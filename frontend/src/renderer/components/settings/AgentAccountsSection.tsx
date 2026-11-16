@@ -5,7 +5,7 @@ import type { components } from "../../../api/schema";
 import { getAgentUILogin, type AgentLoginSnapshot } from "../../hooks/useAgentAuth";
 import { agentAccountLabel, agentAccountPerToken as perToken, agentAccountProviderFor, agentAccountProviderNames, agentAccountUsable, describeAccountProblem, useAgentAccountActions, useAgentAccounts, useAgentAccountUsage, withoutSameLogins, type AgentAccount, type AgentAccountLimitWindow, type AgentAccountLogin, type AgentAccountLoginRequest, type AgentAccountProvider } from "../../hooks/useAgentAccounts";
 import type { TerminalSessionState } from "../../hooks/useTerminalSession";
-import { apiErrorCode } from "../../lib/api-client";
+import { apiErrorCode, apiErrorDetails } from "../../lib/api-client";
 import { baseUrlForHost } from "../../lib/host-clients";
 import { useShellMaybe } from "../../lib/shell-context";
 import { formatRelativeTime } from "../../lib/usage-format";
@@ -73,6 +73,9 @@ export function AgentAccountsPanel({ provider, cliLogin, hostId, loginMethods }:
 	const [loginNote, setLoginNote] = useState("");
 	const [busy, setBusy] = useState<string | null>(null);
 	const [error, setError] = useState("");
+	// Windows refused the account folder's links because its own Developer Mode
+	// is off; the alert says where to turn it on. Other link failures stay errors.
+	const [needsDeveloperMode, setNeedsDeveloperMode] = useState(false);
 	const [removing, setRemoving] = useState<AgentAccount | null>(null);
 	// The in-app sign-in: adding an account, or signing one in again. The
 	// account's own sign-in it started is kept to save or cancel it.
@@ -100,14 +103,17 @@ export function AgentAccountsPanel({ provider, cliLogin, hostId, loginMethods }:
 	const run = useCallback(async (key: string, action: () => Promise<unknown>) => {
 		setBusy(key);
 		setError("");
+		setNeedsDeveloperMode(false);
 		try {
 			await action();
 		} catch (err) {
-			setError(err instanceof Error ? err.message : String(err));
+			const isDeveloperMode = err instanceof Error && apiErrorDetails(err.cause)?.windowsDeveloperMode === true;
+			setNeedsDeveloperMode(isDeveloperMode);
+			setError(isDeveloperMode ? t("settings.agentAccounts.unshared") : err instanceof Error ? err.message : String(err));
 		} finally {
 			setBusy(null);
 		}
-	}, []);
+	}, [t]);
 
 	const setLogin = (next: AgentAccountLogin | undefined) => {
 		pendingLogins = { ...pendingLogins, [loginKey]: next };
@@ -159,6 +165,7 @@ export function AgentAccountsPanel({ provider, cliLogin, hostId, loginMethods }:
 			return;
 		}
 		setError("");
+		setNeedsDeveloperMode(false);
 		if (hasTerminal(login)) closeLogin(login);
 		// Another account's sign-in still pending is stopped, never verified as this one.
 		signInGeneration.current += 1;
@@ -187,6 +194,7 @@ export function AgentAccountsPanel({ provider, cliLogin, hostId, loginMethods }:
 		const generation = signInGeneration.current;
 		const current = () => generation === signInGeneration.current;
 		setError("");
+		setNeedsDeveloperMode(false);
 		try {
 			if (method === API_KEY_METHOD) {
 				if (target) await actions.replaceApiKey(target.id, secret);
@@ -271,7 +279,21 @@ export function AgentAccountsPanel({ provider, cliLogin, hostId, loginMethods }:
 				<Tooltip><TooltipTrigger asChild><Button type="button" size="icon-sm" variant="secondary" aria-label={t("settings.codexAccounts.add")} aria-expanded={signIn !== null && !signInTarget} data-terminal-focus-handoff="true" disabled={busy !== null || signIn !== null} onClick={() => openSignIn()}><Plus aria-hidden="true" /></Button></TooltipTrigger><TooltipContent>{t("settings.codexAccounts.add")}</TooltipContent></Tooltip>
 			</div>}
 		>
-			{error ? <p role="alert" className="px-3 py-2.5 text-xs text-error">{error}</p> : null}
+			{/* A setting the user can change is a warning, like an account problem that needs them. */}
+			{error ? <p role="alert" className={cn("flex items-start gap-1.5 px-3 py-2.5 text-xs", needsDeveloperMode ? "text-warning" : "text-error")}>
+				{needsDeveloperMode ? <TriangleAlert aria-hidden="true" className="mt-px size-icon-sm shrink-0" /> : null}
+				<span className="min-w-0">
+					{error}
+					{needsDeveloperMode ? <Tooltip>
+						<TooltipTrigger asChild>
+							<Button type="button" size="icon-xs" variant="quiet" className="ml-1 align-middle" aria-label={t("settings.agentAccounts.unsharedHelpLabel")}>
+								<Info className="size-icon-sm" aria-hidden="true" />
+							</Button>
+						</TooltipTrigger>
+						<TooltipContent className="max-w-sm">{t("settings.agentAccounts.unsharedHelp")}</TooltipContent>
+					</Tooltip> : null}
+				</span>
+			</p> : null}
 			{/* The harness's own sign-in panel, for this account's folder. A new
 			    panel for each account, so a typed key never carries over. Keys and
 			    tokens are saved by AO itself, so they have no terminal sign-in. */}
@@ -310,7 +332,7 @@ export function AgentAccountsPanel({ provider, cliLogin, hostId, loginMethods }:
 				onUseReset={() => void run(`reset:${account.id}`, () => actions.useReset(account.id))}
 				onSignInAgain={() => openSignIn(account)}
 				onReplaceKey={() => openSignIn(account)}
-				onRemove={() => { setError(""); setRemoving(account); }}
+				onRemove={() => { setError(""); setNeedsDeveloperMode(false); setRemoving(account); }}
 			/>; })}
 			{!hostId && hasMultipleAccounts ? <AccountHandoffRow /> : null}
 		</HarnessDetailGroup>

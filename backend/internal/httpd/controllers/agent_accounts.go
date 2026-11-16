@@ -324,8 +324,12 @@ func (c *AgentAccountsController) switchSession(w http.ResponseWriter, r *http.R
 }
 
 // agentAccountUnsharedMessage is shown when an account folder cannot link to
-// this computer's history; Windows allows the links only in Developer Mode.
-const agentAccountUnsharedMessage = "Orchestrator cannot link this account's folder to this computer's history. On Windows, turn on Developer Mode."
+// this computer's history. When Windows refused the link for want of its own
+// Developer Mode (not Orchestrator's), the message says where to turn it on.
+const (
+	agentAccountUnsharedMessage      = "Orchestrator cannot link this account's folder to this computer's history."
+	agentAccountDeveloperModeMessage = "Turn on Windows Developer Mode to use this account: search Windows Settings for Developer Mode (System > Advanced on Windows 11 25H2 and later)."
+)
 
 func writeAgentAccountError(w http.ResponseWriter, r *http.Request, err error) {
 	switch {
@@ -345,6 +349,8 @@ func writeAgentAccountError(w http.ResponseWriter, r *http.Request, err error) {
 		envelope.WriteAPIError(w, r, http.StatusBadRequest, "validation", "AGENT_ACCOUNT_METHOD_INVALID", "This sign-in method cannot add an account here", nil)
 	case errors.Is(err, ports.ErrAgentAccountSignInUnavailable):
 		envelope.WriteAPIError(w, r, http.StatusServiceUnavailable, "unavailable", "AGENT_ACCOUNT_SIGN_IN_UNAVAILABLE", "The in-app sign-in is unavailable. Use the terminal sign-in instead.", nil)
+	case errors.Is(err, ports.ErrAgentAccountNeedsDeveloperMode):
+		envelope.WriteAPIError(w, r, http.StatusConflict, "conflict", "AGENT_ACCOUNT_UNSHARED", agentAccountDeveloperModeMessage, map[string]any{"windowsDeveloperMode": true})
 	case errors.Is(err, ports.ErrAgentAccountUnshared):
 		envelope.WriteAPIError(w, r, http.StatusConflict, "conflict", "AGENT_ACCOUNT_UNSHARED", agentAccountUnsharedMessage, nil)
 	case errors.Is(err, ports.ErrAgentAccountInUse):

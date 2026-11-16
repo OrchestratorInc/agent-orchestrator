@@ -33,6 +33,10 @@ var (
 	ErrAgentAccountSignInUnavailable = errors.New("the in-app sign-in is unavailable")
 )
 
+// ErrAgentAccountNeedsDeveloperMode joins ErrAgentAccountUnshared when Windows
+// refused the link because its Developer Mode is off.
+var ErrAgentAccountNeedsDeveloperMode = errors.New("the account's links need Windows Developer Mode")
+
 // AgentAccountProviderCLI reads and prepares one provider's CLI config
 // folders. home is empty for the computer's own folder. Implementations ask the
 // CLI itself; none of them reads a token.
