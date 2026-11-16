@@ -129,7 +129,7 @@ export function AgentAccountsPanel({ provider, cliLogin, hostId }: { provider: A
 		setKeyError("");
 		try {
 			if (keyForm?.account) await actions.replaceApiKey(keyForm.account.id, key);
-			else await actions.addApiKey(provider, name, key);
+			else if (provider === "claude") await actions.addApiKey(provider, name, key);
 			setKeyForm(null);
 		} catch (err) {
 			const code = err instanceof Error ? apiErrorCode(err.cause) : undefined;

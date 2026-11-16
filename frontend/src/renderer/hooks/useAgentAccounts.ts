@@ -10,6 +10,8 @@ import { sessionInterfaceTransitionQueryKey } from "./useSessionInterfaceTransit
 
 export type AgentAccount = components["schemas"]["AgentAccountResponse"];
 export type AgentAccountProvider = AgentAccount["provider"];
+/** The providers whose CLI can run on an API key account. */
+export type AgentAccountApiKeyProvider = components["schemas"]["AddAgentAccountAPIKeyRequest"]["provider"];
 export type AgentAccountLimitWindow = components["schemas"]["AgentAccountLimitWindow"];
 export type AgentAccountLogin = components["schemas"]["StartAgentAccountLoginResponse"];
 export type AgentAccountUsageRow = components["schemas"]["AgentAccountUsageRow"];
@@ -169,7 +171,7 @@ export function useAgentAccountActions(hostId?: HostId) {
 			if (error) throw apiErrorException(error);
 		},
 		/** Adds an account that runs the CLI on an API key; the daemon checks the key with the provider first. */
-		addApiKey: async (provider: AgentAccountProvider, name: string, apiKey: string) =>
+		addApiKey: async (provider: AgentAccountApiKeyProvider, name: string, apiKey: string) =>
 			setAccounts(unwrap(await client(hostId).POST("/api/v1/agents/accounts/api-keys", { body: { provider, name, apiKey } })).accounts),
 		replaceApiKey: async (accountId: string, apiKey: string) =>
 			setAccounts(unwrap(await client(hostId).PUT("/api/v1/agents/accounts/{accountId}/api-key", { params: { path: { accountId } }, body: { apiKey } })).accounts),
