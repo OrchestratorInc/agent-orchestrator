@@ -25,7 +25,7 @@ var (
 
 // ErrAgentAccountNeedsDeveloperMode joins ErrAgentAccountUnshared when Windows
 // refused the link because its Developer Mode is off.
-var ErrAgentAccountNeedsDeveloperMode = errors.New("Windows allows the account's links only in Developer Mode")
+var ErrAgentAccountNeedsDeveloperMode = errors.New("the account's links need Windows Developer Mode")
 
 // AgentAccountProviderCLI reads and prepares one provider's CLI config
 // folders. home is empty for the computer's own folder. Implementations ask the
