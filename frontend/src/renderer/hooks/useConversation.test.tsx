@@ -1830,7 +1830,9 @@ describe("opening a local chat it has cached", () => {
 		});
 		await act(async () => { openRead.resolve(page(21, 1, false, "completed", "branch-a")); });
 
-		expect(second.result.current.snapshot).toMatchObject({ activeBranchId: "branch-b", latestSequence: 22 });
+		expect(queryClient.getQueryData<{ pages: { activeBranchId?: string; latestSequence: number }[] }>(key)?.pages[0])
+			.toMatchObject({ activeBranchId: "branch-b", latestSequence: 22 });
+		await waitFor(() => expect(second.result.current.snapshot).toMatchObject({ activeBranchId: "branch-b", latestSequence: 22 }));
 		expect(getMock).toHaveBeenCalledTimes(2);
 	});
 
