@@ -252,6 +252,15 @@ describe("AgentModelPicker", () => {
 		expect(screen.getByRole("radio", { name: "Codex" })).toHaveAttribute("aria-checked", "true");
 	});
 
+	it("goes on from the rail to the settings rows when the agent lists no models", async () => {
+		const user = userEvent.setup();
+		open(undefined, false, "claude-code", { models: [], modelId: undefined });
+		await user.click(screen.getByRole("button", { name: /Agent, model and reasoning effort/ }));
+		act(() => screen.getByRole("radio", { name: "Claude Code" }).focus());
+		await user.keyboard("{ArrowDown}");
+		expect(screen.getByRole("menuitem", { name: /Effort/ })).toHaveFocus();
+	});
+
 	it("goes back to the running agent when its logo is picked", async () => {
 		const user = userEvent.setup();
 		const { onPendingChange } = open({ harness: "codex" });

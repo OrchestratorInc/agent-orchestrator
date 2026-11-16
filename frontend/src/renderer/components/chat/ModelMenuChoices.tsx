@@ -93,6 +93,7 @@ export function ModelMenuChoices<T extends { id: string; label: string }>({
 	const searchRef = useRef<HTMLInputElement>(null);
 	const scrollRef = useRef<HTMLDivElement>(null);
 	const headerRef = useRef<HTMLDivElement>(null);
+	const footerRef = useRef<HTMLDivElement>(null);
 	useEdgeFade(scrollRef);
 	const clearSearch = useCallback(() => setSearch(""), []);
 	// The header's own tab stop (the rail's chosen agent), if it has one.
@@ -101,11 +102,12 @@ export function ModelMenuChoices<T extends { id: string; label: string }>({
 		target?.focus();
 		return Boolean(target);
 	};
-	// Into the list on its checked row, else its first.
+	// Into the list on its checked row, else its first; an empty list goes on to the footer's rows.
 	const focusList = () => {
 		const scroller = scrollRef.current;
 		(scroller?.querySelector<HTMLElement>('[role="menuitemradio"][aria-checked="true"]:not([data-disabled])')
-			?? scroller?.querySelector<HTMLElement>('[role^="menuitem"]'))?.focus();
+			?? scroller?.querySelector<HTMLElement>('[role^="menuitem"]')
+			?? footerRef.current?.querySelector<HTMLElement>('[role^="menuitem"]'))?.focus();
 	};
 	const typeIntoSearch = (event: KeyboardEvent) => {
 		if (!searchRef.current) return false;
@@ -262,7 +264,7 @@ export function ModelMenuChoices<T extends { id: string; label: string }>({
 					)}
 				</div>
 			</div>
-			{footer && !normalizedQuery ? <div className="shrink-0">{footer}</div> : null}
+			{footer && !normalizedQuery ? <div ref={footerRef} className="shrink-0">{footer}</div> : null}
 		</div>
 	);
 }

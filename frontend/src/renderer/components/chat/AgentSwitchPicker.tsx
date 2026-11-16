@@ -680,9 +680,14 @@ function AgentRail({ agents, selected, blockedReason, onPick, onSetup, onManage 
 	const scrollRef = useRef<HTMLDivElement>(null);
 	useEdgeFade(scrollRef, "x");
 	const chosenIndex = agents.findIndex((agent) => agent.id === selected);
-	// The chosen agent in view as the menu opens, however far along the rail it sits.
+	// The chosen agent in view as the menu opens, however far along the rail it sits. The rail's
+	// own scroll is set, not scrollIntoView, which would also scroll the menu and the page.
 	useLayoutEffect(() => {
-		if (chosenIndex > 0) scrollRef.current?.querySelector('[aria-checked="true"]')?.scrollIntoView({ block: "nearest", inline: "nearest" });
+		const rail = scrollRef.current;
+		const chosen = rail?.querySelector<HTMLElement>('[aria-checked="true"]');
+		if (!rail || !chosen || chosenIndex <= 0) return;
+		const end = chosen.offsetLeft + chosen.offsetWidth;
+		if (end > rail.clientWidth) rail.scrollLeft = end - rail.clientWidth;
 		// Only on open: a pick is already in view.
 		// eslint-disable-next-line react-hooks/exhaustive-deps
 	}, []);
@@ -710,7 +715,7 @@ function AgentRail({ agents, selected, blockedReason, onPick, onSetup, onManage 
 					ref={scrollRef}
 					role="radiogroup"
 					aria-label={t("agentSwitch.agents")}
-					className="edge-fade edge-fade-x flex min-w-0 flex-1 items-center gap-0.5 overflow-x-auto overscroll-x-contain [--edge-fade-size:16px] [scrollbar-width:none]"
+					className="edge-fade edge-fade-x relative flex min-w-0 flex-1 items-center gap-0.5 overflow-x-auto overscroll-x-contain [--edge-fade-size:16px] [scrollbar-width:none]"
 					// A mouse wheel scrolls the rail along, as it has no vertical travel.
 					onWheel={(event) => {
 						if (Math.abs(event.deltaY) > Math.abs(event.deltaX)) event.currentTarget.scrollLeft += event.deltaY;
