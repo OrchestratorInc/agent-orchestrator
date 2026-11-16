@@ -3265,8 +3265,10 @@ export function SessionView({ sessionId, cloudOrgId, projectId, hostId }: Sessio
 						splitRef={sessionSplitRef}
 					>
 						<SessionInspector
-							sideChatView={showSideChatTab ? <div ref={setSideChatContainer} className="h-full min-h-0 flex-1" /> : undefined}
-							subagentsView={subagentsAvailable ? <div ref={setSubagentContainer} className="h-full min-h-0 flex-1" /> : undefined}
+							// Keyed per session: a kept, hidden chat still portals into the container it
+							// last had, so each chat needs its own or its panel shows over the next chat's.
+							sideChatView={showSideChatTab ? <div key={uiSessionId} ref={setSideChatContainer} className="h-full min-h-0 flex-1" /> : undefined}
+							subagentsView={subagentsAvailable ? <div key={uiSessionId} ref={setSubagentContainer} className="h-full min-h-0 flex-1" /> : undefined}
 							hostId={hostId}
 							orchestrator={browserOnly}
 							browserAnnotationQueue={inspectorView === "browser" ? browserAnnotationQueue : undefined}

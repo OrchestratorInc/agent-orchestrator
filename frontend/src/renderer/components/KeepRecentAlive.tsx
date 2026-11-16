@@ -8,8 +8,9 @@ export const KEEP_RECENT_ALIVE_MAX = 4;
  * mounted but hidden, so switching back to a recent one reveals the view it
  * left instead of building it again. A hidden view keeps its state and DOM
  * (scroll position, composer draft, folded messages) and runs no effects, so it
- * holds no subscriptions or listeners until it is shown again; React hides it
- * with `display: none`, portals included.
+ * holds no subscriptions or listeners until it is shown again. React hides it
+ * with `display: none` on its top-level DOM nodes only: a portal rendered from
+ * inside the view stays visible, so give each view its own portal container.
  *
  * Views render in the order they were first opened, never reordered: moving a
  * kept view's DOM would reset its scroll position.
