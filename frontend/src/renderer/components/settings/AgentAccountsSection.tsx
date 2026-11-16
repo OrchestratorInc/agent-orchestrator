@@ -78,6 +78,8 @@ export function AgentAccountsPanel({ provider, cliLogin, hostId, loginMethods }:
 	// account's own sign-in it started is kept to save or cancel it.
 	const [signIn, setSignIn] = useState<{ account?: AgentAccount } | null>(null);
 	const accountOperation = useRef<string | undefined>(undefined);
+	// The account a sign-in that finished at once saved, for the chat that sent the user here.
+	const finishedAccount = useRef<string | undefined>(undefined);
 	const harness = providerHarness[provider];
 	const tokensByAccount = new Map((usage.data ?? []).map((row) => [row.accountId, row.inputTokens + row.outputTokens]));
 	const providerAccounts = (accounts.data ?? []).filter((account) => account.provider === provider);
@@ -155,6 +157,11 @@ export function AgentAccountsPanel({ provider, cliLogin, hostId, loginMethods }:
 		}
 		setError("");
 		if (login) closeLogin(login);
+		// Another account's sign-in still pending is stopped, never verified as this one.
+		const pending = accountOperation.current;
+		accountOperation.current = undefined;
+		finishedAccount.current = undefined;
+		if (pending) void actions.cancelLogin(pending).catch(() => undefined);
 		setSignIn({ account });
 	};
 	// A sign-in that finished at once (a key or token) leaves nothing to follow.
@@ -176,6 +183,7 @@ export function AgentAccountsPanel({ provider, cliLogin, hostId, loginMethods }:
 			if (method === API_KEY_METHOD) {
 				if (target) await actions.replaceApiKey(target.id, secret);
 				else if (provider === "claude") await actions.addApiKey(provider, name, secret);
+				finishedAccount.current = target?.id;
 				return finishedAtOnce(method);
 			}
 			const request = { method, ...(secret ? { secret } : {}) } as AgentAccountLoginRequest;
@@ -184,6 +192,7 @@ export function AgentAccountsPanel({ provider, cliLogin, hostId, loginMethods }:
 				: await actions.startLogin(provider, { ...request, ...(name ? { name } : {}) });
 			if (started.account || !started.authOperationId) {
 				await actions.refresh();
+				finishedAccount.current = started.account?.id ?? target?.id;
 				return finishedAtOnce(method);
 			}
 			accountOperation.current = started.operationId;
@@ -195,8 +204,18 @@ export function AgentAccountsPanel({ provider, cliLogin, hostId, loginMethods }:
 	// Saves the account once its sign-in finished; a sign-in that finished at
 	// once is already saved.
 	const verifyAccountSignIn = async (): Promise<boolean> => {
+		// A chat turn that sent the user here to log in gets them back.
+		const returnToChat = (accountId?: string) => {
+			const ui = useUiStore.getState();
+			const waiting = ui.loginReturn;
+			if (waiting && agentAccountProviderFor(waiting.agentId) === provider) ui.completeLoginReturn(waiting.agentId, hostId, accountId);
+		};
 		const operation = accountOperation.current;
-		if (!operation) return true;
+		if (!operation) {
+			returnToChat(finishedAccount.current);
+			finishedAccount.current = undefined;
+			return true;
+		}
 		const result = await actions.verifyLogin(operation);
 		if (result.status === "waiting") return false;
 		if (result.status === "not_subscription") {
@@ -207,15 +226,13 @@ export function AgentAccountsPanel({ provider, cliLogin, hostId, loginMethods }:
 		if (result.status === "duplicate") setError(t("settings.agentAccounts.loginDuplicate", { email: result.account?.email ?? "" }));
 		if (result.status === "mismatch") setError(t("settings.agentAccounts.loginMismatch", { email: [result.account?.email, result.account?.orgName].filter(Boolean).join(" · ") }));
 		if (result.status !== "complete") return false;
-		// A chat turn that sent the user here to log in gets them back.
-		const ui = useUiStore.getState();
-		const waiting = ui.loginReturn;
-		if (waiting && agentAccountProviderFor(waiting.agentId) === provider) ui.completeLoginReturn(waiting.agentId, hostId, result.account?.id);
+		returnToChat(result.account?.id);
 		return true;
 	};
 	// Closing before the sign-in was saved stops it and removes its new folder.
 	const closeSignIn = () => {
 		setSignIn(null);
+		finishedAccount.current = undefined;
 		const operation = accountOperation.current;
 		accountOperation.current = undefined;
 		if (operation) void actions.cancelLogin(operation).catch(() => undefined);
@@ -259,7 +276,7 @@ export function AgentAccountsPanel({ provider, cliLogin, hostId, loginMethods }:
 					await startLogin(signInTarget?.id);
 				}}
 			/> : null}
-			{login ? <div className="px-3 py-2.5"><LoginTerminal login={login} hostId={hostId} note={loginNote} pending={busy === `verify:${provider}`} onCheck={checkLogin} onClose={closeLogin} /></div> : null}
+			{hasTerminal(login) ? <div className="px-3 py-2.5"><LoginTerminal login={login} hostId={hostId} note={loginNote} pending={busy === `verify:${provider}`} onCheck={checkLogin} onClose={closeLogin} /></div> : null}
 			{accounts.isError ? <p role="alert" className="px-3 py-2.5 text-xs text-error">{accounts.error.message}</p> : null}
 			{accounts.isLoading ? <p className="px-3 py-2.5 text-xs text-muted-foreground">{t("settings.agentAccounts.loading")}</p> : null}
 			{/* The CLI login does not wait on the list: a cold read can take a while, and a failed one has no row. */}
@@ -478,8 +495,15 @@ function LimitRow({ window, locale }: { window: AgentAccountLimitWindow; locale:
 	</>;
 }
 
+/** A sign-in that runs in a terminal; a background one has none. */
+type TerminalLogin = AgentAccountLogin & { shellTerminal: NonNullable<AgentAccountLogin["shellTerminal"]> };
+
+function hasTerminal(login: AgentAccountLogin | undefined): login is TerminalLogin {
+	return Boolean(login?.shellTerminal);
+}
+
 function LoginTerminal({ login, hostId, note, pending, onCheck, onClose }: {
-	login: AgentAccountLogin;
+	login: TerminalLogin;
 	hostId?: string;
 	note: string;
 	pending: boolean;

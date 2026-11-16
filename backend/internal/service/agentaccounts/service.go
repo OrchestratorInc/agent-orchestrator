@@ -381,9 +381,20 @@ func (s *Service) read(ctx context.Context, account domain.AgentAccount) *readin
 	s.mu.Lock()
 	known := s.lastOrg[account.ID]
 	s.mu.Unlock()
+	// A per-token sign-in is never a subscription, so it is checked for the
+	// login and organization it was added with here, before it skips limits.
+	perToken := account.PerToken() && identity.LoggedIn
 	switch {
 	case err != nil:
-	case account.PerToken() && identity.LoggedIn && (account.Email == "" || strings.EqualFold(identity.Email, account.Email)):
+	case perToken && account.Email != "" && !strings.EqualFold(identity.Email, account.Email):
+		r.mismatch = true
+		r.identityProblem = domain.AgentAccountProblemOtherLogin
+		r.identityErr = fmt.Sprintf("the folder is now signed in as %s, not %s", identity.Email, account.Email)
+	case perToken && !sameOrg(known.id, identity.OrgID):
+		r.mismatch = true
+		r.identityProblem = domain.AgentAccountProblemOtherOrg
+		r.identityErr = fmt.Sprintf("the folder is now signed in to %s, not %s", orgLabel(identity.OrgName, identity.OrgID), orgLabel(known.name, known.id))
+	case perToken:
 		// A metered sign-in bills per token: there are no limits to read.
 	case !identity.SignedIn:
 		r.limitsErr = "signed out"
@@ -446,7 +457,7 @@ func (s *Service) read(ctx context.Context, account domain.AgentAccount) *readin
 		}
 	}
 	s.readings[account.ID] = r
-	if err == nil && r.identity.SignedIn && !r.mismatch && r.identity.OrgID != "" && !account.Device() {
+	if err == nil && usable(account, r) && r.identity.OrgID != "" && !account.Device() {
 		s.lastOrg[account.ID] = seenOrg{id: r.identity.OrgID, name: r.identity.OrgName}
 	}
 	confirmed := s.loginConfirmed

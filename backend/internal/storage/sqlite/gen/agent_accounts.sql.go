@@ -451,7 +451,7 @@ func (q *Queries) SetAgentAccountDefault(ctx context.Context, arg SetAgentAccoun
 }
 
 const updateAgentAccountKeyHint = `-- name: UpdateAgentAccountKeyHint :execrows
-UPDATE agent_accounts SET key_hint = ? WHERE id = ? AND kind = 'api_key'
+UPDATE agent_accounts SET key_hint = ? WHERE id = ? AND kind IN ('api_key', 'setup_token')
 `
 
 type UpdateAgentAccountKeyHintParams struct {

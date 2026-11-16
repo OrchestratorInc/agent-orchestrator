@@ -59,8 +59,8 @@ type AgentAccountProviderCLI interface {
 type AgentAccountStore interface {
 	ListAgentAccounts(ctx context.Context) ([]domain.AgentAccount, error)
 	CreateAgentAccount(ctx context.Context, account domain.AgentAccount) error
-	// UpdateAgentAccountKeyHint records the last characters of an API key
-	// account's new key; ErrAgentAccountUnknown when id is no such account.
+	// UpdateAgentAccountKeyHint records the last characters of an API key or
+	// setup token account's new credential; ErrAgentAccountUnknown otherwise.
 	UpdateAgentAccountKeyHint(ctx context.Context, id, hint string) error
 	DeleteAgentAccount(ctx context.Context, id string) error
 	GetAgentAccountDefault(ctx context.Context, provider domain.AgentAccountProvider) (string, bool, error)

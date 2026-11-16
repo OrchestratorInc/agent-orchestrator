@@ -205,7 +205,9 @@ func (s *Service) readAPIKeyAccount(ctx context.Context, account domain.AgentAcc
 // subscription account signed in as its own login, or a per-token account (an
 // API key saved, or a metered CLI sign-in) that is logged in.
 func usable(account domain.AgentAccount, r *reading) bool {
-	if r == nil {
+	// A folder signed in as another login, or to another organization, is not
+	// this account, however it signs in.
+	if r == nil || r.mismatch {
 		return false
 	}
 	if account.PerToken() {

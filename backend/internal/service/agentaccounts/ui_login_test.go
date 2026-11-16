@@ -151,3 +151,72 @@ func TestSetupTokenAccount(t *testing.T) {
 		t.Fatalf("terminal sign-in of a setup token account: err = %v", err)
 	}
 }
+
+// A metered folder now signed in as another email, or to another organization,
+// is not the account: it cannot be picked, and is shown not logged in.
+func TestMeteredAccountRefusesAnotherLoginOrOrganization(t *testing.T) {
+	ctx := context.Background()
+	claude := &fakeClaude{signedInAs: map[string]string{"": "a@example.com"}, apiKey: map[string]bool{}, orgOf: map[string]string{}}
+	svc, _, ui := newUILoginService(t, claude)
+	start, err := svc.StartLogin(ctx, domain.AgentAccountProviderClaude, LoginRequest{Method: "console"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	home := ui.started[0].env["CLAUDE_CONFIG_DIR"]
+	claude.apiKey[home], claude.signedInAs[home], claude.orgOf[home] = true, "console@example.com", "org-1"
+	_, view, err := svc.VerifyLogin(ctx, start.OperationID)
+	if err != nil || view == nil {
+		t.Fatalf("verify = %+v, %v", view, err)
+	}
+	id := view.Account.ID
+	if _, err := svc.List(ctx, true); err != nil { // records the account's organization
+		t.Fatal(err)
+	}
+	if err := svc.ValidateAccount(ctx, domain.HarnessClaudeCode, id); err != nil {
+		t.Fatalf("the account's own login: %v", err)
+	}
+
+	claude.orgOf[home] = "org-2"
+	if _, err := svc.List(ctx, true); err != nil {
+		t.Fatal(err)
+	}
+	if err := svc.ValidateAccount(ctx, domain.HarnessClaudeCode, id); !errors.Is(err, ports.ErrAgentAccountSignedOut) {
+		t.Fatalf("another organization: err = %v, want ErrAgentAccountSignedOut", err)
+	}
+
+	claude.orgOf[home], claude.signedInAs[home] = "org-1", "someone@example.com"
+	views, err := svc.List(ctx, true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, v := range views {
+		if v.Account.ID == id && (v.LoggedIn || v.IdentityProblem != domain.AgentAccountProblemOtherLogin) {
+			t.Fatalf("another login: view = %+v", v)
+		}
+	}
+	if err := svc.ValidateAccount(ctx, domain.HarnessClaudeCode, id); !errors.Is(err, ports.ErrAgentAccountSignedOut) {
+		t.Fatalf("another login: err = %v, want ErrAgentAccountSignedOut", err)
+	}
+}
+
+// An accepted setup token replacement keeps the new token and its hint.
+func TestSetupTokenReplacement(t *testing.T) {
+	ctx := context.Background()
+	claude := &fakeClaude{signedInAs: map[string]string{"": "a@example.com"}}
+	svc, store, _ := newUILoginService(t, claude)
+	start, err := svc.StartLogin(ctx, domain.AgentAccountProviderClaude, LoginRequest{Method: "setup_token", Secret: "sk-ant-oat01-good-token-1111"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	account := start.Account.Account
+	replaced, err := svc.StartSignInAgain(ctx, account.ID, LoginRequest{Method: "setup_token", Secret: "sk-ant-oat01-good-token-3333"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if replaced.Account == nil || replaced.Account.Account.KeyHint != "3333" || store.accounts[0].KeyHint != "3333" {
+		t.Fatalf("replaced = %+v, stored hint %q", replaced.Account, store.accounts[0].KeyHint)
+	}
+	if token, _ := claude.SetupTokenOf(account.Home); token != "sk-ant-oat01-good-token-3333" {
+		t.Fatalf("token after replace = %q", token)
+	}
+}

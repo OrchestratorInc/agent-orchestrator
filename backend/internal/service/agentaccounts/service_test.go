@@ -37,7 +37,7 @@ func (m *memStore) UpdateAgentAccountKeyHint(_ context.Context, id, hint string)
 		return m.hintErr
 	}
 	for i := range m.accounts {
-		if m.accounts[i].ID == id && m.accounts[i].APIKey() {
+		if m.accounts[i].ID == id && (m.accounts[i].APIKey() || m.accounts[i].SetupToken()) {
 			m.accounts[i].KeyHint = hint
 			return nil
 		}
@@ -143,7 +143,7 @@ func (f *fakeClaude) Identity(_ context.Context, home string) (domain.AgentAccou
 	}
 	email, ok := f.signedInAs[home]
 	if f.apiKey[home] {
-		return domain.AgentAccountIdentityCheck{LoggedIn: true, Email: email}, nil
+		return domain.AgentAccountIdentityCheck{LoggedIn: true, Email: email, OrgID: f.orgOf[home]}, nil
 	}
 	return domain.AgentAccountIdentityCheck{SignedIn: ok, LoggedIn: ok, Email: email, OrgID: f.orgOf[home], OrgName: f.orgNameOf[home]}, nil
 }

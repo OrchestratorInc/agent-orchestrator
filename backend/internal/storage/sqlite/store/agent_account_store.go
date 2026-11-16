@@ -48,8 +48,8 @@ func (s *Store) CreateAgentAccount(ctx context.Context, a domain.AgentAccount) e
 	return nil
 }
 
-// UpdateAgentAccountKeyHint records the last characters of an API key
-// account's new key. Any other account is unknown here.
+// UpdateAgentAccountKeyHint records the last characters of an API key or
+// setup token account's new key or token. Any other account is unknown here.
 func (s *Store) UpdateAgentAccountKeyHint(ctx context.Context, id, hint string) error {
 	s.writeMu.Lock()
 	defer s.writeMu.Unlock()

@@ -8,7 +8,7 @@ INSERT INTO agent_accounts (id, provider, home, email, plan, kind, name, key_hin
 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?);
 
 -- name: UpdateAgentAccountKeyHint :execrows
-UPDATE agent_accounts SET key_hint = ? WHERE id = ? AND kind = 'api_key';
+UPDATE agent_accounts SET key_hint = ? WHERE id = ? AND kind IN ('api_key', 'setup_token');
 
 -- name: DeleteAgentAccount :exec
 DELETE FROM agent_accounts WHERE id = ?;
