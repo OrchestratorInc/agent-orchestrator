@@ -391,7 +391,7 @@ function ShellLayout() {
 	const themeStyle = useUiStore((state) => state.themeStyle);
 	const windowTranslucency = useUiStore((state) => state.windowTranslucency);
 	const developerMode = useUiStore((state) => state.developerMode);
-	const chatHibernationSyncRef = useRef<Promise<void>>(Promise.resolve());
+	const developerModeSyncRef = useRef<Promise<void>>(Promise.resolve());
 	const isSidebarOpen = useUiStore(sidebarIsVisible);
 	const toggleSidebar = useUiStore((state) => state.toggleSidebar);
 	const sidebarHasLayout = useUiStore(sidebarOccupiesLayout);
@@ -1153,20 +1153,15 @@ const replacementErrorCount = Object.keys(orchestratorReplacementErrors).length;
 		applyDocumentThemeStyle(themeStyle);
 	}, [themeStyle]);
 
-	// The renderer owns Developer Mode; the daemon must know its value before
-	// either the view-close path or the idle sweep can hibernate a provider.
+	// The renderer owns Developer Mode; the daemon learns it when it becomes ready.
 	useEffect(() => {
 		if (usesPreviewWorkspaceData || daemonStatus.state !== "ready" || !daemonStatus.port) return;
 		let cancelled = false;
 		let retry: ReturnType<typeof setTimeout> | undefined;
 		const sync = () => {
 			// Serialize toggles so an older enable request cannot finish after disable.
-			chatHibernationSyncRef.current = chatHibernationSyncRef.current.then(async () => {
+			developerModeSyncRef.current = developerModeSyncRef.current.then(async () => {
 				if (cancelled) return;
-				const { error } = await apiClient.PATCH("/api/v1/settings/chat-hibernation", {
-					body: { enabled: developerMode },
-				});
-				if (error) throw error;
 				const { error: limitHistoryError } = await apiClient.PUT("/api/v1/usage/limit-history", {
 					body: { enabled: developerMode },
 				});

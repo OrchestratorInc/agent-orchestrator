@@ -596,14 +596,12 @@ describe("shell workspace startup", () => {
 	it("resyncs Developer Mode when an attached daemon restarts on the same port", async () => {
 		useUiStore.setState({ developerMode: true });
 		shellMocks.state.daemonStatus = { state: "ready", port: 4777, pid: 101 };
+		const limitHistory = () => vi.mocked(apiClient.PUT).mock.calls.filter((call) => (call as unknown[])[0] === "/api/v1/usage/limit-history");
 		const view = await renderShell();
-		await waitFor(() => expect(apiClient.PATCH).toHaveBeenCalledTimes(1));
-		expect(apiClient.PATCH).toHaveBeenCalledWith("/api/v1/settings/chat-hibernation", {
+		await waitFor(() => expect(limitHistory()).toHaveLength(1));
+		expect(apiClient.PUT).toHaveBeenCalledWith("/api/v1/usage/limit-history", {
 			body: { enabled: true },
 		});
-		await waitFor(() => expect(apiClient.PUT).toHaveBeenCalledWith("/api/v1/usage/limit-history", {
-			body: { enabled: true },
-		}));
 
 		shellMocks.state.daemonStatus = { state: "ready", port: 4777, pid: 202 };
 		view.rerender(
@@ -612,19 +610,18 @@ describe("shell workspace startup", () => {
 			</Suspense>,
 		);
 
-		await waitFor(() => expect(apiClient.PATCH).toHaveBeenCalledTimes(2));
+		await waitFor(() => expect(limitHistory()).toHaveLength(2));
 	});
 
-	it("keeps chat hibernation disabled when Developer Mode is off", async () => {
+	// The daemon starts with chat hibernation on; Developer Mode no longer turns it off.
+	it("leaves chat hibernation to the daemon when Developer Mode is off", async () => {
 		shellMocks.state.daemonStatus = { state: "ready", port: 4777, pid: 101 };
 		await renderShell();
 
-		await waitFor(() => expect(apiClient.PATCH).toHaveBeenCalledWith("/api/v1/settings/chat-hibernation", {
-			body: { enabled: false },
-		}));
 		await waitFor(() => expect(apiClient.PUT).toHaveBeenCalledWith("/api/v1/usage/limit-history", {
 			body: { enabled: false },
 		}));
+		expect(apiClient.PATCH).not.toHaveBeenCalledWith("/api/v1/settings/chat-hibernation", expect.anything());
 	});
 
 	it("routes duplicate-path project adds to the registered project and shows a toast", async () => {

@@ -123,7 +123,9 @@ func New(store Store, chat ChatCapability, offering Offering, now func() time.Ti
 	if now == nil {
 		now = func() time.Time { return time.Now().UTC() }
 	}
-	return &Service{store: store, chat: chat, offering: offering, now: now}
+	s := &Service{store: store, chat: chat, offering: offering, now: now}
+	s.chatHibernation.Store(true)
+	return s
 }
 
 // Offering reports the boot-resolved offering gates.
@@ -256,8 +258,8 @@ func (s *Service) SetSessionRetentionDays(ctx context.Context, days int) (Snapsh
 	return s.Get(ctx)
 }
 
-// ChatHibernationEnabled is false on every daemon boot until Developer Mode
-// enables it through the settings route.
+// ChatHibernationEnabled is true on every daemon boot. The settings route can
+// turn it off until the next boot.
 func (s *Service) ChatHibernationEnabled() bool { return s.chatHibernation.Load() }
 
 // SetChatHibernationEnabled changes the in-memory hibernation gate.
