@@ -49,6 +49,7 @@ func New() *Plugin {
 // launch. See ports.SubmitActivitySignaler.
 func (p *Plugin) EmitsSubmitActivity() bool { return true }
 
+// InterruptKey uses Ctrl+C to cancel work without closing Codex.
 func (*Plugin) InterruptKey() string { return "\x03" }
 
 // EmitsSemanticMessageAcceptance reports that the Codex prompt hook includes

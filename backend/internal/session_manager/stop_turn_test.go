@@ -46,14 +46,14 @@ func TestStopTUITurnPreservesDraftAndAllowsRetry(t *testing.T) {
 	if err := m.StopTUITurn(context.Background(), "s1"); !errors.Is(err, ErrComposerBusy) {
 		t.Fatalf("draft refusal = %v, want ErrComposerBusy", err)
 	}
-	if len(rt.fakeRuntime.interrupts) != 0 {
-		t.Fatalf("draft received interrupt: %v", rt.fakeRuntime.interrupts)
+	if len(rt.interrupts) != 0 {
+		t.Fatalf("draft received interrupt: %v", rt.interrupts)
 	}
 	rt.outputForCall = func(int) string { return idleTerminalOutput }
 	if err := m.StopTUITurn(context.Background(), "s1"); err != nil {
 		t.Fatalf("retry after clearing draft: %v", err)
 	}
-	if len(rt.fakeRuntime.inputs) != 1 {
-		t.Fatalf("interrupt writes = %q, want one", rt.fakeRuntime.inputs)
+	if len(rt.inputs) != 1 {
+		t.Fatalf("interrupt writes = %q, want one", rt.inputs)
 	}
 }

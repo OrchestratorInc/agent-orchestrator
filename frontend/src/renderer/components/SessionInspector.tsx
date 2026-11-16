@@ -493,8 +493,9 @@ const SummaryView = memo(function SummaryView({
 	// CI, review, and merge policies act on a PR. Standalone sessions, local or
 	// a Cloud standalone agent, keep the row for Archive.
 	const scratchpadSession = session.workspaceId === STANDALONE_WORKSPACE_ID || standaloneAgent;
-	const agentsQuery = useAgentReadinessQuery(!session.cloud && session.mode !== "chat", hostId);
-	const stopTurn = canStopTurn(session, agentsQuery.data?.agents.some((agent) => agent.id === session.provider && agent.canStopTurn));
+	const stopEligible = canStopTurn(session);
+	const agentsQuery = useAgentReadinessQuery(stopEligible, hostId);
+	const stopTurn = stopEligible && agentsQuery.data?.agents.some((agent) => agent.id === session.provider && agent.canStopTurn) === true;
 	// Stop turn needs no PR, so a busy worker without one still gets the section.
 	const showSessionControls = hasPRs || scratchpadSession || stopTurn;
 	// Cloud orchestrators list the workers they spawned; local orchestrators
@@ -889,8 +890,8 @@ function updateSessionAutoInjectCI(
 	}));
 }
 
-function canStopTurn(session: WorkspaceSession, supported = false): boolean {
-	return supported && !session.isTerminated && !session.cloud && session.mode !== "chat" && session.activity?.state === "active";
+function canStopTurn(session: WorkspaceSession): boolean {
+	return !session.isTerminated && !session.cloud && session.mode !== "chat" && session.activity?.state === "active";
 }
 
 function SessionControls({ session, hostId, policies, scratchpad, stopTurn }: { session: WorkspaceSession; hostId?: string; policies: boolean; scratchpad: boolean; stopTurn: boolean }) {
@@ -939,7 +940,7 @@ function SessionControls({ session, hostId, policies, scratchpad, stopTurn }: { 
 				{ params: { path: { sessionId: session.id } } },
 			);
 			if (error?.code === "SESSION_TURN_STOP_PENDING") return;
-			if (error) throw new Error(apiErrorMessage(error, `Unable to stop turn (${response.status})`));
+			if (error) throw apiErrorException(error, `Unable to stop turn (${response.status})`);
 		},
 		onSuccess: (_data, turn) => setStoppedTurn(turn),
 		onSettled: () => {

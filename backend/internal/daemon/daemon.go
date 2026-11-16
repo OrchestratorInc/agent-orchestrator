@@ -1691,7 +1691,7 @@ type sessionConversationService struct {
 }
 
 func (s sessionConversationService) StopTurn(ctx context.Context, id domain.SessionID) error {
-	err := s.Service.Interrupt(ctx, id)
+	err := s.Interrupt(ctx, id)
 	if errors.Is(err, chatsvc.ErrNotChatMode) {
 		err = s.sessions.StopTUITurn(ctx, id)
 		switch {
