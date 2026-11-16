@@ -639,7 +639,7 @@ export function SessionView({ sessionId, cloudOrgId, projectId, hostId }: Sessio
 			} catch (error) {
 				if (!resumeMayRecover(error)) throw error;
 				await new Promise((resolve) => setTimeout(resolve, 3_000));
-				if (openedSession.current !== opening) return;
+				if (openedSession.current !== opening) throw error;
 				await resumeAgentOnOpen(id, hostId).catch((retryError: unknown) => {
 					const code = apiErrorCode(retryError);
 					if (code !== "AGENT_NOT_EXITED" && code !== "AGENT_RESUME_IN_PROGRESS") throw retryError;
@@ -688,8 +688,8 @@ export function SessionView({ sessionId, cloudOrgId, projectId, hostId }: Sessio
 		// stays stopped rather than entering an automatic restart loop.
 		openedSession.current.checked = true;
 		const resuming = resumeOnOpen(session.id);
+		resuming.catch(() => {});
 		if (session.needsResume) trackImportFirstOpen(session.provider, resuming);
-		else resuming.catch(() => {});
 	}, [canResume, daemonStatus.state, hostId, importBlock.block, importBlock.checking, hostUnreachable, queryClient, refetchRemoteSession, remoteBase, remoteReadAt, remoteSessionQuery.isError, remoteSessionQuery.isFetching, resumeOnOpen, session, uiSessionId]);
 	useEffect(() => () => {
 		openedSession.current = { key: "", checked: true };
