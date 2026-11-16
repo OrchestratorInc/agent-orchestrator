@@ -44,6 +44,7 @@ import {
 	MAX_SCANNED_PAGE,
 	type PageFileSnapshot,
 	readShareFileText,
+	type ResolvedShareFile,
 	type ShareSnapshot,
 	shareFileFingerprint,
 	snapshotHostShareFile,
@@ -70,18 +71,29 @@ function sourceFileGone(error: unknown, realPath: string): boolean {
 }
 
 /**
- * Whether any file a published page used changed since: rewritten, gone, or
- * there now though it was missing. Read from each file's metadata alone.
+ * What a page's file was when it was published, kept under the path the page
+ * names it by: the file that path resolved to and its fingerprint. A symlink
+ * pointed at another file then shows as a change, though neither file did.
+ */
+function pageFileVersion(file: ResolvedShareFile, fingerprint: string): string {
+	return `${file.relativePath}\n${fingerprint}`;
+}
+
+/**
+ * Whether any file a published page used changed since: rewritten, gone,
+ * resolving to another file, or there now though it was missing. Read from
+ * each file's metadata alone.
  */
 async function pageFilesChanged(dataDir: string, sessionId: string, recorded: Record<string, string>): Promise<boolean> {
-	for (const [relativePath, fingerprint] of Object.entries(recorded)) {
+	for (const [referencedPath, version] of Object.entries(recorded)) {
 		let now = "";
 		try {
-			now = await statShareFile(await resolveShareFile(dataDir, sessionId, relativePath));
+			const file = await resolveShareFile(dataDir, sessionId, referencedPath);
+			now = pageFileVersion(file, await statShareFile(file));
 		} catch (error) {
 			if (!(error instanceof CloudShareError) && !(error as NodeJS.ErrnoException | null)?.code) throw error;
 		}
-		if (fingerprint === "" ? now !== "" : now === "" || !sameShareFingerprint(fingerprint, now)) return true;
+		if (now !== version) return true;
 	}
 	return false;
 }
@@ -562,12 +574,12 @@ export function registerCloudShareIpc(deps: CloudShareIpcDeps): void {
 						});
 						fileSnapshots.push(copy);
 						files.push({ path: used.path, snapshot: copy });
-						fingerprints[used.file.relativePath] = copy.fingerprint;
+						fingerprints[used.referencedPath] = pageFileVersion(used.file, copy.fingerprint);
 					} catch (error) {
 						// A file gone or rewritten while it was copied is left out, not the page.
 						if (!sourceFileGone(error, used.file.realPath)) throw error;
-						skipped.push({ reference: used.path, reason: "missing", relativePath: used.file.relativePath });
-						fingerprints[used.file.relativePath] = "";
+						skipped.push({ reference: used.path, reason: "missing", relativePath: used.referencedPath });
+						fingerprints[used.referencedPath] = "";
 					}
 					copied = before + used.file.size;
 				}

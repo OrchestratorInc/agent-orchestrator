@@ -43,6 +43,11 @@ export type PageFileSkipReason =
 export interface PageFile {
 	/** Where the link serves it, relative to its root. */
 	path: string;
+	/**
+	 * The path the page names it by in the session's artifacts, before any
+	 * symlink is followed: file is what it resolves to now.
+	 */
+	referencedPath: string;
 	file: ResolvedShareFile;
 }
 
@@ -255,7 +260,7 @@ export async function collectPageFiles(
 			skipped.push({ reference, reason: "limit" });
 			continue;
 		}
-		files.push({ path: served, file });
+		files.push({ path: served, referencedPath: relative, file });
 	}
 	return { files, skipped };
 }

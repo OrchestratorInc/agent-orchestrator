@@ -479,6 +479,25 @@ describe("cloudShare IPC", () => {
 		expect(Object.keys((await records.publishedPageFiles(JSON.stringify(["https://cp.test", "sess-1", "docs/report.html"]))) ?? {}).sort()).toEqual(["docs/chart.svg", "docs/later.png"]);
 	});
 
+	it("offers to republish a page when a symlink it uses is pointed at another file", async () => {
+		const docs = path.join(dataDir, "artifacts", "sess-1", "docs");
+		await fs.writeFile(path.join(docs, "old.png"), "old");
+		await fs.writeFile(path.join(docs, "new.png"), "new");
+		await fs.symlink("old.png", path.join(docs, "chart.png"));
+		await fs.writeFile(path.join(docs, "report.html"), `<img src="chart.png">`);
+		const { invoke, publish, file, records } = setup({ files: true });
+		await publish();
+		const inspect = () => invoke("cloudShare:inspect", file) as Promise<{ pageFilesChanged?: boolean }>;
+		expect((await inspect()).pageFilesChanged).toBeUndefined();
+		// Kept by the path the page names, not the file it led to.
+		expect(Object.keys((await records.publishedPageFiles(JSON.stringify(["https://cp.test", "sess-1", "docs/report.html"]))) ?? {})).toEqual(["docs/chart.png"]);
+
+		// Neither the page nor old.png changes: only where chart.png leads.
+		await fs.rm(path.join(docs, "chart.png"));
+		await fs.symlink("new.png", path.join(docs, "chart.png"));
+		expect((await inspect()).pageFilesChanged).toBe(true);
+	});
+
 	it("publishes nothing when the file is rewritten while it is being copied", async () => {
 		const { invoke, file, requests, sender } = setup();
 		const big = path.join(dataDir, "artifacts", "sess-1", "docs", "report.html");
