@@ -9,7 +9,6 @@ import (
 	"log/slog"
 	"strings"
 	"testing"
-	"time"
 )
 
 func TestTimestampFenceInterruptedAndRetried(t *testing.T) {
@@ -176,9 +175,8 @@ func TestOpenContinuesWhenStartupRepairRunsOutOfTime(t *testing.T) {
 	counts, done := &repairScanCounts{}, make(chan struct{})
 	counts.expireAfterBatch.Store(true)
 	opts := repairScanOptions(t, counts, done)
-	// The driver holds the second session scan until this real deadline.
-	// The first committed batch must survive and the background pass resumes.
-	opts.fenceBudget = 15 * time.Second
+	// Inject a deadline into the second scan after one committed batch.
+	// Committed progress must survive and the background pass resumes.
 	s, err := openWithTimestampOptions(dir, opts)
 	if err != nil {
 		t.Fatalf("deadline stopped startup after a committed batch: %v", err)

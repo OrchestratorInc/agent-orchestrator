@@ -23,8 +23,6 @@ type timestampRepairState struct {
 	reader    *sql.DB
 	completed map[string]string
 	retry     map[string]bool
-	changed   bool
-	database  string
 }
 
 func loadTimestampSkips(ctx context.Context, db *sql.DB) (*timestampRepairState, error) {
@@ -36,7 +34,6 @@ func loadTimestampSkips(ctx context.Context, db *sql.DB) (*timestampRepairState,
 	if file == "" {
 		return state, nil
 	}
-	state.database = file
 	state.path = filepath.Join(filepath.Dir(file), "timestamp-repair-skips.json")
 	data, err := os.ReadFile(state.path)
 	if errors.Is(err, os.ErrNotExist) {
@@ -53,16 +50,9 @@ func loadTimestampSkips(ctx context.Context, db *sql.DB) (*timestampRepairState,
 		state.rows = map[string]string{}
 		state.dirty = true
 	}
-	stamp, err := timestampDatabaseStamp(file)
-	if err != nil {
-		return nil, err
-	}
-	state.changed = (state.rows["_database"] != "" && state.rows["_database"] != stamp) || state.rows["_untrusted"] == "1"
-	if !state.changed {
-		for key, value := range state.rows {
-			if strings.HasPrefix(key, "_complete/") {
-				state.completed[strings.TrimPrefix(key, "_complete/")] = value
-			}
+	for key, value := range state.rows {
+		if strings.HasPrefix(key, timestampCompletionPrefix) {
+			state.completed[strings.TrimPrefix(key, timestampCompletionPrefix)] = value
 		}
 	}
 	return state, nil
@@ -120,41 +110,12 @@ func (s *timestampRepairState) skip(table string, values []any, n int, err error
 	slog.Warn("timestamp repair skipped row", "table", table, "rowid", values[n], "error", err)
 }
 
-// A retry-time update can change neither rowid nor change_log. File stamps
-// detect those writes too, including a commit still present only in the WAL.
-func timestampDatabaseStamp(path string) (string, error) {
-	var stamp strings.Builder
-	for _, file := range []string{path, path + "-wal"} {
-		info, err := os.Stat(file)
-		if errors.Is(err, os.ErrNotExist) && file != path {
-			continue
-		}
-		if err != nil {
-			return "", err
-		}
-		if file != path && info.Size() <= 32 {
-			continue
-		}
-		fmt.Fprintf(&stamp, "%d:%d;", info.Size(), info.ModTime().UnixNano())
-	}
-	return stamp.String(), nil
-}
+// Completion version 2 excludes tables previously marked after a CAS miss.
+const timestampCompletionVersion = "2"
+const timestampCompletionPrefix = "_complete2/"
 
-func (s *timestampRepairState) checkpoint(stamp string, trusted bool) error {
-	for key := range s.rows {
-		if strings.HasPrefix(key, "_complete/") {
-			delete(s.rows, key)
-		}
-	}
-	if trusted {
-		for table, columns := range s.completed {
-			s.rows["_complete/"+table] = columns
-		}
-		delete(s.rows, "_untrusted")
-	} else {
-		s.rows["_untrusted"] = "1"
-	}
-	s.rows["_database"] = stamp
+func (s *timestampRepairState) complete(table, signature string) {
+	s.completed[table] = signature
+	s.rows[timestampCompletionPrefix+table] = signature
 	s.dirty = true
-	return s.save()
 }

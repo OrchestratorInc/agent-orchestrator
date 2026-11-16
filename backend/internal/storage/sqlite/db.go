@@ -172,11 +172,9 @@ func openWithTimestampOptions(dataDir string, opts timestampOpenOptions) (*Store
 		_ = writeDB.Close()
 		return nil, err
 	}
-	var initialVersion int64
-	repairErr := writeDB.QueryRow(`PRAGMA data_version`).Scan(&initialVersion)
-	state, loadErr := loadTimestampSkips(context.Background(), readDB)
-	repairErr = errors.Join(repairErr, loadErr)
-	if !newDatabase && repairErr == nil && !state.changed {
+	state, repairErr := loadTimestampSkips(context.Background(), readDB)
+	complete := state != nil && state.rows["_repaired"] == timestampCompletionVersion
+	if !newDatabase && repairErr == nil && !complete {
 		started := time.Now()
 		ctx, cancel := context.WithTimeout(context.Background(), opts.fenceBudget)
 		_, repairErr = runTimestampRepairState(ctx, writeDB, readDB, true, state)
@@ -190,8 +188,6 @@ func openWithTimestampOptions(dataDir string, opts timestampOpenOptions) (*Store
 	}
 	if repairErr != nil {
 		slog.Warn("timestamp startup fence incomplete; continuing in background", "error", repairErr)
-	} else if state.changed {
-		slog.Info("timestamp startup fence deferred; database changed since completion")
 	}
 	store, err := withSearchIndexPools(dataDir, dsn, writeDB, readDB)
 	if err != nil {
@@ -199,20 +195,26 @@ func openWithTimestampOptions(dataDir string, opts timestampOpenOptions) (*Store
 		_ = writeDB.Close()
 		return nil, err
 	}
-	if state != nil {
-		installTimestampCompletion(store, writeDB, state, dataDir, initialVersion)
-		if newDatabase {
-			columns, err := timestampColumns(context.Background(), readDB)
-			if err != nil {
-				slog.Warn("cannot record new database repair completion", "error", err)
-			} else {
-				for _, column := range columns {
-					state.completed[column.table] += column.column + "\x00"
-				}
+	if newDatabase && state != nil && repairErr == nil {
+		// A database created by these migrations has no legacy writer values.
+		columns, err := timestampColumns(context.Background(), readDB)
+		if err == nil {
+			for _, column := range columns {
+				state.completed[column.table] += column.column + "\x00"
 			}
+			for table, signature := range state.completed {
+				state.complete(table, signature)
+			}
+			state.rows["_repaired"] = timestampCompletionVersion
+			state.dirty = true
+			err = state.save()
+			complete = true
+		}
+		if err != nil {
+			slog.Warn("cannot record new database repair completion", "error", err)
 		}
 	}
-	if !newDatabase {
+	if !newDatabase && !complete {
 		store.StartTimestampRepair(func(ctx context.Context) error {
 			if opts.repairDone != nil {
 				defer close(opts.repairDone)
@@ -2540,43 +2542,4 @@ WHERE type = 'table' AND name = 'sessions'`,
 		return fmt.Errorf("schema repair: sessions harness constraint is missing Stakpak")
 	}
 	return nil
-}
-
-// Only this connection's UTC writes may extend a completed repair. A separate
-// read-only observer catches another writer committing during pool shutdown.
-func installTimestampCompletion(store *Store, writer *sql.DB, state *timestampRepairState, dataDir string, initial int64) {
-	var observer *sql.DB
-	var observed int64
-	trusted := true
-	store.SetTimestampRepairCloseHooks(func() error {
-		var err error
-		observer, err = sql.Open("ao-sqlite", databaseURI(dataDir)+readOnlyPragmas)
-		if err != nil {
-			trusted = false
-			return err
-		}
-		observer.SetMaxOpenConns(1)
-		if err := observer.QueryRow(`PRAGMA data_version`).Scan(&observed); err != nil {
-			trusted = false
-			return err
-		}
-		var current int64
-		err = writer.QueryRow(`PRAGMA data_version`).Scan(&current)
-		trusted = err == nil && current == initial
-		return err
-	}, func() error {
-		if observer == nil {
-			return nil
-		}
-		defer func() { _ = observer.Close() }()
-		stamp, err := timestampDatabaseStamp(state.database)
-		if err != nil {
-			return err
-		}
-		var current int64
-		if err := observer.QueryRow(`PRAGMA data_version`).Scan(&current); err != nil {
-			return err
-		}
-		return state.checkpoint(stamp, trusted && current == observed)
-	})
 }

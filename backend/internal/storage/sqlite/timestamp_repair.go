@@ -50,6 +50,14 @@ func runTimestampRepair(ctx context.Context, db *sql.DB, fence bool) (result tim
 	if err != nil {
 		return result, err
 	}
+	// Explicit repair calls also support legacy writers; Open trusts completion.
+	state.completed = map[string]string{}
+	for key := range state.rows {
+		if key == "_repaired" || strings.HasPrefix(key, timestampCompletionPrefix) {
+			delete(state.rows, key)
+			state.dirty = true
+		}
+	}
 	return runTimestampRepairState(ctx, db, db, fence, state)
 }
 
@@ -63,6 +71,7 @@ func runTimestampRepairState(ctx context.Context, db, reader *sql.DB, fence bool
 		return result, err
 	}
 	var failures []error
+	pending := false
 	for i := 0; i < len(columns); {
 		if err := ctx.Err(); err != nil {
 			return result, errors.Join(append(failures, err)...)
@@ -94,7 +103,7 @@ func runTimestampRepairState(ctx context.Context, db, reader *sql.DB, fence bool
 				continue
 			}
 			if done {
-				state.completed[table] = signature
+				state.complete(table, signature)
 				continue
 			}
 		}
@@ -106,7 +115,9 @@ func runTimestampRepairState(ctx context.Context, db, reader *sql.DB, fence bool
 			}
 			if done {
 				if !state.retry[table] {
-					state.completed[table] = signature
+					state.complete(table, signature)
+				} else {
+					pending = true
 				}
 				break
 			}
@@ -122,6 +133,10 @@ func runTimestampRepairState(ctx context.Context, db, reader *sql.DB, fence bool
 	}
 	if version < offsetOnlyTimestampRepairVersion {
 		_, err = db.ExecContext(ctx, `PRAGMA user_version=1`)
+	}
+	if err == nil && !fence && !pending {
+		state.rows["_repaired"] = timestampCompletionVersion
+		state.dirty = true
 	}
 	return result, err
 }
@@ -304,6 +319,8 @@ func repairTimestampBatchMode(ctx context.Context, db *sql.DB, columns []timesta
 						if bindingDrop != nil {
 							bindingDrops = append(bindingDrops, bindingDrop)
 						}
+					} else {
+						state.retry[columns[0].table] = true
 					}
 				}
 				if _, err := tx.ExecContext(ctx, "RELEASE timestamp_row"); err != nil {

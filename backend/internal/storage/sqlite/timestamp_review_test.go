@@ -1,19 +1,20 @@
 package sqlite
 
 import (
-	"bytes"
 	"context"
 	"database/sql"
 	"database/sql/driver"
+	"encoding/json"
 	"errors"
 	"fmt"
-	"log/slog"
 	"os"
 	"path/filepath"
 	"strings"
 	"sync/atomic"
 	"testing"
 	"time"
+
+	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
 )
 
 func TestTimestampCorruptLedgerStillRepairs(t *testing.T) {
@@ -72,8 +73,6 @@ type repairScanCounts struct {
 	connections, writer, reader               atomic.Int64
 	expireAfterBatch, sessionBatch, committed atomic.Bool
 	fenceRows                                 atomic.Int64
-	beforeVersion                             func() error
-	versionHook                               atomic.Bool
 }
 type repairScanDriver struct {
 	driver.Driver
@@ -100,11 +99,7 @@ func (d repairScanDriver) Open(name string) (driver.Conn, error) {
 	return repairScanConn{sqliteConn: conn, counts: d.counts, writer: d.counts.connections.Add(1) == 1}, nil
 }
 func (c repairScanConn) QueryContext(ctx context.Context, query string, args []driver.NamedValue) (driver.Rows, error) {
-	if c.writer && query == "PRAGMA data_version" && c.counts.beforeVersion != nil && c.counts.versionHook.CompareAndSwap(false, true) {
-		if err := c.counts.beforeVersion(); err != nil {
-			return nil, err
-		}
-	}
+
 	if c.counts.committed.Load() && strings.Contains(query, `FROM "sessions" `) && strings.HasPrefix(query, "SELECT rowid,") && c.counts.expireAfterBatch.CompareAndSwap(true, false) {
 		rows, err := c.sqliteConn.QueryContext(ctx, `SELECT count(*) FROM sessions WHERE CAST(created_at AS TEXT) GLOB '* +0000 UTC'`, nil)
 		if err != nil {
@@ -122,8 +117,7 @@ func (c repairScanConn) QueryContext(ctx context.Context, query string, args []d
 			return nil, fmt.Errorf("unexpected repaired row count %T", values[0])
 		}
 		c.counts.fenceRows.Store(n)
-		<-ctx.Done()
-		return nil, ctx.Err()
+		return nil, context.DeadlineExceeded
 	}
 	if strings.Contains(query, "GLOB") && (strings.HasPrefix(query, "SELECT rowid,") || strings.HasPrefix(query, "SELECT min(rowid),max(rowid)")) {
 		if c.writer {
@@ -197,88 +191,41 @@ func TestTimestampCompletedOpenDoesNotScan(t *testing.T) {
 	}
 }
 
-func TestTimestampOldWriterWithoutCDCDefersRescan(t *testing.T) {
-	for _, whileOpen := range []bool{false, true} {
-		t.Run(fmt.Sprint(whileOpen), func(t *testing.T) {
-			dir := t.TempDir()
-			db := openMigratedTestDBIn(t, dir)
-			if _, err := db.Exec(`INSERT INTO sessions(id,num,harness,activity_state,activity_last_at,is_terminated,created_at,updated_at) VALUES('cleanup',1,'aider','idle',CURRENT_TIMESTAMP,0,CURRENT_TIMESTAMP,CURRENT_TIMESTAMP);
-  INSERT INTO session_cleanup_facts(session_id,session_generation,workspace_disposition,next_attempt_at) VALUES('cleanup',0,'pending','2026-10-21 03:30:00 +0000 UTC')`); err != nil {
-				t.Fatal(err)
-			}
-			if err := db.Close(); err != nil {
-				t.Fatal(err)
-			}
-			done := make(chan struct{})
-			s, err := openWithTimestampOptions(dir, timestampOpenOptions{fenceBudget: 30 * time.Second, repairDone: done})
-			if err != nil {
-				t.Fatal(err)
-			}
-			<-done
-			if !whileOpen {
-				if err := s.Close(); err != nil {
-					t.Fatal(err)
-				}
-			}
-			old, err := sql.Open("sqlite", databaseURI(dir)+pragmas)
-			if err != nil {
-				t.Fatal(err)
-			}
-			watermark := func() [2]int64 {
-				var value [2]int64
-				if err := old.QueryRow(`SELECT coalesce((SELECT max(seq) FROM change_log),0),(SELECT max(rowid) FROM session_cleanup_facts)`).Scan(&value[0], &value[1]); err != nil {
-					t.Fatal(err)
-				}
-				return value
-			}
-			before := watermark()
-			if _, err := old.Exec(`UPDATE session_cleanup_facts SET next_attempt_at='2026-10-21 09:00:00 +0530 IST' WHERE session_id='cleanup'`); err != nil {
-				t.Fatal(err)
-			}
-			if after := watermark(); after != before {
-				t.Fatalf("fixture unexpectedly moved log/row watermark: %v -> %v", before, after)
-			}
-			if err := old.Close(); err != nil {
-				t.Fatal(err)
-			}
-			if whileOpen {
-				if err := s.Close(); err != nil {
-					t.Fatal(err)
-				}
-			}
-			var logs bytes.Buffer
-			original := slog.Default()
-			slog.SetDefault(slog.New(slog.NewTextHandler(&logs, nil)))
-			defer slog.SetDefault(original)
-			done = make(chan struct{})
-			counts := &repairScanCounts{}
-			s, err = openWithTimestampOptions(dir, repairScanOptions(t, counts, done))
-			if err != nil {
-				t.Fatal(err)
-			}
-			<-done
-			facts, found, err := s.GetSessionCleanupFacts(context.Background(), "cleanup")
-			if err != nil || !found || !facts.NextAttemptAt.Equal(time.Date(2026, 10, 21, 3, 30, 0, 0, time.UTC)) {
-				t.Fatalf("old-writer due time not repaired: %+v %v %v", facts, found, err)
-			}
-			if err := s.Close(); err != nil {
-				t.Fatal(err)
-			}
-			if !strings.Contains(logs.String(), "timestamp startup fence deferred") {
-				t.Fatalf("old-writer rescan was not deferred: %s", logs.String())
-			}
-			if counts.reader.Load() == 0 || counts.writer.Load() != 0 {
-				t.Fatalf("rescan pools: reader=%d writer=%d", counts.reader.Load(), counts.writer.Load())
-			}
-		})
+func TestTimestampCloseProducesStandaloneDatabase(t *testing.T) {
+	dir := t.TempDir()
+	s, err := Open(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := s.UpsertProject(context.Background(), domain.ProjectRecord{ID: "checkpoint", Path: "/tmp/checkpoint", RegisteredAt: time.Now().UTC()}); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.Close(); err != nil {
+		t.Fatal(err)
+	}
+	data, err := os.ReadFile(filepath.Join(dir, "ao.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	clone := t.TempDir()
+	if err := os.WriteFile(filepath.Join(clone, "ao.db"), data, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	copied, err := OpenPreMigrated(clone)
+	if err != nil {
+		t.Fatalf("closed database still needs its WAL: %v", err)
+	}
+	defer copied.Close()
+	if _, found, err := copied.GetProject(context.Background(), "checkpoint"); err != nil || !found {
+		t.Fatalf("closed database lost recent facts: found=%v err=%v", found, err)
 	}
 }
 
-func TestTimestampOldWriterDuringCompletionValidationRescans(t *testing.T) {
+func TestTimestampCASMissRetriesOnNextOpen(t *testing.T) {
 	dir := t.TempDir()
 	db := openMigratedTestDBIn(t, dir)
-	if _, err := db.Exec(`INSERT INTO sessions(id,num,harness,activity_state,activity_last_at,is_terminated,created_at,updated_at) VALUES('validation',1,'aider','idle',CURRENT_TIMESTAMP,0,CURRENT_TIMESTAMP,CURRENT_TIMESTAMP);
- INSERT INTO session_cleanup_facts(session_id,session_generation,workspace_disposition,next_attempt_at) VALUES('validation',0,'pending','2026-10-21 03:30:00 +0000 UTC')`); err != nil {
+	if _, err := db.Exec(`INSERT INTO projects(id,path,registered_at) VALUES('miss','/tmp/miss',CURRENT_TIMESTAMP); INSERT INTO conversations(id,scope,project_id,created_at,updated_at) VALUES('miss','project','miss','2026-10-21 09:00:00 +0530 IST','2026-10-21 09:00:00 +0530 IST');
+ CREATE TRIGGER miss_timestamp_repair BEFORE UPDATE ON conversations BEGIN SELECT RAISE(IGNORE); END`); err != nil {
 		t.Fatal(err)
 	}
 	done := make(chan struct{})
@@ -290,12 +237,24 @@ func TestTimestampOldWriterDuringCompletionValidationRescans(t *testing.T) {
 	if err := s.Close(); err != nil {
 		t.Fatal(err)
 	}
-	counts := &repairScanCounts{beforeVersion: func() error {
-		_, err := db.Exec(`UPDATE session_cleanup_facts SET next_attempt_at='2026-10-21 09:00:00 +0530 IST' WHERE session_id='validation'`)
-		return err
-	}}
+	data, err := os.ReadFile(filepath.Join(dir, "timestamp-repair-skips.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var ledger map[string]string
+	if err := json.Unmarshal(data, &ledger); err != nil {
+		t.Fatal(err)
+	}
+	for key := range ledger {
+		if strings.HasSuffix(key, "/conversations") {
+			t.Fatalf("CAS miss table was marked complete: %q", key)
+		}
+	}
+	if _, err := db.Exec(`DROP TRIGGER miss_timestamp_repair`); err != nil {
+		t.Fatal(err)
+	}
 	done = make(chan struct{})
-	s, err = openWithTimestampOptions(dir, repairScanOptions(t, counts, done))
+	s, err = openWithTimestampOptions(dir, timestampOpenOptions{fenceBudget: 30 * time.Second, repairDone: done})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -304,10 +263,7 @@ func TestTimestampOldWriterDuringCompletionValidationRescans(t *testing.T) {
 		t.Fatal(err)
 	}
 	var at string
-	if err := db.QueryRow(`SELECT CAST(next_attempt_at AS TEXT) FROM session_cleanup_facts`).Scan(&at); err != nil || at != "2026-10-21 03:30:00 +0000 UTC" {
-		t.Fatalf("old write during completion validation stayed trusted: %q %v", at, err)
-	}
-	if !counts.versionHook.Load() || counts.reader.Load() == 0 {
-		t.Fatal("validation-window write did not cause a reader rescan")
+	if err := db.QueryRow(`SELECT CAST(created_at AS TEXT) FROM conversations WHERE id='miss'`).Scan(&at); err != nil || at != "2026-10-21 03:30:00 +0000 UTC" {
+		t.Fatalf("CAS miss was not retried: %q %v", at, err)
 	}
 }
