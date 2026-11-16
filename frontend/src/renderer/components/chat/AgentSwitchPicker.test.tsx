@@ -261,6 +261,18 @@ describe("AgentModelPicker", () => {
 		expect(screen.getByRole("menuitem", { name: /Effort/ })).toHaveFocus();
 	});
 
+	it("skips an unavailable first model when going from the rail into the list", async () => {
+		const user = userEvent.setup();
+		open(undefined, false, "claude-code", {
+			models: [{ id: "old", label: "Old", unavailableReason: "Needs a newer Claude Code" }, { id: "sonnet", label: "Sonnet" }],
+			modelId: undefined,
+		});
+		await user.click(screen.getByRole("button", { name: /Agent, model and reasoning effort/ }));
+		act(() => screen.getByRole("radio", { name: "Claude Code" }).focus());
+		await user.keyboard("{ArrowDown}");
+		expect(screen.getByRole("menuitemradio", { name: /^Sonnet/ })).toHaveFocus();
+	});
+
 	it("goes back to the running agent when its logo is picked", async () => {
 		const user = userEvent.setup();
 		const { onPendingChange } = open({ harness: "codex" });
