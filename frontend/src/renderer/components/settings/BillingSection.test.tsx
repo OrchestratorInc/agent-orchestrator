@@ -129,10 +129,10 @@ describe("BillingSection", () => {
 		["fr", 7, "Essai gratuit de 7 jours"],
 		["pt-BR", 1, "Iniciar teste de 1 dia"],
 		["pt-BR", 7, "Iniciar teste de 7 dias"],
-		["ru", 1, "Попробовать 1 день бесплатно"],
-		["ru", 3, "Попробовать 3 дня бесплатно"],
-		["ru", 7, "Попробовать 7 дней бесплатно"],
-		["ja", 7, "7日間の無料トライアルを開始"],
+		["ru", 1, "1 день бесплатно"],
+		["ru", 3, "3 дня бесплатно"],
+		["ru", 7, "7 дней бесплатно"],
+		["ja", 7, "7日間無料で試す"],
 		["ko", 7, "7일 무료 체험 시작"],
 		["zh-CN", 7, "开始 7 天试用"],
 	] as const)("labels a %s trial of %i days with the right plural", async (locale, days, label) => {
@@ -142,6 +142,14 @@ describe("BillingSection", () => {
 		});
 		renderSection();
 		expect(await within(await findCard("starter")).findByRole("button", { name: label })).toBeInTheDocument();
+	});
+
+	it("keeps the trial status short enough for the narrowest plan card in Russian", async () => {
+		await appI18n.changeLanguage("ru");
+		mocks.client.getBilling.mockResolvedValue(subscribed({ subscriptionStatus: "trialing", currentPeriodEnd: "2026-11-23T09:00:00Z" }));
+		renderSection();
+		// "Пробный период" wraps beside the plan name at a 1024 px window; the status reads like "Текущий".
+		expect(await within(await findCard("starter")).findByText("Пробный")).toBeInTheDocument();
 	});
 
 	it("never offers the trial to an org that already has a plan, even if the control plane marks one", async () => {
