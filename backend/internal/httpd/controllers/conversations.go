@@ -98,12 +98,6 @@ type ConversationsController struct {
 	Renders *attachmentstore.Store
 	// Search serves chat search. Nil answers the search route 501.
 	Search ConversationSearch
-	Models SwitchModelCatalog
-}
-
-// SwitchModelCatalog reads an agent's cached model catalog.
-type SwitchModelCatalog interface {
-	ModelCatalog(ctx context.Context, agentID, projectID string, refresh bool) (ports.AgentModelCatalog, error)
 }
 
 // Register mounts the conversation routes under a session.

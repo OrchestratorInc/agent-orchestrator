@@ -3489,8 +3489,6 @@ type ProviderSwitchResponse struct {
 	StoppedTurn             bool                             `json:"stoppedTurn,omitempty"`
 	CancelledQueuedMessages int                              `json:"cancelledQueuedMessages,omitempty"`
 	FailedPendingApprovals  bool                             `json:"failedPendingApprovals,omitempty"`
-	SettingsUpdated         bool                             `json:"settingsUpdated,omitempty"`
-	Warnings                []string                         `json:"warnings,omitempty"`
 }
 
 // SessionHistoryQuery pages GET /api/v1/sessions/{sessionId}/history.

@@ -1,36 +1,35 @@
 package cli
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"net/http"
 	"net/url"
 	"slices"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/google/uuid"
 	"github.com/spf13/cobra"
+	"golang.org/x/sync/errgroup"
 
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
 )
 
 type sessionSwitchOptions struct {
-	agent      string
-	model      string
-	effort     string
-	permission string
-	message    string
-	force      bool
+	from    string
+	message string
+	force   bool
 }
 
 type sessionSwitchResponse struct {
-	StoppedTurn             bool     `json:"stoppedTurn"`
-	CancelledQueuedMessages int      `json:"cancelledQueuedMessages"`
-	FailedPendingApprovals  bool     `json:"failedPendingApprovals"`
-	SettingsUpdated         bool     `json:"settingsUpdated"`
-	Warnings                []string `json:"warnings"`
+	StoppedTurn             bool `json:"stoppedTurn"`
+	CancelledQueuedMessages int  `json:"cancelledQueuedMessages"`
+	FailedPendingApprovals  bool `json:"failedPendingApprovals"`
 }
 
 func (r sessionSwitchResponse) stopped() string {
@@ -54,101 +53,131 @@ func (r sessionSwitchResponse) stopped() string {
 	return " (" + strings.Join(parts, ", ") + ")"
 }
 
-func (o sessionSwitchOptions) picks() string {
-	var parts []string
-	for _, pick := range [][2]string{{"model", o.model}, {"effort", o.effort}, {"permission mode", o.permission}} {
-		if value := strings.TrimSpace(pick[1]); value != "" {
-			parts = append(parts, pick[0]+" "+value)
-		}
-	}
-	return strings.Join(parts, ", ")
-}
-
 type sessionSwitchRequest struct {
 	TargetHarness  string `json:"targetHarness"`
 	IdempotencyKey string `json:"idempotencyKey"`
-	Model          string `json:"model,omitempty"`
-	Effort         string `json:"effort,omitempty"`
-	PermissionMode string `json:"permissionMode,omitempty"`
 	Force          bool   `json:"force,omitempty"`
 }
+
+const switchFromLimit = 4
 
 func newSessionSwitchCommand(ctx *commandContext) *cobra.Command {
 	var opts sessionSwitchOptions
 	cmd := &cobra.Command{
-		Use:   "switch <id> --agent <agent>",
+		Use:   "switch <id> <agent>",
 		Short: "Switch a session to another agent",
 		Long: `Switch a session to another agent in place. The session keeps its worktree,
-branch and conversation; the new agent starts from a handoff note of the work so
-far. Works for Chat and Terminal UI sessions on this machine.
+branch and conversation; the new agent starts on its default model from a
+handoff note of the work so far. Works for Chat and Terminal UI sessions on this
+machine, including one whose agent exited.
 
 A session whose agent is working or waiting on an approval is refused. --force
 stops the current turn, cancels queued messages and pending approvals, and
 switches anyway: use it when the agent is stuck, for example during a provider
 outage.
 
---message is sent to the new agent once the switch completes, as ao send would.
+--from <agent> switches every session on that agent instead of one, four at a
+time, and exits 1 if any of them was not switched.
 
-Switching to the agent already running changes nothing, unless --model,
---effort or --permission name new settings: a Chat agent takes them in place.
-A session whose agent exited is started again to hand over.
+--message is sent to the new agent once the switch completes, as ao send would.
 Run ao agent ls for the agents you can switch to.`,
-		Example: `  ao session switch ao-12 --agent codex
-  ao session switch ao-12 --agent codex --force --message "Claude is down. Take over."
-  ao session ls --all --agent claude-code -q | xargs -n1 ao session switch --agent codex --force`,
-		Args: oneSessionIDArg,
+		Example: `  ao session switch ao-12 codex
+  ao session switch ao-12 codex --force -m "Claude is down. Take over."
+  ao session switch --from claude codex --force -m "Claude is down. Take over."`,
+		Args: func(_ *cobra.Command, args []string) error {
+			want := 2
+			if opts.from != "" {
+				want = 1
+			}
+			if len(args) != want {
+				return usageError{errors.New("usage: ao session switch <id> <agent>, or ao session switch --from <agent> <agent>")}
+			}
+			return nil
+		},
 		RunE: func(cmd *cobra.Command, args []string) error {
-			id, err := normalizeSessionID(args[0])
+			agent, err := knownAgentFlag(args[len(args)-1])
 			if err != nil {
 				return err
 			}
-			return ctx.switchSession(cmd.Context(), cmd, id, opts)
+			if agent == "" {
+				return usageError{errors.New("usage: name the agent to switch to")}
+			}
+			if opts.from == "" {
+				id, err := normalizeSessionID(args[0])
+				if err != nil {
+					return err
+				}
+				return ctx.switchSession(cmd.Context(), cmd.OutOrStdout(), id, agent, opts)
+			}
+			from, err := knownAgentFlag(opts.from)
+			if err != nil {
+				return err
+			}
+			if from == agent {
+				return usageError{fmt.Errorf("usage: --from %s names the agent being switched to", opts.from)}
+			}
+			return ctx.switchSessionsFrom(cmd.Context(), cmd, from, agent, opts)
 		},
 	}
 	f := cmd.Flags()
-	f.StringVar(&opts.agent, "agent", "", "Agent to switch to (required), for example codex or claude-code")
-	f.StringVar(&opts.model, "model", "", "Model the new agent starts on; empty keeps its default")
-	f.StringVar(&opts.effort, "effort", "", "Reasoning effort the new agent starts with; empty keeps its default")
-	f.StringVar(&opts.permission, "permission", "", "Permission mode for the new agent: default (the agent's own config, which for Codex in a terminal means no approvals and no sandbox), accept-edits, auto or bypass-permissions; empty keeps the session's")
+	f.StringVar(&opts.from, "from", "", "Switch every session on this agent, for example claude")
 	f.StringVarP(&opts.message, "message", "m", "", "Message to send to the new agent after the switch")
 	f.BoolVar(&opts.force, "force", false, "Stop the current turn, queued messages and pending approvals, then switch")
 	return cmd
 }
 
-func (c *commandContext) switchSession(ctx context.Context, cmd *cobra.Command, id string, opts sessionSwitchOptions) error {
-	agent, err := knownAgentFlag(opts.agent)
-	if err != nil {
+func (c *commandContext) switchSessionsFrom(ctx context.Context, cmd *cobra.Command, from, agent string, opts sessionSwitchOptions) error {
+	var res sessionListResponse
+	if err := c.getJSON(ctx, apiPath("sessions", url.Values{"active": {"true"}}), &res); err != nil {
 		return err
 	}
-	if agent == "" {
-		return usageError{errors.New("usage: --agent is required")}
-	}
-	switch opts.permission {
-	case "", "default", "accept-edits", "auto", "bypass-permissions":
-	default:
-		return usageError{fmt.Errorf("usage: --permission must be default, accept-edits, auto or bypass-permissions, got %q", opts.permission)}
+	var ids []string
+	for _, sess := range filterAndSortSessions(res.Sessions, true) {
+		if sess.Harness == from {
+			ids = append(ids, sess.ID)
+		}
 	}
 	out := cmd.OutOrStdout()
+	if len(ids) == 0 {
+		_, err := fmt.Fprintf(out, "no sessions on %s\n", from)
+		return err
+	}
+	var mu sync.Mutex
+	failed := 0
+	var group errgroup.Group
+	group.SetLimit(switchFromLimit)
+	for _, id := range ids {
+		group.Go(func() error {
+			var lines bytes.Buffer
+			err := c.switchSession(ctx, &lines, id, agent, opts)
+			mu.Lock()
+			defer mu.Unlock()
+			_, _ = out.Write(lines.Bytes())
+			if err != nil {
+				failed++
+				_, _ = fmt.Fprintf(cmd.ErrOrStderr(), "%s: %v\n", id, err)
+			}
+			return nil
+		})
+	}
+	_ = group.Wait()
+	if failed > 0 {
+		return fmt.Errorf("%d of %d sessions on %s were not switched", failed, len(ids), from)
+	}
+	_, err := fmt.Fprintf(out, "switched %d sessions from %s to %s\n", len(ids), from, agent)
+	return err
+}
+
+func (c *commandContext) switchSession(ctx context.Context, out io.Writer, id, agent string, opts sessionSwitchOptions) error {
 	var result sessionSwitchResponse
-	err = c.doJSONPathWithHeadersAndTimeout(ctx, http.MethodPost, "/api/v1/sessions/"+url.PathEscape(id)+"/provider-switch", sessionSwitchRequest{
-		TargetHarness: agent, IdempotencyKey: uuid.NewString(),
-		Model: strings.TrimSpace(opts.model), Effort: strings.TrimSpace(opts.effort),
-		PermissionMode: opts.permission, Force: opts.force,
+	err := c.doJSONPathWithHeadersAndTimeout(ctx, http.MethodPost, "/api/v1/sessions/"+url.PathEscape(id)+"/provider-switch", sessionSwitchRequest{
+		TargetHarness: agent, IdempotencyKey: uuid.NewString(), Force: opts.force,
 	}, &result, nil, 0)
 	var responseErr apiResponseError
 	hasResponseErr := errors.As(err, &responseErr)
 	switch {
 	case err == nil:
-		for _, warning := range result.Warnings {
-			if _, err := fmt.Fprintf(cmd.ErrOrStderr(), "warning: %s\n", warning); err != nil {
-				return err
-			}
-		}
-		line := fmt.Sprintf("switched %s to %s%s", id, agent, result.stopped())
-		if result.SettingsUpdated {
-			line = fmt.Sprintf("%s is already on %s; updated %s", id, agent, opts.picks())
-		}
-		if _, err := fmt.Fprintln(out, line); err != nil {
+		if _, err := fmt.Fprintf(out, "switched %s to %s%s\n", id, agent, result.stopped()); err != nil {
 			return err
 		}
 	case hasResponseErr && responseErr.ErrorBody.Code == "PROVIDER_SWITCH_already_active":
@@ -174,6 +203,9 @@ func (c *commandContext) switchSession(ctx context.Context, cmd *cobra.Command, 
 
 func knownAgentFlag(raw string) (string, error) {
 	agent := strings.ToLower(strings.TrimSpace(raw))
+	if agent == "claude" {
+		agent = string(domain.HarnessClaudeCode)
+	}
 	if agent == "" || domain.AgentHarness(agent).IsKnown() {
 		return agent, nil
 	}

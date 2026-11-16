@@ -319,44 +319,43 @@ ao session resume-agent mer-3
 
 Switch a session to another agent in place, for example from Claude Code to
 Codex when Claude is down. The session keeps its worktree, branch, and
-conversation. The new agent starts from a handoff note of the work so far.
-Works for Chat and Terminal UI sessions on this machine.
+conversation. The new agent starts on its default model from a handoff note of
+the work so far. Works for Chat and Terminal UI sessions on this machine,
+including one whose agent exited.
 
 A session whose agent is working or waiting on an approval is refused.
 `--force` stops the current turn, cancels queued messages and pending
 approvals, and switches anyway. Use it when the agent is stuck.
 
-Switching to the agent already running changes nothing, unless `--model`,
-`--effort` or `--permission` name new settings: a Chat agent takes them in
-place. A session whose agent exited is started again to hand over. Run
-`ao agent ls` for the agents you can switch to.
+`--from <agent>` switches every session on that agent, four at a time, and
+exits 1 if any was not switched. Switching to the agent already running changes
+nothing. `claude` means `claude-code`. Run `ao agent ls` for the agents you can
+switch to.
 
 **Syntax:**
 ```
-ao session switch <id> --agent <agent> [flags]
+ao session switch <id> <agent> [flags]
+ao session switch --from <agent> <agent> [flags]
 ```
 
 **Flags:**
 
 | Flag | Meaning | Default / Required |
 |---|---|---|
-| `--agent string` | Agent to switch to, for example `codex` or `claude-code` | Required |
-| `--effort string` | Reasoning effort the new agent starts with | Agent default |
 | `--force` | Stop the current turn, queued messages, and pending approvals, then switch | - |
+| `--from string` | Switch every session on this agent instead of one | - |
 | `-m, --message string` | Message to send to the new agent after the switch, as `ao send` does | - |
-| `--model string` | Model the new agent starts on | Agent default |
-| `--permission string` | `default`, `accept-edits`, `auto`, or `bypass-permissions` | Session's mode |
 
 **Examples:**
 
 ```bash
 # Move mer-3 to Codex
-ao session switch mer-3 --agent codex
+ao session switch mer-3 codex
 ```
 
 ```bash
 # Claude is down: move every Claude session to Codex, even mid-turn
-ao session ls --all --agent claude-code -q | xargs -n1 ao session switch --agent codex --force -m "Claude is down. Take over."
+ao session switch --from claude codex --force -m "Claude is down. Take over."
 ```
 
 ---

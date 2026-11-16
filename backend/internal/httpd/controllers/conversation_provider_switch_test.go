@@ -253,47 +253,6 @@ func TestChatPermissionModesRouteListsEachAgentsModes(t *testing.T) {
 	}
 }
 
-type fakeSwitchCatalog struct{ catalog ports.AgentModelCatalog }
-
-func (f fakeSwitchCatalog) ModelCatalog(context.Context, string, string, bool) (ports.AgentModelCatalog, error) {
-	return f.catalog, nil
-}
-
-func switchWithCatalog(t *testing.T, svc *fakeConversationService, body string) (int, string) {
-	t.Helper()
-	r := chi.NewRouter()
-	(&controllers.ConversationsController{Svc: svc, Models: fakeSwitchCatalog{ports.AgentModelCatalog{
-		CustomModelEntry: ports.CustomModelEntryDirect,
-		Models: []ports.AgentModelInfo{
-			{ID: "claude-opus-5-5", Efforts: []string{"low", "medium", "high", "max"}},
-			{ID: "claude-haiku-4-5-20251001"},
-		},
-	}}}).Register(r)
-	rec := httptest.NewRecorder()
-	r.ServeHTTP(rec, httptest.NewRequest(http.MethodPost, "/sessions/p1-1/provider-switch", bytes.NewBufferString(body)))
-	return rec.Code, rec.Body.String()
-}
-
-func TestProviderSwitchChecksEffortAgainstTheTargetCatalog(t *testing.T) {
-	for _, tc := range []struct {
-		body, want string
-		status     int
-		called     bool
-	}{
-		{`{"targetHarness":"claude-code","effort":"ultra-mega"}`, `effort \"ultra-mega\" is not one of low, medium, high, max`, http.StatusBadRequest, false},
-		{`{"targetHarness":"claude-code","model":"claude-haiku-4-5-20251001","effort":"high"}`, "takes no reasoning effort", http.StatusBadRequest, false},
-		{`{"targetHarness":"claude-code","model":"claude-opus-5-5[1m]","effort":"MAX"}`, `{"status":"ok"}`, http.StatusOK, true},
-		{`{"targetHarness":"claude-code","model":"opus"}`, `{"status":"ok"}`, http.StatusOK, true},
-		{`{"targetHarness":"claude-code","model":"gpt-5.5"}`, "gpt-5.5 is not in claude-code's model list", http.StatusOK, true},
-	} {
-		svc := &fakeConversationService{}
-		status, body := switchWithCatalog(t, svc, tc.body)
-		if status != tc.status || !bytes.Contains([]byte(body), []byte(tc.want)) || (svc.switchRequest.TargetHarness != "") != tc.called {
-			t.Fatalf("%s: %d %s called=%v", tc.body, status, body, svc.switchRequest.TargetHarness != "")
-		}
-	}
-}
-
 func TestProviderSwitchReportsWhatAForcedSwitchStopped(t *testing.T) {
 	svc := &fakeConversationService{switchResult: domain.ProviderSwitchResult{StoppedTurn: true, CancelledQueued: 2, FailedApprovals: true}}
 	status, body := providerSwitchRouteRequest(t, svc, http.MethodPost, "/sessions/p1-1/provider-switch", `{"targetHarness":"codex","force":true}`)

@@ -5,12 +5,17 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"slices"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 )
 
 type switchCommandCalls struct {
+	mu           sync.Mutex
+	sessions     string
+	switched     []string
 	switches     []map[string]any
 	sends        []string
 	busySends    int
@@ -23,19 +28,24 @@ func switchCommandServer(t *testing.T, status int, code string) (*httptest.Serve
 	t.Helper()
 	calls := &switchCommandCalls{}
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		calls.mu.Lock()
+		defer calls.mu.Unlock()
 		w.Header().Set("Content-Type", "application/json")
 		switch {
-		case r.Method == http.MethodPost && r.URL.Path == "/api/v1/sessions/demo-1/provider-switch":
+		case r.Method == http.MethodGet && r.URL.Path == "/api/v1/sessions":
+			_, _ = w.Write([]byte(calls.sessions))
+		case r.Method == http.MethodPost && strings.HasSuffix(r.URL.Path, "/provider-switch"):
 			var in map[string]any
 			_ = json.NewDecoder(r.Body).Decode(&in)
 			calls.switches = append(calls.switches, in)
+			calls.switched = append(calls.switched, strings.Split(r.URL.Path, "/")[4])
 			if code != "" {
 				w.WriteHeader(status)
 				_, _ = w.Write([]byte(`{"error":"conflict","code":"` + code + `","message":"refused"}`))
 				return
 			}
 			_, _ = w.Write([]byte(cmp.Or(calls.switchBody, `{"status":"ok"}`)))
-		case r.Method == http.MethodPost && r.URL.Path == "/api/v1/sessions/demo-1/send":
+		case r.Method == http.MethodPost && strings.HasSuffix(r.URL.Path, "/send"):
 			var in map[string]any
 			_ = json.NewDecoder(r.Body).Decode(&in)
 			if calls.refusedSends < calls.busySends {
@@ -61,7 +71,7 @@ func TestSessionSwitchForcedWithMessage(t *testing.T) {
 	srv, calls := switchCommandServer(t, 0, "")
 	writeRunFileFor(t, cfg, srv)
 	out, errOut, err := executeCLI(t, Deps{ProcessAlive: func(int) bool { return true }},
-		"session", "switch", "demo-1", "--agent", "codex", "--model", "gpt-6.1-sol", "--force", "-m", "Claude is down. Take over.")
+		"session", "switch", "demo-1", "codex", "--force", "-m", "Claude is down. Take over.")
 	if err != nil {
 		t.Fatalf("session switch failed: %v\nstderr=%s", err, errOut)
 	}
@@ -69,7 +79,7 @@ func TestSessionSwitchForcedWithMessage(t *testing.T) {
 		t.Fatalf("switch calls = %v", calls.switches)
 	}
 	body := calls.switches[0]
-	if body["targetHarness"] != "codex" || body["model"] != "gpt-6.1-sol" || body["force"] != true || body["idempotencyKey"] == "" || body["message"] != nil {
+	if body["targetHarness"] != "codex" || body["model"] != nil || body["force"] != true || body["idempotencyKey"] == "" || body["message"] != nil {
 		t.Fatalf("switch body = %v", body)
 	}
 	if len(calls.sends) != 1 || !strings.HasSuffix(calls.sends[0], "Claude is down. Take over.") {
@@ -87,7 +97,7 @@ func TestSessionSwitchWaitsForTheNewAgentToTakeTheMessage(t *testing.T) {
 	writeRunFileFor(t, cfg, srv)
 	sleeps := 0
 	_, _, err := executeCLI(t, Deps{ProcessAlive: func(int) bool { return true }, Sleep: func(time.Duration) { sleeps++ }},
-		"session", "switch", "demo-1", "--agent", "codex", "-m", "take over")
+		"session", "switch", "demo-1", "codex", "-m", "take over")
 	if err != nil || len(calls.sends) != 1 || sleeps != 2 {
 		t.Fatalf("err = %v sends = %q sleeps = %d", err, calls.sends, sleeps)
 	}
@@ -97,7 +107,7 @@ func TestSessionSwitchToTheRunningAgentSucceeds(t *testing.T) {
 	cfg := setConfigEnv(t)
 	srv, _ := switchCommandServer(t, http.StatusConflict, "PROVIDER_SWITCH_already_active")
 	writeRunFileFor(t, cfg, srv)
-	out, _, err := executeCLI(t, Deps{ProcessAlive: func(int) bool { return true }}, "session", "switch", "demo-1", "--agent", "codex")
+	out, _, err := executeCLI(t, Deps{ProcessAlive: func(int) bool { return true }}, "session", "switch", "demo-1", "codex")
 	if err != nil || !strings.Contains(out, "demo-1 is already on codex") {
 		t.Fatalf("out = %q err = %v", out, err)
 	}
@@ -107,7 +117,7 @@ func TestSessionSwitchBusyPointsAtForce(t *testing.T) {
 	cfg := setConfigEnv(t)
 	srv, calls := switchCommandServer(t, http.StatusConflict, "PROVIDER_SWITCH_busy")
 	writeRunFileFor(t, cfg, srv)
-	_, _, err := executeCLI(t, Deps{ProcessAlive: func(int) bool { return true }}, "session", "switch", "demo-1", "--agent", "codex", "-m", "hi")
+	_, _, err := executeCLI(t, Deps{ProcessAlive: func(int) bool { return true }}, "session", "switch", "demo-1", "codex", "-m", "hi")
 	if err == nil || ExitCode(err) != 1 || !strings.Contains(err.Error(), "--force") {
 		t.Fatalf("err = %v exit = %d", err, ExitCode(err))
 	}
@@ -118,9 +128,11 @@ func TestSessionSwitchBusyPointsAtForce(t *testing.T) {
 
 func TestSessionSwitchNeedsAnAgent(t *testing.T) {
 	setConfigEnv(t)
-	_, _, err := executeCLI(t, Deps{}, "session", "switch", "demo-1")
-	if ExitCode(err) != 2 {
-		t.Fatalf("err = %v exit = %d", err, ExitCode(err))
+	for _, args := range [][]string{{"demo-1"}, {"demo-1", "codex", "extra"}, {"--from", "claude", "demo-1", "codex"}, {"--from", "codex", "codex"}} {
+		_, _, err := executeCLI(t, Deps{}, append([]string{"session", "switch"}, args...)...)
+		if ExitCode(err) != 2 {
+			t.Fatalf("%v: err = %v exit = %d", args, err, ExitCode(err))
+		}
 	}
 }
 
@@ -143,9 +155,13 @@ func TestSessionListFiltersByAgentQuietly(t *testing.T) {
 	if err != nil || out != "demo-1\ndemo-2\n" {
 		t.Fatalf("out = %q err = %v", out, err)
 	}
-	_, _, err = executeCLI(t, Deps{ProcessAlive: func(int) bool { return true }}, "session", "ls", "--agent", "claude", "-q")
+	out, _, err = executeCLI(t, Deps{ProcessAlive: func(int) bool { return true }}, "session", "ls", "--agent", "claude", "-q")
+	if err != nil || out != "demo-1\ndemo-2\n" {
+		t.Fatalf("ls --agent claude: out = %q err = %v", out, err)
+	}
+	_, _, err = executeCLI(t, Deps{ProcessAlive: func(int) bool { return true }}, "session", "ls", "--agent", "claude-c", "-q")
 	if ExitCode(err) != 2 || !strings.Contains(err.Error(), "did you mean claude-code") {
-		t.Fatalf("ls --agent claude: err = %v exit = %d", err, ExitCode(err))
+		t.Fatalf("ls --agent claude-c: err = %v exit = %d", err, ExitCode(err))
 	}
 }
 
@@ -153,7 +169,7 @@ func TestSessionSwitchRejectsAnUnknownAgentLocally(t *testing.T) {
 	cfg := setConfigEnv(t)
 	srv, calls := switchCommandServer(t, 0, "")
 	writeRunFileFor(t, cfg, srv)
-	_, _, err := executeCLI(t, Deps{ProcessAlive: func(int) bool { return true }}, "session", "switch", "demo-1", "--agent", "codx")
+	_, _, err := executeCLI(t, Deps{ProcessAlive: func(int) bool { return true }}, "session", "switch", "demo-1", "codx")
 	if ExitCode(err) != 2 || len(calls.switches) != 0 {
 		t.Fatalf("err = %v exit = %d switches = %d", err, ExitCode(err), len(calls.switches))
 	}
@@ -185,7 +201,7 @@ func TestSessionSwitchRefusalIsNotReportedAsMaybeCompleted(t *testing.T) {
 		cfg := setConfigEnv(t)
 		srv, _ := switchCommandServer(t, tc.status, tc.code)
 		writeRunFileFor(t, cfg, srv)
-		_, _, err := executeCLI(t, Deps{ProcessAlive: func(int) bool { return true }}, "session", "switch", "demo-1", "--agent", "codex")
+		_, _, err := executeCLI(t, Deps{ProcessAlive: func(int) bool { return true }}, "session", "switch", "demo-1", "codex")
 		if err == nil || strings.Contains(err.Error(), "may still have completed") != tc.uncertain {
 			t.Fatalf("%s: err = %v, want uncertain=%v", tc.code, err, tc.uncertain)
 		}
@@ -194,31 +210,54 @@ func TestSessionSwitchRefusalIsNotReportedAsMaybeCompleted(t *testing.T) {
 
 func TestSessionSwitchWithNoDaemonSaysNothingChanged(t *testing.T) {
 	setConfigEnv(t)
-	_, _, err := executeCLI(t, Deps{ProcessAlive: func(int) bool { return false }}, "session", "switch", "demo-1", "--agent", "codex")
+	_, _, err := executeCLI(t, Deps{ProcessAlive: func(int) bool { return false }}, "session", "switch", "demo-1", "codex")
 	if err == nil || strings.Contains(err.Error(), "may still have completed") {
 		t.Fatalf("err = %v", err)
 	}
 }
 
-func TestSessionSwitchSaysWhatItStoppedAndWarns(t *testing.T) {
+func TestSessionSwitchSaysWhatItStopped(t *testing.T) {
 	cfg := setConfigEnv(t)
 	srv, calls := switchCommandServer(t, 0, "")
-	calls.switchBody = `{"status":"ok","stoppedTurn":true,"cancelledQueuedMessages":2,"failedPendingApprovals":true,"warnings":["gpt-x is not in codex's model list; the agent may refuse it"]}`
+	calls.switchBody = `{"status":"ok","stoppedTurn":true,"cancelledQueuedMessages":2,"failedPendingApprovals":true}`
 	writeRunFileFor(t, cfg, srv)
-	out, errOut, err := executeCLI(t, Deps{ProcessAlive: func(int) bool { return true }}, "session", "switch", "demo-1", "--agent", "codex", "--model", "gpt-x", "--force")
-	if err != nil || !strings.Contains(out, "switched demo-1 to codex (stopped the running turn, cancelled 2 queued messages, declined the pending approval)") ||
-		!strings.Contains(errOut, "warning: gpt-x is not in codex's model list") {
-		t.Fatalf("out = %q stderr = %q err = %v", out, errOut, err)
+	out, _, err := executeCLI(t, Deps{ProcessAlive: func(int) bool { return true }}, "session", "switch", "demo-1", "codex", "--force")
+	if err != nil || !strings.Contains(out, "switched demo-1 to codex (stopped the running turn, cancelled 2 queued messages, declined the pending approval)") {
+		t.Fatalf("out = %q err = %v", out, err)
 	}
 }
 
-func TestSessionSwitchToTheRunningAgentWithNewSettings(t *testing.T) {
+func TestSessionSwitchFromSwitchesEverySessionOnThatAgent(t *testing.T) {
 	cfg := setConfigEnv(t)
 	srv, calls := switchCommandServer(t, 0, "")
-	calls.switchBody = `{"status":"ok","settingsUpdated":true}`
+	calls.sessions = `{"sessions":[
+		{"id":"demo-1","projectId":"demo","kind":"worker","harness":"claude-code"},
+		{"id":"demo-2","projectId":"demo","kind":"orchestrator","harness":"claude-code"},
+		{"id":"demo-3","projectId":"demo","kind":"worker","harness":"codex"}]}`
 	writeRunFileFor(t, cfg, srv)
-	out, _, err := executeCLI(t, Deps{ProcessAlive: func(int) bool { return true }}, "session", "switch", "demo-1", "--agent", "claude-code", "--model", "opus", "--effort", "high")
-	if err != nil || !strings.Contains(out, "demo-1 is already on claude-code; updated model opus, effort high") {
-		t.Fatalf("out = %q err = %v", out, err)
+	out, _, err := executeCLI(t, Deps{ProcessAlive: func(int) bool { return true }}, "session", "switch", "--from", "claude", "codex", "--force", "-m", "take over")
+	if err != nil {
+		t.Fatalf("err = %v out = %q", err, out)
+	}
+	switched := append([]string(nil), calls.switched...)
+	slices.Sort(switched)
+	if !slices.Equal(switched, []string{"demo-1", "demo-2"}) || len(calls.sends) != 2 {
+		t.Fatalf("switched = %v sends = %q", switched, calls.sends)
+	}
+	for _, want := range []string{"switched demo-1 to codex", "switched demo-2 to codex", "sent message to demo-1", "switched 2 sessions from claude-code to codex"} {
+		if !strings.Contains(out, want) {
+			t.Fatalf("output %q lacks %q", out, want)
+		}
+	}
+}
+
+func TestSessionSwitchFromReportsTheSessionsItCouldNotSwitch(t *testing.T) {
+	cfg := setConfigEnv(t)
+	srv, calls := switchCommandServer(t, http.StatusConflict, "PROVIDER_SWITCH_busy")
+	calls.sessions = `{"sessions":[{"id":"demo-1","projectId":"demo","kind":"worker","harness":"claude-code"}]}`
+	writeRunFileFor(t, cfg, srv)
+	_, errOut, err := executeCLI(t, Deps{ProcessAlive: func(int) bool { return true }}, "session", "switch", "--from", "claude-code", "codex")
+	if ExitCode(err) != 1 || !strings.Contains(err.Error(), "1 of 1 sessions on claude-code were not switched") || !strings.Contains(errOut, "demo-1: refused") {
+		t.Fatalf("err = %v exit = %d stderr = %q", err, ExitCode(err), errOut)
 	}
 }

@@ -25,8 +25,6 @@ type ProviderSwitchResult struct {
 	StoppedTurn     bool
 	CancelledQueued int
 	FailedApprovals bool
-	SettingsUpdated bool
-	Warnings        []string
 }
 
 // ProviderSwitchRequest is what a switch to another provider asks for.
