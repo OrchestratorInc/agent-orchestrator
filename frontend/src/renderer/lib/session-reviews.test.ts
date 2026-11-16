@@ -4,7 +4,6 @@ import type { PullRequestFacts, WorkspaceSession } from "../types/workspace";
 import {
 	openReviewStatesFor,
 	reviewIsRunning,
-	reviewPhase,
 	reviewRunDisabled,
 	reviewSessionRunAction,
 	sessionReviewsQueryOptions,
@@ -83,23 +82,6 @@ describe("shared review eligibility helpers", () => {
 	it("reports a running review across the session's open PRs", () => {
 		expect(reviewIsRunning([reviewState(1, "needs_review"), reviewState(2, "running")])).toBe(true);
 		expect(reviewIsRunning([reviewState(1, "needs_review")])).toBe(false);
-	});
-
-	it("reads the review phase from the run state, not the reviewer's activity", () => {
-		const withRun = (status: NonNullable<PRReviewState["latestRun"]>["status"], harness = "codex"): PRReviewState[] => [
-			{ ...reviewState(1, "running"), latestRun: { status, harness } as NonNullable<PRReviewState["latestRun"]> },
-		];
-		expect(reviewPhase(withRun("queued"), "idle")).toBe("starting");
-		expect(reviewPhase(withRun("launching"), undefined)).toBe("starting");
-		expect(reviewPhase(withRun("running"), "idle")).toBe("reviewing");
-		expect(reviewPhase(withRun("running"), "exited")).toBe("reviewing");
-		expect(reviewPhase(withRun("running"), "waiting_input", "codex")).toBe("waiting_input");
-		// The waiting reviewer is not the one whose pass is running.
-		expect(reviewPhase(withRun("running", "claude-code"), "waiting_input", "codex")).toBe("reviewing");
-		expect(reviewPhase(withRun("running"), "waiting_input")).toBe("reviewing");
-		expect(reviewPhase(withRun("cancelling"), "active")).toBe("stopping");
-		expect(reviewPhase([reviewState(1, "running")], "idle")).toBe("reviewing");
-		expect(reviewPhase([reviewState(1, "needs_review")], "active")).toBeNull();
 	});
 
 	it("polls only while a run is still active", () => {

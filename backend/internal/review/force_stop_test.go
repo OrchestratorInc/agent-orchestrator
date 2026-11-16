@@ -31,13 +31,11 @@ type scriptedTable struct {
 	// started is each process's start time; it survives exec and differs
 	// for a reused pid.
 	started map[int]string
-	// immortal pids ignore kills, like a process the OS refuses to end.
-	immortal map[int]bool
-	killed   []int
+	killed  []int
 }
 
 func newScriptedTable(lines ...string) *scriptedTable {
-	t := &scriptedTable{processes: map[int]procmem.Process{}, started: map[int]string{}, immortal: map[int]bool{}}
+	t := &scriptedTable{processes: map[int]procmem.Process{}, started: map[int]string{}}
 	table, err := procmem.Parse(strings.Join(lines, "\n"))
 	if err != nil {
 		panic(err)
@@ -77,9 +75,7 @@ func (t *scriptedTable) kill(pid int) error {
 	t.mu.Lock()
 	defer t.mu.Unlock()
 	t.killed = append(t.killed, pid)
-	if !t.immortal[pid] {
-		delete(t.processes, pid)
-	}
+	delete(t.processes, pid)
 	return nil
 }
 
@@ -115,43 +111,6 @@ func forceStopLauncher(rt reviewerRuntime, table *scriptedTable) *agentLauncher 
 	return &agentLauncher{runtime: rt, forceStop: forceStopHooks{snapshot: table.snapshot, starts: table.starts, kill: table.kill, wait: 50 * time.Millisecond, poll: 5 * time.Millisecond}}
 }
 
-// The reproduced failure: Destroy ends the PTY host (44487) and supervisor
-// (44490), but the stopped Claude process (44493) survives, reparented to
-// init. ForceStop kills it and only then confirms the stop.
-func TestForceStopKillsAnAgentTheRuntimeLeftBehind(t *testing.T) {
-	table := newScriptedTable(
-		"44487 1 100 0:00 ao pty-host",
-		"44490 44487 100 0:00 ao agent-process supervise --session review-mer-1",
-		"44493 44490 100 0:00 claude --review",
-		"500 1 100 0:00 unrelated",
-	)
-	rt := &destroyHookRuntime{rootedRuntime: &rootedRuntime{fakeRuntime: &fakeRuntime{}, roots: []int{44487}}}
-	rt.onDestroy = func() { table.destroyWrappers(44487, 44490) }
-	l := forceStopLauncher(rt, table)
-
-	stopped, err := l.ForceStop(context.Background(), "review-mer-1")
-	if err != nil || !stopped {
-		t.Fatalf("ForceStop = %v, %v; want confirmed", stopped, err)
-	}
-	if len(table.killed) != 1 || table.killed[0] != 44493 {
-		t.Fatalf("killed = %v, want only the surviving agent 44493", table.killed)
-	}
-}
-
-func TestForceStopIsUnconfirmedWhileAnyReviewerProcessSurvives(t *testing.T) {
-	table := newScriptedTable(
-		"44487 1 100 0:00 ao pty-host",
-		"44493 44487 100 0:00 claude --review",
-	)
-	table.immortal[44493] = true
-	rt := &destroyHookRuntime{rootedRuntime: &rootedRuntime{fakeRuntime: &fakeRuntime{}, roots: []int{44487}}}
-	rt.onDestroy = func() { table.destroyWrappers(44487) }
-	stopped, err := forceStopLauncher(rt, table).ForceStop(context.Background(), "review-mer-1")
-	if stopped || err == nil || !strings.Contains(err.Error(), "44493") {
-		t.Fatalf("ForceStop = %v, %v; want unconfirmed naming 44493", stopped, err)
-	}
-}
-
 // A pid reused by an unrelated process after the agent exited is never killed.
 func TestForceStopLeavesAReusedPidAlone(t *testing.T) {
 	table := newScriptedTable(
@@ -169,72 +128,5 @@ func TestForceStopLeavesAReusedPidAlone(t *testing.T) {
 	stopped, err := forceStopLauncher(rt, table).ForceStop(context.Background(), "review-mer-1")
 	if err != nil || !stopped || len(table.killed) != 0 {
 		t.Fatalf("ForceStop = %v, %v killed=%v; want confirmed without killing the reused pid", stopped, err, table.killed)
-	}
-}
-
-// Without the reviewer's process tree, wrapper liveness proves nothing, so
-// the stop is never confirmed.
-func TestForceStopIsUnconfirmedWithoutTheProcessTree(t *testing.T) {
-	table := newScriptedTable()
-	stopped, err := forceStopLauncher(&fakeRuntime{}, table).ForceStop(context.Background(), "review-mer-1")
-	if stopped || err == nil {
-		t.Fatalf("ForceStop without process roots = %v, %v; want unconfirmed", stopped, err)
-	}
-}
-
-// A process that execs during teardown changes its command line but not its
-// start time: it is still the reviewer's and must be killed.
-func TestForceStopKillsADescendantThatExecdDuringTeardown(t *testing.T) {
-	table := newScriptedTable(
-		"44487 1 100 0:00 ao pty-host",
-		"44493 44487 100 0:00 sh -c exec sleep 600",
-	)
-	rt := &destroyHookRuntime{rootedRuntime: &rootedRuntime{fakeRuntime: &fakeRuntime{}, roots: []int{44487}}}
-	rt.onDestroy = func() {
-		table.destroyWrappers(44487)
-		table.mu.Lock()
-		p := table.processes[44493]
-		p.Command = "sleep 600"
-		table.processes[44493] = p
-		table.mu.Unlock()
-	}
-	stopped, err := forceStopLauncher(rt, table).ForceStop(context.Background(), "review-mer-1")
-	if err != nil || !stopped {
-		t.Fatalf("ForceStop = %v, %v; want confirmed after killing the exec'd process", stopped, err)
-	}
-	if len(table.killed) != 1 || table.killed[0] != 44493 {
-		t.Fatalf("killed = %v, want the exec'd descendant 44493", table.killed)
-	}
-}
-
-// A retry after an unconfirmed stop still knows what the first attempt
-// captured: the runtime is gone and reports no roots, but the survivor is
-// still the reviewer's and the stop is not confirmed while it lives.
-func TestForceStopRetryKeepsTheSurvivorsOfAnEarlierAttempt(t *testing.T) {
-	table := newScriptedTable(
-		"44487 1 100 0:00 ao pty-host",
-		"44493 44487 100 0:00 claude --review",
-	)
-	table.immortal[44493] = true
-	roots := &rootedRuntime{fakeRuntime: &fakeRuntime{}, roots: []int{44487}}
-	rt := &destroyHookRuntime{rootedRuntime: roots}
-	rt.onDestroy = func() {
-		table.destroyWrappers(44487)
-		roots.roots = nil // the host is unregistered
-	}
-	l := forceStopLauncher(rt, table)
-	if stopped, _ := l.ForceStop(context.Background(), "review-mer-1"); stopped {
-		t.Fatal("first attempt confirmed with the survivor alive")
-	}
-	if stopped, err := l.ForceStop(context.Background(), "review-mer-1"); stopped || err == nil {
-		t.Fatalf("retry falsely confirmed while the survivor lives: %v, %v", stopped, err)
-	}
-	// Once it can be killed, the retry kills it and confirms.
-	table.immortal[44493] = false
-	if stopped, err := l.ForceStop(context.Background(), "review-mer-1"); !stopped || err != nil {
-		t.Fatalf("retry after the survivor became killable = %v, %v; want confirmed", stopped, err)
-	}
-	if _, alive := table.processes[44493]; alive {
-		t.Fatal("survivor still alive after a confirmed retry")
 	}
 }

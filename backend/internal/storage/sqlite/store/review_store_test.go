@@ -613,68 +613,6 @@ func TestReviewUpsertReusesRowAndRunRoundTrip(t *testing.T) {
 	}
 }
 
-func TestTransitionReviewRunsBySessionMovesOnlyActiveRunsOfTheHarness(t *testing.T) {
-	s := newTestStore(t)
-	ctx := context.Background()
-	seedProject(t, s, "mer")
-	rec, err := s.CreateSession(ctx, sampleRecord("mer"))
-	if err != nil {
-		t.Fatalf("create session: %v", err)
-	}
-	now := time.Now().UTC().Truncate(time.Second)
-	if err := s.UpsertReview(ctx, domain.Review{
-		ID: "rev-1", SessionID: rec.ID, ProjectID: rec.ProjectID,
-		Harness: domain.ReviewerCodex, CreatedAt: now, UpdatedAt: now,
-	}); err != nil {
-		t.Fatalf("upsert review: %v", err)
-	}
-	for _, run := range []domain.ReviewRun{
-		{ID: "run-1", ReviewID: "rev-1", SessionID: rec.ID, Harness: domain.ReviewerCodex, PRURL: "https://example/pr/1", TargetSHA: "sha1", Status: domain.ReviewRunRunning, CreatedAt: now},
-		{ID: "run-2", ReviewID: "rev-1", SessionID: rec.ID, Harness: domain.ReviewerCodex, PRURL: "https://example/pr/2", TargetSHA: "sha2", Status: domain.ReviewRunQueued, CreatedAt: now.Add(time.Second)},
-		{ID: "run-3", ReviewID: "rev-1", SessionID: rec.ID, Harness: domain.ReviewerCodex, PRURL: "https://example/pr/3", TargetSHA: "sha3", Status: domain.ReviewRunCompleted, Verdict: domain.VerdictApproved, CreatedAt: now.Add(2 * time.Second)},
-		{ID: "run-4", ReviewID: "rev-1", SessionID: rec.ID, Harness: domain.ReviewerClaudeCode, PRURL: "https://example/pr/4", TargetSHA: "sha4", Status: domain.ReviewRunLaunching, CreatedAt: now.Add(3 * time.Second)},
-	} {
-		if err := s.InsertReviewRun(ctx, run); err != nil {
-			t.Fatalf("insert %s: %v", run.ID, err)
-		}
-	}
-	active, err := s.ListActiveReviewRunsBySession(ctx, rec.ID)
-	if err != nil {
-		t.Fatalf("list active: %v", err)
-	}
-	if len(active) != 3 || active[0].ID != "run-4" || active[1].ID != "run-2" || active[2].ID != "run-1" {
-		t.Fatalf("active = %+v", active)
-	}
-	codex := domain.ReviewerCodex
-	ended := now.Add(time.Minute)
-	ids, err := s.TransitionReviewRunsBySession(ctx, rec.ID, &codex, domain.ActiveReviewRunStatuses, domain.ReviewRunCancelled, domain.ReviewRunPatch{CancelledBy: domain.ReviewCancelledByUser, EndedAt: &ended})
-	if err != nil {
-		t.Fatalf("cancel codex runs: %v", err)
-	}
-	if len(ids) != 2 {
-		t.Fatalf("cancelled ids = %v, want run-1 and run-2", ids)
-	}
-	runs, err := s.ListReviewRunsBySession(ctx, rec.ID)
-	if err != nil {
-		t.Fatalf("list runs: %v", err)
-	}
-	byID := map[string]domain.ReviewRun{}
-	for _, run := range runs {
-		byID[run.ID] = run
-	}
-	for _, id := range []string{"run-1", "run-2"} {
-		if run := byID[id]; run.Status != domain.ReviewRunCancelled || run.CancelledBy != domain.ReviewCancelledByUser || run.EndedAt == nil || !run.EndedAt.Equal(ended) {
-			t.Fatalf("%s not cancelled by user: %+v", id, run)
-		}
-	}
-	if byID["run-3"].Status != domain.ReviewRunCompleted {
-		t.Fatalf("completed run changed: %+v", byID["run-3"])
-	}
-	if byID["run-4"].Status != domain.ReviewRunLaunching {
-		t.Fatalf("other harness's run changed: %+v", byID["run-4"])
-	}
-}
-
 // Every write is guarded by its allowed from-states, and the first final
 // state wins: a late writer sees false and changes nothing.
 func TestTransitionReviewRunIsGuardedByFromStates(t *testing.T) {

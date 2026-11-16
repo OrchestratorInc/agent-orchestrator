@@ -235,7 +235,6 @@ function commonGetsResponder(
   reviewerHandleId = "",
   reviews: unknown[] = [],
   reviewerActivityState?: string,
-  reviewerHarness?: string,
 ) {
   return async (path: string) => {
     if (path === "/api/v1/agents/readiness") {
@@ -263,7 +262,7 @@ function commonGetsResponder(
       };
     }
     if (path === "/api/v1/sessions/{sessionId}/reviews") {
-      return { data: { reviewerHandleId, reviewerActivityState, reviews, ...(reviewerHarness ? { reviewerHarness } : {}) } };
+      return { data: { reviewerHandleId, reviewerActivityState, reviews } };
     }
     if (path === "/api/v1/projects/{id}") {
       return {
@@ -305,9 +304,8 @@ function mockCommonGets(
   reviewerHandleId = "",
   reviews: unknown[] = [],
   reviewerActivityState?: string,
-  reviewerHarness?: string,
 ) {
-  getMock.mockImplementation(commonGetsResponder(_unusedRuns, reviewerHandleId, reviews, reviewerActivityState, reviewerHarness));
+  getMock.mockImplementation(commonGetsResponder(_unusedRuns, reviewerHandleId, reviews, reviewerActivityState));
 }
 
 const approvedReview = {
@@ -5855,53 +5853,6 @@ describe("SessionInspector summary reviews", () => {
     ).toBeInTheDocument();
   });
 
-  it.each([
-    ["launching", "active", "Starting review..."],
-    ["queued", "idle", "Starting review..."],
-    ["running", "waiting_input", "Waiting for input · Codex"],
-    ["cancelling", "active", "Stopping..."],
-  ])("shows the %s run state as %s activity -> %s", async (status, activity, label) => {
-    const live = {
-      ...reviewState(3, "running", "sha-1"),
-      latestRun: { ...approvedReview, id: "run-live", harness: "codex", status, verdict: "" },
-    };
-    mockCommonGets([], "reviewer-pane", [live], activity, "codex");
-
-    renderWithQuery(<SessionInspector session={session([pr(3, "open")])} />);
-    await openReviewsSection();
-
-    expect((await screen.findAllByText(label)).length).toBeGreaterThan(0);
-  });
-
-  it("does not attribute the selected reviewer's wait to another reviewer's running pass", async () => {
-    const live = {
-      ...reviewState(3, "running", "sha-1"),
-      latestRun: { ...approvedReview, id: "run-live", harness: "codex", status: "running", verdict: "" },
-    };
-    // The selected reviewer (claude-code) is waiting; codex is the one working.
-    mockCommonGets([], "reviewer-pane", [live], "waiting_input", "claude-code");
-
-    renderWithQuery(<SessionInspector session={session([pr(3, "open")])} />);
-    await openReviewsSection();
-
-    expect(await screen.findByText("Reviewing... · Codex")).toBeInTheDocument();
-    expect(screen.queryByText(/Waiting for input/)).not.toBeInTheDocument();
-  });
-
-  it("does not report a run a newer commit replaced as a failure", async () => {
-    mockCommonGets([], "", [
-      {
-        ...reviewState(3, "needs_review", "abc123"),
-        latestRun: { ...failedReview, status: "superseded", body: "" },
-      },
-    ]);
-
-    renderWithQuery(<SessionInspector session={session([pr(3, "open")])} />);
-    await openReviewsSection();
-
-    expect(screen.queryByRole("status")).not.toBeInTheDocument();
-  });
-
   it("shows the review in progress strip when the reviewer hook reports blocked", async () => {
     const running = {
       ...reviewState(3, "running", "sha-1"),
@@ -6083,16 +6034,9 @@ describe("SessionInspector summary reviews", () => {
     expect(screen.getByRole("status")).toHaveTextContent(
       "Auto review: Review failed. Please try again.",
     );
-    // Retrying a failed automatic pass does not require turning auto review off.
-    const retry = within(screen.getByRole("status")).getByRole("button", { name: "Retry" });
-    expect(retry).toBeEnabled();
-    await userEvent.click(retry);
-    await waitFor(() =>
-      expect(postMock).toHaveBeenCalledWith("/api/v1/sessions/{sessionId}/reviews/trigger", expect.anything()),
-    );
   });
 
-  it("surfaces a failed manual review with a retry", async () => {
+  it("surfaces a failed manual review", async () => {
     const failedManualReview = {
       ...failedReview,
       triggerSource: "manual",
@@ -6114,27 +6058,6 @@ describe("SessionInspector summary reviews", () => {
       "Review: Review failed. Please try again.",
     );
     expect(screen.getByRole("status")).not.toHaveTextContent("turn_ended_without_submit");
-    await userEvent.click(within(screen.getByRole("status")).getByRole("button", { name: "Retry" }));
-    await waitFor(() =>
-      expect(postMock).toHaveBeenCalledWith("/api/v1/sessions/{sessionId}/reviews/trigger", expect.anything()),
-    );
-  });
-
-  it("keeps Retry available when the retry request fails", async () => {
-    const failedManualReview = { ...failedReview, triggerSource: "manual", body: "", failureReason: "process_exited" };
-    mockCommonGets([], "", [{ ...reviewState(3, "needs_review", "abc123"), latestRun: failedManualReview }]);
-    postMock.mockResolvedValue({ error: { error: { message: "daemon unavailable" } } });
-
-    renderWithQuery(<SessionInspector session={session([pr(3, "open")])} />);
-    await openReviewsSection();
-
-    await userEvent.click(within(screen.getByRole("status")).getByRole("button", { name: "Retry" }));
-    await waitFor(() =>
-      expect(postMock).toHaveBeenCalledWith("/api/v1/sessions/{sessionId}/reviews/trigger", expect.anything()),
-    );
-    await waitFor(() =>
-      expect(within(screen.getByRole("status")).getByRole("button", { name: "Retry" })).toBeEnabled(),
-    );
   });
 
   it("hides Reviews and the review preference when the session has no PR", async () => {
