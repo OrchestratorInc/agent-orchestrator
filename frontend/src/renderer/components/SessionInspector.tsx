@@ -2670,8 +2670,9 @@ function ReviewPanel({
 	// actually in flight, then the newest recorded one.
 	const runningStates = openReviewStates.filter((review) => review.status === "running");
 	const runningRun = runningStates[0]?.latestRun;
+	// A push since the last pass leaves that pass as previousRun, and it still says when the PR was last reviewed.
 	const newestRun = openReviewStates
-		.map((review) => review.latestRun)
+		.flatMap((review) => [review.latestRun, review.previousRun])
 		.filter((run): run is NonNullable<typeof run> => Boolean(run))
 		.sort((a, b) => b.createdAt.localeCompare(a.createdAt))[0];
 	const latest = runningRun ?? newestRun;
@@ -2712,7 +2713,7 @@ function ReviewPanel({
 					<>
 						{cloud ? (
 							<div className="flex min-h-8 min-w-0 items-center justify-between gap-3 py-1">
-								<span className="min-w-0 text-sm text-settings-label">{t("settings.models.reviewerRole")}</span>
+								<span className="min-w-0 text-sm text-settings-label">{t("inspector.agent")}</span>
 								<div className="flex min-w-0 items-center justify-end gap-1.5">
 									<Select
 										disabled={reviewRunning || isTriggering || isCancelling || isInstallingCloudHarness}
@@ -2753,7 +2754,7 @@ function ReviewPanel({
 						) : (
 							// Agent, model, and effort in one menu, picked the way the chat box picks them.
 							<div className="flex min-h-8 min-w-0 items-center justify-between gap-3 py-1">
-								<span className="shrink-0 text-sm text-settings-label">{t("settings.models.reviewerRole")}</span>
+								<span className="shrink-0 text-sm text-settings-label">{t("inspector.agent")}</span>
 								<ReviewerPicker
 									ariaLabel={t("inspector.selectReviewerAgent")}
 									agents={agentCatalog?.agents}

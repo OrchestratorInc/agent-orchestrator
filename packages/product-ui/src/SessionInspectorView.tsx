@@ -1304,8 +1304,12 @@ export function commentTextLines(body: string): string[] {
 			// Fences and rules go before any marker is stripped, while they still look like
 			// themselves: a suggestion block previews as its code, not as "suggestion".
 			if (/^(?:```|~~~)/.test(raw) || /^(?:[-*_=]\s*){3,}$/.test(raw)) return "";
+			// A GitHub alert's "> [!NOTE]" marker is its type, not its text.
+			if (/^(?:>\s*)?\[!(?:NOTE|TIP|IMPORTANT|WARNING|CAUTION)\]$/i.test(raw)) return "";
 			return raw
-				.replace(/^(?:#{1,6}\s+|[-*+]\s+(?:\[[ xX]\]\s+)?|>\s*)/, "")
+				// A quoted line can carry its own heading or list marker ("> ## Reviews paused").
+				.replace(/^(?:>\s*)+/, "")
+				.replace(/^(?:#{1,6}\s+|[-*+]\s+(?:\[[ xX]\]\s+)?)/, "")
 				// Emphasis is stripped outside inline code only; `_` must sit at a word edge, so snake_case stays.
 				.split(/(`[^`\n]*`)/)
 				.map((part, index) => index % 2 === 1 ? part.slice(1, -1) : part

@@ -5255,6 +5255,20 @@ describe("SessionInspector summary reviews", () => {
     ).toBeInTheDocument();
   });
 
+  // A push since the last pass leaves it as previousRun; the PR was still reviewed.
+  it("says when the PR was last reviewed after new commits land", async () => {
+    mockCommonGets([], "reviewer-pane", [{
+      ...reviewState(3, "needs_review", "sha-new"),
+      previousRun: { ...approvedReview, id: "run-old", targetSha: "c040adb1f2", verdict: "changes_requested" },
+    }]);
+
+    renderWithQuery(<SessionInspector session={session([pr(3, "open")])} />);
+    await openReviewsSection();
+
+    expect((await screen.findByText(/Last reviewed/)).closest("p")).toHaveTextContent("c040adb");
+    expect(screen.queryByText("Not reviewed yet")).not.toBeInTheDocument();
+  });
+
   it.each([false, true])("confirms a same-commit re-review before sending it (confirm=%s)", async (confirm) => {
     mockCommonGets([approvedReview], "reviewer-pane", [reviewState(3, "up_to_date")]);
     postMock.mockResolvedValue({
