@@ -69,11 +69,6 @@ type UseBrowserViewOptions = {
 	active: boolean;
 	poppedOut: boolean;
 	/**
-	 * The session's agent turn is running. While it is, a tab the person brings
-	 * forward leaves the agent working on its own tab behind it.
-	 */
-	agentWorking?: boolean;
-	/**
 	 * When true, the view is cleared and the daemon-driven preview is suppressed.
 	 * Use when the session is terminated: the old preview content should not
 	 * remain visible even if the DB still carries a preview_url.
@@ -111,9 +106,9 @@ export type BrowserViewModel = {
 	tabs: BrowserTabState[];
 	activeTabId: string;
 	tabNotice: string;
-	selectTab: (tabId: string) => Promise<void>;
+	selectTab: (tabId: string, byPerson?: boolean) => Promise<void>;
 	closeTab: (tabId: string) => Promise<void>;
-	openTab: (url?: string) => Promise<void>;
+	openTab: (url?: string, byPerson?: boolean) => Promise<void>;
 	openLink: (url: string) => Promise<void>;
 	reorderTabs: (orderedIds: string[]) => void;
 	closedTabs: ClosedBrowserTab[];
@@ -331,7 +326,6 @@ export function useBrowserView({
 	cloudAgentBrowser,
 	active,
 	poppedOut,
-	agentWorking = false,
 	terminated,
 	sessionEnded,
 	previewUrl,
@@ -375,15 +369,6 @@ export function useBrowserView({
 	const tabNoticeTimerRef = useRef<number | null>(null);
 	const tabsStateRef = useRef(tabsState);
 	const hasNativeBrowser = Boolean(window.ao?.browser);
-
-	// The tab host keeps the agent on its own tab while its turn runs and the
-	// person browses another (BrowserSessionEntry.agentTabId). Right after a
-	// session switch, viewId still names the previous session's view until the
-	// switch effect below catches up: never report this session's turn on it.
-	useEffect(() => {
-		if (!viewId || !hasNativeBrowser || stateSessionId !== sessionId) return;
-		void window.ao?.browser.setAgentTurn?.({ viewId, active: agentWorking })?.catch(() => undefined);
-	}, [agentWorking, hasNativeBrowser, sessionId, stateSessionId, viewId]);
 
 	useEffect(() => {
 		activeRef.current = active;
@@ -976,12 +961,14 @@ export function useBrowserView({
 		[hasNativeBrowser],
 	);
 
+	// byPerson: false when the app, not the person, brings the tab forward
+	// (a preview): the agent then follows it instead of keeping its own tab.
 	const selectTab = useCallback(
-		async (tabId: string) => {
+		async (tabId: string, byPerson = true) => {
 			const viewId = viewIdRef.current;
 			if (!viewId || !hasNativeBrowser) return;
 			try {
-				const state = await window.ao!.browser.selectTab({ viewId, tabId });
+				const state = await window.ao!.browser.selectTab({ viewId, tabId, byPerson });
 				if (viewIdRef.current === state.viewId) setTabsState(state);
 			} catch {
 				// The native view may already have switched before automation
@@ -1039,7 +1026,7 @@ export function useBrowserView({
 	);
 
 	const openTab = useCallback(
-		async (url?: string) => {
+		async (url?: string, byPerson = true) => {
 			if (!hasNativeBrowser) return;
 			let viewId = viewIdRef.current;
 			if (!viewId) {
@@ -1049,7 +1036,7 @@ export function useBrowserView({
 				setViewId(viewId);
 				setNavState(ensured);
 			}
-			const state = await window.ao!.browser.openTab({ viewId, url });
+			const state = await window.ao!.browser.openTab({ viewId, url, byPerson });
 			if (viewIdRef.current === state.viewId) setTabsState(state);
 		},
 		[hasNativeBrowser, sessionId],
@@ -1187,8 +1174,8 @@ export function useBrowserView({
 			if (!tabs?.find((tab) => tab.active)?.remote) return navigate(url);
 			const preview = /^https:\/\/ao-preview-[0-9a-f]{32}\.localhost(?::\d+)?\//;
 			const own = tabs.find((tab) => !tab.remote && (sameBrowserOrigin(tab.url, url) || preview.test(tab.url)));
-			if (!own) return openTab(url);
-			await selectTab(own.id);
+			if (!own) return openTab(url, false);
+			await selectTab(own.id, false);
 			return navigate(url);
 		},
 		[hasNativeBrowser, navigate, openTab, selectTab],
@@ -1219,7 +1206,7 @@ export function useBrowserView({
 			void agentBrowserUrl().then(async (url) => {
 				if (cancelled || viewIdRef.current !== viewId) return;
 				if (!url) return again(attempt);
-				const state = await window.ao!.browser.openTab({ viewId, url });
+				const state = await window.ao!.browser.openTab({ viewId, url, byPerson: false });
 				if (viewIdRef.current === viewId) setTabsState(state);
 			}).catch((error) => {
 				if (attempt === 0) console.warn("Unable to open the agent browser", error);

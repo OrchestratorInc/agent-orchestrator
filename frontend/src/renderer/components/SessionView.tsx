@@ -1742,7 +1742,6 @@ export function SessionView({ sessionId, cloudOrgId, projectId, hostId }: Sessio
 		cloudAgentBrowser: session?.cloud && cloudCpReady ? { baseUrl: cloudCpBaseUrl, orgId: session.cloud.orgId, sessionId: session.id } : undefined,
 		active: browserSlotVisible,
 		poppedOut: browserPoppedOut,
-		agentWorking: session?.activity?.state === "active" || session?.activity?.state === "blocked",
 		terminated: browserTerminated,
 		sessionEnded: session?.isTerminated,
 		previewUrl,

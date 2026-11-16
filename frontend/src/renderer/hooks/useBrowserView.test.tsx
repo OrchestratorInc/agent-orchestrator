@@ -77,7 +77,7 @@ function setupBridge() {
 			activeTabId: "t1",
 			tabs: [{ id: "t1", url: "", title: "", active: true }],
 		})),
-		setAgentTurn: vi.fn(async (_input: { viewId: string; active: boolean }) => undefined),
+		setAgentTurn: vi.fn(async (_input: { sessionId: string; active: boolean }) => undefined),
 		selectTab: vi.fn(async ({ viewId, tabId }: { viewId: string; tabId: string }) => ({
 			viewId,
 			activeTabId: tabId,
@@ -238,33 +238,6 @@ describe("useBrowserView", () => {
 		resetConsumedPreviewTriggersForTest();
 		resetClosedTabsForTest();
 		resetNativeViewCacheForTest();
-	});
-
-	it("tells the tab host when the agent's turn starts and ends", async () => {
-		const bridge = setupBridge();
-		const { rerender } = renderHook(
-			({ agentWorking }) => useBrowserView({ sessionId: "sess-1", active: true, poppedOut: false, agentWorking }),
-			{ initialProps: { agentWorking: false } },
-		);
-		await waitFor(() => expect(bridge.setAgentTurn).toHaveBeenCalledWith({ viewId: "42:sess-1", active: false }));
-
-		rerender({ agentWorking: true });
-		await waitFor(() => expect(bridge.setAgentTurn).toHaveBeenLastCalledWith({ viewId: "42:sess-1", active: true }));
-		rerender({ agentWorking: false });
-		await waitFor(() => expect(bridge.setAgentTurn).toHaveBeenLastCalledWith({ viewId: "42:sess-1", active: false }));
-	});
-
-	it("never reports a newly shown session's turn on the previous session's view", async () => {
-		const bridge = setupBridge();
-		const { rerender } = renderHook(
-			({ sessionId, agentWorking }) => useBrowserView({ sessionId, active: true, poppedOut: false, agentWorking }),
-			{ initialProps: { sessionId: "sess-1", agentWorking: true } },
-		);
-		await waitFor(() => expect(bridge.setAgentTurn).toHaveBeenCalledWith({ viewId: "42:sess-1", active: true }));
-
-		rerender({ sessionId: "sess-2", agentWorking: false });
-		await waitFor(() => expect(bridge.setAgentTurn).toHaveBeenCalledWith({ viewId: "42:sess-2", active: false }));
-		expect(bridge.setAgentTurn.mock.calls.map(([input]) => input)).not.toContainEqual({ viewId: "42:sess-1", active: false });
 	});
 
 	it("ensures a scoped browser view and reports the measured slot bounds", async () => {
@@ -595,6 +568,7 @@ describe("useBrowserView", () => {
 		expect(bridge.selectTab).toHaveBeenCalledWith({
 			viewId: "42:sess-1",
 			tabId: "t1",
+			byPerson: true,
 		});
 		await act(() => result.current.closeTab("t2"));
 		expect(bridge.closeTab).toHaveBeenCalledWith({
@@ -611,7 +585,7 @@ describe("useBrowserView", () => {
 		await act(() => result.current.openLink("http://localhost:5173/"));
 
 		expect(bridge.navigate).toHaveBeenCalledWith({ viewId: "42:sess-1", url: "http://localhost:5173/" });
-		expect(bridge.openTab).not.toHaveBeenCalledWith({ viewId: "42:sess-1", url: "http://localhost:5173/" });
+		expect(bridge.openTab).not.toHaveBeenCalledWith({ viewId: "42:sess-1", url: "http://localhost:5173/", byPerson: true });
 	});
 
 	it("selects an existing matching tab instead of opening a duplicate", async () => {
@@ -638,10 +612,11 @@ describe("useBrowserView", () => {
 		});
 
 		await act(() => result.current.openLink("https://www.instagram.com/#inbox"));
-		expect(bridge.selectTab).toHaveBeenCalledWith({ viewId: "42:sess-1", tabId: "t1" });
+		expect(bridge.selectTab).toHaveBeenCalledWith({ viewId: "42:sess-1", tabId: "t1", byPerson: true });
 		expect(bridge.openTab).not.toHaveBeenCalledWith({
 			viewId: "42:sess-1",
 			url: "https://www.instagram.com/#inbox",
+			byPerson: true,
 		});
 	});
 
@@ -686,6 +661,7 @@ describe("useBrowserView", () => {
 		expect(bridge.openTab).toHaveBeenCalledWith({
 			viewId: "42:sess-1",
 			url: "http://localhost:4173/",
+			byPerson: true,
 		});
 		expect(result.current.closedTabs).toEqual([]);
 	});
@@ -732,6 +708,7 @@ describe("useBrowserView", () => {
 		expect(bridge.openTab).toHaveBeenCalledWith({
 			viewId: "42:sess-1",
 			url: "http://localhost:4173/",
+			byPerson: true,
 		});
 	});
 
@@ -769,6 +746,7 @@ describe("useBrowserView", () => {
 		expect(bridge.openTab).toHaveBeenCalledWith({
 			viewId: "42:sess-1",
 			url: "http://localhost:4173/",
+			byPerson: true,
 		});
 	});
 
@@ -820,6 +798,7 @@ describe("useBrowserView", () => {
 		expect(bridge.openTab).toHaveBeenCalledWith({
 			viewId: "42:sess-1",
 			url: "http://localhost:4173/",
+			byPerson: true,
 		});
 		expect(result.current.closedTabs).toHaveLength(0);
 	});
@@ -1815,7 +1794,7 @@ describe("useBrowserView", () => {
 			const browser = setupBridge();
 			vi.spyOn(aoBridge.remotes, "agentBrowserUrl").mockResolvedValue(agentUrl);
 			renderHook(() => useBrowserView(remote));
-			await waitFor(() => expect(browser.openTab).toHaveBeenCalledWith({ viewId, url: agentUrl }));
+			await waitFor(() => expect(browser.openTab).toHaveBeenCalledWith({ viewId, url: agentUrl, byPerson: false }));
 			expect(browser.navigate).not.toHaveBeenCalled();
 		});
 
@@ -1830,7 +1809,7 @@ describe("useBrowserView", () => {
 				expect(lookup).toHaveBeenCalledWith("https://cp.example", "org-1", "ses-1");
 				await act(() => vi.advanceTimersByTimeAsync(2_000));
 				expect(lookup).toHaveBeenCalledTimes(2);
-				expect(browser.openTab).toHaveBeenCalledWith({ viewId: "42:ses-1", url: agentUrl });
+				expect(browser.openTab).toHaveBeenCalledWith({ viewId: "42:ses-1", url: agentUrl, byPerson: false });
 				expect(remoteLookup).not.toHaveBeenCalled();
 			} finally {
 				vi.useRealTimers();
@@ -1845,7 +1824,7 @@ describe("useBrowserView", () => {
 			const agentTab = { id: "t1", url: "", title: "", active: true, remote: { tabId: "" } };
 			browser.getTabs.mockResolvedValue({ viewId, activeTabId: "t1", tabs: [agentTab] });
 			renderHook(() => useBrowserView({ ...remote, previewUrl: "http://localhost:5173/", previewRevision: 1 }));
-			await waitFor(() => expect(browser.openTab).toHaveBeenCalledWith({ viewId, url: appPreview }));
+			await waitFor(() => expect(browser.openTab).toHaveBeenCalledWith({ viewId, url: appPreview, byPerson: false }));
 			expect(browser.navigate).not.toHaveBeenCalled();
 		});
 
@@ -1858,7 +1837,7 @@ describe("useBrowserView", () => {
 			browser.getTabs.mockResolvedValue({ viewId, activeTabId: "a1", tabs: [previewTab, agentTab] });
 			renderHook(() => useBrowserView({ ...remote, previewUrl: "http://localhost:5173/", previewRevision: 1 }));
 			await waitFor(() => expect(browser.navigate).toHaveBeenCalledWith({ viewId, url: appPreview }));
-			expect(browser.selectTab).toHaveBeenCalledWith({ viewId, tabId: "t1" });
+			expect(browser.selectTab).toHaveBeenCalledWith({ viewId, tabId: "t1", byPerson: false });
 			expect(browser.openTab).not.toHaveBeenCalled();
 		});
 
@@ -1886,7 +1865,7 @@ describe("useBrowserView", () => {
 				expect(lookup).toHaveBeenCalledTimes(2);
 				await act(() => vi.advanceTimersByTimeAsync(1));
 				expect(lookup).toHaveBeenCalledTimes(3);
-				expect(browser.openTab).toHaveBeenCalledWith({ viewId, url: agentUrl });
+				expect(browser.openTab).toHaveBeenCalledWith({ viewId, url: agentUrl, byPerson: false });
 			} finally {
 				vi.useRealTimers();
 			}
@@ -1939,7 +1918,7 @@ describe("useBrowserView", () => {
 			const { result } = renderHook(() => useBrowserView(remote));
 			await waitFor(() => expect(browser.getTabs).toHaveBeenCalled());
 			await act(() => result.current.openLink("https://example.com/"));
-			expect(browser.openTab).toHaveBeenCalledWith({ viewId, url: "https://example.com/" });
+			expect(browser.openTab).toHaveBeenCalledWith({ viewId, url: "https://example.com/", byPerson: true });
 			expect(browser.navigate).not.toHaveBeenCalled();
 			expect(browser.selectTab).not.toHaveBeenCalled();
 		});

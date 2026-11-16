@@ -715,14 +715,15 @@ const api = {
 			},
 		},
 		getTabs: (viewId: string) => ipcRenderer.invoke("browser:getTabs", viewId) as Promise<BrowserTabsState>,
-		selectTab: (input: { viewId: string; tabId: string }) =>
+		/** byPerson: false when the app, not the person, brings the tab forward. */
+		selectTab: (input: { viewId: string; tabId: string; byPerson?: boolean }) =>
 			ipcRenderer.invoke("browser:selectTab", input) as Promise<BrowserTabsState>,
-		/** Whether the session's agent turn is running: see BrowserSessionEntry.agentTabId. */
-		setAgentTurn: (input: { viewId: string; active: boolean }) =>
+		/** Whether a session's agent turn is running: see BrowserSessionEntry.agentTabId. */
+		setAgentTurn: (input: { sessionId: string; active: boolean }) =>
 			ipcRenderer.invoke("browser:agentTurn", input) as Promise<void>,
 		closeTab: (input: { viewId: string; tabId: string }) =>
 			ipcRenderer.invoke("browser:closeTab", input) as Promise<BrowserTabsState>,
-		openTab: (input: { viewId: string; url?: string }) =>
+		openTab: (input: { viewId: string; url?: string; byPerson?: boolean }) =>
 			ipcRenderer.invoke("browser:openTab", input) as Promise<BrowserTabsState>,
 		getProfile: (viewId: string) =>
 			ipcRenderer.invoke("browser:profile:get", viewId) as Promise<BrowserProfileViewState>,

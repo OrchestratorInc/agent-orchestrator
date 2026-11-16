@@ -25,6 +25,11 @@ import type { TFunction } from "i18next";
 import { appI18n, type MessageKey } from "../i18n";
 import { toKanbanColumn, type SessionActivity, type SessionStatus } from "../types/workspace";
 
+/** The agent's turn is running, including while it waits on a permission prompt. */
+export function agentTurnRunning(activity?: SessionActivity | null): boolean {
+	return isAgentActivityWorking(activity) || activity?.state === "blocked";
+}
+
 function translator(t: TFunction): ProductUITranslator {
 	return (key, values) => t(key as MessageKey, values);
 }
