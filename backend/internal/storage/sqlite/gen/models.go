@@ -1014,6 +1014,19 @@ type TelemetryLifetimeSession struct {
 	Count     int64
 }
 
+type TimestampRepairControl struct {
+	ID     int64
+	Paused int64
+}
+
+type TimestampRepairProgress struct {
+	TableName  string
+	Signature  string
+	Generation int64
+	Completed  int64
+	Rejected   int64
+}
+
 type UsageBinding struct {
 	ID             int64
 	SessionID      domain.SessionID
