@@ -121,7 +121,7 @@ func mergePRFacts(current, next domain.PRFacts) domain.PRFacts {
 		}
 		// The parent is derived from the target branch, so only a record aimed
 		// at the same base can lend it one.
-		if next.StackParent == 0 && sameAliasPart(next.TargetBranch, current.TargetBranch) {
+		if next.StackParent == 0 && sameTargetBranch(next.TargetBranch, current.TargetBranch) {
 			next.StackParent = current.StackParent
 		}
 		return next
@@ -139,7 +139,7 @@ func mergePRFacts(current, next domain.PRFacts) domain.PRFacts {
 	if current.HeadSHA == "" {
 		current.HeadSHA = next.HeadSHA
 	}
-	if current.StackParent == 0 && sameAliasPart(current.TargetBranch, next.TargetBranch) {
+	if current.StackParent == 0 && sameTargetBranch(current.TargetBranch, next.TargetBranch) {
 		current.StackParent = next.StackParent
 	}
 	return current
@@ -174,8 +174,10 @@ func normalizedAliasPart(value string) string {
 	return strings.ToLower(strings.TrimSpace(value))
 }
 
-func sameAliasPart(a, b string) bool {
-	return normalizedAliasPart(a) == normalizedAliasPart(b)
+// sameTargetBranch compares branch names the way Git and the stack-parent
+// lookup do: case matters, so feat/Base is not feat/base.
+func sameTargetBranch(a, b string) bool {
+	return strings.TrimSpace(a) == strings.TrimSpace(b)
 }
 
 func githubPRURLIdentity(raw string) (host, owner, repoName string, number int, ok bool) {

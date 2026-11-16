@@ -5870,6 +5870,16 @@ func TestDeduplicatePRFactsCarriesStackParentOnlyForTheSameBase(t *testing.T) {
 	if len(got) != 1 || got[0].TargetBranch != "feat/base" || got[0].StackParent != 8 {
 		t.Fatalf("alias without a target = %+v, want feat/base waiting on #8", got)
 	}
+
+	// Branch names are case-sensitive: feat/Base is a different base, in
+	// either input order.
+	recased := domain.PRFacts{URL: "https://github.com/Acme/App/pull/9", Number: 9, TargetBranch: "feat/Base", UpdatedAt: now.Add(time.Minute)}
+	for _, in := range [][]domain.PRFacts{{stale, recased}, {recased, stale}} {
+		got = deduplicatePRFacts(in)
+		if len(got) != 1 || got[0].TargetBranch != "feat/Base" || got[0].StackParent != 0 {
+			t.Fatalf("alias retargeted to feat/Base = %+v, want no stack parent", got)
+		}
+	}
 }
 
 func TestDeduplicatePRFactsKeepsSameBasenameAcrossDifferentOwners(t *testing.T) {
