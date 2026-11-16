@@ -413,6 +413,18 @@ func (e *Engine) TriggerWithOptions(ctx stdctx.Context, workerID domain.SessionI
 		}
 		selectedMode = domain.ReviewerInterfaceTUI
 	}
+	// A pass left running by another harness's reviewer is invisible to the
+	// selected-harness stale sweep below, yet it keeps the head "running" and
+	// blocks this trigger forever once that reviewer is gone. Settle those
+	// orphans before planning so only a live reviewer can hold a head.
+	if changed, err := e.reconcileOtherHarnessReviewers(ctx, reviewRows, harness, runs); err != nil {
+		return TriggerResult{}, err
+	} else if changed {
+		runs, err = e.store.ListReviewRunsBySession(ctx, workerID)
+		if err != nil {
+			return TriggerResult{}, err
+		}
+	}
 	// Another reviewer that is still working keeps running: a worker may ask
 	// several reviewers for opinions on the same commit at once. Only idle
 	// panes of other reviewers are released.
@@ -964,12 +976,47 @@ func (e *Engine) destroyOtherReviewerHandles(ctx stdctx.Context, workerID domain
 // running pass, while leaving any reviewer that is still working alone.
 func (e *Engine) destroyIdleOtherReviewerHandles(ctx stdctx.Context, workerID domain.SessionID, selected domain.ReviewerHarness, reviews []domain.Review, runs []domain.ReviewRun) error {
 	idle := make([]domain.Review, 0, len(reviews))
+	detached := make([]domain.Review, 0, len(reviews))
 	for _, review := range reviews {
-		if review.Harness != selected && !reviewRunsContainRunningForReview(runs, review) {
-			idle = append(idle, review)
+		if reviewerHandleInUse(review, selected, runs) {
+			continue
+		}
+		// TUI reviewers share one stable per-worker pane handle, so an idle row
+		// can still carry the very handle another reviewer is working in. Keep
+		// that pane, but drop the stale claim so the row is not reported active.
+		if review.ReviewerHandleID != "" && reviewerHandleHeldElsewhere(review, selected, reviews, runs) {
+			detached = append(detached, review)
+			continue
+		}
+		idle = append(idle, review)
+	}
+	if err := e.destroyOtherReviewerHandles(ctx, workerID, selected, idle); err != nil {
+		return err
+	}
+	for _, review := range detached {
+		if err := e.store.ClearReviewerHandleByHarness(ctx, workerID, review.Harness); err != nil {
+			return err
 		}
 	}
-	return e.destroyOtherReviewerHandles(ctx, workerID, selected, idle)
+	return nil
+}
+
+// reviewerHandleInUse reports whether a review row owns a pane that must stay
+// alive: the selected reviewer, or any reviewer with a running pass.
+func reviewerHandleInUse(review domain.Review, selected domain.ReviewerHarness, runs []domain.ReviewRun) bool {
+	return review.Harness == selected || reviewRunsContainRunningForReview(runs, review)
+}
+
+// reviewerHandleHeldElsewhere reports whether the row's handle also belongs to a
+// reviewer that is still using it. TUI reviewers share a stable per-worker
+// handle, so two rows can name the same pane.
+func reviewerHandleHeldElsewhere(review domain.Review, selected domain.ReviewerHarness, reviews []domain.Review, runs []domain.ReviewRun) bool {
+	for _, other := range reviews {
+		if other.ReviewerHandleID == review.ReviewerHandleID && reviewerHandleInUse(other, selected, runs) {
+			return true
+		}
+	}
+	return false
 }
 
 func reviewRunsContainRunningForReview(runs []domain.ReviewRun, review domain.Review) bool {
@@ -1117,7 +1164,14 @@ func (e *Engine) restorePersistedChatReviewerLocked(ctx stdctx.Context, worker d
 	defer releaseHarness()
 	launch, err := e.launcher.RestoreTerminal(ctx, LaunchSpec{ReviewSessionID: review.ID, LaunchID: launchID, WorkerID: worker.ID, ProjectID: worker.ProjectID, ProjectEnv: projectEnv, Harness: review.Harness, WorkspacePath: worker.Metadata.WorkspacePath, AgentSessionID: review.AgentSessionID, ProviderConversationID: review.ProviderConversationID, PreviousRuns: previousRuns, InterfaceMode: review.InterfaceMode})
 	if err != nil {
-		return RestoreReviewerResult{}, fmt.Errorf("restore reviewer: %w", err)
+		restoreErr := fmt.Errorf("restore reviewer: %w", err)
+		// Nothing retries a Chat controller for the rest of this daemon's
+		// lifetime, so a failed restore has to settle its passes instead of
+		// leaving them looking like a review that is still in progress.
+		if failErr := e.failRunningRestoredRuns(ctx, previousRuns, restoreErr.Error()); failErr != nil {
+			return RestoreReviewerResult{}, errors.Join(restoreErr, failErr)
+		}
+		return RestoreReviewerResult{}, restoreErr
 	}
 	agentSessionID := review.AgentSessionID
 	if launch.AgentSessionID != "" {
@@ -1156,9 +1210,10 @@ func (e *Engine) restoreReviewerLocked(
 		if other.Harness == harness || !reviewRunsContainRunningForReview(runs, other) {
 			continue
 		}
-		// A Chat reviewer has no pane by design; RecoverChatReviewers restores
-		// its durable conversation, so a missing handle is not a dead reviewer.
-		if other.InterfaceMode == domain.ReviewerInterfaceChat {
+		// A Chat row with no handle has no controller to probe, but its durable
+		// conversation is all a restore needs, so it is left alone. Chat rows
+		// with a handle go through the probe like any other reviewer.
+		if other.ReviewerHandleID == "" && reviewerRecoverableChat(other) {
 			continue
 		}
 		if _, err := e.cancelStaleRunningRuns(ctx, workerID, other.Harness, other, true, runs); err != nil {
@@ -1604,13 +1659,53 @@ func reviewerRowActive(review domain.Review, runs []domain.ReviewRun) bool {
 	return false
 }
 
-const reviewerExitedBeforeSubmission = "reviewer process exited before submitting a result"
+const (
+	reviewerExitedBeforeSubmission = "reviewer process exited before submitting a result"
+	reviewerNotAttached            = "no reviewer process is attached to this review; the review run was failed"
+)
 
-// reconcileExitedReviewer converts a definitively dead active reviewer into
-// durable failed-run facts. Probe errors are intentionally ignored: an unknown
+// reconcileOtherHarnessReviewers settles running passes owned by reviewers
+// other than the selected harness. They are deliberately excluded from
+// cancelStaleRunningRuns, which only knows the selected reviewer's terminal, so
+// without this they would keep a PR "running" and block every later trigger
+// after their reviewer died.
+//
+// The caller must hold the worker lock.
+func (e *Engine) reconcileOtherHarnessReviewers(ctx stdctx.Context, reviewRows []domain.Review, selected domain.ReviewerHarness, runs []domain.ReviewRun) (bool, error) {
+	changed := false
+	for i := range reviewRows {
+		// Legacy rows predate per-harness runs and belong to whichever reviewer
+		// is current, so the selected-harness sweep already owns them.
+		if reviewRows[i].Harness == "" || reviewRows[i].Harness == selected {
+			continue
+		}
+		settled, err := e.reconcileExitedReviewer(ctx, &reviewRows[i], runs)
+		if err != nil {
+			return changed, err
+		}
+		changed = changed || settled
+	}
+	return changed, nil
+}
+
+// reviewerRecoverableChat reports whether a Chat reviewer's pass lives in a
+// durable provider conversation that RecoverChatReviewers can restore. It is
+// only consulted for a row with no handle: once a handle exists, the liveness
+// probe decides, because startup recovery has already run by then.
+func reviewerRecoverableChat(review domain.Review) bool {
+	return review.InterfaceMode == domain.ReviewerInterfaceChat && review.ProviderConversationID != ""
+}
+
+// reconcileExitedReviewer converts a reviewer that cannot finish its running
+// passes into durable failed-run facts. A missing handle is proof that no live
+// reviewer is attached: Trigger records the handle before it releases the
+// worker lock, so a running pass with no handle belongs to a launch that never
+// completed (or lost its handle) and can never report a result. A Chat row
+// without a handle is the exception, because its durable conversation is
+// enough for a restore. Probe errors are intentionally ignored: an unknown
 // runtime state is not proof that the reviewer exited.
 func (e *Engine) reconcileExitedReviewer(ctx stdctx.Context, review *domain.Review, runs []domain.ReviewRun) (bool, error) {
-	if review.ID == "" || review.ReviewerHandleID == "" || review.ReviewerActivityState != domain.ActivityActive {
+	if review.ID == "" {
 		return false, nil
 	}
 	hasRunning := false
@@ -1623,19 +1718,35 @@ func (e *Engine) reconcileExitedReviewer(ctx stdctx.Context, review *domain.Revi
 	if !hasRunning {
 		return false, nil
 	}
-	alive, err := e.launcher.Alive(ctx, review.ReviewerHandleID, review.ReviewerLaunchID)
-	if err != nil {
-		// An unavailable probe is unknown, not evidence that the reviewer died.
-		alive = true
-	}
-	if alive {
+	body := reviewerExitedBeforeSubmission
+	if review.ReviewerHandleID != "" {
+		// Chat rows record a "review-chat:" handle, so the probe covers them too.
+		// Callers reach this after waitForChatRecovery, which means a controller
+		// that is not alive now is not the startup window: RecoverChatReviewers
+		// has already run and would have settled a pass it could not restore.
+		// Review chats are not hibernated (that only stops session-owned chats),
+		// so an absent controller means the pass has no way to report a result.
+		alive, err := e.launcher.Alive(ctx, review.ReviewerHandleID, review.ReviewerLaunchID)
+		if err != nil {
+			// An unavailable probe is unknown, not evidence that the reviewer died.
+			alive = true
+		}
+		if alive {
+			return false, nil
+		}
+	} else if reviewerRecoverableChat(*review) {
+		// A Chat row without a handle predates per-harness handles; its durable
+		// conversation is all a restore needs, so it is not evidence of a launch
+		// that never attached.
 		return false, nil
+	} else {
+		body = reviewerNotAttached
 	}
 	for _, run := range runs {
 		if run.ReviewID != review.ID || run.Status != domain.ReviewRunRunning {
 			continue
 		}
-		if _, err := e.store.UpdateReviewRunResult(ctx, run.ID, domain.ReviewRunFailed, domain.VerdictNone, reviewerExitedBeforeSubmission, "", run.AutoInjectReview); err != nil {
+		if _, err := e.store.UpdateReviewRunResult(ctx, run.ID, domain.ReviewRunFailed, domain.VerdictNone, body, "", run.AutoInjectReview); err != nil {
 			return false, err
 		}
 	}
