@@ -331,6 +331,8 @@ describe("telemetry sanitizers", () => {
 		expect(config.capture_pageview).toBe(false);
 		expect(config.capture_exceptions).toBe(false);
 		expect(config.capture_performance).toBe(false);
+		// No window-wide scroll listener measuring scroll depth for pageviews AO never sends.
+		expect(config.disable_scroll_properties).toBe(true);
 	});
 
 	it("emits the stable AO installation id without creating a person profile", () => {
