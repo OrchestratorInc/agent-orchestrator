@@ -2752,6 +2752,7 @@
 	"archive.deleteArtifacts_other": "Delete {{count}} artifacts",
 	"archive.deleteArtifactsHint_one": "This can't be undone, and a restored session starts without it.",
 	"archive.deleteArtifactsHint_other": "This can't be undone, and a restored session starts without them.",
+	"archive.deleteArtifactsFiles": "The other files in their folder are deleted too.",
 	"archive.deleteArtifactsPublished_one": "{{count}} is published; its link will stop working.",
 	"archive.deleteArtifactsPublished_other": "{{count}} are published; their links will stop working.",
 	"links.stillLive_one": "{{count}} public link still works",

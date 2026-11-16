@@ -1,6 +1,6 @@
 import { type ReactElement, useEffect, useId, useState } from "react";
 import { useTranslation } from "react-i18next";
-import { sessionArtifacts, type WorkspaceSession } from "../types/workspace";
+import { sessionArtifacts, sessionDeliverables, type WorkspaceSession } from "../types/workspace";
 import { sessionPublishedCheck, type PublishedCheck } from "../lib/unpublish-artifacts";
 import { usePublishedLinkCount } from "../hooks/usePublishedLinkCount";
 import { useSettings } from "../hooks/useSettings";
@@ -49,7 +49,11 @@ export function SessionArchiveDialog({
 	// conversation and work so it can be re-provisioned later.
 	const isCloud = session?.cloud !== undefined;
 	const body = isCloud ? t("archive.bodyCloud") : t("archive.body");
-	const artifactCount = session ? sessionArtifacts(session).length : 0;
+	// Counted as every list shows them: registered files, a bundle as one. The
+	// delete still takes the whole folder, so its other files are mentioned.
+	const deliverables = session ? sessionDeliverables(session) : [];
+	const artifactCount = deliverables.length;
+	const otherFiles = session ? sessionArtifacts(session).length > deliverables.reduce((sum, artifact) => sum + (artifact.bundle?.fileCount ?? 1), 0) : false;
 	const published = sessionPublishedCheck(session);
 	const deleting = artifactCount > 0 && deleteArtifacts;
 	return (
@@ -80,6 +84,7 @@ export function SessionArchiveDialog({
 							</label>
 							<p className="text-settings-muted">
 								{t("archive.deleteArtifactsHint", { count: artifactCount })}
+								{otherFiles ? ` ${t("archive.deleteArtifactsFiles")}` : null}
 								{session?.hostId ? <HostPublishedNote session={session} /> : published.lookup.length > 0 ? <LookedUpPublishedNote check={published} /> : <PublishedNote count={published.known} />}
 							</p>
 						</div>

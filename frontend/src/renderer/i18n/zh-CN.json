@@ -2354,6 +2354,7 @@
 	"archive.deleteArtifacts_other": "删除 {{count}} 个产物",
 	"archive.deleteArtifactsHint_one": "此操作无法撤销，恢复的会话将不包含这些产物。",
 	"archive.deleteArtifactsHint_other": "此操作无法撤销，恢复的会话将不包含这些产物。",
+	"archive.deleteArtifactsFiles": "其所在文件夹中的其他文件也会一并删除。",
 	"archive.deleteArtifactsPublished_one": "其中 {{count}} 个已发布，其链接将失效。",
 	"archive.deleteArtifactsPublished_other": "其中 {{count}} 个已发布，其链接将失效。",
 	"links.stillLive_one": "{{count}} 个公开链接仍然有效",

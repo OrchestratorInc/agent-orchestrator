@@ -2332,6 +2332,7 @@
 	"archive.deleteArtifacts_many": "Eliminar {{count}} artefactos",
 	"archive.deleteArtifactsHint_one": "No se puede deshacer y una sesión restaurada empieza sin él.",
 	"archive.deleteArtifactsHint_other": "No se puede deshacer y una sesión restaurada empieza sin ellos.",
+	"archive.deleteArtifactsFiles": "También se eliminan los demás archivos de su carpeta.",
 	"archive.deleteArtifactsPublished_one": "{{count}} está publicado; su enlace dejará de funcionar.",
 	"archive.deleteArtifactsPublished_many": "{{count}} están publicados; sus enlaces dejarán de funcionar.",
 	"archive.deleteArtifactsPublished_other": "{{count}} están publicados; sus enlaces dejarán de funcionar.",

@@ -2295,6 +2295,7 @@
 	"archive.deleteArtifacts_other": "{{count}} 件のアーティファクトを削除",
 	"archive.deleteArtifactsHint_one": "元に戻せず、復元したセッションには含まれません。",
 	"archive.deleteArtifactsHint_other": "元に戻せず、復元したセッションには含まれません。",
+	"archive.deleteArtifactsFiles": "同じフォルダーにある他のファイルも削除されます。",
 	"archive.deleteArtifactsPublished_one": "{{count}} 件が公開済みです。そのリンクは使えなくなります。",
 	"archive.deleteArtifactsPublished_other": "{{count}} 件が公開済みです。それらのリンクは使えなくなります。",
 	"links.stillLive_one": "公開リンク {{count}} 件がまだ有効です",
