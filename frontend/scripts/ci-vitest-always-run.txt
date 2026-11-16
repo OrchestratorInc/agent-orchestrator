@@ -24,3 +24,4 @@ src/main/browser-identity.test.ts
 src/main/remotes-store.test.ts
 src/main/ui-settings.test.ts
 src/renderer/lib/render-frame.test.ts
+src/renderer/style-invalidation.test.ts
