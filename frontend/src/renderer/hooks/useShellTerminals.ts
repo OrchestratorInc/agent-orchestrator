@@ -161,6 +161,15 @@ export function adoptedShellHandle(handleId: string): string | undefined {
 const isPendingShellHandle = (handleId: string) => handleId.startsWith(PENDING_SHELL_PREFIX);
 const hostKey = (hostId?: HostId) => (hostId && hostId !== LOCAL_HOST ? hostId : LOCAL_HOST);
 
+// Ended tabs with a reopen request in flight, by host and original handle,
+// and those the user closed meanwhile. If the reopen wins the daemon's session
+// gate, the close finds no row and succeeds without touching the replacement
+// shell, so the reopen destroys that shell itself instead of adopting it. This
+// holds whichever response arrives first.
+const reopeningShells = new Set<string>();
+const closedWhileReopening = new Set<string>();
+const reopenKey = (handleId: string, hostId?: HostId) => `${hostKey(hostId)}\u0000${handleId}`;
+
 function trackPendingShell(shell: ShellTerminal) {
 	if (!cancelledPendingShells.has(shell.handleId)) pendingShells.set(shell.handleId, shell);
 }
@@ -483,6 +492,7 @@ export function useCloseShellTerminal(hostId?: HostId) {
 			if (isPendingShellHandle(handleId) && pendingShells.delete(handleId)) {
 				cancelledPendingShells.add(handleId);
 			}
+			if (reopeningShells.has(reopenKey(handleId, hostId))) closedWhileReopening.add(reopenKey(handleId, hostId));
 			for (const [pending, adopted] of adoptedShellHandles) {
 				if (adopted === handleId) adoptedShellHandles.delete(pending);
 			}
@@ -522,7 +532,10 @@ export function useCloseShellTerminal(hostId?: HostId) {
 			closing?.delete(handleId);
 			if (closing?.size === 0) closingShellHandles.delete(key);
 			// A pending tab closed nothing on the daemon; its create request settles
-			// the list once the shell it created is destroyed.
+			// the list once the shell it created is destroyed. A tab closed while
+			// it was reopening is settled the same way by its reopen request, so a
+			// refetch here cannot show the replacement before it is destroyed.
+			if (closedWhileReopening.has(reopenKey(handleId, hostId))) return;
 			if (!context?.isCloud && !isPendingShellHandle(handleId)) void queryClient.invalidateQueries({ queryKey });
 		},
 	});
@@ -541,28 +554,28 @@ export function useReopenShellTerminal(hostId?: HostId) {
 	const queryKey = shellTerminalsQueryKeyForHost(hostId);
 	const remote = Boolean(hostId && hostId !== LOCAL_HOST);
 	return useMutation({
-		mutationFn: async ({ handleId, resumeAgent }: ReopenShellTerminalInput): Promise<ShellTerminal> => {
-			const body: components["schemas"]["ReopenShellTerminalRequest"] = {};
-			if (resumeAgent) body.resumeAgent = true;
-			const grid = paneTerminalGridHint();
-			if (grid) {
-				body.cols = grid.cols;
-				body.rows = grid.rows;
+		mutationFn: async ({ handleId, resumeAgent }: ReopenShellTerminalInput): Promise<ShellTerminal | null> => {
+			const key = reopenKey(handleId, hostId);
+			reopeningShells.add(key);
+			try {
+				const shell = await requestReopen(handleId, resumeAgent);
+				if (!closedWhileReopening.has(key)) return shell;
+				// The user closed the tab meanwhile: the shell it became must not
+				// keep running unseen.
+				discardingShells.add(shell.handleId);
+				try {
+					await destroyShellTerminal(shell.handleId, hostId);
+				} finally {
+					discardingShells.delete(shell.handleId);
+				}
+				return null;
+			} finally {
+				reopeningShells.delete(key);
+				closedWhileReopening.delete(key);
 			}
-			if (!remote) {
-				await useTerminalShellStore.getState().load();
-				body.shell = terminalShellRequestValue(useTerminalShellStore.getState().preference);
-			}
-			const { data, error } = await clientForSessionHost(hostId).POST("/api/v1/shell-terminals/{handleId}/reopen", {
-				params: { path: { handleId } },
-				body,
-			});
-			if (error) throw error;
-			if (!data) throw new Error("Daemon returned no shell terminal");
-			if (!remote) markTerminalHandleFresh(data.shellTerminal.handleId);
-			return toShellTerminal(data.shellTerminal, hostId);
 		},
 		onSuccess: (shell, { handleId }) => {
+			if (!shell) return;
 			adoptedShellHandles.set(handleId, shell.handleId);
 			queryClient.setQueryData<ShellTerminal[]>(queryKey, (current) =>
 				current?.map((candidate) => (candidate.handleId === handleId ? shell : candidate)),
@@ -572,6 +585,28 @@ export function useReopenShellTerminal(hostId?: HostId) {
 			void queryClient.invalidateQueries({ queryKey });
 		},
 	});
+
+	async function requestReopen(handleId: string, resumeAgent?: boolean): Promise<ShellTerminal> {
+		const body: components["schemas"]["ReopenShellTerminalRequest"] = {};
+		if (resumeAgent) body.resumeAgent = true;
+		const grid = paneTerminalGridHint();
+		if (grid) {
+			body.cols = grid.cols;
+			body.rows = grid.rows;
+		}
+		if (!remote) {
+			await useTerminalShellStore.getState().load();
+			body.shell = terminalShellRequestValue(useTerminalShellStore.getState().preference);
+		}
+		const { data, error } = await clientForSessionHost(hostId).POST("/api/v1/shell-terminals/{handleId}/reopen", {
+			params: { path: { handleId } },
+			body,
+		});
+		if (error) throw error;
+		if (!data) throw new Error("Daemon returned no shell terminal");
+		if (!remote) markTerminalHandleFresh(data.shellTerminal.handleId);
+		return toShellTerminal(data.shellTerminal, hostId);
+	}
 }
 
 export type RenameShellTerminalInput = { handleId: string; title: string };

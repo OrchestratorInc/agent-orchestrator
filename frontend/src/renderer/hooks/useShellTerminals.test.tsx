@@ -601,3 +601,67 @@ describe("ended shell terminals", () => {
 		expect(adoptedShellHandle(ended.handleId)).toBe("shellterm-new");
 	});
 });
+
+describe("closing an ended tab while it reopens", () => {
+	const ended: ShellTerminal = { ...shells[0], endedAt: "2026-11-10T20:44:00Z" };
+	const replacement = { createdAt: ended.createdAt, handleId: "ptyhost-v1:shellterm-replacement", title: "one", workingDir: "/tmp" };
+
+	function setup() {
+		let finishPost!: (result: { data: { shellTerminal: typeof replacement } }) => void;
+		postMock.mockReturnValue(new Promise((resolve) => (finishPost = resolve)));
+		const deletes: Array<{ handleId: string; finish: (result: object) => void }> = [];
+		deleteMock.mockImplementation((_path: string, init: { params: { path: { handleId: string } } }) =>
+			new Promise((resolve) => deletes.push({ handleId: init.params.path.handleId, finish: resolve })),
+		);
+		getMock.mockResolvedValue({ data: { shellTerminals: [] } });
+		const queryClient = queryClientWithShells();
+		queryClient.setQueryData(shellTerminalsQueryKey, [ended, shells[1]]);
+		const { result } = renderHook(
+			() => ({ reopen: useReopenShellTerminal(), close: useCloseShellTerminal() }),
+			{ wrapper: wrapper(queryClient) },
+		);
+		return { result, queryClient, deletes, finishPost: () => finishPost({ data: { shellTerminal: replacement } }) };
+	}
+
+	async function expectReplacementDestroyed(deletes: Array<{ handleId: string; finish: (result: object) => void }>, queryClient: QueryClient) {
+		await waitFor(() => expect(deletes.map((d) => d.handleId)).toContain(replacement.handleId));
+		deletes.find((d) => d.handleId === replacement.handleId)?.finish({});
+		await waitFor(() => expect(adoptedShellHandle(ended.handleId)).toBeUndefined());
+		const listed = queryClient.getQueryData<ShellTerminal[]>(shellTerminalsQueryKey) ?? [];
+		expect(listed.map((shell) => shell.handleId)).not.toContain(replacement.handleId);
+		expect(listed.map((shell) => shell.handleId)).not.toContain(ended.handleId);
+	}
+
+	it("destroys the replacement when the close answers first", async () => {
+		const { result, queryClient, deletes, finishPost } = setup();
+		act(() => {
+			result.current.reopen.mutate({ handleId: ended.handleId });
+		});
+		await waitFor(() => expect(postMock).toHaveBeenCalled());
+		act(() => {
+			result.current.close.mutate(ended.handleId);
+		});
+		// The reopen won the daemon's gate, so the old row is gone.
+		await waitFor(() => expect(deletes).toHaveLength(1));
+		deletes[0].finish({ error: { code: "SHELL_TERMINAL_NOT_FOUND" } });
+		await waitFor(() => expect(result.current.close.isSuccess).toBe(true));
+		finishPost();
+		await expectReplacementDestroyed(deletes, queryClient);
+	});
+
+	it("destroys the replacement when the reopen answers first", async () => {
+		const { result, queryClient, deletes, finishPost } = setup();
+		act(() => {
+			result.current.reopen.mutate({ handleId: ended.handleId });
+		});
+		await waitFor(() => expect(postMock).toHaveBeenCalled());
+		act(() => {
+			result.current.close.mutate(ended.handleId);
+		});
+		await waitFor(() => expect(deletes).toHaveLength(1));
+		finishPost();
+		await expectReplacementDestroyed(deletes, queryClient);
+		deletes[0].finish({ error: { code: "SHELL_TERMINAL_NOT_FOUND" } });
+		await waitFor(() => expect(result.current.close.isSuccess).toBe(true));
+	});
+});
