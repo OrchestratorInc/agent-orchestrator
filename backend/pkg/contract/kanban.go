@@ -378,7 +378,10 @@ func validatingDisplayStatus(session KanbanSessionFacts, pr KanbanPRFacts, now t
 	switch {
 	case pr.CI == CIFailing && session.AutoInjectCI && active:
 		return DisplayFixingCI
-	case changesRequestedOn(pr) && session.AutoInjectReview && active:
+	// Outstanding changes plus a busy worker is the worker addressing them,
+	// whether or not AO injected the feedback: the card must not drop to a
+	// generic "Working" and back to "Changes requested" as turns start and end.
+	case changesRequestedOn(pr) && active:
 		return DisplayAddressingComments
 	case pr.ReviewRun.Running:
 		return DisplayReviewing
@@ -422,7 +425,11 @@ func inReviewDisplayStatus(session KanbanSessionFacts, pr KanbanPRFacts, now tim
 	switch {
 	case pr.CI == CIFailing && session.AutoInjectCI && active:
 		return DisplayFixingCI
-	case (changesRequestedOn(pr) || pr.ExternalReview.Comments) && session.AutoInjectReview && active:
+	// Same rule as validating: a busy worker on a PR with outstanding changes
+	// is addressing them, regardless of who delivered the feedback.
+	case changesRequestedOn(pr) && active:
+		return DisplayAddressingComments
+	case pr.ExternalReview.Comments && session.AutoInjectReview && active:
 		return DisplayAddressingComments
 	case active:
 		return DisplayWorking
