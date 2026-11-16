@@ -192,6 +192,11 @@ func (l *agentLauncher) captureReviewerTree(ctx context.Context, handle ports.Ru
 	}
 	children := map[int][]int{}
 	for pid, identity := range identities {
+		if identity.PPID == procmem.UnknownPPID {
+			// It could be one of the reviewer's processes, and nothing would
+			// stop it: the tree cannot be trusted.
+			return nil, fmt.Errorf("cannot read the parent of process %d", pid)
+		}
 		children[identity.PPID] = append(children[identity.PPID], pid)
 	}
 	var tree []capturedProcess

@@ -18,5 +18,9 @@ type Identity struct {
 	StartedAt time.Time
 }
 
+// UnknownPPID marks a process whose parent could not be read. Its place in the
+// process tree is unknown, so no tree that might contain it can be trusted.
+const UnknownPPID = -1
+
 // Known reports whether the process's start identity could be read.
 func (i Identity) Known() bool { return i.Start != "" }

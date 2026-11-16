@@ -10,14 +10,15 @@ import (
 	"os"
 	"strconv"
 	"strings"
+	"syscall"
 	"time"
 )
 
 // Identities reads every live process's parent and start time (clock ticks
 // since boot) from /proc/<pid>/stat. Both come from one read of one file, so
 // they always describe the same process. Exited processes (gone, or zombies)
-// are left out; a process whose stat cannot be read for another reason is
-// kept with an unknown identity.
+// are left out; a process of this user whose stat cannot be read for another
+// reason is kept with an unknown identity and unknown parent.
 func Identities(ctx context.Context) (map[int]Identity, error) {
 	if err := ctx.Err(); err != nil {
 		return nil, err
@@ -38,13 +39,15 @@ func Identities(ctx context.Context) (map[int]Identity, error) {
 			continue // it exited
 		}
 		if err != nil {
-			out[pid] = Identity{PPID: -1}
+			if ownedBySelf(entry.Name()) {
+				out[pid] = Identity{PPID: UnknownPPID}
+			}
 			continue
 		}
 		identity, alive, ok := parseProcStat(string(stat))
 		switch {
 		case !ok:
-			out[pid] = Identity{PPID: -1}
+			out[pid] = Identity{PPID: UnknownPPID}
 		case alive:
 			if bootErr == nil {
 				if ticks, err := strconv.ParseInt(identity.Start, 10, 64); err == nil {
@@ -55,6 +58,20 @@ func Identities(ctx context.Context) (map[int]Identity, error) {
 		}
 	}
 	return out, nil
+}
+
+// ownedBySelf reports whether /proc/<pid> belongs to this process's user. A
+// process whose stat cannot be read is reported with unknown ancestry only
+// then: with /proc mounted hidepid, other users' processes are unreadable as
+// a matter of course, and those cannot be descendants of a runtime this user
+// started, so they are left out rather than making every reading uncertain.
+func ownedBySelf(pid string) bool {
+	info, err := os.Stat("/proc/" + pid)
+	if err != nil {
+		return true // cannot tell: stay uncertain
+	}
+	st, ok := info.Sys().(*syscall.Stat_t)
+	return !ok || int(st.Uid) == os.Getuid()
 }
 
 // userHZ is the clock-tick rate /proc reports start times in. The kernel's
