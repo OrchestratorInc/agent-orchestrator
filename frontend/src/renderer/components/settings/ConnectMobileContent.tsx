@@ -400,8 +400,9 @@ export function ConnectMobileContent({ active }: { active: boolean }) {
 		setLinkError("");
 		// A development build must not publish its temporary ~/.ao/dev identity
 		// beside the installed app's. Allow access remains available when a
-		// developer explicitly wants an account listing.
-		if (!signedIn || !password || isDevelopmentBuild()) return { linked: "", added: "", failed: false };
+		// developer explicitly wants an account listing, and regenerating
+		// credentials refreshes that existing listing with { ifListed: true }.
+		if (!signedIn || !password || (isDevelopmentBuild() && !options?.ifListed)) return { linked: "", added: "", failed: false };
 		// Not fatal: an unlinked computer still gets a quick tunnel, whose
 		// address changes on restart. Said, though: after a new password the
 		// account's devices hold the old one until a link lands. An AO Cloud
@@ -522,7 +523,7 @@ export function ConnectMobileContent({ active }: { active: boolean }) {
 				// An AO Cloud without fixed addresses, or an account that uses all of them,
 				// links nothing without a url, and the account would keep the old token:
 				// it lists the tunnel's address instead.
-				if (!isDevelopmentBuild() && signedIn && !linked && !failed) {
+				if (signedIn && !linked && !failed) {
 					void waitForTunnel(t("remote.shareThisComputerTimeout"))
 						.then((ready) => ready && linkThisComputer(cloudBaseUrl, accountId, data.hostId ?? "", data.password ?? "", { ifListed: true, url: ready.url }))
 						.catch(reportLinkError);

@@ -6,6 +6,7 @@ import { TooltipProvider } from "../ui/tooltip";
 import { apiClient } from "../../lib/api-client";
 import { AccountHostSyncError, deleteAccountRemoteHost } from "../../lib/account-remote-hosts";
 import { linkThisComputer } from "../../lib/link-this-computer";
+import { ThisComputerAccess } from "./ThisComputerAccess";
 
 // Remote access away from home needs sign-in. The daemon fake is just enough
 // to start the bridge: enable turns it on with its tunnel, and remote-access
@@ -45,8 +46,16 @@ vi.mock("../../lib/cloud-session", () => ({
 }));
 vi.mock("../../hooks/useCloudLocalAuth", () => ({ useCloudLocalAuth: () => ({ available: false }) }));
 vi.mock("../../hooks/useSettings", () => ({ useSettings: () => ({ settings: { cloudControlPlaneUrl: "https://cp.example.test" } }) }));
+let listedHosts = new Set<string>();
+
 vi.mock("../../lib/account-remote-hosts", async (original) => ({
 	...(await original<typeof import("../../lib/account-remote-hosts")>()),
+	listAccountRemoteHosts: vi.fn(async () => [...listedHosts].map((hostId) => ({ hostId, label: "Mac", url: "" }))),
+	readAccountHostDirectory: vi.fn(async () => ({
+		hosts: [...listedHosts].map((hostId) => ({ hostId, label: "Mac", url: "" })),
+		fixedAddresses: true,
+		hostKeys: true,
+	})),
 	deleteAccountRemoteHost: vi.fn(async () => undefined),
 }));
 vi.mock("../../lib/mobile-pairing-code", () => ({ mobilePairingCodeQueryKey: ["mobile-pairing-code"], PAIRING_CODE_REFRESH_MS: 540_000, fetchPairingCode: async () => ({ code: "Code1234", expiresAt: Date.now() + 600_000 }) }));
@@ -89,6 +98,7 @@ function renderContent() {
 }
 
 beforeEach(() => {
+	listedHosts.clear();
 	Object.assign(fake.status, { enabled: false, noPublicTunnel: false, password: "", endpoints: [] });
 	vi.mocked(apiClient.POST).mockClear();
 	// Reset, not cleared: a rejection a test queued and never used must not
@@ -248,3 +258,70 @@ test("a development build starts remote access without publishing its temporary 
 	await waitFor(() => expect(posted()).toEqual(["/api/v1/mobile/enable", "/api/v1/mobile/remote-access"]));
 	expect(linkThisComputer).not.toHaveBeenCalled();
 });
+
+test("explicitly enabling Allow access in development, regenerating credentials, and refreshing the existing listing without creating a new one", async () => {
+	vi.stubEnv("MODE", "development");
+	fake.signedIn = true;
+	fake.status.enabled = true;
+	fake.status.password = "pw-1";
+	fake.status.endpoints = [{ kind: "lan", host: "192.168.1.42", port: 3011, secure: false }];
+
+	listedHosts = new Set<string>();
+	vi.mocked(linkThisComputer).mockImplementation(async (_baseUrl, _accountId, hostId, _pw, options) => {
+		if (options?.ifListed && !listedHosts.has(hostId)) return { hostId: "", added: false };
+		const added = !listedHosts.has(hostId);
+		listedHosts.add(hostId);
+		return { hostId, added };
+	});
+
+	// Before Allow access is turned on, regenerating in development does not create a listing.
+	const unlistedContent = renderContent();
+	await userEvent.click(await screen.findByRole("button", { name: "Revoke all devices" }));
+	await waitFor(() => expect(linkThisComputer).toHaveBeenCalledWith("https://cp.example.test", "user_01JAO", "h_fixture", "pw-2", { ifListed: true }));
+	expect(listedHosts.has("h_fixture")).toBe(false);
+	unlistedContent.unmount();
+
+	// Explicitly enabling Allow access in development creates the account listing.
+	fake.tunnelHost = "quiet-river.trycloudflare.com";
+	fake.status.enabled = false;
+	fake.status.password = "";
+	fake.status.endpoints = [];
+	const access = render(
+		<QueryClientProvider client={new QueryClient({ defaultOptions: { queries: { retry: false } } })}>
+			<ThisComputerAccess />
+		</QueryClientProvider>,
+	);
+	const toggle = await screen.findByRole("switch", { name: "Allow access from your devices" });
+	await userEvent.click(toggle);
+	await waitFor(() => expect(listedHosts.has("h_fixture")).toBe(true));
+	expect(linkThisComputer).toHaveBeenLastCalledWith("https://cp.example.test", "user_01JAO", "h_fixture", "pw-1");
+	access.unmount();
+
+	// Regenerating credentials in development now refreshes the existing listing without creating a new one.
+	vi.mocked(linkThisComputer).mockClear();
+	renderContent();
+	await userEvent.click(await screen.findByRole("button", { name: "Revoke all devices" }));
+	await waitFor(() => expect(linkThisComputer).toHaveBeenCalledWith("https://cp.example.test", "user_01JAO", "h_fixture", "pw-2", { ifListed: true }));
+	const result = await vi.mocked(linkThisComputer).mock.results[0].value;
+	expect(result).toEqual({ hostId: "h_fixture", added: false });
+});
+
+test("a development build refreshes credentials at the tunnel's address when fixed addresses are unavailable", async () => {
+	vi.stubEnv("MODE", "development");
+	fake.signedIn = true;
+	Object.assign(fake.status, {
+		enabled: true, noPublicTunnel: false, password: "pw-1",
+		endpoints: [
+			{ kind: "lan", host: "192.168.1.42", port: 3011, secure: false },
+			{ kind: "tunnel", host: "quiet-river.trycloudflare.com", port: 443, secure: true },
+		],
+	});
+	vi.mocked(linkThisComputer).mockResolvedValueOnce({ hostId: "", added: false });
+	renderContent();
+	await userEvent.click(await screen.findByRole("button", { name: "Revoke all devices" }));
+
+	await waitFor(() => expect(linkThisComputer).toHaveBeenLastCalledWith(
+		"https://cp.example.test", "user_01JAO", "h_fixture", "pw-2", { ifListed: true, url: "https://quiet-river.trycloudflare.com:443" },
+	));
+});
+
