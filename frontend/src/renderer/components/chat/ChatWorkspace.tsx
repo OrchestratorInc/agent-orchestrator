@@ -643,6 +643,8 @@ export interface ChatWorkspaceProps {
 	activateBranchError?: string;
 	/** The provider's skills. Empty leaves `/` an ordinary character. */
 	skills?: ChatSkill[];
+	/** The agent's skills are still being read; the `/` menu says so instead of staying shut. */
+	skillsLoading?: boolean;
 	/** Worktree paths offered for `@`. */
 	filePaths?: string[];
 	/** Told what follows "@" in the composer, for files that are searched rather than listed (see ChatComposer). */
@@ -933,6 +935,7 @@ function ChatWorkspaceContent({
 	activateBranchTarget,
 	activateBranchError,
 	skills,
+	skillsLoading,
 	filePaths,
 	filePathsTruncated,
 	onFileQuery,
@@ -2483,6 +2486,7 @@ function ChatWorkspaceContent({
 										// look like a regression.
 										emptyPlaceholder={conversationEmpty ? (artifactSession ? t("chat.welcome.artifactPlaceholder") : emptyChatPlaceholder) : undefined}
 										skills={skills}
+										skillsLoading={skillsLoading}
 										filePaths={filePaths}
 										filePathsTruncated={filePathsTruncated}
 										onFileQuery={onFileQuery}
