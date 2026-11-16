@@ -170,6 +170,8 @@ import { SessionAccessTag } from "./teams/SessionAccessTag";
 import { SharedProjectPanel } from "./SharedProjectPanel";
 import { useSessionMenuAvailable } from "../hooks/useAppMenuCommand";
 import { focusAfterPaint, useSessionShortcut } from "../hooks/useAppShortcut";
+import { queryShown } from "../lib/dom-selectors";
+import { KeepRecentAlive } from "./KeepRecentAlive";
 import { openComposerModelPicker, toggleComposerDictation } from "../lib/composer-shortcuts";
 import { inspectorIsOpen, useResolvedTheme, useUiStore, type InspectorView } from "../stores/ui-store";
 import { useSideChatTab, useSideChatsAvailable } from "../lib/side-chats";
@@ -2979,6 +2981,8 @@ export function SessionView({ sessionId, cloudOrgId, projectId, hostId }: Sessio
 								</>
 							) : showChatSurface ? (
 								<>
+								{/* Recent chats stay mounted, hidden, so switching back shows them at once. */}
+								<KeepRecentAlive activeKey={uiSessionId}>
 								<SessionChatSurface
 									sideChatContainer={sideChatContainer}
 									onSideChatsChange={onSideChatsChange}
@@ -3046,6 +3050,7 @@ export function SessionView({ sessionId, cloudOrgId, projectId, hostId }: Sessio
          }}
 									onOpenLinkInBrowser={browserView.openLink}
 								/>
+								</KeepRecentAlive>
 								</>
 							) : (
 								<CenterPane
@@ -3201,7 +3206,7 @@ export function SessionView({ sessionId, cloudOrgId, projectId, hostId }: Sessio
 											// selected, so a press on a selected pane puts the caret in it.
 											requestAnimationFrame(() => {
 												for (const pane of document.querySelectorAll<HTMLElement>("[data-split-pane]")) {
-													if (pane.dataset.splitPane === key) pane.querySelector<HTMLElement>(".xterm-helper-textarea, [contenteditable='true'][role='combobox']")?.focus({ preventScroll: true });
+													if (pane.dataset.splitPane === key) queryShown<HTMLElement>(".xterm-helper-textarea, [contenteditable='true'][role='combobox']", pane)?.focus({ preventScroll: true });
 												}
 											});
 										}}
