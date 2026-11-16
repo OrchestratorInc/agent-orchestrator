@@ -346,6 +346,14 @@ describe("TaskComposer", () => {
 		expect(useUiStore.getState().settingsModal).toEqual(expect.objectContaining({ section: "harness", harnessView: "local" }));
 	});
 
+	it("opens the Cloud harness view from a cloud project's no-agent message", async () => {
+		const queryClient = cloudFixture("", {}, []);
+		render(<Wrap queryClient={queryClient}><TaskComposer projectId="cloud-1" onCreated={vi.fn()} /></Wrap>);
+		expect(await screen.findByText("No agent is ready. Set one up in Settings.")).toBeInTheDocument();
+		fireEvent.click(screen.getByRole("button", { name: "Open Agent Harnesses" }));
+		expect(useUiStore.getState().settingsModal).toEqual(expect.objectContaining({ section: "harness", harnessView: "cloud" }));
+	});
+
 	it("offers the agent default after a stale saved model is rejected without retrying the spawn", async () => {
 		h.get.mockImplementation(async (path: string) => path.includes("/models")
 			? { data: { agent: "codex", selectionMode: "catalog", models: [{ id: "available", label: "Available", isDefault: true }], allowCustom: true } }
@@ -402,6 +410,8 @@ describe("TaskComposer", () => {
 			: { data: {} });
 		render(<Wrap><TaskComposer hostId="box-a" projectId="project-a" onCreated={vi.fn()} /></Wrap>);
 		await screen.findByText("No agent is ready on this host. Configure one there first.");
+		// A remote host's agents are set up on that host, not in this computer's Settings.
+		expect(screen.queryByRole("button", { name: "Open Agent Harnesses" })).not.toBeInTheDocument();
 		expect(startTask()).toBeDisabled();
 		expect(h.remotePost.mock.calls.some(([path]) => path === "/api/v1/orchestrators/delegate")).toBe(false);
 	});

@@ -24,6 +24,7 @@ const h = vi.hoisted(() => ({
 	errorAction: undefined as { label: string; onClick: () => void; input?: { label: string; value: string; onChange: (value: string) => void } } | undefined,
 	remoteLoadError: undefined as string | undefined,
 	remoteLoadErrorAction: undefined as { label: string; onClick: () => void } | undefined,
+	canSubmit: true,
 	replay: { agent: "codex", model: "gpt-6", effort: "high", approvalMode: undefined as string | undefined, mode: undefined as string | undefined },
 	workspace: undefined as ChatWorkspaceProps | undefined,
 	harness: "codex",
@@ -70,7 +71,7 @@ vi.mock("./TaskComposer", () => ({
 		remoteLoadErrorAction: h.remoteLoadErrorAction,
 		submitMode: undefined,
 		isCloudProject: h.isCloudProject,
-		canSubmit: true,
+		canSubmit: h.canSubmit,
 		catalogProjectId: "proj-1",
 		launchSnapshot: () => ({ ...h.replay }),
 		effectiveInterface: "chat",
@@ -118,6 +119,7 @@ beforeEach(() => {
 	h.errorAction = undefined;
 	h.remoteLoadError = undefined;
 	h.remoteLoadErrorAction = undefined;
+	h.canSubmit = true;
 	h.replay = { agent: "codex", model: "gpt-6", effort: "high", approvalMode: undefined, mode: undefined };
 	h.workspace = undefined;
 	h.harness = "codex";
@@ -415,6 +417,23 @@ describe("NewChatPage", () => {
 		h.remoteLoadErrorAction = { label: "Open Agent Harnesses", onClick: openSettings };
 		renderPage();
 		expect(screen.getByRole("alert")).toHaveTextContent(h.remoteLoadError);
+		fireEvent.click(screen.getByRole("button", { name: "Open Agent Harnesses" }));
+		expect(openSettings).toHaveBeenCalledOnce();
+	});
+
+	it("keeps the Harness settings action after a send is refused for having no agent", async () => {
+		const openSettings = vi.fn();
+		h.canSubmit = false;
+		h.remoteLoadError = "No agent is ready. Set one up in Settings.";
+		h.remoteLoadErrorAction = { label: "Open Agent Harnesses", onClick: openSettings };
+		renderPage();
+		let refusal: unknown;
+		await act(async () => {
+			refusal = await Promise.resolve(h.workspace?.onSend?.("Set up my project", undefined, "cid-1")).catch((error: unknown) => error);
+		});
+		expect(refusal).toMatchObject({ message: h.remoteLoadError });
+		// The composer shows the refused send's reason, so the notice keeps only the action.
+		expect(screen.queryByText(h.remoteLoadError)).not.toBeInTheDocument();
 		fireEvent.click(screen.getByRole("button", { name: "Open Agent Harnesses" }));
 		expect(openSettings).toHaveBeenCalledOnce();
 	});
