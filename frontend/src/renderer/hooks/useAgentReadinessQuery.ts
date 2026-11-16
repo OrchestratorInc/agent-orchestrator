@@ -2,7 +2,7 @@ import { apiErrorException } from "../lib/api-error-exception";
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { useQuery, useQueryClient, type QueryClient } from "@tanstack/react-query";
 import { AgentCheckError } from "../lib/agent-check-error";
-import { defaultProjectAgents, preferredAgentNeedsChecks, type ProjectAgentDefaults } from "../lib/agent-select-options";
+import { defaultProjectAgents, preferredAgentList, preferredAgentNeedsChecks, type ProjectAgentDefaults } from "../lib/agent-select-options";
 import type { components } from "../../api/schema";
 import { apiClient } from "../lib/api-client";
 import { clientForHost } from "../lib/host-clients";
@@ -109,12 +109,13 @@ export async function loadProjectAgentDefaults(queryClient: QueryClient, hostId?
 
 /**
  * Default agents ranked from this machine's (or host's) readiness, or null when
- * readiness could not be loaded. Use it when the pick is saved to an existing
- * project, so an unranked fallback is never written.
+ * readiness could not be loaded or no agent can launch. Use it when the pick is
+ * saved to an existing project, so an unranked fallback is never written.
  */
 export async function loadRankedProjectAgentDefaults(queryClient: QueryClient, hostId?: string): Promise<ProjectAgentDefaults | null> {
 	const agents = await readProjectAgentSnapshotWithDeadline(queryClient, hostId);
-	return agents ? defaultProjectAgents(agents) : null;
+	if (!agents || preferredAgentList(agents).length === 0) return null;
+	return defaultProjectAgents(agents);
 }
 
 export function useAgentReadinessQuery(enabled = true, hostId?: string) {

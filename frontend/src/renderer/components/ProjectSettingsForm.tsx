@@ -198,8 +198,8 @@ function SettingsBody({ project, projectId, hostId, hostConnected, onSaved, sect
 	useEffect(() => {
 		if (!missingRoleAgent || !hostConnected || !sessionsSettled) return;
 		let active = true;
-		// Without this machine's agent readiness there's no ranked pick, so the
-		// roles stay empty and the required warning shows.
+		// Without agent readiness, or with no agent that can launch, there's no
+		// ranked pick, so the roles stay empty and the required warning shows.
 		void loadRankedProjectAgentDefaults(queryClient, hostId).then((defaults) => {
 			if (!active) return;
 			if (!defaults) {

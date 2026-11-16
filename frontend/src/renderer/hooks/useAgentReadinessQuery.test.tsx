@@ -17,6 +17,8 @@ vi.mock("../lib/api-client", () => ({
 import {
 	agentReadinessQueryOptions,
 	agentReadinessQueryKey,
+	loadProjectAgentDefaults,
+	loadRankedProjectAgentDefaults,
 	mergeAgentReadiness,
 	useAgentReadinessQuery,
 	useEnsureAgentReadiness,
@@ -115,5 +117,20 @@ describe("agent readiness query", () => {
 			expect(result.current).toBe(true);
 			unmount();
 		} finally { vi.useRealTimers(); }
+	});
+});
+
+describe("project agent defaults", () => {
+	it("ranks the launchable agents for an existing project", async () => {
+		await expect(loadRankedProjectAgentDefaults(new QueryClient())).resolves.toMatchObject({ workerAgent: "codex", orchestratorAgent: "codex" });
+	});
+
+	it("picks nothing for an existing project when no agent can launch, but a new project still falls back", async () => {
+		const none = { data: { agents: [agentReadiness("codex", "Codex", { installation: "not_installed" })] }, error: undefined };
+		getMock.mockResolvedValue(none);
+		postMock.mockResolvedValue(none);
+
+		await expect(loadRankedProjectAgentDefaults(new QueryClient())).resolves.toBeNull();
+		await expect(loadProjectAgentDefaults(new QueryClient())).resolves.toMatchObject({ workerAgent: "claude-code", orchestratorAgent: "claude-code" });
 	});
 });
