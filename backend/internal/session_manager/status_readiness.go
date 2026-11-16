@@ -26,6 +26,9 @@ func (m *Manager) StatusRecoveryRevision() uint64 {
 // SessionStatusReadiness describes this daemon's recovery observation. It is
 // deliberately not durable: a new daemon must verify the sessions again.
 func (m *Manager) SessionStatusReadiness(rec domain.SessionRecord) string {
+	if rec.NeedsImportResume() {
+		return "ready"
+	}
 	m.statusRecoveryMu.RLock()
 	defer m.statusRecoveryMu.RUnlock()
 	result, found := m.statusRecoveries[rec.ID]

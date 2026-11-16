@@ -46,6 +46,7 @@ describe("registerChatImageIpc", () => {
 		const image = { isEmpty: () => empty };
 		const dialog = { showSaveDialog: vi.fn(async () => saveResult) };
 		const write = vi.fn(async () => undefined);
+		const markDownloaded = vi.fn(async () => undefined);
 		registerChatImageIpc({
 			ipcMain: ipcMain as never,
 			clipboard,
@@ -53,8 +54,10 @@ describe("registerChatImageIpc", () => {
 			dialog: dialog as never,
 			downloadsDirectory: () => "/Users/me/Downloads",
 			write,
+			appName: "Orchestrator",
+			markDownloaded,
 		});
-		return { registered, clipboard, image, dialog, write };
+		return { registered, clipboard, image, dialog, write, markDownloaded };
 	}
 
 	it("writes decodable images to the clipboard and rejects the rest", async () => {
@@ -81,5 +84,21 @@ describe("registerChatImageIpc", () => {
 		const canceled = setup({ canceled: true });
 		await expect(canceled.registered.get("chatImage:save")?.({}, { name: "shot.png", bytes })).resolves.toBe(false);
 		expect(canceled.write).not.toHaveBeenCalled();
+	});
+
+	it("marks a saved file as downloaded, as a browser does, and keeps it if marking fails", async () => {
+		const bytes = new Uint8Array([9]);
+		const saved = setup({ canceled: false, filePath: "/Users/me/Downloads/report.pdf" });
+		await saved.registered.get("chatImage:save")?.({}, { name: "report.pdf", bytes });
+		expect(saved.markDownloaded).toHaveBeenCalledExactlyOnceWith("/Users/me/Downloads/report.pdf", "Orchestrator");
+		expect(saved.write.mock.invocationCallOrder[0]).toBeLessThan(saved.markDownloaded.mock.invocationCallOrder[0]!);
+		const failing = setup({ canceled: false, filePath: "/Users/me/Downloads/a.bin" });
+		failing.markDownloaded.mockRejectedValueOnce(new Error("xattr failed"));
+		const warn = vi.spyOn(console, "warn").mockImplementation(() => undefined);
+		await expect(failing.registered.get("chatImage:save")?.({}, { name: "a.bin", bytes })).resolves.toBe(true);
+		warn.mockRestore();
+		const canceled = setup({ canceled: true });
+		await canceled.registered.get("chatImage:save")?.({}, { name: "a.bin", bytes });
+		expect(canceled.markDownloaded).not.toHaveBeenCalled();
 	});
 });

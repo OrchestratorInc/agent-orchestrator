@@ -1,5 +1,4 @@
 import { memo } from "react";
-import { X } from "lucide-react";
 import { useTranslation } from "react-i18next";
 import { cn } from "../../lib/utils";
 import { isMacPlatform } from "../../lib/platform";
@@ -9,6 +8,7 @@ import {
 	settingsDialogBodyClass, settingsDialogContentClass, settingsDialogHeaderClass,
 } from "../ui/dialog";
 import { KeyboardShortcutsContent } from "./KeyboardShortcutsContent";
+import { CloseButton } from "../ui/close-button";
 
 export const KeyboardShortcutsSettingsDialog = memo(function KeyboardShortcutsSettingsDialog({
 	open,
@@ -31,7 +31,7 @@ export const KeyboardShortcutsSettingsDialog = memo(function KeyboardShortcutsSe
 				<div className={cn(settingsDialogHeaderClass, "flex-row items-center justify-between gap-3 px-6 py-4")}>
 					<DialogTitle className="settings-dialog-title">{t("shortcut.dialogTitle")}</DialogTitle>
 					<DialogClose asChild>
-						<button type="button" className="settings-close-button" aria-label={t("common.close")}><X className="size-4" aria-hidden="true" /></button>
+						<CloseButton aria-label={t("common.close")} />
 					</DialogClose>
 				</div>
 				<DialogDescription className="sr-only">{t("shortcut.dialogDescriptionSettings")}</DialogDescription>

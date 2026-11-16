@@ -93,7 +93,7 @@ func buildConfig(plugin piPlugin, resolve binaryResolver, log *slog.Logger) acpd
 				return acpdriver.Launch{}, fmt.Errorf("%w: pi-acp is not installed: %w", ports.ErrChatDriverUnavailable, err)
 			}
 			if !filepath.IsAbs(cfg.DataDir) {
-				return acpdriver.Launch{}, fmt.Errorf("pi-acp requires an absolute AO data directory, got %q", cfg.DataDir)
+				return acpdriver.Launch{}, fmt.Errorf("pi-acp requires an absolute Orchestrator data directory, got %q", cfg.DataDir)
 			}
 			env := cloneEnv(cfg.Env)
 			agentDirs.add(env)
@@ -387,7 +387,7 @@ func validateInitialize(init acpsdk.InitializeResponse) error {
 		return fmt.Errorf("unrecognized %s version %q", distributionName, init.AgentInfo.Version)
 	}
 	if installed.less(minimum) {
-		return fmt.Errorf("%s %s is older than AO's tested minimum %s", distributionName, init.AgentInfo.Version, minimumVersion)
+		return fmt.Errorf("%s %s is older than Orchestrator's tested minimum %s", distributionName, init.AgentInfo.Version, minimumVersion)
 	}
 	return nil
 }

@@ -1,7 +1,7 @@
-import { renderHook } from "@testing-library/react";
+import { act, renderHook } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { useUiStore } from "../stores/ui-store";
-import { useChatMessageFocus } from "./useChatMessageFocus";
+import { useChatMessageFocus, useChatNavigationRequest } from "./useChatMessageFocus";
 
 describe("useChatMessageFocus", () => {
 	beforeEach(() => useUiStore.setState({ chatMessageFocusRequest: null }));
@@ -28,5 +28,18 @@ describe("useChatMessageFocus", () => {
 		expect(focus).not.toHaveBeenCalled();
 		rerender({ ready: true });
 		expect(focus).toHaveBeenCalledTimes(1);
+	});
+
+	it("keeps a navigation request for the chat it was asked of, until that chat applied it", () => {
+		const { result, rerender } = renderHook(({ owner }) => useChatNavigationRequest<{ id: string }>(owner), { initialProps: { owner: "b" } });
+		act(() => result.current.navigate({ id: "palette:1" }));
+		expect(result.current.request).toEqual({ id: "palette:1" });
+		rerender({ owner: "a" });
+		expect(result.current.request).toBeUndefined();
+		rerender({ owner: "b" });
+		act(() => result.current.handled("palette:0"));
+		expect(result.current.request).toEqual({ id: "palette:1" });
+		act(() => result.current.handled("palette:1"));
+		expect(result.current.request).toBeUndefined();
 	});
 });

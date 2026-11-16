@@ -71,7 +71,7 @@ separate tests. The container stays as a thin clean-install check.
 - **Add a case:** a new `TestE2E_*` function (or a `t.Run` subtest) in an
   appropriate `backend/internal/cli/*_test.go` file. Use `newEnv(t)` for
   isolated state and the `env.run`/`httpGet`/`postShutdown` helpers.
-- **Add an OS:** extend the `matrix.os` list in `.github/workflows/cli-e2e.yml`.
+- **Add an OS:** extend the native `matrix.os` list in `.github/workflows/cli-e2e.yml`.
 - Assertions for default state paths under `~/.ao`
   when `AO_RUN_FILE`/`AO_DATA_DIR` are unset belong in unit tests in
   `internal/config`; this suite intentionally overrides both paths.

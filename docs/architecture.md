@@ -202,6 +202,37 @@ Observation is separated from action:
 - **Lifecycle layer:** Reduces observations into durable facts.
 - **Service layer:** Computes display status from facts.
 
+Review runs follow the same split. The Runtime Reaper also probes reviewers,
+but only those serving an in-progress review run, and reports each pass to the
+review engine's run lifecycle (`internal/review/run_lifecycle.go`) instead of
+the session LCM: a reviewer has no session row. The run lifecycle reduces the
+pass into guarded `review_run` transitions (`queued`, `launching`, `running`,
+`cancelling`, then `completed`, `failed`, `cancelled` or `superseded`), applies
+the time limits (launch, first activity, idle grace, max duration, cancel), and
+force-kills a reviewer that ignores a cancel. The reaper's first pass after
+startup is the boot pass, which settles runs a previous daemon left in
+progress; until it has, other paths leave those runs alone so their
+reviewers are reaped, and the boot pass never touches a run this daemon
+created. Reviewer activity hooks, trigger, cancel and the reviews list settle
+their worker's runs directly without waiting for the next pass. Time the
+daemon did not observe (the machine slept) never counts against a run, and a
+reviewer that is still being cancelled is not given new work. The boot pass
+never waits on a worker's lock; a worker a trigger holds is settled on a later
+pass. A reviewer interrupted because its pass timed out stays supervised until
+it stops or is force-stopped. A force-stop captures the reviewer's whole
+process tree before tearing down its runtime and kills any survivor, so an
+agent that cannot react to hangup is not left running; the stop counts as
+confirmed only when none of those processes remains. A process is identified
+by pid and start time (which survives exec and changes on pid reuse), read
+together with its parent from one consistent observation, and the tree is
+walked only from roots the runtime vouches for (a live tmux pane, or a
+ConPTY host that started no later than it was spawned); a process whose
+identity cannot be read is never killed and never counted as gone, and the
+runtime is not torn down until the tree has been captured. Survivors of an
+unconfirmed attempt are carried into the retry, and still killed if a new
+launch takes over the reviewer. Suspend gaps
+are kept for a pending stop's grace as they are for active runs.
+
 ### 4. Change data capture
 
 All durable changes flow through a CDC pipeline:
@@ -624,15 +655,35 @@ sequenceDiagram
 ```
 
 Chat queues every message in SQLite while a provider turn is active. Completion
-claims the waiting messages in enqueue order and sends them as one provider
-input. A steer claims the same waiting queue and appends its guidance to one
-active turn input. Each source message keeps its own transcript row, origin,
-sender, and delivery handle. Messages arriving after the claim wait for the next
+claims from the front of the queue in enqueue order. A message the user typed
+gets a turn of its own, so the agent answers each one before the next is sent.
+Agent and Orchestrator messages waiting next to each other (agent messages,
+review comments, conflict notices) go together as one provider input, stopping
+before the next typed message. A steer claims the whole waiting queue and
+appends its guidance to one active turn input. Each source message keeps its
+own transcript row, origin, sender, and delivery handle. Messages arriving after the claim wait for the next
 turn. AO does not truncate a batch or impose a provider input size limit;
 provider limits and refusals are surfaced as delivery failures. An uncertain
 provider result closes the claimed receipts without automatically replaying
 input that the provider may already have accepted. Terminal sessions retain
 their existing delivery path.
+
+The desktop composer sends one message per session at a time, so the daemon
+receives them in the order they were entered. A send clears the box before the
+daemon answers. If the user enters the next message while the previous send is
+still in flight, the composer holds it and sends it as soon as that send is
+accepted. Each held message then gets its own queued row and keeps its place.
+A held message is sent only if the box still holds exactly the text that was
+entered; an edit made since waits for its own Enter. If the previous send is
+refused or gets no answer, the held message stays in the box instead of
+overtaking it.
+
+The queue dock lists waiting messages in send order: the next one on top, the
+newest at the bottom, and a send the daemon has not confirmed yet after them.
+Folded, it keeps the next message in view. While a turn can be steered, every
+row shows Steer. Cmd/Ctrl+Enter in an empty composer steers the next message,
+as Cmd/Ctrl+Enter steers a typed draft. A plain Enter in an empty composer does
+nothing.
 
 ---
 
@@ -959,7 +1010,15 @@ flowchart TD
     Skip --> NextSession{More sessions?}
     CDC --> NextSession
     NextSession -->|Yes| ForEach
-    NextSession -->|No| Loop
+    NextSession -->|No| Reviewers[List reviewers serving<br/>an in-progress review run]
+
+    Reviewers --> AnyReview{Any?}
+    AnyReview -->|No| Loop
+    AnyReview -->|Yes| ProbeReviewer[Probe each reviewer<br/>exact launch or Chat controller]
+    ProbeReviewer --> ReviewerBreaker[Reviewer mass-death breaker]
+    ReviewerBreaker --> ApplyReview[ApplyReviewerObservations]
+    ApplyReview --> RunLifecycle[Review run lifecycle<br/>guarded review_run transitions]
+    RunLifecycle --> Loop
 
 ```
 
@@ -1136,6 +1195,31 @@ sessions have no agent runtime handle and never attach their provider through
 tmux. They may still open session-scoped shell terminals as a worktree escape
 hatch; those shells are separate resources and do not become the agent
 controller.
+
+### Terminal titles
+
+The PTY host reads OSC 0/2 titles from terminal output without changing it,
+drops animated status glyphs, and keeps the latest title with or without viewers.
+`service/terminaltitle` watches live TUI sessions and shell terminals and stores
+changes at a bounded rate. It does not poll: it reads live sessions once at
+start, then one session per CDC event (spawn, restore, terminate and delete all
+emit one), and the shell terminal service reports user shells as they open and
+close. A watch ends when the runtime cannot report titles or the host stops
+answering, and starts again when the session gets a new launch. Session titles use `session_terminal_titles` because
+every `sessions` update bumps the revision that fences observer writes. A label
+is resolved at read time: an explicit name wins, then a meaningful program title
+(`terminalTitle`), then the existing fallback. A title never changes session
+identity. Chat transports and legacy tmux handles have no titles.
+
+### Agents in shell tabs
+
+`service/shellagent` names the agent a user started by hand in a local shell
+tab and whether it is working, idle or waiting. The PTY host reports the
+terminal's foreground process group and its argv (`tcgetpgrp` with
+`kern.procargs2` on macOS, `/proc` on Linux) when the program changes or starts
+or stops drawing; nothing polls, and watches run only while a client subscribes
+to the `shell-agents` mux channel. Windows ConPTY, tmux and remote or cloud
+shells keep plain tabs.
 
 ### Terminal architecture
 

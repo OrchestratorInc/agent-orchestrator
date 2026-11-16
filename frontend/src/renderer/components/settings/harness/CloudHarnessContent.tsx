@@ -1,24 +1,32 @@
-import { useQueryClient } from "@tanstack/react-query";
-import { KeyRound } from "lucide-react";
+import { useMutation, useQueryClient } from "@tanstack/react-query";
+import { KeyRound } from "@/components/app-icons";
 import { useEffect, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { useCloudCp } from "../../../hooks/useCloudCp";
+import { describeCloudHarness, useCloudHarnessVersions } from "../../../hooks/useCloudHarnessVersions";
+import { versionLabel } from "../../../hooks/useHarnessUpdates";
+import { useCloudOffering } from "../../../hooks/useCloudOffering";
 import { useCloudOrg } from "../../../hooks/useCloudOrg";
 import { providerConnectionsQueryKey, useProviderConnections } from "../../../hooks/useProviderConnections";
+import { CloudCpError, type CloudCpProviderConnection } from "../../../lib/cloud-cp";
 import { agentLabel, type AgentId } from "../../../lib/agent-options";
 import { CLOUD_AGENT_PROVIDERS, isCloudHarnessConnected } from "../../../lib/cloud-agents";
 import { cn } from "../../../lib/utils";
 import { AgentAvatar } from "../../AgentAvatar";
-import { GitHubTokenField } from "../../onboarding/GitHubTokenField";
 import { Button } from "../../ui/button";
+import { Pressable } from "../../ui/pressable";
 import { CloudHarnessLoginPanel, type CloudHarness } from "../CloudHarnessLoginPanel";
 import { SettingsRow } from "../SettingsRow";
+import { CloudAgentAccountsPanel } from "./CloudAgentAccountsPanel";
 import { FOCUS_HIGHLIGHT_MS } from "./harness-ui";
 
 export function CloudHarnessContent({ focusAgentId, search }: { focusAgentId?: string; search: string }) {
 	const { t } = useTranslation();
 	const { org } = useCloudOrg();
 	const connections = useProviderConnections();
+	const versions = useCloudHarnessVersions();
+	// Each harness can hold several accounts: its options list them instead of one login.
+	const { agentAccounts } = useCloudOffering();
 	const [loginAgent, setLoginAgent] = useState<CloudHarness | null>(null);
 	const [expandedAgentId, setExpandedAgentId] = useState<CloudHarness | null>(null);
 	const [highlightedAgentId, setHighlightedAgentId] = useState<AgentId | null>(null);
@@ -47,8 +55,13 @@ export function CloudHarnessContent({ focusAgentId, search }: { focusAgentId?: s
 			: <div className="settings-grouped-rows flex w-full flex-col" ref={rowsRef}>
 				{rows.map((agentId) => {
 					const connected = isCloudHarnessConnected(connections.data, agentId);
+					const cloudVersion = describeCloudHarness(versions.data, agentId)?.currentVersion;
 					const expanded = expandedAgentId === agentId;
-					const openLogin = () => { setLoginAgent(agentId); setExpandedAgentId(agentId); };
+					const openLogin = () => {
+						// With accounts the list logs in: it opens on adding one while there is none.
+						if (!agentAccounts) setLoginAgent(agentId);
+						setExpandedAgentId(agentId);
+					};
 					return <div
 						aria-labelledby={`harness-agent-${agentId}`}
 						className={cn("settings-row-bar min-h-14 flex-wrap gap-3 transition-[background-color,box-shadow] duration-200", highlightedAgentId === agentId && "bg-accent-weak ring-2 ring-inset ring-accent")}
@@ -57,96 +70,66 @@ export function CloudHarnessContent({ focusAgentId, search }: { focusAgentId?: s
 						key={agentId}
 						tabIndex={-1}
 					>
-						<button type="button" className="flex min-w-0 flex-1 items-center gap-3 rounded-md text-left outline-none focus-visible:ring-2 focus-visible:ring-ring" aria-label={t(expanded ? "settings.harness.collapseOptions" : "settings.harness.expandOptions", { agent: agentLabel(agentId) })} aria-expanded={expanded} aria-controls={`cloud-harness-options-${agentId}`} onClick={() => setExpandedAgentId(expanded ? null : agentId)}>
+						<Pressable className="flex min-w-0 flex-1 items-center gap-3 rounded-md" aria-label={t(expanded ? "settings.harness.collapseOptions" : "settings.harness.expandOptions", { agent: agentLabel(agentId) })} aria-expanded={expanded} aria-controls={`cloud-harness-options-${agentId}`} onClick={() => setExpandedAgentId(expanded ? null : agentId)}>
 							<AgentAvatar className="size-7 shrink-0" decorative provider={agentId} />
 							<span className="min-w-0 flex-1">
 								<span className="block text-sm font-medium text-settings-label" id={`harness-agent-${agentId}`}>{agentLabel(agentId)}</span>
-								<span className="mt-0.5 flex flex-wrap gap-x-1.5 text-xs text-settings-muted"><span>{connected ? t("settings.harness.loggedIn") : t("settings.harness.cloudNotConnected")}</span><span aria-hidden="true">·</span><span>{t("settings.harness.apiVersionNotReported")}</span></span>
+								<span className="mt-0.5 flex flex-wrap gap-x-1.5 text-xs text-settings-muted"><span>{connected ? t("settings.harness.loggedIn") : t("settings.harness.cloudNotConnected")}</span><span aria-hidden="true">·</span><span>{cloudVersion ? versionLabel(cloudVersion) : t("settings.harness.apiVersionNotReported")}</span></span>
 							</span>
-						</button>
-						{!connected && loginAgent !== agentId ? <Button type="button" data-harness-primary-action="" size="sm" className="h-8 min-w-20 px-3 focus-visible:ring-2 focus-visible:ring-ring" onClick={openLogin}>{t("settings.harness.login")}</Button> : null}
+						</Pressable>
+						{!connected && loginAgent !== agentId ? <Button type="button" data-harness-primary-action="" size="default" className="min-w-20" onClick={openLogin}>{t("settings.harness.login")}</Button> : null}
 						<div id={`cloud-harness-options-${agentId}`} hidden={!expanded} className={cn("basis-full pl-10", !expanded && "hidden")}>
-							{loginAgent === agentId ? <CloudHarnessLoginPanel agent={agentId} onClose={() => setLoginAgent(null)} /> : connected ? <Button type="button" size="sm" variant="outline" className="h-8 px-3" onClick={openLogin}>{t("settings.harness.refreshLogin")}</Button> : null}
+							{agentAccounts ? (expanded ? <CloudAgentAccountsPanel agent={agentId} addFirst={!connected} /> : null) : loginAgent === agentId ? <CloudHarnessLoginPanel agent={agentId} onClose={() => setLoginAgent(null)} /> : connected ? <Button type="button" size="default" variant="secondary" onClick={openLogin}>{t("settings.harness.refreshLogin")}</Button> : null}
 						</div>
 					</div>;
 				})}
 				{rows.length === 0 ? <p className="px-3 py-6 text-center text-sm text-settings-muted">{t("settings.harness.noResults")}</p> : null}
 			</div>}
-		{org?.id ? <div className="mt-3 border-t border-border px-3 pt-3"><CloudGitHubPatRow /></div> : null}
+		{org?.id && hasSavedGitHubToken(connections.data) ? <div className="mt-3 border-t border-border px-3 pt-3"><SavedGitHubTokenRow /></div> : null}
 	</>;
 }
 
+/** A GitHub token saved for Cloud before it reached GitHub through the GitHub App, whatever its last check said. */
+function hasSavedGitHubToken(connections: CloudCpProviderConnection[] | undefined): boolean {
+	return (connections ?? []).some((connection) => connection.provider === "github" && connection.label === "default");
+}
+
+/** The control plane has no saved GitHub token for this person (DELETE /me/github-pat answered 404 not_found). */
+function isTokenAlreadyGone(error: unknown): boolean {
+	return error instanceof CloudCpError && error.status === 404 && error.code === "not_found";
+}
+
 /**
-	* GitHub personal access token for cloud workers to clone private repositories.
-	* Lives on the Harness page's cloud view (the only place cloud credentials are
-	* managed) so GitHub connectivity stays reachable once a user is signed into a
-	* cloud org. The PAT is personal: stored encrypted and never echoed back.
-	*/
-function CloudGitHubPatRow() {
+ * Nothing saves a GitHub token for Cloud any more, but the control plane keeps
+ * one saved earlier and can still use it, so its owner can remove it here. The
+ * row leaves once the token is gone.
+ */
+function SavedGitHubTokenRow() {
 	const { t } = useTranslation();
 	const { client } = useCloudCp();
 	const queryClient = useQueryClient();
-	const userConnections = useProviderConnections();
-	const [githubPAT, setGitHubPAT] = useState("");
-	const [githubPATBusy, setGitHubPATBusy] = useState(false);
-	const [githubPATError, setGitHubPATError] = useState<string | null>(null);
-
-	const githubPATConnected = (userConnections.data ?? []).some(
-		(connection) => connection.provider === "github" && connection.label === "default" && connection.validationState === "valid",
-	);
-	const saveGitHubPAT = async () => {
-		if (githubPAT.trim() === "") return;
-		setGitHubPATBusy(true);
-		setGitHubPATError(null);
-		try {
-			await client.putGitHubPAT({ secret: githubPAT.trim() });
-			setGitHubPAT("");
-			await queryClient.invalidateQueries({ queryKey: providerConnectionsQueryKey });
-		} catch (error) {
-			setGitHubPATError(error instanceof Error ? error.message : t("settings.cloudAgents.github.errorSave"));
-		} finally {
-			setGitHubPATBusy(false);
-		}
-	};
-	const removeGitHubPAT = async () => {
-		setGitHubPATBusy(true);
-		setGitHubPATError(null);
-		try {
-			await client.deleteGitHubPAT();
-			await queryClient.invalidateQueries({ queryKey: providerConnectionsQueryKey });
-		} catch (error) {
-			setGitHubPATError(error instanceof Error ? error.message : t("settings.cloudAgents.github.errorRemove"));
-		} finally {
-			setGitHubPATBusy(false);
-		}
-	};
-	return (
-		<div className="flex w-full flex-col gap-1.5">
-			<SettingsRow key="github-pat" icon={KeyRound} label={t("settings.cloudAgents.github.title")}>
-				<span className="text-sm leading-5 text-settings-muted">{githubPATConnected ? t("settings.cloudAgents.github.connected") : t("settings.cloudAgents.github.notConnected")}</span>
-			</SettingsRow>
-			<GitHubTokenField
-				id="settings-github-pat"
-				bare
-				className="mt-2"
-				label={t("settings.cloudAgents.github.tokenLabel")}
-				hint={t("settings.cloudAgents.github.tokenHint")}
-				value={githubPAT}
-				disabled={githubPATBusy}
-				error={githubPATError}
-				submitLabel={githubPATBusy ? t("settings.cloudAgents.github.saving") : t("settings.cloudAgents.github.save")}
-				submitVariant="outline"
-				submitDisabled={githubPATBusy}
-				onChange={setGitHubPAT}
-				onSubmit={() => void saveGitHubPAT()}
-			/>
-			{githubPATConnected ? (
-				<div className="mt-2 flex justify-end">
-					<Button type="button" variant="footer" disabled={githubPATBusy} onClick={() => void removeGitHubPAT()}>
-						{t("settings.cloudAgents.github.remove")}
-					</Button>
-				</div>
-			) : null}
-		</div>
-	);
+	const remove = useMutation({
+		mutationFn: async () => {
+			try {
+				await client.deleteGitHubPAT();
+			} catch (error) {
+				// Already gone (removed from another device) is what Remove asked for.
+				if (!isTokenAlreadyGone(error)) throw error;
+			}
+		},
+		// Refetch either way, so the row matches what the control plane holds.
+		onSettled: () => queryClient.invalidateQueries({ queryKey: providerConnectionsQueryKey }),
+	});
+	return <SettingsRow
+		data-saved-github-token=""
+		description={remove.isError
+			? <span className="text-error" role="alert">{t("settings.cloudAgents.savedGitHubToken.errorRemove")}</span>
+			: t("settings.cloudAgents.savedGitHubToken.hint")}
+		icon={KeyRound}
+		label={t("settings.cloudAgents.savedGitHubToken.title")}
+	>
+		<Button disabled={remove.isPending} onClick={() => remove.mutate()} type="button" variant="destructive-ghost">
+			{remove.isPending ? t("settings.cloudAgents.savedGitHubToken.removing") : t("settings.cloudAgents.savedGitHubToken.remove")}
+		</Button>
+	</SettingsRow>;
 }

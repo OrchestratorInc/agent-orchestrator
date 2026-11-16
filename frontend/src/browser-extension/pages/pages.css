@@ -83,3 +83,4 @@ textarea {
 .row { display: flex; justify-content: space-between; align-items: center; gap: 8px; padding: 6px 0; border-top: 1px solid var(--border); }
 .row:first-child { border-top: 0; }
 .error { color: var(--destructive); }
+.logo { display: block; margin-bottom: 10px; border-radius: 22%; }

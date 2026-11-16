@@ -11,6 +11,7 @@ import {
 	koMessages,
 	ptBRMessages,
 	ruMessages,
+	trMessages,
 	zhCNMessages,
 } from "./all-messages";
 
@@ -24,6 +25,7 @@ const allCatalogs = {
 	de: deMessages,
 	"pt-BR": ptBRMessages,
 	ru: ruMessages,
+	tr: trMessages,
 } as const;
 
 function emptyCatalogs(): TranslationCatalogs {
@@ -41,6 +43,7 @@ describe("coerceLocale", () => {
 		expect(coerceLocale("de")).toBe("de");
 		expect(coerceLocale("pt-BR")).toBe("pt-BR");
 		expect(coerceLocale("ru")).toBe("ru");
+		expect(coerceLocale("tr")).toBe("tr");
 	});
 
 	it("defaults unknown values to en", () => {
@@ -52,12 +55,13 @@ describe("coerceLocale", () => {
 });
 
 describe("app i18next instance", () => {
-	it("explains side-chat restrictions as behavior while files remain shared", () => {
-		const explanation = createAppI18n("en").t("sideChat.isolationPolicy");
-		expect(explanation).toContain("Files and Git are shared");
-		expect(explanation).toContain("Read-only is behavioral");
-		expect(explanation).toContain("Sub-agent interaction is prohibited by instruction");
-		expect(explanation).not.toContain("disabled");
+	it("provides a brief side-chat description in every locale", () => {
+		for (const locale of APP_LOCALES) {
+			const catalog = allCatalogs[locale] as unknown as Record<string, string>;
+			expect(catalog["sideChat.emptyDescription"], locale).toBeTruthy();
+		}
+		expect(createAppI18n("en").t("sideChat.emptyDescription"))
+			.toBe("Explore a quick question without interrupting the main chat.");
 	});
 
 	it("provides agent management and readiness labels for every supported locale", () => {
@@ -86,6 +90,7 @@ describe("app i18next instance", () => {
 			de: "settings.language.de",
 			"pt-BR": "settings.language.ptBR",
 			ru: "settings.language.ru",
+			tr: "settings.language.tr",
 		} as const;
 		const expected = {
 			en: "English",
@@ -97,6 +102,7 @@ describe("app i18next instance", () => {
 			de: "Deutsch",
 			"pt-BR": "Português (Brasil)",
 			ru: "Русский",
+			tr: "Türkçe",
 		} as const;
 		for (const locale of APP_LOCALES) {
 			expect(createAppI18n(locale).t(labels[locale])).toBe(expected[locale]);
@@ -156,6 +162,19 @@ describe("app i18next instance", () => {
 		]);
 	});
 
+	it("localizes Cloud project setup and settings copy that only had inline English defaults", () => {
+		const german = createAppI18n("de");
+		// The call sites pass an English defaultValue, which must not win over the catalog.
+		expect(german.t("settings.cloudProject.agentStartsIn", { defaultValue: "Agent starts in" })).toBe("Agent startet in");
+		expect(german.t("cloudRepos.problemLimit", { defaultValue: "A project can have at most {{count}} additional repositories.", count: 5 }))
+			.toBe("Ein Projekt kann höchstens 5 zusätzliche Repositorys haben.");
+		const japanese = createAppI18n("ja");
+		expect(japanese.t("coder.template.label", { defaultValue: "Template" })).toBe("テンプレート");
+		expect(japanese.t("cloudRepos.remove", { defaultValue: "Remove {{name}}", name: "acme/web" })).toBe("acme/web を削除");
+		const russian = createAppI18n("ru");
+		expect(russian.t("cloudRepos.problemLimit", { count: 21 })).toBe("У проекта может быть не больше 21 дополнительных репозиториев.");
+	});
+
 	it("provides Chinese copy for the remaining audited shell surfaces", () => {
 		const chinese = createAppI18n("zh-CN");
 		expect(chinese.t("terminal.loadingOutput")).toBe("正在加载最新输出…");
@@ -163,7 +182,7 @@ describe("app i18next instance", () => {
 		expect(chinese.t("inspector.open")).toBe("打开");
 		expect(chinese.t("inspector.openTerminal")).toBe("打开终端");
 		expect(chinese.t("createProject.gitSetupNotice")).toBe(
-			"如果此文件夹需要设置 Git，AO 会先初始化仓库并创建首次提交，然后再启动。",
+			"如果此文件夹需要设置 Git，Orchestrator 会先初始化仓库并创建首次提交，然后再启动。",
 		);
 		expect(chinese.t("settings.updates.currentVersion", { version: "v1.2.3" })).toBe("当前版本 - v1.2.3");
 		expect(chinese.t("settings.updates.updateTo", { version: "v1.2.3" })).toBe("更新至 v1.2.3");
@@ -179,7 +198,7 @@ describe("app i18next instance", () => {
 		expect(chinese.t("notify.earlierLoadFailed")).toBe("无法加载更早的通知。");
 		expect(chinese.t("notify.loadingEarlier")).toBe("正在加载更早的通知…");
 		expect(chinese.t("notify.retry")).toBe("重试");
-		expect(chinese.t("report.cancel")).toBe("取消");
+		expect(chinese.t("report.github")).toBe("GitHub");
 		expect(chinese.t("shell.openProjectDashboard", { name: "AO" })).toBe("打开 AO 看板");
 		expect(chinese.t("shell.renameSession", { title: "任务" })).toBe("重命名任务");
 		expect(chinese.t("shell.versionReady", { version: "9.9.9" })).toBe("v9.9.9 已就绪");
@@ -264,6 +283,20 @@ describe("app i18next instance", () => {
 });
 
 describe("lazy locale catalogs", () => {
+	it("loads Turkish on demand with the exact English key set and Turkish plural forms", async () => {
+		expect(Object.keys(trMessages).sort()).toEqual(Object.keys(enMessages).sort());
+		const instance = createLazyAppI18n();
+		expect(instance.getResource("tr", "translation", "settings.general")).toBeUndefined();
+		await instance.changeLanguage("tr");
+		expect(instance.language).toBe("tr");
+		expect(instance.t("settings.general")).toBe("Genel");
+		expect(instance.t("settings.language.tr")).toBe("Türkçe");
+		for (const count of [0, 1, 2, 21]) {
+			expect(instance.t("firstRun.importFound", { count, agents: "Codex" }))
+				.toBe(`Bu bilgisayarda Codex ile yapılmış ${count} sohbet bulundu.`);
+		}
+	});
+
 	it("loads a locale's catalog when the app instance changes language", async () => {
 		const instance = createLazyAppI18n();
 		expect(instance.getResource("ja", "translation", "settings.general")).toBeUndefined();

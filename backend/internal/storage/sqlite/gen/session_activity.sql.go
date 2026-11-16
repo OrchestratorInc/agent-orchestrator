@@ -13,6 +13,28 @@ import (
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
 )
 
+const sessionAcceptedDelivery = `-- name: SessionAcceptedDelivery :one
+SELECT EXISTS (
+    SELECT 1 FROM sessions
+    WHERE id = ?1
+      AND instr(' ' || accepted_delivery_id || ' ', ' ' || CAST(?2 AS TEXT) || ' ') > 0
+      AND accepted_delivery_launch_id = ?3
+)
+`
+
+type SessionAcceptedDeliveryParams struct {
+	ID              domain.SessionID
+	DeliveryID      string
+	RuntimeLaunchID string
+}
+
+func (q *Queries) SessionAcceptedDelivery(ctx context.Context, arg SessionAcceptedDeliveryParams) (bool, error) {
+	row := q.db.QueryRowContext(ctx, sessionAcceptedDelivery, arg.ID, arg.DeliveryID, arg.RuntimeLaunchID)
+	var exists bool
+	err := row.Scan(&exists)
+	return exists, err
+}
+
 const updateSessionFromActivitySignal = `-- name: UpdateSessionFromActivitySignal :execrows
 UPDATE sessions SET
     activity_state = ?1,
@@ -34,14 +56,29 @@ UPDATE sessions SET
     native_transcript_path = ?17,
     claude_activity_facts = ?18,
     codex_activity_facts = ?19,
-    updated_at = ?20
-WHERE sessions.id = ?21
-  AND sessions.revision = ?22
+    -- Only a prompt carrying an AO delivery id writes accepted deliveries, so a
+    -- human prompt never erases them. The launch's last 8 are kept, space
+    -- separated, so an earlier delivery is still found after a later one.
+    accepted_delivery_id = CASE
+        WHEN CAST(?20 AS TEXT) = '' THEN accepted_delivery_id
+        WHEN accepted_delivery_id = '' OR accepted_delivery_launch_id <> runtime_launch_id
+            THEN CAST(?20 AS TEXT)
+        WHEN instr(' ' || accepted_delivery_id || ' ', ' ' || CAST(?20 AS TEXT) || ' ') > 0
+            THEN accepted_delivery_id
+        WHEN length(accepted_delivery_id) - length(replace(accepted_delivery_id, ' ', '')) >= 7
+            THEN substr(accepted_delivery_id, instr(accepted_delivery_id, ' ') + 1) || ' ' || CAST(?20 AS TEXT)
+        ELSE accepted_delivery_id || ' ' || CAST(?20 AS TEXT)
+    END,
+    accepted_delivery_launch_id = CASE WHEN CAST(?20 AS TEXT) = ''
+        THEN accepted_delivery_launch_id ELSE runtime_launch_id END,
+    updated_at = ?21
+WHERE sessions.id = ?22
+  AND sessions.revision = ?23
   AND sessions.is_terminated = 0
-  AND sessions.harness = ?23
-  AND sessions.session_mode = ?24
-  AND ((?24 <> 'chat' AND sessions.runtime_launch_id = ?25)
-    OR (?24 = 'chat' AND sessions.controller_generation = ?26))
+  AND sessions.harness = ?24
+  AND sessions.session_mode = ?25
+  AND ((?25 <> 'chat' AND sessions.runtime_launch_id = ?26)
+    OR (?25 = 'chat' AND sessions.controller_generation = ?27))
 `
 
 type UpdateSessionFromActivitySignalParams struct {
@@ -64,6 +101,7 @@ type UpdateSessionFromActivitySignalParams struct {
 	NativeTranscriptPath             string
 	ClaudeActivityFacts              string
 	CodexActivityFacts               string
+	AcceptedDeliveryID               string
 	UpdatedAt                        time.Time
 	ID                               domain.SessionID
 	ExpectedRevision                 int64
@@ -96,6 +134,7 @@ func (q *Queries) UpdateSessionFromActivitySignal(ctx context.Context, arg Updat
 		arg.NativeTranscriptPath,
 		arg.ClaudeActivityFacts,
 		arg.CodexActivityFacts,
+		arg.AcceptedDeliveryID,
 		arg.UpdatedAt,
 		arg.ID,
 		arg.ExpectedRevision,

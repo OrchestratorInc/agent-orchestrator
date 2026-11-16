@@ -13,6 +13,11 @@ export const RENDER_MAX_HEIGHT = 2000;
 const RENDER_PATH = /^\/api\/v1\/sessions\/[^/]+\/renders\/[^/]+$/;
 const MAX_MEASURED_WIDTHS = 16;
 
+/** A path to one of a session's rendered pages, the only thing the frame and viewer load. */
+export function isRenderPath(path: string): boolean {
+	return RENDER_PATH.test(path);
+}
+
 export function clampRenderHeight(height: number): number {
 	return Math.min(RENDER_MAX_HEIGHT, Math.max(RENDER_MIN_HEIGHT, Math.round(height)));
 }
@@ -85,15 +90,21 @@ function isMeasuredHeights(heights: unknown): heights is Array<[number, number]>
 }
 
 /**
- * The page's height at a frame width: the taller of the heights at the nearest
- * measured widths on each side, since a breakpoint between them can make the
- * page as tall as either.
+ * The page's height at a frame width, from the heights measured at other
+ * widths. Between two measured widths a breakpoint could make the page as tall
+ * as either, so it takes the taller; outside them, the nearest one.
  */
 export function measuredRenderHeight(heights: Array<[number, number]>, width: number): number {
-	const above = heights.findIndex(([measuredWidth]) => measuredWidth >= width);
-	const high = above === -1 ? heights.length - 1 : above;
-	const low = heights[high][0] === width ? high : Math.max(0, high - 1);
-	return Math.max(heights[low][1], heights[high][1]);
+	let narrower = heights[0];
+	let wider = heights[heights.length - 1];
+	for (const pair of heights) {
+		if (pair[0] <= width) narrower = pair;
+		if (pair[0] >= width) {
+			wider = pair;
+			break;
+		}
+	}
+	return Math.max(narrower[1], wider[1]);
 }
 
 /** The height a frame opens at before the page reports its own. */
@@ -245,7 +256,7 @@ export function renderTheme(t: Theme, appearance: "light" | "dark"): RenderTheme
 		"--link": t.highlight,
 		"--chart-1": t.blue,
 		// The theme replaces the page's defaults wholesale, so these must be
-		// present too. The app's Geist is not loaded inside the page.
+		// present too. The app's own family is not loaded inside the page.
 		"--font-sans": "-apple-system, system-ui, sans-serif",
 		"--font-mono": "ui-monospace, Menlo, monospace",
 		"--radius": "0.5rem",

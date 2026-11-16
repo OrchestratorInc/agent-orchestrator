@@ -1,5 +1,5 @@
 export type SchedulePreset = "daily" | "weekly" | "custom";
-export type CustomFrequency = "daily" | "weekly" | "monthly";
+export type CustomFrequency = "daily" | "weekly" | "weekdays" | "monthly";
 export type WeekdayCode = "MO" | "TU" | "WE" | "TH" | "FR" | "SA" | "SU";
 
 export const WEEKDAY_CODES: WeekdayCode[] = ["MO", "TU", "WE", "TH", "FR", "SA", "SU"];
@@ -12,7 +12,7 @@ export type ScheduleFields = {
 	weekday: WeekdayCode;
 	hour: string;
 	minute: string;
-	/** Unmapped RRULE text preserved until the user edits the custom builder. */
+	/** Original anchored or unmapped RRULE, preserved until a schedule edit. */
 	legacyRaw: string | null;
 };
 
@@ -72,7 +72,7 @@ function isSimpleMonthly(parts: Record<string, string>): boolean {
 	const keys = Object.keys(parts).sort().join(",");
 	return (
 		parts.FREQ === "MONTHLY" &&
-		parts.BYMONTHDAY !== undefined &&
+		/^(?:[1-9]|[12]\d|3[01])$/.test(parts.BYMONTHDAY ?? "") &&
 		parts.BYHOUR !== undefined &&
 		parts.BYMINUTE !== undefined &&
 		parts.BYSECOND === "0" &&
@@ -109,14 +109,23 @@ export function scheduleFieldsFromRRule(rruleText: string): ScheduleFields {
 	}
 
 	const lines = trimmed.split("\n").map((line) => line.trim()).filter(Boolean);
-	if (lines.length > 1 || trimmed.includes("INTERVAL=")) {
+	const anchored = lines.length === 2 &&
+		(lines[0].startsWith("DTSTART:") || lines[0].startsWith("DTSTART;TZID=")) &&
+		lines[1].startsWith("RRULE:");
+	if ((lines.length > 1 && !anchored) || trimmed.includes("INTERVAL=")) {
 		return emptyCustom();
 	}
+	// Saved daemon rules include an anchor. Show their actual schedule while
+	// preserving that anchor until the user explicitly changes the schedule.
+	const legacyRaw = anchored ? trimmed : null;
 
 	const parts = parseRRuleParts(trimmed);
 	const hour = parts.BYHOUR ?? defaultHour;
 	const minute = parts.BYMINUTE ?? defaultMinute;
 	const time = `${hour.padStart(2, "0")}:${minute.padStart(2, "0")}`;
+	// Every simple form represents exactly one clock time. Lists and other
+	// unsupported values must retain the raw rule and valid fallback fields.
+	if (!parseTimeValue(time)) return emptyCustom();
 
 	if (isSimpleDaily(parts)) {
 		return {
@@ -127,7 +136,17 @@ export function scheduleFieldsFromRRule(rruleText: string): ScheduleFields {
 			weekday: "MO",
 			hour,
 			minute,
-			legacyRaw: null,
+			legacyRaw,
+		};
+	}
+	if (
+		parts.FREQ === "WEEKLY" && parts.BYDAY === "MO,TU,WE,TH,FR" &&
+		parts.BYHOUR !== undefined && parts.BYMINUTE !== undefined && parts.BYSECOND === "0" &&
+		Object.keys(parts).sort().join(",") === "BYDAY,BYHOUR,BYMINUTE,BYSECOND,FREQ"
+	) {
+		return {
+			preset: "custom", time, customFrequency: "weekdays", monthDay: "1",
+			weekday: "MO", hour, minute, legacyRaw,
 		};
 	}
 	if (isSimpleWeekly(parts)) {
@@ -139,7 +158,7 @@ export function scheduleFieldsFromRRule(rruleText: string): ScheduleFields {
 			weekday: normalizeWeekday(parts.BYDAY),
 			hour,
 			minute,
-			legacyRaw: null,
+			legacyRaw,
 		};
 	}
 	if (isSimpleMonthly(parts)) {
@@ -151,7 +170,7 @@ export function scheduleFieldsFromRRule(rruleText: string): ScheduleFields {
 			weekday: "MO",
 			hour,
 			minute,
-			legacyRaw: null,
+			legacyRaw,
 		};
 	}
 
@@ -175,6 +194,9 @@ export function buildRRuleFromSchedule(fields: ScheduleFields): string {
 	const monthDay = Number(fields.monthDay);
 	if (fields.customFrequency === "daily") {
 		return `FREQ=DAILY;BYHOUR=${hour};BYMINUTE=${minute};BYSECOND=0`;
+	}
+	if (fields.customFrequency === "weekdays") {
+		return `FREQ=WEEKLY;BYDAY=MO,TU,WE,TH,FR;BYHOUR=${hour};BYMINUTE=${minute};BYSECOND=0`;
 	}
 	if (fields.customFrequency === "weekly") {
 		return `FREQ=WEEKLY;BYDAY=${fields.weekday};BYHOUR=${hour};BYMINUTE=${minute};BYSECOND=0`;
@@ -270,4 +292,40 @@ export function formatTimeDraft(raw: string): string {
 	const digits = out.slice(0, 4).join("");
 	if (digits.length <= 2) return digits;
 	return `${digits.slice(0, 2)}:${digits.slice(2)}`;
+}
+
+/** A recurrence rule reduced to what a person reads in a list: cadence and clock time. */
+export type ScheduleSummary =
+	| { kind: "daily"; time: { hour: number; minute: number } | null }
+	| { kind: "weekdays"; time: { hour: number; minute: number } | null }
+	| { kind: "weekly"; days: WeekdayCode[]; time: { hour: number; minute: number } | null }
+	| { kind: "monthly"; day: number; time: { hour: number; minute: number } | null }
+	| { kind: "other"; frequency: string | null; time: { hour: number; minute: number } | null };
+
+/**
+ * Summarizes a daemon RRULE (optionally with a DTSTART line) for display.
+ * Rules with an interval, or day lists AO does not author, fall back to
+ * `other` with only their frequency so the list never claims a cadence
+ * the scheduler will not follow.
+ */
+export function describeSchedule(rruleText: string): ScheduleSummary {
+	const parts = parseRRuleParts(rruleText);
+	const frequency = parts.FREQ?.toLowerCase() || null;
+	const time = parts.BYHOUR !== undefined && parts.BYMINUTE !== undefined ? parseHourMinute(parts.BYHOUR, parts.BYMINUTE) : null;
+	const simple = !parts.INTERVAL || parts.INTERVAL === "1";
+	if (!simple) return { kind: "other", frequency, time };
+	if (frequency === "daily" && !parts.BYDAY) return { kind: "daily", time };
+	if (frequency === "weekly" || (frequency === "daily" && parts.BYDAY)) {
+		const raw = parts.BYDAY?.split(",") ?? [];
+		const days = raw.filter((day): day is WeekdayCode => WEEKDAY_CODES.includes(day as WeekdayCode));
+		if (days.length === 0 || days.length !== raw.length) return { kind: "other", frequency, time };
+		const ordered = WEEKDAY_CODES.filter((code) => days.includes(code));
+		if (ordered.join(",") === "MO,TU,WE,TH,FR") return { kind: "weekdays", time };
+		if (ordered.length === 7) return { kind: "daily", time };
+		return { kind: "weekly", days: ordered, time };
+	}
+	if (frequency === "monthly" && /^(?:[1-9]|[12]\d|3[01])$/.test(parts.BYMONTHDAY ?? "")) {
+		return { kind: "monthly", day: Number(parts.BYMONTHDAY), time };
+	}
+	return { kind: "other", frequency, time };
 }

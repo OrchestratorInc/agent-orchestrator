@@ -35,6 +35,7 @@ func TestSessionCleanupFactsRoundTrip(t *testing.T) {
 		LastAttemptAt:        now,
 		NextAttemptAt:        now.Add(time.Minute),
 		FailureCode:          "workspace_dirty",
+		ReportOnly:           true,
 	}
 	if err := s.UpsertSessionCleanupFacts(ctx, want); err != nil {
 		t.Fatalf("upsert facts: %v", err)
@@ -49,6 +50,7 @@ func TestSessionCleanupFactsRoundTrip(t *testing.T) {
 	want.WorkspaceDisposition = domain.DispositionFailed
 	want.AttemptCount = 5
 	want.FailureCode = "worktree_locked"
+	want.ReportOnly = false
 	want.RuntimeReleasedAt = time.Time{} // clear back to NULL
 	if err := s.UpsertSessionCleanupFacts(ctx, want); err != nil {
 		t.Fatalf("re-upsert facts: %v", err)
@@ -254,7 +256,8 @@ func requireCleanupEqual(t *testing.T, got, want domain.SessionCleanupRecord) {
 		got.SessionGeneration != want.SessionGeneration ||
 		got.WorkspaceDisposition != want.WorkspaceDisposition ||
 		got.AttemptCount != want.AttemptCount ||
-		got.FailureCode != want.FailureCode {
+		got.FailureCode != want.FailureCode ||
+		got.ReportOnly != want.ReportOnly {
 		t.Fatalf("cleanup facts scalars = %#v, want %#v", got, want)
 	}
 	if !got.RuntimeReleasedAt.Equal(want.RuntimeReleasedAt) {

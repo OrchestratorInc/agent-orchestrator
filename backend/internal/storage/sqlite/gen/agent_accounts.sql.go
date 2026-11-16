@@ -13,6 +13,43 @@ import (
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
 )
 
+const addDeletedSessionAccountUsage = `-- name: AddDeletedSessionAccountUsage :exec
+INSERT INTO deleted_session_account_usage (
+    account_id, day, model_id, input_tokens, cached_input_tokens, output_tokens, estimated_cost_nanos
+) VALUES (
+    ?1, ?2, ?3, ?4,
+    ?5, ?6, ?7
+)
+ON CONFLICT (account_id, day, model_id) DO UPDATE SET
+    input_tokens = input_tokens + excluded.input_tokens,
+    cached_input_tokens = cached_input_tokens + excluded.cached_input_tokens,
+    output_tokens = output_tokens + excluded.output_tokens,
+    estimated_cost_nanos = estimated_cost_nanos + excluded.estimated_cost_nanos
+`
+
+type AddDeletedSessionAccountUsageParams struct {
+	AccountID          string
+	Day                string
+	ModelID            string
+	InputTokens        int64
+	CachedInputTokens  int64
+	OutputTokens       int64
+	EstimatedCostNanos int64
+}
+
+func (q *Queries) AddDeletedSessionAccountUsage(ctx context.Context, arg AddDeletedSessionAccountUsageParams) error {
+	_, err := q.db.ExecContext(ctx, addDeletedSessionAccountUsage,
+		arg.AccountID,
+		arg.Day,
+		arg.ModelID,
+		arg.InputTokens,
+		arg.CachedInputTokens,
+		arg.OutputTokens,
+		arg.EstimatedCostNanos,
+	)
+	return err
+}
+
 const agentAccountUsageSince = `-- name: AgentAccountUsageSince :many
 SELECT
     CAST(COALESCE(
@@ -173,6 +210,44 @@ func (q *Queries) DeleteAgentAccountDefaultFor(ctx context.Context, accountID st
 	return err
 }
 
+const deletedSessionAccountUsageSince = `-- name: DeletedSessionAccountUsageSince :many
+SELECT account_id, day, model_id, input_tokens, cached_input_tokens, output_tokens, estimated_cost_nanos
+FROM deleted_session_account_usage
+WHERE day >= CAST(?1 AS TEXT)
+ORDER BY day, account_id, model_id
+`
+
+func (q *Queries) DeletedSessionAccountUsageSince(ctx context.Context, sinceDay string) ([]DeletedSessionAccountUsage, error) {
+	rows, err := q.db.QueryContext(ctx, deletedSessionAccountUsageSince, sinceDay)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []DeletedSessionAccountUsage{}
+	for rows.Next() {
+		var i DeletedSessionAccountUsage
+		if err := rows.Scan(
+			&i.AccountID,
+			&i.Day,
+			&i.ModelID,
+			&i.InputTokens,
+			&i.CachedInputTokens,
+			&i.OutputTokens,
+			&i.EstimatedCostNanos,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const getAgentAccountDefault = `-- name: GetAgentAccountDefault :one
 SELECT account_id FROM agent_account_defaults WHERE provider = ?
 `
@@ -269,6 +344,86 @@ func (q *Queries) SessionAgentAccountChangedSince(ctx context.Context, arg Sessi
 	var exists bool
 	err := row.Scan(&exists)
 	return exists, err
+}
+
+const sessionAgentAccountUsageSince = `-- name: SessionAgentAccountUsageSince :many
+SELECT
+    CAST(COALESCE(
+        (SELECT a.account_id FROM session_agent_accounts a
+         WHERE a.session_id = b.session_id
+           AND a.provider = CASE b.harness WHEN 'claude-code' THEN 'claude' ELSE 'codex' END
+           AND a.bound_at <= e.created_at
+         ORDER BY a.bound_at DESC LIMIT 1),
+        (SELECT a.account_id FROM session_agent_accounts a
+         WHERE a.session_id = b.session_id
+           AND a.provider = CASE b.harness WHEN 'claude-code' THEN 'claude' ELSE 'codex' END
+         ORDER BY a.bound_at ASC LIMIT 1),
+        'device-' || CASE b.harness WHEN 'claude-code' THEN 'claude' ELSE 'codex' END
+    ) AS TEXT) AS account_id,
+    CAST(substr(e.created_at, 1, 10) AS TEXT) AS day,
+    e.model_id,
+    CAST(COALESCE(SUM(e.input_tokens), 0) AS INTEGER) AS input_tokens,
+    CAST(COALESCE(SUM(e.cached_input_tokens), 0) AS INTEGER) AS cached_input_tokens,
+    CAST(COALESCE(SUM(e.output_tokens), 0) AS INTEGER) AS output_tokens,
+    CAST(COALESCE(SUM(e.estimated_cost_nanos), 0) AS INTEGER) AS estimated_cost_nanos
+FROM model_usage_events e
+JOIN usage_bindings b ON b.id = e.binding_id
+WHERE b.session_id = ?1
+  AND e.created_at >= ?2
+  AND b.harness IN ('claude-code', 'codex')
+GROUP BY 1, 2, 3
+ORDER BY 2, 1, 3
+`
+
+type SessionAgentAccountUsageSinceParams struct {
+	SessionID domain.SessionID
+	Since     sql.NullTime
+}
+
+type SessionAgentAccountUsageSinceRow struct {
+	AccountID          string
+	Day                string
+	ModelID            string
+	InputTokens        int64
+	CachedInputTokens  int64
+	OutputTokens       int64
+	EstimatedCostNanos int64
+}
+
+// AgentAccountUsageSince limited to one session's events, which the session
+// delete folds into deleted_session_account_usage before they cascade away.
+// Keep the two in step. The plain session_id equality lets the delete, which
+// holds the writer, reach the events through the usage_bindings session index
+// instead of reading every usage event.
+func (q *Queries) SessionAgentAccountUsageSince(ctx context.Context, arg SessionAgentAccountUsageSinceParams) ([]SessionAgentAccountUsageSinceRow, error) {
+	rows, err := q.db.QueryContext(ctx, sessionAgentAccountUsageSince, arg.SessionID, arg.Since)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []SessionAgentAccountUsageSinceRow{}
+	for rows.Next() {
+		var i SessionAgentAccountUsageSinceRow
+		if err := rows.Scan(
+			&i.AccountID,
+			&i.Day,
+			&i.ModelID,
+			&i.InputTokens,
+			&i.CachedInputTokens,
+			&i.OutputTokens,
+			&i.EstimatedCostNanos,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
 }
 
 const setAgentAccountDefault = `-- name: SetAgentAccountDefault :exec

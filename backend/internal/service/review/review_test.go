@@ -27,9 +27,9 @@ type fakeStore struct {
 	sessionAutoInjectReview *bool
 	autoInjectSets          []bool
 
-	updateCalls        int
-	activityUpdates    int
-	resolvedCommentIDs []string
+	updateCalls       int
+	activityUpdates   int
+	resolvedThreadIDs []string
 }
 
 type fakeNotificationSink struct {
@@ -97,33 +97,54 @@ func (f *fakeStore) SetSessionAutoInjectReview(_ context.Context, _ domain.Sessi
 	return true, nil
 }
 
-func (f *fakeStore) UpdateReviewRunResult(_ context.Context, id string, status domain.ReviewRunStatus, verdict domain.ReviewVerdict, body, githubReviewID string, autoInjectReview bool) (bool, error) {
+func (f *fakeStore) TransitionReviewRun(_ context.Context, id string, from []domain.ReviewRunStatus, to domain.ReviewRunStatus, patch domain.ReviewRunPatch) (bool, error) {
+	allowed := func(status domain.ReviewRunStatus) bool {
+		for _, s := range from {
+			if s == status {
+				return true
+			}
+		}
+		return false
+	}
+	apply := func(run *domain.ReviewRun) {
+		run.Status = to
+		if patch.Verdict != "" {
+			run.Verdict = patch.Verdict
+		}
+		if patch.Body != nil {
+			run.Body = *patch.Body
+		}
+		if patch.GithubReviewID != nil {
+			run.GithubReviewID = *patch.GithubReviewID
+		}
+		if patch.AutoInjectReview != nil {
+			run.AutoInjectReview = *patch.AutoInjectReview
+		}
+		if patch.StartedAt != nil {
+			run.StartedAt = patch.StartedAt
+		}
+		if patch.EndedAt != nil {
+			run.EndedAt = patch.EndedAt
+		}
+	}
 	for i := range f.batchRuns {
 		if f.batchRuns[i].ID == id {
-			if f.batchRuns[i].Status != domain.ReviewRunRunning {
+			if !allowed(f.batchRuns[i].Status) {
 				return false, nil
 			}
 			f.updateCalls++
-			f.batchRuns[i].Status = status
-			f.batchRuns[i].Verdict = verdict
-			f.batchRuns[i].Body = body
-			f.batchRuns[i].GithubReviewID = githubReviewID
-			f.batchRuns[i].AutoInjectReview = autoInjectReview
+			apply(&f.batchRuns[i])
 			if f.run.ID == id {
 				f.run = f.batchRuns[i]
 			}
 			return true, nil
 		}
 	}
-	if f.run.Status != domain.ReviewRunRunning {
+	if !allowed(f.run.Status) {
 		return false, nil
 	}
 	f.updateCalls++
-	f.run.Status = status
-	f.run.Verdict = verdict
-	f.run.Body = body
-	f.run.GithubReviewID = githubReviewID
-	f.run.AutoInjectReview = autoInjectReview
+	apply(&f.run)
 	return true, nil
 }
 
@@ -147,17 +168,16 @@ func (f *fakeStore) ListPRComments(_ context.Context, prURL string) ([]domain.Pu
 	return out, nil
 }
 
-func (f *fakeStore) MarkPRCommentResolved(_ context.Context, prURL, commentID string) (bool, error) {
-	f.resolvedCommentIDs = append(f.resolvedCommentIDs, commentID)
+func (f *fakeStore) MarkPRReviewThreadResolved(_ context.Context, prURL, threadID string) error {
+	f.resolvedThreadIDs = append(f.resolvedThreadIDs, threadID)
 	comments := f.prComments[prURL]
 	for i := range comments {
-		if comments[i].ID == commentID {
+		if comments[i].ThreadID == threadID {
 			comments[i].Resolved = true
-			f.prComments[prURL] = comments
-			return true, nil
 		}
 	}
-	return false, nil
+	f.prComments[prURL] = comments
+	return nil
 }
 
 type fakeReviewResolver struct {
@@ -186,7 +206,10 @@ func TestResolveReviewCommentResolvesTrackedThread(t *testing.T) {
 	store := &fakeStore{
 		prs: []domain.PullRequest{{URL: prURL, Number: 7, Provider: "github", Repo: "acme/widget"}},
 		prComments: map[string][]domain.PullRequestComment{
-			prURL: {{ThreadID: "thread-1", ID: "comment-1", URL: commentURL}},
+			prURL: {
+				{ThreadID: "thread-1", ID: "comment-1", URL: commentURL},
+				{ThreadID: "thread-1", ID: "comment-2", URL: commentURL + "-reply"},
+			},
 		},
 	}
 	resolver := &fakeReviewResolver{}
@@ -198,11 +221,37 @@ func TestResolveReviewCommentResolvesTrackedThread(t *testing.T) {
 	if resolver.request.ThreadID != "thread-1" || resolver.request.PR.Number != 7 {
 		t.Fatalf("request = %#v", resolver.request)
 	}
-	if got := store.resolvedCommentIDs; len(got) != 1 || got[0] != "comment-1" {
-		t.Fatalf("resolved comment ids = %#v", got)
+	// The whole thread is marked, replies included, so the summary shows it resolved at once.
+	if got := store.resolvedThreadIDs; len(got) != 1 || got[0] != "thread-1" {
+		t.Fatalf("resolved thread ids = %#v", got)
 	}
-	if !store.prComments[prURL][0].Resolved {
-		t.Fatalf("comment was not marked resolved: %#v", store.prComments[prURL][0])
+	for _, comment := range store.prComments[prURL] {
+		if !comment.Resolved {
+			t.Fatalf("comment was not marked resolved: %#v", comment)
+		}
+	}
+}
+
+func TestResolveReviewCommentMarksThreadWhenCommentIsAlreadyResolved(t *testing.T) {
+	prURL := "https://github.com/acme/widget/pull/7"
+	commentURL := "https://github.com/acme/widget/pull/7#discussion_r1"
+	store := &fakeStore{
+		prs: []domain.PullRequest{{URL: prURL, Number: 7, Provider: "github", Repo: "acme/widget"}},
+		prComments: map[string][]domain.PullRequestComment{
+			prURL: {{ThreadID: "thread-1", ID: "comment-1", URL: commentURL, Resolved: true}},
+		},
+	}
+	resolver := &fakeReviewResolver{}
+	svc := New(nil, store, WithReviewResolver(resolver))
+
+	if err := svc.ResolveReviewComment(context.Background(), "mer-1", prURL, commentURL); err != nil {
+		t.Fatal(err)
+	}
+	if resolver.request.ThreadID != "" {
+		t.Fatalf("provider asked again for a resolved comment: %#v", resolver.request)
+	}
+	if got := store.resolvedThreadIDs; len(got) != 1 || got[0] != "thread-1" {
+		t.Fatalf("resolved thread ids = %#v, want the thread marked locally", got)
 	}
 }
 
@@ -221,8 +270,8 @@ func TestResolveReviewCommentDoesNotPersistWhenProviderFails(t *testing.T) {
 	if err := svc.ResolveReviewComment(context.Background(), "mer-1", prURL, commentURL); err == nil {
 		t.Fatal("ResolveReviewComment error = nil, want provider failure")
 	}
-	if len(store.resolvedCommentIDs) != 0 {
-		t.Fatalf("resolved comment ids = %#v, want none", store.resolvedCommentIDs)
+	if len(store.resolvedThreadIDs) != 0 {
+		t.Fatalf("resolved thread ids = %#v, want none", store.resolvedThreadIDs)
 	}
 	if store.prComments[prURL][0].Resolved {
 		t.Fatalf("comment was marked resolved after provider failure")
@@ -284,8 +333,37 @@ func TestSubmitRecordsTheResultWithoutASeparateDelivery(t *testing.T) {
 		if err != nil {
 			t.Fatalf("%s: Submit: %v", verdict, err)
 		}
-		if run.Status != domain.ReviewRunComplete || run.DeliveredAt != nil {
+		if run.Status != domain.ReviewRunCompleted || run.DeliveredAt != nil {
 			t.Fatalf("%s: run = %+v, want complete and never stamped delivered", verdict, run)
+		}
+	}
+}
+
+// A fast reviewer can submit before the trigger records that its prompt was
+// delivered. The submit completes the run and also records its start; a run
+// that already ended rejects it.
+func TestSubmitCompletesALaunchingRunAndRejectsAFinalOne(t *testing.T) {
+	st := &fakeStore{
+		ok:  true,
+		run: domain.ReviewRun{ID: "run-1", SessionID: "mer-1", BatchID: "batch-1", PRURL: "pr1", TargetSHA: "sha1", Status: domain.ReviewRunLaunching},
+		prs: []domain.PullRequest{{URL: "pr1", HeadSHA: "sha1"}},
+	}
+	svc := New(nil, st)
+	run, err := svc.Submit(context.Background(), "mer-1", "run-1", domain.VerdictApproved, "", "")
+	if err != nil {
+		t.Fatalf("Submit: %v", err)
+	}
+	if run.Status != domain.ReviewRunCompleted || st.run.StartedAt == nil || st.run.EndedAt == nil {
+		t.Fatalf("run = %+v stored = %+v, want completed with started and ended times", run, st.run)
+	}
+
+	for _, status := range []domain.ReviewRunStatus{domain.ReviewRunFailed, domain.ReviewRunCancelled, domain.ReviewRunSuperseded, domain.ReviewRunCancelling, domain.ReviewRunQueued} {
+		st.run = domain.ReviewRun{ID: "run-1", SessionID: "mer-1", PRURL: "pr1", TargetSHA: "sha1", Status: status}
+		if _, err := svc.Submit(context.Background(), "mer-1", "run-1", domain.VerdictApproved, "", ""); !errors.Is(err, ErrInvalid) {
+			t.Fatalf("submit on %s: err = %v, want rejected", status, err)
+		}
+		if st.run.Status != status {
+			t.Fatalf("submit on %s changed the run to %s", status, st.run.Status)
 		}
 	}
 }
@@ -410,7 +488,7 @@ func TestSubmitSnapshotsDisabledPolicyAndNeverDeliversOnRetry(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if run.Status != domain.ReviewRunComplete || run.AutoInjectReview {
+	if run.Status != domain.ReviewRunCompleted || run.AutoInjectReview {
 		t.Fatalf("disabled review = %+v", run)
 	}
 
@@ -420,7 +498,7 @@ func TestSubmitSnapshotsDisabledPolicyAndNeverDeliversOnRetry(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if run.Status != domain.ReviewRunComplete || run.AutoInjectReview {
+	if run.Status != domain.ReviewRunCompleted || run.AutoInjectReview {
 		t.Fatalf("retry rewrote disabled review = %+v", run)
 	}
 }
@@ -485,7 +563,7 @@ func TestSubmitManySkipsSupersededRunAndRecordsSiblings(t *testing.T) {
 	if err != nil {
 		t.Fatalf("SubmitMany must record valid siblings when one run was superseded: %v", err)
 	}
-	if len(runs) != 1 || runs[0].ID != "run-1" || runs[0].Status != domain.ReviewRunComplete {
+	if len(runs) != 1 || runs[0].ID != "run-1" || runs[0].Status != domain.ReviewRunCompleted {
 		t.Fatalf("want only run-1 recorded, got %+v", runs)
 	}
 }
@@ -521,7 +599,7 @@ func TestSubmitCompletedRetryRejectsDifferentRecordedFields(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			st := &fakeStore{ok: true, run: domain.ReviewRun{
 				ID: "run-1", SessionID: "mer-1", PRURL: "pr1", TargetSHA: "sha1",
-				Status: domain.ReviewRunComplete, Verdict: domain.VerdictChangesRequested,
+				Status: domain.ReviewRunCompleted, Verdict: domain.VerdictChangesRequested,
 				Body: "fix it", GithubReviewID: "987",
 			}}
 			svc := New(nil, st)
@@ -578,9 +656,9 @@ func TestSubmitReportsReviewOutcome(t *testing.T) {
 		t.Fatalf("Submit: %v", err)
 	}
 
-	got := sink.named("ao.review.submitted")
+	got := sink.named("ao.reviews.submitted")
 	if len(got) != 1 {
-		t.Fatalf("ao.review.submitted count = %d, want 1", len(got))
+		t.Fatalf("ao.reviews.submitted count = %d, want 1", len(got))
 	}
 	p := got[0].Payload
 	if p["verdict"] != string(domain.VerdictChangesRequested) {
@@ -642,7 +720,7 @@ func TestSubmitNeverReportsReviewProseOrRepoIdentifiers(t *testing.T) {
 			t.Fatalf("payload carries a body key: %#v", ev.Payload)
 		}
 	}
-	if p := sink.named("ao.review.submitted")[0].Payload; p["posted_to_provider"] != false {
+	if p := sink.named("ao.reviews.submitted")[0].Payload; p["posted_to_provider"] != false {
 		t.Fatalf("posted_to_provider = %#v, want false when nothing was posted", p["posted_to_provider"])
 	}
 }
@@ -666,8 +744,8 @@ func TestResubmitDoesNotDoubleReport(t *testing.T) {
 			t.Fatalf("Submit %d: %v", i, err)
 		}
 	}
-	if got := len(sink.named("ao.review.submitted")); got != 1 {
-		t.Fatalf("ao.review.submitted count = %d, want 1 across three submits", got)
+	if got := len(sink.named("ao.reviews.submitted")); got != 1 {
+		t.Fatalf("ao.reviews.submitted count = %d, want 1 across three submits", got)
 	}
 }
 
@@ -739,9 +817,9 @@ func TestTriggerReportsWhoStartedThePass(t *testing.T) {
 			if err := c.call(svc); err != nil {
 				t.Fatalf("trigger: %v", err)
 			}
-			got := sink.named("ao.review.triggered")
+			got := sink.named("ao.reviews.triggered")
 			if len(got) != 1 {
-				t.Fatalf("ao.review.triggered count = %d, want 1", len(got))
+				t.Fatalf("ao.reviews.triggered count = %d, want 1", len(got))
 			}
 			if got[0].Payload["trigger"] != c.want {
 				t.Fatalf("trigger = %#v, want %q", got[0].Payload["trigger"], c.want)
@@ -765,12 +843,12 @@ func TestTriggerFailureReportsWhichPassFailed(t *testing.T) {
 	if _, err := svc.TriggerAuto(context.Background(), "worker-1", "codex"); err == nil {
 		t.Fatal("TriggerAuto: want error")
 	}
-	if got := sink.named("ao.review.triggered"); len(got) != 0 {
-		t.Fatalf("ao.review.triggered count = %d, want 0 on failure", len(got))
+	if got := sink.named("ao.reviews.triggered"); len(got) != 0 {
+		t.Fatalf("ao.reviews.triggered count = %d, want 0 on failure", len(got))
 	}
-	got := sink.named("ao.review.trigger_failed")
+	got := sink.named("ao.reviews.trigger_failed")
 	if len(got) != 1 {
-		t.Fatalf("ao.review.trigger_failed count = %d, want 1", len(got))
+		t.Fatalf("ao.reviews.trigger_failed count = %d, want 1", len(got))
 	}
 	if got[0].Payload["error_kind"] != "invalid" || got[0].Payload["trigger"] != "auto" {
 		t.Fatalf("payload = %#v, want error_kind=invalid trigger=auto", got[0].Payload)
@@ -794,9 +872,9 @@ func TestTriggerRejectsInvalidReviewerConfigBeforeEngine(t *testing.T) {
 	if called {
 		t.Fatal("engineTrigger should not run for invalid config")
 	}
-	got := sink.named("ao.review.trigger_failed")
+	got := sink.named("ao.reviews.trigger_failed")
 	if len(got) != 1 {
-		t.Fatalf("ao.review.trigger_failed count = %d, want 1", len(got))
+		t.Fatalf("ao.reviews.trigger_failed count = %d, want 1", len(got))
 	}
 	if got[0].Payload["error_kind"] != "invalid" || got[0].Payload["trigger"] != "manual" {
 		t.Fatalf("payload = %#v, want error_kind=invalid trigger=manual", got[0].Payload)
@@ -823,7 +901,7 @@ func TestSubmitReportsPassShapeNotItsContents(t *testing.T) {
 		domain.VerdictChangesRequested, body, ""); err != nil {
 		t.Fatalf("Submit: %v", err)
 	}
-	p := sink.named("ao.review.submitted")[0].Payload
+	p := sink.named("ao.reviews.submitted")[0].Payload
 	if p["trigger"] != string(domain.ReviewTriggerAuto) {
 		t.Fatalf("trigger = %#v, want auto", p["trigger"])
 	}
@@ -846,9 +924,9 @@ func TestRestartedManualPassIsNotReportedAsReused(t *testing.T) {
 	if _, err := svc.TriggerRequested(context.Background(), "worker-1", TriggerRequest{Config: domain.AgentConfig{Model: "gpt-5-mini"}}); err != nil {
 		t.Fatalf("Trigger: %v", err)
 	}
-	got := sink.named("ao.review.triggered")
+	got := sink.named("ao.reviews.triggered")
 	if len(got) != 1 {
-		t.Fatalf("ao.review.triggered count = %d, want 1", len(got))
+		t.Fatalf("ao.reviews.triggered count = %d, want 1", len(got))
 	}
 	if _, ok := got[0].Payload["reused"]; ok || got[0].Payload["created_runs"] != 0 {
 		t.Fatalf("payload = %#v, want reused=false created_runs=0 for a restart", got[0].Payload)
@@ -867,9 +945,9 @@ func TestReusedManualPassDoesNotReportNewReview(t *testing.T) {
 	if _, err := svc.TriggerRequested(context.Background(), "worker-1", TriggerRequest{Config: domain.AgentConfig{}}); err != nil {
 		t.Fatalf("Trigger: %v", err)
 	}
-	got := sink.named("ao.review.triggered")
+	got := sink.named("ao.reviews.triggered")
 	if len(got) != 0 {
-		t.Fatalf("ao.review.triggered count = %d, want 0 for reuse", len(got))
+		t.Fatalf("ao.reviews.triggered count = %d, want 0 for reuse", len(got))
 	}
 	if n := len(sink.events); n != 0 {
 		t.Fatalf("emitted %d events, want none for a manual reuse", n)
@@ -906,12 +984,12 @@ func TestReusedOrSkippedAutoPassDoesNotCountAsTriggered(t *testing.T) {
 					t.Fatalf("TriggerAuto %d: %v", i, err)
 				}
 			}
-			got := sink.named("ao.review.triggered")
+			got := sink.named("ao.reviews.triggered")
 			if len(got) != 0 {
-				t.Fatalf("ao.review.triggered count = %d, want 0", len(got))
+				t.Fatalf("ao.reviews.triggered count = %d, want 0", len(got))
 			}
-			if failed := sink.named("ao.review.trigger_failed"); len(failed) != 0 {
-				t.Fatalf("ao.review.trigger_failed count = %d, want 0", len(failed))
+			if failed := sink.named("ao.reviews.trigger_failed"); len(failed) != 0 {
+				t.Fatalf("ao.reviews.trigger_failed count = %d, want 0", len(failed))
 			}
 		})
 	}
@@ -940,7 +1018,7 @@ func TestTriggerRequestedEnablesAutoInjectOnlyAfterAPassStarts(t *testing.T) {
 	if gotOpts.Source != domain.ReviewTriggerAgent || !gotOpts.RejectReviewedHead || gotOpts.Harness != domain.ReviewerCodex {
 		t.Fatalf("engine opts = %+v, want the request forwarded", gotOpts)
 	}
-	if got := sink.named("ao.review.triggered"); len(got) != 1 || got[0].Payload["trigger"] != "agent" {
+	if got := sink.named("ao.reviews.triggered"); len(got) != 1 || got[0].Payload["trigger"] != "agent" {
 		t.Fatalf("triggered events = %+v, want one agent trigger", got)
 	}
 
