@@ -62,6 +62,9 @@ export type RunMoveOptions = {
 
 /** Runs moveSession for one session, recording its progress in useMoveStore. */
 export async function runMove(key: string, input: MoveInput, options: RunMoveOptions = {}): Promise<void> {
+	// A second start while one runs, such as a double click, is ignored.
+	const phase = useMoveStore.getState().moves[key]?.phase;
+	if (phase === "waiting" || phase === "moving") return;
 	cancelled.delete(key);
 	useMoveStore.setState((state) => ({
 		moves: { ...state.moves, [key]: { phase: options.afterTurn ? "waiting" : "moving", targetHostId: input.target.hostId, targetProjectId: input.target.projectId, targetLabel: input.target.label } },

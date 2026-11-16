@@ -59,6 +59,23 @@ describe("runMove", () => {
 		expect(useMoveStore.getState().moves[key]).toMatchObject({ phase: "failed", error: { message: "offline" } });
 	});
 
+	it("starts one move when it is started twice at once", async () => {
+		let finish: (value: MoveResult) => void = () => {};
+		vi.mocked(moveSession).mockReturnValue(new Promise((resolve) => (finish = resolve)));
+		const first = runMove(key, input(["idle"]));
+		const second = runMove(key, input(["idle"]));
+		await second;
+		finish(result);
+		await first;
+		expect(moveSession).toHaveBeenCalledTimes(1);
+		expect(useMoveStore.getState().moves[key].phase).toBe("done");
+
+		vi.mocked(moveSession).mockRejectedValueOnce(new MoveError("offline", "receive", true)).mockResolvedValueOnce(result);
+		await runMove(key, input(["idle"]));
+		await runMove(key, input(["idle"]));
+		expect(moveSession).toHaveBeenCalledTimes(3);
+	});
+
 	it("drops a queued move when it is cancelled", async () => {
 		const run = runMove(key, input(["active"]), { afterTurn: true });
 		await vi.advanceTimersByTimeAsync(0);
