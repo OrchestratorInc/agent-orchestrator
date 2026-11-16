@@ -15,7 +15,9 @@ import (
 	"testing"
 	"time"
 
+	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/agent/opencode"
 	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/agent/registry"
+	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
 )
 
 func TestDoctorChecksGitVersion(t *testing.T) {
@@ -436,7 +438,8 @@ func TestDoctorJSONOutputIsDecodable(t *testing.T) {
 			}
 			return []byte("git version 2.43.0\n"), nil
 		},
-		ProcessAlive: func(int) bool { return false },
+		ProcessAlive:         func(int) bool { return false },
+		ResolveHarnessBinary: noHarnessBinary,
 	}, "doctor", "--json")
 	if err != nil {
 		t.Fatalf("doctor --json failed: %v\nstderr=%s\nstdout=%s", err, errOut, out)
@@ -473,7 +476,8 @@ func TestDoctorTextOutputIsGrouped(t *testing.T) {
 			}
 			return []byte("git version 2.43.0\n"), nil
 		},
-		ProcessAlive: func(int) bool { return false },
+		ProcessAlive:         func(int) bool { return false },
+		ResolveHarnessBinary: noHarnessBinary,
 	}, "doctor")
 	if err != nil {
 		t.Fatalf("doctor failed: %v\nstderr=%s\nstdout=%s", err, errOut, out)
@@ -553,32 +557,150 @@ func TestDoctorPathOnlyHarnessPassesOnFind(t *testing.T) {
 	}
 }
 
-// TestDoctorNewVersionedHarnessPassesWithVersion verifies that a Tier-B
-// harness with a --version flag (e.g. opencode) resolves and reports correctly.
+// TestDoctorNewVersionedHarnessPassesWithVersion verifies that a harness with a
+// --version flag resolves through PATH and reports the version it found.
 func TestDoctorNewVersionedHarnessPassesWithVersion(t *testing.T) {
 	setConfigEnv(t)
 	c := doctorContext(t,
 		map[string]string{
-			"git":      "/bin/git",
-			"opencode": "/usr/local/bin/opencode",
+			"git":  "/bin/git",
+			"kimi": "/usr/local/bin/kimi",
 		},
 		func(_ context.Context, name string, args ...string) ([]byte, error) {
 			if name == "/bin/git" {
 				return []byte("git version 2.43.0\n"), nil
 			}
-			if name == "/usr/local/bin/opencode" && len(args) == 1 && args[0] == "--version" {
-				return []byte("opencode 0.3.12\n"), nil
+			if name == "/usr/local/bin/kimi" && len(args) == 1 && args[0] == "--version" {
+				return []byte("kimi 1.4.0\n"), nil
 			}
 			t.Fatalf("unexpected command: %s %v", name, args)
 			return nil, nil
 		},
 	)
 
-	check := findDoctorCheck(t, c.runDoctor(context.Background()), "opencode")
-	if check.Level != doctorPass || !strings.Contains(check.Message, "opencode 0.3.12") {
-		t.Fatalf("opencode check = %+v, want PASS with version string", check)
+	check := findDoctorCheck(t, c.runDoctor(context.Background()), "kimi")
+	if check.Level != doctorPass || !strings.Contains(check.Message, "kimi 1.4.0") {
+		t.Fatalf("kimi check = %+v, want PASS with version string", check)
+	}
+}
+
+// TestDoctorOpenCodeHarnessesFollowAdapterResolution covers the OpenCode 1 /
+// OpenCode 2 split: both harnesses run an `opencode` executable, but each
+// requires its own major version. Doctor must report the adapter's resolution
+// instead of a bare PATH hit, otherwise it says `opencode` is fine while
+// `ao agent ls` says the same harness needs install.
+func TestDoctorOpenCodeHarnessesFollowAdapterResolution(t *testing.T) {
+	const (
+		pathBinary    = "/usr/local/bin/opencode"
+		managedBinary = "/usr/local/lib/ao/opencode"
+	)
+
+	type want struct {
+		level    doctorLevel
+		contains string
+	}
+	cases := []struct {
+		name    string
+		resolve func(context.Context, string) (string, error)
+		want    map[string]want
+	}{
+		{
+			name: "only OpenCode 2 installed",
+			resolve: func(_ context.Context, harness string) (string, error) {
+				if harness == "opencode-v2" {
+					return pathBinary, nil
+				}
+				return "", &opencode.IncompatibleVersionError{
+					ExpectedMajor: 1, FoundMajor: 2, FoundVersion: "opencode v2.2.5", Path: pathBinary,
+				}
+			},
+			want: map[string]want{
+				"opencode":    {doctorWarn, "OpenCode 1 is not installed"},
+				"opencode-v2": {doctorPass, "opencode v2.2.5"},
+			},
+		},
+		{
+			name: "both majors installed, OpenCode 1 kept apart",
+			resolve: func(_ context.Context, harness string) (string, error) {
+				if harness == "opencode" {
+					return managedBinary, nil
+				}
+				return pathBinary, nil
+			},
+			want: map[string]want{
+				"opencode":    {doctorPass, managedBinary},
+				"opencode-v2": {doctorPass, pathBinary},
+			},
+		},
+		{
+			name: "no opencode on PATH or in AO's install dirs",
+			resolve: func(context.Context, string) (string, error) {
+				return "", ports.ErrAgentBinaryNotFound
+			},
+			want: map[string]want{
+				"opencode":    {doctorWarn, "not found in PATH"},
+				"opencode-v2": {doctorWarn, "not found in PATH"},
+			},
+		},
 	}
 
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			setConfigEnv(t)
+			c := doctorContext(t, map[string]string{
+				"git":      "/bin/git",
+				"opencode": pathBinary,
+			}, func(_ context.Context, name string, args ...string) ([]byte, error) {
+				switch {
+				case name == "/bin/git":
+					return []byte("git version 2.43.0\n"), nil
+				case name == managedBinary:
+					return []byte("opencode 1.18.2\n"), nil
+				case name == pathBinary && len(args) == 1 && args[0] == "--version":
+					return []byte("opencode v2.2.5\n"), nil
+				}
+				t.Fatalf("unexpected command: %s %v", name, args)
+				return nil, nil
+			})
+			c.deps.ResolveHarnessBinary = tc.resolve
+
+			checks := c.runDoctor(context.Background())
+			for harness, expected := range tc.want {
+				check := findDoctorCheck(t, checks, harness)
+				if check.Level != expected.level || !strings.Contains(check.Message, expected.contains) {
+					t.Fatalf("%s check = %+v, want level %s containing %q", harness, check, expected.level, expected.contains)
+				}
+			}
+		})
+	}
+}
+
+// TestDoctorAdapterResolvedHarnessPassesWithoutVersionProbe keeps a resolved
+// harness out of the warning column when the extra `--version` display probe
+// fails: the adapter already proved the binary works when it resolved it.
+func TestDoctorAdapterResolvedHarnessPassesWithoutVersionProbe(t *testing.T) {
+	setConfigEnv(t)
+	const binary = "/usr/local/bin/opencode"
+	c := doctorContext(t, map[string]string{
+		"git":      "/bin/git",
+		"opencode": binary,
+	}, func(_ context.Context, name string, _ ...string) ([]byte, error) {
+		if name == "/bin/git" {
+			return []byte("git version 2.43.0\n"), nil
+		}
+		return nil, errors.New("shim timed out")
+	})
+	c.deps.ResolveHarnessBinary = func(_ context.Context, harness string) (string, error) {
+		if harness == "opencode-v2" {
+			return binary, nil
+		}
+		return "", ports.ErrAgentBinaryNotFound
+	}
+
+	check := findDoctorCheck(t, c.runDoctor(context.Background()), "opencode-v2")
+	if check.Level != doctorPass || !strings.Contains(check.Message, binary) {
+		t.Fatalf("opencode-v2 check = %+v, want PASS naming the resolved path", check)
+	}
 }
 
 func clearDoctorGitHubEnv(t *testing.T) {
@@ -683,12 +805,19 @@ func doctorContext(t *testing.T, paths map[string]string, commandOutput func(con
 			}
 			return path, nil
 		},
-		ProcessAlive: func(int) bool { return false },
+		ProcessAlive:         func(int) bool { return false },
+		ResolveHarnessBinary: noHarnessBinary,
 	}
 	if commandOutput != nil {
 		deps.CommandOutput = commandOutput
 	}
 	return &commandContext{deps: deps.withDefaults()}
+}
+
+// noHarnessBinary keeps adapter-resolved harness probes off the machine running
+// the tests; tests that exercise resolution swap in their own resolver.
+func noHarnessBinary(context.Context, string) (string, error) {
+	return "", ports.ErrAgentBinaryNotFound
 }
 
 func githubDoctorServer(t *testing.T, status int, body, scopes string) *httptest.Server {
