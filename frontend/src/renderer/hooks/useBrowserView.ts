@@ -69,6 +69,11 @@ type UseBrowserViewOptions = {
 	active: boolean;
 	poppedOut: boolean;
 	/**
+	 * The session's agent turn is running. While it is, a tab the person brings
+	 * forward leaves the agent working on its own tab behind it.
+	 */
+	agentWorking?: boolean;
+	/**
 	 * When true, the view is cleared and the daemon-driven preview is suppressed.
 	 * Use when the session is terminated: the old preview content should not
 	 * remain visible even if the DB still carries a preview_url.
@@ -326,6 +331,7 @@ export function useBrowserView({
 	cloudAgentBrowser,
 	active,
 	poppedOut,
+	agentWorking = false,
 	terminated,
 	sessionEnded,
 	previewUrl,
@@ -369,6 +375,13 @@ export function useBrowserView({
 	const tabNoticeTimerRef = useRef<number | null>(null);
 	const tabsStateRef = useRef(tabsState);
 	const hasNativeBrowser = Boolean(window.ao?.browser);
+
+	// The tab host keeps the agent on its own tab while its turn runs and the
+	// person browses another (BrowserSessionEntry.agentTabId).
+	useEffect(() => {
+		if (!viewId || !hasNativeBrowser) return;
+		void window.ao?.browser.setAgentTurn?.({ viewId, active: agentWorking })?.catch(() => undefined);
+	}, [agentWorking, hasNativeBrowser, viewId]);
 
 	useEffect(() => {
 		activeRef.current = active;

@@ -77,6 +77,7 @@ function setupBridge() {
 			activeTabId: "t1",
 			tabs: [{ id: "t1", url: "", title: "", active: true }],
 		})),
+		setAgentTurn: vi.fn(async (_input: { viewId: string; active: boolean }) => undefined),
 		selectTab: vi.fn(async ({ viewId, tabId }: { viewId: string; tabId: string }) => ({
 			viewId,
 			activeTabId: tabId,
@@ -237,6 +238,20 @@ describe("useBrowserView", () => {
 		resetConsumedPreviewTriggersForTest();
 		resetClosedTabsForTest();
 		resetNativeViewCacheForTest();
+	});
+
+	it("tells the tab host when the agent's turn starts and ends", async () => {
+		const bridge = setupBridge();
+		const { rerender } = renderHook(
+			({ agentWorking }) => useBrowserView({ sessionId: "sess-1", active: true, poppedOut: false, agentWorking }),
+			{ initialProps: { agentWorking: false } },
+		);
+		await waitFor(() => expect(bridge.setAgentTurn).toHaveBeenCalledWith({ viewId: "42:sess-1", active: false }));
+
+		rerender({ agentWorking: true });
+		await waitFor(() => expect(bridge.setAgentTurn).toHaveBeenLastCalledWith({ viewId: "42:sess-1", active: true }));
+		rerender({ agentWorking: false });
+		await waitFor(() => expect(bridge.setAgentTurn).toHaveBeenLastCalledWith({ viewId: "42:sess-1", active: false }));
 	});
 
 	it("ensures a scoped browser view and reports the measured slot bounds", async () => {

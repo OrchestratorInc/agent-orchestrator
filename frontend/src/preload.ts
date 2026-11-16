@@ -717,6 +717,9 @@ const api = {
 		getTabs: (viewId: string) => ipcRenderer.invoke("browser:getTabs", viewId) as Promise<BrowserTabsState>,
 		selectTab: (input: { viewId: string; tabId: string }) =>
 			ipcRenderer.invoke("browser:selectTab", input) as Promise<BrowserTabsState>,
+		/** Whether the session's agent turn is running: see BrowserSessionEntry.agentTabId. */
+		setAgentTurn: (input: { viewId: string; active: boolean }) =>
+			ipcRenderer.invoke("browser:agentTurn", input) as Promise<void>,
 		closeTab: (input: { viewId: string; tabId: string }) =>
 			ipcRenderer.invoke("browser:closeTab", input) as Promise<BrowserTabsState>,
 		openTab: (input: { viewId: string; url?: string }) =>

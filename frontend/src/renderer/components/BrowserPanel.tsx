@@ -394,6 +394,7 @@ export function BrowserPanel({
 		sessionId: session.id,
 		active,
 		poppedOut,
+		agentWorking: session.activity?.state === "active" || session.activity?.state === "blocked",
 		previewUrl: session.previewUrl,
 		previewRevision: session.previewRevision,
 		terminated: sessionBrowserUnavailable(session),

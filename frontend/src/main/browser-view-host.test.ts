@@ -3959,6 +3959,72 @@ describe("agent browser runtime", () => {
 		await vi.waitFor(() => expect(runtime.reconcileTargets).toHaveBeenCalledWith("sess-1"));
 	});
 
+	describe("the agent's own tab while its turn runs", () => {
+		async function startTurn() {
+			const harness = setupTabHost();
+			await harness.host.execute("sess-1", "open", { url: "http://localhost:3000/" });
+			const { viewId } = (await harness.invoke("browser:ensure", "sess-1")) as { viewId: string };
+			await harness.invoke("browser:agentTurn", { viewId, active: true });
+			vi.mocked(harness.runtime.runAction).mockClear();
+			const front = async () => ((await harness.invoke("browser:getTabs", viewId)) as BrowserTabsState).activeTabId;
+			return { ...harness, viewId, front };
+		}
+
+		it("keeps working on its tab behind a link the person opens, and follows once the turn ends", async () => {
+			const { activeTargets, host, invoke, runtime, viewId, front } = await startTurn();
+
+			await invoke("browser:openTab", { viewId, url: "https://example.com/" });
+			expect(await front()).toBe("t2");
+
+			await host.execute("sess-1", "snapshot");
+			expect(activeTargets.get("sess-1")).toBe("t1");
+			expect(runtime.runAction).not.toHaveBeenCalledWith("sess-1", "tab-select", { tabId: "t2" }, expect.anything(), undefined);
+			expect(await front()).toBe("t2");
+
+			await invoke("browser:agentTurn", { viewId, active: false });
+			await host.execute("sess-1", "snapshot");
+			expect(activeTargets.get("sess-1")).toBe("t2");
+			expect(await front()).toBe("t2");
+		});
+
+		it("stays on its tab when the person picks another tab", async () => {
+			const { activeTargets, host, invoke, viewId, front } = await startTurn();
+			await invoke("browser:agentTurn", { viewId, active: false });
+			await invoke("browser:openTab", { viewId, url: "https://example.com/" });
+			await invoke("browser:selectTab", { viewId, tabId: "t1" });
+			await invoke("browser:agentTurn", { viewId, active: true });
+
+			await invoke("browser:selectTab", { viewId, tabId: "t2" });
+			await host.execute("sess-1", "snapshot");
+			expect(activeTargets.get("sess-1")).toBe("t1");
+			expect(await front()).toBe("t2");
+		});
+
+		it("opens and selects its own tabs behind the person's", async () => {
+			const { activeTargets, host, invoke, viewId, front } = await startTurn();
+			await invoke("browser:openTab", { viewId, url: "https://example.com/" });
+
+			const created = (await host.execute("sess-1", "tab-new", { url: "http://localhost:4173/" })) as { id: string };
+			expect(created.id).toBe("t3");
+			expect(activeTargets.get("sess-1")).toBe("t3");
+			expect(await front()).toBe("t2");
+
+			await host.execute("sess-1", "tab-select", { tabId: "t1" });
+			expect(activeTargets.get("sess-1")).toBe("t1");
+			expect(await front()).toBe("t2");
+		});
+
+		it("follows the person's tab when its own tab is closed", async () => {
+			const { activeTargets, host, invoke, viewId, front } = await startTurn();
+			await invoke("browser:openTab", { viewId, url: "https://example.com/" });
+
+			await invoke("browser:closeTab", { viewId, tabId: "t1" });
+			await host.execute("sess-1", "snapshot");
+			expect(activeTargets.get("sess-1")).toBe("t2");
+			expect(await front()).toBe("t2");
+		});
+	});
+
 	it("keeps stable logical tab IDs, separate targets, and the selected tab active", async () => {
 		const { emit, host, invoke, views } = setupTabHost();
 		await host.execute("sess-1", "open", { url: "http://localhost:3000" });
