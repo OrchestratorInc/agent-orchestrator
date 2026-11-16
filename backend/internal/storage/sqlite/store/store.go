@@ -25,6 +25,8 @@ import (
 // never writes change_log, it only reads it for the CDC poller.
 type Store struct {
 	stopTimestampRepair   func()
+	timestampBeforeClose  func() error
+	timestampAfterClose   func() error
 	writeDB               *sql.DB
 	readDB                *sql.DB
 	qw                    *gen.Queries // bound to the single writer connection
@@ -231,12 +233,27 @@ func (s *Store) StartTimestampRepair(repair func(context.Context) error) {
 	}()
 }
 
+// SetTimestampRepairCloseHooks installs completion checks around pool shutdown.
+func (s *Store) SetTimestampRepairCloseHooks(before, after func() error) {
+	s.timestampBeforeClose = before
+	s.timestampAfterClose = after
+}
+
 // Close closes every pool.
 func (s *Store) Close() error {
 	if s.stopTimestampRepair != nil {
 		s.stopTimestampRepair()
 	}
-	err := s.writeDB.Close()
+	s.writeMu.Lock()
+	defer s.writeMu.Unlock()
+	var err error
+	if s.timestampBeforeClose != nil {
+		err = s.timestampBeforeClose()
+		s.timestampBeforeClose = nil
+	}
+	if e := s.writeDB.Close(); e != nil && err == nil {
+		err = e
+	}
 	if e := s.readDB.Close(); e != nil && err == nil {
 		err = e
 	}
@@ -247,6 +264,12 @@ func (s *Store) Close() error {
 		if e := db.Close(); e != nil && err == nil {
 			err = e
 		}
+	}
+	if s.timestampAfterClose != nil {
+		if e := s.timestampAfterClose(); e != nil && err == nil {
+			err = e
+		}
+		s.timestampAfterClose = nil
 	}
 	return err
 }

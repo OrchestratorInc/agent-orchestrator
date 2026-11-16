@@ -283,8 +283,11 @@ func TestRepairFailureIsRecordedWithoutStopping(t *testing.T) {
 		t.Fatal(err)
 	}
 	result, err := runTimestampRepair(context.Background(), db, false)
-	if err != nil || result.Skipped != 0 || result.Repaired != 0 {
-		t.Fatalf("handled row retried: %+v %v", result, err)
+	if err != nil || result.Skipped != 0 || result.Repaired != 1 {
+		t.Fatalf("rejected row did not retry after trigger removal: %+v %v", result, err)
+	}
+	if err := canScanTime(db, `SELECT at FROM repair_times WHERE id=1`); err != nil {
+		t.Fatal(err)
 	}
 }
 

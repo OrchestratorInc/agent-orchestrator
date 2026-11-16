@@ -60,21 +60,36 @@ func TestTimestampFenceAutomationOccurrence(t *testing.T) {
 }
 
 func TestTimestampFenceAccountBindingCollision(t *testing.T) {
-	dir := t.TempDir()
-	db := openMigratedTestDBIn(t, dir)
-	if _, err := db.Exec(`INSERT INTO sessions(id,num,harness,activity_state,activity_last_at,is_terminated,created_at,updated_at) VALUES('s',1,'aider','idle','2026-10-21 03:30:00 +0000 UTC',0,'2026-10-21 03:30:00 +0000 UTC','2026-10-21 03:30:00 +0000 UTC');
- INSERT INTO session_agent_accounts(session_id,provider,account_id,bound_at) VALUES('s','codex','last','2026-10-21 03:30:00 +0000 UTC'),('s','codex','last','2026-10-21 09:00:00 +0530 IST');`); err != nil {
-		t.Fatal(err)
-	}
-	s, err := Open(dir)
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer s.Close()
-	var count int
-	var account string
-	if err := db.QueryRow(`SELECT count(*),account_id FROM session_agent_accounts`).Scan(&count, &account); err != nil || count != 1 || account != "last" {
-		t.Fatalf("bindings=%d account=%q err=%v", count, account, err)
+	for name, legacy := range map[string]string{"positive": "2026-10-21 09:00:00 +0530 IST", "negative": "2026-10-20 23:30:00 -0400 EDT"} {
+		t.Run(name, func(t *testing.T) {
+			dir := t.TempDir()
+			db := openMigratedTestDBIn(t, dir)
+			if _, err := db.Exec(`INSERT INTO sessions(id,num,harness,activity_state,activity_last_at,is_terminated,created_at,updated_at) VALUES('s',1,'aider','idle',CURRENT_TIMESTAMP,0,CURRENT_TIMESTAMP,CURRENT_TIMESTAMP)`); err != nil {
+				t.Fatal(err)
+			}
+			if _, err := db.Exec(`INSERT INTO session_agent_accounts(session_id,provider,account_id,bound_at) VALUES('s','codex','first','2026-10-21 03:30:00 +0000 UTC'),('s','codex','last',?)`, legacy); err != nil {
+				t.Fatal(err)
+			}
+			var last int64
+			if err := db.QueryRow(`SELECT max(rowid) FROM session_agent_accounts`).Scan(&last); err != nil {
+				t.Fatal(err)
+			}
+			s, err := Open(dir)
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer s.Close()
+			var count int
+			var account string
+			var survivor int64
+			if err := db.QueryRow(`SELECT count(*),account_id,rowid FROM session_agent_accounts`).Scan(&count, &account, &survivor); err != nil || count != 1 || account != "last" || survivor != last {
+				t.Fatalf("bindings=%d account=%q rowid=%d want=%d: %v", count, account, survivor, last, err)
+			}
+			current, bound, err := s.GetSessionAgentAccount(context.Background(), "s", domain.AgentAccountProviderCodex)
+			if err != nil || !bound || current != "last" {
+				t.Fatalf("effective account=%q bound=%v: %v", current, bound, err)
+			}
+		})
 	}
 }
 

@@ -186,17 +186,27 @@ func TestTimestampRepairCloseCancelsWorker(t *testing.T) {
 	}
 }
 
-func TestOpenMessageBeforeSessionTimestampRepair(t *testing.T) {
-	for name, legacy := range map[string]string{
+func sessionTimestampRepairCases() map[string]string {
+	return map[string]string{
 		"named":           "2026-10-21 18:15:40.123456789 +0200 CEST",
 		"numeric":         "2026-10-21 18:15:40.123456789 +0200 +0200",
 		"rfc3339":         "2026-10-21T18:15:40.123456789+02:00",
 		"negative":        "2026-10-21 12:15:40.123456789 -0400 EDT",
 		"monotonic":       "2026-10-21 18:15:40.123456789 +0200 CEST m=+1.234",
 		"later lifecycle": "2026-10-21 18:15:40.123456789 +0200 CEST",
-	} {
+	}
+}
+
+func TestOpenMessageBeforeSessionTimestampRepair(t *testing.T) {
+	for name, legacy := range sessionTimestampRepairCases() {
 		t.Run(name, func(t *testing.T) {
 			dir := t.TempDir()
+			// A legacy writer can add these rows after startup has completed.
+			s, err := Open(dir)
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer s.Close()
 			db := openMigratedTestDBIn(t, dir)
 			const good = "2026-10-21 16:15:40.123456789 +0000 UTC"
 			updated := legacy
@@ -205,19 +215,11 @@ func TestOpenMessageBeforeSessionTimestampRepair(t *testing.T) {
 				updated = "2026-10-21 13:45:40.123456789 -0400 EDT"
 				wantUpdated = time.Date(2026, 10, 21, 17, 45, 40, 123456789, time.UTC)
 			}
-			_, err := db.Exec(`INSERT INTO sessions(id,num,harness,session_mode,controller_generation,activity_state,activity_last_at,is_terminated,created_at,updated_at,latest_user_prompt,latest_user_prompt_at,latest_assistant_update,conversation_checkpoint_state,conversation_checkpoint_generation,conversation_checkpoint_native_id) VALUES('pending',1,'aider','chat','gen-1','idle',?,0,?,?,'earlier',?,'old answer','complete','old-gen','old-native');
-INSERT INTO conversations(id,scope,session_id,current_session_id,created_at,updated_at) VALUES('pending-conv','session','pending','pending',?,?);
-CREATE TABLE aaa_repair(at TIMESTAMP);
-INSERT INTO aaa_repair VALUES('2026-10-21 18:15:40 +0200 +0200');
-CREATE TRIGGER block_repair BEFORE UPDATE ON aaa_repair BEGIN SELECT RAISE(ABORT,'repair cannot reach sessions'); END;`, good, good, updated, legacy, good, good)
+			_, err = db.Exec(`INSERT INTO sessions(id,num,harness,session_mode,controller_generation,activity_state,activity_last_at,is_terminated,created_at,updated_at,latest_user_prompt,latest_user_prompt_at,latest_assistant_update,conversation_checkpoint_state,conversation_checkpoint_generation,conversation_checkpoint_native_id) VALUES('pending',1,'aider','chat','gen-1','idle',?,0,?,?,'earlier',?,'old answer','complete','old-gen','old-native');
+INSERT INTO conversations(id,scope,session_id,current_session_id,created_at,updated_at) VALUES('pending-conv','session','pending','pending',?,?);`, good, good, updated, legacy, good, good)
 			if err != nil {
 				t.Fatal(err)
 			}
-			s, err := Open(dir)
-			if err != nil {
-				t.Fatal(err)
-			}
-			defer s.Close()
 			var before string
 			if err := db.QueryRow(`SELECT CAST(latest_user_prompt_at AS TEXT) FROM sessions WHERE id='pending'`).Scan(&before); err != nil || before != legacy {
 				t.Fatalf("fixture was repaired before send: %q %v", before, err)
@@ -243,15 +245,47 @@ CREATE TRIGGER block_repair BEFORE UPDATE ON aaa_repair BEGIN SELECT RAISE(ABORT
 					t.Fatalf("send persisted %d %s: %v", count, table, err)
 				}
 			}
-			if _, err := db.Exec(`DROP TRIGGER block_repair`); err != nil {
-				t.Fatal(err)
-			}
 			if err := repairTimestamps(context.Background(), db); err != nil {
 				t.Fatal(err)
 			}
 			after, _, err := s.GetSession(context.Background(), "pending")
 			if err != nil || after.Metadata.LatestUserPrompt != got.Metadata.LatestUserPrompt || !after.Metadata.LatestUserPromptAt.Equal(later) {
 				t.Fatalf("background completion changed sent facts: %+v %v", after.Metadata, err)
+			}
+		})
+	}
+}
+
+func TestOpenCanonicalizesSessionTimestampVariants(t *testing.T) {
+	const good = "2026-10-21 16:15:40.123456789 +0000 UTC"
+	for name, legacy := range sessionTimestampRepairCases() {
+		t.Run(name, func(t *testing.T) {
+			dir := t.TempDir()
+			db := openMigratedTestDBIn(t, dir)
+			updated, wantUpdated := legacy, good
+			if name == "later lifecycle" {
+				updated = "2026-10-21 13:45:40.123456789 -0400 EDT"
+				wantUpdated = "2026-10-21 17:45:40.123456789 +0000 UTC"
+			}
+			if _, err := db.Exec(`INSERT INTO sessions(id,num,harness,activity_state,activity_last_at,is_terminated,created_at,updated_at,latest_user_prompt_at)
+VALUES('canonical',1,'aider','idle',?,0,?,?,?)`, good, good, updated, legacy); err != nil {
+				t.Fatal(err)
+			}
+			var before string
+			if err := db.QueryRow(`SELECT CAST(latest_user_prompt_at AS TEXT) FROM sessions WHERE id='canonical'`).Scan(&before); err != nil || before != legacy {
+				t.Fatalf("legacy fixture = %q: %v", before, err)
+			}
+			s, err := Open(dir)
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer s.Close()
+			var prompt, lifecycle string
+			if err := db.QueryRow(`SELECT CAST(latest_user_prompt_at AS TEXT),CAST(updated_at AS TEXT) FROM sessions WHERE id='canonical'`).Scan(&prompt, &lifecycle); err != nil {
+				t.Fatal(err)
+			}
+			if prompt != good || lifecycle != wantUpdated {
+				t.Fatalf("Open published legacy timestamps: prompt=%q lifecycle=%q; want %q %q", prompt, lifecycle, good, wantUpdated)
 			}
 		})
 	}

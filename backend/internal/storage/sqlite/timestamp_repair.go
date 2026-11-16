@@ -19,6 +19,8 @@ import (
 const offsetOnlyTimestampRepairVersion = 1
 const timestampRepairBatch = 256
 
+var errTimestampPolicySkip = errors.New("preserved distinct execution history")
+
 // These tables feed timestamp predicates, keyset pages, or newest-row decisions.
 // Repair them before the store, search readers, and schedulers become available.
 var timestampFenceTables = map[string]bool{
@@ -47,8 +49,15 @@ func runTimestampRepair(ctx context.Context, db *sql.DB, fence bool) (result tim
 	if err != nil {
 		return result, err
 	}
+	return runTimestampRepairState(ctx, db, db, fence, state)
+}
+
+func runTimestampRepairState(ctx context.Context, db, reader *sql.DB, fence bool, state *timestampRepairState) (result timestampRepairResult, err error) {
+	state.reader = reader
+	state.timestampRepairResult = timestampRepairResult{}
+	state.retry = map[string]bool{}
 	defer func() { result = state.timestampRepairResult; err = errors.Join(err, state.save()) }()
-	columns, err := timestampColumns(ctx, db)
+	columns, err := timestampColumns(ctx, reader)
 	if err != nil {
 		return result, err
 	}
@@ -66,15 +75,25 @@ func runTimestampRepair(ctx context.Context, db *sql.DB, fence bool) (result tim
 		if fence && !timestampFenceTables[group[0].table] {
 			continue
 		}
+		table := group[0].table
+		names := make([]string, len(group))
+		for j, column := range group {
+			names[j] = column.column
+		}
+		signature := strings.Join(names, "\x00") + "\x00"
+		if state.completed[table] == signature {
+			continue
+		}
 		cursor, lastRow := int64(math.MinInt64), int64(math.MaxInt64)
 		if fence {
 			var done bool
-			cursor, lastRow, done, err = timestampRepairBounds(ctx, db, group)
+			cursor, lastRow, done, err = timestampRepairBounds(ctx, reader, group)
 			if err != nil {
 				failures = append(failures, fmt.Errorf("detect %s: %w", group[0].table, err))
 				continue
 			}
 			if done {
+				state.completed[table] = signature
 				continue
 			}
 		}
@@ -85,6 +104,9 @@ func runTimestampRepair(ctx context.Context, db *sql.DB, fence bool) (result tim
 				break
 			}
 			if done {
+				if !state.retry[table] {
+					state.completed[table] = signature
+				}
 				break
 			}
 			cursor = next
@@ -136,7 +158,11 @@ func repairTimestampBatchMode(ctx context.Context, db *sql.DB, columns []timesta
 		filter = " AND (" + strings.Join(predicates, " OR ") + ")"
 	}
 	queryRows := strings.Join([]string{"SELECT rowid,", strings.Join(fields, ","), " FROM ", table, " WHERE rowid>=? AND rowid<=?", filter, " ORDER BY rowid LIMIT ?"}, "")
-	rows, err := db.QueryContext(ctx, queryRows, cursor, lastRow, timestampRepairBatch)
+	reader := state.reader
+	if reader == nil {
+		reader = db
+	}
+	rows, err := reader.QueryContext(ctx, queryRows, cursor, lastRow, timestampRepairBatch)
 	if err != nil {
 		return 0, false, err
 	}
@@ -351,15 +377,7 @@ func resolveTimestampCollision(ctx context.Context, tx *sql.Conn, columns []time
  WHERE original.rowid=? AND twin.rowid<>original.rowid`, at, id).Scan(&twin); err != nil {
 			return err
 		}
-		var same bool
-		if err := tx.QueryRowContext(ctx, `SELECT a.account_id=b.account_id FROM session_agent_accounts a JOIN session_agent_accounts b ON b.rowid=? WHERE a.rowid=?`, twin, id).Scan(&same); err != nil {
-			return err
-		}
-		if !same {
-			return errors.New("same-instant bindings name different accounts")
-		}
-		// BindSessionAgentAccount overwrites an existing same-instant binding.
-		// Rowid records which of the differently spelled bindings was written last.
+		// The last inserted same-instant binding is the effective bind.
 		if id > twin {
 			id = twin
 		}
@@ -390,7 +408,7 @@ func resolveTimestampCollision(ctx context.Context, tx *sql.Conn, columns []time
 			if err := tx.QueryRowContext(ctx, `SELECT automation_id FROM automation_runs WHERE rowid=?`, id).Scan(&automation); err != nil {
 				return err
 			}
-			return fmt.Errorf("automation %s instant %v has two execution histories (rowids %v and %d)", automation, at, id, twin)
+			return fmt.Errorf("automation %s instant %v has two execution histories (rowids %v and %d): %w", automation, at, id, twin, errTimestampPolicySkip)
 		}
 		if !originalEmpty {
 			id = twin

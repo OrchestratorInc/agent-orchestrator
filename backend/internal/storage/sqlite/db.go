@@ -129,7 +129,21 @@ func checkLegacyDatabasePath(dataDir string) error {
 //     that hasn't caught up to the commit and read NULL.
 //   - a READER pool (readDB, MaxOpenConns=maxReaders): all reads scale across
 //     it; WAL readers see the latest committed snapshot.
+type timestampOpenOptions struct {
+	driver      string
+	fenceBudget time.Duration
+	repairDone  chan<- struct{}
+}
+
+// Open opens the database and starts resumable timestamp repair.
 func Open(dataDir string) (*Store, error) {
+	return openWithTimestampOptions(dataDir, timestampOpenOptions{driver: "ao-sqlite", fenceBudget: 30 * time.Second})
+}
+
+func openWithTimestampOptions(dataDir string, opts timestampOpenOptions) (*Store, error) {
+	if opts.driver == "" {
+		opts.driver = "ao-sqlite"
+	}
 	if err := os.MkdirAll(dataDir, 0o750); err != nil {
 		return nil, fmt.Errorf("create data dir: %w", err)
 	}
@@ -140,7 +154,7 @@ func Open(dataDir string) (*Store, error) {
 	newDatabase := errors.Is(statErr, os.ErrNotExist)
 	dsn := databaseURI(dataDir) + pragmas
 
-	writeDB, err := sql.Open("ao-sqlite", dsn)
+	writeDB, err := sql.Open(opts.driver, dsn)
 	if err != nil {
 		return nil, fmt.Errorf("open sqlite writer: %w", err)
 	}
@@ -150,29 +164,71 @@ func Open(dataDir string) (*Store, error) {
 		_ = writeDB.Close()
 		return nil, err
 	}
-	if !newDatabase {
-		started := time.Now()
-		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
-		err := repairTimestampTables(ctx, writeDB, true)
-		cancel()
-		if err != nil {
-			if errors.Is(err, context.Canceled) {
-				_ = writeDB.Close()
-				return nil, err
-			}
-			slog.Error("timestamp startup repair incomplete; retrying on next open", "error", err)
-		}
-		slog.Info("timestamp startup fence completed", "duration", time.Since(started))
-	}
-	store, err := withSearchIndex(dataDir, dsn, writeDB)
+	readDB, err := openTimestampReaders(opts.driver, dsn)
 	if err != nil {
 		_ = writeDB.Close()
 		return nil, err
 	}
-	// Older writers may have added local times after an earlier repair.
-	if !newDatabase {
-		store.StartTimestampRepair(func(ctx context.Context) error { return repairTimestamps(ctx, writeDB) })
+	state, repairErr := loadTimestampSkips(context.Background(), readDB)
+	var initialVersion int64
+	if repairErr == nil {
+		repairErr = writeDB.QueryRow(`PRAGMA data_version`).Scan(&initialVersion)
 	}
+	if !newDatabase && repairErr == nil && !state.changed {
+		started := time.Now()
+		ctx, cancel := context.WithTimeout(context.Background(), opts.fenceBudget)
+		_, repairErr = runTimestampRepairState(ctx, writeDB, readDB, true, state)
+		if repairErr == nil {
+			repairErr = ctx.Err()
+		}
+		cancel()
+		if repairErr == nil {
+			slog.Info("timestamp startup fence completed", "duration", time.Since(started))
+		}
+	}
+	if repairErr != nil {
+		slog.Warn("timestamp startup fence incomplete; continuing in background", "error", repairErr)
+	} else if state.changed {
+		slog.Info("timestamp startup fence deferred; database changed since completion")
+	}
+	store, err := withSearchIndexPools(dataDir, dsn, writeDB, readDB)
+	if err != nil {
+		_ = readDB.Close()
+		_ = writeDB.Close()
+		return nil, err
+	}
+	if state != nil {
+		installTimestampCompletion(store, writeDB, state, dataDir, initialVersion)
+		if newDatabase {
+			columns, err := timestampColumns(context.Background(), readDB)
+			if err != nil {
+				slog.Warn("cannot record new database repair completion", "error", err)
+			} else {
+				for _, column := range columns {
+					state.completed[column.table] += column.column + "\x00"
+				}
+			}
+		}
+	}
+	if !newDatabase {
+		store.StartTimestampRepair(func(ctx context.Context) error {
+			if opts.repairDone != nil {
+				defer close(opts.repairDone)
+			}
+			if state == nil {
+				var err error
+				state, err = loadTimestampSkips(ctx, readDB)
+				if err != nil {
+					return err
+				}
+			}
+			_, err := runTimestampRepairState(ctx, writeDB, readDB, false, state)
+			return err
+		})
+	} else if opts.repairDone != nil {
+		close(opts.repairDone)
+	}
+
 	return store, nil
 }
 
@@ -182,13 +238,25 @@ func Open(dataDir string) (*Store, error) {
 // The index never decides whether the store opens: one that cannot be opened
 // is recorded on the store (SessionSearchUnavailable) and search stays off,
 // while every other read and write works as usual.
-func withSearchIndex(dataDir, dsn string, writeDB *sql.DB) (*Store, error) {
-	readDB, err := sql.Open("ao-sqlite", dsn)
+func openTimestampReaders(driverName, dsn string) (*sql.DB, error) {
+	readDB, err := sql.Open(driverName, dsn)
 	if err != nil {
 		return nil, fmt.Errorf("open sqlite reader: %w", err)
 	}
 	readDB.SetMaxOpenConns(maxReaders)
 	readDB.SetMaxIdleConns(maxReaders)
+	return readDB, nil
+}
+
+func withSearchIndex(dataDir, dsn string, writeDB *sql.DB) (*Store, error) {
+	readDB, err := openTimestampReaders("ao-sqlite", dsn)
+	if err != nil {
+		return nil, err
+	}
+	return withSearchIndexPools(dataDir, dsn, writeDB, readDB)
+}
+
+func withSearchIndexPools(dataDir, dsn string, writeDB, readDB *sql.DB) (*Store, error) {
 	store := sqlitestore.NewStore(writeDB, readDB)
 
 	if sessionSearchSwitchedOff() {
@@ -2470,4 +2538,43 @@ WHERE type = 'table' AND name = 'sessions'`,
 		return fmt.Errorf("schema repair: sessions harness constraint is missing Stakpak")
 	}
 	return nil
+}
+
+// Only this connection's UTC writes may extend a completed repair. A separate
+// read-only observer catches another writer committing during pool shutdown.
+func installTimestampCompletion(store *Store, writer *sql.DB, state *timestampRepairState, dataDir string, initial int64) {
+	var observer *sql.DB
+	var observed int64
+	trusted := true
+	store.SetTimestampRepairCloseHooks(func() error {
+		var err error
+		observer, err = sql.Open("ao-sqlite", databaseURI(dataDir)+readOnlyPragmas)
+		if err != nil {
+			trusted = false
+			return err
+		}
+		observer.SetMaxOpenConns(1)
+		if err := observer.QueryRow(`PRAGMA data_version`).Scan(&observed); err != nil {
+			trusted = false
+			return err
+		}
+		var current int64
+		err = writer.QueryRow(`PRAGMA data_version`).Scan(&current)
+		trusted = err == nil && current == initial
+		return err
+	}, func() error {
+		if observer == nil {
+			return nil
+		}
+		defer func() { _ = observer.Close() }()
+		stamp, err := timestampDatabaseStamp(state.database)
+		if err != nil {
+			return err
+		}
+		var current int64
+		if err := observer.QueryRow(`PRAGMA data_version`).Scan(&current); err != nil {
+			return err
+		}
+		return state.checkpoint(stamp, trusted && current == observed)
+	})
 }
