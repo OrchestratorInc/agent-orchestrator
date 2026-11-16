@@ -63,7 +63,7 @@ export type CliLoginControls = {
  * accounts added in AO, with their limits, default and sign-in. loginMethods
  * are the harness's own sign-in methods; adding an account or signing one in
  * again offers those that suit it in the same panel, instead of a terminal. */
-export function AgentAccountsPanel({ provider, cliLogin, hostId, loginMethods }: { provider: AgentAccountProvider; cliLogin?: CliLoginControls; hostId?: string; loginMethods?: LoginMethod[] }) {
+export function AgentAccountsPanel({ provider, cliLogin: cliLoginControls, hostId, loginMethods }: { provider: AgentAccountProvider; cliLogin?: CliLoginControls; hostId?: string; loginMethods?: LoginMethod[] }) {
 	const { t } = useTranslation();
 	const accounts = useAgentAccounts(true, hostId);
 	const usage = useAgentAccountUsage(30, hostId);
@@ -80,6 +80,9 @@ export function AgentAccountsPanel({ provider, cliLogin, hostId, loginMethods }:
 	// The in-app sign-in: adding an account, or signing one in again. The
 	// account's own sign-in it started is kept to save or cancel it.
 	const [signIn, setSignIn] = useState<{ account?: AgentAccount } | null>(null);
+	// The computer's own sign-in waits while an account signs in: both run the
+	// same harness's sign-in, which takes one at a time.
+	const cliLogin = cliLoginControls && { ...cliLoginControls, disabled: cliLoginControls.disabled || signIn !== null };
 	const accountOperation = useRef<string | undefined>(undefined);
 	// The account a sign-in that finished at once saved, for the chat that sent the user here.
 	const finishedAccount = useRef<string | undefined>(undefined);
@@ -219,6 +222,17 @@ export function AgentAccountsPanel({ provider, cliLogin, hostId, loginMethods }:
 			}
 			return await getAgentUILogin(harness, started.authOperationId, hostId);
 		} catch (err) {
+			// Windows refused the account folder's links: no method can sign it in
+			// until Developer Mode is on, so the card says how, as for a terminal sign-in.
+			if (err instanceof Error && apiErrorDetails(err.cause)?.windowsDeveloperMode === true) {
+				const notice = t("settings.agentAccounts.unshared");
+				if (current()) {
+					closeSignIn();
+					setNeedsDeveloperMode(true);
+					setError(notice);
+				}
+				throw new Error(notice);
+			}
 			throw credentialError(err);
 		}
 	};
@@ -260,6 +274,15 @@ export function AgentAccountsPanel({ provider, cliLogin, hostId, loginMethods }:
 		accountOperation.current = undefined;
 		if (operation) void actions.cancelLogin(operation).catch(() => undefined);
 	};
+	// Leaving Settings mid sign-in ends it: the daemon keeps a pending account
+	// sign-in, and its new folder, until it is saved or cancelled.
+	const actionsRef = useRef(actions);
+	actionsRef.current = actions;
+	useEffect(() => () => {
+		const operation = accountOperation.current;
+		accountOperation.current = undefined;
+		if (operation) void actionsRef.current.cancelLogin(operation).catch(() => undefined);
+	}, []);
 	const requestedLogin = useUiStore((state) => state.accountLogin);
 	useEffect(() => {
 		if (hostId) return;

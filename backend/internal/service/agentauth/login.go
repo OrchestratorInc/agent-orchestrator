@@ -134,6 +134,10 @@ type loginOperation struct {
 	// nativeDigits holds, for each NativeOptions entry, the digit the CLI
 	// printed for it.
 	nativeDigits []string
+	// account marks an account folder's sign-in. The harness's own sign-in
+	// is never handed it to recover, so its panel cannot show, finish or
+	// cancel another account's sign-in.
+	account bool
 }
 
 // StartLogin runs a fixed native login or saves a reviewed provider key.
@@ -293,7 +297,7 @@ func (s *Service) StartLoginWithOptions(ctx context.Context, agentID, method, se
 		return s.saveClaudeSetupToken(secret, expires)
 	}
 	loginCtx, cancel := context.WithDeadline(context.Background(), expires)
-	op := &loginOperation{snapshot: LoginSnapshot{ID: uuid.NewString(), AgentID: agentID, Method: method, Status: "running", ExpiresAt: expires}, cancel: cancel, done: make(chan struct{})}
+	op := &loginOperation{snapshot: LoginSnapshot{ID: uuid.NewString(), AgentID: agentID, Method: method, Status: "running", ExpiresAt: expires}, cancel: cancel, done: make(chan struct{}), account: account}
 	cmd := s.commandContext(loginCtx, plan.command[0], args...)
 	process.ConfigureTreeCancellation(cmd)
 	cmd.WaitDelay = 3 * time.Second

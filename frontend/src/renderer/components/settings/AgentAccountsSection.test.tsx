@@ -468,9 +468,9 @@ const claudeMethods = [
 ];
 const keyAccount = { id: "acct-key", provider: "claude", device: false, default: false, signedIn: false, loggedIn: true, kind: "api_key", name: "Work", keyHint: "cdef" };
 
-function renderPanelWithMethods() {
+function renderPanelWithMethods(cliLogin?: CliLoginControls) {
 	const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
-	return render(<QueryClientProvider client={queryClient}><TooltipProvider><AgentAccountsPanel provider="claude" loginMethods={claudeMethods} /></TooltipProvider></QueryClientProvider>);
+	return render(<QueryClientProvider client={queryClient}><TooltipProvider><AgentAccountsPanel provider="claude" loginMethods={claudeMethods} cliLogin={cliLogin} /></TooltipProvider></QueryClientProvider>);
 }
 
 it("adds an account through the harness's own sign-in panel, offering every Claude method", async () => {
@@ -561,4 +561,48 @@ it("shows an API key account with Replace key in the same panel instead of a sig
 
 	expect(putMock).toHaveBeenCalledWith("/api/v1/agents/accounts/{accountId}/api-key", { params: { path: { accountId: "acct-key" } }, body: { apiKey: "sk-ant-api03-new" } });
 	await waitFor(() => expect(row).toHaveTextContent("Key ending wxyz"));
+});
+
+it("shows the Windows Developer Mode notice when the sign-in panel cannot link a new account's folder", async () => {
+	const user = userEvent.setup();
+	postMock.mockImplementation((path: string) => path === "/api/v1/agents/accounts/login"
+		? Promise.resolve({ error: { code: "AGENT_ACCOUNT_UNSHARED", message: "server text", details: { windowsDeveloperMode: true } } })
+		: Promise.resolve({ data: {} }));
+	renderPanelWithMethods();
+	await user.click(await screen.findByRole("button", { name: "Add account" }));
+	await user.click(screen.getByRole("button", { name: "Claude subscription" }));
+
+	// The panel closes; the card shows the localized warning and its help, as for a terminal sign-in.
+	await waitFor(() => expect(screen.queryByRole("button", { name: "Claude subscription" })).not.toBeInTheDocument());
+	const alert = screen.getByRole("alert");
+	expect(alert).toHaveTextContent("Turn on Windows Developer Mode to use this account.");
+	expect(alert).toHaveClass("text-warning");
+	expect(within(alert).getByRole("button", { name: "How to turn on Windows Developer Mode" })).toBeInTheDocument();
+});
+
+it("cancels an account's pending sign-in when the panel goes away mid sign-in", async () => {
+	const user = userEvent.setup();
+	const { getAgentUILogin } = await import("../../hooks/useAgentAuth");
+	vi.mocked(getAgentUILogin).mockReset().mockResolvedValue({ id: "auth-1", agentId: "claude-code", method: "browser", status: "running", expiresAt: "2026-11-17T10:00:00Z" } as never);
+	postMock.mockImplementation((path: string) => path === "/api/v1/agents/accounts/login"
+		? Promise.resolve({ data: { operationId: "acct-op", provider: "claude", authOperationId: "auth-1" } })
+		: Promise.resolve({ data: {} }));
+	const { unmount } = renderPanelWithMethods();
+	await user.click(await screen.findByRole("button", { name: "Add account" }));
+	await user.click(screen.getByRole("button", { name: "Claude subscription" }));
+	await waitFor(() => expect(postMock).toHaveBeenCalledWith("/api/v1/agents/accounts/login", expect.anything()));
+
+	unmount();
+	await waitFor(() => expect(postMock).toHaveBeenCalledWith("/api/v1/agents/accounts/login/{operationId}/cancel", { params: { path: { operationId: "acct-op" } } }));
+});
+
+it("keeps the computer's own sign-in waiting while an account signs in", async () => {
+	const user = userEvent.setup();
+	const onSignIn = vi.fn();
+	renderPanelWithMethods({ disabled: false, canLogout: true, onSignIn, onLogout: vi.fn() });
+	const row = await findCliLoginRow();
+	expect(within(row).getByRole("button", { name: "Sign in again" })).toBeEnabled();
+
+	await user.click(screen.getByRole("button", { name: "Add account" }));
+	expect(within(row).getByRole("button", { name: "Sign in again" })).toBeDisabled();
 });

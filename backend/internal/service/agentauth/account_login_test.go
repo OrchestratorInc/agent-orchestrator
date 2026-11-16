@@ -2,7 +2,10 @@ package agentauth
 
 import (
 	"context"
+	"errors"
 	"testing"
+
+	"github.com/aoagents/agent-orchestrator/backend/internal/httpd/apierr"
 )
 
 // An account folder signs in only through the CLI's own sign-in: never a key
@@ -43,5 +46,26 @@ func TestStartAccountLoginRefusesOtherMethods(t *testing.T) {
 	}
 	if _, err := s.StartAccountLogin(context.Background(), "claude-code", "browser", "", nil); err == nil {
 		t.Fatal("StartAccountLogin without an account folder succeeded")
+	}
+}
+
+// While an account folder signs in, the harness's own sign-in is refused with
+// its own code and no operation id, so the harness's panel never adopts the
+// account's sign-in as its own. A harness sign-in still names its operation.
+func TestReserveLoginKeepsAccountSignInsApart(t *testing.T) {
+	running := func(account bool) *Service {
+		return &Service{
+			operations:     map[string]*loginOperation{"op-1": {snapshot: LoginSnapshot{ID: "op-1", AgentID: "claude-code", Status: "running"}, done: make(chan struct{}), account: account}},
+			terminalStarts: map[string]bool{},
+		}
+	}
+	var apiErr *apierr.Error
+	_, err := running(true).reserveLogin(context.Background(), "claude-code")
+	if !errors.As(err, &apiErr) || apiErr.Code != "AGENT_AUTH_ACCOUNT_LOGIN_IN_PROGRESS" || apiErr.Details["operationId"] != nil {
+		t.Fatalf("account sign-in in progress: err = %+v", err)
+	}
+	_, err = running(false).reserveLogin(context.Background(), "claude-code")
+	if !errors.As(err, &apiErr) || apiErr.Code != "AGENT_AUTH_IN_PROGRESS" || apiErr.Details["operationId"] != "op-1" {
+		t.Fatalf("harness sign-in in progress: err = %+v", err)
 	}
 }
