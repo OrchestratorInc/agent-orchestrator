@@ -337,7 +337,38 @@ it.each([
 	}
 });
 
-it("counts an agent that is already running on the retry as resumed", async () => {
+it("drops the automatic retry when the remote chat closes during the wait", async () => {
+	localGet.mockReset();
+	localPost.mockReset();
+	remoteConnect.mockResolvedValue({ hostId: "box-a", label: "Box A", url: "http://box-a:3001", base: "http://127.0.0.1:4000" });
+	const resumes: string[] = [];
+	vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL) => {
+		const request = input instanceof Request ? input : new Request(input);
+		const path = new URL(request.url).pathname;
+		if (path.endsWith("/projects")) return Response.json({ projects: [{ id: "project-1", name: "Remote", path: "/remote" }] });
+		if (path.endsWith("/sessions")) return Response.json({ sessions: [{ id: "session-1", projectId: "project-1", harness: "codex", status: "exited", activity: { state: "exited" }, mode: "chat", prs: [] }] });
+		if (path.endsWith("/conversation")) return Response.json(conversationBody({ controller: "stopped" }));
+		if (path.endsWith("/resume-agent")) {
+			resumes.push(request.url);
+			return Response.json({ code: "UPSTREAM_UNAVAILABLE", message: "the host is restarting" }, { status: 503 });
+		}
+		return Response.json({});
+	}));
+	await connectHost("http://box-a:3001");
+	vi.useFakeTimers({ shouldAdvanceTime: true });
+	try {
+		const view = renderRemoteSession(new QueryClient({ defaultOptions: { queries: { retry: false } } }));
+		await waitFor(() => expect(resumes).toHaveLength(1));
+		view.unmount();
+		await act(async () => { await vi.advanceTimersByTimeAsync(3_000); });
+	} finally {
+		vi.useRealTimers();
+	}
+	await act(async () => {});
+	expect(resumes).toHaveLength(1);
+});
+
+it.each(["AGENT_NOT_EXITED", "AGENT_RESUME_IN_PROGRESS"])("counts a retry that answers %s as resumed", async (retryCode) => {
 	localGet.mockReset();
 	localPost.mockReset();
 	remoteConnect.mockResolvedValue({ hostId: "box-a", label: "Box A", url: "http://box-a:3001", base: "http://127.0.0.1:4000" });
@@ -352,7 +383,7 @@ it("counts an agent that is already running on the retry as resumed", async () =
 			resumes.push(request.url);
 			return resumes.length === 1
 				? Response.json({ code: "UPSTREAM_TIMEOUT", message: "the host did not answer in time" }, { status: 504 })
-				: Response.json({ code: "AGENT_NOT_EXITED", message: "agent is still running" }, { status: 409 });
+				: Response.json({ code: retryCode, message: "agent is still running" }, { status: 409 });
 		}
 		return Response.json({});
 	}));
@@ -365,7 +396,7 @@ it("counts an agent that is already running on the retry as resumed", async () =
 		await act(async () => { await vi.advanceTimersByTimeAsync(3_000); });
 		await waitFor(() => expect(resumes).toHaveLength(2));
 		await waitFor(() => expect(queryClient.isMutating()).toBe(0));
-		expect(screen.queryByText(/already running/)).not.toBeInTheDocument();
+		expect(screen.queryByText(/already running|already resuming/)).not.toBeInTheDocument();
 		expect(screen.queryByText(/did not answer in time/)).not.toBeInTheDocument();
 	} finally {
 		vi.useRealTimers();
