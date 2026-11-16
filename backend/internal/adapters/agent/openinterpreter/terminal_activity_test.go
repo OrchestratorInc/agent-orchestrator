@@ -34,6 +34,8 @@ func TestTerminalActivityUsesCurrentNativeChrome(t *testing.T) {
 		{"history", "› old task\nAnswer includes ? for shortcuts", "", false},
 		{"truncated", "›", "", false},
 		{"settled after old status", "• Working (0s • esc to interrupt)\nold result\n› old task\nresult\n› \n  ? for shortcuts                   50% context left", domain.ActivityIdle, true},
+		// Response text that names the interrupt key is not the native status row.
+		{"reply mentions interrupt", "Use esc to interrupt to cancel a command.\n\n› \n\n  ? for shortcuts                         90% context left", domain.ActivityIdle, true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			state, ok := New().DetectTerminalActivity(tc.frame)

@@ -1,12 +1,18 @@
 package openinterpreter
 
 import (
+	"regexp"
 	"strings"
 
 	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/agent/terminalui"
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
 	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
 )
+
+// workingStatusRow matches the native status indicator, "• Working (3s • esc to
+// interrupt)", which a hook label may follow. Response text that merely names
+// the interrupt key lacks the parenthesized elapsed-time form.
+var workingStatusRow = regexp.MustCompile(`(?i)\([^()]*•\s*esc to interrupt\)`)
 
 // DetectTerminalActivity derives state from the current composer or modal.
 func (p *Plugin) DetectTerminalActivity(output string) (domain.ActivityState, bool) {
@@ -105,7 +111,7 @@ func (p *Plugin) InspectTerminalSurface(output string) ports.TerminalSurfaceObse
 		if line == "" {
 			continue
 		}
-		if strings.Contains(strings.ToLower(line), "esc to interrupt") {
+		if workingStatusRow.MatchString(line) {
 			running = true
 		}
 		break
