@@ -633,6 +633,21 @@ describe("AutomationsView", () => {
 		expect(view.container.querySelector('[data-slot="select-content"]')).toBeNull();
 	});
 
+	it("keeps a daily or weekly time's hour and minute together in one Time field", async () => {
+		const user = userEvent.setup();
+		renderView();
+		await openBlankCreate(user);
+		const dialog = screen.getByRole("dialog", { name: "Create automation" });
+		const field = within(dialog).getByText("Time").parentElement!;
+		expect(within(field).getByRole("combobox", { name: "Hour" })).toBeInTheDocument();
+		expect(within(field).getByRole("combobox", { name: "Minute" })).toBeInTheDocument();
+		await user.click(within(dialog).getByRole("combobox", { name: "Schedule" }));
+		await user.click(screen.getByRole("option", { name: "Weekly" }));
+		const weekly = within(dialog).getByText("Time").parentElement!;
+		expect(within(weekly).getByRole("combobox", { name: "Hour" })).toBeInTheDocument();
+		expect(within(weekly).getByRole("combobox", { name: "Minute" })).toBeInTheDocument();
+	});
+
 	it("picks the time from 24-hour hour and minute lists", async () => {
 		const user = userEvent.setup();
 		renderView();

@@ -1038,6 +1038,7 @@ function AutomationFormDialog({
 							) : null}
 							{schedule.preset === "daily" || schedule.preset === "weekly" ? (
 								<TimePickerFields
+									combined
 									hour={schedule.time.split(":")[0] ?? ""}
 									minute={schedule.time.split(":")[1] ?? ""}
 									hourError={validationErrors.time}
@@ -1128,20 +1129,33 @@ function AutomationFormDialog({
 const HOUR_OPTIONS = Array.from({ length: 24 }, (_, value) => String(value).padStart(2, "0")).map((value) => ({ value, label: value }));
 const MINUTE_OPTIONS = Array.from({ length: 60 }, (_, value) => String(value).padStart(2, "0")).map((value) => ({ value, label: value }));
 
-/** Hour (00-23) and minute (00-59) pickers; values are two-digit strings. */
-function TimePickerFields({ hour, minute, hourError, minuteError, onChange }: { hour: string; minute: string; hourError?: string; minuteError?: string; onChange: (hour: string, minute: string) => void }) {
+/**
+ * Hour (00-23) and minute (00-59) pickers; values are two-digit strings.
+ * combined puts both in one Time field, so a daily or weekly time stays on one
+ * row of the form's two-column grid whatever sits beside it.
+ */
+function TimePickerFields({ hour, minute, hourError, minuteError, combined = false, onChange }: { hour: string; minute: string; hourError?: string; minuteError?: string; combined?: boolean; onChange: (hour: string, minute: string) => void }) {
 	const { t } = useTranslation();
 	const pad = (value: string) => (/^\d{1,2}$/.test(value.trim()) ? value.trim().padStart(2, "0") : "");
 	const hh = pad(hour);
 	const mm = pad(minute);
+	const hourSelect = <AutomationSelect id={AUTOMATION_FIELD_IDS.hour} label={t("automations.field.hour")} placeholder="09" value={hh} invalid={Boolean(hourError)} onValueChange={(value) => onChange(value, mm || "00")} options={HOUR_OPTIONS} />;
+	const minuteSelect = <AutomationSelect id={AUTOMATION_FIELD_IDS.minute} label={t("automations.field.minute")} placeholder="00" value={mm} invalid={Boolean(minuteError)} onValueChange={(value) => onChange(hh || "00", value)} options={MINUTE_OPTIONS} />;
+	if (combined) {
+		return (
+			<Field label={t("automations.field.localTime")} id={AUTOMATION_FIELD_IDS.hour} error={hourError}>
+				<div className="flex items-center gap-2">
+					<div className="min-w-0 flex-1">{hourSelect}</div>
+					<span aria-hidden="true" className="text-muted-foreground">:</span>
+					<div className="min-w-0 flex-1">{minuteSelect}</div>
+				</div>
+			</Field>
+		);
+	}
 	return (
 		<>
-			<Field label={t("automations.field.hour")} id={AUTOMATION_FIELD_IDS.hour} error={hourError}>
-				<AutomationSelect id={AUTOMATION_FIELD_IDS.hour} label={t("automations.field.hour")} placeholder="09" value={hh} invalid={Boolean(hourError)} onValueChange={(value) => onChange(value, mm || "00")} options={HOUR_OPTIONS} />
-			</Field>
-			<Field label={t("automations.field.minute")} id={AUTOMATION_FIELD_IDS.minute} error={minuteError}>
-				<AutomationSelect id={AUTOMATION_FIELD_IDS.minute} label={t("automations.field.minute")} placeholder="00" value={mm} invalid={Boolean(minuteError)} onValueChange={(value) => onChange(hh || "00", value)} options={MINUTE_OPTIONS} />
-			</Field>
+			<Field label={t("automations.field.hour")} id={AUTOMATION_FIELD_IDS.hour} error={hourError}>{hourSelect}</Field>
+			<Field label={t("automations.field.minute")} id={AUTOMATION_FIELD_IDS.minute} error={minuteError}>{minuteSelect}</Field>
 		</>
 	);
 }
