@@ -1439,6 +1439,53 @@ describe("ProjectSettingsForm", () => {
 		expect(postMock).not.toHaveBeenCalled();
 	});
 
+	it("fills a missing worker role without replacing an orchestrator running on another agent", async () => {
+		mockProject({
+			id: "proj-1",
+			name: "Project One",
+			kind: "single_repo",
+			path: "/repo/project-one",
+			repo: "",
+			defaultBranch: "main",
+			config: { orchestrator: { agent: "codex" } },
+		});
+
+		renderSettings("proj-1", [
+			{
+				id: "proj-1",
+				name: "Project One",
+				path: "/repo/project-one",
+				sessions: [
+					{
+						id: "proj-1-orchestrator",
+						workspaceId: "proj-1",
+						workspaceName: "Project One",
+						title: "Orchestrator",
+						provider: "claude-code",
+						kind: "orchestrator",
+						branch: "ao/proj-1-orchestrator",
+						status: "working",
+						createdAt: "2026-07-03T00:00:00Z",
+						updatedAt: "2026-07-03T00:00:00Z",
+						prs: [],
+					},
+				],
+			},
+		], "agents");
+
+		await waitFor(() => expect(putMock).toHaveBeenCalledWith("/api/v1/projects/{id}", expect.objectContaining({
+			body: expect.objectContaining({
+				config: expect.objectContaining({
+					worker: expect.objectContaining({ agent: "claude-code" }),
+					orchestrator: expect.objectContaining({ agent: "codex" }),
+				}),
+			}),
+		})));
+		// Only the worker was filled; the Claude Code orchestrator someone started
+		// on purpose keeps running.
+		expect(postMock).not.toHaveBeenCalled();
+	});
+
 	it("saves a filled orchestrator role without replacing an orchestrator that started after the fill", async () => {
 		mockProject({
 			id: "proj-1",

@@ -191,8 +191,9 @@ function SettingsBody({ project, projectId, hostId, hostConnected, onSaved, sect
 	// default.
 	const sessionsQuery = hostId ? remoteProjectQuery : workspaceQuery;
 	const sessionsSettled = sessionsQuery.data !== undefined && !sessionsQuery.isFetching;
-	// The orchestrator agent the fill chose. Saving it never replaces a running
-	// orchestrator on another agent: the user didn't pick it.
+	// The orchestrator agent when the fill ran, chosen by it or already set. The
+	// fill's own save never replaces a running orchestrator on another agent:
+	// the user didn't ask for that, even when only the worker was filled.
 	const autoFilledOrchestratorRef = useRef("");
 	const [agentDefaults, setAgentDefaults] = useState<{ workerAgent: string; orchestratorAgent: string } | null | undefined>(missingRoleAgent ? null : undefined);
 	useEffect(() => {
@@ -209,10 +210,8 @@ function SettingsBody({ project, projectId, hostId, hostConnected, onSaved, sect
 			const orchestratorAgent = config.orchestrator?.agent || activeOrchestratorRef.current?.provider || defaults.orchestratorAgent;
 			// The filled orchestrator is the project's current one, not a change
 			// that should start a replacement on the next save.
-			if (!config.orchestrator?.agent) {
-				lastOrchestratorRef.current = orchestratorAgent;
-				autoFilledOrchestratorRef.current = orchestratorAgent;
-			}
+			if (!config.orchestrator?.agent) lastOrchestratorRef.current = orchestratorAgent;
+			autoFilledOrchestratorRef.current = orchestratorAgent;
 			setAgentDefaults({ workerAgent: defaults.workerAgent, orchestratorAgent });
 		});
 		return () => {
