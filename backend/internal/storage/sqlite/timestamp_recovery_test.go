@@ -207,9 +207,7 @@ func TestOpenMessageBeforeSessionTimestampRepair(t *testing.T) {
 			}
 			_, err := db.Exec(`INSERT INTO sessions(id,num,harness,session_mode,controller_generation,activity_state,activity_last_at,is_terminated,created_at,updated_at,latest_user_prompt,latest_user_prompt_at,latest_assistant_update,conversation_checkpoint_state,conversation_checkpoint_generation,conversation_checkpoint_native_id) VALUES('pending',1,'aider','chat','gen-1','idle',?,0,?,?,'earlier',?,'old answer','complete','old-gen','old-native');
 INSERT INTO conversations(id,scope,session_id,current_session_id,created_at,updated_at) VALUES('pending-conv','session','pending','pending',?,?);
-CREATE TABLE aaa_repair(at TIMESTAMP);
-INSERT INTO aaa_repair VALUES('2026-10-21 18:15:40 +0200 +0200');
-CREATE TRIGGER block_repair BEFORE UPDATE ON aaa_repair BEGIN SELECT RAISE(ABORT,'repair cannot reach sessions'); END;`, good, good, updated, legacy, good, good)
+CREATE TRIGGER block_repair BEFORE UPDATE ON sessions BEGIN SELECT RAISE(ABORT,'repair cannot reach sessions'); END;`, good, good, updated, legacy, good, good)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -221,6 +219,10 @@ CREATE TRIGGER block_repair BEFORE UPDATE ON aaa_repair BEGIN SELECT RAISE(ABORT
 			var before string
 			if err := db.QueryRow(`SELECT CAST(latest_user_prompt_at AS TEXT) FROM sessions WHERE id='pending'`).Scan(&before); err != nil || before != legacy {
 				t.Fatalf("fixture was repaired before send: %q %v", before, err)
+			}
+			// The trigger made the startup fence skip the session row; lift it so only the send itself can normalize.
+			if _, err := db.Exec(`DROP TRIGGER block_repair`); err != nil {
+				t.Fatal(err)
 			}
 			later := time.Date(2026, 10, 21, 16, 30, 0, 0, time.UTC)
 			created, err := s.AppendUserMessage(context.Background(), "pending-conv", "pending", "gen-1", domain.ConversationMessage{ID: "later-message", Text: "later UTC prompt", Origin: domain.MessageOriginHuman}, "later-turn", later)
@@ -242,9 +244,6 @@ CREATE TRIGGER block_repair BEFORE UPDATE ON aaa_repair BEGIN SELECT RAISE(ABORT
 				if err := db.QueryRow("SELECT count(*) FROM " + table).Scan(&count); err != nil || count != 1 {
 					t.Fatalf("send persisted %d %s: %v", count, table, err)
 				}
-			}
-			if _, err := db.Exec(`DROP TRIGGER block_repair`); err != nil {
-				t.Fatal(err)
 			}
 			if err := repairTimestamps(context.Background(), db); err != nil {
 				t.Fatal(err)
