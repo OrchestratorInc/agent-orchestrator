@@ -5,6 +5,7 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"strings"
 	"testing"
 
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
@@ -33,8 +34,7 @@ func TestCopyWorktreeInclude(t *testing.T) {
 		}
 	}
 
-	workspace := t.TempDir()
-	writeTestFile(t, filepath.Join(workspace, "README.md"), "hello\n")
+	workspace := newIncludeWorkspace(t, project)
 	writeTestFile(t, filepath.Join(workspace, "a.local"), "keep")
 
 	if err := copyWorktreeInclude(context.Background(), project, workspace); err != nil {
@@ -66,6 +66,34 @@ func TestCopyWorktreeInclude(t *testing.T) {
 		if info.Mode().Perm() != 0o600 {
 			t.Errorf("secrets/key.txt mode = %v, want 0600", info.Mode().Perm())
 		}
+	}
+}
+
+// newIncludeWorkspace checks out project's HEAD as a linked worktree, the
+// shape every session workspace has.
+func newIncludeWorkspace(t *testing.T, project string) string {
+	t.Helper()
+	workspace := filepath.Join(t.TempDir(), "workspace")
+	runManagerGit(t, project, "worktree", "add", "--detach", workspace, "HEAD")
+	return workspace
+}
+
+func TestCopyWorktreeIncludeSkipsFilesTheWorkspaceDoesNotIgnore(t *testing.T) {
+	project := newManagerGitRepo(t)
+	workspace := newIncludeWorkspace(t, project)
+	// Only the source checkout ignores the file: the rule is not committed.
+	writeTestFile(t, filepath.Join(project, ".gitignore"), "source-only.settings\n")
+	writeTestFile(t, filepath.Join(project, ".worktreeinclude"), "source-only.settings\n")
+	writeTestFile(t, filepath.Join(project, "source-only.settings"), "X=1")
+	if out := runManagerGit(t, project, "check-ignore", "source-only.settings"); strings.TrimSpace(out) != "source-only.settings" {
+		t.Fatalf("source does not ignore the file: %q", out)
+	}
+
+	if err := copyWorktreeInclude(context.Background(), project, workspace); err != nil {
+		t.Fatalf("copyWorktreeInclude: %v", err)
+	}
+	if _, err := os.Lstat(filepath.Join(workspace, "source-only.settings")); !os.IsNotExist(err) {
+		t.Fatalf("file the workspace does not ignore was copied (err=%v)", err)
 	}
 }
 

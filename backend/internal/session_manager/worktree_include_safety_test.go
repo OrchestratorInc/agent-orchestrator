@@ -113,7 +113,7 @@ func TestCopyNewRegularFileReportsSourceError(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer func() { _ = target.Close() }()
-	if err := copyNewRegularFile(source, target, "missing"); !os.IsNotExist(err) {
+	if err := copyNewRegularFile(context.Background(), source, target, "missing"); !os.IsNotExist(err) {
 		t.Fatalf("source error = %v, want missing file", err)
 	}
 }
