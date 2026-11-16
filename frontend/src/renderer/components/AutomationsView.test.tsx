@@ -1193,5 +1193,31 @@ describe("automation starters", () => {
 			const dialog = screen.getByRole("dialog", { name: "Edit automation" });
 			expect(within(dialog).queryByText(/Saving makes it run as you/)).not.toBeInTheDocument();
 		});
+
+		it("says why Run now is off while a run is in flight, on hover and to the keyboard", async () => {
+			const user = userEvent.setup();
+			mocks.cloudAvailable = true;
+			mocks.cloudAutomations = [{ ...cloudAutomation, latestRun: { ...cloudAutomation.latestRun, status: "running", errorCode: undefined, errorMessage: undefined } }];
+			// A disabled button takes no pointer events (the Button's disabled:pointer-events-none).
+			const style = document.head.appendChild(document.createElement("style"));
+			style.textContent = "button:disabled { pointer-events: none; }";
+			try {
+				renderView();
+				const row = screen.getByRole("heading", { name: /Nightly debt/ }).closest("article")!;
+				const runNow = within(row).getByRole("button", { name: "Run Nightly debt now" });
+				expect(runNow).toBeDisabled();
+				const trigger = runNow.closest<HTMLElement>("[data-slot=tooltip-trigger]")!;
+				await user.hover(trigger);
+				expect(await screen.findByRole("tooltip")).toHaveTextContent("Already running");
+				await user.unhover(trigger);
+				await waitFor(() => expect(screen.queryByRole("tooltip")).not.toBeInTheDocument());
+				// Tab from the row's expander reaches the explanation, not the next button.
+				within(row).getByRole("button", { name: "Show run history for Nightly debt" }).focus();
+				await user.tab();
+				expect(await screen.findByRole("tooltip")).toHaveTextContent("Already running");
+			} finally {
+				style.remove();
+			}
+		});
 	});
 });

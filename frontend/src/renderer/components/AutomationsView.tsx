@@ -534,6 +534,8 @@ function CloudAutomationRow({ item, userId, endedSessionIds, projectName, busy, 
 		}
 	}
 	const toggleSwitch = <Switch checked={item.enabled} disabled={busy || !item.canEdit} aria-label={t(item.enabled ? "automations.disable" : "automations.enable", { name: item.displayName })} onCheckedChange={(checked) => void toggle(checked)} />;
+	const runNowDisabled = running || runNow.isPending;
+	const runNowButton = <Button variant="quiet" size="icon-sm" aria-label={t("automations.cloud.runNow.aria", { name: item.displayName })} disabled={runNowDisabled} onClick={() => void act(() => runNow.mutateAsync(item.id))}><Play className="size-3.5" /></Button>;
 	// A toggle keeps one name; aria-pressed says whether it is on.
 	const subscribeLabel = t("automations.cloud.subscribe", { name: item.displayName });
 	return <article className="group">
@@ -564,7 +566,11 @@ function CloudAutomationRow({ item, userId, endedSessionIds, projectName, busy, 
 			<div className="flex shrink-0 items-center gap-1">
 				<Tooltip>
 					<TooltipTrigger asChild>
-						<Button variant="quiet" size="icon-sm" aria-label={t("automations.cloud.runNow.aria", { name: item.displayName })} disabled={running || runNow.isPending} onClick={() => void act(() => runNow.mutateAsync(item.id))}><Play className="size-3.5" /></Button>
+						{runNowDisabled ? (
+							// A disabled button takes no pointer or focus, so a focusable wrapper
+							// carries the tooltip that says why (Radix's disabled-trigger pattern).
+							<span tabIndex={0} className="inline-flex rounded-md focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/60">{runNowButton}</span>
+						) : runNowButton}
 					</TooltipTrigger>
 					<TooltipContent side="bottom">{t(running ? "automations.cloud.runNow.running" : "automations.cloud.runNow")}</TooltipContent>
 				</Tooltip>
