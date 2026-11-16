@@ -55,6 +55,8 @@ func TestSessionConversationInterruptReportsTUIRefusals(t *testing.T) {
 		{sessionmanager.ErrTerminated, "SESSION_TERMINATED"},
 		{sessionmanager.ErrNoActiveTurn, "SESSION_NO_ACTIVE_TURN"},
 		{sessionmanager.ErrInterruptUnsupported, "SESSION_INTERRUPT_UNAVAILABLE"},
+		{sessionmanager.ErrTurnStopPending, "SESSION_TURN_STOP_PENDING"},
+		{sessionmanager.ErrOperationInProgress, "SESSION_OPERATION_IN_PROGRESS"},
 	} {
 		sessions := &fakeSessionLifecycle{interruptErr: tc.err}
 		svc := sessionConversationService{

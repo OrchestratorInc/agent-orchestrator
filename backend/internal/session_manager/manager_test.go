@@ -11492,6 +11492,76 @@ func TestStopTUITurnRefusesIdleSession(t *testing.T) {
 	}
 }
 
+// A stopped turn can still read active until the agent reports its next state.
+// A repeat in that window would send a second Ctrl+C to an idle prompt.
+func TestStopTUITurnSendsOneInterruptPerTurn(t *testing.T) {
+	m, st, rt, _ := newManager()
+	turn := time.Date(2026, 11, 16, 10, 0, 0, 0, time.UTC)
+	st.sessions["s1"] = domain.SessionRecord{
+		ID: "s1", Harness: domain.HarnessClaudeCode, Mode: domain.SessionModeTUI,
+		Activity: domain.Activity{State: domain.ActivityActive, LastActivityAt: turn},
+		Metadata: domain.SessionMetadata{RuntimeHandleID: "runtime-1"},
+	}
+	ctx := context.Background()
+	if err := m.StopTUITurn(ctx, "s1"); err != nil {
+		t.Fatalf("first StopTUITurn: %v", err)
+	}
+	if err := m.StopTUITurn(ctx, "s1"); !errors.Is(err, ErrTurnStopPending) {
+		t.Fatalf("repeat StopTUITurn error = %v, want stop pending", err)
+	}
+	if len(rt.interrupts) != 1 {
+		t.Fatalf("interrupts after repeat = %v, want one", rt.interrupts)
+	}
+
+	// A new active turn can be stopped again.
+	rec := st.sessions["s1"]
+	rec.Activity.LastActivityAt = turn.Add(time.Minute)
+	st.sessions["s1"] = rec
+	if err := m.StopTUITurn(ctx, "s1"); err != nil {
+		t.Fatalf("StopTUITurn on next turn: %v", err)
+	}
+	if len(rt.interrupts) != 2 {
+		t.Fatalf("interrupts after next turn = %v, want two", rt.interrupts)
+	}
+}
+
+func TestStopTUITurnRetriesAfterFailedDelivery(t *testing.T) {
+	m, st, rt, _ := newManager()
+	st.sessions["s1"] = domain.SessionRecord{
+		ID: "s1", Harness: domain.HarnessClaudeCode, Mode: domain.SessionModeTUI,
+		Activity: domain.Activity{State: domain.ActivityActive, LastActivityAt: time.Now()},
+		Metadata: domain.SessionMetadata{RuntimeHandleID: "runtime-1"},
+	}
+	ctx := context.Background()
+	rt.interruptErr = errors.New("pane gone")
+	if err := m.StopTUITurn(ctx, "s1"); err == nil {
+		t.Fatal("StopTUITurn error = nil, want delivery failure")
+	}
+	rt.interruptErr = nil
+	if err := m.StopTUITurn(ctx, "s1"); err != nil {
+		t.Fatalf("retry StopTUITurn: %v", err)
+	}
+	if len(rt.interrupts) != 2 {
+		t.Fatalf("interrupts = %v, want two attempts", rt.interrupts)
+	}
+}
+
+func TestStopTUITurnWaitsForExclusiveOperation(t *testing.T) {
+	m, st, rt, _ := newManager()
+	st.sessions["s1"] = domain.SessionRecord{
+		ID: "s1", Harness: domain.HarnessClaudeCode, Mode: domain.SessionModeTUI,
+		Activity: domain.Activity{State: domain.ActivityActive},
+		Metadata: domain.SessionMetadata{RuntimeHandleID: "runtime-1"},
+	}
+	m.agentOperations["s1"] = agentOperationKill
+	if err := m.StopTUITurn(context.Background(), "s1"); !errors.Is(err, ErrOperationInProgress) {
+		t.Fatalf("StopTUITurn error = %v, want operation in progress", err)
+	}
+	if len(rt.interrupts) != 0 {
+		t.Fatalf("interrupts = %v, want none during kill", rt.interrupts)
+	}
+}
+
 func TestSend_RecordsDeliveredUserInput(t *testing.T) {
 	st := newFakeStore()
 	st.sessions["s1"] = pastStartupGate(domain.SessionRecord{ID: "s1", Harness: "claude-code"})

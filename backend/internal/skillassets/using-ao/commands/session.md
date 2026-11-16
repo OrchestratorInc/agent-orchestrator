@@ -195,7 +195,9 @@ ao session kill mer-3
 
 ### ao session interrupt
 
-Stop an active turn without terminating the session or workspace.
+Request a stop of an active turn without terminating the session or workspace.
+It sends Ctrl+C, which the agent can ignore. A session with no turn in flight,
+or one already sent a stop for this turn, is refused.
 
 **Syntax:**
 ```
@@ -208,8 +210,9 @@ ao session interrupt <id> [flags]
 |---|---|---|
 | `-p, --project string` | Project id to scope the lookup | - |
 
-Use this first when a worker is stuck in a no-progress turn; use `kill` only
-when the session cannot be recovered.
+Use this first when a worker is stuck in a no-progress turn. Check with
+`ao session get <id>` that the turn stopped before sending new instructions; use
+`kill` only when the session cannot be recovered.
 
 ---
 

@@ -540,6 +540,10 @@ type Manager struct {
 	// inputLeaseSince is when a session's current run of input leases began,
 	// for diagnosing an operation that cannot drain them.
 	inputLeaseSince map[domain.SessionID]time.Time
+	// turnStops holds, per session, the LastActivityAt of the active turn
+	// StopTUITurn already interrupted, so a repeat for that turn is refused.
+	turnStopsMu sync.Mutex
+	turnStops   map[domain.SessionID]time.Time
 	// backgroundContext owns asynchronous agent-switch execution independently
 	// of the admitting request. The daemon cancels it before waiting for workers.
 	backgroundContext        context.Context
@@ -5522,12 +5526,21 @@ var (
 	// ErrInterruptUnsupported means the session's runtime cannot deliver an
 	// interrupt.
 	ErrInterruptUnsupported = errors.New("session: interrupt unsupported")
+	// ErrTurnStopPending means StopTUITurn already interrupted this turn and
+	// the session has not reported a new state since. A second Ctrl+C could
+	// reach an idle prompt and arm "press again to exit".
+	ErrTurnStopPending = errors.New("session: turn stop already requested")
 )
 
 // StopTUITurn interrupts a TUI session's active turn on an explicit user
 // request. Unlike InterruptTUI it needs no delivery confirmation, since
 // nothing is sent after it.
 func (m *Manager) StopTUITurn(ctx context.Context, id domain.SessionID) error {
+	release, ok := m.AcquireSessionInput(id)
+	if !ok {
+		return ErrOperationInProgress
+	}
+	defer release()
 	rec, ok, err := m.store.GetSession(ctx, id)
 	if err != nil {
 		return err
@@ -5541,14 +5554,37 @@ func (m *Manager) StopTUITurn(ctx context.Context, id domain.SessionID) error {
 	if domain.NormalizeSessionMode(rec.Mode) == domain.SessionModeChat {
 		return ErrInterruptUnsupported
 	}
+	turn := rec.Activity.LastActivityAt
+	m.turnStopsMu.Lock()
 	if rec.Activity.State != domain.ActivityActive {
+		delete(m.turnStops, id)
+		m.turnStopsMu.Unlock()
 		return ErrNoActiveTurn
+	}
+	if stopped, ok := m.turnStops[id]; ok && stopped.Equal(turn) {
+		m.turnStopsMu.Unlock()
+		return ErrTurnStopPending
 	}
 	interrupter, ok := m.runtime.(runtimeInterrupter)
 	if !ok || rec.Metadata.RuntimeHandleID == "" {
+		m.turnStopsMu.Unlock()
 		return ErrInterruptUnsupported
 	}
-	return interrupter.Interrupt(ctx, ports.RuntimeHandle{ID: rec.Metadata.RuntimeHandleID})
+	if m.turnStops == nil {
+		m.turnStops = make(map[domain.SessionID]time.Time)
+	}
+	m.turnStops[id] = turn
+	m.turnStopsMu.Unlock()
+	if err := interrupter.Interrupt(ctx, ports.RuntimeHandle{ID: rec.Metadata.RuntimeHandleID}); err != nil {
+		// Nothing reached the agent, so a retry for this turn is allowed.
+		m.turnStopsMu.Lock()
+		if stopped, ok := m.turnStops[id]; ok && stopped.Equal(turn) {
+			delete(m.turnStops, id)
+		}
+		m.turnStopsMu.Unlock()
+		return err
+	}
+	return nil
 }
 
 // send carries an optional idempotency key used by durable transition-message

@@ -259,7 +259,7 @@ Your job is to coordinate work, not to perform implementation. Keep the project 
 - For complex planning, research, or large coordination tasks, write a short plan first.
 - Do not use the agent runtime's built-in subagent or task-delegation tools for implementation work.
 - You may coordinate multiple workers, but workers only. If parallel help is needed, spawn or redirect additional worker sessions.
-- If a worker is stuck, first use `+"`ao session interrupt <session-id>`"+` to stop its active turn without ending the session; then clarify the task with `+"`ao send`"+`, or spawn/redirect another worker when appropriate.
+- If a worker is stuck, first use `+"`ao session interrupt <session-id>`"+` to request a stop of its active turn without ending the session. The agent can ignore it, so check with `+"`ao session get <session-id>`"+` that the turn stopped before you clarify the task with `+"`ao send`"+`; if it stays stuck, kill it or spawn/redirect another worker.
 - Never claim a PR into the orchestrator session. If a PR needs continuation, assign or spawn a worker.
 - Use `+"`ao send`"+` for session communication. Do not bypass Orchestrator by writing directly to tmux, PTY, pipes, or runtime internals.
 
@@ -268,7 +268,7 @@ Your job is to coordinate work, not to perform implementation. Keep the project 
 - `+"`ao status`"+` - inspect project, session, PR, and review state.
 - `+"`ao session ls --project %s`"+` - list sessions for this project.
 - `+"`ao session get <worker-session-id>`"+` - inspect a worker session's details.
-- `+"`ao session interrupt <session-id>`"+` - stop the active turn while keeping the session and its workspace.
+- `+"`ao session interrupt <session-id>`"+` - request a stop of the active turn (Ctrl+C) while keeping the session and its workspace.
 - `+"`ao spawn --project %s --name \"<label>\" --prompt \"<clear worker task>\"`"+` - spawn a freeform worker.
 - `+"`ao spawn --project %s --name \"<label>\" --issue <issue-id>`"+` - spawn a worker for an issue.
 - `+"`--name`"+` is required: a deliberate sidebar label so the user can see what each worker is working on at a glance; labels must be 100 characters or fewer.

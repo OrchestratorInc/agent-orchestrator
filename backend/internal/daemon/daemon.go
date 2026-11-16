@@ -1704,6 +1704,10 @@ func (s sessionConversationService) Interrupt(ctx context.Context, id domain.Ses
 			return apierr.Conflict("SESSION_NO_ACTIVE_TURN", "there is no turn in flight to interrupt", nil)
 		case errors.Is(err, sessionmanager.ErrInterruptUnsupported):
 			return apierr.Conflict("SESSION_INTERRUPT_UNAVAILABLE", "this terminal session cannot be interrupted", nil)
+		case errors.Is(err, sessionmanager.ErrTurnStopPending):
+			return apierr.Conflict("SESSION_TURN_STOP_PENDING", "a stop was already sent for this turn", nil)
+		case errors.Is(err, sessionmanager.ErrOperationInProgress):
+			return apierr.Conflict("SESSION_OPERATION_IN_PROGRESS", "Another operation is already running on this session", nil)
 		}
 	}
 	return err
