@@ -89,6 +89,46 @@ base_url = "https://example.invalid/v1"
 	}
 }
 
+// The selected custom provider's env_key is read through the auth context, so
+// an override decides it even when the daemon environment disagrees.
+func TestAuthStatusCustomProviderHonorsAuthEnvironmentOverride(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("native login fixture requires a POSIX shell")
+	}
+	home := t.TempDir()
+	t.Setenv("HOME", t.TempDir())
+	t.Setenv("INTERPRETER_HOME", home)
+	for _, provider := range GeneratedProviders {
+		t.Setenv(provider.EnvKey, "")
+	}
+	config := "model_provider = \"custom\"\n[model_providers.custom]\nenv_key = \"AO_INTERPRETER_TEST_KEY\"\n"
+	if err := os.WriteFile(filepath.Join(home, "config.toml"), []byte(config), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	binary := filepath.Join(t.TempDir(), "interpreter")
+	if err := os.WriteFile(binary, []byte("#!/bin/sh\nprintf 'Not logged in\\n'\nexit 1\n"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	p := &Plugin{resolvedBinary: binary}
+	for _, tc := range []struct {
+		name     string
+		process  string
+		override string
+		want     ports.AgentAuthStatus
+	}{
+		{"empty override hides the daemon key", "fixture-key", "", ports.AgentAuthStatusUnknown},
+		{"override supplies the session key", "", "session-key", ports.AgentAuthStatusConfigured},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Setenv("AO_INTERPRETER_TEST_KEY", tc.process)
+			ctx := ports.WithAuthEnvironment(context.Background(), map[string]string{"AO_INTERPRETER_TEST_KEY": tc.override})
+			if got, err := p.AuthStatus(ctx); err != nil || got != tc.want {
+				t.Fatalf("AuthStatus = %q, %v; want %q", got, err, tc.want)
+			}
+		})
+	}
+}
+
 // A provider key saved in AO (or exported) for a generated provider this
 // platform can run counts as configured even though native login covers only
 // OpenAI. A Chat Completions provider's key does not where its wire is

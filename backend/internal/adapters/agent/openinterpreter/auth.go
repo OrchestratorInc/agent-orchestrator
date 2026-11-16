@@ -83,7 +83,9 @@ func (p *Plugin) AuthStatus(ctx context.Context) (ports.AgentAuthStatus, error) 
 		config.ModelProvider == "amazon-bedrock" || config.ModelProvider == "amazon-bedrock-runtime" {
 		return ports.AgentAuthStatusUnknown, nil
 	}
-	if provider.EnvKey != "" && strings.TrimSpace(os.Getenv(provider.EnvKey)) != "" {
+	// Read through the auth context: a session's overrides, including an empty
+	// one, decide which credential the launched process actually receives.
+	if provider.EnvKey != "" && authprobe.CredentialEnvironment(ctx, domain.AgentAccountMethodAPIKey, provider.EnvKey) != "" {
 		return ports.AgentAuthStatusConfigured, nil
 	}
 	return ports.AgentAuthStatusUnknown, nil
