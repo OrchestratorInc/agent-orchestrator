@@ -15,15 +15,18 @@ export const KEEP_RECENT_ALIVE_MAX = 4;
  * Views render in the order they were first opened, never reordered: moving a
  * kept view's DOM would reset its scroll position.
  *
- * With `activeKey` null (something else is shown) every kept view is hidden and
- * none counts as visited.
+ * With `show` false the key's own view is dropped (it is showing something
+ * else, and its kept view would be stale when it comes back) and every other
+ * kept view stays hidden.
  */
 export function KeepRecentAlive({
 	activeKey,
+	show = true,
 	children,
 	max = KEEP_RECENT_ALIVE_MAX,
 }: {
-	activeKey: string | null;
+	activeKey: string;
+	show?: boolean;
 	children?: ReactElement | null;
 	max?: number;
 }) {
@@ -33,13 +36,16 @@ export function KeepRecentAlive({
 	// Least recently shown first.
 	const recent = useRef<string[]>([]).current;
 
-	if (activeKey !== null && children) {
+	const at = recent.indexOf(activeKey);
+	if (show && children) {
 		views.set(activeKey, children);
-		if (recent.at(-1) !== activeKey) {
-			const at = recent.indexOf(activeKey);
+		if (at !== recent.length - 1 || at === -1) {
 			if (at !== -1) recent.splice(at, 1);
 			recent.push(activeKey);
 		}
+	} else if (at !== -1) {
+		views.delete(activeKey);
+		recent.splice(at, 1);
 	}
 	while (recent.length > Math.max(1, max)) {
 		const evicted = recent.shift();
@@ -47,7 +53,7 @@ export function KeepRecentAlive({
 	}
 
 	return Array.from(views, ([key, view]) => (
-		<Activity key={key} mode={key === activeKey ? "visible" : "hidden"}>
+		<Activity key={key} mode={show && key === activeKey ? "visible" : "hidden"}>
 			{view}
 		</Activity>
 	));

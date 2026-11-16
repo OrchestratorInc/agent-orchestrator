@@ -2978,9 +2978,10 @@ export function SessionView({ sessionId, cloudOrgId, projectId, hostId }: Sessio
 								/>
 								</>
 							) : null}
-							{/* Recent chats stay mounted, hidden, so switching back shows them at once. They
-							    stay mounted while a terminal session is shown too, without counting as a visit. */}
-							<KeepRecentAlive activeKey={showChatSurface && !session?.cloud ? uiSessionId : null}>
+							{/* Recent chats stay mounted, hidden, so switching back shows them at once. Other
+							    sessions' chats stay kept while a terminal session is shown; this session's own
+							    chat is dropped when it leaves Chat. */}
+							<KeepRecentAlive activeKey={uiSessionId} show={Boolean(showChatSurface && !session?.cloud)}>
 							{showChatSurface && !session?.cloud ? (
 								<SessionChatSurface
 									sideChatContainer={sideChatContainer}

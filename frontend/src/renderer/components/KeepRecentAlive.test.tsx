@@ -19,10 +19,10 @@ function Chat({ id }: { id: string }) {
 	);
 }
 
-function Host({ id, max }: { id: string | null; max?: number }) {
+function Host({ id, max, show = true }: { id: string; max?: number; show?: boolean }) {
 	return (
-		<KeepRecentAlive activeKey={id} max={max}>
-			{id ? <Chat key={id} id={id} /> : null}
+		<KeepRecentAlive activeKey={id} max={max} show={show}>
+			{show ? <Chat key={id} id={id} /> : null}
 		</KeepRecentAlive>
 	);
 }
@@ -56,17 +56,16 @@ describe("KeepRecentAlive", () => {
 		expect(order()).toEqual(["chat-a", "chat-c"]);
 	});
 
-	it("hides every chat while something else is shown, without counting it as a visit", () => {
-		const { container, rerender } = render(<Host id="a" max={2} />);
-		act(() => rerender(<Host id="b" max={2} />));
-		act(() => rerender(<Host id={null} max={2} />));
+	it("drops a key's own chat while it shows something else, and keeps the others hidden", () => {
+		const { rerender } = render(<Host id="a" />);
+		fireEvent.change(screen.getByLabelText("Message the agent"), { target: { value: "kept" } });
+		act(() => rerender(<Host id="b" />));
+		act(() => rerender(<Host id="b" show={false} />));
+		expect(screen.queryByTestId("chat-b")).not.toBeInTheDocument();
 		expect(screen.getByTestId("chat-a")).toHaveStyle({ display: "none" });
-		expect(screen.getByTestId("chat-b")).toHaveStyle({ display: "none" });
 
-		act(() => rerender(<Host id="a" max={2} />));
-		act(() => rerender(<Host id="c" max={2} />));
-		const order = Array.from(container.querySelectorAll("[data-testid^='chat-']"), (element) => element.getAttribute("data-testid"));
-		expect(order).toEqual(["chat-a", "chat-c"]);
+		act(() => rerender(<Host id="a" />));
+		expect(queryShown<HTMLInputElement>('[aria-label="Message the agent"]')?.value).toBe("kept");
 	});
 
 	it("lets document-wide lookups find the shown composer, not a hidden one", () => {

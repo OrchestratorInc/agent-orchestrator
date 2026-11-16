@@ -1,5 +1,6 @@
 import { StrictMode, useEffect, type ReactNode } from "react";
 import { noPRDetails } from "../lib/pr-display";
+import { queryShown } from "../lib/dom-selectors";
 import type { SessionPRSummary } from "../hooks/useSessionScmSummary";
 import { sessionUiKey } from "../lib/hosts";
 import { createPortal } from "react-dom";
@@ -1950,15 +1951,21 @@ describe("SessionView", () => {
 		));
 	});
 
-	it("remounts the session-owned Chat surface when navigation selects another Chat session", () => {
+	it("gives each Chat session its own surface and keeps the last one hidden for switching back", () => {
 		workerSession("sess-1").mode = "chat";
 		workerSession("sess-2").mode = "chat";
 		const view = render(<SessionView sessionId="sess-1" />);
 		const firstSurface = screen.getByTestId("chat-surface");
 
 		view.rerender(<SessionView sessionId="sess-2" />);
+		const secondSurface = queryShown('[data-testid="chat-surface"]');
+		expect(secondSurface).not.toBeNull();
+		expect(secondSurface).not.toBe(firstSurface);
+		expect(firstSurface).toBeInTheDocument();
+		expect(firstSurface).toHaveStyle({ display: "none" });
 
-		expect(screen.getByTestId("chat-surface")).not.toBe(firstSurface);
+		view.rerender(<SessionView sessionId="sess-1" />);
+		expect(queryShown('[data-testid="chat-surface"]')).toBe(firstSurface);
 	});
 
 	// The strip only ever shows the session on screen — pinning another session's
