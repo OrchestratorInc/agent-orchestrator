@@ -6350,3 +6350,40 @@ func TestACPDriverHidesCommandsTheBindingNames(t *testing.T) {
 		t.Fatal("hiding compact from the menu also disabled compaction")
 	}
 }
+
+// Commands can arrive during session/new, before start() derives compaction.
+// Hiding compact from the menu must not turn compaction off on that path either.
+func TestACPEarlyHiddenCompactKeepsCompactionInStart(t *testing.T) {
+	agent := &fakeAgent{
+		newSessionUpdates: []acpsdk.SessionUpdate{{
+			AvailableCommandsUpdate: &acpsdk.SessionAvailableCommandsUpdate{
+				AvailableCommands: []acpsdk.AvailableCommand{
+					{Name: "compact", Description: "Compact history"},
+					{Name: "goal", Description: "Keep working until a condition is met"},
+				},
+			},
+		}},
+	}
+	driver := New(Config{
+		Harness:      domain.HarnessClaudeCode,
+		Capabilities: ports.ChatCapabilities{ports.ChatCapabilityStreaming: true},
+		Probe:        func(context.Context) error { return nil },
+		Launch:       func(context.Context, LaunchConfig) (Launch, error) { return Launch{Command: "fake"}, nil },
+		HideCommand:  HideCommands("compact"),
+	}, slog.New(slog.NewTextHandler(io.Discard, nil)))
+	driver.useTestProcess(fakeSpawn(agent))
+
+	opened, err := driver.Start(context.Background(), ports.ChatStartConfig{WorkspacePath: t.TempDir()})
+	if err != nil {
+		t.Fatalf("Start: %v", err)
+	}
+	defer opened.Close()
+
+	if !opened.Capabilities().Has(ports.ChatCapabilityCompaction) {
+		t.Fatal("a compact hidden from the menu before start() disabled compaction")
+	}
+	skills := awaitSkillCount(t, opened.(ports.ChatSkillLister), 1)
+	if skills[0].Name != "goal" {
+		t.Fatalf("skills = %#v, want only goal", skills)
+	}
+}

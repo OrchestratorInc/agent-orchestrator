@@ -1649,9 +1649,15 @@ export const ChatComposer = memo(function ChatComposer({
 			return submitInFlight.current;
 		}
 		if (typingLocked) return Promise.resolve();
-		// `/model` typed out with the menu dismissed still opens the model menu.
-		if (offersModelCommand && !forceSteer && textRef.current.trim() === `/${MODEL_COMMAND}`) {
-			editor.current?.clear();
+		// `/model` typed out with the menu dismissed still opens the model menu. A
+		// queued message being edited keeps it as text, as it does /compact.
+		if (offersModelCommand && !forceSteer && !savingQueuedEdit && textRef.current.trim() === `/${MODEL_COMMAND}`) {
+			// The editor's programmatic clear publishes no change, so the composer
+			// state and the saved draft are cleared here, or /model would come back.
+			clearEditorView();
+			persistComposerText("");
+			draftCaretRef.current = 0;
+			onDraftInput?.("", 0);
 			openModelMenu();
 			return Promise.resolve();
 		}

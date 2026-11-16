@@ -2321,12 +2321,34 @@ describe("slash commands", () => {
 		});
 
 		it("still opens the menu when /model is sent with the suggestions dismissed", async () => {
-			const { field, onSend, opened } = renderWithModelMenu();
+			const sessionId = "model-command-dismissed";
+			const { field, onSend, opened } = renderWithModelMenu({ draftSessionId: sessionId });
 			await typeInComposer(field, "/model");
+			await waitFor(() => expect(readChatSessionDraft(sessionId).composer.text).toBe("/model"));
 			await userEvent.keyboard("{Escape}");
 			await userEvent.keyboard("{Enter}");
 			await waitFor(() => expect(opened).toHaveBeenCalledOnce());
 			expect(onSend).not.toHaveBeenCalled();
+			expect(composerWireText(field)).toBe("");
+			// The saved draft is cleared too, so /model does not return on remount.
+			await waitFor(() => expect(readChatSessionDraft(sessionId).composer.text).toBe(""));
+		});
+
+		it("leaves /model as text in a queued message being edited", async () => {
+			const onSend = vi.fn();
+			const opened = vi.fn();
+			render(
+				<ChatComposer
+					onSend={onSend}
+					skills={SKILLS}
+					editingQueuedTurnId="queued-model"
+					draftSeed={{ id: "queued-model", text: "/model" }}
+					settings={<button type="button" data-shortcut-target="model-picker" onKeyDown={(event) => { if (event.key === "Enter") opened(); }}>Opus 5.5</button>}
+				/>,
+			);
+			fireEvent.submit(screen.getByLabelText("Message the agent").closest("form")!);
+			await waitFor(() => expect(onSend).toHaveBeenCalledWith("/model", undefined, undefined, []));
+			expect(opened).not.toHaveBeenCalled();
 		});
 
 		it("replaces an agent's own /model with AO's", async () => {
