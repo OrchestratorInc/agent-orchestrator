@@ -572,6 +572,9 @@ function refreshLocalConversationOnce(queryClient: QueryClient, sessionId: strin
 		try {
 			do {
 				missed = false;
+				// Marking an already stale query stale again records nothing, so take the
+				// mark off while reading for an event during the read to be seen.
+				queryClient.getQueryCache().find({ queryKey: key, exact: true })?.setState({ isInvalidated: false });
 				applyLiveConversationPage(queryClient, key, await fetchConversationPage(sessionId));
 			} while (missed && queryClient.getQueryCache().find({ queryKey: key, exact: true, type: "active" }));
 			// Still closed: the next open reads what changed.
