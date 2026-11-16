@@ -11,6 +11,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"slices"
 	"strings"
 	"time"
 
@@ -415,6 +416,47 @@ func (c *Claude) shareGlobalConfig(home string, l *ledger) error {
 	if !changed {
 		return nil
 	}
+	return writeObject(path, account)
+}
+
+// claudeApprovedKeyChars is how much of a key Claude Code keeps to remember
+// that the user accepted it: the last 20 characters.
+const claudeApprovedKeyChars = 20
+
+// ApproveAPIKey records in home's .claude.json that the user accepted key, the
+// way Claude Code does when asked about a key in its environment, so a session
+// of an API key account starts without stopping at that question. Only the
+// key's last characters are written, as Claude Code itself writes them.
+func (c *Claude) ApproveAPIKey(home, key string) error {
+	if strings.TrimSpace(home) == "" || key == "" {
+		return errors.New("approve api key: no account folder or key")
+	}
+	suffix := key
+	if len(suffix) > claudeApprovedKeyChars {
+		suffix = suffix[len(suffix)-claudeApprovedKeyChars:]
+	}
+	path := filepath.Join(home, ".claude.json")
+	account, err := readObject(path)
+	if err != nil {
+		return err // Claude's to repair; never overwrite it
+	}
+	var responses struct {
+		Approved []string `json:"approved"`
+		Rejected []string `json:"rejected"`
+	}
+	_ = json.Unmarshal(account["customApiKeyResponses"], &responses)
+	responses.Rejected = slices.DeleteFunc(responses.Rejected, func(s string) bool { return s == suffix })
+	if !slices.Contains(responses.Approved, suffix) {
+		responses.Approved = append(responses.Approved, suffix)
+	}
+	if responses.Rejected == nil {
+		responses.Rejected = []string{}
+	}
+	raw, err := json.Marshal(responses)
+	if err != nil {
+		return err
+	}
+	account["customApiKeyResponses"] = raw
 	return writeObject(path, account)
 }
 

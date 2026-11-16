@@ -6,14 +6,15 @@ import { useUiStore } from "../../stores/ui-store";
 import { TooltipProvider } from "../ui/tooltip";
 import { AgentAccountsPanel, type CliLoginControls } from "./AgentAccountsSection";
 
-const { deleteMock, getMock, patchMock, postMock, terminalState } = vi.hoisted(() => ({
-	deleteMock: vi.fn(), getMock: vi.fn(), patchMock: vi.fn(), postMock: vi.fn(),
+const { deleteMock, getMock, patchMock, postMock, putMock, terminalState } = vi.hoisted(() => ({
+	deleteMock: vi.fn(), getMock: vi.fn(), patchMock: vi.fn(), postMock: vi.fn(), putMock: vi.fn(),
 	terminalState: { value: undefined as ((state: "attached" | "exited" | "error") => void) | undefined },
 }));
 
 vi.mock("../../lib/api-client", () => ({
-	apiClient: { DELETE: deleteMock, GET: getMock, PATCH: patchMock, POST: postMock },
+	apiClient: { DELETE: deleteMock, GET: getMock, PATCH: patchMock, POST: postMock, PUT: putMock },
 	apiErrorMessage: (error: unknown) => error instanceof Error ? error.message : "request failed",
+	apiErrorCode: (error: unknown) => (error as { code?: string } | undefined)?.code,
 }));
 
 vi.mock("../TerminalPane", () => ({
@@ -423,4 +424,71 @@ it("turns the usage-limit handoff on through the daemon and shows what it stored
 
 	expect(patchMock).toHaveBeenCalledWith("/api/v1/settings/account-handoff", { body: { enabled: true } });
 	await waitFor(() => expect(toggle).toBeChecked());
+});
+
+const keyAccount = { id: "acct-key", provider: "claude", device: false, default: false, signedIn: false, loggedIn: true, kind: "api_key", name: "Work", keyHint: "cdef" };
+
+it("adds an Anthropic API key from the add menu, checked by the daemon first", async () => {
+	const user = userEvent.setup();
+	postMock.mockImplementation((path: string) => {
+		if (path !== "/api/v1/agents/accounts/api-keys") return Promise.resolve({ data: {} });
+		return postMock.mock.calls.filter(([called]) => called === path).length === 1
+			? Promise.resolve({ error: { code: "AGENT_ACCOUNT_KEY_REJECTED", message: "Anthropic did not accept this API key." } })
+			: Promise.resolve({ data: { accounts: [device, saved, keyAccount] } });
+	});
+	renderPanel();
+
+	await user.click(await screen.findByRole("button", { name: "Add account" }));
+	expect(screen.getByRole("menuitem", { name: /Sign in with Claude subscription/ })).toBeInTheDocument();
+	await user.click(screen.getByRole("menuitem", { name: /Add Anthropic API key/ }));
+
+	const form = await screen.findByTestId("agent-account-api-key-form");
+	expect(form).toHaveTextContent("billed per token to your API account");
+	const add = within(form).getByRole("button", { name: "Check and add" });
+	expect(add).toBeDisabled();
+	await user.type(within(form).getByLabelText("Name"), "Work");
+	await user.type(within(form).getByLabelText("API key"), "sk-ant-api03-secret");
+	await user.click(add);
+
+	// A refused key keeps the form open with the provider's answer.
+	expect(await within(form).findByRole("alert")).toHaveTextContent("The provider rejected this key.");
+	expect(postMock).toHaveBeenCalledWith("/api/v1/agents/accounts/api-keys", { body: { provider: "claude", name: "Work", apiKey: "sk-ant-api03-secret" } });
+
+	await user.click(within(form).getByRole("button", { name: "Check and add" }));
+	await waitFor(() => expect(screen.queryByTestId("agent-account-api-key-form")).not.toBeInTheDocument());
+	const row = document.querySelector<HTMLElement>('[data-agent-account="acct-key"]');
+	expect(row).not.toBeNull();
+	expect(row).toHaveTextContent("Work");
+	expect(row).toHaveTextContent("API key");
+	expect(row).toHaveTextContent("Key ending cdef · Billed per token");
+	expect(row).not.toHaveTextContent("secret");
+});
+
+it("shows an API key account with its key actions instead of a sign-in", async () => {
+	const user = userEvent.setup();
+	getMock.mockImplementation((path: string) => Promise.resolve({
+		data: path === "/api/v1/agents/accounts/usage" ? { days: 30, usage: [] } : { accounts: [device, keyAccount] },
+	}));
+	putMock.mockReset().mockResolvedValue({ data: { accounts: [device, { ...keyAccount, keyHint: "wxyz" }] } });
+	renderPanel();
+
+	const row = await waitFor(() => {
+		const found = document.querySelector<HTMLElement>('[data-agent-account="acct-key"]');
+		if (!found) throw new Error("no API key row");
+		return found;
+	});
+	expect(within(row).queryByRole("button", { name: "Sign in again" })).not.toBeInTheDocument();
+	expect(within(row).getByRole("button", { name: "Make default" })).toBeEnabled();
+	// Only subscriptions move at a usage limit, so one of each shows no handoff switch.
+	expect(screen.queryByRole("switch", { name: "Move to another account at a usage limit" })).not.toBeInTheDocument();
+
+	await user.click(within(row).getByRole("button", { name: "Replace key" }));
+	const form = await screen.findByTestId("agent-account-api-key-form");
+	expect(form).toHaveTextContent("Replace the key for Work");
+	expect(within(form).queryByLabelText("Name")).not.toBeInTheDocument();
+	await user.type(within(form).getByLabelText("API key"), "sk-ant-api03-new");
+	await user.click(within(form).getByRole("button", { name: "Check and save" }));
+
+	expect(putMock).toHaveBeenCalledWith("/api/v1/agents/accounts/{accountId}/api-key", { params: { path: { accountId: "acct-key" } }, body: { apiKey: "sk-ant-api03-new" } });
+	await waitFor(() => expect(row).toHaveTextContent("Key ending wxyz"));
 });

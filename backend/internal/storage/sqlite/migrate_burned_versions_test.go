@@ -273,6 +273,7 @@ var shippedMigrations = map[int64]string{
 	20261115072651599: "20261115072651599_allow_minimax_code_harness.sql",
 	20261115072835107: "20261115072835107_review_run_state_machine.sql",
 	20261116070040471: "20261116070040471_kept_artifacts.sql",
+	20261116173035000: "20261116173035000_agent_account_api_keys.sql",
 }
 
 // burnedVersion reports version numbers that must never be (re)used: they

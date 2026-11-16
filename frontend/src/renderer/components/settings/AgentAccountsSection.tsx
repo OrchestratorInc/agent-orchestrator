@@ -1,8 +1,9 @@
 import { Info, LoaderCircle, Plus, RefreshCw, RotateCcw, Trash2, TriangleAlert, X } from "@/components/app-icons";
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useId, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
-import { agentAccountLabel, agentAccountProviderFor, agentAccountProviderNames, describeAccountProblem, useAgentAccountActions, useAgentAccounts, useAgentAccountUsage, withoutSameLogins, type AgentAccount, type AgentAccountLimitWindow, type AgentAccountLogin, type AgentAccountProvider } from "../../hooks/useAgentAccounts";
+import { agentAccountLabel, agentAccountProviderFor, agentAccountProviderNames, agentAccountUsable, describeAccountProblem, useAgentAccountActions, useAgentAccounts, useAgentAccountUsage, withoutSameLogins, type AgentAccount, type AgentAccountLimitWindow, type AgentAccountLogin, type AgentAccountProvider } from "../../hooks/useAgentAccounts";
 import type { TerminalSessionState } from "../../hooks/useTerminalSession";
+import { apiErrorCode } from "../../lib/api-client";
 import { baseUrlForHost } from "../../lib/host-clients";
 import { useShellMaybe } from "../../lib/shell-context";
 import { formatRelativeTime } from "../../lib/usage-format";
@@ -12,10 +13,14 @@ import { createTerminalMux, muxUrlFromApiBase } from "../../lib/terminal-mux";
 import { useResolvedTheme, useUiStore } from "../../stores/ui-store";
 import { ConfirmDialog } from "../ConfirmDialog";
 import { TerminalPane } from "../TerminalPane";
+import { Badge } from "../ui/badge";
 import { Button } from "../ui/button";
+import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from "../ui/dropdown-menu";
+import { Input } from "../ui/input";
 import { Switch } from "../ui/switch";
 import { Tooltip, TooltipContent, TooltipTrigger } from "../ui/tooltip";
 import { HarnessDetailGroup, HarnessDetailRow } from "./harness/harness-ui";
+import { KEY_FIELD_CLASS, KeyWarning } from "./providerKeyUi";
 
 const providerNames = agentAccountProviderNames;
 
@@ -45,9 +50,15 @@ export function AgentAccountsPanel({ provider, cliLogin, hostId }: { provider: A
 	const [busy, setBusy] = useState<string | null>(null);
 	const [error, setError] = useState("");
 	const [removing, setRemoving] = useState<AgentAccount | null>(null);
+	// The API key form: adding a new account, or replacing one account's key.
+	const [keyForm, setKeyForm] = useState<{ account?: AgentAccount } | null>(null);
+	const [keyError, setKeyError] = useState("");
+	const focusKeyForm = useRef(false);
 	const tokensByAccount = new Map((usage.data ?? []).map((row) => [row.accountId, row.inputTokens + row.outputTokens]));
 	const providerAccounts = (accounts.data ?? []).filter((account) => account.provider === provider);
-	const hasMultipleAccounts = withoutSameLogins(providerAccounts).filter((account) => !account.device || account.signedIn).length > 1;
+	// Only subscriptions take part in moving at a usage limit.
+	const hasMultipleAccounts = withoutSameLogins(providerAccounts).filter((account) => account.kind !== "api_key" && (!account.device || account.signedIn)).length > 1;
+	const apiKeys = provider === "claude";
 	const rows = withoutSameLogins(providerAccounts, providerAccounts.find((account) => account.default)?.id);
 	const cliTwinOf = (account: AgentAccount) => account.device ? undefined : providerAccounts.find((other) => other.sameLoginAs === account.id && !rows.includes(other));
 	const login = logins[loginKey];
@@ -106,6 +117,29 @@ export function AgentAccountsPanel({ provider, cliLogin, hostId }: { provider: A
 		setLogin(undefined);
 		void actions.cancelLogin(current.operationId).catch(() => undefined);
 	};
+	const openKeyForm = (account?: AgentAccount) => {
+		setError("");
+		setKeyError("");
+		setKeyForm({ account });
+	};
+	// The daemon checks the key with the provider before saving it; the key
+	// lives only in the form until then and is never shown again.
+	const saveKey = async (name: string, key: string) => {
+		setBusy("api-key");
+		setKeyError("");
+		try {
+			if (keyForm?.account) await actions.replaceApiKey(keyForm.account.id, key);
+			else await actions.addApiKey(provider, name, key);
+			setKeyForm(null);
+		} catch (err) {
+			const code = err instanceof Error ? apiErrorCode(err.cause) : undefined;
+			setKeyError(code === "AGENT_ACCOUNT_KEY_REJECTED" ? t("settings.apiKeys.rejected")
+				: code === "AGENT_ACCOUNT_KEY_UNCHECKED" ? t("settings.apiKeys.unreachable")
+				: err instanceof Error ? err.message : String(err));
+		} finally {
+			setBusy(null);
+		}
+	};
 	const requestedLogin = useUiStore((state) => state.accountLogin);
 	useEffect(() => {
 		if (hostId) return;
@@ -121,10 +155,40 @@ export function AgentAccountsPanel({ provider, cliLogin, hostId }: { provider: A
 			title={t("settings.codexAccounts.title")}
 			action={<div className="flex items-center gap-1">
 				<Tooltip><TooltipTrigger asChild><Button type="button" size="icon-sm" variant="ghost" aria-label={t("settings.agentAccounts.refresh")} disabled={busy !== null} onClick={() => void run("refresh", actions.refresh)}>{busy === "refresh" ? <LoaderCircle className="animate-spin" aria-hidden="true" /> : <RefreshCw aria-hidden="true" />}</Button></TooltipTrigger><TooltipContent>{t("settings.agentAccounts.refresh")}</TooltipContent></Tooltip>
-				<Tooltip><TooltipTrigger asChild><Button type="button" size="icon-sm" variant="secondary" aria-label={t("settings.codexAccounts.add")} data-terminal-focus-handoff="true" disabled={busy !== null} onClick={() => void startLogin()}><Plus aria-hidden="true" /></Button></TooltipTrigger><TooltipContent>{t("settings.codexAccounts.add")}</TooltipContent></Tooltip>
+				{apiKeys
+					? <DropdownMenu>
+						<Tooltip><TooltipTrigger asChild><DropdownMenuTrigger asChild><Button type="button" size="icon-sm" variant="secondary" aria-label={t("settings.codexAccounts.add")} data-terminal-focus-handoff="true" disabled={busy !== null}><Plus aria-hidden="true" /></Button></DropdownMenuTrigger></TooltipTrigger><TooltipContent>{t("settings.codexAccounts.add")}</TooltipContent></Tooltip>
+						<DropdownMenuContent
+							align="end"
+							className="w-72"
+							onCloseAutoFocus={(event) => {
+								// The key form takes focus; the menu must not hand it back to "+".
+								if (!focusKeyForm.current) return;
+								focusKeyForm.current = false;
+								event.preventDefault();
+							}}
+						>
+							<DropdownMenuItem onSelect={() => void startLogin()}>
+								<AddAccountChoice title={t("settings.agentAccounts.addSubscription")} hint={t("settings.agentAccounts.addSubscriptionHint")} />
+							</DropdownMenuItem>
+							<DropdownMenuItem onSelect={() => { focusKeyForm.current = true; openKeyForm(); }}>
+								<AddAccountChoice title={t("settings.agentAccounts.addApiKey")} hint={t("settings.agentAccounts.addApiKeyHint")} />
+							</DropdownMenuItem>
+						</DropdownMenuContent>
+					</DropdownMenu>
+					: <Tooltip><TooltipTrigger asChild><Button type="button" size="icon-sm" variant="secondary" aria-label={t("settings.codexAccounts.add")} data-terminal-focus-handoff="true" disabled={busy !== null} onClick={() => void startLogin()}><Plus aria-hidden="true" /></Button></TooltipTrigger><TooltipContent>{t("settings.codexAccounts.add")}</TooltipContent></Tooltip>}
 			</div>}
 		>
 			{error ? <p role="alert" className="px-3 py-2.5 text-xs text-error">{error}</p> : null}
+			{/* A new form for each account, so a typed key never carries over. */}
+			{keyForm ? <div className="px-3 py-2.5"><ApiKeyForm
+				key={keyForm.account?.id ?? "new"}
+				replacing={keyForm.account ? agentAccountLabel(keyForm.account, rows, t) : undefined}
+				pending={busy === "api-key"}
+				error={keyError}
+				onSubmit={(name, key) => void saveKey(name, key)}
+				onClose={() => setKeyForm(null)}
+			/></div> : null}
 			{login ? <div className="px-3 py-2.5"><LoginTerminal login={login} hostId={hostId} note={loginNote} pending={busy === `verify:${provider}`} onCheck={checkLogin} onClose={closeLogin} /></div> : null}
 			{accounts.isError ? <p role="alert" className="px-3 py-2.5 text-xs text-error">{accounts.error.message}</p> : null}
 			{accounts.isLoading ? <p className="px-3 py-2.5 text-xs text-muted-foreground">{t("settings.agentAccounts.loading")}</p> : null}
@@ -143,13 +207,14 @@ export function AgentAccountsPanel({ provider, cliLogin, hostId }: { provider: A
 				onMakeDefault={() => void run(`default:${account.id}`, () => actions.makeDefault(account.id))}
 				onUseReset={() => void run(`reset:${account.id}`, () => actions.useReset(account.id))}
 				onSignInAgain={() => void startLogin(account.id)}
+				onReplaceKey={() => openKeyForm(account)}
 				onRemove={() => { setError(""); setRemoving(account); }}
 			/>; })}
 			{!hostId && hasMultipleAccounts ? <AccountHandoffRow /> : null}
 		</HarnessDetailGroup>
 		{removing ? <ConfirmDialog open destructive
 			title={t("settings.agentAccounts.remove")}
-			description={t("settings.agentAccounts.removeDescription", { email: agentAccountLabel(removing, rows, t) })}
+			description={t(removing.kind === "api_key" ? "settings.agentAccounts.removeApiKeyDescription" : "settings.agentAccounts.removeDescription", { email: agentAccountLabel(removing, rows, t) })}
 			confirmLabel={t(busy === `remove:${removing.id}` ? "settings.agentAccounts.removing" : "settings.agentAccounts.remove")}
 			busy={busy === `remove:${removing.id}`}
 			error={error || undefined}
@@ -159,7 +224,7 @@ export function AgentAccountsPanel({ provider, cliLogin, hostId }: { provider: A
 	</>;
 }
 
-function AccountRow({ account, name, aoTokens, busy, cliLogin, onMakeDefault, onUseReset, onSignInAgain, onRemove }: {
+function AccountRow({ account, name, aoTokens, busy, cliLogin, onMakeDefault, onUseReset, onSignInAgain, onReplaceKey, onRemove }: {
 	account: AgentAccount;
 	name: string;
 	aoTokens: number | undefined;
@@ -169,33 +234,42 @@ function AccountRow({ account, name, aoTokens, busy, cliLogin, onMakeDefault, on
 	onMakeDefault: () => void;
 	onUseReset: () => void;
 	onSignInAgain: () => void;
+	onReplaceKey: () => void;
 	onRemove: () => void;
 }) {
 	const { t, i18n } = useTranslation();
+	const apiKey = account.kind === "api_key";
 	const plan = formatPlanName(account.plan);
 	const resets = account.limits?.resetCredits ?? 0;
-	const meta = [
+	const meta = (apiKey ? [
+		// An API key account bills per token and has no limits to show.
+		account.keyHint ? t("settings.agentAccounts.apiKeyEnding", { hint: account.keyHint }) : null,
+		account.loggedIn ? t("settings.agentAccounts.apiKeyBilled") : t("settings.agentAccounts.apiKeyMissing"),
+	] : [
 		plan ? t("settings.codexAccounts.planLabel", { name: plan }) : null,
-		// An API key (or a cloud provider login) launches the CLI but is not a
-		// subscription: no limits, and no account to move a session to.
+		// An API key (or a cloud provider login) in the CLI's own folder launches
+		// it but is not a subscription: no limits, and no account to move to.
 		account.signedIn ? null : account.loggedIn ? t("settings.agentAccounts.noSubscription") : t("settings.agentAccounts.signedOut"),
-		aoTokens ? t("settings.agentAccounts.aoUsage", { tokens: formatCompactNumber(aoTokens, i18n.language) }) : null,
-	].filter(Boolean).join(" · ");
+	]).concat(aoTokens ? t("settings.agentAccounts.aoUsage", { tokens: formatCompactNumber(aoTokens, i18n.language) }) : null).filter(Boolean).join(" · ");
 	return <div className="px-3 py-2.5" data-agent-account={account.id}>
 		<div className="flex items-start justify-between gap-3">
 			<div className="min-w-0">
-				<p className="truncate text-sm font-medium text-foreground">{name}</p>
+				<p className="flex min-w-0 items-center gap-1.5 text-sm font-medium text-foreground">
+					<span className="truncate">{name}</span>
+					{apiKey ? <Badge>{t("settings.agentAccounts.apiKeyBadge")}</Badge> : null}
+				</p>
 				<p className="mt-0.5 truncate text-xs text-muted-foreground">{meta}</p>
 			</div>
 			<div className="flex shrink-0 items-center gap-2">
 				{cliLogin
 					? <Button type="button" size="sm" variant="ghost" data-terminal-focus-handoff="true" disabled={busy !== null || cliLogin.disabled} onClick={cliLogin.onSignIn}>{t("settings.agentAccounts.signInAgain")}</Button>
-					: !account.signedIn && !account.device
+					: !apiKey && !account.signedIn && !account.device
 						? <Button type="button" size="sm" variant="ghost" data-terminal-focus-handoff="true" disabled={busy !== null} onClick={onSignInAgain}>{t("settings.agentAccounts.signInAgain")}</Button>
 						: null}
 				{account.default
 					? <span className="text-xs text-muted-foreground">{t("settings.agentAccounts.default")}</span>
-					: account.signedIn ? <Button type="button" size="sm" variant="ghost" disabled={busy !== null} onClick={onMakeDefault}>{t("settings.agentAccounts.makeDefault")}</Button> : null}
+					: agentAccountUsable(account) ? <Button type="button" size="sm" variant="ghost" disabled={busy !== null} onClick={onMakeDefault}>{t("settings.agentAccounts.makeDefault")}</Button> : null}
+				{apiKey ? <Button type="button" size="sm" variant="ghost" disabled={busy !== null} onClick={onReplaceKey}>{t("settings.agentAccounts.replaceKey")}</Button> : null}
 				{resets > 0 ? <Tooltip><TooltipTrigger asChild><Button type="button" size="sm" variant="ghost" disabled={busy !== null} onClick={onUseReset}>{busy === `reset:${account.id}` ? <LoaderCircle className="animate-spin" aria-hidden="true" /> : <RotateCcw aria-hidden="true" />}{t("settings.codexAccounts.useReset")}</Button></TooltipTrigger><TooltipContent>{t("settings.codexAccounts.resetCount", { count: resets })}</TooltipContent></Tooltip> : null}
 				{account.device
 					? cliLogin?.canLogout && account.loggedIn ? <Button type="button" size="sm" variant="ghost" disabled={busy !== null || cliLogin.disabled} onClick={cliLogin.onLogout}>{t("settings.harness.logout")}</Button> : null
@@ -359,4 +433,60 @@ function LoginTerminal({ login, hostId, note, pending, onCheck, onClose }: {
 			<Button type="button" size="sm" variant="secondary" disabled={pending} onClick={() => onCheck(login)}>{pending ? <LoaderCircle className="animate-spin" aria-hidden="true" /> : null}{t("settings.agentAccounts.checkSignIn")}</Button>
 		</div>
 	</div>;
+}
+
+/** One way to add an account in the add menu, named with what it means. */
+function AddAccountChoice({ title, hint }: { title: string; hint: string }) {
+	return <span className="flex min-w-0 flex-col gap-0.5">
+		<span className="text-foreground">{title}</span>
+		<span className="text-xs text-muted-foreground">{hint}</span>
+	</span>;
+}
+
+/** Adds an Anthropic API key account, or replaces one account's key. The key
+ * stays in this form only until the daemon has checked and saved it. */
+function ApiKeyForm({ replacing, pending, error, onSubmit, onClose }: {
+	/** The account whose key is replaced; undefined adds a new account. */
+	replacing?: string;
+	pending: boolean;
+	error: string;
+	onSubmit: (name: string, key: string) => void;
+	onClose: () => void;
+}) {
+	const { t } = useTranslation();
+	const id = useId();
+	const [name, setName] = useState("");
+	const [key, setKey] = useState("");
+	const labelClass = "text-xs text-muted-foreground";
+	return <form
+		className="overflow-hidden rounded-md border border-border"
+		data-settings-inline-edit=""
+		data-testid="agent-account-api-key-form"
+		onSubmit={(event) => {
+			event.preventDefault();
+			if (key.trim() && !pending) onSubmit(name, key);
+		}}
+	>
+		<div className="flex min-h-10 items-center justify-between gap-3 border-b border-border px-3 py-2">
+			<p className="truncate text-xs font-medium text-foreground">{replacing ? t("settings.agentAccounts.apiKeyReplaceTitle", { name: replacing }) : t("settings.agentAccounts.apiKeyAddTitle")}</p>
+			<Button type="button" size="icon-sm" variant="quiet" aria-label={t("settings.agentAccounts.apiKeyClose")} className="shrink-0" onClick={onClose}><X aria-hidden="true" /></Button>
+		</div>
+		<div className="grid grid-cols-[auto_minmax(0,1fr)] items-center gap-x-3 gap-y-2 px-3 py-3">
+			{replacing ? null : <>
+				<label htmlFor={`${id}-name`} className={labelClass}>{t("settings.agentAccounts.apiKeyName")}</label>
+				<Input id={`${id}-name`} className={cn(KEY_FIELD_CLASS, "font-sans placeholder:font-sans")} value={name} disabled={pending} autoComplete="off" maxLength={80} placeholder={t("settings.agentAccounts.apiKeyNamePlaceholder")} onChange={(event) => setName(event.target.value)} />
+			</>}
+			<label htmlFor={`${id}-key`} className={labelClass}>{t("settings.agentAccounts.apiKeyField")}</label>
+			<Input id={`${id}-key`} className={KEY_FIELD_CLASS} type="password" value={key} disabled={pending} autoComplete="off" spellCheck={false} maxLength={16384} aria-invalid={error ? true : undefined} placeholder="sk-ant-…" autoFocus onChange={(event) => setKey(event.target.value)} />
+			<KeyWarning className="col-start-2">{t("settings.agentAccounts.apiKeyBilling")}</KeyWarning>
+			{error ? <p role="alert" className="col-start-2 text-xs text-error">{error}</p> : null}
+			<div className="col-start-2 flex justify-end gap-2">
+				<Button type="button" size="sm" variant="ghost" disabled={pending} onClick={onClose}>{t("confirm.cancel")}</Button>
+				<Button type="submit" size="sm" variant="primary" disabled={pending || !key.trim()}>
+					{pending ? <LoaderCircle className="animate-spin" aria-hidden="true" /> : null}
+					{replacing ? t("settings.agentAccounts.apiKeySave") : t("settings.agentAccounts.apiKeyAdd")}
+				</Button>
+			</div>
+		</div>
+	</form>;
 }

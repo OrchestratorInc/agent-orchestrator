@@ -3,7 +3,7 @@ import type { AgentAccount } from "../hooks/useAgentAccounts";
 import { formatCountdown, groupAccounts, limitWindowPace, spanPace, usedPercent, type UsageLimitSpan } from "./usage-limits";
 
 function account(overrides: Partial<AgentAccount>): AgentAccount {
-	return { id: "a", provider: "codex", default: false, device: false, signedIn: true, loggedIn: true, ...overrides };
+	return { id: "a", provider: "codex", kind: "subscription", default: false, device: false, signedIn: true, loggedIn: true, ...overrides };
 }
 
 describe("groupAccounts", () => {
@@ -21,6 +21,14 @@ describe("groupAccounts", () => {
 
 	it("skips providers without accounts", () => {
 		expect(groupAccounts([])).toEqual([]);
+	});
+
+	it("leaves out API key accounts, which have no limits", () => {
+		const grouped = groupAccounts([
+			account({ id: "claude-a", provider: "claude", default: true }),
+			account({ id: "claude-key", provider: "claude", kind: "api_key", signedIn: false }),
+		]);
+		expect(grouped.map((entry) => entry.accounts.map((a) => a.id))).toEqual([["claude-a"]]);
 	});
 
 	it("lists the CLI's login once when a saved account is signed in as the same login", () => {

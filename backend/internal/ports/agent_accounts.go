@@ -23,6 +23,14 @@ var (
 	ErrAgentAccountDefaultUnusable  = errors.New("the default account is signed out or now holds another login")
 )
 
+// API key account errors the API maps to client responses.
+var (
+	ErrAgentAccountKeyRejected  = errors.New("the provider rejected the API key")
+	ErrAgentAccountKeyUnchecked = errors.New("the provider could not be reached to check the API key")
+	ErrAgentAccountKindMismatch = errors.New("the account's kind does not support this")
+	ErrAgentAccountNoLimits     = errors.New("an API key account has no usage limits")
+)
+
 // AgentAccountProviderCLI reads and prepares one provider's CLI config
 // folders. home is empty for the computer's own folder. Implementations ask the
 // CLI itself; none of them reads a token.
@@ -49,6 +57,9 @@ type AgentAccountProviderCLI interface {
 type AgentAccountStore interface {
 	ListAgentAccounts(ctx context.Context) ([]domain.AgentAccount, error)
 	CreateAgentAccount(ctx context.Context, account domain.AgentAccount) error
+	// UpdateAgentAccountKeyHint records the last characters of an API key
+	// account's new key; ErrAgentAccountUnknown when id is no such account.
+	UpdateAgentAccountKeyHint(ctx context.Context, id, hint string) error
 	DeleteAgentAccount(ctx context.Context, id string) error
 	GetAgentAccountDefault(ctx context.Context, provider domain.AgentAccountProvider) (string, bool, error)
 	SetAgentAccountDefault(ctx context.Context, provider domain.AgentAccountProvider, accountID string) error

@@ -53,11 +53,19 @@ export function useAgentAccounts(enabled = true, hostId?: HostId) {
 
 export const agentAccountProviderNames: Record<AgentAccountProvider, string> = { claude: "Claude Code", codex: "Codex" };
 
-type AccountNameT = (key: "settings.agentAccounts.cliLoginOf" | "settings.agentAccounts.oauthToken", options?: { provider: string }) => string;
+type AccountNameT = (key: "settings.agentAccounts.cliLoginOf" | "settings.agentAccounts.oauthToken" | "settings.agentAccounts.apiKeyDefaultName", options?: { provider: string }) => string;
 
-/** An account's name: its email. A Claude login without one is a
- * CLAUDE_CODE_OAUTH_TOKEN login, which reports no identity. */
-export function agentAccountName(account: Pick<AgentAccount, "email" | "provider"> & { signedIn?: boolean }, t: AccountNameT): string {
+/** Whether new work can start on an account: a subscription signed in as its
+ * own login, or an API key account with its key saved. */
+export function agentAccountUsable(account: Pick<AgentAccount, "signedIn" | "loggedIn"> & { kind?: AgentAccount["kind"] }): boolean {
+	return account.kind === "api_key" ? account.loggedIn : account.signedIn;
+}
+
+/** An account's name: its email, or the label of an API key account. A
+ * Claude login without an email is a CLAUDE_CODE_OAUTH_TOKEN login, which
+ * reports no identity. */
+export function agentAccountName(account: Pick<AgentAccount, "email" | "provider"> & { signedIn?: boolean; kind?: AgentAccount["kind"]; name?: string }, t: AccountNameT): string {
+	if (account.kind === "api_key") return account.name || t("settings.agentAccounts.apiKeyDefaultName");
 	if (account.email) return account.email;
 	return account.provider === "claude" && account.signedIn
 		? t("settings.agentAccounts.oauthToken")
@@ -75,7 +83,7 @@ export function oneRowPerLogin<T extends Pick<AgentAccount, "id" | "sameLoginAs"
 	return withoutSameLogins(accounts, keepId).filter((account) => account.id !== keptTwin);
 }
 
-export function agentAccountLabel(account: Pick<AgentAccount, "id" | "email" | "provider" | "device" | "orgId" | "orgName"> & { signedIn?: boolean }, peers: readonly Pick<AgentAccount, "id" | "email" | "orgId" | "orgName">[], t: AccountNameT): string {
+export function agentAccountLabel(account: Pick<AgentAccount, "id" | "email" | "provider" | "device" | "orgId" | "orgName"> & { signedIn?: boolean; kind?: AgentAccount["kind"]; name?: string }, peers: readonly Pick<AgentAccount, "id" | "email" | "orgId" | "orgName">[], t: AccountNameT): string {
 	const name = agentAccountName(account, t);
 	const email = account.email?.toLowerCase();
 	const orgKnown = (peer: Pick<AgentAccount, "orgId" | "orgName">) => Boolean(peer.orgId || peer.orgName);
@@ -160,6 +168,11 @@ export function useAgentAccountActions(hostId?: HostId) {
 			const { error } = await client(hostId).POST("/api/v1/agents/accounts/login/{operationId}/cancel", { params: { path: { operationId } } });
 			if (error) throw apiErrorException(error);
 		},
+		/** Adds an account that runs the CLI on an API key; the daemon checks the key with the provider first. */
+		addApiKey: async (provider: AgentAccountProvider, name: string, apiKey: string) =>
+			setAccounts(unwrap(await client(hostId).POST("/api/v1/agents/accounts/api-keys", { body: { provider, name, apiKey } })).accounts),
+		replaceApiKey: async (accountId: string, apiKey: string) =>
+			setAccounts(unwrap(await client(hostId).PUT("/api/v1/agents/accounts/{accountId}/api-key", { params: { path: { accountId } }, body: { apiKey } })).accounts),
 		makeDefault: async (accountId: string) =>
 			setAccounts(unwrap(await client(hostId).POST("/api/v1/agents/accounts/{accountId}/default", { params: { path: { accountId } } })).accounts),
 		remove: async (accountId: string) =>

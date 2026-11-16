@@ -995,6 +995,65 @@ paths:
       summary: Sign an account out and remove it
       tags:
       - agents
+  /api/v1/agents/accounts/{accountId}/api-key:
+    put:
+      operationId: replaceAgentAccountAPIKey
+      parameters:
+      - description: Agent account identifier; device-claude and device-codex are
+          this computer's own logins.
+        in: path
+        name: accountId
+        required: true
+        schema:
+          description: Agent account identifier; device-claude and device-codex are
+            this computer's own logins.
+          type: string
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ControllersReplaceAgentAccountAPIKeyRequest'
+        required: true
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AgentAccountsResponse'
+          description: OK
+        "400":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Bad Request
+        "404":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Not Found
+        "409":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Conflict
+        "501":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Not Implemented
+        "503":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Service Unavailable
+      summary: Save a new key for an API key account, once the provider accepts it
+      tags:
+      - agents
   /api/v1/agents/accounts/{accountId}/default:
     post:
       operationId: setDefaultAgentAccount
@@ -1116,6 +1175,50 @@ paths:
                 $ref: '#/components/schemas/APIError'
           description: Not Implemented
       summary: Spend one Codex usage-limit reset of an account
+      tags:
+      - agents
+  /api/v1/agents/accounts/api-keys:
+    post:
+      operationId: addAgentAccountAPIKey
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ControllersAddAgentAccountAPIKeyRequest'
+        required: true
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AgentAccountsResponse'
+          description: OK
+        "400":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Bad Request
+        "409":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Conflict
+        "501":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Not Implemented
+        "503":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Service Unavailable
+      summary: Add an account that runs the provider's CLI with an API key, once the
+        provider accepts the key
       tags:
       - agents
   /api/v1/agents/accounts/login:
@@ -15717,10 +15820,19 @@ components:
           type: string
         id:
           type: string
+        keyHint:
+          type: string
+        kind:
+          enum:
+          - subscription
+          - api_key
+          type: string
         limits:
           $ref: '#/components/schemas/AgentAccountLimits'
         loggedIn:
           type: boolean
+        name:
+          type: string
         orgId:
           type: string
         orgName:
@@ -15751,6 +15863,7 @@ components:
       - id
       - provider
       - device
+      - kind
       - default
       - signedIn
       - loggedIn
@@ -18338,6 +18451,20 @@ components:
         disabled:
           type: boolean
       type: object
+    ControllersAddAgentAccountAPIKeyRequest:
+      properties:
+        apiKey:
+          type: string
+        name:
+          type: string
+        provider:
+          enum:
+          - claude
+          type: string
+      required:
+      - provider
+      - apiKey
+      type: object
     ControllersBrowserChromeChannel:
       properties:
         available:
@@ -18740,6 +18867,13 @@ components:
       - hostId
       - token
       - hostKey
+      type: object
+    ControllersReplaceAgentAccountAPIKeyRequest:
+      properties:
+        apiKey:
+          type: string
+      required:
+      - apiKey
       type: object
     ControllersRequestRereviewRequest:
       properties:

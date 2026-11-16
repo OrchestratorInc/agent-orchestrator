@@ -1,7 +1,8 @@
-// Package agentaccounts manages the Claude Code and Codex subscription accounts
-// AO launches agents with. An account is a config folder of the provider's own
-// CLI; the computer's own folder is the "This computer" account. A session is
-// pinned to one account per provider and moves by restarting its agent there.
+// Package agentaccounts manages the Claude Code and Codex accounts AO launches
+// agents with: subscription sign-ins, and Claude Code API keys. An account is a
+// config folder of the provider's own CLI; the computer's own folder is the
+// "This computer" account. A session is pinned to one account per provider and
+// moves by restarting its agent there.
 package agentaccounts
 
 import (
@@ -73,6 +74,7 @@ type Service struct {
 	lastOrg        map[string]seenOrg
 	defaultChanged func(domain.AgentAccountProvider)
 	loginConfirmed func(domain.AgentAccount, time.Time)
+	keyCheck       KeyCheck
 }
 
 // reading is the last identity and limits read for one account.
@@ -343,6 +345,9 @@ func (s *Service) read(ctx context.Context, account domain.AgentAccount) *readin
 	if provider == nil {
 		return nil
 	}
+	if account.APIKey() {
+		return s.readAPIKeyAccount(ctx, account)
+	}
 	caller := ctx
 	ctx, cancel := context.WithTimeout(ctx, 45*time.Second)
 	defer cancel()
@@ -542,7 +547,7 @@ func (s *Service) DefaultSignIn(ctx context.Context, harness domain.AgentHarness
 	if r == nil || (r.identityErr != "" && !r.mismatch) {
 		return identity, false // not known: leave it to the CLI's own readiness
 	}
-	if !r.identity.SignedIn {
+	if !usable(account, r) {
 		// New sessions start on another signed-in account instead, if there is one.
 		next, err := s.newSessionAccount(ctx, p)
 		switch {
@@ -556,6 +561,10 @@ func (s *Service) DefaultSignIn(ctx context.Context, harness domain.AgentHarness
 		}
 	}
 	identity = r.identity
+	// An API key account with its key saved is ready, though not a subscription.
+	if account.APIKey() {
+		identity.SignedIn = identity.LoggedIn
+	}
 	// A mismatched folder names another login; the account is still its own.
 	if account.Email != "" {
 		identity.Email = account.Email
@@ -573,7 +582,7 @@ func (s *Service) DefaultLaunchEnv(ctx context.Context, harness domain.AgentHarn
 	if err != nil {
 		return nil, err
 	}
-	return s.providers[p].LaunchEnv(account.Home), nil
+	return s.accountLaunchEnv(s.providers[p], account)
 }
 
 // SetDefaultChanged late-binds what must hear that the account new sessions of
@@ -623,7 +632,8 @@ func (s *Service) RunsOnComputerLogin(ctx context.Context, harness domain.AgentH
 
 // newSessionAccount is the account a new session of p starts on: the default,
 // or, when the default is known to be signed out or to hold another login, the
-// first other account that is signed in. The session's account shows which.
+// first other subscription account that is signed in. The session's account
+// shows which.
 // Only a bad default costs CLI calls; a good one is answered from the cache.
 func (s *Service) newSessionAccount(ctx context.Context, p domain.AgentAccountProvider) (domain.AgentAccount, error) {
 	def, err := s.defaultID(ctx, p)
@@ -653,7 +663,8 @@ func (s *Service) newSessionAccount(ctx context.Context, p domain.AgentAccountPr
 		return domain.AgentAccount{}, err
 	}
 	for _, other := range accounts {
-		if other.Provider != p || other.ID == account.ID || s.beingRemoved(other.ID) {
+		// An API key account bills per token, so it is used only when chosen.
+		if other.Provider != p || other.ID == account.ID || other.APIKey() || s.beingRemoved(other.ID) {
 			continue
 		}
 		r := s.cachedReading(other.ID)
@@ -726,6 +737,9 @@ func (s *Service) StartSignInAgain(ctx context.Context, accountID string) (Login
 	}
 	if account.Device() {
 		return LoginStart{}, ports.ErrAgentAccountDeviceFixed
+	}
+	if account.APIKey() {
+		return LoginStart{}, ports.ErrAgentAccountKindMismatch
 	}
 	return s.startLogin(ctx, account.Provider, &account)
 }
@@ -994,8 +1008,11 @@ func (s *Service) Remove(ctx context.Context, accountID string) error {
 			return fmt.Errorf("%w: %w", ports.ErrAgentAccountInUse, err)
 		}
 	}
-	if err := s.providers[account.Provider].Logout(ctx, account.Home); err != nil {
-		s.log.Warn("sign out removed account", "account", accountID, "error", err)
+	// An API key account has no sign-in; removing its folder removes its key.
+	if !account.APIKey() {
+		if err := s.providers[account.Provider].Logout(ctx, account.Home); err != nil {
+			s.log.Warn("sign out removed account", "account", accountID, "error", err)
+		}
 	}
 	if err := s.store.DeleteAgentAccount(ctx, accountID); err != nil {
 		return err
@@ -1109,7 +1126,7 @@ func (s *Service) pick(ctx context.Context, harness domain.AgentHarness, account
 		r = s.readings[account.ID]
 		s.mu.Unlock()
 	}
-	if r == nil || !r.identity.SignedIn {
+	if !usable(account, r) {
 		return domain.AgentAccount{}, ports.ErrAgentAccountSignedOut
 	}
 	if err := s.prepare(s.providers[p], account.Home); err != nil {
@@ -1157,6 +1174,9 @@ func (s *Service) SessionLimits(ctx context.Context, id domain.SessionID, harnes
 	if err != nil {
 		return "", domain.AgentAccountLimits{}, err
 	}
+	if account.APIKey() {
+		return account.ID, domain.AgentAccountLimits{}, ports.ErrAgentAccountNoLimits
+	}
 	s.mu.Lock()
 	r := s.readings[account.ID]
 	s.mu.Unlock()
@@ -1194,7 +1214,9 @@ func (s *Service) SessionLimits(ctx context.Context, id domain.SessionID, harnes
 	return account.ID, *r.limits, nil
 }
 
-// HandoffTarget picks the account with the most verified room for a usage-limited session, or "" when none has room.
+// HandoffTarget picks the account with the most verified room for a
+// usage-limited session, or "" when none has room. API key accounts have no
+// usage limits: a session never moves to one, nor away from one.
 func (s *Service) HandoffTarget(ctx context.Context, id domain.SessionID, harness domain.AgentHarness, model string) (string, error) {
 	p, ok := domain.AgentAccountProviderFor(harness)
 	if !ok || s.providers[p] == nil {
@@ -1204,6 +1226,10 @@ func (s *Service) HandoffTarget(ctx context.Context, id domain.SessionID, harnes
 	if err != nil {
 		return "", err
 	}
+	if current.APIKey() {
+		s.log.Info("account handoff: session is on an API key account", "session", id)
+		return "", nil
+	}
 	accounts, err := s.accounts(ctx)
 	if err != nil {
 		return "", err
@@ -1211,7 +1237,7 @@ func (s *Service) HandoffTarget(ctx context.Context, id domain.SessionID, harnes
 	headroom := make([]float64, len(accounts))
 	var wg sync.WaitGroup
 	for i, account := range accounts {
-		if account.Provider != p || account.ID == current.ID || s.beingRemoved(account.ID) {
+		if account.Provider != p || account.ID == current.ID || account.APIKey() || s.beingRemoved(account.ID) {
 			continue
 		}
 		wg.Go(func() {
@@ -1354,7 +1380,11 @@ func (s *Service) launchEnv(ctx context.Context, id domain.SessionID, override d
 		if err := s.prepare(provider, account.Home); err != nil {
 			errs = append(errs, err)
 		}
-		for key, value := range provider.LaunchEnv(account.Home) {
+		accountEnv, err := s.accountLaunchEnv(provider, account)
+		if err != nil {
+			errs = append(errs, err)
+		}
+		for key, value := range accountEnv {
 			env[key] = value
 		}
 	}

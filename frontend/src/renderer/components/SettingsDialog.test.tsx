@@ -489,7 +489,7 @@ describe("SettingsDialog", () => {
 		expect(form).toHaveAttribute("data-focus-agent", "claude-code");
 		expect(screen.getByRole("button", { name: "Harness" })).toHaveAttribute("data-active", "true");
 		// Accounts are on each harness's Account tab; there is no page of their own.
-		expect(screen.queryByRole("button", { name: "Subscriptions" })).toBeNull();
+		expect(screen.queryByRole("button", { name: "Accounts" })).toBeNull();
 	});
 
 	it("forwards the remote host from a Manage agents action to Harness", async () => {

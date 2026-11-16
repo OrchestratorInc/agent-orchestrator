@@ -17,10 +17,11 @@ const PROVIDER_ORDER: AgentAccountProvider[] = ["codex", "claude"];
 
 export const PROVIDER_HARNESS: Record<AgentAccountProvider, string> = { codex: "codex", claude: "claude-code" };
 
+/** Each provider's subscription accounts. An API key account has no limits, so it is left out. */
 export function groupAccounts(accounts: readonly AgentAccount[]): ProviderAccounts[] {
 	return PROVIDER_ORDER.flatMap((provider) => {
 		const sorted = accounts
-			.filter((account) => account.provider === provider)
+			.filter((account) => account.provider === provider && account.kind !== "api_key")
 			.sort((a, b) => Number(b.default) - Number(a.default) || a.id.localeCompare(b.id));
 		const providerAccounts = withoutSameLogins(sorted, sorted.find((account) => account.default)?.id);
 		if (providerAccounts.length === 0) return [];

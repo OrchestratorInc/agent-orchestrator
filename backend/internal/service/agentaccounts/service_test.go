@@ -7,6 +7,8 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"slices"
+	"sync"
 	"testing"
 	"time"
 
@@ -27,6 +29,15 @@ func (m *memStore) ListAgentAccounts(context.Context) ([]domain.AgentAccount, er
 func (m *memStore) CreateAgentAccount(_ context.Context, a domain.AgentAccount) error {
 	m.accounts = append(m.accounts, a)
 	return nil
+}
+func (m *memStore) UpdateAgentAccountKeyHint(_ context.Context, id, hint string) error {
+	for i := range m.accounts {
+		if m.accounts[i].ID == id && m.accounts[i].APIKey() {
+			m.accounts[i].KeyHint = hint
+			return nil
+		}
+	}
+	return ports.ErrAgentAccountUnknown
 }
 func (m *memStore) DeleteAgentAccount(context.Context, string) error { return nil }
 func (m *memStore) GetAgentAccountDefault(_ context.Context, p domain.AgentAccountProvider) (string, bool, error) {
@@ -62,10 +73,31 @@ type fakeClaude struct {
 	limitsErr  error
 	orgOf      map[string]string
 	orgNameOf  map[string]string
+	// mu guards approved and checked, which concurrent reads of List touch.
+	mu       sync.Mutex
+	approved map[string]string // the key each folder was told to accept
+	checked  []string          // every folder whose identity was read
 }
 
 func (*fakeClaude) Provider() domain.AgentAccountProvider { return domain.AgentAccountProviderClaude }
+func (f *fakeClaude) ApproveAPIKey(home, key string) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.approved == nil {
+		f.approved = map[string]string{}
+	}
+	f.approved[home] = key
+	return nil
+}
+func (f *fakeClaude) wasChecked(home string) bool {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return slices.Contains(f.checked, home)
+}
 func (f *fakeClaude) Identity(_ context.Context, home string) (domain.AgentAccountIdentityCheck, error) {
+	f.mu.Lock()
+	f.checked = append(f.checked, home)
+	f.mu.Unlock()
 	if hook := f.onIdentity; hook != nil {
 		f.onIdentity = nil
 		hook(home)
