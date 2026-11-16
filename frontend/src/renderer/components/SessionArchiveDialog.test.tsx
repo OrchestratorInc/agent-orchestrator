@@ -62,3 +62,17 @@ test("looks a cloud session's links up on this computer, since its file list doe
 	expect(inspect).toHaveBeenCalledWith(expect.objectContaining({ source: "cloud", orgId: "org-1", sessionId: "session-1", path: "report.html", baseUrl: "https://cp.test" }));
 	inspect.mockRestore();
 });
+
+test("counts artifacts as the lists show them, and says the delete takes their other files too", () => {
+	const file = (path: string, registered = false) => ({ kind: "generic", name: path.split("/").pop(), path, size: 1, updatedAt: "2026-10-01T00:00:00Z", ...(registered ? { registered: true } : {}) });
+	const local = {
+		...cloudSession,
+		cloud: undefined,
+		// One registered page, the images it uses, and an icon bundle of two files.
+		artifactFiles: [file("report.html", true), file("img/a.png"), file("img/b.png"), file("App.icon/icon.json", true), file("App.icon/Assets/a.png", true)],
+	} as WorkspaceSession;
+	render(<SessionArchiveDialog open onOpenChange={vi.fn()} onConfirm={vi.fn()} session={local} trigger={<span />} />);
+
+	expect(screen.getByRole("checkbox", { name: "Delete 2 artifacts" })).toBeInTheDocument();
+	expect(screen.getByText(/The other files in their folder are deleted too\./)).toBeInTheDocument();
+});

@@ -2849,6 +2849,7 @@
 	"archive.deleteArtifactsHint_few": "Это действие нельзя отменить, а восстановленная сессия запустится без них.",
 	"archive.deleteArtifactsHint_many": "Это действие нельзя отменить, а восстановленная сессия запустится без них.",
 	"archive.deleteArtifactsHint_other": "Это действие нельзя отменить, а восстановленная сессия запустится без них.",
+	"archive.deleteArtifactsFiles": "Остальные файлы в их папке тоже удаляются.",
 	"archive.deleteArtifactsPublished_one": "Опубликован {{count}}; его ссылка перестанет работать.",
 	"archive.deleteArtifactsPublished_few": "Опубликованы {{count}}; их ссылки перестанут работать.",
 	"archive.deleteArtifactsPublished_many": "Опубликовано {{count}}; их ссылки перестанут работать.",

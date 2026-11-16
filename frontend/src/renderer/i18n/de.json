@@ -2301,6 +2301,7 @@
 	"archive.deleteArtifacts_other": "{{count}} Artefakte löschen",
 	"archive.deleteArtifactsHint_one": "Das kann nicht rückgängig gemacht werden, und eine wiederhergestellte Sitzung startet ohne es.",
 	"archive.deleteArtifactsHint_other": "Das kann nicht rückgängig gemacht werden, und eine wiederhergestellte Sitzung startet ohne sie.",
+	"archive.deleteArtifactsFiles": "Die anderen Dateien in ihrem Ordner werden ebenfalls gelöscht.",
 	"archive.deleteArtifactsPublished_one": "{{count}} ist veröffentlicht; der Link funktioniert dann nicht mehr.",
 	"archive.deleteArtifactsPublished_other": "{{count}} sind veröffentlicht; ihre Links funktionieren dann nicht mehr.",
 	"links.stillLive_one": "{{count}} öffentlicher Link funktioniert noch",

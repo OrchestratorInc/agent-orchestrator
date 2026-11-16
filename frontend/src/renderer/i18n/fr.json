@@ -2338,6 +2338,7 @@
 	"archive.deleteArtifacts_many": "Supprimer {{count}} artefacts",
 	"archive.deleteArtifactsHint_one": "Action irréversible : une session restaurée repart sans lui.",
 	"archive.deleteArtifactsHint_other": "Action irréversible : une session restaurée repart sans eux.",
+	"archive.deleteArtifactsFiles": "Les autres fichiers de leur dossier sont aussi supprimés.",
 	"archive.deleteArtifactsPublished_one": "{{count}} est publié ; son lien cessera de fonctionner.",
 	"archive.deleteArtifactsPublished_many": "{{count}} sont publiés ; leurs liens cesseront de fonctionner.",
 	"archive.deleteArtifactsPublished_other": "{{count}} sont publiés ; leurs liens cesseront de fonctionner.",

@@ -2338,6 +2338,7 @@
 	"archive.deleteArtifacts_many": "Excluir {{count}} artefatos",
 	"archive.deleteArtifactsHint_one": "Não é possível desfazer, e uma sessão restaurada começa sem ele.",
 	"archive.deleteArtifactsHint_other": "Não é possível desfazer, e uma sessão restaurada começa sem eles.",
+	"archive.deleteArtifactsFiles": "Os outros arquivos da pasta também são excluídos.",
 	"archive.deleteArtifactsPublished_one": "{{count}} está publicado; o link vai parar de funcionar.",
 	"archive.deleteArtifactsPublished_many": "{{count}} estão publicados; os links vão parar de funcionar.",
 	"archive.deleteArtifactsPublished_other": "{{count}} estão publicados; os links vão parar de funcionar.",
