@@ -186,9 +186,12 @@ function SettingsBody({ project, projectId, hostId, hostConnected, onSaved, sect
 	const missingRoleAgent = !config.worker?.agent || !config.orchestrator?.agent;
 	const activeOrchestratorRef = useRef(activeOrchestrator);
 	activeOrchestratorRef.current = activeOrchestrator;
+	// Wait for the project's sessions: a fill before they load would miss a
+	// running orchestrator and the save would replace it with the default.
+	const sessionsSettled = hostId ? !remoteProjectQuery.isPending : !workspaceQuery.isPending;
 	const [agentDefaults, setAgentDefaults] = useState<{ workerAgent: string; orchestratorAgent: string } | null | undefined>(missingRoleAgent ? null : undefined);
 	useEffect(() => {
-		if (!missingRoleAgent || !hostConnected) return;
+		if (!missingRoleAgent || !hostConnected || !sessionsSettled) return;
 		let active = true;
 		void loadProjectAgentDefaults(queryClient, hostId).then((defaults) => {
 			if (!active) return;
@@ -201,7 +204,7 @@ function SettingsBody({ project, projectId, hostId, hostConnected, onSaved, sect
 		return () => {
 			active = false;
 		};
-	}, [missingRoleAgent, hostConnected, hostId, queryClient]);
+	}, [missingRoleAgent, hostConnected, sessionsSettled, hostId, queryClient]);
 	const agentsQuery = useAgentReadinessQuery(true, hostId);
 	useEnsureAgentReadiness({ hostId });
 	const persist = async (values: ProjectSettingsDraft): Promise<SettingsSaveResult> => {

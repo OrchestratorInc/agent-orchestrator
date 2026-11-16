@@ -1767,11 +1767,6 @@ func (c pluginBinaryCache) InvalidateBinaryResolution(harness domain.AgentHarnes
 	}
 }
 
-// invalidateHarnessBinary makes the harness's executable resolve again
-// everywhere. Launches and install verification, the agent service, Chat
-// drivers and model discovery each hold their own plugin instances, each
-// caching the path it found: missing one leaves it on the binary from before
-// the install.
 // preferredProjectAgent ranks this machine's agents the way the desktop's
 // loadProjectAgentDefaults does: from the cached readiness snapshot, running
 // display checks first only when the agent AO prefers most is not confirmed
@@ -1798,6 +1793,11 @@ func preferredProjectAgent(agents *agentsvc.Service) func(context.Context) domai
 	}
 }
 
+// invalidateHarnessBinary makes the harness's executable resolve again
+// everywhere. Launches and install verification, the agent service, Chat
+// drivers and model discovery each hold their own plugin instances, each
+// caching the path it found: missing one leaves it on the binary from before
+// the install.
 func invalidateHarnessBinary(readiness ports.AgentReadinessProvider, harness string, caches ...harnessBinaryCache) {
 	readiness.InvalidateAgentInstallation(harness)
 	for _, cache := range caches {
