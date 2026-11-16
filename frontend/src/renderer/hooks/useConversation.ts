@@ -21,7 +21,7 @@ import {
 	useQuery,
 	useQueryClient,
 } from "@tanstack/react-query";
-import { useCallback, useEffect, useRef, useState, useSyncExternalStore } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import type { components } from "../../api/schema";
 import { apiErrorCode, apiErrorMessage } from "../lib/api-client";
 import { baseUrlForHost, clientForSessionHost } from "../lib/host-clients";
@@ -33,15 +33,14 @@ import { resumeAgentError, resumeOpenElsewhere } from "./useCanResumeAgent";
 import { useRestoreSession } from "./useRestoreSession";
 import { recordDirectWorkerInteraction } from "../lib/session-management-telemetry";
 import type { ChatDraftExcerptReference } from "../lib/chat-drafts";
-import {
-	type ActivityKind,
-	type ApprovalMode,
-	type ActivityStatus,
-	activeTurn,
-	type ConversationActivity,
-	type ConversationItem,
-	type ConversationMessage,
-	type ConversationSnapshot,
+import type {
+	ActivityKind,
+	ApprovalMode,
+	ActivityStatus,
+	ConversationActivity,
+	ConversationItem,
+	ConversationMessage,
+	ConversationSnapshot,
 	ControllerState,
 	DecisionOption,
 	DiffStatus,
@@ -695,23 +694,6 @@ export function useConversationCommands(sessionId: string | undefined, hostId?: 
 		staleTime: Number.POSITIVE_INFINITY,
 	}).data;
 	const trackedDispatch = stateSessionId ? trackedDispatches[stateSessionId] : undefined;
-	const cachedSnapshot = useSyncExternalStore(
-		useCallback(
-			(onStoreChange) => queryClient.getQueryCache().subscribe(onStoreChange),
-			[queryClient],
-		),
-		() => {
-			if (!sessionId) return undefined;
-			const data = queryClient.getQueryData<InfiniteData<ConversationSnapshot>>(
-				conversationQueryKey(sessionId, hostId),
-			);
-			return data?.pages?.[0];
-		},
-	);
-	const hasActiveTurn = Boolean(
-		(cachedSnapshot && activeTurn(cachedSnapshot)) ||
-		trackedDispatch !== undefined,
-	);
 	const invalidateSession = useCallback(
 		async (targetSessionId: string) => {
 			if (hostId) await refreshRemoteConversation(queryClient, targetSessionId, hostId);
@@ -1282,13 +1264,6 @@ export function useConversationCommands(sessionId: string | undefined, hostId?: 
 		},
 		onSettled: invalidate,
 	});
-	const activateBranchIsBusyError = apiErrorCode(activateBranch.error) === "CHAT_EDIT_BUSY";
-
-	useEffect(() => {
-		if (activateBranch.error && activateBranchIsBusyError && !hasActiveTurn) {
-			activateBranch.reset();
-		}
-	}, [activateBranch, activateBranchIsBusyError, hasActiveTurn]);
 	const acknowledgeAcceptedTurn = useCallback(
 		(turnId: string) => {
 			if (!sessionId) return;
@@ -1493,14 +1468,7 @@ export function useConversationCommands(sessionId: string | undefined, hostId?: 
 				: undefined,
 		activateBranch: (branchId: string) => activateBranch.mutateAsync(branchId),
 		activateBranchPending: activateBranch.isPending,
-		activateBranchDisabled: hasActiveTurn,
-		activateBranchTarget: activateBranch.variables,
-		activateBranchError:
-			activateBranchIsBusyError && !hasActiveTurn
-				? undefined
-				: activateBranch.error
-					? apiErrorMessage(activateBranch.error)
-					: undefined,
+		activateBranchError: activateBranch.error ? apiErrorMessage(activateBranch.error) : undefined,
 		steer: async (text: string, attachments?: WireImageContent[], clientMessageId?: string, recoverOnly?: boolean): Promise<ChatSteerOutcome> => {
 			try {
 				if (sessionId) recordDirectWorkerInteraction(sessionId, "chat", "worker", hostId);
