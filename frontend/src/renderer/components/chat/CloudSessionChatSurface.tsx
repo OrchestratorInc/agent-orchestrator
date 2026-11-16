@@ -25,7 +25,7 @@ import { cloudStartupProblem, isWorkspaceStartupError, resumeCloudSession, type 
 import { PLAN_REFUSAL_CODES } from "../../lib/cloud-cp/client";
 import { forgetCloudOpening, useCloudOpening } from "../../lib/cloud-opening";
 import { CloudCpError } from "../../lib/cloud-cp/errors";
-import { reportPlanRefusal, reportUpgradeViewed } from "../../lib/cloud-telemetry";
+import { reportPlanRefusal } from "../../lib/cloud-telemetry";
 import { useCloudBilling } from "../../hooks/useCloudBilling";
 import { cloudSessionScriptsEnded, groupScriptRuns, parseScriptStepPayload, SCRIPT_STEP_EVENT, type ScriptRun } from "../../lib/cloud-script-runs";
 import { cloudChatHistoryKey, loadCloudChatHistory, loadOlderCloudChatEvents, mergeCloudEvents, streamedCloudChatEvents, type CloudChatHistory } from "../../lib/cloud-chat-history";
@@ -582,7 +582,6 @@ function PlanLimitNotice({ code, shared, onDismiss }: { code: string; shared: bo
 					className="mt-1"
 					onClick={() => {
 						useUiStore.getState().openGlobalSettings("billing");
-						reportUpgradeViewed("plan_refusal");
 					}}
 				>
 					{appI18n.t("cloud.planLimit.upgrade")}
@@ -2075,11 +2074,11 @@ export function CloudSessionChatSurface({
 			const refusal = planRefusalCode(item);
 			if (!refusal) continue;
 			code ??= refusal;
-			reportPlanRefusal(refusal, false, "chat");
+			if (!cloud?.shared) reportPlanRefusal(refusal, false, "chat");
 		}
 		if (!code) return;
 		setPlanRefusal({ key, code });
-	}, [eventsQuery.data, eventsQuery.dataUpdatedAt, eventsQuery.fetchStatus, eventsQuery.isSuccess, refusalKey, snapshot]);
+	}, [cloud?.shared, eventsQuery.data, eventsQuery.dataUpdatedAt, eventsQuery.fetchStatus, eventsQuery.isSuccess, refusalKey, snapshot]);
 	// The brief this device started the session with: shown from the first frame,
 	// until the control plane's chat holds the session's first human message, and
 	// timed from when it was sent, so the start reads as one conversation.

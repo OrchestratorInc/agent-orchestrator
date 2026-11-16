@@ -2619,7 +2619,8 @@ describe("CloudSessionChatSurface", () => {
 		fireEvent.click(screen.getByRole("button", { name: "Upgrade your plan" }));
 		expect(openGlobalSettings).toHaveBeenCalledWith("billing");
 		expect(reportPlanRefusal).toHaveBeenCalledTimes(1);
-		expect(reportUpgradeViewed).toHaveBeenCalledExactlyOnceWith("plan_refusal");
+		// BillingSection records the visit when Settings mounts.
+		expect(reportUpgradeViewed).not.toHaveBeenCalled();
 		useUiStore.setState({ openGlobalSettings: originalOpenGlobalSettings });
 		// A member cannot buy a plan, so the notice sends them to an admin instead.
 		billing.offering = { selfServeBilling: true, canManageBilling: false };
@@ -2665,6 +2666,25 @@ describe("CloudSessionChatSurface", () => {
 		expect(reportPlanRefusal).toHaveBeenCalledTimes(3);
 	});
 
+
+	it("does not attribute a shared owner's refusal to the viewer's organization", async () => {
+		cloudMocks.listChatModels.mockResolvedValue({ models: [] });
+		cloudMocks.listChatEvents.mockReset()
+			.mockResolvedValueOnce({ events: [], hasMore: false, hasOlder: false, nextAfter: 0 })
+			.mockResolvedValue({ events: [{
+				sessionId: session.id, sequence: 1, type: "chat.activity", createdAt: session.updatedAt,
+				payload: { turnId: "turn-1", activity: { id: "spawn", kind: "command", status: "failed", detail: { output: "Limit reached (WORKER_SLOTS_FULL)" } } },
+			}], hasMore: false, hasOlder: false, nextAfter: 1 });
+		const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+		const key = ["cloud-chat-events", "owner-org", session.id];
+		render(<QueryClientProvider client={queryClient}><CloudSessionChatSurface session={{ ...session, cloud: { orgId: "owner-org", shared: true } }} /></QueryClientProvider>);
+		await waitFor(() => expect(queryClient.getQueryState(key)?.fetchStatus).toBe("idle"));
+		await act(() => queryClient.refetchQueries({ queryKey: key }));
+		expect((await screen.findByRole("alert")).textContent).toContain("project owner's plan");
+		expect(reportPlanRefusal).not.toHaveBeenCalled();
+		expect(reportUpgradeViewed).not.toHaveBeenCalled();
+	});
+
 	it("does not report Upgrade opening when a plan notice is dismissed", async () => {
 		cloudMocks.listChatModels.mockResolvedValue({ models: [] });
 		cloudMocks.listChatEvents.mockReset()
@@ -2682,6 +2702,7 @@ describe("CloudSessionChatSurface", () => {
 		fireEvent.click(screen.getByRole("button", { name: "Dismiss" }));
 		expect(screen.queryByRole("alert")).toBeNull();
 		expect(reportPlanRefusal).toHaveBeenCalledExactlyOnceWith("WORKER_SLOTS_FULL", false, "chat");
+		expect(reportUpgradeViewed).not.toHaveBeenCalled();
 	});
 
 	it("reads a plan refusal only in the shape the control plane reports it", () => {
