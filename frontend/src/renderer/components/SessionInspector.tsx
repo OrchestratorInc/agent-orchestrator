@@ -232,6 +232,9 @@ export const SessionInspector = memo(function SessionInspector({
 	const artifactsUnseen = useUiStore((state) =>
 		session ? Boolean(state.inspectorSessions[sessionUiKey(session.id, hostId)]?.artifactsUnseen) : false,
 	);
+	const computerUseUnseen = useUiStore((state) =>
+		session ? Boolean(state.inspectorSessions[sessionUiKey(session.id, hostId)]?.computerUseUnseen) : false,
+	);
 	const inspectorQueryClient = useQueryClient();
 	// Computer use runs on this machine only, so only a local session has a
 	// timeline. The tab appears once the session has made a call.
@@ -316,7 +319,7 @@ export const SessionInspector = memo(function SessionInspector({
 		const label = t(entry.labelKey);
 		return {
 			...entry,
-			badge: (entry.id === "browser" && browserUnseen) || (entry.id === "artifacts" && artifactsUnseen),
+			badge: (entry.id === "browser" && browserUnseen) || (entry.id === "artifacts" && artifactsUnseen) || (entry.id === "computerUse" && computerUseUnseen),
 			count: entry.id === "files" ? filesChangedCount : undefined,
 			displayLabel:
 				entry.id === "files" && filesChangedCount !== undefined && (filesChangedCount > 0 || hasWorkspaceInventory)
