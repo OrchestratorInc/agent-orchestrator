@@ -24,7 +24,7 @@ ORDER BY sw.requested_at DESC, sw.id DESC`, string(sessionID), string(harness), 
 	if err != nil {
 		return "", fmt.Errorf("legacy switch handoff for %s: %w", sessionID, err)
 	}
-	defer rows.Close()
+	defer func() { _ = rows.Close() }()
 	var fallback, path, latestID string
 	var latest time.Time
 	found := false

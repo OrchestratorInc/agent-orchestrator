@@ -29,7 +29,8 @@ var timestampFenceTables = map[string]bool{
 	"session_cleanup_facts": true, "usage_sources": true, "usage_bindings": true,
 	"model_usage_events": true, "session_interface_transitions": true,
 	"codex_account_switches": true,
-	"review":                 true, "review_run": true,
+
+	"review": true, "review_run": true,
 	"conversations": true, "conversation_branches": true, "conversation_messages": true, "conversation_activities": true,
 	"pr": true, "pr_checks": true, "pr_reviews": true, "pr_comment": true, "pr_review_threads": true,
 	"change_log": true, "agent_accounts": true, "session_artifacts": true,
