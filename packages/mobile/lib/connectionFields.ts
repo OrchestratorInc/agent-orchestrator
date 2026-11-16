@@ -107,6 +107,11 @@ export function resolveManualAddress(hostInput: string, portInput: string, saved
 		if (!host) return { ok: false, error: "Enter a host before the port." };
 	}
 
+	// Only a bare name or IP: TLS is decided from the name, so a path, query or
+	// user-info must not let "public.example/x.local" pass as a local address.
+	if (!/^[a-z0-9._-]+$/i.test(host) && !/^(\[[0-9a-f:.%]+\]|[0-9a-f:.%]+)$/i.test(host)) {
+		return { ok: false, error: "Enter only a host name or IP address, without a path." };
+	}
 	if (embedded && !isValidPort(embedded)) return { ok: false, error: "The port in the host must be from 1 to 65535." };
 	if (port && !isValidPort(port)) return { ok: false, error: PORT_ERROR };
 	if (port && embedded && Number(port) !== Number(embedded)) {

@@ -61,6 +61,23 @@ describe("resolveManualAddress", () => {
 		expect(resolveManualAddress(`http://${host}`, port)).toMatchObject({ ok: true, secure: false });
 	});
 
+	// TLS is decided from the name, so anything after it must not make a public
+	// host look local and send its credential over plain HTTP.
+	it.each([
+		"nas.example.com/status.local",
+		"https://nas.example.com/status.local",
+		"nas.example.com?x=.local",
+		"nas.example.com#.local",
+		"user@my-mac.local",
+		"my-mac.local@nas.example.com",
+		"nas.example.com\\x.local",
+		"nas.example.com∕x.local",
+		"nas example.local",
+	])("rejects %s instead of reading a path, query or user-info as part of the host", (host) => {
+		expect(resolveManualAddress(host, "")).toEqual({ ok: false, error: "Enter only a host name or IP address, without a path." });
+		expect(manualAddressError(host, "")).toBe("Enter only a host name or IP address, without a path.");
+	});
+
 	it("keeps the host, without its scheme, port or trailing slash", () => {
 		expect(resolveManualAddress("  https://example.trycloudflare.com:443/ ", "")).toMatchObject({ host: "example.trycloudflare.com" });
 		expect(resolveManualAddress("http://[fe80::1]:3011/", "")).toEqual({ ok: true, host: "[fe80::1]", ...plain() });
