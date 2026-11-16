@@ -111,7 +111,7 @@ func TestPointTimestampNormalizationPreservesNoOpFacts(t *testing.T) {
 	}
 }
 
-func TestUnexpectedTimestampTriggerWriteRollsBackAndStartupContinues(t *testing.T) {
+func TestUnexpectedTimestampTriggerWriteRollsBackAndBlocksStartup(t *testing.T) {
 	dir := t.TempDir()
 	db := openMigratedTestDBIn(t, dir)
 	if _, err := db.Exec(`CREATE TABLE unrelated(value INTEGER);INSERT INTO unrelated VALUES(0);
@@ -123,10 +123,10 @@ func TestUnexpectedTimestampTriggerWriteRollsBackAndStartupContinues(t *testing.
 		t.Fatalf("unexpected write accepted: %v", err)
 	}
 	s, err := Open(dir)
-	if err != nil {
-		t.Fatalf("persistent repair error blocked startup: %v", err)
+	if err == nil {
+		_ = s.Close()
+		t.Fatal("unexpected trigger effects published unrepaired readers")
 	}
-	defer s.Close()
 	var n int
 	var raw string
 	if err := db.QueryRow(`SELECT value FROM unrelated`).Scan(&n); err != nil || n != 0 {
@@ -135,7 +135,12 @@ func TestUnexpectedTimestampTriggerWriteRollsBackAndStartupContinues(t *testing.
 	if err := db.QueryRow(`SELECT CAST(updated_at AS TEXT) FROM sessions`).Scan(&raw); err != nil || raw != "2026-10-21 09:00:00 +0530 IST" {
 		t.Fatalf("failed batch changed bytes: %q %v", raw, err)
 	}
-	if _, ok, err := s.GetSession(context.Background(), "guarded"); err != nil || !ok {
+	ro, err := OpenReadOnly(context.Background(), dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer ro.Close()
+	if _, ok, err := ro.GetSession(context.Background(), "guarded"); err != nil || !ok {
 		t.Fatalf("fallback reader unavailable: %v %v", ok, err)
 	}
 }

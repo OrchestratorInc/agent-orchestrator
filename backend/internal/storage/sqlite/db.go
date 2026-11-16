@@ -118,8 +118,8 @@ func checkLegacyDatabasePath(dataDir string) error {
 	return nil
 }
 
-// timestampFenceTimeout bounds startup repair; unfinished tables continue in
-// the background after readers become available.
+// timestampFenceTimeout bounds startup repair. A failed fence never publishes
+// readers that could compare legacy timestamps as local wall-clock text.
 const timestampFenceTimeout = 5 * time.Minute
 
 type timestampOpenOptions struct {
@@ -172,22 +172,27 @@ func openWithTimestampOptions(dataDir string, opts timestampOpenOptions) (*Store
 		_ = writeDB.Close()
 		return nil, err
 	}
-	state, repairErr := loadTimestampSkips(context.Background(), readDB)
-	complete := state != nil && state.rows["_repaired"] == timestampCompletionVersion
-	if !newDatabase && repairErr == nil && !complete {
+	state, err := loadTimestampSkips(context.Background(), readDB)
+	if err != nil {
+		_ = readDB.Close()
+		_ = writeDB.Close()
+		return nil, fmt.Errorf("load timestamp repair state: %w", err)
+	}
+	if !newDatabase {
 		started := time.Now()
+		slog.Info("checking legacy timestamps before opening readers")
 		ctx, cancel := context.WithTimeout(context.Background(), opts.fenceBudget)
-		_, repairErr = runTimestampRepairState(ctx, writeDB, readDB, true, state)
+		result, repairErr := runTimestampRepairState(ctx, writeDB, readDB, true, state)
 		if repairErr == nil {
 			repairErr = ctx.Err()
 		}
 		cancel()
-		if repairErr == nil {
-			slog.Info("timestamp startup fence completed", "duration", time.Since(started))
+		if repairErr != nil {
+			_ = readDB.Close()
+			_ = writeDB.Close()
+			return nil, fmt.Errorf("timestamp startup repair incomplete; reopen to retry committed progress: %w", repairErr)
 		}
-	}
-	if repairErr != nil {
-		slog.Warn("timestamp startup fence incomplete; continuing in background", "error", repairErr)
+		slog.Info("timestamp startup fence completed", "duration", time.Since(started), "repaired", result.Repaired, "skipped", result.Skipped, "deleted", result.Deleted)
 	}
 	store, err := withSearchIndexPools(dataDir, dsn, writeDB, readDB)
 	if err != nil {
@@ -195,36 +200,10 @@ func openWithTimestampOptions(dataDir string, opts timestampOpenOptions) (*Store
 		_ = writeDB.Close()
 		return nil, err
 	}
-	if newDatabase && state != nil && repairErr == nil {
-		// A database created by these migrations has no legacy writer values.
-		columns, err := timestampColumns(context.Background(), readDB)
-		if err == nil {
-			for _, column := range columns {
-				state.completed[column.table] += column.column + "\x00"
-			}
-			for table, signature := range state.completed {
-				state.complete(table, signature)
-			}
-			state.rows["_repaired"] = timestampCompletionVersion
-			state.dirty = true
-			err = state.saveProgress(context.Background(), writeDB)
-			complete = state.rows["_repaired"] == timestampCompletionVersion
-		}
-		if err != nil {
-			slog.Warn("cannot record new database repair completion", "error", err)
-		}
-	}
-	if !newDatabase && !complete {
+	if !newDatabase {
 		store.StartTimestampRepair(func(ctx context.Context) error {
 			if opts.repairDone != nil {
 				defer close(opts.repairDone)
-			}
-			if state == nil {
-				var err error
-				state, err = loadTimestampSkips(ctx, readDB)
-				if err != nil {
-					return err
-				}
 			}
 			_, err := runTimestampRepairState(ctx, writeDB, readDB, false, state)
 			return err

@@ -30,6 +30,10 @@ var timestampFenceTables = map[string]bool{
 	"model_usage_events": true, "session_interface_transitions": true,
 	"agent_switches": true, "codex_account_switches": true,
 	"review": true, "review_run": true,
+	"conversations": true, "conversation_branches": true, "conversation_messages": true, "conversation_activities": true,
+	"pr": true, "pr_checks": true, "pr_reviews": true, "pr_comment": true, "pr_review_threads": true,
+	"change_log": true, "agent_accounts": true, "session_artifacts": true,
+	"session_forks": true, "telemetry_event": true, "shell_terminals": true,
 }
 
 // Scan forward by row identity, with bounded memory and write transactions.
@@ -41,7 +45,7 @@ func repairTimestamps(ctx context.Context, db *sql.DB) error {
 
 func repairTimestampTables(ctx context.Context, db *sql.DB, fence bool) error {
 	result, err := runTimestampRepair(ctx, db, fence)
-	slog.Info("timestamp repair pass", "repaired", result.Repaired, "skipped", result.Skipped, "foreground", fence)
+	slog.Info("timestamp repair pass", "repaired", result.Repaired, "deleted", result.Deleted, "skipped", result.Skipped, "foreground", fence)
 	return err
 }
 
@@ -50,14 +54,6 @@ func runTimestampRepair(ctx context.Context, db *sql.DB, fence bool) (result tim
 	if err != nil {
 		return result, err
 	}
-	// Explicit repair calls also support legacy writers; Open trusts completion.
-	state.completed = map[string]string{}
-	for key := range state.rows {
-		if key == "_repaired" || strings.HasPrefix(key, timestampCompletionPrefix) {
-			delete(state.rows, key)
-			state.dirty = true
-		}
-	}
 	return runTimestampRepairState(ctx, db, db, fence, state)
 }
 
@@ -65,13 +61,12 @@ func runTimestampRepairState(ctx context.Context, db, reader *sql.DB, fence bool
 	state.reader = reader
 	state.timestampRepairResult = timestampRepairResult{}
 	state.retry = map[string]bool{}
-	defer func() { result = state.timestampRepairResult; err = errors.Join(err, state.saveProgress(ctx, db)) }()
+	defer func() { result = state.timestampRepairResult; err = errors.Join(err, state.save()) }()
 	columns, err := timestampColumns(ctx, reader)
 	if err != nil {
 		return result, err
 	}
 	var failures []error
-	pending := false
 	for i := 0; i < len(columns); {
 		if err := ctx.Err(); err != nil {
 			return result, errors.Join(append(failures, err)...)
@@ -116,8 +111,8 @@ func runTimestampRepairState(ctx context.Context, db, reader *sql.DB, fence bool
 			if done {
 				if !state.retry[table] {
 					state.complete(table, signature)
-				} else {
-					pending = true
+				} else if fence {
+					failures = append(failures, fmt.Errorf("timestamp ordering repair remains pending for %s", table))
 				}
 				break
 			}
@@ -133,10 +128,6 @@ func runTimestampRepairState(ctx context.Context, db, reader *sql.DB, fence bool
 	}
 	if version < offsetOnlyTimestampRepairVersion {
 		_, err = db.ExecContext(ctx, `PRAGMA user_version=1`)
-	}
-	if err == nil && !fence && !pending {
-		state.rows["_repaired"] = timestampCompletionVersion
-		state.dirty = true
 	}
 	return result, err
 }
@@ -242,85 +233,103 @@ func repairTimestampBatchMode(ctx context.Context, db *sql.DB, columns []timesta
 			return 0, false, err
 		}
 		defer func() { _ = stmt.Close() }()
-		var repaired int
+		var repaired, deleted int
 		var bindingDrops []*timestampBindingDrop
 		err = timestamps.PreserveRepresentation(ctx, tx, func() (int64, error) {
+			// Most batches have no constraints. Save one batch instead of creating
+			// and measuring a savepoint for every successfully normalized row.
+			if _, err := tx.ExecContext(ctx, "SAVEPOINT timestamp_batch"); err != nil {
+				return 0, err
+			}
+			var before int64
+			if err := tx.QueryRowContext(ctx, "SELECT total_changes()").Scan(&before); err != nil {
+				return 0, err
+			}
 			var expected int64
-			for _, v := range changes {
+			var batchErr error
+			missed := false
+			for _, values := range changes {
+				writes, updated, err := applyTimestampUpdate(ctx, tx, stmt, columns, values)
+				if err != nil {
+					batchErr = err
+					break
+				}
+				expected += writes
+				if updated {
+					repaired++
+				} else {
+					missed = true
+				}
+			}
+			if batchErr == nil {
+				if missed {
+					state.retry[columns[0].table] = true
+				}
+				_, err := tx.ExecContext(ctx, "RELEASE timestamp_batch")
+				return expected, err
+			}
+			var constraint *modernsqlite.Error
+			if !errors.As(batchErr, &constraint) || constraint.Code()&255 != 19 {
+				return 0, batchErr
+			}
+			if _, err := tx.ExecContext(ctx, "ROLLBACK TO timestamp_batch"); err != nil {
+				return 0, err
+			}
+			if _, err := tx.ExecContext(ctx, "RELEASE timestamp_batch"); err != nil {
+				return 0, err
+			}
+			// SQLite total_changes includes rolled-back writes and trigger effects.
+			// Count them separately; their change-log rows no longer exist.
+			var after int64
+			if err := tx.QueryRowContext(ctx, "SELECT total_changes()").Scan(&after); err != nil {
+				return 0, err
+			}
+			expected, repaired = after-before, 0
+			for _, values := range changes {
 				if _, err := tx.ExecContext(ctx, "SAVEPOINT timestamp_row"); err != nil {
 					return 0, err
 				}
-				var before int64
 				if err := tx.QueryRowContext(ctx, "SELECT total_changes()").Scan(&before); err != nil {
 					return 0, err
 				}
-				var writes int64
+				writes, updated, rowErr := applyTimestampUpdate(ctx, tx, stmt, columns, values)
 				var bindingDrop *timestampBindingDrop
-				apply := func() error {
-					if columns[0].table == "sessions" {
-						var revision int64
-						err := stmt.QueryRowContext(ctx, v...).Scan(&revision)
-						if errors.Is(err, sql.ErrNoRows) {
-							return nil
-						}
-						if err != nil {
-							return err
-						}
+				removed := false
+				if rowErr != nil && errors.As(rowErr, &constraint) && (constraint.Code() == 2067 || constraint.Code() == 1555) {
+					var resolved error
+					bindingDrop, resolved = resolveTimestampCollision(ctx, tx, columns, values)
+					if resolved != nil {
+						rowErr = errors.Join(rowErr, resolved)
+					} else {
+						removed = true
+						writes, updated, rowErr = applyTimestampUpdate(ctx, tx, stmt, columns, values)
 						writes++
-						result, err := tx.ExecContext(ctx, `UPDATE sessions SET revision=? WHERE rowid=? AND revision<>?`, revision, v[len(columns)], revision)
-						if err != nil {
-							return err
-						}
-						n, err := result.RowsAffected()
-						writes += 2 * n
-						return err
 					}
-					result, err := stmt.ExecContext(ctx, v...)
-					if err != nil {
-						var constraint *modernsqlite.Error
-						if !errors.As(err, &constraint) || (constraint.Code() != 2067 && constraint.Code() != 1555) {
-							return err
-						}
-						var resolved error
-						bindingDrop, resolved = resolveTimestampCollision(ctx, tx, columns, v)
-						if resolved != nil {
-							return errors.Join(err, resolved)
-						}
-						// One redundant key row was deleted.
-						writes++
-						result, err = stmt.ExecContext(ctx, v...)
-					}
-					if err != nil {
-						return err
-					}
-					n, err := result.RowsAffected()
-					writes += n
-					return err
 				}
-				rowErr := apply()
 				if rowErr != nil {
-					var constraint *modernsqlite.Error
 					if !errors.As(rowErr, &constraint) || constraint.Code()&255 != 19 {
 						return 0, rowErr
 					}
 					if _, err := tx.ExecContext(ctx, "ROLLBACK TO timestamp_row"); err != nil {
 						return 0, err
 					}
-					var after int64
 					if err := tx.QueryRowContext(ctx, "SELECT total_changes()").Scan(&after); err != nil {
 						return 0, err
 					}
 					expected += after - before
-					state.skip(columns[0].table, v, len(columns), rowErr)
+					state.skip(columns[0].table, values, len(columns), rowErr)
 				} else {
 					expected += writes
-					if writes > 0 {
+					if updated {
 						repaired++
+					} else if !removed {
+						state.retry[columns[0].table] = true
+					}
+					if removed {
+						deleted++
 						if bindingDrop != nil {
 							bindingDrops = append(bindingDrops, bindingDrop)
 						}
-					} else {
-						state.retry[columns[0].table] = true
 					}
 				}
 				if _, err := tx.ExecContext(ctx, "RELEASE timestamp_row"); err != nil {
@@ -336,6 +345,7 @@ func repairTimestampBatchMode(ctx context.Context, db *sql.DB, columns []timesta
 			return 0, false, err
 		}
 		state.Repaired += repaired
+		state.Deleted += deleted
 		for _, drop := range bindingDrops {
 			slog.Warn("timestamp repair dropped same-instant account binding", "session", drop.session, "provider", drop.provider,
 				"kept_account", drop.keptAccount, "dropped_account", drop.droppedAccount, "dropped_rowid", drop.rowid)
@@ -345,10 +355,41 @@ func repairTimestampBatchMode(ctx context.Context, db *sql.DB, columns []timesta
 	return last + 1, n < timestampRepairBatch || last == math.MaxInt64, nil
 }
 
+// applyTimestampUpdate counts only direct writes and the session revision
+// compensation. Collision handling is reserved for the constraint fallback.
+func applyTimestampUpdate(ctx context.Context, tx *sql.Conn, stmt *sql.Stmt, columns []timestampColumn, values []any) (int64, bool, error) {
+	if columns[0].table == "sessions" {
+		var revision int64
+		if err := stmt.QueryRowContext(ctx, values...).Scan(&revision); err != nil {
+			if errors.Is(err, sql.ErrNoRows) {
+				return 0, false, nil
+			}
+			return 0, false, err
+		}
+		result, err := tx.ExecContext(ctx, `UPDATE sessions SET revision=? WHERE rowid=? AND revision<>?`, revision, values[len(columns)], revision)
+		if err != nil {
+			return 0, false, err
+		}
+		n, err := result.RowsAffected()
+		return 1 + 2*n, true, err
+	}
+	result, err := stmt.ExecContext(ctx, values...)
+	if err != nil {
+		return 0, false, err
+	}
+	n, err := result.RowsAffected()
+	return n, n > 0, err
+}
+
 func legacyTimestampPredicate(column string) string {
 	return fmt.Sprintf(`typeof(%[1]s)='text'
 AND ((%[1]s GLOB '* [+-][0-9][0-9][0-9][0-9] *' AND %[1]s NOT GLOB '* +0000 UTC')
-OR %[1]s GLOB '????-??-??T*')`, quoteIdentifier(column))
+OR %[1]s GLOB '????-??-??T*'
+OR %[1]s GLOB '????-??-?? ??:??:*[+-]??:??'
+OR %[1]s GLOB '????-??-?? ??:??:*Z'
+OR %[1]s GLOB '????-??-?? ??:??'
+OR %[1]s GLOB '????-??-?? ??:??Z'
+OR %[1]s GLOB '????-??-??Z')`, quoteIdentifier(column))
 }
 
 // A covering index avoids loading transcript/command payloads just to discover

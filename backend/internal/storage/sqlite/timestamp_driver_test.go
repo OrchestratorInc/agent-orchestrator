@@ -64,6 +64,50 @@ func TestLegacyTimestampReadsPreserveTypesAndInstants(t *testing.T) {
 	}
 }
 
+func TestLegacyTimestampReadsMatchDriverLayouts(t *testing.T) {
+	cases := []struct {
+		value string
+		want  time.Time
+	}{
+		{"2026-10-21 18:15:40.123456789+02:00", time.Date(2026, 10, 21, 16, 15, 40, 123456789, time.UTC)},
+		{"2026-10-21T18:15:40.123456789+02:00", time.Date(2026, 10, 21, 16, 15, 40, 123456789, time.UTC)},
+		{"2026-10-21 10:45:40.123456789-05:30", time.Date(2026, 10, 21, 16, 15, 40, 123456789, time.UTC)},
+		{"2026-10-21 16:15:40.123456789", time.Date(2026, 10, 21, 16, 15, 40, 123456789, time.UTC)},
+		{"2026-10-21T16:15:40.123456789", time.Date(2026, 10, 21, 16, 15, 40, 123456789, time.UTC)},
+		{"2026-10-21 16:15:40Z", time.Date(2026, 10, 21, 16, 15, 40, 0, time.UTC)},
+		{"2026-10-21 16:15", time.Date(2026, 10, 21, 16, 15, 0, 0, time.UTC)},
+		{"2026-10-21T16:15", time.Date(2026, 10, 21, 16, 15, 0, 0, time.UTC)},
+		{"2026-10-21 16:15Z", time.Date(2026, 10, 21, 16, 15, 0, 0, time.UTC)},
+		{"2026-10-21", time.Date(2026, 10, 21, 0, 0, 0, 0, time.UTC)},
+	}
+	for _, driverName := range []string{"sqlite", "ao-sqlite"} {
+		t.Run(driverName, func(t *testing.T) {
+			db, err := sql.Open(driverName, ":memory:")
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer db.Close()
+			db.SetMaxOpenConns(1)
+			if _, err := db.Exec(`CREATE TABLE layouts(at TIMESTAMP, plain TEXT)`); err != nil {
+				t.Fatal(err)
+			}
+			for _, tc := range cases {
+				if _, err := db.Exec(`INSERT INTO layouts(at,plain) VALUES(?,?)`, tc.value, tc.value); err != nil {
+					t.Fatal(err)
+				}
+				var at time.Time
+				var plain string
+				if err := db.QueryRow(`SELECT at,plain FROM layouts WHERE plain=?`, tc.value).Scan(&at, &plain); err != nil {
+					t.Fatalf("scan %q: %v", tc.value, err)
+				}
+				if !at.Equal(tc.want) || plain != tc.value {
+					t.Errorf("%q: got %v and %q; want %v and unchanged text", tc.value, at, plain, tc.want)
+				}
+			}
+		})
+	}
+}
+
 func TestRepairNormalizesHistoricalLocalEncodings(t *testing.T) {
 	db := openRepairDB(t)
 	for i, value := range []string{"2026-10-21 18:15:40.123456789 +0200 CEST", "2026-10-21 21:45:40.123456789 +0530 IST m=+5.31", "2026-10-21T18:15:40.123456789+02:00"} {

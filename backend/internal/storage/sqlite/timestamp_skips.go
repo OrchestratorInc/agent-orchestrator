@@ -14,7 +14,7 @@ import (
 	"strings"
 )
 
-type timestampRepairResult struct{ Repaired, Skipped int }
+type timestampRepairResult struct{ Repaired, Skipped, Deleted int }
 type timestampRepairState struct {
 	timestampRepairResult
 	path      string
@@ -50,9 +50,12 @@ func loadTimestampSkips(ctx context.Context, db *sql.DB) (*timestampRepairState,
 		state.rows = map[string]string{}
 		state.dirty = true
 	}
-	for key, value := range state.rows {
-		if strings.HasPrefix(key, timestampCompletionPrefix) {
-			state.completed[strings.TrimPrefix(key, timestampCompletionPrefix)] = value
+	// Old completion markers are not evidence about the current database: an
+	// older writer or a restored ao.db can introduce legacy values afterward.
+	for key := range state.rows {
+		if key == "_repaired" || strings.HasPrefix(key, "_complete") {
+			delete(state.rows, key)
+			state.dirty = true
 		}
 	}
 	return state, nil
@@ -110,31 +113,8 @@ func (s *timestampRepairState) skip(table string, values []any, n int, err error
 	slog.Warn("timestamp repair skipped row", "table", table, "rowid", values[n], "error", err)
 }
 
-// Version 3 also requires the repaired database pages to be checkpointed.
-const timestampCompletionVersion = "3"
-const timestampCompletionPrefix = "_complete3/"
-
+// Only cache completed tables within this Open. Every later Open checks the
+// database again, including after an older writer or a database restore.
 func (s *timestampRepairState) complete(table, signature string) {
 	s.completed[table] = signature
-	s.rows[timestampCompletionPrefix+table] = signature
-	s.dirty = true
-}
-
-func (s *timestampRepairState) saveProgress(ctx context.Context, db *sql.DB) error {
-	var err error
-	if s.dirty && len(s.completed) > 0 {
-		var busy, logged, checkpointed int
-		err = db.QueryRowContext(ctx, "PRAGMA wal_checkpoint(FULL)").Scan(&busy, &logged, &checkpointed)
-		if err != nil || busy != 0 {
-			if err == nil {
-				err = fmt.Errorf("timestamp repair checkpoint busy: %d", busy)
-			}
-			for table := range s.completed {
-				delete(s.rows, timestampCompletionPrefix+table)
-			}
-			clear(s.completed)
-			delete(s.rows, "_repaired")
-		}
-	}
-	return errors.Join(err, s.save())
 }

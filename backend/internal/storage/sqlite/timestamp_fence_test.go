@@ -54,7 +54,7 @@ func TestTimestampFenceInterruptedAndRetried(t *testing.T) {
 	}
 }
 
-func TestTimestampFenceFailureKeepsStoreAvailable(t *testing.T) {
+func TestTimestampFenceFailureDoesNotPublishReaders(t *testing.T) {
 	dir := t.TempDir()
 	db := openMigratedTestDBIn(t, dir)
 	if _, err := db.Exec(`INSERT INTO projects(id,path,registered_at) VALUES('fence','/tmp/fence','2026-10-21 03:30:00 +0000 UTC'); INSERT INTO sessions(id,num,harness,activity_state,activity_last_at,is_terminated,created_at,updated_at)
@@ -64,11 +64,9 @@ func TestTimestampFenceFailureKeepsStoreAvailable(t *testing.T) {
 		t.Fatal(err)
 	}
 	first, err := Open(dir)
-	if err != nil {
-		t.Fatalf("failed row blocked startup: %v", err)
-	}
-	if err := first.Close(); err != nil {
-		t.Fatal(err)
+	if err == nil {
+		_ = first.Close()
+		t.Fatal("failed ordering repair published readers")
 	}
 	var raw string
 	if err := db.QueryRow(`SELECT CAST(created_at AS TEXT) FROM sessions`).Scan(&raw); err != nil || !strings.HasSuffix(raw, "+0000 UTC") {
@@ -160,7 +158,7 @@ func TestTimestampRepairIndexedBounds(t *testing.T) {
 	}
 }
 
-func TestOpenContinuesWhenStartupRepairRunsOutOfTime(t *testing.T) {
+func TestOpenRetriesCommittedProgressAfterStartupRepairDeadline(t *testing.T) {
 	dir := t.TempDir()
 	db := openMigratedTestDBIn(t, dir)
 	if _, err := db.Exec(`WITH RECURSIVE ids(i) AS (VALUES(1) UNION ALL SELECT i+1 FROM ids WHERE i<2000)
@@ -178,21 +176,29 @@ func TestOpenContinuesWhenStartupRepairRunsOutOfTime(t *testing.T) {
 	// Inject a deadline into the second scan after one committed batch.
 	// Committed progress must survive and the background pass resumes.
 	s, err := openWithTimestampOptions(dir, opts)
-	if err != nil {
-		t.Fatalf("deadline stopped startup after a committed batch: %v", err)
+	if !errors.Is(err, context.DeadlineExceeded) {
+		if s != nil {
+			_ = s.Close()
+		}
+		t.Fatalf("deadline must withhold readers: %v", err)
 	}
 	if n := counts.fenceRows.Load(); n != timestampRepairBatch {
 		t.Errorf("fence repaired %d rows before its deadline, want %d", n, timestampRepairBatch)
+	}
+	if strings.Contains(logs.String(), "timestamp startup fence completed") {
+		t.Fatalf("misleading deadline log: %s", logs.String())
+	}
+	// Already committed rows survive; retry the unfinished table on reopen.
+	s, err = openWithTimestampOptions(dir, repairScanOptions(t, counts, done))
+	if err != nil {
+		t.Fatal(err)
 	}
 	<-done
 	if err := s.Close(); err != nil {
 		t.Fatal(err)
 	}
-	if !strings.Contains(logs.String(), "timestamp startup fence incomplete") || !strings.Contains(logs.String(), context.DeadlineExceeded.Error()) || strings.Contains(logs.String(), "timestamp startup fence completed") {
-		t.Fatalf("misleading deadline log: %s", logs.String())
-	}
 	var legacy int
 	if err := db.QueryRow(`SELECT count(*) FROM sessions WHERE CAST(created_at AS TEXT) LIKE '%IST'`).Scan(&legacy); err != nil || legacy != 0 {
-		t.Fatalf("background resume left %d legacy rows: %v", legacy, err)
+		t.Fatalf("reopen left %d legacy rows: %v", legacy, err)
 	}
 }

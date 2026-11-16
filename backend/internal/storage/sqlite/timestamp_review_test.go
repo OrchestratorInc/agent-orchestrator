@@ -4,7 +4,6 @@ import (
 	"context"
 	"database/sql"
 	"database/sql/driver"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"os"
@@ -164,7 +163,7 @@ func repairScanOptions(t *testing.T, counts *repairScanCounts, done chan<- struc
 	sql.Register(name, repairScanDriver{Driver: base.Driver(), counts: counts})
 	return timestampOpenOptions{driver: name, fenceBudget: 30 * time.Second, repairDone: done}
 }
-func TestTimestampCompletedOpenDoesNotScan(t *testing.T) {
+func TestTimestampReopenChecksForOlderWriters(t *testing.T) {
 	dir := t.TempDir()
 	db := openMigratedTestDBIn(t, dir)
 	if _, err := db.Exec(`INSERT INTO sessions(id,num,harness,activity_state,activity_last_at,is_terminated,created_at,updated_at) VALUES('complete',1,'aider','idle',CURRENT_TIMESTAMP,0,CURRENT_TIMESTAMP,'2026-10-21 09:00:00 +0530 IST')`); err != nil {
@@ -197,8 +196,11 @@ func TestTimestampCompletedOpenDoesNotScan(t *testing.T) {
 	if first.reader.Load() == 0 {
 		t.Error("first pass did not scan on reader pool")
 	}
-	if n := second.writer.Load() + second.reader.Load(); n != 0 {
-		t.Fatalf("completed database rescanned on second Open: %d", n)
+	if second.writer.Load() != 0 || second.reader.Load() == 0 {
+		t.Fatal("reopen must detect legacy values on readers")
+	}
+	if second.committed.Load() {
+		t.Fatal("clean reopen rewrote a session")
 	}
 }
 
@@ -241,25 +243,9 @@ func TestTimestampCASMissRetriesOnNextOpen(t *testing.T) {
 	}
 	done := make(chan struct{})
 	s, err := openWithTimestampOptions(dir, timestampOpenOptions{fenceBudget: 30 * time.Second, repairDone: done})
-	if err != nil {
-		t.Fatal(err)
-	}
-	<-done
-	if err := s.Close(); err != nil {
-		t.Fatal(err)
-	}
-	data, err := os.ReadFile(filepath.Join(dir, "timestamp-repair-skips.json"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	var ledger map[string]string
-	if err := json.Unmarshal(data, &ledger); err != nil {
-		t.Fatal(err)
-	}
-	for key := range ledger {
-		if strings.HasSuffix(key, "/conversations") {
-			t.Fatalf("CAS miss table was marked complete: %q", key)
-		}
+	if err == nil {
+		_ = s.Close()
+		t.Fatal("CAS miss published readers with unnormalized conversation times")
 	}
 	if _, err := db.Exec(`DROP TRIGGER miss_timestamp_repair`); err != nil {
 		t.Fatal(err)
@@ -279,7 +265,7 @@ func TestTimestampCASMissRetriesOnNextOpen(t *testing.T) {
 	}
 }
 
-func TestTimestampCheckpointMustCompleteBeforeMarker(t *testing.T) {
+func TestTimestampRepairDoesNotRequireCheckpoint(t *testing.T) {
 	for _, outcome := range []string{"busy", "error"} {
 		t.Run(outcome, func(t *testing.T) {
 			dir := t.TempDir()
@@ -290,47 +276,42 @@ func TestTimestampCheckpointMustCompleteBeforeMarker(t *testing.T) {
 			counts, done := &repairScanCounts{checkpointOutcome: outcome}, make(chan struct{})
 			s, err := openWithTimestampOptions(dir, repairScanOptions(t, counts, done))
 			if err != nil {
-				t.Fatalf("checkpoint failure blocked startup: %v", err)
+				t.Fatalf("checkpoint affected repair: %v", err)
 			}
 			<-done
 			if err := s.Close(); err != nil {
 				t.Fatal(err)
 			}
-			readLedger := func() map[string]string {
-				data, err := os.ReadFile(filepath.Join(dir, "timestamp-repair-skips.json"))
-				if err != nil {
-					t.Fatal(err)
-				}
-				var ledger map[string]string
-				if err := json.Unmarshal(data, &ledger); err != nil {
-					t.Fatal(err)
-				}
-				return ledger
+			if counts.checkpointCalls.Load() != 0 {
+				t.Fatal("repair attempted an unnecessary WAL checkpoint")
 			}
-			ledger := readLedger()
-			if ledger["_repaired"] != "" {
-				t.Fatalf("%s checkpoint wrote completed marker: %q", outcome, ledger["_repaired"])
-			}
-			for key := range ledger {
-				if strings.HasPrefix(key, timestampCompletionPrefix) {
-					t.Fatalf("%s checkpoint persisted table completion: %s", outcome, key)
-				}
-			}
-			if counts.checkpointCalls.Load() == 0 {
-				t.Fatal("checkpoint was not attempted")
-			}
-			done = make(chan struct{})
-			s, err = openWithTimestampOptions(dir, timestampOpenOptions{fenceBudget: 30 * time.Second, repairDone: done})
-			if err != nil {
-				t.Fatal(err)
-			}
-			<-done
-			if err := s.Close(); err != nil {
-				t.Fatal(err)
-			}
-			if marker := readLedger()["_repaired"]; marker != timestampCompletionVersion {
-				t.Fatalf("next Open did not finish repair: %q", marker)
+			var raw string
+			if err := db.QueryRow(`SELECT CAST(updated_at AS TEXT) FROM sessions`).Scan(&raw); err != nil || raw != "2026-10-21 03:30:00 +0000 UTC" {
+				t.Fatalf("repair failed: %q %v", raw, err)
 			}
 		})
+	}
+}
+
+func TestTimestampOldCompletionLedgerCannotHideLegacyRows(t *testing.T) {
+	dir := t.TempDir()
+	db := openMigratedTestDBIn(t, dir)
+	if _, err := db.Exec(`INSERT INTO sessions(id,num,harness,activity_state,activity_last_at,is_terminated,created_at,updated_at) VALUES('old-writer',1,'aider','idle',CURRENT_TIMESTAMP,0,CURRENT_TIMESTAMP,'2026-10-21 09:00:00 +0530 +0530')`); err != nil {
+		t.Fatal(err)
+	}
+	// This sidecar can survive a downgrade or replacing ao.db with a backup.
+	if err := os.WriteFile(filepath.Join(dir, "timestamp-repair-skips.json"), []byte(`{"_repaired":"3","_complete3/sessions":"created_at\u0000updated_at\u0000"}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	s, err := Open(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := s.Close(); err != nil {
+		t.Fatal(err)
+	}
+	var raw string
+	if err := db.QueryRow(`SELECT CAST(updated_at AS TEXT) FROM sessions`).Scan(&raw); err != nil || raw != "2026-10-21 03:30:00 +0000 UTC" {
+		t.Fatalf("stale completion hid legacy row: %q %v", raw, err)
 	}
 }
