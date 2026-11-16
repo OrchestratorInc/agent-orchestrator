@@ -243,6 +243,15 @@ describe("AgentModelPicker", () => {
 		expect(screen.queryAllByRole("menu")).toHaveLength(1);
 	});
 
+	it("keeps the rail in one order whichever agent runs, so a pick never moves a logo", async () => {
+		const user = userEvent.setup();
+		open(undefined, false, "codex", { modelLabel: "Codex" });
+		await user.click(screen.getByRole("button", { name: /Agent, model and reasoning effort/ }));
+		const names = within(screen.getByRole("radiogroup", { name: "Agents" })).getAllByRole("radio").map((radio) => radio.getAttribute("aria-label"));
+		expect(names.slice(0, 2)).toEqual(["Claude Code", "Codex"]);
+		expect(screen.getByRole("radio", { name: "Codex" })).toHaveAttribute("aria-checked", "true");
+	});
+
 	it("goes back to the running agent when its logo is picked", async () => {
 		const user = userEvent.setup();
 		const { onPendingChange } = open({ harness: "codex" });

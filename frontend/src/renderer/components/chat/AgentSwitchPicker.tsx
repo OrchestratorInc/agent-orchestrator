@@ -265,28 +265,29 @@ export function AgentModelPicker({
 		enabled: !terminal,
 		staleTime: 60_000,
 	}).data;
-	// Every agent is on the rail, the running one first. Runnable ones can be picked, as in
-	// New Task; unknown readiness stays selectable since the daemon checks the target first.
-	// One that is not installed or signed in, or has no chat here, is dimmed after them and
-	// opens its setup in Settings, rather than missing with no word why.
+	// Every agent is on the rail in one fixed order, so picking one never moves it (on /new a
+	// pick changes the running agent at once). Runnable ones can be picked, as in New Task;
+	// unknown readiness stays selectable since the daemon checks the target first. One that is
+	// not installed or signed in, or has no chat here, is dimmed after them and opens its setup
+	// in Settings, rather than missing with no word why. The running agent is never dimmed, and
+	// leads the rail only when the list does not name it.
 	const railAgents = useMemo<RailAgent[]>(() => {
-		const others: RailAgent[] = choices
-			? choices.filter((agent) => agent.id !== currentHarness)
-			: (terminal ? TERMINAL_SWITCH_TARGETS : CHAT_SWITCH_TARGETS).flatMap((id) => {
-				if (id === currentHarness) return [];
+		const listed: RailAgent[] = choices
+			? choices.map((agent) => (agent.id === currentHarness ? { id: agent.id, label: agent.label } : agent))
+			: (terminal ? TERMINAL_SWITCH_TARGETS : CHAT_SWITCH_TARGETS).map((id) => {
 				const agent = readiness?.find((candidate) => candidate.id === id);
 				const label = agentLabel(id) !== id ? agentLabel(id) : agent?.label ?? id;
+				if (id === currentHarness) return { id: id as string, label };
 				const unavailable = agent?.installation.state === "not_installed" ? t("agentSwitch.notInstalled")
 					: agent?.authentication.state === "unauthorized" ? t("agentSwitch.notSignedIn")
 					: !terminal && chatUnavailable?.has(id) ? t("agentSwitch.chatUnavailable")
 					: undefined;
-				return [{ id: id as string, label, unavailable }];
+				return { id: id as string, label, unavailable };
 			});
-		return [
-			{ id: currentHarness, label: agentLabel(currentHarness) },
-			...others.filter((agent) => !agent.unavailable),
-			...others.filter((agent) => agent.unavailable),
-		];
+		const ordered = [...listed.filter((agent) => !agent.unavailable), ...listed.filter((agent) => agent.unavailable)];
+		return ordered.some((agent) => agent.id === currentHarness)
+			? ordered
+			: [{ id: currentHarness, label: agentLabel(currentHarness) }, ...ordered];
 	}, [chatUnavailable, choices, currentHarness, readiness, t, terminal]);
 	const agents = useMemo(() => railAgents.filter((agent) => !agent.unavailable), [railAgents]);
 	const management = useAgentManagementMenu(undefined, hostId, agentSwitch.harnessView);
