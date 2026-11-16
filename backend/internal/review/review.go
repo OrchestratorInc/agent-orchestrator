@@ -571,6 +571,15 @@ func (e *Engine) TriggerWithOptions(ctx stdctx.Context, workerID domain.SessionI
 			reviewRow.ProviderConversationID = ""
 			reviewRow.ControllerGeneration = ""
 		}
+		// The reviewer was marked active before planning decided whether any PR
+		// was due. No run started, so restore the activity it had before this
+		// trigger; otherwise a live pane reads as active with no run behind it.
+		if hasReview && !previousReview.IsArchived && previousReview.ReviewerActivityState != "" && reviewRow.ReviewerActivityState != previousReview.ReviewerActivityState {
+			reviewRow, err = e.upsertReview(ctx, worker, harness, reviewRow.ReviewerHandleID, reviewRow.AgentSessionID, reviewRow.ReviewerLaunchID, previousReview.ReviewerActivityState, now)
+			if err != nil {
+				return TriggerResult{}, err
+			}
+		}
 		if opts.RejectReviewedHead || (opts.Rerun && source == domain.ReviewTriggerAgent) {
 			return TriggerResult{}, nothingToReviewError(reviews, runs, harness, opts.Rerun, noOpenPR)
 		}

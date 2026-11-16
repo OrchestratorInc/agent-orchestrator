@@ -2628,6 +2628,31 @@ func TestAutoTriggerSkipsDraftPR(t *testing.T) {
 	}
 }
 
+func TestAutoTriggerWithNoRunRestoresReviewerActivity(t *testing.T) {
+	store := &fakeStore{
+		review: &domain.Review{ID: "rev-1", SessionID: "mer-1", Harness: domain.ReviewerClaudeCode, ReviewerHandleID: "review-mer-1", AgentSessionID: "native-reviewer-1", ReviewerLaunchID: "launch-1", ReviewerActivityState: domain.ActivityIdle},
+	}
+	launcher := &fakeLauncher{handle: "review-mer-1"}
+	prs := prAt("sha1")
+	prs.prs[0].Draft = true
+	eng := newEngineForTest(store, fakeSessions{rec: liveWorker(), ok: true}, prs, fakeProjects{}, launcher)
+
+	res, err := triggerWithSource(context.Background(), eng, "mer-1", domain.ReviewerClaudeCode, domain.AgentConfig{}, domain.ReviewTriggerAuto)
+	if err != nil {
+		t.Fatalf("TriggerWithSource: %v", err)
+	}
+	if res.Created || len(store.runs) != 0 {
+		t.Fatalf("auto-review started on a draft PR: result=%+v runs=%+v", res, store.runs)
+	}
+	got := store.review
+	if got.ReviewerActivityState != domain.ActivityIdle {
+		t.Fatalf("reviewer activity = %q after a trigger that started no run, want idle", got.ReviewerActivityState)
+	}
+	if got.ReviewerHandleID != "review-mer-1" || got.AgentSessionID != "native-reviewer-1" || got.ReviewerLaunchID != "launch-1" {
+		t.Fatalf("reviewer identity changed: %+v", got)
+	}
+}
+
 func TestManualTriggerStillReviewsDraftPR(t *testing.T) {
 	store := &fakeStore{}
 	launcher := &fakeLauncher{handle: "review-mer-1"}
