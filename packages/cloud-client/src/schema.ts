@@ -27,9 +27,9 @@ export interface paths {
             path?: never;
             cookie?: never;
         };
-        /** @description How long the caller's Cloud sessions and their conversation content are kept. The setting is the signed-in user's own and covers every Cloud session they started, in any organization, team sessions included; a child session an orchestrator started follows the orchestrator session's creator. The clock runs from a session's creation: once a session is older than retentionDays it is ended, its sandbox is deleted and its content (chat timeline, harness transcripts, terminal output, commands, agent-switch handoffs and prompts) is deleted for good. The session itself remains, without its content, for billing and audit. A user keeps defaultDays until they choose another of options. */
+        /** @description How long the caller's Cloud sessions and their conversation content are kept. The setting is the signed-in user's own and covers every Cloud session they started, in any organization, team sessions included; a child session an orchestrator started follows the orchestrator session's creator. The clock runs from a session's creation: once a session is older than retentionDays and has ended (a session still running is never ended for it; it waits until someone ends it), its sandbox is deleted and its content (chat timeline, harness transcripts, terminal output, commands, agent-switch handoffs and prompts) is deleted for good. The session itself remains, without its content, for billing and audit. A user follows defaultDays (followsDefault) until they choose another period, and can go back to it. */
         get: operations["getDataRetention"];
-        /** @description Choose how long the caller's Cloud sessions and their conversation content are kept. Both modes answer sessionsToDelete, the number of the caller's sessions, across all organizations, older than the requested period whose content has not been deleted yet: what this change deletes. With dryRun true nothing changes, so a client can show that number and ask for confirmation before it sends the same request with dryRun false. Every change is written to the audit log with the old and new period. */
+        /** @description Choose how long the caller's Cloud sessions and their conversation content are kept: one of options, or null to follow the deployment's default again (defaultDays, and any later change to it). Both modes answer sessionsToDelete, the number of the caller's sessions, across all organizations, older than the requested period whose content has not been deleted yet: what this change deletes (a session still running once it has ended). With dryRun true nothing changes, so a client can show that number and ask for confirmation before it sends the same request with dryRun false. Every change is written to the audit log with the old and new period. */
         put: operations["putDataRetention"];
         post?: never;
         delete?: never;
@@ -876,6 +876,26 @@ export interface paths {
         head?: never;
         /** @description Renames the session: the title every viewer sees. Anyone who may write in the session may rename it; a viewer is refused. */
         patch: operations["updateSession"];
+        trace?: never;
+    };
+    "/api/cloud/v1/orgs/{orgId}/sessions/{sessionId}/restore": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                orgId: components["parameters"]["OrgId"];
+                sessionId: components["parameters"]["SessionId"];
+            };
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** @description Restores a deleted session under the same id: it is no longer terminated and a new sandbox is provisioned, which resumes the conversation and work captured before the delete. The provisioning happens after the response. */
+        post: operations["restoreSession"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
         trace?: never;
     };
     "/api/cloud/v1/orgs/{orgId}/sessions/{sessionId}/pin": {
@@ -3182,30 +3202,34 @@ export interface components {
         };
         /** @description How long the caller's Cloud sessions and their conversation content are kept. */
         DataRetention: {
-            /** @description Days the caller's sessions and their conversation content are kept, counted from each session's creation. defaultDays until the caller chooses another of options. */
+            /** @description Days the caller's sessions and their conversation content are kept, counted from each session's creation: defaultDays while followsDefault, otherwise the period the caller chose. */
             retentionDays: number;
             /** @description The deployment's default period, in days. Always one of options. */
             defaultDays: number;
+            /** @description True while the caller has no period of their own and keeps defaultDays, following any later change to it. False once they chose a period, even one equal to defaultDays. */
+            followsDefault: boolean;
             /** @description The periods the caller may choose, in days, ascending. */
             options: number[];
-            /** @description When the caller last chose the period; null while they have never chosen one. */
+            /** @description When the caller last chose the period, going back to the default included; null while they have never chosen one. */
             updatedAt: string | null;
         };
         PutDataRetentionInput: {
-            /** @description The new period in days; one of options (400 invalid_retention otherwise). */
-            retentionDays: number;
+            /** @description The new period in days, one of options, or null to follow the deployment's default again (400 invalid_retention otherwise). */
+            retentionDays: number | null;
             /** @description Only count the sessions the period would delete and change nothing. Absent means false. */
             dryRun?: boolean;
         };
         /** @description The caller's retention period as stored after a PUT (unchanged by a dry run), and how many of their sessions the requested period deletes. */
         DataRetentionChange: {
-            /** @description Days the caller's sessions and their conversation content are kept, counted from each session's creation. defaultDays until the caller chooses another of options. */
+            /** @description Days the caller's sessions and their conversation content are kept, counted from each session's creation: defaultDays while followsDefault, otherwise the period the caller chose. */
             retentionDays: number;
             /** @description The deployment's default period, in days. Always one of options. */
             defaultDays: number;
+            /** @description True while the caller has no period of their own and keeps defaultDays, following any later change to it. False once they chose a period, even one equal to defaultDays. */
+            followsDefault: boolean;
             /** @description The periods the caller may choose, in days, ascending. */
             options: number[];
-            /** @description When the caller last chose the period; null while they have never chosen one. */
+            /** @description When the caller last chose the period, going back to the default included; null while they have never chosen one. */
             updatedAt: string | null;
             /** @description The caller's sessions, across all organizations, created longer ago than the requested period whose content has not been deleted yet: the sessions the period makes due for deletion. A dry run deletes nothing. */
             sessionsToDelete: number;
@@ -6241,7 +6265,7 @@ export interface operations {
                     "application/json": components["schemas"]["DataRetentionChange"];
                 };
             };
-            /** @description invalid_retention. retentionDays is not one of options. */
+            /** @description invalid_retention. retentionDays is missing, or neither one of options nor null. */
             400: {
                 headers: {
                     [name: string]: unknown;
@@ -7901,6 +7925,55 @@ export interface operations {
                     "application/json": {
                         session: components["schemas"]["Session"];
                     };
+                };
+            };
+            default: components["responses"]["Error"];
+        };
+    };
+    restoreSession: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                orgId: components["parameters"]["OrgId"];
+                sessionId: components["parameters"]["SessionId"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The session was restored; its sandbox is being provisioned. */
+            202: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        session: {
+                            /** Format: uuid */
+                            id: string;
+                            /** @constant */
+                            restored: true;
+                        };
+                    };
+                };
+            };
+            /** @description not_found. No such session, a session of a deleted project, or one whose content was deleted for its creator's data retention. */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
+                };
+            };
+            /** @description SESSION_CONTENT_EXPIRED. The session is older than its creator's data retention period (GET /me/data-retention), so its content is being deleted, and it cannot be restored. */
+            410: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ErrorEnvelope"];
                 };
             };
             default: components["responses"]["Error"];
