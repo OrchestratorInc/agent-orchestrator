@@ -345,6 +345,7 @@ export function InspectorPullRequestCardView({
 	externalIcon,
 	externalLink: ExternalLink,
 	headerless = false,
+	hideDiffCounts = false,
 	mergeAction,
 	mergeError,
 	openLabel,
@@ -371,6 +372,8 @@ export function InspectorPullRequestCardView({
 	 * header row, as the inspector's PR card does with its own state row.
 	 */
 	headerless?: boolean;
+	/** Leave +/− off the branch line: a row under the card states the same numbers. */
+	hideDiffCounts?: boolean;
 	mergeAction?: ReactNode;
 	mergeError?: string | null;
 	openLabel: string;
@@ -423,6 +426,7 @@ export function InspectorPullRequestCardView({
 				className="mt-1.5"
 				countNounLabel={countNounLabel}
 				externalLink={ExternalLink}
+				hideDiffCounts={hideDiffCounts}
 				inline={compact}
 				openedViaLabel={openedViaLabel}
 				pr={pr}
