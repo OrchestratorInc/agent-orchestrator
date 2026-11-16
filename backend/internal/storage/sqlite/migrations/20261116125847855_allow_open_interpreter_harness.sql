@@ -1,7 +1,8 @@
 -- Add Open Interpreter to the sessions harness constraint without changing usage bindings.
--- Replaces the unmerged draft numbers 0199, 0207 and 0216. Draft databases that
--- already allow 'open-interpreter' keep their constraint; goose records this
--- version once and WithAllowMissing tolerates the retired draft receipts.
+-- Replaces the unmerged draft numbers 0199, 0207, 0216 and 20261114174124485.
+-- Draft databases that already allow 'open-interpreter' keep their constraint;
+-- goose records this version once and WithAllowMissing tolerates the retired
+-- draft receipts.
 -- +goose NO TRANSACTION
 -- +goose Up
 -- +goose StatementBegin

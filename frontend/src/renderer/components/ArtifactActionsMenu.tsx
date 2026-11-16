@@ -15,6 +15,7 @@ import type { CloudCpClient } from "../lib/cloud-cp";
 import { artifactChangeError, artifactKey, canChangeSessionArtifacts } from "../lib/artifacts";
 import { fileMediaKind } from "../lib/file-media";
 import { isMacPlatform, isWindowsPlatform } from "../lib/platform";
+import { captureRendererEvent } from "../lib/telemetry";
 import { cn } from "../lib/utils";
 import { useArtifactsViewStore } from "../stores/artifacts-view-store";
 import type { SessionArtifact, WorkspaceSession } from "../types/workspace";
@@ -143,7 +144,7 @@ export function ArtifactActionsMenu({
 			: deleteSessionArtifactFile({ path: artifact.path, sessionId: session.id, hostId }),
 		onSuccess: async () => {
 			setConfirmingDelete(false);
-			if (!hostId) useArtifactsViewStore.getState().unpinArtifact(artifactKey({ sessionId: session.id, path: artifact.path }));
+			useArtifactsViewStore.getState().unpinArtifact(artifactKey({ sessionId: session.id, path: artifact.path, hostId }));
 			onDeleted?.();
 			await queryClient.invalidateQueries({ queryKey: session.cloud ? cloudSessionsQueryKey : workspaceQueryKeyForHost(hostId) });
 		},
@@ -219,6 +220,7 @@ export function ArtifactActionsMenu({
 		setCopyError("");
 		try {
 			await aoBridge.clipboard.writeText(url);
+			void captureRendererEvent("ao.artifacts.link_copied", { surface: "menu" });
 		} catch (error) {
 			setCopyError(error instanceof Error ? error.message : String(error));
 		}

@@ -6,7 +6,7 @@ import { useChatModelChoices } from "../../hooks/useChatModelChoices";
 import { useCloudCp } from "../../hooks/useCloudCp";
 import { invalidateCloudModelCatalogs } from "../../hooks/useCloudModelCatalog";
 import { useCloudOffering } from "../../hooks/useCloudOffering";
-import { QUEUED_DELETE_FEATURE, QUEUED_EDIT_FEATURE } from "../../lib/cloud-offering";
+import { QUEUED_DELETE_FEATURE, QUEUED_EDIT_FEATURE, QUEUED_STEER_FEATURE } from "../../lib/cloud-offering";
 import type { ShellTerminal } from "../../hooks/useShellTerminals";
 import { useChatMessageFocus, useChatNavigationRequest, type ChatMessageFocusTarget } from "../../hooks/useChatMessageFocus";
 import { useCloudPromptSuggestion } from "../../hooks/useCloudPromptSuggestion";
@@ -54,7 +54,7 @@ type EventPayload = {
 	attempt?: unknown;
 	/**
 	 * chat.turn_interrupted: why a turn ended before it started (deleted,
-	 * interface_switch); chat.turn_aborted: author_cannot_write for a message
+	 * interface_switch, steered); chat.turn_aborted: author_cannot_write for a message
 	 * the control plane did not run.
 	 */
 	reason?: unknown;
@@ -79,6 +79,10 @@ type EventPayload = {
 	summary?: unknown;
 	toolKind?: unknown;
 	steering?: unknown;
+	/** chat.turn_steer_requested, chat.turn_steered, chat.turn_steer_failed: the queued turn whose message the steer carries. */
+	queuedTurnId?: unknown;
+	/** chat.turn_steered, chat.turn_steer_failed: the person deleted the queued message while the agent was taking its steer. */
+	deleteRequested?: unknown;
 	error?: unknown;
 	text?: unknown;
 	/**
@@ -270,6 +274,120 @@ function eventText(event: CloudCpClientEvent): string | undefined {
 	return typeof text === "string" && text.trim() !== "" ? text : undefined;
 }
 
+/** The queued turn whose message a steer event carries, if it carries one. */
+function queuedSteerTurnID(event: CloudCpClientEvent): string | undefined {
+	if (event.type !== "chat.turn_steer_requested" && event.type !== "chat.turn_steered" && event.type !== "chat.turn_steer_failed") return undefined;
+	const queuedTurnID = eventPayload(event).queuedTurnId;
+	return typeof queuedTurnID === "string" && queuedTurnID ? queuedTurnID : undefined;
+}
+
+/** Who a steer is from: the orchestrator's reads as its message did, anyone else's as the person's. */
+function steerOrigin(payload: ReturnType<typeof eventPayload>): { origin: string; senderDisplayName?: string } {
+	if (payload.origin === "automation") {
+		return { origin: "automation", ...(typeof payload.senderLabel === "string" && payload.senderLabel ? { senderDisplayName: payload.senderLabel } : {}) };
+	}
+	return { origin: "human" };
+}
+
+/**
+ * A queued message's steer the control plane has asked of the agent and not
+ * settled after this long is read as failed. The worker answers within 45 s or
+ * the request expires, and the control plane records the expiry the next time
+ * the worker polls; a worker gone silent never does, and the message must not
+ * read as steering forever. The margin covers clock skew.
+ */
+export const QUEUED_STEER_STALE_MS = 90_000;
+
+/** Whether a queued message's steer request is past the time it can be answered in. */
+function queuedSteerStale(requested: CloudCpClientEvent, now: number | undefined): boolean {
+	return now !== undefined && Date.parse(requested.createdAt) + QUEUED_STEER_STALE_MS <= now;
+}
+
+/** The row's error for a queued message whose steer failed: why, that it is back in the queue, and how to retry. */
+export function couldNotSteer(reason?: string): string {
+	const why = reason?.trim().replace(/\.$/, "");
+	return `Couldn't steer${why ? `: ${why}` : ""}. It's back in the queue; select Steer to try again.`;
+}
+
+/**
+ * Why the agent did not take the steer of each queued message whose last
+ * steer failed, by its turn: the message is back in the queue, in its place,
+ * and its row says so. A steer asked or taken since clears it. With now, a
+ * steer left unanswered past QUEUED_STEER_STALE_MS has failed too.
+ */
+export function cloudQueuedSteerErrors(events: readonly CloudCpClientEvent[], now?: number): Record<string, string> {
+	const errors: Record<string, string> = {};
+	const pending = new Map<string, CloudCpClientEvent>();
+	for (const event of events) {
+		const queuedTurnID = queuedSteerTurnID(event);
+		if (!queuedTurnID) continue;
+		delete errors[queuedTurnID];
+		pending.delete(queuedTurnID);
+		if (event.type === "chat.turn_steer_requested") pending.set(queuedTurnID, event);
+		if (event.type !== "chat.turn_steer_failed") continue;
+		const reason = eventPayload(event).error;
+		errors[queuedTurnID] = couldNotSteer(typeof reason === "string" ? reason : undefined);
+	}
+	for (const [queuedTurnID, requested] of pending) {
+		if (queuedSteerStale(requested, now)) errors[queuedTurnID] = couldNotSteer("the agent did not answer in time");
+	}
+	return errors;
+}
+
+/**
+ * The queued messages being steered into the running turn: asked of the agent,
+ * not answered, and not past QUEUED_STEER_STALE_MS at now. They stay in the
+ * queue, marked steering, until the agent answers.
+ */
+export function cloudSteeringQueuedTurns(events: readonly CloudCpClientEvent[], now?: number): Set<string> {
+	const pending = new Map<string, CloudCpClientEvent>();
+	const ended = new Set<string>();
+	for (const event of events) {
+		const queuedTurnID = queuedSteerTurnID(event);
+		if (queuedTurnID) {
+			if (event.type === "chat.turn_steer_requested") pending.set(queuedTurnID, event);
+			else pending.delete(queuedTurnID);
+			continue;
+		}
+		const turnID = eventTurnID(event);
+		if (turnID && (event.type === "chat.turn_interrupted" || event.type === "chat.turn_started" || event.type === "chat.turn_completed" || event.type === "chat.turn_aborted")) ended.add(turnID);
+	}
+	return new Set([...pending].filter(([turnID, requested]) => !ended.has(turnID) && !queuedSteerStale(requested, now)).map(([turnID]) => turnID));
+}
+
+/** When the next unanswered queued-message steer turns stale after `after`, or undefined with none left. */
+export function nextQueuedSteerDeadline(events: readonly CloudCpClientEvent[], after: number): number | undefined {
+	const pending = new Map<string, CloudCpClientEvent>();
+	for (const event of events) {
+		const queuedTurnID = queuedSteerTurnID(event);
+		if (!queuedTurnID) continue;
+		if (event.type === "chat.turn_steer_requested") pending.set(queuedTurnID, event);
+		else pending.delete(queuedTurnID);
+	}
+	const deadlines = [...pending.values()].map((event) => Date.parse(event.createdAt) + QUEUED_STEER_STALE_MS).filter((deadline) => deadline > after);
+	return deadlines.length > 0 ? Math.min(...deadlines) : undefined;
+}
+
+/** A refused or unreachable queued steer, as the row's error. */
+function queuedSteerRefusal(error: unknown): Error {
+	if (!(error instanceof CloudCpError)) {
+		return new Error(couldNotSteer(error instanceof TypeError || !(error instanceof Error)
+			? "AO Cloud could not be reached" : error.message));
+	}
+	switch (error.code) {
+		case "TURN_NOT_STEERABLE":
+			return new Error(couldNotSteer("the agent's running turn can't take guidance"));
+		case "STEER_CONTENT_UNSUPPORTED":
+			return new Error(couldNotSteer("a steer carries text alone, and this message has files"));
+		case "TURN_NOT_QUEUED":
+			return new Error("This message is no longer queued: the agent started on it, or it ended.");
+		case "STEER_IN_PROGRESS":
+			return new Error("This message is already being steered into the running turn.");
+		default:
+			return new Error(couldNotSteer(error.message));
+	}
+}
+
 /**
  * The model and effort a turn sent without them runs: the last a message was
  * sent with. A session's first prompt carries the model it launched with, and
@@ -313,6 +431,18 @@ export function ownMessageTurns(events: readonly CloudCpClientEvent[] | undefine
  * when there is nothing left to delete: the agent already ran it, and the
  * dock lets it go with the next read.
  */
+/**
+ * A delete that came too late: the agent had already taken the queued message
+ * as a steer, so it was delivered. Said in the chat as well as on the row,
+ * which leaves the queue with the steer.
+ */
+export class AlreadyDeliveredError extends Error {
+	constructor() {
+		super("Not deleted: the agent had already taken this message as a steer into its running turn, so it was delivered.");
+		this.name = "AlreadyDeliveredError";
+	}
+}
+
 function queuedDeleteRefusal(error: unknown): Error | undefined {
 	if (!(error instanceof CloudCpError)) return error instanceof Error ? error : new Error("The message could not be deleted. Try again.");
 	switch (error.code) {
@@ -324,6 +454,10 @@ function queuedDeleteRefusal(error: unknown): Error | undefined {
 			return new Error("This message is no longer queued, so it was not deleted. If the agent started on it, stop that turn instead.");
 		case "SESSION_TERMINATED":
 			return new Error("This session has ended, so this message can no longer be deleted.");
+		case "ALREADY_STEERED":
+			return new AlreadyDeliveredError();
+		case "STEER_IN_PROGRESS":
+			return new Error("This message is being steered into the running turn, so it can't be deleted now. Try again once the steer settles.");
 		case "forbidden":
 			return new Error("Only the person who sent this message, whoever started the session, or a workspace admin can delete it.");
 		default:
@@ -882,7 +1016,10 @@ export function toSnapshot(session: WorkspaceSession, events: CloudCpClientEvent
 			// author_cannot_write), which holds on a page holding only its end.
 			const notRun = event.type === "chat.turn_aborted" && eventPayload(event).reason === "author_cannot_write";
 			const neverStarted = notRun || (!startedTurns.has(turnID) && (promptedTurns.has(turnID) || eventPayload(event).attempt === 0));
-			if (event.type === "chat.turn_interrupted" && eventPayload(event).reason === "deleted") {
+			if (event.type === "chat.turn_interrupted" && (eventPayload(event).reason === "deleted" || eventPayload(event).reason === "steered")) {
+				// Deleted: the person took the queued message back. Steered: it
+				// went into the running turn instead, where its chat.turn_steered
+				// row shows it.
 				// The person took the queued message back: it leaves the
 				// conversation, as a local chat drops a queued message deleted from
 				// its dock. Any other ending (a switch to the terminal, an older
@@ -1090,12 +1227,20 @@ export function toSnapshot(session: WorkspaceSession, events: CloudCpClientEvent
 			continue;
 		}
 		if (!text) continue;
+		// A queued message being steered stays in the queue, marked steering
+		// (cloudSteeringQueuedTurns); its failure is the row's reason.
+		if (event.type === "chat.turn_steer_requested" || event.type === "chat.turn_steer_failed") continue;
 		if (event.type === "chat.turn_steered") {
-			const clientMessageID = eventPayload(event).clientMessageId;
+			const payload = eventPayload(event);
+			const clientMessageID = payload.clientMessageId;
 			items.push({
 				kind: "activity", id: `cloud-steer-${event.sequence}`, turnId: turnID, sequence: event.sequence,
 				revision: 1, activityKind: "system", status: "completed", summary: `Steered: ${text}`,
-				detail: { event: "steer", text, origin: "human", clientMessageId: typeof clientMessageID === "string" ? clientMessageID : undefined },
+				detail: {
+					event: "steer", text, ...steerOrigin(payload), clientMessageId: typeof clientMessageID === "string" ? clientMessageID : undefined,
+					// Deleted while the agent was taking it: it got the message anyway.
+					...(payload.deleteRequested === true ? { deliveredBeforeDelete: true } : {}),
+				},
 				createdAt: event.createdAt,
 			});
 			continue;
@@ -1729,12 +1874,39 @@ export function CloudSessionChatSurface({
 	const cancelQueued = useMutation({
 		mutationFn: async (turnId: string) => {
 			if (!cloud) throw new Error("Cloud session context is unavailable.");
+			// The newest event the chat holds: a steer's answer comes after it.
+			const heldThrough = eventsQuery.data?.at(-1)?.sequence ?? 0;
+			let pending = false;
 			try {
-				if (queuedDeleteOffered) await client.deleteQueuedMessage(cloud.orgId, session.id, turnId);
+				if (queuedDeleteOffered) pending = (await client.deleteQueuedMessage(cloud.orgId, session.id, turnId)).pending === true;
 				else await client.cancelTurn(cloud.orgId, session.id, turnId);
 			} catch (error) {
 				const refusal = queuedDeleteRefusal(error);
 				if (refusal) throw refusal;
+				return;
+			}
+			if (!pending) return;
+			// The agent was taking the message as a steer: its answer decides.
+			// Deleted if it did not take it; delivered, and said so, if it did.
+			// Read from the events the chat already holds on, not from the
+			// session's first event.
+			let after = heldThrough;
+			const deadline = Date.now() + QUEUED_STEER_STALE_MS;
+			while (Date.now() < deadline) {
+				let page: Awaited<ReturnType<typeof client.listChatEvents>>;
+				try {
+					page = await client.listChatEvents(cloud.orgId, session.id, { after, limit: 100 });
+				} catch {
+					await new Promise((resolve) => setTimeout(resolve, 1000));
+					continue;
+				}
+				for (const event of page.events) {
+					const payload = eventPayload(event);
+					if (event.type === "chat.turn_interrupted" && payload.turnId === turnId && payload.reason === "deleted") return;
+					if (event.type === "chat.turn_steered" && payload.queuedTurnId === turnId) throw new AlreadyDeliveredError();
+				}
+				after = page.nextAfter > after ? page.nextAfter : after;
+				if (!page.hasMore) await new Promise((resolve) => setTimeout(resolve, 500));
 			}
 		},
 		onSettled: () => void invalidate(),
@@ -1766,6 +1938,15 @@ export function CloudSessionChatSurface({
 	// The chat is the tab in front: not a file, terminal or reviewer tab.
 	const chatInFront = !workspaceFileActive && !workspaceActiveTabKey && !reviewerTarget && !reviewerChatSelected && !shellTarget;
 	const startStopped = startFailed && !rerunning;
+	// The clock a queued message's unanswered steer is read against, moved on
+	// when the oldest one would turn stale, so it then shows as failed.
+	const [steerClock, setSteerClock] = useState(() => Date.now());
+	const steerDeadline = useMemo(() => nextQueuedSteerDeadline(eventsQuery.data ?? [], steerClock), [eventsQuery.data, steerClock]);
+	useEffect(() => {
+		if (steerDeadline === undefined) return;
+		const timer = window.setTimeout(() => setSteerClock(Date.now()), steerDeadline - Date.now() + 250);
+		return () => window.clearTimeout(timer);
+	}, [steerClock, steerDeadline]);
 	// Choosing another agent only records the choice; the switch runs with the next message.
 	const cloudSwitch = useCloudAgentSwitch(session);
 	const [chosenSwitch, setChosenSwitch] = useState<PendingAgentSwitch>();
@@ -1888,6 +2069,53 @@ export function CloudSessionChatSurface({
 		},
 		onSettled: () => void invalidate(),
 	});
+	// A queued message steered into the running turn (the queue's Steer). The
+	// control plane records the request and its outcome on the queued turn's
+	// events, so the chat reads them back after a remount: the message shows as
+	// steering until the agent takes it, and back in the queue, with the reason,
+	// when it does not. Without queued-steer the queue offers no Steer: a
+	// control plane that cannot record it would leave the message queued.
+	const queuedSteerOffered = offering.features.includes(QUEUED_STEER_FEATURE) && !readOnly && session.isTerminated !== true;
+	const steerQueued = useMutation({
+		mutationFn: async (turnId: string) => {
+			if (!cloud) throw new Error("Cloud session context is unavailable.");
+			const composerEpoch = leaseRef.current.epoch;
+			let after: number;
+			try {
+				const accepted = await client.steerQueuedMessage(cloud.orgId, session.id, turnId,
+					composerEpoch !== undefined ? { composerEpoch } : {}, { idempotencyKey: crypto.randomUUID() });
+				after = accepted.event.sequence;
+			} catch (error) {
+				throw queuedSteerRefusal(error);
+			}
+			leaseRef.current.sent();
+			const deadline = Date.now() + QUEUED_STEER_STALE_MS;
+			while (Date.now() < deadline) {
+				let page: Awaited<ReturnType<typeof client.listChatEvents>>;
+				try {
+					page = await client.listChatEvents(cloud.orgId, session.id, { after, limit: 100 });
+				} catch {
+					// The steer is recorded; its outcome reaches the chat's events
+					// once the connection is back. Ask again.
+					await new Promise((resolve) => setTimeout(resolve, 1000));
+					continue;
+				}
+				for (const event of page.events) {
+					if (eventPayload(event).queuedTurnId !== turnId) continue;
+					if (event.type === "chat.turn_steered") return;
+					// Deleted while it was being steered: the delete says how it ended.
+					if (event.type === "chat.turn_steer_failed" && eventPayload(event).deleteRequested === true) return;
+					if (event.type === "chat.turn_steer_failed") throw new Error(cloudQueuedSteerErrors([event])[turnId]);
+				}
+				after = page.nextAfter > after ? page.nextAfter : after;
+				await new Promise((resolve) => setTimeout(resolve, 500));
+			}
+			throw new Error(couldNotSteer("the agent did not answer in time"));
+		},
+		onSettled: () => void invalidate(),
+	});
+	const queuedSteerErrors = useMemo(() => cloudQueuedSteerErrors(eventsQuery.data ?? [], steerClock), [eventsQuery.data, steerClock]);
+	const steeringQueuedTurnIds = useMemo(() => cloudSteeringQueuedTurns(eventsQuery.data ?? [], steerClock), [eventsQuery.data, steerClock]);
 	const planOptions: ChatConfigOption[] | undefined =
 		session.provider === "claude-code" && modelsQuery.data?.modes?.includes("plan")
 			? [{
@@ -2069,6 +2297,9 @@ export function CloudSessionChatSurface({
 						? decide.error.message
 						: steer.error instanceof Error
 							? steer.error.message
+						// A delete the agent beat: the row left with the steer, so the chat says it.
+						: cancelQueued.error instanceof AlreadyDeliveredError
+							? cancelQueued.error.message
 					: eventsQuery.error instanceof Error
 							? eventsQuery.error.message
 						: send.error instanceof Error
@@ -2099,6 +2330,10 @@ export function CloudSessionChatSurface({
 				return steer.mutateAsync({ text, clientMessageId });
 			} : undefined}
 			steerPending={steer.isPending}
+			onPromoteQueuedTurn={queuedSteerOffered && activeTurn && snapshot.capabilities?.includes("steer") ? (turnId) => steerQueued.mutateAsync(turnId) : undefined}
+			promoteQueuedTurnPendingTurnId={steerQueued.isPending ? steerQueued.variables : undefined}
+			queuedSteerErrors={queuedSteerErrors}
+			steeringQueuedTurnIds={steeringQueuedTurnIds}
 			onEditQueuedTurn={queuedEditOffered ? (turnId, text) => editQueued.mutateAsync({ turnId, text }) : undefined}
 			canEditQueuedMessage={canEditQueuedMessage}
 			editQueuedTurnPendingTurnId={editQueued.isPending ? editQueued.variables?.turnId : undefined}

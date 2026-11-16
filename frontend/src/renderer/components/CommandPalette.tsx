@@ -1464,9 +1464,11 @@ export const CommandPalette = memo(function CommandPalette() {
 			/>
 			<ConfirmDialog
 				open={removeTarget !== null}
-				title={t("shell.removeProjectTitle")}
-				description={removeTarget?.kind === CLOUD_PROJECT_KIND ? t("shell.removeCloudProjectBody") : t("shell.removeProjectBody")}
-				confirmLabel={t("shell.remove")}
+				title={removeTarget?.kind === CLOUD_PROJECT_KIND ? t("shell.deleteCloudProjectTitle") : t("shell.removeProjectTitle")}
+				description={removeTarget?.kind === CLOUD_PROJECT_KIND
+					? t("shell.deleteCloudProjectLead", { name: removeTarget.name })
+					: t("shell.removeProjectBody")}
+				confirmLabel={removeTarget?.kind === CLOUD_PROJECT_KIND ? t("shell.deleteCloudProjectConfirm") : t("shell.remove")}
 				destructive
 				onOpenChange={(open) => { if (!open) setRemoveTarget(null); }}
 				onConfirm={() => {

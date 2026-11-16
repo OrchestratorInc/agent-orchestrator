@@ -37,8 +37,17 @@ interface ShareLinkRecord {
 	access?: CloudShareAccess;
 }
 
+/** One record as list returns it: its key, and the link it holds while that link is active. */
+export interface ShareLinkRecordEntry {
+	key: string;
+	url?: string;
+	access?: CloudShareAccess;
+}
+
 export interface ShareLinkRecordStore {
 	get(key: string): Promise<string | undefined>;
+	/** Every record, for the files no daemon reads the records for: a remote host's. */
+	list(): Promise<ShareLinkRecordEntry[]>;
 	/** The fingerprint the file had when it was last published, if recorded. */
 	publishedFingerprint(key: string): Promise<string | undefined>;
 	set(key: string, shareId: string, fingerprint?: string, url?: string, access?: CloudShareAccess): Promise<void>;
@@ -85,6 +94,13 @@ export class ShareLinkRecords implements ShareLinkRecordStore {
 
 	async get(key: string): Promise<string | undefined> {
 		return asRecord((await this.load())[key])?.shareId;
+	}
+
+	async list(): Promise<ShareLinkRecordEntry[]> {
+		return Object.entries(await this.load()).flatMap(([key, value]) => {
+			const record = asRecord(value);
+			return record ? [{ key, ...(record.url ? { url: record.url } : {}), ...(record.access ? { access: record.access } : {}) }] : [];
+		});
 	}
 
 	async publishedFingerprint(key: string): Promise<string | undefined> {

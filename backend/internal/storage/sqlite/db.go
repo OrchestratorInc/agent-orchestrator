@@ -2199,10 +2199,15 @@ func reconcileHarnessConstraint(db *sql.DB) error {
 	needsMiMo := !strings.Contains(schema, "'mimo-code'")
 	needsDeepSeek := !strings.Contains(schema, "'deepseek-harness'")
 	needsOpenHands := !strings.Contains(schema, "'openhands'")
+	needsDockerAgent := !strings.Contains(schema, "'docker-agent'")
+	needsFX := !strings.Contains(schema, "'fx'")
+	needsOpenCodeV2 := !strings.Contains(schema, "'opencode-v2'")
 	needsMemcode := !strings.Contains(schema, "'memcode'")
 	needsCommandCode := !strings.Contains(schema, "'command-code'")
+	needsStakpak := !strings.Contains(schema, "'stakpak'")
+	needsMiniMaxCode := !strings.Contains(schema, "'minimax-code'")
 	needsOpenInterpreter := !strings.Contains(schema, "'open-interpreter'")
-	if !needsNativeAssistant && !needsMemcode && !needsMuse && !needsKimchi && !needsPrimeAgent && !needsOMP && !needsGemini && !needsUnreal && !needsCodewhale && !needsMiMo && !needsDeepSeek && !needsOpenHands && !needsCommandCode && !needsOpenInterpreter {
+	if !needsNativeAssistant && !needsMemcode && !needsStakpak && !needsMuse && !needsKimchi && !needsPrimeAgent && !needsOMP && !needsGemini && !needsUnreal && !needsCodewhale && !needsMiMo && !needsDeepSeek && !needsOpenHands && !needsCommandCode && !needsDockerAgent && !needsFX && !needsOpenCodeV2 && !needsMiniMaxCode && !needsOpenInterpreter {
 		return nil
 	}
 	if _, err := db.Exec(`PRAGMA writable_schema = ON`); err != nil {
@@ -2217,9 +2222,36 @@ func reconcileHarnessConstraint(db *sql.DB) error {
 		}
 		needsNativeAssistant = true
 	}
+	if !needsStakpak {
+		// Stakpak's migration also inserts it before 'fake', so remove it the
+		// same way before the exact repairs and append it again below.
+		if _, err := db.Exec(`UPDATE sqlite_master SET sql = replace(sql, '''stakpak'', ', '') WHERE type = 'table' AND name = 'sessions'`); err != nil {
+			return fmt.Errorf("schema repair: normalize Stakpak constraint: %w", err)
+		}
+		needsStakpak = true
+	}
+	if !needsDockerAgent {
+		// Docker Agent must stay last before 'fake' (its migration's Down
+		// anchors on "'docker-agent', 'fake'))"), but the appends below would
+		// land after it. Remove it the same way and append it again last.
+		if _, err := db.Exec(`UPDATE sqlite_master SET sql = replace(sql, '''docker-agent'', ', '') WHERE type = 'table' AND name = 'sessions'`); err != nil {
+			return fmt.Errorf("schema repair: normalize Docker Agent constraint: %w", err)
+		}
+		needsDockerAgent = true
+	}
+	if !needsMiniMaxCode {
+		// MiniMax Code's migration runs after Docker Agent's, so it is last
+		// before 'fake' on a fresh database. Remove it the same way and append
+		// it again after Docker Agent.
+		if _, err := db.Exec(`UPDATE sqlite_master SET sql = replace(sql, '''minimax-code'', ', '') WHERE type = 'table' AND name = 'sessions'`); err != nil {
+			return fmt.Errorf("schema repair: normalize MiniMax Code constraint: %w", err)
+		}
+		needsMiniMaxCode = true
+	}
 	if !needsOpenInterpreter {
-		// Same normalization as Hermes: drafts and the timestamped migration may
-		// have placed Open Interpreter before 'fake' ahead of a historical repair.
+		// Open Interpreter's migration runs after MiniMax Code's, so it is last
+		// before 'fake' on a fresh database. Remove it the same way and append
+		// it again after MiniMax Code.
 		if _, err := db.Exec(`UPDATE sqlite_master SET sql = replace(sql, '''open-interpreter'', ', '') WHERE type = 'table' AND name = 'sessions'`); err != nil {
 			return fmt.Errorf("schema repair: normalize Open Interpreter constraint: %w", err)
 		}
@@ -2333,6 +2365,13 @@ func reconcileHarnessConstraint(db *sql.DB) error {
 		// without Command Code, so anchor there instead of enumerating shapes.
 		repairs = append(repairs, replacement{"'fake'))", "'command-code', 'fake'))"})
 	}
+	// Append only after the exact legacy recognizers have repaired older lists.
+	if needsFX {
+		repairs = append(repairs, replacement{"'fake'))", "'fx', 'fake'))"})
+	}
+	if needsOpenCodeV2 {
+		repairs = append(repairs, replacement{"'fake'))", "'opencode-v2', 'fake'))"})
+	}
 	// Add the new harness only after exact historical variants are repaired.
 	if needsNativeAssistant {
 		repairs = append(repairs, replacement{"'fake'))", "'hermes', 'fake'))"})
@@ -2340,6 +2379,18 @@ func reconcileHarnessConstraint(db *sql.DB) error {
 	if needsMemcode {
 		repairs = append(repairs, replacement{"'fake'))", "'memcode', 'fake'))"})
 	}
+	if needsStakpak {
+		repairs = append(repairs, replacement{"'fake'))", "'stakpak', 'fake'))"})
+	}
+	// Docker Agent comes last, matching the migration order of a fresh database.
+	if needsDockerAgent {
+		repairs = append(repairs, replacement{"'fake'))", "'docker-agent', 'fake'))"})
+	}
+	// MiniMax Code's migration runs after Docker Agent's, so it follows it.
+	if needsMiniMaxCode {
+		repairs = append(repairs, replacement{"'fake'))", "'minimax-code', 'fake'))"})
+	}
+	// Open Interpreter's migration runs after MiniMax Code's, so it follows it.
 	if needsOpenInterpreter {
 		repairs = append(repairs, replacement{"'fake'))", "'open-interpreter', 'fake'))"})
 	}
@@ -2392,14 +2443,23 @@ WHERE type = 'table' AND name = 'sessions'`,
 	if !strings.Contains(schema, "'openhands'") {
 		return fmt.Errorf("schema repair: sessions harness constraint is missing OpenHands and did not match known pre-OpenHands schema")
 	}
-	if !strings.Contains(schema, "'command-code'") {
-		return fmt.Errorf("schema repair: sessions harness constraint is missing Command Code and did not match known pre-Command-Code schema")
-	}
 	if !strings.Contains(schema, "'memcode'") {
 		return fmt.Errorf("schema repair: sessions harness constraint is missing Memcode and did not match known pre-Memcode schema")
 	}
+	if !strings.Contains(schema, "'minimax-code'") {
+		return fmt.Errorf("schema repair: sessions harness constraint is missing MiniMax Code and did not match known pre-MiniMax-Code schema")
+	}
+	if !strings.Contains(schema, "'docker-agent'") {
+		return fmt.Errorf("schema repair: sessions harness constraint is missing Docker Agent")
+	}
+	if !strings.Contains(schema, "'command-code'") {
+		return fmt.Errorf("schema repair: sessions harness constraint is missing Command Code and did not match known pre-Command-Code schema")
+	}
 	if !strings.Contains(schema, "'hermes'") {
 		return fmt.Errorf("schema repair: sessions harness constraint is missing hermes")
+	}
+	if !strings.Contains(schema, "'stakpak'") {
+		return fmt.Errorf("schema repair: sessions harness constraint is missing Stakpak")
 	}
 	if !strings.Contains(schema, "'open-interpreter'") {
 		return fmt.Errorf("schema repair: sessions harness constraint is missing Open Interpreter")

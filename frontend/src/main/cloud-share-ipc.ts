@@ -2,8 +2,9 @@
  * cloudShare IPC: the only way to publish a share link. Agents, the ao CLI,
  * MCP and the daemon have no route to it; only the app's own window's main
  * frame can ask, when the person presses Publish in its share popover. A
- * local file is uploaded from here; a cloud session's file is copied by the
- * control plane. See shared/cloud-share.ts for what is and is not confirmed.
+ * local file is uploaded from here, as is a remote host's file, downloaded
+ * first through that host's loopback proxy; a cloud session's file is copied
+ * by the control plane. See shared/cloud-share.ts for what is and is not confirmed.
  */
 
 import { promises as fs } from "node:fs";
@@ -20,12 +21,17 @@ import {
 	type CloudShareLinks,
 	type CloudSharePublishResult,
 	type CloudSessionShareFile,
+	type CloudHostShareFile,
 	type CloudShareLink,
+	type HostShareLink,
 } from "../shared/cloud-share";
 import {
 	CloudShareError,
 	type CloudShareApi,
 	cloudSessionArtifactVersion,
+	type HostFetch,
+	hostShareFileUrl,
+	inspectHostShareFile,
 	inviteShareGrants,
 	listShareGrants,
 	listShareLinks,
@@ -36,6 +42,7 @@ import {
 	shareCloudSessionArtifact,
 	type ShareSnapshot,
 	shareFileFingerprint,
+	snapshotHostShareFile,
 	snapshotShareFile,
 	statShareFile,
 	unpublishShareLink,
@@ -49,8 +56,12 @@ export interface CloudShareIpcDeps extends CloudShareApi {
 	daemonDataDir: () => string;
 	/** A private directory for upload snapshots. */
 	snapshotDir: () => string;
-	/** Which link each local file was last published to. */
+	/** Which link each local and remote-host file was last published to. */
 	records: ShareLinkRecordStore;
+	/** A connected remote host's API base on its loopback proxy; undefined while it is not connected. */
+	hostApiBase: (hostId: string) => string | undefined;
+	/** Requests to a host's loopback proxy, which adds the host's credential. */
+	fetchHost: HostFetch;
 }
 
 const VIDEO_EXTENSIONS = new Set([".mp4", ".m4v", ".mov", ".webm", ".ogv", ".avi", ".mkv"]);
@@ -88,10 +99,15 @@ function shareFileArgument(value: unknown): CloudShareFile {
 		if (typeof orgId !== "string") throw new CloudShareError("invalid_request", "Not a file to share.");
 		return { source, baseUrl, orgId, sessionId, path: filePath, projectId: "", artifactId, shareId, fingerprint, ...startsWith } satisfies CloudSessionShareFile;
 	}
-	// A local file's project names the document: an empty one would make a
-	// second document, and link, for a file already published.
-	if (source !== undefined && source !== "local") throw new CloudShareError("invalid_request", "Not a file to share.");
+	// A local or remote-host file's project names the document: an empty one
+	// would make a second document, and link, for a file already published.
+	if (source !== undefined && source !== "local" && source !== "host") throw new CloudShareError("invalid_request", "Not a file to share.");
 	if (typeof projectId !== "string" || projectId === "") throw new CloudShareError("invalid_request", "Not a file to share.");
+	if (source === "host") {
+		const { hostId } = value as Record<string, unknown>;
+		if (typeof hostId !== "string" || hostId === "") throw new CloudShareError("invalid_request", "Not a file to share.");
+		return { source, hostId, baseUrl, sessionId, path: filePath, projectId, artifactId, shareId, fingerprint, ...startsWith } satisfies CloudHostShareFile;
+	}
 	return { baseUrl, sessionId, path: filePath, projectId, artifactId, shareId, fingerprint, ...startsWith };
 }
 
@@ -123,6 +139,52 @@ function cloudRecordKey(records: ShareLinkRecordStore, baseUrl: string, file: Cl
 	return recordKey(records, baseUrl, `cloud:${file.orgId}/${file.sessionId}`, file.path, file.artifactId);
 }
 
+function isHostFile(file: CloudShareFile): file is CloudHostShareFile {
+	return file.source === "host" && typeof file.hostId === "string";
+}
+
+/**
+ * The session part of a remote host's record keys: apart from every local
+ * and cloud session's, and from the same session ID on another host. A
+ * session ID has no "/", so the last one ends the host's ID.
+ */
+const HOST_SESSION_PREFIX = "host:";
+function hostRecordSession(hostId: string, sessionId: string): string {
+	return `${HOST_SESSION_PREFIX}${hostId}/${sessionId}`;
+}
+
+/** The host and session a record key's session part names, when it is a remote host's. */
+function parseHostRecordSession(session: string): { hostId: string; sessionId: string } | undefined {
+	if (!session.startsWith(HOST_SESSION_PREFIX)) return undefined;
+	const slash = session.lastIndexOf("/");
+	if (slash <= HOST_SESSION_PREFIX.length || slash === session.length - 1) return undefined;
+	return { hostId: session.slice(HOST_SESSION_PREFIX.length, slash), sessionId: session.slice(slash + 1) };
+}
+
+/**
+ * The remote hosts' links among the records, for one control plane: keys
+ * [baseUrl, session, path] and [baseUrl, session, "", artifactId], with a
+ * host's session part, whose link is active.
+ */
+function hostShareLinks(entries: readonly { key: string; url?: string; access?: CloudShareAccess }[], baseUrl: string): HostShareLink[] {
+	return entries.flatMap(({ key, url, access }): HostShareLink[] => {
+		if (!url) return [];
+		let parts: unknown;
+		try {
+			parts = JSON.parse(key);
+		} catch {
+			return [];
+		}
+		if (!Array.isArray(parts) || parts[0] !== baseUrl || typeof parts[1] !== "string") return [];
+		const host = parseHostRecordSession(parts[1]);
+		if (!host) return [];
+		const link = { ...host, url, ...(access ? { access } : {}) };
+		if (parts.length === 4 && parts[2] === "" && typeof parts[3] === "string" && parts[3] !== "") return [{ ...link, artifactId: parts[3] }];
+		if (parts.length === 3 && typeof parts[2] === "string" && parts[2] !== "") return [{ ...link, path: parts[2] }];
+		return [];
+	});
+}
+
 function baseUrlArgument(value: unknown): string {
 	const baseUrl = (value as { baseUrl?: unknown } | null)?.baseUrl;
 	if (typeof baseUrl !== "string") throw new CloudShareError("invalid_request", "Not a control plane.");
@@ -139,6 +201,17 @@ function requireMainFrame(event: unknown): void {
 	if (senderFrame === null || (senderFrame && senderFrame.parent !== null)) {
 		throw new CloudShareError("invalid_request", "Sharing is only available from the app window.");
 	}
+}
+
+// Refusals that mean the bytes never made it to AO Cloud: the upload, or the
+// machine or disk the file is read from.
+const UPLOAD_FAILURES = new Set(["upload_failed", "timeout", "host_unavailable", "disk_full", "source_changed", "file_missing"]);
+
+/** A refusal's category for publish telemetry. A file over the size limit is answered 413 or a too_large code. */
+function shareFailure(error: CloudShareError): { failure?: "too_large" | "upload_failed" } {
+	if (error.status === 413 || error.code.includes("too_large")) return { failure: "too_large" };
+	if (UPLOAD_FAILURES.has(error.code)) return { failure: "upload_failed" };
+	return {};
 }
 
 /**
@@ -158,7 +231,7 @@ function refusal(error: unknown): CloudSharePublishResult {
 			case "artifact_share_not_owner":
 				return { status: "not_owner" };
 		}
-		return { status: "error", message: error.message };
+		return { status: "error", message: error.message, ...shareFailure(error) };
 	}
 	throw error;
 }
@@ -207,6 +280,87 @@ export function registerCloudShareIpc(deps: CloudShareIpcDeps): void {
 		}
 	};
 
+	// A remote host's file, at its address on the host's loopback proxy. The
+	// host must be connected: its file is read nowhere else.
+	const hostFile = (file: CloudHostShareFile) => {
+		const apiBase = deps.hostApiBase(file.hostId);
+		if (!apiBase) throw new CloudShareError("host_unavailable", "The machine this file is on isn't connected. Check that it is online and try again.");
+		return hostShareFileUrl(apiBase, file.sessionId, file.path);
+	};
+	const hostRecordKey = (file: CloudHostShareFile, relativePath: string) =>
+		recordKey(deps.records, file.baseUrl, hostRecordSession(file.hostId, file.sessionId), relativePath, file.artifactId);
+
+	// Read from the file's headers on its host: its bytes are not downloaded.
+	const inspectHostFile = async (file: CloudHostShareFile): Promise<CloudShareInspection> => {
+		const located = hostFile(file);
+		const info = await inspectHostShareFile(deps.fetchHost, located);
+		const key = await hostRecordKey(file, info.relativePath);
+		const shareId = await deps.records.get(key);
+		const publishedFingerprint = shareId ? await deps.records.publishedFingerprint(key) : undefined;
+		return {
+			name: info.name,
+			size: info.size,
+			unsupported: isVideo(info.name),
+			fingerprint: info.fingerprint,
+			...(shareId ? { shareId } : {}),
+			...(publishedFingerprint ? { publishedFingerprint } : {}),
+		};
+	};
+
+	// Downloaded into a private snapshot through the host's proxy, then
+	// uploaded as a local file is. Downloading is the first half of the
+	// progress, uploading the second.
+	const publishHostFile = async (file: CloudHostShareFile, sender: IpcMainInvokeEvent["sender"], controller: AbortController): Promise<CloudSharePublishResult> => {
+		if (isVideo(file.path)) return { status: "unsupported", message: "Sharing videos is coming soon." };
+		if (!(await deps.getToken())) return { status: "signed_out" };
+		const located = hostFile(file);
+		const key = await hostRecordKey(file, located.relativePath);
+		const shareId = await deps.records.get(key);
+		const progress = (sentBytes: number, totalBytes: number) => {
+			if (!sender.isDestroyed()) sender.send(CLOUD_SHARE_PROGRESS_CHANNEL, { sessionId: file.sessionId, path: file.path, sentBytes, totalBytes });
+		};
+		// The file as it is now, for the panel to show and publish again.
+		const changed = async (): Promise<CloudSharePublishResult> => {
+			const now = await inspectHostShareFile(deps.fetchHost, located, controller.signal);
+			return { status: "changed", inspection: { name: now.name, size: now.size, unsupported: false, fingerprint: now.fingerprint, ...(shareId ? { shareId } : {}) } };
+		};
+		const expected = await inspectHostShareFile(deps.fetchHost, located, controller.signal);
+		// Publish only the file as the panel showed it: one rewritten since is offered again.
+		if (!file.fingerprint || !sameShareFingerprint(expected.fingerprint, file.fingerprint)) return await changed();
+		let snapshot: ShareSnapshot | undefined;
+		try {
+			try {
+				snapshot = await snapshotHostShareFile(deps.fetchHost, located, deps.snapshotDir(), {
+					expectedSize: expected.size,
+					signal: controller.signal,
+					onProgress: (copied) => progress(copied, expected.size * 2),
+				});
+			} catch (error) {
+				if (error instanceof CloudShareError && error.code === "source_changed") return await changed();
+				throw error;
+			}
+			const taken = snapshot;
+			// The download names its own version: one written between the check and the download is offered again.
+			if (!sameShareFingerprint(taken.fingerprint, file.fingerprint)) return await changed();
+			if (controller.signal.aborted) return { status: "cancelled" };
+			const folder = path.posix.dirname(located.relativePath);
+			const result = await uploadShare(deps, {
+				baseUrl: file.baseUrl,
+				snapshot: taken,
+				name: located.name,
+				project: file.projectId,
+				feature: folder === "." ? file.sessionId : `${file.sessionId}/${folder}`,
+				shareId: file.shareId,
+				access: file.access,
+				emails: file.emails,
+			}, (sentBytes) => progress(taken.size + sentBytes, taken.size * 2), controller.signal);
+			await deps.records.set(key, result.share.id, taken.fingerprint, artifactShareUrl(result.share), shareAccess(result.share));
+			return { status: "published", share: result.share, replaced: result.replaced };
+		} finally {
+			if (snapshot) await fs.rm(snapshot.path, { force: true });
+		}
+	};
+
 	// What the panel and the Publish button show: the file's link, whether the
 	// file changed since it was published there, and the fingerprint a publish
 	// names. Read from this computer's record and the file's metadata (a cloud
@@ -215,6 +369,7 @@ export function registerCloudShareIpc(deps: CloudShareIpcDeps): void {
 		requireMainFrame(event);
 		const file = shareFileArgument(value);
 		if (isCloudFile(file)) return inspectCloudFile(file);
+		if (isHostFile(file)) return inspectHostFile(file);
 		const resolved = await resolveShareFile(deps.daemonDataDir(), file.sessionId, file.path);
 		const key = await recordKey(deps.records, file.baseUrl, file.sessionId, resolved.relativePath, file.artifactId);
 		const shareId = await deps.records.get(key);
@@ -241,6 +396,11 @@ export function registerCloudShareIpc(deps: CloudShareIpcDeps): void {
 		await deps.records.syncLinks(baseUrl, links.shares, since);
 		return links;
 	});
+
+	// The links this computer published remote hosts' files to. Their daemons
+	// have no copy of the records, so the renderer marks their files from these.
+	deps.ipcMain.handle("cloudShare:hostLinks", async (_event, value: unknown): Promise<HostShareLink[]> =>
+		hostShareLinks(await deps.records.list(), baseUrlArgument(value)));
 
 	deps.ipcMain.handle("cloudShare:unpublish", async (event, value: unknown): Promise<void> => {
 		requireMainFrame(event);
@@ -295,6 +455,16 @@ export function registerCloudShareIpc(deps: CloudShareIpcDeps): void {
 			try {
 				return await publishCloudFile(file);
 			} catch (error) {
+				return refusal(error);
+			} finally {
+				inFlight.delete(sender.id);
+			}
+		}
+		if (isHostFile(file)) {
+			try {
+				return await publishHostFile(file, sender, controller);
+			} catch (error) {
+				if (controller.signal.aborted) return { status: "cancelled" };
 				return refusal(error);
 			} finally {
 				inFlight.delete(sender.id);

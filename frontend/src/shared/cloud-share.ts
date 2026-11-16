@@ -1,8 +1,10 @@
 // Types the cloudShare IPC carries between the renderer and the main process.
 // Publishing an artifact as a share link runs only in the main
 // process, which holds the sign-in token. A local file is read inside the
-// session's artifacts folder only and uploaded straight to storage; a cloud
-// session's file is copied by the control plane inside its bucket. The
+// session's artifacts folder only and uploaded straight to storage; a remote
+// host's file is downloaded from its daemon, through that host's proxy, and
+// uploaded the same way; a cloud session's file is copied by the control
+// plane inside its bucket. The
 // renderer names a file and shows progress; it never sees the file's bytes or
 // the token.
 //
@@ -16,21 +18,24 @@
 // file that changed since.
 
 /**
- * A file to share: one in a local session's artifacts folder, or, with
- * source "cloud", one committed file of a cloud session.
+ * A file to share: one in a local session's artifacts folder, with source
+ * "host" one in a remote host's session, or, with source "cloud", one
+ * committed file of a cloud session.
  */
 export interface CloudShareFile {
 	/** The cloud control plane's base URL (settings.cloudControlPlaneUrl). */
 	baseUrl: string;
-	source?: "local" | "cloud";
+	source?: "local" | "host" | "cloud";
 	/** A cloud session's organization. */
 	orgId?: string;
+	/** The remote host a "host" file's session runs on. */
+	hostId?: string;
 	sessionId: string;
 	/** The file's path in the session's artifacts, slash-separated. */
 	path: string;
 	/**
-	 * A local session's project; with the session and folder, it names the
-	 * document a link serves. A cloud session's file is named by its
+	 * A local or remote-host session's project; with the session and folder,
+	 * it names the document a link serves. A cloud session's file is named by its
 	 * organization, session and path instead.
 	 */
 	projectId: string;
@@ -42,8 +47,8 @@ export interface CloudShareFile {
 	/** Update this active link instead of publishing a new document. */
 	shareId?: string;
 	/**
-	 * The file's version as the panel showed it: a local file's size and
-	 * modification time, a cloud file's SHA-256 from its session's artifact
+	 * The file's version as the panel showed it: a local or remote-host file's
+	 * size and modification time, a cloud file's SHA-256 from its session's artifact
 	 * list. Publishing refuses a file that changed since.
 	 */
 	fingerprint?: string;
@@ -74,6 +79,28 @@ export interface CloudShareGrant {
 export interface CloudSessionShareFile extends CloudShareFile {
 	source: "cloud";
 	orgId: string;
+}
+
+/** One file of a remote host's session. */
+export interface CloudHostShareFile extends CloudShareFile {
+	source: "host";
+	hostId: string;
+}
+
+/**
+ * One of this computer's publish records for a remote host's file, which the
+ * renderer matches to the host's artifact list: a remote daemon has no copy
+ * of the records, so it lists no link.
+ */
+export interface HostShareLink {
+	hostId: string;
+	sessionId: string;
+	/** Set on a record kept by the artifact's ID, which follows the file through a rename. */
+	artifactId?: string;
+	/** Set on a record kept by the file's path. */
+	path?: string;
+	url: string;
+	access?: CloudShareAccess;
 }
 
 /** A share link, as the control plane lists it. */
@@ -167,8 +194,11 @@ export type CloudSharePublishResult =
 	| { status: "unsupported"; message: string }
 	/** A cloud session's files are shared only by the person who started the session. */
 	| { status: "not_owner" }
-	/** Refused for another reason, such as no free disk space or another file being shared. */
-	| { status: "error"; message: string }
+	/**
+	 * Refused for another reason, such as no free disk space or another file
+	 * being shared. failure is its category for telemetry, never its message.
+	 */
+	| { status: "error"; message: string; failure?: "too_large" | "upload_failed" }
 	| { status: "signed_out" };
 
 /**

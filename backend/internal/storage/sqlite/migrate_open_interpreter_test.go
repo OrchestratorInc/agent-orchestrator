@@ -9,17 +9,17 @@ import (
 )
 
 const (
-	openInterpreterMigrationVersion int64 = 20261114174124485
+	openInterpreterMigrationVersion int64 = 20261116125847855
 	// beforeOpenInterpreterMigration resolves to the schema just before it.
 	beforeOpenInterpreterMigration = openInterpreterMigrationVersion - 1
 )
 
-// TestMigration20261114174124485AllowsOpenInterpreterAndReversesBothHistoricalSchemas
+// TestMigration20261116125847855AllowsOpenInterpreterAndReversesBothHistoricalSchemas
 // mirrors the Hermes coverage: the new harness must be insertable on a current
 // and a legacy-qm schema, an unknown harness must still be rejected, rollback
 // must refuse existing rows, and the down migration must restore the exact
 // prior constraint.
-func TestMigration20261114174124485AllowsOpenInterpreterAndReversesBothHistoricalSchemas(t *testing.T) {
+func TestMigration20261116125847855AllowsOpenInterpreterAndReversesBothHistoricalSchemas(t *testing.T) {
 	for _, legacyQM := range []bool{false, true} {
 		name := "current"
 		if legacyQM {
@@ -77,7 +77,7 @@ func TestMigration20261114174124485AllowsOpenInterpreterAndReversesBothHistorica
 	}
 }
 
-func TestMigration20261114174124485RejectsUnrecognizedConstraint(t *testing.T) {
+func TestMigration20261116125847855RejectsUnrecognizedConstraint(t *testing.T) {
 	db := openMigratedDatabaseCopy(t, beforeOpenInterpreterMigration)
 	mustExec(t, db, `PRAGMA writable_schema = ON`)
 	mustExec(t, db, `UPDATE sqlite_master SET sql = replace(sql, '''fake''))', '''fake'', ''other''))') WHERE type = 'table' AND name = 'sessions'`)
@@ -100,11 +100,12 @@ func TestMigration20261114174124485RejectsUnrecognizedConstraint(t *testing.T) {
 	}
 }
 
-// Draft builds recorded Open Interpreter's constraint under 0199, 0207 or
-// 0216. Those databases already allow the harness; the timestamped migration
-// must apply once without duplicating it, and startup must stay repeatable.
-func TestMigration20261114174124485AdoptsDraftOpenInterpreterHistory(t *testing.T) {
-	for _, draftVersion := range []int64{207, 216} {
+// Draft builds recorded Open Interpreter's constraint under 0199, 0207, 0216
+// or 20261114174124485. Those databases already allow the harness; the
+// migration must apply once without duplicating it, and startup must stay
+// repeatable.
+func TestMigration20261116125847855AdoptsDraftOpenInterpreterHistory(t *testing.T) {
+	for _, draftVersion := range []int64{207, 216, 20261114174124485} {
 		t.Run(fmt.Sprintf("draft_%04d", draftVersion), func(t *testing.T) {
 			db := openMigratedDatabaseCopy(t, beforeOpenInterpreterMigration)
 			mustExec(t, db, `PRAGMA writable_schema = ON`)
@@ -131,7 +132,7 @@ func TestMigration20261114174124485AdoptsDraftOpenInterpreterHistory(t *testing.
 	}
 }
 
-func TestMigration20261114174124485RepairsDraft0199History(t *testing.T) {
+func TestMigration20261116125847855RepairsDraft0199History(t *testing.T) {
 	db := openMigratedDatabaseCopy(t, 198)
 	// The earliest draft builds used 0199 for the Open Interpreter constraint.
 	// Main uses it for conversation_messages.continuation, which goose skips on
@@ -153,7 +154,7 @@ func TestMigration20261114174124485RepairsDraft0199History(t *testing.T) {
 	}
 }
 
-func TestMigration20261114174124485CoexistsWithCodeBuddy(t *testing.T) {
+func TestMigration20261116125847855CoexistsWithCodeBuddy(t *testing.T) {
 	for _, draftOpenInterpreter := range []bool{false, true} {
 		name := "codebuddy_0207"
 		if draftOpenInterpreter {
