@@ -50,6 +50,10 @@ type fakeSessionService struct {
 	registerArtifactsErr  error
 	deleted               []domain.SessionID
 	deleteCleanup         []bool
+	keptSessions          map[domain.SessionID]domain.Session
+	keptSets              []sessionsvc.KeptArtifacts
+	keepingDeleted        []domain.SessionID
+	forgottenKept         []string
 	deleteErr             error
 	// lastListFilter is the filter the controller parsed; listPage, when set,
 	// replaces the page built from sessions so a test can pin the wire shape.
