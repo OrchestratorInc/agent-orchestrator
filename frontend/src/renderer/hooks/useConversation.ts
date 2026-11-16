@@ -1980,7 +1980,13 @@ export function useConversationSkills(
 	remembered: ChatSkill[] = NO_SKILLS,
 ) {
 	// When this controller first answered with an empty list: see EMPTY_SKILLS_GRACE_MS.
+	// Kept as state for render and mirrored in a ref for `refetchInterval`, which
+	// runs outside render. Both are written only in the effect below.
+	const [emptySince, setEmptySince] = useState<number | undefined>(undefined);
 	const firstEmptyAt = useRef<number | undefined>(undefined);
+	// When the current controller became readable. A cached empty answer from an
+	// earlier one must not count toward this one's grace period.
+	const enabledAt = useRef<number | undefined>(undefined);
 	// Typed explicitly: `refetchInterval` reads the data, which leaves inference circular.
 	const query = useQuery<ChatSkill[]>({
 		queryKey: conversationSkillsQueryKey(sessionId ?? "", hostId),
@@ -2021,10 +2027,20 @@ export function useConversationSkills(
 		},
 	});
 	const live = query.data;
+	const updatedAt = query.dataUpdatedAt;
 	// Restarted on every new controller: `enabled` drops while it starts.
-	if (!enabled || !live || live.length > 0) firstEmptyAt.current = undefined;
-	else firstEmptyAt.current ??= query.dataUpdatedAt;
-	const settled = live !== undefined && (live.length > 0 || emptySkillsSettled(firstEmptyAt.current, query.dataUpdatedAt));
+	useEffect(() => {
+		enabledAt.current = enabled ? Date.now() : undefined;
+	}, [enabled]);
+	useEffect(() => {
+		const since = enabledAt.current;
+		const next = !enabled || !live || live.length > 0
+			? undefined
+			: firstEmptyAt.current ?? (since !== undefined && updatedAt >= since ? updatedAt : undefined);
+		firstEmptyAt.current = next;
+		setEmptySince(next);
+	}, [enabled, live, updatedAt]);
+	const settled = live !== undefined && (live.length > 0 || (enabled && emptySkillsSettled(emptySince, updatedAt)));
 	const standIn = !settled && remembered.length > 0;
 	const skills = live?.length ? live : standIn ? remembered : (live ?? NO_SKILLS);
 	return {

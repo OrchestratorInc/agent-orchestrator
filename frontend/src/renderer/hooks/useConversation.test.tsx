@@ -23,6 +23,7 @@ import {
 	clearConversationProviderCatalogs,
 	conversationConfigOptionsQueryKey,
 	conversationQueryKey,
+	conversationSkillsQueryKey,
 	useConversation,
 	ProviderSwitchFailed,
 	useConversationCommands,
@@ -1692,6 +1693,43 @@ describe("useConversationSkills polling", () => {
 				await vi.advanceTimersByTimeAsync(35_000);
 			});
 			expect(getMock).toHaveBeenCalledTimes(settledCalls + 1);
+		} finally {
+			vi.useRealTimers();
+		}
+	});
+
+	it("restarts the grace period when the controller comes back", async () => {
+		vi.useFakeTimers();
+		try {
+			// A restart keeps the session's query, and with it an empty answer from the
+			// last controller. That old answer must not count toward the new one's
+			// grace period, or the first fresh empty answer would be believed at once
+			// and skills published moments later would wait a full minute.
+			getMock.mockResolvedValue({ data: { skills: [] } });
+			const queryClient = new QueryClient({
+				defaultOptions: { queries: { retry: false } },
+			});
+			queryClient.setQueryData(conversationSkillsQueryKey("ao-skills-restart"), [], { updatedAt: Date.now() - 5 * 60_000 });
+
+			const { result, rerender } = renderHook(
+				({ enabled }: { enabled: boolean }) => useConversationSkills("ao-skills-restart", enabled),
+				{ wrapper: skillsWrapper(queryClient), initialProps: { enabled: false } },
+			);
+			expect(result.current.settled).toBe(false);
+
+			rerender({ enabled: true });
+			await act(async () => {
+				await vi.advanceTimersByTimeAsync(0);
+			});
+			expect(getMock).toHaveBeenCalledTimes(1);
+			expect(result.current.settled).toBe(false);
+			expect(result.current.loading).toBe(true);
+
+			await act(async () => {
+				await vi.advanceTimersByTimeAsync(6_000);
+			});
+			// Still rechecked quickly rather than once a minute.
+			expect(getMock.mock.calls.length).toBeGreaterThanOrEqual(3);
 		} finally {
 			vi.useRealTimers();
 		}
