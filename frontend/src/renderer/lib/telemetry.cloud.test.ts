@@ -47,6 +47,13 @@ describe("cloud funnel event allowlist", () => {
 		});
 		expect(offering).toEqual({ org_kind: "unknown", billing_mode: "unknown", default_provider: "freestyle", provider_count: 2 });
 		expect(await sanitizeRendererProperties("ao.renderer.cloud_checkout_started", { plan: "Pro Plan $$" })).toEqual({ plan: "other" });
+		expect(await sanitizeRendererProperties("ao.renderer.cloud_checkout_started", { plan: "starter", trial: true })).toEqual({ plan: "starter", trial: true });
+		expect(await sanitizeRendererProperties("ao.renderer.cloud_checkout_completed", { plan: "starter", trial: false, duration_ms: 5 })).toEqual({
+			plan: "starter",
+			trial: false,
+			duration_ms: 5,
+		});
+		expect(await sanitizeRendererProperties("ao.renderer.cloud_checkout_completed", { plan: "starter", trial: "7 days" })).toEqual({ plan: "starter" });
 		expect(await sanitizeRendererProperties("ao.renderer.cloud_signed_in", { method: "workos", email: "a@b.c" })).toEqual({ method: "workos" });
 		expect(await sanitizeRendererProperties("ao.renderer.cloud_signed_in", { method: "workos", source: "artifact_publish" })).toEqual({ method: "workos", source: "artifact_publish" });
 		expect(await sanitizeRendererProperties("ao.renderer.cloud_signed_in", { method: "workos", source: "/Users/a/plan.md" })).toEqual({ method: "workos" });

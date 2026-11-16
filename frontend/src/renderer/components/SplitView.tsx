@@ -26,7 +26,7 @@ import { TerminalPane } from "./TerminalPane";
 import { Pressable } from "./ui/pressable";
 import { Tooltip, TooltipContent, TooltipTrigger } from "./ui/tooltip";
 import { TabContextMenu, type TabMenuSpec } from "./TabContextMenu";
-import { terminalTabActionClassName } from "./TerminalTabFrame";
+import { tabFadeClassName, tabHoverFadeClassName, tabHoverRevealClassName, terminalTabActionClassName } from "./TerminalTabFrame";
 
 /**
  * A terminal shown in a split pane. Shell terminals come from the shared
@@ -395,8 +395,9 @@ export function SplitPaneHeader({
  * One strip tab for tabs shown together. The focused member shows its name;
  * the others show only their icon, named by a tooltip. Each member is its own
  * target: clicking it shows the group with that pane focused, and dragging it
- * moves it within the split or out of the group. Hovering the tab swaps the
- * focused member's icon for a close button, as on other tabs, and its menu
+ * moves it within the split or out of the group. The focused member's close
+ * sits over its name's end as on other tabs (shown while the group is
+ * selected, on hover otherwise), and its menu
  * (`useTabMenuItems`) ungroups it, followed by the focused member's own rows.
  */
 export function SplitGroupTab({
@@ -439,7 +440,8 @@ export function SplitGroupTab({
 						aria-selected={active && focused}
 						className={cn(
 							"inline-flex h-full min-w-0 cursor-pointer items-center gap-2 leading-none",
-							focused ? "max-w-shell-tab-max px-2 text-control" : "max-w-40 px-2 text-control",
+							// The focused member has every tab's width floor, so a short name keeps its icon clear of the close's fade.
+							focused ? cn("min-w-shell-tab-min max-w-shell-tab-max px-2 text-control", active ? tabFadeClassName : tabHoverFadeClassName) : "max-w-40 px-2 text-control",
 							active && focused ? "text-foreground" : active ? "text-muted-foreground hover:text-foreground" : "hover:text-foreground",
 						)}
 						data-split-member={member.key}
@@ -463,14 +465,7 @@ export function SplitGroupTab({
 						tabIndex={active && focused ? 0 : -1}
 						type="button"
 					>
-						<span
-							className={cn(
-								"pointer-events-none grid size-icon-base shrink-0 place-items-center",
-								focused && "group-hover:opacity-0 group-has-[:focus-visible]:opacity-0",
-							)}
-						>
-							{member.icon}
-						</span>
+						<span className="pointer-events-none grid size-icon-base shrink-0 place-items-center">{member.icon}</span>
 						<span className="truncate">{member.label}</span>
 					</Pressable>
 				);
@@ -480,11 +475,15 @@ export function SplitGroupTab({
 							<span aria-hidden="true" className="my-2.5 w-px shrink-0 self-stretch bg-border" />
 						) : null}
 						{focused ? (
-							<span className="relative inline-flex min-w-0">
+							<span className="relative inline-flex min-w-0 items-center">
 								{segment}
-								{/* Takes the icon's slot on hover, like the close button on other tabs. */}
+								{/* Over the member's name's end, like every tab's close: shown while
+								    the group is selected, on hover otherwise. */}
 								<span
-									className="pointer-events-none absolute left-2 top-1/2 grid size-icon-base -translate-y-1/2 place-items-center opacity-0 group-hover:pointer-events-auto group-hover:opacity-100 group-has-[:focus-visible]:pointer-events-auto group-has-[:focus-visible]:opacity-100"
+									className={cn(
+										"absolute right-2 top-1/2 grid size-icon-base -translate-y-1/2 place-items-center",
+										!active && tabHoverRevealClassName,
+									)}
 									data-terminal-tab-action
 								>
 									<Pressable
@@ -494,7 +493,7 @@ export function SplitGroupTab({
 											event.stopPropagation();
 											member.onClose();
 										}}
-										// The X covers the member's icon, so a middle-click there closes the pane too.
+										// A middle-click on the X closes the pane too, as on the member itself.
 										onMouseDown={(event) => { if (event.button === 1) event.preventDefault(); }}
 										onAuxClick={(event) => {
 											if (event.button !== 1) return;

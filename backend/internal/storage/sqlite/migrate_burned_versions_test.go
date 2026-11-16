@@ -272,6 +272,7 @@ var shippedMigrations = map[int64]string{
 	20261115071147951: "20261115071147951_allow_docker_agent_harness.sql",
 	20261115072651599: "20261115072651599_allow_minimax_code_harness.sql",
 	20261115072835107: "20261115072835107_review_run_state_machine.sql",
+	20261116070040471: "20261116070040471_kept_artifacts.sql",
 	20261116125847855: "20261116125847855_allow_open_interpreter_harness.sql",
 }
 

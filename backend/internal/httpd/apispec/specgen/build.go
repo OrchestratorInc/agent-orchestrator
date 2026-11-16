@@ -3482,6 +3482,15 @@ func sessionOperations() []operation {
 			contentTypes: map[int]string{http.StatusOK: "text/html"},
 		},
 		{
+			method: http.MethodGet, path: "/api/v1/kept-artifacts", id: "listKeptArtifacts", tag: "sessions",
+			summary: "List the artifacts no session or project lists: those of sessions deleted with their artifacts kept, and of sessions in removed projects",
+			resps: []respUnit{
+				{http.StatusOK, controllers.ListKeptArtifactsResponse{}},
+				{http.StatusInternalServerError, envelope.APIError{}},
+				{http.StatusNotImplemented, envelope.APIError{}},
+			},
+		},
+		{
 			method: http.MethodGet, path: "/api/v1/sessions/{sessionId}/artifact-events", id: "streamSessionArtifactChanges", tag: "sessions",
 			summary:    "Stream changes to the files in a session's artifact directory",
 			pathParams: []any{controllers.SessionIDParam{}},
