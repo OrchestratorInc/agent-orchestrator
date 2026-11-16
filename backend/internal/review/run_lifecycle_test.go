@@ -1054,3 +1054,54 @@ func TestSleepIsNotCountedAgainstAPendingStop(t *testing.T) {
 		t.Fatal("reviewer not force-stopped after its observed grace")
 	}
 }
+
+// failingForceStopLauncher's force-stop is unconfirmed until survive is false,
+// like a captured agent that cannot be killed yet.
+type failingForceStopLauncher struct {
+	*fakeLauncher
+	survive bool
+	calls   int
+}
+
+func (f *failingForceStopLauncher) ForceStop(context.Context, string) (bool, error) {
+	f.calls++
+	if f.survive {
+		return false, errors.New("reviewer processes still alive after force-stop: [44493]")
+	}
+	return true, nil
+}
+
+// An unconfirmed force-kill after a cancel ends the run cancel_unconfirmed,
+// but the reviewer is still retried on later passes until its death is
+// confirmed; only then is its handle released.
+func TestUnconfirmedCancelKillIsRetriedUntilConfirmed(t *testing.T) {
+	launcher := &failingForceStopLauncher{fakeLauncher: &fakeLauncher{handle: "review-mer-1"}, survive: true}
+	s := newLifecycleEngine(t, launcher.fakeLauncher)
+	s.restart(t, launcher.fakeLauncher, RunLifecycleConfig{})
+	s.launcher = launcher
+	run := s.trigger(t)
+	if _, err := s.Cancel(context.Background(), s.worker.ID); err != nil {
+		t.Fatal(err)
+	}
+	// A failed force-stop is reported as a reaper error, so step the passes
+	// by hand rather than through wait, which treats any error as fatal.
+	tick := func() { _ = s.reaper.Tick(context.Background()) }
+	for elapsed := time.Duration(0); elapsed < DefaultRunLifecycleConfig().CancelTimeout; elapsed += reaper.DefaultTickInterval {
+		s.advance(reaper.DefaultTickInterval)
+		tick()
+	}
+	wantRun(t, s.run(t, run.ID), domain.ReviewRunFailed, domain.ReviewFailureCancelUnconfirmed)
+	if s.review(t).ReviewerHandleID == "" {
+		t.Fatal("handle released while the reviewer may still be alive")
+	}
+	before := launcher.calls
+	tick()
+	if launcher.calls <= before {
+		t.Fatal("the unconfirmed kill was not retried")
+	}
+	launcher.survive = false
+	s.pass(t)
+	if s.review(t).ReviewerHandleID != "" || len(s.pendingStops()) != 0 {
+		t.Fatalf("confirmed retry did not release the reviewer: handle=%q stops=%+v", s.review(t).ReviewerHandleID, s.pendingStops())
+	}
+}

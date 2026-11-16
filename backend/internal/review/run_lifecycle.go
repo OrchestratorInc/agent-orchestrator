@@ -889,6 +889,10 @@ func (e *Engine) forceKill(ctx stdctx.Context, run domain.ReviewRun, review doma
 	delete(probes, review.ID)
 	if err != nil || !stopped {
 		slog.Default().WarnContext(ctx, "force-kill reviewer after cancel timeout was not confirmed", "run", run.ID, "review", review.ID, "err", err)
+		// The run ends cancel_unconfirmed, but the reviewer may still be
+		// running: keep force-stopping it on later passes, with the processes
+		// this attempt captured, until its death is confirmed.
+		e.addStop(pendingStop{review: review, since: now, immediate: true})
 		return unconfirmed, nil
 	}
 	if err := e.store.ClearReviewerHandleByHarness(ctx, run.SessionID, review.Harness); err != nil {
