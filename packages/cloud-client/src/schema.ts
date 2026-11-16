@@ -852,7 +852,7 @@ export interface paths {
         get: operations["getAutomation"];
         put?: never;
         post?: never;
-        /** @description Delete an automation and its run history. Its runs' sessions and artifacts stay. Allowed to whoever may edit it. */
+        /** @description Delete an automation and its run history. The session of a run in flight ends with it; every run's transcript and artifacts stay. Allowed to whoever may edit it. */
         delete: operations["deleteAutomation"];
         options?: never;
         head?: never;
@@ -3731,7 +3731,7 @@ export interface components {
         /** @enum {string} */
         AutomationMode: "standard" | "trusted";
         /**
-         * @description pending, starting and running are in flight. completed means the session's opening turn finished. skipped means it did not start: the previous run was still going (PREVIOUS_RUN_ACTIVE), the automation was turned off before it started (AUTOMATION_DISABLED), or the organization or plan was full (the create-session refusal's code: SANDBOX_QUOTA_EXCEEDED, SESSION_LIMIT_REACHED, WORKER_SLOTS_FULL, ORCHESTRATOR_SLOTS_FULL, WINDOW_LIMIT_REACHED, WEEKLY_LIMIT_REACHED). failed means it started and did not finish, or its start was refused for any other reason. timed_out means it reached maxRuntimeMinutes and its session was stopped.
+         * @description pending, starting and running are in flight. completed means the session's opening turn finished. skipped means it did not start: the previous run was still going (PREVIOUS_RUN_ACTIVE), the automation was turned off before it started (AUTOMATION_DISABLED), or the organization or plan was full (the create-session refusal's code: SANDBOX_QUOTA_EXCEEDED, SESSION_LIMIT_REACHED, WORKER_SLOTS_FULL, ORCHESTRATOR_SLOTS_FULL, WINDOW_LIMIT_REACHED, WEEKLY_LIMIT_REACHED). failed means it started and did not finish, or its start was refused for any other reason. timed_out means it reached maxRuntimeMinutes. A run's session ends when the run reaches completed, failed or timed_out.
          * @enum {string}
          */
         AutomationRunStatus: "pending" | "starting" | "running" | "completed" | "failed" | "skipped" | "timed_out";
@@ -3755,7 +3755,7 @@ export interface components {
             status: components["schemas"]["AutomationRunStatus"];
             /**
              * Format: uuid
-             * @description The session it ran in, once started. Only the automation's latest run keeps its session open; earlier runs' sessions are deleted (and can be restored) when the next run starts.
+             * @description The session it ran in, once started. The session ends when the run does (completed, failed or timed_out), as deleteSession ends one: its sandbox is deleted and its transcript, artifacts and pull requests stay. It can be restored to continue the work; the automation's next run ends a restored one again, since it holds the shared branch.
              */
             sessionId?: string;
             attemptCount: number;
