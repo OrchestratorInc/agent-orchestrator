@@ -47,6 +47,7 @@ export function createDictationController(transport: DictationTransport, surface
 	const end = (keep = true) => {
 		if (phase === "idle") return;
 		release();
+		run = 0;
 		setPhase("idle");
 		surface.onEnd(keep);
 	};
@@ -86,10 +87,16 @@ export function createDictationController(transport: DictationTransport, surface
 		},
 		start() {
 			if (phase !== "idle") return;
-			run = ++lastRun;
+			const started = ++lastRun;
+			run = started;
 			unsubscribe = transport.onEvent(onEvent);
 			setPhase("starting");
-			void transport.start(run);
+			// Main refuses a surface that may not dictate now (a hidden tab, say) and
+			// sends nothing for it, so end the run here rather than wait.
+			const refused = () => {
+				if (run === started) end();
+			};
+			transport.start(started).then((ok) => ok || refused(), refused);
 		},
 		stop() {
 			if (phase === "idle" || phase === "finishing") return;
@@ -105,6 +112,7 @@ export function createDictationController(transport: DictationTransport, surface
 		dispose() {
 			if (phase === "idle") return;
 			release();
+			run = 0;
 			phase = "idle";
 			void transport.cancel();
 		},

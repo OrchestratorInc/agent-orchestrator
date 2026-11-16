@@ -19,10 +19,30 @@ export function registerDictationIpc(
 	const stop = () => {
 		helper?.stdin?.write("stop\n");
 	};
+	const cancel = () => {
+		helper?.stdin?.write("cancel\n");
+		helper = null;
+		owner = null;
+	};
 	app.on("will-quit", () => helper?.kill());
 
-	ipcMain.handle("dictation:start", (event, run: unknown) => {
-		if (process.platform !== "darwin" || !isAllowedSender(event.sender)) return;
+	// A surface that closes, crashes or leaves its page mid-dictation cannot
+	// cancel; stop listening for it.
+	const watch = (sender: WebContents) => {
+		if (watched.has(sender)) return;
+		watched.add(sender);
+		const release = () => {
+			if (owner === sender) cancel();
+		};
+		sender.once("destroyed", release);
+		sender.on("render-process-gone", release);
+		sender.on("did-navigate", release);
+	};
+
+	// Resolves to whether the dictation started, so a refused surface does not
+	// wait for events that never come.
+	ipcMain.handle("dictation:start", (event, run: unknown): boolean => {
+		if (process.platform !== "darwin" || !isAllowedSender(event.sender)) return false;
 		const sender = event.sender;
 		const runId = typeof run === "number" && Number.isSafeInteger(run) ? run : 0;
 		const previous = helper;
@@ -34,16 +54,7 @@ export function registerDictationIpc(
 		helper = child;
 		owner = sender;
 		ownerRun = runId;
-		// A surface that closes mid-dictation cannot cancel; stop listening for it.
-		if (!watched.has(sender)) {
-			watched.add(sender);
-			sender.once("destroyed", () => {
-				if (owner !== sender) return;
-				helper?.stdin?.write("cancel\n");
-				helper = null;
-				owner = null;
-			});
-		}
+		watch(sender);
 		// A helper that was replaced or cancelled is still shutting down; its
 		// events, exit included, belong to a dictation that already ended.
 		const send = (message: DictationEvent) => {
@@ -69,6 +80,7 @@ export function registerDictationIpc(
 				owner = null;
 			}
 		});
+		return true;
 	});
 
 	// Only the surface that started the running dictation may stop or cancel it.
@@ -77,10 +89,7 @@ export function registerDictationIpc(
 	});
 
 	ipcMain.handle("dictation:cancel", (event) => {
-		if (event.sender !== owner) return;
-		helper?.stdin?.write("cancel\n");
-		helper = null;
-		owner = null;
+		if (event.sender === owner) cancel();
 	});
 
 	return { stop };

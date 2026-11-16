@@ -2091,8 +2091,8 @@ export function createBrowserViewHost(
     session.activationRevision += 1;
     if (previous && previous !== next) {
       previous.driver().show(false);
-      // A hidden tab's composer cannot be finished; its dictation ends with
-      // the words it has.
+      // A hidden tab's composer cannot be seen, so its dictation finishes, as
+      // leaving the app does; the final wording still reaches the page.
       if (previous.annotationEnabled && previous.annotationDictation)
         previous.view.webContents.send("browser:annotation:stopDictation");
     }
@@ -2751,8 +2751,8 @@ export function createBrowserViewHost(
     }
   }
 
-  // A hidden panel's composer cannot be seen or finished, so its dictation
-  // ends. Re-layouts hide and re-show the view within a frame or two (a slot
+  // A hidden panel's composer cannot be seen, so its dictation finishes, as
+  // leaving the app does. Re-layouts hide and re-show the view within a frame or two (a slot
   // handoff, the 280ms settle re-measure), so only a hide that lasts ends it.
   const ANNOTATION_DICTATION_HIDE_GRACE_MS = 500;
   const dictationHideTimers = new Map<string, ReturnType<typeof setTimeout>>();

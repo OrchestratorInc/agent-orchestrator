@@ -739,7 +739,8 @@ describe("annotation composer dictation", () => {
 		document.body.innerHTML = "";
 		electronMocks.send.mockClear();
 		electronMocks.invoke.mockClear();
-		electronMocks.invoke.mockResolvedValue(undefined);
+		// Main starts the run unless a test says otherwise.
+		electronMocks.invoke.mockImplementation(async (channel: string) => channel === "dictation:start");
 		vi.stubGlobal("requestAnimationFrame", () => 0);
 		vi.stubGlobal("cancelAnimationFrame", () => undefined);
 		gestureMocks.trustClicks = true;
@@ -840,17 +841,52 @@ describe("annotation composer dictation", () => {
 		expect(electronMocks.dictationListeners.size).toBe(0);
 	});
 
-	it("stops dictating, keeping the words, when its tab is hidden", () => {
+	it("finishes dictating, with the final wording, when its tab is hidden", () => {
 		setMode(true, createBrowserAnnotationSession(window.location.href), true);
 		const root = openComment("dictate-hidden");
 		root.querySelector<HTMLButtonElement>('[data-action="dictate"]')!.click();
+		emitDictation({ type: "listening" });
 		emitDictation({ type: "text", text: "Keep this" });
 
 		electronMocks.listeners.get("browser:annotation:stopDictation")?.({});
 
-		expect(electronMocks.invoke).toHaveBeenCalledWith("dictation:cancel");
-		expect(root.querySelector<HTMLTextAreaElement>(".composer-note")?.value).toBe("Keep this");
+		expect(electronMocks.invoke).toHaveBeenCalledWith("dictation:stop");
+		expect(electronMocks.invoke).not.toHaveBeenCalledWith("dictation:cancel");
+		emitDictation({ type: "end", text: "Keep this one" });
+		expect(root.querySelector<HTMLTextAreaElement>(".composer-note")?.value).toBe("Keep this one");
 		expect(root.querySelector('[data-action="dictate"]')?.getAttribute("aria-pressed")).toBe("false");
+	});
+
+	it("lets go of the mic control when main refuses to start", async () => {
+		electronMocks.invoke.mockImplementation(async () => false);
+		setMode(true, createBrowserAnnotationSession(window.location.href), true);
+		const root = openComment("dictate-refused");
+		const mic = root.querySelector<HTMLButtonElement>('[data-action="dictate"]')!;
+
+		mic.click();
+
+		await vi.waitFor(() => expect(mic.getAttribute("aria-pressed")).toBe("false"));
+		// Escape closes the comment again rather than trying to finish a dictation.
+		root.querySelector<HTMLTextAreaElement>(".composer-note")!
+			.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true, cancelable: true }));
+		expect(overlayRoot().querySelector(".composer")).toBeNull();
+	});
+
+	it("re-fits the note when the mic control widens", () => {
+		setMode(true, createBrowserAnnotationSession(window.location.href), true);
+		const root = openComment("dictate-refit");
+		const textarea = root.querySelector<HTMLTextAreaElement>(".composer-note")!;
+		const mic = root.querySelector<HTMLButtonElement>('[data-action="dictate"]')!;
+		mic.click();
+		// The narrower note now wraps to two lines.
+		stubPanelContentHeight(44);
+		const widened = new Event("transitionend");
+		Object.defineProperty(widened, "propertyName", { value: "width" });
+
+		mic.dispatchEvent(widened);
+
+		expect(textarea.style.height).toBe("44px");
+		for (const spy of elementPrototypeSpies.splice(0)) spy.mockRestore();
 	});
 
 	it("adds a space before the words when they would run into the text before them", () => {
@@ -872,6 +908,8 @@ describe("annotation composer dictation", () => {
 		["Say it.", 6, "Say it world."],
 		["Done, ok", 4, "Done world, ok"],
 		["[]", 1, "[world]"],
+		['Change the label to "Start"', 20, 'Change the label to world "Start"'],
+		['Say ""', 5, 'Say "world"'],
 	])("does not space the words from punctuation around them in %j", (value, caret, expected) => {
 		setMode(true, createBrowserAnnotationSession(window.location.href), true);
 		const root = openComment("dictate-punctuation");

@@ -19,7 +19,7 @@ import {
 import { promptPositionForRect, type AnnotationRectLike } from "./shared/browser-annotation-overlay";
 import { createDictationController } from "./shared/dictation-controller";
 import { dictationIpc } from "./shared/dictation-ipc";
-import { DICTATION_METER_BARS, dictationMeterSteps, runDictationMeter } from "./shared/dictation-meter";
+import { DICTATION_METER_BARS, dictationMeterSteps, drawDictationBars, runDictationMeter } from "./shared/dictation-meter";
 import { isTrustedUserEvent } from "./shared/trusted-event";
 
 let enabled = false;
@@ -54,6 +54,8 @@ let dictationPlacement: {
 	suffix: string;
 } | null = null;
 let stopDictationMeter: (() => void) | null = null;
+/** The meter's bars, read when the mic control is (re)built rather than every frame. */
+let dictationBars: HTMLElement[] = [];
 const dictationTransport = dictationIpc(ipcRenderer);
 /** Native macOS dictation into the comment, run as the chat composer's is (useDictation). */
 const dictation = createDictationController(dictationTransport, {
@@ -183,8 +185,9 @@ ipcRenderer.on("browser:annotation:action", (_event, action: string) => {
 	else if (action === "submit") void submitBatch();
 });
 
-// The tab was hidden, so the user can no longer see or finish the dictation.
-ipcRenderer.on("browser:annotation:stopDictation", () => dictation.halt());
+// The tab or panel was hidden, so the user can no longer see the dictation.
+// Finish it as leaving the app does: the final wording still arrives here.
+ipcRenderer.on("browser:annotation:stopDictation", () => dictation.stop());
 
 window.addEventListener("beforeunload", cleanupOverlay);
 
@@ -435,9 +438,11 @@ function startDictation(): void {
 		before,
 		selected: draft.body.slice(start, end),
 		after,
-		// Words are spaced from words, not from the brackets and punctuation around them.
-		prefix: before && !/[\s([{“‘]$/.test(before) ? " " : "",
-		suffix: after && !/^[\s.,;:!?)\]}"'”’…]/.test(after) ? " " : "",
+		// Words are spaced from words, not from the brackets and punctuation around
+		// them. A straight quote opens after a space (or at the start) and closes
+		// before one (or at the end).
+		prefix: before && !/(?:[\s([{“‘]|(?:^|\s)["'])$/.test(before) ? " " : "",
+		suffix: after && !/^(?:[\s.,;:!?)\]}”’…]|["'](?:\s|$))/.test(after) ? " " : "",
 	};
 	dictation.start();
 }
@@ -450,17 +455,23 @@ function showDictatedText(text: string): void {
 	// Until words arrive the note keeps what the run would replace.
 	const words = text ? run.prefix + text : "";
 	draft.body = run.before + (words ? words + run.suffix : run.selected) + run.after;
-	const form = shadow?.querySelector<HTMLFormElement>(".composer");
-	const textarea = form?.querySelector<HTMLTextAreaElement>(".composer-note");
-	if (form && textarea) {
+	const textarea = shadow?.querySelector<HTMLTextAreaElement>(".composer-note");
+	if (textarea) {
 		textarea.value = draft.body;
 		if (words) {
 			const caret = run.before.length + words.length;
 			textarea.setSelectionRange(caret, caret);
 		} else textarea.setSelectionRange(run.before.length, run.before.length + run.selected.length);
-		if (composerAnchorRect) resizeAndPositionComposer(form, textarea, composerAnchorRect);
+		resizeOpenComposer();
 	}
 	emitState();
+}
+
+/** Re-fits the open composer to its note, after the note or its row changed. */
+function resizeOpenComposer(): void {
+	const form = shadow?.querySelector<HTMLFormElement>(".composer");
+	const textarea = form?.querySelector<HTMLTextAreaElement>(".composer-note");
+	if (form && textarea && composerAnchorRect) resizeAndPositionComposer(form, textarea, composerAnchorRect);
 }
 
 function toggleDictation(): void {
@@ -480,6 +491,7 @@ function syncDictationButton(): void {
 	if (!button) return;
 	const dictating = dictation.phase !== "idle";
 	const label = dictating ? "Finish dictation" : "Dictate";
+	const widening = button.classList.contains("dictate-button--active") !== dictating;
 	button.classList.toggle("dictate-button--active", dictating);
 	button.setAttribute("aria-pressed", String(dictating));
 	button.setAttribute("aria-label", label);
@@ -488,15 +500,16 @@ function syncDictationButton(): void {
 	if (dictating && !meter)
 		button.innerHTML = `<span class="dictation-meter" aria-hidden="true">${'<span class="dictation-bar"></span>'.repeat(DICTATION_METER_BARS)}</span>`;
 	else if (!dictating && meter) button.innerHTML = icon("mic");
+	dictationBars = Array.from(button.querySelectorAll<HTMLElement>(".dictation-bar"));
 	if (!listening) drawDictationMeter(dictationMeterSteps(0, 0));
+	// The pill takes width from the note, which may now wrap differently. Without
+	// motion the width changes at once; otherwise "transitionend" re-fits it too.
+	if (widening) resizeOpenComposer();
 }
 
 /** Bars grow from the 3px resting dot, 1px per step. */
 function drawDictationMeter(steps: number[]): void {
-	shadow?.querySelectorAll<HTMLElement>(".dictation-bar").forEach((bar, index) => {
-		const height = `${3 + (steps[index] ?? 0)}px`;
-		if (bar.style.height !== height) bar.style.height = height;
-	});
+	drawDictationBars(dictationBars, steps);
 }
 
 function emitState(): void {
@@ -621,6 +634,9 @@ function renderComposer(): void {
 	const dictateButton = form.querySelector<HTMLButtonElement>('[data-action="dictate"]');
 	// Keep focus in the note, where the words appear.
 	dictateButton?.addEventListener("mousedown", (event) => event.preventDefault());
+	dictateButton?.addEventListener("transitionend", (event) => {
+		if (event.propertyName === "width") resize();
+	});
 	dictateButton?.addEventListener("click", (event) => {
 		// The page can click this control from script; only the user may turn on
 		// the microphone.

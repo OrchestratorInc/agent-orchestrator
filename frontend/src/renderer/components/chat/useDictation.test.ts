@@ -13,7 +13,7 @@ describe("useDictation", () => {
 			listeners.add(listener);
 			return () => listeners.delete(listener);
 		});
-		const start = vi.spyOn(aoBridge.dictation, "start").mockResolvedValue(undefined);
+		const start = vi.spyOn(aoBridge.dictation, "start").mockResolvedValue(true);
 		const cancel = vi.spyOn(aoBridge.dictation, "cancel").mockResolvedValue(undefined);
 		const target = () => ({ onText: vi.fn(), onEnd: vi.fn() });
 		const first = renderHook(() => useDictation(target()));

@@ -4,8 +4,10 @@ import type { DictationEvent } from "./dictation";
 // (DictationMeter) and the browser annotation composer, which draws outside React.
 
 export const DICTATION_METER_BARS = 11;
-/** Height steps per bar, 1px apart, from the resting dot (3px) to the pill's inner height (20px). */
+/** Height steps per bar, 1px apart, from the resting dot to the pill's inner height (20px). */
 export const DICTATION_METER_STEPS = 18;
+/** The resting dot's height. */
+const REST_PX = 3;
 const MIDDLE = (DICTATION_METER_BARS - 1) / 2;
 /** How tall each bar may grow: full in the middle, about a third at the ends. */
 const REACH = Array.from({ length: DICTATION_METER_BARS }, (_, bar) => {
@@ -28,6 +30,14 @@ export function dictationMeterSteps(level: number, seconds: number): number[] {
 	return REACH.map((reach, index) => {
 		const wave = 1 - WAVE_DEPTH * (0.5 + 0.5 * Math.sin((index / (DICTATION_METER_BARS - 1)) * 3 * Math.PI) * swing);
 		return Math.round(level * reach * wave * (DICTATION_METER_STEPS - 1));
+	});
+}
+
+/** Sets each bar's height for its step, touching only bars that change. */
+export function drawDictationBars(bars: readonly HTMLElement[], steps: readonly number[]): void {
+	bars.forEach((bar, index) => {
+		const height = `${REST_PX + (steps[index] ?? 0)}px`;
+		if (bar.style.height !== height) bar.style.height = height;
 	});
 }
 

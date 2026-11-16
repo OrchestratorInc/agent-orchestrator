@@ -6,7 +6,7 @@ import type { DictationTransport } from "./dictation-ipc";
 function setup() {
 	const listeners = new Set<(event: DictationMessage) => void>();
 	const transport: DictationTransport = {
-		start: vi.fn(async () => undefined),
+		start: vi.fn(async (_run: number) => true),
 		stop: vi.fn(async () => undefined),
 		cancel: vi.fn(async () => undefined),
 		onEvent: (listener) => {
@@ -62,6 +62,29 @@ describe("createDictationController", () => {
 		emit(event);
 		expect(controller.phase).toBe("idle");
 		expect(surface.onError).toHaveBeenCalledWith(message);
+	});
+
+	it.each([
+		["refuses", async () => false],
+		["fails", async () => { throw new Error("no handler"); }],
+	])("ends the run when main %s to start it", async (_name, answer) => {
+		const { controller, surface, transport } = setup();
+		vi.mocked(transport.start).mockImplementationOnce(answer);
+		controller.start();
+		await vi.waitFor(() => expect(controller.phase).toBe("idle"));
+		expect(surface.onEnd).toHaveBeenCalledWith(true);
+	});
+
+	it("does not let a late refusal end the run started after it", async () => {
+		const { controller, transport } = setup();
+		let refuse!: (ok: boolean) => void;
+		vi.mocked(transport.start).mockImplementationOnce(() => new Promise((resolve) => { refuse = resolve; }));
+		controller.start();
+		controller.halt();
+		controller.start();
+		refuse(false);
+		await Promise.resolve();
+		expect(controller.phase).toBe("starting");
 	});
 
 	it("ends quietly when another surface takes the mic", () => {
