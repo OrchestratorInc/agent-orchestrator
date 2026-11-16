@@ -78,6 +78,13 @@ WHERE project_id = sqlc.arg(project_id) AND delivery_state = 'claimed'
   AND claim_token = sqlc.arg(claim_token)
 RETURNING *;
 
+-- name: FailReportBatch :many
+UPDATE reports
+SET delivery_state = 'failed', claim_token = '', claimed_at = NULL, last_error = sqlc.arg(last_error)
+WHERE project_id = sqlc.arg(project_id) AND delivery_state = 'claimed'
+  AND claim_token = sqlc.arg(claim_token)
+RETURNING *;
+
 -- name: GetReportInterrupt :one
 SELECT last_interrupted_at FROM report_worker_interrupts WHERE session_id = ?;
 

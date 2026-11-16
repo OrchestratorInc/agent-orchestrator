@@ -269,6 +269,172 @@ func TestCoordinatorAcceptanceAndPiggybackFencing(t *testing.T) {
 	}
 }
 
+func TestCoordinatorRetriesStopAtConfiguredLimit(t *testing.T) {
+	now := time.Date(2026, 11, 16, 10, 0, 0, 0, time.UTC)
+	store := newCoordinatorStore(now)
+	store.sessions = []domain.SessionRecord{{ID: "orch", ProjectID: "p", Kind: domain.KindOrchestrator, Mode: domain.SessionModeChat}}
+	store.add(reportAt("rep-1", "worker", now, now, "progress"))
+	delivery := &coordinatorDelivery{submitErr: errors.New("temporary submit failure")}
+	c := NewCoordinator(CoordinatorDeps{
+		Store:               store,
+		Delivery:            delivery,
+		Now:                 func() time.Time { return now },
+		RetryDelay:          5 * time.Second,
+		MaxDeliveryAttempts: 3,
+	})
+
+	// Attempt 1
+	if _, err := c.RunDue(context.Background()); err == nil {
+		t.Fatal("attempt 1 should fail")
+	}
+	if store.reports[0].DeliveryState != domain.ReportPending || store.reports[0].DeliveryAttempts != 1 {
+		t.Fatalf("attempt 1: state = %s, attempts = %d", store.reports[0].DeliveryState, store.reports[0].DeliveryAttempts)
+	}
+
+	// Advance time past RetryDelay and retry (Attempt 2)
+	now = now.Add(5 * time.Second)
+	if _, err := c.RunDue(context.Background()); err == nil {
+		t.Fatal("attempt 2 should fail")
+	}
+	if store.reports[0].DeliveryState != domain.ReportPending || store.reports[0].DeliveryAttempts != 2 {
+		t.Fatalf("attempt 2: state = %s, attempts = %d", store.reports[0].DeliveryState, store.reports[0].DeliveryAttempts)
+	}
+
+	// Advance time past RetryDelay and retry (Attempt 3: limit reached)
+	now = now.Add(5 * time.Second)
+	if _, err := c.RunDue(context.Background()); err == nil {
+		t.Fatal("attempt 3 should fail")
+	}
+	if store.reports[0].DeliveryState != domain.ReportFailed {
+		t.Fatalf("after 3 attempts: state = %s, want %s", store.reports[0].DeliveryState, domain.ReportFailed)
+	}
+	if store.reports[0].DeliveryAttempts != 3 {
+		t.Fatalf("attempts = %d, want 3", store.reports[0].DeliveryAttempts)
+	}
+	if store.reports[0].LastError != "temporary submit failure" {
+		t.Fatalf("last error = %q, want 'temporary submit failure'", store.reports[0].LastError)
+	}
+
+	// Further calls to RunDue must not attempt delivery again
+	now = now.Add(time.Hour)
+	delay, err := c.RunDue(context.Background())
+	if err != nil || delay != -1 {
+		t.Fatalf("delay = %v, err = %v, want -1 and no error (no pending reports left)", delay, err)
+	}
+	if len(delivery.submissions) != 0 {
+		t.Fatalf("submissions = %d, want 0 successful deliveries", len(delivery.submissions))
+	}
+}
+
+func TestCoordinatorExpiryTerminatesDelivery(t *testing.T) {
+	now := time.Date(2026, 11, 16, 10, 0, 0, 0, time.UTC)
+	store := newCoordinatorStore(now)
+	store.sessions = []domain.SessionRecord{{ID: "orch", ProjectID: "p", Kind: domain.KindOrchestrator, Mode: domain.SessionModeChat}}
+	store.add(reportAt("rep-1", "worker", now, now, "progress"))
+	delivery := &coordinatorDelivery{submitErr: errors.New("service unavailable")}
+	c := NewCoordinator(CoordinatorDeps{
+		Store:               store,
+		Delivery:            delivery,
+		Now:                 func() time.Time { return now },
+		RetryDelay:          time.Minute,
+		MaxDeliveryAttempts: 10,
+		Expiry:              15 * time.Minute,
+	})
+
+	// Attempt 1 at now: fails, within expiry window
+	if _, err := c.RunDue(context.Background()); err == nil {
+		t.Fatal("attempt 1 should fail")
+	}
+	if store.reports[0].DeliveryState != domain.ReportPending {
+		t.Fatalf("state = %s, want pending", store.reports[0].DeliveryState)
+	}
+
+	// Advance time past 15 min expiry
+	now = now.Add(20 * time.Minute)
+	if _, err := c.RunDue(context.Background()); err == nil {
+		t.Fatal("attempt 2 should fail due to expiry")
+	}
+	if store.reports[0].DeliveryState != domain.ReportFailed {
+		t.Fatalf("expired report state = %s, want %s", store.reports[0].DeliveryState, domain.ReportFailed)
+	}
+
+	// Retries have stopped
+	now = now.Add(time.Hour)
+	delay, err := c.RunDue(context.Background())
+	if err != nil || delay != -1 {
+		t.Fatalf("delay = %v, err = %v, want -1", delay, err)
+	}
+}
+
+func TestCoordinatorNormalDeliveryAcknowledgedUnaffected(t *testing.T) {
+	now := time.Date(2026, 11, 16, 10, 0, 0, 0, time.UTC)
+	store := newCoordinatorStore(now)
+	store.sessions = []domain.SessionRecord{{ID: "orch", ProjectID: "p", Kind: domain.KindOrchestrator, Mode: domain.SessionModeChat}}
+	store.add(reportAt("rep-1", "worker", now, now, "success"))
+	delivery := &coordinatorDelivery{submitErr: errors.New("initial failure")}
+	c := NewCoordinator(CoordinatorDeps{
+		Store:               store,
+		Delivery:            delivery,
+		Now:                 func() time.Time { return now },
+		RetryDelay:          5 * time.Second,
+		MaxDeliveryAttempts: 3,
+	})
+
+	// Attempt 1: fails
+	if _, err := c.RunDue(context.Background()); err == nil {
+		t.Fatal("attempt 1 should fail")
+	}
+	if store.reports[0].DeliveryState != domain.ReportPending || store.reports[0].DeliveryAttempts != 1 {
+		t.Fatalf("attempt 1: state = %s, attempts = %d", store.reports[0].DeliveryState, store.reports[0].DeliveryAttempts)
+	}
+
+	// Recover submit, attempt 2 succeeds
+	now = now.Add(5 * time.Second)
+	delivery.submitErr = nil
+	if _, err := c.RunDue(context.Background()); err != nil {
+		t.Fatalf("attempt 2 failed: %v", err)
+	}
+	if store.reports[0].DeliveryState != domain.ReportAcknowledged {
+		t.Fatalf("state = %s, want acknowledged", store.reports[0].DeliveryState)
+	}
+	if store.acked != 1 {
+		t.Fatalf("acked = %d, want 1", store.acked)
+	}
+}
+
+func TestCoordinatorBusyOrchestratorStopsAtConfiguredLimit(t *testing.T) {
+	now := time.Date(2026, 11, 16, 10, 0, 0, 0, time.UTC)
+	store := newCoordinatorStore(now)
+	store.sessions = []domain.SessionRecord{{ID: "orch", ProjectID: "p", Kind: domain.KindOrchestrator, Mode: domain.SessionModeChat}}
+	store.add(reportAt("rep-1", "worker", now, now, "busy test"))
+	delivery := &coordinatorDelivery{submitErr: fmt.Errorf("refused: %w", ErrOrchestratorBusy)}
+	c := NewCoordinator(CoordinatorDeps{
+		Store:               store,
+		Delivery:            delivery,
+		Now:                 func() time.Time { return now },
+		MaxDeliveryAttempts: 2,
+	})
+
+	// Attempt 1
+	delay, err := c.RunDue(context.Background())
+	if err != nil || delay != OrchestratorBusyRetry {
+		t.Fatalf("delay = %v, err = %v, want backoff %v", delay, err, OrchestratorBusyRetry)
+	}
+	if store.reports[0].DeliveryState != domain.ReportPending || store.reports[0].DeliveryAttempts != 1 {
+		t.Fatalf("attempt 1: state = %s, attempts = %d", store.reports[0].DeliveryState, store.reports[0].DeliveryAttempts)
+	}
+
+	// Attempt 2: reaches limit
+	now = now.Add(OrchestratorBusyRetry)
+	_, _ = c.RunDue(context.Background())
+	if store.reports[0].DeliveryState != domain.ReportFailed {
+		t.Fatalf("state = %s, want %s after reaching attempt limit", store.reports[0].DeliveryState, domain.ReportFailed)
+	}
+	if store.reports[0].DeliveryAttempts != 2 {
+		t.Fatalf("attempts = %d, want 2", store.reports[0].DeliveryAttempts)
+	}
+}
+
 type coordinatorStore struct {
 	mu         sync.Mutex
 	now        time.Time
@@ -341,6 +507,7 @@ func (s *coordinatorStore) ClaimPendingReportBatch(_ context.Context, project do
 				continue
 			}
 			s.reports[i].DeliveryBatchID = batchID
+			s.reports[i].DeliveryAttempts++
 			s.reports[i].DeliveryState, s.reports[i].ClaimToken, s.reports[i].ClaimedAt = domain.ReportClaimed, token, at
 			claimed = append(claimed, s.reports[i])
 		}
@@ -368,6 +535,19 @@ func (s *coordinatorStore) ReleaseReportBatch(_ context.Context, project domain.
 	for i := range s.reports {
 		if s.reports[i].ProjectID == project && s.reports[i].DeliveryState == domain.ReportClaimed && s.reports[i].ClaimToken == token {
 			s.reports[i].DeliveryState, s.reports[i].ClaimToken = domain.ReportPending, ""
+			s.reports[i].LastError = reason
+			count++
+		}
+	}
+	return count, nil
+}
+func (s *coordinatorStore) FailReportBatch(_ context.Context, project domain.ProjectID, token string, _ time.Time, reason string) (int, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	count := 0
+	for i := range s.reports {
+		if s.reports[i].ProjectID == project && s.reports[i].DeliveryState == domain.ReportClaimed && s.reports[i].ClaimToken == token {
+			s.reports[i].DeliveryState, s.reports[i].ClaimToken = domain.ReportFailed, ""
 			s.reports[i].LastError = reason
 			count++
 		}

@@ -274,3 +274,52 @@ func TestReportStoreDeferredBatchYieldsScheduleToOtherProjects(t *testing.T) {
 		t.Fatalf("refused = %+v ok=%v err=%v", refused, ok, err)
 	}
 }
+
+func TestReportStoreFailBatchTransitionsToTerminalFailed(t *testing.T) {
+	s := newTestStore(t)
+	ctx := context.Background()
+	seedProject(t, s, "ao")
+	sess, err := s.CreateSession(ctx, sampleRecord("ao"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	now := time.Now().UTC().Truncate(time.Second)
+	rec := domain.ReportRecord{
+		ID: "rpt_fail", SessionID: sess.ID, ProjectID: "ao", Message: "checkpoint",
+		CreatedAt: now, DeliveryState: domain.ReportPending, AvailableAt: now, RepeatCount: 1,
+	}
+	if _, err := s.CreateReport(ctx, rec); err != nil {
+		t.Fatal(err)
+	}
+	claimed, err := s.ClaimPendingReportBatch(ctx, "ao", "token-fail", now)
+	if err != nil || len(claimed) != 1 {
+		t.Fatalf("claim = %+v err = %v", claimed, err)
+	}
+	count, err := s.FailReportBatch(ctx, "ao", "token-fail", now, "attempts exceeded")
+	if err != nil {
+		t.Fatalf("FailReportBatch: %v", err)
+	}
+	if count != 1 {
+		t.Fatalf("failed count = %d, want 1", count)
+	}
+	next, err := s.ListPendingReportSchedule(ctx, 10)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(next) != 0 {
+		t.Fatalf("pending reports = %+v, want none after terminal failure", next)
+	}
+	failed, ok, err := s.GetReport(ctx, "rpt_fail")
+	if err != nil || !ok {
+		t.Fatalf("GetReport ok=%v err=%v", ok, err)
+	}
+	if failed.DeliveryState != domain.ReportFailed {
+		t.Fatalf("delivery state = %s, want %s", failed.DeliveryState, domain.ReportFailed)
+	}
+	if failed.LastError != "attempts exceeded" {
+		t.Fatalf("last error = %q, want 'attempts exceeded'", failed.LastError)
+	}
+	if failed.ClaimToken != "" || !failed.ClaimedAt.IsZero() {
+		t.Fatalf("claim token = %q, claimed_at = %v, want claim released", failed.ClaimToken, failed.ClaimedAt)
+	}
+}

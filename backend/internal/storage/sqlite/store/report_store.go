@@ -191,6 +191,27 @@ func (s *Store) DeferReportBatch(ctx context.Context, projectID domain.ProjectID
 	return len(rows), nil
 }
 
+// FailReportBatch marks the matching project batch permanently failed after reaching the attempt limit.
+func (s *Store) FailReportBatch(ctx context.Context, projectID domain.ProjectID, token string, at time.Time, lastError string) (int, error) {
+	if projectID == "" || token == "" || at.IsZero() {
+		return 0, domain.ErrInvalidReport
+	}
+	s.writeMu.Lock()
+	defer s.writeMu.Unlock()
+	rows, err := s.qw.FailReportBatch(ctx, gen.FailReportBatchParams{
+		ProjectID: string(projectID), ClaimToken: token, LastError: lastError,
+	})
+	if err != nil {
+		return 0, fmt.Errorf("fail project report batch: %w", err)
+	}
+	return len(rows), nil
+}
+
+// AbandonReportBatch aliases FailReportBatch for callers referencing abandonment.
+func (s *Store) AbandonReportBatch(ctx context.Context, projectID domain.ProjectID, token string, at time.Time, lastError string) (int, error) {
+	return s.FailReportBatch(ctx, projectID, token, at, lastError)
+}
+
 // AcquireReportInterrupt durably enforces the per-worker interruption window.
 func (s *Store) AcquireReportInterrupt(ctx context.Context, sessionID domain.SessionID, at time.Time, window time.Duration) (bool, time.Time, error) {
 	if sessionID == "" || at.IsZero() || window <= 0 {
