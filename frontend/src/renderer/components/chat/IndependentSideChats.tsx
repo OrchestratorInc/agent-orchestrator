@@ -390,6 +390,8 @@ export function useIndependentSideChats(
 		setSidesState(next);
 		setActiveId(selected => selectedSideAfterUpdate(selected, previous, next));
 	}, []);
+	// False until the session's side list has loaded once, so "none yet" is not read as "none".
+	const [loaded, setLoaded] = useState(false);
 	const [activeId, setActiveId] = useState<string>();
 	const [visible, setVisible] = useState(false);
 	const [liveSnapshot, setSnapshot] = useState<Snapshot>();
@@ -576,6 +578,7 @@ export function useIndependentSideChats(
 		setSideError(undefined);
 		lifecycleRevision.current++;
 		setSides([]);
+		setLoaded(false);
 		setActiveId(undefined);
 		setVisible(false);
 		setSnapshot(undefined);
@@ -665,6 +668,7 @@ export function useIndependentSideChats(
 				if (closingSidesRef.current.has(side.id) && !closedSidesRef.current.has(side.id) && !nextSides.some(current => current.id === side.id)) nextSides.push(side);
 			}
 			setSides(nextSides);
+			setLoaded(true);
 		} catch (cause) {
 			if (current()) { appliedListRequest.current = request; if (reportErrors) setListError(apiErrorMessage(cause)); }
 		}
@@ -2028,6 +2032,7 @@ export function useIndependentSideChats(
 		replaceDraft,
 		addReference,
 		sides,
+		loaded,
 		activeId: currentActiveId,
 		visible,
 		show: (sideId?: string) => {

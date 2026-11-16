@@ -32,7 +32,13 @@ afterEach(async () => {
 	await fs.rm(dataDir, { recursive: true, force: true });
 });
 
-function setup(options: { token?: string | null; finalizeStatus?: number; finalizeCode?: string; shareStatus?: number; shareCode?: string; listStatus?: number; unreachable?: boolean; shares?: unknown[]; listGate?: Promise<void> } = {}) {
+const HOST_ID = "https://h-vm.useao.dev";
+const HOST_PROXY = "http://127.0.0.1:9/proxy-token";
+
+/** A remote host's artifact as its daemon serves it: bytes, and the modification time its tag names. */
+type HostArtifact = { body: string; mtimeNs: bigint; tag?: boolean; shortBy?: number; served?: () => void };
+
+function setup(options: { token?: string | null; finalizeStatus?: number; finalizeCode?: string; shareStatus?: number; shareCode?: string; listStatus?: number; unreachable?: boolean; shares?: unknown[]; listGate?: Promise<void>; hostFiles?: Map<string, HostArtifact> } = {}) {
 	const handlers = new Map<string, (event: unknown, ...args: unknown[]) => unknown>();
 	const requests: string[] = [];
 	const bodies = new Map<string, unknown>();
@@ -40,12 +46,32 @@ function setup(options: { token?: string | null; finalizeStatus?: number; finali
 	const sent: unknown[] = [];
 	const authorizations: Array<string | null> = [];
 	const sender = { id: 7, isDestroyed: () => false, send: vi.fn((channel: string, value: unknown) => channel === CLOUD_SHARE_PROGRESS_CHANNEL && sent.push(value)) };
+	const hostFiles = options.hostFiles ?? new Map<string, HostArtifact>();
+	const hostRequests: string[] = [];
 	registerCloudShareIpc({
 		ipcMain: { handle: vi.fn((channel: string, handler: (event: unknown, ...args: unknown[]) => unknown) => handlers.set(channel, handler)) },
 		daemonDataDir: () => dataDir,
 		snapshotDir: () => path.join(dataDir, "snapshots"),
 		getToken: async () => (options.token === undefined ? "token-1" : options.token),
 		records,
+		hostApiBase: (hostId) => (hostId === HOST_ID ? HOST_PROXY : undefined),
+		// The host's daemon, behind its proxy: the artifact route serves exact bytes tagged "<size>-<mtime ns>".
+		fetchHost: vi.fn(async (url: string, init: RequestInit) => {
+			const parsed = new URL(url);
+			hostRequests.push(`${init.method ?? "GET"} ${parsed.pathname}${parsed.search}`);
+			const prefix = "/proxy-token/api/v1/sessions/";
+			const match = parsed.pathname.startsWith(prefix) ? /^([^/]+)\/preview\/files\/(.+)$/.exec(parsed.pathname.slice(prefix.length)) : null;
+			const artifact = match && parsed.searchParams.get("source") === "artifact" ? hostFiles.get(`${decodeURIComponent(match[1] ?? "")}/${match[2]?.split("/").map(decodeURIComponent).join("/")}`) : undefined;
+			// The real route is GET-only: a HEAD is refused before the file is looked up.
+			if (init.method === "HEAD") return new Response('{"error":"method not allowed"}', { status: 405 });
+			if (!artifact) return new Response("", { status: 404 });
+			const bytes = Buffer.from(artifact.body);
+			const headers = new Headers(artifact.tag === false
+				? { "content-length": String(bytes.length), "last-modified": new Date(Number(artifact.mtimeNs / 1_000_000n)).toUTCString() }
+				: { etag: `"${bytes.length}-${artifact.mtimeNs}"` });
+			artifact.served?.();
+			return new Response(bytes.subarray(0, bytes.length - (artifact.shortBy ?? 0)), { headers });
+		}),
 		fetch: vi.fn(async (url: string, init: RequestInit) => {
 			const { pathname } = new URL(url);
 			requests.push(`${init.method ?? "GET"} ${pathname}`);
@@ -94,7 +120,8 @@ function setup(options: { token?: string | null; finalizeStatus?: number; finali
 		const { fingerprint } = (await invoke("cloudShare:inspect", target)) as { fingerprint: string };
 		return invoke("cloudShare:publish", { ...target, fingerprint });
 	};
-	return { invoke, publish, file, cloudFile, requests, bodies, records, sent, handlers, sender, authorizations };
+	const hostFile = { source: "host", hostId: HOST_ID, baseUrl: "https://cp.test", sessionId: "sess-1", path: "docs/deck.html", projectId: "proj-9", artifactId: "art-7" };
+	return { invoke, publish, file, cloudFile, hostFile, hostFiles, hostRequests, requests, bodies, records, sent, handlers, sender, authorizations };
 }
 
 async function snapshots(): Promise<string[]> {
@@ -285,6 +312,14 @@ describe("cloudShare IPC", () => {
 		const signedOut = setup({ token: null });
 		await expect(signedOut.invoke("cloudShare:publish", signedOut.file)).resolves.toEqual({ status: "signed_out" });
 		expect(signedOut.requests).toEqual([]);
+
+		// Other refusals carry a category for telemetry beside their message.
+		const tooLarge = setup({ finalizeStatus: 413, finalizeCode: "payload_too_large" });
+		await expect(tooLarge.publish()).resolves.toMatchObject({ status: "error", failure: "too_large" });
+		const other = setup({ finalizeStatus: 400, finalizeCode: "invalid_request" });
+		const refused = await other.publish();
+		expect(refused).toMatchObject({ status: "error" });
+		expect(refused).not.toHaveProperty("failure");
 	});
 
 	it("refuses malformed requests and files outside the artifacts folder", async () => {
@@ -501,5 +536,98 @@ describe("cloudShare IPC", () => {
 		expect(signedOut.authorizations).toEqual([null]);
 		const unreachable = setup({ unreachable: true });
 		await expect(unreachable.invoke("cloudShare:available", { baseUrl: "https://cp.test" })).resolves.toBeNull();
+	});
+});
+
+describe("cloudShare IPC for a remote host's file", () => {
+	const MTIME_NS = 1_763_000_000_123_456_789n;
+	const deck = (artifact: Partial<HostArtifact> = {}) => new Map([["sess-1/docs/deck.html", { body: "<h1>remote deck</h1>", mtimeNs: MTIME_NS, ...artifact }]]);
+
+	it("inspects it from the host's headers alone, with the fingerprint a local file's metadata would give", async () => {
+		const { invoke, hostFile, hostRequests, requests } = setup({ hostFiles: deck() });
+		await expect(invoke("cloudShare:inspect", hostFile)).resolves.toEqual({
+			name: "deck.html", size: 20, unsupported: false, fingerprint: `20:${MTIME_NS / 1_000_000n}`,
+		});
+		expect(hostRequests).toEqual(["GET /proxy-token/api/v1/sessions/sess-1/preview/files/docs/deck.html?source=artifact&raw=true"]);
+		expect(requests).toEqual([]);
+	});
+
+	it("falls back to Content-Length and Last-Modified on a host that sends no tag", async () => {
+		const { invoke, hostFile } = setup({ hostFiles: deck({ tag: false }) });
+		const inspection = await invoke("cloudShare:inspect", hostFile) as { fingerprint: string };
+		// Last-Modified has only seconds.
+		expect(inspection.fingerprint).toBe(`20:${(MTIME_NS / 1_000_000_000n) * 1000n}`);
+	});
+
+	it("publishes it by downloading it through the host's proxy, and keeps its record apart from this computer's sessions", async () => {
+		const { publish, invoke, hostFile, hostRequests, requests, records, sent } = setup({ hostFiles: deck() });
+		await expect(publish(hostFile)).resolves.toMatchObject({ status: "published", share: { id: SHARE_ID } });
+		// The panel's inspect, publish's own version check and the check after the download each read only a GET's headers;
+		// the third GET is the download. The route refuses HEAD.
+		expect(hostRequests.filter((request) => request.startsWith("GET "))).toHaveLength(4);
+		expect(hostRequests.some((request) => request.startsWith("HEAD "))).toBe(false);
+		expect(requests).toContain("POST /api/cloud/v1/me/artifact-shares/finalize");
+		expect(sent.at(-1)).toEqual({ sessionId: "sess-1", path: "docs/deck.html", sentBytes: 40, totalBytes: 40 });
+		expect(await snapshots()).toEqual([]);
+		// Recorded under the host's session, never under this computer's sess-1.
+		await expect(records.get(artifactRecordKey("https://cp.test", `host:${HOST_ID}/sess-1`, "art-7"))).resolves.toBe(SHARE_ID);
+		await expect(records.get(artifactRecordKey("https://cp.test", "sess-1", "art-7"))).resolves.toBeUndefined();
+		await expect(invoke("cloudShare:inspect", hostFile)).resolves.toMatchObject({ shareId: SHARE_ID });
+		await expect(invoke("cloudShare:inspect", { ...hostFile, hostId: "https://other-vm.useao.dev" })).rejects.toThrow("isn't connected");
+	});
+
+	it("lists the links of remote hosts' files for the renderer to mark, for one control plane", async () => {
+		const { publish, invoke, hostFile } = setup({ hostFiles: deck() });
+		await publish(hostFile);
+		await publish();
+		await expect(invoke("cloudShare:hostLinks", { baseUrl: "https://cp.test" })).resolves.toEqual([
+			{ hostId: HOST_ID, sessionId: "sess-1", artifactId: "art-7", url: "https://abc.share.test/", access: "anyone" },
+		]);
+		await expect(invoke("cloudShare:hostLinks", { baseUrl: "https://other.test" })).resolves.toEqual([]);
+	});
+
+	it("publishes nothing when the file changed on the host since it was inspected", async () => {
+		const hostFiles = deck();
+		const { invoke, hostFile, requests } = setup({ hostFiles });
+		const { fingerprint } = await invoke("cloudShare:inspect", hostFile) as { fingerprint: string };
+		hostFiles.set("sess-1/docs/deck.html", { body: "<h1>rewritten deck!</h1>", mtimeNs: MTIME_NS + 5_000_000_000n });
+		await expect(invoke("cloudShare:publish", { ...hostFile, fingerprint })).resolves.toMatchObject({
+			status: "changed", inspection: { size: 24, fingerprint: `24:${(MTIME_NS + 5_000_000_000n) / 1_000_000n}` },
+		});
+		expect(requests).not.toContain("POST /api/cloud/v1/me/artifact-shares/uploads");
+	});
+
+	it("publishes nothing when the download is not the whole version the host named", async () => {
+		const { publish, hostFile, requests } = setup({ hostFiles: deck({ shortBy: 3 }) });
+		await expect(publish(hostFile)).resolves.toMatchObject({ status: "changed" });
+		expect(requests).not.toContain("POST /api/cloud/v1/me/artifact-shares/uploads");
+		expect(await snapshots()).toEqual([]);
+	});
+
+	it("publishes nothing when the file was rewritten on the host while it downloaded", async () => {
+		const hostFiles = deck();
+		let served = 0;
+		// The download (the third read) gets the old version's tag and length; the file is rewritten in place, same length, as it streams.
+		hostFiles.get("sess-1/docs/deck.html")!.served = () => {
+			if (++served === 3) hostFiles.set("sess-1/docs/deck.html", { body: "<h1>REMOTE DECK</h1>", mtimeNs: MTIME_NS + 1_000_000_000n });
+		};
+		const { publish, hostFile, requests } = setup({ hostFiles });
+		await expect(publish(hostFile)).resolves.toMatchObject({ status: "changed" });
+		expect(requests).not.toContain("POST /api/cloud/v1/me/artifact-shares/uploads");
+		expect(await snapshots()).toEqual([]);
+	});
+
+	it("refuses paths outside the session's artifacts and its version history before asking the host", async () => {
+		const { invoke, hostFile, hostRequests } = setup({ hostFiles: deck() });
+		for (const bad of ["../../etc/passwd", "/etc/passwd", ".versions/deck.html/1", "docs/../../x", "docs\\deck.html"]) {
+			await expect(invoke("cloudShare:publish", { ...hostFile, path: bad, fingerprint: "1:1" })).resolves.toMatchObject({ status: "error" });
+		}
+		await expect(invoke("cloudShare:publish", { ...hostFile, hostId: "" })).rejects.toThrow("Not a file to share");
+		expect(hostRequests).toEqual([]);
+	});
+
+	it("says the file is gone when the host no longer has it", async () => {
+		const { invoke, hostFile } = setup({ hostFiles: new Map() });
+		await expect(invoke("cloudShare:inspect", hostFile)).rejects.toThrow("no longer available");
 	});
 });

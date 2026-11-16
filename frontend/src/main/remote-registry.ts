@@ -48,6 +48,11 @@ export class RemoteRegistry {
 		});
 	}
 
+	/** The connected host's API base on its loopback proxy, or undefined while it is not connected. */
+	apiBase(hostId: string): string | undefined {
+		return [...this.live.values()].find(({ view }) => view.hostId === hostId)?.view.base;
+	}
+
 	previewUrl(hostId: string, sessionId: string, sourceUrl: string): string {
 		const connected = [...this.live.values()].find(({ view }) => view.hostId === hostId);
 		if (!connected) throw new Error(`Host ${hostId} is not connected`);

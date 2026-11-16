@@ -3,7 +3,6 @@ import { appI18n } from "../i18n";
 import type { PullRequestFacts, WorkspaceSession } from "../types/workspace";
 import {
 	openReviewStatesFor,
-	reviewHasLiveActivity,
 	reviewIsRunning,
 	reviewRunDisabled,
 	reviewSessionRunAction,
@@ -85,15 +84,15 @@ describe("shared review eligibility helpers", () => {
 		expect(reviewIsRunning([reviewState(1, "needs_review")])).toBe(false);
 	});
 
-	it("only treats a running review as live when reviewer activity is not idle", () => {
-		const running = [reviewState(1, "running")];
-		expect(reviewHasLiveActivity(running, "active", true)).toBe(true);
-		expect(reviewHasLiveActivity(running, "blocked", true)).toBe(true);
-		expect(reviewHasLiveActivity(running, "idle", true)).toBe(false);
-		expect(reviewHasLiveActivity(running, "waiting_input", true)).toBe(false);
-		expect(reviewHasLiveActivity(running, "exited", true)).toBe(false);
-		expect(reviewHasLiveActivity(running, undefined, true)).toBe(true);
-		expect(reviewHasLiveActivity(running, "active", false)).toBe(false);
+	it("polls only while a run is still active", () => {
+		const interval = sessionReviewsQueryOptions(session(), true).refetchInterval as (query: { state: { data: unknown } }) => number | false;
+		const data = (status: string) => ({ reviewerHandleId: "", runs: [{ status }], reviews: [], activeReviewers: [] });
+		for (const status of ["queued", "launching", "running", "cancelling"]) {
+			expect(interval({ state: { data: data(status) } })).toBe(2500);
+		}
+		for (const status of ["completed", "failed", "cancelled", "superseded"]) {
+			expect(interval({ state: { data: data(status) } })).toBe(false);
+		}
 	});
 
 	it("disables the run when triggering, with no open states, or with every state ineligible", () => {

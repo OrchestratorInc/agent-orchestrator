@@ -612,22 +612,22 @@ html[data-ao-platform="darwin"] .settings-dialog-body :is(button, a, input, sele
  * content to the frame's rounded corners while leaving the bar's band open. */
 /* The bar takes over the panel's old top inset: it runs from the window's top
  * edge to the panel's frame, with equal space above and below its controls.
- * Its center stays on the sidebar header and titlebar controls' line. */
+ * It is the traffic-light row (MAC_TRAFFIC_LIGHT_ROW_HEIGHT, 50px), so its
+ * center stays on the native buttons', sidebar brand's and titlebar controls'
+ * line (y = 25). The frame's top line is the row's last pixel (y = 49), and
+ * macOS draws the window's 1px top highlight over its first, so the visible
+ * gaps above and below a 31px control are both 8.5px. */
 .center-panel-shell.center-panel-shell--floating-topbar {
-	--floating-topbar-height: calc(var(--size-topbar-primary) + 2 * var(--size-center-panel-inset-mac));
+	--floating-topbar-height: calc(var(--size-topbar-primary) + 2 * (var(--size-center-panel-inset-mac) + 1px));
 	--size-toolbar: var(--floating-topbar-height);
 	--spacing-toolbar: var(--floating-topbar-height);
-	--size-topbar-content: calc(var(--floating-topbar-height) - 1px);
+	/* The bars drop their bottom border here, so action rows fill the band. */
+	--size-topbar-content: var(--floating-topbar-height);
 	--size-inspector-tabs: var(--floating-topbar-height);
 	--spacing-inspector-tabs: var(--floating-topbar-height);
-	/* Controls sit centered in the band with equal space above and below. */
-	--floating-topbar-gap: var(--space-2);
+	--floating-topbar-gap: calc(var(--space-2) + 1px);
 	--size-topbar-control: calc(var(--floating-topbar-height) - 1px - 2 * var(--floating-topbar-gap));
 	padding-top: 0;
-}
-
-.center-panel-shell--floating-topbar .panel-topbar-controls {
-	top: 1.5px;
 }
 
 /* The last tab's trailing gap already spaces New terminal from it; the action
@@ -661,10 +661,9 @@ html[data-ao-platform="darwin"] .settings-dialog-body :is(button, a, input, sele
 	 * and the next page's border would fade in from bright text color. */
 	border-width: 0;
 	border-radius: 0;
-	/* The frame's faint top line reads as part of the gap below the controls,
-	 * so the bar's contents sit low to look evenly spaced. 1.5px also lands them
-	 * on the traffic lights' centerline (y = 25). */
-	padding: 1.5px 1px 1px;
+	/* No top padding: the bar starts at the window's top edge, so its center is
+	 * the traffic-light row's. */
+	padding: 0 1px 1px;
 	background: transparent;
 	-webkit-mask:
 		linear-gradient(#000 0 0) 0 0 / 100% var(--floating-panel-top) no-repeat,
@@ -880,11 +879,13 @@ html[data-theme="light"] .browser-popout-overlay--mac-windowed .workspace-topbar
 	background: var(--color-bg-sidebar);
 }
 
-/* The bars themselves carry no fill or divider: the frame's top edge is the divider. */
+/* The bars themselves carry no fill or divider: the frame's top edge is the
+ * divider. No border width either, or it would take the band's last row and
+ * pull every control 0.5px above the bar's center. */
 .center-panel-shell--floating-topbar .center-panel-titlebar,
 .center-panel-shell--floating-topbar .session-topbar-surface,
 .center-panel-shell--floating-topbar .session-inspector__topbar {
-	border-bottom-color: transparent;
+	border-bottom-width: 0;
 	background: transparent;
 }
 
@@ -946,7 +947,7 @@ html[data-theme="light"] .browser-popout-overlay--mac-windowed .workspace-topbar
 
 /* The floating bar has no divider: the panel's own edge separates it. */
 .center-panel-shell--floating-topbar .center-panel-surface .session-topbar-surface {
-	border-bottom-color: transparent;
+	border-bottom-width: 0;
 }
 
 /* Vertical section caps resolve against the actual sidebar space between chrome. */
@@ -3592,7 +3593,7 @@ html[data-window-translucent="true"] :is(.queue-dock, .queue-dock-toggle, .queue
 	transform: translateY(-50%);
 }
 
-.chat-scroll-marker-visible {
+.chat-scroll-marker-current {
 	width: 13px;
 	background: color-mix(in srgb, var(--color-text-primary) 82%, transparent);
 	opacity: 1;
@@ -3605,8 +3606,8 @@ html[data-window-translucent="true"] :is(.queue-dock, .queue-dock-toggle, .queue
 	opacity: 0.96;
 }
 
-.group\/scroll:hover .chat-scroll-marker-visible,
-.group\/scroll:focus-visible .chat-scroll-marker-visible {
+.group\/scroll:hover .chat-scroll-marker-current,
+.group\/scroll:focus-visible .chat-scroll-marker-current {
 	width: 11px;
 	background: var(--color-text-muted);
 }
