@@ -7451,8 +7451,7 @@ function groupByTurn(snapshot: ConversationSnapshot, { controllerStopped = false
 	}
 
 	const conversation = subagentsOfConversation(snapshot.items, groups, controllerStopped);
-	if (!conversation) return groups.flatMap(splitAtSteers);
-	return groups.flatMap((group) =>
+	const segments = !conversation ? groups.flatMap(splitAtSteers) : groups.flatMap((group) =>
 		splitAtSteers(group)
 			.map((segment) => withSubagentSteps(segment, conversation))
 			// A part made only of steps that moved under a launch elsewhere has nothing
@@ -7463,6 +7462,9 @@ function groupByTurn(snapshot: ConversationSnapshot, { controllerStopped = false
 				|| (segment.outcome !== undefined && segment.outcome.state !== "completed")
 				|| segment.items.some((item) => !conversation.stepIds.has(item.id))),
 	);
+	// A steer's part sorts at the steer, so it draws below a turn that began while the
+	// steered turn ran, such as a Codex subagent's turn adopted from its child thread.
+	return segments.sort((a, b) => a.anchor - b.anchor);
 }
 
 type ConversationSubagents = {

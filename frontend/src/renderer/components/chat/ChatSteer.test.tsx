@@ -999,6 +999,34 @@ describe("ChatWorkspace steering", () => {
 		expect(carried.compareDocumentPosition(answer) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
 	});
 
+	it("draws a steer after a subagent turn that finished before it, not above it", () => {
+		const at = (minute: number) => `2026-08-11T10:${String(minute).padStart(2, "0")}:00Z`;
+		render(
+			<ChatWorkspace
+				snapshot={{
+					...chatFixture,
+					latestSequence: 15,
+					// A Codex subagent's turn on a child thread is adopted as its own turn.
+					turns: [
+						{ id: "run", state: "running", providerTurnId: "provider-run", requestedAt: at(0), startedAt: at(0) },
+						{ id: "child", state: "completed", providerTurnId: "provider-child", requestedAt: at(1), startedAt: at(1), completedAt: at(21) },
+					],
+					items: [
+						{ kind: "message", id: "prompt", turnId: "run", sequence: 10, revision: 0, role: "user", origin: "human", text: "Clean up the copied code", streaming: false, createdAt: at(0) },
+						{ kind: "activity", id: "work", turnId: "run", sequence: 11, revision: 0, activityKind: "command", status: "completed", summary: "go test ./...", detail: { command: "go test ./...", output: "ok" }, createdAt: at(1) },
+						{ kind: "message", id: "child-report", turnId: "child", sequence: 12, revision: 0, role: "assistant", origin: "provider", text: "Four packages passed.", streaming: false, createdAt: at(21) },
+						{ kind: "activity", id: "steer-1", turnId: "run", sequence: 13, revision: 0, activityKind: "system", status: "completed", summary: "what are you stuck on?", detail: { event: "steer", origin: "human", text: "what are you stuck on?", clientMessageId: "steer-1" }, createdAt: at(22) },
+						{ kind: "message", id: "answer", turnId: "run", sequence: 14, revision: 0, role: "assistant", origin: "provider", text: "Rebasing onto main.", streaming: false, createdAt: at(23) },
+					],
+				}}
+			/>,
+		);
+		const report = screen.getByText("Four packages passed.");
+		const steer = screen.getByText("what are you stuck on?");
+		expect(report.compareDocumentPosition(steer) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+		expect(steer.compareDocumentPosition(screen.getByText("Rebasing onto main.")) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+	});
+
 	it("draws a message drained behind an earlier queued report before the reply to it", () => {
 		const at = (second: number) => `2026-08-11T10:00:${String(second).padStart(2, "0")}Z`;
 		render(
