@@ -4,6 +4,8 @@ import { StyleSheet, Text, View } from "react-native";
 import { KeyboardAvoidingView } from "react-native-keyboard-controller";
 import { ReviewerComposer } from "../../lib/chat/ReviewerComposer";
 import { ChatTimeline } from "../../lib/chat/ChatTimeline";
+import { CloudReviewerScreen } from "../../lib/cloud/CloudReviewerScreen";
+import { isCloudHost } from "../../lib/cloud/mapping";
 import { useChatKeyboard } from "../../lib/chat/useChatKeyboard";
 import { useMobileConversation } from "../../lib/chat/useConversation";
 import { hostRouteMatches } from "../../lib/hostRoute";
@@ -19,7 +21,9 @@ import { Button, EmptyState } from "../../lib/ui";
 export { RouteErrorBoundary as ErrorBoundary } from "../../lib/RouteErrorBoundary";
 
 export default function ReviewerConversationScreen() {
-	const { hostId } = useLocalSearchParams<{ hostId?: string }>();
+	const { hostId, reviewId = "", sessionId = "", title } = useLocalSearchParams<{ hostId?: string; reviewId?: string; sessionId?: string; title?: string }>();
+	// A Cloud review's conversation comes from Orchestrator Cloud, not a daemon.
+	if (isCloudHost(hostId)) return <CloudReviewerScreen reviewId={reviewId} sessionId={sessionId.trim()} title={title} />;
 	return hostId ? <HostScope key={hostId} hostId={hostId}><ReviewerConversationContent /></HostScope> : <ReviewerConversationContent />;
 }
 
@@ -27,12 +31,12 @@ function ReviewerConversationContent() {
 	const { reviewId = "", sessionId = "", title, hostId: routeHostId } = useLocalSearchParams<{ reviewId: string; sessionId?: string; title?: string; hostId?: string }>();
 	const workerSessionId = sessionId.trim();
 	const navigation = useNavigation();
-	const { config, currentHostId } = useApp();
+	const { config, machine, currentHostId } = useApp();
 	const hostMatches = hostRouteMatches(routeHostId, currentHostId);
 	const styles = useThemedStyles(makeStyles);
 	// The review id owns the conversation routes; the worker id owns attachment
 	// staging and SSE refresh. Never stage reviewer attachments under a review id.
-	const conversation = useMobileConversation(hostMatches ? config : null, workerSessionId, { reviewId, eventSessionId: workerSessionId });
+	const conversation = useMobileConversation(hostMatches ? config : null, hostMatches ? machine : "", workerSessionId, { reviewId, eventSessionId: workerSessionId });
 	// The session chat's keyboard handling, so the reviewer composer sits above
 	// the keyboard the same way on both platforms.
 	const chatKeyboard = useChatKeyboard({ underHeader: SYSTEM_GLASS_HEADER });

@@ -1,4 +1,4 @@
-import { Check, ChevronDown, Eye, PencilLine, X } from "lucide-react";
+import { Check, ChevronDown, Eye, PencilLine, X } from "@/components/app-icons";
 import { useTranslation } from "react-i18next";
 import { cn } from "../../lib/utils";
 import type { CloudCpShareRole } from "../../lib/cloud-cp";
@@ -13,10 +13,12 @@ import {
 import { capLabel, roleLabel, type ShareModeCap, type ShareScope } from "./accessLabels";
 import { Button } from "../ui/button";
 
+const ALL_CAPS: readonly ShareModeCap[] = ["read-only", "standard", "trusted"];
+
 /**
  * One row's access, as a borderless trigger like the Settings selects: the
- * level, and for writing its limit. The menu holds the two levels, the limit
- * while writing, and stopping the share.
+ * level, and for writing the agent's permissions. The menu holds the two
+ * levels, the agent's permissions while writing, and removing access.
  */
 export function AccessMenu({
 	role,
@@ -29,6 +31,8 @@ export function AccessMenu({
 	showCap = true,
 	triggerLabel,
 	align = "end",
+	caps = ALL_CAPS,
+	describedBy,
 }: {
 	role: CloudCpShareRole;
 	modeCap: ShareModeCap;
@@ -41,6 +45,10 @@ export function AccessMenu({
 	showCap?: boolean;
 	triggerLabel?: string;
 	align?: "start" | "end";
+	/** The agent permissions offered while writing; a link never offers Trusted. */
+	caps?: readonly ShareModeCap[];
+	/** The id of text that explains this access, read with the trigger. */
+	describedBy?: string;
 }) {
 	const { t } = useTranslation();
 	const level = roleLabel(t, role, scope);
@@ -59,10 +67,12 @@ export function AccessMenu({
 					size="none"
 					className="h-7 max-w-full gap-1 px-2 text-control"
 					aria-label={t("share.changeAccess", { access: label })}
+					aria-describedby={describedBy}
 					data-access-menu=""
 				>
 					<span className="truncate">{label}</span>
-					{showCap && role === "editor" ? <span className="text-passive">· {capLabel(t, modeCap)}</span> : null}
+					{/* Standard is what writing means by default; only another cap is worth naming. */}
+					{showCap && role === "editor" && modeCap !== "standard" ? <span className="text-passive">· {capLabel(t, modeCap)}</span> : null}
 					<ChevronDown className="size-3 shrink-0" aria-hidden="true" />
 				</Button>
 			</DropdownMenuTrigger>
@@ -79,13 +89,13 @@ export function AccessMenu({
 					label={roleLabel(t, "editor", scope)}
 					description={scope === "project" ? t("share.accessStartSessionsDescription") : t("share.accessEditorDescription")}
 					selected={role === "editor"}
-					onSelect={() => choose({ role: "editor", modeCap: role === "editor" ? modeCap : "standard" })}
+					onSelect={() => choose({ role: "editor", modeCap: role === "editor" && caps.includes(modeCap) ? modeCap : "standard" })}
 				/>
 				{role === "editor" ? (
 					<>
 						<DropdownMenuSeparator />
 						<DropdownMenuLabel>{t("share.modeCap")}</DropdownMenuLabel>
-						{(["read-only", "standard", "trusted"] as const).map((cap) => (
+						{caps.map((cap) => (
 							<DropdownMenuItem key={cap} onSelect={() => choose({ role: "editor", modeCap: cap })} data-access-cap={cap}>
 								<span className={cn("flex-1", cap === modeCap ? "text-foreground" : "")}>{capLabel(t, cap)}</span>
 								{cap === modeCap ? <Check className="text-foreground!" aria-hidden="true" /> : null}
@@ -98,7 +108,7 @@ export function AccessMenu({
 						<DropdownMenuSeparator />
 						<DropdownMenuItem onSelect={onStop} className="text-destructive focus:text-destructive [&_svg]:text-destructive!" data-access-stop="">
 							<X aria-hidden="true" />
-							<span>{stopLabel ?? t("share.stopSharing")}</span>
+							<span>{stopLabel ?? t("share.removeAccess")}</span>
 						</DropdownMenuItem>
 					</>
 				) : null}

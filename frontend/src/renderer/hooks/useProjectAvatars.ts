@@ -4,7 +4,6 @@ import { apiClient } from "../lib/api-client";
 import { apiErrorException } from "../lib/api-error-exception";
 import { repositoryOwnerAvatar } from "../lib/repository-avatar";
 import { useUiStore } from "../stores/ui-store";
-import { isNewSidebarDesign } from "../lib/new-sidebar-design";
 import { CLOUD_PROJECT_KIND, STANDALONE_PROJECT_KIND, type WorkspaceSummary } from "../types/workspace";
 
 // Avatar URL -> the image as a data URL, so a launch paints known avatars with
@@ -71,8 +70,8 @@ const refreshedUrls = new Set<string>();
 // sidebar paints them instantly; project details then confirm the owner and
 // refresh the cache in the background. A failed refresh keeps the cached
 // image. Empty when the setting is off.
-export function useProjectAvatars(workspaces: WorkspaceSummary[]): Map<string, string> {
-	const enabled = useUiStore((state) => state.projectAvatars && isNewSidebarDesign(state));
+export function useProjectAvatars(workspaces: readonly WorkspaceSummary[]): Map<string, string> {
+	const enabled = useUiStore((state) => state.projectAvatars);
 	const [cache, setCache] = useState(readCache);
 	const [knownUrls] = useState(() => readStrings(urlsKey));
 	const projects = useMemo(
@@ -104,10 +103,14 @@ export function useProjectAvatars(workspaces: WorkspaceSummary[]): Map<string, s
 				return;
 			}
 			const detail = query.data;
-			const repo = detail && "repo" in detail && typeof detail.repo === "string" && detail.repo
-				? detail.repo
-				: project.workspaceRepos?.[0]?.repo;
-			const avatar = repo ? repositoryOwnerAvatar(repo) : null;
+			const ownRepo = detail && "repo" in detail && typeof detail.repo === "string" && detail.repo ? detail.repo : undefined;
+			const repo = ownRepo ?? project.workspaceRepos?.[0]?.repo;
+			// After a GitHub rename or transfer the remote's owner is stale; the
+			// avatar URL then changes, so the old cached image is not reused.
+			const canonical = ownRepo && detail && "canonicalRepo" in detail
+				? { repo: detail.canonicalRepo, ownerAvatarUrl: detail.canonicalOwnerAvatarUrl }
+				: undefined;
+			const avatar = repo ? repositoryOwnerAvatar(repo, canonical) : null;
 			if (avatar) map.set(project.id, avatar.url);
 		});
 		return map;

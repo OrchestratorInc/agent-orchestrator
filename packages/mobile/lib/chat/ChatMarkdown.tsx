@@ -1,6 +1,6 @@
 import { UITextView as Text } from "@bsky.app/react-native-uitextview";
 import * as Clipboard from "expo-clipboard";
-import { createContext, isValidElement, memo, useCallback, useContext, useEffect, useMemo, useState, type ReactNode } from "react";
+import { createContext, isValidElement, lazy, memo, Suspense, useCallback, useContext, useEffect, useMemo, useState, type ReactNode } from "react";
 import { Image, Platform, Pressable, ScrollView, StyleSheet, View, type StyleProp, type TextStyle } from "react-native";
 import { AppSymbol } from "../AppSymbol";
 import { rowDividerWidth } from "../divider";
@@ -14,11 +14,21 @@ import { imageSourceForPlatform } from "../imageSource";
 import { useAndroidResponseSelection } from "./useAndroidResponseSelection";
 import { FirstLineMarker } from "./FirstLineMarker";
 import { HighlightedCodeText } from "./HighlightedCodeText";
+import { isMermaidFence } from "./mermaidFence";
 import { allowsUnderscoreEmphasis } from "./inlineEmphasis";
 import { parseBlocks, type MarkdownBlock, type TableAlign } from "./markdownBlocks";
 import { iconSize, prose, radius, space, touchTarget, type } from "../tokens";
 import type { ChatExcerpt } from "./types";
 import { sessionLink } from "./automationMessages";
+
+// The diagram renderer (a WebView and the engine's loader) loads on the first
+// Mermaid fence, so text without one never pulls it in.
+const LazyMermaidBlock = lazy(() => import("./MermaidBlock").then((module) => ({ default: module.MermaidBlock })));
+
+/** A Mermaid fence: its diagram once the renderer loads, the code block until then. */
+function DiagramFence({ code, streaming, codeBlock }: { code: string; streaming?: boolean; codeBlock: ReactNode }) {
+	return <Suspense fallback={codeBlock}><LazyMermaidBlock code={code} streaming={streaming} codeBlock={codeBlock} /></Suspense>;
+}
 
 // The conversation screen decides how a tapped link opens (it knows the AO host
 // that the agent's localhost links map onto); the renderer only reports the tap.
@@ -67,7 +77,7 @@ export function ChatLinkProvider({ onLinkOpen, onAddToChat, sessionName, onSessi
  * readable text; the renderer never hides content because a provider used
  * syntax it does not know.
  */
-export const ChatMarkdown = memo(function ChatMarkdown({ text, streaming = false, continuousSelection = false, selectionSource, onAddSelection, resolveImage, imagesInPlace = false }: {
+export const ChatMarkdown = memo(function ChatMarkdown({ text, streaming = false, continuousSelection = false, selectionSource, onAddSelection, resolveImage, imagesInPlace = false, nestedScroll = false, diagrams = true }: {
 	text: string;
 	streaming?: boolean;
 	continuousSelection?: boolean;
@@ -85,6 +95,18 @@ export const ChatMarkdown = memo(function ChatMarkdown({ text, streaming = false
 	resolveImage?: (url: string) => MarkdownImageSource | undefined;
 	/** Draws each image where the document places it, rather than after the text. */
 	imagesInPlace?: boolean;
+	/**
+	 * Android: tables and unwrapped code keep sideways drags when a parent also
+	 * scrolls sideways (the artifact pager). Off elsewhere: a nested-scroll view
+	 * under the finger stops a parent from taking the drag even where it takes
+	 * no touches, as in a filmstrip preview.
+	 */
+	nestedScroll?: boolean;
+	/**
+	 * Draws ```mermaid fences as diagrams, as the desktop does. Off for a
+	 * passive preview (a gallery card), where a fence stays code.
+	 */
+	diagrams?: boolean;
 }) {
 	const t = useTheme();
 	const styles = useThemedStyles(makeStyles);
@@ -96,11 +118,13 @@ export const ChatMarkdown = memo(function ChatMarkdown({ text, streaming = false
 		// live inside text. Image previews follow without repeating captions.
 		const images = imagesInPlace ? [] : blocks.filter((block): block is Extract<MarkdownBlock, { kind: "image" }> => block.kind === "image");
 		return <View style={styles.root}>
-			{splitRuns(blocks, imagesInPlace).map((run, index) => Array.isArray(run)
+			{splitRuns(blocks, imagesInPlace, diagrams && !streaming).map((run, index) => Array.isArray(run)
 				? <SelectableResponseText key={index} blocks={run} source={selectionSource} onSelect={onAddSelection} />
+				: run.kind === "code"
+					? <DiagramFence key={index} code={run.text} codeBlock={<CodeBlock {...run} nestedScroll={nestedScroll} />} />
 				: run.kind === "image"
 					? <MarkdownImage key={index} alt={run.alt} url={run.url} selectionColor={selectionColor} resolve={resolveImage} />
-					: <MarkdownTable key={index} headers={run.headers} align={run.align} rows={run.rows} selectionColor={selectionColor} />)}
+					: <MarkdownTable key={index} headers={run.headers} align={run.align} rows={run.rows} selectionColor={selectionColor} nestedScroll={nestedScroll} />)}
 			{images.map((image, index) => <MarkdownImage key={`${image.url}-${index}`} alt={image.alt} url={image.url} selectionColor={selectionColor} showCaption={false} resolve={resolveImage} />)}
 		</View>;
 	}
@@ -122,9 +146,10 @@ export const ChatMarkdown = memo(function ChatMarkdown({ text, streaming = false
 		}
 		flushProse();
 		const index = content.length;
-		if (block.kind === "code") content.push(<CodeBlock key={index} {...block} streaming={streaming} />);
+		if (block.kind === "code" && diagrams && isMermaidFence(block.language)) content.push(<DiagramFence key={index} code={block.text} streaming={streaming} codeBlock={<CodeBlock {...block} streaming={streaming} nestedScroll={nestedScroll} />} />);
+		else if (block.kind === "code") content.push(<CodeBlock key={index} {...block} streaming={streaming} nestedScroll={nestedScroll} />);
 		else if (block.kind === "image") content.push(<MarkdownImage key={index} alt={block.alt} url={block.url} selectionColor={selectionColor} resolve={resolveImage} />);
-		else if (block.kind === "table") content.push(<MarkdownTable key={index} headers={block.headers} align={block.align} rows={block.rows} selectionColor={selectionColor} />);
+		else if (block.kind === "table") content.push(<MarkdownTable key={index} headers={block.headers} align={block.align} rows={block.rows} selectionColor={selectionColor} nestedScroll={nestedScroll} />);
 		else if (block.kind === "rule") content.push(<View key={index} style={styles.rule} />);
 		else if (block.kind === "quote") content.push(<View key={index} style={styles.quote}><SelectableInlineText value={block.text} selectionColor={selectionColor} style={styles.quoteText} styles={styles} /></View>);
 		else content.push(<View key={index} style={styles.list}>{block.items.map((item, itemIndex) => <View key={itemIndex} style={styles.listRow}><ListMarker checked={item.checked} number={block.ordered ? itemIndex + 1 : undefined} styles={styles} /><SelectableInlineText value={item.text} selectionColor={selectionColor} style={[styles.body, styles.listBody, item.checked && styles.taskDone]} styles={styles} /></View>)}</View>);
@@ -153,19 +178,21 @@ function ListMarker({ checked, number, styles }: { checked?: boolean; number?: n
 
 type TableBlock = Extract<MarkdownBlock, { kind: "table" }>;
 type ImageBlock = Extract<MarkdownBlock, { kind: "image" }>;
+type CodeFence = Extract<MarkdownBlock, { kind: "code" }>;
 
 /** What a markdown image loads: its URL, with headers when it needs the connection's credential. */
 export type MarkdownImageSource = { uri: string; headers?: Record<string, string> };
 
 /**
  * Runs of text one selection can span, broken by a table (a grid cannot live
- * inside text) and, for a document, by each image so it sits in place.
+ * inside text), by a Mermaid fence drawn as its diagram, and, for a document,
+ * by each image so it sits in place.
  */
-function splitRuns(blocks: MarkdownBlock[], splitImages: boolean): Array<Array<Exclude<MarkdownBlock, TableBlock>> | TableBlock | ImageBlock> {
-	const runs: Array<Array<Exclude<MarkdownBlock, TableBlock>> | TableBlock | ImageBlock> = [];
+export function splitRuns(blocks: MarkdownBlock[], splitImages: boolean, splitDiagrams = false): Array<Array<Exclude<MarkdownBlock, TableBlock>> | TableBlock | ImageBlock | CodeFence> {
+	const runs: Array<Array<Exclude<MarkdownBlock, TableBlock>> | TableBlock | ImageBlock | CodeFence> = [];
 	for (const block of blocks) {
 		const last = runs[runs.length - 1];
-		if (block.kind === "table" || (splitImages && block.kind === "image")) runs.push(block);
+		if (block.kind === "table" || (splitImages && block.kind === "image") || (splitDiagrams && block.kind === "code" && isMermaidFence(block.language))) runs.push(block);
 		else if (Array.isArray(last)) last.push(block);
 		else runs.push([block]);
 	}
@@ -247,13 +274,13 @@ function tableColumnWidth(cells: string[]): number {
 	return Math.min(TABLE_COLUMN_MAX, Math.max(TABLE_COLUMN_MIN, Math.ceil(chars * TABLE_CHAR_WIDTH) + space.sm * 2));
 }
 
-function MarkdownTable({ headers, align, rows, selectionColor }: { headers: string[]; align: TableAlign[]; rows: string[][]; selectionColor: string }) {
+function MarkdownTable({ headers, align, rows, selectionColor, nestedScroll }: { headers: string[]; align: TableAlign[]; rows: string[][]; selectionColor: string; nestedScroll: boolean }) {
 	const styles = useThemedStyles(makeStyles);
 	const widths = headers.map((header, column) => tableColumnWidth([header, ...rows.map((row) => row[column] ?? "")]));
 	const row = (cells: string[], header: boolean) => headers.map((_, column) => <View key={column} style={[styles.tableCell, column === 0 && styles.tableFirstCell, { width: widths[column], flexGrow: widths[column] }]}>
 		<SelectableInlineText value={cells[column] ?? ""} selectionColor={selectionColor} style={[header ? styles.tableHeaderText : styles.tableText, align[column] && { textAlign: align[column] }]} styles={styles} codeStyle={styles.tableCode} />
 	</View>);
-	return <ScrollView horizontal showsHorizontalScrollIndicator contentContainerStyle={styles.tableScroll}>
+	return <ScrollView horizontal nestedScrollEnabled={nestedScroll} showsHorizontalScrollIndicator contentContainerStyle={styles.tableScroll}>
 		<View style={styles.table}>
 			<View style={[styles.tableRow, styles.tableHeader]}>{row(headers, true)}</View>
 			{rows.map((cells, index) => <View key={index} style={styles.tableRow}>{row(cells, false)}</View>)}
@@ -264,7 +291,7 @@ function MarkdownTable({ headers, align, rows, selectionColor }: { headers: stri
 /** How long Copy shows its checkmark before it turns back. */
 const COPIED_MS = 1_400;
 
-function CodeBlock({ text, language, streaming }: { text: string; language?: string; streaming?: boolean }) {
+function CodeBlock({ text, language, streaming, nestedScroll = false }: { text: string; language?: string; streaming?: boolean; nestedScroll?: boolean }) {
 	const t = useTheme();
 	const styles = useThemedStyles(makeStyles);
 	const feedback = usePressFeedback("icon");
@@ -307,7 +334,7 @@ function CodeBlock({ text, language, streaming }: { text: string; language?: str
 					<AppSymbol name={copied ? "checkmark" : "copy"} size={iconSize.md} color={copied ? t.green : t.textTertiary} />
 				</Pressable>
 			</View>
-			<ScrollView horizontal={!wrap} showsHorizontalScrollIndicator={!wrap} contentContainerStyle={wrap ? styles.codeWrap : undefined}>
+			<ScrollView horizontal={!wrap} nestedScrollEnabled={nestedScroll && !wrap} showsHorizontalScrollIndicator={!wrap} contentContainerStyle={wrap ? styles.codeWrap : undefined}>
 				<HighlightedCodeText code={text} language={language} streaming={streaming} style={[styles.codeText, wrap && styles.codeTextWrap]} />
 			</ScrollView>
 		</View>

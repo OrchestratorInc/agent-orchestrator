@@ -19,7 +19,7 @@ const (
 	// DefaultSweepInterval is the cadence for reevaluating live sessions.
 	DefaultSweepInterval = time.Minute
 	// autoReviewFailedRetryLimit bounds retries for the same current PR head.
-	autoReviewFailedRetryLimit = 3
+	autoReviewFailedRetryLimit = domain.AutoReviewFailedRetryLimit
 )
 
 // Store provides the durable session, project, PR, and review facts used by

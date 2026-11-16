@@ -20,6 +20,7 @@ import {
 } from "@expo/ui/swift-ui/modifiers";
 import { glassPanel } from "../glass";
 import { haptics } from "../haptics";
+import { secondaryForeground } from "../swiftUIStyles";
 import { useTheme, useThemeState } from "../ThemeProvider";
 import type { ElicitationActionProps, ElicitationChoiceListProps, ElicitationTextFieldProps } from "./elicitation-native-controls";
 import { useActionFit } from "./elicitationActionFit";
@@ -44,7 +45,7 @@ export function ElicitationChoiceList({ choices, selected, multi, onChange }: El
 							<Image systemName={checked ? (multi ? "checkmark.circle.fill" : "largecircle.fill.circle") : "circle"} size={iconSize.md} color={checked ? t.accent : t.textTertiary} modifiers={[padding({ top: 1 }), accessibilityHidden(true)]} />
 							<VStack alignment="leading" spacing={2} modifiers={[frame({ maxWidth: 1000, alignment: "leading" })]}>
 								<Text modifiers={[font({ textStyle: "subheadline", weight: "semibold" }), foregroundStyle(checked ? t.accent : t.textPrimary), multilineTextAlignment("leading"), fixedSize({ horizontal: false, vertical: true })]}>{choice.label}</Text>
-								{choice.description ? <Text modifiers={[font({ textStyle: "footnote" }), foregroundStyle({ type: "hierarchical", style: "secondary" }), multilineTextAlignment("leading"), fixedSize({ horizontal: false, vertical: true })]}>{choice.description}</Text> : null}
+								{choice.description ? <Text modifiers={[font({ textStyle: "footnote" }), secondaryForeground, multilineTextAlignment("leading"), fixedSize({ horizontal: false, vertical: true })]}>{choice.description}</Text> : null}
 							</VStack>
 							<Spacer minLength={0} />
 						</HStack>

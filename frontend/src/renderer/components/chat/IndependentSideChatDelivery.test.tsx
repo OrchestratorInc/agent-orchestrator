@@ -5,13 +5,15 @@ import { TooltipProvider } from "../ui/tooltip";
 import { lexicalEditorText, typeInLexicalEditor } from "../../test/lexical";
 import { beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import { useIndependentSideChats } from "./IndependentSideChats";
+import type { SideCloseRequest } from "../../../shared/side-close";
 
-const { get, post, put, remove, patch } = vi.hoisted(() => ({
+const { get, post, put, remove, patch, closeProtocol } = vi.hoisted(() => ({
 	get: vi.fn(),
 	post: vi.fn(),
 	put: vi.fn(),
 	remove: vi.fn(),
 	patch: vi.fn(),
+	closeProtocol: { status: "closed" as import("../../../shared/side-close").SideCloseStatus },
 }));
 vi.mock("../../lib/api-client", () => ({
 	apiClient: { GET: get, POST: post, PUT: put, DELETE: remove, PATCH: patch },
@@ -20,8 +22,18 @@ vi.mock("../../lib/api-client", () => ({
 	subscribeApiBaseUrl: () => () => {},
 }));
 vi.mock("../../lib/bridge", () => ({
-	aoBridge: { sideChats: { capture: async () => {}, confirmClose: async () => {}, getPendingCloses: async () => [], onPendingClosesChanged: () => () => {} } },
+	aoBridge: { daemon: { getStatus: async () => ({ state: "ready", pid: 1, port: 3002 }), onStatus: () => () => {} }, sideChats: {
+		protocolVersion: 1, mode: "desktop", capture: async () => {},
+		requestClose: async (request: SideCloseRequest) => ({
+			protocolVersion: 1, epoch: "test-daemon", revision: 1, recovery: "ready", sessionId: request.sessionId,
+			sides: [{ id: request.sideId, sessionId: request.sessionId, label: request.sideId, operationId: request.requestId, version: request.expectedVersion + 2, status: closeProtocol.status }],
+		}),
+		getCloseState: async (sessionId: string) => ({ protocolVersion: 1, epoch: "test-daemon", revision: 0, recovery: "ready", sessionId, sides: [] }),
+		onCloseStateChanged: () => () => {},
+	} },
 }));
+
+beforeEach(() => { closeProtocol.status = "closed"; });
 
 describe("side delivery draft ownership", () => {
 	let accept: (value: { error?: object }) => void;
@@ -71,6 +83,24 @@ describe("side delivery draft ownership", () => {
 		return { ...hook, sending };
 	}
 
+	it.each([70 * 1024, 128 * 1024])("accepts a local plain side question of %i bytes", async (bytes) => {
+		const text = "q".repeat(bytes);
+		const hook = await beginSend(text);
+		expect(post.mock.calls[0][1].body.text).toBe(text);
+		await act(async () => { accept({}); await hook.sending; });
+	});
+
+	it("rejects a local side question above 128 KiB without losing the draft", async () => {
+		const text = "q".repeat(128 * 1024 + 1);
+		const hook = renderHook(() => useIndependentSideChats("session", [], [], async () => [], false));
+		await waitFor(() => expect(hook.result.current.activeId).toBe("side"));
+		act(() => hook.result.current.setQuestionDraft("side", text));
+		await act(async () => { await hook.result.current.send("side", text); });
+		expect(post).not.toHaveBeenCalled();
+		expect(hook.result.current.error).toBeDefined();
+		await waitFor(() => expect(put.mock.calls.some(([, options]) => JSON.parse(options.body.contentJson).text === text)).toBe(true));
+	});
+
 	it("refreshes the accepted title without switching the active sidechat", async () => {
 		let label = "Side Chat";
 		const originalGet = get.getMockImplementation()!;
@@ -112,7 +142,7 @@ describe("side delivery draft ownership", () => {
 
 	it("preserves a reference added while acceptance is pending", async () => {
 		const hook = await beginSend();
-		act(() =>
+		await act(async () =>
 			hook.result.current.addReference("side", {
 				id: "chip",
 				conversationId: "main",
@@ -387,7 +417,7 @@ describe("side panel navigation and recovery", () => {
 			if (options.params.query?.before) return new Promise((resolve) => pending.set(id, resolve));
 			return Promise.resolve(page(id));
 		});
-		render(<SidePanelHarness />);
+		await act(async () => { render(<SidePanelHarness />); });
 		await screen.findByRole("button", { name: "Load earlier messages" });
 		await userEvent.click(screen.getByRole("button", { name: "Load earlier messages" }));
 		await waitFor(() => expect(pending.has("side")).toBe(true));
@@ -508,7 +538,7 @@ describe("side panel navigation and recovery", () => {
 	it("keeps the no-open-side-chat state to one message", async () => {
 		get.mockResolvedValue({ data: { sides: [] } });
 		render(<SidePanelHarness />);
-		await screen.findByText("No side chat opened yet");
+		await screen.findByText("No side chat opened.");
 		expect(screen.queryByText("Explore a quick question without interrupting the main chat."))
 			.not.toBeInTheDocument();
 	});
@@ -539,11 +569,13 @@ describe("side panel navigation and recovery", () => {
 	it("switches tabs by keyboard without losing independent drafts", async () => {
 		const user = userEvent.setup();
 		render(<SidePanelHarness />);
+		await waitFor(() => expect(lexicalEditorText(screen.getByLabelText("Side chat question"))).toBe("First draft"));
 		const first = await screen.findByRole("tab", { name: "First question" });
-		first.focus();
+		act(() => first.focus());
 		await user.keyboard("{ArrowRight}");
 		expect(screen.getByRole("tab", { name: "Second question" })).toHaveAttribute("aria-selected", "true");
 		await waitFor(() => expect(lexicalEditorText(screen.getByLabelText("Side chat question"))).toBe("Second draft"));
+		expect(screen.getByRole("tab", { name: "Second question" })).toHaveFocus();
 		await user.keyboard("{Home}");
 		await waitFor(() => expect(lexicalEditorText(screen.getByLabelText("Side chat question"))).toBe("First draft"));
 	});
@@ -605,7 +637,7 @@ describe("side panel navigation and recovery", () => {
 			.mockReturnValue(new DOMRect(40, 150, 100, 20));
 		await userEvent.click(screen.getByRole("button", { name: "1 annotation" }));
 		await userEvent.click(await screen.findByRole("button", { name: "Juniper" }));
-		await waitFor(() => expect(text.closest("[data-chat-message-body]")).toHaveClass("chat-annotation-target"));
+		expect(text.closest("[data-chat-message-body]")).not.toHaveClass("chat-annotation-target");
 		expect(scrollTo).not.toHaveBeenCalled();
 		rangeBounds.mockReturnValue(new DOMRect(40, 800, 100, 20));
 		await userEvent.click(screen.getByRole("button", { name: "1 annotation" }));
@@ -617,7 +649,7 @@ describe("side panel navigation and recovery", () => {
 	it("shows no conversation tab and creates nothing until + is clicked", async () => {
 		get.mockResolvedValue({ data: { sides: [] } });
 		render(<SidePanelHarness />);
-		await screen.findByText("No side chat opened yet");
+		await screen.findByText("No side chat opened.");
 		expect(screen.queryAllByRole("tab")).toHaveLength(0);
 		expect(post).not.toHaveBeenCalled();
 		await userEvent.click(screen.getByRole("button", { name: "New side chat" }));
@@ -631,6 +663,7 @@ describe("side panel navigation and recovery", () => {
 	it("renames with F2 and Enter and cancels with Escape", async () => {
 		patch.mockResolvedValue({});
 		render(<SidePanelHarness />);
+		await screen.findByRole("combobox", { name: "Side chat question" });
 		const tab = await screen.findByRole("tab", { name: "First question" });
 		fireEvent.keyDown(tab, { key: "F2" });
 		const input = screen.getByRole("textbox", { name: "Rename side chat" });
@@ -653,6 +686,7 @@ describe("side panel navigation and recovery", () => {
 	});
 	it("offers only Rename on a tab's right-click menu", async () => {
 		render(<SidePanelHarness />);
+		await screen.findByRole("combobox", { name: "Side chat question" });
 		const tab = await screen.findByRole("tab", { name: "Second question" });
 		fireEvent.contextMenu(tab, { button: 2 });
 		expect(await screen.findByRole("menuitem", { name: "Rename" })).toBeVisible();
@@ -663,6 +697,7 @@ describe("side panel navigation and recovery", () => {
 	it("selects the existing name and commits on blur, discarding empty or unchanged names", async () => {
 		patch.mockResolvedValue({});
 		render(<SidePanelHarness />);
+		await screen.findByRole("combobox", { name: "Side chat question" });
 		const tab = await screen.findByRole("tab", { name: "First question" });
 		fireEvent.doubleClick(tab);
 		const input = screen.getByRole("textbox", { name: "Rename side chat" }) as HTMLInputElement;
@@ -698,14 +733,16 @@ describe("side panel navigation and recovery", () => {
 		expect(screen.getByRole("tab", { name: "First question" })).toHaveAttribute("aria-selected", "true");
 		expect(lexicalEditorText(screen.getByLabelText("Side chat question"))).toBe("First draft");
 	});
-	it("keeps the tab and confirmation open when closing fails", async () => {
-		remove.mockResolvedValue({ error: {} });
+	it("dismisses confirmation and retains a read-only warning tab when shutdown is unconfirmed", async () => {
+		closeProtocol.status = "unconfirmed";
 		render(<SidePanelHarness />);
 		await screen.findByLabelText("Side chat question");
 		await userEvent.click(screen.getByRole("button", { name: "Close First question" }));
 		await userEvent.click(screen.getByRole("button", { name: "Delete" }));
-		await waitFor(() => expect(screen.getByRole("dialog")).toHaveTextContent("Send failed"));
-		await userEvent.click(screen.getByRole("button", { name: "Cancel" }));
+		await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
+		expect(screen.getByRole("alert")).toHaveTextContent("Could not confirm shutdown");
+		expect(screen.queryByLabelText("Side chat question")).not.toBeInTheDocument();
+		expect(screen.queryByRole("button", { name: "Retry close" })).not.toBeInTheDocument();
 		expect(screen.getByRole("tab", { name: "First question" })).toBeInTheDocument();
 	});
 
@@ -782,6 +819,6 @@ it("does not call the local daemon for a remote session", async () => {
 		await Promise.resolve();
 	});
 	expect(get).not.toHaveBeenCalled();
-	await expect(hook.result.current.create()).rejects.toThrow("only for local AO sessions");
+	await expect(hook.result.current.create()).rejects.toThrow("only for local Orchestrator-managed sessions");
 	expect(post).not.toHaveBeenCalled();
 });

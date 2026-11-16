@@ -8,6 +8,7 @@
 // hang a provider on. Keys are released when the route unmounts (including a
 // swipe-dismiss with no selection), so a closure can't outlive its sheet.
 
+import { branchId, selectionParams, type FilesBranch, type FilesChanges, type FilesSelection } from "./files/selection";
 import type { MachineAppearance } from "./machineAppearance";
 import type { MachineNameChoice } from "./pairFlow";
 
@@ -53,7 +54,8 @@ export function agentSheetRoute(opts: { selected: string; onSelect: (id: string)
 	};
 }
 
-export function modelSheetRoute(opts: { agentId: string; projectId: string; selected: string; onSelect: (id: string) => void }) {
+/** The model sheet; `hostId` names Orchestrator Cloud when its catalog is the one to browse. */
+export function modelSheetRoute(opts: { agentId: string; projectId: string; selected: string; hostId?: string; onSelect: (id: string) => void }) {
 	return {
 		pathname: "/sheets/model" as const,
 		params: {
@@ -61,6 +63,7 @@ export function modelSheetRoute(opts: { agentId: string; projectId: string; sele
 			agentId: opts.agentId,
 			projectId: opts.projectId,
 			selected: opts.selected,
+			...(opts.hostId ? { hostId: opts.hostId } : {}),
 		},
 	};
 }
@@ -90,6 +93,33 @@ export function machineNameSheetRoute(opts: {
 			suggested: opts.suggested,
 			symbol: opts.appearance.symbol,
 			hostId: opts.hostId,
+		},
+	};
+}
+
+/** The Files screen's branch picker for one session. */
+export function filesBranchSheetRoute(opts: { sessionId: string; hostId?: string; selected: FilesBranch; onSelect: (branch: FilesBranch) => void }) {
+	return {
+		pathname: "/sheets/files-branch" as const,
+		params: {
+			resultKey: parkSheetResult(opts.onSelect),
+			sessionId: opts.sessionId,
+			selected: branchId(opts.selected),
+			...(opts.hostId ? { hostId: opts.hostId } : {}),
+		},
+	};
+}
+
+/** The Files screen's changes picker, for the branch `selection` names; `base` names what all changes compare with. */
+export function filesChangesSheetRoute(opts: { sessionId: string; hostId?: string; selection: FilesSelection; base?: string; onSelect: (changes: FilesChanges) => void }) {
+	return {
+		pathname: "/sheets/files-changes" as const,
+		params: {
+			resultKey: parkSheetResult(opts.onSelect),
+			sessionId: opts.sessionId,
+			...selectionParams(opts.selection),
+			...(opts.base ? { base: opts.base } : {}),
+			...(opts.hostId ? { hostId: opts.hostId } : {}),
 		},
 	};
 }

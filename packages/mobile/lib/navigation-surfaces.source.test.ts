@@ -20,11 +20,9 @@ describe("navigation surfaces", () => {
 		expect(layout).toContain("card: t.bgSurface");
 	});
 
-	// Left to native-stack's default, Android runs the system's own push
-	// transition instead of a slide picked for it.
-	it("pushes sub-pages with the system transition", () => {
+	// Every stack shares one set of defaults, and with them one push.
+	it("pushes sub-pages with the shared stack options", () => {
 		expect(layout).toContain("<Stack screenOptions={stackScreenOptions(t)}>");
-		expect(source("./stackScreenOptions.ts")).not.toMatch(/animation:/);
 	});
 
 	// The tab roots' titles and actions are the native bar's, each item named
@@ -48,8 +46,10 @@ describe("navigation surfaces", () => {
 	// items are native bar items too, declared from the page, so nothing waits a
 	// frame to be measured and swapped in.
 	it("sets the session header title and items natively", () => {
-		expect(session).toContain("headerTitle: () => (");
+		expect(session).toContain("headerTitle: () => {");
 		expect(session).toContain('<Stack.Toolbar placement="right">');
+		// Android floats the "⋯" on a pill of its own, set as the bar's item.
+		expect(session).toContain('headerRight: menuReady ? () => <HeaderPillButton icon="more"');
 		expect(session).not.toContain("resetHeaderRightForSwap");
 	});
 });

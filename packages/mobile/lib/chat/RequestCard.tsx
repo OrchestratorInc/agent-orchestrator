@@ -1,6 +1,7 @@
-import { useCallback, useState } from "react";
-import { Pressable, StyleSheet, Text, TextInput, View, type AccessibilityRole } from "react-native";
+import { useCallback, useState, type ReactNode } from "react";
+import { Pressable, ScrollView, StyleSheet, Text, TextInput, useWindowDimensions, View, type AccessibilityRole } from "react-native";
 import { Directions, Gesture, GestureDetector } from "react-native-gesture-handler";
+import { useKeyboardState } from "react-native-keyboard-controller";
 import Animated, { SlideInLeft, SlideInRight, SlideOutLeft, SlideOutRight } from "react-native-reanimated";
 
 import { AppSymbol } from "../AppSymbol";
@@ -15,7 +16,7 @@ import { textSelectionColors } from "../textSelection";
 import { fontScaleCap, iconSize, radius, space, stateOpacity, touchTarget, type } from "../tokens";
 import { useReducedMotion } from "../useReducedMotion";
 import { toggleInputValue } from "./elicitationModel";
-import type { RequestDockModel, RequestDockPage } from "./requestDockModel";
+import { requestCardMaxHeight, type RequestDockModel, type RequestDockPage } from "./requestDockModel";
 import { userFacingError } from "../connectionError";
 
 /** The arrow that points back up the timeline, to the card that owns the request. */
@@ -60,6 +61,14 @@ export function RequestCard({
 	// Which way the next page should travel: forward pages come in from the
 	// right, back pages from the left, so the motion agrees with the swipe.
 	const [forward, setForward] = useState(true);
+	// Whether the question runs past the scroll body, so the pinned answers
+	// below it get an edge to show there is more above.
+	const [bodyHeight, setBodyHeight] = useState(0);
+	const [contentHeight, setContentHeight] = useState(0);
+	const windowHeight = useWindowDimensions().height;
+	const keyboardHeight = useKeyboardState((state) => (state.isVisible ? state.height : 0));
+	const maxHeight = requestCardMaxHeight(windowHeight, keyboardHeight);
+	const clipped = bodyHeight > 0 && contentHeight > bodyHeight + 1;
 
 	const total = model.pages.length;
 	const current: RequestDockPage | undefined = model.pages[page];
@@ -152,21 +161,35 @@ export function RequestCard({
 		</Pressable>
 	);
 
+	// The question scrolls inside the card; the header above it and the answers
+	// below it stay put, so a long command can never push them off screen.
+	const body = (children: ReactNode) => (
+		<ScrollView
+			key={model.sequence}
+			style={styles.body}
+			keyboardShouldPersistTaps="handled"
+			onLayout={(event) => setBodyHeight(event.nativeEvent.layout.height)}
+			onContentSizeChange={(_, height) => setContentHeight(height)}
+		>
+			{children}
+		</ScrollView>
+	);
+
 	// Deferred requests get a name and a way back to the card that owns them.
 	if (!model.canAnswerInline) {
 		return (
-			<View style={styles.card}>
+			<View style={[styles.card, { maxHeight }]}>
 				<View style={styles.head}>
 					<Text accessibilityRole="header" maxFontSizeMultiplier={fontScaleCap.chrome} style={styles.eyebrow}>{model.title}</Text>
 					{dismiss}
 				</View>
-				{current.question ? <Text maxFontSizeMultiplier={fontScaleCap.title} style={styles.question}>{current.question}</Text> : null}
+				{current.question ? body(<Text maxFontSizeMultiplier={fontScaleCap.title} style={styles.question}>{current.question}</Text>) : null}
 				<Pressable
 					accessibilityRole="button"
 					accessibilityLabel="Open the full request"
 					android_ripple={textFeedback.android_ripple}
 					onPress={() => onShow(model.sequence)}
-					style={({ pressed }) => [styles.openForm, pressed && textFeedback.pressed]}
+					style={({ pressed }) => [styles.openForm, clipped && styles.pinnedEdge, pressed && textFeedback.pressed]}
 				>
 					<AppSymbol name={towardCard} size={iconSize.sm} color={t.accent} />
 					<Text maxFontSizeMultiplier={fontScaleCap.chrome} style={styles.openFormText}>Open the full request</Text>
@@ -181,9 +204,47 @@ export function RequestCard({
 	const atStart = page === 0;
 	const atEnd = page >= total - 1;
 
+	// An approval's decisions are the way out of the card, so they are pinned
+	// under the question. A question's options are its content and scroll with it.
+	const pinAnswers = model.kind === "approval";
+	const renderOptions = (pinned: boolean) => (
+		<View accessibilityRole={optionRole === "radio" ? "radiogroup" : undefined}>
+			{current.options.map((option, index) => {
+				// The answers were always kept — they accumulate until the last
+				// page submits them — but nothing said so on a second visit.
+				const selected = current.multi
+					? Array.isArray(chosen) && chosen.includes(option.id)
+					: current.propertyName ? values[current.propertyName] === option.id : false;
+				return (
+					<Pressable
+						key={option.id}
+						accessibilityRole={optionRole}
+						accessibilityLabel={option.label}
+						accessibilityHint={option.description}
+						accessibilityState={optionRole === "button" ? { disabled: busy } : { disabled: busy, checked: selected }}
+						disabled={busy}
+						android_ripple={rowFeedback.android_ripple}
+						onPress={() => { if (current.multi) toggle(option.id); else answer(option.id); }}
+						style={({ pressed }) => [styles.option, (index > 0 || (pinned && clipped)) && styles.optionDivider, pressed && rowFeedback.pressed, busy && styles.dim]}
+					>
+						<View style={[styles.ordinal, selected && styles.ordinalSelected]}>
+							{selected
+								? <AppSymbol name="checkmark" size={iconSize.xs} color={t.bgBase} />
+								: <Text maxFontSizeMultiplier={fontScaleCap.chrome} style={styles.ordinalText}>{index + 1}</Text>}
+						</View>
+						<View style={styles.optionBody}>
+							<Text maxFontSizeMultiplier={fontScaleCap.body} style={[styles.optionLabel, selected && styles.optionLabelSelected]}>{option.label}</Text>
+							{option.description ? <Text maxFontSizeMultiplier={fontScaleCap.body} style={styles.optionHint}>{option.description}</Text> : null}
+						</View>
+					</Pressable>
+				);
+			})}
+		</View>
+	);
+
 	return (
 		<GestureDetector gesture={swipe}>
-			<View style={styles.card}>
+			<View style={[styles.card, { maxHeight }]}>
 				<View style={styles.head}>
 					{total > 1 ? <View style={styles.pager}>
 						<Pressable
@@ -231,45 +292,17 @@ export function RequestCard({
 
 				<Animated.View
 					key={page}
+					style={styles.page}
 					entering={reduceMotion ? undefined : (forward ? SlideInRight : SlideInLeft).duration(PAGE_SLIDE_MS)}
 					exiting={reduceMotion ? undefined : (forward ? SlideOutLeft : SlideOutRight).duration(PAGE_SLIDE_MS)}
 				>
-					{current.question ? <Text maxFontSizeMultiplier={fontScaleCap.title} style={styles.question}>{current.question}</Text> : null}
+					{body(<>
+						{current.question ? <Text maxFontSizeMultiplier={fontScaleCap.title} style={styles.question}>{current.question}</Text> : null}
+						{pinAnswers ? null : renderOptions(false)}
+					</>)}
+					{pinAnswers ? renderOptions(true) : null}
 
-					<View accessibilityRole={optionRole === "radio" ? "radiogroup" : undefined}>
-						{current.options.map((option, index) => {
-							// The answers were always kept — they accumulate until the last
-							// page submits them — but nothing said so on a second visit.
-							const selected = current.multi
-								? Array.isArray(chosen) && chosen.includes(option.id)
-								: current.propertyName ? values[current.propertyName] === option.id : false;
-							return (
-								<Pressable
-									key={option.id}
-									accessibilityRole={optionRole}
-									accessibilityLabel={option.label}
-									accessibilityHint={option.description}
-									accessibilityState={optionRole === "button" ? { disabled: busy } : { disabled: busy, checked: selected }}
-									disabled={busy}
-									android_ripple={rowFeedback.android_ripple}
-									onPress={() => { if (current.multi) toggle(option.id); else answer(option.id); }}
-									style={({ pressed }) => [styles.option, index > 0 && styles.optionDivider, pressed && rowFeedback.pressed, busy && styles.dim]}
-								>
-									<View style={[styles.ordinal, selected && styles.ordinalSelected]}>
-										{selected
-											? <AppSymbol name="checkmark" size={iconSize.xs} color={t.bgBase} />
-											: <Text maxFontSizeMultiplier={fontScaleCap.chrome} style={styles.ordinalText}>{index + 1}</Text>}
-									</View>
-									<View style={styles.optionBody}>
-										<Text maxFontSizeMultiplier={fontScaleCap.body} style={[styles.optionLabel, selected && styles.optionLabelSelected]}>{option.label}</Text>
-										{option.description ? <Text maxFontSizeMultiplier={fontScaleCap.body} style={styles.optionHint}>{option.description}</Text> : null}
-									</View>
-								</Pressable>
-							);
-						})}
-					</View>
-
-					{current.multi && current.options.length ? <View style={styles.continueRow}>
+					{current.multi && current.options.length ? <View style={[styles.continueRow, clipped && styles.pinnedEdge]}>
 						<Pressable
 							accessibilityRole="button"
 							accessibilityLabel={atEnd ? "Send answers" : "Next question"}
@@ -283,7 +316,7 @@ export function RequestCard({
 						</Pressable>
 					</View> : null}
 
-					{current.freeText ? <View style={[styles.typed, current.options.length > 0 && styles.optionDivider]}>
+					{current.freeText ? <View style={[styles.typed, (current.options.length > 0 || clipped) && styles.optionDivider]}>
 						<View style={styles.ordinal}><AppSymbol name="rename" size={iconSize.xs} color={t.textTertiary} /></View>
 						<TextInput
 							accessibilityLabel={current.freeText.placeholder}
@@ -335,6 +368,11 @@ const makeStyles = (t: Theme) =>
 			paddingBottom: space.xs,
 			overflow: "hidden",
 		},
+		page: { flexShrink: 1 },
+		// flexGrow 0 so a short question sizes to its text; flexShrink so a long
+		// one gives way first when the card reaches its cap.
+		body: { flexGrow: 0, flexShrink: 1 },
+		pinnedEdge: { borderTopWidth: rowDividerWidth, borderTopColor: t.borderSubtle },
 		// The chevrons, Skip and the close are full touch targets; the row is as
 		// tall as they are and pulls them out to the card's edge.
 		head: { flexDirection: "row", alignItems: "center", justifyContent: "space-between", minHeight: touchTarget, marginRight: -space.sm },

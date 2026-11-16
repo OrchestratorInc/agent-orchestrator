@@ -183,6 +183,16 @@ func (t *legacyACPTransport) modelState() *legacySessionModelState {
 }
 
 func (t *legacyACPTransport) setModel(ctx context.Context, sessionID, modelID string) error {
+	return t.call(ctx, "session/set_model", map[string]string{
+		"sessionId": sessionID,
+		"modelId":   modelID,
+	})
+}
+
+// call sends one request whose method the pinned SDK will not send, because it
+// lacks ACP's underscore extension prefix, and waits for its error or success.
+// The result body is not read.
+func (t *legacyACPTransport) call(ctx context.Context, method string, params any) error {
 	requestID := fmt.Sprintf("ao-legacy-%d", t.nextID.Add(1))
 	response := make(chan legacyACPResponse, 1)
 	t.mu.Lock()
@@ -192,11 +202,8 @@ func (t *legacyACPTransport) setModel(ctx context.Context, sessionID, modelID st
 	request := map[string]any{
 		"jsonrpc": "2.0",
 		"id":      requestID,
-		"method":  "session/set_model",
-		"params": map[string]string{
-			"sessionId": sessionID,
-			"modelId":   modelID,
-		},
+		"method":  method,
+		"params":  params,
 	}
 	encoded, err := json.Marshal(request)
 	if err == nil {

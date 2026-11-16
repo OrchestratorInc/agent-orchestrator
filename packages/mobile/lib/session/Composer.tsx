@@ -113,6 +113,11 @@ export function Composer({
 						placeholder={toTerminal ? "Send to terminal…" : "Message the agent…"}
 						placeholderTextColor={t.textFaint}
 						maxFontSizeMultiplier={COMPOSER_FONT_SCALE_CAP}
+						// A command goes to the shell as typed: the keyboard turned
+						// "ls" into "Ls" and corrected flags into words.
+						autoCapitalize={toTerminal ? "none" : "sentences"}
+						autoCorrect={!toTerminal}
+						spellCheck={!toTerminal}
 						multiline
 						keyboardAppearance={scheme}
 						{...textSelectionColors(t)}

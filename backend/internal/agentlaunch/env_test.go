@@ -3,6 +3,7 @@ package agentlaunch
 import (
 	"context"
 	"errors"
+	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -24,10 +25,15 @@ func TestProjectEnvMergeAndRedaction(t *testing.T) {
 	if got := RedactValues("long-secret", project); got != "[REDACTED]" {
 		t.Fatalf("redacted overlapping values = %q", got)
 	}
-	cause := errors.New("failed with long-secret")
+	sentinel := errors.New("agent requires authentication")
+	cause := fmt.Errorf("failed with long-secret: %w", sentinel)
 	redacted := RedactError(cause, project)
-	if redacted.Error() != "failed with [REDACTED]" || errors.Is(redacted, cause) {
+	var reached interface{ Unwrap() error }
+	if redacted.Error() != "failed with [REDACTED]: agent requires authentication" || errors.As(redacted, &reached) {
 		t.Fatalf("redacted error = %v, want hidden value without the original cause", redacted)
+	}
+	if !errors.Is(redacted, sentinel) {
+		t.Fatalf("redacted error = %v lost its sentinel", redacted)
 	}
 }
 

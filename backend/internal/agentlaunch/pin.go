@@ -27,7 +27,7 @@ func pinDirectory(exe, dataDir string) (string, error) {
 		return dir, nil
 	}
 	if err != nil {
-		return "", fmt.Errorf("inspect AO install directory: %w", err)
+		return "", fmt.Errorf("inspect Orchestrator install directory: %w", err)
 	}
 	shared := false
 	for _, entry := range entries {
@@ -54,7 +54,7 @@ func pinDirectory(exe, dataDir string) (string, error) {
 		return dir, nil
 	}
 	if !filepath.IsAbs(dataDir) {
-		return "", fmt.Errorf("AO shim data directory must be absolute, got %q", dataDir)
+		return "", fmt.Errorf("the Orchestrator shim data directory must be absolute, got %q", dataDir)
 	}
 	absolute, err := filepath.Abs(exe)
 	if err != nil {
@@ -117,7 +117,7 @@ func ensureWindowsAOExecutableWithLink(shimDir, executable string, link func(str
 	target := filepath.Join(shimDir, "ao.exe")
 	sourceInfo, err := os.Stat(executable)
 	if err != nil {
-		return fmt.Errorf("stat AO executable: %w", err)
+		return fmt.Errorf("stat Orchestrator executable: %w", err)
 	}
 	if targetInfo, targetErr := os.Stat(target); targetErr == nil && os.SameFile(sourceInfo, targetInfo) {
 		return nil
@@ -126,7 +126,7 @@ func ensureWindowsAOExecutableWithLink(shimDir, executable string, link func(str
 	}
 	temp, err := os.CreateTemp(shimDir, ".ao-exe-*")
 	if err != nil {
-		return fmt.Errorf("create AO executable shim: %w", err)
+		return fmt.Errorf("create Orchestrator executable shim: %w", err)
 	}
 	tempPath := temp.Name()
 	if err := temp.Close(); err != nil {
@@ -138,14 +138,14 @@ func ensureWindowsAOExecutableWithLink(shimDir, executable string, link func(str
 	}
 	if err := link(executable, tempPath); err != nil {
 		if err := copyExecutable(executable, tempPath, sourceInfo.ModTime()); err != nil {
-			return fmt.Errorf("copy AO executable after link failed: %w", err)
+			return fmt.Errorf("copy Orchestrator executable after link failed: %w", err)
 		}
 	}
 	if err := os.Remove(target); err != nil && !os.IsNotExist(err) {
-		return fmt.Errorf("replace AO executable shim: %w", err)
+		return fmt.Errorf("replace Orchestrator executable shim: %w", err)
 	}
 	if err := os.Rename(tempPath, target); err != nil {
-		return fmt.Errorf("install AO executable shim: %w", err)
+		return fmt.Errorf("install Orchestrator executable shim: %w", err)
 	}
 	return nil
 }

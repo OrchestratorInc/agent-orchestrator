@@ -89,7 +89,6 @@ describe("archived session retention", () => {
 		expect(screen.queryByRole("button", { name: "Delete archived sessions" })).not.toBeInTheDocument();
 	});
 });
-
 describe("Linux Alt menu setting", () => {
 	it("persists the user's choice on Linux", async () => {
 		vi.spyOn(platform, "isLinuxPlatform").mockReturnValue(true);

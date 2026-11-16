@@ -2,7 +2,7 @@ import { Host } from "@expo/ui";
 import { Form, LabeledContent, Section, Text } from "@expo/ui/swift-ui";
 import { textSelection } from "@expo/ui/swift-ui/modifiers";
 import { ACCOUNT_MANAGED_NOTE, endpointDisplayAddress, environmentEndpointRows } from "./environmentView";
-import { FormFooter, formModifiers, FormPasswordField, FormTextField, FormToggle, sectionModifiers } from "./formFields";
+import { FormFooter, formModifiers, FormPasswordField, FormSection, FormTextField, FormToggle, sectionModifiers } from "./formFields";
 import type { Host as PairedHost } from "./hosts";
 import { MachineSymbolMenu } from "./MachineSymbolMenu";
 import { useTheme, useThemeState } from "./ThemeProvider";
@@ -23,10 +23,7 @@ export function MachineEditorForm({ host, editor }: MachineEditorFormProps) {
 	return (
 		<Host style={{ flex: 1 }} colorScheme={scheme}>
 			<Form modifiers={formModifiers(t)}>
-				<Section
-					footer={editor.accountManaged && failure ? <FormFooter error>{failure.message}</FormFooter> : undefined}
-					modifiers={sectionModifiers(t)}
-				>
+				<FormSection error={editor.accountManaged ? failure?.message : undefined} modifiers={sectionModifiers(t)}>
 					<FormTextField
 						label="Name"
 						value={draft.machineName}
@@ -37,7 +34,7 @@ export function MachineEditorForm({ host, editor }: MachineEditorFormProps) {
 						testID={`environment-name-${host.id}`}
 					/>
 					<MachineSymbolMenu selected={draft.appearance.symbol} onSelect={editor.setSymbol} disabled={saving} testID={`environment-symbol-${host.id}`} />
-				</Section>
+				</FormSection>
 				{editor.accountManaged ? (
 					<Section title="Connection" footer={<FormFooter>{ACCOUNT_MANAGED_NOTE}</FormFooter>} modifiers={sectionModifiers(t)}>
 						<LabeledContent label="Address" testID={`environment-account-managed-${host.id}`}>
@@ -45,11 +42,7 @@ export function MachineEditorForm({ host, editor }: MachineEditorFormProps) {
 						</LabeledContent>
 					</Section>
 				) : (
-					<Section
-						title="Connection"
-						footer={connectionError ? <FormFooter error>{connectionError}</FormFooter> : undefined}
-						modifiers={sectionModifiers(t)}
-					>
+					<FormSection title="Connection" error={connectionError} modifiers={sectionModifiers(t)}>
 						<FormTextField
 							label="Host"
 							value={draft.config.host}
@@ -84,7 +77,7 @@ export function MachineEditorForm({ host, editor }: MachineEditorFormProps) {
 							disabled={saving}
 							testID={`environment-tls-${host.id}`}
 						/>
-					</Section>
+					</FormSection>
 				)}
 			</Form>
 		</Host>

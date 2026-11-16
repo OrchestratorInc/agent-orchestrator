@@ -163,7 +163,14 @@ describe("editing a machine", () => {
 		expect(fixtures.reloadHostMetadata).toHaveBeenCalledOnce();
 		expect(fixtures.haptics.success).toHaveBeenCalledOnce();
 		expect(fixtures.back).toHaveBeenCalledOnce();
-		expect(fixtures.preventRemove.prevent).toBe(false);
+		// It leaves through the hold rather than letting go in the commit that
+		// pops it: on Android that changes the header of a page already out of
+		// its stack, and react-native-screens throws (the app went black).
+		expect(fixtures.preventRemove.prevent).toBe(true);
+		const action = { type: "GO_BACK" };
+		act(() => fixtures.preventRemove.callback?.({ data: { action } }));
+		expect(fixtures.dispatch).toHaveBeenCalledWith(action);
+		expect(fixtures.alert).not.toHaveBeenCalled();
 	});
 
 	it("reconnects the default machine over a changed route", async () => {
@@ -175,17 +182,18 @@ describe("editing a machine", () => {
 	});
 
 	it("keeps the editor and says what failed under the connection fields", async () => {
-		fixtures.save.mockRejectedValue(new MachineSaveError("That password was rejected. Check it and try again.", "password"));
+		fixtures.save.mockRejectedValue(new MachineSaveError("That code or password was rejected. Get a new code and try again.", "password"));
 		await open();
 		await type("environment-password-a", "wrong");
 		await act(async () => save().props.onPress());
 		expect(fixtures.back).not.toHaveBeenCalled();
 		expect(fixtures.haptics.warning).toHaveBeenCalledOnce();
-		expect(connectionSection().props.footer.props).toMatchObject({ error: true, children: "That password was rejected. Check it and try again." });
+		expect(connectionSection().props.footer.props).toMatchObject({ error: true, children: "That code or password was rejected. Get a new code and try again." });
 		// A footer isn't read out as it appears, so the screen reader is told.
-		expect(fixtures.announce).toHaveBeenCalledWith("That password was rejected. Check it and try again.", { queue: true });
+		expect(fixtures.announce).toHaveBeenCalledWith("That code or password was rejected. Get a new code and try again.", { queue: true });
 		await type("environment-password-a", "right");
-		expect(connectionSection().props.footer).toBeUndefined();
+		// Cleared but still mounted, so the field being typed in keeps focus.
+		expect(connectionSection().props.footer.props).toMatchObject({ error: false, children: undefined });
 	});
 
 	it("explains an out-of-range port and keeps Save off", async () => {

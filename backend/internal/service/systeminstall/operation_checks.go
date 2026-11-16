@@ -204,17 +204,17 @@ func (s *Service) confirmInstalledOwner(ctx context.Context, target Target, plan
 		job, statusErr := s.Status(ctx, target)
 		if statusErr != nil || job.Status != StatusSucceeded || job.Method != plan.ownershipMethod() ||
 			!s.methodOwnsBinary(ctx, plan, verified.ResolvedPath) {
-			return nil, fmt.Errorf("%w: AO could not confirm which %s installation is in use (%w); update it manually", ErrInstallOwner, target, err)
+			return nil, fmt.Errorf("%w: Orchestrator could not confirm which %s installation is in use (%w); update it manually", ErrInstallOwner, target, err)
 		}
 		version, _ := scheme.find(installedVersionText(target, verified.ResolvedPath, job.Output))
 		baseline = &installedBaseline{target: target, path: verified.ResolvedPath, version: version.display, scheme: scheme}
 	case err != nil:
-		return nil, fmt.Errorf("%w: AO could not confirm which %s installation is in use (%w); update it manually", ErrInstallOwner, target, err)
+		return nil, fmt.Errorf("%w: Orchestrator could not confirm which %s installation is in use (%w); update it manually", ErrInstallOwner, target, err)
 	case verified.ResolvedPath == "":
-		return nil, fmt.Errorf("%w: AO could not resolve the %s that sessions run; update it manually", ErrInstallOwner, target)
+		return nil, fmt.Errorf("%w: Orchestrator could not resolve the %s that sessions run; update it manually", ErrInstallOwner, target)
 	default:
 		if !s.methodOwnsBinary(ctx, plan, verified.ResolvedPath) {
-			return nil, fmt.Errorf("%w: the %s that AO runs (%s) was not installed with %s; update it manually with the tool that installed it", ErrInstallOwner, target, verified.ResolvedPath, installMethodLabel(plan.ownershipMethod()))
+			return nil, fmt.Errorf("%w: the %s that Orchestrator runs (%s) was not installed with %s; update it manually with the tool that installed it", ErrInstallOwner, target, verified.ResolvedPath, installMethodLabel(plan.ownershipMethod()))
 		}
 		version, _ := scheme.find(installedVersionText(target, verified.ResolvedPath, verified.Output))
 		baseline = &installedBaseline{target: target, path: verified.ResolvedPath, version: version.display, scheme: scheme}
@@ -258,12 +258,12 @@ func updateOutcome(baseline *installedBaseline, result VerifyResult) (failure, n
 		return "", ""
 	}
 	if baseline.path != "" && result.ResolvedPath != "" && baseline.path != result.ResolvedPath {
-		note = fmt.Sprintf("AO now runs %s (was %s).", result.ResolvedPath, baseline.path)
+		note = fmt.Sprintf("Orchestrator now runs %s (was %s).", result.ResolvedPath, baseline.path)
 	}
 	after, afterOK := baseline.scheme.find(installedVersionText(baseline.target, result.ResolvedPath, result.Output))
 	before, beforeOK := baseline.scheme.parse(baseline.version)
 	if !afterOK {
-		return "The update finished, but AO could not read the new version.", note
+		return "The update finished, but Orchestrator could not read the new version.", note
 	}
 	if baseline.expected != "" {
 		expected, ok := baseline.scheme.parse(baseline.expected)
@@ -274,7 +274,7 @@ func updateOutcome(baseline *installedBaseline, result VerifyResult) (failure, n
 	}
 	latest, latestOK := baseline.scheme.parse(baseline.latest)
 	if baseline.latest != "" && !latestOK {
-		return "The update finished, but AO could not read the target version.", note
+		return "The update finished, but Orchestrator could not read the target version.", note
 	}
 	if comparison, versionsComparable := baseline.scheme.compare(after, latest); latestOK && versionsComparable && comparison < 0 {
 		// The path stays in diagnostics; the notice only needs the versions.

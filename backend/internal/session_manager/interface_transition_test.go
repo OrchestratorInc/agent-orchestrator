@@ -98,6 +98,18 @@ func (s *transitionLifecycleStore) CommitSessionControllerEpoch(
 	)
 }
 
+func (s *transitionLifecycleStore) CommitSessionControllerEpochArchivedChat(
+	_ context.Context,
+	id domain.SessionID,
+	source, target domain.SessionMode,
+	nativeConversationID string,
+	_ time.Time,
+) (bool, error) {
+	return (&fakeLCM{store: s.fakeStore}).changeControllerEpoch(
+		id, source, target, nativeConversationID, false,
+	)
+}
+
 func (s *transitionLifecycleStore) RestoreSessionControllerEpoch(
 	_ context.Context,
 	id domain.SessionID,
@@ -643,6 +655,17 @@ func (l *sqliteTransitionLifecycle) CommitControllerEpoch(
 	_ bool,
 ) (bool, error) {
 	return l.store.CommitSessionControllerEpoch(
+		ctx, id, source, target, nativeConversationID, time.Now(),
+	)
+}
+func (l *sqliteTransitionLifecycle) CommitControllerEpochArchivedChat(
+	ctx context.Context,
+	id domain.SessionID,
+	source, target domain.SessionMode,
+	nativeConversationID string,
+	_ bool,
+) (bool, error) {
+	return l.store.CommitSessionControllerEpochArchivedChat(
 		ctx, id, source, target, nativeConversationID, time.Now(),
 	)
 }

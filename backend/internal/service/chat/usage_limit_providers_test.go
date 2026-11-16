@@ -3,7 +3,6 @@ package chat_test
 import (
 	"context"
 	"errors"
-	"fmt"
 	"testing"
 	"time"
 
@@ -19,11 +18,16 @@ func TestUsageLimitRecoveryAcrossProviders(t *testing.T) {
 			h := newHarnessForHarness(t, provider)
 			ctx := context.Background()
 			reset := h.now().Add(time.Minute)
-			message := timedUsageLimit
+			var source domain.ConversationTurn
 			if provider == domain.HarnessCodex {
-				message = fmt.Sprintf("Usage limit exceeded\n\nYou've hit your usage limit.\n\nResets at %s", reset.Format(time.RFC3339))
+				const codexText = "You've hit your usage limit. Try again at Aug 3rd, 2026 5:15 PM."
+				source = failUsageLimitedTurnAt(t, h, codexText, reset)
+				if source.ErrorMessage != codexText {
+					t.Fatalf("provider text = %q", source.ErrorMessage)
+				}
+			} else {
+				source = failUsageLimitedTurn(t, h, timedUsageLimit)
 			}
-			source := failUsageLimitedTurn(t, h, message)
 			if source.UsageLimit == nil || source.UsageLimit.ResetsAt == nil || !source.UsageLimit.ResetsAt.Equal(reset) {
 				t.Fatalf("provider deadline = %+v, want %s", source.UsageLimit, reset)
 			}

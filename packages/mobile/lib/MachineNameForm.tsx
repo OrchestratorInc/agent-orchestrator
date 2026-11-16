@@ -1,6 +1,6 @@
 import { Host } from "@expo/ui";
 import { Form, Section } from "@expo/ui/swift-ui";
-import { FormFooter, formModifiers, FormTextField, sectionModifiers } from "./formFields";
+import { FormFooter, formModifiers, FormSection, FormTextField, sectionModifiers } from "./formFields";
 import { MACHINE_NAME_HINT, type MachineNameFormProps } from "./MachineNameForm.types";
 import { MachineSymbolMenu } from "./MachineSymbolMenu";
 import { useTheme, useThemeState } from "./ThemeProvider";
@@ -28,9 +28,9 @@ export function MachineNameForm({ name, onChangeName, symbol, onSelectSymbol, ic
 						testID="machine-name-input"
 					/>
 				</Section>
-				<Section footer={iconHint ? <FormFooter>{iconHint}</FormFooter> : undefined} modifiers={sectionModifiers(t)}>
+				<FormSection hint={iconHint} modifiers={sectionModifiers(t)}>
 					<MachineSymbolMenu selected={symbol} onSelect={onSelectSymbol} testID="machine-name-symbol" />
-				</Section>
+				</FormSection>
 			</Form>
 		</Host>
 	);

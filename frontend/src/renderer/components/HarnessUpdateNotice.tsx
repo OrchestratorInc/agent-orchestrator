@@ -1,10 +1,11 @@
 import { useQuery, useQueryClient } from "@tanstack/react-query";
-import { ArrowRight, ChevronDown, CircleCheck, LoaderCircle } from "lucide-react";
+import { ArrowRight, ChevronDown, CircleCheck, LoaderCircle } from "@/components/app-icons";
 import { type CSSProperties, type ReactNode, useEffect, useId, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import { useTranslation } from "react-i18next";
 import { useAgentAuthPlans } from "../hooks/useAgentAuth";
 import { cacheAgentReadiness, ensureAgentReadiness, useAgentReadinessQuery, useEnsureAgentReadiness } from "../hooks/useAgentReadinessQuery";
+import { CLOUD_HARNESS_HOST, CLOUD_VERSIONED_HARNESSES, describeCloudHarness, useCloudHarnessVersions, type CloudHarnessDetails } from "../hooks/useCloudHarnessVersions";
 import { advisoryInUse, hasConfirmedHarnessUpdate, harnessUpdateNoticeKey, installedAgentIds, installerQueryKey, installersQueryOptions, installJobsQueryKey, installJobsQueryOptions, isActiveInstallJob, isFailedInstallJob, maintenanceMethodId, needsHarnessLogin, updateAdvisoryQueryKey, useHarnessUpdates, useStartHarnessUpdate, versionLabel, type AgentUpdateAdvisory, type HarnessInUse, type InstallJob } from "../hooks/useHarnessUpdates";
 import { publishHarnessUpdateNoticeRect } from "../hooks/useHarnessUpdateNoticeClearance";
 import { useLiveBrowserViewportRect, type ViewportRect } from "../hooks/useLiveBrowserViewportRect";
@@ -77,6 +78,14 @@ export function HarnessUpdateNotice({ enabled }: { enabled: boolean }) {
 	});
 	const openSettings = useUiStore((state) => state.openGlobalSettings);
 	const settingsOpen = useUiStore((state) => state.settingsModal !== null);
+	// AO Cloud is one more place a harness runs: its update joins that
+	// harness's entry, for someone who may change it, never a card of its own.
+	const cloud = useCloudHarnessVersions(enabled);
+	const [cloudStarting, setCloudStarting] = useState<ReadonlySet<AgentId>>(new Set());
+	const cloudStartingRef = useRef(new Set<AgentId>());
+	const [cloudErrors, setCloudErrors] = useState<Partial<Record<AgentId, string>>>({});
+	// The cloud update each failed attempt acted on, so its failure stays shown.
+	const failedCloudUpdates = useRef(new Map<AgentId, CloudHarnessDetails>());
 
 	// Refresh even on failure: a command can change the binary before
 	// failing verification. Never keep advertising an obsolete version.
@@ -152,6 +161,35 @@ export function HarnessUpdateNotice({ enabled }: { enabled: boolean }) {
 		}
 	};
 
+	/** Saves AO Cloud's newer release for new Cloud sessions; it has no job to
+	 * watch. alone: the entry has no update on this computer, whose finished
+	 * job would otherwise say it is done. */
+	const startCloudUpdate = async (agentId: AgentId, details: CloudHarnessDetails, alone: boolean) => {
+		if (cloudStartingRef.current.has(agentId)) return;
+		cloudStartingRef.current.add(agentId);
+		setCloudStarting(new Set(cloudStartingRef.current));
+		setCloudErrors((current) => ({ ...current, [agentId]: undefined }));
+		failedCloudUpdates.current.delete(agentId);
+		try {
+			const result = await cloud.startUpdate(agentId);
+			if (result.error) {
+				failedCloudUpdates.current.set(agentId, details);
+				setCloudErrors((current) => ({ ...current, [agentId]: result.error }));
+			} else if (result.entry?.advisory.currentVersion && alone) {
+				const version = result.entry.advisory.currentVersion;
+				setUpdated((current) => new Map(current).set(agentId, version));
+				window.setTimeout(() => setUpdated((current) => {
+					const next = new Map(current);
+					next.delete(agentId);
+					return next;
+				}), UPDATED_MS);
+			}
+		} finally {
+			cloudStartingRef.current.delete(agentId);
+			setCloudStarting(new Set(cloudStartingRef.current));
+		}
+	};
+
 	// Settings is a modal that blocks pointer and focus outside it; its Harness
 	// page offers the same updates there.
 	if (settingsOpen || !readinessComplete || readiness.isError) return null;
@@ -163,6 +201,9 @@ export function HarnessUpdateNotice({ enabled }: { enabled: boolean }) {
 	// Let the first batch settle so a fast, seldom-used harness cannot jump
 	// ahead of the most-used one. Failed lookups don't block the other results.
 	if (AGENT_OPTIONS.some((id) => installed.has(id) && advisories.get(id)?.isPending)) return null;
+	// AO Cloud's answer joins the same first batch, so a harness never gains
+	// its cloud target after the notice is up.
+	if (cloud.isPending) return null;
 	const readinessById = new Map(readiness.data?.agents.map((agent) => [agent.id, agent]));
 	// An update started here that failed stays explained until it is dismissed,
 	// even once a refresh reports the harness current: an updater can replace
@@ -172,16 +213,32 @@ export function HarnessUpdateNotice({ enabled }: { enabled: boolean }) {
 		const job = jobs.data?.find((candidate) => candidate.target === agentId);
 		return advisory && (errors[agentId] || (startedJobs.current.has(agentId) && isFailedInstallJob(job))) ? advisory : undefined;
 	};
-	const updates = AGENT_OPTIONS.flatMap((agentId) => {
+	const localUpdate = (agentId: AgentId) => {
 		const query = advisories.get(agentId);
 		const confirmed = installed.has(agentId) && !query?.isError && hasConfirmedHarnessUpdate(query?.data) ? query?.data : undefined;
 		const advisory = confirmed ?? failedUpdateAdvisory(agentId);
-		if (!advisory) return [];
+		if (!advisory) return undefined;
 		const method = installers.data?.find((plan) => plan.agentId === agentId)?.methods.find((candidate) => candidate.id === maintenanceMethodId(advisory));
 		const needsLogin = needsHarnessLogin(authPlans.data?.find((plan) => plan.agentId === agentId), readinessById.get(agentId)?.authentication.state);
-		if (!method?.available || !method.updateAvailable || needsLogin) return [];
+		if (!method?.available || !method.updateAvailable || needsLogin) return undefined;
 		const key = harnessUpdateNoticeKey(agentId, advisory.latestVersion!);
-		return dismissed.has(key) ? [] : [{ agentId, advisory, key }];
+		return dismissed.has(key) ? undefined : { advisory, key };
+	};
+	// Only an update the person can make: someone who may not change AO
+	// Cloud's version never sees one.
+	const cloudUpdate = (agentId: AgentId) => {
+		if (!CLOUD_VERSIONED_HARNESSES.has(agentId)) return undefined;
+		const current = describeCloudHarness(cloud.data, agentId);
+		const details = current?.actionable ? current : cloudErrors[agentId] ? failedCloudUpdates.current.get(agentId) : undefined;
+		if (!details?.latestVersion) return undefined;
+		const key = harnessUpdateNoticeKey(agentId, details.latestVersion, CLOUD_HARNESS_HOST);
+		return dismissed.has(key) ? undefined : { details, key };
+	};
+	const updates = AGENT_OPTIONS.flatMap((agentId) => {
+		const local = localUpdate(agentId);
+		const cloudTarget = cloudUpdate(agentId);
+		if (!local && !cloudTarget) return [];
+		return [{ agentId, advisory: local?.advisory, key: local?.key ?? cloudTarget!.key, keys: [local?.key, cloudTarget?.key].filter((key): key is string => Boolean(key)), cloud: cloudTarget?.details }];
 	}).sort((left, right) => {
 		const a = readinessById.get(left.agentId);
 		const b = readinessById.get(right.agentId);
@@ -201,7 +258,10 @@ export function HarnessUpdateNotice({ enabled }: { enabled: boolean }) {
 	};
 	const isExpanded = expanded && updates.length > 1;
 	const ready = !authPlans.isPending && !authPlans.isError && !installers.isPending && !installers.isError && !jobs.isPending && !jobs.isError;
+	const cloudUpdateAllTargets = updates.flatMap(({ agentId, advisory, cloud: details }) =>
+		details?.actionable && !cloudStarting.has(agentId) ? [{ agentId, details, alone: !advisory }] : []);
 	const updateAllTargets = ready ? updates.flatMap(({ agentId, advisory }) => {
+		if (!advisory) return [];
 		const method = installers.data?.find((plan) => plan.agentId === agentId)?.methods.find((candidate) => candidate.id === maintenanceMethodId(advisory));
 		const needsLogin = needsHarnessLogin(authPlans.data?.find((plan) => plan.agentId === agentId), readinessById.get(agentId)?.authentication.state);
 		if (!method?.available || !method.updateAvailable || needsLogin || starting.has(agentId) || settling.has(agentId)
@@ -215,6 +275,8 @@ export function HarnessUpdateNotice({ enabled }: { enabled: boolean }) {
 		setExpanded(true);
 		setUpdateAllSummary(null);
 		let started = 0;
+		// AO Cloud's side only saves a release, so it never waits on a session.
+		for (const target of cloudUpdateAllTargets) void startCloudUpdate(target.agentId, target.details, target.alone);
 		try {
 			// Each notice keeps its existing target/owner recheck and error display.
 			for (const target of targets) {
@@ -235,7 +297,7 @@ export function HarnessUpdateNotice({ enabled }: { enabled: boolean }) {
 	};
 	// Harnesses whose sessions must end first are skipped and named in the summary.
 	const startAllUpdates = () => {
-		if (updateAllInFlight.current || updateAllTargets.length === 0) return;
+		if (updateAllInFlight.current || (updateAllTargets.length === 0 && cloudUpdateAllTargets.length === 0)) return;
 		const skipped: Array<{ agentId: AgentId; count: number }> = [];
 		const runnable = updateAllTargets.filter(({ agentId, advisory }) => {
 			const sessions = advisoryInUse(advisory);
@@ -251,26 +313,28 @@ export function HarnessUpdateNotice({ enabled }: { enabled: boolean }) {
 	// unavailable action.
 	const updateAllButton = <Button type="button" size="sm" className={cn("min-w-20 shrink-0", startingAll && "disabled:opacity-100")}
 		aria-busy={startingAll || undefined}
-		disabled={startingAll || updateAllTargets.length === 0} onClick={() => void startAllUpdates()}>
+		disabled={startingAll || (updateAllTargets.length === 0 && cloudUpdateAllTargets.length === 0)} onClick={() => void startAllUpdates()}>
 		{startingAll ? <LoaderCircle className="size-icon-2xs animate-spin" aria-hidden="true" /> : null}
 		<span>{startingAll ? t("settings.harness.startingAllUpdates")
 			: t("settings.harness.updateAll")}</span>
 	</Button>;
 	const help = t("settings.harness.updateNoticeHelp");
-	const updateItem = ({ agentId, advisory, key }: (typeof updates)[number], variant: "card" | "row") => {
+	const updateItem = ({ agentId, advisory, key, keys, cloud: cloudDetails }: (typeof updates)[number], variant: "card" | "row") => {
 		const plan = installers.data?.find((candidate) => candidate.agentId === agentId);
 		const job = jobFor(agentId);
-		const method = plan?.methods.find((candidate) => candidate.id === maintenanceMethodId(advisory));
+		const method = advisory ? plan?.methods.find((candidate) => candidate.id === maintenanceMethodId(advisory)) : undefined;
 		const authPlan = authPlans.data?.find((candidate) => candidate.agentId === agentId);
-		const needsLogin = needsHarnessLogin(authPlan, readinessById.get(agentId)?.authentication.state);
-		const canUpdate = Boolean(method?.available && method.updateAvailable);
-		const busy = isActiveInstallJob(job) || starting.has(agentId) || settling.has(agentId);
+		const needsLogin = Boolean(advisory) && needsHarnessLogin(authPlan, readinessById.get(agentId)?.authentication.state);
+		const canUpdate = Boolean(method?.available && method.updateAvailable) || Boolean(cloudDetails?.actionable);
+		const busy = isActiveInstallJob(job) || starting.has(agentId) || settling.has(agentId) || cloudStarting.has(agentId);
 		// A job this notice started that failed stays explained here.
 		const failed = startedJobs.current.has(agentId) && isFailedInstallJob(job);
-		const error = errors[agentId] ?? (failed ? job?.error || t("settings.harness.updateJobFailed") : undefined);
+		const error = errors[agentId] ?? (failed ? job?.error || t("settings.harness.updateJobFailed") : undefined) ?? cloudErrors[agentId];
 		// A start error means this attempt made no job; any retained job is an older one.
 		const failedJobStartedAt = errors[agentId] === undefined && failed ? job?.startedAt ?? undefined : undefined;
 		const requestAction = () => {
+			if (cloudDetails?.actionable) void startCloudUpdate(agentId, cloudDetails, !advisory);
+			if (!advisory) return;
 			if (!needsLogin && method) {
 				void startUpdate(agentId, advisory, method.id);
 				return;
@@ -278,27 +342,38 @@ export function HarnessUpdateNotice({ enabled }: { enabled: boolean }) {
 			// A login runs in a terminal on the Harness page, which starts it once on open.
 			openSettings("harness", { focusAgentId: agentId, harnessView: "local", preserveProject: true, startLogin: true });
 		};
-		return <SwipeCard key={key} variant={variant} label={agentLabel(agentId)} onDismiss={() => dismiss(key)}
+		// Which places one Update covers, with each one's versions on hover.
+		const targets = cloudDetails ? <Tooltip>
+			<TooltipTrigger asChild>
+				<p tabIndex={0} className="mt-1 w-fit text-caption text-muted-foreground">{advisory ? t("settings.harness.cloud.targetBoth", { host: t("settings.harness.thisComputer") }) : t("settings.harness.cloud.label")}</p>
+			</TooltipTrigger>
+			<TooltipContent side="top" className="max-w-64">{advisory
+				? t("settings.harness.cloud.targetVersions", { host: t("settings.harness.thisComputer"), local: versionLabel(advisory.currentVersion!), localLatest: versionLabel(advisory.latestVersion!), cloud: versionLabel(cloudDetails.currentVersion), cloudLatest: versionLabel(cloudDetails.latestVersion!) })
+				: t("settings.harness.cloud.versionAvailable", { version: versionLabel(cloudDetails.latestVersion!) })}</TooltipContent>
+		</Tooltip> : null;
+		const versions = advisory ? <VersionChange from={advisory.currentVersion!} to={advisory.latestVersion!} /> : <VersionChange from={cloudDetails!.currentVersion} to={cloudDetails!.latestVersion!} />;
+		return <SwipeCard key={key} variant={variant} label={agentLabel(agentId)} onDismiss={() => dismiss(...keys)}
 			dismissLabel={t("settings.harness.dismissAgentUpdate", { agent: agentLabel(agentId) })}
 			icon={<AgentAvatar className="size-icon-xl shrink-0" decorative provider={agentId} />}
 			title={variant === "row" ? agentLabel(agentId) : t("settings.harness.updateCardTitle", { agent: agentLabel(agentId) })}
 			help={variant === "card" ? help : undefined}>
+			{targets}
 			<div className="mt-2 flex items-center gap-2">
-				<VersionChange from={advisory.currentVersion!} to={advisory.latestVersion!} />
+				{versions}
 				{/* One width for every label, so Updating… never pushes the versions around. */}
 				{busy ? <Button size="sm" variant="secondary" className="min-w-20 disabled:opacity-100" aria-busy="true" disabled><LoaderCircle className="size-icon-2xs animate-spin" aria-hidden="true" />{t("settings.harness.updating")}</Button>
-				: ready && ((needsLogin && authPlan?.available) || (!needsLogin && canUpdate)) ? <Button size="sm" className="min-w-20" disabled={startingAll} onClick={requestAction}>{needsLogin ? t(authPlan?.action === "setup" ? "settings.harness.setup" : "settings.harness.login")
+				: (ready || !advisory) && ((needsLogin && authPlan?.available) || (!needsLogin && canUpdate)) ? <Button size="sm" className="min-w-20" disabled={startingAll} onClick={requestAction}>{needsLogin ? t(authPlan?.action === "setup" ? "settings.harness.setup" : "settings.harness.login")
 					: t(error ? "settings.harness.retryUpdate" : "settings.harness.update")}</Button>
-				: ready && !needsLogin && plan?.documentationUrl ? <Tooltip>
-					<TooltipTrigger asChild><Button size="sm" variant="outline" onClick={() => void aoBridge.app.openExternal(plan.documentationUrl)}>{t("settings.harness.manualUpdate")}</Button></TooltipTrigger>
+				: ready && advisory && !needsLogin && plan?.documentationUrl ? <Tooltip>
+					<TooltipTrigger asChild><Button size="sm" variant="secondary" onClick={() => void aoBridge.app.openExternal(plan.documentationUrl)}>{t("settings.harness.manualUpdate")}</Button></TooltipTrigger>
 					<TooltipContent side="top" className="max-w-64">{method?.updateReason || t("settings.harness.ownershipUnknown")}</TooltipContent>
 				</Tooltip>
-				: <Button size="sm" variant="outline" onClick={() => openSettings("harness", { focusAgentId: agentId, harnessView: "local", preserveProject: true })}>{t("settings.harness.viewDetails")}</Button>}
+				: <Button size="sm" variant="secondary" onClick={() => openSettings("harness", { focusAgentId: agentId, harnessView: "local", preserveProject: true })}>{t("settings.harness.viewDetails")}</Button>}
 			</div>
 			{/* One click to the Harness page with this failure's diagnostics open, ready to copy. */}
 			{error && !busy ? <div className="mt-2 flex flex-col items-start gap-1.5">
 				<p role="alert" className="line-clamp-3 break-words text-caption text-error">{error}</p>
-				<Button type="button" size="sm" variant="outline" onClick={() => openSettings("harness", { focusAgentId: agentId, harnessView: "local", preserveProject: true, showDiagnostics: { jobStartedAt: failedJobStartedAt, error } })}>{t("settings.harness.showDiagnostics")}</Button>
+				<Button type="button" size="sm" variant="secondary" onClick={() => openSettings("harness", { focusAgentId: agentId, harnessView: "local", preserveProject: true, showDiagnostics: { jobStartedAt: failedJobStartedAt, error } })}>{t("settings.harness.showDiagnostics")}</Button>
 			</div> : null}
 		</SwipeCard>;
 	};
@@ -317,7 +392,7 @@ export function HarnessUpdateNotice({ enabled }: { enabled: boolean }) {
 		<p className="mt-2 text-caption text-muted-foreground">{t("settings.harness.updatedTo", { version: friendlyVersion(version, i18n.resolvedLanguage ?? i18n.language) })}</p>
 	</SwipeCard>);
 	const stackTitle = t("settings.harness.updateStackTitle", { count: updates.length });
-	const dismissAll = () => dismiss(...updates.map((update) => update.key));
+	const dismissAll = () => dismiss(...updates.flatMap((update) => update.keys));
 	// Portaled to the end of <body>: Electron applies window drag regions in DOM
 	// order, so a later drag strip (the home page's) would otherwise override no-drag.
 	return createPortal(<NoticeFrame label={t("settings.harness.updateNoticeTitle")}>
@@ -333,7 +408,7 @@ export function HarnessUpdateNotice({ enabled }: { enabled: boolean }) {
 			help={updateAllSummary && !startingAll ? updateAllSummary : help}
 			footer={<>
 				{/* The list toggle keeps one place, opposite Update all, whichever way it points. */}
-				<Button type="button" size="sm" variant="outline" className="shrink-0" aria-expanded={isExpanded} aria-controls={stackId}
+				<Button type="button" size="sm" variant="secondary" className="shrink-0" aria-expanded={isExpanded} aria-controls={stackId}
 					onClick={() => setExpanded(!isExpanded)}>
 					{isExpanded ? t("settings.harness.hideUpdateStack") : t("settings.harness.showUpdateStack", { count: updates.length })}
 					<ChevronDown className={cn("size-icon-2xs transition-transform duration-200 motion-reduce:transition-none", isExpanded && "rotate-180")} aria-hidden="true" />

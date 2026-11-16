@@ -33,7 +33,7 @@ var mcpProtocolVersions = []string{mcpDefaultProtocolVersion, "2025-03-26", "202
 func newMCPCommand(ctx *commandContext) *cobra.Command {
 	return &cobra.Command{
 		Use:    "mcp",
-		Short:  "Serve AO's chat tools over stdio MCP (internal)",
+		Short:  "Serve Orchestrator's chat tools over stdio MCP (internal)",
 		Hidden: true,
 		Args:   noArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {
@@ -237,10 +237,10 @@ const (
 		`is put into the page: PNG, JPEG, GIF, WebP, AVIF, SVG, BMP, or ICO, up to 10 MiB each.`
 	mcpLayoutGuide = `The frame is borderless on the thread background, as wide as the reply column, and its left edge lines up with your text. ` +
 		`Use a fluid width with no outer padding, card, border, or banner title: the page is part of your reply. ` +
-		`An expanded page opens in a dialog up to 1024 px wide that fits its height, and AO centers a top-level block that has a maximum width. ` +
+		`An expanded page opens in a dialog up to 1024 px wide that fits its height, and Orchestrator centers a top-level block that has a maximum width. ` +
 		`Give charts fixed pixel heights. Do not size html or body with 100vh or height: 100%; the frame grows to fit the page, and viewport heights make it grow again. ` +
-		`Scripts run in a sandbox with no access to AO, cookies, or storage. Links open in the user's browser.`
-	mcpThemeGuide = `AO injects its active theme as CSS custom properties on :root, and they follow light/dark mode live: ` +
+		`Scripts run in a sandbox with no access to Orchestrator, cookies, or storage. Links open in the user's browser.`
+	mcpThemeGuide = `Orchestrator injects its active theme as CSS custom properties on :root, and they follow light/dark mode live: ` +
 		`--background (identical to the thread), --foreground, --muted, --muted-foreground, --card, --card-foreground, --popover, ` +
 		`--border, --border-strong, --primary, --primary-foreground, --accent, --accent-foreground, --success, --warning, ` +
 		`--destructive, --code, --link, --chart-1 ... --chart-6 (categorical series), --radius, --font-sans, --font-mono. ` +
@@ -257,10 +257,10 @@ var mcpTools = []map[string]any{
 	{
 		"name":  "html_preview",
 		"title": "Preview HTML",
-		"description": "Load an HTML page in the AO desktop app the way readers see it. Returns a PNG screenshot, " +
+		"description": "Load an HTML page in the Orchestrator desktop app the way readers see it. Returns a PNG screenshot, " +
 			"contentHeight (the height the page needs at this width), and the page's console messages. " +
 			"Call it before html_render. Read the screenshot, and fix every console error. " +
-			"The check needs the AO desktop app; without it, publish without a check. " +
+			"The check needs the Orchestrator desktop app; without it, publish without a check. " +
 			mcpPageRules + " The page gets the theme variables and layout described in html_render.",
 		"inputSchema": map[string]any{
 			"type": "object",
@@ -283,7 +283,7 @@ var mcpTools = []map[string]any{
 		"description": "Show a finished HTML page (chart, table, diagram, image collage, mockup) inline in this chat thread, " +
 			"above your final reply. Preview it with html_preview first, then call this before you write the reply. " +
 			"The reader already sees the page, so the reply must not announce it, say where it is, or restate it: " +
-			"add only what the page does not say. Use this tool, not a built-in visualize skill: AO does not show those. " +
+			"add only what the page does not say. Use this tool, not a built-in visualize skill: Orchestrator does not show those. " +
 			mcpPageRules + " " + mcpLayoutGuide + " " + mcpThemeGuide,
 		"inputSchema": map[string]any{
 			"type": "object",
@@ -294,13 +294,14 @@ var mcpTools = []map[string]any{
 				},
 				"height": map[string]any{
 					"type": "integer", "minimum": 80, "maximum": 2000,
-					"description": "Frame height in CSS pixels, 80-2000; defaults to 400. AO measures the page when " +
+					"description": "Frame height in CSS pixels, 80-2000; defaults to 400. Orchestrator measures the page when " +
 						"you publish it, so this is used only when the desktop app is not running. The frame then fits the page.",
 				},
 				"artifact": map[string]any{
 					"type": "boolean",
 					"description": "Also keep the page as a session artifact, a deliverable the user keeps. " +
-						"Set it only when the user asks to keep the page.",
+						"Set it only when the user asks to keep the page, then run ao artifact add on the path this " +
+						"returns, or the page may not be listed as an artifact.",
 				},
 			},
 			"required": []string{"html", "title"},

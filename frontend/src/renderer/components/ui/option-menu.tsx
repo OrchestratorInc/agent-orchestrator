@@ -1,7 +1,8 @@
 import { createContext, forwardRef, useCallback, useContext, useRef, useState, type ButtonHTMLAttributes } from "react";
-import { ChevronDown, ChevronRight } from "lucide-react";
+import { ChevronDown, ChevronRight } from "@/components/app-icons";
 import { DropdownMenu as DropdownMenuPrimitive } from "radix-ui";
 import { cn } from "../../lib/utils";
+import { GHOST_PILL_CLASS } from "./button";
 import { ShieldOutsideClick, skipFocusHopToSibling, swallowClickAfter } from "./menu-focus";
 
 const SURFACE =
@@ -20,9 +21,12 @@ const LABEL =
  * same control: a visual tweak here should never need making twice.
  */
 export const MENU_TRIGGER_CHROME =
-	"settings-option-trigger max-w-full min-w-0 bg-[var(--color-bg-settings-trigger)] text-[var(--color-text-settings-trigger)] hover:bg-[var(--color-bg-settings-trigger-hover)] hover:text-[var(--color-text-settings-trigger)] data-[state=open]:bg-[var(--color-bg-settings-trigger-hover)] focus:outline-none focus-visible:outline-none focus-visible:ring-0 data-[state=open]:outline-none data-[state=open]:ring-0 disabled:cursor-not-allowed disabled:opacity-50";
+	"settings-option-trigger button-raised max-w-full min-w-0 border [--button-color:var(--secondary)] text-secondary-foreground motion-reduce:transition-none disabled:cursor-not-allowed disabled:opacity-50";
 
-const TRIGGER = cn("group/option-menu-trigger", MENU_TRIGGER_CHROME);
+export const MENU_GHOST_TRIGGER_CHROME = cn(
+	"settings-option-trigger max-w-full min-w-0 border-0 text-foreground motion-reduce:transition-none disabled:cursor-not-allowed disabled:opacity-50",
+	GHOST_PILL_CLASS,
+);
 const CloseSubmenu = createContext<(() => void) | undefined>(undefined);
 
 // ---------------------------------------------------------------------------
@@ -49,11 +53,11 @@ export function OptionMenu({ modal, ...props }: React.ComponentProps<typeof Drop
 
 export const OptionMenuTrigger = forwardRef<
 	HTMLButtonElement,
-	ButtonHTMLAttributes<HTMLButtonElement> & { showCaret?: boolean }
->(function OptionMenuTrigger({ className, children, showCaret = true, ...props }, ref) {
+	ButtonHTMLAttributes<HTMLButtonElement> & { showCaret?: boolean; variant?: "secondary" | "ghost" }
+>(function OptionMenuTrigger({ className, children, showCaret = true, variant = "secondary", ...props }, ref) {
 	return (
 		<DropdownMenuPrimitive.Trigger asChild>
-			<button ref={ref} type="button" className={cn(TRIGGER, className)} {...props}>
+			<button ref={ref} type="button" className={cn("group/option-menu-trigger", variant === "ghost" ? MENU_GHOST_TRIGGER_CHROME : MENU_TRIGGER_CHROME, className)} {...props}>
 				{children}
 				{showCaret ? (
 					<ChevronDown

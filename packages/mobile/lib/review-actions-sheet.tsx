@@ -7,6 +7,7 @@ import { rowDividerWidth } from "./divider";
 import { ItemActionsMenu } from "./item-actions-menu";
 import type { ExternalReviewerRow, ReviewActionsSheetProps, ReviewFeedbackItem, ReviewPolicyRow } from "./review-actions-sheet.types";
 import { ReviewerPicker } from "./reviewer-picker";
+import { reviewerSectionFooter } from "./reviewer-picker.types";
 import type { Theme } from "./theme";
 import { useTheme, useThemedStyles, useThemeState } from "./ThemeProvider";
 import { materialDrawable } from "./toolbarIcon.android";
@@ -30,7 +31,7 @@ export function ReviewActionsSheet({ subtitle, alerts, policies, locked, onPolic
 					{policies.map((policy) => <PolicyItem key={policy.key} policy={policy} locked={locked} onChange={onPolicyChange} />)}
 				</MaterialList>
 			</Section>
-			<Section title="Orchestrator reviewer" footer="Choose who runs the next Orchestrator review and which model it uses.">
+			<Section title="Orchestrator reviewer" footer={reviewerSectionFooter(reviewer)}>
 				{reviewer
 					? <MaterialList><ReviewerPicker {...reviewer} /></MaterialList>
 					: <Text style={styles.empty}>No reviewer agents are available. Install or sign in to an agent on desktop.</Text>}

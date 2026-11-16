@@ -1,10 +1,11 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { act, render, screen } from "@testing-library/react";
+import { act, fireEvent, render, screen } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { aoBridge } from "../lib/bridge";
 import { artifactPathUnder, CloudArtifactFrame } from "./CloudArtifactFrame";
 
-vi.mock("../lib/cloud-cp/renderer-client", () => ({ cloudCpFetch: async () => new Response(null, { status: 200 }) }));
+const mocks = vi.hoisted(() => ({ status: 200 }));
+vi.mock("../lib/cloud-cp/renderer-client", () => ({ cloudCpFetch: async () => new Response(null, { status: mocks.status }) }));
 
 const ROOT = "https://cp.test/api/cloud/v1/artifact-files/token/";
 
@@ -12,6 +13,7 @@ describe("CloudArtifactFrame", () => {
 	let navigate: (navigation: { url: string; status: number }) => void = () => {};
 
 	beforeEach(() => {
+		mocks.status = 200;
 		vi.spyOn(aoBridge.cloudArtifact, "onFrameNavigated").mockImplementation((listener) => {
 			navigate = listener;
 			return () => undefined;
@@ -25,6 +27,38 @@ describe("CloudArtifactFrame", () => {
 			</QueryClientProvider>,
 		);
 	}
+
+	it("frames a remote host's page after a plain GET to its proxy, and shows a refusal as an error, not a link to renew", async () => {
+		const proxied = "http://ao-preview-abc123.localhost:4100/page.html?raw=true";
+		// The host's file route is GET-only, as on a real host: a HEAD is refused.
+		const head = vi.fn(async (_url: string, init?: RequestInit) => new Response(null, { status: init?.method === "HEAD" ? 405 : 200 }));
+		vi.stubGlobal("fetch", head);
+		try {
+			const onAccessRefused = vi.fn();
+			const ok = render(
+				<QueryClientProvider client={new QueryClient()}>
+					<CloudArtifactFrame onAccessRefused={onAccessRefused} source="host" title="page.html" url={proxied} />
+				</QueryClientProvider>,
+			);
+			const frame = await screen.findByTitle("page.html");
+			expect(frame).toHaveAttribute("src", proxied);
+			expect(frame).toHaveAttribute("sandbox", "allow-scripts allow-forms");
+			expect(head).toHaveBeenCalledWith(proxied, expect.objectContaining({ cache: "no-store" }));
+			expect(head.mock.calls.some(([, init]) => init?.method === "HEAD")).toBe(false);
+			ok.unmount();
+			head.mockImplementation(async () => new Response(null, { status: 403 }));
+			render(
+				<QueryClientProvider client={new QueryClient()}>
+					<CloudArtifactFrame onAccessRefused={onAccessRefused} source="host" title="page.html" url={proxied} />
+				</QueryClientProvider>,
+			);
+			expect(await screen.findByRole("button", { name: /retry/i })).toBeInTheDocument();
+			expect(onAccessRefused).not.toHaveBeenCalled();
+			expect(document.querySelector("iframe")).toBeNull();
+		} finally {
+			vi.unstubAllGlobals();
+		}
+	});
 
 	it("reports another file of its session that the page opened", async () => {
 		const onNavigate = vi.fn();
@@ -42,6 +76,30 @@ describe("CloudArtifactFrame", () => {
 		act(() => navigate({ url: `${ROOT}page.html`, status: 401 }));
 		expect(onAccessRefused).toHaveBeenCalledTimes(1);
 		expect(onNavigate).toHaveBeenCalledWith("page.html");
+	});
+
+	it("tells a thumbnail's card whether the page is loading, framed, or replaced by the fallback", async () => {
+		const renderThumbnail = (onThumbnailState: (state: string) => void) => render(
+			<QueryClientProvider client={new QueryClient()}>
+				<CloudArtifactFrame title="index.html" url={`${ROOT}index.html?v=1`} onThumbnailState={onThumbnailState} thumbnail={{ width: 200, fallback: <span>fallback icon</span> }} />
+			</QueryClientProvider>,
+		);
+		const framed: string[] = [];
+		const first = renderThumbnail((state) => framed.push(state));
+		const frame = await screen.findByTitle("index.html");
+		// Framed but not loaded yet: the card keeps waiting.
+		expect(framed.at(-1)).toBe("loading");
+		fireEvent.load(frame);
+		await vi.waitFor(() => expect(framed.at(-1)).toBe("ready"));
+		expect(framed[0]).toBe("loading");
+		first.unmount();
+		mocks.status = 403;
+		const refused: string[] = [];
+		renderThumbnail((state) => refused.push(state));
+		// The fallback shows while the status is pending too, so wait for the state itself.
+		await vi.waitFor(() => expect(refused.at(-1)).toBe("failed"));
+		expect(refused[0]).toBe("loading");
+		expect(screen.getByText("fallback icon")).toBeTruthy();
 	});
 
 	it("ignores frames of other sessions", async () => {

@@ -29,7 +29,28 @@ export function terminalFontSizeDelta(chord: ShortcutChord, isMac: boolean): -1 
 	return 0;
 }
 
+/** The renderer reports whether an artifact viewer that can zoom is under the pointer or holds focus. */
+export const SET_ARTIFACT_ZOOM_ENGAGED_CHANNEL = "artifactZoom:setEngaged";
+/** Main sends the zoom chord it claimed for an engaged artifact viewer. */
+export const ARTIFACT_ZOOM_SHORTCUT_CHANNEL = "artifactZoom:shortcut";
+export type ArtifactZoomAction = "in" | "out" | "reset";
+
+/**
+ * The artifact zoom a chord asks for: Cmd+= / Cmd+- / Cmd+0 on macOS, Ctrl
+ * elsewhere, the same chords as the app's View zoom.
+ */
+export function artifactZoomAction(chord: Pick<ShortcutChord, "alt" | "code" | "ctrl" | "key" | "meta">, isMac: boolean): ArtifactZoomAction | undefined {
+	const hasPrimaryModifier = isMac ? chord.meta && !chord.ctrl : chord.ctrl && !chord.meta;
+	if (!hasPrimaryModifier || chord.alt) return undefined;
+	if (chord.key === "=" || chord.key === "+" || chord.code === "NumpadAdd") return "in";
+	if (chord.key === "-" || chord.key === "_" || chord.code === "NumpadSubtract") return "out";
+	if (chord.key === "0" || chord.code === "Numpad0") return "reset";
+	return undefined;
+}
+
 export type AppShortcutId =
+	| "find-in-chat"
+	| "add-selection-to-chat"
 	| "new-session"
 	| "new-shell-terminal"
 	| "close-shell-terminal"
@@ -92,6 +113,8 @@ export function isSplitPaneShortcut(id: AppShortcutId): boolean {
 // The user-facing shortcut catalog. Bindings live exclusively in
 // defaultShortcutBindings so runtime matching and displayed labels cannot drift.
 export const APP_SHORTCUTS: readonly ShortcutDefinition[] = [
+	{ id: "find-in-chat", label: "Find in chat", category: "Session" },
+	{ id: "add-selection-to-chat", label: "Add selection to chat", category: "Session" },
 	{ id: "new-session", label: "New session", category: "General" },
 	{ id: "command-palette", label: "Open command palette", category: "General" },
 	{ id: "quick-open-file", label: "Quick open file", category: "General" },
@@ -139,6 +162,10 @@ const binding = (
 export function defaultShortcutBindings(id: AppShortcutId, isMac: boolean): readonly ShortcutBinding[] {
 	const primary = isMac ? { meta: true } : { ctrl: true };
 	switch (id) {
+		case "find-in-chat":
+			return [binding("f", primary)];
+		case "add-selection-to-chat":
+			return [binding("l", primary)];
 		case "new-session":
 			return [isMac ? binding("n", { meta: true }) : binding("n", { ctrl: true, shift: true })];
 		// Plain Ctrl+T/W/B are readline/fzf/tmux keys, so on Windows/Linux they
@@ -340,6 +367,7 @@ const YIELDS_TO_FOCUSED_TERMINAL: ReadonlySet<AppShortcutId> = new Set<AppShortc
 
 /** True when `chord` for `id` must reach a focused terminal instead (Windows/Linux only). */
 export function shortcutYieldsToTerminal(id: AppShortcutId, chord: ShortcutChord): boolean {
+	if (id === "find-in-chat" || id === "add-selection-to-chat") return true;
 	return YIELDS_TO_FOCUSED_TERMINAL.has(id) && !chord.shift && !chord.meta && chord.ctrl !== chord.alt;
 }
 
@@ -385,6 +413,70 @@ export function shortcutBindingKeys(binding: ShortcutBinding, isMac: boolean): r
 export function shortcutBindingLabel(binding: ShortcutBinding, isMac: boolean): string {
 	return shortcutBindingKeys(binding, isMac).join(isMac ? "" : "+");
 }
+
+const ACCELERATOR_KEYS: Record<string, string> = {
+	ArrowUp: "Up",
+	ArrowDown: "Down",
+	ArrowLeft: "Left",
+	ArrowRight: "Right",
+	" ": "Space",
+	"+": "Plus",
+	Enter: "Return",
+	Escape: "Escape",
+	Tab: "Tab",
+	PageUp: "PageUp",
+	PageDown: "PageDown",
+	Backspace: "Backspace",
+	Delete: "Delete",
+	Home: "Home",
+	End: "End",
+};
+
+function acceleratorKey(binding: ShortcutBinding): string | undefined {
+	const named = ACCELERATOR_KEYS[binding.key];
+	if (named) return named;
+	if (/^[\x21-\x7e]$/.test(binding.key)) return binding.key.toUpperCase();
+	if (/^F([1-9]|1[0-9]|2[0-4])$/.test(binding.key)) return binding.key;
+	// ⌥-letter bindings record the typed character ("∫"); the physical key names it.
+	return binding.code?.match(/^(?:Key|Digit)([A-Z0-9])$/)?.[1];
+}
+
+/** The Electron accelerator for a binding, or undefined when it has none (the 1-9 family). */
+export function shortcutBindingAccelerator(binding: ShortcutBinding): string | undefined {
+	const key = acceleratorKey(binding);
+	if (!key) return undefined;
+	return [binding.ctrl && "Control", binding.alt && "Alt", binding.shift && "Shift", binding.meta && "Command", key]
+		.filter(Boolean)
+		.join("+");
+}
+
+// Top bar commands that have a native menu item (macOS). Most are shortcuts and
+// travel on their shortcut channel; the two with no chord use the action channel.
+export const APP_MENU_COMMAND_IDS = [
+	"new-session",
+	"new-shell-terminal",
+	"open-in-editor",
+	"open-in-file-manager",
+	"archive-session",
+	"toggle-sidebar",
+	"toggle-inspector",
+	"history-back",
+	"history-forward",
+	"open-orchestrator",
+	"toggle-notifications",
+] as const satisfies readonly (AppShortcutId | "open-in-file-manager" | "toggle-notifications")[];
+export type AppMenuCommandId = (typeof APP_MENU_COMMAND_IDS)[number];
+export type AppMenuActionId = Exclude<AppMenuCommandId, AppShortcutId>;
+export type AppMenuAvailability = Partial<Record<AppMenuCommandId, boolean>>;
+
+export function isAppMenuActionId(id: AppMenuCommandId): id is AppMenuActionId {
+	return id === "open-in-file-manager" || id === "toggle-notifications";
+}
+
+/** The renderer reports which menu commands apply to what is on screen. */
+export const SET_APP_MENU_AVAILABILITY_CHANNEL = "app:set-menu-availability";
+/** Main delivers a menu command that has no shortcut. */
+export const APP_MENU_ACTION_CHANNEL = "app:menu-action";
 
 // IPC channel the main process uses to tell the renderer shell to open the New
 // Task flow. Lives here (not in main/) so the main process, preload, and

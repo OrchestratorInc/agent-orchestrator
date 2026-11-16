@@ -377,7 +377,7 @@ describe("model reroute", () => {
 		expect(screen.queryByLabelText(/Substituted for/)).not.toBeInTheDocument();
 	});
 
-	it("carries the provider's own reason", () => {
+	it("leaves the reroute out of the timeline", () => {
 		render(
 			<ChatWorkspace
 				snapshot={chatFixtureRerouted}
@@ -389,8 +389,9 @@ describe("model reroute", () => {
 			fireEvent.click(trigger);
 		}
 		expect(
-			screen.getByText(/The requested model is at capacity for this account tier/),
-		).toBeInTheDocument();
+			screen.queryByText(/The requested model is at capacity for this account tier/),
+		).not.toBeInTheDocument();
+		expect(screen.queryByText(/Answered by/)).not.toBeInTheDocument();
 	});
 
 	it("keeps naming the chosen model when nothing was substituted", () => {
