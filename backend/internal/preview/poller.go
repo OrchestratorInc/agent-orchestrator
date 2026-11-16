@@ -14,7 +14,7 @@ import (
 const DefaultPollInterval = 250 * time.Millisecond
 
 type sessionPreviewSource interface {
-	ListAllSessions(ctx context.Context) ([]domain.SessionRecord, error)
+	ListActiveWorkerPreviews(ctx context.Context) ([]domain.SessionPreviewRecord, error)
 }
 
 type previewSetter interface {
@@ -101,20 +101,14 @@ func (p *Poller) Poll(ctx context.Context) error {
 	if p.source == nil || p.setter == nil {
 		return nil
 	}
-	sessions, err := p.source.ListAllSessions(ctx)
+	sessions, err := p.source.ListActiveWorkerPreviews(ctx)
 	if err != nil {
 		return fmt.Errorf("preview poller list sessions: %w", err)
 	}
 	activeIDs := make(map[domain.SessionID]struct{}, len(sessions))
 	for _, sess := range sessions {
-		if sess.IsTerminated {
-			continue
-		}
 		activeIDs[sess.ID] = struct{}{}
-		if sess.Kind != domain.KindWorker {
-			continue
-		}
-		storedEntry, workspaceOwned := StoredWorkspaceEntry(sess.Metadata.PreviewURL, sess.ID)
+		storedEntry, workspaceOwned := StoredWorkspaceEntry(sess.PreviewURL, sess.ID)
 		previous, seenBefore := p.seen[sess.ID]
 		restoringCleared := false
 		if !workspaceOwned {
@@ -128,7 +122,7 @@ func (p *Poller) Poll(ctx context.Context) error {
 			workspaceOwned = true
 			restoringCleared = true
 		}
-		entry, ok := EntryAtPath(sess.Metadata.WorkspacePath, storedEntry)
+		entry, ok := EntryAtPath(sess.WorkspacePath, storedEntry)
 		if !ok {
 			if workspaceOwned {
 				if !restoringCleared {
@@ -168,11 +162,11 @@ func (p *Poller) Poll(ctx context.Context) error {
 	return nil
 }
 
-func (p *Poller) shouldRefresh(sess domain.SessionRecord, target string, seenBefore, workspaceOwned bool) bool {
-	current := strings.TrimSpace(sess.Metadata.PreviewURL)
+func (p *Poller) shouldRefresh(sess domain.SessionPreviewRecord, target string, seenBefore, workspaceOwned bool) bool {
+	current := strings.TrimSpace(sess.PreviewURL)
 	if current == "" {
 		if !seenBefore {
-			return sess.Metadata.PreviewRevision == 0
+			return sess.PreviewRevision == 0
 		}
 		previous := p.seen[sess.ID]
 		return previous.cleared
