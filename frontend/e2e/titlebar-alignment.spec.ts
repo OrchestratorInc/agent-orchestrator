@@ -96,7 +96,10 @@ async function floatingBarControls(page: Page) {
 		];
 		const controls = [...shell.querySelectorAll<HTMLElement>(selectors.join(","))]
 			.map((element) => ({ label: element.getAttribute("aria-label") ?? element.textContent?.trim() ?? element.tagName, box: element.getBoundingClientRect() }))
-			.filter(({ box }) => box.width > 0 && box.height > 0 && box.bottom <= frameTop)
+			// Controls that start below the frame belong to the panel (e.g. the
+			// Browser panel's own tab row). One that starts in the bar but runs past
+			// the frame stays in, so its spacing check fails.
+			.filter(({ box }) => box.width > 0 && box.height > 0 && box.top < frameTop)
 			.map(({ label, box }) => ({ label, center: box.top + box.height / 2, above: box.top - 1, below: frameTop - box.bottom }));
 		return { frameTop, controls };
 	});
