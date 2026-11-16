@@ -72,6 +72,8 @@ type repairScanCounts struct {
 	connections, writer, reader               atomic.Int64
 	expireAfterBatch, sessionBatch, committed atomic.Bool
 	fenceRows                                 atomic.Int64
+	beforeVersion                             func() error
+	versionHook                               atomic.Bool
 }
 type repairScanDriver struct {
 	driver.Driver
@@ -98,6 +100,11 @@ func (d repairScanDriver) Open(name string) (driver.Conn, error) {
 	return repairScanConn{sqliteConn: conn, counts: d.counts, writer: d.counts.connections.Add(1) == 1}, nil
 }
 func (c repairScanConn) QueryContext(ctx context.Context, query string, args []driver.NamedValue) (driver.Rows, error) {
+	if c.writer && query == "PRAGMA data_version" && c.counts.beforeVersion != nil && c.counts.versionHook.CompareAndSwap(false, true) {
+		if err := c.counts.beforeVersion(); err != nil {
+			return nil, err
+		}
+	}
 	if c.counts.committed.Load() && strings.Contains(query, `FROM "sessions" `) && strings.HasPrefix(query, "SELECT rowid,") && c.counts.expireAfterBatch.CompareAndSwap(true, false) {
 		rows, err := c.sqliteConn.QueryContext(ctx, `SELECT count(*) FROM sessions WHERE CAST(created_at AS TEXT) GLOB '* +0000 UTC'`, nil)
 		if err != nil {
@@ -264,5 +271,43 @@ func TestTimestampOldWriterWithoutCDCDefersRescan(t *testing.T) {
 				t.Fatalf("rescan pools: reader=%d writer=%d", counts.reader.Load(), counts.writer.Load())
 			}
 		})
+	}
+}
+
+func TestTimestampOldWriterDuringCompletionValidationRescans(t *testing.T) {
+	dir := t.TempDir()
+	db := openMigratedTestDBIn(t, dir)
+	if _, err := db.Exec(`INSERT INTO sessions(id,num,harness,activity_state,activity_last_at,is_terminated,created_at,updated_at) VALUES('validation',1,'aider','idle',CURRENT_TIMESTAMP,0,CURRENT_TIMESTAMP,CURRENT_TIMESTAMP);
+ INSERT INTO session_cleanup_facts(session_id,session_generation,workspace_disposition,next_attempt_at) VALUES('validation',0,'pending','2026-10-21 03:30:00 +0000 UTC')`); err != nil {
+		t.Fatal(err)
+	}
+	done := make(chan struct{})
+	s, err := openWithTimestampOptions(dir, timestampOpenOptions{fenceBudget: 30 * time.Second, repairDone: done})
+	if err != nil {
+		t.Fatal(err)
+	}
+	<-done
+	if err := s.Close(); err != nil {
+		t.Fatal(err)
+	}
+	counts := &repairScanCounts{beforeVersion: func() error {
+		_, err := db.Exec(`UPDATE session_cleanup_facts SET next_attempt_at='2026-10-21 09:00:00 +0530 IST' WHERE session_id='validation'`)
+		return err
+	}}
+	done = make(chan struct{})
+	s, err = openWithTimestampOptions(dir, repairScanOptions(t, counts, done))
+	if err != nil {
+		t.Fatal(err)
+	}
+	<-done
+	if err := s.Close(); err != nil {
+		t.Fatal(err)
+	}
+	var at string
+	if err := db.QueryRow(`SELECT CAST(next_attempt_at AS TEXT) FROM session_cleanup_facts`).Scan(&at); err != nil || at != "2026-10-21 03:30:00 +0000 UTC" {
+		t.Fatalf("old write during completion validation stayed trusted: %q %v", at, err)
+	}
+	if !counts.versionHook.Load() || counts.reader.Load() == 0 {
+		t.Fatal("validation-window write did not cause a reader rescan")
 	}
 }

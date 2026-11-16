@@ -172,11 +172,10 @@ func openWithTimestampOptions(dataDir string, opts timestampOpenOptions) (*Store
 		_ = writeDB.Close()
 		return nil, err
 	}
-	state, repairErr := loadTimestampSkips(context.Background(), readDB)
 	var initialVersion int64
-	if repairErr == nil {
-		repairErr = writeDB.QueryRow(`PRAGMA data_version`).Scan(&initialVersion)
-	}
+	repairErr := writeDB.QueryRow(`PRAGMA data_version`).Scan(&initialVersion)
+	state, loadErr := loadTimestampSkips(context.Background(), readDB)
+	repairErr = errors.Join(repairErr, loadErr)
 	if !newDatabase && repairErr == nil && !state.changed {
 		started := time.Now()
 		ctx, cancel := context.WithTimeout(context.Background(), opts.fenceBudget)
