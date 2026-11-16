@@ -404,7 +404,8 @@ function MoveHereDialogBody({ session, orgId, onClose }: { session: WorkspaceSes
 		gcTime: 0,
 	});
 	const agent = readiness.data?.agents.find((candidate) => candidate.id === session.provider);
-	const loading = Boolean(cloudClient) && (preview.isPending || cloudProjects.isPending || (Boolean(repo && branch) && targets.isPending));
+	// The targets query stops once a move starts; a clone then changes its key, leaving it pending.
+	const loading = Boolean(cloudClient) && (preview.isPending || cloudProjects.isPending || (step === undefined && Boolean(repo && branch) && targets.isPending));
 	const candidates = targets.data ?? [];
 	const target = candidates.find((candidate) => candidate.projectId === chosen) ?? candidates.find((candidate) => !candidate.refusal) ?? candidates[0];
 	// No project here has the repository: the move clones it first.
@@ -424,7 +425,8 @@ function MoveHereDialogBody({ session, orgId, onClose }: { session: WorkspaceSes
 						: targets.error
 							? targets.error.message
 							: target?.refusal?.message;
-	const ready = !loading && !unavailable && (target !== undefined || cloneInto !== undefined);
+	// Try again moves into the project the first attempt chose or cloned, so it needs neither.
+	const ready = !loading && !unavailable && (step !== undefined || target !== undefined || cloneInto !== undefined);
 	const changes = preview.data?.changes ?? [];
 	const transcript = session.provider === "claude-code" ? preview.data?.transcript : undefined;
 

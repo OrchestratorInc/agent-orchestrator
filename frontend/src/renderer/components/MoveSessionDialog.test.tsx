@@ -10,9 +10,13 @@ import { TooltipProvider } from "./ui/tooltip";
 import type { WorkspaceSession } from "../types/workspace";
 
 type Reply = { data?: unknown; error?: unknown };
+type PostReply = Reply | (() => Reply);
 
 const { daemon, navigate, cloud, uploadCloudTranscript } = vi.hoisted(() => ({
-	daemon: { posts: {} as Record<string, Reply>, repo: "", preview: {} as Reply, transcript: {} as Reply, targets: {} as Reply, agents: [] as unknown[] },
+	daemon: {
+		posts: {} as Record<string, PostReply>, repo: "", preview: {} as Reply, transcript: {} as Reply, targets: {} as Reply, agents: [] as unknown[],
+		localProjects: [] as { id: string }[], postCalls: [] as { path: string; body: unknown }[],
+	},
 	uploadCloudTranscript: vi.fn(),
 	navigate: vi.fn(),
 	cloud: {
@@ -31,7 +35,11 @@ vi.mock("../lib/host-clients", () => ({
 					: path === "/api/v1/sessions/move/targets"
 						? daemon.targets
 						: { data: { project: { id: "app", repo: daemon.repo } } }),
-		POST: vi.fn(async (path: string) => daemon.posts[path] ?? { error: { code: "UNEXPECTED", message: path } }),
+		POST: vi.fn(async (path: string, init?: { body?: unknown }) => {
+			daemon.postCalls.push({ path, body: init?.body });
+			const reply = daemon.posts[path];
+			return typeof reply === "function" ? reply() : reply ?? { error: { code: "UNEXPECTED", message: path } };
+		}),
 	}),
 	labelForHost: () => undefined,
 }));
@@ -47,7 +55,7 @@ vi.mock("../hooks/useWorkspaceQuery", () => ({
 	useCloudSessionsQuery: () => ({ data: cloud.sessions, isPending: false }),
 	workspaceQueryKeyForHost: (host?: string) => ["workspace", host ?? "local"],
 	cloudSessionsQueryKey: ["cloud-sessions"],
-	workspaceQueryOptions: { queryKey: ["workspaces"], queryFn: async () => [] },
+	workspaceQueryOptions: { queryKey: ["workspace", "local"], queryFn: async () => daemon.localProjects },
 }));
 vi.mock("../hooks/useAgentReadinessQuery", () => ({ useAgentReadinessQuery: () => ({ data: { agents: daemon.agents } }) }));
 
@@ -77,6 +85,8 @@ beforeEach(() => {
 	cloud.createSession.mockReset();
 	for (const fn of [cloud.previewSessionMove, cloud.exportSessionMove, cloud.restartSessionAgent, cloud.deleteSession]) fn.mockReset();
 	daemon.agents = [];
+	daemon.localProjects = [];
+	daemon.postCalls = [];
 	uploadCloudTranscript.mockReset();
 	daemon.transcript = { data: { agentSessionId: "aid-1", transcriptGzip: btoa("gz") } };
 	cloud.signedIn = true;
@@ -310,6 +320,28 @@ describe("moving a Cloud session to this computer", () => {
 		await user.click(screen.getByRole("button", { name: "Move to this computer" }));
 		await waitFor(() => expect(navigate).toHaveBeenCalledWith("app-new", "local-9"));
 		expect(cloud.exportSessionMove).toHaveBeenCalled();
+	});
+
+	it("moves into the cloned project on Try again after a later step fails", async () => {
+		daemon.targets = { data: { targets: [] } };
+		daemon.posts = {
+			// The clone adds a project, so the workspace list changes under the dialog.
+			"/api/v1/projects/clone": () => {
+				daemon.localProjects = [{ id: "app-new" }];
+				return { data: { project: { id: "app-new" } } };
+			},
+			"/api/v1/sessions/move/import": { data: { session: { id: "local-9" } } },
+		};
+		cloud.exportSessionMove.mockRejectedValueOnce(new CloudCpError("push rejected", { status: 409 }));
+		renderHere();
+		const user = userEvent.setup();
+		await user.click(await screen.findByRole("button", { name: "Move to this computer" }));
+		const retry = await screen.findByRole("button", { name: "Try again" });
+		await waitFor(() => expect(retry.hasAttribute("disabled")).toBe(false));
+		await user.click(retry);
+		await waitFor(() => expect(navigate).toHaveBeenCalledWith("app-new", "local-9"));
+		expect(daemon.postCalls.filter((call) => call.path === "/api/v1/projects/clone")).toHaveLength(1);
+		expect(daemon.postCalls.find((call) => call.path === "/api/v1/sessions/move/import")?.body).toMatchObject({ projectId: "app-new" });
 	});
 
 	it("says nothing moved when the clone fails", async () => {
