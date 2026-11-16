@@ -312,6 +312,14 @@ describe("cloudShare IPC", () => {
 		const signedOut = setup({ token: null });
 		await expect(signedOut.invoke("cloudShare:publish", signedOut.file)).resolves.toEqual({ status: "signed_out" });
 		expect(signedOut.requests).toEqual([]);
+
+		// Other refusals carry a category for telemetry beside their message.
+		const tooLarge = setup({ finalizeStatus: 413, finalizeCode: "payload_too_large" });
+		await expect(tooLarge.publish()).resolves.toMatchObject({ status: "error", failure: "too_large" });
+		const other = setup({ finalizeStatus: 400, finalizeCode: "invalid_request" });
+		const refused = await other.publish();
+		expect(refused).toMatchObject({ status: "error" });
+		expect(refused).not.toHaveProperty("failure");
 	});
 
 	it("refuses malformed requests and files outside the artifacts folder", async () => {

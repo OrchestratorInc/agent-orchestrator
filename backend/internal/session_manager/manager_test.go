@@ -671,6 +671,7 @@ type fakeRuntime struct {
 	outputErr          error
 	interruptErr       error
 	interrupts         []string
+	inputs             []string
 	onInterrupt        func(ports.RuntimeHandle)
 	// aliveByHandle maps a RuntimeHandle.ID to its liveness; missing = false.
 	aliveByHandle           map[string]bool
@@ -692,6 +693,11 @@ func (r *fakeRuntime) Interrupt(_ context.Context, handle ports.RuntimeHandle) e
 		r.onInterrupt(handle)
 	}
 	return r.interruptErr
+}
+
+func (r *fakeRuntime) SendInput(ctx context.Context, handle ports.RuntimeHandle, input string) error {
+	r.inputs = append(r.inputs, input)
+	return r.Interrupt(ctx, handle)
 }
 
 type fakePreviewLifecycle struct {
@@ -896,6 +902,8 @@ func (r *fakeRuntime) GetStyledOutput(ctx context.Context, handle ports.RuntimeH
 }
 
 type fakeAgent struct{}
+
+func (fakeAgent) InterruptKey() string { return "\x03" }
 
 func (fakeAgent) GetConfigSpec(context.Context) (ports.ConfigSpec, error) {
 	return ports.ConfigSpec{}, nil
@@ -6489,6 +6497,7 @@ func TestSpawnOrchestrator_UsesCoordinatorPrompt(t *testing.T) {
 		"Use `ao send` for session communication",
 		"`ao session ls --project mer`",
 		"`ao session get <worker-session-id>`",
+		"`ao session interrupt <session-id>`",
 		"Delegate implementation, fixes, tests, and PR ownership to worker sessions",
 		filepath.ToSlash(filepath.Join("skills", "using-ao", "SKILL.md")),
 		"Orchestrator desktop Browser panel",
@@ -11436,6 +11445,168 @@ func TestSendSemanticTUIRejectsMissingReceiptStore(t *testing.T) {
 	}
 	if len(msg.msgs) != 0 {
 		t.Fatalf("pane writes = %d, want 0", len(msg.msgs))
+	}
+}
+
+// The report coordinator interrupts before delivering a --stuck batch. If the
+// harness cannot confirm delivery the batch is retried, so an interrupt sent
+// anyway would hit the orchestrator again on every retry.
+func TestInterruptTUIRequiresSemanticAcceptance(t *testing.T) {
+	m, st, rt, _ := newManager()
+	st.sessions["s1"] = domain.SessionRecord{
+		ID: "s1", Harness: domain.HarnessClaudeCode, Mode: domain.SessionModeTUI,
+		Activity: domain.Activity{State: domain.ActivityActive},
+		Metadata: domain.SessionMetadata{RuntimeHandleID: "runtime-1"},
+	}
+	if err := m.InterruptTUI(context.Background(), "s1"); !errors.Is(err, ErrSemanticAcceptanceUnsupported) {
+		t.Fatalf("InterruptTUI error = %v, want unsupported", err)
+	}
+	if len(rt.interrupts) != 0 {
+		t.Fatalf("runtime interrupts = %v, want none", rt.interrupts)
+	}
+}
+
+func TestStopTUITurnWithoutSemanticAcceptance(t *testing.T) {
+	m, st, rt, _ := newManager()
+	st.sessions["s1"] = domain.SessionRecord{
+		ID: "s1", Harness: domain.HarnessClaudeCode, Mode: domain.SessionModeTUI,
+		Activity: domain.Activity{State: domain.ActivityActive},
+		Metadata: domain.SessionMetadata{RuntimeHandleID: "runtime-1"},
+	}
+	if err := m.StopTUITurn(context.Background(), "s1"); err != nil {
+		t.Fatalf("StopTUITurn: %v", err)
+	}
+	if got := rt.interrupts; !reflect.DeepEqual(got, []string{"runtime-1"}) {
+		t.Fatalf("runtime interrupts = %v", got)
+	}
+}
+
+// Ctrl+C on an idle Claude Code, Codex or Gemini prompt arms "press again to
+// exit", so a second stop request could quit the agent.
+func TestStopTUITurnRefusesIdleSession(t *testing.T) {
+	for _, state := range []domain.ActivityState{domain.ActivityIdle, domain.ActivityWaitingInput, domain.ActivityBlocked, ""} {
+		m, st, rt, _ := newManager()
+		st.sessions["s1"] = domain.SessionRecord{
+			ID: "s1", Harness: domain.HarnessClaudeCode, Mode: domain.SessionModeTUI,
+			Activity: domain.Activity{State: state},
+			Metadata: domain.SessionMetadata{RuntimeHandleID: "runtime-1"},
+		}
+		if err := m.StopTUITurn(context.Background(), "s1"); !errors.Is(err, ErrNoActiveTurn) {
+			t.Fatalf("StopTUITurn(%q) error = %v, want no active turn", state, err)
+		}
+		if len(rt.interrupts) != 0 {
+			t.Fatalf("StopTUITurn(%q) interrupts = %v, want none", state, rt.interrupts)
+		}
+	}
+}
+
+// A stopped turn can still read active until the agent reports its next state.
+// A repeat in that window would send a second Ctrl+C to an idle prompt.
+func TestStopTUITurnSendsOneInterruptPerTurn(t *testing.T) {
+	m, st, rt, _ := newManager()
+	turn := time.Date(2026, 11, 16, 10, 0, 0, 0, time.UTC)
+	st.sessions["s1"] = domain.SessionRecord{
+		ID: "s1", Harness: domain.HarnessClaudeCode, Mode: domain.SessionModeTUI,
+		Activity: domain.Activity{State: domain.ActivityActive, LastActivityAt: turn},
+		Metadata: domain.SessionMetadata{RuntimeHandleID: "runtime-1"},
+	}
+	ctx := context.Background()
+	if err := m.StopTUITurn(ctx, "s1"); err != nil {
+		t.Fatalf("first StopTUITurn: %v", err)
+	}
+	if err := m.StopTUITurn(ctx, "s1"); !errors.Is(err, ErrTurnStopPending) {
+		t.Fatalf("repeat StopTUITurn error = %v, want stop pending", err)
+	}
+	if len(rt.interrupts) != 1 {
+		t.Fatalf("interrupts after repeat = %v, want one", rt.interrupts)
+	}
+
+	// A new active turn can be stopped again.
+	rec := st.sessions["s1"]
+	rec.Activity.LastActivityAt = turn.Add(time.Minute)
+	st.sessions["s1"] = rec
+	if err := m.StopTUITurn(ctx, "s1"); err != nil {
+		t.Fatalf("StopTUITurn on next turn: %v", err)
+	}
+	if len(rt.interrupts) != 2 {
+		t.Fatalf("interrupts after next turn = %v, want two", rt.interrupts)
+	}
+}
+
+// A stopped turn can stay active (Claude Code sends no hook on Ctrl+C), and a
+// prompt submitted then keeps active without moving LastActivityAt. The new
+// prompt still starts a new turn that must be stoppable.
+func TestStopTUITurnStopsPromptSubmittedWithoutIdle(t *testing.T) {
+	m, st, rt, _ := newManager()
+	turn := time.Date(2026, 11, 16, 10, 0, 0, 0, time.UTC)
+	st.sessions["s1"] = domain.SessionRecord{
+		ID: "s1", Harness: domain.HarnessClaudeCode, Mode: domain.SessionModeTUI,
+		Activity: domain.Activity{State: domain.ActivityActive, LastActivityAt: turn},
+		Metadata: domain.SessionMetadata{
+			RuntimeHandleID:    "runtime-1",
+			LatestUserPrompt:   "run the tests",
+			LatestUserPromptAt: turn,
+		},
+	}
+	ctx := context.Background()
+	if err := m.StopTUITurn(ctx, "s1"); err != nil {
+		t.Fatalf("first StopTUITurn: %v", err)
+	}
+
+	rec := st.sessions["s1"]
+	rec.Metadata.LatestUserPrompt = "fix the lint instead"
+	rec.Metadata.LatestUserPromptAt = turn.Add(time.Minute)
+	st.sessions["s1"] = rec
+	if err := m.StopTUITurn(ctx, "s1"); err != nil {
+		t.Fatalf("StopTUITurn after a new prompt: %v", err)
+	}
+
+	// A coordination turn changes only the checkpoint turn ID.
+	rec = st.sessions["s1"]
+	rec.Metadata.ConversationCheckpointTurnID = "coord-1"
+	st.sessions["s1"] = rec
+	if err := m.StopTUITurn(ctx, "s1"); err != nil {
+		t.Fatalf("StopTUITurn after a coordination prompt: %v", err)
+	}
+	if len(rt.interrupts) != 3 {
+		t.Fatalf("interrupts = %v, want three", rt.interrupts)
+	}
+}
+
+func TestStopTUITurnRetriesAfterFailedDelivery(t *testing.T) {
+	m, st, rt, _ := newManager()
+	st.sessions["s1"] = domain.SessionRecord{
+		ID: "s1", Harness: domain.HarnessClaudeCode, Mode: domain.SessionModeTUI,
+		Activity: domain.Activity{State: domain.ActivityActive, LastActivityAt: time.Now()},
+		Metadata: domain.SessionMetadata{RuntimeHandleID: "runtime-1"},
+	}
+	ctx := context.Background()
+	rt.interruptErr = errors.New("pane gone")
+	if err := m.StopTUITurn(ctx, "s1"); err == nil {
+		t.Fatal("StopTUITurn error = nil, want delivery failure")
+	}
+	rt.interruptErr = nil
+	if err := m.StopTUITurn(ctx, "s1"); err != nil {
+		t.Fatalf("retry StopTUITurn: %v", err)
+	}
+	if len(rt.interrupts) != 2 {
+		t.Fatalf("interrupts = %v, want two attempts", rt.interrupts)
+	}
+}
+
+func TestStopTUITurnWaitsForExclusiveOperation(t *testing.T) {
+	m, st, rt, _ := newManager()
+	st.sessions["s1"] = domain.SessionRecord{
+		ID: "s1", Harness: domain.HarnessClaudeCode, Mode: domain.SessionModeTUI,
+		Activity: domain.Activity{State: domain.ActivityActive},
+		Metadata: domain.SessionMetadata{RuntimeHandleID: "runtime-1"},
+	}
+	m.agentOperations["s1"] = agentOperationKill
+	if err := m.StopTUITurn(context.Background(), "s1"); !errors.Is(err, ErrOperationInProgress) {
+		t.Fatalf("StopTUITurn error = %v, want operation in progress", err)
+	}
+	if len(rt.interrupts) != 0 {
+		t.Fatalf("interrupts = %v, want none during kill", rt.interrupts)
 	}
 }
 

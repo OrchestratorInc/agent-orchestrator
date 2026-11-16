@@ -170,9 +170,11 @@ import { SessionAccessTag } from "./teams/SessionAccessTag";
 import { SharedProjectPanel } from "./SharedProjectPanel";
 import { useSessionMenuAvailable } from "../hooks/useAppMenuCommand";
 import { focusAfterPaint, useSessionShortcut } from "../hooks/useAppShortcut";
+import { queryShown } from "../lib/dom-selectors";
+import { KeepRecentAlive } from "./KeepRecentAlive";
 import { openComposerModelPicker, toggleComposerDictation } from "../lib/composer-shortcuts";
 import { inspectorIsOpen, useResolvedTheme, useUiStore, type InspectorView } from "../stores/ui-store";
-import { useSideChatsAvailable } from "../lib/side-chats";
+import { useSideChatTab, useSideChatsAvailable } from "../lib/side-chats";
 import {
 	INSPECTOR_SEPARATOR_RESERVE_PX,
 	inspectorMaxWidthCss,
@@ -620,6 +622,7 @@ export function SessionView({ sessionId, cloudOrgId, projectId, hostId }: Sessio
 	const toggleInspector = useUiStore((state) => state.toggleInspector);
 	const setInspectorViewForSession = useUiStore((state) => state.setInspectorView);
 	const showGlobalToast = useUiStore((state) => state.showGlobalToast);
+	const { showTab: showSideChatTab, onSideChatsChange } = useSideChatTab(uiSessionId, sideChatsAvailable);
 	const setFilesChangedOnly = useUiStore((state) => state.setFilesChangedOnly);
 	const resetFilesSelection = useUiStore((state) => state.resetFilesSelection);
 	const workspaceFileOpenRequest = useUiStore((state) => state.workspaceFileOpenRequest);
@@ -2353,10 +2356,9 @@ export function SessionView({ sessionId, cloudOrgId, projectId, hostId }: Sessio
 		useSessionSwitchStore.getState().publish(id, sessionTabAgentMenu);
 		return () => useSessionSwitchStore.getState().publish(id, undefined);
 	}, [session?.id, sessionTabAgentMenu]);
-	// The session tab always shows its ⋮ menu after the title; the other tabs
-	// show a close button on hover. While an interface switch is requested or
+	// The session tab always shows its ⋮ menu after the title, where the other
+	// tabs show their close button. While an interface switch is requested or
 	// running, the switch's status (cancel on hover) takes the ⋮'s place.
-	const sessionTabActionPinned = Boolean(session);
 	const sessionTabActions = !session
 		? null
 		: interfaceUi.switchPending
@@ -2952,7 +2954,6 @@ export function SessionView({ sessionId, cloudOrgId, projectId, hostId }: Sessio
 									onOpenArtifact={hasInspector ? handleOpenArtifact : undefined}
 									session={session}
 									sessionTabAction={sessionTabActions}
-									sessionTabActionPinned={sessionTabActionPinned}
 									reviewerTerminal={reviewerTerminal}
 									onOpenReviewerTerminal={selectReviewerTerminal}
 									reviewerTarget={routedTerminalTarget.kind === "reviewer" ? routedTerminalTarget : undefined}
@@ -2976,10 +2977,15 @@ export function SessionView({ sessionId, cloudOrgId, projectId, hostId }: Sessio
 									onOpenLinkInBrowser={browserView.openLink}
 								/>
 								</>
-							) : showChatSurface ? (
-								<>
+							) : null}
+							{/* Recent chats stay mounted, hidden, so switching back shows them at once. Other
+							    sessions' chats stay kept while a terminal session is shown; this session's own
+							    chat is dropped when it leaves Chat. */}
+							<KeepRecentAlive activeKey={uiSessionId} show={Boolean(showChatSurface && !session?.cloud)}>
+							{showChatSurface && !session?.cloud ? (
 								<SessionChatSurface
 									sideChatContainer={sideChatContainer}
+									onSideChatsChange={onSideChatsChange}
 									subagentContainer={subagentContainer}
 									onRevealSubagents={revealSubagentsPanel}
 									key={uiSessionId}
@@ -3007,7 +3013,6 @@ export function SessionView({ sessionId, cloudOrgId, projectId, hostId }: Sessio
 									theme={theme}
 									headerActions={sessionHeaderActions}
 									sessionTabAction={sessionTabActions}
-									sessionTabActionPinned={sessionTabActionPinned}
 									tabStripAction={newShellTerminalAction}
 									workspaceTabs={mainWorkspaceTabs}
 									workspaceActiveTabKey={activeWorkspaceTabKey}
@@ -3044,8 +3049,9 @@ export function SessionView({ sessionId, cloudOrgId, projectId, hostId }: Sessio
          }}
 									onOpenLinkInBrowser={browserView.openLink}
 								/>
-								</>
-							) : (
+							) : null}
+							</KeepRecentAlive>
+							{!showChatSurface ? (
 								<CenterPane
 									hostId={hostId}
 									agentInputDisabled={interfaceUi.agentInputDisabled}
@@ -3068,14 +3074,13 @@ export function SessionView({ sessionId, cloudOrgId, projectId, hostId }: Sessio
 									theme={theme}
 									topbarActions={sessionHeaderActions}
 									sessionTabAction={sessionTabActions}
-									sessionTabActionPinned={sessionTabActionPinned}
 									tabStripAction={newShellTerminalAction}
 									workspaceTabs={mainWorkspaceTabs}
 									workspaceActiveTabKey={activeWorkspaceTabKey}
 									auxiliaryTabOrder={mainAuxiliaryTabOrder}
 									onAuxiliaryTabOrderChange={setMainAuxiliaryTabOrder}
 								/>
-							)}
+							) : null}
 							</div>
 							</SessionTabAgentMenuContext.Provider>
 							</TabSplitMenuContext.Provider>
@@ -3199,7 +3204,7 @@ export function SessionView({ sessionId, cloudOrgId, projectId, hostId }: Sessio
 											// selected, so a press on a selected pane puts the caret in it.
 											requestAnimationFrame(() => {
 												for (const pane of document.querySelectorAll<HTMLElement>("[data-split-pane]")) {
-													if (pane.dataset.splitPane === key) pane.querySelector<HTMLElement>(".xterm-helper-textarea, [contenteditable='true'][role='combobox']")?.focus({ preventScroll: true });
+													if (pane.dataset.splitPane === key) queryShown<HTMLElement>(".xterm-helper-textarea, [contenteditable='true'][role='combobox']", pane)?.focus({ preventScroll: true });
 												}
 											});
 										}}
@@ -3261,8 +3266,10 @@ export function SessionView({ sessionId, cloudOrgId, projectId, hostId }: Sessio
 						splitRef={sessionSplitRef}
 					>
 						<SessionInspector
-							sideChatView={sideChatsAvailable ? <div ref={setSideChatContainer} className="h-full min-h-0 flex-1" /> : undefined}
-							subagentsView={subagentsAvailable ? <div ref={setSubagentContainer} className="h-full min-h-0 flex-1" /> : undefined}
+							// Keyed per session: a kept, hidden chat still portals into the container it
+							// last had, so each chat needs its own or its panel shows over the next chat's.
+							sideChatView={showSideChatTab ? <div key={uiSessionId} ref={setSideChatContainer} className="h-full min-h-0 flex-1" /> : undefined}
+							subagentsView={subagentsAvailable ? <div key={uiSessionId} ref={setSubagentContainer} className="h-full min-h-0 flex-1" /> : undefined}
 							hostId={hostId}
 							orchestrator={browserOnly}
 							browserAnnotationQueue={inspectorView === "browser" ? browserAnnotationQueue : undefined}

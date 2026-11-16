@@ -277,6 +277,7 @@ type sessionLifecycle interface {
 	WaitAgentSwitchWorkers(ctx context.Context) error
 	StopAgentsForQuit(ctx context.Context) error
 	Kill(ctx context.Context, id domain.SessionID) (bool, error)
+	StopTUITurn(ctx context.Context, id domain.SessionID) error
 	Send(ctx context.Context, id domain.SessionID, message string, attachment *ports.SpawnAttachment) error
 	// SetShellTerminalCloser late-binds Kill/Cleanup to close a session's
 	// scoped shell terminals before its worktree is torn down. shellterm.Service
@@ -446,6 +447,8 @@ func startSession(ctx context.Context, cfg config.Config, runtime runtimeselect.
 			reviewcore.WithReviewerChat(reviewerChat)),
 
 		ChatRecoveryDone: reviewerRecoveryDone,
+		// The reaper's first pass settles runs a previous daemon left active.
+		AwaitBootPass: true,
 	})
 	reviewOpts := []reviewsvc.Option{
 		reviewsvc.WithTelemetry(telemetry),

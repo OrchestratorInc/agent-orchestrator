@@ -235,7 +235,7 @@ func TestMCPToolFailuresAreToolResults(t *testing.T) {
 		{"daemon 4xx", mcpCall("html_render", map[string]any{"html": "<p>x</p>"}),
 			"invalid render: a title is required (RENDER_INVALID) [request q1]"},
 		{"missing image", mcpCall("html_render", map[string]any{"html": `<img src="` + gone + `">`, "title": "x"}),
-			"These local images could not be read: " + gone + ". Use absolute paths to existing image files, or remove them."},
+			"Cannot inline these local images: " + gone + ". Check their paths, permissions, and image formats."},
 		{"html over the cap", mcpCall("html_preview", map[string]any{"html": strings.Repeat("a", maxMCPHTMLChars+1)}),
 			"html is too long; the limit is 512000 characters and 1048576 bytes"},
 	}
