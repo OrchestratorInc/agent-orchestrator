@@ -1447,7 +1447,7 @@ func TestForgetTerminalInputDropsLaterInputForTheDestroyedRuntime(t *testing.T) 
 func TestWriteInputDoesNotRecordInputRefusedByAnExitedAttachment(t *testing.T) {
 	mgr := NewManager(&fakeSource{alive: true}, nil, testLogger(), WithHeartbeat(0))
 	defer mgr.Close()
-	a := newAttachment("t1", ports.RuntimeHandle{ID: "t1"}, mgr.src, nil, nil, nil, testLogger())
+	a := newAttachment("t1", ports.RuntimeHandle{ID: "t1"}, mgr.src, nil, nil, nil, nil, testLogger())
 	a.markExited()
 	released := false
 	mgr.writeInput("t1", a, []byte("late"), func() { released = true })
