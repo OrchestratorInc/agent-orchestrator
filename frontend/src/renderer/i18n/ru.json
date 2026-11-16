@@ -5478,6 +5478,8 @@
 	"move.uncommittedNone": "Нет",
 	"move.uncommitted": "Незакоммиченные файлы",
 	"move.cloudProject": "Проект Cloud",
+	"move.newCloudProject": "Новый проект в Cloud",
+	"move.step.project": "Создать проект в Cloud для {{repo}}",
 	"move.conversation": "Разговор",
 	"move.conversationTranscript": "Полная расшифровка, {{size}}",
 	"move.conversationTranscriptSubagents_one": "Полная расшифровка и {{count}} субагент, {{size}}",

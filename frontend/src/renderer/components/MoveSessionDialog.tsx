@@ -6,7 +6,7 @@ import { useAgentReadinessQuery } from "../hooks/useAgentReadinessQuery";
 import { useCloudCp } from "../hooks/useCloudCp";
 import { useCloudOffering } from "../hooks/useCloudOffering";
 import { useCloudOrg } from "../hooks/useCloudOrg";
-import { cloudSessionsQueryKey, useCloudProjectsQuery, useCloudSessionsQuery, workspaceQueryKeyForHost, workspaceQueryOptions } from "../hooks/useWorkspaceQuery";
+import { cloudProjectsQueryKey, cloudSessionsQueryKey, useCloudProjectsQuery, useCloudSessionsQuery, workspaceQueryKeyForHost, workspaceQueryOptions } from "../hooks/useWorkspaceQuery";
 import { apiErrorException } from "../lib/api-error-exception";
 import { uploadCloudTranscript, uploadCloudTranscriptSidecar } from "../lib/cloud-attachments";
 import { useUnfinishedMoveStore } from "../lib/move-finish";
@@ -79,12 +79,15 @@ function MoveSessionDialogBody({ session, onClose }: { session: WorkspaceSession
 	// Cloud session whose response was lost is returned instead of duplicated.
 	const moveId = useRef(crypto.randomUUID()).current;
 	const cloudRequest = useRef<CloudSessionRequest>(undefined);
+	// A Cloud project the move created; Try again moves into it instead of creating another.
+	const createdProject = useRef<string>(undefined);
+	const [steps, setSteps] = useState<MoveStep[]>(STEPS);
 
 	const sourceRepo = useQuery({
 		queryKey: ["move-source-repo", sourceHost, session.workspaceId],
 		queryFn: async () => {
-			const project = await clientForSessionHost(sourceHost).GET("/api/v1/projects/{id}", { params: { path: { id: session.workspaceId } } });
-			return repoKey(projectRepo(project.data?.project));
+			const project = (await clientForSessionHost(sourceHost).GET("/api/v1/projects/{id}", { params: { path: { id: session.workspaceId } } })).data?.project;
+			return { key: repoKey(projectRepo(project)), name: projectField(project, "name"), defaultBranch: projectField(project, "defaultBranch") };
 		},
 	});
 	// What the move would push now, or why it cannot move.
@@ -103,8 +106,11 @@ function MoveSessionDialogBody({ session, onClose }: { session: WorkspaceSession
 	});
 	const signedIn = Boolean(cloudClient && org);
 	const loading = signedIn && (sourceRepo.isPending || cloudProjects.isPending || cloudSessions.isPending || preview.isPending);
-	const project = sourceRepo.data
-		? (cloudProjects.data ?? []).find((candidate) => repoKey(candidate.repositoryUrl) === sourceRepo.data)
+	const repo = sourceRepo.data?.key ?? "";
+	const project = repo ? (cloudProjects.data ?? []).find((candidate) => repoKey(candidate.repositoryUrl) === repo) : undefined;
+	// Cloud has no project for this GitHub repository: the move creates one first.
+	const newProject = !loading && !project && repo.startsWith("github.com/")
+		? { displayName: sourceRepo.data?.name || repo.split("/").at(-1) || repo, repositoryUrl: `https://${repo}`, defaultBranch: sourceRepo.data?.defaultBranch || "main" }
 		: undefined;
 	const harness = session.provider;
 	const branch = preview.data?.branch ?? "";
@@ -118,9 +124,9 @@ function MoveSessionDialogBody({ session, onClose }: { session: WorkspaceSession
 		? t("move.signedOut")
 		: loading
 			? undefined
-			: !project
+			: !project && !newProject
 				? // Without an origin there is no repository to look up; the daemon says why.
-					(!sourceRepo.data && preview.error?.message) || t("move.noCloudProject")
+					(!repo && preview.error?.message) || t("move.noCloudProject")
 				: !offering.features.includes(CLOUD_BRANCH_FEATURE)
 					? t("move.cloudNeedsUpdate")
 					: !(CLOUD_AGENT_PROVIDERS as readonly string[]).includes(harness)
@@ -130,8 +136,11 @@ function MoveSessionDialogBody({ session, onClose }: { session: WorkspaceSession
 							: branchHolder
 								? t("move.branchInUse", { branch, session: branchHolder.displayName })
 								: undefined;
+	// An empty projectId has the move create newProject.
 	const target: MoveTarget | undefined =
-		org && project && !loading && !unavailable ? { orgId: org.id, projectId: project.id, harness } : undefined;
+		org && (project || newProject || step !== undefined) && !loading && !unavailable
+			? { orgId: org.id, projectId: createdProject.current ?? project?.id ?? "", harness }
+			: undefined;
 	const changes = preview.data?.changes ?? [];
 	const transcript = preview.data?.transcript;
 	// Cloud resumes the agent's conversation; without it the session starts from the handoff note.
@@ -140,15 +149,25 @@ function MoveSessionDialogBody({ session, onClose }: { session: WorkspaceSession
 
 	const start = async () => {
 		if (!target || !cloudClient) return;
+		if (!target.projectId && step === undefined) setSteps(["project", ...STEPS]);
 		setError(undefined);
 		setResult(undefined);
 		try {
 			const moved = await moveSession(
-				{ sessionId: session.id, moveId, target, ...(sourceHost !== LOCAL_HOST ? { sourceLabel: labelForHost(sourceHost) } : {}) },
+				{
+					sessionId: session.id,
+					moveId,
+					target,
+					...(target.projectId || !newProject ? {} : { createProject: newProject }),
+					...(sourceHost !== LOCAL_HOST ? { sourceLabel: labelForHost(sourceHost) } : {}),
+				},
 				{
 					source: clientForSessionHost(sourceHost),
 					cloud: cloudClient,
 					onStep: setStep,
+					onProjectCreated: (id) => {
+						createdProject.current = id;
+					},
 					cloudRequest,
 					...(carriesTranscript
 						? {
@@ -167,7 +186,7 @@ function MoveSessionDialogBody({ session, onClose }: { session: WorkspaceSession
 				return;
 			}
 			onClose();
-			navigateToSession(target.projectId, moved.sessionId);
+			navigateToSession(moved.projectId, moved.sessionId);
 			// Say so when the conversation was to move but only the note did.
 			showGlobalToast(t("move.done"), carriesTranscript && moved.conversation === "note" ? t("move.doneNote") : undefined, { tone: "success" });
 		} catch (failure) {
@@ -175,13 +194,14 @@ function MoveSessionDialogBody({ session, onClose }: { session: WorkspaceSession
 		} finally {
 			void queryClient.invalidateQueries({ queryKey: workspaceQueryKeyForHost(sourceHost) });
 			void queryClient.invalidateQueries({ queryKey: cloudSessionsQueryKey });
+			void queryClient.invalidateQueries({ queryKey: cloudProjectsQueryKey });
 		}
 	};
 
 	const openMoved = () => {
-		if (!result || !target) return;
+		if (!result) return;
 		onClose();
-		navigateToSession(target.projectId, result.sessionId);
+		navigateToSession(result.projectId, result.sessionId);
 	};
 
 	return (
@@ -211,7 +231,14 @@ function MoveSessionDialogBody({ session, onClose }: { session: WorkspaceSession
 									<dt className="text-settings-muted">{t("move.branch")}</dt>
 									<dd className="min-w-0 truncate font-mono text-settings-label">{branch}</dd>
 									<dt className="text-settings-muted">{t("move.cloudProject")}</dt>
-									<dd className="min-w-0 truncate text-settings-label">{project?.displayName}</dd>
+									{project ? (
+										<dd className="min-w-0 truncate text-settings-label">{project.displayName}</dd>
+									) : (
+										<dd className="flex min-w-0 gap-2">
+											<span className="truncate text-settings-label">{newProject?.displayName}</span>
+											<span className="truncate text-settings-muted">{t("move.newCloudProject")}</span>
+										</dd>
+									)}
 									<dt className="text-settings-muted">{t("move.conversation")}</dt>
 									<dd className="text-settings-label">
 										{carriesTranscript && transcript
@@ -234,11 +261,15 @@ function MoveSessionDialogBody({ session, onClose }: { session: WorkspaceSession
 						)
 					) : (
 						<MoveStepList
+							steps={steps}
 							step={step}
 							error={error}
 							finished={Boolean(result)}
 							lastFailed={Boolean(result?.completeError)}
-							label={(candidate) => t(`move.step.${candidate as Exclude<MoveStep, "clone">}`, { branch })}
+							label={(candidate) =>
+								candidate === "project"
+									? t("move.step.project", { repo: repo.split("/").slice(1).join("/") })
+									: t(`move.step.${candidate as Exclude<MoveStep, "clone" | "project">}`, { branch })}
 						/>
 					)}
 					{error ? (
@@ -583,7 +614,7 @@ function MoveHereDialogBody({ session, orgId, onClose }: { session: WorkspaceSes
 									? t("move.step.export", { branch })
 									: candidate === "clone"
 										? t("moveHere.step.clone", { repo: repoName, path: homePath(cloneParent) })
-										: t(`moveHere.step.${candidate}`)}
+										: t(`moveHere.step.${candidate as Exclude<MoveStep, "clone" | "export" | "project">}`)}
 						/>
 					)}
 					{error ? (
@@ -636,5 +667,10 @@ function homePath(path: string): string {
 
 /** A project's origin URL; a project the daemon could not resolve has none. */
 function projectRepo(project: object | undefined): string {
-	return project && "repo" in project && typeof project.repo === "string" ? project.repo : "";
+	return projectField(project, "repo");
+}
+
+function projectField(project: object | undefined, field: "repo" | "name" | "defaultBranch"): string {
+	const value = project && field in project ? (project as Record<string, unknown>)[field] : undefined;
+	return typeof value === "string" ? value : "";
 }

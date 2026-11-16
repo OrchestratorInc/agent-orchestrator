@@ -23,8 +23,8 @@ const exported = {
 const ok = (data: unknown = {}): Reply => ({ data });
 const fail = (code: string, message = code): Reply => ({ error: { code, message } });
 const target = { orgId: "org-1", projectId: "proj-1", harness: "claude-code" };
-const cloud = (impl: () => Promise<unknown> = async () => ({ session: { id: "cloud-9" } })) =>
-	({ createSession: vi.fn(impl) }) as unknown as MoveDeps["cloud"] & { createSession: ReturnType<typeof vi.fn> };
+const cloud = (impl: () => Promise<unknown> = async () => ({ session: { id: "cloud-9" } }), createProject: () => Promise<unknown> = async () => ({ project: { id: "cloud-new" } })) =>
+	({ createSession: vi.fn(impl), createProject: vi.fn(createProject) }) as unknown as MoveDeps["cloud"] & Record<"createSession" | "createProject", ReturnType<typeof vi.fn>>;
 
 describe("moveSession", () => {
 	it("stops, pushes, starts the Cloud session on the branch, then marks the source moved", async () => {
@@ -37,7 +37,7 @@ describe("moveSession", () => {
 		const cp = cloud();
 		const steps: string[] = [];
 		const result = await moveSession({ sessionId: "app-1", moveId: "m-2", target }, { source, cloud: cp, onStep: (step) => steps.push(step) });
-		expect(result).toEqual({ sessionId: "cloud-9", conversation: "note" });
+		expect(result).toEqual({ projectId: "proj-1", sessionId: "cloud-9", conversation: "note" });
 		expect(calls).toEqual([
 			"/api/v1/sessions/{sessionId}/exit-agent",
 			"/api/v1/sessions/{sessionId}/move/export",
@@ -50,6 +50,42 @@ describe("moveSession", () => {
 		}, { idempotencyKey: "m-2" });
 		const completeBody = (source.POST as ReturnType<typeof vi.fn>).mock.calls[2][1].body;
 		expect(completeBody).toEqual({ moveId: "m-2", orgId: "org-1", sessionId: "cloud-9" });
+	});
+
+	describe("when Orchestrator Cloud has no project for the repository", () => {
+		const newProject = { displayName: "app", repositoryUrl: "https://github.com/acme/app", defaultBranch: "main" };
+		const noProject = { ...target, projectId: "" };
+
+		it("creates it before stopping the agent, then starts the session in it", async () => {
+			const calls: string[] = [];
+			const source = fakeDaemon({
+				"/api/v1/sessions/{sessionId}/exit-agent": ok(),
+				"/api/v1/sessions/{sessionId}/move/export": ok(exported),
+				"/api/v1/sessions/{sessionId}/move/complete": ok(),
+			}, calls);
+			const cp = cloud();
+			const steps: string[] = [];
+			const onProjectCreated = vi.fn();
+			const result = await moveSession(
+				{ sessionId: "app-1", moveId: "m-2", target: noProject, createProject: newProject },
+				{ source, cloud: cp, onStep: (step) => steps.push(step), onProjectCreated },
+			);
+			expect(steps).toEqual(["project", "stop", "export", "import", "complete"]);
+			expect(cp.createProject).toHaveBeenCalledWith("org-1", newProject, { idempotencyKey: "m-2-project" });
+			expect(onProjectCreated).toHaveBeenCalledWith("cloud-new");
+			expect(cp.createSession.mock.calls[0][1]).toMatchObject({ projectId: "cloud-new" });
+			expect(result).toMatchObject({ projectId: "cloud-new", sessionId: "cloud-9" });
+		});
+
+		it("leaves the session here as it was when Cloud refuses the project", async () => {
+			const calls: string[] = [];
+			const source = fakeDaemon({}, calls);
+			const cp = cloud(undefined, async () => { throw new CloudCpError("The GitHub App cannot reach acme/app.", { status: 422, code: "repository_unavailable" }); });
+			const error = await moveSession({ sessionId: "app-1", target: noProject, createProject: newProject }, { source, cloud: cp }).catch((e: unknown) => e);
+			expect(error).toMatchObject({ step: "project", code: "repository_unavailable", rolledBack: true, pushed: undefined, message: "The GitHub App cannot reach acme/app." });
+			expect(calls).toEqual([]);
+			expect(cp.createSession).not.toHaveBeenCalled();
+		});
 	});
 
 	it("continues when the agent had already exited", async () => {
@@ -142,7 +178,7 @@ describe("moveSession", () => {
 			const uploadTranscript = vi.fn(async () => {});
 			const cp = cloud();
 			const result = await moveSession({ sessionId: "app-1", moveId: "m-5", target }, { source: fakeDaemon(replies, calls), cloud: cp, uploadTranscript });
-			expect(result).toEqual({ sessionId: "cloud-9", conversation: "transcript" });
+			expect(result).toEqual({ projectId: "proj-1", sessionId: "cloud-9", conversation: "transcript" });
 			expect(calls.indexOf("/api/v1/sessions/{sessionId}/move/transcript")).toBe(calls.indexOf("/api/v1/sessions/{sessionId}/move/export") + 1);
 			const [importId, agentSessionId, gzip] = uploadTranscript.mock.calls[0] as unknown as [string, string, Uint8Array];
 			expect([importId, agentSessionId, Array.from(gzip)]).toEqual(["m-5", "aid-1", [103, 122]]);
@@ -177,7 +213,7 @@ describe("moveSession", () => {
 			const uploadTranscript = vi.fn(async () => {});
 			const source = fakeDaemon({ ...replies, "/api/v1/sessions/{sessionId}/move/transcript": undefined as unknown as Reply }, []);
 			const result = await moveSession({ sessionId: "app-1", moveId: "m-8", target }, { source, cloud: cp, uploadTranscript });
-			expect(result).toEqual({ sessionId: "cloud-9", conversation: "note" });
+			expect(result).toEqual({ projectId: "proj-1", sessionId: "cloud-9", conversation: "note" });
 			expect(uploadTranscript).not.toHaveBeenCalled();
 			expect(cp.createSession.mock.calls[0][1]).not.toHaveProperty("transcriptImportId");
 		});

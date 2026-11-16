@@ -5338,6 +5338,8 @@
 	"move.uncommittedNone": "Ninguno",
 	"move.uncommitted": "Archivos sin confirmar",
 	"move.cloudProject": "Proyecto de Cloud",
+	"move.newCloudProject": "Nuevo proyecto de Cloud",
+	"move.step.project": "Crear el proyecto de Cloud para {{repo}}",
 	"move.conversation": "Conversación",
 	"move.conversationTranscript": "Transcripción completa, {{size}}",
 	"move.conversationTranscriptSubagents_one": "Transcripción completa con {{count}} subagente, {{size}}",

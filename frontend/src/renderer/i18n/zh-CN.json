@@ -5172,6 +5172,8 @@
 	"move.uncommittedNone": "无",
 	"move.uncommitted": "未提交的文件",
 	"move.cloudProject": "Cloud 项目",
+	"move.newCloudProject": "新的 Cloud 项目",
+	"move.step.project": "为 {{repo}} 创建 Cloud 项目",
 	"move.conversation": "对话",
 	"move.conversationTranscript": "完整对话记录，{{size}}",
 	"move.conversationTranscriptSubagents_one": "完整对话记录及 {{count}} 个子代理，{{size}}",

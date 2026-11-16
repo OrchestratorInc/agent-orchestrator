@@ -5190,6 +5190,8 @@
 	"move.uncommittedNone": "なし",
 	"move.uncommitted": "未コミットのファイル",
 	"move.cloudProject": "Cloud プロジェクト",
+	"move.newCloudProject": "新しい Cloud プロジェクト",
+	"move.step.project": "{{repo}} の Cloud プロジェクトを作成",
 	"move.conversation": "会話",
 	"move.conversationTranscript": "完全なトランスクリプト（{{size}}）",
 	"move.conversationTranscriptSubagents_one": "完全なトランスクリプト（サブエージェント {{count}} 件、{{size}}）",

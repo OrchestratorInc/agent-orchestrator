@@ -21,7 +21,7 @@ const { daemon, navigate, cloud, uploadCloudTranscript } = vi.hoisted(() => ({
 	navigate: vi.fn(),
 	cloud: {
 		features: [] as string[], projects: [] as unknown[], sessions: [] as unknown[], createSession: vi.fn(), signedIn: true,
-		previewSessionMove: vi.fn(), exportSessionMove: vi.fn(), restartSessionAgent: vi.fn(), deleteSession: vi.fn(),
+		previewSessionMove: vi.fn(), exportSessionMove: vi.fn(), restartSessionAgent: vi.fn(), deleteSession: vi.fn(), createProject: vi.fn(),
 	},
 }));
 
@@ -34,7 +34,7 @@ vi.mock("../lib/host-clients", () => ({
 					? daemon.transcript
 					: path === "/api/v1/sessions/move/targets"
 						? daemon.targets
-						: { data: { project: { id: "app", repo: daemon.repo } } }),
+						: { data: { project: { id: "app", name: "app", defaultBranch: "main", repo: daemon.repo } } }),
 		POST: vi.fn(async (path: string, init?: { body?: unknown }) => {
 			daemon.postCalls.push({ path, body: init?.body });
 			const reply = daemon.posts[path];
@@ -55,6 +55,7 @@ vi.mock("../hooks/useWorkspaceQuery", () => ({
 	useCloudSessionsQuery: () => ({ data: cloud.sessions, isPending: false }),
 	workspaceQueryKeyForHost: (host?: string) => ["workspace", host ?? "local"],
 	cloudSessionsQueryKey: ["cloud-sessions"],
+	cloudProjectsQueryKey: ["cloud-projects"],
 	workspaceQueryOptions: { queryKey: ["workspace", "local"], queryFn: async () => daemon.localProjects },
 }));
 vi.mock("../hooks/useAgentReadinessQuery", () => ({ useAgentReadinessQuery: () => ({ data: { agents: daemon.agents } }) }));
@@ -83,6 +84,7 @@ function renderDialog() {
 beforeEach(() => {
 	navigate.mockReset();
 	cloud.createSession.mockReset();
+	cloud.createProject.mockReset();
 	for (const fn of [cloud.previewSessionMove, cloud.exportSessionMove, cloud.restartSessionAgent, cloud.deleteSession]) fn.mockReset();
 	daemon.agents = [];
 	daemon.localProjects = [];
@@ -152,7 +154,7 @@ it("tries again with the same move id and Cloud request after a lost response", 
 it.each([
 	["the worktree cannot move", () => { daemon.preview = { error: { code: "MOVE_LFS", message: "The move includes Git LFS files, which cannot move yet." } }; }, "The move includes Git LFS files, which cannot move yet."],
 	["AO Cloud cannot start a session on a branch", () => { cloud.features = []; }, "Needs a newer Orchestrator Cloud."],
-	["no Cloud project has the repository", () => { daemon.repo = "https://github.com/acme/other"; }, "Orchestrator Cloud has no project for this repository."],
+	["no Cloud project has the repository and it is not on GitHub", () => { daemon.repo = "https://gitlab.com/acme/app"; }, "Orchestrator Cloud has no project for this repository."],
 	["signed out of AO Cloud", () => { cloud.signedIn = false; }, "Sign in to Orchestrator Cloud to move this session."],
 	["the project has no origin", () => { daemon.repo = ""; daemon.preview = { error: { code: "MOVE_NO_ORIGIN", message: "No origin." } }; }, "No origin."],
 	["a live Cloud session is on the branch", () => { cloud.sessions = [{ id: "cloud-1", projectId: "cloud-proj", branch: "feat/x", isTerminated: false, displayName: "Fix login" }]; }, "The Cloud session Fix login is already on feat/x. Archive it first."],
@@ -161,6 +163,24 @@ it.each([
 	renderDialog();
 	expect(await screen.findByText(message)).toBeTruthy();
 	await waitFor(() => expect(screen.getByRole("button", { name: "Move to Orchestrator Cloud" }).hasAttribute("disabled")).toBe(true));
+});
+
+it("creates the Cloud project when Cloud has none for the repository", async () => {
+	daemon.posts = moveReplies;
+	daemon.repo = "git@github.com:acme/other.git";
+	cloud.createProject.mockResolvedValue({ project: { id: "cloud-new" } });
+	cloud.createSession.mockResolvedValue({ session: { id: "cloud-9" } });
+	renderDialog();
+	const user = userEvent.setup();
+	expect(await screen.findByText("New Cloud project")).toBeTruthy();
+	await user.click(screen.getByRole("button", { name: "Move to Orchestrator Cloud" }));
+	await waitFor(() => expect(navigate).toHaveBeenCalledWith("cloud-new", "cloud-9"));
+	expect(cloud.createProject).toHaveBeenCalledWith(
+		"org-1",
+		{ displayName: "app", repositoryUrl: "https://github.com/acme/other", defaultBranch: "main" },
+		{ idempotencyKey: expect.stringMatching(/-project$/) },
+	);
+	expect(cloud.createSession.mock.calls[0][1]).toMatchObject({ projectId: "cloud-new", branch: "feat/x" });
 });
 
 it("moves the conversation when Orchestrator Cloud can resume it", async () => {

@@ -5190,6 +5190,8 @@
 	"move.uncommittedNone": "없음",
 	"move.uncommitted": "커밋되지 않은 파일",
 	"move.cloudProject": "Cloud 프로젝트",
+	"move.newCloudProject": "새 Cloud 프로젝트",
+	"move.step.project": "{{repo}}의 Cloud 프로젝트 만들기",
 	"move.conversation": "대화",
 	"move.conversationTranscript": "전체 대화 기록, {{size}}",
 	"move.conversationTranscriptSubagents_one": "전체 대화 기록과 하위 에이전트 {{count}}개, {{size}}",

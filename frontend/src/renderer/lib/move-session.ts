@@ -1,20 +1,21 @@
 import { apiErrorCode, apiErrorDetails, apiErrorMessage } from "./api-client";
-import { CloudCpError, type CloudCpClient } from "./cloud-cp";
+import { CloudCpError, type CloudCpClient, type CloudCpCreateProjectRequest } from "./cloud-cp";
 import type { clientForSessionHost } from "./host-clients";
 import { repoKey } from "./repo-key";
 
 type DaemonClient = ReturnType<typeof clientForSessionHost>;
 
-/** The AO Cloud project a session moves to. */
+/** The AO Cloud project a session moves to; an empty projectId has the move create one. */
 export interface MoveTarget {
 	orgId: string;
 	projectId: string;
 	harness: string;
 }
 
-export type MoveStep = "clone" | "stop" | "export" | "import" | "complete";
+export type MoveStep = "project" | "clone" | "stop" | "export" | "import" | "complete";
 
 export interface MoveResult {
+	projectId: string;
 	sessionId: string;
 	/** The Cloud agent resumes the conversation, or starts from the handoff note. */
 	conversation: "transcript" | "note";
@@ -52,8 +53,10 @@ export type CloudSessionRequest = Parameters<CloudCpClient["createSession"]>[1];
 
 export interface MoveDeps {
 	source: DaemonClient;
-	cloud: Pick<CloudCpClient, "createSession">;
+	cloud: Pick<CloudCpClient, "createSession" | "createProject">;
 	onStep?: (step: MoveStep) => void;
+	/** Called with the Cloud project the move created, so Try again moves into it. */
+	onProjectCreated?: (projectId: string) => void;
 	/**
 	 * Holds the Cloud request of the move's first export. AO Cloud accepts a
 	 * reused idempotency key only with the same body, and a retry's export
@@ -78,12 +81,27 @@ export interface MoveDeps {
  * says what was pushed. moveId makes each call safe to retry.
  */
 export async function moveSession(
-	input: { sessionId: string; sourceLabel?: string; target: MoveTarget; moveId?: string },
+	input: { sessionId: string; sourceLabel?: string; target: MoveTarget; createProject?: CloudCpCreateProjectRequest; moveId?: string },
 	deps: MoveDeps,
 ): Promise<MoveResult> {
 	const { sessionId, target } = input;
 	const moveId = input.moveId ?? crypto.randomUUID();
 	const path = { params: { path: { sessionId } } };
+
+	let projectId = target.projectId;
+	if (!projectId) {
+		if (!input.createProject) throw new MoveError("No Orchestrator Cloud project to move the session into", "project", undefined, true);
+		// The agent here has not stopped yet, so a failure leaves the session as it was.
+		deps.onStep?.("project");
+		try {
+			const { project } = await deps.cloud.createProject(target.orgId, input.createProject, { idempotencyKey: `${moveId}-project` });
+			projectId = project.id;
+		} catch (error) {
+			const reason = error instanceof CloudCpError && error.status !== 0 ? error : "Could not reach Orchestrator Cloud.";
+			throw new MoveError(apiErrorMessage(reason, "Could not create the Orchestrator Cloud project"), "project", errorCode(error), true);
+		}
+		deps.onProjectCreated?.(projectId);
+	}
 
 	deps.onStep?.("stop");
 	const stopped = await deps.source.POST("/api/v1/sessions/{sessionId}/exit-agent", path);
@@ -108,7 +126,7 @@ export async function moveSession(
 	const sameAgent = target.harness === m.harness;
 	const transcriptImportId = deps.cloudRequest?.current ? undefined : await carryTranscript(deps, path, moveId);
 	const request: CloudSessionRequest = deps.cloudRequest?.current ?? {
-		projectId: target.projectId,
+		projectId,
 		kind: "worker",
 		harness: target.harness,
 		displayName: (m.displayName || target.harness).slice(0, 100),
@@ -136,6 +154,7 @@ export async function moveSession(
 		body: { moveId, orgId: target.orgId, sessionId: cloudSessionId },
 	});
 	return {
+		projectId: request.projectId,
 		sessionId: cloudSessionId,
 		conversation: request.transcriptImportId ? "transcript" : "note",
 		...(completed.error ? { completeError: apiErrorMessage(completed.error, "Could not mark the session as moved") } : {}),
