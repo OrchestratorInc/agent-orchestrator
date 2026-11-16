@@ -28,7 +28,7 @@ ao project add [flags]
 | Flag | Meaning | Default / Required |
 |---|---|---|
 | `--as-workspace` | Register a parent folder as a workspace project (root-as-repo plus direct child repos) | - |
-| `--default-branch string` | Base branch for new worktrees; needed when the repository has no remote | Resolved from the remote |
+| `--default-branch string` | Base branch for new worktrees; needed when the repository has no remote. With `--as-workspace` it applies to the workspace's root repository; child repositories resolve their own | Resolved from the remote |
 | `--id string` | Project id | Derived by the daemon from the path |
 | `--name string` | Display name | - |
 | `--orchestrator-agent string` | Default orchestrator session agent | - |

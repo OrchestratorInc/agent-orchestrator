@@ -228,6 +228,9 @@ type sessionListEntry struct {
 	LastActivityAt *time.Time      `json:"lastActivityAt,omitempty"`
 	CreatedAt      time.Time       `json:"createdAt"`
 	UpdatedAt      time.Time       `json:"updatedAt"`
+	// ProvisionState is "failed" when the session never started.
+	ProvisionState string `json:"provisionState,omitempty"`
+	ProvisionError string `json:"provisionError,omitempty"`
 }
 
 type sessionListPR struct {
@@ -1225,6 +1228,8 @@ func sessionListEntries(sessions []sessionDTO, summaries map[string][]sessionPRS
 			LastActivityAt: last,
 			CreatedAt:      sess.CreatedAt,
 			UpdatedAt:      sess.UpdatedAt,
+			ProvisionState: sess.ProvisionState,
+			ProvisionError: sess.ProvisionError,
 		})
 	}
 	return entries

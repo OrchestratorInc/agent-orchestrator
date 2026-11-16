@@ -292,7 +292,7 @@ ao session exit-agent <id> [flags]
 
 ### ao session resume-agent
 
-Resume an exited agent in its existing Orchestrator-managed session. It also retries a session that failed to start, with its saved prompt, and waits for that start: it exits 1 with the reason if the start fails again. `ao session get <id>` shows the reason as `start failed`, and `ao session ls` shows `start failed` as the activity.
+Resume an exited agent in its existing Orchestrator-managed session. It also retries a session that failed to start, with its saved prompt, and waits for that start: it exits 1 with the reason if the start fails again. `ao session get <id>` shows the reason as `start failed`, and `ao session ls` shows `start failed` as the activity (`provisionState: "failed"` with `--json`).
 
 **Syntax:**
 ```

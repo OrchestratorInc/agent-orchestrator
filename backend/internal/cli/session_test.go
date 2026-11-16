@@ -626,7 +626,36 @@ func TestSessionRestore_ExitedOrchestratorResumesAgentInPlace(t *testing.T) {
 	}
 }
 
-// A session that never started shows why in `session get` and `session ls`.
+// `session ls` reports a session that never started as "start failed" in the
+// table, and carries the provision state in --json, where activity stays idle.
+func TestSessionList_ShowsFailedStart(t *testing.T) {
+	cfg := setConfigEnv(t)
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		switch {
+		case r.URL.Path == "/api/v1/sessions" && r.URL.Query().Get("active") == "true":
+			_, _ = io.WriteString(w, `{"sessions":[{"id":"demo-1","projectId":"demo","kind":"worker","activity":{"state":"idle"},"isTerminated":false,"status":"idle","provisionState":"failed","provisionError":"default branch is unresolved","prs":[]}]}`)
+		case r.URL.Path == "/api/v1/sessions":
+			_, _ = io.WriteString(w, `{"sessions":[]}`)
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	t.Cleanup(srv.Close)
+	writeRunFileFor(t, cfg, srv)
+	deps := Deps{ProcessAlive: func(int) bool { return true }}
+
+	out, errOut, err := executeCLI(t, deps, "session", "ls")
+	if err != nil || !strings.Contains(out, "start failed") || strings.Contains(out, "idle") {
+		t.Fatalf("session ls: err=%v stderr=%s out:\n%s", err, errOut, out)
+	}
+	out, errOut, err = executeCLI(t, deps, "session", "ls", "--json")
+	if err != nil || !strings.Contains(out, `"provisionState": "failed"`) || !strings.Contains(out, `"provisionError": "default branch is unresolved"`) {
+		t.Fatalf("session ls --json: err=%v stderr=%s out:\n%s", err, errOut, out)
+	}
+}
+
+// A session that never started shows why in `session get`.
 // `session restore` retries it through resume-agent and waits for the retried
 // start, so a second failure is reported instead of "agent resumed".
 func TestSessionRestore_FailedStartRetries(t *testing.T) {
@@ -665,9 +694,6 @@ func TestSessionRestore_FailedStartRetries(t *testing.T) {
 			out, errOut, err := executeCLI(t, deps, "session", "get", "demo-1")
 			if err != nil || !strings.Contains(out, "start failed: default branch is unresolved") {
 				t.Fatalf("session get: err=%v stderr=%s out:\n%s", err, errOut, out)
-			}
-			if got := sessionActivityLabel(sessionDTO{ProvisionState: "failed", Activity: sessionActivity{State: "idle"}}); got != "start failed" {
-				t.Fatalf("list activity for a failed start = %q, want start failed", got)
 			}
 			out, _, err = executeCLI(t, deps, "session", "restore", "demo-1")
 			want := []string{
