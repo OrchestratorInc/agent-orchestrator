@@ -6,6 +6,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import { fireEvent } from "@testing-library/react";
 import { AUTOMATION_TEMPLATES } from "../lib/automation-templates";
 import { AutomationsView } from "./AutomationsView";
+import { useUiStore } from "../stores/ui-store";
 import { TooltipProvider } from "./ui/tooltip";
 
 vi.mock("./NotificationCenter", () => ({ NotificationCenter: () => <button type="button" aria-label="Notifications" /> }));
@@ -27,6 +28,9 @@ const mocks = vi.hoisted(() => ({
 	createCloud: vi.fn(),
 	runNow: vi.fn(),
 	subscribe: vi.fn(),
+	updateCloud: vi.fn(),
+	cloudUserId: "u1",
+	cloudRuns: [] as Array<Record<string, unknown>>,
 	providerConnections: undefined as Array<{ provider: string; validationState: string }> | undefined,
 }));
 
@@ -74,13 +78,13 @@ vi.mock("../hooks/useProviderConnections", () => ({ useProviderConnections: () =
 vi.mock("../hooks/useCloudOffering", () => ({ useCloudOffering: () => ({ chatHarnesses: ["claude-code", "codex", "cursor"] }) }));
 vi.mock("../hooks/useCloudAutomations", async (importOriginal) => ({
 	...await importOriginal<typeof import("../hooks/useCloudAutomations")>(),
-	useCloudAutomations: () => ({ data: mocks.cloudAvailable ? mocks.cloudAutomations : undefined, available: mocks.cloudAvailable, orgId: "org-1", isLoading: false, error: null }),
+	useCloudAutomations: () => ({ data: mocks.cloudAvailable ? mocks.cloudAutomations : undefined, available: mocks.cloudAvailable, orgId: "org-1", userId: mocks.cloudUserId, isLoading: false, error: null }),
 	useCreateCloudAutomation: () => ({ mutateAsync: mocks.createCloud, reset: vi.fn(), isPending: false, error: null }),
-	useUpdateCloudAutomation: () => ({ mutateAsync: vi.fn(), reset: vi.fn(), isPending: false, error: null }),
+	useUpdateCloudAutomation: () => ({ mutateAsync: mocks.updateCloud, reset: vi.fn(), isPending: false, error: null }),
 	useDeleteCloudAutomation: () => ({ mutate: vi.fn(), reset: vi.fn(), isPending: false, error: null }),
 	useRunCloudAutomationNow: () => ({ mutateAsync: mocks.runNow, isPending: false }),
 	useSubscribeCloudAutomation: () => ({ mutateAsync: mocks.subscribe, isPending: false }),
-	useCloudAutomationRuns: () => ({ data: [], isLoading: false, error: null }),
+	useCloudAutomationRuns: () => ({ data: mocks.cloudRuns, isLoading: false, error: null }),
 }));
 
 async function pickTime(user: ReturnType<typeof userEvent.setup>, dialog: HTMLElement, hour: string, minute: string) {
@@ -104,7 +108,7 @@ async function openBlankCreate(user: Pick<typeof userEvent, "click">) {
 }
 
 describe("AutomationsView", () => {
-	beforeEach(() => { mocks.workspaces = [{ id: "demo", name: "Demo" }]; mocks.defaultWorker = "codex"; mocks.defaultsLoaded = true; mocks.fallbackAmp = false; mocks.workerTuning = {}; mocks.baseTuning = {}; mocks.automations = []; mocks.runsError = null; mocks.cloudAvailable = false; mocks.cloudAutomations = []; mocks.providerConnections = undefined; mocks.createCloud.mockReset(); mocks.runNow.mockReset(); mocks.subscribe.mockReset(); mocks.create.mockReset(); mocks.update.mockReset(); mocks.capture.mockReset(); });
+	beforeEach(() => { mocks.workspaces = [{ id: "demo", name: "Demo" }]; mocks.defaultWorker = "codex"; mocks.defaultsLoaded = true; mocks.fallbackAmp = false; mocks.workerTuning = {}; mocks.baseTuning = {}; mocks.automations = []; mocks.runsError = null; mocks.cloudAvailable = false; mocks.cloudAutomations = []; mocks.providerConnections = undefined; mocks.cloudUserId = "u1"; mocks.cloudRuns = []; mocks.updateCloud.mockReset(); mocks.createCloud.mockReset(); mocks.runNow.mockReset(); mocks.subscribe.mockReset(); mocks.create.mockReset(); mocks.update.mockReset(); mocks.capture.mockReset(); });
 
 	it("shows a discoverable empty state and create action", () => {
 		renderView();
@@ -917,6 +921,9 @@ describe("automation starters", () => {
 		};
 		beforeEach(() => {
 			mocks.workspaces = [{ id: "demo", name: "Demo" }, { id: "cloud-1", name: "Cloud app", kind: "cloud", cloudOrgId: "org-1" }];
+			// "automation starters" does not reset the cloud mocks, so each test starts from none.
+			mocks.cloudAvailable = false; mocks.cloudAutomations = []; mocks.providerConnections = undefined; mocks.cloudUserId = "u1"; mocks.cloudRuns = [];
+			mocks.createCloud.mockReset(); mocks.updateCloud.mockReset(); mocks.runNow.mockReset(); mocks.subscribe.mockReset();
 		});
 
 		it("offers no Runs on choice without the automations feature", async () => {
@@ -924,6 +931,17 @@ describe("automation starters", () => {
 			renderView();
 			await openBlankCreate(user);
 			expect(within(screen.getByRole("dialog")).queryByRole("combobox", { name: "Runs on" })).not.toBeInTheDocument();
+		});
+
+		it("names the local choice for any desktop platform, not only a Mac", async () => {
+			const user = userEvent.setup();
+			mocks.cloudAvailable = true;
+			renderView();
+			await openBlankCreate(user);
+			const runsOn = within(screen.getByRole("dialog")).getByRole("combobox", { name: "Runs on" });
+			expect(runsOn).toHaveTextContent("This computer");
+			await user.click(runsOn);
+			expect(screen.getAllByRole("option").map((option) => option.textContent)).toEqual(["This computer", "AO Cloud"]);
 		});
 
 		it("creates a cloud automation in a cloud project with its rule and timezone", async () => {
@@ -975,7 +993,25 @@ describe("automation starters", () => {
 			await user.click(dialog.getByRole("combobox", { name: "Runs on" }));
 			await user.click(await screen.findByRole("option", { name: "AO Cloud" }));
 			expect(dialog.getByRole("combobox", { name: "Agent" })).toHaveTextContent("Log in to an agent first");
-			expect(dialog.getByText(/Log in to an agent for AO Cloud in Settings/)).toBeInTheDocument();
+			expect(dialog.getByText("An automation runs with your agent login in AO Cloud. Log in to an agent first.")).toBeInTheDocument();
+		});
+
+		it("does not send a cloud automation without an agent, and opens the cloud agent logins", async () => {
+			const user = userEvent.setup();
+			const openGlobalSettings = vi.fn();
+			useUiStore.setState({ openGlobalSettings });
+			mocks.cloudAvailable = true;
+			mocks.providerConnections = [];
+			renderView();
+			await openBlankCreate(user);
+			const dialog = within(screen.getByRole("dialog"));
+			await user.click(dialog.getByRole("combobox", { name: "Runs on" }));
+			await user.click(await screen.findByRole("option", { name: "AO Cloud" }));
+			expect(dialog.getByRole("combobox", { name: "Agent" })).toBeDisabled();
+			expect(dialog.getByRole("button", { name: "Create automation" })).toBeDisabled();
+			await user.click(dialog.getByRole("button", { name: "Go to Harness settings" }));
+			expect(openGlobalSettings).toHaveBeenCalledWith("harness", expect.objectContaining({ harnessView: "cloud" }));
+			expect(mocks.createCloud).not.toHaveBeenCalled();
 		});
 
 		it("lists cloud automations with who they run as, and runs one now", async () => {
@@ -994,6 +1030,83 @@ describe("automation starters", () => {
 			expect(mocks.runNow).toHaveBeenCalledWith("c1");
 			await user.click(within(row).getByRole("button", { name: "Get notified about Nightly debt" }));
 			expect(mocks.subscribe).toHaveBeenCalledWith({ id: "c1", subscribed: true });
+		});
+
+		it("keeps the notify toggle's name and reports its state with aria-pressed", () => {
+			mocks.cloudAvailable = true;
+			mocks.cloudAutomations = [{ ...cloudAutomation, subscribed: true }];
+			renderView();
+			const row = screen.getByRole("heading", { name: /Nightly debt/ }).closest("article")!;
+			expect(within(row).getByRole("button", { name: "Get notified about Nightly debt" })).toHaveAttribute("aria-pressed", "true");
+		});
+
+		it("shows a schedule in the automation's own timezone when it differs from this computer's", () => {
+			mocks.cloudAvailable = true;
+			const here = Intl.DateTimeFormat().resolvedOptions().timeZone;
+			const elsewhere = here === "Pacific/Chatham" ? "Asia/Kolkata" : "Pacific/Chatham";
+			mocks.cloudAutomations = [{ ...cloudAutomation, timezone: elsewhere }, { ...cloudAutomation, id: "c2", displayName: "Local zone", timezone: here }];
+			renderView();
+			const row = screen.getByRole("heading", { name: /Nightly debt/ }).closest("article")!;
+			expect(within(row).getByText(`Daily at 7:00 AM (${elsewhere})`)).toBeInTheDocument();
+			const local = screen.getByRole("heading", { name: /Local zone/ }).closest("article")!;
+			expect(within(local).getByText("Daily at 7:00 AM")).toBeInTheDocument();
+		});
+
+		it("explains, in the person's language, why a run was skipped or did not finish", () => {
+			mocks.cloudAvailable = true;
+			mocks.cloudAutomations = [
+				{ ...cloudAutomation, latestRun: { ...cloudAutomation.latestRun, errorCode: "WORKER_SLOTS_FULL", errorMessage: "Your plan is full." } },
+				{ ...cloudAutomation, id: "c2", displayName: "Docs drift", latestRun: { ...cloudAutomation.latestRun, automationId: "c2", errorCode: "AUTOMATION_DISABLED", errorMessage: "off" } },
+				{ ...cloudAutomation, id: "c3", displayName: "Security scan", latestRun: { ...cloudAutomation.latestRun, automationId: "c3", status: "failed", errorCode: "agent_provider_required", errorMessage: "Connect your Codex credential" } },
+			];
+			renderView();
+			const row = (name: RegExp) => screen.getByRole("heading", { name }).closest("article")!;
+			expect(within(row(/Nightly debt/)).getByRole("alert")).toHaveTextContent("Skipped: your plan's limit was reached.");
+			expect(within(row(/Docs drift/)).getByRole("alert")).toHaveTextContent("Skipped: the automation was turned off before this run started.");
+			expect(within(row(/Security scan/)).getByRole("alert")).toHaveTextContent("Failed: the person it runs as has no valid agent login in AO Cloud.");
+		});
+
+		it("shows why it was turned off, and the agent's name, in its details", async () => {
+			const user = userEvent.setup();
+			mocks.cloudAvailable = true;
+			mocks.cloudAutomations = [{ ...cloudAutomation, enabled: false, nextRunAt: undefined, consecutiveFailures: 5, disabledReason: "Turned off after 5 failed runs in a row." }];
+			renderView();
+			await user.click(screen.getByRole("button", { name: "Show run history for Nightly debt" }));
+			const details = document.getElementById("automation-history-cloud-c1")!;
+			expect(within(details).getByText("Turned off after 5 failed runs in a row.")).toBeInTheDocument();
+			expect(within(details).getByText("Codex")).toBeInTheDocument();
+		});
+
+		it("saves only what an edit changed, and nothing when it changed nothing", async () => {
+			const user = userEvent.setup();
+			mocks.cloudAvailable = true;
+			mocks.cloudAutomations = [{ ...cloudAutomation, canEdit: true, runAs: { userId: "u1", displayName: "Me" } }];
+			mocks.updateCloud.mockResolvedValue({});
+			renderView();
+			await user.click(screen.getByRole("button", { name: "Edit Nightly debt" }));
+			let dialog = screen.getByRole("dialog", { name: "Edit automation" });
+			await user.click(within(dialog).getByRole("button", { name: "Save changes" }));
+			await waitFor(() => expect(screen.queryByRole("dialog", { name: "Edit automation" })).not.toBeInTheDocument());
+			expect(mocks.updateCloud).not.toHaveBeenCalled();
+
+			await user.click(screen.getByRole("button", { name: "Edit Nightly debt" }));
+			dialog = screen.getByRole("dialog", { name: "Edit automation" });
+			const name = within(dialog).getByRole("textbox", { name: "Name" });
+			await user.clear(name);
+			await user.type(name, "Weekly debt");
+			await user.click(within(dialog).getByRole("button", { name: "Save changes" }));
+			await waitFor(() => expect(mocks.updateCloud).toHaveBeenCalledTimes(1));
+			expect(mocks.updateCloud).toHaveBeenCalledWith({ id: "c1", body: { displayName: "Weekly debt" } });
+		});
+
+		it("tells an editor who is not its run-as person that saving makes it run as them", async () => {
+			const user = userEvent.setup();
+			mocks.cloudAvailable = true;
+			mocks.cloudAutomations = [{ ...cloudAutomation, canEdit: true }];
+			renderView();
+			await user.click(screen.getByRole("button", { name: "Edit Nightly debt" }));
+			const dialog = screen.getByRole("dialog", { name: "Edit automation" });
+			expect(within(dialog).getByText("Saving makes it run as you, with your Codex login in AO Cloud.")).toBeInTheDocument();
 		});
 	});
 });

@@ -68,6 +68,7 @@ import {
 	CLOUD_AUTOMATION_HARNESSES,
 	cloudAutomationErrorMessage,
 	cloudRunErrorMessage,
+	isCloudRunInFlight,
 	useCloudAutomationRuns,
 	useCloudAutomations,
 	useCreateCloudAutomation,
@@ -79,6 +80,8 @@ import {
 } from "../hooks/useCloudAutomations";
 import { useCloudOffering } from "../hooks/useCloudOffering";
 import { useProviderConnections } from "../hooks/useProviderConnections";
+import { agentLabel } from "../lib/agent-options";
+import { useUiStore } from "../stores/ui-store";
 import {
 	centeredOnboardingDialogClass,
 	onboardingAlertErrorClass,
@@ -102,6 +105,11 @@ const TEMPLATE_ICONS = { daily_pr_review_v1: GitPullRequest, daily_issue_triage_
 function displayTime(value?: string, locale?: string) {
 	if (!value) return "—";
 	return new Intl.DateTimeFormat(locale, { dateStyle: "medium", timeStyle: "short" }).format(new Date(value));
+}
+
+/** This computer's IANA timezone, the zone a new automation's clock time is in. */
+function localTimezone() {
+	return Intl.DateTimeFormat().resolvedOptions().timeZone || "UTC";
 }
 
 function timestamp(value?: string) {
@@ -341,19 +349,23 @@ export function AutomationsView() {
 				</ScrollArea.Scrollbar>
 			</main>
 			</ScrollArea.Root>
-			<AutomationFormDialog initialTemplateId={starter} open={createOpen} workspaces={workspaces} harnesses={harnesses} cloudOrgId={cloud.available ? cloud.orgId : undefined} cloudHarnesses={chatHarnesses} connectedCloudHarnesses={connectedCloudHarnesses} busy={create.isPending || createCloud.isPending} error={create.error?.message ?? cloudAutomationErrorMessage(createCloud.error, t)} onOpenChange={(open) => { setCreateOpen(open); if (!open) createCloud.reset(); }} onSubmit={async ({ runsOn, ...input }) => {
-				if (runsOn === "cloud") {
+			<AutomationFormDialog initialTemplateId={starter} open={createOpen} workspaces={workspaces} harnesses={harnesses} cloudOrgId={cloud.available ? cloud.orgId : undefined} cloudHarnesses={chatHarnesses} connectedCloudHarnesses={connectedCloudHarnesses} busy={create.isPending || createCloud.isPending} error={create.error?.message ?? cloudAutomationErrorMessage(createCloud.error, t)} onOpenChange={(open) => { setCreateOpen(open); if (!open) createCloud.reset(); }} onSubmit={async (input) => {
+				if (input.runsOn === "cloud") {
 					// A cloud run is unattended: trusted mode, the default time limit.
-					await createCloud.mutateAsync({ projectId: input.projectId!, displayName: input.displayName, prompt: input.prompt, harness: input.harness as CloudAutomation["harness"], timezone: input.timezone!, rrule: input.rrule, mode: "trusted", maxRuntimeMinutes: 60, enabled: true });
+					await createCloud.mutateAsync({ projectId: input.projectId!, displayName: input.displayName!, prompt: input.prompt!, harness: input.harness!, timezone: input.timezone!, rrule: input.rrule, mode: "trusted", maxRuntimeMinutes: 60, enabled: true });
 				} else {
-					await create.mutateAsync(input as CreateAutomationInput);
+					const { runsOn: _runsOn, ...body } = input;
+					await create.mutateAsync(body as CreateAutomationInput);
 				}
 				setCreateOpen(false);
 			}} />
-			<AutomationFormDialog open={Boolean(editTarget)} automation={editTarget ?? undefined} workspaces={workspaces} harnesses={harnesses} busy={update.isPending} error={update.error?.message ?? null} onOpenChange={(open) => { if (!open) setEditTarget(null); }} onSubmit={async ({ runsOn: _runsOn, ...input }) => { if (!editTarget) return; await update.mutateAsync({ id: editTarget.id, body: input }); setEditTarget(null); }} />
-			<AutomationFormDialog open={Boolean(cloudEditTarget)} cloudAutomation={cloudEditTarget ?? undefined} cloudOrgId={cloud.orgId} cloudHarnesses={chatHarnesses} connectedCloudHarnesses={connectedCloudHarnesses} workspaces={workspaces} harnesses={harnesses} busy={updateCloud.isPending} error={cloudAutomationErrorMessage(updateCloud.error, t)} onOpenChange={(open) => { if (!open) { setCloudEditTarget(null); updateCloud.reset(); } }} onSubmit={async (input) => {
-				if (!cloudEditTarget) return;
-				await updateCloud.mutateAsync({ id: cloudEditTarget.id, body: { displayName: input.displayName, prompt: input.prompt, ...(input.harness ? { harness: input.harness as CloudAutomation["harness"] } : {}), ...(input.rrule ? { rrule: input.rrule } : {}) } });
+			<AutomationFormDialog open={Boolean(editTarget)} automation={editTarget ?? undefined} workspaces={workspaces} harnesses={harnesses} busy={update.isPending} error={update.error?.message ?? null} onOpenChange={(open) => { if (!open) setEditTarget(null); }} onSubmit={async (input) => { if (!editTarget || input.runsOn !== "local") return; const { runsOn: _runsOn, ...body } = input; await update.mutateAsync({ id: editTarget.id, body }); setEditTarget(null); }} />
+			<AutomationFormDialog open={Boolean(cloudEditTarget)} cloudAutomation={cloudEditTarget ?? undefined} cloudOrgId={cloud.orgId} cloudUserId={cloud.userId} cloudHarnesses={chatHarnesses} connectedCloudHarnesses={connectedCloudHarnesses} workspaces={workspaces} harnesses={harnesses} busy={updateCloud.isPending} error={cloudAutomationErrorMessage(updateCloud.error, t)} onOpenChange={(open) => { if (!open) { setCloudEditTarget(null); updateCloud.reset(); } }} onSubmit={async (input) => {
+				if (!cloudEditTarget || input.runsOn !== "cloud") return;
+				// Only what changed: any change makes the automation run as the editor, so
+				// an unchanged save must not rebind it.
+				const { runsOn: _runsOn, projectId: _projectId, timezone: _timezone, ...body } = input;
+				if (Object.keys(body).length > 0) await updateCloud.mutateAsync({ id: cloudEditTarget.id, body });
 				setCloudEditTarget(null);
 			}} />
 			<ConfirmDialog open={Boolean(deleteTarget)} title={t("automations.delete.title")} description={t("automations.delete.description", { name: deleteTarget?.displayName })} confirmLabel={t("automations.delete.confirm")} destructive busy={remove.isPending || removeCloud.isPending} error={deleteTarget?.cloud ? cloudAutomationErrorMessage(removeCloud.error, t) : remove.error?.message ?? null} onOpenChange={(open) => { if (!open) { setDeleteTarget(null); removeCloud.reset(); } }} onConfirm={() => {
@@ -493,12 +505,18 @@ function CloudAutomationRow({ item, projectName, busy, expanded, onExpand, onEdi
 	const historyId = `automation-history-cloud-${item.id}`;
 	const runAs = item.runAs.displayName || item.runAs.email || t("automations.cloud.runAsUnknown");
 	const latestError = item.latestRun ? cloudRunErrorMessage(item.latestRun, t) : undefined;
-	const running = item.latestRun ? ["pending", "starting", "running"].includes(item.latestRun.status) : false;
+	const running = isCloudRunInFlight(item.latestRun);
+	// The organization shares it, so a teammate elsewhere reads its clock time in its own zone.
+	const schedule = item.timezone === localTimezone()
+		? scheduleLabel(item.rrule)
+		: t("automations.cloud.scheduleInZone", { schedule: scheduleLabel(item.rrule), timezone: item.timezone });
+	const notOnSchedule = item.disabledReason || t("automations.paused");
 	async function act(action: () => Promise<unknown>) {
 		onError(null);
 		try { await action(); } catch (error) { onError(cloudAutomationErrorMessage(error, t)); }
 	}
-	const subscribeLabel = t(item.subscribed ? "automations.cloud.unsubscribe" : "automations.cloud.subscribe", { name: item.displayName });
+	// A toggle keeps one name; aria-pressed says whether it is on.
+	const subscribeLabel = t("automations.cloud.subscribe", { name: item.displayName });
 	return <article className="group">
 		<div className={cn("flex items-center gap-3 rounded-md px-2 py-2.5", expanded ? "bg-interactive-hover" : "hover:bg-interactive-hover")}>
 			<Pressable className="flex min-w-0 flex-1 items-center gap-2.5 rounded-sm" aria-label={t(expanded ? "automations.runs.hide" : "automations.runs.show", { name: item.displayName })} aria-expanded={expanded} aria-controls={historyId} onClick={onExpand}>
@@ -510,7 +528,7 @@ function CloudAutomationRow({ item, projectName, busy, expanded, onExpand, onEdi
 					</h2>
 					<p className="flex min-w-0 items-center gap-1.5 text-caption leading-5 text-muted-foreground">
 						<Clock aria-hidden="true" className="size-icon-xs shrink-0 text-passive" />
-						<span className="truncate">{scheduleLabel(item.rrule)}</span>
+						<span className="truncate">{schedule}</span>
 						<span aria-hidden="true" className="text-passive">·</span>
 						<span className="truncate">{projectName}</span>
 						<span aria-hidden="true" className="text-passive">·</span>
@@ -520,7 +538,7 @@ function CloudAutomationRow({ item, projectName, busy, expanded, onExpand, onEdi
 			</Pressable>
 			<div className="hidden shrink-0 text-end text-caption leading-5 @lg:block">
 				<p className={cn("tabular-nums", item.enabled ? "text-foreground" : "text-muted-foreground")}>
-					{item.enabled ? t("automations.nextRunAt", { time: displayTime(item.nextRunAt, i18n.resolvedLanguage) }) : item.disabledReason || t("automations.paused")}
+					{item.enabled ? t("automations.nextRunAt", { time: displayTime(item.nextRunAt, i18n.resolvedLanguage) }) : notOnSchedule}
 				</p>
 				{item.latestRun ? <p className="text-muted-foreground">{t("automations.lastRun", { status: t(`automations.runStatus.${item.latestRun.status}`, { defaultValue: item.latestRun.status }) })}</p> : null}
 			</div>
@@ -549,9 +567,9 @@ function CloudAutomationRow({ item, projectName, busy, expanded, onExpand, onEdi
 			{expanded ? <motion.div id={historyId} initial={{ height: 0, opacity: 0 }} animate={{ height: "auto", opacity: 1 }} exit={{ height: 0, opacity: 0 }} transition={{ duration: reduceMotion ? 0 : 0.18, ease: "easeOut" }} className="overflow-hidden">
 				<div className="px-2 pt-3 pb-4 pl-8">
 					<div className="mb-4 flex flex-wrap items-center gap-x-4 gap-y-1 text-caption text-muted-foreground">
-						<span className="@lg:hidden tabular-nums">{item.enabled ? t("automations.nextRunAt", { time: displayTime(item.nextRunAt, i18n.resolvedLanguage) }) : t("automations.paused")}</span>
+						<span className="@lg:hidden tabular-nums">{item.enabled ? t("automations.nextRunAt", { time: displayTime(item.nextRunAt, i18n.resolvedLanguage) }) : notOnSchedule}</span>
 						<span>{t("automations.timezone", { timezone: item.timezone })}</span>
-						<span>{t("automations.agent")}: <span className="text-foreground">{item.harness}</span></span>
+						<span>{t("automations.agent")}: <span className="text-foreground">{agentLabel(item.harness)}</span></span>
 						<span>{t("automations.cloud.branch")}: <span className="font-mono text-foreground">{item.branch}</span></span>
 					</div>
 					<p className="mb-1 text-caption font-medium text-muted-foreground">{t("automations.field.prompt")}</p>
@@ -569,9 +587,19 @@ function CloudAutomationRow({ item, projectName, busy, expanded, onExpand, onEdi
 
 type WorkspaceOption = { id: string; name: string; kind?: string; standaloneAgent?: boolean; cloudOrgId?: string; shared?: unknown };
 type RunsOn = "local" | "cloud";
-type AutomationFormSubmit = {
-	/** Where the automation runs: this Mac's daemon, or AO Cloud. */
-	runsOn: RunsOn;
+/** A cloud automation's create, or only the fields an edit changed. */
+type CloudAutomationFormSubmit = {
+	runsOn: "cloud";
+	projectId?: string;
+	timezone?: string;
+	displayName?: string;
+	prompt?: string;
+	harness?: CloudAutomation["harness"];
+	rrule?: string;
+};
+type AutomationFormSubmit = CloudAutomationFormSubmit | {
+	/** Where the automation runs: this computer's daemon. */
+	runsOn: "local";
 	templateId?: AutomationTemplateID;
 	useCase?: AutomationUseCase;
 	projectId?: string;
@@ -593,6 +621,8 @@ type AutomationFormDialogProps = {
 	cloudAutomation?: CloudAutomation;
 	/** The organization whose cloud projects may run automations; unset when AO Cloud automations are not offered. */
 	cloudOrgId?: string;
+	/** The signed-in Cloud user; editing an automation that runs as someone else makes it run as them. */
+	cloudUserId?: string;
 	/** Harnesses AO Cloud runs in Chat (`/me` chatHarnesses). */
 	cloudHarnesses?: string[];
 	/** Harnesses the user has a valid AO Cloud login for; unset while loading. */
@@ -625,6 +655,7 @@ function AutomationFormDialog({
 	automation,
 	cloudAutomation,
 	cloudOrgId,
+	cloudUserId,
 	cloudHarnesses,
 	connectedCloudHarnesses,
 	workspaces,
@@ -637,7 +668,7 @@ function AutomationFormDialog({
 	const { t } = useTranslation();
 	const edited = automation ?? cloudAutomation;
 	const editing = Boolean(edited);
-	const timezone = edited?.timezone || Intl.DateTimeFormat().resolvedOptions().timeZone || "UTC";
+	const timezone = edited?.timezone || localTimezone();
 	const [runsOn, setRunsOn] = useState<RunsOn>("local");
 	const isCloud = runsOn === "cloud";
 	const [projectId, setProjectId] = useState("");
@@ -730,8 +761,11 @@ function AutomationFormDialog({
 		.filter((id) => !cloudHarnesses?.length || cloudHarnesses.includes(id))
 		// A run uses the login of the person it runs as, so offer only harnesses logged in to AO Cloud.
 		.filter((id) => !connectedCloudHarnesses || connectedCloudHarnesses.includes(id) || id === cloudAutomation?.harness)
-		.map((id) => ({ value: id, label: harnesses.find((agent) => agent.id === id)?.label ?? id }));
-	const cloudHarness = cloudHarnessOptions.some((option) => option.value === harness) ? harness : cloudHarnessOptions[0]?.value ?? "";
+		.map((id) => ({ value: id, label: harnesses.find((agent) => agent.id === id)?.label ?? agentLabel(id) }));
+	const cloudHarness = cloudHarnessOptions.find((option) => option.value === harness)?.value ?? cloudHarnessOptions[0]?.value;
+	// Any saved change makes a cloud automation run as its editor (the contract's updateAutomation).
+	const rebindsToEditor = Boolean(cloudAutomation && cloudUserId && cloudAutomation.runAs.userId !== cloudUserId);
+	const openGlobalSettings = useUiStore((state) => state.openGlobalSettings);
 	// Prefer an explicit choice, then the project's resolved worker, then the
 	// first ready harness so Model isn't stuck on "Select agent" before a
 	// project is picked.
@@ -776,7 +810,7 @@ function AutomationFormDialog({
 
 	async function submit(event: FormEvent) {
 		event.preventDefault();
-		if (!isCloud && (!modelValid || awaitingInheritedHarness)) return;
+		if (isCloud ? !cloudHarness : !modelValid || awaitingInheritedHarness) return;
 		const nextErrors: AutomationValidationErrors = {};
 		if (!editing && !projectId) nextErrors.projectId = t("automations.validation.project");
 		if (!name.trim()) nextErrors.name = t("automations.validation.name");
@@ -817,12 +851,13 @@ function AutomationFormDialog({
 		try {
 			if (isCloud) {
 				// A cloud automation runs the harness's default model in trusted mode.
+				// An edit sends only what changed: any change rebinds who it runs as.
 				await onSubmit({
 					runsOn: "cloud",
 					...(editing ? {} : { projectId, timezone }),
-					displayName: name,
-					prompt,
-					...(!editing || cloudHarness !== (cloudAutomation?.harness ?? "") ? { harness: cloudHarness } : {}),
+					...(!cloudAutomation || name !== cloudAutomation.displayName ? { displayName: name } : {}),
+					...(!cloudAutomation || prompt !== cloudAutomation.prompt ? { prompt } : {}),
+					...(!cloudAutomation || cloudHarness !== cloudAutomation.harness ? { harness: cloudHarness } : {}),
 					...(scheduleChanged ? { rrule: nextRRule } : {}),
 				});
 				if (funnel) void captureRendererEvent("ao.renderer.automation_create_succeeded", funnel);
@@ -917,19 +952,27 @@ function AutomationFormDialog({
 								className="min-h-28 w-full resize-y rounded-md border border-transparent bg-input/50 px-3 py-2 text-[13px] leading-5 outline-none focus-visible:border-ring focus-visible:ring-2 focus-visible:ring-ring/30 aria-invalid:border-destructive"
 							/>
 						</Field>
+						{isCloud && !cloudHarness ? (
+							<div className="flex items-center justify-between gap-3">
+								<p id="automation-agent-login" className={onboardingFieldHintClass}>{t("automations.cloud.connectAgentHint")}</p>
+								<Button type="button" variant="secondary" size="sm" className="shrink-0" onClick={() => { onOpenChange(false); openGlobalSettings("harness", { harnessView: "cloud" }); }}>
+									{t("createProject.openHarnessSettings")}
+								</Button>
+							</div>
+						) : null}
 						<div className="grid grid-cols-2 gap-3">
 							{isCloud ? (
 								<Field label={t("automations.agent")} id="automation-agent">
 									<AutomationSelect
 										id="automation-agent"
 										label={t("automations.agent")}
-										value={cloudHarness}
-										disabled={busy}
+										value={cloudHarness ?? ""}
+										disabled={busy || !cloudHarness}
 										onValueChange={setHarness}
 										options={cloudHarnessOptions}
 										placeholder={t("automations.cloud.noConnectedAgent")}
+										describedBy={cloudHarness ? undefined : "automation-agent-login"}
 									/>
-									{cloudHarnessOptions.length === 0 ? <p className={onboardingFieldHintClass}>{t("automations.cloud.connectAgentHint")}</p> : null}
 								</Field>
 							) : <RequiredAgentField
 								id="automation-agent"
@@ -1063,6 +1106,7 @@ function AutomationFormDialog({
 							</div>
 						) : null}
 						<p className={onboardingFieldHintClass}>{t("automations.timezone", { timezone })}</p>
+						{rebindsToEditor && cloudHarness ? <p className={onboardingFieldHintClass}>{t("automations.cloud.rebindNotice", { agent: agentLabel(cloudHarness) })}</p> : null}
 						{templateId !== "custom" ? <p className="text-xs leading-5 text-muted-foreground">{t("automations.templates.setup")}</p> : null}
 						{error ? <p role="alert" className={onboardingFieldErrorClass}>{error}</p> : null}
 					</div>
@@ -1071,7 +1115,7 @@ function AutomationFormDialog({
 						<Button type="button" variant="secondary" disabled={busy} onClick={() => onOpenChange(false)}>
 							{t("automations.cancel")}
 						</Button>
-						<Button type="submit" variant="primary" disabled={busy || (!isCloud && (!modelValid || awaitingInheritedHarness))}>
+						<Button type="submit" variant="primary" disabled={busy || (isCloud ? !cloudHarness : !modelValid || awaitingInheritedHarness)}>
 							{busy ? t(editing ? "automations.saving" : "automations.creating") : t(editing ? "automations.save" : "automations.create")}
 						</Button>
 					</div>

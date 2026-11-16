@@ -20,17 +20,40 @@ export const CLOUD_AUTOMATION_HARNESSES = ["claude-code", "codex", "cursor"] as 
 
 export const cloudAutomationsQueryKey = ["cloud-automations"] as const;
 
+const IN_FLIGHT_RUN_STATUSES: ReadonlySet<string> = new Set(["pending", "starting", "running"]);
+
+/** Whether a run is still going: it may change on the control plane's next tick. */
+export function isCloudRunInFlight(run: Pick<CloudAutomationRun, "status"> | undefined): boolean {
+	return Boolean(run && IN_FLIGHT_RUN_STATUSES.has(run.status));
+}
+
+// The control plane's automation loop ticks every 30s (and at once for Run now),
+// so a run in flight is followed every 15s; otherwise the list only changes at a
+// scheduled time or by someone's edit, and once a minute is enough.
+const IN_FLIGHT_POLL_MS = 15_000;
+const IDLE_POLL_MS = 60_000;
+
+/** How often the automation list refreshes: closely while any automation's latest run is in flight. */
+export function cloudAutomationPollInterval(automations: ReadonlyArray<Pick<CloudAutomation, "latestRun">> | undefined): number {
+	return automations?.some((item) => isCloudRunInFlight(item.latestRun)) ? IN_FLIGHT_POLL_MS : IDLE_POLL_MS;
+}
+
+/** How often an expanded run history refreshes: closely while one of its runs is in flight. */
+export function cloudRunsPollInterval(runs: ReadonlyArray<Pick<CloudAutomationRun, "status">> | undefined): number {
+	return runs?.some((run) => isCloudRunInFlight(run)) ? IN_FLIGHT_POLL_MS : IDLE_POLL_MS;
+}
+
 /** Whether cloud automations are offered, and the organization and query key they live under. */
 export function useCloudAutomationsScope() {
-	const { client, baseUrl } = useCloudCp();
+	const { client, baseUrl, userId } = useCloudCp();
 	const offering = useCloudOffering();
 	const orgId = offering.org?.id ?? "";
 	const available = offering.ready && orgId !== "" && offering.features.includes(AUTOMATIONS_FEATURE);
-	return { client, orgId, available, queryKey: [...cloudAutomationsQueryKey, baseUrl, orgId] as const };
+	return { client, orgId, userId, available, queryKey: [...cloudAutomationsQueryKey, baseUrl, orgId] as const };
 }
 
 export function useCloudAutomations() {
-	const { client, orgId, available, queryKey } = useCloudAutomationsScope();
+	const { client, orgId, userId, available, queryKey } = useCloudAutomationsScope();
 	const query = useQuery({
 		queryKey,
 		enabled: available,
@@ -44,9 +67,10 @@ export function useCloudAutomations() {
 			} while (cursor);
 			return automations;
 		},
-		refetchInterval: 15_000,
+		refetchInterval: (current) => cloudAutomationPollInterval(current.state.data),
 	});
-	return { ...query, available, orgId };
+	/** The signed-in Cloud user: an edit by anyone else makes the automation run as the editor. */
+	return { ...query, available, orgId, userId };
 }
 
 /** Replaces one automation in the cached list, or adds it. */
@@ -119,7 +143,7 @@ export function useCloudAutomationRuns(id: string | null) {
 		queryKey: [...queryKey, id, "runs"],
 		enabled: available && Boolean(id),
 		queryFn: async ({ signal }) => (id ? (await client.listAutomationRuns(orgId, id, { limit: 100 }, { signal })).items : []),
-		refetchInterval: 15_000,
+		refetchInterval: (current) => cloudRunsPollInterval(current.state.data),
 	});
 }
 
@@ -140,12 +164,31 @@ export function cloudAutomationErrorMessage(error: unknown, t: TFunction): strin
 	return error instanceof Error ? error.message : String(error);
 }
 
-const RUN_ERROR_CODES = ["PREVIOUS_RUN_ACTIVE", "SANDBOX_QUOTA_EXCEEDED", "TIMED_OUT", "AGENT_FAILED"] as const;
+const RUN_ERROR_CODES = [
+	"PREVIOUS_RUN_ACTIVE",
+	"AUTOMATION_DISABLED",
+	"SANDBOX_QUOTA_EXCEEDED",
+	"TIMED_OUT",
+	"AGENT_FAILED",
+	"SESSION_ENDED",
+	"START_FAILED",
+	"agent_provider_required",
+] as const;
 
-/** Why a cloud run did not finish, as the person reads it. */
+/** The plan refusals a run is skipped with (the contract's AutomationRunStatus): one message for all. */
+const PLAN_LIMIT_CODES: ReadonlySet<string> = new Set([
+	"SESSION_LIMIT_REACHED",
+	"WORKER_SLOTS_FULL",
+	"ORCHESTRATOR_SLOTS_FULL",
+	"WINDOW_LIMIT_REACHED",
+	"WEEKLY_LIMIT_REACHED",
+]);
+
+/** Why a cloud run did not finish, as the person reads it; the server's words for a code this app does not know. */
 export function cloudRunErrorMessage(run: Pick<CloudAutomationRun, "errorCode" | "errorMessage">, t: TFunction): string | undefined {
 	if (run.errorCode && (RUN_ERROR_CODES as readonly string[]).includes(run.errorCode)) {
 		return t(`automations.cloud.runError.${run.errorCode as (typeof RUN_ERROR_CODES)[number]}`);
 	}
+	if (run.errorCode && PLAN_LIMIT_CODES.has(run.errorCode)) return t("automations.cloud.runError.PLAN_LIMIT");
 	return run.errorMessage || undefined;
 }
