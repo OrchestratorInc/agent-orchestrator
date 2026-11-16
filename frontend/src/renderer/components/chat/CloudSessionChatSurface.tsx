@@ -583,7 +583,7 @@ function PlanLimitNotice({ code, shared, onDismiss }: { code: string; shared: bo
 			: typeof limit === "number" && Number.isFinite(limit) && limit >= 0
 				? appI18n.t("cloud.planLimit.slotsFullWithLimit", { plan: planName, limit })
 				: appI18n.t("cloud.planLimit.slotsFullOnPlan", { plan: planName });
-	const nextStep = appI18n.t(canUpgrade ? "cloud.planLimit.stopOrUpgrade" : "cloud.planLimit.contactAdmin");
+	const nextStep = appI18n.t(canUpgrade ? "cloud.planLimit.stopOrUpgrade" : "cloud.planLimit.stopOrContactAdmin");
 	return (
 		<ComposerErrorNotice
 			title={appI18n.t("cloud.planLimit.title")}
