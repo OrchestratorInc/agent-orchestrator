@@ -1027,6 +1027,37 @@ describe("ChatWorkspace steering", () => {
 		expect(steer.compareDocumentPosition(screen.getByText("Rebasing onto main.")) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
 	});
 
+	it("draws a queued turn that ran after a steered turn below that turn's steer and answer", () => {
+		const at = (minute: number) => `2026-08-11T10:${String(minute).padStart(2, "0")}:00Z`;
+		render(
+			<ChatWorkspace
+				snapshot={{
+					...chatFixture,
+					latestSequence: 15,
+					// B was queued while A ran; C was queued after it and steered into A. B ran once A finished.
+					turns: [
+						{ id: "a", state: "completed", providerTurnId: "provider-a", requestedAt: at(0), startedAt: at(0), completedAt: at(5) },
+						{ id: "b", state: "running", providerTurnId: "provider-b", requestedAt: at(1), startedAt: at(6) },
+					],
+					items: [
+						{ kind: "message", id: "a-prompt", turnId: "a", sequence: 10, revision: 0, role: "user", origin: "human", text: "Fix the flaky test", streaming: false, createdAt: at(0) },
+						{ kind: "message", id: "b-prompt", turnId: "b", sequence: 11, revision: 0, role: "user", origin: "human", text: "Then update the changelog", streaming: false, createdAt: at(1) },
+						{ kind: "activity", id: "steer-c", turnId: "a", sequence: 13, revision: 0, activityKind: "system", status: "completed", summary: "use the unit tests only", detail: { event: "steer", origin: "human", text: "use the unit tests only", clientMessageId: "c" }, createdAt: at(3) },
+						{ kind: "message", id: "a-answer", turnId: "a", sequence: 14, revision: 0, role: "assistant", origin: "provider", text: "Fixed with unit tests only.", streaming: false, createdAt: at(4) },
+						{ kind: "message", id: "b-reply", turnId: "b", sequence: 15, revision: 0, role: "assistant", origin: "provider", text: "Updating the changelog.", streaming: false, createdAt: at(7) },
+					],
+				}}
+			/>,
+		);
+		const follows = (a: Element, b: Element) => Boolean(a.compareDocumentPosition(b) & Node.DOCUMENT_POSITION_FOLLOWING);
+		const answer = screen.getByText("Fixed with unit tests only.");
+		const prompt = screen.getByText("Then update the changelog");
+		expect(follows(screen.getByText("use the unit tests only"), answer)).toBe(true);
+		expect(follows(answer, prompt)).toBe(true);
+		expect(follows(prompt, screen.getByText("Updating the changelog."))).toBe(true);
+		expect(follows(answer, document.querySelector("[data-turn-live-row]")!)).toBe(true);
+	});
+
 	it("keeps a steered turn's first part where the turn began when its prompt is above the loaded history", () => {
 		const at = (minute: number) => `2026-08-11T10:${String(minute).padStart(2, "0")}:00Z`;
 		render(

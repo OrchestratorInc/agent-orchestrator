@@ -7464,7 +7464,23 @@ function groupByTurn(snapshot: ConversationSnapshot, { controllerStopped = false
 	);
 	// A steer's part sorts at the steer, so it draws below a turn that began while the
 	// steered turn ran, such as a Codex subagent's turn adopted from its child thread.
-	return segments.sort((a, b) => a.anchor - b.anchor);
+	// A turn that started only after a steered turn ended (one that waited in the queue)
+	// sorts after that turn's last row instead.
+	const ended = new Map<string, { at: number; last: number }>();
+	for (const segment of segments) {
+		const completedAt = segment.turnId && segment.key.includes(":steer:") ? Date.parse(byTurn.get(segment.turnId)?.completedAt ?? "") : NaN;
+		if (Number.isFinite(completedAt)) ended.set(segment.turnId!, { at: completedAt, last: segment.items.at(-1)!.sequence });
+	}
+	if (ended.size === 0) return segments.sort((a, b) => a.anchor - b.anchor);
+	const sortKey = new Map(segments.map((segment) => {
+		const startedAt = segment.turnId ? Date.parse(byTurn.get(segment.turnId)?.startedAt ?? "") : NaN;
+		let key = segment.anchor;
+		for (const [turnId, turn] of ended) {
+			if (turnId !== segment.turnId && startedAt >= turn.at && key < turn.last) key = turn.last + 0.001;
+		}
+		return [segment, key] as const;
+	}));
+	return segments.sort((a, b) => sortKey.get(a)! - sortKey.get(b)!);
 }
 
 type ConversationSubagents = {
