@@ -35,6 +35,8 @@ describe("offeringKindFor", () => {
 		expect(offeringKindFor(["freestyle"])).toBe("b2c");
 		expect(offeringKindFor(["docker"])).toBe("b2c");
 		expect(offeringKindFor(["freestyle", "coder"])).toBe("both");
+		expect(offeringKindFor(["boat"])).toBe("b2c");
+		expect(offeringKindFor(["boat", "coder"])).toBe("both");
 		expect(offeringKindFor([])).toBe("none");
 	});
 });
