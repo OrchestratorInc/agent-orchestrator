@@ -24,7 +24,7 @@ import type { ArtifactRow } from "../lib/artifacts";
 import { useCloudSession } from "../lib/cloud-session";
 import { clearSignInSource, noteSignInSource } from "../lib/cloud-telemetry";
 import { captureRendererEvent } from "../lib/telemetry";
-import { onArtifactLinksUnpublished } from "../lib/unpublish-artifacts";
+import { onArtifactLinksUnpublished, trackPublish } from "../lib/unpublish-artifacts";
 import { cn } from "../lib/utils";
 import { useUiStore } from "../stores/ui-store";
 import { STANDALONE_WORKSPACE_ID } from "../types/workspace";
@@ -885,6 +885,7 @@ function SharePanel({
 			invited,
 		};
 		setPending(key, pending);
+		trackPublish(baseUrl, file, pending.result);
 		try {
 			const result = await pending.result;
 			// Sent here, not in settle: this runs once per publish even if the panel closed meanwhile.

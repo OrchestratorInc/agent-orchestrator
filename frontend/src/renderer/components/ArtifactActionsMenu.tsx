@@ -16,7 +16,8 @@ import { artifactChangeError, artifactKey, canChangeSessionArtifacts } from "../
 import { fileMediaKind } from "../lib/file-media";
 import { isMacPlatform, isWindowsPlatform } from "../lib/platform";
 import { captureRendererEvent } from "../lib/telemetry";
-import { prepareUnpublish, unpublishTarget, warnLinksStillLive } from "../lib/unpublish-artifacts";
+import { mayBePublished, prepareUnpublish, publishedCheck, unpublishTarget, warnLinksStillLive } from "../lib/unpublish-artifacts";
+import { usePublishedLinkCount } from "../hooks/usePublishedLinkCount";
 import { cn } from "../lib/utils";
 import { useArtifactsViewStore } from "../stores/artifacts-view-store";
 import type { SessionArtifact, WorkspaceSession } from "../types/workspace";
@@ -91,7 +92,7 @@ export function ArtifactActionsMenu({
 	className,
 	children,
 }: {
-	artifact: Pick<SessionArtifact, "id" | "name" | "path" | "rawUrl" | "updatedAt" | "shareUrl">;
+	artifact: Pick<SessionArtifact, "id" | "name" | "path" | "rawUrl" | "updatedAt" | "shareUrl" | "sha256">;
 	downloadUrl?: string;
 	hostId?: string;
 	session: Pick<WorkspaceSession, "id" | "cloud">;
@@ -139,12 +140,18 @@ export function ArtifactActionsMenu({
 		? downloadUrl ?? (access.data ? cloudArtifactFileUrl(access.data, artifact.path, artifact.updatedAt) : undefined)
 		: undefined;
 	const { baseUrl: shareBaseUrl } = useShareAccess();
+	// A cloud file's link is looked up while its delete is being confirmed.
+	const deletesLink = usePublishedLinkCount(shareBaseUrl, publishedCheck({ ...session, hostId }, [artifact]), confirmingDelete) > 0;
 	// The deleted file leaves the session's artifact list on the next read.
 	// Its link is looked up while the file is there and unpublished once it is
 	// gone; a remote host's file has no link recorded on this computer.
 	const remove = useMutation({
 		mutationFn: async () => {
-			const links = await prepareUnpublish(shareBaseUrl, published && !hostId ? [share ?? unpublishTarget(session, artifact)] : []);
+			const links = await prepareUnpublish(
+				shareBaseUrl,
+				mayBePublished(session, artifact) && !hostId ? [share ?? unpublishTarget(session, artifact)] : [],
+				{ deleting: hostId ? [] : [{ sessionId: session.id, path: artifact.path }] },
+			);
 			await (session.cloud
 				? cloudClient.deleteSessionArtifact(session.cloud.orgId, session.id, artifact.path).catch((error: unknown) => { throw artifactChangeError(error, t("artifacts.viewOnly")); })
 				: deleteSessionArtifactFile({ path: artifact.path, sessionId: session.id, hostId }));
@@ -443,7 +450,7 @@ export function ArtifactActionsMenu({
 			<ConfirmDialog
 				busy={remove.isPending}
 				confirmLabel={t("artifacts.delete")}
-				description={`${t(session.cloud ? "artifacts.deleteCloudDescription" : "artifacts.deleteDescription", { name: artifact.name })}${published ? ` ${t("artifacts.deletePublished")}` : ""}`}
+				description={`${t(session.cloud ? "artifacts.deleteCloudDescription" : "artifacts.deleteDescription", { name: artifact.name })}${deletesLink ? ` ${t("artifacts.deletePublished")}` : ""}`}
 				destructive
 				error={remove.error?.message ?? null}
 				onConfirm={() => remove.mutate()}
