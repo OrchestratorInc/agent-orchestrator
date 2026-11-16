@@ -705,6 +705,58 @@ describe("SessionsBoardView", () => {
 		expect(screen.getByText(getSessionStatusView("ci_failed").label)).toBeInTheDocument();
 	});
 
+	it("counts a multi-PR session's other PRs beside the daemon's status", () => {
+		const labels = {
+			formatTime: () => "1h ago",
+			intakeIssue: (id: string) => `Issue ${id}`,
+			pr: {
+				short: "PR",
+				states: { closed: "closed", draft: "draft", merged: "merged", open: "open" },
+			},
+			updatedAt: (timestamp: string) => `Updated ${timestamp}`,
+		};
+		const session: BoardSessionPresentation = {
+			...baseSession,
+			displayStatus: "Awaiting review",
+			kanbanColumn: "needs_review",
+			prMix: { lead: "2 awaiting review", detail: "1 waiting on #8277" },
+			status: "review_pending",
+		};
+		const { rerender } = render(
+			<SessionCardView
+				externalLink={ExternalLink}
+				labels={labels}
+				renderAvatar={(provider) => <span role="img" aria-label={provider}>C</span>}
+				session={session}
+			/>,
+		);
+		expect(screen.getByTestId("session-status")).toHaveTextContent("2 awaiting review · 1 waiting on #8277");
+		expect(screen.queryByText("Awaiting review")).not.toBeInTheDocument();
+
+		// The daemon's phrase decides the tone even where the older derived status still reads mergeable.
+		rerender(
+			<SessionCardView
+				externalLink={ExternalLink}
+				labels={labels}
+				renderAvatar={(provider) => <span role="img" aria-label={provider}>C</span>}
+				session={{ ...baseSession, displayStatus: "Waiting on base PR", kanbanColumn: "needs_review", status: "mergeable" }}
+			/>,
+		);
+		expect(screen.getByTestId("session-status")).toHaveTextContent("Waiting on base PR");
+		expect(screen.getByTestId("session-status")).not.toHaveClass("text-success");
+
+		// While the status is still being checked, the counts stay out of it.
+		rerender(
+			<SessionCardView
+				externalLink={ExternalLink}
+				labels={labels}
+				renderAvatar={(provider) => <span role="img" aria-label={provider}>C</span>}
+				session={{ ...session, statusReadiness: "checking" }}
+			/>,
+		);
+		expect(screen.getByTestId("session-status")).not.toHaveTextContent("1 waiting on #8277");
+	});
+
 	it("translates the daemon's display status instead of printing raw English", () => {
 		render(
 			<SessionCardView
