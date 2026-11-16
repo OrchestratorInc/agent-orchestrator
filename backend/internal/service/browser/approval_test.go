@@ -412,3 +412,14 @@ func TestStuckDescribeStillShowsAPromptPromptly(t *testing.T) {
 		t.Fatalf("prompt listed after %v (ok=%v)", waited, ok)
 	}
 }
+
+func TestSpaceOnFocusedControlIsGated(t *testing.T) {
+	for _, key := range []string{"Space", " ", "NumpadEnter"} {
+		rt := &scriptedRuntime{describe: placeOrder()}
+		svc, gate, token := approvalService(t, rt)
+		answer(t, gate, approval.DecisionDeny)
+		if _, _, err := svc.Execute(context.Background(), "s1", token, "press", map[string]interface{}{"key": key}); apiErrorCode(err) != "BROWSER_ACTION_DENIED" {
+			t.Fatalf("%q: err = %v", key, err)
+		}
+	}
+}
