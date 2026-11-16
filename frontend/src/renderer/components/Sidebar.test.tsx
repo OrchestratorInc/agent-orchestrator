@@ -775,7 +775,7 @@ describe("Sidebar", () => {
 		expect(screen.getAllByLabelText("Sign in")).toHaveLength(2);
 	});
 
-	it("shows the Artifacts row under Automations with a count of live artifacts", async () => {
+	it("shows the Artifacts row under Automations with a count of every listed artifact, archived sessions' included", async () => {
 		const user = userEvent.setup();
 		const withArtifacts: WorkspaceSummary = {
 			...workspace,
@@ -802,7 +802,7 @@ describe("Sidebar", () => {
 		const automations = screen.getByRole("button", { name: "Automations" });
 		const artifacts = screen.getByRole("button", { name: "Artifacts" });
 		expect(automations.compareDocumentPosition(artifacts) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
-		expect(artifacts).toHaveTextContent("2");
+		expect(artifacts).toHaveTextContent("3");
 		expect(artifacts).not.toHaveAttribute("aria-current");
 
 		await user.click(artifacts);

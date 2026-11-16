@@ -16,6 +16,7 @@ import {
 	sameShareFingerprint,
 } from "../../shared/cloud-share";
 import { useCloudMeUserId } from "../hooks/useCloudMeUserId";
+import { keptArtifactsQueryKey } from "../hooks/useKeptArtifacts";
 import { workspaceQueryKeyForHost } from "../hooks/useWorkspaceQuery";
 import { useSettings } from "../hooks/useSettings";
 import { aoBridge } from "../lib/bridge";
@@ -24,6 +25,7 @@ import type { ArtifactRow } from "../lib/artifacts";
 import { useCloudSession } from "../lib/cloud-session";
 import { clearSignInSource, noteSignInSource } from "../lib/cloud-telemetry";
 import { captureRendererEvent } from "../lib/telemetry";
+import { onArtifactLinksUnpublished, trackPublish } from "../lib/unpublish-artifacts";
 import { cn } from "../lib/utils";
 import { useUiStore } from "../stores/ui-store";
 import { STANDALONE_WORKSPACE_ID } from "../types/workspace";
@@ -168,6 +170,8 @@ function subscribeShareLinks(listener: () => void): () => void {
 	shareLinksListeners.add(listener);
 	return () => shareLinksListeners.delete(listener);
 }
+// A delete that unpublished links changed the list as much as this panel does.
+onArtifactLinksUnpublished(shareLinksChanged);
 
 /**
  * Whose link list: the control plane and the signed-in account. A list holds
@@ -304,6 +308,7 @@ export function useReconciledShareLinks(): ShareAccessByUrl {
 		read
 			.then(() => Promise.all([
 				queryClient.invalidateQueries({ queryKey: workspaceQueryKeyForHost() }),
+				queryClient.invalidateQueries({ queryKey: keptArtifactsQueryKey }),
 				queryClient.invalidateQueries({ queryKey: HOST_SHARE_LINKS_KEY }),
 			]))
 			// Offline or signed out: the records stay as they are until the next list.
@@ -625,6 +630,8 @@ function SharePanel({
 	 */
 	const refreshArtifacts = () => {
 		void queryClient.invalidateQueries({ queryKey: workspaceQueryKeyForHost() });
+		// Kept artifacts get their shareUrl from their own list.
+		void queryClient.invalidateQueries({ queryKey: keptArtifactsQueryKey });
 		shareLinksChanged();
 	};
 	const { baseUrl, signedIn, scope } = useShareAccess();
@@ -882,6 +889,7 @@ function SharePanel({
 			invited,
 		};
 		setPending(key, pending);
+		trackPublish(baseUrl, file, pending.result);
 		try {
 			const result = await pending.result;
 			// Sent here, not in settle: this runs once per publish even if the panel closed meanwhile.

@@ -6,6 +6,8 @@ import { useUiStore } from "../stores/ui-store";
 import { useArtifactsViewStore } from "../stores/artifacts-view-store";
 import { CLOUD_PROJECT_KIND, STANDALONE_WORKSPACE_ID, type WorkspaceSession, type WorkspaceSummary } from "../types/workspace";
 import { ArtifactsView } from "./ArtifactsView";
+import type { KeptArtifactSet } from "../hooks/useKeptArtifacts";
+import { newChatDraftScope, readChatSessionDraft, writeChatComposerText } from "../lib/chat-drafts";
 import { TooltipProvider } from "./ui/tooltip";
 
 // The signed-in person's control-plane user ID: only a cloud session's creator shares its files.
@@ -55,6 +57,11 @@ const mocks = vi.hoisted(() => ({
 	cloudArtifacts: undefined as boolean | undefined,
 	/** Who each published link opens for, as the link list says. */
 	shareAccess: new Map<string, "restricted" | "anyone">(),
+	kept: [] as KeptArtifactSet[],
+}));
+vi.mock("../hooks/useKeptArtifacts", () => ({
+	keptArtifactsQueryKey: ["kept-artifacts"],
+	useKeptArtifacts: () => ({ data: mocks.kept }),
 }));
 
 vi.mock("./ShareArtifactPopover", async (importOriginal) => ({
@@ -217,6 +224,7 @@ describe("ArtifactsView", () => {
 	afterEach(() => vi.unstubAllGlobals());
 	beforeEach(() => {
 		mocks.shareAccess = new Map();
+		mocks.kept = [];
 		window.localStorage.removeItem("ao.artifacts.view");
 		useArtifactsViewStore.setState({ view: "gallery", collapsedSections: [], pinnedArtifactIds: [] });
 		vi.stubGlobal("IntersectionObserver", class {
@@ -265,6 +273,28 @@ describe("ArtifactsView", () => {
 		expect(gallery.getByText("agent-orchestrator · Review pricing")).toBeInTheDocument();
 		expect(gallery.getByText("Sessions · Compare caching options")).toBeInTheDocument();
 		expect(screen.queryByRole("button", { name: /team/i })).not.toBeInTheDocument();
+	});
+
+	it("lists kept artifacts view only, under their project or no project, and starts a session from one", async () => {
+		mocks.kept = [
+			{ sessionId: "gone-3", title: "Removed work", sessionDeleted: false, artifactFiles: [{ kind: "markdown", name: "plan.md", path: "plan.md", size: 1, updatedAt: "2030-01-02T00:00:00Z" }] },
+			{ sessionId: "ao-77", projectId: "ao", title: "Old report", sessionDeleted: true, artifactFiles: [{ kind: "markdown", name: "report.md", path: "report.md", size: 1, updatedAt: "2030-01-01T00:00:00Z" }] },
+		];
+		mocks.get.mockImplementation(async (route: string) => route === "/api/v1/desktop/sessions/{sessionId}/artifacts"
+			? { data: { artifactDir: "/data/artifacts/gone-3" } }
+			: { data: undefined });
+		renderView();
+
+		const gallery = within(artifactList());
+		expect(gallery.getByText("No project · Removed work · Project removed")).toBeInTheDocument();
+		expect(gallery.getByText("agent-orchestrator · Old report · Session deleted")).toBeInTheDocument();
+		expect(gallery.queryByRole("button", { name: "Open in session: plan.md" })).not.toBeInTheDocument();
+
+		await userEvent.click(gallery.getByRole("button", { name: "Start a session with this: plan.md" }));
+		await waitFor(() => expect(useUiStore.getState().newTaskRequest).toMatchObject({ projectId: STANDALONE_WORKSPACE_ID }));
+		expect(readChatSessionDraft(newChatDraftScope()).composer.text).toContain("Work from this file: /data/artifacts/gone-3/plan.md");
+		writeChatComposerText(newChatDraftScope(), "");
+		useUiStore.setState({ newTaskRequest: null });
 	});
 
 	it("narrows the one list by project, then clears the filters", async () => {

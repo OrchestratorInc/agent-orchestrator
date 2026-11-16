@@ -2356,10 +2356,9 @@ export function SessionView({ sessionId, cloudOrgId, projectId, hostId }: Sessio
 		useSessionSwitchStore.getState().publish(id, sessionTabAgentMenu);
 		return () => useSessionSwitchStore.getState().publish(id, undefined);
 	}, [session?.id, sessionTabAgentMenu]);
-	// The session tab always shows its ⋮ menu after the title; the other tabs
-	// show a close button on hover. While an interface switch is requested or
+	// The session tab always shows its ⋮ menu after the title, where the other
+	// tabs show their close button. While an interface switch is requested or
 	// running, the switch's status (cancel on hover) takes the ⋮'s place.
-	const sessionTabActionPinned = Boolean(session);
 	const sessionTabActions = !session
 		? null
 		: interfaceUi.switchPending
@@ -2955,7 +2954,6 @@ export function SessionView({ sessionId, cloudOrgId, projectId, hostId }: Sessio
 									onOpenArtifact={hasInspector ? handleOpenArtifact : undefined}
 									session={session}
 									sessionTabAction={sessionTabActions}
-									sessionTabActionPinned={sessionTabActionPinned}
 									reviewerTerminal={reviewerTerminal}
 									onOpenReviewerTerminal={selectReviewerTerminal}
 									reviewerTarget={routedTerminalTarget.kind === "reviewer" ? routedTerminalTarget : undefined}
@@ -3013,7 +3011,6 @@ export function SessionView({ sessionId, cloudOrgId, projectId, hostId }: Sessio
 									theme={theme}
 									headerActions={sessionHeaderActions}
 									sessionTabAction={sessionTabActions}
-									sessionTabActionPinned={sessionTabActionPinned}
 									tabStripAction={newShellTerminalAction}
 									workspaceTabs={mainWorkspaceTabs}
 									workspaceActiveTabKey={activeWorkspaceTabKey}
@@ -3075,7 +3072,6 @@ export function SessionView({ sessionId, cloudOrgId, projectId, hostId }: Sessio
 									theme={theme}
 									topbarActions={sessionHeaderActions}
 									sessionTabAction={sessionTabActions}
-									sessionTabActionPinned={sessionTabActionPinned}
 									tabStripAction={newShellTerminalAction}
 									workspaceTabs={mainWorkspaceTabs}
 									workspaceActiveTabKey={activeWorkspaceTabKey}
