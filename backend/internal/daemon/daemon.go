@@ -364,7 +364,7 @@ func Run(buildVersion string) (retErr error) {
 	// attach Stream and liveness; the CDC broadcaster feeds the session-state channel. The manager
 	// is handed to httpd, which mounts it at /mux. Raw PTY bytes never flow
 	// through the CDC change_log -- only session-state events do.
-	runtimeAdapter := runtimeselect.New(log, cfg.RunFilePath)
+	runtimeAdapter := runtimeselect.New(log, cfg.RunFilePath, store)
 	managedPreview := previewserver.New(log, cfg.DataDir)
 	termMgr := terminal.NewManager(runtimeAdapter, cdcPipe.Broadcaster, log)
 	// Agents split the desktop window's panes through this relay; the window
