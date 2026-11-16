@@ -97,6 +97,59 @@ describe("browser runtime link", () => {
 		);
 	});
 
+	it("logs per-command timing only when AO_BROWSER_TIMING=1", async () => {
+		const run = async (timing: boolean) => {
+			if (timing) vi.stubEnv("AO_BROWSER_TIMING", "1");
+			else vi.stubEnv("AO_BROWSER_TIMING", "");
+			const logs: string[] = [];
+			let release!: () => void;
+			const firstDone = new Promise<void>((resolve) => {
+				release = resolve;
+			});
+			const execute = vi.fn(async (command: { requestId: string }) => {
+				if (command.requestId === "r1") await firstDone;
+				return {};
+			});
+			let serverSocket: net.Socket | null = null;
+			let results = 0;
+			const server = net.createServer((socket) => {
+				serverSocket = socket;
+				ackHello(socket);
+				socket.on("data", (chunk) => {
+					results += (chunk.toString("utf8").match(/"type":"result"/g) ?? []).length;
+				});
+			});
+			const handle = connectBrowserRuntime(await listen(server), { execute, log: (message) => logs.push(message) });
+			handles.push(handle);
+			await vi.waitFor(() => expect(handle.state.connected).toBe(true));
+
+			// Two commands for one session: the second waits behind the first.
+			for (const requestId of ["r1", "r2"]) {
+				serverSocket!.write(
+					`${JSON.stringify({ type: "command", requestId, sessionId: "s1", action: "snapshot", args: {} })}\n`,
+				);
+			}
+			await vi.waitFor(() => expect(execute).toHaveBeenCalledTimes(1));
+			await new Promise((resolve) => setTimeout(resolve, 25));
+			release();
+			await vi.waitFor(() => expect(results).toBe(2));
+			return logs.filter((line) => line.startsWith("browser-timing:"));
+		};
+
+		try {
+			expect(await run(false)).toEqual([]);
+			const lines = await run(true);
+			expect(lines).toHaveLength(2);
+			for (const line of lines) {
+				expect(line).toMatch(/^browser-timing: action=snapshot session=s1 queuedMs=\d+ execMs=\d+ outcome=ok$/);
+			}
+			const queued = Number(/queuedMs=(\d+)/.exec(lines[1])![1]);
+			expect(queued).toBeGreaterThanOrEqual(20);
+		} finally {
+			vi.unstubAllEnvs();
+		}
+	});
+
 	it("reports connecting until hello-ok, and connecting again while an accepted link redials", async () => {
 		useBackoffTimers();
 		let serverSocket: net.Socket | null = null;

@@ -14,6 +14,7 @@ import (
 	"io"
 	"log/slog"
 	"net"
+	"os"
 	"strings"
 	"sync"
 	"time"
@@ -36,7 +37,10 @@ const (
 	RuntimeTokenStdinEnv = "AO_BROWSER_RUNTIME_TOKEN_STDIN" //nolint:gosec // Environment variable name, not a credential.
 	// RuntimeAddressEnv carries the exact listener address into running.json so
 	// Electron never has to duplicate the backend's platform-specific naming.
-	RuntimeAddressEnv     = "AO_BROWSER_RUNTIME_ADDRESS"
+	RuntimeAddressEnv = "AO_BROWSER_RUNTIME_ADDRESS"
+	// TimingEnv set to "1" logs how long each browser command takes end to end
+	// through the broker. The desktop app honors the same variable for its side.
+	TimingEnv             = "AO_BROWSER_TIMING"
 	helloTimeout          = 5 * time.Second
 	helloReplyTimeout     = time.Second
 	runtimeReconnectGrace = 2 * time.Second
@@ -166,6 +170,7 @@ type Broker struct {
 	verifyPeer        func(net.Conn) error
 	exclusive         bool
 	pongAt            time.Time
+	timing            bool
 
 	liveness livenessConfig
 }
@@ -181,7 +186,7 @@ func New(log *slog.Logger, token ...string) *Broker {
 	if len(token) > 0 {
 		runtimeToken = token[0]
 	}
-	return &Broker{log: log, pending: make(map[string]chan pendingResult), writeGate: gate, connectionChanged: make(chan struct{}), token: runtimeToken, transport: TransportElectron, liveness: defaultLiveness}
+	return &Broker{log: log, pending: make(map[string]chan pendingResult), writeGate: gate, connectionChanged: make(chan struct{}), token: runtimeToken, transport: TransportElectron, liveness: defaultLiveness, timing: os.Getenv(TimingEnv) == "1"}
 }
 
 // TransportElectron is the desktop app's WebContentsView runtime.
@@ -238,6 +243,26 @@ func (b *Broker) Status() Status {
 
 // Execute sends one browser command to the connected Electron runtime.
 func (b *Broker) Execute(ctx context.Context, sessionID domain.SessionID, action string, args map[string]interface{}) (Result, error) {
+	if !b.timing {
+		return b.execute(ctx, sessionID, action, args, nil)
+	}
+	var sentAt time.Time
+	start := time.Now()
+	result, err := b.execute(ctx, sessionID, action, args, &sentAt)
+	attrs := []any{"action", action, "session", sessionID, "totalMs", time.Since(start).Milliseconds(), "ok", err == nil}
+	if !sentAt.IsZero() {
+		// connectMs covers waiting for the desktop runtime plus the frame write;
+		// roundTripMs is everything the desktop app spent on the command.
+		attrs = append(attrs, "connectMs", sentAt.Sub(start).Milliseconds(), "roundTripMs", time.Since(sentAt).Milliseconds())
+	}
+	if err != nil {
+		attrs = append(attrs, "err", err)
+	}
+	b.log.Info("browser command timing", attrs...)
+	return result, err
+}
+
+func (b *Broker) execute(ctx context.Context, sessionID domain.SessionID, action string, args map[string]interface{}, sentAt *time.Time) (Result, error) {
 	requestID := uuid.NewString()
 	resultCh := make(chan pendingResult, 1)
 
@@ -271,6 +296,9 @@ func (b *Broker) Execute(ctx context.Context, sessionID domain.SessionID, action
 		}
 		b.disconnect(conn, fmt.Errorf("write browser command: %w", err))
 		return Result{}, ErrUnavailable
+	}
+	if sentAt != nil {
+		*sentAt = time.Now()
 	}
 
 	select {
