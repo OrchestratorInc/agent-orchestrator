@@ -38,11 +38,24 @@ func agentConfirmed(agent AgentReadinessSnapshot) bool {
 	return false
 }
 
+// agentReadinessTier mirrors readinessTier: confirmed agents first, then
+// agents found installed whose sign-in is unchecked, then unchecked agents.
+func agentReadinessTier(agent AgentReadinessSnapshot) int {
+	if agentConfirmed(agent) {
+		return 2
+	}
+	if agent.Installation.State == AgentInstallationInstalled {
+		return 1
+	}
+	return 0
+}
+
 // PreferredProjectAgent is the first entry of the renderer's
-// preferredAgentList: agents AO found installed and signed in come before
-// agents it has not confirmed yet, and within each group the integration
-// priority decides. Missing or signed-out agents are left out. It returns ""
-// when no agent can launch.
+// preferredAgentList: agents AO found installed and signed in come first, then
+// agents it found installed without a sign-in check, then agents it has not
+// checked at all, so an agent that may not be installed never beats one that
+// is. Within each group the integration priority decides. Missing or
+// signed-out agents are left out. It returns "" when no agent can launch.
 func PreferredProjectAgent(agents []AgentReadinessSnapshot) AgentHarness {
 	var best *AgentReadinessSnapshot
 	for i := range agents {
@@ -61,8 +74,8 @@ func PreferredProjectAgent(agents []AgentReadinessSnapshot) AgentHarness {
 }
 
 func preferAgent(a, b AgentReadinessSnapshot) bool {
-	if ac, bc := agentConfirmed(a), agentConfirmed(b); ac != bc {
-		return ac
+	if at, bt := agentReadinessTier(a), agentReadinessTier(b); at != bt {
+		return at > bt
 	}
 	return priorityLess(a, b)
 }

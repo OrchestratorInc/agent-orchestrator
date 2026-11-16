@@ -26,6 +26,14 @@ func TestPreferredProjectAgent(t *testing.T) {
 			want: HarnessCodex,
 		},
 		{
+			name: "an agent found installed beats an unchecked higher-priority one",
+			agents: []AgentReadinessSnapshot{
+				readinessSnapshot("claude-code", AgentInstallationUnknown, AgentAuthenticationUnknown),
+				readinessSnapshot("codex", AgentInstallationInstalled, AgentAuthenticationUnknown),
+			},
+			want: HarnessCodex,
+		},
+		{
 			name: "priority decides among confirmed agents; configured counts as signed in",
 			agents: []AgentReadinessSnapshot{
 				readinessSnapshot("cursor", AgentInstallationInstalled, AgentAuthenticationAuthorized),

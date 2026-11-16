@@ -141,4 +141,23 @@ describe("project agent defaults", () => {
 
 		await expect(loadRankedProjectAgentDefaults(new QueryClient())).resolves.toMatchObject({ workerAgent: "codex", orchestratorAgent: "codex" });
 	});
+
+	it("ranks the daemon's latest snapshot when the checks outlast the limit", async () => {
+		vi.useFakeTimers();
+		try {
+			const unchecked = { installation: "unknown", authentication: "unknown" } as const;
+			getMock
+				.mockResolvedValueOnce({ data: { agents: [agentReadiness("claude-code", "Claude Code", unchecked), agentReadiness("codex", "Codex", unchecked)] }, error: undefined })
+				.mockResolvedValue({ data: { agents: [agentReadiness("claude-code", "Claude Code", unchecked), agentReadiness("codex", "Codex", { authentication: "unknown" })] }, error: undefined });
+			postMock.mockReturnValue(new Promise(() => {}));
+
+			const defaults = loadProjectAgentDefaults(new QueryClient());
+			await vi.advanceTimersByTimeAsync(5000);
+
+			// Claude Code was never checked; the daemon found Codex installed by now.
+			await expect(defaults).resolves.toMatchObject({ workerAgent: "codex", orchestratorAgent: "codex" });
+		} finally {
+			vi.useRealTimers();
+		}
+	});
 });

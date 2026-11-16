@@ -821,7 +821,10 @@ func Run(buildVersion string) (retErr error) {
 		sessionSvc.SetGitHubRepositoryResolver(githubRepos)
 	}
 	projectSvc := projectsvc.NewWithDeps(projectsvc.Deps{Store: store, Sessions: sessionSvc, DefaultHarness: domain.AgentHarness(cfg.Agent), PreferredAgent: preferredProjectAgent(agentSvc), Telemetry: telemetrySink, Milestones: installMilestones(cfg), Logger: log, GitHubRepos: githubRepos})
-	sessionSvc.SetPreferredProjectAgent(projectSvc.PreferredAgent)
+	// An existing project's empty role gets only a ranked agent, never the
+	// default-agent fallback a new project gets: saving an agent that can't
+	// launch would outlive the user installing one that can.
+	sessionSvc.SetPreferredProjectAgent(preferredProjectAgent(agentSvc))
 	go projectSvc.WarmCanonicalRepos(ctx)
 	reportSessions, ok := sessMgr.(reportSemanticSession)
 	if !ok {
@@ -1769,8 +1772,8 @@ func (c pluginBinaryCache) InvalidateBinaryResolution(harness domain.AgentHarnes
 
 // preferredProjectAgent ranks this machine's agents the way the desktop's
 // loadProjectAgentDefaults does: from the cached readiness snapshot, running
-// display checks first only when the agent AO prefers most is not confirmed
-// yet. It returns "" when no agent can be ranked.
+// display checks first when the agent AO prefers most is not confirmed yet or
+// no agent can launch. It returns "" when no agent can launch.
 func preferredProjectAgent(agents *agentsvc.Service) func(context.Context) domain.AgentHarness {
 	return func(ctx context.Context) domain.AgentHarness {
 		if agents == nil {
@@ -1781,12 +1784,16 @@ func preferredProjectAgent(agents *agentsvc.Service) func(context.Context) domai
 			return ""
 		}
 		snapshot := readiness.Agents
-		if domain.PreferredProjectAgentNeedsChecks(snapshot) {
+		if domain.PreferredProjectAgentNeedsChecks(snapshot) || domain.PreferredProjectAgent(snapshot) == "" {
 			checkCtx, cancel := context.WithTimeout(ctx, 10*time.Second)
 			checked, err := agents.EnsureReadiness(checkCtx, nil, domain.AgentReadinessPurposeDisplay)
 			cancel()
 			if err == nil && len(checked.Agents) > 0 {
 				snapshot = checked.Agents
+			} else if latest, latestErr := agents.CachedReadiness(ctx); latestErr == nil {
+				// The checks keep running after the wait ends and record each
+				// agent as it finishes, so rank what they found so far.
+				snapshot = latest.Agents
 			}
 		}
 		return domain.PreferredProjectAgent(snapshot)

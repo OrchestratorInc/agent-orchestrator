@@ -93,12 +93,27 @@ async function readProjectAgentSnapshot(queryClient: QueryClient, hostId?: strin
 	return agents;
 }
 
-function readProjectAgentSnapshotWithDeadline(queryClient: QueryClient, hostId?: string): Promise<AgentReadinessSnapshot[] | null> {
+// How long to wait for the daemon's current snapshot once the checks have
+// outlasted PROJECT_AGENT_DEFAULTS_DEADLINE_MS.
+const LATEST_AGENT_SNAPSHOT_MS = 2000;
+
+function withinMs<T>(work: Promise<T>, ms: number): Promise<T | null> {
 	let timer: ReturnType<typeof setTimeout> | undefined;
 	const deadline = new Promise<null>((resolve) => {
-		timer = setTimeout(() => resolve(null), PROJECT_AGENT_DEFAULTS_DEADLINE_MS);
+		timer = setTimeout(() => resolve(null), ms);
 	});
-	return Promise.race([readProjectAgentSnapshot(queryClient, hostId), deadline]).finally(() => clearTimeout(timer));
+	return Promise.race([work, deadline]).finally(() => clearTimeout(timer));
+}
+
+async function readProjectAgentSnapshotWithDeadline(queryClient: QueryClient, hostId?: string): Promise<AgentReadinessSnapshot[] | null> {
+	const checked = await withinMs(readProjectAgentSnapshot(queryClient, hostId), PROJECT_AGENT_DEFAULTS_DEADLINE_MS);
+	if (checked) return checked;
+	// The checks outlasted the limit, or the first read failed. The daemon keeps
+	// checking and records each agent as it finishes, so rank what it knows now
+	// rather than nothing (which would fall back to Claude Code even on a machine
+	// that only has Codex).
+	const latest = await withinMs(fetchAgentReadiness(hostId).then((readiness) => readiness.agents, () => null), LATEST_AGENT_SNAPSHOT_MS);
+	return latest ?? queryClient.getQueryData<AgentReadiness>(agentReadinessQueryKeyForHost(hostId))?.agents ?? null;
 }
 
 /**

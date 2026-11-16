@@ -296,9 +296,10 @@ func (s *Service) SetGitHubRepositoryResolver(r ports.GitHubRepositoryResolver) 
 	s.githubRepos = r
 }
 
-// SetPreferredProjectAgent late-binds the ranked default agent, owned by the
-// project service, that heals a project whose worker or orchestrator role
-// names no agent before a session of that project starts.
+// SetPreferredProjectAgent late-binds the ranked default agent that heals a
+// project whose worker or orchestrator role names no agent before a session of
+// that project starts. It returns "" when no agent can launch, and the role is
+// then left empty.
 func (s *Service) SetPreferredProjectAgent(pick func(context.Context) domain.AgentHarness) {
 	s.preferredAgent = pick
 }

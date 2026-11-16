@@ -75,10 +75,19 @@ function isConfirmedAgent(agent: AgentInfo): boolean {
 		["authorized", "not_applicable", "configured"].includes(agent.authentication.state);
 }
 
+// How much AO knows about an agent: confirmed installed and signed in, found
+// installed with sign-in not checked yet, or not checked at all.
+function readinessTier(agent: AgentInfo): number {
+	if (isConfirmedAgent(agent)) return 2;
+	return agent.installation.state === "installed" ? 1 : 0;
+}
+
 /**
  * The agents a new project can start on, most preferred first. Agents AO found
- * installed and signed in come before agents it has not confirmed yet; within
- * each group, AO's integration priority decides. Missing or signed-out agents
+ * installed and signed in come first, then agents it found installed but whose
+ * sign-in it has not checked, then agents it has not checked at all, so an
+ * agent that may not be installed never beats one that is. Within each group,
+ * AO's integration priority decides. Missing or signed-out agents
  * are left out. "configured" counts as signed in: AO cannot verify most
  * credentials, and that is not a reason to pass over an agent.
  */
@@ -88,7 +97,7 @@ export function preferredAgentList(agents: readonly AgentInfo[]): string[] {
 		.filter(isLaunchableAgent)
 		.sort(
 			(a, b) =>
-				Number(isConfirmedAgent(b)) - Number(isConfirmedAgent(a)) ||
+				readinessTier(b) - readinessTier(a) ||
 				priority(a) - priority(b) ||
 				agentLabelCompare(a, b),
 		)

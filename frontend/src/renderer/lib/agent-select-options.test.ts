@@ -189,6 +189,14 @@ describe("preferredAgentList", () => {
 		]);
 	});
 
+	it("puts an agent found installed ahead of one AO has not checked at all", () => {
+		// Claude Code may not be installed; Codex is, even though its sign-in is unchecked.
+		expect(preferredAgentList([agent("claude-code", "unknown", "unknown"), agent("codex", "installed", "unknown")])).toEqual([
+			"codex",
+			"claude-code",
+		]);
+	});
+
 	it("counts a configured credential as signed in", () => {
 		expect(preferredAgentList([agent("claude-code", "installed", "unknown"), agent("codex", "installed", "configured")])).toEqual([
 			"codex",
