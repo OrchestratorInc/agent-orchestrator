@@ -317,3 +317,18 @@ it("adds the closed PRs of ended sessions under All", async () => {
 	expect(sections.at(-1)?.data.map((item) => item.session.id)).toEqual(["gave-up"]);
 	expect(header().props.counts).toMatchObject({ open: 2, merged: 1, all: 4 });
 });
+
+// With viewable-item reporting on, React Native runs the key extractor on
+// section headers too; a row-only extractor crashed the page as it opened.
+it("keys a section header as well as a row", () => {
+	act(() => { renderer = create(<PRsScreen />); });
+	const list = renderer!.root.findByType("SectionList" as never).props as {
+		keyExtractor: (item: unknown, index: number) => string;
+		sections: { key: string; data: unknown[] }[];
+		onViewableItemsChanged?: unknown;
+	};
+	expect(list.onViewableItemsChanged).toBeDefined();
+	const section = list.sections[0]!;
+	expect(() => list.keyExtractor(section, 0)).not.toThrow();
+	expect(list.keyExtractor(section.data[0], 0)).toBe("mac:same-project#7");
+});

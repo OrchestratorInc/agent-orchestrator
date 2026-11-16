@@ -41,6 +41,12 @@ function prRowKey({ pr, session }: PRRow): string {
 	return `${session.hostId}:${session.projectId}#${pr.number}`;
 }
 
+// Once the list reports viewable items, React Native also runs the key
+// extractor on section headers, handing it the section rather than a row.
+function listKey(item: PRRow | { key: string }): string {
+	return "pr" in item && "session" in item ? prRowKey(item) : `section:${item.key}`;
+}
+
 type PRsParams = { hostId?: string; projectId?: string };
 
 // Rows past the last one seen whose details load ahead of the scroll. Only
@@ -222,7 +228,7 @@ function PRList() {
 			    over the sheet taking every touch. */}
 			<SectionList
 				sections={sections}
-				keyExtractor={prRowKey}
+				keyExtractor={listKey}
 				onViewableItemsChanged={onViewableItemsChanged}
 				contentInsetAdjustmentBehavior="automatic"
 				contentContainerStyle={{ flexGrow: 1, paddingBottom: space.xxl }}
