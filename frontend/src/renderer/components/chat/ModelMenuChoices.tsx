@@ -1,5 +1,5 @@
 import { Search } from "@/components/app-icons";
-import { useCallback, useId, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from "react";
+import { useCallback, useId, useLayoutEffect, useMemo, useRef, useState, type KeyboardEvent, type ReactNode } from "react";
 import { useEdgeFade } from "../../hooks/useEdgeFade";
 import { useTranslation } from "react-i18next";
 import { cn } from "../../lib/utils";
@@ -14,6 +14,11 @@ export function ModelMenuChoices<T extends { id: string; label: string }>({
 	selectedId,
 	searchable,
 	searchPlaceholder,
+	browse,
+	browseKey,
+	header,
+	footer,
+	className,
 	children,
 }: {
 	models: T[];
@@ -23,6 +28,18 @@ export function ModelMenuChoices<T extends { id: string; label: string }>({
 	searchable?: boolean;
 	/** Set where the rows are a menu that search replaces with matches; nothing is "not found" before a query. */
 	searchPlaceholder?: string;
+	/** The rows listed while nothing is typed, where search reaches more than them (every agent's models). */
+	browse?: T[];
+	/** Names what `browse` lists (the chosen agent), so a new list opens at its top. */
+	browseKey?: string;
+	/**
+	 * Controls between the search and the list, such as the agent rail. Up and Shift+Tab
+	 * leave them for the search, Down and Tab for the list, and typing goes to the search.
+	 */
+	header?: (controls: { clearSearch: () => void }) => ReactNode;
+	/** Rows under the list, kept in view while it scrolls, and hidden while searching. */
+	footer?: ReactNode;
+	className?: string;
 	children: (models: T[], searchActiveID?: string, optionID?: (id: string) => string, query?: string) => ReactNode;
 }) {
 	const { t } = useTranslation();
@@ -34,9 +51,9 @@ export function ModelMenuChoices<T extends { id: string; label: string }>({
 	// rendering them all at once freezes the menu on open. Window initial render and append on scroll.
 	const lowered = useMemo(() => models.map((model) => model.label.toLocaleLowerCase()), [models]);
 	const allMatches = useMemo(() => {
-		if (!normalizedQuery) return models;
+		if (!normalizedQuery) return browse ?? models;
 		return models.filter((_, index) => lowered[index].includes(normalizedQuery));
-	}, [models, lowered, normalizedQuery]);
+	}, [browse, models, lowered, normalizedQuery]);
 
 	const initialLimit = useMemo(() => {
 		if (normalizedQuery) return MAX_SEARCH_RESULTS;
@@ -49,11 +66,13 @@ export function ModelMenuChoices<T extends { id: string; label: string }>({
 		return INITIAL_VISIBLE_COUNT;
 	}, [normalizedQuery, selectedId, allMatches]);
 
-	// Rows loaded past the initial window, per query. Reset while rendering, not in an
+	// Which list is shown: a query's matches, or the browsed rows.
+	const listKey = normalizedQuery ? `query:${normalizedQuery}` : `browse:${browseKey ?? ""}`;
+	// Rows loaded past the initial window, per list. Reset while rendering, not in an
 	// effect, so a new query never commits the previous query's longer list first.
-	const [loaded, setLoaded] = useState({ query: normalizedQuery, count: 0 });
-	if (loaded.query !== normalizedQuery) setLoaded({ query: normalizedQuery, count: 0 });
-	const visibleCount = loaded.query === normalizedQuery ? Math.max(initialLimit, loaded.count) : initialLimit;
+	const [loaded, setLoaded] = useState({ list: listKey, count: 0 });
+	if (loaded.list !== listKey) setLoaded({ list: listKey, count: 0 });
+	const visibleCount = loaded.list === listKey ? Math.max(initialLimit, loaded.count) : initialLimit;
 
 	const matches = useMemo(
 		() => (allMatches.length > visibleCount ? allMatches.slice(0, visibleCount) : allMatches),
@@ -62,8 +81,8 @@ export function ModelMenuChoices<T extends { id: string; label: string }>({
 	const hasMore = matches.length < allMatches.length;
 	// From the rendered length, so several scroll events before a commit add one batch, not several.
 	const loadMore = useCallback(() => {
-		if (hasMore) setLoaded({ query: normalizedQuery, count: matches.length + BATCH_SIZE });
-	}, [hasMore, matches.length, normalizedQuery]);
+		if (hasMore) setLoaded({ list: listKey, count: matches.length + BATCH_SIZE });
+	}, [hasMore, matches.length, listKey]);
 	const [searchFocused, setSearchFocused] = useState(false);
 	const searchActiveID = normalizedQuery && searchFocused ? matches[0]?.id : undefined;
 	const optionIDPrefix = useId();
@@ -73,28 +92,61 @@ export function ModelMenuChoices<T extends { id: string; label: string }>({
 	);
 	const searchRef = useRef<HTMLInputElement>(null);
 	const scrollRef = useRef<HTMLDivElement>(null);
+	const headerRef = useRef<HTMLDivElement>(null);
 	useEdgeFade(scrollRef);
+	const clearSearch = useCallback(() => setSearch(""), []);
+	// The header's own tab stop (the rail's chosen agent), if it has one.
+	const focusHeader = () => {
+		const target = headerRef.current?.querySelector<HTMLElement>('[tabindex="0"]');
+		target?.focus();
+		return Boolean(target);
+	};
+	// Into the list on its checked row, else its first.
+	const focusList = () => {
+		const scroller = scrollRef.current;
+		(scroller?.querySelector<HTMLElement>('[role="menuitemradio"][aria-checked="true"]:not([data-disabled])')
+			?? scroller?.querySelector<HTMLElement>('[role^="menuitem"]'))?.focus();
+	};
+	const typeIntoSearch = (event: KeyboardEvent) => {
+		if (!searchRef.current) return false;
+		if (event.key === "Backspace") {
+			event.preventDefault();
+			searchRef.current.focus();
+			setSearch((current) => current.slice(0, -1));
+			return true;
+		}
+		if (event.key.length === 1 && event.key !== " " && !event.ctrlKey && !event.metaKey && !event.altKey) {
+			// Narrow the catalog instead of letting the menu's typeahead jump
+			// to whichever row starts with the typed character. Space stays
+			// with the menu, where it selects the focused row.
+			event.preventDefault();
+			searchRef.current.focus();
+			setSearch((current) => current + event.key);
+			return true;
+		}
+		return false;
+	};
 	const handleScroll = useCallback(() => {
 		const element = scrollRef.current;
 		if (!element) return;
 		if (element.scrollHeight - element.scrollTop - element.clientHeight < 150) loadMore();
 	}, [loadMore]);
-	// A new search starts at the top; a refreshed (polled) list keeps its scroll.
-	// Not on mount: the list opens at the top, and reading scrollTop then forces a
+	// A new search or browsed list starts at the top; a refreshed (polled) list keeps its
+	// scroll. Not on mount: the list opens at the top, and reading scrollTop then forces a
 	// style pass over the whole page while the menu is still being inserted.
-	const searchedQuery = useRef(normalizedQuery);
+	const shownList = useRef(listKey);
 	useLayoutEffect(() => {
-		if (searchedQuery.current === normalizedQuery) return;
-		searchedQuery.current = normalizedQuery;
+		if (shownList.current === listKey) return;
+		shownList.current = listKey;
 		if (scrollRef.current) scrollRef.current.scrollTop = 0;
-	}, [normalizedQuery]);
+	}, [listKey]);
 	return (
-		<div className="flex min-h-0 max-h-[calc(var(--size-select-menu-max)-var(--space-2)*2)] flex-col">
+		<div className={cn("flex min-h-0 max-h-[calc(var(--size-select-menu-max)-var(--space-2)*2)] flex-col", className)}>
 			{showSearch && (
 				<div
 					// No inline padding: the field then shares the menu rows' silhouette,
 					// since their highlight spans the same content box.
-					className={cn("relative shrink-0 pb-1", searchable ? "mb-1 border-b border-border" : undefined)}
+					className={cn("relative shrink-0 pb-1", searchable && !header ? "mb-1 border-b border-border" : undefined)}
 					onClick={(event) => event.stopPropagation()}
 					onKeyDown={(event) => {
 						if (event.nativeEvent.isComposing) {
@@ -113,6 +165,10 @@ export function ModelMenuChoices<T extends { id: string; label: string }>({
 								highlighted ??
 								scrollRef.current?.querySelector<HTMLElement>('[role="menuitemradio"]')
 							)?.click();
+							return;
+						}
+						if (event.key === "ArrowDown" && !normalizedQuery && focusHeader()) {
+							event.preventDefault();
 							return;
 						}
 						if (event.key === "ArrowDown" || event.key === "ArrowUp") {
@@ -148,6 +204,32 @@ export function ModelMenuChoices<T extends { id: string; label: string }>({
 					) : null}
 				</div>
 			)}
+			{header ? (
+				<div
+					ref={headerRef}
+					className="shrink-0 border-b border-border pb-1 mb-1"
+					// Kept from the composer's click-to-focus handler, as the search is.
+					onClick={(event) => event.stopPropagation()}
+					onKeyDown={(event) => {
+						if (event.nativeEvent.isComposing || event.key === "Escape") return;
+						// The header's keys are its own, never the menu's roving focus or typeahead.
+						event.stopPropagation();
+						if (event.key === "ArrowUp" || (event.key === "Tab" && event.shiftKey)) {
+							event.preventDefault();
+							searchRef.current?.focus();
+							return;
+						}
+						if (event.key === "ArrowDown" || event.key === "Tab") {
+							event.preventDefault();
+							focusList();
+							return;
+						}
+						typeIntoSearch(event);
+					}}
+				>
+					{header({ clearSearch })}
+				</div>
+			) : null}
 			<div className="relative grid min-h-0 flex-1 grid-rows-[minmax(0,1fr)] overflow-hidden">
 				<div
 					ref={scrollRef}
@@ -165,28 +247,13 @@ export function ModelMenuChoices<T extends { id: string; label: string }>({
 						if (!searchRef.current) return;
 						const firstItem = event.currentTarget.querySelector('[role^="menuitem"]');
 						if ((event.key === "ArrowUp" && event.target === firstItem) || (event.key === "Tab" && event.shiftKey)) {
-							// Return to search before the menu's roving focus handles the key.
+							// Back to the header, else the search, before the menu's roving focus handles the key.
 							event.preventDefault();
 							event.stopPropagation();
-							searchRef.current.focus();
+							if (!focusHeader()) searchRef.current.focus();
 							return;
 						}
-						if (event.key === "Backspace") {
-							event.preventDefault();
-							event.stopPropagation();
-							searchRef.current.focus();
-							setSearch((current) => current.slice(0, -1));
-							return;
-						}
-						if (event.key.length === 1 && event.key !== " " && !event.ctrlKey && !event.metaKey && !event.altKey) {
-							// Narrow the catalog instead of letting the menu's typeahead jump
-							// to whichever row starts with the typed character. Space stays
-							// with the menu, where it selects the focused row.
-							event.preventDefault();
-							event.stopPropagation();
-							searchRef.current.focus();
-							setSearch((current) => current + event.key);
-						}
+						if (typeIntoSearch(event)) event.stopPropagation();
 					}}
 				>
 					{children(matches, searchActiveID, optionID, normalizedQuery)}
@@ -195,6 +262,7 @@ export function ModelMenuChoices<T extends { id: string; label: string }>({
 					)}
 				</div>
 			</div>
+			{footer && !normalizedQuery ? <div className="shrink-0">{footer}</div> : null}
 		</div>
 	);
 }
