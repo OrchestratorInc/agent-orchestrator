@@ -1003,6 +1003,7 @@ async function sanitizeCloudFunnelProperties(event: string, properties?: Telemet
 		case "ao.renderer.cloud_limit_reached":
 			safe.code = cloudCode(properties?.code);
 			if (typeof properties?.shown === "boolean") safe.shown = properties.shown;
+			if (properties?.source === "chat") safe.source = "chat";
 			break;
 	}
 	return safe;
@@ -1446,6 +1447,11 @@ export function buildPostHogConfig(distinctId: string, identified = false): Post
 		capture_pageview: false,
 		capture_exceptions: false,
 		capture_performance: false,
+		// Scroll depth only decorates pageview and pageleave events, which AO
+		// never sends. Measuring it adds a capture-phase scroll listener on the
+		// window that reads the document's scroll size on every scroll of every
+		// list in the app (chat, sidebar, menus).
+		disable_scroll_properties: true,
 		// Session replay is billed per recording, not per event, so it bypasses
 		// every limiter in this file. AO never watches replays, so keep the
 		// recorder off in the client instead of relying on the project-side
