@@ -8,6 +8,8 @@ import (
 	"strings"
 	"time"
 
+	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/agent/authprobe"
+	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
 	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
 )
 
@@ -19,13 +21,17 @@ func (p *Plugin) AuthStatus(ctx context.Context) (ports.AgentAuthStatus, error) 
 	if err != nil {
 		return ports.AgentAuthStatusUnknown, err
 	}
-	if strings.TrimSpace(os.Getenv("CLINE_API_KEY")) != "" {
+	// Cline's own provider settings decide first; CLINE_API_KEY is the
+	// fallback. A settings read error only surfaces when no key is set either.
+	status, ok, providerErr := clineProviderAuthStatus(ctx)
+	if providerErr == nil && ok {
+		return status, nil
+	}
+	if authprobe.CredentialEnvironment(ctx, domain.AgentAccountMethodAPIKey, "CLINE_API_KEY") != "" {
 		return ports.AgentAuthStatusAuthorized, nil
 	}
-	if status, ok, err := clineProviderAuthStatus(ctx); err != nil {
-		return ports.AgentAuthStatusUnknown, err
-	} else if ok {
-		return status, nil
+	if providerErr != nil {
+		return ports.AgentAuthStatusUnknown, providerErr
 	}
 	return ports.AgentAuthStatusUnknown, nil
 }
@@ -85,6 +91,15 @@ func clineProviderAuthStatus(ctx context.Context) (ports.AgentAuthStatus, bool, 
 
 	if provider, ok := configuredClineProvider(file); ok {
 		if providerAuthorized(provider.Settings) {
+			evidence := authprobe.FileSource(path).WithMethod(domain.AgentAccountMethodAccount)
+			evidence.Provider = provider.Settings.Provider
+			if strings.TrimSpace(provider.Settings.APIKey) != "" || strings.TrimSpace(provider.Settings.APIKeyAlt) != "" {
+				evidence.Method = domain.AgentAccountMethodAPIKey
+			} else if provider.Settings.Auth != nil {
+				// A Cline account login carries who signed in in its access token.
+				evidence.Email, evidence.Name = authprobe.TokenIdentity(provider.Settings.Auth.AccessToken)
+			}
+			ports.RecordAuthEvidence(ctx, evidence)
 			return ports.AgentAuthStatusAuthorized, true, nil
 		}
 		return ports.AgentAuthStatusUnknown, false, nil

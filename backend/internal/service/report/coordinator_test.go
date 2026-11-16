@@ -2,6 +2,8 @@ package report
 
 import (
 	"context"
+	"errors"
+	"fmt"
 	"strings"
 	"sync"
 	"testing"
@@ -102,6 +104,139 @@ func TestCoordinatorStuckInterruptRateLimitAndCoalescing(t *testing.T) {
 	}
 }
 
+func TestCoordinatorBusyOrchestratorDoesNotHoldUpOtherProjects(t *testing.T) {
+	// Project p's orchestrator composer holds the operator's unsent draft, so its
+	// earliest-due batch is refused. It must back off instead of staying first in
+	// line and starving project q's reports on every retry.
+	now := time.Date(2026, 9, 14, 13, 0, 0, 0, time.UTC)
+	store := newCoordinatorStore(now)
+	store.sessions = []domain.SessionRecord{
+		{ID: "orch-p", ProjectID: "p", Kind: domain.KindOrchestrator, Mode: domain.SessionModeTUI},
+		{ID: "orch-q", ProjectID: "q", Kind: domain.KindOrchestrator, Mode: domain.SessionModeTUI},
+	}
+	other := reportAt("q-1", "worker-q", now.Add(time.Second), now, "q finished")
+	other.ProjectID = "q"
+	store.add(reportAt("p-1", "worker-p", now, now, "p finished"), other)
+	delivery := &coordinatorDelivery{submitErrFor: map[domain.SessionID]error{
+		"orch-p": fmt.Errorf("send orch-p: %w", ErrOrchestratorBusy),
+	}}
+	c := NewCoordinator(CoordinatorDeps{Store: store, Delivery: delivery, Now: func() time.Time { return now }, NewToken: func() string { return "claim" }})
+
+	delay, err := c.RunDue(context.Background())
+	if err != nil {
+		t.Fatalf("RunDue: %v", err)
+	}
+	if len(delivery.submissions) != 1 || delivery.submissions[0].target != "orch-q" {
+		t.Fatalf("submissions = %#v, want q's report delivered past p's busy orchestrator", delivery.submissions)
+	}
+	if delay != OrchestratorBusyRetry {
+		t.Fatalf("next run in %v, want p's backoff %v", delay, OrchestratorBusyRetry)
+	}
+	for _, rec := range store.reports {
+		if rec.ID == "p-1" && (rec.DeliveryState != domain.ReportPending || !rec.AvailableAt.Equal(now.Add(OrchestratorBusyRetry))) {
+			t.Fatalf("p's report = %s available %s, want pending at %s", rec.DeliveryState, rec.AvailableAt, now.Add(OrchestratorBusyRetry))
+		}
+	}
+
+	now = now.Add(OrchestratorBusyRetry)
+	delete(delivery.submitErrFor, "orch-p")
+	if _, err := c.RunDue(context.Background()); err != nil {
+		t.Fatalf("RunDue after backoff: %v", err)
+	}
+	if len(delivery.submissions) != 2 || delivery.submissions[1].target != "orch-p" {
+		t.Fatalf("submissions = %#v, want p's report delivered once its composer cleared", delivery.submissions)
+	}
+}
+
+func TestCoordinatorNeverInterruptsTerminalOrchestrator(t *testing.T) {
+	for _, mode := range []domain.SessionMode{domain.SessionModeTUI, ""} {
+		now := time.Date(2026, 10, 28, 2, 10, 0, 0, time.UTC)
+		store := newCoordinatorStore(now)
+		store.sessions = []domain.SessionRecord{{ID: "orch", ProjectID: "p", Kind: domain.KindOrchestrator, Mode: mode}}
+		first := reportAt("stuck-1", "worker", now, now, "cannot continue")
+		first.State = domain.ReportStuck
+		store.add(first)
+		delivery := &coordinatorDelivery{}
+		c := NewCoordinator(CoordinatorDeps{Store: store, Delivery: delivery, Now: func() time.Time { return now }})
+		if _, err := c.RunDue(context.Background()); err != nil {
+			t.Fatal(err)
+		}
+		if len(delivery.interrupts) != 0 || len(delivery.submissions) != 1 {
+			t.Fatalf("mode %q: interrupts = %v, submissions = %d", mode, delivery.interrupts, len(delivery.submissions))
+		}
+		repeat := reportAt("stuck-2", "worker", now.Add(time.Minute), now, "still cannot continue")
+		repeat.State = domain.ReportStuck
+		store.add(repeat)
+		if _, err := c.RunDue(context.Background()); err != nil {
+			t.Fatal(err)
+		}
+		if len(delivery.interrupts) != 0 || len(delivery.submissions) != 2 {
+			t.Fatalf("mode %q repeat: interrupts = %v, submissions = %d", mode, delivery.interrupts, len(delivery.submissions))
+		}
+	}
+}
+
+func TestCoordinatorRetriesTerminalStuckReportWithoutInterrupt(t *testing.T) {
+	now := time.Date(2026, 10, 28, 2, 10, 0, 0, time.UTC)
+	store := newCoordinatorStore(now)
+	store.sessions = []domain.SessionRecord{{ID: "orch", ProjectID: "p", Kind: domain.KindOrchestrator, Mode: domain.SessionModeTUI}}
+	stuck := reportAt("stuck-1", "worker", now, now, "cannot continue")
+	stuck.State = domain.ReportStuck
+	store.add(stuck)
+	delivery := &coordinatorDelivery{submitErr: errors.New("composer is not empty")}
+	c := NewCoordinator(CoordinatorDeps{Store: store, Delivery: delivery, Now: func() time.Time { return now }})
+	for i := 0; i < 3; i++ {
+		_, _ = c.RunDue(context.Background())
+		now = now.Add(time.Minute)
+	}
+	delivery.submitErr = nil
+	if _, err := c.RunDue(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if len(delivery.interrupts) != 0 || len(delivery.submissions) != 1 {
+		t.Fatalf("interrupts = %v, submissions = %d", delivery.interrupts, len(delivery.submissions))
+	}
+}
+
+func TestCoordinatorRefusedSubmitDoesNotBlockOtherProjects(t *testing.T) {
+	now := time.Date(2026, 10, 28, 2, 10, 0, 0, time.UTC)
+	store := newCoordinatorStore(now)
+	store.sessions = []domain.SessionRecord{
+		{ID: "refusing", ProjectID: "p", Kind: domain.KindOrchestrator, Mode: domain.SessionModeTUI},
+		{ID: "healthy", ProjectID: "q", Kind: domain.KindOrchestrator, Mode: domain.SessionModeTUI},
+	}
+	stuck := reportAt("stuck-1", "worker", now, now, "cannot continue")
+	stuck.State = domain.ReportStuck
+	done := reportAt("done-1", "other-worker", now.Add(time.Second), now.Add(time.Second), "finished")
+	done.ProjectID = "q"
+	store.add(stuck, done)
+	delivery := &coordinatorDelivery{submitErrFor: map[domain.SessionID]error{"refusing": errors.New("prompt submission was not observed")}}
+	c := NewCoordinator(CoordinatorDeps{Store: store, Delivery: delivery, Now: func() time.Time { return now }})
+	for i := 0; i < 5; i++ {
+		_, _ = c.RunDue(context.Background())
+		now = now.Add(10 * time.Second)
+	}
+	if len(delivery.submissions) != 1 || delivery.submissions[0].target != "healthy" {
+		t.Fatalf("submissions = %#v, want one delivery to the healthy project", delivery.submissions)
+	}
+	if len(delivery.interrupts) != 0 {
+		t.Fatalf("interrupts = %v", delivery.interrupts)
+	}
+	if store.reports[0].DeliveryState != domain.ReportPending || store.reports[0].LastError != "prompt submission was not observed" {
+		t.Fatalf("refused report = %s / %q, want pending with the refusal recorded", store.reports[0].DeliveryState, store.reports[0].LastError)
+	}
+}
+
+func TestReportSessionLinkUsesDisplayName(t *testing.T) {
+	got := reportSessionLink(domain.ReportRecord{
+		SessionID: "worker/1", ProjectID: "proj 1", SessionDisplayName: "Backend [worker]",
+	})
+	want := `[Backend \[worker\]](ao://sessions/proj%201/worker%2F1)`
+	if got != want {
+		t.Fatalf("link = %q, want %q", got, want)
+	}
+}
+
 func TestCoordinatorAcceptanceAndPiggybackFencing(t *testing.T) {
 	now := time.Date(2026, 9, 14, 13, 0, 0, 0, time.UTC)
 	store := newCoordinatorStore(now)
@@ -116,6 +251,9 @@ func TestCoordinatorAcceptanceAndPiggybackFencing(t *testing.T) {
 	if !strings.HasPrefix(combined, "hello\n\n<ao-worker-reports>\n") ||
 		!strings.HasSuffix(combined, "\n</ao-worker-reports>") {
 		t.Fatalf("piggyback text = %q", combined)
+	}
+	if !strings.Contains(combined, "[checkpoint] [worker](ao://sessions/p/worker)") {
+		t.Fatalf("piggyback link = %q", combined)
 	}
 	if store.acked != 0 {
 		t.Fatal("claimed report acknowledged before acceptance")
@@ -151,8 +289,14 @@ func reportAt(id string, worker domain.SessionID, created, available time.Time, 
 func (s *coordinatorStore) add(records ...domain.ReportRecord) {
 	s.reports = append(s.reports, records...)
 }
-func (s *coordinatorStore) ListSessions(context.Context, domain.ProjectID) ([]domain.SessionRecord, error) {
-	return append([]domain.SessionRecord(nil), s.sessions...), nil
+func (s *coordinatorStore) ListSessions(_ context.Context, project domain.ProjectID) ([]domain.SessionRecord, error) {
+	var recs []domain.SessionRecord
+	for _, rec := range s.sessions {
+		if rec.ProjectID == project {
+			recs = append(recs, rec)
+		}
+	}
+	return recs, nil
 }
 func (s *coordinatorStore) GetSession(_ context.Context, id domain.SessionID) (domain.SessionRecord, bool, error) {
 	for _, rec := range s.sessions {
@@ -217,13 +361,14 @@ func (s *coordinatorStore) AcknowledgeReportBatch(_ context.Context, project dom
 	s.acked += count
 	return count, nil
 }
-func (s *coordinatorStore) ReleaseReportBatch(_ context.Context, project domain.ProjectID, token string, _ time.Time, _ string) (int, error) {
+func (s *coordinatorStore) ReleaseReportBatch(_ context.Context, project domain.ProjectID, token string, _ time.Time, reason string) (int, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	count := 0
 	for i := range s.reports {
 		if s.reports[i].ProjectID == project && s.reports[i].DeliveryState == domain.ReportClaimed && s.reports[i].ClaimToken == token {
 			s.reports[i].DeliveryState, s.reports[i].ClaimToken = domain.ReportPending, ""
+			s.reports[i].LastError = reason
 			count++
 		}
 	}
@@ -267,14 +412,18 @@ type coordinatorSubmission struct {
 	message, key string
 }
 type coordinatorDelivery struct {
-	submissions []coordinatorSubmission
-	interrupts  []domain.SessionID
-	submitErr   error
+	submissions  []coordinatorSubmission
+	interrupts   []domain.SessionID
+	submitErr    error
+	submitErrFor map[domain.SessionID]error
 }
 
 func (d *coordinatorDelivery) Submit(_ context.Context, target domain.SessionID, message, key string) error {
 	if d.submitErr != nil {
 		return d.submitErr
+	}
+	if err := d.submitErrFor[target]; err != nil {
+		return err
 	}
 	d.submissions = append(d.submissions, coordinatorSubmission{target, message, key})
 	return nil

@@ -84,7 +84,7 @@ func (p *Plugin) GetConfigSpec(ctx context.Context) (ports.ConfigSpec, error) {
 			{
 				Key:         "model",
 				Type:        ports.ConfigFieldString,
-				Description: "Model override written to the AO-generated Kilo agent (agent.<name>.model); format provider/model-id (e.g. anthropic/claude-haiku-4-20250514).",
+				Description: "Model override written to the Orchestrator-generated Kilo agent (agent.<name>.model); format provider/model-id (e.g. anthropic/claude-haiku-4-20250514).",
 			},
 		},
 	}, nil
@@ -325,4 +325,12 @@ func (p *Plugin) kilocodeBinary(ctx context.Context) (string, error) {
 	}
 	p.resolvedBinary = binary
 	return binary, nil
+}
+
+// InvalidateBinaryResolution forgets the cached executable path, so the next
+// launch resolves it again: after AO installs a managed copy, for example.
+func (p *Plugin) InvalidateBinaryResolution() {
+	p.binaryMu.Lock()
+	p.resolvedBinary = ""
+	p.binaryMu.Unlock()
 }

@@ -24,7 +24,7 @@ describe("mobile interface transition polling", () => {
 		expect(mobileInterfaceTransitionIsCancellable(transition)).toBe(false);
 		expect(interfaceTransitionNextPoll({ status: { transition } })).toBeUndefined();
 		expect(interfaceTransitionNextPoll({ status: { transition }, consecutiveFailures: 1 })).toBeUndefined();
-		expect(mobileInterfaceTransitionRecoveryMessage(transition)).toContain("Restart AO on your computer");
+		expect(mobileInterfaceTransitionRecoveryMessage(transition)).toContain("Restart Orchestrator on your computer");
 		expect(mobileInterfaceTransitionRecoveryMessage({ ...transition, errorDetail: "Specific shutdown failure" })).toBe("Specific shutdown failure");
 		expect(mobileInterfaceTransitionRecoveryMessage({ ...transition, phase: "completed" })).toBeUndefined();
 		const resumed = { phase: "target_starting", errorCode: undefined };
@@ -235,12 +235,12 @@ describe("failed rechecks back off on their own count", () => {
 });
 
 describe("chat unavailable alert", () => {
-	it("says it could not reach AO when nothing answered", () => {
+	it("says it could not reach Orchestrator when nothing answered", () => {
 		const alert = interfaceSwitchAlert(undefined, undefined, {
 			outcome: "failed",
 			error: "Network request failed",
 		});
-		expect(alert.title).toBe("Couldn't reach AO");
+		expect(alert.title).toBe("Couldn't reach Orchestrator");
 		expect(alert.message).toContain("Network request failed");
 		expect(alert.message).not.toMatch(/compatible native conversation handoff/);
 	});
@@ -251,7 +251,7 @@ describe("chat unavailable alert", () => {
 			error: "401 Unauthorized",
 			status: 401,
 		});
-		expect(alert.title).toBe("AO rejected this phone");
+		expect(alert.title).toBe("Orchestrator rejected this phone");
 		expect(alert.message).toContain("scan the code again");
 		expect(alert.message).not.toMatch(/could not reach/i);
 	});
@@ -262,7 +262,7 @@ describe("chat unavailable alert", () => {
 			error: "404 Not Found - Unknown session",
 			status: 404,
 		});
-		expect(alert.title).toBe("AO could not answer");
+		expect(alert.title).toBe("Orchestrator could not answer");
 		expect(alert.message).toContain("was reached");
 	});
 
@@ -272,7 +272,7 @@ describe("chat unavailable alert", () => {
 			error: "429",
 			status: 429,
 		});
-		expect(alert.title).toBe("AO is not accepting requests");
+		expect(alert.title).toBe("Orchestrator is not accepting requests");
 		expect(alert.message).toContain("Connect Mobile");
 		expect(alert.message).not.toMatch(/could not reach/i);
 	});

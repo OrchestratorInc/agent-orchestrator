@@ -11,7 +11,7 @@ import (
 )
 
 // HostTrustWarning documents that Autohand retains its normal approval flow.
-const HostTrustWarning = "experimental user-approved reviewer: Autohand uses normal permission prompts; AO does not enable --yes or --unrestricted"
+const HostTrustWarning = "experimental user-approved reviewer: Autohand uses normal permission prompts; Orchestrator does not enable --yes or --unrestricted"
 
 // Reviewer builds Autohand's reviewer command.
 type Reviewer struct {
@@ -34,11 +34,12 @@ func (r *Reviewer) ReviewCommand(ctx context.Context, inv ports.ReviewInvocation
 	if err != nil {
 		return ports.ReviewCommandSpec{}, err
 	}
+	env := map[string]string{workerautohand.NoBrowserEnv: "1"}
 	if strings.TrimSpace(inv.TaskPromptRoot) == "" {
-		return ports.ReviewCommandSpec{Argv: []string{binary}}, nil
+		return ports.ReviewCommandSpec{Argv: []string{binary}, Env: env}, nil
 	}
 	argv := []string{binary, "--path", inv.WorkspacePath, "--sys-prompt", inv.SystemPromptFile, "--", inv.Prompt}
-	return ports.ReviewCommandSpec{Argv: argv}, nil
+	return ports.ReviewCommandSpec{Argv: argv, Env: env}, nil
 }
 
 // ReviewRestoreCommand restores a recorded Autohand reviewer pane by

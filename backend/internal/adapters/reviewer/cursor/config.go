@@ -16,6 +16,7 @@ import (
 	workeragent "github.com/aoagents/agent-orchestrator/backend/internal/adapters/agent/cursor"
 	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/agent/hookutil"
 	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
+	aoprocess "github.com/aoagents/agent-orchestrator/backend/internal/process"
 )
 
 const (
@@ -72,7 +73,7 @@ func installReviewerConfig(ctx context.Context, inv ports.ReviewInvocation) erro
 	}
 	profileDir := reviewerProfileDir(inv)
 	if profileDir == "" {
-		return errors.New("cursor reviewer: AO data directory is required")
+		return errors.New("cursor reviewer: Orchestrator data directory is required")
 	}
 	if err := os.MkdirAll(profileDir, 0o700); err != nil {
 		return fmt.Errorf("cursor reviewer: create profile: %w", err)
@@ -213,7 +214,7 @@ func execMCPServerDisable(ctx context.Context, inv ports.ReviewInvocation, ids [
 	}
 	profileDir := reviewerProfileDir(inv)
 	if profileDir == "" {
-		return errors.New("cursor reviewer: AO data directory is required")
+		return errors.New("cursor reviewer: Orchestrator data directory is required")
 	}
 	if strings.TrimSpace(inv.WorkspacePath) == "" {
 		return errors.New("cursor reviewer: workspace path is required to disable MCP servers")
@@ -266,7 +267,7 @@ func validateMCPServerIDs(ids []string) error {
 // validateMCPServerIDs because this CLI does not honor end-of-options for
 // them, and everything reaching this point is a safe positional argument.
 func mcpDisableCommand(ctx context.Context, binary, id, workspacePath, profileDir string) *exec.Cmd {
-	cmd := exec.CommandContext(ctx, binary, "mcp", "disable", id) //nolint:gosec // binary is adapter-resolved, args are static.
+	cmd := aoprocess.CommandContext(ctx, binary, "mcp", "disable", id) //nolint:gosec // binary is adapter-resolved, args are static.
 	cmd.Dir = workspacePath
 	prefix := cursorDataDirEnv + "="
 	env := make([]string, 0, len(os.Environ())+1)

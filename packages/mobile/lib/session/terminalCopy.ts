@@ -24,7 +24,7 @@ export function isTerminalGoneError(message: string): boolean {
  */
 export function terminalErrorCopy(message: string | undefined): string {
 	if (message && /exclusive session operation/i.test(message)) {
-		return "Typing is paused while AO finishes an operation on this session. Try again in a moment.";
+		return "Typing is paused while Orchestrator finishes an operation on this session. Try again in a moment.";
 	}
 	return "The terminal lost its connection to this session. Go back and open it again.";
 }

@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 import type { Element, Root, RootContent } from "hast";
 import { canonicalLanguage, highlight, highlightSync, type GrammarName } from "./code-highlight";
 
-// The contract these pin down is not "the colours are right" — highlight.js owns
+// The contract these pin down is not "the colours are right" — Shiki owns
 // that — but the four things the chat surface depends on: a fence label resolves
 // to a grammar or to nothing, tokenizing produces classed spans, the same block is
 // never parsed twice, and nothing here can throw into a message.
@@ -36,13 +36,13 @@ function textIn(tree: Root): string {
 describe("canonicalLanguage", () => {
 	it("resolves the aliases agents actually write", () => {
 		expect(canonicalLanguage("ts")).toBe("typescript");
-		expect(canonicalLanguage("tsx")).toBe("typescript");
+		expect(canonicalLanguage("tsx")).toBe("tsx");
 		expect(canonicalLanguage("sh")).toBe("bash");
 		expect(canonicalLanguage("zsh")).toBe("bash");
 		expect(canonicalLanguage("console")).toBe("bash");
 		expect(canonicalLanguage("golang")).toBe("go");
 		expect(canonicalLanguage("yml")).toBe("yaml");
-		expect(canonicalLanguage("html")).toBe("xml");
+		expect(canonicalLanguage("html")).toBe("html");
 		expect(canonicalLanguage("patch")).toBe("diff");
 	});
 
@@ -55,6 +55,8 @@ describe("canonicalLanguage", () => {
 		expect(canonicalLanguage("brainfuck")).toBeUndefined();
 		expect(canonicalLanguage("text")).toBeUndefined();
 		expect(canonicalLanguage("log")).toBeUndefined();
+		expect(canonicalLanguage("constructor")).toBeUndefined();
+		expect(canonicalLanguage("__proto__")).toBeUndefined();
 		expect(canonicalLanguage(undefined)).toBeUndefined();
 	});
 });

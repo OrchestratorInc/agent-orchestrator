@@ -14,7 +14,7 @@ vi.mock("./cloud-workspace/CloudWorkspaceExplorer", () => ({ CloudWorkspaceExplo
 vi.mock("./cloud-workspace/CloudFileContentPane", () => ({ CloudFileContentPane: (props: unknown) => { contentProps(props); return <div>cloud content</div>; } }));
 
 const session: WorkspaceSession = { branch: "ao/cloud", cloud: { orgId: "org-1", sandboxProvider: "coder" }, id: "session-1", prs: [], provider: "codex", status: "working", title: "Cloud", updatedAt: "2026-09-20T00:00:00Z", workspaceId: "workspace-1", workspaceName: "Cloud workspace" };
-const annotation: FileAnnotationModel = { target: null, draft: "", status: "idle", error: "", begin: vi.fn(), setDraft: vi.fn(), cancel: vi.fn(), submit: vi.fn() };
+const annotation: FileAnnotationModel = { targets: [], status: "idle", error: "", begin: vi.fn(), draftFor: () => "", statusFor: () => "idle", setDraft: vi.fn(), cancel: vi.fn(), submit: vi.fn() };
 
 describe("Cloud workspace compatibility exports", () => {
 	it("delegates review and preserves file-open options", async () => {

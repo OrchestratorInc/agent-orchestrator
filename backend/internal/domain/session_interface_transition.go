@@ -83,8 +83,14 @@ func (p SessionInterfaceTransitionPhase) Terminal() bool {
 	}
 }
 
-// SessionInterfaceTransition is the durable controller-handoff record. The
-// session row remains the authority for the currently committed mode; this row
+// SessionInterfaceTransitionDegradedIdentityReset marks a handoff that gave up
+// its strict native-history transfer and started the target fresh because the
+// installed harness adapter never declared a compatible TUI+Chat identity pair.
+const SessionInterfaceTransitionDegradedIdentityReset = "identity-reset"
+
+// SessionInterfaceTransition is the durable controller-handoff record, for a
+// move between interfaces or between provider accounts. The session row (and
+// its account binding) remains the authority for what is committed; this row
 // explains an in-progress gap where the old controller has stopped and the new
 // one is not ready yet.
 type SessionInterfaceTransition struct {
@@ -96,16 +102,44 @@ type SessionInterfaceTransition struct {
 	HistoryPolicy        SessionInterfaceTransitionHistoryPolicy `json:"historyPolicy" enum:"strict,provider_history"`
 	Phase                SessionInterfaceTransitionPhase         `json:"phase" enum:"requested,preflighting,draining,source_stopping,source_stopped,target_starting,activating,completed,failed,cancelled,recovery_required"`
 	NativeConversationID string                                  `json:"nativeConversationId,omitempty"`
-	ErrorCode            string                                  `json:"errorCode,omitempty"`
-	ErrorDetail          string                                  `json:"errorDetail,omitempty"`
-	CreatedAt            time.Time                               `json:"createdAt"`
-	UpdatedAt            time.Time                               `json:"updatedAt"`
-	CompletedAt          time.Time                               `json:"completedAt,omitempty"`
-	NoticeAcknowledgedAt time.Time                               `json:"noticeAcknowledgedAt,omitempty"`
+	// SourceAccountID and TargetAccountID are set when the handoff moves the
+	// agent to another provider account; the mode then stays the same.
+	SourceAccountID string `json:"sourceAccountId,omitempty"`
+	TargetAccountID string `json:"targetAccountId,omitempty"`
+	// DegradedKind records a handoff that completed by starting the target
+	// fresh instead of transferring native history. "identity-reset" marks a
+	// harness whose installed adapter never declared a compatible TUI+Chat
+	// identity pair, so the target conversation intentionally starts empty and
+	// the native history stays with the source interface.
+	DegradedKind         string    `json:"degradedKind,omitempty"`
+	ErrorCode            string    `json:"errorCode,omitempty"`
+	ErrorDetail          string    `json:"errorDetail,omitempty"`
+	CreatedAt            time.Time `json:"createdAt"`
+	UpdatedAt            time.Time `json:"updatedAt"`
+	CompletedAt          time.Time `json:"completedAt,omitempty"`
+	NoticeAcknowledgedAt time.Time `json:"noticeAcknowledgedAt,omitempty"`
 }
 
 // Active reports whether this row still owns the session's handoff gate.
 func (t SessionInterfaceTransition) Active() bool { return !t.Phase.Terminal() }
+
+// AccountMove reports a handoff to another provider account in the same mode.
+func (t SessionInterfaceTransition) AccountMove() bool { return t.TargetAccountID != "" }
+
+// AccountMoveAwaitsTarget reports an account move whose old agent stopped and whose new one has not taken over.
+func (t SessionInterfaceTransition) AccountMoveAwaitsTarget() bool {
+	if !t.AccountMove() {
+		return false
+	}
+	switch t.Phase {
+	case SessionInterfaceTransitionSourceStopped,
+		SessionInterfaceTransitionTargetStarting,
+		SessionInterfaceTransitionActivating:
+		return true
+	default:
+		return false
+	}
+}
 
 // SessionInterfaceTransitionMessage is an automation/lifecycle message held
 // while neither controller is allowed to accept work.

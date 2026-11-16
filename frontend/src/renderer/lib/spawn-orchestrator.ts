@@ -1,6 +1,8 @@
+import { apiErrorException } from "./api-error-exception";
 import { apiErrorCode, apiErrorDetails, apiErrorMessage, apiErrorRequestId } from "./api-client";
 import { appI18n } from "../i18n";
 import { aoBridge } from "./bridge";
+import { resumeOnce } from "../hooks/useCanResumeAgent";
 import type { OrchestratorSpawnSource } from "./orchestrator-spawn-sources";
 import { captureRendererEvent } from "./telemetry";
 import { clientForSessionHost } from "./host-clients";
@@ -64,7 +66,6 @@ export async function spawnOrchestrator(
 	approvalMode?: "default" | "accept-edits" | "auto" | "bypass-permissions",
 	hostId?: string,
 ): Promise<string> {
-	void captureRendererEvent("ao.renderer.orchestrator_spawn_requested", { project_id: projectId, source });
 	try {
 		const { data, error, response } = await clientForSessionHost(hostId).POST("/api/v1/orchestrators", {
 			body: { projectId, clean, ...(mode ? { mode } : {}), ...(approvalMode ? { approvalMode } : {}) },
@@ -83,10 +84,13 @@ export async function spawnOrchestrator(
 			);
 		}
 
-		void captureRendererEvent("ao.renderer.orchestrator_spawn_succeeded", { project_id: projectId, source });
+		void captureRendererEvent("ao.orchestrators.spawned", { project_id: projectId, source });
 		return data.orchestrator.id;
 	} catch (err) {
-		void captureRendererEvent("ao.renderer.orchestrator_spawn_failed", { project_id: projectId, source });
+		void captureRendererEvent("ao.orchestrators.spawn_failed", {
+			project_id: projectId, source,
+			...(err instanceof OrchestratorSpawnError ? { error_code: err.code, http_status: err.status } : {}),
+		});
 		throw err;
 	}
 }
@@ -104,12 +108,17 @@ export async function spawnOrchestrator(
  * A 409 AGENT_NOT_EXITED means it is already running — the caller asked for a
  * working orchestrator and that is this one, so it resolves rather than throws.
  */
-export async function resumeOrchestrator(sessionId: string, hostId?: string): Promise<void> {
+export function resumeOrchestrator(sessionId: string, hostId?: string): Promise<void> {
+	// A local resume joins the one SessionView starts when it opens the session.
+	return hostId ? requestOrchestratorResume(sessionId, hostId) : resumeOnce(sessionId, () => requestOrchestratorResume(sessionId));
+}
+
+async function requestOrchestratorResume(sessionId: string, hostId?: string): Promise<void> {
 	const { data, error, response } = await clientForSessionHost(hostId).POST("/api/v1/sessions/{sessionId}/resume-agent", {
 		params: { path: { sessionId } },
 	});
 	if (error && apiErrorCode(error) !== "AGENT_NOT_EXITED") {
-		throw new Error(apiErrorMessage(error, `Could not resume the orchestrator (${response.status})`));
+		throw apiErrorException(error, `Could not resume the orchestrator (${response.status})`);
 	}
 	if (data?.resumeMode === "saved_prompt") {
 		void aoBridge.notifications

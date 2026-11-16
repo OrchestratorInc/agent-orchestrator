@@ -705,3 +705,27 @@ func TestAuthenticatedIdentityForProvider_DelegatesHostToSubProvider(t *testing.
 		t.Errorf("host calls = %v, want [\"\" \"gitlab.internal\"]", gl.hostCalls)
 	}
 }
+
+type branchListingProvider struct {
+	fakeProvider
+	branch string
+}
+
+func (f *branchListingProvider) ListOpenPRsByBranch(_ context.Context, _ ports.SCMRepo, branch string) ([]ports.SCMPRObservation, error) {
+	f.branch = branch
+	return []ports.SCMPRObservation{{Number: 7, SourceBranch: branch}}, nil
+}
+
+func TestListOpenPRsByBranchDelegatesOrReportsUnsupported(t *testing.T) {
+	gh := &branchListingProvider{fakeProvider: fakeProvider{key: "github"}}
+	gl := &fakeProvider{key: "gitlab"}
+	m := New(NamedProvider{Key: "github", Provider: gh}, NamedProvider{Key: "gitlab", Provider: gl})
+
+	prs, err := m.ListOpenPRsByBranch(context.Background(), ports.SCMRepo{Provider: "github"}, "feat/x")
+	if err != nil || len(prs) != 1 || gh.branch != "feat/x" {
+		t.Fatalf("prs=%+v err=%v branch=%q, want delegation to github", prs, err, gh.branch)
+	}
+	if _, err := m.ListOpenPRsByBranch(context.Background(), ports.SCMRepo{Provider: "gitlab"}, "feat/x"); !errors.Is(err, ports.ErrSCMUnsupported) {
+		t.Fatalf("err = %v, want ErrSCMUnsupported for a provider without branch listing", err)
+	}
+}

@@ -91,7 +91,7 @@ func fatal(formatText string, args ...any) {
 }
 
 func emitSchema(binary, dir string) error {
-	cmd := exec.Command(binary, "app-server", "generate-json-schema", "--out", dir)
+	cmd := exec.Command(binary, "app-server", "generate-json-schema", "--out", dir) //nolint:forbidigo // code generation runs outside the daemon
 	if out, err := cmd.CombinedOutput(); err != nil {
 		return fmt.Errorf("%s app-server generate-json-schema: %w: %s", binary, err, out)
 	}
@@ -99,7 +99,7 @@ func emitSchema(binary, dir string) error {
 }
 
 func providerVersion(binary string) (string, error) {
-	out, err := exec.Command(binary, "--version").Output()
+	out, err := exec.Command(binary, "--version").Output() //nolint:forbidigo // code generation runs outside the daemon
 	if err != nil {
 		return "", err
 	}

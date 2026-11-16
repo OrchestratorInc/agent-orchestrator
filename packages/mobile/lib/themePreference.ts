@@ -59,3 +59,10 @@ export function preferenceLabel(preference: ThemePreference): string {
 			return "System";
 	}
 }
+
+// ---- Named colour theme ----------------------------------------------------
+
+export { DEFAULT_THEME_STYLE, isThemeStyle, type ThemeStyle } from "../../shared/theme/palettes";
+
+/** The key desktop writes for its colour theme (`frontend/src/renderer/lib/theme.ts`). */
+export const THEME_STYLE_KEY = "ao.theme-style";

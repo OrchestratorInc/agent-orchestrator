@@ -11,10 +11,12 @@
 import { Route as rootRouteImport } from './routes/__root'
 import { Route as ShellRouteImport } from './routes/_shell'
 import { Route as ShellIndexRouteImport } from './routes/_shell.index'
-import { Route as ShellTerminalsRouteImport } from './routes/_shell.terminals'
+import { Route as ShellUsageRouteImport } from './routes/_shell.usage'
 import { Route as ShellSettingsRouteImport } from './routes/_shell.settings'
 import { Route as ShellSessionsRouteImport } from './routes/_shell.sessions'
+import { Route as ShellNewRouteImport } from './routes/_shell.new'
 import { Route as ShellAutomationsRouteImport } from './routes/_shell.automations'
+import { Route as ShellArtifactsRouteImport } from './routes/_shell.artifacts'
 import { Route as ShellSessionsIndexRouteImport } from './routes/_shell.sessions.index'
 import { Route as ShellSessionsSessionIdRouteImport } from './routes/_shell.sessions.$sessionId'
 import { Route as ShellProjectsProjectIdRouteImport } from './routes/_shell.projects.$projectId'
@@ -33,9 +35,9 @@ const ShellIndexRoute = ShellIndexRouteImport.update({
   path: '/',
   getParentRoute: () => ShellRoute,
 } as any)
-const ShellTerminalsRoute = ShellTerminalsRouteImport.update({
-  id: '/terminals',
-  path: '/terminals',
+const ShellUsageRoute = ShellUsageRouteImport.update({
+  id: '/usage',
+  path: '/usage',
   getParentRoute: () => ShellRoute,
 } as any)
 const ShellSettingsRoute = ShellSettingsRouteImport.update({
@@ -48,9 +50,19 @@ const ShellSessionsRoute = ShellSessionsRouteImport.update({
   path: '/sessions',
   getParentRoute: () => ShellRoute,
 } as any)
+const ShellNewRoute = ShellNewRouteImport.update({
+  id: '/new',
+  path: '/new',
+  getParentRoute: () => ShellRoute,
+} as any)
 const ShellAutomationsRoute = ShellAutomationsRouteImport.update({
   id: '/automations',
   path: '/automations',
+  getParentRoute: () => ShellRoute,
+} as any)
+const ShellArtifactsRoute = ShellArtifactsRouteImport.update({
+  id: '/artifacts',
+  path: '/artifacts',
   getParentRoute: () => ShellRoute,
 } as any)
 const ShellSessionsIndexRoute = ShellSessionsIndexRouteImport.update({
@@ -101,10 +113,12 @@ const ShellHostHostIdProjectProjectIdSessionSessionIdRoute =
 
 export interface FileRoutesByFullPath {
   '/': typeof ShellIndexRoute
+  '/artifacts': typeof ShellArtifactsRoute
   '/automations': typeof ShellAutomationsRoute
+  '/new': typeof ShellNewRoute
   '/sessions': typeof ShellSessionsRouteWithChildren
   '/settings': typeof ShellSettingsRoute
-  '/terminals': typeof ShellTerminalsRoute
+  '/usage': typeof ShellUsageRoute
   '/projects/$projectId': typeof ShellProjectsProjectIdRoute
   '/sessions/$sessionId': typeof ShellSessionsSessionIdRoute
   '/sessions/': typeof ShellSessionsIndexRoute
@@ -115,9 +129,11 @@ export interface FileRoutesByFullPath {
   '/host/$hostId/project/$projectId/session/$sessionId': typeof ShellHostHostIdProjectProjectIdSessionSessionIdRoute
 }
 export interface FileRoutesByTo {
+  '/artifacts': typeof ShellArtifactsRoute
   '/automations': typeof ShellAutomationsRoute
+  '/new': typeof ShellNewRoute
   '/settings': typeof ShellSettingsRoute
-  '/terminals': typeof ShellTerminalsRoute
+  '/usage': typeof ShellUsageRoute
   '/': typeof ShellIndexRoute
   '/projects/$projectId': typeof ShellProjectsProjectIdRoute
   '/sessions/$sessionId': typeof ShellSessionsSessionIdRoute
@@ -131,10 +147,12 @@ export interface FileRoutesByTo {
 export interface FileRoutesById {
   __root__: typeof rootRouteImport
   '/_shell': typeof ShellRouteWithChildren
+  '/_shell/artifacts': typeof ShellArtifactsRoute
   '/_shell/automations': typeof ShellAutomationsRoute
+  '/_shell/new': typeof ShellNewRoute
   '/_shell/sessions': typeof ShellSessionsRouteWithChildren
   '/_shell/settings': typeof ShellSettingsRoute
-  '/_shell/terminals': typeof ShellTerminalsRoute
+  '/_shell/usage': typeof ShellUsageRoute
   '/_shell/': typeof ShellIndexRoute
   '/_shell/projects/$projectId': typeof ShellProjectsProjectIdRoute
   '/_shell/sessions/$sessionId': typeof ShellSessionsSessionIdRoute
@@ -149,10 +167,12 @@ export interface FileRouteTypes {
   fileRoutesByFullPath: FileRoutesByFullPath
   fullPaths:
     | '/'
+    | '/artifacts'
     | '/automations'
+    | '/new'
     | '/sessions'
     | '/settings'
-    | '/terminals'
+    | '/usage'
     | '/projects/$projectId'
     | '/sessions/$sessionId'
     | '/sessions/'
@@ -163,9 +183,11 @@ export interface FileRouteTypes {
     | '/host/$hostId/project/$projectId/session/$sessionId'
   fileRoutesByTo: FileRoutesByTo
   to:
+    | '/artifacts'
     | '/automations'
+    | '/new'
     | '/settings'
-    | '/terminals'
+    | '/usage'
     | '/'
     | '/projects/$projectId'
     | '/sessions/$sessionId'
@@ -178,10 +200,12 @@ export interface FileRouteTypes {
   id:
     | '__root__'
     | '/_shell'
+    | '/_shell/artifacts'
     | '/_shell/automations'
+    | '/_shell/new'
     | '/_shell/sessions'
     | '/_shell/settings'
-    | '/_shell/terminals'
+    | '/_shell/usage'
     | '/_shell/'
     | '/_shell/projects/$projectId'
     | '/_shell/sessions/$sessionId'
@@ -213,11 +237,11 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof ShellIndexRouteImport
       parentRoute: typeof ShellRoute
     }
-    '/_shell/terminals': {
-      id: '/_shell/terminals'
-      path: '/terminals'
-      fullPath: '/terminals'
-      preLoaderRoute: typeof ShellTerminalsRouteImport
+    '/_shell/usage': {
+      id: '/_shell/usage'
+      path: '/usage'
+      fullPath: '/usage'
+      preLoaderRoute: typeof ShellUsageRouteImport
       parentRoute: typeof ShellRoute
     }
     '/_shell/settings': {
@@ -234,11 +258,25 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof ShellSessionsRouteImport
       parentRoute: typeof ShellRoute
     }
+    '/_shell/new': {
+      id: '/_shell/new'
+      path: '/new'
+      fullPath: '/new'
+      preLoaderRoute: typeof ShellNewRouteImport
+      parentRoute: typeof ShellRoute
+    }
     '/_shell/automations': {
       id: '/_shell/automations'
       path: '/automations'
       fullPath: '/automations'
       preLoaderRoute: typeof ShellAutomationsRouteImport
+      parentRoute: typeof ShellRoute
+    }
+    '/_shell/artifacts': {
+      id: '/_shell/artifacts'
+      path: '/artifacts'
+      fullPath: '/artifacts'
+      preLoaderRoute: typeof ShellArtifactsRouteImport
       parentRoute: typeof ShellRoute
     }
     '/_shell/sessions/': {
@@ -315,10 +353,12 @@ const ShellSessionsRouteWithChildren = ShellSessionsRoute._addFileChildren(
 )
 
 interface ShellRouteChildren {
+  ShellArtifactsRoute: typeof ShellArtifactsRoute
   ShellAutomationsRoute: typeof ShellAutomationsRoute
+  ShellNewRoute: typeof ShellNewRoute
   ShellSessionsRoute: typeof ShellSessionsRouteWithChildren
   ShellSettingsRoute: typeof ShellSettingsRoute
-  ShellTerminalsRoute: typeof ShellTerminalsRoute
+  ShellUsageRoute: typeof ShellUsageRoute
   ShellIndexRoute: typeof ShellIndexRoute
   ShellProjectsProjectIdRoute: typeof ShellProjectsProjectIdRoute
   ShellProjectsProjectIdSettingsRoute: typeof ShellProjectsProjectIdSettingsRoute
@@ -329,10 +369,12 @@ interface ShellRouteChildren {
 }
 
 const ShellRouteChildren: ShellRouteChildren = {
+  ShellArtifactsRoute: ShellArtifactsRoute,
   ShellAutomationsRoute: ShellAutomationsRoute,
+  ShellNewRoute: ShellNewRoute,
   ShellSessionsRoute: ShellSessionsRouteWithChildren,
   ShellSettingsRoute: ShellSettingsRoute,
-  ShellTerminalsRoute: ShellTerminalsRoute,
+  ShellUsageRoute: ShellUsageRoute,
   ShellIndexRoute: ShellIndexRoute,
   ShellProjectsProjectIdRoute: ShellProjectsProjectIdRoute,
   ShellProjectsProjectIdSettingsRoute: ShellProjectsProjectIdSettingsRoute,

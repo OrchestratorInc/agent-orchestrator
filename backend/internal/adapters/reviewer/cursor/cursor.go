@@ -32,6 +32,14 @@ func (r *Reviewer) Harness() domain.ReviewerHarness {
 	return domain.ReviewerCursor
 }
 
+// InvalidateBinaryResolution forgets the worker plugin's cached executable, so
+// the next review runs the release an install just switched to.
+func (r *Reviewer) InvalidateBinaryResolution() {
+	if invalidator, ok := r.agent.(ports.AgentBinaryResolutionInvalidator); ok {
+		invalidator.InvalidateBinaryResolution()
+	}
+}
+
 var _ ports.Reviewer = (*Reviewer)(nil)
 var _ ports.ReviewerCanceller = (*Reviewer)(nil)
 
@@ -90,7 +98,7 @@ func (r *Reviewer) ReviewRestoreCommand(ctx context.Context, inv ports.ReviewInv
 func cursorPrompt(inv ports.ReviewInvocation) string {
 	if inv.SystemPromptFile != "" {
 		return fmt.Sprintf(
-			"Read and follow the AO reviewer role in `%s`, then %s",
+			"Read and follow the Orchestrator reviewer role in `%s`, then %s",
 			filepath.ToSlash(inv.SystemPromptFile),
 			strings.TrimSpace(inv.Prompt),
 		)

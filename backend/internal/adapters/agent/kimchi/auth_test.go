@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 	"testing"
 
+	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
 	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
 )
 
@@ -260,12 +261,17 @@ func TestAuthStatusEnvVarPrecedenceOverConfig(t *testing.T) {
 	t.Setenv("KIMCHI_API_KEY", "env-key")
 	plugin := &Plugin{resolvedBinary: "kimchi"}
 
-	got, err := plugin.AuthStatus(context.Background())
+	ctx, evidence := ports.WithAuthEvidence(context.Background())
+	got, err := plugin.AuthStatus(ctx)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if got != ports.AgentAuthStatusAuthorized {
 		t.Fatalf("AuthStatus = %q, want %q", got, ports.AgentAuthStatusAuthorized)
+	}
+	// The launch uses the variable, so the check must not name the config.
+	if want := domain.EnvironmentSource("KIMCHI_API_KEY").WithMethod(domain.AgentAccountMethodAPIKey); evidence.Identity() != want {
+		t.Fatalf("evidence = %+v, want %+v", evidence.Identity(), want)
 	}
 }
 

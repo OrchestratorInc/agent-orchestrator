@@ -1,6 +1,8 @@
 import AsyncStorage from "@react-native-async-storage/async-storage";
 import * as SecureStore from "expo-secure-store";
 import type { Endpoint } from "./endpoints";
+import type { MachineAppearance } from "./machineAppearance";
+import { clearConfig, loadConfig, saveConfig, type ServerConfig } from "./config";
 
 /**
  * A paired machine.
@@ -15,27 +17,43 @@ export type Host = {
 	id: string;
 	/** Hostname by default; the user can rename it. */
 	name: string;
+	/** Phone-local visual identity used to distinguish machines in fleet views. */
+	appearance?: MachineAppearance;
 	platform: string;
 	endpoints: Endpoint[];
 	/** Connection token. Lives in the device keystore, never in AsyncStorage. */
 	token: string;
+	/** The pairing password swapped for the token, used again if the machine forgets the token. Keystore only. */
+	fallbackToken?: string;
 	lastConnected: number;
+	/** Present only for a machine discovered through AO Cloud. */
+	accountUserId?: string;
+	/** The account's label for the machine at the last sync. While `name` still
+	 * equals it, the name follows renames made on the account; a rename on the
+	 * phone makes them differ and keeps the phone's name. */
+	accountLabel?: string;
 };
 
 /** activeHost() uses explicit selection or the most recent machine. */
 
 /** Ignore recency-only writes so another host reconnecting does not restart live connections. */
 export function sameHostConnections(left: Host[], right: Host[]): boolean {
-	const connectionFields = (hosts: Host[]) => hosts.map(({ id, name, platform, endpoints, token }) => [id, name, platform, endpoints, token]);
+	const connectionFields = (hosts: Host[]) => hosts.map(({ id, name, appearance, platform, endpoints, token, accountUserId }) => [id, name, appearance, platform, endpoints, token, accountUserId]);
 	return JSON.stringify(connectionFields(left)) === JSON.stringify(connectionFields(right));
 }
 
 const HOSTS_KEY = "ao.hosts";
 const ACTIVE_HOST_KEY = "ao.activeHost";
 const tokenKey = (id: string) => `ao.hostToken.${id}`;
+const fallbackTokenKey = (id: string) => `ao.hostFallbackToken.${id}`;
 
-/** What is written to AsyncStorage: everything except the token. */
-export type HostMetadata = Omit<Host, "token">;
+async function writeSecret(key: string, value: string | undefined): Promise<void> {
+	if (value) await SecureStore.setItemAsync(key, value);
+	else await SecureStore.deleteItemAsync(key);
+}
+
+/** What is written to AsyncStorage: everything except the tokens. */
+export type HostMetadata = Omit<Host, "token" | "fallbackToken">;
 type StoredHost = HostMetadata;
 
 function isStoredHost(v: unknown): v is StoredHost {
@@ -70,9 +88,9 @@ async function writeStored(hosts: StoredHost[]): Promise<void> {
 // Several hosts can reconnect together. Serialize read-modify-write so one
 // host's endpoint refresh cannot overwrite another's update.
 let pendingWrite: Promise<void> = Promise.resolve();
-function mutateStored(change: (hosts: StoredHost[]) => StoredHost[]): Promise<void> {
-	const write = pendingWrite.then(async () => writeStored(change(await readStored())));
-	pendingWrite = write.catch(() => {});
+function mutateStored(change: (hosts: StoredHost[]) => StoredHost[] | Promise<StoredHost[]>): Promise<void> {
+	const write = pendingWrite.then(async () => writeStored(await change(await readStored())));
+	pendingWrite = write.then(() => {}, () => {});
 	return write;
 }
 
@@ -80,10 +98,14 @@ function mutateStored(change: (hosts: StoredHost[]) => StoredHost[]): Promise<vo
 export async function loadHosts(): Promise<Host[]> {
 	const stored = sortHosts(await readStored());
 	return Promise.all(
-		stored.map(async (h) => ({
-			...h,
-			token: (await SecureStore.getItemAsync(tokenKey(h.id))) ?? "",
-		})),
+		stored.map(async (h) => {
+			const fallbackToken = await SecureStore.getItemAsync(fallbackTokenKey(h.id));
+			return {
+				...h,
+				token: (await SecureStore.getItemAsync(tokenKey(h.id))) ?? "",
+				...(fallbackToken ? { fallbackToken } : {}),
+			};
+		}),
 	);
 }
 
@@ -95,13 +117,15 @@ export async function findHost(id: string): Promise<Host | null> {
 /** Adds or replaces a machine. Re-pairing the same machine updates it in place
  * rather than adding a second entry for it. */
 export async function saveHost(host: Host): Promise<void> {
-	const { token, ...rest } = host;
+	const { token, fallbackToken, ...rest } = host;
 	await mutateStored((stored) => [rest, ...stored.filter((h) => h.id !== host.id)]);
-	if (token) {
-		await SecureStore.setItemAsync(tokenKey(host.id), token);
-	} else {
-		await SecureStore.deleteItemAsync(tokenKey(host.id));
-	}
+	await writeSecret(tokenKey(host.id), token);
+	await writeSecret(fallbackTokenKey(host.id), fallbackToken);
+}
+
+export async function updateHostToken(id: string, token: string, fallbackToken?: string): Promise<void> {
+	await writeSecret(tokenKey(id), token);
+	await writeSecret(fallbackTokenKey(id), fallbackToken);
 }
 
 /** Rename a pairing without rewriting its credential or discovered endpoints. */
@@ -109,6 +133,11 @@ export async function renameHost(id: string, name: string): Promise<void> {
 	const trimmed = name.trim();
 	if (!trimmed) throw new Error("Machine name cannot be empty");
 	await mutateStored((stored) => stored.map((host) => host.id === id ? { ...host, name: trimmed } : host));
+}
+
+/** Change only the phone-local visual identity for a paired machine. */
+export async function updateHostAppearance(id: string, appearance: MachineAppearance): Promise<void> {
+	await mutateStored((stored) => stored.map((host) => host.id === id ? { ...host, appearance } : host));
 }
 
 /**
@@ -170,11 +199,32 @@ export async function clearActiveHost(): Promise<void> {
 }
 
 export async function removeHost(id: string): Promise<void> {
-	await mutateStored((stored) => stored.filter((h) => h.id !== id));
+	await mutateStored(async (stored) => {
+		const host = stored.find((item) => item.id === id);
+		const cached = await loadConfig();
+		// Config also feeds legacy migration. Clear it in the same local queue
+		// as connection persistence so a late network result cannot restore it.
+		if (cached.hostId === id || (host && !cached.hostId && host.endpoints.some((address) =>
+			address.host === cached.host && String(address.port) === cached.httpPort && address.secure === !!cached.secure))) await clearConfig();
+		return stored.filter((h) => h.id !== id);
+	});
 	await SecureStore.deleteItemAsync(tokenKey(id));
+	await SecureStore.deleteItemAsync(fallbackTokenKey(id));
 	// A pointer at a machine that no longer exists would resolve to nothing;
 	// clearing it falls back to recency instead.
 	if ((await AsyncStorage.getItem(ACTIVE_HOST_KEY)) === id) await clearActiveHost();
+}
+
+/** Commit a connection only while its pairing and credential are still current. */
+export function persistResolvedConfig(config: ServerConfig): Promise<boolean> {
+	const write = pendingWrite.then(async () => {
+		const selected = await activeHost();
+		if (!selected || selected.id !== config.hostId || selected.token !== config.password) return false;
+		await saveConfig(config);
+		return true;
+	});
+	pendingWrite = write.then(() => {}, () => {});
+	return write;
 }
 
 const LEGACY_CONFIG_KEY = "ao.serverConfig";
@@ -266,5 +316,10 @@ export async function adoptHostIdentity(oldId: string, hostId: string): Promise<
 	if (token) {
 		await SecureStore.setItemAsync(tokenKey(hostId), token);
 		await SecureStore.deleteItemAsync(tokenKey(""));
+	}
+	const fallbackToken = await SecureStore.getItemAsync(fallbackTokenKey(""));
+	if (fallbackToken) {
+		await SecureStore.setItemAsync(fallbackTokenKey(hostId), fallbackToken);
+		await SecureStore.deleteItemAsync(fallbackTokenKey(""));
 	}
 }

@@ -12,15 +12,24 @@
  * Images mixed into a sentence stay in the sentence.
  */
 
+import { mediaCrossOrigin } from "../../lib/file-media";
 import { createContext, useContext, useState, type ReactNode } from "react";
 import type { ExtraProps } from "react-markdown";
 import { useTranslation } from "react-i18next";
+import { Copy, Download } from "@/components/app-icons";
 import { cn } from "../../lib/utils";
+import { useUiStore } from "../../stores/ui-store";
+import { ContextMenu, ContextMenuContent, ContextMenuItem, ContextMenuTrigger } from "../ui/context-menu";
 import { Dialog, DialogContent, DialogTitle } from "../ui/dialog";
+import { Pressable } from "../ui/pressable";
+import { copyChatImage, saveChatImage } from "./chat-image-actions";
 import { useChatImageSrc } from "./chat-image-source";
+import { ATTACHMENT_TILE_CLASS } from "./messageAttachments";
 
 /** Thumbnails in a gallery share one height so the row reads as a set. */
 const InGallery = createContext(false);
+/** An attachment on a message shares the tile height of every other attachment. */
+const InAttachmentRow = createContext(false);
 /** A linked image already has an action; a button inside a link is invalid. */
 const InLink = createContext(false);
 
@@ -48,8 +57,42 @@ export function ChatImageGallery({ children }: { children: ReactNode }) {
 	);
 }
 
+/** A message's attached images: each is a tile the same height as any other attachment. */
+export function ChatImageAttachmentRow({ children }: { children: ReactNode }) {
+	return <InAttachmentRow.Provider value={true}>{children}</InAttachmentRow.Provider>;
+}
+
 export function ChatImageLinkScope({ children }: { children: ReactNode }) {
 	return <InLink.Provider value={true}>{children}</InLink.Provider>;
+}
+
+/** Right-click actions for an image: copy it to the clipboard or save it to disk. */
+function ChatImageMenu({ url, label, children }: { url: string; label: string; children: ReactNode }) {
+	const { t } = useTranslation();
+	const showGlobalToast = useUiStore((state) => state.showGlobalToast);
+	const run = (action: () => Promise<unknown>, success: string | null, failure: string) => {
+		void action().then(
+			(done) => {
+				if (success && done !== false) showGlobalToast(success);
+			},
+			(error: unknown) => showGlobalToast(failure, error instanceof Error ? error.message : undefined, "error"),
+		);
+	};
+	return (
+		<ContextMenu>
+			<ContextMenuTrigger asChild>{children}</ContextMenuTrigger>
+			<ContextMenuContent className="min-w-40">
+				<ContextMenuItem onSelect={() => run(() => copyChatImage(url), null, t("chat.image.copyFailed"))}>
+					<Copy aria-hidden="true" />
+					{t("chat.image.copy")}
+				</ContextMenuItem>
+				<ContextMenuItem onSelect={() => run(() => saveChatImage(url, label), null, t("chat.image.saveFailed"))}>
+					<Download aria-hidden="true" />
+					{t("chat.image.save")}
+				</ContextMenuItem>
+			</ContextMenuContent>
+		</ContextMenu>
+	);
 }
 
 /**
@@ -58,9 +101,17 @@ export function ChatImageLinkScope({ children }: { children: ReactNode }) {
  * A source that fails falls back to its alt text rather than a broken-image box,
  * matching `MarkdownImage` in the file viewer.
  */
-export function ChatImage({ src, alt, inline }: { src?: string | Blob; alt?: string; /** A chip sized for a line of prose. */ inline?: boolean }) {
+export function ChatImage({ src, alt, inline, onError: onLoadError }: {
+	src?: string | Blob;
+	alt?: string;
+	/** A chip sized for a line of prose. */
+	inline?: boolean;
+	/** Told when `src` fails, so the caller can offer another source in its place. */
+	onError?: () => void;
+}) {
 	const { t } = useTranslation();
 	const inGallery = useContext(InGallery);
+	const inAttachmentRow = useContext(InAttachmentRow);
 	const inLink = useContext(InLink);
 	const [open, setOpen] = useState(false);
 	// The failed URL rather than a boolean: a new URL deserves its own attempt.
@@ -75,17 +126,24 @@ export function ChatImage({ src, alt, inline }: { src?: string | Blob; alt?: str
 				className={cn(
 					"text-muted-foreground",
 					inGallery && "inline-flex h-40 items-center rounded-md border border-border px-3",
+					inAttachmentRow && ATTACHMENT_TILE_CLASS,
 				)}
 			>
 				{label || rawUrl}
 			</span>
 		);
 
-	const onError = () => setFailedSrc(url);
+	// Batched with the caller's own update: a replacement source draws without
+	// the alt text showing in between.
+	const onError = () => {
+		setFailedSrc(url);
+		onLoadError?.();
+	};
 
 	if (inLink) {
 		return (
 			<img
+				crossOrigin={mediaCrossOrigin(url)}
 				src={url}
 				alt={label}
 				loading="lazy"
@@ -97,55 +155,75 @@ export function ChatImage({ src, alt, inline }: { src?: string | Blob; alt?: str
 
 	return (
 		<>
-			<button
-				type="button"
-				onClick={() => setOpen(true)}
-				aria-label={label ? t("chat.image.open", { name: label }) : t("chat.image.openUnnamed")}
-				className={cn(
-					"max-w-full cursor-zoom-in overflow-hidden rounded-md border border-border bg-background transition-opacity duration-150 hover:opacity-90 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring motion-reduce:transition-none",
-					inline
-						? "mx-0.5 inline-flex items-center gap-1 py-0.5 pl-0.5 pr-1.5 align-middle text-[0.9em] leading-none"
-						: "inline-block align-top",
-				)}
-			>
-				{inline ? (
-					<>
-						<img src={url} alt="" onError={onError} className="size-4 shrink-0 rounded-sm object-cover" />
-						<span>{label}</span>
-					</>
-				) : (
-				<img
-					src={url}
-					alt={label}
-					loading="lazy"
-					onError={onError}
+			<ChatImageMenu url={url} label={label}>
+				<Pressable
+					onClick={() => setOpen(true)}
+					aria-label={label ? t("chat.image.open", { name: label }) : t("chat.image.openUnnamed")}
 					className={cn(
-						// Never `object-cover`: a wide screenshot in a narrow conversation
-						// column is clamped by `max-w-full` to less than its aspect-ratio
-						// width, and cropping there cuts the edges off the before/after pair
-						// this layout exists for.
-						"block max-w-full object-contain",
-						// One height makes the row read as a set. The width floor is for the
-						// decode: a lazy image has no width until it lands, so without it the
-						// row wraps against zero-width boxes and reflows image by image.
-						inGallery ? "h-40 w-auto min-w-24" : "h-auto max-h-80",
+						"max-w-full cursor-zoom-in overflow-hidden rounded-md transition-opacity duration-150 hover:opacity-90 focus-visible:ring-2 focus-visible:ring-ring motion-reduce:transition-none",
+						// A tile's edge is on the image, so its border counts inside the 64px.
+						!inAttachmentRow && "border border-border bg-background",
+						inline
+							? "mx-0.5 inline-flex items-center gap-1 py-0.5 pl-0.5 pr-1.5 align-middle text-[0.9em] leading-none"
+							: "inline-block align-top",
 					)}
-				/>
-				)}
-			</button>
-			<Dialog open={open} onOpenChange={setOpen}>
-				<DialogContent
-					aria-describedby={undefined}
-					className="z-overlay w-auto max-w-[calc(100vw-4rem)] gap-0 bg-popover p-2 pt-10"
 				>
-					<DialogTitle className="sr-only">{label || t("chat.image.untitled")}</DialogTitle>
+					{inline ? (
+						<>
+							<img crossOrigin={mediaCrossOrigin(url)} src={url} alt="" onError={onError} className="size-4 shrink-0 rounded-sm object-cover" />
+							<span>{label}</span>
+						</>
+					) : (
 					<img
+						crossOrigin={mediaCrossOrigin(url)}
+						src={url}
+						alt={label}
+						loading="lazy"
+						onError={onError}
+						className={cn(
+							// Never `object-cover`: a wide screenshot in a narrow conversation
+							// column is clamped by `max-w-full` to less than its aspect-ratio
+							// width, and cropping there cuts the edges off the before/after pair
+							// this layout exists for.
+							"block max-w-full object-contain",
+							// One height makes the row read as a set. The width floor is for the
+							// decode: a lazy image has no width until it lands, so without it the
+							// row wraps against zero-width boxes and reflows image by image.
+							// A tile is the exception: it is a thumbnail that opens full size, so an
+							// image fills between one square and two rather than letterboxing.
+							inAttachmentRow
+								? "h-16 w-auto min-w-16 max-w-32 rounded-md border border-border bg-background object-cover"
+								: inGallery
+									? "h-40 w-auto min-w-24"
+									: "h-auto max-h-80",
+						)}
+					/>
+					)}
+				</Pressable>
+			</ChatImageMenu>
+			<ChatImageDialog open={open} onOpenChange={setOpen} url={url} label={label} />
+		</>
+	);
+}
+
+export function ChatImageDialog({ open, onOpenChange, url, label }: { open: boolean; onOpenChange: (open: boolean) => void; url: string; label: string }) {
+	const { t } = useTranslation();
+	return (
+		<Dialog open={open} onOpenChange={onOpenChange}>
+			<DialogContent
+				aria-describedby={undefined}
+				className="z-overlay w-max max-w-[calc(100vw-4rem)] gap-0 bg-popover p-2 pt-10"
+			>
+				<DialogTitle className="sr-only">{label || t("chat.image.untitled")}</DialogTitle>
+				<ChatImageMenu url={url} label={label}>
+					<img
+						crossOrigin={mediaCrossOrigin(url)}
 						src={url}
 						alt={label}
 						className="block max-h-[calc(100svh-8rem)] max-w-full rounded-md object-contain"
 					/>
-				</DialogContent>
-			</Dialog>
-		</>
+				</ChatImageMenu>
+			</DialogContent>
+		</Dialog>
 	);
 }

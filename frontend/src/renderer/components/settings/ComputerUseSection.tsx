@@ -1,0 +1,423 @@
+import { apiErrorException } from "../../lib/api-error-exception";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
+import { Check, Copy, ExternalLink, LoaderCircle, Settings } from "@/components/app-icons";
+import { useEffect, useRef, useState } from "react";
+import { useTranslation } from "react-i18next";
+import type { components } from "../../../api/schema";
+import { PRIVACY_PANES, type PrivacyGuideAppearance, type PrivacyGuideTarget, type PrivacyPane } from "../../../main/privacy-guide";
+import { useSettings, useUpdateComputerUse } from "../../hooks/useSettings";
+import { apiClient } from "../../lib/api-client";
+import { aoBridge } from "../../lib/bridge";
+import type { Theme } from "../../lib/theme";
+import { useResolvedTheme } from "../../stores/ui-store";
+import { Button } from "../ui/button";
+import { Switch } from "../ui/switch";
+import type { InstallJob } from "./installState";
+import { SettingsRow } from "./SettingsRow";
+import { SettingsSection } from "./SettingsSection";
+
+type ComputerUseStatus = components["schemas"]["ComputerUseStatus"];
+type PermissionState = components["schemas"]["ComputerUsePermissions"]["accessibility"];
+
+export const computerUseStatusQueryKey = ["computer-use", "status"] as const;
+const appPrivacyQueryKey = ["computer-use", "app-privacy"] as const;
+const installJobQueryKey = ["system-install", "cua-driver"] as const;
+const JOB_POLL_MS = 1_500;
+const GRANT_POLL_MS = 2_000;
+const RELEASES_URL = "https://cua.ai/docs/how-to-guides/driver/install";
+
+async function fetchStatus(): Promise<ComputerUseStatus> {
+	const { data, error } = await apiClient.GET("/api/v1/computer-use/status");
+	if (error || !data) throw apiErrorException(error);
+	return data;
+}
+
+async function fetchInstallJob(): Promise<InstallJob> {
+	const { data, error } = await apiClient.GET("/api/v1/system/install/{target}", { params: { path: { target: "cua-driver" } } });
+	if (error || !data) throw apiErrorException(error);
+	return data;
+}
+
+/**
+ * Cua Driver, the computer-use driver behind the agents' computer-use tools. Installs
+ * through the daemon's fixed installer allowlist like the agent CLIs do, then
+ * shows the facts that decide whether agents can use it: the background
+ * service and, on macOS, the privacy permissions CuaDriver.app holds. On macOS
+ * a second section, native computer use, holds Orchestrator's own permissions,
+ * which agents' built-in computer use (Claude Code's, Codex's) needs in
+ * terminal sessions: macOS checks Orchestrator, not the agent, for everything
+ * a session runs.
+ */
+export function ComputerUseSection({ titleHidden }: { titleHidden?: boolean }) {
+	const { t } = useTranslation();
+	const queryClient = useQueryClient();
+	const theme = useResolvedTheme();
+	// The app the floating guide beside System Settings is up for; it follows
+	// that app's grants until the guide closes (everything granted, its X, or
+	// System Settings quitting).
+	const [guiding, setGuiding] = useState<PrivacyGuideTarget | null>(null);
+	// The guide is driven from here alone: leaving this page takes it down, so
+	// it never sits beside System Settings with grants nobody updates.
+	const mounted = useRef(true);
+	const guideOpened = useRef(false);
+	// The grants each app's guide was last given. A failed read sends these
+	// instead, so a guide closed from its own side still ends the polling.
+	const lastGranted = useRef<Partial<Record<PrivacyGuideTarget, Record<PrivacyPane, boolean>>>>({});
+	useEffect(() => {
+		mounted.current = true;
+		return () => {
+			mounted.current = false;
+			if (guideOpened.current) void aoBridge.app.closePrivacyGuide();
+			guideOpened.current = false;
+		};
+	}, []);
+	const status = useQuery({
+		queryKey: computerUseStatusQueryKey,
+		queryFn: fetchStatus,
+		// A permission request waits on the user in System Settings; follow it.
+		refetchInterval: (query) => (query.state.data?.permissions?.granting || guiding === "cuaDriver" ? GRANT_POLL_MS : false),
+	});
+	const mac = isMac();
+	// Orchestrator's own grants, read fresh on each fetch (and on window focus,
+	// as the user comes back from System Settings); null when macOS cannot be
+	// asked, and the row then says so.
+	const appPrivacy = useQuery({
+		queryKey: appPrivacyQueryKey,
+		queryFn: async () => (await aoBridge.app.getAppPrivacy()) ?? null,
+		enabled: mac,
+		refetchInterval: guiding === "orchestrator" ? GRANT_POLL_MS : false,
+	});
+	const job = useQuery({
+		queryKey: installJobQueryKey,
+		queryFn: fetchInstallJob,
+		refetchInterval: (query) => (query.state.data?.status === "running" ? JOB_POLL_MS : false),
+	});
+	const [action, setAction] = useState<"install" | "start" | "grant" | "guide" | "appGrant" | null>(null);
+	// Which action failed travels with the message, so it shows under its section.
+	const [actionError, setActionError] = useState<{ action: NonNullable<typeof action>; message: string } | null>(null);
+	const [copied, setCopied] = useState(false);
+	const agentAccess = useUpdateComputerUse();
+	// Set when this panel starts a fresh install: installing the driver is asking
+	// for agents to use it, so its success turns agent access on. An update
+	// leaves the user's choice alone.
+	const enableOnInstall = useRef(false);
+
+	// A finished install changes what status reports; refresh it once.
+	const jobStatus = job.data?.status;
+	const previousJobStatus = useRef(jobStatus);
+	useEffect(() => {
+		if (previousJobStatus.current === "running" && jobStatus && jobStatus !== "running") {
+			void queryClient.invalidateQueries({ queryKey: computerUseStatusQueryKey });
+			if (jobStatus === "succeeded" && enableOnInstall.current) agentAccess.update(true);
+			enableOnInstall.current = false;
+		}
+		previousJobStatus.current = jobStatus;
+	}, [jobStatus, queryClient, agentAccess]);
+
+	const run = async (name: NonNullable<typeof action>, work: () => Promise<void>) => {
+		setAction(name);
+		setActionError(null);
+		try {
+			await work();
+		} catch (cause) {
+			setActionError({ action: name, message: cause instanceof Error ? cause.message : String(cause) });
+		} finally {
+			setAction(null);
+		}
+	};
+	const install = () => run("install", async () => {
+		enableOnInstall.current = !installed;
+		const { data, error } = await apiClient.POST("/api/v1/system/install/{target}", { params: { path: { target: "cua-driver" } } });
+		if (error || !data) throw apiErrorException(error);
+		queryClient.setQueryData(installJobQueryKey, data);
+	});
+	const startService = () => run("start", async () => {
+		const { data, error } = await apiClient.POST("/api/v1/computer-use/daemon/start");
+		if (error || !data) throw apiErrorException(error);
+		queryClient.setQueryData(computerUseStatusQueryKey, data);
+	});
+	const showGuide = async (target: PrivacyGuideTarget, granted: Record<PrivacyPane, boolean>) => {
+		guideOpened.current = true;
+		// Set before awaiting: a read that fails while the guide opens must
+		// still have grants to send once the page starts following it.
+		lastGranted.current[target] = granted;
+		const app = target === "orchestrator" ? "appGuide" : "guide";
+		await aoBridge.app.showPrivacyGuide({
+			target,
+			pane: firstMissing(granted),
+			granted,
+			appearance: guideAppearance(theme),
+			text: {
+				drag: t(`settings.computerUse.${app}.drag`),
+				hint: t("settings.computerUse.guide.hint"),
+				allowed: t(`settings.computerUse.${app}.allowed`),
+				allowedHint: t("settings.computerUse.guide.allowedHint"),
+				labels: { accessibility: t("settings.computerUse.accessibility"), screenRecording: t("settings.computerUse.screenRecording") },
+				granted: t("settings.computerUse.permission.granted"),
+				close: t("settings.computerUse.guide.close"),
+			},
+		});
+		// Left the page while it opened: the unmount close may have run first.
+		if (!mounted.current) {
+			void aoBridge.app.closePrivacyGuide();
+			return;
+		}
+		setGuiding(target);
+	};
+	const grant = () => run("grant", async () => {
+		const { data, error } = await apiClient.POST("/api/v1/computer-use/permissions/grant");
+		if (error || !data) throw apiErrorException(error);
+		queryClient.setQueryData(computerUseStatusQueryKey, data);
+		// The request lists CuaDriver in System Settings; point the user at it.
+		if (data.permissions) await showGuide("cuaDriver", grantedMap(data.permissions));
+	});
+	// Asks macOS for whatever Orchestrator is missing, which lists it in those
+	// panes, then docks the guide there; with everything granted it opens the
+	// guide to review them.
+	const grantApp = () => run("appGrant", async () => {
+		const current = appPrivacy.data;
+		if (!current) return;
+		const granted = allGrantedMap(current) ? current : (await aoBridge.app.requestAppPrivacy()) ?? current;
+		queryClient.setQueryData(appPrivacyQueryKey, granted);
+		await showGuide("orchestrator", granted);
+	});
+	const copyCommand = async (command: string) => {
+		await navigator.clipboard.writeText(command);
+		setCopied(true);
+		window.setTimeout(() => setCopied(false), 1_500);
+	};
+
+	const current = status.data;
+	const installed = Boolean(current?.installed);
+	const installing = action === "install" || jobStatus === "running";
+	const failed = jobStatus === "failed" || jobStatus === "interrupted";
+	// Unsupported with a command: AO knows the command but cannot run it here,
+	// for a fresh install or an update alike.
+	const needsInstaller = !installed || Boolean(current?.updateAvailable);
+	const manualCommand = jobStatus === "unsupported" && needsInstaller ? job.data?.command : undefined;
+	const permissions = current?.permissions;
+
+	const accessibilityState = permissions?.accessibility;
+	const screenRecordingState = permissions?.screenRecording;
+	// Every poll reports in, so a guide closed from its own side (X, System
+	// Settings quitting) ends the polling at the next one.
+	const statusUpdatedAt = status.dataUpdatedAt;
+	const appAccessibility = appPrivacy.data?.accessibility;
+	const appScreenRecording = appPrivacy.data?.screenRecording;
+	// A failed read (an error, or null from macOS) still reports in: the guide
+	// gets the last grants it was shown, so a close from its own side still
+	// ends the polling instead of leaving it running while this page is open.
+	const appUpdatedAt = Math.max(appPrivacy.dataUpdatedAt, appPrivacy.errorUpdatedAt);
+	const statusPolledAt = Math.max(statusUpdatedAt, status.errorUpdatedAt);
+	// Only the guided target's own poll re-runs the effect below: the other
+	// query's focus refetches would resend unchanged grants.
+	const guidePolledAt = guiding === "orchestrator" ? appUpdatedAt : guiding === "cuaDriver" ? statusPolledAt : 0;
+	useEffect(() => {
+		if (!guiding) return;
+		let granted: Record<PrivacyPane, boolean> | undefined;
+		if (guiding === "cuaDriver" && accessibilityState && screenRecordingState) {
+			granted = { accessibility: accessibilityState === "granted", screenRecording: screenRecordingState === "granted" };
+		} else if (guiding === "orchestrator" && appAccessibility !== undefined && appScreenRecording !== undefined) {
+			granted = { accessibility: appAccessibility, screenRecording: appScreenRecording };
+		}
+		granted ??= lastGranted.current[guiding];
+		if (!granted) return;
+		lastGranted.current[guiding] = granted;
+		let current = true;
+		void aoBridge.app.updatePrivacyGuide(guiding, granted).then((open) => {
+			if (current && !open) {
+				guideOpened.current = false;
+				setGuiding(null);
+			}
+		}, () => undefined);
+		return () => { current = false; };
+	}, [guiding, accessibilityState, screenRecordingState, appAccessibility, appScreenRecording, guidePolledAt]);
+
+	const driverAction = installing ? (
+		<span role="status" className="inline-flex items-center gap-1.5 text-xs text-settings-muted">
+			<LoaderCircle className="size-3.5 animate-spin" aria-hidden="true" />
+			{t(installed ? "settings.computerUse.updating" : "settings.computerUse.installing")}
+		</span>
+	) : manualCommand ? (
+		<Button type="button" size="sm" variant="ghost" onClick={() => void copyCommand(manualCommand)}>
+			{copied ? <Check aria-hidden="true" /> : <Copy aria-hidden="true" />}
+			{t(copied ? "settings.harness.copied" : "settings.harness.copyCommand")}
+		</Button>
+	) : !installed && status.isSuccess ? (
+		<Button type="button" size="sm" variant="ghost" onClick={() => void install()}>
+			{t(failed ? "settings.computerUse.retryInstall" : "settings.computerUse.install")}
+		</Button>
+	) : installed && current?.updateAvailable && current.latestVersion ? (
+		<Button type="button" size="sm" variant="ghost" onClick={() => void install()}>
+			{t("settings.computerUse.update", { version: current.latestVersion })}
+		</Button>
+	) : installed ? (
+		<span className="text-xs text-settings-muted">{t("settings.computerUse.installed")}</span>
+	) : null;
+
+	const driverDescription = failed && job.data?.error ? <span className="text-error">{job.data.error}</span>
+		: manualCommand ? job.data?.error || t("settings.computerUse.manualInstall")
+		: installed && current?.version ? <span className="font-mono">{current.version}</span>
+		: undefined;
+
+	return (
+		<>
+			<SettingsSection title={t("settings.computerUse.driver")} description={t("settings.computerUse.driverDescription")} sectionId="computerUse" titleHidden={titleHidden} grouped>
+				<SettingsRow label={t("settings.computerUse.driverStatus")} description={driverDescription}>
+					{driverAction}
+				</SettingsRow>
+				<AgentAccessRow installed={installed} access={agentAccess} />
+				{status.isPending && isMac() ? (
+					<SettingsRow label={t("settings.computerUse.permissions")}>
+						<PermissionsGear busy disabled onClick={() => undefined} />
+					</SettingsRow>
+				) : null}
+				{installed && current ? (
+					<>
+						{/* A running service needs no row; only its absence is worth reporting. */}
+						{current.daemon !== "running" ? (
+							<SettingsRow label={t("settings.computerUse.service")} description={<span className="text-error">{t("settings.computerUse.serviceNotRunning")}</span>}>
+								<Button type="button" size="sm" variant="ghost" disabled={action !== null} onClick={() => void startService()}>
+									{action === "start" ? <LoaderCircle className="animate-spin" aria-hidden="true" /> : null}
+									{t("settings.computerUse.start")}
+								</Button>
+							</SettingsRow>
+						) : null}
+						{permissions ? (
+							<SettingsRow
+								label={t("settings.computerUse.permissions")}
+								description={permissions.grantError ? <span className="text-error">{permissions.grantError}</span>
+									: current.daemon !== "running" ? t("settings.computerUse.permissionsNeedService")
+									// All granted reads from the trailing state alone; otherwise name each one.
+									: allGranted(permissions.accessibility, permissions.screenRecording) ? undefined
+									: `${t("settings.computerUse.accessibility")}: ${t(`settings.computerUse.permission.${permissions.accessibility}`)} · ${t("settings.computerUse.screenRecording")}: ${t(`settings.computerUse.permission.${permissions.screenRecording}`)}`}
+							>
+								{/* One way in: missing grants are asked for first; either way the
+								    guide docks under System Settings, where the user picks the pane. */}
+								<PermissionsGear
+									busy={permissions.granting || action === "grant" || action === "guide"}
+									disabled={action !== null}
+									onClick={() => void (allGranted(permissions.accessibility, permissions.screenRecording)
+										? run("guide", () => showGuide("cuaDriver", grantedMap(permissions)))
+										: grant())}
+								/>
+							</SettingsRow>
+						) : null}
+					</>
+				) : null}
+				{status.isError ? (
+					<div className="settings-content-row">
+						<p role="alert" className="text-xs text-error">{status.error instanceof Error ? status.error.message : t("settings.computerUse.loadFailed")}</p>
+					</div>
+				) : null}
+			</SettingsSection>
+
+			{actionError && actionError.action !== "appGrant" ? <p role="alert" className="px-(--settings-row-inset) text-xs text-error">{actionError.message}</p> : null}
+
+			{(!installed || manualCommand) && status.isSuccess && !installing ? (
+				<div className="flex px-(--settings-row-inset)">
+					<Button type="button" size="sm" variant="quiet" className="-ml-2.5" onClick={() => void aoBridge.app.openExternal(RELEASES_URL)}>
+						<ExternalLink aria-hidden="true" />{t("settings.harness.installGuide")}
+					</Button>
+				</div>
+			) : null}
+
+			{/* Agents' own computer use (Claude Code's, Codex's) runs as Orchestrator,
+			    so macOS checks Orchestrator's grants, not Cua Driver's. */}
+			{mac ? (
+				<SettingsSection title={t("settings.computerUse.native")} description={t("settings.computerUse.nativeDescription")} sectionId="nativeComputerUse" titleHidden={titleHidden} grouped>
+					<SettingsRow
+						label={t("settings.computerUse.appPermissions")}
+						description={appPrivacy.isPending ? undefined
+							: !appPrivacy.data ? t("settings.computerUse.appPermissionsUnknown")
+							: allGrantedMap(appPrivacy.data) ? undefined
+							: `${t("settings.computerUse.accessibility")}: ${t(`settings.computerUse.permission.${appPrivacy.data.accessibility ? "granted" : "missing"}`)} · ${t("settings.computerUse.screenRecording")}: ${t(`settings.computerUse.permission.${appPrivacy.data.screenRecording ? "granted" : "missing"}`)}`}
+					>
+						<PermissionsGear
+							label={t("settings.computerUse.openAppPermissions")}
+							busy={appPrivacy.isPending || action === "appGrant"}
+							disabled={action !== null || !appPrivacy.data}
+							onClick={() => void grantApp()}
+						/>
+					</SettingsRow>
+				</SettingsSection>
+			) : null}
+
+			{actionError?.action === "appGrant" ? <p role="alert" className="px-(--settings-row-inset) text-xs text-error">{actionError.message}</p> : null}
+		</>
+	);
+}
+
+/**
+ * "Let agents use this computer": while on, new chat sessions get the
+ * computer-use tools and a standing instruction to read their guide first.
+ * It needs Cua Driver installed to turn on; once on it can always be turned off.
+ */
+function AgentAccessRow({ installed, access }: { installed: boolean; access: ReturnType<typeof useUpdateComputerUse> }) {
+	const { t } = useTranslation();
+	const { settings, isLoading } = useSettings();
+	const { update, saving, error } = access;
+	const enabled = settings?.computerUse ?? false;
+	return (
+		<div className="flex w-full flex-col">
+			<SettingsRow
+				label={t("settings.computerUse.agentAccess")}
+				description={!installed && !enabled ? t("settings.computerUse.agentAccessNeedsDriver") : t("settings.computerUse.agentAccessDescription")}
+			>
+				<Switch
+					aria-label={t("settings.computerUse.agentAccess")}
+					checked={enabled}
+					disabled={isLoading || saving || !settings || (!installed && !enabled)}
+					onCheckedChange={update}
+				/>
+			</SettingsRow>
+			{error ? <p role="alert" className="px-3 pb-2 text-caption leading-4 text-error">{error}</p> : null}
+		</div>
+	);
+}
+
+function isMac(): boolean {
+	return document.documentElement.dataset.aoPlatform === "darwin";
+}
+
+/** The macOS permissions row's only control: a gear, spinning while state loads or System Settings is waited on. */
+function PermissionsGear({ label: labelOverride, busy, disabled, onClick }: { label?: string; busy: boolean; disabled: boolean; onClick: () => void }) {
+	const { t } = useTranslation();
+	const label = labelOverride ?? t("settings.computerUse.openPermissions");
+	return (
+		<Button type="button" size="icon-sm" variant="ghost" aria-label={label} title={label} aria-busy={busy || undefined} disabled={disabled || busy} onClick={onClick} className="relative">
+			<Settings aria-hidden="true" />
+			{busy ? <LoaderCircle className="absolute inset-0 m-auto size-6 animate-spin text-settings-muted" aria-hidden="true" /> : null}
+		</Button>
+	);
+}
+
+/**
+ * AO's resolved light/dark mode and popover tokens, so the strip matches the
+ * app (theme catalog included) instead of the OS appearance.
+ */
+function guideAppearance(scheme: Theme): PrivacyGuideAppearance {
+	const style = getComputedStyle(document.documentElement);
+	const token = (name: string) => style.getPropertyValue(name).trim() || undefined;
+	return {
+		scheme,
+		colors: { bg: token("--popover"), fg: token("--popover-foreground"), muted: token("--muted-foreground"), border: token("--border") },
+	};
+}
+
+function allGranted(...states: PermissionState[]): boolean {
+	return states.every((state) => state === "granted");
+}
+
+function grantedMap(permissions: NonNullable<ComputerUseStatus["permissions"]>): Record<PrivacyPane, boolean> {
+	return { accessibility: permissions.accessibility === "granted", screenRecording: permissions.screenRecording === "granted" };
+}
+
+function allGrantedMap(granted: Record<PrivacyPane, boolean>): boolean {
+	return PRIVACY_PANES.every((pane) => granted[pane]);
+}
+
+/** The pane the guide opens on: the first permission still missing. */
+function firstMissing(granted: Record<PrivacyPane, boolean>): PrivacyPane {
+	return PRIVACY_PANES.find((pane) => !granted[pane]) ?? "accessibility";
+}

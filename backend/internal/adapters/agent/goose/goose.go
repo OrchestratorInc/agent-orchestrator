@@ -54,10 +54,10 @@ const (
 	gooseIdentityWaitDelay = 100 * time.Millisecond
 )
 
-// gooseIdentityProbeTimeout bounds the adapter-owned --help identity probe.
-// ResolveBinary's caller can impose a shorter deadline, including the
-// readiness coordinator's installation-check timeout.
-var gooseIdentityProbeTimeout = time.Second
+// gooseIdentityProbeTimeout allows a freshly installed binary to finish its
+// first launch while macOS assesses it. ResolveBinary's caller can impose a
+// shorter deadline, including the readiness coordinator's two-second check.
+var gooseIdentityProbeTimeout = time.Minute
 
 // gooseIdentityCommand is kept injectable so identity tests never need to
 // launch a real CLI. Production uses direct native execution; in particular,
@@ -161,15 +161,9 @@ func (p *Plugin) GetPromptDeliveryStrategy(ctx context.Context, _ ports.LaunchCo
 	return ports.PromptDeliveryAfterStart, nil
 }
 
-// GetRestoreCommand rebuilds the argv that continues an existing Goose session:
-//
-//	[env GOOSE_MODE=<mode>] goose run --system <text> --resume --session-id <agentSessionId>
-//
-// ok is false when the hook-derived native session id has not landed yet, so
-// callers can fall back to fresh launch behavior. AO deliberately uses run
-// rather than session here: run supports --system alongside --resume, so the
-// current derived system instructions are reapplied without replaying the
-// original task or relying on Goose to persist invocation-level instructions.
+// GetRestoreCommand resumes the exact saved conversation in Goose's
+// interactive session command. Unlike run, this stays ready for new input.
+// --system is supported by session as well as run (verified session --help).
 func (p *Plugin) GetRestoreCommand(ctx context.Context, cfg ports.RestoreConfig) (cmd []string, ok bool, err error) {
 	if err := ctx.Err(); err != nil {
 		return nil, false, err
@@ -184,7 +178,7 @@ func (p *Plugin) GetRestoreCommand(ctx context.Context, cfg ports.RestoreConfig)
 		return nil, false, err
 	}
 
-	cmd = append(gooseModeEnvPrefix(cfg.Permissions), binary, "run")
+	cmd = append(gooseModeEnvPrefix(cfg.Permissions), binary, "session")
 	systemPrompt, err := restoreSystemPromptText(cfg)
 	if err != nil {
 		return nil, false, err

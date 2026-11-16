@@ -11,10 +11,13 @@ import (
 )
 
 // ScheduleInput is the user-facing schedule choice. Exactly one source is set.
+// AnchorTimezone is set only when RRule is a persisted rule being moved to a
+// new Timezone, and names the zone its DTSTART anchor was stored in.
 type ScheduleInput struct {
-	RRule    string
-	Cron     string
-	Timezone string
+	RRule          string
+	Cron           string
+	Timezone       string
+	AnchorTimezone string
 }
 
 // Schedule is the canonical durable rule and its first future occurrence.
@@ -45,6 +48,12 @@ func CanonicalizeSchedule(input ScheduleInput, now time.Time) (Schedule, error) 
 	}
 	if cronText != "" {
 		rruleText, err = cronToRRule(cronText)
+		if err != nil {
+			return Schedule{}, err
+		}
+	}
+	if anchorZone := strings.TrimSpace(input.AnchorTimezone); anchorZone != "" && anchorZone != zone {
+		rruleText, err = rebaseRRule(rruleText, anchorZone, loc, now)
 		if err != nil {
 			return Schedule{}, err
 		}
@@ -89,6 +98,43 @@ func CanonicalizeSchedule(input ScheduleInput, now time.Time) (Schedule, error) 
 		previous = following
 	}
 	return Schedule{RRuleText: option.String(), Timezone: zone, NextRunAt: next.UTC()}, nil
+}
+
+// rebaseRRule moves a persisted rule's DTSTART anchor into a new timezone.
+// Hourly and minutely rules keep the anchor's instant so the cadence continues
+// unbroken. Slower rules keep the anchor's local wall-clock time; when that
+// pushes an already-started daily or weekly anchor past now, it steps back by
+// whole intervals so the first occurrences in the new zone are not skipped.
+func rebaseRRule(rruleText, anchorZone string, loc *time.Location, now time.Time) (string, error) {
+	anchorLoc, err := time.LoadLocation(anchorZone)
+	if err != nil {
+		return "", fmt.Errorf("load timezone %q: %w", anchorZone, err)
+	}
+	option, err := rrule.StrToROptionInLocation(rruleText, anchorLoc)
+	if err != nil {
+		return "", fmt.Errorf("parse rrule: %w", err)
+	}
+	anchor := option.Dtstart
+	if anchor.IsZero() {
+		return option.String(), nil
+	}
+	if option.Freq == rrule.HOURLY || option.Freq == rrule.MINUTELY {
+		option.Dtstart = anchor.In(loc)
+		return option.String(), nil
+	}
+	started := !anchor.After(now)
+	anchor = time.Date(anchor.Year(), anchor.Month(), anchor.Day(), anchor.Hour(), anchor.Minute(), anchor.Second(), 0, loc)
+	if started && (option.Freq == rrule.DAILY || option.Freq == rrule.WEEKLY) {
+		days := max(option.Interval, 1)
+		if option.Freq == rrule.WEEKLY {
+			days *= 7
+		}
+		for anchor.After(now) {
+			anchor = anchor.AddDate(0, 0, -days)
+		}
+	}
+	option.Dtstart = anchor
+	return option.String(), nil
 }
 
 func embeddedTimezone(value string) string {

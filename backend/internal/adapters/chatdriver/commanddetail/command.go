@@ -1,5 +1,5 @@
-// Package commanddetail normalizes provider command metadata for AO's durable
-// conversation activity contract.
+// Package commanddetail normalizes provider command and tool metadata for AO's
+// durable conversation activity contract.
 package commanddetail
 
 import "strings"

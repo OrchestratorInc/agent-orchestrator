@@ -2,6 +2,7 @@ import { createHashHistory, createRouter, useRouterState } from "@tanstack/react
 import type { QueryClient } from "@tanstack/react-query";
 import { DaemonStartupLoader } from "./components/DaemonStartupLoader";
 import { routeTree } from "./routeTree.gen";
+import { reportRouteError } from "./components/RouteErrorCapture";
 
 export function AppPendingFallback() {
 	const isInitialLoad = useRouterState({ select: (state) => state.resolvedLocation === undefined });
@@ -15,6 +16,7 @@ export function createAppRouter(queryClient: QueryClient) {
 		history: createHashHistory(),
 		routeTree,
 		context: { queryClient },
+		defaultOnCatch: reportRouteError,
 		defaultPreload: "intent",
 		// Parent route loaders probe the daemon before ShellLayout can mount.
 		// Render the same viewport-wide startup screen during that gap so the
@@ -23,6 +25,10 @@ export function createAppRouter(queryClient: QueryClient) {
 		// branding back over an already-running app.
 		defaultPendingComponent: AppPendingFallback,
 		defaultPendingMs: 0,
+		// The router's default keeps a shown pending component up for at least
+		// 500ms. With pendingMs 0 it always shows, so every launch and reload
+		// held the startup screen for half a second after the data had arrived.
+		defaultPendingMinMs: 0,
 		// Always re-run loaders when a route is preloaded or visited so React
 		// Query's cache is the single source of truth for staleness.
 		defaultPreloadStaleTime: 0,

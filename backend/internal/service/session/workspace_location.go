@@ -12,6 +12,7 @@ import (
 
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
 	"github.com/aoagents/agent-orchestrator/backend/internal/httpd/apierr"
+	"github.com/aoagents/agent-orchestrator/backend/internal/sessionartifacts"
 )
 
 // WorkspaceLocation returns the live workspace directory for a session. It is
@@ -38,10 +39,48 @@ func (s *Service) WorkspaceLocation(ctx context.Context, id domain.SessionID) (s
 	}
 	// These won't clear on their own, so a 500 would only make the caller retry forever.
 	if errors.Is(err, fs.ErrPermission) || errors.Is(err, syscall.ENOTDIR) || errors.Is(err, syscall.ELOOP) {
-		return "", apierr.Conflict("SESSION_WORKSPACE_UNREADABLE", "AO can't read this session's folder. Check its permissions.", nil)
+		return "", apierr.Conflict("SESSION_WORKSPACE_UNREADABLE", "Orchestrator can't read this session's folder. Check its permissions.", nil)
 	}
 	if err != nil {
 		return "", fmt.Errorf("stat session %s workspace: %w", id, err)
 	}
 	return filepath.Clean(workspacePath), nil
+}
+
+// ArtifactLocation returns a session's artifact directory, for Electron main
+// only. A row stored without one uses the default layout under the data dir.
+func (s *Service) ArtifactLocation(ctx context.Context, id domain.SessionID) (string, error) {
+	record, ok, err := s.store.GetSession(ctx, id)
+	if err != nil {
+		return "", fmt.Errorf("get session %s artifact dir: %w", id, err)
+	}
+	if !ok {
+		// A deleted session's kept artifacts stay in its directory.
+		keeper, canKeep := s.store.(keptArtifactStore)
+		if !canKeep {
+			return "", apierr.NotFound("SESSION_NOT_FOUND", "Unknown session")
+		}
+		if _, kept, err := keeper.GetKeptArtifactSession(ctx, id); err != nil {
+			return "", err
+		} else if !kept {
+			return "", apierr.NotFound("SESSION_NOT_FOUND", "Unknown session")
+		}
+		record.ID = id
+	}
+	dir := strings.TrimSpace(record.Metadata.ArtifactDir)
+	if dir == "" {
+		dir = sessionartifacts.Dir(s.dataDir, record.ID)
+	}
+	notFound := apierr.NotFound("SESSION_ARTIFACTS_NOT_FOUND", "This session has no artifacts folder yet.")
+	if dir == "" || !filepath.IsAbs(dir) {
+		return "", notFound
+	}
+	info, err := os.Stat(dir)
+	if errors.Is(err, os.ErrNotExist) || (err == nil && !info.IsDir()) {
+		return "", notFound
+	}
+	if err != nil {
+		return "", fmt.Errorf("stat session %s artifact dir: %w", id, err)
+	}
+	return filepath.Clean(dir), nil
 }

@@ -2,13 +2,18 @@ package agy
 
 import (
 	"context"
+	"database/sql"
 	"encoding/json"
+	"errors"
 	"os"
 	"path/filepath"
 	"reflect"
 	"strings"
 	"testing"
 
+	_ "modernc.org/sqlite"
+
+	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
 	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
 )
 
@@ -21,27 +26,45 @@ func TestManifest(t *testing.T) {
 }
 
 func TestGetLaunchCommand(t *testing.T) {
-	plugin := &Plugin{resolvedBinary: "agy"}
+	for _, tc := range []struct {
+		name  string
+		mode  ports.PermissionMode
+		flags []string
+	}{
+		{name: "default", mode: ports.PermissionModeDefault},
+		{name: "accept-edits", mode: ports.PermissionModeAcceptEdits, flags: []string{"--mode", "accept-edits"}},
+		{name: "auto", mode: ports.PermissionModeAuto, flags: []string{"--mode", "auto"}},
+		{name: "bypass-permissions", mode: ports.PermissionModeBypassPermissions, flags: []string{"--dangerously-skip-permissions"}},
+		// NormalizePermissionMode collapses unknown and empty modes to default.
+		{name: "unknown", mode: ports.PermissionMode("bogus")},
+		{name: "empty", mode: ports.PermissionMode("")},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			plugin := &Plugin{resolvedBinary: "agy"}
 
-	cmd, err := plugin.GetLaunchCommand(context.Background(), ports.LaunchConfig{
-		Permissions:   ports.PermissionModeBypassPermissions,
-		Prompt:        "fix this",
-		WorkspacePath: "/tmp/ws",
-		Config:        ports.AgentConfig{Model: "gemini-3-pro"},
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
+			cmd, err := plugin.GetLaunchCommand(context.Background(), ports.LaunchConfig{
+				Permissions:   tc.mode,
+				Prompt:        "fix this",
+				WorkspacePath: "/tmp/ws",
+				Config:        ports.AgentConfig{Model: "gemini-3-pro"},
+			})
+			if err != nil {
+				t.Fatal(err)
+			}
 
-	want := []string{
-		"agy",
-		"--add-dir", "/tmp/ws",
-		"--dangerously-skip-permissions",
-		"--model", "gemini-3-pro",
-		"--prompt-interactive", "fix this",
-	}
-	if !reflect.DeepEqual(cmd, want) {
-		t.Fatalf("unexpected command\nwant: %#v\n got: %#v", want, cmd)
+			want := []string{
+				"agy",
+				"--add-dir", "/tmp/ws",
+			}
+			want = append(want, tc.flags...)
+			want = append(want, []string{
+				"--model", "gemini-3-pro",
+				"--prompt-interactive", "fix this",
+			}...)
+			if !reflect.DeepEqual(cmd, want) {
+				t.Fatalf("unexpected command\nwant: %#v\n got: %#v", want, cmd)
+			}
+		})
 	}
 }
 
@@ -80,32 +103,50 @@ func TestGetPromptDeliveryStrategy(t *testing.T) {
 }
 
 func TestGetRestoreCommand(t *testing.T) {
-	plugin := &Plugin{resolvedBinary: "agy"}
+	for _, tc := range []struct {
+		name  string
+		mode  ports.PermissionMode
+		flags []string
+	}{
+		{name: "default", mode: ports.PermissionModeDefault},
+		{name: "accept-edits", mode: ports.PermissionModeAcceptEdits, flags: []string{"--mode", "accept-edits"}},
+		{name: "auto", mode: ports.PermissionModeAuto, flags: []string{"--mode", "auto"}},
+		{name: "bypass-permissions", mode: ports.PermissionModeBypassPermissions, flags: []string{"--dangerously-skip-permissions"}},
+		// NormalizePermissionMode collapses unknown and empty modes to default.
+		{name: "unknown", mode: ports.PermissionMode("bogus")},
+		{name: "empty", mode: ports.PermissionMode("")},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			plugin := &Plugin{resolvedBinary: "agy"}
 
-	cmd, ok, err := plugin.GetRestoreCommand(context.Background(), ports.RestoreConfig{
-		Permissions: ports.PermissionModeBypassPermissions,
-		Config:      ports.AgentConfig{Model: "gemini-3-flash"},
-		Session: ports.SessionRef{
-			Metadata:      map[string]string{ports.MetadataKeyAgentSessionID: "native-id-123"},
-			WorkspacePath: "/tmp/ws",
-		},
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if !ok {
-		t.Fatal("expected ok=true")
-	}
+			cmd, ok, err := plugin.GetRestoreCommand(context.Background(), ports.RestoreConfig{
+				Permissions: tc.mode,
+				Config:      ports.AgentConfig{Model: "gemini-3-flash"},
+				Session: ports.SessionRef{
+					Metadata:      map[string]string{ports.MetadataKeyAgentSessionID: "native-id-123"},
+					WorkspacePath: "/tmp/ws",
+				},
+			})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if !ok {
+				t.Fatal("expected ok=true")
+			}
 
-	want := []string{
-		"agy",
-		"--add-dir", "/tmp/ws",
-		"--dangerously-skip-permissions",
-		"--model", "gemini-3-flash",
-		"--conversation", "native-id-123",
-	}
-	if !reflect.DeepEqual(cmd, want) {
-		t.Fatalf("unexpected command\nwant: %#v\n got: %#v", want, cmd)
+			want := []string{
+				"agy",
+				"--add-dir", "/tmp/ws",
+			}
+			want = append(want, tc.flags...)
+			want = append(want, []string{
+				"--model", "gemini-3-flash",
+				"--conversation", "native-id-123",
+			}...)
+			if !reflect.DeepEqual(cmd, want) {
+				t.Fatalf("unexpected command\nwant: %#v\n got: %#v", want, cmd)
+			}
+		})
 	}
 }
 
@@ -121,6 +162,35 @@ func TestGetRestoreCommandNoSessionID(t *testing.T) {
 	}
 	if ok {
 		t.Fatal("expected ok=false when agentSessionId is missing")
+	}
+}
+
+func TestNativeConversationIDUsesTheSharedAntigravityID(t *testing.T) {
+	plugin := New()
+	for _, tc := range []struct {
+		name       string
+		mode       domain.SessionMode
+		providerID string
+		agentID    string
+		want       string
+	}{
+		{name: "ACP to CLI", mode: domain.SessionModeChat, providerID: " shared-id ", agentID: "stale-cli-id", want: "shared-id"},
+		{name: "CLI to ACP", mode: domain.SessionModeTUI, providerID: "stale-acp-id", agentID: " shared-id ", want: "shared-id"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			got, ok, err := plugin.NativeConversationID(context.Background(), ports.SessionRef{
+				Metadata: map[string]string{ports.MetadataKeyAgentSessionID: tc.agentID},
+			}, tc.mode, tc.providerID)
+			if err != nil || !ok || got != tc.want {
+				t.Fatalf("NativeConversationID = (%q, %v, %v), want (%q, true, nil)", got, ok, err, tc.want)
+			}
+		})
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	if _, _, err := plugin.NativeConversationID(ctx, ports.SessionRef{}, domain.SessionModeChat, "shared-id"); !errors.Is(err, context.Canceled) {
+		t.Fatalf("cancelled NativeConversationID error = %v, want context.Canceled", err)
 	}
 }
 
@@ -366,5 +436,137 @@ func TestGetConfigSpecReportsModelField(t *testing.T) {
 	}
 	if !reflect.DeepEqual(spec.Fields, want) {
 		t.Fatalf("config fields\nwant: %#v\n got: %#v", want, spec.Fields)
+	}
+}
+
+func TestGetRestoreCommandDoesNotBridgeDuringPreflight(t *testing.T) {
+	geminiHome := t.TempDir()
+	t.Setenv("GEMINI_HOME", geminiHome)
+
+	acpDB := filepath.Join(geminiHome, "antigravity-acp", "conversations", "native-id-456.db")
+	if err := os.MkdirAll(filepath.Dir(acpDB), 0700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(acpDB, []byte("acp-db-payload"), 0600); err != nil {
+		t.Fatal(err)
+	}
+
+	plugin := &Plugin{resolvedBinary: "agy"}
+	cmd, ok, err := plugin.GetRestoreCommand(context.Background(), ports.RestoreConfig{
+		Session: ports.SessionRef{
+			Metadata: map[string]string{ports.MetadataKeyAgentSessionID: "native-id-456"},
+		},
+	})
+	if err != nil || !ok {
+		t.Fatalf("GetRestoreCommand: ok=%v, err=%v", ok, err)
+	}
+	if len(cmd) == 0 || cmd[len(cmd)-1] != "native-id-456" {
+		t.Fatalf("unexpected cmd: %v", cmd)
+	}
+
+	cliDB := filepath.Join(geminiHome, "antigravity-cli", "conversations", "native-id-456.db")
+	if _, err := os.Stat(cliDB); !os.IsNotExist(err) {
+		t.Fatalf("preflight unexpectedly bridged source storage: stat err = %v", err)
+	}
+}
+
+func TestNativeConversationExistsRequiresPersistedSteps(t *testing.T) {
+	home := t.TempDir()
+	path := filepath.Join(home, "antigravity-acp", "conversations", "native-id.db")
+	if err := os.MkdirAll(filepath.Dir(path), 0700); err != nil {
+		t.Fatal(err)
+	}
+	db, err := sql.Open("sqlite", "file:"+filepath.ToSlash(path))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.Exec("CREATE TABLE steps (id INTEGER PRIMARY KEY)"); err != nil {
+		_ = db.Close()
+		t.Fatal(err)
+	}
+	if err := db.Close(); err != nil {
+		t.Fatal(err)
+	}
+	plugin := New()
+	exists, err := plugin.NativeConversationExists(context.Background(), ports.SessionRef{}, "native-id", map[string]string{"GEMINI_HOME": home})
+	if err != nil || exists {
+		t.Fatalf("empty conversation exists = %v, err = %v; want false, nil", exists, err)
+	}
+	db, err = sql.Open("sqlite", "file:"+filepath.ToSlash(path))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.Exec("INSERT INTO steps DEFAULT VALUES"); err != nil {
+		_ = db.Close()
+		t.Fatal(err)
+	}
+	if err := db.Close(); err != nil {
+		t.Fatal(err)
+	}
+	exists, err = plugin.NativeConversationExists(context.Background(), ports.SessionRef{}, "native-id", map[string]string{"GEMINI_HOME": home})
+	if err != nil || !exists {
+		t.Fatalf("persisted conversation exists = %v, err = %v; want true, nil", exists, err)
+	}
+}
+
+func TestNativeConversationExistsModeScoped(t *testing.T) {
+	home := t.TempDir()
+	plugin := New()
+	env := map[string]string{"GEMINI_HOME": home}
+
+	// Create a DB only in antigravity-acp.
+	acpPath := filepath.Join(home, "antigravity-acp", "conversations", "conv-1.db")
+	if err := os.MkdirAll(filepath.Dir(acpPath), 0700); err != nil {
+		t.Fatal(err)
+	}
+	db, err := sql.Open("sqlite", "file:"+filepath.ToSlash(acpPath))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.Exec("CREATE TABLE steps (id INTEGER PRIMARY KEY); INSERT INTO steps DEFAULT VALUES"); err != nil {
+		_ = db.Close()
+		t.Fatal(err)
+	}
+	_ = db.Close()
+
+	// TUI probe must NOT find the ACP-only database.
+	tuiRef := ports.SessionRef{Metadata: map[string]string{ports.MetadataKeySessionMode: "tui"}}
+	exists, err := plugin.NativeConversationExists(context.Background(), tuiRef, "conv-1", env)
+	if err != nil || exists {
+		t.Fatalf("tui probe found ACP database: exists = %v, err = %v; want false, nil", exists, err)
+	}
+
+	// Chat probe MUST find the ACP database.
+	chatRef := ports.SessionRef{Metadata: map[string]string{ports.MetadataKeySessionMode: "chat"}}
+	exists, err = plugin.NativeConversationExists(context.Background(), chatRef, "conv-1", env)
+	if err != nil || !exists {
+		t.Fatalf("chat probe failed to find ACP database: exists = %v, err = %v; want true, nil", exists, err)
+	}
+
+	// Create a DB only in antigravity-cli.
+	cliPath := filepath.Join(home, "antigravity-cli", "conversations", "conv-2.db")
+	if err := os.MkdirAll(filepath.Dir(cliPath), 0700); err != nil {
+		t.Fatal(err)
+	}
+	db, err = sql.Open("sqlite", "file:"+filepath.ToSlash(cliPath))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.Exec("CREATE TABLE steps (id INTEGER PRIMARY KEY); INSERT INTO steps DEFAULT VALUES"); err != nil {
+		_ = db.Close()
+		t.Fatal(err)
+	}
+	_ = db.Close()
+
+	// Chat probe must NOT find the CLI-only database.
+	exists, err = plugin.NativeConversationExists(context.Background(), chatRef, "conv-2", env)
+	if err != nil || exists {
+		t.Fatalf("chat probe found CLI database: exists = %v, err = %v; want false, nil", exists, err)
+	}
+
+	// TUI probe MUST find the CLI database.
+	exists, err = plugin.NativeConversationExists(context.Background(), tuiRef, "conv-2", env)
+	if err != nil || !exists {
+		t.Fatalf("tui probe failed to find CLI database: exists = %v, err = %v; want true, nil", exists, err)
 	}
 }

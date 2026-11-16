@@ -1,6 +1,10 @@
 package domain
 
-import "time"
+import (
+	"errors"
+	"strings"
+	"time"
+)
 
 // These ID types are distinct string types so they can't be swapped at a call
 // site by accident.
@@ -82,6 +86,19 @@ const (
 	SessionOutputPRAndArtifact SessionOutputType = "pr_artifact"
 )
 
+// RequestedOutput is the deliverable a spawn asks for. Empty is the ordinary
+// task flow; it does not change derived status or the Kanban column.
+type RequestedOutput string
+
+// RequestedOutputArtifact asks the agent to deliver a file in the session's
+// artifact directory instead of a pull request.
+const RequestedOutputArtifact RequestedOutput = "artifact"
+
+// Valid reports whether k is empty or a known output kind.
+func (k RequestedOutput) Valid() bool {
+	return k == "" || k == RequestedOutputArtifact
+}
+
 // HasPR reports whether a session's output includes a claimed/observed PR.
 func (t SessionOutputType) HasPR() bool {
 	return t == SessionOutputPR || t == SessionOutputPRAndArtifact
@@ -103,18 +120,196 @@ const (
 	SessionArtifactGeneric  SessionArtifactKind = "file"
 )
 
+// MaxArtifactRegistrationPaths bounds how many paths one ao artifact add sends.
+const MaxArtifactRegistrationPaths = 100
+
 // SessionArtifactFile is one session-owned file discovered inside artifact_dir.
 type SessionArtifactFile struct {
+	// ID is the artifact's identity, kept across renames. It is empty for a
+	// file AO does not track yet.
+	ID        string              `json:"id,omitempty"`
 	Path      string              `json:"path"`
 	Name      string              `json:"name"`
 	Kind      SessionArtifactKind `json:"kind" enum:"html,markdown,file"`
 	Size      int64               `json:"size"`
 	UpdatedAt time.Time           `json:"updatedAt"`
+	ShareURL  string              `json:"shareUrl,omitempty"`
+	// ShareAccess is who ShareURL opens for, as the desktop last recorded it:
+	// restricted (invited people only) or anyone. Empty when not recorded.
+	ShareAccess string `json:"shareAccess,omitempty"`
+	// Registered is set on a file the agent registered as a deliverable, or
+	// inside a bundle directory it registered.
+	Registered bool `json:"registered,omitempty"`
+	// PreviousPaths are the paths the artifact had before it was renamed, most
+	// recent last, so a link to one of them still finds it.
+	PreviousPaths []string `json:"previousPaths,omitempty"`
+}
+
+// FileIdentity names a file on disk independently of its path: a rename keeps
+// it, while a copy or a newly written file gets another. Birth is the file's
+// creation time in nanoseconds, zero where the platform does not report it; a
+// file without one is never taken for a renamed file, because an inode number
+// alone is reused once its file is deleted.
+//
+// Linux birth times come from a coarse clock, so a file written right after
+// another is deleted can get both its inode and its birth time. There
+// Generation, the inode's generation number, tells them apart; where the file
+// system has none, ModTime does instead, and a file renamed and then modified
+// before AO next looks counts as a new file.
+type FileIdentity struct {
+	Dev        uint64
+	Ino        uint64
+	Birth      int64
+	Generation uint64
+	ModTime    int64
+}
+
+// SessionArtifactRegistration is a validated deliverable and the file observed
+// at its path, so registration can recognize a rename before the first scan.
+type SessionArtifactRegistration struct {
+	Path string
+	File FileIdentity
+}
+
+// SameFile reports whether f and other name the same file, and both are
+// complete enough to tell.
+func (f FileIdentity) SameFile(other FileIdentity) bool {
+	return f.Ino != 0 && f.Birth != 0 && f == other
+}
+
+// SessionArtifactRecord is the stored identity of one tracked file or bundle
+// directory in a session's artifact directory. Path changes on a rename; ID
+// does not.
+type SessionArtifactRecord struct {
+	ID            string
+	SessionID     SessionID
+	Path          string
+	RegisteredAt  *time.Time
+	File          FileIdentity
+	PreviousPaths []string
+	CreatedAt     time.Time
+	// HasVersions reports that the row's path has kept versions. Only the
+	// listing a scan reads sets it.
+	HasVersions bool
+}
+
+// ErrSessionArtifactsChanged reports artifact changes planned from rows that
+// have changed since; nothing was applied, and the next scan plans again.
+var ErrSessionArtifactsChanged = errors.New("session artifacts changed since they were read")
+
+// SessionArtifactChanges is what one scan of a session's artifact directory
+// changes in its artifact rows.
+type SessionArtifactChanges struct {
+	// Insert adds rows for files seen for the first time.
+	Insert []SessionArtifactRecord
+	// Move gives renamed artifacts their new path, with their version rows.
+	Move []SessionArtifactMove
+	// SetFile records the file now at a row's path: a file replaced in place,
+	// or none for a file that is gone.
+	SetFile []SessionArtifactFileUpdate
+	// Drop removes rows of files that were gone before a renamed artifact took
+	// their path, with their version rows.
+	Drop []SessionArtifactFileUpdate
+	// Forget removes rows of files that are gone and were never registered
+	// nor versioned, such as an editor's temporary files. A row with version
+	// history is kept, with no file, as SetFile would.
+	Forget []SessionArtifactFileUpdate
+}
+
+// Empty reports whether c changes nothing.
+func (c SessionArtifactChanges) Empty() bool {
+	return len(c.Insert) == 0 && len(c.Move) == 0 && len(c.SetFile) == 0 && len(c.Drop) == 0 && len(c.Forget) == 0
+}
+
+// SessionArtifactMove is one renamed artifact.
+type SessionArtifactMove struct {
+	ID            string
+	From          string
+	To            string
+	File          FileIdentity
+	PreviousPaths []string
+}
+
+// SessionArtifactFileUpdate names one artifact row by ID and current path.
+type SessionArtifactFileUpdate struct {
+	ID   string
+	Path string
+	File FileIdentity
+}
+
+// SessionArtifactVersion is one immutable snapshot of a session artifact file.
+// Its content is the blob named by SHA256 in the session's version store;
+// ModTime is the file's observed modification time when it was captured.
+type SessionArtifactVersion struct {
+	SessionID   SessionID
+	Path        string
+	Version     int64
+	SHA256      string
+	Size        int64
+	ContentType string
+	ModTime     time.Time
+	CreatedAt   time.Time
+	// Source is who wrote the version: the agent, or the user through an
+	// artifact save or restore.
+	Source ArtifactVersionSource
+	// Harness is the agent that was running the session when the version was
+	// recorded; empty for a version recorded before this was kept.
+	Harness AgentHarness
+	// RestoredFrom is the version number whose content a restore wrote back;
+	// zero for a version that is not a restore.
+	RestoredFrom int64
+}
+
+// ArtifactVersionSource names who wrote an artifact version.
+type ArtifactVersionSource string
+
+const (
+	// ArtifactVersionSourceAgent marks a version the session's agent wrote.
+	ArtifactVersionSourceAgent ArtifactVersionSource = "agent"
+	// ArtifactVersionSourceUser marks a version saved or restored in the app.
+	ArtifactVersionSourceUser ArtifactVersionSource = "user"
+)
+
+// ImportedMessage is one visible message read from a provider's native history.
+type ImportedMessage struct {
+	Role MessageRole
+	Text string
+	At   time.Time
+}
+
+// SessionImportSource keeps provider provenance and durable workspace adoption facts.
+// Importing does not grant AO ownership of the source working directory.
+type SessionImportSource struct {
+	NativeID      string `json:"nativeId"`
+	ConfigDir     string `json:"configDir"`
+	CWD           string `json:"cwd"`
+	Adopted       bool   `json:"adopted"`
+	Transferred   bool   `json:"transferred"`
+	Prepared      bool   `json:"prepared"`
+	WorkingSubdir string `json:"workingSubdir,omitempty"`
+	// ResumeCwd is the launch directory AO prepared a directory-keyed provider's
+	// session for on the first open (see ports.AgentImportedSessionRelocator).
+	// Every later launch of the session uses it, so the provider keeps finding
+	// the same copy even if WorkingSubdir appears or disappears in between.
+	ResumeCwd string `json:"resumeCwd,omitempty"`
+	// ResumeNativeID and ResumeConfigDir name a provider-created import/fork.
+	// NativeID and ConfigDir remain the immutable source/deduplication identity.
+	ResumeNativeID       string `json:"resumeNativeId,omitempty"`
+	ResumeConfigDir      string `json:"resumeConfigDir,omitempty"`
+	ResumeTranscriptPath string `json:"resumeTranscriptPath,omitempty"`
+	// Fingerprint pins optional provider content/sidecar evidence from selection.
+	// First-open native preparation must verify it before copying that source.
+	Fingerprint string `json:"fingerprint,omitempty"`
+	// HistoryThrough is the last conversation sequence the provider replayed
+	// while adopting. The timeline shows the archive in place of that replay.
+	HistoryThrough int64 `json:"historyThrough,omitempty"`
 }
 
 // SessionMetadata is the typed, off-status metadata for a session: operational
 // handles and seed inputs used by Session Manager and reaper.
 type SessionMetadata struct {
+	ImportSource *SessionImportSource `json:"-"`
+
 	// Permissions pins the resolved launch policy independently of future project defaults.
 	Permissions PermissionMode `json:"permissions,omitempty"`
 
@@ -125,7 +320,12 @@ type SessionMetadata struct {
 	DiffBaseRef       string `json:"diffBaseRef,omitempty"`
 	RuntimeHandleID   string `json:"runtimeHandleId,omitempty"`
 	RuntimeLaunchID   string `json:"runtimeLaunchId,omitempty"`
-	AgentSessionID    string `json:"agentSessionId,omitempty"`
+	// RuntimeReleasedLaunchID is the launch whose terminal AO destroyed on
+	// purpose while keeping the session (an agent exit), or found already gone
+	// at startup. Its runtime's death is then not a crash. It names one launch,
+	// so a new launch is never covered.
+	RuntimeReleasedLaunchID string `json:"-"`
+	AgentSessionID          string `json:"agentSessionId,omitempty"`
 	// AgentSessionIDLaunchID identifies the terminal runtime generation proven to
 	// own AgentSessionID. Usually that proof comes from a provider hook. A
 	// coordinated Chat-to-TUI handoff may also establish it by launching the
@@ -235,6 +435,9 @@ type SessionRecord struct {
 	ReviewerConfig    AgentConfig     `json:"reviewerConfig,omitempty"`
 	AutoReviewEnabled bool            `json:"autoReviewEnabled"`
 	DisplayName       string          `json:"displayName,omitempty"`
+	// DisplayNameExplicit marks a name a person or caller chose, which outranks
+	// a terminal program's title. Generated and prompt-derived names do not.
+	DisplayNameExplicit bool `json:"-"`
 	// Mode is the session's currently committed conversation controller. Every
 	// send, restore, kill, and reaper decision dispatches from it. Only the
 	// durable interface-transition coordinator may change it; the daemon default
@@ -249,13 +452,24 @@ type SessionRecord struct {
 	// of the API read model.
 	FirstSignalAt time.Time `json:"-"`
 	IsTerminated  bool      `json:"isTerminated"`
+	// HibernatedAt records that the idle Chat controller was stopped while the
+	// session and conversation remain resumable. Nil means no recorded hibernation.
+	HibernatedAt *time.Time `json:"hibernatedAt,omitempty"`
+	// StaleBinary is set while the session's current launch still runs a
+	// harness release an update has since replaced. It is derived when the row
+	// is read: any later launch starts on the installed release and reads as
+	// current without a write.
+	StaleBinary *SessionStaleBinary `json:"staleBinary,omitempty"`
 	// TerminateOnPRMerge is a user-controlled lifecycle policy. When enabled,
 	// completing the session's PR set through a merge tears down the session.
 	TerminateOnPRMerge bool              `json:"terminateOnPrMerge"`
 	AutoInjectReview   bool              `json:"autoInjectReview"`
 	AutoInjectCI       bool              `json:"autoInjectCI"`
 	OutputType         SessionOutputType `json:"outputType" enum:"none,pr,artifact,pr_artifact"`
-	Metadata           SessionMetadata   `json:"-"`
+	// RequestedOutput is the deliverable requested at spawn. It is fixed after
+	// insertion so restore and agent switching rebuild the same worker prompt.
+	RequestedOutput RequestedOutput `json:"requestedOutput,omitempty" enum:"artifact"`
+	Metadata        SessionMetadata `json:"-"`
 	// CleanupGeneration is a monotonic counter bumped each time the session is
 	// un-terminated (spawn/restore). The terminal-resource reconciler stamps its
 	// durable cleanup facts with the generation they were written for so a
@@ -287,6 +501,85 @@ type SessionRecord struct {
 	// boundary, and kept after the start settles. A step still running when the
 	// session reads ProvisionState failed is the step that failed.
 	ProvisionSteps []SessionProvisionStep `json:"provisionSteps,omitempty"`
+	// BranchState is what the daemon last observed about the session branch:
+	// its commits on top of the base and whether they reached the remote. The
+	// branch-state reconcile writes it only when a fact changes; nil until the first
+	// observation, and a failed git read keeps the last known value.
+	BranchState *SessionBranchState `json:"branchState,omitempty"`
+	// BranchNaming is set while a task's generated branch name is on the way:
+	// from the start of naming until the background rename settles. Clients keep
+	// the temporary branch private meanwhile. Written only by its narrow setter.
+	BranchNaming bool `json:"branchNaming,omitempty"`
+	// TemporaryBranch is the branch a task started on before its generated name
+	// replaced it. The session keeps owning refs under it, and full-row writes
+	// never put it back. Written only by the rename.
+	TemporaryBranch string `json:"-"`
+}
+
+// SessionStaleBinary describes a launch left on a replaced harness release.
+type SessionStaleBinary struct {
+	// Version is the release now installed, which the session moves to.
+	Version string `json:"version" description:"Harness release now installed; the session moves to it on its next launch."`
+	// Since is when an update first left this launch on an older release.
+	Since time.Time `json:"since"`
+	// SwitchFailedAt is set when an automatic move to Version failed. The
+	// session keeps its queued messages and waits for the user to resume it.
+	SwitchFailedAt *time.Time `json:"switchFailedAt,omitempty"`
+}
+
+// SessionWaitReason says why an update that runs when sessions are idle is
+// still waiting for a session.
+type SessionWaitReason string
+
+const (
+	// SessionWaitWorking means the agent is taking a turn.
+	SessionWaitWorking SessionWaitReason = "working"
+	// SessionWaitCommand means the agent runs a command, such as a dev server.
+	SessionWaitCommand SessionWaitReason = "command"
+	// SessionWaitApproval means the agent waits for the user's answer.
+	SessionWaitApproval SessionWaitReason = "approval"
+	// SessionWaitStarting means the session is still starting.
+	SessionWaitStarting SessionWaitReason = "starting"
+	// SessionWaitReviewer means a reviewer runs the harness.
+	SessionWaitReviewer SessionWaitReason = "reviewer"
+	// SessionWaitResume means a terminal could not be started again on its own
+	// conversation, so it is not stopped for the update; it waits until it ends.
+	SessionWaitResume SessionWaitReason = "resume"
+)
+
+// SessionWait is one session an update waits for.
+type SessionWait struct {
+	SessionID SessionID         `json:"sessionId"`
+	Reason    SessionWaitReason `json:"reason" enum:"working,command,approval,starting,reviewer,resume"`
+}
+
+// SessionBranchState is the session branch's commit and push facts.
+type SessionBranchState struct {
+	Branch string `json:"branch,omitempty"`
+	// Commits is how many commits the branch has on top of its base.
+	Commits int `json:"commits"`
+	// RemoteBranch is the remote-tracking branch, such as "origin/feat/x".
+	// Empty means the branch has never been pushed.
+	RemoteBranch string `json:"remoteBranch,omitempty"`
+	RemoteHead   string `json:"remoteHead,omitempty"`
+	// Unpushed is how many branch commits are not on RemoteBranch. It equals
+	// Commits while RemoteBranch is empty.
+	Unpushed int `json:"unpushed"`
+	// Base is the short name of the branch Commits and Behind are counted
+	// against, such as "main". Empty when the base is known only as a commit,
+	// in which case Behind is not known.
+	Base string `json:"base,omitempty"`
+	// BaseRef is the exact ref that was read for Base, such as "origin/main".
+	BaseRef string `json:"baseRef,omitempty"`
+	// Behind is how many commits Base has that the branch does not. Only
+	// meaningful when Base is set.
+	Behind int `json:"behind"`
+	// Head is the branch's tip commit, so a client can tell work that already
+	// shipped in a merged PR from new work.
+	Head string `json:"head,omitempty"`
+	// Conflicts reports that merging the branch into Base would conflict, read
+	// locally before any provider says so. False also covers "could not tell".
+	Conflicts bool `json:"conflicts"`
 }
 
 // SessionProvisionStepID names one stage of an asynchronous Chat start.
@@ -318,6 +611,17 @@ type SessionProvisionStep struct {
 	Status    SessionProvisionStepStatus `json:"status" enum:"pending,running,done"`
 	StartedAt *time.Time                 `json:"startedAt,omitempty"`
 	EndedAt   *time.Time                 `json:"endedAt,omitempty"`
+}
+
+// EligibleForChatHibernation is the cheap durable-fact filter. The chat service
+// still checks live provider work and view leases under its controller gate.
+func (s SessionRecord) EligibleForChatHibernation() bool {
+	return NormalizeSessionMode(s.Mode) == SessionModeChat &&
+		s.Kind != KindOrchestrator &&
+		!s.IsTerminated && !s.IsTaskPreparation && s.ProvisionState.WithDefault() == SessionProvisionReady &&
+		s.HibernatedAt == nil && s.Activity.State == ActivityIdle &&
+		!s.Activity.LastActivityAt.IsZero() &&
+		strings.TrimSpace(s.Metadata.ProviderConversationID) != ""
 }
 
 // SessionProvisionState is a session's start-up progress.
@@ -357,6 +661,14 @@ func (s SessionProvisionState) IsProvisioning() bool {
 // IsStandalone reports whether the session has no registered project owner.
 func (s SessionRecord) IsStandalone() bool { return s.ProjectID == "" }
 
+// RuntimeReleased reports that AO ended the current terminal launch on purpose
+// and kept the session stopped. That launch's runtime is gone by design, so its
+// death is not a crash; a resume starts a new launch, which this never covers.
+func (s SessionRecord) RuntimeReleased() bool {
+	launch := s.Metadata.RuntimeLaunchID
+	return s.Activity.State == ActivityExited && launch != "" && s.Metadata.RuntimeReleasedLaunchID == launch
+}
+
 // SessionControllerOwner is the durable identity of the process/controller
 // currently allowed to act for a session. Narrow lifecycle writes compare this
 // snapshot before updating so stale launch work cannot mutate a replacement.
@@ -389,7 +701,17 @@ func (r SessionRecord) ControllerOwner() SessionControllerOwner {
 // plus derived display facts. None of Status, SCMStatus, or KanbanColumn is
 // persisted.
 type Session struct {
+	NeedsResume bool `json:"needsResume"`
 	SessionRecord
+	// WorkspaceCleanup is a durable teardown fact for the current generation.
+	WorkspaceCleanup WorkspaceDisposition `json:"workspaceCleanup,omitempty" enum:"pending,removed,preserved_dirty,failed,not_applicable"`
+	// WorkspaceCleanupReportOnly marks a cleanup a sweep started rather than an
+	// archive: clients list its failure but raise no error for it.
+	WorkspaceCleanupReportOnly bool `json:"workspaceCleanupReportOnly,omitempty"`
+	// WorkspacePublished says the session has a recorded workspace, so its
+	// workspace reads can succeed. An asynchronous start publishes it partway
+	// through, and a failed start can keep one. The path itself stays private.
+	WorkspacePublished bool `json:"workspacePublished" description:"Whether the session has a recorded workspace that workspace reads can use."`
 	// StatusReadiness describes startup verification, never a persisted status.
 	// Clients must withhold activity labels until ready; unavailable permits retry.
 	StatusReadiness string `json:"statusReadiness" enum:"checking,ready,unavailable"`
@@ -407,10 +729,13 @@ type Session struct {
 	// important current fact about the session at the stage it sits in. It is
 	// derived after the column, from the facts that column reads, and ships in
 	// renderable form so clients print it without a mapping table of their own.
-	DisplayStatus     DisplayStatus         `json:"displayStatus" enum:"Working,Blocked,Exited,No signal,Awaiting PR,Fixing CI failures,Addressing comments,Needs review,Review scheduled,Reviewing,Review failed,Review pending,Draft,CI failing,Commented,Changes requested,Needs human review,Mergeable,Approved,Merged,Closed without merge,Terminated"`
-	TerminalHandleID  string                `json:"terminalHandleId,omitempty"`
-	ArtifactFiles     []SessionArtifactFile `json:"-"`
-	ActiveAgentSwitch *AgentSwitch          `json:"-"`
+	DisplayStatus    DisplayStatus `json:"displayStatus" enum:"Working,Blocked,Needs input,Exited,No signal,Interrupted,Idle,Fixing CI failures,Addressing comments,Review scheduled,Reviewing,Retrying review,Draft,Awaiting review,Review failed,Review cancelled,CI failing,Merge conflicts,Commented,Changes requested,Mergeable,Approved,Merged,Closed without merge,Terminated"`
+	TerminalHandleID string        `json:"terminalHandleId,omitempty"`
+	// TerminalTitle is the title the session's terminal program set, present
+	// only when it should label the session: it is meaningful and no explicit
+	// name outranks it. It never replaces the session's id or stored name.
+	TerminalTitle string                `json:"terminalTitle,omitempty"`
+	ArtifactFiles []SessionArtifactFile `json:"-"`
 	// PRs are the session's attributed pull requests (one session can own many).
 	// They feed status derivation and are surfaced on the API read model. Not
 	// serialized here: the HTTP boundary maps them to the curated wire shape.
@@ -439,4 +764,9 @@ func (s Session) LastEventAt() time.Time {
 		consider(pr.LastReviewAt)
 	}
 	return latest
+}
+
+// NeedsImportResume reports history that has not yet acquired an AO controller.
+func (s SessionRecord) NeedsImportResume() bool {
+	return s.Metadata.ImportSource != nil && !s.Metadata.ImportSource.Adopted
 }

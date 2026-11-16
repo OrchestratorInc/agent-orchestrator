@@ -303,12 +303,16 @@ function isAccessDenied(error: unknown): boolean {
 
 function safariAccessError(): Error {
 	return Object.assign(new Error(
-		"AO couldn't access Safari's data. In System Settings, open Privacy & Security > Full Disk Access, "
-		+ "allow AO, then restart AO and try the import again.",
+		"Orchestrator couldn't access Safari's data. In System Settings, open Privacy & Security > Full Disk Access, "
+		+ "allow Orchestrator, then restart Orchestrator and try the import again.",
 	), { code: "EACCES" });
 }
 
 async function readSmallJSON(file: string, maxBytes: number): Promise<unknown> {
+	return JSON.parse(await readSmallText(file, maxBytes));
+}
+
+async function readSmallText(file: string, maxBytes: number): Promise<string> {
 	const metadata = await lstat(file);
 	if (!metadata.isFile() || metadata.isSymbolicLink() || metadata.size > maxBytes) {
 		throw new Error("Browser metadata exceeds the size limit.");
@@ -318,7 +322,15 @@ async function readSmallJSON(file: string, maxBytes: number): Promise<unknown> {
 	try {
 		const opened = await handle.stat();
 		if (!opened.isFile() || opened.size > maxBytes) throw new Error("Browser metadata exceeds the size limit.");
-		return JSON.parse(await handle.readFile("utf8"));
+		const bytes = Buffer.alloc(maxBytes + 1);
+		let length = 0;
+		while (length < bytes.length) {
+			const { bytesRead } = await handle.read(bytes, length, bytes.length - length, null);
+			if (bytesRead === 0) break;
+			length += bytesRead;
+		}
+		if (length > maxBytes) throw new Error("Browser metadata exceeds the size limit.");
+		return bytes.subarray(0, length).toString("utf8");
 	} finally {
 		await handle.close().catch(() => undefined);
 	}
@@ -364,19 +376,67 @@ async function discoverChromiumProfiles(descriptor: BrowserDescriptor, root: str
 }
 
 async function discoverFirefoxProfiles(descriptor: BrowserDescriptor, root: string): Promise<InternalSourceProfile[]> {
+	const registered = new Map<string, { name: string; default: boolean }>();
+	const installDefaults = new Set<string>();
+	try {
+		const text = await readSmallText(path.join(root, "profiles.ini"), LOCAL_STATE_MAX_BYTES);
+		const sections: Array<{ section: string; values: Map<string, string> }> = [];
+		let current: typeof sections[number] | undefined;
+		for (const raw of text.split(/\r?\n/)) {
+			const line = raw.trim();
+			if (!line || line.startsWith(";") || line.startsWith("#")) continue;
+			if (line.startsWith("[")) {
+				current = /^\[[^\[\]]+\]$/.test(line) ? { section: line.slice(1, -1), values: new Map() } : undefined;
+				if (current) sections.push(current);
+				continue;
+			}
+			const equals = line.indexOf("=");
+			if (current && equals > 0) current.values.set(line.slice(0, equals).trim(), line.slice(equals + 1).trim());
+		}
+		for (const { section, values } of sections) {
+			if (/^Install[0-9a-f]+$/i.test(section)) {
+				const directory = values.get("Default");
+				if (!directory) continue;
+				const candidate = path.resolve(root, directory);
+				const profileRoot = await existingRealDirectory(candidate);
+				if (profileRoot && contained(root, profileRoot)) installDefaults.add(profileRoot);
+				continue;
+			}
+			if (!/^Profile\d+$/.test(section)) continue;
+			const name = values.get("Name");
+			const directory = values.get("Path");
+			const relative = values.get("IsRelative");
+			if (!name || !directory || !["0", "1"].includes(relative ?? "")) continue;
+			if (path.isAbsolute(directory) !== (relative === "0")) continue;
+			const candidate = path.resolve(root, directory);
+			const profileRoot = await existingRealDirectory(candidate);
+			if (!profileRoot || !contained(root, profileRoot)) continue;
+			registered.set(profileRoot, { name, default: values.get("Default") === "1" });
+		}
+	} catch {
+		registered.clear();
+		installDefaults.clear();
+	}
 	const profileParent = (await existingRealDirectory(path.join(root, "Profiles"))) ?? root;
-	const entries = await readdir(profileParent, { withFileTypes: true }).catch(() => []);
+	const entries = contained(root, profileParent) ? await readdir(profileParent, { withFileTypes: true }).catch(() => []) : [];
+	const directories = new Set([
+		...registered.keys(),
+		...entries.filter((entry) => entry.isDirectory()).map((entry) => path.join(profileParent, entry.name)),
+	]);
 	const profiles: InternalSourceProfile[] = [];
-	for (const entry of entries) {
-		if (!entry.isDirectory()) continue;
-		const profileRoot = await existingRealDirectory(path.join(profileParent, entry.name));
+	for (const directory of directories) {
+		const profileRoot = await existingRealDirectory(directory);
 		if (!profileRoot || !contained(root, profileRoot) || !(await hasImportableDatabase(profileRoot, "firefox"))) continue;
-		const dot = entry.name.indexOf(".");
-		const suffix = dot >= 0 ? entry.name.slice(dot + 1) : entry.name;
+		const basename = path.basename(profileRoot);
+		const dot = basename.indexOf(".");
+		const suffix = dot >= 0 ? basename.slice(dot + 1) : basename;
+		const metadata = registered.get(profileRoot);
 		profiles.push({
 			id: opaqueSourceId(`${descriptor.id}:profile`, profileRoot),
-			name: suffix || entry.name,
-			default: /default|release/i.test(suffix),
+			name: metadata?.name ?? (suffix || basename),
+			default: installDefaults.size > 0
+				? installDefaults.has(profileRoot)
+				: metadata?.default ?? /default|release/i.test(suffix),
 			root: profileRoot,
 		});
 	}
@@ -706,7 +766,7 @@ export class BrowserProfileImportService {
 			for (const [index, group] of groups.entries()) {
 				throwIfImportAborted(signal);
 				onProgress({ requestId: request.requestId, phase: "importing", completed: index, total: groups.length });
-				const profile = await this.options.profileStore.createProfile(group.name);
+				const profile = await this.options.profileStore.createProfile(group.name, { claimDefault: false });
 				created.push(profile);
 				throwIfImportAborted(signal);
 				const history = group.data.flatMap((data) => data.history);
@@ -743,6 +803,8 @@ export class BrowserProfileImportService {
 				});
 				onProgress({ requestId: request.requestId, phase: "importing", completed: index + 1, total: groups.length });
 			}
+			// Only a committed import may become the default; see createProfile.
+			if (created[0]) await this.options.profileStore.claimDefaultIfFirst(created[0].id);
 			return { sourceName: source.public.name, entries: results };
 		} catch (error) {
 			const cleanupFailures: string[] = [];
@@ -998,7 +1060,7 @@ async function snapshotSQLite(
 			return destination;
 		}
 		if (browserName) throw temporarySnapshotError(browserName);
-		throw new Error("AO's temporary browser data snapshot disappeared before it could be read. Restart AO and retry the import.");
+		throw new Error("Orchestrator's temporary browser data snapshot disappeared before it could be read. Restart Orchestrator and retry the import.");
 	} catch (error) {
 		await rm(destination, { force: true }).catch(() => undefined);
 		throw error;
@@ -1012,9 +1074,9 @@ async function snapshotSQLite(
 
 function temporarySnapshotError(browserName: string): Error {
 	return new Error(
-		`AO couldn't create a temporary copy of ${browserName}'s profile database. `
+		`Orchestrator couldn't create a temporary copy of ${browserName}'s profile database. `
 		+ `Fully close ${browserName}, including background processes, then retry the import. `
-		+ "If this keeps happening, restart AO and try again.",
+		+ "If this keeps happening, restart Orchestrator and try again.",
 	);
 }
 
@@ -1228,6 +1290,15 @@ function readNullTerminatedUTF8(record: Buffer, offset: number): string {
 	return new TextDecoder("utf-8", { fatal: true }).decode(record.subarray(offset, end));
 }
 
+// Bot managers bind these to the browser that earned them. Replayed from
+// another browser they read as stolen, and sites keep challenging. They are
+// issued again on the next visit, so nothing is lost by leaving them behind.
+const ANTI_BOT_COOKIE = /^(cf_clearance|__cf_bm|_cfuvid|cf_chl_.*|datadome|_abck|ak_bmsc|bm_sz|bm_sv|bm_mi|reese84|incap_ses_.*|visid_incap_.*|nlbi_.*|_px\d?|_pxvid|_pxhd)$/;
+
+export function isAntiBotCookie(name: string): boolean {
+	return ANTI_BOT_COOKIE.test(name);
+}
+
 function normalizeCookieRows(
 	rows: Array<Record<string, unknown>>,
 	now: Date,
@@ -1235,6 +1306,7 @@ function normalizeCookieRows(
 	const cookies: ImportedCookie[] = [];
 	let expired = 0;
 	let invalid = 0;
+	let antiBot = 0;
 	for (const row of rows) {
 		const domain = stringValue(row.domain).trim().toLowerCase();
 		const hostname = domain.replace(/^\.+/, "");
@@ -1246,6 +1318,10 @@ function normalizeCookieRows(
 		const value = stringValue(row.value);
 		if (!name) {
 			invalid += 1;
+			continue;
+		}
+		if (isAntiBotCookie(name)) {
+			antiBot += 1;
 			continue;
 		}
 		const expirationDate = typeof row.expires === "number" && Number.isFinite(row.expires) && row.expires > 0 ? row.expires : undefined;
@@ -1279,18 +1355,19 @@ function normalizeCookieRows(
 	const warnings: BrowserImportWarning[] = [];
 	if (expired > 0) warnings.push({ code: "expired-cookies-skipped", count: expired });
 	if (invalid > 0) warnings.push({ code: "invalid-cookies-skipped", count: invalid });
-	return { cookies, skipped: expired + invalid, warnings };
+	return { cookies, skipped: expired + invalid + antiBot, warnings };
 }
 
 function readFirefoxHistory(file: string): { history: BrowserHistoryEntry[]; warnings: BrowserImportWarning[] } {
 	return withReadOnlyDatabase(file, (database) => {
 		requireTable(database, "moz_places", "The selected Firefox profile does not contain supported history data.");
-		const eligible = countRows(database, "moz_places", "WHERE url LIKE 'http%'");
+		const historyFilter = "WHERE url LIKE 'http%' AND last_visit_date IS NOT NULL";
+		const eligible = countRows(database, "moz_places", historyFilter);
 		const truncated = Math.max(0, eligible - BROWSER_IMPORT_MAX_HISTORY_ENTRIES);
 		const history = (database.prepare(`
 			SELECT url, title, visit_count, last_visit_date
 			FROM moz_places
-			WHERE url LIKE 'http%'
+			${historyFilter}
 			ORDER BY last_visit_date DESC, rowid DESC
 			LIMIT ${BROWSER_IMPORT_MAX_HISTORY_ENTRIES}
 		`).all() as Record<string, unknown>[]).flatMap((row) => {

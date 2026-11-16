@@ -1,13 +1,15 @@
+import { apiErrorException } from "../lib/api-error-exception";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { Eye, EyeOff, FileCode2, KeyRound, Plus, Trash2 } from "lucide-react";
-import { useEffect, useState } from "react";
+import { Eye, EyeOff, FileCode2, Plus, Trash2 } from "@/components/app-icons";
+import { useEffect, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 import type { components } from "../../api/schema";
-import { apiClient, apiErrorMessage } from "../lib/api-client";
+import { apiClient } from "../lib/api-client";
+import { useCloudCp } from "../hooks/useCloudCp";
 import { workspaceQueryKey } from "../hooks/useWorkspaceQuery";
 import type { ProjectSettingsSaveState } from "./ProjectSettingsForm";
 import { Button } from "./ui/button";
-import { Tabs, TabsContent, TabsList, TabsTrigger } from "./ui/tabs";
+import { ProjectSettingsSection } from "@aoagents/product-ui";
 
 type Row = { name: string; value: string; visible: boolean };
 type Project = components["schemas"]["Project"];
@@ -49,26 +51,73 @@ export function ProjectEnvironmentSettings({ projectId, onSaveState }: { project
 		queryKey: ["project", projectId],
 		queryFn: async () => {
 			const { data, error } = await apiClient.GET("/api/v1/projects/{id}", { params: { path: { id: projectId } } });
-			if (error) throw new Error(apiErrorMessage(error));
+			if (error) throw apiErrorException(error);
 			if (data?.status !== "ok") throw new Error(t("settings.project.degraded"));
 			return data.project as Project;
 		},
 	});
-	if (query.isLoading) return <p className="text-sm text-settings-muted">{t("settings.project.loading")}</p>;
-	if (query.isError || !query.data) return <p role="alert" className="text-sm text-error">{query.error instanceof Error ? query.error.message : t("settings.project.loadFailed")}</p>;
-	return <VariablesEditor key={projectId} projectId={projectId} initial={query.data.config?.env} onSaveState={onSaveState} onSaved={() => {
+	if (query.isLoading) return <div className="project-settings-form" aria-busy="true" aria-label={t("settings.project.loading")}><section><div className="settings-grouped-rows flex w-full flex-col"><div className="settings-row-bar" /></div></section></div>;
+	if (query.isError || !query.data) return <div className="flex flex-col items-start gap-3 px-(--settings-row-inset)"><p role="alert" className="text-sm text-error">{query.error instanceof Error ? query.error.message : t("settings.project.loadFailed")}</p><Button type="button" variant="quiet" size="sm" onClick={() => void query.refetch()}>{t("settings.project.retry")}</Button></div>;
+	const save = async (env: Record<string, string>) => {
+		// Refresh before the whole-config PUT so this page cannot erase changes made elsewhere.
+		const current = await apiClient.GET("/api/v1/projects/{id}", { params: { path: { id: projectId } } });
+		if (current.error) throw apiErrorException(current.error);
+		if (current.data?.status !== "ok" || !current.data.project) throw new Error(t("settings.project.degraded"));
+		const project = current.data.project as Project;
+		const { error: updateError } = await apiClient.PUT("/api/v1/projects/{id}", {
+			params: { path: { id: projectId } },
+			body: { displayName: project.name, config: { ...project.config, env } },
+		});
+		if (updateError) throw apiErrorException(updateError);
+	};
+	return <VariablesEditor key={projectId} initial={query.data.config?.env} description={t("settings.project.environmentDescription")} persist={save} onSaveState={onSaveState} onSaved={() => {
 		void queryClient.invalidateQueries({ queryKey: ["project", projectId] });
 		void queryClient.invalidateQueries({ queryKey: workspaceQueryKey });
 	}} />;
 }
 
-function VariablesEditor({ projectId, initial, onSaveState, onSaved }: {
-	projectId: string;
+/**
+ * A Cloud project's environment variables, kept encrypted on the control
+ * plane. Only an organization owner or admin sees and changes their values;
+ * everyone else sees their names, read-only.
+ */
+export function CloudProjectEnvironmentSettings({ projectId, cloudOrgId, onSaveState }: { projectId: string; cloudOrgId: string; onSaveState?: (state: ProjectSettingsSaveState) => void }) {
+	const { t } = useTranslation();
+	const { client, ready, baseUrl } = useCloudCp();
+	const queryClient = useQueryClient();
+	const queryKey = ["cloud-project-environment", baseUrl, cloudOrgId, projectId];
+	const query = useQuery({
+		queryKey, enabled: ready, retry: false,
+		queryFn: ({ signal }) => client.getProjectEnvironment(cloudOrgId, projectId, { signal }),
+	});
+	if (!ready) return <p className="px-(--settings-row-inset) text-sm text-error" role="alert">{t("settings.cloudProject.signIn")}</p>;
+	if (query.isLoading) return <div className="project-settings-form" aria-busy="true" aria-label={t("settings.project.loading")}><section><div className="settings-grouped-rows flex w-full flex-col"><div className="settings-row-bar" /></div></section></div>;
+	if (query.isError || !query.data) return <div className="flex flex-col items-start gap-3 px-(--settings-row-inset)"><p role="alert" className="text-sm text-error">{query.error instanceof Error ? query.error.message : t("settings.project.loadFailed")}</p><Button type="button" variant="quiet" size="sm" onClick={() => void query.refetch()}>{t("settings.project.retry")}</Button></div>;
+	const environment = query.data;
+	const initial = Object.fromEntries(environment.variables.map((variable) => [variable.name, variable.value ?? ""]));
+	return <VariablesEditor key={`${cloudOrgId}/${projectId}`} initial={initial} readOnly={!environment.editable}
+		description={`${t("settings.cloudProject.environmentDescription")}${environment.editable ? "" : ` ${t("settings.cloudProject.environmentReadOnly")}`}`}
+		note={t("settings.cloudProject.environmentNote")}
+		persist={async (env) => {
+			const saved = await client.putProjectEnvironment(cloudOrgId, projectId, env);
+			queryClient.setQueryData(queryKey, saved);
+		}}
+		onSaveState={onSaveState} onSaved={() => undefined} />;
+}
+
+function VariablesEditor({ initial, description, note, readOnly = false, persist, onSaveState, onSaved }: {
 	initial?: Record<string, string>;
+	description: string;
+	/** Who can read the values once they are set, under the description. */
+	note?: string;
+	/** Names only: a Cloud member who is not an owner or admin cannot see or change the values. */
+	readOnly?: boolean;
+	persist: (env: Record<string, string>) => Promise<void>;
 	onSaveState?: (state: ProjectSettingsSaveState) => void;
 	onSaved: () => void;
 }) {
 	const { t } = useTranslation();
+	const attempted = useRef<string | null>(null);
 	const [rows, setRows] = useState(() => rowsFromEnv(initial));
 	const [saved, setSaved] = useState(() => JSON.stringify(initial ?? {}));
 	const [error, setError] = useState<string | null>(null);
@@ -76,20 +125,24 @@ function VariablesEditor({ projectId, initial, onSaveState, onSaved }: {
 	const [activeTab, setActiveTab] = useState<"variables" | "paste">("variables");
 	const [pasteText, setPasteText] = useState("");
 	const [importedCount, setImportedCount] = useState<number | null>(null);
-	const dirty = JSON.stringify(Object.fromEntries(rows.map(({ name, value }) => [name, value]))) !== saved;
-	const variableCount = rows.filter(({ name }) => name.trim()).length;
+	const filled = rows.filter(({ name, value }) => name !== "" || value !== "");
+	const dirty = JSON.stringify(Object.fromEntries(filled.map(({ name, value }) => [name, value]))) !== saved;
+	// The env map this draft would save, or null while a name is invalid or duplicated.
+	const envDraft = (() => {
+		const env: Record<string, string> = {};
+		const names = new Set<string>();
+		for (const row of filled) {
+			const folded = row.name.toUpperCase();
+			if (!/^[A-Za-z_][A-Za-z0-9_]*$/.test(row.name) || names.has(folded)) return null;
+			names.add(folded);
+			env[row.name] = row.value;
+		}
+		return env;
+	})();
+	const unsaveable = dirty && envDraft === null;
 	const mutation = useMutation({
 		mutationFn: async (env: Record<string, string>) => {
-			// Refresh before the whole-config PUT so this page cannot erase changes made elsewhere.
-			const current = await apiClient.GET("/api/v1/projects/{id}", { params: { path: { id: projectId } } });
-			if (current.error) throw new Error(apiErrorMessage(current.error));
-			if (current.data?.status !== "ok" || !current.data.project) throw new Error(t("settings.project.degraded"));
-			const project = current.data.project as Project;
-			const { error: updateError } = await apiClient.PUT("/api/v1/projects/{id}", {
-				params: { path: { id: projectId } },
-				body: { displayName: project.name, config: { ...project.config, env } },
-			});
-			if (updateError) throw new Error(apiErrorMessage(updateError));
+			await persist(env);
 			return env;
 		},
 		onSuccess: (env) => {
@@ -102,11 +155,13 @@ function VariablesEditor({ projectId, initial, onSaveState, onSaved }: {
 		onSaveState?.({
 			phase: mutation.isError ? "failed" : mutation.isPending ? "saving" : dirty ? "pending" : savedAt ? "saved" : "idle",
 			dirty,
+			unsaveable,
 			requestPending: mutation.isPending,
 			error: mutation.error instanceof Error ? mutation.error.message : undefined,
 		});
-	}, [dirty, mutation.error, mutation.isError, mutation.isPending, onSaveState, savedAt]);
-	const update = (next: Row[]) => { setRows(next); setError(null); setSavedAt(false); setImportedCount(null); };
+	}, [dirty, mutation.error, mutation.isError, mutation.isPending, onSaveState, savedAt, unsaveable]);
+	const showEmpty = rows.length === 0 && activeTab === "variables";
+	const update = (next: Row[]) => { attempted.current = null; setRows(next); setError(null); setSavedAt(false); setImportedCount(null); };
 	const importPasted = () => {
 		const parsed = parsePastedEnv(pasteText);
 		if (parsed.invalidLine || parsed.rows.length === 0) {
@@ -124,89 +179,81 @@ function VariablesEditor({ projectId, initial, onSaveState, onSaved }: {
 		setPasteText("");
 		setActiveTab("variables");
 	};
+	// A draft that cannot be saved must still tell the dialog, or a pending close waits forever.
+	const reject = (message: string) => {
+		setError(message);
+		onSaveState?.({ phase: "failed", dirty, requestPending: false, error: message });
+	};
 	const save = () => {
+		if (readOnly) return;
 		if (activeTab === "paste" && pasteText.trim()) {
-			setError(t("settings.project.envPastePending"));
+			reject(t("settings.project.envPastePending"));
 			return;
 		}
 		const env: Record<string, string> = {};
 		const names = new Set<string>();
-		for (const row of rows) {
+		for (const row of filled) {
 			const name = row.name;
 			const folded = name.toUpperCase();
 			if (!/^[A-Za-z_][A-Za-z0-9_]*$/.test(name) || names.has(folded)) {
-				setError(t("settings.project.envInvalid"));
+				reject(t("settings.project.envInvalid"));
 				return;
 			}
 			names.add(folded);
 			env[name] = row.value;
 		}
 		setError(null);
+		// Autosave does not send the same draft again after this save fails.
+		attempted.current = JSON.stringify(env);
 		mutation.mutate(env);
 	};
-	return <form id="project-settings-form" className="flex min-h-full flex-col gap-3" onSubmit={(event) => { event.preventDefault(); save(); }}>
-		<div className="flex flex-wrap items-start justify-between gap-2">
-			<div className="min-w-0">
-				<div className="flex flex-wrap items-center gap-2">
-					<h2 className="text-sm font-semibold text-settings-label">{t("settings.project.environmentVariables")}</h2>
-					<span className="rounded-full border border-border bg-muted/30 px-2 py-0.5 text-2xs font-medium text-muted-foreground">{t("settings.project.environmentCount", { count: variableCount })}</span>
+	// Autosave: a draft with valid, unique names saves shortly after the last edit.
+	useEffect(() => {
+		if (readOnly || !dirty || mutation.isPending || activeTab !== "variables" || envDraft === null) return;
+		const key = JSON.stringify(envDraft);
+		if (attempted.current === key) return;
+		const timer = window.setTimeout(() => { attempted.current = key; mutation.mutate(envDraft); }, 700);
+		return () => window.clearTimeout(timer);
+	}, [activeTab, dirty, mutation, rows]); // eslint-disable-line react-hooks/exhaustive-deps
+	return <form id="project-settings-form" className="project-settings-form flex min-h-full flex-col gap-(--size-settings-section-inner-gap)" onSubmit={(event) => { event.preventDefault(); save(); }}>
+		<p className="px-(--settings-row-inset) text-sm leading-5 text-settings-muted">{description}</p>
+		{note ? <p className="px-(--settings-row-inset) text-sm leading-5 text-settings-muted">{note}</p> : null}
+		{readOnly ? <ProjectSettingsSection title={t("settings.project.environmentVariables")} titleHidden grouped>
+			{rows.length === 0 ? <div className="settings-row-bar"><span className="text-sm leading-5 text-settings-label">{t("settings.project.environmentEmptyTitle")}</span></div>
+				: rows.map((row) => <div className="settings-row-bar gap-2" key={row.name}>
+					<span className="min-w-0 flex-1 truncate font-mono text-sm text-settings-label">{row.name}</span>
+					<span aria-hidden="true" className="text-sm text-settings-muted">••••••••</span>
+				</div>)}
+		</ProjectSettingsSection> : showEmpty ? <ProjectSettingsSection title={t("settings.project.environmentVariables")} titleHidden grouped>
+			<div className="settings-row-bar">
+				<span className="text-sm leading-5 text-settings-label">{t("settings.project.environmentEmptyTitle")}</span>
+				<div className="flex items-center gap-2">
+					<Button onClick={() => { setActiveTab("paste"); setError(null); }} type="button" variant="quiet" size="sm"><FileCode2 aria-hidden="true" />{t("settings.project.pasteVariables")}</Button>
+					<Button onClick={() => update([...rows, { name: "", value: "", visible: false }])} type="button" variant="quiet" size="sm"><Plus aria-hidden="true" />{t("settings.project.addVariable")}</Button>
 				</div>
-				<p className="mt-1 max-w-2xl text-xs leading-4 text-settings-muted">{t("settings.project.environmentHint")}</p>
 			</div>
-		</div>
-		<Tabs className="flex min-h-0 flex-1 flex-col gap-3" onValueChange={(value) => { setActiveTab(value as "variables" | "paste"); setError(null); }} value={activeTab}>
-			<TabsList aria-label={t("settings.project.environmentVariables")} className="shrink-0 self-start rounded-md bg-muted/30">
-				<TabsTrigger value="variables">{t("settings.project.environmentVariables")}</TabsTrigger>
-				<TabsTrigger value="paste"><FileCode2 aria-hidden="true" className="size-4" />{t("settings.project.pasteVariables")}</TabsTrigger>
-			</TabsList>
-			<TabsContent className="flex min-h-0 flex-1 flex-col gap-3" value="variables">
-				<div className="flex min-h-0 flex-1 flex-col overflow-hidden rounded-lg border border-border bg-muted/10">
-					<div className="min-h-0 flex-1 overflow-y-auto">
-						{rows.length > 0 ? <>
-							<div className="sticky top-0 z-chrome grid grid-cols-[minmax(0,1fr)_minmax(0,1fr)_auto_auto] items-center gap-2 border-b border-border bg-muted/20 px-3 py-2 text-xs font-medium uppercase tracking-wide text-muted-foreground">
-								<span>{t("settings.project.envName")}</span>
-								<span>{t("settings.project.envValue")}</span>
-								<span className="sr-only">{t("settings.project.showVariable")}</span>
-								<span aria-hidden="true" className="sr-only">{t("settings.project.envValue")}</span>
-							</div>
-							{rows.map((row, index) => <div className="grid grid-cols-[minmax(0,1fr)_minmax(0,1fr)_auto_auto] items-center gap-2 border-b border-border px-3 py-2.5 last:border-b-0" key={index}>
-								<input aria-label={`${t("settings.project.envName")} ${index + 1}`} className="settings-field-control min-w-0" placeholder={t("settings.project.envName")} value={row.name} onChange={(event) => update(rows.map((item, i) => i === index ? { ...item, name: event.target.value } : item))} />
-								<input aria-label={`${t("settings.project.envValue")} ${index + 1}`} autoComplete="off" className="settings-field-control min-w-0" placeholder={t("settings.project.envValue")} type={row.visible ? "text" : "password"} value={row.value} onChange={(event) => update(rows.map((item, i) => i === index ? { ...item, value: event.target.value } : item))} />
-								<button aria-label={row.visible ? t("settings.project.hideVariable") : t("settings.project.showVariable")} className="rounded p-2 text-settings-muted hover:text-settings-label focus-visible:ring-2 focus-visible:ring-ring" onClick={() => update(rows.map((item, i) => i === index ? { ...item, visible: !item.visible } : item))} title={row.visible ? t("settings.project.hideVariable") : t("settings.project.showVariable")} type="button">{row.visible ? <EyeOff size={16} /> : <Eye size={16} />}</button>
-								<button aria-label={t("settings.project.removeVariable", { name: row.name || index + 1 })} className="rounded p-2 text-settings-muted hover:text-error focus-visible:ring-2 focus-visible:ring-ring" onClick={() => update(rows.filter((_, i) => i !== index))} title={t("settings.project.removeVariable", { name: row.name || index + 1 })} type="button"><Trash2 size={16} /></button>
-							</div>)}
-						</> : <div className="flex flex-col items-center px-6 py-10 text-center">
-							<KeyRound aria-hidden="true" className="mb-3 size-5 text-settings-muted" />
-							<p className="text-sm font-medium text-settings-label">{t("settings.project.environmentEmptyTitle")}</p>
-							<p className="mt-1 max-w-sm text-sm text-settings-muted">{t("settings.project.environmentEmptyHint")}</p>
-						</div>}
-					</div>
-					<div className="flex shrink-0 flex-wrap items-center gap-2 border-t border-border bg-background/30 px-3 py-2.5">
-						<Button className="gap-1.5" onClick={() => update([...rows, { name: "", value: "", visible: false }])} size="sm" type="button" variant="outline"><Plus aria-hidden="true" />{t("settings.project.addVariable")}</Button>
-						<Button className="gap-1.5" onClick={() => { setActiveTab("paste"); setError(null); }} size="sm" type="button" variant="ghost"><FileCode2 aria-hidden="true" />{t("settings.project.pasteVariables")}</Button>
-					</div>
-				</div>
-			</TabsContent>
-			<TabsContent className="flex min-h-0 flex-1 flex-col gap-3" value="paste">
-				<div className="flex min-h-0 flex-1 flex-col gap-2.5 rounded-lg border border-border bg-muted/10 p-3">
-					<div className="shrink-0">
-						<p className="text-sm font-medium text-settings-label">{t("settings.project.pasteVariables")}</p>
-						<p className="mt-1 text-sm text-settings-muted">{t("settings.project.envPasteHint")}</p>
-					</div>
-					<textarea aria-label={t("settings.project.pasteVariables")} autoComplete="off" className="settings-field-control min-h-28 min-w-0 flex-1 font-mono text-sm" id="project-env-paste" onChange={(event) => setPasteText(event.target.value)} spellCheck={false} value={pasteText} />
-					<div className="flex shrink-0 justify-end gap-2">
-						<Button onClick={() => { setActiveTab("variables"); setPasteText(""); setError(null); }} size="sm" type="button" variant="outline">{t("settings.project.envPasteCancel")}</Button>
-						<Button disabled={!pasteText.trim()} onClick={importPasted} size="sm" type="button">{t("settings.project.importVariables")}</Button>
-					</div>
-				</div>
-			</TabsContent>
-		</Tabs>
-		{importedCount !== null && <p role="status" className="text-sm text-settings-muted">{t("settings.project.envImported", { count: importedCount })}</p>}
-		{error && <p role="alert" className="text-sm text-error">{error}</p>}
-		{mutation.isError && <p role="alert" className="text-sm text-error">{mutation.error instanceof Error ? mutation.error.message : t("settings.project.saveFailed")}</p>}
-		<div className="sticky bottom-0 z-chrome mt-auto flex items-center justify-between gap-3 border-t border-border bg-card py-3">
-			<span aria-live="polite" className="min-w-0 truncate text-xs text-settings-muted">{dirty ? t("settings.project.unsavedChanges") : savedAt ? t("settings.project.saved") : ""}</span>
-			<Button disabled={!dirty || mutation.isPending} type="submit">{t("settings.project.saveChanges")}</Button>
-		</div>
+		</ProjectSettingsSection> : activeTab === "variables" ? <><ProjectSettingsSection title={t("settings.project.environmentVariables")} titleHidden grouped>
+			{rows.map((row, index) => <div className="settings-row-bar gap-2" key={index}>
+				<input aria-label={`${t("settings.project.envName")} ${index + 1}`} className="settings-field-control h-(--size-settings-action-height) min-w-0 flex-1 rounded-md!" placeholder={t("settings.project.envName")} value={row.name} onChange={(event) => update(rows.map((item, i) => i === index ? { ...item, name: event.target.value } : item))} />
+				<input aria-label={`${t("settings.project.envValue")} ${index + 1}`} autoComplete="off" className="settings-field-control h-(--size-settings-action-height) min-w-0 flex-1 rounded-md!" placeholder={t("settings.project.envValue")} type={row.visible ? "text" : "password"} value={row.value} onChange={(event) => update(rows.map((item, i) => i === index ? { ...item, value: event.target.value } : item))} />
+				<Button aria-label={row.visible ? t("settings.project.hideVariable") : t("settings.project.showVariable")} className="shrink-0" onClick={() => update(rows.map((item, i) => i === index ? { ...item, visible: !item.visible } : item))} size="icon-sm" title={row.visible ? t("settings.project.hideVariable") : t("settings.project.showVariable")} type="button" variant="quiet">{row.visible ? <EyeOff className="size-3.5" aria-hidden="true" /> : <Eye className="size-3.5" aria-hidden="true" />}</Button>
+				<Button aria-label={t("settings.project.removeVariable", { name: row.name || index + 1 })} className="shrink-0" onClick={() => update(rows.filter((_, i) => i !== index))} size="icon-sm" title={t("settings.project.removeVariable", { name: row.name || index + 1 })} type="button" variant="destructive-ghost"><Trash2 className="size-3.5" aria-hidden="true" /></Button>
+			</div>)}
+		</ProjectSettingsSection>
+		<div className="flex items-center justify-end gap-2">
+				<Button onClick={() => { setActiveTab("paste"); setError(null); }} type="button" variant="quiet" size="sm"><FileCode2 aria-hidden="true" />{t("settings.project.pasteVariables")}</Button>
+				<Button onClick={() => update([...rows, { name: "", value: "", visible: false }])} size="sm" type="button"><Plus aria-hidden="true" />{t("settings.project.addVariable")}</Button>
+			</div>
+		</> : <ProjectSettingsSection title={t("settings.project.pasteVariables")} grouped><div className="settings-content-row flex flex-col gap-3">
+			<p className="text-control leading-4 text-settings-muted">{t("settings.project.envPasteHint")}</p>
+			<textarea aria-label={t("settings.project.pasteVariables")} autoComplete="off" className="settings-field-control min-h-(--size-textarea-min) min-w-0 resize-none rounded-md! py-2.5 font-mono" id="project-env-paste" onChange={(event) => setPasteText(event.target.value)} spellCheck={false} value={pasteText} />
+			<div className="flex justify-end gap-2">
+				<Button onClick={() => { setActiveTab("variables"); setPasteText(""); setError(null); }} type="button" variant="quiet" size="sm">{t("settings.project.envPasteCancel")}</Button>
+				<Button disabled={!pasteText.trim()} onClick={importPasted} size="sm" type="button">{t("settings.project.importVariables")}</Button>
+			</div>
+		</div></ProjectSettingsSection>}
+		{importedCount !== null && <p role="status" className="px-(--settings-row-inset) text-xs text-settings-muted">{t("settings.project.envImported", { count: importedCount })}</p>}
+		{error && <p role="alert" className="px-(--settings-row-inset) text-xs text-error">{error}</p>}
+		{mutation.isError && <p role="alert" className="px-(--settings-row-inset) text-xs text-error">{mutation.error instanceof Error ? mutation.error.message : t("settings.project.saveFailed")}</p>}
 	</form>;
 }

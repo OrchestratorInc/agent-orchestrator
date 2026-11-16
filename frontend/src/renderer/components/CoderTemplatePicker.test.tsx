@@ -7,7 +7,8 @@ import { AdditionalRepositoriesPicker, CoderTemplatePicker } from "./CoderTempla
 vi.mock("../hooks/useCoderTemplates", () => ({
 	useCoderTemplates: () => ({
 		templates: [
-			// The picker curates to the ao-devkit family, so the mock names match.
+			// The picker lists every template the backend returns, as-is (no code
+			// filtering); curation is done by removing templates in Coder.
 			{ id: "template-1", name: "ao-devkit", displayName: "Fast workspace", description: "More CPU", parameters: ["size"] },
 			{ id: "template-2", name: "ao-devkit-large", displayName: "Lean workspace", description: "Less CPU", parameters: [] },
 		],
@@ -27,6 +28,17 @@ it("chooses a template from the dropdown", async () => {
 	expect(screen.getByRole("combobox", { name: "Template" })).toHaveTextContent("Fast workspace");
 	expect(screen.getByText("Machine size")).toBeInTheDocument();
 	expect(screen.getByText("Template").parentElement?.parentElement?.parentElement).toContainElement(screen.getByText("Machine size"));
+});
+
+it("offers no implicit organization-default option", async () => {
+	// A bring-your-own-Coder org may have no deployment-default template, so the
+	// picker must not let a project be created without an explicit choice.
+	const user = userEvent.setup();
+	render(<CoderTemplatePicker orgId="org-1" />);
+	await user.click(screen.getByRole("combobox", { name: "Template" }));
+	expect(screen.queryByRole("option", { name: "Organization workspace" })).not.toBeInTheDocument();
+	expect(screen.getByRole("option", { name: "Fast workspace" })).toBeInTheDocument();
+	expect(screen.getByRole("option", { name: "Lean workspace" })).toBeInTheDocument();
 });
 
 it("shows additional repositories as a carousel and moves to a newly added card", async () => {

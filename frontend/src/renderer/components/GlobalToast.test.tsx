@@ -4,9 +4,34 @@ import { GlobalToast } from "./GlobalToast";
 import { useUiStore } from "../stores/ui-store";
 
 describe("GlobalToast", () => {
+	it("keeps a persistent actionable notice until the user acts", () => {
+		vi.useFakeTimers();
+		const acknowledge = vi.fn();
+		useUiStore.getState().showGlobalToast("Paused", undefined, { durationMs: 0, action: { label: "Acknowledge", run: acknowledge } });
+		render(<GlobalToast />);
+		act(() => vi.advanceTimersByTime(60_000));
+		expect(screen.getByText("Paused")).toBeInTheDocument();
+		fireEvent.click(screen.getByRole("button", { name: "Acknowledge" }));
+		expect(acknowledge).toHaveBeenCalledOnce();
+		expect(screen.queryByText("Paused")).not.toBeInTheDocument();
+	});
 	afterEach(() => {
 		vi.useRealTimers();
 		useUiStore.getState().clearGlobalToast();
+	});
+
+	it("shows compact centered success feedback with a green check for the existing duration", () => {
+		vi.useFakeTimers();
+		useUiStore.getState().showGlobalToast("Copied to clipboard", undefined, { tone: "success", placement: "bottom-center" });
+		render(<GlobalToast />);
+		const toast = screen.getByRole("status");
+		expect(toast.parentElement).toHaveClass("left-1/2", "-translate-x-1/2", "bottom-3", "w-max");
+		expect(toast).toHaveClass("gap-2", "py-2");
+		expect(toast.querySelector("svg")).toHaveClass("icon-check", "text-green-500");
+		act(() => vi.advanceTimersByTime(3_499));
+		expect(screen.getByText("Copied to clipboard")).toBeInTheDocument();
+		act(() => vi.advanceTimersByTime(1));
+		expect(screen.queryByText("Copied to clipboard")).not.toBeInTheDocument();
 	});
 
 	it("stacks concurrent notifications and marks errors as alerts", () => {
@@ -20,6 +45,24 @@ describe("GlobalToast", () => {
 		expect(screen.getAllByRole("alert")).toHaveLength(1);
 		expect(screen.getByText("First")).toBeInTheDocument();
 		expect(screen.getByText("Second")).toBeInTheDocument();
+	});
+
+	it("pauses auto-dismiss while hovered and keeps errors up longer", () => {
+		vi.useFakeTimers();
+		const store = useUiStore.getState();
+		store.showGlobalToast("Plain");
+		store.showGlobalToast("Broken", undefined, "error");
+		render(<GlobalToast />);
+
+		fireEvent.mouseEnter(screen.getByRole("status"));
+		act(() => { vi.advanceTimersByTime(4_000); });
+		expect(screen.getByText("Plain")).toBeInTheDocument();
+		expect(screen.getByText("Broken")).toBeInTheDocument();
+
+		fireEvent.mouseLeave(screen.getByRole("status"));
+		act(() => { vi.advanceTimersByTime(3_600); });
+		expect(screen.queryByText("Plain")).not.toBeInTheDocument();
+		expect(screen.getByText("Broken")).toBeInTheDocument();
 	});
 
 	it("keeps toast keys unique after dismissing the newest toast", () => {

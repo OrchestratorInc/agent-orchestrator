@@ -10,7 +10,7 @@ import {
 
 describe("shared UI locale schema", () => {
 	it("accepts only supported locale identifiers", () => {
-		expect(APP_LOCALES).toEqual(["en", "zh-CN", "ja", "ko", "es", "fr", "de", "pt-BR"]);
+		expect(APP_LOCALES).toEqual(["en", "zh-CN", "ja", "ko", "es", "fr", "de", "pt-BR", "ru"]);
 		expect(coerceLocale("en")).toBe("en");
 		expect(coerceLocale("zh-CN")).toBe("zh-CN");
 		expect(coerceLocale("ja")).toBe("ja");
@@ -19,6 +19,7 @@ describe("shared UI locale schema", () => {
 		expect(coerceLocale("fr")).toBe("fr");
 		expect(coerceLocale("de")).toBe("de");
 		expect(coerceLocale("pt-BR")).toBe("pt-BR");
+		expect(coerceLocale("ru")).toBe("ru");
 		expect(coerceLocale("zh")).toBe(DEFAULT_LOCALE);
 		expect(coerceLocale("pt")).toBe(DEFAULT_LOCALE);
 		expect(coerceLocale({ locale: "zh-CN" })).toBe(DEFAULT_LOCALE);

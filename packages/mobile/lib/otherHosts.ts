@@ -1,10 +1,14 @@
 import { useCallback, useEffect, useRef, useState } from "react";
+import { reconcileRows } from "./rowSharing";
 import { ApiError, getNotifications, getSessions, type DashboardSession, type DashboardStats, type OrchestratorLink, type ProjectInfo } from "./api";
+import { sameArchiveSummary, type ArchiveSummary } from "./archive/archiveSummary";
 import { isConfigured, type ServerConfig } from "./config";
 import { connectToHost } from "./connectRuntime";
 import { shouldKeepPolling, userFacingError } from "./connectionError";
 import type { Endpoint } from "./endpoints";
 import { findHost, type Host } from "./hosts";
+import { EMPTY_LINK_TRACKER, failedPollOutcome, recordPoll, SLOW_POLL_MS, type LinkTracker, type PollOutcome } from "./linkHealth";
+import { machineAppearance, type MachineAppearance } from "./machineAppearance";
 import { pollIntervalFor } from "./pollInterval";
 import { sameServerConfig } from "./sameConfig";
 import { shouldRaceForUpgrade, UPGRADE_RACE_CHECK_MS } from "./upgradeRace";
@@ -12,6 +16,7 @@ import { shouldRaceForUpgrade, UPGRADE_RACE_CHECK_MS } from "./upgradeRace";
 export type HostSnapshot = {
 	hostId: string;
 	name: string;
+	appearance: MachineAppearance;
 	endpoints: Endpoint[];
 	config: ServerConfig | null;
 	connection: "closed" | "connecting" | "open";
@@ -21,17 +26,35 @@ export type HostSnapshot = {
 	projects: ProjectInfo[];
 	projectsKnown: boolean;
 	sessions: DashboardSession[];
+	/**
+	 * The size of the archive the poll left out of `sessions`, when this machine
+	 * pages it. Null before the first answer and for a daemon that predates
+	 * paging, whose `sessions` still holds every archived worker.
+	 */
+	archive?: ArchiveSummary | null;
 	orchestrators: OrchestratorLink[];
 	orchestratorId: string | null;
 	stats: DashboardStats;
 	notificationsUnread: number;
 	lastSyncAt: number;
+	/**
+	 * Recent poll and race outcomes, classified with the phone's network by
+	 * classifyLink, so this machine gets the same grace period as the selected
+	 * one instead of reading as offline after a single unanswered poll.
+	 */
+	linkTracker?: LinkTracker;
+};
+
+export type VerifiedHostSnapshot = HostSnapshot & {
+	config: ServerConfig;
+	connection: "open";
 };
 
 export function emptyHostSnapshot(host: Host): HostSnapshot {
 	return {
 		hostId: host.id,
 		name: host.name,
+		appearance: machineAppearance(host),
 		endpoints: host.endpoints,
 		config: null,
 		connection: "connecting",
@@ -41,6 +64,7 @@ export function emptyHostSnapshot(host: Host): HostSnapshot {
 		projects: [],
 		projectsKnown: false,
 		sessions: [],
+		archive: null,
 		orchestrators: [],
 		orchestratorId: null,
 		stats: {},
@@ -50,20 +74,28 @@ export function emptyHostSnapshot(host: Host): HostSnapshot {
 }
 
 type Runner = { config: ServerConfig | null; refresh: () => Promise<void>; stop: () => void };
+type Publish = (patch: Partial<HostSnapshot>) => void;
+type RunnerSeed = { config: ServerConfig; connected: true };
+
+export function verifiedHostSnapshot(hostId: string, snapshot: HostSnapshot | undefined): VerifiedHostSnapshot | null {
+	if (snapshot?.hostId !== hostId || snapshot.connection !== "open" || snapshot.config?.hostId !== hostId) return null;
+	return snapshot as VerifiedHostSnapshot;
+}
 
 /** One daemon's independent endpoint race and REST poll. */
-export function startOtherHost(host: Host, previous: HostSnapshot | undefined, publish: (patch: Partial<HostSnapshot>) => void): Runner {
+function createOtherHostRunner(host: Host, previous: HostSnapshot | undefined, publish: Publish, seed: RunnerSeed | null): Runner {
 	let stopped = false;
 	let timer: ReturnType<typeof setTimeout> | undefined;
 	let upgradeTimer: ReturnType<typeof setInterval> | undefined;
 	let upgrading = false;
-	let connected = false;
-	let lastRaceAt = 0;
+	let connected = seed?.connected ?? false;
+	let lastRaceAt = seed ? Date.now() : 0;
 	let lastProjects = previous?.projects ?? [];
 	let projectsKnown = previous?.projectsKnown ?? false;
 	let busy: Promise<void> | null = null;
+	let tracker = previous?.linkTracker ?? EMPTY_LINK_TRACKER;
 	const runner: Runner = {
-		config: null,
+		config: seed?.config ?? null,
 		refresh: () => {
 			if (busy) return busy;
 			busy = (runner.config ? poll() : connect()).finally(() => { busy = null; });
@@ -72,6 +104,10 @@ export function startOtherHost(host: Host, previous: HostSnapshot | undefined, p
 		stop: () => { stopped = true; if (timer) clearTimeout(timer); if (upgradeTimer) clearInterval(upgradeTimer); },
 	};
 	const update = (patch: Partial<HostSnapshot>) => { if (!stopped) publish(patch); };
+	const record = (outcome: PollOutcome) => {
+		tracker = recordPoll(tracker, outcome, Date.now());
+		update({ linkTracker: tracker });
+	};
 	const schedule = (ms: number) => {
 		if (timer) clearTimeout(timer);
 		if (!stopped) timer = setTimeout(() => void runner.refresh(), ms);
@@ -90,7 +126,9 @@ export function startOtherHost(host: Host, previous: HostSnapshot | undefined, p
 			if (!result.ok || result.hostId !== host.id) {
 				runner.config = null;
 				const incompatible = !result.ok && result.reason === "incompatible";
-				update({ config: null, connection: "closed", loading: false, error: incompatible ? "AO versions are incompatible. Update AO on this phone and the machine." : "Host is unreachable", errorStatus: incompatible ? 426 : null });
+				// An incompatible host answered; nothing answering at all is a failed race.
+				record(incompatible ? "answered-error" : "no-answer");
+				update({ config: null, connection: "closed", loading: false, error: incompatible ? "Orchestrator versions are incompatible. Update Orchestrator on this phone and the machine." : "Host is unreachable", errorStatus: incompatible ? 426 : null });
 				schedule(15_000);
 				return;
 			}
@@ -101,6 +139,7 @@ export function startOtherHost(host: Host, previous: HostSnapshot | undefined, p
 			if (stopped) return;
 			runner.config = null;
 			update({ config: null, connection: "closed", loading: false, error: userFacingError(cause), errorStatus: null });
+			record("no-answer");
 			schedule(15_000);
 		}
 	};
@@ -139,8 +178,10 @@ export function startOtherHost(host: Host, previous: HostSnapshot | undefined, p
 		const c = runner.config;
 		if (!c || !isConfigured(c) || stopped) return;
 		try {
+			const startedAt = Date.now();
 			const answer = await getSessions(c, "all");
 			if (stopped || runner.config !== c) return;
+			record(Date.now() - startedAt > SLOW_POLL_MS ? "slow" : "ok");
 			if (answer.projects !== null) {
 				lastProjects = answer.projects;
 				projectsKnown = true;
@@ -154,6 +195,7 @@ export function startOtherHost(host: Host, previous: HostSnapshot | undefined, p
 				projects: lastProjects,
 				projectsKnown,
 				sessions: answer.sessions,
+				archive: answer.archive ?? null,
 				orchestrators: answer.orchestrators,
 				orchestratorId: answer.orchestratorId,
 				stats: answer.stats,
@@ -171,6 +213,7 @@ export function startOtherHost(host: Host, previous: HostSnapshot | undefined, p
 		} catch (cause) {
 			if (stopped || runner.config !== c) return;
 			const status = cause instanceof ApiError ? cause.status : undefined;
+			record(failedPollOutcome(cause, status));
 			connected = false;
 			update({ connection: "closed", loading: false, error: userFacingError(cause), errorStatus: status ?? null });
 			if (!shouldKeepPolling(status)) {
@@ -188,55 +231,144 @@ export function startOtherHost(host: Host, previous: HostSnapshot | undefined, p
 	return runner;
 }
 
+export function startOtherHost(host: Host, previous: HostSnapshot | undefined, publish: Publish): Runner {
+	return createOtherHostRunner(host, previous, publish, null);
+}
+
+export function startVerifiedOtherHost(host: Host, snapshot: HostSnapshot, publish: Publish): Runner | null {
+	const verified = verifiedHostSnapshot(host.id, snapshot);
+	if (!verified) return null;
+	return createOtherHostRunner(host, verified, publish, { config: verified.config, connected: true });
+}
+
 /** The selected host keeps its existing store/poll. These runners own every other paired host. */
 export function useOtherHosts(hosts: Host[], selectedHostId: string | null, appActive: boolean) {
 	const [snapshots, setSnapshots] = useState<Record<string, HostSnapshot>>({});
-	const runners = useRef(new Map<string, Runner>());
+	const snapshotsRef = useRef<Record<string, HostSnapshot>>({});
+	const runners = useRef(new Map<string, { generation: number; runner: Runner; host: Host }>());
+	const generations = useRef(new Map<string, number>());
+	const hostsRef = useRef(hosts);
+	const appActiveRef = useRef(appActive);
+	hostsRef.current = hosts;
+	appActiveRef.current = appActive;
 
-	useEffect(() => {
-		for (const runner of runners.current.values()) runner.stop();
-		runners.current.clear();
-		if (!appActive) {
-			setSnapshots((current) => Object.fromEntries(hosts.filter((host) => host.id !== selectedHostId).map((host) => [
-				host.id,
-				{ ...(current[host.id] ?? emptyHostSnapshot(host)), name: host.name, endpoints: host.endpoints, config: null, connection: "closed" as const, loading: false },
-			])));
-			return;
-		}
+	const commitSnapshots = useCallback((update: (current: Record<string, HostSnapshot>) => Record<string, HostSnapshot>) => {
+		const next = update(snapshotsRef.current);
+		snapshotsRef.current = next;
+		setSnapshots(next);
+	}, []);
 
-		const others = hosts.filter((host) => host.id !== selectedHostId);
-		setSnapshots((current) => {
-			const next: Record<string, HostSnapshot> = {};
-			for (const host of others) next[host.id] = {
+	const stopRunner = useCallback((hostId: string) => {
+		generations.current.set(hostId, (generations.current.get(hostId) ?? 0) + 1);
+		runners.current.get(hostId)?.runner.stop();
+		runners.current.delete(hostId);
+	}, []);
+
+	const installRunner = useCallback((host: Host, build: (publish: Publish) => Runner | null): boolean => {
+		stopRunner(host.id);
+		const generation = (generations.current.get(host.id) ?? 0) + 1;
+		generations.current.set(host.id, generation);
+		let entry: { generation: number; runner: Runner; host: Host };
+		const publish = (patch: Partial<HostSnapshot>) => {
+			if (generations.current.get(host.id) !== generation || runners.current.get(host.id) !== entry) return;
+			commitSnapshots((current) => {
+				const previous = current[host.id] ?? emptyHostSnapshot(host);
+				const next = { ...previous, ...patch };
+				if (patch.sessions) next.sessions = reconcileRows(previous.sessions, patch.sessions);
+				if (patch.projects) next.projects = reconcileRows(previous.projects, patch.projects);
+				if (patch.orchestrators) next.orchestrators = reconcileRows(previous.orchestrators, patch.orchestrators);
+				if ("archive" in patch && sameArchiveSummary(previous.archive, patch.archive)) next.archive = previous.archive;
+				if (Object.keys(patch).every((key) => next[key as keyof HostSnapshot] === previous[key as keyof HostSnapshot])) return current;
+				return { ...current, [host.id]: next };
+			});
+		};
+		const runner = build(publish);
+		if (!runner) return false;
+		entry = { generation, runner, host };
+		runners.current.set(host.id, entry);
+		void runner.refresh();
+		return true;
+	}, [commitSnapshots, stopRunner]);
+
+	const startColdRunner = useCallback((host: Host): boolean => {
+		commitSnapshots((current) => ({
+			...current,
+			[host.id]: {
 				...(current[host.id] ?? emptyHostSnapshot(host)),
 				name: host.name,
+				appearance: machineAppearance(host),
 				endpoints: host.endpoints,
 				config: null,
 				connection: "connecting",
 				loading: true,
-			};
-			return next;
-		});
+			},
+		}));
+		return installRunner(host, (publish) => startOtherHost(host, snapshotsRef.current[host.id], publish));
+	}, [commitSnapshots, installRunner]);
 
-		for (const host of others) {
-			const runner = startOtherHost(host, snapshots[host.id], (patch) => {
-				setSnapshots((current) => ({
-					...current,
-					[host.id]: { ...(current[host.id] ?? emptyHostSnapshot(host)), ...patch },
-				}));
-			});
-			runners.current.set(host.id, runner);
-			void runner.refresh();
+	const startSeededRunner = useCallback((host: Host, snapshot: VerifiedHostSnapshot): boolean => (
+		installRunner(host, (publish) => startVerifiedOtherHost(host, snapshot, publish))
+	), [installRunner]);
+
+	useEffect(() => {
+		const desiredBackgroundIds = new Set(
+			appActive ? hosts.filter((host) => host.id !== selectedHostId).map((host) => host.id) : [],
+		);
+		for (const hostId of [...runners.current.keys()]) {
+			if (!desiredBackgroundIds.has(hostId)) stopRunner(hostId);
 		}
+
+		if (!appActive) {
+			commitSnapshots((current) => Object.fromEntries(hosts.map((host) => [
+				host.id,
+				{ ...(current[host.id] ?? emptyHostSnapshot(host)), name: host.name, appearance: machineAppearance(host), endpoints: host.endpoints, config: null, connection: "closed" as const, loading: false },
+			])));
+			return;
+		}
+
+		commitSnapshots((current) => Object.fromEntries(hosts.map((host) => [
+			host.id,
+			{ ...(current[host.id] ?? emptyHostSnapshot(host)), name: host.name, appearance: machineAppearance(host), endpoints: host.endpoints },
+		])));
+		for (const host of hosts) {
+			const entry = runners.current.get(host.id);
+			// Keep live connections for display-only edits, but never retain a
+			// stale credential or route after an edit/account-directory refresh.
+			if (entry && (entry.host.token !== host.token || JSON.stringify(entry.host.endpoints) !== JSON.stringify(host.endpoints))) {
+				stopRunner(host.id);
+			}
+			if (desiredBackgroundIds.has(host.id) && !runners.current.has(host.id)) startColdRunner(host);
+		}
+	}, [hosts, selectedHostId, appActive, commitSnapshots, startColdRunner, stopRunner]);
+
+	useEffect(() => {
 		return () => {
-			for (const runner of runners.current.values()) runner.stop();
-			runners.current.clear();
+			for (const hostId of [...runners.current.keys()]) stopRunner(hostId);
 		};
-	}, [hosts, selectedHostId, appActive]);
+	}, [stopRunner]);
 
 	const refreshHost = useCallback(async (hostId: string) => {
-		await runners.current.get(hostId)?.refresh();
+		await runners.current.get(hostId)?.runner.refresh();
 	}, []);
-	const configForHost = useCallback((hostId: string) => runners.current.get(hostId)?.config ?? null, []);
-	return { snapshots, refreshHost, configForHost };
+	const configForHost = useCallback((hostId: string) => runners.current.get(hostId)?.runner.config ?? null, []);
+	const claimPrimary = useCallback((hostId: string): VerifiedHostSnapshot | null => {
+		const entry = runners.current.get(hostId);
+		const verified = verifiedHostSnapshot(hostId, snapshotsRef.current[hostId]);
+		if (!entry || !verified || entry.runner.config !== verified.config) return null;
+		stopRunner(hostId);
+		return verified;
+	}, [stopRunner]);
+	const adoptPrimary = useCallback((snapshot: HostSnapshot): boolean => {
+		const host = hostsRef.current.find((candidate) => candidate.id === snapshot.hostId);
+		if (!host) return false;
+		stopRunner(host.id);
+		commitSnapshots((current) => ({
+			...current,
+			[host.id]: { ...snapshot, name: host.name, appearance: machineAppearance(host), endpoints: host.endpoints },
+		}));
+		const verified = verifiedHostSnapshot(host.id, snapshot);
+		if (!verified || !appActiveRef.current) return false;
+		return startSeededRunner(host, verified);
+	}, [commitSnapshots, startSeededRunner, stopRunner]);
+	return { snapshots, refreshHost, configForHost, claimPrimary, adoptPrimary };
 }

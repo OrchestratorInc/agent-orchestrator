@@ -228,7 +228,7 @@ func TestGetRestoreCommand(t *testing.T) {
 		t.Fatal("ok=false, want true")
 	}
 
-	want := []string{"amp", "--resume", "T-abc123"}
+	want := []string{"amp", "threads", "continue", "T-abc123"}
 	if !reflect.DeepEqual(cmd, want) {
 		t.Fatalf("cmd = %#v, want %#v", cmd, want)
 	}

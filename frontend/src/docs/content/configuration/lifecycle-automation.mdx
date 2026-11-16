@@ -3,11 +3,12 @@ title: Automation reference
 description: Built-in event rules, recurring Automations, Cues, and notifications.
 ---
 
-AO routes CI failures, review feedback, and merge conflicts with built-in rules. Project settings do not accept the retired `reactions:` configuration. See [Migration](/migration) before reusing an old YAML example.
+Orchestrator routes CI failures, review feedback, and merge conflicts with built-in rules. Project settings do not accept the retired `reactions:` configuration. See [Migration](/migration) before reusing an old YAML example.
 
 For a step-by-step pull-request workflow, see [Handle CI and review feedback](/guides/reactions).
 
-## What AO handles
+<span id="what-ao-handles" />
+## What Orchestrator handles
 
 | Observation | Current behavior |
 | --- | --- |
@@ -35,9 +36,39 @@ Choose one schedule format: a five-field cron expression or an RRULE, a calendar
 
 Cron accepts numeric minute and hour fields, `*` for day and month, and supported weekday choices. It does not accept arbitrary ranges or steps. RRULE does not accept `COUNT` or `UNTIL`, or intervals faster than one minute.
 
-Automations run in the local daemon, so the computer must be awake and AO must be running. After a restart, AO runs at most three missed occurrences. The same automation will not start another run while its current run is active. Deleting an automation also deletes its run history.
+The **Automations** page offers three template cards with editable starter prompts:
 
-To try an automation, create one in **Automations** with a short prompt and a schedule a few minutes ahead. Then open its run history and linked session. If it does not run, check the time zone, confirm the automation is enabled, and make sure AO stayed open and the computer stayed awake. Pause the automation before changing a schedule you are testing.
+| Starter | Default schedule in your timezone | Result |
+| --- | --- | --- |
+| PR review inbox | Monday–Friday, 09:00 | Review up to five open, non-draft PRs requesting the authenticated GitHub user's review, with code references and next actions. |
+| Daily issue triage | Every day, 09:15 | Summarize up to 20 issues changed in the last 24 hours, with suggested priorities, missing details, and possible duplicates. |
+| Weekly release notes | Friday, 16:00 | Draft notes from up to 100 PRs merged into the default branch in the last seven days, with links and migration details supported by evidence. |
+
+Choose a project with a GitHub repository and an agent with its own GitHub read
+access. Connecting GitHub to Orchestrator does not provide credentials to the
+agent. The prompts ask the agent to report missing access and stop. They request
+read-only reports in AO; the release-notes starter does not publish a release or
+claim merged work has deployed. These are prompt instructions, not a new sandbox
+or permission policy.
+
+Review and edit the name, prompt, agent, and schedule before clicking **Create
+automation**. Selecting a card opens the standard creation dialog and saves
+nothing until you submit it. **New automation** opens a blank custom form. The
+prompt limit is 4,096 UTF-8 bytes. Template origin and its use-case category are
+recorded automatically; there is no purpose selector. Editing a definition keeps
+its original template identity.
+
+CLI/API clients can optionally set `templateId` / `useCase` on creation (CLI:
+`--template-id` / `--use-case`). These fields only record intent; they do not load
+a starter prompt. The caller still supplies the prompt and schedule. Omitted
+fields default to `custom` / `unknown`. Update purpose with
+`ao automation update <id> --use-case issue_triage`; template origin cannot be
+updated. See [product telemetry](https://github.com/OrchestratorInc/agent-orchestrator/blob/main/docs/telemetry.md#automation-usage-and-creation)
+for the allowed categories and privacy details.
+
+Automations run in the local daemon, so the computer must be awake and Orchestrator must be running. After a restart, Orchestrator runs at most three missed occurrences. The same automation will not start another run while its current run is active. Deleting an automation also deletes its run history.
+
+To try an automation, create one in **Automations** with a short prompt and a schedule a few minutes ahead. Then open its run history and linked session. If it does not run, check the time zone, confirm the automation is enabled, and make sure Orchestrator stayed open and the computer stayed awake. Pause the automation before changing a schedule you are testing.
 
 Project **Cues** save reusable instructions or exact shell commands for manual use. They do not run on a schedule. An agent Cue sends a prompt to an eligible session or starts a worker. A command Cue opens a fresh local terminal. Manage Cues in the project dialog and choose **Run a cue** from a session.
 
@@ -52,30 +83,30 @@ Lifecycle messages go through the same session manager as user messages:
 - Terminal UI sessions receive the message through their runtime.
 - Chat sessions receive a native provider turn and persist it in the structured conversation.
 
-AO does not run both controllers at once. A handoff between compatible interfaces drains or interrupts the old controller before committing the new one.
+Orchestrator does not run both controllers at once. A handoff between compatible interfaces drains or interrupts the old controller before committing the new one.
 
 ## Notifications
 
-The desktop notification center keeps alerts for input requests, pull requests ready to merge, merged pull requests, and pull requests closed without merging. Desktop toasts appear while AO is running. Marking an alert read keeps it in history; clearing one or all removes it from the center.
+The desktop notification center keeps alerts for input requests, pull requests ready to merge, merged pull requests, and pull requests closed without merging. Desktop toasts appear while Orchestrator is running. Marking an alert read keeps it in history; clearing one or all removes it from the center.
 
-Paired phones can receive push notifications when permissions allow, the device is not muted, and the daemon can connect to the push service.
+Paired phones can receive push notifications when notifications are allowed on the phone and the daemon can connect to the push service.
 
-AO does not currently configure Slack, Discord, webhook notifiers, per-reaction retry budgets, or automatic merge from project config. Merge explicitly from the desktop or with:
+Orchestrator does not currently configure Slack, Discord, webhook notifiers, per-reaction retry budgets, or automatic merge from project config. Merge explicitly from the desktop or with:
 
 ```bash
-ao pr merge <pr-number>
+ao pr merge <pr-number> --url <pr-url> --expected-head-sha <sha>
 ```
 
 ## Reviews
 
-Repository observation and AO reviewer agents are related but separate:
+Repository observation and Orchestrator reviewer agents are related but separate:
 
 - The GitHub/GitLab observer watches a claimed pull request or merge request and records CI, review, and merge data.
-- An AO review run starts a configured reviewer against a worker's pull request. Use **Reviews** in the desktop app or `ao review trigger`, `ao review ls`, and `ao review cancel`.
+- An Orchestrator review run starts a configured reviewer against a worker's pull request. Use **Reviews** in the desktop app or `ao review trigger`, `ao review ls`, and `ao review cancel`.
 
 `autoReview` is a project default copied to new worker sessions. Each session also has its own toggle. Automatic review waits for an eligible pull-request revision and an idle worker. It does not merge the pull request or publish every workspace inspection as a review. See the [agent catalog](/plugins/agents) for reviewer support.
 
 <Cards>
 	<Card title="CI recovery" href="/guides/ci-recovery" description="Follow the built-in CI feedback loop." />
-	<Card title="Review loop" href="/guides/review-loop" description="Work with GitHub feedback and AO reviewer agents." />
+	<Card title="Review loop" href="/guides/review-loop" description="Work with GitHub feedback and Orchestrator reviewer agents." />
 </Cards>

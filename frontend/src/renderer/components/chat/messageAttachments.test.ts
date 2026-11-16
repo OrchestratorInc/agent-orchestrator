@@ -1,8 +1,22 @@
 import { describe, expect, it } from "vitest";
-import { labelInlineImages, proseBesideImages, splitInlineImagePaths } from "./messageAttachments";
+import { attachmentTypeLabel, formatAttachmentSize, labelInlineImages, proseBesideImages, removeInlineImagePath, splitInlineImagePaths } from "./messageAttachments";
 
 const a = ".ao/attachments/attachment-a.png";
 const b = ".ao/attachments/attachment-b.png";
+
+describe("file chip details", () => {
+	it("reads a type from the file's extension, and none when it has none", () => {
+		expect(attachmentTypeLabel("report.final.pdf")).toBe("PDF");
+		expect(attachmentTypeLabel("Makefile")).toBeUndefined();
+		expect(attachmentTypeLabel("notes.not-an-extension")).toBeUndefined();
+	});
+
+	it("scales a size to the unit that reads best", () => {
+		expect(formatAttachmentSize(300)).toBe("300 B");
+		expect(formatAttachmentSize(2048)).toBe("2.0 KB");
+		expect(formatAttachmentSize(3 * 1024 * 1024)).toBe("3.0 MB");
+	});
+});
 
 describe("inline image paths", () => {
 	it("leaves a staged path inside a longer path as text", () => {
@@ -23,5 +37,21 @@ describe("inline image paths", () => {
 	it("labels attached inline images for one-line surfaces and keeps the reference block", () => {
 		const block = `\n\nAttached files (read these files in the workspace):\n- ${a}\n- ${b}`;
 		expect(labelInlineImages(`make ${b} like ${a}${block}`)).toBe(`make [Image 2] like [Image 1]${block}`);
+	});
+});
+
+describe("removeInlineImagePath", () => {
+	it("drops the image with one following space, as removing its chip does", () => {
+		expect(removeInlineImagePath(`compare ${a} with ${b} `, a)).toBe(`compare with ${b} `);
+		expect(removeInlineImagePath(`compare ${a} `, a)).toBe("compare ");
+	});
+
+	it("drops every occurrence, on every line, and leaves line breaks and other images", () => {
+		expect(removeInlineImagePath(`${a} first\nthen ${a}\n${b} kept`, a)).toBe("first\nthen \n" + `${b} kept`);
+	});
+
+	it("leaves text without that image untouched, including a longer path containing it", () => {
+		expect(removeInlineImagePath(`see /wt/${a} and ${b}`, a)).toBe(`see /wt/${a} and ${b}`);
+		expect(removeInlineImagePath("plain words", a)).toBe("plain words");
 	});
 });

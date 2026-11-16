@@ -1,5 +1,6 @@
 import type { DashboardSession, ProjectInfo } from "./api";
 import { isArchived } from "./agentsView";
+import { reconcileRows } from "./rowSharing";
 
 /** The board filter that means "every project". */
 export const ALL_PROJECTS = "all";
@@ -58,7 +59,11 @@ export function retainProjects(
 	if (answer.machine !== activeMachine) return prev;
 	// Explicitly against null, not truthiness: a successful [] takes this branch
 	// and becomes known, which is the distinction the whole type exists for.
-	if (answer.projects !== null) return { machine: answer.machine, projects: answer.projects, known: true };
+	if (answer.projects !== null) {
+		const projects = prev.machine === answer.machine ? reconcileRows(prev.projects, answer.projects) : answer.projects;
+		return prev.known && prev.machine === answer.machine && projects === prev.projects
+			? prev : { machine: answer.machine, projects, known: true };
+	}
 	if (prev.machine === answer.machine && prev.known) return prev;
 	return { machine: answer.machine, projects: [], known: false };
 }
@@ -121,8 +126,8 @@ export function resolveActiveProject(
 /**
  * Keep the spawn sheet on a live project without clearing a choice before the
  * daemon has supplied a project list. A deleted selection falls through to the
- * route, board filter, or sole remaining project instead of being posted as a
- * dead project id.
+ * route, the project last worked in, the board filter, or the sole remaining
+ * project instead of being posted as a dead project id.
  */
 export function resolveSpawnProject(
 	currentProjectId: string | null,
@@ -130,13 +135,18 @@ export function resolveSpawnProject(
 	activeProjectId: string,
 	projects: readonly { id: string }[],
 	projectsKnown: boolean,
+	lastProjectId?: string | null,
 ): string | null {
 	if (currentProjectId === STANDALONE_PROJECT) return STANDALONE_PROJECT;
 	if (
 		currentProjectId
 		&& resolveActiveProject(currentProjectId, projects, projectsKnown) === currentProjectId
 	) return currentProjectId;
-	if (routeProjectId && projects.some((project) => project.id === routeProjectId)) return routeProjectId;
+	// The route and the last project are trusted before the list lands, as the
+	// board filter is: judged against it once it does, a filter picked first
+	// would otherwise stick.
+	if (routeProjectId && (!projectsKnown || projects.some((project) => project.id === routeProjectId))) return routeProjectId;
+	if (lastProjectId && (!projectsKnown || projects.some((project) => project.id === lastProjectId))) return lastProjectId;
 	const active = resolveActiveProject(activeProjectId, projects, projectsKnown);
 	if (active !== ALL_PROJECTS) return active;
 	return projects.length === 1 ? projects[0].id : null;
