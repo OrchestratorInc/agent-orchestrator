@@ -9,12 +9,9 @@ import (
 	"strings"
 )
 
-// StartTimes reads every process's start time, keyed by pid. A process keeps
-// its start time across exec and a reused pid gets a new one, so pid plus
-// start time identifies one process where pid plus command line cannot. The
-// value is opaque: compare it only with another StartTimes reading. A nil run
-// uses exec.
-func StartTimes(ctx context.Context, run Runner) (map[int]string, error) {
+// psStartTimes reads start times from ps. lstart has one-second resolution,
+// so it is the fallback: Linux and macOS read the kernel's own start time.
+func psStartTimes(ctx context.Context, run Runner) (map[int]string, error) {
 	if run == nil {
 		run = execRunner
 	}
