@@ -212,8 +212,11 @@ export type CloudSharePublishResult =
 	| { status: "unsupported"; message: string }
 	/** A cloud session's files are shared only by the person who started the session. */
 	| { status: "not_owner" }
-	/** Refused for another reason, such as no free disk space or another file being shared. */
-	| { status: "error"; message: string }
+	/**
+	 * Refused for another reason, such as no free disk space or another file
+	 * being shared. failure is its category for telemetry, never its message.
+	 */
+	| { status: "error"; message: string; failure?: "too_large" | "upload_failed" }
 	| { status: "signed_out" };
 
 /**

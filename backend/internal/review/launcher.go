@@ -161,6 +161,8 @@ type agentLauncher struct {
 	auth       agentAuthResolver
 	executable func() (string, error)
 	chat       ReviewerChatController
+	forceStop  forceStopHooks
+	stops      forceStopState
 }
 
 type preLaunchReviewer interface {
@@ -820,6 +822,17 @@ func (l *agentLauncher) Reusable(harness domain.ReviewerHarness) bool {
 	}
 	policy, ok := reviewer.(ports.ReviewerReusePolicy)
 	return !ok || policy.ReviewProcessReusable()
+}
+
+// ReportsActivity reports whether the harness's terminal reviewer reliably
+// reports activity through hooks, for the review run lifecycle.
+func (l *agentLauncher) ReportsActivity(harness domain.ReviewerHarness) bool {
+	reviewer, ok := l.reviewers.Reviewer(harness)
+	if !ok {
+		return false
+	}
+	hooks, ok := reviewer.(ports.ReviewerActivityHooks)
+	return ok && hooks.ReviewActivityHooks()
 }
 
 func (l *agentLauncher) Cancel(ctx context.Context, handleID string, harness domain.ReviewerHarness) error {

@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 import { createCloudCpClient, MAX_GITHUB_REPOSITORY_DESCRIPTION, retryAfterMs } from "./client";
-import { CloudCpError } from "./errors";
+import { CloudCpAuthError, CloudCpError } from "./errors";
 
 describe("Cloud control-plane interface transitions", () => {
 	it("preserves caller message ids for Cloud send retries and steering", async () => {
@@ -127,6 +127,53 @@ describe("cloud control-plane harness versions", () => {
 		await client.resetOrgHarnessVersion("org-1", "codex");
 		expect(fetchImpl.mock.calls[1][0]).toBe("https://cloud.example.test/api/cloud/v1/orgs/org-1/harness-versions/codex");
 		expect(fetchImpl.mock.calls[1][1]).toMatchObject({ method: "DELETE" });
+	});
+});
+
+describe("cloud control-plane data retention", () => {
+	const json = (body: unknown, status = 200) => new Response(JSON.stringify(body), { status, headers: { "Content-Type": "application/json" } });
+	const retention = { retentionDays: 180, defaultDays: 180, options: [30, 60, 90, 180, 365], updatedAt: null };
+
+	it("reads the signed-in user's retention", async () => {
+		const fetchImpl = vi.fn().mockImplementation(async () => json(retention));
+		const client = createCloudCpClient({ baseUrl: "https://cloud.example.test", getToken: async () => "token", fetchImpl });
+		await expect(client.getDataRetention()).resolves.toEqual(retention);
+		const [url, init] = fetchImpl.mock.calls[0];
+		expect(url).toBe("https://cloud.example.test/api/cloud/v1/me/data-retention");
+		expect(init).toMatchObject({ method: "GET" });
+	});
+
+	it("counts with a dry run, then changes the period", async () => {
+		const fetchImpl = vi.fn()
+			.mockImplementationOnce(async () => json({ ...retention, sessionsToDelete: 4 }))
+			.mockImplementationOnce(async () => json({ ...retention, retentionDays: 30, updatedAt: "2026-11-15T10:00:00Z", sessionsToDelete: 4 }));
+		const client = createCloudCpClient({ baseUrl: "https://cloud.example.test", getToken: async () => "token", fetchImpl });
+		await expect(client.putDataRetention({ retentionDays: 30, dryRun: true })).resolves.toMatchObject({ retentionDays: 180, sessionsToDelete: 4 });
+		await expect(client.putDataRetention({ retentionDays: 30, dryRun: false })).resolves.toMatchObject({ retentionDays: 30, sessionsToDelete: 4 });
+		for (const [index, dryRun] of [[0, true], [1, false]] as const) {
+			const [url, init] = fetchImpl.mock.calls[index];
+			expect(url).toBe("https://cloud.example.test/api/cloud/v1/me/data-retention");
+			expect(init).toMatchObject({ method: "PUT" });
+			expect(JSON.parse(String(init.body))).toEqual({ retentionDays: 30, dryRun });
+		}
+	});
+
+	it("goes back to the default with retentionDays null", async () => {
+		const fetchImpl = vi.fn().mockImplementation(async () => json({ ...retention, followsDefault: true, sessionsToDelete: 0 }));
+		const client = createCloudCpClient({ baseUrl: "https://cloud.example.test", getToken: async () => "token", fetchImpl });
+		await expect(client.putDataRetention({ retentionDays: null })).resolves.toMatchObject({ followsDefault: true });
+		expect(JSON.parse(String(fetchImpl.mock.calls[0][1].body))).toEqual({ retentionDays: null });
+	});
+
+	it("surfaces the control plane's refusal with its code and message", async () => {
+		const fetchImpl = vi.fn()
+			.mockImplementationOnce(async () => json({ error: "Bad Request", code: "invalid_retention", message: "Choose one of the offered periods.", requestId: "r-1" }, 400))
+			.mockImplementationOnce(async () => json({ error: "Unauthorized", code: "unauthorized", message: "Sign in again.", requestId: "r-2" }, 401));
+		const client = createCloudCpClient({ baseUrl: "https://cloud.example.test", getToken: async () => "token", fetchImpl });
+		await expect(client.putDataRetention({ retentionDays: 45, dryRun: true })).rejects.toMatchObject({
+			status: 400, code: "invalid_retention", message: "Choose one of the offered periods.",
+		});
+		await expect(client.putDataRetention({ retentionDays: 30, dryRun: true })).rejects.toBeInstanceOf(CloudCpAuthError);
 	});
 });
 

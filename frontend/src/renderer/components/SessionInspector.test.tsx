@@ -11,7 +11,7 @@ import {
 import userEvent from "@testing-library/user-event";
 import type { ComponentProps, ReactNode } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { resetPRFocus, SessionInspector } from "./SessionInspector";
+import { PRSummaryCard, resetPRFocus, SessionInspector } from "./SessionInspector";
 import { subscribeChatComposerText } from "../lib/chat-context-bus";
 import { sessionUiKey } from "../lib/hosts";
 import { resetPRMergeMethods } from "./PRActions";
@@ -313,7 +313,7 @@ const approvedReview = {
   reviewId: "review-1",
   sessionId: "sess-1",
   harness: "codex",
-  status: "complete",
+  status: "completed",
   verdict: "approved",
   body: "Looks good.",
   prUrl: "https://example.com/pr/3",
@@ -3769,7 +3769,7 @@ describe("SessionInspector summary reviews", () => {
 
     renderWithQuery(<SessionInspector session={session([pr(3, "open")])} />);
     await openReviewsSection();
-    await screen.findByText("Review in progress · Codex");
+    await screen.findByText("Reviewing... · Codex");
 
     expect(screen.queryByText("Reviewable change 3")).not.toBeInTheDocument();
     expect(screen.queryByText("Review summary")).not.toBeInTheDocument();
@@ -4330,7 +4330,7 @@ describe("SessionInspector summary reviews", () => {
         previousRun: {
           ...approvedReview,
           id: "run-previous",
-          status: "delivered",
+          status: "completed",
           verdict: previousVerdict,
           body: "Previous review summary with actionable detail.",
           githubReviewId: "98765",
@@ -4375,7 +4375,7 @@ describe("SessionInspector summary reviews", () => {
       // word on the button.
       if (status === "running") {
         expect(
-          screen.getByText("Review in progress · Codex"),
+          screen.getByText("Reviewing... · Codex"),
         ).toBeInTheDocument();
       } else {
         expect(
@@ -5705,7 +5705,7 @@ describe("SessionInspector summary reviews", () => {
         ...approvedReview,
         id: "run-done",
         harness: "claude-code",
-        status: "complete",
+        status: "completed",
       },
     };
     const running = {
@@ -5727,10 +5727,10 @@ describe("SessionInspector summary reviews", () => {
     await openReviewsSection();
 
     expect(
-      await screen.findByText("Review in progress · Codex"),
+      await screen.findByText("Reviewing... · Codex"),
     ).toBeInTheDocument();
     expect(
-      screen.queryByText("Review in progress · Claude Code"),
+      screen.queryByText("Reviewing... · Claude Code"),
     ).not.toBeInTheDocument();
   });
 
@@ -5821,13 +5821,13 @@ describe("SessionInspector summary reviews", () => {
 
     // AO runs one reviewer per worker, so a second harness cannot start
     // alongside it. Say so rather than silently ignoring the choice.
-    expect(screen.getByText("Review in progress · Codex")).toBeInTheDocument();
+    expect(screen.getByText("Reviewing... · Codex")).toBeInTheDocument();
     expect(
       screen.getByRole("button", { name: /Select reviewer agent/ }),
     ).toBeDisabled();
   });
 
-  it("hides the review in progress strip when the reviewer hook reports idle", async () => {
+  it("keeps showing the run state when the reviewer hook reports idle", async () => {
     const running = {
       ...reviewState(3, "running", "sha-1"),
       latestRun: {
@@ -5843,9 +5843,11 @@ describe("SessionInspector summary reviews", () => {
     renderWithQuery(<SessionInspector session={session([pr(3, "open")])} />);
     await openReviewsSection();
 
+    // The daemon owns the run: an idle reviewer that does not submit is failed
+    // by the daemon after its grace period, so the UI never guesses.
     expect(
-      screen.queryByText("Review in progress · Codex"),
-    ).not.toBeInTheDocument();
+      await screen.findByText("Reviewing... · Codex"),
+    ).toBeInTheDocument();
     expect(
       screen.getByRole("button", { name: "Stop review" }),
     ).toBeInTheDocument();
@@ -5868,7 +5870,7 @@ describe("SessionInspector summary reviews", () => {
     await openReviewsSection();
 
     expect(
-      await screen.findByText("Review in progress · Codex"),
+      await screen.findByText("Reviewing... · Codex"),
     ).toBeInTheDocument();
   });
 
@@ -5878,7 +5880,7 @@ describe("SessionInspector summary reviews", () => {
       previousRun: {
         ...approvedReview,
         id: "run-previous",
-        status: "delivered",
+        status: "completed",
         verdict: "changes_requested",
         targetSha: "sha-previous",
       },
@@ -6012,7 +6014,8 @@ describe("SessionInspector summary reviews", () => {
     const failedAutoReview = {
       ...failedReview,
       triggerSource: "auto",
-      body: 'reviewer preflight: reviewer harness "kimi" is unauthorized',
+      body: "",
+      failureReason: "preflight_failed",
     };
     mockCommonGets([], "", [
       {
@@ -6029,15 +6032,16 @@ describe("SessionInspector summary reviews", () => {
     await openReviewsSection();
 
     expect(screen.getByRole("status")).toHaveTextContent(
-      'Auto review Failed: reviewer preflight: reviewer harness "kimi" is unauthorized',
+      "Auto review: Review failed. Please try again.",
     );
   });
 
-  it("surfaces the stored reason of a failed manual review", async () => {
+  it("surfaces a failed manual review", async () => {
     const failedManualReview = {
       ...failedReview,
       triggerSource: "manual",
-      body: "launch reviewer: reviewer replace stale pane: no such session",
+      body: "",
+      failureReason: "turn_ended_without_submit",
     };
     mockCommonGets([], "", [
       {
@@ -6049,9 +6053,11 @@ describe("SessionInspector summary reviews", () => {
     renderWithQuery(<SessionInspector session={session([pr(3, "open")])} />);
     await openReviewsSection();
 
+    // The reason code is for diagnostics; people get one message and a retry.
     expect(screen.getByRole("status")).toHaveTextContent(
-      "Review Failed: launch reviewer: reviewer replace stale pane: no such session",
+      "Review: Review failed. Please try again.",
     );
+    expect(screen.getByRole("status")).not.toHaveTextContent("turn_ended_without_submit");
   });
 
   it("hides Reviews and the review preference when the session has no PR", async () => {
@@ -6351,7 +6357,7 @@ describe("SessionInspector Cloud reviews", () => {
             triggerSource: "manual",
             pullRequestUrl: "https://github.com/acme/repo/pull/7",
             targetSha: "head-7",
-            status: "delivered",
+            status: "completed",
             verdict: "approved",
             body: "Cloud review is ready for the worker.",
             providerReviewId: "98765",
@@ -6371,7 +6377,7 @@ describe("SessionInspector Cloud reviews", () => {
           triggerSource: "manual",
           pullRequestUrl: "https://github.com/acme/repo/pull/7",
           targetSha: "head-7",
-          status: "delivered",
+          status: "completed",
           verdict: "approved",
           body: "Cloud review is ready for the worker.",
           providerReviewId: "98765",
@@ -6779,6 +6785,47 @@ describe("SessionInspector branch summary", () => {
     expect(await screen.findByRole("button", { name: "Updating from main…" })).toBeDisabled();
   });
 
+  it("leads with merge when the PR can merge, and keeps the update in the menu", async () => {
+    const ready = prSummary(7, "open", { sourceBranch: "feat/ns", review: { decision: "approved", hasUnresolvedHumanComments: false, unresolvedBy: [] } });
+    mockGitState({ committed: [changedFile("src/a.ts", 5, 0)], prs: [ready] });
+    renderWithQuery(
+      <SessionInspector session={session([pr(7, "open")], { branchState: { ...pushed(2), base: "main", behind: 3 } })} />,
+      undefined,
+      (client) => seedPRSummaries(client, [ready]),
+    );
+
+    // Being behind main doesn't hold up a merge GitHub allows.
+    expect(await screen.findByText("3 commits behind main")).toBeInTheDocument();
+    expect(await screen.findByRole("button", { name: "Squash and merge: PR #7" })).toBeEnabled();
+    expect(screen.queryByRole("button", { name: "Update from main" })).not.toBeInTheDocument();
+    await userEvent.click(screen.getByRole("button", { name: "More actions for PR #7" }));
+    expect(await screen.findByRole("menuitem", { name: "Update from main" })).toBeInTheDocument();
+  });
+
+  it("waits for the stack before replacing update with a separate merge button", async () => {
+    const ready = prSummary(7, "open", { provider: "github", sourceBranch: "feat/ns", review: { decision: "approved", hasUnresolvedHumanComments: false, unresolvedBy: [] } });
+    const stackRead = Promise.withResolvers<{ data: unknown }>();
+    mockGitState({ committed: [changedFile("src/a.ts", 5, 0)], prs: [ready] });
+    const respond = getMock.getMockImplementation() ?? commonGetsResponder();
+    getMock.mockImplementation((path: string) => path === "/api/v1/prs/{id}/stack" ? stackRead.promise : respond(path));
+    renderWithQuery(
+      <SessionInspector session={session([pr(7, "open")], { branchState: { ...pushed(2), base: "main", behind: 3 } })} />,
+      undefined,
+      (client) => seedPRSummaries(client, [ready]),
+    );
+
+    const update = await screen.findByRole("button", { name: "Update from main" });
+    expect(update).toBeDisabled();
+    fireEvent.mouseDown(update);
+    await act(async () => stackRead.resolve({ data: {} }));
+    const merge = await screen.findByRole("button", { name: "Squash and merge: PR #7" });
+    expect(merge).toBeEnabled();
+    expect(merge).not.toBe(update);
+    fireEvent.mouseUp(update);
+    expect(postCallsFor("/api/v1/prs/{id}/merge")).toHaveLength(0);
+    expect(postCallsFor("/api/v1/prs/{id}/stack/merge")).toHaveLength(0);
+  });
+
   it("asks the agent to resolve conflicts with the base, naming the conflicting files", async () => {
     const conflicting = prSummary(7, "open", {
       sourceBranch: "feat/ns",
@@ -6844,6 +6891,57 @@ describe("SessionInspector branch summary", () => {
     expect(message).toContain("The conflicting files are `README.md`.");
     expect(message).toContain("push the branch to update PR #8.");
     expect(await within(screen.getByTestId("pr-card")).findByRole("button", { name: "Resolving conflicts…" })).toBeDisabled();
+  });
+
+  it("states the diff once in the PR card: the commits row has it, so the branch line leaves it off", async () => {
+    const same = prSummary(7, "open", { sourceBranch: "feat/ns", additions: 5, deletions: 2 });
+    mockGitState({ committed: [changedFile("src/a.ts", 5, 2)], prs: [same] });
+    renderWithQuery(
+      <SessionInspector session={session([pr(7, "open")], { branchState: pushed(2) })} />,
+      undefined,
+      (client) => seedPRSummaries(client, [same]),
+    );
+
+    const card = within(await screen.findByTestId("pr-card"));
+    expect(await card.findByText("2 commits")).toBeInTheDocument();
+    expect(card.getAllByText("+5")).toHaveLength(1);
+    // The branch line keeps the file count and drops the numbers.
+    const meta = within(card.getByTestId("pr-meta"));
+    expect(meta.getByText("2 files")).toBeInTheDocument();
+    expect(meta.queryByText("+5")).toBeNull();
+  });
+
+  it("keeps diff counts on standalone cards even when matching work is supplied", async () => {
+    const summary = prSummary(7, "open", { additions: 5, deletions: 2 });
+    renderWithQuery(
+      <PRSummaryCard
+        canOpenReviews={false}
+        onOpenReviews={() => {}}
+        pr={summary}
+        sessionId="sess-1"
+        work={{ content: <div>Branch work</div>, hasRows: true, diff: { additions: 5, deletions: 2 } }}
+      />,
+    );
+
+    const meta = within(await screen.findByTestId("pr-meta"));
+    expect(meta.getByText("+5")).toBeInTheDocument();
+    expect(meta.getByText("−2")).toBeInTheDocument();
+    expect(screen.queryByText("Branch work")).not.toBeInTheDocument();
+  });
+
+  it("keeps both sets of numbers when the branch differs from the PR", async () => {
+    const behindPR = prSummary(7, "open", { sourceBranch: "feat/ns", additions: 5, deletions: 2 });
+    mockGitState({ committed: [changedFile("src/a.ts", 9, 2)], prs: [behindPR] });
+    renderWithQuery(
+      <SessionInspector session={session([pr(7, "open")], { branchState: { ...pushed(3), unpushed: 1 } })} />,
+      undefined,
+      (client) => seedPRSummaries(client, [behindPR]),
+    );
+
+    const card = within(await screen.findByTestId("pr-card"));
+    expect(await card.findByText("3 commits")).toBeInTheDocument();
+    expect(within(card.getByTestId("pr-meta")).getByText("+5")).toBeInTheDocument();
+    expect(card.getByText("+9")).toBeInTheDocument();
   });
 
   it.each([
@@ -7152,6 +7250,19 @@ describe("SessionInspector branch summary", () => {
     expect(conflicts).toHaveTextContent("ConflictsNone");
     expect(conflicts.querySelector("[data-state='passed'] svg")).not.toBeNull();
     expect(conflicts.parentElement?.querySelector("span[aria-hidden='true'].rounded-full")).toBeNull();
+    // The label leads in full colour; a state that is in the way takes its colour
+    // on the words, one that is fine stays plain.
+    expect(screen.getByText("Conflicts")).toHaveClass("text-foreground");
+    expect(conflicts.querySelector("[data-state='passed']")).not.toHaveClass("text-error");
+    const tally = screen.getByTestId("pr-checks-tally");
+    expect(within(tally).getByText("Checks")).toHaveClass("text-foreground");
+    expect(tally.querySelector("[data-state='failed']")).toHaveClass("text-error");
+    // What opens under a row sits in from it.
+    expect(screen.getByTestId("pr-checks").parentElement).toHaveClass("pl-4");
+    // The label keeps the row's size and its state sits two sizes below it.
+    expect(screen.getByText("Conflicts")).not.toHaveClass("text-micro");
+    expect(conflicts.querySelector("[data-state='passed']")).toHaveClass("text-micro");
+    expect(tally.querySelector("[data-state='failed']")).toHaveClass("text-micro");
   });
 
   it("says the PR row opens a tab, until that tab is showing", async () => {

@@ -1,62 +1,37 @@
 package cli
 
 import (
+	"bytes"
 	"encoding/base64"
+	"encoding/binary"
+	"encoding/xml"
+	"errors"
 	"fmt"
 	"io"
-	"maps"
+	"net/http"
 	"os"
-	"regexp"
-	"slices"
 	"strings"
 	"syscall"
-	"unicode"
 	"unicode/utf8"
+
+	"golang.org/x/net/html/charset"
 )
 
-// A render page runs in an opaque-origin sandbox, so it cannot load a local
-// file. The CLI runs as the agent, with the agent's file access, and inlines
-// every local image the page names by absolute path. Ported from T3 Code's
-// HtmlRender.inlineLocalImages.
+// A render page runs in an opaque-origin sandbox and cannot load a local file.
+// The CLI runs with the agent's file access, so it swaps each local image the
+// page names by absolute path for a data URI before publishing.
 
 const (
 	maxRenderImageBytes = 10 << 20
 	// maxRenderPageBytes matches the daemon's limit on a render page.
 	maxRenderPageBytes = 25 << 20
-	// maxImagePathChars bounds a reference the way T3's {0,2048} does; RE2
-	// cannot count that high, so findLocalImages checks it.
-	maxImagePathChars = 2048
+	maxImagePathChars  = 2048
 )
 
-var imageMIMETypes = map[string]string{
-	"png":  "image/png",
-	"jpg":  "image/jpeg",
-	"jpeg": "image/jpeg",
-	"gif":  "image/gif",
-	"webp": "image/webp",
-	"avif": "image/avif",
-	"svg":  "image/svg+xml",
-	"bmp":  "image/bmp",
-	"ico":  "image/x-icon",
+var imageExtensions = map[string]bool{
+	".avif": true, ".bmp": true, ".gif": true, ".ico": true, ".jpeg": true,
+	".jpg": true, ".png": true, ".svg": true, ".webp": true,
 }
-
-// localImagePattern matches an absolute image path that is a whole quoted
-// string ("…", '…', `…`) on one line, or an unquoted CSS url(…). An absolute
-// path is POSIX /… (not protocol-relative //…) or Windows C:\… or C:/…. URLs,
-// data:, blob:, and relative paths never match. RE2 has neither
-// backreferences nor lookahead, so each quote gets its own alternative, and
-// "/ not followed by /" is spelled out.
-var localImagePattern = func() *regexp.Regexp {
-	ext := `\.(?:` + strings.Join(slices.Sorted(maps.Keys(imageMIMETypes)), "|") + `)`
-	path := func(stop string) string {
-		return `((?:/(?:[^/` + stop + `][^` + stop + `]*?)?|[a-z]:[\\/][^` + stop + `]*?)` + ext + `)`
-	}
-	quoted := func(quote string) string { return quote + path(quote+`\r\n`) + quote }
-	return regexp.MustCompile(`(?i)` + quoted(`"`) + `|` + quoted(`'`) + `|` + quoted(`\x60`) +
-		`|url\(\s*` + path(`\s"'\x60()`) + `\s*\)`)
-}()
-
-var windowsDrive = regexp.MustCompile(`(?i)^[a-z]:`)
 
 // openRenderImage opens without blocking, so a FIFO swapped in after the stat
 // cannot hang the read; readRenderImage then refuses it. Tests wrap it.
@@ -69,32 +44,77 @@ type localImage struct {
 	path       string
 }
 
+// findLocalImages finds the absolute image paths a page names, each either a
+// whole one-line string in "…", '…' or `…`, or the unquoted argument of a CSS
+// url(…). URLs, data: and blob: URIs, and relative paths are left alone.
 func findLocalImages(html string) []localImage {
 	var refs []localImage
-	for at := 0; at < len(html); {
-		match := localImagePattern.FindStringSubmatchIndex(html[at:])
-		if match == nil {
+	for at := 0; at < len(html); at++ {
+		skip := strings.IndexAny(html[at:], "\"'`uU")
+		if skip < 0 {
 			break
 		}
-		group := 2
-		for match[group] < 0 {
-			group += 2
+		at += skip
+		start, end, ok := referenceAt(html, at)
+		if ok && isLocalImagePath(html[start:end]) {
+			refs = append(refs, localImage{start: start, end: end, path: html[start:end]})
+			at = end
 		}
-		start, end := at+match[group], at+match[group+1]
-		if utf8.RuneCountInString(html[start:end]) > maxImagePathChars {
-			// T3's bounded pattern fails here and tries the next position.
-			at += match[0] + 1
-			continue
-		}
-		refs = append(refs, localImage{start: start, end: end, path: html[start:end]})
-		at += match[1]
 	}
 	return refs
 }
 
+// referenceAt returns the span of the string quoted at html[at], or of the
+// unquoted url( argument starting there.
+func referenceAt(html string, at int) (start, end int, ok bool) {
+	if quote := html[at]; quote == '"' || quote == '\'' || quote == '`' {
+		length := strings.IndexAny(html[at+1:], string(quote)+"\r\n")
+		if length < 0 || html[at+1+length] != quote {
+			return 0, 0, false
+		}
+		return at + 1, at + 1 + length, true
+	}
+	if !strings.HasPrefix(strings.ToLower(html[at:min(len(html), at+4)]), "url(") {
+		return 0, 0, false
+	}
+	start = skipCSSSpace(html, at+4)
+	end = start
+	for end < len(html) && !strings.ContainsRune(" \t\n\f\r\"'`()", rune(html[end])) {
+		end++
+	}
+	closing := skipCSSSpace(html, end)
+	return start, end, closing < len(html) && html[closing] == ')'
+}
+
+func skipCSSSpace(html string, at int) int {
+	for at < len(html) && strings.ContainsRune(" \t\n\f\r", rune(html[at])) {
+		at++
+	}
+	return at
+}
+
+// isLocalImagePath reports whether ref is an absolute POSIX path (/…, not the
+// protocol-relative //…) or Windows path (C:\… or C:/…) with an image extension.
+func isLocalImagePath(ref string) bool {
+	posix := strings.HasPrefix(ref, "/") && !strings.HasPrefix(ref, "//")
+	if !posix && !hasDriveLetter(ref) {
+		return false
+	}
+	dot := strings.LastIndexByte(ref, '.')
+	return dot >= 0 && imageExtensions[strings.ToLower(ref[dot:])] && utf8.RuneCountInString(ref) <= maxImagePathChars
+}
+
+func hasDriveLetter(ref string) bool {
+	if len(ref) < 3 || ref[1] != ':' || (ref[2] != '\\' && ref[2] != '/') {
+		return false
+	}
+	letter := ref[0] | 0x20
+	return letter >= 'a' && letter <= 'z'
+}
+
 // imageFilePath unescapes a Windows path written inside a JS string literal.
 func imageFilePath(ref string) string {
-	if windowsDrive.MatchString(ref) {
+	if hasDriveLetter(ref) {
 		return strings.ReplaceAll(ref, `\\`, `\`)
 	}
 	return ref
@@ -104,40 +124,28 @@ func formatMiB(n int) string {
 	return fmt.Sprintf("%.1f MiB", float64(n)/(1<<20))
 }
 
-// renderImageError is a whole sentence the agent reads as is.
-type renderImageError string
-
-func (e renderImageError) Error() string { return string(e) }
-
 // missingImagesError refuses a page that names images nobody can read.
 func missingImagesError(missing []string) error {
-	return renderImageError("These local images could not be read: " + strings.Join(missing, ", ") +
-		". Use absolute paths to existing image files, or remove them.")
+	return errors.New("Cannot inline these local images: " + strings.Join(missing, ", ") +
+		". Check their paths, permissions, and image formats.")
 }
 
 // imageTooLarge names an image's size, "12.0 MiB" or "over 10.0 MiB".
 func imageTooLarge(path, size string) error {
-	return renderImageError(fmt.Sprintf("%s is %s; each local image must be at most %s.",
-		path, size, formatMiB(maxRenderImageBytes)))
+	return fmt.Errorf("local image %s exceeds %s (%s); resize it before rendering", path, formatMiB(maxRenderImageBytes), size)
 }
 
 func pageTooLarge(size int) error {
-	return renderImageError(fmt.Sprintf("With its images inlined the page is %s; the limit is %s. Use smaller images.",
-		formatMiB(size), formatMiB(maxRenderPageBytes)))
-}
-
-func dataURIPrefix(path string) string {
-	mime, ok := imageMIMETypes[strings.ToLower(path[strings.LastIndexByte(path, '.')+1:])]
-	if !ok {
-		mime = "application/octet-stream"
-	}
-	return "data:" + mime + ";base64,"
+	return fmt.Errorf("the page exceeds the %s limit after embedding images (%s); use smaller images",
+		formatMiB(maxRenderPageBytes), formatMiB(size))
 }
 
 // inlineLocalImages replaces every absolute local image reference with a data URI.
 // missing lists references that could not be read or are not images; they stay as written.
 func inlineLocalImages(html string) (inlined string, missing []string, err error) {
 	refs := findLocalImages(html)
+
+	// Stat before opening anything: opening a FIFO blocks until a writer comes.
 	var paths []string
 	sizes := map[string]int{}
 	for _, ref := range refs {
@@ -146,67 +154,72 @@ func inlineLocalImages(html string) (inlined string, missing []string, err error
 		}
 		paths = append(paths, ref.path)
 		sizes[ref.path] = -1
-		if info, err := os.Stat(imageFilePath(ref.path)); err == nil && info.Mode().IsRegular() {
-			sizes[ref.path] = int(info.Size())
+		info, err := os.Stat(imageFilePath(ref.path))
+		if err != nil || !info.Mode().IsRegular() {
+			continue
 		}
-	}
-	for _, path := range paths {
-		if sizes[path] > maxRenderImageBytes {
-			return "", nil, imageTooLarge(path, formatMiB(sizes[path]))
+		if info.Size() > maxRenderImageBytes {
+			return "", nil, imageTooLarge(ref.path, formatMiB(int(info.Size())))
 		}
+		sizes[ref.path] = int(info.Size())
 	}
-	pageBytes := len(html)
+	projected := len(html)
 	for _, ref := range refs {
 		if size := sizes[ref.path]; size >= 0 {
-			pageBytes += len(dataURIPrefix(ref.path)) + base64.StdEncoding.EncodedLen(size) - len(ref.path)
+			projected += base64.StdEncoding.EncodedLen(size) - len(ref.path)
 		}
 	}
-	if pageBytes > maxRenderPageBytes {
-		return "", nil, pageTooLarge(pageBytes)
+	if projected > maxRenderPageBytes {
+		return "", nil, pageTooLarge(projected)
 	}
-	// Files can grow after the stat. Each read stops one byte past the image
-	// limit, and reading stops once the images read so far cannot fit the page.
-	dataURIs := map[string]string{}
-	readBytes := 0
+
+	// A file can grow after its stat, so every read is capped and counted again.
+	uris := map[string]string{}
+	encoded := 0
 	for _, path := range paths {
 		if sizes[path] < 0 {
 			continue
 		}
 		data, ok := readRenderImage(imageFilePath(path))
-		if !ok || !isImageBytes(data) {
+		if !ok {
 			continue
 		}
 		if len(data) > maxRenderImageBytes {
-			// The read stopped one byte past the limit, so the real size is unknown.
 			return "", nil, imageTooLarge(path, "over "+formatMiB(maxRenderImageBytes))
 		}
-		readBytes += base64.StdEncoding.EncodedLen(len(data))
-		if readBytes > maxRenderPageBytes {
-			return "", nil, pageTooLarge(readBytes)
+		mime, ok := imageType(data)
+		if !ok {
+			continue
 		}
-		dataURIs[path] = dataURIPrefix(path) + base64.StdEncoding.EncodeToString(data)
+		encoded += base64.StdEncoding.EncodedLen(len(data))
+		if encoded > maxRenderPageBytes {
+			return "", nil, pageTooLarge(encoded)
+		}
+		uris[path] = "data:" + mime + ";base64," + base64.StdEncoding.EncodeToString(data)
 	}
-	var b strings.Builder
-	cursor := 0
+
+	var page strings.Builder
+	last := 0
 	for _, ref := range refs {
-		if uri, ok := dataURIs[ref.path]; ok {
-			b.WriteString(html[cursor:ref.start])
-			b.WriteString(uri)
-			cursor = ref.end
+		if uri, ok := uris[ref.path]; ok {
+			page.WriteString(html[last:ref.start])
+			page.WriteString(uri)
+			last = ref.end
 		}
 	}
-	b.WriteString(html[cursor:])
-	if b.Len() > maxRenderPageBytes {
-		return "", nil, pageTooLarge(b.Len())
+	page.WriteString(html[last:])
+	if page.Len() > maxRenderPageBytes {
+		return "", nil, pageTooLarge(page.Len())
 	}
 	for _, path := range paths {
-		if _, ok := dataURIs[path]; !ok {
+		if _, ok := uris[path]; !ok {
 			missing = append(missing, path)
 		}
 	}
-	return b.String(), missing, nil
+	return page.String(), missing, nil
 }
 
+// readRenderImage reads a regular file, stopping one byte past the image limit.
 func readRenderImage(path string) ([]byte, bool) {
 	file, err := openRenderImage(path)
 	if err != nil {
@@ -220,90 +233,84 @@ func readRenderImage(path string) ([]byte, bool) {
 	return data, err == nil
 }
 
-// isImageBytes reports whether file bytes are an image, whatever the file is
-// named, so a symlink or renamed file cannot carry other data, such as a
-// secret, into a page.
-func isImageBytes(data []byte) bool {
-	head := string(data[:min(len(data), 12)])
-	switch {
-	case strings.HasPrefix(head, "\x89PNG"),
-		strings.HasPrefix(head, "\xff\xd8\xff"),
-		strings.HasPrefix(head, "GIF8"),
-		strings.HasPrefix(head, "\x00\x00\x01\x00"),
-		strings.HasPrefix(head, "BM") && len(head) >= 10 && head[6:10] == "\x00\x00\x00\x00",
-		strings.HasPrefix(head, "RIFF") && len(head) == 12 && head[8:12] == "WEBP",
-		len(head) == 12 && (head[4:] == "ftypavif" || head[4:] == "ftypavis" || head[4:] == "ftypmif1"):
+// imageType names the image format of data from its bytes, never from the
+// file's name, so a renamed file or a symlink cannot carry other data, such
+// as a secret, into a page.
+func imageType(data []byte) (string, bool) {
+	switch mime := http.DetectContentType(data); {
+	case mime == "image/png", mime == "image/jpeg", mime == "image/gif", mime == "image/webp", mime == "image/x-icon":
+		return mime, true
+	case mime == "image/bmp" && isBMP(data):
+		return mime, true
+	case isAVIF(data):
+		return "image/avif", true
+	case isSVG(data):
+		return "image/svg+xml", true
+	}
+	return "", false
+}
+
+// isBMP checks the size of the info header that follows the 14-byte file
+// header; every BMP version uses one of these, so text that merely starts
+// with "BM" is refused.
+func isBMP(data []byte) bool {
+	if len(data) < 18 {
+		return false
+	}
+	switch binary.LittleEndian.Uint32(data[14:18]) {
+	case 12, 16, 40, 52, 56, 64, 108, 124:
 		return true
 	}
-	return hasSVGRoot(string(data[:min(len(data), 4096)]))
+	return false
 }
 
-// isJSSpace matches JavaScript's \s, which T3's hasSvgRoot skips.
-func isJSSpace(r rune) bool {
-	return r == '\uFEFF' || (r != '\u0085' && unicode.IsSpace(r))
-}
-
-// indexAfter returns the index just past token at or after from, or -1 when it never appears.
-func indexAfter(text, token string, from int) int {
-	at := strings.Index(text[from:], token)
-	if at < 0 {
-		return -1
+// isAVIF reports whether data opens with an ISO BMFF ftyp box that lists an
+// AVIF brand, as its major brand or among its compatible brands.
+func isAVIF(data []byte) bool {
+	if len(data) < 16 || string(data[4:8]) != "ftyp" {
+		return false
 	}
-	return from + at + len(token)
-}
-
-// hasSVGRoot reports whether an XML document's root element is <svg>, after
-// any processing instructions, comments, and a doctype. One forward pass, so
-// no input can make it slow, and quoted text never counts as markup.
-func hasSVGRoot(text string) bool {
-	at := 0
-	for at != -1 {
-		for at < len(text) {
-			r, size := utf8.DecodeRuneInString(text[at:])
-			if !isJSSpace(r) {
-				break
-			}
-			at += size
-		}
-		switch rest := text[at:]; {
-		case strings.HasPrefix(rest, "<?"):
-			at = indexAfter(text, "?>", at+2)
-		case strings.HasPrefix(rest, "<!--"):
-			at = indexAfter(text, "-->", at+4)
-		case len(rest) >= 9 && strings.EqualFold(rest[:9], "<!doctype"):
-			at = afterDoctype(text, at+9)
-		default:
-			// XML names are case-sensitive, and only these characters can end one here.
-			return len(rest) >= 5 && strings.HasPrefix(rest, "<svg") && strings.ContainsRune(" \t\r\n/>", rune(rest[4]))
+	size := int(binary.BigEndian.Uint32(data))
+	if size < 16 || size > len(data) || size%4 != 0 {
+		return false
+	}
+	avifBrand := func(at int) bool {
+		brand := string(data[at : at+4])
+		return brand == "avif" || brand == "avis"
+	}
+	if avifBrand(8) {
+		return true
+	}
+	for at := 16; at < size; at += 4 {
+		if avifBrand(at) {
+			return true
 		}
 	}
 	return false
 }
 
-// afterDoctype returns the index just past a doctype whose body starts at
-// from, honoring quotes and its internal subset, or -1 when it never ends.
-func afterDoctype(text string, from int) int {
-	inSubset := false
-	at := from
-	for at != -1 && at < len(text) {
-		switch c := text[at]; {
-		case c == '"' || c == '\'':
-			at = indexAfter(text, string(c), at+1)
-		case inSubset && strings.HasPrefix(text[at:], "<!--"):
-			at = indexAfter(text, "-->", at+4)
-		case inSubset && strings.HasPrefix(text[at:], "<?"):
-			at = indexAfter(text, "?>", at+2)
-		case c == '>' && !inSubset:
-			return at + 1
-		case c == '[':
-			inSubset = true
-			at++
-		case c == ']':
-			inSubset = false
-			at++
-		default:
-			at++
+// isSVG reports whether data is XML whose root element is <svg>.
+func isSVG(data []byte) bool {
+	decoder := xml.NewDecoder(bytes.NewReader(bytes.TrimPrefix(data, []byte("\ufeff"))))
+	decoder.Strict = false
+	decoder.CharsetReader = func(label string, input io.Reader) (io.Reader, error) {
+		if decoded, err := charset.NewReaderLabel(label, input); err == nil {
+			return decoded, nil
+		}
+		return input, nil
+	}
+	for {
+		token, err := decoder.RawToken()
+		if err != nil {
+			return false
+		}
+		switch token := token.(type) {
+		case xml.StartElement:
+			return token.Name.Space == "" && token.Name.Local == "svg"
+		case xml.CharData:
+			if len(bytes.TrimSpace(token)) > 0 {
+				return false
+			}
 		}
 	}
-	return -1
 }
