@@ -842,7 +842,7 @@ export function DeleteArchivedSessionDialog({
 		setError(null);
 		try {
 			// Looked up while the files are there; unpublished only once they are gone.
-			const links = await prepareUnpublish(baseUrl, await sessionDeleteTargets(baseUrl, session), { deleting: [{ sessionId: session.id }] });
+			const links = await prepareUnpublish(baseUrl, await sessionDeleteTargets(baseUrl, session), { deleting: [{ hostId: session.hostId, sessionId: session.id }] });
 			const { error: deleteError } = await (session.hostId ? clientForHost(session.hostId) : apiClient).DELETE("/api/v1/sessions/{sessionId}", {
 				params: { path: { sessionId: session.id }, query: { cleanup: true } },
 			});

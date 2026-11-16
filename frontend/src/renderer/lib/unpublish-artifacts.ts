@@ -43,11 +43,11 @@ const NOTHING_TO_UNPUBLISH: PendingUnpublish = { unpublish: async () => 0 };
 
 const listeners = new Set<() => void>();
 
-/** Publishes still running, by control plane, session and path, with the file each publishes. */
-const publishing = new Map<string, { target: UnpublishTarget; done: Promise<unknown> }>();
+/** Publishes still running, by control plane, host, session and path, with the file each publishes. */
+const publishing = new Map<string, { baseUrl: string; target: UnpublishTarget; done: Promise<unknown> }>();
 
-function publishKey(baseUrl: string, target: Pick<UnpublishTarget, "sessionId" | "path">): string {
-	return JSON.stringify([baseUrl, target.sessionId, target.path]);
+function publishKey(baseUrl: string, target: Pick<UnpublishTarget, "hostId" | "sessionId" | "path">): string {
+	return JSON.stringify([baseUrl, target.hostId ?? null, target.sessionId, target.path]);
 }
 
 /**
@@ -57,7 +57,7 @@ function publishKey(baseUrl: string, target: Pick<UnpublishTarget, "sessionId" |
  */
 export function trackPublish(baseUrl: string, target: UnpublishTarget, done: Promise<unknown>): void {
 	const key = publishKey(baseUrl, target);
-	const entry = { target, done };
+	const entry = { baseUrl, target, done };
 	publishing.set(key, entry);
 	const clear = () => {
 		if (publishing.get(key) === entry) publishing.delete(key);
@@ -65,16 +65,21 @@ export function trackPublish(baseUrl: string, target: UnpublishTarget, done: Pro
 	done.then(clear, clear);
 }
 
-/** What a delete removes: one file, or every file of a session when path is unset. */
-export type DeleteScope = { sessionId: string; path?: string };
+/**
+ * What a delete removes: one file, or every file of a session when path is
+ * unset, on the remote host hostId names, or on this computer when unset.
+ */
+export type DeleteScope = { hostId?: string; sessionId: string; path?: string };
 
 /** Waits for the publishes running on what a delete removes, and returns their files. */
 async function settledPublishes(baseUrl: string, deleting: readonly DeleteScope[]): Promise<UnpublishTarget[]> {
-	const running = [...publishing.entries()].filter(([key, { target }]) =>
-		JSON.parse(key)[0] === baseUrl
-		&& deleting.some((scope) => scope.sessionId === target.sessionId && (scope.path === undefined || scope.path === target.path)));
-	await Promise.allSettled(running.map(([, { done }]) => done));
-	return running.map(([, { target }]) => target);
+	const running = [...publishing.values()].filter((entry) =>
+		entry.baseUrl === baseUrl
+		&& deleting.some((scope) => (scope.hostId ?? null) === (entry.target.hostId ?? null)
+			&& scope.sessionId === entry.target.sessionId
+			&& (scope.path === undefined || scope.path === entry.target.path)));
+	await Promise.allSettled(running.map(({ done }) => done));
+	return running.map(({ target }) => target);
 }
 
 /** Calls listener after links were unpublished here, so link lists are read again. */
@@ -236,7 +241,7 @@ export async function prepareUnpublish(
 ): Promise<PendingUnpublish> {
 	if (!baseUrl) return known.length === 0 ? NOTHING_TO_UNPUBLISH : { unpublish: async () => known.length };
 	const publishedMeanwhile = (await settledPublishes(baseUrl, deleting))
-		.filter((target) => !known.some((file) => file.sessionId === target.sessionId && file.path === target.path));
+		.filter((target) => !known.some((file) => publishKey(baseUrl, file) === publishKey(baseUrl, target)));
 	const files = [...known, ...publishedMeanwhile];
 	if (files.length === 0) return NOTHING_TO_UNPUBLISH;
 	const lookups = await Promise.allSettled(files.map((file) => bridge.inspect({ ...file, baseUrl })));

@@ -509,7 +509,11 @@ function ArtifactViewerBody({
 				</div>}
 				{showingPage && page && noFeedback ? (
 					<ArtifactZoomContext.Provider value={zoomController}>
-						<ArtifactPageFrame key={`${page}:${artifact.updatedAt}`} src={page} title={artifact.name} />
+						{remotePage ? (
+							<HostArtifactPageFrame key={`${page}:${artifact.updatedAt}`} title={artifact.name} url={page} />
+						) : (
+							<ArtifactPageFrame key={`${page}:${artifact.updatedAt}`} src={page} title={artifact.name} />
+						)}
 					</ArtifactZoomContext.Provider>
 				) : showingPage && page ? (
 					<ArtifactZoomContext.Provider value={zoomController}>

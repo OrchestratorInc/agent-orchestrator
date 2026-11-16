@@ -248,3 +248,22 @@ describe("deleteTargets", () => {
 		await expect(deleteTargets(BASE, remote, [{ path: "a.md" }], fake)).resolves.toEqual([target]);
 	});
 });
+
+describe("a running publish and a delete on another host", () => {
+	it("are kept apart, though their session and path match", async () => {
+		const { fake } = bridge({ "same.md": "share-host" });
+		let finish!: () => void;
+		const done = new Promise<void>((resolve) => { finish = resolve; });
+		trackPublish(BASE, { source: "host", hostId: "host-1", sessionId: "ao-1", path: "same.md", projectId: "ao" }, done);
+
+		// A delete of this computer's ao-1/same.md neither waits for nor unpublishes it.
+		await expect((await prepareUnpublish(BASE, [], { deleting: [{ sessionId: "ao-1", path: "same.md" }], bridge: fake })).unpublish()).resolves.toBe(0);
+		expect(fake.inspect).not.toHaveBeenCalled();
+
+		const preparing = prepareUnpublish(BASE, [], { deleting: [{ hostId: "host-1", sessionId: "ao-1", path: "same.md" }], bridge: fake });
+		finish();
+		await (await preparing).unpublish();
+		expect(fake.unpublish).toHaveBeenCalledWith(BASE, "share-host");
+		await done;
+	});
+});
