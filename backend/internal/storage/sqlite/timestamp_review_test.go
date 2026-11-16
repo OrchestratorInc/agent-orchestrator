@@ -16,16 +16,33 @@ import (
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
 )
 
-func TestTimestampCorruptLedgerStillRepairs(t *testing.T) {
-	for name, data := range map[string]string{"empty": "", "garbage": "{broken", "null": "null"} {
+func TestTimestampObsoleteAuditSidecarDoesNotBlockOpen(t *testing.T) {
+	for name, data := range map[string]string{
+		"empty": "", "garbage": "{broken", "null": "null",
+		"stale failure": `{"sessions/1":"obsolete-failure-hash"}`,
+		"directory":     "", "unreadable": "obsolete audit data",
+	} {
 		t.Run(name, func(t *testing.T) {
 			dir := t.TempDir()
 			db := openMigratedTestDBIn(t, dir)
 			if _, err := db.Exec(`INSERT INTO sessions(id,num,harness,activity_state,activity_last_at,is_terminated,created_at,updated_at) VALUES('ledger',1,'aider','idle',CURRENT_TIMESTAMP,0,CURRENT_TIMESTAMP,'2026-10-21 09:00:00 +0530 IST')`); err != nil {
 				t.Fatal(err)
 			}
-			if err := os.WriteFile(filepath.Join(dir, "timestamp-repair-skips.json"), []byte(data), 0o600); err != nil {
-				t.Fatal(err)
+			path := filepath.Join(dir, "timestamp-repair-skips.json")
+			if name == "directory" {
+				if err := os.Mkdir(path, 0o700); err != nil {
+					t.Fatal(err)
+				}
+			} else {
+				if err := os.WriteFile(path, []byte(data), 0o600); err != nil {
+					t.Fatal(err)
+				}
+				if name == "unreadable" {
+					if err := os.Chmod(path, 0); err != nil {
+						t.Fatal(err)
+					}
+					t.Cleanup(func() { _ = os.Chmod(path, 0o600) })
+				}
 			}
 			s, err := Open(dir)
 			if err != nil {
@@ -36,35 +53,9 @@ func TestTimestampCorruptLedgerStillRepairs(t *testing.T) {
 			}
 			var raw string
 			if err := db.QueryRow(`SELECT CAST(updated_at AS TEXT) FROM sessions`).Scan(&raw); err != nil || raw != "2026-10-21 03:30:00 +0000 UTC" {
-				t.Fatalf("corrupt ledger stopped repair: %q %v", raw, err)
+				t.Fatalf("obsolete audit sidecar stopped repair: %q %v", raw, err)
 			}
 		})
-	}
-}
-
-func TestTimestampLegacyFailureLedgerRetries(t *testing.T) {
-	db := openRepairDB(t)
-	const legacy = "2026-10-21 18:15:40 +0200 +0200"
-	if _, err := db.Exec(`INSERT INTO repair_times(id,at) VALUES(1,?)`, legacy); err != nil {
-		t.Fatal(err)
-	}
-	state, err := loadTimestampSkips(context.Background(), db)
-	if err != nil {
-		t.Fatal(err)
-	}
-	// Earlier builds made all constraint failures permanent using this hash.
-	key, hash := timestampSkipKey("repair_times", []any{nil, nil, nil, int64(1), legacy, legacy, nil, nil, nil, nil}, 3)
-	state.rows[key] = strings.TrimPrefix(hash, "policy:")
-	state.dirty = true
-	if err := state.save(); err != nil {
-		t.Fatal(err)
-	}
-	result, err := runTimestampRepair(context.Background(), db, false)
-	if err != nil || result.Repaired != 1 || result.Skipped != 0 {
-		t.Fatalf("old failure ledger prevented retry: %+v %v", result, err)
-	}
-	if err := canScanTime(db, `SELECT at FROM repair_times WHERE id=1`); err != nil {
-		t.Fatal(err)
 	}
 }
 

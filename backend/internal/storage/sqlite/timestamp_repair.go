@@ -28,7 +28,7 @@ var timestampFenceTables = map[string]bool{
 	"sessions": true, "conversation_turns": true, "session_agent_accounts": true,
 	"session_cleanup_facts": true, "usage_sources": true, "usage_bindings": true,
 	"model_usage_events": true, "session_interface_transitions": true,
-	"agent_switches": true, "codex_account_switches": true,
+	"codex_account_switches": true,
 	"review": true, "review_run": true,
 	"conversations": true, "conversation_branches": true, "conversation_messages": true, "conversation_activities": true,
 	"pr": true, "pr_checks": true, "pr_reviews": true, "pr_comment": true, "pr_review_threads": true,
@@ -50,18 +50,14 @@ func repairTimestampTables(ctx context.Context, db *sql.DB, fence bool) error {
 }
 
 func runTimestampRepair(ctx context.Context, db *sql.DB, fence bool) (result timestampRepairResult, err error) {
-	state, err := loadTimestampSkips(ctx, db)
-	if err != nil {
-		return result, err
-	}
-	return runTimestampRepairState(ctx, db, db, fence, state)
+	return runTimestampRepairState(ctx, db, db, fence, newTimestampRepairState())
 }
 
 func runTimestampRepairState(ctx context.Context, db, reader *sql.DB, fence bool, state *timestampRepairState) (result timestampRepairResult, err error) {
 	state.reader = reader
 	state.timestampRepairResult = timestampRepairResult{}
 	state.retry = map[string]bool{}
-	defer func() { result = state.timestampRepairResult; err = errors.Join(err, state.save()) }()
+	defer func() { result = state.timestampRepairResult }()
 	columns, err := timestampColumns(ctx, reader)
 	if err != nil {
 		return result, err
@@ -99,13 +95,6 @@ func runTimestampRepairState(ctx context.Context, db, reader *sql.DB, fence bool
 		}
 		if completed {
 			continue
-		}
-		// Rebuild audit entries for this table, dropping resolved/deleted keys.
-		for key := range state.rows {
-			if strings.HasPrefix(key, table+"/") {
-				delete(state.rows, key)
-				state.dirty = true
-			}
 		}
 		skippedBefore := state.Skipped
 		complete := func() {
@@ -162,11 +151,7 @@ func repairTimestampBatch(ctx context.Context, db *sql.DB, columns []timestampCo
 
 func repairTimestampBatchMode(ctx context.Context, db *sql.DB, columns []timestampColumn, cursor int64, candidatesOnly bool, lastRow int64, state *timestampRepairState) (next int64, done bool, err error) {
 	if state == nil {
-		state, err = loadTimestampSkips(ctx, db)
-		if err != nil {
-			return 0, false, err
-		}
-		defer func() { err = errors.Join(err, state.save()) }()
+		state = newTimestampRepairState()
 	}
 	table := quoteIdentifier(columns[0].table)
 	fields, sets, checks := make([]string, len(columns)), make([]string, len(columns)), make([]string, len(columns))

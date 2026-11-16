@@ -170,12 +170,7 @@ func openWithTimestampOptions(dataDir string, opts timestampOpenOptions) (*Store
 		_ = writeDB.Close()
 		return nil, err
 	}
-	state, err := loadTimestampSkips(context.Background(), readDB)
-	if err != nil {
-		_ = readDB.Close()
-		_ = writeDB.Close()
-		return nil, fmt.Errorf("load timestamp repair state: %w", err)
-	}
+	state := newTimestampRepairState()
 	{
 		started := time.Now()
 		slog.Info("checking legacy timestamps before opening readers")

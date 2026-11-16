@@ -2,7 +2,6 @@ package sqlite
 
 import (
 	"context"
-	"os"
 	"strings"
 	"testing"
 	"time"
@@ -26,13 +25,6 @@ VALUES('preserved',1,'aider','idle',?,0,?,?,?,?);`, legacy, legacy, legacy, lega
 	}
 	for _, name := range []string{"normal", "missing sequence", "validation error", "cleanup error"} {
 		t.Run(name, func(t *testing.T) {
-			ledger, err := loadTimestampSkips(context.Background(), db)
-			if err != nil {
-				t.Fatal(err)
-			}
-			if err := os.Remove(ledger.path); err != nil && !os.IsNotExist(err) {
-				t.Fatal(err)
-			}
 			if _, err := db.Exec(`UPDATE sessions SET activity_last_at=?,created_at=?,updated_at=?,latest_user_prompt_at=?,latest_interaction_at=? WHERE id='preserved'`, legacy, legacy, legacy, legacy, legacy); err != nil {
 				t.Fatal(err)
 			}

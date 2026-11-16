@@ -194,10 +194,12 @@ func TestTimestampFencePreservesCheckRejectedSwitchAndOpensStore(t *testing.T) {
 	slog.SetDefault(slog.New(slog.NewTextHandler(&logs, nil)))
 	defer slog.SetDefault(previous)
 	for range 2 {
-		s, err := Open(dir)
+		done := make(chan struct{})
+		s, err := openWithTimestampOptions(dir, timestampOpenOptions{fenceBudget: time.Minute, repairDone: done})
 		if err != nil {
 			t.Fatalf("CHECK-rejected legacy switch blocked startup: %v", err)
 		}
+		<-done
 		_, found, readErr := s.GetSession(context.Background(), "check-switch")
 		closeErr := s.Close()
 		if readErr != nil || !found || closeErr != nil {
