@@ -13,6 +13,8 @@ import (
 	"strings"
 	"syscall"
 	"unicode/utf8"
+
+	"golang.org/x/net/html/charset"
 )
 
 // A render page runs in an opaque-origin sandbox and cannot load a local file.
@@ -291,7 +293,12 @@ func isAVIF(data []byte) bool {
 func isSVG(data []byte) bool {
 	decoder := xml.NewDecoder(bytes.NewReader(bytes.TrimPrefix(data, []byte("\ufeff"))))
 	decoder.Strict = false
-	decoder.CharsetReader = func(_ string, input io.Reader) (io.Reader, error) { return input, nil }
+	decoder.CharsetReader = func(label string, input io.Reader) (io.Reader, error) {
+		if decoded, err := charset.NewReaderLabel(label, input); err == nil {
+			return decoded, nil
+		}
+		return input, nil
+	}
 	for {
 		token, err := decoder.RawToken()
 		if err != nil {

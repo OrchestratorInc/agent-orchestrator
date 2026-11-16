@@ -132,7 +132,9 @@ func TestImageType(t *testing.T) {
 			`<!DOCTYPE svg PUBLIC "-//W3C//DTD SVG 1.1//EN" "http://www.w3.org/Graphics/SVG/1.1/DTD/svg11.dtd" [` +
 			"\n\t<!ENTITY ns_svg \"http://www.w3.org/2000/svg\">\n\t<!ENTITY ns_xlink \"http://www.w3.org/1999/xlink\">\n]>\n" +
 			`<svg version="1.1" xmlns="&ns_svg;" xmlns:xlink="&ns_xlink;" width="24" height="24"><rect width="24" height="24"/></svg>`, "image/svg+xml"},
-		{"latin-1 svg", "<?xml version=\"1.0\" encoding=\"ISO-8859-1\" standalone=\"no\"?>\n<svg xmlns=\"http://www.w3.org/2000/svg\"><title>caf\xe9</title></svg>", "image/svg+xml"},
+		{"latin-1 svg with a non-ascii root attribute", "<?xml version=\"1.0\" encoding=\"ISO-8859-1\"?><svg aria-label=\"caf\xe9\"/>", "image/svg+xml"},
+		{"windows-1252 svg with a non-ascii root attribute", "<?xml version='1.0' encoding='windows-1252'?>\n<svg xmlns=\"http://www.w3.org/2000/svg\" aria-label=\"\x93quoted\x94\"/>", "image/svg+xml"},
+		{"svg declaring an unknown charset", "<?xml version=\"1.0\" encoding=\"x-made-up\"?><svg/>", "image/svg+xml"},
 		{"text", "OPENAI_API_KEY=sk-test", ""},
 		{"empty", "", ""},
 		{"text starting with BM", "BMW_TOKEN=0123456789abcdef", ""},
