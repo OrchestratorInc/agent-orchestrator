@@ -1644,17 +1644,64 @@ describe("useConversationSkills polling", () => {
 		}
 	});
 
-	it("keeps polling once the catalog loads", async () => {
+	it("rechecks an early empty list quickly, then polls at the normal pace", async () => {
 		vi.useFakeTimers();
 		try {
-			// An empty catalog is a real answer, not a failure: polling continues so a
-			// skill published later becomes visible without a second event channel.
+			// An ACP agent publishes its commands a few seconds after it starts, so the
+			// first answer is often empty. It is asked again every few seconds until the
+			// empty answer has held for the grace period, then once a minute: an empty
+			// catalog is still a real answer, and a skill published later shows up.
 			getMock.mockResolvedValue({ data: { skills: [] } });
 			const queryClient = new QueryClient({
 				defaultOptions: { queries: { retry: false } },
 			});
 
-			renderHook(() => useConversationSkills("ao-skills-ok", true), {
+			const { result } = renderHook(() => useConversationSkills("ao-skills-ok", true), {
+				wrapper: skillsWrapper(queryClient),
+			});
+
+			await act(async () => {
+				await vi.advanceTimersByTimeAsync(0);
+			});
+			expect(getMock).toHaveBeenCalledTimes(1);
+			expect(result.current.loading).toBe(true);
+
+			await act(async () => {
+				await vi.advanceTimersByTimeAsync(10_000);
+			});
+			expect(getMock.mock.calls.length).toBeGreaterThanOrEqual(4);
+
+			await act(async () => {
+				await vi.advanceTimersByTimeAsync(15_000);
+			});
+			// Believed now: `/` is an ordinary character again.
+			expect(result.current.loading).toBe(false);
+			expect(result.current.skills).toEqual([]);
+			const settledCalls = getMock.mock.calls.length;
+
+			await act(async () => {
+				await vi.advanceTimersByTimeAsync(30_000);
+			});
+			expect(getMock).toHaveBeenCalledTimes(settledCalls);
+
+			await act(async () => {
+				await vi.advanceTimersByTimeAsync(35_000);
+			});
+			expect(getMock).toHaveBeenCalledTimes(settledCalls + 1);
+		} finally {
+			vi.useRealTimers();
+		}
+	});
+
+	it("polls once a minute after a non-empty list", async () => {
+		vi.useFakeTimers();
+		try {
+			getMock.mockResolvedValue({ data: { skills: [{ name: "review", displayName: "review", source: "repo" }] } });
+			const queryClient = new QueryClient({
+				defaultOptions: { queries: { retry: false } },
+			});
+
+			renderHook(() => useConversationSkills("ao-skills-full", true), {
 				wrapper: skillsWrapper(queryClient),
 			});
 
@@ -1664,12 +1711,91 @@ describe("useConversationSkills polling", () => {
 			expect(getMock).toHaveBeenCalledTimes(1);
 
 			await act(async () => {
-				await vi.advanceTimersByTimeAsync(60_000);
+				await vi.advanceTimersByTimeAsync(59_000);
+			});
+			expect(getMock).toHaveBeenCalledTimes(1);
+
+			await act(async () => {
+				await vi.advanceTimersByTimeAsync(1_000);
 			});
 			expect(getMock).toHaveBeenCalledTimes(2);
 		} finally {
 			vi.useRealTimers();
 		}
+	});
+
+	it("bounds each read so a provider that never answers cannot hold the list", async () => {
+		getMock.mockResolvedValue({ data: { skills: [] } });
+		const queryClient = new QueryClient({
+			defaultOptions: { queries: { retry: false } },
+		});
+
+		renderHook(() => useConversationSkills("ao-skills-timeout", true), {
+			wrapper: skillsWrapper(queryClient),
+		});
+
+		await waitFor(() => expect(getMock).toHaveBeenCalled());
+		expect(getMock).toHaveBeenCalledWith(
+			"/api/v1/sessions/{sessionId}/conversation/skills",
+			expect.objectContaining({ signal: expect.any(AbortSignal) }),
+		);
+	});
+
+	it("shows the remembered list until the live one arrives", async () => {
+		// `/` must open at once on a chat whose agent is still starting: the list it
+		// reported last time stands in, and the live answer replaces it.
+		let answer: (value: unknown) => void = () => undefined;
+		getMock.mockReturnValue(new Promise((resolve) => { answer = resolve; }));
+		const queryClient = new QueryClient({
+			defaultOptions: { queries: { retry: false } },
+		});
+		const remembered = [{ name: "old-skill", displayName: "old-skill", source: "agent" }];
+
+		const { result } = renderHook(() => useConversationSkills("ao-skills-remembered", true, undefined, remembered), {
+			wrapper: skillsWrapper(queryClient),
+		});
+
+		expect(result.current.skills).toEqual(remembered);
+		expect(result.current.remembered).toBe(true);
+		expect(result.current.loading).toBe(false);
+
+		const live = [{ name: "new-skill", displayName: "new-skill", source: "agent" }];
+		await act(async () => {
+			answer({ data: { skills: live } });
+		});
+		await waitFor(() => expect(result.current.skills).toEqual(live));
+		expect(result.current.remembered).toBe(false);
+	});
+
+	it("keeps the remembered list while an early empty answer may still be filled in", async () => {
+		getMock.mockResolvedValue({ data: { skills: [] } });
+		const queryClient = new QueryClient({
+			defaultOptions: { queries: { retry: false } },
+		});
+		const remembered = [{ name: "old-skill", displayName: "old-skill", source: "agent" }];
+
+		const { result } = renderHook(() => useConversationSkills("ao-skills-early-empty", true, undefined, remembered), {
+			wrapper: skillsWrapper(queryClient),
+		});
+
+		await waitFor(() => expect(getMock).toHaveBeenCalled());
+		expect(result.current.skills).toEqual(remembered);
+	});
+
+	it("shows the remembered list without asking while the agent is not running", () => {
+		const queryClient = new QueryClient({
+			defaultOptions: { queries: { retry: false } },
+		});
+		const remembered = [{ name: "old-skill", displayName: "old-skill", source: "agent" }];
+
+		const { result } = renderHook(() => useConversationSkills("ao-skills-asleep", false, undefined, remembered), {
+			wrapper: skillsWrapper(queryClient),
+		});
+
+		expect(getMock).not.toHaveBeenCalled();
+		expect(result.current.skills).toEqual(remembered);
+		// Nothing is being read, so there is nothing to say is loading.
+		expect(result.current.loading).toBe(false);
 	});
 });
 

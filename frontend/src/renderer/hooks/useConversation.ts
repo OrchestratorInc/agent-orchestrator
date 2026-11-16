@@ -372,6 +372,22 @@ const CONFIG_OPTION_WRITE_TIMEOUT_MS = 60_000;
  */
 const SEND_ANSWER_TIMEOUT_MS = 60_000;
 const SKILLS_POLL_INTERVAL_MS = 60_000;
+/**
+ * Kept well past React Query's 5 minute default: going back to a chat after a
+ * while, its "/" menu must still be there while the agent wakes.
+ */
+const SKILLS_CACHE_MS = 30 * 60_000;
+/** A provider that never answers must not hold the list in a fetch forever. */
+export const SKILLS_REQUEST_TIMEOUT_MS = 10_000;
+/**
+ * ACP agents (Claude among them) publish their commands a few seconds after the
+ * session starts, once the CLI has loaded its plugins and MCP servers. An empty
+ * answer from a controller that just started is usually that gap, not "no
+ * skills", so it is asked again quickly for this long before it is believed.
+ */
+export const EMPTY_SKILLS_GRACE_MS = 20_000;
+export const EMPTY_SKILLS_RECHECK_MS = 2_000;
+const NO_SKILLS: ChatSkill[] = [];
 
 /**
  * Answers that will never change on a retry. SESSION_MODE_MISMATCH is permanent
@@ -1949,8 +1965,22 @@ export function useConversationConfigOptions(sessionId: string | undefined, enab
  * An empty list is a real answer and the composer depends on being able to tell it
  * from a failure — with no skills, `/` has to stay an ordinary character rather than
  * opening an empty menu.
+ *
+ * The live list can only be read from a running controller, which a chat waking
+ * from sleep, starting, or reattaching does not have yet; and an ACP agent
+ * publishes it a few seconds after it starts. Until the live answer is in,
+ * `remembered` (the list this agent last reported in this project) stands in, so
+ * `/` opens at once instead of waiting on the agent. `loading` says a live list is
+ * still on its way and nothing stands in for it.
  */
-export function useConversationSkills(sessionId: string | undefined, enabled: boolean, hostId?: string) {
+export function useConversationSkills(
+	sessionId: string | undefined,
+	enabled: boolean,
+	hostId?: string,
+	remembered: ChatSkill[] = NO_SKILLS,
+) {
+	// When this controller first answered with an empty list: see EMPTY_SKILLS_GRACE_MS.
+	const firstEmptyAt = useRef<number | undefined>(undefined);
 	const query = useQuery({
 		queryKey: conversationSkillsQueryKey(sessionId ?? "", hostId),
 		enabled: Boolean(sessionId) && enabled,
@@ -1960,6 +1990,7 @@ export function useConversationSkills(sessionId: string | undefined, enabled: bo
 		// catalog can be large and changes rarely, so it intentionally refreshes much
 		// less often than conversation state.
 		staleTime: SKILLS_POLL_INTERVAL_MS,
+		gcTime: SKILLS_CACHE_MS,
 		// The catalog is only served once a live controller owns the session; before
 		// then the daemon answers 409 CHAT_CONTROLLER_NOT_READY. A cached "ready"
 		// snapshot can outlive the controller (a restart or interface switch), so a
@@ -1968,23 +1999,45 @@ export function useConversationSkills(sessionId: string | undefined, enabled: bo
 		// poll while that conflict stands; readiness returning re-enables the query
 		// (the controller-gated `enabled`) or invalidates it, which refetches once and
 		// resumes polling on success.
-		refetchInterval: (query) =>
-			apiErrorCode(query.state.error) === "CHAT_CONTROLLER_NOT_READY"
-				? false
-				: SKILLS_POLL_INTERVAL_MS,
+		refetchInterval: (query) => {
+			if (apiErrorCode(query.state.error) === "CHAT_CONTROLLER_NOT_READY") return false;
+			if (query.state.data?.length === 0 && !emptySkillsSettled(firstEmptyAt.current, query.state.dataUpdatedAt)) {
+				return EMPTY_SKILLS_RECHECK_MS;
+			}
+			return SKILLS_POLL_INTERVAL_MS;
+		},
 		retry: false,
-		queryFn: async () => {
+		queryFn: async ({ signal }) => {
 			const { data, error } = await clientForSessionHost(hostId).GET(
 				"/api/v1/sessions/{sessionId}/conversation/skills",
 				{
 					params: { path: { sessionId: sessionId as string } },
+					signal: AbortSignal.any([signal, AbortSignal.timeout(SKILLS_REQUEST_TIMEOUT_MS)]),
 				},
 			);
 			if (error) throw error;
 			return (data?.skills ?? []) as ChatSkill[];
 		},
 	});
-	return { skills: query.data ?? [], isLoading: query.isLoading };
+	const live = query.data;
+	// Restarted on every new controller: `enabled` drops while it starts.
+	if (!enabled || !live || live.length > 0) firstEmptyAt.current = undefined;
+	else firstEmptyAt.current ??= query.dataUpdatedAt;
+	const settled = live !== undefined && (live.length > 0 || emptySkillsSettled(firstEmptyAt.current, query.dataUpdatedAt));
+	const standIn = !settled && remembered.length > 0;
+	const skills = live?.length ? live : standIn ? remembered : (live ?? NO_SKILLS);
+	return {
+		skills,
+		/** True while `skills` is the remembered stand-in rather than the agent's own answer. */
+		remembered: standIn && !live?.length,
+		loading: Boolean(sessionId) && enabled && !settled && skills.length === 0 && !query.error,
+		isLoading: query.isLoading,
+	};
+}
+
+/** An empty list is believed once it has held for the grace period. */
+export function emptySkillsSettled(firstEmptyAt: number | undefined, updatedAt: number): boolean {
+	return firstEmptyAt !== undefined && updatedAt - firstEmptyAt >= EMPTY_SKILLS_GRACE_MS;
 }
 
 /**

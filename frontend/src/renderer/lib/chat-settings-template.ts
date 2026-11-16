@@ -50,10 +50,40 @@ export function rememberChatSettingsTemplate(harness: string, hostId: string | u
 }
 
 const SKILLS_KEY = "ao.chat.skills.v1";
+const PROJECT_SKILLS_KEY = "ao.chat.projectSkills.v1";
+/**
+ * Projects whose own list is kept. A list can run to hundreds of skills with long
+ * descriptions, so only the most recently used projects keep theirs; the rest fall
+ * back to the agent-wide list.
+ */
+export const REMEMBERED_SKILL_PROJECTS = 12;
 
-/** The skills a session of this agent last listed, for a new chat's "/" menu. */
-export function readChatSkills(harness: string, hostId?: string): ChatSkill[] {
+// Insertion order is recency: a write moves its project to the end.
+type ProjectSkills = Record<string, ChatSkill[]>;
+
+function readProjectSkills(): ProjectSkills {
+	try {
+		const parsed: unknown = JSON.parse(storage()?.getItem(PROJECT_SKILLS_KEY) ?? "{}");
+		return parsed && typeof parsed === "object" && !Array.isArray(parsed) ? (parsed as ProjectSkills) : {};
+	} catch {
+		return {};
+	}
+}
+
+/**
+ * The skills a session of this agent last listed, for a "/" menu that has no live
+ * list yet: a new chat, or a session whose agent is still starting or asleep.
+ *
+ * With a project, that project's own list wins, since project skills
+ * (`.claude/skills`, `.agents/skills`) differ between repos; otherwise the list
+ * any session of this agent last reported.
+ */
+export function readChatSkills(harness: string, hostId?: string, projectId?: string): ChatSkill[] {
 	if (!harness) return [];
+	if (projectId) {
+		const own = readProjectSkills()[`${keyFor(harness, hostId)}:${projectId}`];
+		if (Array.isArray(own)) return own;
+	}
 	try {
 		const all: unknown = JSON.parse(storage()?.getItem(SKILLS_KEY) ?? "{}");
 		const skills = all && typeof all === "object" ? (all as Record<string, unknown>)[keyFor(harness, hostId)] : undefined;
@@ -63,13 +93,22 @@ export function readChatSkills(harness: string, hostId?: string): ChatSkill[] {
 	}
 }
 
-export function rememberChatSkills(harness: string, hostId: string | undefined, skills: ChatSkill[]): void {
+export function rememberChatSkills(harness: string, hostId: string | undefined, skills: ChatSkill[], projectId?: string): void {
 	try {
 		const all: Record<string, ChatSkill[]> = JSON.parse(storage()?.getItem(SKILLS_KEY) ?? "{}");
 		const key = keyFor(harness, hostId);
-		if (JSON.stringify(all[key]) === JSON.stringify(skills)) return;
-		all[key] = skills;
-		storage()?.setItem(SKILLS_KEY, JSON.stringify(all));
+		if (JSON.stringify(all[key]) !== JSON.stringify(skills)) {
+			all[key] = skills;
+			storage()?.setItem(SKILLS_KEY, JSON.stringify(all));
+		}
+		if (!projectId) return;
+		const projects = readProjectSkills();
+		const projectKey = `${key}:${projectId}`;
+		if (JSON.stringify(projects[projectKey]) === JSON.stringify(skills)) return;
+		delete projects[projectKey];
+		projects[projectKey] = skills;
+		const kept = Object.entries(projects).slice(-REMEMBERED_SKILL_PROJECTS);
+		storage()?.setItem(PROJECT_SKILLS_KEY, JSON.stringify(Object.fromEntries(kept)));
 	} catch {
 		// Only polish: without it a new chat offers no "/" skills.
 	}
