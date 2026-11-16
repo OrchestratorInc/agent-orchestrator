@@ -194,7 +194,9 @@ function BillingSectionInner({ titleHidden }: { titleHidden?: boolean }) {
 							setPortalFor(offer.name);
 							void openPortal();
 						};
-						let label = t("settings.billing.upgrade");
+						// The control plane sets trialDays only when this org can still start a free trial.
+						const trialDays = offer.trialDays ?? 0;
+						let label = trialDays > 0 ? t("settings.billing.startTrial", { days: trialDays }) : t("settings.billing.upgrade");
 						let onClick: () => void = () => void openCheckout(offer.name);
 						if (isCurrent) {
 							label = t("settings.billing.manage");

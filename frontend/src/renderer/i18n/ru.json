@@ -4149,6 +4149,7 @@
 	"settings.billing.recommended": "Рекомендуем",
 	"settings.billing.current": "Текущий",
 	"settings.billing.upgrade": "Повысить тариф",
+	"settings.billing.startTrial": "Начать пробный период на {{days}} дн.",
 	"settings.billing.switchPlan": "Переключить",
 	"settings.billing.downgrade": "Понизить тариф",
 	"settings.billing.featureAgents_one": "{{count}} облачный агент одновременно",

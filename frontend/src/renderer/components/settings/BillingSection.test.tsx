@@ -97,6 +97,20 @@ describe("BillingSection", () => {
 		expect(mocks.client.createBillingCheckout).toHaveBeenCalledWith("org-1", "starter");
 	});
 
+	it("offers the free trial on the plan the control plane marks, and Checkout starts it", async () => {
+		const trialPlans = [{ ...plans[0], trialDays: 7 }, plans[1]];
+		mocks.client.getBilling.mockResolvedValue({ enabled: true, exempt: false, plan: "free", entitled: false, plans: trialPlans });
+		mocks.client.createBillingCheckout.mockResolvedValue({ url: "https://checkout.stripe.test/cs_trial" });
+		renderSection();
+		await screen.findByText("Starter");
+		expect(within(card("starter")).queryByRole("button", { name: "Upgrade" })).not.toBeInTheDocument();
+		// Pro has no trial, so it keeps the ordinary label.
+		expect(within(card("pro")).getByRole("button", { name: "Upgrade" })).toBeInTheDocument();
+		fireEvent.click(within(card("starter")).getByRole("button", { name: "Start 7-day trial" }));
+		await waitFor(() => expect(mocks.openExternal).toHaveBeenCalledWith("https://checkout.stripe.test/cs_trial"));
+		expect(mocks.client.createBillingCheckout).toHaveBeenCalledWith("org-1", "starter");
+	});
+
 	it("lists what each plan includes and books Enterprise with the founders", async () => {
 		mocks.client.getBilling.mockResolvedValue({ enabled: true, exempt: false, plan: "free", entitled: false, plans });
 		renderSection();

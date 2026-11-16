@@ -3980,6 +3980,7 @@
 	"settings.billing.recommended": "Recommended",
 	"settings.billing.current": "Current",
 	"settings.billing.upgrade": "Upgrade",
+	"settings.billing.startTrial": "Start {{days}}-day trial",
 	"settings.billing.switchPlan": "Switch",
 	"settings.billing.downgrade": "Downgrade",
 	"settings.billing.featureAgents_one": "{{count}} simultaneous cloud agent",

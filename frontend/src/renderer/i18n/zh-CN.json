@@ -3980,6 +3980,7 @@
 	"settings.billing.recommended": "推荐",
 	"settings.billing.current": "当前",
 	"settings.billing.upgrade": "升级",
+	"settings.billing.startTrial": "开始 {{days}} 天试用",
 	"settings.billing.switchPlan": "切换",
 	"settings.billing.downgrade": "降级",
 	"settings.billing.featureAgents_one": "同时运行 {{count}} 个云端代理",

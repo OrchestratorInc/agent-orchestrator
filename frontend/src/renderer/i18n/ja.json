@@ -3998,6 +3998,7 @@
 	"settings.billing.recommended": "おすすめ",
 	"settings.billing.current": "現在",
 	"settings.billing.upgrade": "アップグレード",
+	"settings.billing.startTrial": "{{days}}日間の無料トライアルを開始",
 	"settings.billing.switchPlan": "切り替え",
 	"settings.billing.downgrade": "ダウングレード",
 	"settings.billing.featureAgents_one": "同時に {{count}} クラウドエージェント",

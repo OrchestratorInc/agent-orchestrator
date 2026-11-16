@@ -4078,6 +4078,7 @@
 	"settings.billing.recommended": "Recomendado",
 	"settings.billing.current": "Actual",
 	"settings.billing.upgrade": "Mejorar",
+	"settings.billing.startTrial": "Prueba gratis de {{days}} días",
 	"settings.billing.switchPlan": "Cambiar",
 	"settings.billing.downgrade": "Bajar de plan",
 	"settings.billing.featureAgents_one": "{{count}} agente en la nube simultáneo",

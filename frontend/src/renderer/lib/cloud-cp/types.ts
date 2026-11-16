@@ -1873,6 +1873,8 @@ export interface CloudCpPlanOffer {
 	currency?: string;
 	interval?: string;
 	limits?: CloudCpPlanLimits;
+	/** Days of free trial a Checkout of this plan starts; set only while the org can still take one. */
+	trialDays?: number;
 }
 
 /** POST /orgs/{orgId}/billing/checkout and /billing/portal */

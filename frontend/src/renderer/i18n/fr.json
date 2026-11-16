@@ -4078,6 +4078,7 @@
 	"settings.billing.recommended": "Recommandé",
 	"settings.billing.current": "Actuel",
 	"settings.billing.upgrade": "Passer à ce forfait",
+	"settings.billing.startTrial": "Essai gratuit de {{days}} jours",
 	"settings.billing.switchPlan": "Changer",
 	"settings.billing.downgrade": "Rétrograder",
 	"settings.billing.featureAgents_one": "{{count}} agent cloud simultané",

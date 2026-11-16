@@ -3998,6 +3998,7 @@
 	"settings.billing.recommended": "추천",
 	"settings.billing.current": "현재",
 	"settings.billing.upgrade": "업그레이드",
+	"settings.billing.startTrial": "{{days}}일 무료 체험 시작",
 	"settings.billing.switchPlan": "변경",
 	"settings.billing.downgrade": "다운그레이드",
 	"settings.billing.featureAgents_one": "동시 클라우드 에이전트 {{count}}개",
