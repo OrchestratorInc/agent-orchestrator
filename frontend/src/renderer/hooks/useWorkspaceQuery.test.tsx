@@ -904,18 +904,31 @@ describe("useWorkspaceQuery", () => {
 		await waitFor(() => expect(dataReader.result.current).toHaveLength(1));
 		await waitFor(() => expect(fetchingSeen.at(-1)).toBe(false));
 		const settledRenders = dataRenders;
-		const settledFetching = fetchingSeen.length;
 
-		await act(async () => {
-			await queryClient.refetchQueries({ queryKey: workspaceQueryKey });
+		// Hold the refetch open: observers are notified on a later timer, so a
+		// response that settles in microtasks could end before isFetching is drawn.
+		let release!: () => void;
+		const held = new Promise<void>((resolve) => { release = resolve; });
+		const respond = getMock.getMockImplementation()!;
+		getMock.mockImplementation(async (url: string, ...rest: unknown[]) => {
+			if (url === "/api/v1/sessions") await held;
+			return respond(url, ...rest);
 		});
+		let refetch!: Promise<void>;
+		act(() => {
+			refetch = queryClient.refetchQueries({ queryKey: workspaceQueryKey });
+		});
+		// A reader of isFetching still sees the refetch start and end.
+		await waitFor(() => expect(fetchingSeen.at(-1)).toBe(true));
+		await act(async () => {
+			release();
+			await refetch;
+		});
+		await waitFor(() => expect(fetchingSeen.at(-1)).toBe(false));
 
 		expect(getMock.mock.calls.filter(([url]) => url === "/api/v1/sessions")).toHaveLength(2);
 		// Same lists back: the data reader is not drawn again.
 		expect(dataRenders).toBe(settledRenders);
-		// A reader of isFetching still sees the refetch start and end.
-		expect(fetchingSeen.slice(settledFetching)).toContain(true);
-		expect(fetchingSeen.at(-1)).toBe(false);
 	});
 
 	it("selects only attention-worthy worker sessions for the always-mounted tray", async () => {
