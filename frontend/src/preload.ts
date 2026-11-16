@@ -30,7 +30,7 @@ import {
 } from "./shared/tray";
 import type { DaemonStatus } from "./shared/daemon-status";
 import type { AgentLoginRequest, AgentLoginResponse } from "./main/agent-login-ipc";
-import type { DictationMessage } from "./shared/dictation";
+import { dictationIpc } from "./shared/dictation-ipc";
 import { OPEN_SESSION_DEEP_LINK_CHANNEL } from "./shared/deep-links";
 import type { RemoteHostView } from "./main/remotes-ipc";
 import type { ConnectedHostView } from "./main/remote-registry";
@@ -268,18 +268,7 @@ const api = {
 	triage: {
 		launch: () => ipcRenderer.invoke("triage.launch") as Promise<TriageResult>,
 	},
-	dictation: {
-		start: (run: number) => ipcRenderer.invoke("dictation:start", run) as Promise<void>,
-		stop: () => ipcRenderer.invoke("dictation:stop") as Promise<void>,
-		cancel: () => ipcRenderer.invoke("dictation:cancel") as Promise<void>,
-		onEvent: (listener: (event: DictationMessage) => void) => {
-			const handler = (_event: Electron.IpcRendererEvent, message: DictationMessage) => listener(message);
-			ipcRenderer.on("dictation:event", handler);
-			return () => {
-				ipcRenderer.removeListener("dictation:event", handler);
-			};
-		},
-	},
+	dictation: dictationIpc(ipcRenderer),
 	app: {
 		getVersion: () => ipcRenderer.invoke("app:getVersion") as Promise<string>,
 		chooseDirectory: (input?: string | { title?: string; defaultPath?: string }) => ipcRenderer.invoke("app:chooseDirectory", input) as Promise<string | null>,

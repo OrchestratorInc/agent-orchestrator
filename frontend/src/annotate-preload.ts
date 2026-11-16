@@ -17,7 +17,8 @@ import {
 	type BrowserStyleAdjustment,
 } from "./shared/browser-annotations";
 import { promptPositionForRect, type AnnotationRectLike } from "./shared/browser-annotation-overlay";
-import type { DictationMessage } from "./shared/dictation";
+import { createDictationController } from "./shared/dictation-controller";
+import { dictationIpc } from "./shared/dictation-ipc";
 import { DICTATION_METER_BARS, dictationMeterSteps, runDictationMeter } from "./shared/dictation-meter";
 import { isTrustedUserEvent } from "./shared/trusted-event";
 
@@ -40,13 +41,10 @@ let noticeTimer: ReturnType<typeof setTimeout> | null = null;
 /** Whether the composer may dictate (macOS only), as the shell last said. */
 let dictationAllowed = false;
 /**
- * The dictation running in the composer. Its words replace the selection the
- * run started from; `before`/`after` are the note around it.
+ * Where the running dictation's words go: they replace the selection the run
+ * started from, between `before` and `after`.
  */
-let dictation: {
-	/** The number main tags this run's events with. */
-	run: number;
-	phase: "starting" | "listening" | "finishing";
+let dictationPlacement: {
 	before: string;
 	/** What the run replaces; kept if no words arrive. */
 	selected: string;
@@ -54,10 +52,19 @@ let dictation: {
 	/** Spaces for when the words would otherwise run into the text around them. */
 	prefix: string;
 	suffix: string;
-	unsubscribe: () => void;
-	stopMeter: (() => void) | null;
 } | null = null;
-let lastDictationRun = 0;
+let stopDictationMeter: (() => void) | null = null;
+const dictationTransport = dictationIpc(ipcRenderer);
+/** Native macOS dictation into the comment, run as the chat composer's is (useDictation). */
+const dictation = createDictationController(dictationTransport, {
+	onPhase: () => syncDictationButton(),
+	onText: (text) => showDictatedText(text),
+	onEnd: () => {
+		dictationPlacement = null;
+		syncDictationButton();
+	},
+	onError: (message) => showNotice(message, 6_000),
+});
 
 const ADJUST_MODE_ENABLED = true;
 
@@ -177,7 +184,7 @@ ipcRenderer.on("browser:annotation:action", (_event, action: string) => {
 });
 
 // The tab was hidden, so the user can no longer see or finish the dictation.
-ipcRenderer.on("browser:annotation:stopDictation", () => haltDictation());
+ipcRenderer.on("browser:annotation:stopDictation", () => dictation.halt());
 
 window.addEventListener("beforeunload", cleanupOverlay);
 
@@ -276,7 +283,7 @@ function handleKeyDown(event: KeyboardEvent): void {
 	if (event.key === "Escape") {
 		event.preventDefault();
 		// Escape belongs to dictation while it runs, as in the chat composer.
-		if (dictation) stopDictation();
+		if (dictation.phase !== "idle") dictation.stop();
 		else if (session.draft) closeComposer();
 		else setEnabled(false, "escape");
 	} else if ((event.metaKey || event.ctrlKey) && event.key === "Enter") {
@@ -415,76 +422,29 @@ function showNotice(message: string, durationMs: number): void {
 	}, durationMs);
 }
 
-function onDictationEvent(listener: (event: DictationMessage) => void): () => void {
-	const handler = (_event: Electron.IpcRendererEvent, message: DictationMessage) => listener(message);
-	ipcRenderer.on("dictation:event", handler);
-	return () => {
-		ipcRenderer.removeListener("dictation:event", handler);
-	};
-}
-
-/**
- * Native macOS dictation into the comment, the chat composer's (useDictation)
- * without React: the transcript streams in at the caret while the user speaks.
- */
+/** The transcript streams in at the caret while the user speaks. */
 function startDictation(): void {
 	const draft = session.draft;
 	const textarea = shadow?.querySelector<HTMLTextAreaElement>(".composer-note");
-	if (!draft || !textarea || dictation) return;
+	if (!draft || !textarea || dictation.phase !== "idle") return;
 	const start = textarea.selectionStart ?? draft.body.length;
 	const end = textarea.selectionEnd ?? start;
 	const before = draft.body.slice(0, start);
 	const after = draft.body.slice(end);
-	dictation = {
-		run: ++lastDictationRun,
-		phase: "starting",
+	dictationPlacement = {
 		before,
 		selected: draft.body.slice(start, end),
 		after,
 		// Words are spaced from words, not from the brackets and punctuation around them.
 		prefix: before && !/[\s([{“‘]$/.test(before) ? " " : "",
 		suffix: after && !/^[\s.,;:!?)\]}"'”’…]/.test(after) ? " " : "",
-		unsubscribe: onDictationEvent(handleDictationEvent),
-		stopMeter: null,
 	};
-	syncDictationButton();
-	void ipcRenderer.invoke("dictation:start", dictation.run);
-}
-
-function handleDictationEvent(event: DictationMessage): void {
-	const run = dictation;
-	// A late event from an earlier run cannot end this one.
-	if (!run || event.run !== run.run) return;
-	switch (event.type) {
-		case "listening":
-		case "finishing":
-			run.phase = event.type;
-			syncDictationButton();
-			break;
-		case "text":
-			showDictatedText(event.text);
-			break;
-		case "end":
-			showDictatedText(event.text);
-			endDictation();
-			break;
-		case "error":
-			endDictation();
-			showNotice(event.message, 6_000);
-			break;
-		case "exit":
-			endDictation();
-			showNotice("Dictation stopped unexpectedly.", 6_000);
-			break;
-		case "superseded":
-			endDictation();
-			break;
-	}
+	dictation.start();
 }
 
 /** Shows the transcript so far in place of the previous one. */
 function showDictatedText(text: string): void {
-	const run = dictation;
+	const run = dictationPlacement;
 	const draft = session.draft;
 	if (!run || !draft) return;
 	// Until words arrive the note keeps what the run would replace.
@@ -503,48 +463,22 @@ function showDictatedText(text: string): void {
 	emitState();
 }
 
-/** Ends the run here; the dictated words stay as typed text. */
-function endDictation(): void {
-	const run = dictation;
-	if (!run) return;
-	dictation = null;
-	run.unsubscribe();
-	run.stopMeter?.();
-	syncDictationButton();
-}
-
-/** Stops listening at once, keeping what was dictated. */
-function haltDictation(): void {
-	if (!dictation) return;
-	endDictation();
-	void ipcRenderer.invoke("dictation:cancel");
-}
-
-/** Ends the audio and waits for the recognizer's final wording. */
-function stopDictation(): void {
-	if (!dictation || dictation.phase === "finishing") return;
-	dictation.phase = "finishing";
-	syncDictationButton();
-	void ipcRenderer.invoke("dictation:stop");
-}
-
 function toggleDictation(): void {
-	if (!dictation) startDictation();
-	else stopDictation();
+	if (dictation.phase === "idle") startDictation();
+	else dictation.stop();
 }
 
 /** Puts the mic control and its level meter in step with the running dictation. */
 function syncDictationButton(): void {
-	const run = dictation;
-	const listening = run?.phase === "listening";
-	if (run && listening && !run.stopMeter) run.stopMeter = runDictationMeter(onDictationEvent, drawDictationMeter);
-	if (run && !listening && run.stopMeter) {
-		run.stopMeter();
-		run.stopMeter = null;
+	const listening = dictation.phase === "listening";
+	if (listening && !stopDictationMeter) stopDictationMeter = runDictationMeter(dictationTransport.onEvent, drawDictationMeter);
+	if (!listening && stopDictationMeter) {
+		stopDictationMeter();
+		stopDictationMeter = null;
 	}
 	const button = shadow?.querySelector<HTMLButtonElement>('[data-action="dictate"]');
 	if (!button) return;
-	const dictating = Boolean(run);
+	const dictating = dictation.phase !== "idle";
 	const label = dictating ? "Finish dictation" : "Dictate";
 	button.classList.toggle("dictate-button--active", dictating);
 	button.setAttribute("aria-pressed", String(dictating));
@@ -637,7 +571,7 @@ function renderComposer(): void {
 	const mount = ensureOverlay().querySelector<HTMLElement>(".composer-mount")!;
 	const draft = session.draft;
 	// Saved, discarded or closed: a dictation still running keeps the words it gave.
-	if (!draft) { haltDictation(); mount.innerHTML = ""; return; }
+	if (!draft) { dictation.halt(); mount.innerHTML = ""; return; }
 	const target = selectedElement ?? resolveTarget(draft.target);
 	// Always built in its comment shape, with the input row first: the adjustment
 	// panel is added and removed in place so the row (and the caret) survives the
@@ -659,7 +593,7 @@ function renderComposer(): void {
 	const resize = () => composerAnchorRect && resizeAndPositionComposer(form, textarea, composerAnchorRect);
 	textarea.addEventListener("input", () => {
 		// Typing takes over from dictation, so the next transcript update cannot overwrite it.
-		haltDictation();
+		dictation.halt();
 		draft.body = textarea.value;
 		resize();
 		emitState();
@@ -667,7 +601,7 @@ function renderComposer(): void {
 	textarea.addEventListener("keydown", (event) => {
 		event.stopPropagation();
 		if (event.key === "Enter" && !event.shiftKey && !event.metaKey && !event.ctrlKey) { event.preventDefault(); saveDraft(); }
-		else if (event.key === "Escape" && dictation) { event.preventDefault(); stopDictation(); }
+		else if (event.key === "Escape" && dictation.phase !== "idle") { event.preventDefault(); dictation.stop(); }
 		else if (event.key === "Escape") { event.preventDefault(); closeComposer(); }
 		else if (event.key === "Enter" && (event.metaKey || event.ctrlKey)) { event.preventDefault(); void submitBatch(); }
 	});
@@ -677,7 +611,7 @@ function renderComposer(): void {
 		event.stopPropagation();
 		if (event.key === "Escape") {
 			event.preventDefault();
-			if (dictation) stopDictation();
+			if (dictation.phase !== "idle") dictation.stop();
 			else closeComposer();
 		}
 	});
@@ -1937,7 +1871,7 @@ function overlayStyles(): string {
 	`;
 }
 
-function cleanupOverlay(): void { haltDictation(); host?.remove(); host = null; shadow = null; }
+function cleanupOverlay(): void { dictation.halt(); host?.remove(); host = null; shadow = null; }
 function isOverlayEvent(event: Event): boolean { return Boolean(host && event.composedPath().includes(host)); }
 function waitForPaint(): Promise<void> { return new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(() => resolve()))); }
 function nextAnnotationNumber(): number { return session.annotations.reduce((max, item) => Math.max(max, item.number), 0) + 1; }
