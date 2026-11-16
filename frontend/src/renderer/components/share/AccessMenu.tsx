@@ -1,4 +1,5 @@
 import { Check, ChevronDown, Eye, PencilLine, X } from "@/components/app-icons";
+import { createContext, useContext } from "react";
 import { useTranslation } from "react-i18next";
 import { cn } from "../../lib/utils";
 import type { CloudCpShareRole } from "../../lib/cloud-cp";
@@ -14,6 +15,9 @@ import { capLabel, roleLabel, type ShareModeCap, type ShareScope } from "./acces
 import { Button } from "../ui/button";
 
 const ALL_CAPS: readonly ShareModeCap[] = ["read-only", "standard", "trusted"];
+
+/** Set around a share surface whose session may only be watched (an AO Cloud automation run's): menus offer viewer access only. */
+export const ShareViewerOnlyContext = createContext(false);
 
 /**
  * One row's access, as a borderless trigger like the Settings selects: the
@@ -33,6 +37,7 @@ export function AccessMenu({
 	align = "end",
 	caps = ALL_CAPS,
 	describedBy,
+	viewerOnly,
 }: {
 	role: CloudCpShareRole;
 	modeCap: ShareModeCap;
@@ -49,8 +54,11 @@ export function AccessMenu({
 	caps?: readonly ShareModeCap[];
 	/** The id of text that explains this access, read with the trigger. */
 	describedBy?: string;
+	/** Offers viewer access only; defaults to ShareViewerOnlyContext. */
+	viewerOnly?: boolean;
 }) {
 	const { t } = useTranslation();
+	const onlyViewer = useContext(ShareViewerOnlyContext) || viewerOnly === true;
 	const level = roleLabel(t, role, scope);
 	const label = triggerLabel ?? level;
 	// Picking what is already set changes nothing, so it asks for nothing.
@@ -84,14 +92,16 @@ export function AccessMenu({
 					selected={role === "viewer"}
 					onSelect={() => choose({ role: "viewer", modeCap: "read-only" })}
 				/>
-				<AccessOption
-					icon={<PencilLine />}
-					label={roleLabel(t, "editor", scope)}
-					description={scope === "project" ? t("share.accessStartSessionsDescription") : t("share.accessEditorDescription")}
-					selected={role === "editor"}
-					onSelect={() => choose({ role: "editor", modeCap: role === "editor" && caps.includes(modeCap) ? modeCap : "standard" })}
-				/>
-				{role === "editor" ? (
+				{onlyViewer ? null : (
+					<AccessOption
+						icon={<PencilLine />}
+						label={roleLabel(t, "editor", scope)}
+						description={scope === "project" ? t("share.accessStartSessionsDescription") : t("share.accessEditorDescription")}
+						selected={role === "editor"}
+						onSelect={() => choose({ role: "editor", modeCap: role === "editor" && caps.includes(modeCap) ? modeCap : "standard" })}
+					/>
+				)}
+				{role === "editor" && !onlyViewer ? (
 					<>
 						<DropdownMenuSeparator />
 						<DropdownMenuLabel>{t("share.modeCap")}</DropdownMenuLabel>

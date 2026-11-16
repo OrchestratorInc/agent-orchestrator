@@ -6,6 +6,8 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import { fireEvent } from "@testing-library/react";
 import { AUTOMATION_TEMPLATES } from "../lib/automation-templates";
 import { AutomationsView } from "./AutomationsView";
+import { useUiStore } from "../stores/ui-store";
+import { CloudCpError } from "../lib/cloud-cp";
 import { TooltipProvider } from "./ui/tooltip";
 
 vi.mock("./NotificationCenter", () => ({ NotificationCenter: () => <button type="button" aria-label="Notifications" /> }));
@@ -22,6 +24,16 @@ const mocks = vi.hoisted(() => ({
 	workerTuning: {} as { model?: string; mode?: string; effort?: string },
 	baseTuning: {} as { model?: string; mode?: string; effort?: string },
 	workspaces: [] as Array<Record<string, unknown>>,
+	cloudAvailable: false,
+	cloudAutomations: [] as Array<Record<string, unknown>>,
+	createCloud: vi.fn(),
+	runNow: vi.fn(),
+	subscribe: vi.fn(),
+	updateCloud: vi.fn(),
+	cloudUserId: "u1",
+	cloudRuns: [] as Array<Record<string, unknown>>,
+	navigate: vi.fn(),
+	providerConnections: undefined as Array<{ provider: string; validationState: string }> | undefined,
 }));
 
 vi.mock("../lib/telemetry", async (importOriginal) => ({
@@ -33,7 +45,7 @@ vi.mock("../lib/platform", async (importOriginal) => ({
 	...await importOriginal<typeof import("../lib/platform")>(),
 }));
 
-vi.mock("@tanstack/react-router", () => ({ useNavigate: () => vi.fn() }));
+vi.mock("@tanstack/react-router", () => ({ useNavigate: () => mocks.navigate }));
 const codexSnapshot = { id: "codex", label: "Codex", installation: { state: "installed", freshness: "fresh" }, authentication: { state: "authorized", freshness: "fresh" }, effectiveReadiness: "ready", usageCount: 3, lastUsedAt: null };
 const ampSnapshot = { ...codexSnapshot, id: "amp", label: "Amp" };
 const cursorSnapshot = { id: "cursor", label: "Cursor", installation: { state: "not_installed", freshness: "fresh" }, authentication: { state: "unknown", freshness: "stale" }, effectiveReadiness: "not_ready", usageCount: 0, lastUsedAt: null };
@@ -64,6 +76,26 @@ vi.mock("../hooks/useAutomations", () => ({
 	useAutomationRuns: () => ({ data: [], isLoading: false, error: mocks.runsError }),
 }));
 
+vi.mock("../hooks/useProviderConnections", () => ({ useProviderConnections: () => ({ data: mocks.providerConnections }) }));
+vi.mock("../hooks/useCloudOffering", () => ({ useCloudOffering: () => ({ chatHarnesses: ["claude-code", "codex", "cursor"] }) }));
+vi.mock("../hooks/useCloudAutomations", async (importOriginal) => ({
+	...await importOriginal<typeof import("../hooks/useCloudAutomations")>(),
+	useCloudAutomations: () => ({ data: mocks.cloudAvailable ? mocks.cloudAutomations : undefined, available: mocks.cloudAvailable, orgId: "org-1", userId: mocks.cloudUserId, isLoading: false, error: null }),
+	useCreateCloudAutomation: () => ({ mutateAsync: mocks.createCloud, reset: vi.fn(), isPending: false, error: null }),
+	useUpdateCloudAutomation: () => ({ mutateAsync: mocks.updateCloud, reset: vi.fn(), isPending: false, error: null }),
+	useDeleteCloudAutomation: () => ({ mutate: vi.fn(), reset: vi.fn(), isPending: false, error: null }),
+	useRunCloudAutomationNow: () => ({ mutateAsync: mocks.runNow, isPending: false }),
+	useSubscribeCloudAutomation: () => ({ mutateAsync: mocks.subscribe, isPending: false }),
+	useCloudAutomationRuns: () => ({ data: mocks.cloudRuns, isLoading: false, error: null }),
+}));
+
+async function pickTime(user: ReturnType<typeof userEvent.setup>, dialog: HTMLElement, hour: string, minute: string) {
+	await user.click(within(dialog).getByRole("combobox", { name: "Hour" }));
+	await user.click(await screen.findByRole("option", { name: hour }));
+	await user.click(within(dialog).getByRole("combobox", { name: "Minute" }));
+	await user.click(await screen.findByRole("option", { name: minute }));
+}
+
 function renderView(ui: ReactNode = <AutomationsView />) {
 	const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
 	return render(ui, { wrapper: ({ children }) => <QueryClientProvider client={client}><TooltipProvider>{children}</TooltipProvider></QueryClientProvider> });
@@ -78,7 +110,7 @@ async function openBlankCreate(user: Pick<typeof userEvent, "click">) {
 }
 
 describe("AutomationsView", () => {
-	beforeEach(() => { mocks.workspaces = [{ id: "demo", name: "Demo" }]; mocks.defaultWorker = "codex"; mocks.defaultsLoaded = true; mocks.fallbackAmp = false; mocks.workerTuning = {}; mocks.baseTuning = {}; mocks.automations = []; mocks.runsError = null; mocks.create.mockReset(); mocks.update.mockReset(); mocks.capture.mockReset(); });
+	beforeEach(() => { mocks.workspaces = [{ id: "demo", name: "Demo" }]; mocks.defaultWorker = "codex"; mocks.defaultsLoaded = true; mocks.fallbackAmp = false; mocks.workerTuning = {}; mocks.baseTuning = {}; mocks.automations = []; mocks.runsError = null; mocks.cloudAvailable = false; mocks.cloudAutomations = []; mocks.providerConnections = undefined; mocks.cloudUserId = "u1"; mocks.cloudRuns = []; mocks.updateCloud.mockReset(); mocks.createCloud.mockReset(); mocks.runNow.mockReset(); mocks.subscribe.mockReset(); mocks.create.mockReset(); mocks.update.mockReset(); mocks.capture.mockReset(); });
 
 	it("shows a discoverable empty state and create action", () => {
 		renderView();
@@ -181,7 +213,8 @@ describe("AutomationsView", () => {
 		expect(within(dialog).getByRole("textbox", { name: "Prompt" })).toHaveValue("Review");
 		expect(within(dialog).getByRole("combobox", { name: "Project" })).toBeDisabled();
 		expect(within(dialog).getByRole("combobox", { name: "Agent" })).toHaveTextContent("Codex");
-		expect(within(dialog).getByLabelText("Time")).toHaveValue("09:30");
+		expect(within(dialog).getByRole("combobox", { name: "Hour" })).toHaveTextContent("09");
+		expect(within(dialog).getByRole("combobox", { name: "Minute" })).toHaveTextContent("30");
 
 		const name = within(dialog).getByRole("textbox", { name: "Name" });
 		await user.clear(name);
@@ -412,9 +445,7 @@ describe("AutomationsView", () => {
 		await user.click(screen.getByRole("option", { name: "Weekly" }));
 		await user.click(within(dialog).getByRole("combobox", { name: "Day" }));
 		await user.click(screen.getByRole("option", { name: "Friday" }));
-		const time = within(dialog).getByLabelText("Time");
-		await user.clear(time);
-		await user.type(time, "0930");
+		await pickTime(user, dialog, "09", "30");
 		await user.click(within(dialog).getByRole("button", { name: "Create automation" }));
 
 		expect(mocks.create).toHaveBeenCalledWith(
@@ -490,12 +521,7 @@ describe("AutomationsView", () => {
 		await user.click(screen.getByRole("option", { name: "Weekly" }));
 		await user.click(within(dialog).getByRole("combobox", { name: "Day" }));
 		await user.click(screen.getByRole("option", { name: "Wednesday" }));
-		const hour = within(dialog).getByLabelText("Hour");
-		const minute = within(dialog).getByLabelText("Minute");
-		await user.clear(hour);
-		await user.type(hour, "16");
-		await user.clear(minute);
-		await user.type(minute, "45");
+		await pickTime(user, dialog, "16", "45");
 		await user.click(within(dialog).getByRole("button", { name: "Create automation" }));
 
 		expect(mocks.create).toHaveBeenCalledWith(
@@ -609,52 +635,36 @@ describe("AutomationsView", () => {
 		expect(view.container.querySelector('[data-slot="select-content"]')).toBeNull();
 	});
 
-	it("uses a 24-hour text time field that only accepts clock digits", async () => {
+	it("keeps a daily or weekly time's hour and minute together in one Time field", async () => {
+		const user = userEvent.setup();
+		renderView();
+		await openBlankCreate(user);
+		const dialog = screen.getByRole("dialog", { name: "Create automation" });
+		const field = within(dialog).getByText("Time").parentElement!;
+		expect(within(field).getByRole("combobox", { name: "Hour" })).toBeInTheDocument();
+		expect(within(field).getByRole("combobox", { name: "Minute" })).toBeInTheDocument();
+		await user.click(within(dialog).getByRole("combobox", { name: "Schedule" }));
+		await user.click(screen.getByRole("option", { name: "Weekly" }));
+		const weekly = within(dialog).getByText("Time").parentElement!;
+		expect(within(weekly).getByRole("combobox", { name: "Hour" })).toBeInTheDocument();
+		expect(within(weekly).getByRole("combobox", { name: "Minute" })).toBeInTheDocument();
+	});
+
+	it("picks the time from 24-hour hour and minute lists", async () => {
 		const user = userEvent.setup();
 		renderView();
 		await openBlankCreate(user);
 
 		const dialog = screen.getByRole("dialog", { name: "Create automation" });
-		const time = within(dialog).getByLabelText("Time");
-		expect(time).toHaveAttribute("type", "text");
-		expect(time).toHaveAttribute("inputMode", "numeric");
-		await user.clear(time);
-		await user.type(time, "0705");
-		expect(time).toHaveValue("07:05");
-	});
-
-	it("rejects out-of-range time digits while typing", async () => {
-		const user = userEvent.setup();
-		renderView();
-		await openBlankCreate(user);
-
-		const time = within(screen.getByRole("dialog", { name: "Create automation" })).getByLabelText("Time");
-		await user.clear(time);
-		await user.type(time, "9999");
-		expect(time).toHaveValue("09");
-		await user.clear(time);
-		await user.type(time, "2560");
-		expect(time).toHaveValue("20");
-		await user.clear(time);
-		await user.type(time, "2360");
-		expect(time).toHaveValue("23:0");
-		await user.clear(time);
-		await user.type(time, "2359");
-		expect(time).toHaveValue("23:59");
-	});
-
-	it("rejects an empty time before create", async () => {
-		const user = userEvent.setup();
-		renderView();
-		await openBlankCreate(user);
-
-		const time = screen.getByLabelText("Time");
-		await user.clear(time);
-		await user.click(screen.getByRole("button", { name: "Create automation" }));
-
-		expect(time).toBeInvalid();
-		expect(time).toHaveAccessibleDescription("Choose a valid time.");
-		expect(mocks.create).not.toHaveBeenCalled();
+		expect(within(dialog).queryByRole("textbox", { name: "Time" })).not.toBeInTheDocument();
+		await user.click(within(dialog).getByRole("combobox", { name: "Hour" }));
+		expect(screen.getAllByRole("option").map((option) => option.textContent)).toEqual(Array.from({ length: 24 }, (_, hour) => String(hour).padStart(2, "0")));
+		await user.click(screen.getByRole("option", { name: "07" }));
+		await user.click(within(dialog).getByRole("combobox", { name: "Minute" }));
+		expect(screen.getAllByRole("option")).toHaveLength(60);
+		await user.click(screen.getByRole("option", { name: "05" }));
+		expect(within(dialog).getByRole("combobox", { name: "Hour" })).toHaveTextContent("07");
+		expect(within(dialog).getByRole("combobox", { name: "Minute" })).toHaveTextContent("05");
 	});
 
 	it("uses AO's shared centered dialog without a purpose selector", async () => {
@@ -724,7 +734,8 @@ describe("AutomationsView", () => {
 		vi.setSystemTime(new Date(2026, 8, 22, 14, 7, 0));
 		renderView();
 		await openBlankCreate(userEvent);
-		expect(screen.getByLabelText("Time")).toHaveValue("14:07");
+		expect(screen.getByRole("combobox", { name: "Hour" })).toHaveTextContent("14");
+		expect(screen.getByRole("combobox", { name: "Minute" })).toHaveTextContent("07");
 		vi.useRealTimers();
 	});
 
@@ -916,5 +927,311 @@ describe("automation starters", () => {
 		await user.click(within(dialog).getByRole("button", { name: "Create automation" }));
 		expect(mocks.create).not.toHaveBeenCalled();
 		expect(within(dialog).getByText("Keep the prompt within 4,096 UTF-8 bytes.")).toBeInTheDocument();
+	});
+	describe("AO Cloud", () => {
+		const cloudAutomation = {
+			id: "c1", projectId: "cloud-1", displayName: "Nightly debt", prompt: "List the top 10 debt items.", harness: "codex", mode: "trusted",
+			rrule: "FREQ=DAILY;BYHOUR=7;BYMINUTE=0;BYSECOND=0", timezone: "UTC", enabled: true, nextRunAt: "2026-11-15T07:00:00Z", maxRuntimeMinutes: 60,
+			branch: "ao/automation-c1", runAs: { userId: "u2", displayName: "Priya" }, consecutiveFailures: 0, subscribed: false, canEdit: false,
+			createdAt: "2026-11-14T00:00:00Z", updatedAt: "2026-11-14T00:00:00Z",
+			latestRun: { id: "r1", automationId: "c1", scheduledFor: "2026-11-14T07:00:00Z", trigger: "schedule", status: "skipped", attemptCount: 1, errorCode: "SANDBOX_QUOTA_EXCEEDED", errorMessage: "full", createdAt: "2026-11-14T07:00:00Z" },
+		};
+		beforeEach(() => {
+			mocks.workspaces = [{ id: "demo", name: "Demo" }, { id: "cloud-1", name: "Cloud app", kind: "cloud", cloudOrgId: "org-1" }];
+			// "automation starters" does not reset the cloud mocks, so each test starts from none.
+			mocks.cloudAvailable = false; mocks.cloudAutomations = []; mocks.providerConnections = undefined; mocks.cloudUserId = "u1"; mocks.cloudRuns = [];
+			mocks.createCloud.mockReset(); mocks.updateCloud.mockReset(); mocks.runNow.mockReset(); mocks.subscribe.mockReset();
+		});
+
+		it("offers no Runs on choice without the automations feature", async () => {
+			const user = userEvent.setup();
+			renderView();
+			await openBlankCreate(user);
+			expect(within(screen.getByRole("dialog")).queryByRole("combobox", { name: "Runs on" })).not.toBeInTheDocument();
+		});
+
+		it("names the local choice for any desktop platform, not only a Mac", async () => {
+			const user = userEvent.setup();
+			mocks.cloudAvailable = true;
+			renderView();
+			await openBlankCreate(user);
+			const runsOn = within(screen.getByRole("dialog")).getByRole("combobox", { name: "Runs on" });
+			expect(runsOn).toHaveTextContent("This computer");
+			await user.click(runsOn);
+			expect(screen.getAllByRole("option").map((option) => option.textContent)).toEqual(["This computer", "AO Cloud"]);
+		});
+
+		it("creates a cloud automation in a cloud project with its rule and timezone", async () => {
+			const user = userEvent.setup();
+			mocks.cloudAvailable = true;
+			mocks.createCloud.mockResolvedValue({});
+			renderView();
+			await openBlankCreate(user);
+			const dialog = within(screen.getByRole("dialog"));
+			await user.click(dialog.getByRole("combobox", { name: "Runs on" }));
+			await user.click(await screen.findByRole("option", { name: "AO Cloud" }));
+			await user.click(dialog.getByRole("combobox", { name: "Project" }));
+			// Only the organization's cloud projects run in AO Cloud.
+			expect(screen.queryByRole("option", { name: "Demo" })).not.toBeInTheDocument();
+			await user.click(await screen.findByRole("option", { name: "Cloud app" }));
+			await user.type(dialog.getByRole("textbox", { name: "Name" }), "Nightly debt");
+			await user.type(dialog.getByRole("textbox", { name: "Prompt" }), "List the top 10 debt items.");
+			await pickTime(user, screen.getByRole("dialog"), "07", "00");
+			await user.click(dialog.getByRole("button", { name: "Create automation" }));
+			await waitFor(() => expect(mocks.createCloud).toHaveBeenCalled());
+			expect(mocks.create).not.toHaveBeenCalled();
+			expect(mocks.createCloud.mock.calls[0][0]).toMatchObject({
+				projectId: "cloud-1", displayName: "Nightly debt", prompt: "List the top 10 debt items.", harness: "claude-code",
+				rrule: "FREQ=DAILY;BYHOUR=7;BYMINUTE=0;BYSECOND=0", timezone: Intl.DateTimeFormat().resolvedOptions().timeZone,
+			});
+		});
+
+		it("offers only the agents logged in to AO Cloud", async () => {
+			const user = userEvent.setup();
+			mocks.cloudAvailable = true;
+			mocks.providerConnections = [{ provider: "codex", validationState: "valid" }, { provider: "cursor", validationState: "invalid" }, { provider: "github", validationState: "valid" }];
+			renderView();
+			await openBlankCreate(user);
+			const dialog = within(screen.getByRole("dialog"));
+			await user.click(dialog.getByRole("combobox", { name: "Runs on" }));
+			await user.click(await screen.findByRole("option", { name: "AO Cloud" }));
+			expect(dialog.getByRole("combobox", { name: "Agent" })).toHaveTextContent("Codex");
+			await user.click(dialog.getByRole("combobox", { name: "Agent" }));
+			expect(screen.getAllByRole("option").map((option) => option.textContent)).toEqual(["Codex"]);
+		});
+
+		it("asks for an agent login when none is connected to AO Cloud", async () => {
+			const user = userEvent.setup();
+			mocks.cloudAvailable = true;
+			mocks.providerConnections = [];
+			renderView();
+			await openBlankCreate(user);
+			const dialog = within(screen.getByRole("dialog"));
+			await user.click(dialog.getByRole("combobox", { name: "Runs on" }));
+			await user.click(await screen.findByRole("option", { name: "AO Cloud" }));
+			expect(dialog.getByRole("combobox", { name: "Agent" })).toHaveTextContent("Log in to an agent first");
+			expect(dialog.getByText("An automation runs with your agent login in AO Cloud. Log in to an agent first.")).toBeInTheDocument();
+		});
+
+		it("does not send a cloud automation without an agent, and opens the cloud agent logins", async () => {
+			const user = userEvent.setup();
+			const openGlobalSettings = vi.fn();
+			useUiStore.setState({ openGlobalSettings });
+			mocks.cloudAvailable = true;
+			mocks.providerConnections = [];
+			renderView();
+			await openBlankCreate(user);
+			const dialog = within(screen.getByRole("dialog"));
+			await user.click(dialog.getByRole("combobox", { name: "Runs on" }));
+			await user.click(await screen.findByRole("option", { name: "AO Cloud" }));
+			expect(dialog.getByRole("combobox", { name: "Agent" })).toBeDisabled();
+			expect(dialog.getByRole("button", { name: "Create automation" })).toBeDisabled();
+			await user.click(dialog.getByRole("button", { name: "Go to Harness settings" }));
+			expect(openGlobalSettings).toHaveBeenCalledWith("harness", expect.objectContaining({ harnessView: "cloud" }));
+			expect(mocks.createCloud).not.toHaveBeenCalled();
+		});
+
+		it("lists cloud automations with who they run as, and runs one now", async () => {
+			const user = userEvent.setup();
+			mocks.cloudAvailable = true;
+			mocks.cloudAutomations = [cloudAutomation];
+			mocks.runNow.mockResolvedValue({});
+			renderView();
+			const row = screen.getByRole("heading", { name: /Nightly debt/ }).closest("article")!;
+			expect(within(row).getByText("AO Cloud")).toBeInTheDocument();
+			expect(within(row).getByText("Runs as Priya")).toBeInTheDocument();
+			expect(within(row).getByRole("alert")).toHaveTextContent("Skipped: your workspace is at its session limit.");
+			// Only its owner, creator or an admin may change it.
+			expect(within(row).queryByRole("button", { name: "Edit Nightly debt" })).not.toBeInTheDocument();
+			await user.click(within(row).getByRole("button", { name: "Run Nightly debt now" }));
+			expect(mocks.runNow).toHaveBeenCalledWith("c1");
+			await user.click(within(row).getByRole("button", { name: "Get notified about Nightly debt" }));
+			expect(mocks.subscribe).toHaveBeenCalledWith({ id: "c1", subscribed: true });
+		});
+
+		it("lines up a read-only row's actions with an editable row's", () => {
+			mocks.cloudAvailable = true;
+			mocks.cloudAutomations = [cloudAutomation, { ...cloudAutomation, id: "c2", displayName: "Docs drift", canEdit: true }];
+			renderView();
+			const actions = (name: RegExp) => within(screen.getByRole("heading", { name }).closest("article")!).getByRole("switch").closest("div.flex")!;
+			// Run now, notify, Edit and Delete (or their places), then the switch.
+			expect(actions(/Nightly debt/).children).toHaveLength(5);
+			expect(actions(/Docs drift/).children).toHaveLength(5);
+		});
+
+		it("keeps the notify toggle's name and reports its state with aria-pressed", () => {
+			mocks.cloudAvailable = true;
+			mocks.cloudAutomations = [{ ...cloudAutomation, subscribed: true }];
+			renderView();
+			const row = screen.getByRole("heading", { name: /Nightly debt/ }).closest("article")!;
+			expect(within(row).getByRole("button", { name: "Get notified about Nightly debt" })).toHaveAttribute("aria-pressed", "true");
+		});
+
+		it("shows a schedule in the automation's own timezone when it differs from this computer's", () => {
+			mocks.cloudAvailable = true;
+			const here = Intl.DateTimeFormat().resolvedOptions().timeZone;
+			const elsewhere = here === "Pacific/Chatham" ? "Asia/Kolkata" : "Pacific/Chatham";
+			mocks.cloudAutomations = [{ ...cloudAutomation, timezone: elsewhere }, { ...cloudAutomation, id: "c2", displayName: "Local zone", timezone: here }];
+			renderView();
+			const row = screen.getByRole("heading", { name: /Nightly debt/ }).closest("article")!;
+			expect(within(row).getByText(`Daily at 7:00 AM (${elsewhere})`)).toBeInTheDocument();
+			const local = screen.getByRole("heading", { name: /Local zone/ }).closest("article")!;
+			expect(within(local).getByText("Daily at 7:00 AM")).toBeInTheDocument();
+		});
+
+		it("explains, in the person's language, why a run was skipped or did not finish", () => {
+			mocks.cloudAvailable = true;
+			mocks.cloudAutomations = [
+				{ ...cloudAutomation, latestRun: { ...cloudAutomation.latestRun, errorCode: "WORKER_SLOTS_FULL", errorMessage: "Your plan is full." } },
+				{ ...cloudAutomation, id: "c2", displayName: "Docs drift", latestRun: { ...cloudAutomation.latestRun, automationId: "c2", errorCode: "AUTOMATION_DISABLED", errorMessage: "off" } },
+				{ ...cloudAutomation, id: "c3", displayName: "Security scan", latestRun: { ...cloudAutomation.latestRun, automationId: "c3", status: "failed", errorCode: "agent_provider_required", errorMessage: "Connect your Codex credential" } },
+			];
+			renderView();
+			const row = (name: RegExp) => screen.getByRole("heading", { name }).closest("article")!;
+			expect(within(row(/Nightly debt/)).getByRole("alert")).toHaveTextContent("Skipped: your plan's limit was reached.");
+			expect(within(row(/Docs drift/)).getByRole("alert")).toHaveTextContent("Skipped: the automation was turned off before this run started.");
+			expect(within(row(/Security scan/)).getByRole("alert")).toHaveTextContent("Failed: the person it runs as has no valid agent login in AO Cloud.");
+		});
+
+		it("shows why it was turned off, and the agent's name, in its details", async () => {
+			const user = userEvent.setup();
+			mocks.cloudAvailable = true;
+			mocks.cloudAutomations = [{ ...cloudAutomation, enabled: false, nextRunAt: undefined, consecutiveFailures: 5, disabledReason: "Turned off after 5 failed runs in a row." }];
+			renderView();
+			await user.click(screen.getByRole("button", { name: "Show run history for Nightly debt" }));
+			const details = document.getElementById("automation-history-cloud-c1")!;
+			expect(within(details).getByText("Turned off after 5 failed runs in a row.")).toBeInTheDocument();
+			expect(within(details).getByText("Codex")).toBeInTheDocument();
+		});
+
+		it("shows a settled run's session as ended and viewable, never as running", async () => {
+			const user = userEvent.setup();
+			mocks.cloudAvailable = true;
+			mocks.navigate.mockReset();
+			const run = (id: string, status: string, sessionId: string) => ({ id, automationId: "c1", scheduledFor: "2026-11-15T07:00:00Z", trigger: "schedule", status, attemptCount: 1, sessionId, createdAt: "2026-11-15T07:00:00Z" });
+			mocks.cloudRuns = [run("r3", "running", "s-live"), run("r2", "running", "s-deleted"), run("r1", "completed", "s-done")];
+			// The control plane ends a run's session when the run settles; one deleted mid-run reads terminated before the run settles.
+			mocks.workspaces = [{ id: "demo", name: "Demo" }, { id: "cloud-1", name: "Cloud app", kind: "cloud", cloudOrgId: "org-1", sessions: [
+				{ id: "s-live", isTerminated: false }, { id: "s-deleted", isTerminated: true }, { id: "s-done", isTerminated: true },
+			] }];
+			mocks.cloudAutomations = [{ ...cloudAutomation, latestRun: mocks.cloudRuns[0] }];
+			renderView();
+			await user.click(screen.getByRole("button", { name: "Show run history for Nightly debt" }));
+			const history = document.getElementById("automation-history-cloud-c1")!;
+			const entry = (sessionId: string) => within(history).getAllByTestId("automation-run").find((element) => element.dataset.session === sessionId)!;
+			expect(within(entry("s-live")).getByRole("button", { name: "Open session" })).toBeInTheDocument();
+			expect(within(entry("s-live")).queryByText("Session ended")).toBeNull();
+			for (const ended of ["s-deleted", "s-done"]) {
+				expect(within(entry(ended)).getByText("Session ended")).toBeInTheDocument();
+				expect(within(entry(ended)).queryByRole("button", { name: "Open session" })).toBeNull();
+			}
+			await user.click(within(entry("s-done")).getByRole("button", { name: "View session" }));
+			expect(mocks.navigate).toHaveBeenCalledWith({ to: "/projects/$projectId/sessions/$sessionId", params: { projectId: "cloud-1", sessionId: "s-done" } });
+		});
+
+		it("saves only what an edit changed, and nothing when it changed nothing", async () => {
+			const user = userEvent.setup();
+			mocks.cloudAvailable = true;
+			mocks.cloudAutomations = [{ ...cloudAutomation, canEdit: true, runAs: { userId: "u1", displayName: "Me" } }];
+			mocks.updateCloud.mockResolvedValue({});
+			renderView();
+			await user.click(screen.getByRole("button", { name: "Edit Nightly debt" }));
+			let dialog = screen.getByRole("dialog", { name: "Edit automation" });
+			await user.click(within(dialog).getByRole("button", { name: "Save changes" }));
+			await waitFor(() => expect(screen.queryByRole("dialog", { name: "Edit automation" })).not.toBeInTheDocument());
+			expect(mocks.updateCloud).not.toHaveBeenCalled();
+
+			await user.click(screen.getByRole("button", { name: "Edit Nightly debt" }));
+			dialog = screen.getByRole("dialog", { name: "Edit automation" });
+			const name = within(dialog).getByRole("textbox", { name: "Name" });
+			await user.clear(name);
+			await user.type(name, "Weekly debt");
+			await user.click(within(dialog).getByRole("button", { name: "Save changes" }));
+			await waitFor(() => expect(mocks.updateCloud).toHaveBeenCalledTimes(1));
+			expect(mocks.updateCloud).toHaveBeenCalledWith({ id: "c1", body: { displayName: "Weekly debt" } });
+		});
+
+		it("says turning a teammate's automation on makes it run as you, and why it could not", async () => {
+			const user = userEvent.setup();
+			mocks.cloudAvailable = true;
+			mocks.cloudAutomations = [{ ...cloudAutomation, canEdit: true, enabled: false, nextRunAt: undefined }];
+			mocks.updateCloud.mockRejectedValue(new CloudCpError("Connect and validate your Codex credential first.", { status: 422, code: "agent_provider_required" }));
+			renderView();
+			const row = screen.getByRole("heading", { name: /Nightly debt/ }).closest("article")!;
+			const toggle = within(row).getByRole("switch", { name: "Enable Nightly debt" });
+			await user.hover(toggle);
+			expect(await screen.findByRole("tooltip")).toHaveTextContent("Turning it on makes it run as you, with your Codex login in AO Cloud.");
+			await user.click(toggle);
+			expect(mocks.updateCloud).toHaveBeenCalledWith({ id: "c1", body: { enabled: true } });
+			expect(await screen.findByText("Turning it on makes it run as you. Log in to Codex in AO Cloud first.")).toBeInTheDocument();
+		});
+
+		it("tells an editor who is not its run-as person that saving makes it run as them", async () => {
+			const user = userEvent.setup();
+			mocks.cloudAvailable = true;
+			mocks.cloudAutomations = [{ ...cloudAutomation, canEdit: true }];
+			renderView();
+			await user.click(screen.getByRole("button", { name: "Edit Nightly debt" }));
+			const dialog = screen.getByRole("dialog", { name: "Edit automation" });
+			expect(within(dialog).getByText("Saving makes it run as you, with your Codex login in AO Cloud.")).toBeInTheDocument();
+		});
+
+		it("tells the person it runs as nothing about it running as them", async () => {
+			const user = userEvent.setup();
+			mocks.cloudAvailable = true;
+			mocks.cloudAutomations = [{ ...cloudAutomation, canEdit: true, enabled: false, nextRunAt: undefined, runAs: { userId: "u1", displayName: "Me" } }];
+			mocks.updateCloud.mockRejectedValue(new CloudCpError("Connect and validate your Codex credential first.", { status: 422, code: "agent_provider_required" }));
+			renderView();
+			const row = screen.getByRole("heading", { name: /Nightly debt/ }).closest("article")!;
+			const toggle = within(row).getByRole("switch", { name: "Enable Nightly debt" });
+			await user.hover(toggle);
+			await new Promise((resolve) => setTimeout(resolve, 500));
+			expect(screen.queryByRole("tooltip")).not.toBeInTheDocument();
+			await user.click(toggle);
+			expect(await screen.findByText("Connect your agent account in AO Cloud first: the automation runs with it.")).toBeInTheDocument();
+			await user.click(within(row).getByRole("button", { name: "Edit Nightly debt" }));
+			const dialog = screen.getByRole("dialog", { name: "Edit automation" });
+			expect(within(dialog).queryByText(/Saving makes it run as you/)).not.toBeInTheDocument();
+		});
+
+		it("says why Run now is off while a run is in flight, on hover and to the keyboard", async () => {
+			const user = userEvent.setup();
+			mocks.cloudAvailable = true;
+			mocks.cloudAutomations = [{ ...cloudAutomation, latestRun: { ...cloudAutomation.latestRun, status: "running", errorCode: undefined, errorMessage: undefined } }];
+			// A disabled button takes no pointer events (the Button's disabled:pointer-events-none).
+			const style = document.head.appendChild(document.createElement("style"));
+			style.textContent = "button:disabled { pointer-events: none; }";
+			try {
+				renderView();
+				const row = screen.getByRole("heading", { name: /Nightly debt/ }).closest("article")!;
+				const runNow = within(row).getByRole("button", { name: "Run Nightly debt now" });
+				expect(runNow).toBeDisabled();
+				const trigger = runNow.closest<HTMLElement>("[data-slot=tooltip-trigger]")!;
+				await user.hover(trigger);
+				expect(await screen.findByRole("tooltip")).toHaveTextContent("Already running");
+				await user.unhover(trigger);
+				await waitFor(() => expect(screen.queryByRole("tooltip")).not.toBeInTheDocument());
+				// Tab from the row's expander reaches the explanation, not the next button.
+				within(row).getByRole("button", { name: "Show run history for Nightly debt" }).focus();
+				await user.tab();
+				expect(await screen.findByRole("tooltip")).toHaveTextContent("Already running");
+			} finally {
+				style.remove();
+			}
+		});
+
+		it("keeps showing a run in flight that a newer skipped occurrence hides, with Run now off", () => {
+			mocks.cloudAvailable = true;
+			const skipped = { ...cloudAutomation.latestRun, id: "r2", scheduledFor: "2026-11-16T14:19:00Z", errorCode: "PREVIOUS_RUN_ACTIVE", errorMessage: "The previous run was still going, so this one was skipped." };
+			const manual = { id: "r1", automationId: "c1", scheduledFor: "2026-11-16T14:11:00Z", trigger: "manual", status: "running", attemptCount: 1, sessionId: "s-live", createdAt: "2026-11-16T14:11:00Z" };
+			mocks.cloudAutomations = [{ ...cloudAutomation, latestRun: skipped, hiddenInFlightRun: manual }];
+			renderView();
+			const row = screen.getByRole("heading", { name: /Nightly debt/ }).closest("article")!;
+			expect(within(row).getByText("Last run Running")).toBeInTheDocument();
+			expect(within(row).queryByText("Last run Skipped")).not.toBeInTheDocument();
+			// The skip still says why that occurrence did not run.
+			expect(within(row).getByRole("alert")).toHaveTextContent("Skipped: the previous run was still going.");
+			expect(within(row).getByRole("button", { name: "Run Nightly debt now" })).toBeDisabled();
+		});
 	});
 });

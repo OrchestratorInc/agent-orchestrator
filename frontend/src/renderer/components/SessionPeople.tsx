@@ -116,7 +116,7 @@ function SessionPersonAvatar({ person }: { person: SessionPerson }) {
  * from the dialog or from Project settings. An orchestrator is never shared on
  * its own: its Share shares the whole project.
  */
-export function SessionPeopleControl({ orgId, projectId, sessionId, canShare, sessionName, projectName, standaloneAgent, shareProject = false }: {
+export function SessionPeopleControl({ orgId, projectId, sessionId, canShare, sessionName, projectName, standaloneAgent, shareProject = false, viewOnly }: {
 	orgId: string;
 	projectId: string;
 	sessionId: string;
@@ -127,6 +127,8 @@ export function SessionPeopleControl({ orgId, projectId, sessionId, canShare, se
 	standaloneAgent?: boolean;
 	/** The session is the project's orchestrator: Share opens the whole project, with no session to switch to. */
 	shareProject?: boolean;
+	/** An AO Cloud automation run's session: shared only to watch, with teams and by link. */
+	viewOnly?: boolean;
 }) {
 	const { t } = useTranslation();
 	const { userId } = useCloudCp();
@@ -160,6 +162,7 @@ export function SessionPeopleControl({ orgId, projectId, sessionId, canShare, se
 					projectName={projectName}
 					people={teams}
 					standaloneAgent={standaloneAgent}
+					viewOnly={viewOnly}
 				/>
 			) : null}
 		</>

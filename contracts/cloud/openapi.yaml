@@ -33,6 +33,7 @@ tags:
   - name: Remote Hosts
   - name: Push Devices
   - name: Billing
+  - name: Automations
 paths:
   /api/cloud/v1/me:
     get:
@@ -411,7 +412,9 @@ paths:
         artifact_share_limit_reached for a new or restored document over the
         free plan's link limit. Paid plans have no link limit. An older
         control plane refuses an update with another name with 409
-        artifact_share_name_changed.
+        artifact_share_name_changed. The images and other files an HTML
+        page refers to by relative path are uploaded under this upload
+        with createArtifactShareFileUpload and listed when finalizing.
       requestBody:
         required: true
         content:
@@ -467,6 +470,65 @@ paths:
           description: The upload was cancelled.
         default:
           $ref: "#/components/responses/Error"
+  /api/cloud/v1/me/artifact-shares/uploads/files:
+    post:
+      operationId: createArtifactShareFileUpload
+      tags: [Artifacts]
+      description: >-
+        Starts uploading one file the page being uploaded (uploadToken, from
+        createArtifactShareUpload) refers to by relative path, such as an
+        image. The link serves it at path under its root, so
+        <img src="images/a.png"> in the page loads the file whose path is
+        images/a.png. Any file type but video may be included, and there is
+        no file size limit. Its parts go as the page's do
+        (presignArtifactShareParts, PUT each, abortArtifactShareUpload to
+        cancel); finish it with completeArtifactShareFileUpload. 400
+        invalid_request for a path that is absolute, has an empty, "." or
+        ".." segment, a backslash or a control character, or is reserved
+        (raw, or under _ao/ or a first segment starting with ~); 429
+        artifact_share_rate_limited past the hourly allowance. A control
+        plane that predates included files answers 404. 415
+        artifact_share_type_unsupported for video (.mp4, .m4v, .mov, .webm,
+        .ogv, .avi, .mkv), as for a link's own file.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/ArtifactShareFileUploadInput"
+      responses:
+        "201":
+          description: The file's upload, ready for its parts.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ArtifactShareUpload"
+        default:
+          $ref: "#/components/responses/Error"
+  /api/cloud/v1/me/artifact-shares/uploads/files/complete:
+    post:
+      operationId: completeArtifactShareFileUpload
+      tags: [Artifacts]
+      description: >-
+        Finishes an included file's upload from every one of its parts, in
+        order, and answers the fileToken finalizeArtifactShare lists. Errors
+        are finalizeArtifactShare's. A file no finalize lists before
+        expiresAt is deleted.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/ArtifactShareFileCompleteInput"
+      responses:
+        "200":
+          description: The finished file.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ArtifactShareFileUploaded"
+        default:
+          $ref: "#/components/responses/Error"
   /api/cloud/v1/me/artifact-shares/finalize:
     post:
       operationId: finalizeArtifactShare
@@ -479,7 +541,10 @@ paths:
         400 artifact_share_parts_invalid when the parts do not make up the
         upload; 409 artifact_share_upload_gone when it was already finalized,
         cancelled or expired (start again); 400 artifact_share_upload_invalid
-        for a token that is not this user's or has expired.
+        for a token that is not this user's or has expired, or a fileToken
+        that is not one of this upload's link; 400
+        artifact_share_too_many_files for more than 200 files; 409
+        artifact_share_upload_gone when an included file's upload expired.
       requestBody:
         required: true
         content:
@@ -1334,6 +1399,209 @@ paths:
                     $ref: "#/components/schemas/Project"
                   session:
                     $ref: "#/components/schemas/Session"
+        default:
+          $ref: "#/components/responses/Error"
+  /api/cloud/v1/orgs/{orgId}/automations:
+    parameters:
+      - $ref: "#/components/parameters/OrgId"
+    get:
+      operationId: listAutomations
+      tags: [Automations]
+      description: >-
+        The organization's automations, newest first, each with its latest
+        run. Every member sees every automation of the organization's
+        projects. Offered when offering.features lists automations; every
+        /automations route answers 404 otherwise.
+      parameters:
+        - name: projectId
+          in: query
+          required: false
+          schema:
+            type: string
+            format: uuid
+        - $ref: "#/components/parameters/Limit"
+        - $ref: "#/components/parameters/Cursor"
+      responses:
+        "200":
+          description: A page of automations.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AutomationList"
+        default:
+          $ref: "#/components/responses/Error"
+    post:
+      operationId: createAutomation
+      tags: [Automations]
+      description: >-
+        Schedule a prompt for a project's worker to run in AO Cloud. It runs
+        as the caller, with their personal coding-agent credential for the
+        harness (422 agent_provider_required without a validated one), and
+        they are subscribed to its results. Refused with 409
+        AUTOMATION_LIMIT_REACHED when the organization has as many as it may,
+        422 AUTOMATION_PROJECT_UNSUPPORTED for a standalone agent's project,
+        and 422 validation_error for an invalid field or schedule.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CreateAutomationInput"
+      responses:
+        "201":
+          description: Automation created.
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: false
+                required: [automation]
+                properties:
+                  automation:
+                    $ref: "#/components/schemas/Automation"
+        default:
+          $ref: "#/components/responses/Error"
+  /api/cloud/v1/orgs/{orgId}/automations/{automationId}:
+    parameters:
+      - $ref: "#/components/parameters/OrgId"
+      - $ref: "#/components/parameters/AutomationId"
+    get:
+      operationId: getAutomation
+      tags: [Automations]
+      description: One automation of the organization, with its latest run.
+      responses:
+        "200":
+          description: The automation with its latest run.
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: false
+                required: [automation]
+                properties:
+                  automation:
+                    $ref: "#/components/schemas/Automation"
+        default:
+          $ref: "#/components/responses/Error"
+    patch:
+      operationId: updateAutomation
+      tags: [Automations]
+      description: >-
+        Change an automation; omitted fields keep their values. Only the
+        person it runs as, its creator and the organization's admins may
+        (403 AUTOMATION_EDIT_FORBIDDEN). Changing anything but enabled, or
+        turning the automation on when the caller is not already its runAs,
+        makes the caller the person it runs as (runAs), with their own
+        credential: a caller without a validated credential for the harness
+        gets 422 agent_provider_required. Turning it off changes only
+        enabled. The next run is computed afresh, so
+        turning an automation back on never runs the occurrences it missed.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/UpdateAutomationInput"
+      responses:
+        "200":
+          description: Automation updated.
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: false
+                required: [automation]
+                properties:
+                  automation:
+                    $ref: "#/components/schemas/Automation"
+        default:
+          $ref: "#/components/responses/Error"
+    delete:
+      operationId: deleteAutomation
+      tags: [Automations]
+      description: >-
+        Delete an automation and its run history. The session of a run in
+        flight ends with it; every run's transcript and artifacts stay.
+        Allowed to whoever may edit it.
+      responses:
+        "204":
+          description: Automation deleted.
+        default:
+          $ref: "#/components/responses/Error"
+  /api/cloud/v1/orgs/{orgId}/automations/{automationId}/runs:
+    parameters:
+      - $ref: "#/components/parameters/OrgId"
+      - $ref: "#/components/parameters/AutomationId"
+    get:
+      operationId: listAutomationRuns
+      tags: [Automations]
+      description: The automation's runs, newest occurrence first.
+      parameters:
+        - $ref: "#/components/parameters/Limit"
+        - $ref: "#/components/parameters/Cursor"
+      responses:
+        "200":
+          description: A page of runs.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AutomationRunList"
+        default:
+          $ref: "#/components/responses/Error"
+    post:
+      operationId: runAutomationNow
+      tags: [Automations]
+      description: >-
+        Run the automation now, as the caller with their own credential for
+        its harness (422 agent_provider_required without a validated one).
+        Any member may. Refused with 409 AUTOMATION_RUN_ACTIVE while a run is
+        in flight. The control plane does not replay this command for a
+        reused Idempotency-Key: a retry while the run is in flight gets
+        AUTOMATION_RUN_ACTIVE, and one after it finished starts another run.
+        The run starts within seconds; follow it in the run list.
+      parameters:
+        - $ref: "#/components/parameters/IdempotencyKey"
+      responses:
+        "202":
+          description: Run queued.
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: false
+                required: [run]
+                properties:
+                  run:
+                    $ref: "#/components/schemas/AutomationRun"
+        default:
+          $ref: "#/components/responses/Error"
+  /api/cloud/v1/orgs/{orgId}/automations/{automationId}/subscription:
+    parameters:
+      - $ref: "#/components/parameters/OrgId"
+      - $ref: "#/components/parameters/AutomationId"
+    put:
+      operationId: subscribeAutomation
+      tags: [Automations]
+      description: Be notified when the automation's runs finish or fail.
+      responses:
+        "200":
+          description: Subscribed.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AutomationSubscription"
+        default:
+          $ref: "#/components/responses/Error"
+    delete:
+      operationId: unsubscribeAutomation
+      tags: [Automations]
+      responses:
+        "200":
+          description: Unsubscribed.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AutomationSubscription"
         default:
           $ref: "#/components/responses/Error"
   /api/cloud/v1/orgs/{orgId}/chat-search:
@@ -4811,6 +5079,13 @@ components:
       schema:
         type: string
         format: uuid
+    AutomationId:
+      name: automationId
+      in: path
+      required: true
+      schema:
+        type: string
+        format: uuid
     CueId:
       name: cueId
       in: path
@@ -5676,7 +5951,8 @@ components:
             edited (editQueuedMessage), queued-delete when a queued message can
             be deleted without stopping a started turn (deleteQueuedMessage),
             queued-steer when a queued message can be steered into the running
-            turn (steerQueuedMessage). Empty when none apply.
+            turn (steerQueuedMessage), automations when cloud automations can
+            be scheduled (createAutomation). Empty when none apply.
           items:
             type: string
         maxAttachmentBytes:
@@ -6458,6 +6734,319 @@ components:
         lastError:
           type: string
           description: Why the last poll failed; absent when it did not.
+    AutomationHarness:
+      type: string
+      enum: [claude-code, codex, cursor]
+      description: >-
+        Harnesses an automation can run: those with a Chat controller, whose
+        opening turn tells the control plane the run finished.
+    AutomationMode:
+      type: string
+      enum: [standard, trusted]
+    AutomationRunStatus:
+      type: string
+      enum: [pending, starting, running, completed, failed, skipped, timed_out]
+      description: >-
+        pending, starting and running are in flight. completed means the
+        session's opening turn finished. skipped means it did not start: the
+        previous run was still going (PREVIOUS_RUN_ACTIVE), the automation
+        was turned off before it started (AUTOMATION_DISABLED), or the
+        organization or plan was full (the create-session refusal's code:
+        SANDBOX_QUOTA_EXCEEDED, SESSION_LIMIT_REACHED, WORKER_SLOTS_FULL,
+        ORCHESTRATOR_SLOTS_FULL, WINDOW_LIMIT_REACHED, WEEKLY_LIMIT_REACHED).
+        failed means it started and did not finish, or its start was refused
+        for any other reason. timed_out means it reached maxRuntimeMinutes.
+        A run's session ends when the run reaches completed, failed or
+        timed_out.
+    AutomationRun:
+      type: object
+      additionalProperties: false
+      required: [id, automationId, scheduledFor, trigger, status, attemptCount, createdAt]
+      properties:
+        id:
+          type: string
+          format: uuid
+        automationId:
+          type: string
+          format: uuid
+        scheduledFor:
+          type: string
+          format: date-time
+          description: The occurrence it ran for; the moment it was asked for, for a manual run.
+        trigger:
+          type: string
+          enum: [schedule, manual]
+        triggeredByUserId:
+          type: string
+          format: uuid
+          description: Who asked for a manual run.
+        status:
+          $ref: "#/components/schemas/AutomationRunStatus"
+        sessionId:
+          type: string
+          format: uuid
+          description: >-
+            The session it ran in, once started. The session ends when the run
+            does (completed, failed or timed_out), as deleteSession ends one: its
+            sandbox is deleted and its transcript, artifacts and pull requests
+            stay. It can be restored to continue the work; the automation's next
+            run ends a restored one again, since it holds the shared branch.
+        attemptCount:
+          type: integer
+          minimum: 0
+        startedAt:
+          type: string
+          format: date-time
+        finishedAt:
+          type: string
+          format: date-time
+        errorCode:
+          type: string
+          description: >-
+            Why a skipped, failed or timed_out run did not finish: a skip's
+            code (AutomationRunStatus), TIMED_OUT, AGENT_FAILED (the opening
+            turn failed), SESSION_ENDED (its session was deleted first),
+            START_FAILED, or the create-session refusal's own code (such as
+            agent_provider_required). Clients show errorMessage for a code
+            they do not know.
+        errorMessage:
+          type: string
+          description: The reason in words, for a person to read.
+        createdAt:
+          type: string
+          format: date-time
+    Automation:
+      type: object
+      additionalProperties: false
+      required:
+        - id
+        - projectId
+        - displayName
+        - prompt
+        - harness
+        - mode
+        - rrule
+        - timezone
+        - enabled
+        - maxRuntimeMinutes
+        - branch
+        - runAs
+        - consecutiveFailures
+        - subscribed
+        - canEdit
+        - createdAt
+        - updatedAt
+      description: >-
+        A prompt a project's worker runs on a schedule in AO Cloud. Each run
+        is one session, started as runAs. All runs share one branch and
+        keep at most one open pull request per repository on it: a run
+        updates the pull request an earlier run left open, and once that is
+        merged or closed the next run moves to a new branch. Run sessions
+        can be shared only to watch, with teams and by link.
+      properties:
+        id:
+          type: string
+          format: uuid
+        projectId:
+          type: string
+          format: uuid
+        displayName:
+          type: string
+        prompt:
+          type: string
+        harness:
+          $ref: "#/components/schemas/AutomationHarness"
+        model:
+          type: string
+        reasoningEffort:
+          type: string
+        mode:
+          $ref: "#/components/schemas/AutomationMode"
+        requestedOutput:
+          $ref: "#/components/schemas/RequestedOutput"
+        rrule:
+          type: string
+          description: The canonical rule, with its DTSTART anchor.
+        timezone:
+          type: string
+          description: The IANA timezone the rule runs in.
+        enabled:
+          type: boolean
+        nextRunAt:
+          type: string
+          format: date-time
+          description: Absent while disabled.
+        maxRuntimeMinutes:
+          type: integer
+          minimum: 5
+          maximum: 480
+        branch:
+          type: string
+          description: The branch its runs work on.
+        runAs:
+          type: object
+          additionalProperties: false
+          required: [userId]
+          description: >-
+            Whose credential its scheduled runs use: whoever last changed
+            what it does or when, or turned it on.
+          properties:
+            userId:
+              type: string
+              format: uuid
+            email:
+              type: string
+            displayName:
+              type: string
+        createdByUserId:
+          type: string
+          format: uuid
+        consecutiveFailures:
+          type: integer
+          minimum: 0
+          description: >-
+            Scheduled runs in a row that failed or timed out; a completed
+            scheduled run resets it, and skipped and manual runs leave it. At 5
+            the automation is turned off.
+        disabledReason:
+          type: string
+          description: >-
+            Why it was turned off automatically, such as after 5 scheduled
+            runs in a row that failed or timed out, in words for a person to
+            read. Absent while enabled or turned off by a person.
+        subscribed:
+          type: boolean
+          description: Whether the caller is notified of its runs.
+        canEdit:
+          type: boolean
+          description: Whether the caller may change or delete it.
+        latestRun:
+          $ref: "#/components/schemas/AutomationRun"
+        createdAt:
+          type: string
+          format: date-time
+        updatedAt:
+          type: string
+          format: date-time
+    CreateAutomationInput:
+      type: object
+      additionalProperties: false
+      required: [projectId, displayName, prompt, harness, timezone]
+      description: Exactly one of rrule and cron. Occurrences must be at least an hour apart.
+      properties:
+        projectId:
+          type: string
+          format: uuid
+        displayName:
+          type: string
+          minLength: 1
+          maxLength: 120
+        prompt:
+          type: string
+          minLength: 1
+          maxLength: 32768
+        harness:
+          $ref: "#/components/schemas/AutomationHarness"
+        model:
+          type: string
+          maxLength: 200
+        reasoningEffort:
+          type: string
+          enum: [default, none, minimal, low, medium, high, xhigh, max, ultra]
+        mode:
+          allOf:
+            - $ref: "#/components/schemas/AutomationMode"
+          default: trusted
+        requestedOutput:
+          $ref: "#/components/schemas/RequestedOutput"
+        rrule:
+          type: string
+          description: An RFC 5545 rule (FREQ=HOURLY or slower, no COUNT or UNTIL).
+        cron:
+          type: string
+          description: >-
+            "minute hour * * weekdays", the desktop presets' subset of cron;
+            converted to a rule.
+        timezone:
+          type: string
+          description: An IANA timezone, or UTC.
+        maxRuntimeMinutes:
+          type: integer
+          minimum: 5
+          maximum: 480
+          default: 60
+        enabled:
+          type: boolean
+          default: true
+    UpdateAutomationInput:
+      type: object
+      additionalProperties: false
+      description: >-
+        Fields to change. rrule or cron replaces the schedule; timezone alone
+        moves the saved rule into the new zone.
+      properties:
+        displayName:
+          type: string
+          minLength: 1
+          maxLength: 120
+        prompt:
+          type: string
+          minLength: 1
+          maxLength: 32768
+        harness:
+          $ref: "#/components/schemas/AutomationHarness"
+        model:
+          type: string
+          maxLength: 200
+        reasoningEffort:
+          type: string
+          enum: [default, none, minimal, low, medium, high, xhigh, max, ultra]
+        mode:
+          $ref: "#/components/schemas/AutomationMode"
+        requestedOutput:
+          type: string
+          enum: ["", artifact]
+        rrule:
+          type: string
+        cron:
+          type: string
+        timezone:
+          type: string
+        maxRuntimeMinutes:
+          type: integer
+          minimum: 5
+          maximum: 480
+        enabled:
+          type: boolean
+    AutomationList:
+      type: object
+      additionalProperties: false
+      required: [items, page]
+      properties:
+        items:
+          type: array
+          items:
+            $ref: "#/components/schemas/Automation"
+        page:
+          $ref: "#/components/schemas/PageInfo"
+    AutomationRunList:
+      type: object
+      additionalProperties: false
+      required: [items, page]
+      properties:
+        items:
+          type: array
+          items:
+            $ref: "#/components/schemas/AutomationRun"
+        page:
+          $ref: "#/components/schemas/PageInfo"
+    AutomationSubscription:
+      type: object
+      additionalProperties: false
+      required: [subscribed]
+      properties:
+        subscribed:
+          type: boolean
     Cue:
       type: object
       additionalProperties: false
@@ -8736,6 +9325,13 @@ components:
           type: boolean
         requestedOutput:
           $ref: "#/components/schemas/RequestedOutput"
+        automationRunId:
+          type: string
+          format: uuid
+          description: >-
+            The automation run the session was started for. Such a session is
+            shared only to watch (viewer access), with teams and by link;
+            other shares are refused with AUTOMATION_SESSION_VIEW_ONLY.
         createdByUserId:
           type: string
           format: uuid
@@ -9051,6 +9647,14 @@ components:
           description: >-
             How many emails the link is shared with. Absent from a control
             plane that predates private links.
+        fileCount:
+          type: integer
+          minimum: 0
+          maximum: 200
+          description: >-
+            How many files the link serves beside its own, at their paths
+            under contentUrl (see createArtifactShareFileUpload). Absent from
+            a control plane that predates included files.
     ArtifactShareAccess:
       type: string
       enum: [restricted, anyone]
@@ -9250,6 +9854,37 @@ components:
         expiresAt:
           type: string
           format: date-time
+    ArtifactShareCompletedPart:
+      type: object
+      additionalProperties: false
+      required: [partNumber, sha256, etag]
+      properties:
+        partNumber:
+          type: integer
+          minimum: 1
+        sha256:
+          type: string
+          pattern: "^[0-9a-f]{64}$"
+        etag:
+          type: string
+          description: The ETag the part's PUT returned.
+    ArtifactShareFileCompleteInput:
+      type: object
+      additionalProperties: false
+      required: [uploadToken, parts]
+      description: >-
+        An included file's upload and every one of its parts, in order. It
+        takes no access, emails or files: those are the page's, set when the
+        page is finalized.
+      properties:
+        uploadToken:
+          type: string
+          description: The file's uploadToken, from createArtifactShareFileUpload.
+        parts:
+          type: array
+          minItems: 1
+          items:
+            $ref: "#/components/schemas/ArtifactShareCompletedPart"
     ArtifactShareFinalizeInput:
       type: object
       additionalProperties: false
@@ -9261,19 +9896,7 @@ components:
           type: array
           minItems: 1
           items:
-            type: object
-            additionalProperties: false
-            required: [partNumber, sha256, etag]
-            properties:
-              partNumber:
-                type: integer
-                minimum: 1
-              sha256:
-                type: string
-                pattern: "^[0-9a-f]{64}$"
-              etag:
-                type: string
-                description: The ETag the part's PUT returned.
+            $ref: "#/components/schemas/ArtifactShareCompletedPart"
         access:
           $ref: "#/components/schemas/ArtifactShareAccess"
           description: >-
@@ -9288,6 +9911,63 @@ components:
           description: >-
             Emails to share the link with as it is published, as
             addArtifactShareGrants does.
+        files:
+          type: array
+          maxItems: 200
+          description: >-
+            Every file the link serves beside its own from now on, each from
+            completeArtifactShareFileUpload under this upload, at most one per
+            path; an empty list leaves it none. Absent, an active link keeps
+            the files it has and a new or restored one has none. A private
+            link's page that has files, opened at contentUrl with its view
+            token in the query, is redirected to /~vt/<token>/ under the same
+            host, so the files it refers to by relative path carry the token.
+          items:
+            type: object
+            additionalProperties: false
+            required: [fileToken]
+            properties:
+              fileToken:
+                type: string
+                description: From completeArtifactShareFileUpload; opaque.
+    ArtifactShareFileUploadInput:
+      type: object
+      additionalProperties: false
+      required: [uploadToken, path, size, sha256]
+      properties:
+        uploadToken:
+          type: string
+          description: The page's upload, from createArtifactShareUpload.
+        path:
+          type: string
+          minLength: 1
+          maxLength: 1024
+          description: >-
+            Where the link serves the file: slash-separated, relative to the
+            page, as a browser asks for it once it resolves the page's
+            relative URL (images/a.png, not ./images/a.png).
+        size:
+          type: integer
+          format: int64
+          minimum: 0
+        sha256:
+          type: string
+          pattern: "^[0-9a-f]{64}$"
+          description: The whole file's SHA-256, as for the page.
+    ArtifactShareFileUploaded:
+      type: object
+      additionalProperties: false
+      required: [fileToken, path, expiresAt]
+      properties:
+        fileToken:
+          type: string
+          description: Lists the file in finalizeArtifactShare; opaque.
+        path:
+          type: string
+        expiresAt:
+          type: string
+          format: date-time
+          description: When the file can no longer be listed.
     SessionArtifactShareInput:
       type: object
       additionalProperties: false

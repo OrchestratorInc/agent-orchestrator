@@ -9,6 +9,7 @@ import {
 	type CloudShareInspection,
 	type CloudShareLink,
 	type CloudShareLinks,
+	type CloudSharePageFiles,
 	type CloudSharePublishResult,
 	type HostShareLink,
 	artifactShareUrl,
@@ -59,6 +60,8 @@ type Phase =
 		error?: string;
 		/** The link was just made private: say what that does to people without an invite. */
 		narrowed?: boolean;
+		/** What publishing a page did with the files it uses: say what it left out. */
+		pageFiles?: CloudSharePageFiles;
 		/**
 		 * The file changed since it was published to this link: Republish puts
 		 * the newer version on it.
@@ -729,7 +732,7 @@ function SharePanel({
 		switch (result.status) {
 			case "published":
 				setStaged([]);
-				showPublished(result.share);
+				showPublished(result.share, result.pageFiles ? { pageFiles: result.pageFiles } : {});
 				onChanged?.();
 				refreshArtifacts();
 				return;
@@ -985,6 +988,13 @@ function SharePanel({
 	const status = (text: string, role?: "alert" | "status") => (
 		<p role={role} className={cn("mt-1.5 text-caption", role === "alert" ? "text-error" : "text-muted-foreground")}>{text}</p>
 	);
+	// What a published page left out of the files it uses, if anything.
+	const pageFilesStatus = (files: CloudSharePageFiles | undefined) => {
+		if (files?.unsupported) return status(t("artifacts.share.pageFiles.unsupported"), "status");
+		if (!files?.skipped) return null;
+		const left = t("artifacts.share.pageFiles.skipped", { count: files.skipped });
+		return status(files.videos > 0 ? `${left} ${t("artifacts.share.pageFiles.videos")}` : left, "status");
+	};
 	const note = (text: string) => (
 		<p role="status" className="rounded-md bg-status-in-review/10 px-2.5 py-2 text-caption leading-4 text-status-in-review" data-share-note="">{text}</p>
 	);
@@ -1142,6 +1152,7 @@ function SharePanel({
 				<>
 					{titled(t("artifacts.share.title.published"))}
 					{phase.changed ? status(t("artifacts.share.changed"), "status") : null}
+					{pageFilesStatus(phase.pageFiles)}
 					<div className="mt-3.5 flex flex-col gap-3.5">
 						{privateLinks ? (
 							<>

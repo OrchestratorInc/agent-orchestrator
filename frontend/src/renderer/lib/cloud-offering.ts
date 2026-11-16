@@ -35,6 +35,8 @@ export const QUEUED_DELETE_FEATURE = "queued-delete";
  * running turn (steerQueuedMessage), with the outcome recorded on the queued turn's events.
  */
 export const QUEUED_STEER_FEATURE = "queued-steer";
+/** Offering feature of a control plane that schedules cloud automations (/orgs/{orgId}/automations). */
+export const AUTOMATIONS_FEATURE = "automations";
 /** The largest Cloud attachment when the control plane takes files but names no limit. */
 export const CLOUD_MAX_ATTACHMENT_BYTES = 25 * 1024 * 1024;
 
