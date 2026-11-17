@@ -1874,6 +1874,7 @@ const SortableBrowserTopTab = memo(function SortableBrowserTopTab({
 				<Pressable
 					{...attributes}
 					{...listeners}
+					aria-label={agentTab ? t("browser.agentTab", { title: label.title }) : undefined}
 					aria-selected={selected}
 					className="browser-panel__tab-select"
 					onClick={() => void onSelect(tab.id)}
@@ -1881,13 +1882,28 @@ const SortableBrowserTopTab = memo(function SortableBrowserTopTab({
 					tabIndex={selected ? 0 : -1}
 					type="button"
 				>
-					{agentTab ? (
-						<Bot aria-hidden="true" className="browser-panel__tab-icon" />
-					) : tab.favicon ? (
-						<img alt="" className="browser-panel__tab-icon object-cover" src={tab.favicon} />
-					) : (
-						<BrowserIcon aria-hidden="true" className="browser-panel__tab-icon" />
-					)}
+					<span className="relative inline-flex shrink-0">
+						{tab.favicon ? (
+							<img alt="" className="browser-panel__tab-icon object-cover" src={tab.favicon} />
+						) : (
+							<BrowserIcon aria-hidden="true" className="browser-panel__tab-icon" />
+						)}
+						{agentTab ? (
+							// The agent works here: a corner mark that keeps the site's icon.
+							<Bot
+								aria-hidden="true"
+								className="absolute -bottom-1 -right-1 size-icon-xs rounded-full bg-background text-foreground ring-1 ring-background"
+								data-testid="browser-agent-tab-mark"
+							/>
+						) : null}
+						{tab.unseen ? (
+							<span
+								aria-hidden="true"
+								className="absolute -right-0.5 -top-0.5 inline-flex size-dot-sm rounded-full bg-primary ring-2 ring-background"
+								data-testid="browser-tab-unseen-indicator"
+							/>
+						) : null}
+					</span>
 					<span className="browser-panel__tab-title">{label.title}</span>
 				</Pressable>
 			</BrowserControlTooltip>

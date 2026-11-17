@@ -148,7 +148,7 @@ async function run(): Promise<void> {
 	const server = createServer((request, response) => {
 		if (request.url?.startsWith("/native-tab?")) {
 			const name = new URL(request.url, "http://fixture").searchParams.get("name");
-			assert.ok(name === "Third" || name === "Fourth" || name === "Transient" || name === "Person");
+			assert.ok(["Third", "Fourth", "Transient", "Person", "Agent", "Popup"].includes(name ?? ""));
 			response.writeHead(200, { "content-type": "text/html; charset=utf-8" });
 			response.end(`<!doctype html><title>${name} tab</title><h1>${name} page</h1>
 				<button onclick="this.textContent='${name} changed'">Change ${name}</button>`);
@@ -822,7 +822,8 @@ async function run(): Promise<void> {
 			// A tab the person opens is theirs: the agent keeps working in its own
 			// tab behind it, and can still capture it there.
 			const sessionId = "native-person-tab";
-			await nativeCommand(sessionId, "open", { url: `http://127.0.0.1:${address.port}/native-popup-opener` });
+			await nativeCommand(sessionId, "open", { url: new URL("/native-tab?name=Agent", fixtureURL).href });
+			const agentPage = activeWebContents();
 			const ensure = ipcHandlers.get("browser:ensure");
 			const openTab = ipcHandlers.get("browser:openTab");
 			const getTabs = ipcHandlers.get("browser:getTabs");
@@ -838,18 +839,50 @@ async function run(): Promise<void> {
 			const agentTabs = await nativeCommand(sessionId, "tabs") as BrowserTabsState;
 			assert.deepEqual(agentTabs.tabs.map(tab => tab.id), ["t1"], "the agent must not be shown the person's tab");
 			assert.equal(agentTabs.activeTabId, "t1");
-			const snapshot = await nativeSnapshot(sessionId, "Open report link", "t1");
+			const snapshot = await nativeSnapshot(sessionId, "Change Agent", "t1");
 			assert.ok(!snapshot.includes("Change Person"), "the agent must not read the person's page");
-			assert.equal((await nativeCommand(sessionId, "get", { property: "title" }) as { value: string }).value, "Native popup opener");
+			assert.equal((await nativeCommand(sessionId, "get", { property: "title" }) as { value: string }).value, "Agent tab");
 			await assert.rejects(
 				nativeCommand(sessionId, "tab-select", { tabId: "t2" }),
 				(error: { code?: string }) => error.code === "TAB_NOT_FOUND",
 			);
-			const shot = await nativeCommand(sessionId, "screenshot") as {
-				data: string; width: number; height: number; target: { tabId: string };
-			};
-			assert.equal(shot.target.tabId, "t1");
-			assert.ok(shot.width > 0 && shot.height > 0 && shot.data.length > 1_000, "the agent's tab must be captured behind the person's");
+
+			// The agent changes its page while the person's tab is in front: a
+			// capture afterwards must show the change, not a frame cached before.
+			type Shot = { data: string; width: number; height: number; target: { tabId: string } };
+			const before = await nativeCommand(sessionId, "screenshot") as Shot;
+			assert.equal(before.target.tabId, "t1");
+			assert.ok(before.width > 0 && before.height > 0, "the agent's tab must be captured behind the person's");
+			await nativeCommand(sessionId, "click", { ref: refFor(snapshot, "Change Agent") });
+			await nativeCommand(sessionId, "wait", { text: "Agent changed", timeoutMs: 2_500 });
+			const after = await nativeCommand(sessionId, "screenshot") as Shot;
+			assert.equal(after.target.tabId, "t1");
+			assert.notEqual(after.data, before.data, "a capture behind the person's tab must be painted afresh");
+			assert.equal(await personPage.executeJavaScript("document.querySelector('button').textContent"), "Change Person");
+
+			// The person clicks in the agent's page and it opens a window: the
+			// window is the person's, and the agent's page keeps no handle to it.
+			agentPage.sendInputEvent({ type: "mouseDown", x: 5, y: 5, button: "left", clickCount: 1 });
+			agentPage.sendInputEvent({ type: "mouseUp", x: 5, y: 5, button: "left", clickCount: 1 });
+			const handleIsNull = await agentPage.executeJavaScript(
+				`window.open(${JSON.stringify(new URL("/native-tab?name=Popup", fixtureURL).href)}, "_blank") === null`, true,
+			) as boolean;
+			assert.equal(handleIsNull, true, "the agent's page must get no handle to the person's popup");
+			const withPopup = await deadline((async () => {
+				for (;;) {
+					const state = await getTabs({ sender: shellWebContents }, viewId) as BrowserTabsState;
+					if (state.tabs.length === 3) return state;
+					await new Promise(resolve => setTimeout(resolve, 10));
+				}
+			})());
+			assert.equal(withPopup.tabs[2]?.owner, undefined, "the popup the person opened must be theirs");
+			const popupPage = activeWebContents();
+			await deadline((async () => {
+				while (await popupPage.executeJavaScript("document.title") !== "Popup tab")
+					await new Promise(resolve => setTimeout(resolve, 10));
+			})());
+			assert.equal(await popupPage.executeJavaScript("window.opener === null"), true, "the person's popup must have no opener");
+			assert.deepEqual((await nativeCommand(sessionId, "tabs") as BrowserTabsState).tabs.map(tab => tab.id), ["t1"]);
 
 			const panel = await getTabs({ sender: shellWebContents }, viewId) as BrowserTabsState;
 			assert.equal(panel.activeTabId, "t2", "the agent's work must not move the person's view");

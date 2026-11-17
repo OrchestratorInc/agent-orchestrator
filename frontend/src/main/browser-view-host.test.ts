@@ -1,4 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
+import { WebSocket } from "ws";
+import { AgentBrowserCDPBridge, type AgentBrowserTargetProvider } from "./agent-browser-cdp-bridge";
 import { net } from "electron";
 import {
 	type BrowserNavState,
@@ -6423,6 +6425,39 @@ describe("browser snapshot deltas", () => {
 		refs: { e1: { role: "button", name: "Save" } },
 	});
 
+	it("takes a full snapshot when the agent's tab changes while a delta waits its turn", async () => {
+		const { host, runtime, views } = setupTabHost();
+		const responses: NativeSnapshot[] = [full(1), { kind: "unchanged", baseRevision: 1, revision: 2 }, full(3)];
+		const snapshots: Array<Record<string, unknown>> = [];
+		let release: () => void = () => undefined;
+		const held = new Promise<void>((resolve) => { release = resolve; });
+		const runAction = vi.mocked(runtime.runAction);
+		const original = runAction.getMockImplementation()!;
+		runAction.mockImplementation(async (sessionId, action, args, provider, signal) => {
+			if (action === "wait") {
+				await held;
+				return {};
+			}
+			if (action === "snapshot") {
+				snapshots.push(args);
+				return { snapshot: responses.shift()!, refs: {} };
+			}
+			return original(sessionId, action, args, provider, signal);
+		});
+		await host.execute("sess-1", "snapshot", { delta: true });
+		const waiting = host.execute("sess-1", "wait", { ms: 1 });
+		const queued = host.execute("sess-1", "snapshot", { delta: true });
+		await new Promise((resolve) => setTimeout(resolve, 0));
+		// The agent's page opens a window while the snapshot waits: the agent moves there.
+		views[0].webContents.openWindow("https://popup.example.test/");
+		await vi.waitFor(async () => expect(await host.execute("sess-1", "tabs")).toMatchObject({ activeTabId: "t2" }));
+		release();
+		await waiting;
+
+		expect(await queued).toMatchObject({ kind: "full", revision: 3 });
+		expect(snapshots.slice(1).map((args) => args.full === true)).toEqual([false, true]);
+	});
+
 	it("requests a full baseline first and returns it as snapshot text", async () => {
 		const { host, snapshotCalls } = setupDeltaHost(() => full(1));
 
@@ -6894,6 +6929,18 @@ describe("agent and person tabs", () => {
 		expect(views[0].webContents.getURL()).toBe("https://mine.example.test/");
 	});
 
+	it("marks the agent's tab unseen when a preview loads behind the person's tab, until it is shown", async () => {
+		const { invoke, viewId, tabs } = await open();
+		await invoke("browser:navigate", { viewId, url: "https://mine.example.test/" });
+		await invoke("browser:navigate", { viewId, url: "http://localhost:3000/", preview: true });
+		expect((await tabs()).tabs[1]).toMatchObject({ id: "t2", owner: "agent", unseen: true });
+		await invoke("browser:selectTab", { viewId, tabId: "t2" });
+		expect((await tabs()).tabs[1]!.unseen).toBeUndefined();
+		// A preview loading in front is seen as it loads.
+		await invoke("browser:navigate", { viewId, url: "http://localhost:3000/again", preview: true });
+		expect((await tabs()).tabs[1]!.unseen).toBeUndefined();
+	});
+
 	it("shows a preview in front in the session's unused first tab, which becomes the agent's", async () => {
 		const { invoke, viewId, tabs } = await open();
 		const state = await invoke("browser:navigate", { viewId, url: "http://localhost:3000/", preview: true });
@@ -6924,6 +6971,92 @@ describe("agent and person tabs", () => {
 		expect(await host.execute("sess-1", "screenshot")).toMatchObject({ target: { tabId: "t1" } });
 		expect(views[0].setVisible.mock.calls.map(([visible]) => visible)).toEqual([true, false]);
 		expect(views[1].setVisible).not.toHaveBeenCalled();
+	});
+
+	// The target provider is the boundary agent-browser sees, through the CDP
+	// bridge: nothing it can name may reach a tab the agent does not own.
+	const providerOf = (runtime: import("./agent-browser-runtime").AgentBrowserRuntime): AgentBrowserTargetProvider =>
+		vi.mocked(runtime.runAction).mock.calls.at(-1)![3] as AgentBrowserTargetProvider;
+
+	it("gives automation's target provider no person or unused tab to list, activate or close", async () => {
+		const { host, invoke, runtime, viewId, tabs } = await open();
+		await host.execute("sess-1", "open", { url: "https://agent.example.test/" });
+		await invoke("browser:openTab", { viewId, url: "https://mine.example.test/" });
+		await host.execute("sess-1", "snapshot");
+		const provider = providerOf(runtime);
+		expect(provider.listTargets().map((target) => target.id)).toEqual(["t1"]);
+		await expect(Promise.resolve().then(() => provider.activateTarget("t2"))).rejects.toMatchObject({ code: "TAB_NOT_FOUND" });
+		expect(() => provider.closeTarget("t2")).toThrow(expect.objectContaining({ code: "TAB_NOT_FOUND" }));
+		expect((await tabs()).tabs.map((tab) => tab.id)).toEqual(["t1", "t2"]);
+		expect(await tabs()).toMatchObject({ activeTabId: "t2" });
+	});
+
+	it("opens automation-created targets as the agent's, in front only for a person watching the agent", async () => {
+		const { host, invoke, runtime, viewId, tabs } = await open();
+		await host.execute("sess-1", "snapshot");
+		// The person watches the agent's tab: a target it creates comes forward.
+		await invoke("browser:selectTab", { viewId, tabId: "t1" });
+		const created = await providerOf(runtime).createTarget("https://agent.example.test/two");
+		expect(created.id).toBe("t2");
+		expect(await tabs()).toMatchObject({ activeTabId: "t2", tabs: [{ owner: "agent" }, { owner: "agent" }] });
+		// In a tab of their own, the next one stays behind.
+		await invoke("browser:openTab", { viewId, url: "https://mine.example.test/" });
+		await providerOf(runtime).createTarget("https://agent.example.test/three");
+		expect(await tabs()).toMatchObject({ activeTabId: "t3" });
+		expect((await tabs()).tabs.map((tab) => tab.owner)).toEqual(["agent", "agent", undefined, "agent"]);
+	});
+
+	it("refuses a person's tab to agent-browser's CDP connection", async () => {
+		const tabHost = setupTabHost();
+		const { viewId } = (await tabHost.invoke("browser:ensure", "sess-1")) as { viewId: string };
+		await tabHost.host.execute("sess-1", "open", { url: "https://agent.example.test/" });
+		await tabHost.invoke("browser:openTab", { viewId, url: "https://mine.example.test/" });
+		const bridge = new AgentBrowserCDPBridge(providerOf(tabHost.runtime));
+		const socket = new WebSocket(await bridge.start());
+		await new Promise<void>((resolve, reject) => { socket.once("open", () => resolve()); socket.once("error", reject); });
+		let id = 0;
+		const rpc = (method: string, params?: Record<string, unknown>) =>
+			new Promise<{ result?: Record<string, unknown>; error?: { message: string } }>((resolve) => {
+				const requestId = ++id;
+				const listener = (data: Buffer) => {
+					const message = JSON.parse(data.toString()) as { id?: number };
+					if (message.id !== requestId) return;
+					socket.off("message", listener);
+					resolve(message as never);
+				};
+				socket.on("message", listener);
+				socket.send(JSON.stringify({ id: requestId, method, params }));
+			});
+		try {
+			const listed = await rpc("Target.getTargets");
+			expect((listed.result!.targetInfos as Array<{ targetId: string }>).map((info) => info.targetId)).toEqual(["t1"]);
+			for (const targetId of ["t2"]) {
+				for (const method of ["Target.attachToTarget", "Target.getTargetInfo", "Target.activateTarget", "Target.closeTarget"]) {
+					expect((await rpc(method, { targetId })).error?.message).toBe("Target is outside this worker");
+				}
+			}
+			expect((await rpc("Target.attachToTarget", { targetId: "t1" })).result).toHaveProperty("sessionId");
+			expect((await tabHost.invoke("browser:getTabs", viewId) as BrowserTabsState).tabs.map((tab) => tab.id)).toEqual(["t1", "t2"]);
+		} finally {
+			socket.close();
+			await bridge.close();
+		}
+	});
+
+	it("opens one tab for the agent after the person closes its last one, though agent-browser bootstraps a page on an empty connection", async () => {
+		const { host, invoke, runtime, viewId, tabs } = await open();
+		await host.execute("sess-1", "open", { url: "https://agent.example.test/" });
+		await invoke("browser:openTab", { viewId, url: "https://mine.example.test/" });
+		await invoke("browser:closeTab", { viewId, tabId: "t1" });
+		const runAction = vi.mocked(runtime.runAction);
+		const original = runAction.getMockImplementation()!;
+		runAction.mockImplementation(async (sessionId, action, args, provider, signal) => {
+			// The real runtime opens a page of its own when it connects to no target.
+			if (!provider.listTargets().length) await provider.createTarget("about:blank");
+			return original(sessionId, action, args, provider, signal);
+		});
+		await host.execute("sess-1", "open", { url: "https://agent.example.test/again" });
+		expect((await tabs()).tabs.map((tab) => [tab.id, tab.owner])).toEqual([["t2", undefined], ["t3", "agent"]]);
 	});
 
 	it("keeps a page error from a tab nobody has used yet out of the agent's diagnostics", async () => {

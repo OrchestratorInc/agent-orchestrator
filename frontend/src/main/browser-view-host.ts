@@ -149,6 +149,8 @@ export type BrowserTabState = {
   remote?: { tabId: string };
   // Set on a tab the agent works in (BrowserTabOwner).
   owner?: "agent";
+  // A preview loaded in it while another tab was in front: not seen yet.
+  unseen?: true;
 };
 
 export type BrowserTabsState = {
@@ -611,6 +613,8 @@ type BrowserEntry = {
   owner?: BrowserTabOwner;
   // Who last sent input to this tab's page: a popup it opens is theirs.
   lastInputBy?: BrowserTabOwner;
+  // A preview loaded here while another tab was in front (BrowserTabState).
+  unseen?: boolean;
   // When the agent last worked in this tab (agentUseCounter), so that losing
   // its current tab returns it to the one it used most recently.
   agentUsedAt?: number;
@@ -2223,6 +2227,7 @@ export function createBrowserViewHost(
     }
     session.activeTabId = tabId;
     session.activationRevision += 1;
+    next.unseen = false;
     if (previous && previous !== next) previous.driver().show(false);
     next.driver().show(true);
     if (session.devtools && isBlankBrowserEntry(next)) destroyDevTools(session);
@@ -2626,6 +2631,11 @@ export function createBrowserViewHost(
         await entry.ready;
       },
       closeTarget: (targetId) => {
+        if (session.tabs.get(targetId)?.owner !== "agent")
+          throw browserError(
+            "TAB_NOT_FOUND",
+            `Browser tab ${targetId} does not exist`,
+          );
         closeTab(session, targetId);
       },
     };
@@ -2952,9 +2962,11 @@ export function createBrowserViewHost(
         if (session.activeTabId !== entry.tabId && !personInFront(session))
           activateTab(session, entry.tabId);
         const state = await navigateEntry(entry, url);
-        return session.activeTabId === entry.tabId
-          ? state
-          : readNavState(activeEntry(session));
+        if (session.activeTabId === entry.tabId) return state;
+        // Loaded behind the person's tab: its tab shows it is new to them.
+        entry.unseen = true;
+        pushTabsState(options, session);
+        return readNavState(activeEntry(session));
       }
       if (!session.tabs.size) {
         const entry = await openTab(session, url, true, "opened", false, "person");
@@ -4691,6 +4703,7 @@ export function createBrowserViewHost(
                 return {
                   delta: parseSnapshotDelta(result.snapshot),
                   boundary: result._boundary,
+                  tabId: result.target.tabId,
                 };
               };
               let full = args.full === true || !current;
@@ -4698,7 +4711,9 @@ export function createBrowserViewHost(
               if (
                 !full &&
                 response.delta.kind !== "full" &&
-                response.delta.baseRevision !== current?.revision
+                // A delta from another tab (the agent's changed while this
+                // waited its turn) is not one against this baseline.
+                (response.delta.baseRevision !== current?.revision || response.tabId !== tabId)
               ) {
                 full = true;
                 response = await request(true);
@@ -5807,6 +5822,7 @@ function tabResult(
     ...(entry.favicon ? { favicon: entry.favicon } : {}),
     ...(entry.agentTab !== undefined ? { remote: { tabId: entry.agentTab } } : {}),
     ...(entry.owner === "agent" ? { owner: "agent" as const } : {}),
+    ...(entry.unseen ? { unseen: true as const } : {}),
     untrustedExternalContent: true,
   };
 }

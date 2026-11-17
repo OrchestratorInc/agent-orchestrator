@@ -1201,6 +1201,22 @@ describe("BrowserPanel", () => {
 		expect(hookState.selectTab).toHaveBeenCalledWith("t1");
 	});
 
+	it("names and marks the agent's tab, keeping its site icon, and marks a preview not seen yet", () => {
+		const agentTabState = { id: "t1", url: "http://localhost:3000/", title: "Agent app", active: false, owner: "agent" as const, unseen: true as const, favicon: "data:image/png;base64,AA==" };
+		hookState.tabs = [agentTabState, { id: "t2", url: "http://localhost:4173/", title: "My app", active: true }];
+		hookState.activeTabId = "t2";
+		render(<BrowserPanel active onTogglePopOut={() => undefined} poppedOut={false} session={session} />);
+
+		const tabList = screen.getByRole("tablist", { name: "Browser tabs" });
+		const agentTab = within(tabList).getByRole("tab", { name: "Agent's tab: Agent app" });
+		expect(agentTab.querySelector("img")).toHaveAttribute("src", "data:image/png;base64,AA==");
+		expect(within(agentTab).getByTestId("browser-agent-tab-mark")).toBeInTheDocument();
+		expect(within(agentTab).getByTestId("browser-tab-unseen-indicator")).toBeInTheDocument();
+		const myTab = within(tabList).getByRole("tab", { name: "My app" });
+		expect(within(myTab).queryByTestId("browser-agent-tab-mark")).toBeNull();
+		expect(within(myTab).queryByTestId("browser-tab-unseen-indicator")).toBeNull();
+	});
+
 	it("renders the complete tab chrome in the drag overlay", () => {
 		render(
 			<BrowserTopTabDragOverlay
