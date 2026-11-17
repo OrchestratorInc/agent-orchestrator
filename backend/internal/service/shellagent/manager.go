@@ -72,7 +72,7 @@ type Manager struct {
 
 	// record, when set, remembers the agent in front of each shell ("" once
 	// the shell's own prompt is back); recorded dedupes calls per terminal.
-	record   func(handleID string, harness domain.AgentHarness)
+	record   func(ctx context.Context, handleID string, harness domain.AgentHarness)
 	recorded map[string]domain.AgentHarness
 
 	mu      sync.Mutex
@@ -101,7 +101,7 @@ func NewManager(ctx context.Context, rt Runtime, agents ports.AgentResolver, log
 // SetHarnessRecorder registers fn to be told the agent in front of a shell,
 // or "" when it leaves, once per change. fn may block briefly; it is never called with the lock
 // held. Call once at boot, before tracking starts.
-func (m *Manager) SetHarnessRecorder(fn func(handleID string, harness domain.AgentHarness)) {
+func (m *Manager) SetHarnessRecorder(fn func(ctx context.Context, handleID string, harness domain.AgentHarness)) {
 	m.record = fn
 }
 
@@ -212,7 +212,7 @@ func (m *Manager) watch(ctx context.Context, handleID string, self *shellWatch) 
 
 func (m *Manager) observe(ctx context.Context, handleID string, fg ports.TerminalForeground) {
 	harness := ClassifyArgv(fg.Argv)
-	m.recordHarness(handleID, harness)
+	m.recordHarness(ctx, handleID, harness)
 	if harness == "" {
 		m.apply(ctx, handleID, nil)
 		return
@@ -331,20 +331,23 @@ func looksLikeApprovalPrompt(screen string) bool {
 	return approvalPrompt.MatchString(strings.Join(kept, "\n"))
 }
 
-// recordHarness reports a change of the agent in front of a shell.
-func (m *Manager) recordHarness(handleID string, harness domain.AgentHarness) {
+// recordHarness reports a change of the agent in front of a shell. The first
+// reading always counts, even "": the stored value may be a stale agent from
+// a previous daemon.
+func (m *Manager) recordHarness(ctx context.Context, handleID string, harness domain.AgentHarness) {
 	if m.record == nil {
 		return
 	}
 	m.mu.Lock()
 	_, tracked := m.tracked[handleID]
-	changed := tracked && m.recorded[handleID] != harness
+	previous, seen := m.recorded[handleID]
+	changed := tracked && (!seen || previous != harness)
 	if changed {
 		m.recorded[handleID] = harness
 	}
 	m.mu.Unlock()
 	if changed {
-		m.record(handleID, harness)
+		m.record(ctx, handleID, harness)
 	}
 }
 

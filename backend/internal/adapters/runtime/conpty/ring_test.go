@@ -187,3 +187,20 @@ func TestRingConcurrent(t *testing.T) {
 
 	wg.Wait()
 }
+
+// Output with no newline (a TUI repainting in place) is bounded too, keeping
+// the newest bytes.
+func TestRingBoundsNewlineFreeOutput(t *testing.T) {
+	r := NewRing()
+	chunk := strings.Repeat("a", MaxOutputBytes)
+	r.Append([]byte("line\n"))
+	r.Append([]byte(chunk))
+	r.Append([]byte(strings.Repeat("b", MaxOutputBytes/2)))
+	got := r.Replay()
+	if len(got) > MaxOutputBytes {
+		t.Fatalf("replay = %d bytes, want at most %d", len(got), MaxOutputBytes)
+	}
+	if !strings.HasSuffix(string(got), strings.Repeat("b", MaxOutputBytes/2)) {
+		t.Fatal("replay lost the newest output")
+	}
+}

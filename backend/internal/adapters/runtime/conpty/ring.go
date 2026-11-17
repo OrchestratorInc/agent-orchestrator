@@ -45,9 +45,12 @@ func (r *Ring) Append(raw []byte) {
 	r.trimLocked()
 }
 
+// trimLocked bounds the lines by count, and the lines plus the in-progress
+// partial line by bytes: output with no newline (a TUI repainting in place)
+// would otherwise grow partialLine without limit.
 func (r *Ring) trimLocked() {
 	drop := 0
-	for drop < len(r.lines) && (len(r.lines)-drop > MaxOutputLines || r.size > MaxOutputBytes) {
+	for drop < len(r.lines) && (len(r.lines)-drop > MaxOutputLines || r.size+len(r.partialLine) > MaxOutputBytes) {
 		r.size -= len(r.lines[drop])
 		drop++
 	}
@@ -55,6 +58,10 @@ func (r *Ring) trimLocked() {
 		// ponytail: slice off the head; ceiling: O(n) copy on every trim cycle.
 		// Upgrade path: circular buffer if trim rate is very high.
 		r.lines = r.lines[drop:]
+	}
+	if len(r.partialLine) > MaxOutputBytes {
+		// Keep the newest output, as the line limit does.
+		r.partialLine = r.partialLine[len(r.partialLine)-MaxOutputBytes:]
 	}
 }
 

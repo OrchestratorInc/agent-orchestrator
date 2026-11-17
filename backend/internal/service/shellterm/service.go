@@ -245,6 +245,17 @@ func (g *sessionGate) acquire(ctx context.Context, id domain.SessionID) (release
 	}
 }
 
+// tryAcquire takes the gate only if it is free right now.
+func (g *sessionGate) tryAcquire() (release func(), ok bool) {
+	select {
+	case g.ch <- struct{}{}:
+		var once sync.Once
+		return func() { once.Do(func() { <-g.ch }) }, true
+	default:
+		return nil, false
+	}
+}
+
 // NewService builds the shell terminal service. dataDir is the fallback working
 // directory for a shell opened with no project context. A nil logger falls back
 // to slog.Default.
@@ -1069,17 +1080,48 @@ func (s *Service) ListShellTerminalsForCurrentAppRun(ctx context.Context) ([]She
 			continue
 		}
 		if !alive {
-			// Native hosts retain scrollback after child exit. Tear down that
-			// host before forgetting its row; preserve failures for retry.
-			if stillAlive, destroyErr := s.destroyConfirmed(ctx, rec); stillAlive {
-				s.log.Warn("pruning exited shell terminal: runtime survived cleanup", "handleId", rec.HandleID, "error", destroyErr)
-				out = append(out, shellTerminalFromRecord(rec))
+			if kept, keep := s.pruneExitedShell(ctx, rec); keep {
+				out = append(out, shellTerminalFromRecord(kept))
 			}
 			continue
 		}
 		out = append(out, shellTerminalFromRecord(rec))
 	}
 	return out, nil
+}
+
+// pruneExitedShell destroys an exited shell's retained host and forgets its
+// row, reporting the row to keep listing when it must stay. The list's
+// snapshot can predate a quit that is saving the same shell, so a session's
+// shell is pruned only under that session's gate and after re-reading its
+// row: a row the quit marked ended is kept for restoring. When the gate is
+// busy the row is left as it is for the next list.
+func (s *Service) pruneExitedShell(ctx context.Context, rec ShellTerminalRecord) (ShellTerminalRecord, bool) {
+	if rec.SessionID != "" {
+		release, ok := s.sessionGateFor(rec.SessionID).tryAcquire()
+		if !ok {
+			return rec, true
+		}
+		defer release()
+		current, found, err := s.store.SelectShellTerminalByHandleID(ctx, rec.HandleID)
+		switch {
+		case err != nil:
+			s.log.Warn("pruning exited shell terminal: re-read failed; keeping row", "handleId", rec.HandleID, "error", err)
+			return rec, true
+		case !found:
+			return rec, false
+		case current.EndedAt != nil:
+			return current, true
+		}
+		rec = current
+	}
+	// Native hosts retain scrollback after child exit. Tear down that host
+	// before forgetting its row; preserve failures for retry.
+	if stillAlive, destroyErr := s.destroyConfirmed(ctx, rec); stillAlive {
+		s.log.Warn("pruning exited shell terminal: runtime survived cleanup", "handleId", rec.HandleID, "error", destroyErr)
+		return rec, true
+	}
+	return rec, false
 }
 
 // keepsEndedShell reports whether a shell that stops with the app is kept as
@@ -1106,7 +1148,11 @@ func (s *Service) endShell(ctx context.Context, rec ShellTerminalRecord, end She
 	// reads this handle's input timestamp again.
 	s.forgetTerminalInput(ctx, rec.HandleID)
 	end.EndedAt = s.now().UTC()
-	marked, err := s.store.MarkShellTerminalEnded(ctx, rec.HandleID, end)
+	// The host is already gone, so store what to restore even if the quit's
+	// deadline passes now; a bounded context of its own keeps it finite.
+	markCtx, cancelMark := context.WithTimeout(context.WithoutCancel(ctx), 5*time.Second)
+	marked, err := s.store.MarkShellTerminalEnded(markCtx, rec.HandleID, end)
+	cancelMark()
 	if err != nil || !marked {
 		// Report the row as stored: reopen reads the stored row, so an ended
 		// tab it would refuse must not be shown. The host is gone either way,

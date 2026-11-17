@@ -62,4 +62,4 @@ WHERE handle_id = sqlc.arg(handle_id) AND ended_at IS NULL;
 -- name: UpdateShellTerminalAgentHarness :execrows
 UPDATE shell_terminals
 SET last_agent_harness = sqlc.arg(last_agent_harness)
-WHERE handle_id = sqlc.arg(handle_id) AND last_agent_harness <> sqlc.arg(last_agent_harness);
+WHERE handle_id = sqlc.arg(handle_id) AND ended_at IS NULL AND last_agent_harness <> sqlc.arg(last_agent_harness);

@@ -341,7 +341,7 @@ func (q *Queries) SelectShellTerminalsFromPreviousAppRuns(ctx context.Context, a
 const updateShellTerminalAgentHarness = `-- name: UpdateShellTerminalAgentHarness :execrows
 UPDATE shell_terminals
 SET last_agent_harness = ?1
-WHERE handle_id = ?2 AND last_agent_harness <> ?1
+WHERE handle_id = ?2 AND ended_at IS NULL AND last_agent_harness <> ?1
 `
 
 type UpdateShellTerminalAgentHarnessParams struct {

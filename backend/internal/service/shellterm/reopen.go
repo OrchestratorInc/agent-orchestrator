@@ -203,11 +203,14 @@ func (s *Service) deliverAgentResume(ctx context.Context, handleID string, shell
 // RecordShellAgent remembers the coding agent in front of a shell ("" once it
 // leaves), so a shell that ends without a quit (a power loss) can still offer
 // to resume it. Best-effort: a failed write only loses the offer.
-func (s *Service) RecordShellAgent(handleID string, harness domain.AgentHarness) {
+//
+// The write outlives the caller's cancellation: a watch is cancelled when its
+// last viewer leaves, and the reading it already counted is not reported again.
+func (s *Service) RecordShellAgent(ctx context.Context, handleID string, harness domain.AgentHarness) {
 	if handleID == "" {
 		return
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	ctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 5*time.Second)
 	defer cancel()
 	if err := s.store.UpdateShellTerminalAgentHarness(ctx, handleID, harness); err != nil {
 		s.log.Warn("shell terminal: record agent failed", "handleId", handleID, "error", err)

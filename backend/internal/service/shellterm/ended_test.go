@@ -16,7 +16,10 @@ import (
 	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
 )
 
-func (f *fakeShellTerminalStore) MarkShellTerminalEnded(_ context.Context, handleID string, end ShellTerminalEnd) (bool, error) {
+func (f *fakeShellTerminalStore) MarkShellTerminalEnded(ctx context.Context, handleID string, end ShellTerminalEnd) (bool, error) {
+	if err := ctx.Err(); err != nil {
+		return false, err
+	}
 	if f.markEndedErr != nil {
 		return false, f.markEndedErr
 	}
@@ -540,5 +543,58 @@ func TestAgentResumeCommand(t *testing.T) {
 		if got := agentResumeCommand(tc.harness, tc.id); got != tc.want {
 			t.Errorf("agentResumeCommand(%s, %q) = %q, want %q", tc.harness, tc.id, got, tc.want)
 		}
+	}
+}
+
+// The list's snapshot can predate a quit that saved the same shell. Pruning
+// re-reads the row under the session's gate, so a row the quit marked ended
+// is kept for restoring, and a busy gate leaves the row for the next list.
+func TestListDoesNotPruneShellEndedBySuspension(t *testing.T) {
+	ctx := context.Background()
+	live := sessionShell("shellterm-a")
+	live.AppRunID = testAppRunID
+	saved := live
+	at := time.Date(2026, 11, 16, 9, 0, 0, 0, time.UTC)
+	saved.EndedAt = &at
+
+	rt := newFakeShellRuntime() // the quit already destroyed the host
+	st := &fakeShellTerminalStore{records: []ShellTerminalRecord{saved}, staleRestorable: []ShellTerminalRecord{live}}
+	svc := newTestService(rt, st, &fakeProjectRootLocator{})
+	listed, err := svc.ListShellTerminalsForCurrentAppRun(ctx)
+	if err != nil || len(listed) != 1 || listed[0].EndedAt == nil || len(st.records) != 1 || len(rt.destroyed) != 0 {
+		t.Fatalf("list = %+v, %v; rows = %+v; destroyed = %v; want the saved row kept as ended", listed, err, st.records, rt.destroyed)
+	}
+
+	busy := &fakeShellTerminalStore{records: []ShellTerminalRecord{live}}
+	svc = newTestService(newFakeShellRuntime(), busy, &fakeProjectRootLocator{})
+	release, err := svc.acquireSessionGate(ctx, live.SessionID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	listed, err = svc.ListShellTerminalsForCurrentAppRun(ctx)
+	if err != nil || len(listed) != 1 || len(busy.records) != 1 {
+		t.Fatalf("list under a busy gate = %+v, %v; rows = %+v; want the row left for later", listed, err, busy.records)
+	}
+	release()
+	if listed, err = svc.ListShellTerminalsForCurrentAppRun(ctx); err != nil || len(listed) != 0 || len(busy.records) != 0 {
+		t.Fatalf("list after release = %+v, %v; rows = %+v; want the exited shell pruned", listed, err, busy.records)
+	}
+}
+
+// A quit whose deadline passes after the host is gone still stores what to
+// restore: the write gets a bounded context of its own.
+func TestEndShellStoresEndAfterQuitDeadline(t *testing.T) {
+	rec := sessionShell("shellterm-a")
+	st := &fakeShellTerminalStore{records: []ShellTerminalRecord{rec}}
+	svc := newTestService(newFakeShellRuntime(), st, &fakeProjectRootLocator{})
+	expired, cancel := context.WithCancel(context.Background())
+	cancel()
+	end := unchangedEnd(rec)
+	end.AgentHarness, end.AgentConversationID = domain.HarnessClaudeCode, "0f8c2b9e-3c1a-4d5e-9f00-1a2b3c4d5e6f"
+	if stillAlive, err := svc.endShell(expired, rec, end); stillAlive || err != nil {
+		t.Fatalf("endShell = %v, %v", stillAlive, err)
+	}
+	if st.records[0].EndedAt == nil || st.records[0].AgentConversationID != end.AgentConversationID {
+		t.Fatalf("row = %+v; want the end stored despite the expired quit context", st.records[0])
 	}
 }

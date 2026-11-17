@@ -204,6 +204,9 @@ type fakeShellTerminalStore struct {
 	insertErr         error
 	deleteErrByHandle map[string]error
 	markEndedErr      error
+	// staleRestorable, when set, is what the list query returns: a snapshot
+	// taken before a concurrent change to records.
+	staleRestorable []ShellTerminalRecord
 }
 
 func (f *fakeShellTerminalStore) InsertShellTerminal(_ context.Context, rec ShellTerminalRecord) error {
@@ -2565,6 +2568,9 @@ func TestDesktopRelaunchPreservesUserShells(t *testing.T) {
 }
 
 func (f *fakeShellTerminalStore) SelectRestorableShellTerminals(_ context.Context, appRunID string) ([]ShellTerminalRecord, error) {
+	if f.staleRestorable != nil {
+		return f.staleRestorable, nil
+	}
 	var out []ShellTerminalRecord
 	for _, rec := range f.records {
 		if !rec.Transient || rec.AppRunID == appRunID {

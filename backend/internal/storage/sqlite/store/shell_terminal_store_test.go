@@ -376,3 +376,20 @@ func TestReplaceShellTerminalMissingOldRowChangesNothing(t *testing.T) {
 		t.Fatalf("rows = %+v, %v; want only the untouched existing row", rows, err)
 	}
 }
+
+// A harness reading still in flight when the shell ends must not overwrite
+// the agent saved for restoring.
+func TestUpdateShellTerminalAgentHarnessLeavesEndedRow(t *testing.T) {
+	s, ctx, rec := endedStoreFixture(t)
+	end := shelltermsvc.ShellTerminalEnd{EndedAt: time.Date(2026, 11, 16, 9, 0, 0, 0, time.UTC), WorkingDir: rec.WorkingDir, AgentHarness: domain.HarnessClaudeCode}
+	if marked, err := s.MarkShellTerminalEnded(ctx, rec.HandleID, end); err != nil || !marked {
+		t.Fatalf("mark = %v, %v", marked, err)
+	}
+	if err := s.UpdateShellTerminalAgentHarness(ctx, rec.HandleID, ""); err != nil {
+		t.Fatal(err)
+	}
+	got, _, err := s.SelectShellTerminalByHandleID(ctx, rec.HandleID)
+	if err != nil || got.LastAgentHarness != domain.HarnessClaudeCode {
+		t.Fatalf("harness = %q, %v; want the saved agent kept", got.LastAgentHarness, err)
+	}
+}

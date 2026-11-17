@@ -289,7 +289,7 @@ func TestManagerRecordsHarnessOncePerChange(t *testing.T) {
 	rt := &fakeRuntime{readings: make(chan ports.TerminalForeground)}
 	m := NewManager(ctx, rt, nil, nil)
 	recorded := make(chan domain.AgentHarness, 4)
-	m.SetHarnessRecorder(func(handleID string, harness domain.AgentHarness) {
+	m.SetHarnessRecorder(func(_ context.Context, handleID string, harness domain.AgentHarness) {
 		if handleID == "shell-1" {
 			recorded <- harness
 		}
@@ -387,5 +387,33 @@ func TestReadShellForegroundNamesFolderAgentAndConversation(t *testing.T) {
 	t.Cleanup(func() { foregroundReadTimeout = 3 * time.Second })
 	if _, _, _, ok := m.ReadShellForeground(ctx, "shell-1"); ok {
 		t.Fatal("a terminal that never answered was read")
+	}
+}
+
+// A shell's first reading is recorded even when no agent runs: the stored
+// agent may be stale from a previous daemon.
+func TestManagerRecordsFirstReadingWithoutAgent(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	rt := &fakeRuntime{readings: make(chan ports.TerminalForeground)}
+	m := NewManager(ctx, rt, nil, nil)
+	recorded := make(chan domain.AgentHarness, 4)
+	m.SetHarnessRecorder(func(_ context.Context, _ string, harness domain.AgentHarness) { recorded <- harness })
+	m.TrackShellTerminal("shell-1")
+	defer m.SubscribeShellAgents(func(json.RawMessage) {})()
+	rt.readings <- ports.TerminalForeground{Argv: []string{"zsh"}}
+	rt.readings <- ports.TerminalForeground{Argv: []string{"zsh"}}
+	select {
+	case got := <-recorded:
+		if got != "" {
+			t.Fatalf("recorded %q, want \"\"", got)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("first reading not recorded")
+	}
+	select {
+	case extra := <-recorded:
+		t.Fatalf("recorded %q again", extra)
+	case <-time.After(50 * time.Millisecond):
 	}
 }
