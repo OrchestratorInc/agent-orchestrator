@@ -2872,6 +2872,8 @@
 	"terminal.sessionEndedNotTerminated": "Bu terminal işlemi sona erdi, ancak oturum henüz sonlandırıldı olarak işaretlenmedi.",
 	"terminal.sessionAria": "Oturum terminali",
 	"terminal.shellExited": "Bu kabuk çıktı. Sekmeyi kapatın veya yeni bir terminal açın.",
+	"terminal.shellEnded": "Terminal sona erdi",
+	"terminal.reopenShell": "Terminali yeniden aç",
 	"terminal.shellAria": "Kabuk terminali",
 	"terminal.startingSession": "Oturum başlatılıyor",
 	"terminal.tabsAria": "Açık terminaller",

@@ -1,27 +1,36 @@
-import { agentLabel } from "@aoagents/product-ui";
+import { useEffect, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { RotateCcw } from "@/components/app-icons";
 import { useReopenShellTerminal, type ShellTerminal } from "../hooks/useShellTerminals";
 import { apiErrorMessage } from "../lib/api-client";
 import type { HostId } from "../lib/hosts";
-import { cn } from "../lib/utils";
-import { AgentAvatar } from "./AgentAvatar";
 import { Button } from "./ui/button";
-import { Tooltip, TooltipContent, TooltipTrigger } from "./ui/tooltip";
+
+const restoring = new Set<string>();
 
 /**
- * The pane for a shell tab whose process is gone, for example after the
- * computer restarted. There is no PTY to attach to, so instead of a terminal
- * it says the tab ended and offers to reopen it. Reopening is always the
- * user's choice and starts a fresh shell: nothing the old one ran is replayed.
- * The tab's own close control removes it.
+ * The pane for a shell tab whose process is gone, for example after the app
+ * quit or the computer restarted. The first time it is shown it reopens the
+ * shell in the same folder with its saved output, resuming the agent that was
+ * running in it. Only if that fails does it say the tab ended.
  */
 export function EndedShellTerminal({ shell, hostId }: { shell: ShellTerminal; hostId?: HostId }) {
 	const { t } = useTranslation();
-	const reopen = useReopenShellTerminal(hostId);
-	const agent = shell.resumeHarness ? agentLabel(shell.resumeHarness) : undefined;
-	const pendingResume = reopen.isPending && Boolean(reopen.variables?.resumeAgent);
-	const pendingPlain = reopen.isPending && !reopen.variables?.resumeAgent;
+	const { mutateAsync } = useReopenShellTerminal(hostId);
+	const [error, setError] = useState<unknown>();
+	const { handleId, resumeHarness } = shell;
+	useEffect(() => {
+		const key = `${hostId ?? ""}\u0000${handleId}`;
+		if (restoring.has(key)) return;
+		restoring.add(key);
+		void mutateAsync({ handleId, ...(resumeHarness ? { resumeAgent: true } : {}) })
+			.catch(setError)
+			.finally(() => restoring.delete(key));
+	}, [handleId, hostId, mutateAsync, resumeHarness]);
+
+	if (!error) {
+		return <div aria-busy="true" className="terminal-surface h-full" data-testid="ended-shell-terminal" />;
+	}
 	return (
 		<div
 			aria-label={t("terminal.shellEnded")}
@@ -30,46 +39,21 @@ export function EndedShellTerminal({ shell, hostId }: { shell: ShellTerminal; ho
 			role="region"
 		>
 			<div className="flex flex-col items-start gap-3">
-				<div>
-					<h2 className="text-sm font-medium text-foreground">{t("terminal.shellEnded")}</h2>
-					<p className="mt-1 max-w-content-max text-xs text-muted-foreground">{t("terminal.shellEndedHelp")}</p>
-				</div>
-				<div className="flex flex-wrap items-center gap-2">
-					<Button
-						type="button"
-						variant="primary"
-						disabled={reopen.isPending}
-						onClick={() => reopen.mutate({ handleId: shell.handleId })}
-					>
-						<RotateCcw className={cn("size-icon-base", pendingPlain && "animate-spin")} aria-hidden="true" />
-						{t("terminal.reopenShell")}
-					</Button>
-					{shell.resumeHarness && agent ? (
-						<Tooltip>
-							<TooltipTrigger asChild>
-								<Button
-									type="button"
-									variant="secondary"
-									disabled={reopen.isPending}
-									onClick={() => reopen.mutate({ handleId: shell.handleId, resumeAgent: true })}
-								>
-									<AgentAvatar
-										className={cn("size-icon-sm!", pendingResume && "animate-pulse")}
-										decorative
-										provider={shell.resumeHarness}
-									/>
-									{t("terminal.resumeShellAgent", { agent })}
-								</Button>
-							</TooltipTrigger>
-							<TooltipContent side="bottom">{t("terminal.resumeShellAgentHelp", { agent })}</TooltipContent>
-						</Tooltip>
-					) : null}
-				</div>
-				{reopen.error ? (
-					<p className="text-xs text-destructive" role="alert">
-						{apiErrorMessage(reopen.error)}
-					</p>
-				) : null}
+				<h2 className="text-sm font-medium text-foreground">{t("terminal.shellEnded")}</h2>
+				<p className="max-w-content-max text-xs text-destructive" role="alert">
+					{apiErrorMessage(error)}
+				</p>
+				<Button
+					type="button"
+					variant="primary"
+					onClick={() => {
+						setError(undefined);
+						mutateAsync({ handleId }).catch(setError);
+					}}
+				>
+					<RotateCcw className="size-icon-base" aria-hidden="true" />
+					{t("terminal.reopenShell")}
+				</Button>
 			</div>
 		</div>
 	);

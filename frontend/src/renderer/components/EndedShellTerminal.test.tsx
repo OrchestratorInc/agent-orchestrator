@@ -1,3 +1,4 @@
+import { StrictMode } from "react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
@@ -13,7 +14,6 @@ vi.mock("../stores/terminal-shell-store", () => ({
 }));
 
 import { EndedShellTerminal } from "./EndedShellTerminal";
-import { TooltipProvider } from "./ui/tooltip";
 import type { ShellTerminal } from "../hooks/useShellTerminals";
 
 const ended: ShellTerminal = {
@@ -28,11 +28,11 @@ const ended: ShellTerminal = {
 function renderPane(shell: ShellTerminal) {
 	const queryClient = new QueryClient({ defaultOptions: { mutations: { retry: false }, queries: { retry: false } } });
 	return render(
-		<QueryClientProvider client={queryClient}>
-			<TooltipProvider>
+		<StrictMode>
+			<QueryClientProvider client={queryClient}>
 				<EndedShellTerminal shell={shell} />
-			</TooltipProvider>
-		</QueryClientProvider>,
+			</QueryClientProvider>
+		</StrictMode>,
 	);
 }
 
@@ -44,30 +44,29 @@ beforeEach(() => {
 });
 
 describe("EndedShellTerminal", () => {
-	it("says the terminal ended and reopens a plain shell only when asked", async () => {
+	it("restores the shell once when first shown, without an ended notice", async () => {
 		renderPane(ended);
-		expect(screen.getByRole("heading", { name: "Terminal ended" })).toBeTruthy();
-		expect(screen.getByText(/Nothing it ran before will run again/)).toBeTruthy();
-		// No agent was seen, so there is nothing to resume.
-		expect(screen.queryByRole("button", { name: /Reopen with/ })).toBeNull();
-		expect(postMock).not.toHaveBeenCalled();
-
-		fireEvent.click(screen.getByRole("button", { name: "Reopen terminal" }));
 		await waitFor(() => expect(postMock).toHaveBeenCalledTimes(1));
 		expect(postMock.mock.calls[0][1].body).not.toHaveProperty("resumeAgent");
+		expect(screen.queryByRole("heading", { name: "Terminal ended" })).toBeNull();
 	});
 
-	it("offers to resume the agent last seen in the shell", async () => {
-		renderPane({ ...ended, resumeHarness: "claude-code" });
-		fireEvent.click(screen.getByRole("button", { name: "Reopen with Claude Code" }));
+	it("resumes the agent that was running in the shell", async () => {
+		renderPane({ ...ended, handleId: "shellterm-agent", resumeHarness: "claude-code" });
 		await waitFor(() => expect(postMock).toHaveBeenCalledTimes(1));
 		expect(postMock.mock.calls[0][1].body).toMatchObject({ resumeAgent: true });
 	});
 
-	it("shows a failed reopen in place", async () => {
-		postMock.mockResolvedValue({ error: { code: "SHELL_TERMINAL_NOT_ENDED", message: "This terminal is still running" } });
-		renderPane(ended);
-		fireEvent.click(screen.getByRole("button", { name: "Reopen terminal" }));
+	it("says the terminal ended when the restore fails and reopens a plain shell on request", async () => {
+		postMock.mockResolvedValueOnce({
+			error: { code: "SHELL_TERMINAL_AGENT_RESUME_UNSUPPORTED", message: "Reopening with an agent needs bash, zsh, sh or fish." },
+		});
+		renderPane({ ...ended, handleId: "shellterm-failed", resumeHarness: "codex" });
 		expect(await screen.findByRole("alert")).toBeTruthy();
+		expect(screen.getByRole("heading", { name: "Terminal ended" })).toBeTruthy();
+
+		fireEvent.click(screen.getByRole("button", { name: "Reopen terminal" }));
+		await waitFor(() => expect(postMock).toHaveBeenCalledTimes(2));
+		expect(postMock.mock.calls[1][1].body).not.toHaveProperty("resumeAgent");
 	});
 });
