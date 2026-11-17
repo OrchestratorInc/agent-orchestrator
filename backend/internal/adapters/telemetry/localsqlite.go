@@ -16,7 +16,7 @@ import (
 const (
 	localBufferSize      = 128
 	localPruneEvery      = time.Hour
-	localPruneBatchLimit = int64(1000)
+	localPruneBatchLimit = int64(5000)
 	localPruneBatchPause = 50 * time.Millisecond
 	localVacuumThreshold = int64(256)
 	localVacuumPages     = int64(256)
