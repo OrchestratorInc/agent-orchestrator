@@ -99,6 +99,18 @@ if (host.error) {
 }
 if (host.status !== 0) process.exit(host.status ?? 1);
 
+const mcpVersion = `-X github.com/aoagents/agent-orchestrator/backend/internal/mcpserver.Version=${process.argv.includes("--dev") ? `${appVersion}-dev` : appVersion}`;
+const mcp = spawnSync("go", ["build", "-ldflags", mcpVersion, "-o", join(dirname(buildOutPath), process.platform === "win32" ? "ao-mcp.exe" : "ao-mcp"), "./cmd/ao-mcp"], {
+	cwd: backendRoot,
+	stdio: "inherit",
+	windowsHide: true,
+});
+if (mcp.error) {
+	console.error(`failed to build ao-mcp: ${mcp.error.message}`);
+	process.exit(1);
+}
+if (mcp.status !== 0) process.exit(mcp.status ?? 1);
+
 if (isWindowsDev) {
 	writeFileSync(windowsDevManifestPath, `${JSON.stringify({ path: buildOutPath }, null, 2)}\n`);
 	cleanupOldWindowsDevDaemons(buildOutPath);

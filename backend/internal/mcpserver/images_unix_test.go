@@ -1,6 +1,6 @@
 //go:build unix
 
-package cli
+package mcpserver
 
 import (
 	"os"
@@ -11,7 +11,7 @@ import (
 	"time"
 )
 
-// inlineWithin fails the test if inlineLocalImages has not returned in time.
+// inlineWithin fails the test if InlineLocalImages has not returned in time.
 func inlineWithin(t *testing.T, html string) (missing []string, err error) {
 	t.Helper()
 	type result struct {
@@ -20,14 +20,14 @@ func inlineWithin(t *testing.T, html string) (missing []string, err error) {
 	}
 	done := make(chan result, 1)
 	go func() {
-		_, missing, err := inlineLocalImages(html)
+		_, missing, err := InlineLocalImages(html)
 		done <- result{missing, err}
 	}()
 	select {
 	case r := <-done:
 		return r.missing, r.err
 	case <-time.After(5 * time.Second):
-		t.Fatal("inlineLocalImages is stuck")
+		t.Fatal("InlineLocalImages is stuck")
 		return nil, nil
 	}
 }

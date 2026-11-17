@@ -1,4 +1,4 @@
-package cli
+package mcpserver
 
 import (
 	"context"
@@ -52,7 +52,7 @@ var readOnlyCuaTools = map[string]bool{"list_windows": true, "get_window_state":
 // cuaTools are the computer-use tools this server offers: none unless the
 // session has computer use, and none while the daemon cannot list them (Cua
 // Driver not installed); the list is asked for again on the next tools/list.
-func (c *commandContext) cuaTools(ctx context.Context, state *mcpState) []map[string]any {
+func (s *server) cuaTools(ctx context.Context, state *mcpState) []map[string]any {
 	if os.Getenv(config.EnvComputerUse) != "1" {
 		return nil
 	}
@@ -62,7 +62,7 @@ func (c *commandContext) cuaTools(ctx context.Context, state *mcpState) []map[st
 	var response struct {
 		Tools []cuaAgentTool `json:"tools"`
 	}
-	if err := c.getJSON(ctx, "computer-use/agent-tools", &response); err != nil || len(response.Tools) == 0 {
+	if err := s.daemon.GetJSON(ctx, "computer-use/agent-tools", &response); err != nil || len(response.Tools) == 0 {
 		return nil
 	}
 	state.cuaLoaded = true
@@ -85,7 +85,7 @@ func (c *commandContext) cuaTools(ctx context.Context, state *mcpState) []map[st
 // callCua runs one Cua Driver tool through the daemon and returns its result
 // as text (the window line, the tree or the diff, and the stale snapshots)
 // with each screenshot as an image.
-func (c *commandContext) callCua(ctx context.Context, tool string, raw json.RawMessage) map[string]any {
+func (s *server) callCua(ctx context.Context, tool string, raw json.RawMessage) map[string]any {
 	var arguments map[string]any
 	if len(raw) > 0 && string(raw) != "null" {
 		if err := json.Unmarshal(raw, &arguments); err != nil {
@@ -94,7 +94,7 @@ func (c *commandContext) callCua(ctx context.Context, tool string, raw json.RawM
 	}
 	request := cuaCallRequest{Tool: tool, Arguments: arguments, SessionID: strings.TrimSpace(os.Getenv("AO_SESSION_ID"))}
 	var response cuaCallResponse
-	if err := c.postJSON(ctx, "computer-use/call", request, &response); err != nil {
+	if err := s.daemon.PostJSON(ctx, "computer-use/call", request, &response); err != nil {
 		return mcpToolError(err)
 	}
 	text, ok := renderCuaCall(response)
