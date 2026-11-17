@@ -1094,10 +1094,10 @@ func keepsEndedShell(rec ShellTerminalRecord) bool {
 // endShell tears down a shell's host and marks its row ended with what to
 // restore instead of deleting it. When the host cannot be confirmed gone the
 // row is left unchanged (stillAlive=true) so the next pass retries.
-func (s *Service) endShell(ctx context.Context, rec ShellTerminalRecord, end ShellTerminalEnd) (ShellTerminalRecord, bool, error) {
+func (s *Service) endShell(ctx context.Context, rec ShellTerminalRecord, end ShellTerminalEnd) (stillAlive bool, err error) {
 	stillAlive, destroyErr := s.destroyRuntimeConfirmed(ctx, ports.RuntimeHandle{ID: rec.HandleID})
 	if stillAlive {
-		return rec, true, destroyErr
+		return true, destroyErr
 	}
 	for _, tracker := range s.trackers {
 		tracker.UntrackShellTerminal(rec.HandleID)
@@ -1112,12 +1112,10 @@ func (s *Service) endShell(ctx context.Context, rec ShellTerminalRecord, end She
 		// tab it would refuse must not be shown. The host is gone either way,
 		// and the next pass marks the row again.
 		s.log.Warn("shell terminal: mark ended not stored", "handleId", rec.HandleID, "marked", marked, "error", err)
-		return rec, false, nil
+		return false, nil
 	}
 	s.log.Info("shell terminal ended; kept for restoring", "handleId", rec.HandleID)
-	rec.EndedAt = &end.EndedAt
-	rec.WorkingDir, rec.LastAgentHarness, rec.AgentConversationID = end.WorkingDir, end.AgentHarness, end.AgentConversationID
-	return rec, false, nil
+	return false, nil
 }
 
 // unchangedEnd keeps a shell's folder and last agent as they were recorded:
@@ -1168,7 +1166,7 @@ func (s *Service) ReapShellTerminalsFromPreviousAppRuns(ctx context.Context) (in
 				continue
 			}
 			if !alive {
-				if _, stillAlive, destroyErr := s.endShell(ctx, rec, unchangedEnd(rec)); stillAlive {
+				if stillAlive, destroyErr := s.endShell(ctx, rec, unchangedEnd(rec)); stillAlive {
 					s.log.Warn("ending shell terminal from previous app run: runtime still alive after destroy",
 						"handleId", rec.HandleID, "appRunId", rec.AppRunID, "error", destroyErr)
 				}
@@ -1370,7 +1368,7 @@ func (s *Service) suspendShell(ctx context.Context, rec ShellTerminalRecord) (st
 		}
 	}
 	s.saveOutput(ctx, rec.HandleID)
-	_, stillAlive, err = s.endShell(ctx, rec, end)
+	stillAlive, err = s.endShell(ctx, rec, end)
 	if stillAlive {
 		s.removeSavedOutput(rec.HandleID)
 	}
