@@ -287,10 +287,6 @@ func TestRowOneReviewRunsAlwaysReachAFinalState(t *testing.T) {
 			launchID := s.run(t, run.ID).LaunchID
 			s.observe(t, launchID, domain.ActivityActive)
 			s.observe(t, launchID, domain.ActivityIdle)
-			s.advance(cfg.IdleGrace)
-			if _, err := s.List(context.Background(), s.worker.ID); err != nil {
-				t.Fatal(err)
-			}
 			return describeRun(s.run(t, run.ID))
 		}},
 		{"#5948", "daemon restarts while an orphaned reviewer is alive", "failed (daemon_restarted) (orphan destroyed=true)", func(t *testing.T) string {
@@ -318,6 +314,131 @@ func TestRowOneReviewRunsAlwaysReachAFinalState(t *testing.T) {
 			t.Logf("AFTER %s %-55s -> %s", tc.issue, tc.name, got)
 			if got != tc.want {
 				t.Fatalf("%s: got %q, want %q", tc.issue, got, tc.want)
+			}
+		})
+	}
+}
+
+func TestCursorAndCodexReviewActivityEndsUnsubmittedRunsOnExplicitIdle(t *testing.T) {
+	for _, harness := range []domain.ReviewerHarness{domain.ReviewerCursor, domain.ReviewerCodex} {
+		t.Run(string(harness), func(t *testing.T) {
+			launcher := &fakeLauncher{handle: "review-mer-1", reportsActivity: true}
+			s := newLifecycleEngineWith(t, launcher, RunLifecycleConfig{FirstActivityWindow: 5 * time.Hour, MaxDuration: 5 * time.Hour, SuspendGap: 3 * time.Hour})
+			result, err := s.TriggerWithOptions(context.Background(), s.worker.ID, TriggerOptions{Harness: harness})
+			if err != nil || len(result.CreatedRuns) != 1 {
+				t.Fatalf("trigger %s: result=%+v err=%v", harness, result, err)
+			}
+			run := result.CreatedRuns[0]
+			review, ok, err := s.store.GetReviewBySessionAndHarness(context.Background(), s.worker.ID, harness)
+			if err != nil || !ok {
+				t.Fatalf("review %s: ok=%v err=%v", harness, ok, err)
+			}
+
+			launcher.aliveErr = errors.New("runtime probe unavailable")
+			// Silence alone is not completion, including after long elapsed time.
+			s.advance(2 * time.Hour)
+			s.pass(t)
+			if got := s.run(t, run.ID); got.Status != domain.ReviewRunRunning {
+				t.Fatalf("probe error or silence changed run state: %+v", got)
+			}
+			launcher.aliveErr = nil
+
+			for _, state := range []domain.ActivityState{domain.ActivityActive, domain.ActivityIdle} {
+				if _, err := s.store.UpdateReviewActivity(context.Background(), review.ID, state, "", run.LaunchID); err != nil {
+					t.Fatalf("persist %s activity: %v", state, err)
+				}
+				review.ReviewerActivityState = state
+				if err := s.ObserveReviewActivity(context.Background(), review, run.LaunchID, state); err != nil {
+					t.Fatalf("observe %s activity: %v", state, err)
+				}
+			}
+			wantRun(t, s.run(t, run.ID), domain.ReviewRunFailed, domain.ReviewFailureTurnEndedWithoutSubmit)
+		})
+	}
+}
+
+func TestSubmittedVerdictWinsLateIdleActivity(t *testing.T) {
+	launcher := &fakeLauncher{handle: "review-mer-1", reportsActivity: true}
+	s := newLifecycleEngine(t, launcher)
+	result, err := s.TriggerWithOptions(context.Background(), s.worker.ID, TriggerOptions{Harness: domain.ReviewerCodex})
+	if err != nil || len(result.CreatedRuns) != 1 {
+		t.Fatalf("trigger: result=%+v err=%v", result, err)
+	}
+	run := result.CreatedRuns[0]
+	ended := s.now.Add(time.Second)
+	if ok, err := s.store.TransitionReviewRun(context.Background(), run.ID, domain.ActiveReviewRunStatuses, domain.ReviewRunCompleted, domain.ReviewRunPatch{Verdict: domain.VerdictApproved, EndedAt: &ended}); err != nil || !ok {
+		t.Fatalf("submit verdict transition: ok=%v err=%v", ok, err)
+	}
+	review, ok, err := s.store.GetReviewBySessionAndHarness(context.Background(), s.worker.ID, domain.ReviewerCodex)
+	if err != nil || !ok {
+		t.Fatalf("review lookup: ok=%v err=%v", ok, err)
+	}
+	if _, err := s.store.UpdateReviewActivity(context.Background(), review.ID, domain.ActivityIdle, "", run.LaunchID); err != nil {
+		t.Fatal(err)
+	}
+	review.ReviewerActivityState = domain.ActivityIdle
+	if err := s.ObserveReviewActivity(context.Background(), review, run.LaunchID, domain.ActivityIdle); err != nil {
+		t.Fatal(err)
+	}
+	got := s.run(t, run.ID)
+	if got.Status != domain.ReviewRunCompleted || got.Verdict != domain.VerdictApproved {
+		t.Fatalf("late idle event overwrote submitted result: %+v", got)
+	}
+}
+
+func TestCursorAndCodexSubmitIdleRaceHasOneTerminalWinner(t *testing.T) {
+	for _, harness := range []domain.ReviewerHarness{domain.ReviewerCursor, domain.ReviewerCodex} {
+		t.Run(string(harness), func(t *testing.T) {
+			launcher := &fakeLauncher{handle: "review-mer-1", reportsActivity: true}
+			s := newLifecycleEngine(t, launcher)
+			result, err := s.TriggerWithOptions(context.Background(), s.worker.ID, TriggerOptions{Harness: harness})
+			if err != nil || len(result.CreatedRuns) != 1 {
+				t.Fatalf("trigger: result=%+v err=%v", result, err)
+			}
+			run := result.CreatedRuns[0]
+			review, ok, err := s.store.GetReviewBySessionAndHarness(context.Background(), s.worker.ID, harness)
+			if err != nil || !ok {
+				t.Fatalf("review lookup: ok=%v err=%v", ok, err)
+			}
+
+			start := make(chan struct{})
+			errs := make(chan error, 2)
+			var wg sync.WaitGroup
+			wg.Add(2)
+			go func() {
+				defer wg.Done()
+				<-start
+				ended := s.now.Add(time.Second)
+				_, err := s.store.TransitionReviewRun(context.Background(), run.ID, domain.ActiveReviewRunStatuses, domain.ReviewRunCompleted, domain.ReviewRunPatch{Verdict: domain.VerdictApproved, EndedAt: &ended})
+				errs <- err
+			}()
+			go func() {
+				defer wg.Done()
+				<-start
+				if _, err := s.store.UpdateReviewActivity(context.Background(), review.ID, domain.ActivityIdle, "", run.LaunchID); err != nil {
+					errs <- err
+					return
+				}
+				review.ReviewerActivityState = domain.ActivityIdle
+				errs <- s.ObserveReviewActivity(context.Background(), review, run.LaunchID, domain.ActivityIdle)
+			}()
+			close(start)
+			wg.Wait()
+			close(errs)
+			for err := range errs {
+				if err != nil {
+					t.Fatalf("concurrent terminal transition: %v", err)
+				}
+			}
+
+			got := s.run(t, run.ID)
+			switch {
+			case got.Status == domain.ReviewRunCompleted && got.Verdict == domain.VerdictApproved:
+				// The explicit submit won the guarded transition.
+			case got.Status == domain.ReviewRunFailed && got.FailureReason == domain.ReviewFailureTurnEndedWithoutSubmit:
+				// The explicit stop won; a later submit cannot rewrite a terminal run.
+			default:
+				t.Fatalf("run has no single valid terminal winner: %+v", got)
 			}
 		})
 	}

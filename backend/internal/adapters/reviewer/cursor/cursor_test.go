@@ -105,6 +105,12 @@ func TestReviewCommandBuildsPersistentInteractiveInvocation(t *testing.T) {
 	}
 }
 
+func TestReviewerReportsActivityHooks(t *testing.T) {
+	if !New().ReviewActivityHooks() {
+		t.Fatal("Cursor reviewer must advertise its installed active/idle hooks")
+	}
+}
+
 func TestReviewCommandOmitsAddDirWhenPromptRootIsEmpty(t *testing.T) {
 	agent := &captureAgent{}
 	got, err := (&Reviewer{agent: agent}).ReviewCommand(context.Background(), ports.ReviewInvocation{
@@ -209,6 +215,13 @@ func TestPreLaunchWritesIsolatedReviewerConfig(t *testing.T) {
 	}
 	if err := New().PreLaunch(context.Background(), inv); err != nil {
 		t.Fatalf("PreLaunch: %v", err)
+	}
+	hooks, err := os.ReadFile(filepath.Join(workspace, ".cursor", "hooks.json"))
+	if err != nil {
+		t.Fatalf("review activity hooks were not installed: %v", err)
+	}
+	if !strings.Contains(string(hooks), "ao hooks cursor stop") || !strings.Contains(string(hooks), "ao hooks cursor session-start") {
+		t.Fatalf("Cursor reviewer hooks = %s, want activity start and stop events", hooks)
 	}
 
 	if got, err := os.ReadFile(userConfigPath); err != nil || !reflect.DeepEqual(got, userConfig) {

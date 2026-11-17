@@ -12,19 +12,16 @@ import (
 	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
 )
 
-// RunLifecycleConfig holds the time limits of review runs. Every active run
-// state has one, so a run always reaches a final state. The runtime reaper
-// drives evaluation: each of its cycles observes the reviewers serving an
-// in-progress run and hands the pass to ApplyReviewerObservations.
+// RunLifecycleConfig holds safety limits for review runs. These limits fail a
+// stuck run; a successful run still requires its explicit submitted verdict.
+// The runtime reaper drives evaluation: each cycle observes the reviewers
+// serving an in-progress run and hands the pass to ApplyReviewerObservations.
 type RunLifecycleConfig struct {
 	// LaunchTimeout bounds launching: the reviewer start or task delivery.
 	LaunchTimeout time.Duration
 	// FirstActivityWindow is how long a delivered task may wait for the first
 	// activity signal from the launch serving it.
 	FirstActivityWindow time.Duration
-	// IdleGrace is how long an idle reviewer may go without submitting before
-	// its turn counts as ended.
-	IdleGrace time.Duration
 	// MaxDuration bounds a running pass, including time spent waiting for input.
 	MaxDuration time.Duration
 	// CancelTimeout is how long a cancel waits for the reviewer to stop before
@@ -41,7 +38,6 @@ func DefaultRunLifecycleConfig() RunLifecycleConfig {
 	return RunLifecycleConfig{
 		LaunchTimeout:       2 * time.Minute,
 		FirstActivityWindow: 2 * time.Minute,
-		IdleGrace:           60 * time.Second,
 		MaxDuration:         60 * time.Minute,
 		CancelTimeout:       30 * time.Second,
 		SuspendGap:          time.Minute,
@@ -55,9 +51,6 @@ func (c RunLifecycleConfig) withDefaults() RunLifecycleConfig {
 	}
 	if c.FirstActivityWindow <= 0 {
 		c.FirstActivityWindow = d.FirstActivityWindow
-	}
-	if c.IdleGrace <= 0 {
-		c.IdleGrace = d.IdleGrace
 	}
 	if c.MaxDuration <= 0 {
 		c.MaxDuration = d.MaxDuration
@@ -73,12 +66,10 @@ func (c RunLifecycleConfig) withDefaults() RunLifecycleConfig {
 
 // activityMark is the latest activity state the daemon accepted for one
 // reviewer launch. It is evidence for the run lifecycle, never run state.
-// since is when the reviewer entered state (repeated signals of the same
-// state keep it); at is the latest signal, which acknowledges a cancel.
+// at is when the latest signal arrived, which can acknowledge a cancel.
 type activityMark struct {
 	launchID string
 	state    domain.ActivityState
-	since    time.Time
 	at       time.Time
 }
 
@@ -377,10 +368,7 @@ func (e *Engine) ObserveReviewActivity(ctx stdctx.Context, review domain.Review,
 	// sleep as time spent.
 	e.noteObservation(now)
 	e.runs.mu.Lock()
-	mark := activityMark{launchID: launchID, state: state, since: now, at: now}
-	if prev, ok := e.runs.activity[review.ID]; ok && prev.launchID == launchID && prev.state == state {
-		mark.since = prev.since
-	}
+	mark := activityMark{launchID: launchID, state: state, at: now}
 	e.runs.activity[review.ID] = mark
 	e.runs.mu.Unlock()
 	if launchID != "" {
@@ -404,20 +392,6 @@ func (e *Engine) forgetActivity(reviewID string) {
 	e.runs.mu.Lock()
 	delete(e.runs.activity, reviewID)
 	e.runs.mu.Unlock()
-}
-
-// activitySince returns when the reviewer entered state, as far as this
-// daemon observed. A state read from the review row with no signal seen
-// since startup counts from now.
-func (e *Engine) activitySince(review domain.Review, state domain.ActivityState, now time.Time) time.Time {
-	e.runs.mu.Lock()
-	defer e.runs.mu.Unlock()
-	mark, ok := e.runs.activity[review.ID]
-	if ok && mark.state == state && mark.launchID == review.ReviewerLaunchID {
-		return mark.since
-	}
-	e.runs.activity[review.ID] = activityMark{launchID: review.ReviewerLaunchID, state: state, since: now, at: now}
-	return now
 }
 
 func (e *Engine) tracksActivity(review domain.Review) bool {
@@ -833,13 +807,10 @@ func (e *Engine) decide(ctx stdctx.Context, run domain.ReviewRun, review domain.
 			return runDecision{}, nil
 		}
 		if review.ReviewerActivityState == domain.ActivityIdle {
-			idleSince := e.activitySince(review, domain.ActivityIdle, now)
-			if idleSince.Before(*run.FirstActivityAt) {
-				idleSince = *run.FirstActivityAt
-			}
-			if e.elapsed(now, idleSince) >= cfg.IdleGrace {
-				return fail(domain.ReviewFailureTurnEndedWithoutSubmit, false), nil
-			}
+			// An accepted idle hook is affirmative evidence that this reviewer
+			// turn ended. A missing submit is a failed run; do not wait for an
+			// idle TTL or treat silence as a successful verdict.
+			return fail(domain.ReviewFailureTurnEndedWithoutSubmit, false), nil
 		}
 		return runDecision{}, nil
 	case domain.ReviewRunCancelling:

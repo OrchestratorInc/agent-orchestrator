@@ -43,6 +43,10 @@ func (r *Reviewer) InvalidateBinaryResolution() {
 var _ ports.Reviewer = (*Reviewer)(nil)
 var _ ports.ReviewerCanceller = (*Reviewer)(nil)
 
+// ReviewActivityHooks reports that Cursor's managed hooks report reviewer
+// turns as active and idle.
+func (r *Reviewer) ReviewActivityHooks() bool { return true }
+
 // PreLaunch installs the reviewer-only Cursor permissions and MCP policy into
 // its isolated AO-owned data directory without touching the checkout or user
 // configuration.
@@ -55,12 +59,16 @@ func (r *Reviewer) PreLaunch(ctx context.Context, inv ports.ReviewInvocation) er
 	if err := applyReviewerMCPDisable(ctx, inv); err != nil {
 		return err
 	}
-	return r.agent.InstallWorkspaceTrust(ctx, ports.WorkspaceHookConfig{
+	hookConfig := ports.WorkspaceHookConfig{
 		DataDir:       inv.DataDir,
 		Env:           reviewerEnv(inv),
 		SessionID:     inv.ReviewerID,
 		WorkspacePath: inv.WorkspacePath,
-	})
+	}
+	if err := r.agent.GetAgentHooks(ctx, hookConfig); err != nil {
+		return fmt.Errorf("install Cursor reviewer activity hooks: %w", err)
+	}
+	return r.agent.InstallWorkspaceTrust(ctx, hookConfig)
 }
 
 // ReviewCommand launches Cursor's normal persistent interactive TUI. Cursor
