@@ -139,26 +139,31 @@ func (s *Service) applyPicksToActiveTarget(ctx context.Context, id domain.Sessio
 	if request.PermissionMode != "" {
 		picked.ApprovalMode = ports.NormalizePermissionMode(request.PermissionMode)
 	}
-	if picked.Model == current.Model && picked.ReasoningEffort == current.ReasoningEffort &&
-		ports.NormalizePermissionMode(picked.ApprovalMode) == ports.NormalizePermissionMode(current.ApprovalMode) {
-		return false, nil
-	}
-	if _, err := s.setTurnSettings(ctx, controller, domain.SessionConversationOwner(id), picked); err != nil {
-		return false, &domain.ProviderSwitchError{
-			Kind:   domain.ProviderSwitchRefusalUnsupported,
-			Detail: fmt.Sprintf("%s is already active and did not take the picked settings: %v", request.TargetHarness, err),
-			Cause:  err,
+	unchanged := picked.Model == current.Model && picked.ReasoningEffort == current.ReasoningEffort &&
+		ports.NormalizePermissionMode(picked.ApprovalMode) == ports.NormalizePermissionMode(current.ApprovalMode)
+	if !unchanged {
+		if _, err := s.setTurnSettings(ctx, controller, domain.SessionConversationOwner(id), picked); err != nil {
+			return false, &domain.ProviderSwitchError{
+				Kind:   domain.ProviderSwitchRefusalUnsupported,
+				Detail: fmt.Sprintf("%s is already active and did not take the picked settings: %v", request.TargetHarness, err),
+				Cause:  err,
+			}
 		}
 	}
 	controller.mu.Lock()
 	running := controller.pendingTurnID != ""
 	controller.mu.Unlock()
-	if request.Force && running {
+	switch {
+	case request.Force && running:
 		if err := controller.Interrupt(ctx); err != nil {
 			result.Warnings = append(result.Warnings, fmt.Sprintf("the running turn did not stop: %v", err))
 		} else {
 			result.StoppedTurn = true
 		}
+	case unchanged:
+		return false, nil
+	case running:
+		result.Warnings = append(result.Warnings, "the running turn keeps its old settings; the next turn uses the new ones (--force stops it now)")
 	}
 	return true, nil
 }

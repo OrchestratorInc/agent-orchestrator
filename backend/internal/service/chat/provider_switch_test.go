@@ -963,10 +963,10 @@ func TestForcedSettingsChangeOnTheRunningAgentStopsItsTurn(t *testing.T) {
 		t.Fatal(err)
 	}
 	result, err := h.svc.SwitchProviderReport(ctx, testSession, domain.ProviderSwitchRequest{TargetHarness: record.Harness, Model: "first"})
-	if err != nil || !result.SettingsUpdated || result.StoppedTurn {
-		t.Fatalf("result = %+v err = %v, want the settings applied with the turn left running", result, err)
+	if err != nil || !result.SettingsUpdated || result.StoppedTurn || len(result.Warnings) != 1 || !strings.Contains(result.Warnings[0], "--force") {
+		t.Fatalf("result = %+v err = %v, want the settings applied with the turn left running and a --force hint", result, err)
 	}
-	result, err = h.svc.SwitchProviderReport(ctx, testSession, domain.ProviderSwitchRequest{TargetHarness: record.Harness, Model: "second", Force: true})
+	result, err = h.svc.SwitchProviderReport(ctx, testSession, domain.ProviderSwitchRequest{TargetHarness: record.Harness, Model: "first", Force: true})
 	if err != nil || !result.SettingsUpdated || !result.StoppedTurn {
 		t.Fatalf("forced result = %+v err = %v, want the settings applied and the turn stopped", result, err)
 	}
