@@ -40,7 +40,7 @@ func TestBackgroundTasksReadsNativeCodexInventory(t *testing.T) {
 			if (err != nil) != tc.wantErr || errors.Is(err, ports.ErrBackgroundTasksUnsupported) != tc.unsupported || errors.Is(err, ports.ErrBackgroundTasksPartial) != tc.partial || len(tasks) != tc.count {
 				t.Fatalf("tasks=%+v err=%v", tasks, err)
 			}
-			if tc.count > 0 && (tasks[0].ID != "63962" || tasks[0].Kind != "shell" || tasks[0].Description != "sleep 1800") {
+			if tc.count > 0 && (tasks[0].ID != "63962" || tasks[0].Kind != "shell" || tasks[0].Description != "sleep 1800" || !tasks[0].Stoppable) {
 				t.Fatalf("task=%+v", tasks[0])
 			}
 		})
@@ -130,5 +130,98 @@ func TestBackgroundTasksPreservesObservedAgentsWhenShellInventoryUnsupported(t *
 	tasks, err := c.BackgroundTasks(context.Background())
 	if !errors.Is(err, ports.ErrBackgroundTasksPartial) || len(tasks) != 1 || tasks[0].ID != "agent:child" {
 		t.Fatalf("tasks=%+v err=%v", tasks, err)
+	}
+}
+
+func TestStopBackgroundTaskTerminatesOneCodexTerminal(t *testing.T) {
+	for _, tc := range []struct {
+		name, taskID string
+		reply        string
+		code         int
+		wantErr      error
+		wantSent     bool
+	}{
+		{name: "terminated", taskID: "63962", reply: `{"terminated":true}`, wantSent: true},
+		{name: "already exited", taskID: "63962", reply: `{"terminated":false}`, wantErr: ports.ErrBackgroundTaskNotStoppable, wantSent: true},
+		{name: "unsupported", taskID: "63962", code: -32601, wantErr: ports.ErrBackgroundTaskNotStoppable, wantSent: true},
+		{name: "not a listed terminal", taskID: "99", wantErr: ports.ErrBackgroundTaskNotStoppable},
+		{name: "a subagent", taskID: "agent:child", wantErr: ports.ErrBackgroundTaskNotStoppable},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			d, srv := newTestDriver(t)
+			srv.reply("thread/backgroundTerminals/list", `{"data":[{"processId":"63962","itemId":"cmd-1","command":"npm run dev"}],"nextCursor":null}`)
+			if tc.code != 0 {
+				srv.replyError("thread/backgroundTerminals/terminate", tc.code, "refused")
+			} else if tc.reply != "" {
+				srv.reply("thread/backgroundTerminals/terminate", tc.reply)
+			}
+			conv, err := d.Start(context.Background(), ports.ChatStartConfig{WorkspacePath: "/tmp/ws"})
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer func() { _ = conv.Close() }()
+			c := conv.(*conversation)
+			c.backgroundObserved.Update(ports.ChatBackgroundTask{ID: "agent:child", Kind: "agent", State: "running"}, time.Now())
+			tasks, _ := c.BackgroundTasks(context.Background())
+			for _, task := range tasks {
+				if task.Stoppable != (task.ID == "63962") {
+					t.Fatalf("only the listed terminal is stoppable: %+v", tasks)
+				}
+			}
+			err = c.StopBackgroundTask(context.Background(), tc.taskID)
+			if !errors.Is(err, tc.wantErr) || (tc.wantErr == nil && err != nil) {
+				t.Fatalf("err=%v, want %v", err, tc.wantErr)
+			}
+			if srv.sentMethod("thread/backgroundTerminals/terminate") != tc.wantSent {
+				t.Fatalf("terminate sent=%v, want %v", !tc.wantSent, tc.wantSent)
+			}
+			if tc.wantSent {
+				sent := srv.awaitFrame(func(f frame) bool { return f.Method == "thread/backgroundTerminals/terminate" })
+				var params struct{ ThreadID, ProcessID string }
+				if err := json.Unmarshal(sent.Params, &params); err != nil || params.ThreadID != "thread-1" || params.ProcessID != "63962" {
+					t.Fatalf("params=%s err=%v", sent.Params, err)
+				}
+			}
+		})
+	}
+}
+
+// Codex reports a terminated terminal with the signal's exit code; one AO
+// stopped must not read as failed.
+func TestStoppedCodexTerminalSettlesAsStopped(t *testing.T) {
+	d, srv := newTestDriver(t)
+	srv.reply("thread/backgroundTerminals/list", `{"data":[{"processId":"63962","itemId":"cmd-1","command":"npm run dev"},{"processId":"70001","itemId":"cmd-2","command":"npm run build"}],"nextCursor":null}`)
+	srv.reply("thread/backgroundTerminals/terminate", `{"terminated":true}`)
+	conv, err := d.Start(context.Background(), ports.ChatStartConfig{WorkspacePath: "/tmp/ws"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = conv.Close() }()
+	c := conv.(*conversation)
+	if _, err := c.BackgroundTasks(context.Background()); !errors.Is(err, ports.ErrBackgroundTasksPartial) {
+		t.Fatal(err)
+	}
+	if err := c.StopBackgroundTask(context.Background(), "63962"); err != nil {
+		t.Fatal(err)
+	}
+	// Both exit with a signal's code; only the one AO stopped is not a failure.
+	srv.push(`{"method":"item/completed","params":{"threadId":"thread-1","item":{"id":"cmd-1","type":"commandExecution","processId":"63962","exitCode":143}}}`)
+	srv.push(`{"method":"item/completed","params":{"threadId":"thread-1","item":{"id":"cmd-2","type":"commandExecution","processId":"70001","exitCode":1}}}`)
+	deadline := time.Now().Add(3 * time.Second)
+	for {
+		states := map[string]string{}
+		for _, task := range c.backgroundObserved.Snapshot(time.Now()) {
+			states[task.ID] = task.State
+		}
+		if states["70001"] == "failed" {
+			if states["63962"] != "stopped" {
+				t.Fatalf("states=%v", states)
+			}
+			return
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("completions never settled: %v", states)
+		}
+		time.Sleep(10 * time.Millisecond)
 	}
 }

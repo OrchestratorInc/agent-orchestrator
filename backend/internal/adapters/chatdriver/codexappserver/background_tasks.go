@@ -11,7 +11,10 @@ import (
 	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
 )
 
-var _ ports.ChatBackgroundTaskInspector = (*conversation)(nil)
+var (
+	_ ports.ChatBackgroundTaskInspector = (*conversation)(nil)
+	_ ports.ChatBackgroundTaskStopper   = (*conversation)(nil)
+)
 
 // BackgroundTasks reads the app-server's unified-exec registry, never the OS
 // process tree. A page failure leaves the whole reading unavailable.
@@ -64,6 +67,11 @@ func (c *conversation) BackgroundTasks(ctx context.Context) ([]ports.ChatBackgro
 		if response.NextCursor == nil || *response.NextCursor == "" {
 			c.backgroundObserved.ReconcileShells(out, time.Now())
 			tasks := c.backgroundObserved.Snapshot(time.Now())
+			// Every supported app-server can terminate a listed terminal; an
+			// agent or a settled shell has nothing to stop.
+			for i := range tasks {
+				tasks[i].Stoppable = seenIDs[tasks[i].ID] && tasks[i].State == "running"
+			}
 			// Shell inventory is complete, but event-derived agents may predate
 			// this controller attachment even when none have been observed yet.
 			return tasks, ports.ErrBackgroundTasksPartial
@@ -75,6 +83,61 @@ func (c *conversation) BackgroundTasks(ctx context.Context) ([]ports.ChatBackgro
 		cursors[cursor] = true
 	}
 	return nil, errors.New("background-terminal inventory exceeded 100 pages")
+}
+
+// StopBackgroundTask terminates one background terminal the app-server lists.
+// Its subagents have no stop here.
+func (c *conversation) StopBackgroundTask(ctx context.Context, taskID string) error {
+	c.mu.Lock()
+	closed := c.closed
+	c.mu.Unlock()
+	if closed {
+		return ports.ErrBackgroundTaskNotStoppable
+	}
+	live := false
+	for _, task := range c.backgroundObserved.Snapshot(time.Now()) {
+		if task.ID == taskID && task.Kind == "shell" && task.State == "running" {
+			live = true
+			break
+		}
+	}
+	if !live {
+		return ports.ErrBackgroundTaskNotStoppable
+	}
+	// Marked before asking: the terminal's completion can arrive before the reply.
+	c.setBackgroundStopping(taskID, true)
+	var response struct {
+		Terminated bool `json:"terminated"`
+	}
+	params := map[string]any{"threadId": c.threadID, "processId": taskID}
+	if err := c.conn.request(ctx, "thread/backgroundTerminals/terminate", params, &response); err != nil {
+		c.setBackgroundStopping(taskID, false)
+		var rpcErr *rpcError
+		if errors.As(err, &rpcErr) && (rpcErr.Code == -32601 || rpcErr.Code == -32600 || rpcErr.Code == -32602) {
+			return ports.ErrBackgroundTaskNotStoppable
+		}
+		return err
+	}
+	// False means the terminal had already exited.
+	if !response.Terminated {
+		c.setBackgroundStopping(taskID, false)
+		return ports.ErrBackgroundTaskNotStoppable
+	}
+	c.backgroundObserved.Finish(taskID, "stopped", time.Now())
+	return nil
+}
+
+func (c *conversation) setBackgroundStopping(processID string, stopping bool) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if !stopping {
+		delete(c.backgroundStopping, processID)
+		return
+	}
+	if c.backgroundStopping == nil {
+		c.backgroundStopping = make(map[string]bool)
+	}
+	c.backgroundStopping[processID] = true
 }
 
 func (c *conversation) observeBackgroundNotification(n notification) {
@@ -103,6 +166,13 @@ func (c *conversation) observeBackgroundNotification(n notification) {
 		if params.Item.ExitCode != nil && *params.Item.ExitCode != 0 {
 			state = "failed"
 		}
+		c.mu.Lock()
+		if c.backgroundStopping[params.Item.ProcessID] {
+			// AO terminated it, so the signal's exit code is not a failure.
+			state = "stopped"
+			delete(c.backgroundStopping, params.Item.ProcessID)
+		}
+		c.mu.Unlock()
 		c.backgroundObserved.Finish(params.Item.ProcessID, state, now)
 	}
 	if params.Item.Type == "collabAgentToolCall" {

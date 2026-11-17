@@ -72,6 +72,9 @@ type conversation struct {
 	pending       map[string]*parkedRequest
 	pendingInputs map[string]*parkedInput
 	closed        bool
+	// backgroundStopping holds the terminals AO asked the app-server to
+	// terminate, so their completion reads as stopped, not failed.
+	backgroundStopping map[string]bool
 
 	// sendMu serializes turn dispatch so only one operation mutates the provider
 	// conversation at a time.
