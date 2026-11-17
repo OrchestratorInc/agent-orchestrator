@@ -692,3 +692,46 @@ func TestSwitchToRetiredReviewerRestoresItsPane(t *testing.T) {
 		}
 	}
 }
+
+func TestSwitchRetiredReviewerRespectsNativeSessionReset(t *testing.T) {
+	for _, model := range []string{"model-A", "model-B"} {
+		t.Run(model, func(t *testing.T) {
+			row := domain.Review{ID: "rev-codex", SessionID: "mer-1", Harness: domain.ReviewerCodex, InterfaceMode: domain.ReviewerInterfaceTUI, IsArchived: true, ReviewerActivityState: domain.ActivityExited, AgentSessionID: "old-session"}
+			store := &fakeStore{review: &row, reviews: map[domain.ReviewerHarness]domain.Review{domain.ReviewerCodex: row}, runs: []domain.ReviewRun{requestedRun("run-old", domain.ReviewerCodex, domain.ReviewRunFailed, domain.VerdictNone, 1)}}
+			launcher := &fakeLauncher{handle: "codex-pane"}
+			worker := liveWorker()
+			worker.ReviewerHarness = domain.ReviewerCodex
+			worker.ReviewerConfig = domain.AgentConfig{Model: "model-A"}
+			eng := newEngineForTest(store, fakeSessions{rec: worker, ok: true}, prAt("sha1"), fakeProjects{}, launcher)
+
+			if _, err := eng.SwitchReviewer(context.Background(), worker.ID, domain.ReviewerCodex, domain.AgentConfig{Model: model}); err != nil {
+				t.Fatalf("SwitchReviewer: %v", err)
+			}
+			wantSession := "old-session"
+			if model != worker.ReviewerConfig.Model {
+				wantSession = ""
+			}
+			if !launcher.restored || launcher.gotSpec.AgentSessionID != wantSession || store.review.AgentSessionID != wantSession {
+				t.Fatalf("restored=%v launch session=%q stored session=%q, want %q", launcher.restored, launcher.gotSpec.AgentSessionID, store.review.AgentSessionID, wantSession)
+			}
+		})
+	}
+}
+
+func TestListRetiredFallbackReportsSelectedHarness(t *testing.T) {
+	for _, status := range []domain.ReviewRunStatus{domain.ReviewRunCompleted, domain.ReviewRunFailed} {
+		t.Run(string(status), func(t *testing.T) {
+			row := domain.Review{ID: "rev-codex", SessionID: "mer-1", Harness: domain.ReviewerCodex, ReviewerHandleID: "codex-pane"}
+			store := &fakeStore{review: &row, runs: []domain.ReviewRun{requestedRun("run-old", domain.ReviewerCodex, status, domain.VerdictNone, 1)}}
+			eng := newEngineForTest(store, fakeSessions{rec: liveWorker(), ok: true}, prAt("sha1"), fakeProjects{}, &fakeLauncher{alive: true})
+
+			got, err := eng.List(context.Background(), "mer-1")
+			if err != nil {
+				t.Fatalf("List: %v", err)
+			}
+			if got.ReviewerHarness != domain.ReviewerClaudeCode || got.ReviewerSurface.ReviewID != "" || len(got.ActiveReviewers) != 0 {
+				t.Fatalf("List = %+v, want configured Claude without a retired surface", got)
+			}
+		})
+	}
+}

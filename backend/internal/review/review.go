@@ -1012,6 +1012,8 @@ func (e *Engine) SwitchReviewer(
 		if row.Harness == selected && row.IsArchived {
 			row.IsArchived = false
 			row.UpdatedAt = e.clock()
+			// Preserve the stored native session, which a config reset may have cleared.
+			row.AgentSessionID = ""
 			if err := e.store.UpsertReview(ctx, row); err != nil {
 				return SessionReviews{}, err
 			}
@@ -1641,6 +1643,7 @@ func (e *Engine) listLocked(ctx stdctx.Context, workerID domain.SessionID, selec
 		}
 		if row.ID == reviewRow.ID {
 			reviewRow = retired
+			reviewerHarness = selectedHarness
 		} else {
 			reviewRows[i] = retired
 		}
