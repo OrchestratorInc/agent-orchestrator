@@ -27,11 +27,11 @@ type Fixture struct {
 	Provenance string `json:"provenance"`
 	// ProviderConversationID is the dummy native thread id.
 	ProviderConversationID string `json:"providerConversationId"`
-	// HistoryTurns is how many completed turns precede the live turn. History
-	// turn n uses HistoryTemplates[(n-1) % len].
-	HistoryTurns     int            `json:"historyTurns"`
-	HistoryTemplates []TurnTemplate `json:"historyTemplates"`
-	LiveTurn         TurnTemplate   `json:"liveTurn"`
+	// SettledTurns is how many completed turns precede the reply turn. Settled
+	// turn n uses SettledTemplates[(n-1) % len].
+	SettledTurns     int            `json:"settledTurns"`
+	SettledTemplates []TurnTemplate `json:"settledTemplates"`
+	ReplyTurn        TurnTemplate   `json:"replyTurn"`
 }
 
 // TurnTemplate is one user message and the provider events that answer it.
@@ -94,10 +94,10 @@ func DecodeFixture(data []byte) (Fixture, error) {
 	if !slices.Contains(Providers, fixture.Provider) {
 		return Fixture{}, errors.New("fixture provider is not allowlisted")
 	}
-	if fixture.HistoryTurns < 1 || len(fixture.HistoryTemplates) == 0 {
-		return Fixture{}, errors.New("fixture needs history turns and templates")
+	if fixture.SettledTurns < 1 || len(fixture.SettledTemplates) == 0 {
+		return Fixture{}, errors.New("fixture needs settled turns and templates")
 	}
-	for _, template := range append(slices.Clone(fixture.HistoryTemplates), fixture.LiveTurn) {
+	for _, template := range append(slices.Clone(fixture.SettledTemplates), fixture.ReplyTurn) {
 		if err := template.validate(); err != nil {
 			return Fixture{}, err
 		}
@@ -129,17 +129,17 @@ func (t TurnTemplate) validate() error {
 	return nil
 }
 
-// HistoryTurnList expands the history turns in order.
-func (f Fixture) HistoryTurnList() []Turn {
-	turns := make([]Turn, 0, f.HistoryTurns)
-	for n := 1; n <= f.HistoryTurns; n++ {
-		turns = append(turns, expand(f.HistoryTemplates[(n-1)%len(f.HistoryTemplates)], n))
+// SettledTurnList expands the settled turns in order.
+func (f Fixture) SettledTurnList() []Turn {
+	turns := make([]Turn, 0, f.SettledTurns)
+	for n := 1; n <= f.SettledTurns; n++ {
+		turns = append(turns, expand(f.SettledTemplates[(n-1)%len(f.SettledTemplates)], n))
 	}
 	return turns
 }
 
-// Live expands the live turn, numbered after the history.
-func (f Fixture) Live() Turn { return expand(f.LiveTurn, f.HistoryTurns+1) }
+// Reply expands the reply turn, numbered after the settled turns.
+func (f Fixture) Reply() Turn { return expand(f.ReplyTurn, f.SettledTurns+1) }
 
 func expand(t TurnTemplate, n int) Turn {
 	number := strconv.Itoa(n)

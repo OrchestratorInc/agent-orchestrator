@@ -27,16 +27,16 @@ func DecodeRun(data []byte) (Run, error) {
 	return run, nil
 }
 
-// DecodeCeilings strictly decodes and validates a ceilings file.
-func DecodeCeilings(data []byte) (Ceilings, error) {
-	var ceilings Ceilings
-	if err := decodeStrict(data, &ceilings); err != nil {
-		return Ceilings{}, err
+// DecodeLimits strictly decodes and validates a limits file.
+func DecodeLimits(data []byte) (Limits, error) {
+	var limits Limits
+	if err := decodeStrict(data, &limits); err != nil {
+		return Limits{}, err
 	}
-	if err := ceilings.Validate(); err != nil {
-		return Ceilings{}, err
+	if err := limits.Validate(); err != nil {
+		return Limits{}, err
 	}
-	return ceilings, nil
+	return limits, nil
 }
 
 // Validate checks every field of a run. It does not judge the measurements;
@@ -65,7 +65,7 @@ func (r Run) Validate() error {
 	}
 	for name, digest := range map[string]string{
 		"harnessSha256": r.HarnessSha256, "fixturesSha256": r.FixturesSha256,
-		"ceilingsSha256": r.CeilingsSha256, "clientSourceSha256": r.ClientSourceSha256,
+		"limitsSha256": r.LimitsSha256, "clientSourceSha256": r.ClientSourceSha256,
 		"simulatorClientSha256": r.SimulatorClientSha256,
 	} {
 		if !hex64Pattern.MatchString(digest) {
@@ -126,21 +126,21 @@ func validateKey(key ScenarioKey) error {
 
 func (s Scenario) validate() error {
 	m := s.Metrics
-	if m.WireBytesIn != m.HeaderBytesIn+m.FramingBytesIn+m.BodyEncodedBytes+m.SSEBytes {
-		return errors.New("wireBytesIn must equal headerBytesIn + framingBytesIn + bodyEncodedBytes + sseBytes")
+	if m.DownloadBytes != m.HeaderBytes+m.ChunkBytes+m.BodyBytes+m.SSEBytes {
+		return errors.New("downloadBytes must equal headerBytes + chunkBytes + bodyBytes + sseBytes")
 	}
-	if m.Requests == 0 || m.HeaderBytesIn == 0 || m.BodyEncodedBytes == 0 || m.BodyDecodedBytes == 0 || m.WireBytesOut == 0 {
+	if m.Requests == 0 || m.HeaderBytes == 0 || m.BodyBytes == 0 || m.JSONBytes == 0 || m.UploadBytes == 0 {
 		return errors.New("a scenario must issue requests and receive headers and bodies")
 	}
-	if s.Transport == "local" && m.BodyEncodedBytes != m.BodyDecodedBytes {
+	if s.Transport == "local" && m.BodyBytes != m.JSONBytes {
 		return errors.New("the loopback listener never compresses, so encoded and decoded bodies must match")
 	}
-	if s.Phase == "live-turn" {
+	if s.Phase == "stream-reply" {
 		if m.SSEFrames == 0 || m.SSEBytes == 0 || m.CDCRows == 0 {
-			return errors.New("a live turn must produce change rows and event-stream frames")
+			return errors.New("a reply turn must produce change rows and event-stream frames")
 		}
 	} else if m.SSEFrames != 0 || m.SSEBytes != 0 || m.CDCRows != 0 {
-		return errors.New("only a live turn reads the event stream")
+		return errors.New("only a reply turn reads the event stream")
 	}
 	st := s.State
 	for name, digest := range map[string]string{
@@ -160,10 +160,10 @@ func (s Scenario) validate() error {
 	return nil
 }
 
-// Validate checks a ceilings file.
-func (c Ceilings) Validate() error {
-	if c.SchemaVersion != CeilingsSchema {
-		return fmt.Errorf("schemaVersion must be %q", CeilingsSchema)
+// Validate checks a limits file.
+func (c Limits) Validate() error {
+	if c.SchemaVersion != LimitsSchema {
+		return fmt.Errorf("schemaVersion must be %q", LimitsSchema)
 	}
 	if !hex64Pattern.MatchString(c.FixturesSha256) {
 		return errors.New("fixturesSha256 must be a lowercase sha256")
@@ -172,7 +172,7 @@ func (c Ceilings) Validate() error {
 		return errors.New("maxIncreasePermille must be at most 1000")
 	}
 	if len(c.Rows) == 0 {
-		return errors.New("ceilings have no rows")
+		return errors.New("limits have no rows")
 	}
 	seen := map[ScenarioKey]bool{}
 	for _, row := range c.Rows {
@@ -180,7 +180,7 @@ func (c Ceilings) Validate() error {
 			return err
 		}
 		if seen[row.Key()] {
-			return fmt.Errorf("ceiling %s appears twice", row.Key())
+			return fmt.Errorf("limit %s appears twice", row.Key())
 		}
 		seen[row.Key()] = true
 	}

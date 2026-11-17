@@ -4,8 +4,8 @@
   "harness": "claude-code",
   "provenance": "Normalized ports.ChatEvent shapes produced by backend/internal/adapters/chatdriver/acp (client.go toolEvent, mergeToolUpdate, activityKindFromTool; conversation.go message completion) for the claude-code harness at 999321b38cc5: tool rows carry protocol/toolKind/locations/input/output/content plus providerToolName from _meta.claudeCode, every tool_call_update re-emits the whole accumulated detail, terminal output streams as command.output.delta followed by that re-emit, and edits carry patch, oldText, newText and diff content. Tool-content blocks are representative of claude-code-acp, not captured frames. All paths, commands, outputs and prose are invented dummy content for a fictional project; no user data.",
   "providerConversationId": "dummy-claude-session-0001",
-  "historyTurns": 60,
-  "historyTemplates": [
+  "settledTurns": 60,
+  "settledTemplates": [
     {
       "user": "Turn {n}: where does the dummy shop validate reservation quantities?",
       "steps": [
@@ -48,7 +48,7 @@
       ]
     }
   ],
-  "liveTurn": {
+  "replyTurn": {
     "user": "Turn {n}: move the rollback release into the checkout transaction, add a regression test, and run the full suite.",
     "steps": [
       {"kind": "turn.started"},

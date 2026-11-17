@@ -1,7 +1,7 @@
 // Command chattraffic validates and compares chat traffic benchmark runs
 // and prepares baseline trees. It treats every artifact as data.
 //
-//	chattraffic compare --baseline B.json --candidate C.json --ceilings ceilings.json \
+//	chattraffic compare --baseline B.json --candidate C.json --limits limits.json \
 //	    [--expect-baseline-ref SHA] [--expect-candidate-ref SHA] [--allow-client-change] \
 //	    [--out-json report.json] [--out-md report.md]
 //	chattraffic validate --run R.json
@@ -51,23 +51,23 @@ func compare(args []string, stdout, stderr io.Writer) int {
 	fs.SetOutput(stderr)
 	baselinePath := fs.String("baseline", "", "baseline run JSON")
 	candidatePath := fs.String("candidate", "", "candidate run JSON")
-	ceilingsPath := fs.String("ceilings", "", "reviewed ceilings JSON")
+	limitsPath := fs.String("limits", "", "reviewed limits JSON")
 	expectBaseline := fs.String("expect-baseline-ref", "", "commit the baseline must have measured")
 	expectCandidate := fs.String("expect-candidate-ref", "", "commit the candidate must have measured")
 	allowClientChange := fs.Bool("allow-client-change", false, "compare even when renderer source differs from the simulator's")
 	outJSON := fs.String("out-json", "", "write the report JSON here")
 	outMD := fs.String("out-md", "", "write the Markdown report here")
-	if err := fs.Parse(args); err != nil || fs.NArg() != 0 || *baselinePath == "" || *candidatePath == "" || *ceilingsPath == "" {
-		note(stderr, "compare needs --baseline, --candidate and --ceilings")
+	if err := fs.Parse(args); err != nil || fs.NArg() != 0 || *baselinePath == "" || *candidatePath == "" || *limitsPath == "" {
+		note(stderr, "compare needs --baseline, --candidate and --limits")
 		return chattraffic.ExitIncomparable
 	}
-	ceilingsBytes, err := chattraffic.ReadArtifact(*ceilingsPath)
+	limitsBytes, err := chattraffic.ReadArtifact(*limitsPath)
 	if err != nil {
-		return rejected(stderr, "ceilings", err)
+		return rejected(stderr, "limits", err)
 	}
-	ceilings, err := chattraffic.DecodeCeilings(ceilingsBytes)
+	limits, err := chattraffic.DecodeLimits(limitsBytes)
 	if err != nil {
-		return rejected(stderr, "ceilings", err)
+		return rejected(stderr, "limits", err)
 	}
 	baseline, err := loadRun(*baselinePath)
 	if err != nil {
@@ -77,8 +77,8 @@ func compare(args []string, stdout, stderr io.Writer) int {
 	if err != nil {
 		return rejected(stderr, "candidate run", err)
 	}
-	report := chattraffic.Compare(baseline, candidate, ceilings, chattraffic.Options{
-		CeilingsSha256:     chattraffic.SHA256Hex(ceilingsBytes),
+	report := chattraffic.Compare(baseline, candidate, limits, chattraffic.Options{
+		LimitsSha256:       chattraffic.SHA256Hex(limitsBytes),
 		ExpectBaselineRef:  *expectBaseline,
 		ExpectCandidateRef: *expectCandidate,
 		AllowClientChange:  *allowClientChange,

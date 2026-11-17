@@ -2,7 +2,7 @@
 # Local chat traffic benchmark: baseline revision vs this working tree.
 #
 #   scripts/chat-traffic-benchmark.sh [--baseline-ref REF] [--out-dir DIR]
-#       [--ceilings FILE] [--allow-client-change] [--keep-work]
+#       [--limits FILE] [--allow-client-change] [--keep-work]
 #
 # The baseline is REF's committed tree (default: origin/main, else main),
 # exported with `git archive` into a private temporary directory. Nothing is
@@ -11,7 +11,7 @@
 # against REF. The candidate is this working tree, including uncommitted
 # changes, which are recorded as a digest. Both sides run the same harness,
 # fixtures, toolchain and Go settings; the comparator then checks both runs
-# against the reviewed ceilings file.
+# against the reviewed limits file.
 #
 # Exit codes: 0 pass, 1 limit or semantic failure, 2 invalid, incomparable,
 # failed replay or setup failure. See docs/performance/chat-traffic-benchmark.md.
@@ -33,21 +33,21 @@ value() {
 
 baseline_ref=""
 out_dir=""
-ceilings=""
+limits=""
 allow_client_change=""
 keep_work=""
 while [[ $# -gt 0 ]]; do
 	case "$1" in
 	--baseline-ref) baseline_ref="$(value "$@")"; shift 2 ;;
 	--out-dir) out_dir="$(value "$@")"; shift 2 ;;
-	--ceilings) ceilings="$(value "$@")"; shift 2 ;;
+	--limits) limits="$(value "$@")"; shift 2 ;;
 	--allow-client-change) allow_client_change="--allow-client-change"; shift ;;
 	--keep-work) keep_work=1; shift ;;
 	*) usage ;;
 	esac
 done
 
-# Relative --out-dir and --ceilings name paths from the caller's directory.
+# Relative --out-dir and --limits name paths from the caller's directory.
 caller="$(pwd -P)"
 absolute() {
 	case "$1" in
@@ -56,7 +56,7 @@ absolute() {
 	esac
 }
 [[ -z "$out_dir" ]] || out_dir="$(absolute "$out_dir")"
-[[ -z "$ceilings" ]] || ceilings="$(absolute "$ceilings")"
+[[ -z "$limits" ]] || limits="$(absolute "$limits")"
 
 # A reused --out-dir must never hand an earlier run's results to this one, even
 # when this run stops during setup.
@@ -83,9 +83,9 @@ if [[ -z "$baseline_ref" ]]; then
 fi
 base_sha="$(git rev-parse --verify --quiet "${baseline_ref}^{commit}")" || fail "cannot resolve baseline ref $baseline_ref"
 head_sha="$(git rev-parse --verify HEAD^{commit})"
-ceilings="${ceilings:-$repo/backend/internal/chattraffic/ceilings.json}"
-[[ -f "$ceilings" && ! -L "$ceilings" ]] || fail "ceilings file $ceilings is missing or not a regular file"
-ceilings_sha="$(sha256 <"$ceilings")"
+limits="${limits:-$repo/backend/internal/chattraffic/limits.json}"
+[[ -f "$limits" && ! -L "$limits" ]] || fail "limits file $limits is missing or not a regular file"
+limits_sha="$(sha256 <"$limits")"
 
 # Paths the benchmark compiles or reads. Dirty state elsewhere cannot change a
 # measurement and is not part of the candidate identity.
@@ -138,7 +138,7 @@ go_env=(env GOWORK=off GOTOOLCHAIN=local GOFLAGS=-mod=readonly GOPROXY=off GOMAX
 
 echo "baseline  $baseline_ref = $base_sha"
 echo "candidate working tree on $head_sha${dirty_sha:+ (uncommitted changes $dirty_sha)}"
-echo "ceilings  $ceilings ($ceilings_sha)"
+echo "limits    $limits ($limits_sha)"
 
 (cd backend && "${go_env[@]}" go build -o "$work/bin/chattraffic" ./internal/chattraffic/cmd/chattraffic)
 bench="$work/bin/chattraffic"
@@ -161,7 +161,7 @@ run_side() {
 	(cd "$root/backend" && "${go_env[@]}" \
 		AO_CHATTRAFFIC_OUT="$artifact" AO_CHATTRAFFIC_SIDE="$side" \
 		AO_CHATTRAFFIC_SOURCE_REF="$ref" AO_CHATTRAFFIC_DIRTY_DIFF_SHA256="$dirty" \
-		AO_CHATTRAFFIC_CEILINGS_SHA256="$ceilings_sha" \
+		AO_CHATTRAFFIC_LIMITS_SHA256="$limits_sha" \
 		go test -count=1 -p 1 -timeout 15m -run '^TestChatTrafficBenchmark$' ./internal/httpd/ >"$out_dir/$side.log" 2>&1) || status=$?
 	# The harness carries semantic differences inside the artifact and passes;
 	# it fails, and writes no artifact, only when the replay itself broke an
@@ -180,7 +180,7 @@ run_side candidate "$repo" "$head_sha" "$dirty_sha"
 	fail "the candidate's measured sources changed during the run; no comparison"
 
 status=0
-"$bench" compare --baseline "$out_dir/baseline.json" --candidate "$out_dir/candidate.json" --ceilings "$ceilings" \
+"$bench" compare --baseline "$out_dir/baseline.json" --candidate "$out_dir/candidate.json" --limits "$limits" \
 	--expect-baseline-ref "$base_sha" --expect-candidate-ref "$head_sha" $allow_client_change \
 	--out-json "$out_dir/report.json" --out-md "$out_dir/report.md" || status=$?
 echo

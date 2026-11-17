@@ -1,9 +1,9 @@
 // Package chattraffic holds the data contract of the local chat-traffic
-// benchmark: the run artifact a harness writes, the reviewed ceilings file, the
+// benchmark: the run artifact a harness writes, the reviewed limits file, the
 // comparison of a baseline run with a candidate run, and the Markdown report.
 //
-// The package imports only the standard library. A trusted reader can validate
-// and render untrusted run artifacts without compiling any product code, and
+// The package imports only the standard library, so a run artifact from any
+// revision can be validated and rendered without compiling product code, and
 // every input is treated as data: nothing here derives a path, a command, or
 // Markdown markup from an artifact field. The measurement harness that drives
 // the daemon lives in backend/internal/httpd/chattraffic_harness_test.go.
@@ -11,14 +11,14 @@ package chattraffic
 
 // Schema identifiers. A reader accepts exactly these values.
 const (
-	RunSchema      = "ao.chattraffic.run.v1"
-	CeilingsSchema = "ao.chattraffic.ceilings.v1"
-	ReportSchema   = "ao.chattraffic.report.v1"
-	FixtureSchema  = "ao.chattraffic.fixture.v1"
+	RunSchema     = "ao.chattraffic.run.v1"
+	LimitsSchema  = "ao.chattraffic.limits.v1"
+	ReportSchema  = "ao.chattraffic.report.v1"
+	FixtureSchema = "ao.chattraffic.fixture.v1"
 )
 
 // MaxArtifactBytes bounds every JSON input before it is parsed.
-const MaxArtifactBytes = 64 << 10
+const MaxArtifactBytes = 256 << 10
 
 // MaxMetric bounds every metric and count. Real values are far smaller; the
 // bound keeps integer arithmetic exact and rejects absurd artifacts.
@@ -28,7 +28,7 @@ const MaxMetric int64 = 1_000_000_000
 // these, so a rendered report never contains artifact-chosen text.
 var (
 	Providers  = []string{"claude", "codex"}
-	Phases     = []string{"history-open", "history-full", "live-turn", "expand-output"}
+	Phases     = []string{"open-chat", "scroll-to-top", "stream-reply", "expand-output"}
 	Transports = []string{"local", "remote-lan"}
 	Sides      = []string{"baseline", "candidate"}
 )
@@ -53,9 +53,9 @@ type Run struct {
 	HarnessSha256 string `json:"harnessSha256"`
 	// FixturesSha256 digests the fixture files the harness replayed.
 	FixturesSha256 string `json:"fixturesSha256"`
-	// CeilingsSha256 is the digest of the ceilings file the runner named. The
-	// harness never reads ceilings; this binds the run to one reviewed file.
-	CeilingsSha256 string `json:"ceilingsSha256"`
+	// LimitsSha256 is the digest of the limits file the runner named. The
+	// harness never reads limits; this binds the run to one reviewed file.
+	LimitsSha256 string `json:"limitsSha256"`
 	// ClientSourceSha256 digests the renderer files whose policy the Go client
 	// simulator mirrors, read from this revision's tree.
 	ClientSourceSha256 string `json:"clientSourceSha256"`
@@ -109,20 +109,20 @@ type Metrics struct {
 	// SSEBytes is the event-stream body after HTTP/1.1 de-chunking. The
 	// daemon never compresses the stream, so this is also its decoded size.
 	SSEBytes int64 `json:"sseBytes"`
-	// HeaderBytesIn is every response status line and header block.
-	HeaderBytesIn int64 `json:"headerBytesIn"`
-	// FramingBytesIn is HTTP/1.1 chunked framing on all responses.
-	FramingBytesIn int64 `json:"framingBytesIn"`
-	// BodyEncodedBytes is JSON response bodies as sent on the wire, after
+	// HeaderBytes is every response status line and header block.
+	HeaderBytes int64 `json:"headerBytes"`
+	// ChunkBytes is HTTP/1.1 chunked framing on all responses.
+	ChunkBytes int64 `json:"chunkBytes"`
+	// BodyBytes is JSON response bodies as the client received them, after
 	// de-chunking and before Content-Encoding is decoded.
-	BodyEncodedBytes int64 `json:"bodyEncodedBytes"`
-	// BodyDecodedBytes is the same bodies after Content-Encoding is decoded.
-	BodyDecodedBytes int64 `json:"bodyDecodedBytes"`
-	// WireBytesIn is every byte the client read from its sockets. It equals
-	// HeaderBytesIn + FramingBytesIn + BodyEncodedBytes + SSEBytes.
-	WireBytesIn int64 `json:"wireBytesIn"`
-	// WireBytesOut is every byte the client wrote: request lines and headers.
-	WireBytesOut int64 `json:"wireBytesOut"`
+	BodyBytes int64 `json:"bodyBytes"`
+	// JSONBytes is the same bodies after Content-Encoding is decoded.
+	JSONBytes int64 `json:"jsonBytes"`
+	// DownloadBytes is every byte the client read from its sockets. It equals
+	// HeaderBytes + ChunkBytes + BodyBytes + SSEBytes.
+	DownloadBytes int64 `json:"downloadBytes"`
+	// UploadBytes is every byte the client wrote: request lines and headers.
+	UploadBytes int64 `json:"uploadBytes"`
 }
 
 // State is the semantic result a scenario must reproduce. Byte savings that
@@ -140,47 +140,47 @@ type State struct {
 	Turns        int64  `json:"turns"`
 }
 
-// Ceilings is the reviewed limits file. It is never written by a run and never
+// Limits is the reviewed limits file. It is never written by a run and never
 // derived from a baseline.
-type Ceilings struct {
+type Limits struct {
 	SchemaVersion string `json:"schemaVersion"`
 	// FixturesSha256 names the fixture set these limits were reviewed for.
 	FixturesSha256 string `json:"fixturesSha256"`
 	// MaxIncreasePermille is the largest allowed candidate increase over the
 	// baseline for every metric, in thousandths, using integer arithmetic.
-	MaxIncreasePermille int64        `json:"maxIncreasePermille"`
-	Rows                []CeilingRow `json:"rows"`
+	MaxIncreasePermille int64      `json:"maxIncreasePermille"`
+	Rows                []LimitRow `json:"rows"`
 }
 
-// CeilingRow holds the absolute ceiling for every metric of one scenario.
-type CeilingRow struct {
+// LimitRow holds the absolute limit for every metric of one scenario.
+type LimitRow struct {
 	Provider  string  `json:"provider"`
 	Phase     string  `json:"phase"`
 	Transport string  `json:"transport"`
 	Max       Metrics `json:"max"`
 }
 
-// ScenarioKey identifies a scenario across runs and ceilings.
+// ScenarioKey identifies a scenario across runs and limits.
 type ScenarioKey struct{ Provider, Phase, Transport string }
 
 // Key identifies the scenario a run measured.
 func (s Scenario) Key() ScenarioKey { return ScenarioKey{s.Provider, s.Phase, s.Transport} }
 
-// Key identifies the scenario a ceiling row limits.
-func (c CeilingRow) Key() ScenarioKey { return ScenarioKey{c.Provider, c.Phase, c.Transport} }
+// Key identifies the scenario a limit row covers.
+func (c LimitRow) Key() ScenarioKey { return ScenarioKey{c.Provider, c.Phase, c.Transport} }
 
 func (k ScenarioKey) String() string { return k.Provider + "/" + k.Phase + "/" + k.Transport }
 
 // MetricNames lists metrics in report order.
 var MetricNames = []string{
-	"requests", "cdcRows", "sseFrames", "sseBytes", "headerBytesIn", "framingBytesIn",
-	"bodyEncodedBytes", "bodyDecodedBytes", "wireBytesIn", "wireBytesOut",
+	"requests", "cdcRows", "sseFrames", "sseBytes", "headerBytes", "chunkBytes",
+	"bodyBytes", "jsonBytes", "downloadBytes", "uploadBytes",
 }
 
 // Values returns metrics in MetricNames order.
 func (m Metrics) Values() []int64 {
 	return []int64{
-		m.Requests, m.CDCRows, m.SSEFrames, m.SSEBytes, m.HeaderBytesIn, m.FramingBytesIn,
-		m.BodyEncodedBytes, m.BodyDecodedBytes, m.WireBytesIn, m.WireBytesOut,
+		m.Requests, m.CDCRows, m.SSEFrames, m.SSEBytes, m.HeaderBytes, m.ChunkBytes,
+		m.BodyBytes, m.JSONBytes, m.DownloadBytes, m.UploadBytes,
 	}
 }

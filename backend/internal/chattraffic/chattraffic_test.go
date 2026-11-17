@@ -12,13 +12,13 @@ import (
 	"github.com/aoagents/agent-orchestrator/backend/internal/chattraffic"
 )
 
-func loadSamples(t *testing.T) (chattraffic.Run, chattraffic.Run, chattraffic.Ceilings, chattraffic.Options) {
+func loadSamples(t *testing.T) (chattraffic.Run, chattraffic.Run, chattraffic.Limits, chattraffic.Options) {
 	t.Helper()
 	runBytes, err := os.ReadFile("testdata/sample-run.json")
 	if err != nil {
 		t.Fatal(err)
 	}
-	ceilingBytes, err := os.ReadFile("testdata/sample-ceilings.json")
+	limitBytes, err := os.ReadFile("testdata/sample-limits.json")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -32,61 +32,61 @@ func loadSamples(t *testing.T) (chattraffic.Run, chattraffic.Run, chattraffic.Ce
 	}
 	candidate.Side = "candidate"
 	candidate.Scenarios = append([]chattraffic.Scenario(nil), baseline.Scenarios...)
-	ceilings, err := chattraffic.DecodeCeilings(ceilingBytes)
+	limits, err := chattraffic.DecodeLimits(limitBytes)
 	if err != nil {
-		t.Fatalf("sample ceilings rejected: %v", err)
+		t.Fatalf("sample limits rejected: %v", err)
 	}
-	return baseline, candidate, ceilings, chattraffic.Options{CeilingsSha256: chattraffic.SHA256Hex(ceilingBytes)}
+	return baseline, candidate, limits, chattraffic.Options{LimitsSha256: chattraffic.SHA256Hex(limitBytes)}
 }
 
 func TestCompareIdenticalRunsPasses(t *testing.T) {
-	baseline, candidate, ceilings, opts := loadSamples(t)
-	report := chattraffic.Compare(baseline, candidate, ceilings, opts)
+	baseline, candidate, limits, opts := loadSamples(t)
+	report := chattraffic.Compare(baseline, candidate, limits, opts)
 	if report.Status != chattraffic.StatusPass || report.ExitCode != chattraffic.ExitPass {
 		t.Fatalf("status %s exit %d reasons %+v", report.Status, report.ExitCode, report.Reasons)
 	}
-	if len(report.Rows) != 2 || report.Rows[0].Phase != "history-open" {
+	if len(report.Rows) != 2 || report.Rows[0].Phase != "open-chat" {
 		t.Fatalf("rows not in allowlist order: %+v", report.Rows)
 	}
 }
 
-func TestCompareCeilingIsInclusive(t *testing.T) {
-	baseline, candidate, ceilings, opts := loadSamples(t)
-	ceilings.MaxIncreasePermille = 1000
-	ceiling := ceilings.Rows[0].Max.WireBytesIn
-	candidate.Scenarios[0].Metrics.WireBytesIn = ceiling
-	if report := chattraffic.Compare(baseline, candidate, ceilings, opts); report.ExitCode != chattraffic.ExitPass {
-		t.Fatalf("value equal to the ceiling failed: %+v", report.Reasons)
+func TestCompareLimitIsInclusive(t *testing.T) {
+	baseline, candidate, limits, opts := loadSamples(t)
+	limits.MaxIncreasePermille = 1000
+	limit := limits.Rows[0].Max.DownloadBytes
+	candidate.Scenarios[0].Metrics.DownloadBytes = limit
+	if report := chattraffic.Compare(baseline, candidate, limits, opts); report.ExitCode != chattraffic.ExitPass {
+		t.Fatalf("value equal to the limit failed: %+v", report.Reasons)
 	}
-	candidate.Scenarios[0].Metrics.WireBytesIn = ceiling + 1
-	report := chattraffic.Compare(baseline, candidate, ceilings, opts)
-	if report.ExitCode != chattraffic.ExitFail || !hasReason(report, "over-ceiling", "wireBytesIn") {
-		t.Fatalf("ceiling+1 did not fail: %+v", report.Reasons)
+	candidate.Scenarios[0].Metrics.DownloadBytes = limit + 1
+	report := chattraffic.Compare(baseline, candidate, limits, opts)
+	if report.ExitCode != chattraffic.ExitFail || !hasReason(report, "over-limit", "downloadBytes") {
+		t.Fatalf("limit+1 did not fail: %+v", report.Reasons)
 	}
 }
 
-func TestCompareRelativeIncreaseFailsUnderTheCeiling(t *testing.T) {
-	baseline, candidate, ceilings, opts := loadSamples(t)
+func TestCompareRelativeIncreaseFailsUnderTheLimit(t *testing.T) {
+	baseline, candidate, limits, opts := loadSamples(t)
 	// 2.0% of 42000 is 840: 42840 is allowed, 42841 is not.
-	ceilings.Rows[0].Max.BodyDecodedBytes = 50_000
-	candidate.Scenarios[0].Metrics.BodyDecodedBytes = 42_840
-	if report := chattraffic.Compare(baseline, candidate, ceilings, opts); report.ExitCode != chattraffic.ExitPass {
+	limits.Rows[0].Max.JSONBytes = 50_000
+	candidate.Scenarios[0].Metrics.JSONBytes = 42_840
+	if report := chattraffic.Compare(baseline, candidate, limits, opts); report.ExitCode != chattraffic.ExitPass {
 		t.Fatalf("increase at the cap failed: %+v", report.Reasons)
 	}
-	candidate.Scenarios[0].Metrics.BodyDecodedBytes = 42_841
-	report := chattraffic.Compare(baseline, candidate, ceilings, opts)
-	if report.ExitCode != chattraffic.ExitFail || !hasReason(report, "regressed", "bodyDecodedBytes") {
+	candidate.Scenarios[0].Metrics.JSONBytes = 42_841
+	report := chattraffic.Compare(baseline, candidate, limits, opts)
+	if report.ExitCode != chattraffic.ExitFail || !hasReason(report, "regressed", "jsonBytes") {
 		t.Fatalf("increase past the cap did not fail: %+v", report.Reasons)
 	}
 }
 
 func TestCompareSemanticLossFailsEvenWhenSmaller(t *testing.T) {
-	baseline, candidate, ceilings, opts := loadSamples(t)
+	baseline, candidate, limits, opts := loadSamples(t)
 	scenario := &candidate.Scenarios[1]
-	scenario.Metrics.BodyEncodedBytes /= 2
-	scenario.Metrics.BodyDecodedBytes /= 2
+	scenario.Metrics.BodyBytes /= 2
+	scenario.Metrics.JSONBytes /= 2
 	scenario.State.ClientDigest = strings.Repeat("6", 64)
-	report := chattraffic.Compare(baseline, candidate, ceilings, opts)
+	report := chattraffic.Compare(baseline, candidate, limits, opts)
 	if report.ExitCode != chattraffic.ExitFail || !hasReason(report, "candidate-state-mismatch", "") {
 		t.Fatalf("dropped content passed: %+v", report.Reasons)
 	}
@@ -100,7 +100,7 @@ func TestCompareRefusesIncomparableRuns(t *testing.T) {
 	}{
 		{"harness", func(_, c *chattraffic.Run, _ *chattraffic.Options) { c.HarnessSha256 = strings.Repeat("9", 64) }, "harness-mismatch"},
 		{"fixtures", func(_, c *chattraffic.Run, _ *chattraffic.Options) { c.FixturesSha256 = strings.Repeat("9", 64) }, "fixtures-mismatch"},
-		{"ceilings", func(_, _ *chattraffic.Run, o *chattraffic.Options) { o.CeilingsSha256 = strings.Repeat("9", 64) }, "ceilings-mismatch"},
+		{"limits", func(_, _ *chattraffic.Run, o *chattraffic.Options) { o.LimitsSha256 = strings.Repeat("9", 64) }, "limits-mismatch"},
 		{"toolchain", func(_, c *chattraffic.Run, _ *chattraffic.Options) { c.GoVersion = "go1.26.0" }, "toolchain-mismatch"},
 		{"client", func(_, c *chattraffic.Run, _ *chattraffic.Options) {
 			c.ClientSourceSha256 = strings.Repeat("9", 64)
@@ -117,9 +117,9 @@ func TestCompareRefusesIncomparableRuns(t *testing.T) {
 		}, "expected-state-mismatch"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			baseline, candidate, ceilings, opts := loadSamples(t)
+			baseline, candidate, limits, opts := loadSamples(t)
 			tc.mutate(&baseline, &candidate, &opts)
-			report := chattraffic.Compare(baseline, candidate, ceilings, opts)
+			report := chattraffic.Compare(baseline, candidate, limits, opts)
 			if report.ExitCode != chattraffic.ExitIncomparable || !hasReason(report, tc.code, "") {
 				t.Fatalf("exit %d reasons %+v", report.ExitCode, report.Reasons)
 			}
@@ -135,10 +135,10 @@ func TestCompareRefusesIncomparableRuns(t *testing.T) {
 }
 
 func TestAllowedClientChangeIsNeverAPass(t *testing.T) {
-	baseline, candidate, ceilings, opts := loadSamples(t)
+	baseline, candidate, limits, opts := loadSamples(t)
 	candidate.ClientSourceSha256 = strings.Repeat("9", 64)
 	opts.AllowClientChange = true
-	report := chattraffic.Compare(baseline, candidate, ceilings, opts)
+	report := chattraffic.Compare(baseline, candidate, limits, opts)
 	if report.Status != chattraffic.StatusUnverified || report.ExitCode != chattraffic.ExitIncomparable ||
 		!hasReason(report, "client-source-unmodeled-allowed", "") {
 		t.Fatalf("status %s exit %d reasons %+v", report.Status, report.ExitCode, report.Reasons)
@@ -147,8 +147,8 @@ func TestAllowedClientChangeIsNeverAPass(t *testing.T) {
 		t.Fatal("the Markdown report does not label the comparison unverified")
 	}
 	// A real failure still reports as a failure.
-	candidate.Scenarios[0].Metrics.WireBytesIn = ceilings.Rows[0].Max.WireBytesIn + 1
-	if report := chattraffic.Compare(baseline, candidate, ceilings, opts); report.ExitCode != chattraffic.ExitFail {
+	candidate.Scenarios[0].Metrics.DownloadBytes = limits.Rows[0].Max.DownloadBytes + 1
+	if report := chattraffic.Compare(baseline, candidate, limits, opts); report.ExitCode != chattraffic.ExitFail {
 		t.Fatalf("a limit failure under --allow-client-change exited %d", report.ExitCode)
 	}
 }
@@ -171,7 +171,7 @@ func TestDecodeRunRejectsLooseJSON(t *testing.T) {
 		"too large":     strings.Replace(text, `"requests": 1,`, `"requests": 1000000001,`, 1),
 		"trailing data": text + "{}",
 		"bom":           "\xef\xbb\xbf" + text,
-		"wire sum":      strings.Replace(text, `"wireBytesIn": 5192,`, `"wireBytesIn": 5193,`, 1),
+		"download sum":  strings.Replace(text, `"downloadBytes": 5192,`, `"downloadBytes": 5193,`, 1),
 		"bad ref":       strings.Replace(text, `999321b38cc5f57bc53ab9c255cb10c4e8999e68`, `main`, 1),
 		"provider":      strings.Replace(text, `"provider": "codex"`, `"provider": "gemini"`, 1),
 	} {
@@ -355,15 +355,15 @@ func TestCanonicalPayloadKeepsToolContentOnly(t *testing.T) {
 	}
 }
 
-// The reviewed ceilings name the fixture set they cover. Regenerated expected
-// states change that set, so the ceilings must be reviewed and rebound with
+// The reviewed limits name the fixture set they cover. Regenerated expected
+// states change that set, so the limits must be reviewed and rebound with
 // them; otherwise every benchmark run is refused as incomparable.
-func TestCeilingsBindTheCommittedFixtures(t *testing.T) {
-	data, err := os.ReadFile("ceilings.json")
+func TestLimitsBindTheCommittedFixtures(t *testing.T) {
+	data, err := os.ReadFile("limits.json")
 	if err != nil {
 		t.Fatal(err)
 	}
-	ceilings, err := chattraffic.DecodeCeilings(data)
+	limits, err := chattraffic.DecodeLimits(data)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -376,8 +376,8 @@ func TestCeilingsBindTheCommittedFixtures(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got := chattraffic.ListDigest(append(fixtures, expected...)); got != ceilings.FixturesSha256 {
-		t.Fatalf("ceilings.json is bound to fixtures %s, but the committed fixtures and expected states are %s", ceilings.FixturesSha256, got)
+	if got := chattraffic.ListDigest(append(fixtures, expected...)); got != limits.FixturesSha256 {
+		t.Fatalf("limits.json is bound to fixtures %s, but the committed fixtures and expected states are %s", limits.FixturesSha256, got)
 	}
 }
 

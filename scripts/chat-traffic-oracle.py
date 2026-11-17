@@ -179,9 +179,9 @@ def canonical(turn_states, rows):
 
 def oracle(provider, output_limit):
     fixture = json.loads((FIXTURES / (provider + ".json")).read_text(encoding="utf-8"))
-    templates = fixture["historyTemplates"]
-    history = [expand(templates[(n - 1) % len(templates)], n) for n in range(1, fixture["historyTurns"] + 1)]
-    live = expand(fixture["liveTurn"], fixture["historyTurns"] + 1)
+    templates = fixture["settledTemplates"]
+    history = [expand(templates[(n - 1) % len(templates)], n) for n in range(1, fixture["settledTurns"] + 1)]
+    reply = expand(fixture["replyTurn"], fixture["settledTurns"] + 1)
 
     files = {}
     states, rows, cut_states, cut_rows = [], [], [], []
@@ -196,8 +196,8 @@ def oracle(provider, output_limit):
             cut_rows.append(("activity", kind, output, size(output), status, "", "", len(cut_states) - 1))
     files["oracle-%s-history.txt" % provider] = canonical(states, rows)
     files["oracle-%s-expand.txt" % provider] = canonical(cut_states, cut_rows)
-    state, rows, _ = turn_rows(live)
-    files["oracle-%s-live.txt" % provider] = canonical([state], [row + (0,) for row in rows])
+    state, rows, _ = turn_rows(reply)
+    files["oracle-%s-reply.txt" % provider] = canonical([state], [row + (0,) for row in rows])
     return files
 
 

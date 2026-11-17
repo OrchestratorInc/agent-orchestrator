@@ -27,15 +27,15 @@ func RenderMarkdown(r Report) string {
 		"`remote-lan` bodies are gzip-encoded by the daemon's own LAN middleware; `local` bodies are never encoded. " +
 		"Request and frame counts come from a deterministic scheduled replay, not wall-clock product timing.\n\n")
 
-	b.WriteString("| Scenario | Requests | SSE frames | Wire in (B) | Encoded body (B) | Decoded body (B) | Δ wire in | Wire-in ceiling | Status |\n")
+	b.WriteString("| Scenario | Requests | SSE frames | Download (B) | Body (B) | JSON (B) | Δ download | Download limit | Status |\n")
 	b.WriteString("|---|---:|---:|---:|---:|---:|---:|---:|---|\n")
 	for _, row := range r.Rows {
-		wire := metricNamed(row, "wireBytesIn")
+		download := metricNamed(row, "downloadBytes")
 		fmt.Fprintf(&b, "| %s · %s · %s | %s | %s | %s | %s | %s | %s | %s | %s |\n",
 			escapeMarkdown(row.Provider), escapeMarkdown(row.Phase), escapeMarkdown(row.Transport),
-			candidateValue(row, "requests"), candidateValue(row, "sseFrames"), candidateValue(row, "wireBytesIn"),
-			candidateValue(row, "bodyEncodedBytes"), candidateValue(row, "bodyDecodedBytes"),
-			deltaLabel(wire), groupDigits(wire.Ceiling), rowStatusLabel(row))
+			candidateValue(row, "requests"), candidateValue(row, "sseFrames"), candidateValue(row, "downloadBytes"),
+			candidateValue(row, "bodyBytes"), candidateValue(row, "jsonBytes"),
+			deltaLabel(download), groupDigits(download.Limit), rowStatusLabel(row))
 	}
 
 	if len(r.Reasons) > 0 {
@@ -56,17 +56,17 @@ func RenderMarkdown(r Report) string {
 	for _, row := range r.Rows {
 		fmt.Fprintf(&b, "**%s · %s · %s** (semantic state %s)\n\n", escapeMarkdown(row.Provider),
 			escapeMarkdown(row.Phase), escapeMarkdown(row.Transport), matchLabel(row.SemanticMatch))
-		b.WriteString("| Metric | Baseline | Candidate | Δ | Ceiling | Allowed | Status |\n|---|---:|---:|---:|---:|---:|---|\n")
+		b.WriteString("| Metric | Baseline | Candidate | Δ | Limit | Allowed | Status |\n|---|---:|---:|---:|---:|---:|---|\n")
 		for _, metric := range row.Metrics {
 			fmt.Fprintf(&b, "| %s | %s | %s | %s | %s | %s | %s |\n", escapeMarkdown(metric.Name),
 				groupDigits(metric.Baseline), groupDigits(metric.Candidate), deltaLabel(metric),
-				groupDigits(metric.Ceiling), groupDigits(metric.Allowed), escapeMarkdown(metric.Status))
+				groupDigits(metric.Limit), groupDigits(metric.Allowed), escapeMarkdown(metric.Status))
 		}
 		b.WriteString("\n")
 	}
 	b.WriteString("</details>\n\n")
-	fmt.Fprintf(&b, "Fixtures `%s`, ceilings `%s`, harness `%s`, max increase %s.\n",
-		escapeMarkdown(shortDigest(r.FixturesSha256)), escapeMarkdown(shortDigest(r.CeilingsSha256)),
+	fmt.Fprintf(&b, "Fixtures `%s`, limits `%s`, harness `%s`, max increase %s.\n",
+		escapeMarkdown(shortDigest(r.FixturesSha256)), escapeMarkdown(shortDigest(r.LimitsSha256)),
 		escapeMarkdown(shortDigest(r.Candidate.HarnessSha256)), permilleLabel(r.MaxIncreasePermille))
 	return b.String()
 }

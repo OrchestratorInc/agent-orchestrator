@@ -18,7 +18,7 @@ import (
 
 // Harness paths, relative to the repository root and slash-separated. These
 // are the only files a baseline tree receives from the candidate. They are all
-// benchmark-only: the leaf package with its fixtures and ceilings, and the
+// benchmark-only: the leaf package with its fixtures and limits, and the
 // test file that drives the product. Product code is never in this set.
 const (
 	HarnessPackageDir = "backend/internal/chattraffic"
@@ -284,7 +284,7 @@ func regularFileDigest(p string) (string, error) {
 	return SHA256Hex(data), nil
 }
 
-// ReadArtifact reads an untrusted artifact: it must be a regular file (not a
+// ReadArtifact reads an artifact as plain data: it must be a regular file (not a
 // symlink) no larger than MaxArtifactBytes.
 func ReadArtifact(p string) ([]byte, error) {
 	info, err := os.Lstat(p)

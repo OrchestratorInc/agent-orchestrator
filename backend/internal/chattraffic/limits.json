@@ -1,0 +1,245 @@
+{
+  "schemaVersion": "ao.chattraffic.limits.v1",
+  "fixturesSha256": "97e04b1a096da86b8d7211c45b930293ed247c57dd73cf712a6d892f8f6cb967",
+  "maxIncreasePermille": 20,
+  "rows": [
+    {
+      "provider": "claude",
+      "phase": "open-chat",
+      "transport": "local",
+      "max": {
+        "requests": 1,
+        "cdcRows": 0,
+        "sseFrames": 0,
+        "sseBytes": 0,
+        "headerBytes": 192,
+        "chunkBytes": 64,
+        "bodyBytes": 54080,
+        "jsonBytes": 54080,
+        "downloadBytes": 54272,
+        "uploadBytes": 256
+      }
+    },
+    {
+      "provider": "claude",
+      "phase": "open-chat",
+      "transport": "remote-lan",
+      "max": {
+        "requests": 1,
+        "cdcRows": 0,
+        "sseFrames": 0,
+        "sseBytes": 0,
+        "headerBytes": 256,
+        "chunkBytes": 64,
+        "bodyBytes": 4544,
+        "jsonBytes": 46912,
+        "downloadBytes": 4800,
+        "uploadBytes": 320
+      }
+    },
+    {
+      "provider": "claude",
+      "phase": "scroll-to-top",
+      "transport": "local",
+      "max": {
+        "requests": 2,
+        "cdcRows": 0,
+        "sseFrames": 0,
+        "sseBytes": 0,
+        "headerBytes": 384,
+        "chunkBytes": 64,
+        "bodyBytes": 214720,
+        "jsonBytes": 214720,
+        "downloadBytes": 215104,
+        "uploadBytes": 448
+      }
+    },
+    {
+      "provider": "claude",
+      "phase": "scroll-to-top",
+      "transport": "remote-lan",
+      "max": {
+        "requests": 2,
+        "cdcRows": 0,
+        "sseFrames": 0,
+        "sseBytes": 0,
+        "headerBytes": 512,
+        "chunkBytes": 128,
+        "bodyBytes": 13568,
+        "jsonBytes": 186048,
+        "downloadBytes": 14144,
+        "uploadBytes": 576
+      }
+    },
+    {
+      "provider": "claude",
+      "phase": "stream-reply",
+      "transport": "local",
+      "max": {
+        "requests": 42,
+        "cdcRows": 44,
+        "sseFrames": 45,
+        "sseBytes": 15680,
+        "headerBytes": 7616,
+        "chunkBytes": 896,
+        "bodyBytes": 2174912,
+        "jsonBytes": 2174912,
+        "downloadBytes": 2198720,
+        "uploadBytes": 9792
+      }
+    },
+    {
+      "provider": "claude",
+      "phase": "stream-reply",
+      "transport": "remote-lan",
+      "max": {
+        "requests": 42,
+        "cdcRows": 44,
+        "sseFrames": 45,
+        "sseBytes": 15680,
+        "headerBytes": 9664,
+        "chunkBytes": 832,
+        "bodyBytes": 80256,
+        "jsonBytes": 366784,
+        "downloadBytes": 106240,
+        "uploadBytes": 12736
+      }
+    },
+    {
+      "provider": "claude",
+      "phase": "expand-output",
+      "transport": "remote-lan",
+      "max": {
+        "requests": 20,
+        "cdcRows": 0,
+        "sseFrames": 0,
+        "sseBytes": 0,
+        "headerBytes": 4352,
+        "chunkBytes": 0,
+        "bodyBytes": 18816,
+        "jsonBytes": 72960,
+        "downloadBytes": 23168,
+        "uploadBytes": 5888
+      }
+    },
+    {
+      "provider": "codex",
+      "phase": "open-chat",
+      "transport": "local",
+      "max": {
+        "requests": 1,
+        "cdcRows": 0,
+        "sseFrames": 0,
+        "sseBytes": 0,
+        "headerBytes": 192,
+        "chunkBytes": 64,
+        "bodyBytes": 52992,
+        "jsonBytes": 52992,
+        "downloadBytes": 53184,
+        "uploadBytes": 256
+      }
+    },
+    {
+      "provider": "codex",
+      "phase": "open-chat",
+      "transport": "remote-lan",
+      "max": {
+        "requests": 1,
+        "cdcRows": 0,
+        "sseFrames": 0,
+        "sseBytes": 0,
+        "headerBytes": 256,
+        "chunkBytes": 64,
+        "bodyBytes": 4288,
+        "jsonBytes": 39296,
+        "downloadBytes": 4544,
+        "uploadBytes": 320
+      }
+    },
+    {
+      "provider": "codex",
+      "phase": "scroll-to-top",
+      "transport": "local",
+      "max": {
+        "requests": 2,
+        "cdcRows": 0,
+        "sseFrames": 0,
+        "sseBytes": 0,
+        "headerBytes": 384,
+        "chunkBytes": 64,
+        "bodyBytes": 252480,
+        "jsonBytes": 252480,
+        "downloadBytes": 252864,
+        "uploadBytes": 448
+      }
+    },
+    {
+      "provider": "codex",
+      "phase": "scroll-to-top",
+      "transport": "remote-lan",
+      "max": {
+        "requests": 3,
+        "cdcRows": 0,
+        "sseFrames": 0,
+        "sseBytes": 0,
+        "headerBytes": 704,
+        "chunkBytes": 128,
+        "bodyBytes": 16000,
+        "jsonBytes": 184832,
+        "downloadBytes": 16768,
+        "uploadBytes": 896
+      }
+    },
+    {
+      "provider": "codex",
+      "phase": "stream-reply",
+      "transport": "local",
+      "max": {
+        "requests": 49,
+        "cdcRows": 51,
+        "sseFrames": 52,
+        "sseBytes": 18112,
+        "headerBytes": 8832,
+        "chunkBytes": 1024,
+        "bodyBytes": 2630720,
+        "jsonBytes": 2630720,
+        "downloadBytes": 2658304,
+        "uploadBytes": 11328
+      }
+    },
+    {
+      "provider": "codex",
+      "phase": "stream-reply",
+      "transport": "remote-lan",
+      "max": {
+        "requests": 49,
+        "cdcRows": 51,
+        "sseFrames": 52,
+        "sseBytes": 18112,
+        "headerBytes": 11136,
+        "chunkBytes": 640,
+        "bodyBytes": 87808,
+        "jsonBytes": 350912,
+        "downloadBytes": 117568,
+        "uploadBytes": 14784
+      }
+    },
+    {
+      "provider": "codex",
+      "phase": "expand-output",
+      "transport": "remote-lan",
+      "max": {
+        "requests": 60,
+        "cdcRows": 0,
+        "sseFrames": 0,
+        "sseBytes": 0,
+        "headerBytes": 13056,
+        "chunkBytes": 0,
+        "bodyBytes": 54016,
+        "jsonBytes": 195328,
+        "downloadBytes": 67072,
+        "uploadBytes": 17600
+      }
+    }
+  ]
+}

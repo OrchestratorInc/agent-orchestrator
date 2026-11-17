@@ -24,12 +24,12 @@ const (
 	SeverityUnverified   = "unverified"
 )
 
-// Options are the trusted inputs a comparison checks the runs against. They
+// Options are the caller's inputs a comparison checks the runs against. They
 // come from the caller, never from a run.
 type Options struct {
-	// CeilingsSha256 is the digest of the exact ceilings bytes the caller
+	// LimitsSha256 is the digest of the exact limits bytes the caller
 	// decoded. Each run must name the same file.
-	CeilingsSha256 string
+	LimitsSha256 string
 	// ExpectBaselineRef and ExpectCandidateRef, when set, are the commits the
 	// caller asked to measure.
 	ExpectBaselineRef  string
@@ -48,7 +48,7 @@ type Report struct {
 	Reasons             []Reason    `json:"reasons"`
 	Baseline            Provenance  `json:"baseline"`
 	Candidate           Provenance  `json:"candidate"`
-	CeilingsSha256      string      `json:"ceilingsSha256"`
+	LimitsSha256        string      `json:"limitsSha256"`
 	FixturesSha256      string      `json:"fixturesSha256"`
 	MaxIncreasePermille int64       `json:"maxIncreasePermille"`
 	Rows                []ReportRow `json:"rows"`
@@ -96,7 +96,7 @@ type MetricRow struct {
 	Name              string `json:"name"`
 	Baseline          int64  `json:"baseline"`
 	Candidate         int64  `json:"candidate"`
-	Ceiling           int64  `json:"ceiling"`
+	Limit             int64  `json:"limit"`
 	Allowed           int64  `json:"allowed"`
 	Delta             int64  `json:"delta"`
 	DeltaPermille     int64  `json:"deltaPermille"`
@@ -108,9 +108,9 @@ type MetricRow struct {
 const (
 	MetricOK            = "ok"
 	MetricNotApplicable = "n/a"
-	MetricOverCeiling   = "over-ceiling"
+	MetricOverLimit     = "over-limit"
 	MetricRegressed     = "regressed"
-	MetricOverBoth      = "over-ceiling-and-regressed"
+	MetricOverBoth      = "over-limit-and-regressed"
 	MetricFromZero      = "new-traffic"
 )
 
@@ -124,17 +124,17 @@ func provenance(r Run) Provenance {
 }
 
 // Compare judges a candidate run against a baseline run and the reviewed
-// ceilings. Both runs and the ceilings must already have been validated by
-// DecodeRun and DecodeCeilings. Ceilings come only from the ceilings argument.
-func Compare(baseline, candidate Run, ceilings Ceilings, opts Options) Report {
+// limits. Both runs and the limits must already have been validated by
+// DecodeRun and DecodeLimits. Limits come only from the limits argument.
+func Compare(baseline, candidate Run, limits Limits, opts Options) Report {
 	report := Report{
 		SchemaVersion:       ReportSchema,
 		Reasons:             []Reason{},
 		Baseline:            provenance(baseline),
 		Candidate:           provenance(candidate),
-		CeilingsSha256:      opts.CeilingsSha256,
-		FixturesSha256:      ceilings.FixturesSha256,
-		MaxIncreasePermille: ceilings.MaxIncreasePermille,
+		LimitsSha256:        opts.LimitsSha256,
+		FixturesSha256:      limits.FixturesSha256,
+		MaxIncreasePermille: limits.MaxIncreasePermille,
 		Rows:                []ReportRow{},
 	}
 	add := func(code, severity string, scenario ScenarioKey, metric string) {
@@ -166,12 +166,12 @@ func Compare(baseline, candidate Run, ceilings Ceilings, opts Options) Report {
 	if baseline.HarnessSha256 != candidate.HarnessSha256 {
 		global("harness-mismatch")
 	}
-	if baseline.FixturesSha256 != candidate.FixturesSha256 || candidate.FixturesSha256 != ceilings.FixturesSha256 {
+	if baseline.FixturesSha256 != candidate.FixturesSha256 || candidate.FixturesSha256 != limits.FixturesSha256 {
 		global("fixtures-mismatch")
 	}
-	if !hex64Pattern.MatchString(opts.CeilingsSha256) ||
-		baseline.CeilingsSha256 != opts.CeilingsSha256 || candidate.CeilingsSha256 != opts.CeilingsSha256 {
-		global("ceilings-mismatch")
+	if !hex64Pattern.MatchString(opts.LimitsSha256) ||
+		baseline.LimitsSha256 != opts.LimitsSha256 || candidate.LimitsSha256 != opts.LimitsSha256 {
+		global("limits-mismatch")
 	}
 	clientChanged := false
 	for _, run := range []Run{baseline, candidate} {
@@ -193,15 +193,15 @@ func Compare(baseline, candidate Run, ceilings Ceilings, opts Options) Report {
 
 	baseRows := scenarioMap(baseline.Scenarios)
 	candRows := scenarioMap(candidate.Scenarios)
-	ceilRows := map[ScenarioKey]CeilingRow{}
-	for _, row := range ceilings.Rows {
-		ceilRows[row.Key()] = row
+	limitRows := map[ScenarioKey]LimitRow{}
+	for _, row := range limits.Rows {
+		limitRows[row.Key()] = row
 	}
-	keys := orderedKeys(baseRows, candRows, ceilRows)
+	keys := orderedKeys(baseRows, candRows, limitRows)
 	for _, key := range keys {
 		base, inBase := baseRows[key]
 		cand, inCand := candRows[key]
-		ceiling, inCeilings := ceilRows[key]
+		limit, inLimits := limitRows[key]
 		switch {
 		case !inBase:
 			add("scenario-missing-in-baseline", SeverityIncomparable, key, "")
@@ -209,8 +209,8 @@ func Compare(baseline, candidate Run, ceilings Ceilings, opts Options) Report {
 		case !inCand:
 			add("scenario-missing-in-candidate", SeverityIncomparable, key, "")
 			continue
-		case !inCeilings:
-			add("ceiling-missing", SeverityIncomparable, key, "")
+		case !inLimits:
+			add("limit-missing", SeverityIncomparable, key, "")
 			continue
 		}
 		row := ReportRow{Provider: key.Provider, Phase: key.Phase, Transport: key.Transport, Status: StatusPass}
@@ -231,18 +231,18 @@ func Compare(baseline, candidate Run, ceilings Ceilings, opts Options) Report {
 			add("candidate-state-mismatch", SeverityFail, key, "")
 			row.Status = StatusFail
 		}
-		baseValues, candValues, maxValues := base.Metrics.Values(), cand.Metrics.Values(), ceiling.Max.Values()
+		baseValues, candValues, maxValues := base.Metrics.Values(), cand.Metrics.Values(), limit.Max.Values()
 		for i, name := range MetricNames {
-			metric := judgeMetric(name, baseValues[i], candValues[i], maxValues[i], ceilings.MaxIncreasePermille, rowComparable)
+			metric := judgeMetric(name, baseValues[i], candValues[i], maxValues[i], limits.MaxIncreasePermille, rowComparable)
 			switch metric.Status {
-			case MetricOverCeiling, MetricRegressed, MetricOverBoth, MetricFromZero:
+			case MetricOverLimit, MetricRegressed, MetricOverBoth, MetricFromZero:
 				add(metric.Status, SeverityFail, key, name)
 				row.Status = StatusFail
 			}
 			row.Metrics = append(row.Metrics, metric)
 		}
-		if overAnyCeiling(base.Metrics, ceiling.Max) {
-			add("baseline-over-ceiling", SeverityInfo, key, "")
+		if overAnyLimit(base.Metrics, limit.Max) {
+			add("baseline-over-limit", SeverityInfo, key, "")
 		}
 		report.Rows = append(report.Rows, row)
 	}
@@ -260,18 +260,18 @@ func Compare(baseline, candidate Run, ceilings Ceilings, opts Options) Report {
 	return report
 }
 
-// judgeMetric applies the absolute ceiling always and the relative cap only
+// judgeMetric applies the absolute limit always and the relative cap only
 // when the pair is comparable. Integer arithmetic only: values are bounded by
 // MaxMetric, so the products cannot overflow.
-func judgeMetric(name string, base, cand, ceiling, permille int64, pairComparable bool) MetricRow {
-	metric := MetricRow{Name: name, Baseline: base, Candidate: cand, Ceiling: ceiling, Allowed: ceiling, Delta: cand - base}
-	over := cand > ceiling
+func judgeMetric(name string, base, cand, limit, permille int64, pairComparable bool) MetricRow {
+	metric := MetricRow{Name: name, Baseline: base, Candidate: cand, Limit: limit, Allowed: limit, Delta: cand - base}
+	over := cand > limit
 	regressed := false
 	if pairComparable && base > 0 {
 		metric.RelativeAvailable = true
 		metric.DeltaPermille = (cand - base) * 1000 / base
 		allowed := base + base*permille/1000
-		metric.Allowed = min(ceiling, allowed)
+		metric.Allowed = min(limit, allowed)
 		regressed = cand > allowed
 	}
 	switch {
@@ -282,7 +282,7 @@ func judgeMetric(name string, base, cand, ceiling, permille int64, pairComparabl
 	case over && regressed:
 		metric.Status = MetricOverBoth
 	case over:
-		metric.Status = MetricOverCeiling
+		metric.Status = MetricOverLimit
 	case regressed:
 		metric.Status = MetricRegressed
 	default:
@@ -291,10 +291,10 @@ func judgeMetric(name string, base, cand, ceiling, permille int64, pairComparabl
 	return metric
 }
 
-func overAnyCeiling(m, ceiling Metrics) bool {
-	values, limits := m.Values(), ceiling.Values()
+func overAnyLimit(m, limit Metrics) bool {
+	values, maxima := m.Values(), limit.Values()
 	for i := range values {
-		if values[i] > limits[i] {
+		if values[i] > maxima[i] {
 			return true
 		}
 	}
@@ -315,7 +315,7 @@ func scenarioMap(scenarios []Scenario) map[ScenarioKey]Scenario {
 
 // orderedKeys lists every key any input names, in allowlist order, so a
 // report is stable and a key missing on one side is still reported.
-func orderedKeys(base, cand map[ScenarioKey]Scenario, ceilings map[ScenarioKey]CeilingRow) []ScenarioKey {
+func orderedKeys(base, cand map[ScenarioKey]Scenario, limits map[ScenarioKey]LimitRow) []ScenarioKey {
 	present := map[ScenarioKey]bool{}
 	for key := range base {
 		present[key] = true
@@ -323,7 +323,7 @@ func orderedKeys(base, cand map[ScenarioKey]Scenario, ceilings map[ScenarioKey]C
 	for key := range cand {
 		present[key] = true
 	}
-	for key := range ceilings {
+	for key := range limits {
 		present[key] = true
 	}
 	var keys []ScenarioKey

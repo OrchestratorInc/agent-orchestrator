@@ -1,40 +1,40 @@
 {
-  "schemaVersion": "ao.chattraffic.ceilings.v1",
+  "schemaVersion": "ao.chattraffic.limits.v1",
   "fixturesSha256": "2222222222222222222222222222222222222222222222222222222222222222",
   "maxIncreasePermille": 20,
   "rows": [
     {
       "provider": "codex",
-      "phase": "history-open",
+      "phase": "open-chat",
       "transport": "remote-lan",
       "max": {
         "requests": 1,
         "cdcRows": 0,
         "sseFrames": 0,
         "sseBytes": 0,
-        "headerBytesIn": 200,
-        "framingBytesIn": 20,
-        "bodyEncodedBytes": 5500,
-        "bodyDecodedBytes": 44000,
-        "wireBytesIn": 5700,
-        "wireBytesOut": 230
+        "headerBytes": 200,
+        "chunkBytes": 20,
+        "bodyBytes": 5500,
+        "jsonBytes": 44000,
+        "downloadBytes": 5700,
+        "uploadBytes": 230
       }
     },
     {
       "provider": "codex",
-      "phase": "live-turn",
+      "phase": "stream-reply",
       "transport": "local",
       "max": {
         "requests": 6,
         "cdcRows": 42,
         "sseFrames": 43,
         "sseBytes": 9500,
-        "headerBytesIn": 1200,
-        "framingBytesIn": 320,
-        "bodyEncodedBytes": 250000,
-        "bodyDecodedBytes": 250000,
-        "wireBytesIn": 260000,
-        "wireBytesOut": 950
+        "headerBytes": 1200,
+        "chunkBytes": 320,
+        "bodyBytes": 250000,
+        "jsonBytes": 250000,
+        "downloadBytes": 260000,
+        "uploadBytes": 950
       }
     }
   ]

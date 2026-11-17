@@ -9,7 +9,7 @@
   "goarch": "arm64",
   "harnessSha256": "1111111111111111111111111111111111111111111111111111111111111111",
   "fixturesSha256": "2222222222222222222222222222222222222222222222222222222222222222",
-  "ceilingsSha256": "f978306bf8cd63c38c64be3ddbbef04d597f3dace09192a82f98dc0f60650a96",
+  "limitsSha256": "e5a04cff39b1f46594ad5a4efef5fcdf610f6df52593eb7438b9325fc7db2b7a",
   "clientSourceSha256": "3333333333333333333333333333333333333333333333333333333333333333",
   "simulatorClientSha256": "3333333333333333333333333333333333333333333333333333333333333333",
   "clientPolicy": {
@@ -25,19 +25,19 @@
   "scenarios": [
     {
       "provider": "codex",
-      "phase": "history-open",
+      "phase": "open-chat",
       "transport": "remote-lan",
       "metrics": {
         "requests": 1,
         "cdcRows": 0,
         "sseFrames": 0,
         "sseBytes": 0,
-        "headerBytesIn": 180,
-        "framingBytesIn": 12,
-        "bodyEncodedBytes": 5000,
-        "bodyDecodedBytes": 42000,
-        "wireBytesIn": 5192,
-        "wireBytesOut": 210
+        "headerBytes": 180,
+        "chunkBytes": 12,
+        "bodyBytes": 5000,
+        "jsonBytes": 42000,
+        "downloadBytes": 5192,
+        "uploadBytes": 210
       },
       "state": {
         "expectedDigest": "4444444444444444444444444444444444444444444444444444444444444444",
@@ -50,19 +50,19 @@
     },
     {
       "provider": "codex",
-      "phase": "live-turn",
+      "phase": "stream-reply",
       "transport": "local",
       "metrics": {
         "requests": 6,
         "cdcRows": 40,
         "sseFrames": 41,
         "sseBytes": 9000,
-        "headerBytesIn": 1100,
-        "framingBytesIn": 300,
-        "bodyEncodedBytes": 240000,
-        "bodyDecodedBytes": 240000,
-        "wireBytesIn": 250400,
-        "wireBytesOut": 900
+        "headerBytes": 1100,
+        "chunkBytes": 300,
+        "bodyBytes": 240000,
+        "jsonBytes": 240000,
+        "downloadBytes": 250400,
+        "uploadBytes": 900
       },
       "state": {
         "expectedDigest": "5555555555555555555555555555555555555555555555555555555555555555",

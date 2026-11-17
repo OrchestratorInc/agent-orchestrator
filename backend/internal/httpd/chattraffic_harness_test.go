@@ -53,10 +53,10 @@ const (
 	benchEnvSide      = "AO_CHATTRAFFIC_SIDE"
 	benchEnvSourceRef = "AO_CHATTRAFFIC_SOURCE_REF"
 	benchEnvDirtyDiff = "AO_CHATTRAFFIC_DIRTY_DIFF_SHA256"
-	benchEnvCeilings  = "AO_CHATTRAFFIC_CEILINGS_SHA256"
+	benchEnvLimits    = "AO_CHATTRAFFIC_LIMITS_SHA256"
 	benchEnvUpdate    = "AO_CHATTRAFFIC_UPDATE_EXPECTED"
 	// benchEnvDump names a directory that receives every request, decoded
-	// response body, event frame and live-turn step as JSON lines, one file per
+	// response body, event frame and stream-reply step as JSON lines, one file per
 	// scenario, for analysis. It never changes a measurement.
 	benchEnvDump = "AO_CHATTRAFFIC_DUMP_DIR"
 
@@ -198,7 +198,7 @@ func TestChatTrafficBenchmark(t *testing.T) {
 		GOARCH:                runtime.GOARCH,
 		HarnessSha256:         chattraffic.ListDigest(harnessFiles),
 		FixturesSha256:        chattraffic.ListDigest(append(fixtureFiles, expectedFiles...)),
-		CeilingsSha256:        os.Getenv(benchEnvCeilings),
+		LimitsSha256:          os.Getenv(benchEnvLimits),
 		ClientSourceSha256:    clientDigest,
 		SimulatorClientSha256: simulatorClientFor(clientDigest),
 		ClientPolicy:          policy,
@@ -312,7 +312,7 @@ type benchWorld struct {
 func runBenchWorld(t *testing.T, fixture chattraffic.Fixture, transport string, policy chattraffic.ClientPolicy) []benchResult {
 	t.Helper()
 	w := newBenchWorld(t, fixture, transport)
-	for _, turn := range fixture.HistoryTurnList() {
+	for _, turn := range fixture.SettledTurnList() {
 		w.runTurn(turn, w.sendDirect, func() {})
 	}
 	if err := w.poller.SeekToHead(w.ctx); err != nil {
@@ -324,7 +324,7 @@ func runBenchWorld(t *testing.T, fixture chattraffic.Fixture, transport string, 
 	if transport == "remote-lan" {
 		results = append(results, w.measureExpandOutput(client))
 	}
-	results = append(results, w.measureLiveTurn(policy))
+	results = append(results, w.measureStreamReply(policy))
 	return results
 }
 
@@ -559,7 +559,7 @@ func (w *benchWorld) result(phase string, client *benchClient, view benchPage, m
 
 func (w *benchWorld) measureHistoryOpen(policy chattraffic.ClientPolicy) benchResult {
 	c := w.newClient(policy)
-	c.startDump("history-open")
+	c.startDump("open-chat")
 	c.openChat()
 	if c.remote && !c.pages[0].HasMoreBefore {
 		// A page limit counts messages; activities ride along under a byte
@@ -567,17 +567,17 @@ func (w *benchWorld) measureHistoryOpen(policy chattraffic.ClientPolicy) benchRe
 		// paging, so the fixtures are sized to overflow it.
 		w.t.Errorf("%s history fits one remote page; the fixture must overflow it", w.fixture.Provider)
 	}
-	return w.result("history-open", c, c.view(), c.metrics, nil)
+	return w.result("open-chat", c, c.view(), c.metrics, nil)
 }
 
 func (w *benchWorld) measureHistoryFull(policy chattraffic.ClientPolicy) (benchResult, *benchClient) {
 	c := w.newClient(policy)
-	c.startDump("history-full")
+	c.startDump("scroll-to-top")
 	c.openChat()
 	for c.pages[len(c.pages)-1].HasMoreBefore {
 		c.loadOlder()
 	}
-	return w.result("history-full", c, c.view(), c.metrics, w.fixture.HistoryTurnList()), c
+	return w.result("scroll-to-top", c, c.view(), c.metrics, w.fixture.SettledTurnList()), c
 }
 
 // measureExpandOutput opens every tool output the remote page cut to its head
@@ -639,7 +639,7 @@ func (w *benchWorld) measureExpandOutput(history *benchClient) benchResult {
 		serverText: chattraffic.CanonicalState(serverRows, turnStates),
 		oracleText: chattraffic.CanonicalState(serverRows, turnStates),
 	}
-	outputs := fixtureOutputs(w.fixture.HistoryTurnList())
+	outputs := fixtureOutputs(w.fixture.SettledTurnList())
 	for _, row := range clientRows {
 		if !outputs[chattraffic.SHA256Hex([]byte(row.Text))] {
 			result.fixtureProblem = "an expanded output is not any fixture output"
@@ -654,7 +654,7 @@ func expandedRow(item benchItem, output string) chattraffic.CanonicalRow {
 	}
 }
 
-func (w *benchWorld) measureLiveTurn(policy chattraffic.ClientPolicy) benchResult {
+func (w *benchWorld) measureStreamReply(policy chattraffic.ClientPolicy) benchResult {
 	w.t.Helper()
 	c := w.newClient(policy)
 	c.openChat()
@@ -663,9 +663,9 @@ func (w *benchWorld) measureLiveTurn(policy chattraffic.ClientPolicy) benchResul
 		w.t.Fatal(err)
 	}
 	startSeq := w.latestSeq()
-	c.startDump("live-turn")
+	c.startDump("stream-reply")
 	c.openStream()
-	turn := w.fixture.Live()
+	turn := w.fixture.Reply()
 	step := 0
 	w.runTurn(turn, c.postMessage, func() {
 		kind := "send"
@@ -682,8 +682,8 @@ func (w *benchWorld) measureLiveTurn(policy chattraffic.ClientPolicy) benchResul
 	if c.metrics.SSEFrames != c.metrics.CDCRows+1 {
 		w.t.Errorf("%d change rows produced %d frames; want rows + 1 cursor frame", c.metrics.CDCRows, c.metrics.SSEFrames)
 	}
-	history := w.fixture.HistoryTurnList()
-	return w.result("live-turn", c, c.view(), c.metrics, append(history, turn))
+	history := w.fixture.SettledTurnList()
+	return w.result("stream-reply", c, c.view(), c.metrics, append(history, turn))
 }
 
 // syncStep publishes the step's change rows, lets the client read exactly
@@ -1088,12 +1088,12 @@ func (c *benchClient) do(req *http.Request) []byte {
 	}
 	header := int64(headerEnd + 4)
 	c.metrics.Requests++
-	c.metrics.HeaderBytesIn += header
-	c.metrics.BodyEncodedBytes += int64(len(encoded))
-	c.metrics.BodyDecodedBytes += int64(len(decoded))
-	c.metrics.FramingBytesIn += int64(len(raw)) - header - int64(len(encoded))
-	c.metrics.WireBytesIn += int64(len(raw))
-	c.metrics.WireBytesOut += written
+	c.metrics.HeaderBytes += header
+	c.metrics.BodyBytes += int64(len(encoded))
+	c.metrics.JSONBytes += int64(len(decoded))
+	c.metrics.ChunkBytes += int64(len(raw)) - header - int64(len(encoded))
+	c.metrics.DownloadBytes += int64(len(raw))
+	c.metrics.UploadBytes += written
 	if c.dump != nil {
 		body := json.RawMessage(decoded)
 		if !json.Valid(decoded) {
@@ -1102,8 +1102,8 @@ func (c *benchClient) do(req *http.Request) []byte {
 		c.record(map[string]any{
 			"type": "request", "method": req.Method, "url": req.URL.RequestURI(), "status": resp.StatusCode,
 			"contentEncoding": resp.Header.Get("Content-Encoding"), "headerBytes": header,
-			"framingBytes": int64(len(raw)) - header - int64(len(encoded)), "encodedBytes": len(encoded),
-			"decodedBytes": len(decoded), "wireOut": written, "body": body,
+			"chunkBytes": int64(len(raw)) - header - int64(len(encoded)), "bodyBytes": len(encoded),
+			"jsonBytes": len(decoded), "uploadBytes": written, "body": body,
 		})
 	}
 	return decoded
@@ -1569,7 +1569,7 @@ func checkFixtureContent(turns []chattraffic.Turn, view benchPage, policy chattr
 	}
 	want := fixtureRows(turns, previewLimit)
 	if view.HasMoreBefore {
-		// A bounded page holds only the newest turns; require the live one, which
+		// A bounded page holds only the newest turns; require the reply turn, which
 		// is the view's last turn.
 		want = fixtureRows(turns[len(turns)-1:], previewLimit)
 		for i := range want {
@@ -1602,18 +1602,18 @@ func checkFixtureContent(turns []chattraffic.Turn, view benchPage, policy chattr
 // checkOracle holds the server state to the fixture-only oracle that
 // scripts/chat-traffic-oracle.py derives without running the product, so
 // an expected state can never be blessed from product output alone: the whole
-// history and every cut output must match it exactly, and the live turn's rows
+// history and every cut output must match it exactly, and the reply turn's rows
 // must be the view's final rows.
 func checkOracle(expectedDir string, result benchResult) string {
 	scenario := result.scenario
 	var name string
 	switch scenario.Phase {
-	case "history-full":
+	case "scroll-to-top":
 		name = "oracle-" + scenario.Provider + "-history.txt"
 	case "expand-output":
 		name = "oracle-" + scenario.Provider + "-expand.txt"
-	case "live-turn":
-		name = "oracle-" + scenario.Provider + "-live.txt"
+	case "stream-reply":
+		name = "oracle-" + scenario.Provider + "-reply.txt"
 	default:
 		return ""
 	}
@@ -1622,13 +1622,13 @@ func checkOracle(expectedDir string, result benchResult) string {
 		return "oracle " + name + " is missing; run scripts/chat-traffic-oracle.py"
 	}
 	oracle := string(data)
-	if scenario.Phase != "live-turn" {
+	if scenario.Phase != "stream-reply" {
 		if oracle != result.oracleText {
 			return "server state differs from " + name + ": " + firstDifference(oracle, result.oracleText)
 		}
 		return ""
 	}
-	// The live oracle holds one turn, numbered 0; in the view it follows the
+	// The reply oracle holds one turn, numbered 0; in the view it follows the
 	// history. Its ownership is checked against the fixture instead, so the
 	// turn column is dropped here.
 	rows := func(text string) []string {
@@ -1643,7 +1643,7 @@ func checkOracle(expectedDir string, result benchResult) string {
 	}
 	want, got := rows(oracle), rows(result.oracleText)
 	if len(got) < len(want) || !slices.Equal(got[len(got)-len(want):], want) {
-		return "the live turn's rows differ from " + name
+		return "the reply turn's rows differ from " + name
 	}
 	return ""
 }
@@ -1922,7 +1922,7 @@ func (c *countingReader) count() int64 {
 
 // openStream connects the CDC stream at the head, as the renderer does, and
 // reads the cursor frame. Its response headers and frames count toward the
-// live turn.
+// reply turn.
 func (c *benchClient) openStream() {
 	c.w.t.Helper()
 	ctx, cancel := context.WithCancel(context.Background())
@@ -2033,11 +2033,11 @@ func (c *benchClient) closeStream() {
 		c.w.t.Fatal("event stream socket bytes do not hold its frames")
 	}
 	header := int64(headerEnd + 4)
-	c.metrics.HeaderBytesIn += header
+	c.metrics.HeaderBytes += header
 	c.metrics.SSEBytes += body
-	c.metrics.FramingBytesIn += int64(len(raw)) - header - body
-	c.metrics.WireBytesIn += int64(len(raw))
-	c.metrics.WireBytesOut += written
+	c.metrics.ChunkBytes += int64(len(raw)) - header - body
+	c.metrics.DownloadBytes += int64(len(raw))
+	c.metrics.UploadBytes += written
 	c.stream.cancel()
 	_ = c.stream.resp.Body.Close()
 }

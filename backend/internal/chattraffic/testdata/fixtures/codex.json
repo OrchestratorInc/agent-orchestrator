@@ -4,8 +4,8 @@
   "harness": "codex",
   "provenance": "Normalized ports.ChatEvent shapes produced by backend/internal/adapters/chatdriver/codexappserver/normalize.go (normalizeItem, activityFor, activityDetail, encodeDetail) at 999321b38cc5; item id styles (rs_, msg_, call_) and field sets follow the codex-cli 0.146.0 frames cited in normalize_ingest_test.go. All paths, commands, outputs and prose are invented dummy content for a fictional project; no user data.",
   "providerConversationId": "019dummy-thread-codex",
-  "historyTurns": 60,
-  "historyTemplates": [
+  "settledTurns": 60,
+  "settledTemplates": [
     {
       "user": "Turn {n}: find where reserveStock validates quantities in the dummy shop and explain it.",
       "steps": [
@@ -52,7 +52,7 @@
       ]
     }
   ],
-  "liveTurn": {
+  "replyTurn": {
     "user": "Turn {n}: move the rollback release into the checkout transaction, add a regression test, and run the full suite.",
     "steps": [
       {"kind": "turn.started"},
