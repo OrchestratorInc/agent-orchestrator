@@ -113,6 +113,7 @@ export type SessionProvisionStep = {
 
 /** The daemon's observed branch facts. `unpushed` equals `commits` until the branch reaches its remote. */
 export type SessionBranchState = {
+	branch?: string;
 	commits: number;
 	remoteBranch?: string;
 	/** The commit the remote branch points at, as last read. */

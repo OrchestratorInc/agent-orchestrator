@@ -152,11 +152,12 @@ export function SessionBranchSummary({
 	const behind = behindBase ? (facts.branch?.behind ?? 0) : 0;
 	const hasWork = facts.uncommitted.length > 0 || commitsRow !== null || behind > 0;
 	const { branch, naming } = sessionBranchPresentation(session);
-	if (!branch && !naming && !pullRequests && !hasWork) return null;
+	const checkoutBranch = facts.branch?.branch ?? branch;
+	if (!checkoutBranch && !naming && !pullRequests && !hasWork) return null;
 
 	const hasOtherPRs = Boolean(pullRequests);
 	const remote = branchRemote(facts.branch);
-	const branchName = branch ?? (facts.branch?.remoteBranch ? facts.branch.remoteBranch.slice(facts.branch.remoteBranch.indexOf("/") + 1) : undefined);
+	const branchName = checkoutBranch ?? (facts.branch?.remoteBranch ? facts.branch.remoteBranch.slice(facts.branch.remoteBranch.indexOf("/") + 1) : undefined);
 	const target: GitActionTarget = {
 		branch: branchName,
 		remote,
@@ -245,9 +246,9 @@ export function SessionBranchSummary({
 	const workInPR = typeof pullRequests === "function" && openPRNumber !== undefined && (hasWork || action !== null || sendError !== null);
 
 	if (pullRequests) {
-		const showWorkingTree = !workInPR && (hasWork || action !== null || sendError !== null || branch || naming);
-		const workingTreeTitle = branch
-			? t("inspector.workingTreeBranch", { branch: branchTopic(branch) })
+		const showWorkingTree = !workInPR && (hasWork || action !== null || sendError !== null || checkoutBranch || naming);
+		const workingTreeTitle = checkoutBranch
+			? t("inspector.workingTreeBranch", { branch: branchTopic(checkoutBranch) })
 			: t("inspector.workingTree");
 		return (
 			<>
@@ -267,7 +268,7 @@ export function SessionBranchSummary({
 							className="flex flex-col"
 							data-testid="inspector-working-tree"
 						>
-							<BranchLine base={facts.base} branch={branch} naming={naming} />
+							<BranchLine base={facts.base} branch={checkoutBranch} naming={naming} />
 							{workRows}
 						</section>
 					</InspectorSection>
@@ -279,7 +280,7 @@ export function SessionBranchSummary({
 	return (
 		<InspectorSection surface={false} title={title}>
 			<section aria-label={t("inspector.branch")} className="flex flex-col" data-testid="inspector-branch">
-				<BranchLine base={facts.base} branch={branch} naming={naming} />
+				<BranchLine base={facts.base} branch={checkoutBranch} naming={naming} />
 				{workRows}
 			</section>
 		</InspectorSection>
