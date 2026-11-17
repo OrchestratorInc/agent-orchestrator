@@ -568,8 +568,11 @@ export async function refreshLocalConversationTail(queryClient: QueryClient, ses
 	}
 	const current = queryClient.getQueryData<InfiniteData<ConversationSnapshot>>(key);
 	// A refetch or an optimistic edit that landed during the read is newer than
-	// this tail's view of the page, so the tail must not overwrite it.
-	if (wire.afterSequence !== floor || current?.pages[0] !== prior) return false;
+	// this tail's view of the page, so the tail must not overwrite it. A chat
+	// marked stale during the read (it closed and an event arrived) keeps the
+	// mark: writing data would clear it, and its next open would skip the read
+	// that catches it up.
+	if (wire.afterSequence !== floor || current?.pages[0] !== prior || queryClient.getQueryState(key)?.isInvalidated) return false;
 	const merged = mergeRemoteConversationTail(prior, toSnapshot(wire), floor);
 	if (!merged) return false;
 	queryClient.setQueryData<InfiniteData<ConversationSnapshot>>(key, { ...current, pages: [merged, ...current.pages.slice(1)] });

@@ -92,6 +92,18 @@ describe("refreshLocalConversationTail", () => {
 		expect(getMock).not.toHaveBeenCalled();
 	});
 
+	it("keeps a chat marked stale during the read stale, for its next open to catch up", async () => {
+		const before = cached();
+		getMock.mockImplementationOnce(async () => {
+			// The chat closes and an event marks it stale while the tail is read.
+			await client.invalidateQueries({ queryKey: key, refetchType: "none" });
+			return wire({ afterSequence: 3, oldestSequence: 4, turns: [wireTurn("t2", "running")], messages: [wireMessage("m2", "t2", 4)] });
+		});
+		await expect(refreshLocalConversationTail(client, "s1")).resolves.toBe(false);
+		expect(client.getQueryState(key)?.isInvalidated).toBe(true);
+		expect(cached()).toBe(before);
+	});
+
 	it("asks nothing when no page is cached or no row is settled yet", async () => {
 		client.clear();
 		await expect(refreshLocalConversationTail(client, "s1")).resolves.toBe(false);
