@@ -1,11 +1,9 @@
 import { render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import type { UpdateStatus } from "../../main/update-settings";
 import { SidebarUpdateRow, sidebarUpdateAction, updateFailurePhase } from "./SidebarUpdate";
 import { TooltipProvider } from "./ui/tooltip";
-import { aoBridge } from "../lib/bridge";
-import { useHostUpdateStore } from "../hooks/useHostUpdates";
 
 const { checkMock, downloadMock } = vi.hoisted(() => ({ checkMock: vi.fn(), downloadMock: vi.fn() }));
 vi.mock("../lib/bridge", async (importOriginal) => {
@@ -125,58 +123,5 @@ describe("SidebarUpdateRow retry", () => {
 		await userEvent.click(screen.getByRole("button", { name: "Retry update" }));
 		expect(onRequestInstall).toHaveBeenCalledTimes(1);
 		expect(checkMock).not.toHaveBeenCalled();
-	});
-});
-
-describe("SidebarUpdateRow with remote hosts", () => {
-	afterEach(() => vi.restoreAllMocks());
-	const buildVm = { hostId: "h_build", label: "build-vm", url: "https://build.example", status: "connected" as const };
-	const gpuBox = { hostId: "h_gpu", label: "gpu-box", url: "https://gpu.example", status: "connected" as const };
-	const renderHosts = (status: UpdateStatus, hosts: typeof buildVm[]) => render(
-		<TooltipProvider>
-			<SidebarUpdateRow hosts={hosts} onRequestInstall={vi.fn()} status={status} tabIndex={0} />
-		</TooltipProvider>,
-	);
-
-	it("names the one machine that needs an update and updates it", async () => {
-		const start = vi.spyOn(aoBridge.remotes, "startHostUpdate").mockResolvedValue({ version: "0.14.10", supported: true, state: "updating" });
-		useHostUpdateStore.setState({ localVersion: "0.15.0", byUrl: { [buildVm.url]: { view: { version: "0.14.10", supported: true, state: "idle" } }, [gpuBox.url]: { view: { version: "0.15.0", supported: true, state: "idle" } } } });
-		renderHosts({ state: "idle" }, [buildVm, gpuBox]);
-		await userEvent.click(screen.getByRole("button", { name: "Update build-vm" }));
-		expect(start).toHaveBeenCalledWith(buildVm.url);
-		expect(await screen.findByText("Updating build-vm")).toBeTruthy();
-	});
-
-	it("lists every machine with an update and updates them all", async () => {
-		const start = vi.spyOn(aoBridge.remotes, "startHostUpdate").mockResolvedValue({ version: "0.14.10", supported: true, state: "updating" });
-		useHostUpdateStore.setState({ localVersion: "0.15.0", byUrl: {
-			[buildVm.url]: { view: { version: "0.14.10", supported: true, state: "idle" } },
-			[gpuBox.url]: { view: { version: "0.14.9", supported: false, state: "idle" } },
-		} });
-		renderHosts({ state: "available", version: "0.15.1", releaseNotes: "" }, [buildVm, gpuBox]);
-		await userEvent.click(screen.getByRole("button", { name: "Updates for 3 machines" }));
-		const list = await screen.findByTestId("sidebar-update-machines-list");
-		expect(list.textContent).toContain("This computer");
-		expect(list.textContent).toContain("Update Orchestrator on that computer");
-		await userEvent.click(screen.getByRole("button", { name: "Update all" }));
-		expect(start).toHaveBeenCalledExactlyOnceWith(buildVm.url);
-		expect(downloadMock).toHaveBeenCalled();
-	});
-
-	it("offers this computer's restart only after the machines' updates have started", async () => {
-		let started!: (view: { version: string; supported: boolean; state: "updating" }) => void;
-		vi.spyOn(aoBridge.remotes, "startHostUpdate").mockReturnValue(new Promise((done) => { started = done; }));
-		useHostUpdateStore.setState({ localVersion: "0.15.0", byUrl: { [buildVm.url]: { view: { version: "0.14.10", supported: true, state: "idle" } } } });
-		const onRequestInstall = vi.fn();
-		render(
-			<TooltipProvider>
-				<SidebarUpdateRow hosts={[buildVm]} onRequestInstall={onRequestInstall} status={{ state: "downloaded", version: "0.15.1" }} tabIndex={0} />
-			</TooltipProvider>,
-		);
-		await userEvent.click(screen.getByRole("button", { name: "Updates for 2 machines" }));
-		await userEvent.click(await screen.findByRole("button", { name: "Update all" }));
-		expect(onRequestInstall).not.toHaveBeenCalled();
-		started({ version: "0.14.10", supported: true, state: "updating" });
-		await vi.waitFor(() => expect(onRequestInstall).toHaveBeenCalledOnce());
 	});
 });

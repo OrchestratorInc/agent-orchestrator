@@ -1,7 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { HostUpdateView } from "../../main/remote-request";
 import { aoBridge } from "../lib/bridge";
-import { compareVersions, hostUpdateAction, refreshHostUpdate, startHostUpdate, useHostUpdateStore } from "./useHostUpdates";
+import { autoUpdateHosts, compareVersions, hostUpdateAction, refreshHostUpdate, startHostUpdate, useHostUpdateStore } from "./useHostUpdates";
 
 const URL = "https://build-vm.example";
 const view = (version: string, state: HostUpdateView["state"] = "idle", supported = true): HostUpdateView => ({ version, supported, state });
@@ -151,6 +151,26 @@ describe("host update flow", () => {
 		resolve(view("0.14.10", "updating"));
 		await started;
 		expect(hostUpdateAction(useHostUpdateStore.getState().byUrl[URL], "0.15.0")).toEqual({ kind: "updating" });
+	});
+
+	it("auto-updates each behind host once per version of this computer", async () => {
+		const start = vi.spyOn(aoBridge.remotes, "startHostUpdate").mockResolvedValue(view("0.14.10", "updating"));
+		const behind = "https://auto-behind.example";
+		useHostUpdateStore.setState({ localVersion: "0.15.0", byUrl: {
+			[behind]: { view: view("0.14.10") },
+			"https://auto-failed.example": { view: { ...view("0.14.10", "failed"), error: "disk full" } },
+			"https://auto-manual.example": { view: view("0.14.10", "idle", false) },
+			"https://auto-current.example": { view: view("0.15.1") },
+		} });
+		autoUpdateHosts();
+		expect(start).toHaveBeenCalledExactlyOnceWith(behind);
+		await Promise.resolve();
+		useHostUpdateStore.getState().patch(behind, { view: view("0.14.10"), updating: undefined, error: undefined });
+		autoUpdateHosts();
+		expect(start).toHaveBeenCalledOnce();
+		useHostUpdateStore.setState({ localVersion: "0.15.1" });
+		autoUpdateHosts();
+		expect(start).toHaveBeenCalledTimes(2);
 	});
 
 	it("forgets hosts that went offline unless they are mid-update", () => {

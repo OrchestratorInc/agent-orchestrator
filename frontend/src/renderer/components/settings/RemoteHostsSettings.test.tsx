@@ -2,6 +2,7 @@ import { act, fireEvent, render, screen, waitFor } from "@testing-library/react"
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { afterEach, expect, it, vi } from "vitest";
 import { useUiStore } from "../../stores/ui-store";
+import { useHostUpdateStore } from "../../hooks/useHostUpdates";
 
 const saved = vi.hoisted(() => ({ entries: [] as Array<{ hostId: string; label: string; url: string }> }));
 const account = vi.hoisted(() => ({ status: "authenticated" as "authenticated" | "unauthenticated" }));
@@ -136,4 +137,20 @@ it("requires confirmation before forgetting a host", async () => {
 	fireEvent.click(screen.getByRole("button", { name: "Remove" }));
 	await waitFor(() => expect(remotes.remove).toHaveBeenCalledWith("http://box-a:3001"));
 	expect(await screen.findByText("No hosts yet. Add one below.")).toBeVisible();
+});
+
+it("shows each saved host's version with its update button and the auto-update switch", async () => {
+	saved.entries = [{ hostId: "box-a", label: "Box A", url: "http://box-a:3001" }];
+	useHostUpdateStore.setState({ localVersion: "0.15.0", byUrl: { "http://box-a:3001": { view: { version: "0.14.10", supported: true, state: "idle" } } } });
+	useUiStore.setState({ autoUpdateRemoteHosts: false });
+	renderSettings();
+	await waitFor(() => expect(screen.getByText("Box A")).toBeVisible());
+	expect(screen.getByText("· v0.14.10", { exact: false })).toBeVisible();
+	expect(screen.getByRole("button", { name: "Update Box A" })).toBeVisible();
+	const autoUpdate = screen.getByRole("switch", { name: "Auto update remote hosts" });
+	expect(autoUpdate).toHaveAttribute("aria-checked", "false");
+	fireEvent.click(autoUpdate);
+	expect(useUiStore.getState().autoUpdateRemoteHosts).toBe(true);
+	expect(localStorage.getItem("ao.autoUpdateRemoteHosts")).toBe("true");
+	useHostUpdateStore.setState({ byUrl: {} });
 });

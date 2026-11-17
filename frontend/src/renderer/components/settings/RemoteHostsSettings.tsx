@@ -25,6 +25,8 @@ export function RemoteHostsSettings({ titleHidden }: { titleHidden?: boolean }) 
 	const { t } = useTranslation();
 	const enabled = useUiStore((state) => state.remoteHosts);
 	const setEnabled = useUiStore((state) => state.setRemoteHosts);
+	const autoUpdate = useUiStore((state) => state.autoUpdateRemoteHosts);
+	const setAutoUpdate = useUiStore((state) => state.setAutoUpdateRemoteHosts);
 	const { status, signIn } = useCloudSession();
 	const { settings } = useSettings();
 	const cloudBaseUrl = settings?.cloudControlPlaneUrl ?? "";
@@ -148,6 +150,11 @@ export function RemoteHostsSettings({ titleHidden }: { titleHidden?: boolean }) 
 		<SettingsSection title={t("remote.savedHosts")} grouped>
 			{loading && saved.length === 0 ? <div className="settings-row-bar text-sm text-settings-muted" role="status">{t("remote.loadingHosts")}</div> : null}
 			{!loading && saved.length === 0 && !loadError ? <div className="settings-row-bar text-pretty text-sm text-settings-muted">{t("remote.emptyHosts")}</div> : null}
+			{saved.length > 0 ? (
+				<SettingsRow label={t("remote.autoUpdateHosts")} description={t("remote.autoUpdateHostsDescription")}>
+					<Switch aria-label={t("remote.autoUpdateHosts")} checked={autoUpdate} onCheckedChange={setAutoUpdate} />
+				</SettingsRow>
+			) : null}
 			{saved.map((host) => {
 				const version = hostUpdates[host.url]?.view?.version;
 				const update = hostUpdateAction(hostUpdates[host.url], localVersion);

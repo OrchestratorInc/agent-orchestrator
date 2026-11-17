@@ -236,6 +236,7 @@ export type UiState = {
 	developerMode: boolean;
 	/** Experimental: connect to AO daemons on other machines. Default off. */
 	remoteHosts: boolean;
+	autoUpdateRemoteHosts: boolean;
 	/** Memory and CPU monitoring (card chips, memory light, Diagnostics page). Only takes effect in Developer mode. Default off. */
 	diagnostics: boolean;
 	/** Experimental side chats in the inspector. Only takes effect in Developer mode. Default off. */
@@ -326,6 +327,7 @@ export type UiState = {
 	setThemeStyle: (style: ThemeStyle) => void;
 	setDeveloperMode: (enabled: boolean) => void;
 	setRemoteHosts: (enabled: boolean) => void;
+	setAutoUpdateRemoteHosts: (enabled: boolean) => void;
 	setDiagnostics: (enabled: boolean) => void;
 	setSideChats: (enabled: boolean) => void;
 	setSplitPanes: (enabled: boolean) => void;
@@ -420,6 +422,7 @@ export type OrchestratorReplacementFailure = {
 
 const sidebarStorageKey = "ao.sidebar.open";
 const remoteHostsStorageKey = "ao.remoteHosts";
+const autoUpdateRemoteHostsStorageKey = "ao.autoUpdateRemoteHosts";
 const diagnosticsStorageKey = "ao.diagnostics";
 const sideChatsStorageKey = "ao.sideChats";
 const splitPanesStorageKey = "ao.splitPanes";
@@ -544,6 +547,7 @@ export const useUiStore = create<UiState>((set, get) => ({
 	themeStyle: initialThemeStyle,
 	developerMode: initialDeveloperModeValue,
 	remoteHosts: initialRemoteHosts(),
+	autoUpdateRemoteHosts: getLocalStorage()?.getItem(autoUpdateRemoteHostsStorageKey) === "true",
 	diagnostics: initialDiagnostics(),
 	sideChats: initialSideChats(),
 	splitPanes: getLocalStorage()?.getItem(splitPanesStorageKey) === "true",
@@ -616,6 +620,10 @@ export const useUiStore = create<UiState>((set, get) => ({
 	setRemoteHosts: (remoteHosts) => {
 		getLocalStorage()?.setItem(remoteHostsStorageKey, String(remoteHosts));
 		set({ remoteHosts });
+	},
+	setAutoUpdateRemoteHosts: (autoUpdateRemoteHosts) => {
+		getLocalStorage()?.setItem(autoUpdateRemoteHostsStorageKey, String(autoUpdateRemoteHosts));
+		set({ autoUpdateRemoteHosts });
 	},
 	setDiagnostics: (diagnostics) => {
 		getLocalStorage()?.setItem(diagnosticsStorageKey, String(diagnostics));

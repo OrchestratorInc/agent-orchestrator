@@ -1,16 +1,12 @@
 import { useState } from "react";
-import { ArrowDown, ArrowUp, LoaderCircle, RotateCcw, RotateCw } from "@/components/app-icons";
+import { ArrowDown, ArrowUp, RotateCcw, RotateCw } from "@/components/app-icons";
 import { useTranslation } from "react-i18next";
 import type { UpdateStatus } from "../../main/update-settings";
 import { parseNightlyVersion } from "../lib/build-channel";
 import { requestUpdateDownload } from "../hooks/useUpdateStatus";
-import { hostUpdateAction, startHostUpdate, useHostUpdateStore, type HostUpdateAction } from "../hooks/useHostUpdates";
-import type { RemoteHost } from "../hooks/useRemoteHosts";
 import { aoBridge } from "../lib/bridge";
 import { cn } from "../lib/utils";
 import { NAV_ROW_HIGHLIGHT_HOST_CLASS, NavRowHighlight } from "./NavRowHighlight";
-import { Button } from "./ui/button";
-import { Popover, PopoverContent, PopoverTrigger } from "./ui/popover";
 import { Pressable } from "./ui/pressable";
 import { Tooltip, TooltipContent, TooltipTrigger } from "./ui/tooltip";
 
@@ -203,12 +199,10 @@ function UpdateGlyph({
  * to date.
  */
 export function SidebarUpdateRow({
-	hosts = [],
 	onRequestInstall,
 	status,
 	tabIndex,
 }: {
-	hosts?: RemoteHost[];
 	/** Opens the restart confirmation; installing outright would quit the app. */
 	onRequestInstall: () => void;
 	status: UpdateStatus;
@@ -216,113 +210,7 @@ export function SidebarUpdateRow({
 }) {
 	const { t } = useTranslation();
 	const action = useSidebarUpdateAction(status);
-	const hostActions = useHostActions(hosts);
-	if (hostActions.length === 0) return action === null ? null : <LocalUpdateRow action={action} onRequestInstall={onRequestInstall} tabIndex={tabIndex} />;
-	if (action === null && hostActions.length === 1) return <HostUpdateRow {...hostActions[0]!} tabIndex={tabIndex} />;
-	const count = hostActions.length + (action ? 1 : 0);
-	const busy = action?.kind === "downloading" || hostActions.some((entry) => entry.action.kind === "updating");
-	return (
-		<MachinesPopover action={action} hostActions={hostActions} onRequestInstall={onRequestInstall}>
-			<UpdateStrip
-				glyph={busy ? <UpdateGlyph icon={<LoaderCircle aria-hidden="true" className="animate-spin" />} /> : <UpdateGlyph icon={<ArrowUp aria-hidden="true" />} percent={100} />}
-				press={{ label: t("shell.updatesForMachines", { count }), onClick: () => {} }}
-				tabIndex={tabIndex}
-				testId="sidebar-update-machines"
-				title={t("shell.updatesForMachines", { count })}
-			/>
-		</MachinesPopover>
-	);
-}
-
-type HostActionEntry = { host: RemoteHost; action: HostUpdateAction };
-
-function useHostActions(hosts: RemoteHost[]): HostActionEntry[] {
-	const localVersion = useHostUpdateStore((state) => state.localVersion);
-	const byUrl = useHostUpdateStore((state) => state.byUrl);
-	return hosts.flatMap((host) => {
-		const action = hostUpdateAction(byUrl[host.url], localVersion);
-		return action ? [{ host, action }] : [];
-	});
-}
-
-function HostUpdateRow({ host, action, tabIndex }: HostActionEntry & { tabIndex: number }) {
-	const { t } = useTranslation();
-	const name = host.label;
-	if (action.kind === "updating") {
-		return <UpdateStrip glyph={<UpdateGlyph icon={<LoaderCircle aria-hidden="true" className="animate-spin" />} />} tabIndex={tabIndex} testId="sidebar-host-updating" title={t("shell.updatingMachine", { name })} />;
-	}
-	if (action.kind === "manual") {
-		return <UpdateStrip detail={t("shell.updateOnThatComputer")} glyph={<UpdateGlyph icon={<ArrowUp aria-hidden="true" />} percent={100} />} tabIndex={tabIndex} testId="sidebar-host-manual" title={t("shell.updateMachine", { name })} versionNote={shortVersion(action.version)} />;
-	}
-	if (action.kind === "failed") {
-		return <UpdateStrip detail={action.error || undefined} glyph={<UpdateGlyph icon={<RotateCcw aria-hidden="true" />} solid="failed" />} press={{ label: t("shell.retryMachineUpdate", { name }), onClick: () => void startHostUpdate(host.url) }} tabIndex={tabIndex} testId="sidebar-host-failed" title={t("shell.machineUpdateFailed", { name })} />;
-	}
-	return <UpdateStrip glyph={<UpdateGlyph icon={<ArrowUp aria-hidden="true" />} percent={100} />} press={{ label: t("shell.updateMachine", { name }), onClick: () => void startHostUpdate(host.url) }} tabIndex={tabIndex} testId="sidebar-host-update" title={t("shell.updateMachine", { name })} versionNote={shortVersion(action.version)} />;
-}
-
-function startLocal(action: SidebarUpdateAction, onRequestInstall: () => void): void {
-	if (action?.kind === "download") void requestUpdateDownload();
-	else if (action?.kind === "install") onRequestInstall();
-	else if (action?.kind === "failed") recover(action.recovery, onRequestInstall);
-}
-
-function MachinesPopover({ action, hostActions, onRequestInstall, children }: {
-	action: SidebarUpdateAction;
-	hostActions: HostActionEntry[];
-	onRequestInstall: () => void;
-	children: React.ReactNode;
-}) {
-	const { t } = useTranslation();
-	const startable = hostActions.filter((entry) => entry.action.kind === "update" || entry.action.kind === "failed");
-	const localStartable = action !== null && action.kind !== "downloading";
-	const updateAll = async () => {
-		await Promise.all(startable.map((entry) => startHostUpdate(entry.host.url)));
-		if (localStartable) startLocal(action, onRequestInstall);
-	};
-	const button = (label: string, onClick: () => void, ariaLabel?: string) => <Button aria-label={ariaLabel} onClick={onClick} size="sm" type="button" variant="quiet">{label}</Button>;
-	const pending = (label: string) => <span className="flex items-center gap-1.5 text-xs text-muted-foreground"><LoaderCircle aria-hidden="true" className="size-icon-sm animate-spin" />{label}</span>;
-	const localControl = action === null ? null
-		: action.kind === "downloading" ? pending(t("shell.updateDownloading"))
-		: action.kind === "download" ? button(t("shell.downloadUpdate"), () => void requestUpdateDownload())
-		: action.kind === "install" ? button(t("shell.restart"), onRequestInstall)
-		: button(t("notify.retry"), () => recover(action.recovery, onRequestInstall));
-	return (
-		<Popover>
-			<PopoverTrigger asChild>{children}</PopoverTrigger>
-			<PopoverContent align="start" className="w-72 p-1" side="top" data-testid="sidebar-update-machines-list">
-				<ul className="flex flex-col">
-					{action ? (
-						<li className="flex min-h-9 items-center gap-2 px-2 py-1">
-							<span className="min-w-0 flex-1 truncate text-sm">{t("remote.thisComputer")}</span>
-							{localControl}
-						</li>
-					) : null}
-					{hostActions.map(({ host, action: hostAction }) => (
-						<li className="flex min-h-9 items-center gap-2 px-2 py-1" key={host.url}>
-							<span className="min-w-0 flex-1">
-								<span className="block truncate text-sm">{host.label}</span>
-								{hostAction.kind === "failed" && hostAction.error ? <span className="block truncate text-xs text-error" title={hostAction.error}>{hostAction.error}</span> : null}
-								{hostAction.kind === "manual" ? <span className="block text-xs text-muted-foreground">{t("shell.updateOnThatComputer")}</span> : null}
-							</span>
-							{hostAction.kind === "update" ? button(t("shell.update"), () => void startHostUpdate(host.url), t("shell.updateMachine", { name: host.label }))
-								: hostAction.kind === "failed" ? button(t("notify.retry"), () => void startHostUpdate(host.url), t("shell.retryMachineUpdate", { name: host.label }))
-								: hostAction.kind === "updating" ? pending(t("shell.updating"))
-								: <span className="text-xs tabular-nums text-passive">{shortVersion(hostAction.version)}</span>}
-						</li>
-					))}
-				</ul>
-				{startable.length + (localStartable ? 1 : 0) > 1 ? (
-					<div className="flex justify-end border-t border-(--color-border-subtle) px-1 pt-1">
-						{button(t("shell.updateAll"), () => void updateAll())}
-					</div>
-				) : null}
-			</PopoverContent>
-		</Popover>
-	);
-}
-
-function LocalUpdateRow({ action, onRequestInstall, tabIndex }: { action: NonNullable<SidebarUpdateAction>; onRequestInstall: () => void; tabIndex: number }) {
-	const { t } = useTranslation();
+	if (action === null) return null;
 
 	let title: string;
 	// Dimmed after the title: which version "Update available" means.
@@ -378,18 +266,6 @@ function LocalUpdateRow({ action, onRequestInstall, tabIndex }: { action: NonNul
 		failed: "sidebar-update-failed",
 	}[action.kind];
 
-	return <UpdateStrip detail={detail} glyph={glyph} press={press} tabIndex={tabIndex} testId={testId} title={title} versionNote={versionNote} />;
-}
-
-function UpdateStrip({ detail = null, glyph, press = null, tabIndex, testId, title, versionNote = null, ...triggerProps }: {
-	detail?: string | null;
-	glyph: React.ReactNode;
-	press?: { label: string; onClick: () => void } | null;
-	tabIndex: number;
-	testId: string;
-	title: string;
-	versionNote?: string | null;
-} & React.ComponentProps<"button">) {
 	const content = (
 		<>
 			<span className="relative z-[1] min-w-0 flex-1 truncate text-[length:var(--font-size-base)] font-medium tracking-tight text-foreground">
@@ -408,14 +284,13 @@ function UpdateStrip({ detail = null, glyph, press = null, tabIndex, testId, tit
 
 	if (!press) {
 		return (
-			<div aria-live="polite" className={rowClass} data-testid={testId} role="status" title={detail ? `${title} · ${detail}` : undefined}>
+			<div aria-live="polite" className={rowClass} data-testid={testId} role="status">
 				{content}
 			</div>
 		);
 	}
 	return (
 		<Pressable
-			{...triggerProps}
 			aria-label={press.label}
 			title={detail ? `${title} · ${detail}` : undefined}
 			// The strip is already filled, so hover steps the fill up a shade
@@ -425,7 +300,7 @@ function UpdateStrip({ detail = null, glyph, press = null, tabIndex, testId, tit
 				"hover:bg-[var(--color-bg-tertiary)] focus-visible:bg-[var(--color-bg-tertiary)]",
 			)}
 			data-testid={testId}
-			onClick={(event) => { triggerProps.onClick?.(event); press.onClick(); }}
+			onClick={press.onClick}
 			tabIndex={tabIndex}
 			type="button"
 		>
@@ -436,12 +311,10 @@ function UpdateStrip({ detail = null, glyph, press = null, tabIndex, testId, tit
 
 /** Icon-rail variant of {@link SidebarUpdateRow} for the collapsed sidebar. */
 export function SidebarUpdateRail({
-	hosts = [],
 	onRequestInstall,
 	status,
 	tabIndex,
 }: {
-	hosts?: RemoteHost[];
 	/** Opens the restart confirmation; installing outright would quit the app. */
 	onRequestInstall: () => void;
 	status: UpdateStatus;
@@ -449,21 +322,6 @@ export function SidebarUpdateRail({
 }) {
 	const { t } = useTranslation();
 	const action = useSidebarUpdateAction(status);
-	const hostActions = useHostActions(hosts);
-	if (hostActions.length > 0) {
-		const label = t("shell.updatesForMachines", { count: hostActions.length + (action ? 1 : 0) });
-		return (
-			<MachinesPopover action={action} hostActions={hostActions} onRequestInstall={onRequestInstall}>
-				<Pressable aria-label={label} className={cn(FOOTER_RAIL_BUTTON_CLASS, "text-foreground")} tabIndex={tabIndex} title={label} type="button">
-					<NavRowHighlight />
-					<span className="relative z-[1] grid place-items-center">
-						{hostActions.some((entry) => entry.action.kind === "updating") ? <LoaderCircle aria-hidden="true" className="animate-spin" /> : <ArrowUp aria-hidden="true" />}
-						{action || hostActions.some((entry) => entry.action.kind === "update" || entry.action.kind === "failed") ? <span aria-hidden="true" className="absolute -top-0.5 -right-1 size-1.5 rounded-full bg-logo-accent ring-2 ring-sidebar" /> : null}
-					</span>
-				</Pressable>
-			</MachinesPopover>
-		);
-	}
 	if (action === null) return null;
 
 	if (action.kind === "downloading") {

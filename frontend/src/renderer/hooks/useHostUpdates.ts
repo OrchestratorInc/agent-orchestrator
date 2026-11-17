@@ -4,6 +4,7 @@ import type { HostUpdateView } from "../../main/remote-request";
 import { aoBridge } from "../lib/bridge";
 import { isNightlyBuild } from "../lib/build-channel";
 import { useAppVersion } from "./useCommandPaletteEnabled";
+import { useUiStore } from "../stores/ui-store";
 import { requestRemoteHostsRefresh, type RemoteHost } from "./useRemoteHosts";
 
 const REFRESH_MS = 10 * 60_000;
@@ -99,6 +100,18 @@ export async function startHostUpdate(url: string): Promise<void> {
 	}
 }
 
+const autoStarted = new Set<string>();
+
+export function autoUpdateHosts(): void {
+	const { byUrl, localVersion } = useHostUpdateStore.getState();
+	for (const [url, state] of Object.entries(byUrl)) {
+		const key = `${url}\n${localVersion}`;
+		if (hostUpdateAction(state, localVersion)?.kind !== "update" || autoStarted.has(key)) continue;
+		autoStarted.add(key);
+		void startHostUpdate(url);
+	}
+}
+
 export function useHostVersion(hostId: string | undefined): string | undefined {
 	return useHostUpdateStore((state) => (hostId ? state.byUrl[state.urlByHost[hostId] ?? ""]?.view?.version : undefined) || undefined);
 }
@@ -124,4 +137,7 @@ export function useHostUpdatePolling(hosts: RemoteHost[]): void {
 		const timer = setInterval(() => { for (const url of urls) void refreshHostUpdate(url); }, UPDATING_POLL_MS);
 		return () => clearInterval(timer);
 	}, [updatingKey]);
+	const autoUpdate = useUiStore((state) => state.autoUpdateRemoteHosts);
+	const behindKey = useHostUpdateStore((state) => [state.localVersion, ...Object.keys(state.byUrl).filter((url) => hostUpdateAction(state.byUrl[url], state.localVersion)?.kind === "update")].join("\0"));
+	useEffect(() => { if (autoUpdate) autoUpdateHosts(); }, [autoUpdate, behindKey]);
 }

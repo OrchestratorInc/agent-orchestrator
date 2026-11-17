@@ -1375,7 +1375,6 @@ export const Sidebar = memo(function Sidebar({
 					<>
 						<div className={FOOTER_UPDATES_CLASS}>
 							<SidebarUpdateRow
-								hosts={remoteHosts}
 								onRequestInstall={openUpdateInstallPrompt}
 								status={updateStatus}
 								tabIndex={isCollapsed ? -1 : 0}
@@ -1409,7 +1408,6 @@ export const Sidebar = memo(function Sidebar({
 				>
 					<div className={FOOTER_UPDATES_CLASS}>
 						<SidebarUpdateRow
-							hosts={remoteHosts}
 							onRequestInstall={openUpdateInstallPrompt}
 							status={updateStatus}
 							tabIndex={isCollapsed ? -1 : 0}
@@ -1426,7 +1424,6 @@ export const Sidebar = memo(function Sidebar({
 					className="pointer-events-none absolute inset-x-1.5 bottom-0 top-auto flex min-h-row-md flex-col items-center justify-end gap-1 opacity-0 transition-opacity duration-150 ease-out group-data-[collapsible=icon]:pointer-events-auto group-data-[collapsible=icon]:!bottom-2 group-data-[collapsible=icon]:opacity-100"
 				>
 					<SidebarUpdateRail
-						hosts={remoteHosts}
 						onRequestInstall={openUpdateInstallPrompt}
 						status={updateStatus}
 						tabIndex={isCollapsed ? 0 : -1}
