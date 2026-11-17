@@ -9,7 +9,7 @@ import {
 	type ApprovalDecision,
 	type PendingApproval,
 } from "../../lib/approvals";
-import { useCloudPendingApprovals } from "../../lib/cloud-approvals";
+import { useCloudPendingApprovals, useLiveCloudPendingApprovals } from "../../lib/cloud-approvals";
 import { useNavigateToSession } from "../../lib/navigate-to-session";
 import { useUiStore } from "../../stores/ui-store";
 import { ApprovalPrompt } from "./ApprovalPrompt";
@@ -23,7 +23,13 @@ function useDecide(request: PendingApproval | undefined) {
 		setBusyId(request.id);
 		setError(undefined);
 		try {
-			await decideApproval(request.id, decision, queryClient, request.hostId, request.cloud);
+			await decideApproval(
+				request.id,
+				decision,
+				queryClient,
+				request.hostId,
+				request.cloud && { ...request.cloud, sessionId: request.sessionId },
+			);
 		} catch (reason) {
 			setError({ id: request.id, message: reason instanceof Error ? reason.message : String(reason) });
 		} finally {
@@ -98,7 +104,7 @@ function GlobalApprovalCardContent() {
 	// Self-hosted remote hosts gate their agent browsers the same way.
 	const remote = useRemotePendingApprovals({ live: true });
 	// AO Cloud gates cloud sessions' agent browsers; one org stream holds them.
-	const cloud = useCloudPendingApprovals({ live: true });
+	const cloud = useLiveCloudPendingApprovals();
 	const routed = useRoutedSessionKey();
 	const workspaces = useWorkspaceQuery();
 	const navigateToSession = useNavigateToSession();

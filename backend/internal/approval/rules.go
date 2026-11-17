@@ -20,6 +20,7 @@ type (
 	Verdict = rules.Verdict
 )
 
+// Request kinds, modes and categories, as the public rules define them.
 const (
 	KindBrowserAction = rules.KindBrowserAction
 	KindSavedLogin    = rules.KindSavedLogin
@@ -48,6 +49,8 @@ var (
 	Site = rules.Site
 	// IsEnterKey reports whether a press dispatches Enter.
 	IsEnterKey = rules.IsEnterKey
+	// IsActivationKey reports whether a press activates a focused control.
+	IsActivationKey = rules.IsActivationKey
 	// GatedActions are the browser actions Classify can flag.
 	GatedActions = rules.GatedActions
 )

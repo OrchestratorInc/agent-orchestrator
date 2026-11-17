@@ -74,6 +74,18 @@ interface Hub {
 }
 
 const hubs = new Map<string, Hub>();
+const taps = new Set<(target: CloudSessionEventsTarget, event: CloudCpClientEvent) => void>();
+
+/**
+ * Hears every client event any open session stream delivers, without opening
+ * or holding a stream itself. Returns the unsubscribe.
+ */
+export function tapCloudSessionEvents(listener: (target: CloudSessionEventsTarget, event: CloudCpClientEvent) => void): () => void {
+	taps.add(listener);
+	return () => {
+		taps.delete(listener);
+	};
+}
 
 function hubKey(target: CloudSessionEventsTarget): string {
 	return `${target.baseUrl.replace(/\/+$/, "")}|${target.orgId}|${target.sessionId}`;
@@ -163,6 +175,7 @@ function connect(hub: Hub, from?: number): void {
 				hub.lastSequence = Math.max(hub.lastSequence ?? 0, event.sequence);
 			}
 			for (const subscriber of [...hub.subscribers]) subscriber.onEvent?.(event);
+			for (const tap of [...taps]) tap(hub.target, event);
 		},
 	}).then(() => {
 		if (connection.controller.signal.aborted || hub.connection !== connection) return;

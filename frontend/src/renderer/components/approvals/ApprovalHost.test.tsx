@@ -6,6 +6,7 @@ import type { PendingApproval } from "../../lib/approvals";
 const state = vi.hoisted(() => ({
 	pending: [] as PendingApproval[],
 	remote: [] as PendingApproval[],
+	cloud: [] as PendingApproval[],
 	routedSessionId: undefined as string | undefined,
 	routedHostId: undefined as string | undefined,
 	decide: vi.fn(async () => undefined),
@@ -16,6 +17,10 @@ vi.mock("../../lib/approvals", () => ({
 	usePendingApprovals: () => ({ data: state.pending }),
 	useRemotePendingApprovals: () => state.remote,
 	decideApproval: state.decide,
+}));
+vi.mock("../../lib/cloud-approvals", () => ({
+	useCloudPendingApprovals: () => state.cloud,
+	useLiveCloudPendingApprovals: () => state.cloud,
 }));
 vi.mock("@tanstack/react-router", () => ({
 	useRouterState: ({ select }: { select: (s: unknown) => unknown }) =>
@@ -52,6 +57,7 @@ describe("approval hosts", () => {
 	beforeEach(() => {
 		state.pending = [];
 		state.remote = [];
+		state.cloud = [];
 		state.routedSessionId = undefined;
 		state.routedHostId = undefined;
 		state.decide.mockClear();
@@ -64,7 +70,7 @@ describe("approval hosts", () => {
 		expect(screen.getByTestId("approval-action")).toHaveTextContent("(a)");
 		expect(screen.getByText("+1 more")).toBeInTheDocument();
 		fireEvent.click(screen.getByRole("button", { name: "Allow once" }));
-		await waitFor(() => expect(state.decide).toHaveBeenCalledWith("a", "allow-once", expect.anything(), undefined));
+		await waitFor(() => expect(state.decide).toHaveBeenCalledWith("a", "allow-once", expect.anything(), undefined, undefined));
 	});
 
 	it("renders nothing for a session with no requests", () => {
@@ -89,7 +95,7 @@ describe("approval hosts", () => {
 		renderWith(<GlobalApprovalCard />);
 		expect(screen.getByTestId("approval-action")).toHaveTextContent("(r)");
 		fireEvent.click(screen.getByRole("button", { name: /Deny/ }));
-		await waitFor(() => expect(state.decide).toHaveBeenCalledWith("r", "deny", expect.anything(), "box-b"));
+		await waitFor(() => expect(state.decide).toHaveBeenCalledWith("r", "deny", expect.anything(), "box-b", undefined));
 		fireEvent.click(screen.getByRole("button", { name: "Open session" }));
 		expect(state.navigate).toHaveBeenCalledWith(undefined, "ao-9", "box-b");
 	});
@@ -126,5 +132,25 @@ describe("approval hosts", () => {
 		state.routedSessionId = "ao-1";
 		const { container } = renderWith(<GlobalApprovalCard />);
 		expect(container).toBeEmptyDOMElement();
+	});
+
+	it("shows a cloud session's request in its dock and decides it through the cloud", async () => {
+		const cloudRequest = { ...request("c", "cloud-1"), cloud: { baseUrl: "https://cp.test", orgId: "org-1" } };
+		state.cloud = [cloudRequest];
+		renderWith(<SessionApprovalDock sessionId="cloud-1" />);
+		expect(screen.getByTestId("approval-action")).toHaveTextContent("(c)");
+		fireEvent.click(screen.getByRole("button", { name: /Deny/ }));
+		await waitFor(() =>
+			expect(state.decide).toHaveBeenCalledWith("c", "deny", expect.anything(), undefined, {
+				baseUrl: "https://cp.test", orgId: "org-1", sessionId: "cloud-1",
+			}),
+		);
+	});
+
+	it("shows a cloud session's request app-wide when another session is open", () => {
+		state.cloud = [{ ...request("c", "cloud-1"), cloud: { baseUrl: "https://cp.test", orgId: "org-1" } }];
+		state.routedSessionId = "ao-1";
+		renderWith(<GlobalApprovalCard />);
+		expect(screen.getByTestId("approval-action")).toHaveTextContent("(c)");
 	});
 });
