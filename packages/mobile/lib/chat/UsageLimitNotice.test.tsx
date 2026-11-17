@@ -104,6 +104,16 @@ describe("UsageLimitNotice", () => {
 		expect(value.resume).toHaveBeenCalledWith("t1");
 	});
 
+	it("waits again when its timer fires before the reset", () => {
+		const root = render(<UsageLimitNotice turn={turn({ autoResume: false, resetsAt: RESET })} />);
+		// The clock moved back 10 minutes: the hour-long timer now ends 10 minutes early.
+		vi.setSystemTime(NOW - 10 * 60_000);
+		act(() => { vi.advanceTimersByTime(60 * 60_000); });
+		expect(buttons(root)).toEqual(["Auto-resume at reset"]);
+		act(() => { vi.advanceTimersByTime(10 * 60_000); });
+		expect(buttons(root)).toEqual(["Resume"]);
+	});
+
 	it("rechecks the reset when the app comes back to the foreground", () => {
 		const root = render(<UsageLimitNotice turn={turn({ autoResume: false, resetsAt: RESET })} />);
 		// A suspended app's timer never fired; the clock moved on regardless.

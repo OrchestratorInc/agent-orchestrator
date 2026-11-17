@@ -36,7 +36,8 @@ function useNowUntil(deadline: number | undefined): number {
 		const timer = setTimeout(update, Math.min(deadline - Date.now(), 2_147_483_647));
 		const subscription = AppState.addEventListener("change", (state) => { if (state === "active") update(); });
 		return () => { clearTimeout(timer); subscription.remove(); };
-	}, [deadline, pending]);
+		// `now` re-arms the wait when a timer ends early (the clock moved back).
+	}, [deadline, pending, now]);
 	return now;
 }
 
