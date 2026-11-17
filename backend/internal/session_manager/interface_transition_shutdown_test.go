@@ -398,3 +398,39 @@ func (c *shutdownGuardTransitionChat) QueueChatPrompt(_ context.Context, _ domai
 func (c *shutdownGuardTransitionChat) DrainChatQueue(_ context.Context, _ domain.SessionID) error {
 	return nil
 }
+
+type slowWriterTransitionStore struct {
+	*transitionStore
+	timeouts int
+	calls    int
+}
+
+func (s *slowWriterTransitionStore) AdvanceSessionInterfaceTransition(ctx context.Context, id string, expected, next domain.SessionInterfaceTransitionPhase, nativeID, code, detail string, at time.Time) (bool, error) {
+	s.calls++
+	if s.calls <= s.timeouts {
+		return false, fmt.Errorf("advance interface transition %s: %w", id, context.DeadlineExceeded)
+	}
+	return s.transitionStore.AdvanceSessionInterfaceTransition(ctx, id, expected, next, nativeID, code, detail, at)
+}
+
+func TestInterfaceTransitionMoveOutlastsBusyWriter(t *testing.T) {
+	m, st, _, _, _ := newTransitionManager(t, domain.SessionModeTUI)
+	_, _, err := st.CreateSessionInterfaceTransition(context.Background(), domain.SessionInterfaceTransition{
+		ID: "busy-writer", SessionID: "session-1", SourceMode: domain.SessionModeTUI, TargetMode: domain.SessionModeChat,
+		Phase: domain.SessionInterfaceTransitionPreflighting, NativeConversationID: "native-1",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	slow := &slowWriterTransitionStore{transitionStore: st, timeouts: 2}
+	m.store = slow
+	if err := m.moveInterfaceTransition("busy-writer", domain.SessionInterfaceTransitionDraining, "", ""); err != nil {
+		t.Fatalf("move failed behind a busy writer: %v", err)
+	}
+	if got := st.transitions["busy-writer"].Phase; got != domain.SessionInterfaceTransitionDraining {
+		t.Fatalf("phase = %s, want %s", got, domain.SessionInterfaceTransitionDraining)
+	}
+	if slow.calls != 3 {
+		t.Fatalf("advance calls = %d, want 3", slow.calls)
+	}
+}

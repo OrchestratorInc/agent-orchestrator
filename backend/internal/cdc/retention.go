@@ -22,8 +22,8 @@ const (
 	DefaultMaxRows int64 = 100_000
 	// DefaultRetentionBatch bounds each delete transaction so cleanup cannot
 	// monopolize SQLite's single writer connection.
-	DefaultRetentionBatch         int64 = 10_000
-	defaultRetentionBatchesPerRun int   = 8
+	DefaultRetentionBatch         int64 = 1_000
+	defaultRetentionBatchesPerRun int   = 80
 )
 
 // RetentionStore is the small storage surface needed by the change-log
