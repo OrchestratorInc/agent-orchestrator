@@ -5,7 +5,7 @@ import { trackerIssueLink, STANDALONE_WORKSPACE_ID, type WorkspaceSession } from
 export function useSessionIssueLink(session: WorkspaceSession, hostId = session.hostId) {
 	const project = useQuery({
 		queryKey: hostId ? ["project", hostId, session.workspaceId] : ["project", session.workspaceId],
-		enabled: /^#?[1-9]\d*$/.test(session.issueId?.trim() ?? "") && !session.cloud && session.workspaceId !== STANDALONE_WORKSPACE_ID,
+		enabled: /^(?:[\w.-]+(?:\/[\w.-]+)+#|#?)[1-9]\d*$/.test(session.issueId?.trim() ?? "") && !session.cloud && session.workspaceId !== STANDALONE_WORKSPACE_ID,
 		staleTime: 30_000,
 		queryFn: async () => {
 			const { data, error } = await clientForSessionHost(hostId).GET("/api/v1/projects/{id}", {

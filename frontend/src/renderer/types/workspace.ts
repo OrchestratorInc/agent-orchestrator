@@ -311,11 +311,11 @@ export type WorkspaceSession = {
 const GITHUB_ISSUE_ID = /^github:([\w.-]+\/[\w.-]+)#([1-9]\d*)(?:@([\w.-]+(?::\d+)?))?$/;
 const GITLAB_ISSUE_ID = /^gitlab:([\w.-]+(?:\/[\w.-]+)+)#([1-9]\d*)(?:@([\w.-]+(?::\d+)?))?$/;
 
-/** Resolve intake ids and manual refs; bare numbers need a project's repository. */
+/** Resolve intake ids and manual refs; numbers and repo refs need a project's repository. */
 export function trackerIssueLink(issueId?: string, repository?: string, provider?: "github" | "gitlab"): BoardTrackerIssue | undefined {
 	if (!issueId) return undefined;
 	issueId = issueId.trim();
-	const github = GITHUB_ISSUE_ID.exec(issueId) ?? /^([\w.-]+\/[\w.-]+)#([1-9]\d*)$/.exec(issueId);
+	const github = GITHUB_ISSUE_ID.exec(issueId);
 	if (github) {
 		const [, repo, number, host = "github.com"] = github;
 		return issueLink("github", repo, number, `https://${host}`);
@@ -332,7 +332,8 @@ export function trackerIssueLink(issueId?: string, repository?: string, provider
 			const match = /^\/(.+?)\/(?:(-)\/)?issues\/([1-9]\d*)\/?$/.exec(url.pathname);
 			return match ? issueLink(match[2] ? "gitlab" : "github", match[1], match[3], url.origin) : undefined;
 		}
-		if (/^#?[1-9]\d*$/.test(issueId) && repository) {
+		const ref = /^([\w.-]+(?:\/[\w.-]+)+)#([1-9]\d*)$/.exec(issueId);
+		if ((ref || /^#?[1-9]\d*$/.test(issueId)) && repository) {
 			const scp = /^git@([^/:]+):(.+)$/.exec(repository);
 			const url = new URL(scp ? `ssh://git@${scp[1]}/${scp[2]}` : repository);
 			if (!["https:", "http:", "ssh:"].includes(url.protocol) || url.search || url.hash) return undefined;
@@ -344,7 +345,8 @@ export function trackerIssueLink(issueId?: string, repository?: string, provider
 			if (url.protocol === "ssh:" && url.port && host !== "github.com" && host !== "gitlab.com") return undefined;
 			// An SSH port says nothing about the browser's port.
 			const origin = url.protocol === "ssh:" ? `https://${url.hostname}` : url.origin;
-			return issueLink(forge, url.pathname.replace(/^\/|\/$/g, "").replace(/\.git$/, ""), issueId.replace(/^#/, ""), origin);
+			const repo = ref?.[1] ?? url.pathname.replace(/^\/|\/$/g, "").replace(/\.git$/, "");
+			return issueLink(forge, repo, ref?.[2] ?? issueId.replace(/^#/, ""), origin);
 		}
 	} catch {
 		return undefined;

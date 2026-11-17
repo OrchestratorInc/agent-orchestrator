@@ -32,7 +32,7 @@ import {
 
 describe("trackerIssueLink", () => {
 	it.each([
-		["acme/project#42", undefined, "https://github.com/acme/project/issues/42", "acme/project", 42],
+		["acme/project#42", "https://github.com/acme/project.git", "https://github.com/acme/project/issues/42", "acme/project", 42],
 		["https://github.com/acme/project/issues/42", undefined, "https://github.com/acme/project/issues/42", "acme/project", 42],
 		["https://gitlab.local:8443/group/sub/repo/-/issues/7", undefined, "https://gitlab.local:8443/group/sub/repo/-/issues/7", "group/sub/repo", 7],
 		["42", "https://github.com/acme/project.git", "https://github.com/acme/project/issues/42", "acme/project", 42],
@@ -40,6 +40,19 @@ describe("trackerIssueLink", () => {
 		["7", "https://gitlab.com:8443/group/sub/repo.git", "https://gitlab.com:8443/group/sub/repo/-/issues/7", "group/sub/repo", 7],
 	])("links manual issue %s with repository %s", (issueId, repository, url, repo, number) => {
 		expect(trackerIssueLink(issueId, repository)).toEqual({ number, repo, url });
+	});
+
+	it.each([
+		["group/repo#7", "https://gitlab.com/group/repo.git", undefined, "https://gitlab.com/group/repo/-/issues/7"],
+		["group/sub/repo#7", "git@gitlab.com:group/sub/repo.git", undefined, "https://gitlab.com/group/sub/repo/-/issues/7"],
+		["other/sub/repo#7", "http://gitlab.local:8080/group/repo.git", "gitlab", "http://gitlab.local:8080/other/sub/repo/-/issues/7"],
+		["team/app#5", "https://acme.ghe.com/team/app.git", undefined, "https://acme.ghe.com/team/app/issues/5"],
+		["team/app#5", "https://code.acme.test:8443/team/app.git", "github", "https://code.acme.test:8443/team/app/issues/5"],
+		["team/app#5", "https://code.example.com/team/app.git", undefined, undefined],
+		["team/app#5", undefined, undefined, undefined],
+		["team/app#5", "https://github.com/team/app.git", undefined, "https://github.com/team/app/issues/5"],
+	] as const)("resolves typed issue %s with repository %s and provider %s", (issueId, repository, provider, url) => {
+		expect(trackerIssueLink(issueId, repository, provider)?.url).toBe(url);
 	});
 
 	it("uses the known web origin for an SSH port", () => {
