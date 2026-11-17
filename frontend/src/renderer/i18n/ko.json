@@ -2415,6 +2415,8 @@
 	"terminal.sessionEndedNotTerminated": "이 터미널 프로세스는 종료되었지만 세션은 아직 종료로 표시되지 않았습니다.",
 	"terminal.sessionAria": "세션 터미널",
 	"terminal.shellExited": "이 셸이 종료되었습니다. 탭을 닫거나 새 터미널을 여세요.",
+	"terminal.shellEnded": "터미널이 종료됨",
+	"terminal.reopenShell": "터미널 다시 열기",
 	"terminal.shellAria": "셸 터미널",
 	"terminal.startingSession": "세션 시작 중",
 	"terminal.tabsAria": "열린 터미널",

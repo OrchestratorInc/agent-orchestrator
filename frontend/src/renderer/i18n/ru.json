@@ -2977,6 +2977,8 @@
 	"terminal.sessionEndedNotTerminated": "Процесс терминала завершён, но сессия ещё не отмечена как завершённая.",
 	"terminal.sessionAria": "Терминал сессии",
 	"terminal.shellExited": "Оболочка завершила работу. Закройте вкладку или откройте новый терминал.",
+	"terminal.shellEnded": "Терминал завершён",
+	"terminal.reopenShell": "Открыть терминал снова",
 	"terminal.shellAria": "Терминал оболочки",
 	"terminal.startingSession": "Запуск сессии",
 	"terminal.tabsAria": "Открытые терминалы",

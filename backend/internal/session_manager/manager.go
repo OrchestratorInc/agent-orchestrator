@@ -270,8 +270,13 @@ type lifecycleRecorder interface {
 // Late-bound via SetShellTerminalCloser: shellterm.Service is built after
 // Session Manager during boot (see daemon.startShellTerminals), mirroring why
 // lifecycle.Manager takes its completion terminator the same way.
+//
+// SuspendSessionShells is the app-quit variant with the same contract: the
+// session and its worktree stay, and its user shells are kept to be restored
+// at the next launch instead of being forgotten.
 type ShellTerminalCloser interface {
 	BeginSessionTeardown(ctx context.Context, id domain.SessionID) (release func(), err error)
+	SuspendSessionShells(ctx context.Context, id domain.SessionID) (release func(), err error)
 }
 
 // HarnessUseGate coordinates session lifecycle operations with harness binary
@@ -817,6 +822,16 @@ func (m *Manager) beginShellTerminalTeardown(ctx context.Context, id domain.Sess
 		return nil, nil
 	}
 	return closer.BeginSessionTeardown(ctx, id)
+}
+
+func (m *Manager) suspendShellTerminals(ctx context.Context, id domain.SessionID) (release func(), err error) {
+	m.shellTerminalsMu.Lock()
+	closer := m.shellTerminals
+	m.shellTerminalsMu.Unlock()
+	if closer == nil {
+		return nil, nil
+	}
+	return closer.SuspendSessionShells(ctx, id)
 }
 
 // SetReviewerTerminator wires worker lifecycle paths to the worker's reviewer
