@@ -55,8 +55,10 @@ struct StateTests {
         let legacyMarker = LegacyAppMarker(appPath: request.appPath, version: request.version,
                                            lastReconciledAt: "1970-01-01T00:00:01.000Z", updateRestartProtocol: nil)
         func evidence(marker: LegacyAppMarker? = legacyMarker, pid: Int32? = 456,
-                      appPath: String? = request.appPath, finished: Bool = true, visible: Bool = true) -> LegacyLaunchEvidence {
-            LegacyLaunchEvidence(marker: marker, pid: pid, appPath: appPath, finishedLaunching: finished, visibleWindow: visible)
+                      appPath: String? = request.appPath, finished: Bool = true, visible: Bool = true,
+                      version: String? = request.version) -> LegacyLaunchEvidence {
+            LegacyLaunchEvidence(marker: marker, pid: pid, appPath: appPath, finishedLaunching: finished, visibleWindow: visible,
+                                 bundleVersion: version)
         }
         assert(state.stage(now: 190_001, parentAlive: false, completion: nil, failure: nil, legacy: evidence()) == .legacyComplete)
         assert(state.stage(now: 190_001, parentAlive: false, completion: nil, failure: nil, legacy: evidence(visible: false)) == .reopened)
@@ -82,7 +84,8 @@ struct StateTests {
         let stalled = UpdateProgressState(request: request, now: 1000)
         assert(stalled.stage(now: 120_000, parentAlive: false, completion: nil, failure: nil, legacy: evidence(marker: nil)) == .installing)
         assert(stalled.stage(now: 181_001, parentAlive: false, completion: nil, failure: nil, legacy: evidence(marker: nil)) == .legacyComplete)
-        for stillStuck in [evidence(marker: nil, visible: false), evidence(marker: nil, pid: request.parentPID), evidence(marker: nil, appPath: "/wrong/AO.app"), evidence(marker: nil, finished: false)] {
+        for stillStuck in [evidence(marker: nil, visible: false), evidence(marker: nil, pid: request.parentPID), evidence(marker: nil, appPath: "/wrong/AO.app"), evidence(marker: nil, finished: false),
+                           evidence(marker: nil, version: "1.2.2"), evidence(marker: nil, version: nil)] {
             if case .recovery = stalled.stage(now: 181_001, parentAlive: false, completion: nil, failure: nil, legacy: stillStuck) {} else { fatalError("still stuck") }
         }
         if case .recovery = stalled.stage(now: 181_001, parentAlive: true, completion: nil, failure: nil, legacy: evidence(marker: nil)) {} else { fatalError("parent alive") }

@@ -57,13 +57,15 @@ struct LegacyLaunchEvidence {
     let appPath: String?
     let finishedLaunching: Bool
     let visibleWindow: Bool
+    // CFBundleShortVersionString of the running bundle, as installed on disk.
+    var bundleVersion: String? = nil
 
     func launched(_ request: UpdateRequest, now: Double) -> Bool {
         guard let marker, marker.matchesLegacyLaunch(request, now: now) else { return false }
         return reopened(request)
     }
 
-    // A different, finished-launching process is running from the updated bundle.
+    // A different, finished-launching process is running from the app path.
     func reopened(_ request: UpdateRequest) -> Bool {
         guard let pid, pid > 0, pid != request.parentPID,
               appPath == request.appPath, finishedLaunching else { return false }
@@ -137,10 +139,12 @@ struct UpdateProgressState {
         if now - waitingSince < stallBudgetMs {
             return parentAlive ? .closing : .installing
         }
-        // Orchestrator is back on screen, so there is nothing left to report even
-        // if its acknowledgement never arrived. Exit quietly instead of showing
-        // "not reopened yet" over the app the user is already looking at.
-        if !parentAlive, let legacy, legacy.reopened(request), legacy.visibleWindow { return .legacyComplete }
+        // The updated Orchestrator is back on screen, so there is nothing left to
+        // report even if its acknowledgement never arrived. Exit quietly instead
+        // of showing "not reopened yet" over the app the user is looking at. An
+        // old build reopened after a failed install keeps the recovery window.
+        if !parentAlive, let legacy, legacy.reopened(request), legacy.visibleWindow,
+           legacy.bundleVersion == request.version { return .legacyComplete }
         return .recovery(parentAlive
             ? "Orchestrator is taking longer than expected to close. The update will continue when Orchestrator has closed."
             : "Orchestrator has not reopened yet. The installer may still be working. You can keep waiting or download the latest app.")

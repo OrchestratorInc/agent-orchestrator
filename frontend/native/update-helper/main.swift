@@ -98,7 +98,15 @@ final class ProgressController: NSObject, NSApplicationDelegate, NSWindowDelegat
         }) ?? false
         return LegacyLaunchEvidence(marker: marker, pid: app.processIdentifier,
                                     appPath: app.bundleURL?.standardizedFileURL.path,
-                                    finishedLaunching: app.isFinishedLaunching, visibleWindow: visible)
+                                    finishedLaunching: app.isFinishedLaunching, visibleWindow: visible,
+                                    bundleVersion: bundleVersion(app.bundleURL))
+    }
+
+    // Read Info.plist fresh each time: Bundle caches per process, and a read
+    // taken mid-install would pin the old version.
+    func bundleVersion(_ url: URL?) -> String? {
+        guard let url, let info = NSDictionary(contentsOf: url.appendingPathComponent("Contents/Info.plist")) else { return nil }
+        return info["CFBundleShortVersionString"] as? String
     }
 
     // Bring the window on screen. Called only on the stall/failure paths
