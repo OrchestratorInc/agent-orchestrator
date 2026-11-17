@@ -5307,9 +5307,10 @@ export function Timeline({
 	// an upward wheel at the top and the button above the first turn still ask.
 	const olderPages = useRef({ hasOlder, loadingOlder, onLoadOlder });
 	olderPages.current = { hasOlder, loadingOlder, onLoadOlder };
-	const oldestShape = `${groups.length}:${groups[0]?.key ?? ""}:${groups[0]?.items.length ?? 0}`;
-	const oldestShapeRef = useRef(oldestShape);
-	oldestShapeRef.current = oldestShape;
+	// The oldest loaded row: an older page moves it, live rows and turns do not.
+	const oldestRow = `${groups[0]?.key ?? ""}:${groups[0]?.items[0]?.id ?? ""}`;
+	const oldestRowRef = useRef(oldestRow);
+	oldestRowRef.current = oldestRow;
 	const fillRequestedFor = useRef<string | undefined>(undefined);
 	const loadOlderToFill = useCallback(() => {
 		const node = scroller.current;
@@ -5318,11 +5319,11 @@ export function Timeline({
 		if (!node || !hasOlder || loadingOlder || !onLoadOlder || node.clientHeight === 0) return;
 		// Within 2px, an upward scroll cannot register as one (see onScroll).
 		if (node.scrollHeight - node.clientHeight > 2) return;
-		if (fillRequestedFor.current === oldestShapeRef.current) return;
-		fillRequestedFor.current = oldestShapeRef.current;
+		if (fillRequestedFor.current === oldestRowRef.current) return;
+		fillRequestedFor.current = oldestRowRef.current;
 		onLoadOlder();
 	}, []);
-	useEffect(() => loadOlderToFill(), [loadOlderToFill, oldestShape, hasOlder, loadingOlder]);
+	useEffect(() => loadOlderToFill(), [loadOlderToFill, oldestRow, hasOlder, loadingOlder]);
 
 	useEffect(() => {
 		syncScrollLayout();

@@ -799,6 +799,20 @@ describe("ChatWorkspace timeline", () => {
 			view.rerender(<ChatWorkspace snapshot={page(6)} hasOlder onLoadOlder={onLoadOlder} />);
 			expect(onLoadOlder).toHaveBeenCalledTimes(1);
 
+			// Nor when live rows arrive: a new step in the oldest turn, then a new turn.
+			const live = page(6);
+			const step = live.items.find((item) => item.turnId === live.turns[0]!.id && item.kind === "activity")!;
+			const withStep = { ...live, items: [...live.items, { ...step, id: "live-step", sequence: 10_000 }] };
+			view.rerender(<ChatWorkspace snapshot={withStep} hasOlder onLoadOlder={onLoadOlder} />);
+			const prompt = live.items.find((item) => item.kind === "message" && item.role === "user")!;
+			const withTurn = {
+				...withStep,
+				turns: [...withStep.turns, { ...live.turns.at(-1)!, id: "turn-live" }],
+				items: [...withStep.items, { ...prompt, id: "live-prompt", turnId: "turn-live", sequence: 10_001 }],
+			};
+			view.rerender(<ChatWorkspace snapshot={withTurn} hasOlder onLoadOlder={onLoadOlder} />);
+			expect(onLoadOlder).toHaveBeenCalledTimes(1);
+
 			// An older page that still leaves it short asks for the next one.
 			view.rerender(<ChatWorkspace snapshot={page(4)} hasOlder onLoadOlder={onLoadOlder} />);
 			expect(onLoadOlder).toHaveBeenCalledTimes(2);
