@@ -2828,13 +2828,13 @@ type ShellTerminalResponse struct {
 	// computer restarted. The tab stays listed so the user can reopen or close it.
 	EndedAt *time.Time `json:"endedAt,omitempty" description:"When the shell's process was found gone. Present only for an ended shell, which can be reopened or closed but not attached."`
 	// ResumeHarness names the agent an ended shell can resume on reopen.
-	ResumeHarness string `json:"resumeHarness,omitempty" description:"For an ended shell, the coding agent last seen in it whose conversation picker reopening can start."`
+	ResumeHarness string `json:"resumeHarness,omitempty" description:"For an ended shell, the coding agent that was running in it, which reopening with resumeAgent resumes."`
 }
 
 // ReopenShellTerminalRequest is the body of POST /api/v1/shell-terminals/{handleId}/reopen.
 type ReopenShellTerminalRequest struct {
 	Shell       string `json:"shell,omitempty" description:"Shell to launch, as for opening a shell terminal."`
-	ResumeAgent bool   `json:"resumeAgent,omitempty" description:"Also start the agent last seen in this terminal in its own conversation picker. Nothing the old shell ran is replayed."`
+	ResumeAgent bool   `json:"resumeAgent,omitempty" description:"Also resume the agent that was running in this terminal: the same conversation when it is known, otherwise its conversation picker. Nothing the old shell ran is replayed."`
 	Cols        int    `json:"cols,omitempty" description:"Initial terminal columns, as for opening a shell terminal."`
 	Rows        int    `json:"rows,omitempty" description:"Initial terminal rows. See cols."`
 }

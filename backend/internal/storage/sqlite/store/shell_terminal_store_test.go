@@ -279,13 +279,19 @@ func endedStoreFixture(t *testing.T) (*sqlite.Store, context.Context, shellterms
 
 func TestMarkShellTerminalEndedSetsEndedAtOnce(t *testing.T) {
 	s, ctx, rec := endedStoreFixture(t)
-	first := time.Date(2026, 11, 10, 20, 44, 0, 0, time.UTC)
+	first := shelltermsvc.ShellTerminalEnd{
+		EndedAt:             time.Date(2026, 11, 10, 20, 44, 0, 0, time.UTC),
+		WorkingDir:          "/repo/sub",
+		AgentHarness:        domain.HarnessClaudeCode,
+		AgentConversationID: "0f8c2b9e-3c1a-4d5e-9f00-1a2b3c4d5e6f",
+	}
 
 	marked, err := s.MarkShellTerminalEnded(ctx, rec.HandleID, first)
 	if err != nil || !marked {
 		t.Fatalf("first mark = %v, %v; want true", marked, err)
 	}
-	marked, err = s.MarkShellTerminalEnded(ctx, rec.HandleID, first.Add(time.Hour))
+	later := shelltermsvc.ShellTerminalEnd{EndedAt: first.EndedAt.Add(time.Hour), WorkingDir: "/elsewhere"}
+	marked, err = s.MarkShellTerminalEnded(ctx, rec.HandleID, later)
 	if err != nil || marked {
 		t.Fatalf("second mark = %v, %v; want false", marked, err)
 	}
@@ -296,8 +302,12 @@ func TestMarkShellTerminalEndedSetsEndedAtOnce(t *testing.T) {
 	if err != nil || !found {
 		t.Fatalf("select = %v, %v", found, err)
 	}
-	if got.EndedAt == nil || !got.EndedAt.Equal(first) {
-		t.Fatalf("ended at = %v, want the first mark %v", got.EndedAt, first)
+	if got.EndedAt == nil || !got.EndedAt.Equal(first.EndedAt) {
+		t.Fatalf("ended at = %v, want the first mark %v", got.EndedAt, first.EndedAt)
+	}
+	if got.WorkingDir != first.WorkingDir || got.LastAgentHarness != first.AgentHarness ||
+		got.AgentConversationID != first.AgentConversationID {
+		t.Fatalf("saved end = %q %q %q, want the first mark", got.WorkingDir, got.LastAgentHarness, got.AgentConversationID)
 	}
 }
 
@@ -322,7 +332,7 @@ func TestUpdateShellTerminalAgentHarnessKeepsSameValue(t *testing.T) {
 
 func TestReplaceShellTerminalSwapsEndedRowInPlace(t *testing.T) {
 	s, ctx, old := endedStoreFixture(t)
-	if _, err := s.MarkShellTerminalEnded(ctx, old.HandleID, time.Date(2026, 11, 10, 20, 44, 0, 0, time.UTC)); err != nil {
+	if _, err := s.MarkShellTerminalEnded(ctx, old.HandleID, shelltermsvc.ShellTerminalEnd{EndedAt: time.Date(2026, 11, 10, 20, 44, 0, 0, time.UTC), WorkingDir: old.WorkingDir}); err != nil {
 		t.Fatal(err)
 	}
 	next := old

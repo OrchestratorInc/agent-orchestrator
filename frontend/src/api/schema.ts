@@ -8028,7 +8028,7 @@ export interface components {
         ReopenShellTerminalRequest: {
             /** @description Initial terminal columns, as for opening a shell terminal. */
             cols?: number;
-            /** @description Also start the agent last seen in this terminal in its own conversation picker. Nothing the old shell ran is replayed. */
+            /** @description Also resume the agent that was running in this terminal: the same conversation when it is known, otherwise its conversation picker. Nothing the old shell ran is replayed. */
             resumeAgent?: boolean;
             /** @description Initial terminal rows. See cols. */
             rows?: number;
@@ -8846,7 +8846,7 @@ export interface components {
             endedAt?: null | string;
             handleId: string;
             projectId?: string;
-            /** @description For an ended shell, the coding agent last seen in it whose conversation picker reopening can start. */
+            /** @description For an ended shell, the coding agent that was running in it, which reopening with resumeAgent resumes. */
             resumeHarness?: string;
             sessionId?: string;
             terminalTitle?: string;

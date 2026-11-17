@@ -5,7 +5,6 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
-	"time"
 
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
 	shelltermsvc "github.com/aoagents/agent-orchestrator/backend/internal/service/shellterm"
@@ -117,12 +116,15 @@ func (s *Store) DeleteShellTerminalByHandleID(ctx context.Context, handleID stri
 
 // MarkShellTerminalEnded records that a shell's process is gone while keeping
 // its row, reporting whether a not-yet-ended row was updated.
-func (s *Store) MarkShellTerminalEnded(ctx context.Context, handleID string, endedAt time.Time) (bool, error) {
+func (s *Store) MarkShellTerminalEnded(ctx context.Context, handleID string, end shelltermsvc.ShellTerminalEnd) (bool, error) {
 	s.writeMu.Lock()
 	defer s.writeMu.Unlock()
 	affected, err := s.qw.MarkShellTerminalEnded(ctx, gen.MarkShellTerminalEndedParams{
-		EndedAt:  sql.NullTime{Time: endedAt.UTC(), Valid: true},
-		HandleID: handleID,
+		EndedAt:             sql.NullTime{Time: end.EndedAt.UTC(), Valid: true},
+		WorkingDir:          end.WorkingDir,
+		LastAgentHarness:    string(end.AgentHarness),
+		AgentConversationID: end.AgentConversationID,
+		HandleID:            handleID,
 	})
 	if err != nil {
 		return false, fmt.Errorf("mark shell terminal %s ended: %w", handleID, err)
@@ -238,6 +240,7 @@ func shellTerminalFromGen(row gen.ShellTerminal) shelltermsvc.ShellTerminalRecor
 		rec.EndedAt = &endedAt
 	}
 	rec.LastAgentHarness = domain.AgentHarness(row.LastAgentHarness)
+	rec.AgentConversationID = row.AgentConversationID
 	return rec
 }
 

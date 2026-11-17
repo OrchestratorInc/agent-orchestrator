@@ -2674,10 +2674,9 @@ func TestShellReconciliationPreservesUncertainChildOrHost(t *testing.T) {
 			}
 			// A later conclusive retry must finish cleanup without losing the
 			// handle needed to stop the host retained by the failed attempt.
-			// The session's shell then stays listed as an ended tab.
 			rt.childProbeErr, rt.destroyErr, rt.aliveErr = nil, nil, nil
 			listed, err = svc.ListShellTerminalsForCurrentAppRun(context.Background())
-			if err != nil || len(listed) != 1 || listed[0].EndedAt == nil || len(st.records) != 1 || rt.aliveByHandle[handleID] {
+			if err != nil || len(listed) != 0 || len(st.records) != 0 || rt.aliveByHandle[handleID] {
 				t.Fatalf("retry list = %v, %v; rows = %v", listed, err, st.records)
 			}
 		})

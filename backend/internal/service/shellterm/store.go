@@ -31,8 +31,21 @@ type ShellTerminalRecord struct {
 	// process is gone). The row is kept so the tab stays visible and can be
 	// reopened; nil means not known to have ended.
 	EndedAt *time.Time
-	// LastAgentHarness is the coding agent last seen running in the shell.
+	// LastAgentHarness is the coding agent running in the shell when it was
+	// last seen, or "" when the shell's own prompt was in front.
 	LastAgentHarness domain.AgentHarness
+	// AgentConversationID is the conversation LastAgentHarness was in when
+	// the app quit, when the agent said; "" otherwise.
+	AgentConversationID string
+}
+
+// ShellTerminalEnd is what a shell's row keeps when its process ends, so the
+// tab can be restored where it was.
+type ShellTerminalEnd struct {
+	EndedAt             time.Time
+	WorkingDir          string
+	AgentHarness        domain.AgentHarness
+	AgentConversationID string
 }
 
 // Store is the shell terminal service's persistence surface. The SQLite store
@@ -48,7 +61,7 @@ type Store interface {
 	SelectShellTerminalsFromPreviousAppRuns(ctx context.Context, appRunID string) ([]ShellTerminalRecord, error)
 	DeleteShellTerminalByHandleID(ctx context.Context, handleID string) (bool, error)
 	DeleteShellTerminalsFromPreviousAppRuns(ctx context.Context, appRunID string) (int64, error)
-	MarkShellTerminalEnded(ctx context.Context, handleID string, endedAt time.Time) (bool, error)
+	MarkShellTerminalEnded(ctx context.Context, handleID string, end ShellTerminalEnd) (bool, error)
 	UpdateShellTerminalAgentHarness(ctx context.Context, handleID string, harness domain.AgentHarness) error
 	ReplaceShellTerminal(ctx context.Context, oldHandleID string, rec ShellTerminalRecord) (bool, error)
 }

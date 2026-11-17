@@ -3,31 +3,42 @@ package shellterm
 import (
 	"context"
 	"fmt"
+	"maps"
 	"os"
 	"time"
 
-	"github.com/aoagents/agent-orchestrator/backend/internal/agentlaunch"
+	"github.com/google/uuid"
+
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
 	"github.com/aoagents/agent-orchestrator/backend/internal/httpd/apierr"
 	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
 )
 
-// agentResumePickers is the command, per harness, that opens that agent's
-// own picker of saved conversations for the current directory. It is typed
-// into a reopened shell only when the user asks to resume. A picker, not a
-// specific conversation: AO does not know which conversation ran in a hand-
-// started shell, so the user chooses. Nothing the old shell ran is replayed.
-var agentResumePickers = map[domain.AgentHarness]string{
-	domain.HarnessClaudeCode: "claude --resume",
-	domain.HarnessCodex:      "codex resume",
-}
-
-// resumeHarness is the agent an ended shell can offer to resume, or "".
-func resumeHarness(rec ShellTerminalRecord) domain.AgentHarness {
-	if rec.EndedAt == nil {
+// agentResumeCommand is what a restored shell types to bring back the agent
+// that was running in it: that exact conversation when the agent named it,
+// else the agent's own picker of saved conversations for the folder, so the
+// user chooses and nothing is substituted. "" for an agent it cannot resume.
+// It is a fixed command plus a validated id: nothing the old shell ran is
+// replayed.
+func agentResumeCommand(harness domain.AgentHarness, conversationID string) string {
+	var picker string
+	switch harness {
+	case domain.HarnessClaudeCode:
+		picker = "claude --resume"
+	case domain.HarnessCodex:
+		picker = "codex resume"
+	default:
 		return ""
 	}
-	if _, ok := agentResumePickers[rec.LastAgentHarness]; !ok {
+	if _, err := uuid.Parse(conversationID); err != nil {
+		return picker
+	}
+	return picker + " " + conversationID
+}
+
+// resumeHarness is the agent an ended shell resumes when restored, or "".
+func resumeHarness(rec ShellTerminalRecord) domain.AgentHarness {
+	if rec.EndedAt == nil || agentResumeCommand(rec.LastAgentHarness, "") == "" {
 		return ""
 	}
 	return rec.LastAgentHarness
@@ -37,12 +48,13 @@ func resumeHarness(rec ShellTerminalRecord) domain.AgentHarness {
 // to reach its prompt and take the resume command.
 var agentResumeDeliveryTimeout = 30 * time.Second
 
-// ReopenShellTerminal replaces an ended shell with a fresh login shell in the
-// same session, directory (when it still exists) and tab title and position.
-// It runs only on the user's explicit request and never replays anything the
-// old shell ran. With ResumeAgent, the agent last seen in the shell is started
-// in its own conversation picker once the new shell reaches its prompt; if
-// that cannot be delivered the shell is still open for manual use.
+// ReopenShellTerminal restores an ended shell as a fresh login shell in the
+// same session, directory (when it still exists) and tab title and position,
+// showing the output saved when the app quit above its first prompt. It never
+// replays anything the old shell ran. With ResumeAgent, the agent that was
+// running in the shell is resumed once the new shell reaches its prompt (see
+// agentResumeCommand); if that cannot be delivered the shell is still open
+// for manual use.
 func (s *Service) ReopenShellTerminal(ctx context.Context, in ReopenShellTerminalInput) (ShellTerminal, error) {
 	if in.HandleID == "" {
 		return ShellTerminal{}, apierr.Invalid("SHELL_TERMINAL_ID_REQUIRED", "A shell terminal id is required", nil)
@@ -68,13 +80,14 @@ func (s *Service) ReopenShellTerminal(ctx context.Context, in ReopenShellTermina
 		return ShellTerminal{}, err
 	}
 	resumeCommand := ""
+	var resumedHarness domain.AgentHarness
 	if in.ResumeAgent {
-		harness := resumeHarness(rec)
-		if harness == "" {
+		resumedHarness = resumeHarness(rec)
+		if resumedHarness == "" {
 			return ShellTerminal{}, apierr.Invalid("SHELL_TERMINAL_AGENT_NOT_RESUMABLE",
 				"No agent that Orchestrator can resume was seen in this terminal", nil)
 		}
-		resumeCommand = agentResumePickers[harness]
+		resumeCommand = agentResumeCommand(resumedHarness, rec.AgentConversationID)
 	}
 
 	workingDir, projectID := rec.WorkingDir, rec.ProjectID
@@ -107,12 +120,19 @@ func (s *Service) ReopenShellTerminal(ctx context.Context, in ReopenShellTermina
 		rows:             in.Rows,
 		replaces:         rec.HandleID,
 		createdAt:        rec.CreatedAt,
-		lastAgentHarness: rec.LastAgentHarness,
+		lastAgentHarness: resumedHarness,
+	}
+	if saved := s.savedOutputPath(rec.HandleID); fileExists(saved) {
+		cfg.replayFile = saved
 	}
 	if resumeCommand == "" {
 		// Like a new tab, the shell waits for the client's grid unless one was given.
 		cfg.startOnAttach = true
-		return s.openTerminal(ctx, cfg)
+		terminal, err := s.openTerminal(ctx, cfg)
+		if err == nil {
+			s.removeSavedOutput(rec.HandleID)
+		}
+		return terminal, err
 	}
 	// The resume command needs a prompt to type into, so the shell starts now.
 	readiness, err := prepareCueShellReadiness(s.dataDir, launch.argv, launch.env)
@@ -127,12 +147,14 @@ func (s *Service) ReopenShellTerminal(ctx context.Context, in ReopenShellTermina
 			"Reopening with an agent needs bash, zsh, sh or fish. Reopen the terminal and start the agent yourself.", nil)
 	}
 	cfg.argv = readiness.argv
-	cfg.env = agentlaunch.MergeEnv(launch.env, readiness.env)
+	cfg.env = maps.Clone(launch.env)
+	maps.Copy(cfg.env, readiness.env)
 	terminal, err := s.openTerminal(ctx, cfg)
 	if err != nil {
 		readiness.cleanup()
 		return ShellTerminal{}, err
 	}
+	s.removeSavedOutput(rec.HandleID)
 	go s.deliverAgentResume(context.WithoutCancel(ctx), terminal.HandleID, launch.argv, readiness, resumeCommand)
 	return terminal, nil
 }
@@ -178,11 +200,11 @@ func (s *Service) deliverAgentResume(ctx context.Context, handleID string, shell
 	}
 }
 
-// RecordShellAgent remembers the coding agent seen running in a shell, so an
-// ended tab can offer to resume it. Best-effort: a failed write only loses
-// the offer.
+// RecordShellAgent remembers the coding agent in front of a shell ("" once it
+// leaves), so a shell that ends without a quit (a power loss) can still offer
+// to resume it. Best-effort: a failed write only loses the offer.
 func (s *Service) RecordShellAgent(handleID string, harness domain.AgentHarness) {
-	if handleID == "" || harness == "" {
+	if handleID == "" {
 		return
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
@@ -190,4 +212,9 @@ func (s *Service) RecordShellAgent(handleID string, harness domain.AgentHarness)
 	if err := s.store.UpdateShellTerminalAgentHarness(ctx, handleID, harness); err != nil {
 		s.log.Warn("shell terminal: record agent failed", "handleId", handleID, "error", err)
 	}
+}
+
+func fileExists(path string) bool {
+	info, err := os.Stat(path)
+	return err == nil && info.Mode().IsRegular()
 }

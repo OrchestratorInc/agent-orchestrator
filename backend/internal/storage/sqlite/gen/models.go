@@ -997,6 +997,7 @@ type ShellTerminal struct {
 	AppTitle                  string
 	EndedAt                   sql.NullTime
 	LastAgentHarness          string
+	AgentConversationID       string
 }
 
 type TelemetryEvent struct {

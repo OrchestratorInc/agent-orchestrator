@@ -53,7 +53,10 @@ ORDER BY created_at;
 
 -- name: MarkShellTerminalEnded :execrows
 UPDATE shell_terminals
-SET ended_at = sqlc.arg(ended_at)
+SET ended_at = sqlc.arg(ended_at),
+    working_dir = sqlc.arg(working_dir),
+    last_agent_harness = sqlc.arg(last_agent_harness),
+    agent_conversation_id = sqlc.arg(agent_conversation_id)
 WHERE handle_id = sqlc.arg(handle_id) AND ended_at IS NULL;
 
 -- name: UpdateShellTerminalAgentHarness :execrows

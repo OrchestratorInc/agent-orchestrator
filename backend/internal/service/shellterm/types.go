@@ -41,8 +41,8 @@ type ShellTerminal struct {
 }
 
 // ReopenShellTerminalInput asks to replace an ended shell with a fresh one in
-// the same place. ResumeAgent also starts the agent last seen there in its
-// own conversation picker; nothing the old shell ran is ever replayed.
+// the same place. ResumeAgent also resumes the agent that was running there;
+// nothing the old shell ran is ever replayed.
 type ReopenShellTerminalInput struct {
 	HandleID    string
 	Shell       string

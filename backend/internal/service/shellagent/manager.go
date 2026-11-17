@@ -14,6 +14,7 @@ import (
 
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
 	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
+	"github.com/aoagents/agent-orchestrator/backend/internal/process"
 )
 
 // State is what a shell tab shows about the agent running in it.
@@ -51,6 +52,8 @@ var (
 	// the host died while its record still resolves. The next subscription
 	// starts it again.
 	maxWatchFailures = 6
+	// foregroundReadTimeout bounds a one-off reading of a shell's foreground.
+	foregroundReadTimeout = 3 * time.Second
 )
 
 // shellWatch is one running watch. Its pointer identifies the owner of a
@@ -67,8 +70,8 @@ type Manager struct {
 	log    *slog.Logger
 	base   context.Context
 
-	// record, when set, remembers each harness seen in a shell; recorded
-	// dedupes calls per terminal.
+	// record, when set, remembers the agent in front of each shell ("" once
+	// the shell's own prompt is back); recorded dedupes calls per terminal.
 	record   func(handleID string, harness domain.AgentHarness)
 	recorded map[string]domain.AgentHarness
 
@@ -95,8 +98,8 @@ func NewManager(ctx context.Context, rt Runtime, agents ports.AgentResolver, log
 	}
 }
 
-// SetHarnessRecorder registers fn to be told the harness seen in a shell,
-// once per change. fn may block briefly; it is never called with the lock
+// SetHarnessRecorder registers fn to be told the agent in front of a shell,
+// or "" when it leaves, once per change. fn may block briefly; it is never called with the lock
 // held. Call once at boot, before tracking starts.
 func (m *Manager) SetHarnessRecorder(fn func(handleID string, harness domain.AgentHarness)) {
 	m.record = fn
@@ -209,11 +212,11 @@ func (m *Manager) watch(ctx context.Context, handleID string, self *shellWatch) 
 
 func (m *Manager) observe(ctx context.Context, handleID string, fg ports.TerminalForeground) {
 	harness := ClassifyArgv(fg.Argv)
+	m.recordHarness(handleID, harness)
 	if harness == "" {
 		m.apply(ctx, handleID, nil)
 		return
 	}
-	m.recordHarness(handleID, harness)
 	state := StateWorking
 	if !fg.Busy {
 		// Typing at an idle agent's prompt only echoes: keep the idle reading
@@ -328,7 +331,7 @@ func looksLikeApprovalPrompt(screen string) bool {
 	return approvalPrompt.MatchString(strings.Join(kept, "\n"))
 }
 
-// recordHarness reports a harness the first time it is seen in a shell.
+// recordHarness reports a change of the agent in front of a shell.
 func (m *Manager) recordHarness(handleID string, harness domain.AgentHarness) {
 	if m.record == nil {
 		return
@@ -343,4 +346,66 @@ func (m *Manager) recordHarness(handleID string, harness domain.AgentHarness) {
 	if changed {
 		m.record(handleID, harness)
 	}
+}
+
+// ReadShellForeground reads what runs in a shell right now: the folder of its
+// foreground program and, when that program is a coding agent, its harness and
+// the conversation it is in, when the agent says and that conversation has
+// history to resume. ok=false when the terminal cannot name its foreground.
+func (m *Manager) ReadShellForeground(ctx context.Context, handleID string) (dir string, harness domain.AgentHarness, conversationID string, ok bool) {
+	fg, ok := m.readForeground(ctx, handleID)
+	if !ok {
+		return "", "", "", false
+	}
+	if fg.PGID > 0 {
+		dir, _ = process.WorkingDir(ctx, fg.PGID)
+	}
+	harness = ClassifyArgv(fg.Argv)
+	if harness != "" && fg.PGID > 0 {
+		conversationID = m.agentConversation(ctx, harness, fg.PGID)
+	}
+	return dir, harness, conversationID, true
+}
+
+func (m *Manager) readForeground(ctx context.Context, handleID string) (ports.TerminalForeground, bool) {
+	ctx, cancel := context.WithTimeout(ctx, foregroundReadTimeout)
+	defer cancel()
+	readings := make(chan ports.TerminalForeground, 1)
+	_ = m.rt.WatchTerminalForeground(ctx, ports.RuntimeHandle{ID: handleID}, func(fg ports.TerminalForeground) {
+		select {
+		case readings <- fg:
+		default:
+		}
+		cancel()
+	})
+	select {
+	case fg := <-readings:
+		return fg, true
+	default:
+		return ports.TerminalForeground{}, false
+	}
+}
+
+func (m *Manager) agentConversation(ctx context.Context, harness domain.AgentHarness, pid int) string {
+	if m.agents == nil {
+		return ""
+	}
+	agent, ok := m.agents.Agent(harness)
+	if !ok {
+		return ""
+	}
+	reader, ok := agent.(ports.AgentProcessConversationReader)
+	if !ok {
+		return ""
+	}
+	id, ok, err := reader.ProcessConversationID(ctx, pid)
+	if err != nil || !ok {
+		return ""
+	}
+	if probe, ok := agent.(ports.AgentInterfaceHandoffHistoryProbe); ok {
+		if exists, err := probe.NativeConversationExists(ctx, ports.SessionRef{}, id, nil); err != nil || !exists {
+			return ""
+		}
+	}
+	return id
 }

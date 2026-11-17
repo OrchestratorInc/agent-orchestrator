@@ -16,14 +16,17 @@ import (
 	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
 )
 
-func (f *fakeShellTerminalStore) MarkShellTerminalEnded(_ context.Context, handleID string, endedAt time.Time) (bool, error) {
+func (f *fakeShellTerminalStore) MarkShellTerminalEnded(_ context.Context, handleID string, end ShellTerminalEnd) (bool, error) {
 	if f.markEndedErr != nil {
 		return false, f.markEndedErr
 	}
 	for i, rec := range f.records {
 		if rec.HandleID == handleID && rec.EndedAt == nil {
-			at := endedAt
+			at := end.EndedAt
 			f.records[i].EndedAt = &at
+			f.records[i].WorkingDir = end.WorkingDir
+			f.records[i].LastAgentHarness = end.AgentHarness
+			f.records[i].AgentConversationID = end.AgentConversationID
 			return true, nil
 		}
 	}
@@ -123,9 +126,9 @@ func TestRuntimeLossKeepsSessionShellAsEndedTab(t *testing.T) {
 	}
 }
 
-// A shell whose user typed `exit` during this launch is treated the same way:
-// listed as ended until the user closes or reopens it.
-func TestListMarksExitedSessionShellEnded(t *testing.T) {
+// A shell whose user typed `exit` during this launch closes as before: only
+// shells stopped by a quit, or found gone at the next launch, are restored.
+func TestListClosesShellExitedDuringThisLaunch(t *testing.T) {
 	ctx := context.Background()
 	rt := newFakeShellRuntime()
 	rec := sessionShell("shellterm-a")
@@ -136,10 +139,10 @@ func TestListMarksExitedSessionShellEnded(t *testing.T) {
 	svc := newTestService(rt, st, &fakeProjectRootLocator{})
 
 	listed, err := svc.ListShellTerminalsForCurrentAppRun(ctx)
-	if err != nil || len(listed) != 1 || listed[0].EndedAt == nil {
+	if err != nil || len(listed) != 0 {
 		t.Fatalf("list = %+v, %v", listed, err)
 	}
-	if rt.aliveByHandle[rec.HandleID] || len(st.records) != 1 {
+	if rt.aliveByHandle[rec.HandleID] || len(st.records) != 0 {
 		t.Fatalf("host alive = %v, rows = %+v", rt.aliveByHandle[rec.HandleID], st.records)
 	}
 }
@@ -234,8 +237,8 @@ func TestReopenEndedShellStartsFreshShellInSameTab(t *testing.T) {
 		t.Fatalf("reopened = %+v", got)
 	}
 	if len(st.records) != 2 || st.records[0].HandleID != got.HandleID || !st.records[0].TitleExplicit ||
-		st.records[0].LastAgentHarness != domain.HarnessClaudeCode || st.records[0].AppRunID != testAppRunID {
-		t.Fatalf("rows = %+v; want the ended row replaced in place", st.records)
+		st.records[0].LastAgentHarness != "" || st.records[0].AppRunID != testAppRunID {
+		t.Fatalf("rows = %+v; want the ended row replaced in place, with no agent running", st.records)
 	}
 	if len(rt.created) != 1 || rt.created[0].WorkspacePath != workspace || rt.created[0].Env["AO_SESSION_ID"] != "session-1" ||
 		rt.created[0].Env["AO_CUE_READY_FILE"] != "" {
@@ -363,20 +366,22 @@ func TestEndingShellForgetsInputTimestamp(t *testing.T) {
 	}
 }
 
-// A tab is shown as ended only once that is stored: reopen reads the stored
-// row and would refuse a tab the list showed as ended but never marked.
+// A tab is ended only once that is stored: a failed write leaves the row as
+// it was for the next pass to mark.
 func TestEndedStateNotReportedUntilStored(t *testing.T) {
 	ctx := context.Background()
 	rt := newFakeShellRuntime() // the host is gone
 	st := &fakeShellTerminalStore{records: []ShellTerminalRecord{sessionShell("shellterm-a")}, markEndedErr: errors.New("disk busy")}
 	svc := newTestService(rt, st, &fakeProjectRootLocator{})
 
-	listed, err := svc.ListShellTerminalsForCurrentAppRun(ctx)
-	if err != nil || len(listed) != 1 || listed[0].EndedAt != nil || st.records[0].EndedAt != nil {
-		t.Fatalf("list = %+v, %v; rows = %+v; want the row kept and not reported ended", listed, err, st.records)
+	if _, err := svc.ReapShellTerminalsFromPreviousAppRuns(ctx); err != nil || len(st.records) != 1 || st.records[0].EndedAt != nil {
+		t.Fatalf("reap err = %v; rows = %+v; want the row kept and not ended", err, st.records)
 	}
 	st.markEndedErr = nil
-	listed, err = svc.ListShellTerminalsForCurrentAppRun(ctx)
+	if _, err := svc.ReapShellTerminalsFromPreviousAppRuns(ctx); err != nil {
+		t.Fatal(err)
+	}
+	listed, err := svc.ListShellTerminalsForCurrentAppRun(ctx)
 	if err != nil || len(listed) != 1 || listed[0].EndedAt == nil || st.records[0].EndedAt == nil {
 		t.Fatalf("retry list = %+v, %v; rows = %+v; want it ended once stored", listed, err, st.records)
 	}
@@ -410,5 +415,130 @@ func TestReopenResumeRefusedForShellWithoutReadiness(t *testing.T) {
 	// A plain reopen still works in that shell.
 	if _, err := svc.ReopenShellTerminal(context.Background(), ReopenShellTerminalInput{HandleID: "shellterm-old", Shell: shell}); err != nil {
 		t.Fatalf("plain reopen: %v", err)
+	}
+}
+
+type fakeForegroundReader struct {
+	dir, conversationID string
+	harness             domain.AgentHarness
+	ok                  bool
+	read                []string
+}
+
+func (f *fakeForegroundReader) ReadShellForeground(_ context.Context, handleID string) (string, domain.AgentHarness, string, bool) {
+	f.read = append(f.read, handleID)
+	return f.dir, f.harness, f.conversationID, f.ok
+}
+
+// Quitting keeps each running user shell as an ended tab with what it needs
+// to come back: its recent output, the folder it was in and the agent in
+// front with its conversation. A shell the user already exited is closed.
+func TestSuspendSessionShellsSavesShellsToRestore(t *testing.T) {
+	ctx := context.Background()
+	rt := newFakeShellRuntime()
+	rt.setOutput("$ make test\nok\n")
+	running := sessionShell("shellterm-running")
+	exited := sessionShell("shellterm-exited")
+	ended := endedSessionShell("shellterm-ended", "")
+	rt.aliveByHandle[running.HandleID] = true
+	st := &fakeShellTerminalStore{records: []ShellTerminalRecord{running, exited, ended}}
+	svc := newTestService(rt, st, &fakeProjectRootLocator{})
+	svc.dataDir = t.TempDir()
+	const id = "0f8c2b9e-3c1a-4d5e-9f00-1a2b3c4d5e6f"
+	fg := &fakeForegroundReader{dir: "/worktree/api", harness: domain.HarnessClaudeCode, conversationID: id, ok: true}
+	svc.SetForegroundReader(fg)
+
+	release, err := svc.SuspendSessionShells(ctx, "session-1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	release()
+
+	if len(st.records) != 2 || st.records[0].HandleID != running.HandleID || st.records[1].HandleID != ended.HandleID {
+		t.Fatalf("rows = %+v; want the running shell kept, the exited one closed, the ended one untouched", st.records)
+	}
+	got := st.records[0]
+	if got.EndedAt == nil || got.WorkingDir != "/worktree/api" || got.LastAgentHarness != domain.HarnessClaudeCode || got.AgentConversationID != id {
+		t.Fatalf("saved = %+v", got)
+	}
+	if !reflect.DeepEqual(fg.read, []string{running.HandleID}) {
+		t.Fatalf("foreground read for %v", fg.read)
+	}
+	saved, err := os.ReadFile(svc.savedOutputPath(running.HandleID))
+	if err != nil || !strings.HasPrefix(string(saved), "$ make test\nok\n") || !strings.HasSuffix(string(saved), savedOutputReset) {
+		t.Fatalf("saved output = %q, %v", saved, err)
+	}
+	if rt.aliveByHandle[running.HandleID] {
+		t.Fatal("the running shell's host was left running")
+	}
+}
+
+// Restoring shows the saved output above the new shell, resumes the exact
+// conversation, and drops the saved file once the new shell is up.
+func TestReopenRestoresSavedOutputAndExactConversation(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("POSIX shell delivery")
+	}
+	t.Setenv("SHELL", "/bin/bash")
+	rt := newFakeShellRuntime()
+	rt.cueReady = true
+	workspace := t.TempDir()
+	const id = "0f8c2b9e-3c1a-4d5e-9f00-1a2b3c4d5e6f"
+	ended := endedSessionShell("shellterm-old", domain.HarnessClaudeCode)
+	ended.WorkingDir = workspace
+	ended.AgentConversationID = id
+	st := &fakeShellTerminalStore{records: []ShellTerminalRecord{ended}}
+	svc := reopenTestService(t, rt, st, workspace)
+	saved := svc.savedOutputPath(ended.HandleID)
+	if err := os.MkdirAll(filepath.Dir(saved), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(saved, []byte("old output\r\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	got, err := svc.ReopenShellTerminal(context.Background(), ReopenShellTerminalInput{HandleID: "shellterm-old", ResumeAgent: true})
+	if err != nil {
+		t.Fatalf("ReopenShellTerminal: %v", err)
+	}
+	if rt.created[0].ReplayFile != saved {
+		t.Fatalf("replay file = %q, want %q", rt.created[0].ReplayFile, saved)
+	}
+	if env := rt.created[0].Env; env["AO_SESSION_ID"] != string(ended.SessionID) || env["AO_CUE_READY_FILE"] == "" {
+		t.Fatalf("resumed shell env lost AO values: AO_SESSION_ID=%q AO_CUE_READY_FILE=%q", env["AO_SESSION_ID"], env["AO_CUE_READY_FILE"])
+	}
+	if _, err := os.Stat(saved); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("saved output kept after restore: %v", err)
+	}
+	if st.records[0].LastAgentHarness != domain.HarnessClaudeCode || st.records[0].AgentConversationID != "" {
+		t.Fatalf("row = %+v", st.records[0])
+	}
+	select {
+	case sent := <-rt.sentCh:
+		if sent.handleID != got.HandleID || !strings.Contains(sent.payload, "claude --resume "+id) {
+			t.Fatalf("sent = %+v", sent)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("resume command was not delivered")
+	}
+}
+
+func TestAgentResumeCommand(t *testing.T) {
+	const id = "0f8c2b9e-3c1a-4d5e-9f00-1a2b3c4d5e6f"
+	for _, tc := range []struct {
+		harness domain.AgentHarness
+		id      string
+		want    string
+	}{
+		{domain.HarnessClaudeCode, id, "claude --resume " + id},
+		{domain.HarnessClaudeCode, "", "claude --resume"},
+		{domain.HarnessClaudeCode, "x; rm -rf ~", "claude --resume"},
+		{domain.HarnessCodex, id, "codex resume " + id},
+		{domain.HarnessCodex, "", "codex resume"},
+		{domain.HarnessAider, id, ""},
+	} {
+		if got := agentResumeCommand(tc.harness, tc.id); got != tc.want {
+			t.Errorf("agentResumeCommand(%s, %q) = %q, want %q", tc.harness, tc.id, got, tc.want)
+		}
 	}
 }

@@ -22,7 +22,7 @@ func (m *Manager) StopAgentsForQuit(ctx context.Context) error {
 			continue
 		}
 		workers.Go(func() {
-			release, shellErr := m.beginShellTerminalTeardown(ctx, rec.ID)
+			release, shellErr := m.suspendShellTerminals(ctx, rec.ID)
 			if release != nil {
 				defer release()
 			}

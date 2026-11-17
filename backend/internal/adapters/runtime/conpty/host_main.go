@@ -31,7 +31,7 @@ import (
 func RunHost(args []string, stdout io.Writer) int {
 	opts, args := splitHostOptionArgs(args)
 	if len(args) < 3 {
-		fmt.Fprintf(os.Stderr, "usage: ao pty-host [--start=attach] [--surface=lazy] [--size=COLSxROWS] <sessionId> <cwd> <shellCmd> [shellArg...]\n")
+		fmt.Fprintf(os.Stderr, "usage: ao pty-host [--start=attach] [--surface=lazy] [--size=COLSxROWS] [--replay=FILE] <sessionId> <cwd> <shellCmd> [shellArg...]\n")
 		return 1
 	}
 
@@ -39,6 +39,15 @@ func RunHost(args []string, stdout io.Writer) int {
 	cwd := args[1]
 	shellCmd := args[2]
 	shellArgs := args[3:]
+	// Read before READY: the caller may remove the file once the host is up.
+	ring := NewRing()
+	if opts.ReplayFile != "" {
+		if replay, err := readReplay(opts.ReplayFile); err != nil {
+			fmt.Fprintf(os.Stderr, "pty-host [%s]: replay %s: %v\n", sessionID, opts.ReplayFile, err)
+		} else {
+			ring.Append(replay)
+		}
+	}
 	if err := os.Chdir(cwd); err != nil {
 		fmt.Fprintf(os.Stderr, "pty-host [%s]: chdir %s: %v\n", sessionID, cwd, err)
 		return 1
@@ -95,7 +104,6 @@ func RunHost(args []string, stdout io.Writer) int {
 		}
 	}()
 
-	ring := NewRing()
 	cfg := ServeConfig{
 		SessionID:   sessionID,
 		Listener:    ln,
@@ -109,4 +117,13 @@ func RunHost(args []string, stdout io.Writer) int {
 		return 1
 	}
 	return 0
+}
+
+func readReplay(path string) ([]byte, error) {
+	f, err := os.Open(path)
+	if err != nil {
+		return nil, err
+	}
+	defer f.Close()
+	return io.ReadAll(io.LimitReader(f, MaxOutputBytes))
 }
