@@ -1,4 +1,4 @@
-package cli
+package mcpserver
 
 import (
 	"bytes"
@@ -124,8 +124,8 @@ func formatMiB(n int) string {
 	return fmt.Sprintf("%.1f MiB", float64(n)/(1<<20))
 }
 
-// missingImagesError refuses a page that names images nobody can read.
-func missingImagesError(missing []string) error {
+// MissingImagesError refuses a page that names images nobody can read.
+func MissingImagesError(missing []string) error {
 	return errors.New("Cannot inline these local images: " + strings.Join(missing, ", ") +
 		". Check their paths, permissions, and image formats.")
 }
@@ -140,9 +140,9 @@ func pageTooLarge(size int) error {
 		formatMiB(maxRenderPageBytes), formatMiB(size))
 }
 
-// inlineLocalImages replaces every absolute local image reference with a data URI.
+// InlineLocalImages replaces every absolute local image reference with a data URI.
 // missing lists references that could not be read or are not images; they stay as written.
-func inlineLocalImages(html string) (inlined string, missing []string, err error) {
+func InlineLocalImages(html string) (inlined string, missing []string, err error) {
 	refs := findLocalImages(html)
 
 	// Stat before opening anything: opening a FIFO blocks until a writer comes.

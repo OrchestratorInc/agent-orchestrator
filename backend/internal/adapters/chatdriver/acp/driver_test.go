@@ -5010,6 +5010,13 @@ func TestNormalizeMCPServersAllowsStdioWithoutCapabilities(t *testing.T) {
 		if len(servers) != 1 || servers[0].Stdio == nil {
 			t.Fatalf("servers = %#v, want one stdio server", servers)
 		}
+		encoded, err := json.Marshal(servers[0])
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !strings.Contains(string(encoded), `"args":[]`) {
+			t.Fatalf("server JSON = %s, want args [] (Claude Code skips args null)", encoded)
+		}
 	}
 }
 
