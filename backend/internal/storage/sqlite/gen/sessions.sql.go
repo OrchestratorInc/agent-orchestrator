@@ -227,7 +227,7 @@ SELECT id, project_id, num, issue_id, kind, harness,
     claude_activity_facts, codex_activity_facts,
     hibernated_at, stale_binary_since, stale_binary_version, stale_binary_launch, stale_binary_switch_failed_at,
     client_request_id, client_request_hash, client_request_committed,
-    runtime_released_launch_id, import_source, moved_to, move_conversation_incomplete
+    runtime_released_launch_id, import_source, moved_to, move_conversation_placed
 FROM sessions WHERE id = ?
 `
 
@@ -313,7 +313,7 @@ type GetSessionRow struct {
 	RuntimeReleasedLaunchID          string
 	ImportSource                     string
 	MovedTo                          string
-	MoveConversationIncomplete       int64
+	MoveConversationPlaced           int64
 }
 
 func (q *Queries) GetSession(ctx context.Context, id domain.SessionID) (GetSessionRow, error) {
@@ -401,7 +401,7 @@ func (q *Queries) GetSession(ctx context.Context, id domain.SessionID) (GetSessi
 		&i.RuntimeReleasedLaunchID,
 		&i.ImportSource,
 		&i.MovedTo,
-		&i.MoveConversationIncomplete,
+		&i.MoveConversationPlaced,
 	)
 	return i, err
 }
@@ -425,7 +425,7 @@ SELECT id, project_id, num, issue_id, kind, harness,
     claude_activity_facts, codex_activity_facts,
     hibernated_at, stale_binary_since, stale_binary_version, stale_binary_launch, stale_binary_switch_failed_at,
     client_request_id, client_request_hash, client_request_committed,
-    runtime_released_launch_id, import_source, moved_to, move_conversation_incomplete
+    runtime_released_launch_id, import_source, moved_to, move_conversation_placed
 FROM sessions WHERE automation_run_id = ?
 `
 
@@ -511,7 +511,7 @@ type GetSessionByAutomationRunIDRow struct {
 	RuntimeReleasedLaunchID          string
 	ImportSource                     string
 	MovedTo                          string
-	MoveConversationIncomplete       int64
+	MoveConversationPlaced           int64
 }
 
 func (q *Queries) GetSessionByAutomationRunID(ctx context.Context, automationRunID *domain.AutomationRunID) (GetSessionByAutomationRunIDRow, error) {
@@ -599,7 +599,7 @@ func (q *Queries) GetSessionByAutomationRunID(ctx context.Context, automationRun
 		&i.RuntimeReleasedLaunchID,
 		&i.ImportSource,
 		&i.MovedTo,
-		&i.MoveConversationIncomplete,
+		&i.MoveConversationPlaced,
 	)
 	return i, err
 }
@@ -801,7 +801,7 @@ SELECT id, project_id, num, issue_id, kind, harness,
     claude_activity_facts, codex_activity_facts,
     hibernated_at, stale_binary_since, stale_binary_version, stale_binary_launch, stale_binary_switch_failed_at,
     client_request_id, client_request_hash, client_request_committed,
-    runtime_released_launch_id, import_source, moved_to, move_conversation_incomplete
+    runtime_released_launch_id, import_source, moved_to, move_conversation_placed
 FROM sessions ORDER BY project_id, num
 `
 
@@ -887,7 +887,7 @@ type ListAllSessionsRow struct {
 	RuntimeReleasedLaunchID          string
 	ImportSource                     string
 	MovedTo                          string
-	MoveConversationIncomplete       int64
+	MoveConversationPlaced           int64
 }
 
 func (q *Queries) ListAllSessions(ctx context.Context) ([]ListAllSessionsRow, error) {
@@ -981,7 +981,7 @@ func (q *Queries) ListAllSessions(ctx context.Context) ([]ListAllSessionsRow, er
 			&i.RuntimeReleasedLaunchID,
 			&i.ImportSource,
 			&i.MovedTo,
-			&i.MoveConversationIncomplete,
+			&i.MoveConversationPlaced,
 		); err != nil {
 			return nil, err
 		}
@@ -1150,7 +1150,7 @@ SELECT id, project_id, num, issue_id, kind, harness,
     claude_activity_facts, codex_activity_facts,
     hibernated_at, stale_binary_since, stale_binary_version, stale_binary_launch, stale_binary_switch_failed_at,
     client_request_id, client_request_hash, client_request_committed,
-    runtime_released_launch_id, import_source, moved_to, move_conversation_incomplete
+    runtime_released_launch_id, import_source, moved_to, move_conversation_placed
 FROM sessions WHERE project_id IS ? ORDER BY num
 `
 
@@ -1236,7 +1236,7 @@ type ListSessionsByProjectRow struct {
 	RuntimeReleasedLaunchID          string
 	ImportSource                     string
 	MovedTo                          string
-	MoveConversationIncomplete       int64
+	MoveConversationPlaced           int64
 }
 
 func (q *Queries) ListSessionsByProject(ctx context.Context, projectID *domain.ProjectID) ([]ListSessionsByProjectRow, error) {
@@ -1330,7 +1330,7 @@ func (q *Queries) ListSessionsByProject(ctx context.Context, projectID *domain.P
 			&i.RuntimeReleasedLaunchID,
 			&i.ImportSource,
 			&i.MovedTo,
-			&i.MoveConversationIncomplete,
+			&i.MoveConversationPlaced,
 		); err != nil {
 			return nil, err
 		}
@@ -1935,17 +1935,17 @@ func (q *Queries) SetSessionHibernated(ctx context.Context, arg SetSessionHibern
 	return result.RowsAffected()
 }
 
-const setSessionMoveConversationIncomplete = `-- name: SetSessionMoveConversationIncomplete :execrows
-UPDATE sessions SET move_conversation_incomplete = 1, updated_at = ? WHERE id = ?
+const setSessionMoveConversationPlaced = `-- name: SetSessionMoveConversationPlaced :execrows
+UPDATE sessions SET move_conversation_placed = 1, updated_at = ? WHERE id = ?
 `
 
-type SetSessionMoveConversationIncompleteParams struct {
+type SetSessionMoveConversationPlacedParams struct {
 	UpdatedAt time.Time
 	ID        domain.SessionID
 }
 
-func (q *Queries) SetSessionMoveConversationIncomplete(ctx context.Context, arg SetSessionMoveConversationIncompleteParams) (int64, error) {
-	result, err := q.db.ExecContext(ctx, setSessionMoveConversationIncomplete, arg.UpdatedAt, arg.ID)
+func (q *Queries) SetSessionMoveConversationPlaced(ctx context.Context, arg SetSessionMoveConversationPlacedParams) (int64, error) {
+	result, err := q.db.ExecContext(ctx, setSessionMoveConversationPlaced, arg.UpdatedAt, arg.ID)
 	if err != nil {
 		return 0, err
 	}

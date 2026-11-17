@@ -36,7 +36,7 @@ type sessionMoveStore interface {
 }
 
 type sessionMoveImportStore interface {
-	SetSessionMoveConversationIncomplete(ctx context.Context, id domain.SessionID, updatedAt time.Time) (bool, error)
+	SetSessionMoveConversationPlaced(ctx context.Context, id domain.SessionID, updatedAt time.Time) (bool, error)
 }
 
 // SetMoveNoter wires the handoff note builder for session moves.
@@ -273,7 +273,10 @@ func (s *Service) ImportMove(ctx context.Context, in MoveImportInput) (MoveImpor
 		return MoveImportOutcome{}, err
 	} else if found {
 		sess, err := s.toSession(ctx, rec)
-		return MoveImportOutcome{Session: sess, ConversationIncomplete: rec.MoveConversationIncomplete || conversationNotPlaced(in, sess)}, err
+		// Only a placement recorded after the spawn counts: a crash or a failed
+		// write in between leaves the source's copy in place.
+		incomplete := carriesConversation(in) && (!rec.MoveConversationPlaced || conversationNotPlaced(in, sess))
+		return MoveImportOutcome{Session: sess, ConversationIncomplete: incomplete}, err
 	}
 	project, found, err := s.store.GetProject(ctx, string(in.ProjectID))
 	if err != nil {
@@ -334,12 +337,10 @@ func (s *Service) ImportMove(ctx context.Context, in MoveImportInput) (MoveImpor
 		incomplete = true
 	}
 	out := MoveImportOutcome{Session: sess, Warnings: warnings, ConversationIncomplete: incomplete}
-	// A replay of this move after a lost response must still say so, or the app
-	// deletes the source's copy.
-	if store, ok := s.store.(sessionMoveImportStore); ok && incomplete {
-		if _, err := store.SetSessionMoveConversationIncomplete(ctx, sess.ID, s.clock().UTC()); err != nil {
-			out.Warnings = append(out.Warnings, "Could not record that the conversation did not all move: "+err.Error())
-		}
+	// A replay reads this; without it the replay reports the conversation
+	// incomplete, which only keeps the source's copy. So a failed write needs no warning.
+	if store, ok := s.store.(sessionMoveImportStore); ok && carriesConversation(in) && !incomplete {
+		_, _ = store.SetSessionMoveConversationPlaced(ctx, sess.ID, s.clock().UTC())
 	}
 	for _, url := range m.PullRequests {
 		if _, err := s.ClaimPR(ctx, sess.ID, url, ClaimPROptions{AllowTakeover: true}); err != nil {
@@ -606,6 +607,11 @@ func (s *Service) moveTargetRefusal(ctx context.Context, project domain.ProjectR
 		return refusal
 	}
 	return apierr.Conflict("MOVE_CHECK_FAILED", "Could not check the branch here: "+err.Error(), nil)
+}
+
+// carriesConversation reports a move/import carrying a Claude Code conversation to place.
+func carriesConversation(in MoveImportInput) bool {
+	return in.Transcript != nil && in.Manifest.Harness == domain.HarnessClaudeCode
 }
 
 // conversationNotPlaced reports a moved Claude Code conversation the session

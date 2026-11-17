@@ -747,15 +747,14 @@ func (s *Store) SetSessionMovedTo(ctx context.Context, id domain.SessionID, move
 	return rows > 0, nil
 }
 
-// SetSessionMoveConversationIncomplete records that a session moved here left
-// part of its conversation at the source. It returns ok=false when the session
-// id does not exist.
-func (s *Store) SetSessionMoveConversationIncomplete(ctx context.Context, id domain.SessionID, updatedAt time.Time) (bool, error) {
+// SetSessionMoveConversationPlaced records that a session moved here placed
+// its whole conversation. It returns ok=false when the session id does not exist.
+func (s *Store) SetSessionMoveConversationPlaced(ctx context.Context, id domain.SessionID, updatedAt time.Time) (bool, error) {
 	s.writeMu.Lock()
 	defer s.writeMu.Unlock()
-	rows, err := s.qw.SetSessionMoveConversationIncomplete(ctx, gen.SetSessionMoveConversationIncompleteParams{UpdatedAt: updatedAt, ID: id})
+	rows, err := s.qw.SetSessionMoveConversationPlaced(ctx, gen.SetSessionMoveConversationPlacedParams{UpdatedAt: updatedAt, ID: id})
 	if err != nil {
-		return false, fmt.Errorf("set session move conversation incomplete %s: %w", id, err)
+		return false, fmt.Errorf("set session move conversation placed %s: %w", id, err)
 	}
 	return rows > 0, nil
 }
@@ -1285,18 +1284,18 @@ func rowToRecord(row gen.GetSessionRow) domain.SessionRecord {
 			State:          row.ActivityState,
 			LastActivityAt: row.ActivityLastAt,
 		},
-		FirstSignalAt:              nullTimeToTime(row.FirstSignalAt),
-		IsTerminated:               row.IsTerminated,
-		HibernatedAt:               nullTimeToTimePtr(row.HibernatedAt),
-		MovedTo:                    sessionMoveFromJSON(row.MovedTo),
-		MoveConversationIncomplete: row.MoveConversationIncomplete != 0,
-		StaleBinary:                staleBinaryFromRow(row),
-		IsPinned:                   row.IsPinned,
-		PinnedAt:                   nullTimeToTimePtr(row.PinnedAt),
-		TerminateOnPRMerge:         row.TerminateOnPRMerge,
-		AutoInjectReview:           row.AutoInjectReview,
-		AutoInjectCI:               row.AutoInjectCI,
-		OutputType:                 normalizeSessionOutputType(domain.SessionOutputType(row.SessionOutputType)),
+		FirstSignalAt:          nullTimeToTime(row.FirstSignalAt),
+		IsTerminated:           row.IsTerminated,
+		HibernatedAt:           nullTimeToTimePtr(row.HibernatedAt),
+		MovedTo:                sessionMoveFromJSON(row.MovedTo),
+		MoveConversationPlaced: row.MoveConversationPlaced != 0,
+		StaleBinary:            staleBinaryFromRow(row),
+		IsPinned:               row.IsPinned,
+		PinnedAt:               nullTimeToTimePtr(row.PinnedAt),
+		TerminateOnPRMerge:     row.TerminateOnPRMerge,
+		AutoInjectReview:       row.AutoInjectReview,
+		AutoInjectCI:           row.AutoInjectCI,
+		OutputType:             normalizeSessionOutputType(domain.SessionOutputType(row.SessionOutputType)),
 		Metadata: domain.SessionMetadata{
 			ImportSource:                     unmarshalImportSource(row.ImportSource),
 			Branch:                           row.Branch,

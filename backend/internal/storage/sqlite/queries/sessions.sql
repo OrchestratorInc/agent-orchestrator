@@ -297,7 +297,7 @@ SELECT id, project_id, num, issue_id, kind, harness,
     claude_activity_facts, codex_activity_facts,
     hibernated_at, stale_binary_since, stale_binary_version, stale_binary_launch, stale_binary_switch_failed_at,
     client_request_id, client_request_hash, client_request_committed,
-    runtime_released_launch_id, import_source, moved_to, move_conversation_incomplete
+    runtime_released_launch_id, import_source, moved_to, move_conversation_placed
 FROM sessions WHERE id = ?;
 
 -- name: GetSessionByAutomationRunID :one
@@ -319,7 +319,7 @@ SELECT id, project_id, num, issue_id, kind, harness,
     claude_activity_facts, codex_activity_facts,
     hibernated_at, stale_binary_since, stale_binary_version, stale_binary_launch, stale_binary_switch_failed_at,
     client_request_id, client_request_hash, client_request_committed,
-    runtime_released_launch_id, import_source, moved_to, move_conversation_incomplete
+    runtime_released_launch_id, import_source, moved_to, move_conversation_placed
 FROM sessions WHERE automation_run_id = ?;
 
 -- name: ListSessionsByProject :many
@@ -341,7 +341,7 @@ SELECT id, project_id, num, issue_id, kind, harness,
     claude_activity_facts, codex_activity_facts,
     hibernated_at, stale_binary_since, stale_binary_version, stale_binary_launch, stale_binary_switch_failed_at,
     client_request_id, client_request_hash, client_request_committed,
-    runtime_released_launch_id, import_source, moved_to, move_conversation_incomplete
+    runtime_released_launch_id, import_source, moved_to, move_conversation_placed
 FROM sessions WHERE project_id IS ? ORDER BY num;
 
 -- name: ListAllSessions :many
@@ -363,7 +363,7 @@ SELECT id, project_id, num, issue_id, kind, harness,
     claude_activity_facts, codex_activity_facts,
     hibernated_at, stale_binary_since, stale_binary_version, stale_binary_launch, stale_binary_switch_failed_at,
     client_request_id, client_request_hash, client_request_committed,
-    runtime_released_launch_id, import_source, moved_to, move_conversation_incomplete
+    runtime_released_launch_id, import_source, moved_to, move_conversation_placed
 FROM sessions ORDER BY project_id, num;
 
 -- name: ListPreviewSessions :many
@@ -479,8 +479,8 @@ UPDATE sessions SET auto_inject_ci = ?, updated_at = ? WHERE id = ?;
 -- name: SetSessionMovedTo :execrows
 UPDATE sessions SET moved_to = ?, updated_at = ? WHERE id = ?;
 
--- name: SetSessionMoveConversationIncomplete :execrows
-UPDATE sessions SET move_conversation_incomplete = 1, updated_at = ? WHERE id = ?;
+-- name: SetSessionMoveConversationPlaced :execrows
+UPDATE sessions SET move_conversation_placed = 1, updated_at = ? WHERE id = ?;
 
 -- name: SetSessionPinned :execrows
 UPDATE sessions SET is_pinned = ?, pinned_at = ?, updated_at = ? WHERE id = ?;

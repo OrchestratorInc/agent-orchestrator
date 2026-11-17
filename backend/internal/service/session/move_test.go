@@ -32,9 +32,9 @@ func (m moveStore) SetSessionMovedTo(_ context.Context, id domain.SessionID, mov
 	return true, nil
 }
 
-func (m moveStore) SetSessionMoveConversationIncomplete(_ context.Context, id domain.SessionID, _ time.Time) (bool, error) {
+func (m moveStore) SetSessionMoveConversationPlaced(_ context.Context, id domain.SessionID, _ time.Time) (bool, error) {
 	rec, ok := m.sessions[id]
-	rec.MoveConversationIncomplete = true
+	rec.MoveConversationPlaced = true
 	m.sessions[id] = rec
 	return ok, nil
 }
@@ -422,6 +422,60 @@ func TestImportMoveReplayKeepsAnIncompleteConversation(t *testing.T) {
 	replay, err := svc.ImportMove(context.Background(), in)
 	if err != nil || !replay.ConversationIncomplete || fc.spawnCalls != 1 {
 		t.Fatalf("replay: incomplete %v, spawns %d, err %v; want incomplete without a second spawn", replay.ConversationIncomplete, fc.spawnCalls, err)
+	}
+}
+
+// placedWriteFails stands in for a daemon that stopped, or a write that
+// failed, between the spawn and recording the placement.
+type placedWriteFails struct{ moveStore }
+
+func (placedWriteFails) SetSessionMoveConversationPlaced(context.Context, domain.SessionID, time.Time) (bool, error) {
+	return false, errors.New("disk I/O error")
+}
+
+// A replay counts the conversation as moved only once its placement was
+// recorded after the spawn; until then the source keeps its copy.
+func TestImportMoveReplayNeedsTheRecordedPlacement(t *testing.T) {
+	repo, tip := pushedBranch(t)
+	var gz bytes.Buffer
+	zw := gzip.NewWriter(&gz)
+	_, _ = zw.Write([]byte(`{"type":"user","cwd":"/workspace/repository","message":{"role":"user","content":"hi"}}` + "\n"))
+	_ = zw.Close()
+	const id = "0b5a6c1e-3f2d-4c8a-9e7b-1d2c3b4a5f60"
+	for _, tc := range []struct {
+		name           string
+		store          func(moveStore) Store
+		wantIncomplete bool
+	}{
+		{"placement recorded", func(m moveStore) Store { return m }, false},
+		{"placement not recorded", func(m moveStore) Store { return placedWriteFails{m} }, true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			st := newFakeStore()
+			st.projects["mer"] = domain.ProjectRecord{ID: "mer", Path: repo, RepoOriginURL: "https://github.com/acme/app"}
+			fc := &fakeCommander{spawnFunc: func(cfg ports.SpawnConfig) domain.SessionRecord {
+				rec := domain.SessionRecord{
+					ID: "mer-9", ProjectID: cfg.ProjectID, Kind: cfg.Kind, Harness: cfg.Harness,
+					ClientRequestID: cfg.ClientRequestID, ClientRequestHash: cfg.ClientRequestHash, ClientRequestCommitted: true,
+				}
+				rec.Metadata.AgentSessionID = id
+				st.sessions[rec.ID] = rec
+				return rec
+			}}
+			svc := NewWithDeps(Deps{Manager: fc, Store: tc.store(moveStore{st})})
+			in := MoveImportInput{
+				ProjectID: "mer", MoveID: "m-1", Manifest: importManifest(tip), HandoffNote: "NOTE",
+				Transcript: &MoveImportTranscript{AgentSessionID: id, ProjectDir: "/home/agent/.claude/projects/-workspace-repository", Gzip: gz.Bytes()},
+			}
+			first, err := svc.ImportMove(context.Background(), in)
+			if err != nil || first.ConversationIncomplete {
+				t.Fatalf("first import: incomplete %v, err %v; want the conversation placed", first.ConversationIncomplete, err)
+			}
+			replay, err := svc.ImportMove(context.Background(), in)
+			if err != nil || replay.ConversationIncomplete != tc.wantIncomplete || fc.spawnCalls != 1 {
+				t.Fatalf("replay: incomplete %v, spawns %d, err %v; want incomplete %v", replay.ConversationIncomplete, fc.spawnCalls, err, tc.wantIncomplete)
+			}
+		})
 	}
 }
 
