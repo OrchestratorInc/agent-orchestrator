@@ -3,6 +3,7 @@ package store_test
 import (
 	"context"
 	"errors"
+	"sync"
 	"testing"
 	"time"
 
@@ -99,7 +100,9 @@ func TestChangeLogRetentionPrunesToMaxRowsInBatches(t *testing.T) {
 
 func TestMaintenanceWritesWaitForTheWriter(t *testing.T) {
 	s := newTestStore(t)
-	release := s.HoldWriterForTest()
+	hold := s.HoldWriterForTest()
+	var released sync.Once
+	release := func() { released.Do(hold) }
 	defer release()
 	cases := map[string]func(context.Context) error{
 		"change log age":  func(ctx context.Context) error { _, err := s.PruneChangeLogBefore(ctx, time.Now(), 10); return err },
@@ -116,6 +119,17 @@ func TestMaintenanceWritesWaitForTheWriter(t *testing.T) {
 		cancel()
 		if !errors.Is(err, context.DeadlineExceeded) {
 			t.Fatalf("%s while writer held: err = %v, want deadline exceeded", name, err)
+		}
+	}
+	release()
+	for name, run := range cases {
+		for i := 0; i < 2; i++ {
+			ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+			err := run(ctx)
+			cancel()
+			if err != nil {
+				t.Fatalf("%s run %d after writer released: %v", name, i+1, err)
+			}
 		}
 	}
 }
