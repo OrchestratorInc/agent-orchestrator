@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { previewDocumentThemeStyle, type ThemePreference, type ThemeStyle } from "../../lib/theme";
 import { THEMES, getThemeDefinition } from "../../lib/theme-palettes";
@@ -36,17 +36,32 @@ function AltMenuRow() {
 	const { t } = useTranslation();
 	const [enabled, setEnabled] = useState(true);
 	const [error, setError] = useState(false);
+	const userChanged = useRef(false);
+	const latestSave = useRef(0);
 	useEffect(() => {
 		let active = true;
 		void aoBridge.uiSettings.get().then((settings) => {
-			if (active) setEnabled(settings.altMenuEnabled);
-		}).catch(() => { if (active) setError(true); });
+			if (active && !userChanged.current) setEnabled(settings.altMenuEnabled);
+		}).catch(() => { if (active && !userChanged.current) setError(true); });
 		return () => { active = false; };
 	}, []);
 	const label = t("settings.altMenu", { defaultValue: "Show menu bar with Alt" });
 	return <SettingsRow label={label} description={error ? t("settings.altMenuSaveFailed", { defaultValue: "Could not save this setting." }) : undefined}>
 		<Switch aria-label={label} checked={enabled} onCheckedChange={(next) => {
-			void aoBridge.uiSettings.set({ altMenuEnabled: next }).then((settings) => { setEnabled(settings.altMenuEnabled); setError(false); }).catch(() => setError(true));
+			userChanged.current = true;
+			const save = ++latestSave.current;
+			setEnabled(next);
+			void aoBridge.uiSettings.set({ altMenuEnabled: next }).then((settings) => {
+				if (save === latestSave.current) {
+					setEnabled(settings.altMenuEnabled);
+					setError(false);
+				}
+			}).catch(() => {
+				if (save === latestSave.current) {
+					setEnabled(!next);
+					setError(true);
+				}
+			});
 		}} />
 	</SettingsRow>;
 }

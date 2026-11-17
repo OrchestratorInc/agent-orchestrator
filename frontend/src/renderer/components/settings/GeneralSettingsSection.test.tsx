@@ -1,12 +1,11 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { render, screen } from "@testing-library/react";
+import { render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { Settings } from "../../hooks/useSettings";
-import { useUiStore } from "../../stores/ui-store";
 import * as platform from "../../lib/platform";
 import { aoBridge } from "../../lib/bridge";
-import { DEFAULT_UI_SETTINGS } from "../../../shared/ui-locale";
+import { DEFAULT_UI_SETTINGS, type UiSettings } from "../../../shared/ui-locale";
 
 const { settingsMock, updateRetentionMock } = vi.hoisted(() => ({
 	settingsMock: vi.fn(),
@@ -102,25 +101,24 @@ describe("Linux Alt menu setting", () => {
 		expect(set).toHaveBeenCalledWith({ altMenuEnabled: false });
 		get.mockRestore(); set.mockRestore(); vi.restoreAllMocks();
 	});
-});
 
-describe("simplified top bar switch", () => {
-	beforeEach(() => settingsMock.mockReturnValue(settings({})));
-
-	it("only appears in Developer Mode", () => {
-		useUiStore.setState({ developerMode: false });
+	it("keeps a user's choice when the initial settings read completes late", async () => {
+		vi.spyOn(platform, "isLinuxPlatform").mockReturnValue(true);
+		let resolveSettings!: (settings: UiSettings) => void;
+		const settingsPromise = new Promise<UiSettings>((resolve) => {
+			resolveSettings = resolve;
+		});
+		vi.spyOn(aoBridge.uiSettings, "get").mockReturnValue(settingsPromise);
+		const set = vi.spyOn(aoBridge.uiSettings, "set").mockResolvedValue({ ...DEFAULT_UI_SETTINGS, altMenuEnabled: false });
+		settingsMock.mockReturnValue(settings({}));
 		renderSection();
-		expect(screen.queryByRole("switch", { name: "Simplified top bar" })).not.toBeInTheDocument();
-	});
 
-	it("turns the preview off and on", async () => {
-		useUiStore.setState({ developerMode: true, simplifiedTopbar: true });
-		renderSection();
-		const toggle = screen.getByRole("switch", { name: "Simplified top bar" });
-		expect(toggle).toBeChecked();
+		const toggle = await screen.findByRole("switch", { name: "Show menu bar with Alt" });
 		await userEvent.click(toggle);
-		expect(useUiStore.getState().simplifiedTopbar).toBe(false);
-		await userEvent.click(toggle);
-		expect(useUiStore.getState().simplifiedTopbar).toBe(true);
+		expect(set).toHaveBeenCalledWith({ altMenuEnabled: false });
+
+		resolveSettings({ ...DEFAULT_UI_SETTINGS, altMenuEnabled: true });
+		await waitFor(() => expect(toggle).not.toBeChecked());
+		vi.restoreAllMocks();
 	});
 });
