@@ -683,7 +683,7 @@ type SpawnSessionRequest struct {
 	ParentSessionID domain.SessionID       `json:"parentSessionId,omitempty"`
 	TrackerProvider domain.TrackerProvider `json:"trackerProvider,omitempty" enum:"github,gitlab"`
 	Kind            domain.SessionKind     `json:"kind,omitempty" enum:"worker,orchestrator"`
-	Harness         domain.AgentHarness    `json:"harness,omitempty" enum:"claude-code,codex,aider,opencode,opencode-v2,grok,droid,amp,agy,crush,cursor,qwen,gemini,copilot,goose,auggie,continue,devin,cline,kimi,muse,kiro,kilocode,vibe,pi,kimchi,omp,fx,prime-agent,autohand,unreal-agent,codewhale,mimo-code,minimax-code,deepseek-harness,openhands,command-code,docker-agent,memcode,hermes,stakpak"`
+	Harness         domain.AgentHarness    `json:"harness,omitempty" enum:"claude-code,codex,aider,opencode,opencode-v2,grok,droid,amp,agy,crush,cursor,qwen,gemini,copilot,goose,auggie,continue,devin,cline,kimi,muse,kiro,kilocode,vibe,pi,kimchi,omp,fx,prime-agent,autohand,unreal-agent,codewhale,mimo-code,minimax-code,deepseek-harness,openhands,command-code,docker-agent,memcode,hermes,stakpak,open-interpreter,tau"`
 	Branch          string                 `json:"branch,omitempty"`
 	// BaseBranch starts the session's branch from this branch instead of the
 	// project's default, to stack its work on another pull request.
@@ -1517,7 +1517,7 @@ type DelegateTaskRequest struct {
 	// BaseBranch starts the worker from this branch instead of the project's
 	// default, to stack its work on another pull request.
 	BaseBranch string              `json:"baseBranch,omitempty" maxLength:"255"`
-	Agent      domain.AgentHarness `json:"agent,omitempty" enum:"claude-code,codex,aider,opencode,opencode-v2,grok,droid,amp,agy,crush,cursor,qwen,gemini,copilot,goose,auggie,continue,devin,cline,kimi,muse,kiro,kilocode,vibe,pi,kimchi,omp,fx,prime-agent,autohand,unreal-agent,codewhale,mimo-code,minimax-code,deepseek-harness,openhands,command-code,docker-agent,memcode,hermes,stakpak,fake"`
+	Agent      domain.AgentHarness `json:"agent,omitempty" enum:"claude-code,codex,aider,opencode,opencode-v2,grok,droid,amp,agy,crush,cursor,qwen,gemini,copilot,goose,auggie,continue,devin,cline,kimi,muse,kiro,kilocode,vibe,pi,kimchi,omp,fx,prime-agent,autohand,unreal-agent,codewhale,mimo-code,minimax-code,deepseek-harness,openhands,command-code,docker-agent,memcode,hermes,stakpak,open-interpreter,tau,fake"`
 	Model      string              `json:"model,omitempty" maxLength:"256"`
 	// Effort is an explicit, provider-advertised model tuning override. Nil
 	// inherits the project default; an empty string selects the provider default.
@@ -2822,8 +2822,18 @@ type ShellTerminalResponse struct {
 	Title      string `json:"title"`
 	// TerminalTitle is present only when the running program's title should
 	// label the tab instead of Title.
-	TerminalTitle string    `json:"terminalTitle,omitempty"`
-	CreatedAt     time.Time `json:"createdAt"`
+	TerminalTitle string     `json:"terminalTitle,omitempty"`
+	CreatedAt     time.Time  `json:"createdAt"`
+	EndedAt       *time.Time `json:"endedAt,omitempty" description:"When the shell's process was found gone. Present only for an ended shell, which can be reopened or closed but not attached."`
+	ResumeHarness string     `json:"resumeHarness,omitempty" description:"For an ended shell, the coding agent that was running in it, which reopening with resumeAgent resumes."`
+}
+
+// ReopenShellTerminalRequest is the body of POST /api/v1/shell-terminals/{handleId}/reopen.
+type ReopenShellTerminalRequest struct {
+	Shell       string `json:"shell,omitempty" description:"Shell to launch, as for opening a shell terminal."`
+	ResumeAgent bool   `json:"resumeAgent,omitempty" description:"Also resume the agent that was running in this terminal: the same conversation when it is known, otherwise its conversation picker. Nothing the old shell ran is replayed."`
+	Cols        int    `json:"cols,omitempty" description:"Initial terminal columns, as for opening a shell terminal."`
+	Rows        int    `json:"rows,omitempty" description:"Initial terminal rows. See cols."`
 }
 
 // ListShellTerminalsResponse is the body of GET /api/v1/shell-terminals.

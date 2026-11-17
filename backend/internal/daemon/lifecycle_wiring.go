@@ -277,6 +277,7 @@ type sessionLifecycle interface {
 	WaitAgentSwitchWorkers(ctx context.Context) error
 	StopAgentsForQuit(ctx context.Context) error
 	Kill(ctx context.Context, id domain.SessionID) (bool, error)
+	StopTUITurn(ctx context.Context, id domain.SessionID) error
 	Send(ctx context.Context, id domain.SessionID, message string, attachment *ports.SpawnAttachment) error
 	// SetShellTerminalCloser late-binds Kill/Cleanup to close a session's
 	// scoped shell terminals before its worktree is torn down. shellterm.Service
@@ -813,8 +814,8 @@ func (c chatLauncher) SupportsReviewChat(harness domain.AgentHarness) bool {
 	return c.svc.SupportsChat(harness)
 }
 
-func (c chatLauncher) PreflightReviewChat(ctx context.Context, harness domain.AgentHarness) error {
-	return c.svc.PreflightChat(ctx, harness, ports.PermissionModeAuto)
+func (c chatLauncher) PreflightReviewChat(ctx context.Context, harness domain.AgentHarness, workspacePath string) error {
+	return c.svc.PreflightReviewChat(ctx, harness, workspacePath)
 }
 
 func (c chatLauncher) StartReviewChat(ctx context.Context, cfg reviewcore.ReviewerChatStart) (string, error) {

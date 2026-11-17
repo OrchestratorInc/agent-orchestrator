@@ -125,6 +125,28 @@ describe("ShareArtifactButton on a cloud session's file", () => {
 		expect(await screen.findByRole("button", { name: "Published: report.html" })).toBeTruthy();
 	});
 
+	it("says what a published page left out of the files it uses", async () => {
+		stub(inspection, links, { status: "published", replaced: false, share, pageFiles: { included: 2, skipped: 3, videos: 1, unsupported: false } });
+		const popover = await openPopover(cloudFile);
+		await within(popover).findByText("Published");
+		expect(popover.textContent).toContain("3 files this page uses weren't included, so the shared page won't show them. Videos can't be shared with a page yet.");
+	});
+
+	it("says a page's images were not included when Orchestrator Cloud cannot share them yet", async () => {
+		stub(inspection, links, { status: "published", replaced: false, share, pageFiles: { included: 0, skipped: 0, videos: 0, unsupported: true } });
+		const popover = await openPopover(cloudFile);
+		await within(popover).findByText("Published");
+		expect(popover.textContent).toContain("This page's images weren't included: Orchestrator Cloud can't share them with a page yet.");
+	});
+
+	it("says nothing more when a page included every file it uses", async () => {
+		stub(inspection, links, { status: "published", replaced: false, share, pageFiles: { included: 2, skipped: 0, videos: 0, unsupported: false } });
+		const popover = await openPopover(cloudFile);
+		await within(popover).findByText("Published");
+		expect(popover.textContent).not.toContain("weren't included");
+		expect(popover.textContent).not.toContain("wasn't included");
+	});
+
 	it("names the file without its extension", async () => {
 		stub(inspection, links, { status: "published", replaced: false, share });
 		const popover = await openPopover(cloudFile);

@@ -57,6 +57,8 @@ import mimoCodeLogo from "../assets/agents/mimo-code.svg";
 import minimaxCodeLogo from "../assets/agents/minimax-code.svg";
 import memcodeLogo from "../assets/agents/memcode.png";
 import ompLogo from "../assets/agents/omp.svg";
+import openInterpreterDarkLogo from "../assets/agents/open-interpreter-dark.svg";
+import openInterpreterLogo from "../assets/agents/open-interpreter.svg";
 import openhandsDarkLogo from "../assets/agents/openhands-dark.svg";
 import openhandsLightLogo from "../assets/agents/openhands-light.svg";
 import opencodeDarkLogo from "../assets/agents/opencode-dark.svg";
@@ -69,6 +71,7 @@ import qwenDarkLogo from "../assets/agents/qwen-dark.svg";
 import qwenLightLogo from "../assets/agents/qwen-light.svg";
 // stakpak/agent (Apache-2.0): the mark from assets/stakpak-dark.png.
 import stakpakLogo from "../assets/agents/stakpak.png";
+import tauLogo from "../assets/agents/tau.png";
 import unrealAgentDarkLogo from "../assets/agents/unreal-agent-dark.png";
 import unrealAgentLightLogo from "../assets/agents/unreal-agent-light.png";
 import vibeLogo from "../assets/agents/vibe.svg";
@@ -105,6 +108,7 @@ const LOGOS: AgentLogoSources = {
 	stakpak: stakpakLogo,
 	omp: ompLogo,
 	openhands: { light: openhandsLightLogo, dark: openhandsDarkLogo },
+	"open-interpreter": { light: openInterpreterLogo, dark: openInterpreterDarkLogo },
 	kiro: kiroLogo,
 	kilocode: { light: kilocodeLightLogo, dark: kilocodeDarkLogo },
 	vibe: vibeLogo,
@@ -119,6 +123,7 @@ const LOGOS: AgentLogoSources = {
 	"unreal-agent": { light: unrealAgentLightLogo, dark: unrealAgentDarkLogo },
 	"mimo-code": mimoCodeLogo,
 	"minimax-code": minimaxCodeLogo,
+	tau: tauLogo,
 	"deepseek-harness": { light: deepseekHarnessLightLogo, dark: deepseekHarnessDarkLogo },
 };
 

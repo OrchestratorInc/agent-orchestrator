@@ -40,10 +40,13 @@ type sessionCleanupOptions struct {
 }
 
 type sessionDeleteOptions struct {
-	project       string
-	yes           bool
-	cleanup       bool
-	keepArtifacts bool
+	project string
+	yes     bool
+	cleanup bool
+	// keepArtifacts is the old opt-in, accepted for scripts that still pass
+	// it; keeping is now the default.
+	keepArtifacts   bool
+	deleteArtifacts bool
 }
 
 type sessionClaimPROptions struct {
@@ -244,6 +247,7 @@ func newSessionCommand(ctx *commandContext) *cobra.Command {
 	cmd.AddCommand(newSessionTopCommand(ctx))
 	cmd.AddCommand(newSessionGetCommand(ctx))
 	cmd.AddCommand(newSessionKillCommand(ctx))
+	cmd.AddCommand(newSessionInterruptCommand(ctx))
 	cmd.AddCommand(newSessionRestoreCommand(ctx))
 	cmd.AddCommand(newSessionExitAgentCommand(ctx))
 	cmd.AddCommand(newSessionResumeAgentCommand(ctx))
@@ -327,6 +331,24 @@ func newSessionKillCommand(ctx *commandContext) *cobra.Command {
 				return err
 			}
 			return ctx.killSession(cmd.Context(), cmd, id, opts)
+		},
+	}
+	addSessionProjectFlag(cmd.Flags(), &opts.project, "Project id to scope the lookup")
+	return cmd
+}
+
+func newSessionInterruptCommand(ctx *commandContext) *cobra.Command {
+	var opts sessionOptions
+	cmd := &cobra.Command{
+		Use:   "interrupt <id>",
+		Short: "Interrupt an active turn without terminating the session",
+		Args:  oneSessionIDArg,
+		RunE: func(cmd *cobra.Command, args []string) error {
+			id, err := normalizeSessionID(args[0])
+			if err != nil {
+				return err
+			}
+			return ctx.interruptSession(cmd.Context(), cmd, id, opts)
 		},
 	}
 	addSessionProjectFlag(cmd.Flags(), &opts.project, "Project id to scope the lookup")
@@ -429,8 +451,8 @@ func newSessionDeleteCommand(ctx *commandContext) *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "delete <id>",
 		Short: "Permanently delete a terminated session",
-		Long: "Permanently delete a terminated session's record and its Orchestrator history (conversation, PR facts, attachments and artifacts). " +
-			"With --keep-artifacts its artifact files are kept, view only, on the Artifacts page. " +
+		Long: "Permanently delete a terminated session's record and its Orchestrator history (conversation, PR facts and attachments). " +
+			"Its artifact files are kept, view only, on the Artifacts page, the way the desktop app keeps them; pass --delete-artifacts to delete them too. " +
 			"The session must be terminated and its worktree cleaned up first (ao session cleanup, or --cleanup). Git branches, pull requests and agent account usage totals are kept.",
 		Args: oneSessionIDArg,
 		RunE: func(cmd *cobra.Command, args []string) error {
@@ -444,7 +466,10 @@ func newSessionDeleteCommand(ctx *commandContext) *cobra.Command {
 	addSessionProjectFlag(cmd.Flags(), &opts.project, "Project id to scope the lookup")
 	cmd.Flags().BoolVarP(&opts.yes, "yes", "y", false, "Skip confirmation prompt")
 	cmd.Flags().BoolVar(&opts.cleanup, "cleanup", false, "Clean up a worktree still on disk first (never forced; a dirty or locked one refuses the delete)")
-	cmd.Flags().BoolVar(&opts.keepArtifacts, "keep-artifacts", false, "Keep the session's artifact files, view only, on the Artifacts page")
+	cmd.Flags().BoolVar(&opts.deleteArtifacts, "delete-artifacts", false, "Also delete the session's artifact files instead of keeping them, view only, on the Artifacts page")
+	cmd.Flags().BoolVar(&opts.keepArtifacts, "keep-artifacts", false, "Keep the session's artifact files (the default)")
+	_ = cmd.Flags().MarkHidden("keep-artifacts")
+	cmd.MarkFlagsMutuallyExclusive("keep-artifacts", "delete-artifacts")
 	return cmd
 }
 
@@ -862,6 +887,19 @@ func (c *commandContext) killSession(ctx context.Context, cmd *cobra.Command, id
 	return err
 }
 
+func (c *commandContext) interruptSession(ctx context.Context, cmd *cobra.Command, id string, opts sessionOptions) error {
+	if opts.project != "" {
+		if _, err := c.fetchScopedSession(ctx, id, opts.project); err != nil {
+			return err
+		}
+	}
+	if err := c.postJSON(ctx, "sessions/"+url.PathEscape(id)+"/stop-turn", struct{}{}, nil); err != nil {
+		return err
+	}
+	_, err := fmt.Fprintf(cmd.OutOrStdout(), "interrupt requested for session %s\n", id)
+	return err
+}
+
 func (c *commandContext) deleteSession(ctx context.Context, cmd *cobra.Command, id string, opts sessionDeleteOptions) error {
 	// Look the session up before asking, so an unknown id fails without a
 	// prompt; with --yes the delete itself reports it.
@@ -872,7 +910,11 @@ func (c *commandContext) deleteSession(ctx context.Context, cmd *cobra.Command, 
 	}
 	out := cmd.OutOrStdout()
 	if !opts.yes {
-		confirmed, err := confirmTyped(cmd, fmt.Sprintf("Permanently delete session %s and its history? Type yes to confirm: ", id))
+		what := " and its history"
+		if opts.deleteArtifacts {
+			what = ", its history and its artifact files"
+		}
+		confirmed, err := confirmTyped(cmd, fmt.Sprintf("Permanently delete session %s%s? Type yes to confirm: ", id, what))
 		if err != nil {
 			return err
 		}
@@ -885,7 +927,9 @@ func (c *commandContext) deleteSession(ctx context.Context, cmd *cobra.Command, 
 	if opts.cleanup {
 		params.Set("cleanup", "true")
 	}
-	if opts.keepArtifacts {
+	// Artifacts outlive their session unless the caller asks otherwise, so an
+	// agent deleting a session it spawned never throws away its deliverables.
+	if !opts.deleteArtifacts {
 		params.Set("keepArtifacts", "true")
 	}
 	var res deleteSessionResponse

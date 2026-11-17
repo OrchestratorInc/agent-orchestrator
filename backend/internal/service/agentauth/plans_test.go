@@ -33,6 +33,7 @@ func TestPlansMatchAuthenticationMatrix(t *testing.T) {
 		{"grok", "Log in to Grok", "grok", "Native login; device-auth remains available inside the CLI", "https://docs.x.ai/build/overview", "", ActionLogin, []string{"grok", "login"}},
 		{"kimi", "Log in to Kimi", "kimi", "Kimi opens its login picker automatically", "https://moonshotai.github.io/kimi-code/en/", "", ActionLogin, []string{"kimi"}},
 		{"pi", "Log in to Pi", "pi", "Pi opens its login picker automatically", "https://github.com/earendil-works/pi", "", ActionLogin, []string{"pi"}},
+		{"tau", "Log in to Tau", "tau", "Tau opens its login picker automatically", "https://twotimespi.dev/guides/providers-and-models/", "", ActionLogin, []string{"tau"}},
 		{"amp", "Log in to Amp", "amp", "Native browser flow", "https://ampcode.com/manual", "", ActionLogin, []string{"amp", "login"}},
 		{"auggie", "Log in to Auggie", "auggie", "Native browser flow", "https://docs.augmentcode.com/cli/overview", "", ActionLogin, []string{"auggie", "login"}},
 		{"droid", "Log in to Droid", "droid", "Select Open login after Droid finishes starting", "https://docs.factory.ai/droid-cli/cli-reference", "/login\r", ActionLogin, []string{"droid"}},
@@ -60,6 +61,7 @@ func TestPlansMatchAuthenticationMatrix(t *testing.T) {
 		{"command-code", "Log in to Command Code", "command-code", "Native browser flow; an API key can be pasted in the terminal", "https://commandcode.ai/docs/quickstart", "", ActionLogin, []string{"command-code", "login"}},
 		{"hermes", "Set up Hermes Agent", "hermes", "Native provider setup: choose a provider, then paste an API key or finish its OAuth flow", "https://hermes-agent.nousresearch.com/docs", "", ActionSetup, []string{"hermes", "model"}},
 		{"stakpak", "Log in to Stakpak", "stakpak", "Native provider login: create a Stakpak API key in the browser, or paste an Anthropic, OpenAI or Gemini key", "https://github.com/stakpak/agent#authentication", "", ActionLogin, []string{"stakpak", "auth", "login"}},
+		{"open-interpreter", "Log in to Open Interpreter", "interpreter", "Native sign-in for the built-in OpenAI provider; other providers use a saved API key", "https://www.openinterpreter.com/docs/terminal/install", "", ActionLogin, []string{"interpreter", "login"}},
 	}
 
 	svc := New(foundExecutables(cases), nil)
