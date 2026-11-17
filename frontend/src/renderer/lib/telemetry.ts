@@ -19,6 +19,8 @@ import type { TelemetryInstallContext } from "../../shared/telemetry";
 import { captureExceptionToSentry, initSentry } from "./sentry";
 import { reserveException } from "./reported-errors";
 import { installRendererErrorHandlers } from "../../shared/renderer-error-handlers";
+import { launchProperties, takeLaunchStart } from "./launch-telemetry";
+import { PERFORMANCE_EVENTS, sanitizePerformanceProperties } from "./performance-telemetry-properties";
 
 const POSTHOG_KEY = import.meta.env.VITE_AO_POSTHOG_KEY?.trim() || DEFAULT_POSTHOG_PROJECT_KEY;
 const POSTHOG_HOST = import.meta.env.VITE_AO_POSTHOG_HOST?.trim() || DEFAULT_POSTHOG_HOST;
@@ -1094,6 +1096,7 @@ export async function sanitizeRendererProperties(
 	properties?: TelemetryProperties,
 ): Promise<TelemetryProperties> {
 	if (CLOUD_FUNNEL_EVENTS.has(event)) return sanitizeCloudFunnelProperties(event, properties);
+	if (PERFORMANCE_EVENTS.has(event)) return sanitizePerformanceProperties(event, properties);
 	const safe: TelemetryProperties = {};
 	switch (event) {
 		case "ao.app.active":
@@ -1108,8 +1111,6 @@ export async function sanitizeRendererProperties(
 		case "ao.onboarding.step_completed":
 		case "ao.onboarding.step_abandoned":
 			if (typeof properties?.step === "string" && ONBOARDING_STEPS.some((step) => step === properties.step)) safe.step = properties.step;
-			break;
-		case "ao.app.loaded":
 			break;
 		case "ao.agents.missing":
 			if (properties?.reason === "none_installed") safe.reason = properties.reason;
@@ -1566,10 +1567,20 @@ export async function initTelemetry(): Promise<boolean> {
 				),
 		});
 		if (!isDeniedEvent("ao.app.loaded")) {
-			posthog.capture(
-				postHogEventName("ao.app.loaded"),
-				withTelemetryContext(await sanitizeRendererProperties("ao.app.loaded")),
-			);
+			const captureLoaded = async (launch?: TelemetryProperties) => {
+				posthog.capture(
+					postHogEventName("ao.app.loaded"),
+					withTelemetryContext(await sanitizeRendererProperties("ao.app.loaded", launch)),
+				);
+			};
+			// A launch waits for its usable frame (capped) so the event carries the
+			// launch timings; a reload has no launch start and sends at once.
+			const launchStart = await takeLaunchStart();
+			if (launchStart) {
+				void launchProperties(launchStart, bootstrap.appVersion).then((launch) => (analyticsOptedOut ? undefined : captureLoaded(launch)));
+			} else {
+				await captureLoaded();
+			}
 		}
 		return true;
 	})().catch(() => {

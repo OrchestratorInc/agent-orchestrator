@@ -48,6 +48,7 @@ import type {
 	OpenSessionTargetResult,
 } from "./shared/editor-handoff";
 import type { TelemetryBootstrap } from "./shared/telemetry";
+import type { LaunchTimingStart, ResourceSummary } from "./shared/performance-telemetry";
 import {
 	TELEMETRY_CLEAR_RENDERER_QUEUES_CHANNEL,
 	TELEMETRY_POLICY_CHANGED_CHANNEL,
@@ -648,6 +649,8 @@ const api = {
 		setCloudUser: (userId: string | null) => ipcRenderer.invoke("telemetry:setCloudUser", userId) as Promise<boolean | "unsupported">,
 		getGithubLogin: () => ipcRenderer.invoke("telemetry:getGithubLogin") as Promise<string | null>,
 		getLifetimeSessions: () => ipcRenderer.invoke("telemetry:getLifetimeSessions") as Promise<number | null>,
+		takeLaunchStart: () => ipcRenderer.invoke("telemetry:takeLaunchStart") as Promise<LaunchTimingStart | null>,
+		takeResourceSummary: () => ipcRenderer.invoke("telemetry:takeResourceSummary") as Promise<ResourceSummary | null>,
 		claimFirstOpen: () => ipcRenderer.invoke("telemetry:claimFirstOpen") as Promise<"claimed" | "ineligible" | "unknown">,
 		getPolicy: async () => {
 			const view = await ipcRenderer.invoke("telemetry:getPolicy") as TelemetryPolicyView;

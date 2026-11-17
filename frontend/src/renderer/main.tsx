@@ -19,6 +19,7 @@ import { aoBridge } from "./lib/bridge";
 import { startDaemonFailureTelemetry } from "./lib/daemon-telemetry";
 import { startUpdateTelemetry } from "./lib/update-telemetry";
 import { startSessionManagementTelemetry } from "./lib/session-management-telemetry";
+import { startPerformanceTelemetry } from "./lib/performance-telemetry";
 import { appI18n } from "./i18n";
 import { useLocaleStore } from "./stores/locale-store";
 import { useSoundNotificationsStore } from "./stores/sound-notifications-store";
@@ -98,6 +99,7 @@ const bootstrapSessionManagementTelemetry = () => {
 	void initTelemetry().then((enabled) => {
 		if (enabled) {
 			startSessionManagementTelemetry();
+			startPerformanceTelemetry();
 			return;
 		}
 		if (!isDeniedEvent("ao.renderer.session_management_summary") && sessionManagementTelemetryRetries++ < 12) {

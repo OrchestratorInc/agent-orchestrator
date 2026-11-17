@@ -659,6 +659,79 @@ people choose and whether creation succeeds.
 The desktop product-telemetry controls described under "Turn desktop and daemon
 telemetry off" also control these events.
 
+## Performance
+
+When product telemetry is enabled, the desktop app adds launch timings to
+`ao.app.loaded` and sends `ao.ui.performance_summary`, a numeric summary of
+how fast the app responded. They carry only counts, durations in
+milliseconds, buckets, and the closed values listed here. They never include a
+session, project or file name, path, URL, message text, script URL, function
+name, element text, or CSS selector, and the summary does not say which session
+a measurement came from.
+
+| Event | When it is sent | Performance properties |
+| --- | --- | --- |
+| `ao.app.loaded` | Once per launch, when the window first shows the sidebar with live sessions, or 60 seconds after load if that frame never comes. A reload sends it at once, without these properties | `launch_kind`, `to_visible_ms`, `to_usable_ms` |
+| `ao.ui.performance_summary` | At the end of each 45 to 60 minute window of use (the length is random in that range), or at the next launch for a window cut short by quitting. Nothing is sent for a window with no use. Only installs with `experiment_cohort` below 50 send it | see below |
+
+Launch properties on `ao.app.loaded`:
+
+- `launch_kind` is `cold` (a new app process), `warm` (a window reopened while
+  the app kept running), or `update` (the first cold launch on a new
+  `app_version`).
+- `to_visible_ms` is the time from the start of the launch to the window's
+  first contentful paint. `to_usable_ms` is the time to the frame that first
+  shows the sidebar with live sessions, the same frame the desktop log's
+  "launch timing" line ends at. A cold launch starts when the app process
+  starts; a warm one when the window is requested.
+- A launch during which the window was hidden sends `launch_kind` only.
+
+Properties on `ao.ui.performance_summary`:
+
+- Window: `measurement_schema_version` (1), `flush_reason` (`interval` or
+  `startup`), `window_seconds`, `active_seconds` (time the window was visible
+  with input in the last 5 minutes), `open_sessions_bucket` (`0`, `1-3`,
+  `4-10`, `11-30`, or `31+` sessions that are not terminated), and
+  `uptime_hours_bucket` (how long the window has been open: `lt1`, `lt8`,
+  `lt24`, `lt72`, or `ge72` hours).
+- Session switches: `switch_cached_lt150_count`, `switch_cached_lt500_count`,
+  `switch_cached_lt1000_count`, `switch_cached_ge1000_count`, and the same four
+  `switch_uncached_*` counts. Each switch from one session to another is timed
+  from the click or key that asked for it (or from routing, for a menu
+  shortcut) to the frame that shows the destination's messages, and counted in
+  the bucket under 150, 500, or 1,000 ms, or 1,000 ms and over. Cached means
+  the destination showed its content in its first frame: a chat whose messages
+  were already in memory, or a terminal session. `switch_visible_p75_ms` is the
+  75th percentile time to the first frame that shows the destination.
+  `switch_dropped_count` counts switches not timed because the window was
+  hidden during them or they took over 30 seconds.
+- Clicks and keys: `interaction_count` (every click, tap and key press),
+  `slow_interaction_count` (over 200 ms to the next frame),
+  `very_slow_interaction_count` (over 500 ms), and `interaction_p98_ms`, the
+  98th percentile computed the way Interaction to Next Paint is. These come
+  from the browser's Event Timing API. `slowest_area` is the part of the app
+  the slowest interaction was in: `sidebar`, `tabs`, `chat`, `composer`,
+  `terminal`, `board`, `inspector`, `browser`, `cmdk`, `settings`, or `other`.
+- Frozen frames: `long_frame_count` (frames that took over 50 ms),
+  `long_frame_blocking_ms` (their total blocking time), and
+  `long_frame_top_cause`, the kind of work that blocked longest:
+  `event-listener`, `user-callback` (timers and animation frames),
+  `resolve-promise`, `reject-promise`, `classic-script`, `module-script`, or
+  `other`.
+- Chat open: `chat_open_count` and `chat_open_p75_ms`, for opening a chat whose
+  messages were not in memory, from the click to the frame that shows them.
+- Memory and CPU: `renderer_mb_bucket` (the window's peak memory) and
+  `app_mb_bucket` (peak memory of all app processes), each `lt256`, `lt512`,
+  `lt1024`, `lt2048`, or `ge2048` MB; `app_cpu_avg_pct`, the average CPU of all
+  app processes since the previous summary, to one decimal place. The app
+  samples these every 10 minutes. The daemon's own process is not included.
+
+A missing count means zero; a missing percentile, area or cause means nothing
+was measured for it. Measurements count only while the window is
+visible. The summary window and its counts are kept in the app's local storage
+between launches and replaced after each send. Share usage analytics and the
+kill switch control both events.
+
 ## Chat import
 
 When desktop product telemetry is enabled, Orchestrator.inc records these events
