@@ -24,8 +24,12 @@ import (
 )
 
 const (
-	eventBuffer  = 4096
-	approvalWait = 30 * time.Minute
+	eventBuffer = 4096
+	// A Go channel allocates its whole buffer up front (about 2 MiB at 4096
+	// events). emit blocks instead of dropping for host-backed chats, so they
+	// need only a small read-ahead.
+	persistentEventBuffer = 256
+	approvalWait          = 30 * time.Minute
 	// sessionCloseWait bounds the session/close sent before a provider is
 	// terminated (quickSessionCloseWait for a QuickStop provider).
 	sessionCloseWait      = 2 * time.Second
@@ -308,6 +312,10 @@ func newConversation(
 	for method, alias := range extensionAliases {
 		reverseAliases[alias] = method
 	}
+	buffer := eventBuffer
+	if proc.terminate != nil {
+		buffer = persistentEventBuffer
+	}
 	c := &conversation{
 		proc:             proc,
 		log:              log,
@@ -320,7 +328,7 @@ func newConversation(
 		thoughts:         make(map[string]string),
 		nestedMessages:   make(map[string]nestedMessageState),
 		tools:            make(map[string]*toolState),
-		events:           make(chan ports.ChatEvent, eventBuffer),
+		events:           make(chan ports.ChatEvent, buffer),
 		closing:          make(chan struct{}),
 		extensionFor:     extensionFor,
 		extensionMethods: reverseAliases,

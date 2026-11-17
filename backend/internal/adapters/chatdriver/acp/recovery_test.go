@@ -162,7 +162,7 @@ func TestACPDisconnectWithFullEventBufferCanClose(t *testing.T) {
 		stdin: daemon, stdout: daemon, stop: daemon.Close,
 		terminate: func() error { return nil },
 	}, slog.New(slog.DiscardHandler), "", nil, nil)
-	for range eventBuffer {
+	for range cap(conv.events) {
 		conv.events <- ports.ChatEvent{Kind: ports.ChatEventMessageDelta}
 	}
 	written := make(chan error, 1)
@@ -193,11 +193,29 @@ func TestACPDisconnectWithFullEventBufferCanClose(t *testing.T) {
 	}()
 	select {
 	case drained := <-done:
-		if drained < eventBuffer {
+		if drained < cap(conv.events) {
 			t.Fatalf("only drained %d buffered events", drained)
 		}
 	case <-time.After(time.Second):
 		t.Fatal("disconnect leaked event stream after projection stopped")
+	}
+}
+
+func TestEventBufferIsSmallForHostBackedChats(t *testing.T) {
+	daemon, host := net.Pipe()
+	defer host.Close()
+	persistent := newConversation(&process{
+		stdin: daemon, stdout: daemon, stop: daemon.Close,
+		terminate: func() error { return nil },
+	}, slog.New(slog.DiscardHandler), "", nil, nil)
+	if got := cap(persistent.events); got != persistentEventBuffer {
+		t.Fatalf("host-backed event buffer = %d, want %d", got, persistentEventBuffer)
+	}
+	direct, other := net.Pipe()
+	defer other.Close()
+	plain := newConversation(&process{stdin: direct, stdout: direct, stop: direct.Close}, slog.New(slog.DiscardHandler), "", nil, nil)
+	if got := cap(plain.events); got != eventBuffer {
+		t.Fatalf("direct event buffer = %d, want %d", got, eventBuffer)
 	}
 }
 
