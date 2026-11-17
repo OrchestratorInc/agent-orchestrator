@@ -23,7 +23,7 @@ function extractErrorInfo(cause: unknown): {
 	let error: string | undefined;
 	let code: string | undefined;
 
-	while (current && typeof current === "object") {
+	for (let depth = 0; depth < 8 && current && typeof current === "object"; depth++) {
 		if (current instanceof AccountHostSyncError && typeof current.status === "number") {
 			status ??= current.status;
 		}

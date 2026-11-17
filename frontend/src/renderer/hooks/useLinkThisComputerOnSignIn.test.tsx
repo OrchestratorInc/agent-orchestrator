@@ -248,6 +248,22 @@ test("isRetryableLinkError recognizes daemon API error envelopes including wrapp
 	expect(isRetryableLinkError(apiErrorException({ error: "internal", code: "INTERNAL_ERROR" }))).toBe(true);
 });
 
+test("isRetryableLinkError terminates without hanging on cyclic error cause chains", () => {
+	const selfReferencing = new Error("self-referencing");
+	(selfReferencing as { cause?: unknown }).cause = selfReferencing;
+	expect(isRetryableLinkError(selfReferencing)).toBe(true);
+
+	const cyclicA = new Error("cycle-a");
+	const cyclicB = new Error("cycle-b");
+	(cyclicA as { cause?: unknown }).cause = cyclicB;
+	(cyclicB as { cause?: unknown }).cause = cyclicA;
+	expect(isRetryableLinkError(cyclicA)).toBe(true);
+
+	const cyclicForbidden: { error: string; cause?: unknown } = { error: "forbidden" };
+	cyclicForbidden.cause = cyclicForbidden;
+	expect(isRetryableLinkError(cyclicForbidden)).toBe(false);
+});
+
 test("stops retrying immediately on a wrapped 403 error from the account-token endpoint", async () => {
 	vi.useFakeTimers();
 	fake.signedIn = true;
