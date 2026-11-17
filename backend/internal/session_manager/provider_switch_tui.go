@@ -222,8 +222,9 @@ func (m *Manager) SwitchTUIProvider(ctx context.Context, id domain.SessionID, re
 }
 
 func tuiSettingsChange(md domain.SessionMetadata, request domain.ProviderSwitchRequest) bool {
-	return (request.Model != "" && request.Model != md.Model) || (request.Effort != "" && request.Effort != md.Effort) ||
-		(request.PermissionMode != "" && request.PermissionMode != md.Permissions)
+	return (request.Model != "" && !strings.EqualFold(request.Model, md.Model)) ||
+		(request.Effort != "" && !strings.EqualFold(request.Effort, md.Effort)) ||
+		(request.PermissionMode != "" && ports.NormalizePermissionMode(request.PermissionMode) != ports.NormalizePermissionMode(md.Permissions))
 }
 
 // clearHandoffNote drops a switch target's saved note once the target has a
@@ -270,6 +271,9 @@ func (m *Manager) adoptTUISwitchSettings(ctx context.Context, id domain.SessionI
 	settings.AutoCompactWindow = ""
 	if request.TargetHarness == domain.HarnessClaudeCode {
 		settings.AutoCompactWindow = request.AutoCompactWindow
+	}
+	if request.PermissionMode != "" {
+		settings.ApprovalMode = ports.NormalizePermissionMode(request.PermissionMode)
 	}
 	if err := store.SetConversationSettings(ctx, conversation.ID, settings, m.clock()); err != nil {
 		m.logger.Warn("adopt terminal switch settings", "session", id, "error", err)

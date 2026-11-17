@@ -276,20 +276,22 @@ func switchWithCatalog(t *testing.T, svc *fakeConversationService, body string) 
 
 func TestProviderSwitchChecksEffortAgainstTheTargetCatalog(t *testing.T) {
 	for _, tc := range []struct {
-		body, want string
-		status     int
-		called     bool
+		body, want, model string
+		status            int
+		called            bool
 	}{
-		{`{"targetHarness":"claude-code","effort":"ultra-mega"}`, `effort \"ultra-mega\" is not one of low, medium, high, max`, http.StatusBadRequest, false},
-		{`{"targetHarness":"claude-code","model":"claude-haiku-4-5-20251001","effort":"high"}`, "takes no reasoning effort", http.StatusBadRequest, false},
-		{`{"targetHarness":"claude-code","model":"claude-opus-5-5[1m]","effort":"MAX"}`, `{"status":"ok"}`, http.StatusOK, true},
-		{`{"targetHarness":"claude-code","model":"opus"}`, `{"status":"ok"}`, http.StatusOK, true},
-		{`{"targetHarness":"claude-code","model":"gpt-5.5"}`, "gpt-5.5 is not in claude-code's model list", http.StatusOK, true},
+		{`{"targetHarness":"claude-code","effort":"ultra-mega"}`, `effort \"ultra-mega\" is not one of low, medium, high, max`, "", http.StatusBadRequest, false},
+		{`{"targetHarness":"claude-code","model":"claude-haiku-4-5-20251001","effort":"high"}`, "takes no reasoning effort", "", http.StatusBadRequest, false},
+		{`{"targetHarness":"claude-code","model":"claude-opus-5-5[1m]","effort":"MAX"}`, `{"status":"ok"}`, "claude-opus-5-5[1m]", http.StatusOK, true},
+		{`{"targetHarness":"claude-code","model":"Claude-Opus-5-5"}`, `{"status":"ok"}`, "claude-opus-5-5", http.StatusOK, true},
+		{`{"targetHarness":"claude-code","model":"opus"}`, `{"status":"ok"}`, "opus", http.StatusOK, true},
+		{`{"targetHarness":"claude-code","model":"o"}`, "o is not in claude-code's model list", "o", http.StatusOK, true},
+		{`{"targetHarness":"claude-code","model":"gpt-5.5"}`, "gpt-5.5 is not in claude-code's model list", "gpt-5.5", http.StatusOK, true},
 	} {
 		svc := &fakeConversationService{}
 		status, body := switchWithCatalog(t, svc, tc.body)
-		if status != tc.status || !bytes.Contains([]byte(body), []byte(tc.want)) || (svc.switchRequest.TargetHarness != "") != tc.called {
-			t.Fatalf("%s: %d %s called=%v", tc.body, status, body, svc.switchRequest.TargetHarness != "")
+		if status != tc.status || !bytes.Contains([]byte(body), []byte(tc.want)) || (svc.switchRequest.TargetHarness != "") != tc.called || svc.switchRequest.Model != tc.model {
+			t.Fatalf("%s: %d %s called=%v model=%q", tc.body, status, body, svc.switchRequest.TargetHarness != "", svc.switchRequest.Model)
 		}
 	}
 }

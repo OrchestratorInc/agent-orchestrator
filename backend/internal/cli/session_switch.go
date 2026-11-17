@@ -32,8 +32,8 @@ type sessionSwitchOptions struct {
 func (o sessionSwitchOptions) picks() string {
 	var parts []string
 	for _, pick := range [][2]string{{"model", o.model}, {"effort", o.effort}, {"permission mode", o.permission}} {
-		if value := strings.TrimSpace(pick[1]); value != "" {
-			parts = append(parts, pick[0]+" "+value)
+		if pick[1] != "" {
+			parts = append(parts, pick[0]+" "+pick[1])
 		}
 	}
 	return strings.Join(parts, ", ")
@@ -94,9 +94,10 @@ otherwise. Leave the agent out, or name the one already running, to change only
 --model, --effort or --permission: a Chat agent takes them from its next turn,
 and a Terminal UI agent restarts on its own conversation.
 
-A session whose agent is working or waiting on an approval is refused. --force
-stops the current turn, cancels queued messages and pending approvals, and
-switches anyway.
+A switch that has to stop the agent is refused while it is working or waiting
+on an approval. --force stops the current turn, cancels queued messages and
+pending approvals, and switches anyway. On a Chat settings change, --force stops
+the current turn so the next one runs on the new settings.
 
 --from <agent> makes the same change to every session on that agent,
 orchestrators included, four at a time, and exits 1 if any of them was not
@@ -119,6 +120,7 @@ Run ao agent ls for the agents you can switch to.`,
 			return nil
 		},
 		RunE: func(cmd *cobra.Command, args []string) error {
+			opts.model, opts.effort, opts.permission = strings.TrimSpace(opts.model), strings.TrimSpace(opts.effort), strings.TrimSpace(opts.permission)
 			var agent string
 			if (opts.from == "" && len(args) == 2) || (opts.from != "" && len(args) == 1) {
 				var err error
@@ -229,7 +231,7 @@ func (c *commandContext) switchSession(ctx context.Context, out, errOut io.Write
 	var result sessionSwitchResponse
 	err := c.doJSONPathWithHeadersAndTimeout(ctx, http.MethodPost, "/api/v1/sessions/"+url.PathEscape(id)+"/provider-switch", sessionSwitchRequest{
 		TargetHarness: agent, IdempotencyKey: uuid.NewString(),
-		Model: strings.TrimSpace(opts.model), Effort: strings.TrimSpace(opts.effort),
+		Model: opts.model, Effort: opts.effort,
 		PermissionMode: opts.permission, Force: opts.force,
 	}, &result, nil, 0)
 	var responseErr apiResponseError

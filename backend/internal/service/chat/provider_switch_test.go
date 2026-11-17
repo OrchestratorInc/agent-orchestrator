@@ -947,3 +947,31 @@ func TestSwitchToTheRunningAgentRefusesAModelItsChatDoesNotOffer(t *testing.T) {
 		t.Fatalf("model = %q, %v; want the chat's own value", controller.Settings().Model, err)
 	}
 }
+
+func TestForcedSettingsChangeOnTheRunningAgentStopsItsTurn(t *testing.T) {
+	h, _, _ := newEditHarness(t, false)
+	ctx := context.Background()
+	if _, err := h.svc.Send(ctx, testSession, ports.ChatUserMessage{Text: "long task", Origin: domain.MessageOriginHuman}); err != nil {
+		t.Fatalf("Send: %v", err)
+	}
+	h.conv.emit(ports.ChatEvent{Kind: ports.ChatEventTurnStarted, ProviderTurnID: "provider-turn-1"})
+	h.awaitSnapshot(t, func(snapshot store.ConversationSnapshot) bool {
+		return len(snapshot.Turns) == 1 && snapshot.Turns[0].State == domain.TurnStateRunning
+	})
+	record, _, err := h.st.GetSession(ctx, testSession)
+	if err != nil {
+		t.Fatal(err)
+	}
+	result, err := h.svc.SwitchProviderReport(ctx, testSession, domain.ProviderSwitchRequest{TargetHarness: record.Harness, Model: "first"})
+	if err != nil || !result.SettingsUpdated || result.StoppedTurn {
+		t.Fatalf("result = %+v err = %v, want the settings applied with the turn left running", result, err)
+	}
+	result, err = h.svc.SwitchProviderReport(ctx, testSession, domain.ProviderSwitchRequest{TargetHarness: record.Harness, Model: "second", Force: true})
+	if err != nil || !result.SettingsUpdated || !result.StoppedTurn {
+		t.Fatalf("forced result = %+v err = %v, want the settings applied and the turn stopped", result, err)
+	}
+	h.conv.emit(ports.ChatEvent{Kind: ports.ChatEventTurnCompleted, ProviderTurnID: "provider-turn-1", TurnState: domain.TurnStateInterrupted})
+	h.awaitSnapshot(t, func(snapshot store.ConversationSnapshot) bool {
+		return len(snapshot.Turns) == 1 && snapshot.Turns[0].State == domain.TurnStateInterrupted
+	})
+}

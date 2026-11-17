@@ -265,7 +265,7 @@ func TestTUISwitchToTheRunningAgentWithNewSettingsResumesItsOwnThread(t *testing
 		Workspace: &fakeWorkspace{}, Store: store, Messenger: &fakeMessenger{}, Lifecycle: &fakeLCM{store: st},
 		LookPath: func(string) (string, error) { return "/bin/true", nil }})
 
-	same := domain.ProviderSwitchRequest{TargetHarness: domain.HarnessClaudeCode, Model: "sonnet"}
+	same := domain.ProviderSwitchRequest{TargetHarness: domain.HarnessClaudeCode, Model: "Sonnet", PermissionMode: domain.PermissionModeDefault}
 	if err := m.SwitchTUIProvider(ctx, rec.ID, same); !errors.Is(err, domain.ErrProviderAlreadyActive) {
 		t.Fatalf("unchanged settings = %v, want already_active", err)
 	}

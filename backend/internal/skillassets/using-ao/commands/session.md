@@ -328,11 +328,14 @@ change only `--model`, `--effort`, or `--permission`: a Chat agent takes them
 from its next turn, and a Terminal UI agent restarts on its own conversation.
 The daemon checks a model and effort against the agent's model list before
 anything stops. A model it does not list only warns on agents that take custom
-models (Claude Code, Codex).
+models (Claude Code, Codex). A running Chat agent only takes a model from its
+own list, and the refusal names them.
 
-A session whose agent is working or waiting on an approval is refused.
-`--force` stops the current turn, cancels queued messages and pending
-approvals, and switches anyway. Use it when the agent is stuck.
+A switch that has to stop the agent is refused while it is working or waiting
+on an approval. `--force` stops the current turn, cancels queued messages and
+pending approvals, and switches anyway. Use it when the agent is stuck. On a
+Chat settings change, `--force` stops the current turn so the next one runs on
+the new settings.
 
 `--from <agent>` makes the same change to every session on that agent,
 orchestrators included, four at a time, and exits 1 if any was not switched or

@@ -62,7 +62,7 @@ func (s *Service) SwitchProviderReport(ctx context.Context, id domain.SessionID,
 	if !errors.Is(err, domain.ErrProviderAlreadyActive) || (request.Model == "" && request.Effort == "" && request.PermissionMode == "") {
 		return result, err
 	}
-	changed, applyErr := s.applyPicksToActiveTarget(ctx, id, request)
+	changed, applyErr := s.applyPicksToActiveTarget(ctx, id, request, &result)
 	if errors.Is(applyErr, ErrNotChatMode) {
 		return result, err
 	}
@@ -95,7 +95,7 @@ func (s *Service) SwitchProviderAndSend(ctx context.Context, id domain.SessionID
 		// and so does a window that picked the agent another one already brought
 		// in. Either way the message runs with what its sender picked.
 		if err := s.switchProvider(ctx, id, request, &domain.ProviderSwitchResult{}); errors.Is(err, domain.ErrProviderAlreadyActive) {
-			if _, err := s.applyPicksToActiveTarget(ctx, id, request); err != nil {
+			if _, err := s.applyPicksToActiveTarget(ctx, id, request, &domain.ProviderSwitchResult{}); err != nil {
 				return turn, false, err
 			}
 		} else if err != nil {
@@ -109,7 +109,7 @@ func (s *Service) SwitchProviderAndSend(ctx context.Context, id domain.SessionID
 // applyPicksToActiveTarget gives the agent already running the model, effort
 // and permission mode a switch to it named. A pick it cannot take refuses the
 // message before anything is sent.
-func (s *Service) applyPicksToActiveTarget(ctx context.Context, id domain.SessionID, request domain.ProviderSwitchRequest) (bool, error) {
+func (s *Service) applyPicksToActiveTarget(ctx context.Context, id domain.SessionID, request domain.ProviderSwitchRequest, result *domain.ProviderSwitchResult) (bool, error) {
 	if request.Model == "" && request.Effort == "" && request.PermissionMode == "" {
 		return false, nil
 	}
@@ -139,7 +139,8 @@ func (s *Service) applyPicksToActiveTarget(ctx context.Context, id domain.Sessio
 	if request.PermissionMode != "" {
 		picked.ApprovalMode = ports.NormalizePermissionMode(request.PermissionMode)
 	}
-	if picked.Model == current.Model && picked.ReasoningEffort == current.ReasoningEffort && picked.ApprovalMode == current.ApprovalMode {
+	if picked.Model == current.Model && picked.ReasoningEffort == current.ReasoningEffort &&
+		ports.NormalizePermissionMode(picked.ApprovalMode) == ports.NormalizePermissionMode(current.ApprovalMode) {
 		return false, nil
 	}
 	if _, err := s.setTurnSettings(ctx, controller, domain.SessionConversationOwner(id), picked); err != nil {
@@ -147,6 +148,16 @@ func (s *Service) applyPicksToActiveTarget(ctx context.Context, id domain.Sessio
 			Kind:   domain.ProviderSwitchRefusalUnsupported,
 			Detail: fmt.Sprintf("%s is already active and did not take the picked settings: %v", request.TargetHarness, err),
 			Cause:  err,
+		}
+	}
+	controller.mu.Lock()
+	running := controller.pendingTurnID != ""
+	controller.mu.Unlock()
+	if request.Force && running {
+		if err := controller.Interrupt(ctx); err != nil {
+			result.Warnings = append(result.Warnings, fmt.Sprintf("the running turn did not stop: %v", err))
+		} else {
+			result.StoppedTurn = true
 		}
 	}
 	return true, nil

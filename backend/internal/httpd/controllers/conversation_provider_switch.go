@@ -50,7 +50,7 @@ func (c *ConversationsController) switchProvider(w http.ResponseWriter, r *http.
 		FastMode: req.FastMode, Ultracode: req.Ultracode, AutoCompactWindow: req.AutoCompactWindow,
 		PermissionMode: domain.PermissionMode(req.PermissionMode), Force: req.Force,
 	}
-	warnings, err := c.checkSwitchPicks(ctx, request)
+	warnings, err := c.checkSwitchPicks(ctx, &request)
 	if err != nil {
 		writeProviderSwitchError(w, r, err)
 		return
@@ -86,7 +86,7 @@ func (c *ConversationsController) switchProvider(w http.ResponseWriter, r *http.
 	envelope.WriteJSON(w, http.StatusOK, ProviderSwitchResponse{Status: "ok", Message: &response, Warnings: warnings})
 }
 
-func (c *ConversationsController) checkSwitchPicks(ctx context.Context, request domain.ProviderSwitchRequest) ([]string, error) {
+func (c *ConversationsController) checkSwitchPicks(ctx context.Context, request *domain.ProviderSwitchRequest) ([]string, error) {
 	if c.Models == nil || (request.Model == "" && request.Effort == "") {
 		return nil, nil
 	}
@@ -104,11 +104,14 @@ func (c *ConversationsController) checkSwitchPicks(ctx context.Context, request 
 		alias := false
 		for i := range catalog.Models {
 			id := strings.ToLower(catalog.Models[i].ID)
+			if strings.EqualFold(id, request.Model) {
+				request.Model = catalog.Models[i].ID
+			}
 			if strings.EqualFold(id, request.Model) || id == base {
 				picked = &catalog.Models[i]
 				break
 			}
-			alias = alias || strings.Contains(id, base)
+			alias = alias || slices.Contains(strings.Split(id, "-"), base)
 		}
 		switch {
 		case picked != nil || alias:
@@ -122,13 +125,13 @@ func (c *ConversationsController) checkSwitchPicks(ctx context.Context, request 
 	if request.Effort == "" {
 		return warnings, nil
 	}
-	allowed := catalogEfforts(catalog)
+	allowed, name := catalogEfforts(catalog), string(target)
 	if picked != nil {
-		if len(picked.Efforts) == 0 {
-			return nil, &domain.ProviderSwitchError{Kind: domain.ProviderSwitchRefusalUnsupported,
-				Detail: fmt.Sprintf("%s takes no reasoning effort", picked.ID)}
-		}
-		allowed = picked.Efforts
+		allowed, name = picked.Efforts, picked.ID
+	}
+	if len(allowed) == 0 {
+		return nil, &domain.ProviderSwitchError{Kind: domain.ProviderSwitchRefusalUnsupported,
+			Detail: fmt.Sprintf("%s takes no reasoning effort", name)}
 	}
 	for _, effort := range allowed {
 		if strings.EqualFold(effort, request.Effort) {
