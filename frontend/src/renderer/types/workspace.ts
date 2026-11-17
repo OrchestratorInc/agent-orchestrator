@@ -311,24 +311,52 @@ export type WorkspaceSession = {
 const GITHUB_ISSUE_ID = /^github:([\w.-]+\/[\w.-]+)#([1-9]\d*)(?:@([\w.-]+(?::\d+)?))?$/;
 const GITLAB_ISSUE_ID = /^gitlab:([\w.-]+(?:\/[\w.-]+)+)#([1-9]\d*)(?:@([\w.-]+(?::\d+)?))?$/;
 
-/**
- * The issue's page on its forge when `issueId` is an intake id. Any other
- * issueId is free text typed at spawn that names no repository, so it gets no
- * link rather than a guessed one.
- */
-export function trackerIssueLink(issueId?: string): BoardTrackerIssue | undefined {
+/** Resolve intake ids and manual refs; bare numbers need a project's repository. */
+export function trackerIssueLink(issueId?: string, repository?: string): BoardTrackerIssue | undefined {
 	if (!issueId) return undefined;
-	const github = GITHUB_ISSUE_ID.exec(issueId);
+	issueId = issueId.trim();
+	const github = GITHUB_ISSUE_ID.exec(issueId) ?? /^([\w.-]+\/[\w.-]+)#([1-9]\d*)$/.exec(issueId);
 	if (github) {
 		const [, repo, number, host = "github.com"] = github;
-		return { number: Number(number), repo, url: `https://${host}/${repo}/issues/${number}` };
+		return issueLink("github", repo, number, `https://${host}`);
 	}
 	const gitlab = GITLAB_ISSUE_ID.exec(issueId);
 	if (gitlab) {
 		const [, repo, number, host = "gitlab.com"] = gitlab;
-		return { number: Number(number), repo, url: `https://${host}/${repo}/-/issues/${number}` };
+		return issueLink("gitlab", repo, number, `https://${host}`);
+	}
+	try {
+		if (/^https?:\/\//.test(issueId)) {
+			const url = new URL(issueId);
+			if (url.username || url.password) return undefined;
+			const match = /^\/(.+?)\/(?:(-)\/)?issues\/([1-9]\d*)\/?$/.exec(url.pathname);
+			return match ? issueLink(match[2] ? "gitlab" : "github", match[1], match[3], url.origin) : undefined;
+		}
+		if (/^#?[1-9]\d*$/.test(issueId) && repository) {
+			const scp = /^git@([^/:]+):(.+)$/.exec(repository);
+			const url = new URL(scp ? `ssh://git@${scp[1]}/${scp[2]}` : repository);
+			if (!["https:", "http:", "ssh:"].includes(url.protocol) || url.search || url.hash) return undefined;
+			const host = url.hostname.toLowerCase();
+			// Match the daemon's repository dispatch, including enterprise GitHub hosts.
+			const provider = host === "github.com" || host.endsWith(".github.com") || host.endsWith(".ghe.io") || host.endsWith(".ghe.com") ? "github" : "gitlab";
+			return issueLink(provider, url.pathname.replace(/^\/|\/$/g, "").replace(/\.git$/, ""), issueId.replace(/^#/, ""), `https://${url.host}`);
+		}
+	} catch {
+		return undefined;
 	}
 	return undefined;
+}
+
+function issueLink(provider: "github" | "gitlab", repo: string, rawNumber: string, origin: string): BoardTrackerIssue | undefined {
+	const number = Number(rawNumber);
+	const parts = repo.split("/");
+	if (!Number.isSafeInteger(number) || number <= 0 || parts.length < 2 || (provider === "github" && parts.length !== 2) || parts.some((part) => !/^[\w.-]+$/.test(part) || part === "." || part === "..")) return undefined;
+	try {
+		const url = new URL(`/${repo}/${provider === "gitlab" ? "-/issues" : "issues"}/${number}`, origin);
+		return { number, repo, url: url.href };
+	} catch {
+		return undefined;
+	}
 }
 
 export type ProjectKind = "single_repo" | "workspace" | "scratch";

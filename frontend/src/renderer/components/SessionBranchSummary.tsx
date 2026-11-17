@@ -29,8 +29,9 @@ import { ChangeCounts, ChangedFilesList } from "./ChangedFilesList";
 import { usesPreviewWorkspaceData as usePreviewData } from "../lib/preview-mode";
 import { useSessionGitActionStore, type SessionGitActionKind } from "../stores/session-git-action-store";
 import type { SessionPRSummary } from "../hooks/useSessionScmSummary";
-import { type SessionBranchState, type WorkspaceSession, trackerIssueLink, sessionIsActive, sessionWorkspaceReady } from "../types/workspace";
+import { type SessionBranchState, type WorkspaceSession, sessionIsActive, sessionWorkspaceReady } from "../types/workspace";
 import { ProductExternalLink } from "./ProductExternalLink";
+import { useSessionIssueLink } from "../hooks/useSessionIssueLink";
 import { Button } from "./ui/button";
 import { Pressable } from "./ui/pressable";
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from "./ui/dropdown-menu";
@@ -155,7 +156,7 @@ export function SessionBranchSummary({
 	const behind = behindBase ? (facts.branch?.behind ?? 0) : 0;
 	const hasWork = facts.uncommitted.length > 0 || commitsRow !== null || behind > 0;
 	const { branch, naming } = sessionBranchPresentation(session);
-	const issue = trackerIssueLink(session.issueId);
+	const issue = useSessionIssueLink(session, hostId);
 	if (!issue && !branch && !naming && !pullRequests && !hasWork) return null;
 
 	let action: ReactNode = null;

@@ -32,6 +32,17 @@ import {
 
 describe("trackerIssueLink", () => {
 	it.each([
+		["acme/project#42", undefined, "https://github.com/acme/project/issues/42", "acme/project", 42],
+		["https://github.com/acme/project/issues/42", undefined, "https://github.com/acme/project/issues/42", "acme/project", 42],
+		["https://gitlab.local:8443/group/sub/repo/-/issues/7", undefined, "https://gitlab.local:8443/group/sub/repo/-/issues/7", "group/sub/repo", 7],
+		["42", "https://github.com/acme/project.git", "https://github.com/acme/project/issues/42", "acme/project", 42],
+		["#42", "git@github.com:acme/project.git", "https://github.com/acme/project/issues/42", "acme/project", 42],
+		["7", "ssh://git@gitlab.local:8443/group/sub/repo.git", "https://gitlab.local:8443/group/sub/repo/-/issues/7", "group/sub/repo", 7],
+	])("links manual issue %s with repository %s", (issueId, repository, url, repo, number) => {
+		expect(trackerIssueLink(issueId, repository)).toEqual({ number, repo, url });
+	});
+
+	it.each([
 		["github:acme/project#42", { number: 42, repo: "acme/project", url: "https://github.com/acme/project/issues/42" }],
 		["github:acme/.github#3", { number: 3, repo: "acme/.github", url: "https://github.com/acme/.github/issues/3" }],
 		["gitlab:group/sub/repo#7", { number: 7, repo: "group/sub/repo", url: "https://gitlab.com/group/sub/repo/-/issues/7" }],
@@ -58,6 +69,11 @@ describe("trackerIssueLink", () => {
 		"gitlab:repo#7",
 		"gitlab:group/repo#7@evil.example/path",
 		"github:acme/project#42 extra",
+		"https://github.com/acme/project/issues/0",
+		"https://user:password@github.com/acme/project/issues/42",
+		"javascript://github.com/acme/project/issues/42",
+		"github:acme/..#42",
+		"github:acme/project#9007199254740992",
 	])("leaves %s unlinked", (issueId) => {
 		expect(trackerIssueLink(issueId)).toBeUndefined();
 	});

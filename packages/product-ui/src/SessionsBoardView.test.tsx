@@ -462,10 +462,11 @@ describe("SessionsBoardView", () => {
 		expect(onOpen).toHaveBeenCalledOnce();
 	});
 
-	it("links the session's tracker issue even before it has a PR", () => {
+	it.each([false, true])("links the session's tracker issue before it has a PR (compact=%s)", (compact) => {
 		const onOpen = vi.fn();
 		render(
 			<SessionCardView
+				compact={compact}
 				externalLink={ExternalLink}
 				labels={{
 					formatTime: () => "5m ago",
