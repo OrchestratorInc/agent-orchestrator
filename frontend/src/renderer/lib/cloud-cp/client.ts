@@ -46,6 +46,9 @@ import type {
 	CloudCpNotificationListQuery,
 	CloudCpNotificationListResponse,
 	CloudCpOrgCoderConfigResponse,
+	CloudCpDataRetention,
+	CloudCpDataRetentionChange,
+	CloudCpPutDataRetentionRequest,
 	CloudCpOrgMembersResponse,
 	CloudCpBillingLinkResponse,
 	CloudCpBillingSummary,
@@ -371,6 +374,17 @@ export interface CloudCpClient {
 	 * more than one provider). "" clears it. Returns the org's updated offering.
 	 */
 	putOrgSandboxProvider(orgId: string, defaultProvider: string, options?: CloudCpRequestOptions): Promise<CloudCpOffering>;
+	/**
+	 * How long the signed-in user's Cloud sessions and their conversation
+	 * content are kept. An older control plane without the route answers 404 or
+	 * 405; one whose store can't keep the setting answers 501.
+	 */
+	getDataRetention(options?: CloudCpRequestOptions): Promise<CloudCpDataRetention>;
+	/**
+	 * Choose how long the signed-in user's Cloud sessions are kept. With
+	 * `dryRun` nothing changes; both modes count the sessions the period deletes.
+	 */
+	putDataRetention(body: CloudCpPutDataRetentionRequest, options?: CloudCpRequestOptions): Promise<CloudCpDataRetentionChange>;
 	/** Saves the org's bring-your-own-Coder connection. Omit the token to keep the stored one. */
 	putOrgCoderConfig(
 		orgId: string,
@@ -1079,6 +1093,8 @@ export function createCloudCpClient(options: CloudCpClientOptions): CloudCpClien
 			requestVoid("POST", `/orgs/${seg(orgId)}/sessions/${seg(sessionId)}/presence`, { signal: o?.signal }),
 		putOrgSandboxProvider: (orgId, defaultProvider, o) =>
 			requestJson("PUT", `/orgs/${seg(orgId)}/sandbox-provider`, { body: { defaultProvider }, signal: o?.signal }),
+		getDataRetention: (o) => requestJson("GET", "/me/data-retention", { signal: o?.signal }),
+		putDataRetention: (body, o) => requestJson("PUT", "/me/data-retention", { body, signal: o?.signal }),
 		putOrgCoderConfig: (orgId, body, o) =>
 			requestJson("PUT", `/orgs/${seg(orgId)}/coder-config`, { body, signal: o?.signal }),
 		deleteOrgCoderConfig: (orgId, o) =>

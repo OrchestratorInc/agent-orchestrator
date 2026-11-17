@@ -58,6 +58,7 @@ import { Tooltip, TooltipContent, TooltipTrigger } from "./ui/tooltip";
 import { someoneElseWorking, type SessionPerson } from "../lib/session-people";
 import { SessionPeopleStack } from "./SessionPeople";
 import { SessionOwnerTag } from "./SessionOwnerTag";
+import { useSessionContentExpired } from "../stores/content-expired-sessions-store";
 
 export function toBoardSessionPresentation(
 	session: WorkspaceSession,
@@ -195,6 +196,8 @@ export function ArchivedSessionCardAdapter({
 }) {
 	const { t } = useTranslation();
 	const branch = sessionBranchPresentation(session).branch ?? "";
+	// The control plane refused its restore for data retention: say so instead of offering Restore.
+	const contentExpired = useSessionContentExpired(session.cloud ? session.id : undefined);
 	return (
 		<DesktopSessionCard
 			compact={compact}
@@ -207,12 +210,14 @@ export function ArchivedSessionCardAdapter({
 			hideTerminatedStatus={hideTerminatedStatus}
 			action={
 				<div className="flex items-center">
-					<ArchiveRestoreButton
-						isDisabled={isRestoreDisabled}
-						isRestoring={isRestoring}
-						label={t("shell.restoreNamed", { title: session.title })}
-						onClick={restoreAction}
-					/>
+					{contentExpired ? null : (
+						<ArchiveRestoreButton
+							isDisabled={isRestoreDisabled}
+							isRestoring={isRestoring}
+							label={t("shell.restoreNamed", { title: session.title })}
+							onClick={restoreAction}
+						/>
+					)}
 					{/* The control plane owns a cloud session's record; this daemon cannot delete it. */}
 					{session.cloud ? null : <ArchiveDeleteButton isDisabled={isRestoreDisabled || isRestoring} onRequest={onDelete} session={session} />}
 				</div>
@@ -226,7 +231,7 @@ export function ArchivedSessionCardAdapter({
 					/>
 				) : undefined
 			}
-			footer={<ArchiveRestoreError message={restoreError} />}
+			footer={<ArchiveRestoreError message={contentExpired ? t("restoreUnavailable.contentExpired") : restoreError} />}
 			interactive={Boolean(onOpen)}
 			onOpen={onOpen}
 			session={session}
