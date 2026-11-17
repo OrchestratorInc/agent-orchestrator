@@ -63,7 +63,9 @@ func renderServer(t *testing.T, status int, respBody string) (*httptest.Server, 
 		}
 		body, err := io.ReadAll(r.Body)
 		if err != nil {
-			t.Fatalf("read body: %v", err)
+			t.Errorf("read body: %v", err)
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
 		}
 		capture.called, capture.body, capture.path, capture.method = true, string(body), r.URL.Path, r.Method
 		w.Header().Set("Content-Type", "application/json")
