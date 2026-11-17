@@ -15,7 +15,7 @@ import { AGENT_OPTIONS, agentLabel } from "../lib/agent-options";
 import type { components } from "../../api/schema";
 import { apiClient, apiErrorCode, apiErrorMessage } from "../lib/api-client";
 import { clientForHost } from "../lib/host-clients";
-import { agentAccountProviderFor, type AgentAccountProvider } from "../hooks/useAgentAccounts";
+import { agentAccountProviderFor, useAgentAccounts, type AgentAccountProvider } from "../hooks/useAgentAccounts";
 import { useConnectedHosts } from "../hooks/useHostConnection";
 import { useResetStaleProjectTuning } from "../hooks/useResetStaleProjectTuning";
 import { captureRendererEvent } from "../lib/telemetry";
@@ -566,12 +566,20 @@ export function useTaskLaunch({ projectId, hostId }: {
 	const defaultWorkerAgent = rememberedAgentIsAvailable ? rememberedAgent : configuredDefaultAgent;
 	const selectedAgent = agent || defaultWorkerAgent;
 	const selectedReadiness = agentCatalog?.agents.find((candidate) => candidate.id === selectedAgent);
-	const standalonePending = isLocalStandalone && (selectedAgent
-		? !selectedReadiness || isPendingAgent(selectedReadiness)
-		: !agentCatalog || agentCatalog.agents.some(isPendingAgent));
-	const standaloneRecovery = useStandaloneAgentReadiness(selectedAgent, standalonePending, isLocalStandalone);
 	const accountProvider = agentAccountProviderFor(selectedAgent);
 	const accountId = accountProvider && !isCloudProject ? accountPicks[accountProvider] : undefined;
+	const accounts = useAgentAccounts(isLocalStandalone && Boolean(accountId), hostId);
+	const selectedAccount = accounts.data?.find((candidate) => candidate.id === accountId && candidate.provider === accountProvider);
+	// Agent readiness follows the saved default; an explicit account pick uses
+	// the same sign-in verdict as the account picker instead.
+	const standaloneReadiness: AgentInfo | undefined = selectedReadiness && isLocalStandalone && accountId ? {
+		...selectedReadiness,
+		authentication: { state: selectedAccount ? selectedAccount.signedIn ? "authorized" : "unauthorized" : "unknown", freshness: "fresh" },
+	} : selectedReadiness;
+	const standalonePending = isLocalStandalone && (selectedAgent
+		? !standaloneReadiness || isPendingAgent(standaloneReadiness)
+		: !agentCatalog || agentCatalog.agents.some(isPendingAgent));
+	const standaloneRecovery = useStandaloneAgentReadiness(selectedAgent, standalonePending, isLocalStandalone);
 	// The connection a cloud task with this agent runs on; its catalog follows it.
 	const selectedCloudConnection = isCloudProject
 		? cloudConnectionsQuery.data?.find(
@@ -1052,7 +1060,7 @@ export function useTaskLaunch({ projectId, hostId }: {
 				: t("newTask.checkingAgents", { defaultValue: "Checking agents…" })
 		: selectedReadiness?.installation.state === "not_installed"
 			? t("newTask.agentNeedsInstall", { agent: selectedAgentLabel, defaultValue: "{{agent}} needs to be installed." })
-		: selectedReadiness?.authentication.state === "unauthorized"
+		: standaloneReadiness?.authentication.state === "unauthorized"
 			? t("newTask.agentNeedsSignIn", { agent: selectedAgentLabel, defaultValue: "Sign in to {{agent}} to continue." })
 		: undefined;
 	const readinessNotice = standaloneBlockedReason ? {

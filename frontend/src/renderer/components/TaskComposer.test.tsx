@@ -578,6 +578,26 @@ describe("TaskComposer", () => {
 		expect(await screen.findByRole("button", { name: "Open Agent Harnesses" })).toBeInTheDocument();
 	});
 
+	it.each(["unknown", "unauthorized"] as const)("uses an explicit account instead of the default account's %s verdict", async (authentication) => {
+		window.localStorage.setItem("ao.taskComposer.preferences.v1", JSON.stringify({ __standalone__: { lastAgent: "codex", agents: {} } }));
+		h.agentCatalog = { agents: [agentReadiness("codex", "Codex", { authentication })] };
+		const client = new QueryClient({ defaultOptions: { queries: { staleTime: Infinity } } });
+		client.setQueryData(["agent-accounts"], [{ id: "saved-other", provider: "codex", signedIn: true }]);
+		let launch!: ReturnType<typeof useTaskLaunch>;
+		function Launcher() { launch = useTaskLaunch({ projectId: "__standalone__" }); return null; }
+		render(<Wrap queryClient={client}><Launcher /></Wrap>);
+		await waitFor(() => expect(launch.sendBlockedReason).toBeDefined());
+		act(() => launch.account?.choose("saved-other"));
+		await waitFor(() => expect(launch.canSubmit).toBe(true));
+		expect(launch.sendBlockedReason).toBeUndefined();
+		expect(launch.launchSnapshot().accountId).toBe("saved-other");
+		act(() => client.setQueryData(["agent-accounts"], [{ id: "saved-other", provider: "codex", signedIn: false }]));
+		await waitFor(() => expect(launch.canSubmit).toBe(false));
+		expect(launch.sendBlockedReason).toBe("Sign in to Codex to continue.");
+		act(() => launch.account?.choose(undefined));
+		expect(launch.sendBlockedReason).toBe(authentication === "unknown" ? "Checking Codex…" : "Sign in to Codex to continue.");
+	});
+
 	it("preserves an explicitly selected standalone agent when readiness rankings refresh", async () => {
 		const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
 		h.agentCatalog = {
