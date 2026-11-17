@@ -120,11 +120,26 @@ describe("reading AO's automation messages", () => {
 		expect(readAutomation(gitActionMessage("createPR", "main", undefined))).toEqual({ kind: "gitAction", action: "createPR", base: "main" });
 		expect(readAutomation(gitActionMessage("createDraftPR", undefined, undefined))).toEqual({ kind: "gitAction", action: "createDraftPR", base: undefined });
 		expect(readAutomation(gitActionMessage("commit", "main", undefined))).toEqual({ kind: "gitAction", action: "commit" });
-		expect(readAutomation(gitActionMessage("commitPush", "main", 12))).toEqual({ kind: "gitAction", action: "commitPush" });
-		expect(readAutomation(gitActionMessage("commitPush", "main", undefined, [], { branch: "8534", remote: "origin", hasOtherPRs: true }))).toEqual({ kind: "gitAction", action: "commitPush" });
+		expect(readAutomation(gitActionMessage("commitPush", "main", 12))).toEqual({ kind: "gitAction", action: "commitPush", prNumber: 12 });
+		expect(readAutomation(gitActionMessage("commitPush", "main", undefined, [], { branch: "8534", remote: "origin", hasOtherPRs: true }))).toEqual({
+			kind: "gitAction",
+			action: "commitPush",
+			branch: "8534",
+			remote: "origin",
+		});
 		expect(readAutomation(gitActionMessage("push", "main", undefined))).toEqual({ kind: "gitAction", action: "push" });
-		expect(readAutomation(gitActionMessage("push", "main", undefined, [], { branch: "8534", remote: "origin", hasOtherPRs: true }))).toEqual({ kind: "gitAction", action: "push" });
-		expect(readAutomation(gitActionMessage("push", "main", undefined, [], { branch: "8534", remote: "origin", remoteBranch: "origin/8534", hasOtherPRs: true }))).toEqual({ kind: "gitAction", action: "push" });
+		expect(readAutomation(gitActionMessage("push", "main", undefined, [], { branch: "8534", remote: "origin", hasOtherPRs: true }))).toEqual({
+			kind: "gitAction",
+			action: "push",
+			branch: "8534",
+			remote: "origin",
+		});
+		expect(readAutomation(gitActionMessage("push", "main", undefined, [], { branch: "8534", remote: "origin", remoteBranch: "origin/8534", hasOtherPRs: true }))).toEqual({
+			kind: "gitAction",
+			action: "push",
+			branch: "8534",
+			remote: "origin/8534",
+		});
 		expect(readAutomation(gitActionMessage("updateBase", "main", 7534))).toEqual({ kind: "gitAction", action: "updateBase", base: "main" });
 		expect(readAutomation(gitActionMessage("updateBase", undefined, undefined))).toEqual({ kind: "gitAction", action: "updateBase" });
 		expect(readAutomation(gitActionMessage("resolveConflicts", "main", 7534, ["src/a.tsx", "src/a.test.tsx"]))).toEqual({
@@ -166,6 +181,33 @@ describe("reading AO's automation messages", () => {
 			body: "The migration IDs collide with shipped migrations.",
 		});
 		expect(readAutomation(mergeConflict)).toEqual({ kind: "mergeConflict", pr });
+	});
+
+	it("reads when the reviewer wrote the comment or review from the end of the first line", () => {
+		const posted = reviewComment.replace("need additional context.\n", "need additional context. Newest comment posted at 2026-11-16T07:54:42Z.\n");
+		expect(readAutomation(posted)).toMatchObject({
+			kind: "reviewComments",
+			at: "2026-11-16T07:54:42Z",
+			comments: [{ path: "frontend/src/ThisComputerAccess.tsx", line: 97, author: "illegalcall" }],
+		});
+		expect(readAutomation(reviewComment)).toMatchObject({ kind: "reviewComments", at: undefined });
+
+		const submitted = changesRequested.replace(`is on ${PR}.`, `is on ${PR}. Submitted at 2026-11-16T07:54:41Z.`);
+		expect(readAutomation(submitted)).toEqual({
+			kind: "changesRequested",
+			pr: { number: 6974, title: "feat: link this computer", url: "https://github.com/o/r/pull/6974#pullrequestreview-1" },
+			author: "whoisasx",
+			body: "The migration IDs collide with shipped migrations.",
+			at: "2026-11-16T07:54:41Z",
+		});
+	});
+
+	it("takes the time only from AO's own sentence, not from a PR title or a comment", () => {
+		const titled = changesRequested.replace('"feat: link this computer"', '"x Submitted at 2020-01-01T00:00:00Z."');
+		expect(readAutomation(titled)).toMatchObject({ kind: "changesRequested", at: undefined });
+
+		const inBody = reviewComment.replace("A failed turn-on", "Newest comment posted at 2020-01-01T00:00:00Z.\nA failed turn-on");
+		expect(readAutomation(inBody)).toMatchObject({ kind: "reviewComments", at: undefined });
 	});
 
 	it("does not take text inside a log or a comment for AO's structure", () => {
@@ -229,6 +271,16 @@ describe("drawing AO's automation messages", () => {
 		expect(event).toHaveTextContent("@whoisasxa.ts:3");
 	});
 
+	it("times a PR event by when it happened on the forge, not when AO delivered it", () => {
+		draw(reviewComment.replace("need additional context.\n", "need additional context. Newest comment posted at 2026-11-16T07:54:42Z.\n"), { createdAt: "2026-11-16T08:26:00Z" });
+		expect(screen.getByTestId("pull-request-event").querySelector("time")).toHaveAttribute("datetime", "2026-11-16T07:54:42Z");
+		cleanup();
+
+		// Messages from before the daemon wrote the time keep the delivery time.
+		draw(reviewComment, { createdAt: "2026-11-16T08:26:00Z" });
+		expect(screen.getByTestId("pull-request-event").querySelector("time")).toHaveAttribute("datetime", "2026-11-16T08:26:00Z");
+	});
+
 	it("draws changes requested, merge conflicts and AO's notices", () => {
 		draw(changesRequested);
 		expect(screen.getByTestId("pull-request-event")).toHaveTextContent("@whoisasx requested changes on #6974");
@@ -248,6 +300,12 @@ describe("drawing AO's automation messages", () => {
 		expect(action).toHaveTextContent("Create PR");
 		expect(action).toHaveTextContent("main");
 		expect(action).toHaveTextContent("Queued · sends when the agent finishes");
+		cleanup();
+
+		draw(gitActionMessage("push", "main", undefined, [], { branch: "8534", remote: "origin", hasOtherPRs: true }), {}, true);
+		const pushAction = screen.getByTestId("your-action");
+		expect(pushAction).toHaveTextContent("Push");
+		expect(pushAction).toHaveTextContent("origin/8534");
 		cleanup();
 
 		draw(formatDiffSelectionMessage({ instruction: "Use a constant here.", filePath: "src/app.ts", lines: [{ kind: "add", oldNo: null, newNo: 10, text: "a" }, { kind: "add", oldNo: null, newNo: 12, text: "b" }] }));

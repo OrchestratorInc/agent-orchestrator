@@ -2052,6 +2052,24 @@ describe("HarnessSettingsSection", () => {
 		expect(within(row).queryByText("Credentials not verified")).toBeNull();
 	});
 
+	it("shows Open Interpreter's local provider configuration as configured, not connected", async () => {
+		const interpreterCatalog = { agents: [agentReadiness("open-interpreter", "Open Interpreter", { authentication: "configured" })] };
+		vi.mocked(apiClient.GET).mockImplementation(async (path) => {
+			if (path === "/api/v1/agents/readiness") return { data: interpreterCatalog } as never;
+			if (path === "/api/v1/agents/auth-plans") return { data: { plans: [{ agentId: "open-interpreter", action: "setup", launchMode: "terminal", available: true }] } } as never;
+			if (path === "/api/v1/agents/installers") return { data: { agents: [] } } as never;
+			if (path === "/api/v1/agents/install-jobs") return { data: { jobs: [] } } as never;
+			return { data: undefined } as never;
+		});
+		vi.mocked(apiClient.POST).mockResolvedValue({ data: interpreterCatalog } as never);
+
+		renderSection();
+		const row = await findAgentRow("open-interpreter");
+		expect(await within(row).findByText("Configured")).toBeInTheDocument();
+		expect(within(row).queryByText("Connected")).toBeNull();
+		expect(within(row).queryByRole("button", { name: "Set up" })).not.toBeInTheDocument();
+	});
+
 	it.each(["unknown", "configured", "unauthorized"] as const)("keeps Docker configuration guidance reachable with %s authentication", async (authentication) => {
 		const dockerCatalog = { agents: [agentReadiness("docker-agent", "Docker Agent", { authentication })] };
 		const documentationUrl = "https://example.test/docker-agent/setup";

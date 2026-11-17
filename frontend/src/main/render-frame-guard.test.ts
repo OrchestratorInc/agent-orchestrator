@@ -29,6 +29,17 @@ describe("blocksRenderFrameNavigation", () => {
 		expect(blocksRenderFrameNavigation(inline, "https://phish.example/login")).toBe(true);
 	});
 
+	it("holds a remote host's render on its page", () => {
+		const remote = "http://ao-preview-0123.localhost:4000/r1";
+		const isRemoteRender = (url: string) => new URL(url).host === "ao-preview-0123.localhost:4000";
+		expect(blocksRenderFrameNavigation(remote, `${remote}#ao-theme=y`, isRemoteRender)).toBe(false);
+		expect(blocksRenderFrameNavigation(remote, "https://phish.example/login", isRemoteRender)).toBe(true);
+		expect(blocksRenderFrameNavigation(remote, "http://ao-preview-0123.localhost:4000/r2", isRemoteRender)).toBe(true);
+		expect(blocksRenderFrameNavigation(remote, "http://127.0.0.1:3001/api/v1/sessions", isRemoteRender)).toBe(true);
+		// Unrecognized, the same URL is not held: the guard depends on the predicate.
+		expect(blocksRenderFrameNavigation(remote, "https://phish.example/login")).toBe(false);
+	});
+
 	it("keeps a cloud artifact frame under its access prefix", () => {
 		const prefix = "https://api.aoagents.dev/api/cloud/v1/artifact-files/token-1/";
 		const page = `${prefix}report.html?v=2026-10-16T09%3A55%3A07Z`;
