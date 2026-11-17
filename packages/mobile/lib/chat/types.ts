@@ -184,6 +184,9 @@ export type ActivityDetail = {
 	host?: string;
 	commandSource?: string;
 	event?: "compaction" | "model.rerouted" | "auth.reauth_required" | "steer" | "plan" | string;
+	/** provider.failure: the kind of failure ("limit", "connection") and how serious. */
+	category?: string;
+	severity?: string;
 	/** A provider_switch marker's sides, as the daemon records them (see providerSwitchModel). */
 	sourceHarness?: string;
 	targetHarness?: string;

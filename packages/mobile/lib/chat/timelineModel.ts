@@ -181,8 +181,10 @@ export function settledTurnItems(items: ConversationItem[], turn: ConversationTu
 		if (item.detail?.event === "provider.failure") {
 			const summary = String(item.summary ?? "").trim();
 			if (turnError && summary === turnError) continue;
-			if (notices.has(summary)) continue;
-			notices.add(summary);
+			// A replay repeats the whole notice; one that shares only the title is new.
+			const key = [summary, item.detail.category ?? "", item.detail.severity ?? "", item.detail.text ?? ""].join("\u0000");
+			if (notices.has(key)) continue;
+			notices.add(key);
 		}
 		settled.push(item.status === "running" ? { ...item, status: settledActivityStatus(turn.state) } : item);
 	}

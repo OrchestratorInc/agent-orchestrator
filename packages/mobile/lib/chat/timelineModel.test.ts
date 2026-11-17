@@ -388,6 +388,14 @@ describe("settledTurnItems", () => {
 		expect(shown.map((item) => [item.id, item.kind === "activity" && item.status])).toEqual([["n1", "completed"]]);
 	});
 
+	it("keeps notices that share a title but say something different", () => {
+		const title = "Reconnecting to Claude";
+		const first = { ...notice("n1", title), detail: { event: "provider.failure", category: "connection", text: "Trying again in 4s." } } as ConversationActivity;
+		const second = { ...notice("n2", title), detail: { event: "provider.failure", category: "connection", text: "The API is overloaded." } } as ConversationActivity;
+		const replay = { ...first, id: "n3" } as ConversationActivity;
+		expect(settledTurnItems([first, second, replay], turn("completed")).map((item) => item.id)).toEqual(["n1", "n2"]);
+	});
+
 	it("settles any leftover running row the way the daemon settles a turn", () => {
 		const status = (state: ConversationTurn["state"]) => (settledTurnItems([command("running")], turn(state))[0] as ConversationActivity).status;
 		expect([status("completed"), status("recovered"), status("interrupted"), status("failed")]).toEqual(["completed", "completed", "cancelled", "failed"]);
