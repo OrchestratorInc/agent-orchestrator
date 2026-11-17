@@ -767,6 +767,27 @@ WHERE conversation_activities.conversation_id = sqlc.arg(conversation_id)
 -- The same invariant applies when startup discovers work abandoned by a dead
 -- controller. This runs before SettleOrphanedConversationTurns while their turn
 -- states still identify the affected rows.
+-- A running row on a turn that has already settled can never finish. Older
+-- daemons stored replayed provider retry/limit notices this way, after their turn
+-- had ended, so clients showed a spinner that never stopped. Give each one the
+-- status SettleTurn would have written (terminalActivityStatus).
+-- name: SettleStrandedConversationActivities :exec
+UPDATE conversation_activities
+SET status = CASE (SELECT settled.state FROM conversation_turns AS settled WHERE settled.id = conversation_activities.turn_id)
+        WHEN 'completed' THEN 'completed'
+        WHEN 'recovered' THEN 'recovered'
+        WHEN 'interrupted' THEN 'cancelled'
+        ELSE 'failed'
+    END,
+    revision = revision + 1,
+    updated_at = sqlc.arg(updated_at)
+WHERE status = 'running'
+  AND turn_id IN (
+      SELECT owner.id FROM conversation_turns AS owner
+      WHERE owner.handled_by_session_id = sqlc.arg(handled_by_session_id)
+        AND owner.state IN ('completed', 'recovered', 'interrupted', 'failed', 'cancelled')
+  );
+
 -- name: FailOrphanedConversationActivities :exec
 UPDATE conversation_activities
 SET status = 'failed', revision = revision + 1, updated_at = sqlc.arg(updated_at)

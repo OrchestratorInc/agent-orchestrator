@@ -1892,6 +1892,15 @@ func (s *Store) SettleOrphanedTurns(ctx context.Context, session domain.SessionI
 		}); err != nil {
 		return fmt.Errorf("settle orphaned turns for %s: %w", session, err)
 	}
+	// Running rows already stranded on settled turns (replayed provider notices
+	// stored by older daemons) take the status their turn's settlement gives.
+	if err := q.SettleStrandedConversationActivities(ctx,
+		gen.SettleStrandedConversationActivitiesParams{
+			UpdatedAt:          now,
+			HandledBySessionID: session,
+		}); err != nil {
+		return fmt.Errorf("settle stranded activities for %s: %w", session, err)
+	}
 	return nil
 }
 
