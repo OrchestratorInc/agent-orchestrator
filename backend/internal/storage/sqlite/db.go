@@ -382,7 +382,7 @@ func OpenPreMigrated(dataDir string) (*Store, error) {
 	return store, nil
 }
 
-func migrate(db *sql.DB) error {
+func migrate(db *sql.DB) (err error) {
 	gooseMu.Lock()
 	defer gooseMu.Unlock()
 	goose.SetBaseFS(migrationsFS)
@@ -398,9 +398,16 @@ func migrate(db *sql.DB) error {
 	for i, migration := range migrations {
 		versions[i] = migration.Version
 	}
-	if err := prepareTimestampSchemaMigration(context.Background(), db, versions); err != nil {
+	ctx := context.Background()
+	triggers, err := prepareTimestampSchemaMigration(ctx, db, versions)
+	if err != nil {
 		return fmt.Errorf("prepare timestamp tracking for schema migrations: %w", err)
 	}
+	defer func() {
+		if restoreErr := restoreTimestampProgressTriggers(ctx, db, triggers); restoreErr != nil {
+			err = errors.Join(err, fmt.Errorf("restore timestamp repair triggers: %w", restoreErr))
+		}
+	}()
 	if err := repairRenumberedAgentInstallJobsMigrationHistory(db); err != nil {
 		return fmt.Errorf("repair renumbered agent-install-jobs migration history: %w", err)
 	}

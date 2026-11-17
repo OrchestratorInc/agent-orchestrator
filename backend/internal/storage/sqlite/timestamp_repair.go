@@ -85,11 +85,7 @@ func runTimestampRepairState(ctx context.Context, db, reader *sql.DB, fence bool
 		for j, column := range group {
 			names[j] = column.column
 		}
-		var schema string
-		if err := reader.QueryRowContext(ctx, `SELECT sql FROM sqlite_master WHERE type='table' AND name=?`, table).Scan(&schema); err != nil {
-			return result, err
-		}
-		signature := "v1\x00" + strings.Join(names, "\x00") + "\x00" + schema
+		signature := "v2\x00" + strings.Join(names, "\x00")
 		generation, completed, err := beginTimestampProgress(ctx, db, table, signature)
 		if err != nil {
 			return result, err

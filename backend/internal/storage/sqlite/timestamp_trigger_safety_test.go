@@ -56,7 +56,8 @@ func TestTimestampSchemaMigrationCanDropTrackedColumns(t *testing.T) {
 		t.Run(map[bool]string{false: "one timestamp remains", true: "last timestamp removed"}[last], func(t *testing.T) {
 			db := timestampTriggerDB(t)
 			ctx := context.Background()
-			if err := prepareTimestampSchemaMigration(ctx, db, []int64{1, 2}); err != nil {
+			triggers, err := prepareTimestampSchemaMigration(ctx, db, []int64{1, 2})
+			if err != nil {
 				t.Fatal(err)
 			}
 			if _, err := db.Exec(`ALTER TABLE repair_target DROP COLUMN at`); err != nil {
@@ -66,6 +67,9 @@ func TestTimestampSchemaMigrationCanDropTrackedColumns(t *testing.T) {
 				if _, err := db.Exec(`ALTER TABLE repair_target DROP COLUMN other_at`); err != nil {
 					t.Fatal(err)
 				}
+			}
+			if err := restoreTimestampProgressTriggers(ctx, db, triggers); err != nil {
+				t.Fatal(err)
 			}
 			columns, err := timestampColumns(ctx, db)
 			if err != nil {
@@ -95,7 +99,18 @@ func TestTimestampCurrentSchemaKeepsCompletion(t *testing.T) {
 	if err := finishTimestampProgress(ctx, db, "repair_target", "test", generation, false); err != nil {
 		t.Fatal(err)
 	}
-	if err := prepareTimestampSchemaMigration(ctx, db, []int64{1}); err != nil {
+	var before, after int
+	if err := db.QueryRow(`PRAGMA schema_version`).Scan(&before); err != nil {
+		t.Fatal(err)
+	}
+	previous, err := prepareTimestampSchemaMigration(ctx, db, []int64{1})
+	if err != nil || len(previous) != 0 {
+		t.Fatalf("ordinary open suspended triggers: triggers=%d err=%v", len(previous), err)
+	}
+	if err := db.QueryRow(`PRAGMA schema_version`).Scan(&after); err != nil || before != after {
+		t.Fatalf("ordinary open rewrote trigger DDL: schema_version=%d -> %d err=%v", before, after, err)
+	}
+	if err := restoreTimestampProgressTriggers(ctx, db, previous); err != nil {
 		t.Fatal(err)
 	}
 	_, complete, err := beginTimestampProgress(ctx, db, "repair_target", "test")
@@ -122,7 +137,14 @@ func TestTimestampMissingOlderMigrationInvalidatesCompletion(t *testing.T) {
 		t.Fatal(err)
 	}
 	// Matching the highest receipt is insufficient with goose.WithAllowMissing.
-	if err := prepareTimestampSchemaMigration(ctx, db, []int64{1, 2, 3}); err != nil {
+	triggers, err := prepareTimestampSchemaMigration(ctx, db, []int64{1, 2, 3})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.Exec(`INSERT INTO repair_target(id,at) VALUES(1,CURRENT_TIMESTAMP)`); err != nil {
+		t.Fatal(err)
+	}
+	if err := restoreTimestampProgressTriggers(ctx, db, triggers); err != nil {
 		t.Fatal(err)
 	}
 	var complete bool

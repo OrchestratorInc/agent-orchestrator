@@ -5,6 +5,7 @@ import (
 	"crypto/sha256"
 	"database/sql"
 	"fmt"
+	"maps"
 	"strings"
 )
 
@@ -23,25 +24,11 @@ func prepareTimestampProgress(ctx context.Context, db *sql.DB, columns []timesta
 	if _, err := db.ExecContext(ctx, up); err != nil {
 		return err
 	}
-	rows, err := db.QueryContext(ctx, `SELECT name,sql FROM sqlite_master WHERE type='trigger' AND name GLOB 'ao_timestamp_*'`)
+	existing, err := timestampProgressTriggerDefinitions(ctx, db)
 	if err != nil {
 		return err
 	}
-	defer func() { _ = rows.Close() }()
-	existing := map[string]string{}
-	for rows.Next() {
-		var name, text string
-		if err := rows.Scan(&name, &text); err != nil {
-			return err
-		}
-		existing[name] = text
-	}
-	if err := rows.Err(); err != nil {
-		return err
-	}
-	if err := rows.Close(); err != nil {
-		return err
-	}
+	orphaned := maps.Clone(existing)
 	for i := 0; i < len(columns); {
 		end := i + 1
 		for end < len(columns) && columns[end].table == columns[i].table {
@@ -53,6 +40,7 @@ func prepareTimestampProgress(ctx context.Context, db *sql.DB, columns []timesta
 		triggers := timestampProgressTriggers(group)
 		changed := false
 		for name, text := range triggers {
+			delete(orphaned, name)
 			if existing[name] != text {
 				changed = true
 			}
@@ -85,7 +73,7 @@ func prepareTimestampProgress(ctx context.Context, db *sql.DB, columns []timesta
 			return err
 		}
 	}
-	return nil
+	return dropTimestampProgressTriggers(ctx, db, orphaned)
 }
 
 func timestampProgressTriggers(columns []timestampColumn) map[string]string {
