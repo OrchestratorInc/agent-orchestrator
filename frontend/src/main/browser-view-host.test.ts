@@ -2850,6 +2850,9 @@ describe("browser profile partitions and replacement", () => {
 
 		expect(views[1]!.webContents.session).toBe(views[0]!.webContents.session);
 		expect(webRequest.onCompleted).toHaveBeenCalledTimes(1);
+		// Each worker's agent works in its first tab: its failures are the agent's.
+		await host.execute("worker-1", "tabs");
+		await host.execute("worker-2", "tabs");
 		const onCompleted = webRequest.onCompleted.mock.calls[0]?.[1] as
 			| ((details: {
 					webContentsId: number;
@@ -6921,6 +6924,13 @@ describe("agent and person tabs", () => {
 		expect(await host.execute("sess-1", "screenshot")).toMatchObject({ target: { tabId: "t1" } });
 		expect(views[0].setVisible.mock.calls.map(([visible]) => visible)).toEqual([true, false]);
 		expect(views[1].setVisible).not.toHaveBeenCalled();
+	});
+
+	it("keeps a page error from a tab nobody has used yet out of the agent's diagnostics", async () => {
+		const { host, views } = await open();
+		views[0].webContents.emitConsoleMessage(3, "unused tab failed");
+		await host.execute("sess-1", "tabs");
+		expect(JSON.stringify(await host.execute("sess-1", "errors"))).not.toContain("unused tab failed");
 	});
 
 	it("keeps the person's page errors out of the agent's diagnostics", async () => {

@@ -1235,7 +1235,11 @@ agent's own current tab, whichever tab the person has in front, and the
 automation runtime is only shown the agent's tabs. A tab the person opens
 (the new-tab button, a shortcut, or a link they click) is theirs: the agent
 cannot list, select, or close it. A session's first tab belongs to whichever
-of them uses it first, and previews load in the agent's tab.
+of them uses it first, and previews load in the agent's tab. This decides
+which tabs the agent's commands can target; it is not a data boundary. All of
+a session's tabs share one browser profile, so cookies, local storage,
+IndexedDB, and service workers are shared, and an agent page on the same site
+as a person's tab sees the same sign-in state.
 
 Temporary browser profiles isolate sessions by default. Named persistent profiles can be reused across sessions, sharing their cookies/storage deliberately. Browser import reads supported source profiles without modifying them and stores results under AO data.
 

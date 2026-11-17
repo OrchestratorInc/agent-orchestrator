@@ -1379,8 +1379,9 @@ export function createBrowserViewHost(
       "console-message",
       (_event, level, message, line, sourceId) => {
         if (message.startsWith(REMOTE_TAB_REPORT)) return onRemoteTabReport?.(message);
-        // The agent's `errors` reports its own pages, not the person's.
-        if (level < 3 || entry.owner === "person") return;
+        // The agent's `errors` reports its own pages only (agentTabsOf), not
+        // the person's or a tab nobody has used yet.
+        if (level < 3 || entry.owner !== "agent") return;
         const location = sourceId
           ? `${sanitizeBrowserURL(sourceId)}${typeof line === "number" ? `:${line}` : ""}`
           : "";
@@ -1749,8 +1750,8 @@ export function createBrowserViewHost(
     ): BrowserSessionEntry | undefined => {
       if (typeof webContentsId !== "number") return undefined;
       const tab = tabsByWebContentsId.get(webContentsId);
-      // The person's own tabs are not the agent's to diagnose.
-      if (!tab || tab.owner === "person" || tab.view.webContents.session !== electronSession)
+      // Only the agent's own tabs are the agent's to diagnose (agentTabsOf).
+      if (!tab || tab.owner !== "agent" || tab.view.webContents.session !== electronSession)
         return undefined;
       const owner = entries.get(tab.state.viewId);
       if (
