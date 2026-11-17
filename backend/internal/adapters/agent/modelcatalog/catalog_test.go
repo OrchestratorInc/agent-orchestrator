@@ -1492,6 +1492,8 @@ func TestCatalogFingerprintKeepsTheExecutableOnlyValueForConfiglessAgents(t *tes
 }
 
 func TestTauCatalogFingerprintTracksProjectHome(t *testing.T) {
+	// An inherited TAU_HOME would override both HOME values below.
+	t.Setenv("TAU_HOME", "")
 	homeA := t.TempDir()
 	homeB := t.TempDir()
 	for home, provider := range map[string]string{homeA: "provider-a", homeB: "provider-b"} {

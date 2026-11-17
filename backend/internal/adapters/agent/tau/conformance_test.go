@@ -315,6 +315,8 @@ type conformanceTUI struct {
 	terminal *os.File
 	command  *exec.Cmd
 	done     chan struct{}
+	// readDone closes once terminal output stops, so assertions see all of it.
+	readDone chan struct{}
 	mu       sync.Mutex
 	buffer   bytes.Buffer
 	stopOnce sync.Once
@@ -328,8 +330,8 @@ func startConformanceTUI(t *testing.T, workspace string, env, argv []string) *co
 	if err != nil {
 		t.Fatal(err)
 	}
-	process := &conformanceTUI{terminal: terminal, command: command, done: make(chan struct{})}
-	go func() { _, _ = io.Copy(process, terminal) }()
+	process := &conformanceTUI{terminal: terminal, command: command, done: make(chan struct{}), readDone: make(chan struct{})}
+	go func() { _, _ = io.Copy(process, terminal); close(process.readDone) }()
 	go func() { _ = command.Wait(); close(process.done) }()
 	t.Cleanup(process.stop)
 	return process
@@ -354,6 +356,12 @@ func (p *conformanceTUI) stop() {
 	p.stopOnce.Do(func() {
 		_ = syscall.Kill(-p.command.Process.Pid, syscall.SIGKILL)
 		<-p.done
+		// The process has exited; drain its pending output before closing
+		// the terminal, bounded in case the reader never sees EOF.
+		select {
+		case <-p.readDone:
+		case <-time.After(5 * time.Second):
+		}
 		_ = p.terminal.Close()
 	})
 }
