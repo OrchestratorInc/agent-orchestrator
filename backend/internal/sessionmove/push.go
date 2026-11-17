@@ -99,17 +99,24 @@ func CheckPush(ctx context.Context, worktree string, c Capture, maxFileBytes int
 // a commit the submodule's remote does not have. A push sends only this
 // repository, so the target could not check those commits out.
 func unpushedSubmodules(ctx context.Context, worktree, tip string) ([]string, error) {
-	out, err := runGit(ctx, worktree, nil, nil, "log", "--format=", "--raw", "--no-abbrev", "--no-renames", tip, "--not", "--remotes=origin")
+	// -z keeps paths unquoted: each entry is ":<modes> <ids> <status>" then the path.
+	out, err := runGit(ctx, worktree, nil, nil, "log", "--format=", "--raw", "-z", "--no-abbrev", "--no-renames", tip, "--not", "--remotes=origin")
 	if err != nil {
 		return nil, err
 	}
 	// Newest first, so the first gitlink seen for a path is the one the tip has.
 	pointers := map[string]string{}
 	var paths []string
-	for _, line := range strings.Split(out, "\n") {
-		meta, path, ok := strings.Cut(line, "\t")
+	tokens := strings.Split(out, "\x00")
+	for i := 0; i+1 < len(tokens); i++ {
+		meta := strings.TrimLeft(tokens[i], "\n")
+		if !strings.HasPrefix(meta, ":") {
+			continue
+		}
+		path := tokens[i+1]
+		i++
 		fields := strings.Fields(meta)
-		if !ok || len(fields) < 5 || fields[1] != "160000" || fields[4] == "D" {
+		if len(fields) < 5 || fields[1] != "160000" || fields[4] == "D" {
 			continue
 		}
 		if _, seen := pointers[path]; !seen {

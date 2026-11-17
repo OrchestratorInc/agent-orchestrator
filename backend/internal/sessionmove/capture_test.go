@@ -104,6 +104,13 @@ func TestCaptureSubmodules(t *testing.T) {
 // A push sends only this repository, so a submodule commit its remote lacks
 // would leave the target with a submodule it cannot check out.
 func TestCheckPushRefusesAnUnpublishedSubmoduleCommit(t *testing.T) {
+	// Git quotes a non-ASCII path unless asked not to.
+	for _, path := range []string{"vendor/lib", "vendor/café"} {
+		t.Run(path, func(t *testing.T) { checkUnpublishedSubmodule(t, path) })
+	}
+}
+
+func checkUnpublishedSubmodule(t *testing.T, path string) {
 	f := newFixture(t)
 	sub := filepath.Join(f.tmp, "sub.git")
 	g(t, f.tmp, "init", "-q", "--bare", sub)
@@ -113,10 +120,10 @@ func TestCheckPushRefusesAnUnpublishedSubmoduleCommit(t *testing.T) {
 	g(t, seed, "add", "-A")
 	g(t, seed, "commit", "-q", "-m", "v1")
 	g(t, seed, "push", "-q", sub, "main")
-	g(t, f.src, "submodule", "add", "-q", sub, "vendor/lib")
+	g(t, f.src, "submodule", "add", "-q", sub, path)
 	g(t, f.src, "commit", "-q", "-m", "add submodule")
 	g(t, f.src, "push", "-q", "origin", "feat/x")
-	lib := filepath.Join(f.src, "vendor/lib")
+	lib := filepath.Join(f.src, path)
 	writeFile(t, filepath.Join(lib, "lib.txt"), "v2\n", 0o644)
 	g(t, lib, "commit", "-q", "-am", "v2")
 
@@ -124,7 +131,7 @@ func TestCheckPushRefusesAnUnpublishedSubmoduleCommit(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := CheckPush(t.Context(), f.src, c, GitHubFileLimit); !errors.Is(err, ErrSubmoduleUnpushed) || !strings.Contains(err.Error(), "vendor/lib") {
+	if err := CheckPush(t.Context(), f.src, c, GitHubFileLimit); !errors.Is(err, ErrSubmoduleUnpushed) || !strings.Contains(err.Error(), path) {
 		t.Fatalf("unpublished submodule commit: err = %v", err)
 	}
 	g(t, lib, "push", "-q", "origin", "HEAD:main")
