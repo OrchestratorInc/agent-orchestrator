@@ -28,6 +28,10 @@ const OrchestratorBusyRetry = 30 * time.Second
 // report batch before transitioning it to a terminal failed state.
 const DefaultMaxDeliveryAttempts = 10
 
+// DefaultReportExpiry is the time-based backstop after which an undelivered
+// report batch transitions to a terminal failed state.
+const DefaultReportExpiry = 24 * time.Hour
+
 // ErrReportDeliveryModeUnsupported reports a target without semantic delivery.
 var ErrReportDeliveryModeUnsupported = errors.New("report delivery requires a semantic conversation")
 
@@ -35,6 +39,17 @@ var ErrReportDeliveryModeUnsupported = errors.New("report delivery requires a se
 // take the batch right now — its composer holds the operator's unsent draft —
 // and should be retried later rather than immediately.
 var ErrOrchestratorBusy = errors.New("orchestrator cannot take reports right now")
+
+// ErrUnacknowledgedDelivery reports a delivery where the prompt was submitted to
+// the agent runtime, but acceptance confirmation was not observed.
+var ErrUnacknowledgedDelivery = errors.New("prompt submission was not observed")
+
+func isUnacknowledged(err error) bool {
+	if err == nil {
+		return false
+	}
+	return errors.Is(err, ErrUnacknowledgedDelivery) || strings.Contains(err.Error(), "prompt submission was not observed")
+}
 
 // DeliveryStore is the durable report scheduling and routing boundary.
 type DeliveryStore interface {
@@ -64,6 +79,8 @@ type Coordinator struct {
 	retryDelay          time.Duration
 	maxDeliveryAttempts int
 	expiry              time.Duration
+	onBatchFailed       func(context.Context, PreparedBatch, error)
+	undeliveredCount    map[domain.ProjectID]int
 	wake                chan struct{}
 	mu                  sync.Mutex
 }
@@ -77,6 +94,7 @@ type CoordinatorDeps struct {
 	RetryDelay          time.Duration
 	MaxDeliveryAttempts int
 	Expiry              time.Duration
+	OnBatchFailed       func(context.Context, PreparedBatch, error)
 }
 
 // NewCoordinator constructs an idle report delivery coordinator.
@@ -93,6 +111,11 @@ func NewCoordinator(d CoordinatorDeps) *Coordinator {
 	if d.MaxDeliveryAttempts <= 0 {
 		d.MaxDeliveryAttempts = DefaultMaxDeliveryAttempts
 	}
+	if d.Expiry == 0 {
+		d.Expiry = DefaultReportExpiry
+	} else if d.Expiry < 0 {
+		d.Expiry = 0
+	}
 	return &Coordinator{
 		store:               d.Store,
 		delivery:            d.Delivery,
@@ -101,6 +124,8 @@ func NewCoordinator(d CoordinatorDeps) *Coordinator {
 		retryDelay:          d.RetryDelay,
 		maxDeliveryAttempts: d.MaxDeliveryAttempts,
 		expiry:              d.Expiry,
+		onBatchFailed:       d.OnBatchFailed,
+		undeliveredCount:    make(map[domain.ProjectID]int),
 		wake:                make(chan struct{}, 1),
 	}
 }
@@ -207,8 +232,8 @@ func (c *Coordinator) deliverProject(ctx context.Context, projectID domain.Proje
 			}
 		}
 		if !interrupted && !batch.hasState(domain.ReportNeedsInput) {
-			if c.attemptsExceeded(batch) {
-				return c.fail(ctx, batch, errors.New("repeated stuck report exceeded delivery attempts"))
+			if c.isExpired(batch) {
+				return c.fail(ctx, batch, errors.New("repeated stuck report expired"))
 			}
 			_, deferErr := c.store.DeferReportBatch(ctx, batch.ProjectID, batch.Token, nextInterrupt, "repeated stuck report coalesced inside interrupt window")
 			return deferErr
@@ -216,7 +241,7 @@ func (c *Coordinator) deliverProject(ctx context.Context, projectID domain.Proje
 	}
 	if err := c.delivery.Submit(ctx, target.ID, batch.Render(), batch.IdempotencyKey()); err != nil {
 		if errors.Is(err, ErrOrchestratorBusy) {
-			if c.attemptsExceeded(batch) {
+			if c.isExpired(batch) {
 				return c.fail(ctx, batch, err)
 			}
 			// Released, the batch would stay the earliest due and every retry would
@@ -227,6 +252,9 @@ func (c *Coordinator) deliverProject(ctx context.Context, projectID domain.Proje
 		return c.retryLater(ctx, batch, err)
 	}
 	_, err = c.store.AcknowledgeReportBatch(ctx, batch.ProjectID, batch.Token, c.now().UTC())
+	if err == nil {
+		delete(c.undeliveredCount, batch.ProjectID)
+	}
 	return err
 }
 
@@ -249,10 +277,11 @@ func (c *Coordinator) activeOrchestrator(ctx context.Context, projectID domain.P
 
 // PreparedBatch is a token-fenced durable batch awaiting acceptance.
 type PreparedBatch struct {
-	ProjectID domain.ProjectID
-	Token     string
-	ID        string
-	Reports   []domain.ReportRecord
+	ProjectID          domain.ProjectID
+	Token              string
+	ID                 string
+	Reports            []domain.ReportRecord
+	UndeliveredReports int
 }
 
 func (c *Coordinator) claim(ctx context.Context, projectID domain.ProjectID) (PreparedBatch, error) {
@@ -268,7 +297,14 @@ func (c *Coordinator) claim(ctx context.Context, projectID domain.ProjectID) (Pr
 	if len(reports) > 0 {
 		batchID = reports[0].DeliveryBatchID
 	}
-	return PreparedBatch{ProjectID: projectID, Token: token, ID: batchID, Reports: reports}, err
+	undelivered := c.undeliveredCount[projectID]
+	return PreparedBatch{
+		ProjectID:          projectID,
+		Token:              token,
+		ID:                 batchID,
+		Reports:            reports,
+		UndeliveredReports: undelivered,
+	}, err
 }
 
 // PreparePiggyback claims pending reports for the active Chat orchestrator.
@@ -284,6 +320,8 @@ func (c *Coordinator) PreparePiggyback(ctx context.Context, target domain.Sessio
 	if rec.Kind != domain.KindOrchestrator || rec.IsTerminated || domain.NormalizeSessionMode(rec.Mode) != domain.SessionModeChat {
 		return PreparedBatch{}, nil
 	}
+	c.mu.Lock()
+	defer c.mu.Unlock()
 	return c.claim(ctx, rec.ProjectID)
 }
 
@@ -293,6 +331,11 @@ func (c *Coordinator) AcceptPiggyback(ctx context.Context, batch PreparedBatch) 
 		return nil
 	}
 	_, err := c.store.AcknowledgeReportBatch(ctx, batch.ProjectID, batch.Token, c.now().UTC())
+	if err == nil {
+		c.mu.Lock()
+		delete(c.undeliveredCount, batch.ProjectID)
+		c.mu.Unlock()
+	}
 	return err
 }
 
@@ -301,11 +344,13 @@ func (c *Coordinator) ReleasePiggyback(ctx context.Context, batch PreparedBatch,
 	if len(batch.Reports) == 0 {
 		return nil
 	}
+	c.mu.Lock()
+	defer c.mu.Unlock()
 	return c.release(ctx, batch, cause)
 }
 
 func (c *Coordinator) release(ctx context.Context, batch PreparedBatch, cause error) error {
-	if c.attemptsExceeded(batch) {
+	if c.isExpired(batch) {
 		return c.fail(ctx, batch, cause)
 	}
 	_, releaseErr := c.store.ReleaseReportBatch(ctx, batch.ProjectID, batch.Token, c.now().UTC(), cause.Error())
@@ -319,17 +364,40 @@ func (c *Coordinator) release(ctx context.Context, batch PreparedBatch, cause er
 // due. Schedule selection takes the earliest pending report across projects,
 // so an orchestrator that keeps refusing must not hold that place.
 func (c *Coordinator) retryLater(ctx context.Context, batch PreparedBatch, cause error) error {
-	if c.attemptsExceeded(batch) {
+	if c.isExpired(batch) {
 		return c.fail(ctx, batch, cause)
 	}
-	_, deferErr := c.store.DeferReportBatch(ctx, batch.ProjectID, batch.Token, c.now().UTC().Add(c.retryDelay), cause.Error())
+	if isUnacknowledged(cause) && c.attemptsExceeded(batch) {
+		return c.fail(ctx, batch, cause)
+	}
+	delay := c.backoffDelay(batch)
+	_, deferErr := c.store.DeferReportBatch(ctx, batch.ProjectID, batch.Token, c.now().UTC().Add(delay), cause.Error())
 	if deferErr != nil {
 		return errors.Join(cause, deferErr)
 	}
 	return cause
 }
 
+// backoffDelay calculates exponential backoff for transient delivery failures,
+// growing through 1x, 2x, 4x, 8x, 16x, 32x and capped at 64x of RetryDelay.
+func (c *Coordinator) backoffDelay(batch PreparedBatch) time.Duration {
+	attempts := batch.maxAttempts()
+	if attempts <= 1 {
+		return c.retryDelay
+	}
+	shift := attempts - 1
+	if shift > 6 {
+		shift = 6
+	}
+	factor := time.Duration(1 << shift)
+	return c.retryDelay * factor
+}
+
 func (c *Coordinator) fail(ctx context.Context, batch PreparedBatch, cause error) error {
+	c.undeliveredCount[batch.ProjectID] += len(batch.Reports)
+	if c.onBatchFailed != nil {
+		c.onBatchFailed(ctx, batch, cause)
+	}
 	_, failErr := c.store.FailReportBatch(ctx, batch.ProjectID, batch.Token, c.now().UTC(), cause.Error())
 	if failErr != nil {
 		return errors.Join(cause, failErr)
@@ -337,20 +405,39 @@ func (c *Coordinator) fail(ctx context.Context, batch PreparedBatch, cause error
 	return cause
 }
 
-func (c *Coordinator) attemptsExceeded(batch PreparedBatch) bool {
-	if c == nil {
+func (c *Coordinator) isExpired(batch PreparedBatch) bool {
+	if c == nil || c.expiry <= 0 {
 		return false
 	}
 	now := c.now().UTC()
 	for _, report := range batch.Reports {
-		if c.maxDeliveryAttempts > 0 && report.DeliveryAttempts >= int64(c.maxDeliveryAttempts) {
-			return true
-		}
-		if c.expiry > 0 && !report.CreatedAt.IsZero() && now.Sub(report.CreatedAt) >= c.expiry {
+		if !report.CreatedAt.IsZero() && now.Sub(report.CreatedAt) >= c.expiry {
 			return true
 		}
 	}
 	return false
+}
+
+func (c *Coordinator) attemptsExceeded(batch PreparedBatch) bool {
+	if c == nil || c.maxDeliveryAttempts <= 0 {
+		return false
+	}
+	for _, report := range batch.Reports {
+		if report.DeliveryAttempts >= int64(c.maxDeliveryAttempts) {
+			return true
+		}
+	}
+	return false
+}
+
+func (b PreparedBatch) maxAttempts() int64 {
+	var maxAttempts int64
+	for _, report := range b.Reports {
+		if report.DeliveryAttempts > maxAttempts {
+			maxAttempts = report.DeliveryAttempts
+		}
+	}
+	return maxAttempts
 }
 
 const (
@@ -405,6 +492,13 @@ func (b PreparedBatch) Render() string {
 		}
 		for _, output := range report.Outputs {
 			fmt.Fprintf(&out, "\n%s: %s", output.Kind, output.Reference)
+		}
+	}
+	if b.UndeliveredReports > 0 {
+		if b.UndeliveredReports == 1 {
+			out.WriteString("\n\nNote: 1 report could not be delivered.")
+		} else {
+			fmt.Fprintf(&out, "\n\nNote: %d reports could not be delivered.", b.UndeliveredReports)
 		}
 	}
 	return out.String()
