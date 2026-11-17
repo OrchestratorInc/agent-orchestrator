@@ -538,6 +538,49 @@ function applyLiveConversationPage(queryClient: QueryClient, key: QueryKey, late
 	});
 }
 
+/**
+ * Refresh an open local chat the way a remote one refreshes: read only the rows
+ * above its floor and merge them into the live page, instead of refetching every
+ * loaded page on each event of a streaming turn. Answers false, having written
+ * nothing, when the tail cannot replace those rows (a turn started or settled, an
+ * undo, a branch switch, compaction, a read that failed) or when anything wrote
+ * the live page during the read; the caller then refetches the chat as before.
+ */
+export async function refreshLocalConversationTail(queryClient: QueryClient, sessionId: string): Promise<boolean> {
+	// The open read of a chat that changed while it was closed writes a whole live
+	// page when it lands, possibly one read before this event. A tail merged first
+	// would be overwritten by it, while a full reload started now lands after it.
+	if (localConversationRefreshes.get(queryClient)?.has(sessionId)) return false;
+	const key = conversationQueryKey(sessionId);
+	const loaded = queryClient.getQueryData<InfiniteData<ConversationSnapshot>>(key)?.pages;
+	const prior = loaded?.[0];
+	const floor = prior ? remoteConversationFloor(prior) : 0;
+	if (!prior || floor < 1) return false;
+	// The tail holds only rows above the live page's floor. A turn long enough to
+	// span pages, or an unsettled row on an older loaded page, can still change
+	// below it, so such a chat reads every page as before.
+	if (loaded.length > 1 && remoteConversationFloor(mergeConversationPages(loaded) ?? prior) < prior.oldestSequence - 1) return false;
+	let wire: WireSnapshot;
+	try {
+		// The live page's size: the rows above its floor fit in it, and a tail that
+		// does not reach the floor is refused below.
+		wire = await fetchConversationWire(sessionId, undefined, { afterSequence: floor, limit: LOCAL_INITIAL_PAGE_SIZE });
+	} catch {
+		return false;
+	}
+	const current = queryClient.getQueryData<InfiniteData<ConversationSnapshot>>(key);
+	// A refetch or an optimistic edit that landed during the read is newer than
+	// this tail's view of the page, so the tail must not overwrite it. A chat
+	// marked stale during the read (it closed and an event arrived) keeps the
+	// mark: writing data would clear it, and its next open would skip the read
+	// that catches it up.
+	if (wire.afterSequence !== floor || current?.pages[0] !== prior || queryClient.getQueryState(key)?.isInvalidated) return false;
+	const merged = mergeRemoteConversationTail(prior, toSnapshot(wire), floor);
+	if (!merged) return false;
+	queryClient.setQueryData<InfiniteData<ConversationSnapshot>>(key, { ...current, pages: [merged, ...current.pages.slice(1)] });
+	return true;
+}
+
 const remoteConversationRefreshes = new WeakMap<QueryClient, Map<string, { dirty: boolean }>>();
 
 /**
