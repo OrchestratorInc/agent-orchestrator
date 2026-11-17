@@ -94,7 +94,7 @@ import type { ArtifactOpenRequest } from "./SessionArtifactsView";
 import { SessionTopbarActions } from "./SessionTopbarActions";
 import { captureTopbarAction } from "../lib/topbar-telemetry";
 import { PageTopbar, PageTopbarTrailingAction } from "./PageTopbar";
-import { SessionTopbarHost } from "./SessionTopbarPortal";
+import { SessionTopbarHost, SessionTopbarScope } from "./SessionTopbarPortal";
 import { Button } from "./ui/button";
 import { Tooltip, TooltipContent, TooltipTrigger } from "./ui/tooltip";
 import { useAgentAccountLabel } from "../hooks/useAgentAccounts";
@@ -2983,6 +2983,7 @@ export function SessionView({ sessionId, cloudOrgId, projectId, hostId }: Sessio
 							    chat is dropped when it leaves Chat. */}
 							<KeepRecentAlive activeKey={uiSessionId} show={Boolean(showChatSurface && !session?.cloud)}>
 							{showChatSurface && !session?.cloud ? (
+								<SessionTopbarScope>
 								<SessionChatSurface
 									sideChatContainer={sideChatContainer}
 									onSideChatsChange={onSideChatsChange}
@@ -3049,6 +3050,7 @@ export function SessionView({ sessionId, cloudOrgId, projectId, hostId }: Sessio
          }}
 									onOpenLinkInBrowser={browserView.openLink}
 								/>
+								</SessionTopbarScope>
 							) : null}
 							</KeepRecentAlive>
 							{!showChatSurface ? (
