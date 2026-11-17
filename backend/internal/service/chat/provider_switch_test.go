@@ -925,3 +925,25 @@ func TestSwitchFromAnExitedAgentStartsItToHandOver(t *testing.T) {
 		t.Fatalf("resumed = %v, want the exited session resumed once", resumed)
 	}
 }
+
+func TestSwitchToTheRunningAgentRefusesAModelItsChatDoesNotOffer(t *testing.T) {
+	h, _, driver := newEditHarness(t, false)
+	ctx := context.Background()
+	driver.target = func(conv *fakeConversation) ports.ChatConversation { return liveModelConversation{conv} }
+	if err := h.svc.SwitchProvider(ctx, testSession, domain.ProviderSwitchRequest{TargetHarness: domain.HarnessClaudeCode}); err != nil {
+		t.Fatalf("SwitchProvider: %v", err)
+	}
+	var refusal *domain.ProviderSwitchError
+	_, err := h.svc.SwitchProviderReport(ctx, testSession, domain.ProviderSwitchRequest{TargetHarness: domain.HarnessClaudeCode, Model: "claude-haiku-5-5"})
+	if !errors.As(err, &refusal) || refusal.Kind != domain.ProviderSwitchRefusalUnsupported || !strings.Contains(err.Error(), "opus, sonnet") {
+		t.Fatalf("unoffered model = %v, want a refusal listing the chat's models", err)
+	}
+	result, err := h.svc.SwitchProviderReport(ctx, testSession, domain.ProviderSwitchRequest{TargetHarness: domain.HarnessClaudeCode, Model: "SONNET"})
+	if err != nil || !result.SettingsUpdated {
+		t.Fatalf("offered model = %+v, %v; want it applied", result, err)
+	}
+	controller, err := h.svc.Controller(testSession)
+	if err != nil || controller.Settings().Model != "sonnet" {
+		t.Fatalf("model = %q, %v; want the chat's own value", controller.Settings().Model, err)
+	}
+}

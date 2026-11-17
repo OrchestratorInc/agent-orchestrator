@@ -118,6 +118,20 @@ func (s *Service) applyPicksToActiveTarget(ctx context.Context, id domain.Sessio
 		return false, err
 	}
 	defer release()
+	if choices := liveModelChoices(ctx, controller); request.Model != "" && len(choices) > 0 {
+		i := slices.IndexFunc(choices, func(choice ports.ChatConfigOptionChoice) bool { return strings.EqualFold(choice.Value, request.Model) })
+		if i < 0 {
+			offered := make([]string, 0, len(choices))
+			for _, choice := range choices {
+				offered = append(offered, choice.Value)
+			}
+			return false, &domain.ProviderSwitchError{
+				Kind:   domain.ProviderSwitchRefusalUnsupported,
+				Detail: fmt.Sprintf("%s is not one of this chat's models: %s", request.Model, strings.Join(offered, ", ")),
+			}
+		}
+		request.Model = choices[i].Value
+	}
 	current := controller.Settings()
 	picked := current
 	picked.Model = cmp.Or(request.Model, current.Model)
@@ -136,6 +150,23 @@ func (s *Service) applyPicksToActiveTarget(ctx context.Context, id domain.Sessio
 		}
 	}
 	return true, nil
+}
+
+func liveModelChoices(ctx context.Context, controller *Controller) []ports.ChatConfigOptionChoice {
+	configurer, ok := controller.conv.(ports.ChatConfigOptionController)
+	if !ok {
+		return nil
+	}
+	options, err := configurer.ListConfigOptions(ctx)
+	if err != nil {
+		return nil
+	}
+	for _, option := range options {
+		if option.ID == "model" {
+			return option.Choices
+		}
+	}
+	return nil
 }
 
 // lockProviderSwitch admits one provider switch per session at a time.
