@@ -411,7 +411,9 @@ paths:
         artifact_share_limit_reached for a new or restored document over the
         free plan's link limit. Paid plans have no link limit. An older
         control plane refuses an update with another name with 409
-        artifact_share_name_changed.
+        artifact_share_name_changed. The images and other files an HTML
+        page refers to by relative path are uploaded under this upload
+        with createArtifactShareFileUpload and listed when finalizing.
       requestBody:
         required: true
         content:
@@ -467,6 +469,65 @@ paths:
           description: The upload was cancelled.
         default:
           $ref: "#/components/responses/Error"
+  /api/cloud/v1/me/artifact-shares/uploads/files:
+    post:
+      operationId: createArtifactShareFileUpload
+      tags: [Artifacts]
+      description: >-
+        Starts uploading one file the page being uploaded (uploadToken, from
+        createArtifactShareUpload) refers to by relative path, such as an
+        image. The link serves it at path under its root, so
+        <img src="images/a.png"> in the page loads the file whose path is
+        images/a.png. Any file type but video may be included, and there is
+        no file size limit. Its parts go as the page's do
+        (presignArtifactShareParts, PUT each, abortArtifactShareUpload to
+        cancel); finish it with completeArtifactShareFileUpload. 400
+        invalid_request for a path that is absolute, has an empty, "." or
+        ".." segment, a backslash or a control character, or is reserved
+        (raw, or under _ao/ or a first segment starting with ~); 429
+        artifact_share_rate_limited past the hourly allowance. A control
+        plane that predates included files answers 404. 415
+        artifact_share_type_unsupported for video (.mp4, .m4v, .mov, .webm,
+        .ogv, .avi, .mkv), as for a link's own file.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/ArtifactShareFileUploadInput"
+      responses:
+        "201":
+          description: The file's upload, ready for its parts.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ArtifactShareUpload"
+        default:
+          $ref: "#/components/responses/Error"
+  /api/cloud/v1/me/artifact-shares/uploads/files/complete:
+    post:
+      operationId: completeArtifactShareFileUpload
+      tags: [Artifacts]
+      description: >-
+        Finishes an included file's upload from every one of its parts, in
+        order, and answers the fileToken finalizeArtifactShare lists. Errors
+        are finalizeArtifactShare's. A file no finalize lists before
+        expiresAt is deleted.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/ArtifactShareFileCompleteInput"
+      responses:
+        "200":
+          description: The finished file.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ArtifactShareFileUploaded"
+        default:
+          $ref: "#/components/responses/Error"
   /api/cloud/v1/me/artifact-shares/finalize:
     post:
       operationId: finalizeArtifactShare
@@ -479,7 +540,10 @@ paths:
         400 artifact_share_parts_invalid when the parts do not make up the
         upload; 409 artifact_share_upload_gone when it was already finalized,
         cancelled or expired (start again); 400 artifact_share_upload_invalid
-        for a token that is not this user's or has expired.
+        for a token that is not this user's or has expired, or a fileToken
+        that is not one of this upload's link; 400
+        artifact_share_too_many_files for more than 200 files; 409
+        artifact_share_upload_gone when an included file's upload expired.
       requestBody:
         required: true
         content:
@@ -5206,6 +5270,10 @@ components:
           type: string
         limits:
           $ref: "#/components/schemas/PlanLimits"
+        trialDays:
+          type: integer
+          minimum: 1
+          description: Days of free trial that a Checkout of this plan starts. Present only while the organization can still start a free trial.
     PutPushDeviceInput:
       type: object
       additionalProperties: false
@@ -9047,6 +9115,14 @@ components:
           description: >-
             How many emails the link is shared with. Absent from a control
             plane that predates private links.
+        fileCount:
+          type: integer
+          minimum: 0
+          maximum: 200
+          description: >-
+            How many files the link serves beside its own, at their paths
+            under contentUrl (see createArtifactShareFileUpload). Absent from
+            a control plane that predates included files.
     ArtifactShareAccess:
       type: string
       enum: [restricted, anyone]
@@ -9246,6 +9322,37 @@ components:
         expiresAt:
           type: string
           format: date-time
+    ArtifactShareCompletedPart:
+      type: object
+      additionalProperties: false
+      required: [partNumber, sha256, etag]
+      properties:
+        partNumber:
+          type: integer
+          minimum: 1
+        sha256:
+          type: string
+          pattern: "^[0-9a-f]{64}$"
+        etag:
+          type: string
+          description: The ETag the part's PUT returned.
+    ArtifactShareFileCompleteInput:
+      type: object
+      additionalProperties: false
+      required: [uploadToken, parts]
+      description: >-
+        An included file's upload and every one of its parts, in order. It
+        takes no access, emails or files: those are the page's, set when the
+        page is finalized.
+      properties:
+        uploadToken:
+          type: string
+          description: The file's uploadToken, from createArtifactShareFileUpload.
+        parts:
+          type: array
+          minItems: 1
+          items:
+            $ref: "#/components/schemas/ArtifactShareCompletedPart"
     ArtifactShareFinalizeInput:
       type: object
       additionalProperties: false
@@ -9257,19 +9364,7 @@ components:
           type: array
           minItems: 1
           items:
-            type: object
-            additionalProperties: false
-            required: [partNumber, sha256, etag]
-            properties:
-              partNumber:
-                type: integer
-                minimum: 1
-              sha256:
-                type: string
-                pattern: "^[0-9a-f]{64}$"
-              etag:
-                type: string
-                description: The ETag the part's PUT returned.
+            $ref: "#/components/schemas/ArtifactShareCompletedPart"
         access:
           $ref: "#/components/schemas/ArtifactShareAccess"
           description: >-
@@ -9284,6 +9379,63 @@ components:
           description: >-
             Emails to share the link with as it is published, as
             addArtifactShareGrants does.
+        files:
+          type: array
+          maxItems: 200
+          description: >-
+            Every file the link serves beside its own from now on, each from
+            completeArtifactShareFileUpload under this upload, at most one per
+            path; an empty list leaves it none. Absent, an active link keeps
+            the files it has and a new or restored one has none. A private
+            link's page that has files, opened at contentUrl with its view
+            token in the query, is redirected to /~vt/<token>/ under the same
+            host, so the files it refers to by relative path carry the token.
+          items:
+            type: object
+            additionalProperties: false
+            required: [fileToken]
+            properties:
+              fileToken:
+                type: string
+                description: From completeArtifactShareFileUpload; opaque.
+    ArtifactShareFileUploadInput:
+      type: object
+      additionalProperties: false
+      required: [uploadToken, path, size, sha256]
+      properties:
+        uploadToken:
+          type: string
+          description: The page's upload, from createArtifactShareUpload.
+        path:
+          type: string
+          minLength: 1
+          maxLength: 1024
+          description: >-
+            Where the link serves the file: slash-separated, relative to the
+            page, as a browser asks for it once it resolves the page's
+            relative URL (images/a.png, not ./images/a.png).
+        size:
+          type: integer
+          format: int64
+          minimum: 0
+        sha256:
+          type: string
+          pattern: "^[0-9a-f]{64}$"
+          description: The whole file's SHA-256, as for the page.
+    ArtifactShareFileUploaded:
+      type: object
+      additionalProperties: false
+      required: [fileToken, path, expiresAt]
+      properties:
+        fileToken:
+          type: string
+          description: Lists the file in finalizeArtifactShare; opaque.
+        path:
+          type: string
+        expiresAt:
+          type: string
+          format: date-time
+          description: When the file can no longer be listed.
     SessionArtifactShareInput:
       type: object
       additionalProperties: false

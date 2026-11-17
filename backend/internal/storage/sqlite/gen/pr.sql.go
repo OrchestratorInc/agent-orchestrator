@@ -218,7 +218,7 @@ func (q *Queries) GetDisplayPRFactsBySession(ctx context.Context, sessionID doma
 }
 
 const getPR = `-- name: GetPR :one
-SELECT url, session_id, number, pr_state, review_decision, ci_state, mergeability, updated_at, provider, host, repo, source_branch, target_branch, head_sha, title, additions, deletions, changed_files, author, base_sha, merge_commit_sha, is_draft, is_merged, is_closed, provider_state, provider_mergeable, provider_merge_state_status, html_url, created_at_provider, updated_at_provider, merged_at_provider, closed_at_provider, metadata_hash, ci_hash, review_hash, observed_at, ci_observed_at, review_observed_at, last_nudge_signature, state_changed_at, auto_inject_ci, provider_id, author_avatar_url, review_partial FROM pr WHERE url = ?
+SELECT url, session_id, number, pr_state, review_decision, ci_state, mergeability, updated_at, provider, host, repo, source_branch, target_branch, head_sha, title, additions, deletions, changed_files, author, base_sha, merge_commit_sha, is_draft, is_merged, is_closed, provider_state, provider_mergeable, provider_merge_state_status, html_url, created_at_provider, updated_at_provider, merged_at_provider, closed_at_provider, metadata_hash, ci_hash, review_hash, observed_at, ci_observed_at, review_observed_at, last_nudge_signature, state_changed_at, auto_inject_ci, provider_id, author_avatar_url, review_partial, head_from_fork, head_is_default_branch FROM pr WHERE url = ?
 `
 
 func (q *Queries) GetPR(ctx context.Context, url string) (PR, error) {
@@ -269,12 +269,14 @@ func (q *Queries) GetPR(ctx context.Context, url string) (PR, error) {
 		&i.ProviderID,
 		&i.AuthorAvatarURL,
 		&i.ReviewPartial,
+		&i.HeadFromFork,
+		&i.HeadIsDefaultBranch,
 	)
 	return i, err
 }
 
 const getPRByNumber = `-- name: GetPRByNumber :one
-SELECT url, session_id, number, pr_state, review_decision, ci_state, mergeability, updated_at, provider, host, repo, source_branch, target_branch, head_sha, title, additions, deletions, changed_files, author, base_sha, merge_commit_sha, is_draft, is_merged, is_closed, provider_state, provider_mergeable, provider_merge_state_status, html_url, created_at_provider, updated_at_provider, merged_at_provider, closed_at_provider, metadata_hash, ci_hash, review_hash, observed_at, ci_observed_at, review_observed_at, last_nudge_signature, state_changed_at, auto_inject_ci, provider_id, author_avatar_url, review_partial FROM pr
+SELECT url, session_id, number, pr_state, review_decision, ci_state, mergeability, updated_at, provider, host, repo, source_branch, target_branch, head_sha, title, additions, deletions, changed_files, author, base_sha, merge_commit_sha, is_draft, is_merged, is_closed, provider_state, provider_mergeable, provider_merge_state_status, html_url, created_at_provider, updated_at_provider, merged_at_provider, closed_at_provider, metadata_hash, ci_hash, review_hash, observed_at, ci_observed_at, review_observed_at, last_nudge_signature, state_changed_at, auto_inject_ci, provider_id, author_avatar_url, review_partial, head_from_fork, head_is_default_branch FROM pr
 WHERE number = ?
 ORDER BY
     CASE WHEN pr_state NOT IN ('merged', 'closed') THEN 0 ELSE 1 END,
@@ -333,12 +335,14 @@ func (q *Queries) GetPRByNumber(ctx context.Context, number int64) (PR, error) {
 		&i.ProviderID,
 		&i.AuthorAvatarURL,
 		&i.ReviewPartial,
+		&i.HeadFromFork,
+		&i.HeadIsDefaultBranch,
 	)
 	return i, err
 }
 
 const getPRByProviderIdentity = `-- name: GetPRByProviderIdentity :one
-SELECT url, session_id, number, pr_state, review_decision, ci_state, mergeability, updated_at, provider, host, repo, source_branch, target_branch, head_sha, title, additions, deletions, changed_files, author, base_sha, merge_commit_sha, is_draft, is_merged, is_closed, provider_state, provider_mergeable, provider_merge_state_status, html_url, created_at_provider, updated_at_provider, merged_at_provider, closed_at_provider, metadata_hash, ci_hash, review_hash, observed_at, ci_observed_at, review_observed_at, last_nudge_signature, state_changed_at, auto_inject_ci, provider_id, author_avatar_url, review_partial
+SELECT url, session_id, number, pr_state, review_decision, ci_state, mergeability, updated_at, provider, host, repo, source_branch, target_branch, head_sha, title, additions, deletions, changed_files, author, base_sha, merge_commit_sha, is_draft, is_merged, is_closed, provider_state, provider_mergeable, provider_merge_state_status, html_url, created_at_provider, updated_at_provider, merged_at_provider, closed_at_provider, metadata_hash, ci_hash, review_hash, observed_at, ci_observed_at, review_observed_at, last_nudge_signature, state_changed_at, auto_inject_ci, provider_id, author_avatar_url, review_partial, head_from_fork, head_is_default_branch
 FROM pr
 WHERE provider = ?1
   AND host = ?2
@@ -400,12 +404,14 @@ func (q *Queries) GetPRByProviderIdentity(ctx context.Context, arg GetPRByProvid
 		&i.ProviderID,
 		&i.AuthorAvatarURL,
 		&i.ReviewPartial,
+		&i.HeadFromFork,
+		&i.HeadIsDefaultBranch,
 	)
 	return i, err
 }
 
 const getPRByURLOrAlias = `-- name: GetPRByURLOrAlias :one
-SELECT pr.url, pr.session_id, pr.number, pr.pr_state, pr.review_decision, pr.ci_state, pr.mergeability, pr.updated_at, pr.provider, pr.host, pr.repo, pr.source_branch, pr.target_branch, pr.head_sha, pr.title, pr.additions, pr.deletions, pr.changed_files, pr.author, pr.base_sha, pr.merge_commit_sha, pr.is_draft, pr.is_merged, pr.is_closed, pr.provider_state, pr.provider_mergeable, pr.provider_merge_state_status, pr.html_url, pr.created_at_provider, pr.updated_at_provider, pr.merged_at_provider, pr.closed_at_provider, pr.metadata_hash, pr.ci_hash, pr.review_hash, pr.observed_at, pr.ci_observed_at, pr.review_observed_at, pr.last_nudge_signature, pr.state_changed_at, pr.auto_inject_ci, pr.provider_id, pr.author_avatar_url, pr.review_partial
+SELECT pr.url, pr.session_id, pr.number, pr.pr_state, pr.review_decision, pr.ci_state, pr.mergeability, pr.updated_at, pr.provider, pr.host, pr.repo, pr.source_branch, pr.target_branch, pr.head_sha, pr.title, pr.additions, pr.deletions, pr.changed_files, pr.author, pr.base_sha, pr.merge_commit_sha, pr.is_draft, pr.is_merged, pr.is_closed, pr.provider_state, pr.provider_mergeable, pr.provider_merge_state_status, pr.html_url, pr.created_at_provider, pr.updated_at_provider, pr.merged_at_provider, pr.closed_at_provider, pr.metadata_hash, pr.ci_hash, pr.review_hash, pr.observed_at, pr.ci_observed_at, pr.review_observed_at, pr.last_nudge_signature, pr.state_changed_at, pr.auto_inject_ci, pr.provider_id, pr.author_avatar_url, pr.review_partial, pr.head_from_fork, pr.head_is_default_branch
 FROM pr
 WHERE pr.url = COALESCE(
     (SELECT canonical_url FROM pr_url_alias WHERE alias_url = ?1),
@@ -461,6 +467,8 @@ func (q *Queries) GetPRByURLOrAlias(ctx context.Context, url string) (PR, error)
 		&i.ProviderID,
 		&i.AuthorAvatarURL,
 		&i.ReviewPartial,
+		&i.HeadFromFork,
+		&i.HeadIsDefaultBranch,
 	)
 	return i, err
 }
@@ -540,6 +548,7 @@ external_review AS (
     )
 )
 SELECT
+    pr.session_id,
     pr.url,
     pr.number,
     pr.pr_state,
@@ -548,6 +557,8 @@ SELECT
     pr.mergeability,
     pr.source_branch,
     pr.target_branch,
+    pr.host,
+    pr.repo,
     pr.head_sha,
     pr.updated_at,
     pr.state_changed_at,
@@ -585,7 +596,36 @@ SELECT
         FROM external_review
         WHERE external_review.pr_url = pr.url
           AND external_review.state = 'changes_requested'
-    ) AS external_changes_requested
+    ) AS external_changes_requested,
+    -- The open PR whose source branch this PR targets, in any session, so a
+    -- PR stacked on it is not read as ready to merge. A PR whose source and
+    -- target branch are the same (a fork PR opened from its own main) can
+    -- never be a parent, and neither can one whose head is a fork's branch
+    -- (its name says nothing about this repository's branches) or the
+    -- repository's default branch (a main -> release sync PR would otherwise
+    -- parent every PR into main). Only a parent the SCM observer still polls
+    -- counts: an archived session's or project's PR keeps whatever state it
+    -- had when polling stopped, so its "open" may be long stale.
+    CAST(COALESCE((
+        SELECT parent.number
+        FROM pr parent
+        JOIN sessions parent_session ON parent_session.id = parent.session_id
+        JOIN projects parent_project ON parent_project.id = parent_session.project_id
+        WHERE parent.source_branch = pr.target_branch
+          AND parent.repo = pr.repo COLLATE NOCASE
+          AND parent.host = pr.host
+          AND pr.target_branch != ''
+          AND pr.repo != ''
+          AND parent.source_branch != parent.target_branch
+          AND parent.head_from_fork = FALSE
+          AND parent.head_is_default_branch = FALSE
+          AND parent.url != pr.url
+          AND parent.pr_state IN ('open', 'draft')
+          AND parent_session.is_terminated = 0
+          AND parent_project.archived_at IS NULL
+        ORDER BY parent.updated_at DESC
+        LIMIT 1
+    ), 0) AS INTEGER) AS stack_parent_number
 FROM pr
 LEFT JOIN pr_reviews last_review ON last_review.pr_url = pr.url
     -- The newest review by provider submission time, so re-fetching a review
@@ -604,6 +644,7 @@ ORDER BY pr.updated_at DESC
 `
 
 type ListPRFactsBySessionRow struct {
+	SessionID                domain.SessionID
 	URL                      string
 	Number                   int64
 	PRState                  domain.PRState
@@ -612,6 +653,8 @@ type ListPRFactsBySessionRow struct {
 	Mergeability             domain.Mergeability
 	SourceBranch             string
 	TargetBranch             string
+	Host                     string
+	Repo                     string
 	HeadSha                  string
 	UpdatedAt                time.Time
 	StateChangedAt           sql.NullTime
@@ -621,6 +664,7 @@ type ListPRFactsBySessionRow struct {
 	ReviewComments           bool
 	ExternalApproved         bool
 	ExternalChangesRequested bool
+	StackParentNumber        int64
 }
 
 // All PR snapshots for a session (every state), with source/target branch for
@@ -638,6 +682,7 @@ func (q *Queries) ListPRFactsBySession(ctx context.Context, sessionID domain.Ses
 	for rows.Next() {
 		var i ListPRFactsBySessionRow
 		if err := rows.Scan(
+			&i.SessionID,
 			&i.URL,
 			&i.Number,
 			&i.PRState,
@@ -646,6 +691,8 @@ func (q *Queries) ListPRFactsBySession(ctx context.Context, sessionID domain.Ses
 			&i.Mergeability,
 			&i.SourceBranch,
 			&i.TargetBranch,
+			&i.Host,
+			&i.Repo,
 			&i.HeadSha,
 			&i.UpdatedAt,
 			&i.StateChangedAt,
@@ -655,6 +702,7 @@ func (q *Queries) ListPRFactsBySession(ctx context.Context, sessionID domain.Ses
 			&i.ReviewComments,
 			&i.ExternalApproved,
 			&i.ExternalChangesRequested,
+			&i.StackParentNumber,
 		); err != nil {
 			return nil, err
 		}
@@ -728,6 +776,8 @@ SELECT
     pr.mergeability,
     pr.source_branch,
     pr.target_branch,
+    pr.host,
+    pr.repo,
     pr.head_sha,
     pr.updated_at,
     pr.state_changed_at,
@@ -767,7 +817,36 @@ SELECT
         WHERE external_review.pr_url = pr.url
           AND external_review.session_id = pr.session_id
           AND external_review.state = 'changes_requested'
-    ) AS external_changes_requested
+    ) AS external_changes_requested,
+    -- The open PR whose source branch this PR targets, in any session, so a
+    -- PR stacked on it is not read as ready to merge. A PR whose source and
+    -- target branch are the same (a fork PR opened from its own main) can
+    -- never be a parent, and neither can one whose head is a fork's branch
+    -- (its name says nothing about this repository's branches) or the
+    -- repository's default branch (a main -> release sync PR would otherwise
+    -- parent every PR into main). Only a parent the SCM observer still polls
+    -- counts: an archived session's or project's PR keeps whatever state it
+    -- had when polling stopped, so its "open" may be long stale.
+    CAST(COALESCE((
+        SELECT parent.number
+        FROM pr parent
+        JOIN sessions parent_session ON parent_session.id = parent.session_id
+        JOIN projects parent_project ON parent_project.id = parent_session.project_id
+        WHERE parent.source_branch = pr.target_branch
+          AND parent.repo = pr.repo COLLATE NOCASE
+          AND parent.host = pr.host
+          AND pr.target_branch != ''
+          AND pr.repo != ''
+          AND parent.source_branch != parent.target_branch
+          AND parent.head_from_fork = FALSE
+          AND parent.head_is_default_branch = FALSE
+          AND parent.url != pr.url
+          AND parent.pr_state IN ('open', 'draft')
+          AND parent_session.is_terminated = 0
+          AND parent_project.archived_at IS NULL
+        ORDER BY parent.updated_at DESC
+        LIMIT 1
+    ), 0) AS INTEGER) AS stack_parent_number
 FROM pr
 JOIN wanted_session ON wanted_session.session_id = pr.session_id
 LEFT JOIN pr_reviews last_review ON last_review.pr_url = pr.url
@@ -795,6 +874,8 @@ type ListPRFactsBySessionsRow struct {
 	Mergeability             domain.Mergeability
 	SourceBranch             string
 	TargetBranch             string
+	Host                     string
+	Repo                     string
 	HeadSha                  string
 	UpdatedAt                time.Time
 	StateChangedAt           sql.NullTime
@@ -804,6 +885,7 @@ type ListPRFactsBySessionsRow struct {
 	ReviewComments           bool
 	ExternalApproved         bool
 	ExternalChangesRequested bool
+	StackParentNumber        int64
 }
 
 // Batch form of ListPRFactsBySession for board/session-list reads. The JSON
@@ -828,6 +910,8 @@ func (q *Queries) ListPRFactsBySessions(ctx context.Context, jsonEach interface{
 			&i.Mergeability,
 			&i.SourceBranch,
 			&i.TargetBranch,
+			&i.Host,
+			&i.Repo,
 			&i.HeadSha,
 			&i.UpdatedAt,
 			&i.StateChangedAt,
@@ -837,6 +921,7 @@ func (q *Queries) ListPRFactsBySessions(ctx context.Context, jsonEach interface{
 			&i.ReviewComments,
 			&i.ExternalApproved,
 			&i.ExternalChangesRequested,
+			&i.StackParentNumber,
 		); err != nil {
 			return nil, err
 		}
@@ -852,7 +937,7 @@ func (q *Queries) ListPRFactsBySessions(ctx context.Context, jsonEach interface{
 }
 
 const listPRsBySession = `-- name: ListPRsBySession :many
-SELECT url, session_id, number, pr_state, review_decision, ci_state, mergeability, updated_at, provider, host, repo, source_branch, target_branch, head_sha, title, additions, deletions, changed_files, author, base_sha, merge_commit_sha, is_draft, is_merged, is_closed, provider_state, provider_mergeable, provider_merge_state_status, html_url, created_at_provider, updated_at_provider, merged_at_provider, closed_at_provider, metadata_hash, ci_hash, review_hash, observed_at, ci_observed_at, review_observed_at, last_nudge_signature, state_changed_at, auto_inject_ci, provider_id, author_avatar_url, review_partial FROM pr
+SELECT url, session_id, number, pr_state, review_decision, ci_state, mergeability, updated_at, provider, host, repo, source_branch, target_branch, head_sha, title, additions, deletions, changed_files, author, base_sha, merge_commit_sha, is_draft, is_merged, is_closed, provider_state, provider_mergeable, provider_merge_state_status, html_url, created_at_provider, updated_at_provider, merged_at_provider, closed_at_provider, metadata_hash, ci_hash, review_hash, observed_at, ci_observed_at, review_observed_at, last_nudge_signature, state_changed_at, auto_inject_ci, provider_id, author_avatar_url, review_partial, head_from_fork, head_is_default_branch FROM pr
 WHERE pr.session_id = ?
 ORDER BY updated_at DESC
 `
@@ -911,6 +996,8 @@ func (q *Queries) ListPRsBySession(ctx context.Context, sessionID domain.Session
 			&i.ProviderID,
 			&i.AuthorAvatarURL,
 			&i.ReviewPartial,
+			&i.HeadFromFork,
+			&i.HeadIsDefaultBranch,
 		); err != nil {
 			return nil, err
 		}
@@ -1250,9 +1337,10 @@ INSERT INTO pr (
     is_draft, is_merged, is_closed,
     provider_state, provider_mergeable, provider_merge_state_status, html_url,
     created_at_provider, updated_at_provider, merged_at_provider, closed_at_provider,
-    metadata_hash, ci_hash, review_hash, observed_at, ci_observed_at, review_observed_at, review_partial, auto_inject_ci
+    metadata_hash, ci_hash, review_hash, observed_at, ci_observed_at, review_observed_at, review_partial,
+    head_from_fork, head_is_default_branch, auto_inject_ci
 )
-VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
+VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
     COALESCE((SELECT auto_inject_ci FROM sessions WHERE id = ?), TRUE))
 ON CONFLICT (url) DO UPDATE SET
     number = excluded.number,
@@ -1280,6 +1368,8 @@ ON CONFLICT (url) DO UPDATE SET
     provider_id = CASE WHEN excluded.provider_id != '' THEN excluded.provider_id ELSE pr.provider_id END,
     source_branch = excluded.source_branch,
     target_branch = excluded.target_branch,
+    head_from_fork = excluded.head_from_fork,
+    head_is_default_branch = excluded.head_is_default_branch,
     head_sha = excluded.head_sha,
     title = excluded.title,
     additions = excluded.additions,
@@ -1362,6 +1452,8 @@ type UpsertPRParams struct {
 	CIObservedAt             sql.NullTime
 	ReviewObservedAt         sql.NullTime
 	ReviewPartial            bool
+	HeadFromFork             bool
+	HeadIsDefaultBranch      bool
 	ID                       domain.SessionID
 }
 
@@ -1409,6 +1501,8 @@ func (q *Queries) UpsertPR(ctx context.Context, arg UpsertPRParams) error {
 		arg.CIObservedAt,
 		arg.ReviewObservedAt,
 		arg.ReviewPartial,
+		arg.HeadFromFork,
+		arg.HeadIsDefaultBranch,
 		arg.ID,
 	)
 	return err

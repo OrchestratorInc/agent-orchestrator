@@ -91,7 +91,7 @@ export const unstable_settings = { initialRouteName: "(tabs)" };
 void SplashScreen.preventAutoHideAsync().catch(() => {});
 
 export default function RootLayout() {
-	// The app's family (DM Sans, after T3 Code), loaded before anything else
+	// The app's family (DM Sans), loaded before anything else
 	// draws: rendering the tree first would paint one frame of SF Pro and then
 	// swap every label under it.
 	//

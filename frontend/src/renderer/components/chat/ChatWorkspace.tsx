@@ -212,6 +212,7 @@ import { ChatLoginBand, type ChatLoginBandProps } from "./ChatLoginBand";
 import { ImportedAgentBlocked, McpServerBanner, ReauthBanner, ThreadStateBanner, VersionSwitchBanner } from "./ChatStatusBanners";
 import { HostAwayBanner } from "../HostOfflineStatus";
 import type { AgentBlock } from "../../lib/session-import";
+import type { OutgoingAttachment } from "../../lib/attachment-uploads";
 import { UsageLimitNotice } from "./UsageLimitNotice";
 import {
 	activeTurn,
@@ -334,11 +335,11 @@ const ShellTerminalTabEntry = memo(function ShellTerminalTabEntry({
 	onSelect,
 	onClose,
 	onRename,
-	stripShellHandleIds,
+	stripShells,
 }: {
 	tabKey: string;
 	shell: ShellTerminal;
-	stripShellHandleIds: readonly string[];
+	stripShells: readonly ShellTerminal[];
 	isActive: boolean;
 	onSelect: (handleId: string) => void;
 	onClose: (handleId: string) => void;
@@ -353,7 +354,7 @@ const ShellTerminalTabEntry = memo(function ShellTerminalTabEntry({
 				onRename={onRename ? (title) => onRename(shell.handleId, title) : undefined}
 				onSelect={() => onSelect(shell.handleId)}
 				shell={shell}
-				stripShellHandleIds={stripShellHandleIds}
+				stripShells={stripShells}
 			/>
 		</DraggableWorkspaceTab>
 	);
@@ -434,8 +435,6 @@ export interface ChatWorkspaceProps {
 	headerActions?: ReactNode;
 	/** Agent-session actions on the primary chat tab (interface switch, handoff). */
 	sessionTabAction?: ReactNode;
-	/** Widen the primary tab action slot only while an interface switch spinner is showing. */
-	sessionTabActionPinned?: boolean;
 	/** Pinned beside the tab strip, before the workspace topbar actions. */
 	tabStripAction?: ReactNode;
 	/** File tabs coordinated by SessionView, appended to the native chat tab strip. */
@@ -638,9 +637,13 @@ export interface ChatWorkspaceProps {
 	/** Switch the visible conversation to another branch. */
 	onActivateBranch?: (branchId: string) => void | Promise<unknown>;
 	activateBranchPending?: boolean;
+	activateBranchDisabled?: boolean;
+	activateBranchTarget?: string;
 	activateBranchError?: string;
 	/** The provider's skills. Empty leaves `/` an ordinary character. */
 	skills?: ChatSkill[];
+	/** The agent's skills are still being read; the `/` menu says so instead of staying shut. */
+	skillsLoading?: boolean;
 	/** Worktree paths offered for `@`. */
 	filePaths?: string[];
 	/** Told what follows "@" in the composer, for files that are searched rather than listed (see ChatComposer). */
@@ -656,7 +659,7 @@ export interface ChatWorkspaceProps {
 	 * can open. Absent means no attach control is offered — the fixture preview has
 	 * no worktree to write into.
 	 */
-	onStageAttachments?: (attachments: { mimeType: string; data: string; name?: string }[], signal?: AbortSignal) => Promise<string[]>;
+	onStageAttachments?: (attachments: OutgoingAttachment[], signal?: AbortSignal) => Promise<string[]>;
 	/** Staged files are uploaded to AO Cloud, up to maxBytes each; see ChatComposer. */
 	cloudAttachments?: { maxBytes: number };
 	/** The provider negotiated native image prompt blocks. */
@@ -827,7 +830,6 @@ function ChatWorkspaceContent({
 	remoteHostId,
 	headerActions,
 	sessionTabAction,
-	sessionTabActionPinned = false,
 	tabStripAction,
 	workspaceTabs,
 	workspaceTabActions,
@@ -927,8 +929,11 @@ function ChatWorkspaceContent({
 	editMessageError,
 	onActivateBranch,
 	activateBranchPending,
+	activateBranchDisabled,
+	activateBranchTarget,
 	activateBranchError,
 	skills,
+	skillsLoading,
 	filePaths,
 	filePathsTruncated,
 	onFileQuery,
@@ -2141,7 +2146,6 @@ function ChatWorkspaceContent({
 				session={session}
 				onSessionRenamed={onSessionRenamed}
 				sessionTabAction={sessionTabAction}
-				sessionTabActionPinned={sessionTabActionPinned}
 				tabStripAction={tabStripAction}
 				workspaceTabActions={workspaceTabActions}
 				workspaceActiveTabKey={workspaceActiveTabKey}
@@ -2268,7 +2272,7 @@ function ChatWorkspaceContent({
 							sessionLinkSourceKind={session?.cloud ? "cloud" : undefined}
 							workspacePaths={filePaths}
 						>
-							<ChatImageSourceProvider sessionId={snapshot.sessionId} assetBaseUrl={assetBaseUrl} remoteHost={Boolean(activeRemoteHostId)} artifacts={session?.artifactFiles} cloud={session?.cloud}>
+							<ChatImageSourceProvider sessionId={snapshot.sessionId} assetBaseUrl={assetBaseUrl} remoteHost={Boolean(activeRemoteHostId)} hostId={activeRemoteHostId} artifacts={session?.artifactFiles} cloud={session?.cloud}>
 							<ChatHostId.Provider value={activeRemoteHostId}>
 							<ChatTokenSkills.Provider value={skills ?? NO_SKILLS}>
 
@@ -2310,6 +2314,8 @@ function ChatWorkspaceContent({
 									editError={editMessageError}
 									onActivateBranch={onActivateBranch}
 									activateBranchPending={activateBranchPending}
+									activateBranchDisabled={activateBranchDisabled}
+									activateBranchTarget={activateBranchTarget}
 									activateBranchError={activateBranchError}
 									newWorkDisabled={newWorkDisabled}
 									rollbackDisabled={Boolean(durableTurn || rollbackPending || newWorkDisabled)}
@@ -2477,6 +2483,7 @@ function ChatWorkspaceContent({
 										// look like a regression.
 										emptyPlaceholder={conversationEmpty ? (artifactSession ? t("chat.welcome.artifactPlaceholder") : emptyChatPlaceholder) : undefined}
 										skills={skills}
+										skillsLoading={skillsLoading}
 										filePaths={filePaths}
 										filePathsTruncated={filePathsTruncated}
 										onFileQuery={onFileQuery}
@@ -2858,7 +2865,6 @@ function ChatHeader({
 	onTabsKeyDown,
 	headerActions,
 	sessionTabAction,
-	sessionTabActionPinned = false,
 	tabStripAction,
 	workspaceTabActions,
 	workspaceActiveTabKey,
@@ -2887,7 +2893,6 @@ function ChatHeader({
 	onTabsKeyDown?: (event: ReactKeyboardEvent<HTMLDivElement>) => void;
 	headerActions?: ReactNode;
 	sessionTabAction?: ReactNode;
-	sessionTabActionPinned?: boolean;
 	tabStripAction?: ReactNode;
 	workspaceTabActions?: ReactNode;
 	workspaceActiveTabKey?: string;
@@ -2920,8 +2925,8 @@ function ChatHeader({
 	const selectShellTerminal = useStableCallback(onSelectShellTerminal);
 	const closeShellTerminal = useStableCallback(onCloseShellTerminal);
 	const renameShellTerminal = useStableCallback(onRenameShellTerminal);
-	const stripShellHandleIds = useMemo(
-		() => orderedAuxiliaryTabs.flatMap((tab) => (tab.kind === "shell" ? [tab.terminal.handleId] : [])),
+	const stripShells = useMemo(
+		() => orderedAuxiliaryTabs.flatMap((tab) => (tab.kind === "shell" ? [tab.terminal] : [])),
 		[orderedAuxiliaryTabs],
 	);
 	// The chat tab is "selected" only when neither terminal pane is the body.
@@ -2966,7 +2971,6 @@ function ChatHeader({
 											onRenamed={onSessionRenamed}
 											session={session}
 											tabAction={sessionTabAction}
-											tabActionPinned={sessionTabActionPinned}
 										/>
 									) : (
 										<SessionPaneTab
@@ -2993,7 +2997,7 @@ function ChatHeader({
 											onRename={onRenameShellTerminal ? renameShellTerminal : undefined}
 											onSelect={selectShellTerminal}
 											shell={tab.terminal}
-											stripShellHandleIds={stripShellHandleIds}
+											stripShells={stripShells}
 											tabKey={tab.key}
 										/>
 									) : (
@@ -3330,6 +3334,8 @@ export function Timeline({
 	editError,
 	onActivateBranch,
 	activateBranchPending,
+	activateBranchDisabled,
+	activateBranchTarget,
 	activateBranchError,
 	newWorkDisabled,
 	rollbackDisabled = false,
@@ -3388,6 +3394,8 @@ export function Timeline({
 	editError?: string;
 	onActivateBranch?: (branchId: string) => Promise<unknown> | void;
 	activateBranchPending?: boolean;
+	activateBranchDisabled?: boolean;
+	activateBranchTarget?: string;
 	activateBranchError?: string;
 	newWorkDisabled?: boolean;
 	rollbackDisabled?: boolean;
@@ -3858,8 +3866,9 @@ export function Timeline({
 		markers: [] as Array<{
 			top: number;
 			scrollTop: number;
-			visible: boolean;
 		}>,
+		/** The one tick for the turn being read; -1 only when there are no ticks. */
+		current: -1,
 	});
 	// Show turn ticks whenever there are human prompts — not only when the
 	// transcript overflows. A wider chat often fits a short history (common on
@@ -4825,7 +4834,7 @@ export function Timeline({
 
 	// Long transcripts use measured/estimated row positions for the full minimap,
 	// including turns that are currently outside the mounted viewport.
-	const anchorGeometry = useRef<{ height: number; width: number; positions: number[] } | null>(null);
+	const anchorGeometry = useRef<{ height: number; width: number; tops: number[]; centers: number[] } | null>(null);
 	const contentMutations = useRef<MutationObserver | null>(null);
 
 	const updateScrollbar = useCallback(() => {
@@ -4848,39 +4857,52 @@ export function Timeline({
 			const anchors = Array.from(
 				scrollContent.current?.querySelectorAll<HTMLElement>("[data-chat-scroll-anchor]") ?? [],
 			);
-			geometry = {
-				height: node.scrollHeight,
-				width: node.clientWidth,
-				positions: virtualized ? groups.flatMap((group, index) => {
+			const tops: number[] = [];
+			const centers: number[] = [];
+			if (virtualized) {
+				groups.forEach((group, index) => {
 					const row = virtualizer.measurementsCache[index];
-					return groupHasHumanPrompt(group) && row ? [row.start + row.size / 2] : [];
-				}) : anchors.map((anchor) => {
+					if (!groupHasHumanPrompt(group) || !row) return;
+					tops.push(row.start);
+					centers.push(row.start + row.size / 2);
+				});
+			} else {
+				for (const anchor of anchors) {
 					const rect = anchor.getBoundingClientRect();
-					return rect.top - viewportRect.top + node.scrollTop + rect.height / 2;
-				}),
-			};
+					const top = rect.top - viewportRect.top + node.scrollTop;
+					tops.push(top);
+					centers.push(top + rect.height / 2);
+				}
+			}
+			geometry = { height: node.scrollHeight, width: node.clientWidth, tops, centers };
 			anchorGeometry.current = geometry;
 		}
-		const positions = geometry.positions;
+		const { tops, centers } = geometry;
 		// 8px is the existing 2px dash + 6px gap cadence.
-		const markerGap = positions.length > 1 ? Math.min(8, (trackHeight - 12) / (positions.length - 1)) : 0;
-		const markerStart = (trackHeight - markerGap * Math.max(0, positions.length - 1)) / 2;
-		const markers = positions.map((contentY, index) => ({
+		const markerGap = centers.length > 1 ? Math.min(8, (trackHeight - 12) / (centers.length - 1)) : 0;
+		const markerStart = (trackHeight - markerGap * Math.max(0, centers.length - 1)) / 2;
+		const markers = centers.map((contentY, index) => ({
 			top: markerStart + index * markerGap,
 			scrollTop: Math.min(maxScroll, Math.max(0, contentY - node.clientHeight / 2)),
-			visible: contentY >= node.scrollTop && contentY <= node.scrollTop + node.clientHeight,
 		}));
+		const atEnd = maxScroll - node.scrollTop <= 2;
 		const next = {
 			visible,
 			top: travel * fraction,
 			height,
 			percent: Math.round(fraction * 100),
-			atEnd: maxScroll - node.scrollTop <= 2,
+			atEnd,
 			markers,
+			current: currentScrollMarker(tops, {
+				scrollTop: node.scrollTop,
+				viewportHeight: node.clientHeight,
+				atEnd,
+			}),
 		};
 		setScrollbar((current) =>
 			current.visible === next.visible &&
 			current.atEnd === next.atEnd &&
+			current.current === next.current &&
 			Math.abs(current.top - next.top) < 0.5 &&
 			Math.abs(current.height - next.height) < 0.5 &&
 			current.percent === next.percent &&
@@ -4890,8 +4912,7 @@ export function Timeline({
 				return (
 					candidate !== undefined &&
 					Math.abs(marker.top - candidate.top) < 0.5 &&
-					Math.abs(marker.scrollTop - candidate.scrollTop) < 0.5 &&
-					marker.visible === candidate.visible
+					Math.abs(marker.scrollTop - candidate.scrollTop) < 0.5
 				);
 			})
 				? current
@@ -5099,12 +5120,14 @@ export function Timeline({
 			.find((child) => (child as HTMLElement).dataset.chatTurn === key);
 		const turn = wrapper?.firstElementChild as HTMLElement | null | undefined;
 		if (!turn) return undefined;
-		const top = node.getBoundingClientRect().top;
+		const { top, bottom } = node.getBoundingClientRect();
 		const rows = Array.from(turn.children) as HTMLElement[];
 		const rects = rows.map((row) => row.getBoundingClientRect());
 		const following = pinnedRef.current;
 		const index = following ? -1 : rects.findIndex((rect) => rect.bottom > top);
-		if (!following && index < 0) return undefined;
+		// A reader who sees none of the turn has nothing to hold: below it, no row reaches
+		// their view; above it, the first row starts past the view's bottom edge.
+		if (!following && (index < 0 || rects[index]!.top >= bottom)) return undefined;
 		return {
 			turn,
 			rows,
@@ -5120,7 +5143,9 @@ export function Timeline({
 	// that lands on the end. For a reader who scrolled up, a row still in the turn
 	// (the prompt, a steer, the reply) holds its place; a step that folded away hands
 	// its place to "Worked for", which lands at the top of the view with the reply
-	// under it. Then every row that still moved slides there from where it was.
+	// under it. A turn that began lower in the view keeps its top where it was
+	// instead: the reader is still on what came before it. Then every row that still
+	// moved slides there from where it was.
 	const restoreSettle = useCallback((settle: SettleAnchor) => {
 		const node = scroller.current;
 		if (!node) return;
@@ -5158,7 +5183,7 @@ export function Timeline({
 					?? rows.slice(index + 1).find((row) => row.isConnected);
 			if (target) {
 				held = target;
-				const landing = kept ? offset : 0;
+				const landing = kept || (index === 0 && offset > 0) ? offset : 0;
 				const place = () => {
 					const delta = target.getBoundingClientRect().top - node.getBoundingClientRect().top - landing;
 					if (Math.abs(delta) < 0.5) return;
@@ -5669,6 +5694,8 @@ export function Timeline({
 									newHumanMessageIds={turnNewHumanMessageIds(group, newHumanMessageIds)}
 									onActivateBranch={canActivateBranch ? activateBranch : undefined}
 									activateBranchPending={activateBranchPending}
+									activateBranchDisabled={activateBranchDisabled || Boolean(durableTurn)}
+									activateBranchTarget={activateBranchTarget}
 									activateBranchError={activateBranchError}
 									// Only a turn the provider actually accepted can be undone: a turn it
 									// never saw holds no history to discard, and the daemon refuses it
@@ -5798,7 +5825,7 @@ export function Timeline({
 											aria-hidden="true"
 											className={cn(
 												"chat-scroll-marker",
-												marker.visible && "chat-scroll-marker-visible",
+												index === scrollbar.current && "chat-scroll-marker-current",
 												distance === 0 && "chat-scroll-marker-active",
 												distance === 1 && "chat-scroll-marker-adjacent",
 												distance === 2 && "chat-scroll-marker-near",
@@ -5958,6 +5985,8 @@ const TurnGroup = memo(function TurnGroup({
 	editableTurns,
 	onActivateBranch,
 	activateBranchPending,
+	activateBranchDisabled,
+	activateBranchTarget,
 	activateBranchError,
 	canRollback,
 	rollbackDisabled,
@@ -5998,6 +6027,8 @@ const TurnGroup = memo(function TurnGroup({
 	editableTurns: Set<string>;
 	onActivateBranch?: (branchId: string) => Promise<unknown> | void;
 	activateBranchPending?: boolean;
+	activateBranchDisabled?: boolean;
+	activateBranchTarget?: string;
 	activateBranchError?: string;
 	/** The daemon would accept a rollback of this turn, so offer the affordance. */
 	canRollback: boolean;
@@ -6162,6 +6193,8 @@ const TurnGroup = memo(function TurnGroup({
 			editableTurns={editableTurns}
 			onActivateBranch={onActivateBranch}
 			activateBranchPending={activateBranchPending}
+			activateBranchDisabled={activateBranchDisabled}
+			activateBranchTarget={activateBranchTarget}
 			activateBranchError={activateBranchError}
 			busy={busy}
 			queued={queued}
@@ -6411,6 +6444,8 @@ function TimelineItem({
 	editableTurns,
 	onActivateBranch,
 	activateBranchPending,
+	activateBranchDisabled,
+	activateBranchTarget,
 	activateBranchError,
 	busy,
 	queued,
@@ -6442,6 +6477,8 @@ function TimelineItem({
 	editableTurns: Set<string>;
 	onActivateBranch?: (branchId: string) => Promise<unknown> | void;
 	activateBranchPending?: boolean;
+	activateBranchDisabled?: boolean;
+	activateBranchTarget?: string;
 	activateBranchError?: string;
 	busy?: boolean;
 	/**
@@ -6506,6 +6543,8 @@ function TimelineItem({
 					branchPoint={item.turnId ? branchPoints.get(item.turnId) : undefined}
 					onActivateBranch={onActivateBranch}
 					activateBranchPending={activateBranchPending}
+					activateBranchDisabled={activateBranchDisabled}
+					activateBranchTarget={activateBranchTarget}
 					activateBranchError={activateBranchError}
 					onSelectAnnotation={onSelectAnnotation}
 					status={status}
@@ -7234,6 +7273,31 @@ export function promptSpacerHeight({
  */
 export function promptTopInset(viewportHeight: number): number {
 	return Math.max(80, Math.round(viewportHeight * 0.2));
+}
+
+/**
+ * The minimap tick for the turn being read: the last turn whose top has reached
+ * the reading line, the first turn before any has, the last turn at the end.
+ * Exactly one tick, at every scroll position, so reading between two prompts
+ * (a long reply, tool calls, rows that are not turns) still shows where you are.
+ * The line sits mid-viewport because a tick click centers its turn there.
+ * `tops` are content offsets in document order.
+ */
+export function currentScrollMarker(
+	tops: readonly number[],
+	{ scrollTop, viewportHeight, atEnd }: { scrollTop: number; viewportHeight: number; atEnd: boolean },
+): number {
+	if (tops.length === 0) return -1;
+	if (atEnd) return tops.length - 1;
+	const readingLine = scrollTop + viewportHeight / 2;
+	let low = 0;
+	let high = tops.length - 1;
+	while (low < high) {
+		const middle = Math.ceil((low + high) / 2);
+		if (tops[middle]! <= readingLine) low = middle;
+		else high = middle - 1;
+	}
+	return low;
 }
 
 function previewText(value: string, limit: number): string {

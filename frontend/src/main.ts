@@ -1171,7 +1171,7 @@ async function createWindowInternal(): Promise<void> {
 		// artifact's inline origin) is not the page navigating away.
 		const app = shellWebContents.mainFrame;
 		if (event.initiator?.processId === app.processId && event.initiator.routingId === app.routingId) return;
-		if (blocksRenderFrameNavigation(event.frame.url, event.url)) event.preventDefault();
+		if (blocksRenderFrameNavigation(event.frame.url, event.url, (url) => remoteRegistry.isRenderUrl(url))) event.preventDefault();
 	});
 
 	// A cloud artifact frame's page can open another file of its session; the
@@ -1196,11 +1196,11 @@ async function createWindowInternal(): Promise<void> {
 	shellWebContents.session.webRequest.onBeforeRequest((details, callback) => {
 		// Loading an agent page into a frame is always allowed: the page's own
 		// CSP sandboxes it, and it is judged by its own rule from then on.
-		if (details.resourceType === "subFrame" && isAgentPageUrl(details.url)) return callback({});
+		if (details.resourceType === "subFrame" && (isAgentPageUrl(details.url) || remoteRegistry.isRenderUrl(details.url))) return callback({});
 		let pageUrl: string | undefined;
 		try {
 			for (let frame = details.frame; frame && !pageUrl; frame = frame.parent) {
-				if (isAgentPageUrl(frame.url)) pageUrl = frame.url;
+				if (isAgentPageUrl(frame.url) || remoteRegistry.isRenderUrl(frame.url)) pageUrl = frame.url;
 			}
 		} catch {
 			// The frame went away mid-request; nothing of its page is left to load.
@@ -3944,6 +3944,10 @@ registerCloudShareIpc({
 	getToken: () => getCloudAccessToken(cloudDataDir()),
 	fetch: (url, init) => net.fetch(url, init),
 	records: new ShareLinkRecords(path.join(desktopDataDir, "share-links.json")),
+	// A remote host's file is read through its loopback proxy, which adds the
+	// host's credential; Node's fetch sends no Origin, as the proxy requires.
+	hostApiBase: (hostId) => remoteRegistry.apiBase(hostId),
+	fetchHost: (url, init) => fetch(url, init),
 });
 // Session and project share links this device made, so Copy link works again
 // later; only the signed-in account's, which the file names.

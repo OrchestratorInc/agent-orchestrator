@@ -375,6 +375,15 @@ type AgentInterfaceHandoffHistoryProbe interface {
 	) (bool, error)
 }
 
+// AgentProcessConversationReader is an OPTIONAL capability for agents a user
+// starts by hand in a shell terminal: it names the native conversation a
+// running agent process is in, so the shell can resume exactly that one after
+// the app restarts. pid leads the agent's foreground process group. ok=false
+// when the process does not say.
+type AgentProcessConversationReader interface {
+	ProcessConversationID(ctx context.Context, pid int) (id string, ok bool, err error)
+}
+
 // AgentInterfaceHandoffStorageBridge is an OPTIONAL capability for adapters
 // whose native conversation files live in interface-specific storage roots.
 // Session Manager calls it only after the source controller is stopped.
@@ -641,6 +650,12 @@ type TerminalActivityOptions struct {
 // TerminalActivityOptionsProvider exposes an adapter's terminal observation needs.
 type TerminalActivityOptionsProvider interface {
 	TerminalActivityOptions() TerminalActivityOptions
+}
+
+// TurnInterruptKey declares a key that stops a running turn without exiting
+// the harness. Harnesses without this capability refuse explicit Stop turn.
+type TurnInterruptKey interface {
+	InterruptKey() string
 }
 
 // EmptyComposerDetector is an opt-in safety capability for unsolicited

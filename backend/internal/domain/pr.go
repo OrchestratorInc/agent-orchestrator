@@ -38,6 +38,12 @@ type PRFacts struct {
 	ExternalApproved         bool
 	ExternalChangesRequested bool
 	ExternalComments         bool
+	// StackParent is the number of the open PR, in any live session, whose
+	// source branch this PR targets; 0 when its base branch has no open PR AO
+	// still polls. The parent is in this PR's Host and Repo.
+	StackParent int
+	Host        string
+	Repo        string
 }
 
 // PullRequest is the app-level representation of one tracked pull request as
@@ -80,6 +86,12 @@ type PullRequest struct {
 	AuthorAvatarURL string
 	BaseSHA         string
 	MergeCommitSHA  string
+
+	// HeadFromFork and HeadIsDefaultBranch say the head is not a private
+	// branch of this repository: it lives in a fork, or it is the repository's
+	// default branch. Neither kind of PR can be a stack parent.
+	HeadFromFork        bool
+	HeadIsDefaultBranch bool
 
 	ProviderState            string
 	ProviderMergeable        string

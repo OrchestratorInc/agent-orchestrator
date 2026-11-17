@@ -533,12 +533,18 @@ func (m *Manager) notificationIntentForSCM(rec domain.SessionRecord, o ports.SCM
 		Provider:           o.Provider,
 		Repo:               o.Repo,
 	}
+	// A merge or close happened at a known provider time, which can be well
+	// before AO polled it (slow cadence, daemon down). Show that time, not the
+	// poll's. Ready-to-merge stays on the observation time: it is a state AO
+	// derived from several facts, with no single provider event behind it.
 	if o.PR.Merged {
 		base.Type = domain.NotificationPRMerged
+		base.CreatedAt = timeOr(o.PR.MergedAtProvider, base.CreatedAt)
 		return &base
 	}
 	if o.PR.Closed {
 		base.Type = domain.NotificationPRClosedUnmerged
+		base.CreatedAt = timeOr(o.PR.ClosedAtProvider, base.CreatedAt)
 		return &base
 	}
 	if rec.IsTerminated || rec.Activity.State.NeedsInput() || !ready {
@@ -685,6 +691,7 @@ func prCommentObservations(comments []domain.PullRequestComment) []ports.PRComme
 			URL:              comment.URL,
 			Resolved:         comment.Resolved,
 			AutoInjectReview: comment.AutoInjectReview,
+			CreatedAt:        comment.CreatedAt,
 		})
 	}
 	return out
@@ -908,6 +915,13 @@ func formatReviewChangesRequestedMessage(review domain.PullRequestReview) string
 		author = "unknown reviewer"
 	}
 	fmt.Fprintf(&msg, "A changes-requested review from @%s is on your PR.", author)
+	// When the reviewer submitted it, not when AO delivered it: a nudge held
+	// while the session waited on the user can arrive long after. The chat
+	// shows this time on the event row. It ends the first line, which older
+	// chat clients read only for the PR identity, so they still parse the rest.
+	if !review.SubmittedAt.IsZero() {
+		fmt.Fprintf(&msg, " Submitted at %s.", providerEventTime(review.SubmittedAt))
+	}
 	if body := domain.SanitizeControlChars(review.Body); strings.TrimSpace(body) != "" {
 		fmt.Fprintf(&msg, "\n\nReview body:\n%s", body)
 	}
@@ -926,7 +940,14 @@ func formatReviewCommentsMessage(comments []ports.PRCommentObservation) string {
 		return "A reviewer left feedback on your PR. Address it and push. Fetch the review details only if you need additional context beyond what Orchestrator has provided here."
 	}
 	var msg strings.Builder
-	fmt.Fprintf(&msg, "The following %d unresolved review comment(s) are on your PR as of just now. You should not need to re-fetch this data unless you need additional context.\n", len(comments))
+	fmt.Fprintf(&msg, "The following %d unresolved review comment(s) are on your PR as of just now. You should not need to re-fetch this data unless you need additional context.", len(comments))
+	// When the newest comment was written, not when AO delivered it; the chat
+	// shows this time on the event row. Like the changes-requested nudge, it
+	// ends the first line so older chat clients still parse the message.
+	if newest := newestCommentTime(comments); !newest.IsZero() {
+		fmt.Fprintf(&msg, " Newest comment posted at %s.", providerEventTime(newest))
+	}
+	msg.WriteString("\n")
 	for i, c := range comments {
 		location := "(general)"
 		if c.File != "" {
@@ -954,6 +975,22 @@ func formatReviewCommentsMessage(comments []ports.PRCommentObservation) string {
 	}
 	msg.WriteString("\nAddress each comment and push fixes. Use the thread ID to resolve each thread directly after pushing when available. You should not need to re-fetch review data unless you need additional context beyond what is provided here.")
 	return msg.String()
+}
+
+func newestCommentTime(comments []ports.PRCommentObservation) time.Time {
+	var newest time.Time
+	for _, c := range comments {
+		if c.CreatedAt.After(newest) {
+			newest = c.CreatedAt
+		}
+	}
+	return newest
+}
+
+// providerEventTime renders a provider timestamp for nudge text: UTC RFC 3339
+// to the second, which both agents and the chat's parser read unambiguously.
+func providerEventTime(t time.Time) string {
+	return t.UTC().Format(time.RFC3339)
 }
 
 func markdownCodeFence(s string) string {

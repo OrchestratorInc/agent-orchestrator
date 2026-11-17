@@ -60,6 +60,7 @@ func TestPlansMatchAuthenticationMatrix(t *testing.T) {
 		{"command-code", "Log in to Command Code", "command-code", "Native browser flow; an API key can be pasted in the terminal", "https://commandcode.ai/docs/quickstart", "", ActionLogin, []string{"command-code", "login"}},
 		{"hermes", "Set up Hermes Agent", "hermes", "Native provider setup: choose a provider, then paste an API key or finish its OAuth flow", "https://hermes-agent.nousresearch.com/docs", "", ActionSetup, []string{"hermes", "model"}},
 		{"stakpak", "Log in to Stakpak", "stakpak", "Native provider login: create a Stakpak API key in the browser, or paste an Anthropic, OpenAI or Gemini key", "https://github.com/stakpak/agent#authentication", "", ActionLogin, []string{"stakpak", "auth", "login"}},
+		{"open-interpreter", "Log in to Open Interpreter", "interpreter", "Native sign-in for the built-in OpenAI provider; other providers use a saved API key", "https://www.openinterpreter.com/docs/terminal/install", "", ActionLogin, []string{"interpreter", "login"}},
 	}
 
 	svc := New(foundExecutables(cases), nil)

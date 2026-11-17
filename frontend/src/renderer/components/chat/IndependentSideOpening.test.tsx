@@ -7,6 +7,7 @@ import type { components } from "../../../api/schema";
 import { TooltipProvider } from "../ui/tooltip";
 import { useIndependentSideChats } from "./IndependentSideChats";
 import { emptySideChatDraft, type SideChatDraft } from "./sideChatDraft";
+import { INLINE_ATTACHMENT_BYTES } from "../../lib/attachment-uploads";
 
 const { get, post, put, patch, capture } = vi.hoisted(() => ({ get: vi.fn(), post: vi.fn(), put: vi.fn(), patch: vi.fn(), capture: vi.fn() }));
 vi.mock("../../lib/api-client", () => ({
@@ -501,17 +502,33 @@ describe("deferred side opening", () => {
 		expect(screen.getByRole("combobox", { name: "Side chat question" })).toHaveTextContent("Keep my next draft");
 	});
 
-	it("restores native image bytes from staged files after a remount", async () => {
+	it.each(["Image question", "/btw Image question"])("restores native image bytes from staged files after a remount: %s", async question => {
 		draft = { ...emptySideChatDraft(), text: "Image question", attachments: [{ id: "img", path: ".ao/attachments/a.png", name: "a.png", mimeType: "image/png", bytes: 3 }] };
 		const fetchImage = vi.fn().mockResolvedValue({ ok: true, blob: async () => new Blob(["png"], { type: "image/png" }) });
 		vi.stubGlobal("fetch", fetchImage);
 		render(<Harness />);
 		await screen.findByRole("button", { name: "Remove a.png" });
-		await act(async () => { await chat.send("side", "Image question"); });
+		if (question.startsWith("/btw")) post.mockImplementation(async (path: string) => path.endsWith("/side-chats") ? { data: { side: { ...snapshot.side, id: "destination" } } } : {});
+		await act(async () => { await chat.send("side", question); });
 		expect(fetchImage).toHaveBeenCalledWith(expect.stringContaining("a.png"));
-		expect(post.mock.calls[0][1].body.attachments).toEqual([{ mimeType: "image/png", data: "cG5n" }]);
-		expect(draft.openingDelivery?.request.resources).toEqual([{ uri: ".ao/attachments/a.png", name: "a.png" }]);
-		expect(draft.openingDelivery?.request.attachments).toBeUndefined();
+		const message = post.mock.calls.find(([path]) => path.endsWith("/messages"))![1].body;
+		expect(message.attachments).toEqual([{ mimeType: "image/png", data: "cG5n" }]);
+		expect(message.resources).toEqual([{ uri: ".ao/attachments/a.png", name: "a.png" }]);
+		if (!question.startsWith("/btw")) expect(draft.openingDelivery?.request.attachments).toBeUndefined();
+	});
+
+	it.each(["Image question", "/btw Image question"])("keeps oversized saved images as file resources without fetching them: %s", async question => {
+		draft = { ...emptySideChatDraft(), text: question, attachments: [{ id: "img", path: ".ao/attachments/large.png", name: "large.png", mimeType: "image/png", bytes: INLINE_ATTACHMENT_BYTES + 1 }] };
+		const fetchImage = vi.fn();
+		vi.stubGlobal("fetch", fetchImage);
+		if (question.startsWith("/btw")) post.mockImplementation(async (path: string) => path.endsWith("/side-chats") ? { data: { side: { ...snapshot.side, id: "destination" } } } : {});
+		render(<Harness />);
+		await screen.findByRole("button", { name: "Remove large.png" });
+		await act(async () => { await chat.send("side", question); });
+		const message = post.mock.calls.find(([path]) => path.endsWith("/messages"))![1].body;
+		expect(message.attachments).toEqual([]);
+		expect(message.resources).toEqual([{ uri: ".ao/attachments/large.png", name: "large.png" }]);
+		expect(fetchImage).not.toHaveBeenCalled();
 	});
 
 	it("recreates a failed opening as an unused draft with its files, preserving newer edits in the original tab", async () => {

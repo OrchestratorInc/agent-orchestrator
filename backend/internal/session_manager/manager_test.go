@@ -671,6 +671,7 @@ type fakeRuntime struct {
 	outputErr          error
 	interruptErr       error
 	interrupts         []string
+	inputs             []string
 	onInterrupt        func(ports.RuntimeHandle)
 	// aliveByHandle maps a RuntimeHandle.ID to its liveness; missing = false.
 	aliveByHandle           map[string]bool
@@ -692,6 +693,11 @@ func (r *fakeRuntime) Interrupt(_ context.Context, handle ports.RuntimeHandle) e
 		r.onInterrupt(handle)
 	}
 	return r.interruptErr
+}
+
+func (r *fakeRuntime) SendInput(ctx context.Context, handle ports.RuntimeHandle, input string) error {
+	r.inputs = append(r.inputs, input)
+	return r.Interrupt(ctx, handle)
 }
 
 type fakePreviewLifecycle struct {
@@ -896,6 +902,8 @@ func (r *fakeRuntime) GetStyledOutput(ctx context.Context, handle ports.RuntimeH
 }
 
 type fakeAgent struct{}
+
+func (fakeAgent) InterruptKey() string { return "\x03" }
 
 func (fakeAgent) GetConfigSpec(context.Context) (ports.ConfigSpec, error) {
 	return ports.ConfigSpec{}, nil
@@ -4248,9 +4256,18 @@ func TestKill_ReviewerTeardownFailureLeavesSessionActive(t *testing.T) {
 // AFTER.
 type fakeShellTerminalCloser struct {
 	began     []domain.SessionID
+	suspended []domain.SessionID
 	ended     []domain.SessionID
 	err       error
 	sharedLog *[]string
+}
+
+func (f *fakeShellTerminalCloser) SuspendSessionShells(_ context.Context, id domain.SessionID) (func(), error) {
+	f.suspended = append(f.suspended, id)
+	if f.err != nil {
+		return nil, f.err
+	}
+	return func() { f.ended = append(f.ended, id) }, nil
 }
 
 func (f *fakeShellTerminalCloser) BeginSessionTeardown(_ context.Context, id domain.SessionID) (func(), error) {
@@ -6489,6 +6506,7 @@ func TestSpawnOrchestrator_UsesCoordinatorPrompt(t *testing.T) {
 		"Use `ao send` for session communication",
 		"`ao session ls --project mer`",
 		"`ao session get <worker-session-id>`",
+		"`ao session interrupt <session-id>`",
 		"Delegate implementation, fixes, tests, and PR ownership to worker sessions",
 		filepath.ToSlash(filepath.Join("skills", "using-ao", "SKILL.md")),
 		"Orchestrator desktop Browser panel",
@@ -8218,6 +8236,95 @@ func TestSpawn_TUICodexEffortIsResolvedAndPersisted(t *testing.T) {
 	}
 	if stored.Metadata.Effort != "high" {
 		t.Fatalf("persisted effort = %q, want high (explicit override must be durable for a TUI rebuild)", stored.Metadata.Effort)
+	}
+}
+
+// TestSpawn_TUIPiInheritedEffortIsValidated asserts a Pi or Prime Agent TUI
+// spawn validates an effort inherited from role settings: a level the model
+// advertises reaches the adapter, and a stale one is cleared before --thinking.
+func TestSpawn_TUIPiInheritedEffortIsValidated(t *testing.T) {
+	for _, harness := range []domain.AgentHarness{domain.HarnessPi, domain.HarnessPrimeAgent} {
+		for inherited, want := range map[string]string{"high": "high", "max": ""} {
+			m, st, _, _ := newManager()
+			agent := &recordingAgent{}
+			m.agents = singleAgent{agent: agent}
+			m.SetModelCatalog(tuningCatalog{catalog: ports.AgentModelCatalog{Models: []ports.AgentModelInfo{
+				{ID: "openai/gpt-6.1-sol", IsDefault: true, Efforts: []string{"low", "high"}},
+			}}})
+			project := st.projects["mer"]
+			project.Config.Worker = domain.RoleOverride{AgentConfig: domain.AgentConfig{Model: "openai/gpt-6.1-sol", Effort: inherited}}
+			st.projects["mer"] = project
+
+			if _, _, _, err := m.Spawn(ctx, ports.SpawnConfig{
+				ProjectID: "mer", Kind: domain.KindWorker, Harness: harness,
+				RequestedMode: domain.SessionModeTUI, Prompt: "do the work",
+			}); err != nil {
+				t.Fatalf("harness %q inherited %q spawn: %v", harness, inherited, err)
+			}
+			if agent.lastConfig.Effort != want {
+				t.Fatalf("harness %q inherited %q launch effort = %q, want %q", harness, inherited, agent.lastConfig.Effort, want)
+			}
+		}
+	}
+}
+
+func TestSpawn_TUIPiInheritedEffortWithoutModel(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	for _, harness := range []domain.AgentHarness{domain.HarnessPi, domain.HarnessPrimeAgent} {
+		for _, source := range []string{"project", "role"} {
+			for _, mode := range []domain.SessionMode{"", domain.SessionModeTUI} {
+				for _, tc := range []struct {
+					name    string
+					catalog *tuningCatalog
+					want    string
+				}{
+					{name: "no catalog", want: "high"},
+					{name: "no saved models", catalog: &tuningCatalog{}, want: "high"},
+					{name: "no default", catalog: &tuningCatalog{catalog: ports.AgentModelCatalog{Models: []ports.AgentModelInfo{
+						{ID: "fixture/other", Efforts: []string{"low"}},
+					}}}, want: "high"},
+					{name: "catalog read error", catalog: &tuningCatalog{err: errors.New("saved catalog unavailable")}, want: "high"},
+					{name: "default supports effort", catalog: &tuningCatalog{catalog: ports.AgentModelCatalog{Models: []ports.AgentModelInfo{
+						{ID: "fixture/default", IsDefault: true, Efforts: []string{"low", "high"}},
+					}}}, want: "high"},
+					{name: "default rejects effort", catalog: &tuningCatalog{catalog: ports.AgentModelCatalog{Models: []ports.AgentModelInfo{
+						{ID: "fixture/default", IsDefault: true, Efforts: []string{"low"}},
+					}}}},
+				} {
+					t.Run(fmt.Sprintf("%s/%s/%s/%s", harness, source, mode, tc.name), func(t *testing.T) {
+						m, st, rt, _ := newManager()
+						m.dataDir = t.TempDir()
+						agent := &recordingAgent{}
+						m.agents = singleAgent{agent: agent}
+						if tc.catalog != nil {
+							m.SetModelCatalog(tc.catalog)
+						}
+						project := st.projects["mer"]
+						project.Config = domain.ProjectConfig{Worker: domain.RoleOverride{Harness: harness}}
+						if source == "project" {
+							project.Config.AgentConfig.Effort = "high"
+						} else {
+							project.Config.Worker.AgentConfig.Effort = "high"
+						}
+						st.projects["mer"] = project
+
+						rec, _, _, err := m.Spawn(t.Context(), ports.SpawnConfig{
+							ProjectID: "mer", Kind: domain.KindWorker, Harness: harness,
+							RequestedMode: mode, Prompt: "do the work",
+						})
+						if err != nil {
+							t.Fatal(err)
+						}
+						if agent.lastConfig.Effort != tc.want || agent.launchCalls != 1 || rt.created != 1 {
+							t.Fatalf("launch effort=%q, launches=%d, runtimes=%d; want %q, 1, 1", agent.lastConfig.Effort, agent.launchCalls, rt.created, tc.want)
+						}
+						if got := st.sessions[rec.ID].Metadata.Effort; got != tc.want {
+							t.Fatalf("saved effort=%q, want %q", got, tc.want)
+						}
+					})
+				}
+			}
+		}
 	}
 }
 
@@ -11436,6 +11543,168 @@ func TestSendSemanticTUIRejectsMissingReceiptStore(t *testing.T) {
 	}
 	if len(msg.msgs) != 0 {
 		t.Fatalf("pane writes = %d, want 0", len(msg.msgs))
+	}
+}
+
+// The report coordinator interrupts before delivering a --stuck batch. If the
+// harness cannot confirm delivery the batch is retried, so an interrupt sent
+// anyway would hit the orchestrator again on every retry.
+func TestInterruptTUIRequiresSemanticAcceptance(t *testing.T) {
+	m, st, rt, _ := newManager()
+	st.sessions["s1"] = domain.SessionRecord{
+		ID: "s1", Harness: domain.HarnessClaudeCode, Mode: domain.SessionModeTUI,
+		Activity: domain.Activity{State: domain.ActivityActive},
+		Metadata: domain.SessionMetadata{RuntimeHandleID: "runtime-1"},
+	}
+	if err := m.InterruptTUI(context.Background(), "s1"); !errors.Is(err, ErrSemanticAcceptanceUnsupported) {
+		t.Fatalf("InterruptTUI error = %v, want unsupported", err)
+	}
+	if len(rt.interrupts) != 0 {
+		t.Fatalf("runtime interrupts = %v, want none", rt.interrupts)
+	}
+}
+
+func TestStopTUITurnWithoutSemanticAcceptance(t *testing.T) {
+	m, st, rt, _ := newManager()
+	st.sessions["s1"] = domain.SessionRecord{
+		ID: "s1", Harness: domain.HarnessClaudeCode, Mode: domain.SessionModeTUI,
+		Activity: domain.Activity{State: domain.ActivityActive},
+		Metadata: domain.SessionMetadata{RuntimeHandleID: "runtime-1"},
+	}
+	if err := m.StopTUITurn(context.Background(), "s1"); err != nil {
+		t.Fatalf("StopTUITurn: %v", err)
+	}
+	if got := rt.interrupts; !reflect.DeepEqual(got, []string{"runtime-1"}) {
+		t.Fatalf("runtime interrupts = %v", got)
+	}
+}
+
+// Ctrl+C on an idle Claude Code, Codex or Gemini prompt arms "press again to
+// exit", so a second stop request could quit the agent.
+func TestStopTUITurnRefusesIdleSession(t *testing.T) {
+	for _, state := range []domain.ActivityState{domain.ActivityIdle, domain.ActivityWaitingInput, domain.ActivityBlocked, ""} {
+		m, st, rt, _ := newManager()
+		st.sessions["s1"] = domain.SessionRecord{
+			ID: "s1", Harness: domain.HarnessClaudeCode, Mode: domain.SessionModeTUI,
+			Activity: domain.Activity{State: state},
+			Metadata: domain.SessionMetadata{RuntimeHandleID: "runtime-1"},
+		}
+		if err := m.StopTUITurn(context.Background(), "s1"); !errors.Is(err, ErrNoActiveTurn) {
+			t.Fatalf("StopTUITurn(%q) error = %v, want no active turn", state, err)
+		}
+		if len(rt.interrupts) != 0 {
+			t.Fatalf("StopTUITurn(%q) interrupts = %v, want none", state, rt.interrupts)
+		}
+	}
+}
+
+// A stopped turn can still read active until the agent reports its next state.
+// A repeat in that window would send a second Ctrl+C to an idle prompt.
+func TestStopTUITurnSendsOneInterruptPerTurn(t *testing.T) {
+	m, st, rt, _ := newManager()
+	turn := time.Date(2026, 11, 16, 10, 0, 0, 0, time.UTC)
+	st.sessions["s1"] = domain.SessionRecord{
+		ID: "s1", Harness: domain.HarnessClaudeCode, Mode: domain.SessionModeTUI,
+		Activity: domain.Activity{State: domain.ActivityActive, LastActivityAt: turn},
+		Metadata: domain.SessionMetadata{RuntimeHandleID: "runtime-1"},
+	}
+	ctx := context.Background()
+	if err := m.StopTUITurn(ctx, "s1"); err != nil {
+		t.Fatalf("first StopTUITurn: %v", err)
+	}
+	if err := m.StopTUITurn(ctx, "s1"); !errors.Is(err, ErrTurnStopPending) {
+		t.Fatalf("repeat StopTUITurn error = %v, want stop pending", err)
+	}
+	if len(rt.interrupts) != 1 {
+		t.Fatalf("interrupts after repeat = %v, want one", rt.interrupts)
+	}
+
+	// A new active turn can be stopped again.
+	rec := st.sessions["s1"]
+	rec.Activity.LastActivityAt = turn.Add(time.Minute)
+	st.sessions["s1"] = rec
+	if err := m.StopTUITurn(ctx, "s1"); err != nil {
+		t.Fatalf("StopTUITurn on next turn: %v", err)
+	}
+	if len(rt.interrupts) != 2 {
+		t.Fatalf("interrupts after next turn = %v, want two", rt.interrupts)
+	}
+}
+
+// A stopped turn can stay active (Claude Code sends no hook on Ctrl+C), and a
+// prompt submitted then keeps active without moving LastActivityAt. The new
+// prompt still starts a new turn that must be stoppable.
+func TestStopTUITurnStopsPromptSubmittedWithoutIdle(t *testing.T) {
+	m, st, rt, _ := newManager()
+	turn := time.Date(2026, 11, 16, 10, 0, 0, 0, time.UTC)
+	st.sessions["s1"] = domain.SessionRecord{
+		ID: "s1", Harness: domain.HarnessClaudeCode, Mode: domain.SessionModeTUI,
+		Activity: domain.Activity{State: domain.ActivityActive, LastActivityAt: turn},
+		Metadata: domain.SessionMetadata{
+			RuntimeHandleID:    "runtime-1",
+			LatestUserPrompt:   "run the tests",
+			LatestUserPromptAt: turn,
+		},
+	}
+	ctx := context.Background()
+	if err := m.StopTUITurn(ctx, "s1"); err != nil {
+		t.Fatalf("first StopTUITurn: %v", err)
+	}
+
+	rec := st.sessions["s1"]
+	rec.Metadata.LatestUserPrompt = "fix the lint instead"
+	rec.Metadata.LatestUserPromptAt = turn.Add(time.Minute)
+	st.sessions["s1"] = rec
+	if err := m.StopTUITurn(ctx, "s1"); err != nil {
+		t.Fatalf("StopTUITurn after a new prompt: %v", err)
+	}
+
+	// A coordination turn changes only the checkpoint turn ID.
+	rec = st.sessions["s1"]
+	rec.Metadata.ConversationCheckpointTurnID = "coord-1"
+	st.sessions["s1"] = rec
+	if err := m.StopTUITurn(ctx, "s1"); err != nil {
+		t.Fatalf("StopTUITurn after a coordination prompt: %v", err)
+	}
+	if len(rt.interrupts) != 3 {
+		t.Fatalf("interrupts = %v, want three", rt.interrupts)
+	}
+}
+
+func TestStopTUITurnRetriesAfterFailedDelivery(t *testing.T) {
+	m, st, rt, _ := newManager()
+	st.sessions["s1"] = domain.SessionRecord{
+		ID: "s1", Harness: domain.HarnessClaudeCode, Mode: domain.SessionModeTUI,
+		Activity: domain.Activity{State: domain.ActivityActive, LastActivityAt: time.Now()},
+		Metadata: domain.SessionMetadata{RuntimeHandleID: "runtime-1"},
+	}
+	ctx := context.Background()
+	rt.interruptErr = errors.New("pane gone")
+	if err := m.StopTUITurn(ctx, "s1"); err == nil {
+		t.Fatal("StopTUITurn error = nil, want delivery failure")
+	}
+	rt.interruptErr = nil
+	if err := m.StopTUITurn(ctx, "s1"); err != nil {
+		t.Fatalf("retry StopTUITurn: %v", err)
+	}
+	if len(rt.interrupts) != 2 {
+		t.Fatalf("interrupts = %v, want two attempts", rt.interrupts)
+	}
+}
+
+func TestStopTUITurnWaitsForExclusiveOperation(t *testing.T) {
+	m, st, rt, _ := newManager()
+	st.sessions["s1"] = domain.SessionRecord{
+		ID: "s1", Harness: domain.HarnessClaudeCode, Mode: domain.SessionModeTUI,
+		Activity: domain.Activity{State: domain.ActivityActive},
+		Metadata: domain.SessionMetadata{RuntimeHandleID: "runtime-1"},
+	}
+	m.agentOperations["s1"] = agentOperationKill
+	if err := m.StopTUITurn(context.Background(), "s1"); !errors.Is(err, ErrOperationInProgress) {
+		t.Fatalf("StopTUITurn error = %v, want operation in progress", err)
+	}
+	if len(rt.interrupts) != 0 {
+		t.Fatalf("interrupts = %v, want none during kill", rt.interrupts)
 	}
 }
 

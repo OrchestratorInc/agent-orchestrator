@@ -34,6 +34,7 @@ import { saveSideChatDraft, readSideChatDraft } from "./sideChatDraftWriter";
 import { useTabScrollEdges } from "../../hooks/useTabScrollEdges";
 import { MAX_SESSION_DISPLAY_NAME_LEN } from "../../hooks/useSessionRename";
 import { useUiStore } from "../../stores/ui-store";
+import { INLINE_ATTACHMENT_BYTES, readBlobAsBase64, type OutgoingAttachment } from "../../lib/attachment-uploads";
 
 type Side = components["schemas"]["SideConversation"];
 type Snapshot = components["schemas"]["SideSnapshot"];
@@ -357,34 +358,30 @@ export function SideComposer({
 	);
 }
 
-async function sideFilePayload(file: File): Promise<{ mimeType: string; data: string }> {
-	const dataUrl = await new Promise<string>((resolve, reject) => {
-		const reader = new FileReader();
-		reader.onload = () => resolve(String(reader.result));
-		reader.onerror = () => reject(reader.error);
-		reader.readAsDataURL(file);
-	});
-	return {
-		mimeType: file.type || "application/octet-stream",
-		data: dataUrl.split(",", 2)[1] ?? "",
-	};
+async function sideFilePayload(file: File): Promise<OutgoingAttachment> {
+	const mimeType = file.type || "application/octet-stream";
+	// A large file is not read: staging streams it from disk to the daemon.
+	if (file.size > INLINE_ATTACHMENT_BYTES) return { mimeType, data: "", file };
+	return { mimeType, data: await readBlobAsBase64(file) };
 }
 
 async function sideImagePayloads(sessionId: string, staged: ChatDraftAttachment[], files: { path: string; file: File }[]) {
-	return Promise.all(staged.filter(file => /^image\/(png|jpeg|gif|webp)$/i.test(file.mimeType)).map(async saved => {
+	const images = await Promise.all(staged.filter(file => /^image\/(png|jpeg|gif|webp)$/i.test(file.mimeType) && file.bytes <= INLINE_ATTACHMENT_BYTES).map(async saved => {
 		const live = files.find(file => file.path === saved.path)?.file;
-		if (live) return sideFilePayload(live);
+		if (live) return live.size <= INLINE_ATTACHMENT_BYTES ? sideFilePayload(live) : undefined;
 		const response = await fetch(attachmentURL(getApiBaseUrl(), sessionId, saved.path));
 		if (!response.ok) throw new Error(`Could not load attached image: ${saved.name}`);
-		return sideFilePayload(new File([await response.blob()], saved.name, { type: saved.mimeType }));
+		const blob = await response.blob();
+		return blob.size <= INLINE_ATTACHMENT_BYTES ? sideFilePayload(new File([blob], saved.name, { type: saved.mimeType })) : undefined;
 	}));
+	return images.filter((image): image is OutgoingAttachment => image !== undefined);
 }
 
 export function useIndependentSideChats(
 	sessionId: string,
 	models: ChatModel[],
 	skills: ChatSkill[],
-	stageAttachments: (items: { mimeType: string; data: string }[]) => Promise<string[]>,
+	stageAttachments: (items: OutgoingAttachment[]) => Promise<string[]>,
 	nativeImages: boolean,
 	enabled = true,
 	onNavigate?: (annotation: ChatAnnotationSummaryItem) => void,
@@ -402,6 +399,8 @@ export function useIndependentSideChats(
 		setSidesState(next);
 		setActiveId(selected => selectedSideAfterUpdate(selected, previous, next));
 	}, []);
+	// False until the session's side list has loaded once, so "none yet" is not read as "none".
+	const [loaded, setLoaded] = useState(false);
 	const [activeId, setActiveId] = useState<string>();
 	const [visible, setVisible] = useState(false);
 	const [liveSnapshot, setSnapshot] = useState<Snapshot>();
@@ -649,6 +648,7 @@ export function useIndependentSideChats(
 		setSideError(undefined);
 		lifecycleRevision.current++;
 		setSides([]);
+		setLoaded(false);
 		setActiveId(undefined);
 		setVisible(false);
 		setSnapshot(undefined);
@@ -747,6 +747,7 @@ export function useIndependentSideChats(
 				if (closingSidesRef.current.has(side.id) && !closedSidesRef.current.has(side.id) && !nextSides.some(current => current.id === side.id)) nextSides.push(side);
 			}
 			setSides(nextSides);
+			setLoaded(true);
 		} catch (cause) {
 			if (current()) { appliedListRequest.current = request; if (reportErrors) setListError(apiErrorMessage(cause)); }
 		}
@@ -1797,7 +1798,6 @@ export function useIndependentSideChats(
 										)
 									}
 									actionPinned
-									actionPosition="end"
 									active={active}
 									buttonProps={{
 										"aria-keyshortcuts": "F2",
@@ -2278,6 +2278,7 @@ export function useIndependentSideChats(
 		replaceDraft,
 		addReference,
 		sides,
+		loaded,
 		activeId: currentActiveId,
 		visible,
 		show: (sideId?: string) => {
