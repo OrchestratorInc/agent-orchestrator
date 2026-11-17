@@ -1907,7 +1907,6 @@ const SortableBrowserTopTab = memo(function SortableBrowserTopTab({
 			<TerminalTabFrame
 				action={<TabCloseButton label={t("browser.closeTab", { title: label.title })} onClose={close} />}
 				actionPinned
-				actionPosition="end"
 				active={selected}
 				buttonProps={{
 					...attributes,
@@ -1957,7 +1956,6 @@ export const BrowserTopTabDragOverlay = memo(function BrowserTopTabDragOverlay({
 			<TerminalTabFrame
 				action={<TabCloseButton label={t("browser.closeTab", { title: label.title })} onClose={noop} />}
 				actionPinned
-				actionPosition="end"
 				active={tab.active}
 				buttonProps={{ tabIndex: -1, type: "button" }}
 				icon={<BrowserTabIcon favicon={tab.favicon} />}

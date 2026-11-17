@@ -10,11 +10,13 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log/slog"
 	"net/url"
 	"os"
 	"path/filepath"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/pressly/goose/v3"
 
@@ -116,6 +118,16 @@ func checkLegacyDatabasePath(dataDir string) error {
 	return nil
 }
 
+// timestampFenceTimeout bounds startup repair. A failed fence never publishes
+// readers that could compare legacy timestamps as local wall-clock text.
+const timestampFenceTimeout = 5 * time.Minute
+
+type timestampOpenOptions struct {
+	driver      string
+	fenceBudget time.Duration
+	repairDone  chan<- struct{}
+}
+
 // Open opens (creating if absent) the SQLite database under dataDir and returns
 // a Store. It uses TWO pools against the same file:
 //
@@ -128,6 +140,13 @@ func checkLegacyDatabasePath(dataDir string) error {
 //   - a READER pool (readDB, MaxOpenConns=maxReaders): all reads scale across
 //     it; WAL readers see the latest committed snapshot.
 func Open(dataDir string) (*Store, error) {
+	return openWithTimestampOptions(dataDir, timestampOpenOptions{driver: "ao-sqlite", fenceBudget: timestampFenceTimeout})
+}
+
+func openWithTimestampOptions(dataDir string, opts timestampOpenOptions) (*Store, error) {
+	if opts.driver == "" {
+		opts.driver = "ao-sqlite"
+	}
 	if err := os.MkdirAll(dataDir, 0o750); err != nil {
 		return nil, fmt.Errorf("create data dir: %w", err)
 	}
@@ -136,7 +155,7 @@ func Open(dataDir string) (*Store, error) {
 	}
 	dsn := databaseURI(dataDir) + pragmas
 
-	writeDB, err := sql.Open("sqlite", dsn)
+	writeDB, err := sql.Open(opts.driver, dsn)
 	if err != nil {
 		return nil, fmt.Errorf("open sqlite writer: %w", err)
 	}
@@ -146,12 +165,53 @@ func Open(dataDir string) (*Store, error) {
 		_ = writeDB.Close()
 		return nil, err
 	}
-	store, err := withSearchIndex(dataDir, dsn, writeDB)
+	readDB, err := openTimestampReaders(opts.driver, dsn)
 	if err != nil {
 		_ = writeDB.Close()
 		return nil, err
 	}
+	state := newTimestampRepairState()
+	{
+		started := time.Now()
+		slog.Info("checking legacy timestamps before opening readers")
+		ctx, cancel := context.WithTimeout(context.Background(), opts.fenceBudget)
+		result, repairErr := runTimestampRepairState(ctx, writeDB, readDB, true, state)
+		if repairErr == nil {
+			repairErr = ctx.Err()
+		}
+		cancel()
+		if repairErr != nil {
+			_ = readDB.Close()
+			_ = writeDB.Close()
+			return nil, fmt.Errorf("timestamp startup repair incomplete; committed batches retained: %w", repairErr)
+		}
+		slog.Info("timestamp startup fence completed", "duration", time.Since(started), "repaired", result.Repaired, "skipped", result.Skipped, "deleted", result.Deleted)
+	}
+	store, err := withSearchIndexPools(dataDir, dsn, writeDB, readDB)
+	if err != nil {
+		_ = readDB.Close()
+		_ = writeDB.Close()
+		return nil, err
+	}
+	store.StartTimestampRepair(func(ctx context.Context) error {
+		if opts.repairDone != nil {
+			defer close(opts.repairDone)
+		}
+		_, err := runTimestampRepairState(ctx, writeDB, readDB, false, state)
+		return err
+	})
+
 	return store, nil
+}
+
+func openTimestampReaders(driverName, dsn string) (*sql.DB, error) {
+	readDB, err := sql.Open(driverName, dsn)
+	if err != nil {
+		return nil, fmt.Errorf("open sqlite reader: %w", err)
+	}
+	readDB.SetMaxOpenConns(maxReaders)
+	readDB.SetMaxIdleConns(maxReaders)
+	return readDB, nil
 }
 
 // withSearchIndex opens the reader pool beside an open, migrated writer, then
@@ -161,12 +221,14 @@ func Open(dataDir string) (*Store, error) {
 // is recorded on the store (SessionSearchUnavailable) and search stays off,
 // while every other read and write works as usual.
 func withSearchIndex(dataDir, dsn string, writeDB *sql.DB) (*Store, error) {
-	readDB, err := sql.Open("sqlite", dsn)
+	readDB, err := openTimestampReaders("ao-sqlite", dsn)
 	if err != nil {
-		return nil, fmt.Errorf("open sqlite reader: %w", err)
+		return nil, err
 	}
-	readDB.SetMaxOpenConns(maxReaders)
-	readDB.SetMaxIdleConns(maxReaders)
+	return withSearchIndexPools(dataDir, dsn, writeDB, readDB)
+}
+
+func withSearchIndexPools(dataDir, dsn string, writeDB, readDB *sql.DB) (*Store, error) {
 	store := sqlitestore.NewStore(writeDB, readDB)
 
 	if sessionSearchSwitchedOff() {
@@ -193,7 +255,7 @@ func withSearchIndex(dataDir, dsn string, writeDB *sql.DB) (*Store, error) {
 func OpenReadOnly(ctx context.Context, dataDir string) (*Store, error) {
 	dsn := databaseURI(dataDir) + readOnlyPragmas
 
-	writeDB, err := sql.Open("sqlite", dsn)
+	writeDB, err := sql.Open("ao-sqlite", dsn)
 	if err != nil {
 		return nil, fmt.Errorf("open sqlite read-only writer: %w", err)
 	}
@@ -204,7 +266,7 @@ func OpenReadOnly(ctx context.Context, dataDir string) (*Store, error) {
 		return nil, fmt.Errorf("open sqlite read-only writer: %w", err)
 	}
 
-	readDB, err := sql.Open("sqlite", dsn)
+	readDB, err := sql.Open("ao-sqlite", dsn)
 	if err != nil {
 		_ = writeDB.Close()
 		return nil, fmt.Errorf("open sqlite read-only reader: %w", err)
@@ -289,7 +351,7 @@ func OpenPreMigrated(dataDir string) (*Store, error) {
 
 	dsn := databaseURI(dataDir) + pragmas
 
-	writeDB, err := sql.Open("sqlite", dsn)
+	writeDB, err := sql.Open("ao-sqlite", dsn)
 	if err != nil {
 		return nil, fmt.Errorf("open sqlite writer: %w", err)
 	}
@@ -2206,7 +2268,8 @@ func reconcileHarnessConstraint(db *sql.DB) error {
 	needsCommandCode := !strings.Contains(schema, "'command-code'")
 	needsStakpak := !strings.Contains(schema, "'stakpak'")
 	needsMiniMaxCode := !strings.Contains(schema, "'minimax-code'")
-	if !needsNativeAssistant && !needsMemcode && !needsStakpak && !needsMuse && !needsKimchi && !needsPrimeAgent && !needsOMP && !needsGemini && !needsUnreal && !needsCodewhale && !needsMiMo && !needsDeepSeek && !needsOpenHands && !needsCommandCode && !needsDockerAgent && !needsFX && !needsOpenCodeV2 && !needsMiniMaxCode {
+	needsOpenInterpreter := !strings.Contains(schema, "'open-interpreter'")
+	if !needsNativeAssistant && !needsMemcode && !needsStakpak && !needsMuse && !needsKimchi && !needsPrimeAgent && !needsOMP && !needsGemini && !needsUnreal && !needsCodewhale && !needsMiMo && !needsDeepSeek && !needsOpenHands && !needsCommandCode && !needsDockerAgent && !needsFX && !needsOpenCodeV2 && !needsMiniMaxCode && !needsOpenInterpreter {
 		return nil
 	}
 	if _, err := db.Exec(`PRAGMA writable_schema = ON`); err != nil {
@@ -2246,6 +2309,15 @@ func reconcileHarnessConstraint(db *sql.DB) error {
 			return fmt.Errorf("schema repair: normalize MiniMax Code constraint: %w", err)
 		}
 		needsMiniMaxCode = true
+	}
+	if !needsOpenInterpreter {
+		// Open Interpreter's migration runs after MiniMax Code's, so it is last
+		// before 'fake' on a fresh database. Remove it the same way and append
+		// it again after MiniMax Code.
+		if _, err := db.Exec(`UPDATE sqlite_master SET sql = replace(sql, '''open-interpreter'', ', '') WHERE type = 'table' AND name = 'sessions'`); err != nil {
+			return fmt.Errorf("schema repair: normalize Open Interpreter constraint: %w", err)
+		}
+		needsOpenInterpreter = true
 	}
 	type replacement struct {
 		old string
@@ -2380,6 +2452,10 @@ func reconcileHarnessConstraint(db *sql.DB) error {
 	if needsMiniMaxCode {
 		repairs = append(repairs, replacement{"'fake'))", "'minimax-code', 'fake'))"})
 	}
+	// Open Interpreter's migration runs after MiniMax Code's, so it follows it.
+	if needsOpenInterpreter {
+		repairs = append(repairs, replacement{"'fake'))", "'open-interpreter', 'fake'))"})
+	}
 	for _, r := range repairs {
 		if _, err := db.Exec(
 			`UPDATE sqlite_master
@@ -2446,6 +2522,9 @@ WHERE type = 'table' AND name = 'sessions'`,
 	}
 	if !strings.Contains(schema, "'stakpak'") {
 		return fmt.Errorf("schema repair: sessions harness constraint is missing Stakpak")
+	}
+	if !strings.Contains(schema, "'open-interpreter'") {
+		return fmt.Errorf("schema repair: sessions harness constraint is missing Open Interpreter")
 	}
 	return nil
 }

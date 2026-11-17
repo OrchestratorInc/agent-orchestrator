@@ -167,8 +167,10 @@ func newReadinessCoordinator(cfg readinessCoordinatorConfig) *readinessCoordinat
 		if label == "" {
 			label = id
 		}
+		interrupt, canInterrupt := item.Agent.(ports.TurnInterruptKey)
+		canInterrupt = canInterrupt && interrupt.InterruptKey() != ""
 		c.entries[id] = &readinessEntry{snapshot: domain.AgentReadinessSnapshot{
-			ID: id, Label: label,
+			ID: id, Label: label, CanStopTurn: canInterrupt,
 			Installation: domain.AgentInstallationObservation{
 				State: domain.AgentInstallationUnknown, Freshness: domain.AgentReadinessStale,
 				ReasonCode: domain.AgentReadinessReasonNotChecked, Reason: "Installation has not been checked yet.",

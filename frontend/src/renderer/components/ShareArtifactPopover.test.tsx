@@ -1,9 +1,10 @@
-import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
+import { QueryClient, QueryClientProvider, useQuery } from "@tanstack/react-query";
 import { act, render, renderHook, screen, waitFor, within } from "@testing-library/react";
 import type { ReactNode } from "react";
 import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { CloudShareFile, CloudShareGrant, CloudShareInspection, CloudShareLink, CloudShareLinks, CloudSharePublishResult } from "../../shared/cloud-share";
+import { keptArtifactsQueryKey } from "../hooks/useKeptArtifacts";
 import { workspaceQueryKeyForHost } from "../hooks/useWorkspaceQuery";
 import { aoBridge } from "../lib/bridge";
 import { ShareArtifactButton, ShareArtifactMenuPopover, publishTitle, resetShareCachesForTests, useArtifactShareFile, useReconciledShareLinks } from "./ShareArtifactPopover";
@@ -14,6 +15,19 @@ const mocks = vi.hoisted(() => ({
 	userId: "u-1",
 	baseUrl: "https://cp.test",
 	openSettings: vi.fn(),
+	capture: vi.fn(async () => true),
+	noteSignIn: vi.fn(),
+	clearSignIn: vi.fn(),
+}));
+
+vi.mock("../lib/telemetry", async (importOriginal) => ({
+	...await importOriginal<typeof import("../lib/telemetry")>(),
+	captureRendererEvent: mocks.capture,
+}));
+vi.mock("../lib/cloud-telemetry", async (importOriginal) => ({
+	...await importOriginal<typeof import("../lib/cloud-telemetry")>(),
+	noteSignInSource: mocks.noteSignIn,
+	clearSignInSource: mocks.clearSignIn,
 }));
 
 vi.mock("../hooks/useSettings", () => ({ useSettings: () => ({ settings: { cloudControlPlaneUrl: mocks.baseUrl } }) }));
@@ -76,6 +90,9 @@ beforeEach(() => {
 	mocks.userId = "u-1";
 	mocks.baseUrl = "https://cp.test";
 	mocks.openSettings.mockReset();
+	mocks.capture.mockClear();
+	mocks.noteSignIn.mockReset();
+	mocks.clearSignIn.mockReset();
 	vi.restoreAllMocks();
 	resetShareCachesForTests();
 });
@@ -106,6 +123,28 @@ describe("ShareArtifactButton on a cloud session's file", () => {
 		expect(screen.getByText("Owner")).toBeTruthy();
 		// The toolbar button now reads Published.
 		expect(await screen.findByRole("button", { name: "Published: report.html" })).toBeTruthy();
+	});
+
+	it("says what a published page left out of the files it uses", async () => {
+		stub(inspection, links, { status: "published", replaced: false, share, pageFiles: { included: 2, skipped: 3, videos: 1, unsupported: false } });
+		const popover = await openPopover(cloudFile);
+		await within(popover).findByText("Published");
+		expect(popover.textContent).toContain("3 files this page uses weren't included, so the shared page won't show them. Videos can't be shared with a page yet.");
+	});
+
+	it("says a page's images were not included when Orchestrator Cloud cannot share them yet", async () => {
+		stub(inspection, links, { status: "published", replaced: false, share, pageFiles: { included: 0, skipped: 0, videos: 0, unsupported: true } });
+		const popover = await openPopover(cloudFile);
+		await within(popover).findByText("Published");
+		expect(popover.textContent).toContain("This page's images weren't included: Orchestrator Cloud can't share them with a page yet.");
+	});
+
+	it("says nothing more when a page included every file it uses", async () => {
+		stub(inspection, links, { status: "published", replaced: false, share, pageFiles: { included: 2, skipped: 0, videos: 0, unsupported: false } });
+		const popover = await openPopover(cloudFile);
+		await within(popover).findByText("Published");
+		expect(popover.textContent).not.toContain("weren't included");
+		expect(popover.textContent).not.toContain("wasn't included");
 	});
 
 	it("names the file without its extension", async () => {
@@ -818,6 +857,36 @@ describe("useArtifactShareFile", () => {
 	});
 });
 
+describe("ShareArtifactButton on a kept artifact", () => {
+	it("reads the kept list again on publish, so a mounted page shows the link", async () => {
+		const { inspectSpy, listSpy, publishSpy } = stub(inspection, links);
+		let keptShareUrl = "";
+		publishSpy.mockImplementation(async () => {
+			inspectSpy.mockResolvedValue({ ...inspection, shareId: SHARE_ID, publishedFingerprint: "fp-1" });
+			listSpy.mockResolvedValue({ ...links, used: 2, shares: [share] });
+			keptShareUrl = share.viewerUrl ?? "";
+			return { status: "published", replaced: false, share };
+		});
+		// Stands in for the Artifacts page's kept rows, which take shareUrl from this list.
+		function KeptShareUrl() {
+			const { data } = useQuery({ queryKey: keptArtifactsQueryKey, queryFn: async () => keptShareUrl });
+			return <output aria-label="kept link">{data || "none"}</output>;
+		}
+		render(
+			<QueryClientProvider client={new QueryClient()}><TooltipProvider>
+				<KeptShareUrl />
+				<ShareArtifactButton file={localFile} name="report.html" />
+			</TooltipProvider></QueryClientProvider>,
+		);
+		expect(await screen.findByText("none")).toBeTruthy();
+		await userEvent.click(await screen.findByRole("button", { name: "Publish: report.html" }));
+		const popover = await screen.findByRole("dialog");
+		const publish = within(popover).queryByRole("button", { name: "Publish" });
+		if (publish) await userEvent.click(publish);
+		await waitFor(() => expect(screen.getByLabelText("kept link").textContent).toBe(share.viewerUrl ?? ""));
+	});
+});
+
 describe("useReconciledShareLinks", () => {
 	const renderReconcile = () => {
 		const client = new QueryClient();
@@ -833,6 +902,8 @@ describe("useReconciledShareLinks", () => {
 		const list = vi.spyOn(aoBridge.cloudShare, "list").mockResolvedValue({ ...links, shares: [share] });
 		const invalidate = renderReconcile();
 		await waitFor(() => expect(invalidate).toHaveBeenCalledWith({ queryKey: workspaceQueryKeyForHost() }));
+		// Kept artifacts' links come from their own list.
+		expect(invalidate).toHaveBeenCalledWith({ queryKey: keptArtifactsQueryKey });
 		expect(list).toHaveBeenCalledExactlyOnceWith("https://reconcile.test");
 	});
 
@@ -862,8 +933,8 @@ describe("useReconciledShareLinks", () => {
 		await waitFor(() => expect(first.result.current.size).toBe(1));
 		expect(second.result.current.get("https://viewer.test/artifact/abc")).toBe("restricted");
 		expect(list).toHaveBeenCalledTimes(1);
-		// Once for the artifact lists, once for the links of remote hosts' files.
-		expect(invalidate).toHaveBeenCalledTimes(2);
+		// Once each for the artifact lists, kept artifacts, and the links of remote hosts' files.
+		expect(invalidate).toHaveBeenCalledTimes(3);
 		expect(invalidate).toHaveBeenCalledWith({ queryKey: ["host-share-links"] });
 	});
 
@@ -877,5 +948,82 @@ describe("useReconciledShareLinks", () => {
 		await new Promise((resolve) => setTimeout(resolve, 20));
 		expect(list).not.toHaveBeenCalled();
 		expect(invalidate).not.toHaveBeenCalled();
+	});
+});
+
+describe("publish telemetry", () => {
+	/** Every capture of event, by its properties. */
+	const sent = (event: string) => mocks.capture.mock.calls.filter((call) => (call as unknown[])[0] === event).map((call) => (call as unknown[])[1]);
+
+	it("counts the Publish click once and the link it made, then a copy, with no file details", async () => {
+		stub(inspection, links, { status: "published", replaced: false, share });
+		vi.spyOn(aoBridge.clipboard, "writeText").mockResolvedValue();
+		const popover = await openPopover(cloudFile);
+		await within(popover).findByText("Published");
+		await userEvent.click(screen.getByRole("button", { name: "Copy link" }));
+		await screen.findByRole("button", { name: "Copied" });
+		expect(sent("ao.artifacts.publish_clicked")).toEqual([{ already_published: false, signed_in: true }]);
+		expect(sent("ao.artifacts.published")).toEqual([{ is_republish: false }]);
+		expect(sent("ao.artifacts.link_copied")).toEqual([{ surface: "panel" }]);
+		expect(JSON.stringify(mocks.capture.mock.calls)).not.toMatch(/report|abc|viewer\.test|sess-|cloud-1/);
+	});
+
+	it("counts the sign-in prompt and the Sign in click, and forgets Publish's sign-in when the popover closes", async () => {
+		mocks.status = "unauthenticated";
+		vi.spyOn(aoBridge.cloud, "signIn").mockResolvedValue();
+		const user = userEvent.setup();
+		renderButton(cloudFile);
+		const trigger = await screen.findByRole("button", { name: "Publish: report.html" });
+		await user.click(trigger);
+		await user.click(await screen.findByRole("button", { name: "Sign in" }));
+		expect(sent("ao.artifacts.publish_clicked")).toEqual([{ already_published: false, signed_in: false }]);
+		expect(sent("ao.artifacts.sign_in_prompt_shown")).toEqual([{ reason: "signed_out" }]);
+		expect(sent("ao.artifacts.sign_in_clicked")).toHaveLength(1);
+		expect(mocks.noteSignIn).toHaveBeenCalledExactlyOnceWith("artifact_publish");
+		expect(mocks.clearSignIn).not.toHaveBeenCalled();
+		await user.keyboard("{Escape}");
+		await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
+		expect(mocks.clearSignIn).toHaveBeenCalledWith("artifact_publish");
+	});
+
+	it("counts a publish that came back signed out as a failure and an expired session", async () => {
+		stub(inspection, links, { status: "signed_out" });
+		await openPopover(cloudFile);
+		await screen.findByRole("button", { name: "Sign in" });
+		expect(sent("ao.artifacts.publish_failed")).toEqual([{ is_republish: false, reason: "signed_out" }]);
+		expect(sent("ao.artifacts.sign_in_prompt_shown")).toEqual([{ reason: "session_expired" }]);
+	});
+
+	it("counts a refusal the panel opens on once, as blocked rather than failed", async () => {
+		const { publishSpy } = stub(inspection, { ...links, used: 3 });
+		await openPopover(cloudFile);
+		await waitFor(() => expect(sent("ao.artifacts.publish_blocked")).toEqual([{ reason: "limit", is_republish: false }]));
+		expect(sent("ao.artifacts.publish_failed")).toEqual([]);
+		expect(publishSpy).not.toHaveBeenCalled();
+	});
+
+	it("counts an unsupported file that already has a live link as a blocked republish", async () => {
+		const { publishSpy } = stub({ ...inspection, shareId: SHARE_ID, unsupported: true }, { ...links, shares: [share] });
+		await openPopover(cloudFile, "report.html", "Published");
+		await waitFor(() => expect(sent("ao.artifacts.publish_blocked")).toEqual([{ reason: "unsupported", is_republish: true }]));
+		expect(publishSpy).not.toHaveBeenCalled();
+	});
+
+	it("counts a cancelled upload as cancelled, not failed", async () => {
+		stub(inspection, links, { status: "cancelled" });
+		await openPopover(cloudFile);
+		await waitFor(() => expect(sent("ao.artifacts.publish_cancelled")).toEqual([{ is_republish: false }]));
+		expect(sent("ao.artifacts.publish_failed")).toEqual([]);
+	});
+
+	it("counts an unpublish, and does not count its confirmation as a Publish click", async () => {
+		stub({ ...inspection, shareId: SHARE_ID }, { ...links, shares: [share] });
+		vi.spyOn(aoBridge.cloudShare, "unpublish").mockResolvedValue();
+		const onOpenChange = vi.fn();
+		await openMenuPanel(cloudFile, "unpublish", onOpenChange);
+		await userEvent.click(await screen.findByRole("button", { name: "Unpublish" }));
+		await waitFor(() => expect(onOpenChange).toHaveBeenCalledWith(false));
+		expect(sent("ao.artifacts.unpublished")).toEqual([undefined]);
+		expect(sent("ao.artifacts.publish_clicked")).toEqual([]);
 	});
 });
