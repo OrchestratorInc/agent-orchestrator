@@ -412,6 +412,9 @@ func (e *Engine) TriggerWithOptions(ctx stdctx.Context, workerID domain.SessionI
 			}
 		}
 		if len(prs) > 0 && len(owned) == 0 {
+			if source != domain.ReviewTriggerAuto {
+				return TriggerResult{}, fmt.Errorf("%w: all tracked pull requests are review-only; use --pr <url> to review one", ErrInvalid)
+			}
 			return TriggerResult{SkipReason: "review_only"}, nil
 		}
 		prs = owned

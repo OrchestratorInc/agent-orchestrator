@@ -73,31 +73,36 @@ func TestSuppressNoInjectAOReviewsReviewerExitedAfterPosting(t *testing.T) {
 	}
 }
 
-// Without the account AO posts with, the poll fails for this PR and retries
-// rather than store rows that might be delivered.
-func TestSuppressNoInjectAOReviewsIdentityErrorRetries(t *testing.T) {
+// Without the posting account, mute every author's rows within the window
+// while allowing the PR's current facts to be stored.
+func TestSuppressNoInjectAOReviewsIdentityErrorMutesWindowRows(t *testing.T) {
 	start := time.Date(2026, 11, 15, 10, 0, 0, 0, time.UTC)
 	store := fakeNoInjectStore{windows: []domain.NoInjectReviewWindow{{Start: start}}}
 	identity := &fakeIdentityResolver{err: errors.New("offline")}
 	reviews, comments := noInjectObservedRows(start)
-	if err := suppressNoInjectAOReviews(context.Background(), store, identity, ports.SCMRepo{Provider: "github"}, "https://github.com/o/r/pull/1", time.Time{}, reviews, comments); err == nil {
-		t.Fatal("want an error when the posting account cannot be resolved")
+	if err := suppressNoInjectAOReviews(context.Background(), store, identity, ports.SCMRepo{Provider: "github"}, "https://github.com/o/r/pull/1", time.Time{}, reviews, comments); err != nil {
+		t.Fatal(err)
 	}
-	// No open pass: identity is not needed and not asked for.
+	if reviews[0].AutoInjectReview || reviews[1].AutoInjectReview || comments[0].AutoInjectReview || comments[1].AutoInjectReview {
+		t.Fatalf("unattributed window rows stayed deliverable: reviews=%+v comments=%+v", reviews, comments)
+	}
+	// No pass: identity is not needed and not asked for.
 	identity = &fakeIdentityResolver{err: errors.New("offline")}
 	if err := suppressNoInjectAOReviews(context.Background(), fakeNoInjectStore{}, identity, ports.SCMRepo{Provider: "github"}, "https://github.com/o/r/pull/1", time.Time{}, reviews, comments); err != nil || identity.calls != 0 {
 		t.Fatalf("err = %v calls = %d, want no identity lookup without an open pass", err, identity.calls)
 	}
 }
 
-// An account without a login cannot attribute rows either; the poll fails for
-// this PR and retries rather than store rows that might be delivered.
-func TestSuppressNoInjectAOReviewsEmptyLoginRetries(t *testing.T) {
+// An empty login uses the same conservative delivery policy as a failed lookup.
+func TestSuppressNoInjectAOReviewsEmptyLoginMutesWindowRows(t *testing.T) {
 	start := time.Date(2026, 11, 15, 10, 0, 0, 0, time.UTC)
 	store := fakeNoInjectStore{windows: []domain.NoInjectReviewWindow{{Start: start}}}
 	identity := &fakeIdentityResolver{identity: ports.SCMIdentity{Login: "  ", Human: true}}
 	reviews, comments := noInjectObservedRows(start)
-	if err := suppressNoInjectAOReviews(context.Background(), store, identity, ports.SCMRepo{Provider: "github"}, "https://github.com/o/r/pull/1", time.Time{}, reviews, comments); err == nil {
-		t.Fatal("want an error when the posting account has no login")
+	if err := suppressNoInjectAOReviews(context.Background(), store, identity, ports.SCMRepo{Provider: "github"}, "https://github.com/o/r/pull/1", time.Time{}, reviews, comments); err != nil {
+		t.Fatal(err)
+	}
+	if reviews[0].AutoInjectReview || reviews[1].AutoInjectReview || comments[0].AutoInjectReview || comments[1].AutoInjectReview {
+		t.Fatalf("unattributed window rows stayed deliverable: reviews=%+v comments=%+v", reviews, comments)
 	}
 }

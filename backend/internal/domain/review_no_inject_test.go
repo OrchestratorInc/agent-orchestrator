@@ -66,11 +66,11 @@ func TestSuppressNoInjectWindowRowsReviewerExitedAfterPosting(t *testing.T) {
 	if comments[0].AutoInjectReview || comments[1].AutoInjectReview || !comments[2].AutoInjectReview {
 		t.Fatalf("comments = %+v, want the pass's comments suppressed and later ones kept", comments)
 	}
-	// Without the account the rows cannot be attributed, so nothing changes.
+	// Without the account, every author's rows within the window stay muted.
 	later := []PullRequestComment{{ID: "posted", Author: "me", CreatedAt: start.Add(5 * time.Minute), AutoInjectReview: true}}
 	SuppressNoInjectWindowRows(ended, "", time.Time{}, nil, later)
-	if !later[0].AutoInjectReview {
-		t.Fatal("an unknown account suppressed a comment")
+	if later[0].AutoInjectReview {
+		t.Fatal("an unknown account left a window comment deliverable")
 	}
 }
 

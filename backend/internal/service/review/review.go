@@ -610,7 +610,7 @@ func (s *Service) refreshPRs(ctx context.Context, workerID domain.SessionID, prU
 		return false, nil
 	}
 	for _, pr := range tracked {
-		if pr.Merged || pr.Closed {
+		if pr.Merged || pr.Closed || pr.ReviewOnly {
 			continue
 		}
 		if err := s.prRefresher.RefreshPR(ctx, workerID, firstNonEmpty(pr.HTMLURL, pr.URL), false); err != nil {

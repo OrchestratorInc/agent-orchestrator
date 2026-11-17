@@ -418,7 +418,7 @@ Orchestrator has a built-in adversarial code reviewer for implementation PRs own
 
 How it works:
 
-- ` + "`ao review trigger`" + ` with no session argument reviews this session's open PR heads and turns on review-comment delivery for this session (` + "`--no-inject`" + ` leaves that setting alone).
+- ` + "`ao review trigger`" + ` with no session argument reviews this session's open PR heads and turns on review-comment delivery for this session (` + "`--no-inject`" + ` leaves that setting alone and never delivers this pass's feedback).
 - A head that is already being reviewed, or already has a review, is not reviewed again: the command fails and says why. Push new commits first, or pass ` + "`--rerun`" + ` for a deliberate second pass on the same commit. If you just pushed and it says the head was already reviewed, wait a few seconds and run it again.
 - ` + "`--agent <harness>`" + `, ` + "`--model <id>`" + `, and ` + "`--effort <level>`" + ` choose a different reviewer for one pass; otherwise the project's reviewer is used. Reviewers with different agents can run at the same time (add ` + "`--rerun`" + ` while another is running).
 - Check results with ` + "`ao review ls`" + `; stop every running reviewer with ` + "`ao review cancel`" + `.

@@ -51,8 +51,8 @@ type reviewOnlyStore interface {
 }
 
 // claimPostingLogin resolves the account the SCM provider is signed in as for
-// repo, which is the one AO's reviewer posts with. A provider that cannot
-// report it fails the claim when a --no-inject pass needs it (#6810).
+// repo, which is the one AO's reviewer posts with. If unavailable, no-inject
+// suppression mutes every author within the review window (#6810).
 func (s *Service) claimPostingLogin(repo ports.SCMRepo, prURL string) func(context.Context) (string, error) {
 	return func(ctx context.Context) (string, error) {
 		resolver, ok := s.scm.(ports.ScopedIdentityResolver)

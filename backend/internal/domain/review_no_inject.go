@@ -2,7 +2,6 @@ package domain
 
 import (
 	"context"
-	"fmt"
 	"strings"
 	"time"
 )
@@ -63,12 +62,14 @@ func (w NoInjectReviewWindow) contains(t time.Time) bool {
 // missing time with their observation time; unknownAt is that value, and a
 // row carrying it (or a zero time) has no provider time. Provider times are
 // whole seconds and the observation clock is not, so they do not collide.
+// An empty login matches every author: an unavailable account mutes delivery
+// within the window without blocking PR updates.
 func SuppressNoInjectWindowRows(windows []NoInjectReviewWindow, login string, unknownAt time.Time, reviews []PullRequestReview, comments []PullRequestComment) {
-	if len(windows) == 0 || login == "" {
+	if len(windows) == 0 {
 		return
 	}
 	inWindow := func(author string, at time.Time) bool {
-		if !strings.EqualFold(author, login) {
+		if login != "" && !strings.EqualFold(author, login) {
 			return false
 		}
 		if at.IsZero() || (!unknownAt.IsZero() && at.Equal(unknownAt)) {
@@ -112,8 +113,8 @@ type NoInjectReviewSource interface {
 // a pass recorded, and by what postingLogin's account wrote while a pass ran,
 // which covers a pass that has not recorded its id yet and a reviewer that
 // exited without submitting. postingLogin is asked only when a pass exists; an
-// error or empty login fails the call so the writer retries rather than store
-// rows that might be delivered. A nil postingLogin matches by id only.
+// error or empty login mutes every author's rows within the window, so PR
+// updates can still be stored. A nil postingLogin matches by id only.
 // unknownAt is the time the writer filled in for rows the provider sent
 // without one (see SuppressNoInjectWindowRows).
 func SuppressNoInjectAOReviews(ctx context.Context, src NoInjectReviewSource, postingLogin func(context.Context) (string, error), prURL string, unknownAt time.Time, reviews []PullRequestReview, comments []PullRequestComment) error {
@@ -136,12 +137,9 @@ func SuppressNoInjectAOReviews(ctx context.Context, src NoInjectReviewSource, po
 	}
 	login, err := postingLogin(ctx)
 	if err != nil {
-		return fmt.Errorf("resolve the account AO reviews post with: %w", err)
+		login = ""
 	}
 	login = strings.TrimSpace(login)
-	if login == "" {
-		return fmt.Errorf("resolve the account AO reviews post with: no login")
-	}
 	SuppressNoInjectWindowRows(windows, login, unknownAt, reviews, comments)
 	return nil
 }
