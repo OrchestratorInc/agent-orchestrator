@@ -62,6 +62,10 @@ func (s *Store) ListTelemetryEventsSince(ctx context.Context, since time.Time, l
 // PruneTelemetryEventsBefore deletes at most limit rows older than before and
 // returns how many rows were removed.
 func (s *Store) PruneTelemetryEventsBefore(ctx context.Context, before time.Time, limit int64) (int64, error) {
+	if err := s.writeMu.LockContext(ctx); err != nil {
+		return 0, err
+	}
+	defer s.writeMu.Unlock()
 	n, err := s.qw.PruneTelemetryEventsBefore(ctx, gen.PruneTelemetryEventsBeforeParams{
 		OccurredAt: before.UTC(),
 		Limit:      limit,
@@ -83,6 +87,10 @@ func (s *Store) FreelistCount(ctx context.Context) (int64, error) {
 
 // IncrementalVacuum reclaims up to pages free pages from the database file.
 func (s *Store) IncrementalVacuum(ctx context.Context, pages int64) error {
+	if err := s.writeMu.LockContext(ctx); err != nil {
+		return err
+	}
+	defer s.writeMu.Unlock()
 	if _, err := s.writeDB.ExecContext(ctx, fmt.Sprintf("PRAGMA incremental_vacuum(%d)", pages)); err != nil {
 		return fmt.Errorf("incremental_vacuum: %w", err)
 	}

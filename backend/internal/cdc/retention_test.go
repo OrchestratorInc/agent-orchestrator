@@ -59,8 +59,8 @@ func TestRetentionJanitorRunOncePrunesAgeAndSizeUntilStable(t *testing.T) {
 	if err := j.RunOnce(context.Background()); err != nil {
 		t.Fatal(err)
 	}
-	if store.ages != 3 || store.sizes != 3 {
-		t.Fatalf("prune calls = age %d/size %d, want 3/3", store.ages, store.sizes)
+	if store.ages != 3 || store.sizes != 2 {
+		t.Fatalf("prune calls = age %d/size %d, want 3/2", store.ages, store.sizes)
 	}
 }
 

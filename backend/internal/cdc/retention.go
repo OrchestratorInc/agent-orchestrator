@@ -117,14 +117,19 @@ func (j *RetentionJanitor) Start(ctx context.Context) <-chan struct{} {
 func (j *RetentionJanitor) RunOnce(ctx context.Context) error {
 	before := j.clock().UTC().Add(-j.retention)
 	var total int64
+	sizeDone := false
 	for i := 0; i < j.maxBatches; i++ {
 		removedByAge, err := j.store.PruneChangeLogBefore(ctx, before, j.batch)
 		if err != nil {
 			return err
 		}
-		removedBySize, err := j.store.PruneChangeLogToMaxRows(ctx, j.maxRows, j.batch)
-		if err != nil {
-			return err
+		var removedBySize int64
+		if !sizeDone {
+			removedBySize, err = j.store.PruneChangeLogToMaxRows(ctx, j.maxRows, j.batch)
+			if err != nil {
+				return err
+			}
+			sizeDone = removedBySize == 0
 		}
 		removed := removedByAge + removedBySize
 		total += removed
