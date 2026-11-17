@@ -432,7 +432,7 @@ export function AgentModelPicker({
 		settable && !waiting && source.efforts.length > 0 ? (
 			<OptionMenuSub key="effort" closeOnSelect>
 				<OptionMenuSubTrigger label={t("agentSwitch.effort")} value={source.efforts.find((choice) => choice.value === source.effort)?.label ?? t("agentSwitch.defaultModel")} />
-				<OptionMenuSubContent className={SUB_CLASS}>
+				<OptionMenuSubContent align="start" alignOffset={0} className={SUB_CLASS}>
 					{source.efforts.map((choice) => (
 						<OptionMenuItem
 							key={choice.value}
