@@ -69,6 +69,28 @@ function mockHandoffDestination() {
 }
 
 describe("deferred side opening", () => {
+	it("shows pending follow-ups in the dock and reconciles their row without a duplicate", async () => {
+		acceptOpening("first", "running");
+		render(<Harness />);
+		await screen.findByText("My first question");
+		let finish!: (value: unknown) => void;
+		post.mockImplementationOnce(() => new Promise(resolve => { finish = resolve; }));
+		let sending!: Promise<void>;
+		act(() => { sending = chat.send("side", "Queued follow-up"); });
+		const dock = await screen.findByTestId("queued-message-dock");
+		expect(within(dock).getByText("Queued follow-up")).toBeInTheDocument();
+		expect(within(screen.getByRole("log")).queryByText("Queued follow-up")).not.toBeInTheDocument();
+		await waitFor(() => expect(post).toHaveBeenCalledOnce());
+		const id = post.mock.calls[0][1].body.clientMessageId;
+		const row = screen.getByTestId(`queued-message-local:${id}`);
+		expect(within(row).getByRole("button", { name: "Edit queued message" })).toBeDisabled();
+		const turn = { id: "follow-up", sideId: "side", clientMessageId: id, text: "Queued follow-up", state: "queued", createdAt: at };
+		snapshot = { ...snapshot, turns: [...snapshot.turns, turn] };
+		await waitFor(() => expect(screen.getByTestId("queued-message-follow-up")).toBe(row));
+		expect(within(dock).getAllByText("Queued follow-up")).toHaveLength(1);
+		await act(async () => { finish({ data: { turn } }); await sending; });
+		expect(within(row).getByRole("button", { name: "Edit queued message" })).toBeEnabled();
+	});
 	it.each(["draft-read", "image-load"])("settles a new follow-up bubble when %s fails before dispatch", async failure => {
 		acceptOpening("first", "completed");
 		let finish!: (value: unknown) => void;
@@ -339,12 +361,97 @@ describe("deferred side opening", () => {
 		expect(JSON.stringify(draft)).toBe(saved);
 	});
 
-	it("lets an accepted daemon turn override an older saved delivery failure", async () => {
-		acceptOpening("first", "running");
-		draft = { ...emptySideChatDraft(), pendingDelivery: { clientMessageId: "first", recreateRequired: true, failure: { kind: "rejected", message: "Stale error" }, request: { clientMessageId: "first", text: "My first question" }, submitted: { text: "My first question", attachments: [], references: [] } } };
+	it.each(["queued", "running", "completed"])("lets a %s daemon turn override an older saved delivery failure and keeps newer edits", async state => {
+		acceptOpening("first", state);
+		const sent = { id: "sent", path: "sent.txt", name: "sent.txt", mimeType: "text/plain", bytes: 1 };
+		const newer = { ...sent, id: "new", path: "new.txt", name: "new.txt" };
+		draft = { ...emptySideChatDraft(), text: "My next draft", attachments: [sent, newer], pendingDelivery: { clientMessageId: "first", createdAt: at, handoff: true, recreateRequired: true, failure: { kind: "rejected", message: "Stale error" }, request: { clientMessageId: "first", text: "My first question" }, submitted: { text: "My first question", attachments: [sent], references: [] } } };
 		render(<Harness />);
 		await screen.findByText("My first question");
 		expect(screen.queryByTestId("session-startup")).not.toBeInTheDocument();
+		await waitFor(() => expect(draft.pendingDelivery).toBeUndefined());
+		expect(draft.openingDelivery?.clientMessageId).toBe("first");
+		expect(draft.openingDelivery?.createdAt).toBe(at);
+		expect(draft.openingDelivery?.failure).toBeUndefined();
+		expect(draft.lastHandoffDelivery?.clientMessageId).toBe("first");
+		expect(draft.text).toBe("My next draft");
+		expect(draft.attachments).toEqual([newer]);
+		expect(post).not.toHaveBeenCalled();
+	});
+
+	it("accepts a snapshot while its HTTP request is unresolved and fences a late failure from a newer send", async () => {
+		render(<Harness />);
+		await screen.findByRole("combobox", { name: "Side chat question" });
+		let rejectFirst!: (error: Error) => void;
+		post.mockImplementationOnce(() => new Promise((_resolve, reject) => { rejectFirst = reject; }));
+		let first!: Promise<void>;
+		act(() => { first = chat.send("side", "My first question", [], undefined, false, "handoff-first"); });
+		await waitFor(() => expect(post).toHaveBeenCalledOnce());
+		acceptOpening("handoff-first", "running");
+		await waitFor(() => expect(draft.pendingDelivery).toBeUndefined());
+		expect(draft.lastHandoffDelivery?.clientMessageId).toBe("handoff-first");
+		let finishSecond!: (value: unknown) => void;
+		post.mockImplementationOnce(() => new Promise(resolve => { finishSecond = resolve; }));
+		let second!: Promise<void>;
+		act(() => { chat.setQuestionDraft("side", "My next question"); second = chat.send("side", "My next question"); });
+		await waitFor(() => expect(post).toHaveBeenCalledTimes(2));
+		const nextId = post.mock.calls[1][1].body.clientMessageId;
+		await act(async () => { rejectFirst(new Error("Old response was lost")); await first; });
+		expect(draft.pendingDelivery?.clientMessageId).toBe(nextId);
+		expect(screen.queryByText("Old response was lost")).not.toBeInTheDocument();
+		await act(async () => { finishSecond({}); await second; });
+		expect(post).toHaveBeenCalledTimes(2);
+	});
+
+	it("keeps accepted recovery unlocked after a save failure and reconciles again on reload without sending", async () => {
+		acceptOpening("first", "running");
+		draft = { ...emptySideChatDraft(), text: "Keep newer edits", pendingDelivery: { clientMessageId: "first", request: { text: "My first question", clientMessageId: "first" }, submitted: { text: "My first question", attachments: [], references: [] } } };
+		put.mockResolvedValue({ error: new Error("Recovery save failed") });
+		const first = render(<Harness />);
+		await screen.findByText("Recovery save failed");
+		act(() => { chat.setQuestionDraft("side", "Editable next question"); });
+		expect(screen.getByRole("button", { name: "Send message" })).toBeEnabled();
+		expect(post).not.toHaveBeenCalled();
+		first.unmount();
+		put.mockImplementation(async (_path, options) => { draft = JSON.parse(options.body.contentJson); return {}; });
+		render(<Harness />);
+		await waitFor(() => expect(draft.pendingDelivery).toBeUndefined());
+		expect(draft.text).toBe("Keep newer edits");
+		expect(post).not.toHaveBeenCalled();
+	});
+
+	it("keeps a handoff accepted when a snapshot arrives while its error receipt is being saved", async () => {
+		render(<Harness />);
+		await screen.findByRole("combobox", { name: "Side chat question" });
+		let release!: (value: unknown) => void;
+		const normalPut = put.getMockImplementation()!;
+		put.mockImplementation((path, options) => JSON.parse(options.body.contentJson).pendingDelivery?.failure
+			? new Promise(resolve => { release = resolve; }) : normalPut(path, options));
+		post.mockRejectedValueOnce(new Error("Lost response"));
+		let outcome!: Promise<unknown>;
+		act(() => { outcome = chat.send("side", "My first question", [], undefined, true, "handoff-first").then(() => undefined, error => error); });
+		await waitFor(() => expect(release).toBeTypeOf("function"));
+		acceptOpening("handoff-first", "running");
+		await waitFor(() => expect(screen.queryByText("Lost response")).not.toBeInTheDocument());
+		act(() => { chat.setQuestionDraft("side", "Next editable draft"); });
+		expect(screen.getByRole("button", { name: "Send message" })).toBeEnabled();
+		await act(async () => { release({}); expect(await outcome).toBeUndefined(); });
+		await waitFor(() => expect(draft.pendingDelivery).toBeUndefined());
+		expect(draft.lastHandoffDelivery?.clientMessageId).toBe("handoff-first");
+		expect(post).toHaveBeenCalledOnce();
+	});
+
+	it.each(["attachment", "excerpt"])("reconciles accepted %s-only messages using their stable identity", async kind => {
+		acceptOpening("first", "running");
+		snapshot.turns[0].text = "Daemon-generated context label";
+		draft = { ...emptySideChatDraft(), text: "New draft", pendingDelivery: {
+			clientMessageId: "first", request: { clientMessageId: "first", text: "", ...(kind === "attachment" ? { resources: [{ uri: "notes.txt", name: "notes.txt" }] } : { references: [{ conversationId: "main", messageId: "parent", revision: 1, text: "Context" }] }) },
+			submitted: { text: "", attachments: [], references: [] },
+		} };
+		render(<Harness />);
+		await waitFor(() => expect(draft.pendingDelivery).toBeUndefined());
+		expect(draft.text).toBe("New draft");
+		expect(draft.openingDelivery?.clientMessageId).toBe("first");
 		expect(post).not.toHaveBeenCalled();
 	});
 

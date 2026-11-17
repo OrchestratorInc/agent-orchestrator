@@ -1,6 +1,7 @@
 package chat
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -195,7 +196,10 @@ func (m *memorySideStore) recover(runID string, records []SideRecoveryRecord, no
 			continue
 		}
 		side.SourceProviderID = record.SourceProviderID
-		side.LaunchConfig = record.LaunchConfig
+		side.LaunchConfig = bytes.TrimSpace(record.LaunchConfig)
+		if bytes.Equal(side.LaunchConfig, []byte("null")) {
+			side.LaunchConfig = nil
+		}
 		side.CreateKey = record.CreateKey
 		side.AppRunID = runID
 		side.ProviderHostID = record.ProviderHostID
@@ -209,7 +213,7 @@ func (m *memorySideStore) recover(runID string, records []SideRecoveryRecord, no
 		side.PolicyVersion = record.PolicyVersion
 		side.BoundaryTurnID = record.BoundaryTurnID
 		side.BoundaryState = record.BoundaryState
-		unused := side.State == "draft" && side.OpeningTurnID == "" && len(record.Turns) == 0 && len(record.LaunchConfig) == 0
+		unused := side.State == "draft" && side.OpeningTurnID == "" && len(record.Turns) == 0 && len(side.LaunchConfig) == 0
 		// A pre-dispatch receipt in an older snapshot may already have reached the
 		// lost daemon. Do not reinterpret it as a fresh Send with newer context.
 		var draft struct {
@@ -228,7 +232,8 @@ func (m *memorySideStore) recover(runID string, records []SideRecoveryRecord, no
 				}
 			}
 		}
-		if unused && len(draft.PendingDelivery) == 0 {
+		pendingDelivery := bytes.TrimSpace(draft.PendingDelivery)
+		if unused && (len(pendingDelivery) == 0 || bytes.Equal(pendingDelivery, []byte("null"))) {
 			side.State = "draft"
 		} else if side.ProviderForkID == "" {
 			side.State = "failed"

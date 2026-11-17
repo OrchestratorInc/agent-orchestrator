@@ -2,6 +2,7 @@ package chat_test
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"strings"
@@ -281,6 +282,14 @@ func TestDeferredSideRestoreDraftStaysUnused(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	// Electron transports recovery records through JSON, not Go values.
+	wire, err := json.Marshal(records)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := json.Unmarshal(wire, &records); err != nil {
+		t.Fatal(err)
+	}
 	replacement := chatsvc.New(chatsvc.Options{Store: h.st, Reader: fullSnapshotReader(h.st), Sessions: h.st, Drivers: fakeRegistry{driver: h.driver}, AppRunID: "workflow"})
 	t.Cleanup(func() { replacement.StopAll(context.Background()) })
 	if err := replacement.InitializeSideChats(t.Context()); err != nil {
@@ -305,6 +314,13 @@ func TestDeferredSideRestoreUncertainFirstSendRequiresRecreation(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	wire, err := json.Marshal(records)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := json.Unmarshal(wire, &records); err != nil {
+		t.Fatal(err)
+	}
 	replacement := chatsvc.New(chatsvc.Options{Store: h.st, Reader: fullSnapshotReader(h.st), Sessions: h.st, Drivers: fakeRegistry{driver: h.driver}, AppRunID: "workflow"})
 	t.Cleanup(func() { replacement.StopAll(context.Background()) })
 	if err := replacement.InitializeSideChats(t.Context()); err != nil {
@@ -319,6 +335,46 @@ func TestDeferredSideRestoreUncertainFirstSendRequiresRecreation(t *testing.T) {
 	}
 	if _, err := replacement.SendSideQuestion(t.Context(), testSession, side.ID, ports.ChatUserMessage{Text: "original question", ClientMessageID: "frozen"}); !errors.Is(err, chatsvc.ErrSideNotReady) {
 		t.Fatalf("uncertain delivery resubmitted: %v", err)
+	}
+}
+
+func TestDeferredSideRecoveryDistinguishesAbsentAndFrozenLaunchConfig(t *testing.T) {
+	for _, tc := range []struct {
+		name, config, pending, state string
+		recreate                     bool
+	}{
+		{name: "absent", state: "draft"},
+		{name: "null", config: "null", state: "draft"},
+		{name: "whitespace null", config: " \nnull\t", state: "draft"},
+		{name: "null pending delivery", config: "null", pending: "null", state: "draft"},
+		{name: "frozen config", config: `{}`, state: "failed"},
+		{name: "string null is not absent", config: `"null"`, state: "failed"},
+		{name: "uncertain receipt", config: "null", pending: `{"clientMessageId":"first","request":{"text":"original question"}}`, state: "failed", recreate: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			h := newSideWorkflow(t, "")
+			side := draftSide(t, h, "recover")
+			records, err := h.svc.ExportSideChatLaunch(t.Context(), "workflow")
+			if err != nil {
+				t.Fatal(err)
+			}
+			records[0].LaunchConfig = json.RawMessage(tc.config)
+			if tc.pending != "" {
+				records[0].Draft = `{"version":1,"text":"keep my question","attachments":[],"references":[],"pendingDelivery":` + tc.pending + `}`
+			}
+			replacement := chatsvc.New(chatsvc.Options{Store: h.st, Reader: fullSnapshotReader(h.st), Sessions: h.st, Drivers: fakeRegistry{driver: h.driver}, AppRunID: "workflow"})
+			t.Cleanup(func() { replacement.StopAll(context.Background()) })
+			if err := replacement.InitializeSideChats(t.Context()); err != nil {
+				t.Fatal(err)
+			}
+			if err := replacement.RecoverSideChatLaunch(t.Context(), "workflow", records); err != nil {
+				t.Fatal(err)
+			}
+			snap, err := replacement.SideSnapshot(t.Context(), testSession, side.ID, time.Time{}, 50)
+			if err != nil || snap.Side.State != tc.state || snap.Side.RecreateRequired != tc.recreate || sideProviderCount(h) != 0 {
+				t.Fatalf("unsafe restore: %+v %v (provider count %d)", snap.Side, err, sideProviderCount(h))
+			}
+		})
 	}
 }
 

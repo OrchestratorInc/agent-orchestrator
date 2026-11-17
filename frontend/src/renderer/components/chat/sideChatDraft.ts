@@ -4,6 +4,8 @@ import type { ChatDraftAttachment, ChatDraftExcerptReference } from "../../lib/c
 export type SideDeliveryReceipt = {
 	clientMessageId: string;
 	createdAt?: string;
+	// Preserve handoff retry ownership if a snapshot arrives before the HTTP reply.
+	handoff?: boolean;
 	// A rejected frozen opening can be edited safely in a recreated draft.
 	recreateRequired?: boolean;
 	// Keep a known rejection or uncertain delivery actionable after a remount.

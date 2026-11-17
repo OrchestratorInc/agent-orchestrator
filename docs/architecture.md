@@ -485,7 +485,14 @@ accepted daemon turns take precedence over older local failures. Definitively
 rejected follow-ups remove their temporary bubbles, while uncertain delivery
 keeps its original identity until reconciliation.
 
-Unused drafts restore without provider work. A recovered pre-dispatch receipt or
+Queued follow-ups appear in the shared queue dock before daemon acknowledgement,
+then reconcile by client message ID without duplicating or remounting their row.
+A matching daemon turn also settles a recovered delivery receipt without another
+submission, preserving handoff ownership and newer draft edits. Late HTTP replies
+cannot undo that acknowledgement or release a newer send's ownership.
+
+Unused drafts restore without provider work, including JSON-null launch settings.
+A recovered pre-dispatch receipt or
 interrupted startup with unverified ownership requires visible recreation instead
 of silently capturing newer context or submitting again. Safe startup retries
 reuse the accepted turn and frozen configuration. Staged image bytes are loaded
