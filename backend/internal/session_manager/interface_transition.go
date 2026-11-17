@@ -1637,8 +1637,9 @@ func (m *Manager) moveInterfaceTransitionWithNativeID(
 		if current.Phase.Terminal() {
 			return fmt.Errorf("transition %s is already %s", id, current.Phase)
 		}
-		if nativeConversationID == "" {
-			nativeConversationID = current.NativeConversationID
+		attemptNativeID := nativeConversationID
+		if attemptNativeID == "" {
+			attemptNativeID = current.NativeConversationID
 		}
 		var moved bool
 		if next == domain.SessionInterfaceTransitionCompleted && current.DegradedKind != "" {
@@ -1648,7 +1649,7 @@ func (m *Manager) moveInterfaceTransitionWithNativeID(
 				degradedHandoffMarkerTextFor(current), m.clock())
 		} else {
 			moved, err = store.AdvanceSessionInterfaceTransition(ctx, id, current.Phase, next,
-				nativeConversationID, errorCode, errorDetail, m.clock())
+				attemptNativeID, errorCode, errorDetail, m.clock())
 		}
 		if err != nil {
 			return err
