@@ -202,9 +202,15 @@ export function useStandaloneAgentReadiness(agentId: string, pending: boolean, e
 	}, [enabled, scope]);
 	// An older cached rejection can end `pending` while a retry is in flight.
 	// Keep its expired Retry offer until the target changes, the user retries,
-	// or another readiness result replaces the snapshot held at the deadline.
+	// or a relevant observation replaces the one held at the deadline. Usage
+	// updates and another agent's checks cannot settle this expired attempt.
+	const cached = queryClient.getQueryData<AgentReadiness>(agentReadinessQueryKey);
 	const expiredRetry = expired?.retry !== undefined && expired.retry === retryRequest && expired.scope === scope
-		&& expired.snapshot === queryClient.getQueryData(agentReadinessQueryKey);
+		&& expired.snapshot !== undefined && cached !== undefined
+		&& expired.snapshot.agents.filter((agent) => agentId ? agent.id === agentId : agent.installation.state === "installed").every((agent) => {
+			const current = cached.agents.find((candidate) => candidate.id === agent.id);
+			return current?.authentication === agent.authentication && current?.installation === agent.installation;
+		});
 	return {
 		timedOut: enabled && (Boolean(pending && expired?.request === request) || expiredRetry),
 		retrying: retrying && expired?.request !== request,

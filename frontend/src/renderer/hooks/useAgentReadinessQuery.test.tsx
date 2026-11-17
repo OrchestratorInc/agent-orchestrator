@@ -141,6 +141,12 @@ describe("agent readiness query", () => {
 			await act(async () => { await vi.advanceTimersByTimeAsync(10_000); });
 			expect(getMock).toHaveBeenCalledTimes(reads);
 			expect(result.current.timedOut).toBe(true);
+			await act(async () => {
+				const current = client.getQueryData<{ agents: ReturnType<typeof agentReadiness>[] }>(agentReadinessQueryKey)!;
+				client.setQueryData(agentReadinessQueryKey, { agents: [...current.agents, agentReadiness("claude-code", "Claude Code")] });
+				await vi.advanceTimersByTimeAsync(0);
+			});
+			expect(result.current.timedOut).toBe(true);
 			// A later independent readiness result can settle the expired attempt.
 			await act(async () => {
 				const ready = { agents: [agentReadiness("codex", "Codex")] };
