@@ -9709,6 +9709,9 @@ components:
           type: string
         name:
           type: string
+        title:
+          type: string
+          description: The document title when available, otherwise the filename without its extension.
         contentType:
           type: string
         size:
@@ -9749,6 +9752,10 @@ components:
             shareId:
               type: string
               format: uuid
+            createdAt:
+              type: string
+              format: date-time
+              description: When you first created this artifact link.
             grantCount:
               type: integer
               minimum: 0
