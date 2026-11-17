@@ -202,7 +202,7 @@ func (c *Claude) Limits(ctx context.Context, home string) (domain.AgentAccountLi
 func (c *Claude) loginRejected(ctx context.Context, home string) bool {
 	opts := (agentcreds.ResolveOptions{CommandEnv: c.launchOverlay(ctx, home), ConfigDir: home, AllowKeychain: true}).WithClaudeSettings(ctx)
 	provider, ok := agentcreds.ResolveProvider("", opts)
-	if !ok {
+	if !ok || provider != agentcreds.ProviderFirstParty {
 		return false
 	}
 	cred, found := agentcreds.ResolveLocal(ctx, provider, opts)

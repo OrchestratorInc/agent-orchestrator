@@ -164,7 +164,7 @@ func TestClaudeLimitsReportsUnavailableUsageAsError(t *testing.T) {
 		{"rejected login", fmt.Sprintf(`{"claudeAiOauth":{"accessToken":"sk-ant-oat01-dead","refreshToken":"r","expiresAt":%d}}`, now+3600_000), "", http.StatusUnauthorized, true, true, "api.anthropic.com"},
 		{"expired login the CLI renews", fmt.Sprintf(`{"claudeAiOauth":{"accessToken":"sk-ant-oat01-old","refreshToken":"r","expiresAt":%d}}`, now-60_000), "", http.StatusUnauthorized, false, false, ""},
 		{"no stored login", "", "", http.StatusUnauthorized, false, false, ""},
-		{"login routed through a gateway in settings", fmt.Sprintf(`{"claudeAiOauth":{"accessToken":"sk-ant-oat01-ok","refreshToken":"r","expiresAt":%d}}`, now+3600_000), `{"env":{"ANTHROPIC_BASE_URL":"https://gateway.example"}}`, http.StatusUnauthorized, true, true, "gateway.example"},
+		{"login routed elsewhere by settings", fmt.Sprintf(`{"claudeAiOauth":{"accessToken":"sk-ant-oat01-ok","refreshToken":"r","expiresAt":%d}}`, now+3600_000), `{"env":{"ANTHROPIC_BASE_URL":"https://gateway.example"}}`, http.StatusUnauthorized, false, false, ""},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			home := t.TempDir()
