@@ -41,9 +41,12 @@ const (
 // that normally settle in well under a second.
 const handshakeTimeout = 60 * time.Second
 
-// sandboxProbeTimeout bounds the read-only sandbox probe. A host that denies
+// sandboxProbeTimeout bounds the probe's command/exec call. A host that denies
 // the sandbox fails this command almost immediately; the timeout only exists
-// so a wedged provider cannot hold the review trigger open.
+// so a wedged provider cannot hold the review trigger open. It deliberately
+// does not cover spawning app-server and the initialize handshake, which keep
+// their usual handshakeTimeout so a slow cold start is not mistaken for a
+// broken sandbox.
 const sandboxProbeTimeout = 20 * time.Second
 
 // codexPlugin is the subset of AO's existing Codex agent plugin that the Chat
@@ -241,9 +244,7 @@ func (d *Driver) ProbeSandbox(ctx context.Context, cfg ports.ChatSandboxProbeCon
 	if workdir == "" {
 		workdir = os.TempDir()
 	}
-	probeCtx, cancel := context.WithTimeout(ctx, sandboxProbeTimeout)
-	defer cancel()
-	conv, err := d.connect(probeCtx, workdir, nil, "")
+	conv, err := d.connect(ctx, workdir, nil, "")
 	if err != nil {
 		return err
 	}
@@ -255,16 +256,31 @@ func (d *Driver) ProbeSandbox(ctx context.Context, cfg ports.ChatSandboxProbeCon
 		Stderr   string `json:"stderr"`
 	}
 	params := map[string]any{
-		"command":       sandboxProbeCommand(),
-		"cwd":           workdir,
-		"sandboxPolicy": map[string]any{"type": "readOnly", "networkAccess": false},
+		"command": sandboxProbeCommand(),
+		"cwd":     workdir,
+		// Match the reviewer turn's policy exactly (applyTurnSettings with
+		// readOnly and network left on). On Linux, networkAccess=false makes
+		// Codex add network isolation to the sandbox setup, so probing without
+		// network would exercise a different sandbox from the one the reviewer
+		// actually gets.
+		"sandboxPolicy": map[string]any{"type": "readOnly", "networkAccess": true},
 		"timeoutMs":     int64(10_000),
 	}
+	probeCtx, cancel := context.WithTimeout(ctx, sandboxProbeTimeout)
+	defer cancel()
 	if err := conv.conn.request(probeCtx, "command/exec", params, &resp); err != nil {
 		var refused *rpcError
-		if errors.As(err, &refused) && refused.Code == -32601 {
-			// This provider predates command/exec. Leave the launch as it was
-			// rather than turning an unsupported probe into a hard failure.
+		if !errors.As(err, &refused) {
+			// A timeout or a dropped connection says nothing about the
+			// sandbox, so it is reported as the probe failure it is.
+			return fmt.Errorf("sandbox probe: %w", err)
+		}
+		switch refused.Code {
+		case -32601, -32602:
+			// The provider predates command/exec (-32601) or rejects this
+			// request shape (-32602, e.g. SandboxPolicy drift in another Codex
+			// version). Either way the probe cannot answer, so the launch is
+			// left as it was rather than blocked on an unsupported preflight.
 			return nil
 		}
 		return fmt.Errorf("%w: %w", ports.ErrChatSandboxUnavailable, err)

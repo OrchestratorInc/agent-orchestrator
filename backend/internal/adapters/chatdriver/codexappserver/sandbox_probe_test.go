@@ -6,13 +6,15 @@ import (
 	"errors"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
 )
 
 // A reviewer is read-only with approvals disabled, so the sandbox probe must
-// use exactly that posture: the same policy the turn applies, with no approvals
-// and no network.
+// use exactly that posture: the same policy the reviewer turn applies,
+// including network access, which changes how Codex sets up the sandbox on
+// Linux.
 func TestProbeSandboxRunsNoopCommandInTheReadOnlyPosture(t *testing.T) {
 	d, srv := newTestDriver(t)
 	srv.respondTo("command/exec", `{"exitCode":0,"stdout":"","stderr":""}`)
@@ -37,8 +39,8 @@ func TestProbeSandboxRunsNoopCommandInTheReadOnlyPosture(t *testing.T) {
 	if params.Cwd != workspace {
 		t.Fatalf("cwd = %q, want %q", params.Cwd, workspace)
 	}
-	if params.Policy.Type != "readOnly" || params.Policy.NetworkAccess {
-		t.Fatalf("sandboxPolicy = %+v, want readOnly without network", params.Policy)
+	if params.Policy.Type != "readOnly" || !params.Policy.NetworkAccess {
+		t.Fatalf("sandboxPolicy = %+v, want readOnly with network, as the reviewer turn runs", params.Policy)
 	}
 	want := sandboxProbeCommand()
 	if len(params.Command) != len(want) {
@@ -91,5 +93,36 @@ func TestProbeSandboxSkipsProvidersWithoutCommandExec(t *testing.T) {
 
 	if err := d.ProbeSandbox(context.Background(), ports.ChatSandboxProbeConfig{WorkspacePath: t.TempDir()}); err != nil {
 		t.Fatalf("ProbeSandbox = %v, want nil for an unsupported probe", err)
+	}
+}
+
+// A provider that rejects the request shape (for example SandboxPolicy drift in
+// another Codex version) cannot answer the probe either. That is not a sandbox
+// failure, so the launch must go ahead as before.
+func TestProbeSandboxSkipsProvidersThatRejectTheProbeParams(t *testing.T) {
+	d, srv := newTestDriver(t)
+	srv.replyError("command/exec", -32602, "invalid params: unknown variant `readOnly`")
+
+	if err := d.ProbeSandbox(context.Background(), ports.ChatSandboxProbeConfig{WorkspacePath: t.TempDir()}); err != nil {
+		t.Fatalf("ProbeSandbox = %v, want nil for a probe the provider cannot parse", err)
+	}
+}
+
+// A probe that times out says nothing about the sandbox. It must still fail,
+// but must not be reported as ErrChatSandboxUnavailable.
+func TestProbeSandboxDoesNotLabelATimeoutAsASandboxFailure(t *testing.T) {
+	d, _ := newTestDriver(t) // command/exec is never answered
+	ctx, cancel := context.WithTimeout(context.Background(), 200*time.Millisecond)
+	defer cancel()
+
+	err := d.ProbeSandbox(ctx, ports.ChatSandboxProbeConfig{WorkspacePath: t.TempDir()})
+	if err == nil {
+		t.Fatal("ProbeSandbox = nil, want the timeout")
+	}
+	if errors.Is(err, ports.ErrChatSandboxUnavailable) {
+		t.Fatalf("err = %v, want a probe error that is not ErrChatSandboxUnavailable", err)
+	}
+	if !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("err = %v, want context.DeadlineExceeded preserved", err)
 	}
 }
