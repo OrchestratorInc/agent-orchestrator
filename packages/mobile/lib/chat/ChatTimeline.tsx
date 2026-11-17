@@ -116,6 +116,8 @@ import { TurnForkButton } from "./TurnForkButton";
 import { TURN_ACTION_SIZE, TURN_ACTION_SLOP, TurnRollbackButton, turnActionControl } from "./TurnRollbackButton";
 import { formatReplyTime } from "./replyTime";
 import { CONVERSATION_END_GAP, KEYBOARD_END_GAP_TUCK } from "../session/keyboardInset";
+import { AccountHandoffRow, UsageLimitNotice } from "./UsageLimitNotice";
+import { accountHandoffNote } from "./usageLimit";
 import { TurnArtifacts, useTurnArtifactSource } from "./TurnArtifacts";
 import { turnResults } from "./turnArtifactsModel";
 import { ConversationHarness, LatestWorkerUpdates, OriginMessageView, WorkerSessionsProvider, WorkerUpdateRows } from "./AutomationMessage";
@@ -806,6 +808,8 @@ const TimelineItem = memo(function TimelineItem({
 	const artifactPage = artifact ? artifactRenderRef(sessionId, artifact) : undefined;
 	if (artifact && artifactPage) return <RenderFrame render={artifactPage} artifact={{ sessionId, path: artifact.path }} />;
 	if (item.detail?.event === "auth.reauth_required") return <SystemSignal icon="key" danger title="The provider asked you to sign in again" detail={item.detail.reason} />;
+	const handoff = accountHandoffNote(item.detail);
+	if (handoff) return <AccountHandoffRow note={handoff} />;
 	if (item.activityKind === "error") return <ErrorActivity activity={item} />;
 	return <ActivityRow activity={item} />;
 });
@@ -1298,13 +1302,16 @@ function TurnSummary({ turn, plan }: { turn: ConversationTurn; plan?: Conversati
 	const results = useMemo(() => turnResults(turn, source), [source, turn]);
 	// Nothing to show draws nothing: an empty one still padded every turn's end,
 	// most of the gap between a reply and the next prompt.
-	if (!plan && !results.artifacts.length && !results.files.length && !turn.errorMessage) return null;
+	// A usage limit gets its own notice, which carries the provider's message.
+	const usageLimited = turn.state === "failed" && turn.usageLimit ? { ...turn, usageLimit: turn.usageLimit } : undefined;
+	if (!plan && !results.artifacts.length && !results.files.length && !turn.errorMessage && !usageLimited) return null;
 	return (
 		<View style={styles.turnWrap}>
 			{plan ? <TurnPlan plan={plan} live={turn.state === "running"} /> : null}
 			{results.artifacts.length && source ? <TurnArtifacts artifacts={results.artifacts} source={source} /> : null}
 			{results.files.length ? <ChangedFiles turn={turn} changed={results.files} /> : null}
-			{turn.errorMessage ? <Text style={styles.turnError}>{turn.errorMessage}</Text> : null}
+			{usageLimited ? <UsageLimitNotice turn={usageLimited} /> : null}
+			{turn.errorMessage && !usageLimited ? <Text style={styles.turnError}>{turn.errorMessage}</Text> : null}
 		</View>
 	);
 }
