@@ -1067,7 +1067,7 @@ export function formatTime(iso: string): string {
 	return Number.isNaN(parsed.getTime()) ? "" : timeFormatter.format(parsed);
 }
 
-function formatMessageTimestamp(iso: string, now = new Date()): string {
+export function formatMessageTimestamp(iso: string, now = new Date()): string {
 	const parsed = new Date(iso);
 	if (Number.isNaN(parsed.getTime())) return "";
 

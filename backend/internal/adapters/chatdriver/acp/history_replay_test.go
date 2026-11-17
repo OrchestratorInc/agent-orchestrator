@@ -33,6 +33,77 @@ func textBlock(text string) acpsdk.ContentBlock {
 	return acpsdk.ContentBlock{Text: &acpsdk.ContentBlockText{Text: text}}
 }
 
+func TestACPDroppedSegmentCompletionsRemainEligibleForTurnSettlement(t *testing.T) {
+	conv := replayConversation()
+	conv.messages = map[string]string{"assistant-turn": "message"}
+	conv.thoughts = map[string]string{"thought-turn": "reasoning"}
+	conv.settledItems = make(map[string]bool)
+	conv.openMessageID = "assistant-turn"
+	conv.openThoughtID = "thought-turn"
+
+	conv.eventMu.Lock()
+	conv.eventsClosed = true
+	conv.eventMu.Unlock()
+	conv.mu.Lock()
+	closed := conv.closeIDLessSegmentsLocked()
+	conv.mu.Unlock()
+	conv.emitClosedSegments("turn", closed.messageID, closed.messageText,
+		closed.thoughtID, closed.thoughtText, conv.emit)
+
+	conv.mu.Lock()
+	if conv.settledItems[closed.messageID] || conv.settledItems[closed.thoughtID] {
+		conv.mu.Unlock()
+		t.Fatal("undelivered segment completions were marked settled")
+	}
+	conv.mu.Unlock()
+
+	conv.eventMu.Lock()
+	conv.eventsClosed = false
+	conv.eventMu.Unlock()
+	conv.settleOpenItems("turn")
+	got := []ports.ChatEvent{<-conv.events, <-conv.events}
+	if got[0].Kind != ports.ChatEventMessageCompleted || got[0].Text != "message" ||
+		got[1].Kind != ports.ChatEventActivityCompleted || got[1].Text != "reasoning" {
+		t.Fatalf("terminal events = %#v, want the full message and reasoning completions", got)
+	}
+
+	conv.settleOpenItems("turn")
+	if len(conv.events) != 0 {
+		t.Fatalf("repeated settlement emitted duplicate completions: %d", len(conv.events))
+	}
+}
+
+func TestACPAcceptedPromptSteerClosesIDLessSegments(t *testing.T) {
+	conv := replayConversation()
+	conv.activeTurn = "turn"
+	conv.messages = map[string]string{"assistant-turn": "before steer"}
+	conv.thoughts = map[string]string{"thought-turn": "before steer thought"}
+	conv.settledItems = make(map[string]bool)
+	conv.openMessageID = "assistant-turn"
+	conv.openThoughtID = "thought-turn"
+
+	conv.mu.Lock()
+	closed := conv.steerTookLocked(&promptSteer{turn: "turn", result: make(chan error, 1)})
+	conv.mu.Unlock()
+	conv.emitClosedSegments("turn", closed.messageID, closed.messageText,
+		closed.thoughtID, closed.thoughtText, conv.emit)
+
+	if closed.messageID != "assistant-turn" || closed.thoughtID != "thought-turn" {
+		t.Fatalf("closed segments = %+v, want both open segments", closed)
+	}
+	nextMessage, _ := segmentedMessageID(nil, "assistant", "turn", conv.messageSegment)
+	nextThought, _ := segmentedMessageID(nil, "thought", "turn", conv.thoughtSegment)
+	if nextMessage == closed.messageID || nextThought == closed.thoughtID {
+		t.Fatalf("post-steer segments reused IDs: message=%q thought=%q", nextMessage, nextThought)
+	}
+	if got := <-conv.events; got.Kind != ports.ChatEventMessageCompleted || got.Text != "before steer" {
+		t.Fatalf("message completion = %+v", got)
+	}
+	if got := <-conv.events; got.Kind != ports.ChatEventActivityCompleted || got.Text != "before steer thought" {
+		t.Fatalf("thought completion = %+v", got)
+	}
+}
+
 func TestSetSessionPreambleDoesNotDuplicatePersistedText(t *testing.T) {
 	const preamble = "Standing instructions from Agent Orchestrator:\n<ao_standing_instructions>rules</ao_standing_instructions>"
 	conv := replayConversation()

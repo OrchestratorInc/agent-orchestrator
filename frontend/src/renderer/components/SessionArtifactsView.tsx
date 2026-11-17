@@ -20,6 +20,7 @@ import { aoBridge } from "../lib/bridge";
 import { fileMediaKind } from "../lib/file-media";
 import { isMacPlatform, isWindowsPlatform } from "../lib/platform";
 import { artifactChangeError, canChangeSessionArtifacts, findHostShareLink, type ArtifactRow } from "../lib/artifacts";
+import { isArchivedSession } from "../lib/standalone-archive";
 import { LOCAL_HOST, sessionUiKey } from "../lib/hosts";
 import { cn } from "../lib/utils";
 import type { SessionArtifact, WorkspaceSession } from "../types/workspace";
@@ -421,6 +422,7 @@ function ArtifactViewerBody({
 	onPreviewVersion,
 	previewVersion,
 	readOnly,
+	noFeedback = false,
 	save,
 	sendMessage,
 	sessionId,
@@ -448,6 +450,8 @@ function ArtifactViewerBody({
 	onPreviewVersion: (version: number | null) => void;
 	previewVersion: number | null;
 	readOnly: boolean;
+	/** Offers no feedback to the worker, as for an archived session's files. */
+	noFeedback?: boolean;
 	/** Sends feedback to a cloud session's worker. */
 	sendMessage?: (message: string) => Promise<void>;
 	sessionId: string;
@@ -493,6 +497,7 @@ function ArtifactViewerBody({
 						path={artifact.path}
 						rawUrl={artifact.rawUrl}
 						readOnly={readOnly}
+						noFeedback={noFeedback}
 						save={save}
 						sendMessage={sendMessage}
 						sessionId={sessionId}
@@ -502,7 +507,15 @@ function ArtifactViewerBody({
 					/>
 					</ArtifactZoomContext.Provider>
 				</div>}
-				{showingPage && page ? (
+				{showingPage && page && noFeedback ? (
+					<ArtifactZoomContext.Provider value={zoomController}>
+						{remotePage ? (
+							<HostArtifactPageFrame key={`${page}:${artifact.updatedAt}`} title={artifact.name} url={page} />
+						) : (
+							<ArtifactPageFrame key={`${page}:${artifact.updatedAt}`} src={page} title={artifact.name} />
+						)}
+					</ArtifactZoomContext.Provider>
+				) : showingPage && page ? (
 					<ArtifactZoomContext.Provider value={zoomController}>
 						<ArtifactPageFeedback
 							feedbackRequestKey={feedbackRequestKey}
@@ -713,6 +726,10 @@ export function SessionArtifactsView({
 	// Another member's cloud session files open view only: no edit, restore,
 	// delete or copy of them (the control plane refuses the changes too).
 	const owner = canChangeSessionArtifacts(session.cloud, cloudUserId);
+	// An archived session's files are view only too: they can still be
+	// previewed, shared, downloaded or deleted, but not edited, restored to an
+	// older version, or sent to a worker that is no longer running.
+	const archived = isArchivedSession(session);
 	const queryClient = useQueryClient();
 	// A cloud session's artifacts are edited and versioned in the control plane,
 	// which hands a save to the session's worker.
@@ -976,8 +993,9 @@ export function SessionArtifactsView({
 							onFeedbackRequestConsumed={onRequestConsumed}
 							onPreviewVersion={setPreviewVersion}
 							previewVersion={previewVersion}
-							readOnly={!owner}
-							save={cloud && owner ? saveCloudArtifact : undefined}
+							readOnly={!owner || archived}
+							noFeedback={archived}
+							save={cloud && owner && !archived ? saveCloudArtifact : undefined}
 							sendMessage={cloud ? sendCloudFeedback : undefined}
 							sessionId={session.id}
 							toolbarHost={toolbarHost}

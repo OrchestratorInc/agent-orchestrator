@@ -66,8 +66,6 @@ type CenterPaneProps = {
 	topbarActions?: ReactNode;
 	/** Agent-session actions (interface switch, handoff) on the primary session tab. */
 	sessionTabAction?: ReactNode;
-	/** Keep the primary tab's action showing while an interface switch runs. */
-	sessionTabActionPinned?: boolean;
 	/** Pinned beside the tab strip, before the workspace topbar actions. */
 	tabStripAction?: ReactNode;
 	workspaceTabs?: CenterPaneWorkspaceTab[];
@@ -237,7 +235,6 @@ export function CenterPane({
 	onRenameShellTerminal,
 	topbarActions,
 	sessionTabAction,
-	sessionTabActionPinned = false,
 	tabStripAction,
 	workspaceTabs,
 	workspaceTabActions,
@@ -591,7 +588,6 @@ export function CenterPane({
 												onRenamed={refreshWorkspaces}
 												session={session}
 												tabAction={sessionTabAction}
-												tabActionPinned={sessionTabActionPinned}
 											/>
 										) : (
 											<SessionPaneTab isActive={target.kind === "worker"} label={sessionTabLabel} />
@@ -729,8 +725,6 @@ type SessionPaneTabProps = {
 	title?: string;
 	/** The control after the tab's title: the session's ⋮ menu, or a running interface switch's status. */
 	tabAction?: ReactNode;
-	/** Keep the action showing at rest (the session tab's ⋮ always shows). */
-	tabActionPinned?: boolean;
 	/** Give a tab with no session (a reviewer) the strip's right-click menu. */
 	tabMenu?: boolean;
 	/** The tab's strip key, for split actions in its menu. */
@@ -749,7 +743,6 @@ export function SessionPaneTab({
 	icon,
 	title,
 	tabAction,
-	tabActionPinned = false,
 	tabMenu = false,
 	tabKey = SESSION_TAB_KEY,
 }: SessionPaneTabProps) {
@@ -787,10 +780,10 @@ export function SessionPaneTab({
 	) : undefined;
 	const tabFrame = (
 		<TerminalTabFrame
-			// Renaming hides the ⋮ but keeps its slot, so the tab keeps its width.
-			action={tabAction ? <span className={cn(sessionTabActionClassName, rename.isEditing && "invisible")} data-testid="session-tab-action">{tabAction}</span> : undefined}
-			actionPosition="end"
-			actionPinned={tabActionPinned}
+			// Renaming hides the ⋮ but keeps its slot (the frame's rule), so the tab keeps its width.
+			action={tabAction ? <span className={sessionTabActionClassName} data-testid="session-tab-action">{tabAction}</span> : undefined}
+			// The session tab's ⋮ always shows, in its own room after the title.
+			actionInline
 			wide={session ? "session" : undefined}
 			active={isActive}
 			buttonProps={{

@@ -14,6 +14,8 @@ import type { ChatFileReference } from "../../shared/chat-file-reference";
 import {
 	type InfiniteData,
 	type QueryClient,
+	type QueryKey,
+	hashKey,
 	infiniteQueryOptions,
 	useInfiniteQuery,
 	useIsMutating,
@@ -21,27 +23,27 @@ import {
 	useQuery,
 	useQueryClient,
 } from "@tanstack/react-query";
-import { useCallback, useEffect, useRef, useState, useSyncExternalStore } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import type { components } from "../../api/schema";
 import { apiErrorCode, apiErrorMessage } from "../lib/api-client";
 import { baseUrlForHost, clientForSessionHost } from "../lib/host-clients";
 import { HOST_UNREACHABLE_CODES, sessionUiKey } from "../lib/hosts";
 import { subscribeWorkspaceFileChanges } from "../lib/workspace-file-events";
+import { toWireAttachments, type OutgoingAttachment } from "../lib/attachment-uploads";
 import { isMissingWorkspaceError, knownMissingWorkspace, recordWorkspaceResult, workspaceRecoveryEpoch } from "./useSessionWorkspaceFiles";
 import { workspaceQueryKeyForHost } from "./useWorkspaceQuery";
 import { resumeAgentError, resumeOpenElsewhere } from "./useCanResumeAgent";
 import { useRestoreSession } from "./useRestoreSession";
 import { recordDirectWorkerInteraction } from "../lib/session-management-telemetry";
 import type { ChatDraftExcerptReference } from "../lib/chat-drafts";
-import {
-	type ActivityKind,
-	type ApprovalMode,
-	type ActivityStatus,
-	activeTurn,
-	type ConversationActivity,
-	type ConversationItem,
-	type ConversationMessage,
-	type ConversationSnapshot,
+import type {
+	ActivityKind,
+	ApprovalMode,
+	ActivityStatus,
+	ConversationActivity,
+	ConversationItem,
+	ConversationMessage,
+	ConversationSnapshot,
 	ControllerState,
 	DecisionOption,
 	DiffStatus,
@@ -356,7 +358,8 @@ export function invalidateConversationProviderCatalogs(queryClient: QueryClient,
 	void queryClient.invalidateQueries({ queryKey: conversationSkillsQueryKey(sessionId, hostId) });
 }
 
-const CONVERSATION_PAGE_SIZE = 200;
+const LOCAL_INITIAL_PAGE_SIZE = 30;
+const LOCAL_OLDER_PAGE_SIZE = 200;
 // A remote page crosses a tunnel, often on the host's upload: a small live page,
 // larger pages on scroll, and each tool output cut to its head and tail.
 const REMOTE_LIVE_PAGE_SIZE = 30;
@@ -371,6 +374,22 @@ const CONFIG_OPTION_WRITE_TIMEOUT_MS = 60_000;
  */
 const SEND_ANSWER_TIMEOUT_MS = 60_000;
 const SKILLS_POLL_INTERVAL_MS = 60_000;
+/**
+ * Kept well past React Query's 5 minute default: going back to a chat after a
+ * while, its "/" menu must still be there while the agent wakes.
+ */
+const SKILLS_CACHE_MS = 30 * 60_000;
+/** A provider that never answers must not hold the list in a fetch forever. */
+export const SKILLS_REQUEST_TIMEOUT_MS = 10_000;
+/**
+ * ACP agents (Claude among them) publish their commands a few seconds after the
+ * session starts, once the CLI has loaded its plugins and MCP servers. An empty
+ * answer from a controller that just started is usually that gap, not "no
+ * skills", so it is asked again quickly for this long before it is believed.
+ */
+export const EMPTY_SKILLS_GRACE_MS = 20_000;
+export const EMPTY_SKILLS_RECHECK_MS = 2_000;
+const NO_SKILLS: ChatSkill[] = [];
 
 /**
  * Answers that will never change on a retry. SESSION_MODE_MISMATCH is permanent
@@ -407,7 +426,7 @@ async function fetchConversationWire(sessionId: string, hostId: string | undefin
 }
 
 function conversationPageQuery(hostId: string | undefined, beforeSequence?: number): ConversationPageQuery {
-	if (!hostId) return { beforeSequence, limit: CONVERSATION_PAGE_SIZE };
+	if (!hostId) return { beforeSequence, limit: beforeSequence ? LOCAL_OLDER_PAGE_SIZE : LOCAL_INITIAL_PAGE_SIZE };
 	return { beforeSequence, limit: beforeSequence ? REMOTE_OLDER_PAGE_SIZE : REMOTE_LIVE_PAGE_SIZE, outputLimit: REMOTE_OUTPUT_LIMIT };
 }
 
@@ -492,6 +511,14 @@ export async function refreshRemoteConversation(queryClient: QueryClient, sessio
 		throw error;
 	}
 	queryClient.setQueryData(remoteConversationRefreshErrorKey(sessionId, hostId), false);
+	applyLiveConversationPage(queryClient, key, latest);
+}
+
+/**
+ * Puts a freshly read live page in front of the older pages already held, so
+ * one read updates the chat without reading its older history again.
+ */
+function applyLiveConversationPage(queryClient: QueryClient, key: QueryKey, latest: ConversationSnapshot): void {
 	queryClient.setQueryData<InfiniteData<ConversationSnapshot>>(key, (previous) => {
 		if (previous?.pages.length && previous.pages[0].conversationId === latest.conversationId && previous.pages[0].activeBranchId === latest.activeBranchId && latest.latestSequence < previous.pages[0].latestSequence) return previous;
 		if (!previous?.pages.length || !latest.hasMoreBefore || previous.pages[0].conversationId !== latest.conversationId || previous.pages[0].activeBranchId !== latest.activeBranchId) return { pages: [latest], pageParams: [undefined] };
@@ -536,6 +563,85 @@ export function refreshRemoteConversationOnce(queryClient: QueryClient, sessionI
 	})();
 }
 
+function cachedLivePage(queryClient: QueryClient, key: QueryKey): ConversationSnapshot | undefined {
+	return queryClient.getQueryData<InfiniteData<ConversationSnapshot>>(key)?.pages[0];
+}
+
+/** Each local chat's open read in flight, with the older-page load waiting on it. */
+const localConversationRefreshes = new WeakMap<QueryClient, Map<string, { afterRead?: () => void }>>();
+
+/** Runs `then` once the chat's open read lands; false when no read is in flight. */
+function deferUntilLocalRefresh(queryClient: QueryClient, sessionId: string, then: () => void): boolean {
+	const read = localConversationRefreshes.get(queryClient)?.get(sessionId);
+	if (!read) return false;
+	read.afterRead = then;
+	return true;
+}
+
+/**
+ * Brings a local chat that changed while it was closed up to date as it opens.
+ * Events only mark a closed chat stale, and refetching it as an infinite query
+ * reads every page it holds, one after another, before showing any of them, so
+ * the chat sat on its old copy (a finished turn still "Thinking") until the
+ * oldest page arrived. Reading the live page alone shows what changed at once.
+ */
+function refreshLocalConversationOnce(queryClient: QueryClient, sessionId: string): void {
+	let running = localConversationRefreshes.get(queryClient);
+	if (!running) localConversationRefreshes.set(queryClient, (running = new Map()));
+	if (running.has(sessionId)) return;
+	const read: { afterRead?: () => void } = {};
+	running.set(sessionId, read);
+	const key = conversationQueryKey(sessionId);
+	const hash = hashKey(key);
+	// An event while the chat is closed again mid-read may describe rows the read
+	// missed, and applying the page clears the stale mark it left. (While the chat
+	// is open, an event refetches it on its own.)
+	let missed = false;
+	const stopWatching = queryClient.getQueryCache().subscribe((event) => {
+		if (event.type === "updated" && event.action.type === "invalidate" && event.query.queryHash === hash && event.query.getObserversCount() === 0) missed = true;
+	});
+	void (async () => {
+		try {
+			do {
+				missed = false;
+				// Marking an already stale query stale again records nothing, so take the
+				// mark off while reading for an event during the read to be seen.
+				const query = queryClient.getQueryCache().find({ queryKey: key, exact: true });
+				query?.setState({ isInvalidated: false });
+				// A full reload still running from before the chat closed (closing does not
+				// cancel it) read its pages before this read and would write them over it.
+				const earlierReload = query?.state.fetchStatus === "fetching" && !query.state.fetchMeta?.fetchMore ? query.promise : undefined;
+				const before = cachedLivePage(queryClient, key);
+				const latest = await fetchConversationPage(sessionId);
+				const loading = queryClient.getQueryCache().find({ queryKey: key, exact: true });
+				if (loading?.state.fetchStatus === "fetching") {
+					// An older page that was already loading copied the previous live page when
+					// it started and writes it back when it lands, so this page goes in after it.
+					if (loading.state.fetchMeta?.fetchMore) await loading.promise?.catch(() => undefined);
+					// Cancelling reverts to the pages held when it started (and any write since),
+					// which this page goes in front of. A reload that started during this read
+					// holds newer rows and is left to land.
+					else if (earlierReload && loading.promise === earlierReload) await queryClient.cancelQueries({ queryKey: key, exact: true });
+				}
+				// A branch switch, edit or rollback during the read already refetched the
+				// chat on its new branch; this page shows the one it left.
+				const now = cachedLivePage(queryClient, key);
+				if (now?.conversationId !== before?.conversationId || now?.activeBranchId !== before?.activeBranchId) continue;
+				applyLiveConversationPage(queryClient, key, latest);
+			} while (missed && queryClient.getQueryCache().find({ queryKey: key, exact: true, type: "active" }));
+			// Still closed: the next open reads what changed.
+			if (missed) void queryClient.invalidateQueries({ queryKey: key, exact: true, refetchType: "none" });
+		} catch {
+			// The query's own read retries and reports what keeps failing.
+			void queryClient.invalidateQueries({ queryKey: key });
+		} finally {
+			stopWatching();
+			running.delete(sessionId);
+			read.afterRead?.();
+		}
+	})();
+}
+
 /**
  * A cached local chat whose controller is ready or working. Such a chat learns
  * every change through events; one still starting up or waking does not.
@@ -554,10 +660,10 @@ export function conversationQueryOptions(sessionId: string, hostId?: string) {
 		// A local chat changes only through events, which invalidate it even while
 		// it is closed, and a reconnect invalidates every chat. Opening an unchanged
 		// chat again therefore needs no request; refetching here reloaded every page
-		// it had. A remote chat refreshes its live page when it opens, and events
-		// refresh it while it is open, so a cached remote page is not refetched whole.
+		// it had. Either kind of chat reads only its live page when it opens (see
+		// useConversation), so a cached chat is never refetched whole on open.
 		staleTime: Infinity,
-		...(hostId ? { refetchOnMount: false } : {}),
+		refetchOnMount: false,
 		gcTime: 30 * 60_000,
 		// A mode mismatch is authoritative for this committed controller epoch, so
 		// retrying the same request cannot help and would leave the surface loading
@@ -589,11 +695,14 @@ export function useConversation(sessionId: string | undefined, hostId?: string):
 		select: selectConversationPages,
 	});
 	useEffect(() => {
+		if (!sessionId) return;
+		const cached = queryClient.getQueryState(conversationQueryKey(sessionId, hostId));
+		if (cached?.data === undefined) return;
 		// A cached remote page (an earlier visit, a prefetch, or the disk copy) shows
 		// at once; the open reads what changed since.
-		if (hostId && sessionId && queryClient.getQueryData(conversationQueryKey(sessionId, hostId))) {
-			refreshRemoteConversationOnce(queryClient, sessionId, hostId);
-		}
+		if (hostId) refreshRemoteConversationOnce(queryClient, sessionId, hostId);
+		// A cached local chat is current unless an event marked it stale while closed.
+		else if (cached.isInvalidated) refreshLocalConversationOnce(queryClient, sessionId);
 	}, [hostId, queryClient, sessionId]);
 
 	if (query.error && (!hostId || !query.data)) {
@@ -628,7 +737,12 @@ export function useConversation(sessionId: string | undefined, hostId?: string):
 		// A live refresh may be in flight; cancelling it would drop the newest
 		// page for good. The older page then loads on the next scroll or click.
 		loadOlder: () => {
-			void query.fetchNextPage({ cancelRefetch: false });
+			const fetchOlder = () => void query.fetchNextPage({ cancelRefetch: false });
+			// A local chat's open read is not a query fetch to join. An older-page fetch
+			// started during it copies the cached pages as it starts and writes them
+			// back over the live page the read puts in, so it waits for the read.
+			if (!hostId && sessionId && deferUntilLocalRefresh(queryClient, sessionId, fetchOlder)) return;
+			fetchOlder();
 		},
 	};
 }
@@ -662,8 +776,12 @@ export function useProviderSwitchCommand(sessionId: string, hostId?: string) {
 	});
 }
 
-/** Commands against a conversation. Each refetches the snapshot on success. */
-export function useConversationCommands(sessionId: string | undefined, hostId?: string, terminated = false) {
+/**
+ * Commands against a conversation. Each refetches the snapshot on success.
+ * `turnActive` comes from the caller's snapshot: reading the conversation
+ * cache here would re-render every consumer on each streamed chunk.
+ */
+export function useConversationCommands(sessionId: string | undefined, hostId?: string, terminated = false, turnActive = false) {
 	const queryClient = useQueryClient();
 	const restoreSession = useRestoreSession();
 	const stateSessionId = sessionId ? sessionUiKey(sessionId, hostId) : undefined;
@@ -695,23 +813,7 @@ export function useConversationCommands(sessionId: string | undefined, hostId?: 
 		staleTime: Number.POSITIVE_INFINITY,
 	}).data;
 	const trackedDispatch = stateSessionId ? trackedDispatches[stateSessionId] : undefined;
-	const cachedSnapshot = useSyncExternalStore(
-		useCallback(
-			(onStoreChange) => queryClient.getQueryCache().subscribe(onStoreChange),
-			[queryClient],
-		),
-		() => {
-			if (!sessionId) return undefined;
-			const data = queryClient.getQueryData<InfiniteData<ConversationSnapshot>>(
-				conversationQueryKey(sessionId, hostId),
-			);
-			return data?.pages?.[0];
-		},
-	);
-	const hasActiveTurn = Boolean(
-		(cachedSnapshot && activeTurn(cachedSnapshot)) ||
-		trackedDispatch !== undefined,
-	);
+	const hasActiveTurn = turnActive || trackedDispatch !== undefined;
 	const invalidateSession = useCallback(
 		async (targetSessionId: string) => {
 			if (hostId) await refreshRemoteConversation(queryClient, targetSessionId, hostId);
@@ -1865,9 +1967,30 @@ export function useConversationConfigOptions(sessionId: string | undefined, enab
  * An empty list is a real answer and the composer depends on being able to tell it
  * from a failure — with no skills, `/` has to stay an ordinary character rather than
  * opening an empty menu.
+ *
+ * The live list can only be read from a running controller, which a chat waking
+ * from sleep, starting, or reattaching does not have yet; and an ACP agent
+ * publishes it a few seconds after it starts. Until the live answer is in,
+ * `remembered` (the list this agent last reported in this project) stands in, so
+ * `/` opens at once instead of waiting on the agent. `loading` says a live list is
+ * still on its way and nothing stands in for it.
  */
-export function useConversationSkills(sessionId: string | undefined, enabled: boolean, hostId?: string) {
-	const query = useQuery({
+export function useConversationSkills(
+	sessionId: string | undefined,
+	enabled: boolean,
+	hostId?: string,
+	remembered: ChatSkill[] = NO_SKILLS,
+) {
+	// When this controller first answered with an empty list: see EMPTY_SKILLS_GRACE_MS.
+	// Kept as state for render and mirrored in a ref for `refetchInterval`, which
+	// runs outside render. Both are written only in the effect below.
+	const [emptySince, setEmptySince] = useState<number | undefined>(undefined);
+	const firstEmptyAt = useRef<number | undefined>(undefined);
+	// When the current controller became readable. A cached empty answer from an
+	// earlier one must not count toward this one's grace period.
+	const enabledAt = useRef<number | undefined>(undefined);
+	// Typed explicitly: `refetchInterval` reads the data, which leaves inference circular.
+	const query = useQuery<ChatSkill[]>({
 		queryKey: conversationSkillsQueryKey(sessionId ?? "", hostId),
 		enabled: Boolean(sessionId) && enabled,
 		// ACP agents publish this catalog asynchronously and may replace it later.
@@ -1876,6 +1999,7 @@ export function useConversationSkills(sessionId: string | undefined, enabled: bo
 		// catalog can be large and changes rarely, so it intentionally refreshes much
 		// less often than conversation state.
 		staleTime: SKILLS_POLL_INTERVAL_MS,
+		gcTime: SKILLS_CACHE_MS,
 		// The catalog is only served once a live controller owns the session; before
 		// then the daemon answers 409 CHAT_CONTROLLER_NOT_READY. A cached "ready"
 		// snapshot can outlive the controller (a restart or interface switch), so a
@@ -1884,23 +2008,60 @@ export function useConversationSkills(sessionId: string | undefined, enabled: bo
 		// poll while that conflict stands; readiness returning re-enables the query
 		// (the controller-gated `enabled`) or invalidates it, which refetches once and
 		// resumes polling on success.
-		refetchInterval: (query) =>
-			apiErrorCode(query.state.error) === "CHAT_CONTROLLER_NOT_READY"
-				? false
-				: SKILLS_POLL_INTERVAL_MS,
+		refetchInterval: (query) => {
+			if (apiErrorCode(query.state.error) === "CHAT_CONTROLLER_NOT_READY") return false;
+			if (query.state.data?.length === 0 && !emptySkillsSettled(firstEmptyAt.current, query.state.dataUpdatedAt)) {
+				return EMPTY_SKILLS_RECHECK_MS;
+			}
+			return SKILLS_POLL_INTERVAL_MS;
+		},
 		retry: false,
-		queryFn: async () => {
+		queryFn: async ({ signal }) => {
 			const { data, error } = await clientForSessionHost(hostId).GET(
 				"/api/v1/sessions/{sessionId}/conversation/skills",
 				{
 					params: { path: { sessionId: sessionId as string } },
+					signal: AbortSignal.any([signal, AbortSignal.timeout(SKILLS_REQUEST_TIMEOUT_MS)]),
 				},
 			);
 			if (error) throw error;
 			return (data?.skills ?? []) as ChatSkill[];
 		},
 	});
-	return { skills: query.data ?? [], isLoading: query.isLoading };
+	const live = query.data;
+	const updatedAt = query.dataUpdatedAt;
+	// Restarted on every new controller: `enabled` drops while it starts.
+	useEffect(() => {
+		enabledAt.current = enabled ? Date.now() : undefined;
+	}, [enabled]);
+	useEffect(() => {
+		const since = enabledAt.current;
+		const next = !enabled || !live || live.length > 0
+			? undefined
+			: firstEmptyAt.current ?? (since !== undefined && updatedAt >= since ? updatedAt : undefined);
+		firstEmptyAt.current = next;
+		setEmptySince(next);
+	}, [enabled, live, updatedAt]);
+	const settled = live !== undefined && (live.length > 0 || (enabled && emptySkillsSettled(emptySince, updatedAt)));
+	const standIn = !settled && remembered.length > 0;
+	const skills = live?.length ? live : standIn ? remembered : (live ?? NO_SKILLS);
+	return {
+		skills,
+		/** True while `skills` is the remembered stand-in rather than the agent's own answer. */
+		remembered: standIn && !live?.length,
+		/**
+		 * `skills` is the agent's own answer and is believed, empty included: the
+		 * list to remember. An early empty answer or a stand-in is not.
+		 */
+		settled,
+		loading: Boolean(sessionId) && enabled && !settled && skills.length === 0 && !query.error,
+		isLoading: query.isLoading,
+	};
+}
+
+/** An empty list is believed once it has held for the grace period. */
+export function emptySkillsSettled(firstEmptyAt: number | undefined, updatedAt: number): boolean {
+	return firstEmptyAt !== undefined && updatedAt - firstEmptyAt >= EMPTY_SKILLS_GRACE_MS;
 }
 
 /**
@@ -1955,7 +2116,7 @@ export function useWorkspaceFilePaths(sessionId: string | undefined, enabled: bo
 }
 
 /**
- * Write staged images into the session worktree.
+ * Write staged files into the session worktree.
  *
  * Returns the worktree-relative paths the agent can open. The composer names those
  * paths in the message it sends, which is how an image reaches an agent whose
@@ -1963,12 +2124,15 @@ export function useWorkspaceFilePaths(sessionId: string | undefined, enabled: bo
  */
 export function useStageAttachments(sessionId: string | undefined, hostId?: string) {
 	return useCallback(
-		async (attachments: { mimeType: string; data: string; name?: string }[]): Promise<string[]> => {
+		async (attachments: OutgoingAttachment[], signal?: AbortSignal): Promise<string[]> => {
 			if (!sessionId || attachments.length === 0) return [];
+			// A file too large to inline is streamed from disk to this session's
+			// daemon first, and the request names the upload.
+			const wire = await toWireAttachments(attachments, hostId, signal);
 			const { data, error } = await clientForSessionHost(hostId).POST("/api/v1/sessions/{sessionId}/attachments", {
 				params: { path: { sessionId } },
 				// The daemon names staged files itself; only the bytes go.
-				body: { attachments: attachments.map(({ mimeType, data }) => ({ mimeType, data })) },
+				body: { attachments: wire },
 			});
 			if (error) throw error;
 			return data?.paths ?? [];

@@ -697,12 +697,12 @@ func (c *conversation) processUpdate(params acpsdk.SessionNotification) error {
 	}
 	sourceID := stableACPEventID(params.Meta)
 	sourceIndex := 0
-	emit := func(event ports.ChatEvent) {
+	emit := func(event ports.ChatEvent) bool {
 		if sourceID != "" {
 			event.ProviderEventID = fmt.Sprintf("%s:%d", sourceID, sourceIndex)
 			sourceIndex++
 		}
-		c.emit(event)
+		return c.emit(event)
 	}
 
 	update := params.Update
@@ -711,7 +711,7 @@ func (c *conversation) processUpdate(params acpsdk.SessionNotification) error {
 		update.ToolCall != nil ||
 		update.Plan != nil
 	if providerOutputResumed {
-		c.completeProviderFailure(turnID, emit)
+		c.completeProviderFailure(turnID, func(event ports.ChatEvent) { emit(event) })
 	}
 	switch {
 	case update.AgentMessageChunk != nil:
@@ -801,30 +801,30 @@ func (c *conversation) processUpdate(params acpsdk.SessionNotification) error {
 		}
 		c.mu.Lock()
 		c.tools[tool.id] = tool
-		closedMsgID, closedMsgText, closedThoughtID, closedThoughtText := c.closeIDLessSegmentsLocked()
+		closed := c.closeIDLessSegmentsLocked()
 		c.mu.Unlock()
-		c.emitClosedSegments(turnID, closedMsgID, closedMsgText, closedThoughtID, closedThoughtText, emit)
+		c.emitClosedSegments(turnID, closed.messageID, closed.messageText, closed.thoughtID, closed.thoughtText, emit)
 		emit(c.toolEvent(turnID, tool, toolTerminal(tool.status)))
-		c.emitDiffs(turnID, tool.id, tool.content, emit)
+		c.emitDiffs(turnID, tool.id, tool.content, func(event ports.ChatEvent) { emit(event) })
 	case update.ToolCallUpdate != nil:
 		tool, created := c.mergeToolUpdate(update.ToolCallUpdate)
 		if created || toolTerminal(tool.status) {
 			c.mu.Lock()
-			closedMsgID, closedMsgText, closedThoughtID, closedThoughtText := c.closeIDLessSegmentsLocked()
+			closed := c.closeIDLessSegmentsLocked()
 			c.mu.Unlock()
-			c.emitClosedSegments(turnID, closedMsgID, closedMsgText, closedThoughtID, closedThoughtText, emit)
+			c.emitClosedSegments(turnID, closed.messageID, closed.messageText, closed.thoughtID, closed.thoughtText, emit)
 		}
 		if delta := terminalOutput(update.ToolCallUpdate.Meta); delta != "" {
 			emit(ports.ChatEvent{Kind: ports.ChatEventCommandOutputDelta, ProviderTurnID: turnID,
 				ProviderItemID: c.providerItemID(tool.id), Delta: delta})
 		}
 		emit(c.toolEvent(turnID, tool, toolTerminal(tool.status)))
-		c.emitDiffs(turnID, tool.id, tool.content, emit)
+		c.emitDiffs(turnID, tool.id, tool.content, func(event ports.ChatEvent) { emit(event) })
 	case update.Plan != nil:
 		c.mu.Lock()
-		closedMsgID, closedMsgText, closedThoughtID, closedThoughtText := c.closeIDLessSegmentsLocked()
+		closed := c.closeIDLessSegmentsLocked()
 		c.mu.Unlock()
-		c.emitClosedSegments(turnID, closedMsgID, closedMsgText, closedThoughtID, closedThoughtText, emit)
+		c.emitClosedSegments(turnID, closed.messageID, closed.messageText, closed.thoughtID, closed.thoughtText, emit)
 		plan := normalizePlan(update.Plan.Entries)
 		plan.SpansTurns = c.plansSpanTurns
 		emit(ports.ChatEvent{Kind: ports.ChatEventPlanUpdated, ProviderTurnID: turnID, Plan: plan})
@@ -869,18 +869,28 @@ func (c *conversation) processUpdate(params acpsdk.SessionNotification) error {
 
 func (c *conversation) emitClosedSegments(
 	turnID, msgID, msgText, thoughtID, thoughtText string,
-	emit func(ports.ChatEvent),
+	emit func(ports.ChatEvent) bool,
 ) {
+	c.itemSettlementMu.Lock()
+	defer c.itemSettlementMu.Unlock()
 	if msgID != "" {
-		emit(ports.ChatEvent{
+		c.mu.Lock()
+		settled := c.settledItems[msgID]
+		c.mu.Unlock()
+		if !settled && emit(ports.ChatEvent{
 			Kind:           ports.ChatEventMessageCompleted,
 			ProviderTurnID: turnID,
 			ProviderItemID: msgID,
 			Text:           msgText,
-		})
+		}) {
+			c.markItemSettled(msgID)
+		}
 	}
 	if thoughtID != "" {
-		emit(ports.ChatEvent{
+		c.mu.Lock()
+		settled := c.settledItems[thoughtID]
+		c.mu.Unlock()
+		if !settled && emit(ports.ChatEvent{
 			Kind:           ports.ChatEventActivityCompleted,
 			ProviderTurnID: turnID,
 			ProviderItemID: thoughtID,
@@ -888,8 +898,19 @@ func (c *conversation) emitClosedSegments(
 			ActivityStatus: domain.ActivityStatusCompleted,
 			Summary:        "Reasoning",
 			Text:           thoughtText,
-		})
+		}) {
+			c.markItemSettled(thoughtID)
+		}
 	}
+}
+
+func (c *conversation) markItemSettled(id string) {
+	c.mu.Lock()
+	if c.settledItems == nil {
+		c.settledItems = make(map[string]bool)
+	}
+	c.settledItems[id] = true
+	c.mu.Unlock()
 }
 
 func stableACPEventID(meta map[string]any) string {

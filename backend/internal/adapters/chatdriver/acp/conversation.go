@@ -124,6 +124,9 @@ type conversation struct {
 	configOptions     []ports.ChatConfigOption
 	skills            []ports.ChatSkill
 	skillsKnown       bool
+	// compactAdvertised is whether the agent's own list, before HideCommand,
+	// named compact; start derives compaction from it, not from the shown skills.
+	compactAdvertised bool
 	closed            bool
 	// sessionLost records that the agent stopped holding this conversation's
 	// session and the provider was stopped for it. See providerSessionLost.
@@ -216,6 +219,7 @@ type conversation struct {
 	sessionPromptResponseFailure func(string, acpsdk.PromptResponse, bool) error
 	hibernationCheck             func(context.Context, *acpsdk.ClientSideConnection, acpsdk.SessionId) (bool, error)
 	historyNotice                func(string) bool
+	hideCommand                  func(acpsdk.AvailableCommand) bool
 	// promptErrorFailure: see Config.PromptErrorFailure.
 	promptErrorFailure func(error, bool) error
 	// historyUserChunkIsMessage: see Config.HistoryUserChunkIsMessage.
@@ -262,11 +266,12 @@ type conversation struct {
 
 	claudeRejectedLimits map[string]time.Time
 
-	eventMu      sync.RWMutex
-	events       chan ports.ChatEvent
-	eventsClosed bool
-	closeOnce    sync.Once
-	closing      chan struct{}
+	eventMu          sync.RWMutex
+	itemSettlementMu sync.Mutex
+	events           chan ports.ChatEvent
+	eventsClosed     bool
+	closeOnce        sync.Once
+	closing          chan struct{}
 
 	historyMu     sync.Mutex
 	history       *historyCapture
@@ -422,7 +427,7 @@ func (c *conversation) start(
 	}
 	if c.skillsKnown {
 		c.capabilities[ports.ChatCapabilitySkills] = true
-		c.capabilities[ports.ChatCapabilityCompaction] = hasCompactSkill(c.skills)
+		c.capabilities[ports.ChatCapabilityCompaction] = c.compactAdvertised
 	}
 	c.modeFor = modeFor
 	c.optionsFor = optionsFor
@@ -1559,38 +1564,42 @@ func (c *conversation) watchConnection() {
 	c.eventMu.Unlock()
 }
 
-func (c *conversation) emit(event ports.ChatEvent) {
+func (c *conversation) emit(event ports.ChatEvent) bool {
 	if c.captureHistoryEvent(event) {
-		return
+		return true
 	}
 	c.eventMu.RLock()
 	defer c.eventMu.RUnlock()
 	if c.eventsClosed {
-		return
+		return false
 	}
 	if c.proc != nil && c.proc.terminate != nil {
 		// Host-journaled frames must reach durable projection; dropping one here
 		// would make a successful replay look exactly-once while losing content.
 		select {
 		case c.events <- event:
+			return true
 		case <-c.conn.Done():
+			return false
 		case <-c.closing:
+			return false
 		}
-		return
 	}
 	select {
 	case c.events <- event:
-		return
+		return true
 	default:
 	}
 	if event.Kind == ports.ChatEventMessageDelta || event.Kind == ports.ChatEventReasoningDelta {
 		c.log.Warn("dropped ACP chat delta: consumer behind", "kind", event.Kind, "item", event.ProviderItemID)
-		return
+		return false
 	}
 	select {
 	case c.events <- event:
+		return true
 	case <-time.After(5 * time.Second):
 		c.log.Error("dropped ACP lifecycle event: consumer stalled", "kind", event.Kind)
+		return false
 	}
 }
 
@@ -1607,27 +1616,12 @@ func (c *conversation) resetTurnItemsLocked() {
 	c.tools = make(map[string]*toolState)
 }
 
-func (c *conversation) advanceIDLessSegmentsLocked() {
-	if c.openMessageID != "" {
-		c.messageSegment++
-		c.openMessageID = ""
-	}
-	if c.openThoughtID != "" {
-		c.thoughtSegment++
-		c.openThoughtID = ""
-	}
-}
-
 func (c *conversation) closeIDLessMessageLocked() (string, string) {
 	if c.openMessageID == "" {
 		return "", ""
 	}
 	id := c.openMessageID
 	text := c.messages[id]
-	if c.settledItems == nil {
-		c.settledItems = make(map[string]bool)
-	}
-	c.settledItems[id] = true
 	c.openMessageID = ""
 	c.messageSegment++
 	return id, text
@@ -1639,26 +1633,37 @@ func (c *conversation) closeIDLessThoughtLocked() (string, string) {
 	}
 	id := c.openThoughtID
 	text := c.thoughts[id]
-	if c.settledItems == nil {
-		c.settledItems = make(map[string]bool)
-	}
-	c.settledItems[id] = true
 	c.openThoughtID = ""
 	c.thoughtSegment++
 	return id, text
 }
 
-func (c *conversation) closeIDLessSegmentsLocked() (string, string, string, string) {
+type closedIDLessSegments struct {
+	messageID   string
+	messageText string
+	thoughtID   string
+	thoughtText string
+}
+
+func (c *conversation) closeIDLessSegmentsLocked() closedIDLessSegments {
 	msgID, msgText := c.closeIDLessMessageLocked()
 	thoughtID, thoughtText := c.closeIDLessThoughtLocked()
-	return msgID, msgText, thoughtID, thoughtText
+	return closedIDLessSegments{
+		messageID: msgID, messageText: msgText,
+		thoughtID: thoughtID, thoughtText: thoughtText,
+	}
 }
 
 func (c *conversation) settleOpenItems(turnID string, turnState ...domain.TurnState) {
+	c.itemSettlementMu.Lock()
+	defer c.itemSettlementMu.Unlock()
 	c.mu.Lock()
 	messages := c.messages
 	thoughts := c.thoughts
-	settledItems := c.settledItems
+	settledItems := make(map[string]bool, len(c.settledItems))
+	for id, settled := range c.settledItems {
+		settledItems[id] = settled
+	}
 	nestedMessages := c.nestedMessages
 	tools := c.tools
 	c.mu.Unlock()
@@ -1673,7 +1678,9 @@ func (c *conversation) settleOpenItems(turnID string, turnState ...domain.TurnSt
 			continue
 		}
 		text := messages[id]
-		c.emit(ports.ChatEvent{Kind: ports.ChatEventMessageCompleted, ProviderTurnID: turnID, ProviderItemID: id, Text: text})
+		if c.emit(ports.ChatEvent{Kind: ports.ChatEventMessageCompleted, ProviderTurnID: turnID, ProviderItemID: id, Text: text}) {
+			c.markItemSettled(id)
+		}
 	}
 	thoughtIDs := sortedKeys(thoughts)
 	for _, id := range thoughtIDs {
@@ -1681,9 +1688,11 @@ func (c *conversation) settleOpenItems(turnID string, turnState ...domain.TurnSt
 			continue
 		}
 		text := thoughts[id]
-		c.emit(ports.ChatEvent{Kind: ports.ChatEventActivityCompleted, ProviderTurnID: turnID,
+		if c.emit(ports.ChatEvent{Kind: ports.ChatEventActivityCompleted, ProviderTurnID: turnID,
 			ProviderItemID: id, ActivityKind: domain.ActivityKindReasoning,
-			ActivityStatus: activityStatus, Summary: "Reasoning", Text: text})
+			ActivityStatus: activityStatus, Summary: "Reasoning", Text: text}) {
+			c.markItemSettled(id)
+		}
 	}
 	nestedIDs := sortedKeys(nestedMessages)
 	for _, id := range nestedIDs {

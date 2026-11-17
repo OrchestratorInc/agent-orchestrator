@@ -126,7 +126,8 @@ describe("native WorkOS authentication", () => {
       "ao-app://callback?code=code_123&state=state_123",
       dataDir,
     );
-    expect(signIn).not.toHaveProperty("signIn");
+    // A completed sign-in is marked even without the website's visitor id.
+    expect(signIn?.signIn).toEqual({});
     const session = signIn?.account;
     expect(session).toMatchObject({
       authProvider: "workos",
@@ -146,9 +147,10 @@ describe("native WorkOS authentication", () => {
   it("silently accepts the same completed callback without exchanging its code again", async () => {
     await beginCloudSignIn(dataDir);
     const callback = "ao-app://callback?code=code_123&state=state_123";
-    const account = await handleCloudDeepLink(callback, dataDir);
+    const first = await handleCloudDeepLink(callback, dataDir);
 
-    await expect(handleCloudDeepLink(callback, dataDir)).resolves.toEqual(account);
+    // The repeat returns the same account, and no completed sign-in to report again.
+    await expect(handleCloudDeepLink(callback, dataDir)).resolves.toEqual({ account: first?.account });
     expect(mocks.authenticateWithCode).toHaveBeenCalledTimes(1);
     expect(mocks.showMessageBox).not.toHaveBeenCalled();
   });
@@ -161,31 +163,33 @@ describe("native WorkOS authentication", () => {
       handleCloudDeepLink(callback, dataDir),
     ]);
 
-    expect(accounts[0]).toEqual(accounts[1]);
+    expect(accounts[0]?.account).toEqual(accounts[1]?.account);
+    // Only the call that exchanged the code reports a completed sign-in.
+    expect(accounts.filter((result) => result?.signIn)).toHaveLength(1);
     expect(mocks.authenticateWithCode).toHaveBeenCalledTimes(1);
   });
 
   it("ignores callbacks with no login pending without changing the signed-in account", async () => {
     await beginCloudSignIn(dataDir);
-    const account = await handleCloudDeepLink("ao-app://callback?code=code_123&state=state_123", dataDir);
+    const account = (await handleCloudDeepLink("ao-app://callback?code=code_123&state=state_123", dataDir))?.account;
     await expect(handleCloudDeepLink(
       "ao-app://callback?code=different_code&state=state_123", dataDir,
-    )).resolves.toEqual(account);
+    )).resolves.toEqual({ account });
     await expect(handleCloudDeepLink(
       "ao-app://callback?code=code_123&state=unverified_state", dataDir,
-    )).resolves.toEqual(account);
+    )).resolves.toEqual({ account });
     expect(mocks.authenticateWithCode).toHaveBeenCalledTimes(1);
   });
 
   it("quietly returns to an account saved before callback deduplication was added", async () => {
     await beginCloudSignIn(dataDir);
     const callback = "ao-app://callback?code=code_123&state=state_123";
-    const account = await handleCloudDeepLink(callback, dataDir);
+    const account = (await handleCloudDeepLink(callback, dataDir))?.account;
     const store = await readAuthStore(dataDir);
     delete store.completedCallback;
     await writeAuthStore(dataDir, store);
 
-    await expect(handleCloudDeepLink(callback, dataDir)).resolves.toEqual(account);
+    await expect(handleCloudDeepLink(callback, dataDir)).resolves.toEqual({ account });
     expect(mocks.authenticateWithCode).toHaveBeenCalledTimes(1);
   });
 
@@ -203,13 +207,13 @@ describe("native WorkOS authentication", () => {
   it("keeps a newer pending login when an already completed callback repeats", async () => {
     await beginCloudSignIn(dataDir);
     const callback = "ao-app://callback?code=code_123&state=state_123";
-    const account = await handleCloudDeepLink(callback, dataDir);
+    const account = (await handleCloudDeepLink(callback, dataDir))?.account;
     mocks.getAuthorizationUrlWithPKCE.mockResolvedValueOnce({
       url: "https://workos.example/authorize", state: "state_456", codeVerifier: "verifier_456",
     });
     await beginCloudSignIn(dataDir);
 
-    await expect(handleCloudDeepLink(callback, dataDir)).resolves.toEqual(account);
+    await expect(handleCloudDeepLink(callback, dataDir)).resolves.toEqual({ account });
     await handleCloudDeepLink("ao-app://callback?code=code_456&state=state_456", dataDir);
     expect(mocks.authenticateWithCode).toHaveBeenCalledTimes(2);
     expect(mocks.authenticateWithCode).toHaveBeenLastCalledWith(expect.objectContaining({
@@ -252,7 +256,7 @@ describe("native WorkOS authentication", () => {
       expect(withVisitor.exchange).toEqual([[{ clientId: "client_test", code: "code_123", codeVerifier: "verifier_123" }]]);
       expect(withVisitor.store).toEqual(without.store);
       expect(withVisitor.account).toEqual(without.account);
-      expect(without.result).toEqual({ account: without.result?.account });
+      expect(without.result).toEqual({ account: without.result?.account, signIn: {} });
       expect(withVisitor.result).toEqual({ account: withVisitor.result?.account, signIn: { webDistinctId: VISITOR } });
     });
 
@@ -276,7 +280,7 @@ describe("native WorkOS authentication", () => {
       mocks.authenticateWithCode.mockClear();
       const invalid = await signInWith(`&web_distinct_id=${value}`);
 
-      expect(invalid.result).toEqual({ account: invalid.result?.account });
+      expect(invalid.result).toEqual({ account: invalid.result?.account, signIn: {} });
       expect(invalid.exchange).toEqual(without.exchange);
       expect(invalid.store).toEqual(without.store);
       expect(invalid.account).toEqual(without.account);

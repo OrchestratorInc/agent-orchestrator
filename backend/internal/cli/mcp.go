@@ -24,7 +24,7 @@ import (
 
 const (
 	mcpDefaultProtocolVersion = "2025-06-18"
-	// maxMCPHTMLChars is T3's cap on a tool's html argument.
+	// maxMCPHTMLChars caps a tool's html argument.
 	maxMCPHTMLChars = 512_000
 )
 
@@ -228,47 +228,46 @@ func (c *commandContext) callHTMLRender(ctx context.Context, raw json.RawMessage
 	return map[string]any{"content": []any{mcpText(text)}}
 }
 
-// The tool text follows T3's html tools, with AO's own rules from
-// skillassets/using-ao/commands/render.md.
+// The tool text states the page rules in skillassets/using-ao/commands/render.md.
 const (
-	mcpPageRules = `Write one self-contained HTML document with inline <style> and <script>. ` +
-		`Remote https:// resources, such as a CDN chart library, load as they are; relative URLs do not resolve. ` +
-		`A local image written as an absolute path (src="/abs/shot.png", CSS url(/abs/bg.webp), or a JS string) ` +
-		`is put into the page: PNG, JPEG, GIF, WebP, AVIF, SVG, BMP, or ICO, up to 10 MiB each.`
-	mcpLayoutGuide = `The frame is borderless on the thread background, as wide as the reply column, and its left edge lines up with your text. ` +
-		`Use a fluid width with no outer padding, card, border, or banner title: the page is part of your reply. ` +
-		`An expanded page opens in a dialog up to 1024 px wide that fits its height, and Orchestrator centers a top-level block that has a maximum width. ` +
-		`Give charts fixed pixel heights. Do not size html or body with 100vh or height: 100%; the frame grows to fit the page, and viewport heights make it grow again. ` +
-		`Scripts run in a sandbox with no access to Orchestrator, cookies, or storage. Links open in the user's browser.`
-	mcpThemeGuide = `Orchestrator injects its active theme as CSS custom properties on :root, and they follow light/dark mode live: ` +
-		`--background (identical to the thread), --foreground, --muted, --muted-foreground, --card, --card-foreground, --popover, ` +
+	mcpPageRules = `The page must be a single HTML file that carries its own CSS and JavaScript inline. ` +
+		`It may load https:// resources such as a charting library from a CDN, but relative URLs do not resolve. ` +
+		`To include a picture from this computer, give its absolute path in an img src, a CSS url(), or a JavaScript string, ` +
+		`for example /tmp/plot.png; Orchestrator embeds PNG, JPEG, GIF, WebP, AVIF, SVG, BMP, and ICO files of up to 10 MiB each.`
+	mcpLayoutGuide = `Layout: the page sits in the reply column with no frame border, over the same background as the thread, starting at the left edge of your text. ` +
+		`Treat it as part of your answer: let it fill the width, and leave out outer padding, a wrapping card or border, and a heading banner. ` +
+		`When the reader expands it, it opens in a dialog of up to 1024 px wide sized to its height, and Orchestrator centers a top-level block that sets a max-width. ` +
+		`Charts need a fixed height in pixels. The frame takes the page's height, so html and body must not be sized from the viewport (100vh, height: 100%), which would make the frame keep growing. ` +
+		`Scripts are sandboxed away from Orchestrator, cookies, and storage, and links open in the user's browser.`
+	mcpThemeGuide = `Theme: these CSS variables on :root hold Orchestrator's current theme and change when the user switches between light and dark: ` +
+		`--background (the thread's own color), --foreground, --muted, --muted-foreground, --card, --card-foreground, --popover, ` +
 		`--border, --border-strong, --primary, --primary-foreground, --accent, --accent-foreground, --success, --warning, ` +
-		`--destructive, --code, --link, --chart-1 ... --chart-6 (categorical series), --radius, --font-sans, --font-mono. ` +
-		`The base stylesheet sets the page background, text color, and font from these, sets body margin to 0, and hides the page scrollbar. ` +
-		`Use the variables, not hard-coded colors, so the page reads correctly in both themes.`
+		`--destructive, --code, --link, --chart-1 to --chart-6 for data series, --radius, --font-sans, and --font-mono. ` +
+		`A base stylesheet already applies the background, text color, and font, removes the body margin, and hides the scrollbar. ` +
+		`Color the page with these variables instead of fixed values so it works in both themes.`
 )
 
 var mcpHTMLSchema = map[string]any{
 	"type": "string", "minLength": 1, "maxLength": maxMCPHTMLChars,
-	"description": "A complete, self-contained HTML document.",
+	"description": "The page's full HTML source.",
 }
 
 var mcpTools = []map[string]any{
 	{
 		"name":  "html_preview",
 		"title": "Preview HTML",
-		"description": "Load an HTML page in the Orchestrator desktop app the way readers see it. Returns a PNG screenshot, " +
-			"contentHeight (the height the page needs at this width), and the page's console messages. " +
-			"Call it before html_render. Read the screenshot, and fix every console error. " +
-			"The check needs the Orchestrator desktop app; without it, publish without a check. " +
-			mcpPageRules + " The page gets the theme variables and layout described in html_render.",
+		"description": "Opens the page in the Orchestrator desktop app exactly as readers will get it and returns a PNG screenshot, " +
+			"the page's contentHeight at that width in CSS pixels, and everything it wrote to the console. " +
+			"Use it before html_render: look at the screenshot and clear every console error. " +
+			"It only works while the desktop app is running; if it is not, skip the check and publish. " +
+			mcpPageRules + " Theme variables and layout are the ones html_render describes.",
 		"inputSchema": map[string]any{
 			"type": "object",
 			"properties": map[string]any{
 				"html": mcpHTMLSchema,
 				"width": map[string]any{
 					"type": "integer", "minimum": 240, "maximum": 1600,
-					"description": "Viewport width in CSS pixels, 240-1600. Defaults to 720, the reply column; use 390 to check phones.",
+					"description": "Width of the viewport in CSS pixels, from 240 to 1600. The default, 720, is the reply column; 390 shows a phone.",
 				},
 			},
 			"required": []string{"html"},
@@ -280,17 +279,17 @@ var mcpTools = []map[string]any{
 	{
 		"name":  "html_render",
 		"title": "Render HTML",
-		"description": "Show a finished HTML page (chart, table, diagram, image collage, mockup) inline in this chat thread, " +
-			"above your final reply. Preview it with html_preview first, then call this before you write the reply. " +
-			"The reader already sees the page, so the reply must not announce it, say where it is, or restate it: " +
-			"add only what the page does not say. Use this tool, not a built-in visualize skill: Orchestrator does not show those. " +
+		"description": "Puts a finished HTML page, such as a chart, table, diagram, image collage, or mockup, into this chat thread " +
+			"directly above your final reply. Check it with html_preview, then call this before writing the reply. " +
+			"Your reply sits under a page the reader can already see: do not point to it, introduce it, or repeat it; " +
+			"say only what it leaves out. Orchestrator shows pages from this tool only, not from built-in visualization skills. " +
 			mcpPageRules + " " + mcpLayoutGuide + " " + mcpThemeGuide,
 		"inputSchema": map[string]any{
 			"type": "object",
 			"properties": map[string]any{
 				"html": mcpHTMLSchema,
 				"title": map[string]any{
-					"type": "string", "minLength": 1, "maxLength": 200, "description": "Short name for the page.",
+					"type": "string", "minLength": 1, "maxLength": 200, "description": "Title for the page, a few words.",
 				},
 				"height": map[string]any{
 					"type": "integer", "minimum": 80, "maximum": 2000,

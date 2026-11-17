@@ -6,7 +6,7 @@ import {
 	type WorkspaceSession,
 	type WorkspaceSummary,
 } from "../types/workspace";
-import { artifactChangeError, artifactCount, artifactKey, artifactLocation, artifactSharing, artifactType, canChangeSessionArtifacts, filterArtifactGroups, findHostShareLink, groupArtifactsByProject, hostArtifactLocation, withHostShareLinks, withShareAccess } from "./artifacts";
+import { artifactChangeError, artifactContext, artifactCount, artifactKey, NO_PROJECT_GROUP_ID, withKeptArtifacts, artifactLocation, artifactSharing, artifactType, canChangeSessionArtifacts, filterArtifactGroups, findHostShareLink, groupArtifactsByProject, hostArtifactLocation, withHostShareLinks, withShareAccess } from "./artifacts";
 import { CloudCpError } from "./cloud-cp/errors";
 
 function artifact(name: string, updatedAt: string, kind: SessionArtifact["kind"] = "markdown"): SessionArtifact {
@@ -66,19 +66,24 @@ describe("groupArtifactsByProject", () => {
 		expect(artifactCount(groups)).toBe(1);
 	});
 
-	it("hides archived and terminated sessions and drops projects left empty", () => {
+	it("keeps archived and terminated sessions' artifacts, marked archived, and drops projects left empty", () => {
 		const groups = groupArtifactsByProject([
 			workspace("ao", "agent-orchestrator", [
 				session("ao-1", [artifact("kept.md", "2026-10-09T10:00:00Z")]),
-				session("ao-2", [artifact("archived.md", "2026-10-10T10:00:00Z")], { kanbanColumn: "archive" }),
+				session("ao-2", [artifact("archived.md", "2026-10-11T10:00:00Z")], { kanbanColumn: "archive" }),
 				session("ao-3", [artifact("killed.md", "2026-10-10T10:00:00Z")], { isTerminated: true }),
 			]),
-			workspace("old", "old-project", [session("old-1", [artifact("gone.md", "2026-10-10T10:00:00Z")], { status: "terminated" })]),
+			workspace("old", "old-project", [session("old-1", [artifact("ended.md", "2026-10-08T10:00:00Z")], { status: "terminated" })]),
 			workspace("empty", "empty-project", [session("empty-1", [])]),
 		]);
 
-		expect(groups.map((group) => group.id)).toEqual(["ao"]);
-		expect(groups[0].rows.map((row) => row.name)).toEqual(["kept.md"]);
+		expect(groups.map((group) => group.id)).toEqual(["ao", "old"]);
+		expect(groups[0].rows.map((row) => [row.name, row.archived ?? false])).toEqual([
+			["archived.md", true],
+			["killed.md", true],
+			["kept.md", false],
+		]);
+		expect(groups[1].rows.map((row) => [row.name, row.archived])).toEqual([["ended.md", true]]);
 	});
 
 	it("labels the standalone workspace as the Scratchpad without a project id", () => {
@@ -145,14 +150,14 @@ describe("groupArtifactsByProject", () => {
 		expect(group.rows[1].bundle).toEqual({ path: "brand.icon", fileCount: 2 });
 	});
 
-	it("hides a replaced orchestrator's artifacts as it does a killed worker's", () => {
+	it("keeps a replaced orchestrator's artifacts, marked archived, as it does a killed worker's", () => {
 		const groups = groupArtifactsByProject([
 			workspace("ao", "agent-orchestrator", [
 				session("ao-40", [artifact("old-report.md", "2026-10-09T10:00:00Z")], { kind: "orchestrator", isTerminated: true }),
 			]),
 		], "Orchestrator");
 
-		expect(groups).toEqual([]);
+		expect(groups[0].rows).toEqual([expect.objectContaining({ name: "old-report.md", sessionTitle: "Orchestrator", archived: true })]);
 	});
 
 	it("includes cloud projects' artifacts", () => {
@@ -356,5 +361,48 @@ describe("withHostShareLinks", () => {
 	it("finds one file's link on its own host only", () => {
 		expect(findHostShareLink(links, "host-3", "ao-1", { path: "notes.md" })?.url).toBe("https://elsewhere.share.test/");
 		expect(findHostShareLink(links, "host-3", "ao-1", { id: "art-7", path: "deck.html" })).toBeUndefined();
+	});
+});
+
+describe("withKeptArtifacts", () => {
+	const projects = [
+		workspace("ao", "agent-orchestrator", [session("ao-1", [artifact("live.md", "2026-10-02T00:00:00Z")])]),
+		workspace("docs", "docs", []),
+		workspace(STANDALONE_WORKSPACE_ID, "Sessions", []),
+	];
+	const groups = groupArtifactsByProject(projects);
+
+	it("puts a kept set under its live project, or under one group with no project", () => {
+		const out = withKeptArtifacts(groups, [
+			{ sessionId: "ao-7", projectId: "ao", title: "Old report", sessionDeleted: true, artifactFiles: [{ ...artifact("report.md", "2026-10-05T00:00:00Z"), registered: true }, artifact("scratch.md", "2026-10-06T00:00:00Z")] },
+			{ sessionId: "docs-2", projectId: "docs", title: "Guide", sessionDeleted: true, artifactFiles: [artifact("guide.md", "2026-10-01T00:00:00Z")] },
+			{ sessionId: "gone-3", title: "Removed work", sessionDeleted: false, artifactFiles: [artifact("plan.md", "2026-10-04T00:00:00Z")] },
+			{ sessionId: "ao-9", projectId: "unknown", title: "Lost", sessionDeleted: true, artifactFiles: [artifact("lost.md", "2026-10-03T00:00:00Z")] },
+		], projects, "No project");
+
+		expect(out.map((group) => [group.id, group.name, group.rows.map((row) => row.path)])).toEqual([
+			// Registered files only, newest first among the project's rows.
+			["ao", "agent-orchestrator", ["report.md", "live.md"]],
+			[NO_PROJECT_GROUP_ID, "No project", ["plan.md", "lost.md"]],
+			["docs", "docs", ["guide.md"]],
+		]);
+		const kept = out[0].rows[0];
+		expect(kept).toMatchObject({ sessionId: "ao-7", sessionTitle: "Old report", projectId: "ao", archived: true, kept: "session-deleted" });
+		expect(out[1].rows[0]).toMatchObject({ kept: "project-removed", archived: true });
+		expect(out[1].rows[0].projectId).toBeUndefined();
+		// The input groups are not changed.
+		expect(groups[0].rows.map((row) => row.path)).toEqual(["live.md"]);
+	});
+
+	it("leaves the groups as they are with nothing kept", () => {
+		expect(withKeptArtifacts(groups, undefined, projects, "No project")).toEqual(groups);
+	});
+
+	it("names why a row is view only", () => {
+		const t = ((key: string) => ({ "artifacts.deletedSession": "Session deleted", "artifacts.removedProject": "Project removed", "artifacts.archivedSession": "Archived" })[key] ?? key) as never;
+		expect(artifactContext(t, { sessionTitle: "Report", archived: true, kept: "session-deleted" }, "ao")).toBe("ao · Report · Session deleted");
+		expect(artifactContext(t, { sessionTitle: "Report", archived: true, kept: "project-removed" }, "No project")).toBe("No project · Report · Project removed");
+		expect(artifactContext(t, { sessionTitle: "Report", archived: true }, "ao")).toBe("ao · Report · Archived");
+		expect(artifactContext(t, { sessionTitle: "Report" }, "ao")).toBe("ao · Report");
 	});
 });

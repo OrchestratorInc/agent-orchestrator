@@ -202,6 +202,37 @@ Observation is separated from action:
 - **Lifecycle layer:** Reduces observations into durable facts.
 - **Service layer:** Computes display status from facts.
 
+Review runs follow the same split. The Runtime Reaper also probes reviewers,
+but only those serving an in-progress review run, and reports each pass to the
+review engine's run lifecycle (`internal/review/run_lifecycle.go`) instead of
+the session LCM: a reviewer has no session row. The run lifecycle reduces the
+pass into guarded `review_run` transitions (`queued`, `launching`, `running`,
+`cancelling`, then `completed`, `failed`, `cancelled` or `superseded`), applies
+the time limits (launch, first activity, idle grace, max duration, cancel), and
+force-kills a reviewer that ignores a cancel. The reaper's first pass after
+startup is the boot pass, which settles runs a previous daemon left in
+progress; until it has, other paths leave those runs alone so their
+reviewers are reaped, and the boot pass never touches a run this daemon
+created. Reviewer activity hooks, trigger, cancel and the reviews list settle
+their worker's runs directly without waiting for the next pass. Time the
+daemon did not observe (the machine slept) never counts against a run, and a
+reviewer that is still being cancelled is not given new work. The boot pass
+never waits on a worker's lock; a worker a trigger holds is settled on a later
+pass. A reviewer interrupted because its pass timed out stays supervised until
+it stops or is force-stopped. A force-stop captures the reviewer's whole
+process tree before tearing down its runtime and kills any survivor, so an
+agent that cannot react to hangup is not left running; the stop counts as
+confirmed only when none of those processes remains. A process is identified
+by pid and start time (which survives exec and changes on pid reuse), read
+together with its parent from one consistent observation, and the tree is
+walked only from roots the runtime vouches for (a live tmux pane, or a
+ConPTY host that started no later than it was spawned); a process whose
+identity cannot be read is never killed and never counted as gone, and the
+runtime is not torn down until the tree has been captured. Survivors of an
+unconfirmed attempt are carried into the retry, and still killed if a new
+launch takes over the reviewer. Suspend gaps
+are kept for a pending stop's grace as they are for active runs.
+
 ### 4. Change data capture
 
 All durable changes flow through a CDC pipeline:
@@ -979,7 +1010,15 @@ flowchart TD
     Skip --> NextSession{More sessions?}
     CDC --> NextSession
     NextSession -->|Yes| ForEach
-    NextSession -->|No| Loop
+    NextSession -->|No| Reviewers[List reviewers serving<br/>an in-progress review run]
+
+    Reviewers --> AnyReview{Any?}
+    AnyReview -->|No| Loop
+    AnyReview -->|Yes| ProbeReviewer[Probe each reviewer<br/>exact launch or Chat controller]
+    ProbeReviewer --> ReviewerBreaker[Reviewer mass-death breaker]
+    ReviewerBreaker --> ApplyReview[ApplyReviewerObservations]
+    ApplyReview --> RunLifecycle[Review run lifecycle<br/>guarded review_run transitions]
+    RunLifecycle --> Loop
 
 ```
 

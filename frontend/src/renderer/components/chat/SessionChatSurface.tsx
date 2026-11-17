@@ -8,7 +8,7 @@ import { agentLabel } from "../../lib/agent-options";
 import { useImportedAgentBlock } from "../../lib/session-import";
 import { useIndependentSideChats } from "./IndependentSideChats";
 import type { ChatDraftExcerptReference } from "../../lib/chat-drafts";
-import { useSideChatsAvailable } from "../../lib/side-chats";
+import { type SideChatsState, useSideChatsAvailable } from "../../lib/side-chats";
 /**
  * The central surface for a chat-mode session.
  *
@@ -26,7 +26,7 @@ import { useChatMessageFocus, useChatNavigationRequest } from "../../hooks/useCh
 import { useChatModelChoices } from "../../hooks/useChatModelChoices";
 import { apiClient, apiErrorCode, apiErrorMessage } from "../../lib/api-client";
 import { forgetLaunchSettings, forgetOpeningStart, LaunchSettingsBar, launchSettingsFor, openingStartFor } from "./LaunchSettingsBar";
-import { rememberChatSettingsTemplate, rememberChatSkills } from "../../lib/chat-settings-template";
+import { readChatSkills, rememberChatSettingsTemplate, rememberChatSkills } from "../../lib/chat-settings-template";
 import {
 	clearConversationProviderCatalogs,
 	conversationQueryKey,
@@ -52,7 +52,7 @@ import { clientForSessionHost } from "../../lib/host-clients";
 import type { ShellTerminal } from "../../hooks/useShellTerminals";
 import { useSessionLinkNavigation } from "../../lib/use-session-link-navigation";
 import type { Theme } from "../../stores/ui-store";
-import { can } from "../../types/conversation";
+import { activeTurn, can } from "../../types/conversation";
 import type { ConversationSnapshot, TurnSettings } from "../../types/conversation";
 import type { TerminalTarget } from "../../types/terminal";
 import { STANDALONE_WORKSPACE_ID, sessionIsActive, type WorkspaceSession } from "../../types/workspace";
@@ -71,6 +71,7 @@ export interface ConversationWorkState {
 
 export const SessionChatSurface = memo(function SessionChatSurface({
 	sideChatContainer,
+	onSideChatsChange,
 	subagentContainer,
 	onRevealSubagents,
 	session,
@@ -101,7 +102,6 @@ export const SessionChatSurface = memo(function SessionChatSurface({
 	onOpenLinkInBrowser,
 	headerActions,
 	sessionTabAction,
-	sessionTabActionPinned = false,
 	tabStripAction,
 	workspaceTabs,
 	workspaceTabActions,
@@ -123,6 +123,8 @@ export const SessionChatSurface = memo(function SessionChatSurface({
 	/** The switch to the terminal view, for states without the tab strip and its menu, and its error. */
 	interfaceSwitch?: { control: ReactNode; errorNotice?: ReactNode };
 	sideChatContainer?: HTMLDivElement | null;
+	/** Whether this session has any side chat, and whether one is being created, once its list has loaded. */
+	onSideChatsChange?: (state: SideChatsState) => void;
 	/** The inspector's Subagents tab body while that tab shows; null otherwise. */
 	subagentContainer?: HTMLDivElement | null;
 	/** Brings the Subagents tab up the way the host switches any inspector tab, resizing it on the way. */
@@ -162,7 +164,6 @@ export const SessionChatSurface = memo(function SessionChatSurface({
 	onOpenLinkInBrowser?: (uri: string) => Promise<void>;
 	headerActions?: ReactNode;
 	sessionTabAction?: ReactNode;
-	sessionTabActionPinned?: boolean;
 	tabStripAction?: ReactNode;
 	workspaceTabs?: Array<{ key: string; content: ReactNode; onSelect: () => void }>;
 	workspaceTabActions?: ReactNode;
@@ -207,7 +208,7 @@ export const SessionChatSurface = memo(function SessionChatSurface({
 	// its data. Treat that snapshot as unknown everywhere, especially at the work
 	// boundary that decides whether switching to Terminal needs user consent.
 	const snapshot = queriedSnapshot?.sessionId === session.id ? queriedSnapshot : undefined;
-	const commands = useConversationCommands(session.id, hostId, !sessionIsActive(session));
+	const commands = useConversationCommands(session.id, hostId, !sessionIsActive(session), Boolean(snapshot && activeTurn(snapshot)));
 	const importBlock = useImportedAgentBlock(session, hostId ?? session.hostId).block;
 	// Set only when this task was started from the new chat page.
 	const queryClient = useQueryClient();
@@ -410,17 +411,25 @@ export const SessionChatSurface = memo(function SessionChatSurface({
 		hostId,
 	);
 	const { models, configOptions: offeredConfigOptions } = useChatModelChoices(snapshot?.harness, controllerModels, configOptions.options, snapshot?.settings?.model, hostId, controllerModelsLoaded);
-	const { skills } = useConversationSkills(
+	// A new chat of this agent offers these "/" skills before its own session runs,
+	// and so does this chat while its agent starts, wakes or reattaches.
+	const skillsHarness = snapshot?.harness ?? session.provider;
+	const rememberedSkills = useMemo(
+		() => session.cloud ? [] : readChatSkills(skillsHarness ?? "", hostId, session.workspaceId),
+		[hostId, session.cloud, session.workspaceId, skillsHarness],
+	);
+	const { skills, settled: skillsSettled, loading: skillsLoading } = useConversationSkills(
 		session.id,
 		Boolean(controllerCatalogsEnabled && snapshot),
 		hostId,
+		rememberedSkills,
 	);
-	// A new chat of this agent offers these "/" skills before its own session runs.
-	const skillsHarness = snapshot?.harness;
+	// Only the agent's believed answer is kept, an empty one included, so a skill
+	// removed from the project stops being offered from memory.
 	useEffect(() => {
-		if (session.kind !== "worker" || !skillsHarness || skills.length === 0) return;
-		rememberChatSkills(skillsHarness, hostId, skills);
-	}, [hostId, session.kind, skills, skillsHarness]);
+		if (session.kind !== "worker" || !snapshot?.harness || !skillsSettled) return;
+		rememberChatSkills(snapshot.harness, hostId, skills, session.workspaceId);
+	}, [hostId, session.kind, session.workspaceId, skills, skillsSettled, snapshot?.harness]);
 	const { paths, truncated } = useWorkspaceFilePaths(session.id, Boolean(snapshot) && !session.needsResume, hostId);
 	const stageAttachments = useStageAttachments(session.id, hostId);
 	// Applied once: the chat below unmounts while the conversation reloads, and
@@ -470,6 +479,11 @@ export const SessionChatSurface = memo(function SessionChatSurface({
 		sideCreationEnabled,
 	);
 	useEffect(() => { if (sideChatContainer) sideChats.show(); }, [sideChatContainer]);
+	const sideChatsPresent = sideChats.loaded ? sideChats.sides.length > 0 : undefined;
+	const sideChatCreating = sideChats.pending;
+	useEffect(() => {
+		if (sideChatsPresent !== undefined) onSideChatsChange?.({ present: sideChatsPresent, creating: sideChatCreating });
+	}, [onSideChatsChange, sideChatCreating, sideChatsPresent]);
 	useEffect(() => setSideWork(sideChats.sides.some((side) => side.hasWork)), [sideChats.sides]);
 	const reportSubagents = useCallback(
 		(available: boolean) => useUiStore.getState().setSubagentsAvailable(uiSessionId, available),
@@ -724,7 +738,6 @@ export const SessionChatSurface = memo(function SessionChatSurface({
 				theme={theme}
 				headerActions={headerActions}
 				sessionTabAction={sessionTabAction}
-				sessionTabActionPinned={sessionTabActionPinned}
 				tabStripAction={tabStripAction}
 				workspaceTabs={workspaceTabs}
 				workspaceTabActions={workspaceTabActions}
@@ -903,6 +916,7 @@ export const SessionChatSurface = memo(function SessionChatSurface({
 				activateBranchTarget={commands.activateBranchTarget}
 				activateBranchError={commands.activateBranchError}
 				skills={sideCreationEnabled ? [...(["btw"].map((name) => ({ name, displayName: name, description: "Open a new side chat", source: "AO" }))), ...skills.filter((skill) => skill.name !== "btw")] : skills}
+				skillsLoading={skillsLoading}
 				filePaths={paths}
 				filePathsTruncated={truncated}
 				localEchos={localEchos}
