@@ -35,6 +35,12 @@ interface ShareLinkRecord {
 	url?: string;
 	/** Who the link opens for, as last known; the daemon serves it with the URL. */
 	access?: CloudShareAccess;
+	/**
+	 * For an HTML page published with the files it uses: each file's path in
+	 * the session's artifacts and its fingerprint then, "" for one the page
+	 * used that was missing. A change to any shows the page changed.
+	 */
+	pageFiles?: Record<string, string>;
 }
 
 /** One record as list returns it: its key, and the link it holds while that link is active. */
@@ -50,7 +56,9 @@ export interface ShareLinkRecordStore {
 	list(): Promise<ShareLinkRecordEntry[]>;
 	/** The fingerprint the file had when it was last published, if recorded. */
 	publishedFingerprint(key: string): Promise<string | undefined>;
-	set(key: string, shareId: string, fingerprint?: string, url?: string, access?: CloudShareAccess): Promise<void>;
+	/** The files a published page used and their fingerprints then; see ShareLinkRecord.pageFiles. */
+	publishedPageFiles(key: string): Promise<Record<string, string> | undefined>;
+	set(key: string, shareId: string, fingerprint?: string, url?: string, access?: CloudShareAccess, pageFiles?: Record<string, string>): Promise<void>;
 	/** Records who a link opens for now, on every record of it. */
 	setAccess(shareId: string, access: CloudShareAccess): Promise<void>;
 	/** Moves the record at `from` to `to`, unless `to` already has one. */
@@ -107,10 +115,14 @@ export class ShareLinkRecords implements ShareLinkRecordStore {
 		return asRecord((await this.load())[key])?.fingerprint;
 	}
 
-	async set(key: string, shareId: string, fingerprint?: string, url?: string, access?: CloudShareAccess): Promise<void> {
+	async publishedPageFiles(key: string): Promise<Record<string, string> | undefined> {
+		return asRecord((await this.load())[key])?.pageFiles;
+	}
+
+	async set(key: string, shareId: string, fingerprint?: string, url?: string, access?: CloudShareAccess, pageFiles?: Record<string, string>): Promise<void> {
 		const records = await this.load();
 		this.written(shareId);
-		records[key] = encodeRecord({ shareId, fingerprint, url, access });
+		records[key] = encodeRecord({ shareId, fingerprint, url, access, pageFiles });
 		await this.save();
 	}
 
@@ -199,13 +211,15 @@ export function shareAccess(share: Pick<CloudShareLink, "access">): CloudShareAc
 
 // Writes only the fields it knows: a record from an older version loses any
 // other field the next time it is written.
-function encodeRecord({ shareId, fingerprint, url, access }: ShareLinkRecord): string | ShareLinkRecord {
-	if (!fingerprint && !url && !access) return shareId;
+function encodeRecord({ shareId, fingerprint, url, access, pageFiles }: ShareLinkRecord): string | ShareLinkRecord {
+	const hasPageFiles = pageFiles !== undefined && Object.keys(pageFiles).length > 0;
+	if (!fingerprint && !url && !access && !hasPageFiles) return shareId;
 	return {
 		shareId,
 		...(fingerprint ? { fingerprint } : {}),
 		...(url ? { url } : {}),
 		...(access ? { access } : {}),
+		...(hasPageFiles ? { pageFiles } : {}),
 	};
 }
 
@@ -228,6 +242,12 @@ function isRecordMap(value: unknown): value is Record<string, string | ShareLink
 			typeof record === "object" && record !== null && typeof (record as ShareLinkRecord).shareId === "string" &&
 			((record as ShareLinkRecord).fingerprint === undefined || typeof (record as ShareLinkRecord).fingerprint === "string") &&
 			((record as ShareLinkRecord).url === undefined || typeof (record as ShareLinkRecord).url === "string") &&
-			((record as ShareLinkRecord).access === undefined || (record as ShareLinkRecord).access === "restricted" || (record as ShareLinkRecord).access === "anyone")
+			((record as ShareLinkRecord).access === undefined || (record as ShareLinkRecord).access === "restricted" || (record as ShareLinkRecord).access === "anyone") &&
+			isPageFiles((record as ShareLinkRecord).pageFiles)
 		));
+}
+
+function isPageFiles(value: unknown): boolean {
+	return value === undefined || (typeof value === "object" && value !== null && !Array.isArray(value) &&
+		Object.values(value).every((fingerprint) => typeof fingerprint === "string"));
 }
