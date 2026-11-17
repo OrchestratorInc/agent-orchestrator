@@ -1,3 +1,4 @@
+import { useTelemetrySurface } from "../../lib/ui-usage-telemetry";
 import type { ChatExcerptSnapshot } from "../../../shared/chat-excerpt";
 import { excerptSizeError } from "../../../shared/chat-excerpt";
 import { captureExcerptSnapshot, captureExcerptTurn } from "../../lib/chat-excerpt-snapshot";
@@ -3482,6 +3483,7 @@ export function Timeline({
 	findRequest?: ChatFindRequest;
 	onFindRequestHandled?: ChatWorkspaceProps["onFindRequestHandled"];
 }) {
+	useTelemetrySurface("chat");
 	const findSurface = useRef<HTMLDivElement>(null);
 	const scroller = useRef<HTMLDivElement>(null);
 	const pauseFindFollow = useRef<() => void>(() => {});
@@ -5750,6 +5752,7 @@ export function Timeline({
 				role="log"
 				aria-live="polite"
 				aria-label="Conversation"
+				data-telemetry-surface="chat"
 				style={virtualized ? { overflowAnchor: "none" } : undefined}
 			>
 				{/* Before the settle snapshot: its restore reads how far this one moved the view. */}

@@ -61,6 +61,7 @@ export function TabCloseButton({ label, onClose }: { label: string; onClose: () 
 	return (
 		<Pressable
 			aria-label={label}
+			data-telemetry-id="tab.close"
 			className={terminalTabActionClassName}
 			onClick={(event) => {
 				event.stopPropagation();
@@ -108,6 +109,7 @@ export function TerminalTabFrame({
 					: "text-passive hover:bg-raised hover:text-foreground has-[:focus-visible]:bg-raised has-[:focus-visible]:text-foreground in-data-dragging:bg-raised in-data-dragging:text-foreground",
 			)}
 			data-active={active || undefined}
+			data-telemetry-id="tab.select"
 			data-terminal-tab-frame
 			onClick={(event) => {
 				if (event.target !== event.currentTarget) return;

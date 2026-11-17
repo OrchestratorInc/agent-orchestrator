@@ -1,3 +1,4 @@
+import { uiUsage } from "../../lib/ui-usage-telemetry";
 import { AppLink } from "../AppLink";
 import { TurnForkButton } from "../SessionForkControls";
 import { useAgentAccountLabel } from "../../hooks/useAgentAccounts";
@@ -661,6 +662,7 @@ export function TurnOutcome({
 	login?: TurnOutcomeLogin;
 	usageLimit?: ConversationUsageLimit;
 } & TurnActionsProps) {
+	useFreshFailureReport(state, timestamp, failureCode);
 	// A usage limit has its own notice, whose resume action stands in for Retry. The
 	// turn still closes on the shared row, so copy and undo stay where they always are.
 	if (state === "failed" && usageLimit) {
@@ -818,6 +820,24 @@ export interface TurnOutcomeLogin {
 }
 
 /** Sends a failed turn's prompt again as a new turn. */
+// Failed turns already reported this launch, so a re-render, a scroll back or a
+// return to the chat does not count the same failure twice.
+const reportedFailures = new Set<string>();
+const FRESH_FAILURE_MS = 2 * 60_000;
+
+/** Counts a failed turn as an error shown, once, when it failed moments ago (not one read from history). */
+function useFreshFailureReport(state: string, timestamp: string | undefined, failureCode: string | undefined) {
+	useEffect(() => {
+		if (state !== "failed" || !timestamp) return;
+		const at = Date.parse(timestamp);
+		if (!Number.isFinite(at) || Date.now() - at > FRESH_FAILURE_MS) return;
+		const key = `${timestamp}|${failureCode ?? ""}`;
+		if (reportedFailures.has(key)) return;
+		reportedFailures.add(key);
+		uiUsage.errorShown("chat_turn_failed", "inline", "chat", failureCode ? failureCode.toUpperCase() : undefined);
+	}, [failureCode, state, timestamp]);
+}
+
 function RetryTurnButton({ retry }: { retry: TurnOutcomeRetryControl }) {
 	return (
 		<Button
@@ -827,6 +847,7 @@ function RetryTurnButton({ retry }: { retry: TurnOutcomeRetryControl }) {
 			onClick={retry.onRetry}
 			disabled={retry.pending || retry.disabled}
 			aria-label="Retry this turn"
+			data-telemetry-id="chat.retry"
 			title={retry.error ?? (retry.disabled ? "Wait for the current turn to finish" : "Send this prompt again as a new turn")}
 			data-testid="retry-turn"
 		>

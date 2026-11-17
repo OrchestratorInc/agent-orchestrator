@@ -1648,6 +1648,7 @@ export function SessionView({ sessionId, cloudOrgId, projectId, hostId }: Sessio
 			<Tooltip>
 				<TooltipTrigger asChild>
 					<Button size="icon-sm"
+						data-telemetry-id="tab.new"
 						aria-label={t("shortcut.new-shell-terminal")}
 						data-terminal-focus-handoff="true"
 						onClick={addShellTerminal}
@@ -3351,6 +3352,7 @@ export function SessionView({ sessionId, cloudOrgId, projectId, hostId }: Sessio
 				{hasInspector ? <Tooltip>
 					<TooltipTrigger asChild>
 						<Button type="button" size="icon-sm"
+							data-telemetry-id="topbar.inspector"
 							aria-label={isInspectorOpen ? t("shell.closeInspector") : t("shell.openInspector")}
 							aria-pressed={isInspectorOpen}
 							onClick={() => {

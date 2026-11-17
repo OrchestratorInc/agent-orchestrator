@@ -1,3 +1,6 @@
+import { uiUsage, useTelemetrySurface } from "../../lib/ui-usage-telemetry";
+import type { SendInput } from "../../lib/ui-usage-registry";
+import { surfaceOf } from "../../lib/ui-surfaces";
 import { excerptSizeError, fitExcerptContext, LOCAL_CHAT_MESSAGE_BYTES } from "../../../shared/chat-excerpt";
 import { upgradeExcerpt } from "../../lib/chat-excerpt-snapshot";
 import { hasCodeSelection } from "../diffs/SelectionStableContent";
@@ -297,6 +300,9 @@ function useDockEntrance(shown: string | null): boolean {
 	if (quiet.current !== null && quiet.current !== shown) quiet.current = null;
 	return quiet.current === null;
 }
+
+/** A draft at least this long, erased by hand, counts as discarded. */
+const DISCARDED_DRAFT_MIN_CHARS = 10;
 
 export const ChatComposer = memo(function ChatComposer({
 	focusRef,
@@ -918,6 +924,12 @@ export const ChatComposer = memo(function ChatComposer({
 	const skillsNote = skillsLoading && trigger?.kind === "skill" && trigger.key !== dismissedKey;
 	const filesNote = filePathsLoading && trigger?.kind === "file" && trigger.key !== dismissedKey;
 	const menuShown = menuOpen || skillsNote || filesNote;
+	const markSlashPick = useTelemetrySurface("slash_menu", Boolean(menuShown && trigger?.kind === "skill"), { choice: true });
+	const markMentionPick = useTelemetrySurface("mention_menu", Boolean(menuShown && trigger?.kind === "file"), { choice: true });
+	useTelemetrySurface("composer");
+	useEffect(() => {
+		if (sendError) uiUsage.errorShown("composer_send_failed", "inline", "composer");
+	}, [sendError]);
 	// Clamped rather than trusted: the list re-ranks on every keystroke, so the
 	// index from the previous list can point past the end of this one.
 	const activeIndex = Math.min(highlighted, suggestions.length - 1);
@@ -1602,6 +1614,10 @@ export const ChatComposer = memo(function ChatComposer({
 		if (historyBrowse.current && snapshot.text !== historyBrowse.current.shown) historyBrowse.current = null;
 		const previousText = textRef.current;
 		textRef.current = snapshot.text;
+		// A real draft erased by hand (not cleared by a send) was given up on.
+		if (!snapshot.text.trim() && previousText.trim().length >= DISCARDED_DRAFT_MIN_CHARS && !submitInFlight.current && !historyBrowse.current && surfaceOf(document.activeElement) === "composer") {
+			uiUsage.draftDiscarded();
+		}
 		onQueuedDraftChange?.(snapshot.text);
 		if (snapshot.text !== previousText && !historyBrowse.current) persistComposerText(snapshot.text);
 		if (snapshot.text !== previousText || snapshot.caret !== draftCaretRef.current) {
@@ -1675,6 +1691,8 @@ export const ChatComposer = memo(function ChatComposer({
 	const pick = useCallback((value: string) => {
 		const currentTrigger = triggerRef.current;
 		if (!currentTrigger) return;
+		if (currentTrigger.kind === "skill") markSlashPick();
+		else markMentionPick();
 		const opensModelMenu = currentTrigger.kind === "skill" && value === MODEL_COMMAND && modelMenuUsable();
 		if (opensModelMenu) editor.current?.removeTrigger(currentTrigger);
 		else editor.current?.insertToken(currentTrigger, value);
@@ -1686,7 +1704,7 @@ export const ChatComposer = memo(function ChatComposer({
 		dismissedKeyRef.current = null;
 		setDismissedKey(null);
 		if (opensModelMenu) openModelMenu();
-	}, [modelMenuUsable, openModelMenu]);
+	}, [markMentionPick, markSlashPick, modelMenuUsable, openModelMenu]);
 
 	useEffect(() => {
 		if (isComposing || !trigger || trigger.kind !== "skill" || trigger.key === dismissedKey) return;
@@ -1746,9 +1764,13 @@ export const ChatComposer = memo(function ChatComposer({
 		[modelMenuUsable, onCompact, openModelMenu, skills, suggestionsFor],
 	);
 
-	function submit(event?: FormEvent, forceSteer?: boolean): Promise<void> {
+	function submit(event?: FormEvent, forceSteer?: boolean, input?: SendInput): Promise<void> {
 		event?.preventDefault();
 		if (sendBlockedReason) return Promise.resolve();
+		// Only a person's Enter or click is counted, never a held draft sent later.
+		if (input && !typingLocked && (textRef.current.trim() || fileAttachments.attachments.length > 0)) {
+			uiUsage.messageSent(input, forceSteer && canSteerDraft ? "steer" : queuesDraft ? "queue" : "send", fileAttachments.attachments.length > 0);
+		}
 		if (submitInFlight.current) {
 			// React cannot publish the next busy prop until after this event returns. A
 			// repeat Enter on the message being sent joins that submission instead of
@@ -2307,7 +2329,7 @@ export const ChatComposer = memo(function ChatComposer({
 				return true;
 			}
 			const wantsSteer = enterSends && (event.metaKey || event.ctrlKey) && canSteerDraft;
-			void submit(undefined, wantsSteer);
+			void submit(undefined, wantsSteer, "keyboard");
 			return true;
 		},
 		[canSteerDraft, canSteerNext, enterSends, fileAttachments, messageByteLimit, onCompact, pick, suggestionsFor],
@@ -2435,6 +2457,7 @@ export const ChatComposer = memo(function ChatComposer({
 		// carrying both should still paste its text.
 		const hasText = typeof clipboard?.getData === "function" && clipboard.getData("text/plain") !== "";
 		if (!hasText) event.preventDefault();
+		uiUsage.attachmentAdded("paste");
 		attachFiles(files);
 	}
 
@@ -2445,6 +2468,7 @@ export const ChatComposer = memo(function ChatComposer({
 		if (files.length === 0) return;
 		event.preventDefault();
 		event.stopPropagation();
+		uiUsage.attachmentAdded("drop");
 		attachFiles(files);
 	}
 
@@ -2544,7 +2568,8 @@ export const ChatComposer = memo(function ChatComposer({
 		<form
 			ref={formRef}
 			// Cmd/Ctrl steering remains available as a quiet power-user action.
-			onSubmit={(event) => void submit(event, steersDraft)}
+			onSubmit={(event) => void submit(event, steersDraft, "button")}
+			data-telemetry-surface="composer"
 				onDragOver={(event) => {
 					if (!canAttach || submitInFlight.current) return;
 					event.preventDefault();
@@ -2792,6 +2817,7 @@ export const ChatComposer = memo(function ChatComposer({
 									disabled={controlsDisabled}
 									onChange={(event) => {
 										if (!disabled && !submitInFlight.current && !draftMutationPending && !fileAttachments.preparing) {
+											if (event.target.files?.length) uiUsage.attachmentAdded("picker");
 											attachFiles(Array.from(event.target.files ?? []));
 										}
 										// Cleared so picking the same file twice still fires a change.
@@ -2847,6 +2873,7 @@ export const ChatComposer = memo(function ChatComposer({
 										shape="pill"
 										disabled={controlsDisabled || queuedEditRecovery || draftMutationPending || fileAttachments.preparing}
 										onClick={() => filePicker.current?.click()}
+										data-telemetry-id="composer.attach"
 										aria-label="Attach a file"
 										className="shrink-0"
 									>
@@ -2861,7 +2888,7 @@ export const ChatComposer = memo(function ChatComposer({
 
 					<div role="group" aria-label="Send message controls" className="flex h-7 shrink-0 items-center">
 						{showSteerButton && canSteerDraft && (hasText || staged) ? (
-							<Button type="button" variant="ghost" size="sm" disabled={!sendActionEnabled} onClick={() => void submit(undefined, true)} aria-label="Steer into running turn">
+							<Button type="button" variant="ghost" size="sm" disabled={!sendActionEnabled} onClick={() => void submit(undefined, true, "button")} aria-label="Steer into running turn">
 								Steer
 							</Button>
 						) : null}
@@ -2882,6 +2909,7 @@ export const ChatComposer = memo(function ChatComposer({
 												dictation.toggle();
 											}}
 											data-shortcut-target="dictate"
+											data-telemetry-id="composer.dictation"
 											aria-label={dictating ? "Finish dictation" : "Dictate"}
 											aria-pressed={dictating}
 											className={cn(
@@ -2911,6 +2939,7 @@ export const ChatComposer = memo(function ChatComposer({
 										disabled={canStopTurn ? Boolean(stopping) : canContinueTurn ? continuing : !sendActionEnabled}
 										onClick={canStopTurn ? onInterrupt : canContinueTurn ? continueTurn : undefined}
 										aria-label={canStopTurn ? (stopping ? "Stopping turn" : "Stop turn") : canContinueTurn ? "Continue turn" : sendActionLabel}
+										data-telemetry-id={canStopTurn ? "composer.stop" : "composer.send"}
 									>
 										{canStopTurn && stopping ? (
 											<Loader2 aria-hidden="true" className="size-3.5 animate-spin" />

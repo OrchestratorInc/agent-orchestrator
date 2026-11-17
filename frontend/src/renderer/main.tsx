@@ -20,6 +20,7 @@ import { startDaemonFailureTelemetry } from "./lib/daemon-telemetry";
 import { startUpdateTelemetry } from "./lib/update-telemetry";
 import { startSessionManagementTelemetry } from "./lib/session-management-telemetry";
 import { applyPerformanceOptOut, startPerformanceTelemetry } from "./lib/performance-telemetry";
+import { discardUiUsage, startUiUsageTelemetry } from "./lib/ui-usage-telemetry";
 import { appI18n } from "./i18n";
 import { useLocaleStore } from "./stores/locale-store";
 import { useSoundNotificationsStore } from "./stores/sound-notifications-store";
@@ -54,6 +55,9 @@ aoBridge.telemetry.onAnalyticsOptOut((optedOut) => {
 	useAnalyticsOptOutStore.setState({ optedOut, loaded: true });
 	void applyAnalyticsOptOut(optedOut);
 	applyPerformanceOptOut(optedOut);
+	// Either way the UI usage window starts over: nothing counted before an
+	// opt-out is sent, and no time from while it was off is counted after.
+	discardUiUsage();
 });
 
 if (import.meta.env.DEV) {
@@ -103,6 +107,7 @@ const bootstrapSessionManagementTelemetry = () => {
 		if (enabled) {
 			startSessionManagementTelemetry();
 			startPerformanceTelemetry();
+			startUiUsageTelemetry();
 			return;
 		}
 		if (!isDeniedEvent("ao.renderer.session_management_summary") && sessionManagementTelemetryRetries++ < 12) {

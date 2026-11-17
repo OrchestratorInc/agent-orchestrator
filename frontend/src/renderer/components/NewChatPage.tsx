@@ -1,3 +1,4 @@
+import { useTelemetrySurface } from "../lib/ui-usage-telemetry";
 import { apiErrorException } from "../lib/api-error-exception";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { useNavigate, useRouter } from "@tanstack/react-router";
@@ -48,6 +49,7 @@ import { MAX_CLOUD_CP_BINARY_BYTES } from "../../shared/cloud-binary";
  */
 // A page opened from Report a problem is `report`: its agent runs on Scratchpad only.
 export function NewChatPage({ projectId, hostId, report }: { projectId: string; hostId?: string; report?: boolean }) {
+	useTelemetrySurface("new_chat");
 	const { t } = useTranslation();
 	const navigate = useNavigate();
 	const router = useRouter();
@@ -480,7 +482,7 @@ export function NewChatPage({ projectId, hostId, report }: { projectId: string; 
 	) : task.modelWarning;
 
 	return (
-		<div className="flex h-full min-h-0 flex-col">
+		<div className="flex h-full min-h-0 flex-col" data-telemetry-surface="new_chat">
 			{/* No session yet: the shared session frame with no tabs holds the header's
 			    place and surface, so nothing moves or changes colour at handoff. The
 			    divider is dropped (styles.css) so the bar reads as bare chrome. */}

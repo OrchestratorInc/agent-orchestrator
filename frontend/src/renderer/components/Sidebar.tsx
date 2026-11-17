@@ -1,3 +1,4 @@
+import { useTelemetrySurface } from "../lib/ui-usage-telemetry";
 import { useQueryClient } from "@tanstack/react-query";
 import { useProjectAvatars } from "../hooks/useProjectAvatars";
 import { paidPlanBadge, useCloudBilling } from "../hooks/useCloudBilling";
@@ -742,6 +743,7 @@ export const Sidebar = memo(function Sidebar({
 	// List behavior (force-open sections, lifted Show more caps) belongs to the
 	// icon rail only; toggling an offcanvas sidebar must not change any list.
 	const isIconRail = isCollapsed && SIDEBAR_COLLAPSIBLE === "icon";
+	useTelemetrySurface("sidebar", !isCollapsed || isIconRail);
 	const [expandedChromeVisible, setExpandedChromeVisible] = useState(!isCollapsed);
 	// One IPC subscription for both footer variants of the restart-to-update prompt.
 	const updateStatus = useUpdateStatus();
@@ -1099,6 +1101,7 @@ export const Sidebar = memo(function Sidebar({
 		<SidebarRoot
 			collapsible={SIDEBAR_COLLAPSIBLE}
 			resizeScopeRef={resizeScopeRef}
+			data-telemetry-surface="sidebar"
 			data-expanded-chrome={expandedChromeVisible ? "visible" : "hidden"}
 			data-topbar-offset={underTopbar ? topbarOffset : undefined}
 			className={cn(
@@ -1123,6 +1126,7 @@ export const Sidebar = memo(function Sidebar({
 				 * - No separate "home" affordance on the mark — the whole brand is the control.
 				 */}
 				<Pressable
+					data-telemetry-id="sidebar.home"
 					aria-label={t("shell.goHome")}
 					className={cn(
 						"group/brand flex w-full shrink-0 items-center gap-1.5 rounded-md px-0.5 text-left",
@@ -1144,6 +1148,7 @@ export const Sidebar = memo(function Sidebar({
 				<Tooltip>
 					<TooltipTrigger asChild>
 						<Button
+							data-telemetry-id="sidebar.collapse"
 							aria-label={isCollapsed ? t("shell.expandSidebar") : t("shell.collapseSidebar")}
 							className="hidden size-control-board rounded-lg group-data-[collapsible=icon]:inline-flex [&_svg]:size-icon-base"
 							onClick={toggleSidebar}
@@ -1454,6 +1459,7 @@ export const Sidebar = memo(function Sidebar({
 					<Tooltip>
 						<TooltipTrigger asChild>
 							<Pressable
+								data-telemetry-id="sidebar.connect_mobile"
 								aria-label={t("settings.connectMobile")}
 								className={FOOTER_RAIL_BUTTON_CLASS}
 								onClick={() => selection.goConnectMobile()}
@@ -1471,6 +1477,7 @@ export const Sidebar = memo(function Sidebar({
 					<Tooltip>
 						<TooltipTrigger asChild>
 							<Pressable
+								data-telemetry-id="sidebar.settings"
 								aria-label={t("shell.settings")}
 								className={FOOTER_RAIL_BUTTON_CLASS}
 								onClick={() => selection.goGlobalSettings()}
@@ -1499,6 +1506,7 @@ export const Sidebar = memo(function Sidebar({
 				style={noDragStyle}
 			/>
 			<SidebarRail
+				data-telemetry-id="sidebar.collapse"
 				aria-label={t("shell.expandSidebar")}
 				className="group-data-[state=expanded]:hidden hover:after:bg-transparent"
 				onClick={() => setOpen(true)}
@@ -1998,6 +2006,7 @@ const ProjectItem = memo(function ProjectItem({
 							<div>
 								{/* project-sidebar__proj-row */}
 								<SidebarMenuButton
+									data-telemetry-id="sidebar.project_row"
 									aria-label={hostLabel ? t(isStandalone ? "shell.toggleProject" : "shell.openProjectDashboard", { name: nameWithHost }) : undefined}
 									aria-current={dashboardActive ? "page" : undefined}
 									aria-expanded={expanded}
@@ -2093,6 +2102,7 @@ const ProjectItem = memo(function ProjectItem({
 								{/* Folder disclosure toggle: sibling of the nav button, absolutely positioned over
 	    the icon area so it intercepts clicks there without nesting buttons. */}
 								<Pressable
+									data-telemetry-id="sidebar.project_toggle"
 									aria-label={t("shell.toggleProject", {
 										name: nameWithHost,
 									})}
@@ -2124,6 +2134,7 @@ const ProjectItem = memo(function ProjectItem({
 											<Button
 												size="icon-xs"
 												variant="quiet"
+												data-telemetry-id="sidebar.project_unpin"
 												aria-label={t("shell.unpinProject")}
 												className={HOVER_ACTION_CLASS}
 												data-project-pinned=""
@@ -2143,6 +2154,7 @@ const ProjectItem = memo(function ProjectItem({
 												<Button
 													size="icon-xs"
 													variant="quiet"
+													data-telemetry-id="sidebar.project_new_session"
 													aria-label={t("shell.openNewAgent")}
 													className={ROW_ACTION_BUTTON_CLASS}
 													disabled={isProjectRestarting}
@@ -2210,6 +2222,7 @@ const ProjectItem = memo(function ProjectItem({
 												<Button
 													size="icon-xs"
 													variant="quiet"
+													data-telemetry-id="sidebar.project_menu"
 													aria-label={t("shell.projectActions", {
 																name: nameWithHost,
 													})}
@@ -2422,6 +2435,7 @@ function ScratchpadSection({
 													<Button
 														size="icon-xs"
 														variant="quiet"
+														data-telemetry-id="sidebar.archived_sessions"
 														aria-label={t("shell.archivedSessions")}
 														className={ROW_ACTION_BUTTON_CLASS}
 														onClick={(event) => {
@@ -2443,6 +2457,7 @@ function ScratchpadSection({
 												<Button
 													size="icon-xs"
 													variant="quiet"
+													data-telemetry-id="sidebar.project_new_session"
 													aria-label={t("shell.openNewAgent")}
 													className={ROW_ACTION_BUTTON_CLASS}
 													onClick={() => requestNewTask(STANDALONE_WORKSPACE_ID)}
@@ -2500,6 +2515,7 @@ function ScratchpadSection({
 				{showArchivedRow ? (
 					<button
 						type="button"
+						data-telemetry-id="sidebar.archived_sessions"
 						aria-label={t("shell.archivedSessionsAria", { count: archivedCount })}
 						className={cn(SECTION_ROW_CLASS, NAV_ROW_HIGHLIGHT_HOST_CLASS, "mb-1 shrink-0 rounded-lg text-left text-muted-foreground")}
 						data-scratchpad-archived-row=""
@@ -2879,6 +2895,7 @@ const SessionRow = memo(function SessionRow({
 							aria-current={active ? "page" : undefined}
 							data-testid={session.hostId ? "remote-session-row" : undefined}
 							aria-keyshortcuts="F2"
+							data-telemetry-id="sidebar.session_row"
 							aria-label={t("shell.openSession", { title: [session.title, hostLabel, cloud ? t("shell.cloudProjectBadge") : undefined].filter(Boolean).join(" · ") })}
 							className={cn(
 								"flex h-8 min-w-0 flex-1 items-center gap-1.5 rounded-lg py-0 pl-1.5 text-left text-sm outline-hidden focus-visible:ring-2 focus-visible:ring-sidebar-ring",
@@ -3062,6 +3079,7 @@ const SessionActions = memo(function SessionActions({
 				{session.cloud?.shared ? null : <Button
 							size="icon-xs"
 							variant="quiet"
+							data-telemetry-id="sidebar.session_pin"
 							aria-label={session.isPinned ? t("shell.unpinSession") : t("shell.pinSession")}
 							className={SESSION_ACTION_CLASS}
 							onClick={(event) => {
@@ -3087,6 +3105,7 @@ const SessionActions = memo(function SessionActions({
 										<Button
 											size="icon-xs"
 											variant="quiet"
+											data-telemetry-id="sidebar.session_archive"
 											aria-label={t("shell.archiveSession")}
 											className={SESSION_ACTION_CLASS}
 											disabled={isKilling}
@@ -3194,6 +3213,7 @@ function FooterAccountRow({
 					</>
 				) : (
 					<Pressable
+						data-telemetry-id="sidebar.settings"
 						aria-label={t("shell.settings")}
 						className={FOOTER_NAV_BUTTON_CLASS}
 						onClick={onOpenSettings}
@@ -3213,6 +3233,7 @@ function FooterAccountRow({
 				<Tooltip>
 					<TooltipTrigger asChild>
 						<Pressable
+							data-telemetry-id="sidebar.settings"
 							aria-label={t("shell.settings")}
 							className={FOOTER_ICON_BUTTON_CLASS}
 							onClick={onOpenSettings}
@@ -3795,6 +3816,7 @@ function CreateProjectButton({
 							<Button
 								size="icon-xs"
 								variant="quiet"
+								data-telemetry-id="sidebar.new_project"
 								aria-label={t("shell.newProject")}
 								className={ROW_ACTION_BUTTON_CLASS}
 								disabled={disabled}
@@ -3820,6 +3842,7 @@ function CreateProjectListItem() {
 			<Tooltip>
 				<TooltipTrigger asChild>
 					<Button
+						data-telemetry-id="sidebar.new_project"
 						aria-label={t("shell.newProject")}
 						className="h-control-board w-full rounded-lg"
 						onClick={() => requestCreateProject()}

@@ -1,3 +1,4 @@
+import { useTelemetrySurface } from "../lib/ui-usage-telemetry";
 import { useQueryClient } from "@tanstack/react-query";
 import { RotateCcw } from "@/components/app-icons";
 import {
@@ -1148,6 +1149,7 @@ function AttachedTerminal({
 	onFatal?: (message: string) => void;
 	onTerminalReady?: (terminal: AttachableTerminal) => void;
 }) {
+	useTelemetrySurface("terminal", isVisible);
 	const { t } = useTranslation();
 	const { baseUrl: cloudBaseUrl } = useCloudCp();
 	const cloudBaseUrlRef = useRef(cloudBaseUrl);
@@ -1467,7 +1469,7 @@ function AttachedTerminal({
 	const showEndedState = showEndedStatePreview && (!session?.cloud || cloudEnded) && !isBoxComingUp && !booting && !coverLabel;
 
 	return (
-		<div className="terminal-surface flex h-full min-h-0 flex-col" data-testid="session-terminal">
+		<div className="terminal-surface flex h-full min-h-0 flex-col" data-telemetry-surface="terminal" data-testid="session-terminal">
 			{showEndedState && (
 				<TerminalEndedStrip
 					canRestore={canRestoreSession}

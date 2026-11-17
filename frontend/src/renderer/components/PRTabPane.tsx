@@ -1,3 +1,4 @@
+import { useTelemetrySurface } from "../lib/ui-usage-telemetry";
 import { CheckStateGlyph, type PRCheckState } from "@aoagents/product-ui";
 import { ArrowRight, ArrowUpRight, Circle, CircleAlert, FileDiff, FileText, MessageSquare, type LucideIcon } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
@@ -253,6 +254,7 @@ export function PRTabPane({ hostId, onViewInDiff, request, session, url }: {
 	url: string;
 }) {
 	const { t } = useTranslation();
+	useTelemetrySurface("pr_tab");
 	const pr = useSessionPR(session, url, hostId);
 	const detailsFailed = usePRDetailsLoad(pr, session.id, hostId, !session.cloud);
 	usePRNoChecksClock([pr]);
@@ -310,7 +312,7 @@ export function PRTabPane({ hostId, onViewInDiff, request, session, url }: {
 	const comments = prCommentCount(pr);
 
 	return (
-		<section aria-label={t("pr.tab.label", { number: pr.number })} className="@container h-full min-h-0 bg-background" data-testid="pr-tab-pane">
+		<section aria-label={t("pr.tab.label", { number: pr.number })} className="@container h-full min-h-0 bg-background" data-telemetry-surface="pr_tab" data-testid="pr-tab-pane">
 			<div className="h-full overflow-y-auto" ref={scrollerRef}>
 				<Tabs className="relative mx-auto w-full max-w-[1080px] min-w-0 px-6 @3xl:pr-[calc(1.5rem+252px)]" onValueChange={show} value={section}>
 					<header className="flex min-w-0 flex-col gap-2.5 pt-6 pb-3">
