@@ -99,22 +99,28 @@ func (c *commandContext) inspectDaemon(ctx context.Context) (daemonStatus, error
 	st.StartedAt = &startedAt
 	st.Uptime = formatUptime(c.deps.Now().Sub(info.StartedAt))
 
-	if !c.deps.ProcessAlive(info.PID) {
-		st.State = stateStale
-		st.Error = "run-file points to a dead process"
-		return st, nil
-	}
-
-	health, err := c.readProbe(ctx, info.Port, "healthz")
-	if err != nil {
-		st.State = stateUnhealthy
-		st.Error = err.Error()
-		return st, nil
-	}
-	if err := verifyProbeOwner(health, info.PID, "healthz"); err != nil {
-		st.State = stateStale
-		st.Error = err.Error()
-		return st, nil
+	var health probeResult
+	if c.deps.ProcessAlive(info.PID) {
+		health, err = c.readProbe(ctx, info.Port, "healthz")
+		if err != nil {
+			st.State = stateUnhealthy
+			st.Error = err.Error()
+			return st, nil
+		}
+		if err := verifyProbeOwner(health, info.PID, "healthz"); err != nil {
+			st.State = stateStale
+			st.Error = err.Error()
+			return st, nil
+		}
+	} else {
+		// The PID may only be hidden, not dead: see probeOwnedDaemon.
+		probe, ok := c.probeOwnedDaemon(ctx, info)
+		if !ok {
+			st.State = stateStale
+			st.Error = "run-file points to a dead process"
+			return st, nil
+		}
+		health = probe
 	}
 	st.owned = true
 	st.ExecutablePath = health.ExecutablePath
@@ -169,6 +175,38 @@ func (c *commandContext) readProbe(ctx context.Context, port int, path string) (
 		return probeResult{}, fmt.Errorf("%s: missing status", path)
 	}
 	return body, nil
+}
+
+// probeOwnedDaemon asks the run-file's loopback port whether the daemon it
+// records is still serving. It is the fallback for a failed PID check: a CLI
+// running inside a sandbox with its own PID namespace (Codex on Linux runs
+// every shell command in one) cannot see the daemon's process, although the
+// daemon answers on loopback. The daemon counts as alive only when /healthz
+// identifies itself as the Orchestrator daemon with the run-file's PID, so a
+// different process that reuses the port is not mistaken for it.
+func (c *commandContext) probeOwnedDaemon(ctx context.Context, info *runfile.Info) (probeResult, bool) {
+	if info == nil || info.PID <= 0 || info.Port <= 0 {
+		return probeResult{}, false
+	}
+	health, err := c.readProbe(ctx, info.Port, "healthz")
+	if err != nil {
+		return probeResult{}, false
+	}
+	if verifyProbeOwner(health, info.PID, "healthz") != nil {
+		return probeResult{}, false
+	}
+	return health, true
+}
+
+// daemonAlive reports whether the daemon the run-file records is running: its
+// PID is visible and alive, or, when it is not, the daemon itself answers on
+// loopback (probeOwnedDaemon).
+func (c *commandContext) daemonAlive(ctx context.Context, info *runfile.Info) bool {
+	if c.deps.ProcessAlive(info.PID) {
+		return true
+	}
+	_, ok := c.probeOwnedDaemon(ctx, info)
+	return ok
 }
 
 func verifyProbeOwner(probe probeResult, wantPID int, path string) error {
