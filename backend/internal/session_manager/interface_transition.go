@@ -22,7 +22,6 @@ const (
 	interfaceInterruptSettle              = 2 * time.Second
 	interfaceTransitionStopLimit          = 15 * time.Second
 	interfaceTransitionStepLimit          = 45 * time.Second
-	interfaceTransitionMoveAttempt        = 5 * time.Second
 	interfaceTransitionMoveLimit          = 30 * time.Second
 	interfaceDeliveryRetry                = 2 * time.Second
 	interfaceDeliveryIdlePoll             = 30 * time.Second
@@ -1625,42 +1624,38 @@ func (m *Manager) moveInterfaceTransitionWithNativeID(
 	if !ok {
 		return ports.ErrChatUnsupported
 	}
-	budget, cancelBudget := context.WithTimeout(context.Background(), interfaceTransitionMoveLimit)
-	defer cancelBudget()
-	move := func() (bool, error) {
-		ctx, cancel := context.WithTimeout(budget, interfaceTransitionMoveAttempt)
-		defer cancel()
+	ctx, cancel := context.WithTimeout(context.Background(), interfaceTransitionMoveLimit)
+	defer cancel()
+	for attempt := 0; attempt < 4; attempt++ {
 		current, ok, err := store.GetSessionInterfaceTransition(ctx, id)
 		if err != nil {
-			return false, err
+			return err
 		}
 		if !ok {
-			return false, ErrNotFound
+			return ErrNotFound
 		}
 		if current.Phase.Terminal() {
-			return false, fmt.Errorf("transition %s is already %s", id, current.Phase)
+			return fmt.Errorf("transition %s is already %s", id, current.Phase)
 		}
 		if nativeConversationID == "" {
 			nativeConversationID = current.NativeConversationID
 		}
+		var moved bool
 		if next == domain.SessionInterfaceTransitionCompleted && current.DegradedKind != "" {
 			// Completion and the boundary notice share one transaction. The outbox
 			// dispatcher can therefore recover every completed degraded handoff.
-			return store.CompleteSessionInterfaceTransition(ctx, id, current.Phase,
+			moved, err = store.CompleteSessionInterfaceTransition(ctx, id, current.Phase,
 				degradedHandoffMarkerTextFor(current), m.clock())
+		} else {
+			moved, err = store.AdvanceSessionInterfaceTransition(ctx, id, current.Phase, next,
+				nativeConversationID, errorCode, errorDetail, m.clock())
 		}
-		return store.AdvanceSessionInterfaceTransition(ctx, id, current.Phase, next,
-			nativeConversationID, errorCode, errorDetail, m.clock())
-	}
-	for conflicts := 0; conflicts < 4; {
-		moved, err := move()
-		if errors.Is(err, context.DeadlineExceeded) && budget.Err() == nil {
-			continue
-		}
-		if err != nil || moved {
+		if err != nil {
 			return err
 		}
-		conflicts++
+		if moved {
+			return nil
+		}
 	}
 	return fmt.Errorf("transition %s changed concurrently", id)
 }
