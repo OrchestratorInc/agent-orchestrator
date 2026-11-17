@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { CloudCpStreamEvent } from "../../../main/cloud-cp-proxy";
 import type { CloudCpStreamBridge } from "./stream-bridge";
-import { cloudSessionEventsState, subscribeCloudSessionEvents, type CloudSessionEventsSubscriber } from "./session-events-hub";
+import { cloudSessionEventsState, subscribeCloudSessionEvents, tapCloudSessionEvents, type CloudSessionEventsSubscriber } from "./session-events-hub";
 import type { CloudCpClientEvent, CloudCpSessionLive } from "./types";
 
 const TARGET = { baseUrl: "https://cp.test/", orgId: "org-1", sessionId: "session-1" };
@@ -190,5 +190,21 @@ describe("subscribeCloudSessionEvents", () => {
 		subscribe(bridge, { onEvent: vi.fn() }, { ...TARGET, sessionId: "session-2" });
 		await vi.waitFor(() => expect(bridge.onStreamEvent).toHaveBeenCalledTimes(2));
 		expect(bridge.paths()).toEqual([EVENTS_PATH, "/api/cloud/v1/orgs/org-1/sessions/session-2/events"]);
+	});
+});
+
+describe("tapCloudSessionEvents", () => {
+	it("hears events from streams others hold open, without opening one", async () => {
+		const bridge = fakeBridge();
+		const tap = vi.fn();
+		cleanups.push(tapCloudSessionEvents(tap));
+		await Promise.resolve();
+		expect(bridge.openStream).not.toHaveBeenCalled();
+
+		subscribe(bridge, { onEvent: vi.fn() });
+		await vi.waitFor(() => expect(bridge.onStreamEvent).toHaveBeenCalledTimes(1));
+		bridge.emit("stream-1", eventFrame(7, "browser.approval_requested"));
+		expect(tap).toHaveBeenCalledWith(TARGET, expect.objectContaining({ type: "browser.approval_requested", sequence: 7 }));
+		expect(bridge.openStream).toHaveBeenCalledTimes(1);
 	});
 });

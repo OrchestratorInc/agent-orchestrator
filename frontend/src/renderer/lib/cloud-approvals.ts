@@ -3,212 +3,186 @@
 // PendingApprovals (marked `cloud`), so ApprovalHost and ApprovalPrompt show
 // and decide them exactly like local ones. The control plane owns every
 // decision; this module only reads requests and forwards the user's answer.
+//
+// The control plane lists approvals per session. Each running cloud session's
+// list is read on a slow poll; a browser.approval_* event on any session
+// stream already open (the session on screen, for one) rereads that session
+// at once. Opening a stream per session just for approvals would spend the
+// window's small stream budget.
 
-import { useQuery, useQueryClient, type QueryClient } from "@tanstack/react-query";
-import { useEffect, useSyncExternalStore } from "react";
+import { useQueries, useQueryClient } from "@tanstack/react-query";
+import { useEffect, useMemo, useState, useSyncExternalStore } from "react";
 import { useCloudCp } from "../hooks/useCloudCp";
-import { useCloudOrg } from "../hooks/useCloudOrg";
-import type { CloudCpBrowserApproval, CloudCpBrowserApprovalDecision, CloudCpClient } from "./cloud-cp";
+import { useWorkspaceQuery } from "../hooks/useWorkspaceQuery";
+import type { CloudCpBrowserApproval, CloudCpClient } from "./cloud-cp";
 import { CloudCpError } from "./cloud-cp/errors";
-import { subscribeBrowserApprovalsBridged, type SubscribeBrowserApprovalsBridgedOptions } from "./cloud-cp/stream-bridge";
+import { tapCloudSessionEvents } from "./cloud-cp/session-events-hub";
 import { usesPreviewWorkspaceData } from "./preview-mode";
-import { computeSseRetryDelayMs } from "./sse-backoff";
 import type { ApprovalDecision, PendingApproval } from "./approvals";
 
+export interface CloudApprovalTarget {
+	baseUrl: string;
+	orgId: string;
+	sessionId: string;
+}
+
 /** Under ["approvals"], so every decision's invalidation rereads it too. */
-export const cloudPendingApprovalsQueryKey = (baseUrl: string, orgId: string) =>
-	["approvals", "pending", "cloud", baseUrl.replace(/\/+$/, ""), orgId] as const;
+export const cloudPendingApprovalsQueryKey = (target: CloudApprovalTarget) =>
+	["approvals", "pending", "cloud", target.baseUrl.replace(/\/+$/, ""), target.orgId, target.sessionId] as const;
 
-/** Reread while the stream is down. */
-const CLOUD_FALLBACK_POLL_MS = 15_000;
-// The control plane sends a keepalive every 15 s; a stream silent for longer
-// than this is treated as dead and reopened, even if it never errored.
-export const CLOUD_STREAM_SILENCE_MS = 35_000;
+/** Reread of each running cloud session's requests between events. */
+export const CLOUD_APPROVAL_POLL_MS = 15_000;
 
-const CLOUD_DECISIONS: Record<ApprovalDecision, CloudCpBrowserApprovalDecision> = {
-	"allow-once": "allow_once",
-	"allow-site": "allow_site",
-	deny: "deny",
+// Cloud categories in the local prompt's vocabulary. "unknown" is an action
+// whose effect cannot be read in advance, which locally is "script".
+const CATEGORIES: Record<string, string> = {
+	pay: "payment",
+	send: "message",
+	post: "publish",
+	delete: "delete",
+	account: "account",
+	script: "script",
+	unknown: "script",
 };
 
 /** A cloud request in the local prompt's shape. */
-export function toPendingApproval(request: CloudCpBrowserApproval, cloud: { baseUrl: string; orgId: string }): PendingApproval {
-	const savedLogin = request.kind === "saved_login";
+export function toPendingApproval(request: CloudCpBrowserApproval, target: Omit<CloudApprovalTarget, "sessionId">): PendingApproval {
 	return {
 		id: request.id,
 		sessionId: request.sessionId,
-		kind: savedLogin ? "credential-use" : "browser-action",
-		category: request.category,
+		kind: "browser-action",
+		category: CATEGORIES[request.category] ?? "script",
 		site: request.site,
-		url: request.url,
-		pageTitle: request.pageTitle,
-		action: request.action,
+		// The prompt's headline: what will happen, in one line.
+		action: request.summary,
 		reason: request.reason,
-		// A saved login names the vault item it would use, never its secret.
-		element: savedLogin ? request.credentialLabel ?? request.element : request.element,
-		image: request.image,
 		createdAt: request.createdAt,
 		expiresAt: request.expiresAt,
-		cloud: { baseUrl: cloud.baseUrl.replace(/\/+$/, ""), orgId: cloud.orgId },
+		cloud: { baseUrl: target.baseUrl.replace(/\/+$/, ""), orgId: target.orgId },
 	};
 }
 
-export async function fetchCloudPendingApprovals(client: CloudCpClient, baseUrl: string, orgId: string): Promise<PendingApproval[]> {
-	const { approvals } = await client.listOrgBrowserApprovals(orgId);
-	return approvals.map((request) => toPendingApproval(request, { baseUrl, orgId }));
+export async function fetchCloudPendingApprovals(client: CloudCpClient, target: CloudApprovalTarget): Promise<PendingApproval[]> {
+	const { pending } = await client.listBrowserApprovals(target.orgId, target.sessionId);
+	return pending.map((request) => toPendingApproval(request, target));
 }
 
 /**
  * Sends the user's answer to the control plane. A request that already ended
- * (409, or gone) is not an error the user can act on: the list is reread and
- * the prompt goes away.
+ * (409: decided elsewhere or expired; 404: gone) is not an error the user can
+ * act on: the list is reread and the prompt goes away.
  */
-export async function decideCloudApproval(client: CloudCpClient, orgId: string, id: string, decision: ApprovalDecision): Promise<void> {
+export async function decideCloudApproval(
+	client: CloudCpClient,
+	target: CloudApprovalTarget,
+	id: string,
+	decision: ApprovalDecision,
+): Promise<void> {
 	try {
-		await client.decideBrowserApproval(orgId, id, { decision: CLOUD_DECISIONS[decision] });
+		await client.decideBrowserApproval(target.orgId, target.sessionId, id, { decision });
 	} catch (error) {
 		if (error instanceof CloudCpError && (error.status === 409 || error.status === 404)) return;
 		throw error;
 	}
 }
 
-export interface CloudApprovalStreamDeps {
-	subscribe: (options: Omit<SubscribeBrowserApprovalsBridgedOptions, "baseUrl" | "orgId">) => Promise<void>;
-	/** Rereads the pending list. */
-	refresh: () => void;
-	/** Whether the stream is delivering right now; the poll runs while it is not. */
-	setLive: (live: boolean) => void;
-	now?: () => number;
-	random?: () => number;
+/** Requests still waiting at `now`: the worker refuses one once it expires. */
+export function unexpired(requests: PendingApproval[], now: number): PendingApproval[] {
+	return requests.filter((request) => !(Date.parse(request.expiresAt) <= now));
 }
 
-/**
- * Holds the org's approval stream open: every frame (and every reconnect)
- * rereads the pending list, and a stream that ends, errors or goes silent is
- * reopened with the same backoff as the local stream.
- */
-export function connectCloudApprovalStream(deps: CloudApprovalStreamDeps): () => void {
-	const now = deps.now ?? Date.now;
-	const stop = new AbortController();
-	let failures = 0;
-	let lastSeen = now();
-	let current: AbortController | undefined;
-	const watchdog = setInterval(() => {
-		if (current && now() - lastSeen > CLOUD_STREAM_SILENCE_MS) current.abort();
-	}, 10_000);
-	const wait = (ms: number) =>
-		new Promise<void>((resolve) => {
-			const timer = setTimeout(done, ms);
-			function done() {
-				clearTimeout(timer);
-				stop.signal.removeEventListener("abort", done);
-				resolve();
-			}
-			stop.signal.addEventListener("abort", done, { once: true });
-		});
-	void (async () => {
-		while (!stop.signal.aborted) {
-			const attempt = new AbortController();
-			current = attempt;
-			const abortAttempt = () => attempt.abort();
-			stop.signal.addEventListener("abort", abortAttempt, { once: true });
-			lastSeen = now();
-			await deps.subscribe({
-				signal: attempt.signal,
-				onOpen: () => {
-					lastSeen = now();
-				},
-				onActivity: () => {
-					lastSeen = now();
-				},
-				onFrame: () => {
-					// The first frame (the snapshot) proves the stream works.
-					failures = 0;
-					deps.setLive(true);
-					deps.refresh();
-				},
-			});
-			stop.signal.removeEventListener("abort", abortAttempt);
-			current = undefined;
-			if (stop.signal.aborted) break;
-			deps.setLive(false);
-			// The poll covers the gap; refresh now so nothing waits for it.
-			deps.refresh();
-			failures += 1;
-			await wait(computeSseRetryDelayMs(failures, deps.random));
-		}
-		clearInterval(watchdog);
-		deps.setLive(false);
-	})();
+/** Milliseconds until the next request expires, or undefined when none will. */
+export function nextExpiryIn(requests: PendingApproval[], now: number): number | undefined {
+	let next: number | undefined;
+	for (const request of requests) {
+		const at = Date.parse(request.expiresAt);
+		if (!Number.isFinite(at) || at <= now) continue;
+		next = next === undefined ? at - now : Math.min(next, at - now);
+	}
+	return next;
+}
+
+const isApprovalEvent = (type: string | undefined) =>
+	type === "browser.approval_requested" || type === "browser.approval_decided";
+
+// What the shell's live reader holds, for every other reader.
+let published: PendingApproval[] = [];
+const listeners = new Set<() => void>();
+const subscribePublished = (listener: () => void) => {
+	listeners.add(listener);
 	return () => {
-		stop.abort();
-		clearInterval(watchdog);
+		listeners.delete(listener);
 	};
-}
-
-let liveOrgs: string[] = [];
-const liveListeners = new Set<() => void>();
-const subscribeLive = (listener: () => void) => {
-	liveListeners.add(listener);
-	return () => liveListeners.delete(listener);
 };
-const getLiveOrgs = () => liveOrgs;
-function setOrgLive(key: string, live: boolean) {
-	if (liveOrgs.includes(key) === live) return;
-	liveOrgs = live ? [...liveOrgs, key] : liveOrgs.filter((candidate) => candidate !== key);
-	for (const listener of liveListeners) listener();
+const getPublished = () => published;
+function publish(next: PendingApproval[]) {
+	const same = next.length === published.length && next.every((request, index) => request === published[index]);
+	if (same) return;
+	published = next;
+	for (const listener of listeners) listener();
 }
 
 /**
- * Pending approvals for cloud sessions in the signed-in org. The app shell
- * passes `live` once: it fetches and holds the org's stream open. Other
- * readers (a cloud session's dock) share that cache and never fetch.
+ * Pending approvals for cloud sessions, as the app shell's live reader last
+ * saw them. Reading them fetches nothing.
  */
-export function useCloudPendingApprovals({ live = false }: { live?: boolean } = {}): PendingApproval[] {
+export function useCloudPendingApprovals(): PendingApproval[] {
+	return useSyncExternalStore(subscribePublished, getPublished, getPublished);
+}
+
+/**
+ * The app shell's one live reader: reads every running cloud session's
+ * requests, listens for approval events, and publishes what it finds.
+ */
+export function useLiveCloudPendingApprovals(): PendingApproval[] {
 	const queryClient = useQueryClient();
 	const { client, ready, baseUrl } = useCloudCp();
-	const { org } = useCloudOrg();
-	const orgId = org?.id ?? "";
+	const workspaces = useWorkspaceQuery();
 	const base = baseUrl.replace(/\/+$/, "");
-	const key = cloudPendingApprovalsQueryKey(base, orgId);
-	const streamKey = `${base}|${orgId}`;
-	const enabled = live && ready && orgId !== "" && !usesPreviewWorkspaceData;
-	const streaming = useSyncExternalStore(subscribeLive, getLiveOrgs, getLiveOrgs).includes(streamKey);
-	useEffect(() => {
-		if (!enabled) return;
-		return retainCloudApprovalStream(queryClient, base, orgId);
-	}, [base, enabled, orgId, queryClient]);
-	const query = useQuery({
-		queryKey: key,
-		queryFn: () => fetchCloudPendingApprovals(client, base, orgId),
-		enabled,
-		refetchInterval: enabled && !streaming ? CLOUD_FALLBACK_POLL_MS : false,
-	});
-	return ready && orgId !== "" ? query.data ?? [] : [];
-}
-
-const streams = new Map<string, { refs: number; dispose: () => void }>();
-
-function retainCloudApprovalStream(queryClient: QueryClient, baseUrl: string, orgId: string): () => void {
-	const streamKey = `${baseUrl}|${orgId}`;
-	let entry = streams.get(streamKey);
-	if (!entry) {
-		const dispose = connectCloudApprovalStream({
-			subscribe: (options) => subscribeBrowserApprovalsBridged({ ...options, baseUrl, orgId }),
-			refresh: () => void queryClient.invalidateQueries({ queryKey: cloudPendingApprovalsQueryKey(baseUrl, orgId) }),
-			setLive: (live) => setOrgLive(streamKey, live),
-		});
-		entry = { refs: 0, dispose };
-		streams.set(streamKey, entry);
-	}
-	entry.refs += 1;
-	return () => {
-		const held = streams.get(streamKey);
-		if (!held) return;
-		held.refs -= 1;
-		if (held.refs === 0) {
-			held.dispose();
-			streams.delete(streamKey);
+	const targets = useMemo(() => {
+		const found: CloudApprovalTarget[] = [];
+		if (!ready || usesPreviewWorkspaceData) return found;
+		for (const workspace of workspaces.data ?? []) {
+			for (const session of workspace.sessions) {
+				if (session.cloud?.orgId && session.cloud.observedState === "running") {
+					found.push({ baseUrl: base, orgId: session.cloud.orgId, sessionId: session.id });
+				}
+			}
 		}
-	};
+		return found;
+	}, [base, ready, workspaces.data]);
+
+	useEffect(() => {
+		if (!ready) return;
+		return tapCloudSessionEvents((target, event) => {
+			if (!isApprovalEvent(event.type)) return;
+			void queryClient.invalidateQueries({ queryKey: cloudPendingApprovalsQueryKey(target) });
+		});
+	}, [queryClient, ready]);
+
+	const results = useQueries({
+		queries: targets.map((target) => ({
+			queryKey: cloudPendingApprovalsQueryKey(target),
+			queryFn: () => fetchCloudPendingApprovals(client, target),
+			refetchInterval: CLOUD_APPROVAL_POLL_MS,
+		})),
+	});
+	const all = results.flatMap((result) => result.data ?? []);
+
+	// A request the user leaves alone ends at its expiry: drop it then, and
+	// reread so the list agrees with the control plane.
+	const [now, setNow] = useState(() => Date.now());
+	const wait = nextExpiryIn(all, now);
+	useEffect(() => {
+		if (wait === undefined) return;
+		const timer = setTimeout(() => {
+			setNow(Date.now());
+			void queryClient.invalidateQueries({ queryKey: ["approvals", "pending", "cloud"] });
+		}, wait + 50);
+		return () => clearTimeout(timer);
+	}, [queryClient, wait]);
+	const current = unexpired(all, Math.max(now, Date.now()));
+	useEffect(() => publish(current));
+	useEffect(() => () => publish([]), []);
+	return current;
 }

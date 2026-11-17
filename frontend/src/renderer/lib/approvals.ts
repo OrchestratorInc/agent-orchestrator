@@ -13,7 +13,7 @@ import { baseUrlForHost, clientForHost, clientForSessionHost, connectedHosts, su
 import { probeRemoteSse } from "./remote-sse-probe";
 import { usesPreviewWorkspaceData } from "./preview-mode";
 import { computeSseRetryDelayMs } from "./sse-backoff";
-import { decideCloudApproval } from "./cloud-approvals";
+import { decideCloudApproval, type CloudApprovalTarget } from "./cloud-approvals";
 import { createRendererCloudCpClient } from "./cloud-cp/renderer-client";
 
 export type PendingApproval = components["schemas"]["ApprovalPendingResponse"] & {
@@ -50,11 +50,11 @@ export async function decideApproval(
 	decision: ApprovalDecision,
 	queryClient: QueryClient,
 	hostId?: string,
-	cloud?: PendingApproval["cloud"],
+	cloud?: CloudApprovalTarget,
 ): Promise<void> {
 	if (cloud) {
 		try {
-			await decideCloudApproval(createRendererCloudCpClient(cloud.baseUrl), cloud.orgId, id, decision);
+			await decideCloudApproval(createRendererCloudCpClient(cloud.baseUrl), cloud, id, decision);
 		} finally {
 			await queryClient.invalidateQueries({ queryKey: ["approvals"] });
 		}

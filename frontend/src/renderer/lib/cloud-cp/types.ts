@@ -268,6 +268,13 @@ export type CloudCpProjectIntakeStatus = ProjectIntakeStatus;
 export type CloudCpProjectTrackerIntake = ProjectTrackerIntake;
 export type CloudCpCue = Cue;
 export type CloudCpCueDefinition = CueDefinitionInput;
+
+// Browser approvals: a cloud agent's risky browser action waiting for the person.
+import type { components as CloudSchema } from "../../../../../packages/cloud-client/src/schema";
+export type CloudCpBrowserApproval = CloudSchema["schemas"]["BrowserApproval"];
+export type CloudCpBrowserApprovalList = CloudSchema["schemas"]["BrowserApprovalList"];
+export type CloudCpBrowserApprovalDecisionInput = CloudSchema["schemas"]["BrowserApprovalDecisionInput"];
+export type CloudCpBrowserApprovalDecision = CloudSchema["schemas"]["BrowserApprovalDecision"];
 export type CloudCpInvokeCueResult = InvokeCueResult;
 export type CloudCpProjectRoleConfig = ProjectRoleConfig;
 /**
