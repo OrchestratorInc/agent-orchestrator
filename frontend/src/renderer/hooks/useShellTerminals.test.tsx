@@ -56,6 +56,7 @@ import {
 	useShellTerminals,
 } from "./useShellTerminals";
 import { takeCloudShellInput } from "../lib/cloud-shell-input";
+import { useShellAgentStore } from "../stores/shell-agent-store";
 
 const shells: ShellTerminal[] = [
 	{
@@ -87,6 +88,7 @@ function queryClientWithShells() {
 }
 
 beforeEach(() => {
+	useShellAgentStore.setState({ agents: {}, resuming: {} });
 	deleteMock.mockReset();
 	getMock.mockReset();
 	patchMock.mockReset();
@@ -599,6 +601,7 @@ describe("ended shell terminals", () => {
 			body: expect.objectContaining({ resumeAgent: true, shell: "auto" }),
 		});
 		expect(adoptedShellHandle(ended.handleId)).toBe("shellterm-new");
+		expect(useShellAgentStore.getState().agents["shellterm-new"]).toEqual({ harness: "codex", state: "idle" });
 	});
 });
 

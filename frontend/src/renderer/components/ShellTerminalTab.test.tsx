@@ -21,7 +21,7 @@ afterEach(() => {
 	cleanup();
 	isWindowsPlatform.mockReturnValue(false);
 	useShellAgentStream.mockClear();
-	useShellAgentStore.setState({ agents: {}, unseenDone: {} });
+	useShellAgentStore.setState({ agents: {}, unseenDone: {}, resuming: {} });
 	useUiStore.setState({ developerMode: false });
 });
 
@@ -327,9 +327,27 @@ describe("ShellTerminalTab agent name", () => {
 
 	it("names a default-named tab after its agent", () => {
 		useShellAgentStore.setState({ agents: { "shellterm-1": claude } });
-		renderTab({ appearance: "connected", shell: { ...shell, title: "Terminal 3" }, stripShellHandleIds: ["shellterm-1"] });
+		renderTab({ appearance: "connected", shell: { ...shell, title: "Terminal 3" }, stripShells: [shell] });
 		expect(screen.getByRole("tab", { name: "Claude Code" })).toBeInTheDocument();
 		expect(screen.queryByText("Terminal 3")).not.toBeInTheDocument();
+	});
+
+	it("names an ended tab after the agent it will resume", () => {
+		renderTab({
+			appearance: "connected",
+			shell: { ...shell, title: "Terminal 3", endedAt: "2026-11-17T08:00:00Z", resumeHarness: "codex" },
+		});
+		expect(screen.getByRole("tab", { name: "Codex" })).toBeInTheDocument();
+	});
+
+	it("keeps the number when another ended tab will resume the same agent", () => {
+		const ended = { ...shell, title: "Terminal 3", endedAt: "2026-11-17T08:00:00Z", resumeHarness: "codex" };
+		renderTab({
+			appearance: "connected",
+			shell: ended,
+			stripShells: [ended, { ...ended, handleId: "shellterm-2", title: "Terminal 4" }],
+		});
+		expect(screen.getByRole("tab", { name: "Codex 3" })).toBeInTheDocument();
 	});
 
 	it("keeps the number when another tab in the strip runs the same agent", () => {
@@ -337,7 +355,7 @@ describe("ShellTerminalTab agent name", () => {
 		renderTab({
 			appearance: "connected",
 			shell: { ...shell, title: "Terminal 3" },
-			stripShellHandleIds: ["shellterm-1", "shellterm-2"],
+			stripShells: [shell, { ...shell, handleId: "shellterm-2" }],
 		});
 		expect(screen.getByRole("tab", { name: "Claude Code 3" })).toBeInTheDocument();
 	});
@@ -349,7 +367,7 @@ describe("ShellTerminalTab agent name", () => {
 		renderTab({
 			appearance: "connected",
 			shell: { ...shell, title: "Terminal 3" },
-			stripShellHandleIds: ["shellterm-1", "shellterm-2"],
+			stripShells: [shell, { ...shell, handleId: "shellterm-2" }],
 		});
 		expect(screen.getByRole("tab", { name: "Claude Code" })).toBeInTheDocument();
 	});

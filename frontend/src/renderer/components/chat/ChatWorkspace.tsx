@@ -335,11 +335,11 @@ const ShellTerminalTabEntry = memo(function ShellTerminalTabEntry({
 	onSelect,
 	onClose,
 	onRename,
-	stripShellHandleIds,
+	stripShells,
 }: {
 	tabKey: string;
 	shell: ShellTerminal;
-	stripShellHandleIds: readonly string[];
+	stripShells: readonly ShellTerminal[];
 	isActive: boolean;
 	onSelect: (handleId: string) => void;
 	onClose: (handleId: string) => void;
@@ -354,7 +354,7 @@ const ShellTerminalTabEntry = memo(function ShellTerminalTabEntry({
 				onRename={onRename ? (title) => onRename(shell.handleId, title) : undefined}
 				onSelect={() => onSelect(shell.handleId)}
 				shell={shell}
-				stripShellHandleIds={stripShellHandleIds}
+				stripShells={stripShells}
 			/>
 		</DraggableWorkspaceTab>
 	);
@@ -2925,8 +2925,8 @@ function ChatHeader({
 	const selectShellTerminal = useStableCallback(onSelectShellTerminal);
 	const closeShellTerminal = useStableCallback(onCloseShellTerminal);
 	const renameShellTerminal = useStableCallback(onRenameShellTerminal);
-	const stripShellHandleIds = useMemo(
-		() => orderedAuxiliaryTabs.flatMap((tab) => (tab.kind === "shell" ? [tab.terminal.handleId] : [])),
+	const stripShells = useMemo(
+		() => orderedAuxiliaryTabs.flatMap((tab) => (tab.kind === "shell" ? [tab.terminal] : [])),
 		[orderedAuxiliaryTabs],
 	);
 	// The chat tab is "selected" only when neither terminal pane is the body.
@@ -2997,7 +2997,7 @@ function ChatHeader({
 											onRename={onRenameShellTerminal ? renameShellTerminal : undefined}
 											onSelect={selectShellTerminal}
 											shell={tab.terminal}
-											stripShellHandleIds={stripShellHandleIds}
+											stripShells={stripShells}
 											tabKey={tab.key}
 										/>
 									) : (

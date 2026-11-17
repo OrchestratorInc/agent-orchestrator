@@ -1,7 +1,7 @@
 import { act, cleanup, renderHook } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { setApiBaseUrl } from "../lib/api-client";
-import { useShellAgentStore, useShellAgentStream } from "./shell-agent-store";
+import { RESUME_GRACE_MS, useShellAgentStore, useShellAgentStream } from "./shell-agent-store";
 
 const entry = (state: "working" | "idle" | "waiting") => ({ handleId: "shellterm-1", harness: "claude-code", state });
 
@@ -10,7 +10,7 @@ afterEach(() => {
 	setApiBaseUrl(null);
 	vi.useRealTimers();
 	vi.unstubAllGlobals();
-	useShellAgentStore.setState({ agents: {}, unseenDone: {} });
+	useShellAgentStore.setState({ agents: {}, unseenDone: {}, resuming: {} });
 });
 
 describe("shell agent store", () => {
@@ -37,6 +37,26 @@ describe("shell agent store", () => {
 		expect(useShellAgentStore.getState().agents).toEqual({});
 		replace([entry("idle")]);
 		expect(useShellAgentStore.getState().unseenDone).toEqual({ "shellterm-1": true });
+	});
+
+	it("shows a resuming agent until the daemon reports it, then follows the daemon", () => {
+		const { expectResume, replace, clearAgents } = useShellAgentStore.getState();
+		expectResume("shellterm-1", "codex");
+		replace([]);
+		clearAgents();
+		expect(useShellAgentStore.getState().agents).toEqual({ "shellterm-1": { harness: "codex", state: "idle" } });
+		replace([{ ...entry("working"), harness: "codex" }]);
+		expect(useShellAgentStore.getState().agents).toEqual({ "shellterm-1": { harness: "codex", state: "working" } });
+		replace([]);
+		expect(useShellAgentStore.getState().agents).toEqual({});
+	});
+
+	it("drops a resuming agent the daemon never reports", () => {
+		vi.useFakeTimers();
+		useShellAgentStore.getState().expectResume("shellterm-1", "claude-code");
+		vi.advanceTimersByTime(RESUME_GRACE_MS);
+		expect(useShellAgentStore.getState().agents).toEqual({});
+		expect(useShellAgentStore.getState().resuming).toEqual({});
 	});
 
 	it("drops the done mark when the agent exits", () => {

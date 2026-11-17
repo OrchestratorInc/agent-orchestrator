@@ -12,6 +12,7 @@ import { apiErrorCode, hasTrustedApiBaseUrl } from "../lib/api-client";
 import { clientForSessionHost } from "../lib/host-clients";
 import { LOCAL_HOST, type HostId } from "../lib/hosts";
 import { mockShellTerminals } from "../lib/mock-data";
+import { useShellAgentStore } from "../stores/shell-agent-store";
 import { terminalShellRequestValue, useTerminalShellStore } from "../stores/terminal-shell-store";
 import { useCloudCp } from "./useCloudCp";
 
@@ -555,9 +556,14 @@ export function useReopenShellTerminal(hostId?: HostId) {
 				closedWhileReopening.delete(key);
 			}
 		},
-		onSuccess: (shell, { handleId }) => {
+		onMutate: ({ handleId, resumeAgent }) =>
+			resumeAgent && !remote
+				? queryClient.getQueryData<ShellTerminal[]>(queryKey)?.find((candidate) => candidate.handleId === handleId)?.resumeHarness
+				: undefined,
+		onSuccess: (shell, { handleId }, harness) => {
 			if (!shell) return;
 			adoptedShellHandles.set(handleId, shell.handleId);
+			if (harness) useShellAgentStore.getState().expectResume(shell.handleId, harness);
 			queryClient.setQueryData<ShellTerminal[]>(queryKey, (current) =>
 				current?.map((candidate) => (candidate.handleId === handleId ? shell : candidate)),
 			);

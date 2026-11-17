@@ -20,7 +20,7 @@ func agentResumeCommand(harness domain.AgentHarness, conversationID string) stri
 	case domain.HarnessClaudeCode:
 		picker = "claude --resume"
 	case domain.HarnessCodex:
-		picker = "codex resume"
+		picker = "codex resume -c check_for_update_on_startup=false"
 	default:
 		return ""
 	}

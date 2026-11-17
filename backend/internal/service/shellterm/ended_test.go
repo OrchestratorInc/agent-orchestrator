@@ -553,8 +553,8 @@ func TestAgentResumeCommand(t *testing.T) {
 		{domain.HarnessClaudeCode, id, "claude --resume " + id},
 		{domain.HarnessClaudeCode, "", "claude --resume"},
 		{domain.HarnessClaudeCode, "x; rm -rf ~", "claude --resume"},
-		{domain.HarnessCodex, id, "codex resume " + id},
-		{domain.HarnessCodex, "", "codex resume"},
+		{domain.HarnessCodex, id, "codex resume -c check_for_update_on_startup=false " + id},
+		{domain.HarnessCodex, "", "codex resume -c check_for_update_on_startup=false"},
 		{domain.HarnessAider, id, ""},
 	} {
 		if got := agentResumeCommand(tc.harness, tc.id); got != tc.want {

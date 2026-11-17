@@ -378,7 +378,8 @@ type AgentInterfaceHandoffHistoryProbe interface {
 // AgentProcessConversationReader is an OPTIONAL capability for agents a user
 // starts by hand in a shell terminal: it names the native conversation a
 // running agent process is in, so the shell can resume exactly that one after
-// the app restarts. ok=false when the process does not say.
+// the app restarts. pid leads the agent's foreground process group. ok=false
+// when the process does not say.
 type AgentProcessConversationReader interface {
 	ProcessConversationID(ctx context.Context, pid int) (id string, ok bool, err error)
 }
