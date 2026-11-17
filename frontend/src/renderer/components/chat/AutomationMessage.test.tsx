@@ -121,7 +121,10 @@ describe("reading AO's automation messages", () => {
 		expect(readAutomation(gitActionMessage("createDraftPR", undefined, undefined))).toEqual({ kind: "gitAction", action: "createDraftPR", base: undefined });
 		expect(readAutomation(gitActionMessage("commit", "main", undefined))).toEqual({ kind: "gitAction", action: "commit" });
 		expect(readAutomation(gitActionMessage("commitPush", "main", 12))).toEqual({ kind: "gitAction", action: "commitPush" });
+		expect(readAutomation(gitActionMessage("commitPush", "main", undefined, [], { branch: "8534", remote: "origin", hasOtherPRs: true }))).toEqual({ kind: "gitAction", action: "commitPush" });
 		expect(readAutomation(gitActionMessage("push", "main", undefined))).toEqual({ kind: "gitAction", action: "push" });
+		expect(readAutomation(gitActionMessage("push", "main", undefined, [], { branch: "8534", remote: "origin", hasOtherPRs: true }))).toEqual({ kind: "gitAction", action: "push" });
+		expect(readAutomation(gitActionMessage("push", "main", undefined, [], { branch: "8534", remote: "origin", remoteBranch: "origin/8534", hasOtherPRs: true }))).toEqual({ kind: "gitAction", action: "push" });
 		expect(readAutomation(gitActionMessage("updateBase", "main", 7534))).toEqual({ kind: "gitAction", action: "updateBase", base: "main" });
 		expect(readAutomation(gitActionMessage("updateBase", undefined, undefined))).toEqual({ kind: "gitAction", action: "updateBase" });
 		expect(readAutomation(gitActionMessage("resolveConflicts", "main", 7534, ["src/a.tsx", "src/a.test.tsx"]))).toEqual({
