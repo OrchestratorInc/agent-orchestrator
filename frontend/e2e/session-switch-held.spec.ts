@@ -209,7 +209,7 @@ async function recordSwitch(page: Page): Promise<() => Promise<SwitchFrame[]>> {
 /** SESSION_HOLD_LIMIT_MS in useHeldSession.ts. */
 const HOLD_LIMIT_MS = 500;
 
-type HoldTimes = { inert: [number, boolean][]; tasks: [number, number][] };
+type HoldTimes = { inert: [number, boolean][]; tasks: [number, number][]; drain: () => void };
 
 /**
  * Records, in the page's own clock, each time the session workspace turns
@@ -217,11 +217,16 @@ type HoldTimes = { inert: [number, boolean][]; tasks: [number, number][] };
  */
 async function watchHolds(page: Page) {
 	await page.addInitScript((id) => {
-		const times: HoldTimes = { inert: [], tasks: [] };
+		const times: HoldTimes = { inert: [], tasks: [], drain: () => undefined };
 		(window as unknown as { __holdTimes: HoldTimes }).__holdTimes = times;
-		new PerformanceObserver((list) => {
-			for (const entry of list.getEntries()) times.tasks.push([entry.startTime, entry.duration]);
-		}).observe({ type: "longtask" });
+		const record = (entries: PerformanceEntryList) => {
+			for (const entry of entries) times.tasks.push([entry.startTime, entry.duration]);
+		};
+		const longTasks = new PerformanceObserver((list) => record(list.getEntries()));
+		longTasks.observe({ type: "longtask" });
+		// The observer's callback runs in a later, low-priority task, so take
+		// the entries it has not delivered yet.
+		times.drain = () => record(longTasks.takeRecords());
 		const watched = new WeakSet<Element>();
 		new MutationObserver(() => {
 			const workspace = document.getElementById(id);
@@ -245,7 +250,9 @@ async function watchHolds(page: Page) {
 		 * limit was due, when its timer could not fire.
 		 */
 		after: (since: number) => page.evaluate(({ since, limit }) => {
-			const { inert, tasks } = (window as unknown as { __holdTimes: HoldTimes }).__holdTimes;
+			const { inert, tasks, drain } = (window as unknown as { __holdTimes: HoldTimes }).__holdTimes;
+			// The render that ended the hold may not have reached the callback yet.
+			drain();
 			const from = inert.find(([at, on]) => on && at >= since)?.[0];
 			if (from === undefined) return undefined;
 			const until = inert.find(([at, on]) => !on && at > from)?.[0];
