@@ -7,6 +7,7 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -384,6 +385,201 @@ func TestMiMoCodeDiscoveryUsesNativeModelsCommand(t *testing.T) {
 	base := Base("mimo-code")
 	if !base.AllowCustom || base.CustomModelEntry != ports.CustomModelEntryDirect {
 		t.Fatalf("mimo-code custom model policy = (%v, %q), want direct", base.AllowCustom, base.CustomModelEntry)
+	}
+}
+
+func TestOpenInterpreterDiscoveryUsesEffectiveNativeCatalog(t *testing.T) {
+	spec, ok := commandSpecs["open-interpreter"]
+	if !ok || !reflect.DeepEqual(spec.args, []string{"debug", "models"}) {
+		t.Fatalf("open-interpreter discovery = %#v, want debug models without --bundled", spec)
+	}
+	base := Base("open-interpreter")
+	if base.SelectionMode != ports.ModelSelectionCatalog || !base.AllowCustom {
+		t.Fatalf("open-interpreter picker policy = %#v", base)
+	}
+	if fallback := Manual("open-interpreter"); fallback.SelectionMode != ports.ModelSelectionText || !fallback.AllowCustom {
+		t.Fatalf("open-interpreter fallback = %#v", fallback)
+	}
+}
+
+func TestParseOpenInterpreterModelsKeepsVisibleModelsAndEfforts(t *testing.T) {
+	output := []byte(`{"models":[
+		{"slug":"gpt-6-sol","display_name":"GPT-6 Sol","visibility":"list","default_reasoning_level":"medium","supported_reasoning_levels":[{"effort":"low"},{"effort":"medium"}],"model_messages":{"instructions_template":"do not use this as a model"}},
+		{"slug":"codex-auto-review","display_name":"Auto Review","visibility":"hide"},
+		{"slug":"custom/provider-model","display_name":"","visibility":"list"}
+	]}`)
+	got, err := parseOpenInterpreterModels(output)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := []ports.AgentModelInfo{
+		{ID: "gpt-6-sol", Label: "GPT-6 Sol", Efforts: []string{"low", "medium"}, DefaultEffort: "medium"},
+		{ID: "custom/provider-model"},
+	}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("models = %#v, want %#v", got, want)
+	}
+	if _, err := parseOpenInterpreterModels([]byte("not json")); err == nil {
+		t.Fatal("malformed catalog accepted")
+	}
+}
+
+func TestOpenInterpreterCatalogFingerprintTracksNativeAccount(t *testing.T) {
+	root := t.TempDir()
+	env := map[string]string{"INTERPRETER_HOME": root}
+	request := ports.AgentModelDiscoveryRequest{AgentID: "open-interpreter", Env: env}
+	first := (Discoverer{}).CatalogFingerprint(context.Background(), request)
+	if err := os.WriteFile(filepath.Join(root, "auth.json"), []byte(`{"account":"one"}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	second := (Discoverer{}).CatalogFingerprint(context.Background(), request)
+	if first == second {
+		t.Fatal("native login did not invalidate the catalog")
+	}
+	if err := os.WriteFile(filepath.Join(root, "auth.json"), []byte(`{"account":"two"}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if second == (Discoverer{}).CatalogFingerprint(context.Background(), request) {
+		t.Fatal("account change did not invalidate the catalog")
+	}
+}
+
+// model_catalog_json replaces the native catalog, so editing only the file it
+// names must invalidate. A relative path resolves against its config file's
+// directory; a project layer may name an absolute path.
+func TestOpenInterpreterCatalogFingerprintTracksReferencedModelCatalog(t *testing.T) {
+	root := t.TempDir()
+	workspace := t.TempDir()
+	external := filepath.Join(t.TempDir(), "project-models.json")
+	write := func(path, content string) {
+		t.Helper()
+		if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(path, []byte(content), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	write(filepath.Join(root, "config.toml"), `model_catalog_json = "models.json"`+"\n")
+	write(filepath.Join(root, "models.json"), `{"models":[{"slug":"one"}]}`)
+	write(filepath.Join(workspace, ".openinterpreter", "config.toml"), "model_catalog_json = "+strconv.Quote(external)+"\n")
+	write(external, `{"models":[{"slug":"project-one"}]}`)
+	request := ports.AgentModelDiscoveryRequest{AgentID: "open-interpreter", WorkingDir: workspace, Env: map[string]string{"INTERPRETER_HOME": root}}
+	fingerprint := func() string { return (Discoverer{}).CatalogFingerprint(context.Background(), request) }
+
+	before := fingerprint()
+	write(filepath.Join(root, "models.json"), `{"models":[{"slug":"two"}]}`)
+	afterUser := fingerprint()
+	if afterUser == before {
+		t.Fatal("editing the user-referenced model catalog did not invalidate the catalog")
+	}
+	write(external, `{"models":[{"slug":"project-two"}]}`)
+	if fingerprint() == afterUser {
+		t.Fatal("editing the project-referenced model catalog did not invalidate the catalog")
+	}
+}
+
+// Native discovery reads project layers from the working directory up to the
+// project root and expands "~/" in model_catalog_json against the home
+// directory, so both must reach the fingerprint.
+func TestOpenInterpreterCatalogFingerprintTracksAncestorLayerAndHomePath(t *testing.T) {
+	root := t.TempDir()
+	repo := t.TempDir()
+	home := t.TempDir()
+	workingDir := filepath.Join(repo, "src", "pkg")
+	for _, dir := range []string{filepath.Join(repo, ".git"), workingDir, filepath.Join(repo, ".openinterpreter")} {
+		if err := os.MkdirAll(dir, 0o700); err != nil {
+			t.Fatal(err)
+		}
+	}
+	write := func(path, content string) {
+		t.Helper()
+		if err := os.WriteFile(path, []byte(content), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	write(filepath.Join(repo, ".git", "HEAD"), "ref: refs/heads/main\n")
+	write(filepath.Join(repo, ".openinterpreter", "config.toml"), `model_catalog_json = "~/home-models.json"`+"\n")
+	write(filepath.Join(home, "home-models.json"), `{"models":[{"slug":"one"}]}`)
+	request := ports.AgentModelDiscoveryRequest{AgentID: "open-interpreter", WorkingDir: workingDir, Env: map[string]string{
+		"INTERPRETER_HOME": root, "HOME": home, "USERPROFILE": home,
+	}}
+	fingerprint := func() string { return (Discoverer{}).CatalogFingerprint(context.Background(), request) }
+
+	before := fingerprint()
+	write(filepath.Join(home, "home-models.json"), `{"models":[{"slug":"two"}]}`)
+	if fingerprint() == before {
+		t.Fatal("editing a home-relative catalog named by an ancestor project layer did not invalidate the catalog")
+	}
+}
+
+// project_root_markers in the user layer replaces the default ".git", so an
+// ancestor holding a configured marker supplies a project layer, and an empty
+// list limits discovery to the working directory.
+func TestOpenInterpreterCatalogFingerprintUsesConfiguredRootMarkers(t *testing.T) {
+	root := t.TempDir()
+	repo := t.TempDir()
+	workingDir := filepath.Join(repo, "src")
+	for _, dir := range []string{workingDir, filepath.Join(repo, ".openinterpreter")} {
+		if err := os.MkdirAll(dir, 0o700); err != nil {
+			t.Fatal(err)
+		}
+	}
+	write := func(path, content string) {
+		t.Helper()
+		if err := os.WriteFile(path, []byte(content), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	previous := openInterpreterSystemConfig
+	openInterpreterSystemConfig = func() string { return filepath.Join(t.TempDir(), "absent.toml") }
+	t.Cleanup(func() { openInterpreterSystemConfig = previous })
+	write(filepath.Join(repo, ".project"), "")
+	write(filepath.Join(repo, ".openinterpreter", "config.toml"), `model_catalog_json = "models.json"`+"\n")
+	write(filepath.Join(repo, ".openinterpreter", "models.json"), `{"models":[{"slug":"one"}]}`)
+	request := ports.AgentModelDiscoveryRequest{AgentID: "open-interpreter", WorkingDir: workingDir, Env: map[string]string{"INTERPRETER_HOME": root}}
+	fingerprint := func() string { return (Discoverer{}).CatalogFingerprint(context.Background(), request) }
+
+	write(filepath.Join(root, "config.toml"), `project_root_markers = [".project"]`+"\n")
+	before := fingerprint()
+	write(filepath.Join(repo, ".openinterpreter", "models.json"), `{"models":[{"slug":"two"}]}`)
+	if fingerprint() == before {
+		t.Fatal("a catalog named by the configured-marker root's layer did not invalidate the catalog")
+	}
+	if got := openInterpreterProjectConfigs(workingDir, []string{}); len(got) != 1 || got[0] != filepath.Join(workingDir, ".openinterpreter", "config.toml") {
+		t.Fatalf("empty root markers = %v; want only the working directory layer", got)
+	}
+}
+
+// The system layer selects the provider when the user layer names none and can
+// name a model_catalog_json file, so both are discovery inputs.
+func TestOpenInterpreterCatalogFingerprintTracksSystemLayer(t *testing.T) {
+	root := t.TempDir()
+	systemDir := t.TempDir()
+	system := filepath.Join(systemDir, "config.toml")
+	previous := openInterpreterSystemConfig
+	openInterpreterSystemConfig = func() string { return system }
+	t.Cleanup(func() { openInterpreterSystemConfig = previous })
+	write := func(path, content string) {
+		t.Helper()
+		if err := os.WriteFile(path, []byte(content), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	write(system, `model_provider = "anthropic"`+"\n")
+	request := ports.AgentModelDiscoveryRequest{AgentID: "open-interpreter", Env: map[string]string{"INTERPRETER_HOME": root}}
+	fingerprint := func() string { return (Discoverer{}).CatalogFingerprint(context.Background(), request) }
+
+	anthropic := fingerprint()
+	write(system, `model_provider = "openai"`+"\n"+`model_catalog_json = "models.json"`+"\n")
+	write(filepath.Join(systemDir, "models.json"), `{"models":[{"slug":"one"}]}`)
+	withCatalog := fingerprint()
+	if withCatalog == anthropic {
+		t.Fatal("changing the system provider did not invalidate the catalog")
+	}
+	write(filepath.Join(systemDir, "models.json"), `{"models":[{"slug":"two"}]}`)
+	if fingerprint() == withCatalog {
+		t.Fatal("editing the catalog named by the system layer did not invalidate the catalog")
 	}
 }
 

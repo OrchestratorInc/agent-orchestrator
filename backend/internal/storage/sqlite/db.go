@@ -2268,7 +2268,8 @@ func reconcileHarnessConstraint(db *sql.DB) error {
 	needsCommandCode := !strings.Contains(schema, "'command-code'")
 	needsStakpak := !strings.Contains(schema, "'stakpak'")
 	needsMiniMaxCode := !strings.Contains(schema, "'minimax-code'")
-	if !needsNativeAssistant && !needsMemcode && !needsStakpak && !needsMuse && !needsKimchi && !needsPrimeAgent && !needsOMP && !needsGemini && !needsUnreal && !needsCodewhale && !needsMiMo && !needsDeepSeek && !needsOpenHands && !needsCommandCode && !needsDockerAgent && !needsFX && !needsOpenCodeV2 && !needsMiniMaxCode {
+	needsOpenInterpreter := !strings.Contains(schema, "'open-interpreter'")
+	if !needsNativeAssistant && !needsMemcode && !needsStakpak && !needsMuse && !needsKimchi && !needsPrimeAgent && !needsOMP && !needsGemini && !needsUnreal && !needsCodewhale && !needsMiMo && !needsDeepSeek && !needsOpenHands && !needsCommandCode && !needsDockerAgent && !needsFX && !needsOpenCodeV2 && !needsMiniMaxCode && !needsOpenInterpreter {
 		return nil
 	}
 	if _, err := db.Exec(`PRAGMA writable_schema = ON`); err != nil {
@@ -2308,6 +2309,15 @@ func reconcileHarnessConstraint(db *sql.DB) error {
 			return fmt.Errorf("schema repair: normalize MiniMax Code constraint: %w", err)
 		}
 		needsMiniMaxCode = true
+	}
+	if !needsOpenInterpreter {
+		// Open Interpreter's migration runs after MiniMax Code's, so it is last
+		// before 'fake' on a fresh database. Remove it the same way and append
+		// it again after MiniMax Code.
+		if _, err := db.Exec(`UPDATE sqlite_master SET sql = replace(sql, '''open-interpreter'', ', '') WHERE type = 'table' AND name = 'sessions'`); err != nil {
+			return fmt.Errorf("schema repair: normalize Open Interpreter constraint: %w", err)
+		}
+		needsOpenInterpreter = true
 	}
 	type replacement struct {
 		old string
@@ -2442,6 +2452,10 @@ func reconcileHarnessConstraint(db *sql.DB) error {
 	if needsMiniMaxCode {
 		repairs = append(repairs, replacement{"'fake'))", "'minimax-code', 'fake'))"})
 	}
+	// Open Interpreter's migration runs after MiniMax Code's, so it follows it.
+	if needsOpenInterpreter {
+		repairs = append(repairs, replacement{"'fake'))", "'open-interpreter', 'fake'))"})
+	}
 	for _, r := range repairs {
 		if _, err := db.Exec(
 			`UPDATE sqlite_master
@@ -2508,6 +2522,9 @@ WHERE type = 'table' AND name = 'sessions'`,
 	}
 	if !strings.Contains(schema, "'stakpak'") {
 		return fmt.Errorf("schema repair: sessions harness constraint is missing Stakpak")
+	}
+	if !strings.Contains(schema, "'open-interpreter'") {
+		return fmt.Errorf("schema repair: sessions harness constraint is missing Open Interpreter")
 	}
 	return nil
 }
