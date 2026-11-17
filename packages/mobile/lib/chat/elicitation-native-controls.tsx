@@ -25,6 +25,8 @@ export type ElicitationTextFieldProps = {
 	numeric?: boolean;
 	maxLength?: number;
 	onChange(value: string | number): void;
+	/** The field took focus (see RevealFocusedField). */
+	onFocus?(): void;
 };
 export type ElicitationActionProps = {
 	label: string;
@@ -75,7 +77,7 @@ export function ElicitationChoiceList({ choices, selected, multi, onChange }: El
 	);
 }
 
-export function ElicitationTextField({ value, label, numeric, maxLength, onChange }: ElicitationTextFieldProps) {
+export function ElicitationTextField({ value, label, numeric, maxLength, onChange, onFocus }: ElicitationTextFieldProps) {
 	const t = useTheme();
 	const { scheme } = useThemeState();
 	const controlledText = value === undefined ? "" : String(value);
@@ -89,6 +91,7 @@ export function ElicitationTextField({ value, label, numeric, maxLength, onChang
 				maxLength={maxLength}
 				keyboardOptions={{ keyboardType: numeric ? "decimal" : "text" }}
 				onValueChange={(next) => changeText(numeric ? (next === "" ? "" : Number(next)) : next)}
+				onFocusChanged={(focused) => { if (focused) onFocus?.(); }}
 				textStyle={{ color: t.textPrimary, fontFamily: font.regular, fontSize: type.subheadline.fontSize }}
 				// The caret and selection take the colour the app's React Native fields use.
 				textSelectionColors={{ handleColor: t.highlight, backgroundColor: t.selection }}

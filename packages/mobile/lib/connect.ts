@@ -43,7 +43,24 @@ export type ConnectDeps = {
 	touch: (hostId: string) => Promise<void>;
 	pair?: (config: ServerConfig) => Promise<PairDeviceResult>;
 	saveToken?: (hostId: string, token: string, fallbackToken?: string) => Promise<void>;
+	/** How long connect waits for the endpoint refresh before using the connection; see REFRESH_WAIT_MS. */
+	refreshWaitMs?: number;
 };
+
+/**
+ * How long a connect waits for the endpoint refresh before handing back the
+ * connection that just answered.
+ *
+ * The refresh is a second round trip after the race, and every connect and
+ * resume waited for it before the board, the chat's live updates or anything
+ * else could start: on a slow link, seconds of "reconnecting" over a machine
+ * that had already answered. A fast link finishes it well inside this; a slow
+ * one gets the connection now and lets the refresh finish behind it. What it
+ * learns is for the next race. Its one other job, falling back to the kept
+ * pairing password when a release without device tokens refuses this phone's
+ * token, still happens; landing late, it is used from the next connect on.
+ */
+export const REFRESH_WAIT_MS = 1_000;
 
 /**
  * Connects to a paired machine: race its endpoints, then refresh what we know
@@ -102,7 +119,7 @@ export async function connectHost(id: string, deps: ConnectDeps): Promise<Connec
 		await deps.touch(hostKey);
 		return { ok: true, config, endpoint: outcome.endpoint, hostId: hostKey };
 	}
-	try {
+	const refreshing = (async () => { try {
 		await refreshEndpoints();
 	} catch (error) {
 		// A failed refresh must not cost us a working connection: the endpoints
@@ -125,7 +142,10 @@ export async function connectHost(id: string, deps: ConnectDeps): Promise<Connec
 				config = configForEndpoint(outcome.endpoint, token, hostKeyForConfig);
 			}
 		}
-	}
+	} })();
+	let waited: ReturnType<typeof setTimeout> | undefined;
+	await Promise.race([refreshing, new Promise<void>((resolve) => { waited = setTimeout(resolve, deps.refreshWaitMs ?? REFRESH_WAIT_MS); })]);
+	clearTimeout(waited);
 	await deps.touch(hostKey);
 
 	return { ok: true, config, endpoint: outcome.endpoint, hostId: hostKey };

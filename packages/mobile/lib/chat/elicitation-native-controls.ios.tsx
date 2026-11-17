@@ -57,7 +57,7 @@ export function ElicitationChoiceList({ choices, selected, multi, onChange }: El
 	</Host>;
 }
 
-export function ElicitationTextField({ value, label, numeric, maxLength, onChange }: ElicitationTextFieldProps) {
+export function ElicitationTextField({ value, label, numeric, maxLength, onChange, onFocus }: ElicitationTextFieldProps) {
 	const t = useTheme();
 	const { scheme } = useThemeState();
 	const controlledText = value === undefined ? "" : String(value);
@@ -73,6 +73,7 @@ export function ElicitationTextField({ value, label, numeric, maxLength, onChang
 				const changed = numeric ? (next === "" ? "" : Number(next)) : next;
 				changeText(changed);
 			}}
+			onFocusChange={(focused) => { if (focused) onFocus?.(); }}
 			modifiers={[
 				textFieldStyle("plain"),
 				frame({ maxWidth: 1000, minHeight: touchTarget, alignment: "leading" }),

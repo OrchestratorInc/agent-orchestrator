@@ -19,6 +19,12 @@ export const MIN_DOCK_INSET = 8;
  */
 export const KEYBOARD_DOCK_GAP = 8;
 
+/** Room between the end of a conversation and a composer floating over it. */
+export const CONVERSATION_END_GAP = 24;
+
+/** How much of `CONVERSATION_END_GAP` the conversation gives up, with the keys, while the keyboard is up. */
+export const KEYBOARD_END_GAP_TUCK = 8;
+
 // KeyboardAvoidingView measures against the window while this screen begins
 // below a native-stack header. Supplying that stack's measured header height
 // reconciles those coordinate spaces without assuming a particular iPhone,
