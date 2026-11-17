@@ -14,9 +14,9 @@ import (
 // remoteJSONCompressionLevel is the gzip/deflate level for remote JSON. A remote
 // client usually reads over a host's upload or a tunnel, where bytes cost more
 // than the daemon's CPU. Measured on conversation responses on one M1 core,
-// level 6 sends history pages 15% smaller than BestSpeed (level 1) and live-turn
-// refreshes 8% smaller, for about 0.3 ms more per 60 KB page and 35 µs more per
-// refresh. Level 9 costs 2.7 times level 6's CPU for 1-3 more points.
+// level 6 sends history pages 15% smaller than BestSpeed (level 1) and the
+// refreshes while a reply streams 8% smaller, for about 0.3 ms more per 60 KB
+// page and 35 µs more per refresh. Level 9 costs 2.7 times level 6's CPU for 1-3 more points.
 const remoteJSONCompressionLevel = 6
 
 // remoteJSONCompression compresses only remote JSON. Chi retains responsibility
