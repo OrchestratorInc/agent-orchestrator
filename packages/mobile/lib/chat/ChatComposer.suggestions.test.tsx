@@ -187,3 +187,17 @@ it("closes the list after replacing a token that already has a space after it", 
 	expect(renderer.root.findByType(TextInput).props.value).toBe("/approve fix");
 	expect(panels()).toHaveLength(0);
 });
+
+it("falls back to the current paths when a reload fails after an earlier load", async () => {
+	const p = props();
+	p.onLoadFiles = vi.fn(async () => ({ paths: ["old.ts"], truncated: false }));
+	await act(async () => { renderer = create(<ChatComposer {...p} />); });
+	await type("see @");
+	expect(labels()).toEqual(["old.ts"]);
+	await type("see ");
+	const next = { ...p, filePaths: ["new.ts"], onLoadFiles: vi.fn(async () => { throw new Error("offline"); }) } as ComponentProps<typeof ChatComposer>;
+	await act(async () => renderer.update(<ChatComposer {...next} />));
+	await type("see @");
+	expect(next.onLoadFiles).toHaveBeenCalledTimes(1);
+	expect(labels()).toEqual(["new.ts"]);
+});

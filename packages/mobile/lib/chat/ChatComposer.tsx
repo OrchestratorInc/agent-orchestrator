@@ -576,7 +576,15 @@ function Composer({
 		const load = suggestionKind === "skills"
 			? loaders.current.onLoadSkills().then((next) => { if (pickerGate.isCurrent(request)) setLoadedSkills(next); })
 			: loaders.current.onLoadFiles().then((next) => { if (pickerGate.isCurrent(request)) setLoadedFiles(next); });
-		void load.catch(() => {}).finally(() => { if (pickerGate.isCurrent(request)) setLoadingSuggestions(undefined); });
+		// A failed reload drops the earlier result rather than keep it over the
+		// current `skills`/`filePaths`, which may be newer.
+		void load
+			.catch(() => {
+				if (!pickerGate.isCurrent(request)) return;
+				if (suggestionKind === "skills") setLoadedSkills(undefined);
+				else setLoadedFiles(undefined);
+			})
+			.finally(() => { if (pickerGate.isCurrent(request)) setLoadingSuggestions(undefined); });
 	}, [pickerGate, suggestionKind]);
 	const suggestionItems = useMemo(() => {
 		if (!suggestion) return undefined;
