@@ -144,6 +144,31 @@ describe("moveSession", () => {
 		expect(calls).not.toContain("/api/v1/sessions/{sessionId}/resume-agent");
 	});
 
+	it("keeps the agent here stopped when a refusal follows a lost answer, also on Try again", async () => {
+		const calls: string[] = [];
+		const replies = {
+			"/api/v1/sessions/{sessionId}/exit-agent": ok(),
+			"/api/v1/sessions/{sessionId}/move/export": ok(exported),
+			"/api/v1/sessions/{sessionId}/resume-agent": ok(),
+			"/api/v1/sessions/{sessionId}/move/complete": ok(),
+		};
+		const cloudRequest: MoveDeps["cloudRequest"] = {};
+		const expired = new CloudCpError("Sign in again.", { status: 401, code: "unauthorized" });
+		const cp = cloud();
+		// The first create may have reached Cloud; the retry is refused because the sign-in expired.
+		cp.createSession.mockRejectedValueOnce(new Error("network error")).mockRejectedValueOnce(expired);
+		await expect(moveSession({ sessionId: "app-1", moveId: "m-6", target }, { source: fakeDaemon(replies, calls), cloud: cp, cloudRequest }))
+			.rejects.toMatchObject({ step: "import", rolledBack: false, message: expect.stringContaining("Sign in again.") });
+		// Try again is refused too, and still does not resume the agent.
+		cp.createSession.mockRejectedValueOnce(expired);
+		await expect(moveSession({ sessionId: "app-1", moveId: "m-6", target }, { source: fakeDaemon(replies, calls), cloud: cp, cloudRequest }))
+			.rejects.toMatchObject({ rolledBack: false });
+		expect(calls).not.toContain("/api/v1/sessions/{sessionId}/resume-agent");
+		// Once Cloud answers, the move finishes in the session the first create made.
+		await expect(moveSession({ sessionId: "app-1", moveId: "m-6", target }, { source: fakeDaemon(replies, calls), cloud: cp, cloudRequest }))
+			.resolves.toMatchObject({ sessionId: "cloud-9" });
+	});
+
 	it("leaves recording the move to the retry queue when this computer does not answer", async () => {
 		// No reply for move/complete: the daemon client throws, as it does when the request gets no answer.
 		const source = fakeDaemon({

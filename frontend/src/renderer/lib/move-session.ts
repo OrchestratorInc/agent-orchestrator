@@ -61,9 +61,10 @@ export interface MoveDeps {
 	 * Holds the Cloud request of the move's first export. AO Cloud accepts a
 	 * reused idempotency key only with the same body, and a retry's export
 	 * differs (a new note time, a branch already pushed), so a retry under the
-	 * same moveId resends this one.
+	 * same moveId resends this one. createUnsettled is set once a create got no
+	 * clear answer, so a later refusal on Try again does not resume the agent.
 	 */
-	cloudRequest?: { current?: CloudSessionRequest };
+	cloudRequest?: { current?: CloudSessionRequest; createUnsettled?: boolean };
 	/**
 	 * Uploads the agent's conversation, gzipped, under importId for the Cloud
 	 * session to resume. Unset when Cloud cannot resume it, which leaves the
@@ -140,7 +141,9 @@ export async function moveSession(
 	const pushed = { branch: m.branch, tip: m.tip, wip: m.wip };
 	// A create whose answer was lost may still have made the session, and asking
 	// again under the same key returns it. The agent here resumes only when
-	// Cloud refuses; otherwise both could work on the branch.
+	// Cloud refuses and no create of this move went unanswered; a later refusal
+	// (an expired sign-in, say) does not say the earlier one made nothing.
+	const state = deps.cloudRequest ?? {};
 	let cloudSessionId: string | undefined;
 	let failure: unknown;
 	for (let attempt = 0; attempt < 2 && cloudSessionId === undefined; attempt++) {
@@ -149,12 +152,16 @@ export async function moveSession(
 		} catch (error) {
 			failure = error;
 			if (cloudRefused(error)) break;
+			state.createUnsettled = true;
 		}
 	}
 	if (cloudSessionId === undefined) {
-		if (cloudRefused(failure)) return rollback("import", failure, "Could not start the session in Orchestrator Cloud", pushed);
+		if (cloudRefused(failure) && !state.createUnsettled) return rollback("import", failure, "Could not start the session in Orchestrator Cloud", pushed);
+		const settle = "The agent here stays stopped; Try again finishes the move.";
 		throw new MoveError(
-			"Orchestrator Cloud did not answer, so the session may already be starting there. The agent here stays stopped; Try again finishes the move.",
+			cloudRefused(failure)
+				? `${apiErrorMessage(failure)} An earlier attempt may already have started the session in Orchestrator Cloud. ${settle}`
+				: `Orchestrator Cloud did not answer, so the session may already be starting there. ${settle}`,
 			"import",
 			errorCode(failure),
 			false,
