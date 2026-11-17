@@ -120,6 +120,7 @@ export type BrowserProfileImportOptions = {
 	env?: NodeJS.ProcessEnv;
 	now?: () => Date;
 	sourceLstat?: typeof lstat;
+	readMacPassword?: typeof readMacChromiumPassword;
 };
 
 class SourceBudget {
@@ -754,7 +755,7 @@ export class BrowserProfileImportService {
 				onProgress({ requestId: request.requestId, phase: "permission", completed: 0, total: selected.length });
 			}
 			const decryptor = request.includeCookies
-				? await ChromiumCookieDecryptor.create(source, this.context.platform, signal)
+				? await ChromiumCookieDecryptor.create(source, this.context.platform, signal, this.options.readMacPassword)
 				: null;
 			const readData: ReadProfileData[] = [];
 			for (const [index, profile] of selected.entries()) {
@@ -1180,6 +1181,14 @@ function readChromiumCookies(
 	return withReadOnlyDatabase(file, (database) => {
 		requireTable(database, "cookies", "The selected Chromium profile does not contain supported cookie data.");
 		const columns = tableColumns(database, "cookies");
+		const versionRow = hasTable(database, "meta")
+			? database.prepare("SELECT value FROM meta WHERE key = 'version'").get() as { value?: unknown } | undefined
+			: undefined;
+		// Old databases (and exports without metadata) contain bare cookie values.
+		const databaseVersion = versionRow ? Number(versionRow.value) : 0;
+		if (!Number.isSafeInteger(databaseVersion) || databaseVersion < 0) {
+			throw new Error("The selected Chromium cookie database has an invalid version.");
+		}
 		const hasPartitionKey = columns.has("top_frame_site_key");
 		const isolationWhere = hasPartitionKey ? "WHERE COALESCE(top_frame_site_key, '') = ''" : "";
 		const total = countRows(database, "cookies");
@@ -1202,8 +1211,8 @@ function readChromiumCookies(
 			let value = stringValue(row.value);
 			if (!value) {
 				const encrypted = Buffer.isBuffer(row.encrypted_value) ? row.encrypted_value : Buffer.alloc(0);
-				value = decryptor?.decrypt(encrypted, domain) ?? "";
-				if (!value && encrypted.length > 0) {
+				const decrypted = decryptor?.decrypt(encrypted, domain, databaseVersion) ?? null;
+				if (decrypted === null && encrypted.length > 0) {
 					if (encrypted.subarray(0, 3).toString() === APP_BOUND_ENCRYPTION_PREFIX) {
 						appBoundSkipped += 1;
 					} else {
@@ -1211,6 +1220,7 @@ function readChromiumCookies(
 					}
 					continue;
 				}
+				value = decrypted ?? "";
 			}
 			raw.push({
 				domain,
@@ -1618,7 +1628,7 @@ class ChromiumCookieDecryptor {
 		private readonly key: Buffer | null,
 	) {}
 
-	static async create(source: InternalSource, platform: NodeJS.Platform, signal: AbortSignal): Promise<ChromiumCookieDecryptor> {
+	static async create(source: InternalSource, platform: NodeJS.Platform, signal: AbortSignal, readMacPassword = readMacChromiumPassword): Promise<ChromiumCookieDecryptor> {
 		if (source.descriptor.family !== "chromium") return new ChromiumCookieDecryptor(platform, null);
 		if (platform === "win32") {
 			try {
@@ -1634,15 +1644,15 @@ class ChromiumCookieDecryptor {
 			}
 		}
 		if (platform === "darwin") {
-			return new ChromiumCookieDecryptor(platform, await readMacChromiumPassword(source.descriptor.chromiumKeychainNames ?? [], signal));
+			return new ChromiumCookieDecryptor(platform, await readMacPassword(source.descriptor.chromiumKeychainNames ?? [], signal));
 		}
 		return new ChromiumCookieDecryptor(platform, null);
 	}
 
-	decrypt(encrypted: Buffer, host: string): string | null {
+	decrypt(encrypted: Buffer, host: string, databaseVersion: number): string | null {
 		if (encrypted.length === 0 || !this.key) return null;
-		if (this.platform === "win32") return decryptWindowsChromiumCookie(encrypted, this.key, host);
-		if (this.platform === "darwin") return decryptMacChromiumCookie(encrypted, this.key, host);
+		if (this.platform === "win32") return decryptWindowsChromiumCookie(encrypted, this.key, host, databaseVersion);
+		if (this.platform === "darwin") return decryptMacChromiumCookie(encrypted, this.key, host, databaseVersion);
 		return null;
 	}
 }
@@ -1674,7 +1684,7 @@ export async function readMacChromiumPassword(
 	throw new Error("The browser's Safe Storage key was not found. Turn off cookies to import history only.");
 }
 
-export function decryptWindowsChromiumCookie(encrypted: Buffer, key: Buffer, host: string): string | null {
+export function decryptWindowsChromiumCookie(encrypted: Buffer, key: Buffer, host: string, databaseVersion: number): string | null {
 	if (encrypted.subarray(0, 3).toString() !== "v10" && encrypted.subarray(0, 3).toString() !== "v11") return null;
 	if (encrypted.length < 3 + 12 + 16) return null;
 	try {
@@ -1687,33 +1697,34 @@ export function decryptWindowsChromiumCookie(encrypted: Buffer, key: Buffer, hos
 		return stripChromiumCookieHostDigest(
 			Buffer.concat([decipher.update(ciphertext), decipher.final()]),
 			host,
-		).toString("utf8");
+			databaseVersion,
+		)?.toString("utf8") ?? null;
 	} catch {
 		return null;
 	}
 }
 
-function decryptMacChromiumCookie(encrypted: Buffer, password: Buffer, host: string): string | null {
+function decryptMacChromiumCookie(encrypted: Buffer, password: Buffer, host: string, databaseVersion: number): string | null {
 	const prefix = encrypted.subarray(0, 3).toString();
 	if (prefix !== "v10" && prefix !== "v11") return null;
 	try {
 		const key = pbkdf2Sync(password, "saltysalt", 1_003, 16, "sha1");
 		const decipher = createDecipheriv("aes-128-cbc", key, Buffer.alloc(16, 0x20));
 		const plaintext = Buffer.concat([decipher.update(encrypted.subarray(3)), decipher.final()]);
-		return stripChromiumCookieHostDigest(plaintext, host).toString("utf8");
+		return stripChromiumCookieHostDigest(plaintext, host, databaseVersion)?.toString("utf8") ?? null;
 	} catch {
 		return null;
 	}
 }
 
-function stripChromiumCookieHostDigest(plaintext: Buffer, host: string): Buffer {
-	// Chromium cookie DB v24 prefixes encrypted values with SHA-256(host_key)
-	// and verifies/removes it after platform decryption. Older databases do not,
-	// so only strip an exact digest match.
+function stripChromiumCookieHostDigest(plaintext: Buffer, host: string, databaseVersion: number): Buffer | null {
+	if (databaseVersion < 24) return plaintext;
+	// v24+ requires a matching SHA-256(host_key), even when AES padding is valid.
+	// A mismatch is corrupt data, never a legacy cookie value.
 	const hostDigest = createHash("sha256").update(host).digest();
 	return plaintext.subarray(0, hostDigest.length).equals(hostDigest)
 		? plaintext.subarray(hostDigest.length)
-		: plaintext;
+		: null;
 }
 
 async function windowsDPAPIUnprotect(input: Buffer): Promise<Buffer | null> {
