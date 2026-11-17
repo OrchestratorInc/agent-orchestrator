@@ -169,6 +169,43 @@ describe("moveSession", () => {
 			.resolves.toMatchObject({ sessionId: "cloud-9" });
 	});
 
+	it("asks Cloud for an unanswered create's session on Try again before exporting again", async () => {
+		const cloudRequest: MoveDeps["cloudRequest"] = {};
+		const cp = cloud(async () => { throw new Error("network error"); });
+		const first: string[] = [];
+		await expect(moveSession({ sessionId: "app-1", moveId: "m-7", target }, {
+			source: fakeDaemon({ "/api/v1/sessions/{sessionId}/exit-agent": ok(), "/api/v1/sessions/{sessionId}/move/export": ok(exported) }, first),
+			cloud: cp,
+			cloudRequest,
+		})).rejects.toMatchObject({ rolledBack: false });
+		// The Cloud session has since pushed to the branch, so a new export would be refused.
+		const retry: string[] = [];
+		const source = fakeDaemon({
+			"/api/v1/sessions/{sessionId}/move/export": fail("MOVE_REMOTE_AHEAD", "Origin's branch has commits this machine does not."),
+			"/api/v1/sessions/{sessionId}/resume-agent": ok(),
+			"/api/v1/sessions/{sessionId}/move/complete": ok(),
+		}, retry);
+		cp.createSession.mockImplementation(async () => ({ session: { id: "cloud-9" } }));
+		const steps: string[] = [];
+		await expect(moveSession({ sessionId: "app-1", moveId: "m-7", target }, { source, cloud: cp, cloudRequest, onStep: (step) => steps.push(step) }))
+			.resolves.toMatchObject({ sessionId: "cloud-9" });
+		expect(retry).toEqual(["/api/v1/sessions/{sessionId}/move/complete"]);
+		expect(steps).toEqual(["import", "complete"]);
+		expect(cp.createSession.mock.calls.at(-1)).toEqual(cp.createSession.mock.calls[0]);
+	});
+
+	it("never resumes the agent here while a create of the move is unsettled", async () => {
+		const calls: string[] = [];
+		const source = fakeDaemon({
+			"/api/v1/sessions/{sessionId}/exit-agent": ok(),
+			"/api/v1/sessions/{sessionId}/move/export": fail("MOVE_REMOTE_AHEAD", "Origin's branch has commits this machine does not."),
+			"/api/v1/sessions/{sessionId}/resume-agent": ok(),
+		}, calls);
+		const error = await moveSession({ sessionId: "app-1", moveId: "m-8", target }, { source, cloud: cloud(), cloudRequest: { createUnsettled: true } }).catch((e: unknown) => e);
+		expect(error).toMatchObject({ step: "export", rolledBack: false, message: expect.stringContaining("An earlier attempt may already have started the session") });
+		expect(calls).not.toContain("/api/v1/sessions/{sessionId}/resume-agent");
+	});
+
 	it("leaves recording the move to the retry queue when this computer does not answer", async () => {
 		// No reply for move/complete: the daemon client throws, as it does when the request gets no answer.
 		const source = fakeDaemon({
