@@ -14,9 +14,9 @@
         "sseBytes": 0,
         "headerBytesIn": 192,
         "framingBytesIn": 64,
-        "bodyEncodedBytes": 213952,
-        "bodyDecodedBytes": 213952,
-        "wireBytesIn": 214144,
+        "bodyEncodedBytes": 54080,
+        "bodyDecodedBytes": 54080,
+        "wireBytesIn": 54272,
         "wireBytesOut": 256
       }
     },
@@ -42,16 +42,16 @@
       "phase": "history-full",
       "transport": "local",
       "max": {
-        "requests": 1,
+        "requests": 2,
         "cdcRows": 0,
         "sseFrames": 0,
         "sseBytes": 0,
-        "headerBytesIn": 192,
+        "headerBytesIn": 384,
         "framingBytesIn": 64,
-        "bodyEncodedBytes": 213952,
-        "bodyDecodedBytes": 213952,
-        "wireBytesIn": 214144,
-        "wireBytesOut": 256
+        "bodyEncodedBytes": 214720,
+        "bodyDecodedBytes": 214720,
+        "wireBytesIn": 215104,
+        "wireBytesOut": 448
       }
     },
     {
@@ -76,16 +76,16 @@
       "phase": "live-turn",
       "transport": "local",
       "max": {
-        "requests": 40,
+        "requests": 42,
         "cdcRows": 44,
         "sseFrames": 45,
         "sseBytes": 15680,
-        "headerBytesIn": 7296,
-        "framingBytesIn": 960,
-        "bodyEncodedBytes": 8591232,
-        "bodyDecodedBytes": 8591232,
-        "wireBytesIn": 8615040,
-        "wireBytesOut": 8640
+        "headerBytesIn": 7616,
+        "framingBytesIn": 896,
+        "bodyEncodedBytes": 2174912,
+        "bodyDecodedBytes": 2174912,
+        "wireBytesIn": 2198720,
+        "wireBytesOut": 9792
       }
     },
     {
@@ -102,7 +102,7 @@
         "bodyEncodedBytes": 80256,
         "bodyDecodedBytes": 366784,
         "wireBytesIn": 106240,
-        "wireBytesOut": 12800
+        "wireBytesOut": 12736
       }
     },
     {
@@ -119,7 +119,7 @@
         "bodyEncodedBytes": 18816,
         "bodyDecodedBytes": 72960,
         "wireBytesIn": 23168,
-        "wireBytesOut": 5952
+        "wireBytesOut": 5888
       }
     },
     {
@@ -133,9 +133,9 @@
         "sseBytes": 0,
         "headerBytesIn": 192,
         "framingBytesIn": 64,
-        "bodyEncodedBytes": 251776,
-        "bodyDecodedBytes": 251776,
-        "wireBytesIn": 251968,
+        "bodyEncodedBytes": 52992,
+        "bodyDecodedBytes": 52992,
+        "wireBytesIn": 53184,
         "wireBytesOut": 256
       }
     },
@@ -161,16 +161,16 @@
       "phase": "history-full",
       "transport": "local",
       "max": {
-        "requests": 1,
+        "requests": 2,
         "cdcRows": 0,
         "sseFrames": 0,
         "sseBytes": 0,
-        "headerBytesIn": 192,
+        "headerBytesIn": 384,
         "framingBytesIn": 64,
-        "bodyEncodedBytes": 251776,
-        "bodyDecodedBytes": 251776,
-        "wireBytesIn": 251968,
-        "wireBytesOut": 256
+        "bodyEncodedBytes": 252480,
+        "bodyDecodedBytes": 252480,
+        "wireBytesIn": 252864,
+        "wireBytesOut": 448
       }
     },
     {
@@ -195,16 +195,16 @@
       "phase": "live-turn",
       "transport": "local",
       "max": {
-        "requests": 47,
+        "requests": 49,
         "cdcRows": 51,
         "sseFrames": 52,
         "sseBytes": 18112,
-        "headerBytesIn": 8576,
-        "framingBytesIn": 1088,
-        "bodyEncodedBytes": 11926592,
-        "bodyDecodedBytes": 11926592,
-        "wireBytesIn": 11954240,
-        "wireBytesOut": 10112
+        "headerBytesIn": 8832,
+        "framingBytesIn": 1024,
+        "bodyEncodedBytes": 2630720,
+        "bodyDecodedBytes": 2630720,
+        "wireBytesIn": 2658304,
+        "wireBytesOut": 11328
       }
     },
     {
@@ -221,7 +221,7 @@
         "bodyEncodedBytes": 87808,
         "bodyDecodedBytes": 350912,
         "wireBytesIn": 117568,
-        "wireBytesOut": 14848
+        "wireBytesOut": 14784
       }
     },
     {
@@ -238,7 +238,7 @@
         "bodyEncodedBytes": 54016,
         "bodyDecodedBytes": 195328,
         "wireBytesIn": 67072,
-        "wireBytesOut": 17728
+        "wireBytesOut": 17600
       }
     }
   ]
