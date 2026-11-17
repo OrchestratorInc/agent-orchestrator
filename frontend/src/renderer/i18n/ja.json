@@ -1584,6 +1584,7 @@
 	"report.whatHappened": "何が起きましたか？",
 	"settings.agents": "サブスクリプション",
 	"sidebar.subscriptionAllowanceUnavailable": "サブスクリプションの利用上限は利用できません",
+	"sidebar.providerSubscriptionAllowanceUnavailable": "{{provider}} のサブスクリプション利用上限は利用できません",
 	"sidebar.subscriptionAllowanceRemaining": "{{provider}} · {{window}}：残り {{percent}}",
 	"sidebar.subscriptionAllowanceReset": "{{value}}後にリセット",
 	"settings.codexAccounts.add": "アカウントを追加",

@@ -22,17 +22,21 @@ export function SidebarSubscriptionAllowance({ tabIndex = 0 }: { tabIndex?: numb
 
 	const grouped = groupAccounts(accounts.data ?? []);
 	const summaries: Array<{ provider: string; text: string; reset?: string; checkedAt?: string; stale?: boolean }> = grouped.flatMap(({ provider, accounts: providerAccounts }) => {
-		const account = providerAccounts.find((candidate) => candidate.default && candidate.signedIn)
-			?? providerAccounts.find((candidate) => candidate.signedIn);
+		const account = providerAccounts.find((candidate) => candidate.default && candidate.signedIn);
 		if (!account) return [];
 		const window = account.limits?.windows.reduce<AgentAccountLimitWindow | undefined>((lowest, candidate) => {
 			if (!lowest || usedPercent(candidate.usedPercent) > usedPercent(lowest.usedPercent)) return candidate;
 			return lowest;
 		}, undefined);
-		if (!window) return [{ provider, text: t("sidebar.subscriptionAllowanceUnavailable", { provider: agentAccountProviderNames[provider] }), checkedAt: account.limits?.fetchedAt, stale: Boolean(account.problem || account.problemKind) }];
+		if (!window) return [{
+			provider,
+			text: t("sidebar.providerSubscriptionAllowanceUnavailable", { provider: agentAccountProviderNames[provider] }),
+			checkedAt: account.limits?.fetchedAt,
+			stale: Boolean(account.problem || account.problemKind),
+		}];
 		const remaining = 100 - usedPercent(window.usedPercent);
 		const percent = new Intl.NumberFormat(i18n.language, { style: "percent", maximumFractionDigits: 0 }).format(remaining / 100);
-		const reset = formatCountdown(window.resetsAt, new Date());
+		const reset = formatCountdown(window.resetsAt, new Date(), i18n.language);
 		return [{
 			provider,
 			text: t("sidebar.subscriptionAllowanceRemaining", {

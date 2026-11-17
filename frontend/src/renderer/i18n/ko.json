@@ -1584,6 +1584,7 @@
 	"report.whatHappened": "무슨 일이 있었나요?",
 	"settings.agents": "구독",
 	"sidebar.subscriptionAllowanceUnavailable": "구독 한도를 사용할 수 없습니다",
+	"sidebar.providerSubscriptionAllowanceUnavailable": "{{provider}} 구독 한도를 사용할 수 없습니다",
 	"sidebar.subscriptionAllowanceRemaining": "{{provider}} · {{window}}: {{percent}} 남음",
 	"sidebar.subscriptionAllowanceReset": "{{value}} 후 초기화",
 	"settings.codexAccounts.add": "계정 추가",

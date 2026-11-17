@@ -56,6 +56,10 @@ describe("formatCountdown", () => {
 		expect(formatCountdown("2026-10-31T10:00:00Z", now)).toBe("6d 0h");
 		expect(formatCountdown("2026-10-25T10:11:30Z", now)).toBe("12m");
 	});
+	it("localizes countdown units when a locale is provided", () => {
+		expect(formatCountdown("2026-10-25T13:45:00Z", now, "ja")).toContain("時間");
+		expect(formatCountdown("2026-10-25T13:45:00Z", now, "ja")).toContain("分");
+	});
 	it("returns nothing for a passed or missing reset", () => {
 		expect(formatCountdown("2026-10-25T09:00:00Z", now)).toBeNull();
 		expect(formatCountdown(null, now)).toBeNull();

@@ -41,10 +41,39 @@ describe("SidebarSubscriptionAllowance", () => {
 
 		render(<SidebarSubscriptionAllowance />);
 		const allowances = screen.getAllByTestId("sidebar-subscription-allowance");
-		expect(allowances[0]).toHaveTextContent("Codex · Session (5h): 75% left · Resets in 2h 0m");
+		expect(allowances[0]).toHaveTextContent("Codex · Session (5h): 75% left · Resets in 2 hr 0 min");
 		expect(allowances[1]).toHaveTextContent("Claude Code · Weekly: 20% left");
 		fireEvent.click(screen.getByRole("button", { name: /Codex.*75% left/ }));
 		expect(useUiStore.getState().settingsModal).toMatchObject({ scope: "global", section: "harness" });
+	});
+
+	it("shows provider-specific unavailable states when limits have no windows", () => {
+		accountsState.current = {
+			data: [
+				{ id: "codex-device", provider: "codex", default: true, device: true, signedIn: true, loggedIn: true, limits: { fetchedAt: new Date().toISOString(), windows: [] } },
+				{ id: "claude-device", provider: "claude", default: true, device: true, signedIn: true, loggedIn: true, limits: { fetchedAt: new Date().toISOString(), windows: [] } },
+			],
+			isLoading: false,
+			error: null,
+		};
+		render(<SidebarSubscriptionAllowance />);
+		expect(screen.getAllByTestId("sidebar-subscription-allowance").map((item) => item.textContent)).toEqual([
+			"Codex subscription limits unavailable",
+			"Claude Code subscription limits unavailable",
+		]);
+	});
+
+	it("does not use a signed-in non-default account when the default account is signed out", () => {
+		accountsState.current = {
+			data: [
+				{ id: "codex-default", provider: "codex", default: true, device: true, signedIn: false, loggedIn: false },
+				{ id: "codex-secondary", provider: "codex", default: false, device: true, signedIn: true, loggedIn: true, limits: { fetchedAt: new Date().toISOString(), windows: [{ id: "weekly", label: "Weekly", usedPercent: 10 }] } },
+			],
+			isLoading: false,
+			error: null,
+		};
+		render(<SidebarSubscriptionAllowance />);
+		expect(screen.getByTestId("sidebar-subscription-allowance")).toHaveTextContent("Subscription limits unavailable");
 	});
 
 	it("says limits are unavailable when the provider has not reported a window", () => {

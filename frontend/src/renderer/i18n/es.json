@@ -1613,6 +1613,7 @@
 	"report.whatHappened": "¿Qué ocurrió?",
 	"settings.agents": "Suscripciones",
 	"sidebar.subscriptionAllowanceUnavailable": "Los límites de suscripción no están disponibles",
+	"sidebar.providerSubscriptionAllowanceUnavailable": "Los límites de suscripción de {{provider}} no están disponibles",
 	"sidebar.subscriptionAllowanceRemaining": "{{provider}} · {{window}}: queda {{percent}}",
 	"sidebar.subscriptionAllowanceReset": "Se restablece en {{value}}",
 	"settings.codexAccounts.add": "Añadir cuenta",

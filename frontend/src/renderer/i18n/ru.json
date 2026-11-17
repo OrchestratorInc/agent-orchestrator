@@ -1639,6 +1639,7 @@
 	"report.whatHappened": "Что произошло?",
 	"settings.agents": "Подписки",
 	"sidebar.subscriptionAllowanceUnavailable": "Лимиты подписки недоступны",
+	"sidebar.providerSubscriptionAllowanceUnavailable": "Лимиты подписки {{provider}} недоступны",
 	"sidebar.subscriptionAllowanceRemaining": "{{provider}} · {{window}}: осталось {{percent}}",
 	"sidebar.subscriptionAllowanceReset": "Сброс через {{value}}",
 	"settings.codexAccounts.add": "Добавить аккаунт",

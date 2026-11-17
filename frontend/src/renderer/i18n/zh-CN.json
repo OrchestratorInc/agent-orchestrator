@@ -1566,6 +1566,7 @@
 	"report.whatHappened": "发生了什么？",
 	"settings.agents": "订阅",
 	"sidebar.subscriptionAllowanceUnavailable": "订阅限额暂不可用",
+	"sidebar.providerSubscriptionAllowanceUnavailable": "{{provider}}订阅限额暂不可用",
 	"sidebar.subscriptionAllowanceRemaining": "{{provider}} · {{window}}：剩余 {{percent}}",
 	"sidebar.subscriptionAllowanceReset": "{{value}}后重置",
 	"settings.codexAccounts.add": "添加账户",

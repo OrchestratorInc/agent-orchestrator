@@ -1613,6 +1613,7 @@
 	"report.whatHappened": "O que aconteceu?",
 	"settings.agents": "Assinaturas",
 	"sidebar.subscriptionAllowanceUnavailable": "Limites da assinatura indisponíveis",
+	"sidebar.providerSubscriptionAllowanceUnavailable": "Limites da assinatura do {{provider}} indisponíveis",
 	"sidebar.subscriptionAllowanceRemaining": "{{provider}} · {{window}}: restam {{percent}}",
 	"sidebar.subscriptionAllowanceReset": "Redefine em {{value}}",
 	"settings.codexAccounts.add": "Adicionar conta",

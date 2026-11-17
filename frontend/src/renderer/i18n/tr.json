@@ -1574,6 +1574,7 @@
 	"report.whatHappened": "Ne oldu?",
 	"settings.agents": "Abonelikler",
 	"sidebar.subscriptionAllowanceUnavailable": "Abonelik limitleri kullanılamıyor",
+	"sidebar.providerSubscriptionAllowanceUnavailable": "{{provider}} abonelik limitleri kullanılamıyor",
 	"sidebar.subscriptionAllowanceRemaining": "{{provider}} · {{window}}: {{percent}} kaldı",
 	"sidebar.subscriptionAllowanceReset": "{{value}} içinde sıfırlanır",
 	"settings.codexAccounts.add": "Hesap ekle",

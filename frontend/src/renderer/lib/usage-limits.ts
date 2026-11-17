@@ -34,16 +34,19 @@ export function usedPercent(value: number): number {
 	return Math.max(0, Math.min(100, value));
 }
 
-export function formatCountdown(resetsAt: string | null | undefined, now: Date): string | null {
+export function formatCountdown(resetsAt: string | null | undefined, now: Date, locale?: string): string | null {
 	if (!resetsAt) return null;
 	const ms = new Date(resetsAt).getTime() - now.getTime();
 	if (!Number.isFinite(ms) || ms <= 0) return null;
 	const minutes = Math.ceil(ms / 60_000);
 	const days = Math.floor(minutes / 1440);
 	const hours = Math.floor((minutes % 1440) / 60);
-	if (days > 0) return `${days}d ${hours}h`;
-	if (hours > 0) return `${hours}h ${minutes % 60}m`;
-	return `${minutes}m`;
+	const format = (value: number, unit: "day" | "hour" | "minute", fallback: string) => locale
+		? new Intl.NumberFormat(locale, { style: "unit", unit, unitDisplay: "short", maximumFractionDigits: 0 }).format(value)
+		: `${value}${fallback}`;
+	if (days > 0) return `${format(days, "day", "d")} ${format(hours, "hour", "h")}`;
+	if (hours > 0) return `${format(hours, "hour", "h")} ${format(minutes % 60, "minute", "m")}`;
+	return format(minutes, "minute", "m");
 }
 
 export type LimitPace = {

@@ -1574,6 +1574,7 @@
 	"report.whatHappened": "What happened?",
 	"settings.agents": "Subscriptions",
 	"sidebar.subscriptionAllowanceUnavailable": "Subscription limits unavailable",
+	"sidebar.providerSubscriptionAllowanceUnavailable": "{{provider}} subscription limits unavailable",
 	"sidebar.subscriptionAllowanceRemaining": "{{provider}} · {{window}}: {{percent}} left",
 	"sidebar.subscriptionAllowanceReset": "Resets in {{value}}",
 	"settings.codexAccounts.add": "Add account",
