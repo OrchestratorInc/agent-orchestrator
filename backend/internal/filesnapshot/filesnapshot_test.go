@@ -605,6 +605,33 @@ func TestDeleteAllRemovesOnlyThatSessionsSnapshots(t *testing.T) {
 	}
 }
 
+func TestCleanSeesWhatGitStatusHides(t *testing.T) {
+	ctx := context.Background()
+	repo := newRepo(t)
+	head, clean, err := CaptureClean(ctx, repo, "refs/ao/snapshots/s/t")
+	if err != nil || !clean {
+		t.Fatalf("CaptureClean = %v, %v; want clean", clean, err)
+	}
+	check := func(want bool) {
+		t.Helper()
+		if got, err := Clean(ctx, repo, head); err != nil || got != want {
+			t.Fatalf("Clean = %v, %v; want %v", got, err, want)
+		}
+	}
+	check(true)
+	write(t, repo, "new.txt", "new\n")
+	check(false)
+	remove(t, repo, "new.txt")
+	check(true)
+	// git status does not read an assume-unchanged file.
+	runGit(t, repo, "update-index", "--assume-unchanged", "a.txt")
+	write(t, repo, "a.txt", "changed\n")
+	check(false)
+	runGit(t, repo, "update-index", "--no-assume-unchanged", "a.txt")
+	runGit(t, repo, "commit", "-q", "-am", "next")
+	check(false)
+}
+
 func newRepo(t *testing.T) string {
 	t.Helper()
 	repo := t.TempDir()

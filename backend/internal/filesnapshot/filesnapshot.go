@@ -159,12 +159,31 @@ func CaptureClean(ctx context.Context, workspace string, refs ...string) (head s
 // Clean reports whether HEAD is still head and nothing is staged, changed, or
 // untracked: a clean snapshot taken at head still records these files.
 func Clean(ctx context.Context, workspace, head string) (bool, error) {
-	current, err := git(ctx, workspace, nil, nil, "rev-parse", "--verify", "HEAD")
-	if err != nil || current != head {
+	files, err := git(ctx, workspace, nil, nil, "ls-files", "-v", "-z")
+	if err != nil {
 		return false, err
 	}
-	status, err := git(ctx, workspace, nil, nil, "status", "--porcelain", "-z", "--untracked-files=all")
-	return err == nil && status == "", err
+	for _, entry := range strings.Split(files, "\x00") {
+		// A lowercase tag marks an entry assume-unchanged. git status does not
+		// look at its file; the snapshot does.
+		if entry != "" && entry[0] >= 'a' && entry[0] <= 'z' {
+			return false, nil
+		}
+	}
+	// --branch reports the HEAD this same run compared the files against.
+	status, err := git(ctx, workspace, nil, nil, "status", "--porcelain=v2", "--branch", "-z", "--untracked-files=all")
+	if err != nil {
+		return false, err
+	}
+	sawHead := false
+	for _, line := range strings.Split(status, "\x00") {
+		if oid, ok := strings.CutPrefix(line, "# branch.oid "); ok {
+			sawHead = oid == head
+		} else if line != "" && !strings.HasPrefix(line, "# ") {
+			return false, nil
+		}
+	}
+	return sawHead, nil
 }
 
 // Save records the worktree and index as Plan found them under ref, before Apply
