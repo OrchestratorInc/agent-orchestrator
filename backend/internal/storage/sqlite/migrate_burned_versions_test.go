@@ -249,6 +249,7 @@ var shippedMigrations = map[int64]string{
 	20261101145613011: "20261101145613011_repository_renames.sql",
 	20261101192928401: "20261101192928401_add_shell_terminal_command_owner.sql",
 	20261102100313400: "20261102100313400_lifetime_session_count.sql",
+	20261102133300897: "20261102133300897_session_delete_cascade_indexes.sql",
 	20261102164353715: "20261102164353715_automation_template_metadata.sql",
 	20261103000000000: "20261103000000000_session_import.sql",
 	20261103030401452: "20261103030401452_open_usage_source_kinds.sql",
@@ -270,7 +271,13 @@ var shippedMigrations = map[int64]string{
 	20261115050423095: "20261115050423095_allow_stakpak_harness.sql",
 	20261115071147951: "20261115071147951_allow_docker_agent_harness.sql",
 	20261115072651599: "20261115072651599_allow_minimax_code_harness.sql",
+	20261115072835107: "20261115072835107_review_run_state_machine.sql",
+	20261116063923032: "20261116063923032_index_pr_source_branch.sql",
+	20261116070040471: "20261116070040471_kept_artifacts.sql",
 	20261116101450009: "20261116101450009_report_delivery_terminal_state.sql",
+	20261116113334512: "20261116113334512_pr_head_stack_facts.sql",
+	20261116125847855: "20261116125847855_allow_open_interpreter_harness.sql",
+	20261116173733857: "20261116173733857_timestamp_repair_progress.sql",
 }
 
 // burnedVersion reports version numbers that must never be (re)used: they
@@ -288,8 +295,10 @@ var shippedMigrations = map[int64]string{
 func burnedVersion(v int64) bool {
 	// 203 was used by the historical Hermes candidate and must not be reused.
 	// 20261021083138547 and 20261114173247220 were used by unmerged Docker Agent
-	// builds before the migration moved above main's latest version.
-	return v == 22 || v == 203 || v == 20261021083138547 || v == 20261114173247220
+	// builds before the migration moved above main's latest version. 216 and
+	// 20261114174124485 were Open Interpreter draft numbers for the same reason.
+	return v == 22 || v == 203 || v == 20261021083138547 || v == 20261114173247220 ||
+		v == 216 || v == 20261114174124485
 }
 
 // TestMigrationVersionLedger enforces the append-only migration ledger: every

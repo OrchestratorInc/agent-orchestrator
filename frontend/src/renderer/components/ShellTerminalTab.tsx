@@ -34,7 +34,7 @@ type ShellTerminalTabProps = {
 // discarded. The close control is a sibling
 // button, not nested inside the tab button - nesting interactive elements is
 // invalid HTML and breaks keyboard traversal. Connected session-strip tabs use
-// the shared TerminalTabFrame, which shows that sibling in the glyph's slot on hover.
+// the shared TerminalTabFrame, which shows that sibling at the tab's right edge.
 export function ShellTerminalTab({
 	shell,
 	isActive,
@@ -140,7 +140,9 @@ export function ShellTerminalTab({
 		type: "button" as const,
 	};
 	if (appearance === "connected") {
-		const closeAction = isEditing || shell.optimistic ? undefined : (
+		// The close sits at the tab's right edge from the first frame. Closing a
+		// shell still starting cancels it: its create request destroys the shell.
+		const closeAction = (
 			<Pressable {...closeControl} className={terminalTabActionClassName}>
 				<X aria-hidden="true" className="size-icon-sm" />
 			</Pressable>
@@ -172,7 +174,7 @@ export function ShellTerminalTab({
 				<TerminalTabFrame
 					wide={Boolean(agent)}
 					action={closeAction}
-					onClose={closeAction ? onClose : undefined}
+					onClose={isEditing ? undefined : onClose}
 					active={isActive}
 					buttonProps={{
 						"aria-current": isActive,

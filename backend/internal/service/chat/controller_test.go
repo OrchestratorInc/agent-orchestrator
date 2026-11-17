@@ -36,7 +36,7 @@ const (
 	testSession = domain.SessionID("p1-1")
 )
 
-func openStore(t *testing.T) *sqlite.Store {
+func openStore(t *testing.T, imports ...*domain.SessionImportSource) *sqlite.Store {
 	t.Helper()
 	dir := t.TempDir()
 	st := sqlitetest.MustOpenAt(t, dir)
@@ -49,7 +49,12 @@ func openStore(t *testing.T) *sqlite.Store {
 	}); err != nil {
 		t.Fatalf("seed project: %v", err)
 	}
+	var source *domain.SessionImportSource
+	if len(imports) > 0 {
+		source = imports[0]
+	}
 	if _, err := st.CreateSession(ctx, domain.SessionRecord{
+		Metadata:  domain.SessionMetadata{ImportSource: source},
 		ID:        testSession,
 		ProjectID: testProject,
 		Kind:      domain.KindOrchestrator,
@@ -395,6 +400,9 @@ type fakeDriver struct {
 	probe     func() error
 	start     func(ports.ChatStartConfig) (ports.ChatConversation, error)
 	resume    func(ports.ChatResumeConfig) (ports.ChatConversation, error)
+	// probeSandbox, when set, is what the reviewer preflight sees when it asks
+	// whether the read-only provider sandbox can start.
+	probeSandbox func(ports.ChatSandboxProbeConfig) error
 	// supports, when set, is the agent's answer to which permission modes it runs in.
 	supports func(ports.PermissionMode) bool
 }
@@ -430,6 +438,12 @@ func (d *sequenceDriver) Resume(context.Context, ports.ChatResumeConfig) (ports.
 }
 
 func (d fakeDriver) Harness() domain.AgentHarness { return domain.HarnessCodex }
+func (d fakeDriver) ProbeSandbox(_ context.Context, cfg ports.ChatSandboxProbeConfig) error {
+	if d.probeSandbox == nil {
+		return nil
+	}
+	return d.probeSandbox(cfg)
+}
 func (d fakeDriver) Probe(context.Context) (ports.ChatCapabilities, error) {
 	if d.probe != nil {
 		if err := d.probe(); err != nil {
