@@ -111,15 +111,23 @@ func (s *Store) SetWriteLockObserver(observe func(caller string, held time.Durat
 	s.writeMu.onSlow.Store(&observe)
 }
 
+// WriteReleased receives after a write lock is released, which is after the
+// write committed. Pending signals coalesce into one. It has one consumer, the
+// CDC poller.
+func (s *Store) WriteReleased() <-chan struct{} {
+	return s.writeMu.released
+}
+
 type contextMutex struct {
 	token    chan struct{}
+	released chan struct{}
 	acquired time.Time
 	slowHold time.Duration
 	onSlow   atomic.Pointer[func(caller string, held time.Duration)]
 }
 
 func newContextMutex() *contextMutex {
-	mutex := &contextMutex{token: make(chan struct{}, 1), slowHold: time.Second}
+	mutex := &contextMutex{token: make(chan struct{}, 1), released: make(chan struct{}, 1), slowHold: time.Second}
 	mutex.token <- struct{}{}
 	return mutex
 }
@@ -149,6 +157,10 @@ func (m *contextMutex) LockContext(ctx context.Context) error {
 func (m *contextMutex) Unlock() {
 	held := time.Since(m.acquired)
 	m.token <- struct{}{}
+	select {
+	case m.released <- struct{}{}:
+	default:
+	}
 	if held < m.slowHold {
 		return
 	}

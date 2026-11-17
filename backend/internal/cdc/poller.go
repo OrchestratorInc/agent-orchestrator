@@ -8,9 +8,12 @@ import (
 )
 
 // DefaultPollInterval is how often the poller checks change_log for new rows.
-// Polling (rather than fs-notify or a DB hook) keeps it dependency-free; at this
-// cadence live updates stay well under a human-perceptible delay.
+// With a Wake channel it is the shortest time between polls instead.
 const DefaultPollInterval = 100 * time.Millisecond
+
+// wakeFallbackInterval is how often a poller with a Wake channel polls without
+// a signal, for change_log rows written outside the store's write lock.
+const wakeFallbackInterval = time.Second
 
 // DefaultBatch bounds how many events one poll drains.
 const DefaultBatch = 512
@@ -31,6 +34,8 @@ type Poller struct {
 	src      Source
 	bcast    *Broadcaster
 	interval time.Duration
+	wake     <-chan struct{}
+	fallback time.Duration
 	batch    int
 	logger   *slog.Logger
 	lastSeq  int64
@@ -41,6 +46,9 @@ type Poller struct {
 // SeekToHead, tests set it to read from the beginning.
 type PollerConfig struct {
 	Interval time.Duration
+	// Wake signals a committed write. When set, the poller polls on it and once
+	// a second without it, instead of every Interval.
+	Wake     <-chan struct{}
 	Batch    int
 	Logger   *slog.Logger
 	StartSeq int64
@@ -52,6 +60,8 @@ func NewPoller(src Source, bcast *Broadcaster, cfg PollerConfig) *Poller {
 		src:      src,
 		bcast:    bcast,
 		interval: cfg.Interval,
+		wake:     cfg.Wake,
+		fallback: wakeFallbackInterval,
 		batch:    cfg.Batch,
 		logger:   cfg.Logger,
 		lastSeq:  cfg.StartSeq,
@@ -85,15 +95,33 @@ func (p *Poller) Start(ctx context.Context) <-chan struct{} {
 	done := make(chan struct{})
 	go func() {
 		defer close(done)
-		t := time.NewTicker(p.interval)
+		tick := p.interval
+		if p.wake != nil {
+			tick = p.fallback
+		}
+		t := time.NewTicker(tick)
 		defer t.Stop()
+		full := false
 		for {
-			select {
-			case <-ctx.Done():
-				return
-			case <-t.C:
-				if err := p.Poll(ctx); err != nil {
-					p.logger.Error("cdc poller: poll failed", "err", err)
+			if !full {
+				select {
+				case <-ctx.Done():
+					return
+				case <-t.C:
+				case <-p.wake:
+				}
+			}
+			n, err := p.poll(ctx)
+			if err != nil {
+				p.logger.Error("cdc poller: poll failed", "err", err)
+			}
+			full = err == nil && n == p.batch
+			if p.wake != nil {
+				// Space polls during a burst of writes.
+				select {
+				case <-ctx.Done():
+					return
+				case <-time.After(p.interval):
 				}
 			}
 		}
@@ -105,9 +133,15 @@ func (p *Poller) Start(ctx context.Context) <-chan struct{} {
 // advancing the cursor. Exported so tests (and a daemon) can drive a cycle
 // synchronously.
 func (p *Poller) Poll(ctx context.Context) error {
+	_, err := p.poll(ctx)
+	return err
+}
+
+// poll returns how many events it read.
+func (p *Poller) poll(ctx context.Context) (int, error) {
 	evs, err := p.src.EventsAfter(ctx, p.lastSeq, p.batch)
 	if err != nil {
-		return fmt.Errorf("cdc poller: read after %d: %w", p.lastSeq, err)
+		return 0, fmt.Errorf("cdc poller: read after %d: %w", p.lastSeq, err)
 	}
 	for _, e := range evs {
 		if e.Seq <= p.lastSeq {
@@ -116,7 +150,7 @@ func (p *Poller) Poll(ctx context.Context) error {
 		p.bcast.Publish(e)
 		p.lastSeq = e.Seq
 	}
-	return nil
+	return len(evs), nil
 }
 
 // LastSeq returns the poller's current cursor (the highest seq broadcast).

@@ -23,7 +23,7 @@ type cdcPipeline struct {
 // when ctx is cancelled; Stop waits for it to drain.
 func startCDC(ctx context.Context, store *sqlite.Store, logger *slog.Logger) (*cdcPipeline, error) {
 	bcast := cdc.NewBroadcaster()
-	poller := cdc.NewPoller(store, bcast, cdc.PollerConfig{Logger: logger})
+	poller := cdc.NewPoller(store, bcast, cdc.PollerConfig{Logger: logger, Wake: store.WriteReleased()})
 	if err := poller.SeekToHead(ctx); err != nil {
 		return nil, err
 	}
