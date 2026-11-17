@@ -329,6 +329,17 @@ func (f *fakeStore) PromoteTaskPreparation(_ context.Context, id domain.SessionI
 	return true, nil
 }
 
+func (f *fakeStore) SetSessionTerminateOnPRMerge(_ context.Context, id domain.SessionID, terminate bool, now time.Time) (bool, error) {
+	rec, ok := f.sessions[id]
+	if !ok {
+		return false, nil
+	}
+	rec.TerminateOnPRMerge = terminate
+	rec.UpdatedAt = now
+	f.sessions[id] = rec
+	return true, nil
+}
+
 func (f *fakeStore) DeleteTaskPreparation(_ context.Context, id domain.SessionID) (bool, error) {
 	if f.deletePrepErr != nil {
 		return false, f.deletePrepErr
@@ -5983,6 +5994,22 @@ func TestSpawn_TerminateOnPRMergeResolution(t *testing.T) {
 		}
 	})
 
+	t.Run("project root default overrides project base agentConfig", func(t *testing.T) {
+		t.Setenv("AO_TERMINATE_ON_PR_MERGE", "false")
+		m, st, _, _ := newManager()
+		cfg := testRoleAgents()
+		cfg.TerminateOnPRMerge = boolPtr(false)
+		cfg.AgentConfig.TerminateOnPRMerge = boolPtr(true)
+		st.projects["mer"] = domain.ProjectRecord{ID: "mer", Path: "/repo/mer", Kind: domain.ProjectKindWorkspace, Config: cfg}
+		s, _, _, err := m.Spawn(ctx, ports.SpawnConfig{ProjectID: "mer", Kind: domain.KindWorker})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if st.sessions[s.ID].TerminateOnPRMerge {
+			t.Fatal("project root false must override project base AgentConfig true")
+		}
+	})
+
 	t.Run("role override agentConfig wins over project default", func(t *testing.T) {
 		t.Setenv("AO_TERMINATE_ON_PR_MERGE", "false")
 		m, st, _, _ := newManager()
@@ -6069,18 +6096,29 @@ func TestSpawn_TerminateOnPRMergeResolution(t *testing.T) {
 			t.Fatal("initial terminate_on_pr_merge must be false")
 		}
 
-		// Simulate the per-session toggle being turned on
-		rec := st.sessions[s.ID]
-		rec.TerminateOnPRMerge = true
-		st.sessions[s.ID] = rec
-		if !st.sessions[s.ID].TerminateOnPRMerge {
+		// Toggle on via store and verify
+		ok, err := st.SetSessionTerminateOnPRMerge(ctx, s.ID, true, time.Now())
+		if err != nil || !ok {
+			t.Fatalf("set terminate_on_pr_merge true: %v, %v", ok, err)
+		}
+		got, ok, err := st.GetSession(ctx, s.ID)
+		if err != nil || !ok {
+			t.Fatalf("get session: %v, %v", ok, err)
+		}
+		if !got.TerminateOnPRMerge {
 			t.Fatal("per-session toggle must override to true")
 		}
 
-		// Simulate the per-session toggle being turned off
-		rec.TerminateOnPRMerge = false
-		st.sessions[s.ID] = rec
-		if st.sessions[s.ID].TerminateOnPRMerge {
+		// Toggle off via store and verify
+		ok, err = st.SetSessionTerminateOnPRMerge(ctx, s.ID, false, time.Now())
+		if err != nil || !ok {
+			t.Fatalf("set terminate_on_pr_merge false: %v, %v", ok, err)
+		}
+		got, ok, err = st.GetSession(ctx, s.ID)
+		if err != nil || !ok {
+			t.Fatalf("get session: %v, %v", ok, err)
+		}
+		if got.TerminateOnPRMerge {
 			t.Fatal("per-session toggle must override to false")
 		}
 	})

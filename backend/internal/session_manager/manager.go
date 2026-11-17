@@ -573,9 +573,9 @@ type Manager struct {
 	sendConfirm sendConfirmConfig
 	// interfaceTransition bounds only contradictory stale-idle proof. Turns and
 	// user-paced waits reported through the activity boundary remain unbounded.
-	interfaceTransition        interfaceTransitionConfig
-	logger                     *slog.Logger
-	terminateOnPRMergeDefault  *bool
+	interfaceTransition       interfaceTransitionConfig
+	logger                    *slog.Logger
+	terminateOnPRMergeDefault *bool
 
 	// shellTerminalsMu guards shellTerminals: it is late-bound (see
 	// ShellTerminalCloser) after Manager already exists, so a setter mutates it
@@ -1201,6 +1201,13 @@ func (m *Manager) Spawn(ctx context.Context, cfg ports.SpawnConfig) (result doma
 		if cfg.AgentConfig.Permissions == "" {
 			cfg.AgentConfig.Permissions = ports.PermissionModeBypassPermissions
 		}
+	}
+
+	// Keep the caller's policy separate from inherited settings. The merge below
+	// and the TUI and chat resolvers copy project and role values into cfg.AgentConfig.
+	if cfg.TerminateOnPRMerge == nil && cfg.AgentConfig.TerminateOnPRMerge != nil {
+		explicit := *cfg.AgentConfig.TerminateOnPRMerge
+		cfg.TerminateOnPRMerge = &explicit
 	}
 
 	// Resolve the effective agent config (project base + role override + spawn
@@ -6387,9 +6394,6 @@ func resolveTerminateOnPRMerge(cfg ports.SpawnConfig, projectConfig domain.Proje
 	// 1. Explicit per-session value
 	if cfg.TerminateOnPRMerge != nil {
 		return *cfg.TerminateOnPRMerge
-	}
-	if cfg.AgentConfig.TerminateOnPRMerge != nil {
-		return *cfg.AgentConfig.TerminateOnPRMerge
 	}
 
 	// 2. Project default
