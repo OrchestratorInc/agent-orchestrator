@@ -109,6 +109,18 @@ const prefersReducedMotion = () => window.matchMedia?.("(prefers-reduced-motion:
 // How long a settled reply keeps its fade spans, so the last characters (and the final
 // flush of buffered text) finish fading in before they are dropped.
 const FADE_SHED_MS = 450;
+// How long a character's `stream-char` fade lasts (styles.css).
+const CHAR_FADE_MS = 300;
+
+// The text's length CHAR_FADE_MS ago, from the lengths seen on earlier renders.
+// Characters before it have finished fading, so they render plain.
+function fadedLength(seen: { at: number; length: number }[], length: number): number {
+	const now = performance.now();
+	if (seen.at(-1)?.length !== length) seen.push({ at: now, length });
+	const cutoff = now - CHAR_FADE_MS;
+	while (seen.length > 1 && seen[1].at <= cutoff) seen.shift();
+	return seen[0].at <= cutoff ? seen[0].length : 0;
+}
 
 /**
  * Whether the prose is still arriving, for the fences inside it.
@@ -262,7 +274,8 @@ export const ChatMarkdown = memo(function ChatMarkdown({
 	const [openedOffset] = useState(() => (chatOpening.current ? text.length : 0));
 	const hiddenOffset = useRef(0);
 	if (pageHidden()) hiddenOffset.current = text.length;
-	const settledOffset = Math.max(openedOffset, hiddenOffset.current);
+	const seenLengths = useRef<{ at: number; length: number }[]>([]);
+	const settledOffset = Math.max(openedOffset, hiddenOffset.current, fadedLength(seenLengths.current, text.length));
 	const renderMath = useUiStore((state) => state.renderMath);
 	const plugins = useMemo(() => {
 		const base = renderMath ? MATH_PLUGINS : PLUGINS;
@@ -304,7 +317,8 @@ export const ChatMarkdown = memo(function ChatMarkdown({
 						repairInline={block.repairInline}
 						streaming={streaming && index === blocks.blocks.length - 1}
 						fading={animate && index === blocks.blocks.length - 1}
-						settledOffset={Math.max(0, settledOffset - block.start)}
+						// Only the fading chunk reads it; it changes on every render.
+						settledOffset={index === blocks.blocks.length - 1 ? Math.max(0, settledOffset - block.start) : 0}
 						remarkPlugins={plugins}
 						rehypePlugins={rehypePlugins}
 					/>
@@ -435,6 +449,25 @@ function compactEmoji(children: ReactNode): ReactNode {
 		return children.map((child, index) => <Fragment key={index}>{compactEmoji(child)}</Fragment>);
 	}
 	return children;
+}
+
+// Renders a `stream-text` wrapper from rehypeStreamFade: its settled text plain,
+// then each later character in a `stream-char` span keyed by its source offset,
+// so a character keeps its element, and fades in only once, as the text grows.
+function StreamText({ node }: { node?: HastElement }) {
+	const child = node?.children[0];
+	const text = child?.type === "text" ? child.value : "";
+	const kept = Number(node?.properties.dataKept ?? 0);
+	let offset = Number(node?.properties.dataStart ?? 0) + kept;
+	const fading: ReactNode[] = [];
+	for (const { segment } of GRAPHEME_SEGMENTER.segment(text.slice(kept))) {
+		// compactEmoji must see emoji as plain strings.
+		fading.push(EMOJI_GRAPHEME.test(segment)
+			? <Fragment key={offset}>{compactEmoji(segment)}</Fragment>
+			: <span key={offset} className="stream-char">{segment}</span>);
+		offset += segment.length;
+	}
+	return <>{compactEmoji(text.slice(0, kept))}{fading}</>;
 }
 
 type MarkdownLinkProps = { href?: string; children?: ReactNode; className?: string; menuPath?: string; node?: HastElement };
@@ -748,7 +781,9 @@ function InlineCode({ children, className, node }: { children?: ReactNode; class
 }
 
 const COMPONENTS: Components = {
-	span: ({ children, node: _node, ...props }) => <span {...props}>{props.className?.split(" ").includes("stream-char") ? children : compactEmoji(children)}</span>,
+	span: ({ children, node, ...props }) => props.className === "stream-text"
+		? <StreamText node={node} />
+		: <span {...props}>{compactEmoji(children)}</span>,
 	// Headings step down in size but stay in the conversation's voice — an agent's
 	// "## Findings" is a paragraph label, not a page title.
 	h1: ({ children, node: _node, ...props }) => (

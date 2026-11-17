@@ -368,9 +368,11 @@ func (a *API) Register(root chi.Router) {
 					}
 					// A managed preview carries the dev server's HMR socket and event
 					// streams, and the agent browser its stream socket: both stay open
-					// as long as the page does.
+					// as long as the page does. A file upload streams to disk for as
+					// long as its bytes keep coming; the handler ends one that stalls.
 					if pattern := chi.RouteContext(req.Context()).RoutePattern(); pattern == "/api/v1/sessions/{sessionId}/preview/app/*" ||
-						pattern == "/api/v1/sessions/{sessionId}/agent-browser/*" {
+						pattern == "/api/v1/sessions/{sessionId}/agent-browser/*" ||
+						pattern == "/api/v1/attachment-uploads" {
 						next.ServeHTTP(w, req)
 						return
 					}

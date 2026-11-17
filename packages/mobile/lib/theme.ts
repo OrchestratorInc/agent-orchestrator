@@ -22,8 +22,8 @@
 // colors are a compatibility surface owned by the agent TUIs, not part of this
 // palette, and agents print in them by name.
 //
-// Two palettes of one shape, following T3 Code's mobile palette: neutral zinc
-// surfaces, hue-less prominent actions, a blue reserved for links and focus.
+// Two palettes of one shape: neutral zinc surfaces, hue-less prominent
+// actions, a blue reserved for links and focus.
 // Semantic colours are DARKENED for light mode, not reused. A hue tuned for
 // contrast against #0a0a0a is washed out on white, and skipping this is what
 // makes naive light themes look faded.
@@ -104,7 +104,7 @@ export type Theme = {
 const FONT_MONO = "GeistMono_400Regular";
 
 export const darkTheme: Theme = {
-	// Neutral zinc, after T3 Code: a near-black canvas with no blue cast, cards
+	// Neutral zinc: a near-black canvas with no blue cast, cards
 	// a single step up, and borders kept to a whisper. Flat rows on the canvas do
 	// the grouping; a card is the only bordered surface.
 	bgBase: "#0a0a0a",
@@ -113,7 +113,7 @@ export const darkTheme: Theme = {
 	// the dimmed page under it instead of matching it.
 	bgSurface: "#1c1c1e",
 	// Cards & inputs, a clear step up from both the canvas (1.33:1) and a sheet,
-	// so a grouped card reads as one; T3's own step was too faint on a phone.
+	// so a grouped card reads as one; a smaller step was too faint on a phone.
 	bgElevated: "#27272a",
 	bgElevatedHover: "#303034",
 	bgSubtle: "rgba(255,255,255,0.04)",
@@ -133,7 +133,7 @@ export const darkTheme: Theme = {
 	accentTint: "rgba(245,245,245,0.12)",
 	accentBorder: "rgba(245,245,245,0.26)",
 	accentPressed: "rgba(245,245,245,0.2)",
-	// Links, selection and the cursor take T3's blue. A filled control never
+	// Links, selection and the cursor take the blue. A filled control never
 	// does, so the hue still cannot be read as a worker state.
 	highlight: "#4b7cf3",
 	selection: "rgba(52,107,241,0.32)",
@@ -163,7 +163,7 @@ export const darkTheme: Theme = {
 };
 
 export const lightTheme: Theme = {
-	// T3 Code's light canvas: near-white, with grouped cards a clear zinc step
+	// The light canvas: near-white, with grouped cards a clear zinc step
 	// darker (1.16:1) rather than white cards on grey. The step is what
 	// separates a card on a phone; a border alone was too faint to.
 	bgBase: "#fcfcfc",

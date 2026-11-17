@@ -32,7 +32,7 @@ import { useUiStore } from "../stores/ui-store";
 import { BareTopbarDragStrip } from "./BareTopbarDragStrip";
 import { SessionTabsTopbar } from "./PageTopbar";
 import { useTaskLaunch, type LaunchReplay } from "./TaskComposer";
-import { agentAccountLabel, useAgentAccounts, withoutSameLogins } from "../hooks/useAgentAccounts";
+import { agentAccountLabel, oneRowPerLogin, useAgentAccounts } from "../hooks/useAgentAccounts";
 import type { AccountChoice } from "./chat/AgentSwitchPicker";
 import { Button } from "./ui/button";
 import { cn } from "../lib/utils";
@@ -53,7 +53,7 @@ export function NewChatPage({ projectId, hostId, report }: { projectId: string; 
 	const task = useTaskLaunch({ projectId, hostId });
 	const hostAccounts = useAgentAccounts(Boolean(task.account), hostId);
 	const providerRows = task.account ? (hostAccounts.data ?? []).filter((row) => row.provider === task.account?.provider) : [];
-	const accountRows = withoutSameLogins(providerRows, task.account?.value ?? providerRows.find((row) => row.default)?.id);
+	const accountRows = oneRowPerLogin(providerRows, task.account?.value ?? providerRows.find((row) => row.default)?.id);
 	const accountChoice: AccountChoice | undefined = task.account && accountRows.length > 0 ? {
 		options: accountRows.map((row) => ({ id: row.id, label: agentAccountLabel(row, accountRows, t), disabled: !row.signedIn })),
 		value: task.account.value ?? accountRows.find((row) => row.default)?.id,
@@ -71,7 +71,7 @@ export function NewChatPage({ projectId, hostId, report }: { projectId: string; 
 	const targetRef = useRef({ projectId, hostId });
 	targetRef.current = { projectId, hostId };
 	// The session's own composer shortcuts, before the session exists.
-	useSessionShortcut("model-picker", openComposerModelPicker);
+	useSessionShortcut("model-picker", () => { openComposerModelPicker(); });
 	useSessionShortcut("dictate", toggleComposerDictation);
 	const mounted = useRef(true);
 	useEffect(() => {
@@ -153,7 +153,7 @@ export function NewChatPage({ projectId, hostId, report }: { projectId: string; 
 		writeChatAttachments(draftScope, []);
 	}
 	// "/" skills come from this computer's agent; a Cloud task's agent runs in its sandbox without them.
-	const skills = useMemo(() => task.isCloudProject ? [] : readChatSkills(task.agent.value, hostId), [hostId, task.agent.value, task.isCloudProject]);
+	const skills = useMemo(() => task.isCloudProject ? [] : readChatSkills(task.agent.value, hostId, projectId), [hostId, projectId, task.agent.value, task.isCloudProject]);
 	const snapshot = useMemo<ConversationSnapshot>(
 		() => ({ ...startingConversationSnapshot(draftId, task.agent.value || "claude-code"), controller: { state: "ready" } }),
 		[draftId, task.agent.value],
