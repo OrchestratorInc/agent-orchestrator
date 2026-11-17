@@ -965,6 +965,37 @@ func TestPoll_DiscoversSiblingUnderRootSessionNamespace(t *testing.T) {
 	}
 }
 
+// Another installation can have a session with the same ID. Its PR opened
+// before this session existed is not discovered; a later PR still is.
+func TestPoll_SkipsPRsOpenedBeforeSession(t *testing.T) {
+	created := time.Date(2026, 11, 12, 8, 4, 0, 0, time.UTC)
+	store := testStoreWithSession()
+	store.sessions[0].Metadata.Branch = "ao/p-1/root"
+	store.sessions[0].CreatedAt = created
+	older, newer := testObs(1), testObs(2)
+	older.PR.SourceBranch, older.PR.HeadRepo, older.PR.CreatedAtProvider = "ao/p-1/old", "o/r", created.Add(-time.Hour)
+	newer.PR.SourceBranch, newer.PR.HeadRepo, newer.PR.CreatedAtProvider = "ao/p-1/new", "o/r", created.Add(time.Hour)
+	provider := &fakeProvider{
+		repoGuards:   map[string]ports.SCMGuardResult{prKey(testRepo, 0): {ETag: "v2"}},
+		openPRs:      map[string][]ports.SCMPRObservation{prKey(testRepo, 0): {older.PR, newer.PR}},
+		observations: map[string]ports.SCMObservation{prKey(testRepo, 1): older, prKey(testRepo, 2): newer},
+	}
+	lc := &fakeLifecycle{}
+	if err := newTestObserver(store, provider, lc, time.Unix(1, 0).UTC()).Poll(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	written := map[int]domain.SessionID{}
+	for _, w := range store.writes {
+		written[w.pr.Number] = w.pr.SessionID
+	}
+	if _, ok := written[1]; ok {
+		t.Fatal("PR opened before the session was attached")
+	}
+	if written[2] != "p-1" {
+		t.Fatalf("PR opened after the session: session = %q, want p-1", written[2])
+	}
+}
+
 // A worker renamed after launch keeps owning branches under its temporary
 // name, which the agent may have made or remembered before the rename landed.
 func TestMatchSession_RenamedTaskKeepsTemporaryNamespace(t *testing.T) {

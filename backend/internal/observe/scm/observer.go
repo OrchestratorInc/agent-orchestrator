@@ -13,6 +13,7 @@ import (
 	"fmt"
 	"log/slog"
 	"path/filepath"
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
@@ -1291,6 +1292,14 @@ func (o *Observer) discoverNewPRs(ctx context.Context, sessionRepos []sessionRep
 				headRepo = repoFullName(repo)
 			}
 			eligible := candidatesForHeadRepo(byRepo[repoKey], headRepo)
+			// A session cannot have opened a PR before it existed. Session IDs
+			// and task names repeat across installations, so leave such a PR for
+			// an explicit claim.
+			if !pr.CreatedAtProvider.IsZero() {
+				eligible = slices.DeleteFunc(eligible, func(sr sessionRepo) bool {
+					return pr.CreatedAtProvider.Before(sr.session.CreatedAt)
+				})
+			}
 			sr, ok := matchSession(eligible, pr.SourceBranch)
 			if !ok {
 				continue
