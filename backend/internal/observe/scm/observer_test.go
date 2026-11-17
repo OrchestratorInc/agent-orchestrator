@@ -966,19 +966,21 @@ func TestPoll_DiscoversSiblingUnderRootSessionNamespace(t *testing.T) {
 }
 
 // Another installation can have a session with the same ID. Its PR opened
-// before this session existed is not discovered; a later PR still is.
+// before this session existed is not discovered; a later PR still is,
+// including one GitHub reports in the session's second.
 func TestPoll_SkipsPRsOpenedBeforeSession(t *testing.T) {
-	created := time.Date(2026, 11, 12, 8, 4, 0, 0, time.UTC)
+	created := time.Date(2026, 11, 12, 8, 4, 0, 500_000_000, time.UTC)
 	store := testStoreWithSession()
 	store.sessions[0].Metadata.Branch = "ao/p-1/root"
 	store.sessions[0].CreatedAt = created
-	older, newer := testObs(1), testObs(2)
+	older, newer, sameSecond := testObs(1), testObs(2), testObs(3)
 	older.PR.SourceBranch, older.PR.HeadRepo, older.PR.CreatedAtProvider = "ao/p-1/old", "o/r", created.Add(-time.Hour)
 	newer.PR.SourceBranch, newer.PR.HeadRepo, newer.PR.CreatedAtProvider = "ao/p-1/new", "o/r", created.Add(time.Hour)
+	sameSecond.PR.SourceBranch, sameSecond.PR.HeadRepo, sameSecond.PR.CreatedAtProvider = "ao/p-1/same", "o/r", created.Truncate(time.Second)
 	provider := &fakeProvider{
 		repoGuards:   map[string]ports.SCMGuardResult{prKey(testRepo, 0): {ETag: "v2"}},
-		openPRs:      map[string][]ports.SCMPRObservation{prKey(testRepo, 0): {older.PR, newer.PR}},
-		observations: map[string]ports.SCMObservation{prKey(testRepo, 1): older, prKey(testRepo, 2): newer},
+		openPRs:      map[string][]ports.SCMPRObservation{prKey(testRepo, 0): {older.PR, newer.PR, sameSecond.PR}},
+		observations: map[string]ports.SCMObservation{prKey(testRepo, 1): older, prKey(testRepo, 2): newer, prKey(testRepo, 3): sameSecond},
 	}
 	lc := &fakeLifecycle{}
 	if err := newTestObserver(store, provider, lc, time.Unix(1, 0).UTC()).Poll(context.Background()); err != nil {
@@ -991,8 +993,8 @@ func TestPoll_SkipsPRsOpenedBeforeSession(t *testing.T) {
 	if _, ok := written[1]; ok {
 		t.Fatal("PR opened before the session was attached")
 	}
-	if written[2] != "p-1" {
-		t.Fatalf("PR opened after the session: session = %q, want p-1", written[2])
+	if written[2] != "p-1" || written[3] != "p-1" {
+		t.Fatalf("PRs opened after the session: sessions = %q, %q, want p-1", written[2], written[3])
 	}
 }
 

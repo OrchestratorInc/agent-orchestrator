@@ -1294,10 +1294,10 @@ func (o *Observer) discoverNewPRs(ctx context.Context, sessionRepos []sessionRep
 			eligible := candidatesForHeadRepo(byRepo[repoKey], headRepo)
 			// A session cannot have opened a PR before it existed. Session IDs
 			// and task names repeat across installations, so leave such a PR for
-			// an explicit claim.
+			// an explicit claim. GitHub reports whole seconds.
 			if !pr.CreatedAtProvider.IsZero() {
 				eligible = slices.DeleteFunc(eligible, func(sr sessionRepo) bool {
-					return pr.CreatedAtProvider.Before(sr.session.CreatedAt)
+					return pr.CreatedAtProvider.Before(sr.session.CreatedAt.Truncate(time.Second))
 				})
 			}
 			sr, ok := matchSession(eligible, pr.SourceBranch)
