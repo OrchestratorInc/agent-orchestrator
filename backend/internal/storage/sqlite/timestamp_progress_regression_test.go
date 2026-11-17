@@ -26,7 +26,17 @@ func timestampPendingMigration(t *testing.T, ddl string) {
 
 func TestTimestampProgressUnrelatedPendingMigrationKeepsCompletion(t *testing.T) {
 	dir := t.TempDir()
-	db := openMigratedTestDBIn(t, dir)
+	counts := &repairScanCounts{excludeTable: "goose_db_version"}
+	opts := repairScanOptions(t, counts, nil)
+	db, err := sql.Open(opts.driver, databaseURI(dir)+pragmas)
+	if err != nil {
+		t.Fatal(err)
+	}
+	db.SetMaxOpenConns(1)
+	t.Cleanup(func() { _ = db.Close() })
+	if err := migrate(db); err != nil {
+		t.Fatal(err)
+	}
 	ctx := context.Background()
 	// Receipt history can span several repair batches as migrations accumulate.
 	if _, err := db.Exec(`WITH RECURSIVE receipts(i) AS (VALUES(1) UNION ALL SELECT i+1 FROM receipts WHERE i<257)
@@ -36,6 +46,8 @@ INSERT INTO goose_db_version(version_id,is_applied) SELECT (SELECT max(version_i
 	if err := repairTimestamps(ctx, db); err != nil {
 		t.Fatal(err)
 	}
+	counts.writer.Store(0)
+	counts.reader.Store(0)
 	timestampPendingMigration(t, `CREATE TABLE IF NOT EXISTS probe(id INTEGER)`)
 	if err := migrate(db); err != nil {
 		t.Fatal(err)
@@ -51,8 +63,6 @@ INSERT INTO goose_db_version(version_id,is_applied) SELECT (SELECT max(version_i
 	if err := db.QueryRow(`SELECT completed FROM timestamp_repair_progress WHERE table_name='goose_db_version'`).Scan(&complete); err != nil || complete {
 		t.Fatalf("migration receipt write inherited completion: complete=%v err=%v", complete, err)
 	}
-	counts := &repairScanCounts{excludeTable: "goose_db_version"}
-	opts := repairScanOptions(t, counts, nil)
 	reader, err := sql.Open(opts.driver, databaseURI(dir)+pragmas)
 	if err != nil {
 		t.Fatal(err)
