@@ -3985,6 +3985,7 @@
 	"sideChat.cancelHandoffHelp": "İptal ederseniz yeniden denemeler durur ve geçerli taslağınız korunur. Soru hedefine ulaşmış olabilir.",
 	"sideChat.retryDelivery": "İletimi yeniden dene",
 	"sideChat.sideChatIsUnavailable": "Yan sohbet kullanılamıyor",
+	"sideChat.starting": "Yan sohbet başlatılıyor…",
 	"sideChat.openingSideChat": "Yan sohbet açılıyor…",
 	"sideChat.yourDraftStaysInThisThreadTryLoadingItAgainOrReturnToTheMainChatWhileTheConnectionRetriesAutomatically": "Taslağınız bu konuşmada kalır. Yeniden yüklemeyi deneyin veya bağlantı otomatik olarak yeniden denenirken ana sohbete dönün.",
 	"sideChat.preparingThisSeparateThreadYouCanKeepWorkingInTheMainChat": "Bu ayrı konuşma hazırlanıyor. Ana sohbette çalışmaya devam edebilirsiniz.",
