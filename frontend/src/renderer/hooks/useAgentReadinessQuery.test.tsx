@@ -116,6 +116,51 @@ describe("agent readiness query", () => {
 		} finally { vi.useRealTimers(); }
 	});
 
+	it.each(["another check", "Retry", "agent switch"])("retains an expired Retry offer until settled by %s", async (action) => {
+		vi.useFakeTimers();
+		try {
+			const pending = { agents: [agentReadiness("codex", "Codex", { authentication: "unknown" })] };
+			getMock.mockResolvedValue({ data: pending }); postMock.mockResolvedValue({ data: pending });
+			const client = new QueryClient(); client.setQueryData(agentReadinessQueryKey, pending);
+			let selectedAgent = "codex";
+			const { result, unmount, rerender } = renderHook(() => {
+				const readiness = useAgentReadinessQuery();
+				const agent = readiness.data?.agents.find((candidate) => candidate.id === selectedAgent);
+				return useStandaloneAgentReadiness(selectedAgent, !agent || isPendingAgent(agent), true);
+			}, { wrapper: wrapper(client) });
+			await act(async () => { await vi.advanceTimersByTimeAsync(60_000); });
+			postMock.mockImplementation(() => new Promise(() => {}));
+			act(() => result.current.retry());
+			await act(async () => {
+				client.setQueryData(agentReadinessQueryKey, { agents: [agentReadiness("codex", "Codex", { authentication: "unauthorized" })] });
+				await vi.advanceTimersByTimeAsync(60_000);
+			});
+			expect(result.current.retrying).toBe(false);
+			expect(result.current.timedOut).toBe(true);
+			const reads = getMock.mock.calls.length;
+			await act(async () => { await vi.advanceTimersByTimeAsync(10_000); });
+			expect(getMock).toHaveBeenCalledTimes(reads);
+			expect(result.current.timedOut).toBe(true);
+			// A later independent readiness result can settle the expired attempt.
+			await act(async () => {
+				const ready = { agents: [agentReadiness("codex", "Codex")] };
+				if (action === "Retry") {
+					getMock.mockResolvedValue({ data: ready });
+					postMock.mockResolvedValue({ data: {} });
+					result.current.retry();
+				} else if (action === "agent switch") {
+					client.setQueryData(agentReadinessQueryKey, { agents: [...pending.agents, agentReadiness("claude-code", "Claude Code")] });
+					selectedAgent = "claude-code";
+					rerender();
+				} else client.setQueryData(agentReadinessQueryKey, ready);
+				await vi.advanceTimersByTimeAsync(0);
+			});
+			expect(result.current.timedOut).toBe(false);
+			if (action === "Retry") expect(postMock).toHaveBeenCalledTimes(3);
+			unmount();
+		} finally { vi.useRealTimers(); }
+	});
+
 	it("bounds pending polling to 60 seconds and coalesces explicit Retry probes", async () => {
 		vi.useFakeTimers();
 		try {

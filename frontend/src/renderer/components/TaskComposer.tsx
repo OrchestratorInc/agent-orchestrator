@@ -580,7 +580,7 @@ export function useTaskLaunch({ projectId, hostId }: {
 		? !standaloneReadiness || isPendingAgent(standaloneReadiness)
 		: !agentCatalog || agentCatalog.agents.some(isPendingAgent));
 	const standaloneRecovery = useStandaloneAgentReadiness(selectedAgent, standalonePending, isLocalStandalone);
-	const standaloneChecking = standalonePending || standaloneRecovery.retrying;
+	const standaloneChecking = standalonePending || standaloneRecovery.retrying || standaloneRecovery.timedOut;
 	// The connection a cloud task with this agent runs on; its catalog follows it.
 	const selectedCloudConnection = isCloudProject
 		? cloudConnectionsQuery.data?.find(

@@ -58,7 +58,7 @@ vi.mock("../hooks/useAgentReadinessQuery", async (importOriginal) => {
 		ensureAgentReadiness: h.ensureTargetedReadiness,
 		useAgentReadinessQuery: () => ({ data: h.agentCatalog, isFetching: false, isSuccess: h.agentCatalog !== undefined }),
 		useEnsureAgentReadiness: h.ensureReadiness,
-		useStandaloneAgentReadiness: () => ({ timedOut: h.standaloneTimedOut, retrying: h.standaloneRetrying, retry: h.standaloneRetry }),
+		useStandaloneAgentReadiness: (agentId: string) => ({ timedOut: agentId === "codex" && h.standaloneTimedOut, retrying: agentId === "codex" && h.standaloneRetrying, retry: h.standaloneRetry }),
 	};
 });
 
@@ -537,14 +537,16 @@ describe("TaskComposer", () => {
 		expect(h.post.mock.calls.filter(([path]) => path === "/api/v1/sessions")).toHaveLength(1);
 	});
 
-	it("keeps Send blocked while Retry verifies an older cached rejection", async () => {
+	it.each([false, true])("keeps Send blocked for an older cached rejection (Retry expired: %s)", async (timedOut) => {
 		window.localStorage.setItem("ao.taskComposer.preferences.v1", JSON.stringify({ __standalone__: { lastAgent: "codex", agents: {} } }));
 		h.agentCatalog = { agents: [agentReadiness("codex", "Codex", { authentication: "unauthorized" })] };
-		h.standaloneRetrying = true;
+		h.standaloneRetrying = !timedOut;
+		h.standaloneTimedOut = timedOut;
 		render(<Wrap><TaskComposer projectId="__standalone__" onCreated={vi.fn()} /></Wrap>);
-		expect(await screen.findByText("Checking Codex…")).toBeInTheDocument();
+		expect(await screen.findByText(timedOut ? "Couldn’t confirm Codex is ready" : "Checking Codex…")).toBeInTheDocument();
 		expect(startTask()).toBeDisabled();
 		expect(screen.queryByText("Sign in to Codex to continue.")).not.toBeInTheDocument();
+		if (timedOut) expect(screen.getByRole("button", { name: "Retry" })).toBeInTheDocument();
 	});
 
 	it("offers Retry after inconclusive startup and preserves an explicit replacement", async () => {

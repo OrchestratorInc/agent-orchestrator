@@ -115,7 +115,7 @@ export function useStandaloneAgentReadiness(agentId: string, pending: boolean, e
 	const request = useMemo(() => ({}), [scope, recovering, retryRequest]);
 	const currentRequest = useRef(request);
 	currentRequest.current = request;
-	const [expired, setExpired] = useState<object>();
+	const [expired, setExpired] = useState<{ request: object; scope: object; retry?: typeof retryRequest; snapshot?: AgentReadiness }>();
 	const retryLocked = useRef(false);
 	useEffect(() => {
 		if (!recovering) return;
@@ -130,7 +130,7 @@ export function useStandaloneAgentReadiness(agentId: string, pending: boolean, e
 			clearTimeout(poll);
 			retryLocked.current = false;
 			if (explicitRetry) setSettledRetry(retryRequest);
-			setExpired(request);
+			setExpired({ request, scope, retry: explicitRetry ? retryRequest : undefined, snapshot: queryClient.getQueryData<AgentReadiness>(agentReadinessQueryKey) });
 		}, 60_000);
 		// The supervisor removes the local snapshot when daemon identity changes,
 		// including a replacement on the same port. Discard the old request's
@@ -200,7 +200,16 @@ export function useStandaloneAgentReadiness(agentId: string, pending: boolean, e
 		retryLocked.current = true;
 		setRetryRequest({ scope });
 	}, [enabled, scope]);
-	return { timedOut: enabled && pending && expired === request, retrying: retrying && expired !== request, retry };
+	// An older cached rejection can end `pending` while a retry is in flight.
+	// Keep its expired Retry offer until the target changes, the user retries,
+	// or another readiness result replaces the snapshot held at the deadline.
+	const expiredRetry = expired?.retry !== undefined && expired.retry === retryRequest && expired.scope === scope
+		&& expired.snapshot === queryClient.getQueryData(agentReadinessQueryKey);
+	return {
+		timedOut: enabled && (Boolean(pending && expired?.request === request) || expiredRetry),
+		retrying: retrying && expired?.request !== request,
+		retry,
+	};
 }
 
 export function useEnsureAgentReadiness({
