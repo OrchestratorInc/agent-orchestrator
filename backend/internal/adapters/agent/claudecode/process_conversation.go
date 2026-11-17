@@ -34,7 +34,7 @@ func (p *Plugin) ProcessConversationID(ctx context.Context, pid int) (string, bo
 		SessionID string `json:"sessionId"`
 	}
 	if json.Unmarshal(data, &entry) != nil || entry.PID != pid || !isUUID(entry.SessionID) {
-		return "", false, nil //nolint:nilerr
+		return "", false, nil //nolint:nilerr // an unparsable or foreign entry names no conversation
 	}
 	return entry.SessionID, true, nil
 }
