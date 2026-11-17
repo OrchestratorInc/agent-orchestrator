@@ -566,21 +566,21 @@ func (s *Store) MarkReviewRunNoticeSent(ctx context.Context, id string) (bool, e
 	return n > 0, nil
 }
 
-// ReviewNoticeChatDelivery returns the state and error of the Chat turn that
-// carries the worker's message with clientMessageID, found=false when no such
-// message exists in the worker's conversation.
-func (s *Store) ReviewNoticeChatDelivery(ctx context.Context, sessionID domain.SessionID, clientMessageID string) (domain.TurnState, string, bool, error) {
+// ReviewNoticeChatDelivery returns the state, error and whether the Chat turn
+// carrying clientMessageID started. found=false means no such message exists
+// in the worker's conversation.
+func (s *Store) ReviewNoticeChatDelivery(ctx context.Context, sessionID domain.SessionID, clientMessageID string) (state domain.TurnState, failure string, started, found bool, err error) {
 	row, err := s.qr.SelectReviewNoticeChatDelivery(ctx, gen.SelectReviewNoticeChatDeliveryParams{
 		ClientMessageID: clientMessageID,
 		SessionID:       &sessionID,
 	})
 	if errors.Is(err, sql.ErrNoRows) {
-		return "", "", false, nil
+		return "", "", false, false, nil
 	}
 	if err != nil {
-		return "", "", false, fmt.Errorf("review notice chat delivery for %s: %w", sessionID, err)
+		return "", "", false, false, fmt.Errorf("review notice chat delivery for %s: %w", sessionID, err)
 	}
-	return row.State, row.ErrorMessage, true, nil
+	return row.State, row.ErrorMessage, row.Started, true, nil
 }
 
 // reviewWorkerNotice derives the failed state: a pending notice whose sends

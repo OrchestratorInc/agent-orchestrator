@@ -335,10 +335,10 @@ UPDATE review SET is_archived = TRUE, reviewer_handle_id = '', reviewer_launch_i
 
 -- name: SelectReviewNoticeChatDelivery :one
 -- The Chat turn carrying one "review done" delivery attempt, found by the
--- attempt's client message id in the worker's conversation. Its state tells
--- whether the message reached the agent, is still queued (a sleeping session
--- not yet woken), or failed (the wake or drain failed).
-SELECT conversation_turns.state, conversation_turns.error_message
+-- attempt's client message id in the worker's conversation. A started turn
+-- reached the agent even if it later failed or was interrupted.
+SELECT conversation_turns.state, conversation_turns.error_message,
+    CAST((conversation_turns.started_at IS NOT NULL OR conversation_turns.provider_turn_id != '') AS BOOLEAN) AS started
 FROM conversations
 JOIN conversation_messages ON conversation_messages.conversation_id = conversations.id
     AND conversation_messages.client_message_id = sqlc.arg(client_message_id)

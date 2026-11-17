@@ -49,7 +49,7 @@ type reviewNoticeStore interface {
 // background wake, so a successful send there does not yet mean the worker
 // got the message.
 type reviewNoticeChatStore interface {
-	ReviewNoticeChatDelivery(ctx context.Context, sessionID domain.SessionID, clientMessageID string) (domain.TurnState, string, bool, error)
+	ReviewNoticeChatDelivery(ctx context.Context, sessionID domain.SessionID, clientMessageID string) (state domain.TurnState, failure string, started, found bool, err error)
 }
 
 // chatNoticeDelivery is where a notice's Chat delivery attempts stand.
@@ -58,8 +58,8 @@ type chatNoticeDelivery int
 const (
 	chatNoticeNotSent   chatNoticeDelivery = iota // no attempt is waiting or delivered
 	chatNoticeQueued                              // an attempt waits for the session to wake
-	chatNoticeDelivered                           // an attempt reached the agent
-	chatNoticeFailed                              // the current attempt's turn failed
+	chatNoticeDelivered                           // an attempt reached the agent or the user removed it
+	chatNoticeFailed                              // the current attempt failed before starting
 )
 
 // reviewNoticeClientID is the Chat client message id of a notice's delivery
@@ -75,21 +75,25 @@ func reviewNoticeClientID(run domain.ReviewRun, attempt int) string {
 func chatNoticeDeliveryState(ctx context.Context, chat reviewNoticeChatStore, id domain.SessionID, run domain.ReviewRun) (chatNoticeDelivery, string, error) {
 	state, failure := chatNoticeNotSent, ""
 	for attempt := 0; attempt <= run.WorkerNoticeAttempts; attempt++ {
-		turn, turnErr, found, err := chat.ReviewNoticeChatDelivery(ctx, id, reviewNoticeClientID(run, attempt))
+		turn, turnErr, started, found, err := chat.ReviewNoticeChatDelivery(ctx, id, reviewNoticeClientID(run, attempt))
 		if err != nil {
 			return chatNoticeNotSent, "", err
 		}
 		if !found {
 			continue
 		}
+		if started {
+			return chatNoticeDelivered, "", nil
+		}
 		switch turn {
 		case domain.TurnStateQueued:
 			state = chatNoticeQueued
-		case domain.TurnStateFailed, domain.TurnStateCancelled, domain.TurnStateInterrupted, domain.TurnStateRecovered:
+		case domain.TurnStateFailed, domain.TurnStateInterrupted:
 			if attempt == run.WorkerNoticeAttempts && state == chatNoticeNotSent {
 				state, failure = chatNoticeFailed, fmt.Sprintf("chat turn %s: %s", turn, turnErr)
 			}
-		case domain.TurnStateRunning, domain.TurnStateCompleted:
+		case domain.TurnStateRunning, domain.TurnStateCompleted, domain.TurnStateRecovered, domain.TurnStateCancelled:
+			// Cancelled means the user removed the queued item; leave it removed.
 			return chatNoticeDelivered, "", nil
 		}
 	}
@@ -451,14 +455,14 @@ func reviewFeedbackClientID(key, sig string, attempt int) string {
 }
 
 func chatReviewFeedbackState(ctx context.Context, chat reviewNoticeChatStore, id domain.SessionID, key, sig string, attempt int) (delivered, queued bool, err error) {
-	turn, _, found, err := chat.ReviewNoticeChatDelivery(ctx, id, reviewFeedbackClientID(key, sig, attempt))
-	return found && (turn == domain.TurnStateRunning || turn == domain.TurnStateCompleted),
-		found && turn == domain.TurnStateQueued, err
+	turn, _, started, found, err := chat.ReviewNoticeChatDelivery(ctx, id, reviewFeedbackClientID(key, sig, attempt))
+	delivered = found && (started || turn == domain.TurnStateRunning || turn == domain.TurnStateCompleted || turn == domain.TurnStateRecovered || turn == domain.TurnStateCancelled)
+	return delivered, found && !delivered && turn == domain.TurnStateQueued, err
 }
 
 // Caller holds react.mu. A queued Chat relay is an attempt, not delivery.
 // Its stable id lets another observation or a restart settle it without a
-// second paste. Failed turns use a new id within the existing attempt cap.
+// second paste. Only turns that never started retry within the attempt cap.
 func (m *Manager) sendChatReviewFeedbackLocked(ctx context.Context, chat reviewNoticeChatStore, id domain.SessionID, prURL, key, sig, msg string, maxAttempts int) (sendOnceOutcome, error) {
 	attempts := m.react.attempts[key]
 	if attempts > 0 {

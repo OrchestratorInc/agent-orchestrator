@@ -2,12 +2,15 @@ package store_test
 
 import (
 	"context"
+	"database/sql"
 	"errors"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
 
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
+	"github.com/aoagents/agent-orchestrator/backend/internal/storage/sqlite/sqlitetest"
 )
 
 func TestCreateReviewConversationClaimsChatMode(t *testing.T) {
@@ -1030,7 +1033,8 @@ func TestReviewRunFinalStatusQueuesWorkerNotice(t *testing.T) {
 // A review done notice relayed to a Chat session is found by its client
 // message id in the worker's conversation, with its turn's state and error.
 func TestReviewNoticeChatDeliveryReadsTheTurn(t *testing.T) {
-	s := newTestStore(t)
+	dataDir := t.TempDir()
+	s := sqlitetest.MustOpenAt(t, dataDir)
 	ctx := context.Background()
 	seedProject(t, s, "mer")
 	rec, err := s.CreateSession(ctx, sampleRecord("mer"))
@@ -1042,7 +1046,7 @@ func TestReviewNoticeChatDeliveryReadsTheTurn(t *testing.T) {
 	if err != nil {
 		t.Fatalf("create conversation: %v", err)
 	}
-	if _, _, found, err := s.ReviewNoticeChatDelivery(ctx, rec.ID, "review-done:run-1:0"); err != nil || found {
+	if _, _, _, found, err := s.ReviewNoticeChatDelivery(ctx, rec.ID, "review-done:run-1:0"); err != nil || found {
 		t.Fatalf("before the relay: found=%v err=%v", found, err)
 	}
 	// A relayed message starts as a queued turn until a controller runs it.
@@ -1052,19 +1056,67 @@ func TestReviewNoticeChatDeliveryReadsTheTurn(t *testing.T) {
 	if err != nil || !created {
 		t.Fatalf("append: created=%v err=%v", created, err)
 	}
-	state, failure, found, err := s.ReviewNoticeChatDelivery(ctx, rec.ID, "review-done:run-1:0")
-	if err != nil || !found || state != domain.TurnStateQueued || failure != "" {
-		t.Fatalf("queued relay: state=%q failure=%q found=%v err=%v", state, failure, found, err)
+	state, failure, started, found, err := s.ReviewNoticeChatDelivery(ctx, rec.ID, "review-done:run-1:0")
+	if err != nil || !found || started || state != domain.TurnStateQueued || failure != "" {
+		t.Fatalf("queued relay: state=%q failure=%q started=%v found=%v err=%v", state, failure, started, found, err)
 	}
 	if err := s.SettleTurnByID(ctx, "turn-1", domain.TurnStateFailed, "could not wake the agent", now.Add(time.Minute)); err != nil {
 		t.Fatalf("settle: %v", err)
 	}
-	state, failure, found, err = s.ReviewNoticeChatDelivery(ctx, rec.ID, "review-done:run-1:0")
-	if err != nil || !found || state != domain.TurnStateFailed || failure != "could not wake the agent" {
-		t.Fatalf("failed relay: state=%q failure=%q found=%v err=%v", state, failure, found, err)
+	state, failure, started, found, err = s.ReviewNoticeChatDelivery(ctx, rec.ID, "review-done:run-1:0")
+	if err != nil || !found || started || state != domain.TurnStateFailed || failure != "could not wake the agent" {
+		t.Fatalf("failed relay: state=%q failure=%q started=%v found=%v err=%v", state, failure, started, found, err)
 	}
-	if _, _, found, err := s.ReviewNoticeChatDelivery(ctx, "other-session", "review-done:run-1:0"); err != nil || found {
+	// A provider ID must prevent replay even when the start timestamp is absent.
+	db, err := sql.Open("sqlite", filepath.Join(dataDir, "ao.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	if _, err := db.ExecContext(ctx, "UPDATE conversation_turns SET provider_turn_id = ? WHERE id = ?", "provider-turn-1", "turn-1"); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, started, found, err := s.ReviewNoticeChatDelivery(ctx, rec.ID, "review-done:run-1:0"); err != nil || !found || !started {
+		t.Fatalf("provider-bound relay: started=%v found=%v err=%v", started, found, err)
+	}
+	if _, _, _, found, err := s.ReviewNoticeChatDelivery(ctx, "other-session", "review-done:run-1:0"); err != nil || found {
 		t.Fatalf("another session's lookup: found=%v err=%v", found, err)
+	}
+}
+
+func TestReviewNoticeChatDeliveryDistinguishesOrphanedTurns(t *testing.T) {
+	for _, tc := range []struct {
+		name       string
+		providerID string
+		started    bool
+	}{
+		{"never_started", "", false},
+		{"started_at_only", "", true},
+		{"provider_bound", "provider-turn-1", true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			s, session, conversation := conversationFixture(t)
+			ctx := context.Background()
+			clientID := "review-done:run-1:0"
+			created, err := s.AppendUserMessage(ctx, conversation, session, "gen-1", domain.ConversationMessage{
+				ID: "msg-notice", Origin: domain.MessageOriginAutomation, Text: "AO review done: approved", ClientMessageID: clientID,
+			}, "turn-notice", histClock)
+			if err != nil || !created {
+				t.Fatalf("append: created=%v err=%v", created, err)
+			}
+			if tc.started {
+				if err := s.BindTurnToProvider(ctx, "turn-notice", tc.providerID, histClock.Add(time.Second)); err != nil {
+					t.Fatal(err)
+				}
+			}
+			if err := s.SettleOrphanedTurns(ctx, session, histClock.Add(time.Minute)); err != nil {
+				t.Fatal(err)
+			}
+			state, failure, started, found, err := s.ReviewNoticeChatDelivery(ctx, session, clientID)
+			if err != nil || !found || state != domain.TurnStateFailed || failure != "controller ended before the turn completed" || started != tc.started {
+				t.Fatalf("orphaned relay: state=%q failure=%q started=%v want=%v found=%v err=%v", state, failure, started, tc.started, found, err)
+			}
+		})
 	}
 }
 
@@ -1092,7 +1144,7 @@ func TestReviewNoticeChatDeliveryReadsABatchedTurn(t *testing.T) {
 	if err := s.CompleteQueuedBatch(ctx, conversation, []string{batch[1].TurnID}, "provider-turn-1", "ordinary queued work\n\nAO review done: approved", histClock.Add(time.Minute)); err != nil {
 		t.Fatalf("complete batch: %v", err)
 	}
-	state, failure, found, err := s.ReviewNoticeChatDelivery(ctx, session, "review-done:run-1:0")
+	state, failure, _, found, err := s.ReviewNoticeChatDelivery(ctx, session, "review-done:run-1:0")
 	if err != nil || !found || state != domain.TurnStateCompleted || failure != "" {
 		t.Fatalf("batched notice: state=%q failure=%q found=%v err=%v", state, failure, found, err)
 	}

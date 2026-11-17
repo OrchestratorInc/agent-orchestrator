@@ -772,13 +772,14 @@ func TestReviewDoneNotice_UnconfirmedDeliveryIsNotResent(t *testing.T) {
 // relayed message and its turn state.
 type chatNoticeStore struct {
 	*noticeStore
-	turns map[string]domain.TurnState
-	errs  map[string]string
+	turns   map[string]domain.TurnState
+	errs    map[string]string
+	started map[string]bool
 }
 
-func (s *chatNoticeStore) ReviewNoticeChatDelivery(_ context.Context, _ domain.SessionID, clientMessageID string) (domain.TurnState, string, bool, error) {
+func (s *chatNoticeStore) ReviewNoticeChatDelivery(_ context.Context, _ domain.SessionID, clientMessageID string) (domain.TurnState, string, bool, bool, error) {
 	state, ok := s.turns[clientMessageID]
-	return state, s.errs[clientMessageID], ok, nil
+	return state, s.errs[clientMessageID], s.started[clientMessageID], ok, nil
 }
 
 // chatRelay records each relay under its client message id with the turn
@@ -798,7 +799,7 @@ func (r *chatRelay) Send(ctx context.Context, _ domain.SessionID, _ string) erro
 
 func newChatNoticeManager(t *testing.T, relayState domain.TurnState) (*Manager, *chatNoticeStore, *chatRelay, *time.Time) {
 	t.Helper()
-	st := &chatNoticeStore{noticeStore: &noticeStore{fakeStore: newFakeStore()}, turns: map[string]domain.TurnState{}, errs: map[string]string{}}
+	st := &chatNoticeStore{noticeStore: &noticeStore{fakeStore: newFakeStore()}, turns: map[string]domain.TurnState{}, errs: map[string]string{}, started: map[string]bool{}}
 	rec := working("w-1")
 	rec.Mode = domain.SessionModeChat
 	rec.Activity.State = domain.ActivityIdle
@@ -812,8 +813,21 @@ func newChatNoticeManager(t *testing.T, relayState domain.TurnState) (*Manager, 
 }
 
 func TestReviewDoneNotice_QueuedFeedbackDoesNotSuppressCompletion(t *testing.T) {
-	for _, settled := range []domain.TurnState{domain.TurnStateCompleted, domain.TurnStateFailed, domain.TurnStateCancelled, domain.TurnStateInterrupted, domain.TurnStateRecovered} {
-		t.Run(string(settled), func(t *testing.T) {
+	for _, tc := range []struct {
+		name      string
+		state     domain.TurnState
+		started   bool
+		wantSends int
+	}{
+		{"completed", domain.TurnStateCompleted, false, 1},
+		{"queued_failed", domain.TurnStateFailed, false, 2},
+		{"queued_interrupted", domain.TurnStateInterrupted, false, 2},
+		{"cancelled", domain.TurnStateCancelled, false, 1},
+		{"started_interrupted", domain.TurnStateInterrupted, true, 1},
+		{"orphaned_started", domain.TurnStateFailed, true, 1},
+		{"recovered", domain.TurnStateRecovered, false, 1},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
 			m, st, relay, _ := newChatNoticeManager(t, domain.TurnStateQueued)
 			st.runs = nil
 			st.reviews[donePR] = []domain.PullRequestReview{observedReview("777")}
@@ -838,17 +852,17 @@ func TestReviewDoneNotice_QueuedFeedbackDoesNotSuppressCompletion(t *testing.T) 
 			if len(relay.ids) != 1 {
 				t.Fatalf("queued feedback repeated after restart: %v", relay.ids)
 			}
-			st.turns[relay.ids[0]] = settled
+			if tc.started {
+				st.turns[relay.ids[0]] = domain.TurnStateRunning
+				st.started[relay.ids[0]] = true
+			}
+			st.turns[relay.ids[0]] = tc.state
 			relay.state = domain.TurnStateRunning
 			if err := m.ApplyPRObservation(ctx, "w-1", observation); err != nil {
 				t.Fatal(err)
 			}
-			wantSends := 1
-			if settled != domain.TurnStateCompleted {
-				wantSends = 2
-			}
-			if len(relay.ids) != wantSends {
-				t.Fatalf("feedback sends after %s = %v, want %d", settled, relay.ids, wantSends)
+			if len(relay.ids) != tc.wantSends {
+				t.Fatalf("feedback sends after %s = %v, want %d", tc.state, relay.ids, tc.wantSends)
 			}
 			for i, id := range relay.ids {
 				if id == "" || strings.HasPrefix(id, "review-done:") || (i > 0 && id == relay.ids[i-1]) {
@@ -861,7 +875,7 @@ func TestReviewDoneNotice_QueuedFeedbackDoesNotSuppressCompletion(t *testing.T) 
 			if err := New(st, relay).ApplyPRObservation(ctx, "w-1", observation); err != nil {
 				t.Fatal(err)
 			}
-			if len(relay.ids) != wantSends {
+			if len(relay.ids) != tc.wantSends {
 				t.Fatalf("confirmed feedback repeated after restart: %v", relay.ids)
 			}
 		})
@@ -895,8 +909,8 @@ func TestReviewDoneNotice_FailedFeedbackLeavesCompletionNotice(t *testing.T) {
 	}
 }
 
-func TestReviewDoneNotice_InterruptedOrRecoveredQueuedNoticeRetries(t *testing.T) {
-	for _, state := range []domain.TurnState{domain.TurnStateInterrupted, domain.TurnStateRecovered} {
+func TestReviewDoneNotice_NeverStartedQueuedNoticeRetries(t *testing.T) {
+	for _, state := range []domain.TurnState{domain.TurnStateInterrupted, domain.TurnStateFailed} {
 		t.Run(string(state), func(t *testing.T) {
 			m, st, relay, now := newChatNoticeManager(t, domain.TurnStateQueued)
 			m.SweepReviewDoneNotices(ctx)
@@ -914,6 +928,70 @@ func TestReviewDoneNotice_InterruptedOrRecoveredQueuedNoticeRetries(t *testing.T
 			New(st, relay).SweepReviewDoneNotices(ctx)
 			if len(relay.ids) != 2 {
 				t.Fatalf("confirmed retry repeated after restart: %v", relay.ids)
+			}
+		})
+	}
+}
+
+func TestReviewDoneNotice_StartedOrSettledChatTurnIsNotResent(t *testing.T) {
+	for _, tc := range []struct {
+		name    string
+		state   domain.TurnState
+		started bool
+	}{
+		{"started_interrupted", domain.TurnStateInterrupted, true},
+		{"orphaned_started", domain.TurnStateFailed, true},
+		{"recovered", domain.TurnStateRecovered, false},
+		{"cancelled", domain.TurnStateCancelled, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			m, st, relay, now := newChatNoticeManager(t, domain.TurnStateQueued)
+			m.SweepReviewDoneNotices(ctx)
+			id := relay.ids[0]
+			if tc.started {
+				st.turns[id] = domain.TurnStateRunning
+				st.started[id] = true
+			}
+			st.turns[id] = tc.state
+			for i := 0; i <= domain.ReviewWorkerNoticeMaxAttempts; i++ {
+				m = New(st, relay)
+				m.clock = func() time.Time { return *now }
+				m.SweepReviewDoneNotices(ctx)
+				*now = now.Add(reviewNoticeRetryMax)
+			}
+			if got := st.run("run-1"); len(relay.ids) != 1 || got.WorkerNotice != domain.ReviewWorkerNoticeSent || got.WorkerNoticeAttempts != 0 {
+				t.Fatalf("settled %s turn was retried: ids=%v run=%+v", tc.state, relay.ids, got)
+			}
+		})
+	}
+}
+
+func TestReviewDoneNotice_NeverStartedRetriesAreBounded(t *testing.T) {
+	for _, state := range []domain.TurnState{domain.TurnStateInterrupted, domain.TurnStateFailed} {
+		t.Run(string(state), func(t *testing.T) {
+			m, st, relay, now := newChatNoticeManager(t, domain.TurnStateQueued)
+			for i := 0; i <= domain.ReviewWorkerNoticeMaxAttempts; i++ {
+				m.SweepReviewDoneNotices(ctx)
+				st.turns[relay.ids[len(relay.ids)-1]] = state
+				m.SweepReviewDoneNotices(ctx)
+				*now = now.Add(reviewNoticeRetryMax)
+			}
+			if len(relay.ids) != domain.ReviewWorkerNoticeMaxAttempts || st.run("run-1").WorkerNoticeAttempts != domain.ReviewWorkerNoticeMaxAttempts {
+				t.Fatalf("notice retry limit: ids=%v run=%+v", relay.ids, st.run("run-1"))
+			}
+
+			m, st, relay, _ = newChatNoticeManager(t, domain.TurnStateQueued)
+			st.runs = nil
+			st.comments[donePR] = changesRequestedComments()[:1]
+			observation := ports.PRObservation{Fetched: true, URL: donePR}
+			for i := 0; i <= reviewMaxNudge; i++ {
+				if err := m.ApplyPRObservation(ctx, "w-1", observation); err != nil {
+					t.Fatal(err)
+				}
+				st.turns[relay.ids[len(relay.ids)-1]] = state
+			}
+			if len(relay.ids) != reviewMaxNudge {
+				t.Fatalf("feedback retry limit: ids=%v, want %d", relay.ids, reviewMaxNudge)
 			}
 		})
 	}

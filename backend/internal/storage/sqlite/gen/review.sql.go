@@ -1266,7 +1266,8 @@ func (q *Queries) RestoreReviewLaunchState(ctx context.Context, arg RestoreRevie
 }
 
 const selectReviewNoticeChatDelivery = `-- name: SelectReviewNoticeChatDelivery :one
-SELECT conversation_turns.state, conversation_turns.error_message
+SELECT conversation_turns.state, conversation_turns.error_message,
+    CAST((conversation_turns.started_at IS NOT NULL OR conversation_turns.provider_turn_id != '') AS BOOLEAN) AS started
 FROM conversations
 JOIN conversation_messages ON conversation_messages.conversation_id = conversations.id
     AND conversation_messages.client_message_id = ?1
@@ -1283,16 +1284,16 @@ type SelectReviewNoticeChatDeliveryParams struct {
 type SelectReviewNoticeChatDeliveryRow struct {
 	State        domain.TurnState
 	ErrorMessage string
+	Started      bool
 }
 
 // The Chat turn carrying one "review done" delivery attempt, found by the
-// attempt's client message id in the worker's conversation. Its state tells
-// whether the message reached the agent, is still queued (a sleeping session
-// not yet woken), or failed (the wake or drain failed).
+// attempt's client message id in the worker's conversation. A started turn
+// reached the agent even if it later failed or was interrupted.
 func (q *Queries) SelectReviewNoticeChatDelivery(ctx context.Context, arg SelectReviewNoticeChatDeliveryParams) (SelectReviewNoticeChatDeliveryRow, error) {
 	row := q.db.QueryRowContext(ctx, selectReviewNoticeChatDelivery, arg.ClientMessageID, arg.SessionID)
 	var i SelectReviewNoticeChatDeliveryRow
-	err := row.Scan(&i.State, &i.ErrorMessage)
+	err := row.Scan(&i.State, &i.ErrorMessage, &i.Started)
 	return i, err
 }
 
