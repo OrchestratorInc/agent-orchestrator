@@ -952,7 +952,8 @@ html[data-theme="light"] .browser-popout-overlay--mac-windowed .workspace-topbar
 
 /* The tab bar's header is 1px taller than the band; unfilled, it leaves the
  * panel's top row to the panel. */
-.center-panel-shell--floating-topbar .workspace-topbar-container > header {
+.center-panel-shell--floating-topbar .workspace-topbar-container > header,
+.center-panel-shell--floating-topbar .workspace-topbar-container > [data-session-topbar-scope] > header {
 	background: transparent;
 }
 
