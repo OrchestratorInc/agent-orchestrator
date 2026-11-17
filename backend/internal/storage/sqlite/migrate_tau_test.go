@@ -9,7 +9,7 @@ import (
 
 const (
 	tauMigrationVersion       int64 = 20261117090000000
-	tauMigrationPriorVersion  int64 = 20261116173733857
+	tauMigrationPriorVersion  int64 = 20261116231134450
 	tauMigrationSessionInsert       = `INSERT INTO sessions (id, project_id, num, harness, created_at, updated_at, activity_last_at) VALUES (?, 'tau-project', ?, ?, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)`
 )
 

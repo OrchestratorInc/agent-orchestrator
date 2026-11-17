@@ -1,4 +1,4 @@
-package cli
+package mcpserver
 
 import (
 	"encoding/json"
