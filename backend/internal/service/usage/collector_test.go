@@ -2242,6 +2242,44 @@ func TestReconcileSettlesFinalizingBindingWhoseTranscriptNeverAppears(t *testing
 	}
 }
 
+func TestReconcileKeepsFinalizingBindingWithUnreadSource(t *testing.T) {
+	store := collectorTestStore(t)
+	now := time.Now().UTC()
+	session := collectorTestSession(t, store, domain.HarnessClaudeCode, "native-unread", true)
+	binding := seedCollectorUsageBinding(
+		t, store, session, "native-unread", domain.UsageBindingFinalizing,
+		now.Add(-2*time.Hour), domain.UsageErrorSourceDiscoveryPending,
+	)
+	source, err := store.InsertUsageSource(context.Background(), domain.UsageSourceRecord{
+		BindingID:       binding.ID,
+		Kind:            domain.UsageSourceClaudeSubagent,
+		NativeSessionID: "native-unread",
+		SubagentID:      "child",
+		ArtifactPath:    filepath.Join(t.TempDir(), "subagents", "agent-child.jsonl"),
+		FileIdentity:    "dev:child",
+		State:           domain.UsageSourcePending,
+		UpdatedAt:       now,
+	})
+	mustNoError(t, err)
+	collector := NewCollector(store, SourceRoots{ClaudeProjects: t.TempDir()}, nil)
+
+	mustNoError(t, collector.ReconcileSources(context.Background(), 8), "reconcile with unread child")
+	got, _, err := store.GetUsageBinding(context.Background(), session.ID, session.Harness, "native-unread")
+	mustNoError(t, err)
+	if got.State != domain.UsageBindingFinalizing {
+		t.Fatalf("binding state = %s, want finalizing while a source is unread", got.State)
+	}
+
+	_, err = store.MarkUsageSourceState(context.Background(), source.ID, domain.UsageSourceComplete, "", nil, now)
+	mustNoError(t, err)
+	mustNoError(t, collector.ReconcileSources(context.Background(), 8), "reconcile after child read")
+	got, _, err = store.GetUsageBinding(context.Background(), session.ID, session.Harness, "native-unread")
+	mustNoError(t, err)
+	if got.State != domain.UsageBindingPartial || got.LastErrorCode != domain.UsageErrorArtifactMissing {
+		t.Fatalf("binding = %s/%s, want partial/artifact_missing once every source is read", got.State, got.LastErrorCode)
+	}
+}
+
 func TestResumedSessionReactivatesBindingSettledForMissingTranscript(t *testing.T) {
 	store := collectorTestStore(t)
 	now := time.Now().UTC()

@@ -1428,12 +1428,21 @@ func (c *Collector) reconcileBinding(ctx context.Context, binding domain.UsageBi
 			}
 		}
 		if finalizingDiscoveryExpired(binding, targetState, now) {
-			// Settle with what was collected. A resumed session reactivates the
-			// binding, so a transcript that appears later is still read.
-			_, err = c.store.UpdateUsageBindingState(
-				ctx, binding.ID, domain.UsageBindingPartial, domain.UsageErrorArtifactMissing, now,
-			)
-			return err
+			unread, unreadErr := c.hasUnreadUsageSource(ctx, binding.ID)
+			if unreadErr != nil {
+				return unreadErr
+			}
+			// Settle with what was collected. A source still waiting to be read,
+			// such as a Codex child registered above, keeps the binding
+			// finalizing so the pipeline reads it first. A resumed session
+			// reactivates a settled binding, so a transcript that appears later
+			// is still read.
+			if !unread {
+				_, err = c.store.UpdateUsageBindingState(
+					ctx, binding.ID, domain.UsageBindingPartial, domain.UsageErrorArtifactMissing, now,
+				)
+				return err
+			}
 		}
 		targetState, lastErrorCode, stateErr := c.preserveCodexBudgetState(
 			ctx,
@@ -1513,6 +1522,21 @@ func finalizingDiscoveryExpired(binding domain.UsageBindingRecord, targetState d
 		binding.LastErrorCode == domain.UsageErrorSourceDiscoveryPending &&
 		!binding.UpdatedAt.IsZero() &&
 		now.Sub(binding.UpdatedAt) >= finalizingDiscoveryGrace
+}
+
+// hasUnreadUsageSource reports whether the binding has a source that the
+// ingestion pipeline has not finished reading.
+func (c *Collector) hasUnreadUsageSource(ctx context.Context, bindingID int64) (bool, error) {
+	sources, err := c.store.ListUsageSourcesForBinding(ctx, bindingID)
+	if err != nil {
+		return false, err
+	}
+	for _, source := range sources {
+		if source.State == domain.UsageSourcePending || source.State == domain.UsageSourceActive {
+			return true, nil
+		}
+	}
+	return false, nil
 }
 
 func (c *Collector) preserveCodexBudgetState(
