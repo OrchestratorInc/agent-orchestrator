@@ -2874,6 +2874,8 @@
 	"terminal.sessionEndedNotTerminated": "This terminal process ended, but the session is not marked terminated yet.",
 	"terminal.sessionAria": "Session terminal",
 	"terminal.shellExited": "This shell exited. Close the tab, or open a new terminal.",
+	"terminal.shellEnded": "Terminal ended",
+	"terminal.reopenShell": "Reopen terminal",
 	"terminal.shellAria": "Shell terminal",
 	"terminal.startingSession": "Starting session",
 	"terminal.tabsAria": "Open terminals",

@@ -2462,6 +2462,8 @@
 	"terminal.sessionEndedNotTerminated": "Ce processus de terminal s'est terminé, mais la session n'est pas encore marquée comme terminée.",
 	"terminal.sessionAria": "Terminal de session",
 	"terminal.shellExited": "Ce shell s'est terminé. Fermez l'onglet ou ouvrez un nouveau terminal.",
+	"terminal.shellEnded": "Terminal arrêté",
+	"terminal.reopenShell": "Rouvrir le terminal",
 	"terminal.shellAria": "Terminal shell",
 	"terminal.startingSession": "Démarrage de la session",
 	"terminal.tabsAria": "Terminaux ouverts",
