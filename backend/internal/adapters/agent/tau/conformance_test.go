@@ -21,9 +21,7 @@ import (
 
 	"github.com/creack/pty"
 
-	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
 	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
-	"github.com/aoagents/agent-orchestrator/backend/internal/sessionguard"
 )
 
 type conformanceRequest struct {
@@ -439,38 +437,25 @@ func waitConformanceComposer(t *testing.T, process *conformanceTUI) {
 	t.Fatalf("native composer readiness marker missing\n%s", process.output())
 }
 
-type conformanceSessionReader struct{}
-
-func (conformanceSessionReader) GetSession(context.Context, domain.SessionID) (domain.SessionRecord, bool, error) {
-	return domain.SessionRecord{ID: "ao-tau-conformance", Harness: domain.HarnessTau, Activity: domain.Activity{State: domain.ActivityIdle}, FirstSignalAt: time.Now()}, true, nil
-}
-
-type conformanceMessenger struct{ process *conformanceTUI }
-
-func (m conformanceMessenger) Send(_ context.Context, _ domain.SessionID, prompt string) error {
-	runes := []rune(prompt)
+// sendConformanceInput types a task the way AO delivers it to Tau: one
+// bracketed paste, written in runtime-sized chunks, then Enter. The session
+// guard applies this framing (pinned by sessionguard's TestGuardTauPasteFraming);
+// this test proves the released Tau composer accepts it as a single turn.
+func sendConformanceInput(t *testing.T, process *conformanceTUI, prompt string) {
+	t.Helper()
+	runes := []rune("\x1b[200~" + prompt + "\x1b[201~")
 	for i := 0; i < len(runes); i += 512 {
-		end := i + 512
-		if end > len(runes) {
-			end = len(runes)
-		}
-		if _, err := m.process.terminal.WriteString(string(runes[i:end])); err != nil {
-			return err
+		end := min(i+512, len(runes))
+		if _, err := process.terminal.WriteString(string(runes[i:end])); err != nil {
+			t.Fatalf("native delivery: %v", err)
 		}
 		if end < len(runes) {
 			time.Sleep(15 * time.Millisecond)
 		}
 	}
 	time.Sleep(300 * time.Millisecond)
-	_, err := m.process.terminal.WriteString("\r")
-	return err
-}
-func sendConformanceInput(t *testing.T, process *conformanceTUI, prompt string) {
-	t.Helper()
-	guard := sessionguard.New(conformanceSessionReader{}, conformanceMessenger{process}, nil)
-	outcome, err := guard.Deliver(context.Background(), "ao-tau-conformance", prompt)
-	if err != nil || outcome != sessionguard.Sent {
-		t.Fatalf("guarded native delivery: %v, %v", outcome, err)
+	if _, err := process.terminal.WriteString("\r"); err != nil {
+		t.Fatalf("native submit: %v", err)
 	}
 }
 
