@@ -302,6 +302,7 @@ export type SplitGroupMember = {
 	onClose: () => void;
 	/** A shell whose running agent should show, as on its strip tab. */
 	agentHandleId?: string;
+	resumeHarness?: string;
 };
 
 /**
@@ -309,7 +310,8 @@ export type SplitGroupMember = {
  * (the group tab, its pane header) the agent running in it shows as on that tab.
  */
 function withMemberAgent(member: SplitGroupMember, agents: ReturnType<typeof useShellAgentStore.getState>["agents"]) {
-	const agent = member.agentHandleId ? agents[member.agentHandleId] : undefined;
+	const live = member.agentHandleId ? agents[member.agentHandleId] : undefined;
+	const agent = live ?? (member.agentHandleId && member.resumeHarness ? { harness: member.resumeHarness, state: "idle" as const } : undefined);
 	if (!agent) return { ...member, agent };
 	// A default-named shell ("Terminal 3") reads as its agent.
 	const label = /^Terminal \d+$/.test(member.label) ? agentLabel(agent.harness) : member.label;

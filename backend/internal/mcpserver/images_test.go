@@ -1,4 +1,4 @@
-package cli
+package mcpserver
 
 import (
 	"encoding/base64"
@@ -176,7 +176,7 @@ func TestInlineLocalImages(t *testing.T) {
 		return "data:" + mime + ";base64," + base64.StdEncoding.EncodeToString([]byte(data))
 	}
 
-	got, missing, err := inlineLocalImages(page(chart, icon, photo))
+	got, missing, err := InlineLocalImages(page(chart, icon, photo))
 	if err != nil || missing != nil {
 		t.Fatalf("err=%v missing=%q", err, missing)
 	}
@@ -187,7 +187,7 @@ func TestInlineLocalImages(t *testing.T) {
 
 func TestInlineLocalImagesLeavesAPageWithoutImagesAlone(t *testing.T) {
 	html := `<p>No pictures.</p>`
-	if got, missing, err := inlineLocalImages(html); err != nil || missing != nil || got != html {
+	if got, missing, err := InlineLocalImages(html); err != nil || missing != nil || got != html {
 		t.Fatalf("got %q missing=%q err=%v", got, missing, err)
 	}
 }
@@ -200,7 +200,7 @@ func TestInlineLocalImagesOpensARepeatedImageOnce(t *testing.T) {
 		return open(name)
 	})
 
-	got, _, err := inlineLocalImages(strings.Repeat(`<img src="`+chart+`">`, 3))
+	got, _, err := InlineLocalImages(strings.Repeat(`<img src="`+chart+`">`, 3))
 	if err != nil || opens != 1 {
 		t.Fatalf("err=%v opens=%d", err, opens)
 	}
@@ -221,7 +221,7 @@ func TestInlineLocalImagesReportsWhatItCannotInline(t *testing.T) {
 	html := `<img src="` + absent + `"><img src="` + folder + `"><img src="` + env + `">` +
 		`<img src="` + page + `"><script>load("Q:\\none\\x.webp")</script><img src="` + absent + `">`
 
-	got, missing, err := inlineLocalImages(html)
+	got, missing, err := InlineLocalImages(html)
 	if err != nil || got != html {
 		t.Fatalf("err=%v page=%s", err, got)
 	}
@@ -238,7 +238,7 @@ func TestInlineLocalImagesReportsASymlinkToANonImage(t *testing.T) {
 		t.Skipf("cannot symlink: %v", err)
 	}
 	html := `<img src="` + link + `">`
-	got, missing, err := inlineLocalImages(html)
+	got, missing, err := InlineLocalImages(html)
 	if err != nil || got != html || !slices.Equal(missing, []string{link}) {
 		t.Fatalf("err=%v missing=%q page=%s", err, missing, got)
 	}
@@ -260,7 +260,7 @@ func TestInlineLocalImagesSizeLimits(t *testing.T) {
 			"the page exceeds the 25.0 MiB limit after embedding images (32.0 MiB); use smaller images"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			if _, _, err := inlineLocalImages(tc.html); err == nil || err.Error() != tc.want {
+			if _, _, err := InlineLocalImages(tc.html); err == nil || err.Error() != tc.want {
 				t.Fatalf("err = %v\nwant  %s", err, tc.want)
 			}
 		})
@@ -276,7 +276,7 @@ func TestInlineLocalImagesCatchesAnImageThatGrowsAfterItsStat(t *testing.T) {
 		return open(name)
 	})
 
-	_, _, err := inlineLocalImages(`<img src="` + chart + `">`)
+	_, _, err := InlineLocalImages(`<img src="` + chart + `">`)
 	if want := "local image " + chart + " exceeds 10.0 MiB (over 10.0 MiB); resize it before rendering"; err == nil || err.Error() != want {
 		t.Fatalf("err = %v\nwant  %s", err, want)
 	}
