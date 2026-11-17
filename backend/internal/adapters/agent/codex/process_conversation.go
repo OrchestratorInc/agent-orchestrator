@@ -53,7 +53,7 @@ func subagentRollout(path string) bool {
 	if err != nil {
 		return false
 	}
-	defer f.Close()
+	defer func() { _ = f.Close() }() // read-only: a close error loses nothing
 	var first struct {
 		Type    string `json:"type"`
 		Payload struct {
