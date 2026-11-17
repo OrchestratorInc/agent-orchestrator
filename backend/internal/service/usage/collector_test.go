@@ -2209,6 +2209,39 @@ func TestReconcileCodexRootAcceptsScalarSourceMetadata(t *testing.T) {
 	}
 }
 
+func TestReconcileSettlesFinalizingBindingWhoseTranscriptNeverAppears(t *testing.T) {
+	store := collectorTestStore(t)
+	now := time.Now().UTC()
+	staleSession := collectorTestSession(t, store, domain.HarnessClaudeCode, "native-gone", true)
+	seedCollectorUsageBinding(
+		t, store, staleSession, "native-gone", domain.UsageBindingFinalizing,
+		now.Add(-2*time.Hour), domain.UsageErrorSourceDiscoveryPending,
+	)
+	recentSession := collectorTestSession(t, store, domain.HarnessClaudeCode, "native-late", true)
+	seedCollectorUsageBinding(
+		t, store, recentSession, "native-late", domain.UsageBindingFinalizing,
+		now.Add(-5*time.Minute), domain.UsageErrorSourceDiscoveryPending,
+	)
+
+	collector := NewCollector(store, SourceRoots{ClaudeProjects: t.TempDir()}, nil)
+	mustNoError(t, collector.ReconcileSources(context.Background(), 8), "reconcile missing transcripts")
+
+	stale, ok, err := store.GetUsageBinding(context.Background(), staleSession.ID, staleSession.Harness, "native-gone")
+	if err != nil || !ok {
+		t.Fatalf("get stale binding: ok=%v err=%v", ok, err)
+	}
+	if stale.State != domain.UsageBindingPartial || stale.LastErrorCode != domain.UsageErrorArtifactMissing {
+		t.Fatalf("stale binding = %s/%s, want partial/artifact_missing", stale.State, stale.LastErrorCode)
+	}
+	recent, ok, err := store.GetUsageBinding(context.Background(), recentSession.ID, recentSession.Harness, "native-late")
+	if err != nil || !ok {
+		t.Fatalf("get recent binding: ok=%v err=%v", ok, err)
+	}
+	if recent.State != domain.UsageBindingFinalizing || recent.LastErrorCode != domain.UsageErrorSourceDiscoveryPending {
+		t.Fatalf("recent binding = %s/%s, want finalizing/source_discovery_pending", recent.State, recent.LastErrorCode)
+	}
+}
+
 func TestSourceIdentityChangesWhenFileIsReplacedWithSameFirstRecord(t *testing.T) {
 	root := t.TempDir()
 	path := filepath.Join(root, "session.jsonl")
