@@ -174,9 +174,8 @@ function HoverCardTrigger({
  * it is never drawn at the top-left fallback position, and when the window
  * loses focus.
  */
-function useDismissWhenTriggerHidden(card: HoverCardDismiss | null, contentRef: RefObject<HTMLElement | null>) {
+function useDismissWhenTriggerHidden(card: HoverCardDismiss | null, content: HTMLElement | null) {
 	useLayoutEffect(() => {
-		const content = contentRef.current;
 		if (!card || !content) return;
 		const hideIfTriggerHidden = () => {
 			if (!content.isConnected || isRendered(card.trigger.current)) return false;
@@ -216,7 +215,7 @@ function useDismissWhenTriggerHidden(card: HoverCardDismiss | null, contentRef: 
 			// the trigger still laid out.
 			queueMicrotask(hideIfTriggerHidden);
 		};
-	}, [card, contentRef]);
+	}, [card, content]);
 }
 
 function HoverCardContent({
@@ -237,9 +236,19 @@ function HoverCardContent({
 	animation?: "full" | "enter" | "none";
 }) {
 	const card = useContext(HoverCardDismissContext);
-	const contentRef = useRef<HTMLDivElement | null>(null);
-	const mergedRef = useMergedRef(ref, contentRef);
-	useDismissWhenTriggerHidden(card, contentRef);
+	// State, not a ref: Radix's Portal mounts the card a commit after this
+	// component (and its Presence unmounts and remounts it while this stays
+	// rendered), so the watcher must run whenever the element itself arrives.
+	const [content, setContent] = useState<HTMLDivElement | null>(null);
+	const mergedRef = useCallback(
+		(node: HTMLDivElement | null) => {
+			setContent(node);
+			if (typeof ref === "function") ref(node);
+			else if (ref) ref.current = node;
+		},
+		[ref],
+	);
+	useDismissWhenTriggerHidden(card, content);
 	return (
 		<HoverCardPrimitive.Portal container={portalContainer}>
 			<HoverCardPrimitive.Content
