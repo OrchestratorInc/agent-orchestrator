@@ -294,6 +294,10 @@ func TestProviderSwitchChecksEffortAgainstTheTargetCatalog(t *testing.T) {
 			t.Fatalf("%s: %d %s called=%v model=%q", tc.body, status, body, svc.switchRequest.TargetHarness != "", svc.switchRequest.Model)
 		}
 	}
+	svc := &fakeConversationService{}
+	if _, body := switchWithCatalog(t, svc, `{"targetHarness":"claude-code","effort":"MAX"}`); svc.switchRequest.Effort != "max" {
+		t.Fatalf("effort = %q (%s), want the catalog's own value", svc.switchRequest.Effort, body)
+	}
 }
 
 func TestProviderSwitchReportsWhatAForcedSwitchStopped(t *testing.T) {

@@ -150,15 +150,14 @@ func (s *Service) applyPicksToActiveTarget(ctx context.Context, id domain.Sessio
 			}
 		}
 	}
-	controller.mu.Lock()
-	running := controller.pendingTurnID != ""
-	controller.mu.Unlock()
+	running := controller.busy()
 	switch {
 	case request.Force && running:
-		if err := controller.Interrupt(ctx); err != nil {
-			result.Warnings = append(result.Warnings, fmt.Sprintf("the running turn did not stop: %v", err))
-		} else {
+		switch err := controller.Interrupt(ctx); {
+		case err == nil:
 			result.StoppedTurn = true
+		case !errors.Is(err, ErrNoActiveTurn):
+			result.Warnings = append(result.Warnings, fmt.Sprintf("the running turn did not stop: %v", err))
 		}
 	case unchanged:
 		return false, nil

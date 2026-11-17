@@ -48,7 +48,7 @@ func (c *ConversationsController) switchProvider(w http.ResponseWriter, r *http.
 		Model:    capActivityMeta(strings.TrimSpace(domain.SanitizeControlChars(req.Model))),
 		Effort:   capActivityMeta(strings.TrimSpace(domain.SanitizeControlChars(req.Effort))),
 		FastMode: req.FastMode, Ultracode: req.Ultracode, AutoCompactWindow: req.AutoCompactWindow,
-		PermissionMode: domain.PermissionMode(req.PermissionMode), Force: req.Force,
+		PermissionMode: domain.PermissionMode(strings.TrimSpace(req.PermissionMode)), Force: req.Force,
 	}
 	warnings, err := c.checkSwitchPicks(ctx, &request)
 	if err != nil {
@@ -135,6 +135,7 @@ func (c *ConversationsController) checkSwitchPicks(ctx context.Context, request 
 	}
 	for _, effort := range allowed {
 		if strings.EqualFold(effort, request.Effort) {
+			request.Effort = effort
 			return warnings, nil
 		}
 	}
