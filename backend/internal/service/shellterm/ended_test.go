@@ -46,6 +46,9 @@ func (f *fakeShellTerminalStore) UpdateShellTerminalAgentHarness(_ context.Conte
 }
 
 func (f *fakeShellTerminalStore) AdoptShellTerminal(_ context.Context, handleID, appRunID string) (bool, error) {
+	if f.adoptErr != nil {
+		return false, f.adoptErr
+	}
 	for i, rec := range f.records {
 		if rec.HandleID == handleID && rec.EndedAt == nil {
 			f.records[i].AppRunID = appRunID
@@ -674,5 +677,39 @@ func TestQuitKeepsAShellWhoseStartupRecoveryDidNotSettle(t *testing.T) {
 	release()
 	if len(st.records) != 1 || st.records[0].EndedAt == nil {
 		t.Fatalf("rows = %+v; want the tab kept as ended", st.records)
+	}
+}
+
+// A shell whose startup recovery failed (an unknown probe, or a failed
+// adoption) and that a later list finds alive is recovered then: once the
+// user exits it, the tab closes rather than being ended and reopened.
+func TestShellRecoveredAliveByLaterListClosesWhenItExits(t *testing.T) {
+	for _, tc := range []struct {
+		name               string
+		probeErr, adoptErr error
+	}{
+		{name: "unknown startup probe", probeErr: ports.ErrRuntimeProbeInconclusive},
+		{name: "failed startup adoption", adoptErr: errors.New("disk busy")},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			ctx := context.Background()
+			rt := newFakeShellRuntime()
+			rec := sessionShell("shellterm-a")
+			rt.aliveByHandle[rec.HandleID] = true
+			rt.childProbeErr = tc.probeErr
+			st := &fakeShellTerminalStore{records: []ShellTerminalRecord{rec}, adoptErr: tc.adoptErr}
+			svc := newTestService(rt, st, &fakeProjectRootLocator{})
+			if _, err := svc.ReapShellTerminalsFromPreviousAppRuns(ctx); err != nil || st.records[0].AppRunID == testAppRunID {
+				t.Fatalf("reap err = %v; rows = %+v; want the startup recovery unfinished", err, st.records)
+			}
+			rt.childProbeErr, st.adoptErr = nil, nil
+			if listed, err := svc.ListShellTerminalsForCurrentAppRun(ctx); err != nil || len(listed) != 1 || st.records[0].AppRunID != testAppRunID {
+				t.Fatalf("live list = %+v, %v; rows = %+v; want the live shell adopted", listed, err, st.records)
+			}
+			rt.childExited = true
+			if listed, err := svc.ListShellTerminalsForCurrentAppRun(ctx); err != nil || len(listed) != 0 || len(st.records) != 0 {
+				t.Fatalf("list after exit = %+v, %v; rows = %+v; want the tab removed", listed, err, st.records)
+			}
+		})
 	}
 }

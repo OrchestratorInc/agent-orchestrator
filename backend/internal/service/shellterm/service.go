@@ -1073,6 +1073,15 @@ func (s *Service) ListShellTerminalsForCurrentAppRun(ctx context.Context) ([]She
 			}
 			continue
 		}
+		if keepsEndedShell(rec) && rec.AppRunID != s.appRunID {
+			// A previous launch's shell the startup reap could not recover
+			// (an unknown probe, a failed write) is alive: finish recovering
+			// it, so exiting it later closes the tab like any of this
+			// launch's shells.
+			if _, err := s.store.AdoptShellTerminal(ctx, rec.HandleID, s.appRunID); err != nil {
+				s.log.Warn("shell terminal: adopt into this app run failed", "handleId", rec.HandleID, "error", err)
+			}
+		}
 		out = append(out, shellTerminalFromRecord(rec))
 	}
 	return out, nil

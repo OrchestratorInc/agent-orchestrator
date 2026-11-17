@@ -204,6 +204,7 @@ type fakeShellTerminalStore struct {
 	insertErr         error
 	deleteErrByHandle map[string]error
 	markEndedErr      error
+	adoptErr          error
 	staleRestorable   []ShellTerminalRecord
 }
 
