@@ -16,6 +16,7 @@ export type AgentAccount = {
 	device?: boolean;
 	orgId?: string;
 	orgName?: string;
+	sameLoginAs?: string;
 	signedIn: boolean;
 	default: boolean;
 };
@@ -29,6 +30,11 @@ export function agentAccountProvider(harness?: string): AgentAccountProvider | u
 export function agentAccountName(account: Pick<AgentAccount, "email" | "provider">): string {
 	if (account.email) return account.email;
 	return account.provider === "claude" ? "OAuth token" : "Codex CLI login";
+}
+
+export function withoutSameLogins<T extends Pick<AgentAccount, "id" | "sameLoginAs">>(accounts: readonly T[], keepId?: string): T[] {
+	const ids = new Set(accounts.map((account) => account.id));
+	return accounts.filter((account) => account.id === keepId || !account.sameLoginAs || !ids.has(account.sameLoginAs));
 }
 
 type LabelPeer = Pick<AgentAccount, "id" | "email" | "orgId" | "orgName">;

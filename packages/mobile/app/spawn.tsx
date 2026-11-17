@@ -38,7 +38,7 @@ import { Button } from "../lib/ui";
 import { iconSize, radius, space, type } from "../lib/tokens";
 import { approvalOptions, resolveApprovalMode, type ApprovalMode } from "../lib/spawnApproval";
 import { modelSheetRoute } from "../lib/sheetResult";
-import { agentAccountLabel, useAgentAccounts } from "../lib/agentAccounts";
+import { agentAccountLabel, useAgentAccounts, withoutSameLogins } from "../lib/agentAccounts";
 import { useChatKeyboard } from "../lib/chat/useChatKeyboard";
 import { SYSTEM_GLASS_HEADER } from "../lib/stackScreenOptions";
 import { useGlassBarInset } from "../lib/useHeaderOverlap";
@@ -124,8 +124,11 @@ export default function SpawnScreen() {
 	const [accountPick, setAccountPick] = useState<string>();
 	const spawnAccounts = useAgentAccounts(config, cloudSelected ? undefined : harness);
 	useEffect(() => setAccountPick(undefined), [selectedHostId, harness]);
-	const accountOptions = useMemo(() => spawnAccounts.accounts.filter((account) => account.signedIn).map((account) => ({ id: account.id, label: agentAccountLabel(account, spawnAccounts.accounts) })), [spawnAccounts.accounts]);
 	const shownAccountId = accountPick || spawnAccounts.accounts.find((account) => account.default)?.id;
+	const accountOptions = useMemo(() => {
+		const shown = withoutSameLogins(spawnAccounts.accounts, shownAccountId);
+		return shown.filter((account) => account.signedIn).map((account) => ({ id: account.id, label: agentAccountLabel(account, shown) }));
+	}, [spawnAccounts.accounts, shownAccountId]);
 	const [projectDetail, setProjectDetail] = useState<ProjectDetail>();
 	const [projectDetailLoadedFor, setProjectDetailLoadedFor] = useState<string | null>(null);
 	const [modelLoading, setModelLoading] = useState(false);
