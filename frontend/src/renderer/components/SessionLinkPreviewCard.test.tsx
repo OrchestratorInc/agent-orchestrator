@@ -4,6 +4,7 @@ import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { appI18n } from "../i18n";
 import type { SessionLinkSource } from "../lib/use-session-link-navigation";
+import { useContentExpiredSessionsStore } from "../stores/content-expired-sessions-store";
 import type { PullRequestFacts, SessionArtifact, WorkspaceSession, WorkspaceSummary } from "../types/workspace";
 import { ArtifactLinkPreviewCard, SessionLinkPreviewCard, artifactExcerpt, markdownPreviewSource } from "./SessionLinkPreviewCard";
 
@@ -157,6 +158,21 @@ describe("SessionLinkPreviewCard", () => {
 		await userEvent.click(screen.getByRole("button", { name: "Resume agent" }));
 
 		expect(await screen.findByRole("alert")).toHaveTextContent("No saved session is available.");
+	});
+
+	it("offers no resume for a Cloud session refused for its data retention", () => {
+		const terminated = session({ isTerminated: true, status: "terminated", cloud: { orgId: "org-1" } });
+		mocks.source.mockReturnValue(source({ workspaces: [workspace(terminated)] }));
+		useContentExpiredSessionsStore.getState().mark(terminated.id);
+		try {
+			render(<SessionLinkPreviewCard href="ao://sessions/project-a/worker-367" />);
+			expect(screen.getByRole("status", { name: "Agent terminated" })).toHaveTextContent(
+				"This session is past its data retention period, so its content is being removed. It can't be restored.",
+			);
+			expect(screen.queryByRole("button", { name: "Resume agent" })).not.toBeInTheDocument();
+		} finally {
+			useContentExpiredSessionsStore.setState({ ids: {} });
+		}
 	});
 
 	it("opens the session when a live card is clicked", async () => {

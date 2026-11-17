@@ -18,7 +18,7 @@ import { SettingsSection } from "./SettingsSection";
  * shows whenever they are signed in to Cloud. "Default (N days)" follows the
  * deployment's default, and keeps following it if it changes; a period of
  * their own stays as chosen. A new period is checked with a dry run first;
- * when it would delete sessions the change waits for confirmation.
+ * when it would remove sessions' content the change waits for confirmation.
  */
 export function DataRetentionSection() {
 	const { cloudEnabled } = useCloudGate();

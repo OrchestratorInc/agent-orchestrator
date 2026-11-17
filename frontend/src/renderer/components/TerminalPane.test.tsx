@@ -11,6 +11,8 @@ import type { TerminalTarget } from "../types/terminal";
 import type { WorkspaceSession } from "../types/workspace";
 import { useUiStore } from "../stores/ui-store";
 import { useTerminalResetStore } from "../stores/terminal-reset-store";
+import { useContentExpiredSessionsStore } from "../stores/content-expired-sessions-store";
+import { CloudCpError } from "../lib/cloud-cp";
 import {
 	cloudTerminalKind,
 	TerminalCacheProvider,
@@ -1354,6 +1356,30 @@ describe("terminal restore", () => {
 			view.restore();
 			// The restore leaves the session waiting for its new box; later tests reuse its id.
 			useTerminalResetStore.getState().markConnected(worker.id);
+		}
+	});
+
+	it("says a Cloud session past its data retention can't be restored, and stops offering Restore", async () => {
+		terminalState.value = "exited";
+		cloudRestoreMock.mockRejectedValueOnce(new CloudCpError(
+			"This session is older than its creator's data retention period, so its content is being deleted. It can't be restored.",
+			{ status: 410, code: "SESSION_CONTENT_EXPIRED" },
+		));
+		const view = renderPane({ ...worker, isTerminated: true, status: "terminated", cloud: { orgId: "org-1" }, terminalHandleId: "term-1" });
+		view.queryClient.setQueryData(["settings"], { cloudControlPlaneUrl: "https://cloud.example.test" });
+		view.queryClient.setQueryData(["cloud-sessions", "https://cloud.example.test", "org-1"], [{ id: worker.id, kind: "worker", workerEpoch: 3 }]);
+		try {
+			await userEvent.click(screen.getByRole("button", { name: "Restore session" }));
+			expect(await screen.findByText(
+				"This session is past its data retention period, so its content is being removed. It can't be restored.",
+			)).toBeInTheDocument();
+			expect(screen.queryByText(/older than its creator's data retention period/)).not.toBeInTheDocument();
+			expect(screen.queryByRole("button", { name: "Restore session" })).not.toBeInTheDocument();
+			expect(screen.getByText("Session terminated")).toBeInTheDocument();
+			expect(useContentExpiredSessionsStore.getState().ids[worker.id]).toBe(true);
+		} finally {
+			view.restore();
+			useContentExpiredSessionsStore.setState({ ids: {} });
 		}
 	});
 

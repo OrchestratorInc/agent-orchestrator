@@ -2,8 +2,8 @@
  * How long the signed-in user's Cloud sessions and their conversation content
  * are kept (GET/PUT /me/data-retention). It is each user's own setting and
  * covers every Cloud session they started, team sessions included. A change
- * is previewed first with a dry run, which counts the sessions the new period
- * would delete, so the caller can confirm before anything is deleted.
+ * is previewed first with a dry run, which counts the sessions whose content
+ * the new period would remove, so the caller can confirm before any is removed.
  */
 
 import { queryOptions, useQuery, useQueryClient } from "@tanstack/react-query";
@@ -24,7 +24,7 @@ export interface CloudDataRetention {
 	isPending: boolean;
 	error: unknown;
 	refetch: () => void;
-	/** Counts the sessions `days` (null: the default) would delete, changing nothing. */
+	/** Counts the sessions whose content `days` (null: the default) would remove, changing nothing. */
 	preview: (days: number | null) => Promise<CloudCpDataRetentionChange>;
 	/** Saves `days` as the user's period; null follows the default again. */
 	apply: (days: number | null) => Promise<CloudCpDataRetentionChange>;
@@ -44,8 +44,9 @@ export function useCloudDataRetention(): CloudDataRetention {
 			try {
 				return await client.getDataRetention({ signal });
 			} catch (error) {
-				// A control plane that predates retention has nothing to show.
-				if (error instanceof CloudCpError && (error.status === 404 || error.status === 405)) return null;
+				// A control plane that predates retention (404, 405), or one whose
+				// store can't keep it (501 not_implemented), has nothing to show.
+				if (error instanceof CloudCpError && (error.status === 404 || error.status === 405 || error.status === 501)) return null;
 				throw error;
 			}
 		},

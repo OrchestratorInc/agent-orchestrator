@@ -26,7 +26,7 @@ vi.mock("../../hooks/useCloudCp", () => ({
 	}),
 }));
 
-const LABEL = "Keep my cloud sessions for";
+const LABEL = "Keep my cloud session content for";
 const retention: CloudCpDataRetention = {
 	retentionDays: 180, defaultDays: 180, followsDefault: true, options: [30, 60, 90, 180, 365], updatedAt: null,
 };
@@ -78,7 +78,7 @@ describe("DataRetentionSection", () => {
 		await waitFor(() => expect(trigger).toHaveTextContent("Default (180 days)"));
 		expect(trigger).toBeEnabled();
 		expect(screen.getByText(
-			"Your cloud sessions, including team sessions you started, are deleted with their conversation content this many days after they were created. A session still running is deleted once it ends.",
+			"The content of your cloud sessions, including team sessions you started, is removed this many days after each session was created: transcripts, prompts and outputs. A session still running has its content removed once it ends.",
 		)).toBeInTheDocument();
 		await userEvent.click(trigger);
 		expect(screen.getAllByRole("menuitem").map((item) => item.textContent)).toEqual([
@@ -119,9 +119,9 @@ describe("DataRetentionSection", () => {
 		await choose("Default (180 days)");
 		const dialog = await screen.findByRole("dialog");
 		expect(within(dialog).getByText(
-			"2 of your sessions older than 180 days will be deleted, along with their conversation content. This can't be undone.",
+			"The content of 2 of your sessions older than 180 days will be removed: their transcripts, prompts and outputs. This can't be undone.",
 		)).toBeInTheDocument();
-		await userEvent.click(within(dialog).getByRole("button", { name: "Delete sessions" }));
+		await userEvent.click(within(dialog).getByRole("button", { name: "Remove content" }));
 		await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
 		expect(mocks.client.putDataRetention).toHaveBeenLastCalledWith({ retentionDays: null, dryRun: false });
 	});
@@ -170,6 +170,16 @@ describe("DataRetentionSection", () => {
 		await waitFor(() => expect(screen.queryByRole("heading", { name: "Data retention" })).not.toBeInTheDocument());
 	});
 
+	it("is hidden against a control plane whose store can't keep the setting", async () => {
+		mocks.client.getDataRetention.mockRejectedValue(
+			new CloudCpError("Data retention is unavailable.", { status: 501, code: "not_implemented" }),
+		);
+		renderSection();
+		await waitFor(() => expect(mocks.client.getDataRetention).toHaveBeenCalled());
+		await waitFor(() => expect(screen.queryByRole("heading", { name: "Data retention" })).not.toBeInTheDocument());
+		expect(screen.queryByText("Couldn't load data retention.")).not.toBeInTheDocument();
+	});
+
 	it("shows a disabled select while the period loads", () => {
 		mocks.client.getDataRetention.mockReturnValue(new Promise(() => undefined));
 		renderSection();
@@ -178,7 +188,7 @@ describe("DataRetentionSection", () => {
 		expect(trigger).toHaveTextContent("Loading…");
 	});
 
-	it("checks a shorter period with a dry run and deletes only once confirmed", async () => {
+	it("checks a shorter period with a dry run and removes content only once confirmed", async () => {
 		mocks.client.putDataRetention
 			.mockResolvedValueOnce(changed({ sessionsToDelete: 12 }))
 			.mockResolvedValueOnce(changed({ retentionDays: 30, followsDefault: false, updatedAt: "2026-11-15T10:00:00Z", sessionsToDelete: 12 }));
@@ -188,14 +198,14 @@ describe("DataRetentionSection", () => {
 		const dialog = await screen.findByRole("dialog");
 		expect(mocks.client.putDataRetention).toHaveBeenCalledTimes(1);
 		expect(mocks.client.putDataRetention).toHaveBeenLastCalledWith({ retentionDays: 30, dryRun: true });
-		expect(within(dialog).getByText("Delete older sessions?")).toBeInTheDocument();
+		expect(within(dialog).getByText("Remove content from older sessions?")).toBeInTheDocument();
 		expect(within(dialog).getByText(
-			"12 of your sessions older than 30 days will be deleted, along with their conversation content. This can't be undone.",
+			"The content of 12 of your sessions older than 30 days will be removed: their transcripts, prompts and outputs. This can't be undone.",
 		)).toBeInTheDocument();
 		// Nothing changed while the dialog asks.
 		expect(trigger()).toHaveTextContent("Default (180 days)");
 
-		await userEvent.click(within(dialog).getByRole("button", { name: "Delete sessions" }));
+		await userEvent.click(within(dialog).getByRole("button", { name: "Remove content" }));
 		await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
 		expect(mocks.client.putDataRetention).toHaveBeenCalledTimes(2);
 		expect(mocks.client.putDataRetention).toHaveBeenLastCalledWith({ retentionDays: 30, dryRun: false });
@@ -208,7 +218,23 @@ describe("DataRetentionSection", () => {
 		renderSection();
 		await choose("90 days");
 		expect(await screen.findByText(
-			"1 of your sessions older than 90 days will be deleted, along with its conversation content. This can't be undone.",
+			"The content of 1 of your sessions older than 90 days will be removed: its transcript, prompts and outputs. This can't be undone.",
+		)).toBeInTheDocument();
+	});
+
+	it("puts the period after a Russian preposition its words agree with", async () => {
+		// "старше" wants the genitive ("старше 2 дней"), which the period's own
+		// words ("2 дня") are not; "через" takes them as they are.
+		await appI18n.changeLanguage("ru");
+		mocks.client.getDataRetention.mockResolvedValue({ ...retention, options: [1, 2, 30, 180] });
+		mocks.client.putDataRetention.mockResolvedValueOnce(changed({ sessionsToDelete: 3 }));
+		renderSection();
+		const select = await screen.findByRole("button", { name: "Хранить содержимое моих облачных сессий" });
+		await waitFor(() => expect(select).toBeEnabled());
+		await userEvent.click(select);
+		await userEvent.click(screen.getByRole("menuitem", { name: "2 дня" }));
+		expect(await screen.findByText(
+			"Содержимое сессий будет удаляться через 2 дня после их создания. Под новый срок уже попадают 3 ваши сессии: их транскрипты, промпты и результаты будут удалены. Это действие нельзя отменить.",
 		)).toBeInTheDocument();
 	});
 
@@ -224,7 +250,7 @@ describe("DataRetentionSection", () => {
 		expect(screen.queryByRole("status")).not.toBeInTheDocument();
 	});
 
-	it("applies directly when the new period deletes nothing", async () => {
+	it("applies directly when the new period removes nothing", async () => {
 		mocks.client.putDataRetention
 			.mockResolvedValueOnce(changed({ sessionsToDelete: 0 }))
 			.mockResolvedValueOnce(changed({ retentionDays: 365, followsDefault: false, updatedAt: "2026-11-15T10:00:00Z" }));
@@ -287,11 +313,11 @@ describe("DataRetentionSection", () => {
 			renderSection();
 			await choose("30 days");
 			const dialog = await screen.findByRole("dialog");
-			await userEvent.click(within(dialog).getByRole("button", { name: "Delete sessions" }));
+			await userEvent.click(within(dialog).getByRole("button", { name: "Remove content" }));
 			expect(await within(dialog).findByRole("alert")).toHaveTextContent("Couldn't save data retention. Try again.");
 			expect(trigger()).toHaveTextContent("Default (180 days)");
 
-			await userEvent.click(within(dialog).getByRole("button", { name: "Delete sessions" }));
+			await userEvent.click(within(dialog).getByRole("button", { name: "Remove content" }));
 			await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
 			expect(screen.getByRole("button", { name: LABEL })).toHaveTextContent("30 days");
 		});

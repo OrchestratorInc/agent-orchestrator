@@ -8,6 +8,7 @@ import { useTranslation } from "react-i18next";
 import type { TFunction } from "i18next";
 import { FileText, LoaderCircle, Play, Sheet } from "@/components/app-icons";
 import { useRestoreSession } from "../hooks/useRestoreSession";
+import { useSessionContentExpired } from "../stores/content-expired-sessions-store";
 import { sessionArtifactFileQueryOptions } from "../hooks/useSessionWorkspaceFiles";
 import { csvPreviewRows, tabularDelimiter } from "../lib/csv-preview";
 import { formatTimeCompact } from "../lib/format-time";
@@ -153,6 +154,8 @@ function SessionCardBody({ session }: { session: WorkspaceSession }) {
 function TerminatedCard({ session, hostId }: { session: WorkspaceSession; hostId?: string }) {
 	const { t } = useTranslation();
 	const restoreSession = useRestoreSession();
+	// The control plane refused its restore for data retention: say so instead of offering it.
+	const contentExpired = useSessionContentExpired(session.cloud ? session.id : undefined);
 	const [restoring, setRestoring] = useState(false);
 	const [error, setError] = useState<string>();
 	const resumeAgent = async () => {
@@ -171,23 +174,27 @@ function TerminatedCard({ session, hostId }: { session: WorkspaceSession; hostId
 	return (
 		<div className="space-y-2" role="status" aria-label={t("session.agentTerminated")}>
 			<p className="text-xs font-semibold text-popover-foreground">{t("session.agentTerminated")}</p>
-			<Button
-				className="w-full"
-				disabled={restoring}
-				onClick={(event) => {
-					event.preventDefault();
-					event.stopPropagation();
-					void resumeAgent();
-				}}
-				size="sm"
-				type="button"
-			>
-				{restoring
-					? <LoaderCircle aria-hidden="true" className="size-icon-sm animate-spin" />
-					: <Play aria-hidden="true" className="size-icon-sm" />}
-				{t(restoring ? "inspector.resumingAgent" : "inspector.resumeAgent")}
-			</Button>
-			{error ? <p className="text-xs leading-4 text-destructive" role="alert">{error}</p> : null}
+			{contentExpired ? (
+				<p className="text-xs leading-4 text-muted-foreground">{t("restoreUnavailable.contentExpired")}</p>
+			) : (
+				<Button
+					className="w-full"
+					disabled={restoring}
+					onClick={(event) => {
+						event.preventDefault();
+						event.stopPropagation();
+						void resumeAgent();
+					}}
+					size="sm"
+					type="button"
+				>
+					{restoring
+						? <LoaderCircle aria-hidden="true" className="size-icon-sm animate-spin" />
+						: <Play aria-hidden="true" className="size-icon-sm" />}
+					{t(restoring ? "inspector.resumingAgent" : "inspector.resumeAgent")}
+				</Button>
+			)}
+			{error && !contentExpired ? <p className="text-xs leading-4 text-destructive" role="alert">{error}</p> : null}
 		</div>
 	);
 }

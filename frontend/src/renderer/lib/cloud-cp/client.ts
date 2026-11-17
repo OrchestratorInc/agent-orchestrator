@@ -376,7 +376,8 @@ export interface CloudCpClient {
 	putOrgSandboxProvider(orgId: string, defaultProvider: string, options?: CloudCpRequestOptions): Promise<CloudCpOffering>;
 	/**
 	 * How long the signed-in user's Cloud sessions and their conversation
-	 * content are kept. An older control plane without the route answers 404 or 405.
+	 * content are kept. An older control plane without the route answers 404 or
+	 * 405; one whose store can't keep the setting answers 501.
 	 */
 	getDataRetention(options?: CloudCpRequestOptions): Promise<CloudCpDataRetention>;
 	/**
