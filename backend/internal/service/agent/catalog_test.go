@@ -1345,6 +1345,94 @@ func TestProbeBypassesRefreshRateLimitForOneAgent(t *testing.T) {
 	}
 }
 
+func TestProbeRechecksRecentUnknownInstallation(t *testing.T) {
+	var installed atomic.Bool
+	a := &readinessTestAgent{
+		resolve: func(context.Context) (string, error) {
+			if installed.Load() {
+				return "agent", nil
+			}
+			return "", ports.ErrAgentBinaryIdentityUnknown
+		},
+		auth: func(context.Context) (ports.AgentAuthStatus, error) {
+			return ports.AgentAuthStatusAuthorized, nil
+		},
+	}
+	svc := NewWithAgents([]agentregistry.HarnessAgent{readinessHarness("hermes", "Hermes", a)})
+	initial, err := svc.EnsureAgentReadiness(context.Background(), "hermes", domain.AgentReadinessPurposeLaunch)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if initial.Installation.State != domain.AgentInstallationUnknown {
+		t.Fatalf("initial installation = %q, want unknown", initial.Installation.State)
+	}
+	installed.Store(true)
+	if _, err := svc.Probe(context.Background(), "hermes"); err != nil {
+		t.Fatal(err)
+	}
+	cached, err := svc.CachedReadiness(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := cached.Agents[0]; got.Installation.State != domain.AgentInstallationInstalled || got.Authentication.State != domain.AgentAuthenticationAuthorized {
+		t.Fatalf("after Probe = %#v, want installed and authorized", got)
+	}
+	if calls := a.resolveCalls.Load(); calls != 2 {
+		t.Fatalf("installation checks = %d, want one initial check and one explicit recheck", calls)
+	}
+}
+
+func TestProbeJoinsUnknownInstallationAlreadyChecking(t *testing.T) {
+	started, release := make(chan struct{}), make(chan struct{})
+	var startOnce sync.Once
+	a := &readinessTestAgent{
+		resolve: func(ctx context.Context) (string, error) {
+			startOnce.Do(func() { close(started) })
+			select {
+			case <-release:
+				return "agent", nil
+			case <-ctx.Done():
+				return "", ctx.Err()
+			}
+		},
+		auth: func(context.Context) (ports.AgentAuthStatus, error) { return ports.AgentAuthStatusAuthorized, nil },
+	}
+	svc := NewWithAgents([]agentregistry.HarnessAgent{readinessHarness("hermes", "Hermes", a)})
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	results := make(chan error, 5)
+	go func() {
+		_, err := svc.EnsureAgentReadiness(ctx, "hermes", domain.AgentReadinessPurposeLaunch)
+		results <- err
+	}()
+	select {
+	case <-started:
+	case <-ctx.Done():
+		t.Fatal("initial installation check did not start")
+	}
+	for range 4 {
+		waiter := &readinessWaitContext{Context: ctx, waiting: make(chan struct{})}
+		go func() {
+			_, err := svc.Probe(waiter, "hermes")
+			results <- err
+		}()
+		select {
+		case <-waiter.waiting:
+		case <-ctx.Done():
+			t.Fatal("explicit probe did not reach readiness ensure")
+		}
+	}
+	close(release)
+	for range 5 {
+		if err := <-results; err != nil {
+			t.Fatal(err)
+		}
+	}
+	if calls := a.resolveCalls.Load(); calls != 1 {
+		t.Fatalf("installation checks = %d, want all explicit probes to join the existing check", calls)
+	}
+}
+
 func TestProbeRechecksCachedUnauthorizedAuthentication(t *testing.T) {
 	status := ports.AgentAuthStatusUnauthorized
 	agent := &mutableAuthAgent{status: &status}

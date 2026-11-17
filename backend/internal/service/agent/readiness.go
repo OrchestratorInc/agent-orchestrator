@@ -237,6 +237,14 @@ func (s *Service) Probe(ctx context.Context, agentID string) (ProbeResult, error
 	if agentID == string(domain.HarnessCodex) {
 		s.reconcileCodexDeviceCredentialForRecheck(ctx)
 	}
+	// An explicit retry must also resolve an inconclusive installation even
+	// inside the launch TTL. Join installation work already in progress.
+	for _, snapshot := range s.readiness.Snapshot() {
+		if snapshot.ID == agentID && snapshot.Installation.State == domain.AgentInstallationUnknown && snapshot.Installation.Freshness != domain.AgentReadinessChecking {
+			s.InvalidateAgentInstallation(agentID)
+			break
+		}
+	}
 	s.InvalidateAgentAuthentication(agentID)
 	readiness, err := s.EnsureReadiness(ctx, []string{agentID}, domain.AgentReadinessPurposeLaunch)
 	if err != nil {

@@ -2,14 +2,16 @@ import { expect, test } from "@playwright/test";
 import { agentReadiness } from "../src/renderer/test/agent-readiness-fixtures";
 import { installFakeAgent } from "./support/fake-bridge";
 
-for (const remembered of [false, true]) {
-	test(`renderer: standalone Retry recovers ${remembered ? "remembered Codex" : "a fresh profile"} without losing the draft @T0`, async ({ page }) => {
+for (const scenario of ["a fresh profile", "remembered Codex", "unknown installation", "a failed probe"] as const) {
+	test(`renderer: standalone Retry recovers ${scenario} without losing the draft @T0`, async ({ page }) => {
 		test.setTimeout(120_000);
 		await installFakeAgent(page, { projectId: "readiness", projectName: "Readiness", workers: [] });
-		if (remembered) await page.addInitScript(() => localStorage.setItem("ao.taskComposer.preferences.v1", JSON.stringify({ __standalone__: { lastAgent: "codex", agents: {} } })));
+		if (scenario === "remembered Codex" || scenario === "a failed probe") await page.addInitScript(() => localStorage.setItem("ao.taskComposer.preferences.v1", JSON.stringify({ __standalone__: { lastAgent: "codex", agents: {} } })));
 		await page.clock.install();
 		let authentication: "unknown" | "unauthorized" | "authorized" = "unknown";
+		let installation: "unknown" | "installed" = scenario === "unknown installation" ? "unknown" : "installed";
 		let probes = 0;
+		let reads = 0;
 		let creates = 0;
 		let finish!: () => void;
 		const released = new Promise<void>((resolve) => { finish = resolve; });
@@ -17,11 +19,16 @@ for (const remembered of [false, true]) {
 			const path = new URL(route.request().url()).pathname;
 			if (path === "/api/v1/agents/codex/probe") {
 				probes++;
+				if (scenario === "a failed probe") return route.abort("failed");
 				await released;
 				authentication = "authorized";
+				installation = "installed";
 				return route.fulfill({ json: { supported: true, installed: true, agent: { id: "codex", label: "Codex", authStatus: "authorized" } } });
 			}
-			if (path.startsWith("/api/v1/agents/readiness")) return route.fulfill({ json: { agents: [agentReadiness("codex", "Codex", { authentication })] } });
+			if (path.startsWith("/api/v1/agents/readiness")) {
+				if (route.request().method() === "GET") reads++;
+				return route.fulfill({ json: { agents: [agentReadiness("codex", "Codex", { authentication, installation })] } });
+			}
 			if (path === "/api/v1/settings") return route.fulfill({ json: { defaultSessionMode: "chat", chatHarnesses: ["codex"] } });
 			if (path === "/api/v1/agents/chat/permission-modes") return route.fulfill({ json: { agents: [{ agent: "codex", modes: ["default"] }] } });
 			if (path.endsWith("/models")) return route.fulfill({ json: { agent: "codex", selectionMode: "text", models: [], allowCustom: true } });
@@ -51,6 +58,14 @@ for (const remembered of [false, true]) {
 		await expect(page.getByRole("status").getByText(/^Checking/)).toBeVisible();
 		await prompt.press("Enter");
 		expect(creates).toBe(0);
+		if (scenario === "a failed probe") {
+			const readsBefore = reads;
+			await page.clock.runFor(2_000);
+			await expect.poll(() => reads).toBeGreaterThan(readsBefore);
+			await expect(page.getByRole("status").getByText(/^Checking/)).toBeVisible();
+			authentication = "authorized";
+			await page.clock.runFor(2_000);
+		}
 		finish();
 		await expect(page.getByRole("status").getByText(/^Checking/)).toBeHidden({ timeout: 10_000 });
 		await expect(prompt).toHaveText("Keep my Retry draft");

@@ -2,7 +2,7 @@ import { apiErrorException } from "../lib/api-error-exception";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useQuery, useQueryClient, type QueryClient } from "@tanstack/react-query";
 import { AgentCheckError } from "../lib/agent-check-error";
-import { defaultProjectAgents, preferredAgentNeedsChecks, isPendingAgent, type ProjectAgentDefaults } from "../lib/agent-select-options";
+import { defaultProjectAgents, preferredAgentNeedsChecks, isPendingAgent, isReadyAgent, type ProjectAgentDefaults } from "../lib/agent-select-options";
 import type { components } from "../../api/schema";
 import { apiClient } from "../lib/api-client";
 import { clientForHost } from "../lib/host-clients";
@@ -115,7 +115,7 @@ export function useStandaloneAgentReadiness(agentId: string, pending: boolean, e
 	const request = useMemo(() => ({}), [scope, recovering, retryRequest]);
 	const currentRequest = useRef(request);
 	currentRequest.current = request;
-	const [expired, setExpired] = useState<{ request: object; scope: object; retry?: typeof retryRequest; snapshot?: AgentReadiness }>();
+	const [expired, setExpired] = useState<{ request: object; scope: object; retry?: typeof retryRequest; snapshot?: AgentReadiness; targets: string[] }>();
 	const retryLocked = useRef(false);
 	useEffect(() => {
 		if (!recovering) return;
@@ -123,6 +123,18 @@ export function useStandaloneAgentReadiness(agentId: string, pending: boolean, e
 		let poll: ReturnType<typeof setTimeout> | undefined;
 		const isCurrent = () => active && currentRequest.current === request;
 		const explicitRetry = retryRequest?.scope === scope && consumedRetry.current !== retryRequest;
+		let baseline = queryClient.getQueryData<AgentReadiness>(agentReadinessQueryKey);
+		let baselineConfirmed = false;
+		const candidates = (snapshot?: AgentReadiness) => snapshot?.agents.filter((agent) =>
+			agent.installation.state === "unknown"
+			|| (agent.installation.state === "not_installed" && agent.installation.freshness !== "fresh")
+			|| (agent.installation.state === "installed" && (isPendingAgent(agent) || agent.authentication.state === "unauthorized")),
+		).map((agent) => agent.id) ?? [];
+		let targets = agentId ? [agentId] : candidates(baseline);
+		let targetsResolved = Boolean(agentId);
+		const failedTargets = new Set<string>();
+		const installationChecking = new Set<string>();
+		const authenticationChecking = new Set<string>();
 		retryLocked.current = explicitRetry;
 		const timeout = setTimeout(() => {
 			if (!isCurrent()) return;
@@ -130,7 +142,7 @@ export function useStandaloneAgentReadiness(agentId: string, pending: boolean, e
 			clearTimeout(poll);
 			retryLocked.current = false;
 			if (explicitRetry) setSettledRetry(retryRequest);
-			setExpired({ request, scope, retry: explicitRetry ? retryRequest : undefined, snapshot: queryClient.getQueryData<AgentReadiness>(agentReadinessQueryKey) });
+			setExpired({ request, scope, retry: explicitRetry ? retryRequest : undefined, snapshot: queryClient.getQueryData<AgentReadiness>(agentReadinessQueryKey), targets });
 		}, 60_000);
 		// The supervisor removes the local snapshot when daemon identity changes,
 		// including a replacement on the same port. Discard the old request's
@@ -147,7 +159,23 @@ export function useStandaloneAgentReadiness(agentId: string, pending: boolean, e
 				const next = await fetchAgentReadiness();
 				if (isCurrent()) {
 					cacheAgentReadiness(queryClient, next);
-					if (explicitRetry) {
+					for (const id of failedTargets) {
+						const agent = next.agents.find((candidate) => candidate.id === id);
+						if (!agent) continue;
+						const previous = baseline?.agents.find((candidate) => candidate.id === id);
+						if (agent.installation.freshness === "checking") installationChecking.add(id);
+						if (agent.authentication.freshness === "checking") authenticationChecking.add(id);
+						// A failed POST does not make an old cached rejection conclusive.
+						// Use daemon observation times, never the renderer's wall clock.
+						const newInstallation = installationChecking.has(id) || (baselineConfirmed && agent.installation.checkedAt !== null && agent.installation.checkedAt !== previous?.installation.checkedAt);
+						const newAuthentication = authenticationChecking.has(id) || (baselineConfirmed && agent.authentication.checkedAt !== null && agent.authentication.checkedAt !== previous?.authentication.checkedAt);
+						if (isReadyAgent(agent)
+							|| (agent.installation.state === "not_installed" && agent.installation.freshness === "fresh" && newInstallation)
+							|| (agent.installation.state === "installed" && agent.authentication.state !== "unknown" && agent.authentication.freshness === "fresh" && newAuthentication)) {
+							failedTargets.delete(id);
+						}
+					}
+					if (explicitRetry && targetsResolved && failedTargets.size === 0) {
 						retryLocked.current = false;
 						setSettledRetry(retryRequest);
 					}
@@ -159,17 +187,20 @@ export function useStandaloneAgentReadiness(agentId: string, pending: boolean, e
 			try {
 				if (explicitRetry) {
 					consumedRetry.current = retryRequest;
-					// Fresh profiles may have no selected agent until discovery settles.
-					// Probe the installed pending candidates without changing the pick.
-					const targets = agentId ? [agentId] : (await fetchAgentReadiness()).agents
-						.filter((agent) => agent.installation.state === "installed" && (isPendingAgent(agent) || agent.authentication.state === "unauthorized"))
-						.map((agent) => agent.id);
+					try {
+						baseline = await fetchAgentReadiness();
+						baselineConfirmed = true;
+					} catch { /* A selected agent or cached candidates can still be probed. */ }
+					if (!isCurrent()) return;
+					// Fresh profiles may have no pick while installation is unresolved.
+					targets = agentId ? [agentId] : candidates(baseline);
+					targetsResolved = Boolean(agentId) || baseline !== undefined;
 					for (const target of targets) {
 						if (!isCurrent()) return;
 						try {
 							const { error, response } = await apiClient.POST("/api/v1/agents/{agent}/probe", { params: { path: { agent: target } } });
 							if (error) throw new AgentCheckError("Readiness refresh", error, response?.status);
-						} catch { /* Still check other candidates after an individual failure. */ }
+						} catch { failedTargets.add(target); }
 					}
 				} else {
 					const next = await ensureAgentReadiness(agentId ? [agentId] : [], "display");
@@ -207,7 +238,7 @@ export function useStandaloneAgentReadiness(agentId: string, pending: boolean, e
 	const cached = queryClient.getQueryData<AgentReadiness>(agentReadinessQueryKey);
 	const expiredRetry = expired?.retry !== undefined && expired.retry === retryRequest && expired.scope === scope
 		&& expired.snapshot !== undefined && cached !== undefined
-		&& expired.snapshot.agents.filter((agent) => agentId ? agent.id === agentId : agent.installation.state === "installed").every((agent) => {
+		&& expired.snapshot.agents.filter((agent) => expired.targets.includes(agent.id)).every((agent) => {
 			const current = cached.agents.find((candidate) => candidate.id === agent.id);
 			return current?.authentication === agent.authentication && current?.installation === agent.installation;
 		});
