@@ -47,6 +47,7 @@ import {
 	DialogClose,
 	DialogContent,
 	DialogDescription,
+	DialogOverlay,
 	DialogTitle,
 	settingsDialogBodyClass,
 	settingsDialogContentClass,
@@ -561,6 +562,7 @@ export function SessionMemoryPanel({
 		<Dialog open={open} onOpenChange={onOpenChange}>
 			<DialogContent
 				className={cn(settingsDialogContentClass, "h-[min(var(--size-settings-dialog-max-h),calc(100svh-var(--space-8)))] w-[min(52rem,calc(100vw-var(--space-8)))]")}
+				overlay={<DialogOverlay className="diagnostics-dialog-overlay" />}
 				showCloseButton={false}
 			>
 				<div className={cn(settingsDialogHeaderClass, "flex h-auto flex-row items-center justify-between border-b-0 pb-3")}>
