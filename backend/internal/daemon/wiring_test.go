@@ -241,7 +241,9 @@ func TestWiring_AgentResolverResolvesRealAdapters(t *testing.T) {
 		{domain.HarnessFX, "fx"},
 		{domain.HarnessUnreal, "unreal-agent"},
 		{domain.HarnessCommandCode, "command-code"},
+		{domain.HarnessOpenInterpreter, "open-interpreter"},
 		{domain.HarnessMemcode, "memcode"},
+		{domain.HarnessStakpak, "stakpak"},
 	} {
 		agent, ok := resolver.Agent(tc.harness)
 		if !ok {
@@ -840,6 +842,9 @@ func TestWiring_MergeConflictNudgeReArmsAfterConflictClears(t *testing.T) {
 		ProjectID: "p",
 		Kind:      domain.KindWorker,
 		Activity:  domain.Activity{State: domain.ActivityIdle, LastActivityAt: time.Now()},
+		// Spawned sessions start with automatic CI fixing on; that switch also
+		// gates the merge-conflict nudge.
+		AutoInjectCI: true,
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -952,6 +957,8 @@ type fakeSessionLifecycle struct {
 	restoreAllCalled          bool
 	reconcileErr              error
 	restoreErr                error
+	interrupted               domain.SessionID
+	interruptErr              error
 }
 
 func (f *fakeSessionLifecycle) Send(context.Context, domain.SessionID, string, *ports.SpawnAttachment) error {
@@ -960,6 +967,11 @@ func (f *fakeSessionLifecycle) Send(context.Context, domain.SessionID, string, *
 
 func (f *fakeSessionLifecycle) Kill(_ context.Context, _ domain.SessionID) (bool, error) {
 	return false, nil
+}
+
+func (f *fakeSessionLifecycle) StopTUITurn(_ context.Context, id domain.SessionID) error {
+	f.interrupted = id
+	return f.interruptErr
 }
 
 func (f *fakeSessionLifecycle) Reconcile(_ context.Context) error {
@@ -997,6 +1009,9 @@ func (*fakeSessionLifecycle) StopHarnessSessions(context.Context, domain.AgentHa
 }
 func (*fakeSessionLifecycle) ResumeHarnessSessions(context.Context, []domain.SessionID) error {
 	return nil
+}
+func (*fakeSessionLifecycle) SessionRuntimeEnv(context.Context, domain.SessionRecord) (map[string]string, error) {
+	return nil, nil
 }
 func (*fakeSessionLifecycle) SetVersionTelemetry(ports.EventSink)                                {}
 func (*fakeSessionLifecycle) SetVersionRefreshPolicy(func() sessionmanager.VersionRefreshPolicy) {}

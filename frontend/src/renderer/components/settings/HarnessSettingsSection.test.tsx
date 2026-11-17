@@ -2052,6 +2052,46 @@ describe("HarnessSettingsSection", () => {
 		expect(within(row).queryByText("Credentials not verified")).toBeNull();
 	});
 
+	it("shows Open Interpreter's local provider configuration as configured, not connected", async () => {
+		const interpreterCatalog = { agents: [agentReadiness("open-interpreter", "Open Interpreter", { authentication: "configured" })] };
+		vi.mocked(apiClient.GET).mockImplementation(async (path) => {
+			if (path === "/api/v1/agents/readiness") return { data: interpreterCatalog } as never;
+			if (path === "/api/v1/agents/auth-plans") return { data: { plans: [{ agentId: "open-interpreter", action: "setup", launchMode: "terminal", available: true }] } } as never;
+			if (path === "/api/v1/agents/installers") return { data: { agents: [] } } as never;
+			if (path === "/api/v1/agents/install-jobs") return { data: { jobs: [] } } as never;
+			return { data: undefined } as never;
+		});
+		vi.mocked(apiClient.POST).mockResolvedValue({ data: interpreterCatalog } as never);
+
+		renderSection();
+		const row = await findAgentRow("open-interpreter");
+		expect(await within(row).findByText("Configured")).toBeInTheDocument();
+		expect(within(row).queryByText("Connected")).toBeNull();
+		expect(within(row).queryByRole("button", { name: "Set up" })).not.toBeInTheDocument();
+	});
+
+	it.each(["unknown", "configured", "unauthorized"] as const)("keeps Docker configuration guidance reachable with %s authentication", async (authentication) => {
+		const dockerCatalog = { agents: [agentReadiness("docker-agent", "Docker Agent", { authentication })] };
+		const documentationUrl = "https://example.test/docker-agent/setup";
+		vi.mocked(apiClient.GET).mockImplementation(async (path) => {
+			if (path === "/api/v1/agents/readiness") return { data: dockerCatalog } as never;
+			if (path === "/api/v1/agents/auth-plans") return { data: { plans: [{ agentId: "docker-agent", action: "setup", launchMode: "documentation", available: true, documentationUrl }] } } as never;
+			if (path === "/api/v1/agents/installers") return { data: { agents: [] } } as never;
+			if (path === "/api/v1/agents/install-jobs") return { data: { jobs: [] } } as never;
+			return { data: undefined } as never;
+		});
+		vi.mocked(apiClient.POST).mockResolvedValue({ data: dockerCatalog } as never);
+		const openExternal = vi.spyOn(aoBridge.app, "openExternal").mockResolvedValue(undefined);
+
+		renderSection();
+		const row = await findAgentRow("docker-agent");
+		expect(await within(row).findByText(authentication === "configured" ? "Configured" : authentication === "unauthorized" ? "Not set up" : "Setup status unavailable")).toBeInTheDocument();
+		await userEvent.click(within(row).getByRole("button", { name: "View documentation" }));
+		expect(openExternal).toHaveBeenCalledWith(documentationUrl);
+		expect(apiClient.POST).not.toHaveBeenCalledWith("/api/v1/agents/{agent}/auth", expect.anything());
+		expect(within(row).queryByText("Connected")).toBeNull();
+	});
+
 	it("shows cached readiness while silently refreshing when the page opens", async () => {
 		const refreshed = catalogWithInstalled("claude-code", "codex");
 		let current = catalog;

@@ -40,6 +40,8 @@ import { useProviderConnections } from "../hooks/useProviderConnections";
 import { CLOUD_AGENT_PROVIDERS, cloudAgentInfos, connectedCredentialType, credentialModelScope } from "../lib/cloud-agents";
 import { CloudTaskFilesNeedChatError, CloudTaskFilesUndeliveredError, createCloudChatSessionWithFiles, createCloudSession } from "../lib/cloud-session-create";
 import { uploadCloudAttachment } from "../lib/cloud-attachments";
+import { readBlobAsBase64, toWireAttachments } from "../lib/attachment-uploads";
+import { MAX_CLOUD_CP_BINARY_BYTES } from "../../shared/cloud-binary";
 import { reportCloudSessionCreateRequested } from "../lib/cloud-telemetry";
 import { rememberStandaloneAgent } from "../lib/cloud-standalone-agents";
 import { cloudDefaultModel, cloudModelLabel, isConcreteModelID, isModelSelectable, modelChoiceLabel, splitClaudeModels, withoutLocalAvailability } from "../lib/agent-model-choices";
@@ -104,6 +106,13 @@ const CHAT_PREFLIGHT_CODES = new Set([
 	"CHAT_DRIVER_INCOMPATIBLE",
 	"CHAT_AUTH_REQUIRED",
 ]);
+
+// Harnesses without a terminal interface; mirrors the backend's ChatOnly.
+const CHAT_ONLY_AGENTS = new Set(["unreal-agent", "docker-agent"]);
+
+function isChatOnlyAgent(agent: string | null | undefined): boolean {
+	return Boolean(agent && CHAT_ONLY_AGENTS.has(agent));
+}
 
 const READINESS_RECONCILE_CODES = new Set(["AGENT_BINARY_NOT_FOUND", "AGENT_AUTH_REQUIRED", "CHAT_AUTH_REQUIRED"]);
 
@@ -174,6 +183,12 @@ export type LaunchReplay = {
  * with, and the create call for local, remote, cloud, and standalone targets.
  * The new chat page and TaskComposer render it.
  */
+/** The decoded size of standard base64, as an inline attachment carries its bytes. */
+function base64Bytes(data: string): number {
+	const padding = data.endsWith("==") ? 2 : data.endsWith("=") ? 1 : 0;
+	return Math.floor((data.length * 3) / 4) - padding;
+}
+
 export function useTaskLaunch({ projectId, hostId }: {
 	projectId?: string;
 	hostId?: string;
@@ -266,6 +281,21 @@ export function useTaskLaunch({ projectId, hostId }: {
 						: t("newTask.cloudAttachmentsNeedChatDefault", { defaultValue: "Files can start a Cloud task only in Chat. Set the default session interface to Chat in Settings > General, or remove the files." }),
 					"CLOUD_ATTACHMENTS_NEED_CHAT");
 				}
+				// AO Cloud says how large one upload may be, and the main process carries
+				// no more than MAX_CLOUD_CP_BINARY_BYTES in one request; both read the
+				// bytes whole. Every file is held to that limit, including one already
+				// read inline; a file kept on disk is read now if it fits.
+				const cloudMaxBytes = Math.min(cloudOffering.maxAttachmentBytes ?? 0, MAX_CLOUD_CP_BINARY_BYTES);
+				const cloudFiles = await Promise.all(files.map(async (file) => {
+					const size = file.file?.size ?? base64Bytes(file.data);
+					if (!(file.data || file.file) || size > cloudMaxBytes) {
+						throw new TaskCreateError(t("newTask.cloudAttachmentTooLarge", {
+							size: Math.floor(cloudMaxBytes / (1024 * 1024)),
+							defaultValue: "AO Cloud takes files up to {{size}} MB each. Remove the larger ones to start this task.",
+						}), "CLOUD_ATTACHMENT_TOO_LARGE");
+					}
+					return file.data || !file.file ? file : { ...file, data: await readBlobAsBase64(file.file) };
+				}));
 				if (!cloudOrg?.id) throw new Error(t("newTask.unableToStart"));
 				// The agent is always the one the picker shows; with none there is nothing to start.
 				if (!input.agent) throw new Error(t("newTask.noReadyAgent"));
@@ -299,7 +329,7 @@ export function useTaskLaunch({ projectId, hostId }: {
 					session = created.session;
 				} else if (files.length > 0) {
 					({ session } = await createCloudChatSessionWithFiles(cloudClient, orgId,
-						{ projectId: input.projectId, kind: "worker", ...body, interfaceMode: "chat" }, files,
+						{ projectId: input.projectId, kind: "worker", ...body, interfaceMode: "chat" }, cloudFiles,
 						(sessionId, file, signal) => uploadCloudAttachment(cloudBaseUrl, orgId, sessionId, { name: file.name || "attachment", data: file.data }, { signal }),
 						{ idempotencyKey: input.clientRequestId }));
 				} else {
@@ -343,6 +373,8 @@ export function useTaskLaunch({ projectId, hostId }: {
 	const createDaemonTask = useCallback(
 		async (input: CreateTaskInput): Promise<string> => {
 			try {
+				// A file too large to inline is streamed from disk to the daemon first.
+				const wireAttachments = input.attachments?.length ? await toWireAttachments(input.attachments, hostId) : undefined;
 				const { data, error } = await (hostId ? clientForHost(hostId) : apiClient).POST("/api/v1/orchestrators/delegate", {
 					headers: input.attachments?.length ? { "X-AO-Attachment-Upload": "1" } : undefined,
 					body: {
@@ -356,7 +388,7 @@ export function useTaskLaunch({ projectId, hostId }: {
 						...(input.mode ? { mode: input.mode } : {}),
 						...(input.approvalMode ? { approvalMode: input.approvalMode } : {}),
 						...(input.accountId ? { accountId: input.accountId } : {}),
-						...(input.attachments && input.attachments.length > 0 ? { attachments: input.attachments } : {}),
+						...(wireAttachments ? { attachments: wireAttachments } : {}),
 						...(input.taskPreparation ? { taskPreparation: input.taskPreparation } : {}),
 					},
 				});
@@ -394,6 +426,8 @@ export function useTaskLaunch({ projectId, hostId }: {
 		async (input: CreateTaskInput): Promise<string> => {
 			try {
 			const displayName = sessionNameFromBrief(input.brief) || input.agent || "Standalone agent";
+			// A file too large to inline is streamed from disk to the daemon first.
+			const wireAttachments = input.attachments?.length ? await toWireAttachments(input.attachments, hostId) : undefined;
 			const { data, error } = await (hostId ? clientForHost(hostId) : apiClient).POST("/api/v1/sessions", {
 				headers: input.attachments?.length ? { "X-AO-Attachment-Upload": "1" } : undefined,
 				body: {
@@ -407,7 +441,7 @@ export function useTaskLaunch({ projectId, hostId }: {
 					...(input.mode ? { mode: input.mode } : {}),
 					...(input.approvalMode ? { approvalMode: input.approvalMode } : {}),
 					...(input.accountId ? { accountId: input.accountId } : {}),
-					...(input.attachments && input.attachments.length > 0 ? { attachments: input.attachments } : {}),
+					...(wireAttachments ? { attachments: wireAttachments } : {}),
 				},
 			});
 			if (error) {
@@ -1221,7 +1255,7 @@ export function useTaskLaunch({ projectId, hostId }: {
 			setFallbackAction(
 				canBypassApprovals
 					? "bypass-permissions"
-					: selectedAgent !== "unreal-agent" && interfaceMode !== "tui" &&
+					: !isChatOnlyAgent(selectedAgent) && interfaceMode !== "tui" &&
 							err instanceof TaskCreateError &&
 							Boolean(err.code && CHAT_PREFLIGHT_CODES.has(err.code))
 						? "tui"
@@ -1269,10 +1303,10 @@ export function useTaskLaunch({ projectId, hostId }: {
 		}
 	};
 	// The interface a plain submit asks for; a TUI-only agent cannot open Chat.
-	const submitMode: TaskLaunchOptions["interfaceMode"] = selectedAgent === "unreal-agent" ? "chat" : requiresTuiFallback ? "tui" : undefined;
+	const submitMode: TaskLaunchOptions["interfaceMode"] = isChatOnlyAgent(selectedAgent) ? "chat" : requiresTuiFallback ? "tui" : undefined;
 	const launchFallback = (brief: string, clientRequestId?: string, files?: FileAttachmentPayload[]) =>
 		fallbackAction === "bypass-permissions"
-			? launch(brief, { interfaceMode: selectedAgent === "unreal-agent" ? "chat" : undefined, approvalMode: "bypass-permissions", clientRequestId, attachments: files })
+			? launch(brief, { interfaceMode: isChatOnlyAgent(selectedAgent) ? "chat" : undefined, approvalMode: "bypass-permissions", clientRequestId, attachments: files })
 			: launch(brief, { interfaceMode: "tui", clientRequestId, attachments: files });
 
 	const changeAgent = (value: string) => {

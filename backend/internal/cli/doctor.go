@@ -98,6 +98,12 @@ var harnessProbeSpecs = map[string]harnessProbeSpec{
 	"memcode":      {BinaryName: "memcode", VersionArg: "--version"},
 	"command-code": {BinaryName: "command-code", VersionArg: "--version"},
 	"hermes":       {BinaryName: "hermes", VersionArg: "--version"},
+	"stakpak":      {BinaryName: "stakpak", VersionArg: "--version"},
+	// MiniMax Code's CLI is `mcode`, not its harness ID.
+	"minimax-code": {BinaryName: "mcode", VersionArg: "--version"},
+	// Open Interpreter is pinned to its inspected Rust release; the older Python
+	// CLI also installs `interpreter`, so the version line must identify it.
+	"open-interpreter": {BinaryName: "interpreter", VersionArg: "--version", ExpectedVersionPrefix: "interpreter 0.0.56"},
 }
 
 func newDoctorCommand(ctx *commandContext) *cobra.Command {

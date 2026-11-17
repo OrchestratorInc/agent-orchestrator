@@ -27,10 +27,12 @@ import (
 	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/agent/kiro"
 	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/agent/memcode"
 	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/agent/mimocode"
+	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/agent/minimaxcode"
 	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/agent/muse"
 	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/agent/omp"
 	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/agent/opencode"
 	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/agent/opencodev2"
+	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/agent/openinterpreter"
 	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/agent/pi"
 	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/agent/primeagent"
 	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/agent/vibe"
@@ -46,39 +48,41 @@ type DeriveFunc func(event string, payload []byte) (domain.ActivityState, bool)
 var Derivers = map[string]DeriveFunc{
 	// Adapters that parse hook payloads for finer-grained state keep their own
 	// deriver; the rest share the name-only StandardDeriveActivityState.
-	"claude-code":  claudecode.DeriveActivityState,
-	"command-code": commandcode.DeriveActivityState,
-	"grok":         claudecode.DeriveActivityState,
-	"muse":         muse.DeriveActivityState,
-	"omp":          omp.DeriveActivityState,
-	"codex":        codex.DeriveActivityState,
-	"continue":     continueagent.DeriveActivityState,
-	"droid":        droid.DeriveActivityState,
-	"agy":          agy.DeriveActivityState,
-	"aider":        aider.DeriveActivityState,
-	"kimchi":       kimchi.DeriveActivityState,
-	"opencode":     opencode.DeriveActivityState,
-	"opencode-v2":  opencodev2.DeriveActivityState,
-	"prime-agent":  primeagent.DeriveActivityState,
-	"mimo-code":    mimocode.DeriveActivityState,
-	"memcode":      memcode.DeriveActivityState,
-	"amp":          amp.DeriveActivityState,
-	"pi":           pi.DeriveActivityState,
-	"auggie":       auggie.DeriveActivityState,
-	"goose":        activitystate.StandardDeriveActivityState,
-	"openhands":    activitystate.StandardDeriveActivityState,
-	"devin":        activitystate.StandardDeriveActivityState,
-	"cursor":       cursor.DeriveActivityState,
-	"qwen":         activitystate.StandardDeriveActivityState,
-	"gemini":       gemini.DeriveActivityState,
-	"copilot":      activitystate.StandardDeriveActivityState,
-	"kimi":         activitystate.StandardDeriveActivityState,
-	"cline":        cline.DeriveActivityState,
-	"kiro":         kiro.DeriveActivityState,
-	"kilocode":     activitystate.StandardDeriveActivityState,
-	"autohand":     activitystate.StandardDeriveActivityState,
-	"vibe":         vibe.DeriveActivityState,
-	"fake":         fake.DeriveActivityState,
+	"claude-code":      claudecode.DeriveActivityState,
+	"command-code":     commandcode.DeriveActivityState,
+	"open-interpreter": openinterpreter.DeriveActivityState,
+	"grok":             claudecode.DeriveActivityState,
+	"muse":             muse.DeriveActivityState,
+	"omp":              omp.DeriveActivityState,
+	"codex":            codex.DeriveActivityState,
+	"continue":         continueagent.DeriveActivityState,
+	"droid":            droid.DeriveActivityState,
+	"agy":              agy.DeriveActivityState,
+	"aider":            aider.DeriveActivityState,
+	"kimchi":           kimchi.DeriveActivityState,
+	"opencode":         opencode.DeriveActivityState,
+	"opencode-v2":      opencodev2.DeriveActivityState,
+	"prime-agent":      primeagent.DeriveActivityState,
+	"mimo-code":        mimocode.DeriveActivityState,
+	"minimax-code":     minimaxcode.DeriveActivityState,
+	"memcode":          memcode.DeriveActivityState,
+	"amp":              amp.DeriveActivityState,
+	"pi":               pi.DeriveActivityState,
+	"auggie":           auggie.DeriveActivityState,
+	"goose":            activitystate.StandardDeriveActivityState,
+	"openhands":        activitystate.StandardDeriveActivityState,
+	"devin":            activitystate.StandardDeriveActivityState,
+	"cursor":           cursor.DeriveActivityState,
+	"qwen":             activitystate.StandardDeriveActivityState,
+	"gemini":           gemini.DeriveActivityState,
+	"copilot":          activitystate.StandardDeriveActivityState,
+	"kimi":             activitystate.StandardDeriveActivityState,
+	"cline":            cline.DeriveActivityState,
+	"kiro":             kiro.DeriveActivityState,
+	"kilocode":         activitystate.StandardDeriveActivityState,
+	"autohand":         activitystate.StandardDeriveActivityState,
+	"vibe":             vibe.DeriveActivityState,
+	"fake":             fake.DeriveActivityState,
 }
 
 // AgentSessionID extracts a native resumable-session identifier from an
@@ -116,10 +120,11 @@ const (
 // Command Code exposes no permission-request hook, so hook silence cannot
 // prove an idle pipeline either.
 var signalCoverageOverrides = map[domain.AgentHarness]SignalCoverage{
-	domain.HarnessAider:       SignalCoveragePartial,
-	domain.HarnessCommandCode: SignalCoveragePartial,
-	domain.HarnessContinue:    SignalCoveragePartial,
-	domain.HarnessMemcode:     SignalCoveragePartial,
+	domain.HarnessAider:           SignalCoveragePartial,
+	domain.HarnessCommandCode:     SignalCoveragePartial,
+	domain.HarnessOpenInterpreter: SignalCoveragePartial,
+	domain.HarnessContinue:        SignalCoveragePartial,
+	domain.HarnessMemcode:         SignalCoveragePartial,
 }
 
 // CoverageForHarness returns the activity-signal coverage for a selectable

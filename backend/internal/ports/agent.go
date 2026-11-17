@@ -304,6 +304,11 @@ type NativeSessionResolveConfig struct {
 	DataDir   string
 	SessionID domain.SessionID
 	LaunchID  string
+	// Env is the session's runtime environment, as the runtime layers it over
+	// the daemon's for the agent process, for adapters whose lookup runs the
+	// agent CLI against a store that project-level settings or credentials
+	// select. nil means the caller has none.
+	Env map[string]string
 }
 
 // AgentBinaryResolutionInvalidator is an optional capability for adapters that
@@ -636,6 +641,12 @@ type TerminalActivityOptions struct {
 // TerminalActivityOptionsProvider exposes an adapter's terminal observation needs.
 type TerminalActivityOptionsProvider interface {
 	TerminalActivityOptions() TerminalActivityOptions
+}
+
+// TurnInterruptKey declares a key that stops a running turn without exiting
+// the harness. Harnesses without this capability refuse explicit Stop turn.
+type TurnInterruptKey interface {
+	InterruptKey() string
 }
 
 // EmptyComposerDetector is an opt-in safety capability for unsolicited

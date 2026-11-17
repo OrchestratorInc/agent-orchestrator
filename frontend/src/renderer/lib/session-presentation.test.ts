@@ -87,6 +87,7 @@ describe("session presentation", () => {
 
 	it.each([
 		["Draft", null],
+		["Waiting on base PR", null],
 		["Awaiting review", "review"],
 		["Merge conflicts", "attention"],
 	] as const)("maps in-review sessions with %s to marker %s", (displayStatus, marker) => {

@@ -44,8 +44,18 @@ var providerEnvironment = map[string][]LoginMethod{
 	"unreal-agent": {{"env_OPENAI_API_KEY", "OpenAI API key", true}, {"env_OPENROUTER_API_KEY", "OpenRouter API key", true}, {"env_FIREWORKS_API_KEY", "Fireworks API key", true}},
 	"memcode":      {{"env_OPENAI_API_KEY", "OpenAI API key", true}, {"env_ANTHROPIC_API_KEY", "Anthropic API key", true}},
 	"command-code": {{"env_COMMAND_CODE_API_KEY", "Command Code API key", true}},
+	// Docker Agent's generated default config reads these; GEMINI_API_KEY is
+	// passed on as GOOGLE_API_KEY for its google provider.
+	"docker-agent": {{"env_ANTHROPIC_API_KEY", "Anthropic API key", true}, {"env_OPENAI_API_KEY", "OpenAI API key", true}, {"env_GEMINI_API_KEY", "Gemini API key", true}},
 	"hermes":       {{"env_ANTHROPIC_API_KEY", "Anthropic API key", true}, {"env_OPENAI_API_KEY", "OpenAI API key", true}, {"env_GEMINI_API_KEY", "Gemini API key", true}, {"env_OPENROUTER_API_KEY", "OpenRouter API key", true}, {"env_DEEPSEEK_API_KEY", "DeepSeek API key", true}},
 	"openhands":    {{"env_LLM_API_KEY", "OpenHands LLM API key", true}},
+	"stakpak":      {{"env_STAKPAK_API_KEY", "Stakpak API key", true}, {"env_ANTHROPIC_API_KEY", "Anthropic API key", true}, {"env_OPENAI_API_KEY", "OpenAI API key", true}, {"env_GEMINI_API_KEY", "Gemini API key", true}},
+	// MiniMax Code reads these as credentials (minimaxcode authCredentialEnvNames);
+	// its account login stays the visible terminal /login.
+	"minimax-code": {{"env_MINIMAX_API_KEY", "MiniMax API key", true}, {"env_ANTHROPIC_API_KEY", "Anthropic API key", true}, {"env_OPENAI_API_KEY", "OpenAI API key", true}},
+	// Open Interpreter's generated providers read these variables once chosen
+	// with /model; its built-in OpenAI provider uses native sign-in instead.
+	"open-interpreter": {{"env_ANTHROPIC_API_KEY", "Anthropic API key", true}, {"env_GEMINI_API_KEY", "Gemini API key", true}, {"env_OPENROUTER_API_KEY", "OpenRouter API key", true}, {"env_DEEPSEEK_API_KEY", "DeepSeek API key", true}, {"env_ZAI_API_KEY", "Z.AI API key", true}},
 }
 
 func environmentMethod(agentID, method string) (string, bool) {
