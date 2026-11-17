@@ -443,6 +443,7 @@ func TestSuspendSessionShellsSavesShellsToRestore(t *testing.T) {
 	running := sessionShell("shellterm-running")
 	exited := sessionShell("shellterm-exited")
 	ended := endedSessionShell("shellterm-ended", "")
+	running.AppRunID, exited.AppRunID = testAppRunID, testAppRunID
 	rt.aliveByHandle[running.HandleID] = true
 	st := &fakeShellTerminalStore{records: []ShellTerminalRecord{running, exited, ended}}
 	svc := newTestService(rt, st, &fakeProjectRootLocator{})
@@ -653,5 +654,25 @@ func TestShellRecoveredAliveClosesWhenItExits(t *testing.T) {
 	listed, err := svc.ListShellTerminalsForCurrentAppRun(ctx)
 	if err != nil || len(listed) != 0 || len(st.records) != 0 {
 		t.Fatalf("list = %+v, %v; rows = %+v; want the exited shell closed", listed, err, st.records)
+	}
+}
+
+func TestQuitKeepsAShellWhoseStartupRecoveryDidNotSettle(t *testing.T) {
+	ctx := context.Background()
+	rt := newFakeShellRuntime()
+	st := &fakeShellTerminalStore{records: []ShellTerminalRecord{sessionShell("shellterm-a")}, markEndedErr: errors.New("disk busy")}
+	svc := newTestService(rt, st, &fakeProjectRootLocator{})
+	svc.dataDir = t.TempDir()
+	if _, err := svc.ReapShellTerminalsFromPreviousAppRuns(ctx); err != nil {
+		t.Fatal(err)
+	}
+	st.markEndedErr = nil
+	release, err := svc.SuspendSessionShells(ctx, "session-1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	release()
+	if len(st.records) != 1 || st.records[0].EndedAt == nil {
+		t.Fatalf("rows = %+v; want the tab kept as ended", st.records)
 	}
 }

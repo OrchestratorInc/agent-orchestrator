@@ -1360,7 +1360,7 @@ func (s *Service) SuspendSessionShells(ctx context.Context, sessionID domain.Ses
 		}
 		var alive bool
 		var destroyErr error
-		if keepsEndedShell(rec) && s.childMayBeAlive(ctx, rec) {
+		if keepsEndedShell(rec) && (rec.AppRunID != s.appRunID || s.childMayBeAlive(ctx, rec)) {
 			alive, destroyErr = s.suspendShell(ctx, rec)
 		} else {
 			alive, destroyErr = s.destroyConfirmed(ctx, rec)
