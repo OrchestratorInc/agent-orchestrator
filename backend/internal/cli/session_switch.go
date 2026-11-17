@@ -21,15 +21,30 @@ import (
 )
 
 type sessionSwitchOptions struct {
-	from    string
-	message string
-	force   bool
+	from       string
+	model      string
+	effort     string
+	permission string
+	message    string
+	force      bool
+}
+
+func (o sessionSwitchOptions) picks() string {
+	var parts []string
+	for _, pick := range [][2]string{{"model", o.model}, {"effort", o.effort}, {"permission mode", o.permission}} {
+		if value := strings.TrimSpace(pick[1]); value != "" {
+			parts = append(parts, pick[0]+" "+value)
+		}
+	}
+	return strings.Join(parts, ", ")
 }
 
 type sessionSwitchResponse struct {
-	StoppedTurn             bool `json:"stoppedTurn"`
-	CancelledQueuedMessages int  `json:"cancelledQueuedMessages"`
-	FailedPendingApprovals  bool `json:"failedPendingApprovals"`
+	StoppedTurn             bool     `json:"stoppedTurn"`
+	CancelledQueuedMessages int      `json:"cancelledQueuedMessages"`
+	FailedPendingApprovals  bool     `json:"failedPendingApprovals"`
+	SettingsUpdated         bool     `json:"settingsUpdated"`
+	Warnings                []string `json:"warnings"`
 }
 
 func (r sessionSwitchResponse) stopped() string {
@@ -56,6 +71,9 @@ func (r sessionSwitchResponse) stopped() string {
 type sessionSwitchRequest struct {
 	TargetHarness  string `json:"targetHarness"`
 	IdempotencyKey string `json:"idempotencyKey"`
+	Model          string `json:"model,omitempty"`
+	Effort         string `json:"effort,omitempty"`
+	PermissionMode string `json:"permissionMode,omitempty"`
 	Force          bool   `json:"force,omitempty"`
 }
 
@@ -64,57 +82,80 @@ const switchFromLimit = 4
 func newSessionSwitchCommand(ctx *commandContext) *cobra.Command {
 	var opts sessionSwitchOptions
 	cmd := &cobra.Command{
-		Use:   "switch <id> <agent>",
-		Short: "Switch a session to another agent",
-		Long: `Switch a session to another agent in place. The session keeps its worktree,
-branch and conversation; the new agent starts on its default model from a
-handoff note of the work so far. Works for Chat and Terminal UI sessions on this
-machine, including one whose agent exited.
+		Use:   "switch <id> [agent]",
+		Short: "Switch a session to another agent, model, effort or permission mode",
+		Long: `Switch a session's agent, model, effort or permission mode in place. The
+session keeps its worktree, branch and conversation. Works for Chat and Terminal
+UI sessions on this machine, including one whose agent exited.
+
+Name an agent to move the session to it. The new agent starts from a handoff
+note of the work so far, on --model and --effort if given and on its defaults
+otherwise. Leave the agent out, or name the one already running, to change only
+--model, --effort or --permission: a Chat agent takes them from its next turn,
+and a Terminal UI agent restarts on its own conversation.
 
 A session whose agent is working or waiting on an approval is refused. --force
 stops the current turn, cancels queued messages and pending approvals, and
-switches anyway: use it when the agent is stuck, for example during a provider
-outage.
+switches anyway.
 
---from <agent> switches every session on that agent instead of one,
+--from <agent> makes the same change to every session on that agent,
 orchestrators included, four at a time, and exits 1 if any of them was not
 switched or did not get the message.
 
---message is sent to the new agent once the switch completes, as ao send would.
+--message is sent to the agent once the switch completes, as ao send would.
 Run ao agent ls for the agents you can switch to.`,
 		Example: `  ao session switch ao-12 codex
-  ao session switch ao-12 codex --force -m "Claude is down. Take over."
+  ao session switch ao-12 --model opus --effort high
+  ao session switch ao-12 codex --model gpt-6.1-sol --effort low --permission accept-edits
   ao session switch --from claude codex --force -m "Claude is down. Take over."`,
 		Args: func(_ *cobra.Command, args []string) error {
-			want := 2
+			low, high := 1, 2
 			if opts.from != "" {
-				want = 1
+				low, high = 0, 1
 			}
-			if len(args) != want {
-				return usageError{errors.New("usage: ao session switch <id> <agent>, or ao session switch --from <agent> <agent>")}
+			if len(args) < low || len(args) > high {
+				return usageError{errors.New("usage: ao session switch <id> [agent], or ao session switch --from <agent> [agent]")}
 			}
 			return nil
 		},
 		RunE: func(cmd *cobra.Command, args []string) error {
-			agent, err := knownAgentFlag(args[len(args)-1])
-			if err != nil {
-				return err
+			var agent string
+			if (opts.from == "" && len(args) == 2) || (opts.from != "" && len(args) == 1) {
+				var err error
+				if agent, err = knownAgentFlag(args[len(args)-1]); err != nil {
+					return err
+				}
 			}
-			if agent == "" {
-				return usageError{errors.New("usage: name the agent to switch to")}
+			if agent == "" && opts.picks() == "" {
+				return usageError{errors.New("usage: name an agent to switch to, or a --model, --effort or --permission to change")}
+			}
+			switch opts.permission {
+			case "", "default", "accept-edits", "auto", "bypass-permissions":
+			default:
+				return usageError{fmt.Errorf("usage: --permission must be default, accept-edits, auto or bypass-permissions, got %q", opts.permission)}
 			}
 			if opts.from == "" {
 				id, err := normalizeSessionID(args[0])
 				if err != nil {
 					return err
 				}
-				return ctx.switchSession(cmd.Context(), cmd.OutOrStdout(), id, agent, opts)
+				if agent == "" {
+					var res sessionResponse
+					if err := ctx.getJSON(cmd.Context(), "sessions/"+url.PathEscape(id), &res); err != nil {
+						return err
+					}
+					agent = res.Session.Harness
+				}
+				return ctx.switchSession(cmd.Context(), cmd.OutOrStdout(), cmd.ErrOrStderr(), id, agent, opts)
 			}
 			from, err := knownAgentFlag(opts.from)
 			if err != nil {
 				return err
 			}
-			if from == agent {
+			if agent == "" {
+				agent = from
+			}
+			if from == agent && opts.picks() == "" {
 				return usageError{fmt.Errorf("usage: --from %s names the agent being switched to", opts.from)}
 			}
 			return ctx.switchSessionsFrom(cmd.Context(), cmd, from, agent, opts)
@@ -122,7 +163,10 @@ Run ao agent ls for the agents you can switch to.`,
 	}
 	f := cmd.Flags()
 	f.StringVar(&opts.from, "from", "", "Switch every session on this agent, for example claude")
-	f.StringVarP(&opts.message, "message", "m", "", "Message to send to the new agent after the switch")
+	f.StringVar(&opts.model, "model", "", "Model to run; empty keeps the current one, or the new agent's default")
+	f.StringVar(&opts.effort, "effort", "", "Reasoning effort; empty keeps the current one, or the new agent's default")
+	f.StringVar(&opts.permission, "permission", "", "Permission mode: default (the agent's own config), accept-edits, auto or bypass-permissions; empty keeps the session's")
+	f.StringVarP(&opts.message, "message", "m", "", "Message to send to the agent after the switch")
 	f.BoolVar(&opts.force, "force", false, "Stop the current turn, queued messages and pending approvals, then switch")
 	return cmd
 }
@@ -138,7 +182,7 @@ func (c *commandContext) switchSessionsFrom(ctx context.Context, cmd *cobra.Comm
 			ids = append(ids, sess.ID)
 		}
 	}
-	out := cmd.OutOrStdout()
+	out, errOut := cmd.OutOrStdout(), cmd.ErrOrStderr()
 	if len(ids) == 0 {
 		_, err := fmt.Fprintf(out, "no sessions on %s\n", from)
 		return err
@@ -149,47 +193,70 @@ func (c *commandContext) switchSessionsFrom(ctx context.Context, cmd *cobra.Comm
 	group.SetLimit(switchFromLimit)
 	for _, id := range ids {
 		group.Go(func() error {
-			var lines bytes.Buffer
-			err := c.switchSession(ctx, &lines, id, agent, opts)
+			var lines, warnings bytes.Buffer
+			err := c.switchSession(ctx, &lines, &warnings, id, agent, opts)
 			mu.Lock()
 			defer mu.Unlock()
 			_, _ = out.Write(lines.Bytes())
+			_, _ = errOut.Write(warnings.Bytes())
 			if errors.Is(err, errMessageNotSent) {
 				unsent++
 			} else if err != nil {
 				failed++
 			}
 			if err != nil {
-				_, _ = fmt.Fprintf(cmd.ErrOrStderr(), "%s: %v\n", id, err)
+				_, _ = fmt.Fprintf(errOut, "%s: %v\n", id, err)
 			}
 			return nil
 		})
 	}
 	_ = group.Wait()
+	done := fmt.Sprintf("switched %d sessions from %s to %s", len(ids), from, agent)
+	if from == agent {
+		done = fmt.Sprintf("applied %s to %d sessions on %s", opts.picks(), len(ids), from)
+	}
 	if failed > 0 {
 		return fmt.Errorf("%d of %d sessions on %s were not switched", failed, len(ids), from)
 	}
 	if unsent > 0 {
-		return fmt.Errorf("switched %d sessions from %s to %s, but %d did not get the message", len(ids), from, agent, unsent)
+		return fmt.Errorf("%s, but %d did not get the message", done, unsent)
 	}
-	_, err := fmt.Fprintf(out, "switched %d sessions from %s to %s\n", len(ids), from, agent)
+	_, err := fmt.Fprintln(out, done)
 	return err
 }
 
-func (c *commandContext) switchSession(ctx context.Context, out io.Writer, id, agent string, opts sessionSwitchOptions) error {
+func (c *commandContext) switchSession(ctx context.Context, out, errOut io.Writer, id, agent string, opts sessionSwitchOptions) error {
 	var result sessionSwitchResponse
 	err := c.doJSONPathWithHeadersAndTimeout(ctx, http.MethodPost, "/api/v1/sessions/"+url.PathEscape(id)+"/provider-switch", sessionSwitchRequest{
-		TargetHarness: agent, IdempotencyKey: uuid.NewString(), Force: opts.force,
+		TargetHarness: agent, IdempotencyKey: uuid.NewString(),
+		Model: strings.TrimSpace(opts.model), Effort: strings.TrimSpace(opts.effort),
+		PermissionMode: opts.permission, Force: opts.force,
 	}, &result, nil, 0)
 	var responseErr apiResponseError
 	hasResponseErr := errors.As(err, &responseErr)
+	picks := opts.picks()
 	switch {
 	case err == nil:
-		if _, err := fmt.Fprintf(out, "switched %s to %s%s\n", id, agent, result.stopped()); err != nil {
+		for _, warning := range result.Warnings {
+			if _, err := fmt.Fprintf(errOut, "warning: %s\n", warning); err != nil {
+				return err
+			}
+		}
+		line := fmt.Sprintf("switched %s to %s", id, agent)
+		if result.SettingsUpdated {
+			line = fmt.Sprintf("updated %s on %s: %s", id, agent, picks)
+		} else if picks != "" {
+			line += " with " + picks
+		}
+		if _, err := fmt.Fprintln(out, line+result.stopped()); err != nil {
 			return err
 		}
 	case hasResponseErr && responseErr.ErrorBody.Code == "PROVIDER_SWITCH_already_active":
-		if _, err := fmt.Fprintf(out, "%s is already on %s\n", id, agent); err != nil {
+		line := fmt.Sprintf("%s is already on %s", id, agent)
+		if picks != "" {
+			line += " with " + picks
+		}
+		if _, err := fmt.Fprintln(out, line); err != nil {
 			return err
 		}
 	case hasResponseErr && !opts.force && (responseErr.ErrorBody.Code == "PROVIDER_SWITCH_busy" || responseErr.ErrorBody.Code == "PROVIDER_SWITCH_pending_interaction"):

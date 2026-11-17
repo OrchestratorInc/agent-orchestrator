@@ -876,6 +876,30 @@ func TestProviderSwitchRefusesAnUnknownAgentAndSession(t *testing.T) {
 	}
 }
 
+func TestSwitchToTheRunningAgentAppliesNewSettingsInPlace(t *testing.T) {
+	h, _, _ := newEditHarness(t, false)
+	ctx := context.Background()
+	source, err := h.svc.Controller(testSession)
+	if err != nil {
+		t.Fatal(err)
+	}
+	record, _, err := h.st.GetSession(ctx, testSession)
+	if err != nil {
+		t.Fatal(err)
+	}
+	current := record.Harness
+	result, err := h.svc.SwitchProviderReport(ctx, testSession, domain.ProviderSwitchRequest{TargetHarness: current, Model: "picked-model"})
+	if err != nil || !result.SettingsUpdated {
+		t.Fatalf("result = %+v err = %v, want the settings applied", result, err)
+	}
+	if got := source.Settings().Model; got != "picked-model" {
+		t.Fatalf("model = %q, want picked-model", got)
+	}
+	if _, err := h.svc.SwitchProviderReport(ctx, testSession, domain.ProviderSwitchRequest{TargetHarness: current, Model: "picked-model"}); !errors.Is(err, domain.ErrProviderAlreadyActive) {
+		t.Fatalf("unchanged picks = %v, want already active", err)
+	}
+}
+
 func TestSwitchFromAnExitedAgentStartsItToHandOver(t *testing.T) {
 	h, _, _ := newEditHarness(t, false)
 	ctx := context.Background()

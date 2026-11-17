@@ -34,6 +34,8 @@ func switchCommandServer(t *testing.T, status int, code string) (*httptest.Serve
 		switch {
 		case r.Method == http.MethodGet && r.URL.Path == "/api/v1/sessions":
 			_, _ = w.Write([]byte(calls.sessions))
+		case r.Method == http.MethodGet && strings.HasPrefix(r.URL.Path, "/api/v1/sessions/"):
+			_, _ = w.Write([]byte(`{"session":{"id":"` + strings.Split(r.URL.Path, "/")[4] + `","harness":"claude-code"}}`))
 		case r.Method == http.MethodPost && strings.HasSuffix(r.URL.Path, "/provider-switch"):
 			var in map[string]any
 			_ = json.NewDecoder(r.Body).Decode(&in)
@@ -128,7 +130,8 @@ func TestSessionSwitchBusyPointsAtForce(t *testing.T) {
 
 func TestSessionSwitchNeedsAnAgent(t *testing.T) {
 	setConfigEnv(t)
-	for _, args := range [][]string{{"demo-1"}, {"demo-1", "codex", "extra"}, {"--from", "claude", "demo-1", "codex"}, {"--from", "codex", "codex"}} {
+	for _, args := range [][]string{{"demo-1"}, {"demo-1", "codex", "extra"}, {"--from", "claude", "demo-1", "codex"}, {"--from", "codex", "codex"}, {"--from", "claude"},
+		{"demo-1", "codex", "--permission", "sometimes"}} {
 		_, _, err := executeCLI(t, Deps{}, append([]string{"session", "switch"}, args...)...)
 		if ExitCode(err) != 2 {
 			t.Fatalf("%v: err = %v exit = %d", args, err, ExitCode(err))
@@ -272,5 +275,63 @@ func TestSessionSwitchFromCountsAnUnsentMessageAsSwitched(t *testing.T) {
 	if ExitCode(err) != 1 || !strings.Contains(err.Error(), "switched 1 sessions from claude-code to codex, but 1 did not get the message") ||
 		!strings.Contains(errOut, "demo-1: switched, but the message was not sent") {
 		t.Fatalf("err = %v exit = %d stderr = %q", err, ExitCode(err), errOut)
+	}
+}
+
+func TestSessionSwitchChangesTheModelOfTheRunningAgent(t *testing.T) {
+	cfg := setConfigEnv(t)
+	srv, calls := switchCommandServer(t, 0, "")
+	calls.switchBody = `{"status":"ok","settingsUpdated":true}`
+	writeRunFileFor(t, cfg, srv)
+	out, _, err := executeCLI(t, Deps{ProcessAlive: func(int) bool { return true }}, "session", "switch", "demo-1", "--model", "opus", "--effort", "high")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if body := calls.switches[0]; body["targetHarness"] != "claude-code" || body["model"] != "opus" || body["effort"] != "high" {
+		t.Fatalf("switch body = %v", body)
+	}
+	if !strings.Contains(out, "updated demo-1 on claude-code: model opus, effort high") {
+		t.Fatalf("output = %q", out)
+	}
+}
+
+func TestSessionSwitchToAnotherAgentWithItsSettings(t *testing.T) {
+	cfg := setConfigEnv(t)
+	srv, calls := switchCommandServer(t, 0, "")
+	calls.switchBody = `{"status":"ok","warnings":["gpt-x is not in codex's model list; the agent may refuse it"]}`
+	writeRunFileFor(t, cfg, srv)
+	out, errOut, err := executeCLI(t, Deps{ProcessAlive: func(int) bool { return true }},
+		"session", "switch", "demo-1", "codex", "--model", "gpt-x", "--effort", "low", "--permission", "accept-edits")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if body := calls.switches[0]; body["targetHarness"] != "codex" || body["model"] != "gpt-x" || body["effort"] != "low" || body["permissionMode"] != "accept-edits" {
+		t.Fatalf("switch body = %v", body)
+	}
+	if !strings.Contains(out, "switched demo-1 to codex with model gpt-x, effort low, permission mode accept-edits") ||
+		!strings.Contains(errOut, "warning: gpt-x is not in codex's model list") {
+		t.Fatalf("out = %q stderr = %q", out, errOut)
+	}
+}
+
+func TestSessionSwitchFromAppliesSettingsToEverySessionOnThatAgent(t *testing.T) {
+	cfg := setConfigEnv(t)
+	srv, calls := switchCommandServer(t, 0, "")
+	calls.switchBody = `{"status":"ok","settingsUpdated":true}`
+	calls.sessions = `{"sessions":[
+		{"id":"demo-1","projectId":"demo","kind":"worker","harness":"claude-code"},
+		{"id":"demo-2","projectId":"demo","kind":"worker","harness":"claude-code"}]}`
+	writeRunFileFor(t, cfg, srv)
+	out, _, err := executeCLI(t, Deps{ProcessAlive: func(int) bool { return true }}, "session", "switch", "--from", "claude", "--model", "opus")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, body := range calls.switches {
+		if body["targetHarness"] != "claude-code" || body["model"] != "opus" {
+			t.Fatalf("switch body = %v", body)
+		}
+	}
+	if len(calls.switches) != 2 || !strings.Contains(out, "applied model opus to 2 sessions on claude-code") {
+		t.Fatalf("switches = %d out = %q", len(calls.switches), out)
 	}
 }

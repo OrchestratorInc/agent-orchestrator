@@ -49,8 +49,8 @@ func (s *Service) SwitchProvider(ctx context.Context, id domain.SessionID, reque
 	return err
 }
 
-// SwitchProviderReport switches as SwitchProvider does and reports what it
-// stopped on the way.
+// SwitchProviderReport switches as SwitchProvider does and reports what it stopped
+// on the way. Picks for the agent already running are applied to it in place.
 func (s *Service) SwitchProviderReport(ctx context.Context, id domain.SessionID, request domain.ProviderSwitchRequest) (domain.ProviderSwitchResult, error) {
 	unlock, err := s.lockProviderSwitch(ctx, id)
 	if err != nil {
@@ -59,7 +59,18 @@ func (s *Service) SwitchProviderReport(ctx context.Context, id domain.SessionID,
 	defer unlock()
 	var result domain.ProviderSwitchResult
 	err = s.switchProvider(ctx, id, request, &result)
-	return result, err
+	if !errors.Is(err, domain.ErrProviderAlreadyActive) || (request.Model == "" && request.Effort == "" && request.PermissionMode == "") {
+		return result, err
+	}
+	changed, applyErr := s.applyPicksToActiveTarget(ctx, id, request)
+	if errors.Is(applyErr, ErrNotChatMode) {
+		return result, err
+	}
+	if applyErr != nil || !changed {
+		return result, cmp.Or(applyErr, err)
+	}
+	result.SettingsUpdated = true
+	return result, nil
 }
 
 // SwitchProviderAndSend switches, then sends msg to the agent it switched to:
@@ -84,7 +95,7 @@ func (s *Service) SwitchProviderAndSend(ctx context.Context, id domain.SessionID
 		// and so does a window that picked the agent another one already brought
 		// in. Either way the message runs with what its sender picked.
 		if err := s.switchProvider(ctx, id, request, &domain.ProviderSwitchResult{}); errors.Is(err, domain.ErrProviderAlreadyActive) {
-			if err := s.applyPicksToActiveTarget(ctx, id, request); err != nil {
+			if _, err := s.applyPicksToActiveTarget(ctx, id, request); err != nil {
 				return turn, false, err
 			}
 		} else if err != nil {
@@ -98,13 +109,13 @@ func (s *Service) SwitchProviderAndSend(ctx context.Context, id domain.SessionID
 // applyPicksToActiveTarget gives the agent already running the model, effort
 // and permission mode a switch to it named. A pick it cannot take refuses the
 // message before anything is sent.
-func (s *Service) applyPicksToActiveTarget(ctx context.Context, id domain.SessionID, request domain.ProviderSwitchRequest) error {
+func (s *Service) applyPicksToActiveTarget(ctx context.Context, id domain.SessionID, request domain.ProviderSwitchRequest) (bool, error) {
 	if request.Model == "" && request.Effort == "" && request.PermissionMode == "" {
-		return nil
+		return false, nil
 	}
 	controller, release, err := s.workingController(ctx, id)
 	if err != nil {
-		return err
+		return false, err
 	}
 	defer release()
 	current := controller.Settings()
@@ -115,16 +126,16 @@ func (s *Service) applyPicksToActiveTarget(ctx context.Context, id domain.Sessio
 		picked.ApprovalMode = ports.NormalizePermissionMode(request.PermissionMode)
 	}
 	if picked.Model == current.Model && picked.ReasoningEffort == current.ReasoningEffort && picked.ApprovalMode == current.ApprovalMode {
-		return nil
+		return false, nil
 	}
 	if _, err := s.setTurnSettings(ctx, controller, domain.SessionConversationOwner(id), picked); err != nil {
-		return &domain.ProviderSwitchError{
+		return false, &domain.ProviderSwitchError{
 			Kind:   domain.ProviderSwitchRefusalUnsupported,
 			Detail: fmt.Sprintf("%s is already active and did not take the picked settings: %v", request.TargetHarness, err),
 			Cause:  err,
 		}
 	}
-	return nil
+	return true, nil
 }
 
 // lockProviderSwitch admits one provider switch per session at a time.
@@ -167,13 +178,17 @@ func (s *Service) switchProvider(ctx context.Context, id domain.SessionID, reque
 	} else if domain.NormalizeSessionMode(stored.Mode) == domain.SessionModeTUI && s.terminalSwitcher != nil {
 		// One builder writes the note for both UIs.
 		started := time.Now()
-		if request.HandoffNote, err = s.HandoffNote(ctx, stored, request.TargetHarness, strings.TrimSpace(request.IdempotencyKey)); err != nil {
-			return err
+		sameAgent := stored.Harness == request.TargetHarness
+		if !sameAgent {
+			if request.HandoffNote, err = s.HandoffNote(ctx, stored, request.TargetHarness, strings.TrimSpace(request.IdempotencyKey)); err != nil {
+				return err
+			}
 		}
 		noteReady := time.Since(started)
 		if err := s.terminalSwitcher.SwitchTUIProvider(ctx, id, request); err != nil {
 			return err
 		}
+		result.SettingsUpdated = sameAgent
 		if request.Force {
 			result.StoppedTurn = stored.Activity.State == domain.ActivityActive
 			result.FailedApprovals = stored.Activity.State == domain.ActivityWaitingInput || stored.Activity.State == domain.ActivityBlocked

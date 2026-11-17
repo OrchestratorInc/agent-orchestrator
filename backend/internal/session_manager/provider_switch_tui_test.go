@@ -246,3 +246,54 @@ func TestForcedTUISwitchInterruptsAWorkingAgent(t *testing.T) {
 		t.Fatalf("harness = %q, want the switch target", got)
 	}
 }
+
+func TestTUISwitchToTheRunningAgentWithNewSettingsResumesItsOwnThread(t *testing.T) {
+	ctx := context.Background()
+	settle, poll := tuiSwitchTargetSettle, tuiSwitchTargetSettlePoll
+	tuiSwitchTargetSettle, tuiSwitchTargetSettlePoll = 20*time.Millisecond, 5*time.Millisecond
+	t.Cleanup(func() { tuiSwitchTargetSettle, tuiSwitchTargetSettlePoll = settle, poll })
+	st := newFakeStore()
+	st.projects["mer"] = domain.ProjectRecord{ID: "mer", Config: testRoleAgents()}
+	rec := mkLive("mer-1")
+	rec.Harness, rec.Mode, rec.Kind = domain.HarnessClaudeCode, domain.SessionModeTUI, domain.KindWorker
+	rec.Activity.State = domain.ActivityIdle
+	rec.Metadata.Branch, rec.Metadata.Model, rec.Metadata.Effort, rec.Metadata.AgentSessionID = "branch", "sonnet", "low", "own-native"
+	st.sessions[rec.ID] = rec
+	store := &launchOptionsFakeStore{fakeStore: st, options: domain.AgentLaunchOptions{FastMode: true}}
+	agent := &recordingAgent{}
+	m := New(Deps{Runtime: &childProbeRuntime{fakeRuntime: &fakeRuntime{}, childAlive: true}, Agents: singleAgent{agent: agent},
+		Workspace: &fakeWorkspace{}, Store: store, Messenger: &fakeMessenger{}, Lifecycle: &fakeLCM{store: st},
+		LookPath: func(string) (string, error) { return "/bin/true", nil }})
+
+	same := domain.ProviderSwitchRequest{TargetHarness: domain.HarnessClaudeCode, Model: "sonnet"}
+	if err := m.SwitchTUIProvider(ctx, rec.ID, same); !errors.Is(err, domain.ErrProviderAlreadyActive) {
+		t.Fatalf("unchanged settings = %v, want already_active", err)
+	}
+	if err := m.SwitchTUIProvider(ctx, rec.ID, domain.ProviderSwitchRequest{
+		TargetHarness: domain.HarnessClaudeCode, Model: "opus", Effort: "high", PermissionMode: domain.PermissionModeAcceptEdits,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	got := st.sessions[rec.ID]
+	if got.Harness != domain.HarnessClaudeCode || got.Metadata.AgentSessionID != rec.Metadata.AgentSessionID {
+		t.Fatalf("harness = %q native = %q, want the same agent on its own thread", got.Harness, got.Metadata.AgentSessionID)
+	}
+	if got.Metadata.Permissions != domain.PermissionModeAcceptEdits || agent.lastRestore.Config.Permissions != domain.PermissionModeAcceptEdits {
+		t.Fatalf("permission mode = %q, launched with %q", got.Metadata.Permissions, agent.lastRestore.Config.Permissions)
+	}
+	if agent.restoreCalls != 1 || agent.lastRestore.Config.Model != "opus" || agent.lastRestore.Config.Effort != "high" || agent.launchCalls != 0 {
+		t.Fatalf("restores = %d launches = %d config = %+v, want one resume on the new settings", agent.restoreCalls, agent.launchCalls, agent.lastRestore.Config)
+	}
+	if !store.options.FastMode {
+		t.Fatal("the restart dropped the session's launch options")
+	}
+
+	fresh := st.sessions[rec.ID]
+	fresh.Metadata.AgentSessionID = ""
+	st.sessions[rec.ID] = fresh
+	var refusal *domain.ProviderSwitchError
+	err := m.SwitchTUIProvider(ctx, rec.ID, domain.ProviderSwitchRequest{TargetHarness: domain.HarnessClaudeCode, Model: "haiku"})
+	if !errors.As(err, &refusal) || refusal.Kind != domain.ProviderSwitchRefusalUnsupported || agent.restoreCalls != 1 {
+		t.Fatalf("restart with no thread to resume = %v, restores = %d; want a refusal before anything stops", err, agent.restoreCalls)
+	}
+}
