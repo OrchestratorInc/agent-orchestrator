@@ -304,23 +304,6 @@ function Shell() {
 						}}
 					/>
 				))}
-				{/* The composer's skill and file picker searches in a native bar on
-				    iOS, under the title the page sets ("Skills", "Worktree files").
-				    Android searches in the sheet's body. */}
-				<Stack.Screen
-					name="sheets/composer-picker"
-					options={{
-						presentation: "formSheet",
-						sheetAllowedDetents: [0.6, 0.95],
-						sheetInitialDetentIndex: 0,
-						sheetGrabberVisible: true,
-						sheetCornerRadius,
-						headerShown: Platform.OS === "ios",
-						title: "Insert",
-						headerStyle: { backgroundColor: t.bgSurface },
-						contentStyle: { backgroundColor: t.bgSurface },
-					}}
-				/>
 				{/* A new Orchestrator Cloud project: on iOS a form sheet with a native
 				    bar, Cancel and Create in it, as the machine-name sheet has. On
 				    Android a page under the stack's top app bar, as manual connect
