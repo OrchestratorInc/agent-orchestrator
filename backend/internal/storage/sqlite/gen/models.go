@@ -834,6 +834,7 @@ type Session struct {
 	DisplayNameExplicit              bool
 	AcceptedDeliveryID               string
 	AcceptedDeliveryLaunchID         string
+	MoveConversationIncomplete       int64
 }
 
 type SessionAgentAccount struct {

@@ -35,6 +35,10 @@ type sessionMoveStore interface {
 	SetSessionMovedTo(ctx context.Context, id domain.SessionID, move domain.SessionMove, updatedAt time.Time) (bool, error)
 }
 
+type sessionMoveImportStore interface {
+	SetSessionMoveConversationIncomplete(ctx context.Context, id domain.SessionID, updatedAt time.Time) (bool, error)
+}
+
 // SetMoveNoter wires the handoff note builder for session moves.
 func (s *Service) SetMoveNoter(n MoveNoter) { s.moveNotes = n }
 
@@ -269,8 +273,7 @@ func (s *Service) ImportMove(ctx context.Context, in MoveImportInput) (MoveImpor
 		return MoveImportOutcome{}, err
 	} else if found {
 		sess, err := s.toSession(ctx, rec)
-		// A replay cannot tell whether the sidecar folder was placed, only the conversation.
-		return MoveImportOutcome{Session: sess, ConversationIncomplete: conversationNotPlaced(in, sess)}, err
+		return MoveImportOutcome{Session: sess, ConversationIncomplete: rec.MoveConversationIncomplete || conversationNotPlaced(in, sess)}, err
 	}
 	project, found, err := s.store.GetProject(ctx, string(in.ProjectID))
 	if err != nil {
@@ -331,6 +334,13 @@ func (s *Service) ImportMove(ctx context.Context, in MoveImportInput) (MoveImpor
 		incomplete = true
 	}
 	out := MoveImportOutcome{Session: sess, Warnings: warnings, ConversationIncomplete: incomplete}
+	// A replay of this move after a lost response must still say so, or the app
+	// deletes the source's copy.
+	if store, ok := s.store.(sessionMoveImportStore); ok && incomplete {
+		if _, err := store.SetSessionMoveConversationIncomplete(ctx, sess.ID, s.clock().UTC()); err != nil {
+			out.Warnings = append(out.Warnings, "Could not record that the conversation did not all move: "+err.Error())
+		}
+	}
 	for _, url := range m.PullRequests {
 		if _, err := s.ClaimPR(ctx, sess.ID, url, ClaimPROptions{AllowTakeover: true}); err != nil {
 			out.Warnings = append(out.Warnings, fmt.Sprintf("Could not claim %s: %v", url, err))

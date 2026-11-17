@@ -466,6 +466,9 @@ type SessionRecord struct {
 	// MovedTo is set when the session moved to AO Cloud. The session is
 	// archived here and continues there, so it must not run here again.
 	MovedTo *SessionMove `json:"movedTo,omitempty"`
+	// MoveConversationIncomplete is set on a session moved here from AO Cloud
+	// whose conversation, or its sidecar folder, was not placed.
+	MoveConversationIncomplete bool `json:"-"`
 	// StaleBinary is set while the session's current launch still runs a
 	// harness release an update has since replaced. It is derived when the row
 	// is read: any later launch starts on the installed release and reads as

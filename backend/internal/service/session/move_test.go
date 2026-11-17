@@ -32,6 +32,13 @@ func (m moveStore) SetSessionMovedTo(_ context.Context, id domain.SessionID, mov
 	return true, nil
 }
 
+func (m moveStore) SetSessionMoveConversationIncomplete(_ context.Context, id domain.SessionID, _ time.Time) (bool, error) {
+	rec, ok := m.sessions[id]
+	rec.MoveConversationIncomplete = true
+	m.sessions[id] = rec
+	return ok, nil
+}
+
 // fakeStore counts these calls without a lock, and the orchestrator notice
 // reads sessions on its own goroutine. No session here has pull requests.
 func (moveStore) ListPRFactsForSession(context.Context, domain.SessionID) ([]domain.PRFacts, error) {
@@ -379,6 +386,42 @@ func TestImportMoveStartsFromTheNoteWhenTheConversationCannotBeRead(t *testing.T
 				t.Fatalf("spawn = %+v; want the note", cfg)
 			}
 		})
+	}
+}
+
+// A sidecar folder that could not be placed leaves the conversation id right,
+// so a replay has to read the stored result, not re-derive it from the id.
+func TestImportMoveReplayKeepsAnIncompleteConversation(t *testing.T) {
+	repo, tip := pushedBranch(t)
+	var gz bytes.Buffer
+	zw := gzip.NewWriter(&gz)
+	_, _ = zw.Write([]byte(`{"type":"user","cwd":"/workspace/repository","message":{"role":"user","content":"hi"}}` + "\n"))
+	_ = zw.Close()
+	const id = "0b5a6c1e-3f2d-4c8a-9e7b-1d2c3b4a5f60"
+	st := newFakeStore()
+	st.projects["mer"] = domain.ProjectRecord{ID: "mer", Path: repo, RepoOriginURL: "https://github.com/acme/app"}
+	// Like the manager, the spawn records the session with its client request and the placed conversation id.
+	fc := &fakeCommander{spawnFunc: func(cfg ports.SpawnConfig) domain.SessionRecord {
+		rec := domain.SessionRecord{
+			ID: "mer-9", ProjectID: cfg.ProjectID, Kind: cfg.Kind, Harness: cfg.Harness,
+			ClientRequestID: cfg.ClientRequestID, ClientRequestHash: cfg.ClientRequestHash, ClientRequestCommitted: true,
+		}
+		rec.Metadata.AgentSessionID = id
+		st.sessions[rec.ID] = rec
+		return rec
+	}}
+	svc := NewWithDeps(Deps{Manager: fc, Store: moveStore{st}})
+	in := MoveImportInput{
+		ProjectID: "mer", MoveID: "m-1", Manifest: importManifest(tip), HandoffNote: "NOTE",
+		Transcript: &MoveImportTranscript{AgentSessionID: id, ProjectDir: "/home/agent/.claude/projects/-workspace-repository", Gzip: gz.Bytes(), SidecarGzip: []byte("plain")},
+	}
+	first, err := svc.ImportMove(context.Background(), in)
+	if err != nil || !first.ConversationIncomplete {
+		t.Fatalf("first import: incomplete %v, err %v; want incomplete", first.ConversationIncomplete, err)
+	}
+	replay, err := svc.ImportMove(context.Background(), in)
+	if err != nil || !replay.ConversationIncomplete || fc.spawnCalls != 1 {
+		t.Fatalf("replay: incomplete %v, spawns %d, err %v; want incomplete without a second spawn", replay.ConversationIncomplete, fc.spawnCalls, err)
 	}
 }
 
