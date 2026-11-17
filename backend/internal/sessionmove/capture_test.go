@@ -101,6 +101,38 @@ func TestCaptureSubmodules(t *testing.T) {
 	}
 }
 
+// A push sends only this repository, so a submodule commit its remote lacks
+// would leave the target with a submodule it cannot check out.
+func TestCheckPushRefusesAnUnpublishedSubmoduleCommit(t *testing.T) {
+	f := newFixture(t)
+	sub := filepath.Join(f.tmp, "sub.git")
+	g(t, f.tmp, "init", "-q", "--bare", sub)
+	seed := filepath.Join(f.tmp, "sub-seed")
+	g(t, f.tmp, "init", "-q", seed)
+	writeFile(t, filepath.Join(seed, "lib.txt"), "v1\n", 0o644)
+	g(t, seed, "add", "-A")
+	g(t, seed, "commit", "-q", "-m", "v1")
+	g(t, seed, "push", "-q", sub, "main")
+	g(t, f.src, "submodule", "add", "-q", sub, "vendor/lib")
+	g(t, f.src, "commit", "-q", "-m", "add submodule")
+	g(t, f.src, "push", "-q", "origin", "feat/x")
+	lib := filepath.Join(f.src, "vendor/lib")
+	writeFile(t, filepath.Join(lib, "lib.txt"), "v2\n", 0o644)
+	g(t, lib, "commit", "-q", "-am", "v2")
+
+	c, err := CaptureWorktree(t.Context(), CaptureOptions{Worktree: f.src})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := CheckPush(t.Context(), f.src, c, GitHubFileLimit); !errors.Is(err, ErrSubmoduleUnpushed) || !strings.Contains(err.Error(), "vendor/lib") {
+		t.Fatalf("unpublished submodule commit: err = %v", err)
+	}
+	g(t, lib, "push", "-q", "origin", "HEAD:main")
+	if err := CheckPush(t.Context(), f.src, c, GitHubFileLimit); err != nil {
+		t.Fatalf("published submodule commit: err = %v", err)
+	}
+}
+
 // A copy of an empty index would capture the files a sparse checkout leaves
 // off disk as deletions. Starting from the real index keeps them.
 func TestCaptureSparseCheckout(t *testing.T) {

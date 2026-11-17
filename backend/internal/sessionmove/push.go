@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"path/filepath"
 	"strings"
 )
 
@@ -17,6 +18,9 @@ var (
 	ErrLFSObjects     = errors.New("the move includes Git LFS files")
 	ErrPushNotVisible = errors.New("origin does not show the pushed commit")
 	ErrBranchMoved    = errors.New("the local branch moved after the capture")
+	// ErrSubmoduleUnpushed: the branch points a submodule at a commit its
+	// remote does not have, which the target could not check out.
+	ErrSubmoduleUnpushed = errors.New("a submodule commit is not on its remote")
 )
 
 // FileTooLargeError lists the files over the push limit.
@@ -67,7 +71,8 @@ func PushBranch(ctx context.Context, worktree string, c Capture, maxFileBytes in
 }
 
 // CheckPush returns the refusal PushBranch would give c before pushing: Git
-// LFS files or files over maxFileBytes, in commits origin does not have.
+// LFS files, files over maxFileBytes, or submodule commits not on their
+// remote, in commits origin does not have.
 func CheckPush(ctx context.Context, worktree string, c Capture, maxFileBytes int64) error {
 	big, lfs, err := unpushedBlobs(ctx, worktree, c.Tip(), maxFileBytes)
 	if err != nil {
@@ -80,5 +85,68 @@ func CheckPush(ctx context.Context, worktree string, c Capture, maxFileBytes int
 	if len(big) > 0 {
 		return &FileTooLargeError{Limit: maxFileBytes, Files: big}
 	}
+	subs, err := unpushedSubmodules(ctx, worktree, c.Tip())
+	if err != nil {
+		return err
+	}
+	if len(subs) > 0 {
+		return fmt.Errorf("%w: %s", ErrSubmoduleUnpushed, strings.Join(subs, ", "))
+	}
 	return nil
+}
+
+// unpushedSubmodules lists the submodules that commits origin lacks point at
+// a commit the submodule's remote does not have. A push sends only this
+// repository, so the target could not check those commits out.
+func unpushedSubmodules(ctx context.Context, worktree, tip string) ([]string, error) {
+	out, err := runGit(ctx, worktree, nil, nil, "log", "--format=", "--raw", "--no-abbrev", "--no-renames", tip, "--not", "--remotes=origin")
+	if err != nil {
+		return nil, err
+	}
+	// Newest first, so the first gitlink seen for a path is the one the tip has.
+	pointers := map[string]string{}
+	var paths []string
+	for _, line := range strings.Split(out, "\n") {
+		meta, path, ok := strings.Cut(line, "\t")
+		fields := strings.Fields(meta)
+		if !ok || len(fields) < 5 || fields[1] != "160000" || fields[4] == "D" {
+			continue
+		}
+		if _, seen := pointers[path]; !seen {
+			pointers[path] = fields[3]
+			paths = append(paths, path)
+		}
+	}
+	var missing []string
+	for _, path := range paths {
+		dir := filepath.Join(worktree, path)
+		// ponytail: a submodule that is not checked out here cannot be checked; it is let through.
+		if _, err := gitLine(ctx, dir, "rev-parse", "--git-dir"); err != nil {
+			continue
+		}
+		published, err := onRemote(ctx, dir, pointers[path])
+		if err != nil {
+			return nil, err
+		}
+		if !published {
+			missing = append(missing, path)
+		}
+	}
+	return missing, nil
+}
+
+// onRemote reports whether a remote-tracking ref of the repository in dir
+// contains commit, fetching once before saying no.
+func onRemote(ctx context.Context, dir, commit string) (bool, error) {
+	contains := func() bool {
+		out, err := runGit(ctx, dir, nil, nil, "for-each-ref", "--contains", commit, "--format=%(refname)", "refs/remotes/")
+		return err == nil && strings.TrimSpace(out) != ""
+	}
+	if contains() {
+		return true, nil
+	}
+	if _, err := runGit(ctx, dir, nil, nil, "fetch", "--quiet", "origin"); err != nil {
+		return false, err
+	}
+	return contains(), nil
 }

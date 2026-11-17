@@ -460,6 +460,7 @@ func moveAPIError(err error) error {
 		{sessionmove.ErrDirtySubmodule, "MOVE_DIRTY_SUBMODULE", "Commit or discard the changes inside %s first."},
 		{sessionmove.ErrRemoteAhead, "MOVE_REMOTE_AHEAD", "Origin's branch has commits this machine does not. Pull them first."},
 		{sessionmove.ErrLFSObjects, "MOVE_LFS", "Git LFS files cannot move yet: %s."},
+		{sessionmove.ErrSubmoduleUnpushed, "MOVE_SUBMODULE_UNPUSHED", "Submodule %s is at a commit its remote does not have. Push it first."},
 		{sessionmove.ErrDiverged, "MOVE_BRANCH_DIVERGED", "The branch here has commits the moved branch does not."},
 		{sessionmove.ErrBranchCheckedOut, "MOVE_BRANCH_CHECKED_OUT", "The branch is checked out in a worktree here."},
 		{sessionmove.ErrLocalAhead, "MOVE_LOCAL_AHEAD", "%s here has commits that Orchestrator Cloud's does not. Push them first."},
