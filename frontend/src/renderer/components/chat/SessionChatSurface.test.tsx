@@ -323,6 +323,9 @@ afterEach(() => {
 	vi.useRealTimers();
 });
 
+// The skills hook also takes the remembered list; these tests are about gating.
+const catalogCall = (hook: unknown) => (hook as ReturnType<typeof vi.fn>).mock.lastCall?.slice(0, 3);
+
 describe("SessionChatSurface recovery", () => {
 	it.each<[string, WorkspaceSession, boolean]>([
 		["a live session", session, false],
@@ -1257,13 +1260,13 @@ describe("controller catalogs during an interface handoff", () => {
 		const client = new QueryClient();
 		const { rerender } = render(<Wrapper client={client}><SessionChatSurface session={session} controllerTransitioning /></Wrapper>);
 		for (const hook of [useConversationConfigOptions, useConversationModels, useConversationSkills]) {
-			expect(hook).toHaveBeenLastCalledWith(session.id, false, undefined);
+			expect(catalogCall(hook)).toEqual([session.id, false, undefined]);
 		}
 
 		conversationState.snapshot = { capabilities: ["config_options"], controller: { state: "ready" } };
 		rerender(<Wrapper client={client}><SessionChatSurface session={session} /></Wrapper>);
 		for (const hook of [useConversationConfigOptions, useConversationModels, useConversationSkills]) {
-			expect(hook).toHaveBeenLastCalledWith(session.id, true, undefined);
+			expect(catalogCall(hook)).toEqual([session.id, true, undefined]);
 		}
 	});
 
@@ -1279,18 +1282,18 @@ describe("controller catalogs during an interface handoff", () => {
 		const client = new QueryClient();
 		const { rerender } = render(<Wrapper client={client}><SessionChatSurface session={session} agentResuming /></Wrapper>);
 		for (const hook of [useConversationConfigOptions, useConversationModels, useConversationSkills]) {
-			expect(hook).toHaveBeenLastCalledWith(session.id, false, undefined);
+			expect(catalogCall(hook)).toEqual([session.id, false, undefined]);
 		}
 
 		rerender(<Wrapper client={client}><SessionChatSurface session={{ ...session, needsResume: true }} agentResuming /></Wrapper>);
 		for (const hook of [useConversationConfigOptions, useConversationModels, useConversationSkills]) {
-			expect(hook).toHaveBeenLastCalledWith(session.id, false, undefined);
+			expect(catalogCall(hook)).toEqual([session.id, false, undefined]);
 		}
 
 		conversationState.snapshot = { capabilities: ["config_options"], controller: { state: "ready" } };
 		rerender(<Wrapper client={client}><SessionChatSurface session={{ ...session, needsResume: true }} agentResuming /></Wrapper>);
 		for (const hook of [useConversationConfigOptions, useConversationModels, useConversationSkills]) {
-			expect(hook).toHaveBeenLastCalledWith(session.id, true, undefined);
+			expect(catalogCall(hook)).toEqual([session.id, true, undefined]);
 		}
 	});
 
@@ -1298,7 +1301,7 @@ describe("controller catalogs during an interface handoff", () => {
 		conversationState.snapshot = { capabilities: ["config_options"], controller: { state: "stopped" } };
 		render(<Wrapper client={new QueryClient()}><SessionChatSurface session={session} /></Wrapper>);
 		for (const hook of [useConversationConfigOptions, useConversationModels, useConversationSkills]) {
-			expect(hook).toHaveBeenLastCalledWith(session.id, false, undefined);
+			expect(catalogCall(hook)).toEqual([session.id, false, undefined]);
 		}
 	});
 });

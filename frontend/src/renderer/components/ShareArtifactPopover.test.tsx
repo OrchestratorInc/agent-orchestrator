@@ -1,9 +1,10 @@
-import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
+import { QueryClient, QueryClientProvider, useQuery } from "@tanstack/react-query";
 import { act, render, renderHook, screen, waitFor, within } from "@testing-library/react";
 import type { ReactNode } from "react";
 import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { CloudShareFile, CloudShareGrant, CloudShareInspection, CloudShareLink, CloudShareLinks, CloudSharePublishResult } from "../../shared/cloud-share";
+import { keptArtifactsQueryKey } from "../hooks/useKeptArtifacts";
 import { workspaceQueryKeyForHost } from "../hooks/useWorkspaceQuery";
 import { aoBridge } from "../lib/bridge";
 import { ShareArtifactButton, ShareArtifactMenuPopover, publishTitle, resetShareCachesForTests, useArtifactShareFile, useReconciledShareLinks } from "./ShareArtifactPopover";
@@ -122,6 +123,28 @@ describe("ShareArtifactButton on a cloud session's file", () => {
 		expect(screen.getByText("Owner")).toBeTruthy();
 		// The toolbar button now reads Published.
 		expect(await screen.findByRole("button", { name: "Published: report.html" })).toBeTruthy();
+	});
+
+	it("says what a published page left out of the files it uses", async () => {
+		stub(inspection, links, { status: "published", replaced: false, share, pageFiles: { included: 2, skipped: 3, videos: 1, unsupported: false } });
+		const popover = await openPopover(cloudFile);
+		await within(popover).findByText("Published");
+		expect(popover.textContent).toContain("3 files this page uses weren't included, so the shared page won't show them. Videos can't be shared with a page yet.");
+	});
+
+	it("says a page's images were not included when Orchestrator Cloud cannot share them yet", async () => {
+		stub(inspection, links, { status: "published", replaced: false, share, pageFiles: { included: 0, skipped: 0, videos: 0, unsupported: true } });
+		const popover = await openPopover(cloudFile);
+		await within(popover).findByText("Published");
+		expect(popover.textContent).toContain("This page's images weren't included: Orchestrator Cloud can't share them with a page yet.");
+	});
+
+	it("says nothing more when a page included every file it uses", async () => {
+		stub(inspection, links, { status: "published", replaced: false, share, pageFiles: { included: 2, skipped: 0, videos: 0, unsupported: false } });
+		const popover = await openPopover(cloudFile);
+		await within(popover).findByText("Published");
+		expect(popover.textContent).not.toContain("weren't included");
+		expect(popover.textContent).not.toContain("wasn't included");
 	});
 
 	it("names the file without its extension", async () => {
@@ -834,6 +857,36 @@ describe("useArtifactShareFile", () => {
 	});
 });
 
+describe("ShareArtifactButton on a kept artifact", () => {
+	it("reads the kept list again on publish, so a mounted page shows the link", async () => {
+		const { inspectSpy, listSpy, publishSpy } = stub(inspection, links);
+		let keptShareUrl = "";
+		publishSpy.mockImplementation(async () => {
+			inspectSpy.mockResolvedValue({ ...inspection, shareId: SHARE_ID, publishedFingerprint: "fp-1" });
+			listSpy.mockResolvedValue({ ...links, used: 2, shares: [share] });
+			keptShareUrl = share.viewerUrl ?? "";
+			return { status: "published", replaced: false, share };
+		});
+		// Stands in for the Artifacts page's kept rows, which take shareUrl from this list.
+		function KeptShareUrl() {
+			const { data } = useQuery({ queryKey: keptArtifactsQueryKey, queryFn: async () => keptShareUrl });
+			return <output aria-label="kept link">{data || "none"}</output>;
+		}
+		render(
+			<QueryClientProvider client={new QueryClient()}><TooltipProvider>
+				<KeptShareUrl />
+				<ShareArtifactButton file={localFile} name="report.html" />
+			</TooltipProvider></QueryClientProvider>,
+		);
+		expect(await screen.findByText("none")).toBeTruthy();
+		await userEvent.click(await screen.findByRole("button", { name: "Publish: report.html" }));
+		const popover = await screen.findByRole("dialog");
+		const publish = within(popover).queryByRole("button", { name: "Publish" });
+		if (publish) await userEvent.click(publish);
+		await waitFor(() => expect(screen.getByLabelText("kept link").textContent).toBe(share.viewerUrl ?? ""));
+	});
+});
+
 describe("useReconciledShareLinks", () => {
 	const renderReconcile = () => {
 		const client = new QueryClient();
@@ -849,6 +902,8 @@ describe("useReconciledShareLinks", () => {
 		const list = vi.spyOn(aoBridge.cloudShare, "list").mockResolvedValue({ ...links, shares: [share] });
 		const invalidate = renderReconcile();
 		await waitFor(() => expect(invalidate).toHaveBeenCalledWith({ queryKey: workspaceQueryKeyForHost() }));
+		// Kept artifacts' links come from their own list.
+		expect(invalidate).toHaveBeenCalledWith({ queryKey: keptArtifactsQueryKey });
 		expect(list).toHaveBeenCalledExactlyOnceWith("https://reconcile.test");
 	});
 
@@ -878,8 +933,8 @@ describe("useReconciledShareLinks", () => {
 		await waitFor(() => expect(first.result.current.size).toBe(1));
 		expect(second.result.current.get("https://viewer.test/artifact/abc")).toBe("restricted");
 		expect(list).toHaveBeenCalledTimes(1);
-		// Once for the artifact lists, once for the links of remote hosts' files.
-		expect(invalidate).toHaveBeenCalledTimes(2);
+		// Once each for the artifact lists, kept artifacts, and the links of remote hosts' files.
+		expect(invalidate).toHaveBeenCalledTimes(3);
 		expect(invalidate).toHaveBeenCalledWith({ queryKey: ["host-share-links"] });
 	});
 

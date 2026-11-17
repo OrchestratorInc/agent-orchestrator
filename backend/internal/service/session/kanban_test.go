@@ -81,6 +81,15 @@ func TestSessionListDerivesKanbanColumn(t *testing.T) {
 			},
 			want: domain.KanbanReady,
 		},
+		{
+			name:   "a mergeable pr stacked on an open pr waits in review",
+			record: domain.SessionRecord{ID: "mer-1", ProjectID: "mer"},
+			pr: &domain.PRFacts{
+				URL: "pr1", HeadSHA: "head1", Mergeability: domain.MergeMergeable,
+				CI: domain.CIPassing, StackParent: 8277,
+			},
+			want: domain.KanbanNeedsReview,
+		},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
 			st := newFakeStore()

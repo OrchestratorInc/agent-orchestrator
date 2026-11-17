@@ -48,7 +48,7 @@ export function stackScreenOptions(t: Theme): NativeStackNavigationOptions {
 		// The app's tint: the system back button and every native header item
 		// draw in it, as bar buttons do in any app on either platform.
 		headerTintColor: t.accent,
-		// iOS: the system face at T3 Code's heavy weight, as a navigation title is
+		// iOS: the system face at a heavy weight, as a navigation title is
 		// the platform's chrome. Android: the app's family at Material's title
 		// size; Roboto at a heavy weight read as a borrowed iOS bar, and the face
 		// is the one place the top app bar can carry the app's character.

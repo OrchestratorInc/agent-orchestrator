@@ -22,7 +22,7 @@ type previewSet struct {
 	url string
 }
 
-func (f *fakePreviewSessions) ListAllSessions(_ context.Context) ([]domain.SessionRecord, error) {
+func (f *fakePreviewSessions) ListPreviewSessions(_ context.Context) ([]domain.SessionRecord, error) {
 	return append([]domain.SessionRecord(nil), f.sessions...), nil
 }
 
