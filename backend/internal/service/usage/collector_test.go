@@ -2242,6 +2242,30 @@ func TestReconcileSettlesFinalizingBindingWhoseTranscriptNeverAppears(t *testing
 	}
 }
 
+func TestResumedSessionReactivatesBindingSettledForMissingTranscript(t *testing.T) {
+	store := collectorTestStore(t)
+	now := time.Now().UTC()
+	session := collectorTestSession(t, store, domain.HarnessClaudeCode, "native-resumed", false)
+	seedCollectorUsageBinding(
+		t, store, session, "native-resumed", domain.UsageBindingFinalizing,
+		now.Add(-2*time.Hour), domain.UsageErrorSourceDiscoveryPending,
+	)
+	collector := NewCollector(store, SourceRoots{ClaudeProjects: t.TempDir()}, nil)
+	mustNoError(t, collector.ReconcileSources(context.Background(), 8), "reconcile missing transcript")
+	settled, _, err := store.GetUsageBinding(context.Background(), session.ID, session.Harness, "native-resumed")
+	mustNoError(t, err)
+	if settled.State != domain.UsageBindingPartial {
+		t.Fatalf("binding state = %s, want partial before resume", settled.State)
+	}
+
+	mustNoError(t, collector.ReactivateSession(context.Background(), session.ID, session.Metadata.RuntimeLaunchID), "resume")
+	resumed, _, err := store.GetUsageBinding(context.Background(), session.ID, session.Harness, "native-resumed")
+	mustNoError(t, err)
+	if resumed.State != domain.UsageBindingActive || resumed.LastErrorCode != "" {
+		t.Fatalf("resumed binding = %s/%s, want active with no error", resumed.State, resumed.LastErrorCode)
+	}
+}
+
 func TestSourceIdentityChangesWhenFileIsReplacedWithSameFirstRecord(t *testing.T) {
 	root := t.TempDir()
 	path := filepath.Join(root, "session.jsonl")
