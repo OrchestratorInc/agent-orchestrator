@@ -45,13 +45,14 @@ describe("useSettings polling", () => {
 		vi.useRealTimers();
 	});
 
-	it("runs one 15 s timer for the local settings however many components read them", async () => {
+	it("keeps one poll and one stale timer for the local settings however many components read them", async () => {
 		vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "setInterval", "clearInterval"] });
 		getMock.mockResolvedValue({ data: {}, error: undefined });
-		const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+		// The app's default stale time, which gives every fresh observer a stale timer.
+		const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false, staleTime: 10_000 } } });
 		const { result } = renderHook(() => {
 			useSettingsPolling();
-			return Array.from({ length: 20 }, () => useSettings());
+			return [...Array.from({ length: 10 }, () => useSettings()), ...Array.from({ length: 10 }, () => useSettings(undefined, false))];
 		}, { wrapper: wrapper(queryClient) });
 
 		await act(async () => {
@@ -61,8 +62,9 @@ describe("useSettings polling", () => {
 		const observers = queryClient.getQueryCache().find({ queryKey: settingsQueryKey, exact: true })?.observers ?? [];
 		expect(observers).toHaveLength(21);
 		expect(observers.filter((observer) => observer.options.refetchInterval)).toHaveLength(1);
-		// Only the poller keeps a stale timer; the readers never go stale on their own.
-		expect(observers.filter((observer) => observer.options.staleTime !== Infinity)).toHaveLength(1);
+		// The poll, its stale timer and TanStack's own; 5 or 40 readers give the same
+		// count, enabled or not. Each reader used to add an interval and a stale timer.
+		expect(vi.getTimerCount()).toBeLessThanOrEqual(3);
 		expect(getMock).toHaveBeenCalledTimes(1);
 
 		await act(async () => {

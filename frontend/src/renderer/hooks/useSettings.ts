@@ -94,9 +94,10 @@ export function useSettings(hostId?: string, enabled = true) {
 		enabled,
 		// Each observer runs its own refetch-interval and stale timers, and every
 		// settings update re-arms all of them. The local query has hundreds of
-		// observers, so useSettingsPolling() owns both timers and readers never go
-		// stale on their own. The poll keeps their data at most 15 s old.
-		...(hostId ? { refetchInterval: settingsRefetchInterval } : { staleTime: Infinity }),
+		// observers, so useSettingsPolling() owns the interval. An enabled reader is
+		// stale at once and a disabled one never is, so neither arms a stale timer.
+		// Components that mount together share one read.
+		...(hostId ? { refetchInterval: settingsRefetchInterval } : { staleTime: enabled ? 0 : Infinity }),
 	});
 
 	return {
