@@ -250,10 +250,11 @@ func TestCursorEditorFoldersRetryAFailedRead(t *testing.T) {
 	if cached != "" {
 		t.Fatalf("a failed read was cached under %q", cached)
 	}
+	fin := t.TempDir()
 	newCursorEditorState(t, map[string]any{"composer.composerHeaders": map[string]any{"allComposers": []any{
-		map[string]any{"composerId": "c1", "workspaceIdentifier": map[string]any{"uri": map[string]any{"fsPath": "/work/fin", "scheme": "file"}}},
+		map[string]any{"composerId": "c1", "workspaceIdentifier": map[string]any{"uri": map[string]any{"fsPath": fin, "scheme": "file"}}},
 	}}}, nil)
-	if folders := cursorEditorFolders(context.Background()); folders["c1"] != "/work/fin" {
+	if folders := cursorEditorFolders(context.Background()); folders["c1"] != fin {
 		t.Fatalf("readable list = %v", folders)
 	}
 }
