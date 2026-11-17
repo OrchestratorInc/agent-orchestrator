@@ -29,6 +29,17 @@ describe("Cloud control-plane interface transitions", () => {
 		expect(calls[3][0]).toContain("/orgs/org/sessions/session/chat/prompt-suggestion");
 		expect(JSON.parse(calls[3][1].body as string)).toEqual({ turnId: "t", messages: [{ role: "user", text: "Hi" }] });
 	});
+	it("reads and wipes the caller's Cloud browser sign-ins in the org", async () => {
+		const fetchImpl = vi.fn().mockImplementation(async () => new Response(JSON.stringify({ saved: true, wiped: true, runningSessions: 1 }), { status: 200, headers: { "Content-Type": "application/json" } }));
+		const client = createCloudCpClient({ baseUrl: "https://cloud.example.test", getToken: async () => "token", fetchImpl });
+		await client.getMyBrowserProfile("org 1");
+		expect(await client.wipeMyBrowserProfile("org 1")).toEqual({ saved: true, wiped: true, runningSessions: 1 });
+		const calls = fetchImpl.mock.calls as Array<[string, RequestInit]>;
+		expect(calls[0][0]).toBe("https://cloud.example.test/api/cloud/v1/orgs/org%201/browser-profile");
+		expect(calls[0][1].method).toBe("GET");
+		expect(calls[1][0]).toBe("https://cloud.example.test/api/cloud/v1/orgs/org%201/browser-profile");
+		expect(calls[1][1].method).toBe("DELETE");
+	});
 	it("routes an ACP approval decision to the session request", async () => {
 		const fetchImpl = vi.fn().mockResolvedValue(new Response(JSON.stringify({ ok: true }), { status: 202, headers: { "Content-Type": "application/json" } }));
 		const client = createCloudCpClient({ baseUrl: "https://cloud.example.test/api/cloud/v1", getToken: async () => "token", fetchImpl });

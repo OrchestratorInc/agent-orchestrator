@@ -39,6 +39,8 @@ export interface UseCloudOfferingResult extends Omit<ResolvedCloudOffering, "sou
 	agentSwitchHarnesses: string[];
 	/** Each agent can hold several accounts and a session can move between them (`/me` agentAccounts). */
 	agentAccounts: boolean;
+	/** Cloud browsers keep the person's sign-ins across sessions (`/me` browserProfiles). */
+	browserProfiles: boolean;
 	org: CloudCpOrganization | undefined;
 	/** Mirrors useCloudCp().ready so callers can gate on one hook. */
 	ready: boolean;
@@ -102,6 +104,7 @@ export function useCloudOffering(enabled = true, forOrgId?: string): UseCloudOff
 		chatHarnesses: me.data?.chatHarnesses ?? [],
 		agentSwitchHarnesses: me.data?.agentSwitchHarnesses ?? [],
 		agentAccounts: me.data?.agentAccounts === true,
+		browserProfiles: me.data?.browserProfiles === true,
 		org,
 		ready,
 		loaded,
