@@ -64,10 +64,14 @@ function wrap(parent: Parent & { position?: Element["position"] }, settledOffset
 			// again. Text a remark plugin split off has no position: judge it by its
 			// enclosing element instead.
 			const start = child.position?.start.offset;
+			const end = child.position?.end.offset;
 			const parentEnd = parent.position?.end.offset;
-			const kept = start !== undefined
-				? settledPrefix(child.value, start, settledOffset)
-				: parentEnd !== undefined && parentEnd <= settledOffset ? child.value.length : 0;
+			let kept: number;
+			if (start === undefined) kept = parentEnd !== undefined && parentEnd <= settledOffset ? child.value.length : 0;
+			// A character reference or escape makes the source longer than the text,
+			// so source offsets do not index it: the node settles as a whole.
+			else if (end !== undefined && end - start !== child.value.length) kept = end <= settledOffset ? child.value.length : 0;
+			else kept = settledPrefix(child.value, start, settledOffset);
 			return textSpan(child.value, start, kept);
 		}
 		if (child.type === "element" && !SKIP.has(child.tagName)) wrap(child, settledOffset);

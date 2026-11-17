@@ -52,6 +52,12 @@ describe("rehypeStreamFade", () => {
 		expect(wrappers(settled("first\n\nsecond", 10))).toEqual([[3, "second"]]);
 	});
 
+	it("keeps text with a character reference fading until its source has settled", () => {
+		// "&amp;" is five source characters but one in the text.
+		expect(wrappers(settled("&amp;xy", 5))).toEqual([[0, "&amp;xy"]]);
+		expect(wrappers(settled("&amp;xy", 7))).toEqual([[3, "&amp;xy"]]);
+	});
+
 	it("never splits a grapheme at the settled offset", () => {
 		// The offset lands inside "é" (e + combining accent): the whole cluster fades.
 		expect(wrappers(settled("caf\u0065\u0301 ok", 4))).toEqual([[3, "caf\u0065\u0301 ok"]]);
