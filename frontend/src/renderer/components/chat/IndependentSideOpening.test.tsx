@@ -59,6 +59,15 @@ function acceptOpening(clientMessageId: string, state = "queued") {
 	};
 }
 
+function mockHandoffDestination() {
+	const originalGet = get.getMockImplementation()!;
+	get.mockImplementation((path, options) => {
+		if (options?.params?.path.sideId !== "destination") return originalGet(path, options);
+		return Promise.resolve(path.endsWith("/draft") ? { data: { contentJson: "" } } : { data: { snapshot: { ...snapshot, side: { ...snapshot.side, id: "destination" } } } });
+	});
+	post.mockImplementation(async (path: string) => path.endsWith("/side-chats") ? { data: { side: { ...snapshot.side, id: "destination" } } } : {});
+}
+
 describe("deferred side opening", () => {
 	it.each(["draft-read", "image-load"])("settles a new follow-up bubble when %s fails before dispatch", async failure => {
 		acceptOpening("first", "completed");
@@ -508,7 +517,7 @@ describe("deferred side opening", () => {
 		vi.stubGlobal("fetch", fetchImage);
 		render(<Harness />);
 		await screen.findByRole("button", { name: "Remove a.png" });
-		if (question.startsWith("/btw")) post.mockImplementation(async (path: string) => path.endsWith("/side-chats") ? { data: { side: { ...snapshot.side, id: "destination" } } } : {});
+		if (question.startsWith("/btw")) mockHandoffDestination();
 		await act(async () => { await chat.send("side", question); });
 		expect(fetchImage).toHaveBeenCalledWith(expect.stringContaining("a.png"));
 		const message = post.mock.calls.find(([path]) => path.endsWith("/messages"))![1].body;
@@ -521,7 +530,7 @@ describe("deferred side opening", () => {
 		draft = { ...emptySideChatDraft(), text: question, attachments: [{ id: "img", path: ".ao/attachments/large.png", name: "large.png", mimeType: "image/png", bytes: INLINE_ATTACHMENT_BYTES + 1 }] };
 		const fetchImage = vi.fn();
 		vi.stubGlobal("fetch", fetchImage);
-		if (question.startsWith("/btw")) post.mockImplementation(async (path: string) => path.endsWith("/side-chats") ? { data: { side: { ...snapshot.side, id: "destination" } } } : {});
+		if (question.startsWith("/btw")) mockHandoffDestination();
 		render(<Harness />);
 		await screen.findByRole("button", { name: "Remove large.png" });
 		await act(async () => { await chat.send("side", question); });
