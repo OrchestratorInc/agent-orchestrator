@@ -609,6 +609,11 @@ type BrowserEntry = {
   tabId: string;
   view: BrowserViewLike;
   owner?: BrowserTabOwner;
+  // Who last sent input to this tab's page: a popup it opens is theirs.
+  lastInputBy?: BrowserTabOwner;
+  // When the agent last worked in this tab (agentUseCounter), so that losing
+  // its current tab returns it to the one it used most recently.
+  agentUsedAt?: number;
   // This tab's driver (tabDriver), picked on each call: a tab is bound to an
   // agent page after it is made.
   driver: () => TabDriver;
@@ -694,9 +699,9 @@ type BrowserSessionEntry = {
   // The tab the agent's commands act on, whichever tab is in front
   // (activeTabId is the person's view). Unset until the agent has a tab.
   agentTabId?: string;
-  // When the agent last sent input to a page (AGENT_INPUT_ACTIONS): a popup
-  // soon after is the agent's doing.
-  agentInputAt?: number;
+  // Agent input actions now being dispatched (AGENT_INPUT_ACTIONS). The page
+  // events they raise are the agent's, not the person's.
+  agentInputDepth?: number;
   // Agent browser pages whose tabs closed here: they are closing, so the
   // agent tab sync must not bring them back meanwhile. A page a person closed
   // (closePage) stays closed for as long as reports still list it.
@@ -818,9 +823,6 @@ const MAX_EXTERNAL_TEXT_BYTES = 1 << 20;
 // dispatched an action. It must never inherit agent-browser's 60 second command
 // timeout and hold every later command behind the per-session queue.
 const POPUP_TARGET_SYNC_TIMEOUT_MS = 5_000;
-// How long after the agent's input a popup from its tab still counts as the
-// agent's: the time a page may take to open a window on a click.
-const AGENT_POPUP_WINDOW_MS = 5_000;
 const AGENT_INPUT_ACTIONS = new Set([
   "click", "dblclick", "press", "fill", "type", "check", "uncheck", "select", "drag",
 ]);
@@ -1174,11 +1176,42 @@ export function createBrowserViewHost(
     session.agentTabId !== undefined && session.activeTabId === session.agentTabId;
   const agentTabsOf = (session: BrowserSessionEntry): BrowserEntry[] =>
     [...session.tabs.values()].filter((entry) => entry.owner === "agent");
+  let agentUseCounter = 0;
+  const markAgentUse = (entry: BrowserEntry): void => {
+    entry.agentUsedAt = ++agentUseCounter;
+  };
+  // The agent's tab it used most recently, for when it loses its current one.
+  const recentAgentTab = (session: BrowserSessionEntry): BrowserEntry | undefined => {
+    let recent: BrowserEntry | undefined;
+    for (const entry of agentTabsOf(session))
+      if (!recent || (entry.agentUsedAt ?? 0) >= (recent.agentUsedAt ?? 0)) recent = entry;
+    return recent;
+  };
   const setAgentTab = (session: BrowserSessionEntry, tabId: string | undefined): void => {
     if (session.agentTabId === tabId) return;
     session.agentTabId = tabId;
+    const entry = tabId === undefined ? undefined : session.tabs.get(tabId);
+    if (entry) markAgentUse(entry);
     // Element refs and deltas belong to the tab they were read from.
     session.snapshotDeltaBaseline = undefined;
+  };
+  // Opens a popup as a fresh tab of the person's, with no link to the page
+  // that opened it (BrowserPopupHandlers.detach). A blank popup the page meant
+  // to fill through its handle has nothing to show without one: none opens.
+  const openDetachedPopup = (
+    session: BrowserSessionEntry,
+    opener: BrowserEntry,
+    details: Electron.HandlerDetails,
+    isCurrent: () => boolean,
+  ): void => {
+    if (details.url === "about:blank") return;
+    const popup = createTab(session, false, false, undefined, undefined, "person");
+    void navigateEntry(popup, details.url, popupLoadOptions(details)).catch(() => undefined);
+    setImmediate(() => {
+      if (!isCurrent() || session.tabs.get(popup.tabId) !== popup) return;
+      if (session.activeTabId === opener.tabId) activateTab(session, popup.tabId, false);
+      pushTabsState(options, session, { kind: "popup", tabId: popup.tabId });
+    });
   };
   const createTab = (
     session: BrowserSessionEntry,
@@ -1365,43 +1398,57 @@ export function createBrowserViewHost(
       entry,
       () => isCurrentEntry() && !session.profileReplacing,
       webPreferences,
-      (windowOptions, details) => {
-        // A popup from the agent's tab is the agent's, unless the person
-        // clicked there: they are at the page (it is in front, on screen, with
-        // the keyboard) and no input of the agent's came just before. A link
-        // the person clicks opens a tab of their own, which the agent never
-        // follows.
-        const personAtPage =
-          session.visible &&
-          session.activeTabId === entry.tabId &&
-          view.webContents.isFocused?.() === true;
-        const agentActed =
-          session.agentInputAt !== undefined &&
-          Date.now() - session.agentInputAt <= AGENT_POPUP_WINDOW_MS;
-        const popupOwner: BrowserTabOwner =
-          entry.owner === "agent" && (agentActed || !personAtPage)
-            ? "agent"
-            : "person";
+      {
+        // A popup whose owner is not its opener tab's must not keep the
+        // opener's window handle, or the opener's page could script it: the
+        // agent's page reaching a tab of the person's. It opens unlinked
+        // instead, as a fresh tab of the person's (openDetachedPopup).
+        detach: (details) => {
+          if (popupOwner() === entry.owner) return false;
+          openDetachedPopup(session, entry, details, isCurrentEntry);
+          return true;
+        },
+        create: (windowOptions, details) => createPopup(windowOptions, details),
+      },
+    );
+    // A person sends input to the page: a popup it opens is theirs, and an
+    // unused first tab becomes theirs. Input the agent dispatches raises these
+    // events too, and is left out (agentInputDepth).
+    const notePersonInput = () => {
+      if (!isCurrentEntry() || (session.agentInputDepth ?? 0) > 0) return;
+      entry.lastInputBy = "person";
+      claimForPerson(session, entry);
+    };
+    view.webContents.on("before-input-event", (_event, input) => {
+      // An app shortcut typed with the page focused is not input to the page.
+      if (input.control || input.meta) return;
+      if ((input.type === "keyDown" || input.type === "rawKeyDown") && !input.isAutoRepeat) notePersonInput();
+    });
+    view.webContents.on("before-mouse-event", (_event, mouse) => {
+      if (mouse.type === "mouseDown") notePersonInput();
+    });
+    // A popup is the agent's when its tab opened it and the agent was the last
+    // to send that page input (or nobody has). One the person's input opened is
+    // theirs, a tab the agent never follows.
+    function popupOwner(): BrowserTabOwner {
+      return entry.owner === "agent" && entry.lastInputBy !== "person" ? "agent" : "person";
+    }
+    function createPopup(
+      windowOptions: BrowserPopupOptions,
+      details: Electron.HandlerDetails,
+    ): WebContents {
+        const owner = popupOwner();
         // Adopt Electron's exact guest, rather than creating an unrelated
         // WebContents. Chromium then preserves the WindowProxy and opener.
         const popup = createTab(
           session, false, false, undefined,
           windowOptions.webContents ? windowOptions : undefined,
-          popupOwner,
+          owner,
         );
         // OpenURLFromTab (e.g. a target=_blank link) may have no native guest.
         // In that case the main process must perform the original navigation.
         if (!windowOptions.webContents && details.url !== "about:blank") {
-          const postBody = details.postBody;
-          void navigateEntry(popup, details.url, {
-            httpReferrer: details.referrer,
-            ...(postBody
-              ? {
-                  postData: postBody.data,
-                  extraHeaders: `content-type: ${postBody.contentType}${postBody.boundary ? `; boundary=${postBody.boundary}` : ""}`,
-                }
-              : {}),
-          }).catch(() => undefined);
+          void navigateEntry(popup, details.url, popupLoadOptions(details)).catch(() => undefined);
         }
         // The native guest is still being initialized inside createWindow.
         // Defer queries/layout until Electron has returned from that callback.
@@ -1410,7 +1457,7 @@ export function createBrowserViewHost(
           // As in any browser, a popup shows in front of the tab that opened
           // it, and a background tab's popup stays behind.
           const inFront = session.activeTabId === entry.tabId;
-          if (popupOwner === "agent" && session.agentTabId === entry.tabId) {
+          if (owner === "agent" && session.agentTabId === entry.tabId) {
             // The agent goes on in the page its own tab opened.
             setAgentTab(session, popup.tabId);
             queueNativeActiveTabSync(session);
@@ -1419,8 +1466,7 @@ export function createBrowserViewHost(
           pushTabsState(options, session, { kind: "popup", tabId: popup.tabId });
         });
         return popup.view.webContents as WebContents;
-      },
-    );
+    }
     wireNavEvents(
       view.webContents,
       options,
@@ -2265,9 +2311,9 @@ export function createBrowserViewHost(
     session.tabs.delete(tabId);
     tabsByWebContentsId.delete(closedContents?.id ?? tab.view.webContents.id);
     if (session.agentTabId === tabId) {
-      // The agent goes on in the last tab it still has; with none left, its
-      // next command opens one.
-      setAgentTab(session, agentTabsOf(session).at(-1)?.tabId);
+      // The agent goes on in the tab of its own it used last; with none left,
+      // its next command opens one.
+      setAgentTab(session, recentAgentTab(session)?.tabId);
       session.nativeActiveTabId = undefined;
     }
     if (closedContents) {
@@ -4339,6 +4385,13 @@ export function createBrowserViewHost(
 			assertRemoteWritable(session, scrollOnly);
 			const entry = activeEntry(session);
 			await entry.ready;
+			// A person at a phone or remote viewer is at this page too: a popup
+			// their click opens is theirs, and an unused first tab becomes theirs.
+			// Their input reaches the page without its view ever having focus.
+			if ((input.kind === "pointer" && input.phase === "down") || (input.kind === "key" && input.phase === "down") || input.kind === "text") {
+				entry.lastInputBy = "person";
+				claimForPerson(session, entry);
+			}
 			session.live?.screencast?.requestFrame();
 			const bounds = liveViewport(session);
 			if (input.kind === "pointer") {
@@ -4525,8 +4578,12 @@ export function createBrowserViewHost(
                 // Require fresh synchronization before the next page action.
                 session.nativeActiveTabId = undefined;
               }
+              markAgentUse(targetEntry);
               const agentInput = AGENT_INPUT_ACTIONS.has(nativeAction);
-              if (agentInput) session.agentInputAt = Date.now();
+              if (agentInput) {
+                targetEntry.lastInputBy = "agent";
+                session.agentInputDepth = (session.agentInputDepth ?? 0) + 1;
+              }
               try {
                 result = await options.agentBrowserRuntime!.runAction(
                   sessionId,
@@ -4535,7 +4592,6 @@ export function createBrowserViewHost(
                   agentBrowserTargets(session),
                   nativeSignal,
                 );
-                if (agentInput) session.agentInputAt = Date.now();
               } catch (error) {
                 if (
                   nativeAction === "tab-select" &&
@@ -4551,6 +4607,8 @@ export function createBrowserViewHost(
                   );
                 }
                 throw error;
+              } finally {
+                if (agentInput) session.agentInputDepth = Math.max(0, (session.agentInputDepth ?? 1) - 1);
               }
               if (
                 nativeAction === "tab-select" &&
@@ -5903,16 +5961,34 @@ function shellContents(options: BrowserViewHostOptions): WebContents {
   return contents;
 }
 
+type BrowserPopupHandlers = {
+  // Opens the popup unlinked from its opener, if it must be: true when it did
+  // (the native popup is then denied).
+  detach: (details: Electron.HandlerDetails) => boolean;
+  create: (windowOptions: BrowserPopupOptions, details: Electron.HandlerDetails) => WebContents;
+};
+
+// A popup's own load: its referrer, and the body of a form posted to it.
+function popupLoadOptions(details: Electron.HandlerDetails): Electron.LoadURLOptions {
+  const postBody = details.postBody;
+  return {
+    httpReferrer: details.referrer,
+    ...(postBody
+      ? {
+          postData: postBody.data,
+          extraHeaders: `content-type: ${postBody.contentType}${postBody.boundary ? `; boundary=${postBody.boundary}` : ""}`,
+        }
+      : {}),
+  };
+}
+
 function hardenWebContents(
   contents: BrowserWebContents,
   options: BrowserViewHostOptions,
   entry: BrowserEntry,
   isCurrent: () => boolean,
   popupWebPreferences: Electron.WebPreferences,
-  createPopup: (
-    windowOptions: BrowserPopupOptions,
-    details: Electron.HandlerDetails,
-  ) => WebContents,
+  popups: BrowserPopupHandlers,
 ): void {
   contents.setWindowOpenHandler((details) => {
     const { url } = details;
@@ -5922,10 +5998,11 @@ function hardenWebContents(
     ) {
       return { action: "deny" };
     }
+    if (popups.detach(details)) return { action: "deny" };
     return {
       action: "allow",
       overrideBrowserWindowOptions: { webPreferences: popupWebPreferences },
-      createWindow: (windowOptions) => createPopup(windowOptions, details),
+      createWindow: (windowOptions) => popups.create(windowOptions, details),
     };
   });
   const blockUnsafeNavigation = (event: Electron.Event, url: string) => {

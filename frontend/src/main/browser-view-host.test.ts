@@ -1335,6 +1335,7 @@ function setupTabHost(
 			stop: () => undefined,
 			close: vi.fn(),
 			focus: vi.fn(),
+			sendInputEvent: vi.fn(),
 			openDevTools: vi.fn(),
 			closeDevTools: vi.fn(),
 			session: electronSession,
@@ -6686,12 +6687,12 @@ describe("agent and person tabs", () => {
 		const tabs = async () => (await tabHost.invoke("browser:getTabs", viewId)) as BrowserTabsState;
 		const agentTabs = async () => (await tabHost.host.execute("sess-1", "tabs")) as BrowserTabsState;
 		const nativeActions = () => vi.mocked(tabHost.runtime.runAction).mock.calls.map(([, action, args]) => [action, args]);
-		// The person is at a tab's page: the panel is on screen and the keyboard is in the page.
-		const personAt = (viewIndex: number) => {
-			tabHost.emit("browser:setBounds", { viewId, revision: 1, rect: { x: 0, y: 0, width: 640, height: 420 }, visible: true });
-			(tabHost.views[viewIndex]!.webContents as { isFocused?: () => boolean }).isFocused = () => true;
-		};
-		return { ...tabHost, viewId, tabs, agentTabs, nativeActions, personAt };
+		// The person clicks or types in a tab's page: Chromium's input events reach main first.
+		const personClicks = (viewIndex: number) =>
+			(tabHost.views[viewIndex]!.listeners.get("before-mouse-event") as (event: unknown, mouse: { type: string }) => void)({}, { type: "mouseDown" });
+		const personTypes = (viewIndex: number) =>
+			(tabHost.views[viewIndex]!.listeners.get("before-input-event") as (event: unknown, input: { type: string; key: string }) => void)({ preventDefault: vi.fn() }, { type: "keyDown", key: "a" });
+		return { ...tabHost, viewId, tabs, agentTabs, nativeActions, personClicks, personTypes };
 	};
 
 	it("keeps the agent in its own tab while the person opens and switches tabs", async () => {
@@ -6732,15 +6733,19 @@ describe("agent and person tabs", () => {
 		expect((await tabs()).tabs.map((tab) => tab.id)).toEqual(["t1", "t2"]);
 	});
 
-	it("makes a link the person clicks in the agent's tab the person's own tab", async () => {
-		const { host, views, tabs, agentTabs, nativeActions, personAt } = await open();
+	it("opens a link the person clicks in the agent's tab as their own tab, with no handle back to the agent's page", async () => {
+		const { constructorOptions, host, views, tabs, agentTabs, nativeActions, personClicks } = await open();
 		await host.execute("sess-1", "open", { url: "https://agent.example.test/" });
 
-		// The person is at the page, and no input of the agent's came before
-		// it: the person clicked.
-		personAt(0);
-		views[0].webContents.openWindow("https://link.example.test/");
+		personClicks(0);
+		// window.open in the agent's page gets no handle (Chromium returns null),
+		// so nothing the agent runs in its page can reach the person's tab.
+		const handle = views[0].webContents.openWindow("https://link.example.test/");
+		expect(handle).toBeNull();
 		await vi.waitFor(async () => expect(await tabs()).toMatchObject({ activeTabId: "t2" }));
+		// A fresh page, not the opener's adopted guest: it has no window.opener.
+		expect(constructorOptions[1]!.webContents).toBeUndefined();
+		expect(views[1]!.webContents.loadURL).toHaveBeenCalledWith("https://link.example.test/", expect.objectContaining({ httpReferrer: expect.anything() }));
 		expect((await tabs()).tabs[1]!.owner).toBeUndefined();
 		expect(await agentTabs()).toMatchObject({ activeTabId: "t1", tabs: [{ id: "t1" }] });
 		expect((await agentTabs()).tabs).toHaveLength(1);
@@ -6751,37 +6756,91 @@ describe("agent and person tabs", () => {
 		expect(nativeActions()).not.toContainEqual(["tab-select", { tabId: "t2" }]);
 	});
 
-	it("follows a popup right after the agent's own input even with the person at the page, but not later", async () => {
-		vi.useFakeTimers();
-		try {
-			const { host, views, tabs, agentTabs, personAt } = await open();
-			await host.execute("sess-1", "click", { ref: "e2" });
-			personAt(0);
-			views[0].webContents.openWindow("https://signin.example.test/");
-			await vi.advanceTimersByTimeAsync(0);
-			expect((await tabs()).tabs.map((tab) => tab.owner)).toEqual(["agent", "agent"]);
-			expect(await agentTabs()).toMatchObject({ activeTabId: "t2" });
+	it("gives a popup to whoever last sent input to the tab that opened it, however recent the other's input", async () => {
+		const { constructorOptions, host, views, tabs, agentTabs, personClicks, personTypes } = await open();
+		await host.execute("sess-1", "fill", { ref: "e2", text: "query" });
+		// The person clicks the agent's page straight after the agent typed.
+		personClicks(0);
+		expect(views[0].webContents.openWindow("https://pay.example.test/")).toBeNull();
+		await vi.waitFor(async () => expect((await tabs()).tabs).toHaveLength(2));
+		expect((await tabs()).tabs.map((tab) => tab.owner)).toEqual(["agent", undefined]);
+		expect(await agentTabs()).toMatchObject({ activeTabId: "t1" });
 
-			// Back at the first page, long after the agent's input.
-			await host.execute("sess-1", "tab-select", { tabId: "t1" });
-			await vi.advanceTimersByTimeAsync(5_001);
-			views[0].webContents.openWindow("https://late.example.test/");
-			await vi.advanceTimersByTimeAsync(0);
-			expect((await tabs()).tabs.map((tab) => tab.owner)).toEqual(["agent", "agent", undefined]);
-			expect(await agentTabs()).toMatchObject({ activeTabId: "t1" });
-		} finally {
-			await vi.runAllTimersAsync();
-			vi.useRealTimers();
-		}
+		// The agent clicks again: the next popup is its own, adopted with its opener.
+		await host.execute("sess-1", "click", { ref: "e2" });
+		expect(views[0].webContents.openWindow("https://signin.example.test/")).not.toBeNull();
+		await vi.waitFor(async () => expect(await agentTabs()).toMatchObject({ activeTabId: "t3" }));
+		expect(constructorOptions[2]!.webContents).toBeDefined();
+		expect((await tabs()).tabs.map((tab) => tab.owner)).toEqual(["agent", undefined, "agent"]);
+
+		// Keys count as the person's input too.
+		await host.execute("sess-1", "tab-select", { tabId: "t1" });
+		personTypes(0);
+		expect(views[0].webContents.openWindow("https://other.example.test/")).toBeNull();
+		await vi.waitFor(async () => expect((await tabs()).tabs).toHaveLength(4));
+		expect((await tabs()).tabs.map((tab) => tab.owner)).toEqual(["agent", undefined, "agent", undefined]);
 	});
 
-	it("keeps a popup the agent's while the person is not at its page, however late it opens", async () => {
+	it("leaves the page events the agent's own input raises to the agent", async () => {
+		const { host, runtime, views, tabs, agentTabs } = await open();
+		await host.execute("sess-1", "tabs");
+		const runAction = vi.mocked(runtime.runAction);
+		const original = runAction.getMockImplementation()!;
+		runAction.mockImplementation(async (sessionId, action, args, provider, signal) => {
+			// Input dispatched over the debugger reaches main's input events like a person's.
+			if (action === "click")
+				(views[0]!.listeners.get("before-mouse-event") as (event: unknown, mouse: { type: string }) => void)({}, { type: "mouseDown" });
+			return original(sessionId, action, args, provider, signal);
+		});
+		await host.execute("sess-1", "click", { ref: "e2" });
+		expect(views[0].webContents.openWindow("https://signin.example.test/")).not.toBeNull();
+		await vi.waitFor(async () => expect(await agentTabs()).toMatchObject({ activeTabId: "t2" }));
+		expect((await tabs()).tabs.map((tab) => tab.owner)).toEqual(["agent", "agent"]);
+	});
+
+	it("keeps a popup the agent's while nobody else has sent its tab input", async () => {
 		const { host, views, tabs, agentTabs } = await open();
 		await host.execute("sess-1", "open", { url: "https://agent.example.test/" });
-		// The panel is hidden: nobody is there to click.
+		// The page opens it on its own, long after anyone's input.
 		views[0].webContents.openWindow("https://signin.example.test/");
 		await vi.waitFor(async () => expect(await agentTabs()).toMatchObject({ activeTabId: "t2" }));
 		expect((await tabs()).tabs.map((tab) => tab.owner)).toEqual(["agent", "agent"]);
+	});
+
+	it("keeps the opener for a popup the person opens from their own tab", async () => {
+		const { constructorOptions, host, invoke, viewId, views, tabs } = await open();
+		await host.execute("sess-1", "tabs");
+		await invoke("browser:openTab", { viewId, url: "https://mine.example.test/" });
+		personClicks(1);
+		expect(views[1].webContents.openWindow("https://signin.example.test/")).not.toBeNull();
+		await vi.waitFor(async () => expect((await tabs()).tabs).toHaveLength(3));
+		expect(constructorOptions[2]!.webContents).toBeDefined();
+		expect((await tabs()).tabs.map((tab) => tab.owner)).toEqual(["agent", undefined, undefined]);
+
+		function personClicks(viewIndex: number) {
+			(views[viewIndex]!.listeners.get("before-mouse-event") as (event: unknown, mouse: { type: string }) => void)({}, { type: "mouseDown" });
+		}
+	});
+
+	it("treats a remote viewer's input as the person's: it claims the unused first tab and owns the popups it opens", async () => {
+		const { host, views, tabs, agentTabs } = await open();
+		// Only a phone is watching: the desktop panel is not open.
+		await host.startLiveStream("sess-1", 7, { frame: vi.fn(), state: vi.fn(), error: vi.fn() });
+		await host.handleRemoteInput("sess-1", { kind: "pointer", phase: "down", x: 0.5, y: 0.5, button: "left" });
+		expect((await tabs()).tabs.map((tab) => tab.owner)).toEqual([undefined]);
+		// The agent's next command opens a tab of its own instead of taking the person's.
+		await host.execute("sess-1", "open", { url: "https://agent.example.test/" });
+		expect((await tabs()).tabs.map((tab) => tab.owner)).toEqual([undefined, "agent"]);
+		expect(views[0].webContents.getURL()).not.toBe("https://agent.example.test/");
+
+		// On the phone, the person brings the agent's tab up and clicks its page:
+		// the popup that opens is theirs.
+		await host.handleRemoteTab("sess-1", { action: "select", tabId: "t2" });
+		await host.handleRemoteInput("sess-1", { kind: "pointer", phase: "down", x: 0.5, y: 0.5, button: "left" });
+		expect(views[1].webContents.openWindow("https://link.example.test/")).toBeNull();
+		await vi.waitFor(async () => expect((await tabs()).tabs).toHaveLength(3));
+		expect((await tabs()).tabs.map((tab) => tab.owner)).toEqual([undefined, "agent", undefined]);
+		expect(await agentTabs()).toMatchObject({ activeTabId: "t2" });
 	});
 
 	it("opens and selects the agent's tabs behind a tab of the person's, and in front for a person watching them", async () => {
