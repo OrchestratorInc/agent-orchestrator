@@ -672,9 +672,21 @@ async function refreshLocalConversationTail(queryClient: QueryClient, sessionId:
 		// as this read. Either way, read again from what they leave.
 		const query = queryClient.getQueryCache().find({ queryKey: key, exact: true });
 		if (query?.state.fetchStatus === "fetching") await query.promise?.catch(() => undefined);
+		// Marked stale meanwhile: writing would clear the mark a closed chat's next
+		// open reads by, and an open one reloads.
+		if (query?.state.isInvalidated) {
+			if (query.isActive()) void queryClient.invalidateQueries({ queryKey: key, exact: true });
+			return;
+		}
 		const current = queryClient.getQueryData<InfiniteData<ConversationSnapshot>>(key);
 		if (!current || query?.state.fetchStatus === "fetching" || current !== before) continue;
 		const page = toSnapshot(wire);
+		// Taking a turn back marks it and every later turn, and the first of them can
+		// sit in an older page this read does not cover. Reload every page then.
+		if (current.pages.length > 1 && takesBackCachedTurn(current, page)) {
+			void queryClient.invalidateQueries({ queryKey: key });
+			return;
+		}
 		if (!asTail || wire.afterSequence !== floor) {
 			applyLiveConversationPage(queryClient, key, page);
 			return;
@@ -689,6 +701,12 @@ async function refreshLocalConversationTail(queryClient: QueryClient, sessionId:
 	throw new Error("conversation kept changing during the read");
 }
 
+/** A turn the page shows as taken back that the cached pages still show as kept. */
+function takesBackCachedTurn(cached: InfiniteData<ConversationSnapshot>, page: ConversationSnapshot): boolean {
+	const kept = new Set(cached.pages.flatMap((cachedPage) => cachedPage.turns.filter((turn) => !turn.rolledBack).map((turn) => turn.id)));
+	return page.turns.some((turn) => turn.rolledBack && kept.has(turn.id));
+}
+
 const localConversationTails = new WeakMap<QueryClient, Map<string, { dirty: boolean }>>();
 
 /**
@@ -699,12 +717,15 @@ const localConversationTails = new WeakMap<QueryClient, Map<string, { dirty: boo
 export function refreshOpenLocalConversationOnce(queryClient: QueryClient, sessionId: string): boolean {
 	let running = localConversationTails.get(queryClient);
 	if (!running) localConversationTails.set(queryClient, (running = new Map()));
+	const key = conversationQueryKey(sessionId);
+	const isOpen = () => Boolean(queryClient.getQueryCache().find({ queryKey: key, exact: true, type: "active" }));
 	const inFlight = running.get(sessionId);
 	if (inFlight) {
+		// A chat closed during the read is only marked stale, like any closed chat.
+		if (!isOpen()) return false;
 		inFlight.dirty = true;
 		return true;
 	}
-	const key = conversationQueryKey(sessionId);
 	const query = queryClient.getQueryCache().find<InfiniteData<ConversationSnapshot>>({ queryKey: key, exact: true, type: "active" });
 	if (!query?.state.data?.pages?.[0]?.conversationId || query.state.fetchStatus !== "idle" || query.state.isInvalidated) return false;
 	// The open read brings the chat up to date and handles events during it.
@@ -716,7 +737,9 @@ export function refreshOpenLocalConversationOnce(queryClient: QueryClient, sessi
 			do {
 				state.dirty = false;
 				await refreshLocalConversationTail(queryClient, sessionId);
-			} while (state.dirty);
+			} while (state.dirty && isOpen());
+			// Closed with an event still unread: the next open reads it.
+			if (state.dirty) void queryClient.invalidateQueries({ queryKey: key, exact: true, refetchType: "none" });
 		} catch {
 			// The query's own read retries and reports what keeps failing.
 			void queryClient.invalidateQueries({ queryKey: key });

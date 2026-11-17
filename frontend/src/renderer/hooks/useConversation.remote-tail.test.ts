@@ -237,6 +237,45 @@ describe("refreshOpenLocalConversationOnce", () => {
 		expect(client.getQueryData<InfiniteData<ConversationSnapshot>>(key)!.pages).toHaveLength(3);
 	});
 
+	it("reloads every page when a turn is taken back, since its first turn can be in an older page", async () => {
+		open();
+		const reload = vi.spyOn(client, "invalidateQueries");
+		const takenBack = { turns: [{ ...wireTurn("t2", "completed"), rolledBack: true }], messages: [] };
+		getMock.mockResolvedValueOnce(wire({ afterSequence: 3, oldestSequence: 4, ...takenBack })).mockResolvedValue(wire({ oldestSequence: 1, ...takenBack }));
+		expect(refreshOpenLocalConversationOnce(client, "s1")).toBe(true);
+		await vi.waitFor(() => expect(reload).toHaveBeenCalledWith({ queryKey: key }));
+		// The live page read succeeds, so only the rollback check can have reloaded.
+		expect(tailReads()).toBe(1);
+	});
+
+	it("keeps the stale mark of a chat that closed and went stale during the read", async () => {
+		open();
+		let finish!: (value: unknown) => void;
+		getMock.mockReturnValueOnce(new Promise((resolve) => { finish = resolve; }));
+		expect(refreshOpenLocalConversationOnce(client, "s1")).toBe(true);
+		unsubscribe();
+		// A closed chat's event is left to the transport, which marks it stale.
+		expect(refreshOpenLocalConversationOnce(client, "s1")).toBe(false);
+		await client.invalidateQueries({ queryKey: key, refetchType: "none" });
+		finish(tail());
+		await new Promise((resolve) => setTimeout(resolve, 10));
+		expect(client.getQueryState(key)?.isInvalidated).toBe(true);
+		expect(client.getQueryData<InfiniteData<ConversationSnapshot>>(key)!.pages[0]).toBe(prior);
+		expect(tailReads()).toBe(1);
+	});
+
+	it("stops catching up when the chat closes and leaves it stale", async () => {
+		open();
+		let finish!: (value: unknown) => void;
+		getMock.mockReturnValueOnce(new Promise((resolve) => { finish = resolve; })).mockResolvedValue(tail());
+		expect(refreshOpenLocalConversationOnce(client, "s1")).toBe(true);
+		expect(refreshOpenLocalConversationOnce(client, "s1")).toBe(true);
+		unsubscribe();
+		finish(tail());
+		await vi.waitFor(() => expect(client.getQueryState(key)?.isInvalidated).toBe(true));
+		expect(tailReads()).toBe(1);
+	});
+
 	it("catches up once for any number of events during a read", async () => {
 		open();
 		let finish!: (value: unknown) => void;
