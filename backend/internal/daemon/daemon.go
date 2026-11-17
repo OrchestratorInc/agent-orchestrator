@@ -708,6 +708,11 @@ func Run(buildVersion string) (retErr error) {
 		},
 	})
 	sessMgr = wiredSessMgr
+	if restorer, ok := sessMgr.(interface {
+		EnsureChatController(context.Context, domain.SessionID) error
+	}); ok {
+		chatSvc.SetControllerRestorer(restorer.EnsureChatController)
+	}
 	if switcher, ok := wiredSessMgr.(chatsvc.TerminalProviderSwitcher); ok {
 		chatSvc.SetTerminalProviderSwitcher(switcher)
 	}

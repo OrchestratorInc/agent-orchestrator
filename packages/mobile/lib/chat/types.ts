@@ -1,7 +1,7 @@
 import type { TurnArtifactChange } from "../../../shared/artifacts/turn-artifacts";
 import type { SessionMode } from "../api";
 
-export type ControllerState = "connecting" | "ready" | "busy" | "recovering" | "hibernated" | "stopped";
+export type ControllerState = "connecting" | "ready" | "busy" | "recovering" | "hibernated" | "stopped" | "cold";
 /**
  * `recovered` is a turn replayed from a provider's stored history whose outcome
  * the provider did not report; the daemon swaps it for the known result when it

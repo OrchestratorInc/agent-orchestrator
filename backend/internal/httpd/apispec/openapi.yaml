@@ -20041,6 +20041,7 @@ components:
           - recovering
           - hibernated
           - stopped
+          - cold
           type: string
         conversationId:
           type: string

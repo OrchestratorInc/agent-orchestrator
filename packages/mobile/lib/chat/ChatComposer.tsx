@@ -537,7 +537,10 @@ export function ChatComposer({
 		openingSuggestion.current = key;
 		void openPicker(suggestion.kind, suggestion);
 	}, [cursor, openPicker, pickerGate, text]);
-	const settingsProps = { snapshot, models, options: configOptions ?? NO_OPTIONS, disabled: disabled || stopped || pending || submitting, onSettings, onOption: onConfigOption };
+	// Turn settings need a live controller. A chat left cold by a daemon restart
+	// still takes a message, which restores it, but not a settings change.
+	const cold = snapshot.controller.state === "cold";
+	const settingsProps = { snapshot, models, options: configOptions ?? NO_OPTIONS, disabled: disabled || stopped || cold || pending || submitting, onSettings, onOption: onConfigOption };
 	const effort = useChatEffort(settingsProps);
 	// Typing is a tap outside the slider that the keyboard, not the app, hears.
 	const closeEffort = effort.close;

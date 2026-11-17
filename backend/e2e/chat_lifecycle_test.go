@@ -34,10 +34,10 @@ func TestChatSurvivesADaemonRestartWithNativeContext(t *testing.T) {
 	d.stop()
 	restarted := startDaemon(t, dataDir)
 
-	// No explicit restore call: bringing a live session back is the boot pass's
-	// job, and a user who reopens the app does not press anything. Waiting on the
-	// controller is exactly what the renderer does.
-	after := restarted.awaitLiveController(session, 90*time.Second)
+	// Idle sessions expose history immediately and resume their native provider
+	// on first input, without an explicit restore action.
+	after := restarted.awaitConversation(session, 90*time.Second, "the idle session to remain cold",
+		func(s snapshot) bool { return s.Controller == "cold" })
 
 	// Same conversation, not a new one: a fresh conversation id would mean the
 	// history was abandoned and the agent restarted blind.

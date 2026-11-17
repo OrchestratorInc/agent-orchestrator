@@ -530,6 +530,7 @@ func TestConversationHistoryRefusalsAreTypedNeverInternalErrors(t *testing.T) {
 		{"refusal for a lost provider session", fmt.Errorf("%w: %w", chatsvc.ErrProviderRefused,
 			fmt.Errorf("%w: Session not found", ports.ErrChatProviderSessionLost)), http.StatusConflict, "CHAT_PROVIDER_SESSION_LOST"},
 		{"no controller", chatsvc.ErrNoController, http.StatusConflict, "CHAT_CONTROLLER_NOT_READY"},
+		{"lazy restore failure", ports.ErrChatControllerRestore, http.StatusServiceUnavailable, "CHAT_CONTROLLER_RESTORE_FAILED"},
 		{"stopped before queue append", chatsvc.ErrNotProvisioning, http.StatusConflict, "CHAT_CONTROLLER_NOT_READY"},
 		{"tui session", chatsvc.ErrNotChatMode, http.StatusConflict, "SESSION_MODE_MISMATCH"},
 		{"missing session", ports.ErrSessionNotFound, http.StatusNotFound, "SESSION_NOT_FOUND"},
