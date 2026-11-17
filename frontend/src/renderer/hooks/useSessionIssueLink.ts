@@ -15,5 +15,6 @@ export function useSessionIssueLink(session: WorkspaceSession, hostId = session.
 			return data?.status === "ok" && "repo" in data.project ? data.project : undefined;
 		},
 	});
-	return trackerIssueLink(session.issueId, project.data?.repo);
+	const intake = project.data?.config?.trackerIntake;
+	return trackerIssueLink(session.issueId, project.data?.repo, intake?.repo ? undefined : intake?.provider);
 }

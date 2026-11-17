@@ -312,7 +312,7 @@ const GITHUB_ISSUE_ID = /^github:([\w.-]+\/[\w.-]+)#([1-9]\d*)(?:@([\w.-]+(?::\d
 const GITLAB_ISSUE_ID = /^gitlab:([\w.-]+(?:\/[\w.-]+)+)#([1-9]\d*)(?:@([\w.-]+(?::\d+)?))?$/;
 
 /** Resolve intake ids and manual refs; bare numbers need a project's repository. */
-export function trackerIssueLink(issueId?: string, repository?: string): BoardTrackerIssue | undefined {
+export function trackerIssueLink(issueId?: string, repository?: string, provider?: "github" | "gitlab"): BoardTrackerIssue | undefined {
 	if (!issueId) return undefined;
 	issueId = issueId.trim();
 	const github = GITHUB_ISSUE_ID.exec(issueId) ?? /^([\w.-]+\/[\w.-]+)#([1-9]\d*)$/.exec(issueId);
@@ -337,9 +337,14 @@ export function trackerIssueLink(issueId?: string, repository?: string): BoardTr
 			const url = new URL(scp ? `ssh://git@${scp[1]}/${scp[2]}` : repository);
 			if (!["https:", "http:", "ssh:"].includes(url.protocol) || url.search || url.hash) return undefined;
 			const host = url.hostname.toLowerCase();
-			// Match the daemon's repository dispatch, including enterprise GitHub hosts.
-			const provider = host === "github.com" || host.endsWith(".github.com") || host.endsWith(".ghe.io") || host.endsWith(".ghe.com") ? "github" : "gitlab";
-			return issueLink(provider, url.pathname.replace(/^\/|\/$/g, "").replace(/\.git$/, ""), issueId.replace(/^#/, ""), `https://${url.host}`);
+			const githubHost = host === "github.com" || host.endsWith(".github.com") || host.endsWith(".ghe.io") || host.endsWith(".ghe.com");
+			const gitlabHost = host === "gitlab.com" || host === "www.gitlab.com";
+			const forge = githubHost ? "github" : gitlabHost ? "gitlab" : provider;
+			if (!forge) return undefined;
+			if (url.protocol === "ssh:" && url.port && host !== "github.com" && host !== "gitlab.com") return undefined;
+			// An SSH port says nothing about the browser's port.
+			const origin = url.protocol === "ssh:" ? `https://${url.hostname}` : url.origin;
+			return issueLink(forge, url.pathname.replace(/^\/|\/$/g, "").replace(/\.git$/, ""), issueId.replace(/^#/, ""), origin);
 		}
 	} catch {
 		return undefined;

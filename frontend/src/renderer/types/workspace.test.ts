@@ -37,9 +37,29 @@ describe("trackerIssueLink", () => {
 		["https://gitlab.local:8443/group/sub/repo/-/issues/7", undefined, "https://gitlab.local:8443/group/sub/repo/-/issues/7", "group/sub/repo", 7],
 		["42", "https://github.com/acme/project.git", "https://github.com/acme/project/issues/42", "acme/project", 42],
 		["#42", "git@github.com:acme/project.git", "https://github.com/acme/project/issues/42", "acme/project", 42],
-		["7", "ssh://git@gitlab.local:8443/group/sub/repo.git", "https://gitlab.local:8443/group/sub/repo/-/issues/7", "group/sub/repo", 7],
+		["7", "https://gitlab.com:8443/group/sub/repo.git", "https://gitlab.com:8443/group/sub/repo/-/issues/7", "group/sub/repo", 7],
 	])("links manual issue %s with repository %s", (issueId, repository, url, repo, number) => {
 		expect(trackerIssueLink(issueId, repository)).toEqual({ number, repo, url });
+	});
+
+	it("uses the known web origin for an SSH port", () => {
+		expect(trackerIssueLink("42", "ssh://git@github.com:22/acme/project.git")?.url).toBe("https://github.com/acme/project/issues/42");
+	});
+
+	it("keeps an explicit HTTP browser origin", () => {
+		expect(trackerIssueLink("42", "http://gitlab.com:8080/acme/project.git")?.url).toBe("http://gitlab.com:8080/acme/project/-/issues/42");
+	});
+
+	it.each(["https://bitbucket.org/acme/project.git", "https://code.example.com/acme/project.git"])("leaves an unproven browser origin unlinked: %s", (repository) => {
+		expect(trackerIssueLink("42", repository)).toBeUndefined();
+	});
+
+	it("leaves a self-hosted SSH browser port unresolved", () => {
+		expect(trackerIssueLink("42", "ssh://git@gitlab.local:2222/acme/project.git", "gitlab")).toBeUndefined();
+	});
+
+	it("uses explicit provider metadata for a self-hosted repository", () => {
+		expect(trackerIssueLink("42", "https://code.example.com:8443/acme/project.git", "gitlab")?.url).toBe("https://code.example.com:8443/acme/project/-/issues/42");
 	});
 
 	it.each([

@@ -141,7 +141,10 @@ export function ClassicSessionBranchSummary({
 	}, [clearPending, key, pending]);
 
 	const cards = pullRequests ? <div className="flex flex-col gap-2 pb-3 last:pb-0">{pullRequests}</div> : null;
-	if (!showGit) return cards ? <InspectorSection surface={false} title={title}>{cards}</InspectorSection> : null;
+	if (!showGit) return issue || cards ? <InspectorSection surface={false} title={title}>
+		{issue ? <section aria-label={t("inspector.branch")} data-testid="inspector-branch"><SessionIssueLine issue={issue} /></section> : null}
+		{cards}
+	</InspectorSection> : null;
 
 	const commitsRow = commitsRowView(facts, t);
 	const hasWork = facts.uncommitted.length > 0 || commitsRow !== null;

@@ -6772,7 +6772,7 @@ describe("SessionInspector branch summary", () => {
     mockGitState({});
     const respond = getMock.getMockImplementation()!;
     getMock.mockImplementation(async (path: string) => path === "/api/v1/projects/{id}"
-      ? { data: { status: "ok", project: { repo: "https://gitlab.local:8443/group/sub/demo.git" } } }
+      ? { data: { status: "ok", project: { repo: "https://gitlab.local:8443/group/sub/demo.git", config: { trackerIntake: { provider: "gitlab" } } } } }
       : respond(path));
     renderWithQuery(<SessionInspector session={session([], { issueId })} />);
     const issue = await screen.findByRole("link", { name: `Intake issue: ${label}` });
@@ -6788,11 +6788,20 @@ describe("SessionInspector branch summary", () => {
     mockGitState({});
     const respond = getMock.getMockImplementation()!;
     getMock.mockImplementation(async (path: string) => path === "/api/v1/projects/{id}"
-      ? { data: { status: "ok", project: { repo: "https://gitlab.local:8443/group/sub/demo.git" } } }
+      ? { data: { status: "ok", project: { repo: "https://gitlab.local:8443/group/sub/demo.git", config: { trackerIntake: { provider: "gitlab" } } } } }
       : respond(path));
     renderWithQuery(<SessionInspector session={session([], { issueId })} />);
     const issue = await branch().findByRole("link", { name: `Intake issue: ${label}` });
     expect(issue).toHaveAttribute("href", url);
+  });
+
+  it.each([false, true])("links an issue before an imported session is resumed (PR view=%s)", async (prView) => {
+    useUiStore.setState({ developerMode: prView, prView });
+    mockGitState({});
+    renderWithQuery(<SessionInspector session={session([], { needsResume: true, issueId: "github:acme/demo#42" })} />);
+    const issue = await screen.findByRole("link", { name: "Intake issue: acme/demo#42" });
+    expect(issue).toHaveAttribute("href", "https://github.com/acme/demo/issues/42");
+    expect(branch().queryByText("feat/ns")).not.toBeInTheDocument();
   });
 
   it("links an intake issue above the branch and leaves a typed task id plain", () => {

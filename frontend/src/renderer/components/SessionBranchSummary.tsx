@@ -148,7 +148,10 @@ export function SessionBranchSummary({
 	};
 	if (!showGit) {
 		const cards = renderCards(undefined);
-		return cards ? <InspectorSection surface={false} title={title}>{cards}</InspectorSection> : null;
+		return issue || cards ? <InspectorSection surface={false} title={title}>
+			{issue ? <section aria-label={t("inspector.branch")} data-testid="inspector-branch"><SessionIssueLine issue={issue} /></section> : null}
+			{cards}
+		</InspectorSection> : null;
 	}
 
 	const commitsRow = commitsRowView(facts, t);
