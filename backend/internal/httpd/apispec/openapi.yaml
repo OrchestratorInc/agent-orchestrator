@@ -20450,6 +20450,7 @@ components:
           - memcode
           - hermes
           - stakpak
+          - open-interpreter
           - fake
           type: string
         approvalMode:
@@ -21235,6 +21236,7 @@ components:
           - memcode
           - hermes
           - stakpak
+          - open-interpreter
           - cloudflared
           - cua-driver
           type: string
@@ -25535,6 +25537,7 @@ components:
           - memcode
           - hermes
           - stakpak
+          - open-interpreter
           type: string
         issueId:
           type: string
