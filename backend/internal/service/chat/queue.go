@@ -196,7 +196,21 @@ func (c *Controller) EditQueuedTurn(ctx context.Context, turnID string, edit Que
 	if images > 8 || imageBytes > 25*1024*1024 {
 		return ErrQueuedContentInvalid
 	}
-	if strings.TrimSpace(edit.Text) == "" && len(content) == 0 {
+	text, reports := edit.Text, ""
+	if strings.HasSuffix(message.Text, "</ao-worker-reports>") {
+		if index := strings.LastIndex(message.Text, "\n\n<ao-worker-reports>\n"); index >= 0 {
+			// The report batch belongs to the recorded turn, not the editor.
+			// Preserve its exact context and attribution, including when an older
+			// client sends the full envelope back with its human-text edit.
+			reports = message.Text[index:]
+			if strings.HasSuffix(text, "</ao-worker-reports>") {
+				if index := strings.LastIndex(text, "\n\n<ao-worker-reports>\n"); index >= 0 {
+					text = text[:index]
+				}
+			}
+		}
+	}
+	if strings.TrimSpace(text) == "" && len(content) == 0 {
 		return ErrQueuedTurnTextRequired
 	}
 	encoded := ""
@@ -208,7 +222,7 @@ func (c *Controller) EditQueuedTurn(ctx context.Context, turnID string, edit Que
 		encoded = string(data)
 	}
 	return c.store.UpdateQueuedTurnMessage(ctx, c.conversation.ID, turnID,
-		edit.Text, encoded, message.Revision, c.now(), delivery)
+		text+reports, encoded, message.Revision, c.now(), delivery)
 }
 
 func queuedEditDelivery(turnID string, edit QueuedMessageEdit) (domain.ConversationQueuedEditDelivery, error) {

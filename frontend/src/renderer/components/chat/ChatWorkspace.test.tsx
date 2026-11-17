@@ -6978,6 +6978,30 @@ describe("durable queued edits", () => {
 		};
 	}
 
+	it("persists and reopens only human prose and attachments when editing a report-bearing queue item", async () => {
+		const snapshot = queuedSnapshot();
+		const path = ".ao/attachments/attachment-proof.png";
+		const human = "Review café 👋";
+		snapshot.items = snapshot.items.map((item) => item.kind === "message"
+			? { ...item, text: `${human}\n\nAttached files (read these files in the workspace):\n- ${path}\n\n<ao-worker-reports>\n[checkpoint] hidden worker context\n</ao-worker-reports>` }
+			: item);
+		const save = vi.fn().mockResolvedValue(undefined);
+		const props = { snapshot, onSend: vi.fn(), onEditQueuedTurn: save };
+		const first = render(<ChatWorkspace {...props} />);
+		await userEvent.click(screen.getByRole("button", { name: "Edit queued message" }));
+		expect(screen.getByLabelText("Message the agent")).toHaveTextContent(human);
+		expect(screen.getByLabelText("Message the agent")).not.toHaveTextContent("hidden worker context");
+		expect(screen.getByLabelText("Remove attachment-proof.png")).toBeInTheDocument();
+		expect(readChatSessionDraft(snapshot.sessionId).queuedEdit?.text).toBe(human);
+		first.unmount();
+		render(<ChatWorkspace {...props} />);
+		expect(screen.getByLabelText("Message the agent")).not.toHaveTextContent("ao-worker-reports");
+		await userEvent.click(screen.getByRole("button", { name: "Send message" }));
+		await waitFor(() => expect(save).toHaveBeenCalledOnce());
+		expect(save.mock.calls[0]![1]).not.toContain("ao-worker-reports");
+		expect(save.mock.calls[0]![1]).toContain(path);
+	});
+
 	it("keeps the sharing notice directly above the locked form and below the queue", () => {
 		render(<ChatWorkspace snapshot={queuedSnapshot()} onSend={vi.fn()} composerLockedPlaceholder="" composerNotice={<div data-composer-notice>Live draft stays visible</div>} />);
 		const notice = screen.getByText("Live draft stays visible");
