@@ -56,7 +56,10 @@ export function SessionTopbarScope({ children }: { children: ReactNode }) {
 		element.dataset.sessionTopbarScope = "";
 		return element;
 	});
-	const value = useMemo(() => (parent ? { host: container, setHost: parent.setHost } : undefined), [container, parent]);
+	// No host until the bar exists, as SessionTopbarPortal waits for it: the view's
+	// header then mounts straight into the attached container.
+	const host = parent?.host ? container : null;
+	const value = useMemo(() => (parent ? { host, setHost: parent.setHost } : undefined), [host, parent]);
 	if (!parent) return children;
 	return (
 		<SessionTopbarContext.Provider value={value}>

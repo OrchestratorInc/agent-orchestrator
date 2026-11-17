@@ -4,16 +4,22 @@ import { describe, expect, it } from "vitest";
 import { KeepRecentAlive } from "./KeepRecentAlive";
 import { SessionTopbarHost, SessionTopbarPortal, SessionTopbarProvider, SessionTopbarScope } from "./SessionTopbarPortal";
 
-const attachedAtLayout: Record<string, boolean> = {};
+const attachedAtLayout: Record<string, boolean[]> = {};
+
+/** The portaled header, measuring where it is as a tab strip would. */
+function MeasuredHeader({ id }: { id: string }) {
+	const ref = useRef<HTMLElement>(null);
+	// Mount-only: runs when the header first mounts and each time its chat is shown again.
+	useLayoutEffect(() => {
+		(attachedAtLayout[id] ??= []).push(Boolean(ref.current?.closest('[data-testid="session-topbar-host"]')));
+	}, [id]);
+	return <header ref={ref}>tabs {id}</header>;
+}
 
 function ChatHeader({ id }: { id: string }) {
-	const ref = useRef<HTMLElement>(null);
-	useLayoutEffect(() => {
-		attachedAtLayout[id] = Boolean(ref.current?.closest('[data-testid="session-topbar-host"]'));
-	});
 	return (
 		<SessionTopbarPortal>
-			<header ref={ref}>tabs {id}</header>
+			<MeasuredHeader id={id} />
 		</SessionTopbarPortal>
 	);
 }
@@ -59,6 +65,8 @@ describe("SessionTopbarPortal", () => {
 
 	it("keeps a hidden kept-alive chat's header out of the top bar", () => {
 		const { rerender } = render(<KeptChats id="a" />);
+		// Mounted with the bar itself: the header waits for it instead of mounting detached.
+		expect(attachedAtLayout.a).toEqual([true]);
 		const host = screen.getByTestId("session-topbar-host");
 		expect(host).toHaveTextContent("tabs a");
 
@@ -72,6 +80,6 @@ describe("SessionTopbarPortal", () => {
 		expect(host.querySelectorAll("header")).toHaveLength(1);
 		expect(host).toHaveTextContent("tabs a");
 		// In the bar before the chat's own layout effects run, so they can measure it.
-		expect(attachedAtLayout.a).toBe(true);
+		expect(attachedAtLayout.a).toEqual([true, true]);
 	});
 });
