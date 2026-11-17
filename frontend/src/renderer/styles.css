@@ -591,12 +591,19 @@ html[data-ao-platform="darwin"] .app-shell-root:not(.native-fullscreen) [data-sl
 	border-top-width: 1px;
 }
 
-/* macOS drags from the shared header without an extra strip. Linux keeps the
- * native frame, so it needs no drag region. */
-html[data-ao-platform="darwin"] [data-testid="session-topbar-host"] {
+/* macOS drags from the shared headers without an extra strip: the session tab
+ * bar and the inspector's tab row both sit in the title-bar band. Linux keeps
+ * the native frame, so it needs no drag region. Only the controls punch
+ * through, never their containers, so every empty pixel around and between
+ * them still drags the window and double-clicks to zoom (macOS applies the
+ * system double-click setting to drag regions only). The same punch-out
+ * covers page top bars, which set drag inline on the header (PageTopbar.tsx).
+ * A control's own no-drag must come after the header in the DOM: Electron
+ * builds the region in document order. */
+html[data-ao-platform="darwin"] :is([data-testid="session-topbar-host"], [data-slot="inspector-container"] .session-inspector__topbar) {
 	-webkit-app-region: drag;
 }
-html[data-ao-platform="darwin"] [data-testid="session-topbar-host"] :is(button, a, input, [role="tab"], [role="menuitem"]) {
+html[data-ao-platform="darwin"] :is([data-testid="session-topbar-host"], [data-slot="inspector-container"] .session-inspector__topbar, .workspace-topbar-actions) :is(button, a, input, select, textarea, label, form, [role="button"], [role="link"], [role="tab"], [role="menuitem"], [role="combobox"], [role="switch"], [role="checkbox"], [role="radio"], [title]) {
 	-webkit-app-region: no-drag;
 }
 
