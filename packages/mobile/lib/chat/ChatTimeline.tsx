@@ -100,6 +100,7 @@ import {
 	sameEditableTurns,
 	countActivityNodes,
 	partitionTurnItems,
+	settledTurnItems,
 	readableConversationItems,
 	startupPlacement,
 	streamingCursorMessageId,
@@ -650,9 +651,9 @@ function ConversationTurnGroup({ group, snapshot, approvalPending, inputPending,
 	// turn's errorMessage below it. The turn keeps it — that line carries the
 	// outcome and the rollback — so the activity restating it is dropped.
 	const turnError = group.turn?.state === "failed" ? group.turn.errorMessage : undefined;
-	const items = turnError
+	const items = settledTurnItems(turnError
 		? group.items.filter((item) => !(item.kind === "activity" && errorActivityDuplicatesTurn(item, turnError)))
-		: group.items;
+		: group.items, group.turn);
 	const cursorMessageId = streamingCursorMessageId(items);
 	// Only the prompt being edited gets an element, so every other row keeps its memo.
 	const editorFor = (item: ConversationItem) => editDraft && item.kind === "message" && item.role === "user" && item.origin === "human" && item.turnId === editDraft.turnId
