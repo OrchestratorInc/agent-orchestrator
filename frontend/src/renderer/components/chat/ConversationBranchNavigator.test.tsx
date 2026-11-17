@@ -43,4 +43,26 @@ describe("ConversationBranchNavigator", () => {
 		expect(screen.getByRole("button", { name: "Next conversation branch" })).toBeDisabled();
 		expect(screen.getByRole("alert")).toHaveTextContent("activation failed");
 	});
+
+	it("disables controls and prevents activation when disabled is true", async () => {
+		const user = userEvent.setup();
+		const onActivate = vi.fn();
+		render(
+			<TooltipProvider>
+				<ConversationBranchNavigator
+					point={{ turnId: "turn-1", position: 2, total: 3, previousBranchId: "branch-previous", nextBranchId: "branch-next" }}
+					pending={false}
+					disabled
+					onActivate={onActivate}
+				/>
+			</TooltipProvider>,
+		);
+		const prevButton = screen.getByRole("button", { name: "Previous conversation branch" });
+		const nextButton = screen.getByRole("button", { name: "Next conversation branch" });
+		expect(prevButton).toBeDisabled();
+		expect(nextButton).toBeDisabled();
+		await user.click(prevButton);
+		await user.click(nextButton);
+		expect(onActivate).not.toHaveBeenCalled();
+	});
 });

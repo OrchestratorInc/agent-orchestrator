@@ -9,19 +9,31 @@ import (
 	"testing"
 )
 
-const pngSignature = "\x89PNG\r\n\x1a\n"
+const (
+	pngSignature = "\x89PNG\r\n\x1a\n"
+	jpegHeader   = "\xff\xd8\xff\xdb\x00\x43\x00"
+	// bmpHeader is a file header and the start of a 40-byte BITMAPINFOHEADER.
+	bmpHeader = "BM\x3a\x00\x00\x00\x00\x00\x00\x00\x36\x00\x00\x00\x28\x00\x00\x00\x01\x00"
+)
 
-func writeImage(t *testing.T, dir, name, data string) string {
+// ftyp builds an ISO BMFF ftyp box with a zero minor version.
+func ftyp(major string, compatible ...string) string {
+	body := "ftyp" + major + "\x00\x00\x00\x00" + strings.Join(compatible, "")
+	size := len(body) + 4
+	return string([]byte{byte(size >> 24), byte(size >> 16), byte(size >> 8), byte(size)}) + body
+}
+
+func writeImage(t *testing.T, dir, name, content string) string {
 	t.Helper()
 	path := filepath.Join(dir, name)
-	if err := os.WriteFile(path, []byte(data), 0o600); err != nil {
+	if err := os.WriteFile(path, []byte(content), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	return path
 }
 
-// sparseImage is a PNG of the given size that takes no disk space.
-func sparseImage(t *testing.T, dir, name string, size int64) string {
+// bigPNG writes a sparse PNG of the given size, so it costs no disk space.
+func bigPNG(t *testing.T, dir, name string, size int64) string {
 	t.Helper()
 	path := writeImage(t, dir, name, pngSignature)
 	if err := os.Truncate(path, size); err != nil {
@@ -30,250 +42,242 @@ func sparseImage(t *testing.T, dir, name string, size int64) string {
 	return path
 }
 
+func wrapOpenRenderImage(t *testing.T, wrap func(name string, open func(string) (*os.File, error)) (*os.File, error)) {
+	t.Helper()
+	original := openRenderImage
+	openRenderImage = func(name string) (*os.File, error) { return wrap(name, original) }
+	t.Cleanup(func() { openRenderImage = original })
+}
+
 func TestFindLocalImages(t *testing.T) {
-	atLimit := "/" + strings.Repeat("a", 2043) + ".png"
-	cases := []struct {
+	longest := "/" + strings.Repeat("x", maxImagePathChars-5) + ".gif"
+	for _, tc := range []struct {
 		name string
 		html string
 		want []string
 	}{
-		{"double quotes", `<img src="/tmp/a.png">`, []string{"/tmp/a.png"}},
-		{"single quotes", `<img src='/tmp/a.JPG'>`, []string{"/tmp/a.JPG"}},
-		{"backticks", "const s = `/tmp/a b.webp`;", []string{"/tmp/a b.webp"}},
-		{"css url", `div{background:url(/tmp/bg.svg)}`, []string{"/tmp/bg.svg"}},
-		{"css url with spaces", `div{background:url( /tmp/bg.gif )}`, []string{"/tmp/bg.gif"}},
-		{"uppercase css url", `div{background:URL(/tmp/bg.AVIF)}`, []string{"/tmp/bg.AVIF"}},
-		{"windows path in a JS string", `const p = "C:\\shots\\a.png";`, []string{`C:\\shots\\a.png`}},
-		{"windows path with forward slashes", `<img src="c:/shots/a.ico">`, []string{"c:/shots/a.ico"}},
-		{"several on a line", `<img src="/a.png"><img src='/b.jpeg'>`, []string{"/a.png", "/b.jpeg"}},
-		{"a file at the root", `<img src="/.bmp">`, []string{"/.bmp"}},
-		{"2048 characters", `"` + atLimit + `"`, []string{atLimit}},
-		{"https url", `<img src="https://example.com/a.png">`, nil},
-		{"protocol-relative url", `<img src="//cdn.example.com/a.png">`, nil},
-		{"protocol-relative css url", `div{background:url(//cdn.example.com/a.png)}`, nil},
-		{"data uri", `<img src="data:image/png;base64,AAAA">`, nil},
-		{"blob url", `<img src="blob:https://example.com/a.png">`, nil},
-		{"bare file name", `<img src="a.png">`, nil},
-		{"relative path", `<img src="./a.png">`, nil},
-		{"not an image", `<a href="/tmp/a.txt">`, nil},
-		{"query string", `<img src="/tmp/a.png?v=1">`, nil},
-		{"crosses a line", "<img src=\"/tmp/a\nb.png\">", nil},
-		{"mismatched quotes", `<img src="/tmp/a.png'>`, nil},
-		{"unquoted path in prose", `<p>see /tmp/a.png</p>`, nil},
-		{"over 2048 characters", `"/a` + atLimit + `"`, nil},
-	}
-	for _, tc := range cases {
+		{"img src", `<img alt="chart" src="/home/me/chart.png">`, []string{"/home/me/chart.png"}},
+		{"single-quoted, upper-case extension", `<img src='/srv/out/Logo.JPEG'>`, []string{"/srv/out/Logo.JPEG"}},
+		{"template literal with a space", "img.src = `/Users/me/My Shots/one.webp`;", []string{"/Users/me/My Shots/one.webp"}},
+		{"css url", `body { background: url(/opt/tiles/grid.svg) }`, []string{"/opt/tiles/grid.svg"}},
+		{"css url with padding", "li { list-style: url(\t/opt/dot.ico ) }", []string{"/opt/dot.ico"}},
+		{"upper-case css url", `<div style="background:Url(/opt/bg.avif)">`, []string{"/opt/bg.avif"}},
+		{"escaped windows path", `fetch("D:\\renders\\frame.bmp")`, []string{`D:\\renders\\frame.bmp`}},
+		{"windows path with slashes", `<img src="e:/renders/frame.jpg">`, []string{"e:/renders/frame.jpg"}},
+		{"two on one line", `<img src="/a/1.png"><img src='/a/2.gif'>`, []string{"/a/1.png", "/a/2.gif"}},
+		{"after a non-image string", `<a title="x" href="/a/b.html"><img src="/a/c.png"></a>`, []string{"/a/c.png"}},
+		{"hidden file at the root", `<img src="/.png">`, []string{"/.png"}},
+		{"longest path", "'" + longest + "'", []string{longest}},
+		{"path too long", "'/" + longest + "'", nil},
+		{"https", `<img src="https://example.org/a.png">`, nil},
+		{"protocol-relative", `<img src="//static.example.org/a.png">`, nil},
+		{"protocol-relative css url", `div { background: url(//static.example.org/a.png) }`, nil},
+		{"data uri", `<img src="data:image/gif;base64,R0lGOD">`, nil},
+		{"blob", `<img src="blob:null/1234.png">`, nil},
+		{"relative", `<img src="img/a.png"><img src="../a.png">`, nil},
+		{"other extension", `<script src="/srv/app.js"></script>`, nil},
+		{"no extension", `<img src="/srv/png">`, nil},
+		{"directory named like an image", `<img src="/srv/a.png/b">`, nil},
+		{"with a fragment", `<img src="/srv/a.svg#icon">`, nil},
+		{"split across lines", "<img src='/srv/a\r\n.png'>", nil},
+		{"different closing quote", "<img src=\"/srv/a.png`>", nil},
+		{"bare path in text", `<p>saved to /srv/a.png</p>`, nil},
+		{"quoted css url argument", `div { background: url("/srv/a.png") }`, []string{"/srv/a.png"}},
+		{"unclosed css url", `div { background: url(/srv/a.png`, nil},
+	} {
 		t.Run(tc.name, func(t *testing.T) {
 			var got []string
 			for _, ref := range findLocalImages(tc.html) {
 				if tc.html[ref.start:ref.end] != ref.path {
-					t.Fatalf("span %d-%d is %q, not %q", ref.start, ref.end, tc.html[ref.start:ref.end], ref.path)
+					t.Fatalf("span [%d:%d] holds %q, not %q", ref.start, ref.end, tc.html[ref.start:ref.end], ref.path)
 				}
 				got = append(got, ref.path)
 			}
 			if !slices.Equal(got, tc.want) {
-				t.Fatalf("got %q, want %q", got, tc.want)
+				t.Fatalf("found %q, want %q", got, tc.want)
 			}
 		})
 	}
-	// Inside a JS string a Windows path's backslashes are escaped.
-	if got := imageFilePath(`C:\\shots\\a.png`); got != `C:\shots\a.png` {
-		t.Fatalf("windows file path = %q", got)
+}
+
+func TestImageFilePathUnescapesOnlyWindowsPaths(t *testing.T) {
+	if got := imageFilePath(`D:\\renders\\frame.bmp`); got != `D:\renders\frame.bmp` {
+		t.Fatalf("windows: %q", got)
 	}
-	if got := imageFilePath(`/tmp/a\\b.png`); got != `/tmp/a\\b.png` {
-		t.Fatalf("posix file path = %q", got)
+	if got := imageFilePath(`/srv/odd\\name.png`); got != `/srv/odd\\name.png` {
+		t.Fatalf("posix: %q", got)
 	}
 }
 
-func TestIsImageBytes(t *testing.T) {
-	cases := []struct {
+func TestImageType(t *testing.T) {
+	for _, tc := range []struct {
 		name string
 		data string
-		want bool
+		want string
 	}{
-		{"png", pngSignature, true},
-		{"jpeg", "\xff\xd8\xff\xe0\x00\x10JFIF", true},
-		{"gif", "GIF89a\x01\x00", true},
-		{"ico", "\x00\x00\x01\x00\x01\x00", true},
-		{"bmp", "BM\x46\x00\x00\x00\x00\x00\x00\x00\x36\x00", true},
-		{"webp", "RIFF\x24\x00\x00\x00WEBPVP8 ", true},
-		{"avif", "\x00\x00\x00\x1cftypavif", true},
-		{"avif sequence", "\x00\x00\x00\x1cftypavis", true},
-		{"heif", "\x00\x00\x00\x1cftypmif1", true},
-		{"svg", "<svg/>", true},
-		{"svg after an xml declaration", "<?xml version=\"1.0\"?>\n<svg xmlns=\"http://www.w3.org/2000/svg\"/>", true},
-		{"svg after a comment", "<!-- exported -->\n<svg width=\"1\"></svg>", true},
-		{"svg after a doctype with an internal subset", strings.Join([]string{
-			`<?xml version="1.0"?>`,
-			`<?xml-stylesheet href="theme.css"?>`,
-			`<!DOCTYPE svg [ <!ENTITY fill "red"> <!-- a ] comment --> ]>`,
-			`<svg xmlns="http://www.w3.org/2000/svg" width="32" height="32"/>`,
-		}, "\n"), true},
-		{"svg after a byte order mark", "\ufeff<svg/>", true},
-		{"text named like an image", "API_KEY=abc123", false},
-		{"empty", "", false},
-		{"bmp without its reserved zeros", "BM\x46\x00\x00\x00\x01\x00\x00\x00", false},
-		{"riff that is not webp", "RIFF\x24\x00\x00\x00WAVEfmt ", false},
-		{"mp4", "\x00\x00\x00\x1cftypisom", false},
-		{"html with an svg inside", "<!doctype html><body><svg></svg>API_KEY=abc123", false},
-		{"svg inside a quoted entity", `<!DOCTYPE config [<!ENTITY a "a"><!ENTITY b "]><svg/>">]><config>API_KEY=abc123</config>`, false},
-		{"processing instructions before another root", strings.Repeat("<?p?>", 40) + "<config><svg/></config>", false},
-		{"unclosed doctype", `<!DOCTYPE svg [<!ENTITY a "x><svg/>`, false},
-		{"unclosed comment", "<!-- <svg/>", false},
-		{"uppercase root", "<SVG/>API_KEY=abc123", false},
-		{"longer root name", "<svg\u00e9/>API_KEY=abc123", false},
-	}
-	for _, tc := range cases {
+		{"png", pngSignature, "image/png"},
+		{"jpeg", jpegHeader, "image/jpeg"},
+		{"gif87a", "GIF87a\x02\x00\x02\x00", "image/gif"},
+		{"webp", "RIFF\x1a\x00\x00\x00WEBPVP8L\x0d", "image/webp"},
+		{"ico", "\x00\x00\x01\x00\x02\x00\x10\x10", "image/x-icon"},
+		{"bmp", bmpHeader, "image/bmp"},
+		{"avif", ftyp("avif", "mif1", "miaf"), "image/avif"},
+		{"avif listed as compatible", ftyp("mif1", "avif"), "image/avif"},
+		{"avif sequence", ftyp("avis", "msf1"), "image/avif"},
+		{"svg", `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 4 4"/>`, "image/svg+xml"},
+		{"svg with a prolog", "\ufeff<?xml version='1.0' encoding='UTF-8'?>\r\n<!-- drawn by hand -->\n" +
+			`<!DOCTYPE svg PUBLIC "-//W3C//DTD SVG 1.1//EN" "http://www.w3.org/Graphics/SVG/1.1/DTD/svg11.dtd">` + "\n<svg/>", "image/svg+xml"},
+		{"svg after an internal subset", `<!DOCTYPE svg [<!ENTITY ink "#123"> <!-- ] > --> <!ATTLIST svg a CDATA "]>">]><svg></svg>`, "image/svg+xml"},
+		{"svg with entity namespaces", "<?xml version=\"1.0\" encoding=\"utf-8\"?>\n<!-- Generator: Adobe Illustrator 16.0.0 -->\n" +
+			`<!DOCTYPE svg PUBLIC "-//W3C//DTD SVG 1.1//EN" "http://www.w3.org/Graphics/SVG/1.1/DTD/svg11.dtd" [` +
+			"\n\t<!ENTITY ns_svg \"http://www.w3.org/2000/svg\">\n\t<!ENTITY ns_xlink \"http://www.w3.org/1999/xlink\">\n]>\n" +
+			`<svg version="1.1" xmlns="&ns_svg;" xmlns:xlink="&ns_xlink;" width="24" height="24"><rect width="24" height="24"/></svg>`, "image/svg+xml"},
+		{"latin-1 svg with a non-ascii root attribute", "<?xml version=\"1.0\" encoding=\"ISO-8859-1\"?><svg aria-label=\"caf\xe9\"/>", "image/svg+xml"},
+		{"windows-1252 svg with a non-ascii root attribute", "<?xml version='1.0' encoding='windows-1252'?>\n<svg xmlns=\"http://www.w3.org/2000/svg\" aria-label=\"\x93quoted\x94\"/>", "image/svg+xml"},
+		{"svg declaring an unknown charset", "<?xml version=\"1.0\" encoding=\"x-made-up\"?><svg/>", "image/svg+xml"},
+		{"text", "OPENAI_API_KEY=sk-test", ""},
+		{"empty", "", ""},
+		{"text starting with BM", "BMW_TOKEN=0123456789abcdef", ""},
+		{"wave audio", "RIFF\x1a\x00\x00\x00WAVEfmt \x10\x00", ""},
+		{"mp4 video", ftyp("isom", "iso2", "mp41"), ""},
+		{"heic photo", ftyp("heic", "mif1", "heic"), ""},
+		{"ftyp longer than the file", ftyp("avif")[:14], ""},
+		{"html page holding an svg", "<!DOCTYPE html><html><body><svg/>TOKEN=1</body></html>", ""},
+		{"svg tag inside a doctype string", `<!DOCTYPE doc [<!ENTITY e "]><svg/>">]><doc>TOKEN=1</doc>`, ""},
+		{"text before the root", "TOKEN=1\n<svg/>", ""},
+		{"prefixed root", `<s:svg xmlns:s="http://www.w3.org/2000/svg"/>`, ""},
+		{"upper-case root", "<SVG/>", ""},
+		{"root that only starts with svg", "<svgx/>", ""},
+		{"unterminated comment", "<!-- <svg/>", ""},
+		{"unterminated doctype", `<!DOCTYPE svg [<!ENTITY e "><svg/>`, ""},
+		{"latin-1 document with another root", "<?xml version=\"1.0\" encoding=\"ISO-8859-1\"?>\n<config>TOKEN=1</config>", ""},
+		{"entity text before the root", `<!DOCTYPE svg [<!ENTITY t "TOKEN=1">]>&t;<svg/>`, ""},
+	} {
 		t.Run(tc.name, func(t *testing.T) {
-			if got := isImageBytes([]byte(tc.data)); got != tc.want {
-				t.Fatalf("isImageBytes(%q) = %v, want %v", tc.data, got, tc.want)
+			got, ok := imageType([]byte(tc.data))
+			if got != tc.want || ok != (tc.want != "") {
+				t.Fatalf("imageType(%q) = %q, %v; want %q", tc.data, got, ok, tc.want)
 			}
 		})
 	}
 }
 
-func TestInlineLocalImagesReplacesReferencesWithDataURIs(t *testing.T) {
+func TestInlineLocalImages(t *testing.T) {
 	dir := t.TempDir()
-	png := writeImage(t, dir, "shot.png", pngSignature)
-	svg := writeImage(t, dir, "logo.SVG", "<svg/>")
-	jpeg := writeImage(t, dir, "photo.jpeg", "\xff\xd8\xff\xe0")
-	page := func(png, svg, jpeg string) string {
-		return `<img src="` + png + `"><div style="background:url(` + svg + `)"></div>` +
-			"<script>const shots = ['" + png + "', `" + jpeg + "`];</script>" +
-			`<img src="https://example.com/a.png"><img src="//cdn.example.com/b.png"><img src="./c.png">` +
-			`<img src="data:image/png;base64,AAAA">`
+	chart := writeImage(t, dir, "chart.PNG", pngSignature)
+	icon := writeImage(t, dir, "icon.svg", "<svg/>")
+	photo := writeImage(t, dir, "photo.png", jpegHeader) // a JPEG saved as .png
+	page := func(chart, icon, photo string) string {
+		return `<h1>Report</h1><img src="` + chart + `"><i style="background: url(` + icon + `)"></i>` +
+			"<script>const frames = ['" + chart + "', `" + photo + "`];</script>" +
+			`<img src="https://example.org/a.png"><img src="//example.org/b.png"><img src="c.png">`
 	}
-	encode := func(data string) string { return base64.StdEncoding.EncodeToString([]byte(data)) }
+	uri := func(mime, data string) string {
+		return "data:" + mime + ";base64," + base64.StdEncoding.EncodeToString([]byte(data))
+	}
 
-	got, missing, err := inlineLocalImages(page(png, svg, jpeg))
-	if err != nil || len(missing) != 0 {
+	got, missing, err := inlineLocalImages(page(chart, icon, photo))
+	if err != nil || missing != nil {
 		t.Fatalf("err=%v missing=%q", err, missing)
 	}
-	want := page("data:image/png;base64,"+encode(pngSignature), "data:image/svg+xml;base64,"+encode("<svg/>"),
-		"data:image/jpeg;base64,"+encode("\xff\xd8\xff\xe0"))
-	if got != want {
+	if want := page(uri("image/png", pngSignature), uri("image/svg+xml", "<svg/>"), uri("image/jpeg", jpegHeader)); got != want {
 		t.Fatalf("got  %s\nwant %s", got, want)
 	}
 }
 
-func TestInlineLocalImagesReadsADuplicateOnce(t *testing.T) {
-	png := writeImage(t, t.TempDir(), "shot.png", pngSignature)
-	opens := 0
-	open := openRenderImage
-	openRenderImage = func(name string) (*os.File, error) {
-		opens++
-		return open(name)
-	}
-	t.Cleanup(func() { openRenderImage = open })
-
-	got, _, err := inlineLocalImages(`<img src="` + png + `"><img src='` + png + `'>`)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if want := `<img src="data:image/png;base64,iVBORw0KGgo="><img src='data:image/png;base64,iVBORw0KGgo='>`; got != want || opens != 1 {
-		t.Fatalf("opens=%d got %s", opens, got)
+func TestInlineLocalImagesLeavesAPageWithoutImagesAlone(t *testing.T) {
+	html := `<p>No pictures.</p>`
+	if got, missing, err := inlineLocalImages(html); err != nil || missing != nil || got != html {
+		t.Fatalf("got %q missing=%q err=%v", got, missing, err)
 	}
 }
 
-func TestInlineLocalImagesLeavesUnreadableReferencesAsWritten(t *testing.T) {
+func TestInlineLocalImagesOpensARepeatedImageOnce(t *testing.T) {
+	chart := writeImage(t, t.TempDir(), "chart.png", pngSignature)
+	opens := 0
+	wrapOpenRenderImage(t, func(name string, open func(string) (*os.File, error)) (*os.File, error) {
+		opens++
+		return open(name)
+	})
+
+	got, _, err := inlineLocalImages(strings.Repeat(`<img src="`+chart+`">`, 3))
+	if err != nil || opens != 1 {
+		t.Fatalf("err=%v opens=%d", err, opens)
+	}
+	if want := strings.Repeat(`<img src="data:image/png;base64,iVBORw0KGgo=">`, 3); got != want {
+		t.Fatalf("got %s", got)
+	}
+}
+
+func TestInlineLocalImagesReportsWhatItCannotInline(t *testing.T) {
 	dir := t.TempDir()
-	gone := filepath.Join(dir, "missing.jpg")
-	folder := filepath.Join(dir, "folder.png")
+	absent := filepath.Join(dir, "absent.gif")
+	folder := filepath.Join(dir, "album.jpg")
 	if err := os.Mkdir(folder, 0o700); err != nil {
 		t.Fatal(err)
 	}
-	// Named like an image, but a renamed file or symlink must not carry other data.
-	secret := writeImage(t, dir, "secret.png", "API_KEY=abc123")
-	report := writeImage(t, dir, "report.svg", "<!doctype html><body><svg></svg>API_KEY=abc123")
-	html := `<img src="` + gone + `"><img src='` + folder + `'><script>const p = "C:\\nope\\shot.webp";</script>` +
-		`<img src="` + secret + `"><img src="` + report + `"><img src="` + gone + `">`
+	env := writeImage(t, dir, "env.png", "DATABASE_URL=postgres://u:p@db/app")
+	page := writeImage(t, dir, "page.svg", "<html><body><svg/></body></html>")
+	html := `<img src="` + absent + `"><img src="` + folder + `"><img src="` + env + `">` +
+		`<img src="` + page + `"><script>load("Q:\\none\\x.webp")</script><img src="` + absent + `">`
 
 	got, missing, err := inlineLocalImages(html)
-	if err != nil {
-		t.Fatal(err)
+	if err != nil || got != html {
+		t.Fatalf("err=%v page=%s", err, got)
 	}
-	if got != html {
-		t.Fatalf("page changed: %s", got)
-	}
-	if want := []string{gone, folder, `C:\\nope\\shot.webp`, secret, report}; !slices.Equal(missing, want) {
-		t.Fatalf("missing = %q, want %q", missing, want)
+	if want := []string{absent, folder, env, page, `Q:\\none\\x.webp`}; !slices.Equal(missing, want) {
+		t.Fatalf("missing %q, want %q", missing, want)
 	}
 }
 
-func TestInlineLocalImagesEnforcesSizeLimits(t *testing.T) {
+func TestInlineLocalImagesReportsASymlinkToANonImage(t *testing.T) {
 	dir := t.TempDir()
-	big := sparseImage(t, dir, "big.png", 10<<20+1)
-	seven := sparseImage(t, dir, "seven.png", 7<<20)
-	cases := []struct {
+	key := writeImage(t, dir, "id_ed25519", "-----BEGIN OPENSSH "+"PRIVATE KEY-----")
+	link := filepath.Join(dir, "avatar.png")
+	if err := os.Symlink(key, link); err != nil {
+		t.Skipf("cannot symlink: %v", err)
+	}
+	html := `<img src="` + link + `">`
+	got, missing, err := inlineLocalImages(html)
+	if err != nil || got != html || !slices.Equal(missing, []string{link}) {
+		t.Fatalf("err=%v missing=%q page=%s", err, missing, got)
+	}
+}
+
+func TestInlineLocalImagesSizeLimits(t *testing.T) {
+	dir := t.TempDir()
+	huge := bigPNG(t, dir, "huge.png", 12<<20)
+	nine := bigPNG(t, dir, "nine.png", 9<<20)
+	six := bigPNG(t, dir, "six.png", 6<<20)
+	for _, tc := range []struct {
 		name string
 		html string
 		want string
 	}{
-		{"an image over 10 MiB", `<img src="` + big + `">`,
-			big + " is 10.0 MiB; each local image must be at most 10.0 MiB."},
-		{"a page over 25 MiB", strings.Repeat(`<img src="`+seven+`">`, 3),
-			"With its images inlined the page is 28.0 MiB; the limit is 25.0 MiB. Use smaller images."},
-	}
-	for _, tc := range cases {
+		{"one image over the limit", `<img src="` + six + `"><img src="` + huge + `">`,
+			"local image " + huge + " exceeds 10.0 MiB (12.0 MiB); resize it before rendering"},
+		{"a page that grows past the limit", `<img src="` + nine + `"><img src="` + six + `">` + `<img src="` + nine + `">`,
+			"the page exceeds the 25.0 MiB limit after embedding images (32.0 MiB); use smaller images"},
+	} {
 		t.Run(tc.name, func(t *testing.T) {
-			_, _, err := inlineLocalImages(tc.html)
-			if err == nil || err.Error() != tc.want {
-				t.Fatalf("err = %v, want %q", err, tc.want)
+			if _, _, err := inlineLocalImages(tc.html); err == nil || err.Error() != tc.want {
+				t.Fatalf("err = %v\nwant  %s", err, tc.want)
 			}
 		})
 	}
 }
 
-// stubOpenRenderImage routes inlineLocalImages' reads through open.
-func stubOpenRenderImage(t *testing.T, open func(string) (*os.File, error)) {
-	t.Helper()
-	original := openRenderImage
-	openRenderImage = open
-	t.Cleanup(func() { openRenderImage = original })
-}
-
-func TestInlineLocalImagesRefusesAnImageThatGrowsAfterTheStat(t *testing.T) {
-	png := writeImage(t, t.TempDir(), "grows.png", pngSignature)
-	open := openRenderImage
-	stubOpenRenderImage(t, func(name string) (*os.File, error) {
-		if err := os.Truncate(name, 200<<20); err != nil {
+func TestInlineLocalImagesCatchesAnImageThatGrowsAfterItsStat(t *testing.T) {
+	chart := writeImage(t, t.TempDir(), "chart.png", pngSignature)
+	wrapOpenRenderImage(t, func(name string, open func(string) (*os.File, error)) (*os.File, error) {
+		if err := os.Truncate(name, 64<<20); err != nil {
 			t.Fatal(err)
 		}
 		return open(name)
 	})
 
-	_, _, err := inlineLocalImages(`<img src="` + png + `">`)
-	if want := png + " is over 10.0 MiB; each local image must be at most 10.0 MiB."; err == nil || err.Error() != want {
-		t.Fatalf("err = %v, want %q", err, want)
-	}
-}
-
-func TestInlineLocalImagesReportsASymlinkToANonImageAsMissing(t *testing.T) {
-	dir := t.TempDir()
-	secret := writeImage(t, dir, "secret.txt", "API_KEY=abc123")
-	link := filepath.Join(dir, "shot.png")
-	if err := os.Symlink(secret, link); err != nil {
-		t.Skipf("symlink: %v", err)
-	}
-	opens := 0
-	open := openRenderImage
-	stubOpenRenderImage(t, func(name string) (*os.File, error) {
-		opens++
-		return open(name)
-	})
-
-	html := `<img src="` + link + `">`
-	got, missing, err := inlineLocalImages(html)
-	if err != nil || got != html || !slices.Equal(missing, []string{link}) || opens != 1 {
-		t.Fatalf("err=%v opens=%d missing=%q page=%s", err, opens, missing, got)
-	}
-}
-
-func TestDataURIPrefixFallsBackToOctetStream(t *testing.T) {
-	if got := dataURIPrefix("/a.PNG"); got != "data:image/png;base64," {
-		t.Fatalf("png = %q", got)
-	}
-	if got := dataURIPrefix("/a.tiff"); got != "data:application/octet-stream;base64," {
-		t.Fatalf("unknown = %q", got)
+	_, _, err := inlineLocalImages(`<img src="` + chart + `">`)
+	if want := "local image " + chart + " exceeds 10.0 MiB (over 10.0 MiB); resize it before rendering"; err == nil || err.Error() != want {
+		t.Fatalf("err = %v\nwant  %s", err, want)
 	}
 }

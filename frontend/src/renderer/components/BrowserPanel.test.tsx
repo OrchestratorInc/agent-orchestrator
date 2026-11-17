@@ -1227,13 +1227,13 @@ describe("BrowserPanel", () => {
 		expect(firstTab).toHaveAttribute("aria-selected", "false");
 		expect(secondTab).toHaveAttribute("aria-selected", "true");
 		// The shared tab frame: the full title as the tab's native tooltip, and
-		// the ghost close button in the icon's slot.
+		// the ghost close button at the tab's right edge.
 		expect(firstTab).toHaveAttribute("title", "First app");
 		expect(firstTab.closest("[data-terminal-tab-frame]")).not.toBeNull();
 		expect(firstTab.closest("[data-terminal-tab-frame]")).not.toHaveAttribute("data-active");
 		expect(secondTab.closest("[data-terminal-tab-frame]")).toHaveAttribute("data-active");
 		expect(tabList).toHaveAttribute("data-tab-strip");
-		expect(screen.getByRole("button", { name: "Close tab First app" })).toBeInTheDocument();
+		expect(screen.getByRole("button", { name: "Close tab First app" }).closest("[data-terminal-tab-action]")?.previousElementSibling).toBe(firstTab);
 		await userEvent.click(firstTab);
 		expect(hookState.selectTab).toHaveBeenCalledWith("t1");
 	});
