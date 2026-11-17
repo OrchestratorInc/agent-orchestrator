@@ -150,12 +150,18 @@ func (c *Claude) Limits(ctx context.Context, home string) (domain.AgentAccountLi
 	if err := cmd.Start(); err != nil {
 		return domain.AgentAccountLimits{}, fmt.Errorf("start claude: %w", err)
 	}
-	defer func() {
+	stopped := false
+	stop := func() {
+		if stopped {
+			return
+		}
+		stopped = true
 		_ = stdin.Close()
 		// The whole group: whatever the CLI started for the probe goes with it.
 		_ = cmd.Cancel()
 		_ = cmd.Wait()
-	}()
+	}
+	defer stop()
 	if _, err := stdin.Write([]byte(request)); err != nil {
 		return domain.AgentAccountLimits{}, err
 	}
@@ -179,6 +185,7 @@ func (c *Claude) Limits(ctx context.Context, home string) (domain.AgentAccountLi
 		}
 		body := line.Response.Response
 		if body.RateLimitsAvailable && body.RateLimits == nil {
+			stop()
 			if c.loginRejected(ctx, home) {
 				return domain.AgentAccountLimits{}, fmt.Errorf("claude get_usage: %w", ports.ErrAgentAuthRequired)
 			}
