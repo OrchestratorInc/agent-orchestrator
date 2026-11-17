@@ -965,9 +965,6 @@ func TestPoll_DiscoversSiblingUnderRootSessionNamespace(t *testing.T) {
 	}
 }
 
-// Another installation can have a session with the same ID. Its PR opened
-// before this session existed is not discovered; a later PR still is,
-// including one GitHub reports in the session's second.
 func TestPoll_SkipsPRsOpenedBeforeSession(t *testing.T) {
 	created := time.Date(2026, 11, 12, 8, 4, 0, 500_000_000, time.UTC)
 	store := testStoreWithSession()
