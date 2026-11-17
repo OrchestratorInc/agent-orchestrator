@@ -59,8 +59,13 @@ struct LegacyLaunchEvidence {
     let visibleWindow: Bool
 
     func launched(_ request: UpdateRequest, now: Double) -> Bool {
-        guard let marker, marker.matchesLegacyLaunch(request, now: now),
-              let pid, pid > 0, pid != request.parentPID,
+        guard let marker, marker.matchesLegacyLaunch(request, now: now) else { return false }
+        return reopened(request)
+    }
+
+    // A different, finished-launching process is running from the updated bundle.
+    func reopened(_ request: UpdateRequest) -> Bool {
+        guard let pid, pid > 0, pid != request.parentPID,
               appPath == request.appPath, finishedLaunching else { return false }
         return true
     }
@@ -92,6 +97,8 @@ enum UpdateStage: Equatable {
 }
 
 let failureGraceMs: Double = 20_000
+// How long a normal close-and-reopen may take before the helper shows a window.
+let stallBudgetMs: Double = 180_000
 
 struct UpdateProgressState {
     let request: UpdateRequest
@@ -127,9 +134,13 @@ struct UpdateProgressState {
         // update; the app's own loader is what the user should see on reopen.
         // Only a genuinely stuck update, no close or no reopen after three
         // minutes, is worth surfacing a window with recovery options for.
-        if now - waitingSince < 180_000 {
+        if now - waitingSince < stallBudgetMs {
             return parentAlive ? .closing : .installing
         }
+        // Orchestrator is back on screen, so there is nothing left to report even
+        // if its acknowledgement never arrived. Exit quietly instead of showing
+        // "not reopened yet" over the app the user is already looking at.
+        if !parentAlive, let legacy, legacy.reopened(request), legacy.visibleWindow { return .legacyComplete }
         return .recovery(parentAlive
             ? "Orchestrator is taking longer than expected to close. The update will continue when Orchestrator has closed."
             : "Orchestrator has not reopened yet. The installer may still be working. You can keep waiting or download the latest app.")

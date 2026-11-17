@@ -77,6 +77,15 @@ struct StateTests {
             assert(!evidence(marker: marker).launched(request, now: 190_001))
             assert(state.stage(now: 190_001, parentAlive: false, completion: nil, failure: nil, legacy: evidence(marker: marker)) == .installing)
         }
+        // Past the budget, a new client back on screen ends the helper quietly
+        // even without its acknowledgement; anything less still shows recovery.
+        let stalled = UpdateProgressState(request: request, now: 1000)
+        assert(stalled.stage(now: 120_000, parentAlive: false, completion: nil, failure: nil, legacy: evidence(marker: nil)) == .installing)
+        assert(stalled.stage(now: 181_001, parentAlive: false, completion: nil, failure: nil, legacy: evidence(marker: nil)) == .legacyComplete)
+        for stillStuck in [evidence(marker: nil, visible: false), evidence(marker: nil, pid: request.parentPID), evidence(marker: nil, appPath: "/wrong/AO.app"), evidence(marker: nil, finished: false)] {
+            if case .recovery = stalled.stage(now: 181_001, parentAlive: false, completion: nil, failure: nil, legacy: stillStuck) {} else { fatalError("still stuck") }
+        }
+        if case .recovery = stalled.stage(now: 181_001, parentAlive: true, completion: nil, failure: nil, legacy: evidence(marker: nil)) {} else { fatalError("parent alive") }
         print("Update helper state tests passed")
     }
 }
