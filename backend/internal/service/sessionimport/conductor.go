@@ -37,7 +37,12 @@ func conductorRoot(home string) string {
 }
 
 func conductorDB(root string) (*sql.DB, error) {
-	path := filepath.Join(root, "conductor.db")
+	return openReadOnlySQLite(filepath.Join(root, "conductor.db"))
+}
+
+// openReadOnlySQLite opens another app's database for reading only. It
+// returns nil, nil when the file does not exist.
+func openReadOnlySQLite(path string) (*sql.DB, error) {
 	if _, err := os.Stat(path); err != nil {
 		if errors.Is(err, os.ErrNotExist) {
 			return nil, nil
@@ -47,9 +52,9 @@ func conductorDB(root string) (*sql.DB, error) {
 	dsn := opencode.ReadOnlyDSN(path, 2000)
 	if _, err := os.Stat(path + "-wal"); errors.Is(err, os.ErrNotExist) {
 		// A mode=ro open of a closed WAL database creates -wal and -shm files
-		// in Conductor's folder; with no -wal file every commit is in the main
+		// in the app's folder; with no -wal file every commit is in the main
 		// file, so read it as immutable instead.
-		// ponytail: a checkpoint by a Conductor that starts during the read can
+		// ponytail: a checkpoint by the app starting during the read can
 		// tear it; copy the file first if that is ever seen.
 		dsn += "&immutable=1"
 	}

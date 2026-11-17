@@ -650,6 +650,19 @@ func (s *Service) Scan(ctx context.Context) (Preview, error) {
 			selected[id] = selection{candidate: c, source: source, cacheKey: file.cacheKey(), conductor: conductor}
 		}
 	}
+	// A Cursor editor chat imported before is a Claude Code chat now; while
+	// Claude Code offers it, it is listed once, from there.
+	claudeHeld := map[string]bool{}
+	for _, item := range selected {
+		if item.candidate.Harness == domain.HarnessClaudeCode && item.source.harness != cursorTranscriptSource {
+			claudeHeld[item.source.nativeID] = true
+		}
+	}
+	for id, item := range selected {
+		if item.source.harness == cursorTranscriptSource && claudeHeld[item.source.nativeID] {
+			delete(selected, id)
+		}
+	}
 	for _, item := range selected {
 		preview.Candidates = append(preview.Candidates, item.candidate)
 	}

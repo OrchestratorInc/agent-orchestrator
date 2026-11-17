@@ -9,6 +9,7 @@ import (
 	"path/filepath"
 	"regexp"
 	"runtime"
+	"slices"
 	"strconv"
 	"strings"
 	"time"
@@ -44,12 +45,8 @@ func discoverCursorTranscripts(ctx context.Context, root string) ([]sourceFiles,
 		return nil, err
 	}
 	// A Cursor CLI chat writes a transcript too; its own database resumes it
-	// in Cursor, so it is offered from there. A chat Claude Code already holds,
-	// such as one imported earlier, is offered from Claude Code.
+	// in Cursor, so it is offered from there.
 	skip := cursorCLIChats(root)
-	for id := range claudeTranscripts(homeClaudeRoot()) {
-		skip[id] = true
-	}
 	byID := map[string]sourceFiles{}
 	for _, project := range projects {
 		if !project.IsDir() {
@@ -124,9 +121,11 @@ func cursorProjectFolder(root, path string) (string, bool) {
 
 // cursorWorkspace recovers the folder a Cursor project directory was named
 // after: the path Cursor recorded when the folder was trusted, else the one
-// registered AO project with that name, else the folder the name spells when
-// every "-" stands for a separator.
-func cursorWorkspace(root, folder string, projects []string) string {
+// registered AO project with that name, else the folder the editor's chat
+// list files the chat under, else, when no project has the name, the folder
+// it spells when every "-" stands for a separator. Each candidate must have
+// the directory's name, as Cursor derives one from the other.
+func cursorWorkspace(root, folder string, projects []string, recorded func() string) string {
 	if dir, err := os.OpenRoot(filepath.Join(root, "projects", folder)); err == nil {
 		var trusted struct {
 			WorkspacePath string `json:"workspacePath"`
@@ -140,21 +139,29 @@ func cursorWorkspace(root, folder string, projects []string) string {
 			return trusted.WorkspacePath
 		}
 	}
-	match := ""
+	match, ambiguous := "", false
 	for _, project := range projects {
 		if cursorFolderName(project) != folder {
 			continue
 		}
 		if match != "" && match != project {
-			match = "" // Ambiguous: two projects share the name.
+			ambiguous = true
 			break
 		}
 		match = project
 	}
-	if match != "" {
+	if match != "" && !ambiguous {
 		return match
 	}
-	if runtime.GOOS == "windows" {
+	if recorded != nil {
+		if path := recorded(); filepath.IsAbs(path) && cursorFolderName(path) == folder {
+			if info, err := os.Stat(path); err == nil && info.IsDir() {
+				return path
+			}
+		}
+	}
+	// Two projects with the name rule out a guess too.
+	if ambiguous || runtime.GOOS == "windows" {
 		return ""
 	}
 	guess := string(filepath.Separator) + strings.ReplaceAll(folder, "-", string(filepath.Separator))
@@ -175,8 +182,9 @@ func readCursorTranscriptFile(ctx context.Context, root string, projects []strin
 	if !ok || !nativeIDPattern.MatchString(t.nativeID) {
 		return t, errNoReadableConversation
 	}
+	recorded := func() string { return cursorEditorFolder(ctx, t.nativeID) }
 	// A chat whose folder cannot be recovered has nowhere to continue.
-	if t.cwd = cursorWorkspace(t.root, folder, projects); t.cwd == "" {
+	if t.cwd = cursorWorkspace(t.root, folder, projects, recorded); t.cwd == "" {
 		return t, errNoReadableConversation
 	}
 	providerRoot, err := os.OpenRoot(t.root)
@@ -265,13 +273,35 @@ func readCursorTranscriptFile(ctx context.Context, root string, projects []strin
 	n := len(kept)
 	kept = trimVisible(kept)
 	t.shortened = t.shortened || len(kept) < n
-	prompted := false
 	for _, item := range kept {
-		prompted = prompted || item.Role == domain.MessageRoleUser
 		t.messages = append(t.messages, item.Message)
 	}
-	if !prompted {
+	editor, inEditor := readCursorEditorChat(ctx, t.nativeID)
+	// The editor's own copy is the fuller one: the transcript leaves out what
+	// Cursor redacted, and dates only the prompts. A copy with fewer prompts
+	// is behind the transcript, which then stands.
+	prompts := func(messages []Message) int {
+		n := 0
+		for _, m := range messages {
+			if m.Role == domain.MessageRoleUser {
+				n++
+			}
+		}
+		return n
+	}
+	if inEditor && prompts(editor.messages) > 0 && prompts(editor.messages) >= prompts(t.messages) {
+		t.messages, t.shortened = editor.messages, editor.shortened
+		for _, m := range t.messages {
+			if m.At.After(latest) {
+				latest = m.At
+			}
+		}
+	}
+	if !slices.ContainsFunc(t.messages, func(m Message) bool { return m.Role == domain.MessageRoleUser }) {
 		return t, errNoReadableConversation
+	}
+	if inEditor && editor.title != "" {
+		t.title = editor.title
 	}
 	// The file changes with every turn; its prompts carry only minute-resolution times.
 	if info, err := os.Stat(t.path); err == nil {
@@ -300,18 +330,23 @@ func cursorText(content json.RawMessage) string {
 		if !strings.EqualFold(block.Type, "text") {
 			continue
 		}
-		lines := strings.Split(block.Text, "\n")
-		kept := lines[:0]
-		for _, line := range lines {
-			if strings.TrimSpace(line) != "[REDACTED]" {
-				kept = append(kept, line)
-			}
-		}
-		if text := strings.TrimSpace(strings.Join(kept, "\n")); text != "" {
+		if text := cursorReply(block.Text); text != "" {
 			parts = append(parts, text)
 		}
 	}
 	return strings.Join(parts, "\n\n")
+}
+
+// cursorReply drops the "[REDACTED]" lines that stand for hidden thinking.
+func cursorReply(text string) string {
+	lines := strings.Split(text, "\n")
+	kept := lines[:0]
+	for _, line := range lines {
+		if strings.TrimSpace(line) != "[REDACTED]" {
+			kept = append(kept, line)
+		}
+	}
+	return strings.TrimSpace(strings.Join(kept, "\n"))
 }
 
 // cursorPrompt returns what the user typed, from inside <user_query>, and the
@@ -387,12 +422,16 @@ func utcOffset(zone string) (int, bool) {
 }
 
 // writeCursorTranscript writes the chat as a new Claude Code transcript, so
-// Claude Code can continue it. Cursor's transcripts keep no tool results, so
-// only the conversation's text is carried over.
+// Claude Code can continue it. Cursor keeps no tool results with a chat, so
+// only the conversation's text is carried over. A transcript is written once:
+// publishClaudeTranscript never replaces one.
 func writeCursorTranscript(ctx context.Context, t transcript) (transcript, error) {
 	root := homeClaudeRoot()
-	if claudeTranscripts(root)[t.nativeID] != "" {
-		return t, errClaudeHasConversation
+	// A chat imported before, whose session has since ended, continues from
+	// the transcript written then, which holds the turns added since.
+	if path := claudeTranscripts(root)[t.nativeID]; path != "" {
+		t.harness, t.root, t.path, t.paths = domain.HarnessClaudeCode, root, path, []string{path}
+		return t, nil
 	}
 	// The Claude API takes alternating turns that open with the user.
 	var turns []Message

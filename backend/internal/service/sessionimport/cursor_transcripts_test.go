@@ -43,8 +43,17 @@ func writeCursorEditorChat(t *testing.T, cursor, folder, id, body string, nested
 	return path
 }
 
+// withoutCursorEditorState keeps a test to the transcripts, whatever the machine running it holds.
+func withoutCursorEditorState(t *testing.T) {
+	t.Helper()
+	saved := cursorEditorState
+	cursorEditorState = func() string { return "" }
+	t.Cleanup(func() { cursorEditorState = saved })
+}
+
 func TestCursorEditorChatImportsAndContinuesInClaudeCode(t *testing.T) {
 	ctx := context.Background()
+	withoutCursorEditorState(t)
 	cursor, claude, project := t.TempDir(), t.TempDir(), canonical(t.TempDir())
 	t.Setenv("CLAUDE_CONFIG_DIR", claude)
 	const (
@@ -161,6 +170,7 @@ func TestCursorEditorChatImportsAndContinuesInClaudeCode(t *testing.T) {
 }
 
 func TestCursorTranscriptWithoutQueryTagsKeepsEveryPrompt(t *testing.T) {
+	withoutCursorEditorState(t)
 	cursor, project := t.TempDir(), canonical(t.TempDir())
 	path := writeCursorEditorChat(t, cursor, project, "22222222-2222-4222-8222-222222222222", `{"role":"assistant","message":{"content":[{"type":"text","text":"Welcome back."}]}}
 {"role":"user","message":{"content":"plain prompt"}}
@@ -184,12 +194,18 @@ func TestCursorTranscriptWithoutQueryTagsKeepsEveryPrompt(t *testing.T) {
 	if err != nil || len(back.messages) != 2 || back.messages[0].Text != "plain prompt" {
 		t.Fatalf("read back = %+v, %v", back.messages, err)
 	}
-	if _, err := writeCursorTranscript(context.Background(), got); !errors.Is(err, errClaudeHasConversation) {
-		t.Fatalf("second write = %v, want errClaudeHasConversation", err)
+	// Importing it again, once its session has ended, continues the transcript written the first time.
+	if err := os.WriteFile(written.path, append(mustRead(t, written.path), []byte(`{"type":"user","sessionId":"22222222-2222-4222-8222-222222222222","message":{"role":"user","content":"continued in AO"}}`+"\n")...), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	again, err := writeCursorTranscript(context.Background(), got)
+	if err != nil || again.path != written.path || !strings.Contains(string(mustRead(t, again.path)), "continued in AO") {
+		t.Fatalf("second import = %+v, %v", again, err)
 	}
 }
 
 func TestCursorWorkspaceRecoversTheFolder(t *testing.T) {
+	withoutCursorEditorState(t)
 	cursor, base := t.TempDir(), canonical(t.TempDir())
 	dotted, dashed, plain := filepath.Join(base, "my.app"), filepath.Join(base, "my-app"), filepath.Join(base, "plain")
 	for _, dir := range []string{dotted, dashed, plain} {
@@ -198,24 +214,40 @@ func TestCursorWorkspaceRecoversTheFolder(t *testing.T) {
 		}
 	}
 	// "my.app" and "my-app" share Cursor's folder name; only the trusted path tells them apart.
-	writeFile(t, filepath.Join(cursor, "projects", cursorFolderName(dotted), ".workspace-trusted"), `{"trustedAt":"2026-06-13T03:35:00.000Z","workspacePath":"`+dotted+`"}`)
-	if got := cursorWorkspace(cursor, cursorFolderName(dotted), []string{dashed}); got != dotted {
+	trusted, err := json.Marshal(map[string]string{"trustedAt": "2026-06-13T03:35:00.000Z", "workspacePath": dotted})
+	if err != nil {
+		t.Fatal(err)
+	}
+	writeFile(t, filepath.Join(cursor, "projects", cursorFolderName(dotted), ".workspace-trusted"), string(trusted))
+	if got := cursorWorkspace(cursor, cursorFolderName(dotted), []string{dashed}, nil); got != dotted {
 		t.Fatalf("trusted = %q, want %q", got, dotted)
 	}
-	if got := cursorWorkspace(cursor, cursorFolderName(plain), []string{dashed, plain}); got != plain {
+	if got := cursorWorkspace(cursor, cursorFolderName(plain), []string{dashed, plain}, nil); got != plain {
 		t.Fatalf("registered = %q, want %q", got, plain)
 	}
 	// With no record of the folder, the name is read as a path when that path exists.
 	if spelled := strings.ReplaceAll(strings.Trim(plain, "/"), "/", "-"); spelled == cursorFolderName(plain) {
-		if got := cursorWorkspace(cursor, spelled, nil); got != plain {
+		if got := cursorWorkspace(cursor, spelled, nil, nil); got != plain {
 			t.Fatalf("spelled = %q, want %q", got, plain)
 		}
 	}
 	// Two registered projects with one folder name and no trusted path are ambiguous.
-	if a, b := filepath.Join(base, "x-y"), filepath.Join(base, "x_y"); cursorWorkspace(cursor, cursorFolderName(a), []string{a, b}) != "" {
-		t.Fatal("two registered projects named alike chose one")
+	// Two registered projects named alike choose neither, nor the folder the name spells.
+	if err := os.MkdirAll(filepath.Join(base, "x", "y"), 0o700); err != nil {
+		t.Fatal(err)
 	}
-	if got := cursorWorkspace(cursor, "Users-nobody-gone", nil); got != "" {
+	a, b := filepath.Join(base, "x-y"), filepath.Join(base, "x_y")
+	if cursorWorkspace(cursor, cursorFolderName(a), []string{a, b}, nil) != "" {
+		t.Fatal("two registered projects named alike chose a folder")
+	}
+	// The editor's chat list settles it, when that folder exists.
+	if err := os.MkdirAll(b, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if got := cursorWorkspace(cursor, cursorFolderName(a), []string{a, b}, func() string { return b }); got != b {
+		t.Fatalf("recorded = %q, want %q", got, b)
+	}
+	if got := cursorWorkspace(cursor, "Users-nobody-gone", nil, nil); got != "" {
 		t.Fatalf("missing = %q, want none", got)
 	}
 	// A transcript whose folder cannot be recovered is not offered.
@@ -223,6 +255,15 @@ func TestCursorWorkspaceRecoversTheFolder(t *testing.T) {
 	if _, err := readCursorTranscriptFile(context.Background(), cursor, nil, path); !errors.Is(err, errNoReadableConversation) {
 		t.Fatalf("read = %v, want errNoReadableConversation", err)
 	}
+}
+
+func mustRead(t *testing.T, path string) []byte {
+	t.Helper()
+	body, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return body
 }
 
 func TestCursorFolderNameMatchesCursor(t *testing.T) {
