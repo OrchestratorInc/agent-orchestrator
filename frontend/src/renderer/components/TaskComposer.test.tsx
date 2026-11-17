@@ -17,6 +17,7 @@ const h = vi.hoisted(() => ({
 	ensureReadiness: vi.fn(),
 	ensureTargetedReadiness: vi.fn(),
 	standaloneTimedOut: false,
+	standaloneRetrying: false,
 	standaloneRetry: vi.fn(),
 	agentValues: [] as string[],
 	agentCatalog: undefined as { agents: ReturnType<typeof import("../test/agent-readiness-fixtures").agentReadiness>[] } | undefined,
@@ -57,7 +58,7 @@ vi.mock("../hooks/useAgentReadinessQuery", async (importOriginal) => {
 		ensureAgentReadiness: h.ensureTargetedReadiness,
 		useAgentReadinessQuery: () => ({ data: h.agentCatalog, isFetching: false, isSuccess: h.agentCatalog !== undefined }),
 		useEnsureAgentReadiness: h.ensureReadiness,
-		useStandaloneAgentReadiness: () => ({ timedOut: h.standaloneTimedOut, retrying: false, retry: h.standaloneRetry }),
+		useStandaloneAgentReadiness: () => ({ timedOut: h.standaloneTimedOut, retrying: h.standaloneRetrying, retry: h.standaloneRetry }),
 	};
 });
 
@@ -237,6 +238,7 @@ async function waitForTaskReady() {
 
 beforeEach(() => {
 	h.standaloneTimedOut = false;
+	h.standaloneRetrying = false;
 	h.standaloneRetry.mockReset();
 	h.realPermissionDiscovery = false;
 	useUiStore.setState({ developerMode: true, remoteHosts: true });
@@ -533,6 +535,16 @@ describe("TaskComposer", () => {
 		fireEvent.click(startTask());
 		await waitFor(() => expect(onCreated).toHaveBeenCalledWith("recovered"));
 		expect(h.post.mock.calls.filter(([path]) => path === "/api/v1/sessions")).toHaveLength(1);
+	});
+
+	it("keeps Send blocked while Retry verifies an older cached rejection", async () => {
+		window.localStorage.setItem("ao.taskComposer.preferences.v1", JSON.stringify({ __standalone__: { lastAgent: "codex", agents: {} } }));
+		h.agentCatalog = { agents: [agentReadiness("codex", "Codex", { authentication: "unauthorized" })] };
+		h.standaloneRetrying = true;
+		render(<Wrap><TaskComposer projectId="__standalone__" onCreated={vi.fn()} /></Wrap>);
+		expect(await screen.findByText("Checking Codex…")).toBeInTheDocument();
+		expect(startTask()).toBeDisabled();
+		expect(screen.queryByText("Sign in to Codex to continue.")).not.toBeInTheDocument();
 	});
 
 	it("offers Retry after inconclusive startup and preserves an explicit replacement", async () => {

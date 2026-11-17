@@ -2,6 +2,7 @@ package agent
 
 import (
 	"context"
+	"os"
 	"path/filepath"
 	"testing"
 	"time"
@@ -10,6 +11,68 @@ import (
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
 	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
 )
+
+func TestCodexStartupReadinessUsesNativeLoginAfterAccountSyncFails(t *testing.T) {
+	for _, status := range []ports.AgentAuthStatus{ports.AgentAuthStatusAuthorized, ports.AgentAuthStatusUnauthorized, ports.AgentAuthStatusUnknown} {
+		t.Run(string(status), func(t *testing.T) {
+			t.Setenv("CODEX_HOME", t.TempDir())
+			root := t.TempDir()
+			// Reproduce account_storage_unsafe without changing any real ACLs or
+			// credentials: AO cannot reconcile through a non-directory home.
+			global := filepath.Join(root, "global")
+			if err := os.WriteFile(global, []byte("not a directory"), 0o600); err != nil {
+				t.Fatal(err)
+			}
+			ctx, cancel := context.WithCancel(context.Background())
+			defer cancel()
+			factory := &fakeCodexAccountFactory{capabilities: supportedCodexAccountCapabilities()}
+			svc := NewWithDeps(Deps{Context: ctx, CodexAccountRoot: filepath.Join(root, "accounts"), CodexPendingRoot: filepath.Join(root, "pending"), CodexSwitchStagingRoot: filepath.Join(root, "staging"), CodexGlobalHome: global, CodexAccounts: factory})
+			native := &readinessTestAgent{
+				resolve: func(context.Context) (string, error) { return "codex.exe", nil },
+				auth:    func(context.Context) (ports.AgentAuthStatus, error) { return status, nil },
+			}
+			item := readinessHarness("codex", "Codex", native)
+			svc.readiness = newReadinessCoordinator(readinessCoordinatorConfig{
+				Context: ctx, Agents: []agentregistry.HarnessAgent{item},
+				Factory:             func() []agentregistry.HarnessAgent { return []agentregistry.HarnessAgent{item} },
+				AuthenticationCheck: svc.authenticationWithAccount,
+			})
+			<-svc.WarmReadiness()
+			if native.authCalls.Load() != 0 {
+				t.Fatal("pending reconciliation must not be treated as a native rejection")
+			}
+			svc.WarmCodexAccounts()
+			deadline := time.Now().Add(2 * time.Second)
+			for {
+				cached, err := svc.CachedReadiness(ctx)
+				if err != nil {
+					t.Fatal(err)
+				}
+				if native.authCalls.Load() > 0 && cached.Agents[0].Authentication.State == domain.AgentAuthenticationState(status) && cached.Agents[0].Authentication.ReasonCode != domain.AgentReadinessReasonNotChecked {
+					break
+				}
+				if time.Now().After(deadline) {
+					t.Fatalf("startup never used native login: %#v", cached.Agents[0])
+				}
+				time.Sleep(time.Millisecond)
+			}
+			accounts, err := svc.CachedCodexAccounts(ctx)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if accounts.DeviceReconciliation.Status != domain.CodexDeviceReconciliationBlocked || accounts.DeviceReconciliation.ReasonCode != "account_storage_unsafe" || accounts.DeviceReconciliation.ActiveAccountVerified {
+				t.Fatalf("native fallback must not bypass account-file safety: %#v", accounts.DeviceReconciliation)
+			}
+			before := native.authCalls.Load()
+			for range 10 {
+				_, _ = svc.CachedReadiness(ctx)
+			}
+			if native.authCalls.Load() != before {
+				t.Fatal("cached reads repeated native work")
+			}
+		})
+	}
+}
 
 func TestCodexStartupReadinessRecoversAfterPendingDeviceSync(t *testing.T) {
 	t.Setenv("CODEX_HOME", t.TempDir())

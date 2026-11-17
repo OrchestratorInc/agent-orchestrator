@@ -112,13 +112,16 @@ func (s *Service) structuredCodexAuthenticationRecord(ctx context.Context, agent
 		// readiness path instead of treating that as proof Codex is signed out.
 		return domain.AgentAuthenticationObservation{}, none, false
 	}
-	if purpose == domain.AgentReadinessPurposeLaunch {
-		s.codexAccounts.mu.Lock()
-		verified := s.codexAccounts.reconciliation.Status == domain.CodexDeviceReconciliationVerified
-		s.codexAccounts.mu.Unlock()
-		if !verified {
-			return domain.AgentAuthenticationObservation{}, none, false
-		}
+	s.codexAccounts.mu.Lock()
+	status := s.codexAccounts.reconciliation.Status
+	s.codexAccounts.mu.Unlock()
+	// Account-file synchronization is optional for ordinary CLI use. A settled
+	// failure must not leave startup display readiness pending forever while a
+	// manual launch/probe can verify the same login through Codex itself. Keep
+	// pending discovery and account switching fenced; never relax file safety.
+	syncFailed := status == domain.CodexDeviceReconciliationBlocked || status == domain.CodexDeviceReconciliationTemporarilyUnavailable
+	if status != domain.CodexDeviceReconciliationVerified && (purpose == domain.AgentReadinessPurposeLaunch || (syncFailed && !s.CodexAccountSwitchInProgress())) {
+		return domain.AgentAuthenticationObservation{}, none, false
 	}
 	id := s.codexAccounts.activeAccountID()
 	if id == "" {

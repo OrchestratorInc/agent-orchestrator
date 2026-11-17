@@ -580,6 +580,7 @@ export function useTaskLaunch({ projectId, hostId }: {
 		? !standaloneReadiness || isPendingAgent(standaloneReadiness)
 		: !agentCatalog || agentCatalog.agents.some(isPendingAgent));
 	const standaloneRecovery = useStandaloneAgentReadiness(selectedAgent, standalonePending, isLocalStandalone);
+	const standaloneChecking = standalonePending || standaloneRecovery.retrying;
 	// The connection a cloud task with this agent runs on; its catalog follows it.
 	const selectedCloudConnection = isCloudProject
 		? cloudConnectionsQuery.data?.find(
@@ -1053,7 +1054,7 @@ export function useTaskLaunch({ projectId, hostId }: {
 	// An omitted agent or failed permission probe must still reach daemon admission
 	// and its default-Chat-to-TUI fallback once initial discovery settles.
 	const standaloneBlockedReason = !isLocalStandalone ? undefined
-		: standalonePending ? standaloneRecovery.timedOut
+		: standaloneChecking ? standaloneRecovery.timedOut
 			? selectedAgent ? t("newTask.agentReadinessUnconfirmed", { agent: selectedAgentLabel, defaultValue: "Couldn’t confirm {{agent}} is ready" })
 				: t("newTask.agentsReadinessUnconfirmed", { defaultValue: "Couldn’t confirm an agent is ready" })
 			: selectedAgent ? t("newTask.checkingAgent", { agent: selectedAgentLabel, defaultValue: "Checking {{agent}}…" })
@@ -1065,11 +1066,11 @@ export function useTaskLaunch({ projectId, hostId }: {
 		: undefined;
 	const readinessNotice = standaloneBlockedReason ? {
 		message: standaloneBlockedReason,
-		checking: standalonePending && !standaloneRecovery.timedOut,
+		checking: standaloneChecking && !standaloneRecovery.timedOut,
 		action: standaloneRecovery.timedOut ? {
 			label: t("newTask.modelNotice.retry"),
 			onClick: standaloneRecovery.retry,
-		} : !standalonePending ? {
+		} : !standaloneChecking ? {
 			label: t("newTask.openHarnessSettings"),
 			onClick: () => openGlobalSettings("harness", { focusAgentId: selectedAgent, harnessView: "local", preserveProject: true }),
 		} : undefined,
@@ -1093,7 +1094,7 @@ export function useTaskLaunch({ projectId, hostId }: {
 	// a cloud project must not linger as its error.
 	// Scratchpad has no project agent to fall back to. Pending local discovery
 	// has its checking notice above; only settled unavailability asks for setup.
-	const standaloneAgentError = !isCloudProject && selectedAgent === "" && !standalonePending
+	const standaloneAgentError = !isCloudProject && selectedAgent === "" && !standaloneChecking
 		? agentsQuery.error instanceof Error ? agentsQuery.error.message : agentsQuery.isSuccess ? t("newTask.noReadyAgent") : undefined
 		: isCloudProject && selectedAgent === "" && cloudConnectionsQuery.isSuccess ? t("newTask.noReadyAgent") : undefined;
 	// Scratchpad never reads a project, but its disabled query still sees an entry

@@ -2,7 +2,7 @@ import { apiErrorException } from "../lib/api-error-exception";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useQuery, useQueryClient, type QueryClient } from "@tanstack/react-query";
 import { AgentCheckError } from "../lib/agent-check-error";
-import { defaultProjectAgents, preferredAgentNeedsChecks, type ProjectAgentDefaults } from "../lib/agent-select-options";
+import { defaultProjectAgents, preferredAgentNeedsChecks, isPendingAgent, type ProjectAgentDefaults } from "../lib/agent-select-options";
 import type { components } from "../../api/schema";
 import { apiClient } from "../lib/api-client";
 import { clientForHost } from "../lib/host-clients";
@@ -103,24 +103,33 @@ export function useAgentReadinessQuery(enabled = true, hostId?: string) {
  * on every poll. The daemon continues its own work after this view leaves. */
 export function useStandaloneAgentReadiness(agentId: string, pending: boolean, enabled: boolean) {
 	const queryClient = useQueryClient();
-	const [retryRequest, setRetryRequest] = useState<{ agentId: string }>();
 	const [daemonGeneration, setDaemonGeneration] = useState(0);
+	const scope = useMemo(() => ({}), [agentId, enabled, daemonGeneration, queryClient]);
+	const [retryRequest, setRetryRequest] = useState<{ scope: object }>();
+	const [settledRetry, setSettledRetry] = useState<typeof retryRequest>();
 	const consumedRetry = useRef<typeof retryRequest>(undefined);
-	const request = useMemo(() => ({}), [agentId, pending, enabled, retryRequest, daemonGeneration, queryClient]);
+	const retrying = Boolean(enabled && retryRequest?.scope === scope && settledRetry !== retryRequest);
+	// A cached rejection may end `pending` before a fresh probe finishes. The
+	// explicit retry owns its lifetime until its normalized result is read.
+	const recovering = enabled && (pending || retrying);
+	const request = useMemo(() => ({}), [scope, recovering, retryRequest]);
 	const currentRequest = useRef(request);
 	currentRequest.current = request;
 	const [expired, setExpired] = useState<object>();
 	const retryLocked = useRef(false);
 	useEffect(() => {
-		if (!enabled || !pending) return;
+		if (!recovering) return;
 		let active = true;
 		let poll: ReturnType<typeof setTimeout> | undefined;
 		const isCurrent = () => active && currentRequest.current === request;
+		const explicitRetry = retryRequest?.scope === scope && consumedRetry.current !== retryRequest;
+		retryLocked.current = explicitRetry;
 		const timeout = setTimeout(() => {
 			if (!isCurrent()) return;
 			active = false;
 			clearTimeout(poll);
 			retryLocked.current = false;
+			if (explicitRetry) setSettledRetry(retryRequest);
 			setExpired(request);
 		}, 60_000);
 		// The supervisor removes the local snapshot when daemon identity changes,
@@ -136,18 +145,32 @@ export function useStandaloneAgentReadiness(agentId: string, pending: boolean, e
 		const read = async () => {
 			try {
 				const next = await fetchAgentReadiness();
-				if (isCurrent()) cacheAgentReadiness(queryClient, next);
+				if (isCurrent()) {
+					cacheAgentReadiness(queryClient, next);
+					if (explicitRetry) {
+						retryLocked.current = false;
+						setSettledRetry(retryRequest);
+					}
+				}
 			} catch { /* A transient transport error can recover on the next cached read. */ }
 			if (isCurrent()) poll = setTimeout(() => void read(), 2_000);
 		};
 		const start = async () => {
 			try {
-				if (retryRequest && consumedRetry.current !== retryRequest && retryRequest.agentId === agentId && agentId) {
+				if (explicitRetry) {
 					consumedRetry.current = retryRequest;
-					const { error, response } = await apiClient.POST("/api/v1/agents/{agent}/probe", {
-						params: { path: { agent: agentId } },
-					});
-					if (error) throw new AgentCheckError("Readiness refresh", error, response?.status);
+					// Fresh profiles may have no selected agent until discovery settles.
+					// Probe the installed pending candidates without changing the pick.
+					const targets = agentId ? [agentId] : (await fetchAgentReadiness()).agents
+						.filter((agent) => agent.installation.state === "installed" && (isPendingAgent(agent) || agent.authentication.state === "unauthorized"))
+						.map((agent) => agent.id);
+					for (const target of targets) {
+						if (!isCurrent()) return;
+						try {
+							const { error, response } = await apiClient.POST("/api/v1/agents/{agent}/probe", { params: { path: { agent: target } } });
+							if (error) throw new AgentCheckError("Readiness refresh", error, response?.status);
+						} catch { /* Still check other candidates after an individual failure. */ }
+					}
 				} else {
 					const next = await ensureAgentReadiness(agentId ? [agentId] : [], "display");
 					if (isCurrent()) cacheAgentReadiness(queryClient, next);
@@ -155,12 +178,15 @@ export function useStandaloneAgentReadiness(agentId: string, pending: boolean, e
 			} catch { /* Cached polling still observes daemon-owned recovery. */ }
 			finally {
 				if (isCurrent()) {
-					retryLocked.current = false;
+					// Do not let an earlier cached GET cancel the probe. Its final read
+					// also normalizes the legacy probe response before enabling Send.
+					if (explicitRetry) await read();
+					else retryLocked.current = false;
 				}
 			}
 		};
 		void start();
-		void read();
+		if (!explicitRetry) void read();
 		return () => {
 			active = false;
 			unsubscribe();
@@ -168,13 +194,13 @@ export function useStandaloneAgentReadiness(agentId: string, pending: boolean, e
 			clearTimeout(poll);
 			retryLocked.current = false;
 		};
-	}, [agentId, retryRequest, enabled, pending, queryClient, request]);
+	}, [agentId, retryRequest, recovering, queryClient, request, scope]);
 	const retry = useCallback(() => {
-		if (retryLocked.current) return;
+		if (!enabled || retryLocked.current) return;
 		retryLocked.current = true;
-		setRetryRequest({ agentId });
-	}, [agentId]);
-	return { timedOut: enabled && pending && expired === request, retry };
+		setRetryRequest({ scope });
+	}, [enabled, scope]);
+	return { timedOut: enabled && pending && expired === request, retrying: retrying && expired !== request, retry };
 }
 
 export function useEnsureAgentReadiness({
