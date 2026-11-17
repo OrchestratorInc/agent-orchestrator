@@ -42,7 +42,10 @@ var copilotTokenEnvVars = []string{
 
 // copilotLocalAuthStatus follows Copilot CLI's own credential order: token
 // environment variables first (one silently overrides a stored login), then
-// Copilot's stored login, then the GitHub CLI. A BYOK provider is the fallback.
+// Copilot's stored credentials, the GitHub CLI, and a BYOK provider. A stored
+// login record is account metadata rather than a verified credential, so it is
+// only a fallback: a signed-in GitHub CLI or a BYOK provider still reports
+// authorized instead of being hidden behind it.
 func copilotLocalAuthStatus(ctx context.Context) (ports.AgentAuthStatus, bool, error) {
 	if err := ctx.Err(); err != nil {
 		return ports.AgentAuthStatusUnknown, false, err
@@ -54,7 +57,7 @@ func copilotLocalAuthStatus(ctx context.Context) (ports.AgentAuthStatus, bool, e
 		}
 	}
 	status, ok, err := copilotStoredAuthStatus(ctx)
-	if err == nil && ok && status.HasCredential() {
+	if err == nil && ok && status == ports.AgentAuthStatusAuthorized {
 		return status, true, nil
 	}
 	if copilotBYOKConfigured() {
@@ -77,12 +80,19 @@ func copilotStoredAuthStatus(ctx context.Context) (ports.AgentAuthStatus, bool, 
 	// config file must not prevent the documented GitHub CLI token fallback.
 	configPath := filepath.Join(copilotHomeDir(home), "config.json")
 	configStatus, configOK, _ := copilotConfigAuthStatus(configPath)
-	if configOK {
+	if configOK && configStatus == ports.AgentAuthStatusAuthorized {
 		ports.RecordAuthEvidence(ctx, authprobe.FileSource(configPath).WithMethod(domain.AgentAccountMethodAccount))
 		return configStatus, true, nil
 	}
+	// A recorded login is account metadata, not a verified credential, so the
+	// GitHub CLI still gets to prove an authorization before that login is
+	// reported as merely configured.
 	if status, ok, err := copilotGHAuthStatus(ctx); err != nil || ok {
 		return status, ok, err
+	}
+	if configOK {
+		ports.RecordAuthEvidence(ctx, authprobe.FileSource(configPath).WithMethod(domain.AgentAccountMethodAccount))
+		return configStatus, true, nil
 	}
 	return ports.AgentAuthStatusUnknown, false, nil
 }

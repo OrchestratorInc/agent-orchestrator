@@ -9,6 +9,7 @@ import (
 	"testing"
 
 	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/agent/authprobe"
+	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
 	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
 )
 
@@ -221,6 +222,72 @@ func TestCopilotLocalAuthStatusFallsBackToGHFromUnterminatedBlockComment(t *test
 	}
 	if !ok || status != ports.AgentAuthStatusAuthorized {
 		t.Fatalf("status = (%q, %v), want (%q, true)", status, ok, ports.AgentAuthStatusAuthorized)
+	}
+}
+
+// A config login record is account metadata, so a GitHub CLI that can prove a
+// token still reports authorized instead of being hidden behind "configured".
+func TestCopilotLocalAuthStatusPrefersGHTokenOverStoredLogin(t *testing.T) {
+	clearCopilotAuthProbeEnv(t)
+	dir := t.TempDir()
+	t.Setenv("COPILOT_HOME", dir)
+	config := "{\n  // Copilot configuration comment\n  \"loggedInUsers\": [{\"host\": \"github.com\", \"login\": \"example-user\"}]\n}"
+	if err := os.WriteFile(filepath.Join(dir, "config.json"), []byte(config), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	previous := authprobe.CmdRunner
+	t.Cleanup(func() { authprobe.CmdRunner = previous })
+	authprobe.CmdRunner = func(_ context.Context, name string, args ...string) ([]byte, error) {
+		if name != "gh" || !reflect.DeepEqual(args, []string{"auth", "token"}) {
+			return nil, errors.New("unexpected auth probe command")
+		}
+		return []byte("gho_test-token"), nil
+	}
+
+	ctx, evidence := ports.WithAuthEvidence(context.Background())
+	status, ok, err := copilotLocalAuthStatus(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !ok || status != ports.AgentAuthStatusAuthorized {
+		t.Fatalf("status = (%q, %v), want (%q, true)", status, ok, ports.AgentAuthStatusAuthorized)
+	}
+	if got, want := evidence.Identity().Source, domain.CommandSource("gh", "auth", "token").Source; got != want {
+		t.Fatalf("evidence source = %q, want %q", got, want)
+	}
+}
+
+// A BYOK provider is a usable configuration, so a stored Copilot login must not
+// hide it from readiness either.
+func TestCopilotLocalAuthStatusPrefersBYOKOverStoredLogin(t *testing.T) {
+	clearCopilotAuthProbeEnv(t)
+	dir := t.TempDir()
+	t.Setenv("COPILOT_HOME", dir)
+	config := "{\n  // Copilot configuration comment\n  \"loggedInUsers\": [{\"host\": \"github.com\", \"login\": \"example-user\"}]\n}"
+	if err := os.WriteFile(filepath.Join(dir, "config.json"), []byte(config), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("COPILOT_PROVIDER_BASE_URL", "http://localhost:11434")
+	t.Setenv("COPILOT_MODEL", "llama3.2")
+
+	previous := authprobe.CmdRunner
+	t.Cleanup(func() { authprobe.CmdRunner = previous })
+	authprobe.CmdRunner = func(context.Context, string, ...string) ([]byte, error) {
+		return nil, errors.New("gh: not logged in")
+	}
+
+	ctx, evidence := ports.WithAuthEvidence(context.Background())
+	status, ok, err := copilotLocalAuthStatus(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !ok || status != ports.AgentAuthStatusAuthorized {
+		t.Fatalf("status = (%q, %v), want (%q, true)", status, ok, ports.AgentAuthStatusAuthorized)
+	}
+	want := domain.EnvironmentSource("COPILOT_PROVIDER_BASE_URL")
+	if got := evidence.Identity(); got != want {
+		t.Fatalf("evidence = %+v, want %+v", got, want)
 	}
 }
 
