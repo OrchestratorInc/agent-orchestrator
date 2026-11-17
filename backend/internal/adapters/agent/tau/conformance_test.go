@@ -39,6 +39,8 @@ type conformanceEvent struct {
 	Payload struct {
 		SessionID string `json:"session_id"`
 		Prompt    string `json:"prompt"`
+		// LastAssistantMessage is the turn's final answer for AO history.
+		LastAssistantMessage string `json:"last_assistant_message"`
 	} `json:"payload"`
 }
 
@@ -168,7 +170,9 @@ max_tokens = 1024
 	if accepted.Payload.Prompt != initialTask {
 		t.Fatalf("native accepted task changed: %q", accepted.Payload.Prompt)
 	}
-	waitConformanceEvent(t, hookLog, "stop", 1, first)
+	if stopped := waitConformanceEvent(t, hookLog, "stop", 1, first); stopped.Payload.LastAssistantMessage != "AO fake response" {
+		t.Fatalf("native stop final answer = %q", stopped.Payload.LastAssistantMessage)
+	}
 	first.stop() // SIGKILL: prove restore does not rely on a graceful quit hook.
 
 	// After Kill, core rebuilds the private instructions into the same file.
