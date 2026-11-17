@@ -2,7 +2,7 @@ import { useEffect, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { RotateCcw } from "@/components/app-icons";
 import { useReopenShellTerminal, type ShellTerminal } from "../hooks/useShellTerminals";
-import { apiErrorMessage } from "../lib/api-client";
+import { apiErrorCode, apiErrorMessage } from "../lib/api-client";
 import type { HostId } from "../lib/hosts";
 import { Button } from "./ui/button";
 
@@ -44,8 +44,9 @@ export function EndedShellTerminal({ shell, hostId }: { shell: ShellTerminal; ho
 					type="button"
 					variant="primary"
 					onClick={() => {
+						const resumeAgent = Boolean(resumeHarness) && !apiErrorCode(error)?.startsWith("SHELL_TERMINAL_AGENT_");
 						setError(undefined);
-						mutateAsync({ handleId }).catch(setError);
+						mutateAsync({ handleId, ...(resumeAgent ? { resumeAgent: true } : {}) }).catch(setError);
 					}}
 				>
 					<RotateCcw className="size-icon-base" aria-hidden="true" />

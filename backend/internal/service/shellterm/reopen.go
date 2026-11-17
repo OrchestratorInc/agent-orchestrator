@@ -76,15 +76,18 @@ func (s *Service) ReopenShellTerminal(ctx context.Context, in ReopenShellTermina
 			return ShellTerminal{}, apierr.Invalid("SHELL_TERMINAL_AGENT_NOT_RESUMABLE",
 				"No agent that Orchestrator can resume was seen in this terminal", nil)
 		}
-		resumeCommand = agentResumeCommand(resumedHarness, rec.AgentConversationID)
 	}
 
-	workingDir, projectID := rec.WorkingDir, rec.ProjectID
+	workingDir, projectID, conversationID := rec.WorkingDir, rec.ProjectID, rec.AgentConversationID
 	if info, statErr := os.Stat(workingDir); statErr != nil || !info.IsDir() {
 		workingDir, projectID, err = s.resolveShellTerminalWorkingDir(ctx, rec.ProjectID, rec.SessionID)
 		if err != nil {
 			return ShellTerminal{}, err
 		}
+		conversationID = ""
+	}
+	if resumedHarness != "" {
+		resumeCommand = agentResumeCommand(resumedHarness, conversationID)
 	}
 	var projectEnv map[string]string
 	if projectID != "" {

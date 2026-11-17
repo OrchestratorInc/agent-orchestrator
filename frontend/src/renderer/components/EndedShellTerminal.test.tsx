@@ -70,6 +70,14 @@ describe("EndedShellTerminal", () => {
 		expect(postMock.mock.calls[1][1].body).not.toHaveProperty("resumeAgent");
 	});
 
+	it("retries the agent resume after a failure that was not about the agent", async () => {
+		postMock.mockResolvedValueOnce({ error: { code: "INTERNAL", message: "Daemon busy" } });
+		renderPane({ ...ended, handleId: "shellterm-transient", resumeHarness: "claude-code" });
+		fireEvent.click(await screen.findByRole("button", { name: "Reopen terminal" }));
+		await waitFor(() => expect(postMock).toHaveBeenCalledTimes(2));
+		expect(postMock.mock.calls[1][1].body).toMatchObject({ resumeAgent: true });
+	});
+
 	it("tells a pane remounted while the restore is pending that it failed", async () => {
 		let fail!: (result: object) => void;
 		postMock.mockReturnValueOnce(new Promise((resolve) => (fail = resolve)));

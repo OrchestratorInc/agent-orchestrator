@@ -84,7 +84,7 @@ func reopenTestService(t *testing.T, rt *fakeShellRuntime, st *fakeShellTerminal
 
 func TestRuntimeLossKeepsSessionShellAsEndedTab(t *testing.T) {
 	ctx := context.Background()
-	rt := newFakeShellRuntime() // no host for the handle: conclusively not alive
+	rt := newFakeShellRuntime()
 	rec := sessionShell("ptyhost-v1:shellterm-a")
 	rec.LastAgentHarness = domain.HarnessClaudeCode
 	st := &fakeShellTerminalStore{records: []ShellTerminalRecord{rec}}
@@ -340,7 +340,7 @@ func (r *recordingTracker) UntrackShellTerminal(handleID string) {
 
 func TestEndingShellForgetsInputTimestamp(t *testing.T) {
 	ctx := context.Background()
-	rt := newFakeShellRuntime() // host gone
+	rt := newFakeShellRuntime()
 	st := &fakeShellTerminalStore{records: []ShellTerminalRecord{sessionShell("shellterm-a")}}
 	svc := newTestService(rt, st, &fakeProjectRootLocator{})
 	forgetter := &fakeTerminalInputForgetter{}
@@ -372,7 +372,7 @@ func TestEndingShellForgetsInputTimestamp(t *testing.T) {
 
 func TestEndedStateNotReportedUntilStored(t *testing.T) {
 	ctx := context.Background()
-	rt := newFakeShellRuntime() // the host is gone
+	rt := newFakeShellRuntime()
 	st := &fakeShellTerminalStore{records: []ShellTerminalRecord{sessionShell("shellterm-a")}, markEndedErr: errors.New("disk busy")}
 	svc := newTestService(rt, st, &fakeProjectRootLocator{})
 
@@ -517,6 +517,32 @@ func TestReopenRestoresSavedOutputAndExactConversation(t *testing.T) {
 	}
 }
 
+func TestReopenInFallbackFolderOpensConversationPicker(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("POSIX shell delivery")
+	}
+	t.Setenv("SHELL", "/bin/bash")
+	rt := newFakeShellRuntime()
+	rt.cueReady = true
+	workspace := t.TempDir()
+	ended := endedSessionShell("shellterm-old", domain.HarnessClaudeCode)
+	ended.WorkingDir = filepath.Join(t.TempDir(), "removed")
+	ended.AgentConversationID = "0f8c2b9e-3c1a-4d5e-9f00-1a2b3c4d5e6f"
+	st := &fakeShellTerminalStore{records: []ShellTerminalRecord{ended}}
+	svc := reopenTestService(t, rt, st, workspace)
+	if _, err := svc.ReopenShellTerminal(context.Background(), ReopenShellTerminalInput{HandleID: "shellterm-old", ResumeAgent: true}); err != nil {
+		t.Fatalf("ReopenShellTerminal: %v", err)
+	}
+	select {
+	case sent := <-rt.sentCh:
+		if !strings.Contains(sent.payload, "claude --resume") || strings.Contains(sent.payload, ended.AgentConversationID) {
+			t.Fatalf("sent = %+v, want the picker in the fallback folder", sent)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("resume command was not delivered")
+	}
+}
+
 func TestAgentResumeCommand(t *testing.T) {
 	const id = "0f8c2b9e-3c1a-4d5e-9f00-1a2b3c4d5e6f"
 	for _, tc := range []struct {
@@ -545,7 +571,7 @@ func TestListDoesNotPruneShellEndedBySuspension(t *testing.T) {
 	at := time.Date(2026, 11, 16, 9, 0, 0, 0, time.UTC)
 	saved.EndedAt = &at
 
-	rt := newFakeShellRuntime() // the quit already destroyed the host
+	rt := newFakeShellRuntime()
 	st := &fakeShellTerminalStore{records: []ShellTerminalRecord{saved}, staleRestorable: []ShellTerminalRecord{live}}
 	svc := newTestService(rt, st, &fakeProjectRootLocator{})
 	listed, err := svc.ListShellTerminalsForCurrentAppRun(ctx)

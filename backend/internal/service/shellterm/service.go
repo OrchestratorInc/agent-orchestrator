@@ -113,8 +113,8 @@ type Service struct {
 	// hasn't run yet.
 	onSessionGateWait func(domain.SessionID)
 
-	trackers   []TerminalTracker     // set once at boot
-	foreground ShellForegroundReader // set once at boot; nil saves no agent or folder
+	trackers   []TerminalTracker // set once at boot
+	foreground ShellForegroundReader
 }
 
 // TerminalTracker follows user shells as they open and close: the agent

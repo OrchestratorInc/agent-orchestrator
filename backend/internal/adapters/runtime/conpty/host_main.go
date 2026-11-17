@@ -123,6 +123,6 @@ func readReplay(path string) ([]byte, error) {
 	if err != nil {
 		return nil, err
 	}
-	defer func() { _ = f.Close() }() // read-only: a close error loses nothing
+	defer func() { _ = f.Close() }()
 	return io.ReadAll(io.LimitReader(f, MaxOutputBytes))
 }
