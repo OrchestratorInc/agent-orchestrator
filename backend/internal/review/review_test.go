@@ -2140,7 +2140,7 @@ func TestTriggerConfigOverrideRollbackUpsertFailureKeepsReplacementHandleTracked
 	store := &fakeStore{
 		review:        &domain.Review{ID: "rev-1", SessionID: "mer-1", Harness: domain.ReviewerClaudeCode, ReviewerHandleID: "review-mer-1", AgentSessionID: "native-reviewer-1"},
 		upsertErr:     errors.New("rollback failed"),
-		upsertErrCall: 4,
+		upsertErrCall: 5,
 		runs: []domain.ReviewRun{{
 			ID: "run-1", SessionID: "mer-1", PRURL: "https://github.com/o/r/pull/1", TargetSHA: "sha1",
 			Harness: domain.ReviewerClaudeCode,
@@ -2191,7 +2191,7 @@ func TestTriggerConfigOverrideFinalUpsertFailurePreservesStoredReviewerHandle(t 
 	store := &fakeStore{
 		review:        &domain.Review{ID: "rev-1", SessionID: "mer-1", Harness: domain.ReviewerClaudeCode, ReviewerHandleID: "review-mer-1", AgentSessionID: "native-reviewer-1"},
 		upsertErr:     errors.New("write failed"),
-		upsertErrCall: 3,
+		upsertErrCall: 4,
 		runs: []domain.ReviewRun{{
 			ID: "run-1", SessionID: "mer-1", PRURL: "https://github.com/o/r/pull/1", TargetSHA: "sha1",
 			Harness: domain.ReviewerClaudeCode,
@@ -2680,6 +2680,93 @@ func TestAutoTriggerWaitsForNewCommitAfterCancelledRun(t *testing.T) {
 	}
 	if res.Created || len(store.runs) != 1 || launcher.spawned || launcher.notified {
 		t.Fatalf("cancelled auto-review reran unchanged head: result=%+v launcher=%+v runs=%+v", res, launcher, store.runs)
+	}
+}
+
+func TestAutoTriggerSkipsDraftPR(t *testing.T) {
+	store := &fakeStore{}
+	launcher := &fakeLauncher{handle: "review-mer-1"}
+	prs := prAt("sha1")
+	prs.prs[0].Draft = true
+	eng := newEngineForTest(store, fakeSessions{rec: liveWorker(), ok: true}, prs, fakeProjects{}, launcher)
+
+	res, err := triggerWithSource(context.Background(), eng, "mer-1", domain.ReviewerClaudeCode, domain.AgentConfig{}, domain.ReviewTriggerAuto)
+	if err != nil {
+		t.Fatalf("TriggerWithSource: %v", err)
+	}
+	if res.Created || len(store.runs) != 0 || launcher.spawned {
+		t.Fatalf("auto-review started on a draft PR: result=%+v launcher=%+v runs=%+v", res, launcher, store.runs)
+	}
+}
+
+func TestAutoTriggerWithNoRunKeepsReviewerActivity(t *testing.T) {
+	for _, tc := range []struct {
+		name     string
+		activity domain.ActivityState
+	}{
+		{name: "idle", activity: domain.ActivityIdle},
+		// Rows that predate the reviewer activity column carry an empty state.
+		{name: "empty", activity: ""},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			ctx := context.Background()
+			st := newSQLiteReviewStore(t)
+			worker := liveWorker()
+			seedReviewWorker(t, st, worker)
+			now := time.Now().UTC().Truncate(time.Second)
+			if err := st.UpsertReview(ctx, domain.Review{
+				ID:                    "rev-1",
+				SessionID:             worker.ID,
+				ProjectID:             worker.ProjectID,
+				Harness:               domain.ReviewerClaudeCode,
+				ReviewerHandleID:      "review-mer-1",
+				AgentSessionID:        "native-reviewer-1",
+				ReviewerLaunchID:      "launch-1",
+				ReviewerActivityState: tc.activity,
+				CreatedAt:             now,
+				UpdatedAt:             now,
+			}); err != nil {
+				t.Fatalf("upsert existing review: %v", err)
+			}
+			launcher := &fakeLauncher{handle: "review-mer-1"}
+			prs := prAt("sha1")
+			prs.prs[0].Draft = true
+			eng := newEngineForTest(st, fakeSessions{rec: worker, ok: true}, prs, fakeProjects{}, launcher)
+
+			res, err := triggerWithSource(ctx, eng, worker.ID, domain.ReviewerClaudeCode, domain.AgentConfig{}, domain.ReviewTriggerAuto)
+			if err != nil {
+				t.Fatalf("TriggerWithSource: %v", err)
+			}
+			if res.Created || launcher.spawned {
+				t.Fatalf("auto-review started on a draft PR: result=%+v launcher=%+v", res, launcher)
+			}
+			got, ok, err := st.GetReviewBySessionAndHarness(ctx, worker.ID, domain.ReviewerClaudeCode)
+			if err != nil || !ok {
+				t.Fatalf("get review: ok=%v err=%v", ok, err)
+			}
+			if got.ReviewerActivityState != tc.activity {
+				t.Fatalf("reviewer activity = %q after a trigger that started no run, want %q", got.ReviewerActivityState, tc.activity)
+			}
+			if got.ReviewerHandleID != "review-mer-1" || got.AgentSessionID != "native-reviewer-1" || got.ReviewerLaunchID != "launch-1" {
+				t.Fatalf("reviewer identity changed: %+v", got)
+			}
+		})
+	}
+}
+
+func TestManualTriggerStillReviewsDraftPR(t *testing.T) {
+	store := &fakeStore{}
+	launcher := &fakeLauncher{handle: "review-mer-1"}
+	prs := prAt("sha1")
+	prs.prs[0].Draft = true
+	eng := newEngineForTest(store, fakeSessions{rec: liveWorker(), ok: true}, prs, fakeProjects{}, launcher)
+
+	res, err := triggerWithSource(context.Background(), eng, "mer-1", domain.ReviewerClaudeCode, domain.AgentConfig{}, domain.ReviewTriggerManual)
+	if err != nil {
+		t.Fatalf("TriggerWithSource: %v", err)
+	}
+	if !res.Created || len(store.runs) != 1 {
+		t.Fatalf("manual review of a draft PR did not start: result=%+v runs=%+v", res, store.runs)
 	}
 }
 

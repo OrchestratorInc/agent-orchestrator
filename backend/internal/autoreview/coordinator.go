@@ -138,6 +138,12 @@ func (c *Coordinator) EvaluateSession(ctx context.Context, id domain.SessionID) 
 		case reviewcore.ReviewStateIneligible:
 			reason = ineligibleReason(prs, state.PRURL)
 		case reviewcore.ReviewStateNeedsReview:
+			// A draft is unfinished work: wait until it is marked ready for review.
+			// Manual triggers still review drafts through the engine directly.
+			if isDraftPR(prs, state.PRURL) {
+				reason = "draft_pr"
+				continue
+			}
 			if blocked := existingHeadReason(harnessRuns, state.PRURL, state.TargetSHA); blocked != "" {
 				reason = blocked
 				continue
@@ -219,6 +225,15 @@ func effectiveReviewerHarness(session domain.SessionRecord, config domain.Projec
 		return session.ReviewerHarness
 	}
 	return config.ResolveReviewerHarness(session.Harness)
+}
+
+func isDraftPR(prs []domain.PullRequest, url string) bool {
+	for _, pr := range prs {
+		if pr.URL == url {
+			return pr.Draft
+		}
+	}
+	return false
 }
 
 func ineligibleReason(prs []domain.PullRequest, url string) string {
