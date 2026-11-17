@@ -1164,12 +1164,13 @@ export function useIndependentSideChats(
 			void saveSideChatDraft(sessionId, activeId, JSON.stringify(currentDraft), available)
 				.then(({ error: requestError }) => {
 					if (requestError) throw requestError;
+					if (available() && draftsRef.current[activeId] === currentDraft) clearSideError(activeId, "draft-save");
 					if (available()) return aoBridge.sideChats.capture();
 					return;
 				})
 				.catch((cause) => {
 					if (available())
-						setSideError({ id: activeId, message: apiErrorMessage(cause) });
+						setSideError({ id: activeId, message: apiErrorMessage(cause), kind: "draft-save" });
 				});
 		};
 		const timer = window.setTimeout(() => {
@@ -1183,7 +1184,7 @@ export function useIndependentSideChats(
 			)
 				save();
 		};
-	}, [sessionId, activeId, drafts, sendingRevision, closeRevision, operationCurrent]);
+	}, [sessionId, activeId, drafts, sendingRevision, closeRevision, operationCurrent, clearSideError]);
 
 	const cancelHandoff = useCallback(async (sideId: string) => {
 		const pending = draftsRef.current[sideId]?.pendingCommand;

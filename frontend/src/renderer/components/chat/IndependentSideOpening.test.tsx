@@ -403,7 +403,7 @@ describe("deferred side opening", () => {
 		expect(post).toHaveBeenCalledTimes(2);
 	});
 
-	it("keeps accepted recovery unlocked after a save failure and reconciles again on reload without sending", async () => {
+	it.each([false, true])("keeps accepted recovery unlocked after a save failure and reload without sending (save repaired: %s)", async repair => {
 		acceptOpening("first", "running");
 		draft = { ...emptySideChatDraft(), text: "Keep newer edits", pendingDelivery: { clientMessageId: "first", request: { text: "My first question", clientMessageId: "first" }, submitted: { text: "My first question", attachments: [], references: [] } } };
 		put.mockResolvedValue({ error: new Error("Recovery save failed") });
@@ -412,11 +412,17 @@ describe("deferred side opening", () => {
 		act(() => { chat.setQuestionDraft("side", "Editable next question"); });
 		expect(screen.getByRole("button", { name: "Send message" })).toBeEnabled();
 		expect(post).not.toHaveBeenCalled();
+		if (repair) {
+			put.mockImplementation(async (_path, options) => { draft = JSON.parse(options.body.contentJson); return {}; });
+			act(() => { chat.setQuestionDraft("side", "Saved next question"); });
+			await waitFor(() => expect(screen.queryByText("Recovery save failed")).not.toBeInTheDocument());
+			expect(draft.pendingDelivery).toBeUndefined();
+		}
 		first.unmount();
 		put.mockImplementation(async (_path, options) => { draft = JSON.parse(options.body.contentJson); return {}; });
 		render(<Harness />);
 		await waitFor(() => expect(draft.pendingDelivery).toBeUndefined());
-		expect(draft.text).toBe("Keep newer edits");
+		expect(draft.text).toBe(repair ? "Saved next question" : "Keep newer edits");
 		expect(post).not.toHaveBeenCalled();
 	});
 
