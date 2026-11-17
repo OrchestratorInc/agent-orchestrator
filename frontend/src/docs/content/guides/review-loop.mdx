@@ -49,6 +49,8 @@ Every review run always ends on its own. A run is `queued`, then `launching` whi
 
 Enable automatic review per session, or use the project `autoReview` default for future workers. It starts only for an eligible PR head while the worker is idle. In **Files**, inspect workspace or PR changes and available commits; local inspection does not automatically publish a review. The mobile review and reviewer views expose the corresponding session results.
 
+Automatic review pauses while a PR is a draft. After Orchestrator observes that it is ready, its head becomes eligible on a later sweep once the worker meets the idle gate. Explicit review triggers can still review drafts.
+
 ## Best practices
 
 - Keep the PR claimed by the worker that should act on feedback.

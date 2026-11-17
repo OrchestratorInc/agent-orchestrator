@@ -418,6 +418,15 @@ func TestMetadataHashLeavesOutPRDetails(t *testing.T) {
 	}
 }
 
+func TestMetadataHashChangesWhenDraftBecomesReadyAtSameHead(t *testing.T) {
+	draft := ports.SCMObservation{Provider: "github", Repo: "o/r", PR: ports.SCMPRObservation{URL: "u", Number: 1, HeadSHA: "sha1", Draft: true, UpdatedAtProvider: time.Unix(50, 0).UTC()}}
+	ready := draft
+	ready.PR.Draft = false
+	if metadataSemanticHash(draft) == metadataSemanticHash(ready) {
+		t.Fatal("draft readiness must change the metadata hash without a new head or provider timestamp")
+	}
+}
+
 func TestDomainFromObservationPreservesStableIdentityAndAliases(t *testing.T) {
 	oldURL := "https://github.com/old-owner/repo/pull/7"
 	currentURL := "https://github.com/new-owner/repo/pull/7"
