@@ -69,6 +69,7 @@ const APPROVAL_ORDER: ApprovalMode[] = [
 const AGY_APPROVAL_COPY: Record<ApprovalMode, { label: string; description?: string }> = {
 	...APPROVAL_COPY,
 	default: { label: "Ask for approval" },
+	auto: { label: "Auto-approve", description: "Automatically approves every tool permission request, including risky actions" },
 	"bypass-permissions": { label: "Auto-approve" },
 };
 
