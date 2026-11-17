@@ -161,6 +161,14 @@ describe("isQueryRefinement", () => {
 		["Orbit", "orbit status", true],
 		["orbit", "deploy", false],
 		["", "orbit", false],
+		// Review: an operator's value is a different filter, not a narrower one.
+		["project:alpha", "project:alpha2", false],
+		["orbit", "orbit harness:codex", false],
+		["!test", "!testing", false],
+		['"flak', '"flaky', false],
+		['"flaky test"', '"flaky test" login', true],
+		["orbit harness:codex", "orbit harness:codex sta", true],
+		["project:alpha", "project:alpha", true],
 		["orbit", "", false],
 	] as const)("%j then %j is %s", (previous, next, refines) => {
 		expect(isQueryRefinement(previous, next)).toBe(refines);

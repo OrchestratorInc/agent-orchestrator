@@ -217,16 +217,32 @@ export function pickMachineSearchRows(
 }
 
 /**
- * Whether one query only refines the other ("orb" and "orbit", either way):
- * rows found for one are plausible for the other while it loads. Rows for an
- * unrelated earlier query are not, and pressing Enter on one would open a
- * session that has nothing to do with what is typed.
+ * Whether one query only refines the other's words ("orb" and "orbit", either
+ * way, or "orbit" and "orbit status"): rows found for one are plausible for the
+ * other while it loads. Rows for an unrelated earlier query are not.
+ *
+ * Only plain words refine. Editing an operator or its value changes what the
+ * query means rather than narrowing it: `project:alpha` to `project:alpha2`
+ * is another project, `!test` to `!testing` excludes something else, and an
+ * added `harness:codex` filters out rows the shorter query found.
  */
 export function isQueryRefinement(previous: string, next: string): boolean {
 	const before = previous.trim().toLowerCase();
 	const after = next.trim().toLowerCase();
 	if (!before || !after) return false;
-	return after.startsWith(before) || before.startsWith(after);
+	if (before === after) return true;
+	const [shorter, longer] = before.length <= after.length ? [before, after] : [after, before];
+	if (!longer.startsWith(shorter)) return false;
+	// Every word the edit touched: the last word, when the edit continues it
+	// rather than starting a new one after a space, and any words it added.
+	let from = shorter.length;
+	if (!/\s/.test(longer.charAt(from))) while (from > 0 && !/\s/.test(longer.charAt(from - 1))) from--;
+	return longer.slice(from).split(/\s+/).filter(Boolean).every(isPlainSearchWord);
+}
+
+/** A word with no operator syntax: no `key:`, quote, or leading `!`, `^` or `'`. */
+function isPlainSearchWord(word: string): boolean {
+	return !/[:"]/.test(word) && !/^[!^']/.test(word);
 }
 
 /**

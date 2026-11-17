@@ -1819,6 +1819,46 @@ describe("CommandPalette session-text search", () => {
 		expect(peekSessionSearchReveal("w-fix")).toBeUndefined();
 	});
 
+	// Review: rows kept from the previous query while a slower answer loads were
+	// still picked automatically, so Enter could open a session the new query
+	// does not match.
+	it("does not open a row kept from the previous query until the new answer lands", async () => {
+		let answerFlaky2: (value: unknown) => void = () => {};
+		getMock.mockImplementation((path: string, init?: { params?: { query?: { q?: string } } }) => {
+			if (path.includes("/search/index-status")) return Promise.resolve({ data: { coverage: { state: "ready" } } });
+			if (path.includes("/search/sessions")) {
+				if (init?.params?.query?.q === "flaky2") return new Promise((resolve) => { answerFlaky2 = resolve; });
+				return Promise.resolve(searchResponse([hit]));
+			}
+			if (path === "/api/v1/conversations/search") return Promise.resolve({ data: { results: [] } });
+			return Promise.resolve({ data: {} });
+		});
+		renderPalette();
+		act(() => useUiStore.getState().setCommandPaletteOpen(true));
+		const input = await screen.findByPlaceholderText(/search sessions/i);
+		fireEvent.change(input, { target: { value: "flaky" } });
+		await screen.findByText("fix flake", {}, { timeout: 2_000 });
+
+		fireEvent.change(input, { target: { value: "flaky2" } });
+		await waitFor(() => expect(getMock.mock.calls.some(([path, init]) =>
+			path === "/api/v1/search/sessions" && (init as { params?: { query?: { q?: string } } })?.params?.query?.q === "flaky2")).toBe(true), { timeout: 2_000 });
+		// The kept row is still shown while "flaky2" loads, but Enter leaves it.
+		expect(screen.getByText("fix flake")).toBeInTheDocument();
+		fireEvent.keyDown(input, { key: "Enter" });
+		expect(navigateMock).not.toHaveBeenCalled();
+
+		await act(async () => {
+			answerFlaky2(searchResponse([{ ...hit, sessionId: "w-two", messageId: "msg-2", sessionName: "flaky two" }]));
+		});
+		await waitFor(() => {
+			const selected = document.querySelector('[cmdk-item][data-selected="true"]');
+			expect(selected?.textContent).toContain("flaky two");
+		}, { timeout: 2_000 });
+		fireEvent.keyDown(input, { key: "Enter" });
+		await waitFor(() => expect(navigateMock).toHaveBeenCalled());
+		expect(JSON.stringify(navigateMock.mock.calls.at(-1))).toContain("w-two");
+	});
+
 	it("copies the resume command on ⌘↵ instead of opening", async () => {
 		mockSearch([hit]);
 		renderPalette();

@@ -741,7 +741,12 @@ export const CommandPalette = memo(function CommandPalette() {
 		|| contentSearchQuery.isPlaceholderData
 		|| chatSearchQuery.isPlaceholderData
 		|| cloudChatSearchQuery.isPlaceholderData;
-	const autoSelectable = (item: CommandItemModel) => !item.disabled && !(searchStale && isSearchGroup(item.group));
+	// Past-session rows kept from the previous query while this one answers are
+	// shown, but not picked: they may not match what is typed now.
+	const sessionRowsStale = !sessionSearchRows.current || normalizedSessionQuery !== query.trim();
+	const autoSelectable = (item: CommandItemModel) => !item.disabled
+		&& !(searchStale && isSearchGroup(item.group))
+		&& !(sessionRowsStale && item.group === "search");
 	const value =
 		(visibleItems.some((item) => item.id === selectedValue && !item.disabled)
 			? selectedValue
