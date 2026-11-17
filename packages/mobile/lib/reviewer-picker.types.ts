@@ -112,11 +112,15 @@ function runsWith({ catalog, saved, inherited }: ReviewerModelState): string {
 	return resolveModel(catalog, isMode ? saved.mode : saved.model, isMode ? inherited.mode : inherited.model);
 }
 
-/** The first of the session's and the project's model that names one, else the catalog default. */
+/**
+ * The session's model, else the project's, else the catalog default. Like the
+ * daemon (mergeReviewerAgentConfig), any saved value wins, "default" included:
+ * that runs the agent's default, so it reads as the catalog default rather
+ * than falling through to the project's model.
+ */
 function resolveModel(catalog: ReviewerModelState["catalog"], own: string | undefined, project: string | undefined): string {
-	if (isConcreteModelID(own)) return own;
-	if (isConcreteModelID(project)) return project;
-	return catalogDefaultModel(catalog);
+	const chosen = own || project;
+	return isConcreteModelID(chosen) ? chosen : catalogDefaultModel(catalog);
 }
 
 /**
@@ -135,9 +139,10 @@ export function reviewerModelView(state: ReviewerModelState): ReviewerModelView 
 	const view: ReviewerModelView = {};
 	if (models.length) {
 		// "Use agent model" goes back to inheriting. It is offered once the
-		// session names its own model, and stands in as the checked row when
-		// nothing names one (a catalog with no default, such as Cursor's).
-		const follow = isConcreteModelID(own) || !current ? [{ id: "", label: isMode ? "Use agent mode" : "Use agent model" }] : [];
+		// session saves a model of its own (a saved "default" too, so it can be
+		// cleared), and stands in as the checked row when nothing names one (a
+		// catalog with no default, such as Cursor's).
+		const follow = own || !current ? [{ id: "", label: isMode ? "Use agent mode" : "Use agent model" }] : [];
 		const options = withCurrentOption(models, current);
 		view.model = {
 			title: isMode ? "Mode" : "Model",

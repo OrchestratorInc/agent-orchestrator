@@ -59,8 +59,17 @@ describe("reviewerModelView", () => {
 		expect(view.effort).toBeUndefined();
 	});
 
-	it("treats a saved \"default\" as naming no model", () => {
+	it("reads a saved \"default\" as the catalog default, offering the way back", () => {
 		expect(reviewerModelView(state({ saved: { model: "default" } })).model).toMatchObject({ value: "opus[1m]" });
+		// The daemon takes any saved model over the project's, "default" included,
+		// so the review runs the agent's default, not the project's model.
+		const view = reviewerModelView(state({ saved: { model: "default" }, inherited: { model: "sonnet" } }));
+		expect(view.model).toMatchObject({ value: "opus[1m]", valueLabel: "Opus (1M context)" });
+		expect(view.model?.options[0]).toEqual({ id: "", label: "Use agent model" });
+	});
+
+	it("reads a project's \"default\" as the catalog default", () => {
+		expect(reviewerModelView(state({ inherited: { model: "default" } })).model).toMatchObject({ value: "opus[1m]" });
 	});
 
 	it("keeps a model or effort the catalog no longer lists", () => {
@@ -123,6 +132,11 @@ describe("reviewerModelPick", () => {
 });
 
 describe("reviewerEffortPick", () => {
+	it("checks the effort against the model a saved \"default\" runs", () => {
+		// Opus is the catalog default; with the project's Sonnet it would read "high".
+		expect(reviewerModelView(state({ saved: { model: "default" }, inherited: { model: "sonnet" } })).effort).toMatchObject({ value: "xhigh" });
+	});
+
 	it("saves the model's own default as no override when nothing is inherited", () => {
 		expect(reviewerEffortPick(state({ saved: { effort: "low" } }), "xhigh").effort).toBe("");
 		expect(reviewerEffortPick(state(), "low").effort).toBe("low");
