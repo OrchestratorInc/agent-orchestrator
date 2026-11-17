@@ -1246,6 +1246,29 @@ describe("ChatMarkdown streaming fade", () => {
 		expect(fading(container)).toBe(0);
 	});
 
+	it("fades a grapheme cluster in one span and keeps emoji plain", () => {
+		const { container } = render(<ChatMarkdown text={"é a👨‍👩‍👧b"} streaming />);
+		expect(fading(container)).toBe(4);
+		expect(container.querySelector(".chat-md-emoji")).toHaveTextContent("👨‍👩‍👧");
+		expect(container.querySelector(".stream-char .chat-md-emoji")).toBeNull();
+	});
+
+	it("keeps a fading character's element while earlier text settles", () => {
+		let now = 1_000;
+		vi.spyOn(performance, "now").mockImplementation(() => now);
+		const { container, rerender } = render(<ChatMarkdown text="foo **bar**" streaming />);
+		now += 200;
+		rerender(<ChatMarkdown text="foo **bar** baz" streaming />);
+		const z = [...container.querySelectorAll(".stream-char")].at(-1);
+		expect(z).toHaveTextContent("z");
+		// "foo bar" arrived 350 ms ago and has finished fading; " baz" has not.
+		now += 150;
+		rerender(<ChatMarkdown text="foo **bar** bazz" streaming />);
+		expect(fading(container)).toBe(" bazz".length);
+		expect(container.querySelectorAll(".stream-char")[3]).toBe(z);
+		expect(container.textContent).toBe("foo bar bazz");
+	});
+
 	it("does not fade text already on screen when a chat opens mid-stream", () => {
 		const opening = { current: true };
 		const reply = (text: string) => (
