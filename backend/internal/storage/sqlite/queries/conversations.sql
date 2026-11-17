@@ -764,9 +764,6 @@ WHERE conversation_activities.conversation_id = sqlc.arg(conversation_id)
   AND turn_id = sqlc.arg(turn_id)
   AND kind = 'plan';
 
--- The same invariant applies when startup discovers work abandoned by a dead
--- controller. This runs before SettleOrphanedConversationTurns while their turn
--- states still identify the affected rows.
 -- A running row on a turn that has already settled can never finish. Older
 -- daemons stored replayed provider retry/limit notices this way, after their turn
 -- had ended, so clients showed a spinner that never stopped. Give each one the
@@ -788,6 +785,9 @@ WHERE status = 'running'
         AND owner.state IN ('completed', 'recovered', 'interrupted', 'failed', 'cancelled')
   );
 
+-- The same invariant applies when startup discovers work abandoned by a dead
+-- controller. This runs before SettleOrphanedConversationTurns while their turn
+-- states still identify the affected rows.
 -- name: FailOrphanedConversationActivities :exec
 UPDATE conversation_activities
 SET status = 'failed', revision = revision + 1, updated_at = sqlc.arg(updated_at)

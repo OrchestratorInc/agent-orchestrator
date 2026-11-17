@@ -710,6 +710,9 @@ type FailOrphanedConversationActivitiesParams struct {
 	HandledBySessionID domain.SessionID
 }
 
+// The same invariant applies when startup discovers work abandoned by a dead
+// controller. This runs before SettleOrphanedConversationTurns while their turn
+// states still identify the affected rows.
 func (q *Queries) FailOrphanedConversationActivities(ctx context.Context, arg FailOrphanedConversationActivitiesParams) error {
 	_, err := q.db.ExecContext(ctx, failOrphanedConversationActivities, arg.UpdatedAt, arg.HandledBySessionID)
 	return err
@@ -5373,9 +5376,6 @@ type SettleStrandedConversationActivitiesParams struct {
 	HandledBySessionID domain.SessionID
 }
 
-// The same invariant applies when startup discovers work abandoned by a dead
-// controller. This runs before SettleOrphanedConversationTurns while their turn
-// states still identify the affected rows.
 // A running row on a turn that has already settled can never finish. Older
 // daemons stored replayed provider retry/limit notices this way, after their turn
 // had ended, so clients showed a spinner that never stopped. Give each one the
