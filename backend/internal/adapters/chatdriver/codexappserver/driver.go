@@ -49,6 +49,15 @@ const handshakeTimeout = 60 * time.Second
 // broken sandbox.
 const sandboxProbeTimeout = 20 * time.Second
 
+// sandboxProbeExecTimeoutMs is the timeoutMs the probe asks Codex to enforce
+// on the no-op command itself.
+const sandboxProbeExecTimeoutMs = 10_000
+
+// codexExecTimeoutExitCode is the exit code Codex's command/exec reports when
+// it kills a command for exceeding timeoutMs (the shell convention used by
+// timeout(1)). The probe's no-op cannot exit 124 on its own.
+const codexExecTimeoutExitCode = 124
+
 // codexPlugin is the subset of AO's existing Codex agent plugin that the Chat
 // driver reuses. Binary resolution and local auth probing already live there and
 // must not be reimplemented: a second copy would drift from what TUI sessions do.
@@ -264,7 +273,7 @@ func (d *Driver) ProbeSandbox(ctx context.Context, cfg ports.ChatSandboxProbeCon
 		// network would exercise a different sandbox from the one the reviewer
 		// actually gets.
 		"sandboxPolicy": map[string]any{"type": "readOnly", "networkAccess": true},
-		"timeoutMs":     int64(10_000),
+		"timeoutMs":     int64(sandboxProbeExecTimeoutMs),
 	}
 	probeCtx, cancel := context.WithTimeout(ctx, sandboxProbeTimeout)
 	defer cancel()
@@ -284,6 +293,11 @@ func (d *Driver) ProbeSandbox(ctx context.Context, cfg ports.ChatSandboxProbeCon
 			return nil
 		}
 		return fmt.Errorf("%w: %w", ports.ErrChatSandboxUnavailable, err)
+	}
+	if resp.ExitCode == codexExecTimeoutExitCode {
+		// Codex hit its own timeoutMs before the no-op finished. Like a caller
+		// timeout, that says nothing about whether the sandbox can start.
+		return fmt.Errorf("sandbox probe: provider timed out after %dms: %w", sandboxProbeExecTimeoutMs, context.DeadlineExceeded)
 	}
 	if resp.ExitCode != 0 {
 		return fmt.Errorf("%w: %s", ports.ErrChatSandboxUnavailable, sandboxProbeFailure(resp.ExitCode, resp.Stdout, resp.Stderr))

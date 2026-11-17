@@ -126,3 +126,21 @@ func TestProbeSandboxDoesNotLabelATimeoutAsASandboxFailure(t *testing.T) {
 		t.Fatalf("err = %v, want context.DeadlineExceeded preserved", err)
 	}
 }
+
+// Codex reports its own timeoutMs expiring as exit code 124. That is a probe
+// timeout, not evidence the sandbox cannot start.
+func TestProbeSandboxDoesNotLabelAProviderTimeoutAsASandboxFailure(t *testing.T) {
+	d, srv := newTestDriver(t)
+	srv.respondTo("command/exec", `{"exitCode":124,"stdout":"","stderr":"command timed out"}`)
+
+	err := d.ProbeSandbox(context.Background(), ports.ChatSandboxProbeConfig{WorkspacePath: t.TempDir()})
+	if err == nil {
+		t.Fatal("ProbeSandbox = nil, want the provider timeout")
+	}
+	if errors.Is(err, ports.ErrChatSandboxUnavailable) {
+		t.Fatalf("err = %v, want a probe timeout that is not ErrChatSandboxUnavailable", err)
+	}
+	if !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("err = %v, want context.DeadlineExceeded", err)
+	}
+}
