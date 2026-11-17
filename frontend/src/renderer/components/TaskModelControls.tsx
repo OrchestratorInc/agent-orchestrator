@@ -9,6 +9,7 @@ import { NativeModePicker } from "./NativeModePicker";
 import { AgentModelCombobox } from "./settings/AgentModelCombobox";
 import { EffortPicker, type EffortAvailability } from "./settings/EffortPicker";
 import { useModelTuning } from "./settings/ModelTuningControls";
+import { MENU_TRIGGER_CHROME } from "./ui/option-menu";
 
 // The agent, model and effort menus share one compact width.
 export const COMPOSER_MENU_WIDTH = "w-[min(14rem,calc(100vw-2rem))]! min-w-0! max-w-[calc(100vw-2rem)]!";
@@ -40,6 +41,7 @@ export function TaskEffortPicker({
 }
 
 export function TaskModelPicker({
+	hostId,
 	agentId,
 	agentLabel,
 	catalog,
@@ -56,6 +58,7 @@ export function TaskModelPicker({
 }: TaskComposerModelControl & {
 	onRefresh?: () => Promise<void>;
 	showFollowAgentAction: boolean;
+	hostId?: string;
 	/** Offer the native default as a choice and any model ID, as a cloud task can run them. */
 	allowNativeSelection?: boolean;
 	/** Where the listed models come from. */
@@ -69,7 +72,7 @@ export function TaskModelPicker({
 	if (agentId === "") {
 		return (
 			<span
-				className="composer-chip composer-toolbar-option w-fit cursor-not-allowed justify-start opacity-50"
+				className={`${MENU_TRIGGER_CHROME} composer-chip composer-toolbar-option pointer-events-none w-fit cursor-not-allowed justify-start opacity-50`}
 				aria-disabled="true"
 				aria-label={t("newTask.model")}
 			>
@@ -102,6 +105,7 @@ export function TaskModelPicker({
 
 	return (
 		<AgentModelCombobox
+			hostId={hostId}
 			key={agentId}
 			aria-label={t("newTask.model")}
 			value={value}

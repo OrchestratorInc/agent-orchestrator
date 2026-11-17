@@ -44,6 +44,7 @@ import { pollResultIsCurrent, sameServerConfig } from "./sameConfig";
 import { shouldShowLoading } from "./configLoading";
 import { isDesktopUnreachable, shouldKeepPolling, userFacingError } from "./connectionError";
 import {
+	ANSWER_TRUSTED_FOR_MS,
 	classifyLink,
 	EMPTY_LINK_TRACKER,
 	failedPollOutcome,
@@ -51,14 +52,18 @@ import {
 	networkChangeNeedsRace,
 	recordPoll,
 	SLOW_POLL_MS,
+	trustedPhoneNetwork,
 	UNKNOWN_PHONE_NETWORK,
+	worthProbingForRecovery,
 	type LinkHealth,
 	type PhoneNetwork,
 	type PollOutcome,
 } from "./linkHealth";
 import { IncompatibleHostVersionError } from "./race";
+import { lastAnsweredRequestAt, onRequestAnswered } from "./answeredRequests";
 import { primeInstallId } from "./installId";
 import { collectPRs } from "./prView";
+import { rememberLastProject } from "./lastProject";
 import { ALL_PROJECTS, NO_PROJECTS_KNOWN, STANDALONE_PROJECT, projectsForMachine, resolveActiveProject, retainProjects, sessionRowsForMachine, type KnownProjects } from "./projectFilter";
 import { MOBILE_EVENTS } from "./telemetry/events";
 import { mobileTelemetry, trackFeature } from "./telemetry/runtime";
@@ -69,6 +74,9 @@ import { sameArchiveSummary, type ArchiveSummary } from "./archive/archiveSummar
 import { createHostedRowsCache, type HostedOrchestrator, type HostedProject, type HostedSession } from "./hostedRows";
 import { reconcileRows } from "./rowSharing";
 import { machineAppearance } from "./machineAppearance";
+import { useCloud } from "./cloud/CloudProvider";
+import { CLOUD_HOST_ID, CLOUD_HOST_NAME, createCloudEnvironment, isCloudHost, type CloudEnvironment } from "./cloud/mapping";
+import { archiveCloudSession, launchCloudOrchestrator, renameCloudSession, restoreCloudSession, resumeCloudAgent, sendCloudMessage, setCloudSessionPinned, spawnCloudWorker, unsupportedCloudAction, type CloudActionContext } from "./cloud/actions";
 import { emulatedHostSnapshots, useEmulatedMachines } from "./emulatedMachines";
 import type { ApprovalMode } from "./spawnApproval";
 import { viewMachine } from "./viewMachine";
@@ -93,6 +101,8 @@ export type SpawnOptions = {
 	effort?: string;
 	/** The worker's starting approval mode; omitted keeps the project's. */
 	approvalMode?: ApprovalMode;
+	/** The subscription account the agent starts on; omitted uses the machine's default. */
+	accountId?: string;
 	attachments?: SpawnAttachmentInput[];
 	/** Mobile defaults to Chat; TUI remains an explicit compatibility choice. */
 	mode?: SessionMode;
@@ -128,6 +138,12 @@ type AppState = {
 	allSessions: HostedSession[];
 	allProjects: HostedProject[];
 	allOrchestrators: HostedOrchestrator[];
+	/**
+	 * Orchestrator Cloud as an environment beside the paired machines, while signed in.
+	 * Its rows are already in allSessions/allProjects/allOrchestrators under
+	 * CLOUD_HOST_ID; screens that list environments add this entry.
+	 */
+	cloud: CloudEnvironment | null;
 	/** Whether the first config resolution has finished. Until it has, an
 	 *  unconfigured store means "still finding the machine", not "unpaired". */
 	configResolved: boolean;
@@ -216,6 +232,7 @@ export function HostScope({ hostId, children }: { hostId: string; children: Reac
 	const host = app.hostStates.find((item) => item.hostId === hostId);
 	const isSelected = app.currentHostId === hostId;
 	const scoped = useMemo<AppState>(() => {
+		if (isCloudHost(hostId)) return cloudScope(app);
 		if (isSelected) return app;
 		const config = host?.config ?? null;
 		const projects = host?.projects ?? [];
@@ -263,6 +280,49 @@ export function HostScope({ hostId, children }: { hostId: string; children: Reac
 }
 
 /**
+ * The project and board screens with Orchestrator Cloud behind them: its projects,
+ * workers and orchestrators, every action routed to the control plane by the
+ * cloud host id. Cloud has no daemon config, pairing endpoints or archive pages.
+ */
+function cloudScope(app: AppState): AppState {
+	const cloud = app.cloud;
+	return {
+		...app,
+		config: null,
+		configured: false,
+		currentHostId: CLOUD_HOST_ID,
+		selectedHostName: CLOUD_HOST_NAME,
+		activeEndpoints: [],
+		projects: cloud?.projects ?? [],
+		projectsKnown: Boolean(cloud),
+		sessions: cloud?.sessions ?? [],
+		archive: null,
+		orchestrators: cloud?.orchestrators ?? [],
+		orchestratorId: null,
+		stats: {},
+		activeProjectId: ALL_PROJECTS,
+		connection: cloud ? "open" : "connecting",
+		notificationsUnread: 0,
+		loading: !cloud,
+		error: null,
+		errorStatus: null,
+		unreachable: false,
+		linkHealth: "ok",
+		getLastSyncAt: () => Date.now(),
+		refresh: () => app.refreshHost(CLOUD_HOST_ID),
+		spawn: (opts) => app.spawn({ ...opts, hostId: CLOUD_HOST_ID }),
+		launchConductor: (projectId, clean, mode) => app.launchConductor(projectId, clean, mode, CLOUD_HOST_ID),
+		merge: (pr) => app.merge(pr, CLOUD_HOST_ID),
+		kill: (id) => app.kill(id, CLOUD_HOST_ID),
+		renameWorker: (id, name) => app.renameWorker(id, name, CLOUD_HOST_ID),
+		setWorkerPinned: (id, pinned) => app.setWorkerPinned(id, pinned, CLOUD_HOST_ID),
+		restore: (id) => app.restore(id, CLOUD_HOST_ID),
+		resumeAgent: (id) => app.resumeAgent(id, CLOUD_HOST_ID),
+		send: (id, message) => app.send(id, message, CLOUD_HOST_ID),
+	};
+}
+
+/**
  * While `frozen`, everything below sees the state as it was when it froze, so a
  * poll does not re-render it. It catches up as soon as it thaws.
  *
@@ -301,6 +361,20 @@ export function usePRs() {
 // Provider --------------------------------------------------------------------
 
 export function AppProvider({ children }: { children: ReactNode }) {
+	const cloudState = useCloud();
+	const [buildCloudEnvironment] = useState(() => createCloudEnvironment());
+	const cloud = useMemo(
+		() => cloudState.org ? buildCloudEnvironment(cloudState.projects, cloudState.sessions) : null,
+		[buildCloudEnvironment, cloudState.org, cloudState.projects, cloudState.sessions],
+	);
+	// Actions read the latest cloud state through a ref so their identities stay stable.
+	const cloudActionsRef = useRef<CloudActionContext>(null as unknown as CloudActionContext);
+	cloudActionsRef.current = {
+		client: cloudState.client, org: cloudState.org, projects: cloudState.projects, connections: cloudState.connections,
+		chatHarnesses: cloudState.chatHarnesses, sessions: cloudState.sessions, upsertSession: cloudState.upsertSession, refreshSessions: cloudState.refreshSessions,
+	};
+	const refreshCloudRef = useRef(cloudState.refresh);
+	refreshCloudRef.current = cloudState.refresh;
 	const [pairedHosts, setPairedHosts] = useState<Host[]>([]);
 	const [selectedHostId, setSelectedHostId] = useState<string | null>(null);
 	const [config, setConfig] = useState<ServerConfig | null>(null);
@@ -365,13 +439,34 @@ export function AppProvider({ children }: { children: ReactNode }) {
 	// Refs because the poll and the network listener run outside render; the
 	// classified result is the only part screens see.
 	const linkTrackerRef = useRef(EMPTY_LINK_TRACKER);
+	// phoneNetworkRef is the OS's raw report; phoneNetworkReportedAtRef is when
+	// that report last changed. Everything that decides whether the phone is
+	// offline reads trustedNetwork(), which lets an answered request overrule
+	// an OS that wrongly says there is no network (#8282).
 	const phoneNetworkRef = useRef<PhoneNetwork & { type?: string }>(UNKNOWN_PHONE_NETWORK);
+	const phoneNetworkReportedAtRef = useRef(0);
+	const trustedNetwork = useCallback(
+		() => trustedPhoneNetwork(phoneNetworkRef.current, phoneNetworkReportedAtRef.current, lastAnsweredRequestAt(), Date.now()),
+		[],
+	);
+	// Wakes publishLink when the answer overruling the OS stops counting, in
+	// case no poll or answer comes along to do it.
+	const answerExpiryRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 	const [linkHealth, setLinkHealth] = useState<LinkHealth>("ok");
 	const [phoneNetwork, setPhoneNetwork] = useState<PhoneNetwork>(UNKNOWN_PHONE_NETWORK);
 	const phoneOffline = isPhoneOffline(phoneNetwork);
 	const publishLink = useCallback(() => {
-		setLinkHealth(classifyLink(linkTrackerRef.current, phoneNetworkRef.current, Date.now()));
-	}, []);
+		const trusted = trustedNetwork();
+		setPhoneNetwork((current) => current.connected === trusted.connected && current.internet === trusted.internet ? current : trusted);
+		setLinkHealth(classifyLink(linkTrackerRef.current, trusted, Date.now()));
+		if (answerExpiryRef.current) clearTimeout(answerExpiryRef.current);
+		answerExpiryRef.current = null;
+		const os = phoneNetworkRef.current;
+		if (trusted.connected !== os.connected || trusted.internet !== os.internet) {
+			const left = lastAnsweredRequestAt() + ANSWER_TRUSTED_FOR_MS - Date.now();
+			answerExpiryRef.current = setTimeout(() => { if (mountedRef.current) publishLink(); }, Math.max(0, left));
+		}
+	}, [trustedNetwork]);
 	const recordLink = useCallback((outcome: PollOutcome) => {
 		linkTrackerRef.current = recordPoll(linkTrackerRef.current, outcome, Date.now());
 		publishLink();
@@ -654,10 +749,13 @@ export function AppProvider({ children }: { children: ReactNode }) {
 	// Without this, a failed initial endpoint race leaves it closed until a tap.
 	useEffect(() => {
 		if (!appActive || !configResolved || selectedHostId === null || config) return;
-		// Pointless while the phone has no network: the network listener races
-		// the moment it comes back.
+		// Pointless while the phone has no network at all: the network listener
+		// races the moment it comes back. On a network the OS wrongly calls
+		// offline, its report never changes, so this probe is the only way back.
 		const timer = setInterval(() => {
-			if (!isPhoneOffline(phoneNetworkRef.current)) void reloadConfig();
+			if (worthProbingForRecovery(phoneNetworkRef.current, phoneNetworkReportedAtRef.current, lastAnsweredRequestAt(), Date.now())) {
+				void reloadConfig();
+			}
 		}, 15_000);
 		return () => clearInterval(timer);
 	}, [appActive, configResolved, selectedHostId, config, reloadConfig]);
@@ -674,7 +772,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
 			// Offline, the race can only fail, and a failed race clears the config
 			// and with it the rows "You're offline" promises to keep. Checked before
 			// the resume flag is consumed so a resume still counts once back online.
-			if (isPhoneOffline(phoneNetworkRef.current)) return;
+			if (isPhoneOffline(trustedNetwork())) return;
 			const resumed = resumedRef.current;
 			resumedRef.current = false;
 			let known: Endpoint[] = [];
@@ -925,7 +1023,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
 				failStreak.current += 1;
 				const now = Date.now();
 				if (
-					!isPhoneOffline(phoneNetworkRef.current) &&
+					!isPhoneOffline(trustedNetwork()) &&
 					shouldReRace({
 						consecutiveFailures: failStreak.current,
 						lastReRaceAt: lastReRaceAt.current,
@@ -968,8 +1066,11 @@ export function AppProvider({ children }: { children: ReactNode }) {
 			const next = { connected: state.isConnected, internet: state.isInternetReachable, type: state.type };
 			const previous = phoneNetworkRef.current;
 			phoneNetworkRef.current = next;
-			setPhoneNetwork((current) => current.connected === next.connected && current.internet === next.internet
-				? current : { connected: next.connected, internet: next.internet });
+			// Only a change resets the clock: Android repeats an unchanged report,
+			// and each repeat would otherwise discard the answers that overrule it.
+			if (previous.connected !== next.connected || previous.internet !== next.internet || previous.type !== next.type) {
+				phoneNetworkReportedAtRef.current = Date.now();
+			}
 			publishLink();
 			if (!networkChangeNeedsRace(previous, next) || !pollActiveRef.current) return;
 			// reloadConfig keeps the same config object when the winning endpoint
@@ -980,9 +1081,14 @@ export function AppProvider({ children }: { children: ReactNode }) {
 		};
 		void getNetworkStateAsync().then(apply).catch(() => {});
 		const sub = addNetworkStateListener(apply);
+		// An answer from any machine or from Cloud can overrule the OS. Cheap on
+		// the poll's pace: publishLink only re-renders when the result changes.
+		const unsubscribeAnswered = onRequestAnswered(publishLink);
 		return () => {
 			live = false;
 			sub.remove();
+			unsubscribeAnswered();
+			if (answerExpiryRef.current) clearTimeout(answerExpiryRef.current);
 		};
 	}, [publishLink, reloadConfig, restartLoad]);
 
@@ -994,6 +1100,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
 	const setActiveProject = useCallback((id: string) => {
 		setChosenProjectId(id);
 		AsyncStorage.setItem(ACTIVE_PROJECT_KEY, id).catch(() => {});
+		if (id !== ALL_PROJECTS) rememberLastProject(selectedHostIdRef.current, id);
 	}, []);
 
 	// Which machine this view is about. Rows are keyed to it, so after a re-pair
@@ -1063,9 +1170,19 @@ export function AppProvider({ children }: { children: ReactNode }) {
 	const [sessionRows] = useState(() => createHostedRowsCache<DashboardSession>());
 	const [projectRows] = useState(() => createHostedRowsCache<ProjectInfo>());
 	const [orchestratorRows] = useState(() => createHostedRowsCache<OrchestratorLink>());
-	const allSessions = useMemo(() => sessionRows(hostStates.map((host) => ({ ...host, rows: host.sessions }))), [hostStates, sessionRows]);
-	const allProjects = useMemo(() => projectRows(hostStates.map((host) => ({ ...host, rows: host.projects }))), [hostStates, projectRows]);
-	const allOrchestrators = useMemo(() => orchestratorRows(hostStates.map((host) => ({ ...host, rows: host.orchestrators }))), [hostStates, orchestratorRows]);
+	// Orchestrator Cloud's rows join each machine's, tagged with the cloud environment.
+	const allSessions = useMemo(() => sessionRows([
+		...hostStates.map((host) => ({ ...host, rows: host.sessions })),
+		...(cloud ? [{ ...cloud, rows: cloud.sessions }] : []),
+	]), [cloud, hostStates, sessionRows]);
+	const allProjects = useMemo(() => projectRows([
+		...hostStates.map((host) => ({ ...host, rows: host.projects })),
+		...(cloud ? [{ ...cloud, rows: cloud.projects }] : []),
+	]), [cloud, hostStates, projectRows]);
+	const allOrchestrators = useMemo(() => orchestratorRows([
+		...hostStates.map((host) => ({ ...host, rows: host.orchestrators })),
+		...(cloud ? [{ ...cloud, rows: cloud.orchestrators }] : []),
+	]), [cloud, hostStates, orchestratorRows]);
 	const configForHost = useCallback((hostId: string): ServerConfig | null => {
 		if (hostId === selectedHostId) return cfgRef.current;
 		return otherHosts.configForHost(hostId);
@@ -1077,12 +1194,17 @@ export function AppProvider({ children }: { children: ReactNode }) {
 	}, [configForHost]);
 	const refreshHost = useCallback(async (hostId: string) => {
 		if (!mountedRef.current) return;
-		if (hostId === selectedHostId) await fetchAll(true);
+		if (isCloudHost(hostId)) await refreshCloudRef.current();
+		else if (hostId === selectedHostId) await fetchAll(true);
 		else await otherHosts.refreshHost(hostId);
 	}, [selectedHostId, fetchAll, otherHosts.refreshHost]);
+	const hasCloud = Boolean(cloud);
 	const refreshAll = useCallback(async () => {
-		await Promise.all(hostStates.map((host) => refreshHost(host.hostId)));
-	}, [hostStates, refreshHost]);
+		await Promise.all([
+			...hostStates.map((host) => refreshHost(host.hostId)),
+			...(hasCloud ? [refreshCloudRef.current()] : []),
+		]);
+	}, [hasCloud, hostStates, refreshHost]);
 
 	// Pick a sensible project for actions that need one (spawn / conductor).
 	const targetProject = useCallback((): string | null => {
@@ -1092,12 +1214,13 @@ export function AppProvider({ children }: { children: ReactNode }) {
 	}, [activeProjectId, projects]);
 
 	const spawn = useCallback(
-		async ({ hostId, projectId, prompt, harness, model, effort, approvalMode, mode, attachments, clientRequestId }: SpawnOptions) => {
+		async ({ hostId, projectId, prompt, harness, model, effort, approvalMode, accountId, mode, attachments, clientRequestId }: SpawnOptions) => {
 			const resolvedMode = mode ?? "chat";
 			return trackFeature("spawn", async () => {
+				if (isCloudHost(hostId)) return spawnCloudWorker(cloudActionsRef.current, { projectId, prompt, harness, model, effort, approvalMode, mode: resolvedMode, attachments, clientRequestId });
 				const c = requireConfig(hostId);
 				if (projectId === STANDALONE_PROJECT) {
-					const session = await spawnSession(c, { prompt, harness, model, effort, approvalMode, mode: resolvedMode, attachments, clientRequestId });
+					const session = await spawnSession(c, { prompt, harness, model, effort, approvalMode, accountId, mode: resolvedMode, attachments, clientRequestId });
 					await refreshHost(hostId);
 					return session;
 				}
@@ -1111,6 +1234,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
 					model,
 					effort,
 					approvalMode,
+					accountId,
 					mode: resolvedMode,
 					attachments,
 					clientRequestId,
@@ -1125,6 +1249,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
 	const launchConductor = useCallback(
 		async (projectId: string, clean = false, mode: SessionMode = "chat", hostId?: string) =>
 			trackFeature("conductor", async () => {
+				if (isCloudHost(hostId)) return launchCloudOrchestrator(cloudActionsRef.current, projectId, mode);
 				const c = requireConfig(hostId);
 				const link = await apiLaunchOrchestrator(c, projectId, clean, mode);
 				await refreshHost(c.hostId ?? "");
@@ -1136,6 +1261,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
 	const merge = useCallback(
 		async (pr: DashboardPR, hostId?: string) =>
 			trackFeature("merge", async () => {
+				if (isCloudHost(hostId)) unsupportedCloudAction("merge");
 				const c = requireConfig(hostId);
 				await apiMergePR(c, pr);
 				await refreshHost(c.hostId ?? "");
@@ -1146,6 +1272,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
 	const kill = useCallback(
 		async (id: string, hostId?: string) =>
 			trackFeature("kill", async () => {
+				if (isCloudHost(hostId)) return archiveCloudSession(cloudActionsRef.current, id);
 				const c = requireConfig(hostId);
 				await killSession(c, id);
 				await refreshHost(c.hostId ?? "");
@@ -1155,6 +1282,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
 
 	const renameWorker = useCallback(
 		async (id: string, displayName: string, hostId?: string) => {
+			if (isCloudHost(hostId)) return renameCloudSession(cloudActionsRef.current, id, displayName);
 			const c = requireConfig(hostId);
 			await apiRenameSession(c, id, displayName);
 			await refreshHost(c.hostId ?? "");
@@ -1164,6 +1292,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
 
 	const setWorkerPinned = useCallback(
 		async (id: string, pinned: boolean, hostId?: string) => {
+			if (isCloudHost(hostId)) return setCloudSessionPinned(cloudActionsRef.current, id, pinned);
 			const c = requireConfig(hostId);
 			await (pinned ? apiPinSession(c, id) : apiUnpinSession(c, id));
 			await refreshHost(c.hostId ?? "");
@@ -1174,6 +1303,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
 	const restore = useCallback(
 		async (id: string, hostId?: string) =>
 			trackFeature("restore", async () => {
+				if (isCloudHost(hostId)) return restoreCloudSession(cloudActionsRef.current, id);
 				const c = requireConfig(hostId);
 				await restoreSession(c, id);
 				await refreshHost(c.hostId ?? "");
@@ -1187,6 +1317,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
 	const resumeAgent = useCallback(
 		async (id: string, hostId?: string) =>
 			trackFeature("restore", async () => {
+				if (isCloudHost(hostId)) return resumeCloudAgent(cloudActionsRef.current, id);
 				const c = requireConfig(hostId);
 				await resumeSessionAgent(c, id);
 				await refreshHost(c.hostId ?? "");
@@ -1195,7 +1326,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
 	);
 
 	const send = useCallback(async (id: string, message: string, hostId?: string) => {
-		await trackFeature("send", () => sendMessage(requireConfig(hostId), id, message));
+		await trackFeature("send", () => isCloudHost(hostId) ? sendCloudMessage(cloudActionsRef.current, id, message) : sendMessage(requireConfig(hostId), id, message));
 	}, [requireConfig]);
 	const refresh = useCallback(async () => {
 		await fetchAll(true);
@@ -1219,6 +1350,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
 			allSessions,
 			allProjects,
 			allOrchestrators,
+			cloud,
 			configResolved,
 			activeEndpoints,
 			projects,
@@ -1269,6 +1401,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
 			allSessions,
 			allProjects,
 			allOrchestrators,
+			cloud,
 			configResolved,
 			projects,
 			projectsKnown,

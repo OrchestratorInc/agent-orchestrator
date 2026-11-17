@@ -102,9 +102,13 @@ async function openTurn(page: Page, { withSteps, priorTurns }: { withSteps: bool
 	};
 }
 
-/** Samples the latest turn's rows on every animation frame until the returned stop is called. */
+/**
+ * Samples the latest turn's rows on every animation frame until the returned stop is
+ * called. Returns once the first frame is in, so a frame that runs late still sees
+ * the turn as it was before the caller settles it.
+ */
 async function recordFrames(page: Page) {
-	await page.evaluate(() => {
+	await page.evaluate(() => new Promise<void>((resolve) => {
 		const state = window as unknown as { __settleFrames: Frame[]; __settleStop: boolean };
 		state.__settleFrames = [];
 		state.__settleStop = false;
@@ -120,10 +124,11 @@ async function recordFrames(page: Page) {
 				live: live ? top(live) : null,
 				worked: Boolean(turn?.querySelector(":scope > [data-turn-worked]")),
 			});
+			resolve();
 			if (!state.__settleStop) requestAnimationFrame(tick);
 		};
 		requestAnimationFrame(tick);
-	});
+	}));
 	return async () => {
 		await page.evaluate(() => {
 			(window as unknown as { __settleStop: boolean }).__settleStop = true;
@@ -157,9 +162,10 @@ for (const priorTurns of [1, 30]) {
 
 		expectSteady(frames, "scrollTop");
 		expectSteady(frames, "prompt");
-		// The reply rises into the room its steps left, and only rises.
+		// The reply rises into the room its steps left, and only rises. The steps are
+		// already folded to one summary line while the turn runs, so that room is one row.
 		expectOnlyRising(frames);
-		expect(frames.at(-1)!.reply).toBeLessThan(frames[settled - 1]!.reply - 50);
+		expect(frames.at(-1)!.reply).toBeLessThan(frames[settled - 1]!.reply - 20);
 		// The live row fades out where it was rather than jumping away.
 		const live = frames.slice(settled).flatMap((frame) => (frame.live === null ? [] : [frame.live]));
 		for (const top of live) expect(Math.abs(top - frames[settled - 1]!.live!)).toBeLessThan(1);

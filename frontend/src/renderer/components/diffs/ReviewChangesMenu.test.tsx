@@ -63,7 +63,7 @@ describe("ReviewChangesMenu", () => {
 		expect(trigger).toHaveTextContent("Uncommitted+3−1");
 		// Text only, like the menu's rows: the chevron is its one icon.
 		expect(trigger.querySelectorAll("svg")).toHaveLength(1);
-		expect(trigger.querySelector("svg")).toHaveClass("lucide-chevron-down");
+		expect(trigger.querySelector("svg")).toHaveClass("icon-chevron-down");
 	});
 
 	it("leaves out scopes with no changes, but keeps the current pick and binary-only changes", async () => {

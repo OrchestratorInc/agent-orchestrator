@@ -175,7 +175,9 @@ export async function signInToAccount(): Promise<Account | null> {
 	const code = callback.searchParams.get("code");
 	if (!code) throw new Error("Orchestrator sign-in did not return a code.");
 	const session = await authenticate({ grant_type: "authorization_code", code, code_verifier: verifier });
-	return mutateCredentials(async () => generation === accountGeneration ? saveAccount(session, generation) : null);
+	const account = await mutateCredentials(async () => generation === accountGeneration ? saveAccount(session, generation) : null);
+	if (account) notifyAccountChange(account);
+	return account;
 }
 
 export async function signOutOfAccount(): Promise<void> {
@@ -184,6 +186,22 @@ export async function signOutOfAccount(): Promise<void> {
 	accessToken = null;
 	accessTokenExpiresAt = 0;
 	await mutateCredentials(() => SecureStore.deleteItemAsync(STORE_KEY));
+	notifyAccountChange(null);
+}
+
+type AccountListener = (account: Account | null) => void;
+const accountListeners = new Set<AccountListener>();
+
+function notifyAccountChange(account: Account | null): void {
+	for (const listener of accountListeners) {
+		try { listener(account); } catch { /* One listener must not stop the others. */ }
+	}
+}
+
+/** Hear about sign-in and sign-out wherever they happen (Settings, Cloud, an expired refresh). */
+export function onAccountChange(listener: AccountListener): () => void {
+	accountListeners.add(listener);
+	return () => { accountListeners.delete(listener); };
 }
 
 /** Account APIs use this token; it must never be sent to an AO daemon. */

@@ -5,7 +5,8 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import { awakeQueryKey, type AwakeState } from "../hooks/useAwake";
 import { useStayAwake } from "../hooks/useStayAwake";
 import { mobileStatusQueryKey } from "../lib/mobile-status-key";
-import { AwakeControl } from "./AwakeControl";
+import { AwakeControl, AwakeMenuItem, awakeNeedsAttention, useFooterStayAwake } from "./AwakeControl";
+import { DropdownMenu, DropdownMenuContent, DropdownMenuTrigger } from "./ui/dropdown-menu";
 import { ConnectMobileContent } from "./settings/ConnectMobileContent";
 import { TooltipProvider } from "./ui/tooltip";
 
@@ -392,15 +393,15 @@ describe("shared Stay Awake controls", () => {
 		state.paused = true;
 		state.reason = "low_battery";
 		await show();
-		expect(screen.getByTestId("awake-inactive-indicator")).toHaveClass("lucide-triangle-alert", "size-2.5", "text-error", "-right-1", "-top-1");
-		expect(coffee().querySelector(".lucide-coffee")).toHaveClass("size-icon-md");
+		expect(screen.getByTestId("awake-inactive-indicator")).toHaveClass("icon-triangle-alert", "size-2.5", "text-error", "-right-1", "-top-1");
+		expect(coffee().querySelector(".icon-coffee")).toHaveClass("size-icon-md");
 		expect(coffee()).toHaveAccessibleDescription("Paused: battery below 10%.\nResumes after charging.");
 		state.paused = false;
 		state.reason = "";
 		state.active = true;
 		await act(async () => { await client.invalidateQueries({ queryKey: awakeQueryKey }); });
 		await waitFor(() => expect(screen.queryByTestId("awake-inactive-indicator")).toBeNull());
-		expect(coffee().querySelector(".lucide-coffee")).toHaveClass("size-icon-md");
+		expect(coffee().querySelector(".icon-coffee")).toHaveClass("size-icon-md");
 		expect(coffee().querySelector("[data-nav-row-highlight]")).toHaveClass("bg-interactive-active");
 		expect(test.post).not.toHaveBeenCalled();
 	});
@@ -665,5 +666,44 @@ describe("shared Stay Awake controls", () => {
 		fireEvent.click(coffee());
 		await waitFor(() => expect(screen.getByRole("alert")).toHaveTextContent("stop failed"));
 		expect(test.post).toHaveBeenCalledWith("/api/v1/mobile/keep-awake", { body: { enabled: false, lidClosed: false } });
+	});
+});
+
+describe("footer Stay Awake menu row", () => {
+	// Mirrors the sidebar footer: the trigger holds the state, the row only renders it.
+	function FooterMenu() {
+		const stay = useFooterStayAwake();
+		return (
+			<DropdownMenu>
+				<DropdownMenuTrigger data-attention={awakeNeedsAttention(stay)}>Mobile</DropdownMenuTrigger>
+				<DropdownMenuContent>
+					<AwakeMenuItem stay={stay} />
+				</DropdownMenuContent>
+			</DropdownMenu>
+		);
+	}
+
+	it("keeps a failed toggle badged and explained after the menu closes", async () => {
+		const user = userEvent.setup();
+		const post = test.post.getMockImplementation()!;
+		test.post.mockImplementation(async (path, options) => path === "/api/v1/awake/sessions"
+			? { error: "helper unavailable" } : post(path, options));
+		render(<QueryClientProvider client={client}><FooterMenu /></QueryClientProvider>);
+		const trigger = screen.getByRole("button", { name: "Mobile" });
+		expect(trigger).toHaveAttribute("data-attention", "false");
+
+		await user.click(trigger);
+		const row = await screen.findByTestId("awake-menu-item");
+		await waitFor(() => expect(row).not.toHaveAttribute("data-disabled"));
+		await user.click(row);
+		await screen.findByText("Couldn’t update Stay Awake. Try again.");
+		expect(row).toHaveAttribute("aria-checked", "false");
+
+		await user.keyboard("{Escape}");
+		await waitFor(() => expect(screen.queryByTestId("awake-menu-item")).toBeNull());
+		expect(trigger).toHaveAttribute("data-attention", "true");
+
+		await user.click(trigger);
+		expect(await screen.findByText("Couldn’t update Stay Awake. Try again.")).toBeVisible();
 	});
 });

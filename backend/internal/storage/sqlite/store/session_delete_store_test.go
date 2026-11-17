@@ -13,6 +13,7 @@ import (
 
 	"github.com/aoagents/agent-orchestrator/backend/internal/cdc"
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
+	"github.com/aoagents/agent-orchestrator/backend/internal/storage/sqlite"
 	"github.com/aoagents/agent-orchestrator/backend/internal/storage/sqlite/sqlitetest"
 )
 
@@ -179,6 +180,185 @@ func TestDeleteTerminatedSessionRefusesSharedConversationHistory(t *testing.T) {
 	}
 }
 
+// A retry, an edit branch and a reviewer's fresh thread point at earlier rows
+// with ON DELETE RESTRICT, which SQLite checks even when the same cascade
+// removes the pointing row. Deleting the session must still remove its own
+// conversation and its reviewer's.
+func TestDeleteTerminatedSessionRemovesLinkedConversationHistory(t *testing.T) {
+	for name, link := range map[string]func(*testing.T, *sqlite.Store, domain.SessionRecord, domain.ConversationRecord){
+		"retry": func(t *testing.T, s *sqlite.Store, session domain.SessionRecord, conversation domain.ConversationRecord) {
+			created, err := s.AppendRetryUserMessage(context.Background(), conversation.ID, session.ID, "generation-root", domain.ConversationMessage{
+				ID: "message-3", Origin: domain.MessageOriginHuman, Text: "second prompt",
+				ClientMessageID: "client-3", DeliveryContentJSON: `[{"type":"text","text":"second prompt"}]`,
+			}, "turn-3", "turn-2", testNow.Add(2*time.Minute))
+			if err != nil || !created {
+				t.Fatalf("AppendRetryUserMessage: created=%v err=%v", created, err)
+			}
+		},
+		"edit": func(t *testing.T, s *sqlite.Store, _ domain.SessionRecord, conversation domain.ConversationRecord) {
+			if err := s.CreateConversationBranch(context.Background(), domain.ConversationBranch{
+				ID: "branch-edit", ConversationID: conversation.ID, ProviderConversationID: "thread-edit",
+				ParentBranchID: conversation.ActiveBranchID, ForkAfterTurnID: "turn-1", ReplacedTurnID: "turn-2",
+				ForkAfterSequence: 2,
+			}, testNow.Add(2*time.Minute)); err != nil {
+				t.Fatalf("CreateConversationBranch: %v", err)
+			}
+		},
+		// A reviewer's turns name the worker session, though its conversation
+		// has none. After a turn and a retry, a reviewer that cannot resume
+		// its thread starts a branch under its root.
+		"reviewer": func(t *testing.T, s *sqlite.Store, session domain.SessionRecord, _ domain.ConversationRecord) {
+			ctx := context.Background()
+			review := domain.Review{ID: "review-delete", SessionID: session.ID, ProjectID: session.ProjectID,
+				Harness: domain.ReviewerCodex, CreatedAt: testNow, UpdatedAt: testNow}
+			mustNoError(t, s.UpsertReview(ctx, review))
+			reviewer, err := s.CreateReviewConversation(ctx, "review-delete-conversation", review.ID, session.ProjectID, session.ID, testNow)
+			mustNoError(t, err)
+			if claimed, err := s.ClaimReviewChatController(ctx, review.ID, "review-provider", "review-generation", testNow); err != nil || !claimed {
+				t.Fatalf("ClaimReviewChatController: claimed=%v err=%v", claimed, err)
+			}
+			msg := domain.ConversationMessage{ID: "review-message-1", Origin: domain.MessageOriginHuman, Text: "Review the change"}
+			if created, err := s.AppendReviewUserMessage(ctx, reviewer.ID, session.ID, review.ID, "review-generation", msg, "review-turn-1", testNow); err != nil || !created {
+				t.Fatalf("AppendReviewUserMessage: created=%v err=%v", created, err)
+			}
+			msg.ID = "review-message-2"
+			if created, err := s.AppendReviewRetryUserMessage(ctx, reviewer.ID, session.ID, review.ID, "review-generation", msg, "review-turn-2", "review-turn-1", testNow.Add(time.Second)); err != nil || !created {
+				t.Fatalf("AppendReviewRetryUserMessage: created=%v err=%v", created, err)
+			}
+			mustNoError(t, s.CreateAndActivateReviewConversationBranch(ctx, review.ID, domain.ConversationBranch{
+				ID: "review-fresh", ConversationID: reviewer.ID, SessionID: session.ID,
+				ParentBranchID: reviewer.ActiveBranchID, ProviderConversationID: "fresh-provider",
+				ProviderScopeID: "review-fresh", ProviderIDsScoped: true, CreatedAt: testNow,
+			}, "review-generation", testNow.Add(2*time.Second)))
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			ctx := context.Background()
+			s, session, conversation := seededChatConversation(t)
+			seedBranchTurns(t, s, session, conversation)
+			link(t, s, session, conversation)
+			session.IsTerminated = true
+			mustNoError(t, s.UpdateSession(ctx, session))
+
+			deleted, err := s.DeleteTerminatedSession(ctx, session.ID)
+			if err != nil || !deleted {
+				t.Fatalf("delete = %v, %v; want deleted", deleted, err)
+			}
+			for _, id := range []string{conversation.ID, "review-delete-conversation"} {
+				if has, err := s.HasConversationTurns(ctx, id); err != nil || has {
+					t.Fatalf("turns of %s survived the session: has=%v err=%v", id, has, err)
+				}
+			}
+		})
+	}
+}
+
+func openRawDB(t *testing.T, dir string) *sql.DB {
+	t.Helper()
+	raw, err := sql.Open("sqlite", "file:"+filepath.Join(dir, "ao.db")+"?_pragma=busy_timeout(5000)")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = raw.Close() })
+	return raw
+}
+
+func countRows(t *testing.T, raw *sql.DB, query string, args ...any) int {
+	t.Helper()
+	var n int
+	if err := raw.QueryRow(query, args...).Scan(&n); err != nil {
+		t.Fatal(err)
+	}
+	return n
+}
+
+func TestDeleteTerminatedSessionWithEditedAndRetriedTurns(t *testing.T) {
+	dir := t.TempDir()
+	s := sqlitetest.MustOpenAt(t, dir)
+	ctx := context.Background()
+	seedProject(t, s, "del")
+	sess := terminalSession(t, s, "del", 0)
+	upsertFacts(t, s, domain.SessionCleanupRecord{SessionID: sess.ID, WorkspaceDisposition: domain.DispositionRemoved})
+	now := time.Now().UTC()
+	if _, err := s.CreateConversation(ctx, "conv-edited", domain.ConversationScopeSession, "del", sess.ID, now); err != nil {
+		t.Fatalf("create conversation: %v", err)
+	}
+	raw := openRawDB(t, dir)
+	for _, q := range []string{
+		`INSERT INTO conversation_turns (id, conversation_id, handled_by_session_id, state, requested_at) VALUES ('turn-1', 'conv-edited', ?1, 'failed', ?2)`,
+		`INSERT INTO conversation_turns (id, conversation_id, handled_by_session_id, state, requested_at, retry_of_turn_id) VALUES ('turn-2', 'conv-edited', ?1, 'completed', ?2, 'turn-1')`,
+		`INSERT INTO conversation_branches (id, conversation_id, session_id, created_at) VALUES ('branch-1', 'conv-edited', ?1, ?2)`,
+		`INSERT INTO conversation_branches (id, conversation_id, session_id, parent_branch_id, fork_after_turn_id, replaced_turn_id, created_at) VALUES ('branch-2', 'conv-edited', ?1, 'branch-1', 'turn-1', 'turn-2', ?2)`,
+		`INSERT INTO conversation_branches (id, conversation_id, session_id, parent_branch_id, created_at) VALUES ('branch-3', 'conv-edited', ?1, 'branch-2', ?2)`,
+	} {
+		if _, err := raw.ExecContext(ctx, q, sess.ID, now); err != nil {
+			t.Fatalf("seed %q: %v", q, err)
+		}
+	}
+
+	deleted, err := s.DeleteTerminatedSession(ctx, sess.ID)
+	if err != nil || !deleted {
+		t.Fatalf("delete = %v, %v; want deleted", deleted, err)
+	}
+	if n := countRows(t, raw, `SELECT count(*) FROM conversation_branches WHERE conversation_id = 'conv-edited'`); n != 0 {
+		t.Fatalf("%d branches left, want none", n)
+	}
+}
+
+func TestDeleteTerminatedSessionClearsHistoryInBatches(t *testing.T) {
+	dir := t.TempDir()
+	s := sqlitetest.MustOpenAt(t, dir)
+	ctx := context.Background()
+	seedProject(t, s, "del")
+	sess := terminalSession(t, s, "del", 0)
+	upsertFacts(t, s, domain.SessionCleanupRecord{SessionID: sess.ID, WorkspaceDisposition: domain.DispositionRemoved})
+	live, err := s.CreateSession(ctx, sampleRecord("del"))
+	mustNoError(t, err)
+	now := time.Now().UTC()
+	raw := openRawDB(t, dir)
+	seed := func(id domain.SessionID, conversation string, events, activities int) {
+		t.Helper()
+		if _, err := s.CreateConversation(ctx, conversation, domain.ConversationScopeSession, "del", id, now); err != nil {
+			t.Fatalf("create conversation: %v", err)
+		}
+		if _, err := raw.ExecContext(ctx, `
+WITH RECURSIVE n(i) AS (SELECT 1 UNION ALL SELECT i + 1 FROM n WHERE i < ?3)
+INSERT INTO conversation_provider_events (conversation_id, session_id, method, payload_json, received_at)
+SELECT ?1, ?2, 'message.delta', '{}', ?4 FROM n`, conversation, id, events, now); err != nil {
+			t.Fatalf("seed provider events: %v", err)
+		}
+		if _, err := raw.ExecContext(ctx, `
+WITH RECURSIVE n(i) AS (SELECT 1 UNION ALL SELECT i + 1 FROM n WHERE i < ?2)
+INSERT INTO conversation_activities (id, conversation_id, sequence, kind, status, created_at, updated_at)
+SELECT ?1 || '-activity-' || i, ?1, i, 'command', 'completed', ?3, ?3 FROM n`, conversation, activities, now); err != nil {
+			t.Fatalf("seed activities: %v", err)
+		}
+	}
+	seed(sess.ID, "conv-archived", 2501, 1001)
+	seed(live.ID, "conv-live", 30, 20)
+
+	if deleted, err := s.DeleteTerminatedSession(ctx, live.ID); err != nil || deleted {
+		t.Fatalf("delete live = %v, %v; want refused", deleted, err)
+	}
+	if n := countRows(t, raw, `SELECT count(*) FROM conversation_provider_events WHERE session_id = ?`, live.ID); n != 30 {
+		t.Fatalf("refused delete left %d provider events, want 30", n)
+	}
+	if n := countRows(t, raw, `SELECT count(*) FROM conversation_activities WHERE conversation_id = 'conv-live'`); n != 20 {
+		t.Fatalf("refused delete left %d activities, want 20", n)
+	}
+
+	deleted, err := s.DeleteTerminatedSession(ctx, sess.ID)
+	if err != nil || !deleted {
+		t.Fatalf("delete = %v, %v; want deleted", deleted, err)
+	}
+	if n := countRows(t, raw, `SELECT count(*) FROM conversation_provider_events WHERE session_id = ?`, sess.ID); n != 0 {
+		t.Fatalf("%d provider events left, want none", n)
+	}
+	if n := countRows(t, raw, `SELECT count(*) FROM conversation_activities WHERE conversation_id = 'conv-archived'`); n != 0 {
+		t.Fatalf("%d activities left, want none", n)
+	}
+}
+
 // terminated_at follows is_terminated however the row is written. Retention
 // lists only archived sessions with nothing left on disk, each with when it was
 // archived, or its last update for a row archived before terminated_at existed.
@@ -248,7 +428,7 @@ func TestReleasedArchivedSessionsCarryWhenTheyWereArchived(t *testing.T) {
 // Retention leaves out the sessions delete refuses for shared history: an
 // earlier orchestrator whose turns stay in the project conversation, and the
 // one that conversation now belongs to. Otherwise every pass would retry them.
-// A session's own conversation does not hold it back.
+// A session's own conversation and its reviewer's do not hold it back.
 func TestReleasedArchivedSessionsLeaveOutSharedConversationHistory(t *testing.T) {
 	s := newTestStore(t)
 	ctx := context.Background()
@@ -271,6 +451,12 @@ func TestReleasedArchivedSessionsLeaveOutSharedConversationHistory(t *testing.T)
 	ownConversation, err := s.CreateConversation(ctx, "conv-own", domain.ConversationScopeSession, "ret", own.ID, now)
 	mustNoError(t, err)
 	mustNoError(t, s.AdoptProviderTurn(ctx, ownConversation.ID, own.ID, "gen-1", "turn-2", "provider-turn-2", now))
+	review := domain.Review{ID: "review-own", SessionID: own.ID, ProjectID: own.ProjectID,
+		Harness: domain.ReviewerCodex, CreatedAt: now, UpdatedAt: now}
+	mustNoError(t, s.UpsertReview(ctx, review))
+	reviewer, err := s.CreateReviewConversation(ctx, "conv-own-review", review.ID, own.ProjectID, own.ID, now)
+	mustNoError(t, err)
+	mustNoError(t, s.AdoptReviewProviderTurn(ctx, reviewer.ID, own.ID, review.ID, "gen-1", "turn-3", "provider-turn-3", now))
 
 	got, err := s.ListReleasedArchivedSessions(ctx)
 	mustNoError(t, err)

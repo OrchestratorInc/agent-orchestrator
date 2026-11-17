@@ -28,3 +28,19 @@ func Alive(pid int) bool {
 	}
 	return status == uint32(windows.WAIT_TIMEOUT)
 }
+
+// Exited reports that pid is proven gone, as for Node's process.kill(pid, 0):
+// no such process, or one that has already finished. Access denied means it
+// still exists.
+func Exited(pid int) bool {
+	if pid <= 0 {
+		return false
+	}
+	handle, err := windows.OpenProcess(windows.SYNCHRONIZE, false, uint32(pid))
+	if err != nil {
+		return errors.Is(err, windows.ERROR_INVALID_PARAMETER)
+	}
+	defer windows.CloseHandle(handle)
+	status, err := windows.WaitForSingleObject(handle, 0)
+	return err == nil && status == uint32(windows.WAIT_OBJECT_0)
+}

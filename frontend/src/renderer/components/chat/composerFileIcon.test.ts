@@ -1,4 +1,4 @@
-import { Code2, File, FileJson2, FileText, Image, Video } from "lucide-react";
+import { Code2, File, FileJson2, FileText, Image, Video } from "@/components/app-icons";
 import { describe, expect, it } from "vitest";
 import { composerFileIcon } from "./composerFileIcon";
 

@@ -119,6 +119,15 @@ describe("native runtime resources", () => {
 		]));
 	});
 
+	it("ships the Liquid Glass icon catalog only on macOS and names it in Info.plist", () => {
+		expect(extraResourcesForPlatform("darwin")).toContain("assets/Assets.car");
+		expect(extraResourcesForPlatform("linux")).not.toContain("assets/Assets.car");
+		expect(extraResourcesForPlatform("win32")).not.toContain("assets/Assets.car");
+		expect(config.packagerConfig?.extendInfo).toMatchObject({ CFBundleIconName: "AppIcon" });
+		// The .icns stays as CFBundleIconFile for macOS before 26.
+		expect(config.packagerConfig?.icon).toBe("assets/icon");
+	});
+
 	it("bundles the wake coordinator only on macOS", () => {
 		expect(extraResourcesForPlatform("darwin")).toContain("wake-helper");
 		expect(extraResourcesForPlatform("linux")).not.toContain("wake-helper");
@@ -137,12 +146,24 @@ describe("native runtime resources", () => {
 		expect(extraResourcesForPlatform("win32")).not.toContain("cloudflared");
 	});
 
+	it("fails packaging when the Liquid Glass icon catalog was not copied into Resources", async () => {
+		const resources = join(fixtureDir, "AO.app", "Contents", "Resources");
+		mkdirSync(join(resources, "update-helper"), { recursive: true });
+		mkdirSync(join(resources, "wake-helper"), { recursive: true });
+		writeFileSync(join(resources, "update-helper", "ao-update-progress"), "");
+		writeFileSync(join(resources, "wake-helper", "ao-wake"), "");
+		const hook = config.hooks?.postPackage;
+		if (typeof hook !== "function") throw new Error("postPackage hook missing");
+		await expect(hook(config, { platform: "darwin", arch: "arm64", outputPaths: [fixtureDir] })).rejects.toThrow("packaged macOS app icon catalog missing");
+	});
+
 	it("fails packaging when cloudflared was not copied into Resources", async () => {
 		const resources = join(fixtureDir, "AO.app", "Contents", "Resources");
 		mkdirSync(join(resources, "update-helper"), { recursive: true });
 		mkdirSync(join(resources, "wake-helper"), { recursive: true });
 		writeFileSync(join(resources, "update-helper", "ao-update-progress"), "");
 		writeFileSync(join(resources, "wake-helper", "ao-wake"), "");
+		writeFileSync(join(resources, "Assets.car"), "");
 		const dictationHelper = join(resources, "dictation-helper", "Orchestrator.app", "Contents", "MacOS");
 		mkdirSync(dictationHelper, { recursive: true });
 		writeFileSync(join(dictationHelper, "Orchestrator"), "");
@@ -424,6 +445,10 @@ describe("packaged native dependencies", () => {
 		if (typeof ignore !== "function") return;
 
 		expect(ignore("/.vite/build/main.js")).toBe(false);
+		// Release source maps go to Sentry, never into the app.
+		expect(ignore("/.vite/build/main.js.map")).toBe(true);
+		expect(ignore("/.vite/renderer/main_window/assets/index-RzpjvxTk.js.map")).toBe(true);
+		expect(ignore("/.vite/renderer/main_window/assets/index-RzpjvxTk.js")).toBe(false);
 		expect(ignore("/node_modules")).toBe(false);
 		expect(ignore("/node_modules/better-sqlite3/build/Release/better_sqlite3.node")).toBe(false);
 		expect(ignore("/node_modules/bindings/bindings.js")).toBe(false);

@@ -35,6 +35,22 @@ type ChatSteerer interface {
 	Steer(ctx context.Context, providerTurnID string, msg ChatUserMessage) (ChatTurnRef, error)
 }
 
+// ChatSteerWithdrawer is implemented by drivers whose Steer can wait for the
+// agent to collect guidance. A Steer holds the Chat controller's dispatch lock,
+// so Stop calls WithdrawPendingSteers first, and a waiting Steer returns
+// ErrChatTurnNotSteerable at once instead of holding Stop back. Guidance the
+// agent has already taken is not affected.
+//
+// A driver may also refuse later steers for the running turn until Stop ends
+// it. The returned restore then gives steering back to the turn this call
+// withdrew it from, and Stop calls it when it did not stop the turn after all.
+// Restoring is bound to that turn: a late restore never lifts a later turn's
+// Stop. restore may be nil, and calling it more than once has no further
+// effect.
+type ChatSteerWithdrawer interface {
+	WithdrawPendingSteers() (restore func())
+}
+
 // Errors a ChatSteerer returns. Both are ordinary outcomes rather than failures,
 // and they are distinct because the advice a client should give differs: one means
 // "send this as a new message instead", the other means "wait, then try again".

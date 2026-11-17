@@ -2,6 +2,7 @@ package acp
 
 import (
 	"fmt"
+	"os"
 	"path/filepath"
 	"sort"
 	"strings"
@@ -19,11 +20,8 @@ func normalizeAdditionalDirectories(cwd string, directories []string, supported,
 	if len(directories) == 0 {
 		return nil, nil
 	}
-	if !supported {
-		if implicitWorkspace {
-			return nil, nil
-		}
-		return nil, fmt.Errorf("ACP agent does not support additional workspace directories")
+	if !supported && implicitWorkspace {
+		return nil, nil
 	}
 	seen := map[string]struct{}{filepath.Clean(cwd): {}}
 	out := make([]string, 0, len(directories))
@@ -38,7 +36,42 @@ func normalizeAdditionalDirectories(cwd string, directories []string, supported,
 		seen[clean] = struct{}{}
 		out = append(out, clean)
 	}
-	return out, nil
+	if supported {
+		return out, nil
+	}
+	workspace, err := filepath.EvalSymlinks(cwd)
+	if err != nil {
+		return nil, fmt.Errorf("resolve workspace directory: %w", err)
+	}
+	info, err := os.Stat(workspace)
+	if err != nil {
+		return nil, fmt.Errorf("stat workspace directory: %w", err)
+	}
+	if !info.IsDir() {
+		return nil, fmt.Errorf("workspace path must be a directory, got %q", cwd)
+	}
+	for _, directory := range out {
+		relative, err := filepath.Rel(cwd, directory)
+		if err != nil || !filepath.IsLocal(relative) {
+			return nil, fmt.Errorf("ACP agent does not support additional workspace directories outside cwd: %q", directory)
+		}
+		resolved, err := filepath.EvalSymlinks(directory)
+		if err != nil {
+			return nil, fmt.Errorf("resolve additional workspace directory %q: %w", directory, err)
+		}
+		info, err := os.Stat(resolved)
+		if err != nil {
+			return nil, fmt.Errorf("stat additional workspace directory %q: %w", directory, err)
+		}
+		if !info.IsDir() {
+			return nil, fmt.Errorf("additional workspace path must be a directory, got %q", directory)
+		}
+		relative, err = filepath.Rel(workspace, resolved)
+		if err != nil || !filepath.IsLocal(relative) {
+			return nil, fmt.Errorf("ACP agent does not support additional workspace directories outside cwd: %q", directory)
+		}
+	}
+	return nil, nil
 }
 
 func normalizeMCPServers(configs []ports.ChatMCPServerConfig, caps acpsdk.McpCapabilities) ([]acpsdk.McpServer, error) {

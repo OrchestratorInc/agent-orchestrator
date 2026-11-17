@@ -21,6 +21,8 @@ export type SessionStartupView = {
 	namingBranch: boolean;
 	/** The turn carrying the opening brief, which reads as sent while setup runs. */
 	openingTurnId?: string;
+	/** Step names other than the local ones, for a start with other stages (a cloud sandbox). */
+	labels?: Partial<Record<SessionProvisionStep["id"], string>>;
 };
 
 type StartupSession = Partial<Pick<DashboardSession, "provisionState" | "provisionSteps" | "provisionError" | "branch" | "branchNaming" | "isTerminated">>;

@@ -29,6 +29,7 @@ export function SettingsOptionMenu<T extends string>({
 	renderMenuItem,
 	renderTrigger,
 	triggerClassName,
+	triggerVariant,
 	showCaret,
 	menuClassName,
 	menuItemClassName,
@@ -51,6 +52,7 @@ export function SettingsOptionMenu<T extends string>({
 	renderMenuItem?: (option: SettingsOption<T>, selected: boolean) => ReactNode;
 	renderTrigger?: (selected: SettingsOption<T> | undefined, placeholder?: string) => ReactNode;
 	triggerClassName?: string;
+	triggerVariant?: "secondary" | "ghost";
 	showCaret?: boolean;
 	menuClassName?: string;
 	menuItemClassName?: string;
@@ -94,7 +96,7 @@ export function SettingsOptionMenu<T extends string>({
 			}}
 		>
 			<DropdownMenuTrigger asChild disabled={disabled}>
-				<SettingsMenuTrigger ref={triggerRef} className={triggerClassName} showCaret={showCaret} aria-label={ariaLabel}>
+				<SettingsMenuTrigger variant={triggerVariant} ref={triggerRef} className={triggerClassName} showCaret={showCaret} aria-label={ariaLabel}>
 					{renderTrigger ? (
 						renderTrigger(selected, placeholder)
 					) : (

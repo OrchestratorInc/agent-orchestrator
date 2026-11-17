@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"net/url"
+	"slices"
 	"strconv"
 	"strings"
 	"sync/atomic"
@@ -1109,7 +1110,7 @@ func TestPipelineStatusToCI(t *testing.T) {
 	}{
 		{"success", "passing"},
 		{"failed", "failing"},
-		{"canceled", "failing"},
+		{"canceled", "unknown"},
 		{"running", "pending"},
 		{"pending", "pending"},
 		{"created", "pending"},
@@ -1477,6 +1478,76 @@ func TestFetchPullRequests_PipelineJobsPagination(t *testing.T) {
 	}
 }
 
+func TestFetchPullRequests_CanceledPipeline(t *testing.T) {
+	cases := []struct {
+		name       string
+		jobs       []map[string]any
+		wantCI     domain.CIState
+		wantFailed []string
+	}{
+		{
+			name:   "only canceled jobs is not a failure",
+			jobs:   []map[string]any{{"id": 1, "name": "lint", "status": "canceled"}},
+			wantCI: domain.CIUnknown,
+		},
+		{
+			name: "a required job that already failed stays failing",
+			jobs: []map[string]any{
+				{"id": 1, "name": "lint", "status": "canceled"},
+				{"id": 2, "name": "build", "status": "failed"},
+			},
+			wantCI:     domain.CIFailing,
+			wantFailed: []string{"build"},
+		},
+		{
+			name:   "an optional failed job does not make it failing",
+			jobs:   []map[string]any{{"id": 2, "name": "build", "status": "failed", "allow_failure": true}},
+			wantCI: domain.CIUnknown,
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			mux := http.NewServeMux()
+			mux.HandleFunc("/api/v4/projects/myorg%2Fmyrepo/merge_requests/1", func(w http.ResponseWriter, r *http.Request) {
+				json.NewEncoder(w).Encode(map[string]any{
+					"iid": 1, "title": "Fix bug", "state": "opened", "draft": false,
+					"web_url":       "https://gitlab.com/myorg/myrepo/-/merge_requests/1",
+					"source_branch": "fix-bug", "target_branch": "main", "sha": "abc123",
+					"merge_status": "mergeable", "detailed_merge_status": "mergeable",
+					"author": map[string]any{"username": "alice"},
+				})
+			})
+			mux.HandleFunc("/api/v4/projects/myorg%2Fmyrepo/pipelines", func(w http.ResponseWriter, r *http.Request) {
+				json.NewEncoder(w).Encode([]map[string]any{{"id": 100, "status": "canceled", "sha": "abc123"}})
+			})
+			mux.HandleFunc("/api/v4/projects/myorg%2Fmyrepo/pipelines/100/jobs", func(w http.ResponseWriter, r *http.Request) {
+				json.NewEncoder(w).Encode(tc.jobs)
+			})
+			mux.HandleFunc("/api/v4/projects/myorg%2Fmyrepo/merge_requests/1/approvals", func(w http.ResponseWriter, r *http.Request) {
+				json.NewEncoder(w).Encode(map[string]any{"approved": false, "approvals_required": 0, "approved_by": []any{}})
+			})
+			_, p := testServer(t, mux)
+			repo := ports.SCMRepo{Provider: "gitlab", Host: "gitlab.com", Owner: "myorg", Name: "myrepo", Repo: "myorg/myrepo"}
+			ref := ports.SCMPRRef{Repo: repo, Number: 1, URL: "https://gitlab.com/myorg/myrepo/-/merge_requests/1"}
+
+			obs, err := p.FetchPullRequests(context.Background(), []ports.SCMPRRef{ref})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if obs[0].CI.Summary != string(tc.wantCI) {
+				t.Fatalf("CI summary = %q, want %q", obs[0].CI.Summary, tc.wantCI)
+			}
+			var failed []string
+			for _, ch := range obs[0].CI.FailedChecks {
+				failed = append(failed, ch.Name)
+			}
+			if !slices.Equal(failed, tc.wantFailed) {
+				t.Fatalf("failed checks = %v, want %v", failed, tc.wantFailed)
+			}
+		})
+	}
+}
+
 // TestFetchReviewThreads_DiscussionsPagination verifies that when an MR has
 // more than one page of discussions, all pages are fetched by following the
 // Link header
@@ -1795,6 +1866,11 @@ func TestFetchPullRequests_ForkMR_ResolvesSourceProjectHeadRepo(t *testing.T) {
 	if got, want := o.PR.HeadRepo, "contributor/myrepo-fork"; got != want {
 		t.Errorf("PR.HeadRepo = %q, want %q (source project path_with_namespace)", got, want)
 	}
+	// A fork's branch name says nothing about this project's branches, so the
+	// MR must never be read as a stack parent.
+	if !o.PR.HeadFromFork {
+		t.Error("PR.HeadFromFork = false, want true for a fork MR")
+	}
 	// The source-project endpoint must actually have been queried once.
 	if sourceProjectHits != 1 {
 		t.Errorf("source project endpoint hits = %d, want 1", sourceProjectHits)
@@ -1859,6 +1935,9 @@ func TestFetchPullRequests_NonForkMR_DoesNotFetchSourceProject(t *testing.T) {
 	// For a same-repo MR, HeadRepo stays the target repo (no fork resolution).
 	if got, want := obs[0].PR.HeadRepo, "myorg/myrepo"; got != want {
 		t.Errorf("PR.HeadRepo = %q, want %q (target repo for non-fork MR)", got, want)
+	}
+	if obs[0].PR.HeadFromFork {
+		t.Error("PR.HeadFromFork = true, want false for a same-project MR")
 	}
 	if sourceProjectHits != 0 {
 		t.Errorf("source project endpoint hits = %d, want 0 (non-fork MR must not trigger a fetch)", sourceProjectHits)

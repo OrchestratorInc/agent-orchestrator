@@ -23,6 +23,7 @@ import { useOpenPage } from "./pageNavigation";
 import { iconSize, space, type } from "./tokens";
 import { userFacingError } from "./connectionError";
 import { reviewRouteForSession } from "./reviewView";
+import { isCloudHost } from "./cloud/mapping";
 import { MachineIdentity } from "./MachineIdentity";
 import type { MachineAppearance } from "./machineAppearance";
 
@@ -165,6 +166,8 @@ export const WorkerListRow = memo(
 		});
 	}, [router, session, hostId]);
 
+	const cloudRow = isCloudHost(sessionHostId(session) ?? hostId);
+	// The PR page reads the worker's own host: its machine's daemon, or Orchestrator Cloud.
 	const reviewRoute = reviewRouteForSession(session, sessionHostId(session) ?? hostId);
 	const terminated = session.isTerminated === true || session.status === "terminated";
 	const contextActions = workerContextActions({
@@ -174,6 +177,7 @@ export const WorkerListRow = memo(
 		// session around it is still intact, so resuming is the lighter fix.
 		stopped: !terminated && (session.status === "exited" || session.status === "errored"),
 		hasPr: Boolean(reviewRoute),
+		cloud: cloudRow,
 	});
 
 	const runAction = useCallback((id: WorkerActionId) => {
@@ -401,7 +405,7 @@ const makeStyles = (t: Theme) =>
 			paddingVertical: space.sm,
 			gap: space.hair,
 		},
-		// Inset to the text, as T3 Code's list rows are, and drawn inside the row
+		// Inset to the text, and drawn inside the row
 		// so it travels with a swipe instead of staying behind on the rail.
 		divider: { position: "absolute", left: space.lg, right: 0, bottom: 0, height: rowDividerWidth, backgroundColor: t.borderSubtle },
 		titleEditor: { minHeight: 32, flexDirection: "row", alignItems: "center", gap: space.xs },

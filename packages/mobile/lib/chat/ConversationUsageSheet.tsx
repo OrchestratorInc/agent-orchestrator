@@ -4,20 +4,21 @@ import type { Theme } from "../theme";
 import { useTheme, useThemedStyles } from "../ThemeProvider";
 import { radius, space, type } from "../tokens";
 import { SheetScreen } from "../ui";
-import { compactContextUsageLabel, compactTokenCount, contextReadout, contextUsageLabel, resetLabel, type Severity } from "./conversationChrome";
+import { compactContextUsageLabel, compactTokenCount, contextReadout, contextUsageLabel, quotaWindows, resetLabel, type Severity } from "./conversationChrome";
 import type { ConversationSnapshot } from "./types";
 
 /**
  * The conversation's context window, token counts and account limit, as a
- * small details sheet off the conversation menu and the quota banner.
+ * small details sheet off the conversation menu and the quota chip.
  */
 export function ConversationUsageSheet({ sessionTitle, snapshot }: { sessionTitle: string; snapshot: ConversationSnapshot }) {
 	const styles = useThemedStyles(makeStyles);
 	const usage = snapshot.usage;
 	const limits = snapshot.rateLimits;
 	const context = contextReadout(usage);
-	const limitPercent = limits && Number.isFinite(limits.primaryUsedPercent) ? Math.min(100, Math.max(0, Math.round(limits.primaryUsedPercent))) : undefined;
-	const reset = resetLabel(limits?.primaryResetsInSeconds);
+	// Every window the provider reported: the chip warns on the fullest, which is
+	// not always the primary one.
+	const windows = quotaWindows(limits);
 	return (
 		<SheetScreen title="Context & usage" subtitle={sessionTitle}>
 			<View style={styles.rows}>
@@ -32,21 +33,26 @@ export function ConversationUsageSheet({ sessionTitle, snapshot }: { sessionTitl
 				) : null}
 				{usage ? <UsageRow label="Tokens" value={`${compactTokenCount(usage.inputTokens)} in · ${compactTokenCount(usage.outputTokens)} out`} /> : null}
 				{usage?.cost != null ? <UsageRow label="Cost" value={`${usage.currency || "$"}${usage.cost.toFixed(4)}`} /> : null}
-				{limits && limitPercent !== undefined ? (
-					<UsageRow
-						label={limits.planLabel || "Primary limit"}
-						value={`${limitPercent}% used`}
-						detail={reset ? `Resets in ${reset}` : undefined}
-						meter={{ percent: limitPercent, fill: Math.max(2, limitPercent), severity: limitPercent >= 90 ? "critical" : limitPercent >= 75 ? "warn" : "normal" }}
-					/>
-				) : null}
-				{!usage && !limits ? <Text style={styles.detail}>The agent hasn't reported usage for this conversation yet.</Text> : null}
+				{windows.map((window) => {
+					const reset = resetLabel(window.resetsInSeconds);
+					return (
+						<UsageRow
+							key={window.key}
+							label={window.label}
+							value={`${window.percent}% used`}
+							detail={reset ? `Resets in ${reset}` : undefined}
+							meter={{ percent: window.percent, fill: window.fillPercent, severity: window.severity }}
+						/>
+					);
+				})}
+				{!usage && windows.length === 0 ? <Text style={styles.detail}>The agent hasn't reported usage for this conversation yet.</Text> : null}
 			</View>
 		</SheetScreen>
 	);
 }
 
-function UsageRow({ label, value, detail, detailLabel, meter }: {
+/** One measured line: label and value, an optional meter, and a detail under them. */
+export function UsageRow({ label, value, detail, detailLabel, meter }: {
 	label: string;
 	value?: string;
 	detail?: string;

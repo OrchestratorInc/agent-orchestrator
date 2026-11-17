@@ -65,6 +65,20 @@ describe("SettingsSection", () => {
 		expect(card).not.toContainElement(toolbar);
 	});
 
+	it("keeps a title-less toolbar inside the page body's top padding", () => {
+		render(
+			<SettingsPageTitleContext.Provider value="Harness">
+				<SettingsSection title="Harness" sectionId="harness" toolbar={<div data-testid="toolbar" />}>
+					<SettingsRow label="Row" />
+				</SettingsSection>
+			</SettingsPageTitleContext.Provider>,
+		);
+		expect(screen.queryByRole("heading", { name: "Harness" })).not.toBeInTheDocument();
+		// The page title is in the top bar, so nothing in the body to tuck under:
+		// a negative top margin would pull the search onto the panel's top edge.
+		expect(screen.getByTestId("toolbar").parentElement?.className).not.toMatch(/(^|\s)-mt-/);
+	});
+
 	it("hides only a heading equal to the page title", () => {
 		render(
 			<SettingsPageTitleContext.Provider value="Coder">

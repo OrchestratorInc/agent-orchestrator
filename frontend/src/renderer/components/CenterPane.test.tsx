@@ -3,7 +3,6 @@ import { act, fireEvent, render, screen, waitFor, within } from "@testing-librar
 import userEvent from "@testing-library/user-event";
 import type { ComponentProps, ReactNode } from "react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { useUiStore } from "../stores/ui-store";
 import type { WorkspaceSession } from "../types/workspace";
 import { CenterPane } from "./CenterPane";
 import { TabSplitMenuContext } from "./TabContextMenu";
@@ -116,8 +115,6 @@ function renderCenterPane(props: Partial<ComponentProps<typeof CenterPane>> = {}
 }
 
 beforeEach(() => {
-	// The simplified top bar is a Developer Mode preview; this suite covers it.
-	useUiStore.setState({ developerMode: true });
 	shortcutMocks.closeListener = undefined;
 	shortcutMocks.nextTabListener = undefined;
 	shortcutMocks.previousTabListener = undefined;
@@ -258,7 +255,7 @@ describe("CenterPane toolbar session label", () => {
 
 		const mainTab = screen.getByRole("tab", { name: /^do the thing/ });
 		const mainContainer = mainTab.closest("[data-terminal-tab-frame]");
-		expect(mainContainer).toHaveClass("self-stretch", "min-w-shell-tab-min", "max-w-shell-tab-max");
+		expect(mainContainer).toHaveClass("self-stretch", "min-w-shell-tab-min", "max-w-session-tab-max");
 		expect(mainContainer).not.toHaveClass("bg-surface");
 		expect(mainContainer).not.toHaveClass("session-primary-tab");
 		expect(mainContainer).not.toHaveClass("rounded-md");
@@ -537,8 +534,10 @@ describe("CenterPane toolbar session label", () => {
 		expect(screen.getByRole("tablist", { name: "Open terminals" })).not.toHaveClass("flex-1");
 		expect(screen.queryByRole("toolbar", { name: "Terminal display controls" })).not.toBeInTheDocument();
 		expect(terminalRegion).toContainElement(screen.getByRole("button", { name: "Session tab action" }));
-		expect(screen.getByTestId("session-tab-action").parentElement).toHaveClass("absolute", "left-2", "top-1/2");
-		expect(screen.getByRole("tab", { name: /^do the thing/ })).toHaveClass("h-full", "flex-1");
+		expect(screen.getByTestId("session-tab-action").parentElement).toHaveClass("mr-2", "shrink-0");
+		expect(screen.getByTestId("session-tab-action").parentElement?.previousElementSibling).toBe(screen.getByRole("tab", { name: /^do the thing/ }));
+		expect(screen.getByRole("tab", { name: /^do the thing/ })).toHaveClass("h-full", "flex-1", "pl-2", "pr-1.5");
+		expect(screen.getByRole("tab", { name: /^do the thing/ }).closest("[data-terminal-tab-frame]")).toHaveClass("max-w-session-tab-max");
 		expect(terminalRegion).not.toContainElement(screen.getByTestId("session-action-region"));
 		const actionRegion = screen.getByTestId("session-action-region");
 		expect(actionRegion).not.toHaveClass("border-l");
@@ -548,22 +547,6 @@ describe("CenterPane toolbar session label", () => {
 		expect(actionRegion).not.toContainElement(screen.getByRole("button", { name: "Session tab action" }));
 		expect(tabStripAction).toHaveTextContent("New terminal");
 		expect(document.querySelector("[data-tab-scroll-region]")).not.toHaveAttribute("data-fade-end");
-	});
-
-	it("keeps terminal creation with the workspace actions without Developer Mode", () => {
-		useUiStore.setState({ developerMode: false });
-		renderCenterPane({
-			session: worker,
-			tabStripAction: <button type="button">New terminal</button>,
-			topbarActions: <button type="button">Workspace action</button>,
-		});
-
-		const tablist = screen.getByRole("tablist", { name: "Open terminals" });
-		const actionRegion = screen.getByTestId("session-action-region");
-		expect(actionRegion).toContainElement(screen.getByRole("button", { name: "New terminal" }));
-		expect(actionRegion).toContainElement(screen.getByRole("button", { name: "Workspace action" }));
-		expect(screen.getByTestId("session-terminal-region")).not.toContainElement(screen.getByTestId("session-tab-strip-action"));
-		expect(tablist).toHaveClass("flex-1");
 	});
 
 	it("keeps the tab strip flush with the action controls", () => {
@@ -852,7 +835,13 @@ describe("CenterPane tab context menu", () => {
 		const onClose = vi.fn();
 		renderCenterPane({
 			session: worker,
-			workspaceTabs: [{ key: "file:a.ts", content: <button role="tab" type="button">a.ts</button>, onSelect: vi.fn(), onClose }],
+			workspaceTabs: [{
+				key: "file:a.ts",
+				content: <button role="tab" type="button">a.ts</button>,
+				onSelect: vi.fn(),
+				onClose,
+				menu: { kind: "file", tabKey: "file:a.ts", onClose, file: { path: "a.ts", sessionId: "sess-1", remote: false } },
+			}],
 		});
 
 		fireEvent.contextMenu(screen.getByRole("tab", { name: "a.ts" }));
@@ -893,17 +882,25 @@ describe("CenterPane tab context menu", () => {
 		expect(await screen.findByRole("menuitem", { name: /Archive session/ })).toBeInTheDocument();
 		unmount();
 
-		renderCenterPane({ session: { ...worker, cloud: { orgId: "org-1" } } as WorkspaceSession });
+		// A Cloud worker archives like a local one.
+		const cloud = renderCenterPane({ session: { ...worker, cloud: { orgId: "org-1" } } as WorkspaceSession });
 		fireEvent.contextMenu(screen.getByRole("tab", { name: /^do the thing/ }));
-		await screen.findByRole("menuitem", { name: "Close tab" });
+		expect(await screen.findByRole("menuitem", { name: /Archive session/ })).toBeInTheDocument();
+		cloud.unmount();
+
+		// A Cloud session shared from another organization is the sharer's to archive.
+		renderCenterPane({ session: { ...worker, cloud: { orgId: "org-1", shared: true } } as WorkspaceSession });
+		fireEvent.contextMenu(screen.getByRole("tab", { name: /^do the thing/ }));
+		await screen.findByRole("menu");
 		expect(screen.queryByRole("menuitem", { name: /Archive session/ })).not.toBeInTheDocument();
 	});
 
-	it("never closes the session's own tab", async () => {
+	it("lists no Close tab for the session's own tab", async () => {
 		renderCenterPane({ session: worker, shellTerminals: shells, onCloseShellTerminal: vi.fn() });
 
 		fireEvent.contextMenu(screen.getByRole("tab", { name: /^do the thing/ }));
 
-		expect(await screen.findByRole("menuitem", { name: "Close tab" })).toHaveAttribute("aria-disabled", "true");
+		expect(await screen.findByRole("menuitem", { name: /Archive session/ })).toBeInTheDocument();
+		expect(screen.queryByRole("menuitem", { name: "Close tab" })).not.toBeInTheDocument();
 	});
 });

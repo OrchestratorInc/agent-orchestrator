@@ -9,6 +9,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"log/slog"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
@@ -22,6 +23,7 @@ import (
 	"time"
 
 	"github.com/aoagents/agent-orchestrator/backend/internal/attachmentstore"
+	"github.com/aoagents/agent-orchestrator/backend/internal/config"
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
 	"github.com/aoagents/agent-orchestrator/backend/internal/httpd"
 	"github.com/aoagents/agent-orchestrator/backend/internal/mobilebridge"
@@ -400,6 +402,73 @@ func TestDeleteArtifactFileRefusesAnythingButAListedRegularFile(t *testing.T) {
 		if _, err := os.Stat(file); err != nil {
 			t.Errorf("%s was removed: %v", file, err)
 		}
+	}
+}
+
+// artifactRegistrationServer serves a session listing plan.md and returns its
+// fake service, which the registration routes call.
+func artifactRegistrationServer(t *testing.T) (*httptest.Server, *fakeSessionService) {
+	t.Helper()
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "plan.md"), []byte("plan"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	svc := newFakeSessionService()
+	s := svc.sessions["ao-1"]
+	s.Metadata.ArtifactDir = dir
+	s.ArtifactFiles = []domain.SessionArtifactFile{{Path: "plan.md", Name: "plan.md"}}
+	svc.sessions["ao-1"] = s
+	log := slog.New(slog.NewTextHandler(io.Discard, nil))
+	srv := httptest.NewServer(httpd.NewRouterWithControl(config.Config{}, log, nil, httpd.APIDeps{Sessions: svc}, httpd.ControlDeps{}))
+	t.Cleanup(srv.Close)
+	return srv, svc
+}
+
+func TestRegisterArtifacts(t *testing.T) {
+	srv, fake := artifactRegistrationServer(t)
+	post := func(body string) (*http.Response, string) {
+		t.Helper()
+		resp, err := http.Post(srv.URL+"/api/v1/sessions/ao-1/artifact-registrations", "application/json", strings.NewReader(body))
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer func() { _ = resp.Body.Close() }()
+		raw, err := io.ReadAll(resp.Body)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return resp, string(raw)
+	}
+	resp, body := post(`{"paths":["plan.md"]}`)
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("status = %d, body %s", resp.StatusCode, body)
+	}
+	var got struct {
+		Registered     []string `json:"registered"`
+		OtherFiles     int      `json:"otherFiles"`
+		OtherRootFiles []string `json:"otherRootFiles"`
+	}
+	if err := json.Unmarshal([]byte(body), &got); err != nil {
+		t.Fatal(err)
+	}
+	if len(got.Registered) != 1 || got.Registered[0] != "plan.md" || got.OtherFiles != 2 || len(got.OtherRootFiles) != 1 {
+		t.Fatalf("response = %+v", got)
+	}
+	if len(fake.artifactsRegistered) != 1 {
+		t.Fatalf("registered = %v", fake.artifactsRegistered)
+	}
+	if resp, _ := post(`{"paths":[]}`); resp.StatusCode != http.StatusBadRequest {
+		t.Fatalf("empty paths status = %d, want 400", resp.StatusCode)
+	}
+}
+
+func TestDeleteArtifactFileForgetsItsRegistration(t *testing.T) {
+	srv, fake := artifactRegistrationServer(t)
+	if status := deleteArtifactFile(t, srv, "plan.md"); status != http.StatusOK {
+		t.Fatalf("status = %d, want 200", status)
+	}
+	if len(fake.artifactsUnregistered) != 1 || fake.artifactsUnregistered[0] != "plan.md" {
+		t.Fatalf("unregistered = %v", fake.artifactsUnregistered)
 	}
 }
 

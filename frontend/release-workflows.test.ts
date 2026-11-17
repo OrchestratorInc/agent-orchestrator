@@ -173,6 +173,14 @@ run: |
     );
   });
 
+  it("marks artifacts as published builds and hands Sentry source maps to the conductor", async () => {
+    const contents = await readFile(artifactBuilder, "utf8");
+
+    expect(contents).toContain('AO_PUBLISHED_BUILD: "1"');
+    expect(contents).toContain("name: sentry-sourcemaps-${{ matrix.platform }}");
+    expect(contents).toContain("frontend/.vite/renderer/main_window/assets/*.js.map");
+  });
+
   it("takes Teams for stable builds only from the VITE_AO_TEAMS repository variable", async () => {
     const contents = await readFile(artifactBuilder, "utf8");
 

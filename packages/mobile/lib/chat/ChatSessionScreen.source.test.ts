@@ -4,6 +4,7 @@ import { describe, expect, it } from "vitest";
 const screenSource = readFileSync(new URL("./ChatSessionScreen.tsx", import.meta.url), "utf8");
 const composerSource = readFileSync(new URL("./ChatComposer.tsx", import.meta.url), "utf8");
 const apiSource = readFileSync(new URL("./api.ts", import.meta.url), "utf8");
+const cloudScreenSource = readFileSync(new URL("../cloud/CloudSessionScreen.tsx", import.meta.url), "utf8");
 
 describe("active turn controls", () => {
 	it("remounts the composer when a same-ID session changes host", () => {
@@ -39,6 +40,14 @@ describe("active turn controls", () => {
 		expect(composerSource).toContain('accessibilityLabel={`Steer queued message: ${entry.message.text}`}');
 	});
 
+	// Orchestrator Cloud has no route to steer with or delete a queued turn: its
+	// queue showed both, and Steer hid a message that stayed queued.
+	it("offers a queued message's actions only where the host takes them", () => {
+		expect(composerSource).toContain("{canSteer && onPromoteQueuedTurn ? <Pressable");
+		expect(composerSource).toContain("{onCancelQueuedTurn ? <Pressable");
+		expect(cloudScreenSource).not.toMatch(/onPromoteQueuedTurn=|onCancelQueuedTurn=/);
+	});
+
 	it("keeps the queued row compact without a second labeled steer pill", () => {
 		expect(composerSource).not.toContain("queueSteerText");
 	});
@@ -67,7 +76,8 @@ describe("active turn controls", () => {
 		// The setup checklist reports a failed start in place, with Retry; the banner covers the rest.
 		expect(screenSource).toContain('startFailure={startupShown ? undefined : failedStart}');
 		// A starting session shows its checklist while the conversation loads, not a bare spinner.
-		expect(screenSource).toContain("conversation.loading && !conversation.snapshot && startupView && !startupView.failed");
+		expect(screenSource).toContain("const awaitingConversation = (conversation.loading && !conversation.snapshot) || holdArrivingSnapshot;");
+		expect(screenSource).toContain("if (awaitingConversation && startupView && !startupView.failed) {");
 		expect(screenSource).toContain("<SessionStartupStatus startup={startupView} />");
 		// While the checklist reports setup, the yellow "Starting the agent…" banner stands down.
 		expect(screenSource).toContain('!startFailure && !starting && (snapshot.controller.state === "recovering"');
@@ -76,7 +86,7 @@ describe("active turn controls", () => {
 		// Serially, so a read slower than the poll interval is never superseded (see serialPoll.test.ts).
 		expect(screenSource).toContain("return startSerialPoll(refreshConversation, STARTUP_POLL_MS);");
 		expect(screenSource).not.toContain("setInterval(() => void refreshConversation()");
-		expect(screenSource).toContain('disabled={interfaceTransitionActive || Boolean(failedStart)}');
+		expect(screenSource).toContain('disabled={switchingToTerminal || Boolean(failedStart)}');
 	});
 
 	it("offers a live PR review shortcut while leaving the chat composer in place", () => {
@@ -125,5 +135,15 @@ describe("the composer and the keyboard", () => {
 		const follower = screenSource.indexOf("<KeyboardFollower lift={chatKeyboard.composerLift} style={styles.floatingComposer} onLayout={measureComposer}>");
 		expect(follower).toBeGreaterThan(root);
 		expect(screenSource.indexOf("<ChatComposer")).toBeGreaterThan(follower);
+	});
+});
+
+// iOS 26's glass blurred only the status bar over the conversation and left
+// the title over sharp text; iOS 27's covers the whole bar.
+describe("the bar over the conversation", () => {
+	it("is the clear glass bar on iOS 27 and later only, and the stack's own bar on every other iOS", () => {
+		expect(screenSource).toContain('const CLEAR_HEADER = (SYSTEM_GLASS_HEADER && parseInt(String(Platform.Version), 10) >= 27) || Platform.OS === "android";');
+		expect(screenSource).toContain("if (!CLEAR_HEADER) return;");
+		expect(screenSource).not.toContain("headerBlurEffect");
 	});
 });

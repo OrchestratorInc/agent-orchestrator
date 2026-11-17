@@ -1,4 +1,4 @@
-import { Code2, FolderOpen, SquareTerminal } from "lucide-react";
+import { Code2, FolderOpen, SquareTerminal } from "@/components/app-icons";
 import { useState } from "react";
 import type { OpenTarget } from "../../shared/editor-handoff";
 import {

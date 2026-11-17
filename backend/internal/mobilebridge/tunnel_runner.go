@@ -12,6 +12,7 @@ import (
 	"net/url"
 	"os"
 	"regexp"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -108,7 +109,7 @@ var (
 	// be served now.
 	errFixedTunnelReady = errors.New("fixed address ready")
 	// errFixedTunnelChanged stops a fixed tunnel AO Cloud no longer hands out.
-	errFixedTunnelChanged = errors.New("AO Cloud no longer hands out this fixed address")
+	errFixedTunnelChanged = errors.New("this fixed address is no longer handed out by Orchestrator Cloud")
 )
 
 func (t *TunnelRunner) runOnce(ctx context.Context) error {
@@ -351,11 +352,29 @@ func newConnectorHealth(start time.Time) *connectorHealth {
 var (
 	connIndexRe = regexp.MustCompile(`\bconnIndex=(\d+)`)
 	connDownRe  = regexp.MustCompile(`\b(?:Connection terminated|Serve tunnel error|Unregistered tunnel connection|Retrying connection)\b`)
-	// Cloudflare's edge refusing the run token: the tunnel was deleted or its
-	// token replaced. The wording has varied across releases.
-	refusedRe       = regexp.MustCompile(`\bRegister tunnel error from server side\b`)
-	refusedReasonRe = regexp.MustCompile(`error="(?:Unauthorized:[^"]*|Failed to get tunnel|Tunnel not found|Record for tunnel not found|Invalid tunnel secret)"`)
 )
+
+// edgeRefusedToken reports whether a line is Cloudflare's edge refusing the
+// run token, because the tunnel was deleted or its token replaced: a
+// server-side registration error whose reason denies the token or cannot find
+// the tunnel. The reason's wording has varied across cloudflared releases.
+func edgeRefusedToken(line string) bool {
+	_, rest, ok := strings.Cut(line, "Register tunnel error from server side")
+	if !ok {
+		return false
+	}
+	_, reason, ok := strings.Cut(rest, ` error="`)
+	if !ok {
+		return false
+	}
+	reason, _, _ = strings.Cut(strings.ToLower(reason), `"`)
+	for _, sign := range []string{"unauthorized", "not found", "failed to get tunnel", "invalid tunnel secret"} {
+		if strings.Contains(reason, sign) {
+			return true
+		}
+	}
+	return false
+}
 
 // feed records one output line and reports whether the edge has refused the
 // connector connectorRefusals times in a row. A new tunnel's token can be
@@ -363,7 +382,7 @@ var (
 func (h *connectorHealth) feed(line string, now time.Time) (refused bool) {
 	h.mu.Lock()
 	defer h.mu.Unlock()
-	if refusedRe.MatchString(line) && refusedReasonRe.MatchString(line) {
+	if edgeRefusedToken(line) {
 		h.refused++
 		return h.refused >= connectorRefusals
 	}

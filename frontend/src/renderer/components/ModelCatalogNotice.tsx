@@ -1,6 +1,6 @@
 import { useId, useState } from "react";
 import { useTranslation } from "react-i18next";
-import { LoaderCircle, LogIn, RotateCw } from "lucide-react";
+import { LoaderCircle, LogIn, RotateCw } from "@/components/app-icons";
 import type { ModelCatalogAuthIssue } from "../hooks/useAgentModelsQuery";
 import { cn } from "../lib/utils";
 import { Button } from "./ui/button";
@@ -49,7 +49,7 @@ export function ModelCatalogNotice({ agentLabel, issue, detail, onLogin, onRetry
 			<div className="flex flex-wrap items-center gap-x-2 gap-y-1">
 				<span className="min-w-0">{headline}</span>
 				<span className="inline-flex shrink-0 items-center gap-1">
-					<Button type="button" size="xs" variant="outline" onClick={onLogin}>
+					<Button type="button" size="xs" variant="secondary" onClick={onLogin}>
 						<LogIn aria-hidden="true" className="size-3.5" />
 						{issue === "expired" ? t("newTask.modelNotice.loginAgain") : t("newTask.modelNotice.login")}
 					</Button>

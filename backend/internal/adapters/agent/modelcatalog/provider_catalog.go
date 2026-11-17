@@ -45,14 +45,14 @@ func localProviderCatalog(ctx context.Context, agentID, binary, workingDir strin
 	switch agentID {
 	case "opencode", "kilocode", "mimo-code":
 		if raw, err := readProviderCatalog(providerCachePath(agentID, env)); err == nil {
-			result = parseProviderSnapshot(raw)
+			result = parseProviderSnapshot(raw, false)
 		}
 	case "omp":
 		result = ompProviderCatalog(ctx, filepath.Join(piCatalogDir(agentID, env), "models.db"))
 	case "pi", "kimchi":
 		dir := piCatalogDir(agentID, env)
 		if raw, err := readProviderCatalog(filepath.Join(dir, "models-store.json")); err == nil {
-			result = parseProviderSnapshot(raw)
+			result = parseProviderSnapshot(raw, true)
 		}
 		// User-declared providers remain visible even before their first login.
 		if raw, err := readProviderCatalog(filepath.Join(dir, "models.json")); err == nil {
@@ -60,7 +60,7 @@ func localProviderCatalog(ctx context.Context, agentID, binary, workingDir strin
 				Providers json.RawMessage `json:"providers"`
 			}
 			if json.Unmarshal(raw, &config) == nil {
-				custom := parseProviderSnapshot(config.Providers)
+				custom := parseProviderSnapshot(config.Providers, true)
 				result.Models = append(result.Models, custom.Models...)
 				result.Providers = append(result.Providers, custom.Providers...)
 			}
@@ -132,7 +132,8 @@ func readProviderCatalog(path string) ([]byte, error) {
 
 // Both models.dev caches and Pi's model store key their records by provider.
 // Decode only model metadata; apiKey, headers, URLs and other config stay local.
-func parseProviderSnapshot(raw []byte) ports.AgentModelCatalog {
+// piRules applies Pi's thinking-level defaults (see piThinkingLevels).
+func parseProviderSnapshot(raw []byte, piRules bool) ports.AgentModelCatalog {
 	var providers map[string]struct {
 		Models json.RawMessage `json:"models"`
 	}
@@ -145,13 +146,13 @@ func parseProviderSnapshot(raw []byte) ports.AgentModelCatalog {
 			continue
 		}
 		result.Providers = append(result.Providers, provider)
-		result.Models = append(result.Models, parseProviderModelRecords(entry.Models, provider)...)
+		result.Models = append(result.Models, parseProviderModelRecords(entry.Models, provider, piRules)...)
 	}
 	sort.Strings(result.Providers)
 	return result
 }
 
-func parseProviderModelRecords(raw []byte, provider string) []ports.AgentModelInfo {
+func parseProviderModelRecords(raw []byte, provider string, piRules bool) []ports.AgentModelInfo {
 	var records []map[string]any
 	if json.Unmarshal(raw, &records) != nil {
 		var keyed map[string]map[string]any
@@ -188,23 +189,27 @@ func parseProviderModelRecords(raw []byte, provider string) []ports.AgentModelIn
 		}
 		// These native catalogs store unqualified model IDs, including org/model.
 		models = append(models, ports.AgentModelInfo{ID: modelProvider + "/" + id, Label: label, Provider: modelProvider,
-			ContextWindow: catalogContextWindow(record), Inputs: catalogInputs(record), Efforts: piThinkingLevels(record)})
+			ContextWindow: catalogContextWindow(record), Inputs: catalogInputs(record), Efforts: piThinkingLevels(record, piRules)})
 	}
 	return models
 }
 
 // piThinkingLevels are a reasoning Pi model's thinking levels as effort choices,
-// so a switch to Pi can pick one before Pi runs. thinkingLevelMap sets a level
-// the model lacks to null; only levels pi-acp's bundled runtime takes are
-// offered. Records without the map (OpenCode's cache) name none.
-func piThinkingLevels(record map[string]any) []string {
+// so a switch to Pi can pick one before Pi runs. It mirrors pi-ai's
+// getSupportedThinkingLevels for the levels pi-acp's bundled runtime takes:
+// thinkingLevelMap sets a level the model lacks to null, and xhigh is offered
+// only when the map names it. Pi treats a missing map as minimal through high;
+// piRules applies that default, while other sources' records without the map
+// (OpenCode's cache) name none.
+func piThinkingLevels(record map[string]any, piRules bool) []string {
 	levels, mapped := record["thinkingLevelMap"].(map[string]any)
-	if reasoning, _ := record["reasoning"].(bool); !reasoning || !mapped {
+	if reasoning, _ := record["reasoning"].(bool); !reasoning || (!mapped && !piRules) {
 		return nil
 	}
 	var efforts []string
 	for _, level := range []string{"minimal", "low", "medium", "high", "xhigh"} {
-		if value, named := levels[level]; !named || value != nil {
+		value, named := levels[level]
+		if value != nil || (!named && level != "xhigh") {
 			efforts = append(efforts, level)
 		}
 	}
@@ -234,7 +239,7 @@ func ompProviderCatalog(ctx context.Context, path string) ports.AgentModelCatalo
 		}
 		// Cache keys can include account-specific suffixes: trust model.provider,
 		// never expose the cache key as a provider or infer it from a selector.
-		result.Models = append(result.Models, parseProviderModelRecords(raw, "")...)
+		result.Models = append(result.Models, parseProviderModelRecords(raw, "", false)...)
 	}
 	if rows.Err() != nil {
 		return ports.AgentModelCatalog{}
@@ -276,7 +281,7 @@ const pkg = JSON.parse(readFileSync(join(dirname(entry), '..', 'package.json'), 
 if (pkg.name !== scope + '/pi-ai' && !(owner.name === 'prime-agent' && pkg.name === 'prime-agent-ai')) process.exit(1);
 const {MODELS} = await import(pathToFileURL(join(dirname(entry), 'models.generated.js')).href);
 const models = Object.values(MODELS).flatMap(group => Object.values(group)).map(m =>
- ({id: m.id, name: m.name, provider: m.provider, contextWindow: m.contextWindow, input: m.input}));
+ ({id: m.id, name: m.name, provider: m.provider, contextWindow: m.contextWindow, input: m.input, reasoning: m.reasoning, thinkingLevelMap: m.thinkingLevelMap}));
 process.stdout.write(JSON.stringify(models));
 `
 
@@ -294,7 +299,7 @@ func piInstalledModels(ctx context.Context, binary, workingDir string, env map[s
 	if err != nil {
 		return nil
 	}
-	return parseProviderModelRecords(output, "")
+	return parseProviderModelRecords(output, "", true)
 }
 
 func providerCatalogFingerprint(agentID string, env map[string]string) string {

@@ -71,7 +71,7 @@ describe("the iOS machine editor", () => {
 			["no error", {}],
 			["port error", { portError: "Enter a port from 1 to 65535." }],
 			["no error again", {}],
-			["save failed", { failure: { message: "That password was rejected. Check it and try again.", field: "password" } }],
+			["save failed", { failure: { message: "That code or password was rejected. Get a new code and try again.", field: "password" } }],
 			["failure cleared by an edit", {}],
 		];
 		act(() => { renderer = create(<MachineEditorForm host={host} editor={editor()} />); });
