@@ -7244,7 +7244,7 @@ func (m *Manager) provisionWorkspace(ctx context.Context, project domain.Project
 		return err
 	}
 	if project.Kind.WithDefault() != domain.ProjectKindScratch {
-		if err := copyWorktreeInclude(ctx, project.Path, workspacePath, m.workspace); err != nil {
+		if err := copyWorktreeInclude(ctx, project, workspacePath, m.workspace); err != nil {
 			return err
 		}
 	}

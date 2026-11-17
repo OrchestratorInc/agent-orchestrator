@@ -111,7 +111,7 @@ Use `env`, `symlinks`, and `postCreate` for repeatable workspace setup. A failin
 
 Git projects also honor a `.worktreeinclude` file at the repository root, the same file Claude Code and the Codex app read. It uses `.gitignore` syntax. Each new session workspace gets its own copy of every file that matches it and that Git ignores, such as `.env`, so tracked files are never duplicated. Orchestrator reads the file from your source checkout, so it works even when `.worktreeinclude` itself is not committed. Copying runs after `symlinks` and before `postCreate`: a path listed in `symlinks` stays a link, existing workspace files are not overwritten, and symlinks in the source checkout are skipped.
 
-The session branch must also ignore the included files. If it does not, creation stops before copying them. Add the paths to that branch's `.gitignore`, then try again. Temporary copies stay excluded from Git even if Orchestrator stops during copying.
+Files that the session branch does not ignore are skipped. Add those paths to that branch's `.gitignore` if they are needed for setup. Temporary copies stay excluded from Git even if Orchestrator stops during copying.
 
 ```text
 .env

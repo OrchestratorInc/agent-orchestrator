@@ -5,6 +5,7 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"strings"
 	"testing"
 
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
@@ -34,10 +35,9 @@ func TestCopyWorktreeInclude(t *testing.T) {
 	}
 
 	workspace, adapter := newIncludedWorktree(t, project)
-	writeTestFile(t, filepath.Join(workspace, "README.md"), "hello\n")
 	writeTestFile(t, filepath.Join(workspace, "a.local"), "keep")
 
-	if err := copyWorktreeInclude(context.Background(), project, workspace, adapter); err != nil {
+	if err := copyWorktreeInclude(context.Background(), domain.ProjectRecord{Path: project}, workspace, adapter); err != nil {
 		t.Fatalf("copyWorktreeInclude: %v", err)
 	}
 
@@ -69,9 +69,37 @@ func TestCopyWorktreeInclude(t *testing.T) {
 	}
 }
 
+// newIncludeWorkspace checks out project's HEAD as a linked worktree, the
+// shape every session workspace has.
+func newIncludeWorkspace(t *testing.T, project string) string {
+	t.Helper()
+	workspace := filepath.Join(t.TempDir(), "workspace")
+	runManagerGit(t, project, "worktree", "add", "--detach", workspace, "HEAD")
+	return workspace
+}
+
+func TestCopyWorktreeIncludeSkipsFilesTheWorkspaceDoesNotIgnore(t *testing.T) {
+	project := newManagerGitRepo(t)
+	workspace := newIncludeWorkspace(t, project)
+	// Only the source checkout ignores the file: the rule is not committed.
+	writeTestFile(t, filepath.Join(project, ".gitignore"), "source-only.settings\n")
+	writeTestFile(t, filepath.Join(project, ".worktreeinclude"), "source-only.settings\n")
+	writeTestFile(t, filepath.Join(project, "source-only.settings"), "X=1")
+	if out := runManagerGit(t, project, "check-ignore", "source-only.settings"); strings.TrimSpace(out) != "source-only.settings" {
+		t.Fatalf("source does not ignore the file: %q", out)
+	}
+
+	if err := copyWorktreeInclude(context.Background(), domain.ProjectRecord{Path: project}, workspace, nil); err != nil {
+		t.Fatalf("copyWorktreeInclude: %v", err)
+	}
+	if _, err := os.Lstat(filepath.Join(workspace, "source-only.settings")); !os.IsNotExist(err) {
+		t.Fatalf("file the workspace does not ignore was copied (err=%v)", err)
+	}
+}
+
 func TestCopyWorktreeIncludeWithoutIncludeFileIsNoop(t *testing.T) {
 	// Not a Git repository: without a .worktreeinclude, Git is never run.
-	if err := copyWorktreeInclude(context.Background(), t.TempDir(), t.TempDir(), nil); err != nil {
+	if err := copyWorktreeInclude(context.Background(), domain.ProjectRecord{Path: t.TempDir()}, t.TempDir(), nil); err != nil {
 		t.Fatalf("copyWorktreeInclude: %v", err)
 	}
 }

@@ -9,6 +9,7 @@ import (
 	"testing"
 
 	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/workspace/gitworktree"
+	workspacerouter "github.com/aoagents/agent-orchestrator/backend/internal/adapters/workspace/router"
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
 )
 
@@ -32,8 +33,8 @@ func TestWorktreeIncludeRejectsSourceOnlyIgnore(t *testing.T) {
 	writeTestFile(t, filepath.Join(project, ".worktreeinclude"), ".env\n")
 	writeTestFile(t, filepath.Join(project, ".env"), "private configuration")
 	workspace, adapter := newIncludedWorktree(t, project)
-	if err := (&Manager{workspace: adapter}).provisionWorkspace(context.Background(), domain.ProjectRecord{Path: project}, workspace); err == nil {
-		t.Error("copied a private file the session does not ignore")
+	if err := (&Manager{workspace: adapter}).provisionWorkspace(context.Background(), domain.ProjectRecord{Path: project}, workspace); err != nil {
+		t.Fatalf("skip a source-only ignored file: %v", err)
 	}
 	if _, err := os.Lstat(filepath.Join(workspace, ".env")); !os.IsNotExist(err) {
 		t.Fatalf("private file became visible to Git: %v", err)
@@ -91,5 +92,22 @@ func TestWorktreeIncludeExclusionFailureStopsCopy(t *testing.T) {
 	}
 	if _, err := os.Lstat(filepath.Join(workspace, ".env")); !os.IsNotExist(err) {
 		t.Fatalf("copy started before temporary-file protection: %v", err)
+	}
+}
+
+func TestWorktreeIncludeRoutesExclusionToProject(t *testing.T) {
+	project := newManagerGitRepo(t)
+	writeTestFile(t, filepath.Join(project, ".gitignore"), ".env\n")
+	runManagerGit(t, project, "add", ".gitignore")
+	runManagerGit(t, project, "commit", "-m", "ignore private configuration")
+	writeTestFile(t, filepath.Join(project, ".worktreeinclude"), ".env\n")
+	writeTestFile(t, filepath.Join(project, ".env"), "private configuration")
+	workspace, adapter := newIncludedWorktree(t, project)
+	m := &Manager{workspace: workspacerouter.New(workspacerouter.Deps{Git: adapter, Scratch: &fakeWorkspace{}})}
+	if err := m.provisionWorkspace(context.Background(), domain.ProjectRecord{ID: "project", Path: project}, workspace); err != nil {
+		t.Fatal(err)
+	}
+	if got, err := os.ReadFile(filepath.Join(workspace, ".env")); err != nil || string(got) != "private configuration" {
+		t.Fatalf("project file was not copied: %q, %v", got, err)
 	}
 }

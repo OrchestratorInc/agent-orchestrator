@@ -9,6 +9,8 @@ import (
 	"runtime"
 	"strings"
 	"testing"
+
+	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
 )
 
 func TestCopyWorktreeIncludeRejectsEscapingDestination(t *testing.T) {
@@ -26,7 +28,7 @@ func TestCopyWorktreeIncludeRejectsEscapingDestination(t *testing.T) {
 	if err := os.Symlink(outside, filepath.Join(workspace, "config")); err != nil {
 		t.Fatal(err)
 	}
-	if err := copyWorktreeInclude(context.Background(), project, workspace, adapter); err == nil {
+	if err := copyWorktreeInclude(context.Background(), domain.ProjectRecord{Path: project}, workspace, adapter); err == nil {
 		t.Error("copy through an escaping directory symlink succeeded")
 	}
 	if _, err := os.Lstat(filepath.Join(outside, "secrets.json")); !os.IsNotExist(err) {
@@ -116,7 +118,7 @@ func TestCopyNewRegularFileReportsSourceError(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer func() { _ = target.Close() }()
-	if err := copyNewRegularFile(source, target, "missing", ".ao-include-test"); !os.IsNotExist(err) {
+	if err := copyNewRegularFile(context.Background(), source, target, "missing", ".ao-include-test"); !os.IsNotExist(err) {
 		t.Fatalf("source error = %v, want missing file", err)
 	}
 }

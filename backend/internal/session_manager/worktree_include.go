@@ -13,6 +13,7 @@ import (
 	"path/filepath"
 	"strings"
 
+	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
 	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
 	aoprocess "github.com/aoagents/agent-orchestrator/backend/internal/process"
 )
@@ -24,7 +25,8 @@ import (
 // gitignored, so tracked files and ordinary untracked work are never
 // duplicated. Existing workspace files and anything but regular files are
 // left alone.
-func copyWorktreeInclude(ctx context.Context, projectPath, workspacePath string, workspace ports.Workspace) error {
+func copyWorktreeInclude(ctx context.Context, project domain.ProjectRecord, workspacePath string, workspace ports.Workspace) error {
+	projectPath := project.Path
 	includeFile := filepath.Join(projectPath, ".worktreeinclude")
 	if _, err := os.Lstat(includeFile); errors.Is(err, fs.ErrNotExist) {
 		return nil
@@ -35,6 +37,32 @@ func copyWorktreeInclude(ctx context.Context, projectPath, workspacePath string,
 	}
 	ignored, err := worktreeIncludeGit(ctx, projectPath, matched, "check-ignore", "-z", "--stdin")
 	if err != nil {
+		return err
+	}
+	// Configured directory symlinks can point back into the project. Keep
+	// their existing files; only missing paths are checked and copied.
+	var missing []string
+	for _, rel := range strings.Split(string(ignored), "\x00") {
+		if rel == "" {
+			continue
+		}
+		clean, err := safeRelPath(rel)
+		if err != nil {
+			return fmt.Errorf(".worktreeinclude %q: %w", rel, err)
+		}
+		if _, err := os.Lstat(filepath.Join(workspacePath, clean)); err == nil {
+			continue
+		}
+		missing = append(missing, rel)
+	}
+	if len(missing) == 0 {
+		return nil
+	}
+	// The workspace's revision can lack the source checkout's ignore rule (an
+	// uncommitted .gitignore edit, an older base), and a copy it does not
+	// ignore would be committed by the agent's next `git add -A`.
+	ignoredHere, err := worktreeIncludeGit(ctx, workspacePath, []byte(strings.Join(missing, "\x00")), "check-ignore", "-z", "--stdin")
+	if err != nil || len(ignoredHere) == 0 {
 		return err
 	}
 	source, err := os.OpenRoot(projectPath)
@@ -50,18 +78,16 @@ func copyWorktreeInclude(ctx context.Context, projectPath, workspacePath string,
 	type includedCopy struct{ rel, temporary string }
 	var copies []includedCopy
 	var gitPaths []string
-	for _, rel := range strings.Split(string(ignored), "\x00") {
+	for _, rel := range strings.Split(string(ignoredHere), "\x00") {
 		if rel == "" {
 			continue
+		}
+		if err := ctx.Err(); err != nil {
+			return err
 		}
 		clean, err := safeRelPath(rel)
 		if err != nil {
 			return fmt.Errorf(".worktreeinclude %q: %w", rel, err)
-		}
-		// Configured directory symlinks can point back into the project.
-		// Keep their existing files, but confine every new write with os.Root.
-		if _, err := os.Lstat(filepath.Join(workspacePath, clean)); err == nil {
-			continue
 		}
 		info, err := source.Lstat(clean)
 		if err != nil {
@@ -82,7 +108,7 @@ func copyWorktreeInclude(ctx context.Context, projectPath, workspacePath string,
 	}
 	// A stopped daemon cannot remove its temporary copies. Keep them out of
 	// Git even when the worktree is resumed without provisioning again.
-	if err := workspace.AddExclude(ctx, ports.WorkspaceInfo{Path: workspacePath}, ".ao-include-*"); err != nil {
+	if err := workspace.AddExclude(ctx, ports.WorkspaceInfo{ProjectID: domain.ProjectID(project.ID), Path: workspacePath}, ".ao-include-*"); err != nil {
 		return fmt.Errorf(".worktreeinclude: protect temporary copies: %w", err)
 	}
 	protected, err := worktreeIncludeGit(ctx, workspacePath, []byte(strings.Join(gitPaths, "\x00")+"\x00"), "check-ignore", "-z", "--stdin")
@@ -98,9 +124,9 @@ func copyWorktreeInclude(ctx context.Context, projectPath, workspacePath string,
 			return fmt.Errorf(".worktreeinclude %q: the session does not ignore this path; add it to the branch's .gitignore, then try again", path)
 		}
 	}
-	for _, copy := range copies {
-		if err := copyNewRegularFile(source, target, copy.rel, copy.temporary); err != nil {
-			return fmt.Errorf(".worktreeinclude %q: %w", copy.rel, err)
+	for _, item := range copies {
+		if err := copyNewRegularFile(ctx, source, target, item.rel, item.temporary); err != nil {
+			return fmt.Errorf(".worktreeinclude %q: %w", item.rel, err)
 		}
 	}
 	return nil
@@ -129,7 +155,7 @@ func worktreeIncludeGit(ctx context.Context, projectPath string, stdin []byte, a
 // copyNewRegularFile copies source to target with source's permissions. It
 // skips a source that is not a regular file and a target that already exists,
 // including a link applySymlinks placed there.
-func copyNewRegularFile(source, target *os.Root, rel, temporary string) error {
+func copyNewRegularFile(ctx context.Context, source, target *os.Root, rel, temporary string) error {
 	info, err := source.Lstat(rel)
 	if err != nil {
 		return err
@@ -142,7 +168,20 @@ func copyNewRegularFile(source, target *os.Root, rel, temporary string) error {
 		return err
 	}
 	defer func() { _ = src.Close() }()
-	return publishWorktreeIncludeFile(target, rel, src, info.Mode().Perm(), temporary)
+	return publishWorktreeIncludeFile(target, rel, contextReader{ctx, src}, info.Mode().Perm(), temporary)
+}
+
+// contextReader stops a copy of a large file once the spawn is cancelled.
+type contextReader struct {
+	ctx context.Context
+	r   io.Reader
+}
+
+func (c contextReader) Read(p []byte) (int, error) {
+	if err := c.ctx.Err(); err != nil {
+		return 0, err
+	}
+	return c.r.Read(p)
 }
 
 func publishWorktreeIncludeFile(target *os.Root, rel string, src io.Reader, mode fs.FileMode, tmp string) error {
