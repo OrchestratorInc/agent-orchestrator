@@ -1009,16 +1009,17 @@ func (e *Engine) SwitchReviewer(
 		}
 	}
 	for _, row := range reviewRows {
-		if row.Harness == selected && row.IsArchived {
-			row.IsArchived = false
-			row.UpdatedAt = e.clock()
-			// Preserve the stored native session, which a config reset may have cleared.
-			row.AgentSessionID = ""
-			if err := e.store.UpsertReview(ctx, row); err != nil {
-				return SessionReviews{}, err
-			}
-			break
+		if row.Harness != selected || !row.IsArchived {
+			continue
 		}
+		row.IsArchived = false
+		row.UpdatedAt = e.clock()
+		// Preserve the stored native session, which a config reset may have cleared.
+		row.AgentSessionID = ""
+		if err := e.store.UpsertReview(ctx, row); err != nil {
+			return SessionReviews{}, err
+		}
+		break
 	}
 	if _, err := e.restoreReviewerLocked(ctx, workerID, worker, selected, selectedConfig); err != nil {
 		return SessionReviews{}, err
