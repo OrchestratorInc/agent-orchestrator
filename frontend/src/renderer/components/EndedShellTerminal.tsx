@@ -6,7 +6,9 @@ import { apiErrorMessage } from "../lib/api-client";
 import type { HostId } from "../lib/hosts";
 import { Button } from "./ui/button";
 
-const restoring = new Set<string>();
+// The restore in flight for each ended tab. A pane that remounts while it is
+// pending shares it, so the remounted pane still learns if it failed.
+const restoring = new Map<string, Promise<unknown>>();
 
 /**
  * The pane for a shell tab whose process is gone, for example after the app
@@ -21,11 +23,14 @@ export function EndedShellTerminal({ shell, hostId }: { shell: ShellTerminal; ho
 	const { handleId, resumeHarness } = shell;
 	useEffect(() => {
 		const key = `${hostId ?? ""}\u0000${handleId}`;
-		if (restoring.has(key)) return;
-		restoring.add(key);
-		void mutateAsync({ handleId, ...(resumeHarness ? { resumeAgent: true } : {}) })
-			.catch(setError)
-			.finally(() => restoring.delete(key));
+		let attempt = restoring.get(key);
+		if (!attempt) {
+			attempt = mutateAsync({ handleId, ...(resumeHarness ? { resumeAgent: true } : {}) });
+			restoring.set(key, attempt);
+			const settled = () => restoring.delete(key);
+			attempt.then(settled, settled);
+		}
+		attempt.catch(setError);
 	}, [handleId, hostId, mutateAsync, resumeHarness]);
 
 	if (!error) {

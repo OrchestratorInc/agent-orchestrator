@@ -69,4 +69,17 @@ describe("EndedShellTerminal", () => {
 		await waitFor(() => expect(postMock).toHaveBeenCalledTimes(2));
 		expect(postMock.mock.calls[1][1].body).not.toHaveProperty("resumeAgent");
 	});
+
+	it("tells a pane remounted while the restore is pending that it failed", async () => {
+		let fail!: (result: object) => void;
+		postMock.mockReturnValueOnce(new Promise((resolve) => (fail = resolve)));
+		const shell = { ...ended, handleId: "shellterm-remounted" };
+		const first = renderPane(shell);
+		await waitFor(() => expect(postMock).toHaveBeenCalledTimes(1));
+		first.unmount();
+		renderPane(shell);
+		fail({ error: { code: "SHELL_TERMINAL_NOT_ENDED", message: "This terminal is still running" } });
+		expect(await screen.findByRole("alert")).toBeTruthy();
+		expect(postMock).toHaveBeenCalledTimes(1);
+	});
 });
