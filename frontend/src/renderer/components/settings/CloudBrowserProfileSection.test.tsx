@@ -7,9 +7,10 @@ import { CloudBrowserProfileSection } from "./CloudBrowserProfileSection";
 const mocks = vi.hoisted(() => ({
 	client: { getMyBrowserProfile: vi.fn(), wipeMyBrowserProfile: vi.fn() },
 	browserProfiles: true,
+	status: "authenticated",
 }));
 
-vi.mock("../../lib/cloud-session", () => ({ useCloudSession: () => ({ status: "authenticated" }) }));
+vi.mock("../../lib/cloud-session", () => ({ useCloudSession: () => ({ status: mocks.status }) }));
 vi.mock("../../hooks/useCloudCp", () => ({
 	useCloudCp: () => ({ client: mocks.client, ready: true, baseUrl: "https://cp.test", userId: "user-1" }),
 }));
@@ -28,12 +29,20 @@ function renderSection() {
 describe("CloudBrowserProfileSection", () => {
 	beforeEach(() => {
 		mocks.browserProfiles = true;
+		mocks.status = "authenticated";
 		mocks.client.getMyBrowserProfile.mockReset();
 		mocks.client.wipeMyBrowserProfile.mockReset();
 	});
 
 	it("shows nothing, and asks nothing, on a control plane without browser profiles", () => {
 		mocks.browserProfiles = false;
+		renderSection();
+		expect(screen.queryByText(appI18n.t("settings.cloudBrowserProfile.label"))).toBeNull();
+		expect(mocks.client.getMyBrowserProfile).not.toHaveBeenCalled();
+	});
+
+	it("shows nothing, and asks nothing, while signed out of Cloud", () => {
+		mocks.status = "unauthenticated";
 		renderSection();
 		expect(screen.queryByText(appI18n.t("settings.cloudBrowserProfile.label"))).toBeNull();
 		expect(mocks.client.getMyBrowserProfile).not.toHaveBeenCalled();
