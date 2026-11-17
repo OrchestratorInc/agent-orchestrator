@@ -2965,6 +2965,80 @@ paths:
                 $ref: "#/components/schemas/WorkerOKResponse"
         default:
           $ref: "#/components/responses/Error"
+  /api/cloud/v1/orgs/{orgId}/sessions/{sessionId}/browser-approvals:
+    parameters:
+      - $ref: "#/components/parameters/OrgId"
+      - $ref: "#/components/parameters/SessionId"
+    get:
+      operationId: listBrowserApprovals
+      tags: [Sessions]
+      description: >-
+        The session's agent browser actions waiting for the person's approval
+        (pay, send, post, delete, account and security changes, page scripts).
+        The worker holds each until it is decided or expires; a
+        browser.approval_requested session event announces it and
+        browser.approval_decided ends it.
+      responses:
+        "200":
+          description: Pending browser approvals, oldest first.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/BrowserApprovalList"
+        default:
+          $ref: "#/components/responses/Error"
+  /api/cloud/v1/orgs/{orgId}/sessions/{sessionId}/browser-approvals/{approvalId}/decide:
+    parameters:
+      - $ref: "#/components/parameters/OrgId"
+      - $ref: "#/components/parameters/SessionId"
+      - name: approvalId
+        in: path
+        required: true
+        schema:
+          type: string
+          format: uuid
+    post:
+      operationId: decideBrowserApproval
+      tags: [Sessions]
+      description: >-
+        Allow the action once, always allow its kind of action on this site for
+        the session, or deny it. Allowed for the session's owner and its
+        editors; a viewer gets 403. A decision on an approval already decided
+        otherwise, or expired, gets 409.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/BrowserApprovalDecisionInput"
+      responses:
+        "200":
+          description: The approval's decision.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/BrowserApprovalDecision"
+        default:
+          $ref: "#/components/responses/Error"
+  /api/cloud/v1/orgs/{orgId}/sessions/{sessionId}/browser-approvals/audit:
+    parameters:
+      - $ref: "#/components/parameters/OrgId"
+      - $ref: "#/components/parameters/SessionId"
+    get:
+      operationId: listBrowserApprovalAudit
+      tags: [Sessions]
+      description: The session's gated browser actions and how each was decided, newest first.
+      parameters:
+        - $ref: "#/components/parameters/Limit"
+      responses:
+        "200":
+          description: Audit entries, newest first.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/BrowserApprovalAudit"
+        default:
+          $ref: "#/components/responses/Error"
   /api/cloud/v1/orgs/{orgId}/sessions/{sessionId}/chat-events:
     parameters:
       - $ref: "#/components/parameters/OrgId"
@@ -8119,6 +8193,110 @@ components:
           type: string
           minLength: 1
           maxLength: 256
+    BrowserApproval:
+      type: object
+      additionalProperties: false
+      required: [id, sessionId, action, category, reason, site, summary, createdAt, expiresAt]
+      properties:
+        id:
+          type: string
+          format: uuid
+        sessionId:
+          type: string
+          format: uuid
+        action:
+          type: string
+          description: The agent-browser command (click, fill, press, eval, ...). Its arguments are never stored.
+        category:
+          type: string
+          enum: [pay, send, post, delete, account, script, unknown]
+        reason:
+          type: string
+          description: Why the action needs approval, for the person.
+        site:
+          type: string
+          description: The page's site (host without www.); empty when unknown.
+        summary:
+          type: string
+          description: The action in one line, for the approval card.
+        createdAt:
+          type: string
+          format: date-time
+        expiresAt:
+          type: string
+          format: date-time
+          description: When the worker stops waiting and the action is refused.
+    BrowserApprovalList:
+      type: object
+      additionalProperties: false
+      required: [pending]
+      properties:
+        pending:
+          type: array
+          items:
+            $ref: "#/components/schemas/BrowserApproval"
+    BrowserApprovalDecisionInput:
+      type: object
+      additionalProperties: false
+      required: [decision]
+      properties:
+        decision:
+          type: string
+          enum: [allow-once, allow-site, deny]
+    BrowserApprovalDecision:
+      type: object
+      additionalProperties: false
+      required: [id, decision]
+      properties:
+        id:
+          type: string
+          format: uuid
+        decision:
+          type: string
+          enum: [allow-once, allow-site, deny, timeout]
+    BrowserApprovalAuditEntry:
+      type: object
+      additionalProperties: false
+      required: [id, sessionId, action, category, reason, site, summary, createdAt, decision]
+      properties:
+        id:
+          type: string
+          format: uuid
+        sessionId:
+          type: string
+          format: uuid
+        action:
+          type: string
+        category:
+          type: string
+        reason:
+          type: string
+        site:
+          type: string
+        summary:
+          type: string
+        createdAt:
+          type: string
+          format: date-time
+        decision:
+          type: string
+          enum: [pending, allow-once, allow-site, deny, timeout]
+        decidedAt:
+          type: string
+          format: date-time
+        decidedBy:
+          type: string
+          format: uuid
+          description: The person who decided; absent for pending and timeout.
+    BrowserApprovalAudit:
+      type: object
+      additionalProperties: false
+      required: [entries]
+      properties:
+        entries:
+          type: array
+          items:
+            $ref: "#/components/schemas/BrowserApprovalAuditEntry"
     ChatModel:
       type: object
       additionalProperties: false
