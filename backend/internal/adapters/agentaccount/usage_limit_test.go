@@ -4,6 +4,9 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
+	"io"
+	"net/http"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -147,8 +150,46 @@ func TestClaudeLimitsReportsUnavailableUsageAsError(t *testing.T) {
 	if err := os.WriteFile(bin, []byte("#!/bin/sh\nread -r _\necho '"+reply+"'\n"), 0o755); err != nil {
 		t.Fatal(err)
 	}
-	c := &Claude{Binary: func(context.Context) (string, error) { return bin, nil }}
-	if _, err := c.Limits(context.Background(), ""); err == nil || !strings.Contains(err.Error(), "could not fetch") {
-		t.Fatalf("Limits error = %v, want could not fetch", err)
+	now := time.Now().UnixMilli()
+	for _, tc := range []struct {
+		name          string
+		credentials   string
+		status        int
+		wantSignedOut bool
+		wantProbe     bool
+	}{
+		{"accepted login", fmt.Sprintf(`{"claudeAiOauth":{"accessToken":"sk-ant-oat01-ok","refreshToken":"r","expiresAt":%d}}`, now+3600_000), http.StatusOK, false, true},
+		{"rejected login", fmt.Sprintf(`{"claudeAiOauth":{"accessToken":"sk-ant-oat01-dead","refreshToken":"r","expiresAt":%d}}`, now+3600_000), http.StatusUnauthorized, true, true},
+		{"expired login the CLI renews", fmt.Sprintf(`{"claudeAiOauth":{"accessToken":"sk-ant-oat01-old","refreshToken":"r","expiresAt":%d}}`, now-60_000), http.StatusUnauthorized, false, false},
+		{"no stored login", "", http.StatusUnauthorized, false, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			home := t.TempDir()
+			if tc.credentials != "" {
+				write(t, filepath.Join(home, ".credentials.json"), tc.credentials)
+			}
+			probed := false
+			c := &Claude{
+				Binary: func(context.Context) (string, error) { return bin, nil },
+				HTTPClient: &http.Client{Transport: roundTrip(func(*http.Request) (*http.Response, error) {
+					probed = true
+					return &http.Response{StatusCode: tc.status, Body: io.NopCloser(strings.NewReader(`{"data":[]}`)), Header: http.Header{}}, nil
+				})},
+			}
+			_, err := c.Limits(context.Background(), home)
+			if err == nil || errors.Is(err, ports.ErrAgentAuthRequired) != tc.wantSignedOut {
+				t.Fatalf("Limits error = %v, want signed out %v", err, tc.wantSignedOut)
+			}
+			if !tc.wantSignedOut && !strings.Contains(err.Error(), "could not fetch") {
+				t.Fatalf("Limits error = %v, want could not fetch", err)
+			}
+			if probed != tc.wantProbe {
+				t.Fatalf("asked Anthropic = %v, want %v", probed, tc.wantProbe)
+			}
+		})
 	}
 }
+
+type roundTrip func(*http.Request) (*http.Response, error)
+
+func (f roundTrip) RoundTrip(r *http.Request) (*http.Response, error) { return f(r) }
