@@ -8,6 +8,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"runtime"
 	"slices"
 	"sort"
 	"strings"
@@ -16,6 +17,7 @@ import (
 	"gopkg.in/yaml.v3"
 
 	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/agent/hermes"
+	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/agent/openinterpreter"
 	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
 )
 
@@ -136,6 +138,12 @@ func modelConfigPaths(agentID, workingDir string, env map[string]string) []strin
 			for _, name := range [...]string{"cordis.yml", "cordis.patch.yml", "package.json"} {
 				paths = append(paths, filepath.Join(root, name))
 			}
+		}
+	case "minimax-code":
+		// `mcode provider list` reads the profile's providers and models from
+		// config.yaml, and the region preference picks the account namespace.
+		if root := miniMaxProfileDir(home, env); root != "" {
+			paths = append(paths, filepath.Join(root, "config.yaml"), filepath.Join(root, "preferences", "mcode-region.json"))
 		}
 	case "vibe":
 		if root := strings.TrimSpace(env["VIBE_HOME"]); root != "" {
@@ -332,6 +340,28 @@ func deepseekProfileDir(home string, env map[string]string) string {
 	return filepath.Join(root, "profiles", "acp")
 }
 
+// miniMaxProfileDir resolves the profile MiniMax Code reads, in the CLI's
+// own precedence order. Its default lives under Node's os.homedir(), which
+// follows the launch environment's HOME (USERPROFILE on Windows).
+func miniMaxProfileDir(home string, env map[string]string) string {
+	for _, key := range []string{"MINIMAX_DATA_DIR", "MAVIS_DATA_DIR"} {
+		if root := envValue(env, key); root != "" {
+			return root
+		}
+	}
+	homeKey := "HOME"
+	if runtime.GOOS == "windows" {
+		homeKey = "USERPROFILE"
+	}
+	if requested := strings.TrimSpace(env[homeKey]); requested != "" {
+		home = requested
+	}
+	if home == "" {
+		return ""
+	}
+	return filepath.Join(home, ".minimax")
+}
+
 func readModelConfig(path string) ([]byte, error) {
 	file, err := os.Open(path) //nolint:gosec // paths are fixed agent configuration locations
 	if err != nil {
@@ -346,6 +376,143 @@ func readModelConfig(path string) ([]byte, error) {
 		return nil, fmt.Errorf("configuration exceeds %d bytes", modelConfigReadLimit)
 	}
 	return raw, nil
+}
+
+// openInterpreterModelCatalogFiles returns the model_catalog_json files named by
+// Open Interpreter config layers. Native resolves a relative path against the
+// directory of the config file that sets it.
+func openInterpreterModelCatalogFiles(configs []string, env map[string]string) []string {
+	var files []string
+	for _, path := range configs {
+		raw, err := readModelConfig(path)
+		if err != nil {
+			continue
+		}
+		var config struct {
+			ModelCatalogJSON string `toml:"model_catalog_json"`
+		}
+		if toml.Unmarshal(raw, &config) != nil {
+			continue
+		}
+		file := strings.TrimSpace(config.ModelCatalogJSON)
+		if file == "" {
+			continue
+		}
+		// Native AbsolutePathBuf expands "~/" against the home directory before
+		// resolving other relative paths against the config file's directory.
+		if rest, ok := strings.CutPrefix(file, "~/"); ok {
+			home := openInterpreterUserHome(env)
+			if home == "" {
+				continue
+			}
+			file = filepath.Join(home, rest)
+		} else if !filepath.IsAbs(file) {
+			file = filepath.Join(filepath.Dir(path), file)
+		}
+		files = append(files, filepath.Clean(file))
+	}
+	return files
+}
+
+// openInterpreterSystemConfig is the native system configuration layer; tests
+// point it at a fixture.
+var openInterpreterSystemConfig = openinterpreter.SystemConfigPath
+
+// openInterpreterUserHome is the home directory a session's native process
+// sees: the session environment's override first, then the daemon's.
+func openInterpreterUserHome(env map[string]string) string {
+	key := "HOME"
+	if runtime.GOOS == "windows" {
+		key = "USERPROFILE"
+	}
+	if home := strings.TrimSpace(env[key]); home != "" {
+		return home
+	}
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return ""
+	}
+	return home
+}
+
+// openInterpreterRootMarkers returns the project_root_markers native discovery
+// uses, read from the layers it merges before project layers (later layers
+// win). Absent or unreadable settings keep the native default, ".git".
+func openInterpreterRootMarkers(layers []string) []string {
+	markers := []string{".git"}
+	for _, path := range layers {
+		raw, err := readModelConfig(path)
+		if err != nil {
+			continue
+		}
+		var config struct {
+			Markers *[]string `toml:"project_root_markers"`
+		}
+		if toml.Unmarshal(raw, &config) != nil || config.Markers == nil {
+			continue
+		}
+		markers = *config.Markers
+	}
+	return markers
+}
+
+// openInterpreterIsProjectRoot reports whether dir holds a root marker. As in
+// native discovery, a .git directory counts only when it contains HEAD.
+func openInterpreterIsProjectRoot(dir string, markers []string) bool {
+	for _, marker := range markers {
+		path := filepath.Join(dir, marker)
+		info, err := os.Stat(path)
+		if err != nil {
+			continue
+		}
+		if marker == ".git" && info.IsDir() {
+			if _, err := os.Stat(filepath.Join(path, "HEAD")); err != nil {
+				continue
+			}
+		}
+		return true
+	}
+	return false
+}
+
+// openInterpreterProjectConfigs lists the project configuration layers native
+// discovery reads: .openinterpreter/config.toml in each directory from
+// workingDir up to the project root, the nearest ancestor holding one of
+// markers. With no markers, or none found, only workingDir's own layer applies.
+func openInterpreterProjectConfigs(workingDir string, markers []string) []string {
+	if workingDir == "" {
+		return nil
+	}
+	dir := filepath.Clean(workingDir)
+	dirs := []string{dir}
+	for len(markers) > 0 && !openInterpreterIsProjectRoot(dir, markers) {
+		parent := filepath.Dir(dir)
+		if parent == dir {
+			dirs = dirs[:1]
+			break
+		}
+		dir = parent
+		dirs = append(dirs, dir)
+	}
+	configs := make([]string, 0, len(dirs))
+	for _, dir := range dirs {
+		configs = append(configs, filepath.Join(dir, ".openinterpreter", "config.toml"))
+	}
+	return configs
+}
+
+// fileStatSignature records size and modification time, so a change to a file
+// fingerprintConfigPaths skips for exceeding the read limit still invalidates.
+func fileStatSignature(paths []string) string {
+	var signature strings.Builder
+	for _, path := range paths {
+		if info, err := os.Stat(path); err == nil {
+			fmt.Fprintf(&signature, ":%d-%d", info.Size(), info.ModTime().UnixNano())
+		} else {
+			signature.WriteString(":missing")
+		}
+	}
+	return signature.String()
 }
 
 func configDiscoveryFingerprint(agentID, workingDir string, env map[string]string) string {

@@ -277,6 +277,7 @@ type sessionLifecycle interface {
 	WaitAgentSwitchWorkers(ctx context.Context) error
 	StopAgentsForQuit(ctx context.Context) error
 	Kill(ctx context.Context, id domain.SessionID) (bool, error)
+	StopTUITurn(ctx context.Context, id domain.SessionID) error
 	Send(ctx context.Context, id domain.SessionID, message string, attachment *ports.SpawnAttachment) error
 	// SetShellTerminalCloser late-binds Kill/Cleanup to close a session's
 	// scoped shell terminals before its worktree is torn down. shellterm.Service
@@ -446,6 +447,8 @@ func startSession(ctx context.Context, cfg config.Config, runtime runtimeselect.
 			reviewcore.WithReviewerChat(reviewerChat)),
 
 		ChatRecoveryDone: reviewerRecoveryDone,
+		// The reaper's first pass settles runs a previous daemon left active.
+		AwaitBootPass: true,
 	})
 	reviewOpts := []reviewsvc.Option{
 		reviewsvc.WithTelemetry(telemetry),
@@ -798,12 +801,21 @@ func (c chatLauncher) PreflightChat(
 	return c.svc.PreflightChat(ctx, harness, permissions)
 }
 
+func (c chatLauncher) PreflightChatWithEnv(
+	ctx context.Context,
+	harness domain.AgentHarness,
+	permissions ports.PermissionMode,
+	env map[string]string,
+) error {
+	return c.svc.PreflightChatWithEnv(ctx, harness, permissions, env)
+}
+
 func (c chatLauncher) SupportsReviewChat(harness domain.AgentHarness) bool {
 	return c.svc.SupportsChat(harness)
 }
 
-func (c chatLauncher) PreflightReviewChat(ctx context.Context, harness domain.AgentHarness) error {
-	return c.svc.PreflightChat(ctx, harness, ports.PermissionModeAuto)
+func (c chatLauncher) PreflightReviewChat(ctx context.Context, harness domain.AgentHarness, workspacePath string) error {
+	return c.svc.PreflightReviewChat(ctx, harness, workspacePath)
 }
 
 func (c chatLauncher) StartReviewChat(ctx context.Context, cfg reviewcore.ReviewerChatStart) (string, error) {

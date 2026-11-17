@@ -28,6 +28,9 @@ import copilotLightLogo from "../assets/agents/copilot-light.svg";
 import crushLogo from "../assets/agents/crush.svg";
 import cursorDarkLogo from "../assets/agents/cursor-dark.svg";
 import cursorLightLogo from "../assets/agents/cursor-light.svg";
+// docker/docker-agent (Apache-2.0): docs/assets/docker-mark.svg and docker-mark-white.svg.
+import dockerAgentDarkLogo from "../assets/agents/docker-agent-dark.svg";
+import dockerAgentLightLogo from "../assets/agents/docker-agent-light.svg";
 import devinDarkLogo from "../assets/agents/devin-dark.svg";
 import devinLightLogo from "../assets/agents/devin-light.svg";
 import deepseekHarnessDarkLogo from "../assets/agents/deepseek-harness-dark.svg";
@@ -51,8 +54,11 @@ import kimchiLogo from "../assets/agents/kimchi.svg";
 import kiroLogo from "../assets/agents/kiro.svg";
 import museLogo from "../assets/agents/muse.svg";
 import mimoCodeLogo from "../assets/agents/mimo-code.svg";
+import minimaxCodeLogo from "../assets/agents/minimax-code.svg";
 import memcodeLogo from "../assets/agents/memcode.png";
 import ompLogo from "../assets/agents/omp.svg";
+import openInterpreterDarkLogo from "../assets/agents/open-interpreter-dark.svg";
+import openInterpreterLogo from "../assets/agents/open-interpreter.svg";
 import openhandsDarkLogo from "../assets/agents/openhands-dark.svg";
 import openhandsLightLogo from "../assets/agents/openhands-light.svg";
 import opencodeDarkLogo from "../assets/agents/opencode-dark.svg";
@@ -65,6 +71,7 @@ import qwenDarkLogo from "../assets/agents/qwen-dark.svg";
 import qwenLightLogo from "../assets/agents/qwen-light.svg";
 // stakpak/agent (Apache-2.0): the mark from assets/stakpak-dark.png.
 import stakpakLogo from "../assets/agents/stakpak.png";
+import tauLogo from "../assets/agents/tau.png";
 import unrealAgentDarkLogo from "../assets/agents/unreal-agent-dark.png";
 import unrealAgentLightLogo from "../assets/agents/unreal-agent-light.png";
 import vibeLogo from "../assets/agents/vibe.svg";
@@ -94,12 +101,14 @@ const LOGOS: AgentLogoSources = {
 	goose: { light: gooseLightLogo, dark: gooseDarkLogo },
 	continue: { light: continueLightLogo, dark: continueDarkLogo },
 	devin: { light: devinLightLogo, dark: devinDarkLogo },
+	"docker-agent": { light: dockerAgentLightLogo, dark: dockerAgentDarkLogo },
 	kimi: { light: kimiLightLogo, dark: kimiDarkLogo },
 	muse: museLogo,
 	memcode: memcodeLogo,
 	stakpak: stakpakLogo,
 	omp: ompLogo,
 	openhands: { light: openhandsLightLogo, dark: openhandsDarkLogo },
+	"open-interpreter": { light: openInterpreterLogo, dark: openInterpreterDarkLogo },
 	kiro: kiroLogo,
 	kilocode: { light: kilocodeLightLogo, dark: kilocodeDarkLogo },
 	vibe: vibeLogo,
@@ -113,6 +122,8 @@ const LOGOS: AgentLogoSources = {
 	autohand: { light: autohandLightLogo, dark: autohandDarkLogo },
 	"unreal-agent": { light: unrealAgentLightLogo, dark: unrealAgentDarkLogo },
 	"mimo-code": mimoCodeLogo,
+	"minimax-code": minimaxCodeLogo,
+	tau: tauLogo,
 	"deepseek-harness": { light: deepseekHarnessLightLogo, dark: deepseekHarnessDarkLogo },
 };
 

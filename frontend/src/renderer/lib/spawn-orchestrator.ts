@@ -6,6 +6,7 @@ import { resumeOnce } from "../hooks/useCanResumeAgent";
 import type { OrchestratorSpawnSource } from "./orchestrator-spawn-sources";
 import { captureRendererEvent } from "./telemetry";
 import { clientForSessionHost } from "./host-clients";
+import { sessionUiKey } from "./hosts";
 import type { SessionMode } from "../types/conversation";
 
 // Every UI entry point that spawns an orchestrator: the board CTA, the topbar
@@ -109,8 +110,10 @@ export async function spawnOrchestrator(
  * working orchestrator and that is this one, so it resolves rather than throws.
  */
 export function resumeOrchestrator(sessionId: string, hostId?: string): Promise<void> {
-	// A local resume joins the one SessionView starts when it opens the session.
-	return hostId ? requestOrchestratorResume(sessionId, hostId) : resumeOnce(sessionId, () => requestOrchestratorResume(sessionId));
+	// A resume joins the one SessionView starts when it opens the session.
+	return resumeOnce(sessionUiKey(sessionId, hostId), () => requestOrchestratorResume(sessionId, hostId)).catch((error: unknown) => {
+		if (apiErrorCode(error) !== "AGENT_NOT_EXITED") throw error;
+	});
 }
 
 async function requestOrchestratorResume(sessionId: string, hostId?: string): Promise<void> {

@@ -34,12 +34,16 @@ const AGENT_HUES: Record<AgentId, number | null> = {
 	fx: 110,
 	"unreal-agent": null,
 	"mimo-code": 50,
+	"minimax-code": 0,
 	"deepseek-harness": 265,
 	openhands: 85,
 	"command-code": null,
+	"docker-agent": null,
 	memcode: 140,
 	hermes: 75,
 	stakpak: 215,
+	"open-interpreter": null,
+	tau: null,
 };
 
 export function agentTone(harness: string): string {
