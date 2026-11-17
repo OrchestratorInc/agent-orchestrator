@@ -1877,6 +1877,67 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/cloud/v1/orgs/{orgId}/sessions/{sessionId}/browser-approvals": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                orgId: components["parameters"]["OrgId"];
+                sessionId: components["parameters"]["SessionId"];
+            };
+            cookie?: never;
+        };
+        /** @description The session's agent browser actions waiting for the person's approval (pay, send, post, delete, account and security changes, page scripts). The worker holds each until it is decided or expires; a browser.approval_requested session event announces it and browser.approval_decided ends it. */
+        get: operations["listBrowserApprovals"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/cloud/v1/orgs/{orgId}/sessions/{sessionId}/browser-approvals/{approvalId}/decide": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                orgId: components["parameters"]["OrgId"];
+                sessionId: components["parameters"]["SessionId"];
+                approvalId: string;
+            };
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** @description Allow the action once, always allow its kind of action on this site for the session, or deny it. Allowed for the session's owner and its editors; a viewer gets 403. A decision on an approval already decided otherwise, or expired, gets 409. */
+        post: operations["decideBrowserApproval"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/cloud/v1/orgs/{orgId}/sessions/{sessionId}/browser-approvals/audit": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                orgId: components["parameters"]["OrgId"];
+                sessionId: components["parameters"]["SessionId"];
+            };
+            cookie?: never;
+        };
+        /** @description The session's gated browser actions and how each was decided, newest first. */
+        get: operations["listBrowserApprovalAudit"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/cloud/v1/orgs/{orgId}/sessions/{sessionId}/chat-events": {
         parameters: {
             query?: never;
@@ -4484,6 +4545,67 @@ export interface components {
         };
         ChatApprovalDecisionInput: {
             decisionId: string;
+        };
+        BrowserApproval: {
+            /** Format: uuid */
+            id: string;
+            /** Format: uuid */
+            sessionId: string;
+            /** @description The agent-browser command (click, fill, press, eval, ...). Its arguments are never stored. */
+            action: string;
+            /** @enum {string} */
+            category: "pay" | "send" | "post" | "delete" | "account" | "script" | "unknown";
+            /** @description Why the action needs approval, for the person. */
+            reason: string;
+            /** @description The page's site (host without www.); empty when unknown. */
+            site: string;
+            /** @description The action in one line, for the approval card. */
+            summary: string;
+            /** Format: date-time */
+            createdAt: string;
+            /**
+             * Format: date-time
+             * @description When the worker stops waiting and the action is refused.
+             */
+            expiresAt: string;
+        };
+        BrowserApprovalList: {
+            pending: components["schemas"]["BrowserApproval"][];
+        };
+        BrowserApprovalDecisionInput: {
+            /** @enum {string} */
+            decision: "allow-once" | "allow-site" | "deny";
+        };
+        BrowserApprovalDecision: {
+            /** Format: uuid */
+            id: string;
+            /** @enum {string} */
+            decision: "allow-once" | "allow-site" | "deny" | "timeout";
+        };
+        BrowserApprovalAuditEntry: {
+            /** Format: uuid */
+            id: string;
+            /** Format: uuid */
+            sessionId: string;
+            action: string;
+            category: string;
+            reason: string;
+            site: string;
+            summary: string;
+            /** Format: date-time */
+            createdAt: string;
+            /** @enum {string} */
+            decision: "pending" | "allow-once" | "allow-site" | "deny" | "timeout";
+            /** Format: date-time */
+            decidedAt?: string;
+            /**
+             * Format: uuid
+             * @description The person who decided; absent for pending and timeout.
+             */
+            decidedBy?: string;
+        };
+        BrowserApprovalAudit: {
+            entries: components["schemas"]["BrowserApprovalAuditEntry"][];
         };
         ChatModel: {
             id: string;
@@ -9709,6 +9831,85 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["WorkerOKResponse"];
+                };
+            };
+            default: components["responses"]["Error"];
+        };
+    };
+    listBrowserApprovals: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                orgId: components["parameters"]["OrgId"];
+                sessionId: components["parameters"]["SessionId"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Pending browser approvals, oldest first. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BrowserApprovalList"];
+                };
+            };
+            default: components["responses"]["Error"];
+        };
+    };
+    decideBrowserApproval: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                orgId: components["parameters"]["OrgId"];
+                sessionId: components["parameters"]["SessionId"];
+                approvalId: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["BrowserApprovalDecisionInput"];
+            };
+        };
+        responses: {
+            /** @description The approval's decision. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BrowserApprovalDecision"];
+                };
+            };
+            default: components["responses"]["Error"];
+        };
+    };
+    listBrowserApprovalAudit: {
+        parameters: {
+            query?: {
+                limit?: components["parameters"]["Limit"];
+            };
+            header?: never;
+            path: {
+                orgId: components["parameters"]["OrgId"];
+                sessionId: components["parameters"]["SessionId"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Audit entries, newest first. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BrowserApprovalAudit"];
                 };
             };
             default: components["responses"]["Error"];
