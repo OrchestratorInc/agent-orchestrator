@@ -163,13 +163,26 @@ func (c *Controller) snapshotFiles(ctx context.Context, turnIDs []string) {
 	if (!rollsBack && !forForks) || c.workspacePath == "" || c.reviewID != "" {
 		return
 	}
-	refs := make([]string, len(turnIDs))
-	for i, turnID := range turnIDs {
-		refs[i] = filesnapshot.Ref(c.sessionID, turnID)
+	first := turnIDs[0]
+	var err error
+	if pre := c.preCapture; pre != nil {
+		c.preCapture = nil
+		<-pre.done
+		if len(turnIDs) == 1 && turnIDs[0] == pre.turnID {
+			err = pre.err
+			turnIDs = nil
+		}
 	}
-	captureCtx, cancel := context.WithTimeout(ctx, fileSnapshotBudget)
-	defer cancel()
-	if err := filesnapshot.Capture(captureCtx, c.workspacePath, refs...); err != nil {
+	if len(turnIDs) > 0 {
+		refs := make([]string, len(turnIDs))
+		for i, turnID := range turnIDs {
+			refs[i] = filesnapshot.Ref(c.sessionID, turnID)
+		}
+		captureCtx, cancel := context.WithTimeout(ctx, fileSnapshotBudget)
+		defer cancel()
+		err = filesnapshot.Capture(captureCtx, c.workspacePath, refs...)
+	}
+	if err != nil {
 		level := slog.LevelWarn
 		switch {
 		case errors.Is(err, filesnapshot.ErrNotRepository):
@@ -178,8 +191,38 @@ func (c *Controller) snapshotFiles(ctx context.Context, turnIDs []string) {
 			level = slog.LevelInfo
 		}
 		c.log.Log(ctx, level, "chat file snapshot failed; rolling this turn back will not restore files",
-			"session", c.sessionID, "turn", turnIDs[0], "error", err)
+			"session", c.sessionID, "turn", first, "error", err)
 	}
+}
+
+// preCapturedSnapshot is the file snapshot for a new chat's queued first turn,
+// taken while its agent starts.
+type preCapturedSnapshot struct {
+	turnID string
+	done   chan struct{}
+	err    error
+}
+
+// preCaptureFirstTurn starts the file snapshot for the queued first turn of a
+// chat whose agent is about to start, so the turn does not wait for it after
+// the agent is ready. AO writes nothing to the worktree while the agent
+// starts, so it records what a snapshot at dispatch would.
+func (s *Service) preCaptureFirstTurn(ctx context.Context, cfg StartConfig, owner domain.ConversationOwner, conversationID string) *preCapturedSnapshot {
+	if !forkSnapshots.Load() || !forksOlderTurns(cfg.Harness) || cfg.WorkspacePath == "" || owner.Kind != domain.ConversationOwnerSession {
+		return nil
+	}
+	queued, err := s.store.ListQueuedBatch(ctx, conversationID, 1)
+	if err != nil || len(queued) == 0 {
+		return nil
+	}
+	pre := &preCapturedSnapshot{turnID: queued[0].TurnID, done: make(chan struct{})}
+	go func() {
+		defer close(pre.done)
+		captureCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), fileSnapshotBudget)
+		defer cancel()
+		pre.err = filesnapshot.Capture(captureCtx, cfg.WorkspacePath, filesnapshot.Ref(cfg.SessionID, pre.turnID))
+	}()
+	return pre
 }
 
 // undoFileRestore puts back files a rollback restored before the step that

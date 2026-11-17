@@ -861,6 +861,7 @@ func (s *Service) startLocked(ctx context.Context, cfg StartConfig) (*Controller
 	providerSystemPrompt := withHandoffNote(cfg.SystemPrompt, handoffNote)
 
 	var conv ports.ChatConversation
+	var preCapture *preCapturedSnapshot
 	hostID := providerHostID(cfg)
 	freshIfMissing := cfg.FreshIfProviderConversationMissing
 	if cfg.ProviderConversationID != "" {
@@ -888,6 +889,7 @@ func (s *Service) startLocked(ctx context.Context, cfg StartConfig) (*Controller
 			MCPServers:             cfg.MCPServers,
 		})
 	} else {
+		preCapture = s.preCaptureFirstTurn(ctx, cfg, owner, conversation.ID)
 		conv, err = driver.Start(ctx, ports.ChatStartConfig{
 			ProviderIDsScoped:     providerBoundaryID != "" || activeBranch.ProviderIDsScoped,
 			SessionID:             hostID,
@@ -1089,6 +1091,7 @@ func (s *Service) startLocked(ctx context.Context, cfg StartConfig) (*Controller
 	if owner.Kind != domain.ConversationOwnerReview {
 		controller.artifactDir = s.sessionArtifactDir(ctx, cfg.SessionID)
 	}
+	controller.preCapture = preCapture
 	var commitProviderHistory func(context.Context) error
 	if liveReconnect {
 		if err := s.store.FailReservedQueuedBatch(ctx, conversation.ID, s.now()); err != nil {

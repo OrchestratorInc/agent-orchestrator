@@ -286,6 +286,10 @@ type Controller struct {
 	// artifactDir is the session's artifact directory, empty for a review or a
 	// session without one. Set once, before the controller is published.
 	artifactDir string
+	// preCapture is the first turn's file snapshot, taken while the agent
+	// started. Set before the controller is published; dispatch, under sendMu,
+	// takes it.
+	preCapture *preCapturedSnapshot
 	// artifactBaseline is the artifact directory as the turn in flight started,
 	// compared when it ends to record which artifacts it created or edited. Nil
 	// when no turn is being watched.

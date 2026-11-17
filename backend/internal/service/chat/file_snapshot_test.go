@@ -3,6 +3,8 @@ package chat_test
 import (
 	"context"
 	"errors"
+	"fmt"
+	"log/slog"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -10,6 +12,7 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
 	"github.com/aoagents/agent-orchestrator/backend/internal/filesnapshot"
@@ -266,6 +269,47 @@ func TestForksSnapshotTurnsForAnAgentThatCannotRollBack(t *testing.T) {
 
 	if refs := gitOutputIn(t, workspace, "for-each-ref", "refs/ao/snapshots/"); refs == "" {
 		t.Fatal("no snapshot was saved for the turn")
+	}
+}
+
+// A new chat's queued first turn is snapshotted while its agent starts, so the
+// turn does not wait for the snapshot once the agent is ready.
+func TestFirstTurnFilesAreSnapshottedWhileTheAgentStarts(t *testing.T) {
+	chatsvc.EnableForkSnapshots(true)
+	t.Cleanup(func() { chatsvc.EnableForkSnapshots(false) })
+	st, id := openProvisioningStore(t, domain.SessionProvisionProvisioning)
+	ctx := context.Background()
+	workspace := gitWorkspace(t)
+	conv := newFakeConversation()
+	next := 0
+	svc := chatsvc.New(chatsvc.Options{
+		Store: st, Sessions: st, Reader: fullSnapshotReader(st), Log: slog.New(slog.DiscardHandler),
+		NewID: func() string { next++; return fmt.Sprintf("id-%d", next) },
+		Drivers: fakeRegistry{driver: fakeDriver{conv: conv, start: func(ports.ChatStartConfig) (ports.ChatConversation, error) {
+			for deadline := time.Now().Add(5 * time.Second); time.Now().Before(deadline); time.Sleep(10 * time.Millisecond) {
+				if gitOutputIn(t, workspace, "for-each-ref", "refs/ao/snapshots/") != "" {
+					return conv, nil
+				}
+			}
+			return nil, errors.New("the first turn was not snapshotted while the agent started")
+		}}},
+	})
+	t.Cleanup(func() { _ = svc.Stop(context.Background(), id) })
+	if _, err := svc.Send(ctx, id, ports.ChatUserMessage{Text: "the opening brief", Origin: domain.MessageOriginHuman}); err != nil {
+		t.Fatalf("queue opening prompt: %v", err)
+	}
+	if _, err := svc.Start(ctx, chatsvc.StartConfig{
+		SessionID: id, ProjectID: testProject, Kind: domain.KindWorker,
+		Harness: domain.HarnessClaudeCode, WorkspacePath: workspace,
+		ControllerReady: func(chatsvc.StartResult) (chatsvc.ControllerCommit, error) { return chatsvc.ControllerCommit{}, nil },
+	}); err != nil {
+		t.Fatalf("start: %v", err)
+	}
+	if err := svc.DrainQueued(ctx, id); err != nil {
+		t.Fatalf("drain: %v", err)
+	}
+	if refs := strings.Split(gitOutputIn(t, workspace, "for-each-ref", "--format=%(refname)", "refs/ao/snapshots/"), "\n"); len(refs) != 1 {
+		t.Fatalf("snapshot refs = %q, want the first turn's", refs)
 	}
 }
 
