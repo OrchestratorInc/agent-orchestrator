@@ -129,6 +129,31 @@ describe("moveSession", () => {
 		expect(calls).not.toContain("/api/v1/sessions/{sessionId}/move/complete");
 	});
 
+	it("asks Cloud again under the same key when a create's answer is lost", async () => {
+		const calls: string[] = [];
+		const source = fakeDaemon({
+			"/api/v1/sessions/{sessionId}/exit-agent": ok(),
+			"/api/v1/sessions/{sessionId}/move/export": ok(exported),
+			"/api/v1/sessions/{sessionId}/move/complete": ok(),
+		}, calls);
+		const cp = cloud();
+		cp.createSession.mockRejectedValueOnce(new CloudCpError("Bad gateway", { status: 502 }));
+		await expect(moveSession({ sessionId: "app-1", moveId: "m-4", target }, { source, cloud: cp })).resolves.toMatchObject({ sessionId: "cloud-9" });
+		const [first, second] = cp.createSession.mock.calls;
+		expect(second).toEqual(first);
+		expect(calls).not.toContain("/api/v1/sessions/{sessionId}/resume-agent");
+	});
+
+	it("leaves recording the move to the retry queue when this computer does not answer", async () => {
+		// No reply for move/complete: the daemon client throws, as it does when the request gets no answer.
+		const source = fakeDaemon({
+			"/api/v1/sessions/{sessionId}/exit-agent": ok(),
+			"/api/v1/sessions/{sessionId}/move/export": ok(exported),
+		}, []);
+		const result = await moveSession({ sessionId: "app-1", moveId: "m-5", target }, { source, cloud: cloud() });
+		expect(result).toMatchObject({ sessionId: "cloud-9", completeError: "unexpected /api/v1/sessions/{sessionId}/move/complete" });
+	});
+
 	it("resends the first Cloud request under the same key when a retry's export differs", async () => {
 		const calls: string[] = [];
 		const replies = {
@@ -138,10 +163,12 @@ describe("moveSession", () => {
 			"/api/v1/sessions/{sessionId}/move/complete": ok(),
 		};
 		const cloudRequest: MoveDeps["cloudRequest"] = {};
-		// The first create reached AO Cloud, but its response was lost.
+		// The first creates reached AO Cloud, but their answers were lost.
 		const cp = cloud(async () => { throw new Error("network error"); });
 		await expect(moveSession({ sessionId: "app-1", moveId: "m-3", target }, { source: fakeDaemon(replies, calls), cloud: cp, cloudRequest }))
-			.rejects.toMatchObject({ step: "import", rolledBack: true, message: "Could not reach Orchestrator Cloud." });
+			.rejects.toMatchObject({ step: "import", rolledBack: false, message: expect.stringContaining("Orchestrator Cloud did not answer") });
+		// The session may run in Cloud, so the agent here stays stopped.
+		expect(calls).not.toContain("/api/v1/sessions/{sessionId}/resume-agent");
 		replies["/api/v1/sessions/{sessionId}/move/export"] = ok({ ...exported, handoffNote: "a later note", manifest: { ...exported.manifest, wip: false } });
 		cp.createSession.mockImplementation(async () => ({ session: { id: "cloud-9" } }));
 		await expect(moveSession({ sessionId: "app-1", moveId: "m-3", target }, { source: fakeDaemon(replies, calls), cloud: cp, cloudRequest }))
@@ -281,6 +308,15 @@ describe("moveSessionHere", () => {
 		expect(error).toBeInstanceOf(MoveError);
 		expect(error).toMatchObject({ step: "import", code: "MOVE_LOCAL_AHEAD", rolledBack: true, pushed: { branch: "feat/login", tip, wip: true } });
 		expect(cp.restartSessionAgent).toHaveBeenCalledWith("org-1", "cloud-1");
+		expect(cp.deleteSession).not.toHaveBeenCalled();
+	});
+
+	it("keeps the Cloud agent stopped when this computer does not answer the import", async () => {
+		const cp = cloudFake();
+		// No reply for move/import: the daemon client throws.
+		const error = await moveSessionHere(input, { daemon: fakeDaemon({}, []) as unknown as MoveHereDeps["daemon"], cloud: cp }).catch((e: unknown) => e);
+		expect(error).toMatchObject({ step: "import", rolledBack: false, pushed: { branch: "feat/login", tip, wip: true } });
+		expect(cp.restartSessionAgent).not.toHaveBeenCalled();
 		expect(cp.deleteSession).not.toHaveBeenCalled();
 	});
 

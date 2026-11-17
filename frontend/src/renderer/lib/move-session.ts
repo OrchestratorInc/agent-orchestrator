@@ -137,27 +137,48 @@ export async function moveSession(
 		...(transcriptImportId ? { transcriptImportId } : {}),
 	};
 	if (deps.cloudRequest) deps.cloudRequest.current = request;
-	let cloudSessionId: string;
-	try {
-		const { session } = await deps.cloud.createSession(target.orgId, request, { idempotencyKey: moveId });
-		cloudSessionId = session.id;
-	} catch (error) {
-		// Only a Cloud response becomes a CloudCpError; a request that got none
-		// throws Electron's IPC error, whose text means nothing to the user.
-		const reason = error instanceof CloudCpError && error.status !== 0 ? error : "Could not reach Orchestrator Cloud.";
-		return rollback("import", reason, "Could not start the session in Orchestrator Cloud", { branch: m.branch, tip: m.tip, wip: m.wip });
+	const pushed = { branch: m.branch, tip: m.tip, wip: m.wip };
+	// A create whose answer was lost may still have made the session, and asking
+	// again under the same key returns it. The agent here resumes only when
+	// Cloud refuses; otherwise both could work on the branch.
+	let cloudSessionId: string | undefined;
+	let failure: unknown;
+	for (let attempt = 0; attempt < 2 && cloudSessionId === undefined; attempt++) {
+		try {
+			cloudSessionId = (await deps.cloud.createSession(target.orgId, request, { idempotencyKey: moveId })).session.id;
+		} catch (error) {
+			failure = error;
+			if (cloudRefused(error)) break;
+		}
+	}
+	if (cloudSessionId === undefined) {
+		if (cloudRefused(failure)) return rollback("import", failure, "Could not start the session in Orchestrator Cloud", pushed);
+		throw new MoveError(
+			"Orchestrator Cloud did not answer, so the session may already be starting there. The agent here stays stopped; Try again finishes the move.",
+			"import",
+			errorCode(failure),
+			false,
+			pushed,
+		);
 	}
 
 	deps.onStep?.("complete");
-	const completed = await deps.source.POST("/api/v1/sessions/{sessionId}/move/complete", {
-		...path,
-		body: { moveId, orgId: target.orgId, sessionId: cloudSessionId },
-	});
+	// The session runs in Cloud whatever happens here; the caller retries a failed record.
+	let completeError: string | undefined;
+	try {
+		const completed = await deps.source.POST("/api/v1/sessions/{sessionId}/move/complete", {
+			...path,
+			body: { moveId, orgId: target.orgId, sessionId: cloudSessionId },
+		});
+		if (completed.error) completeError = apiErrorMessage(completed.error, "Could not mark the session as moved");
+	} catch (error) {
+		completeError = apiErrorMessage(error, "Could not mark the session as moved");
+	}
 	return {
 		projectId: request.projectId,
 		sessionId: cloudSessionId,
 		conversation: request.transcriptImportId ? "transcript" : "note",
-		...(completed.error ? { completeError: apiErrorMessage(completed.error, "Could not mark the session as moved") } : {}),
+		...(completeError ? { completeError } : {}),
 	};
 }
 
@@ -254,7 +275,8 @@ export async function moveSessionHere(
 
 	deps.onStep?.("import");
 	const m = exported.manifest;
-	const imported = await deps.daemon.POST("/api/v1/sessions/move/import", {
+	const pushed = { branch: m.branch, tip: m.tip, wip: m.wip };
+	const importing = deps.daemon.POST("/api/v1/sessions/move/import", {
 		body: {
 			projectId,
 			moveId: input.moveId,
@@ -263,13 +285,24 @@ export async function moveSessionHere(
 			...(exported.transcript ? { transcript: exported.transcript } : {}),
 		},
 	});
+	// No answer may still mean the session started here, and Try again returns
+	// it under the same move id, so Cloud's agent stays stopped.
+	const imported = await importing.catch(() => {
+		throw new MoveError(
+			"This computer's Orchestrator did not answer, so the session may already be starting here. The Cloud agent stays stopped; Try again finishes the move.",
+			"import",
+			undefined,
+			false,
+			pushed,
+		);
+	});
 	if (imported.error || !imported.data) {
 		throw new MoveError(
 			apiErrorMessage(imported.error, "Could not start the session on this computer"),
 			"import",
 			apiErrorCode(imported.error),
 			await restart(),
-			{ branch: m.branch, tip: m.tip, wip: m.wip },
+			pushed,
 		);
 	}
 
@@ -315,6 +348,11 @@ async function cloneForMove(daemon: DaemonClient, clone: MoveHereClone): Promise
 		return fail(undefined, otherRepository);
 	}
 	return added.data.project.id;
+}
+
+/** Cloud answered and refused; a 5xx or no answer may still have created the session. */
+function cloudRefused(error: unknown): boolean {
+	return error instanceof CloudCpError && error.status >= 400 && error.status < 500;
 }
 
 function errorCode(error: unknown): string | undefined {

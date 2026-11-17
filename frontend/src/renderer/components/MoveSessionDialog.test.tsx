@@ -132,22 +132,23 @@ it("keeps the session here and offers a retry when the push fails", async () => 
 	expect(cloud.createSession).not.toHaveBeenCalled();
 });
 
-it("tries again with the same move id and Cloud request after a lost response", async () => {
+it("keeps the agent here stopped while Cloud does not answer, and Try again finishes the move", async () => {
 	daemon.posts = { ...moveReplies, "/api/v1/sessions/{sessionId}/resume-agent": { data: {} } };
 	const unreachable = new Error("Error invoking remote method 'cloudCp:request': TypeError: fetch failed");
-	cloud.createSession.mockRejectedValueOnce(unreachable).mockResolvedValueOnce({ session: { id: "cloud-9" } });
+	cloud.createSession.mockRejectedValueOnce(unreachable).mockRejectedValueOnce(unreachable).mockResolvedValueOnce({ session: { id: "cloud-9" } });
 	renderDialog();
 	const user = userEvent.setup();
 	await user.click(await screen.findByRole("button", { name: "Move to Orchestrator Cloud" }));
-	expect(await screen.findByText("Could not reach Orchestrator Cloud.")).toBeTruthy();
+	expect(await screen.findByText(/Orchestrator Cloud did not answer, so the session may already be starting there/)).toBeTruthy();
 	// The push already happened, so the session is not as it was.
 	expect(await screen.findByText("The uncommitted files are now commit abc1234 on feat/x, here and on GitHub.")).toBeTruthy();
-	expect(screen.getByText("The agent here is running again.")).toBeTruthy();
-	expect(screen.queryByText("The session continues here, unchanged.")).toBeNull();
+	expect(screen.getByText("The agent here is still stopped. Resume it from the session menu.")).toBeTruthy();
+	expect(daemon.postCalls.map((call) => call.path)).not.toContain("/api/v1/sessions/{sessionId}/resume-agent");
 	await user.click(screen.getByRole("button", { name: "Try again" }));
 	await waitFor(() => expect(navigate).toHaveBeenCalledWith("cloud-proj", "cloud-9"));
-	const [first, second] = cloud.createSession.mock.calls;
+	const [first, second, third] = cloud.createSession.mock.calls;
 	expect(second).toEqual(first);
+	expect(third).toEqual(first);
 	expect(first[2]).toEqual({ idempotencyKey: expect.any(String) });
 });
 
