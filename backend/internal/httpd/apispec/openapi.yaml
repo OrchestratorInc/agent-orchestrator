@@ -16091,6 +16091,10 @@ components:
           type: string
         permissions:
           type: string
+        terminateOnPrMerge:
+          type:
+          - "null"
+          - boolean
       type: object
     AgentInfo:
       properties:
@@ -22567,6 +22571,10 @@ components:
           items:
             type: string
           type: array
+        terminateOnPrMerge:
+          type:
+          - "null"
+          - boolean
         trackerIntake:
           $ref: '#/components/schemas/TrackerIntakeConfig'
         worker:
@@ -25649,6 +25657,10 @@ components:
           enum:
           - artifact
           type: string
+        terminateOnPrMerge:
+          type:
+          - "null"
+          - boolean
         trackerProvider:
           enum:
           - github
