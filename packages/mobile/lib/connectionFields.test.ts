@@ -61,6 +61,25 @@ describe("resolveManualAddress", () => {
 		expect(resolveManualAddress(`http://${host}`, port)).toMatchObject({ ok: true, secure: false });
 	});
 
+	// Address parsers read these as IPv4 numbers: 134744072 and 0x8080808 are
+	// both 8.8.8.8. Leading zeros are octal to some parsers (010.0.0.1 is
+	// 8.0.0.1 to a URL parser, 10.0.0.1 to getaddrinfo), so only a canonical
+	// dotted quad may count as a private address.
+	it.each(["134744072", "0x8080808", "0X8080808", "167772161", "0", "010.0.0.1", "192.168.1.042", "100.064.0.1"])(
+		"sends the IPv4 literal %s over TLS rather than reading it as a bare machine name",
+		(host) => {
+			expect(resolveManualAddress(host, "")).toEqual({ ok: true, host, ...tls() });
+			expect(resolveManualAddress(`http://${host}`, "")).toMatchObject({ ok: true, secure: false });
+		},
+	);
+
+	it.each(["cafe", "deadbeef", "1pc", "my-pc", "10.0.0.5", "192.168.1.42", "100.101.102.103"])(
+		"keeps %s, a machine name or canonical private address, on plain HTTP",
+		(host) => {
+			expect(resolveManualAddress(host, "")).toEqual({ ok: true, host, ...plain() });
+		},
+	);
+
 	// TLS is decided from the name, so anything after it must not make a public
 	// host look local and send its credential over plain HTTP.
 	it.each([

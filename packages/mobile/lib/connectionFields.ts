@@ -38,13 +38,23 @@ function isPrivateIPv6(host: string): boolean {
 	return h === "::1" || /^fe[89ab][0-9a-f]?:/.test(h) || /^f[cd][0-9a-f]{0,2}:/.test(h);
 }
 
+/** Any spelling an address parser reads as an IPv4 number: 134744072, 0x8080808, 10.1, 010.0.0.1. */
+const IPV4_LITERAL = /^(0x[0-9a-f]*|\d+)(\.(0x[0-9a-f]*|\d+)){0,3}\.?$/i;
+/** Four decimal octets without leading zeros: the one spelling every parser reads alike. */
+const CANONICAL_IPV4 = /^(25[0-5]|2[0-4]\d|1\d\d|[1-9]?\d)(\.(25[0-5]|2[0-4]\d|1\d\d|[1-9]?\d)){3}$/;
+
 /**
  * An address that only means something on the network the phone is on: a
  * private or tailnet IP, a .local name, or a bare machine name. Nothing in
  * front of the daemon gives these a certificate, so they speak plain HTTP.
+ *
+ * A number is never a machine name: 134744072 and 0x8080808 are 8.8.8.8, and
+ * leading zeros are octal to some parsers, so an IPv4 literal is private only
+ * as a canonical dotted quad.
  */
 function isPrivateHost(host: string): boolean {
 	const h = host.trim().toLowerCase();
+	if (IPV4_LITERAL.test(h)) return CANONICAL_IPV4.test(h) && (isLocalNetworkHost(h) || isTailscaleHost(h));
 	if (isLocalNetworkHost(h) || isTailscaleHost(h) || isPrivateIPv6(h)) return true;
 	return !h.includes(".") && !h.includes(":") && !h.startsWith("[");
 }
