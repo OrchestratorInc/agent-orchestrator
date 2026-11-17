@@ -558,7 +558,7 @@ func (c *Collector) RecordHook(ctx context.Context, sessionID domain.SessionID, 
 	}
 	if signal.NativeSessionID != "" && mainPath == "" &&
 		(session.Harness != domain.HarnessClaudeCode || finalizing && !existsForDiscovery) {
-		mainPath, err = c.discoverPath(ctx, session.Harness, signal.NativeSessionID, session.ID)
+		mainPath, err = c.discoverPath(ctx, session.Harness, signal.NativeSessionID, session.ID, session.Metadata.WorkspacePath)
 		if err != nil {
 			return err
 		}
@@ -965,7 +965,7 @@ func (c *Collector) backfillSession(ctx context.Context, session domain.SessionR
 	if err != nil {
 		return err
 	}
-	path, err := c.discoverPath(ctx, session.Harness, nativeID, session.ID)
+	path, err := c.discoverPath(ctx, session.Harness, nativeID, session.ID, session.Metadata.WorkspacePath)
 	if err != nil {
 		return err
 	}
@@ -1410,7 +1410,7 @@ func (c *Collector) reconcileBinding(ctx context.Context, binding domain.UsageBi
 		targetState = domain.UsageBindingFinalizing
 	}
 
-	path, err := c.discoverPath(ctx, binding.Harness, binding.NativeRootID, binding.SessionID)
+	path, err := c.discoverPath(ctx, binding.Harness, binding.NativeRootID, binding.SessionID, session.Metadata.WorkspacePath)
 	if err != nil {
 		return err
 	}
@@ -2785,13 +2785,21 @@ func pathWithinRoot(ctx context.Context, path, root string) bool {
 	return err == nil && rel != ".." && !strings.HasPrefix(rel, ".."+string(filepath.Separator))
 }
 
-func (c *Collector) discoverPath(ctx context.Context, harness domain.AgentHarness, nativeID string, sessionID domain.SessionID) (string, error) {
+func (c *Collector) discoverPath(ctx context.Context, harness domain.AgentHarness, nativeID string, sessionID domain.SessionID, workspace string) (string, error) {
 	if !nativeUsageIDPattern.MatchString(nativeID) {
 		return "", nil
 	}
 	var patterns []string
 	switch harness {
 	case domain.HarnessClaudeCode:
+		// Claude keeps the transcript in the workspace's project directory. Checking
+		// that file first avoids reading every project directory.
+		if resolved, err := filepath.EvalSymlinks(workspace); workspace != "" && err == nil {
+			path := filepath.Join(c.roots.ClaudeProjects, claudeProjectDirName(resolved), nativeID+".jsonl")
+			if info, err := os.Stat(path); err == nil && info.Mode().IsRegular() {
+				return path, nil
+			}
+		}
 		patterns = []string{filepath.Join(c.roots.ClaudeProjects, "*", nativeID+".jsonl")}
 	case domain.HarnessCodex:
 		return c.discoverCodexPath(ctx, nativeID, "")
