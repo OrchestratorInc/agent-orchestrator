@@ -50,9 +50,20 @@ func TestInterruptTUIPreservesNativeCancelKey(t *testing.T) {
 	}
 }
 
+// interruptOnlyRuntime can send the generic interrupt but has no raw input
+// route, so a native cancel key cannot be delivered through it.
+type interruptOnlyRuntime struct {
+	runtimeController
+	fake *fakeRuntime
+}
+
+func (r interruptOnlyRuntime) Interrupt(ctx context.Context, handle ports.RuntimeHandle) error {
+	return r.fake.Interrupt(ctx, handle)
+}
+
 func TestNativeInterruptDoesNotFallbackToWrongControlKey(t *testing.T) {
 	rt := &fakeRuntime{}
-	manager := &Manager{runtime: rt, agents: singleAgent{escapeInterruptAgent{}}}
+	manager := &Manager{runtime: interruptOnlyRuntime{runtimeController: rt, fake: rt}, agents: singleAgent{escapeInterruptAgent{}}}
 	err := manager.interruptTerminal(context.Background(), domain.SessionRecord{Harness: domain.HarnessCodex, Metadata: domain.SessionMetadata{RuntimeHandleID: "pane-1"}})
 	if !errors.Is(err, ErrSemanticAcceptanceUnsupported) || len(rt.interrupts) != 0 {
 		t.Fatalf("unsupported native cancellation = %v, %v", err, rt.interrupts)

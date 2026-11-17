@@ -57,6 +57,16 @@ func TestSpawnHelpListsOpenCodeV2Harness(t *testing.T) {
 	}
 }
 
+func TestSpawnHelpListsOpenInterpreterHarness(t *testing.T) {
+	out, _, err := executeCLI(t, Deps{}, "spawn", "--help")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(out, "stakpak, open-interpreter") {
+		t.Fatalf("spawn help does not list open-interpreter:\n%s", out)
+	}
+}
+
 func TestSpawnHelpListsEveryRegisteredHarness(t *testing.T) {
 	out, _, err := executeCLI(t, Deps{}, "spawn", "--help")
 	if err != nil {
