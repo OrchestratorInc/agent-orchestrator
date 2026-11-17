@@ -7,6 +7,7 @@ const state = vi.hoisted(() => ({
 	finishSync: undefined as (() => void) | undefined,
 	hosts: [] as import("./hosts").Host[],
 }));
+vi.mock("./cloud/CloudProvider", () => ({ useCloud: () => ({ org: null, projects: [], sessions: [], connections: [], chatHarnesses: [], client: {}, upsertSession: () => {}, refreshSessions: async () => {}, refresh: async () => {} }) }));
 vi.mock("@react-native-async-storage/async-storage", () => ({ default: { getItem: async () => null, setItem: async () => {} } }));
 vi.mock("react-native", () => ({ AppState: { currentState: "active", addEventListener: (_: string, callback: (value: string) => void) => {
 	state.onState = callback; return { remove: () => {} };
@@ -14,7 +15,7 @@ vi.mock("react-native", () => ({ AppState: { currentState: "active", addEventLis
 vi.mock("expo-network", () => ({ getNetworkStateAsync: async () => ({ isConnected: true, isInternetReachable: true, type: "WIFI" }), addNetworkStateListener: () => ({ remove: () => {} }) }));
 vi.mock("./api", () => ({ ApiError: class extends Error {}, getSessions: vi.fn(), getNotifications: vi.fn() }));
 vi.mock("./resolveConfig", () => ({ resolveActiveConfig: state.resolveConfig, runtimeResolveDeps: () => ({}) }));
-vi.mock("./config", () => ({ isConfigured: () => false, machineIdentity: () => "" }));
+vi.mock("./config", () => ({ isConfigured: () => false, machineIdentity: () => "", hostMachineIdentity: (id: string) => `host.${id}` }));
 vi.mock("./race", () => ({ IncompatibleHostVersionError: class extends Error {} }));
 vi.mock("./connectRuntime", () => ({ rejectedEndpointNeedsRace: () => false }));
 vi.mock("./hosts", () => ({ activeHost: async () => state.hosts[0] ?? null, loadHosts: async () => state.hosts, sameHostConnections: (a: unknown, b: unknown) => JSON.stringify(a) === JSON.stringify(b), setActiveHost: vi.fn() }));

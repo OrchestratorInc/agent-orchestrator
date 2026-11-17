@@ -36,6 +36,8 @@ var expectedUsageTableColumns = map[string][]string{
 		// second full rebuild to move it beside billing_provider_id would cost
 		// more than the adjacency is worth.
 		"billing_provider_source",
+		"service_tier",
+		"provider_message_id",
 	},
 }
 

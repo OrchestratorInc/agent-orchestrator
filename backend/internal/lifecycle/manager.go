@@ -13,6 +13,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/aoagents/agent-orchestrator/backend/internal/deliverytelemetry"
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
 	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
 	"github.com/aoagents/agent-orchestrator/backend/internal/reqid"
@@ -52,12 +53,29 @@ type sessionStore interface {
 	UpdatePRLastNudgeSignature(ctx context.Context, prURL, payload string) error
 }
 
+type semanticDeliveryActivityStore interface {
+	UpdateSessionFromActivitySignalAndAcceptSemanticDelivery(
+		context.Context,
+		domain.SessionRecord,
+		int64,
+		string,
+	) (bool, error)
+}
+
 // controllerEpochStore is the atomic persistence primitive used by
 // CommitControllerEpoch. It stays optional on the broad lifecycle store so
 // focused reducer fakes do not need controller-transition methods; production
 // SQLite implements it.
 type controllerEpochStore interface {
 	CommitSessionControllerEpoch(
+		context.Context,
+		domain.SessionID,
+		domain.SessionMode,
+		domain.SessionMode,
+		string,
+		time.Time,
+	) (bool, error)
+	CommitSessionControllerEpochArchivedChat(
 		context.Context,
 		domain.SessionID,
 		domain.SessionMode,
@@ -156,6 +174,12 @@ func WithNotificationSink(sink notificationSink) Option {
 	return func(m *Manager) { m.notifications = sink }
 }
 
+// WithDeliveryTelemetry reports ao.sessions.ended for the terminations lifecycle
+// itself decides (runtime death, merge and issue-close teardown).
+func WithDeliveryTelemetry(r *deliverytelemetry.Recorder) Option {
+	return func(m *Manager) { m.delivery = r }
+}
+
 // WithTelemetry wires lifecycle activity transitions to the shared telemetry sink.
 func WithTelemetry(sink ports.EventSink) Option {
 	return func(m *Manager) { m.telemetry = sink }
@@ -247,6 +271,7 @@ type Manager struct {
 	clock     func() time.Time
 	react     reactionState
 	telemetry ports.EventSink
+	delivery  *deliverytelemetry.Recorder
 	// flights tracks, per session, the in-flight tool executions and the
 	// pending permission dialog's identity (see toolFlight). Guarded by mu.
 	flights map[domain.SessionID]*toolFlight
@@ -466,8 +491,7 @@ func (m *Manager) ApplyRuntimeObservation(ctx context.Context, id domain.Session
 		}
 		// AO destroyed this launch's terminal on purpose and kept the session
 		// (an agent exit); Resume builds a new one. Its death is not a crash.
-		if cur.Activity.State == domain.ActivityExited && currentLaunch != "" &&
-			cur.Metadata.RuntimeReleasedLaunchID == currentLaunch {
+		if cur.RuntimeReleased() {
 			return cur, false
 		}
 		if !runtimeClearlyDead(f, cur.Activity, now, m.window) {
@@ -488,6 +512,7 @@ func (m *Manager) ApplyRuntimeObservation(ctx context.Context, id domain.Session
 	finalizeSessionUsage(ctx, id, terminationLaunch, terminationRevision, finalizer)
 
 	terminated := false
+	var beforeEnd domain.SessionRecord
 	err := m.mutate(ctx, id, func(cur domain.SessionRecord, now time.Time) (domain.SessionRecord, bool) {
 		if cur.IsTerminated || cur.Revision != terminationRevision ||
 			cur.Metadata.RuntimeLaunchID != terminationLaunch || !matchesLaunch(cur) ||
@@ -505,12 +530,14 @@ func (m *Manager) ApplyRuntimeObservation(ctx context.Context, id domain.Session
 		delete(m.flights, id)
 		delete(m.steps, id)
 		terminated = true
+		beforeEnd = cur
 		return next, true
 	})
 	if err != nil {
 		return err
 	}
 	if terminated {
+		m.delivery.SessionEnded(ctx, beforeEnd, deliverytelemetry.EndRuntimeDied)
 		// Route reaper-observed death through the same container-reap hook as
 		// every other terminal path (#2652): a crash/SIGKILL detected by the
 		// runtime reaper must not leave the session's Docker containers behind
@@ -565,6 +592,7 @@ func (m *Manager) ApplyActivitySignal(ctx context.Context, id domain.SessionID, 
 	}
 	s.ProviderTurnID = strings.TrimSpace(s.ProviderTurnID)
 	s.SubmissionID = strings.TrimSpace(s.SubmissionID)
+	s.CoordinationID = strings.TrimSpace(s.CoordinationID)
 	if s.SubagentID != "" {
 		// Child hook identity and transcript are not the root conversation's
 		// resumable identity or history checkpoint.
@@ -579,6 +607,8 @@ func (m *Manager) ApplyActivitySignal(ctx context.Context, id domain.SessionID, 
 	if !s.ConversationCheckpointOrigin.Valid() {
 		s.ConversationCheckpointOrigin = domain.ConversationCheckpointOriginUnknown
 	}
+	var semanticDeliveryStore semanticDeliveryActivityStore
+	semanticDeliverySignal := s.Event == "user-prompt-submit" && s.SubagentID == "" && s.CoordinationID != ""
 	// The hook event is the provenance boundary for provider text. Native hook
 	// payloads repeat similarly named aliases on tool, lifecycle, and subagent
 	// events, so accepting a field merely because it is non-empty can promote an
@@ -678,6 +708,12 @@ retryProjection:
 		(mode != domain.SessionModeChat && s.ControllerGeneration != "") {
 		m.mu.Unlock()
 		return nil
+	}
+	// Acceptance is scoped to a runtime launch. Without one, or without a store
+	// that records it, the projection below still applies; SendSemantic refuses
+	// sessions that have no launch, so nothing waits on that acceptance.
+	if semanticDeliverySignal && mode != domain.SessionModeChat && s.LaunchID != "" {
+		semanticDeliveryStore, _ = m.store.(semanticDeliveryActivityStore)
 	}
 	if s.ExpectedRevision != nil && rec.Revision != *s.ExpectedRevision {
 		m.mu.Unlock()
@@ -924,8 +960,14 @@ retryProjection:
 		(s.TranscriptPath != "" && rec.Metadata.NativeTranscriptPath != s.TranscriptPath) ||
 		checkpointChanged || subagentFacts != storedSubagentFacts
 	toolFlightBeforeProjection := cloneToolFlight(m.flights[id])
+	nativeSessionChanged := s.AgentSessionID != "" &&
+		(rec.Metadata.AgentSessionID != s.AgentSessionID || rec.Metadata.AgentSessionIDLaunchID != s.LaunchID)
+	var usageReactivator sessionUsageReactivator
+	if nativeSessionChanged {
+		usageReactivator = m.usageReactivator
+	}
 	if s.Valid {
-		s = m.applyToolPrecedenceLocked(id, rec.Activity.State, s)
+		s = m.applyToolPrecedenceLocked(id, rec.Harness, rec.Activity.State, s)
 	}
 	if !s.Valid && !metadataChanged {
 		m.mu.Unlock()
@@ -937,7 +979,13 @@ retryProjection:
 	stepsBeforeProjection := m.stepsSnapshotLocked(id)
 	m.recordStepLocked(id, s, now)
 	project := func(next domain.SessionRecord) (applied, retry bool, err error) {
-		applied, err = m.store.UpdateSessionFromActivitySignal(ctx, next, observedRevision)
+		if semanticDeliveryStore != nil {
+			applied, err = semanticDeliveryStore.UpdateSessionFromActivitySignalAndAcceptSemanticDelivery(
+				ctx, next, observedRevision, s.CoordinationID,
+			)
+		} else {
+			applied, err = m.store.UpdateSessionFromActivitySignal(ctx, next, observedRevision)
+		}
 		if applied {
 			return applied, false, err
 		}
@@ -972,6 +1020,9 @@ retryProjection:
 			goto retryProjection
 		}
 		m.mu.Unlock()
+		if nativeSessionChanged {
+			reactivateSessionUsage(ctx, id, rec.Metadata.RuntimeLaunchID, usageReactivator)
+		}
 		return nil
 	}
 	if metadataChanged {
@@ -1013,6 +1064,9 @@ retryProjection:
 				return nil
 			}
 			m.mu.Unlock()
+			if nativeSessionChanged {
+				reactivateSessionUsage(ctx, id, rec.Metadata.RuntimeLaunchID, usageReactivator)
+			}
 			return nil
 		}
 		m.mu.Unlock()
@@ -1060,6 +1114,9 @@ retryProjection:
 	resolutions := needsInputResolutions(rec, next, now)
 	waitingEvents := m.waitingInputEvents(next, prevState, prevAt, now)
 	m.mu.Unlock()
+	if nativeSessionChanged {
+		reactivateSessionUsage(ctx, id, next.Metadata.RuntimeLaunchID, usageReactivator)
+	}
 	if prevState != domain.ActivityIdle && next.Activity.State == domain.ActivityIdle {
 		m.operationGateMu.RLock()
 		gate := m.operationGate
@@ -1085,9 +1142,8 @@ retryProjection:
 // post-tool-use is the earliest observable "the decision was resolved"
 // signal; but tool hooks also fire for parallel subagents on the same
 // session, whose traffic must never clear a dialog that is still on screen.
-// In-memory only: a daemon restart loses it and the session degrades to
-// clearing at the next turn boundary — fail-safe staleness, never a spurious
-// clear.
+// In-memory only: a daemon restart loses correlation evidence. Provider-specific
+// compatibility paths and the limits of Kimi's bounded cache are documented below.
 type toolFlight struct {
 	// inflight maps toolUseID -> toolName for pre-tool-use signals whose post
 	// has not arrived yet.
@@ -1105,6 +1161,14 @@ type toolFlight struct {
 	// after-execution event can clear only its own key, and the session remains
 	// blocked until every observed dialog has completed.
 	cursorPending map[string]int
+	// kimiApprovals retains pending (false) and completed (true) native approval
+	// identities. Completion must survive an empty pending set and turn boundaries
+	// because Kimi's independent hook processes may deliver a result first.
+	// kimiApprovalOrder is FIFO by first observation; duplicates never refresh it.
+	// See kimi_approvals.go for the bound, overflow and cleanup contract.
+	kimiApprovals        map[string]bool
+	kimiApprovalOrder    []string
+	kimiApprovalOverflow bool
 }
 
 func cloneToolFlight(flight *toolFlight) *toolFlight {
@@ -1112,15 +1176,21 @@ func cloneToolFlight(flight *toolFlight) *toolFlight {
 		return nil
 	}
 	clone := &toolFlight{
-		inflight:         make(map[string]string, len(flight.inflight)),
-		blockedCandidate: flight.blockedCandidate,
-		cursorPending:    make(map[string]int, len(flight.cursorPending)),
+		inflight:             make(map[string]string, len(flight.inflight)),
+		blockedCandidate:     flight.blockedCandidate,
+		cursorPending:        make(map[string]int, len(flight.cursorPending)),
+		kimiApprovals:        make(map[string]bool, len(flight.kimiApprovals)),
+		kimiApprovalOrder:    append([]string(nil), flight.kimiApprovalOrder...),
+		kimiApprovalOverflow: flight.kimiApprovalOverflow,
 	}
 	for id, name := range flight.inflight {
 		clone.inflight[id] = name
 	}
 	for key, count := range flight.cursorPending {
 		clone.cursorPending[key] = count
+	}
+	for id, completed := range flight.kimiApprovals {
+		clone.kimiApprovals[id] = completed
 	}
 	return clone
 }
@@ -1198,7 +1268,7 @@ func isTurnBoundaryEvent(event string) bool {
 // Event pass through untouched — the compatibility contract for old CLIs and
 // for adapters that don't tag their signals (their last-writer-wins semantics
 // are pinned by tests). Caller must hold m.mu.
-func (m *Manager) applyToolPrecedenceLocked(id domain.SessionID, cur domain.ActivityState, s ports.ActivitySignal) ports.ActivitySignal {
+func (m *Manager) applyToolPrecedenceLocked(id domain.SessionID, harness domain.AgentHarness, cur domain.ActivityState, s ports.ActivitySignal) ports.ActivitySignal {
 	if s.Event == "" {
 		return s
 	}
@@ -1212,6 +1282,20 @@ func (m *Manager) applyToolPrecedenceLocked(id domain.SessionID, cur domain.Acti
 			m.flights[id] = fl
 		}
 		return fl
+	}
+	if harness == domain.HarnessKimi {
+		if s.Event == "permission-request" || s.Event == "permission-resolved" {
+			return ensure().applyKimiApproval(s)
+		}
+		if isTurnBoundaryEvent(s.Event) && fl != nil {
+			// Settle observed requests, but keep completion evidence so delayed
+			// callbacks cannot re-arm a wait or revive a finished turn.
+			fl.settleKimiApprovals()
+			fl.inflight = map[string]string{}
+			fl.blockedCandidate = ""
+			fl.cursorPending = nil
+			return s
+		}
 	}
 
 	// Tracking side effects happen regardless of what the state decision is.
@@ -1350,7 +1434,7 @@ func (m *Manager) waitingInputEvents(next domain.SessionRecord, prevState domain
 	// transition emits neither event so dwell covers the whole pause.
 	if !prevState.NeedsInput() && next.Activity.State.NeedsInput() && !next.IsTerminated {
 		events = append(events, ports.TelemetryEvent{
-			Name:       "ao.session.waiting_input_entered",
+			Name:       "ao.sessions.input_wait_started",
 			Source:     "lifecycle",
 			OccurredAt: now.UTC(),
 			Level:      ports.TelemetryLevelInfo,
@@ -1368,7 +1452,7 @@ func (m *Manager) waitingInputEvents(next domain.SessionRecord, prevState domain
 			"exited_to": string(next.Activity.State),
 		}
 		events = append(events, ports.TelemetryEvent{
-			Name:       "ao.session.waiting_input_exited",
+			Name:       "ao.sessions.input_wait_ended",
 			Source:     "lifecycle",
 			OccurredAt: now.UTC(),
 			Level:      ports.TelemetryLevelInfo,
@@ -1386,6 +1470,9 @@ func (m *Manager) emitTelemetry(ctx context.Context, ev ports.TelemetryEvent) {
 	}
 	if ev.RequestID == "" {
 		ev.RequestID = reqid.FromContext(ctx)
+	}
+	if ev.Name == "ao.sessions.input_wait_started" && ev.SessionID != nil {
+		m.countWaitingInput(ctx, *ev.SessionID)
 	}
 	m.telemetry.Emit(ctx, ev)
 }
@@ -1543,6 +1630,11 @@ func (m *Manager) markSpawned(
 				return nil, err
 			}
 		}
+		if rec.Harness == domain.HarnessKimi {
+			// A successful spawn commits a new provider process generation. Its
+			// approval callbacks must not inherit the prior launch's cache.
+			delete(m.flights, id)
+		}
 		return m.usageReactivator, nil
 	}()
 	if err != nil {
@@ -1566,7 +1658,22 @@ func (m *Manager) CommitControllerEpoch(
 	startFresh bool,
 ) (bool, error) {
 	return m.changeControllerEpoch(
-		ctx, id, source, target, nativeConversationID, startFresh, false,
+		ctx, id, source, target, nativeConversationID, startFresh, false, false,
+	)
+}
+
+// CommitControllerEpochArchivedChat is CommitControllerEpoch for a degraded
+// identity-reset handoff: the source Chat may carry real messages and stays
+// archived instead of proving its root untouched (upstream issue #7724).
+func (m *Manager) CommitControllerEpochArchivedChat(
+	ctx context.Context,
+	id domain.SessionID,
+	source, target domain.SessionMode,
+	nativeConversationID string,
+	startFresh bool,
+) (bool, error) {
+	return m.changeControllerEpoch(
+		ctx, id, source, target, nativeConversationID, startFresh, false, true,
 	)
 }
 
@@ -1581,7 +1688,7 @@ func (m *Manager) RestoreControllerEpoch(
 	startFresh bool,
 ) (bool, error) {
 	return m.changeControllerEpoch(
-		ctx, id, source, target, nativeConversationID, startFresh, true,
+		ctx, id, source, target, nativeConversationID, startFresh, true, false,
 	)
 }
 
@@ -1590,7 +1697,7 @@ func (m *Manager) changeControllerEpoch(
 	id domain.SessionID,
 	source, target domain.SessionMode,
 	nativeConversationID string,
-	startFresh, restore bool,
+	startFresh, restore, archivedChat bool,
 ) (bool, error) {
 	if !source.Valid() || !target.Valid() || source == target {
 		return false, fmt.Errorf("lifecycle: invalid controller epoch %q -> %q", source, target)
@@ -1625,6 +1732,10 @@ func (m *Manager) changeControllerEpoch(
 	var changed bool
 	if restore {
 		changed, err = writer.RestoreSessionControllerEpoch(
+			ctx, id, source, target, nativeConversationID, now,
+		)
+	} else if archivedChat {
+		changed, err = writer.CommitSessionControllerEpochArchivedChat(
 			ctx, id, source, target, nativeConversationID, now,
 		)
 	} else {
@@ -1831,6 +1942,10 @@ func sameActivity(a, b domain.Activity) bool {
 }
 
 func mergeMetadata(base, in domain.SessionMetadata) domain.SessionMetadata {
+	if in.ImportSource != nil {
+		source := *in.ImportSource
+		base.ImportSource = &source
+	}
 	set := func(dst *string, v string) {
 		if v != "" {
 			*dst = v

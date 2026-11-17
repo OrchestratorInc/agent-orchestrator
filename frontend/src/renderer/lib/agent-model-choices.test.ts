@@ -1,7 +1,17 @@
 import { describe, expect, it } from "vitest";
-import { claudeChoiceModel, filterDisabledModels, foldClaudeAliasDefault, offeredCatalogModels, splitClaudeModels } from "./agent-model-choices";
+import {
+	claudeChoiceModel,
+	cloudDefaultModel,
+	cloudModelLabel,
+	filterDisabledModels,
+	foldClaudeAliasDefault,
+	mergeSameNamedModels,
+	offeredCatalogModels,
+	splitClaudeModels,
+	withoutLocalAvailability,
+} from "./agent-model-choices";
 
-type TestModel = { id: string; label: string; isDefault?: boolean };
+type TestModel = { id: string; label: string; isDefault?: boolean; requiresVersion?: string; unavailableReason?: string };
 const model = (label: string, id = label.toLowerCase().replace(/[ .]/g, "-"), extra: { isDefault?: boolean } = {}): TestModel => ({
 	id,
 	label,
@@ -44,6 +54,37 @@ describe("splitClaudeModels", () => {
 	});
 });
 
+describe("mergeSameNamedModels", () => {
+	it("lists a model reached by two ids once, keeping the chosen id", () => {
+		const models = [model("Fable 5.1", "fable"), model("Opus 5.5", "opus"), model("Sonnet 5.5"), model("Opus 5.5", "claude-opus-5-5")];
+		const merged = mergeSameNamedModels(models, "claude-opus-5-5");
+		expect(merged.map((item) => item.id)).toEqual(["fable", "sonnet-5-5", "claude-opus-5-5"]);
+		expect(merged.find((item) => item.id === "claude-opus-5-5")).toMatchObject({ aliases: ["opus"] });
+		// With nothing chosen, the first listing stays.
+		expect(mergeSameNamedModels(models).map((item) => item.id)).toEqual(["fable", "opus", "sonnet-5-5"]);
+	});
+
+	it("keeps the row a chosen alias already folded into", () => {
+		const models = [{ ...model("Opus 5.5", "opus"), aliases: ["default"] }, model("Opus 5.5", "claude-opus-5-5")];
+		const merged = mergeSameNamedModels(models, "default");
+		expect(merged).toEqual([{ id: "opus", label: "Opus 5.5", aliases: ["default", "claude-opus-5-5"] }]);
+	});
+
+	it("with nothing chosen, keeps a twin the installed CLI can run", () => {
+		const gated = { ...model("Opus 5.5", "claude-opus-5-5"), unavailableReason: "Requires Claude Code 2.2" };
+		const merged = mergeSameNamedModels([gated, model("Opus 5.5", "opus")]);
+		expect(merged).toEqual([{ id: "opus", label: "Opus 5.5", aliases: ["claude-opus-5-5"] }]);
+	});
+
+	it("keeps distinct names, context variants, and the same name under different groups", () => {
+		const models = [
+			model("Opus 5.5"), model("Opus 5.5 (1M context)", "opus[1m]"),
+			{ ...model("GPT-6", "openai/gpt-6"), group: "OpenAI" }, { ...model("GPT-6", "codex/gpt-6"), group: "Codex" },
+		];
+		expect(mergeSameNamedModels(models).map((item) => item.id)).toEqual(["opus-5-5", "opus[1m]", "openai/gpt-6", "codex/gpt-6"]);
+	});
+});
+
 describe("foldClaudeAliasDefault", () => {
 	it("marks the newest model of the configured alias family as the default instead of listing the alias", () => {
 		const alias = model("Sonnet", "sonnet", { isDefault: true });
@@ -57,6 +98,26 @@ describe("foldClaudeAliasDefault", () => {
 	it("never folds a configured alias into a context variant", () => {
 		const models = [model("Opus 5.5", "opus", { isDefault: true }), model("Opus 5.5 (1M context)", "opus[1m]"), model("Sonnet 5.5", "sonnet")];
 		expect(foldClaudeAliasDefault(models)).toBe(models);
+	});
+
+	it("keeps the alias as the default when this CLI cannot run the family's newest model", () => {
+		const alias = model("Opus", "opus", { isDefault: true });
+		const gated = { ...model("Opus 5.5"), unavailableReason: "Requires Claude Code 2.1.280 or newer." };
+		// Folding into Opus 4.6 would pin a cloud worker that can run 5.5 to the older model.
+		const models = [model("Opus 4.6"), gated, alias];
+		expect(foldClaudeAliasDefault(models)).toBe(models);
+	});
+});
+
+describe("withoutLocalAvailability", () => {
+	it("clears the local CLI's availability marks and keeps an unmarked list as is", () => {
+		const plain = [model("Sonnet 5.5")];
+		expect(withoutLocalAvailability(plain)).toBe(plain);
+		const gated = { ...model("Opus 5.5"), requiresVersion: "2.1.280", unavailableReason: "Requires Claude Code 2.1.280 or newer." };
+		const [cleared] = withoutLocalAvailability([gated]);
+		expect(cleared?.unavailableReason).toBeUndefined();
+		expect(cleared?.requiresVersion).toBeUndefined();
+		expect(cleared?.id).toBe("opus-5-5");
 	});
 });
 
@@ -101,6 +162,45 @@ describe("claudeChoiceModel", () => {
 		expect(choiceModel("haiku", "Haiku 4.5")?.id).toBe("claude-haiku-4-5-20251001");
 		expect(choiceModel("opus", "Opus 5.5")?.id).toBe("claude-opus-5-5");
 		expect(choiceModel("haiku", "Haiku 4.1")).toBeUndefined();
+	});
+});
+
+describe("cloudModelLabel", () => {
+	const cloud = (id: string, displayName: string, description?: string) => ({ id, displayName, description });
+
+	it("names a Claude alias by the model its own list describes, which can be older than this computer's", () => {
+		expect(cloudModelLabel("claude-code", cloud("haiku", "Haiku", "Haiku 4.5 · Fastest for quick answers"))).toBe("Haiku 4.5");
+		expect(cloudModelLabel("claude-code", cloud("opus", "Opus", "Opus 5.5 · Most capable for complex work"))).toBe("Opus 5.5");
+		expect(cloudModelLabel("claude-code", cloud("sonnet[1m]", "Sonnet (1M context)", "Sonnet 4.6 with 1M context · Billed as extra usage"))).toBe("Sonnet 4.6 (1M context)");
+		expect(cloudModelLabel("claude-code", cloud("opus", "Claude Opus", "Claude Opus 5 · Best for everyday tasks"))).toBe("Claude Opus 5");
+	});
+
+	it("keeps a name that has a version, a placeholder, and one its description does not explain", () => {
+		expect(cloudModelLabel("claude-code", cloud("haiku", "Haiku 4.5", "Haiku 5.5 · Fastest"))).toBe("Haiku 4.5");
+		expect(cloudModelLabel("claude-code", cloud("claude-opus-5", "Claude Opus 5"))).toBe("Claude Opus 5");
+		expect(cloudModelLabel("claude-code", cloud("default", "Default (recommended)", "Opus 5.5 · Most capable"))).toBe("Default (recommended)");
+		expect(cloudModelLabel("claude-code", cloud("haiku", "Haiku", "Fastest for quick answers"))).toBe("Haiku");
+		expect(cloudModelLabel("claude-code", cloud("opus", "Opus", "Sonnet 4.6 · Best for everyday tasks"))).toBe("Opus");
+	});
+
+	it("leaves other agents' names as their list gives them", () => {
+		expect(cloudModelLabel("codex", cloud("gpt-6-luna", "Luna", "Haiku 4.5 · not a Claude model"))).toBe("Luna");
+	});
+});
+
+describe("cloudDefaultModel", () => {
+	const offered = [model("Opus 5", "claude-opus-5"), model("Opus 5.5 (1M context)", "opus[1m]"), model("Claude Opus 5.5", "claude-opus-5-5"), model("Opus 5.5", "opus"), model("Sonnet 4.6", "sonnet")];
+
+	it("is the model the catalog marks, when it is offered", () => {
+		expect(cloudDefaultModel([{ id: "sonnet", default: true }], offered)?.id).toBe("sonnet");
+		expect(cloudDefaultModel([{ id: "haiku", default: true }], offered)).toBeUndefined();
+		expect(cloudDefaultModel([{ id: "opus", default: false }], offered)).toBeUndefined();
+	});
+
+	it("reads a placeholder default as the alias for the model it describes, context variant included", () => {
+		expect(cloudDefaultModel([{ id: "default", description: "Opus 5.5 · Most capable", default: true }], offered)?.id).toBe("opus");
+		expect(cloudDefaultModel([{ id: "default", description: "Opus 5.5 with 1M context · Most capable", default: true }], offered)?.id).toBe("opus[1m]");
+		expect(cloudDefaultModel([{ id: "default", description: "Use the recommended model", default: true }], offered)).toBeUndefined();
 	});
 });
 

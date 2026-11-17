@@ -1,13 +1,29 @@
-import { fireEvent, render, screen } from "@testing-library/react";
+import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
+import { cleanup, fireEvent, render, screen } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { ShellTerminal } from "../hooks/useShellTerminals";
+import { useShellAgentStore } from "../stores/shell-agent-store";
+import { useUiStore } from "../stores/ui-store";
 import { ShellTerminalTab } from "./ShellTerminalTab";
 import { TooltipProvider } from "./ui/tooltip";
 
-const { isWindowsPlatform } = vi.hoisted(() => ({ isWindowsPlatform: vi.fn(() => false) }));
-vi.mock("../lib/platform", () => ({ isWindowsPlatform }));
+const { isWindowsPlatform, useShellAgentStream } = vi.hoisted(() => ({ isWindowsPlatform: vi.fn(() => false), useShellAgentStream: vi.fn() }));
+vi.mock("../lib/platform", async (importOriginal) => ({
+	...(await importOriginal<typeof import("../lib/platform")>()),
+	isWindowsPlatform,
+}));
+vi.mock("../stores/shell-agent-store", async (importOriginal) => ({
+	...(await importOriginal<typeof import("../stores/shell-agent-store")>()),
+	useShellAgentStream,
+}));
 
-afterEach(() => isWindowsPlatform.mockReturnValue(false));
+afterEach(() => {
+	cleanup();
+	isWindowsPlatform.mockReturnValue(false);
+	useShellAgentStream.mockClear();
+	useShellAgentStore.setState({ agents: {}, unseenDone: {} });
+	useUiStore.setState({ developerMode: false });
+});
 
 const shell: ShellTerminal = {
 	handleId: "shellterm-1",
@@ -21,17 +37,20 @@ function renderTab(overrides: Partial<Parameters<typeof ShellTerminalTab>[0]> = 
 	const onSelect = vi.fn();
 	const onClose = vi.fn();
 	const onRename = vi.fn();
+	// A tab's menu looks up session actions, which need a query client.
 	render(
-		<TooltipProvider>
-			<ShellTerminalTab
-				isActive={false}
-				onClose={onClose}
-				onRename={onRename}
-				onSelect={onSelect}
-				shell={shell}
-				{...overrides}
-			/>
-		</TooltipProvider>,
+		<QueryClientProvider client={new QueryClient()}>
+			<TooltipProvider>
+				<ShellTerminalTab
+					isActive={false}
+					onClose={onClose}
+					onRename={onRename}
+					onSelect={onSelect}
+					shell={shell}
+					{...overrides}
+				/>
+			</TooltipProvider>
+		</QueryClientProvider>,
 	);
 	return { onSelect, onClose, onRename };
 }
@@ -97,25 +116,68 @@ describe("ShellTerminalTab rename", () => {
 	it("makes the full connected tile the semantic selection button", () => {
 		const { onSelect } = renderTab({ appearance: "connected" });
 		const tab = screen.getByRole("tab", { name: "ao" });
+		// The close lies over the title's end, so the tab's insets stay even.
 		expect(tab).toHaveClass("h-full", "min-w-0", "px-2", "cursor-pointer");
 		fireEvent.click(tab);
 		expect(onSelect).toHaveBeenCalledOnce();
 	});
 
-	it("reveals close in the terminal glyph's slot on hover", () => {
+	it("shows close over the title's end on the selected tab and keeps the glyph", () => {
 		renderTab({ appearance: "connected", isActive: true });
 
+		const tab = screen.getByRole("tab", { name: "ao" });
+		const slot = screen.getByRole("button", { name: "Close terminal ao" }).parentElement!;
+		// At the right edge, taking no room, so selecting a tab never widens it.
+		expect(slot).toHaveAttribute("data-terminal-tab-action");
+		expect(slot.previousElementSibling).toBe(tab);
+		expect(slot).toHaveClass("absolute", "right-2", "size-icon-base");
+		for (const name of ["left-2", "mr-2", "opacity-0"]) expect(slot).not.toHaveClass(name);
+		// The title fades out under it.
+		expect(tab).toHaveClass("[mask-image:linear-gradient(to_left,transparent_24px,black_36px)]");
+		for (const name of ["group-hover:opacity-0", "opacity-0"]) expect(tab.querySelector("svg")?.parentElement).not.toHaveClass(name);
+		expect(tab).toHaveAttribute("aria-selected", "true");
+	});
+
+	it("shows an unselected tab's close only on hover or focus, over the title's end", () => {
+		renderTab({ appearance: "connected", isActive: false });
+
 		const closeButton = screen.getByRole("button", { name: "Close terminal ao" });
-		expect(closeButton.parentElement).toHaveClass(
+		const slot = closeButton.parentElement!;
+		expect(slot).toHaveClass(
 			"absolute",
-			"left-2",
+			"right-2",
 			"opacity-0",
+			"pointer-events-none",
 			"group-hover:opacity-100",
+			"group-hover:pointer-events-auto",
+			"focus-visible-in-group:opacity-100",
 		);
-		expect(closeButton).not.toHaveClass("transition-opacity", "transition-[opacity,background,color]");
-		expect(closeButton).not.toHaveClass("w-control-sm");
-		expect(screen.getByRole("tab", { name: "ao" }).querySelector("svg")?.parentElement).toHaveClass("group-hover:opacity-0");
-		expect(screen.getByRole("tab", { name: "ao" })).toHaveAttribute("aria-selected", "true");
+		expect(slot).not.toHaveClass("mr-2");
+		const tab = screen.getByRole("tab", { name: "ao" });
+		expect(tab).toHaveClass("group-hover:[mask-image:linear-gradient(to_left,transparent_24px,black_36px)]");
+		expect(tab).not.toHaveClass("[mask-image:linear-gradient(to_left,transparent_24px,black_36px)]");
+		expect(closeButton).not.toHaveClass("transition-opacity", "transition-[opacity,background,color]", "w-control-sm");
+		expect(screen.getByRole("tab", { name: "ao" }).querySelector("svg")?.parentElement).not.toHaveClass("group-hover:opacity-0");
+	});
+
+	it("hides the close while renaming", () => {
+		renderTab({ appearance: "connected", isActive: true });
+		fireEvent.doubleClick(screen.getByRole("tab", { name: "ao" }));
+
+		expect(screen.getByRole("textbox", { name: /rename terminal/i })).toBeInTheDocument();
+		const slot = document.querySelector("[data-terminal-tab-action]:not(button)");
+		expect(slot).toHaveClass("invisible", "absolute");
+	});
+
+	it("shows close on a shell still starting, and closing it cancels the shell", () => {
+		const { onClose } = renderTab({ appearance: "connected", isActive: true, shell: { ...shell, optimistic: true } });
+
+		const closeButton = screen.getByRole("button", { name: "Close terminal ao" });
+		expect(closeButton).not.toHaveClass("invisible");
+		fireEvent.click(closeButton);
+		expect(onClose).toHaveBeenCalledOnce();
+		fireEvent(closeButton.closest("[data-terminal-tab-frame]")!, new MouseEvent("auxclick", { bubbles: true, button: 1 }));
+		expect(onClose).toHaveBeenCalledTimes(2);
 	});
 
 	it("hugs the truncated title instead of a fixed connected width", () => {
@@ -140,7 +202,7 @@ describe("ShellTerminalTab rename", () => {
 			"bg-overlay",
 		);
 		expect(screen.getByTestId("active-terminal-tab-indicator")).toHaveClass("bottom-0", "h-0.5");
-		expect(screen.getByRole("tab", { name: "ao" }).closest("[data-terminal-tab-frame]")).not.toHaveClass("rounded-md", "before:bg-accent", "after:h-px");
+		for (const name of ["rounded-md", "before:bg-accent", "after:h-px"]) expect(screen.getByRole("tab", { name: "ao" }).closest("[data-terminal-tab-frame]")).not.toHaveClass(name);
 	});
 
 	it("matches the shared inactive tab hover surface", () => {
@@ -160,9 +222,17 @@ describe("ShellTerminalTab rename", () => {
 		expect(indicator).toHaveClass("bottom-0", "h-0.5");
 	});
 
-	it("closes from the glyph slot without selecting the tab", () => {
+	it("closes from the right-edge button without selecting the tab", () => {
 		const { onClose, onSelect } = renderTab({ appearance: "connected" });
 		fireEvent.click(screen.getByRole("button", { name: "Close terminal ao" }));
+		expect(onClose).toHaveBeenCalledOnce();
+		expect(onSelect).not.toHaveBeenCalled();
+	});
+
+	it("closes on a middle-click", () => {
+		const { onClose, onSelect } = renderTab({ appearance: "connected" });
+		const frame = screen.getByRole("tab", { name: "ao" }).closest("[data-terminal-tab-frame]")!;
+		fireEvent(frame, new MouseEvent("auxclick", { bubbles: true, button: 1 }));
 		expect(onClose).toHaveBeenCalledOnce();
 		expect(onSelect).not.toHaveBeenCalled();
 	});
@@ -195,13 +265,112 @@ describe("ShellTerminalTab rename gesture per platform", () => {
 		expect(screen.getByRole("textbox", { name: /rename terminal/i })).toBeInTheDocument();
 	});
 
-	it("Windows: right-click enters edit, double-click does not", () => {
+	it("Windows: right-click opens the tab menu, double-click enters edit", () => {
 		isWindowsPlatform.mockReturnValue(true);
-		renderTab();
+		renderTab({ appearance: "connected" });
 		const tab = screen.getByRole("tab", { name: "ao" });
-		fireEvent.doubleClick(tab);
-		expect(screen.queryByRole("textbox")).not.toBeInTheDocument();
 		fireEvent.contextMenu(tab);
+		expect(screen.queryByRole("textbox")).not.toBeInTheDocument();
+		expect(screen.getByRole("menuitem", { name: /rename terminal/i })).toBeInTheDocument();
+		fireEvent.keyDown(screen.getByRole("menu"), { key: "Escape" });
+		fireEvent.doubleClick(tab);
 		expect(screen.getByRole("textbox", { name: /rename terminal/i })).toBeInTheDocument();
+	});
+});
+
+describe("ShellTerminalTab context menu", () => {
+	it("starts rename from the menu", async () => {
+		renderTab({ appearance: "connected" });
+		fireEvent.contextMenu(screen.getByRole("tab", { name: "ao" }));
+
+		fireEvent.click(screen.getByRole("menuitem", { name: /rename terminal/i }));
+
+		expect(await screen.findByRole("textbox", { name: /rename terminal/i })).toBeInTheDocument();
+	});
+
+	it("opens from the keyboard with Shift+F10", () => {
+		renderTab({ appearance: "connected" });
+		fireEvent.keyDown(screen.getByRole("tab", { name: "ao" }), { key: "F10", shiftKey: true });
+
+		expect(screen.getByRole("menu")).toBeInTheDocument();
+	});
+
+	it("disables rename where the tab cannot be renamed", () => {
+		renderTab({ appearance: "connected", onRename: undefined });
+		fireEvent.contextMenu(screen.getByRole("tab", { name: "ao" }));
+
+		expect(screen.getByRole("menuitem", { name: /rename terminal/i })).toHaveAttribute("aria-disabled", "true");
+	});
+});
+
+describe("ShellTerminalTab agent name", () => {
+	const claude = { harness: "claude-code", state: "idle" } as const;
+
+	it("shows the agent without Developer Mode", () => {
+		useUiStore.setState({ developerMode: false });
+		useShellAgentStore.setState({ agents: { "shellterm-1": claude } });
+		renderTab({ appearance: "connected", shell: { ...shell, title: "Terminal 3" } });
+		expect(useShellAgentStream).toHaveBeenLastCalledWith(true);
+		expect(screen.getByRole("tab", { name: "Claude Code" }).closest("[data-terminal-tab-frame]")).toHaveClass("max-w-agent-shell-tab-max");
+	});
+
+	it.each([
+		{ where: "a remote host", place: { hostId: "box-a" } },
+		{ where: "the cloud", place: { cloud: { orgId: "org-1" } } },
+	])("keeps a shell on $where plain and unwatched", ({ place }) => {
+		useShellAgentStore.setState({ agents: { "shellterm-1": claude } });
+		renderTab({ appearance: "connected", shell: { ...shell, title: "Terminal 3", ...place } });
+		expect(useShellAgentStream).toHaveBeenLastCalledWith(false);
+		expect(screen.queryByRole("tab", { name: "Claude Code" })).not.toBeInTheDocument();
+		expect(screen.getByRole("tab", { name: "Terminal 3" }).closest("[data-terminal-tab-frame]")).toHaveClass("max-w-shell-tab-max");
+	});
+
+	it("names a default-named tab after its agent", () => {
+		useShellAgentStore.setState({ agents: { "shellterm-1": claude } });
+		renderTab({ appearance: "connected", shell: { ...shell, title: "Terminal 3" }, stripShellHandleIds: ["shellterm-1"] });
+		expect(screen.getByRole("tab", { name: "Claude Code" })).toBeInTheDocument();
+		expect(screen.queryByText("Terminal 3")).not.toBeInTheDocument();
+	});
+
+	it("keeps the number when another tab in the strip runs the same agent", () => {
+		useShellAgentStore.setState({ agents: { "shellterm-1": claude, "shellterm-2": claude } });
+		renderTab({
+			appearance: "connected",
+			shell: { ...shell, title: "Terminal 3" },
+			stripShellHandleIds: ["shellterm-1", "shellterm-2"],
+		});
+		expect(screen.getByRole("tab", { name: "Claude Code 3" })).toBeInTheDocument();
+	});
+
+	it("drops the number when the other tab runs a different agent", () => {
+		useShellAgentStore.setState({
+			agents: { "shellterm-1": claude, "shellterm-2": { harness: "codex", state: "idle" } },
+		});
+		renderTab({
+			appearance: "connected",
+			shell: { ...shell, title: "Terminal 3" },
+			stripShellHandleIds: ["shellterm-1", "shellterm-2"],
+		});
+		expect(screen.getByRole("tab", { name: "Claude Code" })).toBeInTheDocument();
+	});
+
+	it("keeps a name the user chose", () => {
+		useShellAgentStore.setState({ agents: { "shellterm-1": claude } });
+		renderTab({ appearance: "connected" });
+		expect(screen.getByRole("tab", { name: "ao" })).toBeInTheDocument();
+	});
+
+	it("labels the tab with its program's title without Developer Mode", () => {
+		useUiStore.setState({ developerMode: false });
+		useShellAgentStore.setState({ agents: { "shellterm-1": claude } });
+		renderTab({ appearance: "connected", shell: { ...shell, title: "Terminal 3", terminalTitle: "Fix login" } });
+		expect(screen.getByRole("tab", { name: "Fix login" })).toBeInTheDocument();
+	});
+
+	it("renames from the stored title, not the agent's name", () => {
+		useShellAgentStore.setState({ agents: { "shellterm-1": claude } });
+		renderTab({ appearance: "connected", shell: { ...shell, title: "Terminal 3" } });
+		fireEvent.doubleClick(screen.getByRole("tab", { name: "Claude Code" }));
+		expect(screen.getByRole("textbox", { name: /rename terminal/i })).toHaveValue("Terminal 3");
 	});
 });

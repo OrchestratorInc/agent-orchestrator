@@ -104,6 +104,8 @@ describe("useConversationPromptSuggestion", () => {
 	it.each<ConversationSnapshot>([
 		{ ...settled, turns: [] },
 		{ ...settled, controller: { state: "busy" } },
+		{ ...settled, controller: { state: "connecting" } },
+		{ ...settled, controller: { state: "recovering" } },
 		{ ...settled, mode: "tui" },
 		{ ...settled, turns: [...settled.turns, { id: "turn-2", state: "failed", requestedAt: "" }] },
 		{ ...settled, turns: [...settled.turns, { id: "turn-2", state: "queued", requestedAt: "" }] },
@@ -180,6 +182,22 @@ describe("useConversationPromptSuggestion", () => {
 		const second = renderHook(() => useConversationPromptSuggestion(settled, true), { wrapper });
 		await waitFor(() => expect(second.result.current?.text).toBe("Retry succeeded."));
 		expect(post).toHaveBeenCalledTimes(4);
+	});
+
+	it("waits for a ready controller after a wrong state conflict instead of caching an empty suggestion", async () => {
+		post.mockResolvedValueOnce({ error: { code: "CHAT_PROMPT_SUGGESTION_STALE" }, response: { status: 409 } });
+		const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+		const { result, rerender } = renderHook(({ snapshot }) => useConversationPromptSuggestion(snapshot, true), {
+			wrapper: wrapperFor(client), initialProps: { snapshot: settled },
+		});
+		await waitFor(() => expect(client.getQueryCache().getAll().find((query) => query.queryKey[1] === "local")?.state.status).toBe("error"));
+		expect(result.current).toBeUndefined();
+		expect(post).toHaveBeenCalledOnce();
+		rerender({ snapshot: { ...settled, controller: { state: "connecting" } } });
+		expect(post).toHaveBeenCalledOnce();
+		rerender({ snapshot: settled });
+		await waitFor(() => expect(result.current?.text).toBe("Explain the fix."));
+		expect(post).toHaveBeenCalledTimes(2);
 	});
 
 	it("cancels an obsolete turn and uses the owning remote daemon", async () => {

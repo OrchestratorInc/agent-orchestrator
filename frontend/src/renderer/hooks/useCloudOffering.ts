@@ -35,6 +35,10 @@ export interface UseCloudOfferingResult extends Omit<ResolvedCloudOffering, "sou
 	canManageBilling: boolean;
 	/** Harnesses a session can start in Chat with (`/me` chatHarnesses). */
 	chatHarnesses: string[];
+	/** Harnesses a running session can switch its agent to (`/me` agentSwitchHarnesses). */
+	agentSwitchHarnesses: string[];
+	/** Each agent can hold several accounts and a session can move between them (`/me` agentAccounts). */
+	agentAccounts: boolean;
 	org: CloudCpOrganization | undefined;
 	/** Mirrors useCloudCp().ready so callers can gate on one hook. */
 	ready: boolean;
@@ -51,6 +55,7 @@ const EMPTY: ResolvedCloudOffering = {
 	kind: "none",
 	billingMode: undefined,
 	features: [],
+	maxAttachmentBytes: undefined,
 	customCoder: false,
 	artifacts: false,
 	coderWorkerWorkingFolder: false,
@@ -59,10 +64,12 @@ const EMPTY: ResolvedCloudOffering = {
 
 // enabled=false keeps a caller that may not need the offering (a remote host's
 // board) from reading this machine's settings, as useCloudCp(enabled) does.
-export function useCloudOffering(enabled = true): UseCloudOfferingResult {
+// forOrgId resolves that organization's offering instead of the active one's
+// (a session's own organization).
+export function useCloudOffering(enabled = true, forOrgId?: string): UseCloudOfferingResult {
 	const { client, ready, baseUrl, userId } = useCloudCp(enabled);
 	const { org } = useCloudOrg(enabled);
-	const orgId = org?.id ?? "";
+	const orgId = forOrgId || org?.id || "";
 	const me = useQuery<CloudCpMeResponse>({
 		queryKey: [...cloudMeQueryKey, baseUrl, userId],
 		enabled: ready,
@@ -93,6 +100,8 @@ export function useCloudOffering(enabled = true): UseCloudOfferingResult {
 		selfServeBilling: resolved.billingMode === "self_serve",
 		canManageBilling: canManageBilling(org),
 		chatHarnesses: me.data?.chatHarnesses ?? [],
+		agentSwitchHarnesses: me.data?.agentSwitchHarnesses ?? [],
+		agentAccounts: me.data?.agentAccounts === true,
 		org,
 		ready,
 		loaded,

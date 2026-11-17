@@ -309,7 +309,7 @@ func TestSteerOrSendSteersAndRecoversOneAtomicOutcome(t *testing.T) {
 	if err != nil {
 		t.Fatalf("recover SteerOrSend: %v", err)
 	}
-	if !recovered.Steered || !recovered.Duplicate || recovered.Steer != first.Steer {
+	if !recovered.Steered || !recovered.Duplicate || !recovered.Steer.Replayed || withoutReplay(recovered.Steer) != first.Steer {
 		t.Fatalf("recovered = %+v, want %+v", recovered, first)
 	}
 	if calls := provider.steers(); len(calls) != 1 {
@@ -402,6 +402,11 @@ func TestSteerIsIdempotentOnTheClientHandle(t *testing.T) {
 	if err != nil {
 		t.Fatalf("retried Steer: %v", err)
 	}
+	// Usage counting relies on the flag: only the accepted original is new.
+	if first.Replayed || !replayed.Replayed {
+		t.Fatalf("Replayed = %v then %v, want false then true", first.Replayed, replayed.Replayed)
+	}
+	replayed.Replayed = false
 	if replayed != first {
 		t.Fatalf("replayed result = %+v, want original %+v", replayed, first)
 	}
@@ -435,7 +440,8 @@ func TestAcceptedSteerReplaysAfterControllerRestartWithoutProviderRedispatch(t *
 	if err != nil {
 		t.Fatalf("Steer after restart: %v", err)
 	}
-	if replayed != first {
+	// A retry after a daemon restart is still the original steer.
+	if !replayed.Replayed || withoutReplay(replayed) != first {
 		t.Fatalf("replayed result = %+v, want original %+v", replayed, first)
 	}
 	if calls := restartedProvider.steers(); len(calls) != 0 {
@@ -980,6 +986,65 @@ func TestPromoteQueuedTurnRejectsNonHumanSourceWithoutContactingProvider(t *test
 	}
 }
 
+// Browser annotations are the user's own words relayed as automation. Their
+// queued turn keeps its attribution but can be steered like a typed message.
+func TestPromoteQueuedUserAuthoredAutomationTurnIntoTheRunningTurn(t *testing.T) {
+	h, provider := steerHarness(t)
+	ctx := context.Background()
+	queued, err := h.svc.Send(ctx, testSession, ports.ChatUserMessage{
+		Text: "<browser_annotations>fix the label</browser_annotations>", ClientMessageID: "queued-annotation",
+		Origin: domain.MessageOriginAutomation, AuthoredByUser: true,
+	})
+	if err != nil {
+		t.Fatalf("queue annotation turn: %v", err)
+	}
+	snapshot := h.awaitSnapshot(t, func(s store.ConversationSnapshot) bool {
+		for _, msg := range s.Messages {
+			if msg.TurnID == queued.ID {
+				return true
+			}
+		}
+		return false
+	})
+	for _, msg := range snapshot.Messages {
+		if msg.TurnID == queued.ID && (!msg.AuthoredByUser || msg.Origin != domain.MessageOriginAutomation) {
+			t.Fatalf("queued annotation message = %+v, want automation origin authored by the user", msg)
+		}
+	}
+
+	if _, err := h.svc.PromoteQueuedTurn(ctx, testSession, queued.ID); err != nil {
+		t.Fatalf("PromoteQueuedTurn: %v", err)
+	}
+	calls := provider.steers()
+	if len(calls) != 1 || calls[0].msg.ClientMessageID != "queued-annotation" ||
+		calls[0].msg.Origin != domain.MessageOriginAutomation {
+		t.Fatalf("provider steers = %+v, want the queued annotation as automation", calls)
+	}
+}
+
+// The annotation text is generated from the Browser panel, so it is not
+// editable even though the user may steer or cancel it.
+func TestQueuedUserAuthoredAutomationTurnCanBeCancelledButNotEdited(t *testing.T) {
+	h, _ := steerHarness(t)
+	ctx := context.Background()
+	queued, err := h.svc.Send(ctx, testSession, ports.ChatUserMessage{
+		Text: "<browser_annotations>fix the label</browser_annotations>", ClientMessageID: "queued-annotation-edit",
+		Origin: domain.MessageOriginAutomation, AuthoredByUser: true,
+	})
+	if err != nil {
+		t.Fatalf("queue annotation turn: %v", err)
+	}
+	if err := h.svc.EditQueuedTurn(ctx, testSession, queued.ID, chatsvc.QueuedMessageEdit{Text: "rewritten"}); err == nil {
+		t.Fatal("EditQueuedTurn accepted a user-authored automation turn")
+	}
+	if err := h.svc.CancelQueuedTurn(ctx, testSession, queued.ID); err != nil {
+		t.Fatalf("CancelQueuedTurn: %v", err)
+	}
+	if next, err := h.st.NextQueuedTurn(ctx, h.ctrl.ConversationID()); err == nil {
+		t.Fatalf("queue head after cancel = %+v, want empty", next)
+	}
+}
+
 // A transport failure after the request leaves delivery unknowable. Returning the
 // source to the queue would let drain send guidance the provider may already have
 // accepted, so it must settle failed and require an explicit user decision.
@@ -1069,7 +1134,7 @@ func TestRecoverImageSteerWithoutControllerNeverRedispatches(t *testing.T) {
 			}
 			for range 2 {
 				recovered, err := h.svc.RecoverSteer(ctx, testSession, "image-steer")
-				if !errors.Is(err, tc.wantError) || recovered != original {
+				if !errors.Is(err, tc.wantError) || withoutReplay(recovered) != original {
 					t.Fatalf("recovery = %+v, %v; want %+v, %v", recovered, err, original, tc.wantError)
 				}
 			}
@@ -1083,4 +1148,11 @@ func TestRecoverImageSteerWithoutControllerNeverRedispatches(t *testing.T) {
 			}
 		})
 	}
+}
+
+// withoutReplay compares a replayed steer receipt with the original: they
+// differ only in Replayed, which marks the retry.
+func withoutReplay(r chatsvc.SteerResult) chatsvc.SteerResult {
+	r.Replayed = false
+	return r
 }

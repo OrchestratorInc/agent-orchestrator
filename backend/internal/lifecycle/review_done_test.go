@@ -123,11 +123,32 @@ func assertContains(t *testing.T, got string, wants ...string) {
 	}
 }
 
+func TestReviewDoneNoticeUsesCurrentLifecycleReasons(t *testing.T) {
+	for _, tc := range []struct {
+		name  string
+		run   domain.ReviewRun
+		want  []string
+		retry bool
+	}{
+		{"failed", domain.ReviewRun{Status: domain.ReviewRunFailed, FailureReason: domain.ReviewFailureLaunchFailed}, []string{"AO review done: failed", "Reason: launch failed"}, true},
+		{"user cancelled", domain.ReviewRun{Status: domain.ReviewRunCancelled, CancelledBy: domain.ReviewCancelledByUser}, []string{"AO review done: cancelled", "do not request another unless they ask"}, false},
+		{"superseded", domain.ReviewRun{Status: domain.ReviewRunSuperseded}, []string{"AO review done: superseded", "instead of requesting another review"}, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			got := formatReviewDoneNotice(tc.run, "", 0, false, reviewNoticeLater{})
+			assertContains(t, got, tc.want...)
+			if strings.Contains(got, "Request another review if you still need one.") != tc.retry {
+				t.Fatalf("unexpected retry guidance: %s", got)
+			}
+		})
+	}
+}
+
 // The reported case: a reviewer approves with only a summary (no inline
 // comments), so nothing was forwarded. The worker gets one done message.
 func TestReviewDoneNotice_ApprovedWithoutInlineComments(t *testing.T) {
 	m, st, msg := newNoticeManager(t)
-	st.runs = []domain.ReviewRun{doneRun("run-1", domain.ReviewRunComplete, domain.VerdictApproved, "555", "Looks good. Optional: rename x.")}
+	st.runs = []domain.ReviewRun{doneRun("run-1", domain.ReviewRunCompleted, domain.VerdictApproved, "555", "Looks good. Optional: rename x.")}
 	st.reviews[donePR] = []domain.PullRequestReview{observedReview("555")}
 
 	if err := m.DeliverReviewDoneNotices(ctx, "w-1"); err != nil {
@@ -167,7 +188,7 @@ func TestReviewDoneNotice_ApprovedWithoutInlineComments(t *testing.T) {
 // waits, then goes out from the PR observation that records the review.
 func TestReviewDoneNotice_WaitsForObservedReview(t *testing.T) {
 	m, st, msg := newNoticeManager(t)
-	st.runs = []domain.ReviewRun{doneRun("run-1", domain.ReviewRunComplete, domain.VerdictApproved, "555", "LGTM")}
+	st.runs = []domain.ReviewRun{doneRun("run-1", domain.ReviewRunCompleted, domain.VerdictApproved, "555", "LGTM")}
 
 	if err := m.DeliverReviewDoneNotices(ctx, "w-1"); err != nil {
 		t.Fatal(err)
@@ -210,7 +231,7 @@ func countDoneNotices(msgs []string) int {
 // not send it either.
 func TestReviewDoneNotice_ChangesRequestedSkippedOnceAllCommentsForwarded(t *testing.T) {
 	m, st, msg := newNoticeManager(t)
-	st.runs = []domain.ReviewRun{doneRun("run-1", domain.ReviewRunComplete, domain.VerdictChangesRequested, "777", "Summary with optional ideas")}
+	st.runs = []domain.ReviewRun{doneRun("run-1", domain.ReviewRunCompleted, domain.VerdictChangesRequested, "777", "Summary with optional ideas")}
 	st.reviews[donePR] = []domain.PullRequestReview{observedReview("777")}
 	st.comments[donePR] = changesRequestedComments()
 
@@ -240,7 +261,7 @@ func TestReviewDoneNotice_ChangesRequestedSkippedOnceAllCommentsForwarded(t *tes
 // names how many there are, and does not repeat the summary.
 func TestReviewDoneNotice_ChangesRequestedSentWhileACommentWasNotForwarded(t *testing.T) {
 	m, st, msg := newNoticeManager(t)
-	st.runs = []domain.ReviewRun{doneRun("run-1", domain.ReviewRunComplete, domain.VerdictChangesRequested, "777", "Summary with optional ideas")}
+	st.runs = []domain.ReviewRun{doneRun("run-1", domain.ReviewRunCompleted, domain.VerdictChangesRequested, "777", "Summary with optional ideas")}
 	st.reviews[donePR] = []domain.PullRequestReview{observedReview("777")}
 	st.comments[donePR] = changesRequestedComments()
 	st.comments[donePR][1].AutoInjectReview = false
@@ -263,7 +284,7 @@ func TestReviewDoneNotice_ChangesRequestedSentWhileACommentWasNotForwarded(t *te
 // the observation forwarded them), the notice goes out as before.
 func TestReviewDoneNotice_ChangesRequestedSentWhenNothingWasForwarded(t *testing.T) {
 	m, st, msg := newNoticeManager(t)
-	st.runs = []domain.ReviewRun{doneRun("run-1", domain.ReviewRunComplete, domain.VerdictChangesRequested, "777", "Summary")}
+	st.runs = []domain.ReviewRun{doneRun("run-1", domain.ReviewRunCompleted, domain.VerdictChangesRequested, "777", "Summary")}
 	st.reviews[donePR] = []domain.PullRequestReview{observedReview("777")}
 	st.comments[donePR] = changesRequestedComments()
 
@@ -288,7 +309,7 @@ func TestReviewDoneNotice_SkipReadsPersistedLedgerAfterRestart(t *testing.T) {
 	}
 	assertContains(t, strings.Join(msg.msgs, "\n"), "nil check", "missing test")
 
-	st.runs = []domain.ReviewRun{doneRun("run-1", domain.ReviewRunComplete, domain.VerdictChangesRequested, "777", "Summary")}
+	st.runs = []domain.ReviewRun{doneRun("run-1", domain.ReviewRunCompleted, domain.VerdictChangesRequested, "777", "Summary")}
 	New(st, msg).SweepReviewDoneNotices(ctx)
 	if n := countDoneNotices(msg.msgs); n != 0 {
 		t.Fatalf("restarted daemon sent the notice anyway: %v", msg.msgs)
@@ -299,7 +320,7 @@ func TestReviewDoneNotice_SkipReadsPersistedLedgerAfterRestart(t *testing.T) {
 
 	// A fresh PR row without the ledger still gets the notice.
 	st.signatures = nil
-	st.runs = []domain.ReviewRun{doneRun("run-2", domain.ReviewRunComplete, domain.VerdictChangesRequested, "777", "Summary")}
+	st.runs = []domain.ReviewRun{doneRun("run-2", domain.ReviewRunCompleted, domain.VerdictChangesRequested, "777", "Summary")}
 	New(st, msg).SweepReviewDoneNotices(ctx)
 	if n := countDoneNotices(msg.msgs); n != 1 {
 		t.Fatalf("want the notice without a persisted ledger, got %v", msg.msgs)
@@ -318,7 +339,7 @@ func TestReviewDoneNotice_OtherOutcomesStillSentAfterForwardedComments(t *testin
 		{
 			name: "approved",
 			setup: func(st *noticeStore) {
-				st.runs = []domain.ReviewRun{doneRun("run-1", domain.ReviewRunComplete, domain.VerdictApproved, "777", "LGTM")}
+				st.runs = []domain.ReviewRun{doneRun("run-1", domain.ReviewRunCompleted, domain.VerdictApproved, "777", "LGTM")}
 			},
 			want: []string{"AO review done: approved", "Inline comments: 2"},
 		},
@@ -326,14 +347,14 @@ func TestReviewDoneNotice_OtherOutcomesStillSentAfterForwardedComments(t *testin
 			name: "head moved",
 			setup: func(st *noticeStore) {
 				st.prs["w-1"] = []domain.PullRequest{{URL: donePR, HeadSHA: "def4567890"}}
-				st.runs = []domain.ReviewRun{doneRun("run-1", domain.ReviewRunComplete, domain.VerdictChangesRequested, "777", "Summary")}
+				st.runs = []domain.ReviewRun{doneRun("run-1", domain.ReviewRunCompleted, domain.VerdictChangesRequested, "777", "Summary")}
 			},
 			want: []string{"AO review done: changes requested", "about an earlier commit"},
 		},
 		{
 			name: "newer pass",
 			setup: func(st *noticeStore) {
-				old := doneRun("run-1", domain.ReviewRunComplete, domain.VerdictChangesRequested, "777", "Summary")
+				old := doneRun("run-1", domain.ReviewRunCompleted, domain.VerdictChangesRequested, "777", "Summary")
 				old.CreatedAt = time.Date(2026, 10, 22, 12, 0, 0, 0, time.UTC)
 				newer := doneRun("run-2", domain.ReviewRunRunning, domain.VerdictNone, "", "")
 				newer.CreatedAt = old.CreatedAt.Add(time.Minute)
@@ -392,7 +413,7 @@ func TestReviewDoneNotice_SendsAfterGraceWhenReviewNotObserved(t *testing.T) {
 	m, st, msg := newNoticeManager(t)
 	now := time.Date(2026, 10, 17, 12, 0, 0, 0, time.UTC)
 	m.clock = func() time.Time { return now }
-	st.runs = []domain.ReviewRun{doneRun("run-1", domain.ReviewRunComplete, domain.VerdictChangesRequested, "777", "Fix the nil check")}
+	st.runs = []domain.ReviewRun{doneRun("run-1", domain.ReviewRunCompleted, domain.VerdictChangesRequested, "777", "Fix the nil check")}
 
 	if err := m.DeliverReviewDoneNotices(ctx, "w-1"); err != nil {
 		t.Fatal(err)
@@ -442,9 +463,9 @@ func TestReviewDoneNotice_SuppressedSendStaysPending(t *testing.T) {
 // message, in the order the passes were requested.
 func TestReviewDoneNotice_RerunGetsItsOwnMessage(t *testing.T) {
 	m, st, msg := newNoticeManager(t)
-	first := doneRun("run-1", domain.ReviewRunComplete, domain.VerdictApproved, "555", "first pass")
+	first := doneRun("run-1", domain.ReviewRunCompleted, domain.VerdictApproved, "555", "first pass")
 	first.WorkerNotice = domain.ReviewWorkerNoticeSent
-	st.runs = []domain.ReviewRun{first, doneRun("run-2", domain.ReviewRunComplete, domain.VerdictApproved, "556", "second pass")}
+	st.runs = []domain.ReviewRun{first, doneRun("run-2", domain.ReviewRunCompleted, domain.VerdictApproved, "556", "second pass")}
 	st.reviews[donePR] = []domain.PullRequestReview{observedReview("555"), observedReview("556")}
 
 	if err := m.DeliverReviewDoneNotices(ctx, "w-1"); err != nil {
@@ -460,7 +481,7 @@ func TestReviewDoneNotice_RerunGetsItsOwnMessage(t *testing.T) {
 // a pass from before notices existed) means no message.
 func TestReviewDoneNotice_NothingOwedSendsNothing(t *testing.T) {
 	m, st, msg := newNoticeManager(t)
-	run := doneRun("run-1", domain.ReviewRunComplete, domain.VerdictApproved, "555", "LGTM")
+	run := doneRun("run-1", domain.ReviewRunCompleted, domain.VerdictApproved, "555", "LGTM")
 	run.WorkerNotice = domain.ReviewWorkerNoticeNone
 	st.runs = []domain.ReviewRun{run}
 	st.reviews[donePR] = []domain.PullRequestReview{observedReview("555")}
@@ -505,7 +526,7 @@ func TestReviewDoneNotice_SupersededAndUserCancelledDoNotAskForAnotherReview(t *
 func TestReviewDoneNotice_KeepsOldestFirstOrder(t *testing.T) {
 	m, st, msg := newNoticeManager(t)
 	st.runs = []domain.ReviewRun{
-		doneRun("run-1", domain.ReviewRunComplete, domain.VerdictApproved, "555", "first"),
+		doneRun("run-1", domain.ReviewRunCompleted, domain.VerdictApproved, "555", "first"),
 		doneRun("run-2", domain.ReviewRunCancelled, domain.VerdictNone, "", "cancelled by user"),
 	}
 	if err := m.DeliverReviewDoneNotices(ctx, "w-1"); err != nil {
@@ -527,7 +548,7 @@ func TestReviewDoneNotice_KeepsOldestFirstOrder(t *testing.T) {
 // not leave the wait behind.
 func TestReviewDoneNotice_ForgetsWaitsOfEndedWorkers(t *testing.T) {
 	m, st, _ := newNoticeManager(t)
-	st.runs = []domain.ReviewRun{doneRun("run-1", domain.ReviewRunComplete, domain.VerdictApproved, "555", "LGTM")}
+	st.runs = []domain.ReviewRun{doneRun("run-1", domain.ReviewRunCompleted, domain.VerdictApproved, "555", "LGTM")}
 	if err := m.DeliverReviewDoneNotices(ctx, "w-1"); err != nil {
 		t.Fatal(err)
 	}
@@ -611,7 +632,7 @@ func TestReviewDoneNotice_RetryBackoffIsCapped(t *testing.T) {
 func TestReviewDoneNotice_EarlierCommitIsNotNewWork(t *testing.T) {
 	m, st, msg := newNoticeManager(t)
 	st.prs["w-1"] = []domain.PullRequest{{URL: donePR, HeadSHA: "def4567890"}}
-	st.runs = []domain.ReviewRun{doneRun("run-1", domain.ReviewRunComplete, domain.VerdictChangesRequested, "777", "Summary")}
+	st.runs = []domain.ReviewRun{doneRun("run-1", domain.ReviewRunCompleted, domain.VerdictChangesRequested, "777", "Summary")}
 	st.reviews[donePR] = []domain.PullRequestReview{observedReview("777")}
 	st.comments[donePR] = []domain.PullRequestComment{{ID: "c1", ThreadID: "T1", ReviewID: "777", File: "a.go", Line: 3, Body: "nil check", AutoInjectReview: true}}
 
@@ -634,7 +655,7 @@ func TestReviewDoneNotice_NamesANewerPass(t *testing.T) {
 	newer.TargetSHA = "def4567890"
 	newer.CreatedAt = time.Date(2026, 10, 22, 12, 5, 0, 0, time.UTC)
 	newer.WorkerNotice = domain.ReviewWorkerNoticeNone
-	old := doneRun("run-1", domain.ReviewRunComplete, domain.VerdictApproved, "555", "LGTM")
+	old := doneRun("run-1", domain.ReviewRunCompleted, domain.VerdictApproved, "555", "LGTM")
 	old.CreatedAt = time.Date(2026, 10, 22, 12, 0, 0, 0, time.UTC)
 	st.runs = []domain.ReviewRun{old, newer}
 	st.reviews[donePR] = []domain.PullRequestReview{observedReview("555")}
@@ -700,7 +721,7 @@ func TestReviewDoneNotice_NamesAUserCancelledNewerPass(t *testing.T) {
 	newer := doneRun("run-2", domain.ReviewRunCancelled, domain.VerdictNone, "", domain.ReviewRunCancelledByUserReason)
 	newer.CreatedAt = time.Date(2026, 10, 22, 12, 5, 0, 0, time.UTC)
 	newer.WorkerNotice = domain.ReviewWorkerNoticeSent
-	old := doneRun("run-1", domain.ReviewRunComplete, domain.VerdictApproved, "555", "LGTM")
+	old := doneRun("run-1", domain.ReviewRunCompleted, domain.VerdictApproved, "555", "LGTM")
 	old.CreatedAt = time.Date(2026, 10, 22, 12, 0, 0, 0, time.UTC)
 	st.runs = []domain.ReviewRun{old, newer}
 	st.reviews[donePR] = []domain.PullRequestReview{observedReview("555")}

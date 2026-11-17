@@ -1,5 +1,6 @@
 import { mkdir, readFile, rename, writeFile } from "node:fs/promises";
 import path from "node:path";
+import { type InstallSource, resolveInstallSource } from "../shared/install-environment";
 
 /**
  * The marker the desktop app writes under ~/.ao on every launch (spec §5).
@@ -26,8 +27,15 @@ export interface AppStateMarker {
 	version: string;
 	installedAt: string;
 	lastReconciledAt: string;
+	/** See INSTALL_SOURCES in shared/install-environment.ts. */
 	installSource: string;
 	migration?: MigrationState;
+	firstRunProjectPrompt?: "pending" | "seen";
+	/**
+	 * Keys this writer does not own (for example the onboarding answer
+	 * acq_channel_self_reported) are carried through every launch write.
+	 */
+	[key: string]: unknown;
 }
 
 /** Current marker format version (spec §5, schemaVersion field). */
@@ -50,6 +58,12 @@ export interface WriteAppStateOptions {
 	 * already on disk. Defaults to "unknown" when absent on first creation.
 	 */
 	installedVia?: string;
+	/**
+	 * Installer format detected from the running bundle. Recorded on first
+	 * creation when --installed-via is absent, and refines an "unknown" left by
+	 * a build that could not detect it.
+	 */
+	detectedInstallSource?: InstallSource | null;
 	/** Injectable clock so tests can assert deterministic timestamps. */
 	now: () => Date;
 }
@@ -105,8 +119,14 @@ export async function writeAppStateMarker(opts: WriteAppStateOptions): Promise<v
 	const file = path.join(opts.stateDir, APP_STATE_FILE_NAME);
 	const existing = await readExisting(file);
 	const nowIso = opts.now().toISOString();
+	// Keys owned by other writers (and future fields) survive the launch write.
+	// updateRestartProtocol is this build's own capability, so a downgrade
+	// must not inherit a newer build's claim.
+	const { updateRestartProtocol: _previousProtocol, ...carried } =
+		existing && typeof existing === "object" && !Array.isArray(existing) ? existing : ({} as Partial<AppStateMarker>);
 
 	const marker: AppStateMarker = {
+		...carried,
 		schemaVersion: SCHEMA_VERSION,
 		...(opts.updateRestartProtocol ? { updateRestartProtocol: opts.updateRestartProtocol } : {}),
 		appPath: opts.appPath,
@@ -115,9 +135,10 @@ export async function writeAppStateMarker(opts: WriteAppStateOptions): Promise<v
 		installedAt: existing?.installedAt ?? nowIso,
 		// Refreshed on every launch that touches the marker.
 		lastReconciledAt: nowIso,
-		installSource: existing?.installSource ?? opts.installedVia ?? "unknown",
+		installSource: resolveInstallSource(existing?.installSource, opts.installedVia, opts.detectedInstallSource ?? null),
 		// Preserve a migration block written before this launch write.
 		...(existing?.migration !== undefined ? { migration: existing.migration } : {}),
+		firstRunProjectPrompt: existing?.firstRunProjectPrompt ?? (existing ? "seen" : "pending"),
 	};
 
 	await atomicWriteMarker(opts.stateDir, marker);
@@ -154,4 +175,27 @@ export async function updateMigration(opts: UpdateMigrationOptions): Promise<voi
 export async function readMigrationState(stateDir: string): Promise<MigrationState> {
 	const existing = await readExisting(path.join(stateDir, APP_STATE_FILE_NAME));
 	return existing?.migration ?? { status: "pending" };
+}
+
+export async function readFirstRunProjectPrompt(stateDir: string): Promise<"pending" | "seen"> {
+	const existing = await readExisting(path.join(stateDir, APP_STATE_FILE_NAME));
+	return existing?.firstRunProjectPrompt === "pending" ? "pending" : "seen";
+}
+
+/** Atomic install reservation, independent of renderer remounts and telemetry consent. */
+export async function claimFirstRunExperimentExposure(stateDir: string): Promise<boolean> {
+	try {
+		await writeFile(path.join(stateDir, "first-run-project-experiment-exposed"), "1\n", { mode: 0o600, flag: "wx" });
+		return true;
+	} catch (error) {
+		if ((error as NodeJS.ErrnoException).code === "EEXIST") return false;
+		throw error;
+	}
+}
+
+export async function markFirstRunProjectPromptSeen(stateDir: string): Promise<void> {
+	const existing = await readExisting(path.join(stateDir, APP_STATE_FILE_NAME));
+	if (!existing) throw new Error("App state marker is unavailable");
+	if (existing.firstRunProjectPrompt === "seen") return;
+	await atomicWriteMarker(stateDir, { ...existing, firstRunProjectPrompt: "seen" });
 }

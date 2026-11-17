@@ -1,20 +1,26 @@
 # ao review
 
-Manage AO's native code reviewer for a worker's PR.
+Manage Orchestrator's native code reviewer for a worker's PR.
 
-AO's reviewer is an isolated reviewer agent for implementation PRs owned by an
-AO worker. To review that worker's PR, use `ao review trigger`. Inside a worker,
+Orchestrator's reviewer is an isolated reviewer agent for implementation PRs owned by a
+worker. To review that worker's PR, use `ao review trigger`. Inside a worker,
 the review commands default to the calling session (`AO_SESSION_ID`), so
 `ao review trigger` reviews your own implementation PR. An orchestrator passes
 the implementation worker's session id.
 
-For a requested review of someone else's PR, spawn or use a normal review-only
-worker without claiming or attaching the target PR. That worker submits the
-requested provider review and comments directly. Do not run `ao review trigger`,
+For a requested review of someone else's PR, spawn a normal worker for that
+review alone with `ao spawn --claim-pr <pr-ref> --no-takeover --review`.
+A review claim is a normal claim made with the session's automatic CI and
+review-comment fixing and native auto-review turned off first, so Orchestrator
+never sends it the PR's CI failures, merge conflicts, or review comments, and
+never starts its native reviewer on it. The PR is not the user's: the worker
+submits the requested provider review and comments directly and changes nothing
+else unless the user asks. To take the PR over later, the worker runs
+`ao session claim-pr <pr-ref> --review=false`. Do not run `ao review trigger`,
 create an ownership-only placeholder, or require an implementation owner just
 to review the PR.
 
-AO's review is internal. An AO approval is not a GitHub approval: it does not
+Orchestrator's review is internal. An Orchestrator approval is not a GitHub approval: it does not
 satisfy required or independent-account reviews or branch protection, and it
 does not authorize merging.
 
@@ -73,7 +79,7 @@ ao review submit [worker-session-id] [flags]
 | `--session string` | Worker session id (or pass it as the positional argument) | - |
 | `--verdict string` | Review verdict: `approved` or `changes_requested` | Required |
 
-If the local daemon is restarting when a result is submitted, AO retains the
+If the local daemon is restarting when a result is submitted, Orchestrator retains the
 parsed result in memory and retries the same idempotent request for up to 30
 seconds. Validation errors return immediately. If the daemon remains unavailable,
 the command reports failure and can be repeated safely; daemon idempotency
@@ -118,7 +124,7 @@ ao review cancel mer-3
 
 ### ao review trigger
 
-Start AO's reviewer on a worker's open PR heads (default: the calling session).
+Start Orchestrator's reviewer on a worker's open PR heads (default: the calling session).
 Aliases: `execute`, `restart`. Reviewer panes cannot run it.
 
 **Syntax:**
@@ -130,15 +136,15 @@ ao review trigger [worker-session-id] [flags]
 
 | Flag | Meaning | Default / Required |
 |---|---|---|
-| `--session string` | Worker session id (or pass it positionally) | The calling AO session |
-| `--pr string` | Review only this session's implementation PR URL, attaching it to the session first if AO does not track it yet (never from another active session). Do not pass an external review target | Every eligible PR on the session |
+| `--session string` | Worker session id (or pass it positionally) | The calling Orchestrator-managed session |
+| `--pr string` | Review only this session's implementation PR URL, attaching it to the session first if Orchestrator does not track it yet (never from another active session). Do not pass an external review target | Every eligible PR on the session |
 | `--agent string` | Reviewer agent for this pass only (alias `--harness`) | Session reviewer, then project reviewer, then the project's default worker agent |
 | `--model string` | Reviewer model for this pass only | As above |
 | `--effort string` | Reviewer reasoning effort for this pass only | As above |
 | `--rerun` | Review a head that already has a review again, or add a reviewer with a different agent alongside one that is still running | - |
 | `--no-inject` | Leave the session's review auto-inject setting unchanged | Auto-inject is turned on |
 
-AO fetches the session's PRs fresh from the provider before deciding what is
+Orchestrator fetches the session's PRs fresh from the provider before deciding what is
 due, so the pass covers the commit really on the PR. Right after opening a PR,
 pass `--pr <url>`.
 

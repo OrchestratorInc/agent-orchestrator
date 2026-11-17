@@ -250,6 +250,17 @@ func TestLidStopDoesNotBlockStatus(t *testing.T) {
 	}
 }
 
+func TestDefaultDataDirectoryDoesNotReportIsolated(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	// An empty helper path exits without probing or registering any host job.
+	l := NewLidAwake(os.Getpid(), "", filepath.Join(home, ".ao", "data"))
+	_, _, reason := l.Status()
+	if reason == "isolated_data_dir" {
+		t.Fatal("normal app data directory was classified as isolated")
+	}
+}
+
 func TestCustomDataDirectoryCannotProbeOrInstallHostWake(t *testing.T) {
 	root := t.TempDir()
 	l := NewLidAwake(os.Getpid(), filepath.Join(root, "missing-helper"), root)

@@ -6,6 +6,7 @@ import (
 	"errors"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 	"time"
 
@@ -16,7 +17,10 @@ import (
 	"github.com/aoagents/agent-orchestrator/backend/internal/httpd/controllers"
 	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
 	"github.com/aoagents/agent-orchestrator/backend/internal/service/computeruse"
+	prsvc "github.com/aoagents/agent-orchestrator/backend/internal/service/pr"
 	projectsvc "github.com/aoagents/agent-orchestrator/backend/internal/service/project"
+	sessionsvc "github.com/aoagents/agent-orchestrator/backend/internal/service/session"
+	"github.com/aoagents/agent-orchestrator/backend/internal/service/sessionimport"
 )
 
 func remainingRequestBudget(ctx context.Context) time.Duration {
@@ -35,11 +39,21 @@ type timeoutProbeSessionService struct {
 	spawnSetup    time.Duration
 	spawnRuns     time.Duration
 	spawnLive     chan bool
+	spawnBudget   chan time.Duration
+	resumeBudget  chan time.Duration
+	resumeSetup   time.Duration
 }
 
 // Spawn extends the request's budget by spawnSetup (none when negative), runs
 // past the ordinary budget, and reports whether its context was still live.
 func (s *timeoutProbeSessionService) Spawn(ctx context.Context, _ ports.SpawnConfig) (domain.Session, int, int, error) {
+	if s.spawnBudget != nil {
+		// A spawn with no Setup steps still extends: the base budget is then its whole budget.
+		ctx, cancel := ports.ExtendSpawnRequestBudget(ctx, 0)
+		defer cancel()
+		s.spawnBudget <- remainingRequestBudget(ctx)
+		return domain.Session{}, 0, 0, errors.New("probe only")
+	}
 	if s.spawnSetup >= 0 {
 		var cancel context.CancelFunc
 		ctx, cancel = ports.ExtendSpawnRequestBudget(ctx, s.spawnSetup)
@@ -67,6 +81,15 @@ func (s *timeoutProbeSessionService) recordBudget(t *testing.T) time.Duration {
 		t.Fatal("the route never read the session record")
 		return 0
 	}
+}
+
+func (s *timeoutProbeSessionService) ResumeAgent(ctx context.Context, id domain.SessionID) (sessionsvc.ResumeAgentOutcome, error) {
+	// An import's first open extends the budget by its Setup steps; with none
+	// the request keeps its base budget.
+	ctx, cancel := ports.ExtendSpawnRequestBudget(ctx, s.resumeSetup)
+	defer cancel()
+	s.resumeBudget <- remainingRequestBudget(ctx)
+	return sessionsvc.ResumeAgentOutcome{Session: domain.Session{ID: id}}, nil
 }
 
 func (s *timeoutProbeSessionService) StageAttachments(ctx context.Context, _ domain.SessionID, _ []ports.SpawnAttachment) ([]string, error) {
@@ -176,6 +199,100 @@ func TestAttachmentCapableSendUsesExtendedTimeoutOnlyForUploads(t *testing.T) {
 	}
 }
 
+// timeoutProbePRs records the request budget a PR comment post runs under.
+type timeoutProbePRs struct {
+	prsvc.ActionManager
+	budget chan time.Duration
+}
+
+func (p *timeoutProbePRs) PostComment(ctx context.Context, _ prsvc.CommentRequest) (prsvc.CommentResult, error) {
+	p.budget <- remainingRequestBudget(ctx)
+	return prsvc.CommentResult{ID: "c1"}, nil
+}
+
+func (p *timeoutProbePRs) Merge(ctx context.Context, _ prsvc.MergeRequest) (prsvc.MergeResult, error) {
+	p.budget <- remainingRequestBudget(ctx)
+	return prsvc.MergeResult{}, nil
+}
+
+func (p *timeoutProbePRs) MergeStack(ctx context.Context, _ prsvc.StackMergeRequest) (prsvc.StackMergeResult, error) {
+	p.budget <- remainingRequestBudget(ctx)
+	return prsvc.StackMergeResult{}, nil
+}
+
+// A stack merge waits up to two minutes for GitHub to land it; the one-minute
+// REST budget cancelled it, and the layers it landed went unrecorded. A plain
+// merge keeps the ordinary budget.
+func TestStackMergeRouteUsesExtendedTimeout(t *testing.T) {
+	const configuredTimeout = 250 * time.Millisecond
+	svc := &timeoutProbePRs{budget: make(chan time.Duration, 1)}
+	router := NewRouterWithControl(config.Config{RequestTimeout: configuredTimeout}, discardLogger(), nil, APIDeps{PRs: svc}, ControlDeps{})
+	const head = "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+	for _, tc := range []struct {
+		path, body string
+		long       bool
+	}{
+		{path: "/api/v1/prs/2/stack/merge", body: `{"prUrl":"https://github.com/acme/widgets/pull/2","expectedHeads":[{"number":2,"headSha":"` + head + `"}]}`, long: true},
+		{path: "/api/v1/prs/2/merge", body: `{"prUrl":"https://github.com/acme/widgets/pull/2","expectedHeadSha":"` + head + `"}`},
+	} {
+		req := httptest.NewRequest(http.MethodPost, tc.path, strings.NewReader(tc.body))
+		req.Header.Set("Content-Type", "application/json")
+		response := httptest.NewRecorder()
+		router.ServeHTTP(response, req)
+		select {
+		case budget := <-svc.budget:
+			if tc.long && (budget < 179*time.Second || budget > 3*time.Minute) {
+				t.Fatalf("%s budget = %s, want about 3 minutes", tc.path, budget)
+			}
+			if !tc.long && (budget <= 0 || budget > configuredTimeout) {
+				t.Fatalf("%s budget = %s, want no more than %s", tc.path, budget, configuredTimeout)
+			}
+		case <-time.After(time.Second):
+			t.Fatalf("%s never reached the PR service: status=%d body=%s", tc.path, response.Code, response.Body.String())
+		}
+	}
+}
+
+func TestPRCommentWithFilesUsesExtendedTimeout(t *testing.T) {
+	const configuredTimeout = 250 * time.Millisecond
+	prs := &timeoutProbePRs{budget: make(chan time.Duration, 2)}
+	router := NewRouterWithControl(
+		config.Config{RequestTimeout: configuredTimeout},
+		discardLogger(),
+		nil,
+		APIDeps{PRs: prs},
+		ControlDeps{},
+	)
+	for _, tc := range []struct {
+		name   string
+		body   string
+		upload bool
+	}{
+		{name: "text", body: `{"prUrl":"https://github.com/acme/app/pull/7","body":"hello"}`},
+		{name: "files", body: `{"prUrl":"https://github.com/acme/app/pull/7","body":"![a.png](attachment:0)","attachments":[{"name":"a.png","contentType":"image/png","data":"iVBORw=="}]}`, upload: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			req := httptest.NewRequest(http.MethodPost, "/api/v1/prs/7/comments", bytes.NewBufferString(tc.body))
+			req.Header.Set("Content-Type", "application/json")
+			if tc.upload {
+				req.Header.Set(attachmentUploadHeader, "1")
+			}
+			response := httptest.NewRecorder()
+			router.ServeHTTP(response, req)
+			if response.Code != http.StatusOK {
+				t.Fatalf("comment status = %d, want 200; body=%s", response.Code, response.Body.String())
+			}
+			budget := <-prs.budget
+			if tc.upload && (budget < 9*time.Minute || budget > 10*time.Minute) {
+				t.Fatalf("comment with files budget = %s, want about 10 minutes", budget)
+			}
+			if !tc.upload && (budget <= 0 || budget > configuredTimeout) {
+				t.Fatalf("text comment budget = %s, want no more than %s", budget, configuredTimeout)
+			}
+		})
+	}
+}
+
 type timeoutProbeProjectManager struct {
 	projectsvc.Manager
 	budget chan time.Duration
@@ -184,6 +301,10 @@ type timeoutProbeProjectManager struct {
 func (m *timeoutProbeProjectManager) PrepareClone(ctx context.Context, _ projectsvc.CloneInput) (projectsvc.ClonePreparationResult, error) {
 	m.budget <- remainingRequestBudget(ctx)
 	return projectsvc.ClonePreparationResult{}, nil
+}
+
+func (m *timeoutProbeProjectManager) PrepareCloneWithProgress(ctx context.Context, in projectsvc.CloneInput, _ func(projectsvc.CloneProgress)) (projectsvc.ClonePreparationResult, error) {
+	return m.PrepareClone(ctx, in)
 }
 
 func (m *timeoutProbeProjectManager) Clone(ctx context.Context, _ projectsvc.CloneInput) (projectsvc.Project, error) {
@@ -202,7 +323,7 @@ func TestCloneRoutesUseExtendedTimeout(t *testing.T) {
 		APIDeps{Projects: mgr},
 		ControlDeps{},
 	)
-	for _, path := range []string{"/api/v1/projects/clone", "/api/v1/projects/clone/prepare"} {
+	for _, path := range []string{"/api/v1/projects/clone", "/api/v1/projects/clone/prepare", "/api/v1/projects/clone/prepare/stream"} {
 		req := httptest.NewRequest(http.MethodPost, path, bytes.NewBufferString(`{"remoteUrl":"https://github.com/acme/repo","destinationParent":"/tmp"}`))
 		req.Header.Set("Content-Type", "application/json")
 		router.ServeHTTP(httptest.NewRecorder(), req)
@@ -257,6 +378,9 @@ func TestComputerUseCallUsesExtendedTimeout(t *testing.T) {
 // request keeps the ordinary budget until the spawn extends it.
 func TestSpawnRouteBudgetCoversSetupOnlyOnceExtended(t *testing.T) {
 	const configuredTimeout = 200 * time.Millisecond
+	previous := setupRequestBudget
+	setupRequestBudget = configuredTimeout
+	t.Cleanup(func() { setupRequestBudget = previous })
 	for _, tc := range []struct {
 		name  string
 		setup time.Duration
@@ -284,6 +408,40 @@ func TestSpawnRouteBudgetCoversSetupOnlyOnceExtended(t *testing.T) {
 	}
 }
 
+// A cold spawn fetches, creates a worktree and starts the agent inside one
+// request: setup routes start from a 120s budget, every other route keeps the
+// configured REST timeout.
+func TestSetupRoutesStartFromTheSpawnBudget(t *testing.T) {
+	svc := &timeoutProbeSessionService{spawnBudget: make(chan time.Duration, 1), sendBudget: make(chan time.Duration, 1)}
+	router := NewRouterWithControl(config.Config{RequestTimeout: config.DefaultRequestTimeout}, discardLogger(), nil, APIDeps{Sessions: svc}, ControlDeps{})
+	for _, path := range []string{"/api/v1/sessions"} {
+		req := httptest.NewRequest(http.MethodPost, path, bytes.NewBufferString(`{"projectId":"p1","kind":"worker","harness":"claude-code"}`))
+		req.Header.Set("Content-Type", "application/json")
+		response := httptest.NewRecorder()
+		router.ServeHTTP(response, req)
+		select {
+		case budget := <-svc.spawnBudget:
+			if budget <= 110*time.Second || budget > 120*time.Second {
+				t.Fatalf("%s budget = %s, want about 120s", path, budget)
+			}
+		case <-time.After(2 * time.Second):
+			t.Fatalf("%s never reached Spawn: status=%d body=%s", path, response.Code, response.Body.String())
+		}
+	}
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/sessions/s1/send", bytes.NewBufferString(`{"message":"hi"}`))
+	req.Header.Set("Content-Type", "application/json")
+	response := httptest.NewRecorder()
+	router.ServeHTTP(response, req)
+	select {
+	case budget := <-svc.sendBudget:
+		if budget > config.DefaultRequestTimeout {
+			t.Fatalf("send budget = %s, want at most the REST timeout %s", budget, config.DefaultRequestTimeout)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatalf("send never reached the service: status=%d body=%s", response.Code, response.Body.String())
+	}
+}
+
 func TestSetupRoutesAreTheOnesThatRunSetup(t *testing.T) {
 	router := chi.NewRouter()
 	seen := map[string]bool{}
@@ -291,15 +449,87 @@ func TestSetupRoutesAreTheOnesThatRunSetup(t *testing.T) {
 	router.Post("/api/v1/sessions", record)
 	router.Post("/api/v1/orchestrators", record)
 	router.Post("/api/v1/sessions/{sessionId}/restore", record)
+	router.Post("/api/v1/sessions/{sessionId}/resume-agent", record)
+	router.Post("/api/v1/sessions/{sessionId}/fork", record)
 	router.Post("/api/v1/sessions/{sessionId}/send", record)
 	router.Get("/api/v1/sessions", record)
-	for _, call := range [][2]string{{"POST", "/api/v1/sessions"}, {"POST", "/api/v1/orchestrators"}, {"POST", "/api/v1/sessions/s1/restore"}, {"POST", "/api/v1/sessions/s1/send"}, {"GET", "/api/v1/sessions"}} {
+	for _, call := range [][2]string{{"POST", "/api/v1/sessions"}, {"POST", "/api/v1/orchestrators"}, {"POST", "/api/v1/sessions/s1/restore"}, {"POST", "/api/v1/sessions/s1/resume-agent"}, {"POST", "/api/v1/sessions/s1/fork"}, {"POST", "/api/v1/sessions/s1/send"}, {"GET", "/api/v1/sessions"}} {
 		router.ServeHTTP(httptest.NewRecorder(), httptest.NewRequest(call[0], call[1], nil))
 	}
-	want := map[string]bool{"POST /api/v1/sessions": true, "POST /api/v1/orchestrators": true, "POST /api/v1/sessions/s1/restore": true, "POST /api/v1/sessions/s1/send": false, "GET /api/v1/sessions": false}
+	want := map[string]bool{"POST /api/v1/sessions": true, "POST /api/v1/orchestrators": true, "POST /api/v1/sessions/s1/restore": true, "POST /api/v1/sessions/s1/resume-agent": true, "POST /api/v1/sessions/s1/fork": true, "POST /api/v1/sessions/s1/send": false, "GET /api/v1/sessions": false}
 	for call, setup := range want {
 		if seen[call] != setup {
 			t.Errorf("setupRoute(%s) = %v, want %v", call, seen[call], setup)
 		}
+	}
+}
+
+// Resuming reads the agent's whole native history; a large imported Codex
+// thread took over a minute, past the ordinary REST budget.
+func TestResumeAgentRouteUsesExtendedTimeout(t *testing.T) {
+	svc := &timeoutProbeSessionService{resumeBudget: make(chan time.Duration, 1)}
+	router := NewRouterWithControl(
+		config.Config{RequestTimeout: 250 * time.Millisecond},
+		discardLogger(),
+		nil,
+		APIDeps{Sessions: svc},
+		ControlDeps{},
+	)
+	response := httptest.NewRecorder()
+	router.ServeHTTP(response, httptest.NewRequest(http.MethodPost, "/api/v1/sessions/ao-1/resume-agent", nil))
+	if response.Code != http.StatusOK {
+		t.Fatalf("POST resume-agent status = %d, want 200; body=%s", response.Code, response.Body.String())
+	}
+	budget := <-svc.resumeBudget
+	if budget < 9*time.Minute || budget > 10*time.Minute {
+		t.Fatalf("resume-agent budget = %s, want about 10 minutes", budget)
+	}
+}
+
+// The first open of an imported chat runs the project's Setup, which may be
+// allowed longer than the base resume budget.
+func TestResumeAgentRouteExtendsBudgetForSetup(t *testing.T) {
+	svc := &timeoutProbeSessionService{resumeBudget: make(chan time.Duration, 1), resumeSetup: 20 * time.Minute}
+	router := NewRouterWithControl(
+		config.Config{RequestTimeout: 250 * time.Millisecond},
+		discardLogger(),
+		nil,
+		APIDeps{Sessions: svc},
+		ControlDeps{},
+	)
+	response := httptest.NewRecorder()
+	router.ServeHTTP(response, httptest.NewRequest(http.MethodPost, "/api/v1/sessions/ao-1/resume-agent", nil))
+	if response.Code != http.StatusOK {
+		t.Fatalf("POST resume-agent status = %d, want 200; body=%s", response.Code, response.Body.String())
+	}
+	if budget := <-svc.resumeBudget; budget < 29*time.Minute || budget > 30*time.Minute {
+		t.Fatalf("resume-agent budget with 20 minutes of Setup = %s, want about 30 minutes", budget)
+	}
+}
+
+type scanBudgetProbe struct{ scan, imported time.Duration }
+
+func (p *scanBudgetProbe) Scan(ctx context.Context) (sessionimport.Preview, error) {
+	deadline, _ := ctx.Deadline()
+	p.scan = time.Until(deadline)
+	return sessionimport.Preview{}, nil
+}
+
+func (p *scanBudgetProbe) Import(ctx context.Context, _ []string) ([]sessionimport.Result, error) {
+	deadline, _ := ctx.Deadline()
+	p.imported = time.Until(deadline)
+	return []sessionimport.Result{}, nil
+}
+
+// Scanning and importing both read every chosen history, so both get the long budget.
+func TestSessionImportUsesExtendedTimeout(t *testing.T) {
+	probe := &scanBudgetProbe{}
+	router := NewRouterWithControl(config.Config{RequestTimeout: 250 * time.Millisecond}, discardLogger(), nil, APIDeps{SessionImport: probe}, ControlDeps{})
+	scan := httptest.NewRecorder()
+	router.ServeHTTP(scan, httptest.NewRequest(http.MethodGet, "/api/v1/session-import", nil))
+	imported := httptest.NewRecorder()
+	router.ServeHTTP(imported, httptest.NewRequest(http.MethodPost, "/api/v1/session-import", strings.NewReader(`{"ids":["a"]}`)))
+	if scan.Code != http.StatusOK || probe.scan < 9*time.Minute || imported.Code != http.StatusOK || probe.imported < 9*time.Minute {
+		t.Fatalf("scan %d in %s, import %d in %s: %s", scan.Code, probe.scan, imported.Code, probe.imported, imported.Body)
 	}
 }

@@ -66,6 +66,8 @@ type Plugin struct {
 	agentbase.Base
 	binaryMu       sync.Mutex
 	resolvedBinary string
+	// importBinary replaces the OpenCode 1 lookup in import tests.
+	importBinary string
 }
 
 // New returns a ready-to-register opencode adapter.
@@ -720,6 +722,13 @@ func BinaryCandidates(ctx context.Context) ([]string, error) {
 		} else {
 			candidates = append(candidates, filepath.Join(dir, "opencode"))
 		}
+	}
+	if runtime.GOOS != "windows" {
+		if dir, err := V2InstallerBinDir(); err == nil {
+			candidates = append(candidates, filepath.Join(dir, "opencode"))
+		}
+		candidates = append(candidates, v2HomebrewCandidates()...)
+		candidates = append(candidates, v1HomebrewCandidates()...)
 	}
 	for _, candidate := range candidates {
 		if hookutil.IsExecutableFile(candidate) {

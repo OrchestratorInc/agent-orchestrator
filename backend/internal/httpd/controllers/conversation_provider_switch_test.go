@@ -82,6 +82,7 @@ func TestProviderSwitchRouteMapsRefusalsToStatusAndCode(t *testing.T) {
 		{&domain.ProviderSwitchError{Kind: domain.ProviderSwitchRefusalUnsupported, Detail: "no"}, http.StatusBadRequest, "PROVIDER_SWITCH_unsupported"},
 		{fmt.Errorf("wrapped: %w", &domain.ProviderSwitchError{Kind: domain.ProviderSwitchRefusalUnavailable, Detail: "down"}), http.StatusServiceUnavailable, "PROVIDER_SWITCH_unavailable"},
 		{ports.ErrSessionNotFound, http.StatusNotFound, "SESSION_NOT_FOUND"},
+		{fmt.Errorf("wrapped: %w", ports.ErrChatPermissionModeUnsupported), http.StatusBadRequest, "CHAT_PERMISSION_MODE_UNSUPPORTED"},
 	} {
 		status, body := providerSwitchRouteRequest(t, &fakeConversationService{switchErr: tc.err},
 			http.MethodPost, "/sessions/p1-1/provider-switch", `{"targetHarness":"codex"}`)

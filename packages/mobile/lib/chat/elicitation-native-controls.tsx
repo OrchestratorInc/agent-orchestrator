@@ -1,8 +1,16 @@
-import { Button, Column, Host, ListItem, Text as NativeText, TextInput as NativeTextInput, useNativeState } from "@expo/ui";
-import { useEffect } from "react";
+import { Button, Checkbox, Column, Host, ListItem, OutlinedTextField, RadioButton, Text, TextButton, useNativeState } from "@expo/ui/jetpack-compose";
+import { fillMaxWidth, selectable, selectableGroup, testID, toggleable, width as fixedWidth } from "@expo/ui/jetpack-compose/modifiers";
+import { StyleSheet, View } from "react-native";
 import { haptics } from "../haptics";
 import { useTheme, useThemeState } from "../ThemeProvider";
-import { space, type } from "../tokens";
+import { font, type } from "../tokens";
+import { useNativeTextInput } from "../useNativeTextInput";
+import { useActionFit } from "./elicitationActionFit";
+
+// The Material 3 controls Android draws for a request's choices, typed answers
+// and actions; iOS has its own SwiftUI file. Compose gives each row its 48dp
+// target, ripple and radio or checkbox semantics for TalkBack, so nothing here
+// draws a control by hand.
 
 export type ElicitationChoice = { value: string; label: string; description?: string };
 export type ElicitationChoiceListProps = {
@@ -14,63 +22,137 @@ export type ElicitationChoiceListProps = {
 export type ElicitationTextFieldProps = {
 	value: unknown;
 	label: string;
-	autoFocus?: boolean;
 	numeric?: boolean;
 	maxLength?: number;
 	onChange(value: string | number): void;
 };
-export type ElicitationActionProps = { label: string; primary?: boolean; disabled?: boolean; width?: number; onPress(): void };
+export type ElicitationActionProps = {
+	label: string;
+	primary?: boolean;
+	disabled?: boolean;
+	/** The caller owns the press's haptic: one when the work lands (success or error), or none for a step between questions. The press itself stays silent. */
+	reportsOutcome?: boolean;
+	onPress(): void;
+};
 
 export function ElicitationChoiceList({ choices, selected, multi, onChange }: ElicitationChoiceListProps) {
 	const t = useTheme();
 	const { scheme } = useThemeState();
 	return (
-		<Host matchContents={{ vertical: true }} style={{ width: "100%" }} colorScheme={scheme} seedColor={t.accent}>
-			<Column spacing={0} style={{ width: "100%" }}>
+		<Host matchContents={{ vertical: true }} colorScheme={scheme}>
+			{/* One answer of several is a radio group; several answers are independent checkboxes. */}
+			<Column modifiers={[fillMaxWidth(), ...(multi ? [] : [selectableGroup()])]}>
 				{choices.map((choice) => {
 					const checked = selected(choice.value);
-					return <ListItem
-						key={choice.value}
-						testID={`elicitation-choice-${choice.value}`}
-						onPress={() => { haptics.select(); onChange(choice.value); }}
-						leading={<NativeText textStyle={{ fontFamily: "Geist_400Regular", color: checked ? t.accent : t.textTertiary, fontSize: type.title3.fontSize }}>{checked ? (multi ? "✓" : "●") : "○"}</NativeText>}
-						supportingText={choice.description}
-					>
-						<NativeText textStyle={{ fontFamily: "Geist_400Regular", color: t.textPrimary, fontSize: type.subheadline.fontSize, fontWeight: checked ? "700" : "600" }}>{choice.label}</NativeText>
-					</ListItem>;
+					const choose = () => { haptics.select(); onChange(choice.value); };
+					return (
+						<ListItem
+							key={choice.value}
+							// The row owns the touch and the semantics; the radio and checkbox
+							// inside it only draw the state, as Material lists them.
+							modifiers={[
+								multi ? toggleable(checked, choose, { role: "checkbox" }) : selectable(checked, choose, "radioButton"),
+								testID(`elicitation-choice-${choice.value}`),
+							]}
+							colors={{ containerColor: "transparent", contentColor: t.textPrimary, supportingContentColor: t.textSecondary }}
+						>
+							<ListItem.LeadingContent>
+								{multi ? <Checkbox value={checked} /> : <RadioButton selected={checked} />}
+							</ListItem.LeadingContent>
+							<ListItem.HeadlineContent>
+								<Text style={{ typography: "bodyLarge", fontFamily: font.regular }}>{choice.label}</Text>
+							</ListItem.HeadlineContent>
+							{choice.description ? (
+								<ListItem.SupportingContent>
+									<Text style={{ typography: "bodyMedium", fontFamily: font.regular }}>{choice.description}</Text>
+								</ListItem.SupportingContent>
+							) : null}
+						</ListItem>
+					);
 				})}
 			</Column>
 		</Host>
 	);
 }
 
-export function ElicitationTextField({ value, label, autoFocus, numeric, maxLength, onChange }: ElicitationTextFieldProps) {
+export function ElicitationTextField({ value, label, numeric, maxLength, onChange }: ElicitationTextFieldProps) {
 	const t = useTheme();
 	const { scheme } = useThemeState();
-	const text = useNativeState(value === undefined ? "" : String(value));
-	useEffect(() => {
-		const next = value === undefined ? "" : String(value);
-		if (text.value !== next) text.value = next;
-	}, [text, value]);
-	return <Host style={{ width: "100%", height: 58 }} colorScheme={scheme} seedColor={t.accent}>
-		<NativeTextInput
-			value={text}
-			autoFocus={autoFocus}
-			onChangeText={(next) => onChange(numeric ? (next === "" ? "" : Number(next)) : next)}
-			placeholder={label}
-			keyboardType={numeric ? "numeric" : "default"}
-			maxLength={maxLength}
-			style={{ width: "100%", height: 54, paddingHorizontal: space.md, paddingVertical: space.sm, borderRadius: 12, backgroundColor: t.bgSubtle }}
-			placeholderTextColor={t.textFaint}
-		/>
-	</Host>;
+	const controlledText = value === undefined ? "" : String(value);
+	const text = useNativeState(controlledText);
+	const changeText = useNativeTextInput(controlledText, text, onChange);
+	return (
+		<Host matchContents={{ vertical: true }} colorScheme={scheme}>
+			<OutlinedTextField
+				value={text}
+				singleLine
+				maxLength={maxLength}
+				keyboardOptions={{ keyboardType: numeric ? "decimal" : "text" }}
+				onValueChange={(next) => changeText(numeric ? (next === "" ? "" : Number(next)) : next)}
+				textStyle={{ color: t.textPrimary, fontFamily: font.regular, fontSize: type.subheadline.fontSize }}
+				// The caret and selection take the colour the app's React Native fields use.
+				textSelectionColors={{ handleColor: t.highlight, backgroundColor: t.selection }}
+				colors={{
+					cursorColor: t.highlight,
+					focusedIndicatorColor: t.accent,
+					unfocusedIndicatorColor: t.borderDefault,
+					focusedPlaceholderColor: t.textFaint,
+					unfocusedPlaceholderColor: t.textFaint,
+				}}
+				modifiers={[fillMaxWidth()]}
+			>
+				<OutlinedTextField.Placeholder>
+					<Text style={{ fontFamily: font.regular, fontSize: type.subheadline.fontSize }}>{label}</Text>
+				</OutlinedTextField.Placeholder>
+			</OutlinedTextField>
+		</Host>
+	);
 }
 
-export function ElicitationAction({ label, primary, disabled, width, onPress }: ElicitationActionProps) {
+export function ElicitationAction({ label, primary, disabled, reportsOutcome, onPress }: ElicitationActionProps) {
 	const t = useTheme();
 	const { scheme } = useThemeState();
-	const resolvedWidth = width ?? (primary ? 96 : 70);
-	return <Host style={{ width: resolvedWidth, height: 44 }} colorScheme={scheme} seedColor={t.accent}>
-		<Button label={label} variant={primary ? "filled" : "text"} disabled={disabled} onPress={() => { haptics.tap(); onPress(); }} style={{ width: resolvedWidth, height: 44, borderRadius: 12}} />
-	</Host>;
+	const fit = useActionFit(label);
+	const button = (cap: number | undefined, press?: () => void) => {
+		const modifiers = cap !== undefined ? [fixedWidth(cap)] : undefined;
+		const title = <Text style={{ typography: "labelLarge", fontFamily: font.semibold, textAlign: "center" }}>{label}</Text>;
+		return primary ? (
+			<Button onClick={press} enabled={!disabled} colors={{ containerColor: t.accent, contentColor: t.onAccent }} modifiers={modifiers}>
+				{title}
+			</Button>
+		) : (
+			<TextButton onClick={press} enabled={!disabled} colors={{ contentColor: t.accent }} modifiers={modifiers}>
+				{title}
+			</TextButton>
+		);
+	};
+	// Sized by its label, so a long decision is never cut short, and wrapped only
+	// when that is wider than the row.
+	return (
+		<>
+			<View
+				pointerEvents="none"
+				accessibilityElementsHidden
+				importantForAccessibility="no-hide-descendants"
+				style={styles.measure}
+				onLayout={fit.onRowLayout}
+			>
+				<Host matchContents colorScheme={scheme} onLayoutContent={fit.onLabelLayout}>
+					{button(undefined)}
+				</Host>
+			</View>
+			<Host matchContents colorScheme={scheme} style={styles.action}>
+				{button(fit.cap, () => {
+					if (!reportsOutcome) haptics.tap();
+					onPress();
+				})}
+			</Host>
+		</>
+	);
 }
+
+const styles = StyleSheet.create({
+	// Spans the row behind the actions, unseen and untouchable: it only measures.
+	measure: { position: "absolute", left: 0, right: 0, top: 0, bottom: 0, opacity: 0 },
+	action: { maxWidth: "100%" },
+});

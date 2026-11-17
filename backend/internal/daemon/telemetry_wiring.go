@@ -3,6 +3,7 @@ package daemon
 import (
 	"context"
 	"log/slog"
+	"os"
 	"path/filepath"
 	"time"
 
@@ -50,6 +51,11 @@ func newTelemetrySink(cfg config.Config, store *sqlite.Store, log *slog.Logger) 
 		log.Warn("telemetry remote sink disabled", "remote", cfg.Telemetry.Remote, "error", err)
 		return local, standaloneIdentity(cfg, log), false
 	}
+	// app-state.json and update-settings.json live beside running.json.
+	if cfg.RunFilePath != "" {
+		remote.SetInstallStateDir(filepath.Dir(cfg.RunFilePath))
+	}
+	remote.SetLifetimeSessions(store.LifetimeSessions)
 	// Both wrap only the billed remote sink; local storage keeps every event
 	// unaggregated and unfiltered for debugging regardless of PostHog volume.
 	// Aggregation sits in front: burst-prone event names get folded into one
@@ -60,12 +66,12 @@ func newTelemetrySink(cfg config.Config, store *sqlite.Store, log *slog.Logger) 
 	rateLimited := telemetryadapter.NewRateLimitedSink(remote, aggregatedEventNames)
 	// CLI usage is already one event per command path and error kind. The
 	// minute cap would drop most of that daily burst. The day cap stays.
-	rateLimited.SkipMinuteWindow("ao.cli.usage_errors")
-	rateLimited.SkipMinuteWindow("ao.usage.messages_sent", "ao.usage.worker_pr_associated", "ao.usage.worker_pr_merged")
-	rateLimited.UseUsageDailyWindow("ao.usage.messages_sent", "ao.usage.worker_pr_associated", "ao.usage.worker_pr_merged")
+	rateLimited.SkipMinuteWindow("ao.usage.cli_usage_errors")
+	rateLimited.SkipMinuteWindow("ao.usage.messages_sent", "ao.usage.worker_pr_associated", "ao.usage.worker_pr_merged", "ao.prs.closed")
+	rateLimited.UseUsageDailyWindow("ao.usage.messages_sent", "ao.usage.worker_pr_associated", "ao.usage.worker_pr_merged", "ao.prs.closed")
 	aggregated := telemetryadapter.NewAggregatingSink(rateLimited, aggregatedEventNames, time.Minute)
-	// Keep the full local error stream. Remote HTTP 5xx is not sampled: the
-	// minute rollup and the rate limit already bound it. CLI usage is one
+	// Keep the full local error stream. Remote HTTP 5xx carries only a count
+	// per minute; the rate limit is a backstop. CLI usage is one
 	// event per command path and error kind per completed UTC day.
 	daily := telemetryadapter.NewDailySummarySink(aggregated, filepath.Join(cfg.DataDir, "telemetry", "cli-usage-daily.json"))
 	remote.Identity().OnInstallRetired(daily.Discard)
@@ -76,7 +82,21 @@ func newTelemetrySink(cfg config.Config, store *sqlite.Store, log *slog.Logger) 
 	// costs nothing downstream: no aggregation window, no rate-limit slot, no
 	// export. Local storage is unaffected, so silenced events stay debuggable.
 	denied := telemetryadapter.NewDenylistSink(gated, cfg.Telemetry.DisabledEvents)
-	return telemetryadapter.NewFanoutSink(local, denied), remote.Identity(), true
+	return telemetryadapter.NewOnboardingSink(telemetryadapter.NewFanoutSink(local, denied), remote.Identity()), remote.Identity(), true
+}
+
+const writeLockHeldEvent = "ao.daemon.write_lock_held"
+
+func recordSlowWriteLocks(store *sqlite.Store, sink ports.EventSink) {
+	store.SetWriteLockObserver(func(caller string, held time.Duration) {
+		sink.Emit(context.Background(), ports.TelemetryEvent{
+			Name:       writeLockHeldEvent,
+			Source:     "daemon",
+			OccurredAt: time.Now().UTC(),
+			Level:      ports.TelemetryLevelWarn,
+			Payload:    map[string]any{"caller": caller, "duration_ms": held.Milliseconds()},
+		})
+	})
 }
 
 // Recording is independent of sink startup so a temporary remote setup
@@ -110,7 +130,7 @@ var gitHubLoginRetryDelays = []time.Duration{0, 30 * time.Second, 2 * time.Minut
 
 // startGitHubLoginResolver resolves the authenticated human GitHub login in the
 // background and stores it on the telemetry identity, so every exported daemon
-// event carries github_actor, not just ao.session.spawned. The provider is
+// event carries github_actor, not just ao.sessions.spawned. The provider is
 // rebuilt per attempt because it reads the token at construction. Only the
 // authenticated GitHub account is used, never git config.
 func startGitHubLoginResolver(ctx context.Context, cfg config.Config, ident ports.TelemetryIdentityStore, log *slog.Logger) {
@@ -138,4 +158,66 @@ func startGitHubLoginResolver(ctx context.Context, cfg config.Config, ident port
 			}
 		}
 	}()
+}
+
+// emitInstallLifecycleEvents sends ao.app.installed once, on the first daemon
+// start of a brand-new install. hasPriorState reports whether the local store
+// already holds projects or sessions: an install ID created on upgrade (or
+// after the file was lost) is then not a new install, so the event is spent
+// without being sent. The event is reserved durably before it is queued, so a
+// restart cannot send it twice.
+func emitInstallLifecycleEvents(cfg config.Config, ident ports.TelemetryIdentityStore, sink ports.EventSink, hasPriorState func(context.Context) bool, log *slog.Logger) {
+	if ident == nil || !cfg.Telemetry.Events {
+		return
+	}
+	ctx := context.Background()
+	prior := hasPriorState != nil && hasPriorState(ctx)
+	marked, err := ident.MarkInstalledEvent(ctx)
+	if err != nil {
+		log.Warn("record telemetry install event", "error", err)
+		return
+	}
+	if !marked || prior {
+		return
+	}
+	sink.Emit(ctx, ports.TelemetryEvent{
+		Name:       "ao.app.installed",
+		Source:     "daemon",
+		OccurredAt: time.Now().UTC(),
+		Level:      ports.TelemetryLevelInfo,
+		Payload:    map[string]any{"launcher": daemonLauncher(os.Getenv)},
+	})
+}
+
+// storeHasPriorState reports whether the store already has projects or
+// committed sessions. A read error counts as prior state: a missed install
+// event is safer than a false one.
+func storeHasPriorState(store *sqlite.Store) func(context.Context) bool {
+	return func(ctx context.Context) bool {
+		if sessions, err := store.LifetimeSessions(ctx); err != nil || sessions > 0 {
+			return true
+		}
+		projects, err := store.CountProjectsIncludingArchived(ctx)
+		return err != nil || projects > 0
+	}
+}
+
+// daemonLauncher reports who started this daemon. The desktop supervisor
+// always sets AO_OWNER (app or persistent); a CLI-started daemon has none.
+// The common client property stays "cli" for every daemon event, so this is
+// how install events split desktop from CLI-only installs.
+func daemonLauncher(getenv func(string) string) string {
+	if getenv("AO_OWNER") != "" {
+		return "desktop"
+	}
+	return "cli"
+}
+
+// installMilestones backs first_for_install. Returned as a nil interface (not
+// a typed nil) when there is no data dir, so services omit the property.
+func installMilestones(cfg config.Config) ports.InstallMilestones {
+	if m := telemetryadapter.NewMilestones(cfg.DataDir); m != nil {
+		return m
+	}
+	return nil
 }

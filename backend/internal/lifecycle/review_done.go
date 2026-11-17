@@ -337,7 +337,7 @@ func (m *Manager) StartReviewDoneSweep(ctx context.Context, interval time.Durati
 // changes-requested notice whose inline comments were all forwarded already:
 // it is marked sent without being delivered. Caller holds reviewNoticeMu.
 func (m *Manager) reviewDoneNotice(ctx context.Context, run domain.ReviewRun, sessionRuns []domain.ReviewRun) (msg string, ready, redundant bool, err error) {
-	posted := run.Status == domain.ReviewRunComplete && run.GithubReviewID != ""
+	posted := run.Status == domain.ReviewRunCompleted && run.GithubReviewID != ""
 	inline, observed := 0, false
 	reviewURL := ""
 	var owned []domain.PullRequestComment
@@ -471,10 +471,10 @@ func (l reviewNoticeLater) laterNote(run domain.ReviewRun) string {
 		switch n.Status {
 		case domain.ReviewRunRunning:
 			state = "is running"
-		case domain.ReviewRunComplete:
+		case domain.ReviewRunCompleted:
 			state = "finished: " + reviewDoneVerdict(*n)
 		case domain.ReviewRunCancelled:
-			if n.Body == domain.ReviewRunCancelledByUserReason {
+			if n.CancelledBy == domain.ReviewCancelledByUser || n.Body == domain.ReviewRunCancelledByUserReason {
 				state = "was cancelled by the user"
 			} else {
 				state = "was cancelled"
@@ -496,7 +496,7 @@ func shortNoticeSHA(sha string) string {
 }
 
 func formatReviewDoneNotice(run domain.ReviewRun, reviewURL string, inline int, observed bool, later reviewNoticeLater) string {
-	posted := run.Status == domain.ReviewRunComplete && run.GithubReviewID != ""
+	posted := run.Status == domain.ReviewRunCompleted && run.GithubReviewID != ""
 	note := later.laterNote(run)
 	var msg strings.Builder
 	fmt.Fprintf(&msg, "AO review done: %s\n", reviewDoneVerdict(run))
@@ -513,7 +513,7 @@ func formatReviewDoneNotice(run domain.ReviewRun, reviewURL string, inline int, 
 	}
 	fmt.Fprintf(&msg, "Reviewer: %s\n", domain.SanitizeControlChars(reviewer))
 	fmt.Fprintf(&msg, "Run: %s\n", run.ID)
-	if run.Status == domain.ReviewRunComplete {
+	if run.Status == domain.ReviewRunCompleted {
 		switch {
 		case reviewURL != "":
 			fmt.Fprintf(&msg, "Review: %s\n", domain.SanitizeControlChars(reviewURL))
@@ -532,22 +532,37 @@ func formatReviewDoneNotice(run domain.ReviewRun, reviewURL string, inline int, 
 		body = string(r[:reviewNoticeBodyLimit]) + "\n[truncated; see the review on the PR]"
 	}
 	switch run.Status {
-	case domain.ReviewRunFailed, domain.ReviewRunCancelled:
-		if body != "" {
-			fmt.Fprintf(&msg, "Reason: %s\n", body)
+	case domain.ReviewRunFailed, domain.ReviewRunCancelled, domain.ReviewRunSuperseded:
+		reason := body
+		if reason == "" {
+			switch run.Status {
+			case domain.ReviewRunFailed:
+				reason = strings.ReplaceAll(string(run.FailureReason), "_", " ")
+			case domain.ReviewRunCancelled:
+				if run.CancelledBy == domain.ReviewCancelledByUser {
+					reason = domain.ReviewRunCancelledByUserReason
+				} else {
+					reason = "cancelled by worker session lifecycle"
+				}
+			case domain.ReviewRunSuperseded:
+				reason = domain.ReviewRunSupersededReason
+			}
+		}
+		if reason != "" {
+			fmt.Fprintf(&msg, "Reason: %s\n", reason)
 		}
 		msg.WriteString("\nNo review result was recorded for this pass. ")
-		switch run.Body {
-		case domain.ReviewRunSupersededReason:
+		switch {
+		case run.Status == domain.ReviewRunSuperseded || run.Body == domain.ReviewRunSupersededReason:
 			// The trigger that superseded this pass already started a review
 			// of the newer head; re-triggering would race it.
 			msg.WriteString("A review of the newer head is already under way; wait for its own review done message instead of requesting another review.")
-		case domain.ReviewRunCancelledByUserReason:
+		case run.CancelledBy == domain.ReviewCancelledByUser || run.Body == domain.ReviewRunCancelledByUserReason:
 			msg.WriteString("The user stopped this review on purpose; do not request another unless they ask.")
 		default:
 			msg.WriteString("Request another review if you still need one.")
 		}
-		if note != "" && run.Body != domain.ReviewRunSupersededReason {
+		if note != "" && run.Status != domain.ReviewRunSuperseded && run.Body != domain.ReviewRunSupersededReason {
 			msg.WriteString(" " + note)
 		}
 		return msg.String()
@@ -587,6 +602,8 @@ func reviewDoneVerdict(run domain.ReviewRun) string {
 		return "failed"
 	case domain.ReviewRunCancelled:
 		return "cancelled"
+	case domain.ReviewRunSuperseded:
+		return "superseded"
 	}
 	if run.Verdict == domain.VerdictChangesRequested {
 		return "changes requested"

@@ -14,6 +14,7 @@ import "../../src/renderer/styles.css";
 const session: WorkspaceSession = {
 	id: "cloud-review-fixture", cloud: { orgId: "fixture-org" }, workspaceId: "fixture-project", workspaceName: "Fixture",
 	title: "Cloud review fixture", provider: "codex", status: "working", prs: [], updatedAt: "2026-10-24T00:00:00Z",
+	runtimeConnected: true,
 };
 const file = (path: string): CloudCpWorkspaceReviewFileSummary => ({ path, status: "modified", additions: 1, deletions: 1, size: 20, binary: false, editable: true, fileFingerprint: `fp:${path}` });
 const staged = [file("app.ts"), file("staged.ts"), file("package-lock.json")];

@@ -44,6 +44,7 @@ vi.mock("../stores/terminal-shell-store", () => ({
 
 import {
 	adoptedShellHandle,
+	reloadCloudShellTerminalsForTest,
 	type ShellTerminal,
 	shellTerminalsQueryKey,
 	shellTerminalsQueryKeyForHost,
@@ -52,6 +53,7 @@ import {
 	useRenameShellTerminal,
 	useShellTerminals,
 } from "./useShellTerminals";
+import { takeCloudShellInput } from "../lib/cloud-shell-input";
 
 const shells: ShellTerminal[] = [
 	{
@@ -230,15 +232,18 @@ describe("useOpenShellTerminal", () => {
 		});
 	});
 
-	it("omits the shell field outside Windows", async () => {
+	it("sends the configured shell outside Windows too", async () => {
+		shellStoreMock.preference = { kind: "custom", path: "/opt/homebrew/bin/fish" };
 		postMock.mockResolvedValue({ data: { shellTerminal: { ...shells[0] } } });
 		const queryClient = new QueryClient({ defaultOptions: { mutations: { retry: false } } });
 		const { result } = renderHook(() => useOpenShellTerminal(), { wrapper: wrapper(queryClient) });
 
 		await act(async () => result.current.mutateAsync({}));
 
-		expect(postMock).toHaveBeenCalledWith("/api/v1/shell-terminals", { body: { startOnAttach: true } });
-		expect(shellStoreMock.load).not.toHaveBeenCalled();
+		expect(shellStoreMock.load).toHaveBeenCalled();
+		expect(postMock).toHaveBeenCalledWith("/api/v1/shell-terminals", {
+			body: { startOnAttach: true, shell: "/opt/homebrew/bin/fish" },
+		});
 	});
 
 	it("normalizes an unavailable configured shell back to Automatic", async () => {
@@ -285,6 +290,82 @@ describe("useOpenShellTerminal", () => {
 		await act(async () => close.result.current.mutateAsync(shell.handleId));
 		expect(deleteMock).not.toHaveBeenCalled();
 		expect(queryClient.getQueryData(shellTerminalsQueryKey)).toEqual([]);
+	});
+});
+
+describe("Cloud shell tabs across a restart", () => {
+	it("lists a session's open and renamed Cloud shells again after a restart, and forgets closed ones", async () => {
+		window.localStorage.removeItem("ao.cloudShellTerminals");
+		reloadCloudShellTerminalsForTest();
+		getMock.mockResolvedValue({ data: { shellTerminals: [] } });
+		const queryClient = new QueryClient({ defaultOptions: { mutations: { retry: false }, queries: { retry: false } } });
+		queryClient.setQueryData(shellTerminalsQueryKey, []);
+		const open = renderHook(() => useOpenShellTerminal(), { wrapper: wrapper(queryClient) });
+		const input = { projectId: "cloud-project", sessionId: "cloud-session", cloud: { orgId: "cloud-org" } };
+		const kept = (await act(async () => open.result.current.mutateAsync(input)))!;
+		const closed = (await act(async () => open.result.current.mutateAsync(input)))!;
+		const rename = renderHook(() => useRenameShellTerminal(), { wrapper: wrapper(queryClient) });
+		await act(async () => rename.result.current.mutateAsync({ handleId: kept.handleId, title: "server" }));
+		const close = renderHook(() => useCloseShellTerminal(), { wrapper: wrapper(queryClient) });
+		await act(async () => close.result.current.mutateAsync(closed.handleId));
+
+		// A restart: a fresh renderer reads the tabs back from storage.
+		reloadCloudShellTerminalsForTest();
+		const restarted = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+		const listed = renderHook(() => useShellTerminals(), { wrapper: wrapper(restarted) });
+		await waitFor(() => expect(listed.result.current.data).toEqual([{ ...kept, title: "server" }]));
+
+		await act(async () => close.result.current.mutateAsync(kept.handleId));
+		reloadCloudShellTerminalsForTest();
+		expect(JSON.parse(window.localStorage.getItem("ao.cloudShellTerminals") ?? "null")).toEqual([]);
+	});
+
+	it("ignores stored entries that are not Cloud shells", async () => {
+		window.localStorage.setItem("ao.cloudShellTerminals", JSON.stringify([
+			{ handleId: "ptyhost-v1:shellterm-one", sessionId: "s", title: "t", workingDir: "/", createdAt: "2026-08-27T00:00:00Z", cloud: { orgId: "o" } },
+			{ handleId: "cloud-shell-1", title: "no session", workingDir: "/", createdAt: "2026-08-27T00:00:00Z", cloud: { orgId: "o" } },
+			"garbage",
+		]));
+		reloadCloudShellTerminalsForTest();
+		getMock.mockResolvedValue({ data: { shellTerminals: [] } });
+		const listed = renderHook(() => useShellTerminals(), { wrapper: wrapper(new QueryClient({ defaultOptions: { queries: { retry: false } } })) });
+		await waitFor(() => expect(listed.result.current.data).toEqual([]));
+		window.localStorage.removeItem("ao.cloudShellTerminals");
+		reloadCloudShellTerminalsForTest();
+	});
+});
+
+describe("useOpenShellTerminal initial input", () => {
+	it("queues a cloud shell's input before the shell is listed, so its terminal always finds it", async () => {
+		const queryClient = new QueryClient({
+			defaultOptions: { mutations: { retry: false }, queries: { retry: false } },
+		});
+		queryClient.setQueryData(shellTerminalsQueryKey, []);
+		// What a terminal connecting to the shell the moment it is listed would find.
+		const foundOnListing = new Map<string, string | undefined>();
+		const unsubscribe = queryClient.getQueryCache().subscribe(() => {
+			for (const shell of queryClient.getQueryData<ShellTerminal[]>(shellTerminalsQueryKey) ?? []) {
+				if (!shell.optimistic && !foundOnListing.has(shell.handleId)) foundOnListing.set(shell.handleId, takeCloudShellInput(shell.handleId));
+			}
+		});
+		const open = renderHook(() => useOpenShellTerminal(), { wrapper: wrapper(queryClient) });
+
+		const shell = (await act(async () =>
+			open.result.current.mutateAsync({
+				projectId: "cloud-project",
+				sessionId: "cloud-session",
+				cloud: { orgId: "cloud-org" },
+				initialInput: "npm test\r",
+			}),
+		))!;
+		unsubscribe();
+		try {
+			expect(foundOnListing.get(shell.handleId)).toBe("npm test\r");
+			expect(takeCloudShellInput(shell.handleId)).toBeUndefined();
+		} finally {
+			const close = renderHook(() => useCloseShellTerminal(), { wrapper: wrapper(queryClient) });
+			await act(async () => close.result.current.mutateAsync(shell.handleId));
+		}
 	});
 });
 

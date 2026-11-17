@@ -95,7 +95,7 @@ func (s *installJobStoreFake) InterruptActiveAgentInstallJobs(_ context.Context,
 			continue
 		}
 		record.Status = string(StatusInterrupted)
-		record.Error = "AO restarted before this job completed."
+		record.Error = "Orchestrator restarted before this job completed."
 		record.FinishedAt = &interruptedAt
 		record.UpdatedAt = interruptedAt
 		s.records[target] = record
@@ -172,8 +172,9 @@ func newTestService(goos string, found ...string) *Service {
 		installCapabilities: installCapabilitiesStub{
 			prefix: "/Users/test/.npm", writable: true,
 		},
-		pathWritable:       pathWritableProbeFunc(func(context.Context, string) (bool, error) { return true, nil }),
-		privateNPMPrefixes: map[Target]string{TargetOpencodeV2: "/Users/test/.local/share/opencode-v2-home/npm"},
+		pathWritable:          pathWritableProbeFunc(func(context.Context, string) (bool, error) { return true, nil }),
+		privateNPMPrefixes:    map[Target]string{TargetOpencodeV2: "/Users/test/.local/share/opencode-v2-home/npm"},
+		privateInstallerHomes: map[Target]string{TargetOpencodeV2: "/Users/test/.local/share/opencode-v2-home/installer"},
 		commands: testCommandRunner(func(ctx context.Context, argv []string) *exec.Cmd {
 			return exec.CommandContext(ctx, argv[0], argv[1:]...) //nolint:gosec // test-only, deterministic argv
 		}),
@@ -232,8 +233,9 @@ func TestPlanFor(t *testing.T) {
 			wantUnsupported: true, wantReasonHas: "No supported Linux package manager",
 		},
 		// cloudflared is what makes a phone reachable from outside the local
-		// network. Nothing installed it before, so a machine without it showed a
-		// normal QR that only ever worked on Wi-Fi.
+		// network. These are the package-manager fallbacks: newTestService has
+		// no downloader, so AO's own pinned copy is not on offer (see
+		// cloudflared_test.go for that).
 		{
 			name: "cloudflared darwin uses brew", target: TargetCloudflared, goos: "darwin", found: []string{"brew"},
 			wantCommand: []string{"brew", "install", "cloudflared"},
@@ -307,7 +309,6 @@ func TestPlanFor(t *testing.T) {
 		},
 		{
 			name: "opencode v2 legacy route uses official installer", target: TargetOpencodeV2, goos: "linux", found: []string{"bash"},
-			wantNoticeHas: "replaces the default OpenCode 1",
 		},
 	}
 
@@ -744,6 +745,51 @@ func TestAutohandStartupFailureExplainsRecoveryWithoutClaimingSuccess(t *testing
 			}
 			if tc.wantHint {
 				for _, want := range []string{"existing installation was not changed", "startup check", "retry", "exit status 1"} {
+					if !strings.Contains(job.Error, want) {
+						t.Fatalf("error = %q, want %q", job.Error, want)
+					}
+				}
+			} else if job.Error != "exit status 1" {
+				t.Fatalf("unrelated error was rewritten: %q", job.Error)
+			}
+		})
+	}
+}
+
+func TestCursorRejectedLoginUpdateExplainsRecovery(t *testing.T) {
+	// The exact output of `cursor-agent update` when Cursor rejects the
+	// stored login (reproduced with 2026.04.16 and 2026.11.10 builds).
+	const rejected = "Checking for updates...\nError: Update failed: [unauthenticated] Error\n"
+	for _, tc := range []struct {
+		name     string
+		target   Target
+		output   string
+		wantHint bool
+	}{
+		{name: "rejected login", target: TargetCursor, output: rejected, wantHint: true},
+		{name: "other cursor failure", target: TargetCursor, output: "Checking for updates...\nError: Update failed: Download failed (curl exit 6)\n"},
+		{name: "other harness", target: TargetGrok, output: rejected},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			s := newTestService("darwin", "sh")
+			t.Cleanup(s.stop)
+			s.commands = commandRunnerFunc(func(_ context.Context, _ []string, stdout, _ io.Writer) error {
+				_, _ = io.WriteString(stdout, tc.output)
+				return errors.New("exit status 1")
+			})
+			s.verifier = harnessVerifierFunc(func(context.Context, Target) (VerifyResult, error) {
+				t.Fatal("a failed update must not be verified")
+				return VerifyResult{}, nil
+			})
+			plan := Plan{Target: tc.target, Method: "official-installer", Command: []string{"/home/test/.local/bin/cursor-agent", "update"}}
+			job := &Job{Target: tc.target, Status: StatusInstalling}
+			s.jobs[tc.target] = job
+			s.runAgentOperation(t.Context(), plan, AgentOperationUpdate, job, nil)
+			if job.Status != StatusFailed || job.Output != tc.output {
+				t.Fatalf("job = %+v, want failure with original diagnostics", job)
+			}
+			if tc.wantHint {
+				for _, want := range []string{"rejected the CLI's saved login", "Log out of Cursor, update, then log in again", "exit status 1"} {
 					if !strings.Contains(job.Error, want) {
 						t.Fatalf("error = %q, want %q", job.Error, want)
 					}

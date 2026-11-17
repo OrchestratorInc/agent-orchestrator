@@ -13,12 +13,14 @@ import (
 	"os/exec"
 	"path/filepath"
 	"regexp"
+	"runtime"
 	"sort"
 	"strconv"
 	"strings"
 	"time"
 
 	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/agent/authprobe"
+	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/agent/dockeragent"
 	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/agent/opencodev2"
 	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
 	aoprocess "github.com/aoagents/agent-orchestrator/backend/internal/process"
@@ -38,6 +40,10 @@ const (
 	commandTerminationWait = 2 * time.Second
 )
 
+// commandInterruptSupported reports whether a canceled discovery can ask the
+// CLI to exit cleanly. Windows has no deliverable interrupt for a child.
+var commandInterruptSupported = runtime.GOOS != "windows"
+
 type commandSpec struct {
 	args   []string
 	parser func([]byte) ([]ports.AgentModelInfo, error)
@@ -45,6 +51,11 @@ type commandSpec struct {
 	// browser sign-in when signed out. Discovery only runs once it confirms a
 	// login, so background refreshes never open that sign-in page.
 	signIn *signInCheck
+	// interruptOnCancel is set for CLIs that hold a profile lock while listing
+	// models. A killed run orphans the lock and blocks every later command, so
+	// cancellation interrupts first; where that cannot be delivered (Windows),
+	// discovery is skipped.
+	interruptOnCancel bool
 	// retryEmpty reruns a listing that exits cleanly with no output once.
 	// OpenCode 2 prints nothing the first time it runs in a new folder.
 	retryEmpty bool
@@ -135,6 +146,7 @@ var commandSpecs = map[string]commandSpec{
 	// `cmd --list-models` prints `provider/model` followed by a marketing
 	// description, not a display name — see parseCommandCodeModels.
 	"command-code": {args: []string{"--list-models"}, parser: parseCommandCodeModels},
+	"minimax-code": {args: []string{"provider", "list", "--json"}, parser: parseMiniMaxModels, interruptOnCancel: true},
 }
 
 // Accepts reports whether model may launch agentID. It rejects a model only
@@ -161,6 +173,8 @@ func Base(agentID string) ports.AgentModelCatalog {
 	now := time.Now().UTC()
 	entryMode := customModelEntryMode(agentID)
 	switch agentID {
+	case "docker-agent":
+		return catalog(agentID, "native-default", entryMode, now, model("default", "Agent default", true))
 	case "muse":
 		return catalog(agentID, "official-catalog", entryMode, now,
 			model("muse-spark", "Muse Spark", true),
@@ -237,9 +251,9 @@ func Manual(agentID string) ports.AgentModelCatalog {
 func customModelEntryMode(agentID string) ports.CustomModelEntryMode {
 	switch agentID {
 	case "claude-code", "codex", "opencode", "opencode-v2", "grok", "cursor", "qwen", "gemini",
-		"kimi", "muse", "aider", "goose", "autohand", "fx", "unreal-agent", "codewhale", "mimo-code", "deepseek-harness", "openhands", "devin", "hermes":
+		"kimi", "muse", "aider", "goose", "autohand", "fx", "unreal-agent", "codewhale", "mimo-code", "deepseek-harness", "openhands", "devin", "hermes", "stakpak":
 		return ports.CustomModelEntryDirect
-	case "continue", "cline", "kilocode", "vibe", "pi", "kimchi", "prime-agent":
+	case "docker-agent", "minimax-code", "continue", "cline", "kilocode", "vibe", "pi", "kimchi", "prime-agent":
 		return ports.CustomModelEntryConfigured
 	default:
 		return ports.CustomModelEntryNone
@@ -432,9 +446,10 @@ func (d Discoverer) CatalogFingerprint(ctx context.Context, request ports.AgentM
 			// Snapshots from before RunnableModels lack it.
 			return fingerprint + ":shared-providers-v1:runnable-v1"
 		}
-		if request.AgentID == "pi" || request.AgentID == "kimchi" {
-			// Snapshots from before Pi's thinking levels were read lack them.
-			return fingerprint + ":shared-providers-v1:thinking-v2"
+		if request.AgentID == "pi" || request.AgentID == "kimchi" || request.AgentID == "prime-agent" {
+			// Snapshots from before discovery kept Pi's thinking metadata and
+			// matched Pi's level rules lack those levels.
+			return fingerprint + ":shared-providers-v1:thinking-v3"
 		}
 		return fingerprint + ":shared-providers-v1"
 	}
@@ -442,7 +457,9 @@ func (d Discoverer) CatalogFingerprint(ctx context.Context, request ports.AgentM
 		return fingerprint
 	}
 	extra := d.ClaudeFingerprint(ctx, request)
-	hash := sha256.Sum256([]byte(fingerprint + "\x00" + extra))
+	// Snapshots from before context aliases kept their window label ("opus[1m]"
+	// read "Opus 5.5", a twin of the plain model) are replaced on the next read.
+	hash := sha256.Sum256([]byte(fingerprint + "\x00" + extra + "\x00alias-context-v1"))
 	return fmt.Sprintf("%x", hash[:8])
 }
 
@@ -471,9 +488,16 @@ func discoverCommandCatalog(ctx context.Context, agentID, binary, workingDir str
 			return base, err
 		}
 	}
+	if spec.interruptOnCancel && !commandInterruptSupported {
+		// An error, not an empty success, so the service keeps cached models.
+		return base, errors.New("model discovery is unavailable on this platform because AO cannot stop the agent without leaving its profile locked")
+	}
 	runCtx, cancel := context.WithTimeout(ctx, commandTimeout)
 	defer cancel()
 	cmd := modelCommand(runCtx, binary, spec.args, workingDir, env)
+	if spec.interruptOnCancel {
+		aoprocess.InterruptOnCancel(cmd, commandTerminationWait)
+	}
 	output, err := cmd.CombinedOutput()
 	if err == nil && spec.retryEmpty && len(bytes.TrimSpace(output)) == 0 {
 		cancel()
@@ -719,7 +743,8 @@ func discoverACPOptionCatalog(
 				label = id
 			}
 			provider := strings.TrimSpace(choice.Group)
-			if provider == "" {
+			// Docker Agent values name native config entries, not providers.
+			if provider == "" && request.AgentID != "docker-agent" {
 				if prefix, _, ok := strings.Cut(id, "/"); ok {
 					provider = prefix
 				}
@@ -744,8 +769,8 @@ func hasDiscoverySource(agentID string) bool {
 	switch agentID {
 	// Harnesses whose catalog comes from a daemon-injected surface rather than a
 	// command spec: Codex's app-server, Claude's provider probe, and the ACP
-	// configuration catalog for Cline, DeepSeek Harness, and Devin.
-	case "claude-code", "codex", "deepseek-harness", "devin":
+	// configuration catalog for Cline, DeepSeek Harness, Devin, and Docker Agent.
+	case "claude-code", "codex", "deepseek-harness", "devin", "docker-agent":
 		return true
 	}
 	if hasConfigDiscoverySource(agentID) {
@@ -919,13 +944,25 @@ func discoveryConfigInputs(ctx context.Context, agentID, workingDir string, env 
 	if agentID == "claude-code" {
 		return "config=" + claudeCodeDiscoveryFingerprint(ctx, workingDir, env)
 	}
+	if agentID == "docker-agent" {
+		return "config=" + dockerAgentDiscoveryFingerprint(env)
+	}
 	if agentID == "deepseek-harness" {
 		// Not routed through configDiscoveryFingerprint: the profile is what the
 		// ACP session reads, not a catalog AO parses itself, so the harness has
 		// no config discovery source to declare.
 		return "config=" + fingerprintConfigPaths(modelConfigPaths(agentID, workingDir, env))
 	}
+	if agentID == "minimax-code" {
+		// The native command reports the profile's configured models, so the
+		// profile config is a discovery input even though AO does not parse it.
+		return "config=" + fingerprintConfigPaths(modelConfigPaths(agentID, workingDir, env))
+	}
 	if config := configDiscoveryFingerprint(agentID, workingDir, env); config != "" {
+		if agentID == "stakpak" {
+			// The profile, not only the file, picks the model the catalog offers.
+			config += ";profile=" + stakpakProfile(env)
+		}
 		return "config=" + config
 	}
 	// The listed models come from the binary, but which one is the default comes
@@ -935,6 +972,24 @@ func discoveryConfigInputs(ctx context.Context, agentID, workingDir string, env 
 		return "default=" + configured
 	}
 	return ""
+}
+
+// dockerAgentDiscoveryFingerprint covers what selects Docker Agent's models:
+// the user's config file when one is selected, otherwise which provider keys
+// AO's generated default can use. It hashes key names only, never values.
+func dockerAgentDiscoveryFingerprint(env map[string]string) string {
+	config, ok := env[dockeragent.ConfigEnv]
+	if !ok {
+		config = os.Getenv(dockeragent.ConfigEnv)
+	}
+	if config = strings.TrimSpace(config); config != "" {
+		return "file:" + config + ":" + fingerprintConfigPaths([]string{config})
+	}
+	names := make([]string, 0, 4)
+	for _, m := range dockeragent.DefaultModels(env) {
+		names = append(names, m.Provider+"/"+m.Name)
+	}
+	return "default:" + strings.Join(names, ",")
 }
 
 func claudeCodeDiscoveryFingerprint(ctx context.Context, workingDir string, env map[string]string) string {

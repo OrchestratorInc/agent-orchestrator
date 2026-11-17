@@ -39,6 +39,26 @@ beforeEach(() => {
 });
 afterEach(async () => { await act(async () => renderer?.unmount()); vi.useRealTimers(); vi.unstubAllGlobals(); });
 
+// The composer rides the keyboard down frame by frame; a conversation still
+// padded for the open keyboard left an empty band above it until the close ended.
+it("releases the conversation's pad as the keyboard starts to close, not once it has gone", async () => {
+	await mount();
+	await fire("controller", "keyboardWillShow", { height: 336 });
+	expect(latest?.rootStyle).toEqual({ paddingBottom: 336 });
+	await fire("controller", "keyboardWillHide");
+	expect(latest?.rootStyle).toEqual({ paddingBottom: 0 });
+	// The composer's own handling still waits for the close.
+	expect(latest?.keyboardVisible).toBe(true);
+	expect(latest?.composerLift).toBeUndefined();
+	// Opened again mid-close: padded again.
+	await fire("controller", "keyboardWillShow", { height: 336 });
+	expect(latest?.rootStyle).toEqual({ paddingBottom: 336 });
+	await fire("controller", "keyboardWillHide");
+	await fire("controller", "keyboardDidHide");
+	expect(latest?.rootStyle).toEqual({ paddingBottom: 0 });
+	expect(latest?.composerLift).toBe(0);
+});
+
 it("keeps the keyboard pad through a close React Native reports before keyboard-controller", async () => {
 	await mount();
 	await fire("controller", "keyboardWillShow", { height: 336 });
@@ -72,4 +92,29 @@ it("ignores a report React Native has already contradicted", async () => {
 	await settle();
 	expect(latest?.keyboardVisible).toBe(false);
 	expect(latest?.rootStyle).toEqual({ paddingBottom: 0 });
+});
+
+// The composer rides keyboard-controller's own progress on the UI thread, and
+// stands at the reconciled height only when that progress missed the open.
+// Backgrounding the app with the keyboard up hides it without running the
+// animation the composer rides, which then held the composer at the open height.
+it("rests the composer at the bottom whenever the keyboard is closed", async () => {
+	await mount();
+	expect(latest?.composerLift).toBe(0);
+	await fire("controller", "keyboardWillShow", { height: 336 });
+	expect(latest?.composerLift).toBeUndefined();
+	await fire("controller", "keyboardDidHide");
+	expect(latest?.composerLift).toBe(0);
+});
+
+it("lets the composer ride the keyboard, and lifts it by hand only for an open keyboard-controller missed", async () => {
+	await mount();
+	await fire("controller", "keyboardWillShow", { height: 336 });
+	expect(latest?.composerLift).toBeUndefined();
+	await fire("controller", "keyboardDidHide");
+	fixture.visible = true;
+	await fire("platform", "keyboardDidShow", { endCoordinates: { height: 312 } });
+	await settle();
+	expect(latest?.composerLift).toBe(latest?.rootStyle?.paddingBottom);
+	expect(latest?.composerLift).toBeGreaterThan(0);
 });

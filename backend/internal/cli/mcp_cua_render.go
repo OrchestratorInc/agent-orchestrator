@@ -107,7 +107,7 @@ func (t *cuaText) runSteps(result map[string]any) {
 			reason = cuaString(observation["error"])
 		}
 		t.line("observation failed: " + reason)
-		t.line("The steps above ran, but AO could not read the window after them. Read it with get_window_state before acting again.")
+		t.line("The steps above ran, but Orchestrator could not read the window after them. Read it with get_window_state before acting again.")
 		return
 	}
 	if summary := cuaString(observation["summary"]); summary != "" {

@@ -11,14 +11,14 @@ ALTER TABLE review_run ADD COLUMN worker_notice TEXT NOT NULL DEFAULT ''
 CREATE INDEX idx_review_run_worker_notice_pending
     ON review_run (session_id, created_at)
     WHERE worker_notice = 'pending';
--- Every running -> final transition owes the worker one notice when its
+-- Every active -> final transition owes the worker one notice when its
 -- session receives review feedback. Marking it here, atomically with the
 -- status write, covers every path that ends a pass (submit, cancel,
 -- supersede, reviewer failure) and survives a daemon restart.
 CREATE TRIGGER review_run_worker_notice_pending
 AFTER UPDATE OF status ON review_run
-WHEN OLD.status = 'running'
-    AND NEW.status IN ('complete', 'failed', 'cancelled')
+WHEN OLD.status IN ('queued', 'launching', 'running', 'cancelling')
+    AND NEW.status IN ('completed', 'failed', 'cancelled', 'superseded')
     AND NEW.worker_notice = ''
 BEGIN
     UPDATE review_run SET worker_notice = 'pending'

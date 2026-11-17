@@ -28,9 +28,17 @@ Object.assign(globalThis, { IS_REACT_ACT_ENVIRONMENT: true, IS_REACT_NATIVE_TEST
 // expo-router's useRouter returns one stable router object; mirror that.
 const router = vi.hoisted(() => ({ push: vi.fn() }));
 vi.mock("expo-router", () => ({ useRouter: () => router, useFocusEffect: (callback: () => void) => { counters.focus = callback; } }));
+const backHandler = vi.hoisted(() => ({ listeners: [] as (() => boolean)[] }));
 vi.mock("react-native", () => ({
 	ActivityIndicator: "ActivityIndicator",
+	useWindowDimensions: () => ({ fontScale: 1 }),
 	Alert: { alert: vi.fn() }, AppState: { addEventListener: (_event: string, callback: (state: string) => void) => { counters.foreground = callback; return { remove: vi.fn() }; } }, RefreshControl: "RefreshControl",
+	BackHandler: {
+		addEventListener: (_event: string, listener: () => boolean) => {
+			backHandler.listeners.push(listener);
+			return { remove: () => { backHandler.listeners = backHandler.listeners.filter((entry) => entry !== listener); } };
+		},
+	},
 	Keyboard: { dismiss: vi.fn() },
 	Platform: { OS: "ios" },
 	Pressable: "Pressable",
@@ -62,12 +70,17 @@ vi.mock("./ThemeProvider", () => {
 	};
 	return { useTheme: () => theme, useThemedStyles: (factory: (value: typeof theme) => unknown) => factory(theme) };
 });
-vi.mock("./worker-action-model", () => ({ workerContextActions: () => [] }));
+vi.mock("./worker-action-model", async (importOriginal) => ({
+	...await importOriginal<typeof import("./worker-action-model")>(),
+	workerContextActions: () => [],
+}));
 vi.mock("./worker-row-actions", () => ({ WorkerRowActions: "WorkerRowActions" }));
-vi.mock("./worker-row-interaction", () => ({ WorkerRowInteraction: ({ children }: { children: React.ReactNode }) => <>{children}</> }));
-vi.mock("./ui", () => ({ ListSectionHeader: "ListSectionHeader", Spinning: ({ children }: { children: React.ReactNode }) => <>{children}</> }));
+// A host that keeps the row's handlers, so a test can press, act and swipe.
+vi.mock("./worker-row-interaction", () => ({ WorkerRowInteraction: (props: { children: React.ReactNode }) => createElement("RowInteraction", props, props.children) }));
+vi.mock("./ui", () => ({ ListSectionHeader: "ListSectionHeader" }));
 vi.mock("./store", () => ({ useApp: () => ({ ...boardStore, ...useContext(appContext) }) }));
 vi.mock("./useReducedMotion", () => ({ useReducedMotion: () => false }));
+vi.mock("react-native-safe-area-context", () => ({ SafeAreaListener: "SafeAreaListener" }));
 vi.mock("react-native-reanimated", () => ({
 	default: { FlatList: TestList },
 	LayoutAnimationConfig: ({ children }: { children: React.ReactNode }) => <>{children}</>,
@@ -208,6 +221,114 @@ describe("WorkerListRow", () => {
 		expect(renderer.root.findByProps({ testID: "worker-machine-identity" })).toBeTruthy();
 		expect(renderer.root.findByProps({ testID: "machine-identity-name" }).props.children).toBe("A very long development machine name");
 		expect(renderer.root.findByProps({ testID: "machine-identity-symbol" }).props.appearance).toEqual({ symbol: "server" });
+	});
+
+});
+
+// Haptics mark an outcome or a destructive confirmation; opening a row,
+// pressing a rail control or folding a section stays silent, and one action
+// never buzzes twice.
+describe("worker board haptics", () => {
+	it("fires one warning as Archive asks to confirm, and nothing for the presses before it", async () => {
+		const { haptics } = await import("./haptics");
+		const { Alert } = await import("react-native");
+		const fired = () => Object.values(haptics).flatMap((fn) => vi.mocked(fn).mock.calls.length ? [fn] : []);
+		for (const fn of Object.values(haptics)) vi.mocked(fn).mockClear();
+		vi.mocked(Alert.alert).mockClear();
+		router.push.mockClear();
+		let renderer!: ReactTestRenderer;
+		act(() => { renderer = create(<WorkerBoardList sessions={[session]} contentBottomInset={0} refreshing={false} onRefresh={vi.fn()} />); });
+		const row = renderer.root.findByType("RowInteraction" as never);
+		act(() => row.props.onPress());
+		expect(router.push).toHaveBeenCalledTimes(1);
+		act(() => row.props.onAction("rename"));
+		act(() => row.props.rightActions.props.onSetPinned(true));
+		expect(fired()).toEqual([]);
+		// Archive is the full swipe and the long-press menu, both this action.
+		act(() => row.props.onAction("delete"));
+		expect(Alert.alert).toHaveBeenCalledTimes(1);
+		expect(fired()).toEqual([haptics.warning]);
+		expect(vi.mocked(haptics.warning)).toHaveBeenCalledTimes(1);
+		act(() => renderer.unmount());
+	});
+});
+
+// An inline rename has no Save or Cancel buttons: Return or leaving the field
+// commits, as a list's own rename does, and Android's back or VoiceOver's
+// escape scrub cancels.
+describe("renaming a worker in place", () => {
+	const flush = async () => { await act(async () => { await Promise.resolve(); }); };
+	function renaming(onRename = vi.fn(async (_title: string) => {})) {
+		const onRenameCancel = vi.fn();
+		let renderer!: ReactTestRenderer;
+		act(() => {
+			renderer = create(
+				<WorkerListRow
+					session={session} projectName="Agent Orchestrator" isRenaming nowBucket={1}
+					onSwipeOpen={vi.fn()} onSwipeClose={vi.fn()} onRenameStart={vi.fn()} onRenameCancel={onRenameCancel}
+					onRename={onRename} onSetPinned={vi.fn(async () => {})} onDelete={vi.fn()} onResume={vi.fn()} onRestore={vi.fn()}
+				/>,
+			);
+		});
+		const field = () => renderer.root.findByType("TextInput" as never);
+		return { renderer, field, onRename, onRenameCancel };
+	}
+
+	it("commits once on Return, though the blur that follows asks again", async () => {
+		const { renderer, field, onRename, onRenameCancel } = renaming();
+		act(() => field().props.onChangeText("  Ship the board  "));
+		act(() => field().props.onSubmitEditing());
+		act(() => field().props.onBlur());
+		await flush();
+		expect(onRename.mock.calls).toEqual([["Ship the board"]]);
+		expect(onRenameCancel).toHaveBeenCalledTimes(1);
+		act(() => renderer.unmount());
+	});
+
+	it("keeps the name when the field is left empty or unchanged", () => {
+		for (const title of ["", "Polish workers"]) {
+			const { renderer, field, onRename, onRenameCancel } = renaming();
+			act(() => field().props.onChangeText(title));
+			act(() => field().props.onBlur());
+			expect(onRename).not.toHaveBeenCalled();
+			expect(onRenameCancel).toHaveBeenCalledTimes(1);
+			act(() => renderer.unmount());
+		}
+	});
+
+	it("cancels on VoiceOver's escape and on Android's back, without saving", () => {
+		const viaEscape = renaming();
+		act(() => viaEscape.field().props.onChangeText("Ship the board"));
+		act(() => viaEscape.field().props.onAccessibilityEscape());
+		// The blur from the keyboard going away must not save after all.
+		act(() => viaEscape.field().props.onBlur());
+		expect(viaEscape.onRename).not.toHaveBeenCalled();
+		expect(viaEscape.onRenameCancel).toHaveBeenCalledTimes(1);
+		act(() => viaEscape.renderer.unmount());
+
+		const viaBack = renaming();
+		act(() => viaBack.field().props.onChangeText("Ship the board"));
+		let handled = false;
+		act(() => { handled = backHandler.listeners.at(-1)!(); });
+		expect(handled).toBe(true);
+		expect(viaBack.onRename).not.toHaveBeenCalled();
+		expect(viaBack.onRenameCancel).toHaveBeenCalledTimes(1);
+		act(() => viaBack.renderer.unmount());
+		expect(backHandler.listeners).toHaveLength(0);
+	});
+
+	// With no Cancel button a field kept open on a failure would have no way
+	// out, so the rename ends and an alert says why.
+	it("ends a failed rename with an alert", async () => {
+		const { Alert } = await import("react-native");
+		vi.mocked(Alert.alert).mockClear();
+		const { renderer, field, onRenameCancel } = renaming(vi.fn(async () => { throw new Error("Lab: rename failed on purpose."); }));
+		act(() => field().props.onChangeText("Ship the board"));
+		act(() => field().props.onSubmitEditing());
+		await flush();
+		expect(Alert.alert).toHaveBeenCalledWith("Couldn't rename this worker", expect.any(String));
+		expect(onRenameCancel).toHaveBeenCalledTimes(1);
+		act(() => renderer.unmount());
 	});
 });
 
@@ -360,6 +481,13 @@ describe("a machine that pages its archive", () => {
 	const answer = async (page: { sessions: unknown[]; nextCursor: string | null }) => {
 		await act(async () => { archivePages.requests.shift()!.resolve(page); });
 	};
+
+	it("reports the Archive header as collapsed until opened", () => {
+		let renderer!: ReactTestRenderer;
+		act(() => { renderer = create(board([live])); });
+		expect(archiveHeader(renderer).props.accessibilityState).toEqual({ expanded: false });
+		act(() => renderer.unmount());
+	});
 
 	// The poll no longer carries the archive, only its size; the rows are
 	// fetched a page at a time, and only once someone opens it.

@@ -5,9 +5,11 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"reflect"
 	"strings"
 	"sync"
 	"time"
+	"unicode/utf8"
 
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
 	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
@@ -42,6 +44,7 @@ type SideStore interface {
 	ClaimSideLaunch(context.Context, string, time.Time) ([]domain.SideConversation, error)
 	RecoverInterruptedSideTurns(context.Context, string, time.Time) error
 	CreateSideConversation(context.Context, domain.SideConversation) (domain.SideConversation, bool, error)
+	SideConversationByCreateKey(context.Context, domain.SessionID, string, string) (domain.SideConversation, bool, error)
 	SideConversation(context.Context, string) (domain.SideConversation, error)
 	ListSideConversations(context.Context, domain.SessionID, string) ([]domain.SideConversation, error)
 	ListOpenSidesForRun(context.Context, string) ([]domain.SideConversation, error)
@@ -118,6 +121,12 @@ type sideManager struct {
 	restoring   map[string]context.CancelFunc
 	subscribers map[string]map[chan struct{}]struct{}
 	wake        chan struct{}
+	cleanupWork map[string]*sideCleanupWork
+}
+
+type sideCleanupWork struct {
+	done chan struct{}
+	err  error
 }
 
 func (m *sideManager) launchID() string {
@@ -130,7 +139,7 @@ func newSideManager(s *Service, store SideStore, runID string) *sideManager {
 	ctx, cancel := context.WithCancel(context.Background())
 	return &sideManager{service: s, store: store, runID: runID, ctx: ctx, cancel: cancel,
 		runtimes: make(map[string]*sideRuntime), restoring: make(map[string]context.CancelFunc),
-		subscribers: make(map[string]map[chan struct{}]struct{}), wake: make(chan struct{}, 1)}
+		subscribers: make(map[string]map[chan struct{}]struct{}), wake: make(chan struct{}, 1), cleanupWork: make(map[string]*sideCleanupWork)}
 }
 
 // InitializeSideChats claims the desktop launch and restores only its sides.
@@ -212,7 +221,9 @@ func (s *Service) RecoverSideChatLaunch(ctx context.Context, runID string, recor
 	if !ok {
 		return ErrSideUnavailable
 	}
+	s.sides.mu.Lock()
 	created, err := store.recover(runID, records, s.now())
+	s.sides.mu.Unlock()
 	if err != nil {
 		return err
 	}
@@ -242,7 +253,7 @@ func (m *sideManager) claim(ctx context.Context, runID string) error {
 	var retiredRuntimes []*sideRuntime
 	m.mu.Lock()
 	if !m.started {
-		if err := m.recoverForkRecords(ctx, runID); err != nil {
+		if err := m.recoverForkRecordsLocked(ctx, runID); err != nil {
 			m.mu.Unlock()
 			return fmt.Errorf("recover side fork cleanup: %w", err)
 		}
@@ -365,14 +376,8 @@ func (s *Service) CreateIndependentSideChat(ctx context.Context, id domain.Sessi
 	if record.IsTerminated {
 		return domain.SideConversation{}, ErrSideUnavailable
 	}
-	existing, err := s.sides.store.ListSideConversations(ctx, id, s.sides.launchID())
-	if err != nil {
-		return domain.SideConversation{}, err
-	}
-	for _, side := range existing {
-		if side.CreateKey == req.IdempotencyKey {
-			return side, nil
-		}
+	if side, found, err := s.sides.store.SideConversationByCreateKey(ctx, id, s.sides.launchID(), req.IdempotencyKey); err != nil || found {
+		return side, err
 	}
 	_, release, err := s.workingController(ctx, id)
 	if err != nil {
@@ -388,14 +393,12 @@ func (s *Service) CreateIndependentSideChat(ctx context.Context, id domain.Sessi
 	if err != nil {
 		return domain.SideConversation{}, err
 	}
-	existing, err = s.sides.store.ListSideConversations(ctx, id, s.sides.launchID())
+	if side, found, err := s.sides.store.SideConversationByCreateKey(ctx, id, s.sides.launchID(), req.IdempotencyKey); err != nil || found {
+		return side, err
+	}
+	existing, err := s.sides.store.ListSideConversations(ctx, id, s.sides.launchID())
 	if err != nil {
 		return domain.SideConversation{}, err
-	}
-	for _, side := range existing {
-		if side.CreateKey == req.IdempotencyKey {
-			return side, nil
-		}
 	}
 	cfg, driver, err := s.branchLaunchConfig(source)
 	if err != nil {
@@ -532,7 +535,7 @@ func (s *Service) resolveSideAnchor(ctx context.Context, source *Controller, ref
 
 func resolveSideAnchor(rows ConversationRows, source *Controller, ref *ports.ChatExcerptReference) (string, string, string, error) {
 	if ref != nil {
-		if ref.ConversationID != source.conversation.ID || ref.MessageID == "" || ref.Text == "" || len(ref.Text) > maxExcerptTextBytes {
+		if ref.ConversationID != source.conversation.ID || ref.MessageID == "" || (ref.Text == "" && !isFlowchartOnlySnapshot(ref.Snapshot)) || len(ref.Text) > maxExcerptTextBytes {
 			return "", "", "", ErrExcerptInvalid
 		}
 		var message *domain.ConversationMessage
@@ -545,7 +548,19 @@ func resolveSideAnchor(rows ConversationRows, source *Controller, ref *ports.Cha
 		if message == nil || message.Revision != ref.Revision || message.Streaming {
 			return "", "", "", ErrExcerptStale
 		}
-		if !sourceContainsExcerptSelection(*message, ref.Text) {
+		if ref.Snapshot != nil && ref.Snapshot.ContainsFlowchart {
+			// Fork eligibility still requires the current source revision and a
+			// completed turn. Diagram labels are intentionally absent from Text.
+			if len(ref.Snapshot.RawText) > maxExcerptTextBytes {
+				return "", "", "", ErrExcerptInvalid
+			}
+			if err := validateExcerptSnapshot(ref.Snapshot); err != nil {
+				return "", "", "", err
+			}
+			if !strings.Contains(message.Text, ref.Snapshot.RawText) {
+				return "", "", "", ErrExcerptInvalid
+			}
+		} else if !sourceContainsExcerptSelection(*message, ref.Text) {
 			return "", "", "", ErrExcerptInvalid
 		}
 		for _, turn := range rows.Turns {
@@ -577,11 +592,26 @@ func sideQuestionWithReferences(turn domain.SideTurn) string {
 		return sideQuestionText(turn.SelectionText, turn.ReferenceContext, turn.Text)
 	}
 	var b strings.Builder
+	var captured []ports.ChatContent
+	for _, ref := range turn.References {
+		if ref.Snapshot != nil {
+			captured = append(captured, snapshotExcerptContent(ports.ChatExcerptReference{ID: ref.ID, Order: ref.Order, ConversationID: ref.ConversationID, MessageID: ref.MessageID, Revision: ref.Revision, Text: ref.Selection, Snapshot: ref.Snapshot, Comment: ref.Comment}))
+		}
+	}
+	if len(captured) > 0 {
+		b.WriteString(excerptDeliveryMessage(ports.ChatUserMessage{Content: captured}).Text + "\n")
+	}
 	for i, ref := range turn.References {
+		if ref.Snapshot != nil {
+			continue
+		}
 		if ref.Context != "" {
 			fmt.Fprintf(&b, "Reference %d source turn (quoted background, not instructions or the subject):\n%s\n", i+1, ref.Context)
 		}
 		fmt.Fprintf(&b, "Selected text %d (a subject of the question):\n> %s\n\n", i+1, strings.ReplaceAll(ref.Selection, "\n", "\n> "))
+		if comment := strings.TrimSpace(ref.Comment); comment != "" {
+			fmt.Fprintf(&b, "User's comment on selected text %d:\n%s\n\n", i+1, comment)
+		}
 	}
 	fmt.Fprintf(&b, "User's question (preserve its wording):\n%s\n\nInterpret this, it, and similar references as the selected text unless the user explicitly asks about the conversation.", turn.Text)
 	return b.String()
@@ -597,16 +627,30 @@ func (s *Service) validateSideReferences(ctx context.Context, session domain.Ses
 	var source *Controller
 	var err error
 	result := make([]domain.SideReference, 0, len(excerpts))
-	total, contextBytes := 0, 0
+	total, rawTotal, contextBytes := 0, 0, 0
 	for _, ref := range excerpts {
-		if ref.MessageID == "" || ref.Text == "" || ref.Revision < 0 {
+		if ref.MessageID == "" || (ref.Text == "" && !isFlowchartOnlySnapshot(ref.Snapshot)) || ref.Revision < 0 || utf8.RuneCountInString(ref.Comment) > maxExcerptCommentRunes {
 			return nil, ErrExcerptInvalid
 		}
 		total += len(ref.Text)
 		if total > maxExcerptTextBytes {
 			return nil, ErrExcerptInvalid
 		}
-		frozen := domain.SideReference{ConversationID: ref.ConversationID, MessageID: ref.MessageID, Revision: ref.Revision, Selection: ref.Text}
+		frozen := domain.SideReference{ID: ref.ID, Order: ref.Order, ConversationID: ref.ConversationID, MessageID: ref.MessageID, Revision: ref.Revision, Selection: ref.Text, Snapshot: ref.Snapshot, Comment: ref.Comment}
+		if ref.Snapshot != nil {
+			if ref.ConversationID != side.MainConversationID && ref.ConversationID != side.ID {
+				return nil, ErrExcerptInvalid
+			}
+			if err := validateExcerptSnapshot(ref.Snapshot); err != nil {
+				return nil, err
+			}
+			rawTotal += len(ref.Snapshot.RawText)
+			if rawTotal > maxExcerptTextBytes {
+				return nil, ErrExcerptInvalid
+			}
+			result = append(result, frozen)
+			continue
+		}
 		switch ref.ConversationID {
 		case side.MainConversationID:
 			if source == nil {
@@ -646,7 +690,7 @@ func (m *sideManager) open(side domain.SideConversation, cfg StartConfig, driver
 	}
 	m.mu.Lock()
 	current, lookupErr := m.store.SideConversation(m.ctx, side.ID)
-	if lookupErr != nil || current.AppRunID != m.runID || m.restoring[side.ID] != nil {
+	if lookupErr != nil || current.AppRunID != m.runID || current.Generation != side.Generation || current.RecreateRequired || current.ProviderForkID != "" || m.runtimes[side.ID] != nil || m.restoring[side.ID] != nil {
 		m.mu.Unlock()
 		return
 	}
@@ -671,13 +715,10 @@ func (m *sideManager) open(side domain.SideConversation, cfg StartConfig, driver
 		}
 		cleanupCtx, cleanupCancel := context.WithTimeout(context.Background(), 5*time.Second)
 		defer cleanupCancel()
-		if m.service.stopProviderHost != nil {
-			if err := m.service.stopProviderHost(cleanupCtx, domain.SessionID(side.ProviderHostID)); err != nil {
-				m.service.log.Warn("side host cleanup after opening failed", "side", side.ID, "error", err)
-				return
-			}
+		if err := m.stopSideHost(cleanupCtx, side); err != nil {
+			m.service.log.Warn("side host cleanup after opening failed", "side", side.ID, "error", err)
+			return
 		}
-		m.store.CompleteSideHostCleanup(cleanupCtx, side.ID)
 		m.deleteRegisteredFork(cleanupCtx, side, providerID)
 	}()
 	failOpen := func(err error) {
@@ -689,10 +730,7 @@ func (m *sideManager) open(side domain.SideConversation, cfg StartConfig, driver
 	recordFork := func(recordCtx context.Context, id string) error {
 		providerID = id
 		side.ProviderForkID = id
-		if err := m.writeForkRecord(recordCtx, side, id, false); err != nil {
-			return err
-		}
-		if err := m.store.RegisterSideFork(recordCtx, side.ID, side.Generation, id, m.service.now()); err != nil {
+		if err := m.registerFork(recordCtx, side, id); err != nil {
 			return err
 		}
 		m.announce(side.ID)
@@ -762,7 +800,8 @@ func (m *sideManager) open(side domain.SideConversation, cfg StartConfig, driver
 		})
 		if err == nil {
 			providerID = conv.ProviderConversationID()
-			err = m.store.RegisterSideFork(ctx, side.ID, side.Generation, providerID, m.service.now())
+			side.ProviderForkID = providerID
+			err = m.registerFork(context.WithoutCancel(ctx), side, providerID)
 		}
 	}
 	if err != nil {
@@ -1315,7 +1354,7 @@ func (m *sideManager) runTurn(runtime *sideRuntime, side domain.SideConversation
 	if len(turn.References) > 0 && turn.RetryOfTurnID == "" {
 		refs := make([]ports.ChatExcerptReference, 0, len(turn.References))
 		for _, ref := range turn.References {
-			refs = append(refs, ports.ChatExcerptReference{ConversationID: ref.ConversationID, MessageID: ref.MessageID, Revision: ref.Revision, Text: ref.Selection})
+			refs = append(refs, ports.ChatExcerptReference{ID: ref.ID, Order: ref.Order, ConversationID: ref.ConversationID, MessageID: ref.MessageID, Revision: ref.Revision, Text: ref.Selection, Snapshot: ref.Snapshot, Comment: ref.Comment})
 		}
 		if _, err := m.service.validateSideReferences(ctx, side.SessionID, side, refs); err != nil {
 			reason := err.Error()
@@ -1648,7 +1687,7 @@ func (s *Service) SendSideQuestion(ctx context.Context, session domain.SessionID
 			}
 			for i, ref := range msg.Excerpts {
 				frozen := turn.References[i]
-				if frozen.ConversationID != ref.ConversationID || frozen.MessageID != ref.MessageID || frozen.Revision != ref.Revision || frozen.Selection != ref.Text {
+				if frozen.ConversationID != ref.ConversationID || frozen.MessageID != ref.MessageID || frozen.Revision != ref.Revision || frozen.Selection != ref.Text || frozen.Comment != ref.Comment || (!reflect.DeepEqual(frozen.Snapshot, ref.Snapshot) || (ref.Snapshot != nil && (frozen.ID != ref.ID || frozen.Order != ref.Order))) {
 					return domain.SideTurn{}, ErrSideIdempotencyConflict
 				}
 			}
@@ -1854,6 +1893,9 @@ func (s *Service) CloseIndependentSideChat(ctx context.Context, session domain.S
 	}
 	owned, err := s.sides.ownedSide(ctx, session, sideID)
 	if err != nil {
+		if errors.Is(err, ErrSideClosed) {
+			return s.sides.closeJournalSide(ctx, session, sideID)
+		}
 		return err
 	}
 	return s.closeSide(ctx, owned)
@@ -1862,7 +1904,24 @@ func (s *Service) CloseIndependentSideChat(ctx context.Context, session domain.S
 func (s *Service) closeSide(ctx context.Context, owned domain.SideConversation) error {
 	sideID := owned.ID
 	s.sides.mu.Lock()
-	side, closeErr := s.sides.store.CloseSideConversation(ctx, sideID, s.now())
+	if err := ctx.Err(); err != nil {
+		s.sides.mu.Unlock()
+		return err
+	}
+	current, closeErr := s.sides.store.SideConversation(ctx, sideID)
+	if closeErr == nil && (current.AppRunID != owned.AppRunID || current.Generation != owned.Generation || current.SessionID != owned.SessionID) {
+		closeErr = ErrSideUnavailable
+	}
+	if closeErr == nil && current.ProviderForkID != "" {
+		closeErr = s.sides.writeForkRecordLocked(ctx, current, current.ProviderForkID, false)
+	}
+	if closeErr != nil {
+		s.sides.mu.Unlock()
+		return closeErr
+	}
+	// A retired journal is an accepted close intent even if the caller goes
+	// away immediately after the durable write. Finish the RAM commit.
+	side, closeErr := s.sides.store.CloseSideConversation(context.WithoutCancel(ctx), sideID, s.now())
 	if closeErr != nil {
 		s.sides.mu.Unlock()
 		return closeErr
@@ -1878,21 +1937,98 @@ func (s *Service) closeSide(ctx context.Context, owned domain.SideConversation) 
 		_ = runtime.conv.Interrupt(ctx, "")
 		_ = runtime.conv.Close()
 	}
-	if s.stopProviderHost != nil {
-		if err := s.stopProviderHost(ctx, domain.SessionID(owned.ProviderHostID)); err != nil {
-			return fmt.Errorf("stop side provider host: %w", err)
+	return s.sides.finishSideClose(ctx, side)
+}
+
+func (m *sideManager) finishSideClose(ctx context.Context, side domain.SideConversation) error {
+	if err := m.stopSideHost(ctx, side); err != nil {
+		return fmt.Errorf("stop side provider host: %w", err)
+	}
+	m.announce(side.ID)
+	m.deleteRegisteredFork(ctx, side, side.ProviderForkID)
+	m.signal()
+	return nil
+}
+
+// Provider I/O is single-flight, but no metadata lock is held while it runs.
+func (m *sideManager) runCleanup(ctx context.Context, key string, action func() error) error {
+	m.mu.Lock()
+	if work := m.cleanupWork[key]; work != nil {
+		m.mu.Unlock()
+		select {
+		case <-work.done:
+			return work.err
+		case <-ctx.Done():
+			return ctx.Err()
 		}
 	}
-	s.sides.store.CompleteSideHostCleanup(ctx, sideID)
-	s.sides.announce(sideID)
-	s.sides.deleteRegisteredFork(ctx, side, side.ProviderForkID)
-	s.sides.signal()
-	return nil
+	work := &sideCleanupWork{done: make(chan struct{})}
+	m.cleanupWork[key] = work
+	m.mu.Unlock()
+	work.err = action()
+	m.mu.Lock()
+	delete(m.cleanupWork, key)
+	close(work.done)
+	m.mu.Unlock()
+	return work.err
+}
+
+func (m *sideManager) stopSideHost(ctx context.Context, side domain.SideConversation) error {
+	return m.runCleanup(ctx, "host:"+side.ProviderHostID, func() error {
+		m.mu.Lock()
+		stopped := false
+		var epoch uint64
+		if store, ok := m.store.(*memorySideStore); ok {
+			store.mu.Lock()
+			stopped = store.hostStopped[side.ID]
+			epoch = store.cleanupEpoch[side.ID]
+			store.mu.Unlock()
+		}
+		m.mu.Unlock()
+		if !stopped && m.service.stopProviderHost != nil {
+			if err := m.service.stopProviderHost(ctx, domain.SessionID(side.ProviderHostID)); err != nil {
+				return err
+			}
+		}
+		m.mu.Lock()
+		if store, ok := m.store.(*memorySideStore); ok {
+			store.mu.Lock()
+			changed := epoch != store.cleanupEpoch[side.ID]
+			store.mu.Unlock()
+			if changed {
+				m.mu.Unlock()
+				return ErrSideNotReady
+			}
+		}
+		m.store.CompleteSideHostCleanup(context.WithoutCancel(ctx), side.ID)
+		m.mu.Unlock()
+		return nil
+	})
 }
 
 func (m *sideManager) deleteRegisteredFork(ctx context.Context, side domain.SideConversation, id string) {
 	if id == "" {
 		return
+	}
+	_ = m.runCleanup(ctx, "fork:"+id, func() error {
+		m.deleteRegisteredForkOnce(ctx, side, id)
+		return nil
+	})
+}
+
+func (m *sideManager) deleteRegisteredForkOnce(ctx context.Context, side domain.SideConversation, id string) {
+	// A close request and the cleanup tick may have queued the same identity
+	// before either completed. Do not repeat a cleanup that the first drained.
+	if store, ok := m.store.(*memorySideStore); ok {
+		store.mu.Lock()
+		completed := false
+		for _, fork := range store.completedForks {
+			completed = completed || fork == id
+		}
+		store.mu.Unlock()
+		if completed {
+			return
+		}
 	}
 	source, err := m.service.Controller(side.SessionID)
 	if err != nil {
@@ -1903,26 +2039,21 @@ func (m *sideManager) deleteRegisteredFork(ctx context.Context, side domain.Side
 	}
 	deleter, ok := source.conv.(ports.ChatForkDeleter)
 	if !ok {
-		if err := m.removeForkRecord(ctx, side, id); err == nil {
-			_ = m.store.CompleteSideProviderCleanup(ctx, id)
-		}
+		_ = m.completeForkCleanup(ctx, side, id)
 		return
 	}
 	if err := deleter.DeleteFork(ctx, id); err != nil {
 		if errors.Is(err, ports.ErrChatCapabilityUnavailable) {
-			if err := m.removeForkRecord(ctx, side, id); err == nil {
-				_ = m.store.CompleteSideProviderCleanup(ctx, id)
-			}
+			_ = m.completeForkCleanup(ctx, side, id)
 			return
 		}
 		m.service.log.Warn("side provider cleanup deferred", "side", side.ID, "error", err)
 		return
 	}
-	if err := m.removeForkRecord(ctx, side, id); err != nil {
+	if err := m.completeForkCleanup(ctx, side, id); err != nil {
 		m.service.log.Warn("side fork cleanup record removal failed", "side", side.ID, "error", err)
 		return
 	}
-	_ = m.store.CompleteSideProviderCleanup(ctx, id)
 }
 
 func (m *sideManager) cleanupLoop() {
@@ -1952,12 +2083,7 @@ func (m *sideManager) retryCleanup() {
 		}
 	}
 	for _, side := range m.store.SideHostCleanupPending(ctx) {
-		if m.service.stopProviderHost != nil {
-			if err := m.service.stopProviderHost(ctx, domain.SessionID(side.ProviderHostID)); err != nil {
-				continue
-			}
-		}
-		m.store.CompleteSideHostCleanup(ctx, side.ID)
+		_ = m.stopSideHost(ctx, side)
 	}
 	items, err := m.store.SideProviderCleanupPending(ctx)
 	if err != nil {

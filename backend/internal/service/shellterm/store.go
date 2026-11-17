@@ -16,9 +16,14 @@ type ShellTerminalRecord struct {
 	SessionID  domain.SessionID
 	WorkingDir string
 	Title      string
-	AppRunID   string
-	CreatedAt  time.Time
-	Transient  bool // Trusted auth terminal, owned by its app launch.
+	// TitleExplicit marks Title as chosen, so a program's title cannot outrank it.
+	TitleExplicit bool
+	// AppTitle is the title the shell's program last set.
+	AppTitle     string
+	AppRunID     string
+	CreatedAt    time.Time
+	Transient    bool // Trusted auth terminal, owned by its app launch.
+	CommandOwner string
 	// PreviewCapabilityVerifier authorizes only managed preview lifecycle calls
 	// from this session-scoped shell; the bearer stays in its process environment.
 	PreviewCapabilityVerifier string

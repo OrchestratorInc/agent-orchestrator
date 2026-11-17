@@ -88,7 +88,8 @@ test("question replies remain readable after another question and a reload @T0",
 	await page.reload();
 	await expect(dock).toHaveCount(0);
 	await expect(history.getByText(prompt)).toBeVisible();
-	await expect(history.getByText("fix/login — Merged with no local changes")).toBeVisible();
+	await expect(history.getByText("fix/login", { exact: true })).toBeVisible();
+	await expect(history.getByText("Merged with no local changes")).toHaveCount(0);
 	await expect(history.getByText(feedback)).toBeVisible();
 	await expect(history.getByRole("button")).toHaveCount(0);
 	const evidenceDirectory = process.env.AO_QUESTION_HISTORY_EVIDENCE_DIR;
