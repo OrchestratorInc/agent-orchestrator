@@ -338,8 +338,8 @@ Chat settings change, `--force` stops the current turn so the next one runs on
 the new settings.
 
 `--from <agent>` makes the same change to every session on that agent,
-orchestrators included, four at a time, and exits 1 if any was not switched or
-did not get the message. `claude` means `claude-code`. Run `ao agent ls` for
+orchestrators included, except the agent session running the command. It runs
+four at a time and exits 1 if any was not switched or did not get the message. `claude` means `claude-code`. Run `ao agent ls` for
 the agents you can switch to.
 
 **Syntax:**

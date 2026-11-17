@@ -100,8 +100,9 @@ pending approvals, and switches anyway. On a Chat settings change, --force stops
 the current turn so the next one runs on the new settings.
 
 --from <agent> makes the same change to every session on that agent,
-orchestrators included, four at a time, and exits 1 if any of them was not
-switched or did not get the message.
+orchestrators included, except the agent session running the command. It runs
+four at a time and exits 1 if any of them was not switched or did not get the
+message.
 
 --message is sent to the agent once the switch completes, as ao send would.
 Run ao agent ls for the agents you can switch to.`,
@@ -178,15 +179,24 @@ func (c *commandContext) switchSessionsFrom(ctx context.Context, cmd *cobra.Comm
 	if err := c.getJSON(ctx, apiPath("sessions", url.Values{"active": {"true"}}), &res); err != nil {
 		return err
 	}
+	self := callerSession()
 	var ids []string
+	none := "no sessions on %s\n"
+	out, errOut := cmd.OutOrStdout(), cmd.ErrOrStderr()
 	for _, sess := range filterAndSortSessions(res.Sessions, true) {
-		if sess.Harness == from {
+		switch {
+		case sess.Harness != from:
+		case sess.ID == self:
+			none = "no other sessions on %s\n"
+			if _, err := fmt.Fprintf(out, "skipped %s, the session running this command\n", self); err != nil {
+				return err
+			}
+		default:
 			ids = append(ids, sess.ID)
 		}
 	}
-	out, errOut := cmd.OutOrStdout(), cmd.ErrOrStderr()
 	if len(ids) == 0 {
-		_, err := fmt.Fprintf(out, "no sessions on %s\n", from)
+		_, err := fmt.Fprintf(out, none, from)
 		return err
 	}
 	var mu sync.Mutex

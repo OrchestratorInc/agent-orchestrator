@@ -10,6 +10,8 @@ import (
 	"sync"
 	"testing"
 	"time"
+
+	"github.com/aoagents/agent-orchestrator/backend/internal/caller"
 )
 
 type switchCommandCalls struct {
@@ -250,6 +252,32 @@ func TestSessionSwitchFromSwitchesEverySessionOnThatAgent(t *testing.T) {
 	for _, want := range []string{"switched demo-1 to codex", "switched demo-2 to codex", "sent message to demo-1", "switched 2 sessions from claude-code to codex"} {
 		if !strings.Contains(out, want) {
 			t.Fatalf("output %q lacks %q", out, want)
+		}
+	}
+}
+
+func TestSessionSwitchFromSkipsTheSessionRunningIt(t *testing.T) {
+	for _, tc := range []struct {
+		shell    string
+		switched []string
+		want     string
+	}{
+		{"", []string{"demo-1"}, "skipped demo-2, the session running this command"},
+		{"1", []string{"demo-1", "demo-2"}, "switched 2 sessions from claude-code to codex"},
+	} {
+		cfg := setConfigEnv(t)
+		t.Setenv("AO_SESSION_ID", "demo-2")
+		t.Setenv(caller.ShellTerminalEnv, tc.shell)
+		srv, calls := switchCommandServer(t, 0, "")
+		calls.sessions = `{"sessions":[
+			{"id":"demo-1","projectId":"demo","kind":"worker","harness":"claude-code"},
+			{"id":"demo-2","projectId":"demo","kind":"orchestrator","harness":"claude-code"}]}`
+		writeRunFileFor(t, cfg, srv)
+		out, _, err := executeCLI(t, Deps{ProcessAlive: func(int) bool { return true }}, "session", "switch", "--from", "claude", "codex", "--force")
+		switched := append([]string(nil), calls.switched...)
+		slices.Sort(switched)
+		if err != nil || !slices.Equal(switched, tc.switched) || !strings.Contains(out, tc.want) {
+			t.Fatalf("shell=%q: err = %v switched = %v out = %q", tc.shell, err, switched, out)
 		}
 	}
 }
