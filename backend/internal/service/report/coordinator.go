@@ -252,8 +252,11 @@ func (c *Coordinator) deliverProject(ctx context.Context, projectID domain.Proje
 		return c.retryLater(ctx, batch, err)
 	}
 	_, err = c.store.AcknowledgeReportBatch(ctx, batch.ProjectID, batch.Token, c.now().UTC())
-	if err == nil {
-		delete(c.undeliveredCount, batch.ProjectID)
+	if err == nil && batch.UndeliveredReports > 0 {
+		c.undeliveredCount[batch.ProjectID] -= batch.UndeliveredReports
+		if c.undeliveredCount[batch.ProjectID] <= 0 {
+			delete(c.undeliveredCount, batch.ProjectID)
+		}
 	}
 	return err
 }
@@ -331,9 +334,12 @@ func (c *Coordinator) AcceptPiggyback(ctx context.Context, batch PreparedBatch) 
 		return nil
 	}
 	_, err := c.store.AcknowledgeReportBatch(ctx, batch.ProjectID, batch.Token, c.now().UTC())
-	if err == nil {
+	if err == nil && batch.UndeliveredReports > 0 {
 		c.mu.Lock()
-		delete(c.undeliveredCount, batch.ProjectID)
+		c.undeliveredCount[batch.ProjectID] -= batch.UndeliveredReports
+		if c.undeliveredCount[batch.ProjectID] <= 0 {
+			delete(c.undeliveredCount, batch.ProjectID)
+		}
 		c.mu.Unlock()
 	}
 	return err
@@ -394,13 +400,15 @@ func (c *Coordinator) backoffDelay(batch PreparedBatch) time.Duration {
 }
 
 func (c *Coordinator) fail(ctx context.Context, batch PreparedBatch, cause error) error {
-	c.undeliveredCount[batch.ProjectID] += len(batch.Reports)
-	if c.onBatchFailed != nil {
-		c.onBatchFailed(ctx, batch, cause)
-	}
-	_, failErr := c.store.FailReportBatch(ctx, batch.ProjectID, batch.Token, c.now().UTC(), cause.Error())
+	n, failErr := c.store.FailReportBatch(ctx, batch.ProjectID, batch.Token, c.now().UTC(), cause.Error())
 	if failErr != nil {
 		return errors.Join(cause, failErr)
+	}
+	if n > 0 {
+		c.undeliveredCount[batch.ProjectID] += n
+		if c.onBatchFailed != nil {
+			c.onBatchFailed(ctx, batch, cause)
+		}
 	}
 	return cause
 }
