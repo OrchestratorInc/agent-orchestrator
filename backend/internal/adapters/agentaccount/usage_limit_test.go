@@ -154,25 +154,31 @@ func TestClaudeLimitsReportsUnavailableUsageAsError(t *testing.T) {
 	for _, tc := range []struct {
 		name          string
 		credentials   string
+		settings      string
 		status        int
 		wantSignedOut bool
 		wantProbe     bool
+		wantHost      string
 	}{
-		{"accepted login", fmt.Sprintf(`{"claudeAiOauth":{"accessToken":"sk-ant-oat01-ok","refreshToken":"r","expiresAt":%d}}`, now+3600_000), http.StatusOK, false, true},
-		{"rejected login", fmt.Sprintf(`{"claudeAiOauth":{"accessToken":"sk-ant-oat01-dead","refreshToken":"r","expiresAt":%d}}`, now+3600_000), http.StatusUnauthorized, true, true},
-		{"expired login the CLI renews", fmt.Sprintf(`{"claudeAiOauth":{"accessToken":"sk-ant-oat01-old","refreshToken":"r","expiresAt":%d}}`, now-60_000), http.StatusUnauthorized, false, false},
-		{"no stored login", "", http.StatusUnauthorized, false, false},
+		{"accepted login", fmt.Sprintf(`{"claudeAiOauth":{"accessToken":"sk-ant-oat01-ok","refreshToken":"r","expiresAt":%d}}`, now+3600_000), "", http.StatusOK, false, true, "api.anthropic.com"},
+		{"rejected login", fmt.Sprintf(`{"claudeAiOauth":{"accessToken":"sk-ant-oat01-dead","refreshToken":"r","expiresAt":%d}}`, now+3600_000), "", http.StatusUnauthorized, true, true, "api.anthropic.com"},
+		{"expired login the CLI renews", fmt.Sprintf(`{"claudeAiOauth":{"accessToken":"sk-ant-oat01-old","refreshToken":"r","expiresAt":%d}}`, now-60_000), "", http.StatusUnauthorized, false, false, ""},
+		{"no stored login", "", "", http.StatusUnauthorized, false, false, ""},
+		{"login routed through a gateway in settings", fmt.Sprintf(`{"claudeAiOauth":{"accessToken":"sk-ant-oat01-ok","refreshToken":"r","expiresAt":%d}}`, now+3600_000), `{"env":{"ANTHROPIC_BASE_URL":"https://gateway.example"}}`, http.StatusUnauthorized, true, true, "gateway.example"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			home := t.TempDir()
 			if tc.credentials != "" {
 				write(t, filepath.Join(home, ".credentials.json"), tc.credentials)
 			}
-			probed := false
+			if tc.settings != "" {
+				write(t, filepath.Join(home, "settings.json"), tc.settings)
+			}
+			probed, host := false, ""
 			c := &Claude{
 				Binary: func(context.Context) (string, error) { return bin, nil },
-				HTTPClient: &http.Client{Transport: roundTrip(func(*http.Request) (*http.Response, error) {
-					probed = true
+				HTTPClient: &http.Client{Transport: roundTrip(func(r *http.Request) (*http.Response, error) {
+					probed, host = true, r.URL.Host
 					return &http.Response{StatusCode: tc.status, Body: io.NopCloser(strings.NewReader(`{"data":[]}`)), Header: http.Header{}}, nil
 				})},
 			}
@@ -184,7 +190,10 @@ func TestClaudeLimitsReportsUnavailableUsageAsError(t *testing.T) {
 				t.Fatalf("Limits error = %v, want could not fetch", err)
 			}
 			if probed != tc.wantProbe {
-				t.Fatalf("asked Anthropic = %v, want %v", probed, tc.wantProbe)
+				t.Fatalf("probed = %v, want %v", probed, tc.wantProbe)
+			}
+			if host != tc.wantHost {
+				t.Fatalf("probed %q, want %q", host, tc.wantHost)
 			}
 		})
 	}

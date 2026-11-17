@@ -193,20 +193,7 @@ func (c *Claude) Limits(ctx context.Context, home string) (domain.AgentAccountLi
 }
 
 func (c *Claude) loginRejected(ctx context.Context, home string) bool {
-	overlay := c.LaunchEnv(home)
-	if home == "" && c.DeviceEnv != nil {
-		overlay = c.DeviceEnv(ctx)
-	}
-	opts := agentcreds.ResolveOptions{
-		Env: func(key string) string {
-			if value, ok := overlay[key]; ok {
-				return value
-			}
-			return os.Getenv(key)
-		},
-		ConfigDir:     home,
-		AllowKeychain: true,
-	}
+	opts := (agentcreds.ResolveOptions{CommandEnv: c.launchOverlay(ctx, home), ConfigDir: home, AllowKeychain: true}).WithClaudeSettings(ctx)
 	provider, ok := agentcreds.ResolveProvider("", opts)
 	if !ok {
 		return false
@@ -457,17 +444,19 @@ func (c *Claude) command(ctx context.Context, bin, home string, args ...string) 
 	// A timeout or kill stops the CLI's whole process tree, not only its leader.
 	aoprocess.ConfigureTreeCancellation(cmd)
 	cmd.Env = os.Environ()
-	for key, value := range c.LaunchEnv(home) {
+	for key, value := range c.launchOverlay(ctx, home) {
 		cmd.Env = append(cmd.Env, key+"="+value)
-	}
-	if home == "" && c.DeviceEnv != nil {
-		for key, value := range c.DeviceEnv(ctx) {
-			cmd.Env = append(cmd.Env, key+"="+value)
-		}
 	}
 	// A throwaway cwd keeps a project's own Claude settings out of the probe.
 	cmd.Dir = os.TempDir()
 	return cmd
+}
+
+func (c *Claude) launchOverlay(ctx context.Context, home string) map[string]string {
+	if home == "" && c.DeviceEnv != nil {
+		return c.DeviceEnv(ctx)
+	}
+	return c.LaunchEnv(home)
 }
 
 func (c *Claude) run(ctx context.Context, bin, home string, stdin []byte, args ...string) ([]byte, error) {
