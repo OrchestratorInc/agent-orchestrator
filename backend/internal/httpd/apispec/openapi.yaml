@@ -20507,6 +20507,7 @@ components:
           - hermes
           - stakpak
           - open-interpreter
+          - tau
           - fake
           type: string
         approvalMode:
@@ -21293,6 +21294,7 @@ components:
           - hermes
           - stakpak
           - open-interpreter
+          - tau
           - cloudflared
           - cua-driver
           type: string
@@ -25635,6 +25637,7 @@ components:
           - hermes
           - stakpak
           - open-interpreter
+          - tau
           type: string
         issueId:
           type: string

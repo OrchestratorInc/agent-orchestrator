@@ -47,6 +47,7 @@ const (
 	HarnessHermes          AgentHarness = "hermes"
 	HarnessStakpak         AgentHarness = "stakpak"
 	HarnessOpenInterpreter AgentHarness = "open-interpreter"
+	HarnessTau             AgentHarness = "tau"
 	// HarnessFake is retained for existing test fixtures and historical session
 	// rows, but is not user-selectable.
 	HarnessFake AgentHarness = "fake"
@@ -61,7 +62,7 @@ var AllHarnesses = []AgentHarness{
 	HarnessCline, HarnessKimi, HarnessMuse, HarnessKiro, HarnessKilocode, HarnessVibe, HarnessPi,
 	HarnessKimchi, HarnessPrimeAgent, HarnessAutohand,
 	HarnessOMP, HarnessFX, HarnessUnreal, HarnessCodewhale, HarnessMiMoCode, HarnessMiniMaxCode, HarnessDeepSeek, HarnessOpenHands,
-	HarnessCommandCode, HarnessDockerAgent, HarnessMemcode, HarnessHermes, HarnessStakpak, HarnessOpenInterpreter,
+	HarnessCommandCode, HarnessDockerAgent, HarnessMemcode, HarnessHermes, HarnessStakpak, HarnessOpenInterpreter, HarnessTau,
 }
 
 // ChatOnly reports whether h has no terminal interface, so every session on it
