@@ -1644,10 +1644,12 @@ func (e *Engine) listLocked(ctx stdctx.Context, workerID domain.SessionID, selec
 		}
 		if row.ID == reviewRow.ID {
 			reviewRow = retired
-			reviewerHarness = selectedHarness
 		} else {
 			reviewRows[i] = retired
 		}
+	}
+	if reviewRow.IsArchived {
+		reviewerHarness = selectedHarness
 	}
 	active := []domain.ReviewerSurface{}
 	if reviewerRowActive(reviewRow, runs) {

@@ -725,12 +725,14 @@ func TestListRetiredFallbackReportsSelectedHarness(t *testing.T) {
 			store := &fakeStore{review: &row, runs: []domain.ReviewRun{requestedRun("run-old", domain.ReviewerCodex, status, domain.VerdictNone, 1)}}
 			eng := newEngineForTest(store, fakeSessions{rec: liveWorker(), ok: true}, prAt("sha1"), fakeProjects{}, &fakeLauncher{alive: true})
 
-			got, err := eng.List(context.Background(), "mer-1")
-			if err != nil {
-				t.Fatalf("List: %v", err)
-			}
-			if got.ReviewerHarness != domain.ReviewerClaudeCode || got.ReviewerSurface.ReviewID != "" || len(got.ActiveReviewers) != 0 {
-				t.Fatalf("List = %+v, want configured Claude without a retired surface", got)
+			for poll := 1; poll <= 2; poll++ {
+				got, err := eng.List(context.Background(), "mer-1")
+				if err != nil {
+					t.Fatalf("List poll %d: %v", poll, err)
+				}
+				if got.ReviewerHarness != domain.ReviewerClaudeCode || got.ReviewerSurface.ReviewID != "" || len(got.ActiveReviewers) != 0 {
+					t.Fatalf("List poll %d = %+v, want configured Claude without a retired surface", poll, got)
+				}
 			}
 		})
 	}
