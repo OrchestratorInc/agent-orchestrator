@@ -238,9 +238,10 @@ export function useStandaloneAgentReadiness(agentId: string, pending: boolean, e
 	const cached = queryClient.getQueryData<AgentReadiness>(agentReadinessQueryKey);
 	const expiredRetry = expired?.retry !== undefined && expired.retry === retryRequest && expired.scope === scope
 		&& expired.snapshot !== undefined && cached !== undefined
-		&& expired.snapshot.agents.filter((agent) => expired.targets.includes(agent.id)).every((agent) => {
-			const current = cached.agents.find((candidate) => candidate.id === agent.id);
-			return current?.authentication === agent.authentication && current?.installation === agent.installation;
+		&& expired.targets.every((id) => {
+			const previous = expired.snapshot?.agents.find((candidate) => candidate.id === id);
+			const current = cached.agents.find((candidate) => candidate.id === id);
+			return current?.authentication === previous?.authentication && current?.installation === previous?.installation;
 		});
 	return {
 		timedOut: enabled && (Boolean(pending && expired?.request === request) || expiredRetry),

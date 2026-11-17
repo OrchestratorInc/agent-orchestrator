@@ -171,6 +171,30 @@ describe("agent readiness query", () => {
 		} finally { vi.useRealTimers(); }
 	});
 
+	it("settles an expired Retry when its previously absent target becomes ready", async () => {
+		vi.useFakeTimers();
+		try {
+			const partial = { agents: [agentReadiness("claude-code", "Claude Code")] };
+			getMock.mockResolvedValue({ data: partial }); postMock.mockResolvedValue({ data: partial });
+			const client = new QueryClient(); client.setQueryData(agentReadinessQueryKey, partial);
+			const { result, unmount } = renderHook(() => {
+				const agent = useAgentReadinessQuery().data?.agents.find((candidate) => candidate.id === "codex");
+				return useStandaloneAgentReadiness("codex", !agent || isPendingAgent(agent), true);
+			}, { wrapper: wrapper(client) });
+			await act(async () => { await vi.advanceTimersByTimeAsync(60_000); });
+			postMock.mockImplementation(() => new Promise(() => {}));
+			act(() => result.current.retry());
+			await act(async () => { await vi.advanceTimersByTimeAsync(60_000); });
+			expect(result.current.timedOut).toBe(true);
+			await act(async () => {
+				client.setQueryData(agentReadinessQueryKey, { agents: [agentReadiness("codex", "Codex")] });
+				await vi.advanceTimersByTimeAsync(0);
+			});
+			expect(result.current.timedOut).toBe(false);
+			unmount();
+		} finally { vi.useRealTimers(); }
+	});
+
 	it.each([false, true])("finishes Retry despite an older cached rejection (transient read failure: %s)", async (readFails) => {
 		vi.useFakeTimers();
 		try {
