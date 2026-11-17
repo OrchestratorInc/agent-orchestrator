@@ -80,12 +80,11 @@ function formatUnit(value: number): string {
 /**
  * A session branch as people read it: the topic after the `ao/<session>/`
  * namespace, which only ties the PR to its session. A bare `root` branch has
- * no topic, so the session's own name stands in for it, without the random
- * token AO appends to generated namespaces. Other branches are returned
- * unchanged.
+ * no topic, so the session's own name stands in for it. Other branches are
+ * returned unchanged.
  */
 export function branchTopic(name: string): string {
 	const match = /^ao\/([^/]+)\/(.+)$/.exec(name);
 	if (!match) return name;
-	return match[2] === "root" ? match[1].replace(/-[a-z2-7]{10}$/, "") : match[2];
+	return match[2] === "root" ? match[1] : match[2];
 }

@@ -26,13 +26,10 @@ describe("branchTopic", () => {
 	it("drops the session namespace and keeps the topic", () => {
 		expect(branchTopic("ao/agent-orchestrator-132/archived-sessions-label")).toBe("archived-sessions-label");
 		expect(branchTopic("ao/warm-worktree/dev-warm/cache")).toBe("dev-warm/cache");
-		expect(branchTopic("ao/fix-widget-k7m2q4b6px/dev-warm-cache")).toBe("dev-warm-cache");
 	});
 
 	it("names a root branch after its session", () => {
 		expect(branchTopic("ao/warm-worktree/root")).toBe("warm-worktree");
-		expect(branchTopic("ao/agent-orchestrator-34-k7m2q4b6px/root")).toBe("agent-orchestrator-34");
-		expect(branchTopic("ao/fix-widget-a3d6r2k7mp/root")).toBe("fix-widget");
 	});
 
 	it("leaves other branches alone", () => {

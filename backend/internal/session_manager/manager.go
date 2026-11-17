@@ -4,7 +4,6 @@ package sessionmanager
 
 import (
 	"context"
-	"crypto/rand"
 	"errors"
 	"fmt"
 	"io/fs"
@@ -6156,10 +6155,6 @@ func defaultSessionBranch(id domain.SessionID, kind domain.SessionKind, prefix, 
 func DefaultSpawnBranch(id domain.SessionID, kind domain.SessionKind, prefix string, projectKind domain.ProjectKind, dataDir string) string {
 	if projectKind == domain.ProjectKindScratch {
 		return ""
-	}
-	// Local session IDs can repeat across installations.
-	if kind != domain.KindOrchestrator {
-		id = domain.SessionID(string(id) + "-" + strings.ToLower(rand.Text()[:10]))
 	}
 	branchNamespace := generatedBranchNamespace(dataDir)
 	if projectKind == domain.ProjectKindWorkspace {
