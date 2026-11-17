@@ -5,11 +5,13 @@ import (
 	"context"
 	"database/sql"
 	"encoding/json"
+	"fmt"
 	"os"
 	"path/filepath"
 	"runtime"
 	"slices"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
@@ -123,8 +125,12 @@ func readCursorEditorChat(ctx context.Context, id string) (chat cursorEditorChat
 	case len(data.Conversation) > 0:
 		ordered = data.Conversation
 	default:
-		ordered = listed
-		slices.SortStableFunc(ordered, func(a, b cursorBubble) int {
+		// Every message either format holds, in time order.
+		for bubbleID, bubble := range bubbles {
+			bubble.BubbleID = bubbleID
+			ordered = append(ordered, bubble)
+		}
+		slices.SortFunc(ordered, func(a, b cursorBubble) int {
 			return cmp.Or(cursorBubbleTime(a.CreatedAt).Compare(cursorBubbleTime(b.CreatedAt)), strings.Compare(a.BubbleID, b.BubbleID))
 		})
 	}
@@ -187,21 +193,47 @@ func cursorEditorBubbles(ctx context.Context, db *sql.DB, id string) (listed []c
 	return listed, shortened, rows.Err()
 }
 
-// cursorEditorFolder is the folder Cursor's chat list files the chat under.
-// The list holds every chat, so it is read only when a folder is in doubt.
-func cursorEditorFolder(ctx context.Context, id string) string {
+// cursorEditorFolders maps each chat to the folder Cursor's chat list files
+// it under. The list holds every chat, so it is read once per version of the
+// database rather than once per chat.
+func cursorEditorFolders(ctx context.Context) map[string]string {
 	path := cursorEditorState()
 	if path == "" {
-		return ""
+		return nil
 	}
+	key := path
+	for _, file := range []string{path, path + "-wal"} {
+		if info, err := os.Stat(file); err == nil {
+			key += fmt.Sprintf("\x00%d\x00%d", info.Size(), info.ModTime().UnixNano())
+		}
+	}
+	cursorFoldersCache.Lock()
+	defer cursorFoldersCache.Unlock()
+	if cursorFoldersCache.key == key {
+		return cursorFoldersCache.folders
+	}
+	folders := readCursorEditorFolders(ctx, path)
+	if ctx.Err() == nil {
+		cursorFoldersCache.key, cursorFoldersCache.folders = key, folders
+	}
+	return folders
+}
+
+var cursorFoldersCache struct {
+	sync.Mutex
+	key     string
+	folders map[string]string
+}
+
+func readCursorEditorFolders(ctx context.Context, path string) map[string]string {
 	db, err := openReadOnlySQLite(path)
 	if err != nil || db == nil {
-		return ""
+		return nil
 	}
 	defer func() { _ = db.Close() }()
 	var body []byte
 	if err := db.QueryRowContext(ctx, `SELECT CASE WHEN length(value) <= ? THEN value END FROM ItemTable WHERE key = 'composer.composerHeaders'`, maxCursorComposerBytes).Scan(&body); err != nil || body == nil {
-		return ""
+		return nil
 	}
 	type header struct {
 		ComposerID          string `json:"composerId"`
@@ -218,13 +250,14 @@ func cursorEditorFolder(ctx context.Context, id string) string {
 	if json.Unmarshal(body, &headers) != nil {
 		_ = json.Unmarshal(body, &headers.AllComposers)
 	}
+	folders := make(map[string]string, len(headers.AllComposers))
 	for _, h := range headers.AllComposers {
 		uri := h.WorkspaceIdentifier.URI
-		if h.ComposerID == id && (uri.Scheme == "" || uri.Scheme == "file") && filepath.IsAbs(uri.FSPath) {
-			return uri.FSPath
+		if (uri.Scheme == "" || uri.Scheme == "file") && filepath.IsAbs(uri.FSPath) {
+			folders[h.ComposerID] = uri.FSPath
 		}
 	}
-	return ""
+	return folders
 }
 
 // cursorBubbleTime reads a message time, written as Unix milliseconds or RFC 3339.

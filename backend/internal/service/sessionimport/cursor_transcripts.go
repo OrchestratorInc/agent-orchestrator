@@ -120,11 +120,12 @@ func cursorProjectFolder(root, path string) (string, bool) {
 }
 
 // cursorWorkspace recovers the folder a Cursor project directory was named
-// after: the path Cursor recorded when the folder was trusted, else the one
-// registered AO project with that name, else the folder the editor's chat
-// list files the chat under, else, when no project has the name, the folder
-// it spells when every "-" stands for a separator. Each candidate must have
-// the directory's name, as Cursor derives one from the other.
+// after: the path Cursor recorded when the folder was trusted, else the folder
+// the editor's chat list files the chat under, else the one registered AO
+// project with that name, else, when no project has it, the folder the name
+// spells when every "-" stands for a separator. Many folders share a name, so
+// a recorded path comes before a name match, and each must have the
+// directory's name, as Cursor derives one from the other.
 func cursorWorkspace(root, folder string, projects []string, recorded func() string) string {
 	if dir, err := os.OpenRoot(filepath.Join(root, "projects", folder)); err == nil {
 		var trusted struct {
@@ -137,6 +138,13 @@ func cursorWorkspace(root, folder string, projects []string, recorded func() str
 		_ = dir.Close()
 		if filepath.IsAbs(trusted.WorkspacePath) && cursorFolderName(trusted.WorkspacePath) == folder {
 			return trusted.WorkspacePath
+		}
+	}
+	if recorded != nil {
+		if path := recorded(); filepath.IsAbs(path) && cursorFolderName(path) == folder {
+			if info, err := os.Stat(path); err == nil && info.IsDir() {
+				return path
+			}
 		}
 	}
 	match, ambiguous := "", false
@@ -152,13 +160,6 @@ func cursorWorkspace(root, folder string, projects []string, recorded func() str
 	}
 	if match != "" && !ambiguous {
 		return match
-	}
-	if recorded != nil {
-		if path := recorded(); filepath.IsAbs(path) && cursorFolderName(path) == folder {
-			if info, err := os.Stat(path); err == nil && info.IsDir() {
-				return path
-			}
-		}
 	}
 	// Two projects with the name rule out a guess too.
 	if ambiguous || runtime.GOOS == "windows" {
@@ -182,7 +183,7 @@ func readCursorTranscriptFile(ctx context.Context, root string, projects []strin
 	if !ok || !nativeIDPattern.MatchString(t.nativeID) {
 		return t, errNoReadableConversation
 	}
-	recorded := func() string { return cursorEditorFolder(ctx, t.nativeID) }
+	recorded := func() string { return cursorEditorFolders(ctx)[t.nativeID] }
 	// A chat whose folder cannot be recovered has nowhere to continue.
 	if t.cwd = cursorWorkspace(t.root, folder, projects, recorded); t.cwd == "" {
 		return t, errNoReadableConversation
@@ -277,20 +278,8 @@ func readCursorTranscriptFile(ctx context.Context, root string, projects []strin
 		t.messages = append(t.messages, item.Message)
 	}
 	editor, inEditor := readCursorEditorChat(ctx, t.nativeID)
-	// The editor's own copy is the fuller one: the transcript leaves out what
-	// Cursor redacted, and dates only the prompts. A copy with fewer prompts
-	// is behind the transcript, which then stands.
-	prompts := func(messages []Message) int {
-		n := 0
-		for _, m := range messages {
-			if m.Role == domain.MessageRoleUser {
-				n++
-			}
-		}
-		return n
-	}
-	if inEditor && prompts(editor.messages) > 0 && prompts(editor.messages) >= prompts(t.messages) {
-		t.messages, t.shortened = editor.messages, editor.shortened
+	if inEditor {
+		t.messages = mergeCursorEditor(t.messages, editor.messages)
 		for _, m := range t.messages {
 			if m.At.After(latest) {
 				latest = m.At
@@ -312,6 +301,83 @@ func readCursorTranscriptFile(ctx context.Context, root string, projects []strin
 	}
 	err = finishTranscript(&t)
 	return t, err
+}
+
+// mergeCursorEditor fills the transcript from the editor's own copy, turn by
+// turn. Each transcript prompt is matched, in order, with the same prompt in
+// the editor's copy; a matched turn takes the editor's times, and the
+// editor's reply where the transcript's hides text as [REDACTED]. The editor's
+// copy can lag the transcript, so a turn or reply it has not recorded, or a
+// reply shorter than what the transcript shows, keeps the transcript's; the
+// transcript can lag it too, so the editor's turns after the transcript's
+// last prompt are added.
+func mergeCursorEditor(messages, editor []Message) []Message {
+	type turn struct {
+		prompt Message
+		reply  *Message
+	}
+	var turns []turn
+	for i, m := range editor {
+		switch {
+		case m.Role == domain.MessageRoleUser:
+			turns = append(turns, turn{prompt: m})
+		case len(turns) > 0 && turns[len(turns)-1].reply == nil:
+			turns[len(turns)-1].reply = &editor[i]
+		}
+	}
+	same := func(a, b string) bool {
+		return strings.Join(strings.Fields(a), " ") == strings.Join(strings.Fields(b), " ")
+	}
+	out := make([]Message, 0, len(messages))
+	next := 0
+	var matched *turn
+	replied := false
+	// A matched turn whose reply only the editor recorded keeps that reply.
+	closeTurn := func() {
+		if matched != nil && !replied && matched.reply != nil {
+			out = append(out, *matched.reply)
+		}
+	}
+	for _, m := range messages {
+		switch m.Role {
+		case domain.MessageRoleUser:
+			closeTurn()
+			matched, replied = nil, false
+			for k := next; k < len(turns); k++ {
+				if same(turns[k].prompt.Text, m.Text) {
+					matched, next = &turns[k], k+1
+					break
+				}
+			}
+			if matched != nil && !matched.prompt.At.IsZero() {
+				m.At = matched.prompt.At
+			}
+		case domain.MessageRoleAssistant:
+			replied = true
+			if matched != nil && matched.reply != nil {
+				reply := matched.reply
+				if strings.Contains(m.Text, "[REDACTED]") && !strings.Contains(reply.Text, "[REDACTED]") && len(reply.Text) >= len(strings.ReplaceAll(m.Text, "[REDACTED]", "")) {
+					m.Text = reply.Text
+				}
+				if !reply.At.IsZero() {
+					m.At = reply.At
+				}
+			}
+		}
+		out = append(out, m)
+	}
+	closeTurn()
+	// Turns after the transcript's last prompt, when that prompt is matched,
+	// are ones the transcript has not recorded yet.
+	if matched != nil {
+		for _, rest := range turns[next:] {
+			out = append(out, rest.prompt)
+			if rest.reply != nil {
+				out = append(out, *rest.reply)
+			}
+		}
+	}
+	return out
 }
 
 // cursorText is a record's visible text. Cursor appends the model's thinking
@@ -428,9 +494,18 @@ func utcOffset(zone string) (int, bool) {
 func writeCursorTranscript(ctx context.Context, t transcript) (transcript, error) {
 	root := homeClaudeRoot()
 	// A chat imported before, whose session has since ended, continues from
-	// the transcript written then, which holds the turns added since.
+	// the transcript written then; its history is that transcript's, which
+	// holds the turns added since.
 	if path := claudeTranscripts(root)[t.nativeID]; path != "" {
-		t.harness, t.root, t.path, t.paths = domain.HarnessClaudeCode, root, path, []string{path}
+		held, err := readClaudeTranscript(ctx, root, path)
+		if err != nil {
+			return t, err
+		}
+		t.harness, t.root, t.path, t.paths = domain.HarnessClaudeCode, held.root, held.path, held.paths
+		t.messages, t.shortened = held.messages, held.shortened
+		if held.last.After(t.last) {
+			t.last = held.last
+		}
 		return t, nil
 	}
 	// The Claude API takes alternating turns that open with the user.

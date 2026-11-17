@@ -195,11 +195,20 @@ func TestCursorTranscriptWithoutQueryTagsKeepsEveryPrompt(t *testing.T) {
 		t.Fatalf("read back = %+v, %v", back.messages, err)
 	}
 	// Importing it again, once its session has ended, continues the transcript written the first time.
-	if err := os.WriteFile(written.path, append(mustRead(t, written.path), []byte(`{"type":"user","sessionId":"22222222-2222-4222-8222-222222222222","message":{"role":"user","content":"continued in AO"}}`+"\n")...), 0o600); err != nil {
+	lines := strings.Split(strings.TrimSpace(string(mustRead(t, written.path))), "\n")
+	var last claudeLine
+	if err := json.Unmarshal([]byte(lines[len(lines)-1]), &last); err != nil {
+		t.Fatal(err)
+	}
+	continued, err := json.Marshal(claudeLine{ParentUUID: &last.UUID, Type: "user", SessionID: last.SessionID, CWD: last.CWD, UUID: "33333333-3333-4333-8333-333333333333", Timestamp: claudeTimestamp(time.Now()), Message: json.RawMessage(`{"role":"user","content":"continued in AO"}`)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(written.path, append(mustRead(t, written.path), append(continued, '\n')...), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	again, err := writeCursorTranscript(context.Background(), got)
-	if err != nil || again.path != written.path || !strings.Contains(string(mustRead(t, again.path)), "continued in AO") {
+	if err != nil || again.path != written.path || again.messages[len(again.messages)-1].Text != "continued in AO" {
 		t.Fatalf("second import = %+v, %v", again, err)
 	}
 }
@@ -246,6 +255,10 @@ func TestCursorWorkspaceRecoversTheFolder(t *testing.T) {
 	}
 	if got := cursorWorkspace(cursor, cursorFolderName(a), []string{a, b}, func() string { return b }); got != b {
 		t.Fatalf("recorded = %q, want %q", got, b)
+	}
+	// A recorded path comes before a project that merely shares the name.
+	if got := cursorWorkspace(cursor, cursorFolderName(b), []string{a}, func() string { return b }); got != b {
+		t.Fatalf("recorded over a name match = %q, want %q", got, b)
 	}
 	if got := cursorWorkspace(cursor, "Users-nobody-gone", nil, nil); got != "" {
 		t.Fatalf("missing = %q, want none", got)

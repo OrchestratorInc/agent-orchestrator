@@ -109,12 +109,13 @@ func TestCursorEditorDatabaseGivesTheFullChat(t *testing.T) {
 	if got.cwd != project || got.title != "Real estate options" || !got.messages[0].At.Equal(opened) || !got.messages[3].At.Equal(opened.Add(48*time.Hour)) {
 		t.Fatalf("cwd = %q, title = %q, times = %v, %v", got.cwd, got.title, got.messages[0].At, got.messages[3].At)
 	}
-	// A database copy that is behind the transcript leaves the transcript standing.
+	// A database copy that is behind the transcript does not cut it short.
 	ahead := writeCursorEditorChat(t, cursor, project, id, `{"role":"user","message":{"content":[{"type":"text","text":"<user_query>analyze all the real estate project options i have</user_query>"}]}}
 {"role":"user","message":{"content":[{"type":"text","text":"<user_query>which one is cheapest?</user_query>"}]}}
 {"role":"user","message":{"content":[{"type":"text","text":"<user_query>and the largest?</user_query>"}]}}
 `, true, time.Now())
-	if behind, err := readCursorTranscriptFile(ctx, cursor, nil, ahead); err != nil || len(behind.messages) != 3 || behind.messages[2].Text != "and the largest?" {
+	// It keeps every prompt it holds, and gains the replies only the database recorded.
+	if behind, err := readCursorTranscriptFile(ctx, cursor, nil, ahead); err != nil || len(behind.messages) != 5 || behind.messages[3].Text != "Option B, at 65 lakh." || behind.messages[4].Text != "and the largest?" {
 		t.Fatalf("transcript ahead of the database = %+v, %v", behind.messages, err)
 	}
 	// Cursor's database is only read.
@@ -143,5 +144,67 @@ func TestCursorEditorDatabaseOrdersMessagesWithoutHeaders(t *testing.T) {
 	}
 	if _, found := readCursorEditorChat(context.Background(), "11111111-1111-4111-8111-111111111111"); found {
 		t.Fatal("found a chat the database does not hold")
+	}
+}
+
+func TestCursorEditorCopyOnlyFillsTheTranscript(t *testing.T) {
+	at := time.Date(2026, 6, 13, 3, 35, 0, 0, time.UTC)
+	msg := func(role domain.MessageRole, text string, when time.Time) Message {
+		return Message{Role: role, Text: text, At: when}
+	}
+	transcript := []Message{
+		msg(domain.MessageRoleUser, "q1", time.Time{}),
+		msg(domain.MessageRoleAssistant, "key is [REDACTED]", time.Time{}),
+		msg(domain.MessageRoleUser, "q2", time.Time{}),
+		msg(domain.MessageRoleAssistant, "a long answer about [REDACTED] and more", time.Time{}),
+		msg(domain.MessageRoleUser, "only in the transcript", time.Time{}),
+		msg(domain.MessageRoleAssistant, "kept", time.Time{}),
+		msg(domain.MessageRoleUser, "q3", time.Time{}),
+		msg(domain.MessageRoleAssistant, "reply the editor has not recorded", time.Time{}),
+	}
+	editor := []Message{
+		msg(domain.MessageRoleUser, "q1", at),
+		msg(domain.MessageRoleAssistant, "key is sk-123", at.Add(time.Minute)),
+		msg(domain.MessageRoleUser, " q2 ", at.Add(time.Hour)),
+		msg(domain.MessageRoleAssistant, "a long", at.Add(time.Hour)), // still being written
+		msg(domain.MessageRoleUser, "q3", at.Add(2*time.Hour)),
+	}
+	var got []string
+	for _, m := range mergeCursorEditor(transcript, editor) {
+		got = append(got, string(m.Role)+": "+m.Text)
+	}
+	want := []string{
+		"user: q1", "assistant: key is sk-123",
+		"user: q2", "assistant: a long answer about [REDACTED] and more",
+		"user: only in the transcript", "assistant: kept",
+		"user: q3", "assistant: reply the editor has not recorded",
+	}
+	if !slices.Equal(got, want) {
+		t.Fatalf("merged = %q, want %q", got, want)
+	}
+	merged := mergeCursorEditor(transcript, editor)
+	if !merged[0].At.Equal(at) || !merged[1].At.Equal(at.Add(time.Minute)) || !merged[4].At.IsZero() {
+		t.Fatalf("times = %v %v %v", merged[0].At, merged[1].At, merged[4].At)
+	}
+	// Turns the transcript has not recorded yet follow its last, matched, prompt.
+	ahead := append(slices.Clone(editor), msg(domain.MessageRoleAssistant, "a3", at), msg(domain.MessageRoleUser, "q4", at))
+	if merged := mergeCursorEditor(transcript[:7], ahead); len(merged) != 9 || merged[7].Text != "a3" || merged[8].Text != "q4" {
+		t.Fatalf("editor ahead = %+v", merged)
+	}
+}
+
+// An older chat can keep its messages only in conversationMap, with no headers.
+func TestCursorEditorDatabaseReadsAConversationMap(t *testing.T) {
+	const id = "45fb2adb-9cc1-4437-b94a-de92882f059b"
+	at := time.Date(2026, 3, 1, 9, 0, 0, 0, time.UTC)
+	newCursorEditorState(t, nil, map[string]any{
+		"composerData:" + id: map[string]any{"_v": 2, "conversationMap": map[string]any{
+			"m2": map[string]any{"type": 2, "text": "answer", "createdAt": at.Add(time.Minute).UnixMilli()},
+			"m1": map[string]any{"type": 1, "text": "question", "createdAt": at.UnixMilli()},
+		}},
+	})
+	chat, found := readCursorEditorChat(context.Background(), id)
+	if !found || len(chat.messages) != 2 || chat.messages[0].Text != "question" || chat.messages[1].Text != "answer" {
+		t.Fatalf("chat = %+v, found = %v", chat, found)
 	}
 }
