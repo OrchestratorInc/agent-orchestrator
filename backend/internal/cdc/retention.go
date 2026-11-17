@@ -118,7 +118,7 @@ func (j *RetentionJanitor) RunOnce(ctx context.Context) error {
 	before := j.clock().UTC().Add(-j.retention)
 	var total int64
 	ageDone, sizeDone := false, false
-	for i := 0; i < j.maxBatches && !(ageDone && sizeDone); i++ {
+	for i := 0; i < j.maxBatches && (!ageDone || !sizeDone); i++ {
 		if !ageDone {
 			n, err := j.store.PruneChangeLogBefore(ctx, before, j.batch)
 			if err != nil {
