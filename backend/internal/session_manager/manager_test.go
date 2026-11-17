@@ -4256,9 +4256,18 @@ func TestKill_ReviewerTeardownFailureLeavesSessionActive(t *testing.T) {
 // AFTER.
 type fakeShellTerminalCloser struct {
 	began     []domain.SessionID
+	suspended []domain.SessionID
 	ended     []domain.SessionID
 	err       error
 	sharedLog *[]string
+}
+
+func (f *fakeShellTerminalCloser) SuspendSessionShells(_ context.Context, id domain.SessionID) (func(), error) {
+	f.suspended = append(f.suspended, id)
+	if f.err != nil {
+		return nil, f.err
+	}
+	return func() { f.ended = append(f.ended, id) }, nil
 }
 
 func (f *fakeShellTerminalCloser) BeginSessionTeardown(_ context.Context, id domain.SessionID) (func(), error) {
@@ -8227,6 +8236,95 @@ func TestSpawn_TUICodexEffortIsResolvedAndPersisted(t *testing.T) {
 	}
 	if stored.Metadata.Effort != "high" {
 		t.Fatalf("persisted effort = %q, want high (explicit override must be durable for a TUI rebuild)", stored.Metadata.Effort)
+	}
+}
+
+// TestSpawn_TUIPiInheritedEffortIsValidated asserts a Pi or Prime Agent TUI
+// spawn validates an effort inherited from role settings: a level the model
+// advertises reaches the adapter, and a stale one is cleared before --thinking.
+func TestSpawn_TUIPiInheritedEffortIsValidated(t *testing.T) {
+	for _, harness := range []domain.AgentHarness{domain.HarnessPi, domain.HarnessPrimeAgent} {
+		for inherited, want := range map[string]string{"high": "high", "max": ""} {
+			m, st, _, _ := newManager()
+			agent := &recordingAgent{}
+			m.agents = singleAgent{agent: agent}
+			m.SetModelCatalog(tuningCatalog{catalog: ports.AgentModelCatalog{Models: []ports.AgentModelInfo{
+				{ID: "openai/gpt-6.1-sol", IsDefault: true, Efforts: []string{"low", "high"}},
+			}}})
+			project := st.projects["mer"]
+			project.Config.Worker = domain.RoleOverride{AgentConfig: domain.AgentConfig{Model: "openai/gpt-6.1-sol", Effort: inherited}}
+			st.projects["mer"] = project
+
+			if _, _, _, err := m.Spawn(ctx, ports.SpawnConfig{
+				ProjectID: "mer", Kind: domain.KindWorker, Harness: harness,
+				RequestedMode: domain.SessionModeTUI, Prompt: "do the work",
+			}); err != nil {
+				t.Fatalf("harness %q inherited %q spawn: %v", harness, inherited, err)
+			}
+			if agent.lastConfig.Effort != want {
+				t.Fatalf("harness %q inherited %q launch effort = %q, want %q", harness, inherited, agent.lastConfig.Effort, want)
+			}
+		}
+	}
+}
+
+func TestSpawn_TUIPiInheritedEffortWithoutModel(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	for _, harness := range []domain.AgentHarness{domain.HarnessPi, domain.HarnessPrimeAgent} {
+		for _, source := range []string{"project", "role"} {
+			for _, mode := range []domain.SessionMode{"", domain.SessionModeTUI} {
+				for _, tc := range []struct {
+					name    string
+					catalog *tuningCatalog
+					want    string
+				}{
+					{name: "no catalog", want: "high"},
+					{name: "no saved models", catalog: &tuningCatalog{}, want: "high"},
+					{name: "no default", catalog: &tuningCatalog{catalog: ports.AgentModelCatalog{Models: []ports.AgentModelInfo{
+						{ID: "fixture/other", Efforts: []string{"low"}},
+					}}}, want: "high"},
+					{name: "catalog read error", catalog: &tuningCatalog{err: errors.New("saved catalog unavailable")}, want: "high"},
+					{name: "default supports effort", catalog: &tuningCatalog{catalog: ports.AgentModelCatalog{Models: []ports.AgentModelInfo{
+						{ID: "fixture/default", IsDefault: true, Efforts: []string{"low", "high"}},
+					}}}, want: "high"},
+					{name: "default rejects effort", catalog: &tuningCatalog{catalog: ports.AgentModelCatalog{Models: []ports.AgentModelInfo{
+						{ID: "fixture/default", IsDefault: true, Efforts: []string{"low"}},
+					}}}},
+				} {
+					t.Run(fmt.Sprintf("%s/%s/%s/%s", harness, source, mode, tc.name), func(t *testing.T) {
+						m, st, rt, _ := newManager()
+						m.dataDir = t.TempDir()
+						agent := &recordingAgent{}
+						m.agents = singleAgent{agent: agent}
+						if tc.catalog != nil {
+							m.SetModelCatalog(tc.catalog)
+						}
+						project := st.projects["mer"]
+						project.Config = domain.ProjectConfig{Worker: domain.RoleOverride{Harness: harness}}
+						if source == "project" {
+							project.Config.AgentConfig.Effort = "high"
+						} else {
+							project.Config.Worker.AgentConfig.Effort = "high"
+						}
+						st.projects["mer"] = project
+
+						rec, _, _, err := m.Spawn(t.Context(), ports.SpawnConfig{
+							ProjectID: "mer", Kind: domain.KindWorker, Harness: harness,
+							RequestedMode: mode, Prompt: "do the work",
+						})
+						if err != nil {
+							t.Fatal(err)
+						}
+						if agent.lastConfig.Effort != tc.want || agent.launchCalls != 1 || rt.created != 1 {
+							t.Fatalf("launch effort=%q, launches=%d, runtimes=%d; want %q, 1, 1", agent.lastConfig.Effort, agent.launchCalls, rt.created, tc.want)
+						}
+						if got := st.sessions[rec.ID].Metadata.Effort; got != tc.want {
+							t.Fatalf("saved effort=%q, want %q", got, tc.want)
+						}
+					})
+				}
+			}
+		}
 	}
 }
 

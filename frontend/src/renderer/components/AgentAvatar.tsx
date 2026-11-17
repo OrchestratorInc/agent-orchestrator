@@ -57,6 +57,8 @@ import mimoCodeLogo from "../assets/agents/mimo-code.svg";
 import minimaxCodeLogo from "../assets/agents/minimax-code.svg";
 import memcodeLogo from "../assets/agents/memcode.png";
 import ompLogo from "../assets/agents/omp.svg";
+import openInterpreterDarkLogo from "../assets/agents/open-interpreter-dark.svg";
+import openInterpreterLogo from "../assets/agents/open-interpreter.svg";
 import openhandsDarkLogo from "../assets/agents/openhands-dark.svg";
 import openhandsLightLogo from "../assets/agents/openhands-light.svg";
 import opencodeDarkLogo from "../assets/agents/opencode-dark.svg";
@@ -105,6 +107,7 @@ const LOGOS: AgentLogoSources = {
 	stakpak: stakpakLogo,
 	omp: ompLogo,
 	openhands: { light: openhandsLightLogo, dark: openhandsDarkLogo },
+	"open-interpreter": { light: openInterpreterLogo, dark: openInterpreterDarkLogo },
 	kiro: kiroLogo,
 	kilocode: { light: kilocodeLightLogo, dark: kilocodeDarkLogo },
 	vibe: vibeLogo,

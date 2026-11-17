@@ -89,8 +89,9 @@ func normalizeMCPServers(configs []ports.ChatMCPServerConfig, caps acpsdk.McpCap
 			if strings.TrimSpace(config.Command) == "" {
 				return nil, fmt.Errorf("ACP MCP server %q requires a command", name)
 			}
+			// Claude Code skips a server whose args is null rather than [].
 			servers = append(servers, acpsdk.McpServer{Stdio: &acpsdk.McpServerStdio{
-				Name: name, Command: config.Command, Args: config.Args,
+				Name: name, Command: config.Command, Args: append([]string{}, config.Args...),
 				Env: environmentVariables(config.Env),
 			}})
 		case "http":
