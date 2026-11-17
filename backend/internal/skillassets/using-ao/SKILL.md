@@ -47,7 +47,7 @@ trigger: "Using the `ao` CLI, importing existing agent sessions, or managing Orc
 - Session and project ids are shown by `ao session ls` and `ao project ls`.
 - To refer to a session in Orchestrator Chat or the Orchestrator terminal, use the canonical in-app
   link `ao://sessions/{project-id}/{session-id}`. Get it from
-  `ao session link <session-id>` (or `link` in `ao session get --json`) instead
+  `ao session link <session-id>` (or `link` in `ao session get <session-id> --json`) instead
   of building it: standalone sessions have no project and use `__standalone__`
   as the project segment. Read [commands/session.md](commands/session.md) for
   identity, encoding, and safety rules.

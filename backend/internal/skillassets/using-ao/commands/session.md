@@ -13,7 +13,7 @@ ao://sessions/{project-id}/{session-id}
 ```
 
 Do not build it by hand. `ao session link <session-id>` prints it, and
-`ao session get --json` and `ao session ls --json` include it as `link`:
+`ao session get <session-id> --json` and `ao session ls --json` include it as `link`:
 
 ```bash
 ao session link "$AO_SESSION_ID"   # this session
