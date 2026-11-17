@@ -1,14 +1,15 @@
 import { useEffect, useRef } from "react";
 import { matchesAppShortcut, shortcutYieldsToTerminal, type AppShortcutEvent, type AppShortcutId } from "../../shared/shortcuts";
 import { aoBridge } from "../lib/bridge";
+import { queryShown } from "../lib/dom-selectors";
 import { isMacPlatform } from "../lib/platform";
 import { useKeybindingsStore } from "../stores/keybindings-store";
 import { useUiStore } from "../stores/ui-store";
 
-/** Focuses the first element matching `selector` once the next render has painted. */
+/** Focuses the first shown element matching `selector` once the next render has painted. */
 export function focusAfterPaint(selector: string): void {
 	window.requestAnimationFrame(() => {
-		window.requestAnimationFrame(() => document.querySelector<HTMLElement>(selector)?.focus());
+		window.requestAnimationFrame(() => queryShown<HTMLElement>(selector)?.focus());
 	});
 }
 
