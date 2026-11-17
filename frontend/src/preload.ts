@@ -137,6 +137,8 @@ export type BrowserBoundsApplied = BrowserBoundsInput;
 export type BrowserNavigateInput = {
 	viewId: string;
 	url: string;
+	/** The session's preview target, not an address the person typed: it loads in the agent's tab. */
+	preview?: boolean;
 };
 
 export type ImportFolderMode = "project" | "workspace";

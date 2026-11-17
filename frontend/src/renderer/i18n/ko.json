@@ -395,6 +395,7 @@
 	"home.starUs": "별표하기",
 	"browser.agentAction": "에이전트가 {{verb}}",
 	"browser.agentUsing": "에이전트가 브라우저 사용 중",
+	"browser.agentTab": "에이전트 탭: {{title}}",
 	"browser.find.close": "찾기 닫기",
 	"browser.find.matchCount": "{{total}}개 중 {{active}}개",
 	"browser.find.next": "다음 일치 항목",

@@ -39,6 +39,7 @@ import { CSS } from "@dnd-kit/utilities";
 import {
 	ArrowLeft,
 	ArrowRight,
+	Bot,
 	Bug,
 	Camera,
 	Check,
@@ -1855,6 +1856,8 @@ const SortableBrowserTopTab = memo(function SortableBrowserTopTab({
 	const { attributes, listeners, setNodeRef, transform, transition, isDragging } = useSortable({ id: tab.id });
 	const label = browserTabLabel(tab.title, tab.url);
 	const closeLabel = t("browser.closeTab", { title: label.title });
+	// A tab the agent works in: it keeps working there whichever tab is in front.
+	const agentTab = tab.owner === "agent";
 	return (
 		<div
 			className={cn(
@@ -1863,10 +1866,11 @@ const SortableBrowserTopTab = memo(function SortableBrowserTopTab({
 				isDragging && "browser-panel__tab--drag-placeholder",
 			)}
 			data-browser-tab-id={tab.id}
+			data-browser-tab-owner={tab.owner}
 			ref={setNodeRef}
 			style={{ transform: CSS.Transform.toString(transform), transition }}
 		>
-			<BrowserControlTooltip label={label.title}>
+			<BrowserControlTooltip label={agentTab ? t("browser.agentTab", { title: label.title }) : label.title}>
 				<Pressable
 					{...attributes}
 					{...listeners}
@@ -1877,7 +1881,9 @@ const SortableBrowserTopTab = memo(function SortableBrowserTopTab({
 					tabIndex={selected ? 0 : -1}
 					type="button"
 				>
-					{tab.favicon ? (
+					{agentTab ? (
+						<Bot aria-hidden="true" className="browser-panel__tab-icon" />
+					) : tab.favicon ? (
 						<img alt="" className="browser-panel__tab-icon object-cover" src={tab.favicon} />
 					) : (
 						<BrowserIcon aria-hidden="true" className="browser-panel__tab-icon" />

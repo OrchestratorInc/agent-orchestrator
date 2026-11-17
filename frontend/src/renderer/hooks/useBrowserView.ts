@@ -1037,7 +1037,7 @@ export function useBrowserView({
 				return;
 			}
 			const activeTab = tabs.find((tab) => tab.active);
-			if (activeTab && !activeTab.remote && isBlankTabUrl(activeTab.url)) {
+			if (activeTab && !activeTab.remote && activeTab.owner !== "agent" && isBlankTabUrl(activeTab.url)) {
 				const state = await window.ao!.browser.navigate({ viewId: id, url });
 				if (viewIdRef.current === state.viewId) setNavState(state);
 				return;
@@ -1115,7 +1115,7 @@ export function useBrowserView({
 	}, [navState.url, setAnnotationMode]);
 
 	const navigate = useCallback(
-		(url: string) => {
+		(url: string, preview?: boolean) => {
 			if (!hasNativeBrowser) {
 				const normalized = url.trim();
 				setNavState((current) => ({
@@ -1126,18 +1126,20 @@ export function useBrowserView({
 				}));
 				return Promise.resolve();
 			}
-			return withView((id) => window.ao!.browser.navigate({ viewId: id, url }));
+			return withView((id) => window.ao!.browser.navigate({ viewId: id, url, ...(preview ? { preview } : {}) }));
 		},
 		[hasNativeBrowser, withView],
 	);
 
-	// A preview never lands in an agent tab: it goes to the person's preview
-	// tab (one on its origin or another preview's), else to a new tab.
+	// A preview loads in the tab the agent works in, whichever tab is in front
+	// (the main process picks it). It never lands in a tab showing the agent's
+	// own browser: with one in front it goes to the person's preview tab (one
+	// on its origin or another preview's), else to a new tab.
 	const showPreview = useCallback(
 		async (url: string) => {
 			const id = viewIdRef.current;
 			const tabs = hasNativeBrowser && id ? (await window.ao!.browser.getTabs(id).catch(() => null))?.tabs : undefined;
-			if (!tabs?.find((tab) => tab.active)?.remote) return navigate(url);
+			if (!tabs?.find((tab) => tab.active)?.remote) return navigate(url, true);
 			const preview = /^https:\/\/ao-preview-[0-9a-f]{32}\.localhost(?::\d+)?\//;
 			const own = tabs.find((tab) => !tab.remote && (sameBrowserOrigin(tab.url, url) || preview.test(tab.url)));
 			if (!own) return openTab(url);

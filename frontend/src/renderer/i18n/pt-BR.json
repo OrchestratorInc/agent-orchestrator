@@ -396,6 +396,7 @@
 	"home.starUs": "Dar uma estrela",
 	"browser.agentAction": "Agente {{verb}}",
 	"browser.agentUsing": "Agente usando o navegador",
+	"browser.agentTab": "Aba do agente: {{title}}",
 	"browser.find.close": "Fechar busca",
 	"browser.find.matchCount": "{{active}} de {{total}}",
 	"browser.find.next": "Próxima ocorrência",
