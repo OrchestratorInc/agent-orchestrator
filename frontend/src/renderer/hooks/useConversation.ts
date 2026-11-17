@@ -165,6 +165,8 @@ type ConversationDispatchTrackingBySession = Record<string, ConversationDispatch
 export type ConversationLocalEcho = {
 	clientMessageId: string;
 	text: string;
+	/** A retained receipt can fail locally or have an uncertain dispatch. */
+	delivery?: "failed" | "uncertain";
 	/** A continue after a stop, drawn as a marker while it is sent. */
 	continuation?: boolean;
 	createdAt: string;

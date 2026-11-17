@@ -259,6 +259,8 @@ var shippedMigrations = map[int64]string{
 	20261109072438921: "20261109072438921_terminal_titles.sql",
 	20261109120000000: "20261109120000000_conversation_turn_batch_delivery.sql",
 	20261110172911382: "20261110172911382_conversation_turn_artifacts.sql",
+	20261111020206870: "20261111020206870_shell_terminal_ended.sql",
+	20261116231134450: "20261116231134450_shell_terminal_agent_conversation.sql",
 	20261109094334974: "20261109094334974_session_artifacts.sql",
 	20261028180000000: "20261028180000000_pr_details.sql",
 	20261101102149555: "20261101102149555_pr_details_conversation.sql",
@@ -276,7 +278,9 @@ var shippedMigrations = map[int64]string{
 	20261116063923032: "20261116063923032_index_pr_source_branch.sql",
 	20261116070040471: "20261116070040471_kept_artifacts.sql",
 	20261116113334512: "20261116113334512_pr_head_stack_facts.sql",
+	20261116125847855: "20261116125847855_allow_open_interpreter_harness.sql",
 	20261116173733857: "20261116173733857_timestamp_repair_progress.sql",
+	20261117090000000: "20261117090000000_allow_tau_harness.sql",
 }
 
 // burnedVersion reports version numbers that must never be (re)used: they
@@ -294,8 +298,10 @@ var shippedMigrations = map[int64]string{
 func burnedVersion(v int64) bool {
 	// 203 was used by the historical Hermes candidate and must not be reused.
 	// 20261021083138547 and 20261114173247220 were used by unmerged Docker Agent
-	// builds before the migration moved above main's latest version.
-	return v == 22 || v == 203 || v == 20261021083138547 || v == 20261114173247220
+	// builds before the migration moved above main's latest version. 216 and
+	// 20261114174124485 were Open Interpreter draft numbers for the same reason.
+	return v == 22 || v == 203 || v == 20261021083138547 || v == 20261114173247220 ||
+		v == 216 || v == 20261114174124485
 }
 
 // TestMigrationVersionLedger enforces the append-only migration ledger: every

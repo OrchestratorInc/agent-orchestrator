@@ -714,6 +714,29 @@ func TestResolveClaudeTUIAgentConfigRejectsUnsupportedEffort(t *testing.T) {
 	}
 }
 
+// Open Interpreter applies effort natively (model_reasoning_effort) and its
+// catalog lists each model's supported levels, so effort is validated like
+// Codex instead of being cleared or refused as unsupported.
+func TestResolveOpenInterpreterEffortUsesNativeCatalog(t *testing.T) {
+	m := &Manager{modelCatalog: tuningCatalog{catalog: ports.AgentModelCatalog{Models: []ports.AgentModelInfo{
+		{ID: "gpt-6-sol", IsDefault: true, Efforts: []string{"low", "high"}},
+	}}}}
+	resolved, err := m.resolveAgentConfig(context.Background(), ports.SpawnConfig{
+		ProjectID: "p", Kind: domain.KindWorker, Harness: domain.HarnessOpenInterpreter,
+		AgentConfig: ports.AgentConfig{Model: "gpt-6-sol", Effort: "high"}, EffortOverride: true,
+	}, domain.ProjectConfig{})
+	if err != nil || resolved.Effort != "high" {
+		t.Fatalf("Open Interpreter config = %#v, %v; want effort high", resolved, err)
+	}
+	_, err = m.resolveAgentConfig(context.Background(), ports.SpawnConfig{
+		ProjectID: "p", Kind: domain.KindWorker, Harness: domain.HarnessOpenInterpreter,
+		AgentConfig: ports.AgentConfig{Model: "gpt-6-sol", Effort: "max"}, EffortOverride: true,
+	}, domain.ProjectConfig{})
+	if !errors.Is(err, ports.ErrUnsupportedEffort) {
+		t.Fatalf("unlisted effort error = %v, want ErrUnsupportedEffort", err)
+	}
+}
+
 func TestResolveGrokEffortIsAvailableOnlyInChat(t *testing.T) {
 	m := &Manager{}
 	for _, mode := range []domain.SessionMode{domain.SessionModeChat, domain.SessionModeTUI} {
@@ -750,7 +773,7 @@ func TestResolveAgentConfigRejectsExplicitEffortForUnsupportedHarness(t *testing
 		if !errors.Is(err, ports.ErrUnsupportedEffort) {
 			t.Fatalf("harness %q override error = %v, want ErrUnsupportedEffort", harness, err)
 		}
-		if !strings.Contains(err.Error(), "only supported for codex, claude-code, command-code, hermes, pi, and prime-agent") {
+		if !strings.Contains(err.Error(), "only supported for codex, claude-code, command-code, hermes, pi, prime-agent, and open-interpreter") {
 			t.Fatalf("harness %q error = %v, want support hint", harness, err)
 		}
 		// Unflagged request-carried effort still clears silently, matching the

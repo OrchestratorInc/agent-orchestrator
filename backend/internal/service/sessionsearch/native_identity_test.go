@@ -81,6 +81,33 @@ func TestCodexRolloutIsFoundByItsNativeSessionID(t *testing.T) {
 	}
 }
 
+// A chat session without a native id has no transcript named by its AO id, so
+// the provider tree is not searched for one.
+func TestChatSessionIsNotMatchedByItsAOID(t *testing.T) {
+	root := t.TempDir()
+	f := newFixture(t, sessionsearch.TranscriptRoots{ClaudeProjects: root})
+	seedTUIProject(t, f.store, "proj")
+	session, err := f.store.CreateSession(context.Background(), domain.SessionRecord{
+		ID: "sess-chat", ProjectID: "proj", Kind: domain.KindWorker,
+		Harness: domain.HarnessClaudeCode, Mode: domain.SessionModeChat,
+		Activity:  domain.Activity{State: domain.ActivityIdle, LastActivityAt: testNow},
+		Metadata:  domain.SessionMetadata{Branch: "feat/chat", WorkspacePath: "/tmp/proj"},
+		CreatedAt: testNow, UpdatedAt: testNow,
+	})
+	if err != nil {
+		t.Fatalf("CreateSession: %v", err)
+	}
+	writeTranscript(t, root, filepath.Join("-tmp-proj", string(session.ID)+".jsonl"),
+		claudeLine(t, "user", "user", "a zzChatAOIDNeedle", "2026-08-09T12:00:00Z"),
+	)
+	if _, err := f.svc.IndexAll(context.Background()); err != nil {
+		t.Fatalf("IndexAll: %v", err)
+	}
+	if got := search(t, f.svc, "zzChatAOIDNeedle"); len(got.Results) != 0 {
+		t.Fatalf("results = %+v, want none", got.Results)
+	}
+}
+
 // An AO-managed account keeps its own Claude config directory under AO's state
 // directory, outside ~/.claude/projects. The path the provider's hooks reported
 // is what finds that transcript.

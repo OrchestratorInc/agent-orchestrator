@@ -59,6 +59,8 @@ account and the pass's time window. Other comments by that account during the
 same window are held back too. Rows from that account without a provider time
 are held back whenever the PR has a no-inject pass.
 
+Automatic review pauses while a PR is a draft. After Orchestrator observes that it is ready, its head becomes eligible on a later sweep once the worker meets the idle gate. Explicit review triggers can still review drafts.
+
 ## Best practices
 
 - Keep the PR claimed by the worker that should act on feedback.
