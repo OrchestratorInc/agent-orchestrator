@@ -811,6 +811,90 @@ func newChatNoticeManager(t *testing.T, relayState domain.TurnState) (*Manager, 
 	return m, st, relay, &now
 }
 
+func TestReviewDoneNotice_QueuedFeedbackDoesNotSuppressCompletion(t *testing.T) {
+	for _, settled := range []domain.TurnState{domain.TurnStateCompleted, domain.TurnStateFailed, domain.TurnStateCancelled} {
+		t.Run(string(settled), func(t *testing.T) {
+			m, st, relay, _ := newChatNoticeManager(t, domain.TurnStateQueued)
+			st.runs = nil
+			st.reviews[donePR] = []domain.PullRequestReview{observedReview("777")}
+			st.comments[donePR] = changesRequestedComments()[:1]
+			observation := ports.PRObservation{Fetched: true, URL: donePR}
+			if err := m.ApplyPRObservation(ctx, "w-1", observation); err != nil {
+				t.Fatal(err)
+			}
+			if len(relay.ids) != 1 {
+				t.Fatalf("queued feedback sends = %v, want one", relay.ids)
+			}
+			st.runs = []domain.ReviewRun{doneRun("run-1", domain.ReviewRunCompleted, domain.VerdictChangesRequested, "777", "Optional summary")}
+			m.SweepReviewDoneNotices(ctx)
+			if got := st.notice("run-1"); got != domain.ReviewWorkerNoticePending {
+				t.Fatalf("notice = %q while feedback is only queued, want pending", got)
+			}
+
+			m = New(st, relay)
+			if err := m.ApplyPRObservation(ctx, "w-1", observation); err != nil {
+				t.Fatal(err)
+			}
+			if len(relay.ids) != 1 {
+				t.Fatalf("queued feedback repeated after restart: %v", relay.ids)
+			}
+			st.turns[relay.ids[0]] = settled
+			relay.state = domain.TurnStateRunning
+			if err := m.ApplyPRObservation(ctx, "w-1", observation); err != nil {
+				t.Fatal(err)
+			}
+			wantSends := 1
+			if settled != domain.TurnStateCompleted {
+				wantSends = 2
+			}
+			if len(relay.ids) != wantSends {
+				t.Fatalf("feedback sends after %s = %v, want %d", settled, relay.ids, wantSends)
+			}
+			for i, id := range relay.ids {
+				if id == "" || strings.HasPrefix(id, "review-done:") || (i > 0 && id == relay.ids[i-1]) {
+					t.Fatalf("want distinct feedback delivery ids and no completion message, got %v", relay.ids)
+				}
+			}
+			if got := st.notice("run-1"); got != domain.ReviewWorkerNoticeSent {
+				t.Fatalf("notice = %q after feedback reached the worker, want sent", got)
+			}
+			if err := New(st, relay).ApplyPRObservation(ctx, "w-1", observation); err != nil {
+				t.Fatal(err)
+			}
+			if len(relay.ids) != wantSends {
+				t.Fatalf("confirmed feedback repeated after restart: %v", relay.ids)
+			}
+		})
+	}
+}
+
+func TestReviewDoneNotice_FailedFeedbackLeavesCompletionNotice(t *testing.T) {
+	m, st, relay, _ := newChatNoticeManager(t, domain.TurnStateFailed)
+	st.runs = nil
+	st.reviews[donePR] = []domain.PullRequestReview{observedReview("777")}
+	st.comments[donePR] = changesRequestedComments()[:1]
+	observation := ports.PRObservation{Fetched: true, URL: donePR}
+	for i := 0; i <= reviewMaxNudge; i++ {
+		if err := m.ApplyPRObservation(ctx, "w-1", observation); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if len(relay.ids) != reviewMaxNudge {
+		t.Fatalf("failed feedback sends = %v, want %d", relay.ids, reviewMaxNudge)
+	}
+	st.runs = []domain.ReviewRun{doneRun("run-1", domain.ReviewRunCompleted, domain.VerdictChangesRequested, "777", "Optional summary")}
+	relay.state = domain.TurnStateRunning
+	if err := New(st, relay).ApplyPRObservation(ctx, "w-1", observation); err != nil {
+		t.Fatal(err)
+	}
+	if len(relay.ids) != reviewMaxNudge+1 || relay.ids[len(relay.ids)-1] != "review-done:run-1:0" {
+		t.Fatalf("want one completion notice after failed feedback, got %v", relay.ids)
+	}
+	if got := st.notice("run-1"); got != domain.ReviewWorkerNoticeSent {
+		t.Fatalf("notice = %q after its delivery, want sent", got)
+	}
+}
+
 // A relay into a sleeping Chat session is queued until a background wake
 // drains it. The notice counts as delivered only then, and is sent once.
 func TestReviewDoneNotice_SleepingChatCountsOnceDrained(t *testing.T) {

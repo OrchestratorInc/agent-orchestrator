@@ -2,6 +2,7 @@ package lifecycle
 
 import (
 	"context"
+	"crypto/sha256"
 	"errors"
 	"fmt"
 	"log/slog"
@@ -43,8 +44,8 @@ type reviewNoticeStore interface {
 	ListReviewRunsBySession(ctx context.Context, id domain.SessionID) ([]domain.ReviewRun, error)
 }
 
-// reviewNoticeChatStore reads the Chat turn behind one notice delivery
-// attempt. A relay into a sleeping Chat session is queued and delivered by a
+// reviewNoticeChatStore reads the Chat turn behind a notice or feedback
+// delivery attempt. A relay into a sleeping Chat session is queued and delivered by a
 // background wake, so a successful send there does not yet mean the worker
 // got the message.
 type reviewNoticeChatStore interface {
@@ -388,8 +389,8 @@ func (m *Manager) reviewDoneNotice(ctx context.Context, run domain.ReviewRun, se
 	// one reached the worker as review feedback, the notice adds nothing. A
 	// pass about an earlier commit or with a newer pass still gets its note.
 	if run.Verdict == domain.VerdictChangesRequested && posted && observed && inline > 0 && later.laterNote(run) == "" {
-		forwarded, err := m.reviewCommentsForwarded(ctx, run.PRURL, owned)
-		if err != nil {
+		forwarded, waiting, err := m.reviewCommentsForwarded(ctx, run, owned)
+		if err != nil || waiting {
 			return "", false, false, err
 		}
 		if forwarded {
@@ -400,28 +401,98 @@ func (m *Manager) reviewDoneNotice(ctx context.Context, run domain.ReviewRun, se
 }
 
 // reviewCommentsForwarded reports whether every comment in comments already
-// reached the worker as review feedback: the reaction ledger (react.seen,
-// persisted in pr.last_nudge_signature) holds the per-comment entry that
-// forwarding records only after a send went through. Caller holds
+// reached the worker as review feedback. Chat checks the keyed turn receipt;
+// terminal delivery uses the reaction ledger persisted on the PR. Waiting
+// means a feedback turn is still queued. Caller holds
 // reviewNoticeMu; forwarding never holds react.mu while it delivers notices,
 // so taking it here keeps the order reviewNoticeMu, then react.mu.
-func (m *Manager) reviewCommentsForwarded(ctx context.Context, prURL string, comments []domain.PullRequestComment) (bool, error) {
+func (m *Manager) reviewCommentsForwarded(ctx context.Context, run domain.ReviewRun, comments []domain.PullRequestComment) (forwarded, waiting bool, err error) {
 	m.react.mu.Lock()
 	defer m.react.mu.Unlock()
+	prURL := run.PRURL
 	if prURL != "" && !m.react.loaded[prURL] {
 		if err := m.loadPRSignaturesLocked(ctx, prURL); err != nil {
-			return false, fmt.Errorf("load review feedback ledger for %s: %w", prURL, err)
+			return false, false, fmt.Errorf("load review feedback ledger for %s: %w", prURL, err)
 		}
 		m.react.loaded[prURL] = true
 	}
+	rec, found, err := m.store.GetSession(ctx, run.SessionID)
+	if err != nil {
+		return false, false, err
+	}
+	chat, chatOK := m.store.(reviewNoticeChatStore)
+	isChat := chatOK && found && domain.NormalizeSessionMode(rec.Mode) == domain.SessionModeChat
+	forwarded = true
 	for _, c := range comments {
 		obs := []ports.PRCommentObservation{{ID: c.ID, ThreadID: c.ThreadID}}
 		sig := reviewCommentsSignature(obs)
-		if sig == "" || m.react.seen[commentNudgeKey(prURL, obs[0])] != sig {
-			return false, nil
+		key := commentNudgeKey(prURL, obs[0])
+		if isChat {
+			attempts := m.react.attempts[key]
+			if attempts == 0 || sig == "" {
+				forwarded = false
+				continue
+			}
+			delivered, queued, err := chatReviewFeedbackState(ctx, chat, run.SessionID, key, sig, attempts-1)
+			if err != nil {
+				return false, false, err
+			}
+			forwarded = forwarded && delivered
+			waiting = waiting || queued
+		} else if sig == "" || m.react.seen[key] != sig {
+			forwarded = false
 		}
 	}
-	return true, nil
+	return forwarded, waiting, nil
+}
+
+func reviewFeedbackClientID(key, sig string, attempt int) string {
+	return fmt.Sprintf("review-feedback:%x:%d", sha256.Sum256([]byte(key+"\x00"+sig)), attempt)
+}
+
+func chatReviewFeedbackState(ctx context.Context, chat reviewNoticeChatStore, id domain.SessionID, key, sig string, attempt int) (delivered, queued bool, err error) {
+	turn, _, found, err := chat.ReviewNoticeChatDelivery(ctx, id, reviewFeedbackClientID(key, sig, attempt))
+	return found && turn != domain.TurnStateQueued && turn != domain.TurnStateFailed && turn != domain.TurnStateCancelled,
+		found && turn == domain.TurnStateQueued, err
+}
+
+// Caller holds react.mu. A queued Chat relay is an attempt, not delivery.
+// Its stable id lets another observation or a restart settle it without a
+// second paste. Failed turns use a new id within the existing attempt cap.
+func (m *Manager) sendChatReviewFeedbackLocked(ctx context.Context, chat reviewNoticeChatStore, id domain.SessionID, prURL, key, sig, msg string, maxAttempts int) (sendOnceOutcome, error) {
+	attempts := m.react.attempts[key]
+	if attempts > 0 {
+		delivered, queued, err := chatReviewFeedbackState(ctx, chat, id, key, sig, attempts-1)
+		if err != nil || queued {
+			return sendOnceSuppressed, err
+		}
+		if delivered {
+			if m.react.seen[key] == sig {
+				return sendOnceAccounted, nil
+			}
+			m.react.seen[key] = sig
+			return sendOnceAccounted, m.persistPRSignaturesLocked(ctx, prURL)
+		}
+	}
+	if m.react.seen[key] == sig || (maxAttempts > 0 && attempts >= maxAttempts) {
+		return sendOnceAccounted, nil
+	}
+	outcome, sendErr := m.guard.Nudge(ports.WithClientMessageID(ctx, reviewFeedbackClientID(key, sig, attempts)), id, msg)
+	if outcome != sessionguard.Sent {
+		return sendOnceSuppressed, sendErr
+	}
+	m.react.attempts[key] = attempts + 1
+	delivered, _, readErr := chatReviewFeedbackState(ctx, chat, id, key, sig, attempts)
+	if delivered && readErr == nil {
+		m.react.seen[key] = sig
+	}
+	if err := errors.Join(sendErr, readErr, m.persistPRSignaturesLocked(ctx, prURL)); err != nil {
+		return sendOnceAccounted, err
+	}
+	if delivered {
+		return sendOnceAccounted, nil
+	}
+	return sendOnceSuppressed, nil
 }
 
 // reviewNoticeLater is what happened on the PR after a pass started: its
@@ -559,6 +630,8 @@ func formatReviewDoneNotice(run domain.ReviewRun, reviewURL string, inline int, 
 			msg.WriteString("A review of the newer head is already under way; wait for its own review done message instead of requesting another review.")
 		case run.CancelledBy == domain.ReviewCancelledByUser || run.Body == domain.ReviewRunCancelledByUserReason:
 			msg.WriteString("The user stopped this review on purpose; do not request another unless they ask.")
+		case later.newer != nil && later.newer.Status.IsActive():
+			msg.WriteString("A newer review is already under way; wait for its result instead of requesting another review.")
 		default:
 			msg.WriteString("Request another review if you still need one.")
 		}

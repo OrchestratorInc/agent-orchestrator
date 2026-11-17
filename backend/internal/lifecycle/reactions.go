@@ -1049,6 +1049,15 @@ func (m *Manager) sendOnce(ctx context.Context, id domain.SessionID, prURL, key,
 		}
 		m.react.loaded[prURL] = true
 	}
+	if chat, ok := m.store.(reviewNoticeChatStore); ok && strings.HasPrefix(key, "comment:") {
+		rec, found, err := m.store.GetSession(ctx, id)
+		if err != nil {
+			return sendOnceSuppressed, err
+		}
+		if found && domain.NormalizeSessionMode(rec.Mode) == domain.SessionModeChat {
+			return m.sendChatReviewFeedbackLocked(ctx, chat, id, prURL, key, sig, msg, maxAttempts)
+		}
+	}
 
 	if m.react.seen[key] == sig {
 		return sendOnceAccounted, nil
