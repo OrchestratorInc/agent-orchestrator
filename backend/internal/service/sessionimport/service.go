@@ -24,8 +24,9 @@ import (
 	"github.com/aoagents/agent-orchestrator/backend/internal/httpd/apierr"
 )
 
-// recentDays is the window of activity a chat needs to be offered. Neither
-// limit applies to Conductor chats: a user leaving Conductor brings them all.
+// recentDays is the window of activity a chat needs to be offered. It does
+// not apply to sources a user is moving off, such as Conductor or Cursor's
+// editor; maxChatsPerProject does not apply to Conductor chats either.
 const (
 	recentDays         = 30
 	maxChatsPerProject = 100
@@ -54,6 +55,9 @@ type Candidate struct {
 	// Folder is the repository a chat came from when no AO project holds it.
 	// The chat can be imported once that folder is added as a project.
 	Folder string `json:"folder,omitempty"`
+	// Source is the app the chat was made in when it continues on another
+	// agent, such as a Cursor editor chat continuing in Claude Code.
+	Source domain.AgentHarness `json:"source,omitempty"`
 }
 
 // Preview is a bounded, explicit scan of this host, independent of normal board reads.
@@ -572,7 +576,7 @@ func (s *Service) Scan(ctx context.Context) (Preview, error) {
 		// Every scan reads the histories modified within recentDays; unchanged
 		// ones come from the cache, keyed by size and mtime.
 		recent := s.now().AddDate(0, 0, -recentDays)
-		if harness == conductorSource {
+		if importer.everyChat {
 			recent = time.Time{}
 		}
 		results := make([]parsed, len(files))
@@ -637,7 +641,7 @@ func (s *Service) Scan(ctx context.Context) (Preview, error) {
 			if title == "" {
 				title = "Imported conversation"
 			}
-			c := Candidate{ID: id, Harness: shown, Title: title, ProjectID: dest.id, Folder: dest.folder, LastActivity: source.last.UTC(), MessageCount: result.count, Shortened: source.shortened}
+			c := Candidate{ID: id, Harness: shown, Title: title, ProjectID: dest.id, Folder: dest.folder, LastActivity: source.last.UTC(), MessageCount: result.count, Shortened: source.shortened, Source: importer.from}
 			if sessionID, ok := imported[[2]string{source.root, source.nativeID}]; ok {
 				c.SessionID = sessionID
 			} else if _, own := managed[source.nativeID]; own {

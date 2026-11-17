@@ -17,6 +17,12 @@ For Codex or another supported agent, select that agent under **Settings → Har
 
 For one project, open **Project settings → General → Earlier chats**. Choose **Import chats**.
 
+## Import Cursor editor chats
+
+Agent chats from the Cursor editor are listed with **From Cursor** in **Import chats**, and under **Settings → Harness → Cursor → Import**. The Cursor CLI cannot resume an editor chat, so importing one writes it into Claude Code's history on this computer, and it continues in Claude Code. Claude Code must be installed and signed in.
+
+Cursor keeps these chats under `~/.cursor/projects`, or the folder `CURSOR_DATA_DIR` names. Only the conversation's text carries over: Cursor does not save tool results or the model's thinking with them. A chat is listed when Orchestrator can tell which folder it came from: the folder must still exist, and a folder whose name contains `-`, `.` or other punctuation must already be a project. Editor chats are listed however old they are.
+
 ## Import from the command palette
 
 Open **Cmd+K** on macOS or **Ctrl+K** on Windows/Linux. Search for **Import**. Choose **Import projects and their chats**, or **Import chats** for the current local project.

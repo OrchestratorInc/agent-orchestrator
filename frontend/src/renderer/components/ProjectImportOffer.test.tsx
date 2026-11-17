@@ -102,6 +102,16 @@ it("reviews the project's chats, marks a signed-out agent and imports the checke
 	expect(useSessionImportStore.getState().importedCounts).toEqual({ todo: 1 });
 });
 
+it("names the app a chat was made in when it continues on another agent", async () => {
+	renderWith(<ProjectImportOffer projectId="todo" />, [chat("a", "claude-code", { projectId: "todo", source: "cursor" }), chat("bb", "claude-code", { projectId: "todo" })]);
+	fireEvent.click(await screen.findByRole("button", { name: "Review" }));
+	const dialog = await screen.findByRole("dialog", { name: "Import chats into todo-api" });
+	const cursorRow = within(dialog).getByRole("checkbox", { name: "Import Chat a" }).closest("label");
+	const claudeRow = within(dialog).getByRole("checkbox", { name: "Import Chat bb" }).closest("label");
+	expect(cursorRow).toHaveTextContent(/From Cursor · Claude Code · 2 messages/);
+	expect(claudeRow).not.toHaveTextContent(/From/);
+});
+
 it("stays open while importing, so a failure that lands after Esc is still shown", async () => {
 	renderWith(null, [chat("a", "claude-code", { projectId: "todo" })]);
 	act(() => useSessionImportStore.getState().openProjectImport("todo"));

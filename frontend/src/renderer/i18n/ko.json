@@ -4448,6 +4448,8 @@
 	"sessionImport.importChats_one": "대화 {{count}}개 가져오기",
 	"sessionImport.importChats_other": "대화 {{count}}개 가져오기",
 	"sessionImport.agentSignedOut": "계속하려면 로그인",
+	"sessionImport.continuesIn": "{{agent}}에서 계속",
+	"sessionImport.fromApp": "{{app}}에서",
 	"sessionImport.agentMissing": "설치되지 않음",
 	"sessionImport.foldersTitle": "프로젝트와 대화 가져오기",
 	"sessionImport.foldersDescription": "선택한 각 폴더는 이전 대화와 함께 프로젝트가 됩니다.",

@@ -23790,6 +23790,8 @@ components:
           type: string
         shortened:
           type: boolean
+        source:
+          type: string
         title:
           type: string
       required:

@@ -56,7 +56,8 @@ export function SessionImportPanel({ harness }: { harness: AgentId }) {
 		setResults([]);
 	}, [preview.data]);
 	const candidates = useMemo(
-		() => (preview.data?.candidates ?? []).filter((c) => c.harness === harness),
+		// A chat made in another app, such as Cursor's editor, is listed under that app.
+		() => (preview.data?.candidates ?? []).filter((c) => (c.source || c.harness) === harness),
 		[preview.data, harness],
 	);
 	const folders = useMemo(
@@ -331,6 +332,7 @@ function ImportRow({
 					<time dateTime={c.lastActivity} title={new Date(c.lastActivity).toLocaleString(i18n.resolvedLanguage)}>
 						{formatTimeCompact(c.lastActivity, { longUnits: true })}
 					</time>
+					{c.source ? ` · ${t("sessionImport.continuesIn", { agent: agentLabel(c.harness) })}` : null}
 				</span>
 				{c.shortened ? (
 					<span className="block text-xs text-warning">

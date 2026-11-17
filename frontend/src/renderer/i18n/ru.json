@@ -4878,6 +4878,8 @@
 	"sessionImport.importChats_many": "Импортировать {{count}} чатов",
 	"sessionImport.importChats_other": "Импортировать {{count}} чата",
 	"sessionImport.agentSignedOut": "Войдите, чтобы продолжить",
+	"sessionImport.continuesIn": "Продолжится в {{agent}}",
+	"sessionImport.fromApp": "Из {{app}}",
 	"sessionImport.agentMissing": "Не установлен",
 	"sessionImport.foldersTitle": "Импорт проектов и их чатов",
 	"sessionImport.foldersDescription": "Каждая выбранная папка станет проектом со своими прежними чатами.",

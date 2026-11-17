@@ -4560,6 +4560,8 @@
 	"sessionImport.importChats_many": "Importer {{count}} conversations",
 	"sessionImport.importChats_other": "Importer {{count}} conversations",
 	"sessionImport.agentSignedOut": "Connectez-vous pour continuer",
+	"sessionImport.continuesIn": "Se poursuit dans {{agent}}",
+	"sessionImport.fromApp": "Depuis {{app}}",
 	"sessionImport.agentMissing": "Non installé",
 	"sessionImport.foldersTitle": "Importer des projets et leurs conversations",
 	"sessionImport.foldersDescription": "Chaque dossier choisi devient un projet avec ses conversations précédentes.",

@@ -8332,6 +8332,7 @@ export interface components {
             projectId?: string;
             sessionId?: string;
             shortened?: boolean;
+            source?: string;
             title: string;
         };
         SessionImportPreview: {

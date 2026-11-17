@@ -4448,6 +4448,8 @@
 	"sessionImport.importChats_one": "{{count}} Unterhaltung importieren",
 	"sessionImport.importChats_other": "{{count}} Unterhaltungen importieren",
 	"sessionImport.agentSignedOut": "Zum Fortfahren anmelden",
+	"sessionImport.continuesIn": "Wird in {{agent}} fortgesetzt",
+	"sessionImport.fromApp": "Aus {{app}}",
 	"sessionImport.agentMissing": "Nicht installiert",
 	"sessionImport.foldersTitle": "Projekte und ihre Unterhaltungen importieren",
 	"sessionImport.foldersDescription": "Jeder gewählte Ordner wird ein Projekt mit seinen früheren Unterhaltungen.",
