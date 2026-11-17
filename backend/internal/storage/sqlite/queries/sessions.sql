@@ -366,6 +366,13 @@ SELECT id, project_id, num, issue_id, kind, harness,
     runtime_released_launch_id, import_source
 FROM sessions ORDER BY project_id, num;
 
+-- name: ListPreviewSessions :many
+-- Live workers with only the columns the preview poller reads.
+SELECT id, workspace_path, preview_url, preview_revision
+FROM sessions
+WHERE is_terminated = 0 AND kind = 'worker'
+ORDER BY id;
+
 -- name: ListChatHibernationCandidates :many
 SELECT id FROM sessions
 WHERE session_mode = 'chat' AND is_terminated = 0 AND is_task_preparation = 0
