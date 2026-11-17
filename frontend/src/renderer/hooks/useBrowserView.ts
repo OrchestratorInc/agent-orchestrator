@@ -1301,7 +1301,12 @@ export function useBrowserView({
 				? aoBridge.remotes.previewUrl(origin.hostId, origin.sessionId, target)
 				: Promise.resolve(target);
 			void resolved.then((url) => {
-				return cancelled ? undefined : mode === "external" ? aoBridge.app.openExternal(url) : showPreview(url);
+				if (cancelled) return undefined;
+				if (mode !== "external") return showPreview(url);
+				const externalUrl = origin
+					? aoBridge.remotes.externalUrl(origin.hostId, url).catch(() => url)
+					: Promise.resolve(url);
+				return externalUrl.then((targetUrl) => cancelled ? undefined : aoBridge.app.openExternal(targetUrl));
 			}).catch((error) => console.warn("Unable to open browser preview", error));
 			return () => { cancelled = true; };
 		} else if ((revision !== null && revision > 0) || previous?.target) {

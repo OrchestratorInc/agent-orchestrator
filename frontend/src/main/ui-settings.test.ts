@@ -31,6 +31,13 @@ describe("ui-settings", () => {
 		expect(await readUiSettings(dir)).toEqual(DEFAULT_UI_SETTINGS);
 	});
 
+	it("queues reads after an in-flight settings write", async () => {
+		const writing = writeUiSettings(dir, { automaticBrowser: "blocked" });
+		const reading = readUiSettings(dir);
+		await expect(reading).resolves.toMatchObject({ automaticBrowser: "blocked" });
+		await writing;
+	});
+
 	it("round-trips Turkish through the persisted UI settings", async () => {
 		await writeUiSettings(dir, { locale: "tr" });
 		expect(await readUiSettings(dir)).toEqual({ ...DEFAULT_UI_SETTINGS, locale: "tr" });

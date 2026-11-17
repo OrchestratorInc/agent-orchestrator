@@ -1647,6 +1647,7 @@
 	"settings.automaticBrowser.blocked": "Do not open automatically",
 	"settings.automaticBrowser.description": "Controls agent browser requests and automatic previews. In external or blocked mode, agent browser automation is unavailable; links you open yourself still work.",
 	"settings.automaticBrowser.saveFailed": "Could not save this setting.",
+	"settings.automaticBrowser.loadFailed": "Could not load this setting. Reopen Settings or change the selection to try again.",
 	"settings.altMenu": "Show menu bar with Alt",
 	"settings.altMenuSaveFailed": "Could not save this setting.",
 	"settings.navigationGestures": "Navigation gestures",

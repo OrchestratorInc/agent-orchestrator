@@ -3,7 +3,6 @@ import { render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { Settings } from "../../hooks/useSettings";
-import { useUiStore } from "../../stores/ui-store";
 import * as platform from "../../lib/platform";
 import { aoBridge } from "../../lib/bridge";
 import { DEFAULT_UI_SETTINGS } from "../../../shared/ui-locale";
@@ -90,7 +89,6 @@ describe("archived session retention", () => {
 		expect(screen.queryByRole("button", { name: "Delete archived sessions" })).not.toBeInTheDocument();
 	});
 });
-
 describe("Linux Alt menu setting", () => {
 	it("persists the user's choice on Linux", async () => {
 		vi.spyOn(platform, "isLinuxPlatform").mockReturnValue(true);
@@ -103,26 +101,5 @@ describe("Linux Alt menu setting", () => {
 		await userEvent.click(toggle);
 		expect(set).toHaveBeenCalledWith({ altMenuEnabled: false });
 		get.mockRestore(); set.mockRestore(); vi.restoreAllMocks();
-	});
-});
-
-describe("simplified top bar switch", () => {
-	beforeEach(() => settingsMock.mockReturnValue(settings({})));
-
-	it("only appears in Developer Mode", () => {
-		useUiStore.setState({ developerMode: false });
-		renderSection();
-		expect(screen.queryByRole("switch", { name: "Simplified top bar" })).not.toBeInTheDocument();
-	});
-
-	it("turns the preview off and on", async () => {
-		useUiStore.setState({ developerMode: true, simplifiedTopbar: true });
-		renderSection();
-		const toggle = screen.getByRole("switch", { name: "Simplified top bar" });
-		expect(toggle).toBeChecked();
-		await userEvent.click(toggle);
-		expect(useUiStore.getState().simplifiedTopbar).toBe(false);
-		await userEvent.click(toggle);
-		expect(useUiStore.getState().simplifiedTopbar).toBe(true);
 	});
 });

@@ -13,10 +13,17 @@ describe("automatic browser policy", () => {
 		await expect(enforceAutomaticBrowserPolicy("external", "open", { url: "https://example.com" }, open)).rejects.toMatchObject({ code: "BROWSER_AUTOMATION_DISABLED" });
 		expect(open).toHaveBeenCalledWith("https://example.com/");
 	});
+	it("normalizes supported hostnames and exempts browser-session cleanup", async () => {
+		const open = vi.fn().mockResolvedValue(undefined);
+		await expect(enforceAutomaticBrowserPolicy("external", "tab-new", { url: "localhost:3000" }, open)).rejects.toMatchObject({ code: "BROWSER_AUTOMATION_DISABLED" });
+		expect(open).toHaveBeenCalledWith("http://localhost:3000/");
+		await expect(enforceAutomaticBrowserPolicy("blocked", "__destroy-session", undefined, open)).resolves.toBeUndefined();
+	});
 	it("blocks automatic opening and rejects unsafe external URLs", async () => {
 		const open = vi.fn();
 		await expect(enforceAutomaticBrowserPolicy("blocked", "open", { url: "https://example.com" }, open)).rejects.toMatchObject({ code: "BROWSER_AUTOMATION_DISABLED" });
 		await expect(enforceAutomaticBrowserPolicy("external", "open", { url: "file:///secret" }, open)).rejects.toMatchObject({ code: "INVALID_ARGUMENT" });
+		await expect(enforceAutomaticBrowserPolicy("external", "open", { url: "javascript:alert(1)" }, open)).rejects.toMatchObject({ code: "INVALID_ARGUMENT" });
 		expect(open).not.toHaveBeenCalled();
 	});
 });

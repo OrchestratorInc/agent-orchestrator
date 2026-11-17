@@ -2699,7 +2699,7 @@ export function SessionView({ sessionId, cloudOrgId, projectId, hostId }: Sessio
 	}, [browserPoppedOut, uiSessionId, setBrowserContentRevealed, setBrowserUnseen, transitionInspectorView, setInspectorOpenForSession]);
 
 	useEffect(() => {
-		if (!hasInspector || !automaticBrowserLoaded) return;
+		if (!hasInspector) return;
 		const previewKey = previewRevealKey(previewUrl, previewRevision);
 		const baseline = previewBaselineRef.current;
 		if (!baseline || baseline.sessionId !== uiSessionId) {
@@ -2707,6 +2707,7 @@ export function SessionView({ sessionId, cloudOrgId, projectId, hostId }: Sessio
 			return;
 		}
 		if (baseline.key === previewKey) return;
+		if (!automaticBrowserLoaded) return;
 		previewBaselineRef.current = { sessionId: uiSessionId, key: previewKey };
 		if (!previewKey || terminated || automaticBrowser !== "internal") return;
 		// Only the routed session mounts SessionView. A new explicit preview

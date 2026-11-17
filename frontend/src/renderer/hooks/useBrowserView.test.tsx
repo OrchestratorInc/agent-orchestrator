@@ -232,7 +232,7 @@ function setFullscreenElement(element: Element | null): void {
 
 describe("useBrowserView", () => {
 	afterEach(() => {
-		useAutomaticBrowserStore.setState({ mode: "internal", loaded: true, saving: false, error: false });
+		useAutomaticBrowserStore.setState({ mode: "internal", loaded: true, saving: false, error: false, loadError: false });
 		vi.restoreAllMocks();
 		setFullscreenElement(null);
 		document.body.replaceChildren();
@@ -1739,7 +1739,7 @@ describe("useBrowserView", () => {
 	});
 
 	it.each(["external", "blocked"] as const)("routes automatic previews in %s mode without navigating the built-in browser", async (mode) => {
-		useAutomaticBrowserStore.setState({ mode, loaded: true });
+		useAutomaticBrowserStore.setState({ mode, loaded: true, loadError: false });
 		const bridge = setupBridge();
 		const external = vi.spyOn(aoBridge.app, "openExternal").mockResolvedValue(undefined);
 		renderHook(() => useBrowserView({ sessionId: "policy-session", active: true, poppedOut: false, previewUrl: "http://localhost:5173/", previewRevision: 1 }));
@@ -1748,6 +1748,24 @@ describe("useBrowserView", () => {
 		else await act(async () => {});
 		expect(bridge.navigate).not.toHaveBeenCalled();
 		if (mode === "blocked") expect(external).not.toHaveBeenCalled();
+	});
+
+	it("converts a remote preview address before opening it externally", async () => {
+		useAutomaticBrowserStore.setState({ mode: "external", loaded: true, loadError: false });
+		setupBridge();
+		vi.spyOn(aoBridge.remotes, "previewUrl").mockResolvedValue("https://ao-preview-abc.localhost:/");
+		const externalUrl = vi.spyOn(aoBridge.remotes, "externalUrl").mockResolvedValue("http://127.0.0.1:5173/");
+		const openExternal = vi.spyOn(aoBridge.app, "openExternal").mockResolvedValue(undefined);
+		renderHook(() => useBrowserView({
+			sessionId: "remote:box-a:ao-1",
+			origin: { hostId: "box-a", sessionId: "ao-1", proxyBase: "https://proxy.example/token" },
+			active: true,
+			poppedOut: false,
+			previewUrl: "http://localhost:5173/",
+			previewRevision: 1,
+		}));
+		await waitFor(() => expect(openExternal).toHaveBeenCalledWith("http://127.0.0.1:5173/"));
+		expect(externalUrl).toHaveBeenCalledWith("box-a", "https://ao-preview-abc.localhost:/");
 	});
 
 	it("never opens a disconnected remote localhost preview on this machine", async () => {

@@ -32,7 +32,7 @@ type DestructiveAction = { kind: "clear" | "delete"; profile: Profile };
 
 export function BrowserProfilesSection({ titleHidden }: { titleHidden?: boolean }) {
 	const { t } = useTranslation();
-	const { mode, saving, error: browserPolicyError, setMode } = useAutomaticBrowserStore();
+	const { mode, saving, error: browserPolicyError, loadError: browserPolicyLoadError, loaded: browserPolicyLoaded, load: loadBrowserPolicy, setMode } = useAutomaticBrowserStore();
 	const browserPolicyLabel = t("settings.automaticBrowser");
 	const browserPolicyOptions: SettingsOption<AutomaticBrowserMode>[] = [
 		{ value: "internal", label: t("settings.automaticBrowser.internal") },
@@ -54,6 +54,10 @@ export function BrowserProfilesSection({ titleHidden }: { titleHidden?: boolean 
 	const [usageError, setUsageError] = useState("");
 	const [usageRevision, setUsageRevision] = useState(0);
 	const [importOpen, setImportOpen] = useState(false);
+
+	useEffect(() => {
+		if (!browserPolicyLoaded) void loadBrowserPolicy();
+	}, [browserPolicyLoaded, loadBrowserPolicy]);
 
 	const refresh = async () => {
 		if (!bridge) return;
@@ -185,7 +189,7 @@ export function BrowserProfilesSection({ titleHidden }: { titleHidden?: boolean 
 				titleHidden={titleHidden}
 				grouped
 			>
-				<SettingsRow label={browserPolicyLabel} description={browserPolicyError ? t("settings.automaticBrowser.saveFailed") : t("settings.automaticBrowser.description")}>
+				<SettingsRow label={browserPolicyLabel} description={browserPolicyError ? t("settings.automaticBrowser.saveFailed") : browserPolicyLoadError ? t("settings.automaticBrowser.loadFailed") : t("settings.automaticBrowser.description")}>
 					<SettingsOptionMenu aria-label={browserPolicyLabel} value={mode} options={browserPolicyOptions} disabled={saving} onChange={(next) => void setMode(next)} />
 				</SettingsRow>
 				<SettingsRow label={t("settings.browserImport.rowLabel")}>
