@@ -99,7 +99,7 @@ func (r Run) Validate() error {
 
 func (p ClientPolicy) validate() error {
 	for name, value := range map[string]int64{
-		"localPageSize": p.LocalPageSize, "remoteLivePageSize": p.RemoteLivePageSize,
+		"localPageSize": p.LocalPageSize, "localOlderPageSize": p.LocalOlderPageSize, "remoteLivePageSize": p.RemoteLivePageSize,
 		"remoteOlderPageSize": p.RemoteOlderPageSize, "remoteOutputLimit": p.RemoteOutputLimit,
 		"invalidateWindowMs": p.InvalidateWindowMs,
 	} {

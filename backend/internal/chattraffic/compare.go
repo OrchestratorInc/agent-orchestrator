@@ -161,7 +161,9 @@ func Compare(baseline, candidate Run, ceilings Ceilings, opts Options) Report {
 	if baseline.GoVersion != candidate.GoVersion || baseline.GOOS != candidate.GOOS || baseline.GOARCH != candidate.GOARCH {
 		global("toolchain-mismatch")
 	}
-	if baseline.HarnessSha256 != candidate.HarnessSha256 || baseline.SimulatorClientSha256 != candidate.SimulatorClientSha256 {
+	// Both sides run the same harness, and so the same simulator. Its renderer
+	// revisions may differ when each is one the simulator was checked against.
+	if baseline.HarnessSha256 != candidate.HarnessSha256 {
 		global("harness-mismatch")
 	}
 	if baseline.FixturesSha256 != candidate.FixturesSha256 || candidate.FixturesSha256 != ceilings.FixturesSha256 {

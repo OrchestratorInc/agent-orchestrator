@@ -1,6 +1,6 @@
 {
   "schemaVersion": "ao.chattraffic.ceilings.v1",
-  "fixturesSha256": "2a7c87c160ef99a37983e8bb18b20b06a5b165785f15ad4a555ef0d3a9fb8f33",
+  "fixturesSha256": "769521fe9625b62bcc4cfe3165585b678885ff0a6128cc5aea45667f78451e06",
   "maxIncreasePermille": 20,
   "rows": [
     {

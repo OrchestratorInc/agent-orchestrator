@@ -13,7 +13,9 @@
   "clientSourceSha256": "3333333333333333333333333333333333333333333333333333333333333333",
   "simulatorClientSha256": "3333333333333333333333333333333333333333333333333333333333333333",
   "clientPolicy": {
-    "localPageSize": 200,
+    "localPageSize": 30,
+    "localOlderPageSize": 200,
+    "localTailRefresh": false,
     "remoteLivePageSize": 30,
     "remoteOlderPageSize": 100,
     "remoteOutputLimit": 512,

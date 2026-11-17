@@ -59,9 +59,10 @@ type Run struct {
 	// ClientSourceSha256 digests the renderer files whose policy the Go client
 	// simulator mirrors, read from this revision's tree.
 	ClientSourceSha256 string `json:"clientSourceSha256"`
-	// SimulatorClientSha256 is the client-source digest the simulator was
-	// written against. A run whose ClientSourceSha256 differs measured a client
-	// the simulator does not model.
+	// SimulatorClientSha256 is the reviewed client-source digest the simulator
+	// matched this run's renderer to: the harness lists every renderer revision
+	// its simulator was checked against. A run whose ClientSourceSha256 differs
+	// measured a client the simulator does not model.
 	SimulatorClientSha256 string       `json:"simulatorClientSha256"`
 	ClientPolicy          ClientPolicy `json:"clientPolicy"`
 	// Nonce is fresh per execution, so a cached test replay is detectable.
@@ -72,7 +73,13 @@ type Run struct {
 // ClientPolicy is the renderer paging policy read from this revision's
 // frontend source and applied by the simulator.
 type ClientPolicy struct {
-	LocalPageSize       int64 `json:"localPageSize"`
+	// LocalPageSize is a local chat's first, newest page; LocalOlderPageSize is
+	// each older page read on scroll.
+	LocalPageSize      int64 `json:"localPageSize"`
+	LocalOlderPageSize int64 `json:"localOlderPageSize"`
+	// LocalTailRefresh is set when an open local chat refreshes by reading only
+	// the rows above its floor, rather than refetching every loaded page.
+	LocalTailRefresh    bool  `json:"localTailRefresh"`
 	RemoteLivePageSize  int64 `json:"remoteLivePageSize"`
 	RemoteOlderPageSize int64 `json:"remoteOlderPageSize"`
 	RemoteOutputLimit   int64 `json:"remoteOutputLimit"`

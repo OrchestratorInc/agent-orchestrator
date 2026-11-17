@@ -68,13 +68,28 @@ const (
 	benchStepTimeout    = 15 * time.Second
 )
 
-// simulatorClientSHA256 is chattraffic.ListDigest of ClientSourceFiles at
-// e73e0679b1, the renderer revision this simulator mirrors. Its paging and the
-// refresh of an open chat are unchanged since 999321b38cc5, where the simulator
-// was written; the read that brings a closed local chat up to date as it reopens
-// takes part in no scenario. A revision whose renderer files differ is reported
-// as unmodeled, never silently compared.
-const simulatorClientSHA256 = "801bdc0701031c8eb39fe1f5f31446b7cd5fa630eac5dd86529aeee2f3608c0e"
+// simulatorClientRevisions lists every renderer revision this simulator was
+// checked against (chattraffic.ListDigest of ClientSourceFiles), with what it
+// models there. A revision not listed is reported as unmodeled, never silently
+// compared. In neither does the read that brings a closed local chat up to date
+// as it reopens take part in a scenario.
+var simulatorClientRevisions = map[string]string{
+	// A local chat opens with a 30-message page and reads older history 200 at a
+	// time; each conversation event refetches every loaded page.
+	"4158ecbf3e028c51401b03701270b63ea9dc13926c32b47abf2fbd3b9adece6a": "main c709ef2a73",
+	// The same, except that an open local chat reads only the rows above its
+	// floor and merges them, refetching every loaded page when it cannot.
+	"e02e80959e5b57cdb63b66e51d6f6d3d3ceddbbbecf0c7f0e963ce4bc7cdec1f": "main c709ef2a73 with the local tail refresh (#8502)",
+}
+
+// simulatorClientFor is the reviewed revision a run's renderer matches, or a
+// digest no renderer has when it matches none.
+func simulatorClientFor(clientDigest string) string {
+	if _, ok := simulatorClientRevisions[clientDigest]; ok {
+		return clientDigest
+	}
+	return chattraffic.SHA256Hex([]byte("unreviewed renderer revision"))
+}
 
 func TestChatTrafficBenchmark(t *testing.T) {
 	if os.Getenv(benchEnvOut) == "" && os.Getenv("AO_CHATTRAFFIC") != "1" && os.Getenv(benchEnvUpdate) != "1" {
@@ -185,7 +200,7 @@ func TestChatTrafficBenchmark(t *testing.T) {
 		FixturesSha256:        chattraffic.ListDigest(append(fixtureFiles, expectedFiles...)),
 		CeilingsSha256:        os.Getenv(benchEnvCeilings),
 		ClientSourceSha256:    clientDigest,
-		SimulatorClientSha256: simulatorClientSHA256,
+		SimulatorClientSha256: simulatorClientFor(clientDigest),
 		ClientPolicy:          policy,
 		Nonce:                 hex.EncodeToString(nonce),
 		Scenarios:             scenarios,
@@ -262,7 +277,9 @@ func readBenchClientPolicy(t *testing.T, repoRoot string) (chattraffic.ClientPol
 	}
 	hook, transport := chattraffic.ClientSourceFiles[0], chattraffic.ClientSourceFiles[1]
 	return chattraffic.ClientPolicy{
-		LocalPageSize:       constant(hook, "CONVERSATION_PAGE_SIZE"),
+		LocalPageSize:       constant(hook, "LOCAL_INITIAL_PAGE_SIZE"),
+		LocalOlderPageSize:  constant(hook, "LOCAL_OLDER_PAGE_SIZE"),
+		LocalTailRefresh:    strings.Contains(sources[transport], "refreshLocalConversationTail("),
 		RemoteLivePageSize:  constant(hook, "REMOTE_LIVE_PAGE_SIZE"),
 		RemoteOlderPageSize: constant(hook, "REMOTE_OLDER_PAGE_SIZE"),
 		RemoteOutputLimit:   constant(hook, "REMOTE_OUTPUT_LIMIT"),
@@ -890,9 +907,9 @@ func (c *benchConversation) AcknowledgeProviderEvent(_ context.Context, id strin
 
 // benchClient mirrors the renderer's conversation paging and live refresh
 // (frontend/src/renderer/hooks/useConversation.ts) and its event routing
-// (frontend/src/renderer/lib/event-transport.ts) at simulatorClientSHA256. It
-// is a simulator: it decodes real responses and applies the same rules, but it
-// is not the TypeScript code.
+// (frontend/src/renderer/lib/event-transport.ts) at the revisions listed in
+// simulatorClientRevisions. It is a simulator: it decodes real responses and
+// applies the same rules, but it is not the TypeScript code.
 type benchClient struct {
 	w       *benchWorld
 	remote  bool
@@ -949,7 +966,11 @@ func (c *benchClient) pageQuery(before int64) url.Values {
 		query.Set("beforeSequence", strconv.FormatInt(before, 10))
 	}
 	if !c.remote {
-		query.Set("limit", strconv.FormatInt(c.policy.LocalPageSize, 10))
+		size := c.policy.LocalPageSize
+		if before > 0 {
+			size = c.policy.LocalOlderPageSize
+		}
+		query.Set("limit", strconv.FormatInt(size, 10))
 		return query
 	}
 	size := c.policy.RemoteLivePageSize
@@ -1156,6 +1177,9 @@ func (c *benchClient) settled() bool {
 // the remote refreshRemoteConversation.
 func (c *benchClient) refresh() {
 	if !c.remote {
+		if c.policy.LocalTailRefresh && c.localTail() {
+			return
+		}
 		c.record(map[string]any{"type": "refresh", "mode": "local-refetch", "pages": len(c.pages)})
 		next := []benchPage{c.fetch(c.pageQuery(0))}
 		for len(next) < len(c.pages) && next[len(next)-1].HasMoreBefore {
@@ -2016,4 +2040,31 @@ func (c *benchClient) closeStream() {
 	c.metrics.WireBytesOut += written
 	c.stream.cancel()
 	_ = c.stream.resp.Body.Close()
+}
+
+// localTail is refreshLocalConversationTail: read the rows above the live
+// page's floor, at most a live page of them, and merge them into the live page.
+// False when the tail cannot replace those rows, or older loaded pages hold
+// rows below the floor that can still change; the caller then refetches every
+// loaded page. A tail that falls back still costs its request.
+func (c *benchClient) localTail() bool {
+	prior := c.pages[0]
+	floor := remoteConversationFloor(prior)
+	if floor < 1 {
+		return false
+	}
+	if len(c.pages) > 1 && remoteConversationFloor(mergeBenchPages(c.pages)) < prior.OldestSequence-1 {
+		return false
+	}
+	tail := c.fetch(url.Values{"afterSequence": {strconv.FormatInt(floor, 10)}, "limit": {strconv.FormatInt(c.policy.LocalPageSize, 10)}})
+	if tail.AfterSequence != floor {
+		return false
+	}
+	merged, ok := mergeRemoteConversationTail(prior, tail, floor)
+	if !ok {
+		return false
+	}
+	c.record(map[string]any{"type": "refresh", "mode": "local-tail-merged", "floor": floor})
+	c.pages[0] = merged
+	return true
 }
