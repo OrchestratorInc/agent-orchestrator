@@ -135,14 +135,15 @@ function BillingSectionInner({ titleHidden }: { titleHidden?: boolean }) {
 	const lapsed = summary.subscriptionStatus === "past_due" || summary.subscriptionStatus === "unpaid";
 	// A plan set to cancel stays current until it ends, then the org moves to Free.
 	const endsAt = subscribed && summary.cancelAt ? formatDay(summary.cancelAt) : "";
-	// A free trial is a live subscription. Stripe cancels it when it ends unless a
-	// payment method was added, and the org moves to Free; the trial's end is
-	// the current period's end. A trial set to cancel says so in endsAt instead.
+	// A free trial is a live subscription that took a card at Checkout. Stripe charges
+	// that card for the plan when the trial ends unless the trial was canceled first;
+	// the trial's end is the current period's end. A trial set to cancel says so in
+	// endsAt instead, and the org moves to Free when it ends.
 	const onTrial = subscribed && summary.subscriptionStatus === "trialing";
 	const trialing = onTrial && !endsAt;
 	const trialEnds = trialing && summary.currentPeriodEnd ? formatDay(summary.currentPeriodEnd) : "";
-	// A subscription that ended (a trial without a card, or a cancelled plan) leaves the
-	// org on Free: its cloud sessions are paused and new ones answer PLAN_REQUIRED.
+	// A subscription that ended (a canceled trial or plan) leaves the org on Free:
+	// its cloud sessions are paused and new ones answer PLAN_REQUIRED.
 	const planEnded = !subscribed && summary.subscriptionStatus === "canceled";
 	const offers = summary.plans ?? [];
 	const limits = summary.limits;
@@ -180,7 +181,7 @@ function BillingSectionInner({ titleHidden }: { titleHidden?: boolean }) {
 						{manage ? (
 							<Button size="sm" variant="quiet" disabled={pending !== null} onClick={() => void openPortal()}>
 								{pending === "portal" && portalFor === "" ? spinner : <ExternalLink className="size-icon-sm" aria-hidden="true" />}
-								{t("settings.billing.addPayment")}
+								{t("settings.billing.manageBilling")}
 							</Button>
 						) : null}
 					</div>

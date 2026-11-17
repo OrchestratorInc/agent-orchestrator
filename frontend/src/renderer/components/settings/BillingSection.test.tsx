@@ -172,18 +172,18 @@ describe("BillingSection", () => {
 		expect(screen.getByText("Only organization admins can manage billing.")).toBeInTheDocument();
 	});
 
-	it("says when a free trial ends and offers to add a payment method", async () => {
+	it("says the card is charged when a free trial ends, and links to Manage billing", async () => {
 		mocks.client.getBilling.mockResolvedValue(subscribed({ subscriptionStatus: "trialing", currentPeriodEnd: "2026-11-23T09:00:00Z" }));
 		mocks.client.createBillingPortal.mockResolvedValue({ url: "https://billing.stripe.test/p_trial" });
 		renderSection();
-		expect(await screen.findByText(/^Your Starter free trial ends on .+\. Add a payment method to keep it, or you'll move to Free then\.$/)).toBeInTheDocument();
+		expect(await screen.findByText(/^Your Starter free trial ends on .+\. Your card will be charged then unless you cancel in Manage billing\.$/)).toBeInTheDocument();
 		// A trial is a live subscription: the plan is current, says it is a trial, and changes go through the portal.
 		expect(within(card("starter")).getByText("Free trial")).toBeInTheDocument();
 		expect(within(card("starter")).queryByText("Current")).not.toBeInTheDocument();
 		expect(card("starter")).toHaveAttribute("aria-current", "true");
 		expect(within(card("starter")).getByRole("button", { name: "Manage" })).toBeInTheDocument();
 		expect(within(card("pro")).getByRole("button", { name: "Switch" })).toBeInTheDocument();
-		fireEvent.click(screen.getByRole("button", { name: "Add payment method" }));
+		fireEvent.click(screen.getByRole("button", { name: "Manage billing" }));
 		await waitFor(() => expect(mocks.openExternal).toHaveBeenCalledWith("https://billing.stripe.test/p_trial"));
 		expect(mocks.client.createBillingPortal).toHaveBeenCalledWith("org-1");
 		expect(mocks.client.createBillingCheckout).not.toHaveBeenCalled();
@@ -192,11 +192,11 @@ describe("BillingSection", () => {
 	it("still says a trial is running when the control plane sends no end date", async () => {
 		mocks.client.getBilling.mockResolvedValue(subscribed({ subscriptionStatus: "trialing", currentPeriodEnd: undefined }));
 		renderSection();
-		expect(await screen.findByText("You're on a Starter free trial. Add a payment method to keep it, or you'll move to Free when it ends.")).toBeInTheDocument();
+		expect(await screen.findByText("You're on a Starter free trial. Your card will be charged when it ends unless you cancel in Manage billing.")).toBeInTheDocument();
 	});
 
 	it("explains Free after a trial or plan ends, and offers plans without a second trial", async () => {
-		// What the control plane serves once Stripe cancels the trial: Free, not entitled, the trial used.
+		// What the control plane serves once a canceled trial ends: Free, not entitled, the trial used.
 		mocks.client.getBilling.mockResolvedValue({
 			enabled: true, exempt: false, plan: "free", subscriptionStatus: "canceled", entitled: false,
 			currentPeriodEnd: "2026-11-23T09:00:00Z", plans,
@@ -242,12 +242,12 @@ describe("BillingSection", () => {
 		expect(await within(card("starter")).findByRole("button", { name: "Manage" })).toBeInTheDocument();
 	});
 
-	it("tells members when a trial ends without offering to add a payment method", async () => {
+	it("tells members when a trial ends without the Manage billing button", async () => {
 		mocks.orgRole = "member";
 		mocks.client.getBilling.mockResolvedValue(subscribed({ subscriptionStatus: "trialing", currentPeriodEnd: "2026-11-23T09:00:00Z" }));
 		renderSection();
 		expect(await screen.findByText(/^Your Starter free trial ends on /)).toBeInTheDocument();
-		expect(screen.queryByRole("button", { name: "Add payment method" })).not.toBeInTheDocument();
+		expect(screen.queryByRole("button", { name: "Manage billing" })).not.toBeInTheDocument();
 	});
 
 	it("shows only the cancellation notice for a trial set to cancel", async () => {
@@ -257,7 +257,7 @@ describe("BillingSection", () => {
 		renderSection();
 		expect(await screen.findByText(/^Your Starter plan ends on .+\. You'll move to Free then\.$/)).toBeInTheDocument();
 		expect(screen.queryByText(/free trial ends/)).not.toBeInTheDocument();
-		expect(screen.queryByRole("button", { name: "Add payment method" })).not.toBeInTheDocument();
+		expect(screen.queryByRole("button", { name: "Manage billing" })).not.toBeInTheDocument();
 		// It is still a trial until it ends.
 		expect(within(card("starter")).getByText("Free trial")).toBeInTheDocument();
 	});
