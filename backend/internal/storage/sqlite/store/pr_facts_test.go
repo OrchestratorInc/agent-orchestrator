@@ -273,3 +273,86 @@ func TestListPRFactsProjectsChangeTimestamps(t *testing.T) {
 		}
 	}
 }
+
+// A PR whose base branch is another open PR's branch is stacked on it, even
+// when the parent belongs to a different session. The read projects the
+// parent's number so the board does not call the child ready to merge.
+func TestListPRFactsProjectsTheOpenStackParent(t *testing.T) {
+	s := newTestStore(t)
+	ctx := context.Background()
+	seedProject(t, s, "mer")
+	parentSession, _ := s.CreateSession(ctx, sampleRecord("mer"))
+	childSession, _ := s.CreateSession(ctx, sampleRecord("mer"))
+	now := time.Now().UTC().Truncate(time.Second)
+	write := func(pr domain.PullRequest) {
+		t.Helper()
+		pr.Host, pr.UpdatedAt, pr.ObservedAt = "github.com", now, now
+		if pr.Repo == "" {
+			pr.Repo = "acme/app"
+		}
+		if err := s.WriteSCMObservation(ctx, pr, nil, nil, nil, nil, ports.ReviewWritePreserve); err != nil {
+			t.Fatalf("write %s: %v", pr.URL, err)
+		}
+	}
+	// Open parent in another session, and a fork PR opened from its own main.
+	write(domain.PullRequest{URL: "parent", SessionID: parentSession.ID, Number: 8277, SourceBranch: "dev-warm", TargetBranch: "main"})
+	write(domain.PullRequest{URL: "fork", SessionID: parentSession.ID, Number: 9000, SourceBranch: "main", TargetBranch: "main"})
+	// A merged parent and a same-named branch in another repository.
+	write(domain.PullRequest{URL: "landed", SessionID: parentSession.ID, Number: 8100, Merged: true, SourceBranch: "old-base", TargetBranch: "main"})
+	write(domain.PullRequest{URL: "elsewhere", SessionID: parentSession.ID, Number: 50, Repo: "acme/other", SourceBranch: "other-base", TargetBranch: "main"})
+	// Long-lived heads: a main -> release sync PR would parent every PR into
+	// main, and a fork's develop says nothing about this repository's develop.
+	write(domain.PullRequest{URL: "sync", SessionID: parentSession.ID, Number: 9100, SourceBranch: "main", TargetBranch: "release", HeadIsDefaultBranch: true})
+	write(domain.PullRequest{URL: "fork-develop", SessionID: parentSession.ID, Number: 9200, SourceBranch: "develop", TargetBranch: "main", HeadFromFork: true})
+	// An archived session's PR still reads open, but nothing polls it any more,
+	// so that state may be stale and it must not hold a PR back.
+	archivedSession, _ := s.CreateSession(ctx, sampleRecord("mer"))
+	write(domain.PullRequest{URL: "parked", SessionID: archivedSession.ID, Number: 7000, SourceBranch: "parked-base", TargetBranch: "main"})
+	archivedSession.IsTerminated = true
+	archivedSession.UpdatedAt = now
+	if err := s.UpdateSession(ctx, archivedSession); err != nil {
+		t.Fatal(err)
+	}
+
+	write(domain.PullRequest{URL: "stacked", SessionID: childSession.ID, Number: 8487, SourceBranch: "fast", TargetBranch: "dev-warm"})
+	write(domain.PullRequest{URL: "on-main", SessionID: childSession.ID, Number: 8484, SourceBranch: "icons", TargetBranch: "main"})
+	write(domain.PullRequest{URL: "on-landed", SessionID: childSession.ID, Number: 8101, SourceBranch: "follow-up", TargetBranch: "old-base"})
+	write(domain.PullRequest{URL: "on-other-repo", SessionID: childSession.ID, Number: 8102, SourceBranch: "cross", TargetBranch: "other-base"})
+	write(domain.PullRequest{URL: "on-archived", SessionID: childSession.ID, Number: 8103, SourceBranch: "late", TargetBranch: "parked-base"})
+	write(domain.PullRequest{URL: "on-develop", SessionID: childSession.ID, Number: 8104, SourceBranch: "feature", TargetBranch: "develop"})
+
+	want := map[string]int{"stacked": 8277, "on-main": 0, "on-landed": 0, "on-other-repo": 0, "on-archived": 0, "on-develop": 0}
+	check := func(label string, facts []domain.PRFacts) {
+		t.Helper()
+		if len(facts) != len(want) {
+			t.Fatalf("%s: %d facts, want %d", label, len(facts), len(want))
+		}
+		for _, f := range facts {
+			if f.StackParent != want[f.URL] {
+				t.Fatalf("%s: %s stack parent = %d, want %d", label, f.URL, f.StackParent, want[f.URL])
+			}
+		}
+	}
+	single, err := s.ListPRFactsForSession(ctx, childSession.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	check("single", single)
+	batch, err := s.ListPRFactsForSessions(ctx, []domain.SessionID{childSession.ID})
+	if err != nil {
+		t.Fatal(err)
+	}
+	check("batch", batch[childSession.ID])
+
+	// The flags survive a read, so a poll that rebuilds the row from storage
+	// keeps them.
+	for url, want := range map[string][2]bool{"sync": {false, true}, "fork-develop": {true, false}, "parent": {false, false}} {
+		got, ok, err := s.GetPR(ctx, url)
+		if err != nil || !ok {
+			t.Fatalf("get %s: ok=%v err=%v", url, ok, err)
+		}
+		if got.HeadFromFork != want[0] || got.HeadIsDefaultBranch != want[1] {
+			t.Fatalf("%s: fork=%v default=%v, want %v", url, got.HeadFromFork, got.HeadIsDefaultBranch, want)
+		}
+	}
+}

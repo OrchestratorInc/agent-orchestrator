@@ -1,7 +1,7 @@
 import { lookup } from "node:dns/promises";
 import { isIP } from "node:net";
 import { isOwnPageRequest } from "../shared/agent-page-url";
-import { isLocal } from "./render-check-proxy";
+import { isLocalAddress } from "./render-check-proxy";
 
 type Resolve = (host: string) => Promise<Array<{ address: string; family: number }>>;
 
@@ -36,7 +36,7 @@ export async function agentPageRequestAllowed(requestUrl: string, pageUrl: strin
 	if (host === "localhost" || host.endsWith(".localhost")) return isOwnPageRequest(page, url);
 	const family = isIP(host);
 	const addresses = family ? [{ address: host, family }] : await resolve(host);
-	if (!addresses.some(({ address, family }) => isLocal(address, family))) return true;
+	if (!addresses.some(({ address }) => isLocalAddress(address))) return true;
 	// Only the page's own route on the daemon, named as loopback; any other local address is refused.
 	return isOwnPageRequest(page, url);
 }

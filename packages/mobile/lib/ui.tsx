@@ -182,7 +182,7 @@ export function MascotLamp({ status, size = 40 }: { status?: ConnStatus; size?: 
 
 /**
  * A board group's heading: a small medium label with a hairline running out of
- * it to the edge, T3 Code's list divider. With `onToggle` it folds its section
+ * it to the edge, like a list divider. With `onToggle` it folds its section
  * away, and a small chevron at the end of the rule says so.
  */
 export function ListSectionHeader({

@@ -138,6 +138,11 @@ func Build() ([]byte, error) {
 		if err := r.AddOperation(oc); err != nil {
 			return nil, fmt.Errorf("add operation %s %s: %w", op.method, op.path, err)
 		}
+		if op.rawReqBody != "" {
+			if err := setRawRequestBody(r.Spec, op.method, op.path, op.rawReqBody); err != nil {
+				return nil, err
+			}
+		}
 	}
 
 	return r.Spec.MarshalYAML()
@@ -413,6 +418,7 @@ var schemaNames = map[string]string{ //nolint:gosec // Public OpenAPI type names
 	"ControllersWorkspaceFileBlobQuery":                   "WorkspaceFileBlobQuery",
 	"ControllersWorkspaceFileRevisionQuery":               "WorkspaceFileRevisionQuery",
 	"ControllersWorkspaceSearchQuery":                     "WorkspaceSearchQuery",
+	"ControllersAttachmentUploadResponse":                 "AttachmentUploadResponse",
 	"ControllersStageSessionAttachmentsRequest":           "StageSessionAttachmentsRequest",
 	"ControllersStageSessionAttachmentsResponse":          "StageSessionAttachmentsResponse",
 	"ControllersAttachmentInput":                          "AttachmentInput",
@@ -740,6 +746,25 @@ var schemaNames = map[string]string{ //nolint:gosec // Public OpenAPI type names
 
 // markRequestBodyRequired sets requestBody.required: true on the operation's
 // JSON body. swaggest leaves it absent (== optional) for AddReqStructure bodies.
+// setRawRequestBody declares a required request body of raw bytes, which the
+// reflector has no struct form for: a file streamed as the whole body.
+func setRawRequestBody(spec *openapi31.Spec, method, path, contentType string) error {
+	var item openapi31.PathItem
+	if spec.Paths != nil {
+		item = spec.Paths.MapOfPathItemValues[path]
+	}
+	if method != http.MethodPost || item.Post == nil {
+		return fmt.Errorf("raw request body for %s %s: only a POST operation is supported", method, path)
+	}
+	// OpenAPI 3.1 describes raw bytes by the media type with no schema;
+	// "type: string, format: binary" would type the body as a string, which a
+	// typed client cannot fill from a File or Blob without reading it whole.
+	body := openapi31.RequestBody{Content: map[string]openapi31.MediaType{contentType: {}}}
+	body.WithRequired(true)
+	item.Post.RequestBody = &openapi31.RequestBodyOrReference{RequestBody: &body}
+	return nil
+}
+
 func markRequestBodyRequired(cor openapi.ContentOrReference) {
 	if rb, ok := cor.(*openapi31.RequestBodyOrReference); ok && rb.RequestBody != nil {
 		rb.RequestBody.WithRequired(true)
@@ -817,8 +842,9 @@ type respUnit struct {
 type operation struct {
 	method, path, id, summary string
 	tag                       string
-	pathParams                []any // path/query param containers (e.g. ProjectIDParam)
-	reqBody                   any   // JSON request body struct, nil when the op takes none
+	pathParams                []any  // path/query param containers (e.g. ProjectIDParam)
+	reqBody                   any    // JSON request body struct, nil when the op takes none
+	rawReqBody                string // content type of a required raw-bytes body, in place of reqBody
 	// optionalReqBody declares the body without marking it required, for the
 	// handlers that accept an empty body as a meaningful default.
 	optionalReqBody bool
@@ -1813,6 +1839,18 @@ func shellTerminalOperations() []operation {
 			resps: []respUnit{
 				{http.StatusOK, controllers.ConversationTurnSettingsPayload{}},
 				{http.StatusBadRequest, envelope.APIError{}},
+				{http.StatusNotFound, envelope.APIError{}},
+				{http.StatusConflict, envelope.APIError{}},
+				{http.StatusInternalServerError, envelope.APIError{}},
+				{http.StatusNotImplemented, envelope.APIError{}},
+			},
+		},
+		{
+			method: http.MethodPost, path: "/api/v1/sessions/{sessionId}/stop-turn", id: "stopSessionTurn", tag: "sessions",
+			summary:    "Stop an active turn without ending the session",
+			pathParams: []any{controllers.SessionIDParam{}},
+			resps: []respUnit{
+				{http.StatusNoContent, nil},
 				{http.StatusNotFound, envelope.APIError{}},
 				{http.StatusConflict, envelope.APIError{}},
 				{http.StatusInternalServerError, envelope.APIError{}},
@@ -3482,6 +3520,15 @@ func sessionOperations() []operation {
 			contentTypes: map[int]string{http.StatusOK: "text/html"},
 		},
 		{
+			method: http.MethodGet, path: "/api/v1/kept-artifacts", id: "listKeptArtifacts", tag: "sessions",
+			summary: "List the artifacts no session or project lists: those of sessions deleted with their artifacts kept, and of sessions in removed projects",
+			resps: []respUnit{
+				{http.StatusOK, controllers.ListKeptArtifactsResponse{}},
+				{http.StatusInternalServerError, envelope.APIError{}},
+				{http.StatusNotImplemented, envelope.APIError{}},
+			},
+		},
+		{
 			method: http.MethodGet, path: "/api/v1/sessions/{sessionId}/artifact-events", id: "streamSessionArtifactChanges", tag: "sessions",
 			summary:    "Stream changes to the files in a session's artifact directory",
 			pathParams: []any{controllers.SessionIDParam{}},
@@ -3638,6 +3685,18 @@ func sessionOperations() []operation {
 			pathParams:   []any{controllers.SessionIDParam{}},
 			resps:        []respUnit{{http.StatusOK, ""}, {http.StatusNotFound, envelope.APIError{}}, {http.StatusBadGateway, ""}},
 			contentTypes: map[int]string{http.StatusBadGateway: "text/plain"},
+		},
+		{
+			// The body is the file's raw bytes, streamed to disk with no size cap.
+			method: http.MethodPost, path: "/api/v1/attachment-uploads", id: "uploadAttachment", tag: "sessions",
+			summary:    "Stream a file to disk for a later attachment to name by uploadId",
+			rawReqBody: "application/octet-stream",
+			resps: []respUnit{
+				{http.StatusCreated, controllers.AttachmentUploadResponse{}},
+				{http.StatusBadRequest, envelope.APIError{}},
+				{http.StatusInternalServerError, envelope.APIError{}},
+				{http.StatusNotImplemented, envelope.APIError{}},
+			},
 		},
 		{
 			method: http.MethodPost, path: "/api/v1/sessions/{sessionId}/attachments", id: "stageSessionAttachments", tag: "sessions",

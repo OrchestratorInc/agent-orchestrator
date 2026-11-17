@@ -32,6 +32,7 @@ import { saveSideChatDraft, readSideChatDraft } from "./sideChatDraftWriter";
 import { useTabScrollEdges } from "../../hooks/useTabScrollEdges";
 import { MAX_SESSION_DISPLAY_NAME_LEN } from "../../hooks/useSessionRename";
 import { useUiStore } from "../../stores/ui-store";
+import { INLINE_ATTACHMENT_BYTES, readBlobAsBase64, type OutgoingAttachment } from "../../lib/attachment-uploads";
 
 type Side = components["schemas"]["SideConversation"];
 type Snapshot = components["schemas"]["SideSnapshot"];
@@ -355,24 +356,22 @@ export function SideComposer({
 	);
 }
 
-async function sideFilePayload(file: File): Promise<{ mimeType: string; data: string }> {
-	const dataUrl = await new Promise<string>((resolve, reject) => {
-		const reader = new FileReader();
-		reader.onload = () => resolve(String(reader.result));
-		reader.onerror = () => reject(reader.error);
-		reader.readAsDataURL(file);
-	});
-	return {
-		mimeType: file.type || "application/octet-stream",
-		data: dataUrl.split(",", 2)[1] ?? "",
-	};
+async function sideFilePayload(file: File): Promise<OutgoingAttachment> {
+	const mimeType = file.type || "application/octet-stream";
+	// A large file is not read: staging streams it from disk to the daemon.
+	if (file.size > INLINE_ATTACHMENT_BYTES) return { mimeType, data: "", file };
+	return { mimeType, data: await readBlobAsBase64(file) };
 }
+
+/** An image the agent can take inline: the native image cap is the inline size. */
+const nativeSideImage = ({ file }: { file: File }) =>
+	/^image\/(png|jpeg|gif|webp)$/i.test(file.type) && file.size <= INLINE_ATTACHMENT_BYTES;
 
 export function useIndependentSideChats(
 	sessionId: string,
 	models: ChatModel[],
 	skills: ChatSkill[],
-	stageAttachments: (items: { mimeType: string; data: string }[]) => Promise<string[]>,
+	stageAttachments: (items: OutgoingAttachment[]) => Promise<string[]>,
 	nativeImages: boolean,
 	enabled = true,
 	onNavigate?: (annotation: ChatAnnotationSummaryItem) => void,
@@ -1151,7 +1150,7 @@ export function useIndependentSideChats(
 						const parentId = sides.find((side) => side.id === sideId)?.mainConversationId;
 						if (submitted.references.some((ref) => ref.conversationId !== parentId))
 							throw new Error("References from another side cannot be transferred. Remove them before creating a new side.");
-						const images = [...extraAttachments, ...(await Promise.all((attachments[sideId] ?? []).filter(({ file }) => /^image\/(png|jpeg|gif|webp)$/i.test(file.type)).map(({ file }) => sideFilePayload(file))))];
+						const images = [...extraAttachments, ...(await Promise.all((attachments[sideId] ?? []).filter(nativeSideImage).map(({ file }) => sideFilePayload(file))))];
 						if (!available()) return;
 						const staged = extraAttachments.length ? await stageAttachments(extraAttachments) : [];
 						if (staged.length !== extraAttachments.length) throw new Error("Could not stage every attached file.");
@@ -1261,7 +1260,7 @@ export function useIndependentSideChats(
 						...extraAttachments,
 						...(await Promise.all(
 							files
-								.filter(({ file }) => /^image\/(png|jpeg|gif|webp)$/i.test(file.type))
+								.filter(nativeSideImage)
 								.map(({ file }) => sideFilePayload(file)),
 						)),
 					];
@@ -1570,7 +1569,6 @@ export function useIndependentSideChats(
 										)
 									}
 									actionPinned
-									actionPosition="end"
 									active={active}
 									buttonProps={{
 										"aria-keyshortcuts": "F2",

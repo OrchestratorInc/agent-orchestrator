@@ -240,9 +240,11 @@ describe("cloud funnel telemetry", () => {
 	it("splits plan refusals from limits", () => {
 		reportPlanRefusal("PLAN_REQUIRED", true);
 		reportPlanRefusal("WEEKLY_LIMIT_REACHED", false);
+		reportPlanRefusal("WORKER_SLOTS_FULL", false, "chat");
 		expect(captured).toEqual([
 			{ event: "ao.renderer.cloud_plan_refusal_shown", properties: { code: "PLAN_REQUIRED", shown: true } },
 			{ event: "ao.renderer.cloud_limit_reached", properties: { code: "WEEKLY_LIMIT_REACHED", shown: false } },
+			{ event: "ao.renderer.cloud_limit_reached", properties: { code: "WORKER_SLOTS_FULL", shown: false, source: "chat" } },
 		]);
 	});
 
@@ -258,6 +260,24 @@ describe("cloud funnel telemetry", () => {
 		await client.getBilling("org-1");
 		expect(events()).toEqual(["ao.renderer.cloud_checkout_started", "ao.renderer.cloud_checkout_completed"]);
 		expect(captured[1]?.properties).toMatchObject({ plan: "starter" });
+	});
+
+	it("tells a free trial apart from a paid checkout", async () => {
+		const plans = [{ name: "starter", id: "price_1", trialDays: 7 }, { name: "pro", id: "price_2" }];
+		let summary = { enabled: true, exempt: false, plan: "free", entitled: false, plans } as Record<string, unknown>;
+		const client = instrumentCloudClient(fakeClient({ getBilling: vi.fn(async () => summary) } as unknown as Partial<CloudCpClient>));
+		await client.getBilling("org-1");
+		await client.createBillingCheckout("org-1", "starter");
+		expect(captured.at(-1)).toMatchObject({ event: "ao.renderer.cloud_checkout_started", properties: { plan: "starter", trial: true } });
+		summary = { enabled: true, exempt: false, plan: "starter", entitled: true, subscriptionStatus: "trialing", plans: [plans[1]] };
+		await client.getBilling("org-1");
+		expect(captured.at(-1)).toMatchObject({ event: "ao.renderer.cloud_checkout_completed", properties: { plan: "starter", trial: true } });
+		// The trial is used up: a later checkout of another plan is paid.
+		await client.createBillingCheckout("org-1", "pro");
+		expect(captured.at(-1)).toMatchObject({ event: "ao.renderer.cloud_checkout_started", properties: { plan: "pro", trial: false } });
+		summary = { enabled: true, exempt: false, plan: "pro", entitled: true, subscriptionStatus: "active", plans: [plans[1]] };
+		await client.getBilling("org-1");
+		expect(captured.at(-1)).toMatchObject({ event: "ao.renderer.cloud_checkout_completed", properties: { plan: "pro", trial: false } });
 	});
 
 	it("passes other client methods through untouched", async () => {

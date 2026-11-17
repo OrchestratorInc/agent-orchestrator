@@ -212,6 +212,7 @@ import { ChatLoginBand, type ChatLoginBandProps } from "./ChatLoginBand";
 import { ImportedAgentBlocked, McpServerBanner, ReauthBanner, ThreadStateBanner, VersionSwitchBanner } from "./ChatStatusBanners";
 import { HostAwayBanner } from "../HostOfflineStatus";
 import type { AgentBlock } from "../../lib/session-import";
+import type { OutgoingAttachment } from "../../lib/attachment-uploads";
 import { UsageLimitNotice } from "./UsageLimitNotice";
 import {
 	activeTurn,
@@ -434,8 +435,6 @@ export interface ChatWorkspaceProps {
 	headerActions?: ReactNode;
 	/** Agent-session actions on the primary chat tab (interface switch, handoff). */
 	sessionTabAction?: ReactNode;
-	/** Widen the primary tab action slot only while an interface switch spinner is showing. */
-	sessionTabActionPinned?: boolean;
 	/** Pinned beside the tab strip, before the workspace topbar actions. */
 	tabStripAction?: ReactNode;
 	/** File tabs coordinated by SessionView, appended to the native chat tab strip. */
@@ -643,6 +642,8 @@ export interface ChatWorkspaceProps {
 	activateBranchError?: string;
 	/** The provider's skills. Empty leaves `/` an ordinary character. */
 	skills?: ChatSkill[];
+	/** The agent's skills are still being read; the `/` menu says so instead of staying shut. */
+	skillsLoading?: boolean;
 	/** Worktree paths offered for `@`. */
 	filePaths?: string[];
 	/** Told what follows "@" in the composer, for files that are searched rather than listed (see ChatComposer). */
@@ -658,7 +659,7 @@ export interface ChatWorkspaceProps {
 	 * can open. Absent means no attach control is offered — the fixture preview has
 	 * no worktree to write into.
 	 */
-	onStageAttachments?: (attachments: { mimeType: string; data: string; name?: string }[], signal?: AbortSignal) => Promise<string[]>;
+	onStageAttachments?: (attachments: OutgoingAttachment[], signal?: AbortSignal) => Promise<string[]>;
 	/** Staged files are uploaded to AO Cloud, up to maxBytes each; see ChatComposer. */
 	cloudAttachments?: { maxBytes: number };
 	/** The provider negotiated native image prompt blocks. */
@@ -829,7 +830,6 @@ function ChatWorkspaceContent({
 	remoteHostId,
 	headerActions,
 	sessionTabAction,
-	sessionTabActionPinned = false,
 	tabStripAction,
 	workspaceTabs,
 	workspaceTabActions,
@@ -933,6 +933,7 @@ function ChatWorkspaceContent({
 	activateBranchTarget,
 	activateBranchError,
 	skills,
+	skillsLoading,
 	filePaths,
 	filePathsTruncated,
 	onFileQuery,
@@ -2145,7 +2146,6 @@ function ChatWorkspaceContent({
 				session={session}
 				onSessionRenamed={onSessionRenamed}
 				sessionTabAction={sessionTabAction}
-				sessionTabActionPinned={sessionTabActionPinned}
 				tabStripAction={tabStripAction}
 				workspaceTabActions={workspaceTabActions}
 				workspaceActiveTabKey={workspaceActiveTabKey}
@@ -2272,7 +2272,7 @@ function ChatWorkspaceContent({
 							sessionLinkSourceKind={session?.cloud ? "cloud" : undefined}
 							workspacePaths={filePaths}
 						>
-							<ChatImageSourceProvider sessionId={snapshot.sessionId} assetBaseUrl={assetBaseUrl} remoteHost={Boolean(activeRemoteHostId)} artifacts={session?.artifactFiles} cloud={session?.cloud}>
+							<ChatImageSourceProvider sessionId={snapshot.sessionId} assetBaseUrl={assetBaseUrl} remoteHost={Boolean(activeRemoteHostId)} hostId={activeRemoteHostId} artifacts={session?.artifactFiles} cloud={session?.cloud}>
 							<ChatHostId.Provider value={activeRemoteHostId}>
 							<ChatTokenSkills.Provider value={skills ?? NO_SKILLS}>
 
@@ -2483,6 +2483,7 @@ function ChatWorkspaceContent({
 										// look like a regression.
 										emptyPlaceholder={conversationEmpty ? (artifactSession ? t("chat.welcome.artifactPlaceholder") : emptyChatPlaceholder) : undefined}
 										skills={skills}
+										skillsLoading={skillsLoading}
 										filePaths={filePaths}
 										filePathsTruncated={filePathsTruncated}
 										onFileQuery={onFileQuery}
@@ -2864,7 +2865,6 @@ function ChatHeader({
 	onTabsKeyDown,
 	headerActions,
 	sessionTabAction,
-	sessionTabActionPinned = false,
 	tabStripAction,
 	workspaceTabActions,
 	workspaceActiveTabKey,
@@ -2893,7 +2893,6 @@ function ChatHeader({
 	onTabsKeyDown?: (event: ReactKeyboardEvent<HTMLDivElement>) => void;
 	headerActions?: ReactNode;
 	sessionTabAction?: ReactNode;
-	sessionTabActionPinned?: boolean;
 	tabStripAction?: ReactNode;
 	workspaceTabActions?: ReactNode;
 	workspaceActiveTabKey?: string;
@@ -2972,7 +2971,6 @@ function ChatHeader({
 											onRenamed={onSessionRenamed}
 											session={session}
 											tabAction={sessionTabAction}
-											tabActionPinned={sessionTabActionPinned}
 										/>
 									) : (
 										<SessionPaneTab
