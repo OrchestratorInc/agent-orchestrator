@@ -124,22 +124,47 @@ type Restore struct {
 // refuses with ErrTooLarge, recording nothing, when the untracked files are past
 // the limits above.
 func Capture(ctx context.Context, workspace string, refs ...string) error {
+	_, _, err := CaptureClean(ctx, workspace, refs...)
+	return err
+}
+
+// CaptureClean is Capture that also returns the HEAD it recorded and whether
+// the index and files were exactly HEAD's, with nothing untracked.
+func CaptureClean(ctx context.Context, workspace string, refs ...string) (head string, clean bool, err error) {
 	top, err := toplevel(ctx, workspace)
 	if err != nil {
-		return err
+		return "", false, err
 	}
-	head, err := git(ctx, top, nil, nil, "rev-parse", "--verify", "HEAD")
+	head, err = git(ctx, top, nil, nil, "rev-parse", "--verify", "HEAD")
 	if err != nil {
-		return err
+		return "", false, err
 	}
 	if err := checkUntracked(ctx, top); err != nil {
-		return err
+		return "", false, err
 	}
 	current, err := capture(ctx, top, nil)
 	if err != nil {
-		return err
+		return "", false, err
 	}
-	return record(ctx, top, head, current, refs...)
+	if err := record(ctx, top, head, current, refs...); err != nil {
+		return "", false, err
+	}
+	tree, err := git(ctx, top, nil, nil, "rev-parse", "--verify", head+"^{tree}")
+	if err != nil {
+		return "", false, err
+	}
+	return head, current.index == tree && current.worktree == tree, nil
+}
+
+// Clean reports whether HEAD is still head and nothing is staged, changed, or
+// untracked: a clean snapshot taken at head still records these files.
+func Clean(ctx context.Context, workspace, head string) (bool, error) {
+	current, err := git(ctx, workspace, nil, nil, "rev-parse", "--verify", "HEAD")
+	if err != nil || current != head {
+		return false, err
+	}
+	status, err := git(ctx, workspace, nil, nil, "status", "--porcelain", "-z", "--untracked-files=all")
+	return err == nil && status == "", err
 }
 
 // Save records the worktree and index as Plan found them under ref, before Apply

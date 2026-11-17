@@ -275,6 +275,28 @@ func TestForksSnapshotTurnsForAnAgentThatCannotRollBack(t *testing.T) {
 // A new chat's queued first turn is snapshotted while its agent starts, so the
 // turn does not wait for the snapshot once the agent is ready.
 func TestFirstTurnFilesAreSnapshottedWhileTheAgentStarts(t *testing.T) {
+	workspace := startWithQueuedFirstTurn(t, func(string) {})
+	if got := snapshotFile(t, workspace, "a.txt"); got != "base" {
+		t.Fatalf("snapshot a.txt = %q, want base", got)
+	}
+}
+
+// A file the agent's startup changes after the early snapshot (a SessionStart
+// hook, say) is in the first turn's snapshot, so restoring the turn keeps it.
+func TestFirstTurnSnapshotIsRetakenWhenStartupChangesFiles(t *testing.T) {
+	workspace := startWithQueuedFirstTurn(t, func(workspace string) {
+		writeWorkspaceFile(t, workspace, "a.txt", "initialized\n")
+	})
+	if got := snapshotFile(t, workspace, "a.txt"); got != "initialized" {
+		t.Fatalf("snapshot a.txt = %q, want initialized", got)
+	}
+}
+
+// startWithQueuedFirstTurn queues a new chat's opening prompt, starts its agent,
+// and drains the prompt. The fake agent's start waits for the early snapshot,
+// then runs startup.
+func startWithQueuedFirstTurn(t *testing.T, startup func(workspace string)) string {
+	t.Helper()
 	chatsvc.EnableForkSnapshots(true)
 	t.Cleanup(func() { chatsvc.EnableForkSnapshots(false) })
 	st, id := openProvisioningStore(t, domain.SessionProvisionProvisioning)
@@ -288,6 +310,7 @@ func TestFirstTurnFilesAreSnapshottedWhileTheAgentStarts(t *testing.T) {
 		Drivers: fakeRegistry{driver: fakeDriver{conv: conv, start: func(ports.ChatStartConfig) (ports.ChatConversation, error) {
 			for deadline := time.Now().Add(5 * time.Second); time.Now().Before(deadline); time.Sleep(10 * time.Millisecond) {
 				if gitOutputIn(t, workspace, "for-each-ref", "refs/ao/snapshots/") != "" {
+					startup(workspace)
 					return conv, nil
 				}
 			}
@@ -308,9 +331,17 @@ func TestFirstTurnFilesAreSnapshottedWhileTheAgentStarts(t *testing.T) {
 	if err := svc.DrainQueued(ctx, id); err != nil {
 		t.Fatalf("drain: %v", err)
 	}
-	if refs := strings.Split(gitOutputIn(t, workspace, "for-each-ref", "--format=%(refname)", "refs/ao/snapshots/"), "\n"); len(refs) != 1 {
-		t.Fatalf("snapshot refs = %q, want the first turn's", refs)
+	return workspace
+}
+
+// snapshotFile reads name from the workspace's only snapshot.
+func snapshotFile(t *testing.T, workspace, name string) string {
+	t.Helper()
+	refs := strings.Split(gitOutputIn(t, workspace, "for-each-ref", "--format=%(refname)", "refs/ao/snapshots/"), "\n")
+	if len(refs) != 1 {
+		t.Fatalf("snapshot refs = %q, want one", refs)
 	}
+	return gitOutputIn(t, workspace, "show", refs[0]+":"+name)
 }
 
 // With session forks on, a turn start also keeps the session's artifacts as

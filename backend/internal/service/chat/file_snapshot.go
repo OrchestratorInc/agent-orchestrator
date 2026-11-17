@@ -168,9 +168,12 @@ func (c *Controller) snapshotFiles(ctx context.Context, turnIDs []string) {
 	if pre := c.preCapture; pre != nil {
 		c.preCapture = nil
 		<-pre.done
-		if len(turnIDs) == 1 && turnIDs[0] == pre.turnID {
-			err = pre.err
-			turnIDs = nil
+		// The agent's startup, a SessionStart hook for one, can change the files
+		// after the early snapshot; it stands only if nothing has changed.
+		if len(turnIDs) == 1 && turnIDs[0] == pre.turnID && pre.err == nil && pre.clean {
+			if unchanged, _ := filesnapshot.Clean(ctx, c.workspacePath, pre.head); unchanged {
+				turnIDs = nil
+			}
 		}
 	}
 	if len(turnIDs) > 0 {
@@ -200,13 +203,15 @@ func (c *Controller) snapshotFiles(ctx context.Context, turnIDs []string) {
 type preCapturedSnapshot struct {
 	turnID string
 	done   chan struct{}
+	head   string
+	clean  bool
 	err    error
 }
 
 // preCaptureFirstTurn starts the file snapshot for the queued first turn of a
 // chat whose agent is about to start, so the turn does not wait for it after
-// the agent is ready. AO writes nothing to the worktree while the agent
-// starts, so it records what a snapshot at dispatch would.
+// the agent is ready. Dispatch keeps it only when it recorded a clean
+// worktree and the worktree is still clean.
 func (s *Service) preCaptureFirstTurn(ctx context.Context, cfg StartConfig, owner domain.ConversationOwner, conversationID string) *preCapturedSnapshot {
 	if !forkSnapshots.Load() || !forksOlderTurns(cfg.Harness) || cfg.WorkspacePath == "" || owner.Kind != domain.ConversationOwnerSession {
 		return nil
@@ -220,7 +225,7 @@ func (s *Service) preCaptureFirstTurn(ctx context.Context, cfg StartConfig, owne
 		defer close(pre.done)
 		captureCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), fileSnapshotBudget)
 		defer cancel()
-		pre.err = filesnapshot.Capture(captureCtx, cfg.WorkspacePath, filesnapshot.Ref(cfg.SessionID, pre.turnID))
+		pre.head, pre.clean, pre.err = filesnapshot.CaptureClean(captureCtx, cfg.WorkspacePath, filesnapshot.Ref(cfg.SessionID, pre.turnID))
 	}()
 	return pre
 }
