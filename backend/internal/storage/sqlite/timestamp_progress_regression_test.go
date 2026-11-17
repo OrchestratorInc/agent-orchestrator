@@ -28,6 +28,11 @@ func TestTimestampProgressUnrelatedPendingMigrationKeepsCompletion(t *testing.T)
 	dir := t.TempDir()
 	db := openMigratedTestDBIn(t, dir)
 	ctx := context.Background()
+	// Receipt history can span several repair batches as migrations accumulate.
+	if _, err := db.Exec(`WITH RECURSIVE receipts(i) AS (VALUES(1) UNION ALL SELECT i+1 FROM receipts WHERE i<257)
+INSERT INTO goose_db_version(version_id,is_applied) SELECT (SELECT max(version_id) FROM goose_db_version WHERE is_applied=1),1 FROM receipts`); err != nil {
+		t.Fatal(err)
+	}
 	if err := repairTimestamps(ctx, db); err != nil {
 		t.Fatal(err)
 	}
@@ -42,7 +47,11 @@ func TestTimestampProgressUnrelatedPendingMigrationKeepsCompletion(t *testing.T)
 	if pending != 0 {
 		t.Fatalf("unrelated migration discarded completion for %d untouched tables", pending)
 	}
-	counts := &repairScanCounts{}
+	var complete bool
+	if err := db.QueryRow(`SELECT completed FROM timestamp_repair_progress WHERE table_name='goose_db_version'`).Scan(&complete); err != nil || complete {
+		t.Fatalf("migration receipt write inherited completion: complete=%v err=%v", complete, err)
+	}
+	counts := &repairScanCounts{excludeTable: "goose_db_version"}
 	opts := repairScanOptions(t, counts, nil)
 	reader, err := sql.Open(opts.driver, databaseURI(dir)+pragmas)
 	if err != nil {
@@ -52,8 +61,8 @@ func TestTimestampProgressUnrelatedPendingMigrationKeepsCompletion(t *testing.T)
 	if _, err := runTimestampRepairState(ctx, db, reader, false, newTimestampRepairState()); err != nil {
 		t.Fatal(err)
 	}
-	if scans := counts.reader.Load() + counts.writer.Load(); scans != 1 {
-		t.Fatalf("repair scanned %d tables; only the Goose receipt changed", scans)
+	if scans := counts.reader.Load() + counts.writer.Load(); scans != 0 {
+		t.Fatalf("untouched tables required %d repair SELECTs", scans)
 	}
 }
 
