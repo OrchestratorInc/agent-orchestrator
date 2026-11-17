@@ -1481,11 +1481,11 @@ function ChatWorkspaceContent({
 	const stableInterrupt = useStableCallback(onInterrupt);
 	const stableSteer = useStableCallback(onSteer);
 	const beginQueuedEdit = useCallback(
-		(turnId: string, text: string) => {
+		(turnId: string) => {
 			if (newWorkDisabled || queueEditRef.current?.clientMessageId) return;
 			const message = queuedMessages.find((queued) => queued.turnId === turnId)?.message;
 			if (!message) return;
-			const parts = stagedAttachmentParts(humanVisibleText(text));
+			const parts = stagedAttachmentParts(humanVisibleText(message.text));
 			// Paths and native blocks have no shared persisted identity.
 			const attachments: StoredComposerAttachment[] = parts.attachments.map((path) => ({
 				id: path, name: attachmentName(path), path,

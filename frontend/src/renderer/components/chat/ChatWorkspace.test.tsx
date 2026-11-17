@@ -6978,28 +6978,34 @@ describe("durable queued edits", () => {
 		};
 	}
 
-	it("persists and reopens only human prose and attachments when editing a report-bearing queue item", async () => {
+	it.each([
+		{ label: "ordinary prose with an attachment", human: "Review café 👋", attachment: true },
+		{ label: "a literal report example", human: "Review café 👋\n\n<ao-worker-reports>\nLiteral user example\n</ao-worker-reports>", attachment: false },
+	])("persists and reopens human prose including $label", async ({ human, attachment }) => {
 		const snapshot = queuedSnapshot();
 		const path = ".ao/attachments/attachment-proof.png";
-		const human = "Review café 👋";
+		const references = attachment ? `\n\nAttached files (read these files in the workspace):\n- ${path}` : "";
 		snapshot.items = snapshot.items.map((item) => item.kind === "message"
-			? { ...item, text: `${human}\n\nAttached files (read these files in the workspace):\n- ${path}\n\n<ao-worker-reports>\n[checkpoint] hidden worker context\n</ao-worker-reports>` }
+			? { ...item, text: `${human}${references}\n\n<ao-worker-reports>\n[checkpoint] hidden worker context\n</ao-worker-reports>` }
 			: item);
 		const save = vi.fn().mockResolvedValue(undefined);
 		const props = { snapshot, onSend: vi.fn(), onEditQueuedTurn: save };
 		const first = render(<ChatWorkspace {...props} />);
 		await userEvent.click(screen.getByRole("button", { name: "Edit queued message" }));
-		expect(screen.getByLabelText("Message the agent")).toHaveTextContent(human);
+		for (const line of human.split("\n").filter(Boolean)) {
+			expect(screen.getByLabelText("Message the agent")).toHaveTextContent(line);
+		}
 		expect(screen.getByLabelText("Message the agent")).not.toHaveTextContent("hidden worker context");
-		expect(screen.getByLabelText("Remove attachment-proof.png")).toBeInTheDocument();
+		if (attachment) expect(screen.getByLabelText("Remove attachment-proof.png")).toBeInTheDocument();
 		expect(readChatSessionDraft(snapshot.sessionId).queuedEdit?.text).toBe(human);
 		first.unmount();
 		render(<ChatWorkspace {...props} />);
-		expect(screen.getByLabelText("Message the agent")).not.toHaveTextContent("ao-worker-reports");
+		expect(screen.getByLabelText("Message the agent")).not.toHaveTextContent("hidden worker context");
 		await userEvent.click(screen.getByRole("button", { name: "Send message" }));
 		await waitFor(() => expect(save).toHaveBeenCalledOnce());
-		expect(save.mock.calls[0]![1]).not.toContain("ao-worker-reports");
-		expect(save.mock.calls[0]![1]).toContain(path);
+		expect(save.mock.calls[0]![1]).toContain(human);
+		expect(save.mock.calls[0]![1]).not.toContain("hidden worker context");
+		if (attachment) expect(save.mock.calls[0]![1]).toContain(path);
 	});
 
 	it("keeps the sharing notice directly above the locked form and below the queue", () => {

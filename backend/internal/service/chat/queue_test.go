@@ -15,10 +15,13 @@ import (
 
 func TestQueuedEditPreservesWorkerReports(t *testing.T) {
 	const suffix = "\n\n<ao-worker-reports>\n[checkpoint] worker one\n\n[done] worker two\npr_created: https://example.com/pr/1\n</ao-worker-reports>"
-	for _, tc := range []struct{ name, editedSuffix string }{
-		{"human text only", ""},
-		{"legacy full text", suffix},
-		{"modified legacy context", "\n\n<ao-worker-reports>\nchanged report\n</ao-worker-reports>"},
+	const example = "\n\n<ao-worker-reports>\nliteral user example\n</ao-worker-reports>"
+	for _, tc := range []struct{ name, editedSuffix, humanSuffix string }{
+		{"human text only", "", ""},
+		{"legacy full text", suffix, ""},
+		{"legacy trailing newline", suffix + "\n", ""},
+		{"legacy trailing whitespace", suffix + "\r\n \t\u00a0", ""},
+		{"authored report example", example, example},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			h, provider := steerHarness(t)
@@ -31,6 +34,7 @@ func TestQueuedEditPreservesWorkerReports(t *testing.T) {
 			}
 			zero := int64(0)
 			text := "Review café 👋" + tc.editedSuffix
+			wantText := "Review café 👋" + tc.humanSuffix + suffix
 			edit := chatsvc.QueuedMessageEdit{Text: text, ClientMessageID: "report-edit", ExpectedRevision: &zero}
 			for range 2 {
 				if err := h.svc.EditQueuedTurn(ctx, testSession, turn.ID, edit); err != nil {
@@ -45,7 +49,7 @@ func TestQueuedEditPreservesWorkerReports(t *testing.T) {
 			for _, msg := range snapshot.Messages {
 				if msg.TurnID == turn.ID {
 					found = true
-					if msg.Text != "Review café 👋"+suffix || msg.Revision != 1 {
+					if msg.Text != wantText || msg.Revision != 1 {
 						t.Fatalf("saved message lost or duplicated worker reports: %+v", msg)
 					}
 				}
@@ -60,7 +64,7 @@ func TestQueuedEditPreservesWorkerReports(t *testing.T) {
 				t.Fatal(err)
 			}
 			calls := provider.steers()
-			if len(calls) != 1 || calls[0].msg.Text != "Review café 👋"+suffix || strings.Count(calls[0].msg.Text, "[checkpoint]") != 1 {
+			if len(calls) != 1 || calls[0].msg.Text != wantText || strings.Count(calls[0].msg.Text, "[checkpoint]") != 1 {
 				t.Fatalf("provider must receive edited text and reports once: %+v", calls)
 			}
 		})

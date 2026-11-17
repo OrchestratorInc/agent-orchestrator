@@ -8,6 +8,7 @@ import (
 	"errors"
 	"fmt"
 	"strings"
+	"unicode"
 
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
 	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
@@ -203,10 +204,11 @@ func (c *Controller) EditQueuedTurn(ctx context.Context, turnID string, edit Que
 			// Preserve its exact context and attribution, including when an older
 			// client sends the full envelope back with its human-text edit.
 			reports = message.Text[index:]
-			if strings.HasSuffix(text, "</ao-worker-reports>") {
-				if index := strings.LastIndex(text, "\n\n<ao-worker-reports>\n"); index >= 0 {
-					text = text[:index]
-				}
+			// Match only the recorded batch: report-shaped human examples stay
+			// editable. Older clients may add whitespace after the envelope.
+			legacyText := strings.TrimRightFunc(text, unicode.IsSpace)
+			if strings.HasSuffix(legacyText, reports) {
+				text = strings.TrimSuffix(legacyText, reports)
 			}
 		}
 	}
