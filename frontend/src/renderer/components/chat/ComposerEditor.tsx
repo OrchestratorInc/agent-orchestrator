@@ -27,6 +27,7 @@ import {
 	KEY_ENTER_COMMAND,
 	KEY_ESCAPE_COMMAND,
 	KEY_TAB_COMMAND,
+	SKIP_DOM_SELECTION_TAG,
 	TextNode,
 	type EditorConfig,
 	type LexicalEditor,
@@ -85,7 +86,7 @@ export type ComposerEditorHandle = {
 	focus(): void;
 	clear(): void;
 	/** Replaces the text with the caret at its end, or at its start when asked. */
-	setText(text: string, caret?: "start" | "end"): void;
+	setText(text: string, caret?: "start" | "end", options?: { preserveFocus?: boolean }): void;
 	/** Where a collapsed caret sits relative to the whole text; undefined for a range. */
 	caretBoundary(): { atStart: boolean; atEnd: boolean } | undefined;
 	insertToken(trigger: ComposerTrigger, value: string): void;
@@ -657,8 +658,9 @@ const EditorBridge = forwardRef<
 					tag: PROGRAMMATIC_TEXT_UPDATE_TAG,
 				});
 			},
-			setText: (text, caret) => {
+			setText: (text, caret, options) => {
 				editor.update(() => {
+					if (options?.preserveFocus) $addUpdateTag(SKIP_DOM_SELECTION_TAG);
 					$replaceEditorText(text, attachedImages(), caret);
 					editor.dispatchCommand(CLEAR_HISTORY_COMMAND, undefined);
 				}, {
@@ -862,7 +864,15 @@ const EditorBridge = forwardRef<
 			if (!plainKey(event)) return false;
 			const caret = $caretLine();
 			const action = caret && listEnter(caret.line, caret.column, caret.previous);
-			if (!caret || !action) return false;
+			if (!caret || !action) {
+				// Shift+Enter inserts a plain newline (PlainTextPlugin has no default handler).
+				if (!event.shiftKey) return false;
+				const selection = $getSelection();
+				if (!$isRangeSelection(selection)) return false;
+				$addUpdateTag(HISTORY_PUSH_TAG);
+				selection.insertRawText("\n");
+				return handled(event);
+			}
 			if (action.kind === "exit") return $applyLinePrefixEdit(caret.node, caret.column, action.edit) && handled(event);
 			$addUpdateTag(HISTORY_PUSH_TAG);
 			caret.selection.insertRawText(action.text);

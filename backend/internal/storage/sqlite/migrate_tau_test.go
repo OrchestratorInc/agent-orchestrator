@@ -8,17 +8,17 @@ import (
 )
 
 const (
-	tauMigrationVersion       int64 = 20261114173028000
-	tauMigrationPriorVersion  int64 = 20261114072016988
+	tauMigrationVersion       int64 = 20261117090000000
+	tauMigrationPriorVersion  int64 = 20261116173733857
 	tauMigrationSessionInsert       = `INSERT INTO sessions (id, project_id, num, harness, created_at, updated_at, activity_last_at) VALUES (?, 'tau-project', ?, ?, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)`
 )
 
-// TestMigration20261114173028000AllowsTauAndReversesBothHistoricalSchemas mirrors the
+// TestMigration20261117090000000AllowsTauAndReversesBothHistoricalSchemas mirrors the
 // Hermes coverage: the new harness must be insertable on a current and a
 // legacy-qm schema, an unknown harness must still be rejected, a rollback must
 // refuse existing Tau rows, and the down migration must restore the exact prior
 // constraint.
-func TestMigration20261114173028000AllowsTauAndReversesBothHistoricalSchemas(t *testing.T) {
+func TestMigration20261117090000000AllowsTauAndReversesBothHistoricalSchemas(t *testing.T) {
 	for _, legacyQM := range []bool{false, true} {
 		name := "current"
 		if legacyQM {
@@ -78,7 +78,7 @@ func TestMigration20261114173028000AllowsTauAndReversesBothHistoricalSchemas(t *
 	}
 }
 
-func TestMigration20261114173028000RejectsUnrecognizedConstraint(t *testing.T) {
+func TestMigration20261117090000000RejectsUnrecognizedConstraint(t *testing.T) {
 	db := openMigratedDatabaseCopy(t, tauMigrationPriorVersion)
 	mustExec(t, db, `PRAGMA writable_schema = ON`)
 	mustExec(t, db, `UPDATE sqlite_master SET sql = replace(sql, '''fake''))', '''fake'', ''other''))') WHERE type = 'table' AND name = 'sessions'`)
@@ -105,7 +105,7 @@ func TestMigration20261114173028000RejectsUnrecognizedConstraint(t *testing.T) {
 	upTo(t, db, tauMigrationVersion)
 }
 
-func TestMigration20261114173028000PreservesHarnessesAfterTau(t *testing.T) {
+func TestMigration20261117090000000PreservesHarnessesAfterTau(t *testing.T) {
 	db := openMigratedDatabaseCopy(t, tauMigrationPriorVersion)
 	upTo(t, db, tauMigrationVersion)
 	mustExec(t, db, `PRAGMA writable_schema = ON`)

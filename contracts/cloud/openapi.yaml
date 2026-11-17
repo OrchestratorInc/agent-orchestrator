@@ -104,6 +104,145 @@ paths:
           description: The personal coding-agent credential was disconnected.
         default:
           $ref: "#/components/responses/Error"
+  /api/cloud/v1/me/agent-accounts:
+    get:
+      operationId: listAgentAccounts
+      tags: [Providers]
+      description: >-
+        The authenticated user's coding-agent accounts: every login or key
+        they saved for Claude Code, Codex, Cursor and opencode. Present only
+        on a control plane whose CurrentAccount reports agentAccounts.
+      responses:
+        "200":
+          description: The user's coding-agent accounts.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [agentAccounts]
+                properties:
+                  agentAccounts:
+                    type: array
+                    items:
+                      $ref: "#/components/schemas/CloudAgentAccount"
+        default:
+          $ref: "#/components/responses/Error"
+    post:
+      operationId: addAgentAccount
+      tags: [Providers]
+      description: >-
+        Validates, encrypts and saves another account for an agent. The
+        first account of an agent becomes its default. 409
+        AGENT_ACCOUNT_DUPLICATE when the user already saved the same login.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/AddAgentAccountInput"
+      responses:
+        "201":
+          description: The account was saved.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [agentAccount]
+                properties:
+                  agentAccount:
+                    $ref: "#/components/schemas/CloudAgentAccount"
+        default:
+          $ref: "#/components/responses/Error"
+  /api/cloud/v1/me/agent-accounts/{accountId}:
+    parameters:
+      - $ref: "#/components/parameters/AgentAccountId"
+    patch:
+      operationId: renameAgentAccount
+      tags: [Providers]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/RenameAgentAccountInput"
+      responses:
+        "200":
+          description: The account was renamed.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [agentAccount]
+                properties:
+                  agentAccount:
+                    $ref: "#/components/schemas/CloudAgentAccount"
+        default:
+          $ref: "#/components/responses/Error"
+    delete:
+      operationId: removeAgentAccount
+      tags: [Providers]
+      description: >-
+        Removes an account. 409 AGENT_ACCOUNT_IN_USE while a live session
+        runs on it: move or end those sessions first. Removing an agent's
+        default makes its most recently checked other account the default.
+      responses:
+        "204":
+          description: The account was removed.
+        default:
+          $ref: "#/components/responses/Error"
+  /api/cloud/v1/me/agent-accounts/{accountId}/default:
+    parameters:
+      - $ref: "#/components/parameters/AgentAccountId"
+    post:
+      operationId: makeAgentAccountDefault
+      tags: [Providers]
+      description: >-
+        Makes the account its agent's default, the one new sessions run on.
+        Sessions already running keep their own account.
+      responses:
+        "200":
+          description: The account is its agent's default.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [agentAccount]
+                properties:
+                  agentAccount:
+                    $ref: "#/components/schemas/CloudAgentAccount"
+        default:
+          $ref: "#/components/responses/Error"
+  /api/cloud/v1/me/agent-accounts/{accountId}/credential:
+    parameters:
+      - $ref: "#/components/parameters/AgentAccountId"
+    put:
+      operationId: replaceAgentAccountCredential
+      tags: [Providers]
+      description: >-
+        Signs an account in again. The credential must be the same kind
+        (subscription login or key) and, where the login names one, the same
+        account: 409 AGENT_ACCOUNT_MISMATCH otherwise, since sessions running
+        on the account were set up for it. Save a different login with
+        addAgentAccount.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/PutAgentProviderConnectionInput"
+      responses:
+        "200":
+          description: The account's credential was replaced.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [agentAccount]
+                properties:
+                  agentAccount:
+                    $ref: "#/components/schemas/CloudAgentAccount"
+        default:
+          $ref: "#/components/responses/Error"
   /api/cloud/v1/me/artifact-shares:
     get:
       operationId: listArtifactShares
@@ -1396,6 +1535,53 @@ paths:
                 $ref: "#/components/schemas/SessionPinResponse"
         default:
           $ref: "#/components/responses/Error"
+  /api/cloud/v1/orgs/{orgId}/sessions/{sessionId}/agent-account:
+    parameters:
+      - $ref: "#/components/parameters/OrgId"
+      - $ref: "#/components/parameters/SessionId"
+    get:
+      operationId: getSessionAgentAccount
+      tags: [Sessions]
+      responses:
+        "200":
+          description: The account the session's agent runs on.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SessionAgentAccount"
+        default:
+          $ref: "#/components/responses/Error"
+    put:
+      operationId: switchSessionAgentAccount
+      tags: [Sessions]
+      description: >-
+        Moves the session's agent to another of its creator's accounts for
+        the same agent, through the session's interface transition: the
+        agent stops (after its turn with drain, at once with interrupt) and
+        resumes the same conversation on the new account, or stays on the
+        old one if that fails. Only the session's creator may move it. 409
+        AGENT_ACCOUNT_UNCHANGED for the account it runs on, 422
+        AGENT_ACCOUNT_UNUSABLE for an account that is not signed in or is
+        another agent's.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/SwitchSessionAgentAccountInput"
+      responses:
+        "202":
+          description: The move was accepted; the transition reports its progress.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [transition]
+                properties:
+                  transition:
+                    $ref: "#/components/schemas/SessionInterfaceTransition"
+        default:
+          $ref: "#/components/responses/Error"
   /api/cloud/v1/orgs/{orgId}/sessions/{sessionId}/interface-transition:
     parameters:
       - $ref: "#/components/parameters/OrgId"
@@ -1438,9 +1624,9 @@ paths:
       operationId: cancelSessionInterfaceTransition
       tags: [Sessions]
       description: >-
-        An agent switch can be cancelled only by the session's creator (403
-        forbidden otherwise); an interface-only switch by any member who may
-        switch it.
+        An agent switch or a move to another account can be cancelled only by
+        the session's creator (403 forbidden otherwise); an interface-only
+        switch by any member who may switch it.
       responses:
         "200":
           description: Interface switch cancelled.
@@ -2525,13 +2711,32 @@ paths:
         composer lease holder, the session's creator, and the organization's
         owners and admins. Deleting a message already deleted answers 202
         again. Offered when offering.features lists queued-delete.
+        A message being steered into the running turn (steerQueuedMessage)
+        deletes too: if the worker has not taken the steer yet it is
+        withdrawn (chat.turn_steer_failed with deleteRequested) and the message
+        deleted at once; if the worker is taking it, the answer is 202 with
+        pending and the steer's outcome decides: chat.turn_interrupted of
+        reason deleted when the agent did not take it, or chat.turn_steered
+        with deleteRequested when it did (the message was delivered). Deleting
+        another queued message is unaffected by a steer in flight.
       responses:
         "202":
           description: The queued message was deleted, now or before.
           content:
             application/json:
               schema:
-                $ref: "#/components/schemas/WorkerOKResponse"
+                type: object
+                additionalProperties: false
+                required: [ok]
+                properties:
+                  ok:
+                    type: boolean
+                    const: true
+                  pending:
+                    type: boolean
+                    description: >-
+                      The worker is taking the message as a steer; its outcome
+                      decides whether it is deleted or was delivered.
         "403":
           description: forbidden. The caller may not stop this turn, or only watches the session.
           content:
@@ -2543,6 +2748,81 @@ paths:
             TURN_NOT_QUEUED: the agent started on the message, or it was
             stopped or ended otherwise, so it can no longer be deleted (the
             turn is left as it is). SESSION_TERMINATED: the session ended.
+            ALREADY_STEERED: the agent already took the message as a steer
+            into its running turn, so it was delivered and cannot be deleted.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorEnvelope"
+        default:
+          $ref: "#/components/responses/Error"
+  /api/cloud/v1/orgs/{orgId}/sessions/{sessionId}/turns/{turnId}/steer-queued:
+    parameters:
+      - $ref: "#/components/parameters/OrgId"
+      - $ref: "#/components/parameters/SessionId"
+      - $ref: "#/components/parameters/TurnId"
+    post:
+      operationId: steerQueuedMessage
+      tags: [Sessions]
+      description: >-
+        Steer a message whose turn is still queued into the session's running
+        turn, instead of leaving it to run as a turn of its own. The text
+        steered is the queued message's own; a steer carries text alone, so a
+        message with files (or with no text) is refused and runs as its own
+        turn. Allowed for whoever may stop the
+        queued turn (see deleteQueuedMessage) and, like a steer, only with the
+        composer lease. Answers chat.turn_steer_requested naming the queued
+        turn (payload.queuedTurnId). The message leaves the queue only once
+        the agent takes the guidance: chat.turn_steered with its queuedTurnId,
+        then chat.turn_interrupted of reason steered for the queued turn. When
+        the agent does not take it (it refused, the running turn ended, the
+        worker did not answer in time) chat.turn_steer_failed names the queued
+        turn and says why, and the message stays queued, in its place. While
+        a steer of a queued message is in flight the queue waits for it, so a
+        message is never both steered and run. Offered when offering.features
+        lists queued-steer.
+      parameters:
+        - $ref: "#/components/parameters/IdempotencyKey"
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              properties:
+                composerEpoch:
+                  type: integer
+                  format: int64
+                  minimum: 0
+                  description: The composer lease grant the caller holds; 0 or absent for none.
+      responses:
+        "202":
+          description: The steer was asked of the agent; its outcome follows as an event.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [event]
+                properties:
+                  event:
+                    $ref: "#/components/schemas/TurnSteerRequestedEvent"
+        "403":
+          description: forbidden. The caller may not direct this turn, or only watches the session.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorEnvelope"
+        "409":
+          description: >-
+            TURN_NOT_QUEUED: the agent started on the message, or it ended.
+            TURN_NOT_STEERABLE: no running turn can take guidance (nothing is
+            running, or its agent cannot steer); the message stays queued.
+            STEER_CONTENT_UNSUPPORTED: the message has files or no text,
+            which a steer cannot carry; it stays queued. STEER_IN_PROGRESS: a
+            steer of this message is already in flight.
+            COMPOSER_LOCKED, COMPOSER_LEASE_LOST: someone else holds the
+            composer.
           content:
             application/json:
               schema:
@@ -4524,6 +4804,13 @@ components:
         `worker:transport` for workspace and terminal transport, and
         `worker:notification` for durable agent notification intake.
   parameters:
+    AgentAccountId:
+      name: accountId
+      in: path
+      required: true
+      schema:
+        type: string
+        format: uuid
     CueId:
       name: cueId
       in: path
@@ -4919,6 +5206,10 @@ components:
           type: string
         limits:
           $ref: "#/components/schemas/PlanLimits"
+        trialDays:
+          type: integer
+          minimum: 1
+          description: Days of free trial that a Checkout of this plan starts. Present only while the organization can still start a free trial.
     PutPushDeviceInput:
       type: object
       additionalProperties: false
@@ -5383,8 +5674,9 @@ components:
             sessions) and the deployment's own: attachments when the session
             attachment routes are on, queued-edit when a queued message can be
             edited (editQueuedMessage), queued-delete when a queued message can
-            be deleted without stopping a started turn (deleteQueuedMessage).
-            Empty when none apply.
+            be deleted without stopping a started turn (deleteQueuedMessage),
+            queued-steer when a queued message can be steered into the running
+            turn (steerQueuedMessage). Empty when none apply.
           items:
             type: string
         maxAttachmentBytes:
@@ -5457,6 +5749,12 @@ components:
             a control plane that cannot switch a session's agent.
           items:
             $ref: "#/components/schemas/CloudAgentHarness"
+        agentAccounts:
+          type: boolean
+          description: >-
+            The control plane keeps several accounts per coding agent
+            (listAgentAccounts) and moves a session between them
+            (switchSessionAgentAccount). Absent or false otherwise.
     AgentCapability:
       type: string
       enum:
@@ -8257,6 +8555,16 @@ components:
         targetReasoningEffort:
           type: string
           description: The effort the switched-to agent starts at.
+        sourceAccountId:
+          type: string
+          format: uuid
+          description: The account the session ran on before an account move. Set only on an account move.
+        targetAccountId:
+          type: string
+          format: uuid
+          description: >-
+            The account an account move moves the session to. Set only on an
+            account move; the session runs on it once the move commits.
         createdAt:
           type: string
           format: date-time
@@ -8296,8 +8604,8 @@ components:
             Switches the session's coding agent to this harness (one of the
             current account's agentSwitchHarnesses), in the same sandbox and
             checkout. targetMode may then be the session's current mode. The
-            new agent receives a handoff note of the conversation so far, or
-            resumes its own conversation when the session ran it before.
+            new agent starts a new conversation with a handoff note of the
+            conversation so far, even when the session ran it before.
             Messages sent while the switch runs reach the new agent. A
             control plane without agent switching refuses the field. Only the
             session's creator may switch its agent, since the new agent runs
@@ -9250,6 +9558,13 @@ components:
           type: string
           minLength: 1
           maxLength: 120
+        agentAccountId:
+          type: string
+          format: uuid
+          description: >-
+            The creator's account for harness the session runs on; the
+            harness's default account when omitted. Accepted only by a
+            control plane whose CurrentAccount reports agentAccounts.
         displayName:
           type: string
           minLength: 1
@@ -10419,13 +10734,16 @@ components:
               description: 0 for a turn stopped while still queued, before the agent started on it.
             reason:
               type: string
-              enum: [deleted, interface_switch]
+              enum: [deleted, interface_switch, steered]
               description: >-
                 Why a turn ended before it started. deleted: the person took
                 the queued message back (cancelTurn), so a client drops it from
                 the transcript. interface_switch: a stop-now switch to the
                 terminal ended the queued message, which a client keeps, shown
-                interrupted. Absent for a stopped running turn and for events
+                interrupted. steered: the message was steered into the running
+                turn instead (chat.turn_steered with this turn as its
+                queuedTurnId), so a client shows it there, as the steer, and
+                drops it from the queue. Absent for a stopped running turn and for events
                 written before reasons existed; a client reads a missing or
                 unknown reason as a plain interruption and keeps the message.
         createdAt:
@@ -10518,6 +10836,72 @@ components:
           type: object
           additionalProperties: false
           required: [turnId, text, clientMessageId]
+          description: >-
+            The agent took the guidance. With queuedTurnId, the queued turn
+            then ends with chat.turn_interrupted of reason steered.
+          properties:
+            turnId:
+              type: string
+              format: uuid
+              description: The running turn the guidance is for.
+            text:
+              type: string
+            clientMessageId:
+              type: string
+            queuedTurnId:
+              type: string
+              format: uuid
+              description: >-
+                Set when the steer carries a queued message (steerQueuedMessage,
+                or a message the project's orchestrator sent while the session
+                was busy): the queued turn whose message it is.
+            deleteRequested:
+              type: boolean
+              description: >-
+                With queuedTurnId: the person deleted the message while the
+                agent was taking its steer (deleteQueuedMessage). On
+                chat.turn_steered the agent took it anyway, so it was
+                delivered; on chat.turn_steer_failed it was deleted.
+            origin:
+              type: string
+              description: >-
+                With queuedTurnId: automation for a message the project's
+                orchestrator sent (senderLabel names it), absent for a
+                person's.
+            senderLabel:
+              type: string
+              description: With queuedTurnId and origin automation, who sent the message (Orchestrator).
+            authorUserId:
+              type: string
+              description: With queuedTurnId, the person whose message it is.
+            authorName:
+              type: string
+              description: With authorUserId, their name when they sent it.
+        createdAt:
+          type: string
+          format: date-time
+    TurnSteerRequestedEvent:
+      type: object
+      additionalProperties: false
+      required: [sessionId, sequence, type, payload, createdAt]
+      description: >-
+        Guidance was asked of the agent (steerTurn, steerQueuedMessage, or a
+        message the project's orchestrator sent while the session was busy).
+        Its outcome follows as chat.turn_steered or chat.turn_steer_failed with
+        the same clientMessageId; until then a client shows it as steering.
+      properties:
+        sessionId:
+          type: string
+        sequence:
+          type: integer
+          format: int64
+          maximum: 9007199254740991
+        type:
+          const: chat.turn_steer_requested
+        payload:
+          type: object
+          additionalProperties: false
+          required: [turnId, text, clientMessageId]
           properties:
             turnId:
               type: string
@@ -10525,6 +10909,75 @@ components:
             text:
               type: string
             clientMessageId:
+              type: string
+            queuedTurnId:
+              type: string
+              format: uuid
+              description: Set when the steer carries a queued message, which stays queued until the outcome.
+        createdAt:
+          type: string
+          format: date-time
+    TurnSteerFailedEvent:
+      type: object
+      additionalProperties: false
+      required: [sessionId, sequence, type, payload, createdAt]
+      description: >-
+        The agent did not take the guidance: it refused, the running turn
+        ended first, or the worker did not answer in time. payload.error says
+        why. With queuedTurnId the message stays queued, in its place, and runs
+        as its own turn; a client shows it back in the queue with the reason.
+      properties:
+        sessionId:
+          type: string
+        sequence:
+          type: integer
+          format: int64
+          maximum: 9007199254740991
+        type:
+          const: chat.turn_steer_failed
+        payload:
+          type: object
+          additionalProperties: false
+          required: [turnId, text, clientMessageId]
+          properties:
+            turnId:
+              type: string
+              format: uuid
+              description: The running turn the guidance is for.
+            text:
+              type: string
+            clientMessageId:
+              type: string
+            queuedTurnId:
+              type: string
+              format: uuid
+              description: >-
+                Set when the steer carries a queued message (steerQueuedMessage,
+                or a message the project's orchestrator sent while the session
+                was busy): the queued turn whose message it is.
+            deleteRequested:
+              type: boolean
+              description: >-
+                With queuedTurnId: the person deleted the message while the
+                agent was taking its steer (deleteQueuedMessage). On
+                chat.turn_steered the agent took it anyway, so it was
+                delivered; on chat.turn_steer_failed it was deleted.
+            origin:
+              type: string
+              description: >-
+                With queuedTurnId: automation for a message the project's
+                orchestrator sent (senderLabel names it), absent for a
+                person's.
+            senderLabel:
+              type: string
+              description: With queuedTurnId and origin automation, who sent the message (Orchestrator).
+            authorUserId:
+              type: string
+              description: With queuedTurnId, the person whose message it is.
+            authorName:
+              type: string
+              description: With authorUserId, their name when they sent it.
+            error:
               type: string
         createdAt:
           type: string
@@ -10607,6 +11060,8 @@ components:
         - $ref: "#/components/schemas/TurnAbortedEvent"
         - $ref: "#/components/schemas/InterruptRequestedEvent"
         - $ref: "#/components/schemas/TurnSteeredEvent"
+        - $ref: "#/components/schemas/TurnSteerRequestedEvent"
+        - $ref: "#/components/schemas/TurnSteerFailedEvent"
         - $ref: "#/components/schemas/ScriptStepEvent"
         - $ref: "#/components/schemas/AgentSwitchedEvent"
     ClientEventPage:
@@ -10892,6 +11347,97 @@ components:
         expiresAt:
           type: string
           format: date-time
+    CloudAgentAccount:
+      type: object
+      additionalProperties: false
+      required: [id, agent, name, credentialType, isDefault, validationState, createdAt, updatedAt]
+      properties:
+        id:
+          type: string
+          format: uuid
+        agent:
+          $ref: "#/components/schemas/CloudAgentHarness"
+        name:
+          type: string
+          description: The name the user gave the account; empty when they gave none.
+        credentialType:
+          type: string
+          enum: [oauth_token, api_key, access_token, auth_json, opencode_api_key, anthropic_api_key, openai_api_key, openrouter_api_key]
+        isDefault:
+          type: boolean
+          description: New sessions of the agent run on it.
+        validationState:
+          type: string
+          enum: [pending, valid, invalid]
+        invalidReason:
+          type: string
+          description: Why the account stopped working, when validationState is invalid.
+        email:
+          type: string
+          description: The login's email, when the login names one.
+        plan:
+          type: string
+          description: The login's plan (such as plus or pro), when it names one.
+        validatedAt:
+          type: string
+          format: date-time
+        createdAt:
+          type: string
+          format: date-time
+        updatedAt:
+          type: string
+          format: date-time
+    AddAgentAccountInput:
+      type: object
+      additionalProperties: false
+      required: [agent, credentialType, secret]
+      properties:
+        agent:
+          $ref: "#/components/schemas/CloudAgentHarness"
+        name:
+          type: string
+          maxLength: 80
+        credentialType:
+          type: string
+          enum: [oauth_token, api_key, access_token, auth_json, opencode_api_key, anthropic_api_key, openai_api_key, openrouter_api_key]
+        secret:
+          type: string
+          minLength: 1
+          maxLength: 65536
+          writeOnly: true
+    RenameAgentAccountInput:
+      type: object
+      additionalProperties: false
+      required: [name]
+      properties:
+        name:
+          type: string
+          maxLength: 80
+    SessionAgentAccount:
+      type: object
+      additionalProperties: false
+      required: [agent]
+      properties:
+        agent:
+          $ref: "#/components/schemas/CloudAgentHarness"
+        accountId:
+          type: string
+          format: uuid
+          description: The account the session's agent runs on; absent when the account was removed.
+        boundAt:
+          type: string
+          format: date-time
+          description: When the session started running on it.
+    SwitchSessionAgentAccountInput:
+      type: object
+      additionalProperties: false
+      required: [accountId]
+      properties:
+        accountId:
+          type: string
+          format: uuid
+        policy:
+          $ref: "#/components/schemas/SessionInterfaceTransitionPolicy"
     RedactedProviderConnection:
       type: object
       additionalProperties: false

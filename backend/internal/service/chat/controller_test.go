@@ -15,6 +15,7 @@ import (
 	"testing"
 	"time"
 
+	acpdriver "github.com/aoagents/agent-orchestrator/backend/internal/adapters/chatdriver/acp"
 	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/chatdriver/kimiacp"
 	"github.com/aoagents/agent-orchestrator/backend/internal/attachmentstore"
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
@@ -35,7 +36,7 @@ const (
 	testSession = domain.SessionID("p1-1")
 )
 
-func openStore(t *testing.T) *sqlite.Store {
+func openStore(t *testing.T, imports ...*domain.SessionImportSource) *sqlite.Store {
 	t.Helper()
 	dir := t.TempDir()
 	st := sqlitetest.MustOpenAt(t, dir)
@@ -48,7 +49,12 @@ func openStore(t *testing.T) *sqlite.Store {
 	}); err != nil {
 		t.Fatalf("seed project: %v", err)
 	}
+	var source *domain.SessionImportSource
+	if len(imports) > 0 {
+		source = imports[0]
+	}
 	if _, err := st.CreateSession(ctx, domain.SessionRecord{
+		Metadata:  domain.SessionMetadata{ImportSource: source},
 		ID:        testSession,
 		ProjectID: testProject,
 		Kind:      domain.KindOrchestrator,
@@ -571,6 +577,40 @@ func TestFailedChatProbeCanBeRetriedThenCached(t *testing.T) {
 	}
 	if attempts != 2 {
 		t.Fatalf("Probe attempts = %d, want one failed attempt plus one cached success", attempts)
+	}
+}
+
+func TestContextualChatPreflightRevalidatesEnvironmentAfterCapabilityCache(t *testing.T) {
+	sentinel := errors.New("required native config missing")
+	driver := acpdriver.New(acpdriver.Config{
+		Harness:      domain.HarnessCodex,
+		Capabilities: productionCaps(),
+		Probe:        func(context.Context) error { return nil },
+		Launch: func(context.Context, acpdriver.LaunchConfig) (acpdriver.Launch, error) {
+			t.Fatal("preflight launched a provider")
+			return acpdriver.Launch{}, nil
+		},
+		ValidateEnvironment: func(_ context.Context, env map[string]string) error {
+			if env["CONFIG"] != "/project/native.yaml" {
+				return sentinel
+			}
+			return nil
+		},
+	}, nil)
+	svc := chatsvc.New(chatsvc.Options{Drivers: fakeRegistry{driver: driver}})
+	if err := svc.PreflightChat(context.Background(), domain.HarnessCodex, ports.PermissionModeDefault); err != nil {
+		t.Fatalf("global capability probe: %v", err)
+	}
+	if err := svc.PreflightChatWithEnv(context.Background(), domain.HarnessCodex, ports.PermissionModeDefault, map[string]string{"CONFIG": "/project/native.yaml"}); err != nil {
+		t.Fatalf("project config rejected: %v", err)
+	}
+	if err := svc.PreflightChatWithEnv(context.Background(), domain.HarnessCodex, ports.PermissionModeDefault, nil); !errors.Is(err, sentinel) {
+		t.Fatalf("cached capabilities bypassed required config: %v", err)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	if err := svc.PreflightChatWithEnv(ctx, domain.HarnessCodex, ports.PermissionModeDefault, map[string]string{"CONFIG": "/project/native.yaml"}); !errors.Is(err, context.Canceled) {
+		t.Fatalf("cached capabilities bypassed cancellation: %v", err)
 	}
 }
 

@@ -578,6 +578,8 @@ export interface SystemEventDetail {
 	senderProjectId?: string;
 	senderDisplayName?: string;
 	clientMessageId?: string;
+	/** steer: the person deleted the queued message while the agent was taking it; it was delivered. */
+	deliveredBeforeDelete?: boolean;
 	/** steer: the queued turns whose messages this steer carried into the running turn. */
 	providerInputSourceTurnIds?: string[];
 	/** steer: complete provider-neutral content copied from a promoted queue item. */
@@ -588,6 +590,11 @@ export interface SystemEventDetail {
 		uri?: string;
 		name?: string;
 		text?: string;
+		excerpt?: {
+			reference?: { id?: string; order?: number; conversationId?: string; messageId?: string; revision?: number; text?: string; comment?: string; snapshot?: ChatExcerptSnapshot };
+			selectedText?: string;
+		};
+		fileReference?: ChatFileReference;
 	}>;
 }
 

@@ -50,6 +50,35 @@ const gitIcon: Record<SessionGitActionKind, LucideIcon> = {
 	createDraftPR: GitPullRequestDraft,
 };
 
+/**
+ * A Cloud PR card's git step: the control plane merges from the card itself,
+ * so the step stands alone rather than sharing PRActionButton, whose merge,
+ * close and stack actions go to the local daemon.
+ */
+export function CloudPRGitStepButton({ git }: { git: BranchGitStep }) {
+	const primary = git.primary;
+	if (!git.pending && !primary) return null;
+	const Icon = git.pending ? Loader2 : gitIcon[primary!.kind];
+	const label = git.pending ?? primary!.label;
+	return (
+		<div className="flex min-w-0 flex-col items-stretch gap-1" data-testid="pr-git-step">
+			<Button
+				aria-busy={git.pending ? "true" : undefined}
+				className="min-w-0 gap-1 px-2 text-xs"
+				disabled={Boolean(git.pending)}
+				onClick={() => primary && git.run(primary.kind)}
+				size="sm"
+				type="button"
+				variant="secondary"
+			>
+				<Icon aria-hidden="true" className={cn("size-icon-sm", git.pending && "animate-spin")} />
+				<span className="truncate">{label}</span>
+			</Button>
+			{git.error ? <p className="m-0 text-xs leading-normal text-error" role="status">{git.error}</p> : null}
+		</div>
+	);
+}
+
 /** Refreshes what the inspector shows of the PR after a write to the provider. */
 function useRefreshPR(sessionId: string, hostId?: string) {
 	const queryClient = useQueryClient();
@@ -186,11 +215,15 @@ export function PRActionButton({ canMerge, git, hostId, pr, sessionId }: {
 		setMethod(value);
 	};
 
+	// Being behind the base doesn't hold up a merge the provider allows: merging
+	// leads then, and the update waits in the menu.
+	const updateYields = !git?.pending && git?.primary?.kind === "updateBase" && pr.state === "open" && mergeAllowed;
+	const stackPending = stackQuery.isLoading && canMerge && pr.state === "open" && git?.primary?.kind === "updateBase";
 	// The next step: the branch's work first, then what the PR is waiting for.
-	const gitPrimary = git?.pending
+	const gitPrimary = updateYields ? undefined : git?.pending
 		? { label: git.pending, aria: git.pending, icon: Loader2, run: () => {}, disabled: true, tone: "secondary" as const, spinning: true }
 		: git?.primary
-			? { label: git.primary.label, aria: git.primary.label, icon: gitIcon[git.primary.kind], run: () => git.run(git.primary!.kind), disabled: busy, tone: "secondary" as const, spinning: false }
+			? { label: git.primary.label, aria: git.primary.label, icon: gitIcon[git.primary.kind], run: () => git.run(git.primary!.kind), disabled: busy || stackPending, tone: "secondary" as const, spinning: false }
 			: undefined;
 	const prPrimary = pr.state === "draft"
 		? { label: t("pr.state.action.ready"), aria: t("pr.state.action.ready"), icon: GitPullRequest, run: () => change.mutate("ready"), disabled: busy, tone: "secondary" as const }
@@ -198,7 +231,7 @@ export function PRActionButton({ canMerge, git, hostId, pr, sessionId }: {
 			? { label: t("pr.state.action.reopen"), aria: t("pr.state.action.reopen"), icon: GitPullRequest, run: () => change.mutate("reopen"), disabled: busy, tone: "secondary" as const }
 			: { label: merging ? t("pr.merge.merging") : mergeLabel, aria: severalLayers ? mergeLabel : t("pr.merge.methodFor", { method: methodLabel, number: pr.number }), icon: GitMerge, run: mergeNow, disabled: busy || !mergeAllowed, tone: mergeAllowed ? "go" as const : "secondary" as const };
 	const primary = gitPrimary ?? { ...prPrimary, spinning: false };
-	const gitMenu = (git?.menu ?? []).filter((step) => step.kind !== git?.primary?.kind);
+	const gitMenu = updateYields && git?.primary ? [git.primary, ...git.menu] : (git?.menu ?? []).filter((step) => step.kind !== git?.primary?.kind);
 	// Ready for review, when branch work holds the button on a draft.
 	const stateSteps = pr.state === "draft" && gitPrimary ? [{ key: "ready" as const, label: t("pr.state.action.ready"), icon: GitPullRequest }] : [];
 	const errorText = [merge.error, change.error, confirmStack ? null : mergeStack.error].find((value): value is Error => value instanceof Error && !confirmClose)?.message ?? git?.error ?? null;
@@ -216,6 +249,7 @@ export function PRActionButton({ canMerge, git, hostId, pr, sessionId }: {
 						primary.tone === "go" ? "[--button-color:var(--color-success)] text-on-foreground" : "",
 					)}
 					disabled={primary.disabled}
+					key={gitPrimary ? "git" : "pr"}
 					onClick={primary.run}
 					size="sm"
 					title={!gitPrimary && pr.state === "open" && blocker ? blocker : undefined}

@@ -162,7 +162,7 @@ import { isMacPlatform } from "../lib/platform";
 import { useShell } from "../lib/shell-context";
 import { cn } from "../lib/utils";
 import { usesPreviewWorkspaceData } from "../lib/preview-mode";
-import { isOrchestratorSession, sessionAgentExited, sessionIsActive, type SessionArtifact, type WorkspaceSummary } from "../types/workspace";
+import { canArchiveWorkerSession, isOrchestratorSession, sessionAgentExited, sessionIsActive, type SessionArtifact, type WorkspaceSummary } from "../types/workspace";
 import { terminalTargetBelongsToSession, type TerminalTarget } from "../types/terminal";
 import { useCloudSessionPresence } from "../hooks/useCloudSessionPresence";
 import { SessionPeopleControl } from "./SessionPeople";
@@ -170,9 +170,11 @@ import { SessionAccessTag } from "./teams/SessionAccessTag";
 import { SharedProjectPanel } from "./SharedProjectPanel";
 import { useSessionMenuAvailable } from "../hooks/useAppMenuCommand";
 import { focusAfterPaint, useSessionShortcut } from "../hooks/useAppShortcut";
+import { queryShown } from "../lib/dom-selectors";
+import { KeepRecentAlive } from "./KeepRecentAlive";
 import { openComposerModelPicker, toggleComposerDictation } from "../lib/composer-shortcuts";
 import { inspectorIsOpen, useResolvedTheme, useUiStore, type InspectorView } from "../stores/ui-store";
-import { useSideChatsAvailable } from "../lib/side-chats";
+import { useSideChatTab, useSideChatsAvailable } from "../lib/side-chats";
 import {
 	INSPECTOR_SEPARATOR_RESERVE_PX,
 	inspectorMaxWidthCss,
@@ -611,12 +613,16 @@ export function SessionView({ sessionId, cloudOrgId, projectId, hostId }: Sessio
 	const isInspectorOpen = useUiStore((state) => inspectorIsOpen(state.inspectorSessions, uiSessionId));
 	const [sideChatContainer, setSideChatContainer] = useState<HTMLDivElement | null>(null);
 	const sideChatsAvailable = useSideChatsAvailable(session, hostId);
+	const [subagentContainer, setSubagentContainer] = useState<HTMLDivElement | null>(null);
+	// The chat reports this while it lists any subagents; it clears it when it unmounts.
+	const subagentsAvailable = useUiStore((state) => Boolean(state.inspectorSessions[uiSessionId]?.subagentsAvailable));
 	const inspectorView = useUiStore((state) => state.inspectorSessions[uiSessionId]?.view ?? "summary");
 	const browserUnseen = useUiStore((state) => Boolean(state.inspectorSessions[uiSessionId]?.browserUnseen));
 	const setInspectorOpenForSession = useUiStore((state) => state.setInspectorOpen);
 	const toggleInspector = useUiStore((state) => state.toggleInspector);
 	const setInspectorViewForSession = useUiStore((state) => state.setInspectorView);
 	const showGlobalToast = useUiStore((state) => state.showGlobalToast);
+	const { showTab: showSideChatTab, onSideChatsChange } = useSideChatTab(uiSessionId, sideChatsAvailable);
 	const setFilesChangedOnly = useUiStore((state) => state.setFilesChangedOnly);
 	const resetFilesSelection = useUiStore((state) => state.resetFilesSelection);
 	const workspaceFileOpenRequest = useUiStore((state) => state.workspaceFileOpenRequest);
@@ -710,22 +716,6 @@ export function SessionView({ sessionId, cloudOrgId, projectId, hostId }: Sessio
 	>({});
 	const consumedCenterEditingRequestsRef = useRef(new Set<string>());
 	const consumedCenterLineRequestsRef = useRef(new Set<string>());
-	const activeCenterFileRequest = fileTabs.activePath
-		? centerFileRequestsBySession[uiSessionId]?.[fileTabs.activePath]
-		: undefined;
-	const activeCenterFileRequestToken = fileTabs.activePath && activeCenterFileRequest
-		? `${uiSessionId}:${fileTabs.activePath}:${activeCenterFileRequest.key}`
-		: undefined;
-	const activeCenterFileInitialEditing = Boolean(
-		activeCenterFileRequest?.editing
-		&& activeCenterFileRequestToken
-		&& !consumedCenterEditingRequestsRef.current.has(activeCenterFileRequestToken),
-	);
-	const activeCenterFileInitialLine = activeCenterFileRequest?.line != null
-		&& activeCenterFileRequestToken
-		&& !consumedCenterLineRequestsRef.current.has(activeCenterFileRequestToken)
-		? activeCenterFileRequest.line
-		: undefined;
 	const [auxiliaryTabOrderBySession, setAuxiliaryTabOrderBySession] = useState<Record<string, string[]>>({});
 	const auxiliaryTabOrder = auxiliaryTabOrderBySession[uiSessionId] ?? EMPTY_AUXILIARY_TAB_ORDER;
 	const setAuxiliaryTabOrder = useCallback(
@@ -2060,7 +2050,7 @@ export function SessionView({ sessionId, cloudOrgId, projectId, hostId }: Sessio
 			const base = { tabKey: key, closeShortcut: shown, onClose: () => closePane(key) };
 			if (key === SESSION_TAB_KEY) {
 				if (!session) return { ...base, kind: "plain" };
-				const canArchive = !isOrchestrator && !session.cloud && sessionIsActive(session);
+				const canArchive = !isOrchestrator && canArchiveWorkerSession(session);
 				return { ...base, kind: "session", session, canArchive };
 			}
 			if (filePath) {
@@ -2366,10 +2356,9 @@ export function SessionView({ sessionId, cloudOrgId, projectId, hostId }: Sessio
 		useSessionSwitchStore.getState().publish(id, sessionTabAgentMenu);
 		return () => useSessionSwitchStore.getState().publish(id, undefined);
 	}, [session?.id, sessionTabAgentMenu]);
-	// The session tab always shows its ⋮ menu after the title; the other tabs
-	// show a close button on hover. While an interface switch is requested or
+	// The session tab always shows its ⋮ menu after the title, where the other
+	// tabs show their close button. While an interface switch is requested or
 	// running, the switch's status (cancel on hover) takes the ⋮'s place.
-	const sessionTabActionPinned = Boolean(session);
 	const sessionTabActions = !session
 		? null
 		: interfaceUi.switchPending
@@ -2399,6 +2388,8 @@ export function SessionView({ sessionId, cloudOrgId, projectId, hostId }: Sessio
 					sessionName={session.title}
 					projectName={sessionWorkspace?.name}
 					standaloneAgent={sessionWorkspace?.standaloneAgent}
+					// The orchestrator is the project's: sharing it shares the whole project.
+					shareProject={isOrchestrator && !sessionWorkspace?.standaloneAgent}
 				/>
 			) : null}
 			<SessionTopbarActions route={sessionTopbarRoute} />
@@ -2658,6 +2649,13 @@ export function SessionView({ sessionId, cloudOrgId, projectId, hostId }: Sessio
 		setBrowserUnseen,
 		terminated,
 	]);
+
+	// A subagent row opens its tab like any tab switch, so leaving the Browser canvas
+	// resizes the inspector to the utility width instead of snapping to it.
+	const revealSubagentsPanel = useCallback(() => {
+		transitionInspectorView("subagents");
+		setInspectorOpenForSession(uiSessionId, true);
+	}, [setInspectorOpenForSession, transitionInspectorView, uiSessionId]);
 
 	const revealBrowserPanel = useCallback(() => {
 		setBrowserContentRevealed(uiSessionId, true);
@@ -2956,7 +2954,6 @@ export function SessionView({ sessionId, cloudOrgId, projectId, hostId }: Sessio
 									onOpenArtifact={hasInspector ? handleOpenArtifact : undefined}
 									session={session}
 									sessionTabAction={sessionTabActions}
-									sessionTabActionPinned={sessionTabActionPinned}
 									reviewerTerminal={reviewerTerminal}
 									onOpenReviewerTerminal={selectReviewerTerminal}
 									reviewerTarget={routedTerminalTarget.kind === "reviewer" ? routedTerminalTarget : undefined}
@@ -2980,10 +2977,17 @@ export function SessionView({ sessionId, cloudOrgId, projectId, hostId }: Sessio
 									onOpenLinkInBrowser={browserView.openLink}
 								/>
 								</>
-							) : showChatSurface ? (
-								<>
+							) : null}
+							{/* Recent chats stay mounted, hidden, so switching back shows them at once. Other
+							    sessions' chats stay kept while a terminal session is shown; this session's own
+							    chat is dropped when it leaves Chat. */}
+							<KeepRecentAlive activeKey={uiSessionId} show={Boolean(showChatSurface && !session?.cloud)}>
+							{showChatSurface && !session?.cloud ? (
 								<SessionChatSurface
 									sideChatContainer={sideChatContainer}
+									onSideChatsChange={onSideChatsChange}
+									subagentContainer={subagentContainer}
+									onRevealSubagents={revealSubagentsPanel}
 									key={uiSessionId}
 									assetBaseUrl={remoteBase}
 									hostId={hostId}
@@ -3009,7 +3013,6 @@ export function SessionView({ sessionId, cloudOrgId, projectId, hostId }: Sessio
 									theme={theme}
 									headerActions={sessionHeaderActions}
 									sessionTabAction={sessionTabActions}
-									sessionTabActionPinned={sessionTabActionPinned}
 									tabStripAction={newShellTerminalAction}
 									workspaceTabs={mainWorkspaceTabs}
 									workspaceActiveTabKey={activeWorkspaceTabKey}
@@ -3046,8 +3049,9 @@ export function SessionView({ sessionId, cloudOrgId, projectId, hostId }: Sessio
          }}
 									onOpenLinkInBrowser={browserView.openLink}
 								/>
-								</>
-							) : (
+							) : null}
+							</KeepRecentAlive>
+							{!showChatSurface ? (
 								<CenterPane
 									hostId={hostId}
 									agentInputDisabled={interfaceUi.agentInputDisabled}
@@ -3070,14 +3074,13 @@ export function SessionView({ sessionId, cloudOrgId, projectId, hostId }: Sessio
 									theme={theme}
 									topbarActions={sessionHeaderActions}
 									sessionTabAction={sessionTabActions}
-									sessionTabActionPinned={sessionTabActionPinned}
 									tabStripAction={newShellTerminalAction}
 									workspaceTabs={mainWorkspaceTabs}
 									workspaceActiveTabKey={activeWorkspaceTabKey}
 									auxiliaryTabOrder={mainAuxiliaryTabOrder}
 									onAuxiliaryTabOrderChange={setMainAuxiliaryTabOrder}
 								/>
-							)}
+							) : null}
 							</div>
 							</SessionTabAgentMenuContext.Provider>
 							</TabSplitMenuContext.Provider>
@@ -3122,67 +3125,67 @@ export function SessionView({ sessionId, cloudOrgId, projectId, hostId }: Sessio
 									{renderReviewerChat(retainedReviewerChatId)}
 								</div>
 							) : null}
-							{(session?.cloud ? Boolean(mainActiveFilePath) : fileTabs.openPaths.length > 0) ? (
+							{fileTabs.openPaths.length > 0 ? (
 								<div className="pointer-events-none absolute inset-0">
-					{session?.cloud ? (
-						<div className="pointer-events-auto" style={FULL_PANE_STYLE}>
-						<CloudFileContentPane
-							annotation={fileAnnotation}
-							commitSha={activeCenterFileRequest?.commitSha}
-							initialEditing={activeCenterFileInitialEditing}
-							initialLine={activeCenterFileInitialLine}
-							initialMode={activeCenterFileRequest?.mode ?? "file"}
-							initialRequestKey={activeCenterFileRequest?.key ?? 0}
-							onDirtyChange={setCenterFileDirty}
-							path={mainActiveFilePath!}
-							// Uncommitted is local-only; a cloud review's nearest scope is combined.
-							scope={activeCenterFileRequest?.scope === "uncommitted" ? "combined" : activeCenterFileRequest?.scope}
-							session={session}
-							split={filesSplit}
-						/>
-						</div>
-									) : (
-										<>
-											{fileTabs.openPaths.map((fileKey) => {
-												const request = centerFileRequestsBySession[uiSessionId]?.[fileKey];
-												const token = request ? `${uiSessionId}:${fileKey}:${request.key}` : "";
-												// A file view stays mounted here and is only placed over its pane.
-												const paneKey = `file:${fileKey}`;
-												const inPane = Boolean(shownLayout?.leaves.has(paneKey));
-												const visible = inPane || mainActiveFilePath === fileKey;
-												return (
-													<div
-														key={fileKey}
-														className={cn(visible ? "pointer-events-auto overflow-hidden" : "invisible pointer-events-none [content-visibility:hidden]")}
-														data-split-pane={inPane ? paneKey : undefined}
-														inert={!visible ? true : undefined}
-														style={inPane ? paneStyle(paneKey) : FULL_PANE_STYLE}
-													>
-														<SessionFileWorkspace
-															active={visible && !filesPoppedOut}
-															focusRequest={paneFocusRequests[paneKey] ?? 0}
-															fileKey={fileKey}
-															hostId={hostId}
-															source={request?.source} annotationRange={request?.annotationRange}
-															previousPath={request?.previousPath}
-															annotation={fileAnnotation}
-															commitSha={request?.commitSha}
-															initialEditing={Boolean(request?.editing && !consumedCenterEditingRequestsRef.current.has(token))}
-															initialLine={request?.line != null && !consumedCenterLineRequestsRef.current.has(token) ? request.line : undefined}
-															initialMode={request?.mode ?? "file"}
-															initialRequestKey={request?.key ?? 0}
-															onDirtyChange={setCenterFileDirty}
-															onInitialEditingConsumed={markCenterFileEditingConsumed}
-															onInitialLineConsumed={markCenterFileLineConsumed}
-															path={request?.path ?? fileKey}
-															sessionId={sessionId}
-															split={filesSplit}
-															scope={request?.scope}
-														/>
-													</div>
-												);
-											})}
-										</>									)}
+									{fileTabs.openPaths.map((fileKey) => {
+										const request = centerFileRequestsBySession[uiSessionId]?.[fileKey];
+										const token = request ? `${uiSessionId}:${fileKey}:${request.key}` : "";
+										// A file view stays mounted here and is only placed over its pane,
+										// for a Cloud session as for a local one: switching tabs keeps
+										// each file's mode, scroll and unsaved edit.
+										const paneKey = `file:${fileKey}`;
+										const inPane = Boolean(shownLayout?.leaves.has(paneKey));
+										const visible = inPane || mainActiveFilePath === fileKey;
+										return (
+											<div
+												key={fileKey}
+												className={cn(visible ? "pointer-events-auto overflow-hidden" : "invisible pointer-events-none [content-visibility:hidden]")}
+												data-split-pane={inPane ? paneKey : undefined}
+												inert={!visible ? true : undefined}
+												style={inPane ? paneStyle(paneKey) : FULL_PANE_STYLE}
+											>
+												{session?.cloud ? (
+													<CloudFileContentPane
+														active={visible && !filesPoppedOut}
+														annotation={fileAnnotation}
+														commitSha={request?.commitSha}
+														initialEditing={Boolean(request?.editing && !consumedCenterEditingRequestsRef.current.has(token))}
+														initialLine={request?.line != null && !consumedCenterLineRequestsRef.current.has(token) ? request.line : undefined}
+														initialMode={request?.mode ?? "file"}
+														initialRequestKey={request?.key ?? 0}
+														onDirtyChange={setCenterFileDirty}
+														path={request?.path ?? fileKey}
+														// Uncommitted is local-only; a cloud review's nearest scope is combined.
+														scope={request?.scope === "uncommitted" ? "combined" : request?.scope}
+														session={session}
+														split={filesSplit}
+													/>
+												) : (
+													<SessionFileWorkspace
+														active={visible && !filesPoppedOut}
+														focusRequest={paneFocusRequests[paneKey] ?? 0}
+														fileKey={fileKey}
+														hostId={hostId}
+														source={request?.source} annotationRange={request?.annotationRange}
+														previousPath={request?.previousPath}
+														annotation={fileAnnotation}
+														commitSha={request?.commitSha}
+														initialEditing={Boolean(request?.editing && !consumedCenterEditingRequestsRef.current.has(token))}
+														initialLine={request?.line != null && !consumedCenterLineRequestsRef.current.has(token) ? request.line : undefined}
+														initialMode={request?.mode ?? "file"}
+														initialRequestKey={request?.key ?? 0}
+														onDirtyChange={setCenterFileDirty}
+														onInitialEditingConsumed={markCenterFileEditingConsumed}
+														onInitialLineConsumed={markCenterFileLineConsumed}
+														path={request?.path ?? fileKey}
+														sessionId={sessionId}
+														split={filesSplit}
+														scope={request?.scope}
+													/>
+												)}
+											</div>
+										);
+									})}
 								</div>
 							) : null}
 							{/* Every pane of a split has a title bar: it names the pane as the
@@ -3201,7 +3204,7 @@ export function SessionView({ sessionId, cloudOrgId, projectId, hostId }: Sessio
 											// selected, so a press on a selected pane puts the caret in it.
 											requestAnimationFrame(() => {
 												for (const pane of document.querySelectorAll<HTMLElement>("[data-split-pane]")) {
-													if (pane.dataset.splitPane === key) pane.querySelector<HTMLElement>(".xterm-helper-textarea, [contenteditable='true'][role='combobox']")?.focus({ preventScroll: true });
+													if (pane.dataset.splitPane === key) queryShown<HTMLElement>(".xterm-helper-textarea, [contenteditable='true'][role='combobox']", pane)?.focus({ preventScroll: true });
 												}
 											});
 										}}
@@ -3263,7 +3266,10 @@ export function SessionView({ sessionId, cloudOrgId, projectId, hostId }: Sessio
 						splitRef={sessionSplitRef}
 					>
 						<SessionInspector
-							sideChatView={sideChatsAvailable ? <div ref={setSideChatContainer} className="h-full min-h-0 flex-1" /> : undefined}
+							// Keyed per session: a kept, hidden chat still portals into the container it
+							// last had, so each chat needs its own or its panel shows over the next chat's.
+							sideChatView={showSideChatTab ? <div key={uiSessionId} ref={setSideChatContainer} className="h-full min-h-0 flex-1" /> : undefined}
+							subagentsView={subagentsAvailable ? <div key={uiSessionId} ref={setSubagentContainer} className="h-full min-h-0 flex-1" /> : undefined}
 							hostId={hostId}
 							orchestrator={browserOnly}
 							browserAnnotationQueue={inspectorView === "browser" ? browserAnnotationQueue : undefined}
@@ -3300,6 +3306,7 @@ export function SessionView({ sessionId, cloudOrgId, projectId, hostId }: Sessio
 							view={inspectorView}
 							browserView={hostId || inspectorView === "browser" ? browserView : undefined}
 							session={session}
+							standaloneAgent={sessionWorkspace?.standaloneAgent === true}
 						/>
 					</SessionInspectorRail>
 				) : null}

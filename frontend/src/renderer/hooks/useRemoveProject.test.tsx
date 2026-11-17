@@ -284,7 +284,7 @@ describe("useRemoveProject", () => {
 
 		expect(queryClient.getQueryData(rawKey)).toEqual([]);
 		await waitFor(() => expect(deleteProject).toHaveBeenCalledWith("org-1", "cloud-1"));
-		await waitFor(() => expect(toasts()).toEqual([expect.objectContaining({ title: "Removed cloudy", tone: "success" })]));
+		await waitFor(() => expect(toasts()).toEqual([expect.objectContaining({ title: "Deleted cloudy", tone: "success" })]));
 		// Cloud ids are never reused, so the tombstone outlives the async archive.
 		expect(isOptimisticallyRemovedProject("cloud-1", undefined, true)).toBe(true);
 		expect(queryClient.getQueryData(rawKey)).toEqual([]);
@@ -341,7 +341,8 @@ describe("useRemoveProject", () => {
 		expect(isOptimisticallyRemovedProject("proj-2")).toBe(false);
 		expect(applyOptimisticProjectRemovals([doomed, cloudTwin])).toEqual([doomed]);
 		expect(localIds(queryClient)).toContain("proj-2");
-		expect(toasts()).toEqual([expect.objectContaining({ title: "Removed cloud twin" })]);
+		// A Cloud project is deleted, not removed from a list.
+		expect(toasts()).toEqual([expect.objectContaining({ title: "Deleted cloud twin" })]);
 	});
 
 	it("removes the local row the user picked, not a cloud project with the same id", async () => {

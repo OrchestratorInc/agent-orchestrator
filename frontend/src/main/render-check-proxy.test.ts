@@ -2,270 +2,283 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { lookup } from "node:dns/promises";
 import * as net from "node:net";
-import * as os from "node:os";
-import { allowRenderPage, startRenderCheckProxy } from "./render-check-proxy";
+import ipaddr from "ipaddr.js";
+import { allowRenderPage, isLocalAddress, startRenderCheckProxy } from "./render-check-proxy";
 
-// The real resolver, which a test can override for one lookup.
 vi.mock("node:dns/promises", async (importOriginal) => {
 	const actual = await importOriginal<typeof import("node:dns/promises")>();
 	return { ...actual, lookup: vi.fn(actual.lookup) };
 });
 
-// A public IPv4 address this machine holds, which no private range covers.
-const OWN_PUBLIC_IPV4 = "198.51.100.7";
+// A public address this machine's (fake) interface holds.
+const MACHINE_PUBLIC = "1.2.3.4";
 vi.mock("node:os", async (importOriginal) => {
-	const actual = await importOriginal<typeof os>();
+	const actual = await importOriginal<typeof import("node:os")>();
 	return {
 		...actual,
 		networkInterfaces: () => ({
 			...actual.networkInterfaces(),
-			"ao-test": [
-				{
-					address: OWN_PUBLIC_IPV4,
-					netmask: "255.255.255.0",
-					family: "IPv4",
-					mac: "00:00:00:00:00:00",
-					internal: false,
-					cidr: `${OWN_PUBLIC_IPV4}/24`,
-				},
+			test0: [
+				{ address: MACHINE_PUBLIC, netmask: "255.255.255.0", family: "IPv4", mac: "02:00:00:00:00:01", internal: false, cidr: `${MACHINE_PUBLIC}/24` },
 			],
 		}),
 	};
 });
 
-const sockets: net.Socket[] = [];
-const servers: net.Server[] = [];
-afterEach(async () => {
-	for (const socket of sockets.splice(0)) socket.destroy();
-	await Promise.all(servers.splice(0).map((server) => new Promise((resolve) => server.close(resolve))));
+const cleanup: Array<() => void> = [];
+afterEach(() => {
+	for (const done of cleanup.splice(0)) done();
 });
 
+function target(host: string, port: number): Buffer {
+	const portBytes = Buffer.alloc(2);
+	portBytes.writeUInt16BE(port);
+	if (ipaddr.isValid(host)) {
+		const bytes = ipaddr.parse(host).toByteArray();
+		return Buffer.concat([Buffer.from([bytes.length === 4 ? 0x01 : 0x04, ...bytes]), portBytes]);
+	}
+	return Buffer.concat([Buffer.from([0x03, host.length]), Buffer.from(host, "latin1"), portBytes]);
+}
+
+interface Attempt {
+	version?: number;
+	command?: number;
+	methods?: number[];
+	payload?: string;
+	trickle?: boolean;
+}
+
 /**
- * Sends a SOCKS5 greeting and CONNECT, and resolves with the reply code and
- * the open socket. `bytewise` sends them one byte at a time.
+ * Greets the proxy and asks it to CONNECT, resolving with the reply code
+ * (0xff for a refused greeting, -1 for a close with no reply) and the socket.
  */
-function connectThrough(proxyPort: number, target: Buffer, version = 5, bytewise = false): Promise<{ code: number; socket: net.Socket }> {
+function attempt(proxyPort: number, host: string, port: number, options: Attempt = {}): Promise<{ code: number; socket: net.Socket }> {
+	const { version = 5, command = 1, methods = [0], payload = "", trickle = false } = options;
+	const bytes = Buffer.concat([
+		Buffer.from([5, methods.length, ...methods]),
+		Buffer.from([version, command, 0]),
+		target(host, port),
+		Buffer.from(payload),
+	]);
 	return new Promise((resolve) => {
-		const socket = net.connect(proxyPort, "127.0.0.1", async () => {
-			const request = Buffer.concat([Buffer.from([5, 1, 0, version, 1, 0]), target]);
-			if (!bytewise) return void socket.write(request);
+		const socket = net.connect(proxyPort, "127.0.0.1");
+		cleanup.push(() => socket.destroy());
+		socket.on("error", () => {});
+		socket.once("connect", async () => {
+			if (!trickle) return void socket.write(bytes);
 			socket.setNoDelay(true);
-			for (const byte of request) {
+			for (const byte of bytes) {
+				if (socket.destroyed) return;
 				socket.write(Buffer.from([byte]));
-				await new Promise((wait) => setTimeout(wait, 2));
+				await new Promise((wait) => setTimeout(wait, 1));
 			}
 		});
-		sockets.push(socket);
-		// The proxy may reset a refused connection.
-		socket.on("error", () => {});
 		let received = Buffer.alloc(0);
 		const onData = (chunk: Buffer) => {
 			received = Buffer.concat([received, chunk]);
-			// Method selection (2 bytes) then the 10-byte reply.
 			if (received.length >= 12) {
 				socket.off("data", onData);
+				const extra = received.subarray(12);
+				if (extra.length > 0) socket.unshift(extra);
 				resolve({ code: received[3]!, socket });
 			}
 		};
 		socket.on("data", onData);
-		socket.on("close", () => resolve({ code: received[3] ?? -1, socket }));
+		socket.once("close", () => {
+			const code = received.length >= 12 ? received[3]! : received[1] === 0xff ? 0xff : -1;
+			resolve({ code, socket });
+		});
 	});
 }
 
-async function replyCode(proxyPort: number, target: Buffer, version = 5): Promise<number> {
-	return (await connectThrough(proxyPort, target, version)).code;
+const code = async (proxyPort: number, host: string, port: number, options?: Attempt) => (await attempt(proxyPort, host, port, options)).code;
+
+function nextData(socket: net.Socket): Promise<string> {
+	return new Promise((resolve) => socket.once("data", (chunk) => resolve(chunk.toString())));
 }
 
-function ipv4Target(address: string, port: number): Buffer {
-	const target = Buffer.alloc(7);
-	target[0] = 1;
-	address.split(".").forEach((octet, index) => (target[1 + index] = Number(octet)));
-	target.writeUInt16BE(port, 5);
-	return target;
-}
-
-function ipv6Target(address: string, port: number): Buffer {
-	const target = Buffer.alloc(19);
-	target[0] = 4;
-	const [head = "", tail = ""] = address.split("::");
-	const left = head ? head.split(":") : [];
-	const right = tail ? tail.split(":") : [];
-	const groups = [...left, ...Array(8 - left.length - right.length).fill("0"), ...right];
-	groups.forEach((group, index) => target.writeUInt16BE(Number.parseInt(group, 16), 1 + index * 2));
-	target.writeUInt16BE(port, 17);
-	return target;
-}
-
-/** `a.b.c.d` as the two hex groups of an IPv4-mapped IPv6 address. */
-function toHexPair(address: string): string {
-	const [a = 0, b = 0, c = 0, d = 0] = address.split(".").map(Number);
-	return `${((a << 8) | b).toString(16)}:${((c << 8) | d).toString(16)}`;
-}
-
-function domainTarget(host: string, port: number): Buffer {
-	const name = Buffer.from(host, "latin1");
-	const target = Buffer.alloc(4 + name.length);
-	target[0] = 3;
-	target[1] = name.length;
-	name.copy(target, 2);
-	target.writeUInt16BE(port, 2 + name.length);
-	return target;
-}
-
-/** A loopback server that echoes what it reads, standing in for the daemon. */
-async function echoServer(): Promise<number> {
+/** A loopback server standing in for the daemon's render page: it echoes what it reads. */
+async function pageServer(): Promise<number> {
 	const server = net.createServer((socket) => socket.pipe(socket));
-	servers.push(server);
+	cleanup.push(() => server.close());
 	await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
 	return (server.address() as net.AddressInfo).port;
 }
 
-describe("render-check proxy address policy", () => {
-	it("refuses loopback and private targets, by address or by name", async () => {
-		const port = await startRenderCheckProxy();
-		for (const target of [
-			ipv4Target("127.0.0.1", 80),
-			ipv4Target("10.1.2.3", 80),
-			ipv4Target("169.254.169.254", 80),
-			ipv4Target("198.18.0.1", 80),
-			domainTarget("localhost", 80),
-			// IPv6 forms that carry a local IPv4 address: NAT64, 6to4, Teredo,
-			// and IPv4-compatible.
-			ipv6Target("64:ff9b::7f00:1", 80),
-			ipv6Target("64:ff9b::a00:1", 80),
-			ipv6Target("2002:7f00:1::1", 80),
-			ipv6Target("2001::1", 80),
-			ipv6Target("::7f00:1", 80),
-		]) {
-			expect(await replyCode(port, target)).toBe(2);
-		}
-		// Port 0 is not a connection target.
-		expect(await replyCode(port, ipv4Target("1.1.1.1", 0))).toBe(7);
+function allow(host: string, port: number, refused: string[] = []): () => void {
+	const release = allowRenderPage(host, port, (destination) => refused.push(destination));
+	cleanup.push(release);
+	return release;
+}
+
+describe("isLocalAddress", () => {
+	it.each([
+		"127.0.0.1",
+		"0.0.0.0",
+		"10.20.30.40",
+		"172.16.5.4",
+		"192.168.1.1",
+		"100.64.0.9",
+		"169.254.169.254",
+		"198.18.7.7",
+		"224.0.0.251",
+		"255.255.255.255",
+		"::",
+		"::1",
+		"::a00:1",
+		"::ffff:192.168.0.1",
+		"fd12:3456::1",
+		"fe80::1%en0",
+		"ff02::fb",
+		"64:ff9b::c0a8:101",
+		"64:ff9b:1::808:808",
+		"2002:a00:1::1",
+		"2001:0:4136:e378::1",
+		MACHINE_PUBLIC,
+		`::ffff:${MACHINE_PUBLIC}`,
+		"64:ff9b::102:304",
+		"not an address",
+	])("treats %s as local", (address) => {
+		expect(isLocalAddress(address)).toBe(true);
 	});
 
-	it("refuses every address this machine holds, even a public one", async () => {
-		const port = await startRenderCheckProxy();
-		const own = Object.values(os.networkInterfaces())
-			.flatMap((entries) => entries ?? [])
-			.filter((entry) => !entry.internal && !entry.address.startsWith("fe80"));
-		expect(own.map((entry) => entry.address)).toContain(OWN_PUBLIC_IPV4);
-		// IPv4 also as IPv4-mapped IPv6, which names the same host.
-		const targets = own.flatMap((entry) =>
-			entry.family === "IPv6"
-				? [ipv6Target(entry.address, 80)]
-				: [
-						ipv4Target(entry.address, 80),
-						ipv6Target(`::ffff:${toHexPair(entry.address)}`, 80),
-						ipv6Target(`64:ff9b::${toHexPair(entry.address)}`, 80),
-					],
-		);
-		for (const target of targets) {
-			expect(await replyCode(port, target)).toBe(2);
-		}
-	});
-
-	it("refuses a request with a wrong version byte", async () => {
-		const port = await startRenderCheckProxy();
-		expect(await replyCode(port, ipv4Target("1.1.1.1", 443), 4)).toBe(7);
-	});
+	it.each(["8.8.8.8", "93.184.216.34", "::ffff:8.8.4.4", "2606:4700:4700::1111", "64:ff9b::808:808", "2002:808:808::1"])(
+		"treats %s as public",
+		(address) => {
+			expect(isLocalAddress(address)).toBe(false);
+		},
+	);
 });
 
-describe("render-check proxy render-page allowance", () => {
-	it("reaches only the allowed page while the check runs, and reports each refusal", async () => {
-		const port = await startRenderCheckProxy();
-		const pagePort = await echoServer();
+describe("render-check proxy", () => {
+	it("refuses local targets by address and by name", async () => {
+		const proxy = await startRenderCheckProxy();
+		for (const host of ["127.0.0.1", "192.168.0.10", "169.254.169.254", "::1", "64:ff9b::7f00:1", "2002:7f00:1::1", "localhost", MACHINE_PUBLIC]) {
+			expect(await code(proxy, host, 80)).toBe(2);
+		}
+	});
+
+	it("answers malformed and unsupported requests", async () => {
+		const proxy = await startRenderCheckProxy();
+		expect(await code(proxy, "8.8.8.8", 443, { version: 4 })).toBe(7);
+		expect(await code(proxy, "8.8.8.8", 443, { command: 2 })).toBe(7);
+		expect(await code(proxy, "8.8.8.8", 0)).toBe(7);
+		expect(await code(proxy, "8.8.8.8", 443, { methods: [2] })).toBe(0xff);
+		vi.mocked(lookup).mockResolvedValueOnce([] as never);
+		expect(await code(proxy, "nowhere.invalid", 443)).toBe(4);
+	});
+
+	it("reaches an allowed page, refuses its neighbours, and reports them", async () => {
+		const proxy = await startRenderCheckProxy();
+		const page = await pageServer();
 		const refused: string[] = [];
-		const release = allowRenderPage("127.0.0.1", pagePort, (destination) => refused.push(destination));
+		const release = allow("127.0.0.1", page, refused);
 
-		const { code, socket } = await connectThrough(port, ipv4Target("127.0.0.1", pagePort));
-		expect(code).toBe(0);
-		const echoed = new Promise<string>((resolve) => socket.once("data", (chunk) => resolve(chunk.toString())));
-		socket.write("ping");
-		expect(await echoed).toBe("ping");
+		const { code: ok, socket } = await attempt(proxy, "127.0.0.1", page);
+		expect(ok).toBe(0);
+		const echoed = nextData(socket);
+		socket.write("hello");
+		expect(await echoed).toBe("hello");
 
-		// Another port on the same host, and the same port by another name.
-		const otherPort = pagePort === 65_535 ? pagePort - 1 : pagePort + 1;
-		expect(await replyCode(port, ipv4Target("127.0.0.1", otherPort))).toBe(2);
-		expect(await replyCode(port, domainTarget("localhost", pagePort))).toBe(2);
-		expect(refused).toEqual([`127.0.0.1:${otherPort}`, `localhost:${pagePort}`]);
+		const neighbour = page === 65_535 ? page - 1 : page + 1;
+		expect(await code(proxy, "127.0.0.1", neighbour)).toBe(2);
+		expect(await code(proxy, "localhost", page)).toBe(2);
+		expect(refused).toEqual([`127.0.0.1:${neighbour}`, `localhost:${page}`]);
 
 		release();
-		expect(await replyCode(port, ipv4Target("127.0.0.1", pagePort))).toBe(2);
+		expect(await code(proxy, "127.0.0.1", page)).toBe(2);
 		expect(refused).toHaveLength(2);
 	});
 
-	it("keeps the page reachable until every overlapping check releases it", async () => {
-		const port = await startRenderCheckProxy();
-		const pagePort = await echoServer();
-		const releaseFirst = allowRenderPage("127.0.0.1", pagePort, () => {});
-		const releaseSecond = allowRenderPage("127.0.0.1", pagePort, () => {});
-		releaseFirst();
-		expect(await replyCode(port, ipv4Target("127.0.0.1", pagePort))).toBe(0);
-		releaseSecond();
-		expect(await replyCode(port, ipv4Target("127.0.0.1", pagePort))).toBe(2);
+	it("keeps a page reachable until every check that allowed it lets go", async () => {
+		const proxy = await startRenderCheckProxy();
+		const page = await pageServer();
+		const first = allow("127.0.0.1", page);
+		const second = allow("127.0.0.1", page);
+		first();
+		first();
+		expect(await code(proxy, "127.0.0.1", page)).toBe(0);
+		second();
+		expect(await code(proxy, "127.0.0.1", page)).toBe(2);
 	});
 
-	it("accepts a greeting and request that arrive one byte at a time", async () => {
-		const port = await startRenderCheckProxy();
-		const pagePort = await echoServer();
-		const release = allowRenderPage("127.0.0.1", pagePort, () => {});
-		expect((await connectThrough(port, ipv4Target("127.0.0.1", pagePort), 5, true)).code).toBe(0);
-		release();
+	it("handles a handshake that arrives a byte at a time", async () => {
+		const proxy = await startRenderCheckProxy();
+		const page = await pageServer();
+		allow("127.0.0.1", page);
+		expect(await code(proxy, "127.0.0.1", page, { trickle: true })).toBe(0);
 	});
 
-	it("reaches a page allowed by name, at only the addresses it checked", async () => {
-		const port = await startRenderCheckProxy();
-		const pagePort = await echoServer();
-		const release = allowRenderPage("localhost", pagePort, () => {});
-		const { code, socket } = await connectThrough(port, domainTarget("localhost", pagePort));
-		expect(code).toBe(0);
-		const echoed = new Promise<string>((resolve) => socket.once("data", (chunk) => resolve(chunk.toString())));
-		socket.write("ping");
-		expect(await echoed).toBe("ping");
-		// The page listens on 127.0.0.1 only. Had the proxy resolved the name
-		// again when it connected, it would have found 127.0.0.1 and reached it.
-		vi.mocked(lookup).mockResolvedValueOnce([{ address: "::1", family: 6 }] as never);
-		expect(await replyCode(port, domainTarget("localhost", pagePort))).toBe(-1);
-		release();
+	it("forwards what a client sends before its tunnel is up", async () => {
+		const proxy = await startRenderCheckProxy();
+		const page = await pageServer();
+		allow("127.0.0.1", page);
+		const { code: ok, socket } = await attempt(proxy, "127.0.0.1", page, { payload: "early" });
+		expect(ok).toBe(0);
+		expect(await nextData(socket)).toBe("early");
+	});
+
+	it("connects to the addresses it checked, not to a fresh lookup", async () => {
+		const proxy = await startRenderCheckProxy();
+		const page = await pageServer();
+		allow("page.invalid", page);
+		// Nothing else can resolve this name, so the tunnel works only through the checked address.
+		vi.mocked(lookup).mockResolvedValueOnce([{ address: "127.0.0.1", family: 4 }] as never);
+		const { code: ok, socket } = await attempt(proxy, "page.invalid", page);
+		expect(ok).toBe(0);
+		const echoed = nextData(socket);
+		socket.write("pinned");
+		expect(await echoed).toBe("pinned");
+	});
+
+	it("refuses a name whose answers include a local address", async () => {
+		const proxy = await startRenderCheckProxy();
+		vi.mocked(lookup).mockResolvedValueOnce([
+			{ address: "93.184.216.34", family: 4 },
+			{ address: "10.0.0.1", family: 4 },
+		] as never);
+		expect(await code(proxy, "rebind.invalid", 80)).toBe(2);
 	});
 });
 
 describe("render-check proxy with no network", () => {
-	it("reaches the allowed page and nothing else, without resolving a name", async () => {
-		const port = await startRenderCheckProxy("none");
-		const pagePort = await echoServer();
+	it("reaches only the allowed page and never looks a name up", async () => {
+		const proxy = await startRenderCheckProxy("none");
+		const page = await pageServer();
 		const refused: string[] = [];
-		const release = allowRenderPage("127.0.0.1", pagePort, (destination) => refused.push(destination));
-		const { code, socket } = await connectThrough(port, ipv4Target("127.0.0.1", pagePort));
-		expect(code).toBe(0);
-		socket.destroy();
+		allow("127.0.0.1", page, refused);
+		expect(await code(proxy, "127.0.0.1", page)).toBe(0);
 
 		const lookups = vi.mocked(lookup).mock.calls.length;
-		expect(await replyCode(port, domainTarget("example.com", 443))).toBe(2);
-		expect(await replyCode(port, ipv4Target("93.184.216.34", 443))).toBe(2);
-		// A name sent to a "none" proxy is never looked up, so DNS carries nothing out.
+		expect(await code(proxy, "example.com", 443)).toBe(2);
+		expect(await code(proxy, "8.8.8.8", 53)).toBe(2);
 		expect(vi.mocked(lookup).mock.calls.length).toBe(lookups);
-		expect(refused).toEqual(["example.com:443", "93.184.216.34:443"]);
-		release();
+		expect(refused).toEqual(["example.com:443", "8.8.8.8:53"]);
 	});
 });
 
 describe("startRenderCheckProxy", () => {
-	it("runs one proxy per process for each network", async () => {
-		expect(await startRenderCheckProxy()).toBe(await startRenderCheckProxy("public"));
-		expect(await startRenderCheckProxy("none")).toBe(await startRenderCheckProxy("none"));
-		expect(await startRenderCheckProxy("none")).not.toBe(await startRenderCheckProxy());
+	it("runs one listener per network for the life of the process", async () => {
+		const [publicA, publicB, noneA, noneB] = await Promise.all([
+			startRenderCheckProxy(),
+			startRenderCheckProxy("public"),
+			startRenderCheckProxy("none"),
+			startRenderCheckProxy("none"),
+		]);
+		expect(publicA).toBe(publicB);
+		expect(noneA).toBe(noneB);
+		expect(noneA).not.toBe(publicA);
 	});
 
-	it("fails instead of crashing when it cannot listen, and starts on the next try", async () => {
+	it("rejects when it cannot listen and starts on the next call", async () => {
 		vi.resetModules();
 		const fresh = await import("./render-check-proxy");
-		const exhausted = Object.assign(new Error("too many open files"), { code: "EMFILE" });
+		const failure = Object.assign(new Error("no file descriptors left"), { code: "EMFILE" });
 		const listen = vi.spyOn(net.Server.prototype, "listen").mockImplementationOnce(function (this: net.Server) {
-			process.nextTick(() => this.emit("error", exhausted));
+			queueMicrotask(() => this.emit("error", failure));
 			return this;
 		});
-		await expect(fresh.startRenderCheckProxy()).rejects.toBe(exhausted);
+		await expect(fresh.startRenderCheckProxy()).rejects.toBe(failure);
 		listen.mockRestore();
 		await expect(fresh.startRenderCheckProxy()).resolves.toBeGreaterThan(0);
 	});

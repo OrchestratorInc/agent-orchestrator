@@ -26,18 +26,18 @@ func TestFakeClaudeOwnerProcess(t *testing.T) {
 	time.Sleep(30 * time.Second)
 }
 
-// startFakeClaude runs a long-lived process that ps names "claude": this test
+// startFakeClaude runs a long-lived process that ps names name: this test
 // binary, through a symlink of that name, running only the helper above. A
 // symlink to /bin/sleep does not work where sleep is a multicall coreutils
 // (uutils, Ubuntu's default since 25.10): it does not know a tool called
 // "claude" and exits at once.
-func startFakeClaude(t *testing.T) *exec.Cmd {
+func startFakeClaude(t *testing.T, name string) *exec.Cmd {
 	t.Helper()
 	self, err := os.Executable()
 	if err != nil {
 		t.Fatal(err)
 	}
-	bin := filepath.Join(t.TempDir(), "claude")
+	bin := filepath.Join(t.TempDir(), name)
 	if err := os.Symlink(self, bin); err != nil {
 		t.Fatal(err)
 	}
@@ -101,7 +101,7 @@ func TestImportOwnedElsewhereUsesProviderOwnership(t *testing.T) {
 	}
 
 	// Claude Code registers live sessions under sessions/<pid>.json.
-	owner := startFakeClaude(t)
+	owner := startFakeClaude(t, "claude")
 	t.Cleanup(func() { _ = owner.Process.Kill(); _ = owner.Wait() })
 	waitForExecName(t, owner.Process.Pid, "claude")
 	claude := domain.SessionRecord{Harness: domain.HarnessClaudeCode}
@@ -150,6 +150,34 @@ func TestImportOwnedElsewhereUsesProviderOwnership(t *testing.T) {
 	}
 }
 
+func TestClaudeNativeInstallIsDetectedByItsVersionName(t *testing.T) {
+	ctx := context.Background()
+	owner := startFakeClaude(t, "2.1.323")
+	t.Cleanup(func() { _ = owner.Process.Kill(); _ = owner.Wait() })
+	waitForExecName(t, owner.Process.Pid, "2.1.323")
+	dir := t.TempDir()
+	register := func(entry map[string]any) {
+		t.Helper()
+		entry["pid"], entry["sessionId"], entry["cwd"] = owner.Process.Pid, "thread-1", "/source"
+		body, _ := json.Marshal(entry)
+		if err := os.WriteFile(filepath.Join(dir, "1.json"), body, 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	register(map[string]any{"version": "2.1.323"})
+	if !claudeSessionLive(ctx, dir, "thread-1", "") {
+		t.Fatal("a natively installed Claude session was not detected")
+	}
+	register(map[string]any{"version": "2.1.322"})
+	if claudeSessionLive(ctx, dir, "thread-1", "") {
+		t.Fatal("a process named after another version was treated as Claude")
+	}
+	register(map[string]any{})
+	if claudeSessionLive(ctx, dir, "thread-1", "") {
+		t.Fatal("a version-named process was treated as Claude without a registered version")
+	}
+}
+
 // OpenCode has no per-session lock or live-session registry and stores no
 // writable transcript file, so there is never positive evidence that another
 // process holds the conversation.
@@ -169,7 +197,7 @@ func TestImportOwnedElsewhereOpenCodeNeverOwned(t *testing.T) {
 // Claude Code accepts a second writer, so AO checks its registry after adoption too.
 func TestAdoptedClaudeImportOpenElsewhereBlocksResume(t *testing.T) {
 	home := t.TempDir()
-	owner := startFakeClaude(t)
+	owner := startFakeClaude(t, "claude")
 	t.Cleanup(func() { _ = owner.Process.Kill(); _ = owner.Wait() })
 	waitForExecName(t, owner.Process.Pid, "claude")
 	body, _ := json.Marshal(map[string]any{"pid": owner.Process.Pid, "sessionId": "thread-1", "cwd": "/source"})

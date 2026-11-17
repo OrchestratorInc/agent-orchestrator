@@ -97,6 +97,7 @@ See the [command reference](../../backend/internal/skillassets/using-ao/commands
 | `ao spawn`                          | Targeted launch ensure, then `POST /api/v1/sessions` |
 | `ao session ls`                     | `GET /api/v1/sessions` plus per-session PR summaries; shows branch, PR, CI, review, unresolved threads, activity, and age. |
 | `ao session get <id>`               | `GET /api/v1/sessions/{id}`. `--transcript N` also reads `GET /api/v1/sessions/{id}/conversation` for chat sessions on the local daemon. |
+| `ao session interrupt <id>`         | `POST /api/v1/sessions/{id}/conversation/interrupt` |
 | `ao session kill <id>`              | `POST /api/v1/sessions/{id}/kill`              |
 | `ao session restore <id>`           | `POST /api/v1/sessions/{id}/restore`           |
 | `ao session exit-agent <id>`        | `POST /api/v1/sessions/{id}/exit-agent`        |
@@ -133,6 +134,18 @@ branch, issue, or PR-claim options.
 `AO_SESSION_ID`. From an orchestrator or external shell, pass the target
 explicitly with `ao session claim-pr <session-id> <pr-ref>`. The explicit form
 remains supported for backward compatibility and cross-session coordination.
+
+To review someone else's PR, claim it as a review:
+`ao session claim-pr <pr-ref> --no-takeover --review`, or
+`ao spawn --claim-pr <pr-ref> --no-takeover --review`. Before the claim, the CLI
+turns off the session's automatic CI and review-comment fixing
+(`PATCH /api/v1/sessions/{id}/auto-inject-ci` and `.../auto-inject-review`) and
+its native auto-review (`PUT /api/v1/sessions/{id}/auto-review`), so the session
+gets none of the PR's CI failures, merge conflicts, or review comments. These
+switches cover every PR the session owns; if the claim is refused, the CLI puts
+them back. `--review` implies `--no-takeover`, so it never takes the PR from a
+session that is working on it. To take the PR over, run `ao session claim-pr <pr-ref> --review=false`,
+which turns CI and review-comment fixing back on.
 
 Both `ao session claim-pr` and `ao spawn --claim-pr` claim ownership metadata
 only. The claim step does not check out a branch or change HEAD, so
