@@ -88,6 +88,17 @@ if (result.status !== 0) {
 	process.exit(result.status ?? 1);
 }
 
+const host = spawnSync("go", ["build", "-o", join(dirname(buildOutPath), process.platform === "win32" ? "ao-chat-host.exe" : "ao-chat-host"), "./cmd/ao-chat-host"], {
+	cwd: backendRoot,
+	stdio: "inherit",
+	windowsHide: true,
+});
+if (host.error) {
+	console.error(`failed to build chat host: ${host.error.message}`);
+	process.exit(1);
+}
+if (host.status !== 0) process.exit(host.status ?? 1);
+
 if (isWindowsDev) {
 	writeFileSync(windowsDevManifestPath, `${JSON.stringify({ path: buildOutPath }, null, 2)}\n`);
 	cleanupOldWindowsDevDaemons(buildOutPath);

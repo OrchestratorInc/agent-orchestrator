@@ -228,7 +228,7 @@ func TestRenderWithAMissingLocalImagePublishesNothing(t *testing.T) {
 
 	_, _, err := executeCLI(t, Deps{ProcessAlive: func(int) bool { return true }},
 		"render", writePage(t, []byte(`<img src="`+gone+`">`)), "--title", "x")
-	want := "These local images could not be read: " + gone + ". Use absolute paths to existing image files, or remove them."
+	want := "Cannot inline these local images: " + gone + ". Check their paths, permissions, and image formats."
 	if err == nil || err.Error() != want || capture.called {
 		t.Fatalf("err=%v called=%v; want %q and no request", err, capture.called, want)
 	}

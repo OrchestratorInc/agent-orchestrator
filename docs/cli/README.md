@@ -97,13 +97,14 @@ See the [command reference](../../backend/internal/skillassets/using-ao/commands
 | `ao spawn`                          | Targeted launch ensure, then `POST /api/v1/sessions` |
 | `ao session ls`                     | `GET /api/v1/sessions` plus per-session PR summaries; shows branch, PR, CI, review, unresolved threads, activity, and age. |
 | `ao session get <id>`               | `GET /api/v1/sessions/{id}`. `--transcript N` also reads `GET /api/v1/sessions/{id}/conversation` for chat sessions on the local daemon. |
+| `ao session interrupt <id>`         | `POST /api/v1/sessions/{id}/conversation/interrupt` |
 | `ao session kill <id>`              | `POST /api/v1/sessions/{id}/kill`              |
 | `ao session restore <id>`           | `POST /api/v1/sessions/{id}/restore`           |
 | `ao session exit-agent <id>`        | `POST /api/v1/sessions/{id}/exit-agent`        |
 | `ao session resume-agent <id>`      | `POST /api/v1/sessions/{id}/resume-agent`      |
 | `ao session rename <id> <name>`     | `PATCH /api/v1/sessions/{id}`                  |
 | `ao session cleanup`                | `POST /api/v1/sessions/cleanup`                |
-| `ao session delete <id>`            | `DELETE /api/v1/sessions/{id}`                 |
+| `ao session delete <id>`            | `DELETE /api/v1/sessions/{id}?keepArtifacts=true`; artifact files stay, view only, on the Artifacts page. `--delete-artifacts` drops `keepArtifacts` so they are deleted too. |
 | `ao session claim-pr [<id>] <pr-ref>` | `POST /api/v1/sessions/{id}/pr/claim`        |
 | `ao session fork <id> [--check]` | `POST /api/v1/sessions/{id}/fork`             |
 | `ao orchestrator ls`                | `GET /api/v1/orchestrators`                    |

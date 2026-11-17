@@ -31,6 +31,11 @@ describe("ui-settings", () => {
 		expect(await readUiSettings(dir)).toEqual(DEFAULT_UI_SETTINGS);
 	});
 
+	it("round-trips Turkish through the persisted UI settings", async () => {
+		await writeUiSettings(dir, { locale: "tr" });
+		expect(await readUiSettings(dir)).toEqual({ ...DEFAULT_UI_SETTINGS, locale: "tr" });
+	});
+
 	it("merges a partial write with previously persisted settings instead of replacing them", async () => {
 		await writeUiSettings(dir, { locale: "zh-CN" });
 		await writeUiSettings(dir, { soundNotificationsEnabled: false });
