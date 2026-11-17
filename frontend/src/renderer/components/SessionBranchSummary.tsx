@@ -74,7 +74,13 @@ export type BranchGitStep = {
 };
 
 /** The branch rows and git step, handed to the PR card new commits land on. */
-export type BranchWork = { content: ReactNode; hasRows: boolean; git?: BranchGitStep };
+export type BranchWork = {
+	content: ReactNode;
+	hasRows: boolean;
+	git?: BranchGitStep;
+	/** The diff the commits row states, when there is one; the card leaves the same numbers off its own line. */
+	diff?: { additions: number; deletions: number };
+};
 
 export function SessionBranchSummary({
 	conflictFiles,
@@ -167,6 +173,8 @@ export function SessionBranchSummary({
 		);
 	}
 
+	const committedAdditions = sum(facts.committed, "additions");
+	const committedDeletions = sum(facts.committed, "deletions");
 	const rows = (
 		<>
 			{facts.uncommitted.length > 0 ? (
@@ -182,8 +190,8 @@ export function SessionBranchSummary({
 			) : null}
 			{commitsRow ? (
 				<GitStatusRow
-					additions={sum(facts.committed, "additions")}
-					deletions={sum(facts.committed, "deletions")}
+					additions={committedAdditions}
+					deletions={committedDeletions}
 					icon={<GitCommitHorizontal aria-hidden="true" className="size-icon-sm shrink-0 text-muted-foreground" />}
 					files={facts.committed}
 					label={commitsRow.label}
@@ -230,7 +238,7 @@ export function SessionBranchSummary({
 			<section aria-label={t("inspector.branch")} className="flex flex-col" data-testid="inspector-branch">
 				{/* A PR's card names its own branches; the line is for a branch without one. */}
 				{(branch || naming) && !pullRequests ? <BranchLine base={facts.base} branch={branch} naming={naming} /> : null}
-				{renderCards(workInPR ? { content: rows, hasRows: hasWork, git: gitStep } : undefined)}
+				{renderCards(workInPR ? { content: rows, hasRows: hasWork, git: gitStep, diff: commitsRow ? { additions: committedAdditions, deletions: committedDeletions } : undefined } : undefined)}
 				{workInPR ? null : workRows}
 			</section>
 		</InspectorSection>

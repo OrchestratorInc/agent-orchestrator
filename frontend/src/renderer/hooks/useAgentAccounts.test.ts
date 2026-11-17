@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { agentAccountLabel, agentAccountName, withoutSameLogins } from "./useAgentAccounts";
+import { agentAccountLabel, agentAccountName, oneRowPerLogin, withoutSameLogins } from "./useAgentAccounts";
 
 const cli = { id: "device-claude", sameLoginAs: "acct-a" };
 const a = { id: "acct-a" };
@@ -22,6 +22,14 @@ describe("withoutSameLogins", () => {
 	it("keeps the CLI's login when it is the kept account, and its saved twin too", () => {
 		expect(ids(withoutSameLogins([cli, a, b], "device-claude"))).toEqual(["device-claude", "acct-a", "acct-b"]);
 		expect(ids(withoutSameLogins([cli, a, b], "acct-a"))).toEqual(["acct-a", "acct-b"]);
+	});
+});
+
+describe("oneRowPerLogin", () => {
+	it("lists a login once whichever of its two accounts is kept", () => {
+		expect(ids(oneRowPerLogin([cli, a, b], "device-claude"))).toEqual(["device-claude", "acct-b"]);
+		expect(ids(oneRowPerLogin([cli, a, b], "acct-a"))).toEqual(["acct-a", "acct-b"]);
+		expect(ids(oneRowPerLogin([cli, a, b]))).toEqual(["acct-a", "acct-b"]);
 	});
 });
 

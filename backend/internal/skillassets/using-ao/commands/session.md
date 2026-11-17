@@ -1,6 +1,6 @@
 # ao session
 
-Manage agent sessions: list, inspect, rename, kill, restore, exit or resume an
+Manage agent sessions: list, inspect, interrupt, rename, kill, restore, exit or resume an
 agent, switch harnesses, clean up, claim PRs, and turn automatic fixing on or off.
 
 ## In-app session links
@@ -190,6 +190,34 @@ ao session kill <id> [flags]
 # Kill session mer-3
 ao session kill mer-3
 ```
+
+---
+
+### ao session interrupt
+
+Request a stop of an active turn without terminating the session or workspace.
+Terminal UI supports Claude Code, Codex, and Gemini through their declared
+Ctrl+C binding, which the agent can ignore. Other harnesses are refused. A
+terminal draft, a session with no turn in flight, or a turn already sent a stop
+is refused. Chat sessions use their existing turn cancellation.
+
+**Syntax:**
+```
+ao session interrupt <id> [flags]
+```
+
+**Flags:**
+
+| Flag | Meaning | Default / Required |
+|---|---|---|
+| `-p, --project string` | Project id to scope the lookup | - |
+
+Use this first when a worker is stuck in a no-progress turn. Some agents report
+idle between steps, and some report nothing after a stop and read idle only once
+stale activity is reconciled (about 2 minutes). Recheck `ao session get <id>` for
+up to about 3 minutes and wait until it reads idle on two checks a few seconds
+apart before sending new instructions; use `kill` only when it is still active
+after that.
 
 ---
 
