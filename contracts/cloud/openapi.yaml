@@ -6156,8 +6156,16 @@ components:
     WorkerBrowserProfileKey:
       type: object
       additionalProperties: false
-      required: [key]
+      required: [key, orgId, userId]
       properties:
+        orgId:
+          type: string
+          format: uuid
+          description: The organization whose profile the key seals.
+        userId:
+          type: string
+          format: uuid
+          description: The person whose profile the key seals; snapshots are bound to them.
         key:
           type: string
           format: byte

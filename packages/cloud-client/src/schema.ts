@@ -3488,6 +3488,16 @@ export interface components {
         };
         WorkerBrowserProfileKey: {
             /**
+             * Format: uuid
+             * @description The organization whose profile the key seals.
+             */
+            orgId: string;
+            /**
+             * Format: uuid
+             * @description The person whose profile the key seals; snapshots are bound to them.
+             */
+            userId: string;
+            /**
              * Format: byte
              * @description The 32-byte AES-256 data key, base64.
              */
