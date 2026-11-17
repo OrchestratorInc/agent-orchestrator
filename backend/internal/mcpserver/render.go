@@ -5,12 +5,14 @@ import (
 	"strings"
 )
 
+// Limits and defaults for a rendered page.
 const (
 	MaxRenderFileBytes  = 1 << 20
 	DefaultRenderHeight = 400
 	DefaultRenderWidth  = 720
 )
 
+// RenderRequest publishes a page to the session thread.
 type RenderRequest struct {
 	HTML     string `json:"html"`
 	Title    string `json:"title"`
@@ -18,6 +20,7 @@ type RenderRequest struct {
 	Artifact bool   `json:"artifact,omitempty"`
 }
 
+// RenderResponse names the published render and any artifact kept.
 type RenderResponse struct {
 	RenderID      string `json:"renderId"`
 	ActivityID    string `json:"activityId"`
@@ -26,11 +29,13 @@ type RenderResponse struct {
 	ArtifactError string `json:"artifactError"`
 }
 
+// RenderCheckRequest asks the desktop app to screenshot a page.
 type RenderCheckRequest struct {
 	HTML  string `json:"html"`
 	Width int    `json:"width"`
 }
 
+// RenderCheckResponse is the screenshot and what the page reported.
 type RenderCheckResponse struct {
 	Screenshot struct {
 		Data   string `json:"data"`
@@ -49,6 +54,7 @@ type RenderCheckResponse struct {
 // in a check that ran without network.
 const CheckOfflineNote = "The check ran without network access, as your sandbox has none. Remote resources did not load."
 
+// ShownText tells the agent its page is on screen.
 func ShownText(renderID string) string {
 	return fmt.Sprintf("Shown above your reply (render %s). Do not describe the page; add only what it does not say.", renderID)
 }
