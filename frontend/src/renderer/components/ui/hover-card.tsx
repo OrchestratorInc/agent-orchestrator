@@ -47,12 +47,23 @@ export function useHoverCardDismiss(): () => void {
 
 function noop() {}
 
-function useMergedRef<T>(ref: Ref<T> | undefined, own: RefObject<T | null>) {
+/**
+ * A callback ref that hands the node to `own` and to the forwarded `ref`. It
+ * returns a cleanup, so React detaches through it: a forwarded callback ref's
+ * own React 19 cleanup runs then, or it is called with null as before.
+ */
+function useMergedRef<T>(ref: Ref<T> | undefined, own: (node: T | null) => void) {
 	return useCallback(
 		(node: T | null) => {
-			own.current = node;
-			if (typeof ref === "function") ref(node);
-			else if (ref) ref.current = node;
+			own(node);
+			const cleanup = typeof ref === "function" ? ref(node) : undefined;
+			if (ref && typeof ref !== "function") ref.current = node;
+			return () => {
+				own(null);
+				if (typeof cleanup === "function") cleanup();
+				else if (typeof ref === "function") ref(null);
+				else if (ref) ref.current = null;
+			};
 		},
 		[own, ref],
 	);
@@ -141,7 +152,11 @@ function HoverCardTrigger({
 }: ComponentProps<typeof HoverCardPrimitive.Trigger>) {
 	const card = useContext(HoverCardDismissContext);
 	const fallbackRef = useRef<HTMLElement | null>(null);
-	const mergedRef = useMergedRef(ref as Ref<HTMLElement> | undefined, card?.trigger ?? fallbackRef);
+	const triggerRef = card?.trigger ?? fallbackRef;
+	const setTrigger = useCallback((node: HTMLElement | null) => {
+		triggerRef.current = node;
+	}, [triggerRef]);
+	const mergedRef = useMergedRef(ref as Ref<HTMLElement> | undefined, setTrigger);
 	return (
 		<HoverCardPrimitive.Trigger
 			data-slot="hover-card-trigger"
@@ -240,14 +255,7 @@ function HoverCardContent({
 	// component (and its Presence unmounts and remounts it while this stays
 	// rendered), so the watcher must run whenever the element itself arrives.
 	const [content, setContent] = useState<HTMLDivElement | null>(null);
-	const mergedRef = useCallback(
-		(node: HTMLDivElement | null) => {
-			setContent(node);
-			if (typeof ref === "function") ref(node);
-			else if (ref) ref.current = node;
-		},
-		[ref],
-	);
+	const mergedRef = useMergedRef(ref, setContent);
 	useDismissWhenTriggerHidden(card, content);
 	return (
 		<HoverCardPrimitive.Portal container={portalContainer}>
