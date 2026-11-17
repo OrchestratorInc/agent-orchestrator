@@ -326,7 +326,7 @@ export function AgentModelPicker({
 	// catalog arrives, preferring a still-supported favorite, then its default.
 	// An explicit pending model always wins, including while a later catalog loads.
 	useEffect(() => {
-		if (!open || !pending || pending.model || loadingHostSettings) return;
+		if (!pending || pending.model || loadingHostSettings) return;
 		const catalog = catalogs[others.findIndex((agent) => agent.id === pending.harness)]?.data;
 		if (!catalog) return;
 		const offered = offeredCatalogModels(
@@ -347,6 +347,7 @@ export function AgentModelPicker({
 				const match = findModelVariant(families, favorite.model);
 				if (match) {
 					onPendingChange({
+						...pending,
 						harness: pending.harness,
 						model: match.variant.id,
 						modelLabel: match.family.label,
@@ -379,7 +380,7 @@ export function AgentModelPicker({
 			modelLabel: readableModelLabel(agentModelDisplayLabel(pending.harness, selected.label)),
 			shownEffort: selected.defaultEffort,
 		});
-	}, [catalogs, favorites, hostSettings?.harnessDefaults, loadingHostSettings, onPendingChange, open, others, pending]);
+	}, [catalogs, favorites, hostSettings?.harnessDefaults, loadingHostSettings, onPendingChange, others, pending]);
 	// The rows below always describe who answers next: the pending agent, or the running one.
 	const shownHarness = pending?.harness ?? currentHarness;
 	const source = pending ? otherSource(pending.harness, pending) : currentSource;

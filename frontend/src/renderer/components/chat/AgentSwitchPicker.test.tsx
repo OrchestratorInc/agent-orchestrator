@@ -307,6 +307,61 @@ describe("AgentModelPicker", () => {
 		}
 	});
 
+	it("resolves a pending favourite while the menu is closed", async () => {
+		const favorite = { harness: "codex", row: "gpt-y", model: "gpt-y", label: "GPT Y", effort: "low", effortLabel: "Low" };
+		toggleModelFavorite(favorite);
+		const onPendingChange = vi.fn();
+		const queryClient = new QueryClient();
+		queryClient.setQueryData(["agent-models", "codex"], {
+			models: [
+				{ id: "gpt-x", label: "GPT X", isDefault: true, efforts: ["low", "high"], defaultEffort: "high", provider: "openai" },
+				{ id: "gpt-y", label: "GPT Y", efforts: ["low"], defaultEffort: "low", provider: "openai" },
+			],
+			configuredProviders: ["openai"],
+		});
+		function ControlledPicker() {
+			const [pending, setPending] = useState<PendingAgentSwitch | undefined>({ harness: "codex" });
+			return <AgentModelPicker currentHarness="claude-code" current={{ models: [], modelLabel: "Claude Code", efforts: [] }} agentSwitch={{ projectId: "p", pending, onPendingChange: (next) => { onPendingChange(next); setPending(next); } }} />;
+		}
+		try {
+			render(<QueryClientProvider client={queryClient}><ControlledPicker /></QueryClientProvider>);
+			await vi.waitFor(() => expect(onPendingChange).toHaveBeenCalledWith(expect.objectContaining({ harness: "codex", model: "gpt-y", effort: "low" })));
+		} finally {
+			act(() => toggleModelFavorite(favorite));
+		}
+	});
+
+	it("preserves pending approval mode when resolving a Cursor favourite", async () => {
+		const favorite = {
+			harness: "cursor",
+			row: "claude-opus-4-8-thinking-high",
+			model: "claude-opus-4-8-thinking-high",
+			label: "Claude Opus 4.8 Thinking High",
+			effort: "high",
+			thinking: true,
+		};
+		toggleModelFavorite(favorite);
+		const onPendingChange = vi.fn();
+		const queryClient = new QueryClient();
+		queryClient.setQueryData(["agent-models", "cursor"], {
+			models: ["claude-opus-4-8-high", "claude-opus-4-8-thinking-high"].map((id) => ({ id, label: id })),
+		});
+		function ControlledPicker() {
+			const [pending, setPending] = useState<PendingAgentSwitch | undefined>({ harness: "cursor", approvalMode: "bypass-permissions" });
+			return <AgentModelPicker currentHarness="claude-code" current={{ models: [], modelLabel: "Claude Code", efforts: [] }} agentSwitch={{ projectId: "p", pending, onPendingChange: (next) => { onPendingChange(next); setPending(next); } }} />;
+		}
+		try {
+			render(<QueryClientProvider client={queryClient}><ControlledPicker /></QueryClientProvider>);
+			await vi.waitFor(() => expect(onPendingChange).toHaveBeenCalledWith(expect.objectContaining({
+				harness: "cursor",
+				model: "claude-opus-4-8-thinking-high",
+				approvalMode: "bypass-permissions",
+			})));
+		} finally {
+			act(() => toggleModelFavorite(favorite));
+		}
+	});
+
 	it("uses a supported provider default when the starred model is unavailable", async () => {
 		const favorite = { harness: "codex", row: "gpt-gone", model: "gpt-gone", label: "GPT Gone" };
 		toggleModelFavorite(favorite);
