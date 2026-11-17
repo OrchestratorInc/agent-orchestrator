@@ -3980,6 +3980,7 @@
 	"sideChat.cancelHandoffHelp": "Cancelling stops retries and keeps your current draft. The question may already have reached its destination.",
 	"sideChat.retryDelivery": "Retry delivery",
 	"sideChat.sideChatIsUnavailable": "Side chat is unavailable",
+	"sideChat.starting": "Nebenchat wird gestartet…",
 	"sideChat.openingSideChat": "Opening side chat…",
 	"sideChat.yourDraftStaysInThisThreadTryLoadingItAgainOrReturnToTheMainChatWhileTheConnectionRetriesAutomatically": "Your draft stays in this thread. Try loading it again, or return to the main chat while the connection retries automatically.",
 	"sideChat.preparingThisSeparateThreadYouCanKeepWorkingInTheMainChat": "Preparing this separate thread. You can keep working in the main chat.",

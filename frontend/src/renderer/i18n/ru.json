@@ -4190,6 +4190,7 @@
 	"sideChat.cancelHandoffHelp": "Отмена прекращает повторные попытки и сохраняет текущий черновик. Вопрос уже мог дойти до получателя.",
 	"sideChat.retryDelivery": "Повторить доставку",
 	"sideChat.sideChatIsUnavailable": "Дополнительный чат недоступен",
+	"sideChat.starting": "Запуск бокового чата…",
 	"sideChat.openingSideChat": "Открытие дополнительного чата…",
 	"sideChat.yourDraftStaysInThisThreadTryLoadingItAgainOrReturnToTheMainChatWhileTheConnectionRetriesAutomatically": "Ваш черновик остаётся в этой ветке. Попробуйте загрузить её снова или вернитесь в основной чат, пока подключение восстанавливается автоматически.",
 	"sideChat.preparingThisSeparateThreadYouCanKeepWorkingInTheMainChat": "Подготовка отдельной ветки. Вы можете продолжать работу в основном чате.",

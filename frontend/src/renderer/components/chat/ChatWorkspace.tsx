@@ -4358,7 +4358,7 @@ export function Timeline({
 					sourceRevision: excerpt.revision, snapshot: excerpt.snapshot,
 				})) ?? []), ...(echo.fileReferences ?? []).map(fileReference => ({ type: "file_reference", fileReference, annotationId: fileReference.id, annotationOrder: fileReference.order }))],
 				streaming: false,
-				delivery: echo.backgroundWake || echo.turnId ? "accepted" : "sending",
+				delivery: echo.delivery ?? (echo.backgroundWake || echo.turnId ? "accepted" : "sending"),
 				createdAt: echo.createdAt,
 			}));
 	}, [items, localEchos, snapshot.latestSequence, snapshot.turns]);
