@@ -287,6 +287,7 @@ func TestProviderSwitchChecksEffortAgainstTheTargetCatalog(t *testing.T) {
 		{`{"targetHarness":"claude-code","model":"opus"}`, `{"status":"ok"}`, "opus", http.StatusOK, true},
 		{`{"targetHarness":"claude-code","model":"o"}`, "o is not in claude-code's model list", "o", http.StatusOK, true},
 		{`{"targetHarness":"claude-code","model":"gpt-5.5"}`, "gpt-5.5 is not in claude-code's model list", "gpt-5.5", http.StatusOK, true},
+		{`{"targetHarness":"claude-code","permissionMode":"bypass"}`, `permission mode \"bypass\" is not one of`, "", http.StatusBadRequest, false},
 	} {
 		svc := &fakeConversationService{}
 		status, body := switchWithCatalog(t, svc, tc.body)

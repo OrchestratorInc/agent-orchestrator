@@ -87,6 +87,10 @@ func (c *ConversationsController) switchProvider(w http.ResponseWriter, r *http.
 }
 
 func (c *ConversationsController) checkSwitchPicks(ctx context.Context, request *domain.ProviderSwitchRequest) ([]string, error) {
+	if !request.PermissionMode.Valid() {
+		return nil, &domain.ProviderSwitchError{Kind: domain.ProviderSwitchRefusalUnsupported,
+			Detail: fmt.Sprintf("permission mode %q is not one of default, accept-edits, auto, bypass-permissions", request.PermissionMode)}
+	}
 	if c.Models == nil || (request.Model == "" && request.Effort == "") {
 		return nil, nil
 	}

@@ -966,12 +966,15 @@ func TestForcedSettingsChangeOnTheRunningAgentStopsItsTurn(t *testing.T) {
 	if err != nil || !result.SettingsUpdated || result.StoppedTurn || len(result.Warnings) != 1 || !strings.Contains(result.Warnings[0], "--force") {
 		t.Fatalf("result = %+v err = %v, want the settings applied with the turn left running and a --force hint", result, err)
 	}
+	if _, err := h.svc.Send(ctx, testSession, ports.ChatUserMessage{Text: "queued behind it", Origin: domain.MessageOriginHuman}); err != nil {
+		t.Fatalf("Send queued: %v", err)
+	}
 	result, err = h.svc.SwitchProviderReport(ctx, testSession, domain.ProviderSwitchRequest{TargetHarness: record.Harness, Model: "first", Force: true})
-	if err != nil || !result.SettingsUpdated || !result.StoppedTurn {
+	if err != nil || !result.SettingsUpdated || !result.StoppedTurn || result.CancelledQueued != 1 {
 		t.Fatalf("forced result = %+v err = %v, want the settings applied and the turn stopped", result, err)
 	}
 	h.conv.emit(ports.ChatEvent{Kind: ports.ChatEventTurnCompleted, ProviderTurnID: "provider-turn-1", TurnState: domain.TurnStateInterrupted})
 	h.awaitSnapshot(t, func(snapshot store.ConversationSnapshot) bool {
-		return len(snapshot.Turns) == 1 && snapshot.Turns[0].State == domain.TurnStateInterrupted
+		return len(snapshot.Turns) == 2 && snapshot.Turns[0].State.Terminal() && snapshot.Turns[1].State.Terminal()
 	})
 }
