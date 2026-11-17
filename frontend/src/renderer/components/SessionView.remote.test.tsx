@@ -403,7 +403,7 @@ it.each(["AGENT_NOT_EXITED", "AGENT_RESUME_IN_PROGRESS"])("counts a retry that a
 	}
 });
 
-it("resumes a remote agent that exited after the host list was last read when the chat opens again", async () => {
+it("resumes a remote agent that exited after a still-fresh host list read when the chat opens again", async () => {
 	localGet.mockReset();
 	localPost.mockReset();
 	remoteConnect.mockResolvedValue({ hostId: "box-a", label: "Box A", url: "http://box-a:3001", base: "http://127.0.0.1:4000" });
@@ -428,7 +428,7 @@ it("resumes a remote agent that exited after the host list was last read when th
 	await waitFor(() => expect(screen.getByRole("combobox", { name: "Message the agent" })).toHaveAttribute("contenteditable", "true"));
 	first.unmount();
 	state = "exited";
-	await act(async () => { await queryClient.invalidateQueries({ queryKey: remoteWorkspaceQueryKey("box-a") }); });
+	expect(queryClient.getQueryState(remoteWorkspaceQueryKey("box-a"))?.isInvalidated).toBe(false);
 	renderRemoteSession(queryClient);
 	await waitFor(() => expect(resumes).toEqual(["http://127.0.0.1:4000/api/v1/sessions/session-1/resume-agent"]));
 	await waitFor(() => expect(screen.getByRole("combobox", { name: "Message the agent" })).toHaveAttribute("contenteditable", "true"));

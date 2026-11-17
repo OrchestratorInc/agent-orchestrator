@@ -665,15 +665,17 @@ export function SessionView({ sessionId, cloudOrgId, projectId, hostId }: Sessio
 	const resumeOnOpen = autoResume.mutateAsync;
 	// This session's background resume failed; the chat shows why.
 	const autoResumeFailed = autoResume.variables === sessionId && autoResume.isError;
-	const remoteConnection = useRef({ base: remoteBase, at: 0 });
+	const remoteConnection = useRef({ key: "", base: remoteBase, at: 0 });
 	const refetchRemoteSession = remoteSessionQuery.refetch;
 	const remoteReadAt = Math.max(remoteSessionQuery.dataUpdatedAt, remoteSessionQuery.errorUpdatedAt);
 	useEffect(() => {
 		if (openedSession.current.key !== uiSessionId) openedSession.current = { key: uiSessionId, checked: false };
-		if (hostId && remoteConnection.current.base !== remoteBase) {
-			remoteConnection.current = { base: remoteBase, at: remoteBase ? Date.now() : 0 };
+		if (hostId && (remoteConnection.current.key !== uiSessionId || remoteConnection.current.base !== remoteBase)) {
+			const reconnected = remoteConnection.current.base !== remoteBase;
+			remoteConnection.current = { key: uiSessionId, base: remoteBase, at: remoteBase ? Date.now() : 0 };
 			if (remoteBase && !openedSession.current.checked) {
-				void queryClient.cancelQueries({ queryKey: workspaceQueryKeyForHost(hostId), exact: true }).then(() => refetchRemoteSession());
+				if (reconnected) void queryClient.cancelQueries({ queryKey: workspaceQueryKeyForHost(hostId), exact: true }).then(() => refetchRemoteSession());
+				else void refetchRemoteSession({ cancelRefetch: false });
 			}
 		}
 		if (usesPreviewWorkspaceData || session?.cloud || !session || (hostId ? hostUnreachable || remoteSessionQuery.isFetching || remoteReadAt < remoteConnection.current.at : daemonStatus.state !== "ready") ||
