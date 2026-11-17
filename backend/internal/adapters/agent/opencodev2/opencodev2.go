@@ -73,13 +73,16 @@ func (p *Plugin) GetRestoreCommand(ctx context.Context, cfg ports.RestoreConfig)
 	if err != nil {
 		return nil, false, err
 	}
-	cmd, err := command(ctx, binary, ports.LaunchConfig{Config: cfg.Config, SessionID: cfg.Session.ID, Permissions: cfg.Permissions, Prompt: cfg.Prompt, SystemPrompt: cfg.SystemPrompt, SystemPromptFile: cfg.SystemPromptFile}, nativeID)
+	cmd, err := command(ctx, binary, ports.LaunchConfig{Config: cfg.Config, DataDir: cfg.DataDir, WorkspacePath: cfg.Session.WorkspacePath, SessionID: cfg.Session.ID, Permissions: cfg.Permissions, Prompt: cfg.Prompt, SystemPrompt: cfg.SystemPrompt, SystemPromptFile: cfg.SystemPromptFile}, nativeID)
 	return cmd, err == nil, err
 }
 
-// The v2 root TUI has no --model/--agent flags. Select the AO agent through
-// default_agent in the highest-precedence inline config. --prompt=<value>
-// keeps even leading-dash prompts a single string value in the Effect CLI.
+// The v2 root TUI has no --model/--agent flags. AO normally attaches the TUI
+// to one shared OpenCode 2 server and selects the AO agent through the
+// worktree's project config. A launch that cannot use the shared server keeps
+// the private-server path and passes the same config inline instead.
+// --prompt=<value> keeps even leading-dash prompts a single string value in
+// the Effect CLI.
 func command(ctx context.Context, binary string, cfg ports.LaunchConfig, nativeID string) ([]string, error) {
 	prompt := cfg.SystemPrompt
 	if prompt == "" && cfg.SystemPromptFile != "" {
@@ -100,16 +103,22 @@ func command(ctx context.Context, binary string, cfg ports.LaunchConfig, nativeI
 	if err != nil {
 		return nil, fmt.Errorf("opencode-v2: prepare data home: %w", err)
 	}
-	var envArgs []string
-	envArgs = append(envArgs, "XDG_DATA_HOME="+dataHome)
-	if content != "" {
-		envArgs = append(envArgs, "OPENCODE_CONFIG_CONTENT="+content)
-	}
+	envArgs := []string{"XDG_DATA_HOME=" + dataHome}
+	server, sharedErr := prepareSharedServer(ctx, binary, cfg, dataHome, content)
 	var cmd []string
-	if len(envArgs) > 0 {
+	if sharedErr == nil {
+		envArgs = append(envArgs, "OPENCODE_PASSWORD="+server.password)
 		cmd = append([]string{"env"}, envArgs...)
+		cmd = append(cmd, binary, "--server", server.url)
+	} else {
+		// OpenCode 2 ignores inline config when a client attaches to a shared
+		// server, so a launch that cannot use one keeps the private-server path.
+		if content != "" {
+			envArgs = append(envArgs, "OPENCODE_CONFIG_CONTENT="+content)
+		}
+		cmd = append([]string{"env"}, envArgs...)
+		cmd = append(cmd, binary, "--standalone")
 	}
-	cmd = append(cmd, binary, "--standalone")
 	switch ports.NormalizePermissionMode(cfg.Permissions) {
 	case ports.PermissionModeAuto:
 		cmd = append(cmd, "--auto")

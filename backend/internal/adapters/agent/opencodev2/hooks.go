@@ -51,7 +51,7 @@ func (p *Plugin) GetAgentHooks(ctx context.Context, cfg ports.WorkspaceHookConfi
 	if err := hookutil.AtomicWriteFile(path, []byte(v2PluginSource), 0o600); err != nil {
 		return fmt.Errorf("opencodev2.GetAgentHooks: write plugin: %w", err)
 	}
-	if err := hookutil.EnsureWorkspaceGitignore(filepath.Dir(path), v2PluginFileName); err != nil {
+	if err := hookutil.EnsureWorkspaceGitignore(filepath.Dir(path), v2PluginFileName, projectConfigFileName); err != nil {
 		return fmt.Errorf("opencodev2.GetAgentHooks: gitignore: %w", err)
 	}
 	if err := opencode.InstallUsingAOSkill(cfg.WorkspacePath); err != nil {

@@ -6,6 +6,8 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -418,4 +420,202 @@ func withoutDataHome(cmd []string) []string {
 		out = out[1:]
 	}
 	return out
+}
+
+func TestV2LaunchUsesSharedServerAndWritesProjectConfig(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("POSIX executable fixture")
+	}
+	fakeBinary(t, "2.0.0")
+	const password = "shared-server-password"
+	var gotUser, gotPassword string
+	info := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/api/info" {
+			http.NotFound(w, r)
+			return
+		}
+		gotUser, gotPassword, _ = r.BasicAuth()
+		if gotUser != "opencode" || gotPassword != password {
+			w.WriteHeader(http.StatusUnauthorized)
+			return
+		}
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer info.Close()
+
+	dataDir := t.TempDir()
+	persistServer(dataDir, sharedServer{url: info.URL, password: password})
+	workspace := t.TempDir()
+	cmd, err := New().GetLaunchCommand(context.Background(), ports.LaunchConfig{
+		DataDir:       dataDir,
+		WorkspacePath: workspace,
+		SessionID:     "sess/shared",
+		SystemPrompt:  "AO shared rules",
+		Prompt:        "do the task",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if gotUser != "opencode" || gotPassword != password {
+		t.Fatalf("health probe auth = %q/%q", gotUser, gotPassword)
+	}
+	if !containsArg(cmd, "--server", info.URL) {
+		t.Fatalf("argv = %#v, want --server %s", cmd, info.URL)
+	}
+	if !hasEnv(cmd, "OPENCODE_PASSWORD="+password) {
+		t.Fatalf("argv = %#v, want OPENCODE_PASSWORD", cmd)
+	}
+	if strings.Contains(strings.Join(cmd, "\n"), "--standalone") {
+		t.Fatalf("argv = %#v, must not contain --standalone", cmd)
+	}
+	if hasEnvPrefix(cmd, "OPENCODE_CONFIG_CONTENT=") {
+		t.Fatalf("argv = %#v, must not pass OPENCODE_CONFIG_CONTENT in shared mode", cmd)
+	}
+
+	configPath := filepath.Join(workspace, ".opencode", projectConfigFileName)
+	data, err := os.ReadFile(configPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var config struct {
+		DefaultAgent string `json:"default_agent"`
+		Agents       map[string]struct {
+			Mode   string `json:"mode"`
+			System string `json:"system"`
+		} `json:"agents"`
+	}
+	if err := json.Unmarshal(data, &config); err != nil {
+		t.Fatal(err)
+	}
+	if config.DefaultAgent != "ao-sess-shared" {
+		t.Fatalf("default_agent = %q", config.DefaultAgent)
+	}
+	agent := config.Agents["ao-sess-shared"]
+	if agent.Mode != "primary" || agent.System != "AO shared rules" {
+		t.Fatalf("agent = %#v", agent)
+	}
+}
+
+func TestV2SharedServerFallsBackWhenWorkspaceConfigExists(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("POSIX executable fixture")
+	}
+	fakeBinary(t, "2.0.0")
+	info := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/api/info" {
+			w.WriteHeader(http.StatusOK)
+			return
+		}
+		http.NotFound(w, r)
+	}))
+	defer info.Close()
+
+	dataDir := t.TempDir()
+	persistServer(dataDir, sharedServer{url: info.URL, password: "pw"})
+	workspace := t.TempDir()
+	configPath := filepath.Join(workspace, ".opencode", projectConfigFileName)
+	if err := os.MkdirAll(filepath.Dir(configPath), 0o750); err != nil {
+		t.Fatal(err)
+	}
+	original := "{\n  \"default_agent\": \"user-agent\"\n}\n"
+	if err := os.WriteFile(configPath, []byte(original), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	cmd, err := New().GetLaunchCommand(context.Background(), ports.LaunchConfig{
+		DataDir:       dataDir,
+		WorkspacePath: workspace,
+		SessionID:     "sess/fallback",
+		SystemPrompt:  "AO rules",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(strings.Join(cmd, "\n"), "--standalone") {
+		t.Fatalf("argv = %#v, want standalone fallback", cmd)
+	}
+	if !hasEnvPrefix(cmd, "OPENCODE_CONFIG_CONTENT=") {
+		t.Fatalf("argv = %#v, want OPENCODE_CONFIG_CONTENT fallback", cmd)
+	}
+	if containsArg(cmd, "--server", info.URL) {
+		t.Fatalf("argv = %#v, must not use the shared server", cmd)
+	}
+	got, err := os.ReadFile(configPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(got) != original {
+		t.Fatalf("workspace config changed to %q", got)
+	}
+}
+
+func TestPrepareSharedServerRemovesProjectConfigWhenServerFails(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("POSIX executable fixture")
+	}
+	binary := fakeBinary(t, "2.0.0")
+	workspace := t.TempDir()
+	_, err := prepareSharedServer(context.Background(), binary, ports.LaunchConfig{
+		DataDir:       t.TempDir(),
+		WorkspacePath: workspace,
+		SessionID:     "sess/failed",
+	}, t.TempDir(), `{"default_agent":"ao-failed"}`)
+	if err == nil {
+		t.Fatal("prepareSharedServer succeeded with a server that exits during startup")
+	}
+	if _, statErr := os.Stat(filepath.Join(workspace, ".opencode", projectConfigFileName)); !errors.Is(statErr, os.ErrNotExist) {
+		t.Fatalf("project config still exists: %v", statErr)
+	}
+}
+
+func containsArg(args []string, flag, value string) bool {
+	for i := 0; i+1 < len(args); i++ {
+		if args[i] == flag && args[i+1] == value {
+			return true
+		}
+	}
+	return false
+}
+
+func hasEnv(args []string, want string) bool {
+	for _, arg := range args {
+		if arg == want {
+			return true
+		}
+	}
+	return false
+}
+
+func hasEnvPrefix(args []string, prefix string) bool {
+	for _, arg := range args {
+		if strings.HasPrefix(arg, prefix) {
+			return true
+		}
+	}
+	return false
+}
+
+func TestWaitForSharedServerReadsPasswordAndProbesHealth(t *testing.T) {
+	const password = "probe-password"
+	info := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		user, pass, ok := r.BasicAuth()
+		if !ok || user != "opencode" || pass != password {
+			w.WriteHeader(http.StatusUnauthorized)
+			return
+		}
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer info.Close()
+
+	var output serverOutput
+	if _, err := output.Write([]byte("server listening on http://127.0.0.1:1\nserver password " + password + "\n")); err != nil {
+		t.Fatal(err)
+	}
+	got, err := waitForSharedServer(context.Background(), info.URL, &output, make(chan struct{}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got != password {
+		t.Fatalf("password = %q, want %q", got, password)
+	}
 }
