@@ -45,6 +45,16 @@ func (f *fakeShellTerminalStore) UpdateShellTerminalAgentHarness(_ context.Conte
 	return nil
 }
 
+func (f *fakeShellTerminalStore) AdoptShellTerminal(_ context.Context, handleID, appRunID string) (bool, error) {
+	for i, rec := range f.records {
+		if rec.HandleID == handleID && rec.EndedAt == nil {
+			f.records[i].AppRunID = appRunID
+			return true, nil
+		}
+	}
+	return false, nil
+}
+
 func (f *fakeShellTerminalStore) ReplaceShellTerminal(_ context.Context, oldHandleID string, rec ShellTerminalRecord) (bool, error) {
 	for i, old := range f.records {
 		if old.HandleID == oldHandleID {
@@ -380,9 +390,6 @@ func TestEndedStateNotReportedUntilStored(t *testing.T) {
 		t.Fatalf("reap err = %v; rows = %+v; want the row kept and not ended", err, st.records)
 	}
 	st.markEndedErr = nil
-	if _, err := svc.ReapShellTerminalsFromPreviousAppRuns(ctx); err != nil {
-		t.Fatal(err)
-	}
 	listed, err := svc.ListShellTerminalsForCurrentAppRun(ctx)
 	if err != nil || len(listed) != 1 || listed[0].EndedAt == nil || st.records[0].EndedAt == nil {
 		t.Fatalf("retry list = %+v, %v; rows = %+v; want it ended once stored", listed, err, st.records)
@@ -608,5 +615,43 @@ func TestEndShellStoresEndAfterQuitDeadline(t *testing.T) {
 	}
 	if st.records[0].EndedAt == nil || st.records[0].AgentConversationID != end.AgentConversationID {
 		t.Fatalf("row = %+v; want the end stored despite the expired quit context", st.records[0])
+	}
+}
+
+// The startup reap runs once per launch. A rebooted shell whose recovery it
+// could not finish (here, an inconclusive probe) is ended to restore by the
+// next list, not pruned as if it had exited during this launch.
+func TestListFinishesUnfinishedStartupRecovery(t *testing.T) {
+	ctx := context.Background()
+	rt := newFakeShellRuntime() // the host is gone after the reboot
+	rt.childProbeErr = ports.ErrRuntimeProbeInconclusive
+	st := &fakeShellTerminalStore{records: []ShellTerminalRecord{sessionShell("shellterm-a")}}
+	svc := newTestService(rt, st, &fakeProjectRootLocator{})
+	if _, err := svc.ReapShellTerminalsFromPreviousAppRuns(ctx); err != nil || st.records[0].EndedAt != nil {
+		t.Fatalf("reap err = %v; rows = %+v; want the row left for retry", err, st.records)
+	}
+	rt.childProbeErr = nil
+	listed, err := svc.ListShellTerminalsForCurrentAppRun(ctx)
+	if err != nil || len(listed) != 1 || listed[0].EndedAt == nil || len(st.records) != 1 || st.records[0].EndedAt == nil {
+		t.Fatalf("list = %+v, %v; rows = %+v; want the tab kept and ended", listed, err, st.records)
+	}
+}
+
+// A shell the startup reap found alive belongs to this launch from then on,
+// so exiting it later closes the tab like any shell opened in this launch.
+func TestShellRecoveredAliveClosesWhenItExits(t *testing.T) {
+	ctx := context.Background()
+	rt := newFakeShellRuntime()
+	rec := sessionShell("shellterm-a")
+	rt.aliveByHandle[rec.HandleID] = true
+	st := &fakeShellTerminalStore{records: []ShellTerminalRecord{rec}}
+	svc := newTestService(rt, st, &fakeProjectRootLocator{})
+	if _, err := svc.ReapShellTerminalsFromPreviousAppRuns(ctx); err != nil || st.records[0].AppRunID != testAppRunID {
+		t.Fatalf("reap err = %v; rows = %+v; want the live shell adopted into this launch", err, st.records)
+	}
+	rt.childExited = true
+	listed, err := svc.ListShellTerminalsForCurrentAppRun(ctx)
+	if err != nil || len(listed) != 0 || len(st.records) != 0 {
+		t.Fatalf("list = %+v, %v; rows = %+v; want the exited shell closed", listed, err, st.records)
 	}
 }

@@ -1096,6 +1096,19 @@ func (s *Service) pruneExitedShell(ctx context.Context, rec ShellTerminalRecord)
 			return current, true
 		}
 		rec = current
+		if keepsEndedShell(rec) && rec.AppRunID != s.appRunID {
+			// A previous launch's shell whose startup recovery did not finish
+			// (an unknown probe, a failed write): end it to restore, as the
+			// startup reap would have, rather than prune it as an exit.
+			if stillAlive, err := s.endShell(ctx, rec, unchangedEnd(rec)); stillAlive {
+				s.log.Warn("ending shell terminal from previous app run: runtime still alive after destroy", "handleId", rec.HandleID, "error", err)
+				return rec, true
+			}
+			if ended, found, err := s.store.SelectShellTerminalByHandleID(ctx, rec.HandleID); err == nil && found {
+				return ended, true
+			}
+			return rec, true
+		}
 	}
 	// Native hosts retain scrollback after child exit. Tear down that host
 	// before forgetting its row; preserve failures for retry.
@@ -1176,11 +1189,18 @@ func (s *Service) ReapShellTerminalsFromPreviousAppRuns(ctx context.Context) (in
 				s.log.Warn("shell terminal liveness probe failed; keeping row", "handleId", rec.HandleID, "error", probeErr)
 				continue
 			}
-			if !alive {
-				if stillAlive, destroyErr := s.endShell(ctx, rec, unchangedEnd(rec)); stillAlive {
-					s.log.Warn("ending shell terminal from previous app run: runtime still alive after destroy",
-						"handleId", rec.HandleID, "appRunId", rec.AppRunID, "error", destroyErr)
+			if alive {
+				// Recovered: from now on its exit is this launch's, and closes it.
+				// A row left in the previous run (an unknown probe, a failed
+				// write) is still recovered by the list rather than pruned.
+				if _, err := s.store.AdoptShellTerminal(ctx, rec.HandleID, s.appRunID); err != nil {
+					s.log.Warn("shell terminal: adopt into this app run failed", "handleId", rec.HandleID, "error", err)
 				}
+				continue
+			}
+			if stillAlive, destroyErr := s.endShell(ctx, rec, unchangedEnd(rec)); stillAlive {
+				s.log.Warn("ending shell terminal from previous app run: runtime still alive after destroy",
+					"handleId", rec.HandleID, "appRunId", rec.AppRunID, "error", destroyErr)
 			}
 			continue
 		}

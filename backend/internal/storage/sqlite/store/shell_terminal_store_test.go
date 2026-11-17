@@ -389,3 +389,22 @@ func TestUpdateShellTerminalAgentHarnessLeavesEndedRow(t *testing.T) {
 		t.Fatalf("harness = %q, %v; want the saved agent kept", got.LastAgentHarness, err)
 	}
 }
+
+// Adopting moves a live shell into an app run and never touches an ended one.
+func TestAdoptShellTerminalMovesOnlyLiveRows(t *testing.T) {
+	s, ctx, rec := endedStoreFixture(t)
+	if adopted, err := s.AdoptShellTerminal(ctx, rec.HandleID, "run-2"); err != nil || !adopted {
+		t.Fatalf("adopt live = %v, %v; want true", adopted, err)
+	}
+	got, _, _ := s.SelectShellTerminalByHandleID(ctx, rec.HandleID)
+	if got.AppRunID != "run-2" {
+		t.Fatalf("app run = %q, want run-2", got.AppRunID)
+	}
+	end := shelltermsvc.ShellTerminalEnd{EndedAt: time.Date(2026, 11, 17, 9, 0, 0, 0, time.UTC), WorkingDir: rec.WorkingDir}
+	if _, err := s.MarkShellTerminalEnded(ctx, rec.HandleID, end); err != nil {
+		t.Fatal(err)
+	}
+	if adopted, err := s.AdoptShellTerminal(ctx, rec.HandleID, "run-3"); err != nil || adopted {
+		t.Fatalf("adopt ended = %v, %v; want false", adopted, err)
+	}
+}

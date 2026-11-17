@@ -57,4 +57,5 @@ type Store interface {
 	MarkShellTerminalEnded(ctx context.Context, handleID string, end ShellTerminalEnd) (bool, error)
 	UpdateShellTerminalAgentHarness(ctx context.Context, handleID string, harness domain.AgentHarness) error
 	ReplaceShellTerminal(ctx context.Context, oldHandleID string, rec ShellTerminalRecord) (bool, error)
+	AdoptShellTerminal(ctx context.Context, handleID, appRunID string) (bool, error)
 }

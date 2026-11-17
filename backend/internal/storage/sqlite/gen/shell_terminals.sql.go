@@ -13,6 +13,25 @@ import (
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
 )
 
+const adoptShellTerminal = `-- name: AdoptShellTerminal :execrows
+UPDATE shell_terminals
+SET app_run_id = ?1
+WHERE handle_id = ?2 AND ended_at IS NULL
+`
+
+type AdoptShellTerminalParams struct {
+	AppRunID string
+	HandleID string
+}
+
+func (q *Queries) AdoptShellTerminal(ctx context.Context, arg AdoptShellTerminalParams) (int64, error) {
+	result, err := q.db.ExecContext(ctx, adoptShellTerminal, arg.AppRunID, arg.HandleID)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected()
+}
+
 const deleteShellTerminalByHandleID = `-- name: DeleteShellTerminalByHandleID :execrows
 DELETE FROM shell_terminals
 WHERE handle_id = ?

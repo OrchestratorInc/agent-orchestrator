@@ -126,6 +126,9 @@ func TestTmuxUserShellExitReconciliation(t *testing.T) {
 					t.Fatalf("host after child exit = %v, %v; want retained=%v", alive, err, tc.retainPane)
 				}
 				if reconcile == "desktop relaunch" {
+					// The shell is found gone at the next launch: the reap
+					// runs once per launch, so relaunch before reaping.
+					svc = NewService(rt, st, nil, sessions, workspace, "third-launch", testLogger())
 					if n, err := svc.ReapShellTerminalsFromPreviousAppRuns(ctx); err != nil || n != 0 {
 						t.Fatalf("exited reap = %d, %v", n, err)
 					}

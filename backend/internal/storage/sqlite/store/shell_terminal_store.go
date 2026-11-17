@@ -145,6 +145,18 @@ func (s *Store) UpdateShellTerminalAgentHarness(ctx context.Context, handleID st
 	return nil
 }
 
+// AdoptShellTerminal moves a live shell's row into an app run, reporting
+// whether a not-ended row was updated.
+func (s *Store) AdoptShellTerminal(ctx context.Context, handleID, appRunID string) (bool, error) {
+	s.writeMu.Lock()
+	defer s.writeMu.Unlock()
+	affected, err := s.qw.AdoptShellTerminal(ctx, gen.AdoptShellTerminalParams{AppRunID: appRunID, HandleID: handleID})
+	if err != nil {
+		return false, fmt.Errorf("adopt shell terminal %s: %w", handleID, err)
+	}
+	return affected > 0, nil
+}
+
 // ReplaceShellTerminal swaps an ended shell's row for the shell that reopens
 // it in one transaction, so the tab is never listed twice or not at all. It
 // reports false, changing nothing, when the old row no longer exists.
