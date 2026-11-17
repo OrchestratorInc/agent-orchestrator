@@ -116,17 +116,18 @@ describe("agent readiness query", () => {
 		} finally { vi.useRealTimers(); }
 	});
 
-	it.each(["another check", "Retry", "agent switch"])("retains an expired Retry offer until settled by %s", async (action) => {
+	it.each(["another check", "Retry", "agent switch", "account switch"])("retains an expired Retry offer until settled by %s", async (action) => {
 		vi.useFakeTimers();
 		try {
 			const pending = { agents: [agentReadiness("codex", "Codex", { authentication: "unknown" })] };
 			getMock.mockResolvedValue({ data: pending }); postMock.mockResolvedValue({ data: pending });
 			const client = new QueryClient(); client.setQueryData(agentReadinessQueryKey, pending);
 			let selectedAgent = "codex";
+			let selectedAccount: string | undefined;
 			const { result, unmount, rerender } = renderHook(() => {
 				const readiness = useAgentReadinessQuery();
 				const agent = readiness.data?.agents.find((candidate) => candidate.id === selectedAgent);
-				return useStandaloneAgentReadiness(selectedAgent, !agent || isPendingAgent(agent), true);
+				return useStandaloneAgentReadiness(selectedAgent, !selectedAccount && (!agent || isPendingAgent(agent)), true, selectedAccount);
 			}, { wrapper: wrapper(client) });
 			await act(async () => { await vi.advanceTimersByTimeAsync(60_000); });
 			postMock.mockImplementation(() => new Promise(() => {}));
@@ -157,6 +158,9 @@ describe("agent readiness query", () => {
 				} else if (action === "agent switch") {
 					client.setQueryData(agentReadinessQueryKey, { agents: [...pending.agents, agentReadiness("claude-code", "Claude Code")] });
 					selectedAgent = "claude-code";
+					rerender();
+				} else if (action === "account switch") {
+					selectedAccount = "signed-in-account";
 					rerender();
 				} else client.setQueryData(agentReadinessQueryKey, ready);
 				await vi.advanceTimersByTimeAsync(0);

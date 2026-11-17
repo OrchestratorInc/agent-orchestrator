@@ -101,10 +101,10 @@ export function useAgentReadinessQuery(enabled = true, hostId?: string) {
 
 /** An open local standalone view follows daemon recovery without forcing probes
  * on every poll. The daemon continues its own work after this view leaves. */
-export function useStandaloneAgentReadiness(agentId: string, pending: boolean, enabled: boolean) {
+export function useStandaloneAgentReadiness(agentId: string, pending: boolean, enabled: boolean, accountId?: string) {
 	const queryClient = useQueryClient();
 	const [daemonGeneration, setDaemonGeneration] = useState(0);
-	const scope = useMemo(() => ({}), [agentId, enabled, daemonGeneration, queryClient]);
+	const scope = useMemo(() => ({}), [agentId, accountId, enabled, daemonGeneration, queryClient]);
 	const [retryRequest, setRetryRequest] = useState<{ scope: object }>();
 	const [settledRetry, setSettledRetry] = useState<typeof retryRequest>();
 	const consumedRetry = useRef<typeof retryRequest>(undefined);

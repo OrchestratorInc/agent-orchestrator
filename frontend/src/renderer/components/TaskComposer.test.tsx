@@ -58,7 +58,7 @@ vi.mock("../hooks/useAgentReadinessQuery", async (importOriginal) => {
 		ensureAgentReadiness: h.ensureTargetedReadiness,
 		useAgentReadinessQuery: () => ({ data: h.agentCatalog, isFetching: false, isSuccess: h.agentCatalog !== undefined }),
 		useEnsureAgentReadiness: h.ensureReadiness,
-		useStandaloneAgentReadiness: (agentId: string) => ({ timedOut: agentId === "codex" && h.standaloneTimedOut, retrying: agentId === "codex" && h.standaloneRetrying, retry: h.standaloneRetry }),
+		useStandaloneAgentReadiness: (agentId: string, _pending: boolean, _enabled: boolean, accountId?: string) => ({ timedOut: agentId === "codex" && !accountId && h.standaloneTimedOut, retrying: agentId === "codex" && !accountId && h.standaloneRetrying, retry: h.standaloneRetry }),
 	};
 });
 
@@ -590,6 +590,21 @@ describe("TaskComposer", () => {
 		expect(screen.getByLabelText("Agent")).toHaveAttribute("data-value", "codex");
 		expect(startTask()).toBeDisabled();
 		expect(await screen.findByRole("button", { name: "Open Agent Harnesses" })).toBeInTheDocument();
+	});
+
+	it("clears the previous account's timeout when choosing a signed-in account", async () => {
+		window.localStorage.setItem("ao.taskComposer.preferences.v1", JSON.stringify({ __standalone__: { lastAgent: "codex", agents: {} } }));
+		h.agentCatalog = { agents: [agentReadiness("codex", "Codex", { authentication: "unauthorized" })] };
+		h.standaloneTimedOut = true;
+		const client = new QueryClient({ defaultOptions: { queries: { staleTime: Infinity } } });
+		client.setQueryData(["agent-accounts"], [{ id: "saved-other", provider: "codex", signedIn: true }]);
+		let launch!: ReturnType<typeof useTaskLaunch>;
+		function Launcher() { launch = useTaskLaunch({ projectId: "__standalone__" }); return null; }
+		render(<Wrap queryClient={client}><Launcher /></Wrap>);
+		await waitFor(() => expect(launch.sendBlockedReason).toBe("Couldn’t confirm Codex is ready"));
+		act(() => launch.account?.choose("saved-other"));
+		await waitFor(() => expect(launch.canSubmit).toBe(true));
+		expect(launch.sendBlockedReason).toBeUndefined();
 	});
 
 	it.each(["unknown", "unauthorized"] as const)("uses an explicit account instead of the default account's %s verdict", async (authentication) => {
