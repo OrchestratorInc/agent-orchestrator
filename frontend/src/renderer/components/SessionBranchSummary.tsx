@@ -121,6 +121,7 @@ export function SessionBranchSummary({
 	title: string;
 }) {
 	const { t } = useTranslation();
+	const issue = useSessionIssueLink(session, hostId);
 	// Cloud sessions have no local workspace facts; orchestrators coordinate
 	// workers rather than shipping a branch of their own. An imported chat has
 	// no branch until it is opened.
@@ -156,7 +157,6 @@ export function SessionBranchSummary({
 	const behind = behindBase ? (facts.branch?.behind ?? 0) : 0;
 	const hasWork = facts.uncommitted.length > 0 || commitsRow !== null || behind > 0;
 	const { branch, naming } = sessionBranchPresentation(session);
-	const issue = useSessionIssueLink(session, hostId);
 	if (!issue && !branch && !naming && !pullRequests && !hasWork) return null;
 
 	let action: ReactNode = null;
@@ -240,7 +240,7 @@ export function SessionBranchSummary({
 	return (
 		<InspectorSection surface={false} title={title}>
 			<section aria-label={t("inspector.branch")} className="flex flex-col" data-testid="inspector-branch">
-				{issue ? <IssueLine issue={issue} /> : null}
+				{issue ? <SessionIssueLine issue={issue} /> : null}
 				{/* A PR's card names its own branches; the line is for a branch without one. */}
 				{(branch || naming) && !pullRequests ? <BranchLine base={facts.base} branch={branch} naming={naming} /> : null}
 				{renderCards(workInPR ? { content: rows, hasRows: hasWork, git: gitStep, diff: commitsRow ? { additions: committedAdditions, deletions: committedDeletions } : undefined } : undefined)}
@@ -250,7 +250,7 @@ export function SessionBranchSummary({
 	);
 }
 
-function IssueLine({ issue }: { issue: BoardTrackerIssue }) {
+export function SessionIssueLine({ issue }: { issue: BoardTrackerIssue }) {
 	const { t } = useTranslation();
 	const id = `${issue.repo}#${issue.number}`;
 	return (

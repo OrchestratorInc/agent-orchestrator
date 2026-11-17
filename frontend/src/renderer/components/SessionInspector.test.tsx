@@ -6780,6 +6780,21 @@ describe("SessionInspector branch summary", () => {
     expect(issue).toHaveAttribute("target", "_blank");
   });
 
+  it.each([
+    ["github:acme/demo#42", "acme/demo#42", "https://github.com/acme/demo/issues/42"],
+    ["#7", "group/sub/demo#7", "https://gitlab.local:8443/group/sub/demo/-/issues/7"],
+  ])("links issue %s in the default inspector", async (issueId, label, url) => {
+    useUiStore.setState({ developerMode: false, prView: false });
+    mockGitState({});
+    const respond = getMock.getMockImplementation()!;
+    getMock.mockImplementation(async (path: string) => path === "/api/v1/projects/{id}"
+      ? { data: { status: "ok", project: { repo: "https://gitlab.local:8443/group/sub/demo.git" } } }
+      : respond(path));
+    renderWithQuery(<SessionInspector session={session([], { issueId })} />);
+    const issue = await branch().findByRole("link", { name: `Intake issue: ${label}` });
+    expect(issue).toHaveAttribute("href", url);
+  });
+
   it("links an intake issue above the branch and leaves a typed task id plain", () => {
     mockGitState({});
     const view = renderWithQuery(<SessionInspector session={session([], { issueId: "gitlab:acme/platform/api#7@gitlab.internal" })} />);
