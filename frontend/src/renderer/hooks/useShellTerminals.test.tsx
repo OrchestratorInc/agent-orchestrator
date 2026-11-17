@@ -603,7 +603,6 @@ describe("ended shell terminals", () => {
 });
 
 describe("closing an ended tab while it reopens", () => {
-	// Its own handle: adoptions are module state shared with earlier tests.
 	const ended: ShellTerminal = { ...shells[0], handleId: "ptyhost-v1:shellterm-closed-while-reopening", endedAt: "2026-11-10T20:44:00Z" };
 	const replacement = { createdAt: ended.createdAt, handleId: "ptyhost-v1:shellterm-replacement", title: "one", workingDir: "/tmp" };
 
@@ -642,7 +641,6 @@ describe("closing an ended tab while it reopens", () => {
 		act(() => {
 			result.current.close.mutate(ended.handleId);
 		});
-		// The reopen won the daemon's gate, so the old row is gone.
 		await waitFor(() => expect(deletes).toHaveLength(1));
 		deletes[0].finish({ error: { code: "SHELL_TERMINAL_NOT_FOUND" } });
 		await waitFor(() => expect(result.current.close.isSuccess).toBe(true));

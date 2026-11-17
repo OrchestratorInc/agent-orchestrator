@@ -126,7 +126,6 @@ func TestTmuxUserShellExitReconciliation(t *testing.T) {
 					t.Fatalf("host after child exit = %v, %v; want retained=%v", alive, err, tc.retainPane)
 				}
 				if reconcile == "desktop relaunch" {
-					// A shell found gone at the next launch is kept to restore.
 					if n, err := svc.ReapShellTerminalsFromPreviousAppRuns(ctx); err != nil || n != 0 {
 						t.Fatalf("exited reap = %d, %v", n, err)
 					}
@@ -134,7 +133,6 @@ func TestTmuxUserShellExitReconciliation(t *testing.T) {
 						t.Fatalf("exited list = %+v, %v; want one ended tab", listed, err)
 					}
 				} else {
-					// `exit` in a running app closes the tab.
 					if listed, err := svc.ListShellTerminalsForCurrentAppRun(ctx); err != nil || len(listed) != 0 {
 						t.Fatalf("exited list = %+v, %v", listed, err)
 					}

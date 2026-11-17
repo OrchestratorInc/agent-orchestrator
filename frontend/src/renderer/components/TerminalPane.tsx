@@ -824,7 +824,6 @@ export function TerminalPane({
 		terminalTarget.kind === "shell" && terminalTarget.handleId.startsWith("pending-shell:");
 	const shellHostId = session?.hostId as HostId | undefined;
 	const shellTerminalsQuery = useShellTerminals(shellHostId);
-	// A shell whose process is gone has no PTY to attach to; it shows as ended.
 	const endedShell =
 		terminalTarget.kind === "shell"
 			? shellTerminalsQuery.data?.find((shell) => shell.handleId === terminalTarget.handleId && shell.endedAt)

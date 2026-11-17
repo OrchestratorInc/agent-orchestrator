@@ -281,8 +281,6 @@ func TestManagerRestartsAGivenUpWatchForANewSubscriber(t *testing.T) {
 	}
 }
 
-// The harness seen in a shell is reported once per change, so an ended tab
-// can later offer to resume that agent.
 func TestManagerRecordsHarnessOncePerChange(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
@@ -390,8 +388,6 @@ func TestReadShellForegroundNamesFolderAgentAndConversation(t *testing.T) {
 	}
 }
 
-// A shell's first reading is recorded even when no agent runs: the stored
-// agent may be stale from a previous daemon.
 func TestManagerRecordsFirstReadingWithoutAgent(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()

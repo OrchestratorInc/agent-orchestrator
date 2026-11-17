@@ -254,8 +254,6 @@ func TestRestorableShellTerminalsAcrossAppLaunches(t *testing.T) {
 	}
 }
 
-// endedStoreFixture inserts one session-scoped shell, as an ended tab would
-// start out, against a real SQLite store.
 func endedStoreFixture(t *testing.T) (*sqlite.Store, context.Context, shelltermsvc.ShellTerminalRecord) {
 	t.Helper()
 	s := newTestStore(t)
@@ -377,8 +375,6 @@ func TestReplaceShellTerminalMissingOldRowChangesNothing(t *testing.T) {
 	}
 }
 
-// A harness reading still in flight when the shell ends must not overwrite
-// the agent saved for restoring.
 func TestUpdateShellTerminalAgentHarnessLeavesEndedRow(t *testing.T) {
 	s, ctx, rec := endedStoreFixture(t)
 	end := shelltermsvc.ShellTerminalEnd{EndedAt: time.Date(2026, 11, 16, 9, 0, 0, 0, time.UTC), WorkingDir: rec.WorkingDir, AgentHarness: domain.HarnessClaudeCode}

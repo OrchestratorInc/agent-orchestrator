@@ -240,10 +240,8 @@ type RuntimeConfig struct {
 	// (user and command shells, not agents) need not pay it continuously.
 	// Runtimes that always render ignore it.
 	LazyStyledOutput bool
-	// ReplayFile names saved terminal output to show above Argv's own, for a
-	// shell restored after the app quit. The runtime reads it before Create
-	// returns. Runtimes that cannot show it ignore it.
-	ReplayFile string
+	ReplayFile       string
+	OutputLines      int
 }
 
 // RuntimeHandle identifies a live runtime instance. Its ID is opaque outside

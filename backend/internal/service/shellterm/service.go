@@ -150,7 +150,6 @@ func (s *Service) SetTerminalTrackers(ctx context.Context, trackers ...TerminalT
 		return
 	}
 	for _, rec := range recs {
-		// An ended shell has no program left to follow.
 		if !rec.Transient && rec.EndedAt == nil {
 			for _, tracker := range trackers {
 				tracker.TrackShellTerminal(rec.HandleID)
@@ -245,7 +244,6 @@ func (g *sessionGate) acquire(ctx context.Context, id domain.SessionID) (release
 	}
 }
 
-// tryAcquire takes the gate only if it is free right now.
 func (g *sessionGate) tryAcquire() (release func(), ok bool) {
 	select {
 	case g.ch <- struct{}{}:
@@ -455,20 +453,13 @@ func (s *Service) OpenShellTerminal(ctx context.Context, in OpenShellTerminalInp
 	})
 }
 
-// userShellLaunch is the argv and environment of a user's login shell, plus
-// the preview capability verifier a session-scoped shell persists.
 type userShellLaunch struct {
 	argv     []string
 	env      map[string]string
 	verifier string
-	// done ends the launch-gap admission of the shell's preview bearer; call
-	// it once the shell's row is persisted (or the open failed).
-	done func()
+	done     func()
 }
 
-// prepareUserShell resolves the user's login shell and builds its
-// environment. A session-scoped shell gets AO_SESSION_ID and a preview-only
-// capability that is admitted while the launch is in flight.
 func (s *Service) prepareUserShell(sessionID domain.SessionID, shell string, projectEnv map[string]string) (userShellLaunch, error) {
 	argv, usedFallback := resolveUserLoginShell(shell)
 	if usedFallback {
@@ -811,14 +802,10 @@ type openTerminalConfig struct {
 	previewVerifier          string
 	startOnAttach            bool
 	cols, rows               int
-	// replaces names an ended shell whose row this terminal takes over, in
-	// one transaction. createdAt and lastAgentHarness carry over from it so
-	// the reopened tab keeps its place and its agent; replayFile is the
-	// output it showed before it ended.
-	replaces         string
-	createdAt        time.Time
-	lastAgentHarness domain.AgentHarness
-	replayFile       string
+	replaces                 string
+	createdAt                time.Time
+	lastAgentHarness         domain.AgentHarness
+	replayFile               string
 }
 
 // openTerminal creates and persists a terminal, rolling the runtime back on
@@ -857,6 +844,7 @@ func (s *Service) openTerminal(ctx context.Context, cfg openTerminalConfig) (She
 		// Only agent terminals are probed for their rendered screen.
 		LazyStyledOutput: true,
 		ReplayFile:       cfg.replayFile,
+		OutputLines:      savedOutputLines,
 	})
 	if err != nil {
 		if cfg.cleanupWorkingDirOnError {
@@ -1090,12 +1078,6 @@ func (s *Service) ListShellTerminalsForCurrentAppRun(ctx context.Context) ([]She
 	return out, nil
 }
 
-// pruneExitedShell destroys an exited shell's retained host and forgets its
-// row, reporting the row to keep listing when it must stay. The list's
-// snapshot can predate a quit that is saving the same shell, so a session's
-// shell is pruned only under that session's gate and after re-reading its
-// row: a row the quit marked ended is kept for restoring. When the gate is
-// busy the row is left as it is for the next list.
 func (s *Service) pruneExitedShell(ctx context.Context, rec ShellTerminalRecord) (ShellTerminalRecord, bool) {
 	if rec.SessionID != "" {
 		release, ok := s.sessionGateFor(rec.SessionID).tryAcquire()
@@ -1124,18 +1106,10 @@ func (s *Service) pruneExitedShell(ctx context.Context, rec ShellTerminalRecord)
 	return rec, false
 }
 
-// keepsEndedShell reports whether a shell that stops with the app is kept as
-// an ended tab to restore. Only a session's user shell is: it is the only kind
-// a client shows, and its tab, title and directory are the user's work.
-// Trusted auth terminals end with their flow, and a shell with no session is
-// shown nowhere.
 func keepsEndedShell(rec ShellTerminalRecord) bool {
 	return !rec.Transient && rec.SessionID != ""
 }
 
-// endShell tears down a shell's host and marks its row ended with what to
-// restore instead of deleting it. When the host cannot be confirmed gone the
-// row is left unchanged (stillAlive=true) so the next pass retries.
 func (s *Service) endShell(ctx context.Context, rec ShellTerminalRecord, end ShellTerminalEnd) (stillAlive bool, err error) {
 	stillAlive, destroyErr := s.destroyRuntimeConfirmed(ctx, ports.RuntimeHandle{ID: rec.HandleID})
 	if stillAlive {
@@ -1144,19 +1118,12 @@ func (s *Service) endShell(ctx context.Context, rec ShellTerminalRecord, end She
 	for _, tracker := range s.trackers {
 		tracker.UntrackShellTerminal(rec.HandleID)
 	}
-	// The host is confirmed gone and a reopen gets a new handle, so nothing
-	// reads this handle's input timestamp again.
 	s.forgetTerminalInput(ctx, rec.HandleID)
 	end.EndedAt = s.now().UTC()
-	// The host is already gone, so store what to restore even if the quit's
-	// deadline passes now; a bounded context of its own keeps it finite.
 	markCtx, cancelMark := context.WithTimeout(context.WithoutCancel(ctx), 5*time.Second)
 	marked, err := s.store.MarkShellTerminalEnded(markCtx, rec.HandleID, end)
 	cancelMark()
 	if err != nil || !marked {
-		// Report the row as stored: reopen reads the stored row, so an ended
-		// tab it would refuse must not be shown. The host is gone either way,
-		// and the next pass marks the row again.
 		s.log.Warn("shell terminal: mark ended not stored", "handleId", rec.HandleID, "marked", marked, "error", err)
 		return false, nil
 	}
@@ -1164,8 +1131,6 @@ func (s *Service) endShell(ctx context.Context, rec ShellTerminalRecord, end She
 	return false, nil
 }
 
-// unchangedEnd keeps a shell's folder and last agent as they were recorded:
-// for a shell whose host is already gone there is nothing newer to read.
 func unchangedEnd(rec ShellTerminalRecord) ShellTerminalEnd {
 	return ShellTerminalEnd{WorkingDir: rec.WorkingDir, AgentHarness: rec.LastAgentHarness}
 }
@@ -1250,7 +1215,6 @@ func (s *Service) ReapShellTerminalsFromPreviousAppRuns(ctx context.Context) (in
 // destroyConfirmed runs, the handle is already known to exist.
 func (s *Service) destroyConfirmed(ctx context.Context, rec ShellTerminalRecord) (stillAlive bool, destroyErr error) {
 	handleID := rec.HandleID
-	// An ended shell's host was already destroyed when it was marked ended.
 	if rec.EndedAt == nil {
 		stillAlive, destroyErr = s.destroyRuntimeConfirmed(ctx, ports.RuntimeHandle{ID: handleID})
 		if stillAlive {
@@ -1267,9 +1231,7 @@ func (s *Service) destroyConfirmed(ctx context.Context, rec ShellTerminalRecord)
 		s.log.Warn("shell terminal: delete row after destroy failed", "handleId", handleID, "error", err)
 	} else if deleted {
 		s.cleanupAuthWorkspace(rec.WorkingDir, rec.HandleID)
-		if rec.EndedAt != nil {
-			s.removeSavedOutput(handleID)
-		}
+		s.removeSavedOutput(handleID)
 	}
 	return false, nil
 }
@@ -1397,7 +1359,6 @@ func (s *Service) SuspendSessionShells(ctx context.Context, sessionID domain.Ses
 	return release, nil
 }
 
-// childMayBeAlive is false only when the shell's child is confirmed gone.
 func (s *Service) childMayBeAlive(ctx context.Context, rec ShellTerminalRecord) bool {
 	alive, err := s.runtime.IsChildAlive(ctx, ports.RuntimeHandle{ID: rec.HandleID})
 	return alive || err != nil
@@ -1421,17 +1382,11 @@ func (s *Service) suspendShell(ctx context.Context, rec ShellTerminalRecord) (st
 	return stillAlive, err
 }
 
-// savedOutputLines and savedOutputBytes bound the output a restored shell
-// shows from before the app quit.
 const (
 	savedOutputLines = 5000
 	savedOutputBytes = 1 << 20
 )
 
-// savedOutputReset ends a saved replay in a plain state whatever the old
-// program left on: normal screen and full scroll region without moving the
-// cursor, visible cursor, no mouse or paste modes, and nothing below the
-// cursor, where a full-screen program's last frame would otherwise remain.
 const savedOutputReset = "\x1b[0m\x1b[?1047l\x1b7\x1b[r\x1b8\x1b[?25h\x1b[?1l\x1b>\x1b[?1000l\x1b[?1002l\x1b[?1003l\x1b[?1006l\x1b[?1004l\x1b[?2004l\r\x1b[J"
 
 func (s *Service) savedOutputPath(handleID string) string {
@@ -1445,7 +1400,6 @@ func (s *Service) saveOutput(ctx context.Context, handleID string) {
 	}
 	if limit := savedOutputBytes - len(savedOutputReset); len(out) > limit {
 		out = out[len(out)-limit:]
-		// Start on a line boundary, never inside an escape sequence.
 		if i := strings.IndexByte(out, '\n'); i >= 0 {
 			out = out[i+1:]
 		}

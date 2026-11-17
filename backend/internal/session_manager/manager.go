@@ -824,7 +824,6 @@ func (m *Manager) beginShellTerminalTeardown(ctx context.Context, id domain.Sess
 	return closer.BeginSessionTeardown(ctx, id)
 }
 
-// suspendShellTerminals is beginShellTerminalTeardown for an app quit.
 func (m *Manager) suspendShellTerminals(ctx context.Context, id domain.SessionID) (release func(), err error) {
 	m.shellTerminalsMu.Lock()
 	closer := m.shellTerminals

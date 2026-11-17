@@ -26,13 +26,7 @@ export type ShellTerminal = {
 	/** The running program's title, sent only when it should label the tab. */
 	terminalTitle?: string;
 	createdAt: string;
-	/**
-	 * Set when the shell's process is gone (for example after the computer
-	 * restarted). The tab stays so the user can reopen or close it; it has no
-	 * PTY to attach to.
-	 */
 	endedAt?: string | null;
-	/** For an ended shell, the agent last seen in it that reopening can resume. */
 	resumeHarness?: string;
 	/** Owning daemon; absent for local and cloud shells. */
 	hostId?: HostId;
@@ -161,11 +155,6 @@ export function adoptedShellHandle(handleId: string): string | undefined {
 const isPendingShellHandle = (handleId: string) => handleId.startsWith(PENDING_SHELL_PREFIX);
 const hostKey = (hostId?: HostId) => (hostId && hostId !== LOCAL_HOST ? hostId : LOCAL_HOST);
 
-// Ended tabs with a reopen request in flight, by host and original handle,
-// and those the user closed meanwhile. If the reopen wins the daemon's session
-// gate, the close finds no row and succeeds without touching the replacement
-// shell, so the reopen destroys that shell itself instead of adopting it. This
-// holds whichever response arrives first.
 const reopeningShells = new Set<string>();
 const closedWhileReopening = new Set<string>();
 const reopenKey = (handleId: string, hostId?: HostId) => `${hostKey(hostId)}\u0000${handleId}`;
@@ -543,12 +532,6 @@ export function useCloseShellTerminal(hostId?: HostId) {
 
 export type ReopenShellTerminalInput = { handleId: string; resumeAgent?: boolean };
 
-/**
- * Replaces an ended shell with a fresh one in the same tab, on the user's
- * explicit request. The daemon never replays what the old shell ran; with
- * resumeAgent it starts the agent last seen there in its conversation picker.
- * Selection follows the new handle through adoptedShellHandle.
- */
 export function useReopenShellTerminal(hostId?: HostId) {
 	const queryClient = useQueryClient();
 	const queryKey = shellTerminalsQueryKeyForHost(hostId);
@@ -560,8 +543,6 @@ export function useReopenShellTerminal(hostId?: HostId) {
 			try {
 				const shell = await requestReopen(handleId, resumeAgent);
 				if (!closedWhileReopening.has(key)) return shell;
-				// The user closed the tab meanwhile: the shell it became must not
-				// keep running unseen.
 				discardingShells.add(shell.handleId);
 				try {
 					await destroyShellTerminal(shell.handleId, hostId);

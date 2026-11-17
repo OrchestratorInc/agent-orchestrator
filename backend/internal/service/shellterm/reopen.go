@@ -14,12 +14,6 @@ import (
 	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
 )
 
-// agentResumeCommand is what a restored shell types to bring back the agent
-// that was running in it: that exact conversation when the agent named it,
-// else the agent's own picker of saved conversations for the folder, so the
-// user chooses and nothing is substituted. "" for an agent it cannot resume.
-// It is a fixed command plus a validated id: nothing the old shell ran is
-// replayed.
 func agentResumeCommand(harness domain.AgentHarness, conversationID string) string {
 	var picker string
 	switch harness {
@@ -36,7 +30,6 @@ func agentResumeCommand(harness domain.AgentHarness, conversationID string) stri
 	return picker + " " + conversationID
 }
 
-// resumeHarness is the agent an ended shell resumes when restored, or "".
 func resumeHarness(rec ShellTerminalRecord) domain.AgentHarness {
 	if rec.EndedAt == nil || agentResumeCommand(rec.LastAgentHarness, "") == "" {
 		return ""
@@ -44,8 +37,6 @@ func resumeHarness(rec ShellTerminalRecord) domain.AgentHarness {
 	return rec.LastAgentHarness
 }
 
-// agentResumeDeliveryTimeout bounds the background wait for a reopened shell
-// to reach its prompt and take the resume command.
 var agentResumeDeliveryTimeout = 30 * time.Second
 
 // ReopenShellTerminal restores an ended shell as a fresh login shell in the
@@ -66,7 +57,6 @@ func (s *Service) ReopenShellTerminal(ctx context.Context, in ReopenShellTermina
 	if s.sessions == nil {
 		return ShellTerminal{}, apierr.Internal("SHELL_TERMINAL_NO_SESSION_LOOKUP", "Session lookup is unavailable")
 	}
-	// Validate the session before allocating its gate (see OpenShellTerminal).
 	if _, _, err := s.sessions.SessionWorkspace(ctx, rec.SessionID); err != nil {
 		return ShellTerminal{}, fmt.Errorf("reopen shell terminal: resolve session %s: %w", rec.SessionID, err)
 	}
@@ -75,7 +65,6 @@ func (s *Service) ReopenShellTerminal(ctx context.Context, in ReopenShellTermina
 		return ShellTerminal{}, err
 	}
 	defer release()
-	// A concurrent reopen or close may have won the gate first.
 	if rec, err = s.endedShellTerminal(ctx, in.HandleID); err != nil {
 		return ShellTerminal{}, err
 	}
@@ -92,8 +81,6 @@ func (s *Service) ReopenShellTerminal(ctx context.Context, in ReopenShellTermina
 
 	workingDir, projectID := rec.WorkingDir, rec.ProjectID
 	if info, statErr := os.Stat(workingDir); statErr != nil || !info.IsDir() {
-		// The directory is gone (a removed worktree): start where a new shell
-		// for this session would.
 		workingDir, projectID, err = s.resolveShellTerminalWorkingDir(ctx, rec.ProjectID, rec.SessionID)
 		if err != nil {
 			return ShellTerminal{}, err
@@ -126,7 +113,6 @@ func (s *Service) ReopenShellTerminal(ctx context.Context, in ReopenShellTermina
 		cfg.replayFile = saved
 	}
 	if resumeCommand == "" {
-		// Like a new tab, the shell waits for the client's grid unless one was given.
 		cfg.startOnAttach = true
 		terminal, err := s.openTerminal(ctx, cfg)
 		if err == nil {
@@ -134,14 +120,11 @@ func (s *Service) ReopenShellTerminal(ctx context.Context, in ReopenShellTermina
 		}
 		return terminal, err
 	}
-	// The resume command needs a prompt to type into, so the shell starts now.
 	readiness, err := prepareCueShellReadiness(s.dataDir, launch.argv, launch.env)
 	if err != nil {
 		return ShellTerminal{}, err
 	}
 	if readiness.file == "" {
-		// Without a prompt signal the command could not be delivered. Refuse
-		// before replacing the tab, so the ended tab stays as it was.
 		readiness.cleanup()
 		return ShellTerminal{}, apierr.Invalid("SHELL_TERMINAL_AGENT_RESUME_UNSUPPORTED",
 			"Reopening with an agent needs bash, zsh, sh or fish. Reopen the terminal and start the agent yourself.", nil)
@@ -159,7 +142,6 @@ func (s *Service) ReopenShellTerminal(ctx context.Context, in ReopenShellTermina
 	return terminal, nil
 }
 
-// endedShellTerminal returns a row that exists and has ended.
 func (s *Service) endedShellTerminal(ctx context.Context, handleID string) (ShellTerminalRecord, error) {
 	rec, found, err := s.store.SelectShellTerminalByHandleID(ctx, handleID)
 	if err != nil {
@@ -174,8 +156,6 @@ func (s *Service) endedShellTerminal(ctx context.Context, handleID string) (Shel
 	return rec, nil
 }
 
-// deliverAgentResume types the reviewed resume command once the reopened
-// shell shows its first prompt. Failures leave a plain, usable shell.
 func (s *Service) deliverAgentResume(ctx context.Context, handleID string, shellArgv []string, readiness cueShellReadiness, command string) {
 	defer readiness.cleanup()
 	ctx, cancel := context.WithTimeout(ctx, agentResumeDeliveryTimeout)

@@ -204,9 +204,7 @@ type fakeShellTerminalStore struct {
 	insertErr         error
 	deleteErrByHandle map[string]error
 	markEndedErr      error
-	// staleRestorable, when set, is what the list query returns: a snapshot
-	// taken before a concurrent change to records.
-	staleRestorable []ShellTerminalRecord
+	staleRestorable   []ShellTerminalRecord
 }
 
 func (f *fakeShellTerminalStore) InsertShellTerminal(_ context.Context, rec ShellTerminalRecord) error {

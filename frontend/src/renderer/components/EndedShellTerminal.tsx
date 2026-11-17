@@ -6,16 +6,8 @@ import { apiErrorMessage } from "../lib/api-client";
 import type { HostId } from "../lib/hosts";
 import { Button } from "./ui/button";
 
-// The restore in flight for each ended tab. A pane that remounts while it is
-// pending shares it, so the remounted pane still learns if it failed.
 const restoring = new Map<string, Promise<unknown>>();
 
-/**
- * The pane for a shell tab whose process is gone, for example after the app
- * quit or the computer restarted. The first time it is shown it reopens the
- * shell in the same folder with its saved output, resuming the agent that was
- * running in it. Only if that fails does it say the tab ended.
- */
 export function EndedShellTerminal({ shell, hostId }: { shell: ShellTerminal; hostId?: HostId }) {
 	const { t } = useTranslation();
 	const { mutateAsync } = useReopenShellTerminal(hostId);

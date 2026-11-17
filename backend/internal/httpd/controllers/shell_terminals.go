@@ -158,8 +158,6 @@ func (c *ShellTerminalsController) close(w http.ResponseWriter, r *http.Request)
 	w.WriteHeader(http.StatusNoContent)
 }
 
-// reopen replaces an ended shell with a fresh one in the same tab, on the
-// user's explicit request.
 func (c *ShellTerminalsController) reopen(w http.ResponseWriter, r *http.Request) {
 	if c.Svc == nil {
 		apispec.NotImplemented(w, r, "POST", "/api/v1/shell-terminals/{handleId}/reopen")

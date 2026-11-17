@@ -43,10 +43,17 @@ func TestRingExceedsMaxOutputLines(t *testing.T) {
 	if got != MaxOutputLines {
 		t.Errorf("stored %d lines, want %d", got, MaxOutputLines)
 	}
+	r = NewRingOfLines(5000)
+	for i := 0; i < 5005; i++ {
+		r.Append([]byte("x\n"))
+	}
+	if got := strings.Count(string(r.Snapshot()), "\n"); got != 5000 {
+		t.Errorf("ring of 5000 lines stored %d", got)
+	}
 }
 
 func TestRingTrimsToMaxOutputBytes(t *testing.T) {
-	r := NewRing()
+	r := NewRingOfLines(5000)
 	line := strings.Repeat("y", 1023) + "\n"
 	for i := 0; i < 2000; i++ {
 		r.Append([]byte(line))
@@ -188,8 +195,6 @@ func TestRingConcurrent(t *testing.T) {
 	wg.Wait()
 }
 
-// Output with no newline (a TUI repainting in place) is bounded too, keeping
-// the newest bytes.
 func TestRingBoundsNewlineFreeOutput(t *testing.T) {
 	r := NewRing()
 	chunk := strings.Repeat("a", MaxOutputBytes)

@@ -5,12 +5,11 @@ import (
 	"sync"
 )
 
-// MaxOutputLines and MaxOutputBytes cap the rolling line buffer; whichever is
-// reached first drops the oldest lines.
-const (
-	MaxOutputLines = 5000
-	MaxOutputBytes = 1 << 20
-)
+// MaxOutputLines is the rolling line-buffer cap, matching MAX_OUTPUT_LINES in pty-host.ts.
+const MaxOutputLines = 1000
+
+// MaxOutputBytes caps the bytes a Ring keeps, whatever its line cap.
+const MaxOutputBytes = 1 << 20
 
 // Ring is a bounded rolling buffer of terminal output lines, ANSI codes preserved.
 // It mirrors the appendOutput state machine from pty-host.ts.
@@ -18,18 +17,28 @@ const (
 type Ring struct {
 	mu          sync.Mutex
 	lines       []string // each entry is "line\n" (or bare text on FlushPartial)
-	size        int      // total bytes in lines
+	size        int
+	maxLines    int
 	partialLine string
 }
 
 // NewRing returns an empty Ring.
 func NewRing() *Ring {
-	return &Ring{}
+	return NewRingOfLines(MaxOutputLines)
+}
+
+// NewRingOfLines returns an empty Ring that keeps up to maxLines lines, or
+// MaxOutputLines when maxLines is not positive.
+func NewRingOfLines(maxLines int) *Ring {
+	if maxLines <= 0 {
+		maxLines = MaxOutputLines
+	}
+	return &Ring{maxLines: maxLines}
 }
 
 // Append mirrors appendOutput from pty-host.ts: prepend the current partialLine,
 // split on newlines, store completed lines with "\n" re-appended, keep the last
-// element as the new partialLine, then trim to MaxOutputLines and MaxOutputBytes.
+// element as the new partialLine, then trim to the line cap and MaxOutputBytes.
 func (r *Ring) Append(raw []byte) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
@@ -45,12 +54,9 @@ func (r *Ring) Append(raw []byte) {
 	r.trimLocked()
 }
 
-// trimLocked bounds the lines by count, and the lines plus the in-progress
-// partial line by bytes: output with no newline (a TUI repainting in place)
-// would otherwise grow partialLine without limit.
 func (r *Ring) trimLocked() {
 	drop := 0
-	for drop < len(r.lines) && (len(r.lines)-drop > MaxOutputLines || r.size+len(r.partialLine) > MaxOutputBytes) {
+	for drop < len(r.lines) && (len(r.lines)-drop > r.maxLines || r.size+len(r.partialLine) > MaxOutputBytes) {
 		r.size -= len(r.lines[drop])
 		drop++
 	}
@@ -60,7 +66,6 @@ func (r *Ring) trimLocked() {
 		r.lines = r.lines[drop:]
 	}
 	if len(r.partialLine) > MaxOutputBytes {
-		// Keep the newest output, as the line limit does.
 		r.partialLine = r.partialLine[len(r.partialLine)-MaxOutputBytes:]
 	}
 }

@@ -55,7 +55,6 @@ func (f *fakeShellTerminalStore) ReplaceShellTerminal(_ context.Context, oldHand
 	return false, nil
 }
 
-// sessionShell is a durable user shell in session-1 from a previous launch.
 func sessionShell(handleID string) ShellTerminalRecord {
 	return ShellTerminalRecord{
 		HandleID: handleID, SessionID: "session-1", ProjectID: "project-1", AppRunID: "previous",
@@ -83,9 +82,6 @@ func reopenTestService(t *testing.T, rt *fakeShellRuntime, st *fakeShellTerminal
 	return svc
 }
 
-// The reported loss: after a reboot no native PTY host exists, so the child is
-// conclusively gone. A session's side terminal must stay listed as ended, not
-// silently disappear.
 func TestRuntimeLossKeepsSessionShellAsEndedTab(t *testing.T) {
 	ctx := context.Background()
 	rt := newFakeShellRuntime() // no host for the handle: conclusively not alive
@@ -114,14 +110,12 @@ func TestRuntimeLossKeepsSessionShellAsEndedTab(t *testing.T) {
 	if got.EndedAt == nil || got.Title != "Build" || got.SessionID != "session-1" || got.ResumeHarness != domain.HarnessClaudeCode {
 		t.Fatalf("listed = %+v", got)
 	}
-	// Ended rows are not probed or torn down again.
 	if len(rt.destroyed) != 1 {
 		t.Fatalf("list re-destroyed an ended shell: %v", rt.destroyed)
 	}
 	if !reflect.DeepEqual(tracker.untracked, []string{rec.HandleID}) {
 		t.Fatalf("untracked = %v; an ended shell's agent watch must stop", tracker.untracked)
 	}
-	// A restarted daemon does not follow an ended shell's agent.
 	fresh := &recordingTracker{}
 	svc.SetTerminalTrackers(ctx, fresh)
 	if len(fresh.tracked) != 0 {
@@ -129,8 +123,6 @@ func TestRuntimeLossKeepsSessionShellAsEndedTab(t *testing.T) {
 	}
 }
 
-// A shell whose user typed `exit` during this launch closes as before: only
-// shells stopped by a quit, or found gone at the next launch, are restored.
 func TestListClosesShellExitedDuringThisLaunch(t *testing.T) {
 	ctx := context.Background()
 	rt := newFakeShellRuntime()
@@ -150,8 +142,6 @@ func TestListClosesShellExitedDuringThisLaunch(t *testing.T) {
 	}
 }
 
-// Only a session's user shell is kept: trusted auth terminals and shells no
-// client shows are still forgotten when their process is gone.
 func TestRuntimeLossStillForgetsAuthAndSessionlessShells(t *testing.T) {
 	rt := newFakeShellRuntime()
 	st := &fakeShellTerminalStore{records: []ShellTerminalRecord{
@@ -169,8 +159,6 @@ func TestRuntimeLossStillForgetsAuthAndSessionlessShells(t *testing.T) {
 	}
 }
 
-// An inconclusive probe still proves nothing: the shell is neither ended nor
-// torn down, before or after a desktop relaunch.
 func TestInconclusiveProbeDoesNotEndShell(t *testing.T) {
 	for _, probeErr := range []error{ports.ErrRuntimeProbeInconclusive, ports.ErrRuntimeUnavailable, errors.New("status failed")} {
 		rt := newFakeShellRuntime()
@@ -188,8 +176,6 @@ func TestInconclusiveProbeDoesNotEndShell(t *testing.T) {
 	}
 }
 
-// Closing an ended tab is the user's explicit decision: its row goes, and
-// there is no runtime left to destroy.
 func TestCloseEndedShellRemovesRow(t *testing.T) {
 	rt := newFakeShellRuntime()
 	st := &fakeShellTerminalStore{records: []ShellTerminalRecord{endedSessionShell("shellterm-a", "")}}
@@ -202,7 +188,28 @@ func TestCloseEndedShellRemovesRow(t *testing.T) {
 	}
 }
 
-// Tearing down the parent session removes its ended tabs with its live ones.
+func TestCloseRemovesSavedOutputSavedAfterItWasRead(t *testing.T) {
+	rt := newFakeShellRuntime()
+	live := sessionShell("shellterm-a")
+	rt.aliveByHandle[live.HandleID] = true
+	st := &fakeShellTerminalStore{records: []ShellTerminalRecord{live}}
+	svc := newTestService(rt, st, &fakeProjectRootLocator{})
+	svc.dataDir = t.TempDir()
+	saved := svc.savedOutputPath(live.HandleID)
+	if err := os.MkdirAll(filepath.Dir(saved), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(saved, []byte("old output\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := svc.CloseShellTerminal(context.Background(), live.HandleID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(saved); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("saved output kept after close: %v", err)
+	}
+}
+
 func TestSessionTeardownRemovesEndedShells(t *testing.T) {
 	rt := newFakeShellRuntime()
 	live := sessionShell("shellterm-live")
@@ -247,7 +254,6 @@ func TestReopenEndedShellStartsFreshShellInSameTab(t *testing.T) {
 		rt.created[0].Env["AO_CUE_READY_FILE"] != "" {
 		t.Fatalf("created = %+v", rt.created)
 	}
-	// Nothing is typed into a plain reopened shell.
 	select {
 	case sent := <-rt.sentCh:
 		t.Fatalf("reopen sent input %q", sent.input)
@@ -293,8 +299,6 @@ func TestReopenRefusesLiveUnknownOrUnresumable(t *testing.T) {
 	}
 }
 
-// Resuming types only the harness's own conversation picker command, after the
-// new shell's first prompt. It is never anything the old shell ran.
 func TestReopenResumeTypesOnlyAgentPicker(t *testing.T) {
 	if runtime.GOOS == "windows" {
 		t.Skip("POSIX shell delivery")
@@ -334,9 +338,6 @@ func (r *recordingTracker) UntrackShellTerminal(handleID string) {
 	r.untracked = append(r.untracked, handleID)
 }
 
-// Ending a shell destroys its host and a reopen gets a new handle, so the
-// ended handle's input timestamp is forgotten too (#5691). An inconclusive
-// probe ends nothing and forgets nothing.
 func TestEndingShellForgetsInputTimestamp(t *testing.T) {
 	ctx := context.Background()
 	rt := newFakeShellRuntime() // host gone
@@ -369,8 +370,6 @@ func TestEndingShellForgetsInputTimestamp(t *testing.T) {
 	}
 }
 
-// A tab is ended only once that is stored: a failed write leaves the row as
-// it was for the next pass to mark.
 func TestEndedStateNotReportedUntilStored(t *testing.T) {
 	ctx := context.Background()
 	rt := newFakeShellRuntime() // the host is gone
@@ -390,8 +389,6 @@ func TestEndedStateNotReportedUntilStored(t *testing.T) {
 	}
 }
 
-// A shell with no prompt signal cannot take the resume command, so the
-// request is refused before the ended tab is replaced.
 func TestReopenResumeRefusedForShellWithoutReadiness(t *testing.T) {
 	if runtime.GOOS == "windows" {
 		t.Skip("Unix shell paths")
@@ -415,7 +412,6 @@ func TestReopenResumeRefusedForShellWithoutReadiness(t *testing.T) {
 	if len(rt.created) != 0 || len(st.records) != 1 || st.records[0].HandleID != "shellterm-old" || st.records[0].EndedAt == nil {
 		t.Fatalf("created = %d, rows = %+v; want the ended tab unchanged", len(rt.created), st.records)
 	}
-	// A plain reopen still works in that shell.
 	if _, err := svc.ReopenShellTerminal(context.Background(), ReopenShellTerminalInput{HandleID: "shellterm-old", Shell: shell}); err != nil {
 		t.Fatalf("plain reopen: %v", err)
 	}
@@ -433,9 +429,6 @@ func (f *fakeForegroundReader) ReadShellForeground(_ context.Context, handleID s
 	return f.dir, f.harness, f.conversationID, f.ok
 }
 
-// Quitting keeps each running user shell as an ended tab with what it needs
-// to come back: its recent output, the folder it was in and the agent in
-// front with its conversation. A shell the user already exited is closed.
 func TestSuspendSessionShellsSavesShellsToRestore(t *testing.T) {
 	ctx := context.Background()
 	rt := newFakeShellRuntime()
@@ -476,8 +469,6 @@ func TestSuspendSessionShellsSavesShellsToRestore(t *testing.T) {
 	}
 }
 
-// Restoring shows the saved output above the new shell, resumes the exact
-// conversation, and drops the saved file once the new shell is up.
 func TestReopenRestoresSavedOutputAndExactConversation(t *testing.T) {
 	if runtime.GOOS == "windows" {
 		t.Skip("POSIX shell delivery")
@@ -504,8 +495,8 @@ func TestReopenRestoresSavedOutputAndExactConversation(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ReopenShellTerminal: %v", err)
 	}
-	if rt.created[0].ReplayFile != saved {
-		t.Fatalf("replay file = %q, want %q", rt.created[0].ReplayFile, saved)
+	if rt.created[0].ReplayFile != saved || rt.created[0].OutputLines != savedOutputLines {
+		t.Fatalf("replay file = %q, output lines = %d; want %q, %d", rt.created[0].ReplayFile, rt.created[0].OutputLines, saved, savedOutputLines)
 	}
 	if env := rt.created[0].Env; env["AO_SESSION_ID"] != string(ended.SessionID) || env["AO_CUE_READY_FILE"] == "" {
 		t.Fatalf("resumed shell env lost AO values: AO_SESSION_ID=%q AO_CUE_READY_FILE=%q", env["AO_SESSION_ID"], env["AO_CUE_READY_FILE"])
@@ -546,9 +537,6 @@ func TestAgentResumeCommand(t *testing.T) {
 	}
 }
 
-// The list's snapshot can predate a quit that saved the same shell. Pruning
-// re-reads the row under the session's gate, so a row the quit marked ended
-// is kept for restoring, and a busy gate leaves the row for the next list.
 func TestListDoesNotPruneShellEndedBySuspension(t *testing.T) {
 	ctx := context.Background()
 	live := sessionShell("shellterm-a")
@@ -581,8 +569,6 @@ func TestListDoesNotPruneShellEndedBySuspension(t *testing.T) {
 	}
 }
 
-// A quit whose deadline passes after the host is gone still stores what to
-// restore: the write gets a bounded context of its own.
 func TestEndShellStoresEndAfterQuitDeadline(t *testing.T) {
 	rec := sessionShell("shellterm-a")
 	st := &fakeShellTerminalStore{records: []ShellTerminalRecord{rec}}

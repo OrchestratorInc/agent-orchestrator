@@ -31,7 +31,7 @@ import (
 func RunHost(args []string, stdout io.Writer) int {
 	opts, args := splitHostOptionArgs(args)
 	if len(args) < 3 {
-		fmt.Fprintf(os.Stderr, "usage: ao pty-host [--start=attach] [--surface=lazy] [--size=COLSxROWS] [--replay=FILE] <sessionId> <cwd> <shellCmd> [shellArg...]\n")
+		fmt.Fprintf(os.Stderr, "usage: ao pty-host [--start=attach] [--surface=lazy] [--size=COLSxROWS] [--replay=FILE] [--lines=N] <sessionId> <cwd> <shellCmd> [shellArg...]\n")
 		return 1
 	}
 
@@ -39,8 +39,7 @@ func RunHost(args []string, stdout io.Writer) int {
 	cwd := args[1]
 	shellCmd := args[2]
 	shellArgs := args[3:]
-	// Read before READY: the caller may remove the file once the host is up.
-	ring := NewRing()
+	ring := NewRingOfLines(opts.OutputLines)
 	if opts.ReplayFile != "" {
 		if replay, err := readReplay(opts.ReplayFile); err != nil {
 			fmt.Fprintf(os.Stderr, "pty-host [%s]: replay %s: %v\n", sessionID, opts.ReplayFile, err)

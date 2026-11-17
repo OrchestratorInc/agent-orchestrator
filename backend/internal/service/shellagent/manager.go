@@ -51,8 +51,7 @@ var (
 	// maxWatchFailures ends a watch whose host keeps refusing connections:
 	// the host died while its record still resolves. The next subscription
 	// starts it again.
-	maxWatchFailures = 6
-	// foregroundReadTimeout bounds a one-off reading of a shell's foreground.
+	maxWatchFailures      = 6
 	foregroundReadTimeout = 3 * time.Second
 )
 
@@ -70,8 +69,6 @@ type Manager struct {
 	log    *slog.Logger
 	base   context.Context
 
-	// record, when set, remembers the agent in front of each shell ("" once
-	// the shell's own prompt is back); recorded dedupes calls per terminal.
 	record   func(ctx context.Context, handleID string, harness domain.AgentHarness)
 	recorded map[string]domain.AgentHarness
 
@@ -331,9 +328,6 @@ func looksLikeApprovalPrompt(screen string) bool {
 	return approvalPrompt.MatchString(strings.Join(kept, "\n"))
 }
 
-// recordHarness reports a change of the agent in front of a shell. The first
-// reading always counts, even "": the stored value may be a stale agent from
-// a previous daemon.
 func (m *Manager) recordHarness(ctx context.Context, handleID string, harness domain.AgentHarness) {
 	if m.record == nil {
 		return
@@ -356,6 +350,8 @@ func (m *Manager) recordHarness(ctx context.Context, handleID string, harness do
 // the conversation it is in, when the agent says and that conversation has
 // history to resume. ok=false when the terminal cannot name its foreground.
 func (m *Manager) ReadShellForeground(ctx context.Context, handleID string) (dir string, harness domain.AgentHarness, conversationID string, ok bool) {
+	ctx, cancel := context.WithTimeout(ctx, foregroundReadTimeout)
+	defer cancel()
 	fg, ok := m.readForeground(ctx, handleID)
 	if !ok {
 		return "", "", "", false
@@ -371,7 +367,7 @@ func (m *Manager) ReadShellForeground(ctx context.Context, handleID string) (dir
 }
 
 func (m *Manager) readForeground(ctx context.Context, handleID string) (ports.TerminalForeground, bool) {
-	ctx, cancel := context.WithTimeout(ctx, foregroundReadTimeout)
+	ctx, cancel := context.WithCancel(ctx)
 	defer cancel()
 	readings := make(chan ports.TerminalForeground, 1)
 	_ = m.rt.WatchTerminalForeground(ctx, ports.RuntimeHandle{ID: handleID}, func(fg ports.TerminalForeground) {

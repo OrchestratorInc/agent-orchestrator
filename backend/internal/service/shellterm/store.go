@@ -27,16 +27,9 @@ type ShellTerminalRecord struct {
 	// PreviewCapabilityVerifier authorizes only managed preview lifecycle calls
 	// from this session-scoped shell; the bearer stays in its process environment.
 	PreviewCapabilityVerifier string
-	// EndedAt is set once a session's user shell is known to have ended (its
-	// process is gone). The row is kept so the tab stays visible and can be
-	// reopened; nil means not known to have ended.
-	EndedAt *time.Time
-	// LastAgentHarness is the coding agent running in the shell when it was
-	// last seen, or "" when the shell's own prompt was in front.
-	LastAgentHarness domain.AgentHarness
-	// AgentConversationID is the conversation LastAgentHarness was in when
-	// the app quit, when the agent said; "" otherwise.
-	AgentConversationID string
+	EndedAt                   *time.Time
+	LastAgentHarness          domain.AgentHarness
+	AgentConversationID       string
 }
 
 // ShellTerminalEnd is what a shell's row keeps when its process ends, so the
