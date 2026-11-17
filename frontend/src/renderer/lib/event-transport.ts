@@ -6,7 +6,7 @@ import { computeSseRetryDelayMs } from "./sse-backoff";
 import { workspaceQueryKey } from "../hooks/useWorkspaceQuery";
 import { keptArtifactsQueryKey } from "../hooks/useKeptArtifacts";
 import { sessionScmSummaryQueryKey } from "../hooks/useSessionScmSummary";
-import { conversationQueryKey, conversationQueryRoot, conversationSettled, refreshRemoteConversationOnce } from "../hooks/useConversation";
+import { conversationQueryKey, conversationQueryRoot, conversationSettled, refreshOpenLocalConversationOnce, refreshRemoteConversationOnce } from "../hooks/useConversation";
 import {
 	reviewerConversationQueryKey,
 	reviewerConversationQueryRoot,
@@ -309,7 +309,8 @@ export function createEventTransport(queryClient: QueryClient): EventTransport {
 					pendingEditorHandoffSessions.clear();
 				}
 				for (const sessionId of pendingConversationSessions) {
-					invalidate(conversationQueryKey(sessionId));
+					// An open chat reads only the rows that can have changed.
+					if (!refreshOpenLocalConversationOnce(queryClient, sessionId)) invalidate(conversationQueryKey(sessionId));
 				}
 				pendingConversationSessions.clear();
 				for (const sessionId of pendingReviewSessions) {

@@ -644,6 +644,86 @@ function refreshLocalConversationOnce(queryClient: QueryClient, sessionId: strin
 	})();
 }
 
+/** A read that keeps losing to other writes gives up, and the caller reloads the chat. */
+const LOCAL_TAIL_ATTEMPTS = 4;
+
+/**
+ * Updates an open local chat after an event by reading only the rows that can
+ * still change. Refetching the infinite query read every page the chat held,
+ * so one event in a chat scrolled back through history downloaded megabytes.
+ * Rows below the floor are settled (see remoteConversationFloor) and kept. When
+ * the tail cannot be merged, the live page alone replaces the first page.
+ */
+async function refreshLocalConversationTail(queryClient: QueryClient, sessionId: string): Promise<void> {
+	const key = conversationQueryKey(sessionId);
+	let wholePage = false;
+	for (let attempt = 0; attempt < LOCAL_TAIL_ATTEMPTS; attempt++) {
+		const before = queryClient.getQueryData<InfiniteData<ConversationSnapshot>>(key);
+		const prior = before?.pages[0];
+		if (!prior) return;
+		const floor = remoteConversationFloor(prior);
+		const asTail = !wholePage && floor >= 1;
+		const wire = await fetchConversationWire(sessionId, undefined, asTail ? { afterSequence: floor, limit: LOCAL_INITIAL_PAGE_SIZE } : conversationPageQuery(undefined));
+		// An older page that was loading copied the live page when it started and
+		// writes that copy back when it lands, and a reload holds rows at least as new
+		// as this read. Either way, read again from what they leave.
+		const query = queryClient.getQueryCache().find({ queryKey: key, exact: true });
+		if (query?.state.fetchStatus === "fetching") await query.promise?.catch(() => undefined);
+		const current = queryClient.getQueryData<InfiniteData<ConversationSnapshot>>(key);
+		if (!current || query?.state.fetchStatus === "fetching" || current !== before) continue;
+		const page = toSnapshot(wire);
+		if (!asTail || wire.afterSequence !== floor) {
+			applyLiveConversationPage(queryClient, key, page);
+			return;
+		}
+		const merged = mergeRemoteConversationTail(current.pages[0], page, floor);
+		if (merged) {
+			queryClient.setQueryData<InfiniteData<ConversationSnapshot>>(key, { ...current, pages: [merged, ...current.pages.slice(1)] });
+			return;
+		}
+		wholePage = true;
+	}
+	throw new Error("conversation kept changing during the read");
+}
+
+const localConversationTails = new WeakMap<QueryClient, Map<string, { dirty: boolean }>>();
+
+/**
+ * Refreshes an open local chat for an event, one read at a time with one
+ * catch-up for events during it. Returns false when the chat is closed, has no
+ * pages yet, or is already loading, so the caller invalidates it as before.
+ */
+export function refreshOpenLocalConversationOnce(queryClient: QueryClient, sessionId: string): boolean {
+	let running = localConversationTails.get(queryClient);
+	if (!running) localConversationTails.set(queryClient, (running = new Map()));
+	const inFlight = running.get(sessionId);
+	if (inFlight) {
+		inFlight.dirty = true;
+		return true;
+	}
+	const key = conversationQueryKey(sessionId);
+	const query = queryClient.getQueryCache().find<InfiniteData<ConversationSnapshot>>({ queryKey: key, exact: true, type: "active" });
+	if (!query?.state.data?.pages?.[0]?.conversationId || query.state.fetchStatus !== "idle" || query.state.isInvalidated) return false;
+	// The open read brings the chat up to date and handles events during it.
+	if (localConversationRefreshes.get(queryClient)?.has(sessionId)) return false;
+	const state = { dirty: false };
+	running.set(sessionId, state);
+	void (async () => {
+		try {
+			do {
+				state.dirty = false;
+				await refreshLocalConversationTail(queryClient, sessionId);
+			} while (state.dirty);
+		} catch {
+			// The query's own read retries and reports what keeps failing.
+			void queryClient.invalidateQueries({ queryKey: key });
+		} finally {
+			running.delete(sessionId);
+		}
+	})();
+	return true;
+}
+
 /**
  * A cached local chat whose controller is ready or working. Such a chat learns
  * every change through events; one still starting up or waking does not.

@@ -1,11 +1,11 @@
-import { QueryClient, type InfiniteData } from "@tanstack/react-query";
+import { InfiniteQueryObserver, QueryClient, type InfiniteData } from "@tanstack/react-query";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { ConversationItem, ConversationSnapshot, ConversationTurn } from "../types/conversation";
 
 const { getMock, baseUrlMock } = vi.hoisted(() => ({ getMock: vi.fn(), baseUrlMock: vi.fn() }));
 vi.mock("../lib/host-clients", () => ({ baseUrlForHost: baseUrlMock, clientForSessionHost: () => ({ GET: getMock }) }));
 
-import { conversationQueryKey, mergeRemoteConversationTail, refreshRemoteConversation, remoteConversationFloor } from "./useConversation";
+import { conversationQueryKey, conversationQueryOptions, mergeRemoteConversationTail, refreshOpenLocalConversationOnce, refreshRemoteConversation, remoteConversationFloor } from "./useConversation";
 
 const turn = (id: string, state: ConversationTurn["state"], extra: Partial<ConversationTurn> = {}): ConversationTurn =>
 	({ id, state, requestedAt: `2026-11-03T00:00:0${id.slice(-1)}Z`, ...extra });
@@ -163,5 +163,79 @@ describe("refreshRemoteConversation", () => {
 		getMock.mockResolvedValueOnce(wire({ oldestSequence: 4, turns: [wireTurn("t2", "completed")], messages: [wireMessage("m2", "t2", 4)] }));
 		await refreshRemoteConversation(client, "s1", "box");
 		expect(getMock).toHaveBeenCalledOnce();
+	});
+});
+
+describe("refreshOpenLocalConversationOnce", () => {
+	const key = conversationQueryKey("s1");
+	const older = page([turn("t0", "completed")], [message("o1", "t0", 0)], { hasMoreBefore: true });
+	const tail = () => wire({ afterSequence: 3, oldestSequence: 4, turns: [wireTurn("t2", "running")], messages: [wireMessage("m2", "t2", 4), wireMessage("r2", "t2", 6, "more")] });
+	let client: QueryClient;
+	let unsubscribe = () => {};
+	const open = () => {
+		const observer = new InfiniteQueryObserver(client, conversationQueryOptions("s1"));
+		unsubscribe = observer.subscribe(() => undefined);
+		return observer;
+	};
+	const tailReads = () => getMock.mock.calls.filter(([, options]) => options.params.query.afterSequence !== undefined).length;
+	beforeEach(() => {
+		unsubscribe();
+		getMock.mockReset();
+		client = new QueryClient();
+		client.setQueryData<InfiniteData<ConversationSnapshot>>(key, { pages: [prior, older], pageParams: [undefined, 1] });
+	});
+
+	it("reads only the rows that can change and keeps the older pages", async () => {
+		open();
+		getMock.mockResolvedValueOnce(tail());
+		expect(refreshOpenLocalConversationOnce(client, "s1")).toBe(true);
+		await vi.waitFor(() => expect(client.getQueryData<InfiniteData<ConversationSnapshot>>(key)!.pages[0].items.at(-1)).toMatchObject({ id: "r2", text: "more" }));
+		expect(getMock).toHaveBeenCalledOnce();
+		expect(getMock.mock.calls[0][1].params.query).toEqual({ afterSequence: 3, limit: 30 });
+		const data = client.getQueryData<InfiniteData<ConversationSnapshot>>(key)!;
+		expect(data.pages[0].items.map((item) => item.id)).toEqual(["m1", "a1", "r1", "m2", "r2"]);
+		expect(data.pages[1]).toBe(older);
+	});
+
+	it("leaves a closed, empty or stale chat to the usual reload", () => {
+		expect(refreshOpenLocalConversationOnce(client, "s1")).toBe(false);
+		open();
+		void client.invalidateQueries({ queryKey: key, refetchType: "none" });
+		expect(refreshOpenLocalConversationOnce(client, "s1")).toBe(false);
+		client.setQueryData(key, { pages: [], pageParams: [] });
+		expect(refreshOpenLocalConversationOnce(client, "s1")).toBe(false);
+		expect(getMock).not.toHaveBeenCalled();
+	});
+
+	it("reads again after an older page that was loading lands, so that page cannot undo the merge", async () => {
+		const observer = open();
+		let finishTail!: (value: unknown) => void;
+		let finishOlder!: (value: unknown) => void;
+		getMock
+			.mockReturnValueOnce(new Promise((resolve) => { finishTail = resolve; }))
+			.mockReturnValueOnce(new Promise((resolve) => { finishOlder = resolve; }))
+			.mockResolvedValueOnce(tail());
+		expect(refreshOpenLocalConversationOnce(client, "s1")).toBe(true);
+		const loadingOlder = observer.fetchNextPage();
+		finishTail(tail());
+		await Promise.resolve();
+		finishOlder(wire({ hasMoreBefore: false, oldestSequence: 0, latestSequence: 0 }));
+		await loadingOlder;
+		await vi.waitFor(() => expect(tailReads()).toBe(2));
+		await vi.waitFor(() => expect(client.getQueryData<InfiniteData<ConversationSnapshot>>(key)!.pages[0].items.at(-1)).toMatchObject({ id: "r2", text: "more" }));
+		expect(client.getQueryData<InfiniteData<ConversationSnapshot>>(key)!.pages).toHaveLength(3);
+	});
+
+	it("catches up once for any number of events during a read", async () => {
+		open();
+		let finish!: (value: unknown) => void;
+		getMock.mockReturnValueOnce(new Promise((resolve) => { finish = resolve; })).mockResolvedValue(tail());
+		expect(refreshOpenLocalConversationOnce(client, "s1")).toBe(true);
+		expect(refreshOpenLocalConversationOnce(client, "s1")).toBe(true);
+		expect(refreshOpenLocalConversationOnce(client, "s1")).toBe(true);
+		finish(tail());
+		await vi.waitFor(() => expect(tailReads()).toBe(2));
+		await new Promise((resolve) => setTimeout(resolve, 10));
+		expect(tailReads()).toBe(2);
 	});
 });

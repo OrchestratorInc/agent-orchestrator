@@ -50,6 +50,7 @@ vi.mock("./host-clients", () => ({
 }));
 
 import { createEventTransport } from "./event-transport";
+import { conversationQueryKey, conversationQueryOptions } from "../hooks/useConversation";
 import { interfaceTransitionRefetchInterval } from "../hooks/useSessionInterfaceTransition";
 import { getEventsConnectionState, setEventsConnectionState } from "./events-connection";
 
@@ -1165,6 +1166,23 @@ it("does not cancel an unrelated inactive workspace fetch on CDC", async () => {
 		finish(1);
 		expect(await result).toEqual({ value: 1 });
 	} finally { disconnect(); client.clear(); }
+});
+
+it("reads only the tail of an open local chat instead of reloading its pages", async () => {
+	const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+	const key = conversationQueryKey("open-chat");
+	const live = { conversationId: "c1", sessionId: "open-chat", activeBranchId: "b1", turns: [], items: [], latestSequence: 5, oldestSequence: 1, hasMoreBefore: true };
+	client.setQueryData(key, { pages: [live, { ...live, latestSequence: 0 }], pageParams: [undefined, 1] });
+	const unsubscribe = new InfiniteQueryObserver(client, conversationQueryOptions("open-chat")).subscribe(() => undefined);
+	const invalidate = vi.spyOn(client, "invalidateQueries");
+	remoteGetMock.mockResolvedValue({ data: { conversationId: "c1", sessionId: "open-chat", activeBranchId: "b1", afterSequence: 5, latestSequence: 5, turns: [], messages: [], activities: [] } });
+	const disconnect = createEventTransport(client).connect();
+	try {
+		cdcSources()[0].emit("session_updated", JSON.stringify({ sessionId: "open-chat", payload: { conversationId: "c1" } }));
+		await vi.waitFor(() => expect(remoteGetMock).toHaveBeenCalled());
+		expect(remoteGetMock.mock.calls[0][1].params.query).toEqual({ afterSequence: 5, limit: 30 });
+		expect(invalidate).not.toHaveBeenCalledWith({ queryKey: key }, { cancelRefetch: false });
+	} finally { disconnect(); unsubscribe(); client.clear(); }
 });
 
 it("keeps a prefetched conversation stale when CDC arrives before its response", async () => {
