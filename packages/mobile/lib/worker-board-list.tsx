@@ -565,7 +565,9 @@ function WorkerBoard({
 	// jumped it as the bar's height changed during the pull.
 	const spinnerOffset = Platform.OS === "android" ? overlayTopInset : undefined;
 	const showsEmpty = listData.length === 0 || archiveOnly;
-	useEffect(() => { onEmptyChange?.(showsEmpty); }, [onEmptyChange, showsEmpty]);
+	// Before paint, so a page that hides its own New task while the list is
+	// empty settles on the first frame instead of the one after.
+	useLayoutEffect(() => { onEmptyChange?.(showsEmpty); }, [onEmptyChange, showsEmpty]);
 	// The Archive footer is sized the same way, so it rests just above the tab bar.
 	const contentContainerStyle = insetsForBars && visibleHeight && showsEmpty
 		? { minHeight: visibleHeight, paddingBottom: contentBottomInset }
