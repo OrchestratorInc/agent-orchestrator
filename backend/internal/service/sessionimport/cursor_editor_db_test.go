@@ -208,3 +208,52 @@ func TestCursorEditorDatabaseReadsAConversationMap(t *testing.T) {
 		t.Fatalf("chat = %+v, found = %v", chat, found)
 	}
 }
+
+func TestCursorEditorCopyAddsTurnsBetweenMatchedPrompts(t *testing.T) {
+	m := func(role domain.MessageRole, text string) Message { return Message{Role: role, Text: text} }
+	user, ai := domain.MessageRoleUser, domain.MessageRoleAssistant
+	editor := []Message{m(user, "q1"), m(ai, "a1"), m(user, "q2"), m(ai, "a2"), m(user, "q3"), m(ai, "a3")}
+	texts := func(messages []Message) []string {
+		var out []string
+		for _, message := range messages {
+			out = append(out, message.Text)
+		}
+		return out
+	}
+	if got := texts(mergeCursorEditor([]Message{m(user, "q1"), m(ai, "a1"), m(user, "q3"), m(ai, "a3")}, editor)); !slices.Equal(got, []string{"q1", "a1", "q2", "a2", "q3", "a3"}) {
+		t.Fatalf("between matched prompts = %q", got)
+	}
+	// "q2 (edited)" matches nothing and may be q2 written differently, so q2 is not added beside it.
+	if got := texts(mergeCursorEditor([]Message{m(user, "q1"), m(ai, "a1"), m(user, "q2 (edited)"), m(ai, "b2"), m(user, "q3"), m(ai, "a3")}, editor)); !slices.Equal(got, []string{"q1", "a1", "q2 (edited)", "b2", "q3", "a3"}) {
+		t.Fatalf("after an unmatched prompt = %q", got)
+	}
+}
+
+// A chat list that cannot be read is not remembered as empty.
+func TestCursorEditorFoldersRetryAFailedRead(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "state.vscdb")
+	if err := os.WriteFile(path, []byte("not a database"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	saved := cursorEditorState
+	cursorEditorState = func() string { return path }
+	t.Cleanup(func() { cursorEditorState = saved })
+	cursorFoldersCache.Lock()
+	cursorFoldersCache.key, cursorFoldersCache.folders = "", nil
+	cursorFoldersCache.Unlock()
+	if folders := cursorEditorFolders(context.Background()); folders != nil {
+		t.Fatalf("unreadable list = %v", folders)
+	}
+	cursorFoldersCache.Lock()
+	cached := cursorFoldersCache.key
+	cursorFoldersCache.Unlock()
+	if cached != "" {
+		t.Fatalf("a failed read was cached under %q", cached)
+	}
+	newCursorEditorState(t, map[string]any{"composer.composerHeaders": map[string]any{"allComposers": []any{
+		map[string]any{"composerId": "c1", "workspaceIdentifier": map[string]any{"uri": map[string]any{"fsPath": "/work/fin", "scheme": "file"}}},
+	}}}, nil)
+	if folders := cursorEditorFolders(context.Background()); folders["c1"] != "/work/fin" {
+		t.Fatalf("readable list = %v", folders)
+	}
+}

@@ -308,9 +308,9 @@ func readCursorTranscriptFile(ctx context.Context, root string, projects []strin
 // the editor's copy; a matched turn takes the editor's times, and the
 // editor's reply where the transcript's hides text as [REDACTED]. The editor's
 // copy can lag the transcript, so a turn or reply it has not recorded, or a
-// reply shorter than what the transcript shows, keeps the transcript's; the
-// transcript can lag it too, so the editor's turns after the transcript's
-// last prompt are added.
+// reply shorter than what the transcript shows, keeps the transcript's. Turns
+// only the editor recorded, between matched prompts or after the
+// transcript's last one, are added.
 func mergeCursorEditor(messages, editor []Message) []Message {
 	type turn struct {
 		prompt Message
@@ -331,7 +331,7 @@ func mergeCursorEditor(messages, editor []Message) []Message {
 	out := make([]Message, 0, len(messages))
 	next := 0
 	var matched *turn
-	replied := false
+	replied, strayed := false, false
 	// A matched turn whose reply only the editor recorded keeps that reply.
 	closeTurn := func() {
 		if matched != nil && !replied && matched.reply != nil {
@@ -344,11 +344,24 @@ func mergeCursorEditor(messages, editor []Message) []Message {
 			closeTurn()
 			matched, replied = nil, false
 			for k := next; k < len(turns); k++ {
-				if same(turns[k].prompt.Text, m.Text) {
-					matched, next = &turns[k], k+1
-					break
+				if !same(turns[k].prompt.Text, m.Text) {
+					continue
 				}
+				// Turns only the editor recorded between two matched prompts are
+				// added. After a prompt that matched nothing they are left out:
+				// that prompt may be one of them, written differently.
+				if !strayed {
+					for _, skipped := range turns[next:k] {
+						out = append(out, skipped.prompt)
+						if skipped.reply != nil {
+							out = append(out, *skipped.reply)
+						}
+					}
+				}
+				matched, next = &turns[k], k+1
+				break
 			}
+			strayed = matched == nil
 			if matched != nil && !matched.prompt.At.IsZero() {
 				m.At = matched.prompt.At
 			}

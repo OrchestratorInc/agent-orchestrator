@@ -5,6 +5,7 @@ import (
 	"context"
 	"database/sql"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -212,8 +213,9 @@ func cursorEditorFolders(ctx context.Context) map[string]string {
 	if cursorFoldersCache.key == key {
 		return cursorFoldersCache.folders
 	}
-	folders := readCursorEditorFolders(ctx, path)
-	if ctx.Err() == nil {
+	folders, ok := readCursorEditorFolders(ctx, path)
+	if ok {
+		// A failed read is tried again next time.
 		cursorFoldersCache.key, cursorFoldersCache.folders = key, folders
 	}
 	return folders
@@ -225,15 +227,21 @@ var cursorFoldersCache struct {
 	folders map[string]string
 }
 
-func readCursorEditorFolders(ctx context.Context, path string) map[string]string {
+// readCursorEditorFolders reads the chat list; ok is false when it could not be read.
+func readCursorEditorFolders(ctx context.Context, path string) (folders map[string]string, ok bool) {
 	db, err := openReadOnlySQLite(path)
-	if err != nil || db == nil {
-		return nil
+	if err != nil {
+		return nil, false
+	}
+	if db == nil {
+		return nil, true // No database: Cursor's editor is not installed.
 	}
 	defer func() { _ = db.Close() }()
 	var body []byte
-	if err := db.QueryRowContext(ctx, `SELECT CASE WHEN length(value) <= ? THEN value END FROM ItemTable WHERE key = 'composer.composerHeaders'`, maxCursorComposerBytes).Scan(&body); err != nil || body == nil {
-		return nil
+	if err := db.QueryRowContext(ctx, `SELECT CASE WHEN length(value) <= ? THEN value END FROM ItemTable WHERE key = 'composer.composerHeaders'`, maxCursorComposerBytes).Scan(&body); errors.Is(err, sql.ErrNoRows) {
+		return nil, true
+	} else if err != nil || body == nil {
+		return nil, false
 	}
 	type header struct {
 		ComposerID          string `json:"composerId"`
@@ -250,14 +258,14 @@ func readCursorEditorFolders(ctx context.Context, path string) map[string]string
 	if json.Unmarshal(body, &headers) != nil {
 		_ = json.Unmarshal(body, &headers.AllComposers)
 	}
-	folders := make(map[string]string, len(headers.AllComposers))
+	folders = make(map[string]string, len(headers.AllComposers))
 	for _, h := range headers.AllComposers {
 		uri := h.WorkspaceIdentifier.URI
 		if (uri.Scheme == "" || uri.Scheme == "file") && filepath.IsAbs(uri.FSPath) {
 			folders[h.ComposerID] = uri.FSPath
 		}
 	}
-	return folders
+	return folders, true
 }
 
 // cursorBubbleTime reads a message time, written as Unix milliseconds or RFC 3339.
