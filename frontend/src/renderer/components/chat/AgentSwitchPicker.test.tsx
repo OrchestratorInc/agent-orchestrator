@@ -1,7 +1,7 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { act, fireEvent, render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import claudeCodeLogo from "../../assets/agents/claude-code.svg";
 import codexLogo from "../../assets/agents/codex.svg";
 import { toggleModelFavorite } from "../../lib/model-favorites";
@@ -331,18 +331,19 @@ describe("AgentModelPicker", () => {
 		expect(trigger.querySelector("img")).not.toHaveAttribute("src", claudeCodeLogo);
 	});
 
-	it("groups search matches under each agent's logo and name, the chosen agent first", async () => {
+	it("searches only the chosen agent's models", async () => {
 		const user = userEvent.setup();
 		open();
 		await user.click(screen.getByRole("button", { name: /Agent, model and reasoning effort/ }));
-		await user.type(screen.getByPlaceholderText("Search agents and models"), "o");
-		await screen.findByRole("menuitemradio", { name: /^GPT X.*Codex/ });
-		const row = screen.getByRole("menuitemradio", { name: /^Opus.*Claude Code/ });
-		expect(row.querySelector("img")).not.toBeInTheDocument();
-		const headings = screen.getAllByText(/^(Claude Code|Codex)$/);
-		expect(headings.map((heading) => heading.textContent)).toEqual(["Claude Code", "Codex"]);
-		expect(headings[1].querySelector("img")).toHaveAttribute("src", codexLogo);
-		// Typing never changes the agent.
+		const search = screen.getByPlaceholderText("Search agents and models");
+		await user.type(search, "gpt");
+		// Codex's models are not searched while Claude Code is the agent shown.
+		expect(screen.queryByRole("menuitemradio", { name: /GPT X/ })).not.toBeInTheDocument();
+		expect(screen.getByText("No matching models.")).toBeInTheDocument();
+		await user.clear(search);
+		await user.type(search, "opus");
+		expect(await screen.findByRole("menuitemradio", { name: /^Opus/ })).toBeInTheDocument();
+		// A match names its model only; the agent is the rail's.
 		expect(screen.getByRole("radio", { name: "Claude Code" })).toHaveAttribute("aria-checked", "true");
 	});
 
@@ -356,24 +357,16 @@ describe("AgentModelPicker", () => {
 		expect(search).toHaveValue("");
 	});
 
-	it("dims a chat agent whose chat adapter is missing, and opens its setup when picked", async () => {
-		const openGlobalSettings = vi.fn();
-		const original = useUiStore.getState().openGlobalSettings;
-		useUiStore.setState({ openGlobalSettings });
-		onTestFinished(() => useUiStore.setState({ openGlobalSettings: original }));
+	it("hides a chat agent whose chat adapter is missing", async () => {
 		unavailableGet.mockResolvedValue({ data: { agents: [{ agent: "pi", reason: "pi-acp is not installed" }] }, error: undefined });
 		const user = userEvent.setup();
-		const { onPendingChange } = open();
+		open();
 		await user.click(screen.getByRole("button", { name: /Agent, model and reasoning effort/ }));
-		const pi = await screen.findByRole("radio", { name: "Pi · Chat not set up" });
-		expect(pi).toHaveAttribute("aria-disabled", "true");
 		expect(unavailableGet).toHaveBeenCalledWith("/api/v1/agents/chat/unavailable", expect.anything());
-		await user.click(pi);
-		expect(onPendingChange).not.toHaveBeenCalled();
-		await vi.waitFor(() => expect(openGlobalSettings).toHaveBeenCalledWith("harness", expect.objectContaining({ focusAgentId: "pi" })));
+		await vi.waitFor(() => expect(screen.queryByRole("radio", { name: /^Pi/ })).not.toBeInTheDocument());
 	});
 
-	it("shows agents that are not installed or signed in dimmed, after the ready ones", async () => {
+	it("hides agents that are not installed or signed in", async () => {
 		readiness.agents = [
 			agentReadiness("codex", "Codex", { authentication: "unauthorized" }),
 			agentReadiness("cursor", "Cursor", { installation: "not_installed" }),
@@ -381,19 +374,21 @@ describe("AgentModelPicker", () => {
 		const user = userEvent.setup();
 		open();
 		await user.click(screen.getByRole("button", { name: /Agent, model and reasoning effort/ }));
-		const radios = within(screen.getByRole("radiogroup", { name: "Agents" })).getAllByRole("radio");
-		expect(radios.slice(-2).map((radio) => radio.getAttribute("aria-label"))).toEqual(["Codex · Not signed in", "Cursor · Not installed"]);
-		expect(radios.at(-1)).toHaveAttribute("aria-disabled", "true");
-		expect(radios[0]).toHaveAttribute("aria-label", "Claude Code");
+		const labels = within(screen.getByRole("radiogroup", { name: "Agents" })).getAllByRole("radio")
+			.map((radio) => radio.getAttribute("aria-label"));
+		expect(labels).not.toContain("Codex · Not signed in");
+		expect(labels).not.toContain("Cursor · Not installed");
+		expect(labels[0]).toBe("Claude Code");
 	});
 
-	it("searches every agent's models and picks one with its agent", async () => {
+	it("picks a searched model without changing the agent", async () => {
 		const user = userEvent.setup();
-		const { onPendingChange } = open();
+		const { current, onPendingChange } = open();
 		await user.click(screen.getByRole("button", { name: /Agent, model and reasoning effort/ }));
-		await user.type(screen.getByPlaceholderText("Search agents and models"), "gpt");
-		await user.click(await screen.findByRole("menuitemradio", { name: /GPT X.*Codex/ }));
-		expect(onPendingChange).toHaveBeenCalledWith(expect.objectContaining({ harness: "codex", model: "gpt-x" }));
+		await user.type(screen.getByPlaceholderText("Search agents and models"), "sonn");
+		await user.click(await screen.findByRole("menuitemradio", { name: /^Sonnet/ }));
+		expect(current.onPickModel).toHaveBeenCalledWith("sonnet");
+		expect(onPendingChange).not.toHaveBeenCalled();
 	});
 
 	it("lists Cloud's models for the account for a Cloud task, not this computer's", async () => {
@@ -404,16 +399,16 @@ describe("AgentModelPicker", () => {
 				<AgentModelPicker
 					currentHarness="claude-code"
 					current={{ models: [{ id: "opus", label: "Opus" }], modelId: "opus", modelLabel: "Opus", onPickModel: vi.fn(), efforts: [], onPickEffort: vi.fn() }}
-					agentSwitch={{ projectId: "", cloudOrgId: "org-1", onPendingChange }}
+					agentSwitch={{ projectId: "", cloudOrgId: "org-1", pending: { harness: "codex" }, onPendingChange }}
 				/>
 			</QueryClientProvider>,
 		);
 		const user = userEvent.setup();
 		await user.click(screen.getByRole("button", { name: /Agent, model and reasoning effort/ }));
-		await user.type(screen.getByPlaceholderText("Search agents and models"), "gpt");
-		await user.click(await screen.findByRole("menuitemradio", { name: /GPT Cloud.*Codex/ }));
+		const row = await screen.findByRole("menuitemradio", { name: /GPT Cloud/ });
 		expect(screen.queryByRole("menuitemradio", { name: /GPT X/ })).not.toBeInTheDocument();
 		expect(cloudModels).toHaveBeenCalledWith("org-1", "codex", expect.anything());
+		await user.click(row);
 		expect(onPendingChange).toHaveBeenCalledWith(expect.objectContaining({ harness: "codex", model: "gpt-cloud" }));
 	});
 

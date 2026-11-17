@@ -16,6 +16,7 @@ export function ModelMenuChoices<T extends { id: string; label: string }>({
 	searchPlaceholder,
 	browse,
 	browseKey,
+	rows,
 	header,
 	footer,
 	className,
@@ -32,6 +33,11 @@ export function ModelMenuChoices<T extends { id: string; label: string }>({
 	browse?: T[];
 	/** Names what `browse` lists (the chosen agent), so a new list opens at its top. */
 	browseKey?: string;
+	/**
+	 * Rows to show before the list scrolls, so a long catalog does not stretch the menu.
+	 * Unset takes the pane's own max height. The count includes any rows above the list, such as favourites.
+	 */
+	rows?: number;
 	/**
 	 * Controls between the search and the list, such as the agent rail. Up and Shift+Tab
 	 * leave them for the search, Down and Tab for the list, and typing goes to the search.
@@ -94,6 +100,10 @@ export function ModelMenuChoices<T extends { id: string; label: string }>({
 	const scrollRef = useRef<HTMLDivElement>(null);
 	const headerRef = useRef<HTMLDivElement>(null);
 	const footerRef = useRef<HTMLDivElement>(null);
+	// A row is the menu item's text line plus its py-1.5, with the surface's 1px gap between rows.
+	const rowCap = rows === undefined ? undefined : {
+		maxHeight: `calc((var(--line-height-row) + var(--space-1_5) * 2) * ${rows} + 1px * ${rows})`,
+	};
 	useEdgeFade(scrollRef);
 	const clearSearch = useCallback(() => setSearch(""), []);
 	// The header's own tab stop (the rail's chosen agent), if it has one.
@@ -236,6 +246,7 @@ export function ModelMenuChoices<T extends { id: string; label: string }>({
 			<div className="relative grid min-h-0 flex-1 grid-rows-[minmax(0,1fr)] overflow-hidden">
 				<div
 					ref={scrollRef}
+					style={rowCap}
 					className="model-menu-scroll edge-fade min-h-0 overflow-y-auto overscroll-contain"
 					onScroll={handleScroll}
 					onKeyDownCapture={(event) => {

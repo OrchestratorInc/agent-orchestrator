@@ -109,9 +109,9 @@ describe("ModelMenuChoices", () => {
 		expect(items).toHaveLength(50);
 	});
 
-	const renderRows = (models: { id: string; label: string }[], counts?: Map<string, number[]>) =>
+	const renderRows = (models: { id: string; label: string }[], counts?: Map<string, number[]>, rows?: number) =>
 		render(
-			<ModelMenuChoices models={models} searchable>
+			<ModelMenuChoices models={models} searchable rows={rows}>
 				{(matches, _active, _optionID, query) => {
 					if (query) counts?.set(query, [...(counts.get(query) ?? []), matches.length]);
 					return matches.map((model) => (
@@ -168,5 +168,19 @@ describe("ModelMenuChoices", () => {
 		expect(screen.getAllByRole("menuitemradio")).toHaveLength(100);
 		fireEvent.keyDown(rows[95], { key: "ArrowDown" });
 		expect(screen.getAllByRole("menuitemradio")).toHaveLength(150);
+	});
+
+	it("caps the list at the requested number of rows, so a long catalog does not stretch the menu", () => {
+		renderRows(generateModels(30), undefined, 3);
+		const scroller = document.querySelector<HTMLElement>(".model-menu-scroll");
+		expect(scroller).not.toBeNull();
+		expect(scroller!.style.maxHeight).toBe("calc((var(--line-height-row) + var(--space-1_5) * 2) * 3 + 1px * 3)");
+		// Every row still renders; the list scrolls under the cap.
+		expect(screen.getAllByRole("menuitemradio")).toHaveLength(30);
+	});
+
+	it("takes the pane's own max height when no row cap is asked for", () => {
+		renderRows(generateModels(30));
+		expect(document.querySelector<HTMLElement>(".model-menu-scroll")!.style.maxHeight).toBe("");
 	});
 });
