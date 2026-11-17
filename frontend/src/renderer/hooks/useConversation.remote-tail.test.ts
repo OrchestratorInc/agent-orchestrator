@@ -197,6 +197,17 @@ describe("refreshOpenLocalConversationOnce", () => {
 		expect(data.pages[1]).toBe(older);
 	});
 
+	it("reads the live page once when the running turn already fills a page", async () => {
+		const rows = Array.from({ length: 30 }, (_, index) => message(`x${index}`, "t2", 7 + index));
+		client.setQueryData<InfiniteData<ConversationSnapshot>>(key, { pages: [page(prior.turns, [...prior.items, ...rows], { hasMoreBefore: true }), older], pageParams: [undefined, 1] });
+		open();
+		getMock.mockResolvedValueOnce(wire({ oldestSequence: 7, latestSequence: 37, hasMoreBefore: true, turns: [wireTurn("t2", "running")], messages: [wireMessage("x0", "t2", 7, "more")] }));
+		expect(refreshOpenLocalConversationOnce(client, "s1")).toBe(true);
+		await vi.waitFor(() => expect(client.getQueryData<InfiniteData<ConversationSnapshot>>(key)!.pages[0].items.find((item) => item.id === "x0")).toMatchObject({ text: "more" }));
+		expect(getMock).toHaveBeenCalledOnce();
+		expect(getMock.mock.calls[0][1].params.query).toEqual({ beforeSequence: undefined, limit: 30 });
+	});
+
 	it("leaves a closed, empty or stale chat to the usual reload", () => {
 		expect(refreshOpenLocalConversationOnce(client, "s1")).toBe(false);
 		open();

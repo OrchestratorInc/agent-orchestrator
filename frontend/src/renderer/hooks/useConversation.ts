@@ -662,7 +662,10 @@ async function refreshLocalConversationTail(queryClient: QueryClient, sessionId:
 		const prior = before?.pages[0];
 		if (!prior) return;
 		const floor = remoteConversationFloor(prior);
-		const asTail = !wholePage && floor >= 1;
+		// A long running turn already holds a page of rows above the floor, so its
+		// tail could not be merged; read the live page once instead of twice.
+		const fits = prior.items.filter((item) => item.sequence > floor).length < LOCAL_INITIAL_PAGE_SIZE;
+		const asTail = !wholePage && floor >= 1 && fits;
 		const wire = await fetchConversationWire(sessionId, undefined, asTail ? { afterSequence: floor, limit: LOCAL_INITIAL_PAGE_SIZE } : conversationPageQuery(undefined));
 		// An older page that was loading copied the live page when it started and
 		// writes that copy back when it lands, and a reload holds rows at least as new
