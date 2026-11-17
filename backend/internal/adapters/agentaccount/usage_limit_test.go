@@ -167,7 +167,9 @@ func TestClaudeLimitsReportsUnavailableUsageAsError(t *testing.T) {
 		{"login routed elsewhere by settings", fmt.Sprintf(`{"claudeAiOauth":{"accessToken":"sk-ant-oat01-ok","refreshToken":"r","expiresAt":%d}}`, now+3600_000), `{"env":{"ANTHROPIC_BASE_URL":"https://gateway.example"}}`, http.StatusUnauthorized, false, false, ""},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
+			t.Setenv("ANTHROPIC_BASE_URL", "https://ambient.example")
 			home := t.TempDir()
+			t.Setenv("TMPDIR", t.TempDir())
 			if tc.credentials != "" {
 				write(t, filepath.Join(home, ".credentials.json"), tc.credentials)
 			}
