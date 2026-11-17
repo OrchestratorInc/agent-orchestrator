@@ -16,6 +16,8 @@ const h = vi.hoisted(() => ({
 	capture: vi.fn(),
 	ensureReadiness: vi.fn(),
 	ensureTargetedReadiness: vi.fn(),
+	standaloneTimedOut: false,
+	standaloneRetry: vi.fn(),
 	agentValues: [] as string[],
 	agentCatalog: undefined as { agents: ReturnType<typeof import("../test/agent-readiness-fixtures").agentReadiness>[] } | undefined,
 	cloudProjects: [] as Array<{ id: string; displayName: string; repositoryUrl: string; defaultBranch: string; config: Record<string, unknown> }>,
@@ -55,6 +57,7 @@ vi.mock("../hooks/useAgentReadinessQuery", async (importOriginal) => {
 		ensureAgentReadiness: h.ensureTargetedReadiness,
 		useAgentReadinessQuery: () => ({ data: h.agentCatalog, isFetching: false, isSuccess: h.agentCatalog !== undefined }),
 		useEnsureAgentReadiness: h.ensureReadiness,
+		useStandaloneAgentReadiness: () => ({ timedOut: h.standaloneTimedOut, retrying: false, retry: h.standaloneRetry }),
 	};
 });
 
@@ -233,6 +236,8 @@ async function waitForTaskReady() {
 }
 
 beforeEach(() => {
+	h.standaloneTimedOut = false;
+	h.standaloneRetry.mockReset();
 	h.realPermissionDiscovery = false;
 	useUiStore.setState({ developerMode: true, remoteHosts: true });
 	h.agentCatalog = { agents: AGENT_OPTIONS.map((id) => agentReadiness(id, agentLabel(id))) };
@@ -505,6 +510,72 @@ describe("TaskComposer", () => {
 
 		await waitFor(() => expect(screen.getByLabelText("Agent")).toHaveAttribute("data-value", "codex"));
 		await waitFor(() => expect(screen.queryByRole("status", { name: "Loading models…" })).not.toBeInTheDocument());
+	});
+
+	it("keeps remembered pending Codex, preserves the draft, and only starts on the next Send", async () => {
+		window.localStorage.setItem("ao.taskComposer.preferences.v1", JSON.stringify({ __standalone__: { lastAgent: "codex", agents: { codex: { model: "gpt-6", effort: "high" } } } }));
+		h.agentCatalog = { agents: [agentReadiness("codex", "Codex", { authentication: "unknown" }), agentReadiness("claude-code", "Claude Code")] };
+		const onCreated = vi.fn();
+		const client = new QueryClient();
+		const page = () => <Wrap queryClient={client}><TaskComposer projectId="__standalone__" onCreated={onCreated} /></Wrap>;
+		const { rerender } = render(page());
+		expect(screen.getByLabelText("Agent")).toHaveAttribute("data-value", "codex");
+		expect(await screen.findByText("Checking Codex…")).toBeInTheDocument();
+		fireEvent.change(task(), { target: { value: "Keep this draft" } });
+		expect(startTask()).toBeDisabled();
+		h.agentCatalog = { agents: [agentReadiness("codex", "Codex"), agentReadiness("claude-code", "Claude Code")] };
+		rerender(page());
+		await waitForTaskReady();
+		expect(task()).toHaveValue("Keep this draft");
+		expect(onCreated).not.toHaveBeenCalled();
+		expect(h.post.mock.calls.filter(([path]) => path === "/api/v1/sessions")).toHaveLength(0);
+		h.post.mockResolvedValue({ data: { session: { id: "recovered" } } });
+		fireEvent.click(startTask());
+		await waitFor(() => expect(onCreated).toHaveBeenCalledWith("recovered"));
+		expect(h.post.mock.calls.filter(([path]) => path === "/api/v1/sessions")).toHaveLength(1);
+	});
+
+	it("offers Retry after inconclusive startup and preserves an explicit replacement", async () => {
+		window.localStorage.setItem("ao.taskComposer.preferences.v1", JSON.stringify({ __standalone__: { lastAgent: "codex", agents: {} } }));
+		h.agentCatalog = { agents: [agentReadiness("codex", "Codex", { authentication: "unknown" }), agentReadiness("claude-code", "Claude Code")] };
+		h.standaloneTimedOut = true;
+		const client = new QueryClient();
+		const page = () => <Wrap queryClient={client}><TaskComposer projectId="__standalone__" onCreated={vi.fn()} /></Wrap>;
+		const { rerender } = render(page());
+		expect(await screen.findByText("Couldn’t confirm Codex is ready")).toBeInTheDocument();
+		fireEvent.click(screen.getByRole("button", { name: "Retry" }));
+		expect(h.standaloneRetry).toHaveBeenCalledOnce();
+		fireEvent.click(screen.getByLabelText("Agent"));
+		await waitForTaskReady();
+		h.agentCatalog = { agents: [agentReadiness("codex", "Codex"), agentReadiness("claude-code", "Claude Code")] };
+		rerender(page());
+		expect(screen.getByLabelText("Agent")).toHaveAttribute("data-value", "claude-code");
+	});
+
+	it("only bypasses the standalone readiness gate for an explicitly retried pending request", async () => {
+		window.localStorage.setItem("ao.taskComposer.preferences.v1", JSON.stringify({ __standalone__: { lastAgent: "codex", agents: {} } }));
+		h.agentCatalog = { agents: [agentReadiness("codex", "Codex", { authentication: "unknown" })] };
+		let launch!: ReturnType<typeof useTaskLaunch>;
+		function Launcher() { launch = useTaskLaunch({ projectId: "__standalone__" }); return null; }
+		render(<Wrap><Launcher /></Wrap>);
+		await waitFor(() => expect(launch.sendBlockedReason).toBe("Checking Codex…"));
+		const request = { clientRequestId: "original-id", replay: { agent: "codex", model: "gpt-6", mode: "chat" as const } };
+		await expect(launch.launch("Original brief", request)).rejects.toThrow();
+		expect(h.post.mock.calls.filter(([path]) => path === "/api/v1/sessions")).toHaveLength(0);
+		h.post.mockResolvedValue({ data: { session: { id: "already-created" } } });
+		await act(async () => { await expect(launch.launch("Original brief", { ...request, retryPendingLaunch: true })).resolves.toBe("already-created"); });
+		const requests = h.post.mock.calls.filter(([path]) => path === "/api/v1/sessions");
+		expect(requests).toHaveLength(1);
+		expect(requests[0][1].body).toMatchObject({ clientRequestId: "original-id", harness: "codex", model: "gpt-6", mode: "chat" });
+	});
+
+	it.each(["not_installed", "unauthorized"])("retains remembered Codex with an actionable %s failure", async (failure) => {
+		window.localStorage.setItem("ao.taskComposer.preferences.v1", JSON.stringify({ __standalone__: { lastAgent: "codex", agents: {} } }));
+		h.agentCatalog = { agents: [agentReadiness("codex", "Codex", failure === "not_installed" ? { installation: "not_installed" } : { authentication: "unauthorized" }), agentReadiness("claude-code", "Claude Code")] };
+		render(<Wrap><TaskComposer projectId="__standalone__" onCreated={vi.fn()} /></Wrap>);
+		expect(screen.getByLabelText("Agent")).toHaveAttribute("data-value", "codex");
+		expect(startTask()).toBeDisabled();
+		expect(await screen.findByRole("button", { name: "Open Agent Harnesses" })).toBeInTheDocument();
 	});
 
 	it("preserves an explicitly selected standalone agent when readiness rankings refresh", async () => {

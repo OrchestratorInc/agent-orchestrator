@@ -206,6 +206,13 @@ export function isLaunchableAgent(agent: AgentInfo): boolean {
 	return agent.installation.state !== "not_installed" && agent.authentication.state !== "unauthorized";
 }
 
+/** An unresolved observation is checking, not evidence that setup is needed. */
+export function isPendingAgent(agent: AgentInfo): boolean {
+	if (agent.installation.state === "not_installed" && agent.installation.freshness === "fresh") return false;
+	if (agent.authentication.state === "unauthorized" && agent.authentication.freshness === "fresh") return false;
+	return agent.installation.state !== "installed" || agent.authentication.state === "unknown" || agent.authentication.state === "unauthorized";
+}
+
 export function buildRankedAgentOptions({
 	agents,
 	priorityRank,

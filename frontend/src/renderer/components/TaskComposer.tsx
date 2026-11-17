@@ -25,6 +25,7 @@ import {
 	cacheAgentReadiness,
 	ensureAgentReadiness,
 	useAgentReadinessQuery,
+	useStandaloneAgentReadiness,
 } from "../hooks/useAgentReadinessQuery";
 import { type FileAttachmentPayload, useFileAttachments } from "../hooks/useFileAttachments";
 import { useChatPermissionModesQuery } from "../hooks/useChatPermissionModes";
@@ -52,6 +53,7 @@ import {
 	buildRankedAgentOptions,
 	DEFAULT_AGENT_PRIORITY_RANK,
 	isLaunchableAgent,
+	isPendingAgent,
 	isReadyAgent,
 	unknownAgentReadiness,
 	type AgentInfo,
@@ -164,6 +166,8 @@ export type TaskLaunchOptions = {
 	clientRequestId?: string;
 	/** Send exactly this request instead of the current picks, e.g. a retry of a send whose response was lost. */
 	replay?: LaunchReplay;
+	/** Resolves an already-sent standalone request whose response was lost. */
+	retryPendingLaunch?: boolean;
 	/** Files to upload with the task, in place of the ones this hook holds. */
 	attachments?: FileAttachmentPayload[];
 };
@@ -252,6 +256,7 @@ export function useTaskLaunch({ projectId, hostId }: {
 	// Coder projects keep their own New Task dialog and start-up untouched.
 	const isCoderCloudProject = isCloudProject && !isCloudStandalone && projectSandboxProvider(cloudProject?.config, cloudOffering) === CODER_PROVIDER;
 	const isStandalone = projectId === STANDALONE_WORKSPACE_ID;
+	const isLocalStandalone = isStandalone && !hostId;
 	const preferenceContext = hostId ? `${hostId}:${projectId ?? ""}` : projectId ?? "";
 	const persistedPreferences = useMemo(
 		() => readTaskComposerPreferences(preferenceContext),
@@ -554,10 +559,17 @@ export function useTaskLaunch({ projectId, hostId }: {
 	const rememberedAgent = persistedPreferences?.lastAgent ?? "";
 	const availableAgents = isCloudProject ? cloudAgents : agentCatalog?.agents;
 	const rememberedAgentIsAvailable = Boolean(
-		availableAgents?.some((candidate) => candidate.id === rememberedAgent && (hostId ? isLaunchableAgent(candidate) : isReadyAgent(candidate))),
+		(isLocalStandalone && AGENT_OPTIONS.includes(rememberedAgent as typeof AGENT_OPTIONS[number]) && availableAgents === undefined) ||
+		availableAgents?.some((candidate) => candidate.id === rememberedAgent &&
+			(isLocalStandalone || (hostId ? isLaunchableAgent(candidate) : isReadyAgent(candidate)))),
 	);
 	const defaultWorkerAgent = rememberedAgentIsAvailable ? rememberedAgent : configuredDefaultAgent;
 	const selectedAgent = agent || defaultWorkerAgent;
+	const selectedReadiness = agentCatalog?.agents.find((candidate) => candidate.id === selectedAgent);
+	const standalonePending = isLocalStandalone && (selectedAgent
+		? !selectedReadiness || isPendingAgent(selectedReadiness)
+		: !agentCatalog || agentCatalog.agents.some(isPendingAgent));
+	const standaloneRecovery = useStandaloneAgentReadiness(selectedAgent, standalonePending, isLocalStandalone);
 	const accountProvider = agentAccountProviderFor(selectedAgent);
 	const accountId = accountProvider && !isCloudProject ? accountPicks[accountProvider] : undefined;
 	// The connection a cloud task with this agent runs on; its catalog follows it.
@@ -1032,8 +1044,31 @@ export function useTaskLaunch({ projectId, hostId }: {
 						: undefined;
 	// An omitted agent or failed permission probe must still reach daemon admission
 	// and its default-Chat-to-TUI fallback once initial discovery settles.
+	const standaloneBlockedReason = !isLocalStandalone ? undefined
+		: standalonePending ? standaloneRecovery.timedOut
+			? selectedAgent ? t("newTask.agentReadinessUnconfirmed", { agent: selectedAgentLabel, defaultValue: "Couldn’t confirm {{agent}} is ready" })
+				: t("newTask.agentsReadinessUnconfirmed", { defaultValue: "Couldn’t confirm an agent is ready" })
+			: selectedAgent ? t("newTask.checkingAgent", { agent: selectedAgentLabel, defaultValue: "Checking {{agent}}…" })
+				: t("newTask.checkingAgents", { defaultValue: "Checking agents…" })
+		: selectedReadiness?.installation.state === "not_installed"
+			? t("newTask.agentNeedsInstall", { agent: selectedAgentLabel, defaultValue: "{{agent}} needs to be installed." })
+		: selectedReadiness?.authentication.state === "unauthorized"
+			? t("newTask.agentNeedsSignIn", { agent: selectedAgentLabel, defaultValue: "Sign in to {{agent}} to continue." })
+		: undefined;
+	const readinessNotice = standaloneBlockedReason ? {
+		message: standaloneBlockedReason,
+		checking: standalonePending && !standaloneRecovery.timedOut,
+		action: standaloneRecovery.timedOut ? {
+			label: t("newTask.modelNotice.retry"),
+			onClick: standaloneRecovery.retry,
+		} : !standalonePending ? {
+			label: t("newTask.openHarnessSettings"),
+			onClick: () => openGlobalSettings("harness", { focusAgentId: selectedAgent, harnessView: "local", preserveProject: true }),
+		} : undefined,
+	} : undefined;
 	const canSubmit =
 		hostConnected &&
+		!standaloneBlockedReason &&
 		Boolean(projectId) &&
 		!cloudCatalogLoading &&
 		(!usesChatPermissions || !permissionDiscovery.isPending) &&
@@ -1048,9 +1083,9 @@ export function useTaskLaunch({ projectId, hostId }: {
 	// Named for its remote origins; a local project that failed to load reports here too.
 	// A cloud project is not read locally, so a lookup made before it was known to be
 	// a cloud project must not linger as its error.
-	// Scratchpad has no project agent to fall back to: with no ready agent, or no agent
-	// list at all, a send could never start, so it says why at once.
-	const standaloneAgentError = !isCloudProject && selectedAgent === ""
+	// Scratchpad has no project agent to fall back to. Pending local discovery
+	// has its checking notice above; only settled unavailability asks for setup.
+	const standaloneAgentError = !isCloudProject && selectedAgent === "" && !standalonePending
 		? agentsQuery.error instanceof Error ? agentsQuery.error.message : agentsQuery.isSuccess ? t("newTask.noReadyAgent") : undefined
 		: isCloudProject && selectedAgent === "" && cloudConnectionsQuery.isSuccess ? t("newTask.noReadyAgent") : undefined;
 	// Scratchpad never reads a project, but its disabled query still sees an entry
@@ -1153,8 +1188,9 @@ export function useTaskLaunch({ projectId, hostId }: {
 	};
 
 	// Rejects with the create error after recording it (and any fallback) here.
-	const launch = async (brief: string, { interfaceMode, approvalMode: requestedApproval, clientRequestId, replay, attachments: files }: TaskLaunchOptions = {}): Promise<string> => {
-		if (!projectId || !canSubmit || isSubmitting) throw new Error(remoteLoadError ?? t("newTask.unableToStart"));
+	const launch = async (brief: string, { interfaceMode, approvalMode: requestedApproval, clientRequestId, replay, retryPendingLaunch, attachments: files }: TaskLaunchOptions = {}): Promise<string> => {
+		const resolvingStandalone = isLocalStandalone && retryPendingLaunch && clientRequestId && replay;
+		if (!projectId || (!canSubmit && !resolvingStandalone) || isSubmitting) throw new Error(remoteLoadError ?? t("newTask.unableToStart"));
 
 		setIsSubmitting(true);
 		setError(undefined);
@@ -1324,10 +1360,8 @@ export function useTaskLaunch({ projectId, hostId }: {
 		setEffortTouched(false);
 	};
 
-	// The agents the new chat page's picker offers, ranked as in New Task. Locally only
-	// installed agents whose sign-in is known to be usable: an "Auth unknown" agent may
-	// not start, so it stays in Harness settings. A remote host's readiness can be
-	// unknown without anything being wrong, so there definite failures alone are left out.
+	// Standalone can keep or choose a pending local agent while its separate Send
+	// gate waits for discovery. Project and remote pickers retain their policies.
 	const agentChoices = useMemo(() => {
 		const agents = isCloudProject ? cloudAgents : agentCatalog?.agents;
 		const ranked = buildRankedAgentOptions({
@@ -1335,8 +1369,10 @@ export function useTaskLaunch({ projectId, hostId }: {
 			priorityRank: DEFAULT_AGENT_PRIORITY_RANK,
 			fallbackAgents: AGENT_OPTIONS.map((agent) => unknownAgentReadiness(agent, agentLabel(agent))),
 		});
-		return (agents ? ranked.filter(hostId ? isLaunchableAgent : startsLocally) : ranked).map(({ id, label }) => ({ id, label }));
-	}, [agentCatalog?.agents, cloudAgents, hostId, isCloudProject]);
+		return (agents ? ranked.filter((candidate) => hostId ? isLaunchableAgent(candidate)
+			: startsLocally(candidate) || (isLocalStandalone && (candidate.id === selectedAgent || isPendingAgent(candidate)))) : ranked)
+			.map(({ id, label }) => ({ id, label }));
+	}, [agentCatalog?.agents, cloudAgents, hostId, isCloudProject, isLocalStandalone, selectedAgent]);
 	const catalogProjectId = isCloudProject || isStandalone ? "" : projectId ?? "";
 	// A pick from the picker's other agents: that agent, with the model and effort chosen
 	// alongside it, if any. Its catalog is cached, since the picker lists its models.
@@ -1426,6 +1462,8 @@ export function useTaskLaunch({ projectId, hostId }: {
 		isCloudProject,
 		isCoderCloudProject,
 		canSubmit,
+		sendBlockedReason: standaloneBlockedReason,
+		readinessNotice,
 		isSubmitting,
 		isDirty: modelTouched || effortTouched || attachments.length > 0,
 		error,
@@ -1625,9 +1663,9 @@ export function TaskComposer({
 			attachments={task.attachments}
 			submission={{
 				showFallbackAction: task.fallbackAction !== undefined,
-				error: task.error ?? task.remoteLoadError ?? undefined,
-				status: task.status,
-				errorAction: task.errorAction,
+				error: task.error ?? task.remoteLoadError ?? (task.readinessNotice?.checking ? undefined : task.readinessNotice?.message),
+				status: task.status ?? (task.readinessNotice?.checking ? task.readinessNotice.message : undefined),
+				errorAction: task.errorAction ?? task.readinessNotice?.action,
 				isSubmitting: task.isSubmitting,
 				modelWarning: task.modelWarning,
 				onFallbackAction: (brief) => settle(task.launchFallback(brief)),

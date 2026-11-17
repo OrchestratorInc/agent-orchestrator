@@ -21,6 +21,9 @@ const h = vi.hoisted(() => ({
 	isCloudProject: false,
 	error: undefined as string | undefined,
 	status: undefined as string | undefined,
+	sendBlockedReason: undefined as string | undefined,
+	canSubmit: true,
+	readinessNotice: undefined as { message: string; checking: boolean; action?: { label: string; onClick: () => void } } | undefined,
 	errorAction: undefined as { label: string; onClick: () => void; input?: { label: string; value: string; onChange: (value: string) => void } } | undefined,
 	replay: { agent: "codex", model: "gpt-6", effort: "high", approvalMode: undefined as string | undefined, mode: undefined as string | undefined },
 	workspace: undefined as ChatWorkspaceProps | undefined,
@@ -63,10 +66,12 @@ vi.mock("./TaskComposer", () => ({
 		fallbackLabel: "Create as Terminal UI",
 		error: h.error,
 		status: h.status,
+		sendBlockedReason: h.sendBlockedReason,
+		readinessNotice: h.readinessNotice,
 		errorAction: h.errorAction,
 		submitMode: undefined,
 		isCloudProject: h.isCloudProject,
-		canSubmit: true,
+		canSubmit: h.canSubmit,
 		catalogProjectId: "proj-1",
 		launchSnapshot: () => ({ ...h.replay }),
 		effectiveInterface: "chat",
@@ -111,6 +116,9 @@ beforeEach(() => {
 	h.isCloudProject = false;
 	h.error = undefined;
 	h.status = undefined;
+	h.sendBlockedReason = undefined;
+	h.canSubmit = true;
+	h.readinessNotice = undefined;
 	h.errorAction = undefined;
 	h.replay = { agent: "codex", model: "gpt-6", effort: "high", approvalMode: undefined, mode: undefined };
 	h.workspace = undefined;
@@ -128,6 +136,28 @@ beforeEach(() => {
 });
 
 describe("NewChatPage", () => {
+	it("keeps a draft during readiness recovery without scheduling an automatic send", async () => {
+		writeChatComposerText(draftScope, "Keep my draft");
+		h.sendBlockedReason = "Checking Codex…";
+		h.readinessNotice = { message: h.sendBlockedReason, checking: true };
+		const page = renderPage();
+		page.showProject(STANDALONE_WORKSPACE_ID);
+		expect(screen.getByRole("status")).toHaveTextContent("Checking Codex…");
+		expect(h.workspace?.sendBlockedReason).toBe("Checking Codex…");
+		await expect(h.workspace?.onSend?.("Keep my draft", undefined, "early-send")).rejects.toMatchObject({ code: "TASK_NOT_READY" });
+		expect(readChatSessionDraft(draftScope).composer.text).toBe("Keep my draft");
+		expect(window.localStorage.getItem("ao.newTask.pendingLaunch.v1")).toBeNull();
+		h.sendBlockedReason = undefined;
+		h.readinessNotice = undefined;
+		page.showProject(STANDALONE_WORKSPACE_ID);
+		expect(h.workspace?.sendBlockedReason).toBeUndefined();
+		expect(h.launch).not.toHaveBeenCalled();
+		expect(readChatSessionDraft(draftScope).composer.text).toBe("Keep my draft");
+		h.launch.mockResolvedValue("recovered-session");
+		await act(async () => { await h.workspace?.onSend?.("Keep my draft", undefined, "deliberate-send"); });
+		expect(h.launch).toHaveBeenCalledOnce();
+	});
+
 	it("moves off a Cloud standalone agent's project once it knows it: a shared one to the Scratchpad, the person's own to a new agent", () => {
 		h.workspaces = [
 			{ id: "proj-1", name: "Project", kind: "project", sessions: [] },
@@ -413,6 +443,23 @@ describe("NewChatPage", () => {
 		expect(outcome).toBeInstanceOf(TypeError);
 		expect(outcome).not.toHaveProperty("code");
 		expect(h.navigate).not.toHaveBeenCalled();
+	});
+
+	it("can resolve an uncertain standalone send during a new readiness check", async () => {
+		prepareChatComposerDelivery(draftScope, { kind: "send", clientMessageId: "original-id", requestText: "Fix the build", composerText: "Fix the build", attachments: [] });
+		h.launch.mockRejectedValueOnce(new TypeError("Failed to fetch"));
+		const page = renderPage();
+		page.showProject(STANDALONE_WORKSPACE_ID);
+		await act(async () => { await Promise.resolve(h.workspace?.onSend?.("Fix the build", undefined, "original-id")).catch(() => undefined); });
+		h.sendBlockedReason = "Checking Codex…";
+		h.readinessNotice = { message: h.sendBlockedReason, checking: true };
+		h.canSubmit = false;
+		page.showProject(STANDALONE_WORKSPACE_ID);
+		expect(h.workspace?.sendBlockedReason).toBeUndefined();
+		h.launch.mockResolvedValue("existing-session");
+		await act(async () => { await h.workspace?.onSend?.("Fix the build", undefined, "original-id"); });
+		expect(h.launch).toHaveBeenLastCalledWith("Fix the build", expect.objectContaining({ clientRequestId: "original-id", retryPendingLaunch: true, replay: expect.objectContaining({ agent: "codex" }) }));
+		expect(h.launch).toHaveBeenCalledTimes(2);
 	});
 
 	// A Cloud create's error carries the control plane's HTTP status.

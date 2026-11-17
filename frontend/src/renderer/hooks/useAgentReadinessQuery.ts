@@ -1,5 +1,5 @@
 import { apiErrorException } from "../lib/api-error-exception";
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useQuery, useQueryClient, type QueryClient } from "@tanstack/react-query";
 import { AgentCheckError } from "../lib/agent-check-error";
 import { defaultProjectAgents, preferredAgentNeedsChecks, type ProjectAgentDefaults } from "../lib/agent-select-options";
@@ -97,6 +97,84 @@ export function useAgentReadinessQuery(enabled = true, hostId?: string) {
 		queryFn: () => fetchAgentReadiness(hostId),
 		enabled,
 	});
+}
+
+/** An open local standalone view follows daemon recovery without forcing probes
+ * on every poll. The daemon continues its own work after this view leaves. */
+export function useStandaloneAgentReadiness(agentId: string, pending: boolean, enabled: boolean) {
+	const queryClient = useQueryClient();
+	const [retryRequest, setRetryRequest] = useState<{ agentId: string }>();
+	const [daemonGeneration, setDaemonGeneration] = useState(0);
+	const consumedRetry = useRef<typeof retryRequest>(undefined);
+	const request = useMemo(() => ({}), [agentId, pending, enabled, retryRequest, daemonGeneration, queryClient]);
+	const currentRequest = useRef(request);
+	currentRequest.current = request;
+	const [expired, setExpired] = useState<object>();
+	const retryLocked = useRef(false);
+	useEffect(() => {
+		if (!enabled || !pending) return;
+		let active = true;
+		let poll: ReturnType<typeof setTimeout> | undefined;
+		const isCurrent = () => active && currentRequest.current === request;
+		const timeout = setTimeout(() => {
+			if (!isCurrent()) return;
+			active = false;
+			clearTimeout(poll);
+			retryLocked.current = false;
+			setExpired(request);
+		}, 60_000);
+		// The supervisor removes the local snapshot when daemon identity changes,
+		// including a replacement on the same port. Discard the old request's
+		// completions and follow the replacement's startup instead.
+		const unsubscribe = queryClient.getQueryCache().subscribe((event) => {
+			if (event.type !== "removed" || event.query.queryKey.length !== 1 || event.query.queryKey[0] !== agentReadinessQueryKey[0]) return;
+			active = false;
+			clearTimeout(timeout);
+			clearTimeout(poll);
+			setDaemonGeneration((generation) => generation + 1);
+		});
+		const read = async () => {
+			try {
+				const next = await fetchAgentReadiness();
+				if (isCurrent()) cacheAgentReadiness(queryClient, next);
+			} catch { /* A transient transport error can recover on the next cached read. */ }
+			if (isCurrent()) poll = setTimeout(() => void read(), 2_000);
+		};
+		const start = async () => {
+			try {
+				if (retryRequest && consumedRetry.current !== retryRequest && retryRequest.agentId === agentId && agentId) {
+					consumedRetry.current = retryRequest;
+					const { error, response } = await apiClient.POST("/api/v1/agents/{agent}/probe", {
+						params: { path: { agent: agentId } },
+					});
+					if (error) throw new AgentCheckError("Readiness refresh", error, response?.status);
+				} else {
+					const next = await ensureAgentReadiness(agentId ? [agentId] : [], "display");
+					if (isCurrent()) cacheAgentReadiness(queryClient, next);
+				}
+			} catch { /* Cached polling still observes daemon-owned recovery. */ }
+			finally {
+				if (isCurrent()) {
+					retryLocked.current = false;
+				}
+			}
+		};
+		void start();
+		void read();
+		return () => {
+			active = false;
+			unsubscribe();
+			clearTimeout(timeout);
+			clearTimeout(poll);
+			retryLocked.current = false;
+		};
+	}, [agentId, retryRequest, enabled, pending, queryClient, request]);
+	const retry = useCallback(() => {
+		if (retryLocked.current) return;
+		retryLocked.current = true;
+		setRetryRequest({ agentId });
+	}, [agentId]);
+	return { timedOut: enabled && pending && expired === request, retry };
 }
 
 export function useEnsureAgentReadiness({
