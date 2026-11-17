@@ -37,6 +37,7 @@ import {
 	CircleDashed as MynaCircleDashed,
 	Clock3 as MynaClock3,
 	ClockCircle as MynaClockCircle,
+	CloudSolid as MynaCloudSolid,
 	Cloudy as MynaCloudy,
 	Code as MynaCode,
 	Coffee as MynaCoffee,
@@ -320,6 +321,8 @@ export const Clock = fromMyna(MynaClockCircle, "clock");
 export const Clock3 = fromMyna(MynaClock3, "clock-3");
 // Myna's plain Cloud is an open arc that reads as clipped; Cloudy is closed.
 export const Cloud = fromMyna(MynaCloudy, "cloud", "full");
+// Filled single cloud for the small Cloud mark on rows; solid glyphs ignore stroke.
+export const CloudFilled = fromMyna(MynaCloudSolid, "cloud-filled", "full");
 export const Code2 = fromMyna(MynaCode, "code-xml");
 export const Coffee = fromMyna(MynaCoffee, "coffee");
 export const Columns2 = fromMyna(MynaColumns, "columns-2");

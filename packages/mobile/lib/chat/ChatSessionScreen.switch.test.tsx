@@ -46,7 +46,7 @@ const fixtures = vi.hoisted(() => {
 		conversation: conversation(),
 		freshConversation: conversation,
 		refreshBoard: vi.fn(async () => {}),
-		navigation: { setOptions: vi.fn() },
+		navigation: { setOptions: vi.fn(), addListener: vi.fn(() => () => {}) },
 		router: { push: vi.fn(), back: vi.fn(), replace: vi.fn(), canGoBack: () => true },
 	};
 });
@@ -95,7 +95,8 @@ vi.mock("../session/useInterfaceTransition", async () => ({
 	useInterfaceTransition: () => fixtures.interfaceSwitch,
 }));
 vi.mock("../session/InterfaceSwitchCard", async () => ({ InterfaceSwitchCard: await host("InterfaceSwitchCard") }));
-vi.mock("../frost", async () => ({ Frost: await host("Frost"), FROST_TAIL: 0, frostStops: () => [] }));
+vi.mock("../frost", async () => ({ Frost: await host("Frost"), FROST_TAIL: 0, frostStops: () => [], pillFrostStops: () => [] }));
+vi.mock("../headerPill", async () => ({ HeaderPill: await host("HeaderPill"), HeaderPillButton: await host("HeaderPillButton"), pillBackOptions: () => ({}) }));
 vi.mock("../stackScreenOptions", () => ({ stackScreenOptions: () => ({}), SYSTEM_GLASS_HEADER: false }));
 vi.mock("../ThemeProvider", () => {
 	const theme = new Proxy({}, { get: (_target, key) => `#${String(key)}` });

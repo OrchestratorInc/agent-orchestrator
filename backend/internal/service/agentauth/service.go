@@ -239,7 +239,7 @@ func (s *Service) Logout(ctx context.Context, agentID string) (StartResult, erro
 	if len(plan.logoutCommand) == 0 {
 		return StartResult{}, apierr.Invalid("AGENT_LOGOUT_UNSUPPORTED", "This harness does not have a supported native logout command.", nil)
 	}
-	plan.command = plan.logoutCommand
+	plan.command = nativeLogoutCommand(agentID, plan.logoutCommand)
 	plan.Action = ActionLogout
 	plan.title = strings.Replace(plan.title, "Log in to", "Log out of", 1)
 	plan.Guidance = "Complete the harness's native logout flow, then close the terminal to check authentication again."

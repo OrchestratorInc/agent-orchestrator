@@ -27,6 +27,8 @@ export const aoBridge: AoBridge =
 			showPrivacyGuide: async () => undefined,
 			updatePrivacyGuide: async () => false,
 			closePrivacyGuide: async () => undefined,
+			getAppPrivacy: async () => undefined,
+			requestAppPrivacy: async () => undefined,
 			openChromeExtensions: async () => undefined,
 			scanImportFolder: async ({ path }) => ({ path, repos: [] }),
 			checkAncestorRepo: async () => undefined,
@@ -139,6 +141,7 @@ export const aoBridge: AoBridge =
 			list: async () => {
 				throw new Error("Sharing needs the Orchestrator desktop app.");
 			},
+			hostLinks: async () => [],
 			publish: async () => {
 				throw new Error("Sharing needs the Orchestrator desktop app.");
 			},
@@ -258,6 +261,8 @@ export const aoBridge: AoBridge =
 			}),
 			historySuggestions: async () => [],
 			historyFavicon: async () => undefined,
+			userBrowser: async () => null,
+			openInUserBrowser: async () => ({ name: "", chrome: false }),
 			clear: async (viewId: string) => ({
 				viewId,
 				url: "",

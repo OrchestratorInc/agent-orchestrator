@@ -5,6 +5,7 @@ import (
 
 	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/agent/copilot"
 	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/agent/kimi"
+	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/agent/minimaxcode"
 	"github.com/aoagents/agent-orchestrator/backend/internal/service/shellterm"
 )
 
@@ -16,12 +17,16 @@ import (
 const qwenAuthInput = "i\x7f/auth\r"
 
 var plans = []Plan{
+	plan("docker-agent", ActionSetup, "Set up Docker Agent", []string{"docker-agent", "setup"}, "Native model setup: connect Anthropic, OpenAI or Google and Docker Agent saves the key in its own env file, which Orchestrator's default configuration uses. To use your own YAML, set AO_DOCKER_AGENT_CONFIG to its absolute path. Authorization is checked by the provider on a live turn.", "https://docs.docker.com/ai/docker-agent/getting-started/quickstart/"),
 	loginMenuPlan("claude-code", "claude-login", nil, "Log in to Claude Code", []string{"claude", "auth", "login"}, "Choose Claude subscription, Anthropic Console, SSO, or setup token", "https://code.claude.com/docs/en/installation"),
 	loginMenuPlan("codex", "codex-login", []string{"--use-default-credential-store"}, "Log in to Codex", []string{"codex", "login"}, "Choose ChatGPT, device code, API key, or access token", "https://github.com/openai/codex"),
 	plan("cursor", ActionLogin, "Log in to Cursor", []string{"cursor-agent", "login"}, "Native browser flow", "https://docs.cursor.com/en/cli/installation"),
 	plan("opencode", ActionLogin, "Log in to OpenCode", []string{"opencode", "auth", "login"}, "Native provider chooser", "https://github.com/anomalyco/opencode"),
 	plan("opencode-v2", ActionLogin, "Log in to OpenCode 2", []string{"opencode", "auth", "login"}, "Native provider chooser", "https://opencode.ai/v2/docs"),
 	plan("mimo-code", ActionLogin, "Log in to MiMo Code", []string{"mimo", "auth", "login"}, "Native provider chooser", "https://mimo.mi.com/docs/en-US/tokenplan/integration/mimo-code"),
+	// MiniMax's TUI /login offers both China and Global accounts; the bare
+	// `mcode login` subcommand defaults to the China region.
+	terminalInputPlan("minimax-code", ActionLogin, "Log in to MiniMax Code", []string{"mcode"}, "/login\r", "Select Open login after MiniMax Code finishes starting", "https://agent.minimax.io/docs/cli/quick-start"),
 	documentationPlan("memcode", "Set up memcode", "Configure a native endpoint and provider credentials before launching Orchestrator", "https://github.com/memcode-ai/memcode"),
 	documentationPlan("aider", "Set up Aider", "Configure provider credentials using Aider's documented environment or configuration-file options", "https://aider.chat/docs/config/api-keys.html"),
 	copilotLoginPlan(),
@@ -60,6 +65,11 @@ var plans = []Plan{
 	plan("openhands", ActionSetup, "Set up OpenHands", []string{"openhands"}, "Native first-run LLM settings; Orchestrator forwards terminal input without persisting or logging the raw input, while OpenHands stores settings in ~/.openhands", "https://docs.openhands.dev/openhands/usage/cli/quick-start"),
 	plan("command-code", ActionLogin, "Log in to Command Code", []string{"command-code", "login"}, "Native browser flow; an API key can be pasted in the terminal", "https://commandcode.ai/docs/quickstart"),
 	plan("hermes", ActionSetup, "Set up Hermes Agent", []string{"hermes", "model"}, "Native provider setup: choose a provider, then paste an API key or finish its OAuth flow", "https://hermes-agent.nousresearch.com/docs"),
+	plan("stakpak", ActionLogin, "Log in to Stakpak", []string{"stakpak", "auth", "login"}, "Native provider login: create a Stakpak API key in the browser, or paste an Anthropic, OpenAI or Gemini key", "https://github.com/stakpak/agent#authentication"),
+	// Native login covers the built-in OpenAI provider. The plan also lists
+	// Open Interpreter in the provider-key catalog, which offers the keys its
+	// generated Anthropic, Gemini, OpenRouter and DeepSeek providers read.
+	plan("open-interpreter", ActionLogin, "Log in to Open Interpreter", []string{"interpreter", "login"}, "Native sign-in for the built-in OpenAI provider; other providers use a saved API key", "https://www.openinterpreter.com/docs/terminal/install"),
 }
 
 func terminalInputPlan(agentID string, action Action, title string, command []string, terminalInput, guidance, docs string) Plan {
@@ -195,6 +205,15 @@ func plan(agentID string, action Action, title string, command []string, guidanc
 	}
 }
 
+// nativeLogoutCommand completes a logout argv whose account scope lives in the
+// harness's own state when the logout runs.
+func nativeLogoutCommand(agentID string, command []string) []string {
+	if agentID == "minimax-code" {
+		return append(append([]string(nil), command...), minimaxcode.LogoutArgs()...)
+	}
+	return command
+}
+
 // Only documented CLI subcommands belong here. An absent entry explicitly
 // means unsupported; do not infer logout from login or delete credential files.
 func logoutCommand(agentID string) []string {
@@ -213,6 +232,10 @@ func logoutCommand(agentID string) []string {
 		return []string{"auggie", "logout"}
 	case "devin":
 		return []string{"devin", "auth", "logout"}
+	case "minimax-code":
+		return []string{"mcode", "logout"}
+	case "open-interpreter":
+		return []string{"interpreter", "logout"}
 	default:
 		return nil
 	}

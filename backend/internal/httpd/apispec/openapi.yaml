@@ -2135,6 +2135,41 @@ paths:
       summary: Refresh the cached local agent adapter catalog
       tags:
       - agents
+  /api/v1/attachment-uploads:
+    post:
+      operationId: uploadAttachment
+      requestBody:
+        content:
+          application/octet-stream: {}
+        required: true
+      responses:
+        "201":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AttachmentUploadResponse'
+          description: Created
+        "400":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Bad Request
+        "500":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Internal Server Error
+        "501":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Not Implemented
+      summary: Stream a file to disk for a later attachment to name by uploadId
+      tags:
+      - sessions
   /api/v1/automations:
     get:
       operationId: listAutomations
@@ -4235,6 +4270,32 @@ paths:
       summary: Validate a selected folder for project import onboarding
       tags:
       - import
+  /api/v1/kept-artifacts:
+    get:
+      operationId: listKeptArtifacts
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ControllersListKeptArtifactsResponse'
+          description: OK
+        "500":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Internal Server Error
+        "501":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Not Implemented
+      summary: 'List the artifacts no session or project lists: those of sessions
+        deleted with their artifacts kept, and of sessions in removed projects'
+      tags:
+      - sessions
   /api/v1/link-preview:
     get:
       operationId: getLinkPreview
@@ -7273,6 +7334,16 @@ paths:
           description: When true, a worktree that is still on disk is cleaned up first,
             the way session cleanup does it; a dirty or locked worktree is never forced
             and refuses the delete.
+          type: boolean
+      - description: When true, the session's artifact files are kept, view only,
+          and listed by GET /api/v1/kept-artifacts until they are deleted one by one.
+          Otherwise they are deleted with the session.
+        in: query
+        name: keepArtifacts
+        schema:
+          description: When true, the session's artifact files are kept, view only,
+            and listed by GET /api/v1/kept-artifacts until they are deleted one by
+            one. Otherwise they are deleted with the session.
           type: boolean
       responses:
         "200":
@@ -13239,6 +13310,47 @@ paths:
       summary: Send a message to a running session's agent
       tags:
       - sessions
+  /api/v1/sessions/{sessionId}/stop-turn:
+    post:
+      operationId: stopSessionTurn
+      parameters:
+      - description: Session identifier, e.g. project-1.
+        in: path
+        name: sessionId
+        required: true
+        schema:
+          description: Session identifier, e.g. project-1.
+          type: string
+      responses:
+        "204":
+          description: No Content
+        "404":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Not Found
+        "409":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Conflict
+        "500":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Internal Server Error
+        "501":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Not Implemented
+      summary: Stop an active turn without ending the session
+      tags:
+      - sessions
   /api/v1/sessions/{sessionId}/workspace/branches:
     get:
       operationId: listSessionWorkspaceBranches
@@ -16302,6 +16414,8 @@ components:
       properties:
         authentication:
           $ref: '#/components/schemas/AgentAuthenticationObservation'
+        canStopTurn:
+          type: boolean
         effectiveReadiness:
           enum:
           - ready
@@ -16529,8 +16643,19 @@ components:
           type: string
         mimeType:
           type: string
+        uploadId:
+          type: string
+      type: object
+    AttachmentUploadResponse:
+      properties:
+        bytes:
+          format: int64
+          type: integer
+        uploadId:
+          type: string
       required:
-      - data
+      - uploadId
+      - bytes
       type: object
     AutoSpawnPause:
       properties:
@@ -18415,12 +18540,46 @@ components:
       - active
       - hasBattery
       type: object
+    ControllersKeptArtifactsView:
+      properties:
+        artifactFiles:
+          items:
+            $ref: '#/components/schemas/SessionArtifact'
+          type: array
+        at:
+          description: When the session was deleted, or last updated.
+          format: date-time
+          type: string
+        projectId:
+          type: string
+        sessionDeleted:
+          type: boolean
+        sessionId:
+          type: string
+        title:
+          type: string
+      required:
+      - sessionId
+      - title
+      - sessionDeleted
+      - at
+      - artifactFiles
+      type: object
     ControllersKillSessionRequest:
       properties:
         callerSessionId:
           type: string
         deleteArtifacts:
           type: boolean
+      type: object
+    ControllersListKeptArtifactsResponse:
+      properties:
+        sets:
+          items:
+            $ref: '#/components/schemas/ControllersKeptArtifactsView'
+          type: array
+      required:
+      - sets
       type: object
     ControllersPairDeviceRequest:
       properties:
@@ -18877,6 +19036,7 @@ components:
           - Merge conflicts
           - Commented
           - Changes requested
+          - Waiting on base PR
           - Mergeable
           - Approved
           - Merged
@@ -20282,11 +20442,15 @@ components:
           - unreal-agent
           - codewhale
           - mimo-code
+          - minimax-code
           - deepseek-harness
           - openhands
           - command-code
+          - docker-agent
           - memcode
           - hermes
+          - stakpak
+          - open-interpreter
           - fake
           type: string
         approvalMode:
@@ -21064,11 +21228,15 @@ components:
           - unreal-agent
           - codewhale
           - mimo-code
+          - minimax-code
           - deepseek-harness
           - openhands
           - command-code
+          - docker-agent
           - memcode
           - hermes
+          - stakpak
+          - open-interpreter
           - cloudflared
           - cua-driver
           type: string
@@ -23021,10 +23189,42 @@ components:
           type: string
         body:
           type: string
+        cancelRequestedAt:
+          format: date-time
+          type:
+          - "null"
+          - string
+        cancelledBy:
+          enum:
+          - user
+          - worker_lifecycle
+          type: string
         createdAt:
           format: date-time
           type: string
         deliveredAt:
+          format: date-time
+          type:
+          - "null"
+          - string
+        endedAt:
+          format: date-time
+          type:
+          - "null"
+          - string
+        failureReason:
+          enum:
+          - preflight_failed
+          - launch_failed
+          - never_started
+          - exited_during_launch
+          - turn_ended_without_submit
+          - process_exited
+          - timed_out
+          - daemon_restarted
+          - cancel_unconfirmed
+          type: string
+        firstActivityAt:
           format: date-time
           type:
           - "null"
@@ -23035,13 +23235,32 @@ components:
           type: string
         id:
           type: string
+        launchingAt:
+          format: date-time
+          type:
+          - "null"
+          - string
         prUrl:
           type: string
         reviewId:
           type: string
         sessionId:
           type: string
+        startedAt:
+          format: date-time
+          type:
+          - "null"
+          - string
         status:
+          enum:
+          - queued
+          - launching
+          - running
+          - cancelling
+          - completed
+          - failed
+          - cancelled
+          - superseded
           type: string
         targetSha:
           type: string
@@ -23768,6 +23987,8 @@ components:
           type: string
         reviewComments:
           type: boolean
+        stackParent:
+          type: integer
         state:
           enum:
           - draft
@@ -25308,11 +25529,15 @@ components:
           - unreal-agent
           - codewhale
           - mimo-code
+          - minimax-code
           - deepseek-harness
           - openhands
           - command-code
+          - docker-agent
           - memcode
           - hermes
+          - stakpak
+          - open-interpreter
           type: string
         issueId:
           type: string

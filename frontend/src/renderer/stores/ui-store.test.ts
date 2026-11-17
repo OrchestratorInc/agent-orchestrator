@@ -27,6 +27,28 @@ describe("sidebar visibility", () => {
 	});
 });
 
+describe("subagents tab availability", () => {
+	beforeEach(() => {
+		useUiStore.setState({ inspectorSessions: {} });
+	});
+
+	it("records per session whether its chat has subagents to list", () => {
+		const session = sessionUiKey("session-1");
+		useUiStore.getState().setSubagentsAvailable(session, true);
+		expect(useUiStore.getState().inspectorSessions[session]?.subagentsAvailable).toBe(true);
+		expect(useUiStore.getState().inspectorSessions[sessionUiKey("session-2")]).toBeUndefined();
+
+		useUiStore.getState().setSubagentsAvailable(session, false);
+		expect(useUiStore.getState().inspectorSessions[session]?.subagentsAvailable).toBe(false);
+	});
+
+	it("leaves the store alone when nothing changes, so a chat without subagents adds no session entry", () => {
+		const before = useUiStore.getState().inspectorSessions;
+		useUiStore.getState().setSubagentsAvailable(sessionUiKey("session-3"), false);
+		expect(useUiStore.getState().inspectorSessions).toBe(before);
+	});
+});
+
 describe("color theme selection", () => {
 	beforeEach(() => {
 		window.localStorage.clear();
