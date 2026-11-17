@@ -812,7 +812,7 @@ func newChatNoticeManager(t *testing.T, relayState domain.TurnState) (*Manager, 
 }
 
 func TestReviewDoneNotice_QueuedFeedbackDoesNotSuppressCompletion(t *testing.T) {
-	for _, settled := range []domain.TurnState{domain.TurnStateCompleted, domain.TurnStateFailed, domain.TurnStateCancelled} {
+	for _, settled := range []domain.TurnState{domain.TurnStateCompleted, domain.TurnStateFailed, domain.TurnStateCancelled, domain.TurnStateInterrupted, domain.TurnStateRecovered} {
 		t.Run(string(settled), func(t *testing.T) {
 			m, st, relay, _ := newChatNoticeManager(t, domain.TurnStateQueued)
 			st.runs = nil
@@ -892,6 +892,30 @@ func TestReviewDoneNotice_FailedFeedbackLeavesCompletionNotice(t *testing.T) {
 	}
 	if got := st.notice("run-1"); got != domain.ReviewWorkerNoticeSent {
 		t.Fatalf("notice = %q after its delivery, want sent", got)
+	}
+}
+
+func TestReviewDoneNotice_InterruptedOrRecoveredQueuedNoticeRetries(t *testing.T) {
+	for _, state := range []domain.TurnState{domain.TurnStateInterrupted, domain.TurnStateRecovered} {
+		t.Run(string(state), func(t *testing.T) {
+			m, st, relay, now := newChatNoticeManager(t, domain.TurnStateQueued)
+			m.SweepReviewDoneNotices(ctx)
+			st.turns["review-done:run-1:0"] = state
+			m.SweepReviewDoneNotices(ctx)
+			if got := st.run("run-1"); got.WorkerNotice != domain.ReviewWorkerNoticePending || got.WorkerNoticeAttempts != 1 {
+				t.Fatalf("unconfirmed %s turn counted as delivery: %+v", state, got)
+			}
+			*now = now.Add(reviewNoticeRetryBase)
+			relay.state = domain.TurnStateRunning
+			m.SweepReviewDoneNotices(ctx)
+			if strings.Join(relay.ids, ",") != "review-done:run-1:0,review-done:run-1:1" || st.notice("run-1") != domain.ReviewWorkerNoticeSent {
+				t.Fatalf("notice not retried after %s: ids=%v run=%+v", state, relay.ids, st.run("run-1"))
+			}
+			New(st, relay).SweepReviewDoneNotices(ctx)
+			if len(relay.ids) != 2 {
+				t.Fatalf("confirmed retry repeated after restart: %v", relay.ids)
+			}
+		})
 	}
 }
 

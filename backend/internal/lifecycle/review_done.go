@@ -85,11 +85,11 @@ func chatNoticeDeliveryState(ctx context.Context, chat reviewNoticeChatStore, id
 		switch turn {
 		case domain.TurnStateQueued:
 			state = chatNoticeQueued
-		case domain.TurnStateFailed, domain.TurnStateCancelled:
+		case domain.TurnStateFailed, domain.TurnStateCancelled, domain.TurnStateInterrupted, domain.TurnStateRecovered:
 			if attempt == run.WorkerNoticeAttempts && state == chatNoticeNotSent {
 				state, failure = chatNoticeFailed, fmt.Sprintf("chat turn %s: %s", turn, turnErr)
 			}
-		default:
+		case domain.TurnStateRunning, domain.TurnStateCompleted:
 			return chatNoticeDelivered, "", nil
 		}
 	}
@@ -452,7 +452,7 @@ func reviewFeedbackClientID(key, sig string, attempt int) string {
 
 func chatReviewFeedbackState(ctx context.Context, chat reviewNoticeChatStore, id domain.SessionID, key, sig string, attempt int) (delivered, queued bool, err error) {
 	turn, _, found, err := chat.ReviewNoticeChatDelivery(ctx, id, reviewFeedbackClientID(key, sig, attempt))
-	return found && turn != domain.TurnStateQueued && turn != domain.TurnStateFailed && turn != domain.TurnStateCancelled,
+	return found && (turn == domain.TurnStateRunning || turn == domain.TurnStateCompleted),
 		found && turn == domain.TurnStateQueued, err
 }
 
