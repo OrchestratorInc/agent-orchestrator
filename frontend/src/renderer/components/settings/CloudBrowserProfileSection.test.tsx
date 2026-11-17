@@ -17,8 +17,6 @@ vi.mock("../../hooks/useCloudOffering", () => ({
 	useCloudOffering: () => ({ org: { id: "org-1" }, browserProfiles: mocks.browserProfiles }),
 }));
 
-const t = (key: string, options?: Record<string, unknown>) => appI18n.t(key, options);
-
 function renderSection() {
 	render(
 		<QueryClientProvider client={new QueryClient({ defaultOptions: { queries: { retry: false }, mutations: { retry: false } } })}>
@@ -37,7 +35,7 @@ describe("CloudBrowserProfileSection", () => {
 	it("shows nothing, and asks nothing, on a control plane without browser profiles", () => {
 		mocks.browserProfiles = false;
 		renderSection();
-		expect(screen.queryByText(t("settings.cloudBrowserProfile.label"))).toBeNull();
+		expect(screen.queryByText(appI18n.t("settings.cloudBrowserProfile.label"))).toBeNull();
 		expect(mocks.client.getMyBrowserProfile).not.toHaveBeenCalled();
 	});
 
@@ -45,34 +43,36 @@ describe("CloudBrowserProfileSection", () => {
 		mocks.client.getMyBrowserProfile.mockResolvedValue({ saved: true });
 		mocks.client.wipeMyBrowserProfile.mockResolvedValue({ wiped: true, runningSessions: 2 });
 		renderSection();
-		expect(await screen.findByText(t("settings.cloudBrowserProfile.saved"))).toBeTruthy();
+		expect(await screen.findByText(appI18n.t("settings.cloudBrowserProfile.saved"))).toBeTruthy();
 		expect(mocks.client.getMyBrowserProfile).toHaveBeenCalledWith("org-1", expect.anything());
 
-		fireEvent.click(screen.getByRole("button", { name: t("settings.cloudBrowserProfile.wipe") }));
+		fireEvent.click(screen.getByRole("button", { name: appI18n.t("settings.cloudBrowserProfile.wipe") }));
 		const dialog = await screen.findByRole("dialog");
-		expect(within(dialog).getByText(t("settings.cloudBrowserProfile.confirmTitle"))).toBeTruthy();
+		expect(within(dialog).getByText(appI18n.t("settings.cloudBrowserProfile.confirmTitle"))).toBeTruthy();
 		expect(mocks.client.wipeMyBrowserProfile).not.toHaveBeenCalled();
 
-		fireEvent.click(within(dialog).getByRole("button", { name: t("settings.cloudBrowserProfile.wipe") }));
+		fireEvent.click(within(dialog).getByRole("button", { name: appI18n.t("settings.cloudBrowserProfile.wipe") }));
 		await waitFor(() => expect(mocks.client.wipeMyBrowserProfile).toHaveBeenCalledWith("org-1"));
-		expect(await screen.findByText(t("settings.cloudBrowserProfile.runningSessions", { count: 2 }))).toBeTruthy();
+		expect(await screen.findByText(appI18n.t("settings.cloudBrowserProfile.runningSessions", { count: 2 }))).toBeTruthy();
 		await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
 	});
 
 	it("cannot wipe when nothing is saved", async () => {
 		mocks.client.getMyBrowserProfile.mockResolvedValue({ saved: false });
 		renderSection();
-		expect(await screen.findByText(t("settings.cloudBrowserProfile.none"))).toBeTruthy();
-		expect(screen.getByRole("button", { name: t("settings.cloudBrowserProfile.wipe") }).hasAttribute("disabled")).toBe(true);
+		expect(await screen.findByText(appI18n.t("settings.cloudBrowserProfile.none"))).toBeTruthy();
+		expect(screen.getByRole("button", { name: appI18n.t("settings.cloudBrowserProfile.wipe") }).hasAttribute("disabled")).toBe(true);
 	});
 
 	it("keeps the dialog open with the failure when the wipe fails", async () => {
 		mocks.client.getMyBrowserProfile.mockResolvedValue({ saved: true });
 		mocks.client.wipeMyBrowserProfile.mockRejectedValue(new Error("network"));
 		renderSection();
-		fireEvent.click(await screen.findByRole("button", { name: t("settings.cloudBrowserProfile.wipe") }));
+		// Wipe is disabled until the saved sign-ins have loaded.
+		expect(await screen.findByText(appI18n.t("settings.cloudBrowserProfile.saved"))).toBeTruthy();
+		fireEvent.click(screen.getByRole("button", { name: appI18n.t("settings.cloudBrowserProfile.wipe") }));
 		const dialog = await screen.findByRole("dialog");
-		fireEvent.click(within(dialog).getByRole("button", { name: t("settings.cloudBrowserProfile.wipe") }));
-		expect(await within(dialog).findByText(t("settings.cloudBrowserProfile.wipeFailed"))).toBeTruthy();
+		fireEvent.click(within(dialog).getByRole("button", { name: appI18n.t("settings.cloudBrowserProfile.wipe") }));
+		expect(await within(dialog).findByText(appI18n.t("settings.cloudBrowserProfile.wipeFailed"))).toBeTruthy();
 	});
 });
