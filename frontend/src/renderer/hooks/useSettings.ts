@@ -44,18 +44,18 @@ export interface Settings {
 
 const settingsReadTimeoutMs = 10_000;
 
-export function useSettings(hostId?: string, enabled = true) {
-	const query = useQuery({
+// Settings gate the cloud sign-in UI, so this query must recover from a
+// transient startup failure. The daemon can still be booting on first fetch
+// ("AO daemon is starting"); without a refetch the whole cloud offering stays
+// hidden until a manual reload. Poll like the workspace query so it self-heals
+// once the daemon is ready.
+const settingsRefetchInterval = 15_000;
+
+function settingsQueryOptions(hostId?: string) {
+	return {
 		queryKey: hostId ? ["settings", hostId] : settingsQueryKey,
-		enabled,
-		// Settings gate the cloud sign-in UI, so this query must recover from a
-		// transient startup failure. The daemon can still be booting on first
-		// fetch ("AO daemon is starting"); without a refetch the whole cloud
-		// offering stays hidden until a manual reload. Poll like the workspace
-		// query so it self-heals once the daemon is ready.
-		refetchInterval: 15_000,
 		retry: 5,
-		queryFn: async ({ signal }): Promise<Settings> => {
+		queryFn: async ({ signal }: { signal: AbortSignal }): Promise<Settings> => {
 			// The read is one SQLite row, but the renderer shares six connections
 			// to the daemon with its event streams and slow probes, so a read can
 			// sit queued behind them. Bound it: a read that never completes would
@@ -85,6 +85,18 @@ export function useSettings(hostId?: string, enabled = true) {
 				accountHandoff: data?.accountHandoff ?? false,
 			};
 		},
+	};
+}
+
+export function useSettings(hostId?: string, enabled = true) {
+	const query = useQuery({
+		...settingsQueryOptions(hostId),
+		enabled,
+		// Each observer runs its own refetch-interval and stale timers, and every
+		// settings update re-arms all of them. The local query has hundreds of
+		// observers, so useSettingsPolling() owns both timers and readers never go
+		// stale on their own. The poll keeps their data at most 15 s old.
+		...(hostId ? { refetchInterval: settingsRefetchInterval } : { staleTime: Infinity }),
 	});
 
 	return {
@@ -92,6 +104,14 @@ export function useSettings(hostId?: string, enabled = true) {
 		isLoading: query.isLoading,
 		error: query.error ? apiErrorMessage(query.error) : undefined,
 	};
+}
+
+/**
+ * Drives the local settings poll from one place. Mounted once by the shell; it
+ * never re-renders its host (notifyOnChangeProps: []), it only keeps the timer.
+ */
+export function useSettingsPolling() {
+	useQuery({ ...settingsQueryOptions(), refetchInterval: settingsRefetchInterval, notifyOnChangeProps: [] });
 }
 
 export function useUpdateSessionInterface() {

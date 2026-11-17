@@ -1,7 +1,7 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { renderHook, waitFor } from "@testing-library/react";
+import { act, renderHook, waitFor } from "@testing-library/react";
 import type { ReactNode } from "react";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 const { getMock } = vi.hoisted(() => ({ getMock: vi.fn() }));
 
@@ -10,7 +10,7 @@ vi.mock("../lib/api-client", () => ({
 	apiErrorMessage: () => "request failed",
 }));
 
-import { useSettings } from "./useSettings";
+import { settingsQueryKey, useSettings, useSettingsPolling } from "./useSettings";
 
 function wrapper(queryClient: QueryClient) {
 	return ({ children }: { children: ReactNode }) => (
@@ -37,5 +37,37 @@ describe("useSettings tracker intake gate", () => {
 
 		await waitFor(() => expect(result.current.settings?.trackerIntakeEnabled).toBe(expected));
 		expect(getMock).toHaveBeenCalledWith("/api/v1/settings", { signal: expect.any(AbortSignal) });
+	});
+});
+
+describe("useSettings polling", () => {
+	afterEach(() => {
+		vi.useRealTimers();
+	});
+
+	it("runs one 15 s timer for the local settings however many components read them", async () => {
+		vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "setInterval", "clearInterval"] });
+		getMock.mockResolvedValue({ data: {}, error: undefined });
+		const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+		const { result } = renderHook(() => {
+			useSettingsPolling();
+			return Array.from({ length: 20 }, () => useSettings());
+		}, { wrapper: wrapper(queryClient) });
+
+		await act(async () => {
+			await vi.advanceTimersByTimeAsync(0);
+		});
+		expect(result.current[0]?.settings).toBeDefined();
+		const observers = queryClient.getQueryCache().find({ queryKey: settingsQueryKey, exact: true })?.observers ?? [];
+		expect(observers).toHaveLength(21);
+		expect(observers.filter((observer) => observer.options.refetchInterval)).toHaveLength(1);
+		// Only the poller keeps a stale timer; the readers never go stale on their own.
+		expect(observers.filter((observer) => observer.options.staleTime !== Infinity)).toHaveLength(1);
+		expect(getMock).toHaveBeenCalledTimes(1);
+
+		await act(async () => {
+			await vi.advanceTimersByTimeAsync(15_000);
+		});
+		expect(getMock).toHaveBeenCalledTimes(2);
 	});
 });
