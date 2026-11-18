@@ -19,6 +19,7 @@ import (
 	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/agent/hookutil"
 	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
 	aoprocess "github.com/aoagents/agent-orchestrator/backend/internal/process"
+	"github.com/aoagents/agent-orchestrator/backend/internal/providerkeys"
 )
 
 const (
@@ -67,11 +68,24 @@ func prepareSharedServer(ctx context.Context, binary string, cfg ports.LaunchCon
 	server, err := ensureSharedServer(ctx, binary, cfg.DataDir, dataHome)
 	if err != nil {
 		if created {
-			removeProjectConfig(cfg.WorkspacePath)
+			removeProjectConfig(cfg.WorkspacePath, content)
 		}
 		return sharedServer{}, err
 	}
 	return server, nil
+}
+
+// providerEnvDrift reports whether the launch's provider credentials differ
+// from the daemon environment. A shared server inherits the daemon environment
+// and the attaching client forwards only its password, so a session whose keys
+// differ must keep a private server that starts with cfg.Env.
+func providerEnvDrift(cfgEnv map[string]string) bool {
+	for name, value := range cfgEnv {
+		if providerkeys.Checkable(name) && os.Getenv(name) != value {
+			return true
+		}
+	}
+	return false
 }
 
 func sharedServerEnv(dataHome string) []string {
@@ -103,6 +117,13 @@ func ensureSharedServer(ctx context.Context, binary, dataDir, dataHome string) (
 	if handle, ok := sharedServerRegistry.byDir[key]; ok {
 		if serverHealthy(handle.server.url, handle.server.password) {
 			return handle.server, nil
+		}
+		if handle.cmd != nil {
+			// This process still owns a server for the data dir. Keep the handle
+			// so a later launch can reuse it if it recovers, and never start a
+			// second server while the first one runs: both would write to the
+			// same data home. This launch falls back to a private server.
+			return sharedServer{}, errors.New("opencode-v2: shared server is running but not healthy")
 		}
 		delete(sharedServerRegistry.byDir, key)
 	}
@@ -281,26 +302,46 @@ func writeProjectConfig(workspacePath, content string) (bool, error) {
 	}
 	dir := filepath.Join(workspacePath, ".opencode")
 	path := filepath.Join(dir, projectConfigFileName)
-	existing, err := os.ReadFile(path)
-	switch {
-	case err == nil:
+	if err := os.MkdirAll(dir, 0o750); err != nil {
+		return false, fmt.Errorf("opencode-v2: create project config dir: %w", err)
+	}
+	// O_EXCL creates the file without replacing one a concurrent writer added
+	// after the absence check. Such a file is still compared, so an identical
+	// config can be shared and a differing one falls back to a private server.
+	file, err := os.OpenFile(path, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o600)
+	if errors.Is(err, os.ErrExist) {
+		existing, readErr := os.ReadFile(path)
+		if readErr != nil {
+			return false, fmt.Errorf("opencode-v2: read project config: %w", readErr)
+		}
 		if string(existing) == content {
 			return false, nil
 		}
 		return false, errors.New("opencode-v2: workspace already has .opencode/opencode.json")
-	case errors.Is(err, os.ErrNotExist):
-	default:
-		return false, fmt.Errorf("opencode-v2: read project config: %w", err)
 	}
-	if err := os.MkdirAll(dir, 0o750); err != nil {
-		return false, fmt.Errorf("opencode-v2: create project config dir: %w", err)
+	if err != nil {
+		return false, fmt.Errorf("opencode-v2: create project config: %w", err)
 	}
-	if err := hookutil.AtomicWriteFile(path, []byte(content), 0o600); err != nil {
+	if _, err := file.WriteString(content); err != nil {
+		_ = file.Close()
+		_ = os.Remove(path)
+		return false, fmt.Errorf("opencode-v2: write project config: %w", err)
+	}
+	if err := file.Close(); err != nil {
+		_ = os.Remove(path)
 		return false, fmt.Errorf("opencode-v2: write project config: %w", err)
 	}
 	return true, nil
 }
 
-func removeProjectConfig(workspacePath string) {
-	_ = os.Remove(filepath.Join(workspacePath, ".opencode", projectConfigFileName))
+// removeProjectConfig deletes the config only while it still holds exactly the
+// content this startup attempt wrote. A file the user or another tool replaced
+// or edited during the startup wait is left in place.
+func removeProjectConfig(workspacePath, content string) {
+	path := filepath.Join(workspacePath, ".opencode", projectConfigFileName)
+	existing, err := os.ReadFile(path)
+	if err != nil || string(existing) != content {
+		return
+	}
+	_ = os.Remove(path)
 }

@@ -5,6 +5,7 @@ package opencodev2
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"strings"
@@ -77,6 +78,11 @@ func (p *Plugin) GetRestoreCommand(ctx context.Context, cfg ports.RestoreConfig)
 	return cmd, err == nil, err
 }
 
+// errProviderEnvDrift marks a launch whose provider credentials differ from the
+// daemon environment. The shared server inherits the daemon environment, so
+// such a launch keeps the private-server path where cfg.Env reaches the server.
+var errProviderEnvDrift = errors.New("opencode-v2: provider credentials differ from the daemon environment")
+
 // The v2 root TUI has no --model/--agent flags. AO normally attaches the TUI
 // to one shared OpenCode 2 server and selects the AO agent through the
 // worktree's project config. A launch that cannot use the shared server keeps
@@ -104,7 +110,16 @@ func command(ctx context.Context, binary string, cfg ports.LaunchConfig, nativeI
 		return nil, fmt.Errorf("opencode-v2: prepare data home: %w", err)
 	}
 	envArgs := []string{"XDG_DATA_HOME=" + dataHome}
-	server, sharedErr := prepareSharedServer(ctx, binary, cfg, dataHome, content)
+	var server sharedServer
+	var sharedErr error
+	if providerEnvDrift(cfg.Env) {
+		sharedErr = errProviderEnvDrift
+	} else {
+		server, sharedErr = prepareSharedServer(ctx, binary, cfg, dataHome, content)
+	}
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
 	var cmd []string
 	if sharedErr == nil {
 		envArgs = append(envArgs, "OPENCODE_PASSWORD="+server.password)

@@ -568,6 +568,113 @@ func TestPrepareSharedServerRemovesProjectConfigWhenServerFails(t *testing.T) {
 	}
 }
 
+func TestV2ProviderEnvDriftKeepsPrivateServer(t *testing.T) {
+	fakeBinary(t, "2.0.0")
+	t.Setenv("ANTHROPIC_API_KEY", "")
+	t.Setenv("OPENCODE_CONFIG_CONTENT", "")
+	dataDir := t.TempDir()
+	workspace := t.TempDir()
+	cmd, err := New().GetLaunchCommand(context.Background(), ports.LaunchConfig{
+		DataDir:       dataDir,
+		WorkspacePath: workspace,
+		SessionID:     "sess/env",
+		Env:           map[string]string{"ANTHROPIC_API_KEY": "session-only-key"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(strings.Join(cmd, "\n"), "--standalone") {
+		t.Fatalf("argv = %#v, want the private-server path", cmd)
+	}
+	if _, statErr := os.Stat(filepath.Join(workspace, ".opencode", projectConfigFileName)); !errors.Is(statErr, os.ErrNotExist) {
+		t.Fatalf("project config written for a drifted launch: %v", statErr)
+	}
+}
+
+func TestWriteProjectConfigDoesNotReplaceExistingFile(t *testing.T) {
+	workspace := t.TempDir()
+	if created, err := writeProjectConfig(workspace, "one"); err != nil || !created {
+		t.Fatalf("created=%v err=%v", created, err)
+	}
+	if created, err := writeProjectConfig(workspace, "one"); err != nil || created {
+		t.Fatalf("identical config: created=%v err=%v", created, err)
+	}
+	if _, err := writeProjectConfig(workspace, "two"); err == nil {
+		t.Fatal("differing config was accepted")
+	}
+	data, err := os.ReadFile(filepath.Join(workspace, ".opencode", projectConfigFileName))
+	if err != nil || string(data) != "one" {
+		t.Fatalf("config = %q, %v", data, err)
+	}
+}
+
+func TestRemoveProjectConfigKeepsEditedFile(t *testing.T) {
+	workspace := t.TempDir()
+	dir := filepath.Join(workspace, ".opencode")
+	if err := os.MkdirAll(dir, 0o750); err != nil {
+		t.Fatal(err)
+	}
+	path := filepath.Join(dir, projectConfigFileName)
+	if err := os.WriteFile(path, []byte("edited by the user"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	removeProjectConfig(workspace, "written by AO")
+	if _, err := os.Stat(path); err != nil {
+		t.Fatalf("edited config removed: %v", err)
+	}
+	removeProjectConfig(workspace, "edited by the user")
+	if _, err := os.Stat(path); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("matching config not removed: %v", err)
+	}
+}
+
+func TestEnsureSharedServerKeepsOwnedHandleWhenProbeFails(t *testing.T) {
+	key := t.TempDir()
+	handle := &serverHandle{
+		server: sharedServer{url: "http://127.0.0.1:1", password: "pw"},
+		cmd:    &exec.Cmd{},
+	}
+	sharedServerRegistry.mu.Lock()
+	sharedServerRegistry.byDir[key] = handle
+	sharedServerRegistry.mu.Unlock()
+	t.Cleanup(func() {
+		sharedServerRegistry.mu.Lock()
+		delete(sharedServerRegistry.byDir, key)
+		sharedServerRegistry.mu.Unlock()
+	})
+
+	if _, err := ensureSharedServer(context.Background(), "unused", key, t.TempDir()); err == nil {
+		t.Fatal("ensureSharedServer accepted an unhealthy owned server")
+	}
+	sharedServerRegistry.mu.Lock()
+	got := sharedServerRegistry.byDir[key]
+	sharedServerRegistry.mu.Unlock()
+	if got != handle {
+		t.Fatal("running server handle was dropped, so a replacement could leak a second server")
+	}
+}
+
+func TestGetAgentHooksIgnoresProjectConfigInItsOwnDir(t *testing.T) {
+	workspace := t.TempDir()
+	if err := New().GetAgentHooks(context.Background(), ports.WorkspaceHookConfig{WorkspacePath: workspace}); err != nil {
+		t.Fatal(err)
+	}
+	configIgnore, err := os.ReadFile(filepath.Join(workspace, ".opencode", ".gitignore"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(configIgnore), "/"+projectConfigFileName) {
+		t.Fatalf(".opencode/.gitignore = %q", configIgnore)
+	}
+	pluginIgnore, err := os.ReadFile(filepath.Join(workspace, ".opencode", "plugins", ".gitignore"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(pluginIgnore), "/"+v2PluginFileName) || strings.Contains(string(pluginIgnore), "/"+projectConfigFileName) {
+		t.Fatalf(".opencode/plugins/.gitignore = %q", pluginIgnore)
+	}
+}
+
 func containsArg(args []string, flag, value string) bool {
 	for i := 0; i+1 < len(args); i++ {
 		if args[i] == flag && args[i+1] == value {
