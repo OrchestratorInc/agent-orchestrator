@@ -188,6 +188,24 @@ describe("refreshRemoteConversation", () => {
 		expect(data.pages[1]).toEqual(history);
 	});
 
+	// A new live page that no longer reaches a running row still carries it, but
+	// did not cover it, so its settled status has to be read on its own.
+	it("rereads a running row that slid out of a new live page", async () => {
+		const newest = { hasMoreBefore: true, oldestSequence: 7, latestSequence: 8, turns: [wireTurn("t3", "completed")], messages: [wireMessage("n1", "t3", 7), wireMessage("n2", "t3", 8)] };
+		const settledRow = { id: "a2", turnId: "t2", sequence: 5, revision: 2, activityKind: "command", status: "completed", summary: "a2", createdAt: "" };
+		getMock
+			.mockResolvedValueOnce(wire({ afterSequence: 3, ...newest }))
+			.mockResolvedValueOnce(wire(newest))
+			.mockResolvedValueOnce(wire({ oldestSequence: 5, latestSequence: 5, turns: [wireTurn("t2", "completed")], activities: [settledRow] }));
+		await refreshRemoteConversation(client, "s1", "box");
+		expect(getMock).toHaveBeenCalledTimes(3);
+		expect(getMock.mock.calls[2][1].params.query).toEqual({ beforeSequence: 6, afterSequence: 4, limit: 1, outputLimit: 512 });
+		const live = client.getQueryData<InfiniteData<ConversationSnapshot>>(key)!.pages[0];
+		expect(live.items.find((item) => item.id === "a2")).toMatchObject({ status: "completed", revision: 2 });
+		// The rows the new page brought are left as it returned them.
+		expect(live.items.filter((item) => item.sequence >= 7).map((item) => item.id)).toEqual(["n1", "n2"]);
+	});
+
 	it("uses the answer of a daemon that ignores afterSequence as the live page", async () => {
 		getMock.mockResolvedValueOnce(wire({ oldestSequence: 4, turns: [wireTurn("t2", "completed")], messages: [wireMessage("m2", "t2", 4)] }));
 		await refreshRemoteConversation(client, "s1", "box");

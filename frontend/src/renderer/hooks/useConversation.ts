@@ -499,7 +499,9 @@ export async function refreshRemoteConversation(queryClient: QueryClient, sessio
 			if (merged && current) {
 				queryClient.setQueryData(remoteConversationRefreshErrorKey(sessionId, hostId), false);
 				queryClient.setQueryData<InfiniteData<ConversationSnapshot>>(key, { ...current, pages: [merged, ...current.pages.slice(1)] });
-				await rereadOlderUnsettledActivities(queryClient, key, sessionId, hostId);
+				// The tail covered every row above the floor, which is below every
+				// running row of the live page, so only older pages can be stale.
+				await rereadUncoveredUnsettledActivities(queryClient, key, sessionId, hostId, floor + 1);
 				return;
 			}
 			latest = wire.afterSequence ? await fetchConversationPage(sessionId, hostId) : tail;
@@ -515,25 +517,29 @@ export async function refreshRemoteConversation(queryClient: QueryClient, sessio
 	}
 	queryClient.setQueryData(remoteConversationRefreshErrorKey(sessionId, hostId), false);
 	applyLiveConversationPage(queryClient, key, latest);
-	await rereadOlderUnsettledActivities(queryClient, key, sessionId, hostId);
+	// Rows that slid out of the new page stay in the live page uncovered.
+	await rereadUncoveredUnsettledActivities(queryClient, key, sessionId, hostId, latest.oldestSequence);
 }
 
-/** At most this many rows of older pages are reread per refresh. */
-const REMOTE_OLDER_UNSETTLED_LIMIT = 20;
+/** At most this many uncovered rows are reread per refresh. */
+const REMOTE_UNCOVERED_UNSETTLED_LIMIT = 20;
 
 /**
- * A refresh rereads only the live page, so a row an older page holds as still
- * in progress keeps that status after the host settles it: a daemon's startup
- * repair settles running rows stranded on finished turns, and those sit in
- * history. Rereads just those rows, one sequence each, and patches the ones that
- * changed. Best effort: a row that cannot be read keeps what its page held.
+ * A refresh reads the live page or its tail, never the rows below what that read
+ * covered: older pages, and rows that slid out of a new live page but stay in it.
+ * A row there held as still in progress keeps that status after the host settles
+ * it, and a daemon's startup repair settles exactly such rows (running notices
+ * stranded on finished turns, which sit in history). Rereads just those rows, one
+ * sequence each, and patches the ones that changed; rows at or after `coveredFrom`
+ * in the live page came with the read and are left alone. Best effort: a row
+ * that cannot be read keeps what its page held.
  */
-async function rereadOlderUnsettledActivities(queryClient: QueryClient, key: QueryKey, sessionId: string, hostId: string): Promise<void> {
-	const older = queryClient.getQueryData<InfiniteData<ConversationSnapshot>>(key)?.pages.slice(1) ?? [];
-	const unsettled = older
-		.flatMap((page) => page.items)
+async function rereadUncoveredUnsettledActivities(queryClient: QueryClient, key: QueryKey, sessionId: string, hostId: string, coveredFrom: number): Promise<void> {
+	const pages = queryClient.getQueryData<InfiniteData<ConversationSnapshot>>(key)?.pages ?? [];
+	const unsettled = pages
+		.flatMap((page, index) => index === 0 ? page.items.filter((item) => item.sequence < coveredFrom) : page.items)
 		.filter((item): item is ConversationActivity => item.kind === "activity" && (item.status === "running" || item.status === "pending"))
-		.slice(0, REMOTE_OLDER_UNSETTLED_LIMIT);
+		.slice(0, REMOTE_UNCOVERED_UNSETTLED_LIMIT);
 	if (!unsettled.length) return;
 	const fresh = new Map<string, ConversationItem>();
 	await Promise.all(unsettled.map(async (item) => {
@@ -550,7 +556,7 @@ async function rereadOlderUnsettledActivities(queryClient: QueryClient, key: Que
 	if (!fresh.size) return;
 	queryClient.setQueryData<InfiniteData<ConversationSnapshot>>(key, (current) => current && {
 		...current,
-		pages: current.pages.map((page, index) => index === 0 ? page : { ...page, items: page.items.map((item) => fresh.get(item.id) ?? item) }),
+		pages: current.pages.map((page) => ({ ...page, items: page.items.map((item) => fresh.get(item.id) ?? item) })),
 	});
 }
 
