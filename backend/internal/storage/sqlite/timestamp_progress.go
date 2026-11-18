@@ -5,6 +5,7 @@ import (
 	"crypto/sha256"
 	"database/sql"
 	"fmt"
+	"maps"
 	"strings"
 )
 
@@ -23,25 +24,11 @@ func prepareTimestampProgress(ctx context.Context, db *sql.DB, columns []timesta
 	if _, err := db.ExecContext(ctx, up); err != nil {
 		return err
 	}
-	rows, err := db.QueryContext(ctx, `SELECT name,sql FROM sqlite_master WHERE type='trigger' AND name GLOB 'ao_timestamp_*'`)
+	existing, err := timestampProgressTriggerDefinitions(ctx, db)
 	if err != nil {
 		return err
 	}
-	defer func() { _ = rows.Close() }()
-	existing := map[string]string{}
-	for rows.Next() {
-		var name, text string
-		if err := rows.Scan(&name, &text); err != nil {
-			return err
-		}
-		existing[name] = text
-	}
-	if err := rows.Err(); err != nil {
-		return err
-	}
-	if err := rows.Close(); err != nil {
-		return err
-	}
+	orphaned := maps.Clone(existing)
 	for i := 0; i < len(columns); {
 		end := i + 1
 		for end < len(columns) && columns[end].table == columns[i].table {
@@ -53,6 +40,7 @@ func prepareTimestampProgress(ctx context.Context, db *sql.DB, columns []timesta
 		triggers := timestampProgressTriggers(group)
 		changed := false
 		for name, text := range triggers {
+			delete(orphaned, name)
 			if existing[name] != text {
 				changed = true
 			}
@@ -85,7 +73,7 @@ func prepareTimestampProgress(ctx context.Context, db *sql.DB, columns []timesta
 			return err
 		}
 	}
-	return nil
+	return dropTimestampProgressTriggers(ctx, db, orphaned)
 }
 
 func timestampProgressTriggers(columns []timestampColumn) map[string]string {
@@ -97,7 +85,7 @@ func timestampProgressTriggers(columns []timestampColumn) map[string]string {
 		old = append(old, strings.ReplaceAll(predicate, quoteIdentifier(column.column), "OLD."+quoteIdentifier(column.column)))
 		fresh = append(fresh, strings.ReplaceAll(predicate, quoteIdentifier(column.column), "NEW."+quoteIdentifier(column.column)))
 	}
-	pending := `(SELECT completed=0 OR rejected=1 FROM timestamp_repair_progress WHERE table_name=` + literal + `)`
+	rejected := `(SELECT rejected FROM timestamp_repair_progress WHERE table_name=` + literal + `)=1`
 	predicates := map[string]string{
 		"insert": strings.Join(fresh, " OR "),
 		"update": strings.Join(append(append([]string{}, old...), fresh...), " OR "),
@@ -107,7 +95,7 @@ func timestampProgressTriggers(columns []timestampColumn) map[string]string {
 	for event, predicate := range predicates {
 		name := fmt.Sprintf("ao_timestamp_%x_%s", sha256.Sum256([]byte(table)), event)
 		out[name] = "CREATE TRIGGER " + quoteIdentifier(name) + " AFTER " + strings.ToUpper(event) + " ON " + quoteIdentifier(table) +
-			" WHEN (SELECT paused FROM timestamp_repair_control WHERE id=1)=0 AND (" + pending + " OR " + predicate + ") BEGIN " +
+			" WHEN (SELECT paused FROM timestamp_repair_control WHERE id=1)=0 AND (" + rejected + " OR " + predicate + ") BEGIN " +
 			"UPDATE timestamp_repair_progress SET generation=generation+1,completed=0 WHERE table_name=" + literal + "; END"
 	}
 	return out
