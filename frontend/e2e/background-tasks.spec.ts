@@ -118,7 +118,8 @@ test("one task rides the composer with a stop, beside a queue it never covers @T
 	await openWorker(page, fixture, stops);
 	await page.goto(`/#/projects/${projectId}/sessions/${sessionId}`);
 	const tab = page.getByRole("region", { name: "Background tasks" });
-	await expect(tab).toContainText("Start the settings dev server");
+	// The first reading can land on the next 5 s poll on a cold page.
+	await expect(tab).toContainText("Start the settings dev server", { timeout: 15_000 });
 	await expect(tab).toContainText("12m");
 	await setQueue(page, false);
 	await expectStacked(page, tab);
@@ -151,7 +152,8 @@ test("several tasks fold to a count and open in place without moving into the qu
 	await page.goto(`/#/projects/${projectId}/sessions/${sessionId}`);
 	const tab = page.getByRole("region", { name: "Background tasks" });
 	const toggle = tab.getByRole("button", { name: /2 running/ });
-	await expect(toggle).toHaveAttribute("aria-expanded", "false");
+	// The first reading can land on the next 5 s poll on a cold page.
+	await expect(toggle).toHaveAttribute("aria-expanded", "false", { timeout: 15_000 });
 	await expect(tab).toContainText("1 failed");
 	// Agents belong to Subagents, and a folded tab offers no stop.
 	await expect(tab).not.toContainText("Audit the catalogs");
