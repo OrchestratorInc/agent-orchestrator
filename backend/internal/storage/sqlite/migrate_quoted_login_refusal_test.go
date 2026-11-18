@@ -11,7 +11,8 @@ import (
 // /login" as a refused login, with the answer's last text block as the error
 // (#8427). The migration marks those turns completed and drops the sign-in
 // demand they left, and keeps real refusals, a refusal after an answer that
-// quoted its text earlier, and other failures.
+// quoted its text earlier or after an earlier message that ended on it, and
+// other failures.
 func TestMigrationRepairsAnswersMarkedAsRefusedLogins(t *testing.T) {
 	db := openMigratedDatabaseCopyNoForeignKeys(t, 20261115072651599)
 	at := time.Date(2026, time.November, 14, 17, 28, 56, 0, time.UTC)
@@ -22,19 +23,26 @@ func TestMigrationRepairsAnswersMarkedAsRefusedLogins(t *testing.T) {
 
 	mustExec(t, db, `INSERT INTO projects (id, path, display_name, registered_at) VALUES ('p', '/tmp/p', 'P', ?);`, at)
 	for i, tc := range []struct {
-		name, state, failureCode, errorMessage, answer, reauthReason string
+		name, state, failureCode, errorMessage string
+		answers                                []string
+		reauthReason                           string
 	}{
 		// The answer streamed, then the adapter failed it with its last text block.
-		{"quoted", "failed", "auth_required", quoted, "Let me check the logs.\n\n" + quoted + "\n", quoted},
+		{"quoted", "failed", "auth_required", quoted, []string{"Let me check the logs.\n\n" + quoted + "\n"}, quoted},
 		// The same, from before turns carried a failure code.
-		{"quoted-before-codes", "failed", "", quoted, quoted, ""},
+		{"quoted-before-codes", "failed", "", quoted, []string{quoted}, ""},
+		// The result spaced the answer's text differently than it streamed.
+		{"quoted-spacing", "failed", "auth_required", "The CLI printed:\n" + refusal, []string{"The CLI printed:\n\n" + refusal}, ""},
 		// Nothing streamed: Claude Code refused the login.
-		{"refused", "failed", "auth_required", refusal, "", refusal},
+		{"refused", "failed", "auth_required", refusal, nil, refusal},
 		// The answer quoted the refusal earlier, then the login really failed.
-		{"refused-after-quote", "failed", "auth_required", refusal, "The CLI said \"" + refusal + "\" earlier. Checking again.", refusal},
+		{"refused-after-quote", "failed", "auth_required", refusal, []string{"The CLI said \"" + refusal + "\" earlier. Checking again."}, refusal},
+		// An earlier message ended on the refusal text, the agent went on, then
+		// the login really failed.
+		{"refused-after-quoted-message", "failed", "auth_required", refusal, []string{"The CLI printed:\n\n" + refusal, "Let me check again."}, refusal},
 		// Another failure that happens to end the answer.
-		{"other-failure", "failed", "usage_limit", quoted, quoted, ""},
-		{"completed", "completed", "", "", quoted, ""},
+		{"other-failure", "failed", "usage_limit", quoted, []string{quoted}, ""},
+		{"completed", "completed", "", "", []string{quoted}, ""},
 	} {
 		session := tc.name + "-1"
 		account := sql.NullString{}
@@ -60,10 +68,10 @@ VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?);`, tc.name, tc.name, session, tc.name+"-provi
 		mustExec(t, db, `
 INSERT INTO conversation_messages (id, conversation_id, turn_id, sequence, role, origin, text, created_at, updated_at)
 VALUES (? || '-prompt', ?, ?, 1, 'user', 'human', 'Were those real logouts?', ?, ?);`, tc.name, tc.name, tc.name, at, at)
-		if tc.answer != "" {
+		for j, answer := range tc.answers {
 			mustExec(t, db, `
 INSERT INTO conversation_messages (id, conversation_id, turn_id, sequence, role, origin, text, created_at, updated_at)
-VALUES (? || '-answer', ?, ?, 2, 'assistant', 'provider', ?, ?, ?);`, tc.name, tc.name, tc.name, tc.answer, at, at)
+VALUES (? || '-answer-' || ?, ?, ?, ?, 'assistant', 'provider', ?, ?, ?);`, tc.name, j, tc.name, tc.name, j+2, answer, at, at)
 		}
 	}
 
@@ -72,12 +80,14 @@ VALUES (? || '-answer', ?, ?, 2, 'assistant', 'provider', ?, ?, ?);`, tc.name, t
 	for turn, want := range map[string]struct {
 		state, failureCode, errorMessage string
 	}{
-		"quoted":              {"completed", "", ""},
-		"quoted-before-codes": {"completed", "", ""},
-		"refused":             {"failed", "auth_required", refusal},
-		"refused-after-quote": {"failed", "auth_required", refusal},
-		"other-failure":       {"failed", "usage_limit", quoted},
-		"completed":           {"completed", "", ""},
+		"quoted":                       {"completed", "", ""},
+		"quoted-before-codes":          {"completed", "", ""},
+		"quoted-spacing":               {"completed", "", ""},
+		"refused":                      {"failed", "auth_required", refusal},
+		"refused-after-quote":          {"failed", "auth_required", refusal},
+		"refused-after-quoted-message": {"failed", "auth_required", refusal},
+		"other-failure":                {"failed", "usage_limit", quoted},
+		"completed":                    {"completed", "", ""},
 	} {
 		var state, failureCode, errorMessage string
 		if err := db.QueryRow(`SELECT state, failure_code, error_message FROM conversation_turns WHERE id = ?`, turn).
@@ -90,9 +100,10 @@ VALUES (? || '-answer', ?, ?, 2, 'assistant', 'provider', ?, ?, ?);`, tc.name, t
 	}
 
 	for conversation, wantDemand := range map[string]bool{
-		"quoted":              false,
-		"refused":             true,
-		"refused-after-quote": true,
+		"quoted":                       false,
+		"refused":                      true,
+		"refused-after-quote":          true,
+		"refused-after-quoted-message": true,
 	} {
 		var demand sql.NullString
 		var reason, lastReason string

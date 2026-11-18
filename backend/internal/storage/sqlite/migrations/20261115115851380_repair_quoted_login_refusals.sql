@@ -7,10 +7,12 @@
 -- completed, as the fixed chat records them, and drop the sign-in demand they
 -- left on the conversation if nothing has replaced it since.
 --
--- A turn is one of these when its error contains the login advice and ends an
--- answer the agent gave in that turn. A real refusal never shows its text as an
--- answer: the adapter sends it only as the turn's failure. The raw provider event
--- archive keeps what the adapter reported.
+-- A turn is one of these when its error contains the login advice and ends the
+-- last answer the agent gave in that turn, ignoring spacing as the chat driver
+-- does. A real refusal never shows its text as an answer: the adapter sends it
+-- only as the turn's failure. An earlier answer that ended on the refusal text
+-- doesn't count, since the refusal can follow it. The raw provider event archive
+-- keeps what the adapter reported.
 CREATE TEMP TABLE quoted_login_refusals AS
 SELECT t.id, t.conversation_id, t.error_message
 FROM conversation_turns t
@@ -22,7 +24,16 @@ WHERE t.state = 'failed'
     FROM conversation_messages m
     WHERE m.turn_id = t.id
       AND m.role = 'assistant'
-      AND substr(rtrim(m.text, ' ' || char(9, 10, 13)), -length(t.error_message)) = t.error_message
+      AND m.sequence = (
+        SELECT max(last.sequence)
+        FROM conversation_messages last
+        WHERE last.turn_id = t.id
+          AND last.role = 'assistant'
+      )
+      AND substr(
+        replace(replace(replace(replace(m.text, ' ', ''), char(9), ''), char(10), ''), char(13), ''),
+        -length(replace(replace(replace(replace(t.error_message, ' ', ''), char(9), ''), char(10), ''), char(13), ''))
+      ) = replace(replace(replace(replace(t.error_message, ' ', ''), char(9), ''), char(10), ''), char(13), '')
   );
 
 -- The demand's reason is the error it was recorded from, and every refused turn
