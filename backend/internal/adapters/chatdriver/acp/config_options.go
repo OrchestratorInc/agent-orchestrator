@@ -125,6 +125,13 @@ func (c *conversation) SetConfigOption(
 	if err != nil {
 		return nil, fmt.Errorf("set ACP session config option %q: %w", id, err)
 	}
+	if id == "model" {
+		// The agent now runs a model it offers, not the unoffered one the
+		// session opened on.
+		c.mu.Lock()
+		c.unofferedModel = ""
+		c.mu.Unlock()
+	}
 	// ACP marks the response's configOptions required and defines it as the full
 	// rebuilt catalog, but some agents accept the change and answer without it.
 	// Replacing wholesale on that emptied the catalog and made the entire

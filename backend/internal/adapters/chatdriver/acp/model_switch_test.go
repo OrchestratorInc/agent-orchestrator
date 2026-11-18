@@ -3,8 +3,13 @@ package acp
 import (
 	"context"
 	"errors"
+	"io"
+	"log/slog"
 	"testing"
 
+	acpsdk "github.com/coder/acp-go-sdk"
+
+	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
 	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
 )
 
@@ -128,5 +133,44 @@ func TestCheckModelSwitchForgetsTheOpeningModelOnceAnotherIsChosen(t *testing.T)
 	}
 	if err := c.checkModelSwitch(ctx, "claude-fable-5-2"); !errors.Is(err, ports.ErrChatConfigOptionInvalid) {
 		t.Fatalf("switch back to the unoffered opening model = %v, want ErrChatConfigOptionInvalid", err)
+	}
+}
+
+// Choosing a model through the composer's config option also ends the
+// opening-model exemption, so switching back to the unoffered opening model
+// is refused instead of silently skipped.
+func TestSetConfigOptionForgetsTheUnofferedOpeningModel(t *testing.T) {
+	agent := &fakeAgent{newConfig: []acpsdk.SessionConfigOption{
+		selectConfigOption("model", "Model", "", "default", "default", "opus"),
+	}}
+	driver := New(Config{
+		Harness:      domain.HarnessClaudeCode,
+		Capabilities: ports.ChatCapabilities{ports.ChatCapabilityStreaming: true},
+		Probe:        func(context.Context) error { return nil },
+		Launch:       func(context.Context, LaunchConfig) (Launch, error) { return Launch{Command: "fake"}, nil },
+		SessionOptions: func(settings ports.ChatTurnSettings) []SessionOption {
+			if settings.Model == "claude-fable-5-2" {
+				return []SessionOption{{ID: "model", Value: settings.Model, Optional: true, Name: "Fable 5.2"}}
+			}
+			return []SessionOption{{ID: "model", Value: settings.Model}}
+		},
+	}, slog.New(slog.NewTextHandler(io.Discard, nil)))
+	driver.useTestProcess(fakeSpawn(agent))
+	started, err := driver.Start(context.Background(), ports.ChatStartConfig{
+		SessionID: domain.SessionID("sess1"), WorkspacePath: t.TempDir(), Model: "claude-fable-5-2",
+	})
+	if err != nil {
+		t.Fatalf("Start on an unoffered model: %v", err)
+	}
+	defer started.Close()
+	conv := started.(*conversation)
+	if err := conv.checkModelSwitch(context.Background(), "claude-fable-5-2"); err != nil {
+		t.Fatalf("send on the opening model: %v, want allowed", err)
+	}
+	if _, err := conv.SetConfigOption(context.Background(), "model", ports.ChatConfigOptionValue{Select: "opus"}); err != nil {
+		t.Fatalf("SetConfigOption(opus): %v", err)
+	}
+	if err := conv.checkModelSwitch(context.Background(), "claude-fable-5-2"); !errors.Is(err, ports.ErrChatConfigOptionInvalid) {
+		t.Fatalf("switch back to the opening model = %v, want ErrChatConfigOptionInvalid", err)
 	}
 }
