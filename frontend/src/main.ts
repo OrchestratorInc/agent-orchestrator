@@ -4441,8 +4441,12 @@ async function handleCloudDeepLinkAndFocus(url: string): Promise<void> {
 	const artifact = parseSharedArtifactLink(url);
 	if (artifact) {
 		await app.whenReady();
-		if (!getShellWebContents()) void createWindow();
-		focusCloudWindow();
+		// Wait for a replacement shell, then focus it by name: a shared-artifact
+		// window left open would otherwise be the first window and take focus.
+		if (!getShellWebContents()) {
+			await createWindow().catch((error: unknown) => console.error("AO: could not reopen the window for a shared artifact", error));
+		}
+		focusMainWindow();
 		const contents = getShellWebContents();
 		if (contents && !contents.isDestroyed() && !contents.isLoading()) contents.send("cloud:openSharedArtifact", artifact);
 		else pendingSharedArtifact = artifact;
