@@ -78,6 +78,7 @@ func readAuggieTranscript(ctx context.Context, root string, paths ...string) (tr
 		return t, err
 	}
 	var items []tagged
+	visibleBytes := 0
 	for _, history := range session.History {
 		if err := ctx.Err(); err != nil {
 			return t, err
@@ -126,10 +127,17 @@ func readAuggieTranscript(ctx context.Context, root string, paths ...string) (tr
 				continue
 			}
 			items = append(items, tagged{Message: message})
+			visibleBytes += len(message.Text)
 		}
-		before := len(items)
-		items = trimVisible(items)
-		t.shortened = t.shortened || len(items) < before
+		if visibleBytes > maxVisibleBytes {
+			before := len(items)
+			items = trimVisible(items)
+			t.shortened = t.shortened || len(items) < before
+			visibleBytes = 0
+			for _, item := range items {
+				visibleBytes += len(item.Text)
+			}
+		}
 	}
 	if !filepath.IsAbs(t.cwd) {
 		return t, errors.New("auggie session has no absolute workspace root")
