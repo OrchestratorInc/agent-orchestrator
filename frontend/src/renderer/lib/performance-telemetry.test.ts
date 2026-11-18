@@ -137,6 +137,20 @@ describe("PerformanceAccumulator", () => {
 		expect(flushed()).toMatchObject({ active_seconds: 300, window_seconds: 1_200, flush_reason: "interval" });
 	});
 
+	it("ends an active stretch at the idle limit when input returns after a gap", async () => {
+		const accumulator = create();
+		accumulator.activity();
+		now += 5 * 60_000;
+		accumulator.checkpoint();
+		now += 2 * 60_000;
+		accumulator.activity();
+		now += 3 * 60_000;
+		await accumulator.flush();
+
+		// Minutes 0 to 5, then 7 to 10; the idle minutes 5 to 7 do not count.
+		expect(flushed()).toMatchObject({ active_seconds: 480, window_seconds: 600 });
+	});
+
 	it("sends nothing for a window without use, and starts a new window", async () => {
 		const accumulator = create();
 		now += 10_000;

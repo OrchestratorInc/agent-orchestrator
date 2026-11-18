@@ -177,6 +177,8 @@ export class PerformanceAccumulator {
 	/** The window is visible and the user did something. */
 	activity(): void {
 		const now = this.now();
+		// After an idle gap the earlier stretch ends at the idle limit, not at this input.
+		if (this.activeSince !== null && now - this.lastActivityAt > IDLE_MS) this.checkpoint();
 		this.lastActivityAt = now;
 		if (this.activeSince === null) this.activeSince = now;
 	}
@@ -476,6 +478,8 @@ export function discardPerformanceWindow(storage: Storage): void {
 
 let stopRuntime: (() => void) | null = null;
 let started = false;
+/** Set once the summary has stopped, so a restart does not replay earlier frames. */
+let restarted = false;
 
 /** Starts the summary for this window once telemetry is enabled. */
 export function startPerformanceTelemetry(): void {
@@ -553,10 +557,12 @@ function startRuntime(): void {
 			if (entry.interactionId) accumulator.recordInteraction(entry.interactionId, entry.duration);
 		}
 	}, { durationThreshold: 40 });
+	// A restart after an opt-out skips the buffered frames: ones from before or
+	// during the opt-out belong to no window.
 	const frameObserver = observe("long-animation-frame", (entries) => {
 		if (!visible()) return;
 		for (const entry of entries as LongFrameEntry[]) accumulator.recordLongFrame(entry.blockingDuration ?? 0, entry.scripts ?? []);
-	}, { buffered: true });
+	}, { buffered: !restarted });
 
 	const checkpoint = window.setInterval(() => {
 		syncInteractionCount();
@@ -576,6 +582,7 @@ function startRuntime(): void {
 
 	stopRuntime = () => {
 		stopRuntime = null;
+		restarted = true;
 		window.clearInterval(checkpoint);
 		window.clearTimeout(flushTimer);
 		eventObserver?.disconnect();

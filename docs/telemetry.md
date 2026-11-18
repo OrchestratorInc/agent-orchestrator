@@ -725,8 +725,9 @@ Properties on `ao.ui.performance_summary`:
   samples these every 10 minutes. The daemon's own process is not included.
 
 A missing count means zero; a missing percentile or cause means nothing
-was measured for it. Measurements count only while the window is
-visible. The summary window and its counts are kept in the app's local storage
+was measured for it. Measurements other than memory and CPU count only while
+the window is visible; memory and CPU cover the whole time, so background use
+is included. The summary window and its counts are kept in the app's local storage
 between launches and replaced after each send. Share usage analytics and the
 kill switch control both events. Turning Share usage analytics off stops the
 summary and deletes the window counted so far, so nothing from before is sent

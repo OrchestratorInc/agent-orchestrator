@@ -3660,7 +3660,10 @@ ipcMain.handle("telemetry:setAnalyticsOptOut", async (event, optedOut: unknown) 
 	const trustedSender = trustedShellWebContents.get(event.sender.id);
 	if (trustedSender !== event.sender || typeof optedOut !== "boolean") throw new Error("invalid analytics opt-out request");
 	const result = await telemetryIdentity.setOptedOut(optedOut);
-	if (optedOut) void flushDaemonUsage();
+	if (optedOut) {
+		void flushDaemonUsage();
+		resourceSampler.clear();
+	}
 	return result;
 });
 ipcMain.handle("telemetry:setCloudUser", (event, userId: unknown) => {
@@ -4645,9 +4648,15 @@ app.whenReady().then(async () => {
 	applyUserAgentFallback(app);
 	launchTiming.mark("appReady");
 	// Memory and CPU for ao.ui.performance_summary. getAppMetrics is cheap; the
-	// renderer reads the kept peaks and average when its window flushes.
-	resourceSampler.sample();
-	setInterval(() => resourceSampler.sample(), 10 * 60_000).unref();
+	// renderer reads the kept peaks and average when its window flushes. Nothing
+	// is kept during an analytics opt-out; the first sample after it only sets
+	// the CPU baseline, so the average leaves the opt-out out.
+	const sampleResources = () => {
+		if (telemetryIdentity.isOptedOut()) resourceSampler.clear();
+		else resourceSampler.sample();
+	};
+	sampleResources();
+	setInterval(sampleResources, 10 * 60_000).unref();
 	// Before any browser partition exists; both run in the background.
 	void sweepTemporaryBrowserPartitions(app.getPath("userData")).then(({ removed, failed }) => {
 		if (removed || failed) console.info(`browser storage: removed ${removed} leftover temporary profiles${failed ? `, ${failed} failed` : ""}`);

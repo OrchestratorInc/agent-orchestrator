@@ -47,8 +47,20 @@ export function createResourceSampler(
 		lastSampleAt = at;
 	}
 
+	function reset(): void {
+		rendererPeakKb = 0;
+		appPeakKb = 0;
+		cpuWeighted = 0;
+		cpuElapsedMs = 0;
+	}
+
 	return {
 		sample,
+		/** Drops what was kept and the CPU baseline, so the next sample starts over. */
+		clear(): void {
+			reset();
+			lastSampleAt = undefined;
+		},
 		/** Samples once more, returns what was kept since the previous take, and starts over. */
 		take(): ResourceSummary | null {
 			sample();
@@ -59,10 +71,7 @@ export function createResourceSampler(
 					cpuAvgPct: cpuElapsedMs > 0 ? Math.round((cpuWeighted / cpuElapsedMs) * 10) / 10 : 0,
 				}
 				: null;
-			rendererPeakKb = 0;
-			appPeakKb = 0;
-			cpuWeighted = 0;
-			cpuElapsedMs = 0;
+			reset();
 			return summary;
 		},
 	};

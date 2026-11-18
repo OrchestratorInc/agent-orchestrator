@@ -27,6 +27,25 @@ describe("createResourceSampler", () => {
 		expect(sampler.take()).toEqual({ rendererPeakMb: 60, appPeakMb: 110, cpuAvgPct: 2 });
 	});
 
+	it("clear drops what was kept and the CPU baseline", () => {
+		let now = 0;
+		let metrics: ProcessMetricLike[] = [metric(1, 900, 0)];
+		const sampler = createResourceSampler(() => metrics, () => 1, () => now);
+		sampler.sample();
+		now = 10 * 60_000;
+		metrics = [metric(1, 900, 50)];
+		sampler.sample();
+
+		sampler.clear();
+		// The first sample after a clear only sets the baseline again.
+		now = 20 * 60_000;
+		metrics = [metric(1, 100, 80)];
+		sampler.sample();
+		now = 30 * 60_000;
+		metrics = [metric(1, 120, 2)];
+		expect(sampler.take()).toEqual({ rendererPeakMb: 120, appPeakMb: 120, cpuAvgPct: 2 });
+	});
+
 	it("reports no renderer peak when the shell process is gone", () => {
 		const sampler = createResourceSampler(() => [metric(1, 100, 0)], () => undefined, () => 0);
 		expect(sampler.take()).toEqual({ rendererPeakMb: 0, appPeakMb: 100, cpuAvgPct: 0 });
