@@ -10,6 +10,9 @@ const fixtures = vi.hoisted(() => ({
 	router: { navigate: vi.fn(), dismissTo: vi.fn() },
 	backHandlers: [] as Array<() => boolean>,
 	web: { reload: vi.fn(), goBack: vi.fn() },
+	// The app in the background or reconnecting: no verified connection.
+	away: false,
+	unreachable: false,
 }));
 
 vi.mock("react-native", async () => {
@@ -56,7 +59,13 @@ vi.mock("./connectionError", () => ({ userFacingError: String }));
 vi.mock("./RouteErrorBoundary", () => ({ RouteErrorBoundary: () => null }));
 vi.mock("./store", () => ({
 	HostScope: ({ children }: { children: React.ReactNode }) => children,
-	useApp: () => ({ config: fixtures.config, currentHostId: fixtures.config.hostId, connection: "open" }),
+	useApp: () => ({
+		config: fixtures.away ? null : fixtures.config,
+		currentHostId: fixtures.config.hostId,
+		connection: fixtures.away ? "closed" : "open",
+		paired: true,
+		unreachable: fixtures.unreachable,
+	}),
 }));
 vi.mock("./ThemeProvider", () => {
 	const theme = new Proxy({}, { get: () => "#888" });
@@ -149,6 +158,8 @@ beforeEach(() => {
 	fixtures.backHandlers.length = 0;
 	fixtures.web.reload.mockClear();
 	fixtures.web.goBack.mockClear();
+	fixtures.away = false;
+	fixtures.unreachable = false;
 });
 
 afterEach(() => {
@@ -397,5 +408,37 @@ describe("app preview controls", () => {
 		await act(async () => banner.findByType("Button" as never).props.onPress());
 		expect(fixtures.web.reload).toHaveBeenCalledTimes(1);
 		expect(screen.root.findAll((node) => node.props.accessibilityRole === "alert")).toHaveLength(0);
+	});
+
+	// The app drops its verified connection every time it goes to the background.
+	describe("through an app switch", () => {
+		const titles = () => nodes("EmptyState").map((node) => node.props.title);
+		const appSwitch = async (unreachable = false) => {
+			fixtures.away = true;
+			fixtures.unreachable = unreachable;
+			await act(async () => { screen.update(<SessionPreviewScreen />); });
+		};
+
+		it("keeps the live browser on screen when the session has an app preview, for it to wait on the connection", async () => {
+			await openPreview();
+			expect(mobileView().disabled).toBe(false);
+			await appSwitch();
+			expect(nodes("BrowserLivePane")).toHaveLength(1);
+			expect(titles()).not.toContain("Machine offline");
+		});
+
+		it("waits for the connection instead of saying offline when no preview loaded yet", async () => {
+			fixtures.getPreview.mockReturnValue(new Promise(() => {}));
+			await openPreview();
+			await appSwitch();
+			expect(titles()).toEqual(["Connecting to this machine…"]);
+		});
+
+		it("says the machine is offline once it really is", async () => {
+			fixtures.getPreview.mockReturnValue(new Promise(() => {}));
+			await openPreview();
+			await appSwitch(true);
+			expect(titles()).toEqual(["Machine offline"]);
+		});
 	});
 });

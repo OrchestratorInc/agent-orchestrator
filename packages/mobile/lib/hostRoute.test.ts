@@ -5,6 +5,7 @@ import {
 	heldPreview,
 	hostRouteMatches,
 	initialSpawnHostId,
+	machineOffline,
 	previewForConfig,
 	promotableHostConfig,
 	selectSpawnHost,
@@ -152,5 +153,14 @@ describe("host-qualified mobile routes", () => {
 		expect(heldPreview(loaded, { ...a, password: "rotated" }, "host-a")).toBeNull();
 		expect(heldPreview(loaded, null, "host-b")).toBeNull();
 		expect(heldPreview(null, a, "host-a")).toBeNull();
+	});
+
+	it("reads a connection an app switch closed as a reconnect, and only a real outage or no pairing as offline", () => {
+		// Backgrounded: the connection is closed on purpose, the link tracker has not given up.
+		expect(machineOffline({ unreachable: false, paired: true })).toBe(false);
+		// A cold start that has not resolved the pairing yet is not offline either.
+		expect(machineOffline({ unreachable: false, paired: null })).toBe(false);
+		expect(machineOffline({ unreachable: true, paired: true })).toBe(true);
+		expect(machineOffline({ unreachable: false, paired: false })).toBe(true);
 	});
 });

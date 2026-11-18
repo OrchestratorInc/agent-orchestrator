@@ -127,4 +127,13 @@ describe("retained-stack host routes", () => {
 		expect(source("../app/review/[sessionId].tsx")).toContain("hostId: routeHostId");
 		expect(source("./PRCard.tsx")).toContain("reviewRouteForPR(session.id, pr, hostId)");
 	});
+
+	// The app closes the connection on purpose every time it goes to the background.
+	it("says a machine is offline only by the shared rule, never for a connection an app switch closed", () => {
+		for (const path of ["../app/preview/[id].tsx", "../app/artifact/[sessionId].tsx", "../app/files/[sessionId]/file.tsx", "../app/shell/[handleId].tsx"]) {
+			const screen = source(path);
+			expect(screen, path).not.toContain('connection === "closed"');
+			expect(screen, path).toMatch(/machineOffline\(\{ unreachable(: machineUnreachable)?, paired \}\)/);
+		}
+	});
 });
