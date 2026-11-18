@@ -9,6 +9,7 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 
 	"github.com/google/uuid"
@@ -32,17 +33,34 @@ func (p *Plugin) NativeSessionConfigDir(ctx context.Context, env map[string]stri
 		}
 		return os.Getenv(key)
 	}
-	if root := lookup("CRUSH_GLOBAL_DATA"); root != "" {
-		return root, nil
-	}
-	if root := lookup("XDG_DATA_HOME"); root != "" {
-		return filepath.Join(root, "crush"), nil
-	}
 	home, err := os.UserHomeDir()
 	if err != nil {
 		return "", err
 	}
-	return filepath.Join(home, ".local", "share", "crush"), nil
+	return NativeDataRoot(home, runtime.GOOS, lookup), nil
+}
+
+// NativeDataRoot matches Crush's global registry root for discovery and probes.
+// Pinned config/load.go:1374-1392 gives both overrides priority on every OS.
+func NativeDataRoot(home, platform string, lookup func(string) string) string {
+	if root := lookup("CRUSH_GLOBAL_DATA"); root != "" {
+		return root
+	}
+	if root := lookup("XDG_DATA_HOME"); root != "" {
+		return filepath.Join(root, "crush")
+	}
+	if platform == "windows" {
+		root := lookup("LOCALAPPDATA")
+		if root == "" {
+			profile := lookup("USERPROFILE")
+			if profile == "" {
+				profile = home
+			}
+			root = filepath.Join(profile, "AppData", "Local")
+		}
+		return filepath.Join(root, "crush")
+	}
+	return filepath.Join(home, ".local", "share", "crush")
 }
 
 func crushNativeDB(path string) (*sql.DB, error) {

@@ -9,11 +9,13 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"time"
 
 	_ "modernc.org/sqlite" // read-only Crush project databases
 
+	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/agent/crush"
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
 )
 
@@ -23,13 +25,7 @@ type crushProject struct {
 }
 
 func crushRoot(home string) string {
-	if root := os.Getenv("CRUSH_GLOBAL_DATA"); root != "" {
-		return root
-	}
-	if root := os.Getenv("XDG_DATA_HOME"); root != "" {
-		return filepath.Join(root, "crush")
-	}
-	return filepath.Join(home, ".local", "share", "crush")
+	return crush.NativeDataRoot(home, runtime.GOOS, os.Getenv)
 }
 
 func crushProjects(root string) ([]crushProject, error) {

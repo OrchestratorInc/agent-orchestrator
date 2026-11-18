@@ -26,13 +26,9 @@ func (p *Plugin) RelocateImportedSession(ctx context.Context, r ports.ImportedSe
 	if err := ctx.Err(); err != nil {
 		return err
 	}
-	id, err := uuid.Parse(r.NativeSessionID)
-	if err != nil || !filepath.IsAbs(r.LaunchCWD) || filepath.Base(r.TranscriptPath) != id.String() {
-		return errors.New("invalid crush import relocation")
-	}
-	source := filepath.Dir(r.TranscriptPath)
-	if filepath.Base(source) != "crush.db" || !filepath.IsAbs(source) {
-		return errors.New("invalid crush source database")
+	id, source, err := crushImportIdentity(r)
+	if err != nil {
+		return err
 	}
 	dir := filepath.Join(r.LaunchCWD, ".crush")
 	if err := os.MkdirAll(dir, 0o700); err != nil {
@@ -52,7 +48,7 @@ func (p *Plugin) RelocateImportedSession(ctx context.Context, r ports.ImportedSe
 	} else if !errors.Is(err, os.ErrNotExist) {
 		return err
 	}
-	// A temp file in the destination directory keeps the final rename atomic.
+	// A temp file beside the destination permits exclusive whole-file publication.
 	file, err := os.CreateTemp(dir, ".ao-import-*.db")
 	if err != nil {
 		return err
@@ -63,7 +59,7 @@ func (p *Plugin) RelocateImportedSession(ctx context.Context, r ports.ImportedSe
 		return err
 	}
 	defer func() { _ = os.Remove(tmp) }()
-	if err := copyCrushConversation(ctx, source, tmp, id.String()); err != nil {
+	if err := copyCrushConversation(ctx, source, tmp, id, r.LaunchCWD); err != nil {
 		return err
 	}
 	if err := os.Chmod(tmp, 0o600); err != nil {
@@ -79,14 +75,28 @@ func (p *Plugin) RelocateImportedSession(ctx context.Context, r ports.ImportedSe
 	} else if !errors.Is(err, os.ErrNotExist) {
 		return err
 	}
-	if err := os.Rename(tmp, target); err != nil {
+	// A link publishes the complete DB exclusively. Rename would replace a
+	// database created by another writer after the final existence check.
+	if err := os.Link(tmp, target); err != nil {
 		return err
 	}
 	return nil
 }
 
-// Local config wins over a user-level data_directory override. Preserve the
-// hook-installed context and model settings while pinning only this workspace.
+func crushImportIdentity(r ports.ImportedSessionRelocation) (string, string, error) {
+	id, err := uuid.Parse(r.NativeSessionID)
+	if err != nil || !filepath.IsAbs(r.LaunchCWD) || filepath.Base(r.TranscriptPath) != id.String() {
+		return "", "", errors.New("invalid crush import relocation")
+	}
+	source := filepath.Dir(r.TranscriptPath)
+	if filepath.Base(source) != "crush.db" || !filepath.IsAbs(source) {
+		return "", "", errors.New("invalid crush source database")
+	}
+	return id.String(), source, nil
+}
+
+// Preserve hook context and models while recording the workspace store. The
+// imported restore's --data-dir also outranks .crushrc/crushrc configuration.
 func pinCrushImportStore(workspace, dir string) error {
 	root, err := os.OpenRoot(workspace)
 	if err != nil {
@@ -120,7 +130,7 @@ func pinCrushImportStore(workspace, dir string) error {
 	return hookutil.AtomicWriteFile(filepath.Join(workspace, ".crush.json"), data, 0o600)
 }
 
-func copyCrushConversation(ctx context.Context, source, target, id string) error {
+func copyCrushConversation(ctx context.Context, source, target, id, workspace string) error {
 	src, err := crushNativeDB(source)
 	if err != nil {
 		return err
@@ -197,6 +207,15 @@ func copyCrushConversation(ctx context.Context, source, target, id string) error
 				return err
 			}
 		}
+	}
+	// This private-copy ownership record is committed with the copied rows,
+	// before publication. A failed AO checkpoint can then recover only its
+	// proven copy, never an arbitrary pre-existing native database.
+	if _, err := write.ExecContext(ctx, `CREATE TABLE IF NOT EXISTS ao_import_provenance (singleton INTEGER PRIMARY KEY CHECK (singleton = 1), version INTEGER NOT NULL, native_id TEXT NOT NULL, source_path TEXT NOT NULL, launch_cwd TEXT NOT NULL)`); err != nil {
+		return err
+	}
+	if _, err := write.ExecContext(ctx, `INSERT INTO ao_import_provenance (singleton, version, native_id, source_path, launch_cwd) VALUES (1, 1, ?, ?, ?)`, id, filepath.Clean(source), filepath.Clean(workspace)); err != nil {
+		return err
 	}
 	return write.Commit()
 }

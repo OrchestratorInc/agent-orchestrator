@@ -57,11 +57,66 @@ func TestCrushImportRelocationKeepsSourceAndRefusesExistingCopy(t *testing.T) {
 	if err := p.RelocateImportedSession(context.Background(), r); err == nil {
 		t.Fatal("existing destination must be refused")
 	}
+	if _, err := p.PrepareImportedSession(context.Background(), r); err != nil {
+		t.Fatalf("preparer could not recover its own published copy: %v", err)
+	}
+	other := r
+	other.NativeSessionID = "87654321-1234-1234-1234-123456789012"
+	other.TranscriptPath = filepath.Join(source, other.NativeSessionID)
+	if _, err := p.PrepareImportedSession(context.Background(), other); err == nil {
+		t.Fatal("accepted a prepared database for another selected session")
+	}
+	other = r
+	other.TranscriptPath = filepath.Join(t.TempDir(), "crush.db", id)
+	if _, err := p.PrepareImportedSession(context.Background(), other); err == nil {
+		t.Fatal("accepted a prepared database for another source")
+	}
+	if _, err := copyDB.Exec(`DROP TABLE ao_import_provenance`); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := p.PrepareImportedSession(context.Background(), r); err == nil {
+		t.Fatal("accepted an existing database without AO ownership proof")
+	}
 	if err := copyDB.QueryRow(`SELECT COUNT(*) FROM messages`).Scan(&count); err != nil || count != 2 {
 		t.Fatalf("later turns = %d, %v", count, err)
 	}
 	if err := db.QueryRow(`SELECT COUNT(*) FROM messages`).Scan(&count); err != nil || count != 2 {
 		t.Fatalf("source = %d, %v", count, err)
+	}
+}
+
+func TestCrushRelocationConcurrentPublicationHasOneWinner(t *testing.T) {
+	source := filepath.Join(t.TempDir(), "crush.db")
+	db, err := sql.Open("sqlite", source)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = db.Close() }()
+	id := "12345678-1234-1234-1234-123456789012"
+	if _, err := db.Exec(`CREATE TABLE sessions (id TEXT PRIMARY KEY, parent_session_id TEXT); INSERT INTO sessions VALUES ('12345678-1234-1234-1234-123456789012', NULL)`); err != nil {
+		t.Fatal(err)
+	}
+	r := ports.ImportedSessionRelocation{NativeSessionID: id, TranscriptPath: filepath.Join(source, id), LaunchCWD: t.TempDir()}
+	start := make(chan struct{})
+	results := make(chan error, 4)
+	for range 4 {
+		go func() {
+			<-start
+			results <- New().RelocateImportedSession(context.Background(), r)
+		}()
+	}
+	close(start)
+	winners := 0
+	for range 4 {
+		if <-results == nil {
+			winners++
+		}
+	}
+	if winners != 1 {
+		t.Fatalf("published %d copies; want exactly one exclusive winner", winners)
+	}
+	if _, err := New().PrepareImportedSession(context.Background(), r); err != nil {
+		t.Fatalf("published winner is not resumable: %v", err)
 	}
 }
 

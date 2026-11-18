@@ -12,7 +12,15 @@ var _ ports.AgentImportedSessionPreparer = (*Plugin)(nil)
 // PrepareImportedSession copies and pins the native store before AO checkpoints
 // it. Later launch retries reuse that checkpoint instead of relocating again.
 func (p *Plugin) PrepareImportedSession(ctx context.Context, r ports.ImportedSessionRelocation) (ports.NativeSessionRef, error) {
-	if err := p.RelocateImportedSession(ctx, r); err != nil {
+	prepared, err := preparedCrushCopy(ctx, r)
+	if err != nil {
+		return ports.NativeSessionRef{}, err
+	}
+	if prepared {
+		if err := pinCrushImportStore(r.LaunchCWD, filepath.Join(r.LaunchCWD, ".crush")); err != nil {
+			return ports.NativeSessionRef{}, err
+		}
+	} else if err := p.RelocateImportedSession(ctx, r); err != nil {
 		return ports.NativeSessionRef{}, err
 	}
 	return ports.NativeSessionRef{
