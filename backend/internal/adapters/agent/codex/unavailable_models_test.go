@@ -161,3 +161,42 @@ func TestLastTurnFailureDoesNotRecordARolloutWithoutAnAccountHome(t *testing.T) 
 		t.Fatal("a rollout with no account home was recorded for the computer's own account")
 	}
 }
+
+// Two spawn checks can race to forget one refusal. The later listing must
+// still be kept, so a delayed refusal dated between the two cannot restore it.
+func TestForgetKeepsTheLatestListingAfterAnotherCheckDroppedTheRefusal(t *testing.T) {
+	home := filepath.Join(t.TempDir(), "codex")
+	store := NewUnavailableModels("")
+	base := time.Date(2026, 11, 18, 10, 0, 0, 0, time.UTC)
+	if err := store.Record(home, "gpt-5.2-codex", base); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.Forget(home, "gpt-5.2-codex", base.Add(time.Minute)); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.Forget(home, "gpt-5.2-codex", base.Add(3*time.Minute)); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.Record(home, "gpt-5.2-codex", base.Add(2*time.Minute)); err != nil {
+		t.Fatal(err)
+	}
+	if store.Unavailable(home, "gpt-5.2-codex") {
+		t.Fatal("a refusal older than the latest listing restored the model")
+	}
+	// An older second listing must not move the observation back.
+	if err := store.Forget(home, "gpt-5.2-codex", base.Add(time.Minute)); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.Record(home, "gpt-5.2-codex", base.Add(2*time.Minute)); err != nil {
+		t.Fatal(err)
+	}
+	if store.Unavailable(home, "gpt-5.2-codex") {
+		t.Fatal("an older listing moved the observation back")
+	}
+	if err := store.Record(home, "gpt-5.2-codex", base.Add(4*time.Minute)); err != nil {
+		t.Fatal(err)
+	}
+	if !store.Unavailable(home, "gpt-5.2-codex") {
+		t.Fatal("a refusal newer than every listing must count")
+	}
+}
