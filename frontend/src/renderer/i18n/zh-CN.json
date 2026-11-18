@@ -3859,8 +3859,6 @@
 	"remote.hostIncompatible": "Orchestrator 版本不兼容。请更新此电脑和远程主机上的 Orchestrator。",
 	"remote.updateAO": "更新 Orchestrator",
 	"remote.hostBehind": "运行的版本比这台电脑旧",
-	"remote.hostVersionMismatch": "此主机运行 v{{host}}，这台电脑运行 v{{local}}。",
-	"remote.updateHost": "更新主机",
 	"remote.autoUpdateHosts": "自动更新远程主机",
 	"remote.autoUpdateHostsDescription": "已保存的主机版本比这台电脑旧时会自动更新。",
 	"remote.hostUnauthorized": "主机拒绝了此设备。请在主机上获取新的配对码后重新配对。",

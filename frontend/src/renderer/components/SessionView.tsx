@@ -24,7 +24,6 @@ import { CenterPane } from "./CenterPane";
 import { AgentAvatar } from "./AgentAvatar";
 import { SplitCloseFocusedContext, SplitHiddenTabKeysContext } from "./split-pane-context";
 import { agentLabel } from "../lib/agent-options";
-import { useHostVersion } from "../hooks/useHostUpdates";
 import { useCloudAgentSwitch } from "../hooks/useCloudAgentSwitch";
 import { SessionTabAgentMenuContext, SessionTabMenuButton, TabSplitMenuContext, type SessionTabAgentMenu, type TabMenuSpec, type TabSplitActions } from "./TabContextMenu";
 import { useSplitPanesEnabled } from "../lib/split-panes";
@@ -505,7 +504,6 @@ export function SessionView({ sessionId, cloudOrgId, projectId, hostId }: Sessio
 	const uiSessionId = sessionUiKey(sessionId, hostId);
 	const sessionTopbarRoute = useMemo(() => ({ hostId, projectId, sessionId }), [hostId, projectId, sessionId]);
 	const { baseUrl: remoteBase, label: hostLabel } = useHostConnection(hostId);
-	const hostVersion = useHostVersion(hostId);
 	const refreshWorkspaces = useCallback(
 		() => queryClient.invalidateQueries({ queryKey: workspaceQueryKeyForHost(hostId) }),
 		[hostId, queryClient],
@@ -2401,7 +2399,7 @@ export function SessionView({ sessionId, cloudOrgId, projectId, hostId }: Sessio
 			className="session-topbar-session-chrome workspace-topbar-actions flex shrink-0 items-center"
 			data-compact-session-chrome="false"
 		>
-			{hostLabel ? <span className="max-w-40 truncate px-3 text-xs text-muted-foreground" title={hostVersion ? `${hostId} · v${hostVersion.replace(/^v/i, "")}` : hostId}>{hostLabel}</span> : null}
+			{hostLabel ? <span className="max-w-40 truncate px-3 text-xs text-muted-foreground" title={hostId}>{hostLabel}</span> : null}
 			{/* On a session shared with this person: what they can do in it, and through which team. */}
 			{session ? <SessionAccessTag session={session} /> : null}
 			{/* A shared project's pull requests and merge requests, on its orchestrator. */}

@@ -19,7 +19,6 @@ type HostUpdateState = {
 
 type Store = {
 	byUrl: Record<string, HostUpdateState>;
-	urlByHost: Record<string, string>;
 	localVersion?: string;
 	patch: (url: string, change: Partial<HostUpdateState>) => void;
 	retain: (urls: string[]) => void;
@@ -27,7 +26,6 @@ type Store = {
 
 export const useHostUpdateStore = create<Store>((set) => ({
 	byUrl: {},
-	urlByHost: {},
 	patch: (url, change) => set((state) => ({ byUrl: { ...state.byUrl, [url]: { ...(state.byUrl[url] ?? { view: null }), ...change } } })),
 	retain: (urls) => set((state) => ({ byUrl: Object.fromEntries(Object.entries(state.byUrl).filter(([url, entry]) => urls.includes(url) || entry.updating)) })),
 }));
@@ -112,19 +110,14 @@ export function autoUpdateHosts(): void {
 	}
 }
 
-export function useHostVersion(hostId: string | undefined): string | undefined {
-	return useHostUpdateStore((state) => (hostId ? state.byUrl[state.urlByHost[hostId] ?? ""]?.view?.version : undefined) || undefined);
-}
-
 export function useHostUpdatePolling(hosts: RemoteHost[]): void {
 	const localVersion = useAppVersion();
 	useEffect(() => { useHostUpdateStore.setState({ localVersion }); }, [localVersion]);
 	const readable = hosts.filter((host) => host.failureReason !== "unauthorized" && (host.status === "connected" || host.failureReason === "incompatible"));
-	const key = [...readable.map((host) => `${host.url}\n${host.status}`), ...hosts.map((host) => `${host.hostId}\n${host.url}`)].join("\0");
+	const key = readable.map((host) => `${host.url}\n${host.status}`).join("\0");
 	useEffect(() => {
 		const urls = readable.map((host) => host.url);
 		useHostUpdateStore.getState().retain(urls);
-		useHostUpdateStore.setState({ urlByHost: Object.fromEntries(hosts.map((host) => [host.hostId, host.url])) });
 		const readAll = () => { for (const url of urls) void refreshHostUpdate(url); };
 		readAll();
 		const timer = setInterval(() => { if (!document.hidden) readAll(); }, REFRESH_MS);

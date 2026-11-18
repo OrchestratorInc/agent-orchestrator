@@ -3972,8 +3972,6 @@
 	"remote.hostIncompatible": "Les versions d’Orchestrator sont incompatibles. Mettez à jour Orchestrator sur cet ordinateur et sur l’hôte distant.",
 	"remote.updateAO": "Mettre Orchestrator à jour",
 	"remote.hostBehind": "Exécute une version plus ancienne que cet ordinateur",
-	"remote.hostVersionMismatch": "Cet hôte exécute v{{host}}, cet ordinateur v{{local}}.",
-	"remote.updateHost": "Mettre l’hôte à jour",
 	"remote.autoUpdateHosts": "Mettre à jour automatiquement les hôtes distants",
 	"remote.autoUpdateHostsDescription": "Les hôtes enregistrés se mettent à jour d’eux-mêmes lorsqu’ils exécutent une version plus ancienne que cet ordinateur.",
 	"remote.hostUnauthorized": "L’hôte a refusé cet appareil. Appairez-le de nouveau avec un nouveau code d’appairage de l’hôte.",

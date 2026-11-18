@@ -3877,8 +3877,6 @@
 	"remote.hostIncompatible": "Die Orchestrator-Versionen sind nicht kompatibel. Aktualisieren Sie Orchestrator auf diesem Computer und dem Remote-Host.",
 	"remote.updateAO": "Orchestrator aktualisieren",
 	"remote.hostBehind": "Läuft mit einer älteren Version als dieser Computer",
-	"remote.hostVersionMismatch": "Dieser Host nutzt v{{host}}, dieser Computer v{{local}}.",
-	"remote.updateHost": "Host aktualisieren",
 	"remote.autoUpdateHosts": "Remote-Hosts automatisch aktualisieren",
 	"remote.autoUpdateHostsDescription": "Gespeicherte Hosts aktualisieren sich selbst, wenn sie eine ältere Version als dieser Computer ausführen.",
 	"remote.hostUnauthorized": "Der Host hat dieses Gerät abgelehnt. Koppeln Sie es mit einem neuen Kopplungscode vom Host erneut.",

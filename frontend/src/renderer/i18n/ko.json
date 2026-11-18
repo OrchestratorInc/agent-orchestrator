@@ -3877,8 +3877,6 @@
 	"remote.hostIncompatible": "Orchestrator 버전이 호환되지 않습니다. 이 컴퓨터와 원격 호스트의 Orchestrator를 업데이트하세요.",
 	"remote.updateAO": "Orchestrator 업데이트",
 	"remote.hostBehind": "이 컴퓨터보다 이전 버전입니다",
-	"remote.hostVersionMismatch": "이 호스트는 v{{host}}, 이 컴퓨터는 v{{local}}입니다.",
-	"remote.updateHost": "호스트 업데이트",
 	"remote.autoUpdateHosts": "원격 호스트 자동 업데이트",
 	"remote.autoUpdateHostsDescription": "저장된 호스트가 이 컴퓨터보다 이전 버전이면 자동으로 업데이트됩니다.",
 	"remote.hostUnauthorized": "호스트가 이 기기를 거부했습니다. 호스트에서 새 페어링 코드를 받아 다시 페어링하세요.",

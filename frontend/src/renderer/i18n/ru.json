@@ -4059,8 +4059,6 @@
 	"remote.hostIncompatible": "Версии Orchestrator несовместимы. Обновите Orchestrator на этом компьютере и удалённом хосте.",
 	"remote.updateAO": "Обновить Orchestrator",
 	"remote.hostBehind": "Работает на более старой версии, чем этот компьютер",
-	"remote.hostVersionMismatch": "На этом хосте v{{host}}, на этом компьютере v{{local}}.",
-	"remote.updateHost": "Обновить хост",
 	"remote.autoUpdateHosts": "Автоматически обновлять удалённые хосты",
 	"remote.autoUpdateHostsDescription": "Сохранённые хосты обновляются сами, если работают на более старой версии, чем этот компьютер.",
 	"remote.hostUnauthorized": "Хост отклонил это устройство. Выполните сопряжение заново с новым кодом сопряжения от хоста.",

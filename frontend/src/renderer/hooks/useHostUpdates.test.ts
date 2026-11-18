@@ -33,7 +33,7 @@ describe("hostUpdateAction", () => {
 
 describe("host update flow", () => {
 	beforeEach(() => {
-		useHostUpdateStore.setState({ byUrl: {}, urlByHost: {} });
+		useHostUpdateStore.setState({ byUrl: {} });
 		vi.restoreAllMocks();
 	});
 

@@ -3861,8 +3861,6 @@
 	"remote.updateAO": "Orchestrator uygulamasını güncelle",
 	"remote.autoUpdateHostsDescription": "Kayıtlı makineler, bu bilgisayardan daha eski bir sürüm çalıştırdığında kendilerini günceller.",
 	"remote.autoUpdateHosts": "Uzak makineleri otomatik güncelle",
-	"remote.updateHost": "Makineyi güncelle",
-	"remote.hostVersionMismatch": "Bu makinede v{{host}}, bu bilgisayarda v{{local}} çalışıyor.",
 	"remote.hostBehind": "Bu bilgisayardan daha eski bir sürüm çalıştırıyor",
 	"remote.hostUnauthorized": "Makine bu cihazı reddetti. Makineden yeni bir eşleştirme kodu alıp yeniden eşleştirin.",
 	"remote.hostNotDaemon": "Bu adres bir Orchestrator makinesine ait değil. Adresini ve parolasını kontrol edin.",
