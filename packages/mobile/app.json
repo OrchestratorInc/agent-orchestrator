@@ -57,7 +57,6 @@
 		},
 		"android": {
 			"package": "aoagents.dev",
-			"allowBackup": false,
 			"googleServicesFile": "./google-services.json",
 			"adaptiveIcon": {
 				"backgroundImage": "./assets/android-icon-background.png",
