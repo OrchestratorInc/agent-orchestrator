@@ -92,13 +92,17 @@ describe("buildSessionSearchCommands", () => {
 
 	it("names the machine a remote session is on, opens it there, and offers no local resume command", () => {
 		const [row] = buildSessionSearchCommands([{ ...hit, hostId: "h_azure", machineLabel: "AzureLinux" }], "flaky");
-		expect(row?.subtitle?.startsWith("AzureLinux · ")).toBe(true);
+		// The machine is its own badge beside the title, so a long title cannot
+		// truncate it away; the subtitle carries the rest.
+		expect(row?.machine).toBe("AzureLinux");
+		expect(row?.subtitle).not.toContain("AzureLinux");
 		expect(row?.action).toMatchObject({ kind: "open-search-result", hostId: "h_azure", sessionId: "proj-1" });
 		// The resume command talks to this machine's daemon.
 		expect(row?.secondaryAction).toBeUndefined();
 		const [local] = buildSessionSearchCommands([hit], "flaky");
 		expect(local?.id).not.toBe(row?.id);
 		expect(local?.action).not.toHaveProperty("hostId");
+		expect(local?.machine).toBeUndefined();
 	});
 
 	it("gives every row a stable, distinct id even for repeated session matches", () => {
