@@ -57,7 +57,7 @@ func (s *Store) ListPRFactsForSessions(ctx context.Context, ids []domain.Session
 		return nil, fmt.Errorf("list pr facts for sessions: %w", err)
 	}
 	for _, r := range rows {
-		out[r.SessionID] = append(out[r.SessionID], prFactsFromBatchRow(r))
+		out[r.SessionID] = append(out[r.SessionID], prFactsFromListRow(gen.ListPRFactsBySessionRow(r)))
 	}
 	for _, id := range ids {
 		if out[id] == nil {
@@ -67,6 +67,8 @@ func (s *Store) ListPRFactsForSessions(ctx context.Context, ids []domain.Session
 	return out, nil
 }
 
+// prFactsFromListRow maps a PR-facts row. The batch query selects the same
+// columns in the same order, so its rows convert to this type.
 func prFactsFromListRow(r gen.ListPRFactsBySessionRow) domain.PRFacts {
 	return domain.PRFacts{
 		URL:                      r.URL,
@@ -88,30 +90,9 @@ func prFactsFromListRow(r gen.ListPRFactsBySessionRow) domain.PRFacts {
 		ExternalComments:         r.ExternalComments,
 		ExternalApproved:         r.ExternalApproved,
 		ExternalChangesRequested: r.ExternalChangesRequested,
-	}
-}
-
-func prFactsFromBatchRow(r gen.ListPRFactsBySessionsRow) domain.PRFacts {
-	return domain.PRFacts{
-		URL:                      r.URL,
-		Number:                   int(r.Number),
-		Draft:                    r.PRState == domain.PRStateDraft,
-		Merged:                   r.PRState == domain.PRStateMerged,
-		Closed:                   r.PRState == domain.PRStateClosed,
-		CI:                       r.CIState,
-		Review:                   r.ReviewDecision,
-		Mergeability:             r.Mergeability,
-		ReviewComments:           r.ReviewComments,
-		SourceBranch:             r.SourceBranch,
-		TargetBranch:             r.TargetBranch,
-		HeadSHA:                  r.HeadSha,
-		UpdatedAt:                r.UpdatedAt,
-		StateChangedAt:           timeFromNull(r.StateChangedAt),
-		CIChangedAt:              timeFromNull(r.CIObservedAt),
-		LastReviewAt:             timeFromNull(r.LastReviewAt),
-		ExternalComments:         r.ExternalComments,
-		ExternalApproved:         r.ExternalApproved,
-		ExternalChangesRequested: r.ExternalChangesRequested,
+		StackParent:              int(r.StackParentNumber),
+		Host:                     r.Host,
+		Repo:                     r.Repo,
 	}
 }
 

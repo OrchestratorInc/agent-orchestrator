@@ -71,6 +71,29 @@ it("asks a remote session's own host about its account", async () => {
 	expect(hostsAsked.every((host) => host === "box-a")).toBe(true);
 });
 
+it("lists a session on the CLI login once, not beside the saved account holding the same login", async () => {
+	getMock.mockImplementation((path: string) => Promise.resolve({ data:
+		path === "/api/v1/agents/accounts" ? { accounts: [
+			{ id: "device-claude", provider: "claude", device: true, email: "a@example.com", orgId: "org-a", signedIn: true, sameLoginAs: "acct-a" },
+			{ id: "acct-a", provider: "claude", email: "a@example.com", orgId: "org-a", signedIn: true, default: true },
+			{ id: "acct-b", provider: "claude", email: "b@example.com", orgId: "org-b", signedIn: true },
+		] }
+		: path === "/api/v1/agents/accounts/sessions/{sessionId}" ? { claude: "device-claude" }
+		: {} }));
+	const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+	const { result, unmount } = renderHook(() => useSessionAccountSwitch(session("s-cli")), {
+		wrapper: ({ children }) => <QueryClientProvider client={queryClient}>{children}</QueryClientProvider>,
+	});
+
+	await waitFor(() => expect(result.current.choice?.value).toBe("device-claude"));
+	expect(result.current.choice?.options.map(({ id, label }) => [id, label])).toEqual([["device-claude", "a@example.com"], ["acct-b", "b@example.com"]]);
+
+	await waitFor(() => expect(queryClient.isFetching()).toBe(0));
+	unmount();
+	queryClient.clear();
+	await new Promise((resolve) => setTimeout(resolve, 0));
+});
+
 it("keeps a rejected move's reason so the composer can show it", async () => {
 	getMock.mockImplementation((path: string) => Promise.resolve({ data:
 		path === "/api/v1/agents/accounts" ? { accounts: [

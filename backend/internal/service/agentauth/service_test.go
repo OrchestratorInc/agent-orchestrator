@@ -554,6 +554,40 @@ func TestLogoutUsesAdapterExecutableAndNeverLoginLauncher(t *testing.T) {
 	}
 }
 
+// MiniMax's bare logout targets the China account, so a saved Global login
+// must reach the CLI as --region global.
+func TestMiniMaxLogoutTargetsSavedRegion(t *testing.T) {
+	for _, tc := range []struct {
+		name, preference string
+		args             []string
+	}{
+		{"global", `{"version":1,"regions":{"prod":"en"}}`, []string{"logout", "--region", "global"}},
+		{"no preference", "", []string{"logout"}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			profile := t.TempDir()
+			t.Setenv("MINIMAX_DATA_DIR", profile)
+			if tc.preference != "" {
+				path := filepath.Join(profile, "preferences", "mcode-region.json")
+				if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
+					t.Fatal(err)
+				}
+				if err := os.WriteFile(path, []byte(tc.preference), 0o600); err != nil {
+					t.Fatal(err)
+				}
+			}
+			opener := &recordingTerminalOpener{terminal: shellterm.ShellTerminal{HandleID: "logout-terminal"}}
+			svc := NewWithAgentResolver(nil, managedExecutableResolver{agentID: "minimax-code", path: "/managed/mcode"}, opener, "")
+			if _, err := svc.Logout(context.Background(), "minimax-code"); err != nil {
+				t.Fatal(err)
+			}
+			if want := append([]string{"/managed/mcode"}, tc.args...); !reflect.DeepEqual(opener.input.Argv, want) {
+				t.Fatalf("argv = %v, want %v", opener.input.Argv, want)
+			}
+		})
+	}
+}
+
 func TestLogoutRejectsUnknownUnsupportedAndMissingExecutable(t *testing.T) {
 	for _, tc := range []struct{ agent, code string }{
 		{"not-a-harness", "AGENT_AUTH_TARGET_UNKNOWN"},

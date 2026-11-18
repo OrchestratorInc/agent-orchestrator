@@ -1,7 +1,7 @@
 # ao session
 
-Manage agent sessions: list, inspect, rename, kill, restore, exit or resume an
-agent, switch harnesses, clean up, and claim PRs.
+Manage agent sessions: list, inspect, interrupt, rename, kill, restore, exit or resume an
+agent, switch harnesses, clean up, claim PRs, and turn automatic fixing on or off.
 
 ## In-app session links
 
@@ -193,6 +193,34 @@ ao session kill mer-3
 
 ---
 
+### ao session interrupt
+
+Request a stop of an active turn without terminating the session or workspace.
+Terminal UI supports Claude Code, Codex, and Gemini through their declared
+Ctrl+C binding, which the agent can ignore. Other harnesses are refused. A
+terminal draft, a session with no turn in flight, or a turn already sent a stop
+is refused. Chat sessions use their existing turn cancellation.
+
+**Syntax:**
+```
+ao session interrupt <id> [flags]
+```
+
+**Flags:**
+
+| Flag | Meaning | Default / Required |
+|---|---|---|
+| `-p, --project string` | Project id to scope the lookup | - |
+
+Use this first when a worker is stuck in a no-progress turn. Some agents report
+idle between steps, and some report nothing after a stop and read idle only once
+stale activity is reconciled (about 2 minutes). Recheck `ao session get <id>` for
+up to about 3 minutes and wait until it reads idle on two checks a few seconds
+apart before sending new instructions; use `kill` only when it is still active
+after that.
+
+---
+
 ### ao session rename
 
 Rename a worker session. The project orchestrator cannot be renamed, including by itself; the daemon refuses with `ORCHESTRATOR_RENAME_UNSUPPORTED`.
@@ -324,8 +352,8 @@ ao session cleanup --dry-run
 ### ao session claim-pr
 
 Attach an existing PR to the current Orchestrator-managed session, or target another session explicitly.
-Use this for authorized implementation continuation. Reviewing someone else's PR
-does not require or permit a claim; use a normal review-only worker session.
+Use this for authorized implementation continuation, or with `--review` to
+review someone else's PR (see below).
 
 **Syntax:**
 ```
@@ -343,7 +371,22 @@ Git fail after replacing the index and working files. Verify `git status`, the
 branch, and `HEAD` after switching, even if Git reports failure. Stop on
 unexpected changes; continuing in a different worktree leaves Orchestrator displaying
 the original checkout. Review-only work should use the PR revision view or
-read-only revision diffs without claiming or switching the session's checkout.
+read-only revision diffs without switching the session's checkout.
+
+A review claim (`--review`) is the same claim made for review instead of work.
+It implies `--no-takeover`: it never takes the PR from another active session,
+which would lose the PR's feedback. Before claiming, it turns off the session's "Automatically fix CI failures" and
+"Automatically fix review comments" switches and its native auto-review, so the
+session gets none of the PR's CI failures, merge conflicts, or review comments,
+and Orchestrator's reviewer never starts on it. These are the switches the
+session inspector shows, and they cover every PR the session owns, so use a
+session that owns no other PR. If the claim is refused, the switches go back to
+what they were. The PR is not the user's: do not commit, push, rebase, or
+otherwise change it unless the user explicitly asks.
+
+To take the PR over, claim it again with `--review=false`. That turns CI and
+review-comment fixing back on and leaves native auto-review off. Review comments
+posted while fixing was off are never sent, so read them on the PR.
 
 **Flags:**
 
@@ -352,6 +395,7 @@ read-only revision diffs without claiming or switching the session's checkout.
 | `--json` | Output as JSON | - |
 | `--no-takeover` | Refuse if another active session owns the PR | - |
 | `-p, --project string` | Project id to scope the lookup | - |
+| `--review` | Claim to review the PR: turn off automatic CI and review-comment fixing and native auto-review first. Implies `--no-takeover`. `--review=false` turns fixing back on to take the PR over | Switches unchanged |
 
 **Examples:**
 
@@ -369,3 +413,14 @@ ao session claim-pr mer-3 88
 # Claim PR 88 for the current worker but refuse if another session owns it
 ao session claim-pr 88 --no-takeover
 ```
+
+```bash
+# Review someone else's PR 88 from the current worker
+ao session claim-pr 88 --no-takeover --review
+```
+
+```bash
+# Take that PR over
+ao session claim-pr 88 --review=false
+```
+

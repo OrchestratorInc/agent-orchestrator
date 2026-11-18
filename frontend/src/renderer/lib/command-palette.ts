@@ -536,7 +536,12 @@ export function buildProjectActions(workspace: WorkspaceSummary, ctx: ProjectAct
 	}
 	if (!isStandalone && !isAgent) {
 		row("settings", t("shell.projectSettings"), { kind: "navigate", target: { to: "/projects/$projectId/settings", params: { projectId: workspace.id } } });
-		if (ctx.remove) row("remove", t("shell.removeProjectTitle"), { kind: "run", run: ctx.remove });
+		// Matches the sidebar: a Cloud project is deleted for good, and a project
+		// shared from another organization is its organization's to delete.
+		if (ctx.remove && !workspace.shared) {
+			const title = workspace.kind === CLOUD_PROJECT_KIND ? t("shell.deleteCloudProjectTitle") : t("shell.removeProjectTitle");
+			row("remove", title, { kind: "run", run: ctx.remove });
+		}
 	}
 	return items;
 }

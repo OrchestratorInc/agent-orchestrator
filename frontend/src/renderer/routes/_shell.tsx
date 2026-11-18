@@ -343,7 +343,7 @@ function ShellLayout() {
 	useWorkspacePolling();
 	const workspaceQuery = useWorkspaceQuery();
 	const workspaces = workspaceQuery.data ?? [];
-	const { hosts: remoteHosts, listed: remoteHostsListed, settled: remoteHostsSettled, refresh: refreshRemoteHosts } = useRemoteHosts();
+	const { hosts: remoteHosts, listed: remoteHostsListed, settled: remoteHostsSettled, retryNow: retryRemoteHostsNow } = useRemoteHosts();
 	const remoteHostIdsKey = remoteHosts.map((host) => host.hostId).join("\0");
 	const remoteHostIds = useMemo(() => remoteHostIdsKey ? remoteHostIdsKey.split("\0") : [], [remoteHostIdsKey]);
 	// What each host showed last stays only for the hosts still saved, and shows
@@ -362,10 +362,6 @@ function ShellLayout() {
 	}, [queryClient, refusedRemoteHostKey]);
 	const { data: remoteWorkspaces, failedHostIds: remoteFailedHostIds, loadedProjectHostIds: remoteLoadedProjectHostIds, loadedSessionHostIds: remoteLoadedSessionHostIds } = useRemoteWorkspaces({ cachedHostIds: remoteHostIds });
 	useAutoSpawnPauseNotice([...(workspaceQuery.data ?? EMPTY_PAUSE_PROJECTS), ...(remoteWorkspaces ?? EMPTY_PAUSE_PROJECTS)]);
-	const failedRemoteHostKey = remoteFailedHostIds.join("\0");
-	useEffect(() => {
-		if (failedRemoteHostKey) void refreshRemoteHosts();
-	}, [failedRemoteHostKey, refreshRemoteHosts]);
 	// Global shortcut listeners need the latest workspace list, but recreating
 	// those subscriptions for every streamed activity update is avoidable.
 	const workspacesRef = useRef(workspaces);
@@ -642,6 +638,17 @@ const replacementErrorCount = Object.keys(orchestratorReplacementErrors).length;
 		!usesPreviewWorkspaceData &&
 		!daemonStatus.code &&
 		(daemonStatus.state !== "ready" || workspaceStartupState === "loading" || (!workspaceQuery.isSuccess && !workspaceQuery.isError));
+	// Launch timing: the second frame runs once the first frame that shows the
+	// workspace is on screen. A daemon failure is not a launch, and main logs the
+	// first report only, so nothing is reported while one is showing.
+	const workspaceShown = !isStartupLoading && !daemonStatus.code && workspaceQuery.data !== undefined;
+	useEffect(() => {
+		if (!workspaceShown) return;
+		let frame = requestAnimationFrame(() => {
+			frame = requestAnimationFrame(() => aoBridge.app.reportSessionsShown());
+		});
+		return () => cancelAnimationFrame(frame);
+	}, [workspaceShown]);
 	// The startup loader renders no sidebar, so measure again once the shell
 	// mounts it. Otherwise the strip keeps the 240px default and its fill
 	// paints over the center panel's top-left corner beside a narrower sidebar.
@@ -1111,9 +1118,9 @@ const replacementErrorCount = Object.keys(orchestratorReplacementErrors).length;
 		[openProjectSettings],
 	);
 	const retryRemoteHosts = useCallback(() => {
-		void refreshRemoteHosts();
+		void retryRemoteHostsNow();
 		void queryClient.invalidateQueries({ queryKey: ["remote-workspaces"] });
-	}, [queryClient, refreshRemoteHosts]);
+	}, [queryClient, retryRemoteHostsNow]);
 	// A new handler on every shell render would rebuild the sidebar context and
 	// re-render every row button that reads it.
 	const handleSidebarOpenChange = useCallback((open: boolean) => {

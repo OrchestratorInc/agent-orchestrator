@@ -32,8 +32,8 @@ vi.mock("../../../hooks/useAgentModelsQuery", () => ({
 }));
 
 describe("HarnessModelsPanel", () => {
-	it.each(["direct", undefined] as const)("explains Mastra Code model-ID entry when its native catalog is freeform (%s)", async (customModelEntry) => {
-		h.catalog = { models: [], allowCustom: true, customModelEntry };
+	it("explains Mastra Code model-ID entry when its native catalog is freeform", async () => {
+		h.catalog = { models: [], allowCustom: true, customModelEntry: "direct" };
 		render(
 			<QueryClientProvider client={new QueryClient()}>
 				<HarnessModelsPanel agentId="mastra-code" installed needsLogin={false} onOpenAccount={() => {}} />

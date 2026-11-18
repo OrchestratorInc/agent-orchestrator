@@ -21,8 +21,8 @@ const approvedLiterals: Record<string, readonly string[]> = {
 	],
 	"components/CenterPane.tsx": ["px"],
 	"components/CreateProjectFlow.tsx": [
-		"my-workspace/", "my-project", "web-app", "main", "github_pat_…", "ghp_...",
-		"https://github.com/owner/repo", "GitHub PAT",
+		"my-workspace/", "my-project", "web-app", "main",
+		"https://github.com/owner/repo",
 	],
 	"components/DaemonStartupLoader.tsx": ["Orchestrator"],
 	// Technical branch/prefix examples moved with the common settings fields.
