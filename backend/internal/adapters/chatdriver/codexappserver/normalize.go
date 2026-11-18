@@ -720,9 +720,9 @@ func codexProviderFailure(turnErr codexproto.TurnError) error {
 	if strings.TrimSpace(turnErr.Message) == "" && strings.TrimSpace(detail) == "" && errors.Is(cause, errCodexUsageLimitExceeded) {
 		return ports.NewChatProviderFailure("Usage limit exceeded", "", cause)
 	}
-	// A model the ChatGPT account cannot use: remember it so the next session
-	// on it is refused before it starts, and say what to do now.
-	if codexagent.RecordUnavailableModelFrom(turnErr.Message, time.Now()) != "" && strings.TrimSpace(detail) == "" {
+	// A model the ChatGPT account cannot use: say what to do now. The
+	// conversation records the refusal for its account.
+	if _, unavailable := codexagent.ParseUnavailableModel(turnErr.Message); unavailable && strings.TrimSpace(detail) == "" {
 		detail = codexagent.UnavailableModelHint
 	}
 	failure := ports.NewChatProviderFailure(turnErr.Message, detail, cause)

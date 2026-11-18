@@ -61,7 +61,10 @@ func (p *Plugin) LastTurnFailure(ctx context.Context, transcriptPath string) (po
 	}
 	failure, ok := lastCodexTurnFailure(tail)
 	if ok {
-		RecordUnavailableModelFrom(failure.Message, failure.At)
+		// The rollout lives under the account's CODEX_HOME, which names whose
+		// refusal this is. Reading an old tail again cannot revive a refusal
+		// the account has since cleared: Record ignores it.
+		RecordUnavailableModelFrom(AccountHomeOfRollout(path), failure.Message, failure.At)
 	}
 	return failure, ok, nil
 }

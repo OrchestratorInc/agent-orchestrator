@@ -14,6 +14,7 @@ import (
 
 	"github.com/google/uuid"
 
+	codexagent "github.com/aoagents/agent-orchestrator/backend/internal/adapters/agent/codex"
 	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/chatdriver/codexappserver/codexproto"
 	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/chatdriver/commanddetail"
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
@@ -51,8 +52,11 @@ type conversation struct {
 	threadID        string
 	historyParentID string
 	providerScopeID string
-	readOnly        bool
-	disableNetwork  bool
+	// codexHome is the CODEX_HOME the app-server runs under, naming the Codex
+	// account its refusals belong to. Empty is the computer's own.
+	codexHome      string
+	readOnly       bool
+	disableNetwork bool
 	// launchMode is the permission mode the thread started or resumed with;
 	// a turn without its own approval setting runs under it.
 	launchMode ports.PermissionMode
@@ -195,6 +199,11 @@ func (c *conversation) pump() {
 		// as an absolute instant and has to become a remaining duration, and a
 		// normalizer that reads the clock itself cannot be tested deterministically.
 		for _, ev := range normalizeNotification(n, now) {
+			if ev.Err != nil {
+				// A model this account cannot use: refuse the next session on it
+				// before it starts (#4518).
+				codexagent.RecordUnavailableModelFrom(c.codexHome, ev.Err.Error(), now)
+			}
 			ev = usageLimits.decorate(ev, now)
 			threadID := ev.ProviderConversationID
 			if threadID == "" {
