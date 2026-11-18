@@ -21,8 +21,10 @@ func TestIdentityTrailer(t *testing.T) {
 	if got, want := id.Trailer(), "Co-authored-by: Orchestrator <42+orchestrator[bot]@users.noreply.github.com>"; got != want {
 		t.Fatalf("Trailer() = %q, want %q", got, want)
 	}
-	if Bot.UserID == 0 || Bot.Slug == "" {
-		t.Fatalf("Bot identity is not configured: %+v", Bot)
+	// Local sessions credit the same App bot as Cloud sessions, with the exact
+	// trailer line Cloud writes.
+	if got, want := Bot.Trailer(), "Co-authored-by: orchestrator-inc[bot] <315948587+orchestrator-inc[bot]@users.noreply.github.com>"; got != want {
+		t.Fatalf("Bot.Trailer() = %q, want Cloud's %q", got, want)
 	}
 }
 
