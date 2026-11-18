@@ -99,12 +99,12 @@ func (p *primeRestorePlan) SourceNativeSessionID() string { return p.sourceID }
 
 // Ready requires native file evidence; the manager also fences the live launch
 // and reads its current terminal screen. This taskless plan never sends input.
-func (p *primeRestorePlan) Ready(ctx context.Context, _ string, _ string) (bool, error) {
+func (p *primeRestorePlan) Ready(ctx context.Context, _, _ string) (bool, error) {
 	return p.verify(ctx)
 }
 
 // Restored rechecks the exact native identity, history and worktree before adoption.
-func (p *primeRestorePlan) Restored(ctx context.Context, _ string, _ string) (bool, error) {
+func (p *primeRestorePlan) Restored(ctx context.Context, _, _ string) (bool, error) {
 	return p.verify(ctx)
 }
 

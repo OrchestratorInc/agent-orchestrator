@@ -6,6 +6,7 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+	"time"
 
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
 )
@@ -24,6 +25,7 @@ func TestPrimeAgentImportsNativeTreeAsTerminal(t *testing.T) {
 	}
 	store := &importStore{projects: []domain.ProjectRecord{{ID: "synthetic", Path: cwd}}}
 	service := New(store, "", func(domain.AgentHarness) bool { return true })
+	service.now = func() time.Time { return time.Date(2026, 10, 9, 0, 0, 0, 0, time.UTC) }
 	service.roots = map[domain.AgentHarness]string{domain.HarnessPrimeAgent: root}
 	preview, err := service.Scan(context.Background())
 	if err != nil || len(preview.Candidates) != 1 {
