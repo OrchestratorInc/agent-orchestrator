@@ -11,6 +11,7 @@ type memorySource struct {
 	mu     sync.Mutex
 	events []Event
 	reads  int
+	readAt []time.Time
 }
 
 func (m *memorySource) add(seqs ...int64) {
@@ -25,6 +26,7 @@ func (m *memorySource) EventsAfter(_ context.Context, after int64, limit int) ([
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	m.reads++
+	m.readAt = append(m.readAt, time.Now())
 	var out []Event
 	for _, e := range m.events {
 		if e.Seq > after && len(out) < limit {
@@ -67,5 +69,39 @@ func TestPollerWithWakePollsOnSignalAndDrainsFullBatches(t *testing.T) {
 		case <-time.After(5 * time.Second):
 			t.Fatalf("event %d not delivered after one signal", want)
 		}
+	}
+}
+
+func TestPollerWithWakeSpacesPollsOnBackToBackSignals(t *testing.T) {
+	src := &memorySource{}
+	wake := make(chan struct{}, 1)
+	p := NewPoller(src, NewBroadcaster(), PollerConfig{Interval: 50 * time.Millisecond, Wake: wake})
+	p.fallback = time.Hour
+	ctx, cancel := context.WithCancel(context.Background())
+	done := p.Start(ctx)
+	defer func() { cancel(); <-done }()
+
+	reads := func() []time.Time {
+		src.mu.Lock()
+		defer src.mu.Unlock()
+		return append([]time.Time(nil), src.readAt...)
+	}
+	wake <- struct{}{}
+	deadline := time.Now().Add(5 * time.Second)
+	for len(reads()) < 1 {
+		if time.Now().After(deadline) {
+			t.Fatal("first signal did not poll")
+		}
+		time.Sleep(time.Millisecond)
+	}
+	wake <- struct{}{}
+	for len(reads()) < 2 {
+		if time.Now().After(deadline) {
+			t.Fatal("second signal did not poll")
+		}
+		time.Sleep(time.Millisecond)
+	}
+	if gap := reads()[1].Sub(reads()[0]); gap < 50*time.Millisecond {
+		t.Fatalf("polls %v apart, want at least the 50ms interval", gap)
 	}
 }

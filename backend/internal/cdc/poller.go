@@ -102,6 +102,7 @@ func (p *Poller) Start(ctx context.Context) <-chan struct{} {
 		t := time.NewTicker(tick)
 		defer t.Stop()
 		full := false
+		var last time.Time
 		for {
 			if !full {
 				select {
@@ -111,19 +112,21 @@ func (p *Poller) Start(ctx context.Context) <-chan struct{} {
 				case <-p.wake:
 				}
 			}
+			// Space polls during a burst of writes. Waiting before the poll, not
+			// after it, keeps an idle poller from waking a second time.
+			if wait := p.interval - time.Since(last); p.wake != nil && wait > 0 {
+				select {
+				case <-ctx.Done():
+					return
+				case <-time.After(wait):
+				}
+			}
+			last = time.Now()
 			n, err := p.poll(ctx)
 			if err != nil {
 				p.logger.Error("cdc poller: poll failed", "err", err)
 			}
 			full = err == nil && n == p.batch
-			if p.wake != nil {
-				// Space polls during a burst of writes.
-				select {
-				case <-ctx.Done():
-					return
-				case <-time.After(p.interval):
-				}
-			}
 		}
 	}()
 	return done
