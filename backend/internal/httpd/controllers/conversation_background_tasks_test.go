@@ -70,6 +70,24 @@ func TestBackgroundTasksRoutesPreserveAvailabilityAndErrors(t *testing.T) {
 	}
 }
 
+func TestBackgroundTasksRouteSendsACommandOnlyWhenItDiffersFromTheDescription(t *testing.T) {
+	svc := &backgroundTasksService{reading: chatsvc.BackgroundTaskSnapshot{SessionID: "s", Availability: "ready", Tasks: []ports.ChatBackgroundTask{
+		{ID: "codex", Kind: "shell", Description: "npm run dev", Command: "npm run dev", State: "running"},
+		{ID: "claude", Kind: "shell", Description: "Start the dev server", Command: "npm run dev", State: "running"},
+	}}}
+	router := chi.NewRouter()
+	(&controllers.ConversationsController{Svc: svc}).Register(router)
+	r := httptest.NewRecorder()
+	router.ServeHTTP(r, httptest.NewRequest(http.MethodGet, "/sessions/s/background-tasks", nil))
+	var reading controllers.BackgroundTasksResponse
+	if err := json.Unmarshal(r.Body.Bytes(), &reading); err != nil || len(reading.Tasks) != 2 {
+		t.Fatalf("response=%s err=%v", r.Body, err)
+	}
+	if reading.Tasks[0].Command != "" || reading.Tasks[1].Command != "npm run dev" {
+		t.Fatalf("commands = %q, %q", reading.Tasks[0].Command, reading.Tasks[1].Command)
+	}
+}
+
 func TestStopBackgroundTaskRouteMapsOutcomes(t *testing.T) {
 	svc := &backgroundTasksService{}
 	router := chi.NewRouter()
