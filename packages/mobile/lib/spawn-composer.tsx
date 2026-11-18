@@ -75,10 +75,13 @@ export function SpawnComposer({ prompt, onChangePrompt, placeholder, attachments
 
 	// One round button that follows the prompt, as the chat's: it stops the mic
 	// while it is open, starts the task once there is something written, and
-	// otherwise dictates; a device that cannot dictate keeps Start, which says
+	// otherwise dictates; a device with no recogniser keeps Start, which says
 	// what is missing when pressed. Dictation is hands-free and drops the
 	// keyboard.
-	const canDictate = voice.state !== "unavailable" && voice.state !== "denied";
+	// A denied mic still dictates from here: its tap opens Settings, where the
+	// microphone can be turned back on.
+	const canDictate = voice.state !== "unavailable";
+	const micDenied = voice.state === "denied";
 	const primary = busy ? "send" : listening ? "stopDictation" : transcribing ? "transcribing" : promptEmpty && canDictate ? "dictate" : "send";
 	const roundButton = primary === "send"
 		? <Pressable
@@ -97,7 +100,7 @@ export function SpawnComposer({ prompt, onChangePrompt, placeholder, attachments
 		</Pressable>
 		: <Pressable
 			accessibilityRole="button"
-			accessibilityLabel={primary === "stopDictation" ? "Stop dictating" : primary === "transcribing" ? "Transcribing" : "Dictate the task"}
+			accessibilityLabel={primary === "stopDictation" ? "Stop dictating" : primary === "transcribing" ? "Transcribing" : micDenied ? "Turn on microphone access in Settings" : "Dictate the task"}
 			accessibilityState={{ disabled: transcribing, busy: transcribing }}
 			disabled={transcribing}
 			android_ripple={sendFeedback.android_ripple}
@@ -106,7 +109,7 @@ export function SpawnComposer({ prompt, onChangePrompt, placeholder, attachments
 			style={({ pressed }) => [styles.roundTarget, pressed && sendFeedback.pressed]}
 		>
 			<View style={[styles.roundDisc, primary === "stopDictation" ? styles.dictating : styles.roundAccent]}>
-				{transcribing ? <ActivityIndicator size="small" color={t.onAccent} /> : <AppSymbol name={primary === "stopDictation" ? "stop" : dictateGlyph} size={iconSize.sm} weight="bold" color={primary === "stopDictation" ? t.onDestructive : t.onAccent} />}
+				{transcribing ? <ActivityIndicator size="small" color={t.onAccent} /> : <AppSymbol name={primary === "stopDictation" ? "stop" : micDenied ? "micOff" : dictateGlyph} size={iconSize.sm} weight="bold" color={primary === "stopDictation" ? t.onDestructive : t.onAccent} />}
 			</View>
 		</Pressable>;
 

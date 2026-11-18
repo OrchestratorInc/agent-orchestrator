@@ -5078,6 +5078,8 @@ export interface components {
         PublicArtifactShare: {
             linkId: string;
             name: string;
+            /** @description The document title when available, otherwise the filename without its extension. */
+            title?: string;
             contentType: string;
             /** Format: int64 */
             size: number;
@@ -5095,6 +5097,11 @@ export interface components {
                 owner: boolean;
                 /** Format: uuid */
                 shareId: string;
+                /**
+                 * Format: date-time
+                 * @description When you first created this artifact link.
+                 */
+                createdAt?: string;
                 grantCount: number;
             };
         };

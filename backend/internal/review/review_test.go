@@ -111,12 +111,16 @@ func (f *fakeStore) SettleReviewChatWork(_ context.Context, reviewID string, _ t
 	return nil
 }
 func (f *fakeStore) RestoreReviewLaunchState(_ context.Context, review domain.Review, _ time.Time) (bool, error) {
-	if f.review == nil || f.review.ID != review.ID {
+	if f.reviews == nil && (f.review == nil || f.review.ID != review.ID) {
 		return false, nil
 	}
 	cp := review
-	f.review = &cp
-	f.reviews[review.Harness] = cp
+	if f.review != nil && f.review.ID == review.ID {
+		f.review = &cp
+	}
+	if f.reviews != nil {
+		f.reviews[review.Harness] = cp
+	}
 	return true, nil
 }
 func (f *fakeStore) mutateReview(harness domain.ReviewerHarness, fn func(*domain.Review)) {
@@ -435,7 +439,7 @@ type sqliteReviewChatController struct {
 }
 
 func (c sqliteReviewChatController) SupportsReviewChat(domain.AgentHarness) bool { return true }
-func (c sqliteReviewChatController) PreflightReviewChat(context.Context, domain.AgentHarness) error {
+func (c sqliteReviewChatController) PreflightReviewChat(context.Context, domain.AgentHarness, string) error {
 	return nil
 }
 func (c sqliteReviewChatController) StartReviewChat(ctx context.Context, cfg ReviewerChatStart) (string, error) {
@@ -2797,31 +2801,192 @@ func TestAutoTriggerSkipsCappedFailedHeadButRunsOtherEligiblePRs(t *testing.T) {
 }
 
 func TestAutoTriggerDoesNotAppendPRToLiveRunningReviewer(t *testing.T) {
-	pr1 := "https://github.com/o/r/pull/1"
-	pr2 := "https://github.com/o/r/pull/2"
-	store := &fakeStore{
-		review: &domain.Review{ID: "rev-1", SessionID: "mer-1", Harness: domain.ReviewerClaudeCode, ReviewerHandleID: "review-mer-1"},
-		runs: []domain.ReviewRun{{
-			ID: "run-1", ReviewID: "rev-1", SessionID: "mer-1", Harness: domain.ReviewerClaudeCode,
-			PRURL: pr1, TargetSHA: "sha1", Status: domain.ReviewRunRunning,
-		}},
+	for _, tt := range []struct {
+		name  string
+		draft bool
+		head  string
+	}{
+		{name: "ready", head: "sha1"},
+		{name: "draft current head", draft: true, head: "sha1"},
+		{name: "draft older head", draft: true, head: "new-sha"},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			pr1 := "https://github.com/o/r/pull/1"
+			pr2 := "https://github.com/o/r/pull/2"
+			store := &fakeStore{
+				review: &domain.Review{ID: "rev-1", SessionID: "mer-1", Harness: domain.ReviewerClaudeCode, ReviewerHandleID: "review-mer-1"},
+				runs: []domain.ReviewRun{{
+					ID: "run-1", ReviewID: "rev-1", SessionID: "mer-1", Harness: domain.ReviewerClaudeCode,
+					PRURL: pr1, TargetSHA: "sha1", Status: domain.ReviewRunRunning,
+				}},
+			}
+			launcher := &fakeLauncher{alive: true, handle: "review-mer-1"}
+			prs := fakePRs{prs: []domain.PullRequest{
+				{URL: pr1, Number: 1, HeadSHA: tt.head, Draft: tt.draft},
+				{URL: pr2, Number: 2, HeadSHA: "sha2"},
+			}}
+			eng := newEngineForTest(store, fakeSessions{rec: liveWorker(), ok: true}, prs, fakeProjects{}, launcher)
+
+			res, err := triggerWithSource(context.Background(), eng, "mer-1", domain.ReviewerClaudeCode, domain.AgentConfig{}, domain.ReviewTriggerAuto)
+			if err != nil {
+				t.Fatalf("TriggerWithSource: %v", err)
+			}
+			if res.Created || len(store.runs) != 1 || store.runs[0].Status != domain.ReviewRunRunning {
+				t.Fatalf("live running reviewer accepted another PR or lost its run: result=%+v runs=%+v", res, store.runs)
+			}
+			if !launcher.aliveChecked || launcher.spawned || launcher.notified {
+				t.Fatalf("auto trigger should only check liveness: %+v", launcher)
+			}
+		})
 	}
-	launcher := &fakeLauncher{alive: true, handle: "review-mer-1"}
+}
+
+func TestAutoTriggerSkipsDraftsInMixedBatch(t *testing.T) {
+	store := &fakeStore{}
+	launcher := &fakeLauncher{handle: "review-mer-1"}
 	prs := fakePRs{prs: []domain.PullRequest{
-		{URL: pr1, Number: 1, HeadSHA: "sha1"},
-		{URL: pr2, Number: 2, HeadSHA: "sha2"},
+		{URL: "https://github.com/o/r/pull/1", Number: 1, HeadSHA: "draft-sha", Draft: true},
+		{URL: "https://github.com/o/r/pull/2", Number: 2, HeadSHA: "ready-sha"},
 	}}
 	eng := newEngineForTest(store, fakeSessions{rec: liveWorker(), ok: true}, prs, fakeProjects{}, launcher)
+	res, err := triggerWithSource(context.Background(), eng, "mer-1", "", domain.AgentConfig{}, domain.ReviewTriggerAuto)
+	if err != nil || !res.Created || len(res.CreatedRuns) != 1 || len(store.runs) != 1 || res.CreatedRuns[0].PRURL != prs.prs[1].URL {
+		t.Fatalf("mixed batch = %+v runs=%+v error=%v", res, store.runs, err)
+	}
+	if launcher.spawnCount != 1 || len(launcher.gotSpec.ReviewQueue) != 1 || launcher.gotSpec.ReviewQueue[0].PRURL != prs.prs[1].URL {
+		t.Fatalf("reviewer received draft work: %+v", launcher)
+	}
+}
 
-	res, err := triggerWithSource(context.Background(), eng, "mer-1", domain.ReviewerClaudeCode, domain.AgentConfig{}, domain.ReviewTriggerAuto)
-	if err != nil {
-		t.Fatalf("TriggerWithSource: %v", err)
+func TestAutoTriggerRevalidatesDraftBeforeRunCreation(t *testing.T) {
+	for _, tt := range []struct {
+		name    string
+		status  domain.ReviewRunStatus
+		verdict domain.ReviewVerdict
+		harness domain.ReviewerHarness
+		config  domain.AgentConfig
+	}{
+		{name: "unreviewed"},
+		{name: "retryable failure", status: domain.ReviewRunFailed},
+		{name: "approved with changed config", status: domain.ReviewRunCompleted, verdict: domain.VerdictApproved, config: domain.AgentConfig{Model: "other-model"}},
+		{name: "changes requested with changed config", status: domain.ReviewRunCompleted, verdict: domain.VerdictChangesRequested, config: domain.AgentConfig{Model: "other-model"}},
+		{name: "different reviewer", status: domain.ReviewRunCompleted, verdict: domain.VerdictApproved, harness: domain.ReviewerOpenCode},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			store := &fakeStore{}
+			if tt.status != "" {
+				store.runs = []domain.ReviewRun{{ID: "previous", SessionID: "mer-1", Harness: domain.ReviewerClaudeCode,
+					PRURL: "https://github.com/o/r/pull/1", TargetSHA: "sha1", Status: tt.status, Verdict: tt.verdict, TriggerSource: domain.ReviewTriggerAuto}}
+			}
+			launcher := &fakeLauncher{handle: "review-mer-1"}
+			prs := prAt("sha1")
+			eng := newEngineForTest(store, fakeSessions{rec: liveWorker(), ok: true}, prs, fakeProjects{}, launcher)
+			// The coordinator may have seen ready; the engine must use the latest stored fact.
+			prs.prs[0].Draft = true
+			before := len(store.runs)
+			res, err := triggerWithSource(context.Background(), eng, "mer-1", tt.harness, tt.config, domain.ReviewTriggerAuto)
+			if err != nil || res.Created || len(res.CreatedRuns) != 0 || len(store.runs) != before || launcher.spawned || launcher.notified {
+				t.Fatalf("draft created automatic work: result=%+v runs=%+v launcher=%+v error=%v", res, store.runs, launcher, err)
+			}
+		})
 	}
-	if res.Created || len(store.runs) != 1 {
-		t.Fatalf("live running reviewer accepted another PR: result=%+v runs=%+v", res, store.runs)
+}
+
+func TestAutoTriggerDraftReadinessAndConcurrentDeduplication(t *testing.T) {
+	store := &fakeStore{}
+	launcher := &fakeLauncher{handle: "review-mer-1", alive: true}
+	prs := prAt("sha1")
+	prs.prs[0].Draft = true
+	eng := newEngineForTest(store, fakeSessions{rec: liveWorker(), ok: true}, prs, fakeProjects{}, launcher)
+	for _, sha := range []string{"sha1", "sha2"} {
+		prs.prs[0].HeadSHA = sha
+		res, err := triggerWithSource(context.Background(), eng, "mer-1", "", domain.AgentConfig{}, domain.ReviewTriggerAuto)
+		if err != nil || res.Created || len(store.runs) != 0 || launcher.spawned || launcher.notified {
+			t.Fatalf("draft push created work: result=%+v runs=%+v error=%v", res, store.runs, err)
+		}
 	}
-	if !launcher.aliveChecked || launcher.spawned || launcher.notified {
-		t.Fatalf("auto trigger should only check liveness: %+v", launcher)
+	prs.prs[0].Draft = false
+	const n = 8
+	var wg sync.WaitGroup
+	results, errs := make([]TriggerResult, n), make([]error, n)
+	for i := range results {
+		wg.Add(1)
+		go func(i int) {
+			defer wg.Done()
+			results[i], errs[i] = triggerWithSource(context.Background(), eng, "mer-1", "", domain.AgentConfig{}, domain.ReviewTriggerAuto)
+		}(i)
+	}
+	wg.Wait()
+	created := 0
+	for i, res := range results {
+		if errs[i] != nil {
+			t.Fatal(errs[i])
+		}
+		if res.Created {
+			created++
+		}
+	}
+	if created != 1 || len(store.runs) != 1 || launcher.spawnCount != 1 || store.runs[0].TargetSHA != "sha2" {
+		t.Fatalf("same-SHA readiness duplicated work: created=%d runs=%+v launcher=%+v", created, store.runs, launcher)
+	}
+	store.runs[0].Status, store.runs[0].Verdict = domain.ReviewRunCompleted, domain.VerdictApproved
+	prs.prs[0].Draft = true
+	for _, sha := range []string{"sha2", "sha3"} {
+		prs.prs[0].HeadSHA = sha
+		res, err := triggerWithSource(context.Background(), eng, "mer-1", "", domain.AgentConfig{}, domain.ReviewTriggerAuto)
+		if err != nil || res.Created || len(store.runs) != 1 || launcher.spawnCount != 1 || launcher.notified {
+			t.Fatalf("return to draft created work: result=%+v runs=%+v error=%v", res, store.runs, err)
+		}
+	}
+}
+
+func TestAutoTriggerReconcilesDeadDraftWithoutReplacement(t *testing.T) {
+	for _, sha := range []string{"sha1", "new-sha"} {
+		t.Run(sha, func(t *testing.T) {
+			store := &fakeStore{
+				review: &domain.Review{ID: "rev-1", SessionID: "mer-1", Harness: domain.ReviewerClaudeCode, ReviewerHandleID: "review-mer-1"},
+				runs: []domain.ReviewRun{{ID: "run-1", ReviewID: "rev-1", SessionID: "mer-1", Harness: domain.ReviewerClaudeCode,
+					PRURL: "https://github.com/o/r/pull/1", TargetSHA: "sha1", Status: domain.ReviewRunRunning}},
+			}
+			launcher := &fakeLauncher{alive: false, handle: "review-mer-1"}
+			prs := prAt(sha)
+			prs.prs[0].Draft = true
+			eng := newEngineForTest(store, fakeSessions{rec: liveWorker(), ok: true}, prs, fakeProjects{}, launcher)
+			res, err := triggerWithSource(context.Background(), eng, "mer-1", "", domain.AgentConfig{}, domain.ReviewTriggerAuto)
+			if err != nil || res.Created || len(store.runs) != 1 || store.runs[0].Status != domain.ReviewRunFailed || store.runs[0].FailureReason != domain.ReviewFailureProcessExited || store.runs[0].EndedAt == nil {
+				t.Fatalf("dead draft review was not reconciled: result=%+v runs=%+v error=%v", res, store.runs, err)
+			}
+			if !launcher.aliveChecked || launcher.spawned || launcher.notified {
+				t.Fatalf("dead draft review launched replacement: %+v", launcher)
+			}
+		})
+	}
+}
+
+func TestExplicitDraftReviewAndRerunRemainAvailable(t *testing.T) {
+	for _, source := range []domain.ReviewTriggerSource{domain.ReviewTriggerManual, domain.ReviewTriggerAgent} {
+		t.Run(string(source), func(t *testing.T) {
+			store := &fakeStore{}
+			launcher := &fakeLauncher{handle: "review-mer-1", alive: true}
+			prs := prAt("sha1")
+			prs.prs[0].Draft = true
+			eng := newEngineForTest(store, fakeSessions{rec: liveWorker(), ok: true}, prs, fakeProjects{}, launcher)
+			opts := TriggerOptions{Source: source}
+			res, err := eng.TriggerWithOptions(context.Background(), "mer-1", opts)
+			if err != nil || !res.Created || len(store.runs) != 1 {
+				t.Fatalf("explicit draft review = %+v runs=%+v error=%v", res, store.runs, err)
+			}
+			again, err := eng.TriggerWithOptions(context.Background(), "mer-1", opts)
+			if err != nil || again.Created || len(store.runs) != 1 {
+				t.Fatalf("same-head draft duplicated: %+v error=%v", again, err)
+			}
+			store.runs[0].Status, store.runs[0].Verdict = domain.ReviewRunCompleted, domain.VerdictApproved
+			opts.Rerun = true
+			res, err = eng.TriggerWithOptions(context.Background(), "mer-1", opts)
+			if err != nil || !res.Created || len(store.runs) != 2 {
+				t.Fatalf("explicit draft rerun = %+v runs=%+v error=%v", res, store.runs, err)
+			}
+		})
 	}
 }
 
@@ -3118,6 +3283,7 @@ func TestListReturnsActiveOneShotOverrideHandle(t *testing.T) {
 		review: &domain.Review{ID: "rev-1", SessionID: "mer-1", Harness: domain.ReviewerOpenCode, ReviewerHandleID: "opencode-pane"},
 		runs: []domain.ReviewRun{{
 			ID:        "run-1",
+			ReviewID:  "rev-1",
 			SessionID: "mer-1",
 			Harness:   domain.ReviewerOpenCode,
 			PRURL:     "https://github.com/o/r/pull/1",
@@ -3127,7 +3293,7 @@ func TestListReturnsActiveOneShotOverrideHandle(t *testing.T) {
 	}
 	worker := liveWorker()
 	worker.ReviewerHarness = domain.ReviewerCodex
-	eng := newEngineForTest(store, fakeSessions{rec: worker, ok: true}, prAt("sha1"), fakeProjects{}, &fakeLauncher{})
+	eng := newEngineForTest(store, fakeSessions{rec: worker, ok: true}, prAt("sha1"), fakeProjects{}, &fakeLauncher{alive: true})
 
 	got, err := eng.List(context.Background(), "mer-1")
 	if err != nil {

@@ -1,10 +1,11 @@
 import { useFocusEffect, useRouter } from "expo-router";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { ActivityIndicator, FlatList, Keyboard, StyleSheet, View } from "react-native";
+import { ActivityIndicator, FlatList, Keyboard, Platform, StyleSheet, View } from "react-native";
 import { useLargeTitle } from "../../../lib/largeTitle";
 import { useTabBarFrost } from "../../../lib/frost";
 import { boardTitle } from "../../../lib/board-tabs";
-import { StaleBanner } from "../../../lib/StaleBanner";
+import { FreshnessLine } from "../../../lib/FreshnessLine";
+import { useMachineFreshness } from "../../../lib/useMachineFreshness";
 import { useApp } from "../../../lib/store";
 import { useCloud } from "../../../lib/cloud/CloudProvider";
 import { CLOUD_HOST_ID } from "../../../lib/cloud/mapping";
@@ -29,6 +30,7 @@ import { hostedProjectKey } from "../../../lib/hostedRows";
 import { workerFilterMenu } from "../../../lib/worker-filter-menu";
 import { classifyLink, EMPTY_LINK_TRACKER } from "../../../lib/linkHealth";
 import { WorkerMachineState } from "../../../lib/worker-machine-state";
+import { useRefreshActions } from "../../../lib/useRefreshActions";
 import { WorkerEnvironmentFilter } from "../../../lib/worker-environment-filter";
 import {
 	ALL_WORKER_ENVIRONMENTS,
@@ -73,7 +75,6 @@ export default function FleetScreen() {
 	const unreadCount = (hostStates.length > 1
 		? hostStates.reduce((count, host) => count + host.notificationsUnread, 0)
 		: notificationsUnread) + (cloud ? cloudUnread : 0);
-	const [refreshing, setRefreshing] = useState(false);
 	const [workerEnvironmentId, setWorkerEnvironmentId] = useState(ALL_WORKER_ENVIRONMENTS);
 	const [workerProjectId, setWorkerProjectId] = useState(ALL_WORKER_PROJECTS);
 	// hostStates is replaced on every poll (each machine stamps lastSyncAt), but
@@ -82,10 +83,12 @@ export default function FleetScreen() {
 	// handlers below avoid.
 	// Orchestrator Cloud is one more environment while signed in: its workers are on this board.
 	const environmentsKey = JSON.stringify([...hostStates, ...(cloud ? [cloud] : [])].map((host) => [host.hostId, host.name, host.appearance.symbol]));
+	// Each machine's dot on its chip. Changes only when some machine's state does.
+	const freshness = useMachineFreshness();
 	const environments = useMemo(
-		() => sortWorkerEnvironments([...hostStates, ...(cloud ? [cloud] : [])].map((host) => ({ id: host.hostId, name: host.name, appearance: host.appearance }))),
-		// eslint-disable-next-line react-hooks/exhaustive-deps -- environmentsKey covers every field read here
-		[environmentsKey],
+		() => sortWorkerEnvironments([...hostStates, ...(cloud ? [cloud] : [])].map((host) => ({ id: host.hostId, name: host.name, appearance: host.appearance, freshness: freshness.get(host.hostId) }))),
+		// eslint-disable-next-line react-hooks/exhaustive-deps -- environmentsKey and freshness cover every field read here
+		[environmentsKey, freshness],
 	);
 	const projectOptions = useMemo(
 		() => workerProjectOptions(allProjects, workerEnvironmentId),
@@ -193,16 +196,13 @@ export default function FleetScreen() {
 	const failure = useBoardFailure();
 
 	// No haptic of its own: each platform's refresh control gives the feedback
-	// it gives everywhere, and the Retry actions that also call this buzz once.
-	const onRefresh = useCallback(async () => {
-		setRefreshing(true);
-		try {
-			if (selectedHost) await refreshHost(selectedHost.hostId);
-			else if (cloudSelected) await refreshHost(CLOUD_HOST_ID);
-			else await refreshAll();
-		}
-		finally { setRefreshing(false); }
-	}, [cloudSelected, refreshAll, refreshHost, selectedHost?.hostId]);
+	// it gives everywhere, and the Retry actions that run it too buzz once.
+	// Retry never drives the pull spinner: see useRefreshActions.
+	const { refreshing, onRefresh, retrying, retry } = useRefreshActions(async () => {
+		if (selectedHost) await refreshHost(selectedHost.hostId);
+		else if (cloudSelected) await refreshHost(CLOUD_HOST_ID);
+		else await refreshAll();
+	});
 
 	// Unpaired only once the stored config has been read: until then an empty
 	// store means "still finding the machine", and the board shows its spinner.
@@ -224,15 +224,32 @@ export default function FleetScreen() {
 						: workerEnvironmentId !== ALL_WORKER_ENVIRONMENTS ? "environment"
 							: "idle";
 	const [boardEmpty, setBoardEmpty] = useState(false);
+	// The one machine every row is on, when it is a paired machine: the line under
+	// the title speaks for it, since a dot on every row would say the same thing.
+	// With several machines on the board their chips and rows carry the dots.
+	// A project filter puts every row on its machine even with All machines chosen;
+	// a Cloud project matches no paired machine and leaves the line to the phone.
+	const projectHostId = hostStates.some((host) => host.hostId === filteredProject?.hostId) ? filteredProject?.hostId : undefined;
+	const lineHostId = selectedHost?.hostId ?? projectHostId ?? (!cloudSelected && !cloud && hostStates.length === 1 ? hostStates[0].hostId : undefined);
 
 	// Inside the list rather than above it: the header is translucent and the page
 	// is laid out under it, so the list has to be the page's first view. Above the
-	// rows rather than inside ListEmptyComponent, because the case the banner
-	// exists for is a populated board whose poll has died.
+	// rows rather than inside ListEmptyComponent, because the case the line exists
+	// for is a populated board whose machine has stopped answering. An empty board's
+	// own state says why it is empty, so there the line keeps to the phone being
+	// offline (no host), which a project or idle empty state would not mention; the
+	// machine's own empty state already says that too, so it takes no line at all.
+	const freshnessLine = boardEmpty && emptyView === "machine"
+		? null
+		: <FreshnessLine hostId={boardEmpty ? undefined : lineHostId} onRetry={retry} />;
+	// Under the large title on iOS. Android's title is in the bar, whose frost
+	// fades over the first stretch of the page and dimmed a line placed there;
+	// the chips draw above the frost, so the line goes beneath them.
+	const lineAboveChips = Platform.OS !== "android";
 	const listHeader = unpaired ? largeTitle.header : (
 		<>
 			{largeTitle.header}
-			{hostStates.length <= 1 ? <StaleBanner error={!!error} onRetry={onRefresh} /> : <StaleBanner networkOnly />}
+			{lineAboveChips ? freshnessLine : null}
 			{showsEnvironmentFilter(environments) ? (
 				<WorkerEnvironmentFilter
 					environments={environments}
@@ -240,6 +257,7 @@ export default function FleetScreen() {
 					onSelectEnvironment={selectEnvironment}
 				/>
 			) : null}
+			{lineAboveChips ? null : freshnessLine}
 		</>
 	);
 
@@ -291,7 +309,8 @@ export default function FleetScreen() {
 							linkHealth={classifyLink(selectedHost.linkTracker ?? EMPTY_LINK_TRACKER, phoneNetwork, Date.now())}
 							environments={environments}
 							onSelectEnvironment={selectEnvironment}
-							onRetry={onRefresh}
+							onRetry={retry}
+							retrying={retrying}
 						/>
 					) : emptyView === "error" ? (
 						<EmptyState
@@ -300,7 +319,7 @@ export default function FleetScreen() {
 							message={hostStates.length > 1 ? undefined : failure.hint}
 							action={
 								<View style={styles.errorActions}>
-									<Button title="Retry" icon="refresh-cw" variant="secondary" onPress={onRefresh} />
+									<Button title="Retry" icon="refresh-cw" variant="secondary" loading={retrying} onPress={retry} />
 									{/* Re-scanning is the only fix for a rotated password, and the
 									    fastest one for a moved/renamed host — so it belongs beside
 									    Retry rather than three taps away in Settings. */}

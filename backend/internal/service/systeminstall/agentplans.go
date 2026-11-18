@@ -58,6 +58,7 @@ var agentDocumentationURLs = map[Target]string{
 	TargetHermes:          "https://github.com/NousResearch/hermes-agent",
 	TargetStakpak:         "https://github.com/stakpak/agent#installation",
 	TargetOpenInterpreter: "https://www.openinterpreter.com/docs/terminal/install",
+	TargetTau:             "https://github.com/huggingface/tau",
 }
 
 func (s requestPlanner) agentMethodPlans(target Target, operation AgentOperation) []Plan {
@@ -284,6 +285,8 @@ func (s requestPlanner) agentMethodPlans(target Target, operation AgentOperation
 		if s.goos == "darwin" || s.goos == "linux" {
 			plans = append(plans, s.planShellInstaller(target, "https://install.openhands.dev/install.sh", "sh"))
 		}
+	case TargetTau:
+		plans = []Plan{s.planUV(target, "tau-ai")}
 	case TargetOpenInterpreter:
 		plan := s.officialByOS(target, "https://www.openinterpreter.com/install", "sh", "https://www.openinterpreter.com/install.ps1", agentDocumentationURLs[target])
 		if plan.Script != nil {
