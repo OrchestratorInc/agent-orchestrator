@@ -219,15 +219,15 @@ function keptArtifactRows(set: KeptArtifactSet, projectId: string | undefined): 
 }
 
 /**
- * Where a row comes from, after its name: its project and session, and why it
- * is view only. An archived session's files stay listed, and so do those of a
- * deleted session or removed project that were kept.
+ * What a card says after its name: the machine it is on, whose it is, and why
+ * it is view only. An archived session's files stay listed, and so do those
+ * of a deleted session or removed project that were kept.
  */
-export function artifactContext(t: TFunction, row: Pick<ArtifactRow, "archived" | "kept" | "sessionTitle">, projectName: string): string {
+export function artifactContext(t: TFunction, row: Pick<ArtifactRow, "archived" | "kept">, placeName: string, owner: ArtifactOwner): string {
 	const reason = row.kept === "session-deleted"
 		? t("artifacts.deletedSession")
 		: row.kept === "project-removed" ? t("artifacts.removedProject") : row.archived ? t("artifacts.archivedSession") : "";
-	return reason ? `${projectName} · ${row.sessionTitle} · ${reason}` : `${projectName} · ${row.sessionTitle}`;
+	return [placeName, t(`artifacts.owner.${owner}`), reason].filter(Boolean).join(" · ");
 }
 
 /** Total artifacts across groups, for the sidebar badge. */
@@ -269,11 +269,33 @@ export function artifactLocation(row: Pick<ArtifactRow, "cloud" | "hostId">, gro
 export type ArtifactFilters = {
 	query: string;
 	projectIds?: readonly string[];
-	/** Undefined for both locations. */
+	/** Undefined for every location. */
 	location?: ArtifactLocation;
 	types?: readonly ArtifactType[];
 	sharings?: readonly ArtifactSharing[];
+	/** Undefined for anyone's. */
+	owner?: ArtifactOwner;
+	/** The control-plane user ID that owner compares a cloud session's creator with. */
+	cloudUserId?: string;
+	/** Keys (artifactKey) of the only rows to keep, for the Pinned filter; undefined keeps every row. */
+	onlyKeys?: ReadonlySet<string>;
 };
+
+/** Whether an artifact is this person's ("mine") or someone else's they can see ("shared"). */
+export type ArtifactOwner = "mine" | "shared";
+
+export const ARTIFACT_OWNERS: readonly ArtifactOwner[] = ["mine", "shared"];
+
+/**
+ * Whose an artifact is. A file on this machine or a remote host is this
+ * person's; a cloud session's belongs to whoever started it. A session with
+ * no creator on record, or one read before this person's control-plane ID is
+ * known, counts as theirs, as canChangeSessionArtifacts first treats it.
+ */
+export function artifactOwner(row: Pick<ArtifactRow, "cloud">, cloudUserId: string | undefined): ArtifactOwner {
+	const creator = row.cloud?.createdByUserId;
+	return creator && cloudUserId && creator !== cloudUserId ? "shared" : "mine";
+}
 
 /**
  * Whether an artifact has a public link ("public"), a private one, open only
@@ -344,9 +366,9 @@ export function withHostShareLinks(groups: readonly ArtifactGroup[], links: read
 }
 
 /**
- * Keeps groups matching the project filter, and rows matching the location
- * and type filters whose project, file name or session title contains the
- * query. Groups left without rows are dropped.
+ * Keeps groups matching the project filter, and rows matching the location,
+ * type, sharing, owner and pinned filters whose project, file name or session
+ * title contains the query. Groups left without rows are dropped.
  */
 export function filterArtifactGroups(groups: readonly ArtifactGroup[], filters: ArtifactFilters, scratchpadName?: string): ArtifactGroup[] {
 	const { location } = filters;
@@ -363,6 +385,8 @@ export function filterArtifactGroups(groups: readonly ArtifactGroup[], filters: 
 				...group,
 				rows: group.rows.filter((row) =>
 					(!location || artifactLocation(row, group) === location)
+					&& (!filters.owner || artifactOwner(row, filters.cloudUserId) === filters.owner)
+					&& (!filters.onlyKeys || filters.onlyKeys.has(artifactKey(row)))
 					&& (types.length === 0 || types.includes(artifactType(row)))
 					&& (sharings.length === 0 || matchesSharing(sharings, artifactSharing(row)))
 					&& (groupMatches
@@ -372,6 +396,22 @@ export function filterArtifactGroups(groups: readonly ArtifactGroup[], filters: 
 			};
 		})
 		.filter((group) => group.rows.length > 0);
+}
+
+/**
+ * How many artifacts each location holds under every other filter, for the
+ * location chips; "all" counts every location together.
+ */
+export function artifactLocationCounts(groups: readonly ArtifactGroup[], filters: ArtifactFilters, scratchpadName?: string): ReadonlyMap<ArtifactLocation | "all", number> {
+	const counts = new Map<ArtifactLocation | "all", number>([["all", 0]]);
+	for (const group of filterArtifactGroups(groups, { ...filters, location: undefined }, scratchpadName)) {
+		for (const row of group.rows) {
+			const location = artifactLocation(row, group);
+			counts.set(location, (counts.get(location) ?? 0) + 1);
+			counts.set("all", (counts.get("all") ?? 0) + 1);
+		}
+	}
+	return counts;
 }
 
 /** A sharing filter keeps only rows whose state is known and chosen. */

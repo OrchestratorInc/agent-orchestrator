@@ -2,8 +2,12 @@ import { create } from "zustand";
 
 export type ArtifactViewMode = "gallery" | "list";
 
+/** The order of the Artifacts list; pinned artifacts stay on top in either. */
+export type ArtifactSort = "updated" | "name";
+
 type ArtifactViewPreferences = {
 	view: ArtifactViewMode;
+	sort: ArtifactSort;
 	collapsedSections: string[];
 	pinnedArtifactIds: string[];
 };
@@ -16,6 +20,7 @@ function readPreferences(): ArtifactViewPreferences {
 		if (saved && typeof saved === "object") {
 			return {
 				view: "view" in saved && saved.view === "list" ? "list" : "gallery",
+				sort: "sort" in saved && saved.sort === "name" ? "name" : "updated",
 				collapsedSections: "collapsedSections" in saved && Array.isArray(saved.collapsedSections)
 					? saved.collapsedSections.filter((id): id is string => typeof id === "string") : [],
 				pinnedArtifactIds: "pinnedArtifactIds" in saved && Array.isArray(saved.pinnedArtifactIds)
@@ -23,7 +28,7 @@ function readPreferences(): ArtifactViewPreferences {
 			};
 		}
 	} catch {}
-	return { view: "gallery", collapsedSections: [], pinnedArtifactIds: [] };
+	return { view: "gallery", sort: "updated", collapsedSections: [], pinnedArtifactIds: [] };
 }
 
 function savePreferences(preferences: ArtifactViewPreferences): void {
@@ -34,47 +39,40 @@ function savePreferences(preferences: ArtifactViewPreferences): void {
 
 type ArtifactsViewState = ArtifactViewPreferences & {
 	setView: (view: ArtifactViewMode) => void;
+	setSort: (sort: ArtifactSort) => void;
 	toggleSection: (sectionId: string) => void;
 	togglePinnedArtifact: (artifactId: string) => void;
 	unpinArtifact: (artifactId: string) => void;
 };
 
+/** The saved preferences of `state` with `change` applied, written to storage. */
+function changed(state: ArtifactViewPreferences, change: Partial<ArtifactViewPreferences>): ArtifactViewPreferences {
+	const preferences = {
+		view: state.view,
+		sort: state.sort,
+		collapsedSections: state.collapsedSections,
+		pinnedArtifactIds: state.pinnedArtifactIds,
+		...change,
+	};
+	savePreferences(preferences);
+	return preferences;
+}
+
 export const useArtifactsViewStore = create<ArtifactsViewState>((set) => ({
 	...readPreferences(),
-	setView: (view) => set((state) => {
-		const preferences = { view, collapsedSections: state.collapsedSections, pinnedArtifactIds: state.pinnedArtifactIds };
-		savePreferences(preferences);
-		return preferences;
-	}),
-	toggleSection: (sectionId) => set((state) => {
-		const preferences = {
-			view: state.view,
-			pinnedArtifactIds: state.pinnedArtifactIds,
-			collapsedSections: state.collapsedSections.includes(sectionId)
-				? state.collapsedSections.filter((id) => id !== sectionId)
-				: [...state.collapsedSections, sectionId],
-		};
-		savePreferences(preferences);
-		return preferences;
-	}),
-	togglePinnedArtifact: (artifactId) => set((state) => {
-		const preferences = {
-			view: state.view,
-			collapsedSections: state.collapsedSections,
-			pinnedArtifactIds: state.pinnedArtifactIds.includes(artifactId)
-				? state.pinnedArtifactIds.filter((id) => id !== artifactId)
-				: [artifactId, ...state.pinnedArtifactIds],
-		};
-		savePreferences(preferences);
-		return preferences;
-	}),
-	unpinArtifact: (artifactId) => set((state) => {
-		const preferences = {
-			view: state.view,
-			collapsedSections: state.collapsedSections,
-			pinnedArtifactIds: state.pinnedArtifactIds.filter((id) => id !== artifactId),
-		};
-		savePreferences(preferences);
-		return preferences;
-	}),
+	setView: (view) => set((state) => changed(state, { view })),
+	setSort: (sort) => set((state) => changed(state, { sort })),
+	toggleSection: (sectionId) => set((state) => changed(state, {
+		collapsedSections: state.collapsedSections.includes(sectionId)
+			? state.collapsedSections.filter((id) => id !== sectionId)
+			: [...state.collapsedSections, sectionId],
+	})),
+	togglePinnedArtifact: (artifactId) => set((state) => changed(state, {
+		pinnedArtifactIds: state.pinnedArtifactIds.includes(artifactId)
+			? state.pinnedArtifactIds.filter((id) => id !== artifactId)
+			: [artifactId, ...state.pinnedArtifactIds],
+	})),
+	unpinArtifact: (artifactId) => set((state) => changed(state, {
+		pinnedArtifactIds: state.pinnedArtifactIds.filter((id) => id !== artifactId),
+	})),
 }));

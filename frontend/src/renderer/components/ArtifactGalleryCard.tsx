@@ -1,4 +1,3 @@
-import { artifactFileIcon } from "./artifact-file-icon";
 import { useId, type ReactNode } from "react";
 import type { ArtifactRow } from "../lib/artifacts";
 import { formatTimeCompact } from "../lib/format-time";
@@ -35,7 +34,6 @@ export function ArtifactGalleryCard({ row, context, onPreview, actions, previewL
 	previewLive?: boolean;
 	selection?: ArtifactCardSelection;
 }) {
-	const KindIcon = artifactFileIcon(row);
 	const toggle = selection && !selection.disabledReason ? selection.onToggle : undefined;
 	const descriptionId = useId();
 	return (
@@ -52,7 +50,6 @@ export function ArtifactGalleryCard({ row, context, onPreview, actions, previewL
 				<span className="relative block aspect-[16/9] border-b border-border bg-[var(--solid-muted,var(--muted))]" />
 				<span className="block space-y-1 px-3 py-2.5">
 					<span className="flex min-w-0 items-center gap-1.5 text-control font-medium leading-5 text-foreground">
-						<KindIcon aria-hidden="true" className="size-icon-sm shrink-0 text-muted-foreground" />
 						<span className="truncate">{row.name}</span>
 					</span>
 					<span className="flex min-w-0 items-center gap-1.5 text-caption leading-4 text-muted-foreground">
