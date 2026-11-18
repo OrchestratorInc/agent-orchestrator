@@ -1,0 +1,42 @@
+---
+title: Core concepts
+description: The vocabulary behind Orchestrator - projects, sessions, worktrees, agents, and interfaces.
+---
+
+A short tour of the words every other page uses. Each idea links to the page that covers it in full.
+
+## Projects
+
+A project is a local Git repository registered with Orchestrator. Registering never moves or changes your original checkout; it only tells Orchestrator where work happens. Project settings choose which agent works, which reviews, and with what model and rules. See [Projects](/configuration/projects).
+
+## Sessions and workers
+
+A session is one unit of work on a project, with its own conversation or terminal. A worker session implements a task you give it. An orchestrator session supervises workers, and a reviewer run checks a worker's pull request. See [Quickstart](/quickstart) for a first worker, and [Dashboard](/dashboard) for running many at once.
+
+## Worktrees and branches
+
+Every session gets an isolated git worktree and branch, so agents never mix files, branches, or pull requests. Orchestrator never force-deletes a dirty worktree; cleanup preserves your work. See [Architecture](/architecture) for how the daemon manages this.
+
+## Chat and Terminal UI
+
+Each session has one active agent interface at a time: structured **Chat** or the agent's native **Terminal UI**. Chat support depends on the agent and its installed version, and compatible sessions can switch interfaces without losing their session or worktree. See the [agent capability catalog](/plugins/agents).
+
+## Board states
+
+The board groups sessions by their current state, such as working, waiting for input, in review, or ready to merge. Orchestrator derives these states from durable facts - agent activity, pull-request checks, reviews, and mergeability - rather than storing a label. See [Dashboard](/dashboard).
+
+## Pull requests, CI, and reviews
+
+Orchestrator connects each session's branch to its pull request and shows CI, reviewers, unresolved comments, and mergeability in one place. You can send requested changes back to the worker or merge when ready. See [Examples](/examples).
+
+## Automations and Cues
+
+Automations schedule recurring work, such as a nightly triage. Cues are saved instructions or shell commands you reuse across sessions. Both belong to a project. See [lifecycle and automation](/configuration/lifecycle-automation).
+
+## Where to go next
+
+<Cards>
+	<Card title="Quickstart" description="Run the concepts end to end on one small task." href="/quickstart" />
+	<Card title="Architecture" description="Understand the daemon, storage, events, and controller modes." href="/architecture" />
+	<Card title="Troubleshooting" description="Fix common session, agent, and preview problems." href="/troubleshooting" />
+</Cards>

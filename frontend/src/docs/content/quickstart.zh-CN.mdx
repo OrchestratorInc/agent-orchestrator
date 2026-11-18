@@ -1,10 +1,10 @@
 ---
 title: 快速开始
 description: 添加项目，启动一个 worker，并从任务一路跟进到拉取请求。
-translatedFrom: ec341474c9bc
+translatedFrom: 9994abc640ec
 ---
 
-本指南将带你在桌面应用中完成第一个任务：添加仓库、启动 worker、跟进它的工作，并审查结果。
+本指南将带你在桌面应用中完成第一个任务：添加仓库、启动 worker、跟进它的工作，并审查结果。全程约 15 分钟，最后你会得到一个可以审查的拉取请求。
 
 <Callout type="info" title="开始之前">
 	安装 Orchestrator；如果你使用 GitHub 项目，请用 `gh` 登录。如果你选择外部编程代理，请安装它并完成登录。Orchestrator 把这些工具称为 harness。Unreal Agent 内置于 Orchestrator，可在 macOS 和 Linux 上用于 Chat。请参阅[安装](/installation)。
@@ -29,7 +29,7 @@ translatedFrom: ec341474c9bc
 <span id="add-the-repository" />
 ### 添加仓库
 
-打开 Orchestrator，选择 **Add project**，然后选择本地仓库。桌面应用会登记该仓库，并保持原来的检出目录不变。
+打开 Orchestrator，选择 **New project**，然后选择本地仓库。桌面应用会登记该仓库，并保持原来的检出目录不变。
 
 </Step>
 <Step>
@@ -123,4 +123,5 @@ ao send --session <session-id> --message "Run the focused tests before you finis
 	<Card title="仪表板" description="了解看板、会话视图、检查器、Chat 和终端。" href="/dashboard" />
 	<Card title="架构" description="了解桌面应用和守护进程如何协调会话。" href="/architecture" />
 	<Card title="示例" description="试用当前的桌面和 CLI 工作流。" href="/examples" />
+	<Card title="故障排除" description="解决常见的会话、代理和预览问题。" href="/troubleshooting" />
 </Cards>

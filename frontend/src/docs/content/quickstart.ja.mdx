@@ -1,10 +1,10 @@
 ---
 title: クイックスタート
 description: プロジェクトを追加し、ワーカーを 1 つ起動して、タスクからプルリクエストまでを追いかけます。
-translatedFrom: ec341474c9bc
+translatedFrom: 9994abc640ec
 ---
 
-このガイドでは、デスクトップアプリで最初のタスクを進める流れを説明します。リポジトリを追加し、ワーカーを起動し、その作業を追いかけ、結果をレビューします。
+このガイドでは、デスクトップアプリで最初のタスクを進める流れを説明します。リポジトリを追加し、ワーカーを起動し、その作業を追いかけ、結果をレビューします。所要時間は約 15 分で、最後にレビューできるプルリクエストが出来上がります。
 
 <Callout type="info" title="始める前に">
 	Orchestrator をインストールし、GitHub のプロジェクトを使う場合は `gh` でサインインしておきます。外部のコーディングエージェントを選ぶ場合は、それをインストールしてサインインを済ませてください。Orchestrator では、これらのツールをハーネスと呼びます。Unreal Agent は、macOS と Linux の Chat 用に組み込まれています。[インストール](/installation)を参照してください。
@@ -29,7 +29,7 @@ translatedFrom: ec341474c9bc
 <span id="add-the-repository" />
 ### リポジトリを追加する
 
-Orchestrator を開き、**Add project** を選んで、ローカルのリポジトリを選択します。デスクトップアプリはリポジトリを登録し、元のチェックアウトはそのまま残します。
+Orchestrator を開き、**New project** を選んで、ローカルのリポジトリを選択します。デスクトップアプリはリポジトリを登録し、元のチェックアウトはそのまま残します。
 
 </Step>
 <Step>
@@ -123,4 +123,5 @@ ao send --session <session-id> --message "Run the focused tests before you finis
 	<Card title="ダッシュボード" description="ボード、セッションビュー、インスペクター、Chat、ターミナルの使い方を学びます。" href="/dashboard" />
 	<Card title="アーキテクチャ" description="デスクトップアプリとデーモンがセッションをどう連携させるかを確認します。" href="/architecture" />
 	<Card title="使用例" description="現在のデスクトップと CLI のワークフローを試します。" href="/examples" />
+	<Card title="トラブルシューティング" description="セッション、エージェント、プレビューのよくある問題を解決します。" href="/troubleshooting" />
 </Cards>

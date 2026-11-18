@@ -1,16 +1,24 @@
 ---
 title: 简介
 description: 了解 Orchestrator 能做什么、适合在什么时候使用，以及从哪里开始。
-translatedFrom: bbe596d4eaad
+translatedFrom: 2367c3f8ab76
 ---
 
 Orchestrator 是一款用于监督 AI 编程代理的桌面应用。它为每个 worker 提供隔离的工作区，让它的对话或终端随时可用，并把 Git 工作与拉取请求、CI、代码审查和合并冲突关联起来。
 
 代码由代理编写。Orchestrator 帮你管理项目和会话、跟进工作、发送指令、审查更改，并打开浏览器预览。
 
-<Callout type="info" title="最快的上手方式">
-	下载桌面应用，添加一个仓库，然后启动一个小会话。请先阅读[安装](/installation)，再阅读[快速开始](/quickstart)。
-</Callout>
+![Orchestrator 看板：侧边栏中的项目、按状态分组的会话，以及每张卡片上的拉取请求状态。](/docs/images/dashboard.png)
+
+<span id="choose-your-path" />
+## 选择你的路径
+
+<Cards>
+	<Card title="运行第一个任务" description="安装应用、添加仓库，并跟随一个 worker 从提示到拉取请求。约 15 分钟。" href="/quickstart" />
+	<Card title="同时监督多个代理" description="使用看板、检查器和审查功能并行运行多个 worker。" href="/dashboard" />
+	<Card title="在手机上使用 Orchestrator" description="配对移动应用，随时随地查看会话并回复。" href="/configuration/remote-access" />
+	<Card title="为 Orchestrator 做贡献" description="在本地搭建仓库并领取 issue。" href="https://github.com/OrchestratorInc/agent-orchestrator/blob/main/docs/development.md" />
+</Cards>
 
 <span id="what-ao-helps-you-do" />
 <span id="what-orchestrator-helps-you-do" />
@@ -57,7 +65,7 @@ add project -> start session -> isolated worktree -> pull request -> CI/review -
 
 Connect Mobile 是一个独立的、需要主动开启的监听器，并由连接密码保护。本地配对和安全的远程配对请参阅 [Connect Mobile](/configuration/remote-access)。
 
-本手册以最新的稳定版 [v0.13.3](https://github.com/Untrivial-ai/agent-orchestrator/releases/tag/v0.13.3)（2026 年 10 月 1 日发布）为准进行核对。`main` 上较新的控件可能与该版本不同。使用新控件之前，请查看[更新日志](/changelog)及其发布说明。
+本手册以最新的稳定版 [v0.15.3](https://github.com/OrchestratorInc/agent-orchestrator/releases/tag/v0.15.3)（2026 年 11 月 16 日发布）为准进行核对。`main` 上较新的控件可能与该版本不同。使用新控件之前，请查看[更新日志](/changelog)及其发布说明。
 
 云端会话是一项独立的服务，对账户访问有要求。设置方法请参阅 [Cloud 指南](/guides/cloud)。
 

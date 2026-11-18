@@ -7,9 +7,17 @@ Orchestrator is a desktop app for supervising AI coding agents. It gives each wo
 
 The agents write the code. Orchestrator helps you manage projects and sessions, follow work, send instructions, review changes, and open browser previews.
 
-<Callout type="info" title="Fastest path">
-	Download the desktop app, add a repository, and start one small session. See [Installation](/installation), then [Quickstart](/quickstart).
-</Callout>
+![The Orchestrator board: projects in the sidebar, sessions grouped by state, and pull-request status on each card.](/docs/images/dashboard.png)
+
+<span id="choose-your-path" />
+## Choose your path
+
+<Cards>
+	<Card title="Run your first task" description="Install the app, add a repository, and follow one worker from prompt to pull request. About 15 minutes." href="/quickstart" />
+	<Card title="Supervise several agents" description="Use the board, inspector, and reviews to run many workers side by side." href="/dashboard" />
+	<Card title="Use Orchestrator from your phone" description="Pair the mobile app to check on sessions and respond from anywhere." href="/configuration/remote-access" />
+	<Card title="Contribute to Orchestrator" description="Set up the repository locally and pick up an issue." href="https://github.com/OrchestratorInc/agent-orchestrator/blob/main/docs/development.md" />
+</Cards>
 
 <span id="what-ao-helps-you-do" />
 ## What Orchestrator helps you do
@@ -52,7 +60,7 @@ The desktop app runs a Go background service on `127.0.0.1` and talks to it thro
 
 Connect Mobile is a separate, opt-in listener protected by a connection password. See [Connect Mobile](/configuration/remote-access) for local and secure remote pairing.
 
-This manual is checked against the latest stable release, [v0.13.3](https://github.com/Untrivial-ai/agent-orchestrator/releases/tag/v0.13.3), published 1 October 2026. Newer controls on `main` may differ from that release. Check the [changelog](/changelog) and its release notes before using a new control.
+This manual is checked against the latest stable release, [v0.15.3](https://github.com/OrchestratorInc/agent-orchestrator/releases/tag/v0.15.3), published 16 November 2026. Newer controls on `main` may differ from that release. Check the [changelog](/changelog) and its release notes before using a new control.
 
 Cloud sessions are a separate service with account access requirements. See the [Cloud guide](/guides/cloud) for setup.
 
