@@ -36,7 +36,7 @@ vi.mock("../lib/bridge", () => ({
 }));
 
 const viewer = "https://orchestrator.inc/artifact/q3-report";
-const saved = { linkId: "q3-report", name: "q3.html", contentType: "text/html", size: 1, updatedAt: "2030-01-01T00:00:00Z", access: "anyone", via: "saved", sharedAt: "2030-01-01T00:00:00Z" };
+const saved = { linkId: "q3-report", name: "q3.html", contentType: "text/html", size: 1, updatedAt: "2030-01-01T00:00:00Z", access: "anyone", via: "saved", sharedAt: "2030-01-01T00:00:00Z", viewerUrl: viewer };
 
 /** The main process holding a link, then telling the listening host to take it. */
 async function send(viewerUrl: string) {
@@ -99,6 +99,16 @@ describe("SharedArtifactLinkHost", () => {
 		await send(viewer);
 		await waitFor(() => expect(mocks.openWindow).toHaveBeenCalledWith(viewer));
 		expect(mocks.navigate).not.toHaveBeenCalled();
+	});
+
+	it("opens a link from another origin in its own window, not as the control plane's link of that ID", async () => {
+		mocks.save.mockResolvedValue({ artifact: saved });
+		renderHost();
+		const elsewhere = "https://elsewhere.example/artifact/q3-report";
+		await send(elsewhere);
+		await waitFor(() => expect(mocks.openWindow).toHaveBeenCalledWith(elsewhere));
+		expect(mocks.navigate).not.toHaveBeenCalled();
+		expect(useArtifactsViewStore.getState().openSharedArtifact).toBeNull();
 	});
 
 	it("ignores anything that is not a published artifact's viewer", async () => {

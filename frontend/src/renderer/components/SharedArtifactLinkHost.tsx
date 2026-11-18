@@ -51,6 +51,13 @@ export function SharedArtifactLinkHost() {
 			return;
 		}
 		void client.saveSharedArtifact(linkId).then(({ artifact }) => {
+			// Only the link ID reaches the control plane, so open it here only when
+			// the link came from the viewer the control plane names for it; a link
+			// on any other origin opens its own page in the isolated window.
+			if (!sameOrigin(artifact.viewerUrl, viewerUrl)) {
+				fallback();
+				return;
+			}
 			void queryClient.invalidateQueries({ queryKey: sharedArtifactsQueryKey });
 			useArtifactsViewStore.getState().requestOpenSharedArtifact(artifact);
 			void navigate({ to: "/artifacts" });
@@ -58,4 +65,14 @@ export function SharedArtifactLinkHost() {
 	}, [settled, pending, ready, client, navigate, queryClient]);
 
 	return null;
+}
+
+/** Whether two URLs share an origin; false when either is missing or invalid. */
+function sameOrigin(left: string | undefined, right: string): boolean {
+	if (!left) return false;
+	try {
+		return new URL(left).origin === new URL(right).origin;
+	} catch {
+		return false;
+	}
 }
