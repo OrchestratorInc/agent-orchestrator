@@ -745,6 +745,42 @@ func TestCoordinatorFailDoesNotRecordNoticeWhenStoreFails(t *testing.T) {
 	}
 }
 
+func TestCoordinatorCallsOnBatchFailedWhenBatchFails(t *testing.T) {
+	now := time.Date(2026, 11, 16, 10, 0, 0, 0, time.UTC)
+	store := newCoordinatorStore(now)
+	var capturedBatch PreparedBatch
+	var capturedCause error
+	called := false
+	c := NewCoordinator(CoordinatorDeps{
+		Store: store,
+		Now:   func() time.Time { return now },
+		OnBatchFailed: func(ctx context.Context, batch PreparedBatch, cause error) {
+			called = true
+			capturedBatch = batch
+			capturedCause = cause
+		},
+	})
+	batch := PreparedBatch{
+		ProjectID: "p",
+		Token:     "tok",
+		Reports:   []domain.ReportRecord{reportAt("rep-1", "worker", now, now, "fail")},
+	}
+	store.reports = append(store.reports, reportAt("rep-1", "worker", now, now, "fail"))
+	store.reports[0].DeliveryState = domain.ReportClaimed
+	store.reports[0].ClaimToken = "tok"
+	underlying := errors.New("terminal failure")
+	err := c.fail(context.Background(), batch, underlying)
+	if !errors.Is(err, underlying) {
+		t.Fatalf("fail err = %v, want %v", err, underlying)
+	}
+	if !called {
+		t.Fatal("expected OnBatchFailed to be called")
+	}
+	if capturedBatch.Token != "tok" || !errors.Is(capturedCause, underlying) {
+		t.Fatalf("captured batch = %v, cause = %v", capturedBatch, capturedCause)
+	}
+}
+
 func TestCoordinatorOverlappingBatchesFailureNoticeCheckpoint(t *testing.T) {
 	now := time.Date(2026, 11, 16, 10, 0, 0, 0, time.UTC)
 	store := newCoordinatorStore(now)

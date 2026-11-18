@@ -96,7 +96,10 @@ type CoordinatorDeps struct {
 	RetryDelay          time.Duration
 	MaxDeliveryAttempts int
 	Expiry              time.Duration
-	OnBatchFailed       func(context.Context, PreparedBatch, error)
+	// OnBatchFailed is notified when a report batch transitions to the terminal
+	// failed state. It executes under the coordinator mutex; implementations
+	// must not call Coordinator methods or perform blocking operations.
+	OnBatchFailed func(context.Context, PreparedBatch, error)
 }
 
 // NewCoordinator constructs an idle report delivery coordinator.
