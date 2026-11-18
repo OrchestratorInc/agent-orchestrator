@@ -1753,6 +1753,9 @@ func (d reportSemanticDelivery) Submit(ctx context.Context, id domain.SessionID,
 	if errors.Is(err, sessionmanager.ErrComposerBusy) {
 		return fmt.Errorf("%w: %w", reportsvc.ErrOrchestratorBusy, err)
 	}
+	if errors.Is(err, sessionmanager.ErrPromptSubmissionUnobserved) || (err != nil && strings.Contains(err.Error(), "prompt submission was not observed")) {
+		return fmt.Errorf("%w: %w", reportsvc.ErrUnacknowledgedDelivery, err)
+	}
 	return err
 }
 

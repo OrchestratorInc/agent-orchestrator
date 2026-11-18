@@ -5446,6 +5446,10 @@ type semanticDeliveryStore interface {
 	SemanticDeliveryAccepted(ctx context.Context, id domain.SessionID, runtimeLaunchID, deliveryID string) (bool, error)
 }
 
+// ErrPromptSubmissionUnobserved reports a prompt that was submitted to the agent,
+// but whose acceptance confirmation was never observed before the deadline.
+var ErrPromptSubmissionUnobserved = errors.New("prompt submission was not observed")
+
 // SendSemantic delivers an internal message and returns only after the target
 // agent has accepted that exact message. Chat uses its native accepted-turn
 // boundary. Supported TUIs correlate the durable id through UserPromptSubmit;
@@ -5527,7 +5531,7 @@ func (m *Manager) SendSemantic(ctx context.Context, id domain.SessionID, message
 		case <-ctx.Done():
 			return ctx.Err()
 		case <-deadline.C:
-			return fmt.Errorf("%w: prompt submission was not observed", ErrSemanticAcceptanceUnsupported)
+			return fmt.Errorf("%w: %w", ErrSemanticAcceptanceUnsupported, ErrPromptSubmissionUnobserved)
 		case <-ticker.C:
 		}
 	}
