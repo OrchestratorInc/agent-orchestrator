@@ -173,6 +173,9 @@ func (p *Plugin) GetRestoreCommand(ctx context.Context, cfg ports.RestoreConfig)
 	if agentSessionID == "" {
 		return nil, false, nil
 	}
+	if cfg.Session.Metadata[ports.MetadataKeyImportSourceNativeID] != "" {
+		return p.importedRestoreCommand(ctx, cfg, agentSessionID)
+	}
 	cmd, err := p.baseCommand(ctx, cfg.DataDir, cfg.SystemPrompt, cfg.SystemPromptFile, cfg.Config)
 	if err != nil {
 		return nil, false, err

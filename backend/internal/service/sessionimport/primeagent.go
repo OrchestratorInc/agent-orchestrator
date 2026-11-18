@@ -14,6 +14,12 @@ import (
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
 )
 
+// Match the native adapter's bounded history and inventory admission.
+const (
+	maxPrimeImportHistoryBytes = 128 << 20
+	maxPrimeImportFiles        = 10000
+)
+
 func primeAgentRoot(home string) string {
 	expand := func(path string) string {
 		if path == "~" {
@@ -59,6 +65,9 @@ func readPrimeAgentTranscript(ctx context.Context, root string, paths ...string)
 	if !info.Mode().IsRegular() {
 		return transcript{}, errors.New("prime native history is not a regular file")
 	}
+	if info.Size() > maxPrimeImportHistoryBytes {
+		return transcript{}, errors.New("prime native history exceeds the native size limit")
+	}
 	file, err := provider.Open(rel)
 	if err != nil {
 		return transcript{}, err
@@ -92,6 +101,9 @@ func discoverPrimeAgent(ctx context.Context, root string) ([]sourceFiles, error)
 		info, err := entry.Info()
 		if err != nil {
 			return nil //nolint:nilerr // A concurrently removed source is ineligible.
+		}
+		if len(files) >= maxPrimeImportFiles {
+			return errors.New("prime native session inventory exceeds the limit")
 		}
 		files = append(files, sourceFiles{harness: domain.HarnessPrimeAgent, root: root, key: piFamilyNativeID(path), paths: []string{path}, modTime: info.ModTime(), size: info.Size()})
 		return nil

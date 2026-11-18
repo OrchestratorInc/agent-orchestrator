@@ -6,7 +6,6 @@ import (
 	"crypto/sha256"
 	"encoding/json"
 	"errors"
-	"fmt"
 	"io"
 	"io/fs"
 	"os"
@@ -87,6 +86,9 @@ func readPrimeNativeHistory(ctx context.Context, root, path string, prefix int) 
 	// Resolve only parents removed by the provider's native fork. All other
 	// ancestry and every retained record field participate in the digest.
 	dropped := map[string]any{}
+	assistantIndex := map[string]int{}
+	attributedUsage := map[string]any{}
+	rowIndex := 0
 	decoder := json.NewDecoder(bytes.NewReader(data))
 	decoder.UseNumber()
 	for {
@@ -100,6 +102,8 @@ func readPrimeNativeHistory(ctx context.Context, root, path string, prefix int) 
 			}
 			return history, err
 		}
+		index := rowIndex
+		rowIndex++
 		typ, _ := row["type"].(string)
 		if history.id == "" {
 			history.id, _ = row["id"].(string)
@@ -113,6 +117,17 @@ func readPrimeNativeHistory(ctx context.Context, root, path string, prefix int) 
 		if typ == "session" {
 			return history, errors.New("prime native history repeats its header")
 		}
+		if typ == "message" {
+			message, _ := row["message"].(map[string]any)
+			if id, ok := row["id"].(string); ok && message["role"] == "assistant" {
+				assistantIndex[id] = index
+			}
+		}
+		if typ == "child_usage_attributed" {
+			if target, ok := row["targetId"].(string); ok && row["aggregateUsage"] != nil {
+				attributedUsage[target] = row["aggregateUsage"]
+			}
+		}
 		if typ == "git_state" {
 			id, _ := row["id"].(string)
 			if id != "" {
@@ -120,8 +135,15 @@ func readPrimeNativeHistory(ctx context.Context, root, path string, prefix int) 
 			}
 		}
 	}
+	usageByRow := map[int]any{}
+	for target, usage := range attributedUsage {
+		if index, ok := assistantIndex[target]; ok {
+			usageByRow[index] = usage
+		}
+	}
 	decoder = json.NewDecoder(bytes.NewReader(data))
 	decoder.UseNumber()
+	rowIndex = 0
 	hash := sha256.New()
 	for {
 		if err := ctx.Err(); err != nil {
@@ -134,6 +156,13 @@ func readPrimeNativeHistory(ctx context.Context, root, path string, prefix int) 
 			}
 			return history, err
 		}
+		// Prime's parser folds the last aggregate into the last assistant row
+		// with this id before its native fork serializes the retained entries.
+		if usage, ok := usageByRow[rowIndex]; ok {
+			message, _ := row["message"].(map[string]any)
+			message["usage"] = usage
+		}
+		rowIndex++
 		if row["type"] == "session" || row["type"] == "git_state" {
 			continue
 		}
@@ -218,28 +247,14 @@ func (p *Plugin) ProbeNativeSession(ctx context.Context, ref ports.NativeSession
 	return ports.NativeSessionAvailabilityUnavailable, nil
 }
 
-// PrepareImportedSession validates and pins the source ref and AO launch cwd.
-// The subsequent native --fork performs the copy; this method never writes it.
-func (p *Plugin) PrepareImportedSession(ctx context.Context, r ports.ImportedSessionRelocation) (ports.NativeSessionRef, error) {
-	ref := ports.NativeSessionRef{NativeSessionID: r.NativeSessionID, ConfigDir: r.ConfigDir}
-	path, found, err := p.LocateTranscript(ctx, ref)
+func primeSamePath(a, b string) bool {
+	if a == "" || b == "" {
+		return false
+	}
+	left, err := os.Stat(a)
 	if err != nil {
-		return ref, err
+		return false
 	}
-	if !found || filepath.Clean(path) != filepath.Clean(r.TranscriptPath) {
-		return ref, fmt.Errorf("%w: exact prime source history is unavailable", ports.ErrNativeHistoryUnavailable)
-	}
-	history, err := readPrimeNativeHistory(ctx, r.ConfigDir, path, 0)
-	if err != nil {
-		return ref, err
-	}
-	if !primeSamePath(history.cwd, r.SourceCWD) {
-		return ref, errors.New("prime native source workspace changed")
-	}
-	launch, err := os.Stat(r.LaunchCWD)
-	if err != nil || !launch.IsDir() {
-		return ref, errors.New("prime native AO workspace is unavailable")
-	}
-	ref.TranscriptPath = path
-	return ref, nil
+	right, err := os.Stat(b)
+	return err == nil && os.SameFile(left, right)
 }

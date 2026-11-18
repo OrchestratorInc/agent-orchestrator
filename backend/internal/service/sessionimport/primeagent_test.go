@@ -3,8 +3,10 @@ package sessionimport
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -69,5 +71,54 @@ func TestPrimeAgentRejectsUnsupportedNativeVersion(t *testing.T) {
 	}
 	if _, err := readPrimeAgentTranscript(context.Background(), root, path); err == nil {
 		t.Fatal("unsupported native version was offered for import")
+	}
+}
+
+func TestPrimeAgentImportNativeSizeBoundary(t *testing.T) {
+	for _, size := range []int64{maxPrimeImportHistoryBytes, maxPrimeImportHistoryBytes + 1} {
+		t.Run(fmt.Sprint(size), func(t *testing.T) {
+			root := t.TempDir()
+			path := filepath.Join(root, "boundary.jsonl")
+			if err := os.WriteFile(path, []byte("{\"type\":\"session\",\"version\":2}\n"), 0o600); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.Truncate(path, size); err != nil {
+				t.Fatal(err)
+			}
+			_, err := readPrimeAgentTranscript(context.Background(), root, path)
+			if err == nil {
+				t.Fatal("invalid boundary fixture was accepted")
+			}
+			if size > maxPrimeImportHistoryBytes {
+				if !strings.Contains(err.Error(), "size limit") {
+					t.Fatalf("oversize input reached the display reader: %v", err)
+				}
+			} else if !strings.Contains(err.Error(), "version 3") {
+				t.Fatalf("at-limit input was rejected by the size gate: %v", err)
+			}
+		})
+	}
+}
+
+func TestPrimeAgentDiscoveryInventoryBoundary(t *testing.T) {
+	root := t.TempDir()
+	seed := filepath.Join(root, "seed")
+	if err := os.WriteFile(seed, []byte("synthetic inventory entry"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	for i := range maxPrimeImportFiles {
+		if err := os.Link(seed, filepath.Join(root, fmt.Sprintf("%05d.jsonl", i))); err != nil {
+			t.Fatal(err)
+		}
+	}
+	files, err := discoverPrimeAgent(context.Background(), root)
+	if err != nil || len(files) != maxPrimeImportFiles {
+		t.Fatalf("at-limit inventory = %d, %v", len(files), err)
+	}
+	if err := os.Link(seed, filepath.Join(root, "overflow.jsonl")); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := discoverPrimeAgent(context.Background(), root); err == nil || !strings.Contains(err.Error(), "inventory") {
+		t.Fatalf("oversized inventory was accepted: %v", err)
 	}
 }
