@@ -333,7 +333,7 @@ func commandReadable(ctx context.Context, root *os.Root, rel, id string) error {
 		return errors.New("command-code native header is missing or mismatched")
 	}
 	type link struct {
-		parent string
+		parent *string
 		user   bool
 	}
 	links := map[string]link{}
@@ -364,10 +364,7 @@ func commandReadable(ctx context.Context, root *os.Root, rel, id string) error {
 		default:
 			return errors.New("unsupported command-code native entry")
 		}
-		node := link{}
-		if parent != nil {
-			node.parent = *parent
-		}
+		node := link{parent: parent}
 		if entry.Type == "message" && entry.Message.Role == "user" {
 			var text string
 			if json.Unmarshal(entry.Message.Content, &text) == nil {
@@ -392,17 +389,28 @@ func commandReadable(ctx context.Context, root *os.Root, rel, id string) error {
 		return err
 	}
 	seen := map[string]bool{}
-	for leaf != "" && !seen[leaf] {
+	hasUser := false
+	for {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+		if seen[leaf] {
+			return errors.New("command-code native history contains an ancestry cycle")
+		}
 		node, ok := links[leaf]
 		if !ok {
+			return errors.New("command-code native history has a missing parent")
+		}
+		hasUser = hasUser || node.user
+		if node.parent == nil {
 			break
 		}
-		if node.user {
-			return nil
-		}
-		seen[leaf], leaf = true, node.parent
+		seen[leaf], leaf = true, *node.parent
 	}
-	return errors.New("command-code native history has no conversation")
+	if !hasUser {
+		return errors.New("command-code native history has no conversation")
+	}
+	return nil
 }
 
 func copyCommandBundle(ctx context.Context, root *os.Root, sourceDir, targetRoot, bucket, id string) error {

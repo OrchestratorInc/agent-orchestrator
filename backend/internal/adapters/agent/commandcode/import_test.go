@@ -6,6 +6,7 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"strings"
 	"testing"
 
 	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
@@ -191,5 +192,42 @@ func TestCommandCodeAdoptedImportCannotReseedMissingHistory(t *testing.T) {
 	}
 	if _, err := os.Stat(private); !os.IsNotExist(err) {
 		t.Fatalf("adopted import reseeded old history: %v", err)
+	}
+}
+
+func TestCommandCodeNativeHistoryRequiresCompleteActiveAncestry(t *testing.T) {
+	rootMessage := `{"type":"message","id":"m","parentId":null,"timestamp":"2026-11-03T00:00:00Z","message":{"role":"assistant","content":"earlier response"}}` + "\n"
+	childUser := strings.Replace(commandImportUser, `"parentId":null`, `"parentId":"m"`, 1)
+	for _, tc := range []struct {
+		name    string
+		entries string
+		valid   bool
+	}{
+		{name: "null-root", entries: commandImportUser, valid: true},
+		{name: "complete-chain", entries: rootMessage + childUser, valid: true},
+		{name: "self-cycle", entries: strings.Replace(commandImportUser, `"parentId":null`, `"parentId":"u"`, 1)},
+		{name: "two-node-cycle", entries: strings.Replace(rootMessage, `"parentId":null`, `"parentId":"u"`, 1) + childUser},
+		{name: "missing-parent", entries: childUser},
+		{name: "missing-ancestor", entries: strings.Replace(rootMessage, `"parentId":null`, `"parentId":"missing"`, 1) + childUser},
+		{name: "empty-parent-is-not-null", entries: strings.Replace(commandImportUser, `"parentId":null`, `"parentId":""`, 1)},
+		{name: "inactive-cycle", entries: strings.Replace(commandImportUser, `"id":"u","parentId":null`, `"id":"bad","parentId":"bad"`, 1) + commandImportUser, valid: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			data, cwd := t.TempDir(), t.TempDir()
+			id := "11111111-2222-4333-8444-555555555555"
+			bucket, err := commandNativeProjectBucket(cwd)
+			if err != nil {
+				t.Fatal(err)
+			}
+			root := filepath.Join(SessionHomeDir(data, "imported"), ".commandcode")
+			path := filepath.Join(root, "projects", bucket, id+".jsonl")
+			writeHomeFile(t, path, []byte(commandImportHeader(t, id)+tc.entries))
+			if err := ValidateNativeImport(context.Background(), root, path, id); (err == nil) != tc.valid {
+				t.Fatalf("import valid=%v: %v", tc.valid, err)
+			}
+			if err := verifyImportedCommandResume(context.Background(), data, "imported", cwd, id); (err == nil) != tc.valid {
+				t.Fatalf("private resume valid=%v: %v", tc.valid, err)
+			}
+		})
 	}
 }
