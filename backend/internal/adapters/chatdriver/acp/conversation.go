@@ -136,7 +136,11 @@ type conversation struct {
 	// requireAdvertised refuses a config option the session did not advertise
 	// instead of sending it. See Config.RequireAdvertisedOptions.
 	requireAdvertised bool
-	permissionMode    ports.PermissionMode
+	// unofferedModel is the optional model the session was opened on but the
+	// agent does not offer, so applyTurnSettings left the agent's own model in
+	// place. It is the session's model, not a switch, on later sends.
+	unofferedModel string
+	permissionMode ports.PermissionMode
 	permissionFor     PermissionPolicy
 	initialPermission ports.PermissionMode
 	validateSettings  TurnSettingsValidator
@@ -630,6 +634,7 @@ func (c *conversation) checkOptionalModelOffered(model string) error {
 	c.mu.Lock()
 	optionsFor := c.optionsFor
 	legacyModel := c.legacyModel && !c.modelConfigOption
+	unofferedModel := c.unofferedModel
 	c.mu.Unlock()
 	if optionsFor == nil || legacyModel {
 		return nil
@@ -637,6 +642,11 @@ func (c *conversation) checkOptionalModelOffered(model string) error {
 	for _, option := range optionsFor(ports.ChatTurnSettings{Model: model}) {
 		if option.ID != "model" || !option.Optional {
 			continue
+		}
+		// The model the session was opened on is not a switch, even though
+		// the agent kept its own model in its place.
+		if unofferedModel != "" && option.Value == unofferedModel {
+			return nil
 		}
 		offered, known := c.configOptionOffers(option.ID, option.Value)
 		if !known || offered || c.configOptionValueNamed(option.ID, option.Name) != "" {
@@ -728,9 +738,20 @@ func (c *conversation) applyTurnSettings(ctx context.Context, settings ports.Cha
 		}
 		// The models offered do not depend on the model chosen, so this is final.
 		if offered, known := c.configOptionOffers(option.ID, option.Value); option.Optional && option.ID == "model" && known && !offered {
+			c.mu.Lock()
+			c.unofferedModel = option.Value
+			c.mu.Unlock()
 			return nil
 		}
-		return c.setSessionOption(ctx, sessionID, option)
+		if err := c.setSessionOption(ctx, sessionID, option); err != nil {
+			return err
+		}
+		if option.ID == "model" {
+			c.mu.Lock()
+			c.unofferedModel = ""
+			c.mu.Unlock()
+		}
+		return nil
 	}
 	// A model switch may change the modes an ACP agent offers. Apply a modern
 	// model config option before session/set_mode so the requested mode is

@@ -86,3 +86,26 @@ func TestCheckModelSwitchLeavesTheOpenModelAndUnknownCatalogsAlone(t *testing.T)
 		t.Fatalf("checkModelSwitch(no catalog) = %v, want nil", err)
 	}
 }
+
+// A chat opened on an optional model its agent does not offer keeps the
+// agent's own model (applyTurnSettings skips it). Later sends on that same
+// model are not a switch and must not be refused; a real switch still is.
+func TestCheckModelSwitchAllowsTheUnofferedModelTheSessionOpenedOn(t *testing.T) {
+	c := claudeModelCatalogConversation("default")
+	c.sessionID = "session-1"
+	if err := c.applyTurnSettings(context.Background(), ports.ChatTurnSettings{Model: "claude-fable-5-2"}); err != nil {
+		t.Fatalf("opening on an unoffered model: %v", err)
+	}
+	if got := c.configOptionCurrent("model"); got != "default" {
+		t.Fatalf("current model = %q, want the agent's own default kept", got)
+	}
+	if err := c.checkModelSwitch(context.Background(), "claude-fable-5-2"); err != nil {
+		t.Fatalf("send on the model the session opened on: %v, want allowed", err)
+	}
+	c.optionsFor = func(settings ports.ChatTurnSettings) []SessionOption {
+		return []SessionOption{{ID: "model", Value: settings.Model, Optional: true, Name: "Fable 5.9"}}
+	}
+	if err := c.checkModelSwitch(context.Background(), "claude-fable-5-9"); !errors.Is(err, ports.ErrChatConfigOptionInvalid) {
+		t.Fatalf("switch to another unoffered model = %v, want ErrChatConfigOptionInvalid", err)
+	}
+}
