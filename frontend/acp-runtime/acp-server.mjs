@@ -32,9 +32,21 @@ const server = createServer((socket) => {
 	open++;
 	clearTimeout(idleTimer);
 	const { connection, agent } = runAcp(undefined, nodeToWebWritable(socket), nodeToWebReadable(socket));
+	let closed = false;
+	const dispose = () => agent.dispose().catch((err) => console.error("Error during cleanup:", err));
+	// A session registers only after its query starts, so one still starting at
+	// disconnect would outlive dispose(). Dispose again when it finishes.
+	for (const method of ["newSession", "loadSession", "resumeSession", "unstable_forkSession"]) {
+		const start = agent[method].bind(agent);
+		agent[method] = (params) =>
+			start(params).finally(() => {
+				if (closed) dispose();
+			});
+	}
 	socket.on("error", () => socket.destroy());
 	socket.on("close", () => {
-		agent.dispose().catch((err) => console.error("Error during cleanup:", err));
+		closed = true;
+		dispose();
 		if (--open === 0) exitWhenIdle();
 	});
 	connection.closed.then(() => socket.destroy());

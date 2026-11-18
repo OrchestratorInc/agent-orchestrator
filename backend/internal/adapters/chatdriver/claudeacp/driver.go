@@ -161,6 +161,8 @@ func New(plugin claudePlugin, log *slog.Logger, onAuthRejected func()) ports.Cha
 					"authDuration", authDuration, "modelsDuration", time.Since(modelsStarted))
 			}
 			env := claudeACPLaunchEnv(cfg.Env, claudeBinary, cfg.Model, models)
+			// Only a shared launch stores this session's env for claudeSessionMeta.
+			sessionEnv.Delete(cfg.SessionID)
 			if runtimeLaunch.server != "" {
 				launch, ok, err := sharedAdapterLaunch(ctx, cfg, runtimeLaunch, env)
 				if ok {

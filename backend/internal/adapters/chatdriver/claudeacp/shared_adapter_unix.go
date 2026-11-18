@@ -29,8 +29,21 @@ func ensureSharedAdapter(ctx context.Context, socket string, rt runtimeLaunch, e
 		return err
 	}
 	defer func() { _ = lock.Close() }()
-	if err := syscall.Flock(int(lock.Fd()), syscall.LOCK_EX); err != nil {
-		return err
+	// Another launch may hold the lock while its server starts; wait for it
+	// without ignoring ctx.
+	for {
+		err := syscall.Flock(int(lock.Fd()), syscall.LOCK_EX|syscall.LOCK_NB)
+		if err == nil {
+			break
+		}
+		if !errors.Is(err, syscall.EWOULDBLOCK) {
+			return err
+		}
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-time.After(20 * time.Millisecond):
+		}
 	}
 	if adapterListening(socket) {
 		return nil
