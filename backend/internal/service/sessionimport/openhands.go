@@ -81,13 +81,6 @@ func discoverOpenHands(ctx context.Context, root string) ([]sourceFiles, error) 
 			}
 		}
 		if valid {
-			files.fingerprint, err = openhands.ConversationFingerprint(ctx, root, id.String())
-			if err != nil {
-				if ctx.Err() != nil {
-					return nil, ctx.Err()
-				}
-				continue
-			}
 			out = append(out, files)
 		}
 	}
@@ -111,6 +104,10 @@ func readOpenHandsTranscript(ctx context.Context, root string, paths ...string) 
 	// Both preview and Import can retain multiple paths. Always refresh only
 	// this conversation's event list, without recursion or global rediscovery.
 	paths, err = openhands.ConversationFiles(ctx, root, folderID.String())
+	if err != nil {
+		return t, err
+	}
+	fingerprint, err := openhands.ConversationFingerprint(ctx, root, folderID.String())
 	if err != nil {
 		return t, err
 	}
@@ -218,9 +215,9 @@ func readOpenHandsTranscript(ctx context.Context, root string, paths ...string) 
 				return err
 			}
 			var event struct {
-				ID     string `json:"id"`
-				Source string `json:"source"`
-				At     string `json:"timestamp"`
+				ID      string `json:"id"`
+				Source  string `json:"source"`
+				At      string `json:"timestamp"`
 				Message struct {
 					Role    string      `json:"role"`
 					Content contentText `json:"content"`
@@ -264,7 +261,13 @@ func readOpenHandsTranscript(ctx context.Context, root string, paths ...string) 
 	}
 	t.title = importTitle(t.title)
 	t.fingerprint, err = openhands.ConversationFingerprint(ctx, root, t.nativeID)
-	return t, err
+	if err != nil {
+		return t, err
+	}
+	if t.fingerprint != fingerprint {
+		return t, errors.New("openhands native source changed while reading; rescan")
+	}
+	return t, nil
 }
 
 func openHandsEventTime(value string, location *time.Location) time.Time {
