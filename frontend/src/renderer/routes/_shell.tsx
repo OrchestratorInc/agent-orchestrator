@@ -328,11 +328,12 @@ const ShellCenter = memo(function ShellCenter({
 // the <Outlet> content (board / session / settings / …) swaps. Lifted out of
 // the old single <App>, with selection now owned by the router (route params)
 // instead of Zustand. The daemon-status effect runs here exactly once.
-// What useMatchRoute checked: "/" and "/new" exactly, the settings pages fuzzily.
+// What useMatchRoute checked: "/" and "/new" exactly, the settings pages fuzzily, ignoring case.
 function shellRouteKind(pathname: string): "home" | "new" | "settings" | "" {
-	if (pathname === "/") return "home";
-	if (pathname === "/new") return "new";
-	return /^\/(projects\/[^/]+\/)?settings(\/|$)/.test(pathname) ? "settings" : "";
+	const path = pathname.toLowerCase();
+	if (path === "/") return "home";
+	if (path === "/new") return "new";
+	return /^\/(projects\/[^/]+\/)?settings(\/|$)/.test(path) ? "settings" : "";
 }
 
 function ShellLayout() {

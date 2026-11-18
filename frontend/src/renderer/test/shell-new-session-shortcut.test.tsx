@@ -1196,9 +1196,9 @@ describe("shell new-session shortcut subscription", () => {
 		expect(screen.queryByTestId("create-project-flow")).not.toBeInTheDocument();
 	});
 
-	it("stays with the project the new chat page shows, not the last one opened", async () => {
+	it.each(["/new", "/NEW"])("stays with the project the new chat page shows at %s, not the last one opened", async (path) => {
 		window.localStorage.setItem("ao.newTask.lastProject", "proj-1");
-		shellMocks.state.matchRouteTarget = "/new";
+		shellMocks.state.matchRouteTarget = path;
 		shellMocks.state.routeSearch = { project: "proj-2" };
 		await renderShell();
 
