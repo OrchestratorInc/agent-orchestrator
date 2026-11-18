@@ -1636,7 +1636,8 @@ func (m *Manager) markSpawned(
 	if err != nil {
 		return err
 	}
-	reactivateSessionUsage(ctx, id, launchID, reactivator)
+	// Usage collection catches up in the background; a new agent's first prompt does not wait for it.
+	go reactivateSessionUsage(context.WithoutCancel(ctx), id, launchID, reactivator)
 	return nil
 }
 

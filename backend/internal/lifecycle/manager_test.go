@@ -1969,6 +1969,7 @@ type fakeUsageLifecycle struct {
 	reactivateID     domain.SessionID
 	reactivateLaunch string
 	sawLive          bool
+	reactivated      chan struct{}
 }
 
 func (f *fakeUsageLifecycle) ReactivateSession(
@@ -1980,6 +1981,9 @@ func (f *fakeUsageLifecycle) ReactivateSession(
 	f.reactivateID = id
 	f.reactivateLaunch = launchID
 	f.sawLive = !f.store.sessions[id].IsTerminated
+	if f.reactivated != nil {
+		f.reactivated <- struct{}{}
+	}
 	return nil
 }
 
@@ -1995,11 +1999,16 @@ func TestMarkSpawnedReactivatesUsageAfterLifecycleTransition(t *testing.T) {
 	rec := st.sessions["mer-1"]
 	rec.CleanupGeneration = 7
 	st.sessions[rec.ID] = rec
-	usage := &fakeUsageLifecycle{fakeUsageFinalizer: fakeUsageFinalizer{store: st}}
+	usage := &fakeUsageLifecycle{fakeUsageFinalizer: fakeUsageFinalizer{store: st}, reactivated: make(chan struct{}, 1)}
 	m.SetUsageFinalizer(usage)
 
 	if err := m.MarkSpawned(ctx, "mer-1", domain.SessionMetadata{RuntimeLaunchID: "launch-new"}); err != nil {
 		t.Fatal(err)
+	}
+	select {
+	case <-usage.reactivated:
+	case <-time.After(5 * time.Second):
+		t.Fatal("usage was not reactivated")
 	}
 	if got := st.sessions["mer-1"].CleanupGeneration; got != 8 {
 		t.Fatalf("restored cleanup generation = %d, want 8", got)
