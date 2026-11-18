@@ -26,7 +26,7 @@ func TestAuggieListedNativeHistory(t *testing.T) {
 		t.Fatalf("listed=%+v err=%v", files, err)
 	}
 	got, err := readAuggieTranscript(context.Background(), root, path)
-	if err != nil || got.cwd != "/work/repo" || got.title != "fix widget" || got.model != "native-model" || len(got.messages) != 2 || got.messages[1].Text != "fixed" {
+	if err != nil || got.cwd != "/work/repo" || got.title != "fix widget" || len(got.messages) != 2 || got.messages[1].Text != "fixed" {
 		t.Fatalf("native=%+v err=%v", got, err)
 	}
 	for _, marker := range []string{`"isCloudAgent":true,`, `"poseidonAgentId":"remote",`, `"parentConversationId":"parent",`} {

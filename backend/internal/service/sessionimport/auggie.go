@@ -77,7 +77,6 @@ func readAuggieTranscript(ctx context.Context, root string, paths ...string) (tr
 	if err != nil {
 		return t, err
 	}
-	t.model = session.State.Model
 	var items []tagged
 	for _, history := range session.History {
 		if err := ctx.Err(); err != nil {
