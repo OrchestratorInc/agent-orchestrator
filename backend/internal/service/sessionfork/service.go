@@ -34,20 +34,27 @@ const (
 	CodeNativeMissing    = "FORK_NATIVE_SESSION_MISSING"
 	CodeTurnFilesMissing = "FORK_TURN_FILES_MISSING"
 	CodeOlderTurn        = "FORK_OLDER_TURN_UNSUPPORTED"
+	// CodeStandaloneOlderTurn: a plain folder keeps no files per turn.
+	CodeStandaloneOlderTurn = "FORK_STANDALONE_OLDER_TURN"
+	// CodeWorkspaceUnmanaged: a plain folder outside Orchestrator's own
+	// workspaces, such as the home folder, is never copied.
+	CodeWorkspaceUnmanaged = "FORK_WORKSPACE_UNMANAGED"
 )
 
 var refusalMessages = map[string]string{
-	CodeOrchestrator:     "Orchestrators can't be forked.",
-	CodeWorkspaceProject: "Forking isn't available for multi-repo projects.",
-	CodeNotGit:           "Forking needs a git repository.",
-	CodeSourceTerminated: "Restore this session to fork it.",
-	CodeSourceBusy:       "Wait for the agent to go idle to fork this session.",
-	CodeSourcePreparing:  "Wait for this session to finish setting up.",
-	CodeNoFinishedTurn:   "This session has no finished turn to fork yet.",
-	CodeAgentUnsupported: "This agent can't be forked.",
-	CodeNativeMissing:    "This agent no longer has this conversation, so it can't be forked.",
-	CodeTurnFilesMissing: "The files from this turn weren't saved, so it can't be forked.",
-	CodeOlderTurn:        "This agent can fork only from its latest turn.",
+	CodeOrchestrator:        "Orchestrators can't be forked.",
+	CodeWorkspaceProject:    "Forking isn't available for multi-repo projects.",
+	CodeNotGit:              "Forking needs a git repository.",
+	CodeSourceTerminated:    "Restore this session to fork it.",
+	CodeSourceBusy:          "Wait for the agent to go idle to fork this session.",
+	CodeSourcePreparing:     "Wait for this session to finish setting up.",
+	CodeNoFinishedTurn:      "This session has no finished turn to fork yet.",
+	CodeAgentUnsupported:    "This agent can't be forked.",
+	CodeNativeMissing:       "This agent no longer has this conversation, so it can't be forked.",
+	CodeTurnFilesMissing:    "The files from this turn weren't saved, so it can't be forked.",
+	CodeOlderTurn:           "This agent can fork only from its latest turn.",
+	CodeStandaloneOlderTurn: "Standalone agents can be forked only from their latest turn.",
+	CodeWorkspaceUnmanaged:  "This session's folder can't be copied.",
 }
 
 // ErrDisabled means session forks are turned off for this service.
@@ -152,6 +159,17 @@ type Seeds interface {
 	SnapshotHead(ctx context.Context, workspace, ref string) (string, error)
 }
 
+// DirSeeds copies a plain folder, one with no git repository, such as a
+// standalone agent's workspace.
+type DirSeeds interface {
+	// Manages reports whether workspace is one of Orchestrator's own plain
+	// folders, the only kind a fork copies.
+	Manages(workspace string) bool
+	// Capture copies workspace to a new seed and returns where it is.
+	Capture(ctx context.Context, workspace string) (seed string, err error)
+	Delete(ctx context.Context, seed string) error
+}
+
 // Accounts reads which provider account a session runs under.
 type Accounts interface {
 	SessionAccountID(ctx context.Context, id domain.SessionID, harness domain.AgentHarness) (string, error)
@@ -174,6 +192,9 @@ type Deps struct {
 	Spawner  Spawner
 	Sources  Sources
 	Seeds    Seeds
+	// DirSeeds is optional; without it a session in a plain folder is
+	// refused, as one outside git.
+	DirSeeds DirSeeds
 	Now      func() time.Time
 }
 
@@ -363,21 +384,21 @@ func (s *Service) ForkTurn(ctx context.Context, sourceID domain.SessionID, clien
 	if s.deps.Accounts != nil {
 		account, err := s.deps.Accounts.SessionAccountID(ctx, plan.source.ID, plan.source.Harness)
 		if err != nil {
-			plan.dropSeed(ctx, s.deps.Seeds)
+			s.dropSeed(ctx, plan)
 			return domain.SessionRecord{}, fmt.Errorf("read source account: %w", err)
 		}
 		cfg.AgentAccountID = account
 	}
 	rec, _, _, err := s.deps.Spawner.Spawn(ctx, cfg)
 	if err != nil {
-		plan.dropSeed(ctx, s.deps.Seeds)
+		s.dropSeed(ctx, plan)
 		return domain.SessionRecord{}, err
 	}
 	if _, found, err := s.deps.Lineage.GetSessionFork(ctx, rec.ID); err != nil {
 		return domain.SessionRecord{}, err
 	} else if found {
 		// A retried request returned the first fork; this snapshot is unused.
-		plan.dropSeed(ctx, s.deps.Seeds)
+		s.dropSeed(ctx, plan)
 	} else {
 		// The session exists now, so its lineage is written even if the
 		// request is cancelled. Should this write fail, retrying the same
@@ -434,24 +455,32 @@ func (s *Service) RetrySpawnFork(ctx context.Context, fork domain.SessionRecord)
 }
 
 type forkPlan struct {
-	source  domain.SessionRecord
-	agent   Source
-	title   string
-	root    domain.SessionID
-	number  int
-	name    string
-	head    string
-	seedRef string
+	source domain.SessionRecord
+	// plainFolder marks a source with no git repository, whose files are
+	// copied as a folder.
+	plainFolder bool
+	agent       Source
+	title       string
+	root        domain.SessionID
+	number      int
+	name        string
+	head        string
+	seedRef     string
 	// keepSeed marks a seed the fork borrowed and must not delete.
 	keepSeed bool
+	// seedDir is a plain folder's copy, used instead of seedRef.
+	seedDir string
 }
 
 // dropSeed deletes a seed the fork captured itself; a borrowed one is kept.
-func (p forkPlan) dropSeed(ctx context.Context, seeds Seeds) {
+func (s *Service) dropSeed(ctx context.Context, p forkPlan) {
+	if p.seedDir != "" {
+		_ = s.deps.DirSeeds.Delete(context.WithoutCancel(ctx), p.seedDir)
+	}
 	if p.keepSeed || p.seedRef == "" {
 		return
 	}
-	_ = seeds.Delete(context.WithoutCancel(ctx), p.source.Metadata.WorkspacePath, p.seedRef)
+	_ = s.deps.Seeds.Delete(context.WithoutCancel(ctx), p.source.Metadata.WorkspacePath, p.seedRef)
 }
 
 func (p forkPlan) spawnFork() *ports.SpawnFork {
@@ -460,6 +489,7 @@ func (p forkPlan) spawnFork() *ports.SpawnFork {
 		StartPoint:       p.head,
 		SeedRef:          p.seedRef,
 		KeepSeedRef:      p.keepSeed,
+		SeedDir:          p.seedDir,
 		SourceTitle:      p.title,
 		SourceWorkspace:  p.source.Metadata.WorkspacePath,
 		ArtifactsAsOf:    p.agent.FilesAsOf,
@@ -487,6 +517,9 @@ func (s *Service) plan(ctx context.Context, sourceID domain.SessionID, turnID st
 	if rec.IsTerminated {
 		return forkPlan{}, refuse(CodeSourceTerminated)
 	}
+	// A standalone agent, or a legacy Scratch project's session, works in a
+	// plain folder with no git repository.
+	plainFolder := rec.IsStandalone()
 	if rec.ProjectID != "" {
 		project, found, err := s.deps.Projects.GetProject(ctx, string(rec.ProjectID))
 		if err != nil {
@@ -495,6 +528,7 @@ func (s *Service) plan(ctx context.Context, sourceID domain.SessionID, turnID st
 		if found && project.Kind.WithDefault() == domain.ProjectKindWorkspace {
 			return forkPlan{}, refuse(CodeWorkspaceProject)
 		}
+		plainFolder = found && project.Kind.WithDefault() == domain.ProjectKindScratch
 	}
 	if rec.ProvisionState != "" && rec.ProvisionState != domain.SessionProvisionReady {
 		return forkPlan{}, refuse(CodeSourcePreparing)
@@ -512,10 +546,15 @@ func (s *Service) plan(ctx context.Context, sourceID domain.SessionID, turnID st
 	if agent.Refusal != "" {
 		return forkPlan{}, refuse(agent.Refusal)
 	}
+	if plainFolder {
+		if agent, err = s.plainFolderSource(ctx, rec, turnID, agent); err != nil {
+			return forkPlan{}, err
+		}
+	}
 	if domain.NormalizeSessionMode(rec.Mode) == domain.SessionModeChat && agent.LatestTurnID == "" {
 		return forkPlan{}, refuse(CodeNoFinishedTurn)
 	}
-	plan := forkPlan{source: rec, agent: agent, title: Title(rec), root: rec.ID}
+	plan := forkPlan{source: rec, agent: agent, title: Title(rec), root: rec.ID, plainFolder: plainFolder}
 	if lineage, found, err := s.deps.Lineage.GetSessionFork(ctx, rec.ID); err != nil {
 		return forkPlan{}, err
 	} else if found {
@@ -528,6 +567,12 @@ func (s *Service) plan(ctx context.Context, sourceID domain.SessionID, turnID st
 	plan.number = nextFreeNumber(plan.number, s.numbers[plan.root])
 	s.numbersMu.Unlock()
 	plan.name = ForkDisplayName(plan.number, RootTitle(plan.title))
+	if plainFolder {
+		if !capture {
+			return plan, nil
+		}
+		return s.captureFolder(ctx, plan)
+	}
 	if !capture {
 		if _, err := s.deps.Seeds.Capture(ctx, rec.Metadata.WorkspacePath, ""); errors.Is(err, ErrNotRepository) {
 			return forkPlan{}, refuse(CodeNotGit)
@@ -562,7 +607,49 @@ func (s *Service) plan(ctx context.Context, sourceID domain.SessionID, turnID st
 		// What Freeze kept must match the files: a source that acted since
 		// could have changed them in a way its copied conversation misses.
 		if err := s.requireUnchanged(ctx, rec); err != nil {
-			plan.dropSeed(ctx, s.deps.Seeds)
+			s.dropSeed(ctx, plan)
+			return forkPlan{}, err
+		}
+	}
+	return plan, nil
+}
+
+// plainFolderSource checks a plain-folder source: only an Orchestrator folder
+// is copied, and only as it is now, since no files were kept for older turns.
+func (s *Service) plainFolderSource(ctx context.Context, rec domain.SessionRecord, turnID string, agent Source) (Source, error) {
+	if s.deps.DirSeeds == nil {
+		return Source{}, refuse(CodeNotGit)
+	}
+	if !s.deps.DirSeeds.Manages(rec.Metadata.WorkspacePath) {
+		return Source{}, refuse(CodeWorkspaceUnmanaged)
+	}
+	if turnID != "" {
+		latest, err := s.deps.Sources.ForkSource(ctx, rec, "")
+		if err != nil {
+			return Source{}, err
+		}
+		if latest.LatestTurnID != turnID {
+			return Source{}, refuse(CodeStandaloneOlderTurn)
+		}
+	}
+	agent.AnyTurn = false
+	return agent, nil
+}
+
+// captureFolder copies a plain-folder source's files for the fork.
+func (s *Service) captureFolder(ctx context.Context, plan forkPlan) (forkPlan, error) {
+	if plan.agent.Freeze != nil {
+		plan.agent.Freeze(ctx)
+	}
+	seed, err := s.deps.DirSeeds.Capture(ctx, plan.source.Metadata.WorkspacePath)
+	if err != nil {
+		return forkPlan{}, fmt.Errorf("capture source files: %w", err)
+	}
+	plan.seedDir = seed
+	if plan.agent.Freeze != nil {
+		// As for a git source: what Freeze kept must match the files.
+		if err := s.requireUnchanged(ctx, plan.source); err != nil {
+			s.dropSeed(ctx, plan)
 			return forkPlan{}, err
 		}
 	}
