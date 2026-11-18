@@ -90,6 +90,9 @@ export type InspectorView = "summary" | "reviews" | "browser" | "sideChat" | "fi
  */
 export type BackgroundTaskTab = { task: BackgroundTask; ended?: boolean };
 
+/** One run of a task: a rerun that fails again is a new failure. */
+export const failedTaskKey = (task: BackgroundTask) => `${task.id}\n${task.runId ?? ""}`;
+
 export type CloudReviewUiState = {
 	showChanges?: boolean;
 	filter?: string;
@@ -129,6 +132,8 @@ export type InspectorSessionState = {
 	activeTaskTab?: string;
 	/** The view that closing the last task tab returns to. */
 	taskReturnView?: InspectorView;
+	/** Failed task runs whose tab has been shown (`failedTaskKey`); the composer strip leaves them out. */
+	seenFailedTasks?: string[];
 };
 
 export type FileDisplayMode = "diff" | "file" | "rendered";
@@ -336,6 +341,8 @@ export type UiState = {
 	closeTaskTab: (sessionId: string, taskId: string) => void;
 	/** Refreshes open task tabs from a background-task reading. */
 	syncTaskTabs: (sessionId: string, tasks: BackgroundTask[]) => void;
+	/** Records that a failed task run was shown in its tab, so the composer strip stops raising it. */
+	acknowledgeFailedTask: (sessionId: string, task: BackgroundTask) => void;
 	/**
 	 * Runs the "entering this session" defaults — Summary tab, baseline browser
 	 * reveal — exactly once per session's lifetime. Backed by persisted store
@@ -789,6 +796,18 @@ export const useUiStore = create<UiState>((set, get) => ({
 			});
 			if (!changed) return state;
 			return { inspectorSessions: { ...state.inspectorSessions, [sessionId]: { ...current, taskTabs } } };
+		}),
+	acknowledgeFailedTask: (sessionId, task) =>
+		set((state) => {
+			const current = inspectorState(state.inspectorSessions, sessionId);
+			const key = failedTaskKey(task);
+			if (current.seenFailedTasks?.includes(key)) return state;
+			return {
+				inspectorSessions: {
+					...state.inspectorSessions,
+					[sessionId]: { ...current, seenFailedTasks: [...(current.seenFailedTasks ?? []), key] },
+				},
+			};
 		}),
 	initializeInspectorSession: (sessionId, hasBrowserContent, hasInspector) =>
 		set((state) => {

@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { rememberedFileDisplayMode, sidebarIsVisible, sidebarOccupiesLayout, useUiStore } from "./ui-store";
+import { failedTaskKey, rememberedFileDisplayMode, sidebarIsVisible, sidebarOccupiesLayout, useUiStore } from "./ui-store";
 import { sessionUiKey } from "../lib/hosts";
 import { previewDocumentThemeStyle } from "../lib/theme";
 
@@ -470,6 +470,17 @@ describe("background task tabs", () => {
 		expect(tabs()).toBe(before);
 		store.syncTaskTabs(id, []);
 		expect(tabs().taskTabs?.map((tab) => [tab.task.state, Boolean(tab.ended)])).toEqual([["failed", false], ["running", true]]);
+	});
+
+	it("remembers each failed run that its tab has shown, once", () => {
+		const store = useUiStore.getState();
+		const failed = task("build", { state: "failed", runId: "r1" });
+		store.acknowledgeFailedTask(id, failed);
+		const before = tabs();
+		store.acknowledgeFailedTask(id, failed);
+		expect(tabs()).toBe(before);
+		store.acknowledgeFailedTask(id, task("build", { state: "failed", runId: "r2" }));
+		expect(tabs().seenFailedTasks).toEqual([failedTaskKey(failed), failedTaskKey(task("build", { runId: "r2" }))]);
 	});
 
 	it("remembers the view a fixed tab left for the task tabs", () => {

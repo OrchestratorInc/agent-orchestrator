@@ -4,6 +4,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { WorkspaceSession } from "../types/workspace";
 import type { BackgroundTask, BackgroundTaskReading } from "../hooks/useBackgroundTasks";
 import { BackgroundTasksBadge, ComposerBackgroundTasks, SessionBackgroundTasks, formatElapsed } from "./BackgroundTasks";
+import { failedTaskKey, useUiStore } from "../stores/ui-store";
 
 const { queryMock, mutateMock } = vi.hoisted(() => ({ queryMock: vi.fn(), mutateMock: vi.fn() }));
 vi.mock("../hooks/useBackgroundTasks", () => ({
@@ -157,6 +158,39 @@ describe("composer tab", () => {
 		expect(screen.getByRole("status")).toHaveTextContent("Couldn't stop");
 		expect(screen.getByRole("button", { name: "Stop Server" })).toBeEnabled();
 		expect(screen.getByRole("button", { name: "Stop Watcher" })).toBeDisabled();
+	});
+
+	it("disables every control for a task while one of them stops it", async () => {
+		mutateMock.mockImplementationOnce(() => new Promise<void>(() => {}));
+		const strip = render(<ComposerBackgroundTasks sessionId="s" reading={reading} />);
+		const panel = render(<ComposerBackgroundTasks sessionId="s" reading={reading} />);
+		await userEvent.click(within(strip.container).getByRole("button", { name: "Stop Dev server" }));
+		expect(within(panel.container).getByRole("button", { name: "Stop Dev server" })).toBeDisabled();
+		// The control that started the stop lets it go when it leaves.
+		strip.unmount();
+		expect(within(panel.container).getByRole("button", { name: "Stop Dev server" })).toBeEnabled();
+		expect(mutateMock).toHaveBeenCalledTimes(1);
+	});
+
+	it("leaves out a failure once its tab has shown it, until the task fails again", () => {
+		const failed = shell("build", "npm run build", { state: "failed", runId: "r1", endedAt: ago(1_000) });
+		const seen = [failedTaskKey(failed)];
+		const { rerender } = render(<ComposerBackgroundTasks sessionId="s" reading={readingOf([shell("shell", "Dev server"), failed])} seenFailures={seen} />);
+		expect(screen.getByText("Dev server")).toBeVisible();
+		expect(screen.queryByText("Building")).toBeNull();
+		expect(screen.queryByText(/failed/)).toBeNull();
+		rerender(<ComposerBackgroundTasks sessionId="s" reading={readingOf([shell("shell", "Dev server"), { ...failed, runId: "r2" }])} seenFailures={seen} />);
+		expect(screen.getByRole("button", { name: /1 running.*1 failed/ })).toBeVisible();
+	});
+
+	it("reads the failures already shown from the session's side panel", () => {
+		const failed = shell("build", "npm run build", { state: "failed", endedAt: ago(1_000) });
+		queryMock.mockReturnValue({ data: readingOf([failed]), isError: false });
+		useUiStore.setState({ inspectorSessions: { s: { isOpen: true, view: "task", seenFailedTasks: [failedTaskKey(failed)] } } });
+		try {
+			const { container } = render(<SessionBackgroundTasks session={session} />);
+			expect(container).toBeEmptyDOMElement();
+		} finally { useUiStore.setState({ inspectorSessions: {} }); }
 	});
 
 	it("gives the square back when the task outlives its stop", async () => {

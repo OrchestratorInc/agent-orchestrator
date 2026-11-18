@@ -48,6 +48,8 @@ const inspectorShellClass = "@container/inspector flex h-full min-h-0 flex-col o
 const inspectorBodyBaseClass = "min-h-0 flex-1";
 const inspectorScrollableBodyClass = "board-scrollbar overflow-x-hidden overflow-y-auto pt-0.5 pb-3";
 export const inspectorEmptyClass = "text-xs text-settings-muted leading-normal";
+/** How far a shown task tab stays from the scroller's edge: the edge fade's width. */
+const TASK_TAB_EDGE_PX = 24;
 
 export function SessionInspectorShellView({
 	activeView,
@@ -92,6 +94,20 @@ export function SessionInspectorShellView({
 	taskView?: ReactNode;
 }) {
 	const tablistRef = useRef<HTMLDivElement>(null);
+	const taskTabsRef = useRef<HTMLDivElement>(null);
+	const shownTaskTab = activeView === "task" ? activeTaskTab : undefined;
+	// Task tabs scroll sideways once they outgrow the bar. The shown one scrolls
+	// into view when it opens or is picked, clear of the edge fade. Only this
+	// strip moves: scrollIntoView would also shift the app's sideways wrappers.
+	useEffect(() => {
+		const scroller = taskTabsRef.current;
+		const tab = scroller?.querySelector<HTMLElement>('[role="tab"][data-active]')?.parentElement;
+		if (!scroller || !tab || !shownTaskTab) return;
+		const bounds = scroller.getBoundingClientRect();
+		const rect = tab.getBoundingClientRect();
+		if (rect.left < bounds.left + TASK_TAB_EDGE_PX) scroller.scrollLeft -= bounds.left + TASK_TAB_EDGE_PX - rect.left;
+		else if (rect.right > bounds.right - TASK_TAB_EDGE_PX) scroller.scrollLeft += rect.right - (bounds.right - TASK_TAB_EDGE_PX);
+	}, [shownTaskTab, taskTabs.length]);
 
 	if (loadingText) {
 		return (
@@ -205,7 +221,14 @@ export function SessionInspectorShellView({
 							</button>
 						))}
 						{taskTabs.length ? (
-							<div className="session-inspector__task-tabs edge-fade edge-fade-x scrollbar-none flex min-w-0 items-center gap-1 overflow-x-auto">
+							<div
+								className="session-inspector__task-tabs edge-fade edge-fade-x scrollbar-none flex min-w-0 items-center gap-1 overflow-x-auto"
+								// A mouse wheel scrolls the tabs sideways; a trackpad already does.
+								onWheel={(event) => {
+									if (Math.abs(event.deltaY) > Math.abs(event.deltaX)) event.currentTarget.scrollLeft += event.deltaY;
+								}}
+								ref={taskTabsRef}
+							>
 								<span aria-hidden="true" className="mx-0.5 h-4 w-px shrink-0 bg-border" />
 								{taskTabs.map((tab, index) => {
 									const selected = activeView === "task" && activeTaskTab === tab.id;

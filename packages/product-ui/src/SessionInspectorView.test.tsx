@@ -121,6 +121,27 @@ describe("SessionInspectorShellView", () => {
     fireEvent.click(screen.getByRole("tab", { name: "Running tests" }));
     expect(onTaskTabSelect).toHaveBeenLastCalledWith("tests");
   });
+  it("scrolls the shown task tab into view when the tabs overflow, and scrolls them with a mouse wheel", () => {
+    const taskTabs = ["a", "b", "c"].map((id) => ({ id, label: `Task ${id}`, closeLabel: `Close Task ${id}`, icon: <svg /> }));
+    const rect = (left: number, width: number) => ({ left, right: left + width, width, top: 0, bottom: 28, height: 28, x: left, y: 0, toJSON: () => ({}) }) as DOMRect;
+    const view = (activeTaskTab: string) => (
+      <SessionInspectorShellView
+        activeView="task" activeTaskTab={activeTaskTab} ariaLabel="Session inspector" browserPoppedOut={false}
+        tabs={tabs} onViewChange={vi.fn()} taskTabs={taskTabs} taskView={<div />} onTaskTabSelect={vi.fn()} onTaskTabClose={vi.fn()}
+      />
+    );
+    const { rerender } = render(view("a"));
+    const scroller = screen.getByRole("tab", { name: "Task a" }).closest(".session-inspector__task-tabs") as HTMLElement;
+    // The strip shows 0..200; tab c sits past its end at 300..380.
+    scroller.getBoundingClientRect = () => rect(0, 200);
+    (screen.getByRole("tab", { name: "Task c" }).parentElement as HTMLElement).getBoundingClientRect = () => rect(300, 80);
+    const start = scroller.scrollLeft;
+    rerender(view("c"));
+    // Far enough that its right edge clears the 24px edge fade.
+    expect(scroller.scrollLeft - start).toBe(380 - (200 - 24));
+    fireEvent.wheel(scroller, { deltaY: 40 });
+    expect(scroller.scrollLeft - start).toBe(380 - (200 - 24) + 40);
+  });
   it("renders the artifacts view under its own tab", () => {
     const withArtifacts = [...tabs, { id: "artifacts" as const, icon: <svg />, label: "Artifacts" }];
     render(<SessionInspectorShellView

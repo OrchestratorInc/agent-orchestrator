@@ -226,11 +226,17 @@ export const SessionInspector = memo(function SessionInspector({
 	const taskTabs = useUiStore((state) => (uiKey ? state.inspectorSessions[uiKey]?.taskTabs : undefined));
 	const activeTaskTabId = useUiStore((state) => (uiKey ? state.inspectorSessions[uiKey]?.activeTaskTab : undefined));
 	const activeTaskTab = taskTabs?.find((tab) => tab.task.id === activeTaskTabId);
-	const tasksReading = useBackgroundTasks(session?.id ?? "", Boolean(session && taskTabs?.length && supportsLocalBackgroundTasks(session)), true).data;
+	const tasksWatchable = Boolean(session && supportsLocalBackgroundTasks(session));
+	const hasTaskTabs = Boolean(taskTabs?.length);
+	const tasksReading = useBackgroundTasks(session?.id ?? "", hasTaskTabs && tasksWatchable, true).data;
 	useEffect(() => {
-		// An unavailable reading says nothing about the tasks; keep what the tabs last saw.
-		if (uiKey && tasksReading && tasksReading.availability !== "unavailable") useUiStore.getState().syncTaskTabs(uiKey, tasksReading.tasks);
-	}, [tasksReading, uiKey]);
+		if (!uiKey || !hasTaskTabs) return;
+		// An ended session sends no more readings, and an unavailable one means its
+		// agent isn't reporting: a tab still showing a live task would offer a Stop
+		// that can't land. Mark it ended; a reading that lists it again restores it.
+		if (!tasksWatchable || tasksReading?.availability === "unavailable") useUiStore.getState().syncTaskTabs(uiKey, []);
+		else if (tasksReading) useUiStore.getState().syncTaskTabs(uiKey, tasksReading.tasks);
+	}, [hasTaskTabs, tasksReading, tasksWatchable, uiKey]);
 	const inspectorQueryClient = useQueryClient();
 	// An imported chat has no AO workspace until it is opened and resumes.
 	const localFilesChangedCount = useSessionWorkspaceFilesChangedCount(
@@ -284,6 +290,13 @@ export const SessionInspector = memo(function SessionInspector({
 	const view: InspectorView = requestedView === "task"
 		? (activeTaskTab ? "task" : "summary")
 		: availableViewDefs.some((entry) => entry.id === requestedView) ? requestedView : "summary";
+	// A failure shown in its tab has been seen: the composer strip stops raising it.
+	const shownFailure = view === "task" && isInspectorVisible && activeTaskTab && !activeTaskTab.ended && activeTaskTab.task.state === "failed"
+		? activeTaskTab.task
+		: undefined;
+	useEffect(() => {
+		if (uiKey && shownFailure) useUiStore.getState().acknowledgeFailedTask(uiKey, shownFailure);
+	}, [shownFailure, uiKey]);
 	const sessionLoaded = session !== undefined;
 	useEffect(() => {
 		// Until the session loads, its tabs are unknown: keep the requested view.
