@@ -28,7 +28,7 @@ func (m *Manager) commitAttributionEnabled(ctx context.Context) bool {
 }
 
 // commitTrailerWanted reports whether new commits in this project's sessions
-// get the Co-authored-by: Orchestrator trailer.
+// get the Co-authored-by: orchestrator-inc[bot] trailer.
 func (m *Manager) commitTrailerWanted(ctx context.Context, project domain.ProjectRecord) bool {
 	return !project.Config.Attribution.DisableCommitTrailer && m.commitAttributionEnabled(ctx)
 }

@@ -335,7 +335,7 @@ function SettingsBody({ project, projectId, hostId, hostConnected, onSaved, sect
 		}
 	};
 	return <ProjectSettingsEditor initialValues={initialValues} section={section} disabled={!hostConnected}
-		capabilities={{ workflow: !isScratchProject, sessionPrefix: !isScratchProject, intake: intakeVisible, reviewer: !isScratchProject, requiredAgents: true, workersRequestReview: !isScratchProject, attribution: !isScratchProject && !hostId && !!settings?.commitAttribution }}
+		capabilities={{ workflow: !isScratchProject, sessionPrefix: !isScratchProject, sessionPrefixPlaceholder: "orchestrator", intake: intakeVisible, reviewer: !isScratchProject, requiredAgents: true, workersRequestReview: !isScratchProject, attribution: !isScratchProject && !hostId && !!settings?.commitAttribution }}
 		details={[{ label: t("settings.project.path"), value: project.path, href: hostId ? undefined : `file://${encodeURI(project.path)}` }, { label: t("settings.project.repo"), value: project.repo || "—", href: project.repo ? repositoryHref(project.repo) : undefined }]}
 		workspaceRepos={project.kind === "workspace" ? project.workspaceRepos ?? [] : undefined} repository={project.repo}
 		modelScope={() => ""} defaultReviewer={(draft) => WORKER_DEFAULT_REVIEWERS[draft.workerAgent] ?? "claude-code"}

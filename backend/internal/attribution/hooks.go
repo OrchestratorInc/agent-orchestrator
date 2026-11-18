@@ -22,7 +22,7 @@ var hookScript []byte
 
 // HookNames are the hooks every session worktree gets a dispatcher for: the
 // commit-message hooks that add the trailer, plus the hooks repositories
-// commonly set up (husky installs this set), so a hook the repository adds
+// commonly set up (the set hook managers install), so a hook the repository adds
 // after the session started still runs. Git runs a hook only when its file
 // exists, so the set stays small: each dispatcher costs a shell and a few git
 // processes.
@@ -200,7 +200,7 @@ func ConfigureWorktree(ctx context.Context, worktree, base, coAuthor string) err
 		// A hooksPath set in this worktree's own config would be hidden by
 		// ours, so it is saved and the dispatcher runs it. Repository, global
 		// and system values are read live by the dispatcher instead, which
-		// also covers a hooksPath that husky sets after the session started.
+		// also covers a hooksPath a hook manager sets after the session started.
 		if current != "" && !within(base, current) {
 			if out, err := git("config", "--worktree", ConfigOriginalHooksPath, current); err != nil {
 				return fmt.Errorf("attribution: save original hooksPath: %s: %w", out, err)

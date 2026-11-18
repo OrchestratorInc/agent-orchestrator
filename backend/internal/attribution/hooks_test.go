@@ -373,33 +373,33 @@ func TestHookPassesThroughDefaultHooks(t *testing.T) {
 	}
 }
 
-func TestHookPassesThroughHuskyHooksPath(t *testing.T) {
+func TestHookPassesThroughHookManagerHooksPath(t *testing.T) {
 	var marker string
 	r := newRepo(t, testCoAuthor, func(r repo) {
-		marker = filepath.Join(r.main, "husky-ran")
-		writeHook(t, filepath.Join(r.main, ".husky"), "pre-commit", "echo \"$(basename \"$0\")\" >> '"+marker+"'")
-		writeHook(t, filepath.Join(r.main, ".husky"), "prepare-commit-msg", "printf 'from husky\\n' >> \"$1\"")
-		// Committed, as husky's hooks are, so the session worktree has them.
-		r.git(r.main, "add", ".husky")
-		r.git(r.main, "commit", "-q", "-m", "add husky")
-		r.git(r.main, "config", "core.hooksPath", ".husky")
+		marker = filepath.Join(r.main, "managed-hook-ran")
+		writeHook(t, filepath.Join(r.main, ".githooks"), "pre-commit", "echo \"$(basename \"$0\")\" >> '"+marker+"'")
+		writeHook(t, filepath.Join(r.main, ".githooks"), "prepare-commit-msg", "printf 'from the hook manager\\n' >> \"$1\"")
+		// Committed, as a hook manager's hooks are, so the session worktree has them.
+		r.git(r.main, "add", ".githooks")
+		r.git(r.main, "commit", "-q", "-m", "add hooks")
+		r.git(r.main, "config", "core.hooksPath", ".githooks")
 	})
-	r.commit("-m", "feat: husky")
+	r.commit("-m", "feat: managed hooks")
 	if data, err := os.ReadFile(marker); err != nil || strings.TrimSpace(string(data)) != "pre-commit" {
-		t.Fatalf("husky pre-commit did not run: %q %v", data, err)
+		t.Fatalf("hook manager pre-commit did not run: %q %v", data, err)
 	}
 	msg := r.message("HEAD")
-	if !strings.Contains(msg, "from husky") || countTrailer(msg) != 1 {
-		t.Fatalf("want husky edit and trailer, got:\n%s", msg)
+	if !strings.Contains(msg, "from the hook manager") || countTrailer(msg) != 1 {
+		t.Fatalf("want the hook manager's edit and the trailer, got:\n%s", msg)
 	}
 }
 
 func TestHookPicksUpHooksPathSetLater(t *testing.T) {
 	r := newRepo(t, testCoAuthor, nil)
 	marker := filepath.Join(r.main, "later-ran")
-	writeHook(t, filepath.Join(r.worktree, ".husky", "_"), "pre-commit", "echo ran >> '"+marker+"'")
-	// What `npm install` with husky does inside the session after it started.
-	r.git(r.worktree, "config", "core.hooksPath", ".husky/_")
+	writeHook(t, filepath.Join(r.worktree, ".githooks", "_"), "pre-commit", "echo ran >> '"+marker+"'")
+	// What a hook manager's install step does inside the session after it started.
+	r.git(r.worktree, "config", "core.hooksPath", ".githooks/_")
 	r.commit("-m", "feat: later")
 	if _, err := os.Stat(marker); err != nil {
 		t.Fatalf("hooksPath set after the session started was not run: %v", err)

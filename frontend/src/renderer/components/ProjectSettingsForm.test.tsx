@@ -865,6 +865,27 @@ describe("ProjectSettingsForm", () => {
 		expect(await beginEdit("Session prefix")).toHaveValue("po");
 	});
 
+	it("shows orchestrator as the session prefix new sessions get when none is set", async () => {
+		mockProject({
+			id: "proj-1",
+			name: "Project One",
+			kind: "single_repo",
+			path: "/repo/project-one",
+			repo: "git@github.com:acme/project-one.git",
+			defaultBranch: "main",
+			config: {
+				worker: { agent: "agent-a" },
+				orchestrator: { agent: "agent-b" },
+			},
+		});
+
+		renderSettings("proj-1", undefined, "general");
+
+		const input = await beginEdit("Session prefix");
+		expect(input).toHaveValue("");
+		expect(input).toHaveAttribute("placeholder", "orchestrator");
+	});
+
 	it("loads and saves the project auto review setting", async () => {
 		mockProject({
 			id: "proj-1",
@@ -933,7 +954,7 @@ describe("ProjectSettingsForm", () => {
 			path: "/repo/project-one",
 			repo: "git@github.com:acme/project-one.git",
 			defaultBranch: "main",
-			config: { worker: { agent: "codex" }, orchestrator: { agent: "claude-code" } },
+			config: { worker: { agent: "agent-a" }, orchestrator: { agent: "agent-b" } },
 		});
 		renderSettings("proj-1", undefined, "general");
 		await screen.findByRole("switch", { name: "Workers request a built-in review" });
@@ -950,7 +971,7 @@ describe("ProjectSettingsForm", () => {
 			path: "/repo/project-one",
 			repo: "git@github.com:acme/project-one.git",
 			defaultBranch: "main",
-			config: { worker: { agent: "codex" }, orchestrator: { agent: "claude-code" } },
+			config: { worker: { agent: "agent-a" }, orchestrator: { agent: "agent-b" } },
 		});
 		renderSettings("proj-1", undefined, "general");
 		const trailer = await screen.findByRole("switch", { name: "Credit Orchestrator on commits" });
@@ -973,7 +994,7 @@ describe("ProjectSettingsForm", () => {
 			path: "/repo/project-one",
 			repo: "git@github.com:acme/project-one.git",
 			defaultBranch: "main",
-			config: { worker: { agent: "codex" }, orchestrator: { agent: "claude-code" }, attribution: { disablePRFooter: true } },
+			config: { worker: { agent: "agent-a" }, orchestrator: { agent: "agent-b" }, attribution: { disablePRFooter: true } },
 		});
 		renderSettings("proj-1", undefined, "general");
 		const footer = await screen.findByRole("switch", { name: "Sign PRs" });

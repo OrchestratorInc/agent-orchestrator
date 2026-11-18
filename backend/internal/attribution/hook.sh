@@ -4,8 +4,8 @@
 # A session worktree points core.hooksPath (worktree scope only) at this
 # directory. Every hook name is a copy of this script. prepare-commit-msg and
 # commit-msg add Orchestrator's Co-authored-by trailer; every hook then hands
-# off to the hook the repository itself would have run (husky, lint-staged,
-# .git/hooks), so the repository's own hooks keep working.
+# off to the hook the repository itself would have run (a hook manager's
+# core.hooksPath or .git/hooks), so the repository's own hooks keep working.
 
 hook=$(basename "$0")
 here=$(cd "$(dirname "$0")" 2>/dev/null && pwd -P)
@@ -13,7 +13,7 @@ here=$(cd "$(dirname "$0")" 2>/dev/null && pwd -P)
 # original_hook prints the hook the repository would run without Orchestrator:
 # a hooksPath this worktree's config had before Orchestrator replaced it, else
 # core.hooksPath from the repository, global or system config (read live, so a
-# hooksPath that husky sets after the session started still runs), else the
+# hooksPath a hook manager sets after the session started still runs), else the
 # shared hooks directory.
 original_hook() {
 	dir=$(git config --worktree --type=path --get orchestrator.originalHooksPath 2>/dev/null)

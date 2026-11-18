@@ -56,6 +56,8 @@ export type ProjectAgentPickerProps = {
 type Capabilities = {
 	workflow: boolean;
 	sessionPrefix: boolean;
+	/** Shown in an empty session prefix field: the prefix new sessions get. */
+	sessionPrefixPlaceholder?: string;
 	intake: boolean;
 	reviewer: boolean;
 	requiredAgents: boolean;
@@ -190,7 +192,7 @@ export function ProjectSettingsEditor({ initialValues, section, capabilities, de
 				{capabilities.workflow && <>
 					<ProjectSettingsSection title={t("settings.project.worktrees")} grouped>
 						<ProjectSettingsInputRow id="defaultBranch" label={t("settings.project.defaultBranch")} editLabel={t("settings.field.edit", { label: t("settings.project.defaultBranch") })} editIcon={<Pencil className="settings-inline-edit-icon" aria-hidden="true" />} value={draft.defaultBranch} placeholder={capabilities.requiredBranch ? undefined : "auto"} onChange={(defaultBranch) => patch({ defaultBranch })} />
-						{capabilities.sessionPrefix && <ProjectSettingsInputRow id="sessionPrefix" label={t("settings.project.sessionPrefix")} editLabel={t("settings.field.edit", { label: t("settings.project.sessionPrefix") })} editIcon={<Pencil className="settings-inline-edit-icon" aria-hidden="true" />} value={draft.sessionPrefix} placeholder="ao" onChange={(sessionPrefix) => patch({ sessionPrefix })} />}
+						{capabilities.sessionPrefix && <ProjectSettingsInputRow id="sessionPrefix" label={t("settings.project.sessionPrefix")} editLabel={t("settings.field.edit", { label: t("settings.project.sessionPrefix") })} editIcon={<Pencil className="settings-inline-edit-icon" aria-hidden="true" />} value={draft.sessionPrefix} placeholder={capabilities.sessionPrefixPlaceholder ?? "ao"} onChange={(sessionPrefix) => patch({ sessionPrefix })} />}
 					</ProjectSettingsSection>
 					{capabilities.intake && <ProjectSettingsSection title={t("settings.project.issues")} grouped><IntakeFields variant="settings" description={intakeDescription} form={intake} onChange={(values) => patch({ intakeEnabled: values.enabled ?? draft.intakeEnabled, intakeRepo: values.repo ?? draft.intakeRepo, intakeAssignee: values.assignee ?? draft.intakeAssignee })} repoPreview={{ value: draft.intakeRepo.trim() || deriveRepoPath(repository ?? ""), host: deriveRepoHost(repository ?? "") }} /></ProjectSettingsSection>}
 					<ProjectSettingsSection title={t("settings.project.pullRequests")} grouped>
