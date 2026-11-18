@@ -1,13 +1,14 @@
 /**
  * Shared syntax highlighting for chat, Markdown previews and file diffs.
  * Shiki uses the JavaScript regex engine with bundled grammars and AO's CSS
- * palette. Settled trees use a bounded LRU; live fences send only appended
- * complete lines to a worker that retains their grammar state.
+ * palette. Settled trees use a bounded LRU; streamed fences highlight only
+ * newly completed lines, keeping their grammar state.
  */
 
-import type { Root } from "hast";
+import type { ElementContent, Root, RootContent } from "hast";
+import type { CodeHighlighterPlugin, CodeHighlighterSession, CodeHighlightUpdate, CodeOptions } from "@pierre/words/html";
 import type { CodeEngine } from "./code-highlight-engine";
-import type { CodeLine, HighlightWorkerRequest, HighlightWorkerResponse, StreamingCode } from "./code-highlight-protocol";
+import type { HighlightWorkerRequest, HighlightWorkerResponse } from "./code-highlight-protocol";
 
 /**
  * Fence label → grammar. Labels are what agents type, so the aliases matter
@@ -200,9 +201,7 @@ const WORKER_TIMEOUT_MS = 10_000;
 let worker: Worker | undefined;
 let workerUnavailable = false;
 let nextRequestId = 0;
-let nextStreamId = 0;
 let pendingChars = 0;
-const MAX_STREAM_CHARS = 100_000;
 const pending = new Map<number, {
 	key?: string;
 	chars: number;
@@ -223,53 +222,12 @@ function stopWorker(): void {
 	pendingChars = 0;
 }
 
-/** A fence owns its worker state until disposed; a rewrite resets that state. */
-export function createCodeHighlightStream() {
-	const streamId = ++nextStreamId;
-	let committed: { source: string; language: GrammarName } | undefined;
-	let lines: CodeLine[] = [];
-	let disposed = false;
-	let running = false;
-	return {
-		async update(code: string, language: GrammarName): Promise<StreamingCode | undefined> {
-			if (disposed || running || code.length > MAX_STREAM_CHARS || !code.endsWith("\n")) return undefined;
-			running = true;
-			try {
-				const reset = !committed || committed.language !== language || !code.startsWith(committed.source);
-				const offset = reset ? 0 : committed?.source.length ?? 0;
-				if (!reset && offset === code.length) return { source: code, language, lines };
-				let response = await sendWorker({ kind: "stream", id: ++nextRequestId, streamId, offset, reset, code: code.slice(offset), language });
-				if (disposed) return undefined;
-				// Worker LRU eviction is transparent: replay once from the source.
-				let replace = reset;
-				if (response?.kind === "reset") {
-					replace = true;
-					response = await sendWorker({ kind: "stream", id: ++nextRequestId, streamId, offset: 0, reset: true, code, language });
-				}
-				if (disposed || response?.kind !== "stream") return undefined;
-				lines = replace ? response.lines : [...lines, ...response.lines];
-				committed = { source: code, language };
-				return { source: code, language, lines };
-			} finally {
-				running = false;
-			}
-		},
-		dispose() {
-			disposed = true;
-			committed = undefined;
-			lines = [];
-			try { worker?.postMessage({ kind: "release", streamId } satisfies HighlightWorkerRequest); }
-			catch { stopWorker(); }
-		},
-	};
-}
-
 async function highlightInWorker(code: string, language: GrammarName): Promise<Root | undefined> {
 	const response = await sendWorker({ kind: "highlight", id: ++nextRequestId, code, language }, cacheKey(code, language));
 	return response?.kind === "highlight" ? response.tree : undefined;
 }
 
-function sendWorker(request: Exclude<HighlightWorkerRequest, { kind: "release" }>, key?: string): Promise<HighlightWorkerResponse | undefined> {
+function sendWorker(request: HighlightWorkerRequest, key?: string): Promise<HighlightWorkerResponse | undefined> {
 	if (key) {
 		for (const entry of pending.values()) if (entry.key === key) return entry.promise;
 	}
@@ -302,3 +260,87 @@ function sendWorker(request: Exclude<HighlightWorkerRequest, { kind: "release" }
 		return Promise.resolve(undefined);
 	}
 }
+
+function tokensHtml(nodes: readonly RootContent[]): string {
+	let html = "";
+	for (const node of nodes) {
+		if (node.type === "text") html += node.value.replace(/[&<>]/g, (char) => char === "&" ? "&amp;" : char === "<" ? "&lt;" : "&gt;");
+		else if (node.type === "element") {
+			const className = node.properties.className;
+			const inner = tokensHtml(node.children);
+			html += Array.isArray(className) ? `<span class="${className.join(" ")}">${inner}</span>` : inner;
+		}
+	}
+	return html;
+}
+
+type LiveSession = CodeHighlighterSession & { accepts(options: CodeOptions): boolean };
+const liveSessions = new Set<LiveSession>();
+
+function createLiveSession(): LiveSession {
+	let language: GrammarName | undefined;
+	let source = "";
+	let lines: string[] = [];
+	let line: ((text: string, commit: boolean) => ElementContent[]) | undefined;
+	const highlightLines = ({ code, language: label }: CodeOptions): CodeHighlightUpdate | null => {
+		const grammar = canonicalLanguage(label);
+		if (!grammar || !engine) {
+			if (grammar) void loadEngine();
+			return null;
+		}
+		code = code.replace(/\r\n?/g, "\n");
+		if (grammar !== language || !line || !code.startsWith(source)) {
+			language = grammar;
+			source = "";
+			lines = [];
+			line = engine.createLines(grammar);
+		}
+		const previous = lines.length;
+		const parts = code.split("\n");
+		const tail = parts.pop()!;
+		for (let at = lines.length; at < parts.length; at++) lines.push(tokensHtml(line(parts[at], true)));
+		source = code.slice(0, code.length - tail.length);
+		const lastContent = tail || parts.length === 0 ? parts.length : parts.length - 1;
+		const first = Math.min(previous, lastContent);
+		const changed = lines.slice(first);
+		const tailHtml = tail ? tokensHtml(line(tail, false)) : "";
+		changed.push(tailHtml);
+		let lastLineOffset = 0;
+		for (let at = 0; at < lastContent - first; at++) lastLineOffset += changed[at].length + 1;
+		const committed = lines;
+		return {
+			firstLine: first,
+			lineCount: parts.length + 1,
+			html: changed.join("\n"),
+			lastLineOffset,
+			get fullHtml() {
+				return [...committed, tailHtml].join("\n");
+			},
+		};
+	};
+	const session: LiveSession = {
+		accepts: ({ code, language: label }) => line !== undefined && source !== "" && canonicalLanguage(label) === language && code.replace(/\r\n?/g, "\n").startsWith(source),
+		highlightLines,
+		highlight: (options) => highlightLines(options)?.fullHtml ?? null,
+		dispose() {
+			liveSessions.delete(session);
+			line = undefined;
+			lines = [];
+			source = "";
+		},
+	};
+	liveSessions.add(session);
+	return session;
+}
+
+export const streamingCodeHighlighter: CodeHighlighterPlugin = {
+	highlight(options) {
+		for (const session of liveSessions) if (session.accepts(options)) return session.highlight(options);
+		const grammar = canonicalLanguage(options.language);
+		if (!grammar) return null;
+		const tree = highlightSync(options.code, grammar);
+		if (!tree) void loadEngine();
+		return tree ? tokensHtml(tree.children) : null;
+	},
+	createSession: createLiveSession,
+};

@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { Element, Root, RootContent } from "hast";
-import { canonicalLanguage, highlight, highlightSync, type GrammarName } from "./code-highlight";
+import { canonicalLanguage, highlight, highlightSync, streamingCodeHighlighter, type GrammarName } from "./code-highlight";
 
 // The contract these pin down is not "the colours are right" — Shiki owns
 // that — but the four things the chat surface depends on: a fence label resolves
@@ -111,5 +111,45 @@ describe("highlightSync", () => {
 		// Nothing has ever asked for this block, so a synchronous answer proves the
 		// warm path — which is what keeps every fence after the first from flashing.
 		expect(highlightSync("def later():\n\treturn 1", "python")).toBeDefined();
+	});
+});
+
+describe("streamingCodeHighlighter", () => {
+	const options = (code: string, isIncomplete = true) => ({ code, language: "javascript", isIncomplete });
+
+	it("highlights a streamed fence exactly as a one-shot pass", async () => {
+		await highlight("const warm = 1;", "javascript");
+		const source = "/* open\ncontinued */\nconst value = `first\nsecond ${true}`;\n";
+		const session = streamingCodeHighlighter.createSession!();
+		for (let end = 1; end < source.length; end += 5) session.highlightLines!(options(source.slice(0, end)));
+		const streamed = session.highlightLines!(options(source, false))!.fullHtml;
+		session.dispose();
+		expect(streamed).toBe(streamingCodeHighlighter.highlight(options(source, false)));
+		expect(streamed).toContain("hljs-comment");
+	});
+
+	it("reports changes from the first line that changed", async () => {
+		await highlight("const warm = 1;", "javascript");
+		const session = streamingCodeHighlighter.createSession!();
+		expect(session.highlightLines!(options("a\nb"))).toMatchObject({ firstLine: 0, lineCount: 2 });
+		const next = session.highlightLines!(options("a\nbc\nd"))!;
+		expect(next).toMatchObject({ firstLine: 1, lineCount: 3 });
+		expect(next.html.split("\n")).toHaveLength(2);
+		expect(next.html.slice(next.lastLineOffset).replace(/<[^>]+>/g, "")).toBe("d");
+		expect(session.highlightLines!(options("a\nbc\nd\n"))).toMatchObject({ firstLine: 2, lineCount: 4 });
+		session.dispose();
+	});
+
+	it("reuses the live session when its fence closes", async () => {
+		await highlight("const warm = 1;", "javascript");
+		const session = streamingCodeHighlighter.createSession!();
+		const open = session.highlightLines!(options("const a = 1;\nconst b"))!;
+		expect(streamingCodeHighlighter.highlight(options("const a = 1;\nconst b = 2;\n", false))).toContain(open.fullHtml.split("\n")[0]);
+		session.dispose();
+	});
+
+	it("leaves unknown languages plain", () => {
+		expect(streamingCodeHighlighter.highlight({ code: "x", language: "klingon", isIncomplete: false })).toBeNull();
+		expect(streamingCodeHighlighter.createSession!().highlightLines!({ code: "x", language: "klingon", isIncomplete: true })).toBeNull();
 	});
 });

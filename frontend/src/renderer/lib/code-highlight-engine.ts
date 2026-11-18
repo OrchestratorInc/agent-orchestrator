@@ -2,7 +2,6 @@
 // the renderer/worker chunks. This module itself is loaded only for known code.
 import { createHighlighterCore, type ThemedToken, type ThemeRegistration } from "shiki/core";
 import { createJavaScriptRegexEngine } from "shiki/engine/javascript";
-import { ShikiStreamTokenizer } from "@shikijs/stream";
 import bash from "@shikijs/langs/bash";
 import css from "@shikijs/langs/css";
 import diff from "@shikijs/langs/diff";
@@ -83,22 +82,12 @@ export async function createEngine() {
 			const { tokens } = highlighter.codeToTokens(code.replace(/\r\n|\r/g, "\n"), { lang: language, theme: "ao" });
 			return { type: "root", children: codeLines(tokens, code).flatMap((line) => line.tokens) };
 		},
-		createStream(language: GrammarName) {
-			const tokenizer = new ShikiStreamTokenizer({ highlighter, lang: language, theme: "ao" });
-			return async (chunk: string): Promise<CodeLine[]> => {
-				// Callers supply complete lines. Only the appended chunk is parsed;
-				// Shiki keeps the grammar state of the preceding stable line.
-				const { stable } = await tokenizer.enqueue(chunk.replace(/\r\n|\r/g, "\n"));
-				const lines: ThemedToken[][] = [[]];
-				for (const token of stable) {
-					if (token.content === "\n") lines.push([]);
-					else lines[lines.length - 1].push(token);
-				}
-				// The stream tokenizer also retains stable tokens for its stock
-				// renderers. AO owns those lines after delivery; retain grammar only.
-				tokenizer.tokensStable = [];
-				lines.pop();
-				return codeLines(lines, chunk);
+		createLines(language: GrammarName) {
+			let state: ReturnType<typeof highlighter.codeToTokens>["grammarState"];
+			return (line: string, commit: boolean): ElementContent[] => {
+				const result = highlighter.codeToTokens(line, { lang: language, theme: "ao", grammarState: state });
+				if (commit) state = result.grammarState;
+				return (result.tokens[0] ?? []).filter((token) => token.content !== "").map(tokenNode);
 			};
 		},
 	};

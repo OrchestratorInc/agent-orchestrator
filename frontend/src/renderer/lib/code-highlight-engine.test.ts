@@ -25,36 +25,32 @@ describe("Shiki streaming grammar state", () => {
 		expect(flatten(tree)).toBe(source);
 	});
 
-	it("matches one-shot highlighting across multiline comments and template strings", async () => {
-		const chunks = ['/* open\n', 'continued */\nconst value = `first\n', 'second ${true}`;\n'];
-		const append = engine.createStream("javascript");
-		const lines = [];
-		for (const chunk of chunks) lines.push(...await append(chunk));
-		const source = chunks.join("");
-		expect({ type: "root", children: lines.flatMap((line) => line.tokens) }).toEqual(engine.highlight("javascript", source));
+	it("matches one-shot highlighting across multiline comments and template strings", () => {
+		const source = '/* open\ncontinued */\nconst value = `first\nsecond ${true}`;\n';
+		const line = engine.createLines("javascript");
+		const children = source.split("\n").slice(0, -1).flatMap((text) => [...line(text, true), { type: "text" as const, value: "\n" }]);
+		expect(flatten({ type: "root", children })).toBe(source);
+		expect(children.filter((node) => node.type === "element")).toEqual(engine.highlight("javascript", source).children.filter((node) => node.type === "element"));
 	});
 
-	it.each(["\n", "\r\n", "\r"])("preserves exact source line endings: %j", async (ending) => {
+	it.each(["\n", "\r\n", "\r"])("preserves exact source line endings: %j", (ending) => {
 		const source = `/* 👋${ending}continued */${ending}`;
 		expect(flatten(engine.highlight("javascript", source))).toBe(source);
-		const lines = await engine.createStream("javascript")(source);
-		expect(flatten({ type: "root", children: lines.flatMap((line) => line.tokens) })).toBe(source);
 	});
 
-	it("preserves mixed source line endings when highlighting and streaming", async () => {
+	it("preserves mixed source line endings", () => {
 		const source = "/*\r\nmixed\rend */\nconst value = 1;\r";
 		expect(flatten(engine.highlight("javascript", source))).toBe(source);
-		const lines = await engine.createStream("javascript")(source);
-		expect(flatten({ type: "root", children: lines.flatMap((line) => line.tokens) })).toBe(source);
 	});
 
-	it("keeps independently streamed grammar states separate", async () => {
-		const comment = engine.createStream("javascript");
-		const normal = engine.createStream("javascript");
-		await comment("/* comment\n");
-		const inComment = await comment("const value = 1;\n");
-		const outsideComment = await normal("const value = 1;\n");
-		expect(inComment[0].signature).not.toBe(outsideComment[0].signature);
-		expect(flatten({ type: "root", children: inComment[0].tokens })).toBe("const value = 1;\n");
+	it("keeps independent line states separate, and only commits on request", () => {
+		const comment = engine.createLines("javascript");
+		const normal = engine.createLines("javascript");
+		comment("/* comment", true);
+		const inComment = comment("const value = 1;", false);
+		const outsideComment = normal("const value = 1;", true);
+		expect(inComment).not.toEqual(outsideComment);
+		expect(comment("const value = 1;", false)).toEqual(inComment);
+		expect(flatten({ type: "root", children: inComment })).toBe("const value = 1;");
 	});
 });

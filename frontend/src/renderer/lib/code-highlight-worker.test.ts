@@ -40,86 +40,6 @@ describe("large code worker highlighting", () => {
 		expect(api.highlightSync(code, "javascript")).toBe(await first);
 	});
 
-	it("sends only appended lines, retains completed tokens and avoids the settled cache", async () => {
-		const api = await setup();
-		const stream = api.createCodeHighlightStream();
-		const first = stream.update(code, "javascript");
-		const worker = FakeWorker.instances[0];
-		const request = worker.postMessage.mock.calls[0][0];
-		const append = engine.createStream("javascript");
-		const lines = await append(code);
-		worker.onmessage!(new MessageEvent("message", { data: { kind: "stream", id: request.id, lines } }));
-		const initial = await first;
-		const chunk = 'const next = "new";\n';
-		const second = stream.update(code + chunk, "javascript");
-		const next = worker.postMessage.mock.calls[1][0];
-		expect(next).toMatchObject({ kind: "stream", code: chunk, offset: code.length, reset: false, streamId: request.streamId });
-		worker.onmessage!(new MessageEvent("message", { data: { kind: "stream", id: next.id, lines: await append(chunk) } }));
-		expect((await second)?.lines[0]).toBe(initial?.lines[0]);
-		expect(api.highlightSync(code, "javascript")).toBeUndefined();
-		expect(await stream.update("x".repeat(100_001), "javascript")).toBeUndefined();
-		stream.dispose();
-		expect(worker.postMessage).toHaveBeenLastCalledWith({ kind: "release", streamId: request.streamId });
-	});
-
-	it("replays the full prefix once if the worker evicted its stream", async () => {
-		const api = await setup();
-		const stream = api.createCodeHighlightStream();
-		const first = stream.update("const a = 1;\n", "javascript");
-		const worker = FakeWorker.instances[0];
-		const request = worker.postMessage.mock.calls[0][0];
-		worker.onmessage!(new MessageEvent("message", { data: { kind: "stream", id: request.id, lines: [] } }));
-		await first;
-		const source = "const a = 1;\nconst b = 2;\n";
-		const next = stream.update(source, "javascript");
-		const delta = worker.postMessage.mock.calls[1][0];
-		worker.onmessage!(new MessageEvent("message", { data: { kind: "reset", id: delta.id } }));
-		await vi.waitFor(() => expect(worker.postMessage).toHaveBeenCalledTimes(3));
-		const replay = worker.postMessage.mock.calls[2][0];
-		expect(replay).toMatchObject({ code: source, offset: 0, reset: true });
-		worker.onmessage!(new MessageEvent("message", { data: { kind: "stream", id: replay.id, lines: await engine.createStream("javascript")(source) } }));
-		expect((await next)?.source).toBe(source);
-		stream.dispose();
-	});
-
-	it("does not recreate a disposed stream when an in-flight append requests a replay", async () => {
-		const api = await setup();
-		const stream = api.createCodeHighlightStream();
-		const first = stream.update("const a = 1;\n", "javascript");
-		const worker = FakeWorker.instances[0];
-		const initial = worker.postMessage.mock.calls[0][0];
-		worker.onmessage!(new MessageEvent("message", { data: { kind: "stream", id: initial.id, lines: [] } }));
-		await first;
-		const pending = stream.update("const a = 1;\nconst b = 2;\n", "javascript");
-		const append = worker.postMessage.mock.calls[1][0];
-		stream.dispose();
-		expect(worker.postMessage).toHaveBeenLastCalledWith({ kind: "release", streamId: initial.streamId });
-		worker.onmessage!(new MessageEvent("message", { data: { kind: "reset", id: append.id } }));
-		expect(await pending).toBeUndefined();
-		expect(worker.postMessage).toHaveBeenCalledTimes(3);
-	});
-
-	it("resets stream state on edits and language changes and ignores results after disposal", async () => {
-		const api = await setup();
-		const stream = api.createCodeHighlightStream();
-		const first = stream.update("const old = 1;\n", "javascript");
-		const worker = FakeWorker.instances[0];
-		let request = worker.postMessage.mock.calls[0][0];
-		worker.onmessage!(new MessageEvent("message", { data: { kind: "stream", id: request.id, lines: [] } }));
-		await first;
-		const edited = stream.update("const replacement = 2;\n", "javascript");
-		request = worker.postMessage.mock.calls[1][0];
-		expect(request.reset).toBe(true);
-		worker.onmessage!(new MessageEvent("message", { data: { kind: "stream", id: request.id, lines: [] } }));
-		await edited;
-		const language = stream.update("const replacement = 2;\n", "python");
-		request = worker.postMessage.mock.calls[2][0];
-		expect(request).toMatchObject({ reset: true, offset: 0, language: "python" });
-		stream.dispose();
-		worker.onmessage!(new MessageEvent("message", { data: { kind: "stream", id: request.id, lines: [] } }));
-		expect(await language).toBeUndefined();
-	});
-
 	it("keeps text readable when workers are unsupported", async () => {
 		const api = await setup();
 		vi.stubGlobal("Worker", undefined);
@@ -175,17 +95,13 @@ describe("large code worker highlighting", () => {
 	});
 });
 
-it("the worker serializes initialization, releases grammar state and preserves source", async () => {
+it("the worker highlights large blocks and reports unknown grammars as unavailable", async () => {
 	vi.resetModules();
 	const scope = { onmessage: null as ((event: MessageEvent) => Promise<void>) | null, postMessage: vi.fn() };
 	vi.stubGlobal("self", scope);
 	await import("./code-highlight.worker");
 	await scope.onmessage!(new MessageEvent("message", { data: { kind: "highlight", id: 7, code, language: "javascript" } }));
 	expect(scope.postMessage.mock.calls[0][0]).toEqual({ kind: "highlight", id: 7, tree: engine.highlight("javascript", code) });
-	await scope.onmessage!(new MessageEvent("message", { data: { kind: "stream", id: 8, streamId: 1, offset: 0, reset: true, code: "/* open\n", language: "javascript" } }));
-	await scope.onmessage!(new MessageEvent("message", { data: { kind: "release", streamId: 1 } }));
-	await scope.onmessage!(new MessageEvent("message", { data: { kind: "stream", id: 9, streamId: 1, offset: 8, reset: false, code: "continued */\n", language: "javascript" } }));
-	expect(scope.postMessage.mock.calls.at(-1)?.[0]).toEqual({ kind: "reset", id: 9 });
 	await scope.onmessage!(new MessageEvent("message", { data: { kind: "highlight", id: 10, code, language: "unknown" } }));
 	expect(scope.postMessage.mock.calls.at(-1)?.[0]).toEqual({ kind: "unavailable", id: 10 });
 });

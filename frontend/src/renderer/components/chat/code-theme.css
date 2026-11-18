@@ -18,14 +18,14 @@
  * all three scopes rather than writing every rule out three times.
  */
 
-:is(.chat-code pre, .markdown-code) {
+:is(.chat-code pre, .markdown-code, .chat-md-stream pre) {
 	/* Go and Makefiles arrive tab-indented; the browser default of 8 wastes half
 	   the column in a panel this narrow. */
 	tab-size: 4;
 	scrollbar-width: none;
 }
 
-:is(.chat-code pre, .markdown-code)::-webkit-scrollbar {
+:is(.chat-code pre, .markdown-code, .chat-md-stream pre)::-webkit-scrollbar {
 	width: 0;
 	height: 0;
 }
@@ -37,8 +37,8 @@
 	overflow-wrap: anywhere;
 }
 
-:is(.chat-code, .diff-code, .markdown-code) .hljs-comment,
-:is(.chat-code, .diff-code, .markdown-code) .hljs-quote {
+:is(.chat-code, .diff-code, .markdown-code, .chat-md-stream [data-markdown="code-block"]) .hljs-comment,
+:is(.chat-code, .diff-code, .markdown-code, .chat-md-stream [data-markdown="code-block"]) .hljs-quote {
 	/* Passive text is intentionally very faint and becomes unreadable on the
 	   raised dark code surface. Comments are content, so use the accessible
 	   secondary-text role instead. */
@@ -46,74 +46,74 @@
 	font-style: italic;
 }
 
-:is(.chat-code, .diff-code, .markdown-code) .hljs-keyword,
-:is(.chat-code, .diff-code, .markdown-code) .hljs-literal,
-:is(.chat-code, .diff-code, .markdown-code) .hljs-doctag,
-:is(.chat-code, .diff-code, .markdown-code) .hljs-section,
-:is(.chat-code, .diff-code, .markdown-code) .hljs-name,
-:is(.chat-code, .diff-code, .markdown-code) .hljs-tag,
-:is(.chat-code, .diff-code, .markdown-code) .hljs-selector-tag {
+:is(.chat-code, .diff-code, .markdown-code, .chat-md-stream [data-markdown="code-block"]) .hljs-keyword,
+:is(.chat-code, .diff-code, .markdown-code, .chat-md-stream [data-markdown="code-block"]) .hljs-literal,
+:is(.chat-code, .diff-code, .markdown-code, .chat-md-stream [data-markdown="code-block"]) .hljs-doctag,
+:is(.chat-code, .diff-code, .markdown-code, .chat-md-stream [data-markdown="code-block"]) .hljs-section,
+:is(.chat-code, .diff-code, .markdown-code, .chat-md-stream [data-markdown="code-block"]) .hljs-name,
+:is(.chat-code, .diff-code, .markdown-code, .chat-md-stream [data-markdown="code-block"]) .hljs-tag,
+:is(.chat-code, .diff-code, .markdown-code, .chat-md-stream [data-markdown="code-block"]) .hljs-selector-tag {
 	color: var(--color-term-magenta);
 }
 
-:is(.chat-code, .diff-code, .markdown-code) .hljs-string,
-:is(.chat-code, .diff-code, .markdown-code) .hljs-regexp,
-:is(.chat-code, .diff-code, .markdown-code) .hljs-char.escape_,
-:is(.chat-code, .diff-code, .markdown-code) .hljs-addition,
-:is(.chat-code, .diff-code, .markdown-code) .hljs-template-tag {
+:is(.chat-code, .diff-code, .markdown-code, .chat-md-stream [data-markdown="code-block"]) .hljs-string,
+:is(.chat-code, .diff-code, .markdown-code, .chat-md-stream [data-markdown="code-block"]) .hljs-regexp,
+:is(.chat-code, .diff-code, .markdown-code, .chat-md-stream [data-markdown="code-block"]) .hljs-char.escape_,
+:is(.chat-code, .diff-code, .markdown-code, .chat-md-stream [data-markdown="code-block"]) .hljs-addition,
+:is(.chat-code, .diff-code, .markdown-code, .chat-md-stream [data-markdown="code-block"]) .hljs-template-tag {
 	color: var(--color-term-green);
 }
 
-:is(.chat-code, .diff-code, .markdown-code) .hljs-number,
-:is(.chat-code, .diff-code, .markdown-code) .hljs-symbol,
-:is(.chat-code, .diff-code, .markdown-code) .hljs-bullet,
-:is(.chat-code, .diff-code, .markdown-code) .hljs-link {
+:is(.chat-code, .diff-code, .markdown-code, .chat-md-stream [data-markdown="code-block"]) .hljs-number,
+:is(.chat-code, .diff-code, .markdown-code, .chat-md-stream [data-markdown="code-block"]) .hljs-symbol,
+:is(.chat-code, .diff-code, .markdown-code, .chat-md-stream [data-markdown="code-block"]) .hljs-bullet,
+:is(.chat-code, .diff-code, .markdown-code, .chat-md-stream [data-markdown="code-block"]) .hljs-link {
 	color: var(--color-term-yellow);
 }
 
-:is(.chat-code, .diff-code, .markdown-code) .hljs-title,
-:is(.chat-code, .diff-code, .markdown-code) .hljs-title.function_,
-:is(.chat-code, .diff-code, .markdown-code) .hljs-function .hljs-title {
+:is(.chat-code, .diff-code, .markdown-code, .chat-md-stream [data-markdown="code-block"]) .hljs-title,
+:is(.chat-code, .diff-code, .markdown-code, .chat-md-stream [data-markdown="code-block"]) .hljs-title.function_,
+:is(.chat-code, .diff-code, .markdown-code, .chat-md-stream [data-markdown="code-block"]) .hljs-function .hljs-title {
 	color: var(--color-term-blue);
 }
 
-:is(.chat-code, .diff-code, .markdown-code) .hljs-type,
-:is(.chat-code, .diff-code, .markdown-code) .hljs-title.class_,
-:is(.chat-code, .diff-code, .markdown-code) .hljs-class .hljs-title,
-:is(.chat-code, .diff-code, .markdown-code) .hljs-built_in,
-:is(.chat-code, .diff-code, .markdown-code) .hljs-formula {
+:is(.chat-code, .diff-code, .markdown-code, .chat-md-stream [data-markdown="code-block"]) .hljs-type,
+:is(.chat-code, .diff-code, .markdown-code, .chat-md-stream [data-markdown="code-block"]) .hljs-title.class_,
+:is(.chat-code, .diff-code, .markdown-code, .chat-md-stream [data-markdown="code-block"]) .hljs-class .hljs-title,
+:is(.chat-code, .diff-code, .markdown-code, .chat-md-stream [data-markdown="code-block"]) .hljs-built_in,
+:is(.chat-code, .diff-code, .markdown-code, .chat-md-stream [data-markdown="code-block"]) .hljs-formula {
 	color: var(--color-term-cyan);
 }
 
-:is(.chat-code, .diff-code, .markdown-code) .hljs-attr,
-:is(.chat-code, .diff-code, .markdown-code) .hljs-attribute,
-:is(.chat-code, .diff-code, .markdown-code) .hljs-property,
-:is(.chat-code, .diff-code, .markdown-code) .hljs-variable,
-:is(.chat-code, .diff-code, .markdown-code) .hljs-template-variable,
-:is(.chat-code, .diff-code, .markdown-code) .hljs-selector-attr,
-:is(.chat-code, .diff-code, .markdown-code) .hljs-selector-class,
-:is(.chat-code, .diff-code, .markdown-code) .hljs-selector-id,
-:is(.chat-code, .diff-code, .markdown-code) .hljs-selector-pseudo {
+:is(.chat-code, .diff-code, .markdown-code, .chat-md-stream [data-markdown="code-block"]) .hljs-attr,
+:is(.chat-code, .diff-code, .markdown-code, .chat-md-stream [data-markdown="code-block"]) .hljs-attribute,
+:is(.chat-code, .diff-code, .markdown-code, .chat-md-stream [data-markdown="code-block"]) .hljs-property,
+:is(.chat-code, .diff-code, .markdown-code, .chat-md-stream [data-markdown="code-block"]) .hljs-variable,
+:is(.chat-code, .diff-code, .markdown-code, .chat-md-stream [data-markdown="code-block"]) .hljs-template-variable,
+:is(.chat-code, .diff-code, .markdown-code, .chat-md-stream [data-markdown="code-block"]) .hljs-selector-attr,
+:is(.chat-code, .diff-code, .markdown-code, .chat-md-stream [data-markdown="code-block"]) .hljs-selector-class,
+:is(.chat-code, .diff-code, .markdown-code, .chat-md-stream [data-markdown="code-block"]) .hljs-selector-id,
+:is(.chat-code, .diff-code, .markdown-code, .chat-md-stream [data-markdown="code-block"]) .hljs-selector-pseudo {
 	color: var(--color-term-red);
 }
 
-:is(.chat-code, .diff-code, .markdown-code) .hljs-deletion {
+:is(.chat-code, .diff-code, .markdown-code, .chat-md-stream [data-markdown="code-block"]) .hljs-deletion {
 	color: var(--color-term-red);
 }
 
 /* Shell prompts, pragmas, shebangs: present but not worth a colour of their own. */
-:is(.chat-code, .diff-code, .markdown-code) .hljs-meta,
-:is(.chat-code, .diff-code, .markdown-code) .hljs-meta .hljs-keyword,
-:is(.chat-code, .diff-code, .markdown-code) .hljs-punctuation,
-:is(.chat-code, .diff-code, .markdown-code) .hljs-operator,
-:is(.chat-code, .diff-code, .markdown-code) .hljs-params {
+:is(.chat-code, .diff-code, .markdown-code, .chat-md-stream [data-markdown="code-block"]) .hljs-meta,
+:is(.chat-code, .diff-code, .markdown-code, .chat-md-stream [data-markdown="code-block"]) .hljs-meta .hljs-keyword,
+:is(.chat-code, .diff-code, .markdown-code, .chat-md-stream [data-markdown="code-block"]) .hljs-punctuation,
+:is(.chat-code, .diff-code, .markdown-code, .chat-md-stream [data-markdown="code-block"]) .hljs-operator,
+:is(.chat-code, .diff-code, .markdown-code, .chat-md-stream [data-markdown="code-block"]) .hljs-params {
 	color: var(--color-text-muted);
 }
 
-:is(.chat-code, .diff-code, .markdown-code) .hljs-emphasis {
+:is(.chat-code, .diff-code, .markdown-code, .chat-md-stream [data-markdown="code-block"]) .hljs-emphasis {
 	font-style: italic;
 }
 
-:is(.chat-code, .diff-code, .markdown-code) .hljs-strong {
+:is(.chat-code, .diff-code, .markdown-code, .chat-md-stream [data-markdown="code-block"]) .hljs-strong {
 	font-weight: var(--font-weight-semibold);
 }

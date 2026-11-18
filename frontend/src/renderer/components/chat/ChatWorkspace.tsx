@@ -187,7 +187,7 @@ import {
 } from "./WorkerUpdates";
 import { AutomationMessage, SteeredBrowserFeedback, steeredBrowserFeedback } from "./AutomationMessage";
 import { HumanMessageEditor } from "./HumanMessageEditor";
-import { ChatLinkProvider, ChatOpeningRef } from "./ChatMarkdown";
+import { ChatLinkProvider } from "./ChatMarkdown";
 import { admitArrivals, ChatEntrance, createChatEntranceGate } from "./chat-entrance";
 import { pageHidden } from "../../lib/page-hidden";
 import { ChatImageSourceProvider } from "./chat-image-source";
@@ -3899,12 +3899,6 @@ export function Timeline({
 	// transcript overflows. A wider chat often fits a short history (common on
 	// non-Codex harnesses), and the minimap used to vanish exactly then.
 	const minimapEnabled = scrollbar.markers.length > 0;
-	// Replies rendered with the chat's first commit were already on screen
-	// before the switch; streamed text in them must not fade in again.
-	const chatOpening = useRef(true);
-	useEffect(() => {
-		chatOpening.current = false;
-	}, []);
 	// The minimap appears once the opened chat is measured. That first reveal is
 	// part of opening the chat, so it is instant; only later changes (the chat
 	// narrowing past it) fade.
@@ -5592,7 +5586,6 @@ export function Timeline({
 	}
 
 	return (
-		<ChatOpeningRef.Provider value={chatOpening}>
 		<OpenSubagentContext.Provider value={openSubagent}>
 		{subagentPanel?.container ? createPortal(
 			// A search match in a child's step opens the child here, so its folds read the
@@ -5946,7 +5939,6 @@ export function Timeline({
 		</RevealedChatActivity.Provider>
 		</ChatEntrance.Provider>
 		</OpenSubagentContext.Provider>
-		</ChatOpeningRef.Provider>
 	);
 }
 
