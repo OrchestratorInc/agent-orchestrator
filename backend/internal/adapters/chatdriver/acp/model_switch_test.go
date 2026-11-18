@@ -109,3 +109,24 @@ func TestCheckModelSwitchAllowsTheUnofferedModelTheSessionOpenedOn(t *testing.T)
 		t.Fatalf("switch to another unoffered model = %v, want ErrChatConfigOptionInvalid", err)
 	}
 }
+
+// Opening on an unoffered model, choosing the agent's own model, then asking
+// for the opening model again is a switch the session cannot make: it must be
+// refused, not exempted as the opening model and silently skipped.
+func TestCheckModelSwitchForgetsTheOpeningModelOnceAnotherIsChosen(t *testing.T) {
+	c := claudeModelCatalogConversation("default")
+	c.sessionID = "session-1"
+	ctx := context.Background()
+	if err := c.applyTurnSettings(ctx, ports.ChatTurnSettings{Model: "claude-fable-5-2"}); err != nil {
+		t.Fatalf("opening on an unoffered model: %v", err)
+	}
+	if err := c.checkModelSwitch(ctx, "default"); err != nil {
+		t.Fatalf("switch to the agent's default: %v", err)
+	}
+	if err := c.applyTurnSettings(ctx, ports.ChatTurnSettings{Model: "default"}); err != nil {
+		t.Fatalf("choosing the agent's default: %v", err)
+	}
+	if err := c.checkModelSwitch(ctx, "claude-fable-5-2"); !errors.Is(err, ports.ErrChatConfigOptionInvalid) {
+		t.Fatalf("switch back to the unoffered opening model = %v, want ErrChatConfigOptionInvalid", err)
+	}
+}

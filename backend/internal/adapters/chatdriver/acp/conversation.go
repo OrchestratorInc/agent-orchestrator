@@ -734,6 +734,13 @@ func (c *conversation) applyTurnSettings(ctx context.Context, settings ports.Cha
 			}
 		}
 		if !catalogStale && c.configOptionCurrent(option.ID) == option.Value {
+			if option.ID == "model" {
+				// The agent's own model was chosen: the session no longer runs on
+				// the unoffered model it opened on.
+				c.mu.Lock()
+				c.unofferedModel = ""
+				c.mu.Unlock()
+			}
 			return nil
 		}
 		// The models offered do not depend on the model chosen, so this is final.
