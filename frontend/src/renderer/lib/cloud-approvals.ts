@@ -32,6 +32,8 @@ export const cloudPendingApprovalsQueryKey = (target: CloudApprovalTarget) =>
 
 /** Reread of each running cloud session's requests between events. */
 export const CLOUD_APPROVAL_POLL_MS = 15_000;
+/** Reread of the session on screen, which the person is watching. */
+export const CLOUD_APPROVAL_WATCHED_POLL_MS = 5_000;
 
 // Cloud categories in the local prompt's vocabulary. "unknown" is an action
 // whose effect cannot be read in advance, which locally is "script".
@@ -105,6 +107,52 @@ export function nextExpiryIn(requests: PendingApproval[], now: number): number |
 const isApprovalEvent = (type: string | undefined) =>
 	type === "browser.approval_requested" || type === "browser.approval_decided";
 
+type SessionRef = { orgId: string; sessionId: string };
+const refKey = (ref: SessionRef) => `${ref.orgId}/${ref.sessionId}`;
+
+// Cloud sessions read whatever the session lists say: the one on screen
+// (registered by its dock), and any that announced an approval on an open
+// stream. A session the lists have not caught up with (just created, past
+// the list's first page, or not yet "running" there) is otherwise never read.
+let watched: SessionRef[] = [];
+let heard: SessionRef[] = [];
+const refListeners = new Set<() => void>();
+const subscribeRefs = (listener: () => void) => {
+	refListeners.add(listener);
+	return () => {
+		refListeners.delete(listener);
+	};
+};
+const getWatched = () => watched;
+const getHeard = () => heard;
+const notifyRefs = () => {
+	for (const listener of refListeners) listener();
+};
+function addHeard(ref: SessionRef) {
+	if (heard.some((known) => refKey(known) === refKey(ref))) return;
+	heard = [...heard, ref];
+	notifyRefs();
+}
+
+/** Keeps a cloud session's approvals read often while it is on screen. */
+export function useWatchCloudApprovals(orgId: string | undefined, sessionId: string): void {
+	useEffect(() => {
+		if (!orgId || !sessionId) return;
+		const ref = { orgId, sessionId };
+		watched = [...watched, ref];
+		notifyRefs();
+		return () => {
+			watched = watched.filter((candidate) => candidate !== ref);
+			notifyRefs();
+		};
+	}, [orgId, sessionId]);
+}
+
+/** Whether a listed cloud session can have an agent browser waiting. */
+export function mayHaveApprovals(cloud: { desiredState?: string; observedState?: string }): boolean {
+	return cloud.desiredState === "running" || cloud.observedState === "running";
+}
+
 // What the shell's live reader holds, for every other reader.
 let published: PendingApproval[] = [];
 const listeners = new Set<() => void>();
@@ -139,23 +187,30 @@ export function useLiveCloudPendingApprovals(): PendingApproval[] {
 	const { client, ready, baseUrl } = useCloudCp();
 	const workspaces = useWorkspaceQuery();
 	const base = baseUrl.replace(/\/+$/, "");
+	const watchedRefs = useSyncExternalStore(subscribeRefs, getWatched, getWatched);
+	const heardRefs = useSyncExternalStore(subscribeRefs, getHeard, getHeard);
 	const targets = useMemo(() => {
-		const found: CloudApprovalTarget[] = [];
-		if (!ready || usesPreviewWorkspaceData) return found;
+		if (!ready || usesPreviewWorkspaceData) return [];
+		const found = new Map<string, CloudApprovalTarget & { watched: boolean }>();
+		const add = (ref: SessionRef, isWatched: boolean) => {
+			const known = found.get(refKey(ref));
+			found.set(refKey(ref), { baseUrl: base, ...ref, watched: isWatched || Boolean(known?.watched) });
+		};
 		for (const workspace of workspaces.data ?? []) {
 			for (const session of workspace.sessions) {
-				if (session.cloud?.orgId && session.cloud.observedState === "running") {
-					found.push({ baseUrl: base, orgId: session.cloud.orgId, sessionId: session.id });
-				}
+				if (session.cloud?.orgId && mayHaveApprovals(session.cloud)) add({ orgId: session.cloud.orgId, sessionId: session.id }, false);
 			}
 		}
-		return found;
-	}, [base, ready, workspaces.data]);
+		for (const ref of heardRefs) add(ref, false);
+		for (const ref of watchedRefs) add(ref, true);
+		return [...found.values()];
+	}, [base, heardRefs, ready, watchedRefs, workspaces.data]);
 
 	useEffect(() => {
 		if (!ready) return;
 		return tapCloudSessionEvents((target, event) => {
 			if (!isApprovalEvent(event.type)) return;
+			addHeard({ orgId: target.orgId, sessionId: target.sessionId });
 			void queryClient.invalidateQueries({ queryKey: cloudPendingApprovalsQueryKey(target) });
 		});
 	}, [queryClient, ready]);
@@ -163,8 +218,13 @@ export function useLiveCloudPendingApprovals(): PendingApproval[] {
 	const results = useQueries({
 		queries: targets.map((target) => ({
 			queryKey: cloudPendingApprovalsQueryKey(target),
-			queryFn: () => fetchCloudPendingApprovals(client, target),
-			refetchInterval: CLOUD_APPROVAL_POLL_MS,
+			queryFn: () =>
+				fetchCloudPendingApprovals(client, target).catch((error: unknown) => {
+					// A failed read must not pass for "nothing pending" without a trace.
+					console.warn(`Could not read browser approvals for cloud session ${target.sessionId}`, error);
+					throw error;
+				}),
+			refetchInterval: target.watched ? CLOUD_APPROVAL_WATCHED_POLL_MS : CLOUD_APPROVAL_POLL_MS,
 		})),
 	});
 	const all = results.flatMap((result) => result.data ?? []);

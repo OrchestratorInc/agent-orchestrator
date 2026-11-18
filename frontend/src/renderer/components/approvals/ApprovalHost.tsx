@@ -11,7 +11,7 @@ import {
 	type ApprovalDecision,
 	type PendingApproval,
 } from "../../lib/approvals";
-import { useCloudPendingApprovals, useLiveCloudPendingApprovals } from "../../lib/cloud-approvals";
+import { useCloudPendingApprovals, useLiveCloudPendingApprovals, useWatchCloudApprovals } from "../../lib/cloud-approvals";
 import { useNavigateToSession } from "../../lib/navigate-to-session";
 import { useUiStore } from "../../stores/ui-store";
 import type { AgentAvatarProps } from "../AgentAvatar";
@@ -65,7 +65,9 @@ function useSessionApprovals(sessionId: string, hostId: string | undefined) {
  * not showing its chat (a terminal, or a file or PR tab over the chat).
  * Requests are answered oldest first.
  */
-export function SessionApprovalDock({ sessionId, hostId }: { sessionId: string; hostId?: string }) {
+export function SessionApprovalDock({ sessionId, hostId, cloudOrgId }: { sessionId: string; hostId?: string; cloudOrgId?: string }) {
+	// A cloud session on screen is read often, whatever the session lists say.
+	useWatchCloudApprovals(hostId ? undefined : cloudOrgId, sessionId);
 	const mine = useSessionApprovals(sessionId, hostId);
 	const request = mine[0];
 	const { decide, busy, error } = useDecide(request);

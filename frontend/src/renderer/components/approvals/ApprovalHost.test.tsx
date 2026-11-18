@@ -7,6 +7,7 @@ const state = vi.hoisted(() => ({
 	pending: [] as PendingApproval[],
 	remote: [] as PendingApproval[],
 	cloud: [] as PendingApproval[],
+	watch: vi.fn(),
 	routedSessionId: undefined as string | undefined,
 	routedHostId: undefined as string | undefined,
 	decide: vi.fn(async () => undefined),
@@ -21,6 +22,7 @@ vi.mock("../../lib/approvals", () => ({
 vi.mock("../../lib/cloud-approvals", () => ({
 	useCloudPendingApprovals: () => state.cloud,
 	useLiveCloudPendingApprovals: () => state.cloud,
+	useWatchCloudApprovals: state.watch,
 }));
 vi.mock("@tanstack/react-router", () => ({
 	useRouterState: ({ select }: { select: (s: unknown) => unknown }) =>
@@ -58,6 +60,7 @@ describe("approval hosts", () => {
 		state.pending = [];
 		state.remote = [];
 		state.cloud = [];
+		state.watch.mockClear();
 		state.routedSessionId = undefined;
 		state.routedHostId = undefined;
 		state.decide.mockClear();
@@ -174,7 +177,8 @@ describe("approval hosts", () => {
 	it("shows a cloud session's request in its dock and decides it through the cloud", async () => {
 		const cloudRequest = { ...request("c", "cloud-1"), cloud: { baseUrl: "https://cp.test", orgId: "org-1" } };
 		state.cloud = [cloudRequest];
-		renderWith(<SessionApprovalDock sessionId="cloud-1" />);
+		renderWith(<SessionApprovalDock sessionId="cloud-1" cloudOrgId="org-1" />);
+		expect(state.watch).toHaveBeenCalledWith("org-1", "cloud-1");
 		expect(screen.getByTestId("approval-action")).toHaveTextContent("(c)");
 		fireEvent.click(screen.getByRole("button", { name: /Deny/ }));
 		await waitFor(() =>
@@ -189,5 +193,10 @@ describe("approval hosts", () => {
 		state.routedSessionId = "ao-1";
 		renderWith(<GlobalApprovalCard />);
 		expect(screen.getByTestId("approval-action")).toHaveTextContent("(c)");
+	});
+
+	it("does not watch a remote host's session in the cloud", () => {
+		renderWith(<SessionApprovalDock sessionId="r-1" hostId="box-b" cloudOrgId="org-1" />);
+		expect(state.watch).toHaveBeenCalledWith(undefined, "r-1");
 	});
 });
