@@ -15,7 +15,7 @@ import type { FilesSource } from "../../hooks/useSessionWorkspaceFiles";
  *     diagrams through the shared `MermaidBlock` (strict mode plus DOMPurify,
  *     active-content tags forbidden), and formulas, which the shared
  *     `MathFormula` typesets with KaTeX's `trust: false`, matching the chat surface.
- *   - Fenced code reuses the app's Shiki engine (`lib/code-highlight.ts`).
+ *   - Fenced code reuses the app's highlighter (`lib/code-highlight.ts`).
  *     Its JavaScript regex engine needs no WASM or CSP exception, and its
  *     syntax classes use AO's existing palette in both themes.
  *

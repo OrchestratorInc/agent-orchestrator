@@ -7,7 +7,6 @@ import { aoBridge } from "../../lib/bridge";
 import { findBlocks, findRange, findTextOccurrences, renderedFindBlocks } from "../../lib/chat-find";
 import { setApiBaseUrl } from "../../lib/api-client";
 import { renderMermaidDiagram } from "../../lib/mermaid-diagram";
-import { highlight } from "../../lib/code-highlight";
 import { useUiStore } from "../../stores/ui-store";
 import { ActivityTitle, ArtifactPathCode, ChatLinkProvider, ChatMarkdown } from "./ChatMarkdown";
 import { WorkerUpdateRows } from "./WorkerUpdates";
@@ -181,7 +180,7 @@ describe("ChatMarkdown", () => {
 	it("renders a fenced code block with its language and a copy control, and no stray backticks", () => {
 		render(<ChatMarkdown text={"```go\nfunc main() {}\n```"} />);
 		expect(screen.getByText("go")).toBeInTheDocument();
-		expect(screen.getByText("func main() {}")).toBeInTheDocument();
+		expect(document.querySelector("pre")?.textContent).toBe("func main() {}");
 		expect(screen.getByRole("button", { name: /copy code/i })).toBeInTheDocument();
 		expect(document.body.textContent).not.toContain("```");
 	});
@@ -922,7 +921,7 @@ describe("ChatMarkdown", () => {
 		render(<ChatMarkdown text={"```mermaid\nflowchart TD\n    A --> B\n```"} streaming />);
 
 		expect(screen.queryByTestId("mermaid-diagram")).not.toBeInTheDocument();
-		expect(screen.getByText(/A --> B/)).toBeInTheDocument();
+		expect(document.querySelector("pre")?.textContent).toContain("A --> B");
 		expect(vi.mocked(renderMermaidDiagram)).not.toHaveBeenCalled();
 	});
 
@@ -1099,9 +1098,8 @@ describe("ChatMarkdown image sources", () => {
 describe("ChatMarkdown code highlighting", () => {
 	const block = (language: string, code: string) => `\`\`\`${language}\n${code}\n\`\`\``;
 
-	/** The tokens land as `hljs-*` classes; `code-theme.css` colours them. */
 	function tokens(): Element[] {
-		return [...document.querySelectorAll("pre [class*='hljs-']")];
+		return [...document.querySelectorAll("pre [class*='hljs-'], pre [style*='--ao-code-']")];
 	}
 
 	it("highlights a known language, leaving the code itself untouched", async () => {
@@ -1119,8 +1117,7 @@ describe("ChatMarkdown code highlighting", () => {
 		expect(screen.getByText("brainfuck")).toBeInTheDocument();
 	});
 
-	it("highlights a streaming fence with the classes it settles with", async () => {
-		await highlight("package main", "go");
+	it("highlights a streaming fence and keeps it highlighted when it settles", async () => {
 		const code = "type Session struct {\n\tID string\n}";
 		const { rerender } = render(<ChatMarkdown text={block("go", code)} streaming />);
 		expect(tokens().length).toBeGreaterThan(0);
@@ -1187,11 +1184,10 @@ describe("ChatMarkdown block streaming", () => {
 	it("leaves open fences literal and highlights a completed fence before the reply ends", async () => {
 		const code = 'const literal = "**unfinished";';
 		const fence = "```js\n" + code;
-		await highlight("const warm = 1;", "javascript");
 		const { container, rerender } = render(<ChatMarkdown text={fence} streaming />);
 		expect(container.querySelector("pre")?.textContent?.replace(/\n$/, "")).toBe(code);
 		rerender(<ChatMarkdown text={fence + "\n```\n\nMore prose"} streaming />);
-		await waitFor(() => expect(container.querySelector("pre .hljs-keyword")).toBeInTheDocument());
+		await waitFor(() => expect(container.querySelector("pre [style*='--ao-code-keyword']")).toBeInTheDocument());
 		expect(container.querySelector("pre")?.textContent?.replace(/\n$/, "")).toBe(code);
 	});
 

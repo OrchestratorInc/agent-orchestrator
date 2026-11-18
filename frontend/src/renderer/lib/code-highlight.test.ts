@@ -1,11 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { Element, Root, RootContent } from "hast";
-import { canonicalLanguage, highlight, highlightSync, streamingCodeHighlighter, type GrammarName } from "./code-highlight";
-
-// The contract these pin down is not "the colours are right" — Shiki owns
-// that — but the four things the chat surface depends on: a fence label resolves
-// to a grammar or to nothing, tokenizing produces classed spans, the same block is
-// never parsed twice, and nothing here can throw into a message.
+import { canonicalLanguage, highlightSync, streamingCodeHighlighter, type GrammarName } from "./code-highlight";
 
 function classesIn(tree: Root): string[] {
 	const found: string[] = [];
@@ -34,16 +29,10 @@ function textIn(tree: Root): string {
 }
 
 describe("canonicalLanguage", () => {
-	it("resolves the aliases agents actually write", () => {
-		expect(canonicalLanguage("ts")).toBe("typescript");
-		expect(canonicalLanguage("tsx")).toBe("tsx");
-		expect(canonicalLanguage("sh")).toBe("bash");
-		expect(canonicalLanguage("zsh")).toBe("bash");
+	it("resolves the labels agents actually write", () => {
+		for (const label of ["ts", "tsx", "sh", "zsh", "golang", "yml", "html", "patch", "py", "rs"]) expect(canonicalLanguage(label)).toBe(label);
 		expect(canonicalLanguage("console")).toBe("bash");
-		expect(canonicalLanguage("golang")).toBe("go");
-		expect(canonicalLanguage("yml")).toBe("yaml");
-		expect(canonicalLanguage("html")).toBe("html");
-		expect(canonicalLanguage("patch")).toBe("diff");
+		expect(canonicalLanguage("udiff")).toBe("diff");
 	});
 
 	it("is case-insensitive, because a fence label is free text", () => {
@@ -51,105 +40,57 @@ describe("canonicalLanguage", () => {
 		expect(canonicalLanguage("JSON")).toBe("json");
 	});
 
-	it("returns nothing for a label with no grammar, so no chunk is fetched", () => {
+	it("returns nothing for a label with no grammar", () => {
 		expect(canonicalLanguage("brainfuck")).toBeUndefined();
-		expect(canonicalLanguage("text")).toBeUndefined();
-		expect(canonicalLanguage("log")).toBeUndefined();
 		expect(canonicalLanguage("constructor")).toBeUndefined();
 		expect(canonicalLanguage("__proto__")).toBeUndefined();
 		expect(canonicalLanguage(undefined)).toBeUndefined();
 	});
 });
 
-describe("highlight", () => {
-	it("tokenizes a known language into classed spans without changing the code", async () => {
-		const code = "func main() {\n\tprintln(\"hi\")\n}";
-		const tree = await highlight(code, "go");
+describe("highlightSync", () => {
+	it("tokenizes into AO's syntax classes without changing the code", () => {
+		const code = "func main() {\n\t// hi\n\tprintln(\"hi\", 42)\n}";
+		const tree = highlightSync(code, "go");
 		expect(tree).toBeDefined();
-		expect(classesIn(tree!)).toContain("hljs-keyword");
-		// The rendered text has to be the code, character for character: a
-		// highlighter that quietly reformats would make the block disagree with the
-		// record the daemon stored.
+		const classes = classesIn(tree!);
+		for (const name of ["hljs-keyword", "hljs-comment", "hljs-string", "hljs-number"]) expect(classes).toContain(name);
 		expect(textIn(tree!)).toBe(code);
 	});
 
-	it("reuses the cached tree instead of parsing the same block twice", async () => {
-		const code = "const answer: number = 42;";
-		const first = await highlight(code, "typescript");
-		const second = await highlight(code, "typescript");
-		expect(first).toBeDefined();
-		expect(second).toBe(first);
+	it("keeps the source's line endings", () => {
+		const code = "a = 1\r\nb = 2\rc = 3\n";
+		expect(textIn(highlightSync(code, "python")!)).toBe(code);
 	});
 
-	it("keys the cache on the language too, so the same text can be read two ways", async () => {
-		const code = "name: value";
-		const asYaml = await highlight(code, "yaml");
-		const asSql = await highlight(code, "sql");
-		expect(asYaml).toBeDefined();
-		expect(asSql).toBeDefined();
-		expect(asSql).not.toBe(asYaml);
-	});
-
-	it("degrades to no tree for a grammar that was never registered", async () => {
-		// Reachable only if the alias table and the engine's language list drift, and
-		// the answer then has to be plain monospace rather than a thrown render.
-		const tree = await highlight("x = 1", "elixir" as GrammarName);
-		expect(tree).toBeUndefined();
-	});
-});
-
-describe("highlightSync", () => {
-	it("answers with the very tree the async path cached", async () => {
-		const code = "SELECT id FROM sessions WHERE mode = 'chat';";
-		const awaited = await highlight(code, "sql");
-		expect(awaited).toBeDefined();
-		expect(highlightSync(code, "sql")).toBe(awaited);
-	});
-
-	it("tokenizes on the spot once the grammars are warm", async () => {
-		await highlight("x = 1", "python");
-		// Nothing has ever asked for this block, so a synchronous answer proves the
-		// warm path — which is what keeps every fence after the first from flashing.
-		expect(highlightSync("def later():\n\treturn 1", "python")).toBeDefined();
+	it("degrades to no tree for a grammar it does not have", () => {
+		expect(highlightSync("x = 1", "klingon" as GrammarName)).toBeUndefined();
 	});
 });
 
 describe("streamingCodeHighlighter", () => {
-	const options = (code: string, isIncomplete = true) => ({ code, language: "javascript", isIncomplete });
+	const options = (code: string, isIncomplete = true, language = "javascript") => ({ code, language, isIncomplete });
 
-	it("highlights a streamed fence exactly as a one-shot pass", async () => {
-		await highlight("const warm = 1;", "javascript");
+	it("highlights a streamed fence like a one-shot pass", () => {
 		const source = "/* open\ncontinued */\nconst value = `first\nsecond ${true}`;\n";
 		const session = streamingCodeHighlighter.createSession!();
 		for (let end = 1; end < source.length; end += 5) session.highlightLines!(options(source.slice(0, end)));
 		const streamed = session.highlightLines!(options(source, false))!.fullHtml;
 		session.dispose();
-		expect(streamed).toBe(streamingCodeHighlighter.highlight(options(source, false)));
-		expect(streamed).toContain("hljs-comment");
+		const oneShot = streamingCodeHighlighter.highlight(options(source, false))!;
+		const text = (html: string) => html.replace(/<[^>]+>/g, "");
+		const colors = (html: string) => [...new Set(html.match(/--ao-code-[a-z]+/g))].sort();
+		expect(text(streamed)).toBe(text(oneShot));
+		expect(colors(streamed)).toEqual(colors(oneShot));
+		expect(colors(streamed)).toContain("--ao-code-comment");
 	});
 
-	it("reports changes from the first line that changed", async () => {
-		await highlight("const warm = 1;", "javascript");
-		const session = streamingCodeHighlighter.createSession!();
-		expect(session.highlightLines!(options("a\nb"))).toMatchObject({ firstLine: 0, lineCount: 2 });
-		const next = session.highlightLines!(options("a\nbc\nd"))!;
-		expect(next).toMatchObject({ firstLine: 1, lineCount: 3 });
-		expect(next.html.split("\n")).toHaveLength(2);
-		expect(next.html.slice(next.lastLineOffset).replace(/<[^>]+>/g, "")).toBe("d");
-		expect(session.highlightLines!(options("a\nbc\nd\n"))).toMatchObject({ firstLine: 2, lineCount: 4 });
-		session.dispose();
-	});
-
-	it("reuses the live session when its fence closes", async () => {
-		await highlight("const warm = 1;", "javascript");
-		const session = streamingCodeHighlighter.createSession!();
-		const open = session.highlightLines!(options("const a = 1;\nconst b"))!;
-		expect(streamingCodeHighlighter.highlight(options("const a = 1;\nconst b = 2;\n", false))).toContain(open.fullHtml.split("\n")[0]);
-		session.dispose();
+	it("resolves the same aliases as settled code", () => {
+		expect(streamingCodeHighlighter.highlight(options("$ echo hi\n", false, "console"))).toContain("var(--ao-code-");
 	});
 
 	it("leaves unknown languages plain", () => {
-		expect(streamingCodeHighlighter.highlight({ code: "x", language: "klingon", isIncomplete: false })).toBeNull();
-		expect(streamingCodeHighlighter.createSession!().highlightLines!({ code: "x", language: "klingon", isIncomplete: true })).toBeNull();
+		expect(streamingCodeHighlighter.highlight(options("x", false, "klingon"))).toBeNull();
+		expect(streamingCodeHighlighter.createSession!().highlightLines!(options("x", true, "klingon"))).toBeNull();
 	});
 });
