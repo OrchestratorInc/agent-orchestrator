@@ -1,5 +1,5 @@
 import { useLocalSearchParams, useRouter } from "expo-router";
-import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { StyleSheet, View } from "react-native";
 import { backOr } from "../../lib/backNavigation";
 import { CloudSignIn } from "../../lib/cloud/components";
@@ -84,9 +84,9 @@ function LocalBody({ placement, onCreated, onCancel, onBusyChange }: BodyProps) 
 	// Create takes focus off the form first: the sheet changes and closes as
 	// soon as the request returns, and a field still focused then aborted the app.
 	const focus = useFormFocus();
-	// The latest create when the submit finally runs, so text the blur commits is sent.
+	// The latest committed create when the submit finally runs, so text the blur commits is sent.
 	const create = useRef(project.create);
-	create.current = project.create;
+	useLayoutEffect(() => { create.current = project.create; });
 	return (
 		<>
 			<NewProjectBar canCreate={project.canCreate} busy={project.busy} onCancel={onCancel} onCreate={() => void focus.submit(() => create.current())} />
@@ -106,7 +106,7 @@ function CloudBody({ placement, onCreated, onCancel, onBusyChange, leaveFor }: B
 	// Create takes focus off the form first (see useFormFocus), as on the Local face.
 	const focus = useFormFocus();
 	const create = useRef(project.create);
-	create.current = project.create;
+	useLayoutEffect(() => { create.current = project.create; });
 
 	let body: ReactNode;
 	if (project.status === "signed-out") {
