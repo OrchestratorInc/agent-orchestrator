@@ -1140,6 +1140,12 @@ async function createWindowInternal(): Promise<void> {
 		shellWebContents.id,
 		shellWindowsCreated++ === 0 ? { kind: "cold", startedAtMs: processStartedAt } : { kind: "warm", startedAtMs: windowRequestedAt },
 	);
+	// The start belongs to the first document. A reload that lands before that
+	// page read it must not report a launch, so later documents get none.
+	let shellDocuments = 0;
+	shellWebContents.on("did-navigate", () => {
+		if (++shellDocuments > 1) shellLaunchStarts.delete(shellWebContents.id);
+	});
 	relayScrollPhases(shellWebContents);
 	shellWebContents.once("destroyed", () => {
 		trustedShellWebContents.delete(shellWebContents.id);
