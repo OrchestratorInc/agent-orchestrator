@@ -38,6 +38,7 @@ import (
 	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
 	previewutil "github.com/aoagents/agent-orchestrator/backend/internal/preview"
 	"github.com/aoagents/agent-orchestrator/backend/internal/previewserver"
+	chatsvc "github.com/aoagents/agent-orchestrator/backend/internal/service/chat"
 	projectsvc "github.com/aoagents/agent-orchestrator/backend/internal/service/project"
 	sessionsvc "github.com/aoagents/agent-orchestrator/backend/internal/service/session"
 	usagesvc "github.com/aoagents/agent-orchestrator/backend/internal/service/usage"
@@ -326,6 +327,9 @@ func (c *SessionsController) list(w http.ResponseWriter, r *http.Request) {
 		Sessions:   sessionViews(r, page.Sessions),
 		NextCursor: page.NextCursor,
 		Archived:   archiveSummaryView(page.Archived),
+		PRState:    filter.PRState,
+		Total:      page.Total,
+		Version:    page.Version,
 	})
 }
 
@@ -2370,6 +2374,11 @@ func (c *SessionsController) send(w http.ResponseWriter, r *http.Request) {
 	} else {
 		err = c.Svc.Send(r.Context(), sessionID(r), message, attachment)
 	}
+	if errors.Is(err, chatsvc.ErrControllerHandoff) {
+		envelope.WriteAPIError(w, r, http.StatusConflict, "conflict", "CHAT_INTERFACE_TRANSITION",
+			"the session is switching agents or interfaces; send again after the handoff completes", nil)
+		return
+	}
 	if err != nil {
 		writeAttachmentWriteError(w, r, err)
 		return
@@ -2874,6 +2883,13 @@ func parseSessionListFilter(r *http.Request) (sessionsvc.ListFilter, error) {
 			return sessionsvc.ListFilter{}, fmt.Errorf("limit must be an integer from 1 to %d", sessionsvc.MaxListLimit)
 		}
 		filter.Limit = limit
+	}
+	switch state := domain.PRState(q.Get("prState")); state {
+	case "":
+	case domain.PRStateOpen, domain.PRStateDraft, domain.PRStateMerged, domain.PRStateClosed:
+		filter.PRState = state
+	default:
+		return sessionsvc.ListFilter{}, errors.New("prState must be open, draft, merged or closed")
 	}
 	if filter.Cursor = q.Get("cursor"); filter.Cursor != "" && filter.Limit == 0 {
 		return sessionsvc.ListFilter{}, errors.New("cursor requires limit")

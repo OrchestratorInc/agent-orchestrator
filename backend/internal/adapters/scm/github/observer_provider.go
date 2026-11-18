@@ -62,10 +62,15 @@ func (p *Provider) RepoPRListGuard(ctx context.Context, repo ports.SCMRepo, etag
 	return ports.SCMGuardResult{ETag: firstNonEmptyHeader(resp.ETag, etag), NotModified: resp.NotModified}, nil
 }
 
-// ListPRsByRepo lists pull requests in the repository, optionally filtered to
-// those updated after updatedAfter (zero = full listing). It paginates the REST
-// pulls endpoint using state=open and sort=updated
-func (p *Provider) ListPRsByRepo(ctx context.Context, repo ports.SCMRepo, updatedAfter time.Time) ([]ports.SCMPRObservation, error) {
+// ListPRsByRepo lists the repository's open pull requests. It paginates the
+// REST pulls endpoint using state=open and sort=updated.
+//
+// updatedAfter is ignored. GitHub's pulls endpoint has no since filter and
+// returns every open PR regardless, and the observer relies on that full
+// listing to notice tracked PRs that closed. Sending since anyway only gave
+// every poll a new query string, so each page landed in the client's response
+// cache under a new key and the cache filled with stale copies of the listing.
+func (p *Provider) ListPRsByRepo(ctx context.Context, repo ports.SCMRepo, _ time.Time) ([]ports.SCMPRObservation, error) {
 	const perPage = 100
 	out := []ports.SCMPRObservation{}
 	for page := 1; ; page++ {
@@ -75,9 +80,6 @@ func (p *Provider) ListPRsByRepo(ctx context.Context, repo ports.SCMRepo, update
 		q.Set("direction", "desc")
 		q.Set("per_page", strconv.Itoa(perPage))
 		q.Set("page", strconv.Itoa(page))
-		if !updatedAfter.IsZero() {
-			q.Set("since", updatedAfter.UTC().Format(time.RFC3339Nano))
-		}
 		resp, err := p.client.doREST(ctx, http.MethodGet, repoPath(repo.Owner, repo.Name, "pulls"), q, nil)
 		if err != nil {
 			return nil, err

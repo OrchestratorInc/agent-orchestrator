@@ -796,6 +796,14 @@ func Run(buildVersion string) (retErr error) {
 	}); ok {
 		chatSvc.SetOtherWriterCheck(check.ImportedChatWrittenElsewhere)
 	}
+	if resume, ok := sessMgr.(interface {
+		ResumeAgentWithMode(context.Context, domain.SessionID) (sessionmanager.RestoreResult, error)
+	}); ok {
+		chatSvc.SetResumeAgentCallback(func(ctx context.Context, id domain.SessionID) error {
+			_, err := resume.ResumeAgentWithMode(ctx, id)
+			return err
+		})
+	}
 	if tunable, ok := sessMgr.(interface {
 		SetModelCatalog(interface {
 			Models(context.Context, string, string, bool) (ports.AgentModelCatalog, error)
@@ -963,6 +971,8 @@ func Run(buildVersion string) (retErr error) {
 	// Agents started by hand in a shell give its tab their logo and status.
 	if rt, ok := runtimeAdapter.(shellagent.Runtime); ok {
 		shellAgents := shellagent.NewManager(ctx, rt, agents, log)
+		shellAgents.SetHarnessRecorder(shellTermSvc.RecordShellAgent)
+		shellTermSvc.SetForegroundReader(shellAgents)
 		shellTrackers = append(shellTrackers, shellAgents)
 		termMgr.SetShellAgents(shellAgents)
 	}
@@ -984,6 +994,7 @@ func Run(buildVersion string) (retErr error) {
 	sessMgr.SetShellTerminalCloser(shellTermSvc)
 	var (
 		usageCollector *usagesvc.Collector
+		usageHookQueue *usagesvc.HookQueue
 		usagePipeline  *usagepipeline.Pipeline
 		usagePricing   *usagePricingRuntime
 	)
@@ -1062,7 +1073,15 @@ func Run(buildVersion string) (retErr error) {
 				}
 			}
 		}()
-		lcStack.LCM.SetUsageFinalizer(usageCollector)
+		// The agent waits for every hook, and a usage scan can hold the
+		// collector for seconds, so hooks only queue their usage signal.
+		// Termination finalizes through the queue to record those signals first.
+		usageHookQueue = usagesvc.NewHookQueue(usageCollector, log)
+		go func() {
+			defer sentryobs.RecoverBackground()
+			usageHookQueue.Run(ctx)
+		}()
+		lcStack.LCM.SetUsageFinalizer(usageHookQueue)
 		if wired, ok := sessMgr.(interface {
 			SetBackgroundTaskUsage(sessionmanager.BackgroundTaskUsage)
 		}); ok {
@@ -1254,6 +1273,10 @@ func Run(buildVersion string) (retErr error) {
 	// Terminal hooks pass the hook process gate: a Claude process other than
 	// the session's own must not replace its activity or transcript.
 	hookActivity := hookprocess.New(lcStack.LCM, store, runtimeAdapter, nil, log)
+	var usageHooks controllers.UsageHookRecorder = usageCollector
+	if usageHookQueue != nil {
+		usageHooks = usageHookQueue
+	}
 	srv, err := httpd.NewWithDeps(cfg, log, termMgr, httpd.APIDeps{
 		SessionForks:       sessionForkSvc,
 		Awake:              awakeSvc,
@@ -1298,7 +1321,7 @@ func Run(buildVersion string) (retErr error) {
 		Activity:           hookActivity,
 		PRRefresh:          reviewRefresher,
 		NativeSessions:     nativeSessions,
-		UsageHooks:         usageCollector,
+		UsageHooks:         usageHooks,
 		UsageSummary:       freshUsageSummary{usagesvc.NewSummaryReader(store), usagePipeline},
 		UsageReport:        freshUsageReport{usageReportReader(store, usagePricing), usagePipeline},
 		UsageLimitHistory:  usagesvc.NewLimitHistoryReader(store, agentAccountSvc),

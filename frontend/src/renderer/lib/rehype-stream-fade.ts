@@ -1,18 +1,19 @@
 import type { Element, ElementContent, Root } from "hast";
 
 /**
- * Wraps each streamed character in `<span class="stream-char">` so CSS can fade
- * it in as it mounts. Only the trailing characters are new elements on each
- * render (react-markdown keys by position), so earlier ones never replay the
- * animation. Apply only while streaming; a settled reply drops the plugin and
- * renders plain markdown again, instead of keeping a node per character.
+ * Replaces each text node of the last block with `<span class="stream-text">`,
+ * which ChatMarkdown renders as the text with every character from `dataKept`
+ * on in its own `<span class="stream-char">`, keyed by source offset, so CSS
+ * fades each one in once as it mounts. Every text node of the block gets the
+ * wrapper, settled or not, so a wrapper's position among its siblings, which
+ * react-markdown keys it by, does not move as characters settle. Apply only
+ * while streaming; a settled reply drops the plugin and renders plain markdown.
  *
  * Bounds, so a long reply cannot make every update expensive or unsafe:
- *   - only the last block is wrapped — text streams in at the tail, and earlier
+ *   - only the last block is wrapped: text streams in at the tail, and earlier
  *     blocks have already faded;
  *   - a block over MAX_BLOCK_CHARS is left plain;
- *   - code is skipped, and so are emoji: `compactEmoji` in ChatMarkdown needs to
- *     see them as plain strings;
+ *   - code is skipped;
  *   - any failure leaves the tree untouched, so the reply still renders.
  */
 const MAX_BLOCK_CHARS = 1000;
@@ -23,12 +24,12 @@ export const EMOJI_GRAPHEME = /\p{Extended_Pictographic}|\p{Regional_Indicator}|
 
 type Parent = { children: ElementContent[] };
 
-function charSpan(char: string): Element {
+function textSpan(value: string, start: number | undefined, kept: number): Element {
 	return {
 		type: "element",
 		tagName: "span",
-		properties: { className: ["stream-char"] },
-		children: [{ type: "text", value: char }],
+		properties: { className: ["stream-text"], dataStart: start, dataKept: kept },
+		children: [{ type: "text", value }],
 	};
 }
 
@@ -55,32 +56,34 @@ function settledPrefix(value: string, start: number, settledOffset: number): num
 }
 
 function wrap(parent: Parent & { position?: Element["position"] }, settledOffset: number) {
-	parent.children = parent.children.flatMap((child): ElementContent[] => {
+	parent.children = parent.children.map((child): ElementContent => {
 		// Whitespace-only text is structural (between table rows, list items).
 		if (child.type === "text") {
-			if (child.value.trim() === "") return [child];
+			if (child.value.trim() === "") return child;
 			// Source text that was already on screen stays plain, so it never fades in
 			// again. Text a remark plugin split off has no position: judge it by its
 			// enclosing element instead.
 			const start = child.position?.start.offset;
+			const end = child.position?.end.offset;
 			const parentEnd = parent.position?.end.offset;
-			if (start === undefined && parentEnd !== undefined && parentEnd <= settledOffset) return [child];
-			const kept = start === undefined ? 0 : settledPrefix(child.value, start, settledOffset);
-			if (kept === child.value.length) return [child];
-			const plain: ElementContent[] = kept > 0 ? [{ type: "text", value: child.value.slice(0, kept) }] : [];
-			return plain.concat(Array.from(SEGMENTER.segment(child.value.slice(kept)), ({ segment }): ElementContent =>
-				EMOJI_GRAPHEME.test(segment) ? { type: "text", value: segment } : charSpan(segment),
-			));
+			let kept: number;
+			if (start === undefined) kept = parentEnd !== undefined && parentEnd <= settledOffset ? child.value.length : 0;
+			// A character reference or escape makes the source longer than the text,
+			// so source offsets do not index it: the node settles as a whole.
+			else if (end !== undefined && end - start !== child.value.length) kept = end <= settledOffset ? child.value.length : 0;
+			else kept = settledPrefix(child.value, start, settledOffset);
+			return textSpan(child.value, start, kept);
 		}
 		if (child.type === "element" && !SKIP.has(child.tagName)) wrap(child, settledOffset);
-		return [child];
+		return child;
 	});
 }
 
 export type StreamFadeOptions = {
 	/**
-	 * Markdown source length already shown before streaming resumed (a chat opened
-	 * mid-reply). Characters before it render plain; only later ones fade in.
+	 * Markdown source length that is not fading in: shown before streaming
+	 * resumed (a chat opened mid-reply), or arrived longer ago than the fade
+	 * lasts. Characters before it render plain; only later ones fade in.
 	 */
 	settledOffset?: number;
 };

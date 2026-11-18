@@ -1012,6 +1012,19 @@ func (e *Engine) SwitchReviewer(
 			return SessionReviews{}, err
 		}
 	}
+	for _, row := range reviewRows {
+		if row.Harness != selected || !row.IsArchived {
+			continue
+		}
+		row.IsArchived = false
+		row.UpdatedAt = e.clock()
+		// Preserve the stored native session, which a config reset may have cleared.
+		row.AgentSessionID = ""
+		if err := e.store.UpsertReview(ctx, row); err != nil {
+			return SessionReviews{}, err
+		}
+		break
+	}
 	if _, err := e.restoreReviewerLocked(ctx, workerID, worker, selected, selectedConfig); err != nil {
 		return SessionReviews{}, err
 	}
@@ -1606,6 +1619,43 @@ func (e *Engine) listLocked(ctx stdctx.Context, workerID domain.SessionID, selec
 	reviewRows, err := e.store.ListReviewsBySession(ctx, workerID)
 	if err != nil {
 		return SessionReviews{}, err
+	}
+	// A pass-only override reviewer retires once its runs are terminal: the
+	// --agent flag documents "for this pass only", so a temporary reviewer must
+	// not linger in the pane forever (#6862). The session's selected reviewer
+	// and any reviewer with an active pass always stay. A live idle pane is
+	// destroyed with the row: retiring the record alone would orphan the
+	// reviewer process.
+	for i := range reviewRows {
+		row := reviewRows[i]
+		if row.IsArchived || row.Harness == selectedHarness {
+			continue
+		}
+		if reviewRunsContainRunningForReview(runs, row) {
+			continue
+		}
+		if handle := reviewerProbeHandle(row); handle != "" {
+			if err := e.launcher.Destroy(ctx, handle); err != nil {
+				return SessionReviews{}, fmt.Errorf("retire reviewer %s: %w", row.ID, err)
+			}
+		}
+		retired := row
+		retired.IsArchived = true
+		retired.ReviewerHandleID = ""
+		retired.ReviewerLaunchID = ""
+		retired.ControllerGeneration = ""
+		retired.ReviewerActivityState = domain.ActivityExited
+		if _, err := e.store.RestoreReviewLaunchState(ctx, retired, e.clock()); err != nil {
+			return SessionReviews{}, err
+		}
+		if row.ID == reviewRow.ID {
+			reviewRow = retired
+		} else {
+			reviewRows[i] = retired
+		}
+	}
+	if reviewRow.IsArchived {
+		reviewerHarness = selectedHarness
 	}
 	active := []domain.ReviewerSurface{}
 	if reviewerRowActive(reviewRow, runs) {
