@@ -631,8 +631,16 @@ func removeFile(top, path string) error {
 
 // toplevel returns the root of the worktree at workspace. A workspace nested in
 // some other repository, such as a home directory under version control, is
-// refused: snapshotting or restoring it would act on that whole repository.
+// refused: snapshotting or restoring it would act on that whole repository. A
+// plain folder with a detached store is its own root, and its store is
+// created the first time it is needed.
 func toplevel(ctx context.Context, workspace string) (string, error) {
+	if store, ok := detachedStore(workspace); ok {
+		if err := ensureStore(ctx, store); err != nil {
+			return "", err
+		}
+		return filepath.Clean(workspace), nil
+	}
 	top, err := git(ctx, workspace, nil, nil, "rev-parse", "--show-toplevel")
 	if err != nil {
 		return "", fmt.Errorf("%w: %w", ErrNotRepository, err)
@@ -686,7 +694,9 @@ func git(ctx context.Context, dir string, env []string, stdin io.Reader, args ..
 		"-c", "splitIndex.sharedIndexExpire=never",
 	}, args...)
 	cmd := aoprocess.CommandContext(ctx, "git", full...)
-	cmd.Env = append(append(os.Environ(), "GIT_TERMINAL_PROMPT=0", "GCM_INTERACTIVE=Never"), env...)
+	// A plain folder's commands run against its detached store; the caller's
+	// env comes last, so an override such as GIT_INDEX_FILE wins.
+	cmd.Env = append(append(append(os.Environ(), "GIT_TERMINAL_PROMPT=0", "GCM_INTERACTIVE=Never"), detachedEnv(dir)...), env...)
 	cmd.Stdin = stdin
 	var stdout, stderr bytes.Buffer
 	cmd.Stdout, cmd.Stderr = &stdout, &stderr
