@@ -130,7 +130,8 @@ export function ArtifactsView() {
 	const kept = useKeptArtifacts().data;
 	const noProjectName = t("artifacts.noProject");
 	// Links other people published that open for this person, listed under Cloud.
-	const sharedWithMe = useSharedArtifacts().data;
+	const sharedQuery = useSharedArtifacts();
+	const sharedWithMe = sharedQuery.data;
 	const sharedGroupName = t("artifacts.owner.shared");
 	const groups = useMemo(() => {
 		const own = withShareAccess(withHostShareLinks(withKeptArtifacts(groupArtifactsByProject([...(workspaces ?? []), ...remoteWorkspaces], orchestratorTitle), kept, workspaces ?? [], noProjectName), hostShareLinks), shareAccess);
@@ -527,6 +528,13 @@ export function ArtifactsView() {
 						<Button type="button" size="sm" variant="quiet" onClick={() => void remote.refetch()}>{t("artifacts.hostLoadRetry")}</Button>
 					</div>
 				))}
+				{/* A failed shared list is said so, with a retry; the rest still shows. */}
+				{sharedQuery.isError && (location === undefined || location === "cloud") ? (
+					<div role="alert" className="mt-2 flex items-center gap-2 text-xs text-destructive">
+						<span className="min-w-0 truncate">{t("artifacts.sharedLoadFailed")}</span>
+						<Button type="button" size="sm" variant="quiet" onClick={() => void sharedQuery.refetch()}>{t("artifacts.hostLoadRetry")}</Button>
+					</div>
+				) : null}
 				{hasArtifacts && filtering ? (
 					<div className="mt-2 flex flex-wrap items-center gap-1.5">
 						{([

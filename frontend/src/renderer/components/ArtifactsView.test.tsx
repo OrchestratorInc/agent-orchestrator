@@ -61,10 +61,12 @@ const mocks = vi.hoisted(() => ({
 	kept: [] as KeptArtifactSet[],
 	/** Links other people published that open for this person. */
 	shared: [] as CloudCpSharedArtifact[],
+	sharedFailed: false,
+	refetchShared: vi.fn(),
 }));
 vi.mock("../hooks/useSharedArtifacts", () => ({
 	sharedArtifactsQueryKey: ["shared-artifacts"],
-	useSharedArtifacts: () => ({ data: mocks.shared }),
+	useSharedArtifacts: () => ({ data: mocks.sharedFailed ? undefined : mocks.shared, isError: mocks.sharedFailed, refetch: mocks.refetchShared }),
 }));
 vi.mock("./SharedArtifactFrame", () => ({
 	SharedArtifactFrame: ({ linkId, title }: { linkId: string; title: string }) => <iframe data-link-id={linkId} data-testid="shared-artifact-preview" title={title} />,
@@ -246,6 +248,8 @@ describe("ArtifactsView", () => {
 		mocks.shareAccess = new Map();
 		mocks.kept = [];
 		mocks.shared = [];
+		mocks.sharedFailed = false;
+		mocks.refetchShared.mockReset();
 		window.localStorage.removeItem("ao.artifacts.view");
 		useArtifactsViewStore.setState({ view: "gallery", collapsedSections: [], pinnedArtifactIds: [] });
 		vi.stubGlobal("IntersectionObserver", class {
@@ -719,6 +723,17 @@ describe("ArtifactsView", () => {
 		await user.click(screen.getByRole("button", { name: "Remove filter Owner: Me" }));
 		await user.click(screen.getByRole("button", { name: "Select" }));
 		expect(screen.getByRole("checkbox", { name: "Select q3-report.html" })).toBeDisabled();
+	});
+
+	it("says when the links shared with this person did not load, keeping the rest listed", async () => {
+		const user = userEvent.setup();
+		mocks.sharedFailed = true;
+		renderView();
+		const alert = within(screen.getByRole("alert"));
+		expect(alert.getByText("Couldn't load artifacts shared with you.")).toBeInTheDocument();
+		expect(within(artifactList()).getAllByRole("listitem").length).toBeGreaterThan(0);
+		await user.click(alert.getByRole("button", { name: "Retry" }));
+		expect(mocks.refetchShared).toHaveBeenCalledTimes(1);
 	});
 
 	it("opens a shared link sent from its web page in the preview", async () => {

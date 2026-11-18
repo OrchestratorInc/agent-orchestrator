@@ -3610,6 +3610,7 @@
 	"artifacts.locationRemote": "Máquina remota",
 	"artifacts.hostLoadFailed": "Não foi possível carregar os artefatos de {{host}}.",
 	"artifacts.hostLoadRetry": "Tentar novamente",
+	"artifacts.sharedLoadFailed": "Não foi possível carregar os artefatos compartilhados com você.",
 	"artifacts.empty.title": "Create your first artifact",
 	"artifacts.empty.description": "Artifacts are pages and documents an agent writes for you. Pick where the session should live.",
 	"artifacts.create": "Create artifact",

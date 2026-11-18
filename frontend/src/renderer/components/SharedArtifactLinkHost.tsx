@@ -29,8 +29,11 @@ export function SharedArtifactLinkHost() {
 		const add = (viewerUrl: string | null) => {
 			if (viewerUrl) setPending((current) => [...current, viewerUrl]);
 		};
-		const stop = aoBridge.cloud.onOpenSharedArtifact(add);
-		void aoBridge.cloud.takePendingSharedArtifact().then(add);
+		// The main process keeps each link until it is taken, so one sent before
+		// this subscribed waits; a send only says to take it now.
+		const take = () => void aoBridge.cloud.takePendingSharedArtifact().then(add);
+		const stop = aoBridge.cloud.onOpenSharedArtifact(take);
+		take();
 		return stop;
 	}, []);
 

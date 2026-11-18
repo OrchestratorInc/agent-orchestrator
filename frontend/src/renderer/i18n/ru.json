@@ -3684,6 +3684,7 @@
 	"artifacts.locationRemote": "Удалённая машина",
 	"artifacts.hostLoadFailed": "Не удалось загрузить артефакты с {{host}}.",
 	"artifacts.hostLoadRetry": "Повторить",
+	"artifacts.sharedLoadFailed": "Не удалось загрузить артефакты, которыми с вами поделились.",
 	"artifacts.empty.title": "Создайте свой первый артефакт",
 	"artifacts.empty.description": "Артефакты включают страницы и документы, которые агент создаёт для вас. Выберите, где разместить сессию.",
 	"artifacts.create": "Создать артефакт",

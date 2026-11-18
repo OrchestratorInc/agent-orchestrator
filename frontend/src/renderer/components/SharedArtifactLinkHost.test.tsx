@@ -24,7 +24,12 @@ vi.mock("../lib/bridge", () => ({
 				mocks.listener = listener;
 				return () => { mocks.listener = undefined; };
 			},
-			takePendingSharedArtifact: async () => mocks.pending,
+			// Like the main process: the link is held until taken, once.
+			takePendingSharedArtifact: async () => {
+				const viewerUrl = mocks.pending;
+				mocks.pending = null;
+				return viewerUrl;
+			},
 			openSharedArtifactWindow: mocks.openWindow,
 		},
 	},
@@ -32,6 +37,12 @@ vi.mock("../lib/bridge", () => ({
 
 const viewer = "https://orchestrator.inc/artifact/q3-report";
 const saved = { linkId: "q3-report", name: "q3.html", contentType: "text/html", size: 1, updatedAt: "2030-01-01T00:00:00Z", access: "anyone", via: "saved", sharedAt: "2030-01-01T00:00:00Z" };
+
+/** The main process holding a link, then telling the listening host to take it. */
+async function send(viewerUrl: string) {
+	mocks.pending = viewerUrl;
+	await act(async () => mocks.listener?.(viewerUrl));
+}
 
 function renderHost() {
 	return render(<QueryClientProvider client={new QueryClient()}><SharedArtifactLinkHost /></QueryClientProvider>);
@@ -51,7 +62,7 @@ describe("SharedArtifactLinkHost", () => {
 	it("saves a link sent from its web page and opens it on the Artifacts page", async () => {
 		mocks.save.mockResolvedValue({ artifact: saved });
 		renderHost();
-		act(() => mocks.listener?.(viewer));
+		await send(viewer);
 		await waitFor(() => expect(mocks.navigate).toHaveBeenCalledWith({ to: "/artifacts" }));
 		expect(mocks.save).toHaveBeenCalledWith("q3-report");
 		expect(useArtifactsViewStore.getState().openSharedArtifact).toEqual(saved);
@@ -75,7 +86,7 @@ describe("SharedArtifactLinkHost", () => {
 		mocks.ready = false;
 		mocks.status = "unauthenticated";
 		const { unmount } = renderHost();
-		act(() => mocks.listener?.(viewer));
+		await send(viewer);
 		await waitFor(() => expect(mocks.openWindow).toHaveBeenCalledWith(viewer));
 		expect(mocks.save).not.toHaveBeenCalled();
 		unmount();
@@ -85,14 +96,14 @@ describe("SharedArtifactLinkHost", () => {
 		mocks.openWindow.mockReset();
 		mocks.save.mockRejectedValue(new Error("not found"));
 		renderHost();
-		act(() => mocks.listener?.(viewer));
+		await send(viewer);
 		await waitFor(() => expect(mocks.openWindow).toHaveBeenCalledWith(viewer));
 		expect(mocks.navigate).not.toHaveBeenCalled();
 	});
 
 	it("ignores anything that is not a published artifact's viewer", async () => {
 		renderHost();
-		act(() => mocks.listener?.("https://evil.example/artifact/x?vt=1"));
+		await send("https://evil.example/artifact/x?vt=1");
 		await act(async () => {});
 		expect(mocks.save).not.toHaveBeenCalled();
 		expect(mocks.openWindow).not.toHaveBeenCalled();

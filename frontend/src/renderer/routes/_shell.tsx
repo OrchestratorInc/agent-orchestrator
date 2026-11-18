@@ -307,6 +307,8 @@ const ShellCenter = memo(function ShellCenter({
 	const selfFramedOutlet = <>
 		<div className={startingOrchestrator ? "absolute inset-0 invisible pointer-events-none" : "contents"} inert={startingOrchestrator || undefined}><Outlet /></div>
 		{startingChat ? <CenterPanelShell notifications>{startingChat}</CenterPanelShell> : null}
+		{/* ShellOutlet mounts it elsewhere; the two branches never render together. */}
+		<SharedArtifactLinkHost />
 	</>;
 	// Pages own their header content; the panel owns the shared workspace controls,
 	// so every page carries the bell except the welcome start page.

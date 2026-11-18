@@ -4411,7 +4411,7 @@ ipcMain.handle("cloud:takePendingShareLink", () => {
 });
 
 // A published artifact's viewer URL from ao-app://shared-artifact, already
-// checked by parseSharedArtifactLink, waiting for the window as above.
+// checked by parseSharedArtifactLink, kept until the renderer takes it.
 let pendingSharedArtifact: string | undefined;
 
 ipcMain.handle("cloud:takePendingSharedArtifact", () => {
@@ -4447,9 +4447,11 @@ async function handleCloudDeepLinkAndFocus(url: string): Promise<void> {
 			await createWindow().catch((error: unknown) => console.error("AO: could not reopen the window for a shared artifact", error));
 		}
 		focusMainWindow();
+		// Held until the renderer takes it: a page that has loaded may not have
+		// subscribed yet, so the send only tells a listening host to take it now.
+		pendingSharedArtifact = artifact;
 		const contents = getShellWebContents();
 		if (contents && !contents.isDestroyed() && !contents.isLoading()) contents.send("cloud:openSharedArtifact", artifact);
-		else pendingSharedArtifact = artifact;
 		return;
 	}
 	// macOS keeps the app (and tray) alive after the close button —

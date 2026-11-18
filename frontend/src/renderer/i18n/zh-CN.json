@@ -3503,6 +3503,7 @@
 	"artifacts.locationRemote": "远程机器",
 	"artifacts.hostLoadFailed": "无法加载 {{host}} 的产物。",
 	"artifacts.hostLoadRetry": "重试",
+	"artifacts.sharedLoadFailed": "无法加载与你共享的产物。",
 	"artifacts.empty.title": "Create your first artifact",
 	"artifacts.empty.description": "Artifacts are pages and documents an agent writes for you. Pick where the session should live.",
 	"artifacts.create": "Create artifact",

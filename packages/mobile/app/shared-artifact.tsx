@@ -1,5 +1,5 @@
 import { Stack, useLocalSearchParams, useRouter } from "expo-router";
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { StyleSheet, View } from "react-native";
 import { WebView } from "react-native-webview";
 import { sharedArtifactAppURL } from "../../shared/artifacts/shared-artifact-link";
@@ -14,6 +14,8 @@ export default function SharedArtifactScreen() {
 	const router = useRouter();
 	const inset = useGlassBarInset();
 	const [failedURL, setFailedURL] = useState<string | null>(null);
+	// Each artifact opened on this screen gets a fresh load attempt.
+	useEffect(() => setFailedURL(null), [url]);
 	return <>
 		<Stack.Screen options={{ title: "Shared artifact", headerBackVisible: true }} />
 		<View style={[styles.page, { paddingTop: inset }]}>

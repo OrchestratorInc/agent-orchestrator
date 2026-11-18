@@ -10,9 +10,10 @@ export const sharedArtifactsQueryKey = ["shared-artifacts"] as const;
  * while signed out of Cloud, or where the control plane has no share links.
  */
 export function useSharedArtifacts(enabled = true) {
-	const { client, ready, baseUrl } = useCloudCp(enabled);
+	const { client, ready, baseUrl, userId } = useCloudCp(enabled);
 	return useQuery<CloudCpSharedArtifact[]>({
-		queryKey: [...sharedArtifactsQueryKey, baseUrl],
+		// Per account, so one account's list never shows for another signed in after it.
+		queryKey: [...sharedArtifactsQueryKey, baseUrl, userId],
 		enabled: enabled && ready,
 		staleTime: 30_000,
 		retry: 1,

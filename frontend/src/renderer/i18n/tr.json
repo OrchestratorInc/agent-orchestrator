@@ -3497,6 +3497,7 @@
 	"artifacts.locationRemote": "Uzak makine",
 	"artifacts.hostLoadFailed": "{{host}} üzerindeki çıktılar yüklenemedi.",
 	"artifacts.hostLoadRetry": "Yeniden dene",
+	"artifacts.sharedLoadFailed": "Sizinle paylaşılan çıktılar yüklenemedi.",
 	"artifacts.empty.title": "İlk çıktınızı oluşturun",
 	"artifacts.empty.description": "Çıktılar, bir aracının sizin için yazdığı sayfalar ve belgelerdir. Oturumun nerede çalışacağını seçin.",
 	"artifacts.create": "Çıktı oluştur",

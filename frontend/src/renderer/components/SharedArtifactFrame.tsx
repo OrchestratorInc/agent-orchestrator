@@ -15,9 +15,10 @@ import { PanelMessage, RetryButton } from "./WorkspaceDiffView";
  */
 export function SharedArtifactFrame({ linkId, title }: { linkId: string; title: string }) {
 	const { t } = useTranslation();
-	const { client, ready, baseUrl } = useCloudCp();
+	const { client, ready, baseUrl, userId } = useCloudCp();
 	const view = useQuery({
-		queryKey: ["shared-artifact-view", baseUrl, linkId],
+		// Per account: the view URL carries this account's access.
+		queryKey: ["shared-artifact-view", baseUrl, userId, linkId],
 		enabled: ready,
 		staleTime: 5 * 60_000,
 		gcTime: 0,
