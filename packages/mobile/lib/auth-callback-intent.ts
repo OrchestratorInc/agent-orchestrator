@@ -1,3 +1,5 @@
+import { parseSharedArtifactLink } from "../../shared/artifacts/shared-artifact-link";
+
 // The Orchestrator sign-in returns to ao-app://callback. On iOS the auth
 // session captures that URL privately. On Android the Custom Tab delivers it to
 // the activity as an ordinary deep link, so Expo Router also receives it while
@@ -15,6 +17,8 @@ export function isAuthCallback(path: string): boolean {
  * app during sign-in) opens the app normally.
  */
 export function redirectSystemPath({ path, initial }: { path: string; initial: boolean }): string | null {
+	const artifact = parseSharedArtifactLink(path);
+	if (artifact) return `/shared-artifact?url=${encodeURIComponent(artifact)}`;
 	if (!isAuthCallback(path)) return path;
 	return initial ? "/" : null;
 }

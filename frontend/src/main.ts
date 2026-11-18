@@ -1,3 +1,5 @@
+import { parseSharedArtifactLink } from "../../packages/shared/artifacts/shared-artifact-link";
+import { openSharedArtifact } from "./main/shared-artifact-window";
 import type { SideCloseRequest, SideCloseState } from "./shared/side-close";
 import { SideCloseRecovery, type SideSnapshotCoverage } from "./main/side-close";
 import { SideCloseController } from "./main/side-close-controller";
@@ -4418,6 +4420,12 @@ function isShareDeepLink(raw: string): boolean {
 }
 
 async function handleCloudDeepLinkAndFocus(url: string): Promise<void> {
+	const artifact = parseSharedArtifactLink(url);
+	if (artifact) {
+		await app.whenReady();
+		openSharedArtifact(artifact);
+		return;
+	}
 	// macOS keeps the app (and tray) alive after the close button —
 	// window-all-closed does not quit — and a link clicked then fires open-url
 	// without activate, so nothing else recreates the shell. Hidden utility
