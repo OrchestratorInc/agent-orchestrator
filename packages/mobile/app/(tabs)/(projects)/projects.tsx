@@ -1,5 +1,5 @@
 import { useFocusEffect, useRouter } from "expo-router";
-import { useCallback, useMemo, useRef, useState } from "react";
+import { useCallback, useMemo, useRef } from "react";
 import { FlatList, Platform, RefreshControl, StyleSheet, View } from "react-native";
 import { BoardHeaderItems } from "../../../lib/BoardHeaderItems";
 import { useCloud } from "../../../lib/cloud/CloudProvider";
@@ -21,6 +21,7 @@ import { UnpairedState } from "../../../lib/UnpairedState";
 import type { Theme } from "../../../lib/theme";
 import { useTheme, useThemedStyles } from "../../../lib/ThemeProvider";
 import { useOrchestratorLauncher } from "../../../lib/useOrchestratorLauncher";
+import { useRefreshActions } from "../../../lib/useRefreshActions";
 import { useBoardFailure } from "../../../lib/useBoardFailure";
 import { TabPageScroll } from "../../../lib/TabPageScroll";
 import { space } from "../../../lib/tokens";
@@ -76,7 +77,6 @@ export default function ProjectsScreen() {
 	const unreadCount = (hostStates.length > 1
 		? hostStates.reduce((count, host) => count + host.notificationsUnread, 0)
 		: notificationsUnread) + (cloud ? cloudUnread : 0);
-	const [refreshing, setRefreshing] = useState(false);
 	const { busyProjects, openOrchestrator } = useOrchestratorLauncher();
 	// One list of rows, no status headers: each row already says how its
 	// orchestrator is doing. The sections' order is kept, so projects that need
@@ -89,15 +89,9 @@ export default function ProjectsScreen() {
 	const failure = useBoardFailure();
 
 	// No haptic of its own: each platform's refresh control gives the feedback
-	// it gives everywhere, and the Retry buttons that also call this buzz once.
-	const onRefresh = async () => {
-		setRefreshing(true);
-		try {
-			await refreshAll();
-		} finally {
-			setRefreshing(false);
-		}
-	};
+	// it gives everywhere, and the Retry buttons that run it too buzz once.
+	// Retry never drives the pull spinner: see useRefreshActions.
+	const { refreshing, onRefresh, retrying, retry } = useRefreshActions(refreshAll);
 
 	const openProject = (row: OrchestratorProjectRow) => {
 		const hostId = "hostId" in row.project && typeof row.project.hostId === "string" ? row.project.hostId : undefined;
@@ -121,7 +115,7 @@ export default function ProjectsScreen() {
 
 	// In the list, not above it: the list has to be the page's first view under
 	// the translucent header.
-	const staleBanner = hostStates.length <= 1 ? <StaleBanner error={!!error} onRetry={onRefresh} /> : <StaleBanner networkOnly />;
+	const staleBanner = hostStates.length <= 1 ? <StaleBanner error={!!error} onRetry={retry} /> : <StaleBanner networkOnly />;
 
 	return (
 		<View style={styles.screen}>
@@ -167,7 +161,7 @@ export default function ProjectsScreen() {
 								icon={hostStates.length > 1 ? "unplug" : failure.icon}
 								title={hostStates.length > 1 ? "No machines connected" : failure.title}
 								message={hostStates.length > 1 ? undefined : failure.hint}
-								action={<Button title="Retry" icon="refresh-cw" variant="secondary" onPress={onRefresh} />}
+								action={<Button title="Retry" icon="refresh-cw" variant="secondary" loading={retrying} onPress={retry} />}
 							/>
 						) : (
 							<EmptyState

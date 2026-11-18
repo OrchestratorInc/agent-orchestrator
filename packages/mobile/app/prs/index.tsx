@@ -18,6 +18,7 @@ import { isCloudHost } from "../../lib/cloud/mapping";
 import { useCloudPRSummaries } from "../../lib/cloud/useCloudPRSummaries";
 import { UnpairedState } from "../../lib/UnpairedState";
 import { PR_SUMMARY_REUSE_MS, usePRSummaries } from "../../lib/usePRSummaries";
+import { useRefreshActions } from "../../lib/useRefreshActions";
 import { MINUTE_MS, useNow } from "../../lib/useNow";
 import { useBoardFailure } from "../../lib/useBoardFailure";
 import { TabPageScroll } from "../../lib/TabPageScroll";
@@ -72,7 +73,6 @@ function PRList() {
 	// Orchestrator Cloud listed, an empty filter is just empty.
 	const error = !cloudShown && visibleHosts.every((host) => host.connection !== "open") ? visibleHosts.find((host) => host.error)?.error : null;
 	const [filter, setFilter] = useState<Filter>("open");
-	const [refreshing, setRefreshing] = useState(false);
 	const toast = useToast();
 	const { show: showToast } = toast;
 	// Android 13 and later confirms every copy with its own clipboard preview.
@@ -122,15 +122,14 @@ function PRList() {
 	const failure = useBoardFailure();
 
 	// No haptic of its own: each platform's refresh control gives the feedback
-	// it gives everywhere, and the Retry buttons that also call this buzz once.
-	const onRefresh = async () => {
-		setRefreshing(true);
+	// it gives everywhere, and the Retry buttons that run it too buzz once.
+	// Retry never drives the pull spinner: see useRefreshActions.
+	const { refreshing, onRefresh, retrying, retry } = useRefreshActions(async () => {
 		lastSummaryRefresh.current = Date.now();
 		summaries.reload();
 		cloudSummaries.reload();
 		await refreshAll();
-		setRefreshing(false);
-	};
+	});
 
 	if (!configured) {
 		return (
@@ -150,7 +149,7 @@ function PRList() {
 		<>
 			{singleMachine && !routeHostId ? <ProjectSwitcher /> : null}
 			<PRFilterControl filter={filter} counts={counts} onChange={setFilter} />
-			{singleMachine ? <StaleBanner error={!!error} onRetry={onRefresh} /> : <StaleBanner networkOnly />}
+			{singleMachine ? <StaleBanner error={!!error} onRetry={retry} /> : <StaleBanner networkOnly />}
 		</>
 	);
 
@@ -197,7 +196,7 @@ function PRList() {
 								icon={failure.icon}
 								title={failure.title}
 								message={failure.hint}
-								action={<Button title="Retry" icon="refresh-cw" variant="secondary" onPress={onRefresh} />}
+								action={<Button title="Retry" icon="refresh-cw" variant="secondary" loading={retrying} onPress={retry} />}
 							/>
 						) : (
 							<EmptyState

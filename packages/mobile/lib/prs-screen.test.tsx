@@ -9,7 +9,7 @@ const fixture = vi.hoisted(() => ({
 	cardRenders: [] as string[], params: {} as { hostId?: string; projectId?: string },
 	configForHost: vi.fn(() => ({ host: "ao.test", httpPort: "3011", muxPort: "3011", password: "test" })),
 	summaries: new Map<string, SessionPRSummary>(),
-	reload: vi.fn(), focus: undefined as (() => void) | undefined, summaryTargets: [] as unknown[][],
+	reload: vi.fn(), refreshAll: vi.fn(async () => {}), focus: undefined as (() => void) | undefined, summaryTargets: [] as unknown[][],
 	theme: new Proxy({}, { get: () => "#888888" }),
 	router: { push: vi.fn(), navigate: vi.fn(), back: vi.fn(), canGoBack: () => true, replace: vi.fn() },
 }));
@@ -45,7 +45,7 @@ vi.mock("@react-native-async-storage/async-storage", () => ({ default: {} }));
 vi.mock("expo-secure-store", () => ({}));
 vi.mock("./installId", () => ({}));
 vi.mock("./sentry", () => ({}));
-vi.mock("./store", () => ({ useApp: () => ({ ...fixture, activeProjectId: "all", refreshAll: vi.fn() }) }));
+vi.mock("./store", () => ({ useApp: () => ({ ...fixture, activeProjectId: "all" }) }));
 vi.mock("./ThemeProvider", () => ({ useTheme: () => fixture.theme, useThemeState: () => ({ scheme: "dark" }), useThemedStyles: (factory: (theme: object) => object) => factory(fixture.theme) }));
 vi.mock("./icons", () => ({ Feather: "Feather" }));
 vi.mock("./haptics", () => ({ haptics: { tap: vi.fn(), success: vi.fn() } }));
@@ -93,7 +93,7 @@ beforeEach(() => {
 		projects: [], projectsKnown: true, orchestrators: [], orchestratorId: null, stats: {}, lastSyncAt: 0,
 	}));
 	fixture.cardRenders = []; fixture.params = {}; fixture.summaries.clear();
-	fixture.reload.mockClear(); fixture.focus = undefined; fixture.summaryTargets = [];
+	fixture.reload.mockClear(); fixture.refreshAll.mockReset(); fixture.refreshAll.mockImplementation(async () => {}); fixture.focus = undefined; fixture.summaryTargets = [];
 });
 afterEach(() => { act(() => renderer?.unmount()); renderer = undefined; vi.unstubAllGlobals(); vi.restoreAllMocks(); });
 
@@ -194,6 +194,36 @@ it("refreshes without a haptic of its own", async () => {
 	await act(async () => { await refresh.props.onRefresh(); });
 	expect(fixture.reload).toHaveBeenCalledTimes(1);
 	expect(haptics.tap).not.toHaveBeenCalled();
+});
+
+// iOS's refresh control scrolls the list down by its spinner's height when
+// `refreshing` turns on without a pull, and never scrolls it back, so each
+// Retry would leave the page ~60 pt lower.
+it("retries from the stale banner without turning on the pull-to-refresh spinner", async () => {
+	let answer!: () => void;
+	fixture.refreshAll.mockImplementationOnce(() => new Promise<void>((resolve) => { answer = resolve; }));
+	fixture.hostStates = fixture.hostStates.slice(0, 1);
+	act(() => { renderer = create(<PRsScreen />); });
+	const refreshing = () => renderer!.root.findByType("SectionList" as never).props.refreshControl.props.refreshing;
+	type Header = { props: { children: ({ type: unknown; props: { onRetry?: () => void } } | null)[] } };
+	const banner = (renderer!.root.findByType("SectionList" as never).props.ListHeaderComponent as Header).props.children.find((child) => child?.type === "StaleBanner")!;
+	await act(async () => { banner.props.onRetry!(); });
+	expect(fixture.refreshAll).toHaveBeenCalledTimes(1);
+	expect(fixture.reload).toHaveBeenCalledTimes(1);
+	expect(refreshing()).toBe(false);
+	await act(async () => answer());
+	expect(refreshing()).toBe(false);
+});
+
+it("shows the pull-to-refresh spinner for a pull until the refresh lands", async () => {
+	let answer!: () => void;
+	fixture.refreshAll.mockImplementationOnce(() => new Promise<void>((resolve) => { answer = resolve; }));
+	act(() => { renderer = create(<PRsScreen />); });
+	const control = () => renderer!.root.findByType("SectionList" as never).props.refreshControl;
+	await act(async () => { control().props.onRefresh(); });
+	expect(control().props.refreshing).toBe(true);
+	await act(async () => answer());
+	expect(control().props.refreshing).toBe(false);
 });
 
 // iOS has no system confirmation for a copy; the page shows one.
