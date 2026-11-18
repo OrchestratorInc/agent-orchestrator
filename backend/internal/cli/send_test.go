@@ -633,7 +633,11 @@ func TestSendCarriesCooperativeSessionIdentity(t *testing.T) {
 			if err := json.Unmarshal([]byte(capture.body), &req); err != nil {
 				t.Fatal(err)
 			}
-			if req.SenderSessionID != sender || req.UserAuthored != (sender == "") {
+			wantName := ""
+			if sender == "" {
+				wantName = outsideSenderName
+			}
+			if req.SenderSessionID != sender || req.UserAuthored != (sender == "") || req.SenderName != wantName {
 				t.Fatalf("request=%+v", req)
 			}
 		})
