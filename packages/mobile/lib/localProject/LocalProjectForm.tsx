@@ -55,13 +55,14 @@ import { actionLabel } from "./importRules";
 import { PlacementPicker } from "./PlacementPicker";
 import { baseName, clonePathPreview, displayPath, LOCAL_PROJECT_NAME_MAX, newProjectPathPreview, placeTitle, repositoryNameFromUrl } from "./newLocalProject";
 import type { BrowseTarget, NewLocalProject } from "./useNewLocalProject";
+import { FormFocusContext, useTrackedField } from "../formFocus";
 
 // iOS: a SwiftUI Form under the sheet's native bar, as the cloud project's.
 // The machine's folders are browsed in place, in their own section: a
 // repository row picks itself, any other folder opens, and Use this folder
 // picks the one shown. A new project is named first, as its name is its folder.
 
-export function LocalProjectForm({ project, placement }: LocalProjectFormProps) {
+export function LocalProjectForm({ project, placement, focus }: LocalProjectFormProps) {
 	const t = useTheme();
 	const { scheme } = useThemeState();
 	const browsing = project.browseTarget;
@@ -78,59 +79,61 @@ export function LocalProjectForm({ project, placement }: LocalProjectFormProps) 
 	return (
 		<View style={[styles.screen, { backgroundColor: t.bgBase }]}>
 			{project.error ? <View style={{ paddingTop: barInset }}><InlineBanner tone="danger" icon="error" title={project.error} accessibilityRole="alert" onDismiss={project.dismissError} /></View> : null}
-			<Host style={styles.form} colorScheme={scheme}>
-				<Form modifiers={[...formModifiers(t), appFont("body")]}>
-					{placement ? <PlacementPicker placement={placement} /> : null}
-					<MachineSection project={project} />
-					<SettingsSection>
-						<Picker
-							label="Source"
-							selection={project.source}
-							onSelectionChange={(next: string) => {
-								const option = LOCAL_SOURCE_OPTIONS.find((item) => item.key === next);
-								if (option) project.chooseSource(option.key);
-							}}
-							modifiers={[pickerStyle("segmented"), listRowBackground("transparent"), listRowInsets({ top: 0, leading: 0, bottom: 0, trailing: 0 }), disabledModifier(project.busy), accessibilityIdentifier("new-local-project-source")]}
-						>
-							{LOCAL_SOURCE_OPTIONS.map((option) => <Text key={option.key} modifiers={[tag(option.key)]}>{option.label}</Text>)}
-						</Picker>
-					</SettingsSection>
-					{project.source === "folder" ? (
-						<>
-							{browsing === "folder" ? <BrowserSection project={project} target="folder" /> : <ChosenFolderSection project={project} />}
-							{browsing === "folder" ? null : setup}
-							{nameSection}
-						</>
-					) : project.source === "clone" ? (
-						<>
-							<SettingsSection title="Repository" footer={cloneTargetNote(clonePathPreview(project.remoteUrl, displayPath(project.destinationParent, project.home)))} modifiers={sectionModifiers(t)}>
-								<FormTextField
-									label="URL"
-									value={project.remoteUrl}
-									onChangeText={project.setRemoteUrl}
-									placeholder="https://github.com/owner/repo.git"
-									keyboardType="url"
-									autoCapitalize="none"
-									autoCorrect={false}
-									returnKeyType="done"
-									editable={!project.busy}
-									testID="new-local-project-url"
-								/>
-							</SettingsSection>
-							{project.github.available ? <GitHubSection project={project} /> : null}
-							{destination}
-							{setup}
-							{nameSection}
-						</>
-					) : (
-						<>
-							{nameSection}
-							{destination}
-							{setup}
-						</>
-					)}
-				</Form>
-			</Host>
+			<FormFocusContext value={focus ?? null}>
+				<Host style={styles.form} colorScheme={scheme}>
+					<Form modifiers={[...formModifiers(t), appFont("body")]}>
+						{placement ? <PlacementPicker placement={placement} /> : null}
+						<MachineSection project={project} />
+						<SettingsSection>
+							<Picker
+								label="Source"
+								selection={project.source}
+								onSelectionChange={(next: string) => {
+									const option = LOCAL_SOURCE_OPTIONS.find((item) => item.key === next);
+									if (option) project.chooseSource(option.key);
+								}}
+								modifiers={[pickerStyle("segmented"), listRowBackground("transparent"), listRowInsets({ top: 0, leading: 0, bottom: 0, trailing: 0 }), disabledModifier(project.busy), accessibilityIdentifier("new-local-project-source")]}
+							>
+								{LOCAL_SOURCE_OPTIONS.map((option) => <Text key={option.key} modifiers={[tag(option.key)]}>{option.label}</Text>)}
+							</Picker>
+						</SettingsSection>
+						{project.source === "folder" ? (
+							<>
+								{browsing === "folder" ? <BrowserSection project={project} target="folder" /> : <ChosenFolderSection project={project} />}
+								{browsing === "folder" ? null : setup}
+								{nameSection}
+							</>
+						) : project.source === "clone" ? (
+							<>
+								<SettingsSection title="Repository" footer={cloneTargetNote(clonePathPreview(project.remoteUrl, displayPath(project.destinationParent, project.home)))} modifiers={sectionModifiers(t)}>
+									<FormTextField
+										label="URL"
+										value={project.remoteUrl}
+										onChangeText={project.setRemoteUrl}
+										placeholder="https://github.com/owner/repo.git"
+										keyboardType="url"
+										autoCapitalize="none"
+										autoCorrect={false}
+										returnKeyType="done"
+										editable={!project.busy}
+										testID="new-local-project-url"
+									/>
+								</SettingsSection>
+								{project.github.available ? <GitHubSection project={project} /> : null}
+								{destination}
+								{setup}
+								{nameSection}
+							</>
+						) : (
+							<>
+								{nameSection}
+								{destination}
+								{setup}
+							</>
+						)}
+					</Form>
+				</Host>
+			</FormFocusContext>
 		</View>
 	);
 }
@@ -293,6 +296,7 @@ function DestinationSection({ project }: { project: NewLocalProject }) {
 function GitHubSection({ project }: { project: NewLocalProject }) {
 	const t = useTheme();
 	const github = project.github;
+	const trackedSearch = useTrackedField("new-local-project-github-search");
 	const text = useNativeState(github.query);
 	const change = useNativeTextInput<string>(github.query, text, github.setQuery);
 	const footer = github.searching
@@ -306,6 +310,8 @@ function GitHubSection({ project }: { project: NewLocalProject }) {
 					text={text}
 					placeholder="Search repositories"
 					onTextChange={(next) => change(next)}
+					ref={trackedSearch?.ref}
+					onFocusChange={trackedSearch?.onFocusChange}
 					testID="new-local-project-github-search"
 					modifiers={[textInputAutocapitalization("never"), autocorrectionDisabled(true), submitLabel("search"), tint(t.highlight), accessibilityLabel("Search GitHub repositories")]}
 				/>
@@ -392,6 +398,7 @@ function BrowserSection({ project, target }: { project: NewLocalProject; target:
 }
 
 function FolderFilterRow({ project }: { project: NewLocalProject }) {
+	const trackedFilter = useTrackedField("new-local-project-filter");
 	const t = useTheme();
 	const text = useNativeState(project.filter);
 	const change = useNativeTextInput<string>(project.filter, text, project.setFilter);
@@ -402,6 +409,8 @@ function FolderFilterRow({ project }: { project: NewLocalProject }) {
 				text={text}
 				placeholder="Filter folders"
 				onTextChange={(next) => change(next)}
+				ref={trackedFilter?.ref}
+				onFocusChange={trackedFilter?.onFocusChange}
 				testID="new-local-project-filter"
 				modifiers={[textInputAutocapitalization("never"), autocorrectionDisabled(true), submitLabel("search"), tint(t.highlight), accessibilityLabel("Filter folders")]}
 			/>

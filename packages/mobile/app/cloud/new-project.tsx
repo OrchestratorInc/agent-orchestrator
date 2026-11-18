@@ -13,6 +13,7 @@ import { LocalProjectForm } from "../../lib/localProject/LocalProjectForm";
 import type { PlacementChoice, ProjectPlacement } from "../../lib/localProject/LocalProjectForm.types";
 import { placementFor } from "../../lib/localProject/placement";
 import { useNewLocalProject } from "../../lib/localProject/useNewLocalProject";
+import { useFormFocus } from "../../lib/formFocus";
 import { useLeaveSheetThen } from "../../lib/sheetHandoff";
 import { Spinner } from "../../lib/Spinner";
 import { useApp } from "../../lib/store";
@@ -80,10 +81,13 @@ type BodyProps = {
 function LocalBody({ placement, onCreated, onCancel, onBusyChange }: BodyProps) {
 	const project = useNewLocalProject({ onCreated });
 	useEffect(() => { onBusyChange(project.busy); }, [onBusyChange, project.busy]);
+	// Create takes focus off the form first: the sheet changes and closes as
+	// soon as the request returns, and a field still focused then aborted the app.
+	const focus = useFormFocus();
 	return (
 		<>
-			<NewProjectBar canCreate={project.canCreate} busy={project.busy} onCancel={onCancel} onCreate={() => void project.create()} />
-			<LocalProjectForm project={project} placement={placement} />
+			<NewProjectBar canCreate={project.canCreate} busy={project.busy} onCancel={onCancel} onCreate={() => void focus.submit(project.create)} />
+			<LocalProjectForm project={project} placement={placement} focus={focus} />
 		</>
 	);
 }
@@ -96,6 +100,8 @@ function CloudBody({ placement, onCreated, onCancel, onBusyChange, leaveFor }: B
 	const connectAgent = useCallback(() => leaveFor(() => router.push("/settings/cloud")), [leaveFor, router]);
 	const project = useNewCloudProject({ onCreated: openProject });
 	useEffect(() => { onBusyChange(project.busy); }, [onBusyChange, project.busy]);
+	// Create takes focus off the form first (see useFormFocus), as on the Local face.
+	const focus = useFormFocus();
 
 	let body: ReactNode;
 	if (project.status === "signed-out") {
@@ -112,12 +118,12 @@ function CloudBody({ placement, onCreated, onCancel, onBusyChange, leaveFor }: B
 	} else if (!project.org) {
 		body = <View style={styles.center}><Spinner size="large" accessibilityLabel="Loading Orchestrator Cloud" /></View>;
 	} else {
-		body = <NewProjectForm project={project} onConnectAgent={connectAgent} placement={placement} />;
+		body = <NewProjectForm project={project} onConnectAgent={connectAgent} placement={placement} focus={focus} />;
 	}
 
 	return (
 		<>
-			<NewProjectBar canCreate={project.canCreate} busy={project.busy} onCancel={onCancel} onCreate={() => void project.create()} />
+			<NewProjectBar canCreate={project.canCreate} busy={project.busy} onCancel={onCancel} onCreate={() => void focus.submit(project.create)} />
 			{body}
 		</>
 	);
