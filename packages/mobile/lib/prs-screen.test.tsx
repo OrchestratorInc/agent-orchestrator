@@ -199,14 +199,14 @@ it("refreshes without a haptic of its own", async () => {
 // iOS's refresh control scrolls the list down by its spinner's height when
 // `refreshing` turns on without a pull, and never scrolls it back, so each
 // Retry would leave the page ~60 pt lower.
-it("retries from the stale banner without turning on the pull-to-refresh spinner", async () => {
+it("retries from the freshness line without turning on the pull-to-refresh spinner", async () => {
 	let answer!: () => void;
 	fixture.refreshAll.mockImplementationOnce(() => new Promise<void>((resolve) => { answer = resolve; }));
 	fixture.hostStates = fixture.hostStates.slice(0, 1);
 	act(() => { renderer = create(<PRsScreen />); });
 	const refreshing = () => renderer!.root.findByType("SectionList" as never).props.refreshControl.props.refreshing;
 	type Header = { props: { children: ({ type: unknown; props: { onRetry?: () => void } } | null)[] } };
-	const banner = (renderer!.root.findByType("SectionList" as never).props.ListHeaderComponent as Header).props.children.find((child) => child?.type === "StaleBanner")!;
+	const banner = (renderer!.root.findByType("SectionList" as never).props.ListHeaderComponent as Header).props.children.find((child) => child?.type === "FreshnessLine")!;
 	await act(async () => { banner.props.onRetry!(); });
 	expect(fixture.refreshAll).toHaveBeenCalledTimes(1);
 	expect(fixture.reload).toHaveBeenCalledTimes(1);

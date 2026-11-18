@@ -545,12 +545,12 @@ describe("Workers selected-machine reachability", () => {
 		expect(retry().props.loading).toBe(false);
 		expect(renderer.root.findByType(WorkerBoardList).props.refreshing).toBe(false);
 	});
-	it("retries from the stale banner without turning on the pull-to-refresh spinner", async () => {
+	it("retries from the freshness line without turning on the pull-to-refresh spinner", async () => {
 		let answer!: () => void;
 		fixtures.refreshAll.mockImplementationOnce(() => new Promise<void>((resolve) => { answer = resolve; }));
 		fixtures.hostStates = [fixtures.hostStates[0]];
 		act(() => { renderer = create(<FleetScreen />); });
-		await act(async () => { renderer.root.findByType("StaleBanner" as never).props.onRetry(); });
+		await act(async () => { renderer.root.findByType("FreshnessLine" as never).props.onRetry(); });
 		expect(fixtures.refreshAll).toHaveBeenCalledTimes(1);
 		expect(renderer.root.findByType(WorkerBoardList).props.refreshing).toBe(false);
 		await act(async () => answer());
