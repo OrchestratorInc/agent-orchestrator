@@ -7,6 +7,7 @@ import { app, BrowserWindow, WebContentsView } from "electron";
 import type { ChromeApi } from "../browser-extension/chrome-api";
 import { TrustedInput } from "../browser-extension/trusted-input";
 import { AgentBrowserRuntime } from "./agent-browser-runtime";
+import { AGENT_FRAME_EDGE_PX } from "../shared/browser-agent-frame";
 import { createBrowserViewHost } from "./browser-view-host";
 import type { BrowserTabsState } from "./browser-view-host";
 
@@ -727,7 +728,8 @@ async function run(): Promise<void> {
 				nativeRuntime.runAction = originalRunAction;
 			}
 			await nativeCommand(sessionId, "tab-select", { tabId: "t3" });
-			assert.equal(browserViews.get(third.id)?.getBounds().x, 0, "AO t3 must occupy the visible panel");
+			// t3 is the agent's: its page sits inside the agent frame's edge.
+			assert.equal(browserViews.get(third.id)?.getBounds().x, AGENT_FRAME_EDGE_PX, "AO t3 must occupy the visible panel");
 			assert.ok((browserViews.get(fourth.id)?.getBounds().x ?? 0) < 0, "inactive AO t4 must be parked outside the panel");
 			assert.ok(targetProvider, "background synchronization must expose this session's real target provider");
 			const nativeTabs = (await nativeRuntime.runAction(sessionId, "tabs", {}, targetProvider)).tabs as Array<{ tabId: string; targetId: string }>;
