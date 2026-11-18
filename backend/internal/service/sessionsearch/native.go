@@ -517,6 +517,12 @@ func (s *Service) locateTranscript(target domain.SessionSearchTarget) (string, e
 	}
 	nativeID := strings.TrimSpace(target.NativeSessionID)
 	if nativeID == "" {
+		// Only terminal sessions named transcripts by their AO id. A chat
+		// session's search would glob every provider project directory and
+		// never match.
+		if target.SessionMode == domain.SessionModeChat {
+			return "", nil
+		}
 		nativeID = string(target.ID)
 	}
 	switch target.Harness {

@@ -128,13 +128,17 @@ export function PageTopbarTitle({
 	);
 }
 
-/** Right-aligned action cluster. Controls inside never start a window drag. */
+/**
+ * Right-aligned action cluster. Controls inside never start a window drag
+ * (styles.css punches them out of the header's drag region), but the cluster
+ * itself stays draggable: it is the band's full height, so a no-drag container
+ * would kill drag and double-click-to-zoom in every gap between its controls.
+ */
 export function PageTopbarActions({ className, children, ...props }: ComponentProps<"div">) {
 	return (
 		<div
 			className={cn("workspace-topbar-actions shrink-0", className)}
 			data-testid="workspace-topbar-actions"
-			style={noDragStyle}
 			{...props}
 		>
 			{children}

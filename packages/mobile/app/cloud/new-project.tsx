@@ -13,6 +13,7 @@ import { LocalProjectForm } from "../../lib/localProject/LocalProjectForm";
 import type { PlacementChoice, ProjectPlacement } from "../../lib/localProject/LocalProjectForm.types";
 import { placementFor } from "../../lib/localProject/placement";
 import { useNewLocalProject } from "../../lib/localProject/useNewLocalProject";
+import { useLeaveSheetThen } from "../../lib/sheetHandoff";
 import { Spinner } from "../../lib/Spinner";
 import { useApp } from "../../lib/store";
 import { useTheme } from "../../lib/ThemeProvider";
@@ -48,18 +49,16 @@ export default function NewProjectScreen() {
 	const choose = useCallback((next: ProjectPlacement) => { if (!busy) setChosen(next); }, [busy]);
 	const choice: PlacementChoice | undefined = localOffered && cloudOffered ? { value: placement, onChange: choose, disabled: busy } : undefined;
 
-	// Leave the form first, then open the page, as the conversation's actions
-	// sheet does: a page pushed from a sheet lands in the stack under it, out of
-	// sight, and on Android back from the project should not return to a form
-	// already used. The navigator applies the two in order.
-	const leaveFor = useCallback((open: () => void) => {
-		backOr(router, "/projects");
-		open();
-	}, [router]);
+	// Leave the form first, then open the page: a page pushed from a sheet lands
+	// in the stack under it, out of sight, and on Android back from the project
+	// should not return to a form already used. On iOS the page waits for the
+	// sheet to finish closing (see useLeaveSheetThen).
+	const leave = useCallback(() => backOr(router, "/projects"), [router]);
+	const leaveFor = useLeaveSheetThen(leave);
 	const openProject = useCallback((hostId: string, id: string) => {
 		leaveFor(() => router.push({ pathname: "/project/[id]", params: { id, hostId } }));
 	}, [leaveFor, router]);
-	const cancel = useCallback(() => backOr(router, "/projects"), [router]);
+	const cancel = leave;
 
 	return (
 		<View style={[styles.screen, { backgroundColor: t.bgBase }]}>

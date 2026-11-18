@@ -32,6 +32,10 @@ ao review <subcommand> [args] [flags]
 
 The review loop can be inspected, submitted, cancelled, or triggered again.
 
+Automatic review pauses while a PR is a draft. After Orchestrator observes that it is
+ready, its head becomes eligible on a later sweep once the worker meets the idle
+gate. Explicit review triggers can still review drafts.
+
 ## Subcommands
 
 ---
