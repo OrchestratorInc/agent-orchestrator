@@ -611,11 +611,39 @@ func (c *conversation) DiscardDeferredTurn(providerTurnID string) {
 // cannot use. Only a change is checked: a session already on such a model must
 // still open, so the user can pick another one.
 func (c *conversation) checkModelSwitch(ctx context.Context, model string) error {
-	if c.validateModel == nil || model == "" || model == c.configOptionCurrent("model") {
+	if model == "" || model == c.configOptionCurrent("model") {
 		return nil
 	}
-	if err := c.validateModel(ctx, model); err != nil {
-		return fmt.Errorf("%w: %w", ports.ErrChatConfigOptionInvalid, err)
+	if c.validateModel != nil {
+		if err := c.validateModel(ctx, model); err != nil {
+			return fmt.Errorf("%w: %w", ports.ErrChatConfigOptionInvalid, err)
+		}
+	}
+	return c.checkOptionalModelOffered(model)
+}
+
+// checkOptionalModelOffered refuses a switch to an optional model the session
+// neither offers nor lists under its name. applyTurnSettings skips such a model
+// so a session opened on it still starts; for a switch, skipping would keep the
+// old model answering while AO shows the new one.
+func (c *conversation) checkOptionalModelOffered(model string) error {
+	c.mu.Lock()
+	optionsFor := c.optionsFor
+	legacyModel := c.legacyModel && !c.modelConfigOption
+	c.mu.Unlock()
+	if optionsFor == nil || legacyModel {
+		return nil
+	}
+	for _, option := range optionsFor(ports.ChatTurnSettings{Model: model}) {
+		if option.ID != "model" || !option.Optional {
+			continue
+		}
+		offered, known := c.configOptionOffers(option.ID, option.Value)
+		if !known || offered || c.configOptionValueNamed(option.ID, option.Name) != "" {
+			return nil
+		}
+		return fmt.Errorf("%w: this chat can't switch to %q because its agent doesn't offer that model; start a new chat with it instead",
+			ports.ErrChatConfigOptionInvalid, model)
 	}
 	return nil
 }

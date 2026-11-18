@@ -201,7 +201,16 @@ func (c *conversation) configOptionOffers(id, value string) (offered, known bool
 }
 
 // configOptionValueNamed is the value of the choice shown under name, or "".
+//
+// A choice also matches when its description leads with name. Claude Code
+// lists a family's newest model under its alias, named "Opus" and described
+// "Opus 5.5 · Best for everyday, complex tasks", so the full ID a picker saves
+// is found by its version label rather than missed.
 func (c *conversation) configOptionValueNamed(id, name string) string {
+	name = strings.TrimSpace(name)
+	if name == "" {
+		return ""
+	}
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	for i := range c.configOptions {
@@ -210,6 +219,12 @@ func (c *conversation) configOptionValueNamed(id, name string) string {
 		}
 		for _, choice := range c.configOptions[i].Choices {
 			if strings.EqualFold(strings.TrimSpace(choice.Name), name) {
+				return choice.Value
+			}
+		}
+		for _, choice := range c.configOptions[i].Choices {
+			label, _, _ := strings.Cut(choice.Description, "·")
+			if strings.EqualFold(strings.TrimSpace(label), name) {
 				return choice.Value
 			}
 		}
