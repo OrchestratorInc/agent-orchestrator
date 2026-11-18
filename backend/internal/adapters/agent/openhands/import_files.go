@@ -107,10 +107,12 @@ func ValidateImportedState(raw []byte, nativeID string) error {
 	if !filepath.IsAbs(cwd) || state["head_is_empty"] == true {
 		return errors.New("invalid openhands conversation state")
 	}
-	for _, key := range []string{"agent", "secret_registry"} {
-		if hasImportCredential(state[key]) {
-			return errors.New("openhands stored credentials or secret configuration cannot be copied")
-		}
+	// Other SDK configuration (for example an LLM security analyzer) can
+	// carry secrets too. Only workspace is exempt: preparation replaces it
+	// entirely and never copies its original configuration.
+	delete(state, "workspace")
+	if hasImportCredential(state) {
+		return errors.New("openhands stored credentials or secret configuration cannot be copied")
 	}
 	return nil
 }

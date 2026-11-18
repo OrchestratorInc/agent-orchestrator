@@ -125,10 +125,12 @@ func TestOpenHandsAbandonedTextCannotEvictActiveBranch(t *testing.T) {
 func TestOpenHandsRejectsStoredCredentialsBeforeAdmission(t *testing.T) {
 	root := t.TempDir()
 	dir := filepath.Join(root, "12345678123412341234123456789012")
-	writeFile(t, filepath.Join(dir, "base_state.json"), `{"id":"12345678-1234-1234-1234-123456789012","workspace":{"working_dir":"/work/source"},"agent":{"llm":{"api_key":"synthetic-secret"}},"leaf_event_id":"user"}`)
 	writeFile(t, filepath.Join(dir, "events", "event-00001-user.json"), `{"id":"user","source":"user","llm_message":{"role":"user","content":[{"type":"text","text":"Prompt"}]}}`)
-	if _, err := readOpenHandsTranscript(context.Background(), root, filepath.Join(dir, "base_state.json")); err == nil {
-		t.Fatal("admitted a conversation whose native configuration contains credentials")
+	for _, field := range []string{"agent", "security_analyzer"} {
+		writeFile(t, filepath.Join(dir, "base_state.json"), `{"id":"12345678-1234-1234-1234-123456789012","workspace":{"working_dir":"/work/source"},"`+field+`":{"llm":{"api_key":"synthetic-secret"}},"leaf_event_id":"user"}`)
+		if _, err := readOpenHandsTranscript(context.Background(), root, filepath.Join(dir, "base_state.json")); err == nil {
+			t.Fatal("admitted a conversation whose native configuration contains credentials")
+		}
 	}
 }
 
