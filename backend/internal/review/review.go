@@ -620,17 +620,20 @@ func (e *Engine) TriggerWithOptions(ctx stdctx.Context, workerID domain.SessionI
 		return TriggerResult{Run: firstReusableRun(reviews), ReviewerHandleID: legacyReviewerHandle(reviewRow), Created: false, Reviews: reviews, Runs: runs, ReviewerSurface: reviewerSurface(reviewRow)}, nil
 	}
 
-	failRuns := func(reason domain.ReviewFailureReason, err error) error {
-		if failErr := e.failRuns(ctx, created, reason, err); failErr != nil {
+	failRunsWithContext := func(settleCtx stdctx.Context, reason domain.ReviewFailureReason, err error) error {
+		if failErr := e.failRuns(settleCtx, created, reason, err); failErr != nil {
 			err = errors.Join(err, failErr)
 		}
 		// A restarted pass whose replacement did not start is still served by
 		// the previous reviewer. If that reviewer was stopped, rollback has
 		// already failed it and this is a no-op.
-		if revertErr := e.revertRelaunch(ctx, restarted); revertErr != nil {
+		if revertErr := e.revertRelaunch(settleCtx, restarted); revertErr != nil {
 			err = errors.Join(err, revertErr)
 		}
 		return err
+	}
+	failRuns := func(reason domain.ReviewFailureReason, err error) error {
+		return failRunsWithContext(ctx, reason, err)
 	}
 
 	previousHandleID := reviewRow.ReviewerHandleID
@@ -647,13 +650,13 @@ func (e *Engine) TriggerWithOptions(ctx stdctx.Context, workerID domain.SessionI
 				cause = errors.Join(cause, fmt.Errorf("cleanup replacement reviewer: %w", cleanupErr))
 			}
 		}
+		rollbackCtx, cancel := stdctx.WithTimeout(stdctx.WithoutCancel(ctx), 5*time.Second)
+		defer cancel()
 		if hasReview {
 			if previousStopped {
 				previousReview.ControllerGeneration = ""
 				previousReview.ReviewerActivityState = domain.ActivityExited
 			}
-			rollbackCtx, cancel := stdctx.WithTimeout(stdctx.WithoutCancel(ctx), 5*time.Second)
-			defer cancel()
 			if previousReview.IsArchived || modeChanging || (hasConfigOverride && selectedMode == domain.ReviewerInterfaceChat) {
 				if ok, rollbackErr := e.store.RestoreReviewLaunchState(rollbackCtx, previousReview, rollbackNow); rollbackErr != nil {
 					cause = errors.Join(cause, fmt.Errorf("restore previous reviewer surface: %w", rollbackErr))
@@ -665,11 +668,11 @@ func (e *Engine) TriggerWithOptions(ctx stdctx.Context, workerID domain.SessionI
 			}
 		}
 		if previousStopped {
-			if err := e.failRuns(ctx, restarted, domain.ReviewFailureLaunchFailed, cause); err != nil {
+			if err := e.failRuns(rollbackCtx, restarted, domain.ReviewFailureLaunchFailed, cause); err != nil {
 				cause = errors.Join(cause, err)
 			}
 		}
-		return failRuns(domain.ReviewFailureLaunchFailed, cause)
+		return failRunsWithContext(rollbackCtx, domain.ReviewFailureLaunchFailed, cause)
 	}
 
 	queueRuns := append([]domain.ReviewRun{}, restarted...)
