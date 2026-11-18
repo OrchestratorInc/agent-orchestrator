@@ -104,13 +104,28 @@ func (m *Manager) agentOperationActiveLocked(id domain.SessionID) bool {
 // no interval in which it can pass a boolean check and write into the new
 // provider generation.
 func (m *Manager) beginAgentOperation(ctx context.Context, id domain.SessionID, kind agentOperationKind) error {
-	if err := ctx.Err(); err != nil {
-		return err
-	}
+	return m.admitAgentOperation(ctx, id, kind, false)
+}
+
+// beginKillOperation is Kill's admission. Unlike the workspace-cleanup and
+// delete paths that share agentOperationKill, it also waits, bounded, for an
+// in-flight resume. That resume is usually a wake started by the user opening
+// the session they are now archiving.
+func (m *Manager) beginKillOperation(ctx context.Context, id domain.SessionID) error {
+	return m.admitAgentOperation(ctx, id, agentOperationKill, true)
+}
+
+func (m *Manager) admitAgentOperation(ctx context.Context, id domain.SessionID, kind agentOperationKind, waitForResume bool) error {
 	var drained <-chan struct{}
 	var resumeDeadline time.Time
 	for {
 		m.agentOpMu.Lock()
+		// Rechecked on every pass: a wait below can outlast the caller's
+		// deadline, and a slot freed at that moment must not be claimed late.
+		if err := ctx.Err(); err != nil {
+			m.agentOpMu.Unlock()
+			return err
+		}
 		if m.agentOperationActiveLocked(id) {
 			current := m.agentOperations[id]
 			m.agentOpMu.Unlock()
@@ -118,7 +133,7 @@ func (m *Manager) beginAgentOperation(ctx context.Context, id domain.SessionID, 
 			case current == agentOperationHibernate && kind != agentOperationHibernate:
 				// Background cleanup yields to every explicit operation once its
 				// bounded shutdown completes; it must not make Kill/Switch fail.
-			case current == agentOperationResume && kind == agentOperationKill:
+			case current == agentOperationResume && waitForResume:
 				// Opening a hibernated Chat session wakes it, and the wake holds
 				// a resume for as long as the provider takes to reload the
 				// conversation. An archive clicked meanwhile must not fail for

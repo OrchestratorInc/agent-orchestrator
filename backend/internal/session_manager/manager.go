@@ -2992,7 +2992,7 @@ func (m *Manager) kill(ctx context.Context, id domain.SessionID, backgroundClean
 		return KillResult{}, fmt.Errorf("kill %s: cancel provisioning: %w", id, err)
 	}
 
-	if err := m.beginAgentOperation(ctx, id, agentOperationKill); err != nil {
+	if err := m.beginKillOperation(ctx, id); err != nil {
 		if errors.Is(err, errAgentOperationInProgress) {
 			err = ErrOperationInProgress
 		}
