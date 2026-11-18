@@ -97,7 +97,7 @@ func (m *Manager) TerminalForkSource(ctx context.Context, rec domain.SessionReco
 				Metadata: map[string]string{ports.MetadataKeyAgentSessionID: restoreID, ports.MetadataKeySessionMode: string(domain.SessionModeTUI)},
 			},
 			Kind: source.Kind, DataDir: target.DataDir, Config: agentConfig, Permissions: agentConfig.Permissions,
-			SystemPrompt: target.SystemPrompt, SystemPromptFile: target.SystemPromptFile,
+			SystemPrompt: target.SystemPrompt, SystemPromptFile: target.SystemPromptFile, Env: target.Env,
 		})
 		if err != nil {
 			return ports.ForkTerminalLaunch{}, err

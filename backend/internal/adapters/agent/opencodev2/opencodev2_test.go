@@ -35,6 +35,28 @@ func fakeBinary(t *testing.T, version string) string {
 	return binary
 }
 
+func sharedWorkspace(t *testing.T) string {
+	t.Helper()
+	if runtime.GOOS == "windows" {
+		t.Skip("POSIX git fixture")
+	}
+	if _, err := exec.LookPath("git"); err != nil {
+		t.Skip("git is required for the shared-server fixture")
+	}
+	dir := t.TempDir()
+	if out, err := exec.Command("git", "-C", dir, "init", "-q").CombinedOutput(); err != nil {
+		t.Fatalf("git init: %v: %s", err, out)
+	}
+	configDir := filepath.Join(dir, ".opencode")
+	if err := os.MkdirAll(configDir, 0o750); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(configDir, ".gitignore"), []byte("/"+projectConfigFileName+"\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	return dir
+}
+
 func TestLaunchAndRestoreV2ArgumentsAndOverlay(t *testing.T) {
 	for _, restore := range []bool{false, true} {
 		for _, tc := range []struct {
@@ -445,13 +467,15 @@ func TestV2LaunchUsesSharedServerAndWritesProjectConfig(t *testing.T) {
 
 	dataDir := t.TempDir()
 	persistServer(dataDir, sharedServer{url: info.URL, password: password})
-	workspace := t.TempDir()
-	cmd, err := New().GetLaunchCommand(context.Background(), ports.LaunchConfig{
+	workspace := sharedWorkspace(t)
+	plugin := New()
+	cmd, err := plugin.GetLaunchCommand(context.Background(), ports.LaunchConfig{
 		DataDir:       dataDir,
 		WorkspacePath: workspace,
 		SessionID:     "sess/shared",
 		SystemPrompt:  "AO shared rules",
 		Prompt:        "do the task",
+		Env:           map[string]string{},
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -462,8 +486,18 @@ func TestV2LaunchUsesSharedServerAndWritesProjectConfig(t *testing.T) {
 	if !containsArg(cmd, "--server", info.URL) {
 		t.Fatalf("argv = %#v, want --server %s", cmd, info.URL)
 	}
-	if !hasEnv(cmd, "OPENCODE_PASSWORD="+password) {
-		t.Fatalf("argv = %#v, want OPENCODE_PASSWORD", cmd)
+	if hasEnv(cmd, "OPENCODE_PASSWORD="+password) || strings.Contains(strings.Join(cmd, "\n"), password) {
+		t.Fatalf("argv = %#v, must not contain the server password", cmd)
+	}
+	env := map[string]string{}
+	plugin.AugmentRuntimeLaunchEnv(env, dataDir, "sess/shared", "launch-1")
+	if env["OPENCODE_PASSWORD"] != password {
+		t.Fatalf("runtime env = %#v, want OPENCODE_PASSWORD", env)
+	}
+	again := map[string]string{}
+	plugin.AugmentRuntimeLaunchEnv(again, dataDir, "sess/shared", "launch-2")
+	if _, ok := again["OPENCODE_PASSWORD"]; ok {
+		t.Fatalf("runtime env = %#v, password must be consumed once", again)
 	}
 	if strings.Contains(strings.Join(cmd, "\n"), "--standalone") {
 		t.Fatalf("argv = %#v, must not contain --standalone", cmd)
@@ -512,7 +546,7 @@ func TestV2SharedServerFallsBackWhenWorkspaceConfigExists(t *testing.T) {
 
 	dataDir := t.TempDir()
 	persistServer(dataDir, sharedServer{url: info.URL, password: "pw"})
-	workspace := t.TempDir()
+	workspace := sharedWorkspace(t)
 	configPath := filepath.Join(workspace, ".opencode", projectConfigFileName)
 	if err := os.MkdirAll(filepath.Dir(configPath), 0o750); err != nil {
 		t.Fatal(err)
@@ -527,6 +561,7 @@ func TestV2SharedServerFallsBackWhenWorkspaceConfigExists(t *testing.T) {
 		WorkspacePath: workspace,
 		SessionID:     "sess/fallback",
 		SystemPrompt:  "AO rules",
+		Env:           map[string]string{},
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -554,7 +589,7 @@ func TestPrepareSharedServerRemovesProjectConfigWhenServerFails(t *testing.T) {
 		t.Skip("POSIX executable fixture")
 	}
 	binary := fakeBinary(t, "2.0.0")
-	workspace := t.TempDir()
+	workspace := sharedWorkspace(t)
 	_, err := prepareSharedServer(context.Background(), binary, ports.LaunchConfig{
 		DataDir:       t.TempDir(),
 		WorkspacePath: workspace,
@@ -570,24 +605,213 @@ func TestPrepareSharedServerRemovesProjectConfigWhenServerFails(t *testing.T) {
 
 func TestV2ProviderEnvDriftKeepsPrivateServer(t *testing.T) {
 	fakeBinary(t, "2.0.0")
-	t.Setenv("ANTHROPIC_API_KEY", "")
+	t.Setenv("AWS_PROFILE", "work")
 	t.Setenv("OPENCODE_CONFIG_CONTENT", "")
+	info := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/api/info" {
+			w.WriteHeader(http.StatusOK)
+			return
+		}
+		http.NotFound(w, r)
+	}))
+	defer info.Close()
 	dataDir := t.TempDir()
-	workspace := t.TempDir()
+	persistServer(dataDir, sharedServer{url: info.URL, password: "pw"})
+
+	matching := sharedWorkspace(t)
 	cmd, err := New().GetLaunchCommand(context.Background(), ports.LaunchConfig{
 		DataDir:       dataDir,
-		WorkspacePath: workspace,
-		SessionID:     "sess/env",
-		Env:           map[string]string{"ANTHROPIC_API_KEY": "session-only-key"},
+		WorkspacePath: matching,
+		SessionID:     "sess/matching",
+		SystemPrompt:  "AO rules",
+		Env:           map[string]string{"AWS_PROFILE": "work"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !containsArg(cmd, "--server", info.URL) {
+		t.Fatalf("matching environment argv = %#v, want the shared server", cmd)
+	}
+	if _, statErr := os.Stat(filepath.Join(matching, ".opencode", projectConfigFileName)); statErr != nil {
+		t.Fatalf("matching launch did not write project config: %v", statErr)
+	}
+
+	drifted := sharedWorkspace(t)
+	cmd, err = New().GetLaunchCommand(context.Background(), ports.LaunchConfig{
+		DataDir:       dataDir,
+		WorkspacePath: drifted,
+		SessionID:     "sess/drifted",
+		SystemPrompt:  "AO rules",
+		Env:           map[string]string{"AWS_PROFILE": "personal"},
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
 	if !strings.Contains(strings.Join(cmd, "\n"), "--standalone") {
-		t.Fatalf("argv = %#v, want the private-server path", cmd)
+		t.Fatalf("drifted argv = %#v, want the private-server path", cmd)
+	}
+	if _, statErr := os.Stat(filepath.Join(drifted, ".opencode", projectConfigFileName)); !errors.Is(statErr, os.ErrNotExist) {
+		t.Fatalf("project config written for a drifted launch: %v", statErr)
+	}
+}
+
+func TestV2SharedServerNeedsKnownLaunchEnvironment(t *testing.T) {
+	fakeBinary(t, "2.0.0")
+	info := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/api/info" {
+			w.WriteHeader(http.StatusOK)
+			return
+		}
+		http.NotFound(w, r)
+	}))
+	defer info.Close()
+	dataDir := t.TempDir()
+	persistServer(dataDir, sharedServer{url: info.URL, password: "pw"})
+	workspace := sharedWorkspace(t)
+	cmd, err := New().GetLaunchCommand(context.Background(), ports.LaunchConfig{
+		DataDir:       dataDir,
+		WorkspacePath: workspace,
+		SessionID:     "sess/unknown-env",
+		SystemPrompt:  "AO rules",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(strings.Join(cmd, "\n"), "--standalone") {
+		t.Fatalf("argv = %#v, want the private-server path without an environment", cmd)
 	}
 	if _, statErr := os.Stat(filepath.Join(workspace, ".opencode", projectConfigFileName)); !errors.Is(statErr, os.ErrNotExist) {
-		t.Fatalf("project config written for a drifted launch: %v", statErr)
+		t.Fatalf("project config written without an environment: %v", statErr)
+	}
+	_, ok, err := New().GetRestoreCommand(context.Background(), ports.RestoreConfig{
+		DataDir: dataDir,
+		Session: ports.SessionRef{
+			ID:            "sess/unknown-env",
+			WorkspacePath: workspace,
+			Metadata:      map[string]string{ports.MetadataKeyAgentSessionID: "ses_native"},
+		},
+		Env: nil,
+	})
+	if err != nil || !ok {
+		t.Fatalf("restore = %v %v", ok, err)
+	}
+	if _, statErr := os.Stat(filepath.Join(workspace, ".opencode", projectConfigFileName)); !errors.Is(statErr, os.ErrNotExist) {
+		t.Fatalf("project config written for a restore without an environment: %v", statErr)
+	}
+}
+
+func TestV2RestoreForwardsLaunchEnvironmentToSharedServer(t *testing.T) {
+	fakeBinary(t, "2.0.0")
+	info := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/api/info" {
+			w.WriteHeader(http.StatusOK)
+			return
+		}
+		http.NotFound(w, r)
+	}))
+	defer info.Close()
+	dataDir := t.TempDir()
+	persistServer(dataDir, sharedServer{url: info.URL, password: "pw"})
+	workspace := sharedWorkspace(t)
+	cmd, ok, err := New().GetRestoreCommand(context.Background(), ports.RestoreConfig{
+		DataDir: dataDir,
+		Session: ports.SessionRef{
+			ID:            "sess/restore",
+			WorkspacePath: workspace,
+			Metadata:      map[string]string{ports.MetadataKeyAgentSessionID: "ses_native"},
+		},
+		SystemPrompt: "AO rules",
+		Env:          map[string]string{},
+	})
+	if err != nil || !ok {
+		t.Fatalf("restore = %v %v", ok, err)
+	}
+	if !containsArg(cmd, "--server", info.URL) {
+		t.Fatalf("argv = %#v, want the shared server", cmd)
+	}
+	if !containsArg(cmd, "--session", "ses_native") {
+		t.Fatalf("argv = %#v, want the native session", cmd)
+	}
+}
+
+func TestPrepareSharedServerRequiresEffectiveGitignore(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("POSIX git fixture")
+	}
+	if _, err := exec.LookPath("git"); err != nil {
+		t.Skip("git is required")
+	}
+	binary := fakeBinary(t, "2.0.0")
+	workspace := t.TempDir()
+	if out, err := exec.Command("git", "-C", workspace, "init", "-q").CombinedOutput(); err != nil {
+		t.Fatalf("git init: %v: %s", err, out)
+	}
+	configDir := filepath.Join(workspace, ".opencode")
+	if err := os.MkdirAll(configDir, 0o750); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(configDir, ".gitignore"), []byte("*.log\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	_, err := prepareSharedServer(context.Background(), binary, ports.LaunchConfig{
+		DataDir:       t.TempDir(),
+		WorkspacePath: workspace,
+		SessionID:     "sess/untracked",
+	}, t.TempDir(), `{"default_agent":"ao-untracked"}`)
+	if err == nil {
+		t.Fatal("prepareSharedServer accepted a workspace config Git does not ignore")
+	}
+	if _, statErr := os.Stat(filepath.Join(configDir, projectConfigFileName)); !errors.Is(statErr, os.ErrNotExist) {
+		t.Fatalf("unignored project config was written: %v", statErr)
+	}
+}
+
+func TestLockWorkspacePreparationSerializes(t *testing.T) {
+	workspace := t.TempDir()
+	release := lockWorkspacePreparation(workspace)
+	acquired := make(chan struct{})
+	go func() {
+		unlock := lockWorkspacePreparation(workspace)
+		close(acquired)
+		unlock()
+	}()
+	select {
+	case <-acquired:
+		t.Fatal("second preparation acquired the workspace lock while the first held it")
+	default:
+	}
+	release()
+	select {
+	case <-acquired:
+	case <-time.After(5 * time.Second):
+		t.Fatal("second preparation did not acquire the released workspace lock")
+	}
+}
+
+func TestEnsureSharedServerKeepsReattachedHandleWhenProbeFails(t *testing.T) {
+	info := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusInternalServerError)
+	}))
+	defer info.Close()
+	key := t.TempDir()
+	handle := &serverHandle{server: sharedServer{url: info.URL, password: "pw"}}
+	sharedServerRegistry.mu.Lock()
+	sharedServerRegistry.byDir[key] = handle
+	sharedServerRegistry.mu.Unlock()
+	t.Cleanup(func() {
+		sharedServerRegistry.mu.Lock()
+		delete(sharedServerRegistry.byDir, key)
+		sharedServerRegistry.mu.Unlock()
+	})
+
+	if _, err := ensureSharedServer(context.Background(), "unused", key, t.TempDir()); err == nil {
+		t.Fatal("ensureSharedServer accepted a listening but unhealthy reattached server")
+	}
+	sharedServerRegistry.mu.Lock()
+	got := sharedServerRegistry.byDir[key]
+	sharedServerRegistry.mu.Unlock()
+	if got != handle {
+		t.Fatal("listening reattached server was dropped, so a duplicate could start")
 	}
 }
 
@@ -605,6 +829,10 @@ func TestWriteProjectConfigDoesNotReplaceExistingFile(t *testing.T) {
 	data, err := os.ReadFile(filepath.Join(workspace, ".opencode", projectConfigFileName))
 	if err != nil || string(data) != "one" {
 		t.Fatalf("config = %q, %v", data, err)
+	}
+	temps, err := filepath.Glob(filepath.Join(workspace, ".opencode", ".ao-tmp-*"))
+	if err != nil || len(temps) != 0 {
+		t.Fatalf("temporary config files left behind: %v %v", temps, err)
 	}
 }
 

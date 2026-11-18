@@ -8,6 +8,7 @@ import (
 	"io"
 	"net"
 	"net/http"
+	neturl "net/url"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -19,7 +20,6 @@ import (
 	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/agent/hookutil"
 	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
 	aoprocess "github.com/aoagents/agent-orchestrator/backend/internal/process"
-	"github.com/aoagents/agent-orchestrator/backend/internal/providerkeys"
 )
 
 const (
@@ -27,6 +27,7 @@ const (
 	serverStateFileName   = "opencode-v2-server.json"
 	serverStartTimeout    = 20 * time.Second
 	serverProbeTimeout    = 2 * time.Second
+	serverDialTimeout     = 500 * time.Millisecond
 )
 
 // sharedServer is one OpenCode 2 server that AO owns and reuses for every
@@ -58,8 +59,15 @@ var sharedServerRegistry = struct {
 // config from the project directory when a client attaches to a shared server,
 // so the config has to live in the worktree instead of the launch environment.
 func prepareSharedServer(ctx context.Context, binary string, cfg ports.LaunchConfig, dataHome, content string) (sharedServer, error) {
-	if cfg.DataDir == "" || cfg.WorkspacePath == "" {
-		return sharedServer{}, errors.New("opencode-v2: shared server needs a data dir and workspace")
+	if cfg.DataDir == "" || cfg.WorkspacePath == "" || cfg.SessionID == "" {
+		return sharedServer{}, errors.New("opencode-v2: shared server needs a data dir, workspace, and session id")
+	}
+	// Serialize preparations for one worktree: a second launch must not accept
+	// a config the first launch may remove when its server startup fails.
+	release := lockWorkspacePreparation(cfg.WorkspacePath)
+	defer release()
+	if content != "" && !projectConfigIgnored(ctx, cfg.WorkspacePath) {
+		return sharedServer{}, errors.New("opencode-v2: workspace does not ignore .opencode/opencode.json")
 	}
 	created, err := writeProjectConfig(cfg.WorkspacePath, content)
 	if err != nil {
@@ -75,17 +83,33 @@ func prepareSharedServer(ctx context.Context, binary string, cfg ports.LaunchCon
 	return server, nil
 }
 
-// providerEnvDrift reports whether the launch's provider credentials differ
-// from the daemon environment. A shared server inherits the daemon environment
-// and the attaching client forwards only its password, so a session whose keys
-// differ must keep a private server that starts with cfg.Env.
-func providerEnvDrift(cfgEnv map[string]string) bool {
+// sharedServerEnvDrift reports whether the launch environment differs from the
+// daemon environment in a way the server can observe. A shared server inherits
+// the daemon environment and the attaching client forwards only its password,
+// so a session with any other override must keep a private server that starts
+// with cfg.Env. AO-owned variables and the shell plumbing AO pins for its hooks
+// do not change OpenCode's provider resolution and are excluded.
+func sharedServerEnvDrift(cfgEnv map[string]string) bool {
 	for name, value := range cfgEnv {
-		if providerkeys.Checkable(name) && os.Getenv(name) != value {
+		if !sharedServerRelevantEnv(name) {
+			continue
+		}
+		if os.Getenv(name) != value {
 			return true
 		}
 	}
 	return false
+}
+
+func sharedServerRelevantEnv(name string) bool {
+	if strings.HasPrefix(name, "AO_") {
+		return false
+	}
+	switch name {
+	case "PATH", "ZDOTDIR", "BASH_ENV", "PROMPT_COMMAND":
+		return false
+	}
+	return true
 }
 
 func sharedServerEnv(dataHome string) []string {
@@ -125,13 +149,25 @@ func ensureSharedServer(ctx context.Context, binary, dataDir, dataHome string) (
 			// same data home. This launch falls back to a private server.
 			return sharedServer{}, errors.New("opencode-v2: shared server is running but not healthy")
 		}
+		// A reattached handle has no process to inspect. Only replace it after
+		// the endpoint itself stops listening; a listening but unhealthy server
+		// may still own the data home and must not get a duplicate.
+		if serverListening(handle.server.url) {
+			return sharedServer{}, errors.New("opencode-v2: shared server is listening but not healthy")
+		}
 		delete(sharedServerRegistry.byDir, key)
 	}
 	if dataDir != "" {
-		if persisted, ok := readPersistedServer(dataDir); ok && serverHealthy(persisted.URL, persisted.Password) {
+		if persisted, ok := readPersistedServer(dataDir); ok {
 			server := sharedServer{url: persisted.URL, password: persisted.Password}
-			sharedServerRegistry.byDir[key] = &serverHandle{server: server}
-			return server, nil
+			if serverHealthy(server.url, server.password) {
+				sharedServerRegistry.byDir[key] = &serverHandle{server: server}
+				return server, nil
+			}
+			if serverListening(server.url) {
+				sharedServerRegistry.byDir[key] = &serverHandle{server: server}
+				return sharedServer{}, errors.New("opencode-v2: persisted shared server is listening but not healthy")
+			}
 		}
 	}
 
@@ -193,6 +229,23 @@ func waitForSharedServer(ctx context.Context, url string, output *serverOutput, 
 			}
 		}
 	}
+}
+
+// serverListening reports whether something accepts TCP connections at the
+// server URL. A timeout counts as listening: it cannot prove the process is
+// gone, and starting a second server is worse than falling back privately.
+func serverListening(rawURL string) bool {
+	parsed, err := neturl.Parse(rawURL)
+	if err != nil || parsed.Host == "" {
+		return false
+	}
+	conn, err := net.DialTimeout("tcp", parsed.Host, serverDialTimeout)
+	if err != nil {
+		var netErr net.Error
+		return errors.As(err, &netErr) && netErr.Timeout()
+	}
+	_ = conn.Close()
+	return true
 }
 
 func serverHealthy(url, password string) bool {
@@ -305,33 +358,85 @@ func writeProjectConfig(workspacePath, content string) (bool, error) {
 	if err := os.MkdirAll(dir, 0o750); err != nil {
 		return false, fmt.Errorf("opencode-v2: create project config dir: %w", err)
 	}
-	// O_EXCL creates the file without replacing one a concurrent writer added
-	// after the absence check. Such a file is still compared, so an identical
-	// config can be shared and a differing one falls back to a private server.
-	file, err := os.OpenFile(path, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o600)
-	if errors.Is(err, os.ErrExist) {
-		existing, readErr := os.ReadFile(path)
-		if readErr != nil {
-			return false, fmt.Errorf("opencode-v2: read project config: %w", readErr)
-		}
-		if string(existing) == content {
-			return false, nil
-		}
-		return false, errors.New("opencode-v2: workspace already has .opencode/opencode.json")
-	}
+	// Build the file under a private name first and publish it with a hard
+	// link. The link fails if another writer already created the destination,
+	// so cleanup can never delete a file this attempt did not write.
+	file, err := os.CreateTemp(dir, ".ao-tmp-*")
 	if err != nil {
 		return false, fmt.Errorf("opencode-v2: create project config: %w", err)
 	}
+	temp := file.Name()
+	defer func() { _ = os.Remove(temp) }()
+	if err := file.Chmod(0o600); err != nil {
+		_ = file.Close()
+		return false, fmt.Errorf("opencode-v2: set project config mode: %w", err)
+	}
 	if _, err := file.WriteString(content); err != nil {
 		_ = file.Close()
-		_ = os.Remove(path)
 		return false, fmt.Errorf("opencode-v2: write project config: %w", err)
+	}
+	if err := file.Sync(); err != nil {
+		_ = file.Close()
+		return false, fmt.Errorf("opencode-v2: sync project config: %w", err)
 	}
 	if err := file.Close(); err != nil {
-		_ = os.Remove(path)
-		return false, fmt.Errorf("opencode-v2: write project config: %w", err)
+		return false, fmt.Errorf("opencode-v2: close project config: %w", err)
+	}
+	if err := os.Link(temp, path); err != nil {
+		if errors.Is(err, os.ErrExist) {
+			existing, readErr := os.ReadFile(path)
+			if readErr != nil {
+				return false, fmt.Errorf("opencode-v2: read project config: %w", readErr)
+			}
+			if string(existing) == content {
+				return false, nil
+			}
+			return false, errors.New("opencode-v2: workspace already has .opencode/opencode.json")
+		}
+		return false, fmt.Errorf("opencode-v2: publish project config: %w", err)
 	}
 	return true, nil
+}
+
+// projectConfigIgnored asks Git whether the project config is effectively
+// ignored. check-ignore --no-index evaluates the ignore rules even for a path
+// that is already tracked or does not exist yet.
+func projectConfigIgnored(ctx context.Context, workspacePath string) bool {
+	cmd := aoprocess.CommandContext(ctx, "git", "-C", workspacePath, "check-ignore", "-q", "--no-index", "--", filepath.ToSlash(filepath.Join(".opencode", projectConfigFileName)))
+	return cmd.Run() == nil
+}
+
+type workspacePreparation struct {
+	mu   sync.Mutex
+	refs int
+}
+
+var workspacePreparations = struct {
+	mu    sync.Mutex
+	byDir map[string]*workspacePreparation
+}{byDir: map[string]*workspacePreparation{}}
+
+func lockWorkspacePreparation(workspacePath string) func() {
+	key := filepath.Clean(workspacePath)
+	workspacePreparations.mu.Lock()
+	preparation := workspacePreparations.byDir[key]
+	if preparation == nil {
+		preparation = &workspacePreparation{}
+		workspacePreparations.byDir[key] = preparation
+	}
+	preparation.refs++
+	workspacePreparations.mu.Unlock()
+
+	preparation.mu.Lock()
+	return func() {
+		preparation.mu.Unlock()
+		workspacePreparations.mu.Lock()
+		preparation.refs--
+		if preparation.refs == 0 {
+			delete(workspacePreparations.byDir, key)
+		}
+		workspacePreparations.mu.Unlock()
+	}
 }
 
 // removeProjectConfig deletes the config only while it still holds exactly the

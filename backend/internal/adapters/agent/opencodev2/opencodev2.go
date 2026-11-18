@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"os"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/aoagents/agent-orchestrator/backend/internal/adapters"
@@ -20,7 +21,11 @@ import (
 )
 
 // Plugin is the OpenCode 2 TUI agent adapter.
-type Plugin struct{ agentbase.Base }
+type Plugin struct {
+	agentbase.Base
+	passwordMu             sync.Mutex
+	pendingSharedPasswords map[string]string
+}
 
 // New returns an OpenCode 2 adapter.
 func New() *Plugin { return &Plugin{} }
@@ -29,6 +34,7 @@ var _ adapters.Adapter = (*Plugin)(nil)
 var _ ports.Agent = (*Plugin)(nil)
 var _ ports.AgentAuthChecker = (*Plugin)(nil)
 var _ ports.AgentBinaryResolver = (*Plugin)(nil)
+var _ ports.AgentRuntimeLaunchEnv = (*Plugin)(nil)
 var _ ports.SemanticMessageAcceptanceSignaler = (*Plugin)(nil)
 
 // Manifest describes the adapter.
@@ -58,7 +64,7 @@ func (p *Plugin) GetLaunchCommand(ctx context.Context, cfg ports.LaunchConfig) (
 	if err != nil {
 		return nil, err
 	}
-	return command(ctx, binary, cfg, "")
+	return p.command(ctx, binary, cfg, "")
 }
 
 // GetRestoreCommand builds the OpenCode 2 restore argv.
@@ -74,14 +80,18 @@ func (p *Plugin) GetRestoreCommand(ctx context.Context, cfg ports.RestoreConfig)
 	if err != nil {
 		return nil, false, err
 	}
-	cmd, err := command(ctx, binary, ports.LaunchConfig{Config: cfg.Config, DataDir: cfg.DataDir, WorkspacePath: cfg.Session.WorkspacePath, SessionID: cfg.Session.ID, Permissions: cfg.Permissions, Prompt: cfg.Prompt, SystemPrompt: cfg.SystemPrompt, SystemPromptFile: cfg.SystemPromptFile}, nativeID)
+	cmd, err := p.command(ctx, binary, ports.LaunchConfig{Config: cfg.Config, DataDir: cfg.DataDir, WorkspacePath: cfg.Session.WorkspacePath, SessionID: cfg.Session.ID, Permissions: cfg.Permissions, Prompt: cfg.Prompt, SystemPrompt: cfg.SystemPrompt, SystemPromptFile: cfg.SystemPromptFile, Env: cfg.Env}, nativeID)
 	return cmd, err == nil, err
 }
 
-// errProviderEnvDrift marks a launch whose provider credentials differ from the
-// daemon environment. The shared server inherits the daemon environment, so
-// such a launch keeps the private-server path where cfg.Env reaches the server.
-var errProviderEnvDrift = errors.New("opencode-v2: provider credentials differ from the daemon environment")
+// errProviderEnvDrift marks a launch whose environment differs from the daemon
+// environment. The shared server inherits the daemon environment, so such a
+// launch keeps the private-server path where cfg.Env reaches the server.
+var errProviderEnvDrift = errors.New("opencode-v2: launch environment differs from the daemon environment")
+
+// errSharedServerEnvUnknown marks a launch that did not supply the environment
+// it will run with. Sharing is only safe when every override is known.
+var errSharedServerEnvUnknown = errors.New("opencode-v2: launch environment is required for a shared server")
 
 // The v2 root TUI has no --model/--agent flags. AO normally attaches the TUI
 // to one shared OpenCode 2 server and selects the AO agent through the
@@ -89,7 +99,7 @@ var errProviderEnvDrift = errors.New("opencode-v2: provider credentials differ f
 // the private-server path and passes the same config inline instead.
 // --prompt=<value> keeps even leading-dash prompts a single string value in
 // the Effect CLI.
-func command(ctx context.Context, binary string, cfg ports.LaunchConfig, nativeID string) ([]string, error) {
+func (p *Plugin) command(ctx context.Context, binary string, cfg ports.LaunchConfig, nativeID string) ([]string, error) {
 	prompt := cfg.SystemPrompt
 	if prompt == "" && cfg.SystemPromptFile != "" {
 		data, err := os.ReadFile(cfg.SystemPromptFile)
@@ -112,7 +122,9 @@ func command(ctx context.Context, binary string, cfg ports.LaunchConfig, nativeI
 	envArgs := []string{"XDG_DATA_HOME=" + dataHome}
 	var server sharedServer
 	var sharedErr error
-	if providerEnvDrift(cfg.Env) {
+	if cfg.Env == nil {
+		sharedErr = errSharedServerEnvUnknown
+	} else if sharedServerEnvDrift(cfg.Env) {
 		sharedErr = errProviderEnvDrift
 	} else {
 		server, sharedErr = prepareSharedServer(ctx, binary, cfg, dataHome, content)
@@ -122,10 +134,13 @@ func command(ctx context.Context, binary string, cfg ports.LaunchConfig, nativeI
 	}
 	var cmd []string
 	if sharedErr == nil {
-		envArgs = append(envArgs, "OPENCODE_PASSWORD="+server.password)
+		// The password reaches the TUI through the runtime environment, not
+		// argv: process listings and terminal pane commands must not expose it.
+		p.rememberSharedPassword(cfg.SessionID, server.password)
 		cmd = append([]string{"env"}, envArgs...)
 		cmd = append(cmd, binary, "--server", server.url)
 	} else {
+		p.forgetSharedPassword(cfg.SessionID)
 		// OpenCode 2 ignores inline config when a client attaches to a shared
 		// server, so a launch that cannot use one keeps the private-server path.
 		if content != "" {
@@ -147,6 +162,46 @@ func command(ctx context.Context, binary string, cfg ports.LaunchConfig, nativeI
 		cmd = append(cmd, "--prompt="+cfg.Prompt)
 	}
 	return cmd, nil
+}
+
+// rememberSharedPassword records the password for the next supervised launch
+// of sessionID. AugmentRuntimeLaunchEnv moves it into the runtime environment.
+func (p *Plugin) rememberSharedPassword(sessionID, password string) {
+	if sessionID == "" {
+		return
+	}
+	p.passwordMu.Lock()
+	defer p.passwordMu.Unlock()
+	if p.pendingSharedPasswords == nil {
+		p.pendingSharedPasswords = map[string]string{}
+	}
+	p.pendingSharedPasswords[sessionID] = password
+}
+
+func (p *Plugin) forgetSharedPassword(sessionID string) {
+	if sessionID == "" {
+		return
+	}
+	p.passwordMu.Lock()
+	defer p.passwordMu.Unlock()
+	delete(p.pendingSharedPasswords, sessionID)
+}
+
+// AugmentRuntimeLaunchEnv supplies the shared server's password without putting
+// it in argv. A private launch has no recorded password and keeps the caller's
+// environment untouched.
+func (p *Plugin) AugmentRuntimeLaunchEnv(env map[string]string, _ string, sessionID domain.SessionID, _ string) {
+	key := string(sessionID)
+	if key == "" {
+		return
+	}
+	p.passwordMu.Lock()
+	password := p.pendingSharedPasswords[key]
+	delete(p.pendingSharedPasswords, key)
+	p.passwordMu.Unlock()
+	if password != "" {
+		env["OPENCODE_PASSWORD"] = password
+	}
 }
 
 type permissionRule struct {
