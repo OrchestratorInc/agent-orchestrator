@@ -93,6 +93,27 @@ var errProviderEnvDrift = errors.New("opencode-v2: launch environment differs fr
 // it will run with. Sharing is only safe when every override is known.
 var errSharedServerEnvUnknown = errors.New("opencode-v2: launch environment is required for a shared server")
 
+// errSharedServerEnvConfig marks a launch whose config comes from the daemon
+// environment. The shared server starts with those variables removed and a
+// client does not forward them, so only the private path sees them.
+var errSharedServerEnvConfig = errors.New("opencode-v2: daemon OpenCode config needs a private server")
+
+// sharedServerEnvConfig reports whether the daemon supplies OpenCode config
+// through variables the shared server strips. The private path overrides
+// OPENCODE_CONFIG_CONTENT only when it has content of its own, so an empty
+// launch would otherwise inherit a config the shared path cannot reproduce.
+func sharedServerEnvConfig(content string) bool {
+	if content == "" && os.Getenv("OPENCODE_CONFIG_CONTENT") != "" {
+		return true
+	}
+	for _, name := range []string{"OPENCODE_CONFIG", "OPENCODE_CONFIG_DIR"} {
+		if os.Getenv(name) != "" {
+			return true
+		}
+	}
+	return false
+}
+
 // The v2 root TUI has no --model/--agent flags. AO normally attaches the TUI
 // to one shared OpenCode 2 server and selects the AO agent through the
 // worktree's project config. A launch that cannot use the shared server keeps
@@ -126,6 +147,8 @@ func (p *Plugin) command(ctx context.Context, binary string, cfg ports.LaunchCon
 		sharedErr = errSharedServerEnvUnknown
 	} else if sharedServerEnvDrift(cfg.Env) {
 		sharedErr = errProviderEnvDrift
+	} else if sharedServerEnvConfig(content) {
+		sharedErr = errSharedServerEnvConfig
 	} else {
 		server, sharedErr = prepareSharedServer(ctx, binary, cfg, dataHome, content)
 	}

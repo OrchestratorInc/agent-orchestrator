@@ -32,6 +32,12 @@ func fakeBinary(t *testing.T, version string) string {
 		t.Fatal(err)
 	}
 	t.Setenv("PATH", dir+string(os.PathListSeparator)+"/usr/bin:/bin")
+	// Shared-server tests need the daemon's OpenCode config variables unset:
+	// a developer machine that exports them must not turn every fixture launch
+	// into a private one.
+	for _, name := range []string{"OPENCODE_CONFIG", "OPENCODE_CONFIG_CONTENT", "OPENCODE_CONFIG_DIR"} {
+		t.Setenv(name, "")
+	}
 	return binary
 }
 
@@ -51,7 +57,9 @@ func sharedWorkspace(t *testing.T) string {
 	if err := os.MkdirAll(configDir, 0o750); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(filepath.Join(configDir, ".gitignore"), []byte("/"+projectConfigFileName+"\n"), 0o600); err != nil {
+	// Mirrors the ignore file AO installs: the file ignores itself so a fresh
+	// worktree stays clean apart from the project config.
+	if err := os.WriteFile(filepath.Join(configDir, ".gitignore"), []byte("/.gitignore\n/"+projectConfigFileName+"\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	return dir
@@ -655,6 +663,35 @@ func TestV2ProviderEnvDriftKeepsPrivateServer(t *testing.T) {
 	}
 }
 
+func TestV2DaemonInlineConfigKeepsPrivateServer(t *testing.T) {
+	fakeBinary(t, "2.0.0")
+	info := healthyInfoServer(t)
+	dataDir := t.TempDir()
+	persistServer(dataDir, sharedServer{url: info.URL, password: "pw"})
+	workspace := sharedWorkspace(t)
+	// An empty launch would inherit this on the private path, while the shared
+	// server starts without it and the client does not forward it.
+	t.Setenv("OPENCODE_CONFIG_CONTENT", `{"model":"daemon/model"}`)
+	cmd, err := New().GetLaunchCommand(context.Background(), ports.LaunchConfig{
+		DataDir:       dataDir,
+		WorkspacePath: workspace,
+		SessionID:     "sess/daemon-config",
+		Env:           map[string]string{},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(strings.Join(cmd, "\n"), "--standalone") {
+		t.Fatalf("argv = %#v, want the private-server path", cmd)
+	}
+	if containsArg(cmd, "--server", info.URL) {
+		t.Fatalf("argv = %#v, must not use the shared server", cmd)
+	}
+	if _, statErr := os.Stat(filepath.Join(workspace, ".opencode", projectConfigFileName)); !errors.Is(statErr, os.ErrNotExist) {
+		t.Fatalf("project config written for a daemon-config launch: %v", statErr)
+	}
+}
+
 func TestV2SharedServerNeedsKnownLaunchEnvironment(t *testing.T) {
 	fakeBinary(t, "2.0.0")
 	info := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -753,28 +790,216 @@ func TestPrepareSharedServerRequiresEffectiveGitignore(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(configDir, ".gitignore"), []byte("*.log\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
+	// A healthy persisted server is essential: it removes the startup failure
+	// that would otherwise mask a missing ignore guard. Without the guard this
+	// call would succeed and publish the config.
+	dataDir := t.TempDir()
+	info := healthyInfoServer(t)
+	persistServer(dataDir, sharedServer{url: info.URL, password: "pw"})
 	_, err := prepareSharedServer(context.Background(), binary, ports.LaunchConfig{
-		DataDir:       t.TempDir(),
+		DataDir:       dataDir,
 		WorkspacePath: workspace,
 		SessionID:     "sess/untracked",
 	}, t.TempDir(), `{"default_agent":"ao-untracked"}`)
-	if err == nil {
-		t.Fatal("prepareSharedServer accepted a workspace config Git does not ignore")
+	if err == nil || !strings.Contains(err.Error(), "does not ignore") {
+		t.Fatalf("prepareSharedServer error = %v, want the ignore guard", err)
 	}
 	if _, statErr := os.Stat(filepath.Join(configDir, projectConfigFileName)); !errors.Is(statErr, os.ErrNotExist) {
 		t.Fatalf("unignored project config was written: %v", statErr)
 	}
 }
 
+func TestPrepareSharedServerRejectsTrackedConfig(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("POSIX git fixture")
+	}
+	if _, err := exec.LookPath("git"); err != nil {
+		t.Skip("git is required")
+	}
+	binary := fakeBinary(t, "2.0.0")
+	workspace := sharedWorkspace(t)
+	configPath := filepath.Join(workspace, ".opencode", projectConfigFileName)
+	if err := os.WriteFile(configPath, []byte("{\"default_agent\":\"tracked\"}\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if out, err := exec.Command("git", "-C", workspace, "add", "-f", ".opencode/"+projectConfigFileName).CombinedOutput(); err != nil {
+		t.Fatalf("git add: %v: %s", err, out)
+	}
+	// The ignore rule still matches with --no-index, so only the index check
+	// can reject publishing over a tracked path.
+	if err := os.Remove(configPath); err != nil {
+		t.Fatal(err)
+	}
+	_, err := prepareSharedServer(context.Background(), binary, ports.LaunchConfig{
+		DataDir:       t.TempDir(),
+		WorkspacePath: workspace,
+		SessionID:     "sess/tracked",
+	}, t.TempDir(), `{"default_agent":"ao-tracked"}`)
+	if err == nil || !strings.Contains(err.Error(), "tracks") {
+		t.Fatalf("prepareSharedServer error = %v, want the tracked-path guard", err)
+	}
+	if _, statErr := os.Stat(configPath); !errors.Is(statErr, os.ErrNotExist) {
+		t.Fatalf("tracked project config was recreated: %v", statErr)
+	}
+}
+
+func TestPrepareSharedServerWritesConfigOnlyAfterServerReady(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("POSIX executable fixture")
+	}
+	startedDir := t.TempDir()
+	started := filepath.Join(startedDir, "started")
+	release := filepath.Join(startedDir, "release")
+	binary := filepath.Join(startedDir, "opencode")
+	script := "#!/bin/sh\nif [ \"$1\" = --version ]; then printf '%s\\n' 2.0.0; exit; fi\n" +
+		"touch '" + started + "'\n" +
+		"while [ ! -f '" + release + "' ]; do sleep 0.01; done\n" +
+		"exit 1\n"
+	if err := os.WriteFile(binary, []byte(script), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	workspace := sharedWorkspace(t)
+	configPath := filepath.Join(workspace, ".opencode", projectConfigFileName)
+	dataDir := t.TempDir()
+	done := make(chan error, 1)
+	go func() {
+		_, err := prepareSharedServer(context.Background(), binary, ports.LaunchConfig{
+			DataDir:       dataDir,
+			WorkspacePath: workspace,
+			SessionID:     "sess/slow-start",
+		}, t.TempDir(), `{"default_agent":"ao-slow"}`)
+		done <- err
+	}()
+	waitForFile(t, started)
+	if _, statErr := os.Stat(configPath); !errors.Is(statErr, os.ErrNotExist) {
+		t.Fatalf("project config published while the server was still starting: %v", statErr)
+	}
+	if err := os.WriteFile(release, nil, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := <-done; err == nil {
+		t.Fatal("prepareSharedServer succeeded with a server that exits during startup")
+	}
+	if _, statErr := os.Stat(configPath); !errors.Is(statErr, os.ErrNotExist) {
+		t.Fatalf("project config written by a failed startup: %v", statErr)
+	}
+}
+
+func TestPrepareSharedServerLeavesNoUntrackedFiles(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("POSIX git fixture")
+	}
+	if _, err := exec.LookPath("git"); err != nil {
+		t.Skip("git is required")
+	}
+	binary := fakeBinary(t, "2.0.0")
+	workspace := sharedWorkspace(t)
+	dataDir := t.TempDir()
+	info := healthyInfoServer(t)
+	persistServer(dataDir, sharedServer{url: info.URL, password: "pw"})
+	if _, err := prepareSharedServer(context.Background(), binary, ports.LaunchConfig{
+		DataDir:       dataDir,
+		WorkspacePath: workspace,
+		SessionID:     "sess/clean",
+	}, t.TempDir(), `{"default_agent":"ao-clean"}`); err != nil {
+		t.Fatal(err)
+	}
+	out, err := exec.Command("git", "-C", workspace, "status", "--porcelain", "--untracked-files=all").CombinedOutput()
+	if err != nil {
+		t.Fatalf("git status: %v: %s", err, out)
+	}
+	if strings.TrimSpace(string(out)) != "" {
+		t.Fatalf("shared preparation left worktree entries:\n%s", out)
+	}
+}
+
+func TestRevalidateProjectConfigRepairsChangedWorkspace(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("POSIX git fixture")
+	}
+	if _, err := exec.LookPath("git"); err != nil {
+		t.Skip("git is required")
+	}
+	workspace := sharedWorkspace(t)
+	configPath := filepath.Join(workspace, ".opencode", projectConfigFileName)
+	content := `{"default_agent":"ao-revalidated"}`
+	if _, err := writeProjectConfig(workspace, content); err != nil {
+		t.Fatal(err)
+	}
+	// Still matching: nothing to do.
+	if err := revalidateProjectConfig(context.Background(), workspace, content); err != nil {
+		t.Fatalf("revalidate matching config: %v", err)
+	}
+	// Removed during startup: republished.
+	if err := os.Remove(configPath); err != nil {
+		t.Fatal(err)
+	}
+	if err := revalidateProjectConfig(context.Background(), workspace, content); err != nil {
+		t.Fatalf("revalidate removed config: %v", err)
+	}
+	if got, err := os.ReadFile(configPath); err != nil || string(got) != content {
+		t.Fatalf("config = %q, %v", got, err)
+	}
+	// Rewritten by someone else: refuse instead of overwriting.
+	if err := os.WriteFile(configPath, []byte("{\"default_agent\":\"user\"}"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := revalidateProjectConfig(context.Background(), workspace, content); err == nil {
+		t.Fatal("revalidate accepted a conflicting config")
+	}
+	if got, err := os.ReadFile(configPath); err != nil || !strings.Contains(string(got), "user") {
+		t.Fatalf("conflicting config changed to %q, %v", got, err)
+	}
+}
+
+func TestRevalidateProjectConfigRechecksIgnoreRule(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("POSIX git fixture")
+	}
+	if _, err := exec.LookPath("git"); err != nil {
+		t.Skip("git is required")
+	}
+	workspace := sharedWorkspace(t)
+	content := `{"default_agent":"ao-branch-switch"}`
+	// A branch switch removes the ignore rule while the server starts.
+	gitignore := filepath.Join(workspace, ".opencode", ".gitignore")
+	if err := os.WriteFile(gitignore, []byte("*.log\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := revalidateProjectConfig(context.Background(), workspace, content); err == nil || !strings.Contains(err.Error(), "does not ignore") {
+		t.Fatalf("revalidate error = %v, want the ignore guard", err)
+	}
+	if _, statErr := os.Stat(filepath.Join(workspace, ".opencode", projectConfigFileName)); !errors.Is(statErr, os.ErrNotExist) {
+		t.Fatalf("config published after the ignore rule was removed: %v", statErr)
+	}
+}
+
 func TestLockWorkspacePreparationSerializes(t *testing.T) {
 	workspace := t.TempDir()
+	key := filepath.Clean(workspace)
 	release := lockWorkspacePreparation(workspace)
+	workspacePreparations.mu.Lock()
+	preparation := workspacePreparations.byDir[key]
+	workspacePreparations.mu.Unlock()
+	if preparation == nil {
+		t.Fatal("lockWorkspacePreparation did not register the workspace")
+	}
+	// The lock must be held, not merely allocated: a no-op lock would let this
+	// TryLock succeed and every later assertion pass vacuously.
+	if preparation.mu.TryLock() {
+		preparation.mu.Unlock()
+		t.Fatal("lockWorkspacePreparation returned without holding the workspace mutex")
+	}
 	acquired := make(chan struct{})
+	entered := make(chan struct{})
 	go func() {
+		close(entered)
 		unlock := lockWorkspacePreparation(workspace)
 		close(acquired)
 		unlock()
 	}()
+	<-entered
+	waitForPreparationRefs(t, key, 2)
 	select {
 	case <-acquired:
 		t.Fatal("second preparation acquired the workspace lock while the first held it")
@@ -786,6 +1011,50 @@ func TestLockWorkspacePreparationSerializes(t *testing.T) {
 	case <-time.After(5 * time.Second):
 		t.Fatal("second preparation did not acquire the released workspace lock")
 	}
+}
+
+func waitForPreparationRefs(t *testing.T, key string, want int) {
+	t.Helper()
+	deadline := time.Now().Add(5 * time.Second)
+	for time.Now().Before(deadline) {
+		workspacePreparations.mu.Lock()
+		preparation := workspacePreparations.byDir[key]
+		refs := 0
+		if preparation != nil {
+			refs = preparation.refs
+		}
+		workspacePreparations.mu.Unlock()
+		if refs == want {
+			return
+		}
+		runtime.Gosched()
+	}
+	t.Fatalf("workspace preparation never reached %d refs", want)
+}
+
+func waitForFile(t *testing.T, path string) {
+	t.Helper()
+	deadline := time.Now().Add(5 * time.Second)
+	for time.Now().Before(deadline) {
+		if _, err := os.Stat(path); err == nil {
+			return
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+	t.Fatalf("fixture never created %s", path)
+}
+
+func healthyInfoServer(t *testing.T) *httptest.Server {
+	t.Helper()
+	info := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/api/info" {
+			w.WriteHeader(http.StatusOK)
+			return
+		}
+		http.NotFound(w, r)
+	}))
+	t.Cleanup(info.Close)
+	return info
 }
 
 func TestV2SharedServerBusyReturnsErrorInsteadOfPrivateFallback(t *testing.T) {

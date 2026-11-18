@@ -70,8 +70,12 @@ func prepareSharedServer(ctx context.Context, binary string, cfg ports.LaunchCon
 	if err != nil {
 		return sharedServer{}, err
 	}
-	if writeConfig && !projectConfigIgnored(ctx, cfg.WorkspacePath) {
-		return sharedServer{}, errors.New("opencode-v2: workspace does not ignore .opencode/opencode.json")
+	if writeConfig {
+		// Refuse before a server starts, so the launch can still fall back to a
+		// private server without leaving a file Git would show.
+		if err := projectConfigPublishable(ctx, cfg.WorkspacePath); err != nil {
+			return sharedServer{}, err
+		}
 	}
 	// Start the server before publishing the config. A failed startup then
 	// leaves no AO-owned file behind, so no rollback has to decide whether a
@@ -80,12 +84,36 @@ func prepareSharedServer(ctx context.Context, binary string, cfg ports.LaunchCon
 	if err != nil {
 		return sharedServer{}, err
 	}
-	if writeConfig {
-		if _, err := writeProjectConfig(cfg.WorkspacePath, content); err != nil {
-			return sharedServer{}, fmt.Errorf("%w: %w", errSharedServerConfig, err)
-		}
+	if content == "" {
+		return server, nil
+	}
+	// Startup can take seconds. Re-read the config afterwards: an editor, a
+	// branch switch, or another checkout may have changed the file or the
+	// ignore rules the early check saw. The server now owns the data home, so a
+	// conflict has to fail the launch instead of falling back privately.
+	if err := revalidateProjectConfig(ctx, cfg.WorkspacePath, content); err != nil {
+		return sharedServer{}, fmt.Errorf("%w: %w", errSharedServerConfig, err)
 	}
 	return server, nil
+}
+
+// revalidateProjectConfig makes the worktree config match content after the
+// server start, when the first check may be stale. It reuses an identical file,
+// publishes an absent one only while Git still ignores an untracked path, and
+// fails on a conflicting file.
+func revalidateProjectConfig(ctx context.Context, workspacePath, content string) error {
+	writeConfig, err := checkProjectConfig(workspacePath, content)
+	if err != nil {
+		return err
+	}
+	if !writeConfig {
+		return nil
+	}
+	if err := projectConfigPublishable(ctx, workspacePath); err != nil {
+		return err
+	}
+	_, err = writeProjectConfig(workspacePath, content)
+	return err
 }
 
 var (
@@ -384,8 +412,10 @@ func persistServer(dataDir string, server sharedServer) {
 }
 
 // writeProjectConfig writes the same config document the private-server path
-// passes inline. It never replaces a project config AO did not write itself:
-// a conflicting file makes the launch fall back to a private server instead.
+// passes inline. O_EXCL publishes it in one step: either this call created the
+// file and owns its cleanup, or another writer got there first and its file is
+// reused when the content matches. Nothing but the ignored destination is ever
+// created, so a concurrent `git add -A` cannot stage an AO temp file.
 func writeProjectConfig(workspacePath, content string) (bool, error) {
 	if content == "" {
 		return false, nil
@@ -395,33 +425,10 @@ func writeProjectConfig(workspacePath, content string) (bool, error) {
 	if err := os.MkdirAll(dir, 0o750); err != nil {
 		return false, fmt.Errorf("opencode-v2: create project config dir: %w", err)
 	}
-	// Build the file under a private name first and publish it with a hard
-	// link. The link fails if another writer already created the destination,
-	// so cleanup can never delete a file this attempt did not write.
-	file, err := os.CreateTemp(dir, ".ao-tmp-*")
+	file, err := os.OpenFile(path, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o600) //nolint:gosec // path is rooted in the caller-owned worktree
 	if err != nil {
-		return false, fmt.Errorf("opencode-v2: create project config: %w", err)
-	}
-	temp := file.Name()
-	defer func() { _ = os.Remove(temp) }()
-	if err := file.Chmod(0o600); err != nil {
-		_ = file.Close()
-		return false, fmt.Errorf("opencode-v2: set project config mode: %w", err)
-	}
-	if _, err := file.WriteString(content); err != nil {
-		_ = file.Close()
-		return false, fmt.Errorf("opencode-v2: write project config: %w", err)
-	}
-	if err := file.Sync(); err != nil {
-		_ = file.Close()
-		return false, fmt.Errorf("opencode-v2: sync project config: %w", err)
-	}
-	if err := file.Close(); err != nil {
-		return false, fmt.Errorf("opencode-v2: close project config: %w", err)
-	}
-	if err := os.Link(temp, path); err != nil {
 		if errors.Is(err, os.ErrExist) {
-			existing, readErr := os.ReadFile(path)
+			existing, readErr := os.ReadFile(path) //nolint:gosec // path is rooted in the caller-owned worktree
 			if readErr != nil {
 				return false, fmt.Errorf("opencode-v2: read project config: %w", readErr)
 			}
@@ -430,17 +437,45 @@ func writeProjectConfig(workspacePath, content string) (bool, error) {
 			}
 			return false, errors.New("opencode-v2: workspace already has .opencode/opencode.json")
 		}
-		return false, fmt.Errorf("opencode-v2: publish project config: %w", err)
+		return false, fmt.Errorf("opencode-v2: create project config: %w", err)
+	}
+	// O_EXCL proved this call created path, so cleanup can never delete a file
+	// another writer owns.
+	fail := func(err error) (bool, error) {
+		_ = file.Close()
+		_ = os.Remove(path)
+		return false, err
+	}
+	if _, err := file.WriteString(content); err != nil {
+		return fail(fmt.Errorf("opencode-v2: write project config: %w", err))
+	}
+	if err := file.Sync(); err != nil {
+		return fail(fmt.Errorf("opencode-v2: sync project config: %w", err))
+	}
+	if err := file.Close(); err != nil {
+		return fail(fmt.Errorf("opencode-v2: close project config: %w", err))
 	}
 	return true, nil
 }
 
-// projectConfigIgnored asks Git whether the project config is effectively
-// ignored. check-ignore --no-index evaluates the ignore rules even for a path
-// that is already tracked or does not exist yet.
-func projectConfigIgnored(ctx context.Context, workspacePath string) bool {
-	cmd := aoprocess.CommandContext(ctx, "git", "-C", workspacePath, "check-ignore", "-q", "--no-index", "--", filepath.ToSlash(filepath.Join(".opencode", projectConfigFileName)))
-	return cmd.Run() == nil
+// projectConfigPublishable reports whether Git both ignores and does not track
+// the project config. check-ignore --no-index evaluates the ignore rules even
+// for a path that does not exist yet; ls-files then rejects a tracked path,
+// because Git does not apply ignore rules to tracked files and recreating one
+// would surface AO's content as a modification.
+func projectConfigPublishable(ctx context.Context, workspacePath string) error {
+	rel := filepath.ToSlash(filepath.Join(".opencode", projectConfigFileName))
+	ignore := aoprocess.CommandContext(ctx, "git", "-C", workspacePath, "check-ignore", "-q", "--no-index", "--", rel)
+	if ignore.Run() != nil {
+		return errors.New("opencode-v2: workspace does not ignore .opencode/opencode.json")
+	}
+	tracked := aoprocess.CommandContext(ctx, "git", "-C", workspacePath, "ls-files", "--error-unmatch", "--", rel)
+	tracked.Stdout = io.Discard
+	tracked.Stderr = io.Discard
+	if tracked.Run() == nil {
+		return errors.New("opencode-v2: workspace tracks .opencode/opencode.json")
+	}
+	return nil
 }
 
 type workspacePreparation struct {
