@@ -328,3 +328,63 @@ describe("useArchivedPRs as the archive moves", () => {
 		expect(latest.error).toBe("Couldn't load past pull requests.");
 	});
 });
+
+describe("useArchivedPRs after a failed read", () => {
+	let renderer: ReactTestRenderer | null = null;
+	let latest: ReturnType<typeof useArchivedPRs>;
+	const sources: ArchivedPRSource[] = [{ hostId: "laptop", hostName: "Laptop", archived: 4 }];
+
+	function Probe() {
+		latest = useArchivedPRs([...sources], { states: ["merged"], refreshToken: 0 });
+		return null;
+	}
+
+	async function render() {
+		await act(async () => {
+			if (renderer) renderer.update(<Probe />);
+			else renderer = create(<Probe />);
+		});
+		await act(async () => { for (let i = 0; i < 10; i += 1) await Promise.resolve(); });
+	}
+
+	beforeEach(() => {
+		fixtures.getArchivedPRSessions.mockReset();
+		fixtures.offline = new Set();
+	});
+	afterEach(() => {
+		act(() => renderer?.unmount());
+		renderer = null;
+		fixtures.offline = new Set(["offline"]);
+	});
+
+	// The read fails as the machine drops; nothing else moves (same count, no
+	// refresh), so only the machine coming back can trigger the retry.
+	it("reads a failed source again when its machine comes back, and only then", async () => {
+		fixtures.getArchivedPRSessions.mockRejectedValueOnce(new Error("offline"));
+		await render();
+		expect(latest.error).toBe("Couldn't load past pull requests.");
+		expect(fixtures.getArchivedPRSessions).toHaveBeenCalledTimes(1);
+
+		// Settling or re-rendering while still reachable does not retry.
+		await render();
+		expect(fixtures.getArchivedPRSessions).toHaveBeenCalledTimes(1);
+
+		fixtures.offline = new Set(["laptop"]);
+		await render();
+		expect(fixtures.getArchivedPRSessions).toHaveBeenCalledTimes(1);
+
+		fixtures.getArchivedPRSessions.mockResolvedValue(page(["s1"], null, 1));
+		fixtures.offline = new Set();
+		await render();
+		expect(fixtures.getArchivedPRSessions).toHaveBeenCalledTimes(2);
+		expect(latest.sessions.map((s) => s.id)).toEqual(["s1"]);
+		expect(latest.error).toBeNull();
+
+		// A healthy source is not re-read by another drop and return.
+		fixtures.offline = new Set(["laptop"]);
+		await render();
+		fixtures.offline = new Set();
+		await render();
+		expect(fixtures.getArchivedPRSessions).toHaveBeenCalledTimes(2);
+	});
+});

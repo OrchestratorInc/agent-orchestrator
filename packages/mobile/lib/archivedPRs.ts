@@ -146,7 +146,7 @@ export function useArchivedPRs(sources: readonly ArchivedPRSource[], options: { 
 	streamsRef.current = streams;
 	const sourcesRef = useRef(sources);
 	sourcesRef.current = sources;
-	const runs = useRef(new Map<string, { controller: AbortController; archived: number; refreshToken: number; inFlight: boolean }>());
+	const runs = useRef(new Map<string, { controller: AbortController; archived: number; refreshToken: number; inFlight: boolean; offline: boolean }>());
 	// Bumped when a read settles, so a count that moved while it ran is checked then.
 	const [settled, setSettled] = useState(0);
 
@@ -220,7 +220,7 @@ export function useArchivedPRs(sources: readonly ArchivedPRSource[], options: { 
 		});
 		const start = (source: ArchivedPRSource, state: ArchivedPRState, key: string, mode: ReadMode) => {
 			const controller = new AbortController();
-			const run = { controller, archived: source.archived, refreshToken: options.refreshToken, inFlight: true };
+			const run = { controller, archived: source.archived, refreshToken: options.refreshToken, inFlight: true, offline: false };
 			runs.current.set(key, run);
 			void read(source, state, key, controller, mode).finally(() => {
 				if (runs.current.get(key) !== run) return;
@@ -232,8 +232,20 @@ export function useArchivedPRs(sources: readonly ArchivedPRSource[], options: { 
 			for (const source of sourcesRef.current) {
 				const key = streamKey(source, state);
 				const previous = runs.current.get(key);
-				// An offline machine is not marked read, so the next change or refresh tries it again.
-				if (!configForHost(source.hostId)) continue;
+				// An offline machine is not marked read, so the next change or refresh
+				// tries it again. One that had been read is noted, so its return is seen.
+				if (!configForHost(source.hostId)) {
+					if (previous) previous.offline = true;
+					continue;
+				}
+				// Back online: a read that failed (typically as the machine went away)
+				// is read again once, on this return, not on every later settle.
+				const reconnected = previous?.offline === true;
+				if (previous) previous.offline = false;
+				if (reconnected && !previous.inFlight && streamsRef.current[key]?.error) {
+					start(source, state, key, "full");
+					continue;
+				}
 				// A first read or a pull to refresh reads everything again.
 				if (!previous || previous.refreshToken !== options.refreshToken) {
 					previous?.controller.abort();
