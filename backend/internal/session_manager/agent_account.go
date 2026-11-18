@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"sync"
 
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
 	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
@@ -141,7 +142,7 @@ func (m *Manager) preflightAccountTarget(
 		}
 		return m.chat.PreflightChat(ctx, rec.Harness, config.Permissions)
 	}
-	return m.preflightTerminalLaunch(ctx, agent, rec, project, transition.NativeConversationID)
+	return m.preflightTerminalLaunch(ctx, agent, rec, project, transition.NativeConversationID, env)
 }
 
 // markAccountSwitch tells the conversation that a move which stopped the turn
@@ -180,7 +181,7 @@ func (m *Manager) deliverQueuedAfterAccountMove(transition domain.SessionInterfa
 // account. An account env that cannot be resolved fails the check: the env
 // would name another login, and every probe below would pass against it.
 func (m *Manager) runtimeEnvOnAccount(rec domain.SessionRecord, projectEnv map[string]string, accountID string) (map[string]string, error) {
-	return m.runtimeEnvChecked(rec.ID, rec.ProjectID, rec.IssueID, projectEnv, accountID)
+	return m.runtimeEnvChecked(rec.ID, rec.ProjectID, rec.IssueID, projectEnv, accountID, rec.Harness)
 }
 
 // ExitAgentsOnAccount stops every running agent that uses accountID, before the
@@ -194,14 +195,23 @@ func (m *Manager) ExitAgentsOnAccount(ctx context.Context, accountID string) err
 	if err != nil {
 		return err
 	}
-	var errs []error
+	var (
+		errs  []error
+		errMu sync.Mutex
+		wg    sync.WaitGroup
+	)
+	fail := func(err error) {
+		errMu.Lock()
+		defer errMu.Unlock()
+		errs = append(errs, err)
+	}
 	for _, rec := range recs {
 		if rec.IsTerminated {
 			continue
 		}
 		bound, err := m.agentAccounts.SessionAccountID(ctx, rec.ID, rec.Harness)
 		if err != nil {
-			errs = append(errs, err)
+			fail(err)
 			continue
 		}
 		if bound != accountID {
@@ -212,16 +222,19 @@ func (m *Manager) ExitAgentsOnAccount(ctx context.Context, accountID string) err
 		// exited until its agent reports. Refuse rather than delete the folder
 		// under it: a retry after it settles stops it like any running agent.
 		if m.launchInFlight(rec.ID) {
-			errs = append(errs, fmt.Errorf("session %s is starting its agent on the account", rec.ID))
+			fail(fmt.Errorf("session %s is starting its agent on the account", rec.ID))
 			continue
 		}
 		if rec.Activity.State == domain.ActivityExited {
 			continue
 		}
-		if _, err := m.ExitAgent(ctx, rec.ID); err != nil && !errors.Is(err, ErrAgentExited) {
-			errs = append(errs, err)
-		}
+		wg.Go(func() {
+			if _, err := m.ExitAgent(ctx, rec.ID); err != nil && !errors.Is(err, ErrAgentExited) {
+				fail(err)
+			}
+		})
 	}
+	wg.Wait()
 	return errors.Join(errs...)
 }
 

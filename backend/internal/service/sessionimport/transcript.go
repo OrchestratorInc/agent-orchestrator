@@ -62,6 +62,18 @@ type transcript struct {
 	shortened bool
 	// fingerprint is the optional native-input evidence captured by discovery.
 	fingerprint string
+	// placeAt is the checkout a chat belongs to once its own folder is gone.
+	placeAt string
+}
+
+// folder is where a chat belongs: its own folder, or placeAt once that is gone.
+func (t transcript) folder() string {
+	if t.placeAt != "" {
+		if info, err := os.Stat(t.cwd); err != nil || !info.IsDir() {
+			return t.placeAt
+		}
+	}
+	return t.cwd
 }
 
 type textBlock struct{ Type, Text string }

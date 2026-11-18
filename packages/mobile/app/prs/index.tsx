@@ -1,59 +1,120 @@
-import { useCallback, useMemo, useRef, useState } from "react";
-import { Platform, RefreshControl, SectionList, StyleSheet, View } from "react-native";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { Platform, RefreshControl, SectionList, StyleSheet, View, type ViewToken } from "react-native";
 import { useFocusEffect, useLocalSearchParams } from "expo-router";
 import type { Theme } from "../../lib/theme";
-import { PRCard } from "../../lib/PRCard";
+import { groupedRowPosition } from "../../lib/groupedRow";
+import { PRCard, PRSectionHeader } from "../../lib/PRCard";
+import { MenuRowWidthScope } from "../../lib/useMenuRowWidth";
 import { PRFilterControl } from "../../lib/pr-filter-control";
 import { ProjectSwitcher } from "../../lib/ProjectSwitcher";
 import { collectPRs, prFilterCounts, prInFilter, prLifecycle, prListSections, type PRListFilter } from "../../lib/prView";
 import { refreshControlColors } from "../../lib/refreshControlColors";
 import { Spinner } from "../../lib/Spinner";
 import { StackRootBack } from "../../lib/StackRootBack";
-import { StaleBanner } from "../../lib/StaleBanner";
+import { FreshnessLine } from "../../lib/FreshnessLine";
 import { useApp } from "../../lib/store";
+import { useCloud } from "../../lib/cloud/CloudProvider";
+import { isCloudHost } from "../../lib/cloud/mapping";
+import { useCloudPRSummaries } from "../../lib/cloud/useCloudPRSummaries";
 import { UnpairedState } from "../../lib/UnpairedState";
 import { PR_SUMMARY_REUSE_MS, usePRSummaries } from "../../lib/usePRSummaries";
+import { useRefreshActions } from "../../lib/useRefreshActions";
+import { MINUTE_MS, useNow } from "../../lib/useNow";
 import { useBoardFailure } from "../../lib/useBoardFailure";
 import { TabPageScroll } from "../../lib/TabPageScroll";
 import { ToastHost } from "../../lib/Toast";
 import { useToast } from "../../lib/useToast";
-import { Button, EmptyState, ListSectionHeader } from "../../lib/ui";
+import { Button, EmptyState } from "../../lib/ui";
 import { useTheme, useThemedStyles } from "../../lib/ThemeProvider";
 import { space } from "../../lib/tokens";
-import type { HostedSession } from "../../lib/hostedRows";
+import type { DashboardPR } from "../../lib/api";
+import { hostedRowKey, type HostedSession } from "../../lib/hostedRows";
+import { useArchivedPRs, withArchivedPRSessions, type ArchivedPRSource } from "../../lib/archivedPRs";
+import type { ArchivedPRState } from "../../lib/api";
 
 export { RouteErrorBoundary as ErrorBoundary } from "../../lib/RouteErrorBoundary";
 
 type Filter = PRListFilter;
+type PRRow = { pr: DashboardPR; session: HostedSession };
+
+function prRowKey({ pr, session }: PRRow): string {
+	return `${session.hostId}:${session.projectId}#${pr.number}`;
+}
+
+// Once the list reports viewable items, React Native also runs the key
+// extractor on section headers, handing it the section rather than a row.
+function listKey(item: PRRow | { key: string }): string {
+	return "pr" in item && "session" in item ? prRowKey(item) : `section:${item.key}`;
+}
 
 type PRsParams = { hostId?: string; projectId?: string };
 
+// Rows past the last one seen whose details load ahead of the scroll. Only
+// archived rows wait for it: the merged history can run to hundreds of PRs, one
+// request each.
+const SUMMARY_LOOKAHEAD = 30;
+
+// The ended sessions' PRs each filter shows.
+const ARCHIVED_STATES: Record<PRListFilter, readonly ArchivedPRState[]> = { open: [], merged: ["merged"], all: ["merged", "closed"] };
+
+// Its rows share one width (see `MenuRowWidthScope`): a filter mounts a new
+// set of rows, and the ones past the list's first render batch are sized on
+// their first frame.
 export default function PRsScreen() {
+	return <MenuRowWidthScope><PRList /></MenuRowWidthScope>;
+}
+
+function PRList() {
 	const t = useTheme();
 	const styles = useThemedStyles(makeStyles);
 	const { hostId: routeHostId, projectId: routeProjectId } = useLocalSearchParams<PRsParams>();
-	const { hostStates, allSessions, configForHost, refreshAll, activeProjectId } = useApp();
+	const { hostStates, allSessions, configForHost, refreshAll, activeProjectId, cloud } = useApp();
+	const { sessionsLoaded: cloudSessionsLoaded } = useCloud();
 	const visibleHosts = useMemo(() => routeHostId ? hostStates.filter((host) => host.hostId === routeHostId) : hostStates, [hostStates, routeHostId]);
-	const projectFilter = routeHostId ? (routeProjectId ?? "all") : hostStates.length === 1 ? activeProjectId : "all";
+	// Orchestrator Cloud is one more environment beside the paired machines: a
+	// lone machine's project switcher would hide its pull requests.
+	const environmentCount = hostStates.length + (cloud ? 1 : 0);
+	const singleMachine = hostStates.length === 1 && !cloud;
+	const cloudShown = Boolean(cloud) && (!routeHostId || isCloudHost(routeHostId));
+	const projectFilter = routeHostId ? (routeProjectId ?? "all") : singleMachine ? activeProjectId : "all";
+	const [filter, setFilter] = useState<Filter>("open");
+	const [refreshToken, setRefreshToken] = useState(0);
+	// Each machine that pages its archive is read for the PRs of sessions that
+	// have ended: merged ones once Merged or All is open, closed ones once All
+	// is. A machine with an empty archive has none to read.
+	const archivedSources = useMemo<ArchivedPRSource[]>(() => visibleHosts.flatMap((host) => {
+		if (isCloudHost(host.hostId) || !host.archive) return [];
+		const projectId = projectFilter === "all" ? undefined : projectFilter;
+		const archived = projectId === undefined ? host.archive.total : host.archive.byProject[projectId] ?? 0;
+		return archived > 0 ? [{ hostId: host.hostId, hostName: host.name, appearance: host.appearance, projectId, archived }] : [];
+	}), [visibleHosts, projectFilter]);
+	const archivedStates = ARCHIVED_STATES[filter];
+	const archived = useArchivedPRs(archivedSources, { states: archivedStates, refreshToken });
+	const archivedLoading = archivedStates.some((state) => archived.loading[state]);
+	const archivedKeys = useMemo(() => new Set(archived.sessions.map((session) => hostedRowKey(session.hostId, session.id))), [archived.sessions]);
 	const prs = useMemo(() => {
 		// Hosted rows are structurally shared across sync/notification updates.
 		// Keep those identities, and deduplicate PRs within each machine only.
+		// Live rows come first, so a PR keeps its live session's row.
 		const byHost = new Map<string, HostedSession[]>();
-		for (const session of allSessions) {
+		for (const session of withArchivedPRSessions(allSessions, archived.sessions)) {
 			if (routeHostId && session.hostId !== routeHostId) continue;
 			const rows = byHost.get(session.hostId);
 			if (rows) rows.push(session);
 			else byHost.set(session.hostId, [session]);
 		}
 		return [...byHost.values()].flatMap(sessions => collectPRs(sessions).filter(({ session }) => projectFilter === "all" || session.projectId === projectFilter));
-	}, [allSessions, routeHostId, projectFilter]);
-	const configured = hostStates.length > 0;
-	const loading = visibleHosts.some((host) => host.loading);
-	const error = visibleHosts.every((host) => host.connection !== "open") ? visibleHosts.find((host) => host.error)?.error : null;
-	const [filter, setFilter] = useState<Filter>("open");
-	const [refreshing, setRefreshing] = useState(false);
+	}, [allSessions, archived.sessions, routeHostId, projectFilter]);
+	const configured = hostStates.length > 0 || Boolean(cloud);
+	const loading = visibleHosts.some((host) => host.loading) || (cloudShown && !cloudSessionsLoaded);
+	// A machine's failure fills the page only when nothing answers: with
+	// Orchestrator Cloud listed, an empty filter is just empty.
+	const error = !cloudShown && visibleHosts.every((host) => host.connection !== "open") ? visibleHosts.find((host) => host.error)?.error : null;
 	const toast = useToast();
 	const { show: showToast } = toast;
+	useEffect(() => {
+		if (archived.error) showToast(archived.error);
+	}, [archived.error, showToast]);
 	// Android 13 and later confirms every copy with its own clipboard preview.
 	const linkCopied = useCallback(() => {
 		if (Platform.OS === "android" && Number(Platform.Version) >= 33) return;
@@ -64,16 +125,53 @@ export default function PRsScreen() {
 	// than presenting a flat stream in daemon order.
 	const filtered = useMemo(() => prs.filter(({ pr }) => prInFilter(filter, prLifecycle(pr))), [prs, filter]);
 	const sections = useMemo(() => prListSections(prs, filter), [prs, filter]);
-	const counts = useMemo(() => prFilterCounts(prs), [prs]);
+	// Archived sessions still loading each hold a PR in the state they were
+	// asked for, so the counts do not climb page by page.
+	const { merged: unloadedMerged, closed: unloadedClosed } = archived.unloaded;
+	const counts = useMemo(() => {
+		const loaded = prFilterCounts(prs);
+		return { ...loaded, merged: loaded.merged + unloadedMerged, all: loaded.all + unloadedMerged + unloadedClosed };
+	}, [prs, unloadedMerged, unloadedClosed]);
+	// Name each row's repository only when the list holds more than one.
+	const showProject = useMemo(() => new Set(prs.map(({ session }) => `${session.hostId}:${session.projectId}`)).size > 1, [prs]);
+	const now = useNow(MINUTE_MS);
 
 	// The rich per-PR detail the cards show lives on a separate endpoint, fetched
 	// once per session and cached — see usePRSummaries. Pull-to-refresh is the
 	// only thing that re-fetches it.
-	const summaryTargets = useMemo(() => filtered.flatMap(({ session }) => {
+	// Archived rows load theirs as the list scrolls near them, in list order.
+	const shownRows = useMemo(() => sections.flatMap((section) => section.data), [sections]);
+	const [summaryReach, setSummaryReach] = useState(SUMMARY_LOOKAHEAD);
+	const rowIndex = useRef(new Map<string, number>());
+	rowIndex.current = new Map(shownRows.map((item, index) => [prRowKey(item), index]));
+	const onViewableItemsChanged = useRef(({ viewableItems }: { viewableItems: ViewToken<PRRow>[] }) => {
+		let last = -1;
+		for (const token of viewableItems) {
+			// A section header's token carries the section, not a row.
+			const item = token?.item as Partial<PRRow> | undefined;
+			const index = item?.pr && item.session ? rowIndex.current.get(prRowKey(item as PRRow)) : undefined;
+			if (index !== undefined && index > last) last = index;
+		}
+		if (last >= 0) setSummaryReach((reach) => Math.max(reach, last + 1 + SUMMARY_LOOKAHEAD));
+	}).current;
+	const summaryTargets = useMemo(() => shownRows.flatMap(({ session }, index) => {
+		if (index >= summaryReach && archivedKeys.has(hostedRowKey(session.hostId, session.id))) return [];
 		const config = configForHost(session.hostId);
 		return config ? [{ config, sessionId: session.id }] : [];
-	}), [filtered, configForHost]);
+	}), [shownRows, summaryReach, archivedKeys, configForHost]);
 	const summaries = usePRSummaries(summaryTargets);
+	// A cloud session's detail comes from Orchestrator Cloud, not a daemon,
+	// stamped with its pull requests' states: one merged or closed in Cloud
+	// reads afresh rather than keeping its open card until the reuse runs out.
+	const cloudSummaryTargets = useMemo(() => {
+		const states = new Map<string, string[]>();
+		for (const { pr, session } of prs) {
+			if (!isCloudHost(session.hostId)) continue;
+			states.set(session.id, [...(states.get(session.id) ?? []), `${pr.number}:${prLifecycle(pr)}`]);
+		}
+		return filtered.flatMap(({ session }) => isCloudHost(session.hostId) ? [{ sessionId: session.id, stamp: (states.get(session.id) ?? []).sort().join(",") }] : []);
+	}, [filtered, prs]);
+	const cloudSummaries = useCloudPRSummaries(cloudSummaryTargets);
 	// The page loads its details as it opens. Coming back to it from a PR or a
 	// worker reloads them once they are old, not on every return.
 	const lastSummaryRefresh = useRef(Date.now());
@@ -81,18 +179,21 @@ export default function PRsScreen() {
 		if (Date.now() - lastSummaryRefresh.current < PR_SUMMARY_REUSE_MS) return;
 		lastSummaryRefresh.current = Date.now();
 		summaries.reload();
-	}, [summaries.reload]));
+		cloudSummaries.reload();
+		setRefreshToken((token) => token + 1);
+	}, [summaries.reload, cloudSummaries.reload]));
 	const failure = useBoardFailure();
 
 	// No haptic of its own: each platform's refresh control gives the feedback
-	// it gives everywhere, and the Retry buttons that also call this buzz once.
-	const onRefresh = async () => {
-		setRefreshing(true);
+	// it gives everywhere, and the Retry buttons that run it too buzz once.
+	// Retry never drives the pull spinner: see useRefreshActions.
+	const { refreshing, onRefresh, retrying, retry } = useRefreshActions(async () => {
 		lastSummaryRefresh.current = Date.now();
 		summaries.reload();
+		cloudSummaries.reload();
+		setRefreshToken((token) => token + 1);
 		await refreshAll();
-		setRefreshing(false);
-	};
+	});
 
 	if (!configured) {
 		return (
@@ -110,9 +211,10 @@ export default function PRsScreen() {
 	// platform puts a segmented control.
 	const listHeader = (
 		<>
-			{hostStates.length === 1 && !routeHostId ? <ProjectSwitcher /> : null}
+			{singleMachine && !routeHostId ? <ProjectSwitcher /> : null}
 			<PRFilterControl filter={filter} counts={counts} onChange={setFilter} />
-			{hostStates.length === 1 ? <StaleBanner error={!!error} onRetry={onRefresh} /> : <StaleBanner networkOnly />}
+			{/* Speaks for one machine only when every PR here is on it. */}
+			<FreshnessLine hostId={singleMachine ? hostStates[0].hostId : routeHostId ?? undefined} onRetry={retry} />
 		</>
 	);
 
@@ -127,26 +229,35 @@ export default function PRsScreen() {
 			    over the sheet taking every touch. */}
 			<SectionList
 				sections={sections}
-				keyExtractor={({ pr, session }) => `${session.hostId}:${session.projectId}#${pr.number}`}
+				keyExtractor={listKey}
+				onViewableItemsChanged={onViewableItemsChanged}
 				contentInsetAdjustmentBehavior="automatic"
 				contentContainerStyle={{ flexGrow: 1, paddingBottom: space.xxl }}
 				stickySectionHeadersEnabled={false}
 				ListHeaderComponent={listHeader}
 				refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} {...refreshControlColors(t)} />}
-				renderSectionHeader={({ section }) => <ListSectionHeader label={section.label} />}
-				renderItem={({ item: { pr, session } }) => {
+				renderSectionHeader={({ section }) => <PRSectionHeader label={section.label} count={section.data.length} />}
+				renderItem={({ item: { pr, session }, index, section }) => {
 					const config = configForHost(session.hostId);
 					return <PRCard
 						pr={pr}
 						session={session}
 						hostId={session.hostId}
-						hostName={hostStates.length > 1 ? session.hostName : undefined}
-						summary={config ? summaries.summaryFor(config, session.id, pr.number) : undefined}
+						hostName={environmentCount > 1 ? session.hostName : undefined}
+						showProject={showProject}
+						position={groupedRowPosition(index, section.data.length)}
+						now={now}
+						summary={isCloudHost(session.hostId) ? cloudSummaries.summaryFor(session.id, pr.number) : config ? summaries.summaryFor(config, session.id, pr.number) : undefined}
 						onLinkCopied={linkCopied}
 					/>;
 				}}
+				ListFooterComponent={archivedLoading && filtered.length > 0 ? (
+					<View style={styles.footer}>
+						<Spinner color={t.accent} accessibilityLabel="Loading past pull requests" />
+					</View>
+				) : null}
 				ListEmptyComponent={
-					loading && prs.length === 0 ? (
+					(loading && prs.length === 0) || (archivedLoading && filtered.length === 0) ? (
 						<View style={styles.center}>
 							<Spinner color={t.accent} accessibilityLabel="Loading pull requests" />
 						</View>
@@ -156,7 +267,7 @@ export default function PRsScreen() {
 								icon={failure.icon}
 								title={failure.title}
 								message={failure.hint}
-								action={<Button title="Retry" icon="refresh-cw" variant="secondary" onPress={onRefresh} />}
+								action={<Button title="Retry" icon="refresh-cw" variant="secondary" loading={retrying} onPress={retry} />}
 							/>
 						) : (
 							<EmptyState
@@ -182,4 +293,5 @@ const makeStyles = (t: Theme) =>
 		// first native view, and the bar found no scroll view to inset it for.
 		screen: { flex: 1 },
 		center: { flex: 1, alignItems: "center", justifyContent: "center" },
+		footer: { alignItems: "center", paddingVertical: space.lg },
 	});

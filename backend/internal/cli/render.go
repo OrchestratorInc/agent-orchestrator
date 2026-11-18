@@ -13,51 +13,9 @@ import (
 	"time"
 
 	"github.com/spf13/cobra"
+
+	"github.com/aoagents/agent-orchestrator/backend/internal/mcpserver"
 )
-
-const (
-	maxRenderFileBytes  = 1 << 20
-	defaultRenderHeight = 400
-	defaultRenderWidth  = 720
-)
-
-type renderAPIRequest struct {
-	HTML     string `json:"html"`
-	Title    string `json:"title"`
-	Height   int    `json:"height"`
-	Artifact bool   `json:"artifact,omitempty"`
-}
-
-type renderAPIResponse struct {
-	RenderID      string `json:"renderId"`
-	ActivityID    string `json:"activityId"`
-	Path          string `json:"path"`
-	ArtifactPath  string `json:"artifactPath"`
-	ArtifactError string `json:"artifactError"`
-}
-
-type renderCheckAPIRequest struct {
-	HTML  string `json:"html"`
-	Width int    `json:"width"`
-}
-
-type renderCheckAPIResponse struct {
-	Screenshot struct {
-		Data   string `json:"data"`
-		Width  int    `json:"width"`
-		Height int    `json:"height"`
-	} `json:"screenshot"`
-	ContentHeight   int `json:"contentHeight"`
-	ConsoleMessages []struct {
-		Level string `json:"level"`
-		Text  string `json:"text"`
-	} `json:"consoleMessages"`
-	Network string `json:"network"`
-}
-
-// renderCheckOfflineNote tells the agent why remote resources did not load
-// in a check that ran without network.
-const renderCheckOfflineNote = "The check ran without network access, as your sandbox has none. Remote resources did not load."
 
 func newRenderCommand(ctx *commandContext) *cobra.Command {
 	var title string
@@ -70,22 +28,22 @@ func newRenderCommand(ctx *commandContext) *cobra.Command {
 		Use:   "render <file.html>",
 		Short: "Show a self-contained HTML page inline in this chat session's thread",
 		Long: "Show a chart, table, diagram, or mockup inline in the current chat session's\n" +
-			"thread, above your final reply. Call it before that reply, and do not announce\n" +
-			"or restate the page in it.\n\n" +
-			"The file must be one self-contained HTML document (inline <style> and <script>,\n" +
-			"at most 1 MiB). Remote https:// resources such as a CDN chart library load\n" +
-			"as-is; relative URLs do not resolve. A local image given by absolute path\n" +
-			"(src=\"/abs/shot.png\", CSS url(/abs/bg.webp), or a JS string) is put into\n" +
-			"the page, up to 10 MiB each. Orchestrator stores its own copy, so write the\n" +
-			"file outside the repository.\n\n" +
-			"Style with the theme variables Orchestrator injects on :root, which follow\n" +
-			"light/dark live: --background --foreground --muted --muted-foreground --card\n" +
+			"thread, above your final reply. Run it before writing that reply, and let the\n" +
+			"reply add to the page rather than introduce or repeat it.\n\n" +
+			"The file is a single HTML page of at most 1 MiB with its CSS and JavaScript\n" +
+			"inline. It may load https:// resources such as a charting library from a CDN;\n" +
+			"relative URLs do not resolve. A picture from this computer, named by absolute\n" +
+			"path in an img src, a CSS url(), or a JavaScript string (/tmp/plot.png), is\n" +
+			"embedded in the page, up to 10 MiB each. Orchestrator keeps its own copy, so\n" +
+			"write the file outside the repository.\n\n" +
+			"Color the page with the theme variables on :root, which switch with light and\n" +
+			"dark mode: --background --foreground --muted --muted-foreground --card\n" +
 			"--card-foreground --popover --border --border-strong --primary\n" +
 			"--primary-foreground --accent --accent-foreground --success --warning\n" +
 			"--destructive --code --link --chart-1..--chart-6 --radius --font-sans --font-mono.\n" +
-			"Use a fluid width with no outer padding, card, or border; give charts fixed\n" +
-			"pixel heights; never size html/body with 100vh. Chat sessions only: in a\n" +
-			"terminal session use `ao preview` instead.\n\n" +
+			"Let the page fill the width without outer padding, a card, or a border; give\n" +
+			"charts a fixed pixel height; do not size html or body with 100vh. Chat sessions\n" +
+			"only: in a terminal session use `ao preview` instead.\n\n" +
 			"Run `ao render --check <file>` first: the Orchestrator desktop app returns a\n" +
 			"screenshot, the page's content height, and its console messages.",
 		Example: `  ao render --check "$TMPDIR/turns-by-day.html" --width 390
@@ -102,10 +60,10 @@ func newRenderCommand(ctx *commandContext) *cobra.Command {
 		},
 	}
 	cmd.Flags().StringVar(&title, "title", "", "short name for the page (required unless --check)")
-	cmd.Flags().IntVar(&height, "height", defaultRenderHeight, "first-paint frame height in CSS pixels, 80-2000; the frame then fits the page")
+	cmd.Flags().IntVar(&height, "height", mcpserver.DefaultRenderHeight, "first-paint frame height in CSS pixels, 80-2000; the frame then fits the page")
 	cmd.Flags().BoolVar(&check, "check", false, "screenshot the page in the Orchestrator desktop app instead of publishing it")
 	cmd.Flags().BoolVar(&artifact, "artifact", false, "also keep the page as a session artifact; only when the user asks to keep it")
-	cmd.Flags().IntVar(&width, "width", defaultRenderWidth, "with --check: viewport width in CSS pixels, 240-1600; use 390 for phones")
+	cmd.Flags().IntVar(&width, "width", mcpserver.DefaultRenderWidth, "with --check: viewport width in CSS pixels, 240-1600; use 390 for phones")
 	cmd.Flags().StringVar(&out, "out", "", "with --check: PNG path to write (default: a new file in the temp directory)")
 	return cmd
 }
@@ -123,8 +81,8 @@ func readRenderFile(file string) (string, error) {
 	if err != nil {
 		return "", usageError{fmt.Errorf("read %s: %w", file, err)}
 	}
-	if info.Size() > maxRenderFileBytes {
-		return "", usageError{fmt.Errorf("%s is %d bytes; ao render accepts at most %d", file, info.Size(), maxRenderFileBytes)}
+	if info.Size() > mcpserver.MaxRenderFileBytes {
+		return "", usageError{fmt.Errorf("%s is %d bytes; ao render accepts at most %d", file, info.Size(), mcpserver.MaxRenderFileBytes)}
 	}
 	html, err := os.ReadFile(file)
 	if err != nil {
@@ -146,10 +104,10 @@ func (c *commandContext) publishRender(cmd *cobra.Command, file, title string, h
 	if err != nil {
 		return err
 	}
-	if _, err := fmt.Fprintln(cmd.OutOrStdout(), renderShownText(resp.RenderID)); err != nil {
+	if _, err := fmt.Fprintln(cmd.OutOrStdout(), mcpserver.ShownText(resp.RenderID)); err != nil {
 		return err
 	}
-	line := renderArtifactLine(resp)
+	line := mcpserver.ArtifactLine(resp)
 	if line == "" {
 		return nil
 	}
@@ -163,46 +121,30 @@ func (c *commandContext) publishRender(cmd *cobra.Command, file, title string, h
 
 // postRender inlines a page's local images and shows it in the session's
 // thread. ao render and the html_render MCP tool both publish through it.
-func (c *commandContext) postRender(ctx context.Context, sessionID, html, title string, height int, artifact bool) (renderAPIResponse, error) {
-	var resp renderAPIResponse
-	html, missing, err := inlineLocalImages(html)
+func (c *commandContext) postRender(ctx context.Context, sessionID, html, title string, height int, artifact bool) (mcpserver.RenderResponse, error) {
+	var resp mcpserver.RenderResponse
+	html, missing, err := mcpserver.InlineLocalImages(html)
 	if err != nil {
 		return resp, usageError{err}
 	}
 	if len(missing) > 0 {
-		return resp, usageError{missingImagesError(missing)}
+		return resp, usageError{mcpserver.MissingImagesError(missing)}
 	}
 	path := "sessions/" + url.PathEscape(sessionID) + "/renders"
-	err = c.postJSON(ctx, path, renderAPIRequest{HTML: html, Title: title, Height: height, Artifact: artifact}, &resp)
+	err = c.postJSON(ctx, path, mcpserver.RenderRequest{HTML: html, Title: title, Height: height, Artifact: artifact}, &resp)
 	return resp, err
-}
-
-func renderShownText(renderID string) string {
-	return fmt.Sprintf("Shown above your reply (render %s). Do not describe the page; add only what it does not say.", renderID)
-}
-
-// renderArtifactLine reports where a publish kept the page as an artifact, or
-// why it did not; it is empty when no artifact was asked for.
-func renderArtifactLine(resp renderAPIResponse) string {
-	switch {
-	case resp.ArtifactPath != "":
-		return "saved as artifact: " + resp.ArtifactPath
-	case resp.ArtifactError != "":
-		return "warning: not saved as artifact: " + resp.ArtifactError
-	}
-	return ""
 }
 
 // postRenderCheck inlines a page's local images and has the desktop app
 // screenshot it. A check shows what an unreadable image does to the page
 // instead of refusing it, so missing lists those images.
-func (c *commandContext) postRenderCheck(ctx context.Context, sessionID, html string, width int) (resp renderCheckAPIResponse, missing []string, err error) {
-	html, missing, err = inlineLocalImages(html)
+func (c *commandContext) postRenderCheck(ctx context.Context, sessionID, html string, width int) (resp mcpserver.RenderCheckResponse, missing []string, err error) {
+	html, missing, err = mcpserver.InlineLocalImages(html)
 	if err != nil {
 		return resp, nil, usageError{err}
 	}
 	path := "sessions/" + url.PathEscape(sessionID) + "/renders/check"
-	err = c.postJSON(ctx, path, renderCheckAPIRequest{HTML: html, Width: width}, &resp)
+	err = c.postJSON(ctx, path, mcpserver.RenderCheckRequest{HTML: html, Width: width}, &resp)
 	return resp, missing, err
 }
 
@@ -234,7 +176,7 @@ func (c *commandContext) checkRender(cmd *cobra.Command, file string, width int,
 		return err
 	}
 	if resp.Network == "none" {
-		if _, err := fmt.Fprintln(w, renderCheckOfflineNote); err != nil {
+		if _, err := fmt.Fprintln(w, mcpserver.CheckOfflineNote); err != nil {
 			return err
 		}
 	}

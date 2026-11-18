@@ -32,7 +32,7 @@ function RecoveryDialogs({ origin }: { origin?: "create-project" }) {
 	const [open, setOpen] = useState(true);
 	return (
 		<>
-			{origin === "create-project" && <CreateProjectAgentSheet open={open} onOpenChange={setOpen} isCreating={false} kind="single_repo" path="/repo/new-project" onSubmit={async () => undefined} />}
+			{origin === "create-project" && <CreateProjectAgentSheet open={open} onOpenChange={setOpen} intakeVisible isCreating={false} kind="single_repo" path="/repo/new-project" onSubmit={async () => undefined} />}
 			<SettingsDialog />
 		</>
 	);

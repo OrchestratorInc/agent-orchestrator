@@ -4,6 +4,17 @@ import { GlobalToast } from "./GlobalToast";
 import { useUiStore } from "../stores/ui-store";
 
 describe("GlobalToast", () => {
+	it("keeps a persistent actionable notice until the user acts", () => {
+		vi.useFakeTimers();
+		const acknowledge = vi.fn();
+		useUiStore.getState().showGlobalToast("Paused", undefined, { durationMs: 0, action: { label: "Acknowledge", run: acknowledge } });
+		render(<GlobalToast />);
+		act(() => vi.advanceTimersByTime(60_000));
+		expect(screen.getByText("Paused")).toBeInTheDocument();
+		fireEvent.click(screen.getByRole("button", { name: "Acknowledge" }));
+		expect(acknowledge).toHaveBeenCalledOnce();
+		expect(screen.queryByText("Paused")).not.toBeInTheDocument();
+	});
 	afterEach(() => {
 		vi.useRealTimers();
 		useUiStore.getState().clearGlobalToast();

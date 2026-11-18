@@ -94,6 +94,10 @@ sql:
             go_type:
               import: "github.com/aoagents/agent-orchestrator/backend/internal/domain"
               type: "SessionID"
+          - column: "session_artifacts.session_id"
+            go_type:
+              import: "github.com/aoagents/agent-orchestrator/backend/internal/domain"
+              type: "SessionID"
           - column: "session_artifact_versions.session_id"
             go_type:
               import: "github.com/aoagents/agent-orchestrator/backend/internal/domain"
@@ -217,6 +221,14 @@ sql:
             go_type:
               import: "github.com/aoagents/agent-orchestrator/backend/internal/domain"
               type: "ReviewTriggerSource"
+          - column: "review_run.failure_reason"
+            go_type:
+              import: "github.com/aoagents/agent-orchestrator/backend/internal/domain"
+              type: "ReviewFailureReason"
+          - column: "review_run.cancelled_by"
+            go_type:
+              import: "github.com/aoagents/agent-orchestrator/backend/internal/domain"
+              type: "ReviewCancelledBy"
           - column: "app_settings.default_session_mode"
             go_type:
               import: "github.com/aoagents/agent-orchestrator/backend/internal/domain"
@@ -228,6 +240,10 @@ sql:
           - column: "app_settings.computer_use"
             go_type: "bool"
           - column: "app_settings.commit_attribution"
+            go_type: "bool"
+          - column: "app_settings.limit_history"
+            go_type: "bool"
+          - column: "app_settings.account_handoff"
             go_type: "bool"
           - column: "sessions.provision_state"
             go_type:

@@ -85,6 +85,20 @@ func newTelemetrySink(cfg config.Config, store *sqlite.Store, log *slog.Logger) 
 	return telemetryadapter.NewOnboardingSink(telemetryadapter.NewFanoutSink(local, denied), remote.Identity()), remote.Identity(), true
 }
 
+const writeLockHeldEvent = "ao.daemon.write_lock_held"
+
+func recordSlowWriteLocks(store *sqlite.Store, sink ports.EventSink) {
+	store.SetWriteLockObserver(func(caller string, held time.Duration) {
+		sink.Emit(context.Background(), ports.TelemetryEvent{
+			Name:       writeLockHeldEvent,
+			Source:     "daemon",
+			OccurredAt: time.Now().UTC(),
+			Level:      ports.TelemetryLevelWarn,
+			Payload:    map[string]any{"caller": caller, "duration_ms": held.Milliseconds()},
+		})
+	})
+}
+
 // Recording is independent of sink startup so a temporary remote setup
 // failure does not lose accepted local usage facts.
 func configureUsageRecording(cfg config.Config, store *sqlite.Store, identity ports.TelemetryIdentityStore) {

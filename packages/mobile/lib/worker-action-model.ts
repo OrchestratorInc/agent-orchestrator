@@ -30,6 +30,8 @@ export type WorkerActionState = {
 	/** The runtime is stopped but the session is alive; the agent can be resumed. */
 	stopped: boolean;
 	hasPr: boolean;
+	/** An Orchestrator Cloud session. */
+	cloud?: boolean;
 };
 
 /**
@@ -47,6 +49,7 @@ export function workerContextActions(state: WorkerActionState): WorkerAction[] {
 	actions.push(state.pinned ? { id: "unpin", title: "Unpin" } : { id: "pin", title: "Pin" });
 	actions.push({ id: "rename", title: "Rename" });
 
+	// A cloud worker's pull request has the same review page as a machine's.
 	if (state.hasPr) actions.push({ id: "openPr", title: "Review pull request" });
 
 	// The internal id predates Archive and stays for action routing. Still

@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"io"
 	"log/slog"
+	"maps"
 	"net/http"
 	"strings"
 	"sync/atomic"
@@ -659,6 +660,20 @@ func TestSanitizeRemotePayloadDropsUnlistedReviewKeys(t *testing.T) {
 	}
 }
 
+func TestSanitizeRemotePayloadKeepsWriteLockHolder(t *testing.T) {
+	got := sanitizeRemotePayload("ao.daemon.write_lock_held", map[string]any{
+		"caller":      "store.(*Store).DeleteTerminatedSession:933 | session.(*Service).DeleteExpired:1215",
+		"duration_ms": int64(110482),
+		"session_id":  "agent-orchestrator-1-374",
+	})
+	if got["caller"] != "store.(*Store).DeleteTerminatedSession:933 | session.(*Service).DeleteExpired:1215" || got["duration_ms"] != int64(110482) {
+		t.Fatalf("write lock fields were dropped: %#v", got)
+	}
+	if _, ok := got["session_id"]; ok {
+		t.Fatalf("session_id survived sanitization: %#v", got)
+	}
+}
+
 // Older renderer builds wrote per-build values to person profiles, and nothing
 // refreshed them, so a profile kept showing a months-old version. The one
 // identified update clears them on the wire; later events stay anonymous.
@@ -718,6 +733,37 @@ func TestPostHogSinkClearsStalePersonProperties(t *testing.T) {
 	}
 	if second["$process_person_profile"] != false {
 		t.Errorf("second event $process_person_profile = %#v, want false", second["$process_person_profile"])
+	}
+}
+
+func TestArtifactRegistrationPayloadsAreClosedVocabulary(t *testing.T) {
+	leaks := map[string]any{"path": "/Users/alice/report.html", "name": "report.html", "session_id": "mer-1"}
+	registered := map[string]any{"source": "artifacts_tab", "content_category": "html", "size_bucket": "s", "count": 2}
+	maps.Copy(registered, leaks)
+	got := sanitizeRemotePayload("ao.artifacts.registered", registered)
+	if len(got) != 4 || got["source"] != "artifacts_tab" || got["content_category"] != "html" || got["size_bucket"] != "s" || got["count"] != int64(2) {
+		t.Fatalf("registered payload = %#v", got)
+	}
+	failed := map[string]any{"source": "worker", "reason": "outside_dir"}
+	maps.Copy(failed, leaks)
+	got = sanitizeRemotePayload("ao.artifacts.register_failed", failed)
+	if len(got) != 2 || got["source"] != "worker" || got["reason"] != "outside_dir" {
+		t.Fatalf("register_failed payload = %#v", got)
+	}
+	for key, hostile := range map[string]any{
+		"source": "mer-1", "content_category": "/Users/alice/a.html", "size_bucket": "2048", "count": "/Users/alice/report.html",
+	} {
+		if got := sanitizeRemotePayload("ao.artifacts.registered", map[string]any{key: hostile}); len(got) != 0 {
+			t.Fatalf("accepted %s %#v: %#v", key, hostile, got)
+		}
+	}
+	for _, count := range []any{0, -1, 2.5} {
+		if got := sanitizeRemotePayload("ao.artifacts.registered", map[string]any{"count": count}); len(got) != 0 {
+			t.Fatalf("accepted count %#v: %#v", count, got)
+		}
+	}
+	if got := sanitizeRemotePayload("ao.artifacts.register_failed", map[string]any{"reason": "ARTIFACT_PATH_OUTSIDE_DIR: /Users/alice"}); len(got) != 0 {
+		t.Fatalf("accepted a raw error as reason: %#v", got)
 	}
 }
 

@@ -4,6 +4,7 @@ import { describe, expect, it } from "vitest";
 const screenSource = readFileSync(new URL("./ChatSessionScreen.tsx", import.meta.url), "utf8");
 const composerSource = readFileSync(new URL("./ChatComposer.tsx", import.meta.url), "utf8");
 const apiSource = readFileSync(new URL("./api.ts", import.meta.url), "utf8");
+const cloudScreenSource = readFileSync(new URL("../cloud/CloudSessionScreen.tsx", import.meta.url), "utf8");
 
 describe("active turn controls", () => {
 	it("remounts the composer when a same-ID session changes host", () => {
@@ -39,6 +40,14 @@ describe("active turn controls", () => {
 		expect(composerSource).toContain('accessibilityLabel={`Steer queued message: ${entry.message.text}`}');
 	});
 
+	// Orchestrator Cloud has no route to steer with or delete a queued turn: its
+	// queue showed both, and Steer hid a message that stayed queued.
+	it("offers a queued message's actions only where the host takes them", () => {
+		expect(composerSource).toContain("{canSteer && onPromoteQueuedTurn ? <Pressable");
+		expect(composerSource).toContain("{onCancelQueuedTurn ? <Pressable");
+		expect(cloudScreenSource).not.toMatch(/onPromoteQueuedTurn=|onCancelQueuedTurn=/);
+	});
+
 	it("keeps the queued row compact without a second labeled steer pill", () => {
 		expect(composerSource).not.toContain("queueSteerText");
 	});
@@ -67,7 +76,8 @@ describe("active turn controls", () => {
 		// The setup checklist reports a failed start in place, with Retry; the banner covers the rest.
 		expect(screenSource).toContain('startFailure={startupShown ? undefined : failedStart}');
 		// A starting session shows its checklist while the conversation loads, not a bare spinner.
-		expect(screenSource).toContain("conversation.loading && !conversation.snapshot && startupView && !startupView.failed");
+		expect(screenSource).toContain("const awaitingConversation = (conversation.loading && !conversation.snapshot) || holdArrivingSnapshot;");
+		expect(screenSource).toContain("if (awaitingConversation && startupView && !startupView.failed) {");
 		expect(screenSource).toContain("<SessionStartupStatus startup={startupView} />");
 		// While the checklist reports setup, the yellow "Starting the agent…" banner stands down.
 		expect(screenSource).toContain('!startFailure && !starting && (snapshot.controller.state === "recovering"');
@@ -120,11 +130,44 @@ describe("the composer and the keyboard", () => {
 	// In a long chat, or one still loading as it opened, focusing the field kept
 	// the JS thread busy for most of a second, and the keyboard came up over a
 	// composer still at the bottom: the padded root held it back.
-	it("rides the keyboard outside the padded root, by a transform", () => {
-		const root = screenSource.indexOf("</KeyboardAvoidingView>");
+	it("rides the keyboard outside the conversation's root, by a transform", () => {
+		const root = screenSource.indexOf("<View style={[styles.screen, chatKeyboard.floatingRootStyle]}>");
 		const follower = screenSource.indexOf("<KeyboardFollower lift={chatKeyboard.composerLift} style={styles.floatingComposer} onLayout={measureComposer}>");
+		expect(root).toBeGreaterThan(-1);
 		expect(follower).toBeGreaterThan(root);
 		expect(screenSource.indexOf("<ChatComposer")).toBeGreaterThan(follower);
+	});
+	// The root padded for the keyboard shrank the list, which then chased its end
+	// from JS a frame or more behind the keys: the text lagged, then jumped up.
+	it("lets the conversation make its own room for the keyboard, local and Cloud alike", () => {
+		for (const source of [screenSource, cloudScreenSource]) {
+			expect(source).not.toContain("KeyboardAvoidingView");
+			expect(source).toContain("keyboardOffset={chatKeyboard.listKeyboardOffset}");
+		}
+	});
+	// Padding that followed the pill opening (a measured height, then React)
+	// left it over the last line until the list jumped up after the keyboard.
+	it("pads the conversation for the composer fully open, local and Cloud alike", () => {
+		for (const source of [screenSource, cloudScreenSource]) {
+			expect(source).toContain("setComposerHeight(Math.round(height + composerDeficit.value - composerFieldGrowth.value))");
+			expect(source).toContain("openDeficit={composerDeficit}");
+			// Lines typed lift the conversation on the UI thread instead of through its padding.
+			expect(source).toContain("fieldGrowth={composerFieldGrowth}");
+			expect(source).toContain("composerGrowth={composerFieldGrowth}");
+		}
+	});
+	// Focus reaches JS late, so a pill opened by its own state opened after the keyboard had landed.
+	it("opens the pill with the keyboard, reading the shared values in each worklet", () => {
+		expect(composerSource).toContain("const ride = dockRiseOverride ?? keyboardProgress;");
+		expect(composerSource).toContain("return closingWithKeyboard ? ride : Math.max(open, ride);");
+		expect(composerSource.match(/shownOpenness\(openness\.value, keyboard\.progress\.value, closedByBlur\.value && focusedInput\.value === null && !heldOpen\.value\)/g)?.length).toBe(3);
+	});
+
+	// The spring waited for the blur to reach JS and closed after the keys had gone.
+	it("closes the pill with the keyboard when the field let go of it", () => {
+		const motion = readFileSync(new URL("./keyboardMotion.tsx", import.meta.url), "utf8");
+		expect(motion).toContain("closedByBlur.value = event.height === 0 && input.value === null;");
+		expect(composerSource).not.toContain("useKeyboardHandler(");
 	});
 });
 

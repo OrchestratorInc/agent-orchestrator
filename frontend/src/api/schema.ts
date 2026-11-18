@@ -73,6 +73,23 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/agents/{agent}/auth/operations/{operationId}/actions": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Send a fixed action to a recognized native login menu */
+        post: operations["actOnAgentUILogin"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/agents/{agent}/auth/operations/{operationId}/code": {
         parameters: {
             query?: never;
@@ -84,6 +101,57 @@ export interface paths {
         put?: never;
         /** Submit a one-time Claude sign-in code to the existing native login */
         post: operations["submitAgentUILoginCode"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/agents/{agent}/auth/providers": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** List the key-only providers in an agent's own provider catalog on this device */
+        get: operations["listAgentCatalogProviders"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/agents/{agent}/auth/providers/{provider}/models": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** List the model IDs an agent's own catalog offers for one provider */
+        get: operations["listAgentCatalogModels"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/agents/{agent}/auth/signed-in": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Apply a sign-in completed in an agent's own terminal login */
+        post: operations["recordAgentSignIn"];
         delete?: never;
         options?: never;
         head?: never;
@@ -704,6 +772,58 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/agents/provider-keys": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** List reviewed provider keys with display-safe saved state; values are never returned */
+        get: operations["listProviderKeys"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/agents/provider-keys/{name}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        /** Save a provider key for AO sessions and set whether it is published to the OS user environment */
+        put: operations["saveProviderKey"];
+        post?: never;
+        /** Remove a provider key from AO and from the OS user environment when AO published it */
+        delete: operations["removeProviderKey"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/agents/provider-keys/{name}/check": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Ask the provider whether it accepts a key and list the models it offers */
+        post: operations["checkProviderKey"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/agents/readiness": {
         parameters: {
             query?: never;
@@ -749,6 +869,23 @@ export interface paths {
         put?: never;
         /** Refresh the cached local agent adapter catalog */
         post: operations["refreshAgents"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/attachment-uploads": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Stream a file to disk for a later attachment to name by uploadId */
+        post: operations["uploadAttachment"];
         delete?: never;
         options?: never;
         head?: never;
@@ -1478,6 +1615,40 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/imports/github-availability": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Check whether a GitHub repository name is free to create for a project import */
+        get: operations["checkImportGitHubAvailability"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/imports/github-owners": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** List the GitHub accounts gh on this machine can create a project's repository under */
+        get: operations["listImportGitHubOwners"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/imports/prepare-git": {
         parameters: {
             query?: never;
@@ -1506,6 +1677,23 @@ export interface paths {
         put?: never;
         /** Validate a selected folder for project import onboarding */
         post: operations["validateImport"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/kept-artifacts": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** List the artifacts no session or project lists: those of sessions deleted with their artifacts kept, and of sessions in removed projects */
+        get: operations["listKeptArtifacts"];
+        put?: never;
+        post?: never;
         delete?: never;
         options?: never;
         head?: never;
@@ -1553,7 +1741,7 @@ export interface paths {
             path?: never;
             cookie?: never;
         };
-        /** List paired mobile devices with their live status */
+        /** List the devices that can reach this host, with their live status */
         get: operations["listMobileDevices"];
         put?: never;
         post?: never;
@@ -1563,7 +1751,7 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
-    "/api/v1/mobile/devices/{installId}": {
+    "/api/v1/mobile/devices/{id}": {
         parameters: {
             query?: never;
             header?: never;
@@ -1573,7 +1761,7 @@ export interface paths {
         get?: never;
         put?: never;
         post?: never;
-        /** Remove a paired device from the roster */
+        /** Remove a device: revoke its token and stop its notifications */
         delete: operations["removeMobileDevice"];
         options?: never;
         head?: never;
@@ -1665,6 +1853,23 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/mobile/pairing-code": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Make a one-time code a new device exchanges for its own token */
+        post: operations["createMobilePairingCode"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/mobile/regenerate": {
         parameters: {
             query?: never;
@@ -1674,7 +1879,7 @@ export interface paths {
         };
         get?: never;
         put?: never;
-        /** Rotate the Connect Mobile password, dropping any connected phone */
+        /** Revoke every device: rotate the pairing password, remove all device tokens and unlink the account */
         post: operations["regenerateMobile"];
         delete?: never;
         options?: never;
@@ -1693,6 +1898,23 @@ export interface paths {
         put?: never;
         /** Look for a connector again and start it, without rotating the password */
         post: operations["startMobileRemoteAccess"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/mobile/require-device-credentials": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Refuse or accept the pairing password on the remote listener */
+        post: operations["setMobileRequireDeviceCredentials"];
         delete?: never;
         options?: never;
         head?: never;
@@ -2064,6 +2286,57 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/prs/{id}/attachment-access": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Whether files can be attached to a pull request's comments, and where they would be stored */
+        get: operations["getPRAttachmentAccess"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/prs/{id}/comments": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Post a pull request conversation comment or review-thread reply */
+        post: operations["postPRComment"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/prs/{id}/details": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Read a tracked pull request's details from its provider when none are stored */
+        post: operations["loadPRDetails"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/prs/{id}/merge": {
         parameters: {
             query?: never;
@@ -2073,7 +2346,7 @@ export interface paths {
         };
         get?: never;
         put?: never;
-        /** Squash-merge a pull request */
+        /** Merge a pull request (squash, merge commit, or rebase) */
         post: operations["mergePR"];
         delete?: never;
         options?: never;
@@ -2092,6 +2365,58 @@ export interface paths {
         put?: never;
         /** Resolve review threads on a pull request */
         post: operations["resolveComments"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/prs/{id}/stack": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Read a pull request's stack, or the open pull request it could be stacked on */
+        get: operations["getPRStack"];
+        put?: never;
+        /** Stack a pull request on the open pull request it is based on */
+        post: operations["addPRToStack"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/prs/{id}/stack/merge": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Merge a pull request and the unmerged layers below it, all or nothing */
+        post: operations["mergePRStack"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/prs/{id}/state": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Close, reopen, mark ready, or convert a pull request to draft */
+        post: operations["changePRState"];
         delete?: never;
         options?: never;
         head?: never;
@@ -2158,8 +2483,25 @@ export interface paths {
         };
         get?: never;
         put?: never;
-        /** Issue a host-scoped account credential using the pairing password */
+        /** Issue a host-scoped account credential using the pairing password or a device token */
         post: operations["issueRemoteHostAccountToken"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/remote-host/devices": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Exchange a one-time pairing code, or the pairing password, for this device's own token */
+        post: operations["pairRemoteHostDevice"];
         delete?: never;
         options?: never;
         head?: never;
@@ -2320,6 +2662,57 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/search/index-status": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Report what the session search index covers */
+        get: operations["getSessionSearchIndexStatus"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/search/reindex": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Empty the session search index and rebuild it from scratch in the background */
+        post: operations["reindexSessionSearch"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/search/sessions": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Search past sessions by title, message text, tool output, and touched file paths */
+        get: operations["searchSessions"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/session-import": {
         parameters: {
             query?: never;
@@ -2474,6 +2867,23 @@ export interface paths {
         get: operations["getSessionArtifactFile"];
         put?: never;
         post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/sessions/{sessionId}/artifact-registrations": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Register files in the session's artifact directory as its deliverables */
+        post: operations["registerSessionArtifacts"];
         delete?: never;
         options?: never;
         head?: never;
@@ -3289,9 +3699,10 @@ export interface paths {
             path?: never;
             cookie?: never;
         };
-        get?: never;
+        /** List the worktree files rolling back to a turn would restore */
+        get: operations["previewSessionConversationRollback"];
         put?: never;
-        /** Discard a turn and everything after it from the agent's memory */
+        /** Discard a turn and everything after it from the agent's memory, optionally restoring its files */
         post: operations["rollbackSessionConversation"];
         delete?: never;
         options?: never;
@@ -3327,6 +3738,40 @@ export interface paths {
         put?: never;
         /** Exit the agent while preserving its AO session */
         post: operations["exitAgent"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/sessions/{sessionId}/fork": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Fork a session at a finished turn */
+        post: operations["forkSession"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/sessions/{sessionId}/fork-options": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Report whether a session can be forked */
+        get: operations["getSessionForkOptions"];
+        put?: never;
+        post?: never;
         delete?: never;
         options?: never;
         head?: never;
@@ -3418,6 +3863,58 @@ export interface paths {
         head?: never;
         /** Configure whether PR completion terminates the session */
         patch: operations["setSessionMergePolicy"];
+        trace?: never;
+    };
+    "/api/v1/sessions/{sessionId}/panes": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Read the split-pane layout the desktop window shows for a session */
+        get: operations["getSessionPanes"];
+        put?: never;
+        /** Ask the desktop window to split, unsplit or focus a session's tabs */
+        post: operations["commandSessionPanes"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/sessions/{sessionId}/panes/input": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Type into, or interrupt, one of the session's own terminal tabs */
+        post: operations["typeIntoSessionPane"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/sessions/{sessionId}/panes/output": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Read what one of the session's own terminal tabs shows */
+        get: operations["readSessionPaneOutput"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
         trace?: never;
     };
     "/api/v1/sessions/{sessionId}/pin": {
@@ -3940,6 +4437,23 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/sessions/{sessionId}/stop-turn": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Stop an active turn without ending the session */
+        post: operations["stopSessionTurn"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/sessions/{sessionId}/workspace/branches": {
         parameters: {
             query?: never;
@@ -4213,6 +4727,23 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/settings/account-handoff": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        /** Choose whether a usage-limited Chat session moves to another account and retries its prompt */
+        patch: operations["updateAccountHandoff"];
+        trace?: never;
+    };
     "/api/v1/settings/chat-hibernation": {
         parameters: {
             query?: never;
@@ -4366,6 +4897,23 @@ export interface paths {
         head?: never;
         /** Rename a standalone shell terminal tab */
         patch: operations["renameShellTerminal"];
+        trace?: never;
+    };
+    "/api/v1/shell-terminals/{handleId}/reopen": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Replace an ended shell terminal with a fresh shell in the same tab */
+        post: operations["reopenShellTerminal"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
         trace?: never;
     };
     "/api/v1/side-chats/launch/claim": {
@@ -4553,6 +5101,40 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/usage/limit-history": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        /** Turn keeping limit readings, and reading limits in the background, on or off */
+        put: operations["setUsageLimitHistory"];
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/usage/limit-windows": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Read each login's five-hour and weekly windows from the limit readings AO took */
+        get: operations["getUsageLimitWindows"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/usage/memory/pressure": {
         parameters: {
             query?: never;
@@ -4570,6 +5152,41 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/usage/prices": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Read the user's model prices and the catalog models a model can price as */
+        get: operations["getUsagePrices"];
+        /** Replace the user's model prices and reprice the usage they change */
+        put: operations["setUsagePrices"];
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/usage/report": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Read token and estimated cost usage over a window, by day or hour, for the usage page */
+        get: operations["getUsageReport"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/usage/sessions": {
         parameters: {
             query?: never;
@@ -4579,23 +5196,6 @@ export interface paths {
         };
         /** List compact token and estimated cost usage for session cards */
         get: operations["listCompactSessionUsage"];
-        put?: never;
-        post?: never;
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/api/v1/usage/sessions/{sessionId}": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        /** Get detailed token and estimated cost usage for one session */
-        get: operations["getSessionUsage"];
         put?: never;
         post?: never;
         delete?: never;
@@ -4644,6 +5244,9 @@ export interface components {
         ActivateConversationBranchResponse: {
             activeBranchId: string;
         };
+        AddPRToStackRequest: {
+            prUrl: string;
+        };
         AddProjectInput: {
             asWorkspace?: boolean;
             clonePreparationId?: string;
@@ -4679,6 +5282,7 @@ export interface components {
             sourceKind?: "environment" | "file" | "command" | "keychain";
         };
         AgentAccountLimitWindow: {
+            durationMinutes?: number;
             id: string;
             label: string;
             /** Format: date-time */
@@ -4703,10 +5307,15 @@ export interface components {
             id: string;
             limits?: components["schemas"]["AgentAccountLimits"];
             loggedIn: boolean;
+            orgId?: string;
+            orgName?: string;
             plan?: string;
             problem?: string;
             /** @enum {string} */
+            problemKind?: "slow" | "rate_limited" | "unavailable" | "cli_missing" | "other_login" | "other_org";
+            /** @enum {string} */
             provider: "claude" | "codex";
+            sameLoginAs?: string;
             signedIn: boolean;
         };
         AgentAccountUsageByModel: {
@@ -4851,6 +5460,11 @@ export interface components {
         AgentInstallerCatalogResponse: {
             agents: components["schemas"]["AgentInstallPlan"][];
         };
+        AgentLoginActionRequest: {
+            /** @enum {string} */
+            action: "previous" | "next" | "select" | "1" | "2" | "3" | "4" | "5" | "6" | "7" | "8" | "9";
+            option?: string;
+        };
         AgentLoginMethod: {
             id: string;
             label: string;
@@ -4865,8 +5479,13 @@ export interface components {
             id: string;
             loginUrl?: string;
             method: string;
+            nativeOptions?: string[];
+            /** @enum {string} */
+            nativePrompt?: "waiting" | "menu" | "terminal_required";
+            selectedOption?: string;
             /** @enum {string} */
             status: "running" | "succeeded" | "failed" | "cancelled" | "timed_out";
+            withdrawFailed?: boolean;
         };
         AgentModelInfo: {
             /** Format: int64 */
@@ -4923,6 +5542,7 @@ export interface components {
         };
         AgentReadinessSnapshot: {
             authentication: components["schemas"]["AgentAuthenticationObservation"];
+            canStopTurn?: boolean;
             /** @enum {string} */
             effectiveReadiness: "ready" | "not_ready" | "unknown";
             id: string;
@@ -5025,12 +5645,29 @@ export interface components {
             version: number;
         };
         AttachmentInput: {
-            data: string;
+            data?: string;
             mimeType?: string;
+            uploadId?: string;
+        };
+        AttachmentUploadResponse: {
+            /** Format: int64 */
+            bytes: number;
+            uploadId: string;
         };
         AttributionConfig: {
             disableCommitTrailer?: boolean;
             disablePRFooter?: boolean;
+        };
+        AutoSpawnPause: {
+            effort?: string;
+            errorCode: string;
+            failures: number;
+            harness: string;
+            kind?: string;
+            message: string;
+            model?: string;
+            /** Format: date-time */
+            pausedAt: string;
         };
         AutomationEnvelope: {
             automation: components["schemas"]["AutomationResponse"];
@@ -5243,9 +5880,62 @@ export interface components {
             ok: boolean;
             sessionId: string;
         };
+        CatalogProvider: {
+            env?: string;
+            id: string;
+            models: number;
+            name: string;
+        };
+        ChangePRStateRequest: {
+            /** @enum {string} */
+            action: "close" | "reopen" | "ready" | "draft";
+            prUrl: string;
+        };
+        ChangePRStateResponse: {
+            ok: boolean;
+            prNumber: number;
+            /** @enum {string} */
+            state: "open" | "draft" | "closed";
+            /** Format: date-time */
+            stateChangedAt: string;
+        };
         ChatAgentPermissionModes: {
             agent: string;
             modes: string[];
+        };
+        ChatExcerptRange: {
+            end: number;
+            /** @enum {string} */
+            offsetUnit: "utf-16";
+            start: number;
+        };
+        ChatExcerptSnapshot: {
+            badgeOnly?: boolean;
+            /** @enum {string} */
+            captureMode: "exact" | "block" | "legacy";
+            containsFlowchart?: boolean;
+            contextOmitted?: boolean;
+            diagramRange?: components["schemas"]["ChatExcerptRange"];
+            prefix?: string;
+            rawText: string;
+            /** @enum {string} */
+            referenceFormat?: "numbered-v1";
+            renderedRange?: components["schemas"]["ChatExcerptRange"];
+            sourceRange?: components["schemas"]["ChatExcerptRange"];
+            sourceTurnId?: string;
+            suffix?: string;
+            turn?: components["schemas"]["ChatExcerptTurnSnapshot"];
+            version: number;
+        };
+        ChatExcerptTurnMessage: {
+            /** @enum {string} */
+            role: "user" | "assistant";
+            text: string;
+        };
+        ChatExcerptTurnSnapshot: {
+            id: string;
+            messages: components["schemas"]["ChatExcerptTurnMessage"][];
+            truncated?: boolean;
         };
         ChatFileReferenceLine: {
             /** @enum {string} */
@@ -5265,6 +5955,9 @@ export interface components {
         };
         ChatPermissionModesResponse: {
             agents: components["schemas"]["ChatAgentPermissionModes"][];
+        };
+        CheckProviderKeyRequest: {
+            secret?: string;
         };
         ClaimPRRequest: {
             allowTakeover?: null | boolean;
@@ -5637,6 +6330,22 @@ export interface components {
             extensionVersion?: string;
             hostPath: string;
         };
+        ControllersConversationTurnArtifactResponse: {
+            path: string;
+            /** @enum {string} */
+            status: "added" | "modified";
+        };
+        ControllersConversationTurnArtifactsResponse: {
+            files: components["schemas"]["ControllersConversationTurnArtifactResponse"][];
+        };
+        ControllersForkSessionRequest: {
+            clientRequestId: string;
+            turnId?: string;
+        };
+        ControllersForkSessionResponse: {
+            displayName: string;
+            sessionId: string;
+        };
         ControllersKeepAwakeStatus: {
             active: boolean;
             enabled: boolean;
@@ -5647,9 +6356,138 @@ export interface components {
             lidSupported?: boolean;
             supported: boolean;
         };
+        ControllersKeptArtifactsView: {
+            artifactFiles: components["schemas"]["SessionArtifact"][];
+            /**
+             * Format: date-time
+             * @description When the session was deleted, or last updated.
+             */
+            at: string;
+            projectId?: string;
+            sessionDeleted: boolean;
+            sessionId: string;
+            title: string;
+        };
         ControllersKillSessionRequest: {
             callerSessionId?: string;
             deleteArtifacts?: boolean;
+        };
+        ControllersListKeptArtifactsResponse: {
+            sets: components["schemas"]["ControllersKeptArtifactsView"][];
+        };
+        ControllersPairDeviceRequest: {
+            /** @description Name shown in the host's device list. */
+            name?: string;
+            /** @description The device's platform, such as ios, android, darwin, win32 or linux. */
+            platform?: string;
+        };
+        ControllersPairDeviceResponse: {
+            /** @enum {string} */
+            credential: "pairing-code" | "password";
+            deviceId: string;
+            hostId: string;
+            token: string;
+        };
+        ControllersPairingCodeResponse: {
+            code: string;
+            /** Format: date-time */
+            expiresAt: string;
+        };
+        ControllersPaneBox: {
+            /**
+             * Format: double
+             * @description Height, 0 to 1.
+             */
+            height: number;
+            /** @description Key of the tab shown in this pane. */
+            key: string;
+            /**
+             * Format: double
+             * @description Width, 0 to 1.
+             */
+            width: number;
+            /**
+             * Format: double
+             * @description Left edge, 0 to 1.
+             */
+            x: number;
+            /**
+             * Format: double
+             * @description Top edge, 0 to 1.
+             */
+            y: number;
+        };
+        ControllersPaneCommandRequest: {
+            /**
+             * @description split shows tab beside another; remove takes a tab out of its group; ungroup dissolves a group; focus brings a tab on screen; close closes a terminal tab.
+             * @enum {string}
+             */
+            action: "split" | "remove" | "ungroup" | "focus" | "close";
+            /** @description For split: key of the tab to split beside. Defaults to the tab on screen. */
+            beside?: null | string;
+            /** @description For ungroup: group id. Defaults to the group on screen. */
+            group?: null | string;
+            /**
+             * @description For split: which side of beside the tab goes. Defaults to right.
+             * @enum {null|string}
+             */
+            side?: "left" | "right" | "top" | "bottom" | null;
+            /** @description Tab key. For split, also terminal (open a new shell terminal) or file:<workspace-relative path> (open the file). */
+            tab?: null | string;
+        };
+        ControllersPaneGroup: {
+            /** @description Key of the group's focused pane. */
+            focus: string;
+            /** @description Group id, for ungroup. */
+            id: string;
+            /** @description Every pane of the split with its position. */
+            panes: components["schemas"]["ControllersPaneBox"][];
+        };
+        ControllersPaneInputRequest: {
+            /** @description Close the terminal tab (its shell may already have exited). */
+            close?: boolean;
+            /** @description Press Enter after the text. Defaults to true. */
+            enter?: null | boolean;
+            /** @description Send Ctrl-C instead of text. */
+            interrupt?: boolean;
+            /** @description Key of one of this session's terminal tabs, from ao pane. */
+            tab: string;
+            /** @description Text to type. Sent as a command (followed by Enter) unless enter is false. */
+            text?: null | string;
+        };
+        ControllersPaneLayout: {
+            /** @description Whether split panes are on in the window (a Developer Mode preview). Commands are refused while off. */
+            enabled: boolean;
+            /** @description Every split group of the session. */
+            groups: components["schemas"]["ControllersPaneGroup"][];
+            /** @description Key of the tab on screen (the focused pane when a split is shown). */
+            selected: string;
+            /** @description Id of the group on screen, when a split is shown. */
+            shown?: null | string;
+            /** @description Every tab of the session. */
+            tabs: components["schemas"]["ControllersPaneTab"][];
+        };
+        ControllersPaneLayoutResponse: {
+            layout: components["schemas"]["ControllersPaneLayout"];
+            sessionId: string;
+        };
+        ControllersPaneOutputResponse: {
+            output: string;
+            sessionId: string;
+            tab: string;
+        };
+        ControllersPaneTab: {
+            /** @description Agent running in a terminal tab, when the window tracks it. */
+            agent?: null | string;
+            /** @description Stable tab key used by pane commands: session, a shell terminal's handle id, reviewer:<id>, reviewer-chat:<id> or file:<path>. */
+            key: string;
+            /**
+             * @description What the tab shows.
+             * @enum {string}
+             */
+            kind: "session" | "terminal" | "reviewer" | "file";
+            /** @description The tab's label. */
+            title: string;
         };
         ControllersRemoteHostAccountTokenResponse: {
             hostId: string;
@@ -5689,6 +6527,37 @@ export interface components {
             port: number;
             reason: string;
         };
+        ControllersSessionForkOptionsResponse: {
+            allowed: boolean;
+            anyTurn?: boolean;
+            forkedFrom?: components["schemas"]["ControllersSessionForkOrigin"];
+            forks?: components["schemas"]["ControllersSessionForkSummary"][];
+            refusal?: components["schemas"]["ControllersSessionForkRefusal"];
+            sourcePRs?: components["schemas"]["ControllersSessionForkSourcePR"][];
+            suggestedName?: string;
+        };
+        ControllersSessionForkOrigin: {
+            sessionId: string;
+            sourceExists: boolean;
+            textHandoff?: boolean;
+            title: string;
+            turnId?: string;
+        };
+        ControllersSessionForkRefusal: {
+            code: string;
+            message: string;
+        };
+        ControllersSessionForkSourcePR: {
+            closed: boolean;
+            merged: boolean;
+            number: number;
+            url: string;
+        };
+        ControllersSessionForkSummary: {
+            exists: boolean;
+            sessionId: string;
+            title: string;
+        };
         ControllersSessionView: {
             activity: components["schemas"]["DomainActivity"];
             artifactFiles?: components["schemas"]["SessionArtifact"][];
@@ -5703,7 +6572,7 @@ export interface components {
             createdAt: string;
             displayName?: string;
             /** @enum {string} */
-            displayStatus: "Working" | "Blocked" | "Exited" | "No signal" | "Interrupted" | "Awaiting PR" | "Fixing CI failures" | "Addressing comments" | "Needs review" | "Review scheduled" | "Reviewing" | "Review failed" | "Review pending" | "Draft" | "CI failing" | "Commented" | "Changes requested" | "Needs human review" | "Mergeable" | "Approved" | "Merged" | "Closed without merge" | "Terminated";
+            displayStatus: "Working" | "Blocked" | "Needs input" | "Exited" | "No signal" | "Interrupted" | "Idle" | "Fixing CI failures" | "Addressing comments" | "Review scheduled" | "Reviewing" | "Retrying review" | "Draft" | "Awaiting review" | "Review failed" | "Review cancelled" | "CI failing" | "Merge conflicts" | "Commented" | "Changes requested" | "Waiting on base PR" | "Mergeable" | "Approved" | "Merged" | "Closed without merge" | "Terminated";
             harness?: string;
             /** Format: date-time */
             hibernatedAt?: null | string;
@@ -5764,6 +6633,9 @@ export interface components {
         ControllersSetKeepAwakeRequest: {
             enabled: boolean;
             lidClosed?: null | boolean;
+        };
+        ControllersSetRequireDeviceCredentialsRequest: {
+            enabled: boolean;
         };
         ControllersSetSecurePairingRequest: {
             enabled: boolean;
@@ -5843,13 +6715,14 @@ export interface components {
             annotationId?: string;
             /** Format: int64 */
             annotationOrder?: number;
+            comment?: string;
             fileReference?: components["schemas"]["ConversationFileReferenceRequest"];
             mimeType?: string;
             name?: string;
+            snapshot?: components["schemas"]["ChatExcerptSnapshot"];
             sourceConversationId?: string;
             sourceMessageId?: string;
-            /** Format: int64 */
-            sourceRevision?: number;
+            sourceRevision?: null | number;
             text?: string;
             type: string;
             uri?: string;
@@ -5864,6 +6737,7 @@ export interface components {
             status: "added" | "modified" | "deleted" | "renamed";
         };
         ConversationExcerptReferenceRequest: {
+            comment?: string;
             conversationId: string;
             id?: string;
             messageId: string;
@@ -5871,6 +6745,7 @@ export interface components {
             order?: number;
             /** Format: int64 */
             revision: number;
+            snapshot?: components["schemas"]["ChatExcerptSnapshot"];
             text: string;
         };
         ConversationFileReferenceRequest: {
@@ -5887,6 +6762,8 @@ export interface components {
             order?: number;
             path: string;
             previousPath?: string;
+            /** @enum {string} */
+            referenceFormat?: "numbered-v1";
             scope?: string;
             sessionId: string;
             /** @enum {string} */
@@ -6080,11 +6957,12 @@ export interface components {
             truncated?: boolean;
         };
         ConversationTurnResponse: {
+            artifacts?: components["schemas"]["ControllersConversationTurnArtifactsResponse"];
             completedAt?: null | string;
             diff?: components["schemas"]["ConversationTurnDiffResponse"];
             errorMessage?: string;
             /** @enum {string} */
-            failureCode?: "provider_key_missing";
+            failureCode?: "provider_key_missing" | "auth_required";
             hasHumanPrompt?: boolean;
             hasRetryAttempt?: boolean;
             id: string;
@@ -6202,11 +7080,13 @@ export interface components {
             resolveError: string;
         };
         DelegateTaskRequest: {
+            accountId?: string;
             /** @enum {string} */
-            agent?: "claude-code" | "codex" | "aider" | "opencode" | "opencode-v2" | "grok" | "droid" | "amp" | "agy" | "crush" | "cursor" | "qwen" | "gemini" | "copilot" | "goose" | "auggie" | "continue" | "devin" | "cline" | "kimi" | "muse" | "kiro" | "kilocode" | "vibe" | "pi" | "kimchi" | "omp" | "fx" | "prime-agent" | "autohand" | "unreal-agent" | "codewhale" | "mimo-code" | "deepseek-harness" | "openhands" | "command-code" | "memcode" | "hermes" | "fake";
+            agent?: "claude-code" | "codex" | "aider" | "opencode" | "opencode-v2" | "grok" | "droid" | "amp" | "agy" | "crush" | "cursor" | "qwen" | "gemini" | "copilot" | "goose" | "auggie" | "continue" | "devin" | "cline" | "kimi" | "muse" | "kiro" | "kilocode" | "vibe" | "pi" | "kimchi" | "omp" | "fx" | "prime-agent" | "autohand" | "unreal-agent" | "codewhale" | "mimo-code" | "minimax-code" | "deepseek-harness" | "openhands" | "command-code" | "docker-agent" | "memcode" | "hermes" | "stakpak" | "open-interpreter" | "tau" | "fake";
             /** @enum {string} */
             approvalMode?: "default" | "accept-edits" | "auto" | "bypass-permissions";
             attachments?: components["schemas"]["AttachmentInput"][];
+            baseBranch?: string;
             branch?: string;
             brief: string;
             clientRequestId?: string;
@@ -6279,11 +7159,16 @@ export interface components {
             reviewId: string;
         };
         DomainSideReference: {
+            comment?: string;
             conversationId: string;
+            id?: string;
             messageId: string;
+            /** Format: int64 */
+            order?: number;
             /** Format: int64 */
             revision: number;
             selection: string;
+            snapshot?: components["schemas"]["ChatExcerptSnapshot"];
             sourceRole: string;
         };
         EditConversationMessageRequest: {
@@ -6354,6 +7239,10 @@ export interface components {
             name: string;
             /** @description Absolute path of the directory on the daemon host. */
             path: string;
+        };
+        GetPRStackResponse: {
+            parent?: components["schemas"]["PRStackParentResponse"];
+            stack?: components["schemas"]["PRStackResponse"];
         };
         GitHubRepo: {
             clone_url: string;
@@ -6438,7 +7327,20 @@ export interface components {
             root: components["schemas"]["RepoGitStatus"];
             warning?: string;
         };
+        ImporterGitHubAvailabilityResult: {
+            available: boolean;
+            message?: string;
+        };
+        ImporterGitHubOwner: {
+            avatarUrl: string;
+            login: string;
+        };
+        ImporterGitHubOwnersResult: {
+            owners: components["schemas"]["ImporterGitHubOwner"][];
+        };
         InitializeRepositoryInput: {
+            create?: boolean;
+            createId?: string;
             path: string;
         };
         InitializeRepositoryResult: {
@@ -6475,7 +7377,7 @@ export interface components {
              * @description Fixed install target this job ran (or is running) for.
              * @enum {string}
              */
-            target: "tmux" | "gh" | "claude" | "claude-code" | "codex" | "cursor" | "opencode" | "opencode-v2" | "aider" | "copilot" | "grok" | "kimi" | "pi" | "amp" | "auggie" | "droid" | "crush" | "cline" | "goose" | "qwen" | "gemini" | "continue" | "devin" | "kiro" | "kilocode" | "vibe" | "muse" | "agy" | "autohand" | "kimchi" | "prime-agent" | "omp" | "fx" | "unreal-agent" | "codewhale" | "mimo-code" | "deepseek-harness" | "openhands" | "command-code" | "memcode" | "hermes" | "cloudflared" | "cua-driver";
+            target: "tmux" | "gh" | "claude" | "claude-code" | "codex" | "cursor" | "opencode" | "opencode-v2" | "aider" | "copilot" | "grok" | "kimi" | "pi" | "amp" | "auggie" | "droid" | "crush" | "cline" | "goose" | "qwen" | "gemini" | "continue" | "devin" | "kiro" | "kilocode" | "vibe" | "muse" | "agy" | "autohand" | "kimchi" | "prime-agent" | "omp" | "fx" | "unreal-agent" | "codewhale" | "mimo-code" | "minimax-code" | "deepseek-harness" | "openhands" | "command-code" | "docker-agent" | "memcode" | "hermes" | "stakpak" | "open-interpreter" | "tau" | "cloudflared" | "cua-driver";
             /** Format: date-time */
             updatedAt?: null | string;
             /** @description While waiting_for_idle, the sessions the update still waits for and why. */
@@ -6524,6 +7426,7 @@ export interface components {
         };
         LinkPreviewResponse: {
             description?: string;
+            faviconDarkUrl?: string;
             faviconUrl?: string;
             imageUrl?: string;
             siteName?: string;
@@ -6554,6 +7457,12 @@ export interface components {
         ListAutomationsResponse: {
             automations: components["schemas"]["AutomationResponse"][];
             nextCursor?: string;
+        };
+        ListCatalogModelsResponse: {
+            models: string[];
+        };
+        ListCatalogProvidersResponse: {
+            providers: components["schemas"]["CatalogProvider"][];
         };
         ListCompactSessionUsageResponse: {
             sessions: components["schemas"]["CompactSessionUsageResponse"][];
@@ -6589,6 +7498,9 @@ export interface components {
         ListProjectsResponse: {
             projects: components["schemas"]["ProjectSummary"][];
         };
+        ListProviderKeysResponse: {
+            keys: components["schemas"]["ProviderKey"][];
+        };
         ListReportsResponse: {
             reports: components["schemas"]["ReportResponse"][];
         };
@@ -6615,7 +7527,11 @@ export interface components {
         ListSessionsResponse: {
             archived?: components["schemas"]["SessionArchiveSummary"];
             nextCursor?: string;
+            /** @enum {string} */
+            prState?: "open" | "draft" | "merged" | "closed";
             sessions: components["schemas"]["ControllersSessionView"][];
+            total?: null | number;
+            version?: string;
         };
         ListShellTerminalsResponse: {
             shellTerminals: components["schemas"]["ShellTerminalResponse"][];
@@ -6647,6 +7563,9 @@ export interface components {
             snapshot?: boolean;
             truncated: boolean;
         };
+        LoadPRDetailsRequest: {
+            prUrl: string;
+        };
         MarkAllNotificationsReadRequest: {
             /** @description Acknowledge exactly these notifications. Omit to acknowledge every unread notification; paginating clients should send the ids they actually rendered so later pages stay unread. */
             ids?: string[];
@@ -6674,7 +7593,10 @@ export interface components {
             pressureSource: "psi" | "available_pct" | "memorystatus";
         };
         MergePRRequest: {
+            allowNoChecks?: boolean;
             expectedHeadSha: string;
+            /** @enum {string} */
+            method?: "squash" | "merge" | "rebase";
             prUrl: string;
         };
         MergePRResponse: {
@@ -6686,19 +7608,43 @@ export interface components {
             /** Format: date-time */
             stateChangedAt: string;
         };
+        MergePRStackRequest: {
+            allowNoChecks?: boolean;
+            expectedHeads: components["schemas"]["PRStackHead"][];
+            /** @enum {string} */
+            method?: "squash" | "merge" | "rebase";
+            prUrl: string;
+        };
+        MergePRStackResponse: {
+            method: string;
+            numbers: number[];
+            ok: boolean;
+            prNumber: number;
+            /** Format: date-time */
+            stateChangedAt: string;
+            /** @enum {string} */
+            status: "merged" | "enqueued" | "pending";
+        };
         MobileDeviceResponse: {
             /** Format: date-time */
             createdAt: string;
             deviceName?: string;
+            /** @description What DELETE /api/v1/mobile/devices/{id} takes. */
+            id: string;
+            /** @description The phone's install id, or empty for a device that never registered for notifications. */
             installId: string;
+            /**
+             * @description device: holds its own token. password: a phone that still uses the pairing password, so removing it only stops its notifications. account: every device signed in to the linked account; they share one token.
+             * @enum {string}
+             */
+            kind: "device" | "password" | "account";
             /** Format: date-time */
             lastSeenAt: string;
-            /** @description True when the phone's app is open and polling. */
+            /** @description True when the device is connected, or the phone's app is open and polling. */
             live: boolean;
             /** @description True when this device has a push token registered. */
             notificationsEnabled: boolean;
-            /** @enum {string} */
-            platform?: "ios" | "android";
+            platform?: string;
             token?: string;
         };
         MobileDevicesResponse: {
@@ -6722,7 +7668,10 @@ export interface components {
             loopbackOnly: boolean;
             noPublicTunnel: boolean;
             password: string;
+            /** Format: date-time */
+            passwordLastUsedAt?: null | string;
             port: number;
+            requireDeviceCredentials: boolean;
             securePairing: components["schemas"]["ControllersSecurePairingStatus"];
             tailscaleHost: string;
             tunnel: components["schemas"]["MobileTunnelStatus"];
@@ -6792,6 +7741,17 @@ export interface components {
             projectId: string;
             projectName?: string;
         };
+        PRAttachmentAccessResponse: {
+            allowed: boolean;
+            location?: string;
+            /** @enum {string} */
+            reason?: "no_write_access" | "unsupported";
+        };
+        PRCommentAttachment: {
+            contentType: string;
+            data: string;
+            name: string;
+        };
         PRReviewState: {
             latestRun?: components["schemas"]["ReviewRun"];
             prNumber: number;
@@ -6801,6 +7761,48 @@ export interface components {
             status: "needs_review" | "running" | "up_to_date" | "changes_requested" | "ineligible";
             targetSha: string;
             title: string;
+        };
+        PRStackHead: {
+            headSha: string;
+            number: number;
+        };
+        PRStackLayerResponse: {
+            ci?: string;
+            headBranch: string;
+            headSha: string;
+            mergeability?: string;
+            noChecks?: boolean;
+            number: number;
+            reviewDecision?: string;
+            sessionId?: string;
+            /** @enum {string} */
+            state: "draft" | "open" | "merged" | "closed";
+            title: string;
+            url: string;
+        };
+        PRStackParentResponse: {
+            number: number;
+            url: string;
+        };
+        PRStackResponse: {
+            baseBranch: string;
+            layers: components["schemas"]["PRStackLayerResponse"][];
+            number: number;
+            open: boolean;
+            url: string;
+        };
+        PostPRCommentRequest: {
+            attachments?: components["schemas"]["PRCommentAttachment"][];
+            body: string;
+            prUrl: string;
+            threadId?: string;
+        };
+        PostPRCommentResponse: {
+            /** Format: date-time */
+            createdAt: string;
+            id: string;
+            ok: boolean;
+            url: string;
         };
         PrepareTaskResponse: {
             ok: boolean;
@@ -6883,6 +7885,7 @@ export interface components {
             project: components["schemas"]["Project"];
         };
         ProjectSummary: {
+            autoSpawnPauses?: components["schemas"]["AutoSpawnPause"][];
             folderMissing: boolean;
             id: string;
             /** @enum {string} */
@@ -6898,11 +7901,28 @@ export interface components {
             providerTurnId: string;
             sourceTurnId: string;
         };
+        ProviderKey: {
+            agents: string[];
+            checkable: boolean;
+            configured: boolean;
+            device: boolean;
+            deviceAvailable: boolean;
+            hint?: string;
+            label: string;
+            name: string;
+            withdrawFailed?: boolean;
+        };
+        ProviderKeyCheck: {
+            models?: string[];
+            /** @enum {string} */
+            status: "valid" | "invalid" | "unverified" | "unreachable";
+        };
         ProviderSwitchRequest: {
             /** @enum {string} */
             autoCompactWindow?: "200k" | "1m";
             effort?: string;
             fastMode?: boolean;
+            force?: boolean;
             idempotencyKey?: string;
             message?: components["schemas"]["SendConversationMessageRequest"];
             model?: string;
@@ -6912,8 +7932,13 @@ export interface components {
             ultracode?: boolean;
         };
         ProviderSwitchResponse: {
+            cancelledQueuedMessages?: number;
+            failedPendingApprovals?: boolean;
             message?: components["schemas"]["SendConversationMessageResponse"];
+            settingsUpdated?: boolean;
             status: string;
+            stoppedTurn?: boolean;
+            warnings?: string[];
         };
         PublishRenderRequest: {
             /** @description Also keep the page as a session artifact, a deliverable the user keeps. */
@@ -6951,6 +7976,21 @@ export interface components {
             pat: string;
             refreshToken?: string;
             refreshTokenExpiresIn?: number;
+        };
+        RecordAgentSignInResponse: {
+            releasedKey?: string;
+        };
+        RegisterArtifactsRequest: {
+            /** @description Files or bundle directories in the session's artifact directory: absolute paths, or paths relative to it. */
+            paths: string[];
+        };
+        RegisterArtifactsResponse: {
+            /** @description How many of the session's files are not registered. */
+            otherFiles: number;
+            /** @description The unregistered files at the root of the artifact directory. */
+            otherRootFiles: string[];
+            /** @description The requested paths, relative to the artifact directory. */
+            registered: string[];
         };
         RegisterPushDeviceRequest: {
             /** @description Human-friendly device label. */
@@ -7016,6 +8056,16 @@ export interface components {
             /** @enum {string} */
             level: "debug" | "log" | "warning" | "error";
             text: string;
+        };
+        ReopenShellTerminalRequest: {
+            /** @description Initial terminal columns, as for opening a shell terminal. */
+            cols?: number;
+            /** @description Also resume the agent that was running in this terminal: the same conversation when it is known, otherwise its conversation picker. Nothing the old shell ran is replayed. */
+            resumeAgent?: boolean;
+            /** @description Initial terminal rows. See cols. */
+            rows?: number;
+            /** @description Shell to launch, as for opening a shell terminal. */
+            shell?: string;
         };
         ReorderQueuedConversationTurnsRequest: {
             turnIds: string[];
@@ -7119,16 +8169,31 @@ export interface components {
             batchId: string;
             body: string;
             /** Format: date-time */
+            cancelRequestedAt?: null | string;
+            /** @enum {string} */
+            cancelledBy?: "user" | "worker_lifecycle";
+            /** Format: date-time */
             createdAt: string;
             /** Format: date-time */
             deliveredAt?: null | string;
+            /** Format: date-time */
+            endedAt?: null | string;
+            /** @enum {string} */
+            failureReason?: "preflight_failed" | "launch_failed" | "never_started" | "exited_during_launch" | "turn_ended_without_submit" | "process_exited" | "timed_out" | "daemon_restarted" | "cancel_unconfirmed";
+            /** Format: date-time */
+            firstActivityAt?: null | string;
             githubReviewId: string;
             harness: string;
             id: string;
+            /** Format: date-time */
+            launchingAt?: null | string;
             prUrl: string;
             reviewId: string;
             sessionId: string;
-            status: string;
+            /** Format: date-time */
+            startedAt?: null | string;
+            /** @enum {string} */
+            status: "queued" | "launching" | "running" | "cancelling" | "completed" | "failed" | "cancelled" | "superseded";
             targetSha: string;
             /** @enum {string} */
             triggerSource: "manual" | "agent" | "auto";
@@ -7143,14 +8208,35 @@ export interface components {
             agent?: string;
             agentConfig?: components["schemas"]["AgentConfig"];
         };
+        RollbackConversationRequest: {
+            planId?: string;
+            restoreFiles?: boolean;
+        };
         RollbackConversationResponse: {
             turnsDiscarded: number;
+        };
+        RollbackFileChange: {
+            /** @enum {string} */
+            change: "restored" | "reverted" | "removed";
+            path: string;
+        };
+        RollbackPreviewResponse: {
+            commitsSince: number;
+            files: components["schemas"]["RollbackFileChange"][];
+            filesRestorable: boolean;
+            planId?: string;
+            reason?: string;
+            totalFiles: number;
         };
         RollbackSessionResponse: {
             deleted?: boolean;
             killed?: boolean;
             ok: boolean;
             sessionId: string;
+        };
+        SaveProviderKeyRequest: {
+            device: boolean;
+            secret?: string;
         };
         SaveRenderArtifactRequest: {
             /** @description Name for the file. Characters a file system refuses are replaced. */
@@ -7210,13 +8296,18 @@ export interface components {
             total: number;
         };
         SessionArtifact: {
+            id?: string;
             inlineUrl?: string;
             /** @enum {string} */
             kind: "html" | "markdown" | "file";
             name: string;
             path: string;
             previewUrl?: string;
+            previousPaths?: string[];
             rawUrl?: string;
+            registered?: boolean;
+            /** @enum {string} */
+            shareAccess?: "restricted" | "anyone";
             shareUrl?: string;
             /** Format: int64 */
             size: number;
@@ -7224,7 +8315,13 @@ export interface components {
             updatedAt: string;
         };
         SessionBranchState: {
+            base?: string;
+            baseRef?: string;
+            behind: number;
+            branch?: string;
             commits: number;
+            conflicts: boolean;
+            head?: string;
             remoteBranch?: string;
             remoteHead?: string;
             unpushed: number;
@@ -7331,9 +8428,32 @@ export interface components {
         };
         SessionPRCISummary: {
             autoInjectCI: boolean;
+            checks: components["schemas"]["SessionPRCheck"][];
             failingChecks: components["schemas"]["SessionPRFailingCheck"][];
             /** @enum {string} */
             state: "unknown" | "pending" | "passing" | "failing";
+        };
+        SessionPRCheck: {
+            name: string;
+            /** @enum {string} */
+            status: "unknown" | "queued" | "in_progress" | "passed" | "failed" | "skipped" | "cancelled";
+            url?: string;
+        };
+        SessionPRComment: {
+            author: string;
+            body: string;
+            /** Format: date-time */
+            createdAt?: null | string;
+            id: string;
+            isBot: boolean;
+            url?: string;
+        };
+        SessionPRCommit: {
+            author?: string;
+            /** Format: date-time */
+            committedAt?: null | string;
+            headline: string;
+            sha: string;
         };
         SessionPRConflictFile: {
             path: string;
@@ -7348,6 +8468,7 @@ export interface components {
             /** @enum {string} */
             review: "none" | "approved" | "changes_requested" | "review_required";
             reviewComments: boolean;
+            stackParent?: number;
             /** @enum {string} */
             state: "draft" | "open" | "merged" | "closed";
             /** Format: date-time */
@@ -7360,6 +8481,10 @@ export interface components {
             /** @enum {string} */
             status: "failed" | "cancelled";
             url?: string;
+        };
+        SessionPRLabel: {
+            color?: string;
+            name: string;
         };
         SessionPRMergeabilitySummary: {
             conflictFiles?: components["schemas"]["SessionPRConflictFile"][];
@@ -7375,6 +8500,11 @@ export interface components {
             provider: "github" | "gitlab";
             repo: string;
             url: string;
+        };
+        SessionPRRequestedReviewer: {
+            avatarUrl?: string;
+            isTeam?: boolean;
+            login: string;
         };
         SessionPRReviewCommentLink: {
             autoInjectReview: boolean;
@@ -7412,11 +8542,19 @@ export interface components {
             ci: components["schemas"]["SessionPRCISummary"];
             /** Format: date-time */
             ciObservedAt?: string;
+            commitCount: number;
+            commits: components["schemas"]["SessionPRCommit"][];
+            conversation?: components["schemas"]["SessionPRComment"][];
             /** Format: date-time */
             createdAt?: null | string;
             deletions: number;
+            description?: string;
+            descriptionTruncated?: boolean;
+            /** Format: date-time */
+            detailsObservedAt?: null | string;
             headSha: string;
             htmlUrl?: string;
+            labels: components["schemas"]["SessionPRLabel"][];
             mergeability: components["schemas"]["SessionPRMergeabilitySummary"];
             number: number;
             /** Format: date-time */
@@ -7424,6 +8562,7 @@ export interface components {
             /** @enum {string} */
             provider: "github" | "gitlab";
             repo: string;
+            requestedReviewers: components["schemas"]["SessionPRRequestedReviewer"][];
             review: components["schemas"]["SessionPRReviewSummary"];
             /** Format: date-time */
             reviewObservedAt?: string;
@@ -7433,10 +8572,18 @@ export interface components {
             /** Format: date-time */
             stateChangedAt?: null | string;
             targetBranch: string;
+            threads?: components["schemas"]["SessionPRThread"][];
             title: string;
             /** Format: date-time */
             updatedAt: string;
             url: string;
+        };
+        SessionPRThread: {
+            comments: components["schemas"]["SessionPRComment"][];
+            id: string;
+            line?: number;
+            path?: string;
+            resolved: boolean;
         };
         SessionPRUnresolvedReviewer: {
             count: number;
@@ -7468,6 +8615,65 @@ export interface components {
         SessionResponse: {
             session: components["schemas"]["ControllersSessionView"];
         };
+        SessionSearchCoverage: {
+            /** Format: date-time */
+            backfilledAt?: string;
+            /** Format: int64 */
+            indexedDocs: number;
+            /** Format: int64 */
+            indexedSources: number;
+            /** Format: int64 */
+            pendingSources: number;
+            /** @enum {string} */
+            state: "ready" | "backfilling" | "unavailable";
+            /** Format: int64 */
+            unavailableSources: number;
+            unindexedHarnesses?: string[];
+            /** Format: int64 */
+            unsupportedSources: number;
+        };
+        SessionSearchHighlight: {
+            end: number;
+            start: number;
+        };
+        SessionSearchIndexStatusResponse: {
+            coverage: components["schemas"]["SessionSearchCoverage"];
+        };
+        SessionSearchResponse: {
+            coverage: components["schemas"]["SessionSearchCoverage"];
+            /** @enum {string} */
+            group: "session" | "message";
+            limit: number;
+            offset: number;
+            query: string;
+            results: components["schemas"]["SessionSearchResult"][];
+            /** @enum {string} */
+            sort: "relevance" | "recent";
+            total: number;
+        };
+        SessionSearchResult: {
+            /** Format: date-time */
+            createdAt: string;
+            harness: string;
+            highlights?: components["schemas"]["SessionSearchHighlight"][];
+            /** @enum {string} */
+            kind: "title" | "user" | "assistant" | "tool" | "command" | "path";
+            messageId?: string;
+            projectId: string;
+            projectName?: string;
+            /** Format: double */
+            rank: number;
+            resumeCommand?: string;
+            reviewId?: string;
+            /** Format: int64 */
+            seq: number;
+            sessionId: string;
+            sessionMatches?: number;
+            sessionName?: string;
+            sessionState?: string;
+            snippet: string;
+            title?: string;
+        };
         SessionStaleBinary: {
             /** Format: date-time */
             since: string;
@@ -7486,12 +8692,6 @@ export interface components {
             /** Format: date-time */
             startedAt: string;
             tool: string;
-        };
-        SessionUsageResponse: {
-            harnesses: components["schemas"]["UsageHarnessResponse"][];
-            incomplete: boolean;
-            sessionId: string;
-            totals: components["schemas"]["UsageTotalsResponse"];
         };
         SessionWait: {
             /** @enum {string} */
@@ -7644,6 +8844,8 @@ export interface components {
             enabled: null | boolean;
         };
         SettingsResponse: {
+            /** @description A Chat turn refused for a usage limit moves its session to another signed-in account of the same agent with room, and the prompt is retried there once (Settings, Agent accounts). */
+            accountHandoff: boolean;
             chatHarnesses: string[];
             chatHibernationEnabled: boolean;
             client: string;
@@ -7671,8 +8873,15 @@ export interface components {
         ShellTerminalResponse: {
             /** Format: date-time */
             createdAt: string;
+            /**
+             * Format: date-time
+             * @description When the shell's process was found gone. Present only for an ended shell, which can be reopened or closed but not attached.
+             */
+            endedAt?: null | string;
             handleId: string;
             projectId?: string;
+            /** @description For an ended shell, the coding agent that was running in it, which reopening with resumeAgent resumes. */
+            resumeHarness?: string;
             sessionId?: string;
             terminalTitle?: string;
             title: string;
@@ -7731,6 +8940,9 @@ export interface components {
             mainConversationId: string;
             manualLabel?: boolean;
             model?: string;
+            /** Format: date-time */
+            openingStartedAt?: null | string;
+            openingTurnId?: string;
             recreateRequired?: boolean;
             selectedText?: string;
             sessionId: string;
@@ -7817,8 +9029,11 @@ export interface components {
         SideRecoveryTurn: {
             content?: components["schemas"]["SideContent"][];
             dispatchAttempt?: number;
+            effort?: string;
+            model?: string;
             providerTurnId?: string;
             referenceContexts: string[];
+            settingsFrozen?: boolean;
             turn: components["schemas"]["SideTurn"];
         };
         SideSettingsRequest: {
@@ -7862,17 +9077,19 @@ export interface components {
             orchestrator: components["schemas"]["OrchestratorResponse"];
         };
         SpawnSessionRequest: {
+            accountId?: string;
             /** @enum {string} */
             approvalMode?: "default" | "accept-edits" | "auto" | "bypass-permissions";
             async?: boolean;
             attachments?: components["schemas"]["AttachmentInput"][];
+            baseBranch?: string;
             branch?: string;
             clientRequestId?: string;
             displayName?: string;
             displayNameExplicit?: boolean;
             effort?: string;
             /** @enum {string} */
-            harness?: "claude-code" | "codex" | "aider" | "opencode" | "opencode-v2" | "grok" | "droid" | "amp" | "agy" | "crush" | "cursor" | "qwen" | "gemini" | "copilot" | "goose" | "auggie" | "continue" | "devin" | "cline" | "kimi" | "muse" | "kiro" | "kilocode" | "vibe" | "pi" | "kimchi" | "omp" | "fx" | "prime-agent" | "autohand" | "unreal-agent" | "codewhale" | "mimo-code" | "deepseek-harness" | "openhands" | "command-code" | "memcode" | "hermes";
+            harness?: "claude-code" | "codex" | "aider" | "opencode" | "opencode-v2" | "grok" | "droid" | "amp" | "agy" | "crush" | "cursor" | "qwen" | "gemini" | "copilot" | "goose" | "auggie" | "continue" | "devin" | "cline" | "kimi" | "muse" | "kiro" | "kilocode" | "vibe" | "pi" | "kimchi" | "omp" | "fx" | "prime-agent" | "autohand" | "unreal-agent" | "codewhale" | "mimo-code" | "minimax-code" | "deepseek-harness" | "openhands" | "command-code" | "docker-agent" | "memcode" | "hermes" | "stakpak" | "open-interpreter" | "tau";
             issueId?: string;
             /** @enum {string} */
             kind?: "worker" | "orchestrator";
@@ -7928,7 +9145,10 @@ export interface components {
             operation?: "install" | "reinstall" | "update";
         };
         StartAgentUILoginRequest: {
+            device?: null | boolean;
             method: string;
+            model?: string;
+            provider?: string;
             secret?: string;
         };
         StartAwakeRequest: {
@@ -8139,6 +9359,9 @@ export interface components {
             deleted: boolean;
             token: string;
         };
+        UpdateAccountHandoffRequest: {
+            enabled: null | boolean;
+        };
         UpdateArtifactFileRequest: {
             /** @description The file's new UTF-8 text content. */
             content: string;
@@ -8199,11 +9422,6 @@ export interface components {
             expectedFileFingerprint: string;
             path: string;
         };
-        UsageHarnessResponse: {
-            harness: string;
-            models: components["schemas"]["UsageModelResponse"][];
-            totals: components["schemas"]["UsageTotalsResponse"];
-        };
         UsageHookMetadata: {
             /** @enum {string} */
             harness: "claude-code" | "codex";
@@ -8214,29 +9432,152 @@ export interface components {
             subagentTranscriptPath?: string;
             transcriptPath?: string;
         };
-        UsageModelResponse: {
-            modelId: string;
-            totals: components["schemas"]["UsageTotalsResponse"];
+        UsageLimitHistoryRequest: {
+            enabled: null | boolean;
         };
-        UsageTotalsResponse: {
-            /** @description Deprecated compatibility alias for cachedInputTokens. */
-            cacheReadTokens: null | number;
-            /** @description Input read from an existing provider cache. Cache hit percentage uses cachedInputTokens divided by inclusive inputTokens. */
-            cachedInputTokens: null | number;
-            estimatedCost: null | components["schemas"]["EstimatedCostResponse"];
-            /** @description Total input, including cached and uncached input. */
-            inputTokens: null | number;
-            /** @description Total output, including provider-specific subsets such as reasoning output. */
-            outputTokens: null | number;
-            /** @description Canonical input plus output. Null when either component is unknown. */
-            processedTokens: null | number;
-            /** @description Input not read from an existing provider cache. Includes cache writes. */
-            uncachedInputTokens: null | number;
+        UsageLimitHistoryResponse: {
+            enabled: boolean;
+        };
+        UsageLimitLogin: {
+            accountId: string;
+            email?: string;
+            plan?: string;
+            /** @enum {string} */
+            provider: "claude" | "codex";
+            windows: components["schemas"]["UsageLimitSpan"][];
+        };
+        UsageLimitPoint: {
+            /** Format: date-time */
+            at: string;
+            /** Format: double */
+            usedPercent: number;
+        };
+        UsageLimitSpan: {
+            durationMinutes?: number;
+            /** Format: date-time */
+            firstReadAt: string;
+            label: string;
+            /** Format: date-time */
+            lastReadAt: string;
+            /** Format: double */
+            peakUsedPercent: number;
+            points?: components["schemas"]["UsageLimitPoint"][];
+            readings: number;
+            /** Format: date-time */
+            resetsAt: string;
+            /** Format: date-time */
+            startsAt?: null | string;
+            /** @enum {string} */
+            state: "final" | "partial" | "open";
+            windowId: string;
+        };
+        UsageLimitWindowsResponse: {
+            /** Format: date-time */
+            firstReadingAt?: null | string;
+            logins: components["schemas"]["UsageLimitLogin"][];
+            /** Format: date-time */
+            since: string;
+            /** Format: date-time */
+            until: string;
+        };
+        UsagePriceOverride: {
+            /** @description Decimal USD per million cache-read tokens. Defaults to the input price. */
+            cacheReadUsdPerMillion?: string;
+            /** @description Decimal USD per million cache-write tokens. Defaults to the input price. */
+            cacheWriteUsdPerMillion?: string;
+            /** @description Decimal USD per million uncached input tokens. Set with output. */
+            inputUsdPerMillion?: string;
+            /** @description Model ID as usage rows store it. */
+            modelId: string;
+            /** @description Decimal USD per million output tokens. Set with input. */
+            outputUsdPerMillion?: string;
+            /** @description Catalog model to price as, provider/model, in place of rates. */
+            priceAs?: string;
+        };
+        UsagePricesRequest: {
+            overrides: components["schemas"]["UsagePriceOverride"][];
+        };
+        UsagePricesResponse: {
+            /** @description Catalog models a model can price as, provider/model. */
+            models: string[];
+            overrides: components["schemas"]["UsagePriceOverride"][];
+        };
+        UsageReportResponse: {
+            days: number;
+            /** @description Every bucket in the window, oldest first: 2006-01-02 by day, 2006-01-02T15:00 by hour. */
+            periods: string[];
+            /** @enum {string} */
+            resolution: "day" | "hour";
+            rows: components["schemas"]["UsageReportRowResponse"][];
+            sessions: components["schemas"]["UsageReportSessionResponse"][];
+            /** Format: date-time */
+            since: string;
+            timeZone: string;
+            /** Format: date-time */
+            until: string;
+        };
+        UsageReportRowResponse: {
+            /** Format: int64 */
+            cacheReadCostNanos: number;
+            /** Format: int64 */
+            cacheReadTokens: number;
+            /**
+             * Format: int64
+             * @description What cache reads saved against paying input rates for those tokens.
+             */
+            cacheSavingsNanos: number;
+            /** Format: int64 */
+            cacheWriteCostNanos: number;
+            /** Format: int64 */
+            cacheWriteTokens: number;
+            /** Format: int64 */
+            costNanos: number;
+            /** Format: int64 */
+            events: number;
+            harness: string;
+            /** Format: int64 */
+            inputCostNanos: number;
+            /**
+             * Format: int64
+             * @description Uncached input that was not written to the cache.
+             */
+            inputTokens: number;
+            model: string;
+            /** Format: int64 */
+            outputCostNanos: number;
+            /** Format: int64 */
+            outputTokens: number;
+            period: string;
+            /**
+             * Format: int64
+             * @description Part of costNanos above standard rates, from priority, fast or ultrafast processing.
+             */
+            premiumNanos: number;
+            /** Format: int64 */
+            pricedEvents: number;
+            /** @description standard, priority, fast, flex, ultrafast, or unknown. */
+            speed: string;
+        };
+        UsageReportSessionResponse: {
+            /** Format: int64 */
+            costNanos: number;
+            /** Format: int64 */
+            events: number;
+            harness: string;
+            /** Format: date-time */
+            lastUsedAt: string;
+            /** Format: int64 */
+            pricedEvents: number;
+            projectId?: string;
+            sessionId: string;
+            title: string;
+            /** Format: int64 */
+            tokens: number;
         };
         VerifyAgentAccountLoginResponse: {
             account?: components["schemas"]["AgentAccountResponse"];
             /** @enum {string} */
-            status: "waiting" | "complete" | "duplicate" | "mismatch";
+            status: "waiting" | "complete" | "duplicate" | "mismatch" | "not_subscription";
         };
         WorkspaceBranchResponse: {
             checkedOut: boolean;
@@ -8781,6 +10122,79 @@ export interface operations {
             };
         };
     };
+    actOnAgentUILogin: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Agent adapter identifier. */
+                agent: string;
+                operationId: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["AgentLoginActionRequest"];
+            };
+        };
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AgentLoginSnapshot"];
+                };
+            };
+            /** @description Bad Request */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Not Found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Conflict */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Not Implemented */
+            501: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Service Unavailable */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+        };
+    };
     submitAgentUILoginCode: {
         parameters: {
             query?: never;
@@ -8827,6 +10241,158 @@ export interface operations {
             };
             /** @description Conflict */
             409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Not Implemented */
+            501: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Service Unavailable */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+        };
+    };
+    listAgentCatalogProviders: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Agent adapter identifier. */
+                agent: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ListCatalogProvidersResponse"];
+                };
+            };
+            /** @description Bad Request */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Not Found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Not Implemented */
+            501: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+        };
+    };
+    listAgentCatalogModels: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Agent adapter identifier. */
+                agent: string;
+                /** @description Provider ID from the harness's catalog. */
+                provider: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ListCatalogModelsResponse"];
+                };
+            };
+            /** @description Bad Request */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Not Found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Not Implemented */
+            501: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+        };
+    };
+    recordAgentSignIn: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Agent adapter identifier. */
+                agent: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["RecordAgentSignInResponse"];
+                };
+            };
+            /** @description Bad Request */
+            400: {
                 headers: {
                     [name: string]: unknown;
                 };
@@ -10651,6 +12217,202 @@ export interface operations {
             };
         };
     };
+    listProviderKeys: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ListProviderKeysResponse"];
+                };
+            };
+            /** @description Not Implemented */
+            501: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Service Unavailable */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+        };
+    };
+    saveProviderKey: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Provider environment variable, such as ANTHROPIC_API_KEY. */
+                name: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["SaveProviderKeyRequest"];
+            };
+        };
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ProviderKey"];
+                };
+            };
+            /** @description Bad Request */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Not Implemented */
+            501: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Service Unavailable */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+        };
+    };
+    removeProviderKey: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Provider environment variable, such as ANTHROPIC_API_KEY. */
+                name: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ProviderKey"];
+                };
+            };
+            /** @description Bad Request */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Not Implemented */
+            501: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Service Unavailable */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+        };
+    };
+    checkProviderKey: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Provider environment variable, such as ANTHROPIC_API_KEY. */
+                name: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["CheckProviderKeyRequest"];
+            };
+        };
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ProviderKeyCheck"];
+                };
+            };
+            /** @description Bad Request */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Not Implemented */
+            501: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Service Unavailable */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+        };
+    };
     getAgentReadiness: {
         parameters: {
             query?: never;
@@ -10756,6 +12518,57 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["ListAgentsResponse"];
+                };
+            };
+            /** @description Internal Server Error */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Not Implemented */
+            501: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+        };
+    };
+    uploadAttachment: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/octet-stream": unknown;
+            };
+        };
+        responses: {
+            /** @description Created */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AttachmentUploadResponse"];
+                };
+            };
+            /** @description Bad Request */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
                 };
             };
             /** @description Internal Server Error */
@@ -13443,6 +15256,69 @@ export interface operations {
             };
         };
     };
+    checkImportGitHubAvailability: {
+        parameters: {
+            query?: {
+                /** @description GitHub user or organization the repository would be created under. */
+                owner?: string;
+                /** @description Repository name to check. */
+                name?: string;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ImporterGitHubAvailabilityResult"];
+                };
+            };
+            /** @description Not Implemented */
+            501: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+        };
+    };
+    listImportGitHubOwners: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ImporterGitHubOwnersResult"];
+                };
+            };
+            /** @description Not Implemented */
+            501: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+        };
+    };
     prepareImportGit: {
         parameters: {
             query?: never;
@@ -13509,6 +15385,44 @@ export interface operations {
             };
             /** @description Bad Request */
             400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Not Implemented */
+            501: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+        };
+    };
+    listKeptArtifacts: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ControllersListKeptArtifactsResponse"];
+                };
+            };
+            /** @description Internal Server Error */
+            500: {
                 headers: {
                     [name: string]: unknown;
                 };
@@ -13680,8 +15594,8 @@ export interface operations {
             query?: never;
             header?: never;
             path: {
-                /** @description The device's stable install id. */
-                installId: string;
+                /** @description The row's id from the device list. */
+                id: string;
             };
             cookie?: never;
         };
@@ -13917,6 +15831,53 @@ export interface operations {
             };
         };
     };
+    createMobilePairingCode: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ControllersPairingCodeResponse"];
+                };
+            };
+            /** @description Forbidden */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Conflict */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Internal Server Error */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+        };
+    };
     regenerateMobile: {
         parameters: {
             query?: never;
@@ -13971,6 +15932,57 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["MobileStatusResponse"];
+                };
+            };
+            /** @description Forbidden */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Internal Server Error */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+        };
+    };
+    setMobileRequireDeviceCredentials: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ControllersSetRequireDeviceCredentialsRequest"];
+            };
+        };
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["MobileStatusResponse"];
+                };
+            };
+            /** @description Bad Request */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
                 };
             };
             /** @description Forbidden */
@@ -15446,6 +17458,183 @@ export interface operations {
             };
         };
     };
+    getPRAttachmentAccess: {
+        parameters: {
+            query: {
+                /** @description The pull request's URL. */
+                prUrl: string;
+            };
+            header?: never;
+            path: {
+                /** @description PR number. */
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["PRAttachmentAccessResponse"];
+                };
+            };
+            /** @description Bad Request */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Not Found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+        };
+    };
+    postPRComment: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description PR number. */
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["PostPRCommentRequest"];
+            };
+        };
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["PostPRCommentResponse"];
+                };
+            };
+            /** @description Bad Request */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Forbidden */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Not Found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Unprocessable Entity */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Not Implemented */
+            501: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+        };
+    };
+    loadPRDetails: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description PR number. */
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["LoadPRDetailsRequest"];
+            };
+        };
+        responses: {
+            /** @description No Content */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Bad Request */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Not Found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Unprocessable Entity */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Not Implemented */
+            501: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+        };
+    };
     mergePR: {
         parameters: {
             query?: never;
@@ -15537,6 +17726,257 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["ResolveCommentsResponse"];
+                };
+            };
+            /** @description Not Found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Unprocessable Entity */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Not Implemented */
+            501: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+        };
+    };
+    getPRStack: {
+        parameters: {
+            query: {
+                /** @description The pull request's URL. */
+                prUrl: string;
+            };
+            header?: never;
+            path: {
+                /** @description PR number. */
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["GetPRStackResponse"];
+                };
+            };
+            /** @description Bad Request */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Not Found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Not Implemented */
+            501: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+        };
+    };
+    addPRToStack: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description PR number. */
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["AddPRToStackRequest"];
+            };
+        };
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["GetPRStackResponse"];
+                };
+            };
+            /** @description Bad Request */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Not Found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Unprocessable Entity */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Not Implemented */
+            501: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+        };
+    };
+    mergePRStack: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description PR number. */
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["MergePRStackRequest"];
+            };
+        };
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["MergePRStackResponse"];
+                };
+            };
+            /** @description Bad Request */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Not Found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Conflict */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Unprocessable Entity */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Not Implemented */
+            501: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+        };
+    };
+    changePRState: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description PR number. */
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ChangePRStateRequest"];
+            };
+        };
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ChangePRStateResponse"];
+                };
+            };
+            /** @description Bad Request */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
                 };
             };
             /** @description Not Found */
@@ -15719,6 +18159,75 @@ export interface operations {
             };
             /** @description Forbidden */
             403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+        };
+    };
+    pairRemoteHostDevice: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: {
+            content: {
+                "application/json": components["schemas"]["ControllersPairDeviceRequest"];
+            };
+        };
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ControllersPairDeviceResponse"];
+                };
+            };
+            /** @description Bad Request */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Unauthorized */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Forbidden */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Conflict */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Internal Server Error */
+            500: {
                 headers: {
                     [name: string]: unknown;
                 };
@@ -16378,6 +18887,179 @@ export interface operations {
             };
         };
     };
+    getSessionSearchIndexStatus: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SessionSearchIndexStatusResponse"];
+                };
+            };
+            /** @description Bad Request */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Internal Server Error */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Not Implemented */
+            501: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+        };
+    };
+    reindexSessionSearch: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Accepted */
+            202: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SessionSearchIndexStatusResponse"];
+                };
+            };
+            /** @description Bad Request */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Internal Server Error */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Not Implemented */
+            501: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Service Unavailable */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+        };
+    };
+    searchSessions: {
+        parameters: {
+            query?: {
+                /** @description Words to search for. Leave it out to browse by filters or sort=recent. Words may carry operators such as harness:, project:, status:, before:, after:, path:, !exclude, "exact phrase", 'exact, ^prefix. */
+                q?: string;
+                /** @description Restrict results to one project. Equivalent to project: in q. */
+                projectId?: string;
+                /** @description Restrict results to one agent harness, such as claude-code or codex. */
+                harness?: string;
+                /** @description Restrict to sessions that touched a path containing this text. */
+                path?: string;
+                /** @description Restrict to one session lifecycle state. */
+                status?: "killed" | "live" | "hibernated";
+                /** @description Earliest result time, as an RFC 3339 date or date-time. */
+                from?: string;
+                /** @description Latest result time, as an RFC 3339 date or date-time. */
+                to?: string;
+                /** @description Order by relevance (while typing) or recency (while browsing). Defaults to relevance, or to recent for a filter-only query. */
+                sort?: "relevance" | "recent";
+                /** @description One result per session at its best match, with sessionMatches counting the rest (session, the default), or one result per matching message (message). */
+                group?: "session" | "message";
+                /** @description Page size. Defaults to 20. */
+                limit?: number;
+                /** @description Page offset. */
+                offset?: number;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SessionSearchResponse"];
+                };
+            };
+            /** @description Bad Request */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Internal Server Error */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Not Implemented */
+            501: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+        };
+    };
     scanSessionImport: {
         parameters: {
             query?: never;
@@ -16484,6 +19166,8 @@ export interface operations {
                 limit?: number;
                 /** @description Opaque cursor returned by the previous page. Requires limit. */
                 cursor?: string;
+                /** @description Keep sessions owning a pull request in this state. The list is then ordered by when each session's newest such PR reached the state, and the response echoes prState and carries total. */
+                prState?: "open" | "draft" | "merged" | "closed";
             };
             header?: never;
             path?: never;
@@ -16617,6 +19301,8 @@ export interface operations {
             query?: {
                 /** @description When true, a worktree that is still on disk is cleaned up first, the way session cleanup does it; a dirty or locked worktree is never forced and refuses the delete. */
                 cleanup?: boolean;
+                /** @description When true, the session's artifact files are kept, view only, and listed by GET /api/v1/kept-artifacts until they are deleted one by one. Otherwise they are deleted with the session. */
+                keepArtifacts?: boolean;
             };
             header?: never;
             path: {
@@ -17190,6 +19876,78 @@ export interface operations {
             };
             /** @description Not Found */
             404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Internal Server Error */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Not Implemented */
+            501: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+        };
+    };
+    registerSessionArtifacts: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Session identifier, e.g. project-1. */
+                sessionId: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["RegisterArtifactsRequest"];
+            };
+        };
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["RegisterArtifactsResponse"];
+                };
+            };
+            /** @description Bad Request */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Not Found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Conflict */
+            409: {
                 headers: {
                     [name: string]: unknown;
                 };
@@ -20079,7 +22837,7 @@ export interface operations {
             };
         };
     };
-    rollbackSessionConversation: {
+    previewSessionConversationRollback: {
         parameters: {
             query?: never;
             header?: never;
@@ -20099,7 +22857,81 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
+                    "application/json": components["schemas"]["RollbackPreviewResponse"];
+                };
+            };
+            /** @description Not Found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Conflict */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Internal Server Error */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Not Implemented */
+            501: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+        };
+    };
+    rollbackSessionConversation: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Session identifier, e.g. project-1. */
+                sessionId: string;
+                /** @description AO conversation turn identifier, from the snapshot's turns array. */
+                turnId: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: {
+            content: {
+                "application/json": components["schemas"]["RollbackConversationRequest"];
+            };
+        };
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
                     "application/json": components["schemas"]["RollbackConversationResponse"];
+                };
+            };
+            /** @description Bad Request */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
                 };
             };
             /** @description Not Found */
@@ -20260,6 +23092,110 @@ export interface operations {
             };
             /** @description Not Implemented */
             501: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+        };
+    };
+    forkSession: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Session identifier, e.g. project-1. */
+                sessionId: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ControllersForkSessionRequest"];
+            };
+        };
+        responses: {
+            /** @description Created */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ControllersForkSessionResponse"];
+                };
+            };
+            /** @description Bad Request */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Not Found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Conflict */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Internal Server Error */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+        };
+    };
+    getSessionForkOptions: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Session identifier, e.g. project-1. */
+                sessionId: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ControllersSessionForkOptionsResponse"];
+                };
+            };
+            /** @description Not Found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Internal Server Error */
+            500: {
                 headers: {
                     [name: string]: unknown;
                 };
@@ -20692,6 +23628,355 @@ export interface operations {
             };
             /** @description Not Implemented */
             501: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+        };
+    };
+    getSessionPanes: {
+        parameters: {
+            query?: never;
+            header?: {
+                /** @description Opaque browser capability injected into the owning AO worker. */
+                "X-AO-Browser-Capability"?: string;
+            };
+            path: {
+                /** @description Session identifier, e.g. project-1. */
+                sessionId: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ControllersPaneLayoutResponse"];
+                };
+            };
+            /** @description Forbidden */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Conflict */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Internal Server Error */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Not Implemented */
+            501: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Service Unavailable */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+        };
+    };
+    commandSessionPanes: {
+        parameters: {
+            query?: never;
+            header?: {
+                /** @description Opaque browser capability injected into the owning AO worker. */
+                "X-AO-Browser-Capability"?: string;
+            };
+            path: {
+                /** @description Session identifier, e.g. project-1. */
+                sessionId: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ControllersPaneCommandRequest"];
+            };
+        };
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ControllersPaneLayoutResponse"];
+                };
+            };
+            /** @description Bad Request */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Forbidden */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Conflict */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Internal Server Error */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Not Implemented */
+            501: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Service Unavailable */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Gateway Timeout */
+            504: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+        };
+    };
+    typeIntoSessionPane: {
+        parameters: {
+            query?: never;
+            header?: {
+                /** @description Opaque browser capability injected into the owning AO worker. */
+                "X-AO-Browser-Capability"?: string;
+            };
+            path: {
+                /** @description Session identifier, e.g. project-1. */
+                sessionId: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ControllersPaneInputRequest"];
+            };
+        };
+        responses: {
+            /** @description No Content */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Bad Request */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Forbidden */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Not Found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Conflict */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Internal Server Error */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Not Implemented */
+            501: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Service Unavailable */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+        };
+    };
+    readSessionPaneOutput: {
+        parameters: {
+            query?: {
+                /** @description Key of one of this session's terminal tabs, from ao pane. */
+                tab?: string;
+                /** @description How many of the last lines to return. Defaults to 200. */
+                lines?: null | number;
+            };
+            header?: {
+                /** @description Opaque browser capability injected into the owning AO worker. */
+                "X-AO-Browser-Capability"?: string;
+            };
+            path: {
+                /** @description Session identifier, e.g. project-1. */
+                sessionId: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ControllersPaneOutputResponse"];
+                };
+            };
+            /** @description Bad Request */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Forbidden */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Not Found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Conflict */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Internal Server Error */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Not Implemented */
+            501: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Service Unavailable */
+            503: {
                 headers: {
                     [name: string]: unknown;
                 };
@@ -23032,6 +26317,63 @@ export interface operations {
             };
         };
     };
+    stopSessionTurn: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Session identifier, e.g. project-1. */
+                sessionId: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description No Content */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Not Found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Conflict */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Internal Server Error */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Not Implemented */
+            501: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+        };
+    };
     listSessionWorkspaceBranches: {
         parameters: {
             query?: never;
@@ -24147,6 +27489,57 @@ export interface operations {
             };
         };
     };
+    updateAccountHandoff: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["UpdateAccountHandoffRequest"];
+            };
+        };
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SettingsResponse"];
+                };
+            };
+            /** @description Bad Request */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Internal Server Error */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Not Implemented */
+            501: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+        };
+    };
     updateChatHibernation: {
         parameters: {
             query?: never;
@@ -24743,6 +28136,78 @@ export interface operations {
             };
         };
     };
+    reopenShellTerminal: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Shell terminal runtime handle identifier. */
+                handleId: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: {
+            content: {
+                "application/json": components["schemas"]["ReopenShellTerminalRequest"];
+            };
+        };
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ShellTerminalEnvelope"];
+                };
+            };
+            /** @description Bad Request */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Not Found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Conflict */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Internal Server Error */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Not Implemented */
+            501: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+        };
+    };
     claimSideChatLaunch: {
         parameters: {
             query?: never;
@@ -25199,6 +28664,107 @@ export interface operations {
             };
         };
     };
+    setUsageLimitHistory: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["UsageLimitHistoryRequest"];
+            };
+        };
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["UsageLimitHistoryResponse"];
+                };
+            };
+            /** @description Bad Request */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Internal Server Error */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Not Implemented */
+            501: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+        };
+    };
+    getUsageLimitWindows: {
+        parameters: {
+            query?: {
+                /** @description Days of readings to read; they are kept for 14. Defaults to 7. */
+                days?: number;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["UsageLimitWindowsResponse"];
+                };
+            };
+            /** @description Bad Request */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Internal Server Error */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Not Implemented */
+            501: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+        };
+    };
     getMemoryPressure: {
         parameters: {
             query?: never;
@@ -25215,6 +28781,151 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["MemoryPressureResponse"];
+                };
+            };
+            /** @description Internal Server Error */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Not Implemented */
+            501: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+        };
+    };
+    getUsagePrices: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["UsagePricesResponse"];
+                };
+            };
+            /** @description Internal Server Error */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Not Implemented */
+            501: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+        };
+    };
+    setUsagePrices: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["UsagePricesRequest"];
+            };
+        };
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["UsagePricesResponse"];
+                };
+            };
+            /** @description Bad Request */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Internal Server Error */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Not Implemented */
+            501: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+        };
+    };
+    getUsageReport: {
+        parameters: {
+            query?: {
+                /** @description Days to read, today included. 1 reads the last 24 hours by hour. Defaults to 7. */
+                days?: number;
+                /** @description Whole windows to step back: 1 with days=7 reads the week before this one. Defaults to 0. */
+                offset?: number;
+                /** @description IANA time zone that days and hours are bucketed in. Defaults to UTC. */
+                tz?: string;
+                /** @description Read one project only. */
+                projectId?: string;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["UsageReportResponse"];
+                };
+            };
+            /** @description Bad Request */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
                 };
             };
             /** @description Internal Server Error */
@@ -25256,56 +28967,6 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["ListCompactSessionUsageResponse"];
-                };
-            };
-            /** @description Internal Server Error */
-            500: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["APIError"];
-                };
-            };
-            /** @description Not Implemented */
-            501: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["APIError"];
-                };
-            };
-        };
-    };
-    getSessionUsage: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path: {
-                /** @description Session identifier, e.g. project-1. */
-                sessionId: string;
-            };
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description OK */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["SessionUsageResponse"];
-                };
-            };
-            /** @description Not Found */
-            404: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["APIError"];
                 };
             };
             /** @description Internal Server Error */

@@ -1,4 +1,4 @@
-import { lazy, Suspense, useEffect, useRef, useState } from "react";
+import { lazy, Suspense, useCallback, useEffect, useRef, useState } from "react";
 import { mediaCrossOrigin } from "../../lib/file-media";
 import { cn } from "../../lib/utils";
 import { Dialog, DialogContent, DialogTitle } from "../ui/dialog";
@@ -7,6 +7,7 @@ import { useChatImageSrc } from "./chat-image-source";
 import {
 	ATTACHMENT_TILE_OVERLAY_PILL_CLASS,
 	ATTACHMENT_TILE_PILL_CLASS,
+	ATTACHMENT_TILE_SOLID_FILL_CLASS,
 	attachmentTypeLabel,
 	type AttachmentPreviewKind,
 } from "./messageAttachments";
@@ -17,6 +18,37 @@ const PdfPreview = lazy(() => import("../PdfPreview").then((module) => ({ defaul
 
 /** Enough of a text file to fill a tile. */
 const TEXT_PREVIEW_BYTES = 2048;
+
+/**
+ * The first TEXT_PREVIEW_BYTES of a response, then the read is cancelled. A
+ * file just sent is read from its local copy, which takes no Range, and it may
+ * be gigabytes: reading it whole for a tile would stream all of it.
+ */
+async function readTextPrefix(response: Response): Promise<string> {
+	const reader = response.body?.getReader();
+	if (!reader) return (await response.text()).slice(0, TEXT_PREVIEW_BYTES);
+	const chunks: Uint8Array[] = [];
+	let size = 0;
+	try {
+		while (size < TEXT_PREVIEW_BYTES) {
+			const { done, value } = await reader.read();
+			if (done) break;
+			chunks.push(value);
+			size += value.byteLength;
+		}
+	} finally {
+		void reader.cancel().catch(() => undefined);
+	}
+	const bytes = new Uint8Array(Math.min(size, TEXT_PREVIEW_BYTES));
+	let offset = 0;
+	for (const chunk of chunks) {
+		if (offset >= bytes.length) break;
+		const part = chunk.subarray(0, bytes.length - offset);
+		bytes.set(part, offset);
+		offset += part.length;
+	}
+	return new TextDecoder().decode(bytes);
+}
 const PREVIEW_CLASS = "pointer-events-none absolute inset-0 flex flex-col overflow-hidden";
 
 /**
@@ -24,13 +56,27 @@ const PREVIEW_CLASS = "pointer-events-none absolute inset-0 flex flex-col overfl
  * the start of a text file, with its type as a chip. It loads only near the
  * viewport, and the name card under it shows until it paints or if it fails.
  */
-export function AttachmentFilePreview({ kind, url, name }: { kind: AttachmentPreviewKind; url: string; name: string }) {
+export function AttachmentFilePreview({ kind, url, name, onError: onLoadError }: {
+	kind: AttachmentPreviewKind;
+	url: string;
+	name: string;
+	/** Told when `url` fails, so the caller can offer another source in its place. */
+	onError?: () => void;
+}) {
 	const src = useChatImageSrc(url);
 	const sentinel = useRef<HTMLSpanElement>(null);
 	const [near, setNear] = useState(false);
-	const [failed, setFailed] = useState(false);
+	// The failed URL rather than a flag: a replacement source gets its own attempt.
+	const [failedSrc, setFailedSrc] = useState<string>();
+	const failed = src !== undefined && src === failedSrc;
 	const [open, setOpen] = useState(false);
 	const [text, setText] = useState<string>();
+	const onLoadErrorRef = useRef(onLoadError);
+	onLoadErrorRef.current = onLoadError;
+	const fail = useCallback((failedUrl: string) => {
+		setFailedSrc(failedUrl);
+		onLoadErrorRef.current?.();
+	}, []);
 
 	useEffect(() => {
 		const element = sentinel.current;
@@ -53,18 +99,20 @@ export function AttachmentFilePreview({ kind, url, name }: { kind: AttachmentPre
 			signal: controller.signal,
 			headers: local ? undefined : { Range: `bytes=0-${TEXT_PREVIEW_BYTES - 1}` },
 		})
-			.then(async (response) => {
+			.then((response) => {
 				if (!response.ok) throw new Error(`Preview failed: ${response.status}`);
-				return local ? (await response.blob()).slice(0, TEXT_PREVIEW_BYTES).text() : response.text();
+				return readTextPrefix(response);
 			})
 			.then(setText)
 			.catch(() => {
-				if (!controller.signal.aborted) setFailed(true);
+				if (!controller.signal.aborted) fail(src);
 			});
 		return () => controller.abort();
-	}, [near, kind, src]);
+	}, [near, kind, src, fail]);
 
-	const onError = () => setFailed(true);
+	const onError = () => {
+		if (src) fail(src);
+	};
 	const type = attachmentTypeLabel(name);
 	const preview = !near || failed || !src
 		? null
@@ -73,7 +121,7 @@ export function AttachmentFilePreview({ kind, url, name }: { kind: AttachmentPre
 			: kind === "pdf"
 				? <PdfPreview cover onError={onError} path={name} src={src} />
 				: text
-					? <pre className="m-0 size-full overflow-hidden whitespace-pre-wrap break-words bg-background p-2 font-mono text-micro leading-tight text-foreground">{text}</pre>
+					? <pre className={cn("m-0 size-full overflow-hidden whitespace-pre-wrap break-words p-2 font-mono text-micro leading-tight text-foreground", ATTACHMENT_TILE_SOLID_FILL_CLASS)}>{text}</pre>
 					: null;
 
 	return (

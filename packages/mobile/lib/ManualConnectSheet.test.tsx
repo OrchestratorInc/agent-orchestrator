@@ -9,6 +9,7 @@ const fixtures = vi.hoisted(() => ({
 	ping: vi.fn(async () => ({})),
 	probeIdentity: vi.fn(async () => "host-new"),
 	probeEndpoint: vi.fn(async () => ({ hostId: "host-1" })),
+	pair: vi.fn(async (): Promise<import("./deviceToken").PairDeviceResult> => ({ kind: "unsupported" })),
 	saveConfig: vi.fn(async () => {}),
 	saveHost: vi.fn(async () => {}),
 	setActiveHost: vi.fn(async () => {}),
@@ -55,6 +56,7 @@ vi.mock("./config", () => ({
 }));
 vi.mock("./hosts", () => ({ saveHost: fixtures.saveHost, setActiveHost: fixtures.setActiveHost, renameHost: fixtures.renameHost }));
 vi.mock("./connectRuntime", () => ({ probeEndpoint: fixtures.probeEndpoint, probeIdentity: fixtures.probeIdentity }));
+vi.mock("./deviceTokenRuntime", () => ({ pairThisDevice: fixtures.pair }));
 vi.mock("./localNetworkStore", () => ({ setLocalNetworkConfirmed: vi.fn(async () => {}) }));
 vi.mock("./telemetry/runtime", () => ({ mobileTelemetry: () => null }));
 vi.mock("./haptics", () => ({ haptics: fixtures.haptics }));
@@ -130,10 +132,60 @@ function connectionFooter(): { drawn: boolean; modifiers: Modifier[] } {
 describe("ManualConnectSheet on iOS", () => {
 	it("labels every field for VoiceOver and hides the password", () => {
 		render();
-		for (const [testID, label] of [["manual-connect-name", "Name"], ["manual-connect-host", "Host"], ["manual-connect-port", "Port"], ["manual-connect-password", "Password"], ["manual-connect-tls", "Use TLS"]]) {
+		for (const [testID, label] of [["manual-connect-name", "Name"], ["manual-connect-host", "Host"], ["manual-connect-port", "Port"], ["manual-connect-password", "Password"]]) {
 			expect(hasModifier(field(testID), "accessibilityLabel", label)).toBe(true);
 		}
 		expect(field("manual-connect-password").type).toBe("SecureField");
+		// The address decides TLS; there is nothing to switch.
+		expect(renderer!.root.findAll((node) => node.props.testID === "manual-connect-tls" || node.props.label === "Use TLS")).toEqual([]);
+		expect(field("manual-connect-port").props.text.value).toBe("");
+	});
+
+	it("connects to a typed tunnel over TLS on 443 without being told either", async () => {
+		render();
+		await type("manual-connect-name", "Office PC");
+		await type("manual-connect-host", "h-0123456789abcdef0123.useao.dev");
+		await type("manual-connect-password", "pw");
+		await act(async () => confirm().props.onPress());
+		expect(fixtures.probeIdentity).toHaveBeenCalledWith(expect.objectContaining({ host: "h-0123456789abcdef0123.useao.dev", httpPort: "443", secure: true }));
+		expect(fixtures.ping).toHaveBeenCalledWith(expect.objectContaining({ host: "h-0123456789abcdef0123.useao.dev", httpPort: "443", secure: true }));
+		expect(fixtures.saveHost).toHaveBeenCalledWith(expect.objectContaining({
+			endpoints: [{ kind: "tunnel", host: "h-0123456789abcdef0123.useao.dev", port: 443, secure: true }],
+		}));
+	});
+
+	// Plain HTTP to a public name would hand the password to whoever blocked TLS.
+	it("sends a custom domain's credential over TLS only, never plain HTTP", async () => {
+		render();
+		await type("manual-connect-name", "Office PC");
+		await type("manual-connect-host", "nas.example.com");
+		await type("manual-connect-port", "8080");
+		await type("manual-connect-password", "pw");
+		await act(async () => confirm().props.onPress());
+		for (const mock of [fixtures.probeIdentity, fixtures.ping]) {
+			expect(mock).toHaveBeenCalledOnce();
+			expect(mock).toHaveBeenCalledWith(expect.objectContaining({ host: "nas.example.com", httpPort: "8080", secure: true }));
+		}
+	});
+
+	it("says how to reach a Tailscale name on the Connect Mobile port when HTTPS does not answer", async () => {
+		fixtures.ping.mockRejectedValueOnce(new TypeError("Network request failed"));
+		render();
+		await type("manual-connect-name", "Office PC");
+		await type("manual-connect-host", "my-pc.tail1234.ts.net");
+		await type("manual-connect-port", "3011");
+		await type("manual-connect-password", "pw");
+		await act(async () => confirm().props.onPress());
+		expect(fixtures.announce).toHaveBeenCalledWith(expect.stringContaining("enter https://my-pc.tail1234.ts.net in Host and leave Port empty."), { queue: true });
+	});
+
+	it("uses plain HTTP on the Connect Mobile port for a private address left without a port", async () => {
+		render();
+		await type("manual-connect-name", "Office PC");
+		await type("manual-connect-host", "192.168.1.30");
+		await type("manual-connect-password", "pw");
+		await act(async () => confirm().props.onPress());
+		expect(fixtures.ping).toHaveBeenCalledWith(expect.objectContaining({ host: "192.168.1.30", httpPort: "3011", secure: false }));
 	});
 
 	it("connects from the bar once the form is complete", async () => {
@@ -148,6 +200,25 @@ describe("ManualConnectSheet on iOS", () => {
 		expect(fixtures.ping).toHaveBeenCalledWith(expect.objectContaining({ host: "192.168.1.30", httpPort: "3011", password: "pw" }));
 		expect(fixtures.saveHost).toHaveBeenCalledWith(expect.objectContaining({ id: "host-new", name: "Office PC", token: "pw" }));
 		expect(onConnected).toHaveBeenCalledOnce();
+	});
+
+	it.each([
+		["a one-time code", "pairing-code" as const, undefined],
+		["the pairing password", "password" as const, "typed"],
+	])("swaps %s for this phone's own token before saving", async (_name, credential, fallbackToken) => {
+		const token = "aod_" + "a".repeat(64);
+		fixtures.pair.mockResolvedValueOnce({ kind: "paired", token, credential });
+		render();
+		await type("manual-connect-name", "Office PC");
+		await type("manual-connect-host", "192.168.1.30");
+		await type("manual-connect-password", "typed");
+		await act(async () => confirm().props.onPress());
+		expect(fixtures.pair).toHaveBeenCalledWith(expect.objectContaining({ host: "192.168.1.30", password: "typed", hostId: "host-new" }), { fresh: true });
+		expect(fixtures.ping).toHaveBeenCalledWith(expect.objectContaining({ password: token }));
+		expect(fixtures.saveConfig).toHaveBeenCalledWith(expect.objectContaining({ password: token }));
+		const saved = (fixtures.saveHost.mock.calls as unknown as [Host][]).at(-1)![0];
+		expect(saved.token).toBe(token);
+		expect(saved.fallbackToken).toBe(fallbackToken);
 	});
 
 	// The route returns from onConnected early when its sheet has lost focus.
@@ -175,9 +246,9 @@ describe("ManualConnectSheet on iOS", () => {
 		await type("manual-connect-password", "wrong");
 		await act(async () => confirm().props.onPress());
 		const connection = renderer!.root.findAllByType("Section" as never)[1];
-		expect(connection.props.footer.props).toMatchObject({ error: true, children: "That password was rejected. Check it and try again." });
+		expect(connection.props.footer.props).toMatchObject({ error: true, children: "That code or password was rejected. Get a new code and try again." });
 		// A footer isn't read out as it appears, so VoiceOver is told.
-		expect(fixtures.announce).toHaveBeenCalledWith("That password was rejected. Check it and try again.", { queue: true });
+		expect(fixtures.announce).toHaveBeenCalledWith("That code or password was rejected. Get a new code and try again.", { queue: true });
 		await type("manual-connect-password", "right");
 		// Cleared but still mounted (see the footer test below).
 		expect(renderer!.root.findAllByType("Section" as never)[1].props.footer.props).toMatchObject({ error: false, children: undefined });
@@ -269,6 +340,12 @@ describe("ManualConnectSheet on Android", () => {
 		return { onConnected };
 	}
 
+	it("has no TLS switch: the address decides it", async () => {
+		await renderAndroid();
+		expect(renderer!.root.findAll((node) => hasModifier(node, "testID", "manual-connect-tls") || node.props.label === "Use TLS")).toEqual([]);
+		expect(field("manual-connect-host")).toBeDefined();
+	});
+
 	it("shows a rejected password as the password field's own error", async () => {
 		await renderAndroid({ editingHost: paired });
 		// resetModules gave the Android sheet its own copy of the api module.
@@ -278,10 +355,10 @@ describe("ManualConnectSheet on Android", () => {
 		await act(async () => renderer!.root.findByType("RNButton" as never).props.onPress());
 		const password = field("manual-connect-password");
 		expect(password.props.isError).toBe(true);
-		expect(password.findByType("OutlinedTextField.SupportingText" as never).findByType("Text" as never).props.children).toBe("That password was rejected. Check it and try again.");
+		expect(password.findByType("OutlinedTextField.SupportingText" as never).findByType("Text" as never).props.children).toBe("That code or password was rejected. Get a new code and try again.");
 		expect(field("manual-connect-host").props.isError).toBe(false);
 		// Supporting text is read only with its field focused, so TalkBack is told.
-		expect(fixtures.announce).toHaveBeenCalledWith("That password was rejected. Check it and try again.", { queue: true });
+		expect(fixtures.announce).toHaveBeenCalledWith("That code or password was rejected. Get a new code and try again.", { queue: true });
 	});
 
 	// Connect follows the last field.

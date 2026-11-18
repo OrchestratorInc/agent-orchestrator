@@ -23,18 +23,20 @@ default.
 
 The packaged desktop app gives its spawned Go daemon the daemon Sentry project
 DSN through `AO_SENTRY_DSN`. An explicit `AO_SENTRY_DSN` value takes precedence;
-without one, development builds hand the daemon an empty value. Daemon error
-reporting remains subject to the existing Share error events control.
+without one, development and self-built copies hand the daemon an empty value
+(see Published builds only below). Daemon error reporting remains subject to the
+existing Share error events control.
 
 Electron main and the renderer have a separate desktop Sentry project. Their
 default DSN is distinct from the daemon project; Electron main uses
 `AO_ELECTRON_SENTRY_DSN` for an explicit override. Without one, development
-builds use an empty Electron DSN. The renderer uses this main-owned sender
-and has no independent DSN override. Packaged stable and nightly builds send
-error events through Electron main only when Share error events is enabled.
-All consented desktop error reports are kept, subject to the renderer's
-per-error budget and side-chat recovery budgets. This includes fatal crashes, handled main-process failures,
-unhandled renderer window errors, and rejected promises.
+and self-built copies use an empty Electron DSN. The renderer uses this
+main-owned sender and has no independent DSN override. Published stable and
+nightly builds send error events through Electron main only when Share error
+events is enabled, subject to the install sampling and daily caps below. This
+covers fatal crashes, handled main-process failures, unhandled renderer window
+errors, and rejected promises.
+
 On a fresh or existing packaged install, Share error events starts on unless
 it was explicitly turned off. You can turn it off at any time in Settings.
 Renderer diagnostics pass through the existing main-owned consent boundary;
@@ -48,7 +50,15 @@ Once enabled, renderer exceptions go to Electron Sentry rather than PostHog. Fai
 Sentry sends can wait in an offline queue under AO's Electron data directory.
 Error events can include a standard exception type, bounded function names,
 bounded line and column numbers, and a validated app relative JavaScript asset
-filename. The asset filename preserves the location needed for source map matching. Local
+filename. Anonymous minified frames (`at app://renderer/assets/x.js:L:C`) are
+kept, and a frame whose function name is not on the fixed allowlist is kept as
+`renderer_frame` with its location only, so a renderer title reads, for
+example, `Renderer TypeError in assets/useSessionWorkspaceFiles:123:45`. Release
+builds stamp the Electron main and renderer bundles with Sentry debug IDs and
+upload their source maps to the ao-electron project; the maps are not shipped
+in the app. An event may carry the debug ID of each app bundle in its stack and
+the bundle's app URL (`app://renderer/assets/...` or `app:///.vite/build/...`),
+never an install path. Local
 filesystem paths, full URLs, and raw exception messages are removed before sending.
 The app's global renderer error boundary binds handlers independently of
 PostHog setup. Electron main still checks Share error events before sending.
@@ -107,6 +117,43 @@ owning Git repository disappeared returns a missing-workspace or
 `WORKSPACE_GIT_READ_FAILED` 500 for investigation; the app does not infer
 session death or remove worktrees from these read failures.
 
+### Published builds only
+
+Sentry initializes only in a published build: the version must be a
+release-stamped stable (`0.14.10`) or nightly (`0.14.11-nightly.202611100625`)
+version, and the build must carry the `AO_PUBLISHED_BUILD=1` marker that only
+the release workflow (`build-artifacts.yml`) bakes into Electron main. A
+development run, a fork or self-built copy (for example `0.13.0`,
+`0.14.10+fork.1`, `0.13.0-company.7`), and an edge or PR build send nothing to
+either Sentry project. The daemon applies the same version pattern to the DSN
+it receives.
+
+### Sampling and daily caps
+
+Sentry quota is shared by every install, so desktop and daemon errors are
+sampled by install rather than by event:
+
+- An install is in the error sample when `sha256(install_id)`, read as a
+  big-endian 32-bit integer, modulo 10 is 0. Electron main and the daemon use
+  the same rule, so about one install in ten sends non-fatal errors from all
+  of its processes, and the rest send none. An install whose identifier cannot
+  be read is outside the sample.
+- Fatal events send from every install: Electron main uncaught exceptions,
+  Electron process crashes (`process_exit`), and daemon panics. Renderer errors,
+  including unhandled window errors and rejections, are non-fatal and sampled.
+- Every event carries a `sample_rate` tag: `0.1` for sampled non-fatal events
+  and `1` for always-sent fatal events. Multiply counts of `sample_rate:0.1`
+  events by 10 to estimate the real volume.
+- Electron main caps every desktop event (main and renderer) after scrubbing,
+  keyed on its final Sentry fingerprint: at most 3 events per fingerprint and 25
+  events in total per install per UTC day. The counters are saved in
+  `telemetry_sentry_budget.json` in the AO data directory, so a renderer reload,
+  a new window or an app restart does not reset them. The renderer has no
+  exception budget of its own.
+- The daemon caps non-fatal errors at 25 per install per UTC day across all
+  fingerprints, on top of its per-fingerprint budget below. This counter is in
+  memory and resets when the daemon restarts.
+
 ## What Orchestrator.inc sends
 
 Orchestrator.inc sends structured events in a few broad categories:
@@ -128,6 +175,11 @@ Orchestrator.inc sends structured events in a few broad categories:
 - Reliability data, such as an error type and context, a crash message and
   stack trace after path redaction, an HTTP status, or an agent waiting for
   input
+- Slow database writes: when one write holds the daemon's database write lock
+  for a second or more, `ao.daemon.write_lock_held` sends how long it was held
+  (`duration_ms`) and the names and line numbers of the four innermost code
+  functions that held it (`caller`). It never includes file paths, database
+  contents, or message text
 - Basic environment information, such as the Orchestrator.inc version, operating system,
   release channel, and which supported agent types are available. Desktop and
   daemon events carry the operating system name (`$os`) and version
@@ -399,8 +451,9 @@ New (`historical: false`) PR outcomes add:
 
 | Event | When it is sent | Properties |
 | --- | --- | --- |
-| `ao.sessions.spawned` | A session becomes usable: a synchronous start returns, or an asynchronous Chat start finishes its worktree, Setup, controller start and opening prompt | `kind`, `harness`, `spawn_duration_ms`, `duration_ms`, `created_by` and, for sessions a request started, `surface` |
-| `ao.sessions.spawn_failed` | A start attempt fails, including an asynchronous Chat start that fails in the background | `kind`, `harness`, `spawn_duration_ms`, `duration_ms`, `error_kind`, `error_code` |
+| `ao.sessions.spawned` | A session becomes usable: a synchronous start returns, or an asynchronous Chat start finishes its worktree, Setup, controller start and opening prompt | `kind`, `harness`, `spawn_duration_ms`, `duration_ms`, `created_by`, `mode`, `async`, `model`, the step timings below and, for sessions a request started, `surface` |
+| `ao.sessions.spawn_failed` | A start attempt fails, including an asynchronous Chat start that fails in the background | `kind`, `harness`, `spawn_duration_ms`, `duration_ms`, `error_kind`, `error_code`, `failed_step`, `cause`, `created_by`, `surface`, `mode`, `async`, `model` and the step timings below |
+| `ao.sessions.spawn_cancelled` | A start attempt is cancelled on purpose (`SPAWN_CANCELLED`: the client left, the session was killed while starting, or the daemon shut down) | The same properties as `ao.sessions.spawn_failed` |
 | `ao.sessions.ended` | A session is killed, replaced, torn down after its pull requests merged or its issue closed, or its runtime dies | `kind` (`standalone`, `worker`, or `orchestrator`), `harness`, `outcome`, `duration_ms`, `had_pr`, `waiting_input_count`, `created_by`, `session_telemetry_id`, and for project sessions `project_telemetry_id`. Project sessions use the same grouping IDs as the usage counts; a standalone session's `session_telemetry_id` is a one-way hash of its session ID salted with the installation identifier |
 
 - `spawn_duration_ms` is the whole launch: from the session service accepting
@@ -412,9 +465,36 @@ New (`historical: false`) PR outcomes add:
   usable. A retry of a failed start is its own attempt, timed from the retry,
   without `duration_ms`. Each attempt reports one outcome. A start cancelled on
   purpose (the session is killed while starting, or the daemon shuts down)
-  reports neither event, so it does not count as a launch failure; a start
-  that runs out of its time budget reports `ao.sessions.spawn_failed`. A start
-  interrupted by a daemon restart reports neither event.
+  reports `ao.sessions.spawn_cancelled`, so it does not count as a launch
+  failure; a start that runs out of its time budget reports
+  `ao.sessions.spawn_failed` with `error_code: SPAWN_TIMEOUT` and
+  `cause: timeout`, whatever error the step that was running returned (a git
+  or agent process killed by the deadline reports "signal: killed" or "peer
+  disconnected"). A start interrupted by a daemon restart reports no event.
+- Step timings, in milliseconds, are sent only for the steps that ran:
+  `model_check_ms` (validating the model and effort against the saved
+  catalog), `branch_fetch_ms` (refreshing the default branch),
+  `worktree_ms` (creating the git worktree), `setup_ms` (the project's Setup
+  steps) and `agent_start_ms` (starting the terminal agent or the Chat
+  controller).
+- `failed_step` is `model_check`, `branch_fetch`, `worktree`, `setup`,
+  `agent_start`, `prompt` or `other`.
+- `cause` is a fixed value, never error text: `timeout`; for git and worktree
+  failures `branch_exists`, `path_exists`, `locked`, `permission`,
+  `path_too_long`, `not_a_repo`, `killed` or `other`, classified from git's
+  stderr inside the daemon; for agent and Chat starts `exited`,
+  `no_response`, `not_logged_in`, `killed` or `other`. Sentry spawn errors
+  carry `failed_step` and `cause` as tags.
+- `mode` is `chat` or `terminal` (absent when the start failed before a mode
+  was chosen), `async` is whether the start went on in the background after
+  the request was answered, and `model` is a fixed Claude family alias
+  (`fable`, `opus`, `sonnet`, `haiku`, optionally suffixed `[1m]`) or `custom`.
+  Every concrete, typed, or discovered ID is bucketed as `custom`, even when
+  the saved catalog lists it: gateway and custom-provider catalogs may contain
+  private organization names. `model` is absent when the harness default was
+  used without naming one, or model resolution did not record it. Like every daemon event
+  they also carry `$os`, `platform` and `arch`, whichever client launched the
+  daemon.
 - `surface` is `desktop`, `mobile`, or `cli`, as above.
 - `created_by` is `user`, `orchestrator` (an orchestrator ran `ao spawn`),
   `scheduled` (an automation's schedule), or `automation` (issue intake, or a
@@ -489,19 +569,85 @@ not emit creation events. This measures declared intent at creation, not current
 active usage, successful execution, or the exact contents of a customized prompt.
 Existing events cannot be used to reconstruct historical automation intent.
 
-## Artifact creation
+## Artifacts
 
-When desktop product telemetry is enabled, Orchestrator.inc records visits to the
-Artifacts page with `ao.routes.viewed` and `surface: artifacts`. It
-also records these events when you start an artifact session from that page:
+When product telemetry is enabled, Orchestrator.inc records visits to the
+Artifacts page with `ao.routes.viewed` and `surface: artifacts`, and the events
+below: how artifacts are created, and how people publish them and copy their
+links. They carry only the closed values listed here and counts. They never
+include a file name, path, extension, URL, artifact content, title, session or
+project name, raw error message, or the people a link is shared with.
 
 | Event | When it is sent | Artifact-specific properties |
 | --- | --- | --- |
-| `ao.renderer.artifact_create_succeeded` | The session starts | `scope` |
-| `ao.renderer.artifact_create_failed` | Starting the session fails | `scope` |
+| `ao.artifacts.session_started` | New artifact on the Artifacts page starts its session (formerly `ao.renderer.artifact_create_succeeded`) | `scope` |
+| `ao.artifacts.session_start_failed` | Starting that session fails (formerly `ao.renderer.artifact_create_failed`) | `scope`, `error_code`, `http_status` |
+| `ao.artifacts.registered` | The daemon registers new artifacts for a session (`ao artifact add`). One event per content category and size band among them; registering a path again sends nothing | `source`, `content_category`, `size_bucket`, `count` |
+| `ao.artifacts.register_failed` | The daemon refuses an `ao artifact add` | `source`, `reason` |
+| `ao.artifacts.publish_clicked` | The Publish popover opens: you click the toolbar's Publish, Published or Republish button, or Publish in the ⋯ menu, before any sign-in check or upload. Opening it on a published file to copy the link counts too, with `already_published` true | `already_published`, `signed_in` |
+| `ao.artifacts.sign_in_prompt_shown` | The Publish popover asks you to sign in, once per popover | `reason` |
+| `ao.artifacts.sign_in_clicked` | You click its Sign in button | none |
+| `ao.artifacts.published` | A publish or republish succeeds | `is_republish` |
+| `ao.artifacts.publish_failed` | A publish attempt fails | `is_republish`, `reason` |
+| `ao.artifacts.publish_cancelled` | You cancel a publish before its upload finishes | `is_republish` |
+| `ao.artifacts.publish_blocked` | The Publish popover opens on a refusal, before any attempt: the link limit, or a file type that cannot be published yet (once per popover) | `is_republish`, `reason` |
+| `ao.artifacts.link_copied` | You copy a published link | `surface` |
+| `ao.artifacts.unpublished` | Unpublishing succeeds | none |
 
-`scope` is `standalone` for the Scratchpad and `project` otherwise. No project
-identifier, file name, or artifact content is sent.
+- `scope` is `standalone` for the Scratchpad, `project` for a project, and
+  `cloud` for an AO Cloud project.
+- `error_code` is the API's error code (such as `AGENT_NOT_READY`), never its
+  message; `http_status` is the 4xx or 5xx status when the daemon refused.
+- `source` is `artifacts_tab` for a worker started by New artifact, otherwise
+  `worker` or `orchestrator`: the kind of session that ran `ao artifact add`.
+- `content_category` comes from the file's extension: `markdown`, `html`,
+  `image`, `video`, `audio`, `pdf`, `text`, or `other` (a bundle directory is
+  `other`).
+- `size_bucket` is `xs` (under 10 KB), `s` (under 100 KB), `m` (under 1 MB),
+  `l` (under 10 MB), or `xl`. A bundle directory's size is that of the files in
+  it. It is omitted when the daemon could not list the files.
+- `reason` on `register_failed` is `outside_dir` (not in the session's
+  artifact directory), `not_found`, `not_registrable` (not a file or bundle
+  directory), `session_not_found` (the session was deleted while its artifacts
+  were being registered), or `internal`. A command that fails before it reaches
+  the daemon is not counted here.
+- `registered` is not sent when the daemon cannot read which paths the session
+  had already registered, since it could not tell new artifacts from old ones.
+  Those registrations go uncounted.
+- `already_published` is whether the file had an active link when Publish was
+  clicked; `signed_in` is whether you were signed in to AO Cloud.
+- `reason` on `sign_in_prompt_shown` is `signed_out` (signed out when you
+  clicked Publish) or `session_expired` (a publish came back signed out).
+- `is_republish` is true when an existing link was being updated.
+- `reason` on `publish_failed` is `signed_out`, `too_large`, `upload_failed`
+  (the upload, or reading the file from its machine, failed), `refused` (the
+  server refused the upload: the plan's link limit, a file type that cannot be
+  published yet, or someone else's cloud session), or `other`. Cancelling is
+  `publish_cancelled` and a refusal shown on open is `publish_blocked`, so
+  neither counts as a failure.
+- `reason` on `publish_blocked` is `limit` or `unsupported`.
+- `surface` on `link_copied` is `panel` (the Publish popover) or `menu` (the
+  artifact's ⋯ menu).
+
+`ao.renderer.cloud_signed_in` also carries `source`: `artifact_publish` when
+the sign-in finished within 30 minutes of clicking Sign in in the Publish
+popover, while the popover stayed open, and `other` otherwise. That note is
+kept in memory only. It also carries `same_account`: true when you signed in
+again as the account that was already signed in, as after a server refused an
+expired session. Those sign-ins were not counted before, so filtering on
+`same_account` not true reproduces the earlier count. A token refresh is not a
+sign-in. Together these events give the sign-in drop-off funnel:
+`publish_clicked` (`signed_in` false) → `sign_in_prompt_shown` →
+`sign_in_clicked` → `cloud_signed_in` (`source` `artifact_publish`) →
+`published` → `link_copied`.
+
+The `ao.artifacts.registered` and `ao.artifacts.register_failed` events are
+sent by the daemon that registered the file, so they follow that daemon's
+telemetry setting; cloud sessions register artifacts in AO Cloud and do not
+send them. The other events are sent by the desktop app at most once per
+action or per open, never on re-renders, and stop when Share usage analytics
+is off. A kill-switch entry written against an old event name still silences
+the renamed event.
 
 The automation events do not include the prompt text, automation name, raw
 project identifier, exact schedule, timezone, selected agent, or error message.
@@ -779,17 +925,21 @@ their raw path. Every daemon Sentry event has release and environment values.
 Typed daemon 503 envelopes remain breadcrumbs in the renderer, matching daemon
 Sentry policy. Untyped renderer 503 responses remain reportable. The existing
 API client skips its confirmed expected 409 probes, while other 409 responses
-remain ordinary 4xx breadcrumbs. Renderer exception intake is capped per exception
-name and call site at five per minute and 200 per day. HTTP and background daemon sends
+remain ordinary 4xx breadcrumbs. Renderer exceptions are sampled and capped in
+Electron main as described under Sampling and daily caps. HTTP and background daemon sends
 share a limit of four concurrent reports, dropping diagnostics at capacity without
 retaining a queue. Their transport runs outside the caller's locks and database
 transactions, and opt-out waits for admitted sends before it completes.
 The daemon admits the first five
 reportable errors per fingerprint each minute and at most 200 per day. Its
 in process budget tracks at most 1,024 distinct fingerprints per day, then
-uses one overflow group per operation. It samples
-admitted errors at full rate. Project quota and spike protection still need
-verification before a stable release.
+uses one overflow group per operation. On top of that, the daemon sends
+non-fatal errors only from sampled installs and at most 25 per install per UTC
+day; panics always send.
+Model discovery failures (a missing, outdated or misconfigured agent CLI,
+including a non-zero exit) and an unfinished Codex account setup
+(`CODEX_ACCOUNT_SETUP_INCOMPLETE`, even when its staging step hits a deadline)
+are user setup states and never create Sentry issues.
 The daemon tags these error events with the same `install_id` and sets Sentry
 `user.id` to that identifier when available. If it cannot be read, consented
 error reporting continues without either identity field. These fields do not
@@ -931,6 +1081,9 @@ renamed event. Events not listed keep their names.
 | `ao.usage.daily_summary` | not shipped; nothing to rename |
 | `ao.http.5xx` | unchanged |
 | (new) | `ao.setup.checked` |
+| `ao.renderer.artifact_create_succeeded` | `ao.artifacts.session_started` |
+| `ao.renderer.artifact_create_failed` | `ao.artifacts.session_start_failed` |
+| (new) | other `ao.artifacts.*` events (see "Artifacts") |
 
 
 ## Questions or corrections

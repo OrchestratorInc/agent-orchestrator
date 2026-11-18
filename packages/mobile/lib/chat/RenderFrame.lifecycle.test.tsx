@@ -22,7 +22,7 @@ vi.mock("expo-router/react-navigation", async () => {
 // Inlining an artifact page has its own tests; these frames are renders.
 vi.mock("../useInlinedArtifactPage", () => ({ useInlinedArtifactPage: () => ({ failed: false }) }));
 vi.mock("expo-linking", () => ({ openURL: vi.fn() }));
-vi.mock("../config", () => ({ authHeaders: () => ({ Authorization: "Bearer test" }), httpBase: () => "http://lab:3011" }));
+vi.mock("../config", () => ({ authHeaders: () => ({ Authorization: "Bearer test" }), httpBase: () => "http://lab:3011", machineIdentity: () => "host.lab-host" }));
 vi.mock("../haptics", () => ({ haptics: { tap: () => {} } }));
 vi.mock("../store", () => ({ useApp: () => ({ config: { host: "lab", httpPort: "3011", muxPort: "", password: "test" }, currentHostId: "lab-host" }) }));
 vi.mock("../ThemeProvider", () => {

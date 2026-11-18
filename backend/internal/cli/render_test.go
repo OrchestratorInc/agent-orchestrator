@@ -6,10 +6,24 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/aoagents/agent-orchestrator/backend/internal/mcpserver"
 )
+
+const pngSignature = "\x89PNG\r\n\x1a\n"
+
+func writeImage(t *testing.T, dir, name, content string) string {
+	t.Helper()
+	path := filepath.Join(dir, name)
+	if err := os.WriteFile(path, []byte(content), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	return path
+}
 
 func renderServer(t *testing.T, status int, respBody string) (*httptest.Server, *previewCapture) {
 	t.Helper()
@@ -41,6 +55,21 @@ func writePage(t *testing.T, body []byte) string {
 		t.Fatal(err)
 	}
 	return path
+}
+
+// A check that ran without network says so, so the agent knows why remote
+// resources did not load.
+func TestRenderCheckSaysWhenTheCheckRanWithoutNetwork(t *testing.T) {
+	t.Setenv("AO_SESSION_ID", "aa-47")
+	cfg := setConfigEnv(t)
+	srv, _ := renderServer(t, http.StatusOK,
+		`{"screenshot":{"mimeType":"image/png","data":"iVBORw0KGgo=","width":720,"height":120},"contentHeight":120,"consoleMessages":[],"network":"none"}`)
+	writeRunFileFor(t, cfg, srv)
+	stdout, _, err := executeCLI(t, Deps{ProcessAlive: func(int) bool { return true }},
+		"render", "--check", writePage(t, []byte("<p>x</p>")), "--out", filepath.Join(t.TempDir(), "c.png"))
+	if err != nil || !strings.Contains(stdout, mcpserver.CheckOfflineNote) {
+		t.Fatalf("render --check: err=%v stdout=%s, want the offline note", err, stdout)
+	}
 }
 
 func TestRenderPostsThePageToTheSession(t *testing.T) {
@@ -81,7 +110,8 @@ func TestRenderArtifactKeepsThePageOrWarns(t *testing.T) {
 	for _, tc := range []struct {
 		name, resp, stdout, stderr string
 	}{
-		{"kept", `{"renderId":"r1","artifactPath":"/ao/artifacts/aa-47/Turns by day.html"}`, "saved as artifact: /ao/artifacts/aa-47/Turns by day.html\n", ""},
+		{"kept", `{"renderId":"r1","artifactPath":"/ao/artifacts/aa-47/Turns by day.html"}`, "saved as artifact: /ao/artifacts/aa-47/Turns by day.html\nto list it as an artifact, run: ao artifact add '/ao/artifacts/aa-47/Turns by day.html'\n", ""},
+		{"kept with shell characters", `{"renderId":"r1","artifactPath":"/ao/artifacts/aa-47/Ada's $1M.html"}`, "saved as artifact: /ao/artifacts/aa-47/Ada's $1M.html\nto list it as an artifact, run: ao artifact add '/ao/artifacts/aa-47/Ada'\\''s $1M.html'\n", ""},
 		// The page is in the thread either way, so the command still succeeds.
 		{"not kept", `{"renderId":"r1","artifactError":"save render artifact: disk full"}`, "", "warning: not saved as artifact: save render artifact: disk full\n"},
 	} {
@@ -99,7 +129,7 @@ func TestRenderArtifactKeepsThePageOrWarns(t *testing.T) {
 			if !strings.Contains(capture.body, `"artifact":true`) {
 				t.Fatalf("request = %s, want artifact", capture.body)
 			}
-			if !strings.HasPrefix(out, renderShownText("r1")+"\n") || !strings.HasSuffix(out, tc.stdout) || !strings.HasSuffix(errOut, tc.stderr) {
+			if !strings.HasPrefix(out, mcpserver.ShownText("r1")+"\n") || !strings.HasSuffix(out, tc.stdout) || !strings.HasSuffix(errOut, tc.stderr) {
 				t.Fatalf("stdout = %q, stderr = %q", out, errOut)
 			}
 		})
@@ -226,7 +256,7 @@ func TestRenderWithAMissingLocalImagePublishesNothing(t *testing.T) {
 
 	_, _, err := executeCLI(t, Deps{ProcessAlive: func(int) bool { return true }},
 		"render", writePage(t, []byte(`<img src="`+gone+`">`)), "--title", "x")
-	want := "These local images could not be read: " + gone + ". Use absolute paths to existing image files, or remove them."
+	want := "Cannot inline these local images: " + gone + ". Check their paths, permissions, and image formats."
 	if err == nil || err.Error() != want || capture.called {
 		t.Fatalf("err=%v called=%v; want %q and no request", err, capture.called, want)
 	}
@@ -260,5 +290,40 @@ func TestRenderCheckInlinesImagesAndListsTheMissingOnes(t *testing.T) {
 	// The paths come from the page, so they are marked untrusted like console text.
 	if want := browserUntrustedText("missing images: " + gone); !strings.Contains(stdout, want) {
 		t.Fatalf("stdout missing %q:\n%s", want, stdout)
+	}
+}
+
+// The agent runs the command this line gives it, and the path holds the page
+// title, so a real shell must read the path back unchanged and run nothing.
+func TestRenderArtifactLineCommandIsSafeInAShell(t *testing.T) {
+	sh, err := exec.LookPath("sh")
+	if err != nil {
+		t.Skip("no POSIX shell")
+	}
+	canary := filepath.Join(t.TempDir(), "ran")
+	for _, name := range []string{
+		"Revenue over $1M.html",
+		"Ada's report.html",
+		"$(touch " + canary + ").html",
+		"`touch " + canary + "`.html",
+		"a; touch " + canary + ".html",
+		"$HOME and 'quotes' \\ here.html",
+	} {
+		artifactPath := "/ao/artifacts/aa-47/" + name
+		line := mcpserver.ArtifactLine(mcpserver.RenderResponse{ArtifactPath: artifactPath})
+		_, command, ok := strings.Cut(line, "run: ao artifact add ")
+		if !ok {
+			t.Fatalf("no command in %q", line)
+		}
+		out, err := exec.Command(sh, "-c", "printf %s "+command).CombinedOutput()
+		if err != nil {
+			t.Fatalf("%q: %v: %s", name, err, out)
+		}
+		if string(out) != artifactPath {
+			t.Errorf("shell read %q, want %q", out, artifactPath)
+		}
+	}
+	if _, err := os.Stat(canary); err == nil {
+		t.Fatal("a page title ran as a command")
 	}
 }

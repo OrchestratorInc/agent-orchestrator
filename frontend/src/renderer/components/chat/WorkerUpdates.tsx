@@ -387,7 +387,7 @@ function WorkerUpdateRow({ update }: { update: WorkerUpdate }) {
 				<p key={path} className="ml-6 flex h-6 min-w-0 items-center gap-1.5 text-muted-foreground">
 					<FileText aria-hidden="true" className="size-3.5 shrink-0" />
 					{/* A listed artifact links to its preview; one the session no longer lists stays a name. */}
-					<span className="min-w-0 truncate font-mono" title={path}>
+					<span className="min-w-0 truncate" title={path}>
 						<ArtifactPathCode text={artifactReference(path, update.sessionId)}>{path.split("/").at(-1)}</ArtifactPathCode>
 					</span>
 				</p>
@@ -549,13 +549,16 @@ export function Folded({ watch, children }: { watch: unknown; children: ReactNod
 	}, [open, watch]);
 	return (
 		<>
-			<div ref={body} className={cn("min-w-0", !open && "line-clamp-5")}>
+			<div ref={body} className={cn("min-w-0", !open && "line-clamp-5")} onToggle={(event) => (event.target as HTMLDetailsElement).open && setOpen(true)}>
 				<div>{children}</div>
 			</div>
 			{folds || open ? (
 				<Pressable
 					aria-expanded={open}
-					onClick={() => setOpen((current) => !current)}
+					onClick={() => {
+						if (open) body.current?.querySelectorAll("details[open]").forEach((details) => details.removeAttribute("open"));
+						setOpen(!open);
+					}}
 					className="mt-1 inline-flex items-center gap-1 rounded text-xs font-medium text-muted-foreground transition-colors hover:text-foreground"
 				>
 					{t(open ? "shell.showLess" : "shell.showMore")}

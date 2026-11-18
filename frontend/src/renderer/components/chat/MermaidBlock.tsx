@@ -145,7 +145,7 @@ export const MermaidBlock = memo(function MermaidBlock({
 
 	return (
 		<div data-chat-find-exclude="" className="chat-code group/code my-2.5 overflow-hidden rounded-lg border border-border bg-surface">
-			<div className="flex items-center gap-2 border-b border-border bg-raised/40 px-2.5 py-1">
+			<div data-excerpt-exclude="" className="flex items-center gap-2 border-b border-border bg-raised/40 px-2.5 py-1">
 				<span className="text-caption text-muted-foreground">
 					mermaid
 				</span>
@@ -214,7 +214,7 @@ export const MermaidBlock = memo(function MermaidBlock({
 				</pre>
 			)}
 			{failed && !showSource ? (
-				<div className="border-t border-border px-3 py-1.5 text-caption text-muted-foreground">
+				<div data-excerpt-exclude="" className="border-t border-border px-3 py-1.5 text-caption text-muted-foreground">
 					Couldn&apos;t render this diagram — showing its source.
 				</div>
 			) : null}

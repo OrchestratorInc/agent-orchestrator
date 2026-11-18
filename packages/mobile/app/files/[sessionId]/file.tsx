@@ -22,12 +22,13 @@ import { ToastHost } from "../../../lib/Toast";
 import { font, fontScaleCap, radius, space, type } from "../../../lib/tokens";
 import { Button, EmptyState } from "../../../lib/ui";
 import { useToast } from "../../../lib/useToast";
-import { getWorkspaceFile, sendFileFeedback, workspaceImageSource, type WorkspaceFileDetail } from "../../../lib/files/api";
+import type { FileRead, WorkspaceFileDetail } from "../../../lib/files/api";
+import type { FilesBackend, WorkspaceImageSource } from "../../../lib/files/backend";
+import { useFilesBackend } from "../../../lib/files/useFilesBackend";
 import { CODE_LINE_HEIGHT, codeContentWidth, DiffLine, FoldRow, gutterWidth, InlineComment, LineCounts, MARKER_WIDTH, SelectionComposer, useCodeScale, type ComposerAction } from "../../../lib/files/components";
 import { fileIcon } from "../../../lib/files/fileIcons";
 import {
 	annotationTarget,
-	changeGroups,
 	commentAnchor,
 	CONTEXT_STEP,
 	contentLines,
@@ -53,6 +54,8 @@ import { useReviewSender } from "../../../lib/files/useReviewSender";
 import { useLineDrag } from "../../../lib/files/useLineDrag";
 import { useWorkspaceManifest } from "../../../lib/files/useWorkspace";
 import { SegmentedChoice, type SegmentedChoiceOption } from "../../../lib/files/SegmentedChoice";
+import { annotationContext, branchLabel, changesLabel, fileRead, imageComparable, inPick, selectionParams, type SelectionParams } from "../../../lib/files/selection";
+import { useBranchBackend, useChangeList, useRouteSelection } from "../../../lib/files/useChangeList";
 
 export { RouteErrorBoundary as ErrorBoundary } from "../../../lib/RouteErrorBoundary";
 
@@ -78,21 +81,32 @@ export default function SessionFileScreen() {
 }
 
 function SessionFileContent() {
-	const params = useLocalSearchParams<{ sessionId: string; path: string; mode?: Mode; previousPath?: string; hostId?: string }>();
+	const params = useLocalSearchParams<{ sessionId: string; path: string; mode?: Mode; previousPath?: string; hostId?: string } & SelectionParams>();
+	// What the Files screen was comparing; a file opened from chat has none, the worktree's base.
+	const pick = useRouteSelection(params);
+	const picked = Object.keys(selectionParams(pick)).length > 0;
 	const id = String(params.sessionId ?? "");
 	const path = String(params.path ?? "");
 	const router = useRouter();
 	const navigation = useNavigation();
-	const { config, currentHostId, connection, loading: appLoading } = useApp();
+	const { currentHostId, connection, loading: appLoading } = useApp();
+	// The paired machine's daemon, or Orchestrator Cloud for a cloud session.
+	const { backend, cloud, signedOut, unreachable } = useFilesBackend();
 	const hostMatches = hostRouteMatches(params.hostId, currentHostId);
 	const styles = useThemedStyles(makeStyles);
 	const { width } = useWindowDimensions();
 	const codeScale = useCodeScale();
 
-	const { manifest } = useWorkspaceManifest(hostMatches ? config : null, id, hostMatches);
-	const changes = useMemo(() => manifest ? orderedChanges(changeGroups(manifest)) : [], [manifest]);
+	const { manifest } = useWorkspaceManifest(hostMatches ? backend : null, id, hostMatches);
+	const branchBackend = useBranchBackend(hostMatches ? backend : null, pick.branch);
+	const viewing = pick.branch.kind !== "checked_out";
+	const { groups } = useChangeList(branchBackend, id, pick, manifest, hostMatches);
+	const changes = useMemo(() => orderedChanges(groups ?? []), [groups]);
 	const position = changes.findIndex((file) => file.path === path);
 	const listed = position >= 0 ? changes[position] : undefined;
+	// The diff the pick reads: a worktree section, one commit, or the whole range.
+	const readKey = JSON.stringify(fileRead(pick, listed));
+	const read = useMemo(() => JSON.parse(readKey) as FileRead, [readKey]);
 
 	const [detail, setDetail] = useState<WorkspaceFileDetail | null>(null);
 	const [loading, setLoading] = useState(true);
@@ -115,17 +129,18 @@ function SessionFileContent() {
 	const request = useRef(0);
 
 	const key = reviewKey(currentHostId, id);
-	const review = useReviewSender(config, key, id);
+	const review = useReviewSender(backend, key, id);
 
 	// What says the file changed under us: its fingerprint in the manifest, or the
 	// whole workspace version for a file the manifest does not list.
-	const fingerprint = listed?.fileFingerprint || manifest?.workspaceVersion || "";
+	// Another branch moves on its own, with nothing in the worktree's version to say so.
+	const fingerprint = listed?.fileFingerprint || (viewing ? "" : manifest?.workspaceVersion) || "";
 	const load = useCallback(async (quiet: boolean) => {
-		if (!config || !hostMatches || !path) return;
+		if (!branchBackend || !hostMatches || !path) return;
 		const ticket = ++request.current;
 		if (!quiet) setLoading(true);
 		try {
-			const next = await getWorkspaceFile(config, id, path);
+			const next = await branchBackend.file(id, path, read);
 			if (ticket !== request.current) return;
 			setDetail(next);
 			setLoadError(undefined);
@@ -134,7 +149,7 @@ function SessionFileContent() {
 		} finally {
 			if (ticket === request.current) setLoading(false);
 		}
-	}, [config, hostMatches, id, path]);
+	}, [branchBackend, hostMatches, id, path, read]);
 
 	// A new path starts from a clean slate; the same path reloads quietly when the
 	// agent edits it, keeping the reader's place.
@@ -162,7 +177,11 @@ function SessionFileContent() {
 		return effectiveMode === "diff" ? diffDisplayRows(parsed, lines, revealed) : fileDisplayRows(lines ?? []);
 	}, [detail, effectiveMode, lines, parsed, revealed]);
 	// Comments on this file, queued and sent, drawn under the lines they are about.
-	const fileComments = useMemo(() => review.all.filter((comment) => comment.target.path === path), [path, review.all]);
+	// What a comment here is made on; only this pick's comments are drawn on its lines.
+	const context = useMemo(() => annotationContext(pick), [pick]);
+	// Another branch, or part of the changes, in words: under the title, and on each queued comment.
+	const compared = picked ? [viewing ? branchLabel(pick.branch) : "", changesLabel(pick.changes)].filter(Boolean).join(" · ") : "";
+	const fileComments = useMemo(() => review.all.filter((comment) => comment.target.path === path && inPick(comment.target, context)), [context, path, review.all]);
 	const commentById = useMemo(() => new Map(fileComments.map((comment) => [comment.id, comment])), [fileComments]);
 	const rows = useMemo(() => withInlineComments(baseRows, fileComments), [baseRows, fileComments]);
 	const digits = useMemo(() => String(rows.reduce((max, row) => row.type === "line" ? Math.max(max, row.row.newNo ?? 0, row.row.oldNo ?? 0) : max, 0)).length, [rows]);
@@ -171,6 +190,7 @@ function SessionFileContent() {
 	const markdown = isMarkdownPath(path);
 	const image = isImagePath(path);
 	const svg = isSvgPath(path);
+	const imageSources = useImageSources(branchBackend, id, path, detail, changed, image, read);
 
 	// Lines with a comment card under them, so a screen reader hears "has a comment" there.
 	const commented = useMemo(() => new Set(fileComments.flatMap((comment) => comment.anchor ? [`${comment.anchor.side}:${comment.anchor.line}`] : [])), [fileComments]);
@@ -316,12 +336,12 @@ function SessionFileContent() {
 	const label = chosen.length ? selectionLabel(chosen) : "";
 
 	const act = useCallback(async (action: ComposerAction, text: string) => {
-		if (!config || !detail || !chosen.length) return;
+		if (!backend || !detail || !chosen.length) return;
 		const feedback = text.trim();
-		const target = annotationTarget({ path, previousPath: detail.previousPath, workspaceVersion: detail.workspaceVersion, fileFingerprint: detail.fileFingerprint }, chosen);
+		const target = { ...annotationTarget({ path, previousPath: detail.previousPath, workspaceVersion: detail.workspaceVersion, fileFingerprint: detail.fileFingerprint }, chosen), ...context };
 		const anchor = commentAnchor(chosen);
 		if (action === "comment") {
-			addReviewComment(key, { label: `${name} · ${label}`, feedback, target, anchor });
+			addReviewComment(key, { label: `${name} · ${label}${compared ? ` · ${compared}` : ""}`, feedback, target, anchor });
 			haptics.success();
 			setSelection(null);
 			showToast("Comment added to the review.");
@@ -330,9 +350,9 @@ function SessionFileContent() {
 		setBusy(true);
 		setActionError(undefined);
 		try {
-			await sendFileFeedback(config, id, [{ target, feedback }]);
+			await backend.sendFeedback(id, [{ target, feedback }]);
 			// What was sent stays on the line, like a posted review comment.
-			addReviewComment(key, { label: `${name} · ${label}`, feedback, target, anchor, status: "sent" });
+			addReviewComment(key, { label: `${name} · ${label}${compared ? ` · ${compared}` : ""}`, feedback, target, anchor, status: "sent" });
 			haptics.success();
 			setSelection(null);
 			showToast("Sent. The agent's reply appears in the session.");
@@ -342,7 +362,7 @@ function SessionFileContent() {
 		} finally {
 			setBusy(false);
 		}
-	}, [chosen, config, detail, id, key, label, name, path, showToast]);
+	}, [backend, chosen, compared, context, detail, id, key, label, name, path, showToast]);
 
 	const copySelection = useCallback(() => {
 		void Clipboard.setStringAsync(chosen.map((row) => row.text).join("\n"));
@@ -352,8 +372,10 @@ function SessionFileContent() {
 	if (!hostMatches) return <View style={styles.center}><EmptyState icon="monitor" title="This file belongs to another machine" message="Open it from that machine's session." action={<Button title="Open board" icon="workers" onPress={() => router.dismissTo("/")} />} /></View>;
 	// A cold start (a deep link, a notification) lands before the saved pairing
 	// loads; that is not "offline" yet.
-	if (!config && appLoading) return <View style={styles.center}>{headerItems}<Spinner size="large" accessibilityLabel="Connecting" /></View>;
-	if (!config && connection === "closed") return <View style={styles.center}>{headerItems}<EmptyState icon="wifi-off" title="Machine offline" message="The file loads once the app reconnects." /></View>;
+	if (signedOut) return <View style={styles.center}>{headerItems}<EmptyState icon="cloud" title="Signed out of Orchestrator Cloud" message="Sign in from Settings to see this file." /></View>;
+	if (unreachable) return <View style={styles.center}>{headerItems}<EmptyState icon="cloud" title="Can't reach Orchestrator Cloud" message={unreachable.message} action={<Button title="Retry" icon="refresh" onPress={unreachable.retry} />} /></View>;
+	if (!backend && (appLoading || cloud)) return <View style={styles.center}>{headerItems}<Spinner size="large" accessibilityLabel="Connecting" /></View>;
+	if (!backend && connection === "closed") return <View style={styles.center}>{headerItems}<EmptyState icon="wifi-off" title="Machine offline" message="The file loads once the app reconnects." /></View>;
 
 	// Where the file lives and how much changed, under the title that names it;
 	// then the one control over how it reads. iOS adds the file's place among the
@@ -375,8 +397,11 @@ function SessionFileContent() {
 	const truncation = detail?.diffTruncated && effectiveMode === "diff"
 		? "This diff is too large to show in full; the end is cut off."
 		: detail?.contentTruncated && effectiveMode === "file" ? "This file is too large to show in full." : "";
-	const meta = metaRow || detail?.previousPath || viewOptions.length > 1 || truncation ? (
+	// Another branch, or part of the changes: said under the title, since the
+	// page reads the same either way. The branch is named only when it is not the worktree's.
+	const meta = metaRow || compared || detail?.previousPath || viewOptions.length > 1 || truncation ? (
 		<View style={styles.meta}>
+			{compared ? <Text accessibilityLabel={`Comparing ${compared}`} maxFontSizeMultiplier={fontScaleCap.chrome} numberOfLines={1} ellipsizeMode="middle" style={styles.compared}>{compared}</Text> : null}
 			{metaRow}
 			{detail?.previousPath ? <Text maxFontSizeMultiplier={fontScaleCap.chrome} numberOfLines={1} style={styles.renamed}>{`Renamed from ${detail.previousPath}`}</Text> : null}
 			{viewOptions.length > 1 ? <SegmentedChoice<ViewChoice> value={view} options={viewOptions} onChange={chooseView} accessibilityLabel="View" /> : null}
@@ -403,11 +428,13 @@ function SessionFileContent() {
 		body = <View style={styles.center}><EmptyState busy title={`Opening ${name}…`} /></View>;
 	} else if (loadError && !detail) {
 		body = <View style={styles.center}><EmptyState icon="alert-triangle" title="Couldn't open this file" message={loadError} action={<Button title="Try again" icon="refresh-cw" onPress={() => void load(false)} />} /></View>;
-	} else if (detail && image) {
-		body = <ImageCompare detail={detail} name={name} sources={{
-			before: detail.status !== "added" && changed ? workspaceImageSource(config!, id, path, "before", detail.workspaceVersion) : undefined,
-			after: !detail.deleted ? workspaceImageSource(config!, id, path, "after", detail.workspaceVersion) : undefined,
-		}} />;
+	} else if (detail && image && !imageComparable(read)) {
+		// The machine can't read a worktree scope's image sides yet; showing the base and the worktree would contradict the diff.
+		body = <View style={styles.center}><EmptyState icon="image" title={`No image preview for ${changesLabel(pick.changes)}`} message="Images are compared in All changes, a single commit, or another branch." /></View>;
+	} else if (detail && image && !imageSources.unavailable) {
+		body = imageSources.resolved
+			? <ImageCompare detail={detail} name={name} sources={imageSources} />
+			: <View style={styles.center}><EmptyState busy title={`Opening ${name}…`} /></View>;
 	} else if (detail && svg && effectiveMode === "file" && lines && !detail.binary) {
 		body = <ScrollView contentContainerStyle={styles.preview}><SvgXml xml={detail.content} width="100%" height={width} /></ScrollView>;
 	} else if (detail?.binary) {
@@ -415,7 +442,7 @@ function SessionFileContent() {
 	} else if (detail && markdown && rendered && effectiveMode === "file") {
 		body = <ScrollView contentContainerStyle={styles.markdown}><ChatMarkdown text={detail.content} /></ScrollView>;
 	} else if (detail && !rows.length) {
-		body = <View style={styles.center}><EmptyState icon={effectiveMode === "diff" ? "check" : "file"} title={effectiveMode === "diff" ? "No changes in this file" : "Empty file"} message={effectiveMode === "diff" ? "It matches the base branch." : undefined} /></View>;
+		body = <View style={styles.center}><EmptyState icon={effectiveMode === "diff" ? "check" : "file"} title={effectiveMode === "diff" ? "No changes in this file" : "Empty file"} message={effectiveMode === "diff" && !picked ? "It matches the base branch." : undefined} /></View>;
 	} else {
 		const listView = (
 			<GestureDetector gesture={drag.gesture}>
@@ -493,7 +520,36 @@ function SessionFileContent() {
 	);
 }
 
-type ImageSide = { uri: string; headers: Record<string, string> };
+type ImageSide = WorkspaceImageSource;
+
+/**
+ * Both sides of a changed image. A machine's are URLs read with its Bearer
+ * header; Orchestrator Cloud has no image URL, so its are read as data and
+ * may not exist, which `unavailable` reports so the page says so instead.
+ */
+function useImageSources(backend: FilesBackend | null, sessionId: string, path: string, detail: WorkspaceFileDetail | null, changed: boolean, image: boolean, read: FileRead) {
+	const [sources, setSources] = useState<{ key: string; before?: ImageSide; after?: ImageSide }>();
+	const wantBefore = Boolean(detail && detail.status !== "added" && changed);
+	const wantAfter = Boolean(detail && !detail.deleted);
+	const version = detail?.workspaceVersion ?? "";
+	const key = JSON.stringify([backend?.key, sessionId, path, version, wantBefore, wantAfter, read]);
+	useEffect(() => {
+		if (!backend || !detail || !image) return;
+		let current = true;
+		// A side that can't be read is no side: the page then says the image is
+		// unavailable rather than staying on Opening… with the read rejected.
+		const side = (which: "before" | "after") => backend.imageSource(sessionId, path, which, version, read).catch(() => undefined);
+		void Promise.all([
+			wantBefore ? side("before") : undefined,
+			wantAfter ? side("after") : undefined,
+		]).then(([before, after]) => { if (current) setSources({ key, before, after }); });
+		return () => { current = false; };
+		// `key` covers what the effect reads from `detail`.
+		// eslint-disable-next-line react-hooks/exhaustive-deps
+	}, [key, image]);
+	const resolved = sources?.key === key;
+	return { before: resolved ? sources.before : undefined, after: resolved ? sources.after : undefined, resolved, unavailable: resolved && !sources.before && !sources.after };
+}
 
 /**
  * A changed image, before and after. Each pane opens the full-screen viewer,
@@ -541,6 +597,7 @@ const makeStyles = (t: Theme) => StyleSheet.create({
 	metaText: { flex: 1, fontFamily: t.fontMono, fontSize: type.footnote.fontSize, lineHeight: type.footnote.lineHeight, color: t.textTertiary },
 	stepCount: { ...type.footnote, fontFamily: font.medium, color: t.textSecondary, paddingHorizontal: space.sm },
 	renamed: { ...type.footnote, color: t.blue },
+	compared: { fontFamily: t.fontMono, fontSize: type.footnote.fontSize, lineHeight: type.footnote.lineHeight, color: t.textSecondary },
 	warn: { ...type.footnote, color: t.amber },
 	preview: { padding: space.lg },
 	markdown: { padding: space.lg, paddingBottom: 120 },

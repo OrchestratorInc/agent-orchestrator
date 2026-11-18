@@ -3,10 +3,13 @@ import { act, create, type ReactTestInstance, type ReactTestRenderer } from "rea
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 const fixtures = vi.hoisted(() => ({
+	glass: true,
 	theme: { bgBase: "#base", bgElevated: "#elevated", textPrimary: "#primary", textSecondary: "#secondary", textTertiary: "#tertiary", accent: "#accent", red: "#red", green: "#green" },
 }));
 
 vi.mock("react-native", () => ({ StyleSheet: { create: (styles: object) => styles } }));
+vi.mock("expo-router/react-navigation", () => ({ useHeaderHeight: () => 116 }));
+vi.mock("./stackScreenOptions", () => ({ get SYSTEM_GLASS_HEADER() { return fixtures.glass; } }));
 vi.mock("./ThemeProvider", () => ({ useTheme: () => fixtures.theme, useThemeState: () => ({ scheme: "dark" }) }));
 vi.mock("@expo/ui", async () => {
 	const React = await import("react");
@@ -25,11 +28,11 @@ vi.mock("@expo/ui/swift-ui", async () => {
 vi.mock("@expo/ui/swift-ui/modifiers", () => {
 	const modifier = (type: string) => (...args: unknown[]) => ({ $type: type, args });
 	return Object.fromEntries(
-		["accessibilityAddTraits", "accessibilityHidden", "background", "buttonBorderShape", "buttonStyle", "controlSize", "defaultScrollAnchor", "disabled", "font", "foregroundStyle", "frame", "imageScale", "labelsHidden", "lineLimit", "listRowBackground", "pickerStyle", "scrollContentBackground", "tag", "tint"].map((name) => [name, modifier(name)]),
+		["accessibilityAddTraits", "accessibilityHidden", "background", "buttonBorderShape", "buttonStyle", "controlSize", "defaultScrollAnchorForRole", "disabled", "font", "foregroundStyle", "frame", "ignoreSafeArea", "imageScale", "labelsHidden", "lineLimit", "listRowBackground", "listRowInsets", "listRowSeparator", "pickerStyle", "scrollContentBackground", "tag", "tint"].map((name) => [name, modifier(name)]),
 	);
 });
 
-import { SettingsButtonRow, SettingsChoiceSection, SettingsLinkRow, SettingsPickerRow, SettingsSection, SettingsStatusRow, SettingsToggleRow, SettingsValueRow } from "./SettingsForm";
+import { SettingsButtonRow, SettingsChoiceSection, SettingsForm, SettingsLinkRow, SettingsPickerRow, SettingsSection, SettingsStatusRow, SettingsToggleRow, SettingsValueRow } from "./SettingsForm";
 
 let renderers: ReactTestRenderer[] = [];
 
@@ -62,7 +65,35 @@ afterEach(() => {
 });
 
 describe("the iOS settings form", () => {
-	it("marks a section's title as a header and leaves out a header or footer it does not have", () => {
+	// Measured on an iPhone: anchored for every role, each row that arrived after
+	// the page opened scrolled it down by about that row, until Account sat under
+	// the title, and scrolling back up was undone by the next change.
+	it("opens at the top and leaves the page where it was scrolled as rows come and go", () => {
+		const form = render(<SettingsForm>{null}</SettingsForm>).findByType("FieldGroup" as never);
+		expect(has(form, "defaultScrollAnchorForRole", "top", "initialOffset")).toBe(true);
+		expect((form.props.modifiers as Modifier[]).filter((modifier) => modifier.$type.startsWith("defaultScrollAnchor"))).toHaveLength(1);
+	});
+
+	// Measured on an iPhone: pushed from the board's Settings button, the Form
+	// never received the bar's inset, so Account sat under the title and pulling
+	// down sprang back to Machines. It keeps clear of the bar itself instead.
+	it("keeps clear of iOS 26's clear bar itself, by the bar's height less the Form's own gap", () => {
+		fixtures.glass = true;
+		const titled = render(<SettingsForm><SettingsSection title="Account">{null}</SettingsSection></SettingsForm>).findByType("FieldGroup" as never);
+		expect(has(titled, "ignoreSafeArea", { regions: "container", edges: "top" })).toBe(true);
+		const space = (form: ReactTestInstance) => (form.props.children as React.ReactElement[])[0];
+		expect(render(space(titled)).findByType("Spacer" as never).props.modifiers).toEqual(expect.arrayContaining([{ $type: "frame", args: [{ height: 116 - 53 }] }]));
+		const untitled = render(<SettingsForm><SettingsSection>{null}</SettingsSection></SettingsForm>).findByType("FieldGroup" as never);
+		expect(render(space(untitled)).findByType("Spacer" as never).props.modifiers).toEqual(expect.arrayContaining([{ $type: "frame", args: [{ height: 116 - 35 }] }]));
+
+		fixtures.glass = false;
+		const opaque = render(<SettingsForm><SettingsSection title="Account">{null}</SettingsSection></SettingsForm>).findByType("FieldGroup" as never);
+		expect(has(opaque, "ignoreSafeArea")).toBe(false);
+		expect(opaque.findAllByType("Spacer" as never)).toHaveLength(0);
+		fixtures.glass = true;
+	});
+
+	it("marks a section's title as a header, leaves out a header it does not have, and keeps an empty footer slot", () => {
 		const root = render(<SettingsSection title="Account" footer="Paired machines sync.">{null}</SettingsSection>);
 		const header = root.findByType("FieldGroupSectionHeader" as never).findByType("Text" as never);
 		expect(header.props.children).toBe("Account");
@@ -70,7 +101,10 @@ describe("the iOS settings form", () => {
 		expect(root.findByType("FieldGroupSectionFooter" as never).findByType("Text" as never).props.children).toBe("Paired machines sync.");
 		const bare = render(<SettingsSection>{null}</SettingsSection>);
 		expect(bare.findAllByType("FieldGroupSectionHeader" as never)).toHaveLength(0);
-		expect(bare.findAllByType("FieldGroupSectionFooter" as never)).toHaveLength(0);
+		// Mounted with nothing in it: a footer slot that came and went rebuilt the
+		// SwiftUI section, and the field being typed in lost the keyboard (#7906).
+		expect(bare.findAllByType("FieldGroupSectionFooter" as never)).toHaveLength(1);
+		expect(bare.findByType("FieldGroupSectionFooter" as never).findAllByType("Text" as never)).toHaveLength(0);
 	});
 
 	it("opens a link row, reading its value but not its symbols to VoiceOver", () => {

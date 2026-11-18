@@ -11,10 +11,12 @@
  * An entry stops being handed out after a few minutes, long enough for the
  * daemon's copy to replace the echo, and its URL is revoked once no mounted
  * tile still shows it. A tile keeps the URL it mounted with, so nothing reloads
- * or flickers under the reader; one mounted later reads the daemon's copy.
+ * or flickers under the reader; one mounted later reads the daemon's copy. A
+ * local copy that fails to draw, or was revoked before its tile could hold it,
+ * hands the tile over to the daemon's copy too.
  */
 
-import { useEffect, useMemo } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 
 /** How long a new tile is given the local copy. */
 const HANDOUT_MS = 5 * 60_000;
@@ -91,9 +93,10 @@ export function sentAttachmentPreview(path: string | undefined): string | undefi
 	return entry && !entry.retired ? entry.url : undefined;
 }
 
-function hold(path: string, url: string): () => void {
+/** Count a tile as showing this URL; undefined when the URL is no longer live. */
+function hold(path: string, url: string): (() => void) | undefined {
 	const entry = entries.get(path);
-	if (!entry || entry.url !== url) return () => {};
+	if (!entry || entry.url !== url) return undefined;
 	entry.users++;
 	return () => {
 		entry.users--;
@@ -101,14 +104,35 @@ function hold(path: string, url: string): () => void {
 	};
 }
 
+export type SentAttachmentPreview = {
+	/** The local copy, until it fails; the tile then reads the daemon's copy. */
+	url: string | undefined;
+	/** Call when the local copy fails to load. Undefined once the tile has no local copy. */
+	onError: (() => void) | undefined;
+};
+
 /**
  * The local copy of a staged file for a tile, kept for as long as the tile is
- * mounted. Read once per path, so the source never swaps under a drawn tile.
+ * mounted. Read once per path, so the source never swaps under a drawn tile,
+ * except once, to the daemon's copy, if the local one fails.
  */
-export function useSentAttachmentPreview(path: string | undefined): string | undefined {
+export function useSentAttachmentPreview(path: string | undefined): SentAttachmentPreview {
 	const url = useMemo(() => sentAttachmentPreview(path), [path]);
-	useEffect(() => (path && url ? hold(path, url) : undefined), [path, url]);
-	return url;
+	// The URL that failed rather than a flag, so a new path gets its own attempt.
+	const [failed, setFailed] = useState<string>();
+	const live = url !== undefined && url !== failed ? url : undefined;
+	// Keyed on the live URL, so a tile that gave up its local copy also lets it go.
+	useEffect(() => {
+		if (!path || !live) return undefined;
+		const release = hold(path, live);
+		// Revoked between this render and now (retired with no other tile holding it).
+		if (!release) setFailed(live);
+		return release;
+	}, [path, live]);
+	const onError = useCallback(() => {
+		if (url) setFailed(url);
+	}, [url]);
+	return { url: live, onError: live ? onError : undefined };
 }
 
 /** Test seam: forget every entry. */

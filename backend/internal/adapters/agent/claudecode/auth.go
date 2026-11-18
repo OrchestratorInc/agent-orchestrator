@@ -122,7 +122,15 @@ func (p *Plugin) AuthStatusWithDiagnostics(ctx context.Context) (ports.AgentAuth
 // session launched from dataDir will actually use: with a setup-token login
 // chosen in AO, that token, which the native CLI check alone cannot see.
 func (p *Plugin) AuthStatusForRuntime(ctx context.Context, dataDir string) (ports.AgentAuthStatus, domain.AgentAccountIdentity, []domain.AgentAuthDiagnostic, error) {
+	// What the caller holds back from Claude Code's sessions (an Anthropic key
+	// AO exported to the daemon for another harness) is held back first, in
+	// the order a session launch applies it: the credential AO adds is then
+	// chosen against the environment a session really has, so a blanked key
+	// no longer reads as Claude Code's own login and hides the cloud token.
 	env := make(map[string]string)
+	for name, value := range ports.AuthEnvironmentOverrides(ctx) {
+		env[name] = value
+	}
 	p.AugmentRuntimeEnv(env, dataDir)
 	status, report, steps, err := p.authStatusAndDiagnostics(ctx, "", env, false)
 	return status, report.account(), steps, err

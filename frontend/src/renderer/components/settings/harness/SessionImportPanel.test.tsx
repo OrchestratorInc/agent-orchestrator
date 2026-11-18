@@ -5,7 +5,6 @@ import { beforeEach, expect, it, vi } from "vitest";
 import { workspaceQueryKey } from "../../../hooks/useWorkspaceQuery";
 import type { AgentId } from "../../../lib/agent-options";
 import type { WorkspaceSummary } from "../../../types/workspace";
-import { useUiStore } from "../../../stores/ui-store";
 import { SessionImportPanel } from "./SessionImportPanel";
 const api = vi.hoisted(() => ({ GET: vi.fn(), POST: vi.fn() }));
 vi.mock("../../../lib/api-client", () => ({
@@ -34,7 +33,6 @@ beforeEach(() => {
 	api.GET.mockReset();
 	api.POST.mockReset();
 	window.localStorage.clear();
-	useUiStore.setState({ sessionImportOfferClosed: false });
 	api.GET.mockResolvedValue({
 		data: {
 			candidates: [
@@ -45,6 +43,14 @@ beforeEach(() => {
 		},
 	});
 	api.POST.mockResolvedValue({ data: { results: [{ id: "older", status: "created", sessionId: "standalone-1" }] } });
+});
+it("shows only the reading status until the first scan returns", async () => {
+	api.GET.mockReturnValue(new Promise(() => {}));
+	renderPanel();
+	expect(await screen.findByText("Reading local histories…")).toBeInTheDocument();
+	expect(screen.queryByRole("button", { name: /^Import \d+/ })).not.toBeInTheDocument();
+	expect(screen.queryByRole("button", { name: "Scan again" })).not.toBeInTheDocument();
+	expect(screen.queryByRole("checkbox", { name: "Select all shown conversations" })).not.toBeInTheDocument();
 });
 it("lists OMP chats for import", async () => {
 	api.GET.mockResolvedValue({
@@ -70,8 +76,6 @@ it("lists only this agent's chats, preselects the ones not imported and imports 
 	expect(await screen.findByText("1 conversation imported.")).toBeInTheDocument();
 	expect(api.POST).toHaveBeenCalledWith("/api/v1/session-import", { body: { ids: ["older"] } });
 	expect(screen.getByText("Already in Orchestrator")).toBeInTheDocument();
-	expect(window.localStorage.getItem("ao.sessionImport.offerClosed")).toBe("true");
-	expect(useUiStore.getState().sessionImportOfferClosed).toBe(true);
 });
 
 it("filters the list by a search over titles and projects", async () => {
@@ -148,8 +152,6 @@ it("reports new, existing and failed imports separately", async () => {
 	renderPanel();
 	fireEvent.click(await screen.findByRole("button", { name: "Import 2 conversations" }));
 	expect(await screen.findByText("1 already in Orchestrator. 1 could not be imported.")).toBeInTheDocument();
-	expect(window.localStorage.getItem("ao.sessionImport.offerClosed")).toBeNull();
-	expect(useUiStore.getState().sessionImportOfferClosed).toBe(false);
 });
 
 it("adds a new folder as a project, scans again and imports its chat there", async () => {

@@ -88,13 +88,13 @@ export function EffortMenuItems({ value, choices, onChange, defaultValue = "", d
 	</>;
 }
 
-export function EffortPicker(props: EffortMenuProps & { disabled?: boolean; label?: string; triggerClassName?: string; triggerVariant?: "secondary" | "ghost"; menuClassName?: string; footer?: ReactNode }) {
+export function EffortPicker(props: EffortMenuProps & { disabled?: boolean; label?: string; triggerClassName?: string; triggerVariant?: "secondary" | "ghost"; menuClassName?: string; footer?: ReactNode; /** Trigger text while following the default; "Effort" when omitted. */ followLabel?: string }) {
 	const { t } = useTranslation();
 	const following = props.value === (props.defaultValue ?? "") || (!props.value && props.defaultValue === "default");
 	const label = effortDisplayLabel({
 		value: following ? "" : props.value,
 		choices: props.choices,
-		followLabel: t("settings.models.effort"),
+		followLabel: props.followLabel || t("settings.models.effort"),
 		t,
 		defaultEffort: props.defaultEffort,
 	});
