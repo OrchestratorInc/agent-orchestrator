@@ -16,6 +16,7 @@ import { ProjectCard } from "../../../lib/project-card";
 import { refreshControlColors } from "../../../lib/refreshControlColors";
 import { Spinner } from "../../../lib/Spinner";
 import { StaleBanner } from "../../../lib/StaleBanner";
+import { spawnHostOffline } from "../../../lib/spawnNotices";
 import { useApp } from "../../../lib/store";
 import { UnpairedState } from "../../../lib/UnpairedState";
 import type { Theme } from "../../../lib/theme";
@@ -40,6 +41,7 @@ export default function ProjectsScreen() {
 		hostStates,
 		cloud,
 		notificationsUnread,
+		phoneNetwork,
 		refreshAll,
 	} = useApp();
 	const { status: cloudStatus, notificationsUnread: cloudUnread, watch: watchCloud, projectsLoaded: cloudProjectsLoaded, projectsError: cloudProjectsError, refreshProjects: refreshCloudProjects, client: cloudClient, org: cloudOrg } = useCloud();
@@ -82,10 +84,13 @@ export default function ProjectsScreen() {
 	// orchestrator is doing. The sections' order is kept, so projects that need
 	// attention still come first.
 	// Orchestrator Cloud's projects sit beside each machine's, marked by the cloud environment.
-	const rows = useMemo(
-		() => hostedProjectSections(cloud ? [...hostStates, cloud] : hostStates).flatMap((section) => section.data),
-		[cloud, hostStates],
-	);
+	// A machine is "(offline)" by the rule every screen uses, not for a connection
+	// the app closed on going to the background (see spawnHostOffline).
+	const rows = useMemo(() => {
+		const now = Date.now();
+		const hosts = hostStates.map((host) => ({ ...host, offline: spawnHostOffline(host, phoneNetwork, now) }));
+		return hostedProjectSections(cloud ? [...hosts, cloud] : hosts).flatMap((section) => section.data);
+	}, [cloud, hostStates, phoneNetwork]);
 	const failure = useBoardFailure();
 
 	// No haptic of its own: each platform's refresh control gives the feedback

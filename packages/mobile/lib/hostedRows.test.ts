@@ -1,13 +1,15 @@
 import { describe, expect, it } from "vitest";
 import type { DashboardSession } from "./api";
 import { hostedProjectKey, hostedProjectSections, hostedSessionKey, sessionMachineIdentity, type HostedSession } from "./hostedRows";
+import { EMPTY_LINK_TRACKER, UNREACHABLE_AFTER_FAILURES, UNREACHABLE_AFTER_MS, type LinkTracker, type PhoneNetwork } from "./linkHealth";
+import { spawnHostOffline } from "./spawnNotices";
 
 describe("hosted rows", () => {
 	it("keeps identical project and session IDs from two machines separate", () => {
 		const session = (id: string) => ({ id, projectId: "same", status: "working", mode: "chat" }) as DashboardSession;
 		const sections = hostedProjectSections([
 			{ hostId: "a", name: "Laptop", appearance: { symbol: "laptop" }, projects: [{ id: "same", name: "App" }], sessions: [session("same-session")], orchestrators: [] },
-			{ hostId: "b", name: "Desktop", appearance: { symbol: "desktop" }, connection: "closed", projects: [{ id: "same", name: "App" }], sessions: [], orchestrators: [] },
+			{ hostId: "b", name: "Desktop", appearance: { symbol: "desktop" }, offline: true, projects: [{ id: "same", name: "App" }], sessions: [], orchestrators: [] },
 		]);
 		const rows = sections.flatMap((section) => section.data);
 		expect(rows.map((row) => hostedProjectKey(row.project))).toEqual(["[\"a\",\"same\"]", "[\"b\",\"same\"]"]);
@@ -21,6 +23,24 @@ describe("hosted rows", () => {
 		expect(hostedSessionKey({ ...session("same-session"), hostId: "a", hostName: "Laptop" } as HostedSession)).not.toBe(
 			hostedSessionKey({ ...session("same-session"), hostId: "b", hostName: "Desktop" } as HostedSession),
 		);
+	});
+
+	// As the projects board marks them: a connection the app closed on going to
+	// the background is not offline; a machine the link tracker gave up on is.
+	it("names a machine offline by the shared rule, not for a connection an app switch closed", () => {
+		const now = 1_000_000;
+		const online: PhoneNetwork = { connected: true, internet: true };
+		const givenUp: LinkTracker = { recent: ["no-answer", "no-answer", "no-answer"], unansweredStreak: UNREACHABLE_AFTER_FAILURES, unansweredSince: now - UNREACHABLE_AFTER_MS };
+		const machine = (hostId: string, name: string, poll: { error: string | null; linkTracker: LinkTracker }) => ({
+			hostId, name, connection: "closed" as const, errorStatus: null, ...poll,
+			projects: [{ id: "app", name: "App" }], sessions: [], orchestrators: [],
+		});
+		const hosts = [
+			machine("a", "Laptop", { error: null, linkTracker: EMPTY_LINK_TRACKER }),
+			machine("b", "Desktop", { error: "Couldn't reach your desktop.", linkTracker: givenUp }),
+		];
+		const rows = hostedProjectSections(hosts.map((host) => ({ ...host, offline: spawnHostOffline(host, online, now) }))).flatMap((section) => section.data);
+		expect(rows.map((row) => row.project.hostName)).toEqual(["Laptop", "Desktop (offline)"]);
 	});
 
 	it("keeps machine identity separate from project text for worker rows", () => {

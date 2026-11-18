@@ -130,10 +130,27 @@ describe("retained-stack host routes", () => {
 
 	// The app closes the connection on purpose every time it goes to the background.
 	it("says a machine is offline only by the shared rule, never for a connection an app switch closed", () => {
-		for (const path of ["../app/preview/[id].tsx", "../app/artifact/[sessionId].tsx", "../app/files/[sessionId]/file.tsx", "../app/shell/[handleId].tsx"]) {
+		for (const path of [
+			"../app/preview/[id].tsx",
+			"../app/artifact/[sessionId].tsx",
+			"../app/artifacts/[sessionId].tsx",
+			"../app/files/[sessionId]/index.tsx",
+			"../app/files/[sessionId]/folder.tsx",
+			"../app/files/[sessionId]/file.tsx",
+			"../app/shell/[handleId].tsx",
+		]) {
 			const screen = source(path);
 			expect(screen, path).not.toContain('connection === "closed"');
 			expect(screen, path).toMatch(/machineOffline\(\{ unreachable(: machineUnreachable)?, paired \}\)/);
 		}
+	});
+
+	// Each machine's projects keep their rows through an app switch, so a bare
+	// closed connection marked every one "(offline)", in the app-switcher snapshot too.
+	it("marks a machine's projects offline by the shared rule, never for a closed connection", () => {
+		expect(source("./hostedRows.ts")).not.toContain('connection === "closed"');
+		const projects = source("../app/(tabs)/(projects)/projects.tsx");
+		expect(projects).toContain("offline: spawnHostOffline(host, phoneNetwork, now)");
+		expect(projects).toContain("hostedProjectSections(cloud ? [...hosts, cloud] : hosts)");
 	});
 });
