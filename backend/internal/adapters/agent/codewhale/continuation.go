@@ -90,11 +90,11 @@ func (*Plugin) PrepareImportedSession(ctx context.Context, r ports.ImportedSessi
 	if archive.ID != r.NativeSessionID {
 		return ports.NativeSessionRef{}, errors.New("codewhale source no longer holds the imported conversation")
 	}
-	copy, path, err := codewhalestore.Copy(ctx, r.ConfigDir, r.TranscriptPath, r.LaunchCWD)
+	prepared, path, err := codewhalestore.Copy(ctx, r.ConfigDir, r.TranscriptPath, r.LaunchCWD)
 	if err != nil {
 		return ports.NativeSessionRef{}, err
 	}
-	return ports.NativeSessionRef{NativeSessionID: copy.ID, ConfigDir: r.ConfigDir, TranscriptPath: path}, nil
+	return ports.NativeSessionRef{NativeSessionID: prepared.ID, ConfigDir: r.ConfigDir, TranscriptPath: path}, nil
 }
 
 func (p *Plugin) nativeRestoreConfigDir(ctx context.Context, cfg ports.WorkspaceHookConfig) (string, error) {
@@ -232,7 +232,7 @@ func codewhaleRuntimeScope(runtimeDir string) (string, error) {
 		return "", err
 	}
 	if owner.ID == "" || strings.IndexFunc(owner.ID, func(r rune) bool {
-		return !(r >= 'a' && r <= 'z' || r >= 'A' && r <= 'Z' || r >= '0' && r <= '9' || r == '-' || r == '_')
+		return (r < 'a' || r > 'z') && (r < 'A' || r > 'Z') && (r < '0' || r > '9') && r != '-' && r != '_'
 	}) >= 0 {
 		return "", errors.New("codewhale saved runtime has an invalid owner id")
 	}
