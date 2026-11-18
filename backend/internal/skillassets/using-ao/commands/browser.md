@@ -227,7 +227,8 @@ later session, and several sessions can use it at the same time. A session the
 user switched to Temporary (private) starts signed out and its data is cleared
 when the session ends. So does a session in a project whose settings say
 "Always use a temporary browser", unless the user picked a profile for that
-session. Profiles stay on this computer and are never copied
+session. That setting applies when a session's browser is created: a browser
+already open keeps its profile, sign-ins, and data. Profiles stay on this computer and are never copied
 between machines.
 
 ```bash
