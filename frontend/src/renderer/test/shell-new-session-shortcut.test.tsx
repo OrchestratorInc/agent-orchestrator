@@ -153,13 +153,12 @@ vi.mock("@tanstack/react-router", async (importOriginal) => ({
 	createFileRoute: () => (options: unknown) => ({ options }),
 	Outlet: () => <input aria-label="Page draft" defaultValue="" />,
 	useMatch: () => undefined,
-	useMatchRoute: () => (options: { to: string }) => shellMocks.state.matchRouteTarget === options.to,
 	useNavigate: () => shellMocks.navigate,
 	useRouter: () => shellMocks.router,
 	useParams: () => shellMocks.state.routeParams,
 	useSearch: () => shellMocks.state.routeSearch,
-	useRouterState: ({ select }: { select: (state: { location: { search: unknown } }) => unknown }) =>
-		select({ location: { search: shellMocks.state.routeSearch ?? {} } }),
+	useRouterState: ({ select }: { select: (state: { location: { search: unknown; pathname: string } }) => unknown }) =>
+		select({ location: { search: shellMocks.state.routeSearch ?? {}, pathname: shellMocks.state.matchRouteTarget ?? "" } }),
 }));
 
 vi.mock("../lib/bridge", () => ({
