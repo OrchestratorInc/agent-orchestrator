@@ -247,6 +247,9 @@ func TestPrimeImportProofPublishesCompleteWithoutReplacing(t *testing.T) {
 func TestPrimeForkMatchesCurrentAndLegacyNativeIDs(t *testing.T) {
 	root, workspace := t.TempDir(), t.TempDir()
 	source := filepath.Join(root, "synthetic-source.jsonl")
+	if err := os.WriteFile(source, nil, 0o600); err != nil {
+		t.Fatal(err)
+	}
 	proof := primeImportProof{SourceID: primeSourceID, SourcePath: source, Workspace: workspace}
 	for _, tc := range []struct {
 		id   string
