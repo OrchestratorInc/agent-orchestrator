@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"net/http"
 	"time"
 
@@ -15,6 +16,11 @@ import (
 )
 
 const probeTimeout = 2 * time.Second
+
+// maxProbeBody caps a /healthz or /readyz response. The daemon's is a few
+// hundred bytes; the cap keeps an unverified process on the run-file's port
+// from making the CLI buffer an arbitrarily large body.
+const maxProbeBody = 64 << 10
 
 type statusOptions struct {
 	json bool
@@ -168,7 +174,7 @@ func (c *commandContext) readProbe(ctx context.Context, port int, path string) (
 		return probeResult{}, fmt.Errorf("%s: HTTP %d", path, resp.StatusCode)
 	}
 	var body probeResult
-	if err := json.NewDecoder(resp.Body).Decode(&body); err != nil {
+	if err := json.NewDecoder(io.LimitReader(resp.Body, maxProbeBody)).Decode(&body); err != nil {
 		return probeResult{}, fmt.Errorf("%s: decode response: %w", path, err)
 	}
 	if body.Status == "" {
@@ -184,7 +190,14 @@ func (c *commandContext) readProbe(ctx context.Context, port int, path string) (
 // daemon answers on loopback. The daemon counts as alive only when /healthz
 // identifies itself as the Orchestrator daemon with the run-file's PID, so a
 // different process that reuses the port is not mistaken for it.
+//
+// That claim is unauthenticated, so it is only consulted where a PID can be
+// hidden but alive (Deps.PIDMayBeHidden). Elsewhere a failed PID check means
+// the daemon is dead, and the run-file is stale whatever answers on its port.
 func (c *commandContext) probeOwnedDaemon(ctx context.Context, info *runfile.Info) (probeResult, bool) {
+	if c.deps.PIDMayBeHidden == nil || !c.deps.PIDMayBeHidden() {
+		return probeResult{}, false
+	}
 	if info == nil || info.PID <= 0 || info.Port <= 0 {
 		return probeResult{}, false
 	}

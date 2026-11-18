@@ -112,15 +112,22 @@ func (c *commandContext) waitForStopped(ctx context.Context, pid int, runFilePat
 			return daemonStatus{}, err
 		}
 		alive := c.deps.ProcessAlive(pid)
+		if !alive && info != nil && info.PID == pid {
+			// The PID may only be hidden (see probeOwnedDaemon). A daemon that
+			// still answers is draining and removes its own run-file once its
+			// server stops, so keep waiting rather than delete it from under it.
+			_, alive = c.probeOwnedDaemon(ctx, info)
+		}
 		if !alive {
 			// Only remove the run-file if it still belongs to the process we
 			// stopped. A concurrent `ao start` may have already written a new
 			// run-file for a different daemon; removing that would corrupt its
 			// handshake and make a live daemon look stopped.
+			//
+			// Best effort: the daemon accepted /shutdown and removes its own
+			// run-file, and a CLI in a read-only sandbox cannot.
 			if info != nil && info.PID == pid {
-				if err := runfile.Remove(runFilePath); err != nil {
-					return daemonStatus{}, err
-				}
+				_ = runfile.Remove(runFilePath)
 			}
 			return daemonStatus{State: stateStopped, RunFile: runFilePath, DataDir: dataDir}, nil
 		}
