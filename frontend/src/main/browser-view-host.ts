@@ -189,6 +189,13 @@ export type BrowserFindStopInput = {
   focusPage?: boolean;
 };
 
+// The agent started working in a tab on screen after a quiet spell: the
+// panel greets it with a light around the page as the mascot pops up.
+export type BrowserAgentGreeting = {
+  viewId: string;
+  tabId: string;
+};
+
 export type BrowserAgentActivityState = {
   viewId: string;
   active: boolean;
@@ -1110,6 +1117,10 @@ export function createBrowserViewHost(
       const entry = session.tabs.get(session.agentTabId);
       if (!entry || !agentTabOnScreen(session, entry)) return;
       agentBadge.show(session, framedBounds(session, entry));
+      shellWebContents.send("browser:agentGreeting", {
+        viewId: session.viewId,
+        tabId: entry.tabId,
+      } satisfies BrowserAgentGreeting);
     }, 250);
   };
   const setAgentBrowserActivity = (

@@ -66,6 +66,7 @@ const hookState = vi.hoisted(() => ({
 	tabs: [{ id: "t1", url: "", title: "", active: true }] as BrowserTabState[],
 	activeTabId: "t1",
 	agentTabId: "",
+	agentGreeting: null as { tabId: string; seq: number } | null,
 	tabNotice: "",
 	agentBrowserActive: false,
 	agentBrowserActivity: null as { active: boolean; action?: string; phase?: "started" | "finished" } | null,
@@ -104,6 +105,7 @@ vi.mock("../hooks/useBrowserView", () => ({
 			tabs: hookState.tabs,
 			activeTabId: hookState.activeTabId,
 			agentTabId: hookState.agentTabId,
+			agentGreeting: hookState.agentGreeting,
 			tabNotice: hookState.tabNotice,
 			selectTab: hookState.selectTab,
 			closeTab: hookState.closeTab,
@@ -342,6 +344,7 @@ describe("BrowserPanel", () => {
 		hookState.tabs = [{ id: "t1", url: "", title: "", active: true }];
 		hookState.activeTabId = "t1";
 		hookState.agentTabId = "";
+		hookState.agentGreeting = null;
 		hookState.agentBrowserActive = false;
 		hookState.agentBrowserActivity = null;
 		hookState.tabNotice = "";
@@ -1218,7 +1221,7 @@ describe("BrowserPanel", () => {
 
 		const frame = screen.getByTestId("browser-agent-frame");
 		expect(frame).toHaveAttribute("aria-hidden", "true");
-		expect(frame).not.toHaveAttribute("data-acting");
+		expect(screen.queryByTestId("browser-agent-frame-sweep")).toBeNull();
 
 		hookState.tabs = hookState.tabs.map((tab) => ({ ...tab, active: tab.id === "t2" }));
 		hookState.activeTabId = "t2";
@@ -1226,7 +1229,38 @@ describe("BrowserPanel", () => {
 		expect(screen.queryByTestId("browser-agent-frame")).toBeNull();
 	});
 
-	it("lights the agent's frame and its tab while the agent acts in it, and only its tab while it acts behind", () => {
+	it("runs a light around the agent's page when it greets, then lets it fade, and not around another tab", () => {
+		vi.useFakeTimers();
+		try {
+			hookState.navState = { ...hookState.navState, url: "http://localhost:3000/" };
+			hookState.tabs = [
+				{ id: "t1", url: "http://localhost:3000/", title: "Agent app", active: true, owner: "agent" as const },
+				{ id: "t2", url: "http://localhost:4173/", title: "Agent two", active: false, owner: "agent" as const },
+			];
+			hookState.activeTabId = "t1";
+			hookState.agentTabId = "t1";
+			const panel = () => <TooltipProvider><BrowserPanel active onTogglePopOut={() => undefined} poppedOut={false} session={session} /></TooltipProvider>;
+			const { rerender } = render(<BrowserPanel active onTogglePopOut={() => undefined} poppedOut={false} session={session} />);
+			expect(screen.queryByTestId("browser-agent-frame-sweep")).toBeNull();
+
+			hookState.agentGreeting = { tabId: "t1", seq: 1 };
+			rerender(panel());
+			expect(screen.getByTestId("browser-agent-frame-sweep")).toBeInTheDocument();
+			act(() => {
+				vi.advanceTimersByTime(3_300);
+			});
+			expect(screen.queryByTestId("browser-agent-frame-sweep")).toBeNull();
+
+			// A greeting in the agent's other tab, behind: no light around this one.
+			hookState.agentGreeting = { tabId: "t2", seq: 2 };
+			rerender(panel());
+			expect(screen.queryByTestId("browser-agent-frame-sweep")).toBeNull();
+		} finally {
+			vi.useRealTimers();
+		}
+	});
+
+	it("marks the agent's tab while the agent acts in it, in front or behind", () => {
 		hookState.navState = { ...hookState.navState, url: "http://localhost:3000/" };
 		hookState.tabs = [
 			{ id: "t1", url: "http://localhost:3000/", title: "Agent app", active: true, owner: "agent" as const },
@@ -1238,8 +1272,8 @@ describe("BrowserPanel", () => {
 		hookState.agentBrowserActivity = { active: true, action: "click", phase: "started" };
 		const { rerender } = render(<BrowserPanel active onTogglePopOut={() => undefined} poppedOut={false} session={session} />);
 
-		const frame = screen.getByTestId("browser-agent-frame");
-		expect(frame).toHaveAttribute("data-acting", "true");
+		// Acting alone lights no light around the page: only the greeting does.
+		expect(screen.queryByTestId("browser-agent-frame-sweep")).toBeNull();
 		const tabList = screen.getByRole("tablist", { name: "Browser tabs" });
 		const agentTabRow = () => within(tabList).getByRole("tab", { name: "Agent's tab: Agent app" }).closest("[data-browser-tab-id]");
 		const myTabRow = () => within(tabList).getByRole("tab", { name: "My app" }).closest("[data-browser-tab-id]");

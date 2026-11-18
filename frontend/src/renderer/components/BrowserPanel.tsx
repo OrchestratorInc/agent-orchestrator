@@ -456,6 +456,7 @@ export const BrowserPanelView = memo(function BrowserPanelView({
 		reopenClosedTab,
 		agentBrowserActive,
 		agentBrowserActivity,
+		agentGreeting = null,
 		devtoolsState = { viewId: "", open: false, activeTabId: "" },
 		profileState = { viewId: "", profileId: null, temporary: true },
 		openDevTools = async () => undefined,
@@ -960,7 +961,16 @@ export const BrowserPanelView = memo(function BrowserPanelView({
 	// its commands land in.
 	// The tab the agent is acting in right now, in front or behind.
 	const agentActingIn = agentStatusLabel ? agentTabId : "";
-	const agentActingInFront = agentActingIn !== "" && agentActingIn === activeTabId;
+	// The agent's greeting (it started working after a quiet spell): a light
+	// runs around its page while the mascot is up, if its tab is in front.
+	const [greetingShown, setGreetingShown] = useState(0);
+	useEffect(() => {
+		if (!agentGreeting) return;
+		setGreetingShown(agentGreeting.seq);
+		const timer = window.setTimeout(() => setGreetingShown(0), AGENT_GREETING_MS);
+		return () => window.clearTimeout(timer);
+	}, [agentGreeting]);
+	const greetingInFront = greetingShown !== 0 && agentGreeting?.tabId === activeTabId ? greetingShown : 0;
 	const runtimeState = useBrowserRuntimeState();
 	// A handshake in flight (launch, Reconnect, a daemon restart's first redial) is
 	// not a disconnect yet; alarming then would flash the alert on every relink.
@@ -1807,7 +1817,7 @@ export const BrowserPanelView = memo(function BrowserPanelView({
 							ref={slotRef}
 						/>
 						{framedForAgent ? (
-							<BrowserAgentFrame acting={agentActingInFront} />
+							<BrowserAgentFrame greeting={greetingInFront} />
 						) : null}
 					</div>
 					{showStaticPreview ? <StaticPreview url={navState.url} /> : null}
@@ -1965,6 +1975,9 @@ export const BrowserTopTabDragOverlay = memo(function BrowserTopTabDragOverlay({
 		</div>
 	);
 });
+
+// As long as the mascot's pop-up (main/browser-agent-badge.ts AGENT_BADGE_SHOW_MS).
+const AGENT_GREETING_MS = 3_200;
 
 function agentActivityLabel(activity: BrowserViewModel["agentBrowserActivity"], active: boolean): string {
 	if (!active && !activity?.active) return "";

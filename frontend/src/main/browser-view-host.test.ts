@@ -7033,7 +7033,7 @@ describe("agent and person tabs", () => {
 
 	it("pops the AO mascot up over the agent's page when it starts working after a quiet spell", async () => {
 		const tabHost = setupTabHost(undefined, false, undefined, undefined, undefined, { agentBadge: true });
-		const { host, invoke, emit, views, constructorOptions } = tabHost;
+		const { host, invoke, emit, views, constructorOptions, sent } = tabHost;
 		const { viewId } = (await invoke("browser:ensure", "sess-1")) as { viewId: string };
 		emit("browser:setBounds", { viewId, revision: 1, rect: { x: 10, y: 20, width: 700, height: 500 }, visible: true });
 		await host.execute("sess-1", "open", { url: "https://agent.example.test/" });
@@ -7044,6 +7044,10 @@ describe("agent and person tabs", () => {
 		expect(constructorOptions[1]!.webPreferences).toMatchObject({ javascript: false, sandbox: true, nodeIntegration: false });
 		expect(badge.setBounds).toHaveBeenLastCalledWith(agentBadgeBounds(insetForAgentFrame({ x: 10, y: 20, width: 700, height: 500 })));
 		expect(badge.setVisible).toHaveBeenLastCalledWith(true);
+		// The panel runs its light around the same tab.
+		expect(sent.filter((event) => event.channel === "browser:agentGreeting").map((event) => event.payload)).toEqual([
+			{ viewId, tabId: "t1" },
+		]);
 		// The person's pointer reaches it: out of the way at once.
 		(badge.listeners.get("before-mouse-event") as () => void)();
 		expect(badge.setVisible).toHaveBeenLastCalledWith(false);

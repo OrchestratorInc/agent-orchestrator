@@ -330,6 +330,7 @@ export const aoBridge: AoBridge =
 			onPageFocus: () => () => undefined,
 			onTabsState: () => () => undefined,
 			onAgentActivity: () => () => undefined,
+			onAgentGreeting: () => () => undefined,
 			onRuntimeState: () => () => undefined,
 			onDevToolsState: () => () => undefined,
 			onProfileState: () => () => undefined,

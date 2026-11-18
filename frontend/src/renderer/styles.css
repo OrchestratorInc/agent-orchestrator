@@ -5711,7 +5711,17 @@ html[data-shell-linux] body > .files-popout-overlay {
 .browser-panel__tab[data-browser-tab-owner="agent"][data-agent-acting="true"]::after {
 	opacity: 1;
 	box-shadow: 0 0 6px 1px color-mix(in srgb, var(--color-status-working) 75%, transparent);
-	animation: browser-agent-glow 1.8s ease-in-out infinite;
+	animation: browser-agent-tab-pulse 1.8s ease-in-out infinite;
+}
+
+@keyframes browser-agent-tab-pulse {
+	0%,
+	100% {
+		opacity: 1;
+	}
+	50% {
+		opacity: 0.55;
+	}
 }
 
 .browser-panel__tab-agent-mark {
@@ -5986,8 +5996,15 @@ html[data-shell-linux] body > .files-popout-overlay {
 /* The agent's tab (BrowserAgentFrame). The view host insets that tab's page by
  * --agent-frame-edge on every side, and everything here paints in that room:
  * nothing may paint inside the page's rect, where the raised shell would cover
- * the live page during a menu. The glow is a live Working state, not
- * decoration (DESIGN.md decisions log). */
+ * the live page during a menu. The sweep is the agent's greeting as it starts
+ * working, a live Working state rather than decoration (DESIGN.md decisions
+ * log), and it leaves after one pass. */
+@property --agent-sweep-angle {
+	syntax: "<angle>";
+	inherits: false;
+	initial-value: 0deg;
+}
+
 .browser-agent-frame {
 	position: absolute;
 	inset: 0;
@@ -5995,7 +6012,7 @@ html[data-shell-linux] body > .files-popout-overlay {
 }
 
 .browser-agent-frame__ground,
-.browser-agent-frame__glow {
+.browser-agent-frame__edge {
 	position: absolute;
 	inset: var(--agent-frame-edge);
 	/* The page view's corner radius (BROWSER_VIEW_BORDER_RADIUS). */
@@ -6007,26 +6024,51 @@ html[data-shell-linux] body > .files-popout-overlay {
 	box-shadow: 0 0 0 var(--agent-frame-edge) var(--bg);
 }
 
-.browser-agent-frame__glow {
+.browser-agent-frame__edge {
 	box-shadow: 0 0 0 1px color-mix(in srgb, var(--color-status-working) 40%, transparent);
-	transition: box-shadow var(--duration-normal) ease-out;
 }
 
-.browser-agent-frame[data-acting="true"] .browser-agent-frame__glow {
-	box-shadow:
-		0 0 0 1.5px var(--color-status-working),
-		0 0 5px 2px color-mix(in srgb, var(--color-status-working) 65%, transparent),
-		0 0 12px 5px color-mix(in srgb, var(--color-status-working) 35%, transparent);
-	animation: browser-agent-glow 1.8s ease-in-out infinite;
+/* A streak of light runs around the page twice, then fades. Masked to the
+ * edge, so its middle stays clear over the page. */
+.browser-agent-frame__sweep {
+	position: absolute;
+	inset: 0;
+	padding: var(--agent-frame-edge);
+	border-radius: calc(10px + var(--agent-frame-edge));
+	background: conic-gradient(
+		from var(--agent-sweep-angle),
+		transparent 0deg 220deg,
+		color-mix(in srgb, var(--color-status-working) 35%, transparent) 290deg,
+		var(--color-status-working) 345deg,
+		color-mix(in srgb, var(--color-status-working) 45%, white) 357deg,
+		transparent 360deg
+	);
+	mask:
+		linear-gradient(#000 0 0) content-box exclude,
+		linear-gradient(#000 0 0);
+	filter: blur(1.5px) drop-shadow(0 0 4px var(--color-status-working));
+	opacity: 0;
+	animation:
+		browser-agent-sweep-turn 1.3s cubic-bezier(0.45, 0, 0.55, 1) 2,
+		browser-agent-sweep-fade 3s ease-out forwards;
 }
 
-@keyframes browser-agent-glow {
-	0%,
-	100% {
+@keyframes browser-agent-sweep-turn {
+	to {
+		--agent-sweep-angle: 360deg;
+	}
+}
+
+@keyframes browser-agent-sweep-fade {
+	0% {
+		opacity: 0;
+	}
+	8%,
+	72% {
 		opacity: 1;
 	}
-	50% {
-		opacity: 0.55;
+	100% {
+		opacity: 0;
 	}
 }
 
@@ -6045,9 +6087,11 @@ html[data-shell-linux] body > .files-popout-overlay {
 	}
 }
 
+/* Reduced motion: no travelling light, a still ring that fades in and out. */
 @media (prefers-reduced-motion: reduce) {
-	.browser-agent-frame[data-acting="true"] .browser-agent-frame__glow {
-		animation: none;
+	.browser-agent-frame__sweep {
+		background: var(--color-status-working);
+		animation: browser-agent-sweep-fade 3s ease-out forwards;
 	}
 }
 
