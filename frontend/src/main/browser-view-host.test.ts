@@ -7009,7 +7009,7 @@ describe("agent and person tabs", () => {
 	});
 
 	it("gives the keyboard back when a tab behind the person's takes it, and leaves the panel's editing alone", async () => {
-		const { host, invoke, views, viewId, sent, shellFocus } = await open();
+		const { host, invoke, views, viewId, sent, shellFocus, personClicks } = await open();
 		await host.execute("sess-1", "open", { url: "https://agent.example.test/" });
 		await invoke("browser:openTab", { viewId, url: "https://mine.example.test/" });
 		const pageFocusReports = () => sent.filter((event) => event.channel === "browser:pageFocus").length;
@@ -7022,7 +7022,8 @@ describe("agent and person tabs", () => {
 		expect(pageFocusReports()).toBe(reported);
 		expect(shellFocus).toHaveBeenCalledTimes(1);
 
-		// The person's own page in front taking focus is theirs: the panel hears of it.
+		// The person clicks their own page in front: its focus is theirs, and the panel hears of it.
+		personClicks(1);
 		takesFocus(1);
 		expect(pageFocusReports()).toBe(reported + 1);
 		// Behind again: the keyboard goes back to the person's page, not the app.
@@ -7031,6 +7032,39 @@ describe("agent and person tabs", () => {
 		expect((views[1]!.webContents as unknown as { focus: ReturnType<typeof vi.fn> }).focus).toHaveBeenCalled();
 		expect(shellFocus).not.toHaveBeenCalled();
 		expect(pageFocusReports()).toBe(reported + 1);
+	});
+
+	it("keeps the keyboard where the person is while the agent loads or drives the page in front", async () => {
+		const { host, views, sent, shellFocus, personClicks } = await open();
+		const pageFocusReports = () => sent.filter((event) => event.channel === "browser:pageFocus").length;
+		const takesFocus = () => (views[0]!.listeners.get("focus") as () => void)();
+		// The agent's command is under way; the person is typing in the chat composer.
+		const later = vi.spyOn(Date, "now");
+		try {
+			await host.execute("sess-1", "open", { url: "https://agent.example.test/" });
+			const reported = pageFocusReports();
+			shellFocus.mockClear();
+			// Its page load takes the keyboard: it goes straight back to the app.
+			takesFocus();
+			expect(shellFocus).toHaveBeenCalledTimes(1);
+			expect(pageFocusReports()).toBe(reported);
+
+			// The person clicks into the page: that focus is theirs.
+			personClicks(0);
+			shellFocus.mockClear();
+			takesFocus();
+			expect(shellFocus).not.toHaveBeenCalled();
+			expect(pageFocusReports()).toBe(reported + 1);
+
+			// Long after the agent stopped and the person last clicked, focus is ordinary again.
+			later.mockReturnValue(Date.now() + 60_000);
+			shellFocus.mockClear();
+			takesFocus();
+			expect(shellFocus).not.toHaveBeenCalled();
+			expect(pageFocusReports()).toBe(reported + 2);
+		} finally {
+			later.mockRestore();
+		}
 	});
 
 	it("reports the agent acting until a slow command finishes, not only while it starts", async () => {

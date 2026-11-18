@@ -627,6 +627,8 @@ type BrowserEntry = {
   owner?: BrowserTabOwner;
   // Who last sent input to this tab's page: a popup it opens is theirs.
   lastInputBy?: BrowserTabOwner;
+  // When the person last clicked or typed in the page (Date.now()).
+  personInputAt?: number;
   // A preview loaded here while another tab was in front (BrowserTabState).
   unseen?: boolean;
   // Its page has drawn a frame (ensurePainted). Until it has, Chromium drops
@@ -830,6 +832,11 @@ const OFFSCREEN_BOUNDS: BrowserRect = {
 // this is the only thing rounding its corners. A mismatch here leaves a sliver of
 // the page's own background peeking past the DOM panel's rounded corner curve.
 const BROWSER_VIEW_BORDER_RADIUS = 10;
+// A page takes the keyboard while the agent works only right after the
+// person clicks or types in it.
+const PERSON_FOCUS_GRACE_MS = 1_500;
+// How long after the agent's last command its page loads may still settle.
+const AGENT_SETTLE_MS = 1_500;
 const DEFAULT_NETWORK_CAPTURE_SECONDS = 60;
 const MAX_NETWORK_CAPTURE_SECONDS = 300;
 const MAX_NETWORK_REQUESTS = 200;
@@ -1091,6 +1098,12 @@ export function createBrowserViewHost(
   shellWebContents.on?.("focus", () => {
     personFocus = undefined;
   });
+  // The agent is working in the session, or just finished: a page load it
+  // started can still be settling.
+  const agentAtWork = (session: BrowserSessionEntry): boolean =>
+    session.agentBrowserCommands > 0 ||
+    (session.agentQuietSince !== undefined &&
+      Date.now() - session.agentQuietSince < AGENT_SETTLE_MS);
   const restorePersonFocus = (): void => {
     const last = personFocus;
     const stillInFront =
@@ -1504,6 +1517,7 @@ export function createBrowserViewHost(
     const notePersonInput = () => {
       if (!isCurrentEntry() || (session.agentInputDepth ?? 0) > 0) return;
       entry.lastInputBy = "person";
+      entry.personInputAt = Date.now();
       claimForPerson(session, entry);
     };
     view.webContents.on("before-input-event", (_event, input) => {
@@ -1652,11 +1666,15 @@ export function createBrowserViewHost(
     );
     view.webContents.on("focus", () => {
       if (!isCurrentEntry()) return;
-      // Only the tab in front is the person's to type into. A tab behind it
-      // (the agent's, working out of sight) taking focus must not pull the
-      // keyboard from where the person was, nor end their address-bar edit:
-      // give focus back.
-      if (session.activeTabId !== entry.tabId) {
+      // The keyboard is the person's. A page takes it only when they reach
+      // for it: a tab behind the one in front (the agent's, out of sight), or
+      // a page the agent is loading or driving, must not pull it from where
+      // they were (the chat composer, the address bar): give focus back.
+      const inFront = session.activeTabId === entry.tabId;
+      const personReached =
+        entry.personInputAt !== undefined &&
+        Date.now() - entry.personInputAt < PERSON_FOCUS_GRACE_MS;
+      if (!inFront || (agentAtWork(session) && !personReached)) {
         restorePersonFocus();
         return;
       }
