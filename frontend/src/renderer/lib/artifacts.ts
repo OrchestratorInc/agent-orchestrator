@@ -11,6 +11,7 @@ import type { KeptArtifactSet } from "../hooks/useKeptArtifacts";
 import type { TFunction } from "i18next";
 import type { CloudShareAccess, HostShareLink } from "../../shared/cloud-share";
 import { CloudCpError } from "./cloud-cp/errors";
+import type { CloudCpSharedArtifact } from "./cloud-cp/types";
 import { fileMediaKind } from "./file-media";
 import { isSvgPath } from "./image-files";
 import { sessionUiKey } from "./hosts";
@@ -57,7 +58,43 @@ export type ArtifactRow = {
 	 * session; a new one can start from it.
 	 */
 	kept?: "session-deleted" | "project-removed";
+	/**
+	 * Set on a link someone else published that opens for this person: one
+	 * shared with their email, or a public one they opened in the app. It has
+	 * no session; it opens through the link's viewer access.
+	 */
+	shared?: { linkId: string; viewerUrl?: string; access: CloudShareAccess };
 };
+
+/** The group ID of the links shared with this person. */
+export const SHARED_WITH_ME_GROUP_ID = "shared-with-me";
+
+/** A shared link's row; see ArtifactRow.shared. */
+export function sharedArtifactRow(item: Pick<CloudCpSharedArtifact, "linkId" | "name" | "contentType" | "updatedAt" | "access" | "viewerUrl">): ArtifactRow {
+	const name = item.name;
+	const kind: ArtifactKind = /^text\/html\b/i.test(item.contentType) || /\.html?$/i.test(name)
+		? "html"
+		: /^text\/markdown\b/i.test(item.contentType) || /\.(md|markdown)$/i.test(name) ? "markdown" : "file";
+	return {
+		id: `shared:${item.linkId}`,
+		path: name,
+		name,
+		kind,
+		updatedAt: item.updatedAt,
+		sessionId: `shared:${item.linkId}`,
+		sessionTitle: "",
+		shared: { linkId: item.linkId, ...(item.viewerUrl ? { viewerUrl: item.viewerUrl } : {}), access: item.access },
+	};
+}
+
+/**
+ * The links shared with this person as one Cloud group, newest change first,
+ * or undefined when there are none.
+ */
+export function sharedArtifactGroup(items: readonly CloudCpSharedArtifact[] | undefined, name: string): ArtifactGroup | undefined {
+	const rows = (items ?? []).filter((item) => item.via !== "owner").map(sharedArtifactRow).sort(newestFirst);
+	return rows.length > 0 ? { id: SHARED_WITH_ME_GROUP_ID, name, isScratchpad: false, cloud: true, rows } : undefined;
+}
 
 /**
  * Whether this person may change or take a copy of a session's artifact files:
@@ -290,9 +327,11 @@ export const ARTIFACT_OWNERS: readonly ArtifactOwner[] = ["mine", "shared"];
  * Whose an artifact is. A file on this machine or a remote host is this
  * person's; a cloud session's belongs to whoever started it. A session with
  * no creator on record, or one read before this person's control-plane ID is
- * known, counts as theirs, as canChangeSessionArtifacts first treats it.
+ * known, counts as theirs, as canChangeSessionArtifacts first treats it. A
+ * link someone else published is always shared.
  */
-export function artifactOwner(row: Pick<ArtifactRow, "cloud">, cloudUserId: string | undefined): ArtifactOwner {
+export function artifactOwner(row: Pick<ArtifactRow, "cloud" | "shared">, cloudUserId: string | undefined): ArtifactOwner {
+	if (row.shared) return "shared";
 	const creator = row.cloud?.createdByUserId;
 	return creator && cloudUserId && creator !== cloudUserId ? "shared" : "mine";
 }
@@ -315,7 +354,8 @@ export const ARTIFACT_SHARINGS: readonly ArtifactSharing[] = ["public", "shared"
  * link list says who its link opens for: until then, or when the list cannot
  * be read, it is neither called public nor counted as such.
  */
-export function artifactSharing(row: Pick<ArtifactRow, "shareUrl" | "shareAccess" | "cloud">): ArtifactSharing | undefined {
+export function artifactSharing(row: Pick<ArtifactRow, "shareUrl" | "shareAccess" | "cloud" | "shared">): ArtifactSharing | undefined {
+	if (row.shared) return row.shared.access === "restricted" ? "shared" : "public";
 	if (row.shareUrl) return row.shareAccess === "restricted" ? "shared" : row.shareAccess === "anyone" ? "public" : undefined;
 	return row.cloud ? undefined : "private";
 }

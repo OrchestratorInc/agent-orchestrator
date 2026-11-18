@@ -1,4 +1,5 @@
 import { create } from "zustand";
+import type { CloudCpSharedArtifact } from "../lib/cloud-cp";
 
 export type ArtifactViewMode = "gallery" | "list";
 
@@ -38,6 +39,13 @@ function savePreferences(preferences: ArtifactViewPreferences): void {
 }
 
 type ArtifactsViewState = ArtifactViewPreferences & {
+	/**
+	 * A shared link opened from outside the app (ao-app://shared-artifact),
+	 * which the Artifacts page opens in its preview once, then clears. Never
+	 * saved.
+	 */
+	openSharedArtifact: CloudCpSharedArtifact | null;
+	requestOpenSharedArtifact: (artifact: CloudCpSharedArtifact | null) => void;
 	setView: (view: ArtifactViewMode) => void;
 	setSort: (sort: ArtifactSort) => void;
 	toggleSection: (sectionId: string) => void;
@@ -60,6 +68,8 @@ function changed(state: ArtifactViewPreferences, change: Partial<ArtifactViewPre
 
 export const useArtifactsViewStore = create<ArtifactsViewState>((set) => ({
 	...readPreferences(),
+	openSharedArtifact: null,
+	requestOpenSharedArtifact: (artifact) => set({ openSharedArtifact: artifact }),
 	setView: (view) => set((state) => changed(state, { view })),
 	setSort: (sort) => set((state) => changed(state, { sort })),
 	toggleSection: (sectionId) => set((state) => changed(state, {

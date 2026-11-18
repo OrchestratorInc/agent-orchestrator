@@ -348,6 +348,43 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/cloud/v1/me/shared-artifacts": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** @description Lists the active links other people published that open for the signed-in person, newest change first: links shared with their verified email, and public links they opened in Orchestrator (saveSharedArtifact). A saved link that went private without inviting them, or was unpublished, is no longer listed; their own links never are. No owner is named. A link's file opens through viewArtifactShare. Available only when artifact share links are on; otherwise 404. */
+        get: operations["listSharedArtifacts"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/cloud/v1/me/shared-artifacts/{linkId}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The link's public ID, the slug of an ArtifactShare. */
+                linkId: string;
+            };
+            cookie?: never;
+        };
+        get?: never;
+        /** @description Lists a link the signed-in person opened in Orchestrator among the ones shared with them, and returns it as listed. Saving it again keeps when it was first saved. A link shared with their email (via invited) and their own link (via owner) are returned as they are, with nothing saved. Like viewArtifactShare, a link that does not open for them, private or not there at all, returns 404, and the call is rate-limited per person (429 rate_limited). */
+        put: operations["saveSharedArtifact"];
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/cloud/v1/orgs/{orgId}/providers/{agent}/models": {
         parameters: {
             query?: never;
@@ -5075,6 +5112,34 @@ export interface components {
             /** @description Emails to share the link with as it is published, as addArtifactShareGrants does. */
             emails?: string[];
         };
+        /** @description A link someone else published that opens for the signed-in person, as their Artifacts list shows it. */
+        SharedArtifact: {
+            /** @description The link's public ID, for viewArtifactShare. */
+            linkId: string;
+            name: string;
+            contentType: string;
+            /** Format: int64 */
+            size: number;
+            /**
+             * Format: date-time
+             * @description When the link last served a new version.
+             */
+            updatedAt: string;
+            /** @enum {string} */
+            access: "restricted" | "anyone";
+            /** @description The viewer page of the link; absent without a viewer. */
+            viewerUrl?: string;
+            /**
+             * @description Why it is listed: invited, shared with their email; saved, they opened the public link in Orchestrator; owner, their own link, returned only by saveSharedArtifact and never listed.
+             * @enum {string}
+             */
+            via: "invited" | "saved" | "owner";
+            /**
+             * Format: date-time
+             * @description When it was shared with them or they saved it.
+             */
+            sharedAt: string;
+        };
         PublicArtifactShare: {
             linkId: string;
             name: string;
@@ -6786,6 +6851,55 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["PublicArtifactShare"];
+                };
+            };
+            default: components["responses"]["Error"];
+        };
+    };
+    listSharedArtifacts: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The links shared with the signed-in person. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        artifacts: components["schemas"]["SharedArtifact"][];
+                    };
+                };
+            };
+            default: components["responses"]["Error"];
+        };
+    };
+    saveSharedArtifact: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description The link's public ID, the slug of an ArtifactShare. */
+                linkId: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The link as the signed-in person's list shows it. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        artifact: components["schemas"]["SharedArtifact"];
+                    };
                 };
             };
             default: components["responses"]["Error"];

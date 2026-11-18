@@ -3507,6 +3507,8 @@
 	"artifacts.bulkDeleteFailed": "{{total}}개 중 {{failed}}개를 삭제하지 못했습니다: {{message}}",
 	"artifacts.noMatches": "No matches",
 	"artifacts.clearFilters": "Clear filters",
+	"artifacts.sharedSignIn": "공유받은 아티팩트를 열려면 Orchestrator Cloud에 로그인하세요.",
+	"artifacts.sharedUnavailable": "이 아티팩트는 더 이상 공유되지 않습니다.",
 	"artifacts.sortBy": "정렬 기준",
 	"artifacts.sort.updated": "최근 업데이트",
 	"artifacts.sort.name": "이름",

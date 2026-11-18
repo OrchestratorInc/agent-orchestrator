@@ -3596,6 +3596,8 @@
 	"artifacts.bulkDeleteFailed": "No se pudieron eliminar {{failed}} de {{total}}: {{message}}",
 	"artifacts.noMatches": "No matches",
 	"artifacts.clearFilters": "Clear filters",
+	"artifacts.sharedSignIn": "Inicia sesión en Orchestrator Cloud para abrir los artefactos compartidos contigo.",
+	"artifacts.sharedUnavailable": "Este artefacto ya no está compartido contigo.",
 	"artifacts.sortBy": "Ordenar por",
 	"artifacts.sort.updated": "Última actualización",
 	"artifacts.sort.name": "Nombre",

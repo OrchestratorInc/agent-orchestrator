@@ -3507,6 +3507,8 @@
 	"artifacts.bulkDeleteFailed": "{{failed}} von {{total}} konnten nicht gelöscht werden: {{message}}",
 	"artifacts.noMatches": "No matches",
 	"artifacts.clearFilters": "Clear filters",
+	"artifacts.sharedSignIn": "Melde dich bei Orchestrator Cloud an, um mit dir geteilte Artefakte zu öffnen.",
+	"artifacts.sharedUnavailable": "Dieses Artefakt wird nicht mehr mit dir geteilt.",
 	"artifacts.sortBy": "Sortieren nach",
 	"artifacts.sort.updated": "Zuletzt aktualisiert",
 	"artifacts.sort.name": "Name",

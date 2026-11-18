@@ -1,0 +1,100 @@
+import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
+import { act, render, waitFor } from "@testing-library/react";
+import { beforeEach, describe, expect, it, vi } from "vitest";
+import { useArtifactsViewStore } from "../stores/artifacts-view-store";
+import { SharedArtifactLinkHost } from "./SharedArtifactLinkHost";
+
+const mocks = vi.hoisted(() => ({
+	ready: true,
+	status: "authenticated" as "loading" | "authenticated" | "unauthenticated",
+	pending: null as string | null,
+	listener: undefined as ((viewerUrl: string) => void) | undefined,
+	save: vi.fn(),
+	navigate: vi.fn(),
+	openWindow: vi.fn(),
+}));
+vi.mock("../hooks/useCloudCp", () => ({ useCloudCp: () => ({ client: { saveSharedArtifact: mocks.save }, ready: mocks.ready }) }));
+vi.mock("../hooks/useCloudGate", () => ({ useCloudGate: () => ({ loading: false }) }));
+vi.mock("../lib/cloud-session", () => ({ useCloudSession: () => ({ status: mocks.status }) }));
+vi.mock("@tanstack/react-router", () => ({ useNavigate: () => mocks.navigate }));
+vi.mock("../lib/bridge", () => ({
+	aoBridge: {
+		cloud: {
+			onOpenSharedArtifact: (listener: (viewerUrl: string) => void) => {
+				mocks.listener = listener;
+				return () => { mocks.listener = undefined; };
+			},
+			takePendingSharedArtifact: async () => mocks.pending,
+			openSharedArtifactWindow: mocks.openWindow,
+		},
+	},
+}));
+
+const viewer = "https://orchestrator.inc/artifact/q3-report";
+const saved = { linkId: "q3-report", name: "q3.html", contentType: "text/html", size: 1, updatedAt: "2030-01-01T00:00:00Z", access: "anyone", via: "saved", sharedAt: "2030-01-01T00:00:00Z" };
+
+function renderHost() {
+	return render(<QueryClientProvider client={new QueryClient()}><SharedArtifactLinkHost /></QueryClientProvider>);
+}
+
+describe("SharedArtifactLinkHost", () => {
+	beforeEach(() => {
+		mocks.ready = true;
+		mocks.status = "authenticated";
+		mocks.pending = null;
+		mocks.save.mockReset();
+		mocks.navigate.mockReset();
+		mocks.openWindow.mockReset();
+		useArtifactsViewStore.setState({ openSharedArtifact: null });
+	});
+
+	it("saves a link sent from its web page and opens it on the Artifacts page", async () => {
+		mocks.save.mockResolvedValue({ artifact: saved });
+		renderHost();
+		act(() => mocks.listener?.(viewer));
+		await waitFor(() => expect(mocks.navigate).toHaveBeenCalledWith({ to: "/artifacts" }));
+		expect(mocks.save).toHaveBeenCalledWith("q3-report");
+		expect(useArtifactsViewStore.getState().openSharedArtifact).toEqual(saved);
+		expect(mocks.openWindow).not.toHaveBeenCalled();
+	});
+
+	it("opens a link that arrived before the window, once the sign-in is read", async () => {
+		mocks.save.mockResolvedValue({ artifact: saved });
+		mocks.pending = viewer;
+		mocks.status = "loading";
+		const { rerender } = renderHost();
+		await act(async () => {});
+		expect(mocks.save).not.toHaveBeenCalled();
+		expect(mocks.openWindow).not.toHaveBeenCalled();
+		mocks.status = "authenticated";
+		rerender(<QueryClientProvider client={new QueryClient()}><SharedArtifactLinkHost /></QueryClientProvider>);
+		await waitFor(() => expect(mocks.save).toHaveBeenCalledWith("q3-report"));
+	});
+
+	it("opens it in its own window when signed out of Cloud or when it does not open for this account", async () => {
+		mocks.ready = false;
+		mocks.status = "unauthenticated";
+		const { unmount } = renderHost();
+		act(() => mocks.listener?.(viewer));
+		await waitFor(() => expect(mocks.openWindow).toHaveBeenCalledWith(viewer));
+		expect(mocks.save).not.toHaveBeenCalled();
+		unmount();
+
+		mocks.ready = true;
+		mocks.status = "authenticated";
+		mocks.openWindow.mockReset();
+		mocks.save.mockRejectedValue(new Error("not found"));
+		renderHost();
+		act(() => mocks.listener?.(viewer));
+		await waitFor(() => expect(mocks.openWindow).toHaveBeenCalledWith(viewer));
+		expect(mocks.navigate).not.toHaveBeenCalled();
+	});
+
+	it("ignores anything that is not a published artifact's viewer", async () => {
+		renderHost();
+		act(() => mocks.listener?.("https://evil.example/artifact/x?vt=1"));
+		await act(async () => {});
+		expect(mocks.save).not.toHaveBeenCalled();
+		expect(mocks.openWindow).not.toHaveBeenCalled();
+	});
+});

@@ -363,9 +363,10 @@ export function useShareAccess(): { baseUrl: string; signedIn: boolean; scope: S
  * and not once they are shared. A Scratchpad file belongs to the Scratchpad
  * workspace, as in the session view.
  */
-export function useArtifactShareFile(artifact: Pick<ArtifactRow, "id" | "cloud" | "hostId" | "sessionId" | "path" | "projectId" | "sha256"> | null): Omit<CloudShareFile, "baseUrl" | "shareId"> | undefined {
+export function useArtifactShareFile(artifact: Pick<ArtifactRow, "id" | "cloud" | "hostId" | "sessionId" | "path" | "projectId" | "sha256" | "shared"> | null): Omit<CloudShareFile, "baseUrl" | "shareId"> | undefined {
 	const cloudUserId = useCloudMeUserId(Boolean(artifact?.cloud));
-	if (!artifact) return undefined;
+	// Someone else's link is theirs to share; it has no file here.
+	if (!artifact || artifact.shared) return undefined;
 	// The artifact's ID survives a rename, so the renamed file finds its link.
 	const artifactId = artifact.id ? { artifactId: artifact.id } : {};
 	if (artifact.cloud) {

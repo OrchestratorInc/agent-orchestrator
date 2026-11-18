@@ -4410,6 +4410,22 @@ ipcMain.handle("cloud:takePendingShareLink", () => {
 	return link ?? null;
 });
 
+// A published artifact's viewer URL from ao-app://shared-artifact, already
+// checked by parseSharedArtifactLink, waiting for the window as above.
+let pendingSharedArtifact: string | undefined;
+
+ipcMain.handle("cloud:takePendingSharedArtifact", () => {
+	const viewerUrl = pendingSharedArtifact;
+	pendingSharedArtifact = undefined;
+	return viewerUrl ?? null;
+});
+
+// The renderer's fallback: openSharedArtifact accepts only a published
+// artifact's https viewer URL, and its window has no preload or credentials.
+ipcMain.handle("cloud:openSharedArtifactWindow", (_event, viewerUrl: unknown) => {
+	if (typeof viewerUrl === "string") openSharedArtifact(viewerUrl);
+});
+
 function isShareDeepLink(raw: string): boolean {
 	try {
 		const url = new URL(raw);
@@ -4420,10 +4436,16 @@ function isShareDeepLink(raw: string): boolean {
 }
 
 async function handleCloudDeepLinkAndFocus(url: string): Promise<void> {
+	// A published artifact's "Open on orchestrator": the Artifacts page opens it,
+	// or hands it back to openSharedArtifact's isolated window when it cannot.
 	const artifact = parseSharedArtifactLink(url);
 	if (artifact) {
 		await app.whenReady();
-		openSharedArtifact(artifact);
+		if (!getShellWebContents()) void createWindow();
+		focusCloudWindow();
+		const contents = getShellWebContents();
+		if (contents && !contents.isDestroyed() && !contents.isLoading()) contents.send("cloud:openSharedArtifact", artifact);
+		else pendingSharedArtifact = artifact;
 		return;
 	}
 	// macOS keeps the app (and tray) alive after the close button —

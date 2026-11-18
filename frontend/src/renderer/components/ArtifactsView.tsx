@@ -14,9 +14,11 @@ import { deleteSessionArtifactFile } from "../hooks/useSessionWorkspaceFiles";
 import { cloudSessionsQueryKey, useRemoteWorkspaces, useWorkspaceQuery, workspaceQueryKeyForHost } from "../hooks/useWorkspaceQuery";
 import { keptArtifactsQueryKey, useKeptArtifacts } from "../hooks/useKeptArtifacts";
 import { useStartSessionFromArtifact } from "../hooks/useStartSessionFromArtifact";
+import { useSharedArtifacts } from "../hooks/useSharedArtifacts";
 import {
 	ARTIFACT_OWNERS,
 	ARTIFACT_SHARINGS,
+	SHARED_WITH_ME_GROUP_ID,
 	ARTIFACT_TYPES,
 	artifactChangeError,
 	artifactContext,
@@ -29,6 +31,8 @@ import {
 	filterArtifactGroups,
 	groupArtifactsByProject,
 	hostArtifactLocation,
+	sharedArtifactGroup,
+	sharedArtifactRow,
 	withHostShareLinks,
 	withKeptArtifacts,
 	withShareAccess,
@@ -125,10 +129,14 @@ export function ArtifactsView() {
 	// Artifacts kept after their session was deleted or their project removed.
 	const kept = useKeptArtifacts().data;
 	const noProjectName = t("artifacts.noProject");
-	const groups = useMemo(
-		() => withShareAccess(withHostShareLinks(withKeptArtifacts(groupArtifactsByProject([...(workspaces ?? []), ...remoteWorkspaces], orchestratorTitle), kept, workspaces ?? [], noProjectName), hostShareLinks), shareAccess),
-		[workspaces, remoteWorkspaces, orchestratorTitle, kept, noProjectName, hostShareLinks, shareAccess],
-	);
+	// Links other people published that open for this person, listed under Cloud.
+	const sharedWithMe = useSharedArtifacts().data;
+	const sharedGroupName = t("artifacts.owner.shared");
+	const groups = useMemo(() => {
+		const own = withShareAccess(withHostShareLinks(withKeptArtifacts(groupArtifactsByProject([...(workspaces ?? []), ...remoteWorkspaces], orchestratorTitle), kept, workspaces ?? [], noProjectName), hostShareLinks), shareAccess);
+		const shared = sharedArtifactGroup(sharedWithMe, sharedGroupName);
+		return shared ? [...own, shared] : own;
+	}, [workspaces, remoteWorkspaces, orchestratorTitle, kept, noProjectName, hostShareLinks, shareAccess, sharedWithMe, sharedGroupName]);
 	const [query, setQuery] = useState("");
 	// Each filter keeps several values at once; an empty list shows every artifact.
 	const [projectIds, setProjectIds] = useState<readonly string[]>([]);
@@ -139,6 +147,13 @@ export function ArtifactsView() {
 	const [pinnedOnly, setPinnedOnly] = useState(false);
 	const [preview, setPreview] = useState<{ row: ArtifactRow; projectName: string } | null>(null);
 	const openPreview = useCallback((row: ArtifactRow, projectName: string) => setPreview({ row, projectName }), []);
+	// A shared link opened from outside the app (ao-app://shared-artifact) opens here once.
+	const openSharedArtifact = useArtifactsViewStore((state) => state.openSharedArtifact);
+	useEffect(() => {
+		if (!openSharedArtifact) return;
+		setPreview({ row: sharedArtifactRow(openSharedArtifact), projectName: t("artifacts.owner.shared") });
+		useArtifactsViewStore.getState().requestOpenSharedArtifact(null);
+	}, [openSharedArtifact, t]);
 	// The open preview follows its row as the list refreshes, so a file an
 	// agent rewrites shows its new content.
 	const previewRow = useMemo(() => {
@@ -214,8 +229,8 @@ export function ArtifactsView() {
 		{ value: "local", label: t("artifacts.locationLocal") },
 		// One per saved remote host, under the name the host is listed by.
 		...(remoteHosts ?? []).map((host) => ({ value: hostArtifactLocation(host.hostId), label: host.label })),
-		// Cloud artifacts show only where the control plane keeps them.
-		...(cloudArtifacts ? [{ value: "cloud" as const, label: t("artifacts.locationCloud") }] : []),
+		// Cloud artifacts show only where the control plane keeps them, or where links are shared with this person.
+		...(cloudArtifacts || groups.some((group) => group.id === SHARED_WITH_ME_GROUP_ID) ? [{ value: "cloud" as const, label: t("artifacts.locationCloud") }] : []),
 	];
 	// Machines whose list did not load, among those shown: said so, with a retry, instead of
 	// leaving their artifacts silently missing.
@@ -235,7 +250,7 @@ export function ArtifactsView() {
 	// rest of the bundle behind; it has no Delete in its menu either.
 	const deleteBlockedReason = (row: ArtifactRow) => row.bundle
 		? t("artifacts.bundleNotDeletable")
-		: canChangeSessionArtifacts(row.cloud, cloudUserId) ? undefined : t("artifacts.viewOnly");
+		: row.shared ? t("artifacts.viewOnly") : canChangeSessionArtifacts(row.cloud, cloudUserId) ? undefined : t("artifacts.viewOnly");
 	const [selecting, setSelecting] = useState(false);
 	const [selectedIds, setSelectedIds] = useState<ReadonlySet<string>>(() => new Set());
 	const [confirmingBulkDelete, setConfirmingBulkDelete] = useState(false);
@@ -725,7 +740,7 @@ const ArtifactCard = memo(function ArtifactCard({ row, projectName, placeName, o
 						</time>
 					</div>
 					{selection ? null : <div className="relative z-[2] flex shrink-0 items-center gap-1 @max-lg:[&>button]:hidden">
-						{row.bundle ? null : <DeferredArtifactActionsMenu
+						{row.bundle || row.shared ? null : <DeferredArtifactActionsMenu
 							artifact={row}
 							hostId={row.hostId}
 							session={{ id: row.sessionId, cloud: row.cloud }}
@@ -750,7 +765,7 @@ const ArtifactCard = memo(function ArtifactCard({ row, projectName, placeName, o
 			context={context}
 			onPreview={open}
 			selection={selection}
-			actions={selection || row.bundle ? null : (
+			actions={selection || row.bundle || row.shared ? null : (
 				<DeferredArtifactActionsMenu
 					artifact={row}
 					hostId={row.hostId}

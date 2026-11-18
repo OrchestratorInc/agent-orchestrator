@@ -815,6 +815,35 @@ export interface CloudCpChatSearchResponse {
 	results: CloudCpChatSearchHit[];
 }
 
+/**
+ * A link someone else published that opens for the signed-in person
+ * (listSharedArtifacts). It names no owner.
+ */
+export interface CloudCpSharedArtifact {
+	linkId: string;
+	name: string;
+	contentType: string;
+	size: number;
+	updatedAt: string;
+	access: "restricted" | "anyone";
+	viewerUrl?: string;
+	/** invited: shared with their email; saved: opened in the app; owner: their own (only from saveSharedArtifact). */
+	via: "invited" | "saved" | "owner";
+	sharedAt: string;
+}
+
+/** What viewArtifactShare returns for a link that opens for the signed-in person. */
+export interface CloudCpArtifactShareView {
+	linkId: string;
+	name: string;
+	contentType: string;
+	size: number;
+	updatedAt: string;
+	/** Where the file is served; a private link's carries a short-lived view token. */
+	contentUrl: string;
+	access?: "restricted" | "anyone";
+}
+
 /** POST /orgs/{orgId}/sessions/{sessionId}/artifacts/access */
 export interface CloudCpArtifactAccessResponse {
 	/** Control-plane path ending in "/"; append a file's escaped path. */

@@ -3489,6 +3489,8 @@
 	"artifacts.bulkDeleteFailed": "{{total}} 个中有 {{failed}} 个无法删除:{{message}}",
 	"artifacts.noMatches": "No matches",
 	"artifacts.clearFilters": "Clear filters",
+	"artifacts.sharedSignIn": "登录 Orchestrator Cloud 以打开与你共享的产物。",
+	"artifacts.sharedUnavailable": "此产物已不再与你共享。",
 	"artifacts.sortBy": "排序方式",
 	"artifacts.sort.updated": "最近更新",
 	"artifacts.sort.name": "名称",

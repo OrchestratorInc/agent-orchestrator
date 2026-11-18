@@ -3670,6 +3670,8 @@
 	"artifacts.bulkDeleteFailed": "Не удалось удалить {{failed}} из {{total}}: {{message}}",
 	"artifacts.noMatches": "Совпадений нет",
 	"artifacts.clearFilters": "Сбросить фильтры",
+	"artifacts.sharedSignIn": "Войдите в Orchestrator Cloud, чтобы открыть артефакты, к которым вам дали доступ.",
+	"artifacts.sharedUnavailable": "Доступ к этому артефакту больше не предоставлен.",
 	"artifacts.sortBy": "Сортировка",
 	"artifacts.sort.updated": "Последнее обновление",
 	"artifacts.sort.name": "Название",

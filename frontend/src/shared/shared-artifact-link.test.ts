@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { parseSharedArtifactLink, sharedArtifactAppURL, sharedArtifactURL } from "../../../packages/shared/artifacts/shared-artifact-link";
+import { parseSharedArtifactLink, sharedArtifactAppURL, sharedArtifactLinkId, sharedArtifactURL } from "../../../packages/shared/artifacts/shared-artifact-link";
 
 const viewer = "https://orchestrator.inc/artifact/abcdefghijklmnopqrstuvwxyz";
 const link = `ao-app://shared-artifact?url=${encodeURIComponent(viewer)}`;
@@ -9,6 +9,13 @@ describe("published artifact links", () => {
 		expect(parseSharedArtifactLink(link)).toBe(viewer);
 		expect(sharedArtifactAppURL(viewer)).toBe(`${viewer}?inApp=1`);
 		expect(sharedArtifactURL("https://orchestrator.inc/artifact/my-renamed-report")).toBe("https://orchestrator.inc/artifact/my-renamed-report");
+	});
+
+	it("names the link ID of a published viewer URL, and nothing else", () => {
+		expect(sharedArtifactLinkId(viewer)).toBe("abcdefghijklmnopqrstuvwxyz");
+		expect(sharedArtifactLinkId("https://orchestrator.inc/artifact/x?vt=1")).toBeNull();
+		expect(sharedArtifactLinkId("https://orchestrator.inc/other/abc")).toBeNull();
+		expect(sharedArtifactLinkId("http://orchestrator.inc/artifact/abc")).toBeNull();
 	});
 	it("refuses credentials, tokens, fragments, non-HTTPS and non-artifact destinations", () => {
 		for (const value of ["not a URL", viewer.replace("https:", "http:"), viewer.replace("https:", "file:"),

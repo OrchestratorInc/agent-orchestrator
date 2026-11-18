@@ -29,3 +29,9 @@ export function sharedArtifactAppURL(raw: string): string | null {
 	const valid = sharedArtifactURL(raw);
 	return valid ? `${valid}?inApp=1` : null;
 }
+
+/** A published artifact's link ID, from its viewer URL; null for anything else. */
+export function sharedArtifactLinkId(raw: string): string | null {
+	const valid = sharedArtifactURL(raw);
+	return valid ? new URL(valid).pathname.slice("/artifact/".length) : null;
+}

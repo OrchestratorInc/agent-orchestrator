@@ -7,6 +7,7 @@ import { useArtifactsViewStore } from "../stores/artifacts-view-store";
 import { CLOUD_PROJECT_KIND, STANDALONE_WORKSPACE_ID, type WorkspaceSession, type WorkspaceSummary } from "../types/workspace";
 import { ArtifactsView } from "./ArtifactsView";
 import type { KeptArtifactSet } from "../hooks/useKeptArtifacts";
+import type { CloudCpSharedArtifact } from "../lib/cloud-cp";
 import { newChatDraftScope, readChatSessionDraft, writeChatComposerText } from "../lib/chat-drafts";
 import { TooltipProvider } from "./ui/tooltip";
 
@@ -58,6 +59,15 @@ const mocks = vi.hoisted(() => ({
 	/** Who each published link opens for, as the link list says. */
 	shareAccess: new Map<string, "restricted" | "anyone">(),
 	kept: [] as KeptArtifactSet[],
+	/** Links other people published that open for this person. */
+	shared: [] as CloudCpSharedArtifact[],
+}));
+vi.mock("../hooks/useSharedArtifacts", () => ({
+	sharedArtifactsQueryKey: ["shared-artifacts"],
+	useSharedArtifacts: () => ({ data: mocks.shared }),
+}));
+vi.mock("./SharedArtifactFrame", () => ({
+	SharedArtifactFrame: ({ linkId, title }: { linkId: string; title: string }) => <iframe data-link-id={linkId} data-testid="shared-artifact-preview" title={title} />,
 }));
 vi.mock("../hooks/useKeptArtifacts", () => ({
 	keptArtifactsQueryKey: ["kept-artifacts"],
@@ -235,6 +245,7 @@ describe("ArtifactsView", () => {
 	beforeEach(() => {
 		mocks.shareAccess = new Map();
 		mocks.kept = [];
+		mocks.shared = [];
 		window.localStorage.removeItem("ao.artifacts.view");
 		useArtifactsViewStore.setState({ view: "gallery", collapsedSections: [], pinnedArtifactIds: [] });
 		vi.stubGlobal("IntersectionObserver", class {
@@ -674,6 +685,51 @@ describe("ArtifactsView", () => {
 		expect(rows()).toEqual([expect.stringContaining("alpha.md"), expect.stringContaining("zeta.md")]);
 		expect(useArtifactsViewStore.getState().sort).toBe("name");
 		useArtifactsViewStore.setState({ sort: "updated" });
+	});
+
+	it("lists links shared with this person under Cloud, view only, and previews them from their link", async () => {
+		const user = userEvent.setup();
+		mocks.cloudArtifacts = false;
+		mocks.shared = [{
+			linkId: "q3-report", name: "q3-report.html", contentType: "text/html", size: 10, updatedAt: "2030-01-01T00:00:00Z",
+			access: "restricted", via: "invited", sharedAt: "2030-01-01T00:00:00Z", viewerUrl: "https://orchestrator.inc/artifact/q3-report",
+		}];
+		renderView();
+		// Cloud is offered for them even where the control plane keeps no session artifacts.
+		const location = within(screen.getByRole("group", { name: "Artifact location" }));
+		expect(location.getAllByRole("button").map((button) => button.textContent)).toEqual(["All4", "On this machine3", "Cloud1"]);
+		await user.click(location.getByRole("button", { name: "Cloud" }));
+		const card = within(artifactList()).getByRole("listitem");
+		expect(card).toHaveTextContent("q3-report.html");
+		expect(card).toHaveTextContent("Cloud · Shared with you");
+		// Someone else's link has no actions of its own here.
+		expect(within(card).queryByRole("button", { name: "More actions: q3-report.html" })).not.toBeInTheDocument();
+
+		await user.click(within(card).getByRole("button", { name: /^q3-report\.html/ }));
+		const dialog = within(screen.getByRole("dialog", { name: "q3-report.html" }));
+		expect(dialog.getByTestId("shared-artifact-preview")).toHaveAttribute("data-link-id", "q3-report");
+		expect(dialog.getByRole("link", { name: "Open in browser" })).toHaveAttribute("href", "https://orchestrator.inc/artifact/q3-report");
+		expect(dialog.queryByRole("button", { name: "Open in session" })).not.toBeInTheDocument();
+		await user.keyboard("{Escape}");
+
+		// The owner filter keeps them with what is shared; selecting skips them.
+		await user.click(location.getByRole("button", { name: "All" }));
+		await user.click((await openFilterMenu(user, "Owner")).getByRole("menuitemradio", { name: "Me" }));
+		expect(screen.queryByText("q3-report.html")).not.toBeInTheDocument();
+		await user.click(screen.getByRole("button", { name: "Remove filter Owner: Me" }));
+		await user.click(screen.getByRole("button", { name: "Select" }));
+		expect(screen.getByRole("checkbox", { name: "Select q3-report.html" })).toBeDisabled();
+	});
+
+	it("opens a shared link sent from its web page in the preview", async () => {
+		renderView();
+		act(() => useArtifactsViewStore.getState().requestOpenSharedArtifact({
+			linkId: "roadmap", name: "roadmap.md", contentType: "text/markdown", size: 3, updatedAt: "2030-01-01T00:00:00Z",
+			access: "anyone", via: "saved", sharedAt: "2030-01-01T00:00:00Z", viewerUrl: "https://orchestrator.inc/artifact/roadmap",
+		}));
+		const dialog = within(await screen.findByRole("dialog", { name: "roadmap.md" }));
+		expect(dialog.getByTestId("shared-artifact-preview")).toHaveAttribute("data-link-id", "roadmap");
+		expect(useArtifactsViewStore.getState().openSharedArtifact).toBeNull();
 	});
 
 	it("does not let a bundle be selected, since deleting it would remove only one of its files", async () => {

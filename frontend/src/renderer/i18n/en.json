@@ -3483,6 +3483,8 @@
 	"artifacts.bulkDeleteFailed": "Couldn't delete {{failed}} of {{total}}: {{message}}",
 	"artifacts.noMatches": "No matches",
 	"artifacts.clearFilters": "Clear filters",
+	"artifacts.sharedSignIn": "Sign in to Orchestrator Cloud to open artifacts shared with you.",
+	"artifacts.sharedUnavailable": "This artifact is no longer shared with you.",
 	"artifacts.sortBy": "Sort by",
 	"artifacts.sort.updated": "Last updated",
 	"artifacts.sort.name": "Name",

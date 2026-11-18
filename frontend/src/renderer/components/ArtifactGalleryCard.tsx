@@ -1,4 +1,5 @@
 import { useId, type ReactNode } from "react";
+import { File } from "@/components/app-icons";
 import type { ArtifactRow } from "../lib/artifacts";
 import { formatTimeCompact } from "../lib/format-time";
 import { cn } from "../lib/utils";
@@ -39,7 +40,10 @@ export function ArtifactGalleryCard({ row, context, onPreview, actions, previewL
 	return (
 		<li className={cn("group relative min-w-0 rounded-md bg-card ring-1 ring-foreground/10", selection?.selected && "ring-2 ring-primary")}>
 			<span className="pointer-events-none absolute inset-x-0 top-0 z-[1] block aspect-[16/9] overflow-hidden rounded-t-md border-b border-border">
-				<ArtifactSnapshotThumbnail key={`${row.rawUrl}:${row.inlineUrl}:${row.updatedAt}`} row={row} previewLive={previewLive} />
+				{row.shared
+					// Someone else's link has no copy here to draw a preview from.
+					? <span className="flex size-full items-center justify-center bg-[var(--solid-muted,var(--muted))] text-muted-foreground"><File aria-hidden="true" className="size-6" /></span>
+					: <ArtifactSnapshotThumbnail key={`${row.rawUrl}:${row.inlineUrl}:${row.updatedAt}`} row={row} previewLive={previewLive} />}
 			</span>
 			<Pressable
 				className={cn("block w-full overflow-hidden rounded-md hover:bg-accent", selection?.disabledReason && "cursor-not-allowed hover:bg-transparent")}

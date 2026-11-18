@@ -26,6 +26,7 @@ import { ArchiveModalHost } from "../components/ArchiveModalHost";
 import { GlobalToast } from "../components/GlobalToast";
 import { SettingsPane, SettingsProvider, useSettingsPage } from "../components/SettingsDialog";
 import { ShareLinkHost } from "../components/OpenShareLinkDialog";
+import { SharedArtifactLinkHost } from "../components/SharedArtifactLinkHost";
 import { KeyboardShortcutsDialog } from "../components/KeyboardShortcutsDialog";
 import { QuitConfirmDialog } from "../components/QuitConfirmDialog";
 import { PageTopbar } from "../components/PageTopbar";
@@ -183,6 +184,7 @@ function ShellOutlet({ startingChat }: { startingChat: ReactNode }) {
 			</div>
 			<SettingsPane />
 			<ShareLinkHost />
+			<SharedArtifactLinkHost />
 		</>
 	);
 }

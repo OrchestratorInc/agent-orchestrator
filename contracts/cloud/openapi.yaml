@@ -627,6 +627,65 @@ paths:
                 $ref: "#/components/schemas/PublicArtifactShare"
         default:
           $ref: "#/components/responses/Error"
+  /api/cloud/v1/me/shared-artifacts:
+    get:
+      operationId: listSharedArtifacts
+      tags: [Artifacts]
+      description: >-
+        Lists the active links other people published that open for the
+        signed-in person, newest change first: links shared with their
+        verified email, and public links they opened in Orchestrator
+        (saveSharedArtifact). A saved link that went private without inviting
+        them, or was unpublished, is no longer listed; their own links never
+        are. No owner is named. A link's file opens through viewArtifactShare.
+        Available only when artifact share links are on; otherwise 404.
+      responses:
+        "200":
+          description: The links shared with the signed-in person.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [artifacts]
+                properties:
+                  artifacts:
+                    type: array
+                    items:
+                      $ref: "#/components/schemas/SharedArtifact"
+        default:
+          $ref: "#/components/responses/Error"
+  /api/cloud/v1/me/shared-artifacts/{linkId}:
+    parameters:
+      - name: linkId
+        in: path
+        required: true
+        description: The link's public ID, the slug of an ArtifactShare.
+        schema:
+          type: string
+    put:
+      operationId: saveSharedArtifact
+      tags: [Artifacts]
+      description: >-
+        Lists a link the signed-in person opened in Orchestrator among the
+        ones shared with them, and returns it as listed. Saving it again keeps
+        when it was first saved. A link shared with their email (via invited)
+        and their own link (via owner) are returned as they are, with nothing
+        saved. Like viewArtifactShare, a link that does not open for them,
+        private or not there at all, returns 404, and the call is rate-limited
+        per person (429 rate_limited).
+      responses:
+        "200":
+          description: The link as the signed-in person's list shows it.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [artifact]
+                properties:
+                  artifact:
+                    $ref: "#/components/schemas/SharedArtifact"
+        default:
+          $ref: "#/components/responses/Error"
   /api/cloud/v1/orgs/{orgId}/providers/{agent}/models:
     parameters:
       - $ref: "#/components/parameters/OrgId"
@@ -9470,6 +9529,44 @@ components:
           description: >-
             Emails to share the link with as it is published, as
             addArtifactShareGrants does.
+    SharedArtifact:
+      type: object
+      description: >-
+        A link someone else published that opens for the signed-in person, as
+        their Artifacts list shows it.
+      required: [linkId, name, contentType, size, updatedAt, access, via, sharedAt]
+      properties:
+        linkId:
+          type: string
+          description: The link's public ID, for viewArtifactShare.
+        name:
+          type: string
+        contentType:
+          type: string
+        size:
+          type: integer
+          format: int64
+        updatedAt:
+          type: string
+          format: date-time
+          description: When the link last served a new version.
+        access:
+          type: string
+          enum: [restricted, anyone]
+        viewerUrl:
+          type: string
+          description: The viewer page of the link; absent without a viewer.
+        via:
+          type: string
+          enum: [invited, saved, owner]
+          description: >-
+            Why it is listed: invited, shared with their email; saved, they
+            opened the public link in Orchestrator; owner, their own link,
+            returned only by saveSharedArtifact and never listed.
+        sharedAt:
+          type: string
+          format: date-time
+          description: When it was shared with them or they saved it.
     PublicArtifactShare:
       type: object
       additionalProperties: false

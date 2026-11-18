@@ -3483,6 +3483,8 @@
 	"artifacts.bulkDeleteFailed": "{{total}} öğeden {{failed}} tanesi silinemedi: {{message}}",
 	"artifacts.noMatches": "Eşleşme yok",
 	"artifacts.clearFilters": "Filtreleri temizle",
+	"artifacts.sharedSignIn": "Seninle paylaşılan yapıtları açmak için Orchestrator Cloud'a giriş yap.",
+	"artifacts.sharedUnavailable": "Bu yapıt artık seninle paylaşılmıyor.",
 	"artifacts.sortBy": "Sıralama",
 	"artifacts.sort.updated": "Son güncelleme",
 	"artifacts.sort.name": "Ad",
