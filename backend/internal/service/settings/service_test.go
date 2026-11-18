@@ -32,21 +32,21 @@ func (*hibernationSettingsStore) SetAccountHandoff(context.Context, bool, time.T
 	return nil
 }
 
-func TestChatHibernationGateResetsOnDaemonBoot(t *testing.T) {
+func TestChatHibernationIsOnAtEveryDaemonBoot(t *testing.T) {
 	ctx := context.Background()
 	store := &hibernationSettingsStore{}
 	first := New(store, nil, Offering{}, nil)
-	if first.ChatHibernationEnabled() {
-		t.Fatal("new daemon enabled chat hibernation")
+	if !first.ChatHibernationEnabled() {
+		t.Fatal("new daemon left chat hibernation off")
 	}
-	snapshot, err := first.SetChatHibernationEnabled(ctx, true)
-	if err != nil || !snapshot.ChatHibernationEnabled || !first.ChatHibernationEnabled() {
-		t.Fatalf("enable chat hibernation: snapshot=%+v err=%v", snapshot, err)
+	snapshot, err := first.SetChatHibernationEnabled(ctx, false)
+	if err != nil || snapshot.ChatHibernationEnabled || first.ChatHibernationEnabled() {
+		t.Fatalf("disable chat hibernation: snapshot=%+v err=%v", snapshot, err)
 	}
 	second := New(store, nil, Offering{}, nil)
 	snapshot, err = second.Get(ctx)
-	if err != nil || snapshot.ChatHibernationEnabled || second.ChatHibernationEnabled() {
-		t.Fatalf("restarted daemon retained chat hibernation: snapshot=%+v err=%v", snapshot, err)
+	if err != nil || !snapshot.ChatHibernationEnabled || !second.ChatHibernationEnabled() {
+		t.Fatalf("restarted daemon kept chat hibernation off: snapshot=%+v err=%v", snapshot, err)
 	}
 }
 

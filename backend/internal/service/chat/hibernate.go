@@ -19,8 +19,9 @@ const chatViewLease = 30 * time.Second
 const chatHibernateGrace = 30 * time.Second
 
 // IdleBeforeHibernate is how long a quiet provider stays parked, prompt
-// cache and all, before idle hibernation may stop it.
-const IdleBeforeHibernate = 10 * time.Minute
+// cache and all, before idle hibernation may stop it. A follow-up within the
+// hour finds the agent running; threads left for longer free its memory.
+const IdleBeforeHibernate = 60 * time.Minute
 
 type wakeRun struct {
 	done    chan struct{}
