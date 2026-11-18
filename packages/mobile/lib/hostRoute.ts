@@ -98,3 +98,16 @@ export function heldPreview<T>(
 	if (previewForConfig(loaded, config, routeHostId) !== null) return { value: loaded.value, config: loaded.config };
 	return !config || sameServerConfig(loaded.config, config) ? { value: loaded.value, config: loaded.config } : null;
 }
+
+/**
+ * Whether a screen with nothing to show yet says the machine is offline rather
+ * than waiting for it: by the same rule as HostScope and New task, the link
+ * tracker has given up on it and its last poll failed as unreachable
+ * (`unreachable`), or no machine is paired at all. The app drops its verified
+ * connection every time it goes to the background, so a closed connection is
+ * not offline: read as offline, it flashed an error after every app switch,
+ * into the app-switcher snapshot too.
+ */
+export function machineOffline(app: { unreachable: boolean; paired: boolean | null }): boolean {
+	return app.unreachable || app.paired === false;
+}

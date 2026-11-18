@@ -8,7 +8,7 @@ import { AppSymbol } from "../../lib/AppSymbol";
 import { authHeaders } from "../../lib/config";
 import { userFacingError } from "../../lib/connectionError";
 import { rowDividerWidth } from "../../lib/divider";
-import { heldPreview, hostRouteMatches } from "../../lib/hostRoute";
+import { heldPreview, hostRouteMatches, machineOffline } from "../../lib/hostRoute";
 import { BrowserLivePane } from "../../lib/preview/BrowserLivePane";
 import { LoadingBar } from "../../lib/preview/LoadingBar";
 import { previewModeMenu, type PreviewMode } from "../../lib/preview/previewModeMenu";
@@ -31,7 +31,7 @@ function SessionPreviewContent() {
 	const sessionID = String(rawID ?? "");
 	const navigation = useNavigation();
 	const router = useRouter();
-	const { config, currentHostId, connection } = useApp();
+	const { config, currentHostId, unreachable, paired } = useApp();
 	const hostMatches = hostRouteMatches(routeHostId, currentHostId);
 	const t = useTheme();
 	const { scheme } = useThemeState();
@@ -175,8 +175,10 @@ function SessionPreviewContent() {
 	// Preview is pushed over the board, so the way back to it pops rather than
 	// stacking a second board on top.
 	if (!hostMatches) return <View style={styles.center}><EmptyState icon="globe" title="Preview belongs to another machine" message="Open it from that machine's session." action={<Button title="Open board" icon="workers" onPress={() => router.dismissTo("/")} />} /></View>;
-	// Only with nothing to show yet: a page already open stays while the app reconnects.
-	if (!config && !preview && connection === "closed") return <View style={styles.center}><EmptyState icon="wifi-off" title="Machine offline" message="This preview loads once the app reconnects." /></View>;
+	// Only with nothing to show yet: a page already open stays while the app
+	// reconnects. An app switch closes the connection on purpose, so only a
+	// machine that is really gone says so (see machineOffline).
+	if (!config && !preview && machineOffline({ unreachable, paired })) return <View style={styles.center}><EmptyState icon="wifi-off" title="Machine offline" message="This preview loads once the app reconnects." /></View>;
 	if (!config && !preview) return <View style={styles.center}><EmptyState busy title="Connecting to this machine…" /></View>;
 
 	return <View style={[styles.screen, { paddingTop: glassInset }]}>

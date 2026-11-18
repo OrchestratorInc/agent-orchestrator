@@ -1,7 +1,7 @@
 import { useLocalSearchParams, useRouter } from "expo-router";
 import { useRef } from "react";
 import { View } from "react-native";
-import { hostRouteMatches } from "../../lib/hostRoute";
+import { hostRouteMatches, machineOffline } from "../../lib/hostRoute";
 import TerminalSessionScreen from "../../lib/session/TerminalSessionScreen";
 import { Spinner } from "../../lib/Spinner";
 import { HostScope, useApp } from "../../lib/store";
@@ -21,7 +21,7 @@ export default function ShellRoute() {
 
 function ShellRouteContent() {
 	const { hostId: routeHostId } = useLocalSearchParams<{ hostId?: string }>();
-	const { config, currentHostId, connection, loading, machine } = useApp();
+	const { config, currentHostId, unreachable, paired, loading, machine } = useApp();
 	const router = useRouter();
 	// Once the shell has opened, it stays through an app switch: the terminal
 	// reconnects by itself, as a terminal session's does. Unmounted, it was
@@ -46,7 +46,8 @@ function ShellRouteContent() {
 			</View>
 		);
 	}
-	if (!config && !opened && connection === "closed") {
+	// Not for a connection an app switch closed: that one reconnects (see machineOffline).
+	if (!config && !opened && machineOffline({ unreachable, paired })) {
 		return <View style={{ flex: 1, justifyContent: "center", backgroundColor: t.bgBase }}><EmptyState icon="wifi-off" title="Machine offline" message="This shell opens once the app reconnects." /></View>;
 	}
 	return <View style={{ flex: 1, paddingTop: glassInset, backgroundColor: t.bgBase }}><TerminalSessionScreen /></View>;

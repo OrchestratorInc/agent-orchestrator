@@ -30,6 +30,8 @@ const TAP_MAX_MS = 10_000;
 /** The mark a tap leaves on the frame: about a fingertip. */
 const TOUCH_MARK = 36;
 const ignoreActivation = () => {};
+const BROWSER_UNPAIRED_COPY = "Pair this phone with the desktop app first.";
+const BROWSER_OFFLINE_COPY = "This machine is offline. The browser connects once the app reconnects.";
 
 export type BrowserLivePaneProps = {
 	sessionID: string;
@@ -45,7 +47,14 @@ export type BrowserLivePaneProps = {
 };
 
 export function BrowserLivePane({ sessionID, onDisabled, onTitle, headerItem = null }: BrowserLivePaneProps) {
-	const { config } = useApp();
+	const { config, paired, unreachable } = useApp();
+	// Why there is no verified connection to stream over, while there is none.
+	// The app drops it every time it goes to the background, and Preview keeps
+	// this pane on screen through that when it holds an app preview, so a
+	// missing connection is a reconnect unless the machine is really gone (by
+	// the same rule as every other screen, see machineOffline) or none is
+	// paired. Null with a connection, so nothing here restarts the stream.
+	const away = config ? null : paired === false ? "unpaired" : unreachable ? "offline" : "reconnecting";
 	const t = useTheme();
 	const styles = useThemedStyles(makeStyles);
 	const insets = useSafeAreaInsets();
@@ -74,8 +83,13 @@ export function BrowserLivePane({ sessionID, onDisabled, onTitle, headerItem = n
 	useEffect(() => {
 		setPage(null);
 		if (!config) {
+			if (away === "reconnecting") {
+				setStatus("connecting");
+				setError(undefined);
+				return;
+			}
 			setStatus("error");
-			setError("Pair this phone with the desktop app first.");
+			setError(away === "unpaired" ? BROWSER_UNPAIRED_COPY : BROWSER_OFFLINE_COPY);
 			return;
 		}
 		if (!sessionID) {
@@ -123,7 +137,7 @@ export function BrowserLivePane({ sessionID, onDisabled, onTitle, headerItem = n
 			live?.close();
 			if (client.current === live) client.current = null;
 		};
-	}, [attempt, config, onDisabled, sessionID, showNotice]);
+	}, [attempt, away, config, onDisabled, sessionID, showNotice]);
 
 	// The bar is titled with the desktop's page while one is showing.
 	const pageTitle = status === "open" && page?.url ? page.title.trim() || undefined : undefined;
