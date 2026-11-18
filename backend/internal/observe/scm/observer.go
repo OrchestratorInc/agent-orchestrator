@@ -1201,7 +1201,8 @@ func (o *Observer) discoverNewPRs(ctx context.Context, sessionRepos []sessionRep
 		}
 		// Incremental discovery: request only MRs updated since the last
 		// successful cursor minus an overlap window. Zero cursor (first poll)
-		// requests a full listing
+		// requests a full listing. GitHub has no such filter and always lists
+		// every open PR, which terminal reconciliation below relies on.
 		repoKey := prKey(repo, 0)
 		cursor := o.Cache.LastSyncCursor[repoKey]
 		updatedAfter := time.Time{}
