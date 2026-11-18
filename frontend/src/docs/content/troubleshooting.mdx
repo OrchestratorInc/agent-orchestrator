@@ -47,7 +47,7 @@ If the Orchestrator window closes by itself, with no error dialog and nothing in
 for p in $(pgrep -x agent-orchestra); do grep "realtime timeout" /proc/$p/limits; done | sort | uniq -c
 ```
 
-If both values are `0`, this is the cause. With a limit of 0, the Linux kernel kills a process without logging anything as soon as one of its threads uses realtime scheduling or a CPU-time timer. Orchestrator does not set this limit; it inherits it from the program that launched it, so other apps started the same way can disappear too.
+If both values are `0` and the symptoms match, this is the likely cause. With a limit of 0, the Linux kernel kills a process as soon as one of its threads uses realtime scheduling or a CPU-time timer, and logs nothing unless fatal-signal logging is turned on. Orchestrator does not set this limit; it inherits it from the program that launched it, so other apps started the same way can disappear too.
 
 The usual source is a desktop without rtkit. The desktop portal then reports a realtime budget of 0, PipeWire applies that budget to your session's shell, and every app you launch inherits it. Omarchy 4.5.0 and earlier ship without rtkit on x86; Omarchy's own fix is [omacom/omarchy#16824](https://github.com/omacom/omarchy/pull/16824). To confirm on Arch-based systems, including Omarchy:
 
@@ -58,7 +58,7 @@ busctl --user get-property org.freedesktop.portal.Desktop /org/freedesktop/porta
 
 `package 'rtkit' was not found` and `x 0` confirm it.
 
-Fix it in this order. Installing rtkit before raising the limits makes the kills more frequent, because rtkit can then give realtime priority to processes that still hold a limit of 0.
+Fix it in this order. Installing rtkit before raising the limits makes the kills more frequent, because rtkit can then give realtime priority to processes that still hold a limit of 0. These steps repair only your own processes, so if other users are logged in to this machine, have them log out first.
 
 1. Raise the limit of every process of yours that holds a 0. This takes effect immediately, without restarting anything, but only lasts until you log out:
 
@@ -66,29 +66,34 @@ Fix it in this order. Installing rtkit before raising the limits makes the kills
    u=$(id -u); for d in /proc/[0-9]*; do [ "$(awk '/^Uid:/{print $2}' $d/status 2>/dev/null)" = "$u" ] && [ "$(awk '/realtime timeout/{print $5}' $d/limits 2>/dev/null)" = 0 ] && sudo prlimit --pid ${d#/proc/} --rttime=200000:200000; done
    ```
 
-2. Install rtkit, holding it back so it cannot start halfway through the install:
+2. Hold rtkit back so it cannot start halfway through the install, then install it. The install runs only if the hold succeeds:
 
    ```bash
-   sudo systemctl mask --runtime rtkit-daemon.service
-   sudo pacman -S --needed rtkit
+   sudo systemctl mask --runtime rtkit-daemon.service && sudo pacman -S --needed rtkit
+   ```
+
+3. Run the command from step 1 again to raise processes that started during the install, then release rtkit:
+
+   ```bash
    sudo systemctl unmask --runtime rtkit-daemon.service
    ```
 
-3. Restart the desktop portal so it reads rtkit's budget, then confirm it reports `x 200000`:
+4. Confirm rtkit answers with a budget above 0, such as `x 200000`. Then restart the desktop portal right away so it reads that budget, and confirm the portal reports the same value. If either command shows `x 0` or an error, fix the rtkit or portal service and repeat this step before continuing:
 
    ```bash
+   busctl get-property org.freedesktop.RealtimeKit1 /org/freedesktop/RealtimeKit1 org.freedesktop.RealtimeKit1 RTTimeUSecMax
    systemctl --user restart xdg-desktop-portal.service
    busctl --user get-property org.freedesktop.portal.Desktop /org/freedesktop/portal/desktop org.freedesktop.portal.Realtime RTTimeUSecMax
    ```
 
-4. Run the command from step 1 again to raise any process that started in the meantime.
-5. Optional: restart audio so PipeWire also runs with realtime priority. This briefly interrupts sound:
+5. Run the command from step 1 again to raise any process that started in the meantime.
+6. Optional: restart audio so PipeWire also runs with realtime priority. This briefly interrupts sound:
 
    ```bash
    systemctl --user restart pipewire pipewire-pulse wireplumber
    ```
 
-To verify, run the first check again; no Orchestrator process should show `0`. New sessions start with the correct limit once rtkit is installed. On Omarchy, updating to a release that includes its fix does all of this for you.
+To verify, relaunch Orchestrator from your usual launcher and run the first check again. It should print at least one row, and no row should show `0`. An empty result means no Orchestrator process was found, so it does not confirm the fix. New sessions start with the correct limit once rtkit is installed. On Omarchy, updating to a release that includes its fix does all of this for you.
 
 ## Agents and sessions
 
