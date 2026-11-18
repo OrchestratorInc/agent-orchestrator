@@ -487,8 +487,10 @@ export function mergeRemoteConversationTail(prior: ConversationSnapshot, tail: C
 export async function refreshRemoteConversation(queryClient: QueryClient, sessionId: string, hostId: string): Promise<void> {
 	const key = conversationQueryKey(sessionId, hostId);
 	let latest: ConversationSnapshot;
+	let priorControllerState: string | undefined;
 	try {
 		const prior = queryClient.getQueryData<InfiniteData<ConversationSnapshot>>(key)?.pages[0];
+		priorControllerState = prior?.controller.state;
 		const floor = prior ? remoteConversationFloor(prior) : 0;
 		if (prior && floor >= 1) {
 			const wire = await fetchConversationWire(sessionId, hostId, { afterSequence: floor, limit: REMOTE_LIVE_PAGE_SIZE, outputLimit: REMOTE_OUTPUT_LIMIT });
@@ -499,6 +501,7 @@ export async function refreshRemoteConversation(queryClient: QueryClient, sessio
 			if (merged && current) {
 				queryClient.setQueryData(remoteConversationRefreshErrorKey(sessionId, hostId), false);
 				queryClient.setQueryData<InfiniteData<ConversationSnapshot>>(key, { ...current, pages: [merged, ...current.pages.slice(1)] });
+				forgetRereadsOnControllerChange(queryClient, sessionId, hostId, priorControllerState, merged.controller.state);
 				// The tail covered every row above the floor, which is below every
 				// running row of the live page, so only older pages can be stale.
 				await rereadUncoveredUnsettledActivities(queryClient, key, sessionId, hostId, floor + 1);
@@ -517,12 +520,46 @@ export async function refreshRemoteConversation(queryClient: QueryClient, sessio
 	}
 	queryClient.setQueryData(remoteConversationRefreshErrorKey(sessionId, hostId), false);
 	applyLiveConversationPage(queryClient, key, latest);
+	forgetRereadsOnControllerChange(queryClient, sessionId, hostId, priorControllerState, latest.controller.state);
 	// Rows that slid out of the new page stay in the live page uncovered.
 	await rereadUncoveredUnsettledActivities(queryClient, key, sessionId, hostId, latest.oldestSequence);
 }
 
 /** At most this many uncovered rows are reread per refresh. */
 const REMOTE_UNCOVERED_UNSETTLED_LIMIT = 20;
+
+/**
+ * Rows a reread found unchanged, as `id:revision`, per open remote chat. A row
+ * the host keeps in progress (an older daemon that never settles it, an AO action
+ * still in flight, an old pending approval) is then read once, not on every
+ * refresh of a streaming turn. Opening the chat, reconnecting its host's stream,
+ * or its controller starting (when a daemon settles stranded rows) reads it again.
+ */
+const unchangedRemoteRereads = new WeakMap<QueryClient, Map<string, Set<string>>>();
+const rereadChatKey = (hostId: string, sessionId: string) => `${hostId}\u0000${sessionId}`;
+
+function unchangedRereadsFor(queryClient: QueryClient, sessionId: string, hostId: string): Set<string> {
+	let chats = unchangedRemoteRereads.get(queryClient);
+	if (!chats) unchangedRemoteRereads.set(queryClient, (chats = new Map()));
+	let rows = chats.get(rereadChatKey(hostId, sessionId));
+	if (!rows) chats.set(rereadChatKey(hostId, sessionId), (rows = new Set()));
+	return rows;
+}
+
+/** Reads every in-progress row of a host's chats, or of one chat, again on its next refresh. */
+export function forgetRemoteConversationRereads(queryClient: QueryClient, hostId: string, sessionId?: string): void {
+	const chats = unchangedRemoteRereads.get(queryClient);
+	if (!chats) return;
+	if (sessionId !== undefined) {
+		chats.delete(rereadChatKey(hostId, sessionId));
+		return;
+	}
+	for (const key of [...chats.keys()]) if (key.startsWith(rereadChatKey(hostId, ""))) chats.delete(key);
+}
+
+function forgetRereadsOnControllerChange(queryClient: QueryClient, sessionId: string, hostId: string, before: string | undefined, after: string | undefined): void {
+	if (before !== undefined && before !== after) forgetRemoteConversationRereads(queryClient, hostId, sessionId);
+}
 
 /**
  * A refresh reads the live page or its tail, never the rows below what that read
@@ -536,9 +573,11 @@ const REMOTE_UNCOVERED_UNSETTLED_LIMIT = 20;
  */
 async function rereadUncoveredUnsettledActivities(queryClient: QueryClient, key: QueryKey, sessionId: string, hostId: string, coveredFrom: number): Promise<void> {
 	const pages = queryClient.getQueryData<InfiniteData<ConversationSnapshot>>(key)?.pages ?? [];
+	const unchanged = unchangedRereadsFor(queryClient, sessionId, hostId);
 	const unsettled = pages
 		.flatMap((page, index) => index === 0 ? page.items.filter((item) => item.sequence < coveredFrom) : page.items)
 		.filter((item): item is ConversationActivity => item.kind === "activity" && (item.status === "running" || item.status === "pending"))
+		.filter((item) => !unchanged.has(`${item.id}:${item.revision}`))
 		.slice(0, REMOTE_UNCOVERED_UNSETTLED_LIMIT);
 	if (!unsettled.length) return;
 	const fresh = new Map<string, ConversationItem>();
@@ -549,6 +588,8 @@ async function rereadUncoveredUnsettledActivities(queryClient: QueryClient, key:
 			});
 			const row = toSnapshot(wire).items.find((candidate) => candidate.id === item.id);
 			if (row?.kind === "activity" && (row.status !== item.status || row.revision !== item.revision)) fresh.set(item.id, row);
+			// Unchanged, or no longer shown: not worth reading again on every refresh.
+			else unchanged.add(`${item.id}:${item.revision}`);
 		} catch {
 			// The row keeps what its page held; the next refresh tries again.
 		}
@@ -797,7 +838,10 @@ export function useConversation(sessionId: string | undefined, hostId?: string):
 		if (cached?.data === undefined) return;
 		// A cached remote page (an earlier visit, a prefetch, or the disk copy) shows
 		// at once; the open reads what changed since.
-		if (hostId) refreshRemoteConversationOnce(queryClient, sessionId, hostId);
+		if (hostId) {
+			forgetRemoteConversationRereads(queryClient, hostId, sessionId);
+			refreshRemoteConversationOnce(queryClient, sessionId, hostId);
+		}
 		// A cached local chat is current unless an event marked it stale while closed.
 		else if (cached.isInvalidated) refreshLocalConversationOnce(queryClient, sessionId);
 	}, [hostId, queryClient, sessionId]);

@@ -5,7 +5,7 @@ import type { ConversationItem, ConversationSnapshot, ConversationTurn } from ".
 const { getMock, baseUrlMock } = vi.hoisted(() => ({ getMock: vi.fn(), baseUrlMock: vi.fn() }));
 vi.mock("../lib/host-clients", () => ({ baseUrlForHost: baseUrlMock, clientForSessionHost: () => ({ GET: getMock }) }));
 
-import { conversationQueryKey, mergeRemoteConversationTail, refreshRemoteConversation, remoteConversationFloor } from "./useConversation";
+import { conversationQueryKey, forgetRemoteConversationRereads, mergeRemoteConversationTail, refreshRemoteConversation, remoteConversationFloor } from "./useConversation";
 
 const turn = (id: string, state: ConversationTurn["state"], extra: Partial<ConversationTurn> = {}): ConversationTurn =>
 	({ id, state, requestedAt: `2026-11-03T00:00:0${id.slice(-1)}Z`, ...extra });
@@ -223,6 +223,43 @@ describe("refreshRemoteConversation", () => {
 		expect(live.items.find((item) => item.id === "a2")).toMatchObject({ status: "completed", revision: 2 });
 		// The rows the new page brought are left as it returned them.
 		expect(live.items.filter((item) => item.sequence >= 7).map((item) => item.id)).toEqual(["n1", "n2"]);
+	});
+
+	// A row the host keeps running (an older daemon, an AO action, an old pending
+	// approval) must not cost a request on every refresh of a streaming turn.
+	describe("a row the host still reports unchanged", () => {
+		const runningRow = { id: "n0", turnId: "t0", sequence: 2, revision: 1, activityKind: "command", status: "running", summary: "n0", createdAt: "" };
+		const tail = (controller = "busy") => wire({ controller, afterSequence: 3, oldestSequence: 4, turns: [wireTurn("t2", "running")], messages: [wireMessage("m2", "t2", 4)] });
+		const reread = () => wire({ oldestSequence: 2, latestSequence: 2, turns: [wireTurn("t0", "running")], activities: [runningRow] });
+		const rereads = () => getMock.mock.calls.filter((call) => call[1].params.query.limit === 1).length;
+		beforeEach(async () => {
+			const history = page([turn("t0", "running")], [message("m0", "t0", 1), tool("n0", "t0", 2, "running")]);
+			client.setQueryData<InfiniteData<ConversationSnapshot>>(key, { pages: [prior, history], pageParams: [undefined, 1] });
+			getMock.mockResolvedValueOnce(tail()).mockResolvedValueOnce(reread());
+			await refreshRemoteConversation(client, "s1", "box");
+			expect(rereads()).toBe(1);
+		});
+
+		it("is not reread by the next refresh", async () => {
+			getMock.mockResolvedValueOnce(tail());
+			await refreshRemoteConversation(client, "s1", "box");
+			expect(getMock).toHaveBeenCalledTimes(3);
+			expect(rereads()).toBe(1);
+		});
+
+		it("is reread once the chat reopens or its host's stream reconnects", async () => {
+			forgetRemoteConversationRereads(client, "box");
+			getMock.mockResolvedValueOnce(tail()).mockResolvedValueOnce(reread());
+			await refreshRemoteConversation(client, "s1", "box");
+			expect(rereads()).toBe(2);
+		});
+
+		// A daemon settles stranded rows when the chat's controller starts.
+		it("is reread when the chat's controller state changes", async () => {
+			getMock.mockResolvedValueOnce(tail("ready")).mockResolvedValueOnce(reread());
+			await refreshRemoteConversation(client, "s1", "box");
+			expect(rereads()).toBe(2);
+		});
 	});
 
 	it("uses the answer of a daemon that ignores afterSequence as the live page", async () => {
