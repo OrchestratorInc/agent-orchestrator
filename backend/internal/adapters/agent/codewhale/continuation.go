@@ -97,6 +97,31 @@ func (*Plugin) PrepareImportedSession(ctx context.Context, r ports.ImportedSessi
 	return ports.NativeSessionRef{NativeSessionID: copy.ID, ConfigDir: r.ConfigDir, TranscriptPath: path}, nil
 }
 
+func (p *Plugin) nativeRestoreConfigDir(ctx context.Context, cfg ports.WorkspaceHookConfig) (string, error) {
+	root, err := p.NativeSessionConfigDir(ctx, cfg.Env)
+	if err != nil {
+		return "", err
+	}
+	if root == "~" || strings.HasPrefix(root, "~/") || strings.HasPrefix(root, `~\`) {
+		home := strings.TrimSpace(cfg.Env["HOME"])
+		if home == "" {
+			home, err = os.UserHomeDir()
+			if err != nil {
+				return "", err
+			}
+		}
+		if root == "~" {
+			root = home
+		} else {
+			root = filepath.Join(home, root[2:])
+		}
+	}
+	if !filepath.IsAbs(root) {
+		root = filepath.Join(cfg.WorkspacePath, root)
+	}
+	return filepath.Abs(root)
+}
+
 func (p *Plugin) nativeRestoreRuntimeDir(ctx context.Context, cfg ports.WorkspaceHookConfig, nativeID, recordedRoot, freshDir string) (string, error) {
 	if err := ctx.Err(); err != nil {
 		return "", err
@@ -110,7 +135,7 @@ func (p *Plugin) nativeRestoreRuntimeDir(ctx context.Context, cfg ports.Workspac
 	if !nativeSessionIDPattern.MatchString(nativeID) {
 		return "", errors.New("codewhale restore has an invalid native identity")
 	}
-	root, err := p.NativeSessionConfigDir(ctx, cfg.Env)
+	root, err := p.nativeRestoreConfigDir(ctx, cfg)
 	if err != nil {
 		return "", err
 	}

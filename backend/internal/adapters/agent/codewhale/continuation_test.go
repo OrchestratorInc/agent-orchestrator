@@ -73,6 +73,69 @@ func TestNativeRestoreRuntimeDirReusesExactSavedBinding(t *testing.T) {
 	}
 }
 
+func TestNativeRestoreResolvesSelectedProfile(t *testing.T) {
+	for _, kind := range []string{"relative", "cleared", "tilde"} {
+		t.Run(kind, func(t *testing.T) {
+			workspace, home := t.TempDir(), t.TempDir()
+			t.Setenv(codewhaleHomeEnv, t.TempDir())
+			env := map[string]string{"HOME": home}
+			root := filepath.Join(workspace, "profile")
+			switch kind {
+			case "relative":
+				env[codewhaleHomeEnv] = "profile"
+			case "cleared":
+				env[codewhaleHomeEnv] = ""
+				root = filepath.Join(home, ".codewhale")
+			case "tilde":
+				env[codewhaleHomeEnv] = "~/profile"
+				root = filepath.Join(home, "profile")
+			}
+			saved, err := filepath.EvalSymlinks(t.TempDir())
+			if err != nil {
+				t.Fatal(err)
+			}
+			seedRuntimeOwner(t, saved)
+			writeRestoreSnapshot(t, root, workspace, restoreTestID, saved)
+			cfg := ports.WorkspaceHookConfig{WorkspacePath: workspace, Env: env}
+			got, err := New().nativeRestoreRuntimeDir(context.Background(), cfg, restoreTestID, root, t.TempDir())
+			if err != nil || got != saved {
+				t.Fatalf("selected profile runtime = %q, %v", got, err)
+			}
+		})
+	}
+}
+
+func TestNativeRestoreAllowsBoundEmptyHistory(t *testing.T) {
+	root, workspace := t.TempDir(), t.TempDir()
+	saved, err := filepath.EvalSymlinks(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	seedRuntimeOwner(t, saved)
+	path := writeRestoreSnapshot(t, root, workspace, restoreTestID, saved)
+	body, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var raw map[string]any
+	if err := json.Unmarshal(body, &raw); err != nil {
+		t.Fatal(err)
+	}
+	raw["messages"] = []any{}
+	body, err = json.Marshal(raw)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(path, body, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	cfg := ports.WorkspaceHookConfig{WorkspacePath: workspace, Env: map[string]string{codewhaleHomeEnv: root}}
+	got, err := New().nativeRestoreRuntimeDir(context.Background(), cfg, restoreTestID, "", t.TempDir())
+	if err != nil || got != saved {
+		t.Fatalf("empty native restart = %q, %v", got, err)
+	}
+}
+
 func TestNativeRestoreRuntimeDirRefusesMissingAndMismatchedState(t *testing.T) {
 	for _, kind := range []string{"unbound", "missing_directory", "workspace", "override", "identity", "owner", "profile"} {
 		t.Run(kind, func(t *testing.T) {
@@ -206,6 +269,9 @@ func TestNativeRestoreLocatorSelectsExactConversationInSharedRuntime(t *testing.
 	}
 	env := map[string]string{codewhaleHomeEnv: root, "AO_RUNTIME_LAUNCH_ID": "selected-launch", "AO_RUN_FILE": runPath}
 	p := &Plugin{resolvedBinary: "/synthetic/codewhale"}
+	if _, err := os.Stat(filepath.Dir(nativeSessionLocatorPath(dataDir, "ao-selected", "selected-launch"))); !os.IsNotExist(err) {
+		t.Fatalf("new launch locator directory already exists: %v", err)
+	}
 	if err := p.PrepareRuntimeLaunch(context.Background(), ports.WorkspaceHookConfig{
 		DataDir: dataDir, SessionID: "ao-selected", WorkspacePath: workspace, Env: env,
 		NativeSessionID: restoreTestID,

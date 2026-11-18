@@ -148,6 +148,13 @@ func (p *Plugin) PrepareRuntimeLaunch(ctx context.Context, cfg ports.WorkspaceHo
 		return fmt.Errorf("codewhale.PrepareRuntimeLaunch: create launch metadata directory: %w", err)
 	}
 	sessionsDir, err := codewhaleSessionsDir(cfg.WorkspacePath, cfg.Env)
+	if cfg.NativeSessionID != "" {
+		var root string
+		root, err = p.nativeRestoreConfigDir(ctx, cfg)
+		if err == nil {
+			sessionsDir = filepath.Join(root, "sessions")
+		}
+	}
 	if err != nil {
 		return fmt.Errorf("codewhale.PrepareRuntimeLaunch: resolve sessions directory: %w", err)
 	}
@@ -157,6 +164,9 @@ func (p *Plugin) PrepareRuntimeLaunch(ctx context.Context, cfg ports.WorkspaceHo
 		return fmt.Errorf("codewhale.PrepareRuntimeLaunch: encode native session locator: %w", err)
 	}
 	locatorPath := nativeSessionLocatorPath(dataDir, sessionID, launchID)
+	if err := os.MkdirAll(filepath.Dir(locatorPath), 0o750); err != nil {
+		return fmt.Errorf("codewhale.PrepareRuntimeLaunch: create launch locator directory: %w", err)
+	}
 	if err := hookutil.AtomicWriteFile(locatorPath, locatorData, 0o600); err != nil {
 		return fmt.Errorf("codewhale.PrepareRuntimeLaunch: write native session locator: %w", err)
 	}

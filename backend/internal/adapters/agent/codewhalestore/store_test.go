@@ -7,6 +7,7 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"strings"
 	"testing"
 )
 
@@ -132,7 +133,7 @@ func TestCopyPreservesNativeGraphAndSource(t *testing.T) {
 }
 
 func TestImportRefusesDependentAndBrokenSnapshots(t *testing.T) {
-	for _, name := range []string{"artifacts", "context_references", "approval_receipts", "work_state", "identity", "schema", "cycle", "missing_parent", "child", "goal", "checkpoint"} {
+	for _, name := range []string{"artifacts", "context_references", "approval_receipts", "work_state", "identity", "schema", "negative_schema", "negative_journal_schema", "empty", "cycle", "missing_parent", "child", "goal", "checkpoint"} {
 		t.Run(name, func(t *testing.T) {
 			root, cwd := t.TempDir(), t.TempDir()
 			path := fixture(t, root, cwd)
@@ -142,6 +143,13 @@ func TestImportRefusesDependentAndBrokenSnapshots(t *testing.T) {
 					raw["metadata"].(map[string]any)["id"] = "44444444-4444-4444-8444-444444444444"
 				case "schema":
 					raw["schema_version"] = 999
+				case "negative_schema":
+					raw["schema_version"] = -1
+				case "negative_journal_schema":
+					raw["journal"].(map[string]any)["schema_version"] = -1
+				case "empty":
+					delete(raw, "journal")
+					delete(raw, "leaf_id")
 				case "child":
 					raw["metadata"].(map[string]any)["spawn_depth"] = 1
 				case "cycle", "missing_parent":
@@ -196,5 +204,81 @@ func TestReadRefusesEscapesSymlinksAndCancellation(t *testing.T) {
 	}
 	if _, err := ReadImport(context.Background(), root, path); err == nil {
 		t.Fatal("followed a native file symlink")
+	}
+}
+
+func TestImportAcceptsLegacySchemaVersions(t *testing.T) {
+	for _, absent := range []bool{false, true} {
+		root, cwd := t.TempDir(), t.TempDir()
+		path := fixture(t, root, cwd)
+		change(t, path, func(raw map[string]any) {
+			journal := raw["journal"].(map[string]any)
+			if absent {
+				delete(raw, "schema_version")
+				delete(journal, "schema_version")
+			} else {
+				raw["schema_version"], journal["schema_version"] = 0, 0
+			}
+		})
+		if _, err := ReadImport(context.Background(), root, path); err != nil {
+			t.Fatalf("legacy schema (absent=%v): %v", absent, err)
+		}
+	}
+}
+
+func TestCopyPublicationSizeBound(t *testing.T) {
+	for _, kind := range []string{"html", "expanded_target"} {
+		t.Run(kind, func(t *testing.T) {
+			root, cwd, launch := t.TempDir(), t.TempDir(), t.TempDir()
+			source := fixture(t, root, cwd)
+			body, err := os.ReadFile(source)
+			if err != nil {
+				t.Fatal(err)
+			}
+			var raw map[string]any
+			if err := json.Unmarshal(body, &raw); err != nil {
+				t.Fatal(err)
+			}
+			metadata := raw["metadata"].(map[string]any)
+			delete(metadata, "runtime_store")
+			delete(metadata, "publication_id")
+			var encoded bytes.Buffer
+			encoder := json.NewEncoder(&encoded)
+			encoder.SetEscapeHTML(false)
+			if kind == "html" {
+				metadata["title"] = strings.Repeat("<>&", maxBytes/12)
+			} else {
+				raw["padding"] = ""
+				if err := encoder.Encode(raw); err != nil {
+					t.Fatal(err)
+				}
+				raw["padding"] = strings.Repeat("x", maxBytes-encoded.Len())
+				encoded.Reset()
+			}
+			if err := encoder.Encode(raw); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.WriteFile(source, encoded.Bytes(), 0o600); err != nil {
+				t.Fatal(err)
+			}
+			prepared, target, err := Copy(context.Background(), root, source, launch)
+			if kind == "expanded_target" {
+				if err == nil {
+					t.Fatal("published a copy exceeding the native reader limit")
+				}
+				entries, err := os.ReadDir(filepath.Dir(source))
+				if err != nil || len(entries) != 1 {
+					t.Fatalf("failed publication left native state: %d entries, %v", len(entries), err)
+				}
+				return
+			}
+			if err != nil || !prepared.UnopenedCopy || prepared.Title != metadata["title"] {
+				t.Fatalf("HTML copy failed or lost its proof: %v", err)
+			}
+			info, err := os.Stat(target)
+			if err != nil || info.Size() > maxBytes {
+				t.Fatalf("prepared size: %v, %v", info, err)
+			}
+		})
 	}
 }

@@ -2,6 +2,7 @@
 package codewhalestore
 
 import (
+	"bytes"
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
@@ -131,7 +132,7 @@ func read(ctx context.Context, root, path string, importing bool) (Archive, map[
 	if _, err := uuid.Parse(doc.Metadata.ID); err != nil || filepath.Base(path) != doc.Metadata.ID+".json" {
 		return Archive{}, nil, errors.New("codewhale native identity mismatch")
 	}
-	if doc.Version > 1 || !filepath.IsAbs(doc.Metadata.Workspace) || doc.Metadata.SpawnDepth != 0 || doc.Messages == nil {
+	if doc.Version < 0 || doc.Version > 1 || !filepath.IsAbs(doc.Metadata.Workspace) || doc.Metadata.SpawnDepth != 0 || doc.Messages == nil {
 		return Archive{}, nil, errors.New("unsupported codewhale native snapshot")
 	}
 	// These fields bind external paths, grants or executable work to the old
@@ -149,7 +150,7 @@ func read(ctx context.Context, root, path string, importing bool) (Archive, map[
 		var proof copyProof
 		if json.Unmarshal(raw["ao_import"], &proof) == nil && proof.SourceID != "" && copiedID(root, proof.SourceID, out.CWD) == out.ID {
 			delete(raw, "ao_import")
-			unsigned, err := json.Marshal(raw)
+			unsigned, err := marshalSnapshot(raw)
 			if err != nil {
 				return Archive{}, nil, err
 			}
@@ -173,7 +174,7 @@ func read(ctx context.Context, root, path string, importing bool) (Archive, map[
 		}
 	} else {
 		journal := doc.Journal
-		if journal.Version > 1 || journal.SpawnDepth != 0 || len(journal.Entries) > 100000 || (doc.Leaf != "" && doc.Leaf != journal.Leaf) {
+		if journal.Version < 0 || journal.Version > 1 || journal.SpawnDepth != 0 || len(journal.Entries) > 100000 || (doc.Leaf != "" && doc.Leaf != journal.Leaf) {
 			return Archive{}, nil, errors.New("unsupported codewhale journal")
 		}
 		byID := make(map[string]entry, len(journal.Entries))
@@ -234,7 +235,7 @@ func read(ctx context.Context, root, path string, importing bool) (Archive, map[
 			}
 		}
 	}
-	if len(out.Messages) == 0 {
+	if importing && len(out.Messages) == 0 {
 		return Archive{}, nil, errors.New("codewhale native conversation has no visible messages")
 	}
 	return out, raw, ctx.Err()
@@ -311,15 +312,15 @@ func Copy(ctx context.Context, root, path, launchCWD string) (Archive, string, e
 		return Archive{}, "", err
 	}
 	metadata["id"], _ = json.Marshal(id)
-	metadata["workspace"], _ = json.Marshal(cwd)
+	metadata["workspace"], _ = marshalSnapshot(cwd)
 	delete(metadata, "runtime_store")
 	delete(metadata, "publication_id")
-	raw["metadata"], err = json.Marshal(metadata)
+	raw["metadata"], err = marshalSnapshot(metadata)
 	if err != nil {
 		return Archive{}, "", err
 	}
 	delete(raw, "ao_import")
-	unsigned, err := json.Marshal(raw)
+	unsigned, err := marshalSnapshot(raw)
 	if err != nil {
 		return Archive{}, "", err
 	}
@@ -331,9 +332,12 @@ func Copy(ctx context.Context, root, path, launchCWD string) (Archive, string, e
 	if err != nil {
 		return Archive{}, "", err
 	}
-	body, err := json.Marshal(raw)
+	body, err := marshalSnapshot(raw)
 	if err != nil {
 		return Archive{}, "", err
+	}
+	if len(body) > maxBytes {
+		return Archive{}, "", errors.New("codewhale prepared snapshot exceeds import limit")
 	}
 	provider, err := os.OpenRoot(root)
 	if err != nil {
@@ -369,4 +373,14 @@ func Copy(ctx context.Context, root, path, launchCWD string) (Archive, string, e
 
 func copiedID(root, sourceID, cwd string) string {
 	return uuid.NewSHA1(uuid.NameSpaceURL, []byte("ao-codewhale-import\x00"+filepath.Clean(root)+"\x00"+sourceID+"\x00"+cwd)).String()
+}
+
+func marshalSnapshot(value any) ([]byte, error) {
+	var body bytes.Buffer
+	encoder := json.NewEncoder(&body)
+	encoder.SetEscapeHTML(false)
+	if err := encoder.Encode(value); err != nil {
+		return nil, err
+	}
+	return body.Bytes(), nil
 }
