@@ -11,6 +11,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/workspace/dirseed"
 	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/workspace/forkseed"
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
 	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
@@ -92,7 +93,7 @@ func (m *Manager) createForkWorkspace(ctx context.Context, fork *ports.SpawnFork
 	}
 	if fork.SourceWorkspace != "" {
 		cloned, err := cloneForkDependencies(ctx, fork.SourceWorkspace, ws.Path)
-		if err != nil && !errors.Is(err, errCloneUnsupported) {
+		if err != nil && !errors.Is(err, dirseed.ErrCloneUnsupported) {
 			m.logger.Warn("session fork: clone dependencies; setup will install them", "workspace", ws.Path, "err", err)
 		} else if len(cloned) > 0 {
 			m.logger.Info("session fork: cloned dependencies", "workspace", ws.Path, "folders", cloned)
