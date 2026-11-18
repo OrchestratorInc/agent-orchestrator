@@ -62,3 +62,22 @@ func TestSettleOpenItemsReadsACopyWhileUpdatesStillArrive(t *testing.T) {
 		t.Fatalf("settling changed the live tool's status to %q", got)
 	}
 }
+
+// A late session/update can complete a tool after settlement snapshotted it
+// as open. Settlement checks the live state before emitting its synthetic
+// failure, so a completed tool is not overwritten as failed.
+func TestToolStillOpenFollowsTheLiveTool(t *testing.T) {
+	c := &conversation{}
+	tools := map[string]*toolState{
+		"done":    {id: "done", status: acpsdk.ToolCallStatusCompleted},
+		"failed":  {id: "failed", status: acpsdk.ToolCallStatusFailed},
+		"running": {id: "running", status: acpsdk.ToolCallStatusInProgress},
+		"pending": {id: "pending", status: acpsdk.ToolCallStatusPending},
+		"unset":   {id: "unset"},
+	}
+	for id, want := range map[string]bool{"done": false, "failed": false, "running": true, "pending": true, "unset": true} {
+		if got := c.toolStillOpen(tools, id); got != want {
+			t.Errorf("toolStillOpen(%q) = %v, want %v", id, got, want)
+		}
+	}
+}
