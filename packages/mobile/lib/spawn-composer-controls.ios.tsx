@@ -16,7 +16,8 @@ import {
 } from "@expo/ui/swift-ui/modifiers";
 import { useEffect, useState, type ReactNode } from "react";
 import { StyleSheet, View } from "react-native";
-import { hasLogo, logoKey } from "./harnessLogo";
+import { logoKey } from "./harnessLogo";
+import { hasMenuIcon } from "./harnessMenuIcons";
 import { EffortGaugeButton } from "./effort-gauge";
 import { EffortSliderOverlay } from "./effort-slider";
 import { useEffortSliderOpen } from "./useEffortSlider";
@@ -277,13 +278,14 @@ const styles = StyleSheet.create({
  * image set whose dark appearance is the brand's dark mark, where it ships one
  * (see scripts/sync-harness-logos.mjs). Drawn by name, it keeps its size
  * wherever SwiftUI puts it, an open submenu's header included, which ignores
- * any frame.
+ * any frame. Only marks the installed binary's catalog has are drawn by name
+ * (see harnessMenuIcons.ts); a missing asset would draw an empty slot.
  */
 export function HarnessImage({ harness }: { harness: string }) {
 	// One slot for every harness, so switching to one without a mark (drawn as
 	// the terminal symbol) never resizes the row it sits in.
 	const slot = frame({ width: HARNESS_MARK, height: HARNESS_MARK });
-	if (!hasLogo(harness)) return <Image systemName="terminal" modifiers={[font({ textStyle: "subheadline" }), slot]} />;
+	if (!hasMenuIcon(harness)) return <Image systemName="terminal" modifiers={[font({ textStyle: "subheadline" }), slot]} />;
 	return <Image assetName={`HarnessLogo-${logoKey(harness)}`} modifiers={[slot]} />;
 }
 
