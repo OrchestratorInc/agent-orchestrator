@@ -173,8 +173,8 @@ export async function installFakeBridge(page: Page, opts: FakeBridgeOptions = {}
 					setAccess: async () => {
 						throw new Error("Sharing is not faked.");
 					},
-					grants: async () => [],
-					invite: async () => [],
+					grants: async () => ({ people: [], teams: [], workspaces: [] }),
+					invite: async () => ({ people: [], teams: [], workspaces: [] }),
 					removeGrant: async () => undefined,
 					onProgress: () => () => undefined,
 				},
@@ -1183,8 +1183,8 @@ export async function installFakeAgent(page: Page, opts: FakeAgentOptions = {}):
 					setAccess: async () => {
 						throw new Error("Sharing is not faked.");
 					},
-					grants: async () => [],
-					invite: async () => [],
+					grants: async () => ({ people: [], teams: [], workspaces: [] }),
+					invite: async () => ({ people: [], teams: [], workspaces: [] }),
 					removeGrant: async () => undefined,
 					onProgress: () => () => undefined,
 				},
