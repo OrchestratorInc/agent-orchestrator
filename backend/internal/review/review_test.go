@@ -248,6 +248,9 @@ func applyReviewRunPatch(run *domain.ReviewRun, to domain.ReviewRunStatus, patch
 	if patch.AutoInjectReview != nil {
 		run.AutoInjectReview = *patch.AutoInjectReview
 	}
+	if patch.ReviewerModel != nil {
+		run.ReviewerModel = *patch.ReviewerModel
+	}
 	if patch.FailureReason != "" {
 		run.FailureReason = patch.FailureReason
 	}

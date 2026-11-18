@@ -97,6 +97,7 @@ UPDATE review_run SET
     body = COALESCE(CAST(sqlc.narg(body) AS TEXT), body),
     github_review_id = COALESCE(CAST(sqlc.narg(github_review_id) AS TEXT), github_review_id),
     auto_inject_review = COALESCE(CAST(sqlc.narg(auto_inject_review) AS BOOLEAN), auto_inject_review),
+    reviewer_model = COALESCE(CAST(sqlc.narg(reviewer_model) AS TEXT), reviewer_model),
     failure_reason = COALESCE(NULLIF(CAST(sqlc.arg(failure_reason) AS TEXT), ''), failure_reason),
     cancelled_by = COALESCE(NULLIF(CAST(sqlc.arg(cancelled_by) AS TEXT), ''), cancelled_by),
     launch_id = COALESCE(NULLIF(CAST(sqlc.arg(launch_id) AS TEXT), ''), launch_id),

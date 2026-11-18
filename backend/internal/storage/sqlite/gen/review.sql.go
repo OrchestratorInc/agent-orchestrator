@@ -1335,15 +1335,16 @@ UPDATE review_run SET
     body = COALESCE(CAST(?3 AS TEXT), body),
     github_review_id = COALESCE(CAST(?4 AS TEXT), github_review_id),
     auto_inject_review = COALESCE(CAST(?5 AS BOOLEAN), auto_inject_review),
-    failure_reason = COALESCE(NULLIF(CAST(?6 AS TEXT), ''), failure_reason),
-    cancelled_by = COALESCE(NULLIF(CAST(?7 AS TEXT), ''), cancelled_by),
-    launch_id = COALESCE(NULLIF(CAST(?8 AS TEXT), ''), launch_id),
-    launching_at = COALESCE(?9, launching_at),
-    started_at = COALESCE(?10, started_at),
-    first_activity_at = CASE WHEN CAST(?11 AS BOOLEAN) THEN NULL ELSE COALESCE(?12, first_activity_at) END,
-    cancel_requested_at = COALESCE(?13, cancel_requested_at),
-    ended_at = COALESCE(?14, ended_at)
-WHERE id = ?15 AND status IN (SELECT CAST(value AS TEXT) FROM json_each(CAST(?16 AS TEXT)))
+    reviewer_model = COALESCE(CAST(?6 AS TEXT), reviewer_model),
+    failure_reason = COALESCE(NULLIF(CAST(?7 AS TEXT), ''), failure_reason),
+    cancelled_by = COALESCE(NULLIF(CAST(?8 AS TEXT), ''), cancelled_by),
+    launch_id = COALESCE(NULLIF(CAST(?9 AS TEXT), ''), launch_id),
+    launching_at = COALESCE(?10, launching_at),
+    started_at = COALESCE(?11, started_at),
+    first_activity_at = CASE WHEN CAST(?12 AS BOOLEAN) THEN NULL ELSE COALESCE(?13, first_activity_at) END,
+    cancel_requested_at = COALESCE(?14, cancel_requested_at),
+    ended_at = COALESCE(?15, ended_at)
+WHERE id = ?16 AND status IN (SELECT CAST(value AS TEXT) FROM json_each(CAST(?17 AS TEXT)))
 `
 
 type TransitionReviewRunParams struct {
@@ -1352,6 +1353,7 @@ type TransitionReviewRunParams struct {
 	Body               sql.NullString
 	GithubReviewID     sql.NullString
 	AutoInjectReview   sql.NullBool
+	ReviewerModel      sql.NullString
 	FailureReason      string
 	CancelledBy        string
 	LaunchID           string
@@ -1375,6 +1377,7 @@ func (q *Queries) TransitionReviewRun(ctx context.Context, arg TransitionReviewR
 		arg.Body,
 		arg.GithubReviewID,
 		arg.AutoInjectReview,
+		arg.ReviewerModel,
 		arg.FailureReason,
 		arg.CancelledBy,
 		arg.LaunchID,

@@ -32,6 +32,46 @@ func newLifecycleEngine(t *testing.T, launcher *fakeLauncher) lifecycleEngine {
 	return newLifecycleEngineWith(t, launcher, RunLifecycleConfig{})
 }
 
+func TestRelaunchPersistsReviewerModel(t *testing.T) {
+	for _, tc := range []struct {
+		name, model string
+		fail        bool
+	}{{"override", "gpt-5-mini", false}, {"default_model", "", false}, {"failed_replacement", "gpt-5-mini", true}} {
+		t.Run(tc.name, func(t *testing.T) {
+			ctx := context.Background()
+			launcher := &fakeLauncher{alive: true, handle: "reviewer"}
+			s := newLifecycleEngine(t, launcher)
+			res, err := s.TriggerWithOptions(ctx, s.worker.ID, TriggerOptions{Config: domain.AgentConfig{Model: "gpt-5"}})
+			if err != nil {
+				t.Fatal(err)
+			}
+			launcher.launchID = ""
+			if tc.fail {
+				launcher.spawnErr = errors.New("replacement failed")
+			}
+			_, err = s.TriggerWithOptions(ctx, s.worker.ID, TriggerOptions{Config: domain.AgentConfig{Model: tc.model, Effort: "high"}})
+			if (err != nil) != tc.fail {
+				t.Fatalf("relaunch error = %v, want failure %v", err, tc.fail)
+			}
+			want := tc.model
+			if tc.fail {
+				want = "gpt-5"
+			}
+			run := s.run(t, res.Run.ID)
+			if run.Status != domain.ReviewRunRunning || run.ReviewerModel != want {
+				t.Fatalf("relaunch: status=%s model=%q, want running model=%q", run.Status, run.ReviewerModel, want)
+			}
+			if _, err := s.store.TransitionReviewRun(ctx, run.ID, []domain.ReviewRunStatus{domain.ReviewRunRunning}, domain.ReviewRunCompleted, domain.ReviewRunPatch{Verdict: domain.VerdictApproved}); err != nil {
+				t.Fatal(err)
+			}
+			notices, err := s.store.ListPendingReviewRunNotices(ctx, s.worker.ID)
+			if err != nil || len(notices) != 1 || notices[0].ReviewerModel != want {
+				t.Fatalf("completion notices = %+v, %v; want model %q", notices, err, want)
+			}
+		})
+	}
+}
+
 func newLifecycleEngineWith(t *testing.T, launcher *fakeLauncher, cfg RunLifecycleConfig) lifecycleEngine {
 	t.Helper()
 	st := newSQLiteReviewStore(t)

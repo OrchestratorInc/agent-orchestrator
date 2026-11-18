@@ -715,7 +715,7 @@ func (e *Engine) TriggerWithOptions(ctx stdctx.Context, workerID domain.SessionI
 		}
 		// A restarted pass is now waiting on the replacement launch, so a hung
 		// launch is bounded by LaunchTimeout like a new one.
-		if err := e.markRunsRelaunching(ctx, restarted, launchID); err != nil {
+		if err := e.markRunsRelaunching(ctx, restarted, launchID, config.Model); err != nil {
 			return TriggerResult{}, rollbackReplacement(err)
 		}
 		reviewRow, err = e.upsertReview(ctx, worker, harness, reviewRow.ReviewerHandleID, launchAgentSessionID, launchID, "", now)

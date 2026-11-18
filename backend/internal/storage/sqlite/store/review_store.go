@@ -278,6 +278,7 @@ func (s *Store) TransitionReviewRun(ctx context.Context, id string, from []domai
 		Body:               p.body,
 		GithubReviewID:     p.githubReviewID,
 		AutoInjectReview:   p.autoInjectReview,
+		ReviewerModel:      p.reviewerModel,
 		FailureReason:      p.failureReason,
 		CancelledBy:        p.cancelledBy,
 		LaunchID:           p.launchID,
@@ -389,6 +390,7 @@ type reviewRunPatchSQL struct {
 	body               sql.NullString
 	githubReviewID     sql.NullString
 	autoInjectReview   sql.NullBool
+	reviewerModel      sql.NullString
 	failureReason      string
 	cancelledBy        string
 	launchID           string
@@ -415,6 +417,9 @@ func reviewRunPatchParams(p domain.ReviewRunPatch) reviewRunPatchSQL {
 	}
 	if p.AutoInjectReview != nil {
 		out.autoInjectReview = sql.NullBool{Bool: *p.AutoInjectReview, Valid: true}
+	}
+	if p.ReviewerModel != nil {
+		out.reviewerModel = sql.NullString{String: *p.ReviewerModel, Valid: true}
 	}
 	out.launchingAt = timePtrToNullTime(p.LaunchingAt)
 	out.startedAt = timePtrToNullTime(p.StartedAt)

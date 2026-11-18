@@ -287,6 +287,7 @@ type ReviewRunPatch struct {
 	Body             *string
 	GithubReviewID   *string
 	AutoInjectReview *bool
+	ReviewerModel    *string
 	FailureReason    ReviewFailureReason
 	CancelledBy      ReviewCancelledBy
 	LaunchID         string
