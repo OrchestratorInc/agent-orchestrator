@@ -124,7 +124,7 @@ func readAutohandTranscript(ctx context.Context, root string, paths ...string) (
 			At      time.Time   `json:"timestamp"`
 		}
 		if json.Unmarshal(line, &message) != nil {
-			return nil // A torn append must not hide earlier complete messages.
+			return nil //nolint:nilerr // A torn preview record must not hide complete turns; native resume validates every record.
 		}
 		if message.At.After(t.last) && message.At.Before(now) {
 			t.last = message.At

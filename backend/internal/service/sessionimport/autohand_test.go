@@ -105,7 +105,10 @@ func TestAutohandRootAndCanceledDiscovery(t *testing.T) {
 func TestAutohandImportsTerminalAndRefreshesSidecar(t *testing.T) {
 	root, cwd := t.TempDir(), t.TempDir()
 	path := autohandFixture(t, root, autohandTestID, `{"role":"user","content":"first prompt"}`)
-	meta, err := json.Marshal(map[string]string{"sessionId": autohandTestID, "projectPath": cwd})
+	meta, err := json.Marshal(map[string]string{
+		"sessionId": autohandTestID, "projectPath": cwd,
+		"createdAt": "2026-10-01T10:00:00Z", "lastActiveAt": "2026-10-01T10:01:00Z",
+	})
 	if err != nil {
 		t.Fatal(err)
 	}
