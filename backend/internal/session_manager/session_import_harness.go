@@ -19,11 +19,22 @@ type importedHarnessHooks struct {
 }
 
 var importedHarnesses = map[domain.AgentHarness]importedHarnessHooks{
-	domain.HarnessCrush:  {configEnvKey: "CRUSH_GLOBAL_DATA", ownedElsewhere: crushImportOwnedElsewhere, adoptedOwnedElsewhere: crushImportOwnedElsewhere},
-	domain.HarnessGemini: {configEnvKey: "GEMINI_CLI_HOME", configValue: filepath.Dir},
+	domain.HarnessClaudeCode: {configEnvKey: "CLAUDE_CONFIG_DIR"},
+	domain.HarnessCline:      {configEnvKey: "CLINE_DATA_DIR", ownedElsewhere: clineImportOwnedElsewhere, adoptedOwnedElsewhere: clineImportOwnedElsewhere},
+	domain.HarnessCodex:      {configEnvKey: "CODEX_HOME"},
+	domain.HarnessCopilot:    {configEnvKey: "COPILOT_HOME"},
+	domain.HarnessCrush:      {configEnvKey: "CRUSH_GLOBAL_DATA", ownedElsewhere: crushImportOwnedElsewhere, adoptedOwnedElsewhere: crushImportOwnedElsewhere},
+	domain.HarnessCursor:     {configEnvKey: "CURSOR_DATA_DIR", adoptedOwnedElsewhere: cursorAdoptedImportOwnedElsewhere},
+	domain.HarnessGemini:     {configEnvKey: "GEMINI_CLI_HOME", configValue: filepath.Dir},
+	domain.HarnessGrok:       {configEnvKey: "GROK_HOME", ownedElsewhere: grokImportOwnedElsewhere, adoptedOwnedElsewhere: grokImportOwnedElsewhere},
+	domain.HarnessKimchi:     {configEnvKey: "KIMCHI_CODING_AGENT_DIR"},
+	domain.HarnessOMP:        {configEnvKey: "PI_CODING_AGENT_DIR"},
+	domain.HarnessOpenCode:   {configEnvKey: "OPENCODE_DATA_DIR"},
+	domain.HarnessPi:         {configEnvKey: "PI_CODING_AGENT_DIR"},
+	domain.HarnessQwen:       {configEnvKey: "QWEN_HOME"},
 }
 
 // writableTranscriptOwner also covers providers without a session registry.
 // Node-based CLIs normally appear as their binary name or node in lsof output.
 // This is best-effort evidence, not a substitute for provider writer locks.
-var importedProcessNames = []string{"claude", "codex", "droid", "gemini", "node", "copilot", "omp", "crush"}
+var importedProcessNames = []string{"claude", "codex", "gemini", "node", "copilot", "omp", "aider", "cline", "cursor-agent", "grok", "crush"}

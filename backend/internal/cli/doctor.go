@@ -22,6 +22,7 @@ import (
 
 	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/agent/codex"
 	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/agent/registry"
+	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/agent/tau"
 	"github.com/aoagents/agent-orchestrator/backend/internal/agentlaunch"
 	"github.com/aoagents/agent-orchestrator/backend/internal/config"
 	"github.com/aoagents/agent-orchestrator/backend/internal/tmuxbin"
@@ -65,12 +66,14 @@ type harnessProbe struct {
 	Name                  string
 	BinaryName            string
 	VersionArg            string
+	VersionCheck          func(version string) error
 	ExpectedVersionPrefix string
 }
 
 type harnessProbeSpec struct {
 	BinaryName            string
 	VersionArg            string
+	VersionCheck          func(version string) error
 	ExpectedVersionPrefix string
 }
 
@@ -98,13 +101,20 @@ var harnessProbeSpecs = map[string]harnessProbeSpec{
 	"memcode":      {BinaryName: "memcode", VersionArg: "--version"},
 	"command-code": {BinaryName: "command-code", VersionArg: "--version"},
 	"hermes":       {BinaryName: "hermes", VersionArg: "--version"},
+	"stakpak":      {BinaryName: "stakpak", VersionArg: "--version"},
+	// MiniMax Code's CLI is `mcode`, not its harness ID.
+	"minimax-code": {BinaryName: "mcode", VersionArg: "--version"},
+	// Open Interpreter is pinned to its inspected Rust release; the older Python
+	// CLI also installs `interpreter`, so the version line must identify it.
+	"open-interpreter": {BinaryName: "interpreter", VersionArg: "--version", ExpectedVersionPrefix: "interpreter 0.0.56"},
+	"tau":              {BinaryName: "tau", VersionArg: "--version", VersionCheck: tau.CheckVersion},
 }
 
 func newDoctorCommand(ctx *commandContext) *cobra.Command {
 	var asJSON bool
 	cmd := &cobra.Command{
 		Use:   "doctor",
-		Short: "Run local AO health checks",
+		Short: "Run local Orchestrator health checks",
 		Args:  noArgs,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			checks := ctx.runDoctor(cmd.Context())
@@ -225,6 +235,7 @@ func (c *commandContext) runDoctor(ctx context.Context) []doctorCheck {
 			Name:                  id,
 			BinaryName:            binaryName,
 			VersionArg:            spec.VersionArg,
+			VersionCheck:          spec.VersionCheck,
 			ExpectedVersionPrefix: spec.ExpectedVersionPrefix,
 		}))
 	}
@@ -436,7 +447,7 @@ func (c *commandContext) checkAOLoginShell(ctx context.Context, daemonExe, dataD
 			Message: fmt.Sprintf("a %s login shell still runs %s (%s)", shellName, wantLabel, want),
 		}, true
 	default:
-		msg = fmt.Sprintf("a %s login shell runs %s, not %s %s: a startup file such as ~/.profile puts its directory first, and AO puts its own ao back only in zsh and bash, so agent commands that run in a login shell (Codex's) and new terminals run that copy; remove it or stop prepending its directory", shellName, resolved, wantLabel, want)
+		msg = fmt.Sprintf("a %s login shell runs %s, not %s %s: a startup file such as ~/.profile puts its directory first, and Orchestrator puts its own ao back only in zsh and bash, so agent commands that run in a login shell (Codex's) and new terminals run that copy; remove it or stop prepending its directory", shellName, resolved, wantLabel, want)
 		if agentlaunch.IsDevLauncher(resolved, agentlaunch.DevLauncherBuildPaths(os.Getenv)) {
 			msg += fmt.Sprintf("; it is the launcher scripts/daemon-build.sh installs, and `rm '%s'` removes it", strings.ReplaceAll(resolved, "'", `'\''`))
 		}
@@ -464,7 +475,7 @@ func (c *commandContext) checkGit(ctx context.Context) doctorCheck {
 		return doctorCheck{Level: doctorWarn, Section: doctorSectionTools, Name: "git", Message: fmt.Sprintf("%s (version unknown: %s)", path, firstOutputLine(out))}
 	}
 	if cmp < 0 {
-		return doctorCheck{Level: doctorWarn, Section: doctorSectionTools, Name: "git", Message: fmt.Sprintf("%s (version %s; AO expects >= %s for worktrees)", path, version, minGitVersion)}
+		return doctorCheck{Level: doctorWarn, Section: doctorSectionTools, Name: "git", Message: fmt.Sprintf("%s (version %s; Orchestrator expects >= %s for worktrees)", path, version, minGitVersion)}
 	}
 	return doctorCheck{Level: doctorPass, Section: doctorSectionTools, Name: "git", Message: fmt.Sprintf("%s (version %s; supports worktrees)", path, version)}
 }
@@ -567,6 +578,14 @@ func (c *commandContext) checkHarness(ctx context.Context, harness harnessProbe)
 	if version == "" {
 		version = "version output was empty"
 	}
+	if harness.VersionCheck != nil {
+		if err := harness.VersionCheck(version); err != nil {
+			return doctorCheck{
+				Level: doctorWarn, Section: doctorSectionAgents, Name: harness.Name,
+				Message: fmt.Sprintf("%s resolves to %s, but reports %q: %v", harness.BinaryName, path, version, err),
+			}
+		}
+	}
 	if harness.ExpectedVersionPrefix != "" && !strings.HasPrefix(version, harness.ExpectedVersionPrefix) {
 		return doctorCheck{
 			Level: doctorWarn, Section: doctorSectionAgents, Name: harness.Name,
@@ -596,17 +615,17 @@ func (c *commandContext) checkCodexLaunchFlags(ctx context.Context) doctorCheck 
 		if err != nil {
 			return doctorCheck{
 				Level: doctorWarn, Section: doctorSectionAgents, Name: name,
-				Message: fmt.Sprintf("codex rejected AO's launch flags (`codex %s`: %v) — codex sessions may spawn without activity hooks; a codex CLI update likely changed its flag/config surface", strings.Join(probe, " "), err),
+				Message: fmt.Sprintf("codex rejected Orchestrator's launch flags (`codex %s`: %v) — codex sessions may spawn without activity hooks; a codex CLI update likely changed its flag/config surface", strings.Join(probe, " "), err),
 			}
 		}
 		if strings.Contains(string(out), "unknown configuration field") {
 			return doctorCheck{
 				Level: doctorWarn, Section: doctorSectionAgents, Name: name,
-				Message: fmt.Sprintf("codex no longer recognizes one of AO's config overrides (%s) — codex sessions may spawn without activity hooks", firstOutputLine(out)),
+				Message: fmt.Sprintf("codex no longer recognizes one of Orchestrator's config overrides (%s) — codex sessions may spawn without activity hooks", firstOutputLine(out)),
 			}
 		}
 	}
-	return doctorCheck{Level: doctorPass, Section: doctorSectionAgents, Name: name, Message: "codex accepts AO's hook/trust launch flags"}
+	return doctorCheck{Level: doctorPass, Section: doctorSectionAgents, Name: name, Message: "codex accepts Orchestrator's hook/trust launch flags"}
 }
 
 func (c *commandContext) checkGitHubToken(ctx context.Context) doctorCheck {

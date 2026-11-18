@@ -9,6 +9,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
 )
@@ -39,6 +40,7 @@ func TestGeminiJSONLImportUsesNativeHeaderAndCurrentBranch(t *testing.T) {
 	st := &importStore{projects: []domain.ProjectRecord{{ID: "synthetic", Path: cwd}}}
 	svc := New(st, "", func(domain.AgentHarness) bool { return false })
 	svc.roots = map[domain.AgentHarness]string{domain.HarnessGemini: root}
+	svc.now = func() time.Time { return time.Date(2026, 11, 3, 0, 0, 0, 0, time.UTC) }
 	preview, err := svc.Scan(context.Background())
 	if err != nil || len(preview.Candidates) != 1 {
 		t.Fatalf("scan = %#v, %v", preview, err)
@@ -57,7 +59,7 @@ func TestGeminiJSONLImportUsesNativeHeaderAndCurrentBranch(t *testing.T) {
 }
 
 func TestGeminiLegacyJSONAndRegistryCWD(t *testing.T) {
-	root := t.TempDir()
+	root := canonical(t.TempDir())
 	cwd := t.TempDir()
 	dir := filepath.Join(root, "tmp", "synthetic", "chats")
 	if err := os.MkdirAll(dir, 0o700); err != nil {
@@ -78,7 +80,7 @@ func TestGeminiLegacyJSONAndRegistryCWD(t *testing.T) {
 }`), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	got, err := readGeminiTranscript(context.Background(), root, path)
+	got, err := readGeminiTranscriptWithProjects(context.Background(), root, nil, path)
 	if err != nil || got.cwd != cwd || len(got.messages) != 2 {
 		t.Fatalf("legacy = %#v, %v", got, err)
 	}
@@ -100,7 +102,7 @@ func TestGeminiLegacyHashResolvesOnlyRegisteredProjectsWithoutMetadata(t *testin
 	if err := os.WriteFile(path, body, 0o600); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := readGeminiTranscript(context.Background(), root, path); err == nil {
+	if _, err := readGeminiTranscriptWithProjects(context.Background(), root, nil, path); err == nil {
 		t.Fatal("unregistered hash was guessed")
 	}
 	st := &importStore{projects: []domain.ProjectRecord{{ID: "legacy", Path: cwd}}}
@@ -128,7 +130,7 @@ func TestGeminiSkimsOversizeToolRecordAndKeepsVisibleText(t *testing.T) {
 	before := maxRecordBytes
 	maxRecordBytes = 256
 	t.Cleanup(func() { maxRecordBytes = before })
-	root, cwd := t.TempDir(), t.TempDir()
+	root, cwd := canonical(t.TempDir()), t.TempDir()
 	dir := filepath.Join(root, "tmp", "synthetic", "chats")
 	if err := os.MkdirAll(dir, 0o700); err != nil {
 		t.Fatal(err)
@@ -144,7 +146,7 @@ func TestGeminiSkimsOversizeToolRecordAndKeepsVisibleText(t *testing.T) {
 	if err := os.WriteFile(path, []byte(body), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	got, err := readGeminiTranscript(context.Background(), root, path)
+	got, err := readGeminiTranscriptWithProjects(context.Background(), root, nil, path)
 	if err != nil || len(got.messages) != 2 || !got.shortened || got.messages[1].Text != "visible answer" {
 		t.Fatalf("oversize = %#v, %v", got, err)
 	}

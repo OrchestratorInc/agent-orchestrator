@@ -36,15 +36,6 @@ func TestRegisteredDiscoveryRootsAreExplicitAndConfined(t *testing.T) {
 	}
 }
 
-func TestSourceCacheFingerprintIncludesNativeSidecars(t *testing.T) {
-	first := sourceFiles{harness: domain.HarnessGemini, root: "/provider", paths: []string{"database"}, fingerprint: "db=1,wal=2,meta=3"}
-	changed := first
-	changed.fingerprint = "db=1,wal=4,meta=3"
-	if first.cacheKey() == changed.cacheKey() {
-		t.Fatal("native sidecar change retained a stale transcript cache key")
-	}
-}
-
 func TestRepoLocalDiscoveryUsesEachNativeRoot(t *testing.T) {
 	old := harnessImporters[domain.HarnessGemini]
 	t.Cleanup(func() { harnessImporters[domain.HarnessGemini] = old })

@@ -1,7 +1,7 @@
 ---
 name: ao-answer
 description: >-
-  Find AO sessions that wait on the user, show each question or approval as
+  Find Orchestrator sessions that wait on the user, show each question or approval as
   tap-to-answer options, and send the answer back to that session, following
   ao-rules "Decisions" (default, away mode, standing approvals). Use for
   "what's waiting on me", "answer <session>", "approve it", the AO waiting
@@ -51,7 +51,7 @@ In the **AO waiting check** routine: keep what you already showed in `~/.ao-grok
 ## 2. Show it
 Per session, one short briefing first: `<host>/<session>` and its name, what it is doing, and what it asks, in one or two sentences. Don't recommend anything. Then:
 - `approval`: the command or change verbatim, the risk you judge (ao-rules), and the `decisions` labels exactly as options in one card. Mark a decision whose `kind` is `allow_always` as "changes this agent's permissions for good".
-- `user_input`: one card with every question in it, in order (the card pages through them). A field with `oneOf` or `enum` is a question: use the `oneOf` titles or `enum` values as its options, exactly. A field whose `_meta._askUserQuestionCustomAnswer.questionId` names another field is that question's "Other" box: show it as a typed-answer option on that question, not as its own question. Any other free-text field is a question with a typed answer. `detail.inputMode` `url` can't be answered from chat: tell the user to open AO.
+- `user_input`: one card with every question in it, in order (the card pages through them). A field with `oneOf` or `enum` is a question: use the `oneOf` titles or `enum` values as its options, exactly. A field whose `_meta._askUserQuestionCustomAnswer.questionId` names another field is that question's "Other" box: show it as a typed-answer option on that question, not as its own question. Any other free-text field is a question with a typed answer. `detail.inputMode` `url` can't be answered from chat: tell the user to open Orchestrator.
 - `reply`: the agent's question from its last reply, with options if it gave clear ones, else ask for a typed answer.
 
 Several sessions at once: explain them together, then cards per session.

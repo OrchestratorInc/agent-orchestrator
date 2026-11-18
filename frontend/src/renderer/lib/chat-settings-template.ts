@@ -50,26 +50,76 @@ export function rememberChatSettingsTemplate(harness: string, hostId: string | u
 }
 
 const SKILLS_KEY = "ao.chat.skills.v1";
+const PROJECT_SKILLS_KEY = "ao.chat.projectSkills.v1";
+/**
+ * Projects whose own list is kept. A list can run to hundreds of skills with long
+ * descriptions, so only the most recently used projects keep theirs; the rest fall
+ * back to the agent-wide list.
+ */
+export const REMEMBERED_SKILL_PROJECTS = 12;
 
-/** The skills a session of this agent last listed, for a new chat's "/" menu. */
-export function readChatSkills(harness: string, hostId?: string): ChatSkill[] {
-	if (!harness) return [];
+type SkillLists = Record<string, ChatSkill[]>;
+
+// Every chat that opens reads these, and together they can run to hundreds of
+// kilobytes. Parsing that again on every chat switch would cost the switch time,
+// so the parsed copy is kept for as long as the stored text is unchanged (another
+// window's write changes the text, so it is still picked up).
+const parsedLists = new Map<string, { raw: string; lists: SkillLists }>();
+
+function readSkillLists(key: string): SkillLists {
 	try {
-		const all: unknown = JSON.parse(storage()?.getItem(SKILLS_KEY) ?? "{}");
-		const skills = all && typeof all === "object" ? (all as Record<string, unknown>)[keyFor(harness, hostId)] : undefined;
-		return Array.isArray(skills) ? (skills as ChatSkill[]) : [];
+		const raw = storage()?.getItem(key) ?? "{}";
+		const cached = parsedLists.get(key);
+		if (cached?.raw === raw) return cached.lists;
+		const parsed: unknown = JSON.parse(raw);
+		const lists = parsed && typeof parsed === "object" && !Array.isArray(parsed) ? (parsed as SkillLists) : {};
+		parsedLists.set(key, { raw, lists });
+		return lists;
 	} catch {
-		return [];
+		return {};
 	}
 }
 
-export function rememberChatSkills(harness: string, hostId: string | undefined, skills: ChatSkill[]): void {
+function writeSkillLists(key: string, lists: SkillLists): void {
+	const raw = JSON.stringify(lists);
+	storage()?.setItem(key, raw);
+	parsedLists.set(key, { raw, lists });
+}
+
+/**
+ * The skills a session of this agent last listed, for a "/" menu that has no live
+ * list yet: a new chat, or a session whose agent is still starting or asleep.
+ *
+ * With a project, that project's own list wins, since project skills
+ * (`.claude/skills`, `.agents/skills`) differ between repos; otherwise the list
+ * any session of this agent last reported.
+ */
+export function readChatSkills(harness: string, hostId?: string, projectId?: string): ChatSkill[] {
+	if (!harness) return [];
+	if (projectId) {
+		const own = readSkillLists(PROJECT_SKILLS_KEY)[`${keyFor(harness, hostId)}:${projectId}`];
+		if (Array.isArray(own)) return own;
+	}
+	const skills = readSkillLists(SKILLS_KEY)[keyFor(harness, hostId)];
+	return Array.isArray(skills) ? skills : [];
+}
+
+export function rememberChatSkills(harness: string, hostId: string | undefined, skills: ChatSkill[], projectId?: string): void {
 	try {
-		const all: Record<string, ChatSkill[]> = JSON.parse(storage()?.getItem(SKILLS_KEY) ?? "{}");
 		const key = keyFor(harness, hostId);
-		if (JSON.stringify(all[key]) === JSON.stringify(skills)) return;
-		all[key] = skills;
-		storage()?.setItem(SKILLS_KEY, JSON.stringify(all));
+		const all = readSkillLists(SKILLS_KEY);
+		if (JSON.stringify(all[key]) !== JSON.stringify(skills)) writeSkillLists(SKILLS_KEY, { ...all, [key]: skills });
+		if (!projectId) return;
+		// Insertion order is recency: each write moves its project to the end, even
+		// when its list is unchanged, so a project in daily use is never the one dropped.
+		const projects = readSkillLists(PROJECT_SKILLS_KEY);
+		const projectKey = `${key}:${projectId}`;
+		const keys = Object.keys(projects);
+		if (keys[keys.length - 1] === projectKey && JSON.stringify(projects[projectKey]) === JSON.stringify(skills)) return;
+		const next: SkillLists = { ...projects };
+		delete next[projectKey];
+		next[projectKey] = skills;
+		writeSkillLists(PROJECT_SKILLS_KEY, Object.fromEntries(Object.entries(next).slice(-REMEMBERED_SKILL_PROJECTS)));
 	} catch {
 		// Only polish: without it a new chat offers no "/" skills.
 	}

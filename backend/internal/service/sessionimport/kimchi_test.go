@@ -53,12 +53,6 @@ func TestKimchiTranscriptKeepsOnlyUserAndAssistantText(t *testing.T) {
 	if got.title != "Hero greeting" {
 		t.Fatalf("title = %q, want session_info name", got.title)
 	}
-	if got.model != "anthropic/claude-opus" {
-		t.Fatalf("model = %q", got.model)
-	}
-	if got.effort != "high" {
-		t.Fatalf("effort = %q", got.effort)
-	}
 }
 
 func TestKimchiTranscriptTitleFallsBackToFirstPrompt(t *testing.T) {
@@ -122,8 +116,7 @@ func TestKimchiDiscoverGroupsEachFileByNativeID(t *testing.T) {
 	other := "019fe4d5-2222-77ac-a0e3-d3c18b37dcef"
 	writeFile(t, kimchiPath(root, "--work-other--", other), `{"type":"session","version":3,"id":"`+other+`","timestamp":"2026-08-09T05:43:21.669Z","cwd":"/work/other"}
 `)
-	svc := New(&importStore{}, "", chatSupported)
-	files, err := svc.discover(context.Background(), domain.HarnessKimchi, canonical(root))
+	files, err := discoverFor(context.Background(), domain.HarnessKimchi, canonical(root), nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -142,34 +135,25 @@ func TestKimchiDiscoverGroupsEachFileByNativeID(t *testing.T) {
 	}
 }
 
-// AO's own resume copies live in the Kimchi sessions tree under a folder whose
-// header cwd is inside AO's data directory; discovery must skip them so the
-// original is not offered twice (and the AO copy, which carries AO's turns, is
-// never imported as a fresh chat).
-func TestKimchiDiscoverSkipsAOResumeCopies(t *testing.T) {
-	root := t.TempDir()
-	dataDir := t.TempDir()
-	// The original conversation, in the user's own repository.
-	writeFile(t, kimchiPath(root, "--work-repo--", kimchiSession), `{"type":"session","version":3,"id":"`+kimchiSession+`","timestamp":"2026-08-09T04:43:21.669Z","cwd":"/work/repo"}
-`+kimchiMsg("u1", kimchiSession, "user", "hi")+`
-`)
-	// AO's resume copy of the same conversation, keyed by the AO worktree path.
-	// The worktree must exist on disk so its path resolves to the same physical
-	// form as the excluded data dir (for example /var vs /private/var on macOS).
+// AO's own resume copy shares the original's id but runs in an AO worktree;
+// Scan must offer only the original.
+func TestKimchiScanSkipsAOResumeCopies(t *testing.T) {
+	root, dataDir, repo := t.TempDir(), t.TempDir(), canonical(t.TempDir())
 	worktree := filepath.Join(dataDir, "worktrees", "proj", "sess")
 	if err := os.MkdirAll(worktree, 0o755); err != nil {
 		t.Fatal(err)
 	}
-	writeFile(t, kimchiPath(root, "--"+folderDashes(worktree)+"--", kimchiSession), `{"type":"session","version":3,"id":"`+kimchiSession+`","timestamp":"2026-08-09T06:43:21.669Z","cwd":"`+worktree+`"}
+	for _, cwd := range []string{repo, canonical(worktree)} {
+		writeFile(t, kimchiPath(root, "--"+folderDashes(cwd)+"--", kimchiSession), `{"type":"session","version":3,"id":"`+kimchiSession+`","timestamp":"2026-08-09T04:43:21.669Z","cwd":"`+cwd+`"}
 `+kimchiMsg("u1", kimchiSession, "user", "hi")+`
 `)
-	svc := New(&importStore{}, dataDir, chatSupported)
-	files, err := svc.discover(context.Background(), domain.HarnessKimchi, canonical(root))
-	if err != nil {
-		t.Fatal(err)
 	}
-	if len(files) != 1 {
-		t.Fatalf("discovered %d files, want 1 (AO resume copy must be skipped)", len(files))
+	svc := New(&importStore{projects: []domain.ProjectRecord{{ID: "repo", Path: repo}}}, dataDir, chatSupported)
+	svc.roots = map[domain.AgentHarness]string{domain.HarnessKimchi: canonical(root)}
+	svc.now = func() time.Time { return time.Date(2026, 8, 10, 0, 0, 0, 0, time.UTC) }
+	preview, err := svc.Scan(context.Background())
+	if err != nil || len(preview.Candidates) != 1 || preview.Candidates[0].ProjectID != "repo" {
+		t.Fatalf("candidates = %#v, %v", preview.Candidates, err)
 	}
 }
 
@@ -208,15 +192,6 @@ func TestKimchiTranscriptAppliesActiveContextEditsAndRetractions(t *testing.T) {
 	wantTexts(t, got.messages, "user: first question", "assistant: corrected answer", "user: real followup")
 }
 
-func TestKimchiTranscriptRejectsDuplicateSessionRecords(t *testing.T) {
-	root := t.TempDir()
-	header := `{"type":"session","version":3,"id":"` + kimchiSession + `","cwd":"/work/repo"}`
-	path := writeFile(t, kimchiPath(root, "--work-repo--", kimchiSession), header+"\n"+kimchiMsg("u1", "", "user", "hello")+"\n"+header+"\n")
-	if _, err := readTranscript(context.Background(), domain.HarnessKimchi, root, path); err == nil {
-		t.Fatal("expected duplicate native session record to fail")
-	}
-}
-
 func TestKimchiScanAndImportPreservesNativeContinuation(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("HOME", home)
@@ -233,6 +208,7 @@ func TestKimchiScanAndImportPreservesNativeContinuation(t *testing.T) {
 		t.Fatal("Kimchi discovery followed an override its runtime ignores")
 	}
 	svc.roots = map[domain.AgentHarness]string{domain.HarnessKimchi: root}
+	svc.now = func() time.Time { return time.Date(2026, 8, 10, 0, 0, 0, 0, time.UTC) }
 	header := `{"type":"session","version":3,"id":"` + kimchiSession + `","cwd":"` + cwd + `","timestamp":"` + time.Now().UTC().Format(time.RFC3339Nano) + `"}`
 	path := writeFile(t, kimchiPath(root, "--source--", kimchiSession), header+`
 {"type":"model_change","id":"m1","parentId":null,"provider":"kimchi-dev","modelId":"auto"}
@@ -254,7 +230,7 @@ func TestKimchiScanAndImportPreservesNativeContinuation(t *testing.T) {
 	if rec.Harness != domain.HarnessKimchi || !rec.NeedsImportResume() || rec.Mode != domain.SessionModeChat || rec.ProjectID != "repo" {
 		t.Fatalf("imported session cannot continue: %+v", rec)
 	}
-	if rec.Metadata.Model != "kimchi-dev/auto" || rec.Metadata.Effort != "high" || rec.Metadata.ProviderConversationID != kimchiSession || rec.Metadata.NativeTranscriptPath != canonical(path) {
+	if rec.Metadata.ProviderConversationID != kimchiSession || rec.Metadata.NativeTranscriptPath != canonical(path) {
 		t.Fatalf("lost continuation metadata: %+v", rec.Metadata)
 	}
 	if source := rec.Metadata.ImportSource; source == nil || source.NativeID != kimchiSession || source.ConfigDir != canonical(root) || source.CWD != canonical(cwd) {

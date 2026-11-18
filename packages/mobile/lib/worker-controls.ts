@@ -37,13 +37,6 @@ export function filterWorkersByEnvironmentAndProject<T extends { projectId: stri
 	return filterWorkersByProject(environmentWorkers, projectId, projects);
 }
 
-export function workerSearchPresentation(
-	requestedOpen: boolean,
-	query: string,
-): "collapsed" | "expanded" {
-	return requestedOpen || query.trim().length > 0 ? "expanded" : "collapsed";
-}
-
 export function workerProjectLabel(
 	projects: readonly WorkerProject[],
 	projectId: string,
@@ -80,11 +73,16 @@ export function workerProjectForEnvironment(
 		: ALL_WORKER_PROJECTS;
 }
 
+export function workerEnvironmentLabel(environments: readonly WorkerEnvironment[], environmentId: string): string {
+	const options = workerEnvironmentOptions(environments);
+	return (options.find((environment) => environment.id === environmentId) ?? options[0]).label;
+}
+
 export function workerEnvironmentOptions(
 	environments: readonly WorkerEnvironment[],
 ): { id: string; label: string; appearance?: MachineAppearance }[] {
 	return [
-		{ id: ALL_WORKER_ENVIRONMENTS, label: "All environments" },
+		{ id: ALL_WORKER_ENVIRONMENTS, label: "All machines" },
 		...environments.map((environment) => ({ id: environment.id, label: environment.name, ...(environment.appearance ? { appearance: environment.appearance } : {}) })),
 	];
 }
@@ -99,15 +97,4 @@ export function sortWorkerEnvironments<T extends WorkerEnvironment>(environments
 /** One machine leaves nothing to filter, so the chip row only appears from two. */
 export function showsEnvironmentFilter(environments: readonly WorkerEnvironment[]): boolean {
 	return environments.length > 1;
-}
-
-/**
- * Where a horizontal chip row must scroll so a chip is fully visible with `inset`
- * of breathing room, or null when it already is.
- */
-export function chipRevealOffset(chip: { x: number; width: number }, view: { offset: number; width: number; inset: number }): number | null {
-	if (chip.x - view.inset < view.offset) return Math.max(0, chip.x - view.inset);
-	const end = chip.x + chip.width + view.inset;
-	if (end > view.offset + view.width) return end - view.width;
-	return null;
 }
