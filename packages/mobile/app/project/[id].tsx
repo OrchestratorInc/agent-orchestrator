@@ -92,9 +92,11 @@ function ProjectScreenContent() {
 	const canStartTask = hostMatches && !!row;
 	// One way to start a task at a time: while "No workers yet" offers Start
 	// task, the floating New task (Android) and the bottom compose (iOS) stay
-	// out; they come back once the list has a worker to show.
-	const [noWorkersShown, setNoWorkersShown] = useState(false);
-	const offerNewTask = canStartTask && !noWorkersShown;
+	// out; they come back once the list has a worker to show. Unknown (null)
+	// until the list first says which: starting from "has workers" put the
+	// compose button up on every empty project only to take it down again.
+	const [noWorkersShown, setNoWorkersShown] = useState<boolean | null>(null);
+	const offerNewTask = canStartTask && noWorkersShown === false;
 
 	// Memoized on what the items show. hostStates is replaced on every poll, and
 	// each new toolbar element would register the header's options again.
