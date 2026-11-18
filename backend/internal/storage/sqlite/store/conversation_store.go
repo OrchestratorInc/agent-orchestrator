@@ -1895,6 +1895,24 @@ func (s *Store) SettleOrphanedTurns(ctx context.Context, session domain.SessionI
 	return nil
 }
 
+// SettleStrandedActivities gives running rows stranded on a conversation's
+// already-settled turns (replayed provider notices stored by older daemons) the
+// status their turn's settlement writes. It covers turns an earlier session
+// handled before a handoff, and touches settled turns only, so unlike
+// SettleOrphanedTurns it is safe while a live controller is attached.
+func (s *Store) SettleStrandedActivities(ctx context.Context, conversationID string, now time.Time) error {
+	q, unlock := s.conversationWriter(ctx)
+	defer unlock()
+	if err := q.SettleStrandedConversationActivities(ctx,
+		gen.SettleStrandedConversationActivitiesParams{
+			UpdatedAt:      now,
+			ConversationID: conversationID,
+		}); err != nil {
+		return fmt.Errorf("settle stranded activities in %s: %w", conversationID, err)
+	}
+	return nil
+}
+
 // SettleUnboundRunningTurn closes an ambiguous dispatch after live reconnect.
 // Recheck under the writer lock so a bound or queued turn is never settled.
 func (s *Store) SettleUnboundRunningTurn(ctx context.Context, conversationID string, session domain.SessionID, turnID string, now time.Time) error {

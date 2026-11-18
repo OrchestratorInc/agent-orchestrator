@@ -5353,6 +5353,45 @@ func (q *Queries) SettleRunningConversationActivitiesForTurn(ctx context.Context
 	return err
 }
 
+const settleStrandedConversationActivities = `-- name: SettleStrandedConversationActivities :exec
+UPDATE conversation_activities
+SET status = CASE (SELECT settled.state FROM conversation_turns AS settled WHERE settled.id = conversation_activities.turn_id)
+        WHEN 'completed' THEN 'completed'
+        WHEN 'recovered' THEN 'recovered'
+        WHEN 'interrupted' THEN 'cancelled'
+        ELSE 'failed'
+    END,
+    revision = revision + 1,
+    updated_at = ?1
+WHERE conversation_activities.conversation_id = ?2
+  AND status = 'running'
+  -- An AO action runs on the daemon's clock, not the turn's: one recorded after
+  -- its turn settled is still in flight, and its terminal update skips a row that
+  -- is no longer running, so settling it here would lose the real outcome.
+  AND kind <> 'ao_action'
+  AND turn_id IN (
+      -- Every settled turn in the conversation, including turns an earlier
+      -- session handled before a handoff kept them in this timeline.
+      SELECT owner.id FROM conversation_turns AS owner
+      WHERE owner.conversation_id = ?2
+        AND owner.state IN ('completed', 'recovered', 'interrupted', 'failed', 'cancelled')
+  )
+`
+
+type SettleStrandedConversationActivitiesParams struct {
+	UpdatedAt      time.Time
+	ConversationID string
+}
+
+// A running row on a turn that has already settled can never finish. Older
+// daemons stored replayed provider retry/limit notices this way, after their turn
+// had ended, so clients showed a spinner that never stopped. Give each one the
+// status SettleTurn would have written (terminalActivityStatus).
+func (q *Queries) SettleStrandedConversationActivities(ctx context.Context, arg SettleStrandedConversationActivitiesParams) error {
+	_, err := q.db.ExecContext(ctx, settleStrandedConversationActivities, arg.UpdatedAt, arg.ConversationID)
+	return err
+}
+
 const settleStreamingConversationMessagesForTurn = `-- name: SettleStreamingConversationMessagesForTurn :exec
 UPDATE conversation_messages
 SET streaming = 0, revision = revision + 1, updated_at = ?1
