@@ -1426,13 +1426,14 @@ function setupTabHost(
 	const addChildView = vi.fn();
 	const onNativeViewAdded = vi.fn();
 	const onTabCloseFailure = vi.fn();
+	const shellFocus = vi.fn();
 	const host = createBrowserViewHost({
 		mainWindow: {
 			contentView: { addChildView, removeChildView: () => undefined },
 			getContentBounds: () => ({ x: 0, y: 0, width: 800, height: 600 }),
 			webContents: {
 				id: 1,
-				focus: () => undefined,
+				focus: shellFocus,
 				send: (channel: string, payload: unknown) => sent.push({ channel, payload }),
 			},
 		} as never,
@@ -1501,6 +1502,7 @@ function setupTabHost(
 		runtime,
 		sendFromTab,
 		sent,
+		shellFocus,
 		views,
 		clearBrowserProfileData,
 	};
@@ -7004,6 +7006,31 @@ describe("agent and person tabs", () => {
 		// frame Chromium does not draw off screen.
 		expect(runtime.screenshot).not.toHaveBeenCalled();
 		expect(views[1].webContents.capturePage).not.toHaveBeenCalled();
+	});
+
+	it("gives the keyboard back when a tab behind the person's takes it, and leaves the panel's editing alone", async () => {
+		const { host, invoke, views, viewId, sent, shellFocus } = await open();
+		await host.execute("sess-1", "open", { url: "https://agent.example.test/" });
+		await invoke("browser:openTab", { viewId, url: "https://mine.example.test/" });
+		const pageFocusReports = () => sent.filter((event) => event.channel === "browser:pageFocus").length;
+		const takesFocus = (index: number) => (views[index]!.listeners.get("focus") as () => void)();
+		const reported = pageFocusReports();
+
+		// The person is in the app's own UI (typing an address); the agent's tab behind takes focus.
+		shellFocus.mockClear();
+		takesFocus(0);
+		expect(pageFocusReports()).toBe(reported);
+		expect(shellFocus).toHaveBeenCalledTimes(1);
+
+		// The person's own page in front taking focus is theirs: the panel hears of it.
+		takesFocus(1);
+		expect(pageFocusReports()).toBe(reported + 1);
+		// Behind again: the keyboard goes back to the person's page, not the app.
+		shellFocus.mockClear();
+		takesFocus(0);
+		expect((views[1]!.webContents as unknown as { focus: ReturnType<typeof vi.fn> }).focus).toHaveBeenCalled();
+		expect(shellFocus).not.toHaveBeenCalled();
+		expect(pageFocusReports()).toBe(reported + 1);
 	});
 
 	it("reports the agent acting until a slow command finishes, not only while it starts", async () => {

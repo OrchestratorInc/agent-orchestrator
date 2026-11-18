@@ -1085,6 +1085,22 @@ export function createBrowserViewHost(
       };
       void promise.then(settle, settle);
     });
+  // Where the person's keyboard was last: the app's own UI or the page in
+  // front. A tab behind that takes focus hands it back here.
+  let personFocus: { session: BrowserSessionEntry; entry: BrowserEntry } | undefined;
+  shellWebContents.on?.("focus", () => {
+    personFocus = undefined;
+  });
+  const restorePersonFocus = (): void => {
+    const last = personFocus;
+    const stillInFront =
+      last !== undefined &&
+      entries.get(last.session.viewId) === last.session &&
+      last.session.tabs.get(last.entry.tabId) === last.entry &&
+      last.session.activeTabId === last.entry.tabId;
+    if (stillInFront) last.entry.view.webContents.focus();
+    else shellWebContents.focus();
+  };
   // The AO mascot's pop-up over the agent's page (browser-agent-badge.ts).
   const agentBadge = options.agentBadge
     ? createAgentBadge({
@@ -1636,6 +1652,15 @@ export function createBrowserViewHost(
     );
     view.webContents.on("focus", () => {
       if (!isCurrentEntry()) return;
+      // Only the tab in front is the person's to type into. A tab behind it
+      // (the agent's, working out of sight) taking focus must not pull the
+      // keyboard from where the person was, nor end their address-bar edit:
+      // give focus back.
+      if (session.activeTabId !== entry.tabId) {
+        restorePersonFocus();
+        return;
+      }
+      personFocus = { session, entry };
       lastFocusedViewId = session.viewId;
       lastUsedViewId = session.viewId;
       shellWebContents.send("browser:pageFocus", session.viewId);

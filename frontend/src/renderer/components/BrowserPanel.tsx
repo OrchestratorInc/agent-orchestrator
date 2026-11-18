@@ -862,6 +862,9 @@ export const BrowserPanelView = memo(function BrowserPanelView({
 
 	const endUrlEditing = (event: FocusEvent<HTMLInputElement>) => {
 		if (event.relatedTarget instanceof Node && historyMenuRef.current?.contains(event.relatedTarget)) return;
+		// The app lost focus, not the field (another window, or a page that took
+		// the keyboard for a moment): like any browser, keep what was typed.
+		if (!document.hasFocus()) return;
 		historyRequestGenerationRef.current += 1;
 		setUrlEditing(false);
 		setUrlInput(navState.url);

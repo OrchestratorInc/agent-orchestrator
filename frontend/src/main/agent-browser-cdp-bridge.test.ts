@@ -550,8 +550,11 @@ describe("worker-scoped agent-browser CDP bridge", () => {
 				sessionId,
 			);
 			const clear = await rpc(socket, 3, "Emulation.clearDeviceMetricsOverride", {}, sessionId);
+			// Never hands the agent's page the person's keyboard focus.
+			const front = await rpc(socket, 4, "Page.bringToFront", {}, sessionId);
 			expect(set.error).toBeUndefined();
 			expect(clear.error).toBeUndefined();
+			expect(front.error).toBeUndefined();
 			expect(debug.sendCommand).not.toHaveBeenCalled();
 		} finally {
 			socket.close();

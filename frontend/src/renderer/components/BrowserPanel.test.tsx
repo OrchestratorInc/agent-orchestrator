@@ -1293,6 +1293,32 @@ describe("BrowserPanel", () => {
 		expect(agentTabRow()).not.toHaveAttribute("data-agent-acting");
 	});
 
+	it("keeps what the person typed in the address bar when the app loses focus for a moment", () => {
+		hookState.navState = { ...hookState.navState, url: "" };
+		render(<BrowserPanel active onTogglePopOut={() => undefined} poppedOut={false} session={session} />);
+		const address = screen.getByRole("textbox", { name: "Browser URL" });
+		fireEvent.focus(address);
+		fireEvent.change(address, { target: { value: "github.com" } });
+
+		// A page took the keyboard for a moment (the window lost focus, not the field).
+		const hasFocus = vi.spyOn(document, "hasFocus").mockReturnValue(false);
+		try {
+			fireEvent.blur(address);
+		} finally {
+			hasFocus.mockRestore();
+		}
+		expect(address).toHaveValue("github.com");
+
+		// Leaving the field for something else in the app still ends the edit.
+		const appFocused = vi.spyOn(document, "hasFocus").mockReturnValue(true);
+		try {
+			fireEvent.blur(address);
+		} finally {
+			appFocused.mockRestore();
+		}
+		expect(address).toHaveValue("");
+	});
+
 	it("names and marks the agent's tab, keeping its site icon, and marks a preview not seen yet", () => {
 		const agentTabState = { id: "t1", url: "http://localhost:3000/", title: "Agent app", active: false, owner: "agent" as const, unseen: true as const, favicon: "data:image/png;base64,AA==" };
 		hookState.tabs = [agentTabState, { id: "t2", url: "http://localhost:4173/", title: "My app", active: true }];
