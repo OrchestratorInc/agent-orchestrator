@@ -85,15 +85,16 @@ func (p *Poller) Start(ctx context.Context) <-chan struct{} {
 		defer ticker.Stop()
 		for {
 			tick := ticker.C
+			var changes <-chan struct{}
 			// Only a session change can give an idle poller something to watch.
 			if p.changes != nil && err == nil && len(p.seen) == 0 {
-				tick = nil
+				tick, changes = nil, p.changes
 			}
 			select {
 			case <-ctx.Done():
 				return
 			case <-tick:
-			case <-p.changes:
+			case <-changes:
 			}
 			err = p.pollAndLog(ctx)
 		}
@@ -135,6 +136,8 @@ func (p *Poller) Poll(ctx context.Context) error {
 			// the selected file temporarily disappeared. A blank fresh session
 			// or an explicit user clear must remain blank.
 			if !seenBefore || !previous.cleared || previous.path == "" {
+				// Nothing to watch or restore, so the poller may go idle.
+				delete(p.seen, sess.ID)
 				continue
 			}
 			storedEntry = previous.path

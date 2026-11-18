@@ -121,6 +121,15 @@ func (p *Poller) Start(ctx context.Context) <-chan struct{} {
 				case <-time.After(wait):
 				}
 			}
+			if ctx.Err() != nil {
+				return
+			}
+			// The read below sees every write committed before it, so a signal
+			// already pending is covered; one arriving during the read stays queued.
+			select {
+			case <-p.wake:
+			default:
+			}
 			last = time.Now()
 			n, err := p.poll(ctx)
 			if err != nil {
