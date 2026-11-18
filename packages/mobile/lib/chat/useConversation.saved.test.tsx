@@ -14,10 +14,17 @@ vi.mock("@react-native-async-storage/async-storage", () => ({ default: {
 	getItem: async (key: string) => fixture.stored.get(key) ?? null,
 	setItem: async (key: string, value: string) => { fixture.stored.set(key, value); },
 	removeItem: async (key: string) => { fixture.stored.delete(key); },
+	getAllKeys: async () => [...fixture.stored.keys()],
+	multiRemove: async (keys: string[]) => { for (const key of keys) fixture.stored.delete(key); },
 } }));
+vi.mock("expo-file-system", () => import("./savedConversations.fakes").then((fakes) => fakes.fileSystemModule));
+vi.mock("expo-crypto", () => import("./savedConversations.fakes").then((fakes) => fakes.cryptoModule));
+vi.mock("expo-secure-store", () => import("./savedConversations.fakes").then((fakes) => fakes.secureStoreModule));
 vi.mock("./conversationEvents", () => ({ subscribeConversationEvents: () => () => {} }));
 vi.mock("./conversationPoll", () => ({ conversationPollIntervalFor: () => null }));
 import { requestDockModel } from "./requestDockModel";
+import { createConversationSaver } from "./savedConversations";
+import { resetSavedChatFakes } from "./savedConversations.fakes";
 import type { ConversationPage } from "./snapshot";
 import { activeTurn, pendingApproval } from "./types";
 import { useMobileConversation, type MobileConversation } from "./useConversation";
@@ -41,10 +48,14 @@ const savedMidTurn = {
 	],
 } as unknown as ConversationPage;
 
-beforeEach(() => {
+beforeEach(async () => {
 	vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
 	fixture.stored.clear();
-	fixture.stored.set("ao.chat.saved.v1.host.a/saved-chat", JSON.stringify({ v: 1, savedAt: Date.now(), page: savedMidTurn }));
+	resetSavedChatFakes();
+	// Saved on the phone before the app was closed.
+	const saver = createConversationSaver();
+	saver.schedule("host.a/saved-chat", savedMidTurn);
+	await saver.flush();
 	fixture.request.mockReset().mockImplementation(async (cfg: ServerConfig) => ({
 		json: async () => ({ controller: "ready", capabilities: [], messages: [], conversationId: `c-${cfg.hostId}` }),
 	}));

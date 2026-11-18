@@ -10,10 +10,13 @@ vi.mock("@react-native-async-storage/async-storage", () => ({ default: {
 	getAllKeys: async () => [...plain.keys()],
 } }));
 vi.mock("expo-secure-store", () => ({
+	WHEN_UNLOCKED_THIS_DEVICE_ONLY: 5,
 	getItemAsync: async (key: string) => secure.get(key) ?? null,
 	setItemAsync: async (key: string, value: string) => void secure.set(key, value),
 	deleteItemAsync: async (key: string) => void secure.delete(key),
 }));
+vi.mock("expo-file-system", () => import("./chat/savedConversations.fakes").then((fakes) => fakes.fileSystemModule));
+vi.mock("expo-crypto", () => import("./chat/savedConversations.fakes").then((fakes) => fakes.cryptoModule));
 vi.mock("./account", () => ({ loadAccount: async () => null }));
 vi.mock("./push", () => ({ unpairFromServer: async () => {}, retryPendingUnpairs: async () => {} }));
 vi.mock("./pendingUnpair", () => ({ markMachineUnpaired: async () => {} }));
@@ -25,9 +28,10 @@ import { loadConfig, saveConfig } from "./config";
 import { activeHost, loadHosts, migrateLegacyConfig, persistResolvedConfig, saveHost } from "./hosts";
 import { resolveActiveConfig } from "./resolveConfig";
 import { createConversationSaver, loadSavedConversation } from "./chat/savedConversations";
+import { resetSavedChatFakes, savedFileNames } from "./chat/savedConversations.fakes";
 
 const host = { id: "h_one", name: "One", platform: "darwin", endpoints: [{ kind: "lan" as const, host: "host-one", port: 3011, secure: false }], token: "secret", lastConnected: 1, accountUserId: "user-a" };
-beforeEach(() => { plain.clear(); secure.clear(); });
+beforeEach(() => { plain.clear(); secure.clear(); resetSavedChatFakes(); });
 
 it("does not resurrect the last account host from cached connection data after sign-out", async () => {
 	await saveHost(host);
@@ -106,5 +110,5 @@ it("removes a forgotten machine's chats saved on the phone and keeps another mac
 
 	expect(await loadSavedConversation("host.h_one/s")).toBeNull();
 	expect(await loadSavedConversation("host.h_other/s")).not.toBeNull();
-	expect([...plain.keys()].filter((key) => key.startsWith("ao.chat.saved.v1.host.h_one"))).toEqual([]);
+	expect(savedFileNames()).toEqual(["host.h_other%2Fs.page"]);
 });

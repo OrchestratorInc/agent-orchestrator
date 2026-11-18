@@ -1,4 +1,7 @@
 import AsyncStorage from "@react-native-async-storage/async-storage";
+import { AESEncryptionKey, AESSealedData, aesDecryptAsync, aesEncryptAsync } from "expo-crypto";
+import { Directory, File, Paths } from "expo-file-system";
+import * as SecureStore from "expo-secure-store";
 import type { ConversationPage } from "./snapshot";
 import type { ConversationItem, ConversationTurn } from "./types";
 import { DEFAULT_CONFIG, hostMachineIdentity, machineIdentity } from "../config";
@@ -11,38 +14,133 @@ import type { HostMetadata } from "../hosts";
 // seconds. A chat with nothing in memory now shows its saved page at once,
 // and its first read replaces it.
 //
-// Agent output can carry secrets, so these pages stay out of device backups:
-// app.json turns Android's Auto Backup off (`android.allowBackup: false`), and
-// on iOS AsyncStorage keeps its directory out of iCloud backup by default
-// (unless Info.plist sets RCTAsyncStorageExcludeFromBackup to false).
+// The pages are a cache, so they live in the OS cache directory, one file per
+// chat under `saved-chats/` (as artifactDownload keeps downloads), not in
+// AsyncStorage with the data the user keeps:
+// - device backups skip the cache directory by OS rule (Android's cacheDir,
+//   iOS's Library/Caches), so agent output, which can carry secrets, never
+//   leaves the phone in one, and the rest of the app is backed up as before;
+// - they share no storage limit with pairings, drafts or pending sends;
+// - the OS may clear them when storage runs low; a missing file loads as
+//   nothing saved.
+// Each file is encrypted with AES-GCM under a key kept in the secure store and
+// bound to its chat, so a copy taken off the phone cannot be read. A file that
+// does not decrypt (cut short, another chat's, made under a key since deleted)
+// loads as nothing saved and is deleted. With no key to be had, nothing is saved.
 
-const INDEX_KEY = "ao.chat.saved.v1";
-const PAGE_PREFIX = "ao.chat.saved.v1.";
+/** Where older builds kept the pages; cleared once a launch. */
+const LEGACY_INDEX_KEY = "ao.chat.saved.v1";
+const LEGACY_PAGE_PREFIX = `${LEGACY_INDEX_KEY}.`;
+const DIRECTORY_NAME = "saved-chats";
+const FILE_SUFFIX = ".page";
+/** The longest file name used; a chat whose key would need more is not saved. */
+const MAX_FILE_NAME = 200;
+const KEY_STORE_KEY = "ao.chat.savedPagesKey";
+const keyStoreOptions = (): SecureStore.SecureStoreOptions => ({ keychainAccessible: SecureStore.WHEN_UNLOCKED_THIS_DEVICE_ONLY });
+
 /** How many chats keep a saved page; the least recently saved go first. */
 export const SAVED_CONVERSATIONS = 12;
-/** A page larger than this many UTF-8 bytes is not saved (Android keeps one value under ~2 MB). */
+/** A page larger than this many UTF-8 bytes is not saved. */
 export const SAVED_PAGE_MAX_BYTES = 400_000;
 /**
- * All saved pages together stay under this many UTF-8 bytes; the least
- * recently saved chats go first. Android's AsyncStorage holds 6 MB in all,
- * shared with everything else the app keeps, and a write past it fails.
+ * All saved pages together stay under this many bytes on disk; the least
+ * recently saved chats go first. The OS may clear the cache directory too,
+ * but is not relied on to.
  */
 export const SAVED_TOTAL_MAX_BYTES = 2_000_000;
-/** A saved page older than this is not shown. */
+/** A saved page older than this is not shown, and is deleted. */
 export const SAVED_PAGE_KEEP_MS = 7 * 24 * 60 * 60 * 1000;
 
-type Saved = { v: 1; savedAt: number; page: ConversationPage };
-/** A saved chat in the index: its key and its page's size in UTF-8 bytes. */
-export type SavedEntry = { key: string; bytes: number };
+type Saved = { v: 2; savedAt: number; page: ConversationPage };
+/** A file in the saved-chats directory, as it is listed. */
+export type SavedFile = { name: string; size: number; modified: number };
 
 const FIRST_WRITE_DELAY_MS = 2_000;
 
-export async function loadSavedConversation(key: string, now = Date.now()): Promise<ConversationPage | null> {
+const savedDirectory = () => new Directory(Paths.cache, DIRECTORY_NAME);
+
+/**
+ * A chat's file name: its key, escaped to be safe as one, so a machine's chats
+ * are still found by its identity (see forget). Null when it would be too long.
+ */
+export function savedFileName(key: string): string | null {
+	const name = encodeURIComponent(key) + FILE_SUFFIX;
+	return name.length <= MAX_FILE_NAME ? name : null;
+}
+
+/** The chat a file holds, or null for a file that is not a saved page. */
+export function savedFileKey(name: string): string | null {
+	if (!name.endsWith(FILE_SUFFIX)) return null;
 	try {
-		const raw = await AsyncStorage.getItem(PAGE_PREFIX + key);
-		if (!raw) return null;
-		const saved = JSON.parse(raw) as Partial<Saved>;
-		if (saved.v !== 1 || typeof saved.savedAt !== "number" || now - saved.savedAt >= SAVED_PAGE_KEEP_MS) return null;
+		return decodeURIComponent(name.slice(0, -FILE_SUFFIX.length));
+	} catch {
+		return null;
+	}
+}
+
+let legacyCleanup: Promise<void> | undefined;
+/**
+ * Removes the pages and index older builds kept in AsyncStorage. Runs once a
+ * launch; one that fails runs again next time.
+ */
+export function clearLegacySavedPages(): Promise<void> {
+	legacyCleanup ??= (async () => {
+		const keys = (await AsyncStorage.getAllKeys()).filter((key) => key === LEGACY_INDEX_KEY || key.startsWith(LEGACY_PAGE_PREFIX));
+		if (keys.length) await AsyncStorage.multiRemove(keys);
+	})().catch(() => {
+		legacyCleanup = undefined;
+	});
+	return legacyCleanup;
+}
+
+let pageKey: AESEncryptionKey | undefined;
+let creatingKey: Promise<AESEncryptionKey> | undefined;
+/** Moves on when the key is deleted, so a read under way then keeps no old key. */
+let keyGeneration = 0;
+
+/** The key pages are encrypted with; with `create`, made the first time a page is saved. */
+async function savedPagesKey(create: boolean): Promise<AESEncryptionKey | null> {
+	if (pageKey) return pageKey;
+	const generation = keyGeneration;
+	const stored = await SecureStore.getItemAsync(KEY_STORE_KEY, keyStoreOptions());
+	let key: AESEncryptionKey | null = null;
+	if (stored) key = await AESEncryptionKey.import(stored, "base64");
+	else if (create) {
+		creatingKey ??= (async () => {
+			const made = await AESEncryptionKey.generate();
+			await SecureStore.setItemAsync(KEY_STORE_KEY, await made.encoded("base64"), keyStoreOptions());
+			return made;
+		})().finally(() => {
+			creatingKey = undefined;
+		});
+		key = await creatingKey;
+	}
+	if (key && generation === keyGeneration) pageKey = key;
+	return key;
+}
+
+/** A chat's key as the encryption's additional data, so a file opens only as its own chat. */
+const boundTo = (key: string) => ({ additionalData: new TextEncoder().encode(key) });
+
+export async function loadSavedConversation(key: string, now = Date.now()): Promise<ConversationPage | null> {
+	void clearLegacySavedPages();
+	try {
+		const name = savedFileName(key);
+		if (!name) return null;
+		const file = new File(savedDirectory(), name);
+		if (!file.exists) return null;
+		const encryptionKey = await savedPagesKey(false);
+		if (!encryptionKey) return null;
+		let saved: Partial<Saved> = {};
+		try {
+			const plain = await aesDecryptAsync(AESSealedData.fromCombined(await file.bytes()), encryptionKey, boundTo(key));
+			saved = JSON.parse(new TextDecoder().decode(plain)) as Partial<Saved>;
+		} catch { /* deleted below */ }
+		if (saved.v !== 2 || typeof saved.savedAt !== "number" || now - saved.savedAt >= SAVED_PAGE_KEEP_MS) {
+			// Unreadable or expired: it can never show, so it goes now.
+			file.delete();
+			return null;
+		}
 		const page = saved.page;
 		return page && Array.isArray(page.items) && Array.isArray(page.turns) ? savedPageView(page) : null;
 	} catch {
@@ -83,107 +181,91 @@ export function savedPageView(page: ConversationPage): ConversationPage {
 }
 
 /**
- * The size of `text` in UTF-8, which is what storage holds: `length` counts
- * UTF-16 units, so a page of CJK text took three times the room it counted.
+ * The files to delete once `keep` is written: anything that is not a saved
+ * page, pages older than SAVED_PAGE_KEEP_MS, and the pages past `limit` chats
+ * or `budget` bytes in all, the least recently saved (by modification time)
+ * going first. `keep` always stays.
  */
-export function utf8Bytes(text: string): number {
-	let bytes = 0;
-	for (let i = 0; i < text.length; i++) {
-		const code = text.charCodeAt(i);
-		if (code < 0x80) bytes += 1;
-		else if (code < 0x800) bytes += 2;
-		else if (code >= 0xd800 && code <= 0xdbff && i + 1 < text.length && (text.charCodeAt(i + 1) & 0xfc00) === 0xdc00) {
-			bytes += 4;
-			i++;
-		} else bytes += 3;
-	}
-	return bytes;
-}
-
-/**
- * The entries to keep after saving `key` (`bytes` large), newest first, and
- * the keys to drop: at most `limit` chats and `budget` bytes in all, the
- * least recently saved going first.
- */
-export function nextIndex(
-	index: readonly SavedEntry[],
-	key: string,
-	bytes: number,
+export function savedPageEvictions(
+	files: readonly SavedFile[],
+	keep: string,
+	now: number,
 	limit = SAVED_CONVERSATIONS,
 	budget = SAVED_TOTAL_MAX_BYTES,
-): { keep: SavedEntry[]; drop: string[] } {
-	const seen = new Set([key]);
-	const ordered = [{ key, bytes }, ...index.filter((entry) => !seen.has(entry.key) && Boolean(seen.add(entry.key)))];
-	const keep: SavedEntry[] = [];
+): string[] {
+	const current = (file: SavedFile) => file.name === keep || (savedFileKey(file.name) !== null && now - file.modified < SAVED_PAGE_KEEP_MS);
+	const evicted = files.filter((file) => !current(file)).map((file) => file.name);
+	const newestFirst = files.filter(current).sort((a, b) => Number(b.name === keep) - Number(a.name === keep) || b.modified - a.modified);
+	let kept = 0;
 	let total = 0;
-	for (const entry of ordered) {
-		if (keep.length >= limit || (keep.length > 0 && total + entry.bytes > budget)) break;
-		keep.push(entry);
-		total += entry.bytes;
+	for (const file of newestFirst) {
+		if (file.name !== keep && (kept >= limit || total + file.size > budget)) {
+			// This one and every older one go.
+			evicted.push(...newestFirst.slice(kept).map((older) => older.name));
+			break;
+		}
+		kept++;
+		total += file.size;
 	}
-	return { keep, drop: ordered.slice(keep.length).map((entry) => entry.key) };
-}
-
-async function readIndex(): Promise<SavedEntry[]> {
-	try {
-		const raw = await AsyncStorage.getItem(INDEX_KEY);
-		const parsed: unknown = raw ? JSON.parse(raw) : [];
-		if (!Array.isArray(parsed)) return [];
-		return parsed.flatMap((entry): SavedEntry[] => {
-			if (Array.isArray(entry) && typeof entry[0] === "string" && typeof entry[1] === "number") return [{ key: entry[0], bytes: entry[1] }];
-			// An entry with no size counts as the largest page there can be.
-			if (typeof entry === "string") return [{ key: entry, bytes: SAVED_PAGE_MAX_BYTES }];
-			return [];
-		});
-	} catch {
-		return []; // a broken index starts over, and the sweep below clears what it named
-	}
-}
-
-const writeIndex = (entries: readonly SavedEntry[]) => AsyncStorage.setItem(INDEX_KEY, JSON.stringify(entries.map((entry) => [entry.key, entry.bytes])));
-
-/** The saved chats on the phone, by key, whether the index names them or not. */
-async function savedKeysOnPhone(): Promise<string[]> {
-	return (await AsyncStorage.getAllKeys()).filter((key) => key.startsWith(PAGE_PREFIX)).map((key) => key.slice(PAGE_PREFIX.length));
+	return evicted;
 }
 
 async function writeSaved(key: string, page: ConversationPage, now: number): Promise<void> {
-	const text = JSON.stringify({ v: 1, savedAt: now, page } satisfies Saved);
-	const bytes = utf8Bytes(text);
-	if (bytes > SAVED_PAGE_MAX_BYTES) return;
-	const index = await readIndex();
-	// Until the new page is written, storage still holds the old one, so its
-	// entry counts the larger of the two: a save cut short or refused never
-	// leaves the index counting less than the phone holds.
-	const old = index.find((entry) => entry.key === key)?.bytes ?? 0;
-	const { keep, drop } = nextIndex(index, key, Math.max(bytes, old));
-	// Pages no kept entry names go too: the dropped ones, and any an interrupted
-	// save or removal left behind with no entry, which nothing else would clear.
-	const kept = new Set(keep.map((entry) => entry.key));
-	let stale = drop;
-	try {
-		stale = [...new Set([...drop, ...(await savedKeysOnPhone())])].filter((saved) => !kept.has(saved));
-	} catch { /* the dropped ones at least */ }
-	// Room first: on a phone near its limit the page fits only once these are gone.
-	if (stale.length) await AsyncStorage.multiRemove(stale.map((saved) => PAGE_PREFIX + saved));
-	// The index before the page, so a save cut short leaves an entry with no
-	// page (which loads as nothing), never a page outside the budget.
-	await writeIndex(keep);
-	await AsyncStorage.setItem(PAGE_PREFIX + key, text);
-	// Written: a smaller page now counts its own size.
-	if (old > bytes) await writeIndex(keep.map((entry) => (entry.key === key ? { key, bytes } : entry)));
+	await clearLegacySavedPages();
+	const name = savedFileName(key);
+	if (!name) return;
+	const plain = new TextEncoder().encode(JSON.stringify({ v: 2, savedAt: now, page } satisfies Saved));
+	if (plain.byteLength > SAVED_PAGE_MAX_BYTES) return;
+	const encryptionKey = await savedPagesKey(true);
+	if (!encryptionKey) return;
+	const sealed = await aesEncryptAsync(plain, encryptionKey, boundTo(key));
+	const directory = savedDirectory();
+	if (!directory.exists) directory.create({ intermediates: true, idempotent: true });
+	// Written in place: a write cut short leaves a file that does not decrypt,
+	// which loads as nothing saved.
+	new File(directory, name).write(await sealed.combined());
+	pruneSaved(directory, name, now);
 }
 
-/** Removes every saved chat `matches` picks, listed in the index or not. */
-async function removeSaved(matches: (key: string) => boolean): Promise<void> {
-	const index = await readIndex();
-	const keys = new Set(index.map((entry) => entry.key));
+/** Applies savedPageEvictions to the directory. Never fails the write it follows. */
+function pruneSaved(directory: Directory, keep: string, now: number): void {
 	try {
-		for (const key of await savedKeysOnPhone()) keys.add(key);
-	} catch { /* the ones the index names at least */ }
-	const doomed = [...keys].filter(matches);
-	if (doomed.length) await AsyncStorage.multiRemove(doomed.map((key) => PAGE_PREFIX + key));
-	await writeIndex(index.filter((entry) => !matches(entry.key)));
+		const files = directory.list().filter((item): item is File => item instanceof File);
+		const facts = files.map((file): SavedFile => {
+			const info = file.info();
+			return { name: file.name, size: info.size ?? 0, modified: info.modificationTime ?? 0 };
+		});
+		const evicted = new Set(savedPageEvictions(facts, keep, now));
+		for (const file of files) if (evicted.has(file.name)) file.delete();
+	} catch {
+		// Trimmed after the next write.
+	}
+}
+
+/**
+ * Deletes every saved chat `matches` picks. With `all`, the whole directory
+ * goes and the key with it, so anything a deletion missed can no longer be
+ * read; the next save makes a new key.
+ */
+async function removeSaved(matches: (key: string) => boolean, all: boolean): Promise<void> {
+	await clearLegacySavedPages();
+	const directory = savedDirectory();
+	if (all) {
+		keyGeneration++;
+		pageKey = undefined;
+		try {
+			if (directory.exists) directory.delete();
+		} finally {
+			await SecureStore.deleteItemAsync(KEY_STORE_KEY, keyStoreOptions());
+		}
+		return;
+	}
+	if (!directory.exists) return;
+	for (const item of directory.list()) {
+		if (!(item instanceof File)) continue;
+		const key = savedFileKey(item.name);
+		if (key !== null && matches(key)) item.delete();
+	}
 }
 
 /**
@@ -197,7 +279,7 @@ async function removeSaved(matches: (key: string) => boolean): Promise<void> {
 export function createConversationSaver(
 	write: (key: string, page: ConversationPage, now: number) => Promise<void> = writeSaved,
 	everyMs = 5_000,
-	remove: (matches: (key: string) => boolean) => Promise<void> = removeSaved,
+	remove: (matches: (key: string) => boolean, all: boolean) => Promise<void> = removeSaved,
 ) {
 	const pending = new Map<string, ConversationPage>();
 	const lastWrite = new Map<string, number>();
@@ -239,7 +321,7 @@ export function createConversationSaver(
 			}
 			for (const key of [...pending.keys()]) if (matches(key)) pending.delete(key);
 			for (const key of [...lastWrite.keys()]) if (matches(key)) lastWrite.delete(key);
-			const removal = chain.then(() => remove(matches));
+			const removal = chain.then(() => remove(matches, machines === null));
 			chain = removal.catch(() => {});
 			return removal;
 		},
