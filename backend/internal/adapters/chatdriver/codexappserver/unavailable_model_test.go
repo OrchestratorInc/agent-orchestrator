@@ -3,6 +3,7 @@ package codexappserver
 import (
 	"strings"
 	"testing"
+	"time"
 
 	codexagent "github.com/aoagents/agent-orchestrator/backend/internal/adapters/agent/codex"
 	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/chatdriver/codexappserver/codexproto"
@@ -43,6 +44,14 @@ func TestTurnCompletedAtUsesTheProvidersTime(t *testing.T) {
 	at, ok := turnCompletedAt(failed)
 	if !ok || at.Unix() != 1795500000 {
 		t.Fatalf("turnCompletedAt = %v, %v; want the provider's completedAt", at, ok)
+	}
+	// Codex reports whole seconds: a listing observed within that second must
+	// not count as newer than the refusal.
+	if listed := time.Unix(1795500000, 999_000_000); !at.After(listed) {
+		t.Fatalf("refusal time %v is not after a listing within its second (%v)", at, listed)
+	}
+	if again, _ := turnCompletedAt(failed); !again.Equal(at) {
+		t.Fatalf("a replayed notification is dated %v, want the same %v", again, at)
 	}
 	for name, n := range map[string]notification{
 		"no completedAt": {Method: codexproto.MethodTurnCompleted, Params: []byte(`{"turn":{"status":"failed","error":{"message":"x"}}}`)},
