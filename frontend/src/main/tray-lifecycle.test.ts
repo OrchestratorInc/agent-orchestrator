@@ -35,11 +35,11 @@ function eventFrom(sender: unknown) {
 }
 
 describe("isTrayEnabled", () => {
-	it("is enabled on macOS for every release channel", () => {
-		expect(isTrayEnabled("darwin")).toBe(true);
+	it.each(["darwin", "win32"] as const)("is enabled on %s for every release channel", (platform) => {
+		expect(isTrayEnabled(platform)).toBe(true);
 	});
 
-	it.each(["win32", "linux"] as const)("is disabled on %s", (platform) => {
+	it.each(["linux", "freebsd"] as const)("is disabled on %s", (platform) => {
 		expect(isTrayEnabled(platform)).toBe(false);
 	});
 });

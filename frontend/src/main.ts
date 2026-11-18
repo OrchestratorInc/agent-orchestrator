@@ -476,9 +476,15 @@ let agentQuitCleanupComplete = false;
 let agentQuitCleanupPromise: Promise<void> | null = null;
 let desktopAgentShutdownAccepted = false;
 let createWindowPromise: Promise<void> | null = null;
+let windowsSessionEnding = false;
+
+function isDesktopExiting(): boolean {
+	return windowsSessionEnding || browserQuitRequested || agentQuitCleanupPromise !== null || agentQuitCleanupComplete;
+}
+
 const desktopQuit = createDesktopQuitController({
 	platform: process.platform,
-	hasTray: () => trayController !== null && !browserQuitRequested,
+	hasTray: () => trayController !== null && !isDesktopExiting(),
 	isUpdateRestartRequested,
 	hasWindow: () => mainWindow !== null || createWindowPromise !== null,
 	closeWindow: () => {
@@ -513,7 +519,7 @@ const quitConfirm = createQuitConfirmController({
 		};
 		shell?.send(QUIT_CONFIRM_REQUEST_CHANNEL, request);
 	},
-	quit: () => app.quit(),
+	quit: () => desktopQuit.backgroundQuit(),
 });
 let browserRuntimeLink: BrowserRuntimeLinkHandle | null = null;
 let browserRuntimeLinkIdentity: BrowserRuntimeIdentity | null = null;
@@ -817,8 +823,9 @@ function showWhenRendererLoaded(window: BaseWindow, contents: WebContents): void
 }
 
 function focusMainWindow(): void {
+	if (isDesktopExiting()) return;
 	if (!mainWindow) {
-		createWindow();
+		void createWindow().catch((error) => console.error("failed to recreate main window:", error));
 		return;
 	}
 	if (mainWindow.isMinimized()) mainWindow.restore();
@@ -1035,6 +1042,7 @@ async function disposeAllBrowserViewHosts(): Promise<void> {
 
 async function createWindowInternal(): Promise<void> {
 	await disposeAllBrowserViewHosts();
+	if (isDesktopExiting()) return;
 	const agentBrowserRuntime = new AgentBrowserRuntime({
 		binaryPath: resolveAgentBrowserBinaryPath(),
 		// Agent Browser creates Unix sockets below each run root. Keep this base
@@ -1044,7 +1052,7 @@ async function createWindowInternal(): Promise<void> {
 		log: (message) => console.log(`AO: ${message}`),
 	});
 	await agentBrowserRuntime.prepare();
-	if (browserQuitRequested) {
+	if (isDesktopExiting()) {
 		await agentBrowserRuntime.dispose();
 		return;
 	}
@@ -1066,6 +1074,11 @@ async function createWindowInternal(): Promise<void> {
 		fromPartition: (partition) => session.fromPartition(partition),
 	});
 	await profileImporter.initialize();
+	if (isDesktopExiting()) {
+		await profileImporter.dispose();
+		await agentBrowserRuntime.dispose();
+		return;
+	}
 	const windowOptions: Electron.BaseWindowConstructorOptions = {
 		width: 1320,
 		height: 860,
@@ -1223,10 +1236,11 @@ async function createWindowInternal(): Promise<void> {
 
 	shellWebContents.on("will-prevent-unload", (event) => {
 		if (
-			chatDraftRisks.length > 0 &&
-			(chatDraftQuitConfirmed ||
-				chatDraftWindowCloseConfirmed ||
-				confirmUnsafeChatDraftLeave(chatDraftRisks, (options) => dialog.showMessageBoxSync(options), chatDraftDialog))
+			windowsSessionEnding ||
+			(chatDraftRisks.length > 0 &&
+				(chatDraftQuitConfirmed ||
+					chatDraftWindowCloseConfirmed ||
+					confirmUnsafeChatDraftLeave(chatDraftRisks, (options) => dialog.showMessageBoxSync(options), chatDraftDialog)))
 		) {
 			// Electron uses preventDefault here to ignore beforeunload and continue
 			// leaving.
@@ -1239,6 +1253,7 @@ async function createWindowInternal(): Promise<void> {
 	});
 
 	mainWindow.on("close", (event) => {
+		if (windowsSessionEnding) return;
 		const preventClose = shouldPreventUnsafeChatDraftClose(
 			chatDraftRisks,
 			chatDraftQuitConfirmed || chatDraftWindowCloseConfirmed,
@@ -1252,6 +1267,16 @@ async function createWindowInternal(): Promise<void> {
 		}
 		if (chatDraftRisks.length > 0) chatDraftWindowCloseConfirmed = true;
 	});
+	if (process.platform === "win32") {
+		mainWindow.on("session-end", () => {
+			// Windows has committed logout/shutdown. Never reopen or wait for a
+			// draft dialog; the OS need not emit the ordinary quit events.
+			windowsSessionEnding = true;
+			chatDraftQuitConfirmed = true;
+			chatDraftWindowCloseConfirmed = true;
+			desktopQuit.quitCompletely();
+		});
+	}
 
 	// Application shortcuts are handled here so they fire no matter which web
 	// contents holds focus — the shell renderer, xterm's helper textarea, or a
@@ -1452,6 +1477,7 @@ async function createWindowInternal(): Promise<void> {
 }
 
 function createWindow(): Promise<void> {
+	if (isDesktopExiting()) return Promise.resolve();
 	if (createWindowPromise) return createWindowPromise;
 	// A background quit hid the Dock icon; bring it back with the window.
 	void app.dock?.show();
@@ -3564,7 +3590,7 @@ ipcMain.handle("menu:action", (event, action: string) => {
 		case "window.close":
 			return win.close();
 		case "app.quit":
-			return app.quit();
+			return desktopQuit.backgroundQuit();
 		case "help.shortcuts":
 			shell?.focus();
 			return shell?.send(KEYBOARD_SHORTCUTS_HELP_CHANNEL);
@@ -4390,11 +4416,7 @@ ipcMain.handle("cloudCp:agentBrowserUrl", (_event, baseUrl: unknown, orgId: unkn
 	cloudAgentProxy.agentBrowserUrl(baseUrl, orgId, sessionId));
 
 function focusCloudWindow(): void {
-	const window = BaseWindow.getAllWindows()[0];
-	if (!window) return;
-	if (window.isMinimized()) window.restore();
-	window.show();
-	window.focus();
+	focusMainWindow();
 }
 
 // A shared session's link (ao-app://share/<code>, or ao-app://share/<orgId>/<token>
@@ -4418,14 +4440,9 @@ function isShareDeepLink(raw: string): boolean {
 }
 
 async function handleCloudDeepLinkAndFocus(url: string): Promise<void> {
-	// macOS keeps the app (and tray) alive after the close button —
-	// window-all-closed does not quit — and a link clicked then fires open-url
-	// without activate, so nothing else recreates the shell. Hidden utility
-	// windows can linger, so the window list is not the test: recreate when
-	// there is no shell to deliver to. The queued links below flush once its
-	// fresh shell mounts. Windows/Linux quit on the last window closing, so
-	// this never fires there.
-	if (!getShellWebContents()) void createWindow();
+	if (isDesktopExiting()) return;
+	// A tray-resident app may have no dashboard. Its queued links flush once
+	// the recreated shell mounts; utility windows are not the dashboard.
 	focusCloudWindow();
 	// A shared cloud session: the renderer redeems it and opens the session.
 	if (isShareDeepLink(url)) {
@@ -4498,6 +4515,7 @@ app.on("open-url", (event, url) => {
 });
 
 app.on("second-instance", (_event, argv) => {
+	if (isDesktopExiting()) return;
 	const deepLink = argv.find((value) => value.startsWith("ao-app://"));
 	if (deepLink) {
 		void handleCloudDeepLinkAndFocus(deepLink);
@@ -4511,25 +4529,16 @@ app.on("second-instance", (_event, argv) => {
 	// path uses rather than silently dropping it.
 	const folderPath = parseOpenFolderPathArg(argv);
 	if (folderPath) {
-		const window = BaseWindow.getAllWindows()[0];
-		if (window) {
-			if (window.isMinimized()) window.restore();
-			window.show();
-			window.focus();
-		}
+		focusMainWindow();
 		const contents = getShellWebContents();
-		if (contents) {
+		if (contents && !contents.isLoading()) {
 			contents.send(OPEN_FOLDER_PATH_CHANNEL, folderPath);
 		} else {
 			pendingFolderPath = folderPath;
 		}
 		return;
 	}
-	const window = BaseWindow.getAllWindows()[0];
-	if (!window) return;
-	if (window.isMinimized()) window.restore();
-	window.show();
-	window.focus();
+	focusMainWindow();
 });
 // (see forge.config.ts publishers). In dev there is no feed, so it is skipped.
 // A live updater additionally requires a signed + notarized build — see
@@ -4745,7 +4754,7 @@ app.whenReady().then(async () => {
 		: { ...DEFAULT_UI_SETTINGS };
 	soundNotificationsEnabled = initialUiSettings.soundNotificationsEnabled;
 	terminalShellPreference = initialUiSettings.terminalShell;
-	if (browserQuitRequested) return;
+	if (isDesktopExiting()) return;
 	if (isTrayEnabled(process.platform)) {
 		trayController = createTrayController({
 			focusWindow: focusMainWindow,
@@ -4754,7 +4763,7 @@ app.whenReady().then(async () => {
 			locale: initialUiSettings.locale,
 		});
 	}
-	if (trayController) {
+	if (trayController && process.platform === "darwin") {
 		const awakeTray = createAwakeTrayMonitor({
 			baseURL: () => daemonStatus.state === "ready" && daemonStatus.port ? `http://127.0.0.1:${daemonStatus.port}` : null,
 			request: (url, init) => fetch(url, init),
@@ -4772,7 +4781,7 @@ app.whenReady().then(async () => {
 	const daemonStartsWithWindow = process.platform !== "win32";
 	if (daemonStartsWithWindow) void startDaemon();
 	await createWindow();
-	if (browserQuitRequested) return;
+	if (isDesktopExiting()) return;
 	// Not awaited: launch must not wait on this network fetch (up to 10 s). It
 	// runs once the window exists so its dialogs attach to it.
 	if (app.isPackaged) {
@@ -4813,7 +4822,7 @@ app.whenReady().then(async () => {
 
 // Daemon teardown is now handled via the OS-native supervisor socket: the daemon
 // self-stops ~5s after the last client (this process) drops its connection.
-// Ordinary macOS Quit closes the window and leaves the Dock; the tray stays.
+// Ordinary in-app Quit closes the window; the tray stays. macOS also leaves the Dock.
 // Full exit drops the supervisor socket, stopping the app-owned daemon after
 // its grace period and stopping agents. Planned updates explicitly detach.
 setUpdateRestartFailureHandler(() => {
@@ -4823,7 +4832,7 @@ setUpdateRestartFailureHandler(() => {
 let updateQuitDeadlineArmed = false;
 app.on("before-quit", (event) => {
 	if (desktopQuit.handleBeforeQuit(event)) return;
-	if (chatDraftRisks.length > 0 && !chatDraftQuitConfirmed) {
+	if (!windowsSessionEnding && chatDraftRisks.length > 0 && !chatDraftQuitConfirmed) {
 		event.preventDefault();
 		if (confirmUnsafeChatDraftLeave(
 			chatDraftRisks,
@@ -4928,7 +4937,7 @@ process.on("exit", () => {
 });
 
 app.on("window-all-closed", () => {
-	if (process.platform !== "darwin") {
+	if (process.platform !== "darwin" && !(isTrayEnabled(process.platform) && trayController && !isDesktopExiting())) {
 		app.quit();
 	}
 });

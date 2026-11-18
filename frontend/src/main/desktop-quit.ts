@@ -1,3 +1,5 @@
+import { isTrayEnabled } from "./tray-lifecycle";
+
 type QuitEvent = { preventDefault(): void };
 
 export function createDesktopQuitController(options: {
@@ -11,11 +13,23 @@ export function createDesktopQuitController(options: {
 }) {
 	let quitCompletelyRequested = false;
 	let hideDockOnWindowClosed = false;
+	let backgroundQuitRequested = false;
 
 	return {
+		backgroundQuit(): void {
+			// Only AO's own Quit backgrounds on Windows. Installer and OS exits
+			// must pass through, including asynchronous cleanup continuations.
+			backgroundQuitRequested = true;
+			try {
+				options.quit();
+			} finally {
+				backgroundQuitRequested = false;
+			}
+		},
 		handleBeforeQuit(event: QuitEvent): boolean {
 			if (
-				options.platform !== "darwin" ||
+				!isTrayEnabled(options.platform) ||
+				(options.platform === "win32" && !backgroundQuitRequested) ||
 				!options.hasTray() ||
 				quitCompletelyRequested ||
 				options.isUpdateRestartRequested()
@@ -25,10 +39,10 @@ export function createDesktopQuitController(options: {
 			if (options.hasWindow()) {
 				// Leave the Dock once the window is really gone: the draft guard can
 				// still cancel the close.
-				hideDockOnWindowClosed = true;
+				hideDockOnWindowClosed = options.platform === "darwin";
 				// close(), not destroy(): the existing unsaved-draft guard still runs.
 				options.closeWindow();
-			} else {
+			} else if (options.platform === "darwin") {
 				options.hideDock();
 			}
 			return true;

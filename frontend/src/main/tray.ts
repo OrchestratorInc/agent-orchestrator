@@ -51,17 +51,35 @@ export type TrayControllerOptions = {
 };
 
 export function createTrayController(options: TrayControllerOptions): TrayController | null {
-	const iconPath = trayIconPath();
-	if (!iconPath) return null;
-	const icon = nativeImage.createFromPath(iconPath);
-	if (icon.isEmpty()) return null;
-	icon.setTemplateImage(true);
-	const awakeIconPath = trayIconPath("trayAwakeIconTemplate.png");
-	const loadedAwakeIcon = awakeIconPath ? nativeImage.createFromPath(awakeIconPath) : icon;
-	const awakeIcon = loadedAwakeIcon.isEmpty() ? icon : loadedAwakeIcon;
-	awakeIcon.setTemplateImage(true);
-
-	const tray = new Tray(icon);
+	const isMac = process.platform === "darwin";
+	let icon: ReturnType<typeof nativeImage.createFromPath>;
+	let awakeIcon: typeof icon;
+	let tray: Tray;
+	try {
+		const iconPath = trayIconPath(isMac ? "trayIconTemplate.png" : "icon.ico");
+		if (!iconPath) {
+			console.warn("AO: tray icon is missing");
+			return null;
+		}
+		icon = nativeImage.createFromPath(iconPath);
+		if (icon.isEmpty()) {
+			console.warn("AO: tray icon could not be loaded");
+			return null;
+		}
+		awakeIcon = icon;
+		if (isMac) {
+			icon.setTemplateImage(true);
+			const awakeIconPath = trayIconPath("trayAwakeIconTemplate.png");
+			const loadedAwakeIcon = awakeIconPath ? nativeImage.createFromPath(awakeIconPath) : icon;
+			awakeIcon = loadedAwakeIcon.isEmpty() ? icon : loadedAwakeIcon;
+			awakeIcon.setTemplateImage(true);
+		}
+		tray = new Tray(icon);
+	} catch (error) {
+		console.warn("AO: tray initialization failed", error);
+		return null;
+	}
+	let disposed = false;
 	let sessions: TraySessionEntry[] = [];
 	let awake: boolean | null = false;
 	let lastAwake = false;
@@ -87,11 +105,12 @@ export function createTrayController(options: TrayControllerOptions): TrayContro
 	};
 
 	const render = () => {
+		if (disposed) return;
 		const count = sessions.length;
 		// A compact drawn cup stays legible without relying on font glyph sizing.
 		tray.setImage(lastAwake ? awakeIcon : icon);
-		tray.setTitle([lastAwake && awake === null ? "?" : "", count > 0 ? String(count) : ""].filter(Boolean).join(" "));
-		const awakeLabel = awake === true ? t("tray.awakeActive") : awake === null && lastAwake ? t("tray.awakeUnknown") : "";
+		if (isMac) tray.setTitle([lastAwake && awake === null ? "?" : "", count > 0 ? String(count) : ""].filter(Boolean).join(" "));
+		const awakeLabel = !isMac ? "" : awake === true ? t("tray.awakeActive") : awake === null && lastAwake ? t("tray.awakeUnknown") : "";
 		tray.setToolTip([count > 0 ? tPlural("tray.attentionTooltip", count) : "Orchestrator", awakeLabel].filter(Boolean).join(" — "));
 
 		const items: MenuItemConstructorOptions[] = [];
@@ -127,7 +146,15 @@ export function createTrayController(options: TrayControllerOptions): TrayContro
 		tray.setContextMenu(Menu.buildFromTemplate(items));
 	};
 
-	render();
+	try {
+		render();
+		if (process.platform === "win32") tray.on("click", options.focusWindow);
+	} catch (error) {
+		tray.removeAllListeners();
+		tray.destroy();
+		console.warn("AO: tray setup failed", error);
+		return null;
+	}
 
 	return {
 		setState(state) {
@@ -150,6 +177,9 @@ export function createTrayController(options: TrayControllerOptions): TrayContro
 			render();
 		},
 		dispose() {
+			if (disposed) return;
+			disposed = true;
+			tray.removeAllListeners();
 			tray.destroy();
 		},
 	};
