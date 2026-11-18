@@ -1798,6 +1798,24 @@ func (q *Queries) MarkConversationTurnsRolledBack(ctx context.Context, arg MarkC
 	return result.RowsAffected()
 }
 
+const markQueuedConversationBatchStarted = `-- name: MarkQueuedConversationBatchStarted :exec
+UPDATE conversation_turns
+SET started_at = COALESCE(started_at, ?1)
+WHERE conversation_id = ?2
+  AND id IN (SELECT CAST(value AS TEXT) FROM json_each(CAST(?3 AS TEXT)))
+`
+
+type MarkQueuedConversationBatchStartedParams struct {
+	StartedAt      sql.NullTime
+	ConversationID string
+	TurnIds        string
+}
+
+func (q *Queries) MarkQueuedConversationBatchStarted(ctx context.Context, arg MarkQueuedConversationBatchStartedParams) error {
+	_, err := q.db.ExecContext(ctx, markQueuedConversationBatchStarted, arg.StartedAt, arg.ConversationID, arg.TurnIds)
+	return err
+}
+
 const moveConversationActivities = `-- name: MoveConversationActivities :exec
 UPDATE conversation_activities
 SET conversation_id = ?1, branch_id = ?2,
@@ -5248,15 +5266,17 @@ func (q *Queries) SettleConversationMessage(ctx context.Context, arg SettleConve
 const settleConversationTurn = `-- name: SettleConversationTurn :exec
 UPDATE conversation_turns
 SET state = ?1, error_message = ?2, failure_code = ?3,
-    completed_at = COALESCE(completed_at, ?4),
-    usage_limit_resets_at = COALESCE(?5, usage_limit_resets_at)
-WHERE id = ?6
+    started_at = COALESCE(started_at, ?4),
+    completed_at = COALESCE(completed_at, ?5),
+    usage_limit_resets_at = COALESCE(?6, usage_limit_resets_at)
+WHERE id = ?7
 `
 
 type SettleConversationTurnParams struct {
 	State              domain.TurnState
 	ErrorMessage       string
 	FailureCode        string
+	StartedAt          sql.NullTime
 	CompletedAt        sql.NullTime
 	UsageLimitResetsAt sql.NullTime
 	ID                 string
@@ -5267,6 +5287,7 @@ func (q *Queries) SettleConversationTurn(ctx context.Context, arg SettleConversa
 		arg.State,
 		arg.ErrorMessage,
 		arg.FailureCode,
+		arg.StartedAt,
 		arg.CompletedAt,
 		arg.UsageLimitResetsAt,
 		arg.ID,

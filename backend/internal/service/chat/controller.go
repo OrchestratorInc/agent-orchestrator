@@ -101,9 +101,10 @@ type Store interface {
 	NextQueuedTurn(ctx context.Context, conversationID string) (domain.QueuedTurn, error)
 	ListQueuedBatch(ctx context.Context, conversationID string, limit int) ([]domain.QueuedTurn, error)
 	ClaimQueuedBatch(ctx context.Context, conversationID string, dispatch bool, limit int, now time.Time) ([]domain.QueuedTurn, error)
+	MarkQueuedBatchStarted(ctx context.Context, conversationID string, turnIDs []string, now time.Time) error
 	CompleteQueuedBatch(ctx context.Context, conversationID string, turnIDs []string, providerTurnID, steerActivityID string, now time.Time) error
 	ReleaseQueuedBatch(ctx context.Context, conversationID string, turnIDs []string) error
-	FailQueuedBatch(ctx context.Context, conversationID string, turnIDs []string, reason string, now time.Time) error
+	FailQueuedBatch(ctx context.Context, conversationID string, turnIDs []string, reason string, now time.Time, accepted bool) error
 	FailReservedQueuedBatch(ctx context.Context, conversationID string, now time.Time) error
 	ReserveQueuedTurnForPromotion(ctx context.Context, conversationID, turnID string, now time.Time) (domain.QueuedTurn, error)
 	ReleaseQueuedTurnPromotion(ctx context.Context, conversationID, turnID string) error
@@ -2046,7 +2047,7 @@ func (c *Controller) dispatch(
 		if len(followers) > 0 {
 			ids := append([]string{turnID}, followers...)
 			if failErr := c.store.FailQueuedBatch(context.WithoutCancel(ctx), c.conversation.ID, ids,
-				"batch provider input could not be recorded: "+err.Error(), c.now()); failErr != nil {
+				"batch provider input could not be recorded: "+err.Error(), c.now(), false); failErr != nil {
 				c.log.Error("failed to settle unrecorded queued batch", "error", failErr)
 			}
 		} else if settleErr := c.store.SettleTurnByID(context.WithoutCancel(ctx), turnID,
@@ -2055,13 +2056,22 @@ func (c *Controller) dispatch(
 		}
 		return domain.ConversationTurn{}, fmt.Errorf("record provider input: %w", err)
 	}
+	providerAccepted := false
 	failFollowers := func(reason string) {
 		if len(followers) == 0 {
 			return
 		}
-		if err := c.store.FailQueuedBatch(context.WithoutCancel(ctx), c.conversation.ID, followers, reason, c.now()); err != nil {
+		if err := c.store.FailQueuedBatch(context.WithoutCancel(ctx), c.conversation.ID, followers, reason, c.now(), providerAccepted); err != nil {
 			c.log.Error("failed to settle queued batch", "error", err)
 		}
+	}
+	recordAcceptance := func() error {
+		providerAccepted = true
+		if err := c.store.MarkQueuedBatchStarted(context.WithoutCancel(ctx), c.conversation.ID, followers, c.now()); err != nil {
+			failFollowers("batch acceptance could not be recorded: " + err.Error())
+			return fmt.Errorf("record batch acceptance: %w", err)
+		}
+		return nil
 	}
 	// A provider can accept this turn and then lose its SQLite binding to ENOSPC.
 	// Move it out of the durable queue before crossing that boundary, or a live
@@ -2111,6 +2121,11 @@ func (c *Controller) dispatch(
 		}, fmt.Errorf("send turn: %w", err)
 	}
 
+	if !hasDeferredStart {
+		if err := recordAcceptance(); err != nil {
+			return domain.ConversationTurn{}, err
+		}
+	}
 	if err := c.store.BindTurnToProvider(ctx, turnID, ref.ProviderTurnID, c.now()); err != nil {
 		failFollowers("batch provider binding is uncertain: " + err.Error())
 		c.mu.Lock()
@@ -2149,6 +2164,9 @@ func (c *Controller) dispatch(
 				c.log.Error("failed to settle turn after deferred start error", "error", settleErr)
 			}
 			return domain.ConversationTurn{}, fmt.Errorf("start turn: %w", err)
+		}
+		if err := recordAcceptance(); err != nil {
+			return domain.ConversationTurn{}, err
 		}
 	}
 	if len(followers) > 0 {
@@ -2387,7 +2405,7 @@ func (c *Controller) drainLockedWithLimit(ctx context.Context, allowDispatch boo
 	msg, err := c.queuedBatchInput(ctx, batch, nil)
 	if err != nil {
 		if failErr := c.store.FailQueuedBatch(context.WithoutCancel(ctx), c.conversation.ID,
-			queuedBatchIDs(batch), err.Error(), c.now()); failErr != nil {
+			queuedBatchIDs(batch), err.Error(), c.now(), false); failErr != nil {
 			return errors.Join(err, failErr)
 		}
 		return err

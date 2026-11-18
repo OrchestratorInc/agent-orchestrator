@@ -533,7 +533,7 @@ func (c *Controller) steerLocked(ctx context.Context, msg ports.ChatUserMessage)
 		wrapped := classify(fmt.Errorf("steer turn %s: %w", turn, err))
 		if len(batch) > 0 {
 			if failErr := c.store.FailQueuedBatch(context.WithoutCancel(ctx), c.conversation.ID,
-				queuedBatchIDs(batch), ErrSteerDeliveryUncertain.Error(), c.now()); failErr != nil {
+				queuedBatchIDs(batch), ErrSteerDeliveryUncertain.Error(), c.now(), false); failErr != nil {
 				c.log.Error("failed to settle uncertain steered batch", "error", failErr)
 			}
 		}
@@ -546,6 +546,10 @@ func (c *Controller) steerLocked(ctx context.Context, msg ports.ChatUserMessage)
 	landed := ref.ProviderTurnID
 	if landed == "" {
 		landed = turn
+	}
+	if err := c.store.MarkQueuedBatchStarted(context.WithoutCancel(ctx), c.conversation.ID, queuedBatchIDs(batch), c.now()); err != nil {
+		settleErr := c.store.FailQueuedBatch(context.WithoutCancel(ctx), c.conversation.ID, queuedBatchIDs(batch), ErrSteerDeliveryUncertain.Error(), c.now(), true)
+		return SteerResult{ProviderTurnID: landed}, fmt.Errorf("%w: record batch acceptance: %w", ErrSteerDeliveryUncertain, errors.Join(err, settleErr))
 	}
 	providerInput := steerProviderInput{
 		Text: providerMessage.Text, Content: providerMessage.Content,
@@ -560,7 +564,7 @@ func (c *Controller) steerLocked(ctx context.Context, msg ports.ChatUserMessage)
 		}
 		if err != nil {
 			if failErr := c.store.FailQueuedBatch(context.WithoutCancel(ctx), c.conversation.ID,
-				queuedBatchIDs(batch), ErrSteerDeliveryUncertain.Error(), c.now()); failErr != nil {
+				queuedBatchIDs(batch), ErrSteerDeliveryUncertain.Error(), c.now(), true); failErr != nil {
 				c.log.Error("failed to settle steered batch with unrecorded provider input", "error", failErr)
 			}
 			return SteerResult{ProviderTurnID: landed}, fmt.Errorf("%w: record steered batch provider input: %w", ErrSteerDeliveryUncertain, err)
@@ -571,7 +575,7 @@ func (c *Controller) steerLocked(ctx context.Context, msg ports.ChatUserMessage)
 		if recordErr != nil {
 			if len(batch) > 0 {
 				_ = c.store.FailQueuedBatch(context.WithoutCancel(ctx), c.conversation.ID,
-					queuedBatchIDs(batch), ErrSteerDeliveryUncertain.Error(), c.now())
+					queuedBatchIDs(batch), ErrSteerDeliveryUncertain.Error(), c.now(), true)
 			}
 			// The guidance IS with the agent; only AO's record of it failed. Reporting the
 			// error rather than swallowing it, because a steer the timeline never mentions
@@ -581,7 +585,7 @@ func (c *Controller) steerLocked(ctx context.Context, msg ports.ChatUserMessage)
 		if len(batch) > 0 {
 			if err := c.store.CompleteQueuedBatch(context.WithoutCancel(ctx), c.conversation.ID, queuedBatchIDs(batch), landed, activityID, c.now()); err != nil {
 				_ = c.store.FailQueuedBatch(context.WithoutCancel(ctx), c.conversation.ID,
-					queuedBatchIDs(batch), ErrSteerDeliveryUncertain.Error(), c.now())
+					queuedBatchIDs(batch), ErrSteerDeliveryUncertain.Error(), c.now(), true)
 				return SteerResult{ProviderTurnID: landed, ActivityID: activityID}, fmt.Errorf("%w: complete pending messages: %w", ErrSteerDeliveryUncertain, err)
 			}
 		}
@@ -603,7 +607,7 @@ func (c *Controller) steerLocked(ctx context.Context, msg ports.ChatUserMessage)
 	if completeErr != nil {
 		if len(batch) > 0 {
 			_ = c.store.FailQueuedBatch(context.WithoutCancel(ctx), c.conversation.ID,
-				queuedBatchIDs(batch), ErrSteerDeliveryUncertain.Error(), c.now())
+				queuedBatchIDs(batch), ErrSteerDeliveryUncertain.Error(), c.now(), true)
 		}
 		return SteerResult{}, fmt.Errorf("%w: %w", ErrSteerDeliveryUncertain, completeErr)
 	}
@@ -653,7 +657,7 @@ func (c *Controller) SteerOrSend(
 	if err != nil {
 		if len(batch) > 0 {
 			if failErr := c.store.FailQueuedBatch(context.WithoutCancel(ctx), c.conversation.ID,
-				queuedBatchIDs(batch), ErrSteerDeliveryUncertain.Error(), c.now()); failErr != nil {
+				queuedBatchIDs(batch), ErrSteerDeliveryUncertain.Error(), c.now(), false); failErr != nil {
 				c.log.Error("failed to settle fallback batch", "error", failErr)
 			}
 		}
