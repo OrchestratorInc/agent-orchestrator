@@ -1,0 +1,37 @@
+name: Docs gap reminder
+
+on:
+  schedule:
+    - cron: "0 3 * * *" # 08:30 IST
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pull-requests: write
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Check docs against latest release
+        id: check
+        working-directory: frontend/src/docs
+        run: node scripts/check-docs-version.mjs --mode sync
+      - name: Find a draft docs PR
+        id: pr
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          pr=$(gh pr list --state open --draft --search "docs: sync with latest release" --json number --jq '.[0].number // empty')
+          echo "number=$pr" >> "$GITHUB_OUTPUT"
+      - name: Comment on the docs PR when the docs lag
+        if: steps.check.outputs.stdout != '' && steps.pr.outputs.number != ''
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          RESULT: ${{ steps.check.outputs.stdout }}
+          PR: ${{ steps.pr.outputs.number }}
+        run: |
+          if printf '%s' "$RESULT" | grep -q '^DOCS_GAP'; then
+            gh pr comment "$PR" --body "The docs do not match the latest release yet. Run \`node scripts/check-docs-version.mjs --mode review\` in \`frontend/src/docs\` to see what is stale."
+          fi

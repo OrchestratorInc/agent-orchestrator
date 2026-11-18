@@ -1,0 +1,20 @@
+name: Docs link check
+
+on:
+  pull_request:
+    paths:
+      - "frontend/src/docs/**"
+
+permissions:
+  contents: read
+
+jobs:
+  lychee:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Link checker
+        uses: lycheeverse/lychee-action@v2
+        with:
+          args: --base ./frontend/src/docs/content --no-progress --exclude-mail "./frontend/src/docs/content/**/*.mdx" "./docs/**/*.md"
+          fail: true
