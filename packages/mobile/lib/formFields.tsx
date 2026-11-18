@@ -107,7 +107,8 @@ function InlineTextField(props: FormTextFieldProps & { textContentType?: TextCon
 	const t = useTheme();
 	const text = useNativeState(props.value);
 	const change = useNativeTextInput(props.value, text, props.onChangeText);
-	const modifiers = inputModifiers(t, props, props.textContentType);
+	// Locked while the form submits, so it can't be focused again before the form closes.
+	const modifiers = inputModifiers(t, tracked?.locked ? { ...props, editable: false } : props, props.textContentType);
 	if (typeof props.width === "number") modifiers.push(frame({ width: props.width }));
 	return (
 		<TextField

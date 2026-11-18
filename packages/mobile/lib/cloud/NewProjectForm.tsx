@@ -233,6 +233,7 @@ function RepositorySearchRow({ project }: { project: NewCloudProject }) {
 					// The caret and selection take the tint; the app's other fields use this colour for both.
 					tint(t.highlight),
 					accessibilityLabel("Search repositories"),
+					disabledModifier(tracked?.locked ?? false),
 				]}
 			/>
 			{project.searching ? (

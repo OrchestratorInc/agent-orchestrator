@@ -84,9 +84,12 @@ function LocalBody({ placement, onCreated, onCancel, onBusyChange }: BodyProps) 
 	// Create takes focus off the form first: the sheet changes and closes as
 	// soon as the request returns, and a field still focused then aborted the app.
 	const focus = useFormFocus();
+	// The latest create when the submit finally runs, so text the blur commits is sent.
+	const create = useRef(project.create);
+	create.current = project.create;
 	return (
 		<>
-			<NewProjectBar canCreate={project.canCreate} busy={project.busy} onCancel={onCancel} onCreate={() => void focus.submit(project.create)} />
+			<NewProjectBar canCreate={project.canCreate} busy={project.busy} onCancel={onCancel} onCreate={() => void focus.submit(() => create.current())} />
 			<LocalProjectForm project={project} placement={placement} focus={focus} />
 		</>
 	);
@@ -102,6 +105,8 @@ function CloudBody({ placement, onCreated, onCancel, onBusyChange, leaveFor }: B
 	useEffect(() => { onBusyChange(project.busy); }, [onBusyChange, project.busy]);
 	// Create takes focus off the form first (see useFormFocus), as on the Local face.
 	const focus = useFormFocus();
+	const create = useRef(project.create);
+	create.current = project.create;
 
 	let body: ReactNode;
 	if (project.status === "signed-out") {
@@ -123,7 +128,7 @@ function CloudBody({ placement, onCreated, onCancel, onBusyChange, leaveFor }: B
 
 	return (
 		<>
-			<NewProjectBar canCreate={project.canCreate} busy={project.busy} onCancel={onCancel} onCreate={() => void focus.submit(project.create)} />
+			<NewProjectBar canCreate={project.canCreate} busy={project.busy} onCancel={onCancel} onCreate={() => void focus.submit(() => create.current())} />
 			{body}
 		</>
 	);

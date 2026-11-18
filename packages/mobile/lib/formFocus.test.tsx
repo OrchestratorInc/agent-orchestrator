@@ -1,14 +1,21 @@
 import { act, create, type ReactTestRenderer } from "react-test-renderer";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { TextFieldRef } from "@expo/ui/swift-ui";
-import { BLUR_SETTLE_MS, useFormFocus, type FormFocus } from "./formFocus";
+import { BLUR_SETTLE_MS, FormFocusContext, useFormFocus, useTrackedField, type FormFocus, type TrackedFieldState } from "./formFocus";
 
 let renderer: ReactTestRenderer | undefined;
 let focus: FormFocus;
+let seen: TrackedFieldState | undefined;
+
+/** What a field in the form reads through context. */
+function Field() {
+	seen = useTrackedField("name");
+	return null;
+}
 
 function Form() {
 	focus = useFormFocus();
-	return null;
+	return <FormFocusContext value={focus}><Field /></FormFocusContext>;
 }
 
 /** A stand-in for a SwiftUI field: blur() resolves at once, like the native one, before focus is let go. */
@@ -123,4 +130,48 @@ describe("useFormFocus", () => {
 		expect(ref.blur).not.toHaveBeenCalled();
 		expect(run).toHaveBeenCalledTimes(1);
 	});
+
+	it("locks the fields once focus is off, until the submit settles", async () => {
+		const { tracked } = fakeField("name");
+		tracked.onFocusChange(true);
+		let finish!: () => void;
+		const run = vi.fn(() => new Promise<void>((resolve) => { finish = resolve; }));
+		let done!: Promise<void>;
+		await act(async () => { done = focus.submit(run); });
+		// Still letting go: nothing focused is changed under the user.
+		expect(seen?.locked).toBe(false);
+		await act(async () => { await vi.advanceTimersByTimeAsync(16); });
+		expect(run).toHaveBeenCalledTimes(1);
+		expect(focus.locked).toBe(true);
+		expect(seen?.locked).toBe(true);
+		await act(async () => { finish(); await done; });
+		expect(seen?.locked).toBe(false);
+	});
+
+	it("unlocks the fields when the submit fails", async () => {
+		const run = vi.fn(async () => { throw new Error("refused"); });
+		await act(async () => { await focus.submit(run).catch(() => {}); });
+		expect(run).toHaveBeenCalledTimes(1);
+		expect(seen?.locked).toBe(false);
+	});
+
+	it("releases a field focused again while the first one let go", async () => {
+		const name = fakeField("name");
+		const search = fakeField("search");
+		name.tracked.onFocusChange(true);
+		const run = vi.fn();
+		let done!: Promise<void>;
+		await act(async () => { done = focus.submit(run); });
+		// The user taps the search field just as the name field lets go.
+		search.tracked.onFocusChange(true);
+		await act(async () => { await vi.advanceTimersByTimeAsync(32); await done; });
+		expect(search.ref.blur).toHaveBeenCalledTimes(1);
+		expect(run).toHaveBeenCalledTimes(1);
+	});
+
+	it("tells a field it is unlocked when no submit runs", () => {
+		expect(seen).toMatchObject({ locked: false });
+		expect(seen?.ref).toBe(focus.field("name").ref);
+	});
 });
+

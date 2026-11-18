@@ -313,7 +313,7 @@ function GitHubSection({ project }: { project: NewLocalProject }) {
 					ref={trackedSearch?.ref}
 					onFocusChange={trackedSearch?.onFocusChange}
 					testID="new-local-project-github-search"
-					modifiers={[textInputAutocapitalization("never"), autocorrectionDisabled(true), submitLabel("search"), tint(t.highlight), accessibilityLabel("Search GitHub repositories")]}
+					modifiers={[textInputAutocapitalization("never"), autocorrectionDisabled(true), submitLabel("search"), tint(t.highlight), accessibilityLabel("Search GitHub repositories"), disabledModifier(trackedSearch?.locked ?? false)]}
 				/>
 				{github.searching ? (
 					<Button systemImage="xmark.circle.fill" label="Clear search" onPress={() => change("", true)} modifiers={[labelStyle("iconOnly"), buttonStyle("borderless"), tint(t.textTertiary)]} />
@@ -412,7 +412,7 @@ function FolderFilterRow({ project }: { project: NewLocalProject }) {
 				ref={trackedFilter?.ref}
 				onFocusChange={trackedFilter?.onFocusChange}
 				testID="new-local-project-filter"
-				modifiers={[textInputAutocapitalization("never"), autocorrectionDisabled(true), submitLabel("search"), tint(t.highlight), accessibilityLabel("Filter folders")]}
+				modifiers={[textInputAutocapitalization("never"), autocorrectionDisabled(true), submitLabel("search"), tint(t.highlight), accessibilityLabel("Filter folders"), disabledModifier(trackedFilter?.locked ?? false)]}
 			/>
 			{project.filter ? (
 				<Button systemImage="xmark.circle.fill" label="Clear filter" onPress={() => change("", true)} modifiers={[labelStyle("iconOnly"), buttonStyle("borderless"), tint(t.textTertiary)]} />
