@@ -12,16 +12,22 @@ import (
 )
 
 type countingSessions struct {
-	mu    sync.Mutex
-	inner *fakePreviewSessions
-	lists int
+	mu     sync.Mutex
+	inner  *fakePreviewSessions
+	lists  int
+	onList func(lists int)
 }
 
 func (c *countingSessions) ListPreviewSessions(ctx context.Context) ([]domain.SessionRecord, error) {
 	c.mu.Lock()
-	defer c.mu.Unlock()
 	c.lists++
-	return c.inner.ListPreviewSessions(ctx)
+	lists := c.lists
+	sessions, err := c.inner.ListPreviewSessions(ctx)
+	c.mu.Unlock()
+	if c.onList != nil {
+		c.onList(lists)
+	}
+	return sessions, err
 }
 
 func (c *countingSessions) SetPreview(ctx context.Context, id domain.SessionID, previewURL string) (domain.Session, error) {
@@ -94,9 +100,18 @@ func TestPollerWaitsForChangeWhileNothingIsWatched(t *testing.T) {
 
 func TestPollerFallsBackToTheIntervalWhenChangesCloses(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
-		svc := &countingSessions{inner: &fakePreviewSessions{sessions: []domain.SessionRecord{workerSession("ao-1", t.TempDir(), "")}}}
-		changes := make(chan struct{}, 1)
 		ctx, cancel := context.WithCancel(context.Background())
+		// A poller spinning on the closed channel never lets fake time advance;
+		// stopping it at the fifth list lets the count assertion report the loop.
+		svc := &countingSessions{
+			inner: &fakePreviewSessions{sessions: []domain.SessionRecord{workerSession("ao-1", t.TempDir(), "")}},
+			onList: func(lists int) {
+				if lists >= 5 {
+					cancel()
+				}
+			},
+		}
+		changes := make(chan struct{}, 1)
 		done := NewPoller(svc, svc, "http://127.0.0.1:3001", PollerConfig{Interval: 10 * time.Millisecond, Changes: changes, Logger: discardLogger()}).Start(ctx)
 		defer func() { cancel(); <-done }()
 
