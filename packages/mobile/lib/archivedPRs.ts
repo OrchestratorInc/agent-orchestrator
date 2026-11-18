@@ -31,9 +31,24 @@ type Stream = {
 	/** False once the daemon is known to predate the filter. */
 	supported: boolean;
 	error: string | null;
+	/** The rows are every match from one read that reached the end. */
+	complete: boolean;
 };
 
-const EMPTY_STREAM: Stream = { rows: [], total: 0, loading: false, supported: true, error: null };
+const EMPTY_STREAM: Stream = { rows: [], total: 0, loading: false, supported: true, error: null, complete: false };
+
+/** "full" reads every page; "check" reads the first and stops when nothing moved. */
+type ReadMode = "full" | "check";
+
+/**
+ * Whether a first page shows the same list a complete stream holds: the same
+ * total and the same sessions leading it. A worker ending without a PR in
+ * this state moves the archive's size but not this list, and costs one page.
+ */
+export function firstPageUnchanged(held: Pick<Stream, "rows" | "total" | "complete" | "supported">, first: PRStatePage): boolean {
+	if (!held.complete || !held.supported || first.total !== held.total) return false;
+	return first.sessions.every((session, index) => held.rows[index]?.id === session.id);
+}
 
 const sourceKey = (source: Pick<ArchivedPRSource, "hostId" | "projectId">) => `${source.hostId}\n${source.projectId ?? ""}`;
 const streamKey = (source: Pick<ArchivedPRSource, "hostId" | "projectId">, state: ArchivedPRState) => `${sourceKey(source)}\n${state}`;
@@ -131,22 +146,35 @@ export function useArchivedPRs(sources: readonly ArchivedPRSource[], options: { 
 	streamsRef.current = streams;
 	const sourcesRef = useRef(sources);
 	sourcesRef.current = sources;
-	const runs = useRef(new Map<string, { controller: AbortController; stamp: string }>());
+	const runs = useRef(new Map<string, { controller: AbortController; archived: number; refreshToken: number; inFlight: boolean }>());
+	// Bumped when a read settles, so a count that moved while it ran is checked then.
+	const [settled, setSettled] = useState(0);
 
 	const update = useCallback((key: string, change: (stream: Stream) => Stream) => {
 		setStreams((current) => ({ ...current, [key]: change(current[key] ?? EMPTY_STREAM) }));
 	}, []);
 
-	const read = useCallback(async (source: ArchivedPRSource, state: ArchivedPRState, key: string, controller: AbortController) => {
+	const read = useCallback(async (source: ArchivedPRSource, state: ArchivedPRState, key: string, controller: AbortController, mode: ReadMode) => {
 		const config = configForHost(source.hostId);
 		if (!config) return;
-		const firstRead = (streamsRef.current[key]?.rows.length ?? 0) === 0;
-		update(key, (stream) => ({ ...stream, loading: true, error: null }));
+		const fetchPage = (cursor: string | null) =>
+			getArchivedPRSessions(config, { prState: state, cursor, projectId: source.projectId }, { signal: controller.signal });
+		const held = streamsRef.current[key] ?? EMPTY_STREAM;
+		const firstRead = held.rows.length === 0;
 		const rows: HostedSession[] = [];
 		let total = 0;
 		try {
+			// A moved archive count is checked against the first page before
+			// anything is shown as loading; most ended workers change nothing here.
+			let first: PRStatePage | null | undefined;
+			if (mode === "check" && held.complete) {
+				first = await fetchPage(null);
+				if (controller.signal.aborted) return;
+				if (first && firstPageUnchanged(held, first)) return;
+			}
+			update(key, (stream) => ({ ...stream, loading: true, error: null }));
 			const outcome = await readAllPRStatePages(
-				(cursor) => getArchivedPRSessions(config, { prState: state, cursor, projectId: source.projectId }, { signal: controller.signal }),
+				(cursor) => cursor === null && first !== undefined ? Promise.resolve(first) : fetchPage(cursor),
 				(sessions, pageTotal) => {
 					rows.push(...sessions.map((session) => archivedPRRow(source, session, state)));
 					total = pageTotal;
@@ -162,11 +190,14 @@ export function useArchivedPRs(sources: readonly ArchivedPRSource[], options: { 
 				update(key, () => ({ ...EMPTY_STREAM, supported: false }));
 				return;
 			}
-			update(key, () => ({ rows, total: Math.max(total, rows.length), loading: false, supported: true, error: null }));
+			update(key, () => ({ rows, total: Math.max(total, rows.length), loading: false, supported: true, error: null, complete: true }));
 		} catch (cause) {
 			if (controller.signal.aborted) return;
-			// Whatever was on screen stays; a pull to refresh reads again.
-			update(key, (stream) => ({ ...stream, loading: false, error: userFacingError(cause, "Couldn't load past pull requests.") }));
+			// Whatever was on screen stays; a pull to refresh reads again. The
+			// total shrinks to it, so the counts claim no PR the list cannot show.
+			update(key, (stream) => ({
+				...stream, total: stream.rows.length, loading: false, error: userFacingError(cause, "Couldn't load past pull requests."),
+			}));
 		}
 	}, [configForHost, update]);
 
@@ -187,21 +218,36 @@ export function useArchivedPRs(sources: readonly ArchivedPRSource[], options: { 
 			const kept = Object.entries(existing).filter(([key]) => stillShown(key));
 			return kept.length === Object.keys(existing).length ? existing : Object.fromEntries(kept);
 		});
+		const start = (source: ArchivedPRSource, state: ArchivedPRState, key: string, mode: ReadMode) => {
+			const controller = new AbortController();
+			const run = { controller, archived: source.archived, refreshToken: options.refreshToken, inFlight: true };
+			runs.current.set(key, run);
+			void read(source, state, key, controller, mode).finally(() => {
+				if (runs.current.get(key) !== run) return;
+				run.inFlight = false;
+				setSettled((n) => n + 1);
+			});
+		};
 		for (const state of options.states) {
 			for (const source of sourcesRef.current) {
 				const key = streamKey(source, state);
-				const stamp = `${source.archived}|${options.refreshToken}`;
 				const previous = runs.current.get(key);
 				// An offline machine is not marked read, so the next change or refresh tries it again.
-				if (previous?.stamp === stamp || !configForHost(source.hostId)) continue;
-				previous?.controller.abort();
-				const controller = new AbortController();
-				runs.current.set(key, { controller, stamp });
-				void read(source, state, key, controller);
+				if (!configForHost(source.hostId)) continue;
+				// A first read or a pull to refresh reads everything again.
+				if (!previous || previous.refreshToken !== options.refreshToken) {
+					previous?.controller.abort();
+					start(source, state, key, "full");
+					continue;
+				}
+				// A moved archive count never cuts a read short: one in flight is
+				// checked again when it settles, an idle one checks its first page.
+				if (previous.archived === source.archived || previous.inFlight) continue;
+				start(source, state, key, "check");
 			}
 		}
 		// `wanted` stands for `options.states`.
-	}, [plan, wanted, options.refreshToken, read, configForHost]);
+	}, [plan, wanted, options.refreshToken, read, configForHost, settled]);
 	useEffect(() => () => {
 		for (const run of runs.current.values()) run.controller.abort();
 		runs.current.clear();

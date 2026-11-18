@@ -16,7 +16,8 @@ vi.mock("./store", () => ({ useApp: () => ({ configForHost: fixtures.configForHo
 vi.mock("./connectionError", () => ({ userFacingError: (_cause: unknown, fallback: string) => fallback }));
 
 import {
-	archivedPRRow, mergeArchivedRows, readAllPRStatePages, unloadedArchivedSessions, useArchivedPRs, withArchivedPRSessions, type ArchivedPRSource,
+	archivedPRRow, firstPageUnchanged, mergeArchivedRows, readAllPRStatePages, unloadedArchivedSessions, useArchivedPRs, withArchivedPRSessions,
+	type ArchivedPRSource,
 } from "./archivedPRs";
 
 const pr = (number: number, state: DashboardPR["state"] = "merged"): DashboardPR => ({ number, url: "", state });
@@ -227,5 +228,103 @@ describe("useArchivedPRs reconnects", () => {
 		await act(async () => { for (let i = 0; i < 10; i += 1) await Promise.resolve(); });
 		expect(fixtures.getArchivedPRSessions).toHaveBeenCalledTimes(1);
 		expect(latest.sessions.map((s) => s.id)).toEqual(["s1"]);
+	});
+});
+
+describe("firstPageUnchanged", () => {
+	const held = { rows: [hosted("s3"), hosted("s2"), hosted("s1")], total: 3, complete: true, supported: true };
+	it("holds when the total and the leading sessions match a complete list", () => {
+		expect(firstPageUnchanged(held, page(["s3", "s2"], "c1", 3))).toBe(true);
+	});
+	it("does not hold for a new total, a new leader, or a list that never finished", () => {
+		expect(firstPageUnchanged(held, page(["s3", "s2"], "c1", 4))).toBe(false);
+		expect(firstPageUnchanged(held, page(["s4", "s3"], "c1", 3))).toBe(false);
+		expect(firstPageUnchanged({ ...held, complete: false }, page(["s3", "s2"], "c1", 3))).toBe(false);
+	});
+});
+
+describe("useArchivedPRs as the archive moves", () => {
+	let renderer: ReactTestRenderer | null = null;
+	let latest: ReturnType<typeof useArchivedPRs>;
+	const loadingSeen: boolean[] = [];
+
+	function Probe(props: { archived: number }) {
+		latest = useArchivedPRs([{ hostId: "mac", hostName: "Mac", archived: props.archived }], { states: ["merged"], refreshToken: 0 });
+		loadingSeen.push(latest.loading.merged);
+		return null;
+	}
+
+	async function render(archived: number) {
+		await act(async () => {
+			if (renderer) renderer.update(<Probe archived={archived} />);
+			else renderer = create(<Probe archived={archived} />);
+		});
+		await act(async () => { for (let i = 0; i < 10; i += 1) await Promise.resolve(); });
+	}
+
+	beforeEach(() => {
+		fixtures.getArchivedPRSessions.mockReset();
+		loadingSeen.length = 0;
+	});
+	afterEach(() => {
+		act(() => renderer?.unmount());
+		renderer = null;
+	});
+
+	// A worker ending without a merged PR moves the archive's size; one page
+	// shows nothing changed, and the list neither reloads nor flickers.
+	it("checks one page when the archive's size moves and keeps the list when it did not change", async () => {
+		fixtures.getArchivedPRSessions.mockImplementation(async (_config: unknown, options?: { cursor: string | null }) =>
+			options?.cursor ? page(["s1"], null, 3) : page(["s3", "s2"], "c1", 3));
+		await render(10);
+		expect(fixtures.getArchivedPRSessions).toHaveBeenCalledTimes(2);
+		loadingSeen.length = 0;
+
+		await render(11);
+		expect(fixtures.getArchivedPRSessions).toHaveBeenCalledTimes(3);
+		expect(fixtures.getArchivedPRSessions.mock.calls[2]?.[1]).toMatchObject({ cursor: null });
+		expect(latest.sessions.map((s) => s.id)).toEqual(["s3", "s2", "s1"]);
+		expect(loadingSeen).not.toContain(true);
+	});
+
+	it("reads on from the checked page when the list did change", async () => {
+		fixtures.getArchivedPRSessions.mockImplementation(async (_config: unknown, options?: { cursor: string | null }) =>
+			options?.cursor ? page(["s1"], null, 3) : page(["s3", "s2"], "c1", 3));
+		await render(10);
+		fixtures.getArchivedPRSessions.mockImplementation(async (_config: unknown, options?: { cursor: string | null }) =>
+			options?.cursor ? page(["s2", "s1"], null, 4) : page(["s4", "s3"], "c1", 4));
+		await render(11);
+		// The checked first page is reused: one more request for the rest.
+		expect(fixtures.getArchivedPRSessions).toHaveBeenCalledTimes(4);
+		expect(latest.sessions.map((s) => s.id)).toEqual(["s4", "s3", "s2", "s1"]);
+	});
+
+	it("lets a read in flight finish when the size moves, then checks once", async () => {
+		let release!: (value: PRStatePage) => void;
+		fixtures.getArchivedPRSessions.mockImplementationOnce(() => new Promise((resolve) => { release = resolve; }));
+		await render(10);
+		await render(11);
+		await render(12);
+		const signal = (fixtures.getArchivedPRSessions.mock.calls[0]?.[2] as { signal: AbortSignal }).signal;
+		expect(signal.aborted).toBe(false);
+		expect(fixtures.getArchivedPRSessions).toHaveBeenCalledTimes(1);
+
+		fixtures.getArchivedPRSessions.mockResolvedValue(page(["s1"], null, 1));
+		await act(async () => { release(page(["s1"], null, 1)); });
+		await render(12);
+		expect(fixtures.getArchivedPRSessions).toHaveBeenCalledTimes(2);
+		expect(latest.sessions.map((s) => s.id)).toEqual(["s1"]);
+	});
+
+	// A first read that fails partway shows what it has, and the counts claim
+	// no more than that.
+	it("counts only the rows shown after a read fails partway", async () => {
+		fixtures.getArchivedPRSessions
+			.mockResolvedValueOnce(page(["s5", "s4"], "c1", 5))
+			.mockRejectedValueOnce(new Error("down"));
+		await render(10);
+		expect(latest.sessions.map((s) => s.id)).toEqual(["s5", "s4"]);
+		expect(latest.unloaded.merged).toBe(0);
+		expect(latest.error).toBe("Couldn't load past pull requests.");
 	});
 });
