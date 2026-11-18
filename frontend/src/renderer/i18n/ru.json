@@ -360,7 +360,6 @@
 	"browser.agentAction": "Агент: {{verb}}",
 	"browser.agentUsing": "Агент использует браузер",
 	"browser.agentTab": "Вкладка агента: {{title}}",
-	"browser.agentFrame": "Вкладка агента",
 	"browser.find.close": "Закрыть поиск",
 	"browser.find.matchCount": "{{active}} из {{total}}",
 	"browser.find.next": "Следующее совпадение",

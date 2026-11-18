@@ -16,7 +16,8 @@ import {
 	scaleBoundsForZoom,
 	shouldHandleAppShortcutInBrowserContext,
 } from "./browser-view-host";
-import { AGENT_FRAME_EDGE_PX, AGENT_FRAME_STRIP_PX, insetForAgentFrame } from "../shared/browser-agent-frame";
+import { AGENT_FRAME_EDGE_PX, insetForAgentFrame } from "../shared/browser-agent-frame";
+import { AGENT_BADGE_QUIET_MS, agentBadgeBounds } from "./browser-agent-badge";
 import { browserProfilePartition, type BrowserProfile } from "../shared/browser-profiles";
 import type { BrowserProfileStore } from "./browser-profile-store";
 import type { BrowserHistoryStore } from "./browser-history-store";
@@ -1225,7 +1226,7 @@ function setupTabHost(
 	loadURLHook?: (viewIndex: number, url: string) => Promise<void>,
 	browserHistoryStore?: BrowserHistoryStore,
 	clearBrowserProfileData = vi.fn(async (_partition: string) => undefined),
-	overrides?: { entryReadyTimeoutMs?: number },
+	overrides?: { entryReadyTimeoutMs?: number; agentBadge?: boolean },
 	prepareBrowserPartition?: (partition: string) => void,
 ) {
 	const constructorOptions: Array<{
@@ -1463,6 +1464,7 @@ function setupTabHost(
 		clearBrowserProfileData,
 		prepareBrowserPartition,
 		entryReadyTimeoutMs: overrides?.entryReadyTimeoutMs,
+		agentBadge: overrides?.agentBadge,
 		onNativeViewAdded,
 		onTabCloseFailure,
 		// Kept only as a regression tripwire: the removed auto-send path used
@@ -7029,16 +7031,65 @@ describe("agent and person tabs", () => {
 		expect(phases()).toEqual(["started", "finished"]);
 	});
 
+	it("pops the AO mascot up over the agent's page when it starts working after a quiet spell", async () => {
+		const tabHost = setupTabHost(undefined, false, undefined, undefined, undefined, { agentBadge: true });
+		const { host, invoke, emit, views, constructorOptions } = tabHost;
+		const { viewId } = (await invoke("browser:ensure", "sess-1")) as { viewId: string };
+		emit("browser:setBounds", { viewId, revision: 1, rect: { x: 10, y: 20, width: 700, height: 500 }, visible: true });
+		await host.execute("sess-1", "open", { url: "https://agent.example.test/" });
+
+		// Its own view, stacked over the page's bottom-left corner, running no script.
+		await vi.waitFor(() => expect(views).toHaveLength(2));
+		const badge = views[1]!;
+		expect(constructorOptions[1]!.webPreferences).toMatchObject({ javascript: false, sandbox: true, nodeIntegration: false });
+		expect(badge.setBounds).toHaveBeenLastCalledWith(agentBadgeBounds(insetForAgentFrame({ x: 10, y: 20, width: 700, height: 500 })));
+		expect(badge.setVisible).toHaveBeenLastCalledWith(true);
+		// The person's pointer reaches it: out of the way at once.
+		(badge.listeners.get("before-mouse-event") as () => void)();
+		expect(badge.setVisible).toHaveBeenLastCalledWith(false);
+
+		// More commands in the same run: no second greeting.
+		badge.setVisible.mockClear();
+		await host.execute("sess-1", "get", { property: "url" });
+		await new Promise((resolve) => setTimeout(resolve, 300));
+		expect(badge.setVisible).not.toHaveBeenCalledWith(true);
+
+		// Back after a quiet spell: it greets again.
+		const later = vi.spyOn(Date, "now").mockReturnValue(Date.now() + AGENT_BADGE_QUIET_MS + 1);
+		try {
+			await host.execute("sess-1", "get", { property: "url" });
+			await vi.waitFor(() => expect(badge.setVisible).toHaveBeenLastCalledWith(true));
+		} finally {
+			later.mockRestore();
+		}
+		// The person moves to a tab of their own: it leaves with the agent's page.
+		await invoke("browser:openTab", { viewId, url: "https://mine.example.test/" });
+		expect(badge.setVisible).toHaveBeenLastCalledWith(false);
+	});
+
+	it("does not pop the mascot up when the agent works in a tab out of sight", async () => {
+		const tabHost = setupTabHost(undefined, false, undefined, undefined, undefined, { agentBadge: true });
+		const { host, invoke, emit, views } = tabHost;
+		const { viewId } = (await invoke("browser:ensure", "sess-1")) as { viewId: string };
+		emit("browser:setBounds", { viewId, revision: 1, rect: { x: 10, y: 20, width: 700, height: 500 }, visible: true });
+		await invoke("browser:openTab", { viewId, url: "https://mine.example.test/" });
+		const before = views.length;
+		await host.execute("sess-1", "tab-new", { url: "https://agent.example.test/" });
+		await new Promise((resolve) => setTimeout(resolve, 300));
+		// Only the agent's new tab: no mascot view.
+		expect(views).toHaveLength(before + 1);
+	});
+
 	it("lays the agent's tab out inside its frame and the person's tab at full size", async () => {
 		const { host, invoke, emit, views, viewId, tabs } = await open();
 		emit("browser:setBounds", { viewId, revision: 1, rect: { x: 10, y: 20, width: 320, height: 240 }, visible: true });
 		await host.execute("sess-1", "open", { url: "https://agent.example.test/" });
-		// Edge on three sides, strip along the bottom (shared/browser-agent-frame.ts).
+		// The same edge on every side (shared/browser-agent-frame.ts).
 		const framed = {
 			x: 10 + AGENT_FRAME_EDGE_PX,
 			y: 20 + AGENT_FRAME_EDGE_PX,
 			width: 320 - AGENT_FRAME_EDGE_PX * 2,
-			height: 240 - AGENT_FRAME_EDGE_PX - AGENT_FRAME_STRIP_PX,
+			height: 240 - AGENT_FRAME_EDGE_PX * 2,
 		};
 		expect(views[0].setBounds).toHaveBeenLastCalledWith(framed);
 		expect(await tabs()).toMatchObject({ agentTabId: "t1" });
@@ -7053,7 +7104,7 @@ describe("agent and person tabs", () => {
 			x: AGENT_FRAME_EDGE_PX,
 			y: AGENT_FRAME_EDGE_PX,
 			width: 400 - AGENT_FRAME_EDGE_PX * 2,
-			height: 300 - AGENT_FRAME_EDGE_PX - AGENT_FRAME_STRIP_PX,
+			height: 300 - AGENT_FRAME_EDGE_PX * 2,
 		});
 	});
 

@@ -396,7 +396,6 @@
 	"browser.agentAction": "代理正在{{verb}}",
 	"browser.agentUsing": "代理正在使用浏览器",
 	"browser.agentTab": "代理的标签页：{{title}}",
-	"browser.agentFrame": "代理的标签页",
 	"browser.find.close": "关闭查找",
 	"browser.find.matchCount": "第 {{active}} 项，共 {{total}} 项",
 	"browser.find.next": "下一个匹配项",

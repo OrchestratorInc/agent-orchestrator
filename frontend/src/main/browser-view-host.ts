@@ -33,6 +33,7 @@ import type {
 } from "../shared/browser-annotations";
 import { createBrowserAnnotationSession } from "../shared/browser-annotations";
 import { insetForAgentFrame } from "../shared/browser-agent-frame";
+import { AGENT_BADGE_QUIET_MS, createAgentBadge, type AgentBadgeView } from "./browser-agent-badge";
 import {
   browserProfilePartition,
   isValidBrowserProfileSessionId,
@@ -528,6 +529,9 @@ export type BrowserViewHostOptions = {
   // keep a raised shell (open dialog/notice) above the new view.
   onNativeViewAdded?: () => void;
   onTabCloseFailure?: (failure: BrowserCloseFailure) => void;
+  // Pops the AO mascot up over the agent's page when it starts working there
+  // (browser-agent-badge.ts). Off unless the app turns it on.
+  agentBadge?: boolean;
   // Test hook: how long a tab's initial about:blank load may take before
   // awaiting callers get a typed failure instead of hanging forever.
   entryReadyTimeoutMs?: number;
@@ -696,6 +700,8 @@ type BrowserSessionEntry = {
   layoutRevision: number;
   networkTabId?: string;
   agentBrowserCommands: number;
+  // When the agent last finished all its commands: it is quiet since then.
+  agentQuietSince?: number;
   browserOperations: number;
   // Woken when no agent command or renderer operation is in flight.
   idleWaiters: Array<() => void>;
@@ -1072,6 +1078,40 @@ export function createBrowserViewHost(
       };
       void promise.then(settle, settle);
     });
+  // The AO mascot's pop-up over the agent's page (browser-agent-badge.ts).
+  const agentBadge = options.agentBadge
+    ? createAgentBadge({
+        create: () =>
+          new options.WebContentsView({
+            webPreferences: {
+              backgroundThrottling: false,
+              contextIsolation: true,
+              javascript: false,
+              nodeIntegration: false,
+              // In memory: it stores nothing.
+              partition: "ao-agent-badge",
+              sandbox: true,
+              transparent: true,
+            },
+          }) as unknown as AgentBadgeView,
+        attach: (view) => {
+          options.mainWindow.contentView.addChildView(view as unknown as BrowserViewLike);
+          options.onNativeViewAdded?.();
+        },
+        detach: (view) => options.mainWindow.contentView.removeChildView?.(view as unknown as BrowserViewLike),
+      })
+    : undefined;
+  // The agent starts working after a quiet spell: once its tab has settled
+  // (its first command may claim or open it), greet the person watching it.
+  const greetFromAgentTab = (session: BrowserSessionEntry): void => {
+    if (!agentBadge) return;
+    setTimeout(() => {
+      if (entries.get(session.viewId) !== session || session.agentTabId === undefined) return;
+      const entry = session.tabs.get(session.agentTabId);
+      if (!entry || !agentTabOnScreen(session, entry)) return;
+      agentBadge.show(session, framedBounds(session, entry));
+    }, 250);
+  };
   const setAgentBrowserActivity = (
     session: BrowserSessionEntry,
     action: string,
@@ -1079,11 +1119,17 @@ export function createBrowserViewHost(
     commandId?: string,
     phase?: BrowserAgentActivityState["phase"],
   ): void => {
+    if (active && session.agentBrowserCommands === 0) {
+      const quietSince = session.agentQuietSince;
+      if (quietSince === undefined || Date.now() - quietSince >= AGENT_BADGE_QUIET_MS)
+        greetFromAgentTab(session);
+    }
     session.agentBrowserCommands = Math.max(
       0,
       session.agentBrowserCommands + (active ? 1 : -1),
     );
     if (!active) wakeIfIdle(session);
+    if (!active && session.agentBrowserCommands === 0) session.agentQuietSince = Date.now();
     shellWebContents.send("browser:agentActivity", {
       viewId: session.viewId,
       active: session.agentBrowserCommands > 0,
@@ -2862,6 +2908,12 @@ export function createBrowserViewHost(
     session: BrowserSessionEntry,
     entry: BrowserEntry,
   ): void {
+    // The mascot stays with the agent's page while it is on screen.
+    if (agentBadge?.showing(session)) {
+      if (session.visible && entry.tabId === session.agentTabId)
+        agentBadge.follow(session, framedBounds(session, entry));
+      else agentBadge.hide();
+    }
     syncLiveViewport(session, entry);
     if (!session.visible) {
       if (session.live) {
@@ -3288,6 +3340,7 @@ export function createBrowserViewHost(
   const destroy = (viewId: string): void => {
     const session = entries.get(viewId);
     if (!session) return;
+    if (agentBadge?.showing(session)) agentBadge.hide();
 		const live = session.live;
 		live?.sink.error("BROWSER_SESSION_CLOSED", "The desktop browser session was closed");
 		session.live = undefined;
@@ -5321,6 +5374,7 @@ export function createBrowserViewHost(
       disposePromise = (async () => {
         ipcDisposers.splice(0).forEach((dispose) => dispose());
         options.browserDownloadManager?.dispose();
+        agentBadge?.dispose();
         for (const viewId of [...entries.keys()]) {
           destroy(viewId);
         }

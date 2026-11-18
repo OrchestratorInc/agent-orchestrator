@@ -5984,10 +5984,10 @@ html[data-shell-linux] body > .files-popout-overlay {
 }
 
 /* The agent's tab (BrowserAgentFrame). The view host insets that tab's page by
- * --agent-frame-edge on three sides and --agent-frame-strip along the bottom,
- * and everything here paints in that room: nothing may paint inside the page's
- * rect, where the raised shell would cover the live page during a menu. The
- * glow is a live Working state, not decoration (DESIGN.md decisions log). */
+ * --agent-frame-edge on every side, and everything here paints in that room:
+ * nothing may paint inside the page's rect, where the raised shell would cover
+ * the live page during a menu. The glow is a live Working state, not
+ * decoration (DESIGN.md decisions log). */
 .browser-agent-frame {
 	position: absolute;
 	inset: 0;
@@ -5997,7 +5997,7 @@ html[data-shell-linux] body > .files-popout-overlay {
 .browser-agent-frame__ground,
 .browser-agent-frame__glow {
 	position: absolute;
-	inset: var(--agent-frame-edge) var(--agent-frame-edge) var(--agent-frame-strip);
+	inset: var(--agent-frame-edge);
 	/* The page view's corner radius (BROWSER_VIEW_BORDER_RADIUS). */
 	border-radius: 10px;
 }
@@ -6008,7 +6008,6 @@ html[data-shell-linux] body > .files-popout-overlay {
 }
 
 .browser-agent-frame__glow {
-	z-index: 1;
 	box-shadow: 0 0 0 1px color-mix(in srgb, var(--color-status-working) 40%, transparent);
 	transition: box-shadow var(--duration-normal) ease-out;
 }
@@ -6019,49 +6018,6 @@ html[data-shell-linux] body > .files-popout-overlay {
 		0 0 5px 2px color-mix(in srgb, var(--color-status-working) 65%, transparent),
 		0 0 12px 5px color-mix(in srgb, var(--color-status-working) 35%, transparent);
 	animation: browser-agent-glow 1.8s ease-in-out infinite;
-}
-
-.browser-agent-frame__strip {
-	position: absolute;
-	inset: auto 0 0;
-	height: var(--agent-frame-strip);
-	display: flex;
-	align-items: center;
-	gap: 6px;
-	padding: 0 calc(var(--agent-frame-edge) + 6px);
-	background: var(--bg);
-}
-
-/* Above the glow, so the mascot and label stay crisp under its bleed. */
-.browser-agent-frame__mascot,
-.browser-agent-frame__label {
-	position: relative;
-	z-index: 2;
-}
-
-.browser-agent-frame__mascot {
-	width: 16px;
-	height: 16px;
-	flex: none;
-	transform-origin: 50% 90%;
-}
-
-.browser-agent-frame[data-acting="true"] .browser-agent-frame__mascot {
-	animation: browser-agent-conduct 1.2s ease-in-out infinite;
-}
-
-.browser-agent-frame__label {
-	min-width: 0;
-	overflow: hidden;
-	text-overflow: ellipsis;
-	white-space: nowrap;
-	font-size: var(--font-size-caption);
-	color: var(--fg-muted);
-	transition: color var(--duration-fast) ease-out;
-}
-
-.browser-agent-frame[data-acting="true"] .browser-agent-frame__label {
-	color: var(--fg);
 }
 
 @keyframes browser-agent-glow {
@@ -6090,8 +6046,7 @@ html[data-shell-linux] body > .files-popout-overlay {
 }
 
 @media (prefers-reduced-motion: reduce) {
-	.browser-agent-frame[data-acting="true"] .browser-agent-frame__glow,
-	.browser-agent-frame[data-acting="true"] .browser-agent-frame__mascot {
+	.browser-agent-frame[data-acting="true"] .browser-agent-frame__glow {
 		animation: none;
 	}
 }

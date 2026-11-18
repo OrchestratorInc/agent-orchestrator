@@ -1219,7 +1219,6 @@ describe("BrowserPanel", () => {
 		const frame = screen.getByTestId("browser-agent-frame");
 		expect(frame).toHaveAttribute("aria-hidden", "true");
 		expect(frame).not.toHaveAttribute("data-acting");
-		expect(within(frame).getByTestId("browser-agent-frame-label")).toHaveTextContent("Agent's tab");
 
 		hookState.tabs = hookState.tabs.map((tab) => ({ ...tab, active: tab.id === "t2" }));
 		hookState.activeTabId = "t2";
@@ -1241,7 +1240,6 @@ describe("BrowserPanel", () => {
 
 		const frame = screen.getByTestId("browser-agent-frame");
 		expect(frame).toHaveAttribute("data-acting", "true");
-		expect(within(frame).getByTestId("browser-agent-frame-label")).toHaveTextContent("Agent clicking");
 		const tabList = screen.getByRole("tablist", { name: "Browser tabs" });
 		const agentTabRow = () => within(tabList).getByRole("tab", { name: "Agent's tab: Agent app" }).closest("[data-browser-tab-id]");
 		const myTabRow = () => within(tabList).getByRole("tab", { name: "My app" }).closest("[data-browser-tab-id]");

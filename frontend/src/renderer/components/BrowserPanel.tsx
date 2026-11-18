@@ -1807,10 +1807,7 @@ export const BrowserPanelView = memo(function BrowserPanelView({
 							ref={slotRef}
 						/>
 						{framedForAgent ? (
-							<BrowserAgentFrame
-								acting={agentActingInFront}
-								label={agentActingInFront ? agentStatusLabel : t("browser.agentFrame")}
-							/>
+							<BrowserAgentFrame acting={agentActingInFront} />
 						) : null}
 					</div>
 					{showStaticPreview ? <StaticPreview url={navState.url} /> : null}
