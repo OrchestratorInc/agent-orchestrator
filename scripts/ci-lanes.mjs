@@ -2,12 +2,13 @@ import { execFileSync } from 'node:child_process';
 import { pathToFileURL } from 'node:url';
 
 const FRONTEND = /^(frontend\/(?!src\/docs\/|native\/)|packages\/(product-ui|shared|cloud-client)\/)/;
+const DOCS_REFERENCE = /^backend\/(cmd\/docsref\/|internal\/(adapters\/(agent\/|chatdriver\/|reviewer\/|registry\.go$)|domain\/(harness|reviewerharness)\.go$)|go\.(mod|sum)$)/;
 
 export const LANES = {
   go: [/^backend\//, /^go\.work(\.sum)?$/, /^contracts\/session-start-interface\.json$/, /^frontend\/scripts\/prepare-cloudflared\.mjs$/, /^frontend\/src\/api\/schema\.ts$/, /^package(-lock)?\.json$/, /^\.github\/scripts\/go-test-parallel\.sh$/],
   'cli-e2e': [/^backend\//, /^test\/cli\//],
   frontend: [FRONTEND],
-  docs: [/^frontend\/src\/docs\//],
+  docs: [/^frontend\/src\/docs\//, DOCS_REFERENCE],
   boundary: [FRONTEND, /^backend\/internal\/httpd\//],
   cloud: [/^packages\/cloud-client\//, /^contracts\/cloud\//],
   'product-ui': [/^packages\/product-ui\//],

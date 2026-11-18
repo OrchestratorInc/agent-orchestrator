@@ -1,5 +1,7 @@
 import remarkGfm from "remark-gfm";
 import { defineDocs, defineConfig } from "fumadocs-mdx/config";
+import harnessRows from "./.generated/agent-harnesses.json";
+import { remarkReferenceBlocks } from "./scripts/reference-blocks.mjs";
 
 export const docs = defineDocs({
   dir: "content",
@@ -11,7 +13,7 @@ export const docs = defineDocs({
 
 export default defineConfig({
   mdxOptions: {
-    remarkPlugins: [remarkGfm],
+    remarkPlugins: [remarkGfm, [remarkReferenceBlocks, { rows: harnessRows }]],
     remarkStructureOptions: {
       stringify: {
         stringify(node) {

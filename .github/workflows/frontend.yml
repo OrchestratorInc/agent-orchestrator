@@ -248,8 +248,18 @@ jobs:
           cache: npm
           cache-dependency-path: frontend/src/docs/package-lock.json
 
+      - uses: ./.github/actions/setup-go-cached
+        with:
+          name: docs-reference
+
       - name: Install docs dependencies
         run: npm ci
+
+      - name: Test docs references
+        working-directory: backend
+        env:
+          GOTOOLCHAIN: auto
+        run: go test -p 1 -count=1 ./cmd/docsref
 
       # Re-extracts the docs catalogs, then fails if any locale is missing a
       # translation for a string in the source.
