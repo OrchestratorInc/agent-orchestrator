@@ -18,6 +18,9 @@ import (
 type Tracker struct {
 	mu    sync.Mutex
 	tasks map[string]ports.ChatBackgroundTask
+	// Last explicit event per task, so a missed completion cannot hold the
+	// provider awake forever.
+	seen map[string]time.Time
 	// Settled identities outlive the visible outcome, for this conversation only.
 	settled map[string]map[string]struct{}
 }
@@ -89,6 +92,7 @@ func (t *Tracker) Update(task ports.ChatBackgroundTask, now time.Time) {
 		t.rememberSettled(task)
 	}
 	t.tasks[task.ID] = task
+	t.markSeen(task.ID, now)
 	t.prune(now)
 }
 
@@ -112,7 +116,29 @@ func (t *Tracker) Finish(id, state string, now time.Time) {
 		t.rememberSettled(old)
 	}
 	t.tasks[id] = old
+	t.markSeen(id, now)
 	t.prune(now)
+}
+
+// Active reports whether a running or paused task had an explicit event within
+// maxIdle. Older entries are ignored, since their completion may never arrive.
+func (t *Tracker) Active(now time.Time, maxIdle time.Duration) bool {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	for id, task := range t.tasks {
+		if (task.State == "running" || task.State == "paused") && now.Sub(t.seen[id]) < maxIdle {
+			return true
+		}
+	}
+	return false
+}
+
+// Caller holds mu.
+func (t *Tracker) markSeen(id string, now time.Time) {
+	if t.seen == nil {
+		t.seen = make(map[string]time.Time)
+	}
+	t.seen[id] = now
 }
 
 // Snapshot returns a copy of live jobs and outcomes from the last 30 seconds.
@@ -151,6 +177,7 @@ func (t *Tracker) prune(now time.Time) {
 	for id, task := range t.tasks {
 		if task.EndedAt != nil && now.Sub(*task.EndedAt) >= 30*time.Second {
 			delete(t.tasks, id)
+			delete(t.seen, id)
 		}
 	}
 }
@@ -160,6 +187,7 @@ func (t *Tracker) Remove(id string) {
 	t.mu.Lock()
 	defer t.mu.Unlock()
 	delete(t.tasks, id)
+	delete(t.seen, id)
 }
 
 // ReconcileShells replaces the shell membership after a complete native read.
@@ -174,6 +202,7 @@ func (t *Tracker) ReconcileShells(tasks []ports.ChatBackgroundTask, now time.Tim
 	for id, task := range t.tasks {
 		if task.Kind == "shell" && task.State == "running" && !ids[id] {
 			delete(t.tasks, id)
+			delete(t.seen, id)
 		}
 	}
 	t.mu.Unlock()

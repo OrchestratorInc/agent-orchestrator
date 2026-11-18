@@ -1381,14 +1381,14 @@ func (c *conversation) Terminate() error {
 	return c.closeProvider(true, true)
 }
 
+// staleBackgroundTask bounds how long an event-derived running task can keep a
+// session from hibernating after its last event. ACP cannot enumerate native
+// jobs, so a completion the provider never sends must not block it forever.
+const staleBackgroundTask = 30 * time.Minute
+
 func (c *conversation) CanHibernate(ctx context.Context) (bool, error) {
 	if c.hibernationCheck == nil {
-		for _, task := range c.backgroundObserved.Snapshot(time.Now()) {
-			if task.State == "running" || task.State == "paused" {
-				return false, nil
-			}
-		}
-		return true, nil
+		return !c.backgroundObserved.Active(time.Now(), staleBackgroundTask), nil
 	}
 	c.mu.Lock()
 	id := c.sessionID

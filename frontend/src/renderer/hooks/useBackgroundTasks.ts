@@ -28,7 +28,10 @@ export function useBackgroundTaskReadings(enabled: boolean, projectId?: string) 
 			if (!data || !Array.isArray(data.sessions) || !data.sessions.every(isTaskReading)) {
 				throw new Error("Invalid background task inventory response");
 			}
-			return data;
+			// observedAt changes on every sample and the board does not use it.
+			// Dropping it lets structural sharing keep unchanged readings, so the
+			// board does not re-render on every poll.
+			return { ...data, sessions: data.sessions.map(({ observedAt: _observedAt, ...reading }) => reading) };
 		},
 		select: selectReadings,
 		refetchInterval: 5_000,

@@ -114,3 +114,20 @@ func TestSettledReplayProtectionOutlivesVisibleHistory(t *testing.T) {
 		})
 	}
 }
+
+func TestActiveIgnoresTasksWithNoRecentEvent(t *testing.T) {
+	var tracker Tracker
+	now := time.Now()
+	tracker.Update(ports.ChatBackgroundTask{ID: "job", Kind: "shell", State: "running"}, now)
+	if !tracker.Active(now.Add(29*time.Minute), 30*time.Minute) {
+		t.Fatal("a recently reported task stopped counting as active")
+	}
+	// A completion that never arrives must not hold the provider awake forever.
+	if tracker.Active(now.Add(30*time.Minute), 30*time.Minute) {
+		t.Fatal("a task with no event for 30 minutes still counts as active")
+	}
+	tracker.Finish("job", "paused", now.Add(40*time.Minute))
+	if !tracker.Active(now.Add(41*time.Minute), 30*time.Minute) {
+		t.Fatal("a new event did not refresh the task")
+	}
+}

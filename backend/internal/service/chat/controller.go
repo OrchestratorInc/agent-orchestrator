@@ -228,6 +228,7 @@ type Controller struct {
 	backgroundTasks        []ports.ChatBackgroundTask
 	backgroundSampledAt    time.Time
 	backgroundPartial      bool
+	backgroundErr          error
 	store                  Store
 	continuationReader     SnapshotReader
 	activity               ActivityRecorder

@@ -1,6 +1,7 @@
 package acp
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -607,7 +608,9 @@ func (c *conversation) handleNotification(method string, params json.RawMessage)
 	var err error
 	switch method {
 	case acpsdk.ClientMethodSessionUpdate:
-		if c.observeAsyncTaskNotification(params) {
+		// Decode for an async task only when its discriminator can be present,
+		// so ordinary frames are not decoded twice on the frame reader.
+		if bytes.Contains(params, []byte("async_task")) && c.observeAsyncTaskNotification(params) {
 			return true
 		}
 		var update acpsdk.SessionNotification

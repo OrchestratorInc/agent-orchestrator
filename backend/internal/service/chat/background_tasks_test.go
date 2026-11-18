@@ -165,3 +165,21 @@ func TestStopBackgroundTaskRefusesProvidersWithoutStopAndNeverWakesASession(t *t
 		t.Fatalf("stopped controller err=%v", err)
 	}
 }
+
+func TestBackgroundTasksFailedReadIsSharedForOneSecond(t *testing.T) {
+	conv := &backgroundConversation{fakeConversation: newFakeConversation(), err: errors.New("provider hung")}
+	h := newHarnessWithConversation(t, conv)
+	for range 3 {
+		if _, err := h.svc.BackgroundTasks(context.Background(), testSession); err == nil {
+			t.Fatal("provider failure became a reading")
+		}
+	}
+	if conv.calls != 1 {
+		t.Fatalf("failed reads in the same second made %d provider calls, want 1", conv.calls)
+	}
+	h.advance(time.Second)
+	conv.err = nil
+	if reading, err := h.svc.BackgroundTasks(context.Background(), testSession); err != nil || reading.Availability != "ready" || conv.calls != 2 {
+		t.Fatalf("reading after the failed sample expired=%+v err=%v calls=%d", reading, err, conv.calls)
+	}
+}

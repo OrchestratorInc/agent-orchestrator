@@ -56,11 +56,22 @@ func (s *Service) BackgroundTasks(ctx context.Context, id domain.SessionID) (Bac
 			return out, nil
 		}
 		if readErr != nil && !errors.Is(readErr, ports.ErrBackgroundTasksPartial) {
+			// Keep a failed sample for the same second, so concurrent and
+			// repeated readers share this attempt instead of queueing for their
+			// own. A caller's own cancellation is not the provider's failure.
+			if ctx.Err() == nil {
+				controller.backgroundErr = readErr
+				controller.backgroundSampledAt = s.now()
+			}
 			return out, readErr
 		}
+		controller.backgroundErr = nil
 		controller.backgroundPartial = errors.Is(readErr, ports.ErrBackgroundTasksPartial)
 		controller.backgroundTasks = append([]ports.ChatBackgroundTask(nil), tasks...)
 		controller.backgroundSampledAt = s.now()
+	}
+	if controller.backgroundErr != nil {
+		return out, controller.backgroundErr
 	}
 	// Provider I/O can cross termination, a handoff, or a provider replacement.
 	fresh, found, err := s.sessions.GetSession(ctx, id)
