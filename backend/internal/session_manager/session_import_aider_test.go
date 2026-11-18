@@ -107,7 +107,7 @@ func TestAiderFirstOpenCopiesNativeHistoryAndRefusesExistingHistory(t *testing.T
 				t.Fatalf("wrong native/worktree launch = %#v", rt.lastCfg)
 			}
 			provenance := result.Session.Metadata.ImportSource
-			if provenance.ConfigDir != source || provenance.ResumeConfigDir != workspace || provenance.ResumeTranscriptPath != target || provenance.SourceTranscriptPath != path || result.Session.Metadata.AgentSessionID != id {
+			if provenance.ConfigDir != source || provenance.ResumeConfigDir != workspace || provenance.ResumeTranscriptPath != target || result.Session.Metadata.AgentSessionID != id {
 				t.Fatalf("native copy lost provenance or identity = %+v", result.Session.Metadata)
 			}
 			data, err := os.ReadFile(path)
@@ -156,7 +156,7 @@ func TestAiderFreshImportReusesOnlyPinnedHistoryFromGitTransfer(t *testing.T) {
 			}
 			workspace := result.Session.Metadata.WorkspacePath
 			prepared := result.Session.Metadata.ImportSource
-			if workspace == source || rt.lastCfg.WorkspacePath != workspace || !prepared.Transferred || !prepared.Prepared || prepared.ResumeNativeID != id || prepared.ResumeConfigDir != workspace || prepared.ConfigDir != source || prepared.SourceTranscriptPath != path {
+			if workspace == source || rt.lastCfg.WorkspacePath != workspace || !prepared.Transferred || !prepared.Prepared || prepared.ResumeNativeID != id || prepared.ResumeConfigDir != workspace || prepared.ConfigDir != source {
 				t.Fatalf("wrong worktree/provenance = %+v, %+v", result.Session.Metadata, rt.lastCfg)
 			}
 			argv := strings.Join(rt.lastCfg.Argv, " ")

@@ -5,9 +5,10 @@ import { getDeviceVoiceProvider } from "./deviceProvider";
 import type { VoiceMode, VoiceProvider, VoiceState } from "./types";
 
 // Dictation, decoupled from any screen. Owns permission, the recording
-// lifecycle, the live partial transcript, and the gesture that distinguishes a
-// hold from a double-tap; knows nothing about terminals, sessions, or how the
-// text is eventually sent.
+// lifecycle, the live partial transcript and input level, and the gestures that
+// start and finish a recording; knows nothing about terminals, sessions, or how
+// the text is eventually sent. Every mic in the app is a tap toggle now
+// (`toggleLatched`); `pressIn`/`pressOut` keep the older hold and double-tap.
 
 // A press shorter than this was a tap, not a hold.
 const TAP_MS = 250;
@@ -30,6 +31,17 @@ export type UseVoiceInput = {
 	pressIn(): void;
 	/** Finger up off the mic key. */
 	pressOut(): void;
+	/**
+	 * Starts hands-free dictation, or finishes it when it is already running:
+	 * what a tap on the mic does, and a screen reader's activation.
+	 */
+	toggleLatched(): void;
+	/**
+	 * Listens to the input level, 0 to 1, while the mic captures; returns the
+	 * unsubscribe. Not state: it changes several times a second, and only the
+	 * waveform drawing it should redraw, not the composer holding the hook.
+	 */
+	subscribeLevel(listener: (level: number) => void): () => void;
 };
 
 export function useVoiceInput({
@@ -67,6 +79,12 @@ export function useVoiceInput({
 		stateRef.current = next;
 		setState(next);
 	}, []);
+	const levelListeners = useRef(new Set<(level: number) => void>()).current;
+	const emitLevel = useCallback((level: number) => { for (const listener of levelListeners) listener(level); }, [levelListeners]);
+	const subscribeLevel = useCallback((listener: (level: number) => void) => {
+		levelListeners.add(listener);
+		return () => { levelListeners.delete(listener); };
+	}, [levelListeners]);
 	const onTranscriptRef = useRef(onTranscript);
 	onTranscriptRef.current = onTranscript;
 	// Guards against a permission dialog resolving after the component unmounted.
@@ -163,12 +181,16 @@ export function useVoiceInput({
 					if (!mountedRef.current) return;
 					setPartial(text);
 				},
+				onLevel: (level) => {
+					if (mountedRef.current && stateRef.current === "recording") emitLevel(level);
+				},
 				onFinal: (text) => {
 					modeRef.current = "push";
 					if (!mountedRef.current) return;
 					setMode("push");
 					setPartial("");
 					setPhase("idle");
+					emitLevel(0);
 					// An empty transcript means silence or a stray tap: a no-op, not an
 					// error, and nothing should reach the composer.
 					if (text) onTranscriptRef.current(text);
@@ -179,6 +201,7 @@ export function useVoiceInput({
 					setMode("push");
 					setPartial("");
 					setPhase("idle");
+					emitLevel(0);
 					setError(message);
 				},
 				},
@@ -192,7 +215,7 @@ export function useVoiceInput({
 			// words - the UI invited the user to talk before anything was capturing.
 		})();
 		},
-		[device, setPhase],
+		[device, emitLevel, setPhase],
 	);
 
 	// Ends whatever is running, keeping the transcript.
@@ -226,8 +249,9 @@ export function useVoiceInput({
 		if (tapWindowRef.current) {
 			clearTimeout(tapWindowRef.current);
 			tapWindowRef.current = null;
+			// No haptic of its own: the key already tapped for this press, and the
+			// mic buzzes again once it is listening.
 			startedLatchedRef.current = true;
-			haptics.tap();
 			// The tap's own recording was aborted a moment ago; give the native
 			// recogniser time to finish tearing down before asking it to start again.
 			restartRef.current = setTimeout(() => beginRecording("latched"), RESTART_DELAY_MS);
@@ -263,5 +287,18 @@ export function useVoiceInput({
 		finish();
 	}, [device, finish, setPhase]);
 
-	return { state, mode, partial, error, pressIn, pressOut };
+	const toggleLatched = useCallback(() => {
+		if (modeRef.current === "latched" && stateRef.current !== "idle") {
+			finish();
+			return;
+		}
+		if (tapWindowRef.current) {
+			clearTimeout(tapWindowRef.current);
+			tapWindowRef.current = null;
+		}
+		startedLatchedRef.current = false;
+		beginRecording("latched");
+	}, [beginRecording, finish]);
+
+	return { state, mode, partial, error, pressIn, pressOut, toggleLatched, subscribeLevel };
 }

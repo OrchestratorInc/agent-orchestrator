@@ -139,13 +139,13 @@ func TestCopilotDiscoveryUsesOnlyTopLevelNativeSessions(t *testing.T) {
 	writeFile(t, filepath.Join(filepath.Dir(path), "agents", copilotTestID, "events.jsonl"), "{}\n")
 	writeFile(t, filepath.Join(root, "session-state", "not-a-uuid", "events.jsonl"), "{}\n")
 	writeFile(t, filepath.Join(root, "session-state", "22222222-2222-4222-8222-222222222222", "workspace.yaml"), "name: no transcript\n")
-	files, err := (&Service{}).discover(context.Background(), domain.HarnessCopilot, root)
+	files, err := discoverFor(context.Background(), domain.HarnessCopilot, root, nil)
 	if err != nil || len(files) != 1 || files[0].nativeID() != copilotTestID || len(files[0].paths) != 1 || files[0].paths[0] != path {
 		t.Fatalf("native conversation discovery = %+v, %v", files, err)
 	}
 	before := files[0].cacheKey()
 	writeFile(t, filepath.Join(filepath.Dir(path), "workspace.yaml"), "id: "+copilotTestID+"\nname: changed title\n")
-	files, err = (&Service{}).discover(context.Background(), domain.HarnessCopilot, root)
+	files, err = discoverFor(context.Background(), domain.HarnessCopilot, root, nil)
 	if err != nil || len(files) != 1 || files[0].cacheKey() == before {
 		t.Fatalf("metadata change did not invalidate preview cache: %+v, %v", files, err)
 	}
@@ -208,7 +208,7 @@ func TestCopilotScanImportRefreshAndDeduplication(t *testing.T) {
 		t.Fatalf("Copilot preview = %+v, %v", preview, err)
 	}
 	candidate := preview.Candidates[0]
-	if candidate.Harness != domain.HarnessCopilot || candidate.ProjectID != "repo" || candidate.MessageCount != 2 || !candidate.Suggested {
+	if candidate.Harness != domain.HarnessCopilot || candidate.ProjectID != "repo" || candidate.MessageCount != 2 {
 		t.Fatalf("candidate = %+v", candidate)
 	}
 	results, err := svc.Import(context.Background(), []string{candidate.ID})
@@ -327,9 +327,9 @@ func TestCopilotRewindAndClearKeepOnlyCurrentHistory(t *testing.T) {
 }
 
 func TestCopilotHeldHistoryIsBoundedAndKeepsOpeningAndNewest(t *testing.T) {
-	oldHeld := maxClaudeHeld
-	maxClaudeHeld = 512
-	t.Cleanup(func() { maxClaudeHeld = oldHeld })
+	oldHeld := maxHeldText
+	maxHeldText = 512
+	t.Cleanup(func() { maxHeldText = oldHeld })
 	root := t.TempDir()
 	path := copilotFixture(t, root, copilotTestID, t.TempDir())
 	body, err := os.ReadFile(path)

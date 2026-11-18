@@ -55,14 +55,21 @@ func (p *Plugin) ProbeNativeSession(ctx context.Context, ref ports.NativeSession
 	return ports.NativeSessionAvailabilityUnavailable, nil
 }
 
-// PrepareImportedSession copies the same native id to the launch cwd's bucket.
+// PrepareImportedSession copies the chat to where the resume looks.
 // Cursor's direct --resume path uses process.cwd() for this lookup and creates
 // tools from the launch workspace, independently of the saved conversation graph.
+// ACP's session/load reads only acp-sessions/<id>, so a Chat import is copied
+// there under its own id (see Layout.SessionID); the terminal CLI's own chat
+// folder never holds the copy.
 func (*Plugin) PrepareImportedSession(ctx context.Context, r ports.ImportedSessionRelocation) (ports.NativeSessionRef, error) {
-	if path, found, err := cursorstore.PreparedCopy(ctx, r.ConfigDir, r.TranscriptPath, r.LaunchCWD, r.NativeSessionID, r.SourceFingerprint); err != nil {
+	layout := cursorstore.LayoutTerminal
+	if r.Chat {
+		layout = cursorstore.LayoutACP
+	}
+	if path, found, err := cursorstore.PreparedCopyIn(ctx, layout, r.ConfigDir, r.TranscriptPath, r.LaunchCWD, r.NativeSessionID, r.SourceFingerprint); err != nil {
 		return ports.NativeSessionRef{}, err
 	} else if found {
-		return ports.NativeSessionRef{NativeSessionID: r.NativeSessionID, ConfigDir: r.ConfigDir, TranscriptPath: path}, nil
+		return ports.NativeSessionRef{NativeSessionID: layout.SessionID(r.NativeSessionID, r.LaunchCWD, r.SourceFingerprint), ConfigDir: r.ConfigDir, TranscriptPath: path}, nil
 	}
 	archive, err := cursorstore.Read(ctx, r.ConfigDir, r.TranscriptPath)
 	if err != nil {
@@ -74,11 +81,11 @@ func (*Plugin) PrepareImportedSession(ctx context.Context, r ports.ImportedSessi
 	if r.SourceCWD != "" && archive.CWD != r.SourceCWD {
 		return ports.NativeSessionRef{}, errors.New("cursor source workspace changed since selection")
 	}
-	path, err := cursorstore.CopySelected(ctx, r.ConfigDir, r.TranscriptPath, r.LaunchCWD, r.SourceFingerprint)
+	path, err := cursorstore.CopySelectedIn(ctx, layout, r.ConfigDir, r.TranscriptPath, r.LaunchCWD, r.SourceFingerprint)
 	if err != nil {
 		return ports.NativeSessionRef{}, err
 	}
-	return ports.NativeSessionRef{NativeSessionID: archive.ID, ConfigDir: r.ConfigDir, TranscriptPath: path}, nil
+	return ports.NativeSessionRef{NativeSessionID: layout.SessionID(archive.ID, r.LaunchCWD, r.SourceFingerprint), ConfigDir: r.ConfigDir, TranscriptPath: path}, nil
 }
 
 // PrepareRuntimeLaunch verifies the exact imported cwd bucket before Cursor
@@ -88,10 +95,10 @@ func (p *Plugin) PrepareRuntimeLaunch(ctx context.Context, cfg ports.WorkspaceHo
 	if err := ctx.Err(); err != nil {
 		return err
 	}
-	if cfg.RestoreMode == ports.WorkspaceRestoreFresh || cfg.RestoreMode == ports.WorkspaceRestoreNative && cfg.ImportConfigDir == "" {
+	if cfg.ImportConfigDir == "" {
 		return nil
 	}
-	if cfg.NativeSessionID == "" || cfg.ImportConfigDir == "" {
+	if cfg.NativeSessionID == "" {
 		return errors.New("cursor imported restore is missing its exact native binding")
 	}
 	root, err := p.NativeSessionConfigDir(ctx, cfg.Env)

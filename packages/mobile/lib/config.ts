@@ -129,8 +129,17 @@ export function muxUrl(cfg: ServerConfig): string {
  * project list would be a bug in whichever disagreed.
  */
 export function machineIdentity(cfg: ServerConfig): string {
-	if (cfg.hostId) return `host.${cfg.hostId}`;
+	if (cfg.hostId) return hostMachineIdentity(cfg.hostId);
 	return `${cfg.secure ? "https" : "http"}.${cfg.host}.${cfg.httpPort}`;
+}
+
+/**
+ * The same identity for a paired machine named only by its host id, for when
+ * there is no verified config for it: in the background, or while its
+ * endpoints are being raced.
+ */
+export function hostMachineIdentity(hostId: string): string {
+	return `host.${hostId}`;
 }
 
 export function isConfigured(cfg: ServerConfig): boolean {

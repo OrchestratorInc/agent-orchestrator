@@ -1,6 +1,7 @@
 package sessionmanager
 
 import (
+	"bufio"
 	"bytes"
 	"cmp"
 	"context"
@@ -29,34 +30,20 @@ type ImportArchiveRefresher interface {
 	RefreshArchive(context.Context, domain.SessionRecord) error
 }
 
-// SetImportArchiveRefresher late-binds the import service. Nil skips optional
-// archive refresh, but cannot validate a fingerprinted first-open source.
+// SetImportArchiveRefresher late-binds the import service. Nil skips the archive refresh.
 func (m *Manager) SetImportArchiveRefresher(refresher ImportArchiveRefresher) {
 	m.importArchive = refresher
 }
 
 // refreshImportArchive keeps turns added in another app since the import in the
 // visible history. The copy taken at import remains when the source is unreadable.
-func (m *Manager) refreshImportArchive(ctx context.Context, rec domain.SessionRecord) error {
-	source := rec.Metadata.ImportSource
-	if source != nil && (source.ResumeNativeID != "" || source.ResumeCwd != "") {
-		return nil // Retain the archive paired with the checkpointed native copy.
-	}
-	required := rec.NeedsImportResume() && source.Fingerprint != "" && source.ResumeCwd == "" && source.ResumeNativeID == ""
+func (m *Manager) refreshImportArchive(ctx context.Context, rec domain.SessionRecord) {
 	if m.importArchive == nil {
-		if required {
-			return importNotice("native source snapshot validation is unavailable; retry after the import service is ready")
-		}
-		return nil
+		return
 	}
 	if err := m.importArchive.RefreshArchive(ctx, rec); err != nil {
-		if required {
-			m.logger.Warn("native import source snapshot could not be verified", "sessionID", rec.ID, "error", err)
-			return importNotice("the native source changed or could not be verified; retry, or remove this pending import and scan again")
-		}
 		m.logger.Warn("imported history refresh failed; keeping the import-time copy", "sessionID", rec.ID, "error", err)
 	}
-	return nil
 }
 
 // importReplayedThrough is the last sequence of the provider replay projected
@@ -84,32 +71,22 @@ var ErrSessionOpenElsewhere = errors.New("this is open elsewhere; close it there
 // setting even the default path logs a keychain user out, and an AO account's
 // folder links the computer's history, so replacing it would run the chat
 // under another login than the session's account.
-//
-// Kimi Code stores every session strictly under its home (KIMI_CODE_HOME, else
-// ~/.kimi-code); KIMI_SHARE_DIR is only the legacy kimi-cli migration source and
-// there is no sessions-dir or session-path override, so an imported Kimi chat
-// has to launch in the source home to be found. This stays equivalent to a
-// managed Kimi chat: AO's managed Kimi home only mirrors that same login
-// (ShareCredentials symlinks the managed credentials to it and seeds its config
-// from it), and standing instructions reach the ACP session through the
-// workspace .kimi-code/AGENTS.md and the first-prompt preamble, both independent
-// of the home. The config.toml lifecycle hooks are a TUI-only mechanism the ACP
-// chat driver does not use, so pointing at the source home drops nothing a chat
-// relied on.
 func (m *Manager) applyImportedConfigEnv(ctx context.Context, rec domain.SessionRecord, env map[string]string) {
 	source := rec.Metadata.ImportSource
 	if source == nil {
 		return
 	}
+	if model := strings.TrimSpace(rec.Metadata.Model); rec.Harness == domain.HarnessClaudeCode && model != "" && model != "default" && strings.TrimSpace(os.Getenv("ANTHROPIC_MODEL")) == "" {
+		if _, set := env["ANTHROPIC_MODEL"]; !set {
+			env["ANTHROPIC_MODEL"] = model
+		}
+	}
 	ref := importedNativeRef(source)
 	if rec.Metadata.ProviderConversationID != ref.NativeSessionID {
 		return
 	}
-	key := map[domain.AgentHarness]string{domain.HarnessClaudeCode: "CLAUDE_CONFIG_DIR", domain.HarnessCodex: "CODEX_HOME", domain.HarnessDroid: "FACTORY_HOME_OVERRIDE", domain.HarnessOpenCode: "OPENCODE_DATA_DIR", domain.HarnessPi: "PI_CODING_AGENT_DIR", domain.HarnessKimi: "KIMI_CODE_HOME", domain.HarnessCopilot: "COPILOT_HOME", domain.HarnessOMP: "PI_CODING_AGENT_DIR", domain.HarnessKimchi: "KIMCHI_CODING_AGENT_DIR", domain.HarnessQwen: "QWEN_HOME"}[rec.Harness]
 	hooks := importedHarnesses[rec.Harness]
-	if hooks.configEnvKey != "" {
-		key = hooks.configEnvKey
-	}
+	key := hooks.configEnvKey
 	if key == "" {
 		return
 	}
@@ -139,11 +116,6 @@ func (m *Manager) applyImportedConfigEnv(ctx context.Context, rec domain.Session
 		}
 	}
 	value := ref.ConfigDir
-	if rec.Harness == domain.HarnessDroid {
-		// FACTORY_HOME_OVERRIDE is a home override Droid appends ".factory" to,
-		// not the state dir itself, so point it at the parent of the config dir.
-		value = filepath.Dir(ref.ConfigDir)
-	}
 	if hooks.configValue != nil {
 		value = hooks.configValue(ref.ConfigDir)
 	}
@@ -151,16 +123,18 @@ func (m *Manager) applyImportedConfigEnv(ctx context.Context, rec domain.Session
 }
 
 // relocateImportedSession lets a provider that finds a session by the directory
-// it runs in (OMP, Qwen, Kimchi) load the imported session from AO's launch
-// directory, before the first resume. Providers that find a session by id from
-// any directory do not implement the relocator and need nothing.
+// it runs in load the imported session from AO's launch directory, before the
+// first resume: a preparer (AgentImportedSessionPreparer) checkpoints its own
+// copy, otherwise a relocator (AgentImportedSessionRelocator) places one.
+// Providers that find a session by id from any directory implement neither and
+// need nothing.
 //
 // It records the launch directory as ResumeCwd, and every later launch of the
 // session is pinned to it (pinnedImportLaunchPath), so the provider keeps
 // finding the same copy, which then holds AO's turns. If the copy is still not
 // where the provider looks, the required first-open replay comes back without
 // messages and the import fails rather than continuing an empty chat.
-func (m *Manager) relocateImportedSession(ctx context.Context, rec domain.SessionRecord, launchPath string, launchEnv ...map[string]string) (domain.SessionRecord, error) {
+func (m *Manager) relocateImportedSession(ctx context.Context, rec domain.SessionRecord, launchPath string, env map[string]string) (domain.SessionRecord, error) {
 	source := rec.Metadata.ImportSource
 	if source == nil || m.agents == nil {
 		return rec, nil
@@ -168,10 +142,6 @@ func (m *Manager) relocateImportedSession(ctx context.Context, rec domain.Sessio
 	agent, ok := m.agents.Agent(rec.Harness)
 	if !ok {
 		return rec, nil
-	}
-	var env map[string]string
-	if len(launchEnv) > 0 {
-		env = launchEnv[0]
 	}
 	if preparer, ok := agent.(ports.AgentImportedSessionPreparer); ok {
 		prepared, err := m.prepareImportedNativeSession(ctx, rec, launchPath, preparer, env)
@@ -187,11 +157,13 @@ func (m *Manager) relocateImportedSession(ctx context.Context, rec domain.Sessio
 		TranscriptPath:    rec.Metadata.NativeTranscriptPath,
 		SourceCWD:         source.CWD,
 		LaunchCWD:         launchPath,
+		Chat:              domain.NormalizeSessionMode(rec.Mode) == domain.SessionModeChat,
 		SourceFingerprint: source.Fingerprint,
+		DataDir:           m.dataDir,
 		Env:               maps.Clone(env),
 	})
 	if err != nil {
-		return rec, fmt.Errorf("%w: %w", importNotice("AO could not prepare this conversation for its workspace. See the AO daemon log for details."), agentlaunch.RedactError(err, env))
+		return rec, fmt.Errorf("%w: %w", importNotice("Orchestrator could not prepare this conversation for its workspace. See the Orchestrator daemon log for details."), agentlaunch.RedactError(err, env))
 	}
 	if source.ResumeCwd == launchPath {
 		return rec, nil
@@ -207,6 +179,34 @@ func (m *Manager) relocateImportedSession(ctx context.Context, rec domain.Sessio
 	}
 	rec.Metadata.ImportSource = &next
 	return rec, nil
+}
+
+// importLaunch returns the folder an imported session launches in: the pinned
+// folder of a relocated import, else the subfolder it ran in. With prepare, the
+// first resume also relocates the provider's copy there.
+func (m *Manager) importLaunch(ctx context.Context, operation string, rec domain.SessionRecord, workspace string, env map[string]string, prepare bool) (domain.SessionRecord, string, error) {
+	source := rec.Metadata.ImportSource
+	if source == nil {
+		return rec, workspace, nil
+	}
+	launchPath := workspace
+	if source.ResumeCwd != "" {
+		pinned, err := pinnedImportLaunchPath(workspace, source.ResumeCwd)
+		if err != nil {
+			return rec, "", relaunchFailed("import launch directory", fmt.Errorf("%s %s: %w", operation, rec.ID, err))
+		}
+		launchPath = pinned
+	} else if source.WorkingSubdir != "" {
+		launchPath = importLaunchPath(workspace, source.WorkingSubdir)
+	}
+	if !prepare {
+		return rec, launchPath, nil
+	}
+	rec, err := m.relocateImportedSession(ctx, rec, launchPath, env)
+	if err != nil {
+		return rec, "", relaunchFailed("import relocation", fmt.Errorf("%s %s: %w", operation, rec.ID, err))
+	}
+	return rec, launchPath, nil
 }
 
 // pinnedImportLaunchPath is the launch directory of a relocated import: the one
@@ -237,13 +237,9 @@ func sameDirectory(a, b string) bool {
 // holds the conversation: Codex keeps a writer lock per loaded thread, Claude
 // Code registers each live session, and older writers keep the transcript open.
 //
-// Pi has no such signal: it keeps no writer lock or live-session registry and
-// does not hold its session file open (see writableTranscriptOwner), and
-// pi-acp's session/load does not refuse a second writer. So a Pi conversation
-// still open in the Pi CLI/TUI is not detected, and importing it can interleave
-// turns with the other writer. This matches the documented posture for
-// lock-less providers; a reliable per-session Pi owner signal would be needed
-// to protect it.
+// Lock-less providers such as Pi and Kimchi have no such signal, so a
+// conversation still open in their CLI/TUI is not detected and importing it
+// can interleave turns with the other writer (see writableTranscriptOwner).
 func importOwnedElsewhere(ctx context.Context, rec domain.SessionRecord) bool {
 	source := rec.Metadata.ImportSource
 	if source == nil {
@@ -263,21 +259,13 @@ func importOwnedElsewhere(ctx context.Context, rec domain.SessionRecord) bool {
 		}
 	case domain.HarnessQwen:
 		return qwenSessionLive(ctx, source.ConfigDir, source.NativeID, rec.Metadata.WorkspacePath)
-	case domain.HarnessKimi:
-		// Kimi publishes a per-session lock file holding the live writer's pid;
-		// its transcript is append-open-close so it is never held open for lsof.
-		return kimiSessionLocked(ctx, source.ConfigDir, source.NativeID)
 	case domain.HarnessOMP:
 		if ompSessionLocked(ctx, source.ConfigDir, source.NativeID) {
 			return true
 		}
 	case domain.HarnessKimchi:
-		// Kimchi is a Pi fork with the same lock-less posture: no writer lock or
-		// live-session registry, its transcript is append-open-close so lsof
-		// never sees a live writer, and kimchi-acp's session/load does not refuse
-		// a second writer. An imported Kimchi chat still open in the Kimchi
-		// CLI/TUI is therefore not detected; see the Pi note above. AO resumes
-		// from its own relocated copy of the transcript, not the original.
+		// Lock-less like Pi (see above); AO resumes from its own relocated copy
+		// of the transcript, not the original.
 		return false
 	case domain.HarnessOpenCode:
 		// OpenCode keeps all conversations in one shared SQLite store with no
@@ -309,8 +297,6 @@ func adoptedOwnedElsewhere(ctx context.Context, rec domain.SessionRecord) bool {
 		return providerLockHeld(filepath.Join(source.ConfigDir, "thread-writer-locks", nativeID+".lock"))
 	case domain.HarnessQwen:
 		return qwenSessionLive(ctx, source.ConfigDir, nativeID, rec.Metadata.WorkspacePath)
-	case domain.HarnessKimi:
-		return kimiSessionLocked(ctx, source.ConfigDir, nativeID)
 	case domain.HarnessCopilot:
 		// Copilot has no process-bound live-session registry. A writable log
 		// descriptor is positive evidence; idle clients cannot always be detected.
@@ -319,6 +305,71 @@ func adoptedOwnedElsewhere(ctx context.Context, rec domain.SessionRecord) bool {
 		return ompSessionLocked(ctx, source.ConfigDir, nativeID)
 	}
 	return false
+}
+
+// ImportedChatWrittenElsewhere reports whether another Claude Code process has
+// an imported chat open, and otherwise whether one wrote turns to its
+// transcript after since.
+func (m *Manager) ImportedChatWrittenElsewhere(ctx context.Context, rec domain.SessionRecord, since time.Time) (open, wrote bool) {
+	if rec.Metadata.ImportSource == nil || rec.Harness != domain.HarnessClaudeCode {
+		return false, false
+	}
+	// ImportSource remains as provenance after an edit forks the conversation
+	// or a provider switch replaces it. Those providers no longer share the
+	// imported transcript, whose path is intentionally cleared at that boundary.
+	if current := rec.Metadata.ProviderConversationID; current != "" && current != importedNativeRef(rec.Metadata.ImportSource).NativeSessionID {
+		return false, false
+	}
+	if adoptedOwnedElsewhere(ctx, rec) {
+		return true, false
+	}
+	return false, !since.IsZero() && claudeTurnsWrittenElsewhere(ctx, rec.Metadata.NativeTranscriptPath, rec.Metadata.WorkspacePath, since)
+}
+
+func claudeTurnsWrittenElsewhere(ctx context.Context, path, workspace string, since time.Time) bool {
+	// Unknown transcript state cannot prove the live provider is current.
+	if path == "" || workspace == "" {
+		return true
+	}
+	file, err := os.Open(path)
+	if err != nil {
+		return true
+	}
+	defer func() { _ = file.Close() }()
+	info, err := file.Stat()
+	if err != nil || !info.Mode().IsRegular() {
+		return true
+	}
+	if !info.ModTime().After(since) {
+		return false
+	}
+	// A tool result or image can exceed a fixed tail window, and our own
+	// output can push an external turn out of it. Read complete records from
+	// the changed file, keeping only one record in memory at a time.
+	reader := bufio.NewReader(file)
+	for {
+		if ctx.Err() != nil {
+			return true
+		}
+		line, readErr := reader.ReadBytes('\n')
+		if readErr != nil && !errors.Is(readErr, io.EOF) {
+			return true
+		}
+		if len(line) == 0 {
+			return false
+		}
+		var record struct {
+			Type      string    `json:"type"`
+			CWD       string    `json:"cwd"`
+			Timestamp time.Time `json:"timestamp"`
+		}
+		if json.Unmarshal(line, &record) != nil || record.Type != "user" && record.Type != "assistant" {
+			continue
+		}
+		if record.CWD != "" && record.Timestamp.After(since) && !pathWithin(workspace, record.CWD) {
+			return true
+		}
+	}
 }
 
 // claudeSessionLive reads Claude Code's live-session registry. A launch inside
@@ -338,6 +389,7 @@ func claudeSessionLive(ctx context.Context, dir, nativeID, ownWorkspace string) 
 			SessionID string `json:"sessionId"`
 			CWD       string `json:"cwd"`
 			StartedAt int64  `json:"startedAt"`
+			Version   string `json:"version"`
 		}
 		if err != nil || json.Unmarshal(body, &live) != nil || live.SessionID != nativeID || live.PID <= 0 {
 			continue
@@ -345,7 +397,7 @@ func claudeSessionLive(ctx context.Context, dir, nativeID, ownWorkspace string) 
 		if ownWorkspace != "" && pathWithin(ownWorkspace, live.CWD) {
 			continue
 		}
-		if claudeProcessLive(ctx, live.PID, live.StartedAt) {
+		if claudeProcessLive(ctx, live.PID, live.StartedAt, live.Version) {
 			return true
 		}
 	}
@@ -355,13 +407,13 @@ func claudeSessionLive(ctx context.Context, dir, nativeID, ownWorkspace string) 
 // claudeProcessLive checks a registry entry against the process now holding its
 // PID. Registry files outlive crashes and PIDs are reused, so the PID must still
 // be a Claude process, and one that started before it registered the session.
-func claudeProcessLive(ctx context.Context, pid int, registeredAtMillis int64) bool {
+func claudeProcessLive(ctx context.Context, pid int, registeredAtMillis int64, version string) bool {
 	if !processalive.Alive(pid) {
 		return false
 	}
 	name, started, ok := processStart(ctx, pid)
 	name = strings.ToLower(name)
-	if !ok || !strings.Contains(name, "claude") && !strings.Contains(name, "node") {
+	if !ok || !strings.Contains(name, "claude") && !strings.Contains(name, "node") && (version == "" || !strings.EqualFold(name, version)) {
 		return false
 	}
 	return registeredAtMillis <= 0 || !started.After(time.UnixMilli(registeredAtMillis))
@@ -370,13 +422,10 @@ func claudeProcessLive(ctx context.Context, pid int, registeredAtMillis int64) b
 // writableTranscriptOwner is the fallback for writers without a lock or registry.
 // Read-only descriptors are not ownership.
 //
-// It cannot see a live Pi owner: the pi CLI/TUI and pi-acp persist with
-// appendFileSync/writeFileSync, opening and closing the session file for each
-// entry rather than holding it open, so lsof reports a Pi writer only during
-// the instant of a write. Pi also keeps no writer lock or live-session
-// registry, and pi-acp's session/load does not refuse a second writer, so an
-// imported Pi conversation that is still open elsewhere is not detected. See
-// importOwnedElsewhere.
+// It cannot see a live Pi or Kimchi owner: they open and close the session
+// file for each entry rather than holding it open, keep no writer lock or
+// live-session registry, and their ACP session/load does not refuse a second
+// writer. See importOwnedElsewhere.
 func writableTranscriptOwner(ctx context.Context, path string) bool {
 	if path == "" {
 		return false
@@ -425,9 +474,6 @@ func importGit(ctx context.Context, path string, args ...string) ([]byte, error)
 }
 
 func (m *Manager) prepareImportedWorkspace(ctx context.Context, rec domain.SessionRecord, project domain.ProjectRecord) (domain.SessionRecord, error) {
-	if rec.Harness == domain.HarnessOpenCode || rec.Harness == domain.HarnessKimi || rec.Harness == domain.HarnessDroid {
-		return rec, fmt.Errorf("%w: %w", ports.ErrChatResumeFailed, importNotice("this harness cannot yet resume an import safely in AO's workspace; the imported history is preserved"))
-	}
 	if importOwnedElsewhere(ctx, rec) {
 		return rec, ErrSessionOpenElsewhere
 	}
@@ -1146,9 +1192,6 @@ func copyImportedWorkspace(ctx context.Context, source, destination string, over
 			!slices.Equal(before.changed, after.changed) || !maps.Equal(before.facts, after.facts) {
 			return importNotice("source files changed while copying; retry")
 		}
-	}
-	if completionMarker == "" {
-		return nil
 	}
 	if _, err := os.Lstat(completionMarker); !errors.Is(err, os.ErrNotExist) {
 		return importNotice("source contains a reserved workspace transfer marker")

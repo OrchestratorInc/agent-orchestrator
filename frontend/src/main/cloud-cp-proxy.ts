@@ -38,6 +38,11 @@ export function cloudCpStreamChannel(streamId: string): string {
 /** Only CP API paths may be proxied; anything else is rejected before fetch. */
 const API_PREFIX = "/api/cloud/v1";
 
+/** The share link routes, read-only through this proxy. */
+const SHARE_LINKS_ROUTE = "/me/artifact-shares";
+/** A cloud session's file is shared through POST .../sessions/{id}/artifacts/share. */
+const SESSION_FILE_SHARE_ROUTE = /\/sessions\/[^/]+\/artifacts\/share\/?$/;
+
 /** Upper bound on live SSE streams per renderer WebContents. */
 export const MAX_STREAMS_PER_WEBCONTENTS = 8;
 
@@ -104,7 +109,8 @@ export interface CloudCpStreamSender {
 }
 
 export interface CloudCpProxy {
-	request(init: unknown): Promise<CloudCpProxyResponse>;
+	/** internal is for the main process only: renderer requests never carry it. */
+	request(init: unknown, internal?: { hostTokens: true; signal?: AbortSignal }): Promise<CloudCpProxyResponse>;
 	/** sender is the WebContents that asked: its requests end when it goes away. */
 	requestBinary(init: unknown, sender?: CloudCpBinarySender): Promise<CloudCpProxyBinaryResponse>;
 	/** Abort one of a WebContents' binary requests; another's is never touched. */
@@ -232,7 +238,7 @@ function validateRequestTarget(init: unknown): CloudCpProxyRequestInit | CloudCp
  * resolves dot segments (including percent-encoded ones) and backslashes, so
  * a raw-string prefix check alone would let "/api/cloud/v1/../../x" escape.
  */
-function resolveTargetUrl(init: Pick<CloudCpProxyRequestInit, "baseUrl" | "path">): string {
+function resolveTargetUrl(init: Pick<CloudCpProxyRequestInit, "baseUrl" | "path" | "method">): string {
 	const base = new URL(init.baseUrl);
 	const basePath = base.pathname.replace(/\/+$/, "");
 	const target = new URL(base.origin + basePath + init.path);
@@ -243,7 +249,43 @@ function resolveTargetUrl(init: Pick<CloudCpProxyRequestInit, "baseUrl" | "path"
 	if (!inBounds) {
 		throw invalid(`path must stay under ${API_PREFIX} after URL normalization.`);
 	}
+	// Share links are published, updated and revoked only through the main
+	// process's cloudShare flow, which reads files only inside a session's
+	// artifacts folder and publishes only what its inspection showed; through
+	// this proxy the renderer may only read them.
+	const sharePrefix = `${expectedPrefix}${SHARE_LINKS_ROUTE}`;
+	const shareRoute = target.pathname === sharePrefix || target.pathname.startsWith(`${sharePrefix}/`) ||
+		SESSION_FILE_SHARE_ROUTE.test(decodeURIComponent(target.pathname));
+	if (shareRoute && !["GET", "HEAD"].includes(init.method.toUpperCase())) {
+		throw invalid("share links can only be changed from the desktop's share flow.");
+	}
 	return target.toString();
+}
+
+const ACCOUNT_HOSTS_PATH = /\/api\/cloud\/v1\/me\/hosts(?:\/|$)/;
+
+/** The account's machine directory, whose host tokens stay in the main process. */
+function isAccountHostsUrl(url: string): boolean {
+	const { pathname } = new URL(url);
+	try {
+		return ACCOUNT_HOSTS_PATH.test(decodeURIComponent(pathname));
+	} catch {
+		return ACCOUNT_HOSTS_PATH.test(pathname);
+	}
+}
+
+function withoutHostTokens(body: string): string {
+	let parsed: unknown;
+	try {
+		parsed = JSON.parse(body);
+	} catch {
+		return body;
+	}
+	if (typeof parsed !== "object" || parsed === null) return body;
+	const record = parsed as { token?: unknown; hosts?: unknown };
+	delete record.token;
+	if (Array.isArray(record.hosts)) for (const host of record.hosts) if (typeof host === "object" && host !== null) delete (host as { token?: unknown }).token;
+	return JSON.stringify(record);
 }
 
 function buildHeaders(requested: Record<string, string> | undefined, token: string): Headers {
@@ -266,7 +308,7 @@ function unauthorizedResponse(): CloudCpProxyResponse {
 		body: JSON.stringify({
 			error: "unauthorized",
 			code: "no_token",
-			message: "No AO Cloud session is available. Sign in and try again.",
+			message: "No Orchestrator Cloud session is available. Sign in and try again.",
 		}),
 	};
 }
@@ -295,16 +337,16 @@ interface ActiveStream {
  * baseUrl, but only the configured one is ever dialed: any other is refused.
  */
 export async function pinnedTargetUrl(
-	init: Pick<CloudCpProxyRequestInit, "baseUrl" | "path">,
+	init: Pick<CloudCpProxyRequestInit, "baseUrl" | "path" | "method">,
 	controlPlaneUrl: ControlPlaneUrlResolver,
 ): Promise<string> {
 	const configured = await controlPlaneUrl();
-	if (!configured) throw invalid("no AO Cloud control plane is configured.");
+	if (!configured) throw invalid("no Orchestrator Cloud control plane is configured.");
 	parseCloudBaseUrl(configured);
 	if (!sameControlPlaneUrl(init.baseUrl, configured)) {
-		throw invalid("baseUrl is not the configured AO Cloud control plane.");
+		throw invalid("baseUrl is not the configured Orchestrator Cloud control plane.");
 	}
-	return resolveTargetUrl({ baseUrl: configured, path: init.path });
+	return resolveTargetUrl({ baseUrl: configured, path: init.path, method: init.method });
 }
 
 export function createCloudCpProxy(getDataDir: () => string, options: CloudCpProxyOptions): CloudCpProxy {
@@ -370,9 +412,10 @@ export function createCloudCpProxy(getDataDir: () => string, options: CloudCpPro
 		}
 	}
 
-	async function request(init: unknown): Promise<CloudCpProxyResponse> {
+	async function request(init: unknown, internal?: { hostTokens: true; signal?: AbortSignal }): Promise<CloudCpProxyResponse> {
 		const valid = validateInit(init);
 		const url = await pinnedTargetUrl(valid, options.controlPlaneUrl);
+		const redact = internal?.hostTokens !== true && isAccountHostsUrl(url);
 		const token = await getCloudAccessToken(getDataDir());
 		// 401-shaped without touching the network, so the renderer client's
 		// standard auth-error path handles signed-out exactly like a server 401.
@@ -381,12 +424,14 @@ export function createCloudCpProxy(getDataDir: () => string, options: CloudCpPro
 			method: valid.method.toUpperCase(),
 			headers: buildHeaders(valid.headers, token),
 			body: valid.body,
+			signal: internal?.signal,
 		});
 		const headers: Record<string, string> = {};
 		response.headers.forEach((value, key) => {
 			headers[key] = value;
 		});
-		return { status: response.status, headers, body: await response.text() };
+		const body = await response.text();
+		return { status: response.status, headers, body: redact ? withoutHostTokens(body) : body };
 	}
 
 	// In-flight binary requests by WebContents and request id, so a cancel
@@ -420,11 +465,12 @@ export function createCloudCpProxy(getDataDir: () => string, options: CloudCpPro
 	async function requestBinary(init: unknown, sender?: CloudCpBinarySender): Promise<CloudCpProxyBinaryResponse> {
 		const valid = validateBinaryInit(init);
 		const url = await pinnedTargetUrl(valid, options.controlPlaneUrl);
+		if (isAccountHostsUrl(url)) throw invalid("the account's machines are read through cloudCp:request.");
 		// Over the channel's limit is a refusal with a message the person can
 		// read, not a request.
 		if (valid.body !== undefined && valid.body.byteLength > MAX_CLOUD_CP_BINARY_BYTES) {
 			return binaryError(413, CLOUD_CP_BINARY_TOO_LARGE,
-				`The file is larger than ${MAX_CLOUD_CP_BINARY_BYTES / MiB} MiB, the most the app sends to AO Cloud at once.`);
+				`The file is larger than ${MAX_CLOUD_CP_BINARY_BYTES / MiB} MiB, the most the app sends to Orchestrator Cloud at once.`);
 		}
 		const token = await getCloudAccessToken(getDataDir());
 		if (token === null || token === "") {
@@ -449,7 +495,7 @@ export function createCloudCpProxy(getDataDir: () => string, options: CloudCpPro
 				headers[key] = value;
 			});
 			const tooLarge = () => binaryError(413, CLOUD_CP_BINARY_TOO_LARGE,
-				`The file is larger than ${MAX_CLOUD_CP_BINARY_BYTES / MiB} MiB, the most the app takes from AO Cloud at once.`);
+				`The file is larger than ${MAX_CLOUD_CP_BINARY_BYTES / MiB} MiB, the most the app takes from Orchestrator Cloud at once.`);
 			const declared = Number(response.headers.get("content-length"));
 			if (Number.isFinite(declared) && declared > MAX_CLOUD_CP_BINARY_BYTES) {
 				await response.body?.cancel().catch(() => undefined);
@@ -461,7 +507,7 @@ export function createCloudCpProxy(getDataDir: () => string, options: CloudCpPro
 		} catch (error) {
 			if (timeout.aborted && !cancelled.signal.aborted) {
 				return binaryError(504, CLOUD_CP_BINARY_TIMEOUT,
-					`AO Cloud did not answer within ${Math.round(timeoutMs / 1000)} seconds. Try again.`);
+					`Orchestrator Cloud did not answer within ${Math.round(timeoutMs / 1000)} seconds. Try again.`);
 			}
 			throw error;
 		} finally {
@@ -472,13 +518,14 @@ export function createCloudCpProxy(getDataDir: () => string, options: CloudCpPro
 	async function openStream(sender: CloudCpStreamSender, init: unknown): Promise<{ streamId: string }> {
 		const valid = validateInit(init);
 		const url = await pinnedTargetUrl(valid, options.controlPlaneUrl);
+		if (isAccountHostsUrl(url)) throw invalid("the account's machines are read through cloudCp:request.");
 		const ids = trackSender(sender);
 		if (ids.size >= MAX_STREAMS_PER_WEBCONTENTS) {
 			throw streamError(429, `This window already has ${MAX_STREAMS_PER_WEBCONTENTS} open cloud streams.`);
 		}
 		const token = await getCloudAccessToken(getDataDir());
 		if (token === null || token === "") {
-			throw streamError(401, "No AO Cloud session is available. Sign in and try again.");
+			throw streamError(401, "No Orchestrator Cloud session is available. Sign in and try again.");
 		}
 		const controller = new AbortController();
 		const response = await doFetch(url, {
@@ -525,7 +572,7 @@ export function createCloudCpProxy(getDataDir: () => string, options: CloudCpPro
 	return { request, requestBinary, cancelBinary, openStream, closeStream };
 }
 
-export function installCloudCpProxy(getDataDir: () => string, controlPlaneUrl: ControlPlaneUrlResolver): void {
+export function installCloudCpProxy(getDataDir: () => string, controlPlaneUrl: ControlPlaneUrlResolver): CloudCpProxy {
 	const proxy = createCloudCpProxy(getDataDir, { controlPlaneUrl });
 	ipcMain.handle(CLOUD_CP_REQUEST_CHANNEL, (_event, init: unknown) => proxy.request(init));
 	ipcMain.handle(CLOUD_CP_REQUEST_BINARY_CHANNEL, (event, init: unknown) => proxy.requestBinary(init, event.sender));
@@ -536,4 +583,5 @@ export function installCloudCpProxy(getDataDir: () => string, controlPlaneUrl: C
 	ipcMain.on(CLOUD_CP_CLOSE_STREAM_CHANNEL, (event, streamId: unknown) => {
 		proxy.closeStream(event.sender, streamId);
 	});
+	return proxy;
 }

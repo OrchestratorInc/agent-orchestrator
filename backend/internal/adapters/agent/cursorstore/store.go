@@ -37,7 +37,6 @@ type Archive struct {
 	ID       string
 	CWD      string
 	Title    string
-	Model    string
 	Updated  time.Time
 	Messages []Message
 }
@@ -46,7 +45,6 @@ type metadata struct {
 	ID      string `json:"agentId"`
 	Root    string `json:"latestRootBlobId"`
 	Name    string `json:"name"`
-	Model   string `json:"lastUsedModel"`
 	Created int64  `json:"createdAt"`
 }
 
@@ -69,6 +67,52 @@ func SessionPath(root, cwd, id string) (string, error) {
 	}
 	sum := md5.Sum([]byte(resolved)) //nolint:gosec // Native compatibility, not cryptography.
 	return filepath.Join(root, "chats", hex.EncodeToString(sum[:]), id, "store.db"), nil
+}
+
+// Layout selects where Cursor looks up a chat it resumes. The terminal CLI keys
+// chats by the md5 of its launch directory; `cursor-agent acp` keeps them in
+// acp-sessions/<id> and loads them by id, running tools in the requested cwd.
+// Both read the same SQLite store format.
+type Layout int
+
+// The two places Cursor resumes a chat from.
+const (
+	// LayoutTerminal is the terminal CLI's chats/<md5 of cwd>/<id> layout.
+	LayoutTerminal Layout = iota
+	// LayoutACP is `cursor-agent acp`'s acp-sessions/<id> layout.
+	LayoutACP
+)
+
+// ACPSessionPath matches `cursor-agent acp`'s acp-sessions/<id>/store.db layout.
+func ACPSessionPath(root, id string) (string, error) {
+	if _, err := uuid.Parse(id); err != nil || filepath.Base(id) != id {
+		return "", errors.New("invalid cursor session id")
+	}
+	root, err := providerRoot(root)
+	if err != nil {
+		return "", err
+	}
+	return filepath.Join(root, "acp-sessions", id, "store.db"), nil
+}
+
+// SessionID is the id the copy of native chat id resumes under. The terminal
+// layout keys copies by launch directory, so they keep the native id. ACP keys
+// them by id alone, so each launch directory and source version gets its own
+// stable id: a second import of the same chat, from this or another AO data
+// directory, must not collide with the first copy, which holds that import's
+// later turns.
+func (l Layout) SessionID(id, cwd, expected string) string {
+	if l != LayoutACP {
+		return id
+	}
+	return uuid.NewSHA1(uuid.NameSpaceURL, []byte("ao-cursor-acp\x00"+id+"\x00"+cwd+"\x00"+expected)).String()
+}
+
+func (l Layout) path(root, cwd, id, expected string) (string, error) {
+	if l == LayoutACP {
+		return ACPSessionPath(root, l.SessionID(id, cwd, expected))
+	}
+	return SessionPath(root, cwd, id)
 }
 
 func providerRoot(root string) (string, error) {
@@ -216,7 +260,7 @@ func read(ctx context.Context, tx *sql.Tx, path string) (Archive, error) {
 	if !filepath.IsAbs(sidecar.CWD) {
 		return Archive{}, errors.New("cursor native workspace is missing")
 	}
-	out := Archive{ID: meta.ID, CWD: sidecar.CWD, Title: meta.Name, Model: meta.Model, Updated: time.UnixMilli(sidecar.Updated)}
+	out := Archive{ID: meta.ID, CWD: sidecar.CWD, Title: meta.Name, Updated: time.UnixMilli(sidecar.Updated)}
 	if sidecar.Updated == 0 {
 		out.Updated = time.UnixMilli(meta.Created)
 	}
@@ -306,23 +350,20 @@ func Find(ctx context.Context, root, id string) (string, bool, error) {
 	return found, found != "", nil
 }
 
-// Copy publishes a private native snapshot once, leaving the source unchanged.
-func Copy(ctx context.Context, root, source, launchCWD string) (string, error) {
-	return CopySelected(ctx, root, source, launchCWD, "")
+// CopySelectedIn publishes a private native snapshot once, where layout's
+// resume looks for it, leaving the source unchanged. It verifies the discovery
+// evidence before snapshotting and before publishing the completed copy; empty
+// evidence supports old imports.
+func CopySelectedIn(ctx context.Context, layout Layout, root, source, launchCWD, expected string) (string, error) {
+	return copyIn(ctx, layout, root, source, launchCWD, expected, nil)
 }
 
-// CopySelected additionally verifies the discovery evidence before snapshotting
-// and before publishing the completed copy. Empty evidence supports old imports.
-func CopySelected(ctx context.Context, root, source, launchCWD, expected string) (string, error) {
-	return copyWithPublisher(ctx, root, source, launchCWD, expected, nil)
-}
-
-func copyWithPublisher(ctx context.Context, root, source, launchCWD, expected string, publish func(string, string) error) (string, error) {
+func copyIn(ctx context.Context, layout Layout, root, source, launchCWD, expected string, publish func(string, string) error) (string, error) {
 	root, err := providerRoot(root)
 	if err != nil {
 		return "", err
 	}
-	if target, found, err := PreparedCopy(ctx, root, source, launchCWD, filepath.Base(filepath.Dir(source)), expected); err != nil || found {
+	if target, found, err := PreparedCopyIn(ctx, layout, root, source, launchCWD, filepath.Base(filepath.Dir(source)), expected); err != nil || found {
 		return target, err
 	}
 	if err := checkFingerprint(ctx, root, source, expected); err != nil {
@@ -338,7 +379,8 @@ func copyWithPublisher(ctx context.Context, root, source, launchCWD, expected st
 	if err != nil {
 		return "", err
 	}
-	target, err := SessionPath(root, launchCWD, archive.ID)
+	targetID := layout.SessionID(archive.ID, launchCWD, expected)
+	target, err := layout.path(root, launchCWD, archive.ID, expected)
 	if err != nil {
 		return "", err
 	}
@@ -351,7 +393,7 @@ func copyWithPublisher(ctx context.Context, root, source, launchCWD, expected st
 		return "", err
 	}
 	if existing, err := Read(ctx, root, target); err == nil {
-		if existing.ID != archive.ID || existing.CWD != launchCWD {
+		if existing.ID != targetID || existing.CWD != launchCWD {
 			return "", errors.New("cursor target identity differs")
 		}
 		return target, nil
@@ -369,7 +411,7 @@ func copyWithPublisher(ctx context.Context, root, source, launchCWD, expected st
 	if err := file.Close(); err != nil {
 		return "", err
 	}
-	if err := copyRows(ctx, tx, staged); err != nil {
+	if err := copyRows(ctx, tx, staged, targetID); err != nil {
 		return "", err
 	}
 	provider, err := os.OpenRoot(root)
@@ -438,7 +480,8 @@ func copyWithPublisher(ctx context.Context, root, source, launchCWD, expected st
 	return target, nil
 }
 
-func copyRows(ctx context.Context, source *sql.Tx, path string) error {
+// copyRows copies the store, recording id as the chat's own agentId.
+func copyRows(ctx context.Context, source *sql.Tx, path, id string) error {
 	db, err := sql.Open("sqlite", path)
 	if err != nil {
 		return err
@@ -453,16 +496,16 @@ func copyRows(ctx context.Context, source *sql.Tx, path string) error {
 	}
 	defer func() { _ = target.Rollback() }()
 	var total int64
-	if err := copyTableRows(ctx, source, target, true, &total); err != nil {
+	if err := copyTableRows(ctx, source, target, true, id, &total); err != nil {
 		return err
 	}
-	if err := copyTableRows(ctx, source, target, false, &total); err != nil {
+	if err := copyTableRows(ctx, source, target, false, id, &total); err != nil {
 		return err
 	}
 	return target.Commit()
 }
 
-func copyTableRows(ctx context.Context, source, target *sql.Tx, metadata bool, total *int64) error {
+func copyTableRows(ctx context.Context, source, target *sql.Tx, metadata bool, id string, total *int64) error {
 	selectSQL := "SELECT id, CASE WHEN length(data)<=67108864 THEN data END FROM blobs"
 	insertSQL := "INSERT INTO blobs VALUES (?,?)"
 	if metadata {
@@ -475,22 +518,57 @@ func copyTableRows(ctx context.Context, source, target *sql.Tx, metadata bool, t
 	}
 	defer func() { _ = rows.Close() }()
 	for rows.Next() {
-		var id string
+		var key string
 		var data []byte
-		if err := rows.Scan(&id, &data); err != nil {
+		if err := rows.Scan(&key, &data); err != nil {
 			return err
 		}
-		*total += int64(len(id) + len(data))
+		*total += int64(len(key) + len(data))
 		if data == nil || *total > maxStore {
 			return errors.New("cursor native snapshot exceeds import limit")
 		}
 		var value any = data
 		if metadata {
-			value = string(data)
+			text := string(data)
+			if key == "0" {
+				var err error
+				if text, err = withAgentID(text, id); err != nil {
+					return err
+				}
+			}
+			value = text
 		}
-		if _, err := target.ExecContext(ctx, insertSQL, id, value); err != nil {
+		if _, err := target.ExecContext(ctx, insertSQL, key, value); err != nil {
 			return err
 		}
 	}
 	return rows.Err()
+}
+
+// withAgentID rewrites the hex-encoded chat record's agentId and keeps every
+// other field Cursor stored.
+func withAgentID(encoded, id string) (string, error) {
+	body, err := hex.DecodeString(encoded)
+	if err != nil {
+		return "", err
+	}
+	var record map[string]json.RawMessage
+	if err := json.Unmarshal(body, &record); err != nil {
+		return "", err
+	}
+	var current string
+	if err := json.Unmarshal(record["agentId"], &current); err != nil {
+		return "", errors.New("cursor native identity is missing")
+	}
+	if current == id {
+		return encoded, nil
+	}
+	if record["agentId"], err = json.Marshal(id); err != nil {
+		return "", err
+	}
+	body, err = json.Marshal(record)
+	if err != nil {
+		return "", err
+	}
+	return hex.EncodeToString(body), nil
 }

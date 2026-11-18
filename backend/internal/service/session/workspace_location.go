@@ -39,7 +39,7 @@ func (s *Service) WorkspaceLocation(ctx context.Context, id domain.SessionID) (s
 	}
 	// These won't clear on their own, so a 500 would only make the caller retry forever.
 	if errors.Is(err, fs.ErrPermission) || errors.Is(err, syscall.ENOTDIR) || errors.Is(err, syscall.ELOOP) {
-		return "", apierr.Conflict("SESSION_WORKSPACE_UNREADABLE", "AO can't read this session's folder. Check its permissions.", nil)
+		return "", apierr.Conflict("SESSION_WORKSPACE_UNREADABLE", "Orchestrator can't read this session's folder. Check its permissions.", nil)
 	}
 	if err != nil {
 		return "", fmt.Errorf("stat session %s workspace: %w", id, err)
@@ -55,7 +55,17 @@ func (s *Service) ArtifactLocation(ctx context.Context, id domain.SessionID) (st
 		return "", fmt.Errorf("get session %s artifact dir: %w", id, err)
 	}
 	if !ok {
-		return "", apierr.NotFound("SESSION_NOT_FOUND", "Unknown session")
+		// A deleted session's kept artifacts stay in its directory.
+		keeper, canKeep := s.store.(keptArtifactStore)
+		if !canKeep {
+			return "", apierr.NotFound("SESSION_NOT_FOUND", "Unknown session")
+		}
+		if _, kept, err := keeper.GetKeptArtifactSession(ctx, id); err != nil {
+			return "", err
+		} else if !kept {
+			return "", apierr.NotFound("SESSION_NOT_FOUND", "Unknown session")
+		}
+		record.ID = id
 	}
 	dir := strings.TrimSpace(record.Metadata.ArtifactDir)
 	if dir == "" {

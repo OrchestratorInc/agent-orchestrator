@@ -2,7 +2,6 @@ package sessionimport
 
 import (
 	"context"
-	"errors"
 	"os"
 	"path/filepath"
 	"strings"
@@ -26,8 +25,8 @@ func TestAiderProjectHistoryDiscoveryAndNativeMessages(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if groups[0].fingerprint == "" || groups[0].fingerprint != got.fingerprint {
-		t.Fatalf("native snapshot was not fingerprinted: %+v", groups[0])
+	if got.fingerprint == "" {
+		t.Fatalf("native snapshot was not fingerprinted: %+v", got)
 	}
 	wantTexts(t, got.messages, "user: make a greeting\nwith two lines", "assistant: Hello", "user: next turn", "assistant: Done")
 	if got.nativeID != groups[0].key || got.cwd != canonical(project) || got.title != "make a greeting with two lines" {
@@ -58,11 +57,6 @@ func TestAiderRegisteredProjectScanImportsNativeTerminalHistory(t *testing.T) {
 	if rec.Metadata.ImportSource.Fingerprint == "" {
 		t.Fatal("import did not persist its selected snapshot")
 	}
-	if err := svc.RefreshArchive(context.Background(), rec); !errors.Is(err, errSourceFingerprintChanged) {
-		t.Fatalf("changed pinned source was accepted: %v", err)
-	}
-	// Legacy imports without selection evidence retain archive refresh behavior.
-	rec.Metadata.ImportSource.Fingerprint = ""
 	if err := svc.RefreshArchive(context.Background(), rec); err != nil {
 		t.Fatal(err)
 	}

@@ -117,7 +117,7 @@ func (s *Service) observeAfter(ctx context.Context, binary string, saved *savedI
 	session := arguments["session"]
 	target, found := s.actionWindow(session, arguments)
 	if !found {
-		output["observation"] = map[string]any{"ok": false, "skipped": "AO could not tell which window this action ran in. Read it with get_window_state to see the result, and pass pid and window_id next time."}
+		output["observation"] = map[string]any{"ok": false, "skipped": "Orchestrator could not tell which window this action ran in. Read it with get_window_state to see the result, and pass pid and window_id next time."}
 		return output
 	}
 	read := map[string]any{"pid": target.pid, "window_id": target.windowID, "since": "latest"}
