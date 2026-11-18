@@ -26,11 +26,11 @@ func (s *batchAcceptanceStore) BindTurnToProvider(ctx context.Context, turnID, p
 		return err
 	}
 	if providerID == "provider-turn-2" && s.mode == "live_reconnect" {
-		turn, err := s.Store.TurnByID(ctx, turnID)
+		turn, err := s.TurnByID(ctx, turnID)
 		if err != nil {
 			return err
 		}
-		return s.Store.FailReservedQueuedBatch(ctx, turn.ConversationID, now)
+		return s.FailReservedQueuedBatch(ctx, turn.ConversationID, now)
 	}
 	return nil
 }
