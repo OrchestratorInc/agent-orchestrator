@@ -2714,9 +2714,29 @@ describe("Sidebar", () => {
 		if (state === "ready") vi.spyOn(window.localStorage, "setItem").mockImplementation(() => { throw new Error("quota"); });
 		await userEvent.click(screen.getByRole("button", { name: "Report a bug" }));
 		expect(useUiStore.getState().globalToast).toMatchObject({ body: "Could not start the report. Try again.", tone: "error" });
+		expect(screen.getByRole("button", { name: "Report a bug" })).toBeEnabled();
 		expect(launch).toHaveBeenCalledTimes(state === "stopped" ? 1 : 0);
 		expect(useUiStore.getState().newTaskRequest).toBeNull();
 		expect(useUiStore.getState().settingsModal).toBeNull();
+	});
+
+	it("disables Report a bug until the pending terminal fallback finishes", async () => {
+		reportDaemonState.current = "stopped";
+		let finish!: () => void;
+		const launch = vi.spyOn(aoBridge.triage, "launch").mockReturnValue(new Promise((resolve) => {
+			finish = () => resolve({ ok: true });
+		}));
+		renderSidebar({ seed: (client) => client.setQueryData(["app-version"], "0.14.11-nightly.202611170300") });
+		const report = screen.getByRole("button", { name: "Report a bug" });
+		const user = userEvent.setup();
+		await user.click(report);
+		await user.click(report);
+		expect(launch).toHaveBeenCalledTimes(1);
+		expect(report).toBeDisabled();
+		await act(async () => { finish(); });
+		expect(report).toBeEnabled();
+		await user.click(report);
+		expect(launch).toHaveBeenCalledTimes(2);
 	});
 
 	it("keeps Report a bug hidden until the installed version is known", async () => {

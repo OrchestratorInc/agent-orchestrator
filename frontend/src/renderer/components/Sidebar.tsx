@@ -3182,8 +3182,12 @@ function FooterReportBugButton({ tabIndex, rail = false }: { tabIndex: number; r
 	const version = useAppVersion();
 	const daemonState = useShellMaybe()?.daemonStatus.state ?? "stopped";
 	const showGlobalToast = useUiStore((state) => state.showGlobalToast);
+	const [reporting, setReporting] = useState(false);
 	const report = async () => {
+		if (reporting) return;
+		setReporting(true);
 		const failure = await startProblemReport(daemonState);
+		setReporting(false);
 		if (failure) showGlobalToast(t("shell.reportBug"), failure, "error");
 	};
 	if (!isNightlyBuild(version)) return null;
@@ -3194,6 +3198,7 @@ function FooterReportBugButton({ tabIndex, rail = false }: { tabIndex: number; r
 				<Pressable
 					aria-label={t("shell.reportBug")}
 					className={rail ? FOOTER_RAIL_BUTTON_CLASS : FOOTER_ICON_BUTTON_CLASS}
+					disabled={reporting}
 					onClick={() => void report()}
 					tabIndex={tabIndex}
 					type="button"
