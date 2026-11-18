@@ -859,9 +859,14 @@ function otherAgentSource(
 	};
 }
 
-/** Claude's models: the newest of each family, plus its context variants, in Fable, Opus, Sonnet, Haiku order. Older releases stay out of the picker; an id can still be typed. */
+/**
+ * Claude's models: the newest of each family and its context variants first, in Fable, Opus,
+ * Sonnet, Haiku order, then the older releases. The older ones sit below the few rows the menu
+ * shows, so they cost no height but a scroll or a search still reaches them.
+ */
 function claudeOrder<T extends { id: string; label: string }>(models: T[]): T[] {
-	return splitClaudeModels(models).current;
+	const { current, other } = splitClaudeModels(models);
+	return [...current, ...other];
 }
 
 const SearchRow = memo(function SearchRow({ row, optionId, active, searchActive, disabled, onPick }: {

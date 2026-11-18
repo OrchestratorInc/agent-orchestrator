@@ -90,6 +90,23 @@ describe("AgentModelPicker", () => {
 		expect(screen.queryByRole("menuitemradio", { name: "Max" })).not.toBeInTheDocument();
 	});
 
+	it("lists Claude's newest models first and keeps the older releases below them", async () => {
+		const user = userEvent.setup();
+		open(undefined, false, "claude-code", {
+			models: [
+				{ id: "claude-opus-4-5-20251101", label: "Opus 4.5" },
+				{ id: "claude-opus-5-5", label: "Opus 5.5" },
+				{ id: "claude-sonnet-4-5", label: "Sonnet 4.5" },
+			],
+			modelId: "claude-opus-5-5",
+		});
+		await user.click(screen.getByRole("button", { name: /Agent, model and reasoning effort/ }));
+		// The newest of each family leads, then the release it superseded: the older one costs no
+		// height under the row cap, and a scroll or a search still reaches it.
+		const labels = screen.getAllByRole("menuitemradio").map((row) => row.textContent);
+		expect(labels).toEqual([expect.stringContaining("Opus 5.5"), expect.stringContaining("Sonnet 4.5"), expect.stringContaining("Opus 4.5")]);
+	});
+
 	it.each(["Opus", "Sonnet"])("keeps the menu open, effort under it, after picking model %s", async (model) => {
 		const user = userEvent.setup();
 		const { current } = open();
