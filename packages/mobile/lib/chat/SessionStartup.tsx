@@ -4,7 +4,6 @@ import Animated, { FadeOut } from "react-native-reanimated";
 
 import { AppSymbol } from "../AppSymbol";
 import { rowDividerWidth } from "../divider";
-import { layoutTransition } from "../layoutMotion";
 import { ROW_ENTER_MS } from "../motion";
 import type { Theme } from "../theme";
 import { useTheme, useThemedStyles } from "../ThemeProvider";
@@ -38,7 +37,6 @@ export function SessionStartupStatus({ startup, onRetry, retrying }: { startup: 
 		<Animated.View
 			accessibilityLabel="Session setup"
 			exiting={reduceMotion ? undefined : FadeOut.duration(ROW_ENTER_MS)}
-			layout={reduceMotion ? undefined : layoutTransition()}
 			style={styles.wrap}
 			testID="session-startup"
 		>

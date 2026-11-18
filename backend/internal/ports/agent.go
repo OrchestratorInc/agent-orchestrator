@@ -375,6 +375,15 @@ type AgentInterfaceHandoffHistoryProbe interface {
 	) (bool, error)
 }
 
+// AgentProcessConversationReader is an OPTIONAL capability for agents a user
+// starts by hand in a shell terminal: it names the native conversation a
+// running agent process is in, so the shell can resume exactly that one after
+// the app restarts. pid leads the agent's foreground process group. ok=false
+// when the process does not say.
+type AgentProcessConversationReader interface {
+	ProcessConversationID(ctx context.Context, pid int) (id string, ok bool, err error)
+}
+
 // AgentInterfaceHandoffStorageBridge is an OPTIONAL capability for adapters
 // whose native conversation files live in interface-specific storage roots.
 // Session Manager calls it only after the source controller is stopped.
@@ -571,6 +580,12 @@ const (
 	AgentExitDetectionSupervisor AgentExitDetectionMode = "supervisor"
 )
 
+// AgentInterruptInputProvider selects a native cancellation key for TUIs where
+// Ctrl+C does not cancel the active turn. The input is sent without Enter.
+type AgentInterruptInputProvider interface {
+	InterruptInput() string
+}
+
 // AgentExitDetector is an optional adapter capability. Adapters that omit it
 // keep their existing launch behavior.
 type AgentExitDetector interface {
@@ -689,11 +704,16 @@ type WaitingTerminalActivityDetector interface {
 // TerminalActivityDetector, in which case AO waits for an authoritative idle
 // detection. A non-positive timeout always preserves immediate delivery.
 type PromptReadinessHints struct {
-	InitialDelay time.Duration
-	Patterns     []string
-	PollInterval time.Duration
-	Timeout      time.Duration
-	Lines        int
+	// RequireReady refuses delivery when startup markers are absent or the wait budget expires.
+	RequireReady bool
+	// RequireCurrentLaunchSignal requires the lifecycle's first signal for this launch in addition
+	// to a terminal marker. This prevents preserved pane history from proving current readiness.
+	RequireCurrentLaunchSignal bool
+	InitialDelay               time.Duration
+	Patterns                   []string
+	PollInterval               time.Duration
+	Timeout                    time.Duration
+	Lines                      int
 	// RenderedScreen matches against the runtime's rendered current viewport
 	// (StyledTerminalOutputReader) instead of the raw output ring. Full-screen
 	// TUIs draw on the alternate screen, so their text never appears as a

@@ -369,6 +369,18 @@ html[data-window-translucent="true"]::view-transition-old(root) {
 	backdrop-filter: blur(var(--blur-overlay));
 }
 
+/* Diagnostics updates both its graphs and the board behind it. Blur the app
+ * surface rather than sampling it through a backdrop filter, which flickers
+ * in the translucent Electron shell. The portalled dialog stays sharp. */
+.diagnostics-dialog-overlay {
+	-webkit-backdrop-filter: none;
+	backdrop-filter: none;
+}
+
+body:has(.diagnostics-dialog-overlay) #root {
+	filter: blur(var(--blur-overlay));
+}
+
 /* In a translucent window, Chromium's backdrop blur cannot see content drawn
  * over the transparent window base, so text behind would show through sharp.
  * There the surface turns nearly solid instead. */
@@ -591,12 +603,19 @@ html[data-ao-platform="darwin"] .app-shell-root:not(.native-fullscreen) [data-sl
 	border-top-width: 1px;
 }
 
-/* macOS drags from the shared header without an extra strip. Linux keeps the
- * native frame, so it needs no drag region. */
-html[data-ao-platform="darwin"] [data-testid="session-topbar-host"] {
+/* macOS drags from the shared headers without an extra strip: the session tab
+ * bar and the inspector's tab row both sit in the title-bar band. Linux keeps
+ * the native frame, so it needs no drag region. Only the controls punch
+ * through, never their containers, so every empty pixel around and between
+ * them still drags the window and double-clicks to zoom (macOS applies the
+ * system double-click setting to drag regions only). The same punch-out
+ * covers page top bars, which set drag inline on the header (PageTopbar.tsx).
+ * A control's own no-drag must come after the header in the DOM: Electron
+ * builds the region in document order. */
+html[data-ao-platform="darwin"] :is([data-testid="session-topbar-host"], [data-slot="inspector-container"] .session-inspector__topbar) {
 	-webkit-app-region: drag;
 }
-html[data-ao-platform="darwin"] [data-testid="session-topbar-host"] :is(button, a, input, [role="tab"], [role="menuitem"]) {
+html[data-ao-platform="darwin"] :is([data-testid="session-topbar-host"], [data-slot="inspector-container"] .session-inspector__topbar, .workspace-topbar-actions) :is(button, a, input, select, textarea, label, form, [role="button"], [role="link"], [role="tab"], [role="menuitem"], [role="combobox"], [role="switch"], [role="checkbox"], [role="radio"], [title]) {
 	-webkit-app-region: no-drag;
 }
 
@@ -952,7 +971,8 @@ html[data-theme="light"] .browser-popout-overlay--mac-windowed .workspace-topbar
 
 /* The tab bar's header is 1px taller than the band; unfilled, it leaves the
  * panel's top row to the panel. */
-.center-panel-shell--floating-topbar .workspace-topbar-container > header {
+.center-panel-shell--floating-topbar .workspace-topbar-container > header,
+.center-panel-shell--floating-topbar .workspace-topbar-container > [data-session-topbar-scope] > header {
 	background: transparent;
 }
 
@@ -2115,6 +2135,53 @@ textarea,
 	color: transparent;
 	animation: chat-working-shimmer 2.4s ease-in-out infinite;
 	will-change: transform;
+}
+
+/* The same sweep for sidebar rows, where several run at once while a chat is typed in.
+   A masked copy of the title moves with transforms (the inner span cancels the move), so
+   the sweep runs on the compositor instead of repainting each title every frame. The band
+   is 0.75 title widths and its center travels from 1.4 to -0.4 widths, like the gradient. */
+.sidebar-working-shimmer {
+	position: absolute;
+	inset-block: 0;
+	left: -77.5%;
+	width: 180%;
+	pointer-events: none;
+	user-select: none;
+	mask-image: linear-gradient(100deg, transparent 0, black 20.8%, transparent 41.7%);
+	mask-repeat: no-repeat;
+	animation: sidebar-working-shimmer 2.4s ease-in-out infinite;
+}
+
+.sidebar-working-shimmer > span {
+	display: block;
+	animation: sidebar-working-shimmer-counter 2.4s ease-in-out infinite;
+}
+
+.sidebar-working-shimmer > span > span {
+	display: block;
+	width: calc(100% / 1.8);
+	margin-left: calc(100% * 0.775 / 1.8);
+	overflow: hidden;
+	text-overflow: ellipsis;
+	white-space: nowrap;
+	color: var(--color-foreground);
+}
+
+@keyframes sidebar-working-shimmer {
+	from { transform: translateX(100%); }
+	to { transform: translateX(0); }
+}
+
+@keyframes sidebar-working-shimmer-counter {
+	from { transform: translateX(-100%); }
+	to { transform: translateX(0); }
+}
+
+@media (prefers-reduced-motion: reduce) {
+	.sidebar-working-shimmer {
+		display: none;
+	}
 }
 
 /* The live row's label (current step, retry chip, setup label) fades in once when the

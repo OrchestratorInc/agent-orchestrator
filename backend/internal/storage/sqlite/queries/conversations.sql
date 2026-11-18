@@ -712,15 +712,15 @@ SELECT * FROM conversation_turns
 WHERE conversation_id = ? AND provider_turn_id = ? AND provider_turn_id <> ''
 LIMIT 1;
 
--- name: BindConversationTurnProviderID :exec
+-- name: BindConversationTurnProviderID :execrows
 UPDATE conversation_turns
 SET provider_turn_id = ?, started_at = COALESCE(started_at, ?)
-WHERE id = ?;
+WHERE id = ? AND state IN ('queued', 'running');
 
--- name: MarkConversationTurnStarted :exec
+-- name: MarkConversationTurnStarted :execrows
 UPDATE conversation_turns
 SET state = 'running', started_at = COALESCE(started_at, ?)
-WHERE id = ?;
+WHERE id = ? AND state IN ('queued', 'running');
 
 -- name: SettleConversationTurn :exec
 UPDATE conversation_turns
@@ -763,6 +763,34 @@ SET status = 'completed',
 WHERE conversation_activities.conversation_id = sqlc.arg(conversation_id)
   AND turn_id = sqlc.arg(turn_id)
   AND kind = 'plan';
+
+-- A running row on a turn that has already settled can never finish. Older
+-- daemons stored replayed provider retry/limit notices this way, after their turn
+-- had ended, so clients showed a spinner that never stopped. Give each one the
+-- status SettleTurn would have written (terminalActivityStatus).
+-- name: SettleStrandedConversationActivities :exec
+UPDATE conversation_activities
+SET status = CASE (SELECT settled.state FROM conversation_turns AS settled WHERE settled.id = conversation_activities.turn_id)
+        WHEN 'completed' THEN 'completed'
+        WHEN 'recovered' THEN 'recovered'
+        WHEN 'interrupted' THEN 'cancelled'
+        ELSE 'failed'
+    END,
+    revision = revision + 1,
+    updated_at = sqlc.arg(updated_at)
+WHERE conversation_activities.conversation_id = sqlc.arg(conversation_id)
+  AND status = 'running'
+  -- An AO action runs on the daemon's clock, not the turn's: one recorded after
+  -- its turn settled is still in flight, and its terminal update skips a row that
+  -- is no longer running, so settling it here would lose the real outcome.
+  AND kind <> 'ao_action'
+  AND turn_id IN (
+      -- Every settled turn in the conversation, including turns an earlier
+      -- session handled before a handoff kept them in this timeline.
+      SELECT owner.id FROM conversation_turns AS owner
+      WHERE owner.conversation_id = sqlc.arg(conversation_id)
+        AND owner.state IN ('completed', 'recovered', 'interrupted', 'failed', 'cancelled')
+  );
 
 -- The same invariant applies when startup discovers work abandoned by a dead
 -- controller. This runs before SettleOrphanedConversationTurns while their turn
@@ -1243,7 +1271,7 @@ WHERE conversation_id = ? AND state = 'queued' AND requested_at <= ?;
 -- lock before this runs. There can be no later accepted row to preserve, so the
 -- correct operation is independent of wall-clock ordering and cancels the whole
 -- durable queue.
--- name: CancelAllQueuedConversationTurns :exec
+-- name: CancelAllQueuedConversationTurns :execrows
 UPDATE conversation_turns
 SET state = 'interrupted', completed_at = ?
 WHERE conversation_id = ? AND state = 'queued';

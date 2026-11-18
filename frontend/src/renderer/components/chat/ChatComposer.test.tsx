@@ -2332,6 +2332,115 @@ describe("slash commands", () => {
 		await userEvent.click(screen.getByText("Ship"));
 		expect(field.querySelector('[data-composer-token="skill"]')).toHaveTextContent("/ship");
 	});
+
+	describe("/model", () => {
+		// Stands in for the settings row's model menu: openComposerModelPicker
+		// opens it with an Enter keydown, which a Radix trigger answers.
+		function renderWithModelMenu(props: Partial<Parameters<typeof ChatComposer>[0]> = {}) {
+			const opened = vi.fn();
+			const rendered = renderComposer({
+				skills: SKILLS,
+				settings: (
+					<button type="button" data-shortcut-target="model-picker" onKeyDown={(event) => { if (event.key === "Enter") opened(); }}>
+						Opus 5.5
+					</button>
+				),
+				...props,
+			});
+			return { ...rendered, opened };
+		}
+
+		it("opens the model menu on Enter instead of sending", async () => {
+			const { field, onSend, opened } = renderWithModelMenu();
+			await typeInComposer(field, "/model");
+			// Typing the name only selects it; the menu waits for Enter.
+			await new Promise((resolve) => setTimeout(resolve, 20));
+			expect(opened).not.toHaveBeenCalled();
+
+			await userEvent.keyboard("{Enter}");
+			await waitFor(() => expect(opened).toHaveBeenCalledOnce());
+			expect(onSend).not.toHaveBeenCalled();
+			expect(composerWireText(field)).toBe("");
+		});
+
+		it("still opens the menu when /model is sent with the suggestions dismissed", async () => {
+			const sessionId = "model-command-dismissed";
+			const { field, onSend, opened } = renderWithModelMenu({ draftSessionId: sessionId });
+			await typeInComposer(field, "/model");
+			await waitFor(() => expect(readChatSessionDraft(sessionId).composer.text).toBe("/model"));
+			await userEvent.keyboard("{Escape}");
+			await userEvent.keyboard("{Enter}");
+			await waitFor(() => expect(opened).toHaveBeenCalledOnce());
+			expect(onSend).not.toHaveBeenCalled();
+			expect(composerWireText(field)).toBe("");
+			// The saved draft is cleared too, so /model does not return on remount.
+			await waitFor(() => expect(readChatSessionDraft(sessionId).composer.text).toBe(""));
+		});
+
+		it("leaves /model as text in a queued message being edited", async () => {
+			const onSend = vi.fn();
+			const opened = vi.fn();
+			render(
+				<ChatComposer
+					onSend={onSend}
+					skills={SKILLS}
+					editingQueuedTurnId="queued-model"
+					draftSeed={{ id: "queued-model", text: "/model" }}
+					settings={<button type="button" data-shortcut-target="model-picker" onKeyDown={(event) => { if (event.key === "Enter") opened(); }}>Opus 5.5</button>}
+				/>,
+			);
+			fireEvent.submit(screen.getByLabelText("Message the agent").closest("form")!);
+			await waitFor(() => expect(onSend).toHaveBeenCalledWith("/model", undefined, undefined, []));
+			expect(opened).not.toHaveBeenCalled();
+		});
+
+		it.each(["Enter", "Tab"])("is not AO's while a queued message is edited (%s)", async (key) => {
+			const { field, onSend, opened } = renderWithModelMenu({
+				editingQueuedTurnId: "queued-model-key",
+				draftSeed: { id: "queued-model-key", text: "" },
+			});
+			await typeInComposer(field, "/mod");
+			expect(screen.queryAllByRole("option").some((option) => /^Model/.test(option.textContent ?? ""))).toBe(false);
+			await typeInComposer(field, "el");
+			await userEvent.keyboard(`{${key}}`);
+			await new Promise((resolve) => setTimeout(resolve, 20));
+			expect(opened).not.toHaveBeenCalled();
+			if (key === "Enter") await waitFor(() => expect(onSend).toHaveBeenCalledWith("/model", undefined, undefined, []));
+			else expect(composerWireText(field)).toBe("/model");
+		});
+
+		const unusableMenus = {
+			"a settings row with no model menu": <span>Context 12%</span>,
+			"a disabled model menu": <button type="button" disabled data-shortcut-target="model-picker">Opus 5.5</button>,
+		};
+		it.each(Object.entries(unusableMenus))("keeps /model in the box with %s", async (_, settings) => {
+			const { field, onSend } = renderComposer({ skills: SKILLS, settings });
+			await typeInComposer(field, "/mod");
+			expect(screen.queryAllByRole("option").some((option) => /^Model/.test(option.textContent ?? ""))).toBe(false);
+			await typeInComposer(field, "el");
+			await userEvent.keyboard("{Escape}");
+			await userEvent.keyboard("{Enter}");
+			await new Promise((resolve) => setTimeout(resolve, 20));
+			expect(onSend).not.toHaveBeenCalled();
+			expect(composerWireText(field)).toBe("/model");
+		});
+
+		it("replaces an agent's own /model with AO's", async () => {
+			const { field } = renderWithModelMenu({
+				skills: [...SKILLS, { name: "model", displayName: "model", description: "Set the AI model", source: "agent" }],
+			});
+			await typeInComposer(field, "/mode");
+			const options = screen.getAllByRole("option").filter((option) => /^Model/.test(option.textContent ?? ""));
+			expect(options).toHaveLength(1);
+			expect(options[0]?.textContent).toContain("Choose the agent, model and effort");
+		});
+
+		it("is not offered where the composer has no model menu", async () => {
+			const { field } = renderComposer({ skills: SKILLS });
+			await typeInComposer(field, "/");
+			expect(screen.getAllByRole("option").some((option) => /^Model/.test(option.textContent ?? ""))).toBe(false);
+		});
+	});
 });
 
 /* ---- file mentions ------------------------------------------------------- */

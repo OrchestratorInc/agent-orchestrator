@@ -84,6 +84,7 @@ type Service struct {
 	renderMeasures     sync.WaitGroup
 	sides              *sideManager
 	wakeChat           func(context.Context, domain.SessionID) error
+	resumeAgent        func(context.Context, domain.SessionID) error
 	hibernationEnabled func() bool
 	// versionRefresh reports whether open sessions move to a newly installed
 	// harness release, and how long they must be quiet first.
@@ -386,6 +387,26 @@ func cloneStartConfig(cfg StartConfig) StartConfig {
 		cloned.MCPServers[index] = server
 	}
 	return cloned
+}
+
+// strandedActivitySettler is implemented by stores that can settle running rows
+// left on turns that have already settled.
+type strandedActivitySettler interface {
+	SettleStrandedActivities(ctx context.Context, conversationID string, now time.Time) error
+}
+
+// settleStrandedActivities stops the spinners older daemons left behind: they
+// stored replayed provider notices as running rows on long-settled turns. Like
+// settleOrphanedWork it is best-effort, so a failure is logged and never blocks
+// the session from starting.
+func (s *Service) settleStrandedActivities(ctx context.Context, session domain.SessionID, conversationID string) {
+	settler, ok := s.store.(strandedActivitySettler)
+	if !ok {
+		return
+	}
+	if err := settler.SettleStrandedActivities(ctx, conversationID, s.now()); err != nil {
+		s.log.Error("chat start: settle stranded activities", "session", session, "conversation", conversationID, "error", err)
+	}
 }
 
 // settleOrphanedWork closes out anything a previous controller left behind.
@@ -1082,6 +1103,10 @@ func (s *Service) startLocked(ctx context.Context, cfg StartConfig) (*Controller
 		!queuedBeforeFirstController && !preserveUndispatchedQueue {
 		s.settleOrphanedWork(ctx, cfg.SessionID, conversation.ID)
 	}
+	// Unlike orphaned work, rows stranded on settled turns are never a live
+	// controller's, so a live reconnect cleans them too. The whole conversation:
+	// a handoff keeps turns another session handled in this timeline.
+	s.settleStrandedActivities(ctx, cfg.SessionID, conversation.ID)
 	// A fresh generation per launch, so events from the controller this one
 	// replaced can be told apart from the current one's.
 	controller := newController(
@@ -2439,6 +2464,33 @@ func (s *Service) PreflightChat(
 		return err
 	}
 	return chatAdmissionError(driver, harness, caps, permissions)
+}
+
+// PreflightReviewChat admits a Chat reviewer and proves the provider's
+// read-only sandbox can actually start in the worker's checkout.
+//
+// A reviewer runs read-only with approvals disabled, so the sandbox is its only
+// route to read the pinned diff and to submit the result. A host that cannot
+// start that sandbox (for example a container whose seccomp profile or an
+// AppArmor policy denies user namespaces) would otherwise launch a turn that
+// cannot run a single command and fail with a generic "turn ended without
+// submitting a result" instead of the provider's real error.
+func (s *Service) PreflightReviewChat(ctx context.Context, harness domain.AgentHarness, workspacePath string) error {
+	if err := s.PreflightChat(ctx, harness, ports.PermissionModeAuto); err != nil {
+		return err
+	}
+	driver, err := s.drivers.Driver(harness)
+	if err != nil {
+		return fmt.Errorf("%w: %s has no chat driver", ports.ErrChatUnsupported, harness)
+	}
+	prober, ok := driver.(ports.ChatSandboxProber)
+	if !ok {
+		return nil
+	}
+	if err := prober.ProbeSandbox(ctx, ports.ChatSandboxProbeConfig{WorkspacePath: workspacePath}); err != nil {
+		return fmt.Errorf("reviewer read-only sandbox: %w", err)
+	}
+	return nil
 }
 
 // PermissionModes lists, strictest first, the permission modes harness can run a

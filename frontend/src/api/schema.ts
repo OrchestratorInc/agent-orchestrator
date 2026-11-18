@@ -4882,6 +4882,23 @@ export interface paths {
         patch: operations["renameShellTerminal"];
         trace?: never;
     };
+    "/api/v1/shell-terminals/{handleId}/reopen": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Replace an ended shell terminal with a fresh shell in the same tab */
+        post: operations["reopenShellTerminal"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/side-chats/launch/claim": {
         parameters: {
             query?: never;
@@ -7044,7 +7061,7 @@ export interface components {
         DelegateTaskRequest: {
             accountId?: string;
             /** @enum {string} */
-            agent?: "claude-code" | "codex" | "aider" | "opencode" | "opencode-v2" | "grok" | "droid" | "amp" | "agy" | "crush" | "cursor" | "qwen" | "gemini" | "copilot" | "goose" | "auggie" | "continue" | "devin" | "cline" | "kimi" | "muse" | "kiro" | "kilocode" | "vibe" | "pi" | "kimchi" | "omp" | "fx" | "prime-agent" | "autohand" | "unreal-agent" | "codewhale" | "mimo-code" | "minimax-code" | "deepseek-harness" | "openhands" | "command-code" | "docker-agent" | "memcode" | "hermes" | "stakpak" | "fake";
+            agent?: "claude-code" | "codex" | "aider" | "opencode" | "opencode-v2" | "grok" | "droid" | "amp" | "agy" | "crush" | "cursor" | "qwen" | "gemini" | "copilot" | "goose" | "auggie" | "continue" | "devin" | "cline" | "kimi" | "muse" | "kiro" | "kilocode" | "vibe" | "pi" | "kimchi" | "omp" | "fx" | "prime-agent" | "autohand" | "unreal-agent" | "codewhale" | "mimo-code" | "minimax-code" | "deepseek-harness" | "openhands" | "command-code" | "docker-agent" | "memcode" | "hermes" | "stakpak" | "open-interpreter" | "tau" | "fake";
             /** @enum {string} */
             approvalMode?: "default" | "accept-edits" | "auto" | "bypass-permissions";
             attachments?: components["schemas"]["AttachmentInput"][];
@@ -7339,7 +7356,7 @@ export interface components {
              * @description Fixed install target this job ran (or is running) for.
              * @enum {string}
              */
-            target: "tmux" | "gh" | "claude" | "claude-code" | "codex" | "cursor" | "opencode" | "opencode-v2" | "aider" | "copilot" | "grok" | "kimi" | "pi" | "amp" | "auggie" | "droid" | "crush" | "cline" | "goose" | "qwen" | "gemini" | "continue" | "devin" | "kiro" | "kilocode" | "vibe" | "muse" | "agy" | "autohand" | "kimchi" | "prime-agent" | "omp" | "fx" | "unreal-agent" | "codewhale" | "mimo-code" | "minimax-code" | "deepseek-harness" | "openhands" | "command-code" | "docker-agent" | "memcode" | "hermes" | "stakpak" | "cloudflared" | "cua-driver";
+            target: "tmux" | "gh" | "claude" | "claude-code" | "codex" | "cursor" | "opencode" | "opencode-v2" | "aider" | "copilot" | "grok" | "kimi" | "pi" | "amp" | "auggie" | "droid" | "crush" | "cline" | "goose" | "qwen" | "gemini" | "continue" | "devin" | "kiro" | "kilocode" | "vibe" | "muse" | "agy" | "autohand" | "kimchi" | "prime-agent" | "omp" | "fx" | "unreal-agent" | "codewhale" | "mimo-code" | "minimax-code" | "deepseek-harness" | "openhands" | "command-code" | "docker-agent" | "memcode" | "hermes" | "stakpak" | "open-interpreter" | "tau" | "cloudflared" | "cua-driver";
             /** Format: date-time */
             updatedAt?: null | string;
             /** @description While waiting_for_idle, the sessions the update still waits for and why. */
@@ -7489,7 +7506,11 @@ export interface components {
         ListSessionsResponse: {
             archived?: components["schemas"]["SessionArchiveSummary"];
             nextCursor?: string;
+            /** @enum {string} */
+            prState?: "open" | "draft" | "merged" | "closed";
             sessions: components["schemas"]["ControllersSessionView"][];
+            total?: null | number;
+            version?: string;
         };
         ListShellTerminalsResponse: {
             shellTerminals: components["schemas"]["ShellTerminalResponse"][];
@@ -7879,6 +7900,7 @@ export interface components {
             autoCompactWindow?: "200k" | "1m";
             effort?: string;
             fastMode?: boolean;
+            force?: boolean;
             idempotencyKey?: string;
             message?: components["schemas"]["SendConversationMessageRequest"];
             model?: string;
@@ -7888,8 +7910,13 @@ export interface components {
             ultracode?: boolean;
         };
         ProviderSwitchResponse: {
+            cancelledQueuedMessages?: number;
+            failedPendingApprovals?: boolean;
             message?: components["schemas"]["SendConversationMessageResponse"];
+            settingsUpdated?: boolean;
             status: string;
+            stoppedTurn?: boolean;
+            warnings?: string[];
         };
         PublishRenderRequest: {
             /** @description Also keep the page as a session artifact, a deliverable the user keeps. */
@@ -8007,6 +8034,16 @@ export interface components {
             /** @enum {string} */
             level: "debug" | "log" | "warning" | "error";
             text: string;
+        };
+        ReopenShellTerminalRequest: {
+            /** @description Initial terminal columns, as for opening a shell terminal. */
+            cols?: number;
+            /** @description Also resume the agent that was running in this terminal: the same conversation when it is known, otherwise its conversation picker. Nothing the old shell ran is replayed. */
+            resumeAgent?: boolean;
+            /** @description Initial terminal rows. See cols. */
+            rows?: number;
+            /** @description Shell to launch, as for opening a shell terminal. */
+            shell?: string;
         };
         ReorderQueuedConversationTurnsRequest: {
             turnIds: string[];
@@ -8812,8 +8849,15 @@ export interface components {
         ShellTerminalResponse: {
             /** Format: date-time */
             createdAt: string;
+            /**
+             * Format: date-time
+             * @description When the shell's process was found gone. Present only for an ended shell, which can be reopened or closed but not attached.
+             */
+            endedAt?: null | string;
             handleId: string;
             projectId?: string;
+            /** @description For an ended shell, the coding agent that was running in it, which reopening with resumeAgent resumes. */
+            resumeHarness?: string;
             sessionId?: string;
             terminalTitle?: string;
             title: string;
@@ -8872,6 +8916,9 @@ export interface components {
             mainConversationId: string;
             manualLabel?: boolean;
             model?: string;
+            /** Format: date-time */
+            openingStartedAt?: null | string;
+            openingTurnId?: string;
             recreateRequired?: boolean;
             selectedText?: string;
             sessionId: string;
@@ -8958,8 +9005,11 @@ export interface components {
         SideRecoveryTurn: {
             content?: components["schemas"]["SideContent"][];
             dispatchAttempt?: number;
+            effort?: string;
+            model?: string;
             providerTurnId?: string;
             referenceContexts: string[];
+            settingsFrozen?: boolean;
             turn: components["schemas"]["SideTurn"];
         };
         SideSettingsRequest: {
@@ -9015,7 +9065,7 @@ export interface components {
             displayNameExplicit?: boolean;
             effort?: string;
             /** @enum {string} */
-            harness?: "claude-code" | "codex" | "aider" | "opencode" | "opencode-v2" | "grok" | "droid" | "amp" | "agy" | "crush" | "cursor" | "qwen" | "gemini" | "copilot" | "goose" | "auggie" | "continue" | "devin" | "cline" | "kimi" | "muse" | "kiro" | "kilocode" | "vibe" | "pi" | "kimchi" | "omp" | "fx" | "prime-agent" | "autohand" | "unreal-agent" | "codewhale" | "mimo-code" | "minimax-code" | "deepseek-harness" | "openhands" | "command-code" | "docker-agent" | "memcode" | "hermes" | "stakpak";
+            harness?: "claude-code" | "codex" | "aider" | "opencode" | "opencode-v2" | "grok" | "droid" | "amp" | "agy" | "crush" | "cursor" | "qwen" | "gemini" | "copilot" | "goose" | "auggie" | "continue" | "devin" | "cline" | "kimi" | "muse" | "kiro" | "kilocode" | "vibe" | "pi" | "kimchi" | "omp" | "fx" | "prime-agent" | "autohand" | "unreal-agent" | "codewhale" | "mimo-code" | "minimax-code" | "deepseek-harness" | "openhands" | "command-code" | "docker-agent" | "memcode" | "hermes" | "stakpak" | "open-interpreter" | "tau";
             issueId?: string;
             /** @enum {string} */
             kind?: "worker" | "orchestrator";
@@ -19089,6 +19139,8 @@ export interface operations {
                 limit?: number;
                 /** @description Opaque cursor returned by the previous page. Requires limit. */
                 cursor?: string;
+                /** @description Keep sessions owning a pull request in this state. The list is then ordered by when each session's newest such PR reached the state, and the response echoes prState and carries total. */
+                prState?: "open" | "draft" | "merged" | "closed";
             };
             header?: never;
             path?: never;
@@ -27979,6 +28031,78 @@ export interface operations {
             };
             /** @description Not Found */
             404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Internal Server Error */
+            500: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Not Implemented */
+            501: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+        };
+    };
+    reopenShellTerminal: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                /** @description Shell terminal runtime handle identifier. */
+                handleId: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: {
+            content: {
+                "application/json": components["schemas"]["ReopenShellTerminalRequest"];
+            };
+        };
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ShellTerminalEnvelope"];
+                };
+            };
+            /** @description Bad Request */
+            400: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Not Found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["APIError"];
+                };
+            };
+            /** @description Conflict */
+            409: {
                 headers: {
                     [name: string]: unknown;
                 };
