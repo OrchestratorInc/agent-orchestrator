@@ -1,7 +1,7 @@
 import { act, create, type ReactTestRenderer } from "react-test-renderer";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { TextFieldRef } from "@expo/ui/swift-ui";
-import { BLUR_SETTLE_MS, FormFocusContext, useFormFocus, useTrackedField, type FormFocus, type TrackedFieldState } from "./formFocus";
+import { BLUR_SETTLE_MS, FormFocusContext, MAX_RELEASES, useFormFocus, useTrackedField, type FormFocus, type TrackedFieldState } from "./formFocus";
 
 let renderer: ReactTestRenderer | undefined;
 let focus: FormFocus;
@@ -167,6 +167,43 @@ describe("useFormFocus", () => {
 		await act(async () => { await vi.advanceTimersByTimeAsync(32); await done; });
 		expect(search.ref.blur).toHaveBeenCalledTimes(1);
 		expect(run).toHaveBeenCalledTimes(1);
+	});
+
+	it("keeps letting go across two handoffs before locking", async () => {
+		const a = fakeField("a", { reportsBlur: false });
+		const b = fakeField("b", { reportsBlur: false });
+		const c = fakeField("c");
+		a.tracked.onFocusChange(true);
+		const run = vi.fn(() => {
+			// Nothing may still hold focus once the fields lock and the submit runs.
+			expect(focus.field("c")).toBe(c.tracked);
+			expect(c.ref.blur).toHaveBeenCalledTimes(1);
+		});
+		let done!: Promise<void>;
+		await act(async () => { done = focus.submit(run); });
+		expect(a.ref.blur).toHaveBeenCalledTimes(1);
+		// B takes focus while A lets go, then C while B lets go.
+		await act(async () => { b.tracked.onFocusChange(true); });
+		expect(b.ref.blur).toHaveBeenCalledTimes(1);
+		await act(async () => { c.tracked.onFocusChange(true); });
+		expect(run).not.toHaveBeenCalled();
+		await act(async () => { await vi.advanceTimersByTimeAsync(16); await done; });
+		expect(c.ref.blur).toHaveBeenCalledTimes(1);
+		expect(run).toHaveBeenCalledTimes(1);
+	});
+
+	it("goes ahead after MAX_RELEASES handoffs", async () => {
+		const ids = Array.from({ length: MAX_RELEASES + 2 }, (_, i) => `f${i}`);
+		const fields = ids.map((id) => fakeField(id, { reportsBlur: false }));
+		fields[0].tracked.onFocusChange(true);
+		// Every blur hands focus straight to the next field, as if the user kept tapping.
+		fields.forEach((field, i) => {
+			field.ref.blur.mockImplementation(async () => { fields[i + 1]?.tracked.onFocusChange(true); });
+		});
+		const run = vi.fn();
+		await act(async () => { await focus.submit(run); });
+		expect(run).toHaveBeenCalledTimes(1);
+		expect(fields.filter((field) => field.ref.blur.mock.calls.length).length).toBe(MAX_RELEASES);
 	});
 
 	it("tells a field it is unlocked when no submit runs", () => {

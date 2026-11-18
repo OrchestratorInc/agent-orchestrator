@@ -4,6 +4,9 @@ import { createContext, useContext, useEffect, useMemo, useState } from "react";
 /** How long a blurred field gets to say it has let go before the submit goes ahead anyway. */
 export const BLUR_SETTLE_MS = 300;
 
+/** How many fields in a row a submit lets go of (one per tap during the wait) before going ahead. */
+export const MAX_RELEASES = 5;
+
 /** What one SwiftUI text field takes to be tracked: its ref and its focus callback. */
 export type TrackedField = {
 	ref(field: TextFieldRef | null): void;
@@ -101,9 +104,11 @@ export function useFormFocus(): FormFocus {
 			if (busy) return;
 			busy = true;
 			try {
-				await release();
-				// A field tapped while the first one let go: once more.
-				await release();
+				// A field tapped while another let go takes focus in turn: keep
+				// letting go while a tracked field holds it.
+				for (let pass = 0; pass < MAX_RELEASES && focused && refs.has(focused) && !closed; pass++) {
+					await release();
+				}
 				if (closed) return;
 				setLocked(true);
 				await run();
