@@ -1,10 +1,10 @@
 "use client";
 
 import * as React from "react";
-import { XIcon } from "lucide-react";
 import { Dialog as SheetPrimitive } from "radix-ui";
 import { useTranslation } from "react-i18next";
 
+import { CloseButton } from "./close-button";
 import { cn } from "@/lib/utils";
 
 function Sheet({ ...props }: React.ComponentProps<typeof SheetPrimitive.Root>) {
@@ -68,9 +68,8 @@ function SheetContent({
 			>
 				{children}
 				{showCloseButton && (
-					<SheetPrimitive.Close className="absolute top-4 right-4 rounded-xs opacity-70 transition-opacity hover:opacity-100 focus:outline-hidden disabled:pointer-events-none data-[state=open]:bg-secondary">
-						<XIcon className="size-icon-base" />
-						<span className="sr-only">{t("common.close")}</span>
+					<SheetPrimitive.Close asChild>
+						<CloseButton aria-label={t("common.close")} className="absolute top-3 right-3" size="icon-sm" />
 					</SheetPrimitive.Close>
 				)}
 			</SheetPrimitive.Content>

@@ -56,10 +56,14 @@ test("renderer: hidden model-menu scrollbar keeps wheel scrolling functional @T0
 	await expect(page).toHaveURL(/#\/new/);
 	// The new chat page uses the session's own picker: agent, model and effort in one menu.
 	await page.getByRole("button", { name: "Agent, model and reasoning effort for the next message" }).click();
-	await page.getByRole("menuitem", { name: /^Model/ }).click();
+	const modelTrigger = page.getByRole("menuitem", { name: /^Model/ });
+	await modelTrigger.click();
+	const submenuId = await modelTrigger.getAttribute("aria-controls");
+	if (!submenuId) throw new Error("Model submenu has no aria-controls");
+	const submenu = page.locator(`[id="${submenuId}"]`);
 
-	// The picker's own menu scrolls on the same strip; the model list is the submenu, opened last.
-	const scroller = page.locator(".model-menu-scroll").last();
+	// The picker and model submenu both scroll; use the submenu controlled by the Model row.
+	const scroller = submenu.locator(".model-menu-scroll");
 	await expect(scroller).toBeVisible();
 	const geometry = await scroller.evaluate((element) => ({
 		clientHeight: element.clientHeight,
@@ -70,4 +74,18 @@ test("renderer: hidden model-menu scrollbar keeps wheel scrolling functional @T0
 	await page.mouse.wheel(0, 400);
 
 	await expect.poll(() => scroller.evaluate((element) => element.scrollTop)).toBeGreaterThan(0);
+	await scroller.getByRole("menuitemradio").last().click();
+	await expect(modelTrigger).toHaveAttribute("data-state", "closed");
+	const trigger = page.getByRole("button", { name: "Agent, model and reasoning effort for the next message" });
+	await expect(trigger).toContainText("model-30");
+	await modelTrigger.click();
+	const search = submenu.getByRole("searchbox", { name: "Search models" });
+	// Move off the trigger so its pending hover open cannot outlive keyboard selection.
+	await search.hover();
+	await search.fill("model-29");
+	await expect(page.getByRole("menuitemradio", { name: /model-29/ })).toHaveAttribute("data-search-active", "true");
+	await expect(search).toBeFocused();
+	await search.press("Enter");
+	await expect(trigger).toContainText("model-29");
+	await expect(modelTrigger).toHaveAttribute("data-state", "closed");
 });

@@ -88,7 +88,7 @@ func TestCopyPreservesNativeGraphAndSource(t *testing.T) {
 		t.Fatal(err)
 	}
 	wantCWD, pathErr := filepath.EvalSymlinks(launch)
-	if pathErr != nil || prepared.ID == syntheticID || prepared.CWD != wantCWD || len(prepared.Messages) != 2 {
+	if pathErr != nil || prepared.ID == syntheticID || prepared.CWD != wantCWD || len(prepared.Messages) != 2 || !prepared.UnopenedCopy {
 		t.Fatalf("prepared = %#v", prepared)
 	}
 	after, err := os.ReadFile(source)
@@ -126,7 +126,7 @@ func TestCopyPreservesNativeGraphAndSource(t *testing.T) {
 		raw["work_state"] = map[string]any{"todos": []any{}}
 	})
 	retry, retryPath, err := Copy(context.Background(), root, source, launch)
-	if err != nil || retryPath != target || retry.ID != prepared.ID || retry.Title != "later AO title" {
+	if err != nil || retryPath != target || retry.ID != prepared.ID || retry.Title != "later AO title" || retry.UnopenedCopy {
 		t.Fatalf("retry = %#v, %q, %v", retry, retryPath, err)
 	}
 }

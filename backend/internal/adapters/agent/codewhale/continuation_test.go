@@ -52,7 +52,7 @@ func writeRestoreSnapshot(t *testing.T, root, workspace, id, runtimeDir string) 
 
 func TestNativeRestoreRuntimeDirKeepsFreshLaunchUnchanged(t *testing.T) {
 	fresh := filepath.Join(t.TempDir(), "launches", "generation", "runtime")
-	got, err := New().nativeRestoreRuntimeDir(context.Background(), ports.WorkspaceHookConfig{}, "", "", false, fresh)
+	got, err := New().nativeRestoreRuntimeDir(context.Background(), ports.WorkspaceHookConfig{}, "", "", fresh)
 	if err != nil || got != fresh {
 		t.Fatalf("fresh runtime = %q, %v", got, err)
 	}
@@ -67,7 +67,7 @@ func TestNativeRestoreRuntimeDirReusesExactSavedBinding(t *testing.T) {
 	seedRuntimeOwner(t, saved)
 	writeRestoreSnapshot(t, root, workspace, restoreTestID, saved)
 	cfg := ports.WorkspaceHookConfig{WorkspacePath: workspace, Env: map[string]string{codewhaleHomeEnv: root}}
-	got, err := New().nativeRestoreRuntimeDir(context.Background(), cfg, restoreTestID, "", false, filepath.Join(t.TempDir(), "new-generation"))
+	got, err := New().nativeRestoreRuntimeDir(context.Background(), cfg, restoreTestID, "", filepath.Join(t.TempDir(), "new-generation"))
 	if err != nil || got != saved {
 		t.Fatalf("restored runtime = %q, %v", got, err)
 	}
@@ -105,7 +105,7 @@ func TestNativeRestoreRuntimeDirRefusesMissingAndMismatchedState(t *testing.T) {
 			case "profile":
 				cfg.Env[codewhaleHomeEnv] = t.TempDir()
 			}
-			if _, err := New().nativeRestoreRuntimeDir(context.Background(), cfg, id, root, false, t.TempDir()); err == nil {
+			if _, err := New().nativeRestoreRuntimeDir(context.Background(), cfg, id, root, t.TempDir()); err == nil {
 				t.Fatal("selected new authority for an invalid native restore")
 			}
 		})
@@ -125,7 +125,7 @@ func TestImportedFirstOpenThenSecondNativeRestart(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	got, err := p.nativeRestoreRuntimeDir(context.Background(), cfg, prepared.NativeSessionID, prepared.ConfigDir, true, first)
+	got, err := p.nativeRestoreRuntimeDir(context.Background(), cfg, prepared.NativeSessionID, prepared.ConfigDir, first)
 	if err != nil || got != first {
 		t.Fatalf("imported first open = %q, %v", got, err)
 	}
@@ -133,9 +133,61 @@ func TestImportedFirstOpenThenSecondNativeRestart(t *testing.T) {
 	// open. Its next generation must reuse it instead of selecting a new store.
 	seedRuntimeOwner(t, first)
 	writeRestoreSnapshot(t, root, launch, prepared.NativeSessionID, first)
-	got, err = p.nativeRestoreRuntimeDir(context.Background(), cfg, prepared.NativeSessionID, prepared.ConfigDir, false, filepath.Join(t.TempDir(), "second-generation"))
+	got, err = p.nativeRestoreRuntimeDir(context.Background(), cfg, prepared.NativeSessionID, prepared.ConfigDir, filepath.Join(t.TempDir(), "second-generation"))
 	if err != nil || got != first {
 		t.Fatalf("second native restart = %q, %v", got, err)
+	}
+	// ImportConfigDir remains set after adoption. It cannot authorize a later
+	// missing binding just because this conversation originally came from import.
+	writeRestoreSnapshot(t, root, launch, prepared.NativeSessionID, "")
+	if _, err := p.nativeRestoreRuntimeDir(context.Background(), cfg, prepared.NativeSessionID, prepared.ConfigDir, t.TempDir()); err == nil {
+		t.Fatal("recreated runtime authority after the native binding disappeared")
+	}
+}
+
+func TestImportedFirstOpenRefusesUnprovenOrChangedCopy(t *testing.T) {
+	for _, kind := range []string{"changed", "missing_proof", "wrong_source", "ordinary_restore", "missing_identity"} {
+		t.Run(kind, func(t *testing.T) {
+			root, sourceCWD, launch := t.TempDir(), t.TempDir(), t.TempDir()
+			source := writeRestoreSnapshot(t, root, sourceCWD, restoreTestID, "")
+			p := New()
+			prepared, err := p.PrepareImportedSession(context.Background(), ports.ImportedSessionRelocation{NativeSessionID: restoreTestID, ConfigDir: root, TranscriptPath: source, LaunchCWD: launch})
+			if err != nil {
+				t.Fatal(err)
+			}
+			body, err := os.ReadFile(prepared.TranscriptPath)
+			if err != nil {
+				t.Fatal(err)
+			}
+			var raw map[string]any
+			if err := json.Unmarshal(body, &raw); err != nil {
+				t.Fatal(err)
+			}
+			id, recordedRoot := prepared.NativeSessionID, prepared.ConfigDir
+			switch kind {
+			case "changed":
+				raw["metadata"].(map[string]any)["title"] = "changed after copy"
+			case "missing_proof":
+				delete(raw, "ao_import")
+			case "wrong_source":
+				raw["ao_import"].(map[string]any)["source_id"] = "99999999-9999-4999-8999-999999999999"
+			case "ordinary_restore":
+				recordedRoot = ""
+			case "missing_identity":
+				id = ""
+			}
+			body, err = json.Marshal(raw)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err := os.WriteFile(prepared.TranscriptPath, body, 0o600); err != nil {
+				t.Fatal(err)
+			}
+			cfg := ports.WorkspaceHookConfig{WorkspacePath: launch, Env: map[string]string{codewhaleHomeEnv: root}}
+			if _, err := p.nativeRestoreRuntimeDir(context.Background(), cfg, id, recordedRoot, t.TempDir()); err == nil {
+				t.Fatal("accepted unproven unbound native restore")
+			}
+		})
 	}
 }
 
@@ -156,7 +208,7 @@ func TestNativeRestoreLocatorSelectsExactConversationInSharedRuntime(t *testing.
 	p := &Plugin{resolvedBinary: "/synthetic/codewhale"}
 	if err := p.PrepareRuntimeLaunch(context.Background(), ports.WorkspaceHookConfig{
 		DataDir: dataDir, SessionID: "ao-selected", WorkspacePath: workspace, Env: env,
-		NativeSessionID: restoreTestID, RestoreMode: ports.WorkspaceRestoreNative,
+		NativeSessionID: restoreTestID,
 	}); err != nil {
 		t.Fatal(err)
 	}

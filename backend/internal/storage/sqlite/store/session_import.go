@@ -1,6 +1,7 @@
 package store
 
 import (
+	"cmp"
 	"context"
 	"database/sql"
 	"errors"
@@ -43,14 +44,27 @@ func (s *Store) CreateImportedSession(ctx context.Context, rec domain.SessionRec
 		if err != nil {
 			return err
 		}
-		for i, msg := range messages {
-			if err := q.InsertSessionImportMessage(ctx, gen.InsertSessionImportMessageParams{SessionID: string(created.ID), Sequence: int64(i + 1), Role: string(msg.Role), Text: msg.Text, CreatedAt: msg.At}); err != nil {
-				return err
-			}
-		}
-		return nil
+		return insertImportMessages(ctx, q, created.ID, messages)
 	})
 	return created, fresh, err
+}
+
+// insertImportMessages writes messages as the archive's sequences 1..N.
+func insertImportMessages(ctx context.Context, q *gen.Queries, id domain.SessionID, messages []domain.ImportedMessage) error {
+	for i, msg := range messages {
+		if err := q.InsertSessionImportMessage(ctx, gen.InsertSessionImportMessageParams{SessionID: string(id), Sequence: int64(i + 1), Role: string(msg.Role), Text: msg.Text, CreatedAt: msg.At}); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// importWorkspaceParams binds an adoption write of source and workspace facts.
+func importWorkspaceParams(id domain.SessionID, source *domain.SessionImportSource, workspace domain.SessionMetadata, now time.Time) gen.SetSessionImportWorkspaceParams {
+	return gen.SetSessionImportWorkspaceParams{
+		ID: id, NewSource: marshalImportSource(source), Branch: workspace.Branch, WorkspacePath: workspace.WorkspacePath,
+		WorkspaceRepoPath: workspace.WorkspaceRepoPath, DiffBaseSha: workspace.DiffBaseSHA, DiffBaseRef: workspace.DiffBaseRef, UpdatedAt: now,
+	}
 }
 
 // ReplaceImportedMessages swaps in a fresher read of the source until the
@@ -91,10 +105,8 @@ func (s *Store) ReplaceImportedMessages(ctx context.Context, id domain.SessionID
 		if err := q.DeleteSessionImportMessages(ctx, string(id)); err != nil {
 			return err
 		}
-		for i, msg := range messages {
-			if err := q.InsertSessionImportMessage(ctx, gen.InsertSessionImportMessageParams{SessionID: string(id), Sequence: int64(i + 1), Role: string(msg.Role), Text: msg.Text, CreatedAt: msg.At}); err != nil {
-				return err
-			}
+		if err := insertImportMessages(ctx, q, id, messages); err != nil {
+			return err
 		}
 		if !opened {
 			return nil
@@ -106,9 +118,9 @@ func (s *Store) ReplaceImportedMessages(ctx context.Context, id domain.SessionID
 
 // LoadSessionImportMessages pages the archive. It remains after native adoption.
 func (s *Store) LoadSessionImportMessages(ctx context.Context, id domain.SessionID, before, limit int64) ([]domain.ConversationMessage, bool, error) {
-	// The conversation route accepts up to 500 per page; the archive pages alike.
+	// The archive pages like the live conversation it precedes.
 	if limit <= 0 {
-		limit = 100
+		limit = DefaultConversationPageSize
 	}
 	limit = min(limit, 500)
 	if before == 0 {
@@ -136,7 +148,6 @@ func (s *Store) LoadSessionImportMessages(ctx context.Context, id domain.Session
 
 // SetSessionImportWorkspace changes only adoption facts, preserving concurrent
 // session edits: the import source and workspace's branch, paths and diff base.
-// It compares decoded values, so rows written before a field was added still match.
 func (s *Store) SetSessionImportWorkspace(ctx context.Context, id domain.SessionID, expected, next *domain.SessionImportSource, workspace domain.SessionMetadata, now time.Time) (bool, error) {
 	if expected == nil || next == nil {
 		return false, errors.New("import source is required")
@@ -155,27 +166,30 @@ func (s *Store) SetSessionImportWorkspace(ctx context.Context, id domain.Session
 		if current := unmarshalImportSource(raw); current == nil || *current != *expected {
 			return nil
 		}
-		rows, err := q.SetSessionImportWorkspace(ctx, gen.SetSessionImportWorkspaceParams{
-			ID: id, NewSource: marshalImportSource(next), Branch: workspace.Branch, WorkspacePath: workspace.WorkspacePath,
-			WorkspaceRepoPath: workspace.WorkspaceRepoPath, DiffBaseSha: workspace.DiffBaseSHA, DiffBaseRef: workspace.DiffBaseRef, UpdatedAt: now,
-		})
+		rows, err := q.SetSessionImportWorkspace(ctx, importWorkspaceParams(id, next, workspace, now))
 		updated = rows > 0
 		return err
 	})
 	return updated, err
 }
 
-// CommitImportedNativeSessionID checkpoints a provider-observed native fork and
-// publishes both native bindings atomically for the exact pending launch. The
-// immutable source identity remains available for import deduplication.
-func (s *Store) CommitImportedNativeSessionID(ctx context.Context, id domain.SessionID, expected *domain.SessionImportSource, handleID, launchID, nativeID string) (bool, error) {
-	if expected == nil || handleID == "" || launchID == "" || nativeID == "" {
-		return false, errors.New("native import identity and launch are required")
+// errPreparedImportLost rolls back a prepared identity whose workspace write
+// lost its ownership proof after the session handles moved.
+var errPreparedImportLost = errors.New("prepared import lost ownership")
+
+// SetPreparedImportIdentity records a preparer's new native copy before the
+// first launch. The session's agent and provider handles move from the source
+// identity to the copy in the same transaction, so a chat conversation created
+// for the launch binds the copy rather than the untouched original.
+func (s *Store) SetPreparedImportIdentity(ctx context.Context, id domain.SessionID, expected, next *domain.SessionImportSource, workspace domain.SessionMetadata, now time.Time) (bool, error) {
+	if expected == nil || next == nil || next.ResumeNativeID == "" {
+		return false, errors.New("prepared import identity is required")
 	}
+	previous := cmp.Or(expected.ResumeNativeID, expected.NativeID)
 	s.writeMu.Lock()
 	defer s.writeMu.Unlock()
 	updated := false
-	err := s.inTx(ctx, "commit imported native identity", func(q *gen.Queries) error {
+	err := s.inTxDB(ctx, "set prepared import identity", func(q *gen.Queries, db gen.DBTX) error {
 		row, err := q.GetSession(ctx, id)
 		if errors.Is(err, sql.ErrNoRows) {
 			return nil
@@ -184,32 +198,45 @@ func (s *Store) CommitImportedNativeSessionID(ctx context.Context, id domain.Ses
 			return err
 		}
 		rec := rowToRecord(row)
-		source := rec.Metadata.ImportSource
-		if !rec.NeedsImportResume() || rec.IsTerminated || *source != *expected || rec.Metadata.RuntimeHandleID != handleID || rec.Metadata.RuntimeLaunchID != launchID {
+		if current := rec.Metadata.ImportSource; rec.IsTerminated || current == nil || *current != *expected {
 			return nil
 		}
-		next := *source
-		next.ResumeNativeID = nativeID
-		// Preparation's path named the former identity. The observed fork's
-		// locator supplies its actual path through the fenced activity signal.
-		next.ResumeTranscriptPath = ""
-		rec.Metadata.AgentSessionID, rec.Metadata.ProviderConversationID = nativeID, nativeID
-		rec.Metadata.AgentSessionIDLaunchID = launchID
-		if err := q.UpdateSession(ctx, recordToUpdate(rec)); err != nil {
-			return err
+		if next.ResumeNativeID != previous && rec.Metadata.ProviderConversationID == previous &&
+			(rec.Metadata.AgentSessionID == previous || rec.Metadata.AgentSessionID == "") {
+			rec.Metadata.AgentSessionID, rec.Metadata.ProviderConversationID = next.ResumeNativeID, next.ResumeNativeID
+			rec.Metadata.AgentSessionIDLaunchID = ""
+			rec.UpdatedAt = now
+			if err := q.UpdateSession(ctx, recordToUpdate(rec)); err != nil {
+				return err
+			}
+			if db == nil {
+				return errors.New("prepared import identity requires its own transaction")
+			}
+			// A conversation opened before preparation still names the source.
+			// Its root moves too while no turn of its own has used that handle.
+			if _, err := db.ExecContext(ctx, `
+UPDATE conversation_branches SET provider_conversation_id = ?
+WHERE parent_branch_id IS NULL AND provider_conversation_id = ?
+  AND id = (SELECT active_branch_id FROM conversations WHERE session_id = ? AND current_session_id = ?)
+  AND NOT EXISTS (
+      SELECT 1 FROM conversation_turns AS t JOIN conversations AS c ON c.id = t.conversation_id
+      WHERE c.session_id = ?
+  )`, next.ResumeNativeID, previous, id, id, id); err != nil {
+				return fmt.Errorf("rebind imported conversation: %w", err)
+			}
 		}
-		rows, err := q.SetSessionImportWorkspace(ctx, gen.SetSessionImportWorkspaceParams{
-			ID: id, NewSource: marshalImportSource(&next), Branch: rec.Metadata.Branch, WorkspacePath: rec.Metadata.WorkspacePath,
-			WorkspaceRepoPath: rec.Metadata.WorkspaceRepoPath, DiffBaseSha: rec.Metadata.DiffBaseSHA, DiffBaseRef: rec.Metadata.DiffBaseRef, UpdatedAt: rec.UpdatedAt,
-		})
+		rows, err := q.SetSessionImportWorkspace(ctx, importWorkspaceParams(id, next, workspace, now))
 		if err != nil {
 			return err
 		}
 		if rows != 1 {
-			return errors.New("native import identity checkpoint lost ownership")
+			return errPreparedImportLost
 		}
 		updated = true
 		return nil
 	})
+	if errors.Is(err, errPreparedImportLost) {
+		return false, nil
+	}
 	return updated, err
 }

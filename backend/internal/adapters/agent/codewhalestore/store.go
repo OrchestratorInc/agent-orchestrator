@@ -3,6 +3,8 @@ package codewhalestore
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"io"
@@ -35,6 +37,13 @@ type Archive struct {
 	RuntimeBound bool
 	RuntimeDir   string
 	RuntimeScope string
+	// UnopenedCopy proves that this is still the exact unbound private copy.
+	UnopenedCopy bool
+}
+
+type copyProof struct {
+	SourceID string `json:"source_id"`
+	Digest   string `json:"digest"`
 }
 
 type nativeMessage struct {
@@ -135,6 +144,20 @@ func read(ctx context.Context, root, path string, importing bool) (Archive, map[
 	out := Archive{ID: doc.Metadata.ID, CWD: doc.Metadata.Workspace, Title: doc.Metadata.Title, Model: doc.Metadata.Model, Updated: doc.Metadata.Updated}
 	if binding := doc.Metadata.RuntimeStore; binding != nil {
 		out.RuntimeBound, out.RuntimeDir, out.RuntimeScope = true, binding.DataDir, binding.Scope
+	}
+	if !out.RuntimeBound {
+		var proof copyProof
+		if json.Unmarshal(raw["ao_import"], &proof) == nil && proof.SourceID != "" && copiedID(root, proof.SourceID, out.CWD) == out.ID {
+			delete(raw, "ao_import")
+			unsigned, err := json.Marshal(raw)
+			if err != nil {
+				return Archive{}, nil, err
+			}
+			digest := sha256.Sum256(unsigned)
+			out.UnopenedCopy = proof.Digest == hex.EncodeToString(digest[:])
+			// Retain the field when returning the original document to Copy.
+			raw["ao_import"], _ = json.Marshal(proof)
+		}
 	}
 	add := func(message nativeMessage, at time.Time) {
 		if message.Role != "user" && message.Role != "assistant" {
@@ -275,7 +298,7 @@ func Copy(ctx context.Context, root, path, launchCWD string) (Archive, string, e
 		return Archive{}, "", err
 	}
 	// Namespaced identity makes preparation idempotent before AO checkpoints it.
-	id := uuid.NewSHA1(uuid.NameSpaceURL, []byte("ao-codewhale-import\x00"+filepath.Clean(root)+"\x00"+archive.ID+"\x00"+cwd)).String()
+	id := copiedID(root, archive.ID, cwd)
 	target := filepath.Join(root, "sessions", id+".json")
 	if existing, err := Read(ctx, root, target); err == nil {
 		if existing.ID != id || existing.CWD != cwd {
@@ -292,6 +315,19 @@ func Copy(ctx context.Context, root, path, launchCWD string) (Archive, string, e
 	delete(metadata, "runtime_store")
 	delete(metadata, "publication_id")
 	raw["metadata"], err = json.Marshal(metadata)
+	if err != nil {
+		return Archive{}, "", err
+	}
+	delete(raw, "ao_import")
+	unsigned, err := json.Marshal(raw)
+	if err != nil {
+		return Archive{}, "", err
+	}
+	digest := sha256.Sum256(unsigned)
+	// v0.10.2 deserializes SavedSession into typed fields and does not retain
+	// unknown fields (session_manager.rs:1150, 1541). The first native save
+	// drops this proof; its digest also refuses any changed, still-marked copy.
+	raw["ao_import"], err = json.Marshal(copyProof{SourceID: archive.ID, Digest: hex.EncodeToString(digest[:])})
 	if err != nil {
 		return Archive{}, "", err
 	}
@@ -329,4 +365,8 @@ func Copy(ctx context.Context, root, path, launchCWD string) (Archive, string, e
 	}
 	prepared, err := Read(ctx, root, target)
 	return prepared, target, err
+}
+
+func copiedID(root, sourceID, cwd string) string {
+	return uuid.NewSHA1(uuid.NameSpaceURL, []byte("ao-codewhale-import\x00"+filepath.Clean(root)+"\x00"+sourceID+"\x00"+cwd)).String()
 }

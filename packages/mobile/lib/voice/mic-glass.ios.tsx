@@ -6,7 +6,7 @@ import { useThemeState } from "../ThemeProvider";
 
 /**
  * The glass behind the idle mic: the system Liquid Glass material, the same one
- * the Workers dock and the drawer buttons use.
+ * the Workers dock uses.
  *
  * Only the material comes from SwiftUI. The touch stays on the React Native
  * Pressable above it, because a SwiftUI Button has no press-in / press-out and

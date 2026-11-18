@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
 )
@@ -27,10 +28,10 @@ func newOpenCodeStore(t *testing.T) (root string, db *sql.DB) {
 			title text NOT NULL, time_updated integer NOT NULL, time_archived integer)`,
 		`CREATE TABLE message (
 			id text PRIMARY KEY, session_id text NOT NULL,
-			time_created integer NOT NULL, data text NOT NULL)`,
+			time_created integer NOT NULL, time_updated integer NOT NULL DEFAULT 0, data text NOT NULL)`,
 		`CREATE TABLE part (
 			id text PRIMARY KEY, message_id text NOT NULL, session_id text NOT NULL,
-			time_created integer NOT NULL, data text NOT NULL)`,
+			time_created integer NOT NULL, time_updated integer NOT NULL DEFAULT 0, data text NOT NULL)`,
 	}
 	for _, stmt := range stmts {
 		if _, err := db.Exec(stmt); err != nil {
@@ -100,19 +101,22 @@ func TestOpenCodeDiscoverSkipsChildAndArchived(t *testing.T) {
 	}
 }
 
-func TestScanDoesNotOfferOpenCodeWithReadableHistory(t *testing.T) {
+// OpenCode resumes from a private copy bound to AO's workspace (see the
+// opencode adapter's PrepareImportedSession), so readable chats are offered.
+func TestScanOffersOpenCodeWithReadableHistory(t *testing.T) {
 	root, db := newOpenCodeStore(t)
 	project := t.TempDir()
 	addSession(t, db, "ses_deferred", "", project, "Deferred import", 9000, nil)
 	addMessage(t, db, "ses_deferred", "msg_deferred", "user", 1000, "text:keep tools in AO")
 	svc := New(&importStore{projects: []domain.ProjectRecord{{ID: "repo", Path: project}}}, "", chatSupported)
 	svc.roots = map[domain.AgentHarness]string{domain.HarnessOpenCode: root}
+	svc.now = func() time.Time { return time.UnixMilli(9000).Add(time.Hour) }
 	preview, err := svc.Scan(context.Background())
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(preview.Candidates) != 0 {
-		t.Fatalf("OpenCode must not be offered until tools run in AO's worktree: %+v", preview.Candidates)
+	if len(preview.Candidates) != 1 || preview.Candidates[0].Harness != domain.HarnessOpenCode || preview.Candidates[0].ProjectID != "repo" {
+		t.Fatalf("readable OpenCode chat was not offered: %+v", preview.Candidates)
 	}
 }
 
@@ -176,9 +180,9 @@ func TestOpenCodeMissingDatabaseYieldsNoCandidates(t *testing.T) {
 // A long OpenCode session is bounded while its parts are read: the oldest
 // text goes first and the opening prompt stays.
 func TestOpenCodeHeldTextIsBoundedWhileReading(t *testing.T) {
-	held := maxClaudeHeld
-	maxClaudeHeld = 60
-	t.Cleanup(func() { maxClaudeHeld = held })
+	held := maxHeldText
+	maxHeldText = 60
+	t.Cleanup(func() { maxHeldText = held })
 	root, db := newOpenCodeStore(t)
 	const id = "ses_e830c4a8affelmmC9j6HFbCZAr"
 	addSession(t, db, id, "", "/work/repo", "Long chat", 1700000009000, nil)

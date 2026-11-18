@@ -97,12 +97,12 @@ func (*Plugin) PrepareImportedSession(ctx context.Context, r ports.ImportedSessi
 	return ports.NativeSessionRef{NativeSessionID: copy.ID, ConfigDir: r.ConfigDir, TranscriptPath: path}, nil
 }
 
-func (p *Plugin) nativeRestoreRuntimeDir(ctx context.Context, cfg ports.WorkspaceHookConfig, nativeID, recordedRoot string, importedFirstOpen bool, freshDir string) (string, error) {
+func (p *Plugin) nativeRestoreRuntimeDir(ctx context.Context, cfg ports.WorkspaceHookConfig, nativeID, recordedRoot, freshDir string) (string, error) {
 	if err := ctx.Err(); err != nil {
 		return "", err
 	}
 	if nativeID == "" {
-		if cfg.RestoreMode != ports.WorkspaceRestoreFresh {
+		if recordedRoot != "" {
 			return "", errors.New("codewhale native restore did not identify its conversation")
 		}
 		return freshDir, nil
@@ -144,7 +144,7 @@ func (p *Plugin) nativeRestoreRuntimeDir(ctx context.Context, cfg ports.Workspac
 		return "", errors.New("codewhale restore snapshot does not match its selected workspace")
 	}
 	if !archive.RuntimeBound {
-		if importedFirstOpen {
+		if recordedRoot != "" && archive.UnopenedCopy {
 			return freshDir, nil
 		}
 		return "", errors.New("codewhale native restore is missing its saved runtime binding")

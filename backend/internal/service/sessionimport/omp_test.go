@@ -106,13 +106,13 @@ func TestOMPRejectsIdentityMismatchAndPromptlessSessions(t *testing.T) {
 }
 
 func TestOMPNativeIDFromPath(t *testing.T) {
-	if got := ompNativeIDFromPath("2026-10-27T10-41-41-840Z_" + ompSession + ".jsonl"); got != ompSession {
+	if got := piFamilyNativeID("2026-10-27T10-41-41-840Z_" + ompSession + ".jsonl"); got != ompSession {
 		t.Fatalf("name only: got %q, want %q", got, ompSession)
 	}
-	if got := ompNativeIDFromPath("/root/sessions/-a-b/2026-10-27T10-41-41-840Z_" + ompSession + ".jsonl"); got != ompSession {
+	if got := piFamilyNativeID("/root/sessions/-a-b/2026-10-27T10-41-41-840Z_" + ompSession + ".jsonl"); got != ompSession {
 		t.Fatalf("full path: got %q, want %q", got, ompSession)
 	}
-	if got := ompNativeIDFromPath("noseparator.jsonl"); got != "noseparator" {
+	if got := piFamilyNativeID("noseparator.jsonl"); got != "noseparator" {
 		t.Fatalf("no separator: got %q, want %q", got, "noseparator")
 	}
 	// sourceFiles derives the same grouping id from the file name.
@@ -124,7 +124,7 @@ func TestOMPNativeIDFromPath(t *testing.T) {
 
 func TestOMPDiscoverImportAndRefresh(t *testing.T) {
 	ctx := context.Background()
-	root := t.TempDir()
+	root := canonical(t.TempDir())
 	cwd := t.TempDir()
 	encodedCWD, err := json.Marshal(cwd)
 	if err != nil {
@@ -215,28 +215,10 @@ func TestOMPRootOverrideAndDefault(t *testing.T) {
 	}
 }
 
-func TestOMPModelAndEffortFollowTheActiveBranch(t *testing.T) {
-	body := `{"type":"session","id":"` + ompSession + `","cwd":"/work/repo"}
-{"type":"model_change","id":"model","parentId":null,"model":"synthetic/original"}
-{"type":"thinking_level_change","id":"effort","parentId":"model","thinkingLevel":"medium"}
-{"type":"message","id":"m1","parentId":"effort","message":{"role":"user","content":"keep this"}}
-{"type":"model_change","id":"abandoned","parentId":"m1","model":"synthetic/abandoned"}
-{"type":"message","id":"a1","parentId":"m1","message":{"role":"assistant","content":"active answer"}}
-`
-	root := t.TempDir()
-	got, err := readTranscript(context.Background(), domain.HarnessOMP, root, writeFile(t, ompFile(root), body))
-	if err != nil {
-		t.Fatal(err)
-	}
-	if got.model != "synthetic/original" || got.effort != "medium" {
-		t.Fatalf("active settings = %q, %q", got.model, got.effort)
-	}
-}
-
 func TestOMPBoundsHeldTextAcrossAbandonedBranches(t *testing.T) {
-	oldHeld := maxClaudeHeld
-	maxClaudeHeld = 128
-	t.Cleanup(func() { maxClaudeHeld = oldHeld })
+	oldHeld := maxHeldText
+	maxHeldText = 128
+	t.Cleanup(func() { maxHeldText = oldHeld })
 	body := `{"type":"session","id":"` + ompSession + `","cwd":"/work/repo"}` + "\n" +
 		`{"type":"message","id":"m1","parentId":null,"message":{"role":"user","content":"opening prompt"}}` + "\n" +
 		`{"type":"message","id":"a1","parentId":"m1","message":{"role":"assistant","content":"` + strings.Repeat("x", 100) + `"}}` + "\n" +

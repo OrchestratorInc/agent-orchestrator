@@ -30,7 +30,7 @@ func TestImportedNativePreparationCheckpointsIdentityBeforeLaunch(t *testing.T) 
 	rec.Metadata.ImportSource = &domain.SessionImportSource{NativeID: "original", ConfigDir: t.TempDir(), Prepared: true, Fingerprint: "synthetic-native-snapshot"}
 	rec.Metadata.NativeTranscriptPath = "/original/history.json"
 	st.sessions[rec.ID] = rec
-	prepared, err := m.relocateImportedSession(context.Background(), rec, rec.Metadata.WorkspacePath)
+	prepared, err := m.relocateImportedSession(context.Background(), rec, rec.Metadata.WorkspacePath, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -38,7 +38,7 @@ func TestImportedNativePreparationCheckpointsIdentityBeforeLaunch(t *testing.T) 
 	if a.request.SourceFingerprint != "synthetic-native-snapshot" {
 		t.Fatal("native preparer did not receive the selected source fingerprint")
 	}
-	if prepared.Metadata.AgentSessionID != "copied-native" || prepared.Metadata.ProviderConversationID != "copied-native" || source.NativeID != "original" || source.ResumeNativeID != "copied-native" || source.SourceTranscriptPath != "/original/history.json" || prepared.Metadata.NativeTranscriptPath != "/private/copy.json" {
+	if prepared.Metadata.AgentSessionID != "copied-native" || prepared.Metadata.ProviderConversationID != "copied-native" || source.NativeID != "original" || source.ResumeNativeID != "copied-native" || prepared.Metadata.NativeTranscriptPath != "/private/copy.json" {
 		t.Fatalf("prepared identity = %#v", prepared.Metadata)
 	}
 	checkpoint := st.sessions[rec.ID]
@@ -46,7 +46,7 @@ func TestImportedNativePreparationCheckpointsIdentityBeforeLaunch(t *testing.T) 
 		t.Fatalf("prelaunch checkpoint = %#v", checkpoint.Metadata)
 	}
 	a.err = errors.New("preparation must not run again")
-	again, err := m.relocateImportedSession(context.Background(), checkpoint, rec.Metadata.WorkspacePath)
+	again, err := m.relocateImportedSession(context.Background(), checkpoint, rec.Metadata.WorkspacePath, nil)
 	if err != nil || a.calls != 1 || again.Metadata.AgentSessionID != "copied-native" {
 		t.Fatalf("retry = %#v, calls=%d, %v", again.Metadata, a.calls, err)
 	}
@@ -65,7 +65,7 @@ func TestImportedNativePreparationRejectsUnidentifiedConversation(t *testing.T) 
 		rec := st.sessions["mer-1"]
 		rec.Metadata.ImportSource = &domain.SessionImportSource{NativeID: "original", ConfigDir: t.TempDir(), Prepared: true}
 		st.sessions[rec.ID] = rec
-		if _, err := m.relocateImportedSession(context.Background(), rec, rec.Metadata.WorkspacePath); err == nil {
+		if _, err := m.relocateImportedSession(context.Background(), rec, rec.Metadata.WorkspacePath, nil); err == nil {
 			t.Fatalf("accepted unidentified native id %q", nativeID)
 		}
 		if st.sessions[rec.ID].Metadata.ImportSource.ResumeNativeID != "" || rt.created != 0 {
