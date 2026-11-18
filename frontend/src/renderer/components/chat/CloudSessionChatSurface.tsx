@@ -22,8 +22,11 @@ import { appI18n } from "../../i18n";
 import { CLOUD_AGENT_PROVIDERS } from "../../lib/cloud-agents";
 import type { CloudCpAgentProvider, CloudCpClientEvent, CloudCpSessionChatSettings } from "../../lib/cloud-cp";
 import { cloudStartupProblem, isWorkspaceStartupError, resumeCloudSession, type CloudStartupProblem } from "../../lib/cloud-lifecycle";
+import { PLAN_REFUSAL_CODES } from "../../lib/cloud-cp/client";
 import { forgetCloudOpening, useCloudOpening } from "../../lib/cloud-opening";
 import { CloudCpError } from "../../lib/cloud-cp/errors";
+import { reportPlanRefusal } from "../../lib/cloud-telemetry";
+import { useCloudBilling } from "../../hooks/useCloudBilling";
 import { cloudSessionScriptsEnded, groupScriptRuns, parseScriptStepPayload, SCRIPT_STEP_EVENT, type ScriptRun } from "../../lib/cloud-script-runs";
 import { cloudChatHistoryKey, loadCloudChatHistory, loadOlderCloudChatEvents, mergeCloudEvents, streamedCloudChatEvents, type CloudChatHistory } from "../../lib/cloud-chat-history";
 import { useSessionLinkNavigation } from "../../lib/use-session-link-navigation";
@@ -48,6 +51,7 @@ import { CloudAttachmentSourceProvider } from "./CloudMessageAttachments";
 import { cloudAttachmentReference, cloudMessageAttachments, uploadCloudAttachment, type CloudAttachment } from "../../lib/cloud-attachments";
 import type { ApprovalModeLimits } from "./TurnSettingsBar";
 import { SharedComposerNotice } from "./SharedComposerNotice";
+import { Button } from "../ui/button";
 import { artifactAtPath } from "../../../../../packages/shared/artifacts/deliverables";
 
 type EventPayload = {
@@ -527,6 +531,79 @@ function useCloudChatEventStream(orgId: string | undefined, sessionId: string, e
 	return useCloudSessionEventStream({ baseUrl, orgId, sessionId, enabled, onEvent, resumeAfter });
 }
 
+const PLAN_REFUSAL_CODE_ALTERNATION = [...PLAN_REFUSAL_CODES].join("|");
+// Failed MCP tools also report the code in parentheses or a JSON `code` field.
+// A bare code is not enough: a failing test or grep can print it too.
+const PLAN_REFUSAL_PATTERN = new RegExp(
+	`\\((${PLAN_REFUSAL_CODE_ALTERNATION})\\)|"code"\\s*:\\s*"(${PLAN_REFUSAL_CODE_ALTERNATION})"`,
+);
+const CLI_PLAN_REFUSAL_PATTERN = new RegExp(`^\\s*(?:[\\w./][\\w./-]*\\s+=>\\s+)?ao: (${PLAN_REFUSAL_CODE_ALTERNATION}): \\S`);
+
+/** A command or MCP tool that failed, by the same rule the timeline rows use. */
+function failedTool(item: ConversationItem): item is ConversationItem & { kind: "activity" } {
+	if (item.kind !== "activity") return false;
+	if (item.activityKind === "command") return item.status === "failed";
+	if (item.activityKind !== "mcp_tool") return false;
+	return item.status === "failed" || item.detail?.success === false || Boolean(item.detail?.error);
+}
+
+/**
+ * The plan refusal code a tool reported, if any. An agent's own call to
+ * the control plane (an orchestrator spawning a worker) is refused inside the
+ * sandbox, so the tool's output is the only place this desktop sees it. A
+ * command reports it in its output, an MCP tool in its error.
+ */
+export function planRefusalCode(item: ConversationItem): string | undefined {
+	if (item.kind === "activity" && item.activityKind === "command" && typeof item.detail?.output === "string") {
+		// A shell loop can finish successfully after individual spawns are refused.
+		for (const line of item.detail.output.split(/\r?\n/)) {
+			const match = CLI_PLAN_REFUSAL_PATTERN.exec(line);
+			if (match) return match[1];
+		}
+	}
+	if (!failedTool(item) || item.activityKind !== "mcp_tool") return undefined;
+	const text = [item.detail?.error, item.detail?.output].filter((part): part is string => typeof part === "string").join("\n");
+	const match = PLAN_REFUSAL_PATTERN.exec(text);
+	return match?.[1] ?? match?.[2];
+}
+
+/**
+ * Why the agent's request was refused, with Upgrade for an org that can buy a
+ * plan. A shared session runs on its owner's plan, not the viewer's org, so a
+ * guest sees neither this org's plan nor a link to its billing.
+ */
+function PlanLimitNotice({ code, shared, onDismiss }: { code: string; shared: boolean; onDismiss: () => void }) {
+	const { data, offering } = useCloudBilling();
+	const plan = shared ? undefined : data?.limits?.plan ?? data?.plan;
+	const planName = plan ? plan.charAt(0).toUpperCase() + plan.slice(1) : undefined;
+	const limit = data?.limits?.maxRunningSandboxes;
+	const canUpgrade = offering.selfServeBilling && offering.canManageBilling;
+	const reason = !code.endsWith("_SLOTS_FULL") ? appI18n.t("cloud.planLimit.refused")
+		: !planName ? appI18n.t("cloud.planLimit.slotsFull")
+			: typeof limit === "number" && Number.isFinite(limit) && limit > 0
+				? appI18n.t("cloud.planLimit.slotsFullWithLimit", { plan: planName, limit })
+				: appI18n.t("cloud.planLimit.slotsFullOnPlan", { plan: planName });
+	const nextStep = appI18n.t(canUpgrade ? "cloud.planLimit.stopOrUpgrade" : "cloud.planLimit.stopOrContactAdmin");
+	return (
+		<ComposerErrorNotice
+			title={appI18n.t("cloud.planLimit.title")}
+			message={shared ? appI18n.t("cloud.planLimit.contactOwner") : <>{reason}<span className="block">{nextStep}</span></>}
+			onDismiss={onDismiss}
+			action={!shared && canUpgrade ? (
+				<Button
+					type="button"
+					variant="link"
+					className="mt-1"
+					onClick={() => {
+						useUiStore.getState().openGlobalSettings("billing");
+					}}
+				>
+					{appI18n.t("cloud.planLimit.upgrade")}
+				</Button>
+			) : undefined}
+		/>
+	);
+}
 /** A worker's turn_plan activity as the turn's plan, or undefined when it carries none. */
 function cloudPlan(detail: Record<string, unknown>): ConversationPlan | undefined {
 	const raw = detail.plan;
@@ -1382,7 +1459,6 @@ export function CloudSessionChatSurface({
 	session,
 	headerActions,
 	sessionTabAction,
-	sessionTabActionPinned = false,
 	onOpenFiles,
 	onOpenFile,
 	onOpenArtifact,
@@ -1427,8 +1503,6 @@ export function CloudSessionChatSurface({
 	workspaceFileActive?: boolean;
 	headerActions?: ReactNode;
 	sessionTabAction?: ReactNode;
-	/** Keep the session tab's action showing at rest, while an interface switch is in flight. */
-	sessionTabActionPinned?: boolean;
 	/** The Cloud reviewer terminal, shown as its own tab beside the chat as in local sessions. */
 	reviewerTerminal?: { handleId: string; harness: string };
 	onOpenReviewerTerminal?: (target: { handleId: string; harness: string }) => void;
@@ -1602,6 +1676,10 @@ export function CloudSessionChatSurface({
 		queryKey: ["cloud-chat-events", cloud?.orgId ?? "", session.id],
 		enabled: Boolean(cloud && ready),
 		gcTime: CHAT_EVENTS_CACHE_MS,
+		// Each opening needs a history read, even within the cache's freshness
+		// window, to exclude refusals that happened while the chat was closed.
+		staleTime: 0,
+		refetchOnMount: "always",
 		// The event stream delivers events as they are committed; the poll only
 		// catches what a dropped or not-yet-open stream missed. An open stream
 		// counts from the moment it opens, so an idle chat slows down at once.
@@ -1968,6 +2046,50 @@ export function CloudSessionChatSurface({
 		const controller = startStopped ? { ...projected.controller, state: "stopped" as const } : projected.controller;
 		return { ...projected, items, controller, settings: { ...shownSettings, approvalMode: shownApprovalMode } };
 	}, [eventsQuery.data, history?.hasOlder, me, runningSwitch, session, shownSettings, shownApprovalMode, startFailed, startStopped]);
+	// Refusals present when this chat opened are history; a new refusal while
+	// it is open explains the limit above the composer.
+	const refusalKey = `${cloud?.orgId ?? ""}:${session.id}`;
+	const refusalBaseline = useRef<{ key: string; openedAt: number; through: number; seen?: Set<string> }>(undefined);
+	const [planRefusal, setPlanRefusal] = useState<{ key: string; code: string }>();
+	useEffect(() => {
+		const key = refusalKey;
+		if (refusalBaseline.current?.key !== key) {
+			refusalBaseline.current = { key, openedAt: Date.now(), through: 0 };
+			setPlanRefusal(undefined);
+		}
+		const baseline = refusalBaseline.current;
+		// Events cached from an earlier opening are history too, until refetched.
+		if (eventsQuery.dataUpdatedAt < baseline.openedAt) return;
+		const refusals = snapshot.items.filter((item) => planRefusalCode(item));
+		if (!baseline.seen) {
+			// Stream writes also advance dataUpdatedAt. Wait for opening history
+			// to finish before deciding which failures were already present.
+			if (!eventsQuery.isSuccess || eventsQuery.fetchStatus !== "idle") return;
+			baseline.seen = new Set(refusals.map((item) => item.id));
+			baseline.through = eventsQuery.data?.at(-1)?.sequence ?? 0;
+			return;
+		}
+		// Older pages can add failed tools after opening. Only an activity
+		// updated beyond the last observed event can report a new refusal.
+		const updated = new Set<string>();
+		for (const event of eventsQuery.data ?? []) {
+			if (event.sequence <= baseline.through || event.type !== "chat.activity") continue;
+			const activity = eventPayload(event).activity;
+			if (activity && typeof activity === "object" && "id" in activity) updated.add(`cloud-activity-${eventTurnID(event)}:${activity.id}`);
+		}
+		baseline.through = Math.max(baseline.through, eventsQuery.data?.at(-1)?.sequence ?? 0);
+		let code: string | undefined;
+		for (const item of refusals) {
+			if (baseline.seen.has(item.id) || !updated.has(item.id)) continue;
+			const refusal = planRefusalCode(item);
+			if (!refusal) continue;
+			baseline.seen.add(item.id);
+			code ??= refusal;
+			if (!cloud?.shared) reportPlanRefusal(refusal, false, "chat");
+		}
+		if (!code) return;
+		setPlanRefusal({ key, code });
+	}, [cloud?.shared, eventsQuery.data, eventsQuery.dataUpdatedAt, eventsQuery.fetchStatus, eventsQuery.isSuccess, refusalKey, snapshot]);
 	// The brief this device started the session with: shown from the first frame,
 	// until the control plane's chat holds the session's first human message, and
 	// timed from when it was sent, so the start reads as one conversation.
@@ -2313,7 +2435,12 @@ export function CloudSessionChatSurface({
 					message={apiErrorMessage(switchError)}
 					onDismiss={() => setSwitchError(undefined)}
 				/>
-			) : live ? <SharedComposerNotice live={live} lease={lease} userId={me} /> : undefined}
+			) : planRefusal?.key === refusalKey || live ? (
+				<>
+					{planRefusal?.key === refusalKey && <PlanLimitNotice code={planRefusal.code} shared={cloud?.shared === true} onDismiss={() => setPlanRefusal(undefined)} />}
+					{live && <SharedComposerNotice live={live} lease={lease} userId={me} />}
+				</>
+			) : undefined}
 			composerLockedPlaceholder={readOnly
 				? appI18n.t(myRole === "viewer" ? "chat.shared.viewOnly" : "chat.shared.checkingAccess")
 				// The attached notice already names the writer and the place in line.
@@ -2401,7 +2528,6 @@ export function CloudSessionChatSurface({
 			resumeError={retryStart.error instanceof Error ? retryStart.error.message : undefined}
 			sessionRole={session.kind}
 			sessionTabAction={sessionTabAction}
-			sessionTabActionPinned={sessionTabActionPinned}
 			sessionTitle={session.title}
 			// The chat tab renames the session as a local one does; the rename
 			// updates the cached session lists itself, and this catches up the rest.

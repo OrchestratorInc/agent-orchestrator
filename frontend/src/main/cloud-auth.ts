@@ -564,10 +564,10 @@ async function completeCloudSignIn(
 
 export interface CloudDeepLinkSignIn {
   account: CloudAccount;
-  // What the orchestrator.inc return page adds to the sign-in: the website
-  // visitor id (web_distinct_id) for visitors who accepted analytics there.
-  // Present only when it is well formed and this link completed a new sign-in,
-  // so a repeated return link never hands it over twice. Analytics only: it
+  // Present only when this link completed a new sign-in, so a repeated return
+  // link never hands it over twice. It holds what the orchestrator.inc return
+  // page adds: the website visitor id (web_distinct_id) for visitors who
+  // accepted analytics there, when it is well formed. Analytics only: it
   // plays no part in signing in, and nothing stores or logs it.
   signIn?: CloudSignInContext;
 }
@@ -590,11 +590,13 @@ export async function handleCloudDeepLink(
     url.searchParams.get("state"),
     dataDir,
   );
+  if (!exchanged) return { account };
   // Read only once signing in has finished, so it cannot change how that went.
+  // A sign-in without the website's id still hands over an empty context: it
+  // tells the renderer a sign-in completed, even for the account already
+  // signed in, which the session notification alone does not.
   const webDistinctId = url.searchParams.get("web_distinct_id");
-  return exchanged && isWebDistinctId(webDistinctId)
-    ? { account, signIn: { webDistinctId } }
-    : { account };
+  return { account, signIn: isWebDistinctId(webDistinctId) ? { webDistinctId } : {} };
 }
 
 const CALLBACK_HTML = (title: string, body: string): string =>

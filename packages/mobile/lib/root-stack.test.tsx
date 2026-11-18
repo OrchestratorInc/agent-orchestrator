@@ -98,7 +98,11 @@ describe("root stack", () => {
 	it.each(["ios", "android"])("gives every pushed page the system back button and transition on %s", async (platform) => {
 		const renderer = await renderRoot(platform);
 		try {
-			expect(renderer.root.findByType("Stack" as never).props.screenOptions).not.toHaveProperty("animation");
+			// iOS keeps UIKit's own push; Android slides in the same way rather
+			// than running react-native-screens' near-instant default fade.
+			const screenOptions = renderer.root.findByType("Stack" as never).props.screenOptions;
+			if (platform === "android") expect(screenOptions.animation).toBe("ios_from_right");
+			else expect(screenOptions).not.toHaveProperty("animation");
 			for (const name of pushedPages) {
 				const options = renderer.root.findByProps({ name }).props.options;
 				expect(options).not.toHaveProperty("headerLeft");

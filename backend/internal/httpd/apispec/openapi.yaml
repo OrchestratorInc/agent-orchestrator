@@ -2135,6 +2135,41 @@ paths:
       summary: Refresh the cached local agent adapter catalog
       tags:
       - agents
+  /api/v1/attachment-uploads:
+    post:
+      operationId: uploadAttachment
+      requestBody:
+        content:
+          application/octet-stream: {}
+        required: true
+      responses:
+        "201":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AttachmentUploadResponse'
+          description: Created
+        "400":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Bad Request
+        "500":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Internal Server Error
+        "501":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Not Implemented
+      summary: Stream a file to disk for a later attachment to name by uploadId
+      tags:
+      - sessions
   /api/v1/automations:
     get:
       operationId: listAutomations
@@ -4235,6 +4270,32 @@ paths:
       summary: Validate a selected folder for project import onboarding
       tags:
       - import
+  /api/v1/kept-artifacts:
+    get:
+      operationId: listKeptArtifacts
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ControllersListKeptArtifactsResponse'
+          description: OK
+        "500":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Internal Server Error
+        "501":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Not Implemented
+      summary: 'List the artifacts no session or project lists: those of sessions
+        deleted with their artifacts kept, and of sessions in removed projects'
+      tags:
+      - sessions
   /api/v1/link-preview:
     get:
       operationId: getLinkPreview
@@ -7195,6 +7256,21 @@ paths:
         schema:
           description: Opaque cursor returned by the previous page. Requires limit.
           type: string
+      - description: Keep sessions owning a pull request in this state. The list is
+          then ordered by when each session's newest such PR reached the state, and
+          the response echoes prState and carries total.
+        in: query
+        name: prState
+        schema:
+          description: Keep sessions owning a pull request in this state. The list
+            is then ordered by when each session's newest such PR reached the state,
+            and the response echoes prState and carries total.
+          enum:
+          - open
+          - draft
+          - merged
+          - closed
+          type: string
       responses:
         "200":
           content:
@@ -7273,6 +7349,16 @@ paths:
           description: When true, a worktree that is still on disk is cleaned up first,
             the way session cleanup does it; a dirty or locked worktree is never forced
             and refuses the delete.
+          type: boolean
+      - description: When true, the session's artifact files are kept, view only,
+          and listed by GET /api/v1/kept-artifacts until they are deleted one by one.
+          Otherwise they are deleted with the session.
+        in: query
+        name: keepArtifacts
+        schema:
+          description: When true, the session's artifact files are kept, view only,
+            and listed by GET /api/v1/kept-artifacts until they are deleted one by
+            one. Otherwise they are deleted with the session.
           type: boolean
       responses:
         "200":
@@ -13239,6 +13325,47 @@ paths:
       summary: Send a message to a running session's agent
       tags:
       - sessions
+  /api/v1/sessions/{sessionId}/stop-turn:
+    post:
+      operationId: stopSessionTurn
+      parameters:
+      - description: Session identifier, e.g. project-1.
+        in: path
+        name: sessionId
+        required: true
+        schema:
+          description: Session identifier, e.g. project-1.
+          type: string
+      responses:
+        "204":
+          description: No Content
+        "404":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Not Found
+        "409":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Conflict
+        "500":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Internal Server Error
+        "501":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Not Implemented
+      summary: Stop an active turn without ending the session
+      tags:
+      - sessions
   /api/v1/sessions/{sessionId}/workspace/branches:
     get:
       operationId: listSessionWorkspaceBranches
@@ -14831,6 +14958,62 @@ paths:
       summary: Rename a standalone shell terminal tab
       tags:
       - shellTerminals
+  /api/v1/shell-terminals/{handleId}/reopen:
+    post:
+      operationId: reopenShellTerminal
+      parameters:
+      - description: Shell terminal runtime handle identifier.
+        in: path
+        name: handleId
+        required: true
+        schema:
+          description: Shell terminal runtime handle identifier.
+          type: string
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ReopenShellTerminalRequest'
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ShellTerminalEnvelope'
+          description: OK
+        "400":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Bad Request
+        "404":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Not Found
+        "409":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Conflict
+        "500":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Internal Server Error
+        "501":
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/APIError'
+          description: Not Implemented
+      summary: Replace an ended shell terminal with a fresh shell in the same tab
+      tags:
+      - shellTerminals
   /api/v1/side-chats/launch/claim:
     post:
       operationId: claimSideChatLaunch
@@ -16302,6 +16485,8 @@ components:
       properties:
         authentication:
           $ref: '#/components/schemas/AgentAuthenticationObservation'
+        canStopTurn:
+          type: boolean
         effectiveReadiness:
           enum:
           - ready
@@ -16529,8 +16714,19 @@ components:
           type: string
         mimeType:
           type: string
+        uploadId:
+          type: string
+      type: object
+    AttachmentUploadResponse:
+      properties:
+        bytes:
+          format: int64
+          type: integer
+        uploadId:
+          type: string
       required:
-      - data
+      - uploadId
+      - bytes
       type: object
     AutoSpawnPause:
       properties:
@@ -18415,12 +18611,46 @@ components:
       - active
       - hasBattery
       type: object
+    ControllersKeptArtifactsView:
+      properties:
+        artifactFiles:
+          items:
+            $ref: '#/components/schemas/SessionArtifact'
+          type: array
+        at:
+          description: When the session was deleted, or last updated.
+          format: date-time
+          type: string
+        projectId:
+          type: string
+        sessionDeleted:
+          type: boolean
+        sessionId:
+          type: string
+        title:
+          type: string
+      required:
+      - sessionId
+      - title
+      - sessionDeleted
+      - at
+      - artifactFiles
+      type: object
     ControllersKillSessionRequest:
       properties:
         callerSessionId:
           type: string
         deleteArtifacts:
           type: boolean
+      type: object
+    ControllersListKeptArtifactsResponse:
+      properties:
+        sets:
+          items:
+            $ref: '#/components/schemas/ControllersKeptArtifactsView'
+          type: array
+      required:
+      - sets
       type: object
     ControllersPairDeviceRequest:
       properties:
@@ -18877,6 +19107,7 @@ components:
           - Merge conflicts
           - Commented
           - Changes requested
+          - Waiting on base PR
           - Mergeable
           - Approved
           - Merged
@@ -20290,6 +20521,8 @@ components:
           - memcode
           - hermes
           - stakpak
+          - open-interpreter
+          - tau
           - fake
           type: string
         approvalMode:
@@ -21075,6 +21308,8 @@ components:
           - memcode
           - hermes
           - stakpak
+          - open-interpreter
+          - tau
           - cloudflared
           - cua-driver
           type: string
@@ -21472,10 +21707,23 @@ components:
           $ref: '#/components/schemas/SessionArchiveSummary'
         nextCursor:
           type: string
+        prState:
+          enum:
+          - open
+          - draft
+          - merged
+          - closed
+          type: string
         sessions:
           items:
             $ref: '#/components/schemas/ControllersSessionView'
           type: array
+        total:
+          type:
+          - "null"
+          - integer
+        version:
+          type: string
       required:
       - sessions
       type: object
@@ -22487,6 +22735,8 @@ components:
           type: string
         fastMode:
           type: boolean
+        force:
+          type: boolean
         idempotencyKey:
           type: string
         message:
@@ -22510,10 +22760,22 @@ components:
       type: object
     ProviderSwitchResponse:
       properties:
+        cancelledQueuedMessages:
+          type: integer
+        failedPendingApprovals:
+          type: boolean
         message:
           $ref: '#/components/schemas/SendConversationMessageResponse'
+        settingsUpdated:
+          type: boolean
         status:
           type: string
+        stoppedTurn:
+          type: boolean
+        warnings:
+          items:
+            type: string
+          type: array
       required:
       - status
       type: object
@@ -22772,6 +23034,23 @@ components:
       - level
       - text
       type: object
+    ReopenShellTerminalRequest:
+      properties:
+        cols:
+          description: Initial terminal columns, as for opening a shell terminal.
+          type: integer
+        resumeAgent:
+          description: 'Also resume the agent that was running in this terminal: the
+            same conversation when it is known, otherwise its conversation picker.
+            Nothing the old shell ran is replayed.'
+          type: boolean
+        rows:
+          description: Initial terminal rows. See cols.
+          type: integer
+        shell:
+          description: Shell to launch, as for opening a shell terminal.
+          type: string
+      type: object
     ReorderQueuedConversationTurnsRequest:
       properties:
         turnIds:
@@ -23027,10 +23306,42 @@ components:
           type: string
         body:
           type: string
+        cancelRequestedAt:
+          format: date-time
+          type:
+          - "null"
+          - string
+        cancelledBy:
+          enum:
+          - user
+          - worker_lifecycle
+          type: string
         createdAt:
           format: date-time
           type: string
         deliveredAt:
+          format: date-time
+          type:
+          - "null"
+          - string
+        endedAt:
+          format: date-time
+          type:
+          - "null"
+          - string
+        failureReason:
+          enum:
+          - preflight_failed
+          - launch_failed
+          - never_started
+          - exited_during_launch
+          - turn_ended_without_submit
+          - process_exited
+          - timed_out
+          - daemon_restarted
+          - cancel_unconfirmed
+          type: string
+        firstActivityAt:
           format: date-time
           type:
           - "null"
@@ -23041,13 +23352,32 @@ components:
           type: string
         id:
           type: string
+        launchingAt:
+          format: date-time
+          type:
+          - "null"
+          - string
         prUrl:
           type: string
         reviewId:
           type: string
         sessionId:
           type: string
+        startedAt:
+          format: date-time
+          type:
+          - "null"
+          - string
         status:
+          enum:
+          - queued
+          - launching
+          - running
+          - cancelling
+          - completed
+          - failed
+          - cancelled
+          - superseded
           type: string
         targetSha:
           type: string
@@ -23774,6 +24104,8 @@ components:
           type: string
         reviewComments:
           type: boolean
+        stackParent:
+          type: integer
         state:
           enum:
           - draft
@@ -24775,9 +25107,20 @@ components:
         createdAt:
           format: date-time
           type: string
+        endedAt:
+          description: When the shell's process was found gone. Present only for an
+            ended shell, which can be reopened or closed but not attached.
+          format: date-time
+          type:
+          - "null"
+          - string
         handleId:
           type: string
         projectId:
+          type: string
+        resumeHarness:
+          description: For an ended shell, the coding agent that was running in it,
+            which reopening with resumeAgent resumes.
           type: string
         sessionId:
           type: string
@@ -24912,6 +25255,13 @@ components:
         manualLabel:
           type: boolean
         model:
+          type: string
+        openingStartedAt:
+          format: date-time
+          type:
+          - "null"
+          - string
+        openingTurnId:
           type: string
         recreateRequired:
           type: boolean
@@ -25125,12 +25475,18 @@ components:
           type: array
         dispatchAttempt:
           type: integer
+        effort:
+          type: string
+        model:
+          type: string
         providerTurnId:
           type: string
         referenceContexts:
           items:
             type: string
           type: array
+        settingsFrozen:
+          type: boolean
         turn:
           $ref: '#/components/schemas/SideTurn'
       required:
@@ -25322,6 +25678,8 @@ components:
           - memcode
           - hermes
           - stakpak
+          - open-interpreter
+          - tau
           type: string
         issueId:
           type: string

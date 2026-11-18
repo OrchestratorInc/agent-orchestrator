@@ -20,6 +20,7 @@ import { usesPreviewWorkspaceData } from "../lib/preview-mode";
 import { toReviewerHarnessId } from "../lib/reviewer-harnesses";
 import { captureRendererEvent } from "../lib/telemetry";
 import { aoBridge } from "../lib/bridge";
+import { withQueryFields } from "../lib/query-result";
 import { clientForHost } from "../lib/host-clients";
 import { useConnectedHosts } from "./useHostConnection";
 import { requestRemoteHostCheck } from "./useRemoteHosts";
@@ -66,10 +67,11 @@ function toPullRequestFacts(pr: components["schemas"]["SessionPRFacts"]): PullRe
 		mergeability: pr.mergeability,
 		reviewComments: pr.reviewComments,
 		updatedAt: pr.updatedAt,
+		...(pr.stackParent ? { stackParent: pr.stackParent } : {}),
 	};
 }
 
-function toSessionArtifact(artifact: components["schemas"]["SessionArtifact"]): SessionArtifact {
+export function toSessionArtifact(artifact: components["schemas"]["SessionArtifact"]): SessionArtifact {
 	return {
 		...(artifact.id ? { id: artifact.id } : {}),
 		kind: artifact.kind,
@@ -574,7 +576,7 @@ export function toCloudWorkspaceSession(
 			...(file.previousPaths?.length ? { previousPaths: file.previousPaths } : {}),
 			...(file.sha256 ? { sha256: file.sha256 } : {}),
 		})),
-		...((session.artifactCount ?? 0) > 0 && !session.artifactFiles && !session.isTerminated ? { artifactFilesPending: true } : {}),
+		...((session.artifactCount ?? 0) > 0 && !session.artifactFiles ? { artifactFilesPending: true } : {}),
 	};
 }
 
@@ -741,10 +743,11 @@ export function useCloudSessionsQuery(options: WorkspaceSubscriptionOptions = {}
 			return response.items;
 		},
 	});
-	// The list carries only an artifact count. Each live session's files are
-	// read in their own query, once per artifact version, without holding up
-	// the list.
-	const withFiles = (list.data ?? []).filter((session) => (session.artifactCount ?? 0) > 0 && !session.isTerminated);
+	// The list carries only an artifact count. Each session's files are read in
+	// their own query, once per artifact version, without holding up the list.
+	// An archived session's are read too: its artifacts stay listed until the
+	// person deletes them.
+	const withFiles = (list.data ?? []).filter((session) => (session.artifactCount ?? 0) > 0);
 	const fileData = useQueries({
 		queries: withFiles.map((session) => ({
 			queryKey: cloudArtifactFilesQueryKey(baseUrl, orgId ?? "", session.id, cloudArtifactVersion(session)),
@@ -833,7 +836,7 @@ async function withSharedArtifactFiles(
 	baseUrl: string,
 	session: CloudCpSession,
 ): Promise<CloudCpSession> {
-	if ((session.artifactCount ?? 0) === 0 || session.isTerminated) return session;
+	if ((session.artifactCount ?? 0) === 0) return session;
 	let reads = sharedArtifactReads.get(queryClient);
 	if (!reads) {
 		reads = { last: new Map(), failed: new Map() };
@@ -1100,7 +1103,7 @@ export function useWorkspaceQuery(options: WorkspaceSubscriptionOptions = {}) {
 		// removalVersion is read outside React by applyOptimisticProjectRemovals.
 		// eslint-disable-next-line react-hooks/exhaustive-deps
 	}, [localData, cloudData, cloudSessionData, sharedData, includeCloud, orgId, ready, removalVersion]);
-	return { ...local, data };
+	return withQueryFields(local, { data });
 }
 
 /**
@@ -1192,11 +1195,10 @@ export function useWorkspaceSession(sessionId: string, hostId?: string, localLoo
 		});
 	}, [queryClient, resolvedDirectSession, hostId, localLookupEnabled]);
 	if (hostId) return remote;
-	return {
-		...local,
+	return withQueryFields(local, {
 		data: local.data ?? resolvedDirectSession ?? cloudSession,
 		isLoading: local.isLoading || direct.isLoading,
-	};
+	});
 }
 
 /**
@@ -1277,7 +1279,7 @@ export function useWorkspaceScope(projectId?: string, sessionId?: string, hostId
 	const data = local.data?.project || local.data?.session || !local.isSuccess
 		? local.data
 		: cloudScope ?? local.data;
-	return hostId ? remote : { ...local, data };
+	return hostId ? remote : withQueryFields(local, { data });
 }
 
 function selectTraySessions(workspaces: WorkspaceSummary[]): TraySessionEntry[] {
@@ -1319,5 +1321,5 @@ export function useWorkspaceTraySessions() {
 		if (local.data === undefined) return undefined;
 		return cloudEntries.length === 0 ? local.data : [...local.data, ...cloudEntries];
 	}, [cloudEntries, local.data]);
-	return { ...local, data };
+	return withQueryFields(local, { data });
 }

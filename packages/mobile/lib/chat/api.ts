@@ -265,6 +265,19 @@ export async function promoteQueuedConversationTurn(cfg: ServerConfig, sessionId
 	await apiRequest(cfg, conversationPath(sessionId, `/turns/${encodeURIComponent(turnId)}/steer`), { method: "POST" });
 }
 
+/** Sends a failed turn's prompt again, as a new turn. */
+export async function retryConversationTurn(cfg: ServerConfig, sessionId: string, turnId: string): Promise<void> {
+	await apiRequest(cfg, conversationPath(sessionId, `/turns/${encodeURIComponent(turnId)}/retry`), { method: "POST" });
+}
+
+/** Asks the daemon to send a usage-limited prompt again at the reset, or stops it. */
+export async function setConversationTurnAutoResume(cfg: ServerConfig, sessionId: string, turnId: string, enabled: boolean): Promise<void> {
+	await apiRequest(cfg, conversationPath(sessionId, `/turns/${encodeURIComponent(turnId)}/auto-resume`), {
+		method: "PATCH",
+		body: JSON.stringify({ enabled }),
+	});
+}
+
 export async function compactConversation(cfg: ServerConfig, sessionId: string): Promise<void> {
 	await apiRequest(cfg, conversationPath(sessionId, "/compact"), { method: "POST" });
 }

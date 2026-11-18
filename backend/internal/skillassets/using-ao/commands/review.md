@@ -32,6 +32,10 @@ ao review <subcommand> [args] [flags]
 
 The review loop can be inspected, submitted, cancelled, or triggered again.
 
+Automatic review pauses while a PR is a draft. After Orchestrator observes that it is
+ready, its head becomes eligible on a later sweep once the worker meets the idle
+gate. Explicit review triggers can still review drafts.
+
 ## Subcommands
 
 ---
@@ -138,7 +142,7 @@ ao review trigger [worker-session-id] [flags]
 |---|---|---|
 | `--session string` | Worker session id (or pass it positionally) | The calling Orchestrator-managed session |
 | `--pr string` | Review only this session's implementation PR URL, attaching it to the session first if Orchestrator does not track it yet (never from another active session). Do not pass an external review target | Every eligible PR on the session |
-| `--agent string` | Reviewer agent for this pass only (alias `--harness`) | Session reviewer, then project reviewer, then the project's default worker agent |
+| `--agent string` | Reviewer agent for this pass only (alias `--harness`); the temporary reviewer retires when its pass ends | Session reviewer, then project reviewer, then the project's default worker agent |
 | `--model string` | Reviewer model for this pass only | As above |
 | `--effort string` | Reviewer reasoning effort for this pass only | As above |
 | `--rerun` | Review a head that already has a review again, or add a reviewer with a different agent alongside one that is still running | - |

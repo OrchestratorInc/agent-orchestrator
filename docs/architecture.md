@@ -202,6 +202,37 @@ Observation is separated from action:
 - **Lifecycle layer:** Reduces observations into durable facts.
 - **Service layer:** Computes display status from facts.
 
+Review runs follow the same split. The Runtime Reaper also probes reviewers,
+but only those serving an in-progress review run, and reports each pass to the
+review engine's run lifecycle (`internal/review/run_lifecycle.go`) instead of
+the session LCM: a reviewer has no session row. The run lifecycle reduces the
+pass into guarded `review_run` transitions (`queued`, `launching`, `running`,
+`cancelling`, then `completed`, `failed`, `cancelled` or `superseded`), applies
+the time limits (launch, first activity, idle grace, max duration, cancel), and
+force-kills a reviewer that ignores a cancel. The reaper's first pass after
+startup is the boot pass, which settles runs a previous daemon left in
+progress; until it has, other paths leave those runs alone so their
+reviewers are reaped, and the boot pass never touches a run this daemon
+created. Reviewer activity hooks, trigger, cancel and the reviews list settle
+their worker's runs directly without waiting for the next pass. Time the
+daemon did not observe (the machine slept) never counts against a run, and a
+reviewer that is still being cancelled is not given new work. The boot pass
+never waits on a worker's lock; a worker a trigger holds is settled on a later
+pass. A reviewer interrupted because its pass timed out stays supervised until
+it stops or is force-stopped. A force-stop captures the reviewer's whole
+process tree before tearing down its runtime and kills any survivor, so an
+agent that cannot react to hangup is not left running; the stop counts as
+confirmed only when none of those processes remains. A process is identified
+by pid and start time (which survives exec and changes on pid reuse), read
+together with its parent from one consistent observation, and the tree is
+walked only from roots the runtime vouches for (a live tmux pane, or a
+ConPTY host that started no later than it was spawned); a process whose
+identity cannot be read is never killed and never counted as gone, and the
+runtime is not torn down until the tree has been captured. Survivors of an
+unconfirmed attempt are carried into the retry, and still killed if a new
+launch takes over the reviewer. Suspend gaps
+are kept for a pending stop's grace as they are for active runs.
+
 ### 4. Change data capture
 
 All durable changes flow through a CDC pipeline:
@@ -434,6 +465,40 @@ that flag, while new provider boundaries use scoped IDs.
 When Codex proves fork ancestry, replay omits copied prefixes only if their stable
 item IDs and complete content match retained ancestor rows. Those rows stay in
 their original scope. Unknown ancestry or changed content is retained in full.
+
+Side-chat tabs are launch-scoped drafts until their first accepted Send. Draft
+creation reads conversation metadata only: it does not wake the parent, read its
+full transcript, or create a provider. Separate creation keys never merge unused
+drafts through empty anchors. The daemon serializes each side's submissions and
+atomically accepts the opening turn with its frozen latest completed parent
+context, model, effort, and launch configuration. Later parent work cannot move
+that cutoff. Opening-turn IDs and timestamps travel with the side's recovery
+state; the shared chat timeline shows that opening question and its lattice
+loader while later questions remain in the queue dock.
+
+The renderer loads each saved side draft before freezing a Send or copying a
+replacement. Typing alone does not mark that draft as loaded, and autosaves wait
+for the read so they cannot erase saved files or delivery receipts. Edits made
+after Send remain in the next draft. Known opening failures are saved with the
+receipt and restore their Retry or Recreate action without automatic dispatch;
+accepted daemon turns take precedence over older local failures. Definitively
+rejected follow-ups remove their temporary bubbles, while uncertain delivery
+keeps its original identity until reconciliation.
+
+Queued follow-ups appear in the shared queue dock before daemon acknowledgement,
+then reconcile by client message ID without duplicating or remounting their row.
+A matching daemon turn also settles a recovered delivery receipt without another
+submission, preserving handoff ownership and newer draft edits. Late HTTP replies
+cannot undo that acknowledgement or release a newer send's ownership.
+
+Unused drafts restore without provider work, including JSON-null launch settings.
+A recovered pre-dispatch receipt or
+interrupted startup with unverified ownership requires visible recreation instead
+of silently capturing newer context or submitting again. Safe startup retries
+reuse the accepted turn and frozen configuration. Staged image bytes are loaded
+from daemon-owned attachment files after renderer remounts. Closing an unused
+draft requires no provider shutdown; an accepted startup retains the existing
+closing controller's cancellation, generation fencing, and cleanup ownership.
 
 Current-context side forks fence source dispatch only during copying. The
 start/stop gate is released before provider I/O; Stop cancels the copy and Kill
@@ -979,7 +1044,15 @@ flowchart TD
     Skip --> NextSession{More sessions?}
     CDC --> NextSession
     NextSession -->|Yes| ForEach
-    NextSession -->|No| Loop
+    NextSession -->|No| Reviewers[List reviewers serving<br/>an in-progress review run]
+
+    Reviewers --> AnyReview{Any?}
+    AnyReview -->|No| Loop
+    AnyReview -->|Yes| ProbeReviewer[Probe each reviewer<br/>exact launch or Chat controller]
+    ProbeReviewer --> ReviewerBreaker[Reviewer mass-death breaker]
+    ReviewerBreaker --> ApplyReview[ApplyReviewerObservations]
+    ApplyReview --> RunLifecycle[Review run lifecycle<br/>guarded review_run transitions]
+    RunLifecycle --> Loop
 
 ```
 
