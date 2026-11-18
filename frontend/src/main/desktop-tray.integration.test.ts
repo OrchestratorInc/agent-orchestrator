@@ -7,6 +7,7 @@ import { describe, expect, it, vi } from "vitest";
 import { createDesktopQuitController } from "./desktop-quit";
 import { requestDesktopShutdown } from "./desktop-shutdown";
 import { isTrayEnabled } from "./tray-lifecycle";
+import { TRAY_RENDERER_READY_CHANNEL } from "../shared/tray";
 
 // Execute the production handlers, following daemon-auto-restart's VM harness.
 // This catches wiring mistakes that isolated controller tests cannot observe.
@@ -18,7 +19,9 @@ const statements = source.statements.filter((node) => {
 	if (ts.isVariableStatement(node)) return node.declarationList.declarations.some((decl) => decl.name.getText(source) === "desktopQuit");
 	if (!ts.isExpressionStatement(node) || !ts.isCallExpression(node.expression)) return false;
 	const call = node.expression;
-	return call.expression.getText(source) === "app.on" && ts.isStringLiteral(call.arguments[0]) && handlers.has(call.arguments[0].text);
+	const target = call.expression.getText(source);
+	return (target === "app.on" && ts.isStringLiteral(call.arguments[0]) && handlers.has(call.arguments[0].text)) ||
+		(target === "ipcMain.on" && call.arguments[0]?.getText(source) === "TRAY_RENDERER_READY_CHANNEL");
 }).map((node) => node.getText(source));
 const windowStatements: string[] = [];
 function collectWindowHandlers(node: ts.Node): void {
@@ -34,9 +37,10 @@ collectWindowHandlers(source);
 const transpile = (text: string) => ts.transpileModule(text, { compilerOptions: { target: ts.ScriptTarget.ES2022 } }).outputText;
 
 function setup(platform: NodeJS.Platform = "win32", withTray = true) {
-	const app = Object.assign(new EventEmitter(), { quit: vi.fn(), exit: vi.fn(), dock: { hide: vi.fn(), show: vi.fn() } });
+	const app = Object.assign(new EventEmitter(), { isPackaged: false, quit: vi.fn(), exit: vi.fn(), dock: { hide: vi.fn(), show: vi.fn() } });
+	const ipcMain = new EventEmitter();
 	const fetch = vi.fn(async (_url: string, _init: RequestInit) => ({ ok: true, status: 202 }));
-	const trayLifecycle = { dispose: vi.fn() };
+	const trayLifecycle = { dispose: vi.fn(), handleRendererReady: vi.fn() };
 	const confirmLeave = vi.fn(() => false);
 	const guard = vi.fn(() => false);
 	const navigated = vi.fn();
@@ -60,7 +64,7 @@ function setup(platform: NodeJS.Platform = "win32", withTray = true) {
 		vm.runInContext(transpile(windowStatements.join("\n")), context);
 	});
 	const context = vm.createContext({
-		process: { platform, env: {} }, app, console, Promise, AbortSignal,
+		process: { platform, env: {} }, app, ipcMain, console, Promise, AbortSignal,
 		createDesktopQuitController, requestDesktopShutdown, isTrayEnabled,
 		browserQuitRequested: false, windowsSessionEnding: false,
 		agentQuitCleanupPromise: null as Promise<unknown> | null, agentQuitCleanupComplete: false,
@@ -86,7 +90,8 @@ function setup(platform: NodeJS.Platform = "win32", withTray = true) {
 		handleCloudDeepLinkAndFocus: navigated,
 		parseOpenFolderPathArg: (argv: string[]) => argv.find((arg) => arg.startsWith("folder:"))?.slice(7),
 		getShellWebContents: (): { isLoading(): boolean; send: ReturnType<typeof vi.fn> } | null => null,
-		pendingFolderPath: undefined, OPEN_FOLDER_PATH_CHANNEL: "open-folder",
+		pendingFolderPath: null as string | null, OPEN_FOLDER_PATH_CHANNEL: "open-folder",
+		TRAY_RENDERER_READY_CHANNEL, pendingSessionDeepLink: null, pendingBillingSection: null,
 	});
 	app.quit.mockImplementation(() => {
 		const event = makeEvent();
@@ -98,7 +103,8 @@ function setup(platform: NodeJS.Platform = "win32", withTray = true) {
 	const controller = vm.runInContext("desktopQuit", context) as ReturnType<typeof createDesktopQuitController>;
 	const focus = () => vm.runInContext("focusMainWindow()", context);
 	const settled = async () => { for (let turn = 0; turn < 30; turn++) await Promise.resolve(); };
-	return { app, context, controller, fetch, trayLifecycle, confirmLeave, guard, createWindowInternal, focus, settled, navigated };
+	const rendererReady = (sender = context.getShellWebContents()) => ipcMain.emit(TRAY_RENDERER_READY_CHANNEL, { sender });
+	return { app, context, controller, fetch, trayLifecycle, confirmLeave, guard, createWindowInternal, focus, settled, navigated, rendererReady };
 }
 
 describe("desktop tray event wiring", () => {
@@ -203,6 +209,59 @@ describe("desktop tray event wiring", () => {
 		} else {
 			expect(send).toHaveBeenCalledWith("open-folder", "C:/project");
 		}
+	});
+
+	it("does not replay a stale queued folder after directly delivering a newer launch", () => {
+		const h = setup();
+		let loading = true;
+		const contents = { isLoading: () => loading, send: vi.fn() };
+		h.context.getShellWebContents = () => contents;
+		h.app.emit("second-instance", {}, ["ao.exe", "folder:C:/folder-A"]);
+		expect(h.context.pendingFolderPath).toBe("C:/folder-A");
+		loading = false;
+		h.app.emit("second-instance", {}, ["ao.exe", "folder:C:/folder-B"]);
+		h.rendererReady();
+		expect(contents.send.mock.calls).toEqual([["open-folder", "C:/folder-B"]]);
+		expect(h.context.pendingFolderPath).toBeNull();
+	});
+
+	it("delivers only the newest folder queued while the renderer loads", () => {
+		const h = setup();
+		let loading = true;
+		const contents = { isLoading: () => loading, send: vi.fn() };
+		h.context.getShellWebContents = () => contents;
+		h.app.emit("second-instance", {}, ["ao.exe", "folder:C:/folder-A"]);
+		h.app.emit("second-instance", {}, ["ao.exe", "folder:C:/folder-B"]);
+		loading = false;
+		h.rendererReady();
+		expect(contents.send.mock.calls).toEqual([["open-folder", "C:/folder-B"]]);
+		expect(h.context.pendingFolderPath).toBeNull();
+	});
+
+	it("flushes a queued folder only once across repeated readiness signals", () => {
+		const h = setup();
+		const contents = { isLoading: () => true, send: vi.fn() };
+		h.context.getShellWebContents = () => contents;
+		h.app.emit("second-instance", {}, ["ao.exe", "folder:C:/folder-A"]);
+		h.rendererReady();
+		h.rendererReady();
+		expect(contents.send.mock.calls).toEqual([["open-folder", "C:/folder-A"]]);
+		expect(h.context.pendingFolderPath).toBeNull();
+	});
+
+	it("keeps a queued folder until readiness comes from the current renderer", () => {
+		const h = setup();
+		const contents = { isLoading: () => true, send: vi.fn() };
+		h.context.getShellWebContents = () => contents;
+		h.app.emit("second-instance", {}, ["ao.exe", "folder:C:/folder-A"]);
+		const otherContents = { isLoading: () => false, send: vi.fn() };
+		h.rendererReady(otherContents);
+		expect(otherContents.send).not.toHaveBeenCalled();
+		expect(contents.send).not.toHaveBeenCalled();
+		expect(h.context.pendingFolderPath).toBe("C:/folder-A");
+		h.rendererReady();
+		expect(contents.send.mock.calls).toEqual([["open-folder", "C:/folder-A"]]);
+		expect(h.context.pendingFolderPath).toBeNull();
 	});
 
 	it("restores the existing minimized dashboard", () => {

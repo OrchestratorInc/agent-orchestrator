@@ -4532,6 +4532,7 @@ app.on("second-instance", (_event, argv) => {
 		focusMainWindow();
 		const contents = getShellWebContents();
 		if (contents && !contents.isLoading()) {
+			pendingFolderPath = null;
 			contents.send(OPEN_FOLDER_PATH_CHANNEL, folderPath);
 		} else {
 			pendingFolderPath = folderPath;
