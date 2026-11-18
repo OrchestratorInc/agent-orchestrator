@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"testing"
+	"testing/synctest"
 	"time"
 
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
@@ -111,23 +112,27 @@ func TestExplicitOperationsWaitForHibernation(t *testing.T) {
 // Opening a hibernated Chat session wakes it under a resume. An archive
 // clicked during that wake must wait for it rather than fail (#8645).
 func TestKillWaitsForInFlightResume(t *testing.T) {
-	m := newInputLeaseTestManager()
-	id := domain.SessionID("worker-1")
-	if err := m.beginAgentResume(context.Background(), id); err != nil {
-		t.Fatal(err)
-	}
-	killed := make(chan error, 1)
-	go func() { killed <- m.beginAgentOperation(context.Background(), id, agentOperationKill) }()
-	select {
-	case err := <-killed:
-		t.Fatalf("kill failed/overtook the in-flight resume: %v", err)
-	case <-time.After(60 * time.Millisecond):
-	}
-	m.endAgentResume(id)
-	if err := <-killed; err != nil {
-		t.Fatalf("kill after resume finished: %v", err)
-	}
-	m.endAgentOperation(id, agentOperationKill)
+	synctest.Test(t, func(t *testing.T) {
+		m := newInputLeaseTestManager()
+		id := domain.SessionID("worker-1")
+		if err := m.beginAgentResume(context.Background(), id); err != nil {
+			t.Fatal(err)
+		}
+		killed := make(chan error, 1)
+		go func() { killed <- m.beginAgentOperation(context.Background(), id, agentOperationKill) }()
+		// Kill has either returned or is parked in its poll for the resume.
+		synctest.Wait()
+		select {
+		case err := <-killed:
+			t.Fatalf("kill failed/overtook the in-flight resume: %v", err)
+		default:
+		}
+		m.endAgentResume(id)
+		if err := <-killed; err != nil {
+			t.Fatalf("kill after resume finished: %v", err)
+		}
+		m.endAgentOperation(id, agentOperationKill)
+	})
 }
 
 func TestKillGivesUpOnAWedgedResume(t *testing.T) {
