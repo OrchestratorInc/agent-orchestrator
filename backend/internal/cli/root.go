@@ -107,7 +107,9 @@ type Deps struct {
 	// PIDMayBeHidden reports whether a failed ProcessAlive check may only mean
 	// the daemon's PID is hidden from this process, as in a separate Linux PID
 	// namespace, rather than dead. Only then is the run-file's loopback port
-	// trusted to vouch for the daemon (probeOwnedDaemon). A nil func means no.
+	// trusted to vouch for the daemon (probeOwnedDaemon). Left nil, the root
+	// command uses the platform default (Linux only); to disable the fallback,
+	// supply a func that returns false.
 	PIDMayBeHidden func() bool
 }
 

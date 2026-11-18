@@ -42,8 +42,8 @@ type fakeDaemon struct {
 	srv        *httptest.Server
 	apiCalls   atomic.Int32
 	shutdownOK atomic.Bool
-	// down is set once the daemon has drained after /shutdown; /healthz then
-	// answers 500, as a stopped server would stop answering.
+	// down is set as soon as the daemon starts draining after /shutdown;
+	// /healthz then answers 500, as the real server closes its listeners first.
 	down atomic.Bool
 	// runFileAtExit records whether the run-file still existed when the daemon
 	// finished draining, i.e. whether nobody removed it from under the daemon.
@@ -54,7 +54,7 @@ type fakeDaemon struct {
 // newFakeDaemon serves /healthz and /readyz as the daemon would, reporting the
 // given service and PID, plus a /api/v1/ping route that counts calls.
 // healthStatus 0 means /healthz answers 500. Like the real daemon, after
-// /shutdown it drains briefly, stops answering, then removes its own run-file.
+// /shutdown it stops answering at once, drains, then removes its own run-file.
 func newFakeDaemon(t *testing.T, cfg testConfig, service string, pid int, healthStatus int) *fakeDaemon {
 	t.Helper()
 	d := &fakeDaemon{stopped: make(chan struct{})}
@@ -79,10 +79,11 @@ func newFakeDaemon(t *testing.T, cfg testConfig, service string, pid int, health
 			}
 			go func() {
 				defer close(d.stopped)
-				time.Sleep(300 * time.Millisecond)
+				time.Sleep(50 * time.Millisecond)
+				d.down.Store(true) // listeners closed; still draining
+				time.Sleep(400 * time.Millisecond)
 				_, err := os.Stat(cfg.runFile)
 				d.runFileAtExit.Store(err == nil)
-				d.down.Store(true)
 				_ = runfile.Remove(cfg.runFile)
 			}()
 			w.WriteHeader(http.StatusAccepted)
@@ -213,6 +214,11 @@ func TestStopShutsDownDaemonWhosePIDIsHidden(t *testing.T) {
 	if !strings.Contains(out, `"state": "stopped"`) {
 		t.Fatalf("stop did not report stopped:\n%s", out)
 	}
+	// The CLI never removes the run-file of a daemon it cannot see, so the
+	// file being gone when stop returns means stop waited for the daemon.
+	if _, err := os.Stat(cfg.runFile); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("stop returned before the daemon removed its run-file (stat err = %v)", err)
+	}
 	<-d.stopped
 	if !d.runFileAtExit.Load() {
 		t.Fatal("stop removed the run-file while the daemon was still shutting down")
@@ -236,7 +242,9 @@ func TestStopSucceedsWhenHiddenPIDRunFileIsReadOnly(t *testing.T) {
 	}
 	t.Cleanup(func() { _ = os.Chmod(dir, 0o755) })
 
-	out, _, err := executeCLI(t, hiddenPIDDeps(), "stop", "--json")
+	// The daemon cannot remove its run-file either, so stop waits out its
+	// timeout, finds the daemon no longer answering, and reports stopped.
+	out, _, err := executeCLI(t, hiddenPIDDeps(), "stop", "--json", "--timeout", "1s")
 	if err != nil {
 		t.Fatalf("stop with a read-only run-file folder: %v", err)
 	}
@@ -306,5 +314,66 @@ func TestOversizedHealthzBodyIsRejected(t *testing.T) {
 	err := hiddenPIDContext().getJSON(context.Background(), "ping", nil)
 	if !errors.Is(err, errDaemonNotRunning) {
 		t.Fatalf("err = %v, want errDaemonNotRunning for an oversized /healthz", err)
+	}
+}
+
+// A /healthz that times out proves nothing about a daemon whose PID is hidden.
+// It must not be reported stale, and stop must keep its run-file.
+func TestHiddenPIDProbeTimeoutKeepsRunFile(t *testing.T) {
+	cfg := setConfigEnv(t)
+	release := make(chan struct{})
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		select {
+		case <-release:
+		case <-r.Context().Done():
+		}
+	}))
+	t.Cleanup(func() { close(release); srv.Close() })
+	if err := runfile.Write(cfg.runFile, runfile.Info{
+		PID: hiddenDaemonPID, Port: serverPort(t, srv.URL), StartedAt: time.Unix(100, 0).UTC(),
+	}); err != nil {
+		t.Fatal(err)
+	}
+	deps := hiddenPIDDeps()
+	deps.HTTPClient = &http.Client{Timeout: 200 * time.Millisecond}
+
+	out, _, err := executeCLI(t, deps, "status", "--json")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(out, `"state": "unhealthy"`) {
+		t.Fatalf("status after a probe timeout did not report unhealthy:\n%s", out)
+	}
+	if _, _, err := executeCLI(t, deps, "stop", "--json"); err == nil {
+		t.Fatal("stop succeeded against a daemon it could not verify")
+	}
+	if _, err := os.Stat(cfg.runFile); err != nil {
+		t.Fatalf("stop removed the run-file after an inconclusive probe: %v", err)
+	}
+}
+
+// The probe must be answered by the run-file's port itself. A redirect from
+// whatever listens there must not be followed to another host.
+func TestProbeDoesNotFollowRedirects(t *testing.T) {
+	cfg := setConfigEnv(t)
+	var elsewhere atomic.Int32
+	target := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		elsewhere.Add(1)
+		_, _ = fmt.Fprintf(w, `{"status":"ok","service":%q,"pid":%d}`, daemonmeta.ServiceName, hiddenDaemonPID)
+	}))
+	t.Cleanup(target.Close)
+	redirector := httptest.NewServer(http.RedirectHandler(target.URL+"/healthz", http.StatusFound))
+	t.Cleanup(redirector.Close)
+	if err := runfile.Write(cfg.runFile, runfile.Info{
+		PID: hiddenDaemonPID, Port: serverPort(t, redirector.URL), StartedAt: time.Unix(100, 0).UTC(),
+	}); err != nil {
+		t.Fatal(err)
+	}
+	err := hiddenPIDContext().getJSON(context.Background(), "ping", nil)
+	if !errors.Is(err, errDaemonNotRunning) {
+		t.Fatalf("err = %v, want errDaemonNotRunning", err)
+	}
+	if got := elsewhere.Load(); got != 0 {
+		t.Fatalf("redirect target received %d requests, want 0", got)
 	}
 }
