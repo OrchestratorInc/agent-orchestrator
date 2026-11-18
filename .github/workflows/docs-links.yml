@@ -13,8 +13,15 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - name: Link checker
+      - name: Check internal links in the docs site content
         uses: lycheeverse/lychee-action@v2
         with:
-          args: --base ./frontend/src/docs/content --no-progress --exclude-mail "./frontend/src/docs/content/**/*.mdx" "./docs/**/*.md"
+          lycheeVersion: v0.24.2
+          args: --offline --no-progress --root-dir ${{ github.workspace }}/frontend/src/docs/content --fallback-extensions mdx --index-files index.mdx --remap '/content/docs/images/(.*) /public/docs/images/$1' "./frontend/src/docs/content/**/*.mdx"
+          fail: true
+      - name: Check external links in the docs site content
+        uses: lycheeverse/lychee-action@v2
+        with:
+          lycheeVersion: v0.24.2
+          args: --no-progress --root-dir ${{ github.workspace }}/frontend/src/docs/content --fallback-extensions mdx --index-files index.mdx --remap '/content/docs/images/(.*) /public/docs/images/$1' --exclude '^file://' "./frontend/src/docs/content/**/*.mdx"
           fail: true
