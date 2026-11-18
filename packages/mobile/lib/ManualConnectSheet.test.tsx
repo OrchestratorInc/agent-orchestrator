@@ -176,7 +176,7 @@ describe("ManualConnectSheet on iOS", () => {
 		await type("manual-connect-port", "3011");
 		await type("manual-connect-password", "pw");
 		await act(async () => confirm().props.onPress());
-		expect(fixtures.announce).toHaveBeenCalledWith(expect.stringContaining("Clear Port to use the machine's Tailscale HTTPS address."), { queue: true });
+		expect(fixtures.announce).toHaveBeenCalledWith(expect.stringContaining("enter https://my-pc.tail1234.ts.net in Host and leave Port empty."), { queue: true });
 	});
 
 	it("uses plain HTTP on the Connect Mobile port for a private address left without a port", async () => {

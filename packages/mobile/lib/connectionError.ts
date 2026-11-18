@@ -188,15 +188,18 @@ export function describeConnectionFailure(
 			// A Tailscale name on the Connect Mobile port is plain HTTP, which the
 			// phone does not assume for a qualified name. Android can be told to
 			// type http://; iOS refuses plain HTTP to that name, so it is pointed at
-			// Tailscale's HTTPS address on 443 instead.
+			// Tailscale's HTTPS address on 443 instead, spelled with https:// and no
+			// port: clearing Port alone keeps a port written into Host, and an
+			// editor would fall back to the saved port.
 			if (target.secure === true && target.port && target.port !== "443" && target.host.trim().toLowerCase().endsWith(".ts.net")) {
+				const name = target.host.trim();
 				return {
 					title: "Your machine is offline",
 					icon: "unplug",
-					hint: target.platform === "ios" ? "Clear Port to use Tailscale's HTTPS address." : "Type http:// before a Tailscale name.",
+					hint: target.platform === "ios" ? "Enter https:// and the Tailscale name, with Port empty." : "Type http:// before a Tailscale name.",
 					message: `Nothing answered over HTTPS at ${address}. ` + (target.platform === "ios"
-						? "Clear Port to use the machine's Tailscale HTTPS address."
-						: `A Tailscale name on the Connect Mobile port uses plain HTTP: enter http://${target.host.trim()}.`),
+						? `To use the machine's Tailscale HTTPS address, enter https://${name} in Host and leave Port empty.`
+						: `A Tailscale name on the Connect Mobile port uses plain HTTP: enter http://${name}.`),
 					showLocalNetworkHint: false,
 				};
 			}

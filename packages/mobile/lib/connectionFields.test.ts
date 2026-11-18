@@ -135,6 +135,13 @@ describe("resolveManualAddress", () => {
 			expect(resolveManualAddress(FIXED, "9443", tunnel)).toMatchObject({ ok: false, error: expect.stringContaining("Tunnel addresses use port 443") });
 		});
 
+		// What the iOS failure for a Tailscale name on 3011 tells people to type.
+		it("takes a typed https:// with no port to 443, whatever port was saved", () => {
+			const tailnet = { host: "my-pc.tail1234.ts.net", port: 3011, secure: true };
+			expect(resolveManualAddress("https://my-pc.tail1234.ts.net", "", tailnet)).toEqual({ ok: true, host: "my-pc.tail1234.ts.net", ...tls() });
+			expect(resolveManualAddress("my-pc.tail1234.ts.net", "", tailnet)).toEqual({ ok: true, host: "my-pc.tail1234.ts.net", ...tls("3011") });
+		});
+
 		it("lets a typed scheme override the saved choice", () => {
 			expect(resolveManualAddress("https://203.0.113.7:8080", "", saved)).toEqual({ ok: true, host: "203.0.113.7", ...tls("8080") });
 		});

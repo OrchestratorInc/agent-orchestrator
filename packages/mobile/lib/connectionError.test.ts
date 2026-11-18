@@ -191,9 +191,11 @@ describe("describeConnectionFailure", () => {
 			);
 		});
 
-		it("tells iOS, which blocks plain HTTP to that name, to clear the port instead", () => {
+		// Clearing Port alone is not enough: a port written into Host stays, and an
+		// editor falls back to the saved port. A typed https:// with no port is 443.
+		it("tells iOS, which blocks plain HTTP to that name, to enter its HTTPS address instead", () => {
 			expect(tried("ios").message).toBe(
-				"Nothing answered over HTTPS at my-pc.tail1234.ts.net:3011. Clear Port to use the machine's Tailscale HTTPS address.",
+				"Nothing answered over HTTPS at my-pc.tail1234.ts.net:3011. To use the machine's Tailscale HTTPS address, enter https://my-pc.tail1234.ts.net in Host and leave Port empty.",
 			);
 		});
 
@@ -205,7 +207,7 @@ describe("describeConnectionFailure", () => {
 		])("keeps the usual copy for %s", (_name, over) => {
 			const message = tried("android", over).message;
 			expect(message).toMatch(/^Reached nothing at /);
-			expect(message).not.toContain("Clear Port");
+			expect(message).not.toContain("leave Port empty");
 		});
 	});
 
