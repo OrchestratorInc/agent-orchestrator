@@ -336,6 +336,18 @@ describe("Workers filter menu", () => {
 		expect(order()).toEqual(["chips", "line"]);
 	});
 
+	// An empty board explains itself, but a project or idle empty state would not
+	// say the phone is offline: the line stays, limited to that (no machine).
+	it("keeps only the phone-offline line on an empty board", () => {
+		fixtures.hostStates = [snapshot({ hostId: "mac", name: "Mac", connection: "open" })];
+		act(() => { renderer = create(<FleetScreen />); });
+		const line = () => renderer.root.findAllByType("FreshnessLine" as never);
+		expect(line()[0].props.hostId).toBe("mac");
+		act(() => renderer.root.findByType(WorkerBoardList).props.onEmptyChange(true));
+		expect(line()).toHaveLength(1);
+		expect(line()[0].props.hostId).toBeUndefined();
+	});
+
 	it("scopes the project choices to the chosen machine and drops one it does not have", () => {
 		fixtures.projects = [project("ao", "AO", "mac", "Mac"), project("game", "Game", "windows", "Windows")];
 		act(() => { renderer = create(<FleetScreen />); });

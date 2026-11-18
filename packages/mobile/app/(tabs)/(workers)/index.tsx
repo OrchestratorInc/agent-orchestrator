@@ -235,9 +235,13 @@ export default function FleetScreen() {
 	// Inside the list rather than above it: the header is translucent and the page
 	// is laid out under it, so the list has to be the page's first view. Above the
 	// rows rather than inside ListEmptyComponent, because the case the line exists
-	// for is a populated board whose machine has stopped answering; an empty board's
-	// own state already says why it is empty.
-	const freshnessLine = boardEmpty ? null : <FreshnessLine hostId={lineHostId} onRetry={retry} />;
+	// for is a populated board whose machine has stopped answering. An empty board's
+	// own state says why it is empty, so there the line keeps to the phone being
+	// offline (no host), which a project or idle empty state would not mention; the
+	// machine's own empty state already says that too, so it takes no line at all.
+	const freshnessLine = boardEmpty && emptyView === "machine"
+		? null
+		: <FreshnessLine hostId={boardEmpty ? undefined : lineHostId} onRetry={retry} />;
 	// Under the large title on iOS. Android's title is in the bar, whose frost
 	// fades over the first stretch of the page and dimmed a line placed there;
 	// the chips draw above the frost, so the line goes beneath them.
