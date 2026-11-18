@@ -2137,6 +2137,53 @@ textarea,
 	will-change: transform;
 }
 
+/* The same sweep for sidebar rows, where several run at once while a chat is typed in.
+   A masked copy of the title moves with transforms (the inner span cancels the move), so
+   the sweep runs on the compositor instead of repainting each title every frame. The band
+   is 0.75 title widths and its center travels from 1.4 to -0.4 widths, like the gradient. */
+.sidebar-working-shimmer {
+	position: absolute;
+	inset-block: 0;
+	left: -77.5%;
+	width: 180%;
+	pointer-events: none;
+	user-select: none;
+	mask-image: linear-gradient(100deg, transparent 0, black 20.8%, transparent 41.7%);
+	mask-repeat: no-repeat;
+	animation: sidebar-working-shimmer 2.4s ease-in-out infinite;
+}
+
+.sidebar-working-shimmer > span {
+	display: block;
+	animation: sidebar-working-shimmer-counter 2.4s ease-in-out infinite;
+}
+
+.sidebar-working-shimmer > span > span {
+	display: block;
+	width: calc(100% / 1.8);
+	margin-left: calc(100% * 0.775 / 1.8);
+	overflow: hidden;
+	text-overflow: ellipsis;
+	white-space: nowrap;
+	color: var(--color-foreground);
+}
+
+@keyframes sidebar-working-shimmer {
+	from { transform: translateX(100%); }
+	to { transform: translateX(0); }
+}
+
+@keyframes sidebar-working-shimmer-counter {
+	from { transform: translateX(-100%); }
+	to { transform: translateX(0); }
+}
+
+@media (prefers-reduced-motion: reduce) {
+	.sidebar-working-shimmer {
+		display: none;
+	}
+}
+
 /* The live row's label (current step, retry chip, setup label) fades in once when the
    row changes what it is showing; the text inside then updates in place. */
 .chat-live-label {
