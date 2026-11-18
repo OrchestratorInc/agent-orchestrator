@@ -161,7 +161,8 @@ func publishPrimeImportProof(root, marker string, data []byte) error {
 
 func primeForkMatches(history primeNativeHistory, proof primeImportProof, expected primeNativeHistory) bool {
 	id, err := uuid.Parse(history.id)
-	return err == nil && len(history.id) == 36 && id.Version() == 4 && history.id != proof.SourceID &&
+	// Current Prime creates UUIDv7 identities; older native histories used v4.
+	return err == nil && len(history.id) == 36 && (id.Version() == 4 || id.Version() == 7) && history.id != proof.SourceID &&
 		primeSamePath(history.parent, proof.SourcePath) && primeSamePath(history.cwd, proof.Workspace) &&
 		history.count == expected.count && history.digest == expected.digest
 }

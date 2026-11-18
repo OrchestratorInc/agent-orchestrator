@@ -243,3 +243,26 @@ func TestPrimeImportProofPublishesCompleteWithoutReplacing(t *testing.T) {
 		t.Fatalf("staging file leaked: %v, %v", entries, err)
 	}
 }
+
+func TestPrimeForkMatchesCurrentAndLegacyNativeIDs(t *testing.T) {
+	root, workspace := t.TempDir(), t.TempDir()
+	source := filepath.Join(root, "synthetic-source.jsonl")
+	proof := primeImportProof{SourceID: primeSourceID, SourcePath: source, Workspace: workspace}
+	for _, tc := range []struct {
+		id   string
+		want bool
+	}{
+		{primeForkID, true},
+		{"7e30cc6c-ab67-72bf-abfb-9f68ef5499b1", true},
+		{"7e30cc6c-ab67-12bf-abfb-9f68ef5499b1", false},
+		{primeSourceID, false},
+		{"not-a-native-uuid", false},
+	} {
+		t.Run(tc.id, func(t *testing.T) {
+			history := primeNativeHistory{id: tc.id, cwd: workspace, parent: source}
+			if got := primeForkMatches(history, proof, primeNativeHistory{}); got != tc.want {
+				t.Fatalf("native ID accepted = %v, want %v", got, tc.want)
+			}
+		})
+	}
+}
