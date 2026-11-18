@@ -1378,7 +1378,9 @@ export function useConversationCommands(
 			return data;
 		},
 		onSuccess: (data) => {
-			const turnId = data?.outcome === "sent" && data.state !== "queued" ? data.turnId : undefined;
+			const turnId = data?.outcome === "sent" && data.state !== "queued" && (!data.duplicate || data.state === "running")
+				? data.turnId
+				: undefined;
 			if (turnId && stateSessionId) {
 				queryClient.setQueryData<ConversationDispatchTrackingBySession>(
 					conversationDispatchTrackingQueryKey,

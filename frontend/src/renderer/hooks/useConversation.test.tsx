@@ -1344,6 +1344,15 @@ describe("steering refusals", () => {
 		expect(result.current.activateBranchDisabled).toBe(false);
 
 		postMock.mockResolvedValueOnce({
+			data: { outcome: "sent", duplicate: true, turnId: "turn-old", state: "completed" },
+			error: undefined,
+		});
+		await act(async () => {
+			await result.current.steer("recovered long ago", undefined, "old-1", true);
+		});
+		expect(result.current.pendingAcceptedTurnId).toBeUndefined();
+
+		postMock.mockResolvedValueOnce({
 			data: { outcome: "sent", duplicate: false, turnId: "turn-9", state: "running" },
 			error: undefined,
 		});
