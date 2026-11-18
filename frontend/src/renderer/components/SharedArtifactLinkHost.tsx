@@ -1,34 +1,34 @@
-import { useQueryClient } from "@tanstack/react-query";
 import { useNavigate } from "@tanstack/react-router";
 import { useEffect, useRef, useState } from "react";
 import { sharedArtifactLinkId } from "../../../../packages/shared/artifacts/shared-artifact-link";
 import { useCloudCp } from "../hooks/useCloudCp";
 import { useCloudGate } from "../hooks/useCloudGate";
-import { sharedArtifactsQueryKey } from "../hooks/useSharedArtifacts";
 import { aoBridge } from "../lib/bridge";
 import { useCloudSession } from "../lib/cloud-session";
-import type { CloudCpSharedArtifact } from "../lib/cloud-cp";
+import type { SharedArtifactLink } from "../lib/artifacts";
 import { useArtifactsViewStore } from "../stores/artifacts-view-store";
 import { useUiStore } from "../stores/ui-store";
 
 /**
- * How long saving a link may take before it opens in its own window instead.
+ * How long checking a link may take before it opens in its own window instead.
  * One small request; past this the control plane is struggling, and a waiting
- * save would hold every later link, which open one at a time.
+ * check would hold every later link, which open one at a time.
  */
-const SHARED_ARTIFACT_SAVE_TIMEOUT_MS = 15_000;
+const SHARED_ARTIFACT_OPEN_TIMEOUT_MS = 15_000;
 
 /**
  * Opens a published artifact sent from its web page's "Open on orchestrator"
- * (ao-app://shared-artifact) on the Artifacts page: it is saved to the links
- * shared with this person, so it stays listed, and shown in the page's
- * preview. Signed out of Cloud, or when it does not open for this account, it
- * opens in its own isolated window instead, where the viewer asks for sign-in.
- * A link that arrives while the sign-in is still being read waits for it.
+ * (ao-app://shared-artifact) in the Artifacts page's preview, once the control
+ * plane says it opens for this account. Opening it lists nothing: a link is
+ * listed as shared with this person only because its owner shared it with
+ * their email or a team of theirs. Signed out of Cloud, or when it does not
+ * open for this account, it opens in its own isolated window instead, where
+ * the viewer asks for sign-in. A link that arrives while the sign-in is still
+ * being read waits for it.
  */
 export function SharedArtifactLinkHost() {
 	const { client, ready, userId } = useCloudCp();
-	// The account signed in now, read when a save finishes.
+	// The account signed in now, read when a check finishes.
 	const currentUserId = useRef(userId);
 	useEffect(() => {
 		currentUserId.current = userId;
@@ -36,14 +36,13 @@ export function SharedArtifactLinkHost() {
 	const { loading: gateLoading } = useCloudGate();
 	const { status } = useCloudSession();
 	const navigate = useNavigate();
-	const queryClient = useQueryClient();
 	const [pending, setPending] = useState<string[]>([]);
-	// One link is saved at a time, so they open in the order they came.
-	const [saving, setSaving] = useState(false);
-	// A saved link waits while Settings is open: Settings covers the page, and
+	// One link is checked at a time, so they open in the order they came.
+	const [checking, setChecking] = useState(false);
+	// A checked link waits while Settings is open: Settings covers the page, and
 	// closing it for the person could lose a project's unsaved changes.
 	const settingsOpen = useUiStore((state) => state.settingsModal !== null);
-	const [waiting, setWaiting] = useState<{ artifact: CloudCpSharedArtifact; userId: string } | null>(null);
+	const [waiting, setWaiting] = useState<{ artifact: SharedArtifactLink; userId: string } | null>(null);
 
 	useEffect(() => {
 		const add = (viewerUrl: string | null) => {
@@ -63,7 +62,7 @@ export function SharedArtifactLinkHost() {
 
 	const settled = !gateLoading && status !== "loading";
 	useEffect(() => {
-		if (!settled || saving || pending.length === 0) return;
+		if (!settled || checking || pending.length === 0) return;
 		const [viewerUrl, ...rest] = pending;
 		setPending(rest);
 		if (!viewerUrl) return;
@@ -74,22 +73,29 @@ export function SharedArtifactLinkHost() {
 			fallback();
 			return;
 		}
-		const savedFor = userId;
-		setSaving(true);
-		void client.saveSharedArtifact(linkId, { signal: AbortSignal.timeout(SHARED_ARTIFACT_SAVE_TIMEOUT_MS) }).then(({ artifact }) => {
+		const checkedFor = userId;
+		setChecking(true);
+		void client.viewArtifactShare(linkId, { signal: AbortSignal.timeout(SHARED_ARTIFACT_OPEN_TIMEOUT_MS) }).then((view) => {
 			// Another account signed in meanwhile: this one's link is not shown to it.
-			if (currentUserId.current !== savedFor) return;
+			if (currentUserId.current !== checkedFor) return;
 			// Only the link ID reaches the control plane, so open it here only when
 			// the link came from the viewer the control plane names for it; a link
 			// on any other origin opens its own page in the isolated window.
-			if (!sameOrigin(artifact.viewerUrl, viewerUrl)) {
+			if (!sameOrigin(view.viewerUrl, viewerUrl)) {
 				fallback();
 				return;
 			}
-			void queryClient.invalidateQueries({ queryKey: sharedArtifactsQueryKey });
-			setWaiting({ artifact, userId: savedFor });
-		}, fallback).finally(() => setSaving(false));
-	}, [settled, saving, pending, ready, client, userId, queryClient]);
+			const artifact: SharedArtifactLink = {
+				linkId: view.linkId,
+				name: view.name,
+				contentType: view.contentType,
+				updatedAt: view.updatedAt,
+				access: view.access ?? "anyone",
+				...(view.viewerUrl ? { viewerUrl: view.viewerUrl } : {}),
+			};
+			setWaiting({ artifact, userId: checkedFor });
+		}, fallback).finally(() => setChecking(false));
+	}, [settled, checking, pending, ready, client, userId]);
 
 	// Shown on the Artifacts page once nothing covers it.
 	useEffect(() => {

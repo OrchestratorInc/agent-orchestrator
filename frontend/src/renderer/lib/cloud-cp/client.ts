@@ -265,10 +265,8 @@ export interface CloudCpClient {
 		sessionId: string,
 		options?: CloudCpRequestOptions,
 	): Promise<CloudCpArtifactAccessResponse>;
-	/** The links other people published that open for the signed-in person. */
+	/** The links other people shared with the signed-in person, by email or team. */
 	listSharedArtifacts(options?: CloudCpRequestOptions): Promise<{ artifacts: CloudCpSharedArtifact[] }>;
-	/** Adds a link opened in the app to the ones shared with the signed-in person; 404 when it does not open for them. */
-	saveSharedArtifact(linkId: string, options?: CloudCpRequestOptions): Promise<{ artifact: CloudCpSharedArtifact }>;
 	/** A link's details with a contentUrl that opens its file for the signed-in person; 404 when it does not open for them. */
 	viewArtifactShare(linkId: string, options?: CloudCpRequestOptions): Promise<CloudCpArtifactShareView>;
 	listSessionArtifacts(
@@ -1006,7 +1004,6 @@ export function createCloudCpClient(options: CloudCpClientOptions): CloudCpClien
 		createSessionArtifactAccess: (orgId, sessionId, o) =>
 			requestJson("POST", `/orgs/${seg(orgId)}/sessions/${seg(sessionId)}/artifacts/access`, { signal: o?.signal }),
 		listSharedArtifacts: (o) => requestJson("GET", "/me/shared-artifacts", { signal: o?.signal }),
-		saveSharedArtifact: (linkId, o) => requestJson("PUT", `/me/shared-artifacts/${seg(linkId)}`, { signal: o?.signal }),
 		viewArtifactShare: (linkId, o) => requestJson("POST", `/artifact-shares/${seg(linkId)}/view`, { signal: o?.signal }),
 		listSessionArtifacts: (orgId, sessionId, o) =>
 			requestJson("GET", `/orgs/${seg(orgId)}/sessions/${seg(sessionId)}/artifacts`, { signal: o?.signal }),

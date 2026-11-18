@@ -696,7 +696,7 @@ describe("ArtifactsView", () => {
 		mocks.cloudArtifacts = false;
 		mocks.shared = [{
 			linkId: "q3-report", name: "q3-report.html", contentType: "text/html", size: 10, updatedAt: "2030-01-01T00:00:00Z",
-			access: "restricted", via: "invited", sharedAt: "2030-01-01T00:00:00Z", viewerUrl: "https://orchestrator.inc/artifact/q3-report",
+			access: "restricted", via: "direct", teams: [], sharedAt: "2030-01-01T00:00:00Z", viewerUrl: "https://orchestrator.inc/artifact/q3-report",
 		}];
 		renderView();
 		// Cloud is offered for them even where the control plane keeps no session artifacts.
@@ -739,8 +739,8 @@ describe("ArtifactsView", () => {
 	it("opens a shared link sent from its web page in the preview", async () => {
 		renderView();
 		act(() => useArtifactsViewStore.getState().requestOpenSharedArtifact({
-			linkId: "roadmap", name: "roadmap.md", contentType: "text/markdown", size: 3, updatedAt: "2030-01-01T00:00:00Z",
-			access: "anyone", via: "saved", sharedAt: "2030-01-01T00:00:00Z", viewerUrl: "https://orchestrator.inc/artifact/roadmap",
+			linkId: "roadmap", name: "roadmap.md", contentType: "text/markdown", updatedAt: "2030-01-01T00:00:00Z",
+			access: "anyone", viewerUrl: "https://orchestrator.inc/artifact/roadmap",
 		}));
 		const dialog = within(await screen.findByRole("dialog", { name: "roadmap.md" }));
 		expect(dialog.getByTestId("shared-artifact-preview")).toHaveAttribute("data-link-id", "roadmap");

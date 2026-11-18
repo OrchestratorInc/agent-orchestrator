@@ -176,22 +176,21 @@ describe("groupArtifactsByProject", () => {
 
 describe("sharedArtifactGroup", () => {
 	const item = (linkId: string, name: string, updatedAt: string, extra: Partial<CloudCpSharedArtifact> = {}): CloudCpSharedArtifact => ({
-		linkId, name, contentType: "text/html", size: 1, updatedAt, access: "anyone", via: "saved", sharedAt: updatedAt, viewerUrl: `https://orchestrator.inc/artifact/${linkId}`, ...extra,
+		linkId, name, contentType: "text/html", size: 1, updatedAt, access: "anyone", via: "direct", teams: [], sharedAt: updatedAt, viewerUrl: `https://orchestrator.inc/artifact/${linkId}`, ...extra,
 	});
 
-	it("lists links shared with this person as one Cloud group, newest first, never their own", () => {
+	it("lists links shared with this person as one Cloud group, newest first", () => {
 		const group = sharedArtifactGroup([
 			item("old", "old.html", "2026-10-01T00:00:00Z"),
-			item("new", "notes.md", "2026-10-02T00:00:00Z", { contentType: "text/markdown; charset=utf-8", access: "restricted", via: "invited" }),
-			item("mine", "mine.html", "2026-10-03T00:00:00Z", { via: "owner" }),
+			item("new", "notes.md", "2026-10-02T00:00:00Z", { contentType: "text/markdown; charset=utf-8", access: "restricted", via: "team", teams: [{ id: "t-1", name: "Design" }] }),
 		], "Shared with you");
 		expect(group).toMatchObject({ id: SHARED_WITH_ME_GROUP_ID, name: "Shared with you", cloud: true });
 		expect(group?.rows.map((row) => [row.name, row.kind, row.shared?.linkId])).toEqual([["notes.md", "markdown", "new"], ["old.html", "html", "old"]]);
-		const [invited, saved] = group!.rows;
-		expect(artifactOwner(invited!, "me")).toBe("shared");
-		expect(artifactLocation(invited!, group!)).toBe("cloud");
-		expect(artifactSharing(invited!)).toBe("shared");
-		expect(artifactSharing(saved!)).toBe("public");
+		const [privateLink, publicLink] = group!.rows;
+		expect(artifactOwner(privateLink!, "me")).toBe("shared");
+		expect(artifactLocation(privateLink!, group!)).toBe("cloud");
+		expect(artifactSharing(privateLink!)).toBe("shared");
+		expect(artifactSharing(publicLink!)).toBe("public");
 		expect(sharedArtifactGroup([], "Shared with you")).toBeUndefined();
 		expect(sharedArtifactGroup(undefined, "Shared with you")).toBeUndefined();
 	});

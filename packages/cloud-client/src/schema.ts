@@ -355,29 +355,9 @@ export interface paths {
             path?: never;
             cookie?: never;
         };
-        /** @description Lists the active links other people published that open for the signed-in person, newest change first: links shared with their verified email, and public links they opened in Orchestrator (saveSharedArtifact). A saved link that went private without inviting them, or was unpublished, is no longer listed; their own links never are. No owner is named. A link's file opens through viewArtifactShare. Available only when artifact share links are on; otherwise 404. */
+        /** @description Lists the active links other people published and shared with the signed-in person, newest change first: links shared with their verified email, and links shared with a team they are in, private or public. They are listed without being opened; opening a link never lists it. A link shared both ways is listed once. An unpublished link is no longer listed; their own links never are. No owner is named. A link's file opens through viewArtifactShare. Available only when artifact share links are on; otherwise 404. */
         get: operations["listSharedArtifacts"];
         put?: never;
-        post?: never;
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/api/cloud/v1/me/shared-artifacts/{linkId}": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path: {
-                /** @description The link's public ID, the slug of an ArtifactShare. */
-                linkId: string;
-            };
-            cookie?: never;
-        };
-        get?: never;
-        /** @description Lists a link the signed-in person opened in Orchestrator among the ones shared with them, and returns it as listed. Saving it again keeps when it was first saved. A link shared with their email (via invited) and their own link (via owner) are returned as they are, with nothing saved. Like viewArtifactShare, a link that does not open for them, private or not there at all, returns 404, and the call is rate-limited per person (429 rate_limited). */
-        put: operations["saveSharedArtifact"];
         post?: never;
         delete?: never;
         options?: never;
@@ -5112,7 +5092,7 @@ export interface components {
             /** @description Emails to share the link with as it is published, as addArtifactShareGrants does. */
             emails?: string[];
         };
-        /** @description A link someone else published that opens for the signed-in person, as their Artifacts list shows it. */
+        /** @description A link someone else published and shared with the signed-in person, as their Artifacts list shows it. */
         SharedArtifact: {
             /** @description The link's public ID, for viewArtifactShare. */
             linkId: string;
@@ -5130,13 +5110,18 @@ export interface components {
             /** @description The viewer page of the link; absent without a viewer. */
             viewerUrl?: string;
             /**
-             * @description Why it is listed: invited, shared with their email; saved, they opened the public link in Orchestrator; owner, their own link, returned only by saveSharedArtifact and never listed.
+             * @description How it reached them: direct, shared with their email (whether or not also with a team of theirs); team, shared only with teams they are in.
              * @enum {string}
              */
-            via: "invited" | "saved" | "owner";
+            via: "direct" | "team";
+            /** @description Every team of theirs the link is shared with; empty when none. */
+            teams: {
+                id: string;
+                name: string;
+            }[];
             /**
              * Format: date-time
-             * @description When it was shared with them or they saved it.
+             * @description When it was first shared with them.
              */
             sharedAt: string;
         };
@@ -5157,6 +5142,8 @@ export interface components {
             /** @description Where the link's file is served; the viewer frames it. For a private link (viewArtifactShare) it carries a short-lived view token in its vt query parameter. */
             contentUrl: string;
             access?: components["schemas"]["ArtifactShareAccess"];
+            /** @description The link's viewer page; absent where the control plane has no viewer. The desktop app opens a link sent from a viewer page only when it came from this origin. */
+            viewerUrl?: string;
             /** @description Only from viewArtifactShare, and only for the link's owner: what the viewer page needs to manage the link. shareId unpublishes it (deleteArtifactShare); grantCount is how many emails it is shared with. Absent for everyone else. */
             you?: {
                 owner: boolean;
@@ -6873,32 +6860,6 @@ export interface operations {
                 content: {
                     "application/json": {
                         artifacts: components["schemas"]["SharedArtifact"][];
-                    };
-                };
-            };
-            default: components["responses"]["Error"];
-        };
-    };
-    saveSharedArtifact: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path: {
-                /** @description The link's public ID, the slug of an ArtifactShare. */
-                linkId: string;
-            };
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description The link as the signed-in person's list shows it. */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": {
-                        artifact: components["schemas"]["SharedArtifact"];
                     };
                 };
             };

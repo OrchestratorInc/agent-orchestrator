@@ -59,9 +59,9 @@ export type ArtifactRow = {
 	 */
 	kept?: "session-deleted" | "project-removed";
 	/**
-	 * Set on a link someone else published that opens for this person: one
-	 * shared with their email, or a public one they opened in the app. It has
-	 * no session; it opens through the link's viewer access.
+	 * Set on a link someone else published and shared with this person, by
+	 * their email or a team they are in, or one they opened from its page. It
+	 * has no session; it opens through the link's viewer access.
 	 */
 	shared?: { linkId: string; viewerUrl?: string; access: CloudShareAccess };
 };
@@ -69,8 +69,11 @@ export type ArtifactRow = {
 /** The group ID of the links shared with this person. */
 export const SHARED_WITH_ME_GROUP_ID = "shared-with-me";
 
+/** What a shared link's row is made from: a listed link, or one opened from its page. */
+export type SharedArtifactLink = Pick<CloudCpSharedArtifact, "linkId" | "name" | "contentType" | "updatedAt" | "access" | "viewerUrl">;
+
 /** A shared link's row; see ArtifactRow.shared. */
-export function sharedArtifactRow(item: Pick<CloudCpSharedArtifact, "linkId" | "name" | "contentType" | "updatedAt" | "access" | "viewerUrl">): ArtifactRow {
+export function sharedArtifactRow(item: SharedArtifactLink): ArtifactRow {
 	const name = item.name;
 	const kind: ArtifactKind = /^text\/html\b/i.test(item.contentType) || /\.html?$/i.test(name)
 		? "html"
@@ -92,7 +95,7 @@ export function sharedArtifactRow(item: Pick<CloudCpSharedArtifact, "linkId" | "
  * or undefined when there are none.
  */
 export function sharedArtifactGroup(items: readonly CloudCpSharedArtifact[] | undefined, name: string): ArtifactGroup | undefined {
-	const rows = (items ?? []).filter((item) => item.via !== "owner").map(sharedArtifactRow).sort(newestFirst);
+	const rows = (items ?? []).map(sharedArtifactRow).sort(newestFirst);
 	return rows.length > 0 ? { id: SHARED_WITH_ME_GROUP_ID, name, isScratchpad: false, cloud: true, rows } : undefined;
 }
 

@@ -816,8 +816,8 @@ export interface CloudCpChatSearchResponse {
 }
 
 /**
- * A link someone else published that opens for the signed-in person
- * (listSharedArtifacts). It names no owner.
+ * A link someone else published and shared with the signed-in person
+ * (listSharedArtifacts), by their email or a team they are in. It names no owner.
  */
 export interface CloudCpSharedArtifact {
 	linkId: string;
@@ -827,8 +827,10 @@ export interface CloudCpSharedArtifact {
 	updatedAt: string;
 	access: "restricted" | "anyone";
 	viewerUrl?: string;
-	/** invited: shared with their email; saved: opened in the app; owner: their own (only from saveSharedArtifact). */
-	via: "invited" | "saved" | "owner";
+	/** direct: shared with their email (and maybe a team too); team: only with teams they are in. */
+	via: "direct" | "team";
+	/** Every team of theirs the link is shared with; empty when none. */
+	teams: { id: string; name: string }[];
 	sharedAt: string;
 }
 
@@ -842,6 +844,8 @@ export interface CloudCpArtifactShareView {
 	/** Where the file is served; a private link's carries a short-lived view token. */
 	contentUrl: string;
 	access?: "restricted" | "anyone";
+	/** The link's viewer page; absent where the control plane has no viewer. */
+	viewerUrl?: string;
 }
 
 /** POST /orgs/{orgId}/sessions/{sessionId}/artifacts/access */

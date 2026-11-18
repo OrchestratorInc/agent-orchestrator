@@ -1,5 +1,5 @@
 import { create } from "zustand";
-import type { CloudCpSharedArtifact } from "../lib/cloud-cp";
+import type { SharedArtifactLink } from "../lib/artifacts";
 
 export type ArtifactViewMode = "gallery" | "list";
 
@@ -44,8 +44,8 @@ type ArtifactsViewState = ArtifactViewPreferences & {
 	 * which the Artifacts page opens in its preview once, then clears. Never
 	 * saved.
 	 */
-	openSharedArtifact: CloudCpSharedArtifact | null;
-	requestOpenSharedArtifact: (artifact: CloudCpSharedArtifact | null) => void;
+	openSharedArtifact: SharedArtifactLink | null;
+	requestOpenSharedArtifact: (artifact: SharedArtifactLink | null) => void;
 	setView: (view: ArtifactViewMode) => void;
 	setSort: (sort: ArtifactSort) => void;
 	toggleSection: (sectionId: string) => void;
