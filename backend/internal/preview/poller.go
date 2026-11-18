@@ -24,7 +24,10 @@ type previewSetter interface {
 // PollerConfig configures preview poller timing and logging.
 type PollerConfig struct {
 	Interval time.Duration
-	Logger   *slog.Logger
+	// Changes signals a session row change. When set, the poller waits for it
+	// instead of polling while it has no preview file to watch.
+	Changes <-chan struct{}
+	Logger  *slog.Logger
 }
 
 // Poller watches explicitly selected workspace previews and persists refreshes
@@ -36,6 +39,7 @@ type Poller struct {
 	setter   previewSetter
 	baseURL  string
 	interval time.Duration
+	changes  <-chan struct{}
 	logger   *slog.Logger
 	seen     map[domain.SessionID]entryState
 }
@@ -57,6 +61,7 @@ func NewPoller(source sessionPreviewSource, setter previewSetter, baseURL string
 		setter:   setter,
 		baseURL:  baseURL,
 		interval: cfg.Interval,
+		changes:  cfg.Changes,
 		logger:   cfg.Logger,
 		seen:     map[domain.SessionID]entryState{},
 	}
@@ -75,25 +80,33 @@ func (p *Poller) Start(ctx context.Context) <-chan struct{} {
 	done := make(chan struct{})
 	go func() {
 		defer close(done)
-		p.pollAndLog(ctx)
+		err := p.pollAndLog(ctx)
 		ticker := time.NewTicker(p.interval)
 		defer ticker.Stop()
 		for {
+			tick := ticker.C
+			// Only a session change can give an idle poller something to watch.
+			if p.changes != nil && err == nil && len(p.seen) == 0 {
+				tick = nil
+			}
 			select {
 			case <-ctx.Done():
 				return
-			case <-ticker.C:
-				p.pollAndLog(ctx)
+			case <-tick:
+			case <-p.changes:
 			}
+			err = p.pollAndLog(ctx)
 		}
 	}()
 	return done
 }
 
-func (p *Poller) pollAndLog(ctx context.Context) {
-	if err := p.Poll(ctx); err != nil {
+func (p *Poller) pollAndLog(ctx context.Context) error {
+	err := p.Poll(ctx)
+	if err != nil {
 		p.logger.Error("preview poller: poll failed", "err", err)
 	}
+	return err
 }
 
 // Poll performs one deterministic scan of active worker sessions.
