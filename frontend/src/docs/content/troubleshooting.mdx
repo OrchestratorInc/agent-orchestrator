@@ -72,7 +72,7 @@ Fix it in this order. Installing rtkit before raising the limits makes the kills
    sudo systemctl mask --runtime rtkit-daemon.service && sudo pacman -S --needed rtkit
    ```
 
-   If the install fails or you cancel it, run this step again. Until step 3 or a reboot releases rtkit, it stays held back, which grants nothing and kills nothing.
+   If the install fails or you cancel it, run this step again. To stop the repair here instead, reboot rather than releasing rtkit by hand. Until step 3 or a reboot releases rtkit, it stays held back, which grants nothing and kills nothing.
 
 3. Run the command from step 1 again to raise processes that started during the install, then release rtkit:
 
