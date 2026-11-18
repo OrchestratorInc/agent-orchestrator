@@ -90,9 +90,9 @@ func TestOpenHandsNaiveTimestampUsesLocalZone(t *testing.T) {
 }
 
 func TestOpenHandsAbandonedTextCannotEvictActiveBranch(t *testing.T) {
-	oldHeld, oldVisible := maxHeldText, maxVisibleBytes
-	maxHeldText, maxVisibleBytes = 64, 128
-	t.Cleanup(func() { maxHeldText, maxVisibleBytes = oldHeld, oldVisible })
+	oldHeld := maxHeldText
+	maxHeldText = 64
+	t.Cleanup(func() { maxHeldText = oldHeld })
 	root := t.TempDir()
 	dir := filepath.Join(root, "12345678123412341234123456789012")
 	writeFile(t, filepath.Join(dir, "base_state.json"), `{"id":"12345678-1234-1234-1234-123456789012","workspace":{"working_dir":"/work/source"},"leaf_event_id":"C"}`)
