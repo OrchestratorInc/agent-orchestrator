@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"maps"
 	"slices"
 	"sort"
 	"strconv"
@@ -1577,11 +1578,17 @@ func (c *conversation) emit(event ports.ChatEvent) {
 }
 
 func (c *conversation) settleOpenItems(turnID string, turnState ...domain.TurnState) {
+	// Copy what is settled while holding the lock. A late session/update for the
+	// same turn can still write these maps and tool states (processUpdate) while
+	// the items below are emitted, so iterating the live ones raced.
 	c.mu.Lock()
-	messages := c.messages
-	thoughts := c.thoughts
-	nestedMessages := c.nestedMessages
-	tools := c.tools
+	messages := maps.Clone(c.messages)
+	thoughts := maps.Clone(c.thoughts)
+	nestedMessages := maps.Clone(c.nestedMessages)
+	tools := make(map[string]toolState, len(c.tools))
+	for id, tool := range c.tools {
+		tools[id] = *tool
+	}
 	c.mu.Unlock()
 	recovered := len(turnState) > 0 && turnState[0] == domain.TurnStateRecovered
 	activityStatus := domain.ActivityStatusCompleted
@@ -1613,7 +1620,7 @@ func (c *conversation) settleOpenItems(turnID string, turnState ...domain.TurnSt
 	for _, id := range toolIDs {
 		tool := tools[id]
 		if tool.status == acpsdk.ToolCallStatusPending || tool.status == acpsdk.ToolCallStatusInProgress || tool.status == "" {
-			snapshot := *tool
+			snapshot := tool
 			snapshot.status = acpsdk.ToolCallStatusFailed
 			event := c.toolEvent(turnID, &snapshot, true)
 			if recovered {

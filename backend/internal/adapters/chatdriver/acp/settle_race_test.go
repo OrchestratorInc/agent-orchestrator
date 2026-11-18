@@ -1,0 +1,64 @@
+package acp
+
+import (
+	"io"
+	"log/slog"
+	"strconv"
+	"sync"
+	"testing"
+
+	acpsdk "github.com/coder/acp-go-sdk"
+
+	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
+)
+
+// settleOpenItems emits a turn's open items while a late session/update for
+// that turn can still write the same maps and tool states. It must read a copy
+// taken under the lock: iterating the live maps raced with processUpdate and
+// failed CI under -race (TestACPSteerPromptWithoutAnAcknowledgementIsARefusal).
+func TestSettleOpenItemsReadsACopyWhileUpdatesStillArrive(t *testing.T) {
+	c := &conversation{
+		events:         make(chan ports.ChatEvent, 1<<16),
+		log:            slog.New(slog.NewTextHandler(io.Discard, nil)),
+		messages:       map[string]string{"m": "hello"},
+		thoughts:       map[string]string{"r": "thinking"},
+		nestedMessages: map[string]nestedMessageState{"n": {text: "sub", parentID: "p"}},
+		tools:          map[string]*toolState{"t": {id: "t", status: acpsdk.ToolCallStatusInProgress}},
+	}
+	drained := make(chan struct{})
+	go func() {
+		defer close(drained)
+		for range c.events {
+		}
+	}()
+
+	var writers sync.WaitGroup
+	writers.Go(func() {
+		for i := range 2000 {
+			key := strconv.Itoa(i)
+			c.mu.Lock()
+			c.messages["m"+key] = "late"
+			c.thoughts["r"+key] = "late"
+			c.nestedMessages["n"+key] = nestedMessageState{text: "late"}
+			c.tools["t"].status = acpsdk.ToolCallStatusInProgress
+			c.tools["t"+key] = &toolState{id: "t" + key, status: acpsdk.ToolCallStatusPending}
+			c.mu.Unlock()
+		}
+	})
+	for range 50 {
+		c.settleOpenItems("turn-1")
+	}
+	writers.Wait()
+	c.eventMu.Lock()
+	c.eventsClosed = true
+	close(c.events)
+	c.eventMu.Unlock()
+	<-drained
+
+	// The live tool keeps its own state: settling reports a copy as failed.
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if got := c.tools["t"].status; got != acpsdk.ToolCallStatusInProgress {
+		t.Fatalf("settling changed the live tool's status to %q", got)
+	}
+}
