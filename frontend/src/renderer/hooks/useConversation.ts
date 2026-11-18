@@ -554,9 +554,17 @@ async function rereadUncoveredUnsettledActivities(queryClient: QueryClient, key:
 		}
 	}));
 	if (!fresh.size) return;
+	// Another refresh may have committed a newer revision while these reads ran,
+	// so a read row only replaces an older revision of what the cache holds now.
 	queryClient.setQueryData<InfiniteData<ConversationSnapshot>>(key, (current) => current && {
 		...current,
-		pages: current.pages.map((page) => ({ ...page, items: page.items.map((item) => fresh.get(item.id) ?? item) })),
+		pages: current.pages.map((page) => ({
+			...page,
+			items: page.items.map((item) => {
+				const read = fresh.get(item.id);
+				return read && read.revision > item.revision ? read : item;
+			}),
+		})),
 	});
 }
 

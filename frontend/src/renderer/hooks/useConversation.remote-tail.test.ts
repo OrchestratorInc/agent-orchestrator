@@ -175,6 +175,25 @@ describe("refreshRemoteConversation", () => {
 		expect(data.pages[1].items.find((item) => item.id === "n0")).toMatchObject({ status: "failed", revision: 2 });
 	});
 
+	it("does not put back an older revision another refresh replaced while the row was read", async () => {
+		const history = page([turn("t0", "failed")], [message("m0", "t0", 1), tool("n0", "t0", 2, "running")]);
+		client.setQueryData<InfiniteData<ConversationSnapshot>>(key, { pages: [prior, history], pageParams: [undefined, 1] });
+		const staleRead = { id: "n0", turnId: "t0", sequence: 2, revision: 2, activityKind: "command", status: "running", summary: "n0", createdAt: "" };
+		getMock
+			.mockResolvedValueOnce(wire({ afterSequence: 3, oldestSequence: 4, turns: [wireTurn("t2", "running")], messages: [wireMessage("m2", "t2", 4)] }))
+			.mockImplementationOnce(async () => {
+				// An overlapping refresh commits revision 3 before this read answers with 2.
+				client.setQueryData<InfiniteData<ConversationSnapshot>>(key, (current) => current && {
+					...current,
+					pages: current.pages.map((entry, index) => index === 0 ? entry : { ...entry, items: entry.items.map((item) => item.id === "n0" ? { ...item, status: "failed", revision: 3 } as ConversationItem : item) }),
+				});
+				return wire({ oldestSequence: 2, latestSequence: 2, turns: [wireTurn("t0", "failed")], activities: [staleRead] });
+			});
+		await refreshRemoteConversation(client, "s1", "box");
+		const data = client.getQueryData<InfiniteData<ConversationSnapshot>>(key)!;
+		expect(data.pages[1].items.find((item) => item.id === "n0")).toMatchObject({ status: "failed", revision: 3 });
+	});
+
 	it("leaves an older page's running row alone while the host still reports it running", async () => {
 		const history = page([turn("t0", "running")], [message("m0", "t0", 1), tool("n0", "t0", 2, "running")]);
 		client.setQueryData<InfiniteData<ConversationSnapshot>>(key, { pages: [prior, history], pageParams: [undefined, 1] });
