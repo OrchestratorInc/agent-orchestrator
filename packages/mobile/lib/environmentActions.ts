@@ -14,8 +14,17 @@ import { IncompatibleHostVersionError } from "./race";
  * A changed route or password is checked against the machine before it is
  * stored (see persistManualHostEdit). Says whether the route changed, so the
  * caller can reconnect the default machine over the new one.
+ *
+ * The icon is written last and on its own: it is a phone-local write that can
+ * fail without the machine being at fault, after a route was already saved.
+ * Its failure comes back as `appearanceError` beside `routeChanged`, rather
+ * than as a connection failure that would hide the saved route.
  */
-export async function saveEnvironmentMachine(host: Host, draft: EnvironmentMachineDraft, platform: string): Promise<{ routeChanged: boolean }> {
+export async function saveEnvironmentMachine(
+	host: Host,
+	draft: EnvironmentMachineDraft,
+	platform: string,
+): Promise<{ routeChanged: boolean; appearanceError?: MachineSaveError }> {
 	const before = host.endpoints[draft.endpointIndex];
 	const appearanceChanged = machineAppearance(host).symbol !== draft.appearance.symbol;
 	let after: Host["endpoints"][number] | undefined;
@@ -27,7 +36,6 @@ export async function saveEnvironmentMachine(host: Host, draft: EnvironmentMachi
 			renameHost,
 		});
 		after = saved.endpoints[draft.endpointIndex];
-		if (appearanceChanged) await updateHostAppearance(host.id, draft.appearance);
 	} catch (error) {
 		if (error instanceof DifferentMachineError || error instanceof AccountManagedHostError) throw new MachineSaveError(error.message, "host");
 		const status = error instanceof IncompatibleHostVersionError ? 426 : error instanceof ApiError ? error.status : undefined;
@@ -43,6 +51,16 @@ export async function saveEnvironmentMachine(host: Host, draft: EnvironmentMachi
 	// whether it speaks TLS is only known once it answered.
 	const routeChanged = !before || !after || before.host !== after.host || before.port !== after.port ||
 		before.secure !== after.secure || host.token !== draft.config.password;
+	if (appearanceChanged) {
+		try {
+			await updateHostAppearance(host.id, draft.appearance);
+		} catch {
+			const message = routeChanged
+				? "The connection was saved, but the icon couldn't be. Try Save again."
+				: "The icon couldn't be saved. Try again.";
+			return { routeChanged, appearanceError: new MachineSaveError(message, "host") };
+		}
+	}
 	return { routeChanged };
 }
 

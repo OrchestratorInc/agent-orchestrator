@@ -138,6 +138,21 @@ describe("saving a machine", () => {
 		expect(failed).toMatchObject({ field: "host", message: expect.stringContaining("enter http://my-pc.tail1234.ts.net:3011.") });
 	});
 
+	// A storage failure on the icon has no HTTP status, which used to read as
+	// "unreachable": the machine was blamed for a local write, and a route that
+	// had already been saved was never reported.
+	it("reports an icon that failed to save as such, with the route it did save", async () => {
+		fixtures.updateHostAppearance.mockRejectedValueOnce(new Error("storage full"));
+		const moved = await saveEnvironmentMachine(a, draft({ host: "10.0.0.9" }, "cloud"), "ios");
+		expect(moved.routeChanged).toBe(true);
+		expect(moved.appearanceError).toBeInstanceOf(MachineSaveError);
+		expect(moved.appearanceError).toMatchObject({ field: "host", message: "The connection was saved, but the icon couldn't be. Try Save again." });
+
+		fixtures.updateHostAppearance.mockRejectedValueOnce(new Error("storage full"));
+		const iconOnly = await saveEnvironmentMachine(a, draft({}, "cloud"), "ios");
+		expect(iconOnly).toMatchObject({ routeChanged: false, appearanceError: { field: "host", message: "The icon couldn't be saved. Try again." } });
+	});
+
 	it("names the port it tried when Port was left empty", async () => {
 		fixtures.persist.mockRejectedValueOnce(new (ApiError as unknown as new (status: number) => Error)(500));
 		const failed = await saveEnvironmentMachine(a, draft({ host: "10.0.0.9", httpPort: "" }), "ios").catch((error: MachineSaveError) => error);

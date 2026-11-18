@@ -7,7 +7,7 @@ const fixtures = vi.hoisted(() => ({
 	platform: { OS: "ios" },
 	findHost: vi.fn<(id: string) => Promise<Host | null>>(async () => null),
 	activeHost: vi.fn<() => Promise<Host | null>>(async () => null),
-	save: vi.fn(async () => ({ routeChanged: false })),
+	save: vi.fn(async (): Promise<{ routeChanged: boolean; appearanceError?: Error }> => ({ routeChanged: false })),
 	reloadConfig: vi.fn(async () => {}),
 	reloadHostMetadata: vi.fn(async () => {}),
 	alert: vi.fn(),
@@ -97,6 +97,8 @@ beforeEach(() => {
 	for (const mock of [fixtures.findHost, fixtures.activeHost, fixtures.save, fixtures.reloadConfig, fixtures.reloadHostMetadata, fixtures.alert, fixtures.back, fixtures.setSheetOptions, fixtures.setPageOptions, fixtures.dispatch, fixtures.announce]) mock.mockReset();
 	fixtures.findHost.mockResolvedValue(a);
 	fixtures.activeHost.mockResolvedValue(a);
+	// Counted per test: a save that fails in one must not count in the next.
+	for (const fn of Object.values(fixtures.haptics)) fn.mockClear();
 	fixtures.save.mockResolvedValue({ routeChanged: false });
 	fixtures.reloadHostMetadata.mockResolvedValue(undefined);
 	fixtures.reloadConfig.mockResolvedValue(undefined);
@@ -180,6 +182,20 @@ describe("editing a machine", () => {
 		await type("environment-port-a", "3012");
 		await act(async () => save().props.onPress());
 		expect(fixtures.reloadConfig).toHaveBeenCalledOnce();
+	});
+
+	// A local storage failure on the icon is not the machine being offline, and
+	// the route that did save still reconnects the default machine.
+	it("reconnects over a saved route and stays open when only the icon failed to save", async () => {
+		const message = "The connection was saved, but the icon couldn't be. Try Save again.";
+		fixtures.save.mockResolvedValue({ routeChanged: true, appearanceError: new MachineSaveError(message, "host") });
+		await open();
+		await type("environment-port-a", "3012");
+		await act(async () => save().props.onPress());
+		expect(fixtures.reloadHostMetadata).toHaveBeenCalledOnce();
+		expect(fixtures.reloadConfig).toHaveBeenCalledOnce();
+		expect(fixtures.back).not.toHaveBeenCalled();
+		expect(connectionSection().props.footer.props).toMatchObject({ error: true, children: message });
 	});
 
 	it("keeps the editor and says what failed under the connection fields", async () => {
