@@ -1,7 +1,7 @@
 ---
 title: 快速开始
 description: 添加项目，启动一个 worker，并从任务一路跟进到拉取请求。
-translatedFrom: 9994abc640ec
+translatedFrom: fa1b909360a3
 ---
 
 本指南将带你在桌面应用中完成第一个任务：添加仓库、启动 worker、跟进它的工作，并审查结果。全程约 15 分钟，最后你会得到一个可以审查的拉取请求。
@@ -37,9 +37,9 @@ translatedFrom: 9994abc640ec
 <span id="create-a-worker" />
 ### 创建 worker
 
-在项目中新建一个任务，输入简短的名称和具体的提示词。选择一个可用的编程代理。外部代理在安装后才会出现；Unreal Agent 内置于 Orchestrator，可在受支持的 macOS 和 Linux 上用于 Chat。Orchestrator 在 Settings 的 **Harness** 下列出代理。
+在项目标题栏中点击 **+ Task** 打开新的对话，选择一个可用的编程代理，然后发送具体的提示词。发送后会话即开始。外部代理在安装后才会出现；Unreal Agent 内置于 Orchestrator，可在受支持的 macOS 和 Linux 上用于 Chat。Orchestrator 在 Settings 的 **Harness** 下列出代理。
 
-选择适合该任务的界面：
+新会话会使用 **Settings → General** 中设置的界面打开；不支持 Chat 的代理会以 Terminal UI 启动：
 
 - **Chat**：适合结构化对话、活动、审批、计划和持久保存的历史。
 - **Terminal UI**：适合使用 harness 原生的交互式终端。
@@ -53,6 +53,8 @@ translatedFrom: 9994abc640ec
 ### 跟进会话
 
 在侧边栏或看板中选择该会话。主窗格显示它的 Chat 对话或实时终端。检查器显示会话详情、拉取请求状态、审查、已更改的文件和浏览器预览。
+
+![终端 UI 中的 worker 会话：左侧为会话列表，主窗格为代理的终端。](/docs/images/session-terminal.png)
 
 Orchestrator 会把活跃、空闲、等待输入、受阻或已退出等活动状态，与拉取请求的信息结合起来，显示会话的状态。
 
@@ -77,6 +79,8 @@ Keep this change limited to the API route. Do not refactor the shared client.
 ### 审查拉取请求
 
 在 worker 创建或认领拉取请求后，Orchestrator 会显示 CI、审查者、未解决的审查评论和可合并状态的简要概览。你可以运行审查代理、把要求的修改发回给 worker、解决评论，或在合适时进行合并。
+
+![会话检查器：链接的拉取请求及其检查、审查状态和合并准备情况。](/docs/images/session-inspector.png)
 
 Orchestrator 绝不会强制删除有未提交更改的工作树。当无法安全移除会话工作区时，清理过程会保留用户的工作。
 

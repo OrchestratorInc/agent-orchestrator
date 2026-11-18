@@ -32,7 +32,7 @@ Open Orchestrator, choose **New project**, and select the local repository. The 
 
 ### Create a worker
 
-Click **New task** in the project to open a new chat, select an available coding agent, and send a specific prompt. The session starts when you send it. External agents appear after installation; Unreal Agent is built into Orchestrator for Chat on supported macOS and Linux. Orchestrator lists agents under **Harness** in Settings.
+Click **+ Task** in the project header to open a new chat, select an available coding agent, and send a specific prompt. The session starts when you send it. External agents appear after installation; Unreal Agent is built into Orchestrator for Chat on supported macOS and Linux. Orchestrator lists agents under **Harness** in Settings.
 
 New sessions open in the interface set under **Settings → General**; agents without Chat support start in their Terminal UI:
 
@@ -47,6 +47,8 @@ Orchestrator creates an isolated git worktree and branch for the session before 
 ### Follow the session
 
 Select the session in the sidebar or board. The main pane shows its Chat conversation or live terminal. The inspector shows session details, pull-request state, reviews, changed files, and browser preview.
+
+![A worker session in its terminal UI: the session list on the left, the agent's terminal in the main pane.](/docs/images/session-terminal.png)
 
 Orchestrator combines activity such as active, idle, waiting for input, blocked, or exited with pull-request facts to show the session's status.
 
@@ -69,6 +71,8 @@ For a TUI session, the terminal remains available when direct interaction is nee
 ### Review the pull request
 
 After the worker opens or claims a pull request, Orchestrator shows a concise summary of CI, reviewers, unresolved review comments, and mergeability. You can run a reviewer agent, send requested changes back to the worker, resolve comments, or merge when appropriate.
+
+![The session inspector: linked pull requests with their checks, review status, and merge readiness.](/docs/images/session-inspector.png)
 
 Orchestrator never force-deletes a dirty worktree. Cleanup preserves user work when it cannot safely remove a session workspace.
 
