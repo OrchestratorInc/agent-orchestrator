@@ -499,6 +499,7 @@ export async function refreshRemoteConversation(queryClient: QueryClient, sessio
 			if (merged && current) {
 				queryClient.setQueryData(remoteConversationRefreshErrorKey(sessionId, hostId), false);
 				queryClient.setQueryData<InfiniteData<ConversationSnapshot>>(key, { ...current, pages: [merged, ...current.pages.slice(1)] });
+				await rereadOlderUnsettledActivities(queryClient, key, sessionId, hostId);
 				return;
 			}
 			latest = wire.afterSequence ? await fetchConversationPage(sessionId, hostId) : tail;
@@ -514,6 +515,43 @@ export async function refreshRemoteConversation(queryClient: QueryClient, sessio
 	}
 	queryClient.setQueryData(remoteConversationRefreshErrorKey(sessionId, hostId), false);
 	applyLiveConversationPage(queryClient, key, latest);
+	await rereadOlderUnsettledActivities(queryClient, key, sessionId, hostId);
+}
+
+/** At most this many rows of older pages are reread per refresh. */
+const REMOTE_OLDER_UNSETTLED_LIMIT = 20;
+
+/**
+ * A refresh rereads only the live page, so a row an older page holds as still
+ * in progress keeps that status after the host settles it: a daemon's startup
+ * repair settles running rows stranded on finished turns, and those sit in
+ * history. Rereads just those rows, one sequence each, and patches the ones that
+ * changed. Best effort: a row that cannot be read keeps what its page held.
+ */
+async function rereadOlderUnsettledActivities(queryClient: QueryClient, key: QueryKey, sessionId: string, hostId: string): Promise<void> {
+	const older = queryClient.getQueryData<InfiniteData<ConversationSnapshot>>(key)?.pages.slice(1) ?? [];
+	const unsettled = older
+		.flatMap((page) => page.items)
+		.filter((item): item is ConversationActivity => item.kind === "activity" && (item.status === "running" || item.status === "pending"))
+		.slice(0, REMOTE_OLDER_UNSETTLED_LIMIT);
+	if (!unsettled.length) return;
+	const fresh = new Map<string, ConversationItem>();
+	await Promise.all(unsettled.map(async (item) => {
+		try {
+			const wire = await fetchConversationWire(sessionId, hostId, {
+				beforeSequence: item.sequence + 1, afterSequence: item.sequence > 1 ? item.sequence - 1 : undefined, limit: 1, outputLimit: REMOTE_OUTPUT_LIMIT,
+			});
+			const row = toSnapshot(wire).items.find((candidate) => candidate.id === item.id);
+			if (row?.kind === "activity" && (row.status !== item.status || row.revision !== item.revision)) fresh.set(item.id, row);
+		} catch {
+			// The row keeps what its page held; the next refresh tries again.
+		}
+	}));
+	if (!fresh.size) return;
+	queryClient.setQueryData<InfiniteData<ConversationSnapshot>>(key, (current) => current && {
+		...current,
+		pages: current.pages.map((page, index) => index === 0 ? page : { ...page, items: page.items.map((item) => fresh.get(item.id) ?? item) }),
+	});
 }
 
 /**

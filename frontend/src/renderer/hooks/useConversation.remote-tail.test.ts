@@ -159,6 +159,35 @@ describe("refreshRemoteConversation", () => {
 		expect(data.pages[0].items.map((item) => item.id)).toEqual(["m1", "a1", "r1", "m2", "a2", "r2", "n1", "n2"]);
 	});
 
+	// A daemon's startup repair settles running rows stranded on finished turns,
+	// which sit in history: an older page the refresh does not reread.
+	it("rereads a row an older page still holds as running, and patches it once it settled", async () => {
+		const history = page([turn("t0", "failed")], [message("m0", "t0", 1), tool("n0", "t0", 2, "running")]);
+		client.setQueryData<InfiniteData<ConversationSnapshot>>(key, { pages: [prior, history], pageParams: [undefined, 1] });
+		const settledRow = { id: "n0", turnId: "t0", sequence: 2, revision: 2, activityKind: "command", status: "failed", summary: "n0", createdAt: "" };
+		getMock
+			.mockResolvedValueOnce(wire({ afterSequence: 3, oldestSequence: 4, turns: [wireTurn("t2", "running")], messages: [wireMessage("m2", "t2", 4)] }))
+			.mockResolvedValueOnce(wire({ oldestSequence: 2, latestSequence: 2, turns: [wireTurn("t0", "failed")], activities: [settledRow] }));
+		await refreshRemoteConversation(client, "s1", "box");
+		expect(getMock).toHaveBeenCalledTimes(2);
+		expect(getMock.mock.calls[1][1].params.query).toEqual({ beforeSequence: 3, afterSequence: 1, limit: 1, outputLimit: 512 });
+		const data = client.getQueryData<InfiniteData<ConversationSnapshot>>(key)!;
+		expect(data.pages[1].items.find((item) => item.id === "n0")).toMatchObject({ status: "failed", revision: 2 });
+	});
+
+	it("leaves an older page's running row alone while the host still reports it running", async () => {
+		const history = page([turn("t0", "running")], [message("m0", "t0", 1), tool("n0", "t0", 2, "running")]);
+		client.setQueryData<InfiniteData<ConversationSnapshot>>(key, { pages: [prior, history], pageParams: [undefined, 1] });
+		const sameRow = { id: "n0", turnId: "t0", sequence: 2, revision: 1, activityKind: "command", status: "running", summary: "n0", createdAt: "" };
+		getMock
+			.mockResolvedValueOnce(wire({ afterSequence: 3, oldestSequence: 4, turns: [wireTurn("t2", "running")], messages: [wireMessage("m2", "t2", 4)] }))
+			.mockResolvedValueOnce(wire({ oldestSequence: 2, latestSequence: 2, turns: [wireTurn("t0", "running")], activities: [sameRow] }));
+		await refreshRemoteConversation(client, "s1", "box");
+		const data = client.getQueryData<InfiniteData<ConversationSnapshot>>(key)!;
+		expect(getMock).toHaveBeenCalledTimes(2);
+		expect(data.pages[1]).toEqual(history);
+	});
+
 	it("uses the answer of a daemon that ignores afterSequence as the live page", async () => {
 		getMock.mockResolvedValueOnce(wire({ oldestSequence: 4, turns: [wireTurn("t2", "completed")], messages: [wireMessage("m2", "t2", 4)] }));
 		await refreshRemoteConversation(client, "s1", "box");
