@@ -58,6 +58,9 @@ func (p *Plugin) GetAgentHooks(ctx context.Context, cfg ports.WorkspaceHookConfi
 	if err := installUsingAOSkill(cfg.WorkspacePath); err != nil {
 		return fmt.Errorf("mimocode.GetAgentHooks: skill: %w", err)
 	}
+	if err := hookutil.InstallBugTriageSkill(mimoSkillsDir(cfg.WorkspacePath)); err != nil {
+		return fmt.Errorf("mimocode.GetAgentHooks: skill: %w", err)
+	}
 	return nil
 }
 
@@ -97,6 +100,9 @@ func (p *Plugin) UninstallHooks(ctx context.Context, workspacePath string) error
 		}
 	}
 	if err := uninstallUsingAOSkill(workspacePath); err != nil {
+		return fmt.Errorf("mimocode.UninstallHooks: skill: %w", err)
+	}
+	if err := hookutil.UninstallBugTriageSkill(mimoSkillsDir(workspacePath)); err != nil {
 		return fmt.Errorf("mimocode.UninstallHooks: skill: %w", err)
 	}
 	return nil

@@ -42,7 +42,7 @@ describe("theme tokens", () => {
 		for (const theme of THEMES.slice(1)) {
 			for (const mode of ["dark", "light"] as const) {
 				const tokens = deriveThemeTokens(theme[mode], mode);
-				const validating = tokens["--color-status-validating-new"];
+				const validating = tokens["--color-status-validating"];
 				expect(validating, `${theme.id}/${mode}`).not.toBe(theme[mode].yellow);
 				expect(validating, `${theme.id}/${mode}`).not.toBe(tokens["--color-status-in-review"]);
 				expect(validating, `${theme.id}/${mode}`).not.toBe(tokens["--color-status-working"]);

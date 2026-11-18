@@ -8,7 +8,7 @@ Natural-language-to-command mappings for common Orchestrator tasks.
 | Start an existing configured dev app | `ao preview start [configuration]` |
 | Check or stop the worker's managed dev app | `ao preview status` / `ao preview stop` |
 | Show this Markdown or HTML file without a server | `ao preview "<workspace-path>"` |
-| Hand off a newly created browser-displayable artifact | `ao preview "<workspace-path>"` immediately after writing the primary artifact |
+| Hand off a newly created artifact (any file type) | `ao artifact add "<path>"`; it renders in the Artifacts tab, so do not `ao preview` it |
 | Inspect and verify this webpage as the agent | `ao browser open "<url>"`, then `ao browser snapshot` |
 | Drive the shared remote browser on a self-hosted host (`AO_AGENT_BROWSER_URL` set) | Read [commands/browser-remote.md](commands/browser-remote.md); `ao browser get url`, `ao browser snapshot` |
 | Click or fill a page element | `ao browser snapshot`, then `ao browser click <ref>` or `ao browser fill <ref> "<text>"` |
@@ -25,6 +25,7 @@ Natural-language-to-command mappings for common Orchestrator tasks.
 | Register a repo as a project | `ao project add --path <abs-path> --name <name>` |
 | List projects | `ao project ls` |
 | Check installed agent harnesses and readiness | `ao agent ls --refresh` |
+| Start on, or move a session to, another Claude Code or Codex account | `ao account ls`, then `ao spawn --account <id>` or `ao account switch <session> <id>`; see [commands/account.md](commands/account.md) |
 | Save a repetitive agent task or exact command as a Cue | `ao cue list --json`, then `ao cue create --name "..." --prompt "..."` or `--command "..."` |
 | Rename a worker session (not the orchestrator) | `ao session rename <id> "<name>"` |
 | Restore a killed session | `ao session restore <id>` |
@@ -47,4 +48,5 @@ Natural-language-to-command mappings for common Orchestrator tasks.
 | Inspect, cancel, or rerun a review | `ao review ls [session-id]`, `ao review cancel [session-id]`, or `ao review trigger [session-id] --rerun` |
 | Configure a project's default branch or model | `ao project set-config <id> --default-branch <branch> --model <model>` |
 | Bring a repository's Conductor scripts, run actions, env, or prompt over | Read [commands/conductor.md](commands/conductor.md); then `ao project set-config` and `ao cue create` |
+| Import or continue an existing Claude Code, Codex, or other supported agent session from a terminal | Read [commands/import.md](commands/import.md). Use **Settings → Harness → agent → Import** |
 | Import projects from a legacy Orchestrator install | `ao import --dry-run` (preview), then `ao import -y` |

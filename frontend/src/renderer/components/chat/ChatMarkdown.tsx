@@ -1,5 +1,6 @@
 import type { Element as HastElement } from "hast";
 import { rehypeExcerptSource, excerptElementProps } from "../../lib/rehype-excerpt-source";
+import { pageHidden } from "../../lib/page-hidden";
 /**
  * Markdown for agent prose.
  *
@@ -9,7 +10,8 @@ import { rehypeExcerptSource, excerptElementProps } from "../../lib/rehype-excer
  * visible backticks.
  *
  * Raw HTML is escaped, not rendered. Agent output is only as trustworthy as the
- *     files it just read, so `rehype-raw` is deliberately absent; markdown-only is
+ *     files it just read, so `rehype-raw` runs only where a caller passes it with a
+ *     sanitizer (GitHub review bodies); otherwise markdown-only is
  *     the whole sanitization story and there is no schema to get wrong, with two
  *     exceptions: ```mermaid fences render as diagrams through `MermaidBlock`,
  *     whose SVG passes through mermaid's strict mode plus DOMPurify with
@@ -31,6 +33,7 @@ import {
 	useEffect,
 	useLayoutEffect,
 	useMemo,
+	useRef,
 	useState,
 	type MouseEvent as ReactMouseEvent,
 	type ReactNode,
@@ -49,7 +52,7 @@ import { Button } from "../ui/button";
 import { Pressable } from "../ui/pressable";
 import { isHostLocalWebLink } from "../../lib/loopback";
 import { canonicalLanguage } from "../../lib/code-highlight";
-import { fenceOf } from "../../lib/markdown-fence";
+import { fenceOf, textOf } from "../../lib/markdown-fence";
 import { EMOJI_GRAPHEME, rehypeStreamFade } from "../../lib/rehype-stream-fade";
 import { isInlineMath, remarkMath } from "../../lib/remark-math";
 import { useUiStore } from "../../stores/ui-store";
@@ -63,6 +66,9 @@ import {
 	workspaceFilePath,
 } from "../../lib/external-link-policy";
 import { AppLink } from "../AppLink";
+import { LinkFavicon } from "../LinkPreviewCard";
+import { useCachedLinkFavicons } from "../../hooks/useLinkPreview";
+import { canLoadLinkFavicon, preloadLinkFavicon } from "../../lib/link-preload";
 import { ChatPathMenu, ChatPathMenuContext } from "../ChatPathMenu";
 import { ArtifactLinkPreviewCard, SessionLinkPreviewCard } from "../SessionLinkPreviewCard";
 import {
@@ -103,6 +109,18 @@ const prefersReducedMotion = () => window.matchMedia?.("(prefers-reduced-motion:
 // How long a settled reply keeps its fade spans, so the last characters (and the final
 // flush of buffered text) finish fading in before they are dropped.
 const FADE_SHED_MS = 450;
+// How long a character's `stream-char` fade lasts (styles.css).
+const CHAR_FADE_MS = 300;
+
+// The text's length CHAR_FADE_MS ago, from the lengths seen on earlier renders.
+// Characters before it have finished fading, so they render plain.
+function fadedLength(seen: { at: number; length: number }[], length: number): number {
+	const now = performance.now();
+	if (seen.at(-1)?.length !== length) seen.push({ at: now, length });
+	const cutoff = now - CHAR_FADE_MS;
+	while (seen.length > 1 && seen[1].at <= cutoff) seen.shift();
+	return seen[0].at <= cutoff ? seen[0].length : 0;
+}
 
 /**
  * Whether the prose is still arriving, for the fences inside it.
@@ -227,6 +245,7 @@ export const ChatMarkdown = memo(function ChatMarkdown({
 	className,
 	safeOrigin = false,
 	remarkPlugins,
+	rehypePlugins,
 }: {
 	text: string;
 	streaming?: boolean;
@@ -240,6 +259,7 @@ export const ChatMarkdown = memo(function ChatMarkdown({
 	safeOrigin?: boolean;
 	/** Run after the built-in plugins; keep the array stable, a new one re-parses the text. */
 	remarkPlugins?: Options["remarkPlugins"];
+	rehypePlugins?: Options["rehypePlugins"];
 }) {
 	// Replies opened from history mount settled and never wrap; live ones keep the fade a
 	// beat past the end of the stream.
@@ -247,9 +267,15 @@ export const ChatMarkdown = memo(function ChatMarkdown({
 	if (streaming && !fading) setFading(true);
 	// A reply already on screen when its chat opens (switching to a chat
 	// mid-stream) is not new; only characters that arrive afterwards fade in. A
-	// reply that arrives later fades from its first character.
+	// reply that arrives later fades from its first character. Text that arrives
+	// while the window is hidden is not watched either: its fade could only play
+	// once the reader is back, replaying the whole stretch at once.
 	const chatOpening = useContext(ChatOpeningRef);
-	const [settledOffset] = useState(() => (chatOpening.current ? text.length : 0));
+	const [openedOffset] = useState(() => (chatOpening.current ? text.length : 0));
+	const hiddenOffset = useRef(0);
+	if (pageHidden()) hiddenOffset.current = text.length;
+	const seenLengths = useRef<{ at: number; length: number }[]>([]);
+	const settledOffset = Math.max(openedOffset, hiddenOffset.current, fadedLength(seenLengths.current, text.length));
 	const renderMath = useUiStore((state) => state.renderMath);
 	const plugins = useMemo(() => {
 		const base = renderMath ? MATH_PLUGINS : PLUGINS;
@@ -291,8 +317,10 @@ export const ChatMarkdown = memo(function ChatMarkdown({
 						repairInline={block.repairInline}
 						streaming={streaming && index === blocks.blocks.length - 1}
 						fading={animate && index === blocks.blocks.length - 1}
-						settledOffset={Math.max(0, settledOffset - block.start)}
+						// Only the fading chunk reads it; it changes on every render.
+						settledOffset={index === blocks.blocks.length - 1 ? Math.max(0, settledOffset - block.start) : 0}
 						remarkPlugins={plugins}
+						rehypePlugins={rehypePlugins}
 					/>
 				))}
 			</div>
@@ -302,7 +330,7 @@ export const ChatMarkdown = memo(function ChatMarkdown({
 
 // No wrapper DOM: list/table layout, image galleries and prose spacing keep
 // their existing parent. Only the changing chunk enters react-markdown again.
-const MarkdownChunk = memo(function MarkdownChunk({ source, sourceOffset, repairInline, streaming, fading, settledOffset, remarkPlugins }: {
+const MarkdownChunk = memo(function MarkdownChunk({ source, sourceOffset, repairInline, streaming, fading, settledOffset, remarkPlugins, rehypePlugins }: {
 	source: string;
 	sourceOffset: number;
 	repairInline: boolean;
@@ -310,6 +338,7 @@ const MarkdownChunk = memo(function MarkdownChunk({ source, sourceOffset, repair
 	fading: boolean;
 	settledOffset: number;
 	remarkPlugins: Options["remarkPlugins"];
+	rehypePlugins: Options["rehypePlugins"];
 }) {
 	const repaired = useMemo(() => streaming && repairInline ? remend(source, {
 		linkMode: "text-only", images: false, htmlTags: false,
@@ -318,10 +347,11 @@ const MarkdownChunk = memo(function MarkdownChunk({ source, sourceOffset, repair
 	const plugins = useMemo<NonNullable<Options["rehypePlugins"]>>(() => {
 		// Repaired streaming tails cannot be selected. Settled chunks retain only
 		// source bounds; detailed mappings are built when a selection is captured.
-		const entries: NonNullable<Options["rehypePlugins"]> = streaming ? [] : [[rehypeExcerptSource, { offset: sourceOffset }]];
+		const entries: NonNullable<Options["rehypePlugins"]> = [...(rehypePlugins ?? [])];
+		if (!streaming) entries.push([rehypeExcerptSource, { offset: sourceOffset }]);
 		if (fading) entries.push([rehypeStreamFade, { settledOffset }]);
 		return entries;
-	}, [sourceOffset, streaming, fading, settledOffset]);
+	}, [rehypePlugins, sourceOffset, streaming, fading, settledOffset]);
 	return <StreamingProse.Provider value={streaming}>
 		<Markdown remarkPlugins={remarkPlugins} rehypePlugins={plugins} components={COMPONENTS} urlTransform={chatUrlTransform}>
 			{repaired}
@@ -421,7 +451,26 @@ function compactEmoji(children: ReactNode): ReactNode {
 	return children;
 }
 
-type MarkdownLinkProps = { href?: string; children?: ReactNode; className?: string; menuPath?: string };
+// Renders a `stream-text` wrapper from rehypeStreamFade: its settled text plain,
+// then each later character in a `stream-char` span keyed by its source offset,
+// so a character keeps its element, and fades in only once, as the text grows.
+function StreamText({ node }: { node?: HastElement }) {
+	const child = node?.children[0];
+	const text = child?.type === "text" ? child.value : "";
+	const kept = Number(node?.properties.dataKept ?? 0);
+	let offset = Number(node?.properties.dataStart ?? 0) + kept;
+	const fading: ReactNode[] = [];
+	for (const { segment } of GRAPHEME_SEGMENTER.segment(text.slice(kept))) {
+		// compactEmoji must see emoji as plain strings.
+		fading.push(EMOJI_GRAPHEME.test(segment)
+			? <Fragment key={offset}>{compactEmoji(segment)}</Fragment>
+			: <span key={offset} className="stream-char">{segment}</span>);
+		offset += segment.length;
+	}
+	return <>{compactEmoji(text.slice(0, kept))}{fading}</>;
+}
+
+type MarkdownLinkProps = { href?: string; children?: ReactNode; className?: string; menuPath?: string; node?: HastElement };
 
 function MarkdownLink(props: MarkdownLinkProps) {
 	const { href } = props;
@@ -449,7 +498,42 @@ function ArtifactFileLink(props: MarkdownLinkProps & { href: string }) {
 		: <MarkdownLinkTarget {...props} />;
 }
 
-function MarkdownLinkTarget({ href, children, className, menuPath }: MarkdownLinkProps) {
+/** Whether a markdown link wraps a picture, which marks itself. */
+function linksImage(node: HastElement | undefined): boolean {
+	return node?.children.some((child) => child.type === "element" && child.tagName === "img") ?? false;
+}
+
+/**
+ * A web link's site icon before its text, behind a shimmering globe until it
+ * arrives and a still one when none does. Asked for as soon as the link
+ * renders (its site root only, once per site). A fixed 14px slot, so the text
+ * never moves when the icon arrives or fails.
+ */
+function InlineLinkFavicon({ href }: { href: string }) {
+	const cachedState = useCachedLinkFavicons(href);
+	const favicons = cachedState === "failed" ? undefined : cachedState;
+	const cached = Boolean(favicons);
+	const loadable = useMemo(() => canLoadLinkFavicon(href), [href]);
+	useEffect(() => {
+		if (!cached && loadable) preloadLinkFavicon(href);
+	}, [cached, href, loadable]);
+	return (
+		<span
+			aria-hidden="true"
+			data-link-favicon=""
+			className="me-1 inline-flex size-3.5 select-none align-[-0.15em] text-muted-foreground"
+		>
+			<LinkFavicon
+				faviconUrl={favicons?.faviconUrl}
+				faviconDarkUrl={favicons?.faviconDarkUrl}
+				pending={cachedState === undefined && loadable}
+				className="size-3.5 shrink-0"
+			/>
+		</span>
+	);
+}
+
+function MarkdownLinkTarget({ href, children, className, menuPath, node }: MarkdownLinkProps) {
 	const safeOriginContent = useContext(SafeOriginContent);
 	const { sessionId, open: onLinkOpen, openFile: onFileOpen, openSession: onSessionLinkOpen, remoteHost, sessionLinkHostId, sessionLinkSourceKind, workspacePaths, findFile } = useContext(OpenChatLink);
 	const filePath = href && onFileOpen
@@ -509,6 +593,7 @@ function MarkdownLinkTarget({ href, children, className, menuPath }: MarkdownLin
 			rel="noreferrer noopener"
 			className={className ?? "text-markdown-link underline decoration-markdown-link/45 underline-offset-2 transition-colors hover:text-markdown-link-hover hover:decoration-markdown-link-hover/75"}
 		>
+			{href && !sessionLink && isWebLink(href) && !linksImage(node) ? <InlineLinkFavicon href={href} /> : null}
 			<ChatImageLinkScope>
 				<InsideMarkdownLink.Provider value>
 					<InsideArtifactLink.Provider value={sessionLink && !isSessionLink(href!)}>{children}</InsideArtifactLink.Provider>
@@ -696,7 +781,9 @@ function InlineCode({ children, className, node }: { children?: ReactNode; class
 }
 
 const COMPONENTS: Components = {
-	span: ({ children, node: _node, ...props }) => <span {...props}>{props.className?.split(" ").includes("stream-char") ? children : compactEmoji(children)}</span>,
+	span: ({ children, node, ...props }) => props.className === "stream-text"
+		? <StreamText node={node} />
+		: <span {...props}>{compactEmoji(children)}</span>,
 	// Headings step down in size but stay in the conversation's voice — an agent's
 	// "## Findings" is a paragraph label, not a page title.
 	h1: ({ children, node: _node, ...props }) => (
@@ -758,7 +845,7 @@ const COMPONENTS: Components = {
 	// on the class alone rendered those as inline code.
 	pre: ({ children, node }) => {
 		const fence = fenceOf(children);
-		if (!fence) return <>{children}</>;
+		if (!fence) return <CodeBlock code={textOf(children).replace(/\n$/, "")} sourceNode={node} />;
 		// Mermaid is a diagram, not source: it renders through the sandboxed SVG
 		// path rather than the highlighter. See `MermaidBlock.tsx`.
 		if (fence.language?.toLowerCase() === "mermaid") return <div {...excerptElementProps(node)} data-excerpt-block="" data-excerpt-flowchart=""><MermaidFence code={fence.code} /></div>;
@@ -795,6 +882,10 @@ const COMPONENTS: Components = {
 	hr: () => <hr className="my-3 border-border" />,
 	strong: ({ children, node: _node, ...props }) => <strong {...props} className="font-semibold text-foreground">{children}</strong>,
 	del: ({ children, node: _node, ...props }) => <del {...props} className="text-muted-foreground">{children}</del>,
+	details: ({ children, node: _node, ...props }) => <details {...props} className="my-2 first:mt-0 last:mb-0">{children}</details>,
+	summary: ({ children, node: _node, ...props }) => (
+		<summary {...props} className="cursor-pointer text-muted-foreground transition-colors hover:text-foreground">{children}</summary>
+	),
 
 	// Match terminal links: a plain HTTP(S) click uses the session's AO Browser;
 	// Cmd/Ctrl- or Option/Alt-click and non-web schemes use the system browser,

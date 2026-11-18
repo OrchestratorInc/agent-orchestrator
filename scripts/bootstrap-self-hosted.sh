@@ -68,15 +68,15 @@ else
 		printf '%s  %s\n' 7226736c2339719cda28fbf3a54d71aa63bcefe376e98cef00034268dab24840 "$stage/go.tar.gz" | sha256sum -c -
 		tar -xzf "$stage/go.tar.gz" -C "$tools"
 	fi
-	if [[ ! -x "$tools/node-v22.23.2-linux-x64/bin/node" ]]; then
-		curl -fsSL https://nodejs.org/dist/v22.23.2/node-v22.23.2-linux-x64.tar.xz -o "$stage/node.tar.xz"
-		curl -fsSL https://nodejs.org/dist/v22.23.2/SHASUMS256.txt -o "$stage/SHASUMS256.txt"
-		expected="$(awk '$2 == "node-v22.23.2-linux-x64.tar.xz" { print $1 }' "$stage/SHASUMS256.txt")"
+	if [[ ! -x "$tools/node-v22.23.5-linux-x64/bin/node" ]]; then
+		curl -fsSL https://nodejs.org/dist/v22.23.5/node-v22.23.5-linux-x64.tar.xz -o "$stage/node.tar.xz"
+		curl -fsSL https://nodejs.org/dist/v22.23.5/SHASUMS256.txt -o "$stage/SHASUMS256.txt"
+		expected="$(awk '$2 == "node-v22.23.5-linux-x64.tar.xz" { print $1 }' "$stage/SHASUMS256.txt")"
 		[[ "$expected" =~ ^[0-9a-f]{64}$ ]] || { printf '%s\n' 'Node checksum missing.' >&2; exit 1; }
 		printf '%s  %s\n' "$expected" "$stage/node.tar.xz" | sha256sum -c -
 		tar -xJf "$stage/node.tar.xz" -C "$tools"
 	fi
-	export PATH="$tools/go/bin:$tools/node-v22.23.2-linux-x64/bin:$PATH"
+	export PATH="$tools/go/bin:$tools/node-v22.23.5-linux-x64/bin:$PATH"
 	git clone --depth 1 --single-branch --branch "$source_ref" https://github.com/OrchestratorInc/agent-orchestrator.git "$stage/source"
 	(
 		cd "$stage/source/frontend"

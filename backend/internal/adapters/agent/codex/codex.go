@@ -49,6 +49,9 @@ func New() *Plugin {
 // launch. See ports.SubmitActivitySignaler.
 func (p *Plugin) EmitsSubmitActivity() bool { return true }
 
+// InterruptKey uses Ctrl+C to cancel work without closing Codex.
+func (*Plugin) InterruptKey() string { return "\x03" }
+
 // EmitsSemanticMessageAcceptance reports that the Codex prompt hook includes
 // the accepted prompt, allowing AO delivery ids to be correlated semantically.
 func (p *Plugin) EmitsSemanticMessageAcceptance() bool { return true }
@@ -336,7 +339,8 @@ func (p *Plugin) AuthStatus(ctx context.Context) (ports.AgentAuthStatus, error) 
 
 	started := time.Now()
 	cmd := aoprocess.CommandContext(probeCtx, binary, "login", "status")
-	cmd.Env = agentlaunch.ProcessEnvForLaunchBinary(probeCtx, binary)
+	// The probe sees what Codex sessions see, without a key AO holds back.
+	cmd.Env = authprobe.Environ(ctx, agentlaunch.ProcessEnvForLaunchBinary(probeCtx, binary))
 	out, err := cmd.CombinedOutput()
 	status, recognized := codexAuthStatusFromOutput(out)
 	if !recognized {

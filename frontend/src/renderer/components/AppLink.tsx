@@ -20,7 +20,7 @@ import { HoverCard, HoverCardTrigger } from "./ui/hover-card";
 export const AppBrowserLinkContext = createContext<((url: string) => void) | undefined>(undefined);
 
 /** Shared web-link behavior; native fragments and special schemes retain their handlers. */
-export function AppLink({ href, onClick, onAuxClick, onBrowserOpen, inAppLink, systemBrowser, filePath, menuPath, onFileOpen, hoverPreview, ref, ...props }: ComponentProps<"a"> & {
+export function AppLink({ href, onClick, onAuxClick, onBrowserOpen, inAppLink, systemBrowser, filePath, menuPath, onFileOpen, hoverPreview, noHoverPreview, ref, ...props }: ComponentProps<"a"> & {
 	onBrowserOpen?: (url: string) => void;
 	inAppLink?: (url: string) => boolean;
 	/**
@@ -34,6 +34,8 @@ export function AppLink({ href, onClick, onAuxClick, onBrowserOpen, inAppLink, s
 	menuPath?: string;
 	onFileOpen?: (path: string) => void;
 	hoverPreview?: (open: boolean) => ReactNode;
+	/** For links in a dense list, where a preview card would cover the rows around it. */
+	noHoverPreview?: boolean;
 }) {
 	const { t } = useTranslation();
 	const sessionBrowserOpen = useContext(AppBrowserLinkContext);
@@ -43,7 +45,7 @@ export function AppLink({ href, onClick, onAuxClick, onBrowserOpen, inAppLink, s
 	const webLink = !!href && isWebLink(href);
 	const browserLink = !systemBrowser && !!href && (inAppLink?.(href) ?? webLink);
 	const showBrowserAction = browserLink && !(contextPath && pathMenuContext);
-	const hasHoverPreview = webLink || Boolean(hoverPreview);
+	const hasHoverPreview = !noHoverPreview && (webLink || Boolean(hoverPreview));
 	const [previewOpen, setPreviewOpen] = useState(false);
 	const previewQuery = useLinkPreview(href ?? "", previewOpen && webLink);
 	const anchorRef = useRef<HTMLAnchorElement>(null);

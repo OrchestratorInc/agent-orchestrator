@@ -1,4 +1,4 @@
-// Self-contained xterm.js surface, ported from yyork's terminal architecture.
+// Self-contained xterm.js surface.
 //
 // Design rules (the reason this component exists):
 //  - The mount effect is dependency-free: the terminal instance is created once
@@ -296,6 +296,13 @@ function normalizedTerminalShortcut(event: KeyboardEvent): string | null {
 	}
 
 	return null;
+}
+
+// The search overlay renders inside the terminal's shell element, so the shell's
+// listeners also see events meant for its input. Without this check a paste in
+// the search box is blocked and written to the PTY instead.
+function isTerminalSearchEvent(event: Event): boolean {
+	return event.target instanceof Element && event.target.closest('[role="search"]') !== null;
 }
 
 function terminalHasFocus(host: HTMLElement): boolean {
@@ -816,6 +823,8 @@ export function XtermTerminal(props: XtermTerminalProps) {
 			callbacksRef.current.onChangeFontSize?.(delta);
 		});
 		const activateLink = (event: MouseEvent, uri: string) => {
+			// The link is being followed: its preview has done its job.
+			linkPreviewControlsRef.current.hide(true);
 			// Open on a plain click even while the pane tracks the mouse, like web
 			// links: tmux (mouse on) and fullscreen TUIs keep tracking on, so a
 			// modifier gate here made plain clicks do nothing.
@@ -1234,6 +1243,7 @@ export function XtermTerminal(props: XtermTerminalProps) {
 			},
 		};
 		const openContextMenu = (event: MouseEvent) => {
+			if (isTerminalSearchEvent(event)) return;
 			event.preventDefault();
 			event.stopPropagation();
 			setContextMenu({
@@ -1307,11 +1317,12 @@ export function XtermTerminal(props: XtermTerminalProps) {
 			return false;
 		});
 		const copyInput = (event: ClipboardEvent) => {
+			if (isTerminalSearchEvent(event)) return;
 			if (!copySelection({ clipboardData: event.clipboardData })) return;
 			event.preventDefault();
 		};
 		const copyShortcut = (event: KeyboardEvent) => {
-			if (!isTerminalCopyShortcut(event) || !terminalHasFocus(shell) || !copySelection()) return;
+			if (isTerminalSearchEvent(event) || !isTerminalCopyShortcut(event) || !terminalHasFocus(shell) || !copySelection()) return;
 			event.preventDefault();
 			event.stopPropagation();
 		};
@@ -1835,6 +1846,7 @@ export function XtermTerminal(props: XtermTerminalProps) {
 			return false;
 		});
 		const pasteInput = (event: ClipboardEvent) => {
+			if (isTerminalSearchEvent(event)) return;
 			event.preventDefault();
 			event.stopPropagation();
 			if (suppressNextNativePaste) {
@@ -1845,6 +1857,7 @@ export function XtermTerminal(props: XtermTerminalProps) {
 			pasteText(text);
 		};
 		const compositionInput = (event: CompositionEvent) => {
+			if (isTerminalSearchEvent(event)) return;
 			emitUserInput(event.data, "composition");
 		};
 		shell.addEventListener("paste", pasteInput, true);

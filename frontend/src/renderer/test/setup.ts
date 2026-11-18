@@ -141,6 +141,7 @@ if (typeof window !== "undefined") {
 	document.elementFromPoint = (() => null) as typeof document.elementFromPoint;
 
 	window.ao = {
+		triage: { launch: async () => ({ ok: true }) },
 		dictation: {
 			start: async () => undefined,
 			stop: async () => undefined,
@@ -155,6 +156,8 @@ if (typeof window !== "undefined") {
 			showPrivacyGuide: async () => undefined,
 			updatePrivacyGuide: async () => false,
 			closePrivacyGuide: async () => undefined,
+			getAppPrivacy: async () => undefined,
+			requestAppPrivacy: async () => undefined,
 			openChromeExtensions: async () => undefined,
 			scanImportFolder: async ({ path }: { path: string }) => ({ path, repos: [] }),
 			checkAncestorRepo: async () => undefined,
@@ -166,6 +169,7 @@ if (typeof window !== "undefined") {
 			checkGitHubRepositoryAvailability: async () => ({ available: true }),
 			getPathForFile: () => "",
 			onOpenFolderPath: () => () => undefined,
+			onOpenSessionDeepLink: () => () => undefined,
 			onNewSessionShortcut: () => () => undefined,
 			onKeyboardShortcutsHelp: () => () => undefined,
 			onQuitConfirmRequest: () => () => undefined,
@@ -180,6 +184,7 @@ if (typeof window !== "undefined") {
 			onPreviousTabShortcut: () => () => undefined,
 			onNextTabShortcut: () => () => undefined,
 			onShortcut: (listener: Parameters<typeof appShortcutBus.subscribe>[0]) => appShortcutBus.subscribe(listener),
+			reportSessionsShown: () => undefined,
 			setMenuAvailability: () => undefined,
 			onMenuAction: () => () => undefined,
 			onScrollPhase: () => () => undefined,
@@ -227,17 +232,27 @@ if (typeof window !== "undefined") {
 		},
 		cloudShare: {
 			available: async () => true,
-			inspect: async () => ({ name: "", size: 0, secretFindings: [], unsupported: false, fingerprint: "" }),
-			list: async () => ({ shares: [], limit: 3, used: 0, unlimited: false }),
+			inspect: async () => ({ name: "", size: 0, unsupported: false, fingerprint: "" }),
+			list: async () => ({ shares: [], limit: 3, used: 0, unlimited: false, privateLinks: false }),
+			hostLinks: async () => [],
 			publish: async () => ({ status: "cancelled" as const }),
 			cancel: async () => undefined,
 			unpublish: async () => undefined,
+			setAccess: async () => {
+				throw new Error("not stubbed");
+			},
+			grants: async () => [],
+			invite: async () => [],
+			removeGrant: async () => undefined,
 			onProgress: () => () => undefined,
 		},
 		cloudArtifact: {
 			fetch: async () => new Uint8Array(),
 			openFolder: async () => undefined,
 			onFrameNavigated: () => () => undefined,
+		},
+		artifactSnapshot: {
+			request: async () => false,
 		},
 		daemon: {
 			getStatus: async () => ({ state: "stopped" }),
@@ -247,7 +262,12 @@ if (typeof window !== "undefined") {
 			onStatus: () => () => undefined,
 		},
 		agentLogin: { request: async () => null },
-		sideChats: { capture: async () => undefined, confirmClose: async () => undefined, getPendingCloses: async () => [], onPendingClosesChanged: () => () => {} },
+		sideChats: {
+			protocolVersion: 1, mode: "desktop", capture: async () => undefined,
+			requestClose: async () => { throw new Error("Install a close fixture before requesting deletion"); },
+			getCloseState: async (sessionId: string) => ({ protocolVersion: 1, epoch: "test-daemon", revision: 0, recovery: "ready", sessionId, sides: [] }),
+			onCloseStateChanged: () => () => {},
+		},
 	editorHandoff: {
 			pathAction: async () => undefined,
 			getState: async () => ({
@@ -312,6 +332,8 @@ if (typeof window !== "undefined") {
 			}),
 			historySuggestions: async () => [],
 			historyFavicon: async () => undefined,
+			userBrowser: async () => null,
+			openInUserBrowser: async () => ({ name: "", chrome: false }),
 			clear: async (viewId: string) => ({
 				viewId,
 				url: "",

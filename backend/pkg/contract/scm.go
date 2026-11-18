@@ -75,12 +75,25 @@ type PullRequestFailingCheck struct {
 	URL        string        `json:"url,omitempty"`
 }
 
+// PullRequestCheckEntry is one CI check on the PR's head commit.
+type PullRequestCheckEntry struct {
+	Name   string        `json:"name"`
+	Status PRCheckStatus `json:"status"`
+	URL    string        `json:"url,omitempty"`
+}
+
 // PullRequestCISummary is the latest aggregate CI observation.
 type PullRequestCISummary struct {
 	State         CIState                   `json:"state"`
 	FailingChecks []PullRequestFailingCheck `json:"failingChecks"`
-	AutoInjectCI  bool                      `json:"autoInjectCI"`
+	// Checks lists every check on the head commit, failing first, so a view can
+	// say "23/23 passed" and list them by name. Capped at MaxPullRequestChecks.
+	Checks       []PullRequestCheckEntry `json:"checks"`
+	AutoInjectCI bool                    `json:"autoInjectCI"`
 }
+
+// MaxPullRequestChecks caps PullRequestCISummary.Checks.
+const MaxPullRequestChecks = 200
 
 // PullRequestReviewCommentLink points to one review comment.
 type PullRequestReviewCommentLink struct {
@@ -140,6 +153,29 @@ type PullRequestMergeabilitySummary struct {
 	ConflictFiles []PullRequestConflictFile `json:"conflictFiles"`
 }
 
+// PullRequestLabel is one label on a pull request. Color is a provider hex
+// string without the leading "#".
+type PullRequestLabel struct {
+	Name  string `json:"name"`
+	Color string `json:"color,omitempty"`
+}
+
+// PullRequestRequestedReviewer is a user or team whose review is requested and
+// not yet given.
+type PullRequestRequestedReviewer struct {
+	Login     string `json:"login"`
+	AvatarURL string `json:"avatarUrl,omitempty"`
+	IsTeam    bool   `json:"isTeam,omitempty"`
+}
+
+// PullRequestCommit is one commit on the pull request's branch.
+type PullRequestCommit struct {
+	SHA         string    `json:"sha"`
+	Headline    string    `json:"headline"`
+	Author      string    `json:"author,omitempty"`
+	CommittedAt time.Time `json:"committedAt,omitempty"`
+}
+
 // PullRequestSummary is the normalized raw SCM read model for one pull request.
 type PullRequestSummary struct {
 	URL              string                         `json:"url"`
@@ -166,6 +202,46 @@ type PullRequestSummary struct {
 	ObservedAt       time.Time                      `json:"observedAt"`
 	CIObservedAt     time.Time                      `json:"ciObservedAt"`
 	ReviewObservedAt time.Time                      `json:"reviewObservedAt"`
+
+	// Description is the PR body as markdown. It is untrusted provider content.
+	Description          string `json:"description,omitempty"`
+	DescriptionTruncated bool   `json:"descriptionTruncated,omitempty"`
+	// Labels, RequestedReviewers and Commits are empty until DetailsObservedAt
+	// is set, and empty afterwards only when the PR has none.
+	Labels             []PullRequestLabel             `json:"labels"`
+	RequestedReviewers []PullRequestRequestedReviewer `json:"requestedReviewers"`
+	// Commits are the newest commits, oldest first; CommitCount is the total.
+	Commits     []PullRequestCommit `json:"commits"`
+	CommitCount int                 `json:"commitCount"`
+	// DetailsObservedAt is zero until an observation has carried the details.
+	DetailsObservedAt time.Time `json:"detailsObservedAt,omitempty"`
+
+	// Threads are the stored review threads with their comments, oldest first.
+	Threads []PullRequestThread `json:"threads,omitempty"`
+	// Conversation is the newest top-level conversation comments, oldest
+	// first. It is empty until DetailsObservedAt is set.
+	Conversation []PullRequestCommentEntry `json:"conversation,omitempty"`
+}
+
+// PullRequestThread is one review thread with its stored comments, oldest
+// first.
+type PullRequestThread struct {
+	ID       string                    `json:"id"`
+	Path     string                    `json:"path,omitempty"`
+	Line     int                       `json:"line,omitempty"`
+	Resolved bool                      `json:"resolved"`
+	Comments []PullRequestCommentEntry `json:"comments"`
+}
+
+// PullRequestCommentEntry is one review-thread or conversation comment. Body
+// is untrusted provider markdown.
+type PullRequestCommentEntry struct {
+	ID        string    `json:"id"`
+	Author    string    `json:"author"`
+	IsBot     bool      `json:"isBot"`
+	Body      string    `json:"body"`
+	URL       string    `json:"url,omitempty"`
+	CreatedAt time.Time `json:"createdAt,omitempty"`
 }
 
 // AOReviewRun is one transport-neutral AO review pass.

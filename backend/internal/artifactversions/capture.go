@@ -384,6 +384,25 @@ func (c *Capturer) Snapshot(ctx context.Context, sess domain.SessionRecord, relP
 	return c.recordNow(ctx, sess, relPath, writer{source: domain.ArtifactVersionSourceAgent, harness: sess.Harness}, 0)
 }
 
+// SnapshotSession keeps every artifact file of sess as it is now, with no
+// settle window. A Chat turn calls it as it starts, so a fork of an earlier
+// turn can copy the artifacts as that turn left them. A file too large to
+// version, or one changing while it is read, is skipped.
+func (c *Capturer) SnapshotSession(ctx context.Context, sess domain.SessionRecord) error {
+	dir := cmp.Or(sess.Metadata.ArtifactDir, sessionartifacts.Dir(c.dataDir, sess.ID))
+	files, err := sessionartifacts.List(ctx, dir)
+	if err != nil {
+		return err
+	}
+	var errs []error
+	for _, f := range files {
+		if _, err := c.Snapshot(ctx, sess, f.Path); err != nil && !errors.Is(err, ErrTooLarge) && !errors.Is(err, ErrUnsettled) {
+			errs = append(errs, fmt.Errorf("%s: %w", f.Path, err))
+		}
+	}
+	return errors.Join(errs...)
+}
+
 // recordNow snapshots one file under the capture lock and returns the sha256
 // of the content now kept as its latest version. A file modified within settle
 // is left for a later call, which returns no sum.

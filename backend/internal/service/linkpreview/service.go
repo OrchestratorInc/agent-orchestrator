@@ -66,6 +66,9 @@ type Preview struct {
 	ImageURL    string
 	SiteName    string
 	FaviconURL  string
+	// FaviconDarkURL is the icon the page declares for a dark color scheme
+	// (media="(prefers-color-scheme: dark)"), when it declares one.
+	FaviconDarkURL string
 }
 
 // failureKind records which class of failure a cache entry carries so a cached
@@ -262,10 +265,15 @@ func (s *Service) fetch(ctx context.Context, pageURL *url.URL) (Preview, failure
 	if meta.ogImage != "" {
 		p.ImageURL = resolveReference(base, meta.ogImage)
 	}
-	if meta.favicon != "" {
-		p.FaviconURL = resolveReference(base, meta.favicon)
+	// An icon scoped to one color scheme is the default only when the page
+	// names no unscoped one; light first, as browsers draw tabs light by default.
+	if favicon := firstNonEmpty(meta.favicon, meta.faviconLight, meta.faviconDark); favicon != "" {
+		p.FaviconURL = resolveReference(base, favicon)
 	} else {
 		p.FaviconURL = base.Scheme + "://" + base.Host + "/favicon.ico"
+	}
+	if meta.faviconDark != "" {
+		p.FaviconDarkURL = resolveReference(base, meta.faviconDark)
 	}
 	return p, failureNone, nil
 }
@@ -386,6 +394,8 @@ type headMeta struct {
 	title         string
 	description   string
 	favicon       string
+	faviconLight  string
+	faviconDark   string
 }
 
 func parseHead(doc []byte) headMeta {
@@ -596,17 +606,32 @@ func applyMeta(m *headMeta, attrs map[string]string) {
 }
 
 // applyLink folds one <link> tag into the candidate set, keeping only icon
-// references.
+// references. An icon whose media names a color scheme fills that scheme's
+// slot, so a dark-only icon never becomes the icon for every theme.
 func applyLink(m *headMeta, attrs map[string]string) {
-	if m.favicon != "" || attrs["href"] == "" {
+	if attrs["href"] == "" || !isIconRel(attrs["rel"]) {
 		return
 	}
-	for _, token := range strings.Fields(strings.ToLower(attrs["rel"])) {
+	slot := &m.favicon
+	media := strings.ToLower(strings.Join(strings.Fields(attrs["media"]), ""))
+	switch {
+	case strings.Contains(media, "prefers-color-scheme:dark"):
+		slot = &m.faviconDark
+	case strings.Contains(media, "prefers-color-scheme:light"):
+		slot = &m.faviconLight
+	}
+	if *slot == "" {
+		*slot = attrs["href"]
+	}
+}
+
+func isIconRel(rel string) bool {
+	for _, token := range strings.Fields(strings.ToLower(rel)) {
 		if token == "icon" || token == "shortcut" {
-			m.favicon = attrs["href"]
-			return
+			return true
 		}
 	}
+	return false
 }
 
 // cleanText unescapes entities and trims surrounding whitespace from text

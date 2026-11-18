@@ -11,6 +11,7 @@ import { Platform, View } from "react-native";
 import { GestureHandlerRootView } from "react-native-gesture-handler";
 import { KeyboardProvider } from "react-native-keyboard-controller";
 import { SafeAreaProvider } from "react-native-safe-area-context";
+import { KeyboardResumeResync } from "../lib/KeyboardResumeResync";
 import { OnboardingGate } from "../lib/OnboardingGate";
 import { TelemetryManager } from "../lib/TelemetryManager";
 import { rootTouchStart } from "../lib/touchOutside";
@@ -57,6 +58,9 @@ const SHEET_ROUTES: readonly { name: string; detents: readonly number[] | "fitTo
 const PICKER_SHEETS = [
 	{ name: "sheets/agent", title: "Agent" },
 	{ name: "sheets/model", title: "Model" },
+	{ name: "sheets/files-branch", title: "Branch" },
+	{ name: "sheets/files-changes", title: "Changes" },
+	{ name: "sheets/account", title: "Account" },
 ] as const;
 
 // iOS's machine-name sheet, the one sheet with a text input: a native bar
@@ -87,7 +91,7 @@ export const unstable_settings = { initialRouteName: "(tabs)" };
 void SplashScreen.preventAutoHideAsync().catch(() => {});
 
 export default function RootLayout() {
-	// The app's family (DM Sans, after T3 Code), loaded before anything else
+	// The app's family (DM Sans), loaded before anything else
 	// draws: rendering the tree first would paint one frame of SF Pro and then
 	// swap every label under it.
 	//
@@ -128,6 +132,7 @@ export default function RootLayout() {
 			    Android only fires `keyboardDidShow` once the keyboard has finished
 			    animating, so every dock and composer arrived a beat late. */}
 			<KeyboardProvider>
+				<KeyboardResumeResync />
 				<SafeAreaProvider>
 					<ThemeProvider initial={themeSettings}>
 						{/* Orchestrator Cloud outside the machines' store: the store lists cloud rows beside each machine's. */}
@@ -299,23 +304,6 @@ function Shell() {
 						}}
 					/>
 				))}
-				{/* The composer's skill and file picker searches in a native bar on
-				    iOS, under the title the page sets ("Skills", "Worktree files").
-				    Android searches in the sheet's body. */}
-				<Stack.Screen
-					name="sheets/composer-picker"
-					options={{
-						presentation: "formSheet",
-						sheetAllowedDetents: [0.6, 0.95],
-						sheetInitialDetentIndex: 0,
-						sheetGrabberVisible: true,
-						sheetCornerRadius,
-						headerShown: Platform.OS === "ios",
-						title: "Insert",
-						headerStyle: { backgroundColor: t.bgSurface },
-						contentStyle: { backgroundColor: t.bgSurface },
-					}}
-				/>
 				{/* A new Orchestrator Cloud project: on iOS a form sheet with a native
 				    bar, Cancel and Create in it, as the machine-name sheet has. On
 				    Android a page under the stack's top app bar, as manual connect
@@ -324,11 +312,11 @@ function Shell() {
 				<Stack.Screen
 					name="cloud/new-project"
 					options={Platform.OS === "android" ? {
-						title: "New cloud project",
+						title: "New project",
 						contentStyle: { backgroundColor: t.bgBase },
 					} : {
 						...NAME_SHEET_OPTIONS,
-						title: "New cloud project",
+						title: "New project",
 						headerStyle: { backgroundColor: t.bgBase },
 						contentStyle: { backgroundColor: t.bgBase },
 					}}

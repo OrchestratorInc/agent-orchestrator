@@ -153,6 +153,8 @@ function setupBridge() {
 		getRuntimeState: vi.fn(async () => ({ connected: false, connecting: false, rejected: false })),
 		historySuggestions: vi.fn(async () => []),
 		historyFavicon: vi.fn(async () => undefined),
+		userBrowser: vi.fn(async () => ({ name: "Chrome", chrome: true })),
+		openInUserBrowser: vi.fn(async () => ({ name: "Chrome", chrome: true })),
 		captureScreenshot: vi.fn(async () => undefined),
 		downloads: {
 			list: vi.fn(async () => ({ downloads: [] })),
@@ -2442,5 +2444,117 @@ describe("useBrowserView", () => {
 				}),
 			),
 		);
+	});
+});
+
+describe("useBrowserView scroll geometry", () => {
+	afterEach(() => {
+		vi.restoreAllMocks();
+		document.body.replaceChildren();
+		resetConsumedPreviewTriggersForTest();
+		resetClosedTabsForTest();
+		resetNativeViewCacheForTest();
+	});
+
+	async function shownSlot() {
+		const bridge = setupBridge();
+		const column = document.createElement("div");
+		const chat = document.createElement("div");
+		document.body.append(column, chat);
+		const slot = createSlot();
+		column.appendChild(slot);
+		const { result } = renderHook(() => useBrowserView({ sessionId: "sess-1", active: true, poppedOut: false }));
+		await waitFor(() => expect(bridge.ensure).toHaveBeenCalled());
+		act(() => bridge.emit({ viewId: "42:sess-1", url: "http://localhost:3000/", title: "", canGoBack: false, canGoForward: false, isLoading: false }));
+		act(() => result.current.slotRef(slot));
+		await waitFor(() => expect(bridge.setBounds).toHaveBeenCalledWith(expect.objectContaining({ visible: true })));
+		// Let the ref-handoff and settle measures finish.
+		await new Promise((resolve) => setTimeout(resolve, 350));
+		bridge.setBounds.mockClear();
+		const nextFrame = () => new Promise((resolve) => setTimeout(resolve, 40));
+		return { bridge, column, chat, slot, nextFrame };
+	}
+
+	it("ignores scrolling beside the browser, such as the chat", async () => {
+		const { bridge, chat, nextFrame } = await shownSlot();
+		for (let i = 0; i < 5; i++) {
+			act(() => { chat.dispatchEvent(new Event("scroll")); });
+			await nextFrame();
+		}
+		expect(bridge.setBounds).not.toHaveBeenCalled();
+	});
+
+	it("sends nothing when a scroll around the browser leaves it where it was", async () => {
+		const { bridge, column, nextFrame } = await shownSlot();
+		act(() => { column.dispatchEvent(new Event("scroll")); });
+		await nextFrame();
+		expect(bridge.setBounds).not.toHaveBeenCalled();
+	});
+
+	it("follows a scroll that moves the browser", async () => {
+		const { bridge, column, slot, nextFrame } = await shownSlot();
+		vi.mocked(slot.getBoundingClientRect).mockReturnValue({
+			x: 12, y: 4, width: 320, height: 240, top: 4, right: 332, bottom: 244, left: 12, toJSON: () => ({}),
+		} as DOMRect);
+		act(() => { column.dispatchEvent(new Event("scroll")); });
+		await nextFrame();
+		expect(bridge.setBounds).toHaveBeenCalledTimes(1);
+		expect(bridge.setBounds).toHaveBeenLastCalledWith(expect.objectContaining({ rect: expect.objectContaining({ y: 4 }), visible: true }));
+	});
+
+	it("still re-sends unchanged geometry for non-scroll layout changes", async () => {
+		const { bridge, nextFrame } = await shownSlot();
+		act(() => { window.dispatchEvent(new Event("resize")); });
+		await nextFrame();
+		expect(bridge.setBounds).toHaveBeenCalledWith(expect.objectContaining({ visible: true }));
+	});
+});
+
+describe("useBrowserView scroll geometry while hidden", () => {
+	afterEach(() => {
+		vi.restoreAllMocks();
+		document.body.replaceChildren();
+		resetConsumedPreviewTriggersForTest();
+		resetClosedTabsForTest();
+		resetNativeViewCacheForTest();
+	});
+
+	const nextFrame = () => new Promise((resolve) => setTimeout(resolve, 40));
+
+	it("does not re-send hidden bounds for every scroll while the panel is closed", async () => {
+		const bridge = setupBridge();
+		const chat = document.createElement("div");
+		document.body.append(chat);
+		renderHook(() => useBrowserView({ sessionId: "sess-1", active: false, poppedOut: false }));
+		await waitFor(() => expect(bridge.ensure).toHaveBeenCalled());
+		act(() => bridge.emit({ viewId: "42:sess-1", url: "http://localhost:3000/", title: "", canGoBack: false, canGoForward: false, isLoading: false }));
+		await new Promise((resolve) => setTimeout(resolve, 350));
+		// The view is hidden by now; scrolling must not keep saying so.
+		bridge.setBounds.mockClear();
+		for (let i = 0; i < 5; i++) {
+			act(() => { chat.dispatchEvent(new Event("scroll")); });
+			act(() => { document.dispatchEvent(new Event("scroll")); });
+			await nextFrame();
+		}
+		expect(bridge.setBounds.mock.calls.filter(([input]) => input.visible === true)).toEqual([]);
+		expect(bridge.setBounds.mock.calls.length).toBeLessThanOrEqual(1);
+	});
+
+	it("still sends a hide that comes from something other than scrolling", async () => {
+		const bridge = setupBridge();
+		const slot = createSlot();
+		const { result, rerender } = renderHook(({ active }) => useBrowserView({ sessionId: "sess-1", active, poppedOut: false }), { initialProps: { active: true } });
+		await waitFor(() => expect(bridge.ensure).toHaveBeenCalled());
+		act(() => bridge.emit({ viewId: "42:sess-1", url: "http://localhost:3000/", title: "", canGoBack: false, canGoForward: false, isLoading: false }));
+		act(() => result.current.slotRef(slot));
+		await new Promise((resolve) => setTimeout(resolve, 350));
+		rerender({ active: false });
+		await nextFrame();
+		bridge.setBounds.mockClear();
+		// Hiding again (another deactivation path) is never deduplicated.
+		rerender({ active: true });
+		rerender({ active: false });
+		await nextFrame();
+		expect(bridge.setBounds).toHaveBeenCalledWith(expect.objectContaining({ viewId: "42:sess-1", visible: false }));
 	});
 });
