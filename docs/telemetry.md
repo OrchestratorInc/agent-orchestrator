@@ -661,8 +661,8 @@ telemetry off" also control these events.
 
 ## UI responsiveness
 
-When product telemetry is enabled, the desktop app adds launch timings to
-`ao.app.loaded` and sends `ao.ui.performance_summary`, a numeric summary of
+When product telemetry is enabled, the desktop app sends launch timings in
+`ao.launches.timed` and sends `ao.usage.ui_performance`, a numeric summary of
 how fast the app responded. They carry only counts, durations in
 milliseconds, buckets, and the closed values listed here. They never include a
 session, project or file name, path, URL, message text, script URL, function
@@ -671,10 +671,10 @@ a measurement came from.
 
 | Event | When it is sent | Performance properties |
 | --- | --- | --- |
-| `ao.app.loaded` | Once per launch, when the window first shows the sidebar with live sessions, or when the window closes or 60 seconds pass without that frame (then without `to_usable_ms`). A reload sends it at once, without these properties | `launch_kind`, `to_visible_ms`, `to_usable_ms` |
-| `ao.ui.performance_summary` | At the end of each 45 to 60 minute window of use (the length is random in that range), or at the next launch for a window cut short by quitting. Nothing is sent for a window with no use. Only installs with `experiment_cohort` below 50 send it | see below |
+| `ao.launches.timed` | Once per launch, when the window first shows the sidebar with live sessions, or when the window closes or 60 seconds pass without that frame (then without `to_usable_ms`). A reload sends none. `ao.app.loaded` is still sent at startup without these properties | `launch_kind`, `to_visible_ms`, `to_usable_ms` |
+| `ao.usage.ui_performance` | At the end of each 45 to 60 minute window of use (the length is random in that range), or at the next launch for a window cut short by quitting. Nothing is sent for a window with no use. Only installs with `experiment_cohort` below 50 send it | see below |
 
-Launch properties on `ao.app.loaded`:
+Properties on `ao.launches.timed`:
 
 - `launch_kind` is `cold` (a new app process), `warm` (a window reopened while
   the app kept running), or `update` (the first cold launch on a new
@@ -686,7 +686,7 @@ Launch properties on `ao.app.loaded`:
   starts; a warm one when the window is requested.
 - A launch during which the window was hidden sends `launch_kind` only.
 
-Properties on `ao.ui.performance_summary`:
+Properties on `ao.usage.ui_performance`:
 
 - Window: `measurement_schema_version` (1), `flush_reason` (`interval` or
   `startup`), `window_seconds`, `active_seconds` (time the window was visible

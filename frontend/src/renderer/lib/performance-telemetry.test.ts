@@ -27,7 +27,7 @@ describe("PerformanceAccumulator", () => {
 		now += 10_000;
 		await accumulator.flush();
 
-		expect(capture).toHaveBeenCalledWith("ao.ui.performance_summary", expect.any(Object));
+		expect(capture).toHaveBeenCalledWith("ao.usage.ui_performance", expect.any(Object));
 		expect(flushed()).toMatchObject({
 			switch_cached_lt150_count: 2,
 			switch_cached_lt500_count: 1,

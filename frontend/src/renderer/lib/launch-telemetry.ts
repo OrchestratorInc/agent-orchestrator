@@ -2,9 +2,9 @@ import { aoBridge } from "./bridge";
 import type { LaunchTimingStart } from "../../shared/performance-telemetry";
 
 /**
- * Launch timings for ao.app.loaded. Main hands each shell page its launch start
- * once (process creation for a cold launch, the window request for a warm one),
- * so a reload reports no timings.
+ * Launch timings for ao.launches.timed. Main hands each shell page its launch
+ * start once (process creation for a cold launch, the window request for a warm
+ * one), so a reload sends no timings.
  *
  * to_visible_ms ends at the first contentful paint. to_usable_ms ends at the
  * frame that shows the sidebar with live sessions, the same frame main's
@@ -12,7 +12,7 @@ import type { LaunchTimingStart } from "../../shared/performance-telemetry";
  */
 
 const LAUNCH_VERSION_KEY = "ao.telemetry.launchVersion";
-/** How long ao.app.loaded waits for a usable frame before it is sent without one. */
+/** How long ao.launches.timed waits for a usable frame before it is sent without one. */
 const USABLE_WAIT_MS = 60_000;
 
 let resolveUsable: ((epochMs: number) => void) | undefined;
@@ -63,13 +63,13 @@ export async function takeLaunchStart(): Promise<LaunchTimingStart | null> {
 	}
 }
 
-/** The launch fields for ao.app.loaded. Resolves within USABLE_WAIT_MS. */
+/** The properties of ao.launches.timed. Resolves within USABLE_WAIT_MS. */
 export async function launchProperties(start: LaunchTimingStart, appVersion: string): Promise<Record<string, unknown>> {
 	const launchKind = readLaunchKind(start.kind, appVersion);
 	let timer = 0;
 	let onPageHide = () => {};
 	// Closing the window first (a launch the daemon failed, then quit) still
-	// sends the event, without the usable time, as it was sent before timings.
+	// sends the event, without the usable time.
 	const usableAt = await Promise.race([
 		usable,
 		new Promise<undefined>((resolve) => {

@@ -383,7 +383,7 @@ const telemetryIdentity = new TelemetryIdentityController(
 	},
 );
 const trustedShellWebContents = new Map<number, WebContents>();
-// Launch start per shell page for ao.app.loaded, handed out once so a reload
+// Launch start per shell page for ao.launches.timed, handed out once so a reload
 // does not report a launch. The first shell window is a cold launch; later
 // ones (reopened from the Dock) start when the window was requested.
 const shellLaunchStarts = new Map<number, LaunchTimingStart>();
@@ -4647,7 +4647,7 @@ async function writeAppStateOnLaunch(): Promise<void> {
 app.whenReady().then(async () => {
 	applyUserAgentFallback(app);
 	launchTiming.mark("appReady");
-	// Memory and CPU for ao.ui.performance_summary. getAppMetrics is cheap; the
+	// Memory and CPU for ao.usage.ui_performance. getAppMetrics is cheap; the
 	// renderer reads the kept peaks and average when its window flushes. Nothing
 	// is kept during an analytics opt-out; the first sample after it only sets
 	// the CPU baseline, so the average leaves the opt-out out.

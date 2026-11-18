@@ -11,7 +11,7 @@ import {
 import { sessionIsActive, type WorkspaceSummary } from "../types/workspace";
 
 /**
- * ao.ui.performance_summary: one numeric summary per 45 to 60 minutes of use,
+ * ao.usage.ui_performance: one numeric summary per 45 to 60 minutes of use,
  * covering session switch speed, slow clicks and keys, frozen frames, chat
  * open time, and memory and CPU. Measurements count only while the window is
  * visible. See docs/telemetry.md, "UI responsiveness".
@@ -20,7 +20,7 @@ import { sessionIsActive, type WorkspaceSummary } from "../types/workspace";
  * interaction's surface is added once the shared UI surface list lands.
  */
 
-const EVENT = "ao.ui.performance_summary";
+const EVENT = "ao.usage.ui_performance";
 const STORAGE_KEY = "ao.telemetry.performance.v1";
 const CHECKPOINT_MS = 5 * 60_000;
 const IDLE_MS = 5 * 60_000;

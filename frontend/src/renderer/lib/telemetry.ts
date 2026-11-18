@@ -1112,6 +1112,8 @@ export async function sanitizeRendererProperties(
 		case "ao.onboarding.step_abandoned":
 			if (typeof properties?.step === "string" && ONBOARDING_STEPS.some((step) => step === properties.step)) safe.step = properties.step;
 			break;
+		case "ao.app.loaded":
+			break;
 		case "ao.agents.missing":
 			if (properties?.reason === "none_installed") safe.reason = properties.reason;
 			break;
@@ -1567,21 +1569,16 @@ export async function initTelemetry(): Promise<boolean> {
 				),
 		});
 		if (!isDeniedEvent("ao.app.loaded")) {
-			const captureLoaded = async (launch?: TelemetryProperties) => {
-				posthog.capture(
-					postHogEventName("ao.app.loaded"),
-					withTelemetryContext(await sanitizeRendererProperties("ao.app.loaded", launch)),
-				);
-			};
-			// A launch waits for its usable frame (capped) so the event carries the
-			// launch timings; a reload has no launch start and sends at once.
-			const launchStart = await takeLaunchStart();
-			if (launchStart) {
-				void launchProperties(launchStart, bootstrap.appVersion).then((launch) => (analyticsOptedOut ? undefined : captureLoaded(launch)));
-			} else {
-				await captureLoaded();
-			}
+			posthog.capture(
+				postHogEventName("ao.app.loaded"),
+				withTelemetryContext(await sanitizeRendererProperties("ao.app.loaded")),
+			);
 		}
+		// Launch timings are their own event, sent once the window is usable, so a
+		// crash during that wait never costs ao.app.loaded. A reload has no start.
+		void takeLaunchStart()
+			.then((start) => (start ? launchProperties(start, bootstrap.appVersion).then((launch) => captureRendererEvent("ao.launches.timed", launch)) : undefined))
+			.catch(() => undefined);
 		return true;
 	})().catch(() => {
 		// A thrown error is transient (the bridge not ready yet, or a hiccup in

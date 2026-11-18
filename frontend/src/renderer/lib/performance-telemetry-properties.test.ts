@@ -3,8 +3,8 @@ import { memoryBucket, openSessionsBucket, sanitizePerformanceProperties, uptime
 import { sanitizeRendererProperties } from "./telemetry";
 
 describe("sanitizePerformanceProperties", () => {
-	it("keeps the launch fields on ao.app.loaded, rounded and capped", () => {
-		expect(sanitizePerformanceProperties("ao.app.loaded", {
+	it("keeps the launch fields, rounded and capped", () => {
+		expect(sanitizePerformanceProperties("ao.launches.timed", {
 			launch_kind: "update",
 			to_visible_ms: 812.6,
 			to_usable_ms: 9_999_999,
@@ -13,17 +13,17 @@ describe("sanitizePerformanceProperties", () => {
 		})).toEqual({ launch_kind: "update", to_visible_ms: 813, to_usable_ms: 600_000 });
 	});
 
-	it("sends no timings for ao.app.loaded without a launch kind", () => {
-		expect(sanitizePerformanceProperties("ao.app.loaded", { launch_kind: "reload", to_usable_ms: 900 })).toEqual({});
-		expect(sanitizePerformanceProperties("ao.app.loaded")).toEqual({});
+	it("sends no timings without a launch kind", () => {
+		expect(sanitizePerformanceProperties("ao.launches.timed", { launch_kind: "reload", to_usable_ms: 900 })).toEqual({});
+		expect(sanitizePerformanceProperties("ao.launches.timed")).toEqual({});
 	});
 
 	it("drops negative, non-finite and non-numeric timings", () => {
-		expect(sanitizePerformanceProperties("ao.app.loaded", { launch_kind: "cold", to_visible_ms: -4, to_usable_ms: Number.NaN })).toEqual({ launch_kind: "cold" });
+		expect(sanitizePerformanceProperties("ao.launches.timed", { launch_kind: "cold", to_visible_ms: -4, to_usable_ms: Number.NaN })).toEqual({ launch_kind: "cold" });
 	});
 
 	it("keeps only the documented summary properties and closed values", () => {
-		const safe = sanitizePerformanceProperties("ao.ui.performance_summary", {
+		const safe = sanitizePerformanceProperties("ao.usage.ui_performance", {
 			measurement_schema_version: 1,
 			flush_reason: "interval",
 			window_seconds: 2_700,
@@ -58,7 +58,7 @@ describe("sanitizePerformanceProperties", () => {
 	});
 
 	it("drops values outside the closed lists", () => {
-		expect(sanitizePerformanceProperties("ao.ui.performance_summary", {
+		expect(sanitizePerformanceProperties("ao.usage.ui_performance", {
 			measurement_schema_version: 2,
 			flush_reason: "quit",
 			slowest_area: "button.send",
@@ -70,8 +70,10 @@ describe("sanitizePerformanceProperties", () => {
 	});
 
 	it("is what the renderer client applies to both events", async () => {
-		expect(await sanitizeRendererProperties("ao.app.loaded", { launch_kind: "warm", to_usable_ms: 420, extra: 1 })).toEqual({ launch_kind: "warm", to_usable_ms: 420 });
-		expect(await sanitizeRendererProperties("ao.ui.performance_summary", { long_frame_top_cause: "user-callback", element_text: "Send" })).toEqual({ long_frame_top_cause: "user-callback" });
+		expect(await sanitizeRendererProperties("ao.launches.timed", { launch_kind: "warm", to_usable_ms: 420, extra: 1 })).toEqual({ launch_kind: "warm", to_usable_ms: 420 });
+		expect(await sanitizeRendererProperties("ao.usage.ui_performance", { long_frame_top_cause: "user-callback", element_text: "Send" })).toEqual({ long_frame_top_cause: "user-callback" });
+		// ao.app.loaded is sent at init with no properties, as before.
+		expect(await sanitizeRendererProperties("ao.app.loaded", { launch_kind: "warm", to_usable_ms: 420 })).toEqual({});
 	});
 });
 

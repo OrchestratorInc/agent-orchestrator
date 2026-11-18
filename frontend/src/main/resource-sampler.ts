@@ -9,7 +9,7 @@ export type ProcessMetricLike = {
 
 /**
  * Keeps peak memory and time-weighted CPU across samples for
- * ao.ui.performance_summary. Electron reports CPU as the average since the
+ * ao.usage.ui_performance. Electron reports CPU as the average since the
  * previous getAppMetrics() call, so the first sample only sets the baseline.
  */
 export function createResourceSampler(

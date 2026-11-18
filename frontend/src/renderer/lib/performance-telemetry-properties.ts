@@ -1,13 +1,13 @@
 /**
- * Property allowlists for the performance events: the launch fields on
- * ao.app.loaded and ao.ui.performance_summary. Only counts, durations, buckets
- * and values from the closed lists below pass. See docs/telemetry.md,
- * "UI responsiveness". Kept free of imports so telemetry.ts can delegate here.
+ * Property allowlists for the performance events, ao.launches.timed and
+ * ao.usage.ui_performance. Only counts, durations, buckets and values from the
+ * closed lists below pass. See docs/telemetry.md, "UI responsiveness". Kept
+ * free of imports so telemetry.ts can delegate here.
  */
 
 type Properties = Record<string, unknown>;
 
-export const PERFORMANCE_EVENTS: ReadonlySet<string> = new Set(["ao.app.loaded", "ao.ui.performance_summary"]);
+export const PERFORMANCE_EVENTS: ReadonlySet<string> = new Set(["ao.launches.timed", "ao.usage.ui_performance"]);
 
 export const LAUNCH_KINDS = ["cold", "warm", "update"] as const;
 export const FLUSH_REASONS = ["interval", "startup"] as const;
@@ -25,7 +25,7 @@ export const OPEN_SESSIONS_BUCKETS = ["0", "1-3", "4-10", "11-30", "31+"] as con
 export const MEMORY_BUCKETS = ["lt256", "lt512", "lt1024", "lt2048", "ge2048"] as const;
 export const UPTIME_BUCKETS = ["lt1", "lt8", "lt24", "lt72", "ge72"] as const;
 
-/** Every whole-number property of ao.ui.performance_summary. */
+/** Every whole-number property of ao.usage.ui_performance. */
 export const PERFORMANCE_SUMMARY_COUNTS = [
 	"window_seconds",
 	"active_seconds",
@@ -66,14 +66,14 @@ function oneOf<T extends string>(value: unknown, allowed: readonly T[]): T | und
 
 export function sanitizePerformanceProperties(event: string, properties?: Properties): Properties {
 	const candidates: Properties = {};
-	if (event === "ao.app.loaded") {
+	if (event === "ao.launches.timed") {
 		candidates.launch_kind = oneOf(properties?.launch_kind, LAUNCH_KINDS);
-		// A launch without its kind is a reload; its timings would not be a launch.
+		// Timings without a known launch kind are not a launch.
 		if (candidates.launch_kind !== undefined) {
 			candidates.to_visible_ms = wholeNumber(properties?.to_visible_ms, MAX_LAUNCH_MS);
 			candidates.to_usable_ms = wholeNumber(properties?.to_usable_ms, MAX_LAUNCH_MS);
 		}
-	} else if (event === "ao.ui.performance_summary") {
+	} else if (event === "ao.usage.ui_performance") {
 		candidates.measurement_schema_version = properties?.measurement_schema_version === 1 ? 1 : undefined;
 		candidates.flush_reason = oneOf(properties?.flush_reason, FLUSH_REASONS);
 		for (const key of PERFORMANCE_SUMMARY_COUNTS) candidates[key] = wholeNumber(properties?.[key]);
