@@ -1377,7 +1377,18 @@ export function useConversationCommands(
 			if (error) throw error;
 			return data;
 		},
-		onSuccess: invalidate,
+		onSuccess: (data) => {
+			const turnId = data?.outcome === "sent" && data.state !== "queued" ? data.turnId : undefined;
+			if (turnId && stateSessionId) {
+				queryClient.setQueryData<ConversationDispatchTrackingBySession>(
+					conversationDispatchTrackingQueryKey,
+					(current = {}) => current[stateSessionId]
+						? current
+						: { ...current, [stateSessionId]: { operation: "send", requestId: turnId, state: "accepted", turnId } },
+				);
+			}
+			invalidate();
+		},
 	});
 
 	const promoteQueuedTurn = useMutation({
