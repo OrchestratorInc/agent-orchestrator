@@ -62,6 +62,9 @@ func (gitForkSeeds) DiscardChanges(ctx context.Context, worktree string) error {
 // copies in the source's uncommitted and untracked files. A worktree that was
 // created is returned with any error, so the caller rolls it back.
 func (m *Manager) createForkWorkspace(ctx context.Context, fork *ports.SpawnFork, cfg ports.WorkspaceConfig) (ports.WorkspaceInfo, *ports.WorkspaceProjectInfo, error) {
+	if fork.SeedDir != "" {
+		return m.createPlainForkWorkspace(ctx, fork, cfg)
+	}
 	if fork.StartPoint == "" {
 		return ports.WorkspaceInfo{}, nil, errors.New("session fork: missing start point")
 	}
@@ -100,6 +103,49 @@ func (m *Manager) createForkWorkspace(ctx context.Context, fork *ports.SpawnFork
 		}
 	}
 	return ws, nil, nil
+}
+
+// createPlainForkWorkspace makes a plain-folder fork's workspace and moves
+// the copy of its original's folder into it. The copy already holds the
+// dependency folders, and a plain folder is never removed while it has files,
+// so there are no starting files to record. A folder that was created is
+// returned with any error, so the caller rolls it back.
+func (m *Manager) createPlainForkWorkspace(ctx context.Context, fork *ports.SpawnFork, cfg ports.WorkspaceConfig) (ports.WorkspaceInfo, *ports.WorkspaceProjectInfo, error) {
+	ws, err := m.workspace.Create(ctx, cfg)
+	if err != nil {
+		return ws, nil, err
+	}
+	if err := dirseed.Apply(ctx, fork.SeedDir, ws.Path); err != nil {
+		// The folder was empty a moment ago, so anything in it came from the
+		// seed. Emptied, the caller's rollback removes it; a plain folder with
+		// files is otherwise kept as the session's work. The reaper removes a
+		// seed that is left behind.
+		clearFolder(ws.Path)
+		_ = dirseed.Delete(fork.SeedDir)
+		return ws, nil, fmt.Errorf("session fork: copy source files: %w", err)
+	}
+	m.markForkWorkspace(ws.Path)
+	if err := m.restoreAttachments(ctx, cfg.SessionID, ws); err != nil {
+		m.logger.Warn("session fork: place attachments in the fork", "workspace", ws.Path, "err", err)
+	}
+	return ws, nil, nil
+}
+
+// clearFolder removes everything inside dir, keeping dir itself.
+func clearFolder(dir string) {
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		return
+	}
+	for _, entry := range entries {
+		_ = os.RemoveAll(filepath.Join(dir, entry.Name()))
+	}
+}
+
+// plainFolderProject reports whether a session's workspace is a plain folder
+// with no git repository: a standalone agent's, or a Scratch project's.
+func plainFolderProject(project domain.ProjectRecord, rec domain.SessionRecord) bool {
+	return projectKindForSession(project, rec.ProjectID) == domain.ProjectKindScratch
 }
 
 // copyForkFiles copies the source's artifacts into the fork's artifact
@@ -528,6 +574,11 @@ func (m *Manager) dropInheritedForkChanges(ctx context.Context, rec domain.Sessi
 	if err != nil || !found {
 		return false
 	}
+	// A plain folder has no git to tell inherited changes from the fork's
+	// own; everything in it is kept.
+	if project, err := m.loadProject(ctx, rec.ProjectID); err != nil || plainFolderProject(project, rec) {
+		return false
+	}
 	source, found, err := m.store.GetSession(ctx, fork.SourceSessionID)
 	if err != nil || !found || source.IsTerminated {
 		return false
@@ -547,11 +598,13 @@ func (m *Manager) dropInheritedForkChanges(ctx context.Context, rec domain.Sessi
 // after restore recreated it. Archiving drops a fork's inherited changes when
 // it never touched them, so the worktree can be removed; they live on under
 // the fork's starting-files ref until it is deleted.
-func (m *Manager) restoreForkStartingFiles(ctx context.Context, id domain.SessionID, worktree string) {
-	if worktree == "" || !m.isSessionFork(ctx, id) {
+func (m *Manager) restoreForkStartingFiles(ctx context.Context, project domain.ProjectRecord, rec domain.SessionRecord, worktree string) {
+	// A plain-folder fork keeps no starting files: its folder is never
+	// removed while it has any.
+	if worktree == "" || plainFolderProject(project, rec) || !m.isSessionFork(ctx, rec.ID) {
 		return
 	}
-	if _, err := m.forkSeeds.RestoreBase(ctx, worktree, forkseed.BaseRef(string(id))); err != nil {
-		m.logger.Warn("session fork: put starting files back after restore", "session", id, "err", err)
+	if _, err := m.forkSeeds.RestoreBase(ctx, worktree, forkseed.BaseRef(string(rec.ID))); err != nil {
+		m.logger.Warn("session fork: put starting files back after restore", "session", rec.ID, "err", err)
 	}
 }

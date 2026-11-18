@@ -5268,7 +5268,7 @@ func (m *Manager) restoreAllSession(ctx context.Context, rec domain.SessionRecor
 		}
 	}
 	if recreated {
-		m.restoreForkStartingFiles(ctx, rec.ID, ws.Path)
+		m.restoreForkStartingFiles(ctx, project, rec, ws.Path)
 		if err := m.provisionWorkspaceWith(ctx, project, rec.ID, ws.Path, attributionRecorded, ""); err != nil {
 			m.logger.Error("restore-all: setup recreated workspace failed", "sessionID", rec.ID, "error", err)
 			captureBackgroundFault(ctx, err, "boot_restore", "restore_workspace")
@@ -5361,7 +5361,7 @@ func (m *Manager) restoreSessionWorkspace(ctx context.Context, project domain.Pr
 			return ports.WorkspaceInfo{}, fmt.Errorf("restore attachments: %w", err)
 		}
 		if recreated {
-			m.restoreForkStartingFiles(ctx, rec.ID, ws.Path)
+			m.restoreForkStartingFiles(ctx, project, rec, ws.Path)
 			if err := m.provisionRecreatedWorkspace(ctx, project, rec.ID, ws.Path); err != nil {
 				return ports.WorkspaceInfo{}, fmt.Errorf("setup recreated workspace: %w", err)
 			}
