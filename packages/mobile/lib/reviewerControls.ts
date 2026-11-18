@@ -1,4 +1,4 @@
-import type { AgentCatalog, ReviewerAgentConfig } from "./api";
+import type { AgentCatalog, ProjectDetail, ReviewerAgentConfig } from "./api";
 import { rankAgents, type RankedAgent } from "./agentPicker";
 
 export type ReviewerSelection = {
@@ -27,6 +27,34 @@ const WORKER_DEFAULT_REVIEWERS: Readonly<Record<string, string>> = {
  */
 export function defaultReviewerHarness(projectReviewers: readonly { harness?: string }[] | undefined, workerHarness: string | undefined): string {
 	return projectReviewers?.[0]?.harness || (workerHarness ? WORKER_DEFAULT_REVIEWERS[workerHarness] : undefined) || "claude-code";
+}
+
+/**
+ * The project-level model, mode and effort the daemon puts under the session's
+ * own reviewer settings when the session reviews with `harness` (the daemon's
+ * projectReviewerSelection and DefaultWorkerReviewer). An empty session field
+ * means "use this", not the model's own default. Mirrors desktop's
+ * inheritedReviewerConfig (frontend SessionInspector.tsx).
+ */
+export function inheritedReviewerConfig(config: ProjectDetail["config"], harness: string): ReviewerAgentConfig {
+	const reviewer = config?.reviewers?.[0];
+	if (reviewer) {
+		if (reviewer.harness !== harness) return {};
+		const { model, mode, effort } = reviewer.agentConfig ?? {};
+		return compact({ model, mode, effort });
+	}
+	const worker = config?.worker?.agent ?? "";
+	// The project's default worker reviews with its own model and effort, but
+	// only when that agent reviews as itself.
+	if (!worker || WORKER_DEFAULT_REVIEWERS[worker] !== worker || worker !== harness) return {};
+	return compact({
+		model: config?.worker?.agentConfig?.model || config?.agentConfig?.model,
+		effort: config?.worker?.agentConfig?.effort || config?.agentConfig?.effort,
+	});
+}
+
+function compact(config: ReviewerAgentConfig): ReviewerAgentConfig {
+	return Object.fromEntries(Object.entries(config).filter(([, value]) => value)) as ReviewerAgentConfig;
 }
 
 export function reviewerSwitchSelection(

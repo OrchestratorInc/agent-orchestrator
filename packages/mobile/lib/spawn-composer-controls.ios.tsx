@@ -46,6 +46,9 @@ export function SpawnComposerControls({
 	projects,
 	projectId,
 	onSelectProject,
+	accounts = [],
+	accountId,
+	onSelectAccount,
 	agents,
 	harness,
 	onSelectHarness,
@@ -81,6 +84,7 @@ export function SpawnComposerControls({
 	const selectedProject = projects.find((project) => project.id === projectId);
 	const hostLabel = hosts.find((host) => host.id === hostId)?.label ?? "Choose machine";
 	const projectLabel = selectedProject?.label ?? "Choose project";
+	const accountLabel = accounts.find((account) => account.id === accountId)?.label ?? "Default account";
 	const harnessLabel = agents.find((agent) => agent.id === harness)?.label ?? "Choose harness";
 	// The model the task runs: the one picked or pinned, else the catalog's own
 	// default by name, and the agent's name only when the catalog names none.
@@ -148,6 +152,17 @@ export function SpawnComposerControls({
 						<Spacer minLength={0} />
 					</HStack>
 
+					{accounts.length > 1 && onSelectAccount ? (
+						<HStack>
+							<Menu
+								label={<SelectorLabel icon={<SelectorGlyph name="person.crop.circle" />} title={accountLabel} />}
+								modifiers={[buttonStyle("plain"), menuOrder("fixed"), tint(t.textSecondary), accessibilityLabel(`Account, ${accountLabel}`), accessibilityIdentifier("spawn-account")]}
+							>
+								{accounts.map((account) => <Choice key={account.id} label={account.label} selected={account.id === accountId} onChoose={() => onSelectAccount?.(account.id)} />)}
+							</Menu>
+							<Spacer minLength={0} />
+						</HStack>
+					) : null}
 				</VStack>
 			</Host>
 

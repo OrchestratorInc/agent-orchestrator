@@ -41,6 +41,9 @@ export type SessionInterfaceTransition = {
 	sourceMode: "chat" | "tui";
 	targetMode: "chat" | "tui";
 	policy: "drain" | "interrupt";
+	/** Set when the transition moves the session to another subscription account. */
+	sourceAccountId?: string;
+	targetAccountId?: string;
 	phase:
 		| "requested"
 		| "preflighting"
@@ -596,4 +599,39 @@ async function streamError(res: Response): Promise<ApiError> {
 		// A proxy may answer HTML; the status remains enough to classify it.
 	}
 	return new ApiError(res.status, message, code, requestId, detail || undefined);
+}
+
+/** What the daemon reports about forking a session. */
+export type ForkOptions = {
+	allowed: boolean;
+	anyTurn?: boolean;
+	refusal?: { code: string; message: string };
+};
+
+/**
+ * Whether a session can be forked. Null when the daemon has session forks off
+ * (it answers 404), so the app shows no Fork action at all.
+ */
+export async function getForkOptions(cfg: ServerConfig, sessionId: string): Promise<ForkOptions | null> {
+	try {
+		const res = await apiRequest(cfg, `${API}/sessions/${encodeURIComponent(sessionId)}/fork-options`);
+		return (await res.json()) as ForkOptions;
+	} catch (cause) {
+		if ((cause as { status?: number })?.status === 404) return null;
+		throw cause;
+	}
+}
+
+/** Forks a session as it was at turnId into a new session, and returns it. */
+export async function forkSession(
+	cfg: ServerConfig,
+	sessionId: string,
+	turnId: string,
+	clientRequestId: string,
+): Promise<{ sessionId: string; displayName: string }> {
+	const res = await apiRequest(cfg, `${API}/sessions/${encodeURIComponent(sessionId)}/fork`, {
+		method: "POST",
+		body: JSON.stringify({ clientRequestId, turnId }),
+	});
+	return (await res.json()) as { sessionId: string; displayName: string };
 }

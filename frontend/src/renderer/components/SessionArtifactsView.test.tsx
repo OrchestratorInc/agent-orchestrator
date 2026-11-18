@@ -88,8 +88,8 @@ vi.mock("./ArtifactFileView", () => ({
 	),
 }));
 vi.mock("./CloudArtifactFrame", () => ({
-	CloudArtifactFrame: ({ url, onAccessRefused, onNavigate }: { url: string; onAccessRefused?: () => void; onNavigate?: (path: string) => void }) => (
-		<div data-testid="cloud-frame">
+	CloudArtifactFrame: ({ url, source, onAccessRefused, onNavigate }: { url: string; source?: string; onAccessRefused?: () => void; onNavigate?: (path: string) => void }) => (
+		<div data-source={source ?? "cloud"} data-testid="cloud-frame">
 			{url}
 			<button type="button" onClick={onAccessRefused}>refuse</button>
 			<button type="button" onClick={() => onNavigate?.("docs/notes.md")}>open notes</button>
@@ -100,6 +100,12 @@ vi.mock("./CloudArtifactFrame", () => ({
 vi.mock("../hooks/useCloudArtifacts", async (importOriginal) => ({
 	...(await importOriginal<typeof import("../hooks/useCloudArtifacts")>()),
 	useCloudArtifactAccess: cloudAccessMock,
+}));
+
+const shareAccessMock = vi.hoisted(() => ({ current: new Map<string, "restricted" | "anyone">() }));
+vi.mock("./ShareArtifactPopover", async (importOriginal) => ({
+	...(await importOriginal<typeof import("./ShareArtifactPopover")>()),
+	useReconciledShareLinks: () => shareAccessMock.current,
 }));
 
 const artifacts: SessionArtifact[] = [
@@ -376,6 +382,30 @@ describe("SessionArtifactsView", () => {
 		artifactFileChangesMock.mockReset();
 	});
 
+	it("marks each published card by who its link opens for, as on the Artifacts page", () => {
+		shareAccessMock.current = new Map([["https://viewer.test/artifact/notes", "restricted"], ["https://viewer.test/artifact/report", "anyone"]]);
+		const files = artifacts.map((file, index) => index === 0 ? { ...file, shareUrl: "https://viewer.test/artifact/notes" }
+			: index === 1 ? { ...file, shareUrl: "https://viewer.test/artifact/report" } : file);
+		renderView(<SessionArtifactsView session={session(files)} />);
+		const card = (name: RegExp) => screen.getByRole("button", { name }).closest("li")!;
+		const privateMark = within(card(/^notes\.md/)).getByRole("img", { name: "Shared privately" });
+		expect(privateMark).toHaveClass("text-status-in-review");
+		expect(privateMark.querySelector("svg")).toHaveClass("icon-link");
+		const publicMark = within(card(/^report\.html/)).getByRole("img", { name: "Published" });
+		expect(publicMark).toHaveClass("text-success");
+		expect(publicMark.querySelector("svg")).toHaveClass("icon-globe");
+		expect(within(card(/^plan\.md/)).queryByRole("img")).toBeNull();
+		shareAccessMock.current = new Map();
+	});
+
+	it("marks a card by the access recorded with its link before the link list is read", () => {
+		const files = artifacts.map((file, index) => index === 0 ? { ...file, shareUrl: "https://viewer.test/artifact/notes", shareAccess: "anyone" as const } : file);
+		renderView(<SessionArtifactsView session={session(files)} />);
+		const mark = within(screen.getByRole("button", { name: /^notes\.md/ }).closest("li")!).getByRole("img", { name: "Published" });
+		expect(mark).toHaveClass("text-success");
+		expect(mark.querySelector("svg")).toHaveClass("icon-globe");
+	});
+
 	it("follows an open local file's changes on disk only while it is open", async () => {
 		renderView(<SessionArtifactsView session={session()} />);
 		expect(artifactFileChangesMock).toHaveBeenLastCalledWith(expect.objectContaining({ id: "sess-1" }), false);
@@ -536,6 +566,21 @@ describe("SessionArtifactsView", () => {
 		renderView(<SessionArtifactsView hostId="remote-1" session={session()} />);
 
 		expect(screen.queryByRole("button", { name: /^Open in (?!session)/ })).not.toBeInTheDocument();
+	});
+
+	it("renders a remote host's HTML page in the viewer, framed from its proxy URL, never from an inline origin", async () => {
+		const proxied = "http://ao-preview-abc123.localhost:4100/report.html?raw=true";
+		const page: SessionArtifact = { kind: "html", name: "report.html", path: "report.html", rawUrl: proxied, size: 20, updatedAt: "2026-09-23T00:00:00Z", registered: true };
+		renderView(<SessionArtifactsView hostId="remote-1" session={session([page])} />);
+		await userEvent.click(screen.getByRole("button", { name: /^report\.html/ }));
+		const frame = await screen.findByTestId("cloud-frame");
+		expect(frame).toHaveAttribute("data-source", "host");
+		expect(frame).toHaveTextContent(proxied);
+		expect(screen.getByTestId("artifact-view").parentElement).toHaveClass("hidden");
+		await userEvent.click(screen.getByRole("button", { name: "report.html" }));
+		expect(screen.getByRole("menuitemradio", { name: "Rich preview" })).toHaveAttribute("aria-checked", "true");
+		await userEvent.click(screen.getByRole("menuitemradio", { name: "View source" }));
+		expect(screen.queryByTestId("cloud-frame")).toBeNull();
 	});
 
 	it("opens HTML in the artifact viewer and can switch to its source", async () => {
@@ -935,7 +980,7 @@ describe("SessionArtifactsView", () => {
 
 	it.each([
 		{ location: "local", hostId: undefined, cloud: undefined, shown: true },
-		{ location: "remote", hostId: "remote-1", cloud: undefined, shown: false },
+		{ location: "remote", hostId: "remote-1", cloud: undefined, shown: true },
 		{ location: "cloud", hostId: undefined, cloud: { orgId: "org-1", createdByUserId: "me-1" }, shown: true },
 		{ location: "another member's cloud", hostId: undefined, cloud: { orgId: "org-1", createdByUserId: "someone-else" }, shown: false },
 		{ location: "creatorless cloud", hostId: undefined, cloud: { orgId: "org-1" }, shown: false },

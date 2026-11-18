@@ -173,6 +173,14 @@ describe("mention chips", () => {
 		expect(call[7]).toEqual([{ kind: "person", id: "u-chen", name: "Chen Wei" }]);
 	});
 
+	it.each(["{Enter}", "{Tab}"])("inserts the highlighted person's chip with %s", async (key) => {
+		const { field } = renderComposer({ mentions: mentions() });
+		await typeInLexicalEditor(field, "@");
+		await userEvent.keyboard("{ArrowDown}");
+		await userEvent.keyboard(key);
+		expect(field.querySelector('[data-composer-token="person"]')).toHaveTextContent("Ben Ortiz");
+	});
+
 	it("inserts a team chip by click; a team is mentioned like a person, with nothing asked", async () => {
 		const { field, onSend } = renderComposer({ mentions: mentions() });
 		await typeInLexicalEditor(field, "@");

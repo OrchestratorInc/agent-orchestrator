@@ -29,6 +29,7 @@ import (
 	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/agentaccount"
 	chatdriveracp "github.com/aoagents/agent-orchestrator/backend/internal/adapters/chatdriver/acp"
 	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/chatdriver/codexappserver"
+	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/chatdriver/dockeragentacp"
 	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/chatdriver/persistenthost"
 	chatdriverregistry "github.com/aoagents/agent-orchestrator/backend/internal/adapters/chatdriver/registry"
 	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/cuadriver"
@@ -49,6 +50,7 @@ import (
 	"github.com/aoagents/agent-orchestrator/backend/internal/datadirlock"
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
 	"github.com/aoagents/agent-orchestrator/backend/internal/httpd"
+	"github.com/aoagents/agent-orchestrator/backend/internal/httpd/apierr"
 	"github.com/aoagents/agent-orchestrator/backend/internal/httpd/controllers"
 	"github.com/aoagents/agent-orchestrator/backend/internal/lifecyclelog"
 	"github.com/aoagents/agent-orchestrator/backend/internal/mobilebridge"
@@ -77,6 +79,7 @@ import (
 	importsvc "github.com/aoagents/agent-orchestrator/backend/internal/service/importer"
 	linkpreviewsvc "github.com/aoagents/agent-orchestrator/backend/internal/service/linkpreview"
 	notificationsvc "github.com/aoagents/agent-orchestrator/backend/internal/service/notification"
+	"github.com/aoagents/agent-orchestrator/backend/internal/service/panes"
 	prsvc "github.com/aoagents/agent-orchestrator/backend/internal/service/pr"
 	projectsvc "github.com/aoagents/agent-orchestrator/backend/internal/service/project"
 	reportsvc "github.com/aoagents/agent-orchestrator/backend/internal/service/report"
@@ -143,6 +146,7 @@ var _ interface {
 	sessionmanager.TerminalInputGate
 	sessionmanager.TerminalInputObserver
 	sessionmanager.TerminalInputFencer
+	sessionmanager.TerminalInputForgetter
 } = (*terminal.Manager)(nil)
 
 // daemonShutdownContext separates worker cancellation from signal cleanup.
@@ -364,6 +368,10 @@ func Run(buildVersion string) (retErr error) {
 	runtimeAdapter := runtimeselect.New(log, cfg.RunFilePath)
 	managedPreview := previewserver.New(log, cfg.DataDir)
 	termMgr := terminal.NewManager(runtimeAdapter, cdcPipe.Broadcaster, log)
+	// Agents split the desktop window's panes through this relay; the window
+	// links to it over the terminal mux (ch "panes").
+	paneBroker := panes.NewBroker()
+	termMgr.SetPanes(paneSource{paneBroker})
 	defer termMgr.Close()
 
 	// The agent messenger sends validated user input to the session's live
@@ -577,6 +585,9 @@ func Run(buildVersion string) (retErr error) {
 					Env:     request.Env,
 				}, request.WorkingDir, log)
 			},
+			"docker-agent": func(listCtx context.Context, request ports.AgentModelDiscoveryRequest) ([]ports.ChatConfigOption, error) {
+				return dockeragentacp.DiscoverConfigOptions(listCtx, request.Binary, cfg.DataDir, request.Env, log)
+			},
 			"devin": func(listCtx context.Context, request ports.AgentModelDiscoveryRequest) ([]ports.ChatConfigOption, error) {
 				return chatdriveracp.DiscoverConfigOptions(listCtx, chatdriveracp.Launch{
 					Command: request.Binary,
@@ -663,6 +674,13 @@ func Run(buildVersion string) (retErr error) {
 		}
 		return fmt.Errorf("wire session service: %w", err)
 	}
+	lcStack.StartActivityObserver(wiredSessMgr.SessionRuntimeEnv)
+	// The runtime reaper also observes reviewers serving an in-progress review
+	// run; the review engine reduces each pass into run transitions. Its first
+	// pass (ReconcileRuntime, after Chat reviewer recovery) settles runs a
+	// previous daemon left in progress.
+	lcStack.runtimeReaper.BindReviewers(reviewSvc.ReviewerObserver())
+
 	if usage != nil {
 		sessionSvc.SetUsageArchiveFlush(func(context.Context) { usage.requestArchiveFlush() })
 	}
@@ -696,7 +714,12 @@ func Run(buildVersion string) (retErr error) {
 	agentAccountSvc = newAgentAccounts(cfg, store, codexHome, agentDeps.CodexAccounts, log)
 	agentAccountSvc.SetLimitLog(store)
 	go agentAccountSvc.KeepReadingLimits(ctx, time.Minute)
+	// The mode-aware messenger, so a Chat original is told as a chat message.
+	sessionForkSvc := wireSessionFork(store, sessionSvc, wiredSessMgr, chatSvc, chatDrivers, agentAccountSvc, lcStack.ArtifactVersions, lifecycleMessenger, log)
 	chatSvc.SetUsageLimitAccounts(agentAccountSvc)
+	if mover, ok := wiredSessMgr.(chatsvc.AccountHandoffMover); ok {
+		chatSvc.SetAccountHandoff(settingsSvc.AccountHandoffEnabled, agentAccountSvc, mover)
+	}
 	if wired, ok := sessMgr.(interface {
 		SetAgentAccounts(ports.AgentAccountLaunchEnv)
 	}); ok {
@@ -767,6 +790,11 @@ func Run(buildVersion string) (retErr error) {
 			defer cancel()
 			return wake.WakeHibernatedChat(wakeCtx, id)
 		})
+	}
+	if check, ok := sessMgr.(interface {
+		ImportedChatWrittenElsewhere(context.Context, domain.SessionRecord, time.Time) (bool, bool)
+	}); ok {
+		chatSvc.SetOtherWriterCheck(check.ImportedChatWrittenElsewhere)
 	}
 	if tunable, ok := sessMgr.(interface {
 		SetModelCatalog(interface {
@@ -910,6 +938,10 @@ func Run(buildVersion string) (retErr error) {
 	}
 	// HostID is assigned below, once the identity file has been read.
 	mc := &controllers.MobileController{Bridge: bs}
+	// Session search: a local, read-only index over past sessions. It starts
+	// its own bounded backfill and sweep, so a slow transcript read can never
+	// delay the daemon's first response.
+	sessionSearchSvc := startSessionSearch(ctx, store, cfg.StateDir, log)
 	browserService := browsersvc.New(sessionSvc, browserBroker, browserAuthority)
 	var browserChrome controllers.BrowserChromeService
 	if chrome != nil {
@@ -926,11 +958,13 @@ func Run(buildVersion string) (retErr error) {
 	// behind them. They reuse the same runtime adapter (and therefore the same
 	// terminal mux) as session panes, but keep their own ids, storage, and
 	// lifetime — see internal/service/shellterm.
-	shellTermSvc := startShellTerminals(ctx, cfg, runtimeAdapter, store, projectSvc, sessionSvc, log)
+	shellTermSvc := startShellTerminals(ctx, cfg, runtimeAdapter, store, projectSvc, sessionSvc, termMgr, log)
 	var shellTrackers []shelltermsvc.TerminalTracker
 	// Agents started by hand in a shell give its tab their logo and status.
 	if rt, ok := runtimeAdapter.(shellagent.Runtime); ok {
 		shellAgents := shellagent.NewManager(ctx, rt, agents, log)
+		shellAgents.SetHarnessRecorder(shellTermSvc.RecordShellAgent)
+		shellTermSvc.SetForegroundReader(shellAgents)
 		shellTrackers = append(shellTrackers, shellAgents)
 		termMgr.SetShellAgents(shellAgents)
 	}
@@ -952,6 +986,7 @@ func Run(buildVersion string) (retErr error) {
 	sessMgr.SetShellTerminalCloser(shellTermSvc)
 	var (
 		usageCollector *usagesvc.Collector
+		usageHookQueue *usagesvc.HookQueue
 		usagePipeline  *usagepipeline.Pipeline
 		usagePricing   *usagePricingRuntime
 	)
@@ -1030,7 +1065,15 @@ func Run(buildVersion string) (retErr error) {
 				}
 			}
 		}()
-		lcStack.LCM.SetUsageFinalizer(usageCollector)
+		// The agent waits for every hook, and a usage scan can hold the
+		// collector for seconds, so hooks only queue their usage signal.
+		// Termination finalizes through the queue to record those signals first.
+		usageHookQueue = usagesvc.NewHookQueue(usageCollector, log)
+		go func() {
+			defer sentryobs.RecoverBackground()
+			usageHookQueue.Run(ctx)
+		}()
+		lcStack.LCM.SetUsageFinalizer(usageHookQueue)
 		if wired, ok := sessMgr.(interface {
 			SetBackgroundTaskUsage(sessionmanager.BackgroundTaskUsage)
 		}); ok {
@@ -1222,7 +1265,12 @@ func Run(buildVersion string) (retErr error) {
 	// Terminal hooks pass the hook process gate: a Claude process other than
 	// the session's own must not replace its activity or transcript.
 	hookActivity := hookprocess.New(lcStack.LCM, store, runtimeAdapter, nil, log)
+	var usageHooks controllers.UsageHookRecorder = usageCollector
+	if usageHookQueue != nil {
+		usageHooks = usageHookQueue
+	}
 	srv, err := httpd.NewWithDeps(cfg, log, termMgr, httpd.APIDeps{
+		SessionForks:       sessionForkSvc,
 		Awake:              awakeSvc,
 		Projects:           projectSvc,
 		ArtifactVersions:   lcStack.ArtifactVersions,
@@ -1253,10 +1301,11 @@ func Run(buildVersion string) (retErr error) {
 		SessionImport:      sessionImportSvc,
 		Directories:        fsbrowsersvc.New(),
 		ShellTerminals:     shellTermSvc,
+		PaneTerminals:      shellTermSvc,
 		Cues:               cuesvc.New(cuesvc.Deps{Store: store, Sessions: sessionSvc, Terminals: shellTermSvc}),
 		AgentAuth:          agentAuthSvc,
 		GitHub:             newGitHubStatusService(githubpat.New(cfg.DataDir), prReader),
-		Conversations:      chatSvc,
+		Conversations:      sessionConversationService{Service: chatSvc, sessions: sessMgr},
 		ConversationSearch: store,
 		Settings:           settingsSvc,
 		CDC:                store,
@@ -1264,10 +1313,10 @@ func Run(buildVersion string) (retErr error) {
 		Activity:           hookActivity,
 		PRRefresh:          reviewRefresher,
 		NativeSessions:     nativeSessions,
-		UsageHooks:         usageCollector,
+		UsageHooks:         usageHooks,
 		UsageSummary:       freshUsageSummary{usagesvc.NewSummaryReader(store), usagePipeline},
 		UsageReport:        freshUsageReport{usageReportReader(store, usagePricing), usagePipeline},
-		UsageLimitHistory:  usagesvc.NewLimitHistoryReader(store),
+		UsageLimitHistory:  usagesvc.NewLimitHistoryReader(store, agentAccountSvc),
 		UsageLimitSetting:  store,
 		UsagePrices:        usagePrices(usagePricing),
 		SessionMemory:      memoryReader,
@@ -1291,7 +1340,9 @@ func Run(buildVersion string) (retErr error) {
 		}),
 		Browser:                  browserService,
 		BrowserChrome:            browserChrome,
+		Panes:                    paneBroker,
 		LinkPreview:              linkpreviewsvc.New(nil),
+		SessionSearch:            sessionSearchSvc,
 		PreviewServer:            managedPreview,
 		SessionCapabilities:      browserAuthority,
 		ShellPreviewCapabilities: shellTermSvc,
@@ -1468,6 +1519,7 @@ func Run(buildVersion string) (retErr error) {
 				if err := sessMgr.ReconcileWorkspaceCleanup(ctx); err != nil && ctx.Err() == nil {
 					log.Warn("workspace cleanup reconcile failed", "err", err)
 				}
+				reapForkSeeds(ctx, store, log)
 				if settings, err := settingsSvc.Get(ctx); err != nil {
 					log.Warn("read session retention", "err", err)
 				} else if err := sessionSvc.DeleteExpired(ctx, settings.SessionRetentionDays); err != nil && ctx.Err() == nil {
@@ -1506,6 +1558,12 @@ func Run(buildVersion string) (retErr error) {
 					defer sentryobs.RecoverBackground()
 					if err := chatSvc.ResumeUsageLimitedTurns(ctx); err != nil && ctx.Err() == nil {
 						log.Warn("usage-limit auto-resume failed", "err", err)
+					}
+				})
+				sweeps.Go(func() {
+					defer sentryobs.RecoverBackground()
+					if err := chatSvc.HandoffUsageLimitedTurns(ctx); err != nil && ctx.Err() == nil {
+						log.Warn("usage-limit account handoff failed", "err", err)
 					}
 				})
 				select {
@@ -1638,6 +1696,37 @@ func telemetryAppVersion(configured, buildVersion string) string {
 type reportSemanticSession interface {
 	SendSemantic(context.Context, domain.SessionID, string, string) error
 	InterruptTUI(context.Context, domain.SessionID) error
+}
+
+// sessionConversationService adds an explicit Stop turn endpoint. The existing
+// conversation interrupt keeps its Chat-only contract.
+type sessionConversationService struct {
+	*chatsvc.Service
+	sessions sessionLifecycle
+}
+
+func (s sessionConversationService) StopTurn(ctx context.Context, id domain.SessionID) error {
+	err := s.Interrupt(ctx, id)
+	if errors.Is(err, chatsvc.ErrNotChatMode) {
+		err = s.sessions.StopTUITurn(ctx, id)
+		switch {
+		case errors.Is(err, sessionmanager.ErrNotFound):
+			return apierr.NotFound("SESSION_NOT_FOUND", "session not found")
+		case errors.Is(err, sessionmanager.ErrTerminated):
+			return apierr.Conflict("SESSION_TERMINATED", "session is terminated", nil)
+		case errors.Is(err, sessionmanager.ErrNoActiveTurn):
+			return apierr.Conflict("SESSION_NO_ACTIVE_TURN", "there is no turn in flight to interrupt", nil)
+		case errors.Is(err, sessionmanager.ErrInterruptUnsupported):
+			return apierr.Conflict("SESSION_INTERRUPT_UNAVAILABLE", "Stop turn is unavailable for this harness; use its terminal controls", nil)
+		case errors.Is(err, sessionmanager.ErrComposerBusy):
+			return apierr.Conflict("SESSION_COMPOSER_BUSY", "Clear or submit the draft in the terminal before stopping the turn", nil)
+		case errors.Is(err, sessionmanager.ErrTurnStopPending):
+			return apierr.Conflict("SESSION_TURN_STOP_PENDING", "a stop was already sent for this turn", nil)
+		case errors.Is(err, sessionmanager.ErrOperationInProgress):
+			return apierr.Conflict("SESSION_OPERATION_IN_PROGRESS", "Another operation is already running on this session", nil)
+		}
+	}
+	return err
 }
 
 type reportSemanticDelivery struct {

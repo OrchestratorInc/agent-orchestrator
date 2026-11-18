@@ -46,7 +46,7 @@ const fixtures = vi.hoisted(() => {
 		conversation: conversation(),
 		freshConversation: conversation,
 		refreshBoard: vi.fn(async () => {}),
-		navigation: { setOptions: vi.fn() },
+		navigation: { setOptions: vi.fn(), addListener: vi.fn(() => () => {}) },
 		router: { push: vi.fn(), back: vi.fn(), replace: vi.fn(), canGoBack: () => true },
 	};
 });
@@ -70,8 +70,9 @@ vi.mock("expo-router", async () => {
 	return { Stack: { Toolbar }, useIsFocused: () => true, useNavigation: () => fixtures.navigation, useRouter: () => fixtures.router };
 });
 vi.mock("expo-router/react-navigation", () => ({ useHeaderHeight: () => 0 }));
-vi.mock("react-native-keyboard-controller", async () => ({ KeyboardAvoidingView: await host("KeyboardAvoidingView") }));
-vi.mock("../api", () => ({ mobileReachablePreviewURL: () => undefined, restoreSession: vi.fn(), resumeSessionAgent: vi.fn() }));
+vi.mock("react-native-reanimated", () => ({ useSharedValue: <T,>(value: T) => ({ value }), runOnJS: <F,>(fn: F) => fn }));
+vi.mock("react-native-keyboard-controller", async () => ({ KeyboardAvoidingView: await host("KeyboardAvoidingView"), useKeyboardHandler: () => {}, useReanimatedFocusedInput: () => ({ input: { value: null } }) }));
+vi.mock("../api", () => ({ ApiError: class ApiError extends Error {}, apiRequest: vi.fn(() => new Promise(() => {})), mobileReachablePreviewURL: () => undefined, restoreSession: vi.fn(), resumeSessionAgent: vi.fn() }));
 vi.mock("../haptics", () => ({ haptics: { tap: vi.fn(), success: vi.fn(), warning: vi.fn(), error: vi.fn() } }));
 vi.mock("../openGitHub", () => ({ openGitHub: vi.fn() }));
 vi.mock("../InlineBanner", async () => ({ InlineBanner: await host("InlineBanner") }));
@@ -95,13 +96,21 @@ vi.mock("../session/useInterfaceTransition", async () => ({
 	useInterfaceTransition: () => fixtures.interfaceSwitch,
 }));
 vi.mock("../session/InterfaceSwitchCard", async () => ({ InterfaceSwitchCard: await host("InterfaceSwitchCard") }));
-vi.mock("../frost", async () => ({ Frost: await host("Frost"), FROST_TAIL: 0, frostStops: () => [] }));
+vi.mock("../frost", async () => ({ Frost: await host("Frost"), FROST_TAIL: 0, frostStops: () => [], pillFrostStops: () => [] }));
+vi.mock("../headerPill", async () => ({ HeaderPill: await host("HeaderPill"), HeaderPillButton: await host("HeaderPillButton"), pillBackOptions: () => ({}) }));
 vi.mock("../stackScreenOptions", () => ({ stackScreenOptions: () => ({}), SYSTEM_GLASS_HEADER: false }));
 vi.mock("../ThemeProvider", () => {
 	const theme = new Proxy({}, { get: (_target, key) => `#${String(key)}` });
 	return { useTheme: () => theme, useThemedStyles: (factory: (value: unknown) => unknown) => factory(theme) };
 });
-vi.mock("./api", () => ({ getWorkspacePaths: vi.fn(), openSessionShell: vi.fn(), prewarmChatAgent: vi.fn() }));
+vi.mock("./api", () => ({
+	getWorkspacePaths: vi.fn(),
+	openSessionShell: vi.fn(),
+	prewarmChatAgent: vi.fn(),
+	// The screen asks whether its turns can be forked.
+	getForkOptions: () => Promise.resolve({ allowed: false }),
+	forkSession: () => Promise.resolve(undefined),
+}));
 vi.mock("./requestDockModel", () => ({ requestDockModel: () => undefined }));
 vi.mock("./ChatComposer", async () => ({ ChatComposer: await host("ChatComposer") }));
 vi.mock("./KeyboardFollower", async () => ({ KeyboardFollower: await host("KeyboardFollower") }));

@@ -10,6 +10,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"log/slog"
 	"net/http"
@@ -38,6 +39,7 @@ import (
 	previewutil "github.com/aoagents/agent-orchestrator/backend/internal/preview"
 	"github.com/aoagents/agent-orchestrator/backend/internal/previewserver"
 	browsersvc "github.com/aoagents/agent-orchestrator/backend/internal/service/browser"
+	chatsvc "github.com/aoagents/agent-orchestrator/backend/internal/service/chat"
 	projectsvc "github.com/aoagents/agent-orchestrator/backend/internal/service/project"
 	sessionsvc "github.com/aoagents/agent-orchestrator/backend/internal/service/session"
 	sessionmanager "github.com/aoagents/agent-orchestrator/backend/internal/session_manager"
@@ -50,6 +52,10 @@ type fakeSessionService struct {
 	registerArtifactsErr  error
 	deleted               []domain.SessionID
 	deleteCleanup         []bool
+	keptSessions          map[domain.SessionID]domain.Session
+	keptSets              []sessionsvc.KeptArtifacts
+	keepingDeleted        []domain.SessionID
+	forgottenKept         []string
 	deleteErr             error
 	// lastListFilter is the filter the controller parsed; listPage, when set,
 	// replaces the page built from sessions so a test can pin the wire shape.
@@ -66,6 +72,7 @@ type fakeSessionService struct {
 	sentDeliveryOptions        ports.MessageDeliveryOptions
 	delegationInput            sessionsvc.DelegateTaskInput
 	delegationErr              error
+	sendErr                    error
 	preparedProject            domain.ProjectID
 	canceledPreparation        string
 	cleanupProjects            []domain.ProjectID
@@ -499,14 +506,14 @@ func (f *fakeSessionService) Rename(_ context.Context, id domain.SessionID, disp
 func (f *fakeSessionService) Send(_ context.Context, _ domain.SessionID, message string, attachment *ports.SpawnAttachment) error {
 	f.sent = message
 	f.sentAttachment = attachment
-	return nil
+	return f.sendErr
 }
 
 func (f *fakeSessionService) SendWithOptions(_ context.Context, _ domain.SessionID, message string, attachment *ports.SpawnAttachment, options ports.MessageDeliveryOptions) error {
 	f.sent = message
 	f.sentAttachment = attachment
 	f.sentDeliveryOptions = options
-	return nil
+	return f.sendErr
 }
 
 func (f *fakeSessionService) DelegateTask(_ context.Context, in sessionsvc.DelegateTaskInput) (sessionsvc.DelegateTaskOutcome, error) {
@@ -1837,13 +1844,14 @@ func TestSessionsAPI_SpawnRejectsOversizedBody(t *testing.T) {
 	srv := newSessionTestServer(t, svc)
 
 	// A body past the ~135 MiB maxSpawnBodyBytes cap is rejected while decoding
-	// (MaxBytesReader), before the attachment size caps and without materializing
+	// (MaxBytesReader), without materializing
 	// the whole body. The oversized bytes live in an *attachment* payload (not the
 	// prompt, which has its own much smaller PROMPT_TOO_LONG cap), so this pins the
 	// body cap specifically: MaxBytesReader makes the read/decode fail with
-	// INVALID_JSON. If that line were removed the body would decode fully and be
-	// rejected later with an attachment-specific code (ATTACHMENT_TOO_LARGE),
-	// failing this test. 150 MiB of base64 comfortably exceeds the ~135 MiB cap.
+	// INVALID_JSON. If that line were removed the body would decode fully (inline
+	// data has no decoded cap of its own; large files go through
+	// /api/v1/attachment-uploads), failing this test. 150 MiB of base64
+	// comfortably exceeds the ~135 MiB cap.
 	oversized := `{"projectId":"ao","attachments":[{"mimeType":"image/png","data":"` +
 		strings.Repeat("A", 150<<20) + `"}]}`
 	body, status, _ := doRequest(t, srv, "POST", "/api/v1/sessions", oversized)
@@ -1983,6 +1991,29 @@ func TestSessionsAPI_SpawnPassesModelToService(t *testing.T) {
 	}
 	if svc.lastSpawn.AgentConfig.Model != "sonnet" {
 		t.Fatalf("service AgentConfig.Model = %q, want sonnet", svc.lastSpawn.AgentConfig.Model)
+	}
+}
+
+func TestSessionsAPI_SpawnAndDelegatePassAccountToService(t *testing.T) {
+	svc := newFakeSessionService()
+	srv := newSessionTestServer(t, svc)
+
+	body, status, _ := doRequest(t, srv, "POST", "/api/v1/sessions",
+		`{"kind":"worker","harness":"claude-code","prompt":"fix","accountId":" acct-b "}`)
+	if status != http.StatusCreated {
+		t.Fatalf("POST session = %d, want 201; body=%s", status, body)
+	}
+	if svc.lastSpawn.AgentAccountID != "acct-b" {
+		t.Fatalf("spawn AgentAccountID = %q, want acct-b", svc.lastSpawn.AgentAccountID)
+	}
+
+	body, status, _ = doRequest(t, srv, "POST", "/api/v1/orchestrators/delegate",
+		`{"projectId":"ao","brief":"Fix it","agent":"codex","accountId":"acct-c"}`)
+	if status != http.StatusAccepted {
+		t.Fatalf("POST delegate = %d, want 202; body=%s", status, body)
+	}
+	if svc.delegationInput.AccountID != "acct-c" {
+		t.Fatalf("delegate AccountID = %q, want acct-c", svc.delegationInput.AccountID)
 	}
 }
 
@@ -4936,12 +4967,6 @@ func TestSessionsAPI_DelegateTaskRejectsInvalidAttachments(t *testing.T) {
 			body: `{"projectId":"ao","brief":"Fix it","attachments":[{"mimeType":"image/svg+xml","data":"PHN2Zy8+"}]}`,
 			code: "UNSUPPORTED_ATTACHMENT_TYPE",
 		},
-		{
-			name: "too large",
-			body: `{"projectId":"ao","brief":"Fix it","attachments":[{"mimeType":"image/png","data":"` +
-				base64.StdEncoding.EncodeToString([]byte(strings.Repeat("x", (50<<20)+1))) + `"}]}`,
-			code: "ATTACHMENT_TOO_LARGE",
-		},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
@@ -4990,6 +5015,15 @@ func TestSessionsAPI_SendWithAttachment(t *testing.T) {
 	if svc.sentDeliveryOptions.AuthoredByUser {
 		t.Fatal("ordinary automation send was marked user-authored")
 	}
+}
+
+func TestSessionsAPI_SendToAChatOpenElsewhereIsAConflict(t *testing.T) {
+	svc := newFakeSessionService()
+	svc.sendErr = fmt.Errorf("send ao-1: %w", chatsvc.ErrChatOpenElsewhere)
+	srv := newSessionTestServer(t, svc)
+
+	body, status, _ := doRequest(t, srv, "POST", "/api/v1/sessions/ao-1/send", `{"message":"Do the next step","senderSessionId":"ao-orchestrator"}`)
+	assertErrorCode(t, body, status, http.StatusConflict, "CHAT_OPEN_ELSEWHERE")
 }
 
 func TestSessionsAPI_SendCarriesUserAuthorshipSeparatelyFromDelivery(t *testing.T) {

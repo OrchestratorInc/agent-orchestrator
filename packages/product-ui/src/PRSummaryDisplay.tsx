@@ -35,6 +35,7 @@ export function PRSummaryMeta({
 	className,
 	countNounLabel = defaultCountNounLabel,
 	externalLink: ExternalLink,
+	hideDiffCounts = false,
 	inline = false,
 	leading,
 	openedViaLabel = "via Orchestrator",
@@ -43,6 +44,8 @@ export function PRSummaryMeta({
 	className?: string;
 	countNounLabel?: CountNounLabel;
 	externalLink: ExternalLinkComponent;
+	/** The compact line leaves +/− out: something beside it states the same numbers. */
+	hideDiffCounts?: boolean;
 	/** The author and the diff stats share one line, as the PR view's card shows them. */
 	inline?: boolean;
 	leading?: string;
@@ -51,7 +54,7 @@ export function PRSummaryMeta({
 	pr: PRSummaryMetadata;
 }) {
 	if (inline) {
-		return <PRCompactMeta className={className} countNounLabel={countNounLabel} externalLink={ExternalLink} leading={leading} openedViaLabel={openedViaLabel} pr={pr} />;
+		return <PRCompactMeta className={className} countNounLabel={countNounLabel} externalLink={ExternalLink} hideDiffCounts={hideDiffCounts} leading={leading} openedViaLabel={openedViaLabel} pr={pr} />;
 	}
 	const branchRange = prBranchRange(pr);
 	const hasDiff = hasDiffMetadata(pr);
@@ -150,6 +153,7 @@ function PRCompactMeta({
 	className,
 	countNounLabel,
 	externalLink: ExternalLink,
+	hideDiffCounts = false,
 	leading,
 	openedViaLabel,
 	pr,
@@ -157,6 +161,7 @@ function PRCompactMeta({
 	className?: string;
 	countNounLabel: CountNounLabel;
 	externalLink: ExternalLinkComponent;
+	hideDiffCounts?: boolean;
 	leading?: string;
 	openedViaLabel: string;
 	pr: PRSummaryMetadata;
@@ -208,7 +213,7 @@ function PRCompactMeta({
 			{hasDiff || avatar ? (
 				<span className="flex shrink-0 items-center gap-2 tabular-nums">
 					{pr.changedFiles > 0 ? <span>{countNounLabel(pr.changedFiles, "file")}</span> : null}
-					{changed ? (
+					{changed && !hideDiffCounts ? (
 						<span className="inline-flex items-center gap-1">
 							{pr.additions > 0 ? <span aria-hidden="true" className="text-success">+{formatCount(pr.additions)}</span> : null}
 							{pr.deletions > 0 ? <span aria-hidden="true" className="text-error">−{formatCount(pr.deletions)}</span> : null}
@@ -323,7 +328,7 @@ export function PRCardStatusSummary({
 			<div className={cn("border-t border-border pt-2", className)}>
 				<div className="grid min-w-0 grid-cols-1 gap-y-1.5">
 					{rows.map((status) => (
-						<StatusRow externalLink={externalLink} key={status.key} reviewDetailsAction={reviewDetailsAction} status={status} />
+						<StatusRow dot externalLink={externalLink} key={status.key} reviewDetailsAction={reviewDetailsAction} status={status} />
 					))}
 				</div>
 				<div className="mt-2 border-t border-border pt-2">
@@ -414,12 +419,15 @@ export function PRCardStatusSummary({
 
 function StatusRow({
 	details,
+	dot = false,
 	externalLink: ExternalLink,
 	reviewDetailsAction,
 	status,
 }: {
 	/** What opens from this row (such as which checks failed). */
 	details?: ReactNode;
+	/** A coloured dot before the label. The PR view's rows go without: the label's colour already says it. */
+	dot?: boolean;
 	externalLink: ExternalLinkComponent;
 	reviewDetailsAction?: ReactNode;
 	status: PRCardStatus;
@@ -429,10 +437,27 @@ function StatusRow({
 	const reduceMotion = useReducedMotion();
 	// The checks row says its counts instead of a verdict; their glyphs carry the state.
 	const tally = status.checks && status.checks.counts.length > 0 ? status.checks : undefined;
+	// Without a dot, a review or conflicts row reads like the checks row: what it
+	// is about, then a glyph and where it stands.
+	const fact = !dot && !tally ? status.fact : undefined;
+	const plain = tally || fact;
+	const line = tally
+		? <ChecksTally tally={tally} />
+		: fact
+			? (
+				<span className="flex min-w-0 flex-wrap items-center gap-x-3 gap-y-1" data-testid="pr-status-fact">
+					<span className={rowLabelClass}>{fact.title}</span>
+					<span className={`${rowStateClass} ${cn("inline-flex min-w-0 items-center gap-1", attentionClass[status.tone])}`} data-state={fact.state}>
+						<CheckStateGlyph className={toneClass[status.tone]} state={fact.state} />
+						<span className="min-w-0 truncate">{fact.value}</span>
+					</span>
+				</span>
+			)
+			: undefined;
 	return (
 		<div className="min-w-0">
-			<div className={cn("flex min-w-0 items-center gap-2 text-xs font-medium leading-4", tally ? "text-foreground" : toneClass[status.tone])}>
-				{tally ? null : <span aria-hidden="true" className={cn("size-dot-sm shrink-0 rounded-full bg-current", status.breathe && "animate-status-pulse")} />}
+			<div className={cn("flex min-w-0 items-center gap-2 text-xs font-medium leading-4", plain ? "text-foreground" : toneClass[status.tone])}>
+				{dot && !tally ? <span aria-hidden="true" className={cn("size-dot-sm shrink-0 rounded-full bg-current", status.breathe && "animate-status-pulse")} /> : null}
 				{details ? (
 					<>
 						<button
@@ -440,13 +465,13 @@ function StatusRow({
 							aria-expanded={open}
 							className={cn(
 								"inline-flex min-w-0 items-center gap-1 rounded-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/60",
-								tally ? "flex-1 gap-3 text-left" : "underline-offset-2 hover:underline",
+								plain ? "flex-1 gap-3 text-left" : "underline-offset-2 hover:underline",
 							)}
 							onClick={() => setOpen((value) => !value)}
 							type="button"
 						>
-							{tally ? <ChecksTally tally={tally} /> : <span className="min-w-0 truncate">{status.label}</span>}
-							<ChevronIcon aria-hidden="true" className={cn("size-icon-2xs shrink-0", tally && "ml-auto text-muted-foreground")} direction={open ? "up" : "down"} />
+							{line ?? <span className="min-w-0 truncate">{status.label}</span>}
+							<ChevronIcon aria-hidden="true" className={cn("size-icon-2xs shrink-0", plain && "ml-auto text-muted-foreground")} direction={open ? "up" : "down"} />
 						</button>
 						{status.href ? (
 							<ExternalLink
@@ -458,14 +483,14 @@ function StatusRow({
 							</ExternalLink>
 						) : null}
 					</>
-				) : tally ? (
-					<ChecksTally tally={tally} />
+				) : line ? (
+					line
 				) : (
 					<PRCardStatusLink externalLink={ExternalLink} status={status} />
 				)}
 			</div>
 			{status.detail || (status.key === "review" && reviewDetailsAction) ? (
-				<div className="mt-0.5 flex min-w-0 items-baseline gap-2 pl-4 text-xs leading-4">
+				<div className={cn("mt-0.5 flex min-w-0 items-baseline gap-2 text-xs leading-4", dot ? "pl-4" : plain && rowChildClass)}>
 					{status.detail ? <span className="text-muted-foreground">{status.detail}</span> : null}
 					{status.key === "review" && reviewDetailsAction ? reviewDetailsAction : null}
 				</div>
@@ -496,11 +521,31 @@ const checkStateClass: Record<PRCheckState, string> = {
 	skipped: "text-passive",
 };
 
-/** A check state's glyph in its colour; a running check's spins unless motion is reduced. */
-export function CheckStateGlyph({ className, state }: { className?: string; state: PRCheckState }) {
+// A row's label leads at the row's own size, with its state two sizes below it.
+const rowLabelClass = "text-foreground";
+// Joined outside cn(): tailwind-merge reads this size as a colour and drops it for one.
+const rowStateClass = "text-micro";
+// What belongs to a row sits in from it.
+const rowChildClass = "pl-4";
+
+/** A state that is in the way takes its colour on the words too; one that is fine stays plain. */
+const attentionClass: Partial<Record<PRDisplayTone, string>> = {
+	review: "text-status-in-review",
+	warning: "text-warning",
+	error: "text-error",
+};
+
+const glyphSizeClass = { xs: "size-icon-xs", sm: "size-icon-sm" };
+
+/**
+ * A check state's glyph in its colour; a running check's spins unless motion is
+ * reduced. `size` is a prop because the two icon sizes don't override each other
+ * as classes.
+ */
+export function CheckStateGlyph({ className, size = "xs", state }: { className?: string; size?: keyof typeof glyphSizeClass; state: PRCheckState }) {
 	return (
 		<CheckStateIcon
-			className={cn("size-icon-xs shrink-0", checkStateClass[state], state === "running" && "motion-safe:animate-spin", className)}
+			className={cn(glyphSizeClass[size], "shrink-0", checkStateClass[state], state === "running" && "motion-safe:animate-spin", className)}
 			state={state}
 		/>
 	);
@@ -513,10 +558,13 @@ export function CheckStateGlyph({ className, state }: { className?: string; stat
 function ChecksTally({ tally }: { tally: PRChecksTally }) {
 	return (
 		<span className="flex min-w-0 flex-wrap items-center gap-x-3 gap-y-1" data-testid="pr-checks-tally">
-			<span>{tally.title}</span>
+			<span className={rowLabelClass}>{tally.title}</span>
 			{tally.counts.map((count, index) => (
 				<span
-					className={cn("inline-flex items-center gap-1 tabular-nums", index === 0 ? "text-foreground" : "font-normal text-muted-foreground")}
+					className={`${rowStateClass} ${cn(
+						"inline-flex items-center gap-1 tabular-nums",
+						index === 0 ? (count.state === "failed" ? "text-error" : "text-foreground") : "font-normal text-muted-foreground",
+					)}`}
 					data-state={count.state}
 					key={count.state}
 				>
@@ -569,11 +617,11 @@ function ReadinessFacts({
 	const leadMore = lead ? details?.[lead.key] : readiness.detail;
 	const more = leadMore || others.length > 0 ? (
 		<div className="grid min-w-0 grid-cols-1 gap-y-1.5">
-			{leadMore ? <div className="min-w-0 pl-4 text-xs leading-4 text-muted-foreground">{leadMore}</div> : null}
+			{leadMore ? <div className={cn("min-w-0 text-xs leading-4 text-muted-foreground", rowChildClass)}>{leadMore}</div> : null}
 			{others.map((status) => (
 				<div className="min-w-0" key={status.key}>
 					<StatusRow externalLink={externalLink} reviewDetailsAction={reviewDetailsAction} status={status} />
-					{details?.[status.key] ? <div className="mt-1 min-w-0 pl-4">{details[status.key]}</div> : null}
+					{details?.[status.key] ? <div className={cn("mt-1 min-w-0", rowChildClass)}>{details[status.key]}</div> : null}
 				</div>
 			))}
 		</div>

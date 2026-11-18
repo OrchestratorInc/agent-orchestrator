@@ -43,12 +43,20 @@ type sessionDeleteOptions struct {
 	project string
 	yes     bool
 	cleanup bool
+	// keepArtifacts is the old opt-in, accepted for scripts that still pass
+	// it; keeping is now the default.
+	keepArtifacts   bool
+	deleteArtifacts bool
 }
 
 type sessionClaimPROptions struct {
 	project    string
 	json       bool
 	noTakeover bool
+	// review is set when --review was passed: true claims the PR to review it
+	// with every automatic-feedback switch off, false turns CI and
+	// review-comment fixing back on to take it over.
+	review *bool
 }
 
 type sessionRenameRequest struct {
@@ -239,6 +247,7 @@ func newSessionCommand(ctx *commandContext) *cobra.Command {
 	cmd.AddCommand(newSessionTopCommand(ctx))
 	cmd.AddCommand(newSessionGetCommand(ctx))
 	cmd.AddCommand(newSessionKillCommand(ctx))
+	cmd.AddCommand(newSessionInterruptCommand(ctx))
 	cmd.AddCommand(newSessionRestoreCommand(ctx))
 	cmd.AddCommand(newSessionExitAgentCommand(ctx))
 	cmd.AddCommand(newSessionResumeAgentCommand(ctx))
@@ -247,6 +256,7 @@ func newSessionCommand(ctx *commandContext) *cobra.Command {
 	cmd.AddCommand(newSessionDeleteCommand(ctx))
 	cmd.AddCommand(newSessionClaimPRCommand(ctx))
 	cmd.AddCommand(newSessionHistoryCommand(ctx))
+	cmd.AddCommand(newSessionForkCommand(ctx))
 	return cmd
 }
 
@@ -321,6 +331,24 @@ func newSessionKillCommand(ctx *commandContext) *cobra.Command {
 				return err
 			}
 			return ctx.killSession(cmd.Context(), cmd, id, opts)
+		},
+	}
+	addSessionProjectFlag(cmd.Flags(), &opts.project, "Project id to scope the lookup")
+	return cmd
+}
+
+func newSessionInterruptCommand(ctx *commandContext) *cobra.Command {
+	var opts sessionOptions
+	cmd := &cobra.Command{
+		Use:   "interrupt <id>",
+		Short: "Interrupt an active turn without terminating the session",
+		Args:  oneSessionIDArg,
+		RunE: func(cmd *cobra.Command, args []string) error {
+			id, err := normalizeSessionID(args[0])
+			if err != nil {
+				return err
+			}
+			return ctx.interruptSession(cmd.Context(), cmd, id, opts)
 		},
 	}
 	addSessionProjectFlag(cmd.Flags(), &opts.project, "Project id to scope the lookup")
@@ -423,7 +451,8 @@ func newSessionDeleteCommand(ctx *commandContext) *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "delete <id>",
 		Short: "Permanently delete a terminated session",
-		Long: "Permanently delete a terminated session's record and its Orchestrator history (conversation, PR facts, attachments and artifacts). " +
+		Long: "Permanently delete a terminated session's record and its Orchestrator history (conversation, PR facts and attachments). " +
+			"Its artifact files are kept, view only, on the Artifacts page, the way the desktop app keeps them; pass --delete-artifacts to delete them too. " +
 			"The session must be terminated and its worktree cleaned up first (ao session cleanup, or --cleanup). Git branches, pull requests and agent account usage totals are kept.",
 		Args: oneSessionIDArg,
 		RunE: func(cmd *cobra.Command, args []string) error {
@@ -437,21 +466,37 @@ func newSessionDeleteCommand(ctx *commandContext) *cobra.Command {
 	addSessionProjectFlag(cmd.Flags(), &opts.project, "Project id to scope the lookup")
 	cmd.Flags().BoolVarP(&opts.yes, "yes", "y", false, "Skip confirmation prompt")
 	cmd.Flags().BoolVar(&opts.cleanup, "cleanup", false, "Clean up a worktree still on disk first (never forced; a dirty or locked one refuses the delete)")
+	cmd.Flags().BoolVar(&opts.deleteArtifacts, "delete-artifacts", false, "Also delete the session's artifact files instead of keeping them, view only, on the Artifacts page")
+	cmd.Flags().BoolVar(&opts.keepArtifacts, "keep-artifacts", false, "Keep the session's artifact files (the default)")
+	_ = cmd.Flags().MarkHidden("keep-artifacts")
+	cmd.MarkFlagsMutuallyExclusive("keep-artifacts", "delete-artifacts")
 	return cmd
 }
 
 func newSessionClaimPRCommand(ctx *commandContext) *cobra.Command {
 	var opts sessionClaimPROptions
+	var review bool
 	cmd := &cobra.Command{
 		Use:   "claim-pr [<session-id>] <pr-ref>",
 		Short: "Attach an existing PR to a session",
 		Long: "Attach an existing PR to a session. When session-id is omitted, the current session is read from AO_SESSION_ID.\n\n" +
-			"Claiming updates PR ownership metadata only; it does not check out the PR branch. Verify the workspace branch and HEAD before editing.",
+			"Claiming updates PR ownership metadata only; it does not check out the PR branch. Verify the workspace branch and HEAD before editing.\n\n" +
+			"With --review, the session claims someone else's PR to review it, not to work on it. It implies --no-takeover, so it never takes the PR from a session working on it. Before the claim, Orchestrator turns off the session's " +
+			"automatic fixing of CI failures, merge conflicts and review comments, and its native auto-review, so none of the PR's feedback reaches the agent. " +
+			"These are the session's \"Automatically fix\" switches, so they cover every PR it owns; use one session per review. " +
+			"To take the PR over later, claim it again with --review=false, which turns CI and review-comment fixing back on. " +
+			"Review comments posted while fixing was off are not sent, so read them on the PR.",
 		Example: `  # From inside a worker session
   ao session claim-pr 88
 
   # Target a session explicitly
-  ao session claim-pr mer-3 88`,
+  ao session claim-pr mer-3 88
+
+  # Review someone else's PR without the agent acting on its feedback
+  ao session claim-pr 88 --no-takeover --review
+
+  # Take that PR over
+  ao session claim-pr 88 --review=false`,
 		Args: func(cmd *cobra.Command, args []string) error {
 			if err := cobra.RangeArgs(1, 2)(cmd, args); err != nil {
 				return usageError{err}
@@ -464,13 +509,72 @@ func newSessionClaimPRCommand(ctx *commandContext) *cobra.Command {
 			if err != nil {
 				return err
 			}
+			if cmd.Flags().Changed("review") {
+				opts.review = &review
+			}
 			return ctx.claimSessionPR(cmd.Context(), cmd, id, ref, opts)
 		},
 	}
 	addSessionProjectFlag(cmd.Flags(), &opts.project, "Project id to scope the lookup")
 	cmd.Flags().BoolVar(&opts.noTakeover, "no-takeover", false, "Refuse if another active session owns the PR")
+	cmd.Flags().BoolVar(&review, "review", false, "Claim to review someone else's PR: turn off automatic CI and review-comment fixing and native auto-review first, and refuse if another active session owns it (implies --no-takeover). --review=false turns fixing back on to take it over")
 	cmd.Flags().BoolVar(&opts.json, "json", false, "Output as JSON")
 	return cmd
+}
+
+type sessionAutoInjectCIRequest struct {
+	AutoInjectCI bool `json:"autoInjectCI"`
+}
+
+type sessionAutoInjectReviewRequest struct {
+	AutoInjectReview bool `json:"autoInjectReview"`
+}
+
+type sessionAutoReviewRequest struct {
+	Enabled bool `json:"enabled"`
+}
+
+// setSessionSwitches sets the session's CI and review-comment switches and its
+// native auto-review. A nil value leaves that switch unchanged.
+func (c *commandContext) setSessionSwitches(ctx context.Context, id string, ci, reviews, autoReview *bool) error {
+	base := "sessions/" + url.PathEscape(id)
+	if ci != nil {
+		if err := c.patchJSON(ctx, base+"/auto-inject-ci", sessionAutoInjectCIRequest{AutoInjectCI: *ci}, nil); err != nil {
+			return fmt.Errorf("set automatic CI fixing: %w", err)
+		}
+	}
+	if reviews != nil {
+		if err := c.patchJSON(ctx, base+"/auto-inject-review", sessionAutoInjectReviewRequest{AutoInjectReview: *reviews}, nil); err != nil {
+			return fmt.Errorf("set automatic review-comment fixing: %w", err)
+		}
+	}
+	if autoReview != nil {
+		if err := c.putJSON(ctx, base+"/auto-review", sessionAutoReviewRequest{Enabled: *autoReview}, nil); err != nil {
+			return fmt.Errorf("set native auto-review: %w", err)
+		}
+	}
+	return nil
+}
+
+// setSessionReview sets the switches a review claim controls. review turns
+// the session's automatic CI and review-comment fixing and its native
+// auto-review off; !review turns CI and review-comment fixing back on to take
+// the PR over and leaves native auto-review as it is.
+func (c *commandContext) setSessionReview(ctx context.Context, id string, review bool) error {
+	fix := !review
+	var autoReview *bool
+	if review {
+		autoReview = &fix
+	}
+	return c.setSessionSwitches(ctx, id, &fix, &fix, autoReview)
+}
+
+type sessionSwitchesResponse struct {
+	Session struct {
+		AutoInjectCI      bool `json:"autoInjectCI"`
+		AutoInjectReview  bool `json:"autoInjectReview"`
+		AutoReviewEnabled bool `json:"autoReviewEnabled"`
+	} `json:"session"`
 }
 
 func resolveSessionClaimPRArgs(args []string) (sessionID, ref string, err error) {
@@ -528,15 +632,44 @@ func (c *commandContext) claimSessionPR(ctx context.Context, cmd *cobra.Command,
 	if err != nil {
 		return err
 	}
+	// A review claim sets the switches before claiming, so none of the PR's
+	// feedback can reach the agent in between. If anything after that fails,
+	// the switches go back to what they were, since they cover every PR the
+	// session owns.
+	restore := func(err error) error { return err }
+	if opts.review != nil {
+		var before sessionSwitchesResponse
+		if err := c.getJSON(ctx, "sessions/"+url.PathEscape(id), &before); err != nil {
+			return err
+		}
+		prev := before.Session
+		restore = func(err error) error {
+			var autoReview *bool
+			if *opts.review {
+				autoReview = &prev.AutoReviewEnabled
+			}
+			if restoreErr := c.setSessionSwitches(ctx, id, &prev.AutoInjectCI, &prev.AutoInjectReview, autoReview); restoreErr != nil {
+				return fmt.Errorf("%w; restoring the session's automatic fixing switches also failed: %w", err, restoreErr)
+			}
+			return err
+		}
+		if err := c.setSessionReview(ctx, id, *opts.review); err != nil {
+			return restore(err)
+		}
+	}
 	var res claimPRResponse
-	req := claimPRRequest{PR: resolvedRef, AllowTakeover: !opts.noTakeover}
+	// A review claim never takes the PR from another active session: that
+	// session would lose the PR's feedback, since the PR follows the
+	// reviewer's switches. --review=false can still take it over.
+	reviewing := opts.review != nil && *opts.review
+	req := claimPRRequest{PR: resolvedRef, AllowTakeover: !opts.noTakeover && !reviewing}
 	if err := c.postJSON(ctx, "sessions/"+url.PathEscape(id)+"/pr/claim", req, &res); err != nil {
-		return err
+		return restore(err)
 	}
 	if opts.json {
 		return writeJSON(cmd.OutOrStdout(), res)
 	}
-	return writeClaimPRResult(cmd, res)
+	return writeClaimPRResult(cmd, res, opts.review)
 }
 
 func (c *commandContext) fetchProjectDetails(ctx context.Context, id string) (projectDetails, error) {
@@ -547,7 +680,7 @@ func (c *commandContext) fetchProjectDetails(ctx context.Context, id string) (pr
 	return res.Project, nil
 }
 
-func writeClaimPRResult(cmd *cobra.Command, res claimPRResponse) error {
+func writeClaimPRResult(cmd *cobra.Command, res claimPRResponse, review *bool) error {
 	out := cmd.OutOrStdout()
 	if len(res.PRs) == 0 {
 		if _, err := fmt.Fprintf(out, "session %s claimed PR\n", res.SessionID); err != nil {
@@ -570,7 +703,17 @@ func writeClaimPRResult(cmd *cobra.Command, res claimPRResponse) error {
 			return err
 		}
 	}
-	return nil
+	// A plain claim prints nothing more: the agent instructions already say to
+	// claim with --review when only reviewing.
+	var err error
+	switch {
+	case review == nil:
+	case *review:
+		_, err = fmt.Fprintln(out, "  reviewing: automatic fixing of CI failures, merge conflicts and review comments and native auto-review are off. It is not the user's PR; do not change it unless the user asks.")
+	default:
+		_, err = fmt.Fprintln(out, "  taken over: automatic fixing of CI failures, merge conflicts and review comments is on. Review comments posted while it was off were not sent; read them on the PR.")
+	}
+	return err
 }
 
 func (c *commandContext) listSessions(ctx context.Context, cmd *cobra.Command, opts sessionListOptions) error {
@@ -744,6 +887,19 @@ func (c *commandContext) killSession(ctx context.Context, cmd *cobra.Command, id
 	return err
 }
 
+func (c *commandContext) interruptSession(ctx context.Context, cmd *cobra.Command, id string, opts sessionOptions) error {
+	if opts.project != "" {
+		if _, err := c.fetchScopedSession(ctx, id, opts.project); err != nil {
+			return err
+		}
+	}
+	if err := c.postJSON(ctx, "sessions/"+url.PathEscape(id)+"/stop-turn", struct{}{}, nil); err != nil {
+		return err
+	}
+	_, err := fmt.Fprintf(cmd.OutOrStdout(), "interrupt requested for session %s\n", id)
+	return err
+}
+
 func (c *commandContext) deleteSession(ctx context.Context, cmd *cobra.Command, id string, opts sessionDeleteOptions) error {
 	// Look the session up before asking, so an unknown id fails without a
 	// prompt; with --yes the delete itself reports it.
@@ -754,7 +910,11 @@ func (c *commandContext) deleteSession(ctx context.Context, cmd *cobra.Command, 
 	}
 	out := cmd.OutOrStdout()
 	if !opts.yes {
-		confirmed, err := confirmTyped(cmd, fmt.Sprintf("Permanently delete session %s and its history? Type yes to confirm: ", id))
+		what := " and its history"
+		if opts.deleteArtifacts {
+			what = ", its history and its artifact files"
+		}
+		confirmed, err := confirmTyped(cmd, fmt.Sprintf("Permanently delete session %s%s? Type yes to confirm: ", id, what))
 		if err != nil {
 			return err
 		}
@@ -766,6 +926,11 @@ func (c *commandContext) deleteSession(ctx context.Context, cmd *cobra.Command, 
 	params := url.Values{}
 	if opts.cleanup {
 		params.Set("cleanup", "true")
+	}
+	// Artifacts outlive their session unless the caller asks otherwise, so an
+	// agent deleting a session it spawned never throws away its deliverables.
+	if !opts.deleteArtifacts {
+		params.Set("keepArtifacts", "true")
 	}
 	var res deleteSessionResponse
 	if err := c.deleteJSON(ctx, apiPath("sessions/"+url.PathEscape(id), params), &res); err != nil {

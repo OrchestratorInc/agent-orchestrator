@@ -176,7 +176,14 @@ func (m *Manager) ApplyPRObservation(ctx context.Context, id domain.SessionID, o
 		if err != nil {
 			return fmt.Errorf("list persisted comments for %s: %w", o.URL, err)
 		}
-		o.Comments = prCommentObservations(comments)
+		// The worker posts with the PR author's account, so its own replies
+		// ("Fixed in abc123") come back as review comments; never inject them.
+		// Unknown author (no PR row yet): nothing is filtered.
+		var prAuthor string
+		if pr, ok, err := m.store.GetPR(ctx, o.URL); err == nil && ok {
+			prAuthor = pr.Author
+		}
+		o.Comments = prCommentObservations(withoutPRAuthorReplies(comments, prAuthor))
 
 		if o.CI == domain.CIFailing {
 			pr, ok, err := m.store.GetPR(ctx, o.URL)
@@ -250,16 +257,33 @@ func (m *Manager) ApplyPRObservation(ctx context.Context, id domain.SessionID, o
 	// and re-polls.
 	var blockedCheckErr error
 	if o.Mergeability == domain.MergeConflicting {
-		// Only the bottom of a stack is eligible for the rebase nudge. A PR
-		// stacked on an open parent is expected to report conflicts against its
-		// parent branch until the parent merges and it retargets, so nudging the
-		// agent to rebase it now would be noise. Mergeability UNKNOWN (the brief
-		// post-retarget recompute window) never reaches here.
-		blocked, err := m.prBlockedByOpenParent(ctx, id, o.URL)
+		// The session's "Automatically fix CI failures" switch also covers merge
+		// conflicts, so a session reviewing someone else's PR with the switch off
+		// is never told to rebase it. Fail closed: an unreadable policy skips
+		// this nudge and is surfaced below, like the parent-stack check.
+		pr, prFound, prErr := m.store.GetPR(ctx, o.URL)
+		var skip bool
+		var err error
+		switch {
+		case prErr != nil:
+			err = fmt.Errorf("load CI injection policy for %s: %w", o.URL, prErr)
+		case !prFound:
+			err = fmt.Errorf("load CI injection policy for %s: PR not found", o.URL)
+		case !pr.AutoInjectCI:
+			skip = true
+		default:
+			// Only the bottom of a stack is eligible for the rebase nudge. A PR
+			// stacked on an open parent is expected to report conflicts against
+			// its parent branch until the parent merges and it retargets, so
+			// nudging the agent to rebase it now would be noise. Mergeability
+			// UNKNOWN (the brief post-retarget recompute window) never reaches
+			// here.
+			skip, err = m.prBlockedByOpenParent(ctx, id, o.URL)
+		}
 		switch {
 		case err != nil:
 			blockedCheckErr = err
-		case !blocked:
+		case !skip:
 			msg := "There are merge conflicts on " + ident + ". Rebase onto the base branch and resolve them."
 			if o.URL != "" {
 				msg += "\nPR: " + domain.SanitizeControlChars(o.URL)
@@ -509,12 +533,18 @@ func (m *Manager) notificationIntentForSCM(rec domain.SessionRecord, o ports.SCM
 		Provider:           o.Provider,
 		Repo:               o.Repo,
 	}
+	// A merge or close happened at a known provider time, which can be well
+	// before AO polled it (slow cadence, daemon down). Show that time, not the
+	// poll's. Ready-to-merge stays on the observation time: it is a state AO
+	// derived from several facts, with no single provider event behind it.
 	if o.PR.Merged {
 		base.Type = domain.NotificationPRMerged
+		base.CreatedAt = timeOr(o.PR.MergedAtProvider, base.CreatedAt)
 		return &base
 	}
 	if o.PR.Closed {
 		base.Type = domain.NotificationPRClosedUnmerged
+		base.CreatedAt = timeOr(o.PR.ClosedAtProvider, base.CreatedAt)
 		return &base
 	}
 	if rec.IsTerminated || rec.Activity.State.NeedsInput() || !ready {
@@ -610,6 +640,40 @@ func scmToPRObservation(o ports.SCMObservation) ports.PRObservation {
 	return pr
 }
 
+// withoutPRAuthorReplies drops the PR author's replies in review threads.
+// The worker uses the author's account, so a reply by the author is the
+// worker answering feedback (or the author answering it), not feedback for
+// the worker. A thread the author starts is kept: that is the author
+// reviewing their own PR, which the worker should act on. Comments arrive
+// oldest first, so a thread's first comment is its root.
+func withoutPRAuthorReplies(comments []domain.PullRequestComment, prAuthor string) []domain.PullRequestComment {
+	author := normalizeCommentAuthor(prAuthor)
+	if author == "" {
+		return comments
+	}
+	seenThread := make(map[string]bool, len(comments))
+	out := make([]domain.PullRequestComment, 0, len(comments))
+	for _, comment := range comments {
+		thread := strings.TrimSpace(comment.ThreadID)
+		reply := thread != "" && seenThread[thread]
+		if thread != "" {
+			seenThread[thread] = true
+		}
+		if reply && normalizeCommentAuthor(comment.Author) == author {
+			continue
+		}
+		out = append(out, comment)
+	}
+	return out
+}
+
+// normalizeCommentAuthor compares logins as GitHub does: case-insensitive,
+// with a leading "@" ignored. "[bot]" stays, so an app named after the
+// author is still a different author.
+func normalizeCommentAuthor(login string) string {
+	return strings.ToLower(strings.TrimPrefix(strings.TrimSpace(login), "@"))
+}
+
 func prCommentObservations(comments []domain.PullRequestComment) []ports.PRCommentObservation {
 	out := make([]ports.PRCommentObservation, 0, len(comments))
 	for _, comment := range comments {
@@ -627,6 +691,7 @@ func prCommentObservations(comments []domain.PullRequestComment) []ports.PRComme
 			URL:              comment.URL,
 			Resolved:         comment.Resolved,
 			AutoInjectReview: comment.AutoInjectReview,
+			CreatedAt:        comment.CreatedAt,
 		})
 	}
 	return out
@@ -850,6 +915,13 @@ func formatReviewChangesRequestedMessage(review domain.PullRequestReview) string
 		author = "unknown reviewer"
 	}
 	fmt.Fprintf(&msg, "A changes-requested review from @%s is on your PR.", author)
+	// When the reviewer submitted it, not when AO delivered it: a nudge held
+	// while the session waited on the user can arrive long after. The chat
+	// shows this time on the event row. It ends the first line, which older
+	// chat clients read only for the PR identity, so they still parse the rest.
+	if !review.SubmittedAt.IsZero() {
+		fmt.Fprintf(&msg, " Submitted at %s.", providerEventTime(review.SubmittedAt))
+	}
 	if body := domain.SanitizeControlChars(review.Body); strings.TrimSpace(body) != "" {
 		fmt.Fprintf(&msg, "\n\nReview body:\n%s", body)
 	}
@@ -868,7 +940,14 @@ func formatReviewCommentsMessage(comments []ports.PRCommentObservation) string {
 		return "A reviewer left feedback on your PR. Address it and push. Fetch the review details only if you need additional context beyond what Orchestrator has provided here."
 	}
 	var msg strings.Builder
-	fmt.Fprintf(&msg, "The following %d unresolved review comment(s) are on your PR as of just now. You should not need to re-fetch this data unless you need additional context.\n", len(comments))
+	fmt.Fprintf(&msg, "The following %d unresolved review comment(s) are on your PR as of just now. You should not need to re-fetch this data unless you need additional context.", len(comments))
+	// When the newest comment was written, not when AO delivered it; the chat
+	// shows this time on the event row. Like the changes-requested nudge, it
+	// ends the first line so older chat clients still parse the message.
+	if newest := newestCommentTime(comments); !newest.IsZero() {
+		fmt.Fprintf(&msg, " Newest comment posted at %s.", providerEventTime(newest))
+	}
+	msg.WriteString("\n")
 	for i, c := range comments {
 		location := "(general)"
 		if c.File != "" {
@@ -896,6 +975,22 @@ func formatReviewCommentsMessage(comments []ports.PRCommentObservation) string {
 	}
 	msg.WriteString("\nAddress each comment and push fixes. Use the thread ID to resolve each thread directly after pushing when available. You should not need to re-fetch review data unless you need additional context beyond what is provided here.")
 	return msg.String()
+}
+
+func newestCommentTime(comments []ports.PRCommentObservation) time.Time {
+	var newest time.Time
+	for _, c := range comments {
+		if c.CreatedAt.After(newest) {
+			newest = c.CreatedAt
+		}
+	}
+	return newest
+}
+
+// providerEventTime renders a provider timestamp for nudge text: UTC RFC 3339
+// to the second, which both agents and the chat's parser read unambiguously.
+func providerEventTime(t time.Time) string {
+	return t.UTC().Format(time.RFC3339)
 }
 
 func markdownCodeFence(s string) string {

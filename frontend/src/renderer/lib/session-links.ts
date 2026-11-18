@@ -178,10 +178,15 @@ export function isSessionLink(value: string): boolean {
 export function resolveSessionLink(value: string, workspaces: SessionLinkWorkspace[]): ResolvedSessionLink | undefined {
 	const target = parseSessionLink(value) ?? parseArtifactLink(value);
 	if (!target) return undefined;
-	const project = workspaces.find((workspace) => workspace.id === target.projectId);
-	const session = project?.sessions.find((candidate) => candidate.id === target.sessionId);
-	if (!session) return undefined;
-	return { projectId: target.projectId, sessionId: target.sessionId, isTerminated: session.isTerminated === true || session.status === "terminated" };
+	// Remote hosts merge into one list and each contributes its own standalone
+	// entry, so several workspaces can share an id; the first id match is not
+	// necessarily the one holding the session.
+	for (const workspace of workspaces) {
+		if (workspace.id !== target.projectId) continue;
+		const session = workspace.sessions.find((candidate) => candidate.id === target.sessionId);
+		if (session) return { projectId: target.projectId, sessionId: target.sessionId, isTerminated: session.isTerminated === true || session.status === "terminated" };
+	}
+	return undefined;
 }
 
 /** Find raw session and artifact links without swallowing prose punctuation adjacent to them. */

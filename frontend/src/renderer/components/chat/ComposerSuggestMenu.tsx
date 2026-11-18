@@ -13,7 +13,7 @@
  */
 
 import { useEffect, useRef } from "react";
-import { CornerDownLeft } from "@/components/app-icons";
+import { CornerDownLeft, Loader2 } from "@/components/app-icons";
 import { useEdgeFade } from "../../hooks/useEdgeFade";
 import { cn } from "../../lib/utils";
 import { PersonAvatar, TeamTile } from "../teams/TeamVisuals";
@@ -28,6 +28,7 @@ export function ComposerSuggestMenu({
 	highlighted,
 	onPick,
 	truncated,
+	loadingNote,
 }: {
 	/** Shared with the editor's `aria-controls`, so the pairing is announced. */
 	id: string;
@@ -37,6 +38,11 @@ export function ComposerSuggestMenu({
 	onPick: (value: string) => void;
 	/** The candidate list was capped by the daemon, so it is not exhaustive. */
 	truncated?: boolean;
+	/**
+	 * More candidates are still on their way. Shown as a quiet line, not a row, so
+	 * it can stand alone while nothing matches yet without taking Enter.
+	 */
+	loadingNote?: string;
 }) {
 	const list = useRef<HTMLUListElement>(null);
 	const previousHighlighted = useRef(highlighted);
@@ -57,7 +63,7 @@ export function ComposerSuggestMenu({
 		row?.scrollIntoView({ block: "nearest" });
 	}, [highlighted, items]);
 
-	if (items.length === 0) return null;
+	if (items.length === 0 && !loadingNote) return null;
 
 	const renderOption = (item: Suggestion, index: number) => {
 		const active = index === highlighted;
@@ -87,13 +93,27 @@ export function ComposerSuggestMenu({
 					<Icon aria-hidden="true" className="size-3.5 shrink-0 text-muted-foreground" />
 				) : null}
 				{/* Name first, then its description or folder on the same line,
-				    in smaller text, so a row stays one line tall. */}
+				    so a row stays one line tall. In the `/` menu the name is
+				    what the eye scans for, so it reads bright and its
+				    description stays quiet at the same size. A file's folder
+				    stays smaller. */}
 				<span className="flex min-w-0 flex-1 items-baseline gap-2">
-					<span className={cn("truncate", item.detail ? "max-w-3/5 shrink-0" : "min-w-0")}>
-						{kind === "skill" ? `/${item.label}` : item.label}
+					<span
+						className={cn(
+							"truncate",
+							item.detail ? "max-w-3/5 shrink-0" : "min-w-0",
+							kind === "skill" && "text-foreground",
+						)}
+					>
+						{item.label}
 					</span>
 					{item.detail ? (
-						<span className="min-w-0 flex-1 truncate text-caption text-muted-foreground">
+						<span
+							className={cn(
+								"min-w-0 flex-1 truncate text-muted-foreground",
+								kind === "file" && "text-caption",
+							)}
+						>
 							{item.detail}
 						</span>
 					) : null}
@@ -118,39 +138,54 @@ export function ComposerSuggestMenu({
 			// out of the textarea on its way to the click.
 			onMouseDown={(event) => event.preventDefault()}
 		>
-			<ul
-				ref={list}
-				id={id}
-				role="listbox"
-				// Rows are 32px, so the edge fade is short enough to leave a row readable.
-				// The scroll padding keeps a keyboard-highlighted row clear of it.
-				className="model-menu-scroll edge-fade flex max-h-64 scroll-py-4 flex-col overflow-y-auto overscroll-contain [--edge-fade-size:16px]"
-			>
-				{menuGroups(items).map((group) => group.section ? (
-					// A section is a group named for screen readers; its visible title says the same.
-					<li key={`section:${group.start}`} role="presentation">
-						<ul aria-label={group.section} className="flex flex-col" role="group">
-							<li
-								aria-hidden="true"
-								className={cn("px-2 pt-1.5 pb-1 text-caption text-muted-foreground", group.start > 0 && "mt-1")}
-								data-suggest-section=""
-								role="presentation"
-							>
-								{group.section}
-							</li>
-							{group.items.map((item, offset) => (
-								<li key={item.value} data-index={group.start + offset} role="presentation">
-									{renderOption(item, group.start + offset)}
+			{items.length > 0 ? (
+				<ul
+					ref={list}
+					id={id}
+					role="listbox"
+					// Rows are 32px, so the edge fade is short enough to leave a row readable.
+					// The scroll padding keeps a keyboard-highlighted row clear of it.
+					className="model-menu-scroll edge-fade flex max-h-64 scroll-py-4 flex-col overflow-y-auto overscroll-contain [--edge-fade-size:16px]"
+				>
+					{menuGroups(items).map((group) => group.section ? (
+						// A section is a group named for screen readers; its visible title says the same.
+						<li key={`section:${group.start}`} role="presentation">
+							<ul aria-label={group.section} className="flex flex-col" role="group">
+								<li
+									aria-hidden="true"
+									className={cn("px-2 pt-1.5 pb-1 text-caption text-muted-foreground", group.start > 0 && "mt-1")}
+									data-suggest-section=""
+									role="presentation"
+								>
+									{group.section}
 								</li>
-							))}
-						</ul>
-					</li>
-				) : group.items.map((item, offset) => (
-					<li key={item.value} data-index={group.start + offset} role="presentation">
-						{renderOption(item, group.start + offset)}
-					</li>
-				)))}
-			</ul>
+								{group.items.map((item, offset) => (
+									<li key={item.value} data-index={group.start + offset} role="presentation">
+										{renderOption(item, group.start + offset)}
+									</li>
+								))}
+							</ul>
+						</li>
+					) : group.items.map((item, offset) => (
+						<li key={item.value} data-index={group.start + offset} role="presentation">
+							{renderOption(item, group.start + offset)}
+						</li>
+					)))}
+				</ul>
+			) : null}
+
+			{loadingNote ? (
+				<p
+					role="status"
+					className={cn(
+						"flex h-8 items-center gap-2 px-2 text-xs text-muted-foreground",
+						items.length > 0 && "mt-1 border-t border-border",
+					)}
+				>
+					<Loader2 aria-hidden="true" className="size-3 shrink-0 animate-spin" />
+					{loadingNote}
+				</p>
+			) : null}
 
 			{truncated ? (
 				// Said out loud rather than letting a capped list read as the whole

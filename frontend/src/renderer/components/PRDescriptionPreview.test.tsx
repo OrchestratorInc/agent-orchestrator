@@ -62,13 +62,13 @@ describe("PRDescriptionPreview", () => {
     }
   });
 
-  it("counts the images and tables in a line under the text, loading no image in the card", async () => {
+  it("counts the images in a line under the text, loading no image in the card, and says nothing of tables", async () => {
     const { container } = renderPreview(summary({
       description: "Before and after:\n\n| a | b |\n| --- | --- |\n| ![Old](https://example.com/old.png) | <img alt=\"New\" src=\"https://example.com/new.png\"> |",
     }));
     expect(container.querySelector("img")).toBeNull();
     const media = within(screen.getByTestId("pr-description-media"));
-    expect(media.getByText("1 table")).toBeInTheDocument();
+    expect(media.queryByText(/table/)).not.toBeInTheDocument();
     await userEvent.click(media.getByRole("button", { name: "2 images" }));
     expect(within(screen.getByTestId("pr-image-gallery")).getByText("1 of 2")).toBeInTheDocument();
   });

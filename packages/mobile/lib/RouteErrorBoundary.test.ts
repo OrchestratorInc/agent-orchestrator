@@ -48,10 +48,10 @@ const screenRoutes = [
 
 const sheetRoutes = [
 	"cloud/new-project.tsx",
+	"sheets/account.tsx",
 	"sheets/agent.tsx",
 	"sheets/artifact-history.tsx",
 	"sheets/cloud-plan.tsx",
-	"sheets/composer-picker.tsx",
 	"sheets/conversation-usage.tsx",
 	"sheets/files-branch.tsx",
 	"sheets/files-changes.tsx",

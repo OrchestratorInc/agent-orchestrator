@@ -42,6 +42,16 @@ describe("session links", () => {
 		expect(resolveSessionLink("ao://sessions/p/missing", workspaces)).toBeUndefined();
 	});
 
+	it("searches every workspace sharing the project id before giving up", () => {
+		// Remote hosts merge into one list and each contributes its own
+		// standalone entry, so several workspaces can carry the same id.
+		const workspaces = [
+			{ id: "p", sessions: [{ id: "other" }] },
+			{ id: "p", sessions: [{ id: "s", status: "working" }] },
+		];
+		expect(resolveSessionLink("ao://sessions/p/s", workspaces)).toEqual({ projectId: "p", sessionId: "s", isTerminated: false });
+	});
+
 	it.each([
 		["ao://sessions/p/s/artifacts/plan.md", { projectId: "p", sessionId: "s", path: "plan.md" }],
 		["ao://sessions/p/s/artifacts/plans/my%20plan.md", { projectId: "p", sessionId: "s", path: "plans/my plan.md" }],
