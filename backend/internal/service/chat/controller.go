@@ -2065,14 +2065,6 @@ func (c *Controller) dispatch(
 			c.log.Error("failed to settle queued batch", "error", err)
 		}
 	}
-	recordAcceptance := func() error {
-		providerAccepted = true
-		if err := c.store.MarkQueuedBatchStarted(context.WithoutCancel(ctx), c.conversation.ID, followers, c.now()); err != nil {
-			failFollowers("batch acceptance could not be recorded: " + err.Error())
-			return fmt.Errorf("record batch acceptance: %w", err)
-		}
-		return nil
-	}
 	// A provider can accept this turn and then lose its SQLite binding to ENOSPC.
 	// Move it out of the durable queue before crossing that boundary, or a live
 	// reconnect can drain the same prompt after the provider completes it. ACP's
@@ -2122,8 +2114,9 @@ func (c *Controller) dispatch(
 	}
 
 	if !hasDeferredStart {
-		if err := recordAcceptance(); err != nil {
-			return domain.ConversationTurn{}, err
+		providerAccepted = true
+		if err := c.store.MarkQueuedBatchStarted(context.WithoutCancel(ctx), c.conversation.ID, followers, c.now()); err != nil {
+			c.log.Error("failed to record queued batch acceptance", "error", err)
 		}
 	}
 	if err := c.store.BindTurnToProvider(ctx, turnID, ref.ProviderTurnID, c.now()); err != nil {

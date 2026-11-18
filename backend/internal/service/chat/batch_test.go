@@ -505,6 +505,53 @@ func TestFailedSteerFallbackSettlesClaimedBatch(t *testing.T) {
 	}
 }
 
+func TestBatchReceiptWriteFailurePreservesAcceptedInput(t *testing.T) {
+	ctx := context.Background()
+	t.Run("dispatch", func(t *testing.T) {
+		provider := newFakeConversation()
+		h := newHarnessWithConversationAndStore(t, provider, func(st *store.Store) chatsvc.Store {
+			return &failedBatchAcceptanceStore{Store: &batchAcceptanceStore{Store: st}}
+		})
+		for _, text := range []string{"active", "leader", "follower"} {
+			if _, err := h.svc.Send(ctx, testSession, ports.ChatUserMessage{Text: text, ClientMessageID: text, Origin: domain.MessageOriginAutomation}); err != nil {
+				t.Fatal(err)
+			}
+		}
+		provider.emit(ports.ChatEvent{Kind: ports.ChatEventTurnCompleted, ProviderTurnID: "provider-turn-1", TurnState: domain.TurnStateCompleted})
+		h.awaitSnapshot(t, func(s store.ConversationSnapshot) bool {
+			return turnStateByText(t, s)["follower"] == domain.TurnStateFailed
+		})
+		leader, err := h.st.TurnByProviderID(ctx, h.ctrl.ConversationID(), "provider-turn-2")
+		if err != nil || leader.State != domain.TurnStateRunning {
+			t.Fatalf("accepted leader: state=%s err=%v, want bound and running", leader.State, err)
+		}
+		next, err := h.svc.Send(ctx, testSession, ports.ChatUserMessage{Text: "next", ClientMessageID: "next", Origin: domain.MessageOriginAutomation})
+		if err != nil || next.State != domain.TurnStateQueued {
+			t.Fatalf("next send: state=%s err=%v, want queued behind accepted leader", next.State, err)
+		}
+	})
+	for _, clientID := range []string{"steer", ""} {
+		t.Run("steer="+clientID, func(t *testing.T) {
+			h, provider := steerHarnessWithStore(t, func(st *store.Store) chatsvc.Store {
+				return &failedBatchAcceptanceStore{Store: st}
+			})
+			if _, err := h.svc.Send(ctx, testSession, ports.ChatUserMessage{Text: "follower", ClientMessageID: "follower", Origin: domain.MessageOriginAutomation}); err != nil {
+				t.Fatal(err)
+			}
+			const guidance = "summarize the result"
+			_, steerErr := h.svc.Steer(ctx, testSession, ports.ChatUserMessage{Text: guidance, ClientMessageID: clientID, Origin: domain.MessageOriginHuman})
+			snapshot, err := h.st.LoadConversationSnapshot(ctx, h.ctrl.ConversationID())
+			if err != nil {
+				t.Fatal(err)
+			}
+			markers := steerMarkers(snapshot)
+			if len(provider.steers()) != 1 || len(markers) != 1 || markers[0].detail.Text != guidance || steerErr != nil {
+				t.Fatalf("accepted steer: calls=%d transcript entries=%d err=%v, want one recorded steer", len(provider.steers()), len(markers), steerErr)
+			}
+		})
+	}
+}
+
 func TestSteerFlushesPendingChatMessages(t *testing.T) {
 	h, provider := steerHarness(t)
 	ctx := context.Background()

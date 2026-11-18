@@ -548,8 +548,7 @@ func (c *Controller) steerLocked(ctx context.Context, msg ports.ChatUserMessage)
 		landed = turn
 	}
 	if err := c.store.MarkQueuedBatchStarted(context.WithoutCancel(ctx), c.conversation.ID, queuedBatchIDs(batch), c.now()); err != nil {
-		settleErr := c.store.FailQueuedBatch(context.WithoutCancel(ctx), c.conversation.ID, queuedBatchIDs(batch), ErrSteerDeliveryUncertain.Error(), c.now(), true)
-		return SteerResult{ProviderTurnID: landed}, fmt.Errorf("%w: record batch acceptance: %w", ErrSteerDeliveryUncertain, errors.Join(err, settleErr))
+		c.log.Error("failed to record steered batch acceptance", "error", err)
 	}
 	providerInput := steerProviderInput{
 		Text: providerMessage.Text, Content: providerMessage.Content,
