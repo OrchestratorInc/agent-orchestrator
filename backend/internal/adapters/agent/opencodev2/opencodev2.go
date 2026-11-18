@@ -8,6 +8,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"path/filepath"
 	"strings"
 	"sync"
 	"time"
@@ -114,6 +115,45 @@ func sharedServerEnvConfig(content string) bool {
 	return false
 }
 
+// projectConfigOwner names the session whose agent the worktree config selects,
+// or "" when the file is absent, unreadable as JSON, or not AO-generated. Only
+// AO's own documents (default_agent with the ao- prefix) identify a session.
+func projectConfigOwner(workspacePath string) (string, error) {
+	data, err := os.ReadFile(filepath.Join(workspacePath, ".opencode", projectConfigFileName))
+	if errors.Is(err, os.ErrNotExist) {
+		return "", nil
+	}
+	if err != nil {
+		return "", fmt.Errorf("opencode-v2: read project config: %w", err)
+	}
+	var config struct {
+		DefaultAgent string `json:"default_agent"`
+	}
+	// A config another tool wrote is not AO's concern: an unparsable document
+	// has no AO agent name, so the workspace counts as not owned by a session.
+	if err := json.Unmarshal(data, &config); err != nil {
+		return "", nil //nolint:nilerr // unparsable config has no AO agent, not a failure
+	}
+	if !strings.HasPrefix(config.DefaultAgent, "ao-") {
+		return "", nil
+	}
+	return config.DefaultAgent, nil
+}
+
+// defaultAgentConfig is the minimal document that keeps a private launch on
+// its own AO agent when the worktree config belongs to another session.
+func defaultAgentConfig(sessionID string) (string, error) {
+	name := aoAgentName(sessionID)
+	data, err := json.Marshal(map[string]any{
+		"agents":        map[string]any{name: map[string]any{"mode": "primary"}},
+		"default_agent": name,
+	})
+	if err != nil {
+		return "", fmt.Errorf("opencode-v2: encode default agent config: %w", err)
+	}
+	return string(data), nil
+}
+
 // The v2 root TUI has no --model/--agent flags. AO normally attaches the TUI
 // to one shared OpenCode 2 server and selects the AO agent through the
 // worktree's project config. A launch that cannot use the shared server keeps
@@ -172,8 +212,24 @@ func (p *Plugin) command(ctx context.Context, binary string, cfg ports.LaunchCon
 		p.forgetSharedPassword(cfg.SessionID)
 		// OpenCode 2 ignores inline config when a client attaches to a shared
 		// server, so a launch that cannot use one keeps the private-server path.
-		if content != "" {
-			envArgs = append(envArgs, "OPENCODE_CONFIG_CONTENT="+content)
+		injected := content
+		if injected == "" {
+			// A project config generated for another session would apply that
+			// session's agent, model, prompt, and permissions here. Pass this
+			// session's own minimal config inline instead of inheriting it.
+			owner, err := projectConfigOwner(cfg.WorkspacePath)
+			if err != nil {
+				return nil, err
+			}
+			if owner != "" && owner != aoAgentName(cfg.SessionID) {
+				injected, err = defaultAgentConfig(cfg.SessionID)
+				if err != nil {
+					return nil, err
+				}
+			}
+		}
+		if injected != "" {
+			envArgs = append(envArgs, "OPENCODE_CONFIG_CONTENT="+injected)
 		}
 		cmd = append([]string{"env"}, envArgs...)
 		cmd = append(cmd, binary, "--standalone")

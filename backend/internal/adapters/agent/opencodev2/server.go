@@ -2,6 +2,9 @@ package opencodev2
 
 import (
 	"context"
+	"crypto/rand"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -12,6 +15,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"sort"
 	"strconv"
 	"strings"
 	"sync"
@@ -25,9 +29,10 @@ import (
 const (
 	projectConfigFileName    = "opencode.json"
 	projectConfigTempPattern = ".ao-tmp-*"
-	projectConfigTempProbe   = ".ao-tmp-probe"
+	projectConfigTempPrefix  = ".ao-tmp-"
 	serverStateFileName      = "opencode-v2-server.json"
 	serverStartTimeout       = 20 * time.Second
+	serverStopTimeout        = 5 * time.Second
 	serverProbeTimeout       = 2 * time.Second
 	serverDialTimeout        = 500 * time.Millisecond
 )
@@ -49,12 +54,49 @@ type serverHandle struct {
 type persistedServer struct {
 	URL      string `json:"url"`
 	Password string `json:"password"`
+	// EnvHash records the environment the server was started with. A server can
+	// outlive the daemon; without this, a reattach would reuse provider settings
+	// that the current launch no longer has.
+	EnvHash string `json:"env_hash,omitempty"`
 }
 
+// contextMutex is a mutex whose Lock can be abandoned when the launch context
+// is canceled. The registry lock is held across server startup, so a plain
+// sync.Mutex would pin a canceled launch until the other holder finished.
+type contextMutex struct {
+	token chan struct{}
+}
+
+func newContextMutex() *contextMutex {
+	mu := &contextMutex{token: make(chan struct{}, 1)}
+	mu.token <- struct{}{}
+	return mu
+}
+
+func (m *contextMutex) Lock(ctx context.Context) error {
+	select {
+	case <-m.token:
+		return nil
+	case <-ctx.Done():
+		return ctx.Err()
+	}
+}
+
+func (m *contextMutex) TryLock() bool {
+	select {
+	case <-m.token:
+		return true
+	default:
+		return false
+	}
+}
+
+func (m *contextMutex) Unlock() { m.token <- struct{}{} }
+
 var sharedServerRegistry = struct {
-	mu    sync.Mutex
+	mu    *contextMutex
 	byDir map[string]*serverHandle
-}{byDir: map[string]*serverHandle{}}
+}{mu: newContextMutex(), byDir: map[string]*serverHandle{}}
 
 // prepareSharedServer writes the session's project config and returns the AO
 // server that launch should attach to. OpenCode 2 only resolves per-session
@@ -66,8 +108,28 @@ func prepareSharedServer(ctx context.Context, binary string, cfg ports.LaunchCon
 	}
 	// Serialize preparations for one worktree so two launches cannot publish
 	// different config documents or inspect each other's half-written state.
-	release := lockWorkspacePreparation(cfg.WorkspacePath)
+	release, err := lockWorkspacePreparation(ctx, cfg.WorkspacePath)
+	if err != nil {
+		return sharedServer{}, err
+	}
 	defer release()
+	tempName, err := projectConfigTempName()
+	if err != nil {
+		return sharedServer{}, err
+	}
+	if content == "" {
+		// A config generated for another session would apply that session's
+		// agent, model, prompt, and permissions to this launch. Do not attach a
+		// shared server; the private path writes this session's own minimal
+		// config over it instead of inheriting the foreign document.
+		owner, err := projectConfigOwner(cfg.WorkspacePath)
+		if err != nil {
+			return sharedServer{}, err
+		}
+		if owner != "" && owner != aoAgentName(cfg.SessionID) {
+			return sharedServer{}, errProjectConfigForeign
+		}
+	}
 	writeConfig, err := checkProjectConfig(cfg.WorkspacePath, content)
 	if err != nil {
 		return sharedServer{}, err
@@ -75,7 +137,7 @@ func prepareSharedServer(ctx context.Context, binary string, cfg ports.LaunchCon
 	if writeConfig {
 		// Refuse before a server starts, so the launch can still fall back to a
 		// private server without leaving a file Git would show.
-		if err := projectConfigPublishable(ctx, cfg.WorkspacePath); err != nil {
+		if err := projectConfigPublishable(ctx, cfg.WorkspacePath, tempName); err != nil {
 			return sharedServer{}, err
 		}
 	}
@@ -93,7 +155,7 @@ func prepareSharedServer(ctx context.Context, binary string, cfg ports.LaunchCon
 	// branch switch, or another checkout may have changed the file or the
 	// ignore rules the early check saw. The server now owns the data home, so a
 	// conflict has to fail the launch instead of falling back privately.
-	if err := revalidateProjectConfig(ctx, cfg.WorkspacePath, content); err != nil {
+	if err := revalidateProjectConfig(ctx, cfg.WorkspacePath, content, tempName); err != nil {
 		return sharedServer{}, fmt.Errorf("%w: %w", errSharedServerConfig, err)
 	}
 	return server, nil
@@ -103,7 +165,7 @@ func prepareSharedServer(ctx context.Context, binary string, cfg ports.LaunchCon
 // server start, when the first check may be stale. It reuses an identical file,
 // publishes an absent one only while Git still ignores an untracked path, and
 // fails on a conflicting file.
-func revalidateProjectConfig(ctx context.Context, workspacePath, content string) error {
+func revalidateProjectConfig(ctx context.Context, workspacePath, content, tempName string) error {
 	writeConfig, err := checkProjectConfig(workspacePath, content)
 	if err != nil {
 		return err
@@ -111,10 +173,10 @@ func revalidateProjectConfig(ctx context.Context, workspacePath, content string)
 	if !writeConfig {
 		return nil
 	}
-	if err := projectConfigPublishable(ctx, workspacePath); err != nil {
+	if err := projectConfigPublishable(ctx, workspacePath, tempName); err != nil {
 		return err
 	}
-	_, err = writeProjectConfig(workspacePath, content)
+	_, err = writeProjectConfig(workspacePath, content, tempName)
 	return err
 }
 
@@ -127,6 +189,10 @@ var (
 	// could not publish its project config. A private fallback would again share
 	// the data home, so the launch must fail.
 	errSharedServerConfig = errors.New("opencode-v2: shared server project config could not be published")
+	// errProjectConfigForeign means the worktree holds a config generated for a
+	// different session. Attaching the shared server would apply that session's
+	// settings here, so this launch takes the private path with its own config.
+	errProjectConfigForeign = errors.New("opencode-v2: workspace config belongs to another session")
 )
 
 // checkProjectConfig reports whether content needs to be written. A different
@@ -202,7 +268,9 @@ func ensureSharedServer(ctx context.Context, binary, dataDir, dataHome string) (
 		key = dataHome
 	}
 
-	sharedServerRegistry.mu.Lock()
+	if err := sharedServerRegistry.mu.Lock(ctx); err != nil {
+		return sharedServer{}, err
+	}
 	defer sharedServerRegistry.mu.Unlock()
 
 	if handle, ok := sharedServerRegistry.byDir[key]; ok {
@@ -210,34 +278,53 @@ func ensureSharedServer(ctx context.Context, binary, dataDir, dataHome string) (
 			return handle.server, nil
 		}
 		if handle.cmd != nil {
-			// This process still owns a server for the data dir. Keep the handle
-			// so a later launch can reuse it if it recovers, and never start a
-			// second server while the first one runs: both would write to the
-			// same data home. This launch falls back to a private server.
-			return sharedServer{}, errSharedServerUnavailable
+			// A process that has exited no longer owns the data home; drop the
+			// handle so a later launch can start a fresh server.
+			if handle.done != nil && isClosed(handle.done) {
+				delete(sharedServerRegistry.byDir, key)
+			} else {
+				// This process still owns a server for the data dir. Keep the
+				// handle so a later launch can reuse it if it recovers, and never
+				// start a second server while the first one runs: both would write
+				// to the same data home. This launch falls back to a private server.
+				return sharedServer{}, errSharedServerUnavailable
+			}
+		} else {
+			// A reattached handle has no process to inspect. Only replace it after
+			// the endpoint itself stops listening; a listening but unhealthy server
+			// may still own the data home and must not get a duplicate.
+			if serverListening(handle.server.url) {
+				return sharedServer{}, fmt.Errorf("%w: endpoint is listening but not healthy", errSharedServerUnavailable)
+			}
+			delete(sharedServerRegistry.byDir, key)
 		}
-		// A reattached handle has no process to inspect. Only replace it after
-		// the endpoint itself stops listening; a listening but unhealthy server
-		// may still own the data home and must not get a duplicate.
-		if serverListening(handle.server.url) {
-			return sharedServer{}, fmt.Errorf("%w: endpoint is listening but not healthy", errSharedServerUnavailable)
-		}
-		delete(sharedServerRegistry.byDir, key)
 	}
 	if dataDir != "" {
 		if persisted, ok := readPersistedServer(dataDir); ok {
 			server := sharedServer{url: persisted.URL, password: persisted.Password}
-			if serverHealthy(server.url, server.password) {
+			if persisted.EnvHash != sharedServerEnvHash() {
+				// A server that outlived the daemon keeps the environment it was
+				// started with. Reusing it would serve this launch with stale
+				// provider settings; starting another one would duplicate the data
+				// home. Fail until that server is gone.
+				if serverListening(server.url) {
+					return sharedServer{}, fmt.Errorf("%w: persisted server was started with a different environment", errSharedServerUnavailable)
+				}
+				// The record only blocks a fresh start; its endpoint is gone.
+				_ = os.Remove(filepath.Join(dataDir, serverStateFileName))
+			} else if serverHealthy(server.url, server.password) {
 				sharedServerRegistry.byDir[key] = &serverHandle{server: server}
 				return server, nil
-			}
-			if serverListening(server.url) {
+			} else if serverListening(server.url) {
 				sharedServerRegistry.byDir[key] = &serverHandle{server: server}
 				return sharedServer{}, fmt.Errorf("%w: persisted endpoint is listening but not healthy", errSharedServerUnavailable)
 			}
 		}
 	}
 
+	if err := ctx.Err(); err != nil {
+		return sharedServer{}, err
+	}
 	port, err := freePort()
 	if err != nil {
 		return sharedServer{}, fmt.Errorf("opencode-v2: pick server port: %w", err)
@@ -253,10 +340,13 @@ func ensureSharedServer(ctx context.Context, binary, dataDir, dataHome string) (
 	}
 	done := make(chan struct{})
 	handle := &serverHandle{cmd: cmd, done: done}
-	go func() {
+	// The launch context ends when the launch returns, but the server keeps
+	// running; reaping it must survive the launch, so a detached goroutine with
+	// its own context is correct here.
+	go func() { //nolint:gosec // reaps a server that outlives the launch context
 		_ = cmd.Wait()
 		close(done)
-		sharedServerRegistry.mu.Lock()
+		_ = sharedServerRegistry.mu.Lock(context.Background())
 		if sharedServerRegistry.byDir[key] == handle {
 			delete(sharedServerRegistry.byDir, key)
 		}
@@ -266,7 +356,21 @@ func ensureSharedServer(ctx context.Context, binary, dataDir, dataHome string) (
 	password, err := waitForSharedServer(ctx, url, output, done)
 	if err != nil {
 		_ = cmd.Process.Kill()
-		return sharedServer{}, err
+		// Returning a fallback-eligible error while the child could still run
+		// would start a private server against the same data home. Wait for the
+		// process to exit; if it does not, keep its handle so later launches see
+		// an owner and fail too.
+		select {
+		case <-done:
+			return sharedServer{}, err
+		case <-time.After(serverStopTimeout):
+			if isClosed(done) {
+				return sharedServer{}, err
+			}
+			handle.server = sharedServer{url: url}
+			sharedServerRegistry.byDir[key] = handle
+			return sharedServer{}, fmt.Errorf("%w: shared server did not stop after a startup failure", errSharedServerUnavailable)
+		}
 	}
 	server := sharedServer{url: url, password: password}
 	handle.server = server
@@ -315,22 +419,76 @@ func serverListening(rawURL string) bool {
 	return true
 }
 
+// serverProbeClient never follows redirects: the endpoint is a loopback
+// address this process picked, so a redirect would only send the probe to a
+// destination the server chose.
+var serverProbeClient = &http.Client{
+	Timeout: serverProbeTimeout,
+	CheckRedirect: func(*http.Request, []*http.Request) error {
+		return http.ErrUseLastResponse
+	},
+}
+
+// serverHealthy reports whether url answers as the AO-owned OpenCode server.
+// A bare 200 is not identity: a persisted loopback port can be reused by an
+// unrelated service, so the password must authenticate, an unauthenticated
+// request must be rejected, and the body must be the info document.
 func serverHealthy(url, password string) bool {
-	client := &http.Client{Timeout: serverProbeTimeout}
+	var info struct {
+		Version string `json:"version"`
+		PID     int    `json:"pid"`
+	}
+	if !probeInfo(url, password, &info) || info.Version == "" || info.PID <= 0 {
+		return false
+	}
+	return probeInfoStatus(url, "") == http.StatusUnauthorized
+}
+
+func probeInfo(url, password string, out any) bool {
 	req, err := http.NewRequest(http.MethodGet, url+"/api/info", http.NoBody)
 	if err != nil {
 		return false
 	}
 	req.SetBasicAuth("opencode", password)
-	resp, err := client.Do(req)
+	resp, err := serverProbeClient.Do(req)
 	if err != nil {
 		return false
 	}
-	defer func() {
-		_, _ = io.Copy(io.Discard, resp.Body)
-		_ = resp.Body.Close()
-	}()
-	return resp.StatusCode == http.StatusOK
+	defer closeProbeBody(resp)
+	if resp.StatusCode != http.StatusOK {
+		return false
+	}
+	return json.NewDecoder(io.LimitReader(resp.Body, 64<<10)).Decode(out) == nil
+}
+
+func probeInfoStatus(url, password string) int {
+	req, err := http.NewRequest(http.MethodGet, url+"/api/info", http.NoBody)
+	if err != nil {
+		return 0
+	}
+	if password != "" {
+		req.SetBasicAuth("opencode", password)
+	}
+	resp, err := serverProbeClient.Do(req)
+	if err != nil {
+		return 0
+	}
+	defer closeProbeBody(resp)
+	return resp.StatusCode
+}
+
+func closeProbeBody(resp *http.Response) {
+	_, _ = io.Copy(io.Discard, io.LimitReader(resp.Body, 64<<10))
+	_ = resp.Body.Close()
+}
+
+func isClosed(ch <-chan struct{}) bool {
+	select {
+	case <-ch:
+		return true
+	default:
+		return false
+	}
 }
 
 func freePort() (int, error) {
@@ -406,18 +564,36 @@ func persistServer(dataDir string, server sharedServer) {
 		return
 	}
 	//nolint:gosec // G117: this 0600 file exists so the daemon can reattach to its own loopback server; the value is never logged.
-	data, err := json.Marshal(persistedServer{URL: server.url, Password: server.password})
+	data, err := json.Marshal(persistedServer{URL: server.url, Password: server.password, EnvHash: sharedServerEnvHash()})
 	if err != nil {
 		return
 	}
 	_ = hookutil.AtomicWriteFile(filepath.Join(dataDir, serverStateFileName), data, 0o600)
 }
 
+// sharedServerEnvHash fingerprints the environment a server starts with. It
+// covers the provider and tool variables a relaunch could change, but not the
+// data home or OpenCode's own config inputs, which are passed per launch.
+func sharedServerEnvHash() string {
+	env := os.Environ()
+	sort.Strings(env)
+	hash := sha256.New()
+	for _, kv := range env {
+		name, _, _ := strings.Cut(kv, "=")
+		if !sharedServerRelevantEnv(name) || name == "XDG_DATA_HOME" || strings.HasPrefix(name, "OPENCODE_") {
+			continue
+		}
+		_, _ = hash.Write([]byte(kv))
+		_, _ = hash.Write([]byte{0})
+	}
+	return hex.EncodeToString(hash.Sum(nil))
+}
+
 // writeProjectConfig writes the same config document the private-server path
 // passes inline. It stages the content under an ignored temp name and publishes
 // it with a hard link, so the config appears complete rather than partial and
 // the link fails instead of replacing another writer's file.
-func writeProjectConfig(workspacePath, content string) (bool, error) {
+func writeProjectConfig(workspacePath, content, tempName string) (bool, error) {
 	if content == "" {
 		return false, nil
 	}
@@ -426,13 +602,13 @@ func writeProjectConfig(workspacePath, content string) (bool, error) {
 	if err := os.MkdirAll(dir, 0o750); err != nil {
 		return false, fmt.Errorf("opencode-v2: create project config dir: %w", err)
 	}
-	// projectConfigPublishable proved the temp pattern is ignored, so a
+	// projectConfigPublishable proved this exact name is ignored, so a
 	// concurrent `git add -A` cannot stage the staging file.
-	file, err := os.CreateTemp(dir, projectConfigTempPattern)
+	temp := filepath.Join(dir, tempName)
+	file, err := os.OpenFile(temp, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o600) //nolint:gosec // tempName is generated below the caller-owned worktree
 	if err != nil {
 		return false, fmt.Errorf("opencode-v2: create project config temp file: %w", err)
 	}
-	temp := file.Name()
 	defer func() { _ = os.Remove(temp) }()
 	if _, err := file.WriteString(content); err != nil {
 		_ = file.Close()
@@ -467,18 +643,21 @@ func writeProjectConfig(workspacePath, content string) (bool, error) {
 // yet; ls-files then rejects a tracked path, because Git does not apply ignore
 // rules to tracked files and recreating one would surface AO's content as a
 // modification.
-func projectConfigPublishable(ctx context.Context, workspacePath string) error {
+func projectConfigPublishable(ctx context.Context, workspacePath, tempName string) error {
 	rel := filepath.ToSlash(filepath.Join(".opencode", projectConfigFileName))
 	if err := requireIgnored(ctx, workspacePath, rel); err != nil {
 		return err
 	}
-	if err := requireIgnored(ctx, workspacePath, filepath.ToSlash(filepath.Join(".opencode", projectConfigTempProbe))); err != nil {
+	// Check the exact staging name: a foreign ignore file could cover a probe
+	// literal without covering the name this attempt creates.
+	if err := requireIgnored(ctx, workspacePath, filepath.ToSlash(filepath.Join(".opencode", tempName))); err != nil {
 		return err
 	}
 	// Any output means the path is tracked. A Git failure must not read as
 	// "untracked": with a corrupt index ls-files exits non-zero and says
 	// nothing about the path, so publication fails closed instead.
 	tracked := aoprocess.CommandContext(ctx, "git", "-C", workspacePath, "ls-files", "-z", "--", rel)
+	tracked.Env = projectConfigGitEnv()
 	var trackedOut strings.Builder
 	tracked.Stdout = &trackedOut
 	tracked.Stderr = io.Discard
@@ -491,8 +670,35 @@ func projectConfigPublishable(ctx context.Context, workspacePath string) error {
 	return nil
 }
 
+// projectConfigGitEnv removes Git variables that would point the inspection at
+// another repository or index. The caller's launch environment can carry them
+// for their own tooling, but they must not decide what this worktree tracks.
+func projectConfigGitEnv() []string {
+	env := os.Environ()
+	clean := make([]string, 0, len(env))
+	for _, kv := range env {
+		name, _, _ := strings.Cut(kv, "=")
+		switch name {
+		case "GIT_DIR", "GIT_WORK_TREE", "GIT_INDEX_FILE", "GIT_COMMON_DIR", "GIT_NAMESPACE",
+			"GIT_OBJECT_DIRECTORY", "GIT_ALTERNATE_OBJECT_DIRECTORIES", "GIT_PREFIX":
+			continue
+		}
+		clean = append(clean, kv)
+	}
+	return clean
+}
+
+func projectConfigTempName() (string, error) {
+	var raw [8]byte
+	if _, err := rand.Read(raw[:]); err != nil {
+		return "", fmt.Errorf("opencode-v2: name project config temp file: %w", err)
+	}
+	return projectConfigTempPrefix + hex.EncodeToString(raw[:]), nil
+}
+
 func requireIgnored(ctx context.Context, workspacePath, rel string) error {
 	ignore := aoprocess.CommandContext(ctx, "git", "-C", workspacePath, "check-ignore", "-q", "--no-index", "--", rel)
+	ignore.Env = projectConfigGitEnv()
 	if ignore.Run() != nil {
 		return fmt.Errorf("opencode-v2: workspace does not ignore %s", rel)
 	}
@@ -500,7 +706,7 @@ func requireIgnored(ctx context.Context, workspacePath, rel string) error {
 }
 
 type workspacePreparation struct {
-	mu   sync.Mutex
+	mu   *contextMutex
 	refs int
 }
 
@@ -509,18 +715,26 @@ var workspacePreparations = struct {
 	byDir map[string]*workspacePreparation
 }{byDir: map[string]*workspacePreparation{}}
 
-func lockWorkspacePreparation(workspacePath string) func() {
+func lockWorkspacePreparation(ctx context.Context, workspacePath string) (func(), error) {
 	key := filepath.Clean(workspacePath)
 	workspacePreparations.mu.Lock()
 	preparation := workspacePreparations.byDir[key]
 	if preparation == nil {
-		preparation = &workspacePreparation{}
+		preparation = &workspacePreparation{mu: newContextMutex()}
 		workspacePreparations.byDir[key] = preparation
 	}
 	preparation.refs++
 	workspacePreparations.mu.Unlock()
 
-	preparation.mu.Lock()
+	if err := preparation.mu.Lock(ctx); err != nil {
+		workspacePreparations.mu.Lock()
+		preparation.refs--
+		if preparation.refs == 0 {
+			delete(workspacePreparations.byDir, key)
+		}
+		workspacePreparations.mu.Unlock()
+		return nil, err
+	}
 	return func() {
 		preparation.mu.Unlock()
 		workspacePreparations.mu.Lock()
@@ -529,5 +743,5 @@ func lockWorkspacePreparation(workspacePath string) func() {
 			delete(workspacePreparations.byDir, key)
 		}
 		workspacePreparations.mu.Unlock()
-	}
+	}, nil
 }

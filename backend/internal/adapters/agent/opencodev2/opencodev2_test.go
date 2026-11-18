@@ -458,20 +458,7 @@ func TestV2LaunchUsesSharedServerAndWritesProjectConfig(t *testing.T) {
 	}
 	fakeBinary(t, "2.0.0")
 	const password = "shared-server-password"
-	var gotUser, gotPassword string
-	info := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.URL.Path != "/api/info" {
-			http.NotFound(w, r)
-			return
-		}
-		gotUser, gotPassword, _ = r.BasicAuth()
-		if gotUser != "opencode" || gotPassword != password {
-			w.WriteHeader(http.StatusUnauthorized)
-			return
-		}
-		w.WriteHeader(http.StatusOK)
-	}))
-	defer info.Close()
+	info := opencodeInfoServer(t, password)
 
 	dataDir := t.TempDir()
 	persistServer(dataDir, sharedServer{url: info.URL, password: password})
@@ -487,9 +474,6 @@ func TestV2LaunchUsesSharedServerAndWritesProjectConfig(t *testing.T) {
 	})
 	if err != nil {
 		t.Fatal(err)
-	}
-	if gotUser != "opencode" || gotPassword != password {
-		t.Fatalf("health probe auth = %q/%q", gotUser, gotPassword)
 	}
 	if !containsArg(cmd, "--server", info.URL) {
 		t.Fatalf("argv = %#v, want --server %s", cmd, info.URL)
@@ -543,14 +527,7 @@ func TestV2SharedServerFallsBackWhenWorkspaceConfigExists(t *testing.T) {
 		t.Skip("POSIX executable fixture")
 	}
 	fakeBinary(t, "2.0.0")
-	info := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.URL.Path == "/api/info" {
-			w.WriteHeader(http.StatusOK)
-			return
-		}
-		http.NotFound(w, r)
-	}))
-	defer info.Close()
+	info := healthyInfoServer(t)
 
 	dataDir := t.TempDir()
 	persistServer(dataDir, sharedServer{url: info.URL, password: "pw"})
@@ -615,14 +592,7 @@ func TestV2ProviderEnvDriftKeepsPrivateServer(t *testing.T) {
 	fakeBinary(t, "2.0.0")
 	t.Setenv("AWS_PROFILE", "work")
 	t.Setenv("OPENCODE_CONFIG_CONTENT", "")
-	info := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.URL.Path == "/api/info" {
-			w.WriteHeader(http.StatusOK)
-			return
-		}
-		http.NotFound(w, r)
-	}))
-	defer info.Close()
+	info := healthyInfoServer(t)
 	dataDir := t.TempDir()
 	persistServer(dataDir, sharedServer{url: info.URL, password: "pw"})
 
@@ -694,14 +664,7 @@ func TestV2DaemonInlineConfigKeepsPrivateServer(t *testing.T) {
 
 func TestV2SharedServerNeedsKnownLaunchEnvironment(t *testing.T) {
 	fakeBinary(t, "2.0.0")
-	info := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.URL.Path == "/api/info" {
-			w.WriteHeader(http.StatusOK)
-			return
-		}
-		http.NotFound(w, r)
-	}))
-	defer info.Close()
+	info := healthyInfoServer(t)
 	dataDir := t.TempDir()
 	persistServer(dataDir, sharedServer{url: info.URL, password: "pw"})
 	workspace := sharedWorkspace(t)
@@ -739,14 +702,7 @@ func TestV2SharedServerNeedsKnownLaunchEnvironment(t *testing.T) {
 
 func TestV2RestoreForwardsLaunchEnvironmentToSharedServer(t *testing.T) {
 	fakeBinary(t, "2.0.0")
-	info := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.URL.Path == "/api/info" {
-			w.WriteHeader(http.StatusOK)
-			return
-		}
-		http.NotFound(w, r)
-	}))
-	defer info.Close()
+	info := healthyInfoServer(t)
 	dataDir := t.TempDir()
 	persistServer(dataDir, sharedServer{url: info.URL, password: "pw"})
 	workspace := sharedWorkspace(t)
@@ -919,14 +875,28 @@ func TestPrepareSharedServerWritesConfigOnlyAfterServerReady(t *testing.T) {
 	workspace := sharedWorkspace(t)
 	configPath := filepath.Join(workspace, ".opencode", projectConfigFileName)
 	dataDir := t.TempDir()
-	done := make(chan error, 1)
+	result := make(chan error, 1)
+	finished := make(chan struct{})
+	// A failed assertion must not strand the fixture: the server script blocks
+	// on the release file and the registry lock dies with the test binary's
+	// wait, so release it and wait for the launch to return even when the test
+	// aborts.
+	t.Cleanup(func() {
+		_ = os.WriteFile(release, nil, 0o600)
+		select {
+		case <-finished:
+		case <-time.After(serverStopTimeout):
+			t.Error("server fixture did not exit after release")
+		}
+	})
 	go func() {
+		defer close(finished)
 		_, err := prepareSharedServer(context.Background(), binary, ports.LaunchConfig{
 			DataDir:       dataDir,
 			WorkspacePath: workspace,
 			SessionID:     "sess/slow-start",
 		}, t.TempDir(), `{"default_agent":"ao-slow"}`)
-		done <- err
+		result <- err
 	}()
 	waitForFile(t, started)
 	if _, statErr := os.Stat(configPath); !errors.Is(statErr, os.ErrNotExist) {
@@ -935,7 +905,7 @@ func TestPrepareSharedServerWritesConfigOnlyAfterServerReady(t *testing.T) {
 	if err := os.WriteFile(release, nil, 0o600); err != nil {
 		t.Fatal(err)
 	}
-	if err := <-done; err == nil {
+	if err := <-result; err == nil {
 		t.Fatal("prepareSharedServer succeeded with a server that exits during startup")
 	}
 	if _, statErr := os.Stat(configPath); !errors.Is(statErr, os.ErrNotExist) {
@@ -981,18 +951,19 @@ func TestRevalidateProjectConfigRepairsChangedWorkspace(t *testing.T) {
 	workspace := sharedWorkspace(t)
 	configPath := filepath.Join(workspace, ".opencode", projectConfigFileName)
 	content := `{"default_agent":"ao-revalidated"}`
-	if _, err := writeProjectConfig(workspace, content); err != nil {
+	tempName := mustProjectConfigTempName(t)
+	if _, err := writeProjectConfig(workspace, content, tempName); err != nil {
 		t.Fatal(err)
 	}
 	// Still matching: nothing to do.
-	if err := revalidateProjectConfig(context.Background(), workspace, content); err != nil {
+	if err := revalidateProjectConfig(context.Background(), workspace, content, tempName); err != nil {
 		t.Fatalf("revalidate matching config: %v", err)
 	}
 	// Removed during startup: republished.
 	if err := os.Remove(configPath); err != nil {
 		t.Fatal(err)
 	}
-	if err := revalidateProjectConfig(context.Background(), workspace, content); err != nil {
+	if err := revalidateProjectConfig(context.Background(), workspace, content, tempName); err != nil {
 		t.Fatalf("revalidate removed config: %v", err)
 	}
 	if got, err := os.ReadFile(configPath); err != nil || string(got) != content {
@@ -1002,7 +973,7 @@ func TestRevalidateProjectConfigRepairsChangedWorkspace(t *testing.T) {
 	if err := os.WriteFile(configPath, []byte("{\"default_agent\":\"user\"}"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	if err := revalidateProjectConfig(context.Background(), workspace, content); err == nil {
+	if err := revalidateProjectConfig(context.Background(), workspace, content, tempName); err == nil {
 		t.Fatal("revalidate accepted a conflicting config")
 	}
 	if got, err := os.ReadFile(configPath); err != nil || !strings.Contains(string(got), "user") {
@@ -1024,7 +995,7 @@ func TestRevalidateProjectConfigRechecksIgnoreRule(t *testing.T) {
 	if err := os.WriteFile(gitignore, []byte("*.log\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	if err := revalidateProjectConfig(context.Background(), workspace, content); err == nil || !strings.Contains(err.Error(), "does not ignore") {
+	if err := revalidateProjectConfig(context.Background(), workspace, content, mustProjectConfigTempName(t)); err == nil || !strings.Contains(err.Error(), "does not ignore") {
 		t.Fatalf("revalidate error = %v, want the ignore guard", err)
 	}
 	if _, statErr := os.Stat(filepath.Join(workspace, ".opencode", projectConfigFileName)); !errors.Is(statErr, os.ErrNotExist) {
@@ -1035,7 +1006,10 @@ func TestRevalidateProjectConfigRechecksIgnoreRule(t *testing.T) {
 func TestLockWorkspacePreparationSerializes(t *testing.T) {
 	workspace := t.TempDir()
 	key := filepath.Clean(workspace)
-	release := lockWorkspacePreparation(workspace)
+	release, err := lockWorkspacePreparation(context.Background(), workspace)
+	if err != nil {
+		t.Fatal(err)
+	}
 	workspacePreparations.mu.Lock()
 	preparation := workspacePreparations.byDir[key]
 	workspacePreparations.mu.Unlock()
@@ -1052,7 +1026,12 @@ func TestLockWorkspacePreparationSerializes(t *testing.T) {
 	entered := make(chan struct{})
 	go func() {
 		close(entered)
-		unlock := lockWorkspacePreparation(workspace)
+		unlock, lockErr := lockWorkspacePreparation(context.Background(), workspace)
+		if lockErr != nil {
+			t.Error(lockErr)
+			close(acquired)
+			return
+		}
 		close(acquired)
 		unlock()
 	}()
@@ -1090,6 +1069,15 @@ func waitForPreparationRefs(t *testing.T, key string, want int) {
 	t.Fatalf("workspace preparation never reached %d refs", want)
 }
 
+func mustProjectConfigTempName(t *testing.T) string {
+	t.Helper()
+	name, err := projectConfigTempName()
+	if err != nil {
+		t.Fatal(err)
+	}
+	return name
+}
+
 func waitForFile(t *testing.T, path string) {
 	t.Helper()
 	deadline := time.Now().Add(5 * time.Second)
@@ -1102,17 +1090,31 @@ func waitForFile(t *testing.T, path string) {
 	t.Fatalf("fixture never created %s", path)
 }
 
-func healthyInfoServer(t *testing.T) *httptest.Server {
+// opencodeInfoServer answers /api/info the way the real OpenCode 2 server
+// does: unauthenticated requests get 401 and the authenticated body carries
+// the version and pid the health probe checks.
+func opencodeInfoServer(t *testing.T, password string) *httptest.Server {
 	t.Helper()
 	info := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.URL.Path == "/api/info" {
-			w.WriteHeader(http.StatusOK)
+		if r.URL.Path != "/api/info" {
+			http.NotFound(w, r)
 			return
 		}
-		http.NotFound(w, r)
+		user, pass, ok := r.BasicAuth()
+		if !ok || user != "opencode" || pass != password {
+			w.WriteHeader(http.StatusUnauthorized)
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"version":"2.0.0","pid":1}`))
 	}))
 	t.Cleanup(info.Close)
 	return info
+}
+
+func healthyInfoServer(t *testing.T) *httptest.Server {
+	t.Helper()
+	return opencodeInfoServer(t, "pw")
 }
 
 func TestV2SharedServerBusyReturnsErrorInsteadOfPrivateFallback(t *testing.T) {
@@ -1120,11 +1122,13 @@ func TestV2SharedServerBusyReturnsErrorInsteadOfPrivateFallback(t *testing.T) {
 	dataDir := t.TempDir()
 	workspace := sharedWorkspace(t)
 	handle := &serverHandle{server: sharedServer{url: "http://127.0.0.1:1", password: "pw"}, cmd: &exec.Cmd{}}
-	sharedServerRegistry.mu.Lock()
+	if err := sharedServerRegistry.mu.Lock(context.Background()); err != nil {
+		t.Fatal(err)
+	}
 	sharedServerRegistry.byDir[dataDir] = handle
 	sharedServerRegistry.mu.Unlock()
 	t.Cleanup(func() {
-		sharedServerRegistry.mu.Lock()
+		_ = sharedServerRegistry.mu.Lock(context.Background())
 		delete(sharedServerRegistry.byDir, dataDir)
 		sharedServerRegistry.mu.Unlock()
 	})
@@ -1154,11 +1158,13 @@ func TestEnsureSharedServerKeepsReattachedHandleWhenProbeFails(t *testing.T) {
 	defer info.Close()
 	key := t.TempDir()
 	handle := &serverHandle{server: sharedServer{url: info.URL, password: "pw"}}
-	sharedServerRegistry.mu.Lock()
+	if err := sharedServerRegistry.mu.Lock(context.Background()); err != nil {
+		t.Fatal(err)
+	}
 	sharedServerRegistry.byDir[key] = handle
 	sharedServerRegistry.mu.Unlock()
 	t.Cleanup(func() {
-		sharedServerRegistry.mu.Lock()
+		_ = sharedServerRegistry.mu.Lock(context.Background())
 		delete(sharedServerRegistry.byDir, key)
 		sharedServerRegistry.mu.Unlock()
 	})
@@ -1166,7 +1172,7 @@ func TestEnsureSharedServerKeepsReattachedHandleWhenProbeFails(t *testing.T) {
 	if _, err := ensureSharedServer(context.Background(), "unused", key, t.TempDir()); err == nil {
 		t.Fatal("ensureSharedServer accepted a listening but unhealthy reattached server")
 	}
-	sharedServerRegistry.mu.Lock()
+	_ = sharedServerRegistry.mu.Lock(context.Background())
 	got := sharedServerRegistry.byDir[key]
 	sharedServerRegistry.mu.Unlock()
 	if got != handle {
@@ -1176,13 +1182,14 @@ func TestEnsureSharedServerKeepsReattachedHandleWhenProbeFails(t *testing.T) {
 
 func TestWriteProjectConfigDoesNotReplaceExistingFile(t *testing.T) {
 	workspace := t.TempDir()
-	if created, err := writeProjectConfig(workspace, "one"); err != nil || !created {
+	tempName := mustProjectConfigTempName(t)
+	if created, err := writeProjectConfig(workspace, "one", tempName); err != nil || !created {
 		t.Fatalf("created=%v err=%v", created, err)
 	}
-	if created, err := writeProjectConfig(workspace, "one"); err != nil || created {
+	if created, err := writeProjectConfig(workspace, "one", tempName); err != nil || created {
 		t.Fatalf("identical config: created=%v err=%v", created, err)
 	}
-	if _, err := writeProjectConfig(workspace, "two"); err == nil {
+	if _, err := writeProjectConfig(workspace, "two", tempName); err == nil {
 		t.Fatal("differing config was accepted")
 	}
 	data, err := os.ReadFile(filepath.Join(workspace, ".opencode", projectConfigFileName))
@@ -1201,11 +1208,13 @@ func TestEnsureSharedServerKeepsOwnedHandleWhenProbeFails(t *testing.T) {
 		server: sharedServer{url: "http://127.0.0.1:1", password: "pw"},
 		cmd:    &exec.Cmd{},
 	}
-	sharedServerRegistry.mu.Lock()
+	if err := sharedServerRegistry.mu.Lock(context.Background()); err != nil {
+		t.Fatal(err)
+	}
 	sharedServerRegistry.byDir[key] = handle
 	sharedServerRegistry.mu.Unlock()
 	t.Cleanup(func() {
-		sharedServerRegistry.mu.Lock()
+		_ = sharedServerRegistry.mu.Lock(context.Background())
 		delete(sharedServerRegistry.byDir, key)
 		sharedServerRegistry.mu.Unlock()
 	})
@@ -1213,7 +1222,7 @@ func TestEnsureSharedServerKeepsOwnedHandleWhenProbeFails(t *testing.T) {
 	if _, err := ensureSharedServer(context.Background(), "unused", key, t.TempDir()); err == nil {
 		t.Fatal("ensureSharedServer accepted an unhealthy owned server")
 	}
-	sharedServerRegistry.mu.Lock()
+	_ = sharedServerRegistry.mu.Lock(context.Background())
 	got := sharedServerRegistry.byDir[key]
 	sharedServerRegistry.mu.Unlock()
 	if got != handle {
@@ -1271,15 +1280,7 @@ func hasEnvPrefix(args []string, prefix string) bool {
 
 func TestWaitForSharedServerReadsPasswordAndProbesHealth(t *testing.T) {
 	const password = "probe-password"
-	info := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		user, pass, ok := r.BasicAuth()
-		if !ok || user != "opencode" || pass != password {
-			w.WriteHeader(http.StatusUnauthorized)
-			return
-		}
-		w.WriteHeader(http.StatusOK)
-	}))
-	defer info.Close()
+	info := opencodeInfoServer(t, password)
 
 	var output serverOutput
 	if _, err := output.Write([]byte("server listening on http://127.0.0.1:1\nserver password " + password + "\n")); err != nil {
@@ -1291,5 +1292,228 @@ func TestWaitForSharedServerReadsPasswordAndProbesHealth(t *testing.T) {
 	}
 	if got != password {
 		t.Fatalf("password = %q, want %q", got, password)
+	}
+}
+
+func TestV2AttachRejectsServerFromDifferentEnvironment(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("POSIX executable fixture")
+	}
+	fakeBinary(t, "2.0.0")
+	info := healthyInfoServer(t)
+	dataDir := t.TempDir()
+	// The record pretends the server was started under a different provider
+	// environment; attaching would serve this launch with stale settings, and
+	// a private fallback would share the data home. The launch must hard-fail.
+	persistServer(dataDir, sharedServer{url: info.URL, password: "pw"})
+	setStateEnvHash(t, dataDir, strings.Repeat("ab", 32))
+	workspace := sharedWorkspace(t)
+	_, err := New().GetLaunchCommand(context.Background(), ports.LaunchConfig{
+		DataDir:       dataDir,
+		WorkspacePath: workspace,
+		SessionID:     "sess/env-mismatch",
+		SystemPrompt:  "AO rules",
+		Env:           map[string]string{},
+	})
+	if err == nil || !strings.Contains(err.Error(), "different environment") {
+		t.Fatalf("launch error = %v, want the environment mismatch guard", err)
+	}
+
+	// A mismatched record whose endpoint is gone must not block a fresh start.
+	stale := sharedWorkspace(t)
+	dataDir = t.TempDir()
+	persistServer(dataDir, sharedServer{url: "http://127.0.0.1:1", password: "pw"})
+	setStateEnvHash(t, dataDir, strings.Repeat("cd", 32))
+	cmd, err := New().GetLaunchCommand(context.Background(), ports.LaunchConfig{
+		DataDir:       dataDir,
+		WorkspacePath: stale,
+		SessionID:     "sess/env-mismatch-dead",
+		SystemPrompt:  "AO rules",
+		Env:           map[string]string{},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if containsArg(cmd, "--server", "http://127.0.0.1:1") {
+		t.Fatalf("argv = %#v, must not attach to the stale record", cmd)
+	}
+	if !strings.Contains(strings.Join(cmd, "\n"), "--standalone") {
+		t.Fatalf("argv = %#v, want a fresh start after the stale record", cmd)
+	}
+}
+
+func setStateEnvHash(t *testing.T, dataDir, envHash string) {
+	t.Helper()
+	path := filepath.Join(dataDir, serverStateFileName)
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var state map[string]any
+	if err := json.Unmarshal(data, &state); err != nil {
+		t.Fatal(err)
+	}
+	state["env_hash"] = envHash
+	updated, err := json.Marshal(state)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(path, updated, 0o600); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestV2ForeignProjectConfigKeepsSessionOwnAgent(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("POSIX executable fixture")
+	}
+	fakeBinary(t, "2.0.0")
+	// No shared server anywhere: the launch must stay on the private path and
+	// still get this session's own agent instead of the foreign one.
+	workspace := sharedWorkspace(t)
+	configPath := filepath.Join(workspace, ".opencode", projectConfigFileName)
+	if err := os.WriteFile(configPath, []byte(`{"default_agent":"ao-sess-other-session"}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	cmd, err := New().GetLaunchCommand(context.Background(), ports.LaunchConfig{
+		DataDir:       t.TempDir(),
+		WorkspacePath: workspace,
+		SessionID:     "sess/newcomer",
+		SystemPrompt:  "AO rules",
+		Env:           map[string]string{},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(strings.Join(cmd, "\n"), "--standalone") {
+		t.Fatalf("argv = %#v, want the private-server path", cmd)
+	}
+	var injected string
+	for _, arg := range cmd {
+		if value, ok := strings.CutPrefix(arg, "OPENCODE_CONFIG_CONTENT="); ok {
+			injected = value
+		}
+	}
+	var config struct {
+		DefaultAgent string `json:"default_agent"`
+	}
+	if err := json.Unmarshal([]byte(injected), &config); err != nil {
+		t.Fatalf("injected config %q: %v", injected, err)
+	}
+	if config.DefaultAgent != "ao-sess-newcomer" {
+		t.Fatalf("default_agent = %q, want this session's own agent", config.DefaultAgent)
+	}
+	// The foreign config stays untouched on disk.
+	data, err := os.ReadFile(configPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(data), "ao-sess-other-session") {
+		t.Fatalf("workspace config changed to %q", data)
+	}
+}
+
+func TestV2HealthProbeRejectsRedirectsAndAnonymousServers(t *testing.T) {
+	fakeBinary(t, "2.0.0")
+	dataDir := t.TempDir()
+	// A redirect must not be followed; the endpoint counts as not healthy.
+	redirect := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		http.Redirect(w, r, "/elsewhere", http.StatusFound)
+	}))
+	t.Cleanup(redirect.Close)
+	workspace := sharedWorkspace(t)
+	// Listening but not OpenCode's server: the endpoint stays unadopted and the
+	// persisted record keeps later launches off it.
+	assertNotAdopted := func(t *testing.T, dataDir, session string, url string) {
+		t.Helper()
+		persistServer(dataDir, sharedServer{url: url, password: "pw"})
+		cmd, err := New().GetLaunchCommand(context.Background(), ports.LaunchConfig{
+			DataDir:       dataDir,
+			WorkspacePath: workspace,
+			SessionID:     session,
+			SystemPrompt:  "AO rules",
+			Env:           map[string]string{},
+		})
+		if err == nil || !strings.Contains(err.Error(), "not healthy") {
+			t.Fatalf("launch error = %v, want the unadopted-endpoint guard", err)
+		}
+		if containsArg(cmd, "--server", url) {
+			t.Fatalf("argv = %#v, must not adopt the endpoint", cmd)
+		}
+	}
+	assertNotAdopted(t, dataDir, "sess/redirect", redirect.URL)
+
+	// A service that answers 200 without authentication is not OpenCode's
+	// server; the identity probe needs the 401 path too.
+	anonymous := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"version":"2.0.0","pid":1}`))
+	}))
+	t.Cleanup(anonymous.Close)
+	dataDir = t.TempDir()
+	assertNotAdopted(t, dataDir, "sess/anonymous", anonymous.URL)
+}
+
+func TestPrepareSharedServerIgnoresInheritedGitEnv(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("POSIX git fixture")
+	}
+	if _, err := exec.LookPath("git"); err != nil {
+		t.Skip("git is required")
+	}
+	binary := fakeBinary(t, "2.0.0")
+	workspace := sharedWorkspace(t)
+	configPath := filepath.Join(workspace, ".opencode", projectConfigFileName)
+	if err := os.WriteFile(configPath, []byte(`{"default_agent":"tracked"}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if out, err := exec.Command("git", "-C", workspace, "add", "-f", ".opencode/"+projectConfigFileName).CombinedOutput(); err != nil {
+		t.Fatalf("git add: %v: %s", err, out)
+	}
+	// An inherited index would hide the tracked path from the guard; the git
+	// commands must run against the worktree's own index.
+	empty := t.TempDir()
+	if err := os.WriteFile(filepath.Join(empty, "index"), nil, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("GIT_INDEX_FILE", filepath.Join(empty, "index"))
+	// Publishing must not silently replace the tracked file: the link fails with
+	// "already has" when the guard would have caught it without the inherited
+	// index.
+	_, err := prepareSharedServer(context.Background(), binary, ports.LaunchConfig{
+		DataDir:       t.TempDir(),
+		WorkspacePath: workspace,
+		SessionID:     "sess/git-env",
+	}, t.TempDir(), `{"default_agent":"ao-git-env"}`)
+	if err == nil || !strings.Contains(err.Error(), "tracks") && !strings.Contains(err.Error(), "already has") {
+		t.Fatalf("prepareSharedServer error = %v, want the tracked-path guard", err)
+	}
+}
+
+func TestPrepareSharedServerRequiresIgnoreOfExactTempName(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("POSIX git fixture")
+	}
+	if _, err := exec.LookPath("git"); err != nil {
+		t.Skip("git is required")
+	}
+	binary := fakeBinary(t, "2.0.0")
+	workspace := sharedWorkspace(t)
+	// A gitignore that covers the probe literal only does not cover the random
+	// staging name; publishing would stage an unignored file.
+	configIgnore := "/.gitignore\n/" + projectConfigFileName + "\n/.ao-tmp-probe\n"
+	if err := os.WriteFile(filepath.Join(workspace, ".opencode", ".gitignore"), []byte(configIgnore), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	_, err := prepareSharedServer(context.Background(), binary, ports.LaunchConfig{
+		DataDir:       t.TempDir(),
+		WorkspacePath: workspace,
+		SessionID:     "sess/literal-probe",
+	}, t.TempDir(), `{"default_agent":"ao-literal-probe"}`)
+	if err == nil || !strings.Contains(err.Error(), ".ao-tmp-") {
+		t.Fatalf("prepareSharedServer error = %v, want the temp-ignore guard", err)
+	}
+	if _, statErr := os.Stat(filepath.Join(workspace, ".opencode", projectConfigFileName)); !errors.Is(statErr, os.ErrNotExist) {
+		t.Fatalf("project config published under an unignored staging name")
 	}
 }
