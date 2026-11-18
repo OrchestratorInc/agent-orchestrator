@@ -1,8 +1,11 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { render, screen } from "@testing-library/react";
+import { render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { Settings } from "../../hooks/useSettings";
+import * as platform from "../../lib/platform";
+import { aoBridge } from "../../lib/bridge";
+import { DEFAULT_UI_SETTINGS, type UiSettings } from "../../../shared/ui-locale";
 
 const { settingsMock, updateRetentionMock } = vi.hoisted(() => ({
 	settingsMock: vi.fn(),
@@ -83,5 +86,39 @@ describe("archived session retention", () => {
 		renderSection();
 
 		expect(screen.queryByRole("button", { name: "Delete archived sessions" })).not.toBeInTheDocument();
+	});
+});
+describe("Linux Alt menu setting", () => {
+	it("persists the user's choice on Linux", async () => {
+		vi.spyOn(platform, "isLinuxPlatform").mockReturnValue(true);
+		const get = vi.spyOn(aoBridge.uiSettings, "get").mockResolvedValue({ ...DEFAULT_UI_SETTINGS });
+		const set = vi.spyOn(aoBridge.uiSettings, "set").mockResolvedValue({ ...DEFAULT_UI_SETTINGS, altMenuEnabled: false });
+		settingsMock.mockReturnValue(settings({}));
+		renderSection();
+		const toggle = await screen.findByRole("switch", { name: "Show menu bar with Alt" });
+		expect(toggle).toBeChecked();
+		await userEvent.click(toggle);
+		expect(set).toHaveBeenCalledWith({ altMenuEnabled: false });
+		get.mockRestore(); set.mockRestore(); vi.restoreAllMocks();
+	});
+
+	it("keeps a user's choice when the initial settings read completes late", async () => {
+		vi.spyOn(platform, "isLinuxPlatform").mockReturnValue(true);
+		let resolveSettings!: (settings: UiSettings) => void;
+		const settingsPromise = new Promise<UiSettings>((resolve) => {
+			resolveSettings = resolve;
+		});
+		vi.spyOn(aoBridge.uiSettings, "get").mockReturnValue(settingsPromise);
+		const set = vi.spyOn(aoBridge.uiSettings, "set").mockResolvedValue({ ...DEFAULT_UI_SETTINGS, altMenuEnabled: false });
+		settingsMock.mockReturnValue(settings({}));
+		renderSection();
+
+		const toggle = await screen.findByRole("switch", { name: "Show menu bar with Alt" });
+		await userEvent.click(toggle);
+		expect(set).toHaveBeenCalledWith({ altMenuEnabled: false });
+
+		resolveSettings({ ...DEFAULT_UI_SETTINGS, altMenuEnabled: true });
+		await waitFor(() => expect(toggle).not.toBeChecked());
+		vi.restoreAllMocks();
 	});
 });
