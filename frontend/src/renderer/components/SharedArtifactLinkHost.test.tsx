@@ -2,6 +2,7 @@ import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { act, render, waitFor } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { useArtifactsViewStore } from "../stores/artifacts-view-store";
+import { useUiStore } from "../stores/ui-store";
 import { SharedArtifactLinkHost } from "./SharedArtifactLinkHost";
 
 const mocks = vi.hoisted(() => ({
@@ -55,6 +56,7 @@ describe("SharedArtifactLinkHost", () => {
 		mocks.navigate.mockReset();
 		mocks.openWindow.mockReset();
 		useArtifactsViewStore.setState({ openSharedArtifact: null });
+		useUiStore.getState().closeSettings();
 	});
 
 	it("saves a link sent from its web page and opens it on the Artifacts page", async () => {
@@ -66,6 +68,21 @@ describe("SharedArtifactLinkHost", () => {
 		expect(mocks.save).toHaveBeenCalledWith("q3-report", { signal: expect.any(AbortSignal) });
 		expect(useArtifactsViewStore.getState().openSharedArtifact).toEqual(saved);
 		expect(mocks.openWindow).not.toHaveBeenCalled();
+	});
+
+	it("saves a link that arrives while Settings is open, and opens it once Settings closes", async () => {
+		mocks.save.mockResolvedValue({ artifact: saved });
+		act(() => useUiStore.getState().openGlobalSettings());
+		renderHost();
+		await send(viewer);
+		await waitFor(() => expect(mocks.save).toHaveBeenCalledTimes(1));
+		await act(async () => {});
+		// Settings stays as the person left it; nothing opens behind it.
+		expect(useUiStore.getState().settingsModal).not.toBeNull();
+		expect(mocks.navigate).not.toHaveBeenCalled();
+		act(() => useUiStore.getState().closeSettings());
+		await waitFor(() => expect(mocks.navigate).toHaveBeenCalledWith({ to: "/artifacts" }));
+		expect(useArtifactsViewStore.getState().openSharedArtifact).toEqual(saved);
 	});
 
 	it("opens a link that arrived before the window, once the sign-in is read", async () => {

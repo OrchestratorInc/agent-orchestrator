@@ -7,7 +7,9 @@ import { useCloudGate } from "../hooks/useCloudGate";
 import { sharedArtifactsQueryKey } from "../hooks/useSharedArtifacts";
 import { aoBridge } from "../lib/bridge";
 import { useCloudSession } from "../lib/cloud-session";
+import type { CloudCpSharedArtifact } from "../lib/cloud-cp";
 import { useArtifactsViewStore } from "../stores/artifacts-view-store";
+import { useUiStore } from "../stores/ui-store";
 
 /**
  * How long saving a link may take before it opens in its own window instead.
@@ -38,6 +40,10 @@ export function SharedArtifactLinkHost() {
 	const [pending, setPending] = useState<string[]>([]);
 	// One link is saved at a time, so they open in the order they came.
 	const [saving, setSaving] = useState(false);
+	// A saved link waits while Settings is open: Settings covers the page, and
+	// closing it for the person could lose a project's unsaved changes.
+	const settingsOpen = useUiStore((state) => state.settingsModal !== null);
+	const [waiting, setWaiting] = useState<{ artifact: CloudCpSharedArtifact; userId: string } | null>(null);
 
 	useEffect(() => {
 		const add = (viewerUrl: string | null) => {
@@ -81,10 +87,18 @@ export function SharedArtifactLinkHost() {
 				return;
 			}
 			void queryClient.invalidateQueries({ queryKey: sharedArtifactsQueryKey });
-			useArtifactsViewStore.getState().requestOpenSharedArtifact(artifact);
-			void navigate({ to: "/artifacts" });
+			setWaiting({ artifact, userId: savedFor });
 		}, fallback).finally(() => setSaving(false));
-	}, [settled, saving, pending, ready, client, userId, navigate, queryClient]);
+	}, [settled, saving, pending, ready, client, userId, queryClient]);
+
+	// Shown on the Artifacts page once nothing covers it.
+	useEffect(() => {
+		if (!waiting || settingsOpen) return;
+		setWaiting(null);
+		if (currentUserId.current !== waiting.userId) return;
+		useArtifactsViewStore.getState().requestOpenSharedArtifact(waiting.artifact);
+		void navigate({ to: "/artifacts" });
+	}, [waiting, settingsOpen, navigate]);
 
 	return null;
 }
