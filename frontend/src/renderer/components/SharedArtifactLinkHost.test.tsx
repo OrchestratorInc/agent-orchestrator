@@ -7,7 +7,7 @@ import { SharedArtifactLinkHost } from "./SharedArtifactLinkHost";
 const mocks = vi.hoisted(() => ({
 	ready: true,
 	status: "authenticated" as "loading" | "authenticated" | "unauthenticated",
-	pending: null as string | null,
+	pending: [] as string[],
 	listener: undefined as ((viewerUrl: string) => void) | undefined,
 	save: vi.fn(),
 	navigate: vi.fn(),
@@ -24,12 +24,8 @@ vi.mock("../lib/bridge", () => ({
 				mocks.listener = listener;
 				return () => { mocks.listener = undefined; };
 			},
-			// Like the main process: the link is held until taken, once.
-			takePendingSharedArtifact: async () => {
-				const viewerUrl = mocks.pending;
-				mocks.pending = null;
-				return viewerUrl;
-			},
+			// Like the main process: links are held in order until taken, once each.
+			takePendingSharedArtifact: async () => mocks.pending.shift() ?? null,
 			openSharedArtifactWindow: mocks.openWindow,
 		},
 	},
@@ -40,7 +36,7 @@ const saved = { linkId: "q3-report", name: "q3.html", contentType: "text/html", 
 
 /** The main process holding a link, then telling the listening host to take it. */
 async function send(viewerUrl: string) {
-	mocks.pending = viewerUrl;
+	mocks.pending.push(viewerUrl);
 	await act(async () => mocks.listener?.(viewerUrl));
 }
 
@@ -52,7 +48,7 @@ describe("SharedArtifactLinkHost", () => {
 	beforeEach(() => {
 		mocks.ready = true;
 		mocks.status = "authenticated";
-		mocks.pending = null;
+		mocks.pending = [];
 		mocks.save.mockReset();
 		mocks.navigate.mockReset();
 		mocks.openWindow.mockReset();
@@ -71,7 +67,7 @@ describe("SharedArtifactLinkHost", () => {
 
 	it("opens a link that arrived before the window, once the sign-in is read", async () => {
 		mocks.save.mockResolvedValue({ artifact: saved });
-		mocks.pending = viewer;
+		mocks.pending = [viewer];
 		mocks.status = "loading";
 		const { rerender } = renderHost();
 		await act(async () => {});
@@ -80,6 +76,15 @@ describe("SharedArtifactLinkHost", () => {
 		mocks.status = "authenticated";
 		rerender(<QueryClientProvider client={new QueryClient()}><SharedArtifactLinkHost /></QueryClientProvider>);
 		await waitFor(() => expect(mocks.save).toHaveBeenCalledWith("q3-report"));
+	});
+
+	it("keeps every link that arrived before the window, in order", async () => {
+		mocks.save.mockImplementation(async (linkId: string) => ({ artifact: { ...saved, linkId, viewerUrl: `https://orchestrator.inc/artifact/${linkId}` } }));
+		mocks.pending = [viewer, "https://orchestrator.inc/artifact/roadmap"];
+		renderHost();
+		await waitFor(() => expect(mocks.save).toHaveBeenCalledTimes(2));
+		expect(mocks.save.mock.calls.map(([linkId]) => linkId)).toEqual(["q3-report", "roadmap"]);
+		expect(mocks.pending).toEqual([]);
 	});
 
 	it("opens it in its own window when signed out of Cloud or when it does not open for this account", async () => {

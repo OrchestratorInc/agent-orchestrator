@@ -4410,15 +4410,13 @@ ipcMain.handle("cloud:takePendingShareLink", () => {
 	return link ?? null;
 });
 
-// A published artifact's viewer URL from ao-app://shared-artifact, already
-// checked by parseSharedArtifactLink, kept until the renderer takes it.
-let pendingSharedArtifact: string | undefined;
+// Published artifacts' viewer URLs from ao-app://shared-artifact, already
+// checked by parseSharedArtifactLink, kept in arrival order until the renderer
+// takes them one by one. Bounded, so a flood of links cannot grow it forever.
+const MAX_PENDING_SHARED_ARTIFACTS = 20;
+const pendingSharedArtifacts: string[] = [];
 
-ipcMain.handle("cloud:takePendingSharedArtifact", () => {
-	const viewerUrl = pendingSharedArtifact;
-	pendingSharedArtifact = undefined;
-	return viewerUrl ?? null;
-});
+ipcMain.handle("cloud:takePendingSharedArtifact", () => pendingSharedArtifacts.shift() ?? null);
 
 // The renderer's fallback: openSharedArtifact accepts only a published
 // artifact's https viewer URL, and its window has no preload or credentials.
@@ -4441,15 +4439,27 @@ async function handleCloudDeepLinkAndFocus(url: string): Promise<void> {
 	const artifact = parseSharedArtifactLink(url);
 	if (artifact) {
 		await app.whenReady();
-		// Wait for a replacement shell, then focus it by name: a shared-artifact
-		// window left open would otherwise be the first window and take focus.
-		if (!getShellWebContents()) {
-			await createWindow().catch((error: unknown) => console.error("AO: could not reopen the window for a shared artifact", error));
+		if (getShellWebContents()) {
+			// Focused by name: a shared-artifact window left open would otherwise
+			// be the first window and take focus.
+			focusMainWindow();
+		} else {
+			// A replacement shell shows itself, and so takes focus, once its
+			// renderer has loaded (showWhenRendererLoaded).
+			try {
+				await createWindow();
+			} catch (error) {
+				// With no shell to take it, the link opens in its own window.
+				console.error("AO: could not reopen the window for a shared artifact", error);
+				openSharedArtifact(artifact);
+				return;
+			}
 		}
-		focusMainWindow();
 		// Held until the renderer takes it: a page that has loaded may not have
 		// subscribed yet, so the send only tells a listening host to take it now.
-		pendingSharedArtifact = artifact;
+		if (!pendingSharedArtifacts.includes(artifact) && pendingSharedArtifacts.length < MAX_PENDING_SHARED_ARTIFACTS) {
+			pendingSharedArtifacts.push(artifact);
+		}
 		const contents = getShellWebContents();
 		if (contents && !contents.isDestroyed() && !contents.isLoading()) contents.send("cloud:openSharedArtifact", artifact);
 		return;
