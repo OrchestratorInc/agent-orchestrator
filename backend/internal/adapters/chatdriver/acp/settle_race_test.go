@@ -23,7 +23,10 @@ func TestSettleOpenItemsReadsACopyWhileUpdatesStillArrive(t *testing.T) {
 		messages:       map[string]string{"m": "hello"},
 		thoughts:       map[string]string{"r": "thinking"},
 		nestedMessages: map[string]nestedMessageState{"n": {text: "sub", parentID: "p"}},
-		tools:          map[string]*toolState{"t": {id: "t", status: acpsdk.ToolCallStatusInProgress}},
+		tools: map[string]*toolState{
+			"t": {id: "t", status: acpsdk.ToolCallStatusInProgress},
+			"w": {id: "w", status: acpsdk.ToolCallStatusInProgress},
+		},
 	}
 	drained := make(chan struct{})
 	go func() {
@@ -40,7 +43,9 @@ func TestSettleOpenItemsReadsACopyWhileUpdatesStillArrive(t *testing.T) {
 			c.messages["m"+key] = "late"
 			c.thoughts["r"+key] = "late"
 			c.nestedMessages["n"+key] = nestedMessageState{text: "late"}
-			c.tools["t"].status = acpsdk.ToolCallStatusInProgress
+			// Field writes go to "w"; "t" is left alone so a settlement that
+			// mutated the live tool would still show in the check below.
+			c.tools["w"].status = acpsdk.ToolCallStatusInProgress
 			c.tools["t"+key] = &toolState{id: "t" + key, status: acpsdk.ToolCallStatusPending}
 			c.mu.Unlock()
 		}
