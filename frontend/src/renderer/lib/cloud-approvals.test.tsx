@@ -4,7 +4,16 @@ import { CloudCpError } from "./cloud-cp/errors";
 
 const hooks = vi.hoisted(() => ({
 	listBrowserApprovals: vi.fn(),
-	sessions: [] as Array<{ id: string; cloud?: { orgId: string; observedState?: string } }>,
+	sessions: [] as Array<{ id: string; cloud?: { orgId: string; observedState?: string; desiredState?: string } }>,
+	tap: undefined as undefined | ((target: { baseUrl: string; orgId: string; sessionId: string }, event: { type: string }) => void),
+}));
+vi.mock("./cloud-cp/session-events-hub", () => ({
+	tapCloudSessionEvents: (listener: NonNullable<typeof hooks.tap>) => {
+		hooks.tap = listener;
+		return () => {
+			hooks.tap = undefined;
+		};
+	},
 }));
 vi.mock("../hooks/useCloudCp", () => ({
 	useCloudCp: () => ({ ready: true, baseUrl: "https://cp.test/", client: { listBrowserApprovals: hooks.listBrowserApprovals } }),
@@ -13,7 +22,7 @@ vi.mock("../hooks/useWorkspaceQuery", () => ({ useWorkspaceQuery: () => ({ data:
 
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { renderHook, waitFor } from "@testing-library/react";
-import type { ReactNode } from "react";
+import { act, type ReactNode } from "react";
 import {
 	decideCloudApproval,
 	fetchCloudPendingApprovals,
@@ -22,6 +31,7 @@ import {
 	unexpired,
 	useCloudPendingApprovals,
 	useLiveCloudPendingApprovals,
+	useWatchCloudApprovals,
 } from "./cloud-approvals";
 
 const TARGET = { baseUrl: "https://cp.test/", orgId: "org-1", sessionId: "s-1" };
@@ -99,5 +109,60 @@ describe("cloud approvals", () => {
 		shell.unmount();
 		await waitFor(() => expect(reader.result.current).toEqual([]));
 		client.clear();
+	});
+
+	describe("sessions the lists have not caught up with", () => {
+		const future = () => new Date(Date.now() + 60_000).toISOString();
+		function mount() {
+			const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+			const wrapper = ({ children }: { children: ReactNode }) => <QueryClientProvider client={client}>{children}</QueryClientProvider>;
+			const shell = renderHook(() => useLiveCloudPendingApprovals(), { wrapper });
+			return { client, wrapper, shell };
+		}
+		const readSessions = () => hooks.listBrowserApprovals.mock.calls.map(([, sessionId]) => sessionId);
+
+		it("reads the session on screen even when no list has it", async () => {
+			hooks.sessions = [];
+			hooks.listBrowserApprovals.mockReset().mockImplementation(async (_org: string, sessionId: string) => ({
+				pending: [cloudRequest({ id: `on-${sessionId}`, sessionId, expiresAt: future() })],
+			}));
+			const { client, wrapper, shell } = mount();
+			const dock = renderHook(() => useWatchCloudApprovals("org-1", "s-screen"), { wrapper });
+			await waitFor(() => expect(shell.result.current.map((request) => request.id)).toEqual(["on-s-screen"]));
+			dock.unmount();
+			shell.unmount();
+			client.clear();
+		});
+
+		it("reads a session that is starting toward running, not only one already running", async () => {
+			hooks.sessions = [{ id: "s-starting", cloud: { orgId: "org-1", desiredState: "running", observedState: "bootstrapping" } }];
+			hooks.listBrowserApprovals.mockReset().mockResolvedValue({ pending: [] });
+			const { client, shell } = mount();
+			await waitFor(() => expect(readSessions()).toContain("s-starting"));
+			shell.unmount();
+			client.clear();
+		});
+
+		it("reads a session that announced an approval on an open stream", async () => {
+			hooks.sessions = [];
+			hooks.listBrowserApprovals.mockReset().mockResolvedValue({ pending: [] });
+			const { client, shell } = mount();
+			await waitFor(() => expect(hooks.tap).toBeDefined());
+			act(() => hooks.tap?.({ baseUrl: "https://cp.test", orgId: "org-1", sessionId: "s-heard" }, { type: "browser.approval_requested" }));
+			await waitFor(() => expect(readSessions()).toContain("s-heard"));
+			shell.unmount();
+			client.clear();
+		});
+
+		it("logs a failed read instead of passing it off as nothing pending", async () => {
+			hooks.sessions = [{ id: "s-failing", cloud: { orgId: "org-1", observedState: "running" } }];
+			hooks.listBrowserApprovals.mockReset().mockRejectedValue(new CloudCpError("boom", { status: 500 }));
+			const warn = vi.spyOn(console, "warn").mockImplementation(() => undefined);
+			const { client, shell } = mount();
+			await waitFor(() => expect(warn).toHaveBeenCalledWith(expect.stringContaining("s-failing"), expect.any(CloudCpError)));
+			warn.mockRestore();
+			shell.unmount();
+			client.clear();
+		});
 	});
 });

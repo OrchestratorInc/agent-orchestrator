@@ -9,7 +9,7 @@ import {
 	type ApprovalDecision,
 	type PendingApproval,
 } from "../../lib/approvals";
-import { useCloudPendingApprovals, useLiveCloudPendingApprovals } from "../../lib/cloud-approvals";
+import { useCloudPendingApprovals, useLiveCloudPendingApprovals, useWatchCloudApprovals } from "../../lib/cloud-approvals";
 import { useNavigateToSession } from "../../lib/navigate-to-session";
 import { useUiStore } from "../../stores/ui-store";
 import { ApprovalPrompt } from "./ApprovalPrompt";
@@ -47,7 +47,9 @@ function useDecide(request: PendingApproval | undefined) {
  * The session's own approval prompt, under its topbar so it shows over chat
  * and terminal sessions alike. Requests are answered oldest first.
  */
-export function SessionApprovalDock({ sessionId, hostId }: { sessionId: string; hostId?: string }) {
+export function SessionApprovalDock({ sessionId, hostId, cloudOrgId }: { sessionId: string; hostId?: string; cloudOrgId?: string }) {
+	// A cloud session on screen is read often, whatever the session lists say.
+	useWatchCloudApprovals(hostId ? undefined : cloudOrgId, sessionId);
 	const local = usePendingApprovals();
 	const remote = useRemotePendingApprovals();
 	// A cloud session's agent browser is gated by AO Cloud; its requests
