@@ -11,6 +11,7 @@ import (
 	"path/filepath"
 	"regexp"
 	"strings"
+	"unicode"
 
 	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
 )
@@ -117,8 +118,8 @@ func validateAutohandNativeHistory(ctx context.Context, root *os.Root, id string
 	defer func() { _ = f.Close() }()
 	scanner := bufio.NewScanner(io.LimitReader(f, (128<<20)+1))
 	scanner.Buffer(make([]byte, 64<<10), 64<<20)
-	// The native loader splits on LF without stripping CR. A whitespace-only
-	// interior line must reach JSON validation rather than becoming an empty line.
+	// Native splitting preserves CR, so nonempty whitespace cannot be confused
+	// with the empty LF records that native filtering removes.
 	scanner.Split(func(data []byte, atEOF bool) (int, []byte, error) {
 		if i := bytes.IndexByte(data, '\n'); i >= 0 {
 			return i + 1, data[:i], nil
@@ -128,7 +129,9 @@ func validateAutohandNativeHistory(ctx context.Context, root *os.Root, id string
 		}
 		return 0, nil, nil
 	})
-	count, readBytes := 0, 0
+	readBytes := 0
+	var pending []byte
+	gap := false
 	for scanner.Scan() {
 		if err := ctx.Err(); err != nil {
 			return err
@@ -138,31 +141,65 @@ func validateAutohandNativeHistory(ctx context.Context, root *os.Root, id string
 		if readBytes > 128<<20 {
 			return errors.New("autohand native history exceeds read budget")
 		}
+		if pending == nil {
+			line = bytes.TrimLeftFunc(line, autohandNativeSpace)
+		}
 		if len(line) == 0 {
 			continue
 		}
-		var message struct {
-			Role      string                       `json:"role"`
-			Content   *string                      `json:"content"`
-			ToolCalls []map[string]json.RawMessage `json:"toolCalls"`
+		if len(bytes.TrimRightFunc(line, autohandNativeSpace)) == 0 {
+			gap = true
+			continue
 		}
-		if json.Unmarshal(line, &message) != nil || message.Content == nil || message.Role != "user" && message.Role != "assistant" && message.Role != "system" && message.Role != "tool" {
-			return errors.New("autohand native history contains a malformed record")
-		}
-		for _, call := range message.ToolCalls {
-			if call == nil {
-				return errors.New("autohand native history contains a malformed tool call")
+		if pending != nil {
+			if gap {
+				return errors.New("autohand native history contains an interior whitespace record")
+			}
+			if err := validateAutohandNativeRecord(pending); err != nil {
+				return err
 			}
 		}
-		count++
+		// Hold only the last record: native trim may remove its trailing space,
+		// but the same space must remain when another record follows it.
+		pending = append(pending[:0], line...)
+		gap = false
 	}
 	if err := scanner.Err(); err != nil {
 		return err
 	}
-	if count == 0 {
+	if pending == nil {
 		return errors.New("autohand native history is empty")
 	}
+	if err := validateAutohandNativeRecord(bytes.TrimRightFunc(pending, autohandNativeSpace)); err != nil {
+		return err
+	}
 	return validateAutohandNativeState(ctx, root, id)
+}
+
+// autohandNativeSpace follows ECMAScript trim, including BOM but not NEL.
+func autohandNativeSpace(r rune) bool {
+	switch r {
+	case '\t', '\n', '\v', '\f', '\r', '\ufeff', '\u2028', '\u2029':
+		return true
+	}
+	return unicode.Is(unicode.Zs, r)
+}
+
+func validateAutohandNativeRecord(line []byte) error {
+	var message struct {
+		Role      string                       `json:"role"`
+		Content   *string                      `json:"content"`
+		ToolCalls []map[string]json.RawMessage `json:"toolCalls"`
+	}
+	if json.Unmarshal(line, &message) != nil || message.Content == nil || message.Role != "user" && message.Role != "assistant" && message.Role != "system" && message.Role != "tool" {
+		return errors.New("autohand native history contains a malformed record")
+	}
+	for _, call := range message.ToolCalls {
+		if call == nil {
+			return errors.New("autohand native history contains a malformed tool call")
+		}
+	}
+	return nil
 }
 
 func validateAutohandNativeState(ctx context.Context, root *os.Root, id string) error {

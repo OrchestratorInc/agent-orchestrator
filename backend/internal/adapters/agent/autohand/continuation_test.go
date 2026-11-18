@@ -93,6 +93,43 @@ func writeAutohandNativeMetadata(t *testing.T, dir, id string) {
 	}
 }
 
+func TestAutohandNativeTrimsOnlyFileBoundaries(t *testing.T) {
+	root := t.TempDir()
+	id := "11111111-2222-4333-8444-555555555555-1790000000000"
+	dir := filepath.Join(root, "sessions", id)
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	writeAutohandNativeMetadata(t, dir, id)
+	user := `{"role":"user","content":"synthetic prompt"}`
+	assistant := `{"role":"assistant","content":"synthetic reply"}`
+	for _, tc := range []struct {
+		name  string
+		body  string
+		valid bool
+	}{
+		{name: "leading whitespace", body: "\n \t\r\n" + user, valid: true},
+		{name: "trailing whitespace", body: user + "\n \n", valid: true},
+		{name: "unicode boundaries", body: "\ufeff\u00a0" + user + "\u2028\ufeff", valid: true},
+		{name: "CRLF records", body: user + "\r\n" + assistant + "\r\n", valid: true},
+		{name: "empty LF record", body: user + "\n\n" + assistant, valid: true},
+		{name: "interior space", body: user + "\n \n" + assistant},
+		{name: "interior CRLF blank", body: user + "\r\n\r\n" + assistant},
+		{name: "interior BOM", body: user + "\n\ufeff" + assistant},
+		{name: "NEL is not native trim space", body: "\u0085" + user},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			if err := os.WriteFile(filepath.Join(dir, "conversation.jsonl"), []byte(tc.body), 0o600); err != nil {
+				t.Fatal(err)
+			}
+			_, found, err := New().LocateTranscript(context.Background(), ports.NativeSessionRef{NativeSessionID: id, ConfigDir: root})
+			if tc.valid && (err != nil || !found) || !tc.valid && (err == nil || found) {
+				t.Fatalf("found=%v err=%v, want valid=%v", found, err, tc.valid)
+			}
+		})
+	}
+}
+
 func TestAutohandImportedCommandValidatesOptionalStateAndNeverFallsBack(t *testing.T) {
 	for _, body := range []string{"", "{}", `{"readFileState":`, "null"} {
 		t.Run(body, func(t *testing.T) {
