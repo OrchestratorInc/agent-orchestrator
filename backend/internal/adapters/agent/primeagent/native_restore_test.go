@@ -169,6 +169,23 @@ func TestPrimePreparationRefusesMissingWrongAmbiguousOrFailedFork(t *testing.T) 
 	}
 }
 
+func TestPrimePreparationPreservesRunnerError(t *testing.T) {
+	root, sourceCWD, workspace := t.TempDir(), t.TempDir(), t.TempDir()
+	source := writePrimeNativeFixture(t, root, primeSourceID, sourceCWD, "", primeNativeFixtureRows()...)
+	runnerErr := errors.New("synthetic provider startup failed")
+	plugin := primeTestPlugin()
+	plugin.runCommand = func(context.Context, string, string, map[string]string, ...string) ([]byte, error) {
+		return nil, runnerErr
+	}
+	ref, err := plugin.PrepareImportedSession(context.Background(), ports.ImportedSessionRelocation{NativeSessionID: primeSourceID, ConfigDir: root, TranscriptPath: source, SourceCWD: sourceCWD, LaunchCWD: workspace, DataDir: t.TempDir()})
+	if !errors.Is(err, runnerErr) || ref.NativeSessionID != "" {
+		t.Fatalf("runner error lost or native identity returned: %#v, %v", ref, err)
+	}
+	if !strings.Contains(err.Error(), "prime native fork preparation failed: "+runnerErr.Error()) {
+		t.Fatalf("native preparation diagnostic lost context or cause: %v", err)
+	}
+}
+
 func TestPrimePreparedProofRefusesChangedNativeCopy(t *testing.T) {
 	root, cwd, workspace := t.TempDir(), t.TempDir(), t.TempDir()
 	source := writePrimeNativeFixture(t, root, primeSourceID, cwd, "", primeNativeFixtureRows()...)

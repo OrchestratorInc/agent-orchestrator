@@ -6,6 +6,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"maps"
 	"os"
@@ -97,7 +98,7 @@ func (p *Plugin) PrepareImportedSession(ctx context.Context, r ports.ImportedSes
 		if ctxErr := forkCtx.Err(); ctxErr != nil {
 			return empty, ctxErr
 		}
-		return empty, errors.New("prime native fork preparation failed")
+		return empty, fmt.Errorf("prime native fork preparation failed: %w", err)
 	}
 	after, err := readPrimeNativeHistory(ctx, r.ConfigDir, source, 0)
 	if err != nil || after.digest != expected.digest || after.count != expected.count {
