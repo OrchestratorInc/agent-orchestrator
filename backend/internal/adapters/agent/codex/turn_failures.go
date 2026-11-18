@@ -60,11 +60,12 @@ func (p *Plugin) LastTurnFailure(ctx context.Context, transcriptPath string) (po
 		return ports.TurnFailure{}, false, err
 	}
 	failure, ok := lastCodexTurnFailure(tail)
-	if ok {
-		// The rollout lives under the account's CODEX_HOME, which names whose
-		// refusal this is. Reading an old tail again cannot revive a refusal
-		// the account has since cleared: Record ignores it.
-		RecordUnavailableModelFrom(AccountHomeOfRollout(path), failure.Message, failure.At)
+	// The rollout lives under the account's CODEX_HOME, which names whose
+	// refusal this is; one whose path shows no account records nothing, rather
+	// than blaming the computer's own. Reading an old tail again cannot revive
+	// a refusal the account has since cleared: Record ignores it.
+	if home := AccountHomeOfRollout(path); ok && home != "" {
+		RecordUnavailableModelFrom(home, failure.Message, failure.At)
 	}
 	return failure, ok, nil
 }

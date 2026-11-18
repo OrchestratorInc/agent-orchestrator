@@ -1,6 +1,7 @@
 package codex
 
 import (
+	"context"
 	"os"
 	"path/filepath"
 	"testing"
@@ -117,5 +118,46 @@ func TestRecordUnavailableModelFromIgnoresOtherFailures(t *testing.T) {
 	}
 	if !DefaultUnavailableModels().Unavailable(home, "gpt-5") {
 		t.Fatal("the refusal was not recorded in the process-wide store")
+	}
+}
+
+// A listing observed before a refusal cannot clear it: the refusal is newer.
+func TestForgetKeepsARefusalNewerThanTheListing(t *testing.T) {
+	home := filepath.Join(t.TempDir(), "codex")
+	store := NewUnavailableModels("")
+	refused := time.Date(2026, 11, 18, 6, 0, 0, 0, time.UTC)
+	if err := store.Record(home, "gpt-5.2-codex", refused); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.Forget(home, "gpt-5.2-codex", refused.Add(-time.Minute)); err != nil {
+		t.Fatal(err)
+	}
+	if !store.Unavailable(home, "gpt-5.2-codex") {
+		t.Fatal("a listing older than the refusal cleared it")
+	}
+	if err := store.Forget(home, "gpt-5.2-codex", refused); err != nil {
+		t.Fatal(err)
+	}
+	if store.Unavailable(home, "gpt-5.2-codex") {
+		t.Fatal("a listing observed at the refusal must clear it")
+	}
+}
+
+// A rollout whose path shows no account home records nothing, rather than
+// blaming the computer's own account.
+func TestLastTurnFailureDoesNotRecordARolloutWithoutAnAccountHome(t *testing.T) {
+	ConfigureUnavailableModels("")
+	t.Cleanup(func() { ConfigureUnavailableModels("") })
+	path := filepath.Join(t.TempDir(), "rollout-2026-11-18T06-00-00-abc.jsonl")
+	line := `{"timestamp":"2026-11-18T06:00:00Z","type":"event_msg","payload":{"type":"task_complete","error":{"message":"The 'gpt-5.2-codex' model is not supported when using Codex with a ChatGPT account."}}}`
+	if err := os.WriteFile(path, []byte(line+"\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	failure, ok, err := (&Plugin{}).LastTurnFailure(context.Background(), path)
+	if err != nil || !ok || failure.Message == "" {
+		t.Fatalf("LastTurnFailure = %+v, %v, %v; want the failure reported", failure, ok, err)
+	}
+	if DefaultUnavailableModels().Unavailable("", "gpt-5.2-codex") {
+		t.Fatal("a rollout with no account home was recorded for the computer's own account")
 	}
 }

@@ -148,8 +148,17 @@ func TestResolveAgentConfigTrustsOnlyAFreshCatalogToLiftARefusal(t *testing.T) {
 		t.Fatalf("rediscoveries after 3 refused spawns = %d, want 1", got)
 	}
 
+	// A fresh listing observed before the refusal proves nothing either.
 	catalog.mu.Lock()
 	catalog.catalog.Stale = false
+	catalog.catalog.ValidatedAt = time.Now().Add(-time.Hour)
+	catalog.mu.Unlock()
+	if _, err := codexSpawn(m, "", "gpt-5.2-codex", domain.ProjectConfig{}); !errors.Is(err, ErrUnsupportedModel) {
+		t.Fatalf("listing observed before the refusal: error = %v, want the refusal kept", err)
+	}
+
+	catalog.mu.Lock()
+	catalog.catalog.ValidatedAt = time.Now().Add(time.Minute)
 	catalog.mu.Unlock()
 	if _, err := codexSpawn(m, "", "gpt-5.2-codex", domain.ProjectConfig{}); err != nil {
 		t.Fatalf("fresh listing: error = %v, want launch", err)

@@ -198,11 +198,13 @@ func (c *conversation) pump() {
 		// The clock is passed in rather than read inside: a rate-limit reset arrives
 		// as an absolute instant and has to become a remaining duration, and a
 		// normalizer that reads the clock itself cannot be tested deterministically.
+		refusedAt, refusal := turnCompletedAt(n)
 		for _, ev := range normalizeNotification(n, now) {
-			if ev.Err != nil {
+			if refusal && ev.Err != nil {
 				// A model this account cannot use: refuse the next session on it
-				// before it starts (#4518).
-				codexagent.RecordUnavailableModelFrom(c.codexHome, ev.Err.Error(), now)
+				// before it starts (#4518), dated by the provider so a turn
+				// replayed on reattach cannot revive a refusal since cleared.
+				codexagent.RecordUnavailableModelFrom(c.codexHome, ev.Err.Error(), refusedAt)
 			}
 			ev = usageLimits.decorate(ev, now)
 			threadID := ev.ProviderConversationID
@@ -296,6 +298,21 @@ func (c *conversation) pump() {
 	}
 	c.emit(state)
 	c.failPendingApprovals()
+}
+
+// turnCompletedAt is when Codex says a failed turn ended, for a turn/completed
+// notification that carries it. A model refusal is recorded only from these:
+// the provider's own time stays the same when a detached host replays the
+// notification, where the time AO received it would not.
+func turnCompletedAt(n notification) (time.Time, bool) {
+	if n.Method != codexproto.MethodTurnCompleted {
+		return time.Time{}, false
+	}
+	var p codexproto.TurnCompletedNotification
+	if json.Unmarshal(n.Params, &p) != nil || p.Turn.Error == nil || p.Turn.CompletedAt == nil || *p.Turn.CompletedAt <= 0 {
+		return time.Time{}, false
+	}
+	return time.Unix(*p.Turn.CompletedAt, 0).UTC(), true
 }
 
 // emit delivers an event, preferring to drop a delta over blocking the reader. A

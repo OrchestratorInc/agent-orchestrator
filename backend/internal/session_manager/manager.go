@@ -2081,11 +2081,20 @@ func (m *Manager) refuseUnavailableCodexModel(ctx context.Context, cfg ports.Spa
 		if catalog, err := m.modelCatalog.Models(ctx, string(cfg.Harness), string(cfg.ProjectID), false); err == nil {
 			for _, item := range catalog.Models {
 				if item.ID == model {
-					if catalog.Stale {
+					// The listing counts only as of when it was observed: a
+					// refusal recorded since then is newer and stays.
+					observed := catalog.ValidatedAt
+					if observed.IsZero() {
+						observed = catalog.FetchedAt
+					}
+					if catalog.Stale || observed.IsZero() {
 						continue
 					}
-					_ = unavailable.Forget(home, model, time.Now())
-					return nil
+					_ = unavailable.Forget(home, model, observed)
+					if !unavailable.Unavailable(home, model) {
+						return nil
+					}
+					continue
 				}
 				available = append(available, item.ID)
 			}
