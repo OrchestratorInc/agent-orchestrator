@@ -51,7 +51,8 @@ export function useBackgroundTasks(sessionId: string, enabled: boolean) {
 			});
 			if (error) throw error;
 			if (!isTaskReading(data)) throw new Error("Invalid background task response");
-			return data;
+			// The daemon leaves out a shell task's command when it is the description.
+			return { ...data, tasks: data.tasks.map((task) => task.kind === "shell" && !task.command ? { ...task, command: task.description } : task) };
 		},
 		refetchInterval: 5_000,
 		staleTime: 1_000,
