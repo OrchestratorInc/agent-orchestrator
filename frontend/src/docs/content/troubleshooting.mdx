@@ -72,16 +72,23 @@ Fix it in this order. Installing rtkit before raising the limits makes the kills
    sudo systemctl mask --runtime rtkit-daemon.service && sudo pacman -S --needed rtkit
    ```
 
+   If the install fails or you cancel it, run this step again. Until step 3 or a reboot releases rtkit, it stays held back, which grants nothing and kills nothing.
+
 3. Run the command from step 1 again to raise processes that started during the install, then release rtkit:
 
    ```bash
    sudo systemctl unmask --runtime rtkit-daemon.service
    ```
 
-4. Confirm rtkit answers with a budget above 0, such as `x 200000`. Then restart the desktop portal right away so it reads that budget, and confirm the portal reports the same value. If either command shows `x 0` or an error, fix the rtkit or portal service and repeat this step before continuing:
+4. Confirm rtkit answers with a budget above 0, such as `x 200000`. If it shows `x 0` or an error, fix the rtkit service and repeat this check before continuing:
 
    ```bash
    busctl get-property org.freedesktop.RealtimeKit1 /org/freedesktop/RealtimeKit1 org.freedesktop.RealtimeKit1 RTTimeUSecMax
+   ```
+
+   Only after that check passes, restart the desktop portal so it reads rtkit's budget, and confirm the portal reports the same value. If it still shows `x 0`, repeat this step:
+
+   ```bash
    systemctl --user restart xdg-desktop-portal.service
    busctl --user get-property org.freedesktop.portal.Desktop /org/freedesktop/portal/desktop org.freedesktop.portal.Realtime RTTimeUSecMax
    ```
