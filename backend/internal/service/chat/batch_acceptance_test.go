@@ -49,16 +49,24 @@ func (*failedBatchAcceptanceStore) MarkQueuedBatchStarted(_ context.Context, _ s
 }
 
 func TestBatchFollowerRetainsProviderAcceptance(t *testing.T) {
-	for _, mode := range []string{"completion_failure", "live_reconnect", "bind_failure", "acceptance_write_failure", "never_sent", "deferred_completion_failure", "deferred_never_sent"} {
+	for _, mode := range []string{"completion_failure", "live_reconnect", "bind_failure", "acceptance_write_failure", "never_sent", "deferred_prompt_rejected", "deferred_never_sent"} {
 		t.Run(mode, func(t *testing.T) {
 			ctx := context.Background()
 			provider := newFakeConversation()
 			var conv ports.ChatConversation = provider
-			if mode == "deferred_completion_failure" || mode == "deferred_never_sent" {
+			if mode == "deferred_prompt_rejected" || mode == "deferred_never_sent" {
 				conv = &deferredConversation{fakeConversation: provider, start: func(id string) error {
-					if id == "provider-turn-2" && mode == "deferred_never_sent" {
+					if id != "provider-turn-2" {
+						return nil
+					}
+					if mode == "deferred_never_sent" {
 						return errors.New("prompt never started")
 					}
+					provider.emit(
+						ports.ChatEvent{Kind: ports.ChatEventTurnStarted, ProviderTurnID: id},
+						ports.ChatEvent{Kind: ports.ChatEventTurnCompleted, ProviderTurnID: id,
+							TurnState: domain.TurnStateFailed, Err: errors.New("provider session missing")},
+					)
 					return nil
 				}}
 			}
@@ -81,10 +89,12 @@ func TestBatchFollowerRetainsProviderAcceptance(t *testing.T) {
 			}
 			provider.emit(ports.ChatEvent{Kind: ports.ChatEventTurnCompleted, ProviderTurnID: "provider-turn-1", TurnState: domain.TurnStateCompleted})
 			h.awaitSnapshot(t, func(s store.ConversationSnapshot) bool {
-				return turnStateByText(t, s)["review-done:run-1:0"] == domain.TurnStateFailed
+				states := turnStateByText(t, s)
+				return states["review-done:run-1:0"] == domain.TurnStateFailed &&
+					(mode != "deferred_prompt_rejected" || states["leader"] == domain.TurnStateFailed)
 			})
 			state, _, started, found, err := h.st.ReviewNoticeChatDelivery(ctx, testSession, "review-done:run-1:0")
-			want := mode != "never_sent" && mode != "deferred_never_sent"
+			want := mode != "never_sent" && mode != "deferred_never_sent" && mode != "deferred_prompt_rejected"
 			if err != nil || !found || state != domain.TurnStateFailed || started != want {
 				t.Fatalf("follower: state=%s started=%v, want failed started=%v; found=%v err=%v", state, started, want, found, err)
 			}

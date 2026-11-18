@@ -2152,7 +2152,7 @@ func (c *Controller) dispatch(
 	// ACP's session/prompt request stays open until the turn finishes, so an ACP
 	// driver prepares the request in SendTurn and starts it here. The durable
 	// provider-id binding above must exist before the first streamed update can be
-	// projected. Eager drivers do not implement this optional interface.
+	// projected. A successful local start does not confirm provider acceptance.
 	if hasDeferredStart {
 		if err := deferred.StartDeferredTurn(ref.ProviderTurnID); err != nil {
 			failFollowers("batch provider start is uncertain: " + err.Error())
@@ -2164,9 +2164,6 @@ func (c *Controller) dispatch(
 				c.log.Error("failed to settle turn after deferred start error", "error", settleErr)
 			}
 			return domain.ConversationTurn{}, fmt.Errorf("start turn: %w", err)
-		}
-		if err := recordAcceptance(); err != nil {
-			return domain.ConversationTurn{}, err
 		}
 	}
 	if len(followers) > 0 {
