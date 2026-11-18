@@ -2,7 +2,7 @@ import { useCallback, useEffect, useId, useMemo, useRef, useState, type ReactNod
 import { useTranslation } from "react-i18next";
 import type { TFunction } from "i18next";
 import { create } from "zustand";
-import { ChevronRight, ListTodo, SquareTerminal } from "@/components/app-icons";
+import { ChevronDown, ListTodo, SquareTerminal } from "@/components/app-icons";
 import {
 	useBackgroundTasks,
 	useStopBackgroundTask,
@@ -273,10 +273,11 @@ export function ComposerBackgroundTasks({ sessionId, reading, onOpenTask, seenFa
 				onClick={() => setOpen((value) => !value)}
 				className="flex h-8 w-full min-w-0 items-center gap-2 rounded-sm text-left focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
 			>
+				{/* Leads the row like the queued-messages toggle above it. */}
+				<ChevronDown aria-hidden="true" className={cn("size-3.5 shrink-0 text-muted-foreground", open ? "rotate-0" : "-rotate-90")} />
 				<SquareTerminal aria-hidden="true" className="size-4 shrink-0 text-muted-foreground" />
 				{live.length ? <span className="shrink-0 text-xs font-medium text-foreground/90">{t("backgroundTasks.runningCount", { count: live.length })}</span> : null}
 				{failedCount ? <span className="min-w-0 truncate text-[11px] text-destructive">{t("backgroundTasks.failedCount", { count: failedCount })}</span> : null}
-				<ChevronRight aria-hidden="true" className={cn("ml-auto size-3 shrink-0 text-muted-foreground/60 transition-transform motion-reduce:transition-none", open && "rotate-90")} />
 			</button>
 			{open ? (
 				<ul id={listId} className="chat-composer-tasks-list">
