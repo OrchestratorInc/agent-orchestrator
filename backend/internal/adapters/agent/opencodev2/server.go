@@ -62,25 +62,62 @@ func prepareSharedServer(ctx context.Context, binary string, cfg ports.LaunchCon
 	if cfg.DataDir == "" || cfg.WorkspacePath == "" || cfg.SessionID == "" {
 		return sharedServer{}, errors.New("opencode-v2: shared server needs a data dir, workspace, and session id")
 	}
-	// Serialize preparations for one worktree: a second launch must not accept
-	// a config the first launch may remove when its server startup fails.
+	// Serialize preparations for one worktree so two launches cannot publish
+	// different config documents or inspect each other's half-written state.
 	release := lockWorkspacePreparation(cfg.WorkspacePath)
 	defer release()
-	if content != "" && !projectConfigIgnored(ctx, cfg.WorkspacePath) {
+	writeConfig, err := checkProjectConfig(cfg.WorkspacePath, content)
+	if err != nil {
+		return sharedServer{}, err
+	}
+	if writeConfig && !projectConfigIgnored(ctx, cfg.WorkspacePath) {
 		return sharedServer{}, errors.New("opencode-v2: workspace does not ignore .opencode/opencode.json")
 	}
-	created, err := writeProjectConfig(cfg.WorkspacePath, content)
-	if err != nil {
-		return sharedServer{}, err
-	}
+	// Start the server before publishing the config. A failed startup then
+	// leaves no AO-owned file behind, so no rollback has to decide whether a
+	// file still belongs to this attempt.
 	server, err := ensureSharedServer(ctx, binary, cfg.DataDir, dataHome)
 	if err != nil {
-		if created {
-			removeProjectConfig(cfg.WorkspacePath, content)
-		}
 		return sharedServer{}, err
 	}
+	if writeConfig {
+		if _, err := writeProjectConfig(cfg.WorkspacePath, content); err != nil {
+			return sharedServer{}, fmt.Errorf("%w: %w", errSharedServerConfig, err)
+		}
+	}
 	return server, nil
+}
+
+var (
+	// errSharedServerUnavailable means a server may still own the data home but
+	// cannot serve this launch. Falling back to a private server would start a
+	// second process against the same data home, so the launch must fail.
+	errSharedServerUnavailable = errors.New("opencode-v2: shared server is running but not healthy")
+	// errSharedServerConfig means the shared server is running but this attempt
+	// could not publish its project config. A private fallback would again share
+	// the data home, so the launch must fail.
+	errSharedServerConfig = errors.New("opencode-v2: shared server project config could not be published")
+)
+
+// checkProjectConfig reports whether content needs to be written. A different
+// existing file is refused before a server starts, so the launch can safely
+// fall back to a private server without touching the file.
+func checkProjectConfig(workspacePath, content string) (bool, error) {
+	if content == "" {
+		return false, nil
+	}
+	path := filepath.Join(workspacePath, ".opencode", projectConfigFileName)
+	existing, err := os.ReadFile(path)
+	if errors.Is(err, os.ErrNotExist) {
+		return true, nil
+	}
+	if err != nil {
+		return false, fmt.Errorf("opencode-v2: read project config: %w", err)
+	}
+	if string(existing) == content {
+		return false, nil
+	}
+	return false, errors.New("opencode-v2: workspace already has .opencode/opencode.json")
 }
 
 // sharedServerEnvDrift reports whether the launch environment differs from the
@@ -147,13 +184,13 @@ func ensureSharedServer(ctx context.Context, binary, dataDir, dataHome string) (
 			// so a later launch can reuse it if it recovers, and never start a
 			// second server while the first one runs: both would write to the
 			// same data home. This launch falls back to a private server.
-			return sharedServer{}, errors.New("opencode-v2: shared server is running but not healthy")
+			return sharedServer{}, errSharedServerUnavailable
 		}
 		// A reattached handle has no process to inspect. Only replace it after
 		// the endpoint itself stops listening; a listening but unhealthy server
 		// may still own the data home and must not get a duplicate.
 		if serverListening(handle.server.url) {
-			return sharedServer{}, errors.New("opencode-v2: shared server is listening but not healthy")
+			return sharedServer{}, fmt.Errorf("%w: endpoint is listening but not healthy", errSharedServerUnavailable)
 		}
 		delete(sharedServerRegistry.byDir, key)
 	}
@@ -166,7 +203,7 @@ func ensureSharedServer(ctx context.Context, binary, dataDir, dataHome string) (
 			}
 			if serverListening(server.url) {
 				sharedServerRegistry.byDir[key] = &serverHandle{server: server}
-				return sharedServer{}, errors.New("opencode-v2: persisted shared server is listening but not healthy")
+				return sharedServer{}, fmt.Errorf("%w: persisted endpoint is listening but not healthy", errSharedServerUnavailable)
 			}
 		}
 	}
@@ -437,16 +474,4 @@ func lockWorkspacePreparation(workspacePath string) func() {
 		}
 		workspacePreparations.mu.Unlock()
 	}
-}
-
-// removeProjectConfig deletes the config only while it still holds exactly the
-// content this startup attempt wrote. A file the user or another tool replaced
-// or edited during the startup wait is left in place.
-func removeProjectConfig(workspacePath, content string) {
-	path := filepath.Join(workspacePath, ".opencode", projectConfigFileName)
-	existing, err := os.ReadFile(path)
-	if err != nil || string(existing) != content {
-		return
-	}
-	_ = os.Remove(path)
 }

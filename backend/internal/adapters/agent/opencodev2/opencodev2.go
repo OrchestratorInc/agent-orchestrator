@@ -132,6 +132,12 @@ func (p *Plugin) command(ctx context.Context, binary string, cfg ports.LaunchCon
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
+	// A running server owns the data home. Starting a private server beside it
+	// would make both write the same OpenCode state, so these errors surface
+	// instead of falling back.
+	if errors.Is(sharedErr, errSharedServerUnavailable) || errors.Is(sharedErr, errSharedServerConfig) {
+		return nil, sharedErr
+	}
 	var cmd []string
 	if sharedErr == nil {
 		// The password reaches the TUI through the runtime environment, not

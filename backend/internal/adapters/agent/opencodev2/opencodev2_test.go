@@ -584,7 +584,7 @@ func TestV2SharedServerFallsBackWhenWorkspaceConfigExists(t *testing.T) {
 	}
 }
 
-func TestPrepareSharedServerRemovesProjectConfigWhenServerFails(t *testing.T) {
+func TestPrepareSharedServerDoesNotWriteConfigWhenServerFails(t *testing.T) {
 	if runtime.GOOS == "windows" {
 		t.Skip("POSIX executable fixture")
 	}
@@ -599,7 +599,7 @@ func TestPrepareSharedServerRemovesProjectConfigWhenServerFails(t *testing.T) {
 		t.Fatal("prepareSharedServer succeeded with a server that exits during startup")
 	}
 	if _, statErr := os.Stat(filepath.Join(workspace, ".opencode", projectConfigFileName)); !errors.Is(statErr, os.ErrNotExist) {
-		t.Fatalf("project config still exists: %v", statErr)
+		t.Fatalf("project config written before the server became ready: %v", statErr)
 	}
 }
 
@@ -788,6 +788,38 @@ func TestLockWorkspacePreparationSerializes(t *testing.T) {
 	}
 }
 
+func TestV2SharedServerBusyReturnsErrorInsteadOfPrivateFallback(t *testing.T) {
+	fakeBinary(t, "2.0.0")
+	dataDir := t.TempDir()
+	workspace := sharedWorkspace(t)
+	handle := &serverHandle{server: sharedServer{url: "http://127.0.0.1:1", password: "pw"}, cmd: &exec.Cmd{}}
+	sharedServerRegistry.mu.Lock()
+	sharedServerRegistry.byDir[dataDir] = handle
+	sharedServerRegistry.mu.Unlock()
+	t.Cleanup(func() {
+		sharedServerRegistry.mu.Lock()
+		delete(sharedServerRegistry.byDir, dataDir)
+		sharedServerRegistry.mu.Unlock()
+	})
+
+	cmd, err := New().GetLaunchCommand(context.Background(), ports.LaunchConfig{
+		DataDir:       dataDir,
+		WorkspacePath: workspace,
+		SessionID:     "sess/busy",
+		SystemPrompt:  "AO rules",
+		Env:           map[string]string{},
+	})
+	if !errors.Is(err, errSharedServerUnavailable) {
+		t.Fatalf("error = %v, want errSharedServerUnavailable", err)
+	}
+	if cmd != nil {
+		t.Fatalf("busy shared server produced a private fallback argv: %#v", cmd)
+	}
+	if _, statErr := os.Stat(filepath.Join(workspace, ".opencode", projectConfigFileName)); !errors.Is(statErr, os.ErrNotExist) {
+		t.Fatalf("project config written for a busy server: %v", statErr)
+	}
+}
+
 func TestEnsureSharedServerKeepsReattachedHandleWhenProbeFails(t *testing.T) {
 	info := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusInternalServerError)
@@ -833,26 +865,6 @@ func TestWriteProjectConfigDoesNotReplaceExistingFile(t *testing.T) {
 	temps, err := filepath.Glob(filepath.Join(workspace, ".opencode", ".ao-tmp-*"))
 	if err != nil || len(temps) != 0 {
 		t.Fatalf("temporary config files left behind: %v %v", temps, err)
-	}
-}
-
-func TestRemoveProjectConfigKeepsEditedFile(t *testing.T) {
-	workspace := t.TempDir()
-	dir := filepath.Join(workspace, ".opencode")
-	if err := os.MkdirAll(dir, 0o750); err != nil {
-		t.Fatal(err)
-	}
-	path := filepath.Join(dir, projectConfigFileName)
-	if err := os.WriteFile(path, []byte("edited by the user"), 0o600); err != nil {
-		t.Fatal(err)
-	}
-	removeProjectConfig(workspace, "written by AO")
-	if _, err := os.Stat(path); err != nil {
-		t.Fatalf("edited config removed: %v", err)
-	}
-	removeProjectConfig(workspace, "edited by the user")
-	if _, err := os.Stat(path); !errors.Is(err, os.ErrNotExist) {
-		t.Fatalf("matching config not removed: %v", err)
 	}
 }
 
