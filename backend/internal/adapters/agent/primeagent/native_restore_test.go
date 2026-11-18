@@ -219,3 +219,27 @@ func TestPrimeImportedRestoreRefusesMissingIdentityRootOrWorkspace(t *testing.T)
 		})
 	}
 }
+
+func TestPrimeImportProofPublishesCompleteWithoutReplacing(t *testing.T) {
+	root := t.TempDir()
+	const marker = ".ao-import-synthetic.json"
+	want := []byte(`{"Version":1,"TargetID":"synthetic"}`)
+	if err := publishPrimeImportProof(root, marker, want); err != nil {
+		t.Fatal(err)
+	}
+	if err := publishPrimeImportProof(root, marker, []byte("replacement")); !errors.Is(err, os.ErrExist) {
+		t.Fatalf("existing proof was not protected: %v", err)
+	}
+	got, err := os.ReadFile(filepath.Join(root, marker))
+	if err != nil || string(got) != string(want) {
+		t.Fatalf("published proof = %q, %v", got, err)
+	}
+	info, err := os.Stat(filepath.Join(root, marker))
+	if err != nil || !info.Mode().IsRegular() {
+		t.Fatalf("proof is not a regular file: %v", err)
+	}
+	entries, err := os.ReadDir(root)
+	if err != nil || len(entries) != 1 || entries[0].Name() != marker {
+		t.Fatalf("staging file leaked: %v, %v", entries, err)
+	}
+}

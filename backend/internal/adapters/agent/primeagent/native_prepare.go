@@ -136,17 +136,27 @@ func (p *Plugin) PrepareImportedSession(ctx context.Context, r ports.ImportedSes
 	if err != nil {
 		return empty, err
 	}
-	file, err := os.OpenFile(filepath.Join(root, marker), os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0o600) //nolint:gosec // AO-managed root and a SHA-256-derived, non-replacing marker name.
-	if err != nil {
+	if err := publishPrimeImportProof(root, marker, data); err != nil {
 		return empty, err
 	}
+	return ports.NativeSessionRef{NativeSessionID: proof.TargetID, ConfigDir: root, TranscriptPath: filepath.Join(root, proof.TargetPath)}, nil
+}
+
+func publishPrimeImportProof(root, marker string, data []byte) error {
+	file, err := os.CreateTemp(root, ".ao-import-staging-*")
+	if err != nil {
+		return err
+	}
+	defer func() { _ = os.Remove(file.Name()) }()
 	_, writeErr := file.Write(data)
 	syncErr := file.Sync()
 	closeErr := file.Close()
 	if err := errors.Join(writeErr, syncErr, closeErr); err != nil {
-		return empty, err
+		return err
 	}
-	return ports.NativeSessionRef{NativeSessionID: proof.TargetID, ConfigDir: root, TranscriptPath: filepath.Join(root, proof.TargetPath)}, nil
+	// Linking a complete, synced file publishes atomically without replacing a
+	// concurrent proof. The staging name is never considered an import proof.
+	return os.Link(file.Name(), filepath.Join(root, marker))
 }
 
 func primeForkMatches(history primeNativeHistory, proof primeImportProof, expected primeNativeHistory) bool {

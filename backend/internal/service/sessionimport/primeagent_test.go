@@ -102,12 +102,8 @@ func TestPrimeAgentImportNativeSizeBoundary(t *testing.T) {
 
 func TestPrimeAgentDiscoveryInventoryBoundary(t *testing.T) {
 	root := t.TempDir()
-	seed := filepath.Join(root, "seed")
-	if err := os.WriteFile(seed, []byte("synthetic inventory entry"), 0o600); err != nil {
-		t.Fatal(err)
-	}
 	for i := range maxPrimeImportFiles {
-		if err := os.Link(seed, filepath.Join(root, fmt.Sprintf("%05d.jsonl", i))); err != nil {
+		if err := os.WriteFile(filepath.Join(root, fmt.Sprintf("%05d.jsonl", i)), nil, 0o600); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -115,7 +111,7 @@ func TestPrimeAgentDiscoveryInventoryBoundary(t *testing.T) {
 	if err != nil || len(files) != maxPrimeImportFiles {
 		t.Fatalf("at-limit inventory = %d, %v", len(files), err)
 	}
-	if err := os.Link(seed, filepath.Join(root, "overflow.jsonl")); err != nil {
+	if err := os.WriteFile(filepath.Join(root, "overflow.jsonl"), nil, 0o600); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := discoverPrimeAgent(context.Background(), root); err == nil || !strings.Contains(err.Error(), "inventory") {
