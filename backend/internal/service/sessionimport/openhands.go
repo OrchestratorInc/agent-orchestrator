@@ -226,7 +226,8 @@ func readOpenHandsTranscript(ctx context.Context, root string, paths ...string) 
 			if json.Unmarshal(line, &event) != nil || event.ID != id {
 				return nil //nolint:nilerr // Ignore nonmatching/invalid records, as in graph recovery.
 			}
-			if !((event.Source == "user" && event.Message.Role == "user") || (event.Source == "agent" && event.Message.Role == "assistant")) {
+			visible := (event.Source == "user" && event.Message.Role == "user") || (event.Source == "agent" && event.Message.Role == "assistant")
+			if !visible {
 				return nil
 			}
 			text := string(event.Message.Content)
