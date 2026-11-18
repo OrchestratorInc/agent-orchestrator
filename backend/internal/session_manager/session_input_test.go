@@ -108,6 +108,85 @@ func TestExplicitOperationsWaitForHibernation(t *testing.T) {
 	}
 }
 
+// Opening a hibernated Chat session wakes it under a resume. An archive
+// clicked during that wake must wait for it rather than fail (#8645).
+func TestKillWaitsForInFlightResume(t *testing.T) {
+	m := newInputLeaseTestManager()
+	id := domain.SessionID("worker-1")
+	if err := m.beginAgentResume(context.Background(), id); err != nil {
+		t.Fatal(err)
+	}
+	killed := make(chan error, 1)
+	go func() { killed <- m.beginAgentOperation(context.Background(), id, agentOperationKill) }()
+	select {
+	case err := <-killed:
+		t.Fatalf("kill failed/overtook the in-flight resume: %v", err)
+	case <-time.After(60 * time.Millisecond):
+	}
+	m.endAgentResume(id)
+	if err := <-killed; err != nil {
+		t.Fatalf("kill after resume finished: %v", err)
+	}
+	m.endAgentOperation(id, agentOperationKill)
+}
+
+func TestKillGivesUpOnAWedgedResume(t *testing.T) {
+	m := newInputLeaseTestManager()
+	m.killResumeWait = 50 * time.Millisecond
+	id := domain.SessionID("worker-1")
+	if err := m.beginAgentResume(context.Background(), id); err != nil {
+		t.Fatal(err)
+	}
+	defer m.endAgentResume(id)
+	started := time.Now()
+	err := m.beginAgentOperation(context.Background(), id, agentOperationKill)
+	if !errors.Is(err, errAgentOperationInProgress) {
+		t.Fatalf("kill error = %v, want errAgentOperationInProgress", err)
+	}
+	if waited := time.Since(started); waited < m.killResumeWait {
+		t.Fatalf("kill gave up after %v, before its %v limit", waited, m.killResumeWait)
+	}
+	if !m.SessionMutationInProgress(id) {
+		t.Fatal("giving up released the resume's operation")
+	}
+}
+
+func TestKillWaitingForResumeHonorsContext(t *testing.T) {
+	m := newInputLeaseTestManager()
+	id := domain.SessionID("worker-1")
+	if err := m.beginAgentResume(context.Background(), id); err != nil {
+		t.Fatal(err)
+	}
+	defer m.endAgentResume(id)
+	ctx, cancel := context.WithTimeout(context.Background(), 40*time.Millisecond)
+	defer cancel()
+	if err := m.beginAgentOperation(ctx, id, agentOperationKill); !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("kill error = %v, want context.DeadlineExceeded", err)
+	}
+}
+
+// Only Kill waits for a resume. Other operations keep failing fast, so a
+// second resume or a restore still reports the session busy at once.
+func TestOtherOperationsStillRefuseAnInFlightResume(t *testing.T) {
+	for _, kind := range []agentOperationKind{agentOperationResume, agentOperationExit, agentOperationRestore, agentOperationProviderSwitch, agentOperationHibernate} {
+		t.Run(string(kind), func(t *testing.T) {
+			m := newInputLeaseTestManager()
+			id := domain.SessionID("worker-1")
+			if err := m.beginAgentResume(context.Background(), id); err != nil {
+				t.Fatal(err)
+			}
+			defer m.endAgentResume(id)
+			started := time.Now()
+			if err := m.beginAgentOperation(context.Background(), id, kind); !errors.Is(err, errAgentOperationInProgress) {
+				t.Fatalf("%s error = %v, want errAgentOperationInProgress", kind, err)
+			}
+			if waited := time.Since(started); waited > 10*time.Millisecond {
+				t.Fatalf("%s waited %v for the resume; want an immediate refusal", kind, waited)
+			}
+		})
+	}
+}
+
 func eventuallySessionInput(t *testing.T, timeout time.Duration, fn func() bool) {
 	t.Helper()
 	deadline := time.Now().Add(timeout)

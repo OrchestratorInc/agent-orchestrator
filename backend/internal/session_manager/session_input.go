@@ -108,20 +108,36 @@ func (m *Manager) beginAgentOperation(ctx context.Context, id domain.SessionID, 
 		return err
 	}
 	var drained <-chan struct{}
+	var resumeDeadline time.Time
 	for {
 		m.agentOpMu.Lock()
 		if m.agentOperationActiveLocked(id) {
 			current := m.agentOperations[id]
 			m.agentOpMu.Unlock()
-			if current != agentOperationHibernate || kind == agentOperationHibernate {
+			switch {
+			case current == agentOperationHibernate && kind != agentOperationHibernate:
+				// Background cleanup yields to every explicit operation once its
+				// bounded shutdown completes; it must not make Kill/Switch fail.
+			case current == agentOperationResume && kind == agentOperationKill:
+				// Opening a hibernated Chat session wakes it, and the wake holds
+				// a resume for as long as the provider takes to reload the
+				// conversation. An archive clicked meanwhile must not fail for
+				// work the user did not start: wait for the wake, bounded so a
+				// wedged resume still leaves Kill most of its teardown budget.
+				if resumeDeadline.IsZero() {
+					resumeDeadline = time.Now().Add(m.killResumeWaitLimit())
+				} else if time.Now().After(resumeDeadline) {
+					m.agentWaitLogger().Warn("kill gave up waiting for a resume to finish",
+						"sessionID", id, "waited", m.killResumeWaitLimit())
+					return errAgentOperationInProgress
+				}
+			default:
 				return errAgentOperationInProgress
 			}
-			// Background cleanup yields to every explicit operation once its
-			// bounded shutdown completes; it must not make Kill/Switch fail.
 			select {
 			case <-ctx.Done():
-				m.agentWaitLogger().Warn("agent operation gave up waiting for hibernation to finish",
-					"sessionID", id, "operation", kind, "error", ctx.Err())
+				m.agentWaitLogger().Warn("agent operation gave up waiting for another operation to finish",
+					"sessionID", id, "operation", kind, "holder", current, "error", ctx.Err())
 				return ctx.Err()
 			case <-time.After(20 * time.Millisecond):
 				continue
@@ -156,6 +172,19 @@ func (m *Manager) beginAgentOperation(ctx context.Context, id domain.SessionID, 
 			"inputLeases", leases, "oldestLeaseHeldFor", heldFor, "error", ctx.Err())
 		return ctx.Err()
 	}
+}
+
+// killResumeWait bounds how long Kill waits for an in-flight resume (a wake)
+// before reporting the session busy. A Chat wake normally finishes in seconds;
+// 30s leaves Kill 60s of its 90s teardown budget and keeps the archive request
+// inside the REST layer's 60s timeout.
+const killResumeWait = 30 * time.Second
+
+func (m *Manager) killResumeWaitLimit() time.Duration {
+	if m.killResumeWait > 0 {
+		return m.killResumeWait
+	}
+	return killResumeWait
 }
 
 // Some tests build a Manager without New, so the logger may be unset.

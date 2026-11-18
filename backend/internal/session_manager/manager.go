@@ -508,6 +508,9 @@ type Manager struct {
 	// killTeardown bounds Kill's detached teardown. Zero means
 	// killTeardownBudget; tests shrink it to prove what survives its expiry.
 	killTeardown time.Duration
+	// killResumeWait bounds Kill's wait for an in-flight resume. Zero means
+	// killResumeWait; tests shrink it to prove Kill still gives up.
+	killResumeWait time.Duration
 	// openTranscriptFile is os.Open in production. The narrow seam lets tests
 	// deterministically prove that a post-stop transcript read failure falls
 	// back without advertising the provider path.
