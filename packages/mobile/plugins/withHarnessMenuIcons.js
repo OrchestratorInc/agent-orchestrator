@@ -3,7 +3,7 @@ const path = require("node:path");
 const { withDangerousMod } = require("@expo/config-plugins");
 
 // The harness marks SwiftUI menus draw by asset name, sized and scaled for
-// them (scripts/generate-harness-menu-icons.mjs writes these image sets).
+// them (scripts/sync-harness-logos.mjs writes these image sets).
 const source = path.join(__dirname, "..", "assets", "icons", "harness");
 
 function copyHarnessMenuIcons(platformProjectRoot, projectName) {

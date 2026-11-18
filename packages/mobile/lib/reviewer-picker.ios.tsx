@@ -1,7 +1,7 @@
 import { Label, Picker, Text } from "@expo/ui/swift-ui";
 import { accessibilityIdentifier, disabled, listRowBackground, pickerStyle, tag, tint } from "@expo/ui/swift-ui/modifiers";
 import { projectDefaultLabel, withCurrentOption, type ReviewerChoiceRow, type ReviewerPickerProps } from "./reviewer-picker.types";
-import { HarnessImage, useHarnessLogoUris } from "./spawn-composer-controls.ios";
+import { HarnessImage } from "./spawn-composer-controls.ios";
 import { appFont } from "./swiftUIFont";
 import { useTheme } from "./ThemeProvider";
 import { useDeclinedChoice } from "./useDeclinedChoice";
@@ -13,7 +13,6 @@ import { useDeclinedChoice } from "./useDeclinedChoice";
  */
 export function ReviewerPicker({ reviewers, selectedReviewer, effectiveReviewer, onSelectReviewer, model, onSelectModel, effort, onSelectEffort, busy }: ReviewerPickerProps) {
 	const rowModifiers = useRowModifiers(busy);
-	const logoUris = useHarnessLogoUris(reviewers);
 	const reviewerChoice = useDeclinedChoice(selectedReviewer, busy);
 	return (
 		<>
@@ -26,7 +25,7 @@ export function ReviewerPicker({ reviewers, selectedReviewer, effectiveReviewer,
 			>
 				<Label title={projectDefaultLabel(reviewers, effectiveReviewer)} systemImage="person.2" modifiers={[tag("")]} />
 				{withCurrentOption(reviewers, selectedReviewer).map((agent) => (
-					<Label key={agent.id} title={agent.label} icon={<HarnessImage uri={logoUris[agent.id]} harness={agent.id} />} modifiers={[tag(agent.id)]} />
+					<Label key={agent.id} title={agent.label} icon={<HarnessImage harness={agent.id} />} modifiers={[tag(agent.id)]} />
 				))}
 			</Picker>
 			{model ? <ChoicePicker row={model} busy={busy} tag="review-model" onSelect={onSelectModel} /> : null}
