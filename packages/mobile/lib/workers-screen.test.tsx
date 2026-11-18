@@ -322,6 +322,20 @@ describe("Workers filter menu", () => {
 		expect(line().props.hostId).toBe("windows");
 	});
 
+	// Android's title is in the bar, whose frost dimmed a line placed right under
+	// it; the chips draw above the frost, so there the line goes beneath them.
+	it("puts the freshness line under the chips on Android and above them on iOS", () => {
+		fixtures.hostStates = [snapshot({ hostId: "mac", name: "Mac" }), snapshot({ hostId: "windows", name: "Windows" })];
+		const order = () => renderer.root.findAll((node) => node.type === ("FreshnessLine" as never) || node.type === WorkerEnvironmentFilter, { deep: true })
+			.map((node) => (node.type === WorkerEnvironmentFilter ? "chips" : "line"));
+		act(() => { renderer = create(<FleetScreen />); });
+		expect(order()).toEqual(["line", "chips"]);
+		act(() => renderer.unmount());
+		fixtures.platform = "android";
+		act(() => { renderer = create(<FleetScreen />); });
+		expect(order()).toEqual(["chips", "line"]);
+	});
+
 	it("scopes the project choices to the chosen machine and drops one it does not have", () => {
 		fixtures.projects = [project("ao", "AO", "mac", "Mac"), project("game", "Game", "windows", "Windows")];
 		act(() => { renderer = create(<FleetScreen />); });

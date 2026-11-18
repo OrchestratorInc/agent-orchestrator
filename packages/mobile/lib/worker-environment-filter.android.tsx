@@ -43,7 +43,9 @@ export function WorkerEnvironmentFilter({ environments, selectedEnvironmentId, o
 					const tone = freshnessTone(environment.freshness);
 					return (
 						<FilterChip
-							key={environment.id}
+							// Keyed by its dot too: Compose took up a trailing slot only when
+							// the chip was built, so a dot that appeared later never drew.
+							key={`${environment.id}:${tone ?? "live"}`}
 							selected={selected}
 							// Choosing the chosen machine again goes back to every environment.
 							onClick={() => select(selected && !all ? ALL_WORKER_ENVIRONMENTS : environment.id)}

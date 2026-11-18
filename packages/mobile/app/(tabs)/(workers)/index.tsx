@@ -1,6 +1,6 @@
 import { useFocusEffect, useRouter } from "expo-router";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { ActivityIndicator, FlatList, Keyboard, StyleSheet, View } from "react-native";
+import { ActivityIndicator, FlatList, Keyboard, Platform, StyleSheet, View } from "react-native";
 import { useLargeTitle } from "../../../lib/largeTitle";
 import { useTabBarFrost } from "../../../lib/frost";
 import { boardTitle } from "../../../lib/board-tabs";
@@ -237,10 +237,15 @@ export default function FleetScreen() {
 	// rows rather than inside ListEmptyComponent, because the case the line exists
 	// for is a populated board whose machine has stopped answering; an empty board's
 	// own state already says why it is empty.
+	const freshnessLine = boardEmpty ? null : <FreshnessLine hostId={lineHostId} onRetry={retry} />;
+	// Under the large title on iOS. Android's title is in the bar, whose frost
+	// fades over the first stretch of the page and dimmed a line placed there;
+	// the chips draw above the frost, so the line goes beneath them.
+	const lineAboveChips = Platform.OS !== "android";
 	const listHeader = unpaired ? largeTitle.header : (
 		<>
 			{largeTitle.header}
-			{boardEmpty ? null : <FreshnessLine hostId={lineHostId} onRetry={retry} />}
+			{lineAboveChips ? freshnessLine : null}
 			{showsEnvironmentFilter(environments) ? (
 				<WorkerEnvironmentFilter
 					environments={environments}
@@ -248,6 +253,7 @@ export default function FleetScreen() {
 					onSelectEnvironment={selectEnvironment}
 				/>
 			) : null}
+			{lineAboveChips ? null : freshnessLine}
 		</>
 	);
 
