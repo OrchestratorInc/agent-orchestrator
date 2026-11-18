@@ -1190,7 +1190,10 @@ export function createBrowserViewHost(
           options.mainWindow.contentView.addChildView(view as unknown as BrowserViewLike);
           options.onNativeViewAdded?.();
         },
-        detach: (view) => options.mainWindow.contentView.removeChildView?.(view as unknown as BrowserViewLike),
+        detach: (view) => {
+          if (options.mainWindow.isDestroyed?.()) return;
+          options.mainWindow.contentView.removeChildView?.(view as unknown as BrowserViewLike);
+        },
       })
     : undefined;
   // The agent starts working after a quiet spell: once its tab has settled

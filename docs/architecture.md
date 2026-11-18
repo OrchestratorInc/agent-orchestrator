@@ -1342,7 +1342,10 @@ agent's own current tab, whichever tab the person has in front, and the
 automation runtime is only shown the agent's tabs. A tab the person opens
 (the new-tab button, a shortcut, or a link they click) is theirs: the agent
 cannot list, select, or close it. A session's first tab belongs to whichever
-of them uses it first, and previews load in the agent's tab. This decides
+of them uses it first. Previews load in the agent's tab, except when a
+remote or cloud session's agent-browser viewer is in front: the preview then
+goes to a tab already on its origin (or holding another preview), else to a
+new tab, and those are the person's. This decides
 which tabs the agent's commands can target; it is not a data boundary. All of
 a session's tabs share one browser profile, so cookies, local storage,
 IndexedDB, and service workers are shared, and an agent page on the same site

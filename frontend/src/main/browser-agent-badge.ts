@@ -44,7 +44,8 @@ animation:pop .5s cubic-bezier(.34,1.56,.64,1) both,conduct .9s ease-in-out .5s 
 @keyframes conduct{0%,50%,100%{transform:none}25%{transform:translateY(-7px) rotate(-10deg)}75%{transform:translateY(-7px) rotate(10deg)}}
 @keyframes leave{to{opacity:0;transform:translateY(14px) scale(.8)}}
 @keyframes appear{from{opacity:0}}
-@media (prefers-reduced-motion:reduce){.m{animation:appear .2s both,leave .4s ease-in ${exitAt}s forwards}}
+@keyframes fade{to{opacity:0}}
+@media (prefers-reduced-motion:reduce){.m{animation:appear .2s both,fade .4s ease-in ${exitAt}s forwards}}
 </style></head><body><div class="m">${mascotSvg.replace(/^\s*<\?xml[^>]*>\s*/, "")}</div></body></html>`;
 }
 
@@ -122,9 +123,21 @@ export function createAgentBadge(options: {
 		dispose: () => {
 			hide();
 			if (!view) return;
-			options.detach(view);
-			view.webContents.close?.();
+			const closing = view;
 			view = undefined;
+			// The window may already be gone (host disposal runs from its
+			// `closed` handler): detaching then throws, and must not keep the
+			// badge's own contents open or stop the host's other cleanup.
+			try {
+				options.detach(closing);
+			} catch {
+				// Nothing left to detach from.
+			}
+			try {
+				closing.webContents.close?.();
+			} catch {
+				// Already closed.
+			}
 		},
 	};
 }

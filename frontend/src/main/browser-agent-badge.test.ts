@@ -92,6 +92,26 @@ describe("agent badge", () => {
 		expect(view.setVisible).toHaveBeenLastCalledWith(false);
 	});
 
+	it("only fades, without moving, when motion is reduced", () => {
+		const reduced = agentBadgeDocument().split("prefers-reduced-motion:reduce")[1]!;
+		expect(reduced).not.toMatch(/\bleave\b|\bpop\b|\bconduct\b/);
+		expect(agentBadgeDocument()).toMatch(/@keyframes fade\{to\{opacity:0\}\}/);
+	});
+
+	it("still closes its contents when the window is already gone", () => {
+		const { view } = fakeView();
+		const badge = createAgentBadge({
+			create: () => view as AgentBadgeView,
+			attach: vi.fn(),
+			detach: () => {
+				throw new Error("Object has been destroyed");
+			},
+		});
+		badge.show("a", page);
+		expect(() => badge.dispose()).not.toThrow();
+		expect(view.webContents.close).toHaveBeenCalled();
+	});
+
 	it("reuses one view and closes it on dispose", () => {
 		const { view } = fakeView();
 		const create = vi.fn(() => view as AgentBadgeView);
