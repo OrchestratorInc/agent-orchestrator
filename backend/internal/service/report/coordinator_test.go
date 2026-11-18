@@ -514,6 +514,93 @@ func TestCoordinatorUnavailableBacksOffWithoutExhaustingAttempts(t *testing.T) {
 	}
 }
 
+func TestCoordinatorBusyUnavailableToUnacknowledgedTransition(t *testing.T) {
+	now := time.Date(2026, 11, 16, 10, 0, 0, 0, time.UTC)
+	store := newCoordinatorStore(now)
+	store.sessions = []domain.SessionRecord{{ID: "orch", ProjectID: "p", Kind: domain.KindOrchestrator, Mode: domain.SessionModeChat}}
+	store.add(reportAt("rep-1", "worker", now, now, "transition test"))
+	delivery := &coordinatorDelivery{submitErr: ErrOrchestratorBusy}
+	c := NewCoordinator(CoordinatorDeps{
+		Store:               store,
+		Delivery:            delivery,
+		Now:                 func() time.Time { return now },
+		RetryDelay:          5 * time.Second,
+		MaxDeliveryAttempts: 3,
+		Expiry:              time.Hour,
+	})
+
+	// Attempts 1..3: ErrOrchestratorBusy retries do not count against the unacknowledged attempt budget
+	for i := 1; i <= 3; i++ {
+		delay, err := c.RunDue(context.Background())
+		if err != nil || delay != OrchestratorBusyRetry {
+			t.Fatalf("busy attempt %d: delay = %v, err = %v, want delay %v and nil err", i, delay, err, OrchestratorBusyRetry)
+		}
+		if store.reports[0].DeliveryState != domain.ReportPending {
+			t.Fatalf("busy attempt %d: state = %s, want pending", i, store.reports[0].DeliveryState)
+		}
+		now = now.Add(OrchestratorBusyRetry)
+	}
+	if store.reports[0].DeliveryAttempts != 3 {
+		t.Fatalf("store attempts = %d, want 3", store.reports[0].DeliveryAttempts)
+	}
+
+	// Attempt 4: Transient controller-unavailable error also does not count against the budget
+	delivery.submitErr = errors.New("no live chat controller for session")
+	if _, err := c.RunDue(context.Background()); err == nil {
+		t.Fatal("unavailable attempt should fail")
+	}
+	if store.reports[0].DeliveryState != domain.ReportPending {
+		t.Fatalf("unavailable attempt: state = %s, want pending", store.reports[0].DeliveryState)
+	}
+	if store.reports[0].DeliveryAttempts != 4 {
+		t.Fatalf("store attempts = %d, want 4", store.reports[0].DeliveryAttempts)
+	}
+
+	// Now switch to ErrUnacknowledgedDelivery.
+	// Even though store.reports[0].DeliveryAttempts is 4 (> MaxDeliveryAttempts 3),
+	// the unacknowledged attempt budget is intact and has seen 0 unacknowledged attempts so far.
+	delivery.submitErr = ErrUnacknowledgedDelivery
+
+	// Unacknowledged Attempt 1 (Total claim attempt 5): must remain pending
+	now = store.reports[0].AvailableAt
+	if _, err := c.RunDue(context.Background()); err == nil {
+		t.Fatal("unacknowledged attempt 1 should fail")
+	}
+	if store.reports[0].DeliveryState != domain.ReportPending {
+		t.Fatalf("unacknowledged attempt 1: state = %s, want pending", store.reports[0].DeliveryState)
+	}
+	if store.reports[0].DeliveryAttempts != 5 {
+		t.Fatalf("store attempts = %d, want 5", store.reports[0].DeliveryAttempts)
+	}
+
+	// Unacknowledged Attempt 2 (Total claim attempt 6): must remain pending
+	now = store.reports[0].AvailableAt
+	if _, err := c.RunDue(context.Background()); err == nil {
+		t.Fatal("unacknowledged attempt 2 should fail")
+	}
+	if store.reports[0].DeliveryState != domain.ReportPending {
+		t.Fatalf("unacknowledged attempt 2: state = %s, want pending", store.reports[0].DeliveryState)
+	}
+	if store.reports[0].DeliveryAttempts != 6 {
+		t.Fatalf("store attempts = %d, want 6", store.reports[0].DeliveryAttempts)
+	}
+
+	// Unacknowledged Attempt 3 (Total claim attempt 7: reaches MaxDeliveryAttempts = 3): must transition to failed!
+	now = store.reports[0].AvailableAt
+	if _, err := c.RunDue(context.Background()); err == nil {
+		t.Fatal("unacknowledged attempt 3 should fail")
+	}
+	if store.reports[0].DeliveryState != domain.ReportFailed {
+		t.Fatalf("after 3 unacknowledged attempts: state = %s, want %s", store.reports[0].DeliveryState, domain.ReportFailed)
+	}
+	if store.reports[0].DeliveryAttempts != 7 {
+		t.Fatalf("store attempts = %d, want 7", store.reports[0].DeliveryAttempts)
+	}
+	if store.reports[0].LastError != "prompt submission was not observed" {
+		t.Fatalf("last error = %q, want 'prompt submission was not observed'", store.reports[0].LastError)
+	}
+}
+
 func TestCoordinatorSurfacesFailedReportsInNextDelivery(t *testing.T) {
 	now := time.Date(2026, 11, 16, 10, 0, 0, 0, time.UTC)
 	store := newCoordinatorStore(now)
@@ -589,8 +676,8 @@ func TestCoordinatorClearsOnlyIncludedFailureCountOnAcknowledgment(t *testing.T)
 	if store.reports[0].DeliveryState != domain.ReportFailed {
 		t.Fatalf("rep-1 state = %s, want %s", store.reports[0].DeliveryState, domain.ReportFailed)
 	}
-	if c.undeliveredCount["p"] != 1 {
-		t.Fatalf("undeliveredCount = %d, want 1", c.undeliveredCount["p"])
+	if c.UndeliveredCount("p") != 1 {
+		t.Fatalf("undeliveredCount = %d, want 1", c.UndeliveredCount("p"))
 	}
 
 	// Prepare batch A for rep-2 (capturing UndeliveredReports = 1)
@@ -616,16 +703,16 @@ func TestCoordinatorClearsOnlyIncludedFailureCountOnAcknowledgment(t *testing.T)
 	if err := c.fail(context.Background(), batchB, cause); !errors.Is(err, cause) {
 		t.Fatalf("fail batchB: %v", err)
 	}
-	if c.undeliveredCount["p"] != 2 {
-		t.Fatalf("undeliveredCount after batchB = %d, want 2", c.undeliveredCount["p"])
+	if c.UndeliveredCount("p") != 2 {
+		t.Fatalf("undeliveredCount after batchB = %d, want 2", c.UndeliveredCount("p"))
 	}
 
 	// Accept batch A: must clear only batchA's captured count (1), retaining the 1 failure from batchB
 	if err := c.AcceptPiggyback(context.Background(), batchA); err != nil {
 		t.Fatalf("AcceptPiggyback batchA: %v", err)
 	}
-	if c.undeliveredCount["p"] != 1 {
-		t.Fatalf("undeliveredCount after accepting batchA = %d, want 1", c.undeliveredCount["p"])
+	if c.UndeliveredCount("p") != 1 {
+		t.Fatalf("undeliveredCount after accepting batchA = %d, want 1", c.UndeliveredCount("p"))
 	}
 }
 
@@ -653,8 +740,118 @@ func TestCoordinatorFailDoesNotRecordNoticeWhenStoreFails(t *testing.T) {
 	if onFailedCalled {
 		t.Fatal("onBatchFailed should not be called when FailReportBatch fails")
 	}
-	if c.undeliveredCount["p"] != 0 {
-		t.Fatalf("undeliveredCount = %d, want 0 when store fails", c.undeliveredCount["p"])
+	if c.UndeliveredCount("p") != 0 {
+		t.Fatalf("undeliveredCount = %d, want 0 when store fails", c.UndeliveredCount("p"))
+	}
+}
+
+func TestCoordinatorOverlappingBatchesFailureNoticeCheckpoint(t *testing.T) {
+	now := time.Date(2026, 11, 16, 10, 0, 0, 0, time.UTC)
+	store := newCoordinatorStore(now)
+	store.sessions = []domain.SessionRecord{{ID: "orch", ProjectID: "p", Kind: domain.KindOrchestrator, Mode: domain.SessionModeChat}}
+	store.add(reportAt("rep-1", "worker", now, now, "fails first"))
+	c := NewCoordinator(CoordinatorDeps{
+		Store:               store,
+		Delivery:            &coordinatorDelivery{submitErr: ErrUnacknowledgedDelivery},
+		Now:                 func() time.Time { return now },
+		MaxDeliveryAttempts: 1,
+		Expiry:              time.Hour,
+	})
+
+	// Fail rep-1
+	_, _ = c.RunDue(context.Background())
+	if store.reports[0].DeliveryState != domain.ReportFailed {
+		t.Fatalf("rep-1 state = %s, want %s", store.reports[0].DeliveryState, domain.ReportFailed)
+	}
+	if c.UndeliveredCount("p") != 1 {
+		t.Fatalf("undeliveredCount = %d, want 1", c.UndeliveredCount("p"))
+	}
+
+	// Prepare batch A for rep-2 (capturing UndeliveredReports = 1, FailureCheckpoint = 1)
+	store.add(reportAt("rep-2", "worker", now, now, "piggyback batch A"))
+	batchA, err := c.PreparePiggyback(context.Background(), "orch")
+	if err != nil || len(batchA.Reports) != 1 {
+		t.Fatalf("PreparePiggyback batchA err = %v, reports = %d", err, len(batchA.Reports))
+	}
+	if batchA.UndeliveredReports != 1 || batchA.FailureCheckpoint != 1 {
+		t.Fatalf("batchA undelivered = %d, checkpoint = %d, want 1, 1", batchA.UndeliveredReports, batchA.FailureCheckpoint)
+	}
+
+	// Prepare batch B for rep-3 while batch A is in flight (also capturing UndeliveredReports = 1, FailureCheckpoint = 1)
+	store.add(reportAt("rep-3", "worker", now, now, "piggyback batch B"))
+	batchB, err := c.PreparePiggyback(context.Background(), "orch")
+	if err != nil || len(batchB.Reports) != 1 {
+		t.Fatalf("PreparePiggyback batchB err = %v, reports = %d", err, len(batchB.Reports))
+	}
+	if batchB.UndeliveredReports != 1 || batchB.FailureCheckpoint != 1 {
+		t.Fatalf("batchB undelivered = %d, checkpoint = %d, want 1, 1", batchB.UndeliveredReports, batchB.FailureCheckpoint)
+	}
+
+	// Deliver and accept batch B
+	if err := c.AcceptPiggyback(context.Background(), batchB); err != nil {
+		t.Fatalf("AcceptPiggyback batchB: %v", err)
+	}
+	if c.UndeliveredCount("p") != 0 {
+		t.Fatalf("undeliveredCount after batchB = %d, want 0", c.UndeliveredCount("p"))
+	}
+
+	// Intervening failure: rep-4 fails while batch A is still in flight
+	batchFail := PreparedBatch{
+		ProjectID: "p",
+		Token:     "tok-fail",
+		Reports:   []domain.ReportRecord{reportAt("rep-4", "worker", now, now, "intervening failure")},
+	}
+	store.reports = append(store.reports, reportAt("rep-4", "worker", now, now, "intervening failure"))
+	store.reports[len(store.reports)-1].DeliveryState = domain.ReportClaimed
+	store.reports[len(store.reports)-1].ClaimToken = "tok-fail"
+	cause := errors.New("intervening error")
+	if err := c.fail(context.Background(), batchFail, cause); !errors.Is(err, cause) {
+		t.Fatalf("fail batchFail: %v", err)
+	}
+	if c.UndeliveredCount("p") != 1 {
+		t.Fatalf("undeliveredCount after intervening failure = %d, want 1", c.UndeliveredCount("p"))
+	}
+
+	// Zero-row acknowledgment test: accepting a stale batch affecting zero rows must not consume notice
+	staleBatch := PreparedBatch{
+		ProjectID:          "p",
+		Token:              "stale-token-not-in-store",
+		Reports:            []domain.ReportRecord{reportAt("rep-stale", "worker", now, now, "stale")},
+		UndeliveredReports: 1,
+		FailureCheckpoint:  2,
+	}
+	if err := c.AcceptPiggyback(context.Background(), staleBatch); err != nil {
+		t.Fatalf("AcceptPiggyback staleBatch: %v", err)
+	}
+	if c.UndeliveredCount("p") != 1 {
+		t.Fatalf("undeliveredCount after zero-row staleBatch = %d, want 1", c.UndeliveredCount("p"))
+	}
+
+	// Accept batch A: batchA carries FailureCheckpoint = 1, but failureAckedSeq is already 1.
+	// Accepting A must not subtract its stale snapshot and must preserve rep-4's failure!
+	if err := c.AcceptPiggyback(context.Background(), batchA); err != nil {
+		t.Fatalf("AcceptPiggyback batchA: %v", err)
+	}
+	if c.UndeliveredCount("p") != 1 {
+		t.Fatalf("undeliveredCount after accepting batchA = %d, want 1 (must not erase intervening failure)", c.UndeliveredCount("p"))
+	}
+
+	// Verify next prepared batch includes the intervening failure notice
+	store.add(reportAt("rep-5", "worker", now, now, "batch C"))
+	batchC, err := c.PreparePiggyback(context.Background(), "orch")
+	if err != nil || len(batchC.Reports) != 1 {
+		t.Fatalf("PreparePiggyback batchC err = %v, reports = %d", err, len(batchC.Reports))
+	}
+	if batchC.UndeliveredReports != 1 || batchC.FailureCheckpoint != 2 {
+		t.Fatalf("batchC undelivered = %d, checkpoint = %d, want 1, 2", batchC.UndeliveredReports, batchC.FailureCheckpoint)
+	}
+
+	// Deliver and accept batch C
+	if err := c.AcceptPiggyback(context.Background(), batchC); err != nil {
+		t.Fatalf("AcceptPiggyback batchC: %v", err)
+	}
+	if c.UndeliveredCount("p") != 0 {
+		t.Fatalf("undeliveredCount after batchC = %d, want 0", c.UndeliveredCount("p"))
 	}
 }
 
