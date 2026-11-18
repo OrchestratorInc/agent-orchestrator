@@ -60,6 +60,9 @@ func (p *Plugin) LastTurnFailure(ctx context.Context, transcriptPath string) (po
 		return ports.TurnFailure{}, false, err
 	}
 	failure, ok := lastCodexTurnFailure(tail)
+	if ok {
+		RecordUnavailableModelFrom(failure.Message, failure.At)
+	}
 	return failure, ok, nil
 }
 

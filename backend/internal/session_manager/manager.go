@@ -20,6 +20,7 @@ import (
 
 	"github.com/google/uuid"
 
+	codexagent "github.com/aoagents/agent-orchestrator/backend/internal/adapters/agent/codex"
 	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/agent/memcode"
 	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/agent/modelcatalog"
 	"github.com/aoagents/agent-orchestrator/backend/internal/agentlaunch"
@@ -1955,6 +1956,11 @@ func (m *Manager) resolveAgentConfigOnce(ctx context.Context, cfg ports.SpawnCon
 		// let the CLI reject unknown values at launch.
 		return resolved, nil
 	}
+	if cfg.Harness == domain.HarnessCodex {
+		if err := m.refuseUnavailableCodexModel(ctx, cfg, strings.TrimSpace(resolved.Model)); err != nil {
+			return ports.AgentConfig{}, err
+		}
+	}
 	modelID := strings.TrimSpace(resolved.Model)
 	validateClaudeModel := cfg.Harness == domain.HarnessClaudeCode && modelID != ""
 	if resolved.Effort == "" && !validateClaudeModel {
@@ -2052,6 +2058,30 @@ func (m *Manager) resolveAgentConfigOnce(ctx context.Context, cfg ports.SpawnCon
 		return ports.AgentConfig{}, fmt.Errorf("%w %q for model %q", ports.ErrUnsupportedEffort, resolved.Effort, modelID)
 	}
 	return resolved, nil
+}
+
+// refuseUnavailableCodexModel refuses a Codex session on a model Codex already
+// refused for the signed-in ChatGPT account, instead of starting a worker whose
+// first turn fails (#4518). A model the saved catalog lists again is allowed
+// and forgotten: the account may have changed.
+func (m *Manager) refuseUnavailableCodexModel(ctx context.Context, cfg ports.SpawnConfig, model string) error {
+	unavailable := codexagent.DefaultUnavailableModels()
+	if model == "" || !unavailable.Unavailable(model) {
+		return nil
+	}
+	var available []string
+	if m.modelCatalog != nil {
+		if catalog, err := m.modelCatalog.Models(ctx, string(cfg.Harness), string(cfg.ProjectID), false); err == nil {
+			for _, item := range catalog.Models {
+				if item.ID == model {
+					_ = unavailable.Forget(model)
+					return nil
+				}
+				available = append(available, item.ID)
+			}
+		}
+	}
+	return fmt.Errorf("%w: %s", ErrUnsupportedModel, codexagent.UnavailableModelMessage(model, available))
 }
 
 // refreshModelCatalogInBackground rediscovers a harness's catalog without
