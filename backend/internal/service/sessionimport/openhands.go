@@ -1,7 +1,6 @@
 package sessionimport
 
 import (
-	"cmp"
 	"context"
 	"encoding/json"
 	"errors"
@@ -9,12 +8,12 @@ import (
 	"os"
 	"path/filepath"
 	"slices"
-	"strconv"
 	"strings"
 	"time"
 
 	"github.com/google/uuid"
 
+	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/agent/openhands"
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
 )
 
@@ -53,52 +52,42 @@ func discoverOpenHands(ctx context.Context, root string) ([]sourceFiles, error) 
 			return nil, err
 		}
 		id, err := uuid.Parse(entry.Name())
-		if err != nil || !entry.IsDir() {
+		if err != nil || !entry.IsDir() || entry.Name() != strings.ReplaceAll(id.String(), "-", "") {
 			continue
 		}
-		state := filepath.Join(entry.Name(), "base_state.json")
-		info, err := provider.Stat(state)
-		if err != nil || !info.Mode().IsRegular() {
-			continue
-		}
-		files := sourceFiles{harness: domain.HarnessOpenHands, root: root, key: id.String(), paths: []string{filepath.Join(root, state)}, modTime: info.ModTime(), size: info.Size()}
-		events, err := provider.Open(filepath.Join(entry.Name(), "events"))
+		paths, err := openhands.ConversationFiles(ctx, root, id.String())
 		if err != nil {
-			continue
-		}
-		children, err := events.ReadDir(-1)
-		_ = events.Close()
-		if err != nil {
-			continue
-		}
-		var paths []string
-		for _, event := range children {
-			if !event.Type().IsRegular() || !strings.HasPrefix(event.Name(), "event-") || !strings.HasSuffix(event.Name(), ".json") {
-				continue
+			if ctx.Err() != nil {
+				return nil, ctx.Err()
 			}
-			path := filepath.Join(entry.Name(), "events", event.Name())
-			info, err := provider.Stat(path)
+			continue
+		}
+		files := sourceFiles{harness: domain.HarnessOpenHands, root: root, key: id.String(), paths: paths}
+		valid := true
+		for _, path := range paths {
+			rel, err := filepath.Rel(root, path)
+			if err != nil || !filepath.IsLocal(rel) {
+				valid = false
+				break
+			}
+			info, err := provider.Stat(rel)
 			if err != nil {
-				continue
+				valid = false
+				break
 			}
-			paths = append(paths, filepath.Join(root, path))
 			files.size += info.Size()
 			if info.ModTime().After(files.modTime) {
 				files.modTime = info.ModTime()
 			}
 		}
-		slices.SortFunc(paths, func(a, b string) int {
-			aParts := strings.SplitN(filepath.Base(a), "-", 3)
-			bParts := strings.SplitN(filepath.Base(b), "-", 3)
-			aIndex, aErr := strconv.ParseUint(aParts[1], 10, 64)
-			bIndex, bErr := strconv.ParseUint(bParts[1], 10, 64)
-			if aErr == nil && bErr == nil && aIndex != bIndex {
-				return cmp.Compare(aIndex, bIndex)
+		if valid {
+			files.fingerprint, err = openhands.ConversationFingerprint(ctx, root, id.String())
+			if err != nil {
+				if ctx.Err() != nil {
+					return nil, ctx.Err()
+				}
+				continue
 			}
-			return strings.Compare(a, b)
-		})
-		files.paths = append(files.paths, paths...)
-		if len(paths) > 0 {
 			out = append(out, files)
 		}
 	}
@@ -107,33 +96,42 @@ func discoverOpenHands(ctx context.Context, root string) ([]sourceFiles, error) 
 
 func readOpenHandsTranscript(ctx context.Context, root string, paths ...string) (transcript, error) {
 	t := transcript{harness: domain.HarnessOpenHands, root: root}
-	// RefreshArchive persists just base_state.json. Rediscover the current event
-	// set so turns added after the scan are included before the first open.
-	if len(paths) == 1 {
-		files, err := discoverOpenHands(ctx, root)
-		if err != nil {
-			return t, err
-		}
-		for _, file := range files {
-			if filepath.Clean(file.paths[0]) == filepath.Clean(paths[0]) {
-				return readOpenHandsTranscript(ctx, root, file.paths...)
-			}
-		}
+	if len(paths) == 0 {
+		return t, errors.New("no openhands conversation state")
 	}
-	if len(paths) < 2 {
-		return t, errors.New("no openhands conversation events")
+	rel, err := filepath.Rel(root, paths[0])
+	if err != nil || !filepath.IsLocal(rel) || filepath.Base(rel) != "base_state.json" {
+		return t, errors.New("invalid openhands state path")
+	}
+	folder := filepath.Dir(rel)
+	folderID, err := uuid.Parse(folder)
+	if err != nil || folder != strings.ReplaceAll(folderID.String(), "-", "") {
+		return t, errors.New("invalid openhands conversation directory")
+	}
+	// Both preview and Import can retain multiple paths. Always refresh only
+	// this conversation's event list, without recursion or global rediscovery.
+	paths, err = openhands.ConversationFiles(ctx, root, folderID.String())
+	if err != nil {
+		return t, err
 	}
 	provider, err := os.OpenRoot(root)
 	if err != nil {
 		return t, err
 	}
 	defer func() { _ = provider.Close() }()
-	rel, err := filepath.Rel(root, paths[0])
-	if err != nil || !filepath.IsLocal(rel) || filepath.Base(rel) != "base_state.json" {
-		return t, errors.New("invalid openhands state path")
-	}
 	file, err := provider.Open(rel)
 	if err != nil {
+		return t, err
+	}
+	raw, err := io.ReadAll(io.LimitReader(file, int64(maxRecordBytes)+1))
+	_ = file.Close()
+	if err != nil {
+		return t, err
+	}
+	if len(raw) > maxRecordBytes {
+		return t, errors.New("openhands state is too large")
+	}
+	if err := openhands.ValidateImportedState(raw, folderID.String()); err != nil {
 		return t, err
 	}
 	var state struct {
@@ -144,89 +142,39 @@ func readOpenHandsTranscript(ctx context.Context, root string, paths ...string) 
 			CWD string `json:"working_dir"`
 		} `json:"workspace"`
 	}
-	err = json.NewDecoder(io.LimitReader(file, int64(maxRecordBytes))).Decode(&state)
-	_ = file.Close()
-	if err != nil {
+	if err := json.Unmarshal(raw, &state); err != nil {
 		return t, err
 	}
-	id, err := uuid.Parse(state.ID)
-	if err != nil || !filepath.IsAbs(state.Workspace.CWD) || state.EmptyHead {
+	if !filepath.IsAbs(state.Workspace.CWD) || state.EmptyHead {
 		return t, errors.New("invalid openhands conversation state")
 	}
-	folderID, err := uuid.Parse(filepath.Base(filepath.Dir(paths[0])))
-	if err != nil || id != folderID {
-		return t, errors.New("native identity mismatch")
-	}
-	t.nativeID, t.cwd, t.path, t.paths = id.String(), state.Workspace.CWD, paths[0], paths
+	t.nativeID, t.cwd, t.path, t.paths = folderID.String(), state.Workspace.CWD, paths[0], paths
 	type node struct {
-		parent   string
-		previous string
-		item     tagged
+		parent, previous, path string
 	}
 	nodes := map[string]node{}
-	var order []string
-	previous, first, held, drop := "", "", 0, 0
-	fallbackLeaf := ""
+	previous, fallbackLeaf := "", ""
+	// Retain graph metadata only. Text on abandoned branches must not evict
+	// active messages before the saved head has selected the native branch.
 	for _, path := range paths[1:] {
-		if filepath.Dir(filepath.Dir(path)) != filepath.Dir(paths[0]) {
-			return t, errors.New("event outside openhands conversation")
-		}
 		err := readOne(provider, root, path, func(line []byte) error {
 			if err := ctx.Err(); err != nil {
 				return err
 			}
 			var event struct {
-				ID      string `json:"id"`
-				Parent  string `json:"parent_id"`
-				Kind    string `json:"kind"`
-				Source  string `json:"source"`
-				At      string `json:"timestamp"`
-				Message struct {
-					Role    string      `json:"role"`
-					Content contentText `json:"content"`
-				} `json:"llm_message"`
+				ID     string `json:"id"`
+				Parent string `json:"parent_id"`
+				Kind   string `json:"kind"`
+				At     string `json:"timestamp"`
 			}
 			if json.Unmarshal(line, &event) != nil || event.ID == "" {
-				return nil //nolint:nilerr // Skip torn or identity-less events without discarding readable history.
+				return nil //nolint:nilerr // Native recovery skips unreadable/missing events.
 			}
-			at, _ := time.Parse(time.RFC3339Nano, event.At)
-			if at.IsZero() {
-				at, _ = time.Parse("2006-01-02T15:04:05.999999999", event.At)
-			}
+			at := openHandsEventTime(event.At, time.Local)
 			if at.After(t.last) && at.Before(time.Now().Add(time.Hour)) {
 				t.last = at
 			}
-			text := ""
-			if (event.Source == "user" && event.Message.Role == "user") || (event.Source == "agent" && event.Message.Role == "assistant") {
-				text = string(event.Message.Content) // extended_content is injected context
-			}
-			if strings.Contains(text, omittedText) {
-				t.shortened, text = true, strings.ReplaceAll(text, omittedText, "")
-			}
-			if strings.TrimSpace(text) == "" {
-				text = ""
-			}
-			if first == "" && text != "" {
-				first = event.ID
-			}
-			if old, ok := nodes[event.ID]; ok {
-				held -= len(old.item.Text)
-			} else {
-				order = append(order, event.ID)
-			}
-			nodes[event.ID] = node{parent: event.Parent, previous: previous, item: tagged{Message: Message{Role: domain.MessageRole(event.Message.Role), Text: text, At: at}, kind: "openhands"}}
-			held += len(text)
-			for held > maxHeldText && drop < len(order) {
-				key := order[drop]
-				drop++
-				if key == first {
-					continue
-				}
-				n := nodes[key]
-				held -= len(n.item.Text)
-				n.item.Text = ""
-				nodes[key], t.shortened = n, true
-			}
+			nodes[event.ID] = node{parent: event.Parent, previous: previous, path: path}
 			previous = event.ID
 			if event.Kind != "ConversationStateUpdateEvent" && event.Kind != "ConversationErrorEvent" {
 				fallbackLeaf = event.ID
@@ -237,8 +185,8 @@ func readOpenHandsTranscript(ctx context.Context, root string, paths ...string) 
 			return t, err
 		}
 	}
-	// Match EventLog._effective_parent_id: bridge absent parents through the
-	// preceding surviving event, while preserving an explicit tree root.
+	// Match the SDK's missing-parent and missing-leaf recovery, preserving an
+	// explicit tree root instead of bridging it to an abandoned branch.
 	for id, n := range nodes {
 		if n.parent == "__root__" {
 			n.parent = ""
@@ -249,9 +197,9 @@ func readOpenHandsTranscript(ctx context.Context, root string, paths ...string) 
 	}
 	leaf := state.Leaf
 	if _, ok := nodes[leaf]; !ok {
-		leaf = fallbackLeaf // ConversationState._repair_missing_leaf
+		leaf = fallbackLeaf
 	}
-	var items []tagged
+	var branch []string
 	seen := map[string]bool{}
 	for leaf != "" && !seen[leaf] {
 		n, ok := nodes[leaf]
@@ -259,15 +207,48 @@ func readOpenHandsTranscript(ctx context.Context, root string, paths ...string) 
 			break
 		}
 		seen[leaf] = true
-		if n.item.Text != "" {
-			items = append(items, n.item)
-		}
+		branch = append(branch, leaf)
 		leaf = n.parent
 	}
-	slices.Reverse(items)
-	before := len(items)
-	items = trimVisible(items)
-	t.shortened = t.shortened || len(items) < before
+	slices.Reverse(branch)
+	var items []tagged
+	for _, id := range branch {
+		err := readOne(provider, root, nodes[id].path, func(line []byte) error {
+			if err := ctx.Err(); err != nil {
+				return err
+			}
+			var event struct {
+				ID     string `json:"id"`
+				Source string `json:"source"`
+				At     string `json:"timestamp"`
+				Message struct {
+					Role    string      `json:"role"`
+					Content contentText `json:"content"`
+				} `json:"llm_message"`
+			}
+			if json.Unmarshal(line, &event) != nil || event.ID != id {
+				return nil //nolint:nilerr // Ignore nonmatching/invalid records, as in graph recovery.
+			}
+			if !((event.Source == "user" && event.Message.Role == "user") || (event.Source == "agent" && event.Message.Role == "assistant")) {
+				return nil
+			}
+			text := string(event.Message.Content)
+			if strings.Contains(text, omittedText) {
+				t.shortened, text = true, strings.ReplaceAll(text, omittedText, "")
+			}
+			if strings.TrimSpace(text) == "" {
+				return nil
+			}
+			items = append(items, tagged{Message: Message{Role: domain.MessageRole(event.Message.Role), Text: text, At: openHandsEventTime(event.At, time.Local)}, kind: "openhands"})
+			before := len(items)
+			items = trimVisible(items)
+			t.shortened = t.shortened || len(items) < before
+			return nil
+		})
+		if err != nil {
+			return t, err
+		}
+	}
 	hasUser := false
 	for _, item := range items {
 		t.messages = append(t.messages, item.Message)
@@ -281,9 +262,16 @@ func readOpenHandsTranscript(ctx context.Context, root string, paths ...string) 
 	if !hasUser {
 		return t, errors.New("no readable native conversation")
 	}
-	t.title = strings.Join(strings.Fields(t.title), " ")
-	if runes := []rune(t.title); len(runes) > 100 {
-		t.title = string(runes[:100]) + "…"
+	t.title = importTitle(t.title)
+	t.fingerprint, err = openhands.ConversationFingerprint(ctx, root, t.nativeID)
+	return t, err
+}
+
+func openHandsEventTime(value string, location *time.Location) time.Time {
+	at, err := time.Parse(time.RFC3339Nano, value)
+	if err == nil {
+		return at
 	}
-	return t, nil
+	at, _ = time.ParseInLocation("2006-01-02T15:04:05.999999999", value, location)
+	return at
 }

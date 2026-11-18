@@ -2,8 +2,11 @@ package sessionimport
 
 import (
 	"context"
+	"encoding/json"
 	"path/filepath"
+	"strings"
 	"testing"
+	"time"
 
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
 )
@@ -39,14 +42,93 @@ func TestOpenHandsImportActiveBranch(t *testing.T) {
 	}
 	writeFile(t, filepath.Join(dir, "events", "event-00005-new.json"), `{"id":"new","parent_id":"reply","source":"user","timestamp":"2026-11-02T10:01:00","llm_message":{"role":"user","content":[{"type":"text","text":"New after scan"}]}}`)
 	writeFile(t, filepath.Join(dir, "base_state.json"), `{"id":"`+id+`","workspace":{"working_dir":"/work/source"},"leaf_event_id":"new"}`)
-	fresh, err := readOpenHandsTranscript(context.Background(), root, got.path)
-	if err != nil {
-		t.Fatal(err)
+	for _, retained := range [][]string{{got.path}, files[0].paths} {
+		fresh, err := readOpenHandsTranscript(context.Background(), root, retained...)
+		if err != nil {
+			t.Fatal(err)
+		}
+		wantTexts(t, fresh.messages, "user: Synthetic prompt", "assistant: Synthetic answer", "user: New after scan")
 	}
-	wantTexts(t, fresh.messages, "user: Synthetic prompt", "assistant: Synthetic answer", "user: New after scan")
 	writeFile(t, filepath.Join(dir, "base_state.json"), `{"id":"87654321-1234-1234-1234-123456789012","workspace":{"working_dir":"/work/source"}}`)
 	if _, err := readOpenHandsTranscript(context.Background(), root, files[0].paths...); err == nil {
 		t.Fatal("accepted mismatched native id")
+	}
+}
+
+func TestOpenHandsRequiresNativeUUIDHexDirectory(t *testing.T) {
+	id := "a2345678-abcd-1234-abcd-123456789abc"
+	hex := strings.ReplaceAll(id, "-", "")
+	for _, name := range []string{hex, id, strings.ToUpper(hex), "{" + id + "}"} {
+		t.Run(name, func(t *testing.T) {
+			root := t.TempDir()
+			dir := filepath.Join(root, name)
+			writeFile(t, filepath.Join(dir, "base_state.json"), `{"id":"`+id+`","workspace":{"working_dir":"/work/source"},"leaf_event_id":"user"}`)
+			writeFile(t, filepath.Join(dir, "events", "event-00001-user.json"), `{"id":"user","source":"user","llm_message":{"role":"user","content":[{"type":"text","text":"Native prompt"}]}}`)
+			files, err := discoverOpenHands(context.Background(), root)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if (len(files) == 1) != (name == hex) {
+				t.Fatalf("directory %q admitted %d conversations", name, len(files))
+			}
+			_, err = readOpenHandsTranscript(context.Background(), root, filepath.Join(dir, "base_state.json"))
+			if (err == nil) != (name == hex) {
+				t.Fatalf("directory %q read error = %v", name, err)
+			}
+		})
+	}
+}
+
+func TestOpenHandsNaiveTimestampUsesLocalZone(t *testing.T) {
+	zone := time.FixedZone("SDK-local", 9*60*60)
+	want := time.Date(2026, 11, 18, 3, 0, 0, 123456000, time.UTC)
+	for _, value := range []string{"2026-11-18T12:00:00.123456", "2026-11-18T12:00:00.123456+09:00", "2026-11-18T03:00:00.123456Z"} {
+		if got := openHandsEventTime(value, zone); !got.Equal(want) {
+			t.Fatalf("timestamp %q = %s, want %s", value, got, want)
+		}
+	}
+}
+
+func TestOpenHandsAbandonedTextCannotEvictActiveBranch(t *testing.T) {
+	oldHeld, oldVisible := maxHeldText, maxVisibleBytes
+	maxHeldText, maxVisibleBytes = 64, 128
+	t.Cleanup(func() { maxHeldText, maxVisibleBytes = oldHeld, oldVisible })
+	root := t.TempDir()
+	dir := filepath.Join(root, "12345678123412341234123456789012")
+	writeFile(t, filepath.Join(dir, "base_state.json"), `{"id":"12345678-1234-1234-1234-123456789012","workspace":{"working_dir":"/work/source"},"leaf_event_id":"C"}`)
+	for i, event := range []struct{ id, parent, role, text string }{
+		{"user", "__root__", "user", "Opening prompt"},
+		{"A", "user", "assistant", "Active answer A"},
+		{"B", "A", "assistant", strings.Repeat("abandoned", 64)},
+		{"C", "A", "assistant", "Active answer C"},
+	} {
+		source := "agent"
+		if event.role == "user" {
+			source = "user"
+		}
+		raw, err := json.Marshal(map[string]any{"id": event.id, "parent_id": event.parent, "source": source, "llm_message": map[string]any{"role": event.role, "content": []map[string]string{{"type": "text", "text": event.text}}}})
+		if err != nil {
+			t.Fatal(err)
+		}
+		writeFile(t, filepath.Join(dir, "events", "event-0000"+string(rune('0'+i))+"-"+event.id+".json"), string(raw))
+	}
+	got, err := readOpenHandsTranscript(context.Background(), root, filepath.Join(dir, "base_state.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	wantTexts(t, got.messages, "user: Opening prompt", "assistant: Active answer A", "assistant: Active answer C")
+	if got.shortened {
+		t.Fatal("abandoned branch text marked a complete active branch shortened")
+	}
+}
+
+func TestOpenHandsRejectsStoredCredentialsBeforeAdmission(t *testing.T) {
+	root := t.TempDir()
+	dir := filepath.Join(root, "12345678123412341234123456789012")
+	writeFile(t, filepath.Join(dir, "base_state.json"), `{"id":"12345678-1234-1234-1234-123456789012","workspace":{"working_dir":"/work/source"},"agent":{"llm":{"api_key":"synthetic-secret"}},"leaf_event_id":"user"}`)
+	writeFile(t, filepath.Join(dir, "events", "event-00001-user.json"), `{"id":"user","source":"user","llm_message":{"role":"user","content":[{"type":"text","text":"Prompt"}]}}`)
+	if _, err := readOpenHandsTranscript(context.Background(), root, filepath.Join(dir, "base_state.json")); err == nil {
+		t.Fatal("admitted a conversation whose native configuration contains credentials")
 	}
 }
 

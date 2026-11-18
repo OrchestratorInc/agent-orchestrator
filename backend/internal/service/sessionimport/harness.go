@@ -38,7 +38,7 @@ type harnessImporter struct {
 var harnessImporters = map[domain.AgentHarness]harnessImporter{
 	domain.HarnessAider:      {discoverRegistered: discoverAiderRegistered, read: readAiderTranscript, mode: domain.SessionModeTUI},
 	domain.HarnessClaudeCode: {root: claudeRoot, discover: walkSources(domain.HarnessClaudeCode, "projects", jsonlKey), read: readClaudeTranscript},
-	domain.HarnessOpenHands:  {root: openHandsRoot, discover: discoverOpenHands, read: readOpenHandsTranscript},
+	domain.HarnessOpenHands:  {root: openHandsRoot, discover: discoverOpenHands, read: readOpenHandsTranscript, mode: domain.SessionModeTUI},
 	// Archived Codex threads are not resumable without unarchiving them in Codex.
 	domain.HarnessCodex:    {root: codexRoot, discover: walkSources(domain.HarnessCodex, "sessions", codexKey), read: readCodexTranscript},
 	domain.HarnessCopilot:  {root: copilotRoot, discover: discoverCopilot, read: readCopilotTranscript},
