@@ -6,7 +6,7 @@
  * kept in one client would look correct in Settings and disagree with the others.
  */
 
-import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { type Query, useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import type { components } from "../../api/schema";
 import { apiClient, apiErrorMessage } from "../lib/api-client";
 import { clientForHost } from "../lib/host-clients";
@@ -89,15 +89,26 @@ function settingsQueryOptions(hostId?: string) {
 }
 
 export function useSettings(hostId?: string, enabled = true) {
+	// A function default would need the query's own types; treat it as 0.
+	const clientStaleTime = useQueryClient().getDefaultOptions().queries?.staleTime;
+	const defaultStaleTime = typeof clientStaleTime === "function" ? 0 : clientStaleTime;
 	const query = useQuery({
 		...settingsQueryOptions(hostId),
 		enabled,
 		// Each observer runs its own refetch-interval and stale timers, and every
 		// settings update re-arms all of them. The local query has hundreds of
-		// observers, so useSettingsPolling() owns the interval. An enabled reader is
-		// stale at once and a disabled one never is, so neither arms a stale timer.
-		// Components that mount together share one read.
-		...(hostId ? { refetchInterval: settingsRefetchInterval } : { staleTime: enabled ? 0 : Infinity }),
+		// observers, so useSettingsPolling() owns the interval. A reader still
+		// refetches on mount once the data is older than the client's stale time,
+		// but its own stale time is only 0 or Infinity, and neither arms a timer. A
+		// disabled reader is never stale, so it stays at Infinity.
+		...(hostId
+			? { refetchInterval: settingsRefetchInterval }
+			: {
+					staleTime: enabled
+						? (settingsQuery: Query<Settings>) =>
+								settingsQuery.isStaleByTime(defaultStaleTime) ? 0 : Infinity
+						: Infinity,
+				}),
 	});
 
 	return {

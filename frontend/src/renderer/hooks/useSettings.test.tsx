@@ -72,4 +72,28 @@ describe("useSettings polling", () => {
 		});
 		expect(getMock).toHaveBeenCalledTimes(2);
 	});
+
+	it("refetches on mount only once the settings are older than the client's stale time", async () => {
+		vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "setInterval", "clearInterval", "Date"] });
+		getMock.mockResolvedValue({ data: {}, error: undefined });
+		const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false, staleTime: 10_000 } } });
+		queryClient.setQueryData(settingsQueryKey, { defaultSessionMode: "tui" });
+
+		const first = renderHook(() => useSettings(), { wrapper: wrapper(queryClient) });
+		await act(async () => {
+			await vi.advanceTimersByTimeAsync(0);
+		});
+		expect(getMock).not.toHaveBeenCalled();
+		expect(vi.getTimerCount()).toBe(0);
+
+		await act(async () => {
+			await vi.advanceTimersByTimeAsync(10_001);
+		});
+		renderHook(() => useSettings(), { wrapper: wrapper(queryClient) });
+		await act(async () => {
+			await vi.advanceTimersByTimeAsync(0);
+		});
+		expect(getMock).toHaveBeenCalledTimes(1);
+		first.unmount();
+	});
 });
