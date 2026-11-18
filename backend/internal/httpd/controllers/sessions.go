@@ -2376,6 +2376,13 @@ func (c *SessionsController) send(w http.ResponseWriter, r *http.Request) {
 			"the session is switching agents or interfaces; send again after the handoff completes", nil)
 		return
 	}
+	if errors.Is(err, ports.ErrChatConfigOptionInvalid) {
+		// A setting the session cannot apply, such as a model its agent does not
+		// offer: the caller can fix it, as the chat composer's send path says.
+		envelope.WriteAPIError(w, r, http.StatusBadRequest, "validation",
+			"CHAT_CONFIG_OPTION_INVALID", err.Error(), nil)
+		return
+	}
 	if err != nil {
 		writeAttachmentWriteError(w, r, err)
 		return
