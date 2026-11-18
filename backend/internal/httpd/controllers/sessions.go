@@ -38,6 +38,7 @@ import (
 	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
 	previewutil "github.com/aoagents/agent-orchestrator/backend/internal/preview"
 	"github.com/aoagents/agent-orchestrator/backend/internal/previewserver"
+	chatsvc "github.com/aoagents/agent-orchestrator/backend/internal/service/chat"
 	projectsvc "github.com/aoagents/agent-orchestrator/backend/internal/service/project"
 	sessionsvc "github.com/aoagents/agent-orchestrator/backend/internal/service/session"
 	usagesvc "github.com/aoagents/agent-orchestrator/backend/internal/service/usage"
@@ -2369,6 +2370,11 @@ func (c *SessionsController) send(w http.ResponseWriter, r *http.Request) {
 		err = sender.SendWithOptions(r.Context(), sessionID(r), message, attachment, ports.MessageDeliveryOptions{AuthoredByUser: in.UserAuthored, SenderSessionID: in.SenderSessionID})
 	} else {
 		err = c.Svc.Send(r.Context(), sessionID(r), message, attachment)
+	}
+	if errors.Is(err, chatsvc.ErrControllerHandoff) {
+		envelope.WriteAPIError(w, r, http.StatusConflict, "conflict", "CHAT_INTERFACE_TRANSITION",
+			"the session is switching agents or interfaces; send again after the handoff completes", nil)
+		return
 	}
 	if err != nil {
 		writeAttachmentWriteError(w, r, err)

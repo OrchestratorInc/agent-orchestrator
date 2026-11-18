@@ -4994,6 +4994,16 @@ func TestSessionsAPI_DelegateTaskRejectsOversizedBody(t *testing.T) {
 	}
 }
 
+func TestSessionsAPI_SendDuringAHandoffIsARetryableConflict(t *testing.T) {
+	svc := newFakeSessionService()
+	svc.sendErr = fmt.Errorf("send ao-1: %w", chatsvc.ErrControllerHandoff)
+	srv := newSessionTestServer(t, svc)
+	body, status, _ := doRequest(t, srv, "POST", "/api/v1/sessions/ao-1/send", `{"message":"hi"}`)
+	if status != http.StatusConflict || !strings.Contains(string(body), "CHAT_INTERFACE_TRANSITION") {
+		t.Fatalf("send = %d %s, want 409 CHAT_INTERFACE_TRANSITION", status, body)
+	}
+}
+
 func TestSessionsAPI_SendWithAttachment(t *testing.T) {
 	svc := newFakeSessionService()
 	srv := newSessionTestServer(t, svc)

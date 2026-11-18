@@ -84,6 +84,7 @@ type Service struct {
 	renderMeasures     sync.WaitGroup
 	sides              *sideManager
 	wakeChat           func(context.Context, domain.SessionID) error
+	resumeAgent        func(context.Context, domain.SessionID) error
 	hibernationEnabled func() bool
 	// versionRefresh reports whether open sessions move to a newly installed
 	// harness release, and how long they must be quiet first.

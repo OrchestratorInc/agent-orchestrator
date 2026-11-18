@@ -22707,6 +22707,8 @@ components:
           type: string
         fastMode:
           type: boolean
+        force:
+          type: boolean
         idempotencyKey:
           type: string
         message:
@@ -22730,10 +22732,22 @@ components:
       type: object
     ProviderSwitchResponse:
       properties:
+        cancelledQueuedMessages:
+          type: integer
+        failedPendingApprovals:
+          type: boolean
         message:
           $ref: '#/components/schemas/SendConversationMessageResponse'
+        settingsUpdated:
+          type: boolean
         status:
           type: string
+        stoppedTurn:
+          type: boolean
+        warnings:
+          items:
+            type: string
+          type: array
       required:
       - status
       type: object
