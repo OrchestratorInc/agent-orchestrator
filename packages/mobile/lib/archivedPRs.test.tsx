@@ -465,3 +465,82 @@ describe("useArchivedPRs after a failed read", () => {
 		expect(fixtures.getArchivedPRSessions).toHaveBeenCalledTimes(2);
 	});
 });
+
+describe("useArchivedPRs reconnect edge cases", () => {
+	let renderer: ReactTestRenderer | null = null;
+	let latest: ReturnType<typeof useArchivedPRs>;
+	const sources: ArchivedPRSource[] = [{ hostId: "laptop", hostName: "Laptop", archived: 4 }];
+	const statesOf = (call: unknown[]) => (call[1] as { prState: string }).prState;
+
+	function Probe(props: { states: ArchivedPRState[] }) {
+		latest = useArchivedPRs([...sources], { states: props.states, refreshToken: 0 });
+		return null;
+	}
+
+	async function render(states: ArchivedPRState[]) {
+		await act(async () => {
+			if (renderer) renderer.update(<Probe states={states} />);
+			else renderer = create(<Probe states={states} />);
+		});
+		await act(async () => { for (let i = 0; i < 10; i += 1) await Promise.resolve(); });
+	}
+
+	beforeEach(() => {
+		fixtures.getArchivedPRSessions.mockReset();
+		fixtures.offline = new Set();
+	});
+	afterEach(() => {
+		act(() => renderer?.unmount());
+		renderer = null;
+		fixtures.offline = new Set(["offline"]);
+	});
+
+	// Closed failed on All; the machine drops and returns while Merged is open.
+	// The closed read retries when All is shown again, not while Merged is.
+	it("retries a failed read of a filter that was not open when its machine came back", async () => {
+		fixtures.getArchivedPRSessions.mockImplementation(async (_config: unknown, options?: { prState: string }) => {
+			if (options?.prState === "closed") throw new Error("offline");
+			return page(["s1"], null, 1);
+		});
+		await render(["merged", "closed"]);
+		expect(latest.error).toBe("Couldn't load past pull requests.");
+
+		await render(["merged"]);
+		fixtures.offline = new Set(["laptop"]);
+		await render(["merged"]);
+		fixtures.offline = new Set();
+		fixtures.getArchivedPRSessions.mockImplementation(async (_config: unknown, options?: { prState: string }) =>
+			options?.prState === "closed" ? { ...page(["c9"], null, 1), sessions: [session("c9", [pr(9, "closed")])] } : page(["s1"], null, 1));
+		await render(["merged"]);
+		expect(fixtures.getArchivedPRSessions.mock.calls.map(statesOf).filter((s) => s === "closed")).toHaveLength(1);
+
+		await render(["merged", "closed"]);
+		expect(fixtures.getArchivedPRSessions.mock.calls.map(statesOf).filter((s) => s === "closed")).toHaveLength(2);
+		expect(latest.sessions.map((s) => s.id)).toEqual(["s1", "c9"]);
+		expect(latest.error).toBeNull();
+	});
+
+	// The machine answers again before its pending request fails: the return
+	// waits for the read to settle, then the failed read is retried once.
+	it("retries once when the machine is back before its pending read fails", async () => {
+		let reject!: (error: Error) => void;
+		fixtures.getArchivedPRSessions.mockImplementationOnce(() => new Promise((_resolve, fail) => { reject = fail; }));
+		await render(["merged"]);
+		fixtures.offline = new Set(["laptop"]);
+		await render(["merged"]);
+		fixtures.offline = new Set();
+		await render(["merged"]);
+		expect(fixtures.getArchivedPRSessions).toHaveBeenCalledTimes(1);
+
+		fixtures.getArchivedPRSessions.mockResolvedValue(page(["s1"], null, 1));
+		await act(async () => { reject(new Error("offline")); });
+		await act(async () => { for (let i = 0; i < 10; i += 1) await Promise.resolve(); });
+		expect(fixtures.getArchivedPRSessions).toHaveBeenCalledTimes(2);
+		expect(latest.sessions.map((s) => s.id)).toEqual(["s1"]);
+		expect(latest.error).toBeNull();
+
+		// Settled and healthy: nothing more is fetched.
+		await render(["merged"]);
+		expect(fixtures.getArchivedPRSessions).toHaveBeenCalledTimes(2);
+	});
+});

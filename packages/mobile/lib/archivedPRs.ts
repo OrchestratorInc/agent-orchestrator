@@ -262,23 +262,28 @@ export function useArchivedPRs(sources: readonly ArchivedPRSource[], options: { 
 				setSettled((n) => n + 1);
 			});
 		};
+		// Note every machine that went away, for every stream read so far, whether
+		// or not its filter is open: a failed read retries once the machine is back
+		// and its filter is shown again.
+		for (const [key, run] of runs.current) {
+			if (!configForHost(key.slice(0, key.indexOf("\n")))) run.offline = true;
+		}
 		for (const state of options.states) {
 			for (const source of sourcesRef.current) {
 				const key = streamKey(source, state);
 				const previous = runs.current.get(key);
 				// An offline machine is not marked read, so the next change or refresh
-				// tries it again. One that had been read is noted, so its return is seen.
-				if (!configForHost(source.hostId)) {
-					if (previous) previous.offline = true;
-					continue;
-				}
-				// Back online: a read that failed (typically as the machine went away)
-				// is read again once, on this return, not on every later settle.
-				const reconnected = previous?.offline === true;
-				if (previous) previous.offline = false;
-				if (reconnected && !previous.inFlight && streamsRef.current[key]?.error) {
-					start(source, state, key, "full");
-					continue;
+				// tries it again.
+				if (!configForHost(source.hostId)) continue;
+				// Back online: the return stays pending while a read is still in
+				// flight (its failure may land after the machine answers again). Once
+				// it settles, a failed read is retried once; a good one just clears it.
+				if (previous?.offline && !previous.inFlight) {
+					previous.offline = false;
+					if (streamsRef.current[key]?.error) {
+						start(source, state, key, "full");
+						continue;
+					}
 				}
 				// A first read or a pull to refresh reads everything again.
 				if (!previous || previous.refreshToken !== options.refreshToken) {
