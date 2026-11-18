@@ -7,6 +7,7 @@ import { requestUpdateDownload } from "../hooks/useUpdateStatus";
 import { aoBridge } from "../lib/bridge";
 import { cn } from "../lib/utils";
 import { NAV_ROW_HIGHLIGHT_HOST_CLASS, NavRowHighlight } from "./NavRowHighlight";
+import { buttonVariants } from "./ui/button";
 import { Pressable } from "./ui/pressable";
 import { Tooltip, TooltipContent, TooltipTrigger } from "./ui/tooltip";
 
@@ -154,40 +155,41 @@ function recover(recovery: UpdateRecovery, onRequestInstall: () => void): void {
 }
 
 /**
- * The update icon. Available and downloading draw an arrow in a ring, and while
- * a download runs the ring is its progress, filling as the bytes arrive. Once
- * there is nothing left to fill (ready, or failed) the circle is solid with the
- * icon cut out of it, so a circular icon such as restart never sits inside a
- * second circle.
+ * The update icon while there is something to fetch: an arrow in a ring, and
+ * while a download runs the ring is its progress, filling as the bytes arrive.
+ * Neutral foreground, not brand blue: the sidebar's colour is reserved for
+ * meaning, and "a download exists" is not an alarm.
  */
-function UpdateGlyph({
+function UpdateGlyph({ icon, percent }: { icon: React.ReactNode; percent?: number }) {
+	return (
+		<span className="relative grid size-5 place-items-center text-foreground">
+			<ProgressRing className="absolute inset-0 size-5" percent={percent} />
+			<span className="grid place-items-center [&_svg]:size-3 [&_svg]:stroke-[2.5]">{icon}</span>
+		</span>
+	);
+}
+
+/**
+ * The action the row will take, drawn as a small text button at its end. The
+ * whole row is the real button, so this is presentational: it styles the click
+ * target's label with the app's own primary or secondary button surface.
+ */
+function UpdateActionLabel({
 	icon,
-	percent,
-	solid,
+	label,
+	variant,
 }: {
 	icon: React.ReactNode;
-	percent?: number;
-	/** Solid disc: brand blue when ready, the destructive red when failed. */
-	solid?: "ready" | "failed";
+	label: string;
+	variant: "primary" | "secondary";
 }) {
-	const iconClass = "[&_svg]:size-3 [&_svg]:stroke-[2.5]";
-	if (solid) {
-		return (
-			<span
-				className={cn(
-					"grid size-5 place-items-center rounded-full",
-					solid === "ready" ? "bg-logo-accent text-logo-accent-foreground" : "bg-[var(--color-danger-strong)] text-white",
-					iconClass,
-				)}
-			>
-				{icon}
-			</span>
-		);
-	}
 	return (
-		<span className="relative grid size-5 place-items-center text-logo-accent">
-			<ProgressRing className="absolute inset-0 size-5" percent={percent} />
-			<span className={cn("grid place-items-center", iconClass)}>{icon}</span>
+		<span
+			aria-hidden="true"
+			className={cn(buttonVariants({ variant, size: "xs" }), "pointer-events-none px-2 [&_svg]:size-3.5")}
+		>
+			{icon}
+			{label}
 		</span>
 	);
 }
@@ -245,8 +247,9 @@ export function SidebarUpdateRow({
 		);
 	} else if (action.kind === "install") {
 		const version = displayVersion(action.version);
-		title = t("shell.updateReadyToInstall");
-		glyph = <UpdateGlyph icon={<RotateCw aria-hidden="true" />} solid="ready" />;
+		title = t("shell.updateReady");
+		// The one thing to do next, said in words: it restarts the app.
+		glyph = <UpdateActionLabel icon={<RotateCw aria-hidden="true" />} label={t("shell.updateRestart")} variant="primary" />;
 		press = {
 			label: version ? t("shell.restartInstallUpdateVersion", { version }) : t("shell.restartInstallUpdate"),
 			onClick: onRequestInstall,
@@ -254,7 +257,13 @@ export function SidebarUpdateRow({
 	} else {
 		title = t("shell.updateFailed");
 		detail = action.phase === "install" ? t("shell.updateInstallFailed") : t("shell.updateDownloadFailed");
-		glyph = <UpdateGlyph icon={<RotateCcw aria-hidden="true" />} solid="failed" />;
+		glyph = (
+			<UpdateActionLabel
+				icon={<RotateCcw aria-hidden="true" className="text-destructive" />}
+				label={t("shell.updateRetry")}
+				variant="secondary"
+			/>
+		);
 		const { recovery } = action;
 		press = { label: t("shell.retryUpdate"), onClick: () => recover(recovery, onRequestInstall) };
 	}
@@ -275,7 +284,7 @@ export function SidebarUpdateRow({
 				) : null}
 				{detail ? <span className="sr-only">{` · ${detail}`}</span> : null}
 			</span>
-			<span className="relative z-[1] grid size-control-md shrink-0 place-items-center">{glyph}</span>
+			<span className="relative z-[1] grid min-w-control-md shrink-0 place-items-center">{glyph}</span>
 		</>
 	);
 	// A filled strip with no outline or shadow (DESIGN.md: grouped content), as
@@ -332,7 +341,7 @@ export function SidebarUpdateRail({
 					<span
 						aria-label={label}
 						aria-live="polite"
-						className="grid size-control-board place-items-center rounded-lg text-logo-accent"
+						className="grid size-control-board place-items-center rounded-lg text-foreground"
 						role="status"
 					>
 						<ProgressRing className="size-4" percent={action.percent} />
@@ -354,7 +363,7 @@ export function SidebarUpdateRail({
 	} else if (action.kind === "install") {
 		const version = displayVersion(action.version);
 		label = version ? t("shell.restartInstallUpdateVersion", { version }) : t("shell.restartInstallUpdate");
-		tooltip = t("shell.updateReadyToInstall");
+		tooltip = t("shell.updateReady");
 		onClick = onRequestInstall;
 	} else {
 		failed = true;
@@ -381,7 +390,7 @@ export function SidebarUpdateRail({
 							aria-hidden="true"
 							className={cn(
 								"absolute -top-0.5 -right-1 size-1.5 rounded-full ring-2 ring-sidebar",
-								failed ? "bg-destructive" : "bg-logo-accent",
+								failed ? "bg-destructive" : "bg-foreground",
 							)}
 						/>
 					</span>
