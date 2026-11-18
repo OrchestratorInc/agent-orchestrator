@@ -23,6 +23,8 @@ describe("machine editor draft", () => {
 		const renamed = { ...machineEditDraft(legacy), machineName: "Box" };
 		expect(canSaveDraft(renamed, legacy.endpoints[0])).toBe(true);
 		expect(canSaveDraft({ ...renamed, config: { ...renamed.config, host: "box/other" } }, legacy.endpoints[0])).toBe(false);
+		const slashed: Host = { ...host, endpoints: [{ kind: "lan", host: "box/ao/", port: 3011, secure: false }] };
+		expect(canSaveDraft({ ...machineEditDraft(slashed), machineName: "Box" }, slashed.endpoints[0])).toBe(true);
 	});
 
 	it("edits the route the phone is connected over, else the first", () => {

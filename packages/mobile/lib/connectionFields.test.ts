@@ -130,6 +130,12 @@ describe("resolveManualAddress", () => {
 			expect(resolveManualAddress("box/ao", "3011", legacy)).toEqual({ ok: true, host: "box/ao", ...plain() });
 			expect(resolveManualAddress("box/ao", "", legacy)).toEqual({ ok: true, host: "box/ao", ...plain() });
 			expect(resolveManualAddress("box/other", "3011", legacy)).toEqual({ ok: false, error: "Enter only a host name or IP address, without a path." });
+			// Only exactly as saved: changing the case of a path is an edit.
+			expect(resolveManualAddress("box/AO", "3011", legacy)).toEqual({ ok: false, error: "Enter only a host name or IP address, without a path." });
+			// Recognized before parsing, so a trailing slash as saved still matches.
+			const slashed = { host: "box/ao/", port: 3011, secure: false };
+			expect(resolveManualAddress("box/ao/", "3011", slashed)).toEqual({ ok: true, host: "box/ao/", ...plain() });
+			expect(resolveManualAddress("box/ao/", "", slashed)).toEqual({ ok: true, host: "box/ao/", ...plain() });
 			const tunnel = { host: FIXED, port: 8443, secure: true };
 			expect(resolveManualAddress(FIXED, "8443", tunnel)).toEqual({ ok: true, host: FIXED, ...tls("8443") });
 			expect(resolveManualAddress(FIXED, "9443", tunnel)).toMatchObject({ ok: false, error: expect.stringContaining("Tunnel addresses use port 443") });

@@ -199,7 +199,7 @@ export function describeConnectionFailure(
 					hint: target.platform === "ios" ? "Enter https:// and the Tailscale name, with Port empty." : "Type http:// before a Tailscale name.",
 					message: `Nothing answered over HTTPS at ${address}. ` + (target.platform === "ios"
 						? `To use the machine's Tailscale HTTPS address, enter https://${name} in Host and leave Port empty.`
-						: `A Tailscale name on the Connect Mobile port uses plain HTTP: enter http://${name}.`),
+						: `A Tailscale name on the Connect Mobile port uses plain HTTP: enter http://${name}:${target.port}.`),
 					showLocalNetworkHint: false,
 				};
 			}

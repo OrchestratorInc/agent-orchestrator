@@ -185,10 +185,13 @@ describe("describeConnectionFailure", () => {
 		const tried = (platform: string, over: Partial<{ host: string; port: string; secure: boolean | undefined }> = {}) =>
 			describeConnectionFailure("unreachable", { host: "my-pc.tail1234.ts.net", port: "3011", platform, secure: true, ...over });
 
-		it("tells Android to type http://", () => {
+		// With the port, so the suggested Host retries the port that was tried
+		// and agrees with whatever Port holds.
+		it("tells Android to type http:// with the port that was tried", () => {
 			expect(tried("android").message).toBe(
-				"Nothing answered over HTTPS at my-pc.tail1234.ts.net:3011. A Tailscale name on the Connect Mobile port uses plain HTTP: enter http://my-pc.tail1234.ts.net.",
+				"Nothing answered over HTTPS at my-pc.tail1234.ts.net:3011. A Tailscale name on the Connect Mobile port uses plain HTTP: enter http://my-pc.tail1234.ts.net:3011.",
 			);
+			expect(tried("android", { port: "8443" }).message).toContain("enter http://my-pc.tail1234.ts.net:8443.");
 		});
 
 		// Clearing Port alone is not enough: a port written into Host stays, and an

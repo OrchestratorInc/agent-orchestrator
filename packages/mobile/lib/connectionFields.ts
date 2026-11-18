@@ -93,6 +93,13 @@ export function resolveManualAddress(hostInput: string, portInput: string, saved
 	let rest = hostInput.trim();
 	const port = portInput.trim();
 
+	// An untouched saved route is kept exactly as saved, before any parsing or
+	// check below: one saved before they existed (a legacy host may even end in
+	// a slash), or advertised by the machine, must never block a rename.
+	if (saved && rest === saved.host && (!port || (isValidPort(port) && Number(port) === saved.port))) {
+		return { ok: true, host: saved.host, port: String(saved.port), secure: saved.secure };
+	}
+
 	let typedTls: boolean | undefined;
 	const scheme = rest.match(/^([a-z][a-z0-9+.-]*):\/\//i);
 	if (scheme) {
@@ -125,16 +132,15 @@ export function resolveManualAddress(hostInput: string, portInput: string, saved
 	const typedPort = port || embedded ? String(Number(port || embedded)) : "";
 	const resolved = (secure: boolean): ManualAddress => ({ ok: true, host, port: typedPort || (secure ? TLS_PORT : BRIDGE_PORT), secure });
 
-	// An untouched saved route is kept as it is, before the checks below: one
-	// saved before they existed, or advertised by the machine, must never block
-	// a rename.
-	if (typedTls === undefined && saved && saved.host.toLowerCase() === host.toLowerCase() && (!typedPort || Number(typedPort) === saved.port)) {
-		return { ok: true, host, port: String(saved.port), secure: saved.secure };
-	}
 	// Only a bare name or IP: TLS is decided from the name, so a path, query or
 	// user-info must not let "public.example/x.local" pass as a local address.
 	if (!/^[a-z0-9._-]+$/i.test(host) && !/^(\[[0-9a-f:.%]+\]|[0-9a-f:.%]+)$/i.test(host)) {
 		return { ok: false, error: "Enter only a host name or IP address, without a path." };
+	}
+	// The saved route again, now that the host is a valid name, whose case does
+	// not matter, or with its port written into Host.
+	if (typedTls === undefined && saved && saved.host.toLowerCase() === host.toLowerCase() && (!typedPort || Number(typedPort) === saved.port)) {
+		return { ok: true, host, port: String(saved.port), secure: saved.secure };
 	}
 	if (typedTls !== undefined) return resolved(typedTls);
 	if (isTunnelHost(host) && typedPort && typedPort !== TLS_PORT) {
