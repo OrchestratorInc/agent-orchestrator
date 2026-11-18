@@ -17,10 +17,11 @@ const autohandTestID = "11111111-2222-4333-8444-555555555555-1790000000000"
 func autohandFixture(t *testing.T, root, id, messages string) string {
 	t.Helper()
 	dir := filepath.Join(root, "sessions", id)
-	writeFile(t, filepath.Join(dir, "metadata.json"), `{
-  "sessionId":"`+id+`", "projectPath":"/work/repo", "model":"example/model",
-  "createdAt":"2026-10-01T10:00:00Z", "lastActiveAt":"2026-10-01T10:01:00Z"
-}`)
+	metadata, err := json.Marshal(map[string]string{"sessionId": id, "projectPath": filepath.Join(root, "project"), "model": "example/model", "createdAt": "2026-10-01T10:00:00Z", "lastActiveAt": "2026-10-01T10:01:00Z"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	writeFile(t, filepath.Join(dir, "metadata.json"), string(metadata))
 	return writeFile(t, filepath.Join(dir, "conversation.jsonl"), messages)
 }
 
@@ -45,7 +46,7 @@ func TestAutohandDiscoveryAndRefresh(t *testing.T) {
 			t.Fatal(err)
 		}
 		wantTexts(t, got.messages, "user: build a greeting", "assistant: Hello")
-		if got.cwd != "/work/repo" || got.title != "build a greeting" || got.nativeID != autohandTestID || got.last.Format("15:04") != "10:02" {
+		if got.cwd != filepath.Join(root, "project") || got.title != "build a greeting" || got.nativeID != autohandTestID || got.last.Format("15:04") != "10:02" {
 			t.Fatalf("transcript = %+v", got)
 		}
 	}
@@ -55,11 +56,15 @@ func TestAutohandRejectsMismatchedMetadataAndEscapingLink(t *testing.T) {
 	root := t.TempDir()
 	path := autohandFixture(t, root, autohandTestID, `{"role":"user","content":"hello"}`)
 	meta := filepath.Join(filepath.Dir(path), "metadata.json")
-	writeFile(t, meta, `{"sessionId":"other","projectPath":"/work/repo"}`)
+	original, err := os.ReadFile(meta)
+	if err != nil {
+		t.Fatal(err)
+	}
+	writeFile(t, meta, strings.Replace(string(original), autohandTestID, "other", 1))
 	if _, err := readAutohandTranscript(context.Background(), root, path); err == nil {
 		t.Fatal("accepted mismatched identity")
 	}
-	outside := writeFile(t, filepath.Join(t.TempDir(), "metadata.json"), `{"sessionId":"`+autohandTestID+`","projectPath":"/work/repo"}`)
+	outside := writeFile(t, filepath.Join(t.TempDir(), "metadata.json"), string(original))
 	if err := os.Remove(meta); err != nil {
 		t.Fatal(err)
 	}
@@ -135,4 +140,31 @@ func TestAutohandImportsTerminalAndRefreshesSidecar(t *testing.T) {
 		t.Fatal(err)
 	}
 	wantTexts(t, store.messages, "user: first prompt", "assistant: new reply")
+}
+
+func TestAutohandUndatedActivityUsesFileTimeWithoutReplacingNativeTime(t *testing.T) {
+	native := time.Date(2026, 10, 1, 10, 0, 0, 0, time.UTC)
+	modified := native.Add(time.Hour)
+	for _, dated := range []bool{false, true} {
+		root := t.TempDir()
+		path := autohandFixture(t, root, autohandTestID, `{"role":"user","content":"undated turn"}`)
+		metadata := map[string]string{"sessionId": autohandTestID, "projectPath": filepath.Join(root, "project")}
+		want := modified
+		if dated {
+			metadata["createdAt"] = native.Format(time.RFC3339)
+			want = native
+		}
+		data, err := json.Marshal(metadata)
+		if err != nil {
+			t.Fatal(err)
+		}
+		writeFile(t, filepath.Join(filepath.Dir(path), "metadata.json"), string(data))
+		if err := os.Chtimes(path, modified, modified); err != nil {
+			t.Fatal(err)
+		}
+		got, err := readAutohandTranscript(context.Background(), root, path)
+		if err != nil || !got.last.Equal(want) || len(got.messages) != 1 || !got.messages[0].At.Equal(want) {
+			t.Fatalf("dated=%v transcript=%+v err=%v, want activity %v", dated, got, err, want)
+		}
+	}
 }

@@ -166,10 +166,8 @@ func readAutohandTranscript(ctx context.Context, root string, paths ...string) (
 	}
 	t.path, t.paths = paths[1], append([]string(nil), paths...)
 	for _, item := range items {
-		if item.At.IsZero() {
-			item.At = t.last
-		}
 		t.messages = append(t.messages, item.Message)
 	}
-	return t, nil
+	finishErr := finishTranscript(&t)
+	return t, finishErr
 }

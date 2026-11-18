@@ -17,11 +17,16 @@ func TestAutohandImportRefusesMalformedNativeFilesBeforeLaunch(t *testing.T) {
 		name    string
 		adopted bool
 		state   bool
+		history string
 	}{
 		{name: "first open torn history"},
 		{name: "first open torn state", state: true},
 		{name: "adopted torn history", adopted: true},
 		{name: "adopted torn state", adopted: true, state: true},
+		{name: "first open interior whitespace", history: "{\"role\":\"user\",\"content\":\"valid\"}\n \n{\"role\":\"assistant\",\"content\":\"valid\"}"},
+		{name: "adopted interior whitespace", adopted: true, history: "{\"role\":\"user\",\"content\":\"valid\"}\n \n{\"role\":\"assistant\",\"content\":\"valid\"}"},
+		{name: "first open null tool call", history: `{"role":"assistant","content":"","toolCalls":[null]}`},
+		{name: "adopted null tool call", adopted: true, history: `{"role":"assistant","content":"","toolCalls":[null]}`},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			id := "11111111-2222-4333-8444-555555555555-1790000000000"
@@ -47,6 +52,9 @@ func TestAutohandImportRefusesMalformedNativeFilesBeforeLaunch(t *testing.T) {
 				t.Fatal(err)
 			}
 			body := "{\"role\":\"user\",\"content\":\"synthetic prompt\"}\n{\"role\":"
+			if tc.history != "" {
+				body = tc.history
+			}
 			if tc.state {
 				body = `{"role":"user","content":"synthetic prompt"}`
 				if err := os.WriteFile(filepath.Join(dir, "state.json"), []byte(`{"readFileState":`), 0o600); err != nil {

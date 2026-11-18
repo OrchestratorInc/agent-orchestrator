@@ -5,12 +5,14 @@ package sessionmanager
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"testing"
 	"time"
 
+	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/agent/autohand"
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
 )
 
@@ -35,14 +37,15 @@ func TestAutohandResumedConversationUsesCurrentHeartbeatForOwnership(t *testing.
 	})
 	waitForExecName(t, cmd.Process.Pid, "autohand")
 	root, source, workspace := t.TempDir(), t.TempDir(), t.TempDir()
-	rec := domain.SessionRecord{Harness: domain.HarnessAutohand, Metadata: domain.SessionMetadata{WorkspacePath: workspace, ImportSource: &domain.SessionImportSource{NativeID: "resumed-conversation", ConfigDir: root}}}
+	id := "11111111-2222-4333-8444-555555555555-1790000000000"
+	rec := domain.SessionRecord{Harness: domain.HarnessAutohand, Metadata: domain.SessionMetadata{WorkspacePath: workspace, ImportSource: &domain.SessionImportSource{NativeID: id, ConfigDir: root}}}
 	dir := filepath.Join(root, "active-agents")
 	if err := os.MkdirAll(dir, 0o700); err != nil {
 		t.Fatal(err)
 	}
-	write := func(updated time.Time) {
+	write := func(cwd string, updated time.Time) {
 		t.Helper()
-		data, err := json.Marshal(map[string]any{"sessionId": "resumed-conversation", "pid": cmd.Process.Pid, "workspaceRoot": source, "startedAt": time.Now().Add(-24 * time.Hour), "updatedAt": updated})
+		data, err := json.Marshal(map[string]any{"sessionId": id, "pid": cmd.Process.Pid, "workspaceRoot": cwd, "startedAt": time.Now().Add(-24 * time.Hour), "updatedAt": updated})
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -50,11 +53,24 @@ func TestAutohandResumedConversationUsesCurrentHeartbeatForOwnership(t *testing.
 			t.Fatal(err)
 		}
 	}
-	write(time.Now())
-	if !autohandImportOwnedElsewhere(context.Background(), rec) {
-		t.Fatal("missed the current process resuming yesterday's conversation")
+	for _, cwd := range []string{source, workspace, filepath.Join(workspace, "nested")} {
+		write(cwd, time.Now())
+		if !autohandImportOwnedElsewhere(context.Background(), rec) {
+			t.Fatalf("missed the current process resuming yesterday's conversation in %q", cwd)
+		}
+		rt := &fakeRuntime{}
+		manager, store, _ := newExitedResumeManager(t, rt, autohand.New())
+		adopted := store.sessions["mer-1"]
+		adopted.Mode, adopted.Harness = domain.SessionModeTUI, domain.HarnessAutohand
+		adopted.Metadata.WorkspacePath = workspace
+		adopted.Metadata.AgentSessionID, adopted.Metadata.ProviderConversationID = id, id
+		adopted.Metadata.ImportSource = &domain.SessionImportSource{NativeID: id, ConfigDir: root, CWD: source, Adopted: true}
+		store.sessions[adopted.ID] = adopted
+		if _, err := manager.ResumeAgentWithMode(context.Background(), adopted.ID); !errors.Is(err, ErrSessionOpenElsewhere) || rt.created != 0 {
+			t.Fatalf("foreign writer in %q reached launch: created=%d err=%v", cwd, rt.created, err)
+		}
 	}
-	write(time.Now().Add(-time.Minute))
+	write(source, time.Now().Add(-time.Minute))
 	if autohandImportOwnedElsewhere(context.Background(), rec) {
 		t.Fatal("accepted a stale heartbeat")
 	}
@@ -62,7 +78,7 @@ func TestAutohandResumedConversationUsesCurrentHeartbeatForOwnership(t *testing.
 	if !known {
 		t.Fatal("synthetic process start time is unknown")
 	}
-	write(started.Add(-time.Second))
+	write(source, started.Add(-time.Second))
 	if autohandImportOwnedElsewhere(context.Background(), rec) {
 		t.Fatal("accepted a heartbeat predating this pid's current process")
 	}

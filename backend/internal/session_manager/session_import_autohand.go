@@ -44,7 +44,6 @@ func autohandImportOwnedElsewhere(ctx context.Context, rec domain.SessionRecord)
 			var live struct {
 				ID      string    `json:"sessionId"`
 				PID     int       `json:"pid"`
-				CWD     string    `json:"workspaceRoot"`
 				Updated time.Time `json:"updatedAt"`
 			}
 			err = json.NewDecoder(io.LimitReader(f, 64<<10)).Decode(&live)
@@ -52,9 +51,8 @@ func autohandImportOwnedElsewhere(ctx context.Context, rec domain.SessionRecord)
 			if err != nil || live.ID != source.NativeID || live.PID <= 0 || !processalive.Alive(live.PID) {
 				continue
 			}
-			if rec.Metadata.WorkspacePath != "" && pathWithin(rec.Metadata.WorkspacePath, live.CWD) {
-				continue
-			}
+			// A matching workspace does not prove that AO owns this PID. Any
+			// live matching provider must block a second native writer.
 			name, started, known := processStart(ctx, live.PID)
 			name = strings.ToLower(name)
 			// startedAt is the conversation's creation time, including resumed

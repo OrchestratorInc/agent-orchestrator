@@ -18,7 +18,10 @@ func TestAutohandNativeContinuation(t *testing.T) {
 	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(path, []byte(`{"role":"user","content":"synthetic prompt"}`), 0o600); err != nil {
+	body := "{\"role\":\"user\",\"content\":\"synthetic prompt\"}\n\n" +
+		`{"role":"assistant","content":"","toolCalls":[{"id":"call-1","tool":"read_file","args":{"path":"probe.txt"}}]}` + "\n" +
+		`{"role":"tool","content":"synthetic result","tool_call_id":"call-1"}`
+	if err := os.WriteFile(path, []byte(body), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	writeAutohandNativeMetadata(t, filepath.Dir(path), id)
@@ -59,6 +62,10 @@ func TestAutohandStrictResumeRefusesTornNativeHistory(t *testing.T) {
 		"{\"role\":\"user\",\"content\":\"kept in tolerant preview\"}\n{\"role\":",
 		`{"role":"user","content":null}`,
 		`{"role":"user","content":"valid"} trailing`,
+		"{\"role\":\"user\",\"content\":\"valid\"}\n \n{\"role\":\"assistant\",\"content\":\"valid\"}",
+		"{\"role\":\"user\",\"content\":\"valid\"}\n\r\n{\"role\":\"assistant\",\"content\":\"valid\"}",
+		`{"role":"assistant","content":"","toolCalls":[null]}`,
+		`{"role":"assistant","content":"","toolCalls":[false]}`,
 	} {
 		if err := os.WriteFile(filepath.Join(dir, "conversation.jsonl"), []byte(body), 0o600); err != nil {
 			t.Fatal(err)

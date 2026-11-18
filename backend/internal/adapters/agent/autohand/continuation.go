@@ -2,6 +2,7 @@ package autohand
 
 import (
 	"bufio"
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -116,6 +117,17 @@ func validateAutohandNativeHistory(ctx context.Context, root *os.Root, id string
 	defer func() { _ = f.Close() }()
 	scanner := bufio.NewScanner(io.LimitReader(f, (128<<20)+1))
 	scanner.Buffer(make([]byte, 64<<10), 64<<20)
+	// The native loader splits on LF without stripping CR. A whitespace-only
+	// interior line must reach JSON validation rather than becoming an empty line.
+	scanner.Split(func(data []byte, atEOF bool) (int, []byte, error) {
+		if i := bytes.IndexByte(data, '\n'); i >= 0 {
+			return i + 1, data[:i], nil
+		}
+		if atEOF && len(data) > 0 {
+			return len(data), data, nil
+		}
+		return 0, nil, nil
+	})
 	count, readBytes := 0, 0
 	for scanner.Scan() {
 		if err := ctx.Err(); err != nil {
@@ -126,15 +138,21 @@ func validateAutohandNativeHistory(ctx context.Context, root *os.Root, id string
 		if readBytes > 128<<20 {
 			return errors.New("autohand native history exceeds read budget")
 		}
-		if strings.TrimSpace(string(line)) == "" {
+		if len(line) == 0 {
 			continue
 		}
 		var message struct {
-			Role    string  `json:"role"`
-			Content *string `json:"content"`
+			Role      string                       `json:"role"`
+			Content   *string                      `json:"content"`
+			ToolCalls []map[string]json.RawMessage `json:"toolCalls"`
 		}
 		if json.Unmarshal(line, &message) != nil || message.Content == nil || message.Role != "user" && message.Role != "assistant" && message.Role != "system" && message.Role != "tool" {
 			return errors.New("autohand native history contains a malformed record")
+		}
+		for _, call := range message.ToolCalls {
+			if call == nil {
+				return errors.New("autohand native history contains a malformed tool call")
+			}
 		}
 		count++
 	}
