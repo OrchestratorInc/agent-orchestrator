@@ -9,9 +9,10 @@ import (
 )
 
 // Codex refuses a model the ChatGPT account cannot use only on the first turn.
-// The failure keeps Codex's words, adds the next step, and is remembered so the
-// next session on that model is refused before it starts (#4518).
-func TestCodexProviderFailureRemembersAModelTheAccountCannotUse(t *testing.T) {
+// The failure keeps Codex's words and adds the next step. Only the live
+// conversation, which knows its account, records the refusal (#4518): a turn
+// read back from history records nothing.
+func TestCodexProviderFailureExplainsAModelTheAccountCannotUse(t *testing.T) {
 	codexagent.ConfigureUnavailableModels("")
 	t.Cleanup(func() { codexagent.ConfigureUnavailableModels("") })
 
@@ -23,8 +24,8 @@ func TestCodexProviderFailureRemembersAModelTheAccountCannotUse(t *testing.T) {
 	if !strings.Contains(err.Error(), refusal) || !strings.Contains(err.Error(), codexagent.UnavailableModelHint) {
 		t.Fatalf("failure = %q, want Codex's refusal and the hint", err)
 	}
-	if !codexagent.DefaultUnavailableModels().Unavailable("gpt-5.2-codex") {
-		t.Fatal("the refused model was not remembered")
+	if codexagent.DefaultUnavailableModels().Unavailable("", "gpt-5.2-codex") {
+		t.Fatal("codexProviderFailure recorded the refusal without knowing its account")
 	}
 
 	other := codexProviderFailure(codexproto.TurnError{Message: "stream disconnected before completion"})

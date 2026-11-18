@@ -477,6 +477,8 @@ type Manager struct {
 	agentBrowserURL             string
 	agentBrowserToken           string
 	agentAccounts               ports.AgentAccountLaunchEnv
+	refusedModelRefreshMu       sync.Mutex
+	refusedModelRefreshAt       map[string]time.Time
 	accountOverrideMu           sync.Mutex
 	accountOverrides            map[domain.SessionID]string
 	attachments                 *attachmentstore.Store
@@ -1957,7 +1959,7 @@ func (m *Manager) resolveAgentConfigOnce(ctx context.Context, cfg ports.SpawnCon
 		return resolved, nil
 	}
 	if cfg.Harness == domain.HarnessCodex {
-		if err := m.refuseUnavailableCodexModel(ctx, cfg, strings.TrimSpace(resolved.Model)); err != nil {
+		if err := m.refuseUnavailableCodexModel(ctx, cfg, project, strings.TrimSpace(resolved.Model)); err != nil {
 			return ports.AgentConfig{}, err
 		}
 	}
@@ -2060,13 +2062,28 @@ func (m *Manager) resolveAgentConfigOnce(ctx context.Context, cfg ports.SpawnCon
 	return resolved, nil
 }
 
+// codexAccountHomes resolves the CODEX_HOME a Codex session runs under on an
+// account. The agent-accounts service implements it.
+type codexAccountHomes interface {
+	AccountHome(ctx context.Context, harness domain.AgentHarness, accountID string) (string, error)
+}
+
+// refusedModelRefreshInterval bounds how often a spawn refused on a Codex
+// model may start catalog rediscovery for its harness and project.
+const refusedModelRefreshInterval = 10 * time.Minute
+
 // refuseUnavailableCodexModel refuses a Codex session on a model Codex already
-// refused for the signed-in ChatGPT account, instead of starting a worker whose
-// first turn fails (#4518). A model the saved catalog lists again is allowed
-// and forgotten: the account may have changed.
-func (m *Manager) refuseUnavailableCodexModel(ctx context.Context, cfg ports.SpawnConfig, model string) error {
+// refused for the account the session runs on, instead of starting a worker
+// whose first turn fails (#4518). Another account is never refused for it. A
+// model a fresh saved catalog lists again is allowed and forgotten; a stale
+// catalog's listing proves nothing, so the refusal stays.
+func (m *Manager) refuseUnavailableCodexModel(ctx context.Context, cfg ports.SpawnConfig, project domain.ProjectConfig, model string) error {
+	if model == "" {
+		return nil
+	}
+	home, ok := m.codexAccountHome(ctx, cfg, project)
 	unavailable := codexagent.DefaultUnavailableModels()
-	if model == "" || !unavailable.Unavailable(model) {
+	if !ok || !unavailable.Unavailable(home, model) {
 		return nil
 	}
 	var available []string
@@ -2074,14 +2091,58 @@ func (m *Manager) refuseUnavailableCodexModel(ctx context.Context, cfg ports.Spa
 		if catalog, err := m.modelCatalog.Models(ctx, string(cfg.Harness), string(cfg.ProjectID), false); err == nil {
 			for _, item := range catalog.Models {
 				if item.ID == model {
-					_ = unavailable.Forget(model)
+					if catalog.Stale {
+						continue
+					}
+					_ = unavailable.Forget(home, model, time.Now())
 					return nil
 				}
 				available = append(available, item.ID)
 			}
 		}
+		// The account may list the model again; look, at most once per interval.
+		if m.claimRefusedModelRefresh(cfg.Harness, cfg.ProjectID) {
+			m.refreshModelCatalogInBackground(cfg.Harness, cfg.ProjectID)
+		}
 	}
 	return fmt.Errorf("%w: %s", ErrUnsupportedModel, codexagent.UnavailableModelMessage(model, available))
+}
+
+// codexAccountHome is the CODEX_HOME the spawn's Codex session will run under:
+// the selected saved account's, or the default account's. ok is false when the
+// account cannot be resolved, and then no refusal applies.
+func (m *Manager) codexAccountHome(ctx context.Context, cfg ports.SpawnConfig, project domain.ProjectConfig) (string, bool) {
+	if homes, ok := m.agentAccounts.(codexAccountHomes); ok {
+		home, err := homes.AccountHome(ctx, cfg.Harness, cfg.AgentAccountID)
+		if err != nil {
+			return "", false
+		}
+		if home != "" {
+			return home, true
+		}
+	} else if cfg.AgentAccountID != "" {
+		return "", false
+	}
+	// The computer's own account: a project may still point Codex elsewhere.
+	return project.Env["CODEX_HOME"], true
+}
+
+// claimRefusedModelRefresh reports whether a refused spawn may start catalog
+// rediscovery for its harness and project now, at most once per
+// refusedModelRefreshInterval (refusedModelRefreshAt).
+func (m *Manager) claimRefusedModelRefresh(harness domain.AgentHarness, project domain.ProjectID) bool {
+	key := string(harness) + "\x00" + string(project)
+	now := time.Now()
+	m.refusedModelRefreshMu.Lock()
+	defer m.refusedModelRefreshMu.Unlock()
+	if last, ok := m.refusedModelRefreshAt[key]; ok && now.Sub(last) < refusedModelRefreshInterval {
+		return false
+	}
+	if m.refusedModelRefreshAt == nil {
+		m.refusedModelRefreshAt = map[string]time.Time{}
+	}
+	m.refusedModelRefreshAt[key] = now
+	return true
 }
 
 // refreshModelCatalogInBackground rediscovers a harness's catalog without
