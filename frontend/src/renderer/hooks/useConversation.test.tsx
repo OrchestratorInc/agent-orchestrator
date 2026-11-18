@@ -1330,6 +1330,30 @@ describe("steering refusals", () => {
 		);
 	});
 
+	it("tracks the turn a steer started when it fell back to a send", async () => {
+		postMock.mockResolvedValueOnce({
+			data: { outcome: "steered", duplicate: false, activityId: "activity-1" },
+			error: undefined,
+		});
+		const { result } = renderHook(() => useConversationCommands("ao-1"), { wrapper });
+
+		await act(async () => {
+			await result.current.steer("join the turn");
+		});
+		expect(result.current.pendingAcceptedTurnId).toBeUndefined();
+		expect(result.current.activateBranchDisabled).toBe(false);
+
+		postMock.mockResolvedValueOnce({
+			data: { outcome: "sent", duplicate: false, turnId: "turn-9", state: "running" },
+			error: undefined,
+		});
+		await act(async () => {
+			await result.current.steer("the turn already ended");
+		});
+		await waitFor(() => expect(result.current.pendingAcceptedTurnId).toBe("turn-9"));
+		expect(result.current.activateBranchDisabled).toBe(true);
+	});
+
 	it("clears steer pending before a slow conversation refresh finishes", async () => {
 		const refresh = deferred<void>();
 		const steerResponse = deferred<{
