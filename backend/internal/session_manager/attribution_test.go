@@ -270,6 +270,24 @@ func TestRetryWithAttributionOffForgetsTheRecordedTrailer(t *testing.T) {
 	}
 }
 
+// A retry with attribution off clears the recorded trailer even when the
+// earlier attempt recorded it but never configured a worktree.
+func TestRetryWithAttributionOffForgetsATrailerRecordedBeforeAFailure(t *testing.T) {
+	ctx := context.Background()
+	root := t.TempDir()
+	beta := false
+	m, st := attributionManager(t, root, &beta)
+	if err := st.SetSessionCommitAttribution(ctx, "s-1", attribution.Bot.CoAuthor()); err != nil {
+		t.Fatal(err)
+	}
+	// No hooks directory and no configured worktree: the first attempt
+	// stopped right after recording its choice.
+	m.applyCommitAttribution(ctx, domain.ProjectRecord{ID: "p"}, "s-1", filepath.Join(root, "missing"), attributionFromSettings)
+	if got, _ := st.SessionCommitAttribution(ctx, "s-1"); got != "" {
+		t.Fatalf("recorded choice after the retry = %q, want none", got)
+	}
+}
+
 func TestPRFooterPromptFollowsBetaProjectAndRemote(t *testing.T) {
 	ctx := context.Background()
 	for _, tc := range []struct {

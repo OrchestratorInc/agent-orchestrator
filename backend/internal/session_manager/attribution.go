@@ -93,6 +93,8 @@ func (m *Manager) applyCommitAttribution(ctx context.Context, project domain.Pro
 			if err := m.store.SetSessionCommitAttribution(ctx, sessionID, coAuthor); err != nil {
 				m.logger.Warn("attribution: record session choice", "sessionID", sessionID, "error", err)
 			}
+		} else {
+			m.forgetSessionCommitAttribution(ctx, sessionID)
 		}
 	case attributionRecorded:
 		recorded, err := m.store.SessionCommitAttribution(ctx, sessionID)
@@ -107,14 +109,12 @@ func (m *Manager) applyCommitAttribution(ctx context.Context, project domain.Pro
 			return
 		}
 	}
-	removed := false
 	for _, worktree := range m.sessionGitWorktrees(ctx, project, workspacePath) {
 		if coAuthor == "" {
 			if attribution.ConfiguredFor(ctx, worktree, base) {
 				if err := attribution.RemoveFromWorktree(ctx, worktree); err != nil {
 					m.logger.Warn("attribution: remove from worktree", "path", worktree, "error", err)
 				}
-				removed = true
 			}
 			continue
 		}
@@ -122,13 +122,27 @@ func (m *Manager) applyCommitAttribution(ctx context.Context, project domain.Pro
 			m.logger.Warn("attribution: configure worktree", "path", worktree, "error", err)
 		}
 	}
-	// A retry that reuses this session's worktree after the beta or the
-	// project's switch was turned off must also forget the recorded trailer,
-	// or a recreated worktree would add it back.
-	if removed && choice == attributionFromSettings {
-		if err := m.store.SetSessionCommitAttribution(ctx, sessionID, ""); err != nil {
-			m.logger.Warn("attribution: clear session choice", "sessionID", sessionID, "error", err)
-		}
+}
+
+// forgetSessionCommitAttribution clears a trailer an earlier attempt of this
+// session recorded. A retry made after the beta or the project's switch was
+// turned off must not leave it behind, or a recreated worktree would add the
+// trailer back. That holds even when the earlier attempt failed before it
+// configured any worktree.
+func (m *Manager) forgetSessionCommitAttribution(ctx context.Context, sessionID domain.SessionID) {
+	if m.store == nil || sessionID == "" {
+		return
+	}
+	recorded, err := m.store.SessionCommitAttribution(ctx, sessionID)
+	if err != nil {
+		m.logger.Warn("attribution: read session choice", "sessionID", sessionID, "error", err)
+		return
+	}
+	if recorded == "" {
+		return
+	}
+	if err := m.store.SetSessionCommitAttribution(ctx, sessionID, ""); err != nil {
+		m.logger.Warn("attribution: clear session choice", "sessionID", sessionID, "error", err)
 	}
 }
 
