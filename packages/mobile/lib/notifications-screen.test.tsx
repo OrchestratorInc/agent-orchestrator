@@ -452,8 +452,10 @@ describe("NotificationsScreen", () => {
 			act(() => { clearAll.props.onPress(); });
 			const [, , buttons] = fixtures.alert.mock.calls[0] as [string, string, { text: string; onPress?: () => void }[]];
 			const load = holdNextLoad();
+			// The mount fetched already: only calls after Clear all prove its reload ran.
+			const fetchesBefore = fixtures.getNotifications.mock.calls.length;
 			await act(async () => { buttons.find((button) => button.text === "Clear all")!.onPress!(); });
-			expect(fixtures.getNotifications).toHaveBeenCalled();
+			expect(fixtures.getNotifications.mock.calls.length).toBeGreaterThan(fetchesBefore);
 			expect(refreshing()).toBe(false);
 			await load.answer();
 			expect(refreshing()).toBe(false);
