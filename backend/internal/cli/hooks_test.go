@@ -1278,6 +1278,7 @@ func TestHookSemanticAcceptanceFacts(t *testing.T) {
 		domain.HarnessPi,
 		domain.HarnessAmp,
 		domain.HarnessPrimeAgent,
+		domain.HarnessMiniMaxCode,
 	} {
 		t.Run(string(harness), func(t *testing.T) {
 			got := hookSemanticAcceptanceFacts(
@@ -2828,22 +2829,26 @@ func TestHooks_ReviewerPermissionRequestAnswersInsteadOfBlocking(t *testing.T) {
 }
 
 func TestHooksSessionDeliveryPreservesCoordinationOrigin(t *testing.T) {
-	t.Setenv("AO_SESSION_ID", "ao-worker")
-	t.Setenv("AO_RUNTIME_LAUNCH_ID", "launch-1")
-	cfg := setConfigEnv(t)
-	srv, capture := activityServer(t, http.StatusOK, `{"ok":true}`)
-	writeRunFileFor(t, cfg, srv)
-	payload, _ := json.Marshal(map[string]string{"session_id": "native-1", "prompt": domain.WrapSessionDelivery("session-send:1", "orchestrator direction")})
-	_, _, err := executeCLI(t, Deps{In: strings.NewReader(string(payload)), ProcessAlive: func(int) bool { return true }}, "hooks", "claude-code", "user-prompt-submit")
-	if err != nil {
-		t.Fatal(err)
-	}
-	var req setActivityAPIRequest
-	if err := json.Unmarshal([]byte(capture.body), &req); err != nil {
-		t.Fatal(err)
-	}
-	if req.ConversationCheckpointOrigin != "coordination" || req.CoordinationID != "session-send:1" || req.LatestUserPrompt != "" {
-		t.Fatalf("hook facts=%+v", req)
+	for _, harness := range []domain.AgentHarness{domain.HarnessClaudeCode, domain.HarnessMiniMaxCode} {
+		t.Run(string(harness), func(t *testing.T) {
+			t.Setenv("AO_SESSION_ID", "ao-worker")
+			t.Setenv("AO_RUNTIME_LAUNCH_ID", "launch-1")
+			cfg := setConfigEnv(t)
+			srv, capture := activityServer(t, http.StatusOK, `{"ok":true}`)
+			writeRunFileFor(t, cfg, srv)
+			payload, _ := json.Marshal(map[string]string{"session_id": "native-1", "prompt": domain.WrapSessionDelivery("session-send:1", "orchestrator direction")})
+			_, _, err := executeCLI(t, Deps{In: strings.NewReader(string(payload)), ProcessAlive: func(int) bool { return true }}, "hooks", string(harness), "user-prompt-submit")
+			if err != nil {
+				t.Fatal(err)
+			}
+			var req setActivityAPIRequest
+			if err := json.Unmarshal([]byte(capture.body), &req); err != nil {
+				t.Fatal(err)
+			}
+			if req.ConversationCheckpointOrigin != "coordination" || req.CoordinationID != "session-send:1" || req.LatestUserPrompt != "" {
+				t.Fatalf("hook facts=%+v", req)
+			}
+		})
 	}
 }
 
@@ -2905,5 +2910,80 @@ func TestClaudeHookArtifactNudgeFailsOpen(t *testing.T) {
 	}, "hooks", "claude-code", "pre-tool-use")
 	if err != nil || stdout != "" {
 		t.Fatalf("stdout=%q err=%v", stdout, err)
+	}
+}
+
+// Claude Code's built-in computer use tells the user to grant "the Claude
+// desktop app"; inside AO macOS checks Orchestrator. The hook answers that
+// refusal with a notice for the user and corrected guidance for the model,
+// and stays silent for every other tool result.
+func TestClaudeHookAnswersComputerUsePermissionRefusal(t *testing.T) {
+	t.Setenv("AO_SESSION_ID", "qa-1")
+	t.Setenv(envDesktopApp, "1")
+	cfg := setConfigEnv(t)
+	srv, _ := activityServer(t, http.StatusOK, `{"ok":true}`)
+	writeRunFileFor(t, cfg, srv)
+	run := func(agent, event string, payload map[string]any) string {
+		t.Helper()
+		body, _ := json.Marshal(payload)
+		stdout, _, err := executeCLI(t, Deps{In: strings.NewReader(string(body)), ProcessAlive: func(int) bool { return true }}, "hooks", agent, event)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return stdout
+	}
+	refused := map[string]any{
+		"session_id": "native",
+		"tool_name":  "mcp__computer-use__request_access",
+		"tool_response": []map[string]string{{"type": "text", "text": "The user saw the permission prompt but macOS Accessibility permission(s) are still not granted. " +
+			"Do not retry in this turn. Let the user know these permissions need to be granted in the Claude desktop app."}},
+	}
+
+	for _, event := range []string{"post-tool-use", "post-tool-use-failure"} {
+		var got claudePostToolUseOutput
+		if err := json.Unmarshal([]byte(run("claude-code", event, refused)), &got); err != nil {
+			t.Fatalf("%s: %v", event, err)
+		}
+		wantEvent := map[string]string{"post-tool-use": "PostToolUse", "post-tool-use-failure": "PostToolUseFailure"}[event]
+		if got.HookSpecificOutput.HookEventName != wantEvent ||
+			!strings.Contains(got.SystemMessage, "Settings > Computer use agents > Native computer use > Grant macOS permissions to Orchestrator") ||
+			!strings.Contains(got.HookSpecificOutput.AdditionalContext, "Ignore the advice to grant Claude") ||
+			!strings.Contains(got.HookSpecificOutput.AdditionalContext, "restart") {
+			t.Fatalf("%s: unexpected output %+v", event, got)
+		}
+	}
+
+	failure := map[string]any{"session_id": "native", "tool_name": "mcp__computer-use__screenshot", "error": "Screen Recording permission(s) are still not granted"}
+	if out := run("claude-code", "post-tool-use-failure", failure); !strings.Contains(out, "Grant macOS permissions to Orchestrator") {
+		t.Fatalf("refusal in error field not answered: %q", out)
+	}
+
+	granted := map[string]any{"session_id": "native", "tool_name": "mcp__computer-use__screenshot", "tool_response": "ok"}
+	otherTool := map[string]any{"session_id": "native", "tool_name": "Bash", "tool_response": "permission not granted"}
+	// The user declining one app is not a macOS refusal: Claude's own
+	// explanation stands.
+	appDeclined := map[string]any{"session_id": "native", "tool_name": "mcp__computer-use__request_access", "tool_response": "Access to Safari was not granted."}
+	onScreenText := map[string]any{"session_id": "native", "tool_name": "mcp__computer-use__screenshot", "tool_response": "Window text: permission not granted"}
+	for name, tc := range map[string]struct {
+		agent, event string
+		payload      map[string]any
+	}{
+		"granted result":   {"claude-code", "post-tool-use", granted},
+		"other tool":       {"claude-code", "post-tool-use", otherTool},
+		"pre-tool-use":     {"claude-code", "pre-tool-use", refused},
+		"non-Claude agent": {"codex", "post-tool-use", refused},
+		"app declined":     {"claude-code", "post-tool-use", appDeclined},
+		"on-screen text":   {"claude-code", "post-tool-use", onScreenText},
+	} {
+		if out := run(tc.agent, tc.event, tc.payload); out != "" {
+			t.Fatalf("%s produced output: %q", name, out)
+		}
+	}
+
+	// A daemon started from a terminal: macOS checks that terminal, so
+	// Claude's own advice is left alone.
+	t.Setenv(envDesktopApp, "")
+	if out := run("claude-code", "post-tool-use", refused); out != "" {
+		t.Fatalf("CLI-started daemon produced output: %q", out)
 	}
 }

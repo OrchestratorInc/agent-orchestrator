@@ -7,6 +7,7 @@ import { useChatImageSrc } from "./chat-image-source";
 import {
 	ATTACHMENT_TILE_OVERLAY_PILL_CLASS,
 	ATTACHMENT_TILE_PILL_CLASS,
+	ATTACHMENT_TILE_SOLID_FILL_CLASS,
 	attachmentTypeLabel,
 	type AttachmentPreviewKind,
 } from "./messageAttachments";
@@ -17,6 +18,37 @@ const PdfPreview = lazy(() => import("../PdfPreview").then((module) => ({ defaul
 
 /** Enough of a text file to fill a tile. */
 const TEXT_PREVIEW_BYTES = 2048;
+
+/**
+ * The first TEXT_PREVIEW_BYTES of a response, then the read is cancelled. A
+ * file just sent is read from its local copy, which takes no Range, and it may
+ * be gigabytes: reading it whole for a tile would stream all of it.
+ */
+async function readTextPrefix(response: Response): Promise<string> {
+	const reader = response.body?.getReader();
+	if (!reader) return (await response.text()).slice(0, TEXT_PREVIEW_BYTES);
+	const chunks: Uint8Array[] = [];
+	let size = 0;
+	try {
+		while (size < TEXT_PREVIEW_BYTES) {
+			const { done, value } = await reader.read();
+			if (done) break;
+			chunks.push(value);
+			size += value.byteLength;
+		}
+	} finally {
+		void reader.cancel().catch(() => undefined);
+	}
+	const bytes = new Uint8Array(Math.min(size, TEXT_PREVIEW_BYTES));
+	let offset = 0;
+	for (const chunk of chunks) {
+		if (offset >= bytes.length) break;
+		const part = chunk.subarray(0, bytes.length - offset);
+		bytes.set(part, offset);
+		offset += part.length;
+	}
+	return new TextDecoder().decode(bytes);
+}
 const PREVIEW_CLASS = "pointer-events-none absolute inset-0 flex flex-col overflow-hidden";
 
 /**
@@ -67,9 +99,9 @@ export function AttachmentFilePreview({ kind, url, name, onError: onLoadError }:
 			signal: controller.signal,
 			headers: local ? undefined : { Range: `bytes=0-${TEXT_PREVIEW_BYTES - 1}` },
 		})
-			.then(async (response) => {
+			.then((response) => {
 				if (!response.ok) throw new Error(`Preview failed: ${response.status}`);
-				return local ? (await response.blob()).slice(0, TEXT_PREVIEW_BYTES).text() : response.text();
+				return readTextPrefix(response);
 			})
 			.then(setText)
 			.catch(() => {
@@ -89,7 +121,7 @@ export function AttachmentFilePreview({ kind, url, name, onError: onLoadError }:
 			: kind === "pdf"
 				? <PdfPreview cover onError={onError} path={name} src={src} />
 				: text
-					? <pre className="m-0 size-full overflow-hidden whitespace-pre-wrap break-words bg-background p-2 font-mono text-micro leading-tight text-foreground">{text}</pre>
+					? <pre className={cn("m-0 size-full overflow-hidden whitespace-pre-wrap break-words p-2 font-mono text-micro leading-tight text-foreground", ATTACHMENT_TILE_SOLID_FILL_CLASS)}>{text}</pre>
 					: null;
 
 	return (

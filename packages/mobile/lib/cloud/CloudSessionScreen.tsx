@@ -2,16 +2,18 @@ import { Stack, useNavigation, useRouter } from "expo-router";
 import { useHeaderHeight, useIsFocused } from "expo-router/react-navigation";
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { Alert, Keyboard, Platform, StyleSheet, View, type LayoutChangeEvent } from "react-native";
-import { KeyboardAvoidingView } from "react-native-keyboard-controller";
+import { useSharedValue } from "react-native-reanimated";
 import { backOr } from "../backNavigation";
 import { ChatComposer } from "../chat/ChatComposer";
 import { sessionLink } from "../chat/automationMessages";
 import { ChatLinkProvider } from "../chat/ChatMarkdown";
 import { ChatTimeline, type TimelineStartup } from "../chat/ChatTimeline";
+import { useFlag } from "../chat/flag";
 import { chatSheetRoute } from "../chat/chatSheetRegistry";
 import type { ConversationMenuAction, ConversationMenuGroup } from "../chat/conversationMenuModel";
 import { ConversationTitle } from "../chat/ConversationTitle";
 import { KeyboardFollower } from "../chat/KeyboardFollower";
+import { KeyboardMotionScope } from "../chat/keyboardMotion";
 import { MessageFileSourceContext } from "../chat/messageFiles";
 import { requestDockModel } from "../chat/requestDockModel";
 import { SessionStartupStatus } from "../chat/SessionStartup";
@@ -106,19 +108,28 @@ export function CloudSessionScreen({ sessionId }: { sessionId: string }) {
 	const clearJumpToSequence = useCallback(() => setJumpToSequence(undefined), []);
 	const [dismissedRequest, setDismissedRequest] = useState<number>();
 	const restoreRequest = useCallback(() => setDismissedRequest(undefined), []);
-	const chatKeyboard = useChatKeyboard({ underHeader: CLEAR_HEADER });
+	const chatKeyboard = useChatKeyboard({ underHeader: CLEAR_HEADER, floating: true });
 	const headerHeight = useHeaderHeight();
 	const headerOverlap = CLEAR_HEADER ? headerHeight : 0;
 	const [bannersHeight, setBannersHeight] = useState(0);
 	const [composerHeight, setComposerHeight] = useState(0);
-	const [composerOpen, setComposerOpen] = useState(false);
+	// The composer's open state, for the jump to the newest message alone (see Flag).
+	const composerOpen = useFlag();
 	const composerSettle = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
 	useEffect(() => () => clearTimeout(composerSettle.current), []);
+	// Padded for the composer fully open, as a local chat's is.
+	const composerDeficit = useSharedValue(0);
+	// Lines typed (and quotes or attachments over the field) move the
+	// conversation up by a transform on the UI thread (ChatTimeline's
+	// `composerGrowth`), so the padding leaves them out and typing changes no
+	// React state of the conversation's: padding that followed the field put a
+	// new line over the last message for a quarter second, then jumped.
+	const composerFieldGrowth = useSharedValue(0);
 	const measureComposer = useCallback((event: LayoutChangeEvent) => {
-		const height = Math.round(event.nativeEvent.layout.height);
+		const height = event.nativeEvent.layout.height;
 		clearTimeout(composerSettle.current);
-		composerSettle.current = setTimeout(() => setComposerHeight(height), COMPOSER_SETTLE_MS);
-	}, []);
+		composerSettle.current = setTimeout(() => setComposerHeight(Math.round(height + composerDeficit.value - composerFieldGrowth.value)), COMPOSER_SETTLE_MS);
+	}, [composerDeficit, composerFieldGrowth]);
 
 	const tui = session?.interfaceMode === "tui";
 	const current: SessionView = view ?? (tui ? "agent" : "chat");
@@ -569,9 +580,13 @@ export function CloudSessionScreen({ sessionId }: { sessionId: string }) {
 		);
 	}
 
+	// One keyboard handler for the composer, its follower and the conversation
+	// (see KeyboardMotionScope).
 	return (
+		<KeyboardMotionScope>
 		<View style={styles.screen}>
-			<KeyboardAvoidingView style={[styles.screen, chatKeyboard.rootStyle]} behavior={chatKeyboard.behavior} keyboardVerticalOffset={chatKeyboard.keyboardVerticalOffset}>
+			{/* Not padded for the keyboard: the timeline makes its own room, as a local chat's does. */}
+			<View style={[styles.screen, chatKeyboard.floatingRootStyle]}>
 				{headerItems}
 				{CLEAR_HEADER ? null : banners}
 				<View style={styles.conversation}>
@@ -593,6 +608,8 @@ export function CloudSessionScreen({ sessionId }: { sessionId: string }) {
 								underHeader={headerOverlap}
 								topInset={bannersHeight}
 								bottomInset={composerHeight}
+								keyboardOffset={chatKeyboard.listKeyboardOffset}
+								composerGrowth={composerFieldGrowth}
 								jumpHidden={composerOpen}
 							/>
 						</MessageFileSourceContext.Provider>
@@ -607,12 +624,12 @@ export function CloudSessionScreen({ sessionId }: { sessionId: string }) {
 						</View>
 					) : null}
 				</View>
-			</KeyboardAvoidingView>
+			</View>
 			{/* The composer floats over the conversation and rides the keyboard, as a local chat's does. */}
 			<KeyboardFollower lift={chatKeyboard.composerLift} style={styles.floatingComposer} onLayout={measureComposer}>
 				<ChatComposer
 					key={session.id}
-					onExpandedChange={setComposerOpen}
+					onExpandedChange={composerOpen.set}
 					sessionId={`cloud.${session.id}`}
 					// Keys the unsent draft and attachments, as a machine's does, so a
 					// cloud chat keeps what was typed across leaving it.
@@ -648,6 +665,8 @@ export function CloudSessionScreen({ sessionId }: { sessionId: string }) {
 					onSettings={chooseTurnSettings}
 					onConfigOption={chooseOption}
 					restingInset={chatKeyboard.restingInset}
+					openDeficit={composerDeficit}
+					fieldGrowth={composerFieldGrowth}
 					dockRiseOverride={chatKeyboard.dockRiseOverride}
 					startingAgentName={startingAgentName}
 					fileUploads={attachmentLimit ? { maxBytes: attachmentLimit } : undefined}
@@ -660,6 +679,7 @@ export function CloudSessionScreen({ sessionId }: { sessionId: string }) {
 			</KeyboardFollower>
 			{switchCard}
 		</View>
+		</KeyboardMotionScope>
 	);
 }
 

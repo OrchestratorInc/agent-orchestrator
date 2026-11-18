@@ -57,7 +57,7 @@ import {
 	type TelemetryPolicyView,
 } from "./shared/telemetry-policy";
 import type { MigrationState } from "./main/app-state";
-import type { PrivacyGuideRequest, PrivacyPane } from "./main/privacy-guide";
+import type { PrivacyGuideRequest, PrivacyGuideTarget, PrivacyPane } from "./main/privacy-guide";
 import type { UpdateSettings, UpdateStatus, UpdateInstallResult } from "./main/update-settings";
 import type { CloudAccount, CloudPendingSignIn } from "./shared/cloud-account";
 import {
@@ -70,6 +70,7 @@ import {
 	type CloudShareLinks,
 	type CloudShareProgress,
 	type CloudSharePublishResult,
+	type HostShareLink,
 } from "./shared/cloud-share";
 import type { LocalLoginInput, LocalRegisterInput } from "./main/cloud-auth-local";
 import type { PushFolderInput, PushFolderPreview, PushFolderResult } from "./main/cloud-folder-push";
@@ -287,8 +288,10 @@ const api = {
 		checkGitRepository: (remoteUrl: string) => ipcRenderer.invoke("app:checkGitRepository", remoteUrl) as Promise<boolean>,
 		openExternal: (url: string) => ipcRenderer.invoke("app:openExternal", url) as Promise<void>,
 		showPrivacyGuide: (request: PrivacyGuideRequest) => ipcRenderer.invoke("app:showPrivacyGuide", request) as Promise<void>,
-		updatePrivacyGuide: (granted: Record<PrivacyPane, boolean>) => ipcRenderer.invoke("app:updatePrivacyGuide", granted) as Promise<boolean>,
+		updatePrivacyGuide: (target: PrivacyGuideTarget, granted: Record<PrivacyPane, boolean>) => ipcRenderer.invoke("app:updatePrivacyGuide", target, granted) as Promise<boolean>,
 		closePrivacyGuide: () => ipcRenderer.invoke("app:closePrivacyGuide") as Promise<void>,
+		getAppPrivacy: () => ipcRenderer.invoke("app:getAppPrivacy") as Promise<Record<PrivacyPane, boolean> | undefined>,
+		requestAppPrivacy: () => ipcRenderer.invoke("app:requestAppPrivacy") as Promise<Record<PrivacyPane, boolean> | undefined>,
 		openChromeExtensions: () => ipcRenderer.invoke("app:openChromeExtensions") as Promise<void>,
 		scanImportFolder: (input: { path: string; mode: ImportFolderMode }) =>
 			ipcRenderer.invoke("app:scanImportFolder", input) as Promise<ImportFolderScan>,
@@ -546,6 +549,8 @@ const api = {
 		inspect: (file: CloudShareFile) => ipcRenderer.invoke("cloudShare:inspect", file) as Promise<CloudShareInspection>,
 		available: (baseUrl: string) => ipcRenderer.invoke("cloudShare:available", { baseUrl }) as Promise<boolean | null>,
 		list: (baseUrl: string) => ipcRenderer.invoke("cloudShare:list", { baseUrl }) as Promise<CloudShareLinks>,
+		/** The links this computer published remote hosts' files to; their daemons list none. */
+		hostLinks: (baseUrl: string) => ipcRenderer.invoke("cloudShare:hostLinks", { baseUrl }) as Promise<HostShareLink[]>,
 		publish: (file: CloudShareFile) => ipcRenderer.invoke("cloudShare:publish", file) as Promise<CloudSharePublishResult>,
 		cancel: () => ipcRenderer.invoke("cloudShare:cancel") as Promise<void>,
 		unpublish: (baseUrl: string, shareId: string) => ipcRenderer.invoke("cloudShare:unpublish", { baseUrl, shareId }) as Promise<void>,

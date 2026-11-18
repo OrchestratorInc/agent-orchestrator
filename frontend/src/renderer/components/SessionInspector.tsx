@@ -1,11 +1,13 @@
 import { apiErrorException } from "../lib/api-error-exception";
-import { BrowserIcon } from "./icons";
+import { BrowserIcon, SubagentIcon } from "./icons";
 import { GitHubIcon } from "./GitHubIcon";
 import { artifactFileIcon } from "./artifact-file-icon";
 import { ArtifactShareMark } from "./ArtifactShareMark";
 import { useReconciledShareLinks, type ShareAccessByUrl } from "./ShareArtifactPopover";
 import { Chat, CheckWaves, Folder, List, Package } from "@/components/app-icons";
 import { AppLink } from "./AppLink";
+import { GitHubMarkdown, githubHtmlClass } from "./PRMarkdown";
+import { botThreadReviewers, mergeReviewers, prConversationComments, prHasReviewActivity } from "../lib/pr-review-comments";
 import { ArtifactThumbnail } from "./ArtifactThumbnail";
 import type { ArtifactRow } from "../lib/artifacts";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
@@ -13,8 +15,6 @@ import { useTranslation } from "react-i18next";
 import { useNavigate } from "@tanstack/react-router";
 import { memo, useCallback, useEffect, useLayoutEffect, useRef, useState, type ComponentProps, type ReactNode } from "react";
 import type { TFunction } from "i18next";
-import ReactMarkdown from "react-markdown";
-import remarkGfm from "remark-gfm";
 import {
 	InspectorActivityTimelineView,
 	InspectorPullRequestCardView,
@@ -120,8 +120,8 @@ import type { MessageKey } from "../i18n";
 import { usesPreviewWorkspaceData as usePreviewData } from "../lib/preview-mode";
 import {
 	openReviewStatesFor,
-	reviewHasLiveActivity,
 	reviewIsRunning,
+	reviewPhase,
 	reviewRunDisabled,
 	reviewSessionRunAction,
 	sessionReviewsQueryOptions,
@@ -139,7 +139,7 @@ export type { InspectorView } from "@aoagents/product-ui";
 
 const VIEW_DEFS: {
 	id: InspectorView;
-	labelKey: "inspector.summary" | "inspector.reviewTab" | "inspector.browser" | "inspector.sideChat" | "inspector.files" | "artifacts.title";
+	labelKey: "inspector.summary" | "inspector.reviewTab" | "inspector.browser" | "inspector.sideChat" | "inspector.subagents" | "inspector.files" | "artifacts.title";
 	icon: ReactNode;
 }[] = [
 	{ id: "summary", labelKey: "inspector.summary", icon: <List /> },
@@ -147,6 +147,7 @@ const VIEW_DEFS: {
 	{ id: "reviews", labelKey: "inspector.reviewTab", icon: <CheckWaves /> },
 	{ id: "browser", labelKey: "inspector.browser", icon: <BrowserIcon aria-hidden="true" /> },
 	{ id: "sideChat", labelKey: "inspector.sideChat", icon: <Chat /> },
+	{ id: "subagents", labelKey: "inspector.subagents", icon: <SubagentIcon aria-hidden="true" /> },
 	{ id: "artifacts", labelKey: "artifacts.title", icon: <Package /> },
 ];
 
@@ -179,6 +180,7 @@ export const SessionInspector = memo(function SessionInspector({
 	filesView,
 	browserView,
 	sideChatView,
+	subagentsView,
 	view: viewProp,
 	onViewChange,
 	standaloneAgent = false,
@@ -205,6 +207,8 @@ export const SessionInspector = memo(function SessionInspector({
 	filesView?: ReactNode;
 	browserView?: BrowserViewModel;
 	sideChatView?: ReactNode;
+	/** The chat's Subagents panel; the tab shows only while the chat has subagents to list. */
+	subagentsView?: ReactNode;
 	/** Controlled active tab. Omit to let the inspector own its own selection. */
 	view?: InspectorView;
 	onViewChange?: (view: InspectorView) => void;
@@ -266,22 +270,30 @@ export const SessionInspector = memo(function SessionInspector({
 	// A persisted/controlled Reviews selection can outlive the last reviewable PR.
 	// Keep the shell on a real, visible tab instead of rendering an empty, unlabelled body.
 	const reviewsAvailable = reviewsTabVisible(session);
+	// The orchestrator's rail also offers its chat's Subagents panel while it lists any.
 	const availableViewDefs = orchestrator ? VIEW_DEFS.filter((entry) =>
-		entry.id === "summary" || entry.id === "browser" || (entry.id === "artifacts" && ((session?.artifactFiles?.length ?? 0) > 0 || artifactRequestPending)))
+		entry.id === "summary" || entry.id === "browser"
+		|| (entry.id === "subagents" && subagentsView !== undefined)
+		|| (entry.id === "artifacts" && ((session?.artifactFiles?.length ?? 0) > 0 || artifactRequestPending)))
 		: VIEW_DEFS.filter((entry) => (!hostId || entry.id !== "browser" || browserView) && (reviewsAvailable || entry.id !== "reviews")
 			// The host passes a side chat view only where side chats can run.
 			&& (entry.id !== "sideChat" || sideChatView !== undefined)
+			&& (entry.id !== "subagents" || subagentsView !== undefined)
 			// Artifacts shows whenever the session lists files, or while an artifact
 			// link waits for the list to refresh.
 			&& (entry.id !== "artifacts" || (session?.artifactFiles?.length ?? 0) > 0 || artifactRequestPending));
 	const view: InspectorView = availableViewDefs.some((entry) => entry.id === requestedView) ? requestedView : "summary";
 	const sessionLoaded = session !== undefined;
+	// The chat reports its subagents just after it mounts, so on the way back to a
+	// session the Subagents tab is briefly missing. Show Summary through that gap but
+	// keep the reader's choice, so the tab comes back selected.
+	const awaitingSubagents = requestedView === "subagents" && subagentsView === undefined;
 	useEffect(() => {
 		// Until the session loads, its tabs are unknown: keep the requested view.
-		if (view === requestedView || (!sessionLoaded && !orchestrator)) return;
+		if (view === requestedView || (!sessionLoaded && !orchestrator) || awaitingSubagents) return;
 		setInternalView(view);
 		onViewChange?.(view);
-	}, [onViewChange, orchestrator, requestedView, sessionLoaded, view]);
+	}, [awaitingSubagents, onViewChange, orchestrator, requestedView, sessionLoaded, view]);
 	const tabs = availableViewDefs.map((entry) => {
 		const label = t(entry.labelKey);
 		return {
@@ -305,6 +317,7 @@ export const SessionInspector = memo(function SessionInspector({
 		<div className="session-inspector contents">
 			<SessionInspectorShellView
 				sideChatView={sideChatView ?? <p className="p-4 text-xs text-muted-foreground">{t("sideChat.unavailable")}</p>}
+				subagentsView={subagentsView}
 				activeView={view}
 				ariaLabel={t("inspector.aria")}
 				artifactsView={
@@ -480,7 +493,11 @@ const SummaryView = memo(function SummaryView({
 	// CI, review, and merge policies act on a PR. Standalone sessions, local or
 	// a Cloud standalone agent, keep the row for Archive.
 	const scratchpadSession = session.workspaceId === STANDALONE_WORKSPACE_ID || standaloneAgent;
-	const showSessionControls = hasPRs || scratchpadSession;
+	const stopEligible = canStopTurn(session);
+	const agentsQuery = useAgentReadinessQuery(stopEligible, hostId);
+	const stopTurn = stopEligible && agentsQuery.data?.agents.some((agent) => agent.id === session.provider && agent.canStopTurn) === true;
+	// Stop turn needs no PR, so a busy worker without one still gets the section.
+	const showSessionControls = hasPRs || scratchpadSession || stopTurn;
 	// Cloud orchestrators list the workers they spawned; local orchestrators
 	// have no parent/child model and every other session has no children.
 	const showWorkers =
@@ -588,7 +605,7 @@ const SummaryView = memo(function SummaryView({
 					title={prSectionTitle}
 				/>
 			)}
-			completion={showSessionControls && !guest ? <SessionControls hostId={hostId} scratchpad={scratchpadSession} session={session} /> : undefined}
+			completion={showSessionControls && !guest ? <SessionControls hostId={hostId} policies={hasPRs} scratchpad={scratchpadSession} session={session} stopTurn={stopTurn} /> : undefined}
 			scripts={session.cloud ? <CloudScriptRunSections cloud={session.cloud} sessionId={session.id} /> : undefined}
 			workers={showWorkers ? <OrchestratorChildrenSection session={session} /> : <SessionForksSection session={session} />}
 		/>
@@ -873,12 +890,18 @@ function updateSessionAutoInjectCI(
 	}));
 }
 
-function SessionControls({ session, hostId, scratchpad }: { session: WorkspaceSession; hostId?: string; scratchpad: boolean }) {
+function canStopTurn(session: WorkspaceSession): boolean {
+	return !session.isTerminated && !session.cloud && session.mode !== "chat" && session.activity?.state === "active";
+}
+
+function SessionControls({ session, hostId, policies, scratchpad, stopTurn }: { session: WorkspaceSession; hostId?: string; policies: boolean; scratchpad: boolean; stopTurn: boolean }) {
 	const { t } = useTranslation();
 	const navigate = useNavigate();
 	const queryClient = useQueryClient();
 	const workspaceKey = workspaceQueryKeyForHost(hostId);
 	const [confirmOpen, setConfirmOpen] = useState(false);
+	const [stoppedTurn, setStoppedTurn] = useState<string>();
+	const turnKey = JSON.stringify([hostId, session.id, session.activity?.state, session.activity?.lastActivityAt, session.lastUserMessageAt, session.lastInteractionAt]);
 	const terminate = useTerminateSession();
 	const { client: cloudClient } = useCloudCp();
 	const policy = useMutation({
@@ -905,6 +928,21 @@ function SessionControls({ session, hostId, scratchpad }: { session: WorkspaceSe
 		onError: (_error, _next, context) => {
 			if (context?.previous) queryClient.setQueryData(workspaceKey, context.previous);
 		},
+		onSettled: () => {
+			void queryClient.invalidateQueries({ queryKey: workspaceKey });
+		},
+	});
+	const interrupt = useMutation({
+		mutationFn: async (_turn: string) => {
+			if (usePreviewData) return;
+			const { error, response } = await clientForSessionHost(hostId).POST(
+				"/api/v1/sessions/{sessionId}/stop-turn",
+				{ params: { path: { sessionId: session.id } } },
+			);
+			if (error?.code === "SESSION_TURN_STOP_PENDING") return;
+			if (error) throw apiErrorException(error, `Unable to stop turn (${response.status})`);
+		},
+		onSuccess: (_data, turn) => setStoppedTurn(turn),
 		onSettled: () => {
 			void queryClient.invalidateQueries({ queryKey: workspaceKey });
 		},
@@ -963,17 +1001,34 @@ function SessionControls({ session, hostId, scratchpad }: { session: WorkspaceSe
 			</span>
 		</div>
 	);
+	const interruptAction = stopTurn ? (
+		<div className="py-1">
+			<div className="flex items-center justify-between gap-3">
+				<span className="text-xs font-medium text-settings-label">{t("inspector.currentTurn")}</span>
+				<Button disabled={interrupt.isPending || stoppedTurn === turnKey} onClick={() => interrupt.mutate(turnKey)} size="sm" type="button" variant="outline">
+					{stoppedTurn === turnKey ? t("inspector.stopRequested") : interrupt.isPending ? t("inspector.stoppingTurn") : t("inspector.stopTurn")}
+				</Button>
+			</div>
+			{interrupt.error ? <p className="mt-1 text-2xs text-error" role="alert">{interrupt.error.message}</p> : null}
+		</div>
+	) : null;
 
 	if (isStandaloneSession) {
 		return (
 			<Section title={t("inspector.sessionControls")}>
+				{interruptAction}
 				{terminateAction}
 			</Section>
 		);
 	}
 
+	if (!policies) {
+		return <Section title={t("inspector.sessionControls")}>{interruptAction}</Section>;
+	}
+
 	return (
 		<Section title={t("inspector.sessionControls")}>
+			{interruptAction}
 			<AutoInjectCIPolicyControl hostId={hostId} session={session} />
 			<AutoInjectReviewPolicyControl hostId={hostId} session={session} />
 			{session.kind === "orchestrator" ? null : canTerminateNow ? (
@@ -1122,6 +1177,8 @@ function PRViewSummaryCard({
 			compact
 			countNounLabel={(count, noun) => `${count} ${t(prNounKeys[noun], { count })}`}
 			headerless={layout === "focus"}
+			// The commits row under this card states the same diff: say it once, there.
+			hideDiffCounts={layout === "focus" && Boolean(work?.diff && work.diff.additions === pr.additions && work.diff.deletions === pr.deletions)}
 			description={<PRDescriptionPreview cloud={Boolean(cloudOrgId)} detailsFailed={detailsFailed} pr={pr} sessionKey={sessionUiKey(sessionId, hostId)} />}
 			externalIcon={<ArrowUpRight aria-hidden="true" className="size-icon-2xs shrink-0" strokeWidth={2} />}
 			externalLink={ProductExternalLink}
@@ -1477,7 +1534,7 @@ function ArtifactPreviewTile({
 	session: WorkspaceSession;
 	shareAccess: ShareAccessByUrl;
 }) {
-	const row: ArtifactRow = { ...artifact, sessionId: session.id, sessionTitle: session.title ?? "", cloud: session.cloud, shareAccess: artifact.shareUrl ? shareAccess.get(artifact.shareUrl) ?? artifact.shareAccess : undefined };
+	const row: ArtifactRow = { ...artifact, sessionId: session.id, sessionTitle: session.title ?? "", cloud: session.cloud, hostId: session.hostId, shareAccess: artifact.shareUrl ? shareAccess.get(artifact.shareUrl) ?? artifact.shareAccess : undefined };
 	return (
 		<Pressable
 			className="group flex min-w-0 flex-col gap-1.5 rounded-md focus-visible:ring-1 focus-visible:ring-ring"
@@ -1901,7 +1958,7 @@ function LocalReviewsSection({
 	const reviewerOwnerKey = sessionUiKey(session.id, hostId);
 	const openReviewStates = openReviewStatesFor(session, reviewsQuery.data?.reviews ?? []);
 	const reviewHeads = openReviewStates.map((review) => `${review.prUrl}@${review.targetSha}`).sort().join("\n");
-	const currentHeadReviewed = openReviewStates.some((review) => review.latestRun?.targetSha === review.targetSha && (review.latestRun.status === "complete" || review.latestRun.status === "delivered"));
+	const currentHeadReviewed = openReviewStates.some((review) => review.latestRun?.targetSha === review.targetSha && review.latestRun.status === "completed");
 	useEffect(() => {
 		setRerunConfirmation((current) => current && (current.ownerKey !== reviewerOwnerKey || current.heads !== reviewHeads) ? null : current);
 	}, [reviewerOwnerKey, reviewHeads]);
@@ -2028,10 +2085,7 @@ function LocalReviewsSection({
 	const prSummaries = sessionPRDisplaySummaries(session, scmSummary.data?.prs);
 	const githubReviews = prSummaries.filter(
 		(pr) =>
-			(pr.state === "open" || pr.state === "draft") &&
-			((pr.review?.reviews?.length ?? 0) > 0 ||
-				(pr.review?.unresolvedBy ?? []).some((reviewer) => reviewer.count > 0) ||
-				(pr.review?.resolvedBy ?? []).some((reviewer) => reviewer.count > 0)),
+			(pr.state === "open" || pr.state === "draft") && prHasReviewActivity(pr),
 	);
 	return (
 		<>
@@ -2065,6 +2119,7 @@ function LocalReviewsSection({
 				reviewerHandleId={reviewsQuery.data?.reviewerHandleId ?? ""}
 				reviewerSurface={reviewsQuery.data?.reviewerSurface}
 				reviewerActivityState={reviewsQuery.data?.reviewerActivityState}
+				reviewerActivityHarness={reviewsQuery.data?.reviewerHarness}
 				activeReviewers={reviewsQuery.data?.activeReviewers ?? []}
 				onOpenReviewer={(surface) => {
 					if (surface.mode === "chat") onOpenReviewerChat?.(surface.reviewId);
@@ -2322,11 +2377,22 @@ function cloudReviewRun(run: CloudCpAOReviewRun, harness: string): ReviewRunFact
 		prUrl: run.pullRequestUrl,
 		reviewId: run.reviewId,
 		sessionId: run.sessionId,
-		status: run.status,
+		status: cloudReviewRunStatus(run.status),
 		targetSha: run.targetSha,
 		triggerSource: run.triggerSource,
 		verdict: run.verdict,
 	};
+}
+
+/** AO Cloud keeps its original run vocabulary; read it as the daemon's states. */
+function cloudReviewRunStatus(status: CloudCpAOReviewRun["status"]): ReviewRunFacts["status"] {
+	switch (status) {
+		case "complete":
+		case "delivered":
+			return "completed";
+		default:
+			return status;
+	}
 }
 
 function cloudReviewsToLocal(
@@ -2455,8 +2521,11 @@ function MergedReviewsSection({
 		const entries = (github?.review?.reviews ?? []).filter(
 			(entry) => !externalReviewActorMatchesPRAuthor(entry.reviewerId, github?.author),
 		);
-		const allUnresolvedReviewers = github?.review?.unresolvedBy ?? [];
-		const allResolvedReviewers = github?.review?.resolvedBy ?? [];
+		// A bot's inline comments (CodeRabbit's) come from the PR's review threads:
+		// the summary's lists leave bots out.
+		const botReviewers = github ? botThreadReviewers(github) : { unresolved: [], resolved: [] };
+		const allUnresolvedReviewers = mergeReviewers(github?.review?.unresolvedBy ?? [], botReviewers.unresolved);
+		const allResolvedReviewers = mergeReviewers(github?.review?.resolvedBy ?? [], botReviewers.resolved);
 		const agentReviewIds = new Set(aoRuns.map((run) => run.githubReviewId).filter(Boolean));
 		const agentComments = new Map<string, { inlineComments: InspectorInlineComment[]; resolvedComments: InspectorInlineComment[] }>();
 		const partitionReviewerComments = (
@@ -2520,7 +2589,7 @@ function MergedReviewsSection({
 		const resolvedByReviewer = new Map(
 			resolvedReviewers.map((reviewer) => [reviewer.reviewerId, reviewer]),
 		);
-		const externalEntries = entries.map((entry) => {
+		const externalEntries: InspectorGithubReview[] = entries.map((entry) => {
 			const reviewer = unresolvedByReviewer.get(entry.reviewerId);
 			const resolvedReviewer = resolvedByReviewer.get(entry.reviewerId);
 			unresolvedByReviewer.delete(entry.reviewerId);
@@ -2586,6 +2655,25 @@ function MergedReviewsSection({
 				submittedAt: "",
 				submittedAtLabel: "",
 				verdict: githubVerdict("none", t),
+			});
+		}
+		// Top-level PR comments read beside the reviews: a bot's walkthrough or a
+		// person's note is feedback too, and the PR page shows it in the same place.
+		for (const comment of github ? prConversationComments(github) : []) {
+			externalEntries.push({
+				body: comment.body,
+				canRequestRereview: false,
+				id: `comment:${comment.url || comment.id}`,
+				kind: "comment" as const,
+				pullRequestUrl: github?.url,
+				inlineComments: [],
+				resolvedComments: [],
+				isBot: comment.isBot,
+				reviewerId: comment.author,
+				reviewUrl: comment.url,
+				submittedAt: comment.createdAt ?? "",
+				submittedAtLabel: comment.createdAt ? formatTimeCompact(comment.createdAt) : "",
+				verdict: githubVerdict("commented", t),
 			});
 		}
 		for (const reviewer of resolvedByReviewer.values()) {
@@ -2708,6 +2796,7 @@ function reviewLabels(t: TFunction): InspectorReviewLabels {
 		reviewActions: t("inspector.reviewActions"),
 		reviews: t("inspector.reviews"),
 		reviewedAt: (time) => t("inspector.reviewedAt", { time }),
+		commentedAt: (time) => t("inspector.commentedAt", { time }),
 		resolvedComments: (count) => t("inspector.resolvedComments", { count }),
 		rereviewRequested: t("inspector.rereviewRequested"),
 		rereviewRequestFailed: t("inspector.rereviewRequestFailed"),
@@ -2730,19 +2819,12 @@ function reviewLabels(t: TFunction): InspectorReviewLabels {
 }
 
 function renderReviewMarkdown(body: string) {
+	// The same renderer as the PR's comments, so a bot's <details> sections and
+	// badges read as GitHub shows them rather than as literal tags.
 	return (
-		<ReactMarkdown
-			components={{
-				a: ({ href, children }) => (
-					<AppLink href={href} target="_blank" rel="noopener noreferrer">
-						{children}
-					</AppLink>
-				),
-			}}
-			remarkPlugins={[remarkGfm]}
-		>
-			{body}
-		</ReactMarkdown>
+		<div className={githubHtmlClass}>
+			<GitHubMarkdown body={body} />
+		</div>
 	);
 }
 
@@ -2831,6 +2913,7 @@ function ReviewPanel({
 	reviewerHandleId,
 	reviewerSurface,
 	reviewerActivityState,
+	reviewerActivityHarness,
 	activeReviewers,
 	onOpenReviewer,
 	isLoading,
@@ -2859,6 +2942,8 @@ function ReviewPanel({
 	reviewerHandleId: string;
 	reviewerSurface?: components["schemas"]["ListReviewsResponse"]["reviewerSurface"];
 	reviewerActivityState?: components["schemas"]["ListReviewsResponse"]["reviewerActivityState"];
+	/** The reviewer reviewerActivityState describes; the selected one, not necessarily the one running. */
+	reviewerActivityHarness?: string;
 	activeReviewers: ReviewerSurface[];
 	onOpenReviewer: (surface: ReviewerSurface) => void;
 	isLoading: boolean;
@@ -2893,17 +2978,13 @@ function ReviewPanel({
 	onCloudInstallHarness?: () => void;
 }) {
 	const { t } = useTranslation();
-	// A failed run stores its reason in body. Show it for manual triggers too:
-	// the trigger request itself only returns a generic "Review operation failed".
+	// The daemon records why a run failed as a code for diagnostics; people see
+	// one generic message with a retry, for manual triggers too.
 	const latestFailure = reviewStates
 		.map((review) => review.latestRun)
 		.filter(
 			(run): run is ReviewRunFacts =>
-				Boolean(
-					run?.status === "failed" &&
-						run.body?.trim() &&
-						(run.triggerSource !== "auto" || autoReviewEnabled),
-				),
+				Boolean(run?.status === "failed" && (run.triggerSource !== "auto" || autoReviewEnabled)),
 		)
 		.sort((a, b) => b.createdAt.localeCompare(a.createdAt))[0];
 	const [dismissedFailureId, setDismissedFailureId] = useState<string | null>(null);
@@ -2939,7 +3020,7 @@ function ReviewPanel({
 		Boolean(reviewerSurface?.mode === "chat" && reviewerSurface.reviewId);
 	const reviewRunning = reviewIsRunning(openReviewStates);
 	const reviewerControlsLocked = reviewRunning || autoReviewEnabled || isKilling || isSwitchingReviewer || isTriggering || isCancelling;
-	const reviewLive = reviewHasLiveActivity(openReviewStates, reviewerActivityState, hasReviewerSession);
+	const phase = reviewPhase(openReviewStates, reviewerActivityState, reviewerActivityHarness);
 	const reviewHasRun = reviewRunning || Boolean(latest);
 	const runAction = reviewSessionRunAction(openReviewStates, isTriggering);
 	const runDisabled = isKilling || isSwitchingReviewer || (cloud && !cloudReviewerReady) || reviewRunDisabled(openReviewStates, isTriggering);
@@ -2962,10 +3043,25 @@ function ReviewPanel({
 				{reviewFailure ? (
 					<p className="m-0 rounded-md border border-error/28 bg-error/8 px-2.5 py-2 text-xs leading-normal text-error" role="status">
 						<span className="font-semibold">
-							{reviewFailure.triggerSource === "auto" ? t("inspector.autoReview") : t("pr.section.review")}{" "}
-							{t("inspector.review.failed")}:
+							{reviewFailure.triggerSource === "auto" ? t("inspector.autoReview") : t("pr.section.review")}:
 						</span>{" "}
-						{reviewFailure.body.trim()}
+						{t("inspector.review.failedRetry")}
+						{readOnly ? null : (
+							<>
+								{" "}
+								<Button
+									className="h-auto p-0 text-xs"
+									disabled={runDisabled || reviewRunning || isCancelling}
+									// The notice clears itself once a new pass replaces the failed
+									// one; dismissing it here would lose Retry if the request fails.
+									onClick={onTrigger}
+									size="xs"
+									variant="link"
+								>
+									{t("inspector.review.retry")}
+								</Button>
+							</>
+						)}
 					</p>
 				) : null}
 				{notice ? (
@@ -3121,13 +3217,17 @@ function ReviewPanel({
 					</div>
 				</div>
 				)}
-				{reviewLive ? (
+				{phase ? (
 					<div className="flex items-center gap-2 border-t border-border pt-3">
 						<Loader2 aria-hidden="true" className="size-icon-sm shrink-0 animate-spin text-muted-foreground" />
 						<span className="min-w-0 flex-1 truncate text-xs font-medium text-muted-foreground">
-							{isCancelling
+							{isCancelling || phase === "stopping"
 								? t("inspector.review.cancelling")
-								: `Review in progress · ${agentLabel(activeReviewerHarness)}`}
+								: phase === "starting"
+									? t("inspector.review.starting")
+									: phase === "waiting_input"
+										? `${t("inspector.review.waitingForInput")} · ${agentLabel(activeReviewerHarness)}`
+										: `${t("inspector.review.reviewing")} · ${agentLabel(activeReviewerHarness)}`}
 						</span>
 					</div>
 				) : null}
@@ -3158,7 +3258,7 @@ function githubVerdict(verdict: string, t: TFunction): { label: string; tone: "n
 function runsByPRFrom(openReviewStates: PRReviewState[], runs: ReviewRunFacts[]): Map<string, ReviewRunFacts[]> {
 	const byPR = new Map<string, ReviewRunFacts[]>();
 	for (const run of runs.filter(
-		(run) => (run.status === "complete" || run.status === "delivered") && Boolean(run.body?.trim()),
+		(run) => run.status === "completed" && Boolean(run.body?.trim()),
 	)) {
 		byPR.set(run.prUrl, [...(byPR.get(run.prUrl) ?? []), run]);
 	}
@@ -3167,7 +3267,7 @@ function runsByPRFrom(openReviewStates: PRReviewState[], runs: ReviewRunFacts[])
 			const fallback = [state.latestRun, state.previousRun].filter(
 				(run): run is ReviewRunFacts =>
 					Boolean(run) &&
-					(run!.status === "complete" || run!.status === "delivered") &&
+					run!.status === "completed" &&
 					Boolean(run!.body?.trim()),
 			);
 			if (fallback.length > 0) byPR.set(state.prUrl, fallback);
@@ -3197,7 +3297,8 @@ function aoReviewMeta(reviewState: PRReviewState): string {
 		reviewState.status === "needs_review" &&
 		(!reviewState.latestRun ||
 			reviewState.latestRun.status === "failed" ||
-			reviewState.latestRun.status === "cancelled")
+			reviewState.latestRun.status === "cancelled" ||
+			reviewState.latestRun.status === "superseded")
 	) {
 		return appI18n.t("inspector.latestCommitNotReviewedMeta", { number: reviewState.prNumber });
 	}
@@ -3230,6 +3331,16 @@ function reviewVerdict(reviewState: PRReviewState): {
 	}
 	if (reviewState.latestRun?.status === "cancelled") {
 		return { label: appI18n.t("inspector.review.cancelled"), tone: "neutral" };
+	}
+	if (reviewState.latestRun?.status === "superseded") {
+		return { label: appI18n.t("inspector.review.superseded"), tone: "neutral" };
+	}
+	switch (reviewState.latestRun?.status) {
+		case "queued":
+		case "launching":
+			return { label: appI18n.t("inspector.review.starting"), tone: "running" };
+		case "cancelling":
+			return { label: appI18n.t("inspector.review.cancelling"), tone: "running" };
 	}
 	switch (reviewState.status) {
 		case "running":

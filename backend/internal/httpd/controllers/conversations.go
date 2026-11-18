@@ -88,11 +88,7 @@ type turnAutoResumeService interface {
 	SetTurnAutoResume(context.Context, domain.SessionID, string, bool) error
 }
 
-// ConversationsController owns the Chat routes for a session.
-//
-// Every route dispatches from the session's persisted mode inside the service, so
-// a client cannot reach the Chat path for a session that was created in TUI mode
-// even by calling these URLs directly. UI visibility is not the boundary.
+// ConversationsController owns the Chat routes and the explicit Stop turn route.
 type ConversationsController struct {
 	Svc ConversationService
 	// UserMessages counts accepted human steers for product telemetry. Nil
@@ -138,6 +134,7 @@ func (c *ConversationsController) Register(r chi.Router) {
 	r.Post("/sessions/{sessionId}/conversation/approvals/{requestId}/resolve", c.resolve)
 	r.Post("/sessions/{sessionId}/conversation/inputs/{requestId}/resolve", c.resolveInput)
 	r.Post("/sessions/{sessionId}/conversation/interrupt", c.interrupt)
+	r.Post("/sessions/{sessionId}/stop-turn", c.stopTurn)
 	r.Post("/sessions/{sessionId}/conversation/steer", c.steer)
 	r.Post("/sessions/{sessionId}/conversation/steer-or-send", c.steerOrSend)
 	r.Post("/sessions/{sessionId}/conversation/turns/{turnId}/steer", c.promoteQueuedTurn)
@@ -1217,6 +1214,21 @@ func (c *ConversationsController) resolveInput(w http.ResponseWriter, r *http.Re
 		requestID,
 		ports.ChatInputResponse{Action: action, Content: req.Content},
 	); err != nil {
+		writeConversationError(w, r, err)
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
+}
+
+func (c *ConversationsController) stopTurn(w http.ResponseWriter, r *http.Request) {
+	svc, ok := c.Svc.(interface {
+		StopTurn(context.Context, domain.SessionID) error
+	})
+	if !ok {
+		apispec.NotImplemented(w, r, "POST", "/api/v1/sessions/{sessionId}/stop-turn")
+		return
+	}
+	if err := svc.StopTurn(r.Context(), domain.SessionID(chi.URLParam(r, "sessionId"))); err != nil {
 		writeConversationError(w, r, err)
 		return
 	}

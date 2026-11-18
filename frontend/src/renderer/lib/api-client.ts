@@ -98,6 +98,7 @@ const ROUTE_TEMPLATES = [
     "/api/v1/awake/sessions/{awakeId}/extend",
     "/api/v1/session-import",
 	"/api/v1/agents",
+	"/api/v1/attachment-uploads",
 	"/api/v1/agents/install-jobs",
 	"/api/v1/agents/auth-plans",
 	"/api/v1/agents/installers",

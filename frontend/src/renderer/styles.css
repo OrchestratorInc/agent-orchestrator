@@ -10,6 +10,17 @@
 
 @custom-variant dark (&:is(.dark *, :root:not([data-theme="light"]) *));
 
+/*
+ * "A control inside the group has keyboard focus". Use these, never
+ * group-has-*: Tailwind compiles that to `:is(:where(.group):has(...) *)`, and a
+ * :has() inside :is() makes Chromium restyle the whole app on every DOM change
+ * anywhere (about 30 ms per streamed chat line, tooltip or session switch).
+ * Same elements, same specificity, written as a plain descendant selector.
+ */
+@custom-variant focus-visible-in-group (:where(.group):has(:focus-visible) &);
+@custom-variant focus-visible-in-session-row (:where(.group\/session-row):has(:focus-visible) &);
+@custom-variant focus-visible-in-scratchpad (:where(.group\/scratchpad):has(:focus-visible) &);
+
 @custom-media --layout-narrow (width <= 680px); /* --breakpoint-layout-narrow */
 
 /*
@@ -358,6 +369,18 @@ html[data-window-translucent="true"]::view-transition-old(root) {
 	backdrop-filter: blur(var(--blur-overlay));
 }
 
+/* Diagnostics updates both its graphs and the board behind it. Blur the app
+ * surface rather than sampling it through a backdrop filter, which flickers
+ * in the translucent Electron shell. The portalled dialog stays sharp. */
+.diagnostics-dialog-overlay {
+	-webkit-backdrop-filter: none;
+	backdrop-filter: none;
+}
+
+body:has(.diagnostics-dialog-overlay) #root {
+	filter: blur(var(--blur-overlay));
+}
+
 /* In a translucent window, Chromium's backdrop blur cannot see content drawn
  * over the transparent window base, so text behind would show through sharp.
  * There the surface turns nearly solid instead. */
@@ -580,12 +603,19 @@ html[data-ao-platform="darwin"] .app-shell-root:not(.native-fullscreen) [data-sl
 	border-top-width: 1px;
 }
 
-/* macOS drags from the shared header without an extra strip. Linux keeps the
- * native frame, so it needs no drag region. */
-html[data-ao-platform="darwin"] [data-testid="session-topbar-host"] {
+/* macOS drags from the shared headers without an extra strip: the session tab
+ * bar and the inspector's tab row both sit in the title-bar band. Linux keeps
+ * the native frame, so it needs no drag region. Only the controls punch
+ * through, never their containers, so every empty pixel around and between
+ * them still drags the window and double-clicks to zoom (macOS applies the
+ * system double-click setting to drag regions only). The same punch-out
+ * covers page top bars, which set drag inline on the header (PageTopbar.tsx).
+ * A control's own no-drag must come after the header in the DOM: Electron
+ * builds the region in document order. */
+html[data-ao-platform="darwin"] :is([data-testid="session-topbar-host"], [data-slot="inspector-container"] .session-inspector__topbar) {
 	-webkit-app-region: drag;
 }
-html[data-ao-platform="darwin"] [data-testid="session-topbar-host"] :is(button, a, input, [role="tab"], [role="menuitem"]) {
+html[data-ao-platform="darwin"] :is([data-testid="session-topbar-host"], [data-slot="inspector-container"] .session-inspector__topbar, .workspace-topbar-actions) :is(button, a, input, select, textarea, label, form, [role="button"], [role="link"], [role="tab"], [role="menuitem"], [role="combobox"], [role="switch"], [role="checkbox"], [role="radio"], [title]) {
 	-webkit-app-region: no-drag;
 }
 
@@ -612,22 +642,22 @@ html[data-ao-platform="darwin"] .settings-dialog-body :is(button, a, input, sele
  * content to the frame's rounded corners while leaving the bar's band open. */
 /* The bar takes over the panel's old top inset: it runs from the window's top
  * edge to the panel's frame, with equal space above and below its controls.
- * Its center stays on the sidebar header and titlebar controls' line. */
+ * It is the traffic-light row (MAC_TRAFFIC_LIGHT_ROW_HEIGHT, 50px), so its
+ * center stays on the native buttons', sidebar brand's and titlebar controls'
+ * line (y = 25). The frame's top line is the row's last pixel (y = 49), and
+ * macOS draws the window's 1px top highlight over its first, so the visible
+ * gaps above and below a 31px control are both 8.5px. */
 .center-panel-shell.center-panel-shell--floating-topbar {
-	--floating-topbar-height: calc(var(--size-topbar-primary) + 2 * var(--size-center-panel-inset-mac));
+	--floating-topbar-height: calc(var(--size-topbar-primary) + 2 * (var(--size-center-panel-inset-mac) + 1px));
 	--size-toolbar: var(--floating-topbar-height);
 	--spacing-toolbar: var(--floating-topbar-height);
-	--size-topbar-content: calc(var(--floating-topbar-height) - 1px);
+	/* The bars drop their bottom border here, so action rows fill the band. */
+	--size-topbar-content: var(--floating-topbar-height);
 	--size-inspector-tabs: var(--floating-topbar-height);
 	--spacing-inspector-tabs: var(--floating-topbar-height);
-	/* Controls sit centered in the band with equal space above and below. */
-	--floating-topbar-gap: var(--space-2);
+	--floating-topbar-gap: calc(var(--space-2) + 1px);
 	--size-topbar-control: calc(var(--floating-topbar-height) - 1px - 2 * var(--floating-topbar-gap));
 	padding-top: 0;
-}
-
-.center-panel-shell--floating-topbar .panel-topbar-controls {
-	top: 1.5px;
 }
 
 /* The last tab's trailing gap already spaces New terminal from it; the action
@@ -661,10 +691,9 @@ html[data-ao-platform="darwin"] .settings-dialog-body :is(button, a, input, sele
 	 * and the next page's border would fade in from bright text color. */
 	border-width: 0;
 	border-radius: 0;
-	/* The frame's faint top line reads as part of the gap below the controls,
-	 * so the bar's contents sit low to look evenly spaced. 1.5px also lands them
-	 * on the traffic lights' centerline (y = 25). */
-	padding: 1.5px 1px 1px;
+	/* No top padding: the bar starts at the window's top edge, so its center is
+	 * the traffic-light row's. */
+	padding: 0 1px 1px;
 	background: transparent;
 	-webkit-mask:
 		linear-gradient(#000 0 0) 0 0 / 100% var(--floating-panel-top) no-repeat,
@@ -880,11 +909,13 @@ html[data-theme="light"] .browser-popout-overlay--mac-windowed .workspace-topbar
 	background: var(--color-bg-sidebar);
 }
 
-/* The bars themselves carry no fill or divider: the frame's top edge is the divider. */
+/* The bars themselves carry no fill or divider: the frame's top edge is the
+ * divider. No border width either, or it would take the band's last row and
+ * pull every control 0.5px above the bar's center. */
 .center-panel-shell--floating-topbar .center-panel-titlebar,
 .center-panel-shell--floating-topbar .session-topbar-surface,
 .center-panel-shell--floating-topbar .session-inspector__topbar {
-	border-bottom-color: transparent;
+	border-bottom-width: 0;
 	background: transparent;
 }
 
@@ -940,13 +971,14 @@ html[data-theme="light"] .browser-popout-overlay--mac-windowed .workspace-topbar
 
 /* The tab bar's header is 1px taller than the band; unfilled, it leaves the
  * panel's top row to the panel. */
-.center-panel-shell--floating-topbar .workspace-topbar-container > header {
+.center-panel-shell--floating-topbar .workspace-topbar-container > header,
+.center-panel-shell--floating-topbar .workspace-topbar-container > [data-session-topbar-scope] > header {
 	background: transparent;
 }
 
 /* The floating bar has no divider: the panel's own edge separates it. */
 .center-panel-shell--floating-topbar .center-panel-surface .session-topbar-surface {
-	border-bottom-color: transparent;
+	border-bottom-width: 0;
 }
 
 /* Vertical section caps resolve against the actual sidebar space between chrome. */
@@ -2654,15 +2686,13 @@ body.is-resizing-x .session-split[data-workspace-resizing="true"] [data-slot="in
 	box-shadow: none !important;
 }
 
-/* Keyboard focus for the growing pill: focus-visible only (not focus-within),
+/* Keyboard focus for the row highlight: focus-visible only (not focus-within),
    so a mouse click on Pinned / footer rows does not leave the pill stuck on.
    Project folder toggle + trailing actions live outside the nav-row host but
    inside data-project-drag-row — light that project's pill from there too. */
 .group\/nav-row:focus-visible [data-nav-row-highlight-idle],
 .group\/nav-row:has(:focus-visible) [data-nav-row-highlight-idle],
 [data-project-drag-row]:has(:focus-visible) [data-nav-row-highlight-idle] {
-	width: 100%;
-	height: 100%;
 	opacity: 1;
 }
 
@@ -2672,7 +2702,7 @@ body.is-resizing-x .session-split[data-workspace-resizing="true"] [data-slot="in
 	color: var(--color-foreground);
 }
 
-/* Fine-pointer hover only: row highlight grow, folder↔chevron swap, session
+/* Fine-pointer hover only: row highlight, folder↔chevron swap, session
    action reveal. Touch must not sticky-hover; keyboard uses focus-visible above.
    Folder/chevron/actions use `scale`/`rotate` (not `transform`) so Tailwind v4
    utilities are actually overridden on hover. */
@@ -2682,8 +2712,6 @@ body.is-resizing-x .session-split[data-workspace-resizing="true"] [data-slot="in
 	   so expanded sessions under the same menu-item are not all lit at once. */
 	.group\/nav-row:hover [data-nav-row-highlight-idle],
 	.group\/menu-item:not([data-dragging="true"]) [data-project-drag-row]:hover [data-nav-row-highlight-idle] {
-		width: 100%;
-		height: 100%;
 		opacity: 1;
 	}
 
@@ -2715,13 +2743,6 @@ body.is-resizing-x .session-split[data-workspace-resizing="true"] [data-slot="in
 
 	.group\/session-row:hover [data-session-message-age] {
 		opacity: 0;
-	}
-}
-
-@media (prefers-reduced-motion: reduce) {
-	[data-nav-row-highlight] {
-		width: 100% !important;
-		height: 100% !important;
 	}
 }
 
@@ -3036,6 +3057,7 @@ html.sidebar-reordering * {
 }
 
 /* Join only a notice that actually rendered, after the floating queue. */
+[data-composer-notice] + [data-composer-notice],
 [data-composer-notice] + .cursor-chat-composer {
 	border-top-left-radius: 0;
 	border-top-right-radius: 0;
@@ -3592,7 +3614,7 @@ html[data-window-translucent="true"] :is(.queue-dock, .queue-dock-toggle, .queue
 	transform: translateY(-50%);
 }
 
-.chat-scroll-marker-visible {
+.chat-scroll-marker-current {
 	width: 13px;
 	background: color-mix(in srgb, var(--color-text-primary) 82%, transparent);
 	opacity: 1;
@@ -3605,8 +3627,8 @@ html[data-window-translucent="true"] :is(.queue-dock, .queue-dock-toggle, .queue
 	opacity: 0.96;
 }
 
-.group\/scroll:hover .chat-scroll-marker-visible,
-.group\/scroll:focus-visible .chat-scroll-marker-visible {
+.group\/scroll:hover .chat-scroll-marker-current,
+.group\/scroll:focus-visible .chat-scroll-marker-current {
 	width: 11px;
 	background: var(--color-text-muted);
 }
@@ -5779,6 +5801,11 @@ html[data-shell-linux] body > .files-popout-overlay {
 	display: none;
 }
 
+/* With its close gone, the title does not fade out under it. */
+.browser-panel__tab-strip:has(> .browser-panel__tab:nth-child(8)) > .browser-panel__tab:not(:has([data-active])) [data-terminal-tab-frame] > button {
+	mask-image: none;
+}
+
 .browser-panel__tab--drag-placeholder {
 	opacity: 0;
 	pointer-events: none;
@@ -6142,23 +6169,30 @@ html[data-native-browser-composition="true"] .browser-popout-frame {
 	padding-block: var(--space-2);
 }
 
-::highlight(chat-annotation) {
+/*
+ * Every ::highlight() rule applies only inside the element its ranges are in.
+ * A global one is resolved for every element on each style recalc, even with
+ * no highlight registered, which made the session page slower to scroll. The
+ * minifier does not parse ::highlight, so each selector in a list stays a
+ * separate rule: keep one selector per rule.
+ */
+[data-chat-find-surface] ::highlight(chat-annotation) {
 	background-color: #6b728040;
 	color: inherit;
 }
 
-::highlight(chat-annotations) {
+[data-chat-find-surface] ::highlight(chat-annotations) {
 	background-color: color-mix(in srgb, var(--primary) 14%, transparent);
 	color: inherit;
 }
 
-::highlight(chat-annotation-draft) {
+[data-chat-find-surface] ::highlight(chat-annotation-draft) {
 	background-color: var(--color-term-selection-light);
 	color: inherit;
 }
 
 /* Text selected in an artifact preview while its ask bar has focus. */
-::highlight(artifact-selection) {
+[data-artifact-selection-scope] ::highlight(artifact-selection) {
 	background-color: var(--color-term-selection-light);
 	color: inherit;
 }
@@ -6792,8 +6826,6 @@ html:not([data-window-translucent="true"]) .onboarding-preview-stage {
 
 /* Keep the session row lit while its hover preview card is open (pointer on the card). */
 .group\/nav-row[data-preview-open] [data-nav-row-highlight-idle] {
-	width: 100%;
-	height: 100%;
 	opacity: 1;
 }
 .group\/nav-row[data-preview-open] {
@@ -6805,8 +6837,6 @@ html:not([data-window-translucent="true"]) .onboarding-preview-stage {
    the trigger overwrites data-state with its own value. aria-haspopup keeps
    collapsible rows, which also set aria-expanded, out of it. */
 .group\/nav-row[aria-haspopup="menu"][aria-expanded="true"] [data-nav-row-highlight-idle] {
-	width: 100%;
-	height: 100%;
 	opacity: 1;
 }
 .group\/nav-row[aria-haspopup="menu"][aria-expanded="true"] {

@@ -17,8 +17,11 @@ import { CloudCpError } from "./cloud-cp/errors";
 import type { CloudCpMeResponse, CloudCpSession } from "./cloud-cp/types";
 import { createCloudSession } from "./cloud-session-create";
 import {
+	clearSignInSource,
 	instrumentCloudClient,
 	noteCloudSession,
+	noteCloudSignInCompleted,
+	noteSignInSource,
 	observeCloudSessions,
 	reportCloudOffering,
 	reportPlanRefusal,
@@ -154,11 +157,61 @@ describe("cloud funnel telemetry", () => {
 		noteCloudSession(null, false);
 		noteCloudSession(account, false);
 		expect(events()).toEqual(["ao.renderer.cloud_signed_in", "ao.renderer.cloud_signed_in"]);
+		expect(captured.map((entry) => entry.properties?.same_account)).toEqual([false, false]);
 
 		resetCloudTelemetryForTest();
 		captured.length = 0;
 		noteCloudSession(account, true);
 		expect(events()).toEqual([]);
+	});
+
+	it("counts signing in again as the same account once, from main's completed sign-in", () => {
+		const first = { authProvider: "workos", user: { id: "user-1" }, storedAt: "2026-11-16T10:00:00Z" };
+		const again = { ...first, storedAt: "2026-11-16T10:20:00Z" };
+		noteCloudSession(first, true);
+		// A link refused the expired session; Publish's Sign in signs the same account in again.
+		noteSignInSource("artifact_publish");
+		noteCloudSession(again, false);
+		expect(events()).toEqual([]);
+		noteCloudSignInCompleted(again);
+		expect(captured).toEqual([{ event: "ao.renderer.cloud_signed_in", properties: { method: "workos", source: "artifact_publish", same_account: true } }]);
+
+		// A new account: the notification reports it, and main's completed sign-in does not again.
+		const other = { authProvider: "workos", user: { id: "user-2" }, storedAt: "2026-11-16T11:00:00Z" };
+		noteCloudSession(other, false);
+		noteCloudSignInCompleted(other);
+		expect(events()).toEqual(["ao.renderer.cloud_signed_in", "ao.renderer.cloud_signed_in"]);
+
+		// In the other order, the notification does not count it again either.
+		const third = { authProvider: "workos", user: { id: "user-3" }, storedAt: "2026-11-16T12:00:00Z" };
+		noteCloudSignInCompleted(third);
+		noteCloudSession(third, false);
+		expect(events()).toHaveLength(3);
+		// Only the re-sign-in is marked, so same_account != true is the count before it was added.
+		expect(captured.map((entry) => entry.properties?.same_account)).toEqual([true, false, false]);
+	});
+
+	it("says a sign-in came from Publish only within 30 minutes of its Sign in click, once", () => {
+		const account = { authProvider: "workos", user: { id: "user-1" } };
+		const sources = () => captured.map((entry) => entry.properties?.source);
+		noteCloudSession(null, true);
+		noteSignInSource("artifact_publish");
+		noteCloudSession(account, false);
+		// The note is used up: the next sign-in is not Publish's.
+		noteCloudSession(null, false);
+		noteCloudSession(account, false);
+		expect(sources()).toEqual(["artifact_publish", "other"]);
+
+		// Expired.
+		noteCloudSession(null, false);
+		noteSignInSource("artifact_publish", Date.now() - 31 * 60_000);
+		noteCloudSession(account, false);
+		// Cleared when the popover that set it closed.
+		noteCloudSession(null, false);
+		noteSignInSource("artifact_publish");
+		clearSignInSource("artifact_publish");
+		noteCloudSession(account, false);
+		expect(sources()).toEqual(["artifact_publish", "other", "other", "other"]);
 	});
 
 	it("records the offering from /me once and tolerates a control plane without it", async () => {
@@ -187,9 +240,11 @@ describe("cloud funnel telemetry", () => {
 	it("splits plan refusals from limits", () => {
 		reportPlanRefusal("PLAN_REQUIRED", true);
 		reportPlanRefusal("WEEKLY_LIMIT_REACHED", false);
+		reportPlanRefusal("WORKER_SLOTS_FULL", false, "chat");
 		expect(captured).toEqual([
 			{ event: "ao.renderer.cloud_plan_refusal_shown", properties: { code: "PLAN_REQUIRED", shown: true } },
 			{ event: "ao.renderer.cloud_limit_reached", properties: { code: "WEEKLY_LIMIT_REACHED", shown: false } },
+			{ event: "ao.renderer.cloud_limit_reached", properties: { code: "WORKER_SLOTS_FULL", shown: false, source: "chat" } },
 		]);
 	});
 
@@ -205,6 +260,24 @@ describe("cloud funnel telemetry", () => {
 		await client.getBilling("org-1");
 		expect(events()).toEqual(["ao.renderer.cloud_checkout_started", "ao.renderer.cloud_checkout_completed"]);
 		expect(captured[1]?.properties).toMatchObject({ plan: "starter" });
+	});
+
+	it("tells a free trial apart from a paid checkout", async () => {
+		const plans = [{ name: "starter", id: "price_1", trialDays: 7 }, { name: "pro", id: "price_2" }];
+		let summary = { enabled: true, exempt: false, plan: "free", entitled: false, plans } as Record<string, unknown>;
+		const client = instrumentCloudClient(fakeClient({ getBilling: vi.fn(async () => summary) } as unknown as Partial<CloudCpClient>));
+		await client.getBilling("org-1");
+		await client.createBillingCheckout("org-1", "starter");
+		expect(captured.at(-1)).toMatchObject({ event: "ao.renderer.cloud_checkout_started", properties: { plan: "starter", trial: true } });
+		summary = { enabled: true, exempt: false, plan: "starter", entitled: true, subscriptionStatus: "trialing", plans: [plans[1]] };
+		await client.getBilling("org-1");
+		expect(captured.at(-1)).toMatchObject({ event: "ao.renderer.cloud_checkout_completed", properties: { plan: "starter", trial: true } });
+		// The trial is used up: a later checkout of another plan is paid.
+		await client.createBillingCheckout("org-1", "pro");
+		expect(captured.at(-1)).toMatchObject({ event: "ao.renderer.cloud_checkout_started", properties: { plan: "pro", trial: false } });
+		summary = { enabled: true, exempt: false, plan: "pro", entitled: true, subscriptionStatus: "active", plans: [plans[1]] };
+		await client.getBilling("org-1");
+		expect(captured.at(-1)).toMatchObject({ event: "ao.renderer.cloud_checkout_completed", properties: { plan: "pro", trial: false } });
 	});
 
 	it("passes other client methods through untouched", async () => {

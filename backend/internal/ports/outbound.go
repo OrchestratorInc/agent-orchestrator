@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"time"
 
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
 )
@@ -239,6 +240,8 @@ type RuntimeConfig struct {
 	// (user and command shells, not agents) need not pay it continuously.
 	// Runtimes that always render ignore it.
 	LazyStyledOutput bool
+	ReplayFile       string
+	OutputLines      int
 }
 
 // RuntimeHandle identifies a live runtime instance. Its ID is opaque outside
@@ -270,6 +273,23 @@ type SupervisedProcessInspector interface {
 // simply reports no memory reading rather than zero.
 type RuntimeProcessRootInspector interface {
 	ProcessRootPIDs(ctx context.Context, handle RuntimeHandle) ([]int, error)
+}
+
+// ProcessRoot is a root of a runtime's process tree together with the latest
+// moment that root process can have started. A process found at that pid that
+// started later is not the runtime's: the pid was reused after the runtime's
+// process exited. A zero StartedBy means the runtime has just observed the
+// root alive, so it cannot have been reused.
+type ProcessRoot struct {
+	PID       int
+	StartedBy time.Time
+}
+
+// RuntimeProcessRootBoundInspector is ProcessRootPIDs with evidence that each
+// root is still the runtime's own process. A force-stop that kills a tree must
+// not walk down from a pid another process now holds.
+type RuntimeProcessRootBoundInspector interface {
+	BoundedProcessRoots(ctx context.Context, handle RuntimeHandle) ([]ProcessRoot, error)
 }
 
 // ExactSupervisedProcessInspector is the strict launch-generation probe used
