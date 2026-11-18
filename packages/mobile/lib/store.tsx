@@ -1213,9 +1213,15 @@ export function AppProvider({ children }: { children: ReactNode }) {
 	const refreshHost = useCallback(async (hostId: string) => {
 		if (!mountedRef.current) return;
 		if (isCloudHost(hostId)) await refreshCloudRef.current();
-		else if (hostId === selectedHostId) await fetchAll(true);
+		else if (hostId === selectedHostId) {
+			// No verified config means its endpoint race failed and its poll has
+			// stopped, so a fetch would return at once and a Retry do nothing. Race
+			// again instead: a config that answers restarts the poll.
+			if (cfgRef.current) await fetchAll(true);
+			else await reloadConfig();
+		}
 		else await otherHosts.refreshHost(hostId);
-	}, [selectedHostId, fetchAll, otherHosts.refreshHost]);
+	}, [selectedHostId, fetchAll, reloadConfig, otherHosts.refreshHost]);
 	const hasCloud = Boolean(cloud);
 	const refreshAll = useCallback(async () => {
 		await Promise.all([
