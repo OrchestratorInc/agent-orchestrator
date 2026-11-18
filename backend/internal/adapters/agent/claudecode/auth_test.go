@@ -10,7 +10,9 @@ import (
 	"path/filepath"
 	"runtime"
 	"slices"
+	"strings"
 	"testing"
+	"time"
 
 	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
 	"github.com/aoagents/agent-orchestrator/backend/pkg/agentcreds"
@@ -741,6 +743,44 @@ func TestProviderModelsRunsCLIOncePerDiscoveryAndCachesProviderResult(t *testing
 	}
 	if cliReports != 2 {
 		t.Fatalf("claude auth status calls = %d, want one per discovery", cliReports)
+	}
+}
+
+// A stale Claude CLI earlier on the daemon's PATH treats `auth status` as a
+// prompt and runs until its own timeout. That time must not come out of the
+// provider request's budget (#7672).
+func TestProviderModelsSlowCLIReportDoesNotStarveTheProviderRequest(t *testing.T) {
+	clearClaudeCredentialEnv(t)
+	InvalidateAuthCache()
+	t.Cleanup(InvalidateAuthCache)
+
+	server := withStubValidator(t, func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = w.Write([]byte(`{"data":[{"id":"claude-opus-5"}]}`))
+	})
+	env := map[string]string{
+		"ANTHROPIC_API_KEY":  "project-key",
+		"ANTHROPIC_BASE_URL": server.URL,
+	}
+	previousTimeout := claudeModelProbeTimeout
+	claudeModelProbeTimeout = 200 * time.Millisecond
+	t.Cleanup(func() { claudeModelProbeTimeout = previousTimeout })
+	previous := claudeModelAuthReport
+	claudeModelAuthReport = func(context.Context, string, string, map[string]string) (claudeAuthReport, bool) {
+		time.Sleep(2 * claudeModelProbeTimeout)
+		return claudeAuthReport{}, false
+	}
+	t.Cleanup(func() { claudeModelAuthReport = previous })
+
+	models, err := ProviderModels(context.Background(), "/usr/local/bin/claude", "/workspace", env)
+	if err != nil {
+		t.Fatalf("ProviderModels() error = %v, want models after a slow CLI report", err)
+	}
+	if len(models) != 1 || models[0].ID != "claude-opus-5" {
+		t.Fatalf("models = %+v, want the provider model", models)
+	}
+	fingerprint := ProviderCatalogFingerprint(context.Background(), "/usr/local/bin/claude", "/workspace", env)
+	if strings.HasSuffix(fingerprint, "\x00") {
+		t.Fatalf("fingerprint %q has no credential, want the resolved key's identity", fingerprint)
 	}
 }
 
