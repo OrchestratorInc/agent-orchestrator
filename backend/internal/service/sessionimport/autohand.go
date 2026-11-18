@@ -97,7 +97,6 @@ func readAutohandTranscript(ctx context.Context, root string, paths ...string) (
 	var meta struct {
 		ID      string    `json:"sessionId"`
 		CWD     string    `json:"projectPath"`
-		Model   string    `json:"model"`
 		Created time.Time `json:"createdAt"`
 		Last    time.Time `json:"lastActiveAt"`
 	}
@@ -109,7 +108,7 @@ func readAutohandTranscript(ctx context.Context, root string, paths ...string) (
 	if meta.ID != t.nativeID || !filepath.IsAbs(meta.CWD) {
 		return t, errors.New("autohand identity or working directory invalid")
 	}
-	t.cwd, t.model, t.last = meta.CWD, meta.Model, meta.Created
+	t.cwd, t.last = meta.CWD, meta.Created
 	now := time.Now().Add(time.Hour)
 	if meta.Last.After(t.last) && meta.Last.Before(now) {
 		t.last = meta.Last
