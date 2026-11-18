@@ -143,7 +143,8 @@ export type ConnectionErrorCopy = {
  */
 export function describeConnectionFailure(
 	reason: ConnectionFailure,
-	target: { host: string; port: string; platform: "ios" | "android" | string },
+	/** `secure` says the attempt was HTTPS, when the caller knows it. */
+	target: { host: string; port: string; platform: "ios" | "android" | string; secure?: boolean },
 ): ConnectionErrorCopy {
 	// Only surfaced when the phone never reached the host at all, and only on
 	// iOS, where a denied Local Network prompt produces exactly this symptom.
@@ -184,6 +185,21 @@ export function describeConnectionFailure(
 		case "unreachable": {
 			// Build the address string only when we have both host and port
 			const address = target.host && target.port ? `${target.host}:${target.port}` : target.host || "";
+			// A Tailscale name on the Connect Mobile port is plain HTTP, which the
+			// phone does not assume for a qualified name. Android can be told to
+			// type http://; iOS refuses plain HTTP to that name, so it is pointed at
+			// Tailscale's HTTPS address on 443 instead.
+			if (target.secure === true && target.port && target.port !== "443" && target.host.trim().toLowerCase().endsWith(".ts.net")) {
+				return {
+					title: "Your machine is offline",
+					icon: "unplug",
+					hint: target.platform === "ios" ? "Clear Port to use Tailscale's HTTPS address." : "Type http:// before a Tailscale name.",
+					message: `Nothing answered over HTTPS at ${address}. ` + (target.platform === "ios"
+						? "Clear Port to use the machine's Tailscale HTTPS address."
+						: `A Tailscale name on the Connect Mobile port uses plain HTTP: enter http://${target.host.trim()}.`),
+					showLocalNetworkHint: false,
+				};
+			}
 			const messagePrefix = address ? `Reached nothing at ${address}. ` : "Couldn't reach your machine. ";
 			return {
 				title: "Your machine is offline",

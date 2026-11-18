@@ -132,6 +132,12 @@ describe("saving a machine", () => {
 		expect(unreachable).toMatchObject({ field: "host" });
 	});
 
+	it("says to type http:// when a Tailscale name on another port does not answer over HTTPS", async () => {
+		fixtures.persist.mockRejectedValueOnce(new TypeError("Network request failed"));
+		const failed = await saveEnvironmentMachine(a, draft({ host: "my-pc.tail1234.ts.net", httpPort: "3011" }), "android").catch((error: MachineSaveError) => error);
+		expect(failed).toMatchObject({ field: "host", message: expect.stringContaining("enter http://my-pc.tail1234.ts.net") });
+	});
+
 	it("names the port it tried when Port was left empty", async () => {
 		fixtures.persist.mockRejectedValueOnce(new (ApiError as unknown as new (status: number) => Error)(500));
 		const failed = await saveEnvironmentMachine(a, draft({ host: "10.0.0.9", httpPort: "" }), "ios").catch((error: MachineSaveError) => error);

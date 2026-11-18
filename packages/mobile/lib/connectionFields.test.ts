@@ -123,6 +123,18 @@ describe("resolveManualAddress", () => {
 			expect(resolveManualAddress("203.0.113.7", "9090", saved)).toEqual({ ok: true, host: "203.0.113.7", ...tls("9090") });
 		});
 
+		// Saved before the Host field was strict, or advertised by the machine:
+		// an untouched route must never block a rename.
+		it("keeps a saved route it would no longer accept as typed, while it is unchanged", () => {
+			const legacy = { host: "box/ao", port: 3011, secure: false };
+			expect(resolveManualAddress("box/ao", "3011", legacy)).toEqual({ ok: true, host: "box/ao", ...plain() });
+			expect(resolveManualAddress("box/ao", "", legacy)).toEqual({ ok: true, host: "box/ao", ...plain() });
+			expect(resolveManualAddress("box/other", "3011", legacy)).toEqual({ ok: false, error: "Enter only a host name or IP address, without a path." });
+			const tunnel = { host: FIXED, port: 8443, secure: true };
+			expect(resolveManualAddress(FIXED, "8443", tunnel)).toEqual({ ok: true, host: FIXED, ...tls("8443") });
+			expect(resolveManualAddress(FIXED, "9443", tunnel)).toMatchObject({ ok: false, error: expect.stringContaining("Tunnel addresses use port 443") });
+		});
+
 		it("lets a typed scheme override the saved choice", () => {
 			expect(resolveManualAddress("https://203.0.113.7:8080", "", saved)).toEqual({ ok: true, host: "203.0.113.7", ...tls("8080") });
 		});

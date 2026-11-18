@@ -18,6 +18,13 @@ const host: Host = {
 const onTailscale: ServerConfig = { host: "studio.tail123.ts.net", httpPort: "3011", muxPort: "3012", secure: true, password: "secret", hostId: "host-1", endpointKind: "tailscale" };
 
 describe("machine editor draft", () => {
+	it("lets a machine be renamed although its saved address predates the Host checks", () => {
+		const legacy: Host = { ...host, endpoints: [{ kind: "lan", host: "box/ao", port: 3011, secure: false }] };
+		const renamed = { ...machineEditDraft(legacy), machineName: "Box" };
+		expect(canSaveDraft(renamed, legacy.endpoints[0])).toBe(true);
+		expect(canSaveDraft({ ...renamed, config: { ...renamed.config, host: "box/other" } }, legacy.endpoints[0])).toBe(false);
+	});
+
 	it("edits the route the phone is connected over, else the first", () => {
 		expect(editableEndpointIndex(host, onTailscale)).toBe(1);
 		expect(editableEndpointIndex(host)).toBe(0);

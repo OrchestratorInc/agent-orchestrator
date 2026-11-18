@@ -260,6 +260,14 @@ describe("persisting an inline machine edit", () => {
 		expect(saved.endpoints[1]).toEqual(host.endpoints[1]);
 	});
 
+	it("renames a machine whose saved address predates the Host checks, without probing it", async () => {
+		const legacy = { ...host, endpoints: [{ kind: "lan" as const, host: "box/ao", port: 3011, secure: false }] };
+		const d = editDeps();
+		await persistManualHostEdit(legacy, { ...cfg, host: "box/ao", httpPort: "3011", password: "old" }, "Box", 0, d);
+		expect(d.renameHost).toHaveBeenCalledWith("h_manual", "Box");
+		expect(d.probe).not.toHaveBeenCalled();
+	});
+
 	it("labels a changed address by its new name rather than the one it replaced", async () => {
 		const d = editDeps();
 		const saved = await persistManualHostEdit(host, { ...cfg, host: "my-pc.tail1234.ts.net", httpPort: "", password: "old" }, "Old", 1, d);

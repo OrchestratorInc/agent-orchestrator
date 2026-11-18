@@ -168,6 +168,17 @@ describe("ManualConnectSheet on iOS", () => {
 		}
 	});
 
+	it("says how to reach a Tailscale name on the Connect Mobile port when HTTPS does not answer", async () => {
+		fixtures.ping.mockRejectedValueOnce(new TypeError("Network request failed"));
+		render();
+		await type("manual-connect-name", "Office PC");
+		await type("manual-connect-host", "my-pc.tail1234.ts.net");
+		await type("manual-connect-port", "3011");
+		await type("manual-connect-password", "pw");
+		await act(async () => confirm().props.onPress());
+		expect(fixtures.announce).toHaveBeenCalledWith(expect.stringContaining("Clear Port to use the machine's Tailscale HTTPS address."), { queue: true });
+	});
+
 	it("uses plain HTTP on the Connect Mobile port for a private address left without a port", async () => {
 		render();
 		await type("manual-connect-name", "Office PC");

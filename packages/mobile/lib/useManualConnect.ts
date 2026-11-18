@@ -160,6 +160,7 @@ function connectFailure(error: unknown, target: ServerConfig, editing: boolean):
 		host: target.host,
 		port: target.httpPort,
 		platform: Platform.OS,
+		secure: target.secure,
 	});
 	return {
 		message: editing && kind === "auth" ? "That code or password was rejected. Get a new code and try again." : copy.message,

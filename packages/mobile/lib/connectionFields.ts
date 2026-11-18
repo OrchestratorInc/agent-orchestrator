@@ -117,11 +117,6 @@ export function resolveManualAddress(hostInput: string, portInput: string, saved
 		if (!host) return { ok: false, error: "Enter a host before the port." };
 	}
 
-	// Only a bare name or IP: TLS is decided from the name, so a path, query or
-	// user-info must not let "public.example/x.local" pass as a local address.
-	if (!/^[a-z0-9._-]+$/i.test(host) && !/^(\[[0-9a-f:.%]+\]|[0-9a-f:.%]+)$/i.test(host)) {
-		return { ok: false, error: "Enter only a host name or IP address, without a path." };
-	}
 	if (embedded && !isValidPort(embedded)) return { ok: false, error: "The port in the host must be from 1 to 65535." };
 	if (port && !isValidPort(port)) return { ok: false, error: PORT_ERROR };
 	if (port && embedded && Number(port) !== Number(embedded)) {
@@ -130,10 +125,18 @@ export function resolveManualAddress(hostInput: string, portInput: string, saved
 	const typedPort = port || embedded ? String(Number(port || embedded)) : "";
 	const resolved = (secure: boolean): ManualAddress => ({ ok: true, host, port: typedPort || (secure ? TLS_PORT : BRIDGE_PORT), secure });
 
-	if (typedTls !== undefined) return resolved(typedTls);
-	if (saved && saved.host.toLowerCase() === host.toLowerCase() && (!typedPort || Number(typedPort) === saved.port)) {
+	// An untouched saved route is kept as it is, before the checks below: one
+	// saved before they existed, or advertised by the machine, must never block
+	// a rename.
+	if (typedTls === undefined && saved && saved.host.toLowerCase() === host.toLowerCase() && (!typedPort || Number(typedPort) === saved.port)) {
 		return { ok: true, host, port: String(saved.port), secure: saved.secure };
 	}
+	// Only a bare name or IP: TLS is decided from the name, so a path, query or
+	// user-info must not let "public.example/x.local" pass as a local address.
+	if (!/^[a-z0-9._-]+$/i.test(host) && !/^(\[[0-9a-f:.%]+\]|[0-9a-f:.%]+)$/i.test(host)) {
+		return { ok: false, error: "Enter only a host name or IP address, without a path." };
+	}
+	if (typedTls !== undefined) return resolved(typedTls);
 	if (isTunnelHost(host) && typedPort && typedPort !== TLS_PORT) {
 		return { ok: false, error: "Tunnel addresses use port 443. Clear Port or enter 443." };
 	}

@@ -1,5 +1,5 @@
 import type { ServerConfig } from "./config";
-import { resolveManualAddress } from "./connectionFields";
+import { resolveManualAddress, type SavedRoute } from "./connectionFields";
 import type { Host } from "./hosts";
 import { machineAppearance, type MachineAppearance } from "./machineAppearance";
 
@@ -57,8 +57,9 @@ export function isDraftDirty(initial: EnvironmentMachineDraft, draft: Environmen
 		draft.config.password !== initial.config.password;
 }
 
-export function canSaveDraft(draft: EnvironmentMachineDraft): boolean {
-	return Boolean(draft.machineName.trim()) && resolveManualAddress(draft.config.host, draft.config.httpPort).ok;
+/** `saved` is the route being edited: left as it is, it never blocks a rename. */
+export function canSaveDraft(draft: EnvironmentMachineDraft, saved?: SavedRoute): boolean {
+	return Boolean(draft.machineName.trim()) && resolveManualAddress(draft.config.host, draft.config.httpPort, saved).ok;
 }
 
 /** A save the machine refused, said against the field it is about. */

@@ -35,8 +35,8 @@ export async function saveEnvironmentMachine(host: Host, draft: EnvironmentMachi
 		if (kind === "auth") throw new MachineSaveError("That code or password was rejected. Get a new code and try again.", "password");
 		// Said against the port that was tried: an empty Port follows the address.
 		const address = resolveManualAddress(draft.config.host, draft.config.httpPort, before);
-		const port = address.ok ? address.port : draft.config.httpPort;
-		const copy = describeConnectionFailure(kind, { host: draft.config.host, port, platform });
+		const tried = address.ok ? { port: address.port, secure: address.secure } : { port: draft.config.httpPort };
+		const copy = describeConnectionFailure(kind, { host: address.ok ? address.host : draft.config.host, platform, ...tried });
 		throw new MachineSaveError(copy.message, "host");
 	}
 	// Compared with what was saved: the typed address may have had no port, and

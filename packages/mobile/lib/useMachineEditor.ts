@@ -31,7 +31,7 @@ export function useMachineEditor(host: Host, activeConfig: ServerConfig | undefi
 
 	const dirty = isDraftDirty(initial, draft);
 	// Save waits for a change, as a form's Done does.
-	const canSave = dirty && canSaveDraft(draft) && !saving;
+	const canSave = dirty && canSaveDraft(draft, host.endpoints[draft.endpointIndex]) && !saving;
 
 	/** Resolves true once the draft is saved. */
 	async function save(): Promise<boolean> {
