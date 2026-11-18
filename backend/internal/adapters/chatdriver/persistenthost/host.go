@@ -42,6 +42,10 @@ const (
 	providerStopDeadline = 3 * time.Second
 )
 
+// SocketProvider as the provider command, followed by a unix socket path, makes
+// the host connect to a running adapter instead of starting one.
+const SocketProvider = "ao-acp-socket"
+
 // Protocol selects the provider-wire behavior owned by the host.
 type Protocol string
 
@@ -672,25 +676,35 @@ func Run(ctx context.Context, cfg Config) error {
 	child := aoprocess.Command(cfg.Argv[0], cfg.Argv[1:]...) //nolint:gosec // provider argv is constructed by AO's driver.
 	child.Dir = cfg.Workdir
 	child.Env = cfg.Env
-	configureProviderProcess(child)
-	stdin, err := child.StdinPipe()
-	if err != nil {
-		return err
-	}
-	stdout, err := child.StdoutPipe()
-	if err != nil {
-		return err
-	}
-	// The adapter's stderr is the only record of why a turn went silent. Keep it
-	// beside the descriptor instead of discarding it.
-	if dir, dirErr := hostDir(cfg.DataDir, cfg.SessionID); dirErr == nil {
-		adapterLog := openAdapterLog(dir, adapterLogMaxBytes)
-		defer func() { _ = adapterLog.Close() }()
-		child.Stderr = adapterLog
-	}
-	closeProviderTree, err := startProviderProcess(child)
-	if err != nil {
-		return err
+	var stdin io.WriteCloser
+	var stdout io.Reader
+	closeProviderTree := func() {}
+	if len(cfg.Argv) == 2 && cfg.Argv[0] == SocketProvider {
+		// A shared adapter process serves this chat on its own connection. The
+		// child is never started, so stopping it only closes the connection.
+		conn, dialErr := net.Dial("unix", cfg.Argv[1])
+		if dialErr != nil {
+			return dialErr
+		}
+		stdin, stdout = conn, conn
+	} else {
+		configureProviderProcess(child)
+		if stdin, err = child.StdinPipe(); err != nil {
+			return err
+		}
+		if stdout, err = child.StdoutPipe(); err != nil {
+			return err
+		}
+		// The adapter's stderr is the only record of why a turn went silent. Keep it
+		// beside the descriptor instead of discarding it.
+		if dir, dirErr := hostDir(cfg.DataDir, cfg.SessionID); dirErr == nil {
+			adapterLog := openAdapterLog(dir, adapterLogMaxBytes)
+			defer func() { _ = adapterLog.Close() }()
+			child.Stderr = adapterLog
+		}
+		if closeProviderTree, err = startProviderProcess(child); err != nil {
+			return err
+		}
 	}
 	// The job owns descendants even if the direct provider exits first. Close
 	// it before waiting for inherited pipes and before releasing the host lock.

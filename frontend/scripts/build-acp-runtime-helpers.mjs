@@ -6,7 +6,7 @@ const BIN_BUILD_TOOLS = ["corepack", "npm", "npx"];
 const BUILD_ONLY_CONTENT = ["include", "lib", "node_modules", "share", "CHANGELOG.md", "README.md"];
 
 export function runtimeSourceFiles() {
-	return ["package.json", "package-lock.json"];
+	return ["package.json", "package-lock.json", "acp-server.mjs"];
 }
 
 export function createWorkDirectory(outputRoot) {
@@ -326,6 +326,20 @@ const CLAUDE_WINDOW_PROBE = `
 // task has already left the registry, so the SDK's last reported state is the
 // only signal that the agent is still working. A query that never reports idle
 // again keeps its host awake, which is the safe side.
+// acp-server.mjs runs one ACP connection per socket client, so runAcp takes the
+// connection's streams instead of always using the process's stdio.
+export function patchClaudeRunAcpStreams(adapterPath) {
+	const source = readFileSync(adapterPath, "utf8");
+	const patched = "export function runAcp(logger, input = nodeToWebWritable(process.stdout), output = nodeToWebReadable(process.stdin)) {";
+	if (source.includes(patched)) return false;
+	const original = `export function runAcp(logger) {
+    const input = nodeToWebWritable(process.stdout);
+    const output = nodeToWebReadable(process.stdin);`;
+	if (source.split(original).length !== 2) throw new Error("claude-agent-acp no longer matches AO's runAcp stream patch");
+	writeFileSync(adapterPath, source.replace(original, patched));
+	return true;
+}
+
 export function patchClaudeHibernationCheck(adapterPath) {
 	let source = readFileSync(adapterPath, "utf8");
 	const method = '"_ao/session/can_hibernate"';

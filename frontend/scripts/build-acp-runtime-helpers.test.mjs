@@ -21,6 +21,7 @@ import {
 	patchClaudeFoldedPromptSettlement,
 	patchClaudeHibernationCheck,
 	patchClaudeRetryDetails,
+	patchClaudeRunAcpStreams,
 	patchClaudeStaleIdleDebt,
 	patchClaudeSteerSettlement,
 	pruneNodeDistribution,
@@ -50,6 +51,7 @@ describe("runtimeSourceFiles", () => {
 		expect(runtimeSourceFiles()).toEqual([
 			"package.json",
 			"package-lock.json",
+			"acp-server.mjs",
 		]);
 	});
 });
@@ -613,6 +615,33 @@ describe("patchClaudeStaleIdleDebt", () => {
 		writeFileSync(adapterPath, 'case "session_state_changed": {\n');
 
 		expect(() => patchClaudeStaleIdleDebt(adapterPath)).toThrow(/idle-debt patch/);
+	});
+});
+
+describe("patchClaudeRunAcpStreams", () => {
+	it("lets runAcp take a connection's streams and keeps stdio as the default", () => {
+		const adapterPath = join(temporaryDirectory(), "acp-agent.js");
+		writeFileSync(adapterPath, `export function runAcp(logger) {
+    const input = nodeToWebWritable(process.stdout);
+    const output = nodeToWebReadable(process.stdin);
+    return { input, output };
+}`);
+		expect(patchClaudeRunAcpStreams(adapterPath)).toBe(true);
+		expect(patchClaudeRunAcpStreams(adapterPath)).toBe(false);
+		const source = readFileSync(adapterPath, "utf8").replace("export ", "");
+		const runAcp = new Function("process", "nodeToWebWritable", "nodeToWebReadable", `${source}\nreturn runAcp;`)(
+			{ stdout: "stdout", stdin: "stdin" },
+			(stream) => `writable:${stream}`,
+			(stream) => `readable:${stream}`,
+		);
+		expect(runAcp(undefined)).toEqual({ input: "writable:stdout", output: "readable:stdin" });
+		expect(runAcp(undefined, "in", "out")).toEqual({ input: "in", output: "out" });
+	});
+
+	it("fails when runAcp no longer matches", () => {
+		const adapterPath = join(temporaryDirectory(), "acp-agent.js");
+		writeFileSync(adapterPath, "export function runAcp(logger, stream) {}");
+		expect(() => patchClaudeRunAcpStreams(adapterPath)).toThrow("runAcp stream patch");
 	});
 });
 

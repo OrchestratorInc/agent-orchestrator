@@ -12,6 +12,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"maps"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -160,6 +161,15 @@ func New(plugin claudePlugin, log *slog.Logger, onAuthRejected func()) ports.Cha
 					"authDuration", authDuration, "modelsDuration", time.Since(modelsStarted))
 			}
 			env := claudeACPLaunchEnv(cfg.Env, claudeBinary, cfg.Model, models)
+			if runtimeLaunch.server != "" {
+				launch, ok, err := sharedAdapterLaunch(ctx, cfg, runtimeLaunch, env)
+				if ok {
+					return launch, nil
+				}
+				if err != nil && log != nil {
+					log.Warn("shared Claude adapter unavailable; starting one for this chat", "error", err)
+				}
+			}
 			return acpdriver.Launch{
 				Command: runtimeLaunch.command,
 				Args:    runtimeLaunch.args,
@@ -533,8 +543,16 @@ func claudeSessionMeta(cfg acpdriver.LaunchConfig) map[string]any {
 	meta["claudeCode"] = claudeCode
 	// Also per session, so a choice made after the adapter started still applies.
 	options := map[string]any{}
+	// A shared adapter process carries no chat's env, so each session brings its own.
+	env := maps.Clone(sharedSessionEnv(cfg.SessionID))
 	if window := cfg.Env[claudeAutoCompactWindowEnv]; window != "" {
-		options["env"] = map[string]string{claudeAutoCompactWindowEnv: window}
+		if env == nil {
+			env = map[string]string{}
+		}
+		env[claudeAutoCompactWindowEnv] = window
+	}
+	if env != nil {
+		options["env"] = env
 	}
 	if cfg.DisableTools {
 		options["tools"] = []string{}
@@ -603,6 +621,8 @@ func claudeSessionOptions(settings ports.ChatTurnSettings) []acpdriver.SessionOp
 type runtimeLaunch struct {
 	command string
 	args    []string
+	// server is acp-server.mjs when the runtime ships it.
+	server string
 }
 
 // resolveRuntime finds AO's packaged ACP runtime. Explicit command and path
@@ -647,7 +667,11 @@ func resolveRuntime(ctx context.Context) (runtimeLaunch, error) {
 	if err != nil {
 		return runtimeLaunch{}, err
 	}
-	return runtimeLaunch{command: node, args: []string{entry}}, nil
+	launch := runtimeLaunch{command: node, args: []string{entry}}
+	if server := filepath.Join(runtimeDir, "acp-server.mjs"); requireFile(server, "shared adapter entrypoint") == nil {
+		launch.server = server
+	}
+	return launch, nil
 }
 
 func runtimeDirectoryBesideExecutable() string {
