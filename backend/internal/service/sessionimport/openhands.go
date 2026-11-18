@@ -216,7 +216,7 @@ func readOpenHandsTranscript(ctx context.Context, root string, paths ...string) 
 			}
 			nodes[event.ID] = node{parent: event.Parent, previous: previous, item: tagged{Message: Message{Role: domain.MessageRole(event.Message.Role), Text: text, At: at}, kind: "openhands"}}
 			held += len(text)
-			for held > maxClaudeHeld && drop < len(order) {
+			for held > maxHeldText && drop < len(order) {
 				key := order[drop]
 				drop++
 				if key == first {
