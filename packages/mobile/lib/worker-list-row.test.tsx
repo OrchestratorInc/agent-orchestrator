@@ -6,6 +6,8 @@ import { createContext, createElement, useContext, useImperativeHandle, Fragment
 const appContext = createContext({ currentHostId: "host-1", notificationsUnread: 0 });
 const counters = vi.hoisted(() => ({ renders: 0, scrollToOffset: vi.fn(), foreground: (_state: string) => {}, focus: () => {} }));
 const boardStore = vi.hoisted(() => ({
+	// The board reads each machine's freshness; no live sync time belongs to any here.
+	getPrimaryLastSyncAt: () => undefined,
 	projects: [], allProjects: [], connection: "open", hostStates: [] as { hostId: string; connection: string }[],
 	kill: vi.fn(), renameWorker: vi.fn(), setWorkerPinned: vi.fn(), restore: vi.fn(), resumeAgent: vi.fn(),
 	configForHost: (hostId: string) => ({ host: `${hostId}.test`, httpPort: "3011", muxPort: "3011", password: "secret", hostId }),
