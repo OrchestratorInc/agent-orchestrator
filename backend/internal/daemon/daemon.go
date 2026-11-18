@@ -817,6 +817,10 @@ func Run(buildVersion string) (retErr error) {
 	sessMgr.SetTerminalInputGate(termMgr)
 	sessionImportSvc := sessionimport.New(store, cfg.DataDir, chatDrivers.SupportsChat)
 	sessMgr.SetImportArchiveRefresher(sessionImportSvc)
+	// The Orchestrator attribution beta credits Orchestrator on new sessions'
+	// commits and PRs. Wired before tracker intake starts, so a session its
+	// first poll spawns already sees the setting.
+	sessMgr.SetCommitAttributionEnabled(settingsSvc.CommitAttributionEnabled)
 	lifecycleMessenger.Bind(sessionLifecycleMessenger{sessMgr})
 	lcStack.LCM.SetCompletionTerminator(sessMgr)
 	// Lifecycle reactions deliberately do not hold Session Manager's input
@@ -913,8 +917,6 @@ func Run(buildVersion string) (retErr error) {
 	sessMgr.SetVersionTelemetry(telemetrySink)
 	// "Let agents use this computer" gives new chat sessions the computer-use tools.
 	sessMgr.SetComputerUseEnabled(settingsSvc.ComputerUseEnabled)
-	// The Orchestrator attribution beta credits Orchestrator on new sessions' commits and PRs.
-	sessMgr.SetCommitAttributionEnabled(settingsSvc.CommitAttributionEnabled)
 	sessMgr.SetVersionRefreshPolicy(func() sessionmanager.VersionRefreshPolicy {
 		return versionRefreshPolicy(ctx, cfg, settingsSvc)
 	})

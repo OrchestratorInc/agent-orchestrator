@@ -10,6 +10,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"sync"
 
@@ -99,10 +100,16 @@ func InstallHooks(dir string) error {
 	return nil
 }
 
+// runnable reports whether Git would run a hook file. Windows has no execute
+// bit, and Git for Windows runs any hook file that exists.
+func runnable(info os.FileInfo) bool {
+	return runtime.GOOS == "windows" || info.Mode().Perm()&0o111 != 0
+}
+
 func installHook(dir, name string) error {
 	path := filepath.Join(dir, name)
 	if current, err := os.ReadFile(path); err == nil && bytes.Equal(current, hookScript) {
-		if info, err := os.Stat(path); err == nil && info.Mode().Perm()&0o111 != 0 {
+		if info, err := os.Stat(path); err == nil && runnable(info) {
 			return nil
 		}
 	}
@@ -161,7 +168,7 @@ func installRepositoryHooks(worktree, hooksDir string, git func(...string) (stri
 		}
 		for _, name := range onDemandHookNames {
 			info, err := os.Stat(filepath.Join(dir, name))
-			if err != nil || !info.Mode().IsRegular() || info.Mode().Perm()&0o111 == 0 {
+			if err != nil || !info.Mode().IsRegular() || !runnable(info) {
 				continue
 			}
 			if err := installHook(hooksDir, name); err != nil {

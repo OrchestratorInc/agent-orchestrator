@@ -236,6 +236,40 @@ func TestRecreatedWorktreeKeepsTheSessionsChoice(t *testing.T) {
 	}
 }
 
+// A retry of the same session that reuses its worktree after attribution was
+// turned off clears the recorded trailer too, so recreating the worktree later
+// does not bring the trailer back.
+func TestRetryWithAttributionOffForgetsTheRecordedTrailer(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("uses Unix git hook scripts")
+	}
+	ctx := context.Background()
+	root := t.TempDir()
+	repoDir := filepath.Join(root, "repo")
+	wt := filepath.Join(root, "session", "s-1")
+	branch := "orchestrator/s-1/root"
+	attributionRepo(t, repoDir, wt, branch)
+	beta := true
+	m, st := attributionManager(t, root, &beta)
+	project := domain.ProjectRecord{ID: "p"}
+	m.applyCommitAttribution(ctx, project, "s-1", wt, attributionFromSettings)
+	if got, _ := st.SessionCommitAttribution(ctx, "s-1"); got == "" {
+		t.Fatal("first attempt recorded no trailer")
+	}
+
+	beta = false
+	m.applyCommitAttribution(ctx, project, "s-1", wt, attributionFromSettings)
+	if got, _ := st.SessionCommitAttribution(ctx, "s-1"); got != "" {
+		t.Fatalf("recorded choice after the retry = %q, want none", got)
+	}
+	runManagerGit(t, repoDir, "worktree", "remove", "--force", wt)
+	runManagerGit(t, repoDir, "worktree", "add", "-q", wt, branch)
+	m.applyCommitAttribution(ctx, project, "s-1", wt, attributionRecorded)
+	if msg := commitMessage(t, wt); strings.Contains(msg, "Co-authored-by") {
+		t.Fatalf("recreated worktree adds the trailer again:\n%s", msg)
+	}
+}
+
 func TestPRFooterPromptFollowsBetaProjectAndRemote(t *testing.T) {
 	ctx := context.Background()
 	for _, tc := range []struct {
