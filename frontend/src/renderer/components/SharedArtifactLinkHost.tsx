@@ -1,6 +1,6 @@
 import { useQueryClient } from "@tanstack/react-query";
 import { useNavigate } from "@tanstack/react-router";
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { sharedArtifactLinkId } from "../../../../packages/shared/artifacts/shared-artifact-link";
 import { useCloudCp } from "../hooks/useCloudCp";
 import { useCloudGate } from "../hooks/useCloudGate";
@@ -18,12 +18,19 @@ import { useArtifactsViewStore } from "../stores/artifacts-view-store";
  * A link that arrives while the sign-in is still being read waits for it.
  */
 export function SharedArtifactLinkHost() {
-	const { client, ready } = useCloudCp();
+	const { client, ready, userId } = useCloudCp();
+	// The account signed in now, read when a save finishes.
+	const currentUserId = useRef(userId);
+	useEffect(() => {
+		currentUserId.current = userId;
+	}, [userId]);
 	const { loading: gateLoading } = useCloudGate();
 	const { status } = useCloudSession();
 	const navigate = useNavigate();
 	const queryClient = useQueryClient();
 	const [pending, setPending] = useState<string[]>([]);
+	// One link is saved at a time, so they open in the order they came.
+	const [saving, setSaving] = useState(false);
 
 	useEffect(() => {
 		const add = (viewerUrl: string | null) => {
@@ -43,7 +50,7 @@ export function SharedArtifactLinkHost() {
 
 	const settled = !gateLoading && status !== "loading";
 	useEffect(() => {
-		if (!settled || pending.length === 0) return;
+		if (!settled || saving || pending.length === 0) return;
 		const [viewerUrl, ...rest] = pending;
 		setPending(rest);
 		if (!viewerUrl) return;
@@ -54,7 +61,11 @@ export function SharedArtifactLinkHost() {
 			fallback();
 			return;
 		}
+		const savedFor = userId;
+		setSaving(true);
 		void client.saveSharedArtifact(linkId).then(({ artifact }) => {
+			// Another account signed in meanwhile: this one's link is not shown to it.
+			if (currentUserId.current !== savedFor) return;
 			// Only the link ID reaches the control plane, so open it here only when
 			// the link came from the viewer the control plane names for it; a link
 			// on any other origin opens its own page in the isolated window.
@@ -65,8 +76,8 @@ export function SharedArtifactLinkHost() {
 			void queryClient.invalidateQueries({ queryKey: sharedArtifactsQueryKey });
 			useArtifactsViewStore.getState().requestOpenSharedArtifact(artifact);
 			void navigate({ to: "/artifacts" });
-		}, fallback);
-	}, [settled, pending, ready, client, navigate, queryClient]);
+		}, fallback).finally(() => setSaving(false));
+	}, [settled, saving, pending, ready, client, userId, navigate, queryClient]);
 
 	return null;
 }

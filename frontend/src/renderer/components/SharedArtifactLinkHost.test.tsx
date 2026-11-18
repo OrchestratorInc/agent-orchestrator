@@ -6,6 +6,7 @@ import { SharedArtifactLinkHost } from "./SharedArtifactLinkHost";
 
 const mocks = vi.hoisted(() => ({
 	ready: true,
+	userId: "user-a",
 	status: "authenticated" as "loading" | "authenticated" | "unauthenticated",
 	pending: [] as string[],
 	listener: undefined as ((viewerUrl: string) => void) | undefined,
@@ -13,7 +14,7 @@ const mocks = vi.hoisted(() => ({
 	navigate: vi.fn(),
 	openWindow: vi.fn(),
 }));
-vi.mock("../hooks/useCloudCp", () => ({ useCloudCp: () => ({ client: { saveSharedArtifact: mocks.save }, ready: mocks.ready }) }));
+vi.mock("../hooks/useCloudCp", () => ({ useCloudCp: () => ({ client: { saveSharedArtifact: mocks.save }, ready: mocks.ready, userId: mocks.userId }) }));
 vi.mock("../hooks/useCloudGate", () => ({ useCloudGate: () => ({ loading: false }) }));
 vi.mock("../lib/cloud-session", () => ({ useCloudSession: () => ({ status: mocks.status }) }));
 vi.mock("@tanstack/react-router", () => ({ useNavigate: () => mocks.navigate }));
@@ -47,6 +48,7 @@ function renderHost() {
 describe("SharedArtifactLinkHost", () => {
 	beforeEach(() => {
 		mocks.ready = true;
+		mocks.userId = "user-a";
 		mocks.status = "authenticated";
 		mocks.pending = [];
 		mocks.save.mockReset();
@@ -78,13 +80,44 @@ describe("SharedArtifactLinkHost", () => {
 		await waitFor(() => expect(mocks.save).toHaveBeenCalledWith("q3-report"));
 	});
 
-	it("keeps every link that arrived before the window, in order", async () => {
-		mocks.save.mockImplementation(async (linkId: string) => ({ artifact: { ...saved, linkId, viewerUrl: `https://orchestrator.inc/artifact/${linkId}` } }));
+	it("keeps every link that arrived before the window, and opens them in order", async () => {
+		// Each save waits until the test finishes it, so they can finish out of order.
+		const finish = new Map<string, () => void>();
+		mocks.save.mockImplementation((linkId: string) => new Promise((resolve) => {
+			finish.set(linkId, () => resolve({ artifact: { ...saved, linkId, viewerUrl: `https://orchestrator.inc/artifact/${linkId}` } }));
+		}));
+		const opened: string[] = [];
+		const stop = useArtifactsViewStore.subscribe((state) => {
+			if (state.openSharedArtifact) opened.push(state.openSharedArtifact.linkId);
+		});
 		mocks.pending = [viewer, "https://orchestrator.inc/artifact/roadmap"];
 		renderHost();
-		await waitFor(() => expect(mocks.save).toHaveBeenCalledTimes(2));
+		await waitFor(() => expect(finish.has("q3-report")).toBe(true));
+		// The second is not saved until the first has finished.
+		expect(mocks.save).toHaveBeenCalledTimes(1);
+		await act(async () => finish.get("q3-report")?.());
+		await waitFor(() => expect(finish.has("roadmap")).toBe(true));
+		await act(async () => finish.get("roadmap")?.());
+		await waitFor(() => expect(opened).toEqual(["q3-report", "roadmap"]));
+		stop();
+
 		expect(mocks.save.mock.calls.map(([linkId]) => linkId)).toEqual(["q3-report", "roadmap"]);
 		expect(mocks.pending).toEqual([]);
+	});
+
+	it("drops a saved link when another account signed in while it was saving", async () => {
+		let finish: (() => void) | undefined;
+		mocks.save.mockImplementation(() => new Promise((resolve) => {
+			finish = () => resolve({ artifact: saved });
+		}));
+		const { rerender } = renderHost();
+		await send(viewer);
+		await waitFor(() => expect(finish).toBeDefined());
+		mocks.userId = "user-b";
+		rerender(<QueryClientProvider client={new QueryClient()}><SharedArtifactLinkHost /></QueryClientProvider>);
+		await act(async () => finish?.());
+		expect(useArtifactsViewStore.getState().openSharedArtifact).toBeNull();
+		expect(mocks.navigate).not.toHaveBeenCalled();
 	});
 
 	it("opens it in its own window when signed out of Cloud or when it does not open for this account", async () => {

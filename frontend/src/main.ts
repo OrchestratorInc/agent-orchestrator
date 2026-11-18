@@ -799,11 +799,16 @@ function applyRuntimeAppIcon(): void {
 // sooner (focusMainWindow, deep links, the dock) can still show it directly.
 const WINDOW_SHOW_FALLBACK_MS = 2_500;
 
+/** Windows created hidden whose showWhenRendererLoaded has not shown them yet. */
+const windowsAwaitingFirstShow = new WeakSet<BaseWindow>();
+
 function showWhenRendererLoaded(window: BaseWindow, contents: WebContents): void {
 	let shown = false;
+	windowsAwaitingFirstShow.add(window);
 	const show = () => {
 		if (shown) return;
 		shown = true;
+		windowsAwaitingFirstShow.delete(window);
 		clearTimeout(fallback);
 		if (window.isDestroyed() || window.isVisible()) return;
 		window.show();
@@ -4441,8 +4446,9 @@ async function handleCloudDeepLinkAndFocus(url: string): Promise<void> {
 		await app.whenReady();
 		if (getShellWebContents()) {
 			// Focused by name: a shared-artifact window left open would otherwise
-			// be the first window and take focus.
-			focusMainWindow();
+			// be the first window and take focus. A shell still loading shows
+			// itself once ready, so it is left hidden until then.
+			if (!mainWindow || !windowsAwaitingFirstShow.has(mainWindow)) focusMainWindow();
 		} else {
 			// A replacement shell shows itself, and so takes focus, once its
 			// renderer has loaded (showWhenRendererLoaded).
@@ -4457,7 +4463,12 @@ async function handleCloudDeepLinkAndFocus(url: string): Promise<void> {
 		}
 		// Held until the renderer takes it: a page that has loaded may not have
 		// subscribed yet, so the send only tells a listening host to take it now.
-		if (!pendingSharedArtifacts.includes(artifact) && pendingSharedArtifacts.length < MAX_PENDING_SHARED_ARTIFACTS) {
+		if (!pendingSharedArtifacts.includes(artifact)) {
+			// Past the bound, a new link opens in its own window rather than being lost.
+			if (pendingSharedArtifacts.length >= MAX_PENDING_SHARED_ARTIFACTS) {
+				openSharedArtifact(artifact);
+				return;
+			}
 			pendingSharedArtifacts.push(artifact);
 		}
 		const contents = getShellWebContents();
