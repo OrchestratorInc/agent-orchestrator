@@ -224,15 +224,19 @@ func RemoveFromWorktree(ctx context.Context, worktree string) error {
 		out, err := cmd.CombinedOutput()
 		return strings.TrimSpace(string(out)), err
 	}
+	// Restore the saved hooksPath before its record goes, so a failure part
+	// way through never loses the person's own setting.
 	original, _ := git("--get", ConfigOriginalHooksPath)
-	for _, key := range []string{"core.hooksPath", ConfigCoAuthor, ConfigOriginalHooksPath} {
+	if original != "" {
+		if out, err := git("--replace-all", "core.hooksPath", original); err != nil {
+			return fmt.Errorf("attribution: restore hooksPath: %s: %w", out, err)
+		}
+	} else if out, err := git("--unset-all", "core.hooksPath"); err != nil && !isMissingKey(err) {
+		return fmt.Errorf("attribution: unset core.hooksPath: %s: %w", out, err)
+	}
+	for _, key := range []string{ConfigCoAuthor, ConfigOriginalHooksPath} {
 		if out, err := git("--unset-all", key); err != nil && !isMissingKey(err) {
 			return fmt.Errorf("attribution: unset %s: %s: %w", key, out, err)
-		}
-	}
-	if original != "" {
-		if out, err := git("core.hooksPath", original); err != nil {
-			return fmt.Errorf("attribution: restore hooksPath: %s: %w", out, err)
 		}
 	}
 	return nil

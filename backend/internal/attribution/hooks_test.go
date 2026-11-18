@@ -114,6 +114,20 @@ func TestHookKeepsOtherCoAuthors(t *testing.T) {
 	}
 }
 
+// A -m or -F message is taken as written, so a "#" line in its trailer block
+// stays, as it does in a commit without Orchestrator.
+func TestHookKeepsCommentLikeLinesInALiteralMessage(t *testing.T) {
+	r := newRepo(t, testCoAuthor, nil)
+	r.commit("-m", "feat: note\n\nCo-authored-by: Agent <agent@example.com>\n# retain this note\nSigned-off-by: Dev <dev@example.com>")
+	msg := r.message("HEAD")
+	if !strings.Contains(msg, "\n# retain this note\n") || countTrailer(msg) != 1 {
+		t.Fatalf("want the # line kept and one trailer, got:\n%s", msg)
+	}
+	if !strings.HasSuffix(strings.TrimSpace(msg), "Co-authored-by: "+testCoAuthor) {
+		t.Fatalf("want the trailer last, got:\n%s", msg)
+	}
+}
+
 func TestHookAddsOnNoVerifyAndKeepsOneOnRebase(t *testing.T) {
 	r := newRepo(t, testCoAuthor, nil)
 	r.commit("--no-verify", "-m", "feat: three")

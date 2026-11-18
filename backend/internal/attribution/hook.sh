@@ -78,11 +78,17 @@ has_message() {
 # global and system config switched off; only the comment string carries over,
 # so comment lines and a `commit -v` scissors line are still recognised.
 # --no-divider: a "---" line in the body is not a patch divider here.
+# With $3 = literal (a -m or -F message), nothing in the message is a comment:
+# the comment character is one no message contains, so a "#" line is kept.
 insert_trailer() {
 	case "$1" in /*) file=$1 ;; *) file=$PWD/$1 ;; esac
 	trailer=$2
-	comment=$(git config --get core.commentString 2>/dev/null) ||
-		comment=$(git config --get core.commentChar 2>/dev/null) || comment=
+	if [ "$3" = literal ]; then
+		comment=$(printf '\001')
+	else
+		comment=$(git config --get core.commentString 2>/dev/null) ||
+			comment=$(git config --get core.commentChar 2>/dev/null) || comment=
+	fi
 	(
 		unset GIT_DIR GIT_WORK_TREE GIT_INDEX_FILE GIT_COMMON_DIR GIT_PREFIX \
 			GIT_CONFIG GIT_CONFIG_PARAMETERS GIT_CONFIG_COUNT
@@ -114,15 +120,18 @@ add_trailer() {
 	replaying && return 0
 	coauthor=$(git config --get orchestrator.coauthor 2>/dev/null)
 	[ -n "$coauthor" ] || return 0
+	# Already there (added by prepare-commit-msg, or kept by an amend): leave
+	# the message exactly as it is.
+	grep -Fqx "Co-authored-by: $coauthor" "$msg" && return 0
 	# -m and -F messages are taken as written: nothing in them is a comment.
 	# Otherwise, with nothing written yet the editor is about to open; commit-msg
 	# adds the trailer after it closes, and an empty message still aborts.
 	if [ "$2" != message ]; then
 		has_message "$msg" || return 0
-	elif ! grep -q '[^[:space:]]' "$msg"; then
-		return 0
+		insert_trailer "$msg" "Co-authored-by: $coauthor"
+	elif grep -q '[^[:space:]]' "$msg"; then
+		insert_trailer "$msg" "Co-authored-by: $coauthor" literal
 	fi
-	insert_trailer "$msg" "Co-authored-by: $coauthor"
 }
 
 original=$(original_hook)
