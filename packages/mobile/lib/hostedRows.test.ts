@@ -13,7 +13,8 @@ describe("hosted rows", () => {
 		expect(rows.map((row) => hostedProjectKey(row.project))).toEqual(["[\"a\",\"same\"]", "[\"b\",\"same\"]"]);
 		expect(rows.map((row) => row.workers.length)).toEqual([1, 0]);
 		expect(rows.map((row) => row.project.name)).toEqual(["App", "App"]);
-		expect(rows.map((row) => row.project.hostName)).toEqual(["Laptop", "Desktop (offline)"]);
+		// No "(offline)" suffix: a machine's state is its freshness dot.
+		expect(rows.map((row) => row.project.hostName)).toEqual(["Laptop", "Desktop"]);
 		expect(rows.map((row) => row.project.hostAppearance)).toEqual([
 			{ symbol: "laptop" },
 			{ symbol: "desktop" },

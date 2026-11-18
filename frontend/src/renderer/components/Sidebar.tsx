@@ -193,7 +193,7 @@ const SESSION_ACTION_CLASS = ROW_ACTION_BUTTON_CLASS;
 // Plain fill stays for non-interactive status rows; interactive rows use
 // {@link NavRowHighlight} via {@link NAV_ROW_HIGHLIGHT_HOST_CLASS}.
 const NAV_ROW_CLASS =
-	"h-9 gap-2.5 rounded-lg px-2.5 text-sm font-medium text-muted-foreground transition-colors hover:bg-interactive-hover hover:text-foreground active:bg-interactive-hover active:text-foreground data-[active=true]:bg-interactive-active data-[active=true]:font-medium data-[active=true]:text-foreground";
+	"h-9 gap-2.5 rounded-lg px-2.5 text-sm font-medium text-muted-foreground hover:bg-interactive-hover hover:text-foreground active:bg-interactive-hover active:text-foreground data-[active=true]:bg-interactive-active data-[active=true]:font-medium data-[active=true]:text-foreground";
 
 /** Expanded footer action row: growing highlight behind icon + label. */
 const FOOTER_NAV_BUTTON_CLASS = cn(
@@ -1997,10 +1997,10 @@ const ProjectItem = memo(function ProjectItem({
 										data-expanded={expanded ? "" : undefined}
 										data-project-folder-visual=""
 									>
-										{/* 1.2 — contextual icon swap: scale 0.8↔1 (animated); opacity snaps for hide.
+										{/* 1.2 — contextual icon swap on hover, instant (scale and opacity snap).
 										    Hover paint lives in styles.css (fine pointer only). */}
 										<span
-											className="inline-flex size-icon-md items-center justify-center transition-[scale] duration-normal ease-[var(--ease-out)] motion-reduce:transition-none"
+											className="inline-flex size-icon-md items-center justify-center"
 											data-project-folder-icon=""
 										>
 											{!expanded && projectNeedsInput ? (
@@ -2010,7 +2010,8 @@ const ProjectItem = memo(function ProjectItem({
 										<span
 											className={cn(
 												"absolute inline-flex size-icon-md scale-[0.8] items-center justify-center opacity-0",
-												"transition-[scale,rotate] duration-normal ease-[var(--ease-out)]",
+												// Only expanding or collapsing turns it; the hover swap is instant.
+												"transition-[rotate] duration-normal ease-[var(--ease-out)]",
 												"motion-reduce:transition-none",
 												expanded && "rotate-90",
 											)}
@@ -2401,9 +2402,7 @@ function ScratchpadSection({
 									<span
 										className={cn(
 											"pointer-events-none absolute right-full top-0 flex h-full origin-center pr-1.5 scale-[0.8] items-center opacity-0",
-											"transition-[scale] duration-normal ease-[var(--ease-out)]",
-											"motion-reduce:transition-none",
-											"group-has-[:focus-visible]/scratchpad:pointer-events-auto group-has-[:focus-visible]/scratchpad:scale-100 group-has-[:focus-visible]/scratchpad:opacity-100",
+											"focus-visible-in-scratchpad:pointer-events-auto focus-visible-in-scratchpad:scale-100 focus-visible-in-scratchpad:opacity-100",
 										)}
 										data-scratchpad-archive-action=""
 									>
@@ -2890,7 +2889,7 @@ const SessionRow = memo(function SessionRow({
 								"flex h-8 min-w-0 flex-1 items-center gap-1.5 rounded-lg py-0 pl-1.5 text-left text-sm outline-hidden focus-visible:ring-2 focus-visible:ring-sidebar-ring",
 								(session.lastInteractionAt ?? session.lastUserMessageAt) ? "pr-[36px]" : "pr-2.5",
 								!reorder?.isDragging &&
-									"group-hover/session-row:pr-sidebar-project-actions group-has-[:focus-visible]/session-row:pr-sidebar-project-actions",
+									"group-hover/session-row:pr-sidebar-project-actions focus-visible-in-session-row:pr-sidebar-project-actions",
 								reorder && "cursor-grab active:cursor-grabbing",
 								reorder?.isDragging && "!cursor-grabbing",
 							)}
@@ -2937,7 +2936,7 @@ const SessionRow = memo(function SessionRow({
 										active || marker === "attention"
 											? "text-foreground"
 											: "text-muted-foreground group-hover/session-row:text-foreground",
-										shimmer && "chat-working-shimmer",
+										shimmer && "relative",
 									)}
 									data-session-name=""
 									onPointerUp={(event) => {
@@ -2951,6 +2950,7 @@ const SessionRow = memo(function SessionRow({
 									}}
 								>
 									{session.title}
+									{shimmer ? <span aria-hidden="true" className="sidebar-working-shimmer"><span><span>{session.title}</span></span></span> : null}
 								</span>
 								{hostLabel ? <Badge variant="outline" className="h-4 min-w-0 max-w-1/2 shrink justify-start px-1.5 text-2xs"><span className="truncate">{hostLabel}</span></Badge> : null}
 								{cloud ? <CloudMark /> : null}
@@ -3000,7 +3000,7 @@ const SessionMessageAge = memo(function SessionMessageAge({ session }: { session
 
 	return (
 		<time
-			className="absolute inset-y-0 right-2 z-[1] flex min-w-0 shrink-0 items-center whitespace-nowrap font-sans text-micro tabular-nums text-passive opacity-100 group-has-[:focus-visible]/session-row:opacity-0"
+			className="absolute inset-y-0 right-2 z-[1] flex min-w-0 shrink-0 items-center whitespace-nowrap font-sans text-micro tabular-nums text-passive opacity-100 focus-visible-in-session-row:opacity-0"
 			data-session-message-age=""
 			dateTime={at}
 			title={t("shell.lastMessageAt", { time: formatTimeCompact(at) })}
@@ -3056,13 +3056,11 @@ const SessionActions = memo(function SessionActions({
 		>
 			<div
 				className={cn(
-					/* 1.3 — pin/kill: scale 0.8↔1 from center (not origin-right — that reads as a slide) */
+					/* 1.3 — pin/kill appear on hover at once: scale and opacity snap */
 					ROW_ACTIONS_CLASS,
 					"origin-center scale-[0.8] opacity-0",
-					"transition-[scale] duration-normal ease-[var(--ease-out)]",
-					"motion-reduce:transition-none",
 					!isDragging &&
-						"group-has-[:focus-visible]/session-row:pointer-events-auto group-has-[:focus-visible]/session-row:scale-100 group-has-[:focus-visible]/session-row:opacity-100",
+						"focus-visible-in-session-row:pointer-events-auto focus-visible-in-session-row:scale-100 focus-visible-in-session-row:opacity-100",
 				)}
 				data-session-action-buttons=""
 			>

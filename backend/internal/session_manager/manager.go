@@ -270,8 +270,13 @@ type lifecycleRecorder interface {
 // Late-bound via SetShellTerminalCloser: shellterm.Service is built after
 // Session Manager during boot (see daemon.startShellTerminals), mirroring why
 // lifecycle.Manager takes its completion terminator the same way.
+//
+// SuspendSessionShells is the app-quit variant with the same contract: the
+// session and its worktree stay, and its user shells are kept to be restored
+// at the next launch instead of being forgotten.
 type ShellTerminalCloser interface {
 	BeginSessionTeardown(ctx context.Context, id domain.SessionID) (release func(), err error)
+	SuspendSessionShells(ctx context.Context, id domain.SessionID) (release func(), err error)
 }
 
 // HarnessUseGate coordinates session lifecycle operations with harness binary
@@ -540,6 +545,10 @@ type Manager struct {
 	// inputLeaseSince is when a session's current run of input leases began,
 	// for diagnosing an operation that cannot drain them.
 	inputLeaseSince map[domain.SessionID]time.Time
+	// turnStops holds, per session, the turn StopTUITurn already interrupted,
+	// so a repeat for that turn is refused.
+	turnStopsMu sync.Mutex
+	turnStops   map[domain.SessionID]tuiTurn
 	// backgroundContext owns asynchronous agent-switch execution independently
 	// of the admitting request. The daemon cancels it before waiting for workers.
 	backgroundContext        context.Context
@@ -813,6 +822,16 @@ func (m *Manager) beginShellTerminalTeardown(ctx context.Context, id domain.Sess
 		return nil, nil
 	}
 	return closer.BeginSessionTeardown(ctx, id)
+}
+
+func (m *Manager) suspendShellTerminals(ctx context.Context, id domain.SessionID) (release func(), err error) {
+	m.shellTerminalsMu.Lock()
+	closer := m.shellTerminals
+	m.shellTerminalsMu.Unlock()
+	if closer == nil {
+		return nil, nil
+	}
+	return closer.SuspendSessionShells(ctx, id)
 }
 
 // SetReviewerTerminator wires worker lifecycle paths to the worker's reviewer
@@ -1242,7 +1261,11 @@ func (m *Manager) Spawn(ctx context.Context, cfg ports.SpawnConfig) (result doma
 			cfg.AgentConfigResolved = true
 		}
 	}
-	if mode == domain.SessionModeTUI && (cfg.Harness == domain.HarnessClaudeCode || cfg.Harness == domain.HarnessCodex || strings.TrimSpace(cfg.AgentConfig.Effort) != "") {
+	// Pi and Prime Agent also resolve an effort inherited from role/project
+	// settings, so a stale level is cleared instead of reaching --thinking.
+	inheritsThinking := (cfg.Harness == domain.HarnessPi || cfg.Harness == domain.HarnessPrimeAgent) &&
+		strings.TrimSpace(agentConfig.Effort) != ""
+	if mode == domain.SessionModeTUI && (cfg.Harness == domain.HarnessClaudeCode || cfg.Harness == domain.HarnessCodex || strings.TrimSpace(cfg.AgentConfig.Effort) != "" || inheritsThinking) {
 		checked := BeginSpawnStep(ctx, SpawnStepModelCheck)
 		resolved, err := m.resolveTUIAgentConfig(ctx, cfg, project.Config, agentConfig)
 		checked(err)
@@ -1838,6 +1861,7 @@ func replayClientRequest(rec domain.SessionRecord, hash string) (domain.SessionR
 // unavailable, stale, lacks a custom model or lists other efforts, the session
 // launches with the unvalidated config, as it would without a catalog.
 func (m *Manager) resolveTUIAgentConfig(ctx context.Context, cfg ports.SpawnConfig, project domain.ProjectConfig, unvalidated ports.AgentConfig) (ports.AgentConfig, error) {
+	cfg.RequestedMode = domain.SessionModeTUI
 	resolved, err := m.resolveAgentConfig(ctx, cfg, project)
 	// Only the spawn's own cancellation stops the launch; a catalog lookup's
 	// internal timeout is one more way the catalog can be unavailable.
@@ -1849,6 +1873,17 @@ func (m *Manager) resolveTUIAgentConfig(ctx context.Context, cfg ports.SpawnConf
 	return unvalidated, nil
 }
 
+// resolveAgentConfig resolves the effective agent config for a spawn: it layers
+// the project/role defaults under the request's model and effort overrides, then
+// validates the resulting effort against the harness. Harnesses without effort
+// support clear it (or reject a flagged explicit override); command-code and
+// hermes forward the level raw for the CLI to check; the catalog-backed
+// harnesses (codex, claude-code, pi, prime-agent) confirm the selected model
+// advertises the level. It returns ErrUnsupportedEffort when a model does not
+// offer an explicitly requested level and ErrModelCapabilitiesUnavailable when
+// the catalog cannot confirm the launch. Unsupported inherited Pi or Prime
+// Agent effort is cleared. Terminals leave unconfirmed inherited levels to the
+// CLI; chat clears them.
 func (m *Manager) resolveAgentConfig(ctx context.Context, cfg ports.SpawnConfig, project domain.ProjectConfig) (ports.AgentConfig, error) {
 	resolved, err := m.resolveAgentConfigOnce(ctx, cfg, project)
 	if err != nil && cfg.Fork != nil && cfg.AgentConfig.Model != "" && errors.Is(err, ErrUnsupportedModel) {
@@ -1869,6 +1904,16 @@ func (m *Manager) resolveAgentConfigOnce(ctx context.Context, cfg ports.SpawnCon
 	resolved := applySpawnAgentConfig(base, requested)
 	modelChangedWithoutExplicitEffort := requested.Model != "" && requested.Model != base.Model &&
 		!cfg.EffortOverride && requested.Effort == ""
+	// Role or project settings may carry a stale Pi or Prime Agent effort that
+	// the selected model does not advertise. Clear that level instead of failing
+	// the launch; terminals let the CLI judge levels the catalog cannot confirm.
+	// A level the request carries itself (a flagged override, or a nonempty effort
+	// in the spawn request) is explicit and still validated, so an unsupported
+	// choice is rejected rather than silently dropped.
+	inheritedPiEffort := !cfg.EffortOverride && strings.TrimSpace(requested.Effort) == "" &&
+		(cfg.Harness == domain.HarnessPi || cfg.Harness == domain.HarnessPrimeAgent)
+	clearUnconfirmedPiEffort := inheritedPiEffort &&
+		(cfg.RequestedMode != domain.SessionModeTUI || modelChangedWithoutExplicitEffort)
 	if cfg.EffortOverride {
 		resolved.Effort = requested.Effort
 	}
@@ -1881,13 +1926,13 @@ func (m *Manager) resolveAgentConfigOnce(ctx context.Context, cfg ports.SpawnCon
 		}
 		return resolved, nil
 	}
-	if cfg.Harness != domain.HarnessCodex && cfg.Harness != domain.HarnessClaudeCode && cfg.Harness != domain.HarnessCommandCode && cfg.Harness != domain.HarnessHermes {
+	if cfg.Harness != domain.HarnessCodex && cfg.Harness != domain.HarnessClaudeCode && cfg.Harness != domain.HarnessCommandCode && cfg.Harness != domain.HarnessHermes && cfg.Harness != domain.HarnessPi && cfg.Harness != domain.HarnessPrimeAgent && cfg.Harness != domain.HarnessOpenInterpreter {
 		// Only a flagged explicit override (the spawn API and delegation mark
 		// request-carried effort) fails loudly: the caller asked for something
 		// the harness cannot honor. Unflagged or inherited effort still clears
 		// silently so role/project defaults keep working for every harness.
 		if cfg.EffortOverride && strings.TrimSpace(requested.Effort) != "" {
-			return ports.AgentConfig{}, fmt.Errorf("%w for harness %q: effort is only supported for codex, claude-code, command-code, and hermes agents, or Grok Chat", ports.ErrUnsupportedEffort, cfg.Harness)
+			return ports.AgentConfig{}, fmt.Errorf("%w for harness %q: effort is only supported for codex, claude-code, command-code, hermes, pi, prime-agent, and open-interpreter agents, or Grok Chat", ports.ErrUnsupportedEffort, cfg.Harness)
 		}
 		resolved.Effort = ""
 		return resolved, nil
@@ -1909,6 +1954,9 @@ func (m *Manager) resolveAgentConfigOnce(ctx context.Context, cfg ports.SpawnCon
 		if validateClaudeModel {
 			return ports.AgentConfig{}, fmt.Errorf("%w: model catalog is unavailable", ports.ErrModelCapabilitiesUnavailable)
 		}
+		if clearUnconfirmedPiEffort {
+			resolved.Effort = ""
+		}
 		return resolved, nil
 	}
 	// A spawn never waits on live model discovery: it runs the agent's CLI and
@@ -1929,7 +1977,7 @@ func (m *Manager) resolveAgentConfigOnce(ctx context.Context, cfg ports.SpawnCon
 			return ports.AgentConfig{}, fmt.Errorf("model catalog: %w", ctxErr)
 		}
 		NoteSpawnModel(ctx, modelID, false)
-		if modelChangedWithoutExplicitEffort {
+		if modelChangedWithoutExplicitEffort || clearUnconfirmedPiEffort {
 			resolved.Effort = ""
 		}
 		return resolved, nil
@@ -1974,13 +2022,23 @@ func (m *Manager) resolveAgentConfigOnce(ctx context.Context, cfg ports.SpawnCon
 	}
 	if selected == nil {
 		// The saved catalog does not list the model, so the CLI owns its
-		// capabilities. A level no Claude model accepts is still certain.
+		// capabilities, including its default model when none was selected.
+		// Terminals preserve inherited effort for the CLI to validate.
+		// A level no Claude model accepts is still certain.
+		if clearUnconfirmedPiEffort {
+			resolved.Effort = ""
+			return resolved, nil
+		}
 		if cfg.Harness == domain.HarnessClaudeCode && !containsString(claudeEffortLevels, resolved.Effort) {
 			return ports.AgentConfig{}, fmt.Errorf("%w %q for model %q", ports.ErrUnsupportedEffort, resolved.Effort, modelID)
 		}
 		return resolved, nil
 	}
 	if !containsString(selected.Efforts, resolved.Effort) {
+		if inheritedPiEffort {
+			resolved.Effort = ""
+			return resolved, nil
+		}
 		return ports.AgentConfig{}, fmt.Errorf("%w %q for model %q", ports.ErrUnsupportedEffort, resolved.Effort, modelID)
 	}
 	return resolved, nil
@@ -4034,7 +4092,7 @@ func (m *Manager) relaunchSessionWithPolicyAndGeneration(ctx context.Context, op
 			argv, delivery, mode, err = freshLaunchArgv(ctx, agent, rec.ID, launchPath, rec.Metadata,
 				systemPrompt, systemPromptFile, agentConfig, rec.Kind, m.dataDir, true, freshNativeSessionID, env)
 		} else {
-			initialization, err = restorer.PrepareNativeRestore(ctx, ports.RestoreConfig{Session: ports.SessionRef{ID: string(rec.ID), WorkspacePath: launchPath, Metadata: nativeRestoreMetadata(rec)}, DataDir: m.dataDir, Kind: rec.Kind, Config: agentConfig, Permissions: agentConfig.Permissions, SystemPrompt: systemPrompt, SystemPromptFile: systemPromptFile})
+			initialization, err = restorer.PrepareNativeRestore(ctx, ports.RestoreConfig{Env: env, Session: ports.SessionRef{ID: string(rec.ID), WorkspacePath: launchPath, Metadata: nativeRestoreMetadata(rec)}, DataDir: m.dataDir, Kind: rec.Kind, Config: agentConfig, Permissions: agentConfig.Permissions, SystemPrompt: systemPrompt, SystemPromptFile: systemPromptFile})
 			if err == nil {
 				argv = initialization.Argv()
 				for key, value := range initialization.LaunchEnv() {
@@ -5493,7 +5551,10 @@ func semanticMessageAccepted(rec domain.SessionRecord, clientMessageID string) b
 		rec.Metadata.ConversationCheckpointTurnID == clientMessageID
 }
 
-// InterruptTUI requests cancellation through the session's owned runtime.
+// InterruptTUI requests cancellation through the session's owned runtime
+// before a report is delivered. It requires semantic acceptance: the report
+// coordinator retries a batch whose delivery is not confirmed, and each retry
+// would interrupt the orchestrator again.
 func (m *Manager) InterruptTUI(ctx context.Context, id domain.SessionID) error {
 	rec, ok, err := m.store.GetSession(ctx, id)
 	if err != nil {
@@ -5505,11 +5566,147 @@ func (m *Manager) InterruptTUI(ctx context.Context, id domain.SessionID) error {
 	if domain.NormalizeSessionMode(rec.Mode) == domain.SessionModeChat || !m.harnessSemanticAcceptance(rec.Harness) {
 		return ErrSemanticAcceptanceUnsupported
 	}
+	if rec.Metadata.RuntimeHandleID == "" {
+		return ErrSemanticAcceptanceUnsupported
+	}
+	return m.interruptTerminal(ctx, rec)
+}
+
+// interruptTerminal preserves each harness's native cancel key across direct
+// cancellation and controller handoffs. It never appends a submission key.
+func (m *Manager) interruptTerminal(ctx context.Context, rec domain.SessionRecord) error {
+	if m.agents != nil {
+		if agent, found := m.agents.Agent(rec.Harness); found {
+			if native, supported := agent.(ports.AgentInterruptInputProvider); supported {
+				sender, supported := m.runtime.(interface {
+					SendInput(context.Context, ports.RuntimeHandle, string) error
+				})
+				if !supported {
+					return ErrSemanticAcceptanceUnsupported
+				}
+				return sender.SendInput(ctx, ports.RuntimeHandle{ID: rec.Metadata.RuntimeHandleID}, native.InterruptInput())
+			}
+		}
+	}
 	interrupter, ok := m.runtime.(runtimeInterrupter)
-	if !ok || rec.Metadata.RuntimeHandleID == "" {
+	if !ok {
 		return ErrSemanticAcceptanceUnsupported
 	}
 	return interrupter.Interrupt(ctx, ports.RuntimeHandle{ID: rec.Metadata.RuntimeHandleID})
+}
+
+var (
+	// ErrNoActiveTurn means StopTUITurn found no turn to stop. Ctrl+C on an
+	// idle agent prompt arms "press again to exit", so it is refused.
+	ErrNoActiveTurn = errors.New("session: no active turn")
+	// ErrInterruptUnsupported means the harness has no declared turn interrupt
+	// key or its runtime cannot send it.
+	ErrInterruptUnsupported = errors.New("session: interrupt unsupported")
+	// ErrTurnStopPending means StopTUITurn already interrupted this turn and
+	// the session has not reported a new state since. A second Ctrl+C could
+	// reach an idle prompt and arm "press again to exit".
+	ErrTurnStopPending = errors.New("session: turn stop already requested")
+)
+
+// tuiTurn identifies one turn of a TUI session. LastActivityAt alone is not
+// enough, because a stopped turn can stay active (Claude Code reports nothing
+// on Ctrl+C) and a prompt submitted then keeps active without moving it. The
+// prompt facts do move, and coordination prompts set a checkpoint turn ID.
+type tuiTurn struct {
+	activityAt time.Time
+	promptAt   time.Time
+	prompt     string
+	turnID     string
+}
+
+func tuiTurnOf(rec domain.SessionRecord) tuiTurn {
+	return tuiTurn{
+		activityAt: rec.Activity.LastActivityAt,
+		promptAt:   rec.Metadata.LatestUserPromptAt,
+		prompt:     rec.Metadata.LatestUserPrompt,
+		turnID:     rec.Metadata.ConversationCheckpointTurnID,
+	}
+}
+
+func (t tuiTurn) same(o tuiTurn) bool {
+	return t.activityAt.Equal(o.activityAt) && t.promptAt.Equal(o.promptAt) &&
+		t.prompt == o.prompt && t.turnID == o.turnID
+}
+
+// StopTUITurn interrupts a TUI session's active turn on an explicit user
+// request. Unlike InterruptTUI it needs no delivery confirmation, since
+// nothing is sent after it.
+func (m *Manager) StopTUITurn(ctx context.Context, id domain.SessionID) error {
+	release, ok := m.AcquireSessionInput(id)
+	if !ok {
+		return ErrOperationInProgress
+	}
+	defer release()
+	rec, ok, err := m.store.GetSession(ctx, id)
+	if err != nil {
+		return err
+	}
+	if !ok {
+		return ErrNotFound
+	}
+	if rec.IsTerminated {
+		return ErrTerminated
+	}
+	if domain.NormalizeSessionMode(rec.Mode) == domain.SessionModeChat {
+		return ErrInterruptUnsupported
+	}
+	if rec.Activity.State == domain.ActivityActive {
+		busy, releaseInput := m.composerBusyCheck()(ctx, rec)
+		if busy {
+			return ErrComposerBusy
+		}
+		if releaseInput != nil {
+			defer releaseInput()
+		}
+	}
+	turn := tuiTurnOf(rec)
+	m.turnStopsMu.Lock()
+	if rec.Activity.State != domain.ActivityActive {
+		delete(m.turnStops, id)
+		m.turnStopsMu.Unlock()
+		return ErrNoActiveTurn
+	}
+	if stopped, ok := m.turnStops[id]; ok && stopped.same(turn) {
+		m.turnStopsMu.Unlock()
+		return ErrTurnStopPending
+	}
+	if m.agents == nil {
+		m.turnStopsMu.Unlock()
+		return ErrInterruptUnsupported
+	}
+	agent, found := m.agents.Agent(rec.Harness)
+	interrupt, supported := agent.(ports.TurnInterruptKey)
+	if !found || !supported || interrupt.InterruptKey() == "" {
+		m.turnStopsMu.Unlock()
+		return ErrInterruptUnsupported
+	}
+	input, ok := m.runtime.(interface {
+		SendInput(context.Context, ports.RuntimeHandle, string) error
+	})
+	if !ok || rec.Metadata.RuntimeHandleID == "" {
+		m.turnStopsMu.Unlock()
+		return ErrInterruptUnsupported
+	}
+	if m.turnStops == nil {
+		m.turnStops = make(map[domain.SessionID]tuiTurn)
+	}
+	m.turnStops[id] = turn
+	m.turnStopsMu.Unlock()
+	if err := input.SendInput(ctx, ports.RuntimeHandle{ID: rec.Metadata.RuntimeHandleID}, interrupt.InterruptKey()); err != nil {
+		// Nothing reached the agent, so a retry for this turn is allowed.
+		m.turnStopsMu.Lock()
+		if stopped, ok := m.turnStops[id]; ok && stopped.same(turn) {
+			delete(m.turnStops, id)
+		}
+		m.turnStopsMu.Unlock()
+		return err
+	}
+	return nil
 }
 
 // send carries an optional idempotency key used by durable transition-message
@@ -5695,6 +5892,8 @@ Your next action for any implementation, fix, UI change, test, PR, or code-revie
 ao spawn --project %s --name "<label, max 100 chars>" --prompt "<clear worker task>"
 
 If a suitable worker already exists, use ao send to redirect that worker instead. After spawning or redirecting, report the worker session id and stop. Do not do the worker's task in this orchestrator session.
+
+If a worker is stuck in an active turn, use ao session interrupt <session-id> to stop that turn without terminating the session; use ao session kill <session-id> only when the session cannot be recovered.
 
 USER MESSAGE:
 %s`, project, project, message)
@@ -6627,6 +6826,7 @@ func systemPromptFileRequired(harness domain.AgentHarness) bool {
 		domain.HarnessAgy,
 		domain.HarnessAuggie,
 		domain.HarnessCommandCode,
+		domain.HarnessOpenInterpreter,
 		domain.HarnessKiro,
 		domain.HarnessOpenCode,
 		domain.HarnessCopilot,
@@ -7508,6 +7708,9 @@ func (m *Manager) waitForPromptReadiness(ctx context.Context, agent ports.Agent,
 	callerDeadline, hasCallerDeadline := ctx.Deadline()
 	if hints.InitialDelay > 0 {
 		if hasCallerDeadline && time.Until(callerDeadline)-promptDeliveryDeadlineReserve <= hints.InitialDelay {
+			if hints.RequireReady {
+				return fmt.Errorf("prompt readiness: %w", context.DeadlineExceeded)
+			}
 			m.logger.Warn("prompt readiness skipped to preserve caller deadline for fallback delivery",
 				"sessionID", cfg.SessionID,
 				"kind", string(cfg.Kind),
@@ -7520,6 +7723,9 @@ func (m *Manager) waitForPromptReadiness(ctx context.Context, agent ports.Agent,
 		}
 	}
 	if len(hints.Patterns) == 0 || hints.Timeout <= 0 {
+		if hints.RequireReady {
+			return fmt.Errorf("prompt readiness: required readiness markers and timeout are missing")
+		}
 		return m.promptReadinessSkipped(ctx, handle, lines, hints)
 	}
 	poll := hints.PollInterval
@@ -7529,6 +7735,9 @@ func (m *Manager) waitForPromptReadiness(ctx context.Context, agent ports.Agent,
 
 	waitTimeout, hasReadinessBudget := promptReadinessWaitTimeout(hints.Timeout, callerDeadline, hasCallerDeadline)
 	if !hasReadinessBudget {
+		if hints.RequireReady {
+			return fmt.Errorf("prompt readiness: %w", context.DeadlineExceeded)
+		}
 		m.logger.Warn("prompt readiness skipped to preserve caller deadline for fallback delivery",
 			"sessionID", cfg.SessionID,
 			"kind", string(cfg.Kind),
@@ -7548,7 +7757,14 @@ func (m *Manager) waitForPromptReadiness(ctx context.Context, agent ports.Agent,
 		if err == nil {
 			blocked = promptOutputContainsWrapped(output, hints.BlockingPatterns)
 			if !blocked && promptOutputContains(output, hints.Patterns) {
-				return nil
+				currentLaunchReady := true
+				if hints.RequireCurrentLaunchSignal {
+					rec, ok, getErr := m.store.GetSession(ctx, domain.SessionID(cfg.SessionID))
+					currentLaunchReady = getErr == nil && ok && !rec.FirstSignalAt.IsZero()
+				}
+				if currentLaunchReady {
+					return nil
+				}
 			}
 		}
 		select {
@@ -7560,6 +7776,9 @@ func (m *Manager) waitForPromptReadiness(ctx context.Context, agent ports.Agent,
 				// the terminal. Typing the prompt there would answer the dialog
 				// with arbitrary keys, so fail delivery instead.
 				return fmt.Errorf("prompt readiness: %w", errPromptBlockedByDialog)
+			}
+			if hints.RequireReady {
+				return fmt.Errorf("prompt readiness: required composer was not observed: %w", context.DeadlineExceeded)
 			}
 			// Prompt readiness is best-effort: a missing terminal marker must not
 			// block spawn forever or be treated as confirmed readiness. Fall back

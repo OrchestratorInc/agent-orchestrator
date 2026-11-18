@@ -2155,10 +2155,29 @@ func TestDiscoverClaudePathRejectsGlobMetadata(t *testing.T) {
 	writeUsageFixture(t, filepath.Join(root, "project", "native-session.jsonl"), "{}\n")
 	collector := NewCollector(collectorTestStore(t), SourceRoots{ClaudeProjects: root}, nil)
 
-	path, err := collector.discoverPath(context.Background(), domain.HarnessClaudeCode, "*", "")
+	path, err := collector.discoverPath(context.Background(), domain.HarnessClaudeCode, "*", "", "")
 	mustNoError(t, err)
 	if path != "" {
 		t.Fatalf("invalid Claude native ID discovered %q", path)
+	}
+}
+
+func TestDiscoverClaudePathReadsTheWorkspaceProjectDirectory(t *testing.T) {
+	root, workspace := t.TempDir(), t.TempDir()
+	resolved, err := filepath.EvalSymlinks(workspace)
+	mustNoError(t, err)
+	want := filepath.Join(root, claudeProjectDirName(resolved), "native-session.jsonl")
+	writeUsageFixture(t, want, "{}\n")
+	other := filepath.Join(root, "other-project", "native-session.jsonl")
+	writeUsageFixture(t, other, "{}\n")
+	later := time.Now().Add(time.Hour)
+	mustNoError(t, os.Chtimes(other, later, later))
+	collector := NewCollector(collectorTestStore(t), SourceRoots{ClaudeProjects: root}, nil)
+
+	path, err := collector.discoverPath(context.Background(), domain.HarnessClaudeCode, "native-session", "", workspace)
+	mustNoError(t, err)
+	if path != want {
+		t.Fatalf("discoverPath = %q, want %q", path, want)
 	}
 }
 
