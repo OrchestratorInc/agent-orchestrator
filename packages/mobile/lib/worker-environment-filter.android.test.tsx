@@ -15,12 +15,19 @@ vi.mock("@expo/ui/jetpack-compose", async () => {
 	return {
 		Host: host("ComposeHost"),
 		LazyRow: host("LazyRow"),
-		FilterChip: Object.assign(host("FilterChip"), { LeadingIcon: host("LeadingIconSlot"), Label: host("LabelSlot") }),
+		FilterChip: Object.assign(host("FilterChip"), { LeadingIcon: host("LeadingIconSlot"), TrailingIcon: host("TrailingIconSlot"), Label: host("LabelSlot") }),
+		Box: host("ComposeBox"),
 		Icon: host("Icon"),
 		Text: host("ComposeText"),
 	};
 });
-vi.mock("@expo/ui/jetpack-compose/modifiers", () => ({ testID: (tag: string) => ({ testID: tag }) }));
+vi.mock("@expo/ui/jetpack-compose/modifiers", () => ({
+	testID: (tag: string) => ({ testID: tag }),
+	size: (width: number, height: number) => ({ size: [width, height] }),
+	clip: (shape: unknown) => ({ clip: shape }),
+	background: (color: string) => ({ background: color }),
+	Shapes: { Circle: "circle" },
+}));
 
 import { WorkerEnvironmentFilter } from "./worker-environment-filter.android";
 
@@ -80,4 +87,22 @@ describe("WorkerEnvironmentFilter on Android", () => {
 		expect(onSelect).not.toHaveBeenCalled();
 		expect(select).not.toHaveBeenCalled();
 	});
+});
+
+// The machine's state on its chip: the trailing slot, since Material keeps the
+// leading one for the check.
+it("puts a red or amber dot in the trailing slot of a machine that may not be current", async () => {
+	await act(async () => {
+		renderer = create(<WorkerEnvironmentFilter
+			environments={[{ id: "mac", name: "Mac", freshness: "unreachable" }, { id: "pc", name: "PC", freshness: "lagging" }, { id: "vm", name: "VM", freshness: "live" }]}
+			selectedEnvironmentId="mac"
+			onSelectEnvironment={vi.fn()}
+		/>);
+	});
+	const dot = (index: number) => chips()[index].findAllByType("TrailingIconSlot" as never)[0]?.findByType("ComposeBox" as never).props.modifiers;
+	expect(dot(1)).toEqual([{ size: [7, 7] }, { clip: "circle" }, { background: "#red" }, { testID: "worker-environment-freshness-mac" }]);
+	expect(dot(2)).toContainEqual({ background: "#amber" });
+	expect(chips()[3].findAllByType("TrailingIconSlot" as never)).toHaveLength(0);
+	// The chosen chip keeps its check in the leading slot alongside the dot.
+	expect(chips()[1].findAllByType("LeadingIconSlot" as never)).toHaveLength(1);
 });
