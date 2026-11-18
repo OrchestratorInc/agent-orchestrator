@@ -778,10 +778,13 @@ SET status = CASE (SELECT settled.state FROM conversation_turns AS settled WHERE
     END,
     revision = revision + 1,
     updated_at = sqlc.arg(updated_at)
-WHERE status = 'running'
+WHERE conversation_activities.conversation_id = sqlc.arg(conversation_id)
+  AND status = 'running'
   AND turn_id IN (
+      -- Every settled turn in the conversation, including turns an earlier
+      -- session handled before a handoff kept them in this timeline.
       SELECT owner.id FROM conversation_turns AS owner
-      WHERE owner.handled_by_session_id = sqlc.arg(handled_by_session_id)
+      WHERE owner.conversation_id = sqlc.arg(conversation_id)
         AND owner.state IN ('completed', 'recovered', 'interrupted', 'failed', 'cancelled')
   );
 

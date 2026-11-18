@@ -57,10 +57,38 @@ func TestSettleStrandedActivitiesMatchesTurnSettlement(t *testing.T) {
 			}
 		}
 	}
+	// A handoff keeps turns another session handled in this conversation's timeline.
+	otherRecord := sampleRecord("hist")
+	otherRecord.Mode = domain.SessionModeChat
+	other, err := s.CreateSession(ctx, otherRecord)
+	if err != nil {
+		t.Fatalf("create other session: %v", err)
+	}
+	if err := s.ClaimChatControllerGeneration(ctx, other.ID, "gen-other"); err != nil {
+		t.Fatalf("claim other generation: %v", err)
+	}
+	if created, err := s.AppendUserMessage(ctx, conversation, other.ID, "gen-other", domain.ConversationMessage{
+		ID: "turn-handoff-msg", Text: "earlier work", Origin: domain.MessageOriginHuman,
+	}, "turn-handoff", histClock); err != nil || !created {
+		t.Fatalf("append handed-off prompt: created=%v err=%v", created, err)
+	}
+	if err := s.BindTurnToProvider(ctx, "turn-handoff", "provider-turn-handoff", histClock); err != nil {
+		t.Fatalf("bind handed-off turn: %v", err)
+	}
+	if err := s.SettleTurn(ctx, conversation, "provider-turn-handoff", domain.TurnStateInterrupted, "", histClock); err != nil {
+		t.Fatalf("settle handed-off turn: %v", err)
+	}
+	if err := s.UpsertActivity(ctx, conversation, "provider-turn-handoff", domain.ConversationActivity{
+		ID: "stranded-handoff", Kind: domain.ActivityKindSystem, Status: domain.ActivityStatusRunning, Summary: notice,
+		ProviderItemID: "session-failure:stranded-handoff",
+		Detail:         []byte(`{"event":"provider.failure","category":"limit"}`),
+	}, later); err != nil {
+		t.Fatalf("upsert handed-off row: %v", err)
+	}
 	turns := turnStates(t, s, conversation)
 	before := activitiesByID(t, s, conversation)
 
-	if err := s.SettleStrandedActivities(ctx, session, later.Add(time.Minute)); err != nil {
+	if err := s.SettleStrandedActivities(ctx, conversation, later.Add(time.Minute)); err != nil {
 		t.Fatalf("SettleStrandedActivities: %v", err)
 	}
 
@@ -73,6 +101,9 @@ func TestSettleStrandedActivitiesMatchesTurnSettlement(t *testing.T) {
 			t.Fatalf("read %s: found=%v err=%v", id, found, err)
 		}
 		return got
+	}
+	if got := status("stranded-handoff"); got != store.TerminalActivityStatus(domain.TurnStateInterrupted) {
+		t.Errorf("row stranded on a turn an earlier session handled = %q, want %q", got, store.TerminalActivityStatus(domain.TurnStateInterrupted))
 	}
 	for _, state := range states {
 		if got := turns["turn-"+string(state)]; got != state {

@@ -5363,17 +5363,20 @@ SET status = CASE (SELECT settled.state FROM conversation_turns AS settled WHERE
     END,
     revision = revision + 1,
     updated_at = ?1
-WHERE status = 'running'
+WHERE conversation_activities.conversation_id = ?2
+  AND status = 'running'
   AND turn_id IN (
+      -- Every settled turn in the conversation, including turns an earlier
+      -- session handled before a handoff kept them in this timeline.
       SELECT owner.id FROM conversation_turns AS owner
-      WHERE owner.handled_by_session_id = ?2
+      WHERE owner.conversation_id = ?2
         AND owner.state IN ('completed', 'recovered', 'interrupted', 'failed', 'cancelled')
   )
 `
 
 type SettleStrandedConversationActivitiesParams struct {
-	UpdatedAt          time.Time
-	HandledBySessionID domain.SessionID
+	UpdatedAt      time.Time
+	ConversationID string
 }
 
 // A running row on a turn that has already settled can never finish. Older
@@ -5381,7 +5384,7 @@ type SettleStrandedConversationActivitiesParams struct {
 // had ended, so clients showed a spinner that never stopped. Give each one the
 // status SettleTurn would have written (terminalActivityStatus).
 func (q *Queries) SettleStrandedConversationActivities(ctx context.Context, arg SettleStrandedConversationActivitiesParams) error {
-	_, err := q.db.ExecContext(ctx, settleStrandedConversationActivities, arg.UpdatedAt, arg.HandledBySessionID)
+	_, err := q.db.ExecContext(ctx, settleStrandedConversationActivities, arg.UpdatedAt, arg.ConversationID)
 	return err
 }
 
