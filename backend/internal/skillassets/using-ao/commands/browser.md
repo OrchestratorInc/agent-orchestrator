@@ -224,9 +224,10 @@ silently search the web and does not allow `file://` or local filesystem paths.
 By default a session's browser uses the user's default browser profile, which
 is persistent: a site the user signed in to once stays signed in for every
 later session, and several sessions can use it at the same time. A session the
-user switched to Temporary (private), or any session in a project whose
-settings say "Always use a temporary browser", starts signed out and its data is
-cleared when the session ends. Profiles stay on this computer and are never copied
+user switched to Temporary (private) starts signed out and its data is cleared
+when the session ends. So does a session in a project whose settings say
+"Always use a temporary browser", unless the user picked a profile for that
+session. Profiles stay on this computer and are never copied
 between machines.
 
 ```bash
@@ -235,8 +236,9 @@ ao browser status   # e.g. "Browser profile: Personal (persistent: ...)"
 
 - Run `ao browser status` when a page shows you signed out. If the profile is
   Temporary or not the one with the user's sign-ins, ask the user to pick a
-  profile from the Browser panel's menu (Profile) or set a default in Settings →
-  Browser. You cannot change profiles yourself; there is no profile flag.
+  profile for this session from the Browser panel's menu (Profile). Changing the
+  default in Settings → Browser does not override a project set to "Always use a
+  temporary browser". You cannot change profiles yourself; there is no profile flag.
 - If the user is not signed in to a site, ask them to sign in themselves in the
   Browser panel. Never type the user's passwords or one-time codes, and do not
   sign in on their behalf.
