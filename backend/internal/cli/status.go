@@ -55,6 +55,10 @@ type daemonStatus struct {
 	Ready          string     `json:"ready,omitempty"`
 	Error          string     `json:"error,omitempty"`
 	owned          bool
+	// pidVisible records whether inspection saw the daemon's PID alive, as
+	// opposed to verifying it only over loopback (probeOwnedDaemon). Checking
+	// again later could match an unrelated process reusing that PID number.
+	pidVisible bool
 }
 
 type probeResult struct {
@@ -108,7 +112,8 @@ func (c *commandContext) inspectDaemon(ctx context.Context) (daemonStatus, error
 	st.Uptime = formatUptime(c.deps.Now().Sub(info.StartedAt))
 
 	var health probeResult
-	if c.deps.ProcessAlive(info.PID) {
+	st.pidVisible = c.deps.ProcessAlive(info.PID)
+	if st.pidVisible {
 		health, err = c.readProbe(ctx, info.Port, "healthz")
 		if err != nil {
 			st.State = stateUnhealthy

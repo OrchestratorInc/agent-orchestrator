@@ -70,13 +70,12 @@ func (c *commandContext) stopDaemon(ctx context.Context, opts stopOptions) (daem
 		return daemonStatus{}, fmt.Errorf("daemon pid %d is alive but ownership could not be verified", st.PID)
 	}
 
-	// inspectDaemon verified this daemon either by its PID or, when the PID is
-	// hidden from this process (see probeOwnedDaemon), over loopback only.
-	pidVisible := c.deps.ProcessAlive(st.PID)
 	if err := c.requestShutdown(ctx, st.Port); err != nil {
 		return daemonStatus{}, fmt.Errorf("request daemon shutdown: %w", err)
 	}
-	if !pidVisible {
+	// inspectDaemon verified this daemon either by its PID or, when the PID is
+	// hidden from this process (see probeOwnedDaemon), over loopback only.
+	if !st.pidVisible {
 		return c.waitForHiddenStopped(ctx, st.PID, cfg.RunFilePath, cfg.DataDir, opts.timeout)
 	}
 	return c.waitForStopped(ctx, st.PID, cfg.RunFilePath, cfg.DataDir, opts.timeout)

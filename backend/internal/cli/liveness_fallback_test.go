@@ -41,6 +41,7 @@ func hiddenPIDDeps() Deps {
 type fakeDaemon struct {
 	srv        *httptest.Server
 	apiCalls   atomic.Int32
+	readyCalls atomic.Int32
 	shutdownOK atomic.Bool
 	// down is set as soon as the daemon starts draining after /shutdown;
 	// /healthz then answers 500, as the real server closes its listeners first.
@@ -68,6 +69,7 @@ func newFakeDaemon(t *testing.T, cfg testConfig, service string, pid int, health
 			}
 			_, _ = fmt.Fprintf(w, `{"status":"ok","service":%q,"pid":%d}`, service, pid)
 		case "/readyz":
+			d.readyCalls.Add(1)
 			_, _ = fmt.Fprintf(w, `{"status":"ready","service":%q,"pid":%d}`, service, pid)
 		case "/api/v1/ping":
 			d.apiCalls.Add(1)
@@ -375,5 +377,29 @@ func TestProbeDoesNotFollowRedirects(t *testing.T) {
 	}
 	if got := elsewhere.Load(); got != 0 {
 		t.Fatalf("redirect target received %d requests, want 0", got)
+	}
+}
+
+// Once inspection has verified a hidden-PID daemon over loopback, stop must
+// keep treating it as hidden. A later PID check that matches an unrelated
+// process with the same number must not switch it to waiting on that PID.
+func TestStopKeepsHiddenWaitWhenPIDNumberIsReused(t *testing.T) {
+	cfg := setConfigEnv(t)
+	d := newFakeDaemon(t, cfg, daemonmeta.ServiceName, hiddenDaemonPID, http.StatusOK)
+	deps := hiddenPIDDeps()
+	// Hidden until inspection has verified the daemon (its last step is
+	// /readyz); after that an unrelated process holds the same PID number.
+	deps.ProcessAlive = func(int) bool { return d.readyCalls.Load() > 0 }
+
+	start := time.Now()
+	out, _, err := executeCLI(t, deps, "stop", "--json", "--timeout", "5s")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(out, `"state": "stopped"`) || !d.shutdownOK.Load() {
+		t.Fatalf("stop did not stop the hidden daemon:\n%s", out)
+	}
+	if elapsed := time.Since(start); elapsed > 3*time.Second {
+		t.Fatalf("stop took %s: it waited on the reused PID instead of the run-file", elapsed)
 	}
 }
