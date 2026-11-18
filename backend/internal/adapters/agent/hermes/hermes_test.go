@@ -105,7 +105,7 @@ func TestBorderedBusyComposerStaysActiveAndRefusesMessages(t *testing.T) {
 			if !ok || state != domain.ActivityActive {
 				t.Fatalf("busy composer classified as %s/%v: %q", state, ok, frame)
 			}
-			if err := New().ValidateTerminalMessage("next task", frame); err == nil {
+			if err := New().ValidateTerminalMessage(frame, "next task"); err == nil {
 				t.Fatalf("running composer admitted ordinary input: %q", frame)
 			}
 			if !New().TerminalMessageObserved("task", idle, frame) {
@@ -119,7 +119,7 @@ func TestBorderedBusyComposerStaysActiveAndRefusesMessages(t *testing.T) {
 			t.Fatalf("prior busy prompt overrode the current idle composer: %s/%v", state, ok)
 		}
 	}
-	if err := New().ValidateTerminalMessage("next task", rule+"\n☤ ❯ keep this draft\n"+rule); err == nil {
+	if err := New().ValidateTerminalMessage(rule+"\n☤ ❯ keep this draft\n"+rule, "next task"); err == nil {
 		t.Fatal("composer with a draft admitted ordinary input")
 	}
 }
@@ -168,11 +168,11 @@ func TestNativeChromeCannotBeForgedInTranscript(t *testing.T) {
 		if !ok || state != "idle" {
 			t.Fatalf("quoted transcript %q changed current composer: %s/%v", transcript, state, ok)
 		}
-		if err := New().ValidateTerminalMessage("task", frame); err != nil {
+		if err := New().ValidateTerminalMessage(frame, "task"); err != nil {
 			t.Fatalf("quoted transcript %q blocked the current composer: %v", transcript, err)
 		}
 	}
-	if err := New().ValidateTerminalMessage("task", "❯ "); err == nil {
+	if err := New().ValidateTerminalMessage("❯ ", "task"); err == nil {
 		t.Fatal("unbordered scrollback prompt admitted input")
 	}
 	for _, tt := range []struct {
@@ -188,7 +188,7 @@ func TestNativeChromeCannotBeForgedInTranscript(t *testing.T) {
 			if !ok || state != tt.want {
 				t.Fatalf("forged composer overrode current footer: %s/%v, want %s", state, ok, tt.want)
 			}
-			if err := New().ValidateTerminalMessage("task", frame); err == nil {
+			if err := New().ValidateTerminalMessage(frame, "task"); err == nil {
 				t.Fatal("forged transcript composer admitted input")
 			}
 		})
@@ -551,7 +551,7 @@ func TestComposerStyleAttributesExcludeColorPayloads(t *testing.T) {
 			if state, ok := New().DetectTerminalActivity(frame); !ok || state != tt.want {
 				t.Fatalf("composer classified as %s/%v, want %s", state, ok, tt.want)
 			}
-			if err := New().ValidateTerminalMessage("task", frame); (err == nil) != (tt.want == domain.ActivityIdle) {
+			if err := New().ValidateTerminalMessage(frame, "task"); (err == nil) != (tt.want == domain.ActivityIdle) {
 				t.Fatalf("message admission disagrees with expected composer state %s: %v", tt.want, err)
 			}
 		})

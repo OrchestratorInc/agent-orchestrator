@@ -541,7 +541,7 @@ func (m runtimeMessenger) Send(ctx context.Context, id domain.SessionID, message
 				}
 				admission.pending = ""
 			}
-			if err := policy.ValidateTerminalMessage(message, screen); err != nil {
+			if err := policy.ValidateTerminalMessage(screen, message); err != nil {
 				return err
 			}
 			current, exists, err := m.store.GetSession(ctx, id)
