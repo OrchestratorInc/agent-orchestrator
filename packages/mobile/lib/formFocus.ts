@@ -1,5 +1,5 @@
 import type { TextFieldRef } from "@expo/ui/swift-ui";
-import { createContext, useContext, useMemo } from "react";
+import { createContext, useContext, useEffect, useMemo } from "react";
 
 /** How long a blurred field gets to say it has let go before the submit goes ahead anyway. */
 export const BLUR_SETTLE_MS = 300;
@@ -16,7 +16,8 @@ export type FormFocus = {
 	/**
 	 * Runs `submit` once no field holds focus: the focused one is blurred first
 	 * and given until it reports the loss (or `BLUR_SETTLE_MS`). A second call
-	 * while one is waiting or running is ignored.
+	 * while one is waiting or running is ignored, and so is a submit whose form
+	 * closed while it waited (Cancel, or the sheet switching face).
 	 */
 	submit(submit: () => unknown): Promise<void>;
 };
@@ -33,12 +34,13 @@ export type FormFocus = {
  * `onFocusChange(false)` arrives, not when the promise resolves.
  */
 export function useFormFocus(): FormFocus {
-	return useMemo(() => {
+	const focus = useMemo(() => {
 		const refs = new Map<string, TextFieldRef>();
 		const fields = new Map<string, TrackedField>();
 		let focused: string | null = null;
 		let letGo: (() => void) | null = null;
 		let busy = false;
+		let closed = false;
 
 		const field = (id: string): TrackedField => {
 			let tracked = fields.get(id);
@@ -82,14 +84,21 @@ export function useFormFocus(): FormFocus {
 			busy = true;
 			try {
 				await release();
+				if (closed) return;
 				await run();
 			} finally {
 				busy = false;
 			}
 		};
 
-		return { field, submit };
+		const setClosed = (value: boolean) => { closed = value; };
+		return { field, submit, setClosed };
 	}, []);
+	useEffect(() => {
+		focus.setClosed(false);
+		return () => focus.setClosed(true);
+	}, [focus]);
+	return focus;
 }
 
 /**

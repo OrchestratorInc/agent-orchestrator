@@ -101,6 +101,19 @@ describe("useFormFocus", () => {
 		expect(run).toHaveBeenCalledTimes(2);
 	});
 
+	it("drops a submit whose form closed while it waited for the field to let go", async () => {
+		const { tracked } = fakeField("name", { reportsBlur: false });
+		tracked.onFocusChange(true);
+		const run = vi.fn();
+		const done = focus.submit(run);
+		// Cancel, or the sheet switching face, unmounts the form mid-wait.
+		act(() => renderer?.unmount());
+		renderer = undefined;
+		await vi.advanceTimersByTimeAsync(BLUR_SETTLE_MS);
+		await done;
+		expect(run).not.toHaveBeenCalled();
+	});
+
 	it("forgets a field whose view went away", async () => {
 		const { tracked, ref } = fakeField("name");
 		tracked.onFocusChange(true);
