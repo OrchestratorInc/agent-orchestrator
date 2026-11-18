@@ -5970,7 +5970,11 @@ components:
             edited (editQueuedMessage), queued-delete when a queued message can
             be deleted without stopping a started turn (deleteQueuedMessage),
             queued-steer when a queued message can be steered into the running
-            turn (steerQueuedMessage). Empty when none apply.
+            turn (steerQueuedMessage), orchestrator-on-coder when a project
+            whose sessions run on Coder may run its orchestrator on Coder too
+            (ProjectOrchestratorSandboxProvider): the deployment offers coder
+            and freestyle, and the organization may run Coder as its own
+            (customCoder). Empty when none apply.
           items:
             type: string
         maxAttachmentBytes:
@@ -6217,6 +6221,8 @@ components:
           $ref: "#/components/schemas/ProjectWorkersRequestReview"
         coAuthorCommits:
           $ref: "#/components/schemas/ProjectCoAuthorCommits"
+        orchestratorSandboxProvider:
+          $ref: "#/components/schemas/ProjectOrchestratorSandboxProvider"
         trackerIntake:
           $ref: "#/components/schemas/ProjectTrackerIntake"
         source:
@@ -6660,8 +6666,28 @@ components:
           $ref: "#/components/schemas/ProjectWorkersRequestReview"
         coAuthorCommits:
           $ref: "#/components/schemas/ProjectCoAuthorCommits"
+        orchestratorSandboxProvider:
+          $ref: "#/components/schemas/ProjectOrchestratorSandboxProvider"
         trackerIntake:
           $ref: "#/components/schemas/ProjectTrackerIntake"
+    ProjectOrchestratorSandboxProvider:
+      type: string
+      enum: [freestyle, coder]
+      description: >-
+        Where the orchestrator of a project whose sessions run on Coder runs.
+        freestyle, the default and the same as absent, runs it on an instant
+        VM; coder runs it on the organization's Coder exactly as the project's
+        workers run (the project's template and the organization's own Coder
+        deployment and workspace rules). The project's workers run on Coder
+        either way. Setting coder needs a project whose sessions run on Coder
+        and an organization whose offering lists orchestrator-on-coder;
+        otherwise the write is refused with 422 provider_unavailable. It is
+        read when an orchestrator session is created, so an orchestrator that
+        is running, paused or restored stays where it was created. When the
+        organization can no longer run orchestrators on Coder, a new
+        orchestrator runs on an instant VM. It has no effect on a project on
+        any other provider, or on a deployment without instant VMs, where the
+        orchestrator of a Coder project already runs on Coder.
     ProjectWorkersRequestReview:
       type: boolean
       description: >-
