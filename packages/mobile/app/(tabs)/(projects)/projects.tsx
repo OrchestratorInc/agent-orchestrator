@@ -15,7 +15,8 @@ import type { OrchestratorProjectRow } from "../../../lib/orchestratorView";
 import { ProjectCard } from "../../../lib/project-card";
 import { refreshControlColors } from "../../../lib/refreshControlColors";
 import { Spinner } from "../../../lib/Spinner";
-import { StaleBanner } from "../../../lib/StaleBanner";
+import { FreshnessLine } from "../../../lib/FreshnessLine";
+import { useMachineFreshness } from "../../../lib/useMachineFreshness";
 import { useApp } from "../../../lib/store";
 import { UnpairedState } from "../../../lib/UnpairedState";
 import type { Theme } from "../../../lib/theme";
@@ -43,6 +44,8 @@ export default function ProjectsScreen() {
 		notificationsUnread,
 		refreshAll,
 	} = useApp();
+	// Each card's machine dot. Changes only when some machine's state does.
+	const freshness = useMachineFreshness();
 	const { status: cloudStatus, notificationsUnread: cloudUnread, watch: watchCloud, projectsLoaded: cloudProjectsLoaded, projectsError: cloudProjectsError, refreshProjects: refreshCloudProjects, client: cloudClient, org: cloudOrg } = useCloud();
 	// A Free organization runs no cloud agents, so a new cloud project could never run anything.
 	const cloudPlan = useCloudPlan(cloudClient, cloud ? cloudOrg?.id : undefined);
@@ -114,8 +117,10 @@ export default function ProjectsScreen() {
 	}
 
 	// In the list, not above it: the list has to be the page's first view under
-	// the translucent header.
-	const staleBanner = hostStates.length <= 1 ? <StaleBanner error={!!error} onRetry={retry} /> : <StaleBanner networkOnly />;
+	// the translucent header. It speaks for the one machine when every project is
+	// on it; with several machines, each card's machine wears its own dot.
+	const staleBanner = <FreshnessLine hostId={!cloud && hostStates.length === 1 ? hostStates[0].hostId : undefined} onRetry={retry} />;
+	const showMachine = hostStates.length + (cloud ? 1 : 0) > 1;
 
 	return (
 		<View style={styles.screen}>
@@ -143,7 +148,8 @@ export default function ProjectsScreen() {
 						<ProjectCard
 							row={item}
 							busy={busyProjects.has(hostedProjectKey(item.project))}
-							showMachine={hostStates.length + (cloud ? 1 : 0) > 1}
+							showMachine={showMachine}
+							freshness={showMachine ? freshness.get(item.project.hostId) : undefined}
 							onOpenProject={openProject}
 							onOrchestrator={openOrchestrator}
 						/>

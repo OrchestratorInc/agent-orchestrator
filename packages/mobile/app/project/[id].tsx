@@ -6,7 +6,8 @@ import { hostRouteMatches } from "../../lib/hostRoute";
 import { orchestratorProjectSections, projectDetailSessions, projectPageStats } from "../../lib/orchestratorView";
 import { ProjectMachineIndicator, ProjectPageHeader } from "../../lib/project-card";
 import { Spinner } from "../../lib/Spinner";
-import { StaleBanner } from "../../lib/StaleBanner";
+import { FreshnessLine } from "../../lib/FreshnessLine";
+import { useMachineFreshness } from "../../lib/useMachineFreshness";
 import { rememberLastProject } from "../../lib/lastProject";
 import { HostScope, useApp } from "../../lib/store";
 import { useCloud } from "../../lib/cloud/CloudProvider";
@@ -49,7 +50,7 @@ function ProjectScreenContent() {
 	const glassInset = useGlassBarInset();
 	const fab = useFabExpanded();
 	const { id, hostId: routeHostId } = useLocalSearchParams<{ id: string; hostId?: string }>();
-	const { config, currentHostId, hostStates: machineStates, cloud, connection, loading, error, refresh, projects, sessions, orchestrators, archive, linkHealth } = useApp();
+	const { config, currentHostId, hostStates: machineStates, cloud, connection, loading, refresh, projects, sessions, orchestrators, archive, linkHealth } = useApp();
 	const hostMatches = hostRouteMatches(routeHostId, currentHostId);
 	const { busyProjects, openOrchestrator } = useOrchestratorLauncher();
 
@@ -106,6 +107,9 @@ function ProjectScreenContent() {
 	// With one machine paired, every project is on it: naming it says nothing.
 	const machineName = hostStates.length > 1 ? machine?.name : undefined;
 	const machineSymbol = machine?.appearance.symbol;
+	// The header's machine label wears its dot too, so the page says which
+	// machine is behind even after the line under the title scrolls away.
+	const machineFreshness = useMachineFreshness().get(currentHostId ?? "");
 	// iOS has no floating action button. New task is the compose button at the
 	// bottom right, as the board's tab bar sets it apart and as Notes and Mail
 	// place it: a bottom toolbar's trailing item, on the system's glass. Android
@@ -126,20 +130,19 @@ function ProjectScreenContent() {
 				    stays off the bar items' shared glass. */}
 				{machineName ? (
 					<Stack.Toolbar.View hidesSharedBackground>
-						<ProjectMachineIndicator hostId={currentHostId} hosts={hostStates} />
+						<ProjectMachineIndicator hostId={currentHostId} hosts={hostStates} freshness={machineFreshness} />
 					</Stack.Toolbar.View>
 				) : null}
 			</Stack.Toolbar>
 		) : null,
 		// eslint-disable-next-line react-hooks/exhaustive-deps -- the indicator reads only the machine's name and symbol from hostStates
-		[currentHostId, machineName, machineSymbol],
+		[currentHostId, machineName, machineSymbol, machineFreshness],
 	);
 
 	return (
 		<View style={styles.screen}>
 			{headerItems}
 			{bottomCompose}
-			{hostMatches ? <View pointerEvents="box-none" style={glassInset ? [styles.floatingBanner, { top: glassInset }] : undefined}><StaleBanner error={!!error} onRetry={retry} /></View> : null}
 
 			{!hostMatches ? (
 				loading && !config ? (
@@ -187,12 +190,17 @@ function ProjectScreenContent() {
 					refreshing={refreshing}
 					onRefresh={onRefresh}
 					ListHeaderComponent={
+						<>
+						{/* In the list, under the title: a line with no fill of its own
+						    can't float over rows the way the old banner did. */}
+						<FreshnessLine hostId={currentHostId} onRetry={retry} />
 						<ProjectPageHeader
 							row={row}
 							stats={stats}
 							busy={busyProjects.has(hostedRowKey(currentHostId ?? "", row.project.id))}
 							onPress={openOrchestrator}
 						/>
+						</>
 					}
 					ListEmptyComponent={
 						<View>
@@ -216,5 +224,4 @@ const makeStyles = (t: Theme) =>
 	StyleSheet.create({
 		screen: { flex: 1, backgroundColor: t.bgBase },
 		center: { flex: 1, alignItems: "center", justifyContent: "center", paddingVertical: 60 },
-		floatingBanner: { position: "absolute", start: 0, end: 0, zIndex: 1 },
 	});

@@ -86,7 +86,8 @@ vi.mock("./store", () => ({ useApp: () => ({
 	hostStates: fixtures.hostStates, notificationsUnread: fixtures.notificationsUnread,
 	phoneNetwork: { connected: true, internet: true },
 }) }));
-vi.mock("./StaleBanner", () => ({ StaleBanner: "StaleBanner" }));
+vi.mock("./FreshnessLine", () => ({ FreshnessLine: "FreshnessLine" }));
+vi.mock("./useMachineFreshness", () => ({ useMachineFreshness: () => new Map() }));
 vi.mock("./useBoardFailure", () => ({ useBoardFailure: () => ({ icon: "wifi-off", title: "Can't connect", hint: "Try again" }) }));
 vi.mock("./UnpairedState", () => ({ UnpairedState: "UnpairedState" }));
 vi.mock("./ThemeProvider", () => ({
@@ -308,6 +309,45 @@ describe("Workers filter menu", () => {
 		expect(renderer.root.findAllByType(WorkerEnvironmentFilter)).toHaveLength(1);
 	});
 
+	// A project filter can put every row on one machine while All machines stays
+	// chosen; the line under the title then speaks for that machine.
+	it("points the freshness line at the filtered project's machine", () => {
+		fixtures.hostStates = [snapshot({ hostId: "mac", name: "Mac" }), snapshot({ hostId: "windows", name: "Windows" })];
+		fixtures.projects = [project("ao", "AO", "mac", "Mac"), project("game", "Game", "windows", "Windows")];
+		act(() => { renderer = create(<FleetScreen />); });
+		const line = () => renderer.root.findByType("FreshnessLine" as never);
+		expect(line().props.hostId).toBeUndefined();
+		choose(filterMenu(), "Game · Windows");
+		expect(selectedEnvironment()).toBe("All machines");
+		expect(line().props.hostId).toBe("windows");
+	});
+
+	// Android's title is in the bar, whose frost dimmed a line placed right under
+	// it; the chips draw above the frost, so there the line goes beneath them.
+	it("puts the freshness line under the chips on Android and above them on iOS", () => {
+		fixtures.hostStates = [snapshot({ hostId: "mac", name: "Mac" }), snapshot({ hostId: "windows", name: "Windows" })];
+		const order = () => renderer.root.findAll((node) => node.type === ("FreshnessLine" as never) || node.type === WorkerEnvironmentFilter, { deep: true })
+			.map((node) => (node.type === WorkerEnvironmentFilter ? "chips" : "line"));
+		act(() => { renderer = create(<FleetScreen />); });
+		expect(order()).toEqual(["line", "chips"]);
+		act(() => renderer.unmount());
+		fixtures.platform = "android";
+		act(() => { renderer = create(<FleetScreen />); });
+		expect(order()).toEqual(["chips", "line"]);
+	});
+
+	// An empty board explains itself, but a project or idle empty state would not
+	// say the phone is offline: the line stays, limited to that (no machine).
+	it("keeps only the phone-offline line on an empty board", () => {
+		fixtures.hostStates = [snapshot({ hostId: "mac", name: "Mac", connection: "open" })];
+		act(() => { renderer = create(<FleetScreen />); });
+		const line = () => renderer.root.findAllByType("FreshnessLine" as never);
+		expect(line()[0].props.hostId).toBe("mac");
+		act(() => renderer.root.findByType(WorkerBoardList).props.onEmptyChange(true));
+		expect(line()).toHaveLength(1);
+		expect(line()[0].props.hostId).toBeUndefined();
+	});
+
 	it("scopes the project choices to the chosen machine and drops one it does not have", () => {
 		fixtures.projects = [project("ao", "AO", "mac", "Mac"), project("game", "Game", "windows", "Windows")];
 		act(() => { renderer = create(<FleetScreen />); });
@@ -505,12 +545,12 @@ describe("Workers selected-machine reachability", () => {
 		expect(retry().props.loading).toBe(false);
 		expect(renderer.root.findByType(WorkerBoardList).props.refreshing).toBe(false);
 	});
-	it("retries from the stale banner without turning on the pull-to-refresh spinner", async () => {
+	it("retries from the freshness line without turning on the pull-to-refresh spinner", async () => {
 		let answer!: () => void;
 		fixtures.refreshAll.mockImplementationOnce(() => new Promise<void>((resolve) => { answer = resolve; }));
 		fixtures.hostStates = [fixtures.hostStates[0]];
 		act(() => { renderer = create(<FleetScreen />); });
-		await act(async () => { renderer.root.findByType("StaleBanner" as never).props.onRetry(); });
+		await act(async () => { renderer.root.findByType("FreshnessLine" as never).props.onRetry(); });
 		expect(fixtures.refreshAll).toHaveBeenCalledTimes(1);
 		expect(renderer.root.findByType(WorkerBoardList).props.refreshing).toBe(false);
 		await act(async () => answer());
