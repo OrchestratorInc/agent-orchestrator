@@ -270,6 +270,13 @@ type conversation struct {
 	eventsClosed bool
 	closeOnce    sync.Once
 	closing      chan struct{}
+	// Host-backed chats queue events here until the consumer first calls
+	// Events, so session/new never waits on a full channel. sendMu keeps the
+	// queued events ahead of later ones.
+	sendMu      sync.Mutex
+	backlog     []ports.ChatEvent
+	consuming   bool
+	consumeOnce sync.Once
 
 	historyMu     sync.Mutex
 	history       *historyCapture
@@ -504,7 +511,38 @@ func (c *conversation) Capabilities() ports.ChatCapabilities {
 	return cloneCapabilities(c.capabilities)
 }
 
-func (c *conversation) Events() <-chan ports.ChatEvent { return c.events }
+func (c *conversation) Events() <-chan ports.ChatEvent {
+	if c.proc != nil && c.proc.terminate != nil {
+		c.consumeOnce.Do(func() { go c.flushBacklog() })
+	}
+	return c.events
+}
+
+// flushBacklog delivers the events queued before the consumer attached, then
+// lets emit send directly.
+func (c *conversation) flushBacklog() {
+	c.eventMu.RLock()
+	defer c.eventMu.RUnlock()
+	c.sendMu.Lock()
+	defer c.sendMu.Unlock()
+	c.consuming = true
+	backlog := c.backlog
+	c.backlog = nil
+	if c.eventsClosed {
+		return
+	}
+	for i, event := range backlog {
+		select {
+		case c.events <- event:
+		case <-c.conn.Done():
+			// The disconnect path delivers what is left before its stop event.
+			c.backlog = backlog[i:]
+			return
+		case <-c.closing:
+			return
+		}
+	}
+}
 
 // PreservesProviderOnClose reports that Close detaches only when this
 // conversation is backed by the daemon-independent host.
@@ -1537,11 +1575,19 @@ func (c *conversation) watchConnection() {
 	}
 	c.eventMu.Lock()
 	if !c.eventsClosed {
+		c.sendMu.Lock()
+		pending := append(c.backlog, event)
+		c.backlog = nil
+		c.sendMu.Unlock()
 		// Deliver the recovery boundary even though conn.Done is already closed;
 		// emit's disconnect select could otherwise drop this ownership signal.
-		select {
-		case c.events <- event:
-		case <-c.closing:
+	deliver:
+		for _, pendingEvent := range pending {
+			select {
+			case c.events <- pendingEvent:
+			case <-c.closing:
+				break deliver
+			}
 		}
 		c.eventsClosed = true
 		close(c.events)
@@ -1561,6 +1607,12 @@ func (c *conversation) emit(event ports.ChatEvent) {
 	if c.proc != nil && c.proc.terminate != nil {
 		// Host-journaled frames must reach durable projection; dropping one here
 		// would make a successful replay look exactly-once while losing content.
+		c.sendMu.Lock()
+		defer c.sendMu.Unlock()
+		if !c.consuming {
+			c.backlog = append(c.backlog, event)
+			return
+		}
 		select {
 		case c.events <- event:
 		case <-c.conn.Done():

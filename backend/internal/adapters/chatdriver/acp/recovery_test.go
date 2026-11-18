@@ -9,6 +9,7 @@ import (
 	"io"
 	"log/slog"
 	"net"
+	"strconv"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -216,6 +217,44 @@ func TestEventBufferIsSmallForHostBackedChats(t *testing.T) {
 	plain := newConversation(&process{stdin: direct, stdout: direct, stop: direct.Close}, slog.New(slog.DiscardHandler), "", nil, nil)
 	if got := cap(plain.events); got != eventBuffer {
 		t.Fatalf("direct event buffer = %d, want %d", got, eventBuffer)
+	}
+}
+
+func TestHostBackedEventsQueueUntilConsumerAttaches(t *testing.T) {
+	daemon, host := net.Pipe()
+	defer host.Close()
+	conv := newConversation(&process{
+		stdin: daemon, stdout: daemon, stop: daemon.Close,
+		terminate: func() error { return nil },
+	}, slog.New(slog.DiscardHandler), "", nil, nil)
+	burst := cap(conv.events) + 50
+	emitted := make(chan struct{})
+	go func() {
+		for i := range burst {
+			conv.emit(ports.ChatEvent{Kind: ports.ChatEventMessageDelta, ProviderItemID: strconv.Itoa(i)})
+		}
+		close(emitted)
+	}()
+	select {
+	case <-emitted:
+	case <-time.After(time.Second):
+		t.Fatal("emit blocked before the consumer attached")
+	}
+	events := conv.Events()
+	go conv.emit(ports.ChatEvent{Kind: ports.ChatEventMessageDelta, ProviderItemID: "after"})
+	for i := range burst + 1 {
+		want := strconv.Itoa(i)
+		if i == burst {
+			want = "after"
+		}
+		select {
+		case event := <-events:
+			if event.ProviderItemID != want {
+				t.Fatalf("event %d = %q, want %q", i, event.ProviderItemID, want)
+			}
+		case <-time.After(time.Second):
+			t.Fatalf("event %d not delivered", i)
+		}
 	}
 }
 
