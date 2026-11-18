@@ -184,7 +184,6 @@ function ShellOutlet({ startingChat }: { startingChat: ReactNode }) {
 			</div>
 			<SettingsPane />
 			<ShareLinkHost />
-			<SharedArtifactLinkHost />
 		</>
 	);
 }
@@ -307,8 +306,6 @@ const ShellCenter = memo(function ShellCenter({
 	const selfFramedOutlet = <>
 		<div className={startingOrchestrator ? "absolute inset-0 invisible pointer-events-none" : "contents"} inert={startingOrchestrator || undefined}><Outlet /></div>
 		{startingChat ? <CenterPanelShell notifications>{startingChat}</CenterPanelShell> : null}
-		{/* ShellOutlet mounts it elsewhere; the two branches never render together. */}
-		<SharedArtifactLinkHost />
 	</>;
 	// Pages own their header content; the panel owns the shared workspace controls,
 	// so every page carries the bell except the welcome start page.
@@ -1689,6 +1686,8 @@ const replacementErrorCount = Object.keys(orchestratorReplacementErrors).length;
 								startingCoderWorkspaceUrl={startingOrchestratorSession?.cloud?.coderWorkspaceUrl}
 								startingHarness={startingWorkspace?.orchestratorAgent ?? startingOrchestratorSession?.provider}
 							/>
+							{/* One host for every route: links it holds survive moving into or out of settings. */}
+							<SharedArtifactLinkHost />
 							<SwipeNavigation containerRef={centerPaneRef} navigation={settingsPage?.navigation ?? {
 								canGoBack: !isHomeRoute && router.history.canGoBack(),
 								canGoForward,
