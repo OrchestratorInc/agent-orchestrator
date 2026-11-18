@@ -55,8 +55,7 @@ beforeEach(() => {
 		phoneNetwork: online,
 		phoneOffline: false,
 		linkHealth: "ok",
-		primaryHostId: "mac",
-		getPrimaryLastSyncAt: () => NOW - 1_000,
+		getPrimaryLastSyncAt: (id: string) => (id === "mac" ? NOW - 1_000 : undefined),
 	};
 });
 afterEach(() => {
@@ -72,7 +71,7 @@ describe("FreshnessLine", () => {
 
 	it("names an unreachable machine in red, with its age and Retry, as a polite live region", () => {
 		fixtures.app.hostStates = [snapshot("mac", { connection: "closed", linkTracker: failing(UNREACHABLE_AFTER_FAILURES, UNREACHABLE_AFTER_MS) })];
-		fixtures.app.getPrimaryLastSyncAt = () => NOW - 180_000;
+		fixtures.app.getPrimaryLastSyncAt = (id: string) => (id === "mac" ? NOW - 180_000 : undefined);
 		const onRetry = vi.fn();
 		const line = render({ hostId: "mac", onRetry })!;
 		expect(text(line).props.children).toBe("Can't reach Studio · updated 3m ago");
@@ -91,6 +90,15 @@ describe("FreshnessLine", () => {
 		expect(render({ hostId: "mac" })).toBeUndefined();
 	});
 
+	// FrozenAppScope keeps Studio's page on a tab off screen after a switch to
+	// another machine: the live time is now that machine's, so Studio's line
+	// keeps its own age from its snapshot.
+	it("keeps a machine's own age after the selected machine changes", () => {
+		fixtures.app.hostStates = [snapshot("mac", { connection: "closed", lastSyncAt: NOW - 180_000, linkTracker: failing(UNREACHABLE_AFTER_FAILURES, UNREACHABLE_AFTER_MS) }), snapshot("pc")];
+		fixtures.app.getPrimaryLastSyncAt = (id: string) => (id === "pc" ? NOW - 1_000 : undefined);
+		expect(text(render({ hostId: "mac" })!).props.children).toBe("Can't reach Studio · updated 3m ago");
+	});
+
 	it("says it is reconnecting in amber after a single unanswered poll", () => {
 		fixtures.app.hostStates = [snapshot("mac", { linkTracker: recordPoll(EMPTY_LINK_TRACKER, "no-answer", NOW - 2_000) })];
 		const line = render({ hostId: "mac", onRetry: vi.fn() })!;
@@ -100,7 +108,7 @@ describe("FreshnessLine", () => {
 
 	it("puts the phone being offline first, without Retry, on any page", () => {
 		fixtures.app.phoneOffline = true;
-		fixtures.app.getPrimaryLastSyncAt = () => NOW - 180_000;
+		fixtures.app.getPrimaryLastSyncAt = (id: string) => (id === "mac" ? NOW - 180_000 : undefined);
 		const line = render({ onRetry: vi.fn() })!;
 		expect(text(line).props.children).toBe("You're offline · updated 3m ago");
 		expect(retry(line)).toBeUndefined();

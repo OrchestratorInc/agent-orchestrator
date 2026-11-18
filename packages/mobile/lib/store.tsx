@@ -194,13 +194,17 @@ type AppState = {
 	 */
 	getLastSyncAt: () => number;
 	/**
-	 * The selected machine and its last sync, the same in every scope. HostScope
-	 * and Cloud repoint `currentHostId` and `getLastSyncAt` at the machine their
-	 * screen is about, but freshness is judged for every paired machine at once,
-	 * and the selected one's snapshot trails its polls: it has to be read here.
+	 * The selected machine's last sync, when `hostId` is the machine that sync
+	 * belongs to; undefined for any other machine, whose snapshot is current.
+	 *
+	 * Unscoped: HostScope and Cloud repoint `currentHostId` and `getLastSyncAt`
+	 * at the machine their screen is about, while freshness is judged for every
+	 * machine at once, and the selected one's snapshot trails its polls. Keyed by
+	 * the owner rather than paired with a host id in the context value, because
+	 * FrozenAppScope holds an old value on a tab off screen: after a switch it
+	 * would name the old machine while the getter read the new one's time.
 	 */
-	primaryHostId: string | undefined;
-	getPrimaryLastSyncAt: () => number;
+	getPrimaryLastSyncAt: (hostId: string) => number | undefined;
 	// actions
 	/**
 	 * Races the selected machine's endpoints. Null means none passed the host
@@ -440,6 +444,9 @@ export function AppProvider({ children }: { children: ReactNode }) {
 	// what "re-render the board on a change, not on the poll tick" removed. Only
 	// the banner subscribes to the passage of time; the board does not.
 	const lastSyncAtRef = useRef(0);
+	// The machine lastSyncAtRef belongs to, so getPrimaryLastSyncAt never hands
+	// one machine's time to a reader asking about another.
+	const lastSyncOwnerRef = useRef<string | null>(null);
 	// Whether the last failure had no HTTP status — nothing answered at all,
 	// which is what leaving a network looks like.
 	const lastFailUnreachableRef = useRef(false);
@@ -568,6 +575,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
 				setStats({});
 				setNotificationsUnread(0);
 				lastSyncAtRef.current = 0;
+				lastSyncOwnerRef.current = null;
 			}
 			// Let every other paired machine connect while the selected one's
 			// endpoint race is still waiting for an unreachable LAN or tunnel.
@@ -697,6 +705,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
 			setStats(incoming.stats);
 			setNotificationsUnread(incoming.notificationsUnread);
 			lastSyncAtRef.current = incoming.lastSyncAt;
+			lastSyncOwnerRef.current = incoming.hostId;
 			setConnection("open");
 			setLoading(false);
 			setError(null);
@@ -890,6 +899,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
 			recordLink(Date.now() - startedAt > SLOW_POLL_MS ? "slow" : "ok");
 			lastTickOkRef.current = true;
 			lastSyncAtRef.current = Date.now();
+			lastSyncOwnerRef.current = c.hostId ?? null;
 			if (!openRef.current) {
 				openRef.current = true;
 				const trigger = everConnectedRef.current ? "reconnect" : "launch";
@@ -1345,6 +1355,10 @@ export function AppProvider({ children }: { children: ReactNode }) {
 	// Stable for the life of the provider, which is what lets it sit in the memo's
 	// dependency list below without ever busting it.
 	const getLastSyncAt = useCallback(() => lastSyncAtRef.current, []);
+	const getPrimaryLastSyncAt = useCallback(
+		(hostId: string) => (lastSyncOwnerRef.current === hostId ? lastSyncAtRef.current : undefined),
+		[],
+	);
 
 	const value = useMemo<AppState>(
 		() => ({
@@ -1381,8 +1395,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
 			phoneOffline,
 			phoneNetwork,
 			getLastSyncAt,
-			primaryHostId: selectedHostId ?? undefined,
-			getPrimaryLastSyncAt: getLastSyncAt,
+			getPrimaryLastSyncAt,
 			reloadConfig,
 			switchHost,
 			refresh,

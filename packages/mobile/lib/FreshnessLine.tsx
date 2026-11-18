@@ -30,7 +30,7 @@ export function FreshnessLine({ hostId, onRetry }: { hostId?: string; onRetry?: 
 
 	const host = hostId ? app.hostStates.find((item) => item.hostId === hostId) : undefined;
 	// The selected machine's snapshot trails its polls (see readFleetFreshness).
-	const syncedAt = (id: string, fallback: number) => (id === app.primaryHostId ? app.getPrimaryLastSyncAt() : fallback);
+	const syncedAt = (id: string, fallback: number) => app.getPrimaryLastSyncAt(id) ?? fallback;
 	const lastSyncAt = host
 		? syncedAt(host.hostId, host.lastSyncAt)
 		: Math.max(0, ...app.hostStates.map((item) => syncedAt(item.hostId, item.lastSyncAt)));

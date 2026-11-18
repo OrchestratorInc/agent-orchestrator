@@ -31,8 +31,7 @@ describe("readFleetFreshness", () => {
 		const freshness = readFleetFreshness({
 			hostStates: [snapshot("mac", stale), snapshot("pc", stale)],
 			phoneNetwork: online,
-			primaryHostId: "mac",
-			getPrimaryLastSyncAt: () => NOW - 1_000,
+			getPrimaryLastSyncAt: (id: string) => (id === "mac" ? NOW - 1_000 : undefined),
 		}, NOW);
 		expect(freshness.get("mac")).toBe("live");
 		expect(freshness.get("pc")).toBe("lagging");
@@ -45,12 +44,24 @@ describe("readFleetFreshness", () => {
 		const scoped = {
 			hostStates: [snapshot("mac", stale), snapshot("pc", NOW - 1_000)],
 			phoneNetwork: online,
-			primaryHostId: "mac",
-			getPrimaryLastSyncAt: () => NOW - 1_000,
+			getPrimaryLastSyncAt: (id: string) => (id === "mac" ? NOW - 1_000 : undefined),
 			currentHostId: "pc",
 			getLastSyncAt: () => NOW - 1_000,
 		};
 		expect(readFleetFreshness(scoped, NOW).get("mac")).toBe("live");
+	});
+
+	// A tab off screen keeps an old store value (FrozenAppScope). After a switch
+	// the live time belongs to the new machine, so the old one reads its snapshot.
+	it("never hands one machine's live sync time to another", () => {
+		const stale = NOW - STALE_AFTER_MS * 4;
+		const freshness = readFleetFreshness({
+			hostStates: [snapshot("mac", stale), snapshot("pc", stale)],
+			phoneNetwork: online,
+			getPrimaryLastSyncAt: (id: string) => (id === "pc" ? NOW - 1_000 : undefined),
+		}, NOW);
+		expect(freshness.get("mac")).toBe("lagging");
+		expect(freshness.get("pc")).toBe("live");
 	});
 });
 
@@ -70,8 +81,7 @@ describe("useMachineFreshness", () => {
 		fixtures.app = {
 			hostStates: [snapshot("mac", NOW), snapshot("pc", NOW)],
 			phoneNetwork: online,
-			primaryHostId: "mac",
-			getPrimaryLastSyncAt: () => Date.now(),
+			getPrimaryLastSyncAt: (id: string) => (id === "mac" ? Date.now() : undefined),
 		};
 	});
 	afterEach(() => {
