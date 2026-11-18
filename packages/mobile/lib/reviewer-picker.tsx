@@ -3,29 +3,37 @@ import { alpha, background, clickable, clip, fillMaxWidth, Shapes, size, testID 
 import { useState, type ReactNode } from "react";
 import { chipColorFor } from "./harnessLogo";
 import { logoFor } from "./harnessLogoAssets";
-import { projectDefaultLabel, reviewerLabel, withCurrentOption, type ReviewerPickerProps } from "./reviewer-picker.types";
+import { projectDefaultLabel, reviewerLabel, withCurrentOption, type ReviewerChoiceRow, type ReviewerPickerProps } from "./reviewer-picker.types";
 import { useTheme } from "./ThemeProvider";
 import { materialDrawable } from "./toolbarIcon.android";
 import { font, iconSize, radius, stateOpacity } from "./tokens";
 
-type Menu = "reviewer" | "model";
+type Menu = "reviewer" | "model" | "effort";
 
 /**
- * The reviewer and its model as Material list items, each opening a dropdown
+ * The reviewer, its model and its effort as Material list items, each opening a dropdown
  * menu of the choices with a check on the current one: the menu Android's own
  * settings use for picking one value, anchored to the row it changes.
  */
-export function ReviewerPicker({ reviewers, selectedReviewer, effectiveReviewer, onSelectReviewer, models, modelTitle, selectedModel, onSelectModel, busy }: ReviewerPickerProps) {
+export function ReviewerPicker({ reviewers, selectedReviewer, effectiveReviewer, onSelectReviewer, model, onSelectModel, effort, onSelectEffort, busy }: ReviewerPickerProps) {
 	const [open, setOpen] = useState<Menu | null>(null);
 	const reviewer = selectedReviewer || effectiveReviewer;
 	const reviewerText = selectedReviewer ? reviewerLabel(reviewers, selectedReviewer) : projectDefaultLabel(reviewers, effectiveReviewer);
-	const modelText = selectedModel ? reviewerLabel(models, selectedModel) : "Provider default";
 
 	function choose(menu: Menu, id: string) {
 		setOpen(null);
 		if (menu === "reviewer") onSelectReviewer(id);
-		else onSelectModel(id);
+		else if (menu === "model") onSelectModel(id);
+		else onSelectEffort(id);
 	}
+
+	const settingRow = (menu: Menu, row: ReviewerChoiceRow) => (
+		<PickerRow title={row.title} value={row.valueLabel} open={open === menu} busy={busy} tag={`review-${menu}`} onOpen={() => setOpen(menu)} onDismiss={() => setOpen(null)}>
+			{row.options.map((option) => (
+				<Choice key={option.id || "-"} label={option.label} selected={option.id === row.value} onPress={() => choose(menu, option.id)} />
+			))}
+		</PickerRow>
+	);
 
 	return (
 		<>
@@ -35,14 +43,8 @@ export function ReviewerPicker({ reviewers, selectedReviewer, effectiveReviewer,
 					<Choice key={agent.id} label={agent.label} leading={<HarnessMark harness={agent.id} />} selected={agent.id === selectedReviewer} onPress={() => choose("reviewer", agent.id)} />
 				))}
 			</PickerRow>
-			{models.length ? (
-				<PickerRow title={modelTitle} value={modelText} open={open === "model"} busy={busy} tag="review-model" onOpen={() => setOpen("model")} onDismiss={() => setOpen(null)}>
-					<Choice label="Provider default" selected={!selectedModel} onPress={() => choose("model", "")} />
-					{withCurrentOption(models, selectedModel).map((model) => (
-						<Choice key={model.id} label={model.label} selected={model.id === selectedModel} onPress={() => choose("model", model.id)} />
-					))}
-				</PickerRow>
-			) : null}
+			{model ? settingRow("model", model) : null}
+			{effort ? settingRow("effort", effort) : null}
 		</>
 	);
 }
