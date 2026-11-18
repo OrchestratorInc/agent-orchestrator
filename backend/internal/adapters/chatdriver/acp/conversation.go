@@ -139,8 +139,8 @@ type conversation struct {
 	// unofferedModel is the optional model the session was opened on but the
 	// agent does not offer, so applyTurnSettings left the agent's own model in
 	// place. It is the session's model, not a switch, on later sends.
-	unofferedModel string
-	permissionMode ports.PermissionMode
+	unofferedModel    string
+	permissionMode    ports.PermissionMode
 	permissionFor     PermissionPolicy
 	initialPermission ports.PermissionMode
 	validateSettings  TurnSettingsValidator
