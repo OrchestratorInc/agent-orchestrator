@@ -2,11 +2,13 @@ package store_test
 
 import (
 	"context"
+	"errors"
 	"strings"
 	"testing"
 	"time"
 
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
+	reportsvc "github.com/aoagents/agent-orchestrator/backend/internal/service/report"
 	"github.com/aoagents/agent-orchestrator/backend/internal/storage/sqlite"
 )
 
@@ -323,3 +325,96 @@ func TestReportStoreFailBatchTransitionsToTerminalFailed(t *testing.T) {
 		t.Fatalf("claim token = %q, claimed_at = %v, want claim released", failed.ClaimToken, failed.ClaimedAt)
 	}
 }
+
+func TestReportRetryBudgetSurvivesCoordinatorAndStoreRestart(t *testing.T) {
+	ctx := context.Background()
+	dir := t.TempDir()
+	s, err := sqlite.Open(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = s.Close() })
+	seedProject(t, s, "ao")
+	worker, err := s.CreateSession(ctx, sampleRecord("ao"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	orch := sampleRecord("ao")
+	orch.Kind, orch.Mode = domain.KindOrchestrator, domain.SessionModeChat
+	if _, err := s.CreateSession(ctx, orch); err != nil {
+		t.Fatal(err)
+	}
+	now := time.Now().UTC().Truncate(time.Second)
+	if _, err := s.CreateReport(ctx, domain.ReportRecord{
+		ID: "restart-budget", SessionID: worker.ID, ProjectID: "ao", Message: "checkpoint",
+		CreatedAt: now, AvailableAt: now, DeliveryState: domain.ReportPending, RepeatCount: 1,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	delivery := &retryBudgetDelivery{err: reportsvc.ErrOrchestratorBusy}
+	newCoordinator := func() *reportsvc.Coordinator {
+		return reportsvc.NewCoordinator(reportsvc.CoordinatorDeps{
+			Store: s, Delivery: delivery, Now: func() time.Time { return now },
+			MaxDeliveryAttempts: 3, Expiry: -1,
+		})
+	}
+	c := newCoordinator()
+	// Busy retries must never consume the persisted unacknowledged budget.
+	for i := 0; i < 3; i++ {
+		if _, err := c.RunDue(ctx); err != nil {
+			t.Fatal(err)
+		}
+		now = now.Add(time.Minute)
+	}
+	delivery.err = reportsvc.ErrUnacknowledgedDelivery
+	for i := 0; i < 2; i++ {
+		if _, err := c.RunDue(ctx); !errors.Is(err, delivery.err) {
+			t.Fatalf("RunDue: %v", err)
+		}
+		rec, ok, err := s.GetReport(ctx, "restart-budget")
+		if err != nil || !ok || rec.DeliveryState != domain.ReportPending {
+			t.Fatalf("before restart: report=%+v, ok=%v, err=%v", rec, ok, err)
+		}
+		now = rec.AvailableAt
+	}
+	// A stale token must not increment the durable budget or terminate the batch.
+	if n, err := s.RetryUnacknowledgedReportBatch(ctx, "ao", "stale", now, 3, "stale"); err != nil || n != 0 {
+		t.Fatalf("stale retry: failed=%d err=%v", n, err)
+	}
+	if err := s.Close(); err != nil {
+		t.Fatal(err)
+	}
+	s, err = sqlite.Open(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	c = newCoordinator()
+	if _, err := c.RunDue(ctx); !errors.Is(err, delivery.err) {
+		t.Fatalf("RunDue after restart: %v", err)
+	}
+	rec, ok, err := s.GetReport(ctx, "restart-budget")
+	if err != nil || !ok || rec.DeliveryState != domain.ReportFailed || rec.DeliveryAttempts != 6 {
+		t.Fatalf("after restart: report=%+v, ok=%v, err=%v", rec, ok, err)
+	}
+	if c.UndeliveredCount("ao") != 1 {
+		t.Fatal("terminal transition did not record failure notice")
+	}
+	submissions := delivery.submissions
+	if _, err := c.RunDue(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if delivery.submissions != submissions {
+		t.Fatal("retried a terminal report")
+	}
+}
+
+type retryBudgetDelivery struct {
+	err         error
+	submissions int
+}
+
+func (d *retryBudgetDelivery) Submit(context.Context, domain.SessionID, string, string) error {
+	d.submissions++
+	return d.err
+}
+func (*retryBudgetDelivery) Interrupt(context.Context, domain.SessionID) error { return nil }

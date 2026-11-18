@@ -61,6 +61,7 @@ type DeliveryStore interface {
 	ReleaseReportBatch(context.Context, domain.ProjectID, string, time.Time, string) (int, error)
 	DeferReportBatch(context.Context, domain.ProjectID, string, time.Time, string) (int, error)
 	FailReportBatch(context.Context, domain.ProjectID, string, time.Time, string) (int, error)
+	RetryUnacknowledgedReportBatch(context.Context, domain.ProjectID, string, time.Time, int, string) (int, error)
 	AcquireReportInterrupt(context.Context, domain.SessionID, time.Time, time.Duration) (bool, time.Time, error)
 }
 
@@ -72,19 +73,18 @@ type Delivery interface {
 
 // Coordinator delivers durable report batches to active orchestrators.
 type Coordinator struct {
-	store                  DeliveryStore
-	delivery               Delivery
-	now                    func() time.Time
-	newToken               func() string
-	retryDelay             time.Duration
-	maxDeliveryAttempts    int
-	expiry                 time.Duration
-	onBatchFailed          func(context.Context, PreparedBatch, error)
-	unacknowledgedAttempts map[string]int
-	failureSeq             map[domain.ProjectID]int
-	failureAckedSeq        map[domain.ProjectID]int
-	wake                   chan struct{}
-	mu                     sync.Mutex
+	store               DeliveryStore
+	delivery            Delivery
+	now                 func() time.Time
+	newToken            func() string
+	retryDelay          time.Duration
+	maxDeliveryAttempts int
+	expiry              time.Duration
+	onBatchFailed       func(context.Context, PreparedBatch, error)
+	failureSeq          map[domain.ProjectID]int
+	failureAckedSeq     map[domain.ProjectID]int
+	wake                chan struct{}
+	mu                  sync.Mutex
 }
 
 // CoordinatorDeps configures durable scheduling and delivery.
@@ -122,18 +122,17 @@ func NewCoordinator(d CoordinatorDeps) *Coordinator {
 		d.Expiry = 0
 	}
 	return &Coordinator{
-		store:                  d.Store,
-		delivery:               d.Delivery,
-		now:                    d.Now,
-		newToken:               d.NewToken,
-		retryDelay:             d.RetryDelay,
-		maxDeliveryAttempts:    d.MaxDeliveryAttempts,
-		expiry:                 d.Expiry,
-		onBatchFailed:          d.OnBatchFailed,
-		unacknowledgedAttempts: make(map[string]int),
-		failureSeq:             make(map[domain.ProjectID]int),
-		failureAckedSeq:        make(map[domain.ProjectID]int),
-		wake:                   make(chan struct{}, 1),
+		store:               d.Store,
+		delivery:            d.Delivery,
+		now:                 d.Now,
+		newToken:            d.NewToken,
+		retryDelay:          d.RetryDelay,
+		maxDeliveryAttempts: d.MaxDeliveryAttempts,
+		expiry:              d.Expiry,
+		onBatchFailed:       d.OnBatchFailed,
+		failureSeq:          make(map[domain.ProjectID]int),
+		failureAckedSeq:     make(map[domain.ProjectID]int),
+		wake:                make(chan struct{}, 1),
 	}
 }
 
@@ -260,9 +259,6 @@ func (c *Coordinator) deliverProject(ctx context.Context, projectID domain.Proje
 	}
 	nAcked, err := c.store.AcknowledgeReportBatch(ctx, batch.ProjectID, batch.Token, c.now().UTC())
 	if err == nil {
-		for _, r := range batch.Reports {
-			delete(c.unacknowledgedAttempts, r.ID)
-		}
 		if nAcked > 0 && batch.UndeliveredReports > 0 && batch.FailureCheckpoint > c.failureAckedSeq[batch.ProjectID] {
 			c.failureAckedSeq[batch.ProjectID] = batch.FailureCheckpoint
 		}
@@ -366,9 +362,6 @@ func (c *Coordinator) AcceptPiggyback(ctx context.Context, batch PreparedBatch) 
 	nAcked, err := c.store.AcknowledgeReportBatch(ctx, batch.ProjectID, batch.Token, c.now().UTC())
 	if err == nil {
 		c.mu.Lock()
-		for _, r := range batch.Reports {
-			delete(c.unacknowledgedAttempts, r.ID)
-		}
 		if nAcked > 0 && batch.UndeliveredReports > 0 && batch.FailureCheckpoint > c.failureAckedSeq[batch.ProjectID] {
 			c.failureAckedSeq[batch.ProjectID] = batch.FailureCheckpoint
 		}
@@ -405,10 +398,15 @@ func (c *Coordinator) retryLater(ctx context.Context, batch PreparedBatch, cause
 	if c.isExpired(batch) {
 		return c.fail(ctx, batch, cause)
 	}
-	if isUnacknowledged(cause) && c.recordUnacknowledgedAttempt(batch) {
-		return c.fail(ctx, batch, cause)
-	}
 	delay := c.backoffDelay(batch)
+	if isUnacknowledged(cause) {
+		n, err := c.store.RetryUnacknowledgedReportBatch(ctx, batch.ProjectID, batch.Token, c.now().UTC().Add(delay), c.maxDeliveryAttempts, cause.Error())
+		if err != nil {
+			return errors.Join(cause, err)
+		}
+		c.recordFailedBatch(ctx, batch, cause, n)
+		return cause
+	}
 	_, deferErr := c.store.DeferReportBatch(ctx, batch.ProjectID, batch.Token, c.now().UTC().Add(delay), cause.Error())
 	if deferErr != nil {
 		return errors.Join(cause, deferErr)
@@ -436,16 +434,17 @@ func (c *Coordinator) fail(ctx context.Context, batch PreparedBatch, cause error
 	if failErr != nil {
 		return errors.Join(cause, failErr)
 	}
-	for _, r := range batch.Reports {
-		delete(c.unacknowledgedAttempts, r.ID)
-	}
+	c.recordFailedBatch(ctx, batch, cause, n)
+	return cause
+}
+
+func (c *Coordinator) recordFailedBatch(ctx context.Context, batch PreparedBatch, cause error, n int) {
 	if n > 0 {
 		c.failureSeq[batch.ProjectID] += n
 		if c.onBatchFailed != nil {
 			c.onBatchFailed(ctx, batch, cause)
 		}
 	}
-	return cause
 }
 
 func (c *Coordinator) isExpired(batch PreparedBatch) bool {
@@ -459,20 +458,6 @@ func (c *Coordinator) isExpired(batch PreparedBatch) bool {
 		}
 	}
 	return false
-}
-
-func (c *Coordinator) recordUnacknowledgedAttempt(batch PreparedBatch) bool {
-	if c == nil || c.maxDeliveryAttempts <= 0 {
-		return false
-	}
-	exceeded := false
-	for _, report := range batch.Reports {
-		c.unacknowledgedAttempts[report.ID]++
-		if c.unacknowledgedAttempts[report.ID] >= c.maxDeliveryAttempts {
-			exceeded = true
-		}
-	}
-	return exceeded
 }
 
 func (b PreparedBatch) maxAttempts() int64 {

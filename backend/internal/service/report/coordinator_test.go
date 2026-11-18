@@ -892,17 +892,18 @@ func TestCoordinatorOverlappingBatchesFailureNoticeCheckpoint(t *testing.T) {
 }
 
 type coordinatorStore struct {
-	mu            sync.Mutex
-	now           time.Time
-	reports       []domain.ReportRecord
-	sessions      []domain.SessionRecord
-	interrupts    map[domain.SessionID]time.Time
-	acked         int
-	failReportErr error
+	unacknowledgedAttempts map[string]int
+	mu                     sync.Mutex
+	now                    time.Time
+	reports                []domain.ReportRecord
+	sessions               []domain.SessionRecord
+	interrupts             map[domain.SessionID]time.Time
+	acked                  int
+	failReportErr          error
 }
 
 func newCoordinatorStore(now time.Time) *coordinatorStore {
-	return &coordinatorStore{now: now, interrupts: map[domain.SessionID]time.Time{}}
+	return &coordinatorStore{unacknowledgedAttempts: map[string]int{}, now: now, interrupts: map[domain.SessionID]time.Time{}}
 }
 
 func reportAt(id string, worker domain.SessionID, created, available time.Time, note string) domain.ReportRecord {
@@ -1014,6 +1015,23 @@ func (s *coordinatorStore) FailReportBatch(_ context.Context, project domain.Pro
 	}
 	return count, nil
 }
+func (s *coordinatorStore) RetryUnacknowledgedReportBatch(ctx context.Context, project domain.ProjectID, token string, at time.Time, limit int, reason string) (int, error) {
+	s.mu.Lock()
+	exceeded := false
+	for _, rec := range s.reports {
+		if rec.ProjectID == project && rec.DeliveryState == domain.ReportClaimed && rec.ClaimToken == token {
+			s.unacknowledgedAttempts[rec.ID]++
+			exceeded = exceeded || s.unacknowledgedAttempts[rec.ID] >= limit
+		}
+	}
+	s.mu.Unlock()
+	if exceeded {
+		return s.FailReportBatch(ctx, project, token, at, reason)
+	}
+	_, err := s.DeferReportBatch(ctx, project, token, at, reason)
+	return 0, err
+}
+
 func (s *coordinatorStore) DeferReportBatch(ctx context.Context, project domain.ProjectID, token string, at time.Time, reason string) (int, error) {
 	count, err := s.ReleaseReportBatch(ctx, project, token, at, reason)
 	if err != nil {
