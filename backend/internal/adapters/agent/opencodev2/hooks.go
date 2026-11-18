@@ -54,10 +54,11 @@ func (p *Plugin) GetAgentHooks(ctx context.Context, cfg ports.WorkspaceHookConfi
 	if err := hookutil.EnsureWorkspaceGitignore(filepath.Dir(path), v2PluginFileName); err != nil {
 		return fmt.Errorf("opencodev2.GetAgentHooks: gitignore plugin: %w", err)
 	}
-	// The session config lives one directory above the plugin. Ignore it from
-	// its own directory; EnsureWorkspaceGitignore leaves a .gitignore another
-	// installer owns untouched instead of dropping its entries.
-	if err := hookutil.EnsureWorkspaceGitignore(filepath.Join(cfg.WorkspacePath, ".opencode"), projectConfigFileName); err != nil {
+	// The session config lives one directory above the plugin. Ignore it and
+	// the temp name it is staged under from its own directory;
+	// EnsureWorkspaceGitignore leaves a .gitignore another installer owns
+	// untouched instead of dropping its entries.
+	if err := hookutil.EnsureWorkspaceGitignore(filepath.Join(cfg.WorkspacePath, ".opencode"), projectConfigFileName, projectConfigTempPattern); err != nil {
 		return fmt.Errorf("opencodev2.GetAgentHooks: gitignore project config: %w", err)
 	}
 	if err := opencode.InstallUsingAOSkill(cfg.WorkspacePath); err != nil {

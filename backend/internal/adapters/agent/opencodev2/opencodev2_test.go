@@ -59,7 +59,7 @@ func sharedWorkspace(t *testing.T) string {
 	}
 	// Mirrors the ignore file AO installs: the file ignores itself so a fresh
 	// worktree stays clean apart from the project config.
-	if err := os.WriteFile(filepath.Join(configDir, ".gitignore"), []byte("/.gitignore\n/"+projectConfigFileName+"\n"), 0o600); err != nil {
+	if err := os.WriteFile(filepath.Join(configDir, ".gitignore"), []byte("/.gitignore\n/"+projectConfigFileName+"\n/"+projectConfigTempPattern+"\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	return dir
@@ -809,6 +809,64 @@ func TestPrepareSharedServerRequiresEffectiveGitignore(t *testing.T) {
 	}
 }
 
+func TestPrepareSharedServerRequiresEffectiveTempIgnore(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("POSIX git fixture")
+	}
+	if _, err := exec.LookPath("git"); err != nil {
+		t.Skip("git is required")
+	}
+	binary := fakeBinary(t, "2.0.0")
+	workspace := sharedWorkspace(t)
+	// A .gitignore that ignores the config but not the staging name would let a
+	// concurrent `git add -A` stage the temp file, so sharing stays off.
+	configIgnore := "/.gitignore\n/" + projectConfigFileName + "\n"
+	if err := os.WriteFile(filepath.Join(workspace, ".opencode", ".gitignore"), []byte(configIgnore), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	configPath := filepath.Join(workspace, ".opencode", projectConfigFileName)
+	_, err := prepareSharedServer(context.Background(), binary, ports.LaunchConfig{
+		DataDir:       t.TempDir(),
+		WorkspacePath: workspace,
+		SessionID:     "sess/temp-ignore",
+	}, t.TempDir(), `{"default_agent":"ao-temp-ignore"}`)
+	if err == nil || !strings.Contains(err.Error(), ".ao-tmp-") {
+		t.Fatalf("prepareSharedServer error = %v, want the temp-ignore guard", err)
+	}
+	if _, statErr := os.Stat(configPath); !errors.Is(statErr, os.ErrNotExist) {
+		t.Fatalf("project config was published without an ignored temp name: %v", statErr)
+	}
+}
+
+func TestPrepareSharedServerFailsClosedOnGitIndexError(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("POSIX git fixture")
+	}
+	if _, err := exec.LookPath("git"); err != nil {
+		t.Skip("git is required")
+	}
+	binary := fakeBinary(t, "2.0.0")
+	workspace := sharedWorkspace(t)
+	// A corrupt index makes ls-files fail; that says nothing about whether the
+	// config is tracked, so publication must fail closed instead of assuming
+	// "untracked".
+	if err := os.WriteFile(filepath.Join(workspace, ".git", "index"), []byte("corrupt index"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	configPath := filepath.Join(workspace, ".opencode", projectConfigFileName)
+	_, err := prepareSharedServer(context.Background(), binary, ports.LaunchConfig{
+		DataDir:       t.TempDir(),
+		WorkspacePath: workspace,
+		SessionID:     "sess/corrupt-index",
+	}, t.TempDir(), `{"default_agent":"ao-corrupt-index"}`)
+	if err == nil || !strings.Contains(err.Error(), "list tracked") {
+		t.Fatalf("prepareSharedServer error = %v, want the ls-files failure", err)
+	}
+	if _, statErr := os.Stat(configPath); !errors.Is(statErr, os.ErrNotExist) {
+		t.Fatalf("project config was published despite an unreadable index: %v", statErr)
+	}
+}
+
 func TestPrepareSharedServerRejectsTrackedConfig(t *testing.T) {
 	if runtime.GOOS == "windows" {
 		t.Skip("POSIX git fixture")
@@ -1172,14 +1230,14 @@ func TestGetAgentHooksIgnoresProjectConfigInItsOwnDir(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !strings.Contains(string(configIgnore), "/"+projectConfigFileName) {
+	if !strings.Contains(string(configIgnore), "/"+projectConfigFileName) || !strings.Contains(string(configIgnore), "/"+projectConfigTempPattern) {
 		t.Fatalf(".opencode/.gitignore = %q", configIgnore)
 	}
 	pluginIgnore, err := os.ReadFile(filepath.Join(workspace, ".opencode", "plugins", ".gitignore"))
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !strings.Contains(string(pluginIgnore), "/"+v2PluginFileName) || strings.Contains(string(pluginIgnore), "/"+projectConfigFileName) {
+	if !strings.Contains(string(pluginIgnore), "/"+v2PluginFileName) || strings.Contains(string(pluginIgnore), "/"+projectConfigFileName) || strings.Contains(string(pluginIgnore), "/"+projectConfigTempPattern) {
 		t.Fatalf(".opencode/plugins/.gitignore = %q", pluginIgnore)
 	}
 }
