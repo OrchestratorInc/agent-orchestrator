@@ -193,6 +193,14 @@ type AppState = {
 	 * Read it through useMachineFreshness or FreshnessLine, which own the clock.
 	 */
 	getLastSyncAt: () => number;
+	/**
+	 * The selected machine and its last sync, the same in every scope. HostScope
+	 * and Cloud repoint `currentHostId` and `getLastSyncAt` at the machine their
+	 * screen is about, but freshness is judged for every paired machine at once,
+	 * and the selected one's snapshot trails its polls: it has to be read here.
+	 */
+	primaryHostId: string | undefined;
+	getPrimaryLastSyncAt: () => number;
 	// actions
 	/**
 	 * Races the selected machine's endpoints. Null means none passed the host
@@ -1373,6 +1381,8 @@ export function AppProvider({ children }: { children: ReactNode }) {
 			phoneOffline,
 			phoneNetwork,
 			getLastSyncAt,
+			primaryHostId: selectedHostId ?? undefined,
+			getPrimaryLastSyncAt: getLastSyncAt,
 			reloadConfig,
 			switchHost,
 			refresh,

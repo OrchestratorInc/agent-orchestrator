@@ -22,15 +22,17 @@ const NO_FRESHNESS: ReadonlyMap<string, MachineFreshness> = new Map();
  * the board's data changes, so on a quiet board it trails the real polls and
  * would call a healthy machine stale.
  */
-export function readFleetFreshness(app: Pick<Store, "hostStates" | "phoneNetwork" | "currentHostId" | "getLastSyncAt">, now: number): Map<string, MachineFreshness> {
+export function readFleetFreshness(app: Pick<Store, "hostStates" | "phoneNetwork" | "primaryHostId" | "getPrimaryLastSyncAt">, now: number): Map<string, MachineFreshness> {
+	// The unscoped pair: inside a HostScope for another machine, `currentHostId`
+	// names that machine and the selected one would read its trailing snapshot.
 	const hosts = app.hostStates.map((host) =>
-		host.hostId === app.currentHostId ? { ...host, lastSyncAt: app.getLastSyncAt() } : host);
+		host.hostId === app.primaryHostId ? { ...host, lastSyncAt: app.getPrimaryLastSyncAt() } : host);
 	return freshnessByHost(hosts, app.phoneNetwork ?? UNKNOWN_PHONE_NETWORK, now);
 }
 
 /**
- * Each paired machine's freshness, by host id. Machines that are live are
- * left out, so a lookup that finds nothing means "live".
+ * Each paired machine's freshness, by host id. While every machine is live
+ * the map is empty, so a lookup that finds nothing means "live" too.
  *
  * Checks the clock every tick, but re-renders its caller only when some
  * machine's state changes: the board and its rows must not redraw on a timer.
