@@ -389,9 +389,15 @@ func TestStopKeepsHiddenWaitWhenPIDNumberIsReused(t *testing.T) {
 	deps := hiddenPIDDeps()
 	// Hidden until inspection has verified the daemon (its last step is
 	// /readyz); after that an unrelated process holds the same PID number.
-	deps.ProcessAlive = func(int) bool { return d.readyCalls.Load() > 0 }
+	var afterInspection atomic.Int32
+	deps.ProcessAlive = func(int) bool {
+		if d.readyCalls.Load() == 0 {
+			return false
+		}
+		afterInspection.Add(1)
+		return true
+	}
 
-	start := time.Now()
 	out, _, err := executeCLI(t, deps, "stop", "--json", "--timeout", "5s")
 	if err != nil {
 		t.Fatal(err)
@@ -399,7 +405,8 @@ func TestStopKeepsHiddenWaitWhenPIDNumberIsReused(t *testing.T) {
 	if !strings.Contains(out, `"state": "stopped"`) || !d.shutdownOK.Load() {
 		t.Fatalf("stop did not stop the hidden daemon:\n%s", out)
 	}
-	if elapsed := time.Since(start); elapsed > 3*time.Second {
-		t.Fatalf("stop took %s: it waited on the reused PID instead of the run-file", elapsed)
+	// Any PID check after inspection would be acting on the reused number.
+	if got := afterInspection.Load(); got != 0 {
+		t.Fatalf("stop checked the PID %d time(s) after inspection, want 0", got)
 	}
 }
