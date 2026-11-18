@@ -68,8 +68,6 @@ func (s *Store) ListPRFactsForSessions(ctx context.Context, ids []domain.Session
 	return out, nil
 }
 
-// prFactsFromListRow maps a PR-facts row. The batch query selects the same
-// columns in the same order, so its rows convert to this type.
 // ListPRStateTimes maps each session owning a PR in state to when its newest
 // such PR reached it: the recorded state change, or the PR's last update for a
 // row stored before state changes were timed.
@@ -92,6 +90,8 @@ func (s *Store) ListPRStateTimes(ctx context.Context, state domain.PRState) (map
 	return out, nil
 }
 
+// prFactsFromListRow maps a PR-facts row. The batch query selects the same
+// columns in the same order, so its rows convert to this type.
 func prFactsFromListRow(r gen.ListPRFactsBySessionRow) domain.PRFacts {
 	return domain.PRFacts{
 		URL:                      r.URL,
