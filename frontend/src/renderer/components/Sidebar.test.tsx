@@ -16,6 +16,7 @@ import userEvent from "@testing-library/user-event";
 import { useSyncExternalStore } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { components } from "../../api/schema";
+import type { DaemonStatus } from "../../shared/daemon-status";
 import {
 	Sidebar,
 	SIDEBAR_DEFAULT_WIDTH,
@@ -33,6 +34,8 @@ import { agentReadiness } from "../test/agent-readiness-fixtures";
 import { sessionInterfaceTransitionStatus } from "../test/interface-transition-fixtures";
 import { useUiStore } from "../stores/ui-store";
 import { aoBridge } from "../lib/bridge";
+import { newChatDraftScope, readChatSessionDraft } from "../lib/chat-drafts";
+import { REPORT_PROBLEM_PROMPT } from "../lib/report-problem";
 import { useSidebarOrderStore } from "../stores/sidebar-order-store";
 import { useSessionImportStore } from "../stores/session-import-store";
 import { sessionInterfaceTransitionQueryKey } from "../hooks/useSessionInterfaceTransition";
@@ -52,6 +55,12 @@ type DragOverTestEvent = {
 	delta: { x: number; y: number };
 	over: { id: string; rect: { height: number; top: number } } | null;
 };
+
+const reportDaemonState = vi.hoisted(() => ({ current: "ready" as DaemonStatus["state"] }));
+vi.mock("../lib/shell-context", async (importOriginal) => ({
+	...await importOriginal<typeof import("../lib/shell-context")>(),
+	useShellMaybe: () => ({ daemonStatus: { state: reportDaemonState.current } }),
+}));
 
 const {
 	checkUpdateMock,
@@ -542,6 +551,7 @@ function fireDrag(
 
 beforeEach(() => {
 	window.localStorage.clear();
+	reportDaemonState.current = "ready";
 	useSidebarOrderStore.setState({ projectOrder: [], pendingCreatedProjectIds: [], pinnedProjectIds: [], sessionOrders: {} });
 	useSessionImportStore.setState({ importedCounts: {} });
 	dragEnds.clear();
@@ -563,6 +573,7 @@ beforeEach(() => {
 		isCommandPaletteOpen: false,
 		newTaskRequest: null,
 		settingsModal: null,
+		globalToast: null,
 		provisioningProjectIds: new Set(),
 		restartingProjectIds: new Set(),
 		updateInstallPromptOpen: false,
@@ -2678,7 +2689,7 @@ describe("Sidebar", () => {
 		expect(screen.queryAllByRole("button", { name: "Report a bug", hidden: true })).toHaveLength(0);
 	});
 
-	it("shows Report a bug on nightly and opens the existing report settings page", async () => {
+	it("shows Report a bug on nightly and starts the report agent without opening Settings", async () => {
 		const user = userEvent.setup();
 		cloudSessionState.configured = true;
 		cloudSessionState.status = "authenticated";
@@ -2690,8 +2701,22 @@ describe("Sidebar", () => {
 		await user.hover(report);
 		expect(await screen.findByRole("tooltip")).toHaveTextContent("Report a bug");
 		await user.click(report);
-		expect(useUiStore.getState().settingsModal).toEqual({ scope: "global", section: "help" });
+		expect(useUiStore.getState().newTaskRequest).toMatchObject({ projectId: STANDALONE_WORKSPACE_ID, report: true });
+		expect(readChatSessionDraft(newChatDraftScope()).composer.text).toBe(REPORT_PROBLEM_PROMPT);
+		expect(useUiStore.getState().settingsModal).toBeNull();
 		expect(navigateMock).not.toHaveBeenCalled();
+	});
+
+	it.each(["ready", "stopped"] as const)("shows Report a bug failures when the daemon is %s", async (state) => {
+		reportDaemonState.current = state;
+		const launch = vi.spyOn(aoBridge.triage, "launch").mockResolvedValue({ ok: false, error: "report.failed" });
+		renderSidebar({ seed: (client) => client.setQueryData(["app-version"], "0.14.11-nightly.202611170300") });
+		if (state === "ready") vi.spyOn(window.localStorage, "setItem").mockImplementation(() => { throw new Error("quota"); });
+		await userEvent.click(screen.getByRole("button", { name: "Report a bug" }));
+		expect(useUiStore.getState().globalToast).toMatchObject({ body: "Could not start the report. Try again.", tone: "error" });
+		expect(launch).toHaveBeenCalledTimes(state === "stopped" ? 1 : 0);
+		expect(useUiStore.getState().newTaskRequest).toBeNull();
+		expect(useUiStore.getState().settingsModal).toBeNull();
 	});
 
 	it("keeps Report a bug hidden until the installed version is known", async () => {
