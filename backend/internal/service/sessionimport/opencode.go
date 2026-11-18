@@ -12,6 +12,7 @@ import (
 
 	_ "modernc.org/sqlite" // read-only SQLite driver for OpenCode's session store
 
+	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/agent/opencode"
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
 )
 
@@ -51,7 +52,7 @@ func openCodeDB(root string) (*sql.DB, error) {
 		return nil, err
 	}
 	// mode=ro never creates or migrates; busy_timeout rides out OpenCode's writes.
-	return sql.Open("sqlite", "file:"+filepath.ToSlash(path)+"?mode=ro&_pragma=busy_timeout(2000)")
+	return sql.Open("sqlite", opencode.ReadOnlyDSN(path, 2000))
 }
 
 // discoverOpenCode lists top-level, non-archived conversations newest first. A
@@ -129,8 +130,8 @@ func openCodeMessageText(ctx context.Context, db *sql.DB, sessionID string) (map
 	defer func() { _ = rows.Close() }()
 	textByMessage := map[string]string{}
 	shortened := false
-	// As Claude and Pi do, drop the oldest text once the held text passes
-	// maxClaudeHeld, so a huge session is not held whole; the opening message
+	// As the JSONL readers do, drop the oldest text once the held text passes
+	// maxHeldText, so a huge session is not held whole; the opening message
 	// stays, and a dropped message's later parts stay dropped.
 	var order []string
 	dropped := map[string]bool{}
@@ -163,7 +164,7 @@ func openCodeMessageText(ctx context.Context, db *sql.DB, sessionID string) (map
 			held += len(chunk)
 			order = append(order, messageID)
 		}
-		for ; held > maxClaudeHeld && drop < len(order); drop++ {
+		for ; held > maxHeldText && drop < len(order); drop++ {
 			if drop == 0 {
 				continue // the opening message stays
 			}
@@ -196,7 +197,7 @@ func readOpenCodeTranscript(ctx context.Context, root string, paths ...string) (
 		return t, err
 	}
 	if db == nil {
-		return t, errors.New("no readable native conversation")
+		return t, errNoReadableConversation
 	}
 	defer func() { _ = db.Close() }()
 
@@ -209,7 +210,7 @@ func readOpenCodeTranscript(ctx context.Context, root string, paths ...string) (
 		SELECT directory, title, parent_id, time_updated, time_archived
 		FROM session WHERE id = ?`, sessionID).Scan(&directory, &title, &parentID, &timeUpdated, &archived)
 	if errors.Is(err, sql.ErrNoRows) {
-		return t, errors.New("no readable native conversation")
+		return t, errNoReadableConversation
 	}
 	if err != nil {
 		return t, err
@@ -260,7 +261,7 @@ func readOpenCodeTranscript(ctx context.Context, root string, paths ...string) (
 		if at.After(t.last) && at.Before(now.Add(time.Hour)) {
 			t.last = at
 		}
-		items = append(items, tagged{Message: Message{Role: domain.MessageRole(role.String), Text: text, At: at}, kind: "opencode", id: id})
+		items = append(items, tagged{Message: Message{Role: domain.MessageRole(role.String), Text: text, At: at}})
 	}
 	if err := msgRows.Err(); err != nil {
 		return t, err
@@ -277,34 +278,19 @@ func readOpenCodeTranscript(ctx context.Context, root string, paths ...string) (
 		t.messages = append(t.messages, item.Message)
 	}
 	if !hasUser {
-		return t, errors.New("no readable native conversation")
-	}
-	if t.cwd != "" && !filepath.IsAbs(t.cwd) {
-		return t, errors.New("transcript working directory must be absolute")
+		return t, errNoReadableConversation
 	}
 	if t.last.IsZero() && timeUpdated.Valid {
 		t.last = time.UnixMilli(timeUpdated.Int64)
 	}
-	for i := range t.messages {
-		if t.messages[i].At.IsZero() {
-			t.messages[i].At = t.last
-		}
-	}
 	// OpenCode titles an untitled chat "New session - <ISO>"; treat that
 	// placeholder as no title and fall back to the opening prompt.
-	t.title = strings.TrimSpace(title)
-	if t.title == "" || strings.HasPrefix(t.title, "New session - ") {
+	if t.title = strings.TrimSpace(title); strings.HasPrefix(t.title, "New session - ") {
 		t.title = ""
-		for _, m := range t.messages {
-			if m.Role == domain.MessageRoleUser {
-				t.title = m.Text
-				break
-			}
-		}
 	}
-	t.title = strings.Join(strings.Fields(t.title), " ")
-	if runes := []rune(t.title); len(runes) > 100 {
-		t.title = string(runes[:100]) + "…"
+	if err := finishTranscript(&t); err != nil {
+		return t, err
 	}
-	return t, nil
+	t.fingerprint, err = opencode.NativeSessionFingerprint(ctx, db, sessionID)
+	return t, err
 }

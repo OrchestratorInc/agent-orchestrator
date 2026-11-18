@@ -10,12 +10,12 @@ export function GlobalSettingsForm({
 	cloudEnabled = true,
 	customCoder = false,
 	selfServeBilling = false,
+	teams = "none",
 	focusAgentId,
 	hostId,
 	harnessView,
 	startLogin,
 	showDiagnostics,
-	harnessTab,
 	section = "all",
 }: {
 	cloudEnabled?: boolean;
@@ -23,19 +23,19 @@ export function GlobalSettingsForm({
 	customCoder?: boolean;
 	/** The org is on self-serve billing. */
 	selfServeBilling?: boolean;
+	/** What the Teams page offers (SettingsDialog reads the offering and the person's teams). */
+	teams?: "manage" | "member" | "none";
 	focusAgentId?: string;
 	hostId?: string;
 	harnessView?: "local" | "cloud";
 	startLogin?: boolean;
 	showDiagnostics?: HarnessDiagnosticsRequest;
-	harnessTab?: "import";
 	section?: GlobalSettingsSection;
 }) {
 	const { t } = useTranslation();
-	const developerMode = useUiStore((state) => state.developerMode);
 	const diagnostics = useUiStore((state) => state.developerMode && state.diagnostics);
 	const all = section === "all";
-	const context = { cloudEnabled, developerMode, diagnostics, customCoder, selfServeBilling, focusAgentId, hostId, harnessView, startLogin, showDiagnostics, harnessTab, singlePage: !all };
+	const context = { cloudEnabled, diagnostics, customCoder, selfServeBilling, teams, focusAgentId, hostId, harnessView, startLogin, showDiagnostics, singlePage: !all };
 	const items = globalSettingsItemsFor(section, context);
 	// On a single page the pane's title names it; SettingsSection hides only a
 	// heading that would repeat that title, so other section headings show.

@@ -34,8 +34,7 @@ func TestRingAppendPartialThenComplete(t *testing.T) {
 // TestRingExceedsMaxOutputLines verifies the buffer trims to MaxOutputLines.
 func TestRingExceedsMaxOutputLines(t *testing.T) {
 	r := NewRing()
-	// Push 1005 lines.
-	for i := 0; i < 1005; i++ {
+	for i := 0; i < MaxOutputLines+5; i++ {
 		r.Append([]byte("x\n"))
 	}
 
@@ -43,6 +42,33 @@ func TestRingExceedsMaxOutputLines(t *testing.T) {
 	got := strings.Count(string(snap), "\n")
 	if got != MaxOutputLines {
 		t.Errorf("stored %d lines, want %d", got, MaxOutputLines)
+	}
+	r = NewRingOfLines(5000)
+	for i := 0; i < 5005; i++ {
+		r.Append([]byte("x\n"))
+	}
+	if got := strings.Count(string(r.Snapshot()), "\n"); got != 5000 {
+		t.Errorf("ring of 5000 lines stored %d", got)
+	}
+}
+
+func TestRingTrimsToMaxOutputBytes(t *testing.T) {
+	r := NewRingOfLines(5000)
+	line := strings.Repeat("y", 1023) + "\n"
+	for i := 0; i < 2000; i++ {
+		r.Append([]byte(line))
+	}
+	r.Append([]byte("last\n"))
+
+	snap := string(r.Snapshot())
+	if len(snap) > MaxOutputBytes {
+		t.Fatalf("stored %d bytes, want at most %d", len(snap), MaxOutputBytes)
+	}
+	if len(snap) < MaxOutputBytes-len(line) {
+		t.Fatalf("stored %d bytes, trimmed more than needed", len(snap))
+	}
+	if !strings.HasSuffix(snap, "last\n") {
+		t.Fatalf("newest line dropped: %q", snap[len(snap)-20:])
 	}
 }
 
@@ -167,4 +193,19 @@ func TestRingConcurrent(t *testing.T) {
 	}
 
 	wg.Wait()
+}
+
+func TestRingBoundsNewlineFreeOutput(t *testing.T) {
+	r := NewRing()
+	chunk := strings.Repeat("a", MaxOutputBytes)
+	r.Append([]byte("line\n"))
+	r.Append([]byte(chunk))
+	r.Append([]byte(strings.Repeat("b", MaxOutputBytes/2)))
+	got := r.Replay()
+	if len(got) > MaxOutputBytes {
+		t.Fatalf("replay = %d bytes, want at most %d", len(got), MaxOutputBytes)
+	}
+	if !strings.HasSuffix(string(got), strings.Repeat("b", MaxOutputBytes/2)) {
+		t.Fatal("replay lost the newest output")
+	}
 }

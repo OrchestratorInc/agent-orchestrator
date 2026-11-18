@@ -1,6 +1,14 @@
 import { describe, expect, it } from "vitest";
 import type { components } from "../../api/schema";
-import { buildRankedAgentOptions, defaultAuthorizedAgentForRole, isLaunchableAgent, type RoleSession } from "./agent-select-options";
+import {
+	buildRankedAgentOptions,
+	defaultAuthorizedAgentForRole,
+	defaultProjectAgents,
+	isLaunchableAgent,
+	preferredAgentList,
+	preferredAgentNeedsChecks,
+	type RoleSession,
+} from "./agent-select-options";
 
 type Agent = components["schemas"]["AgentReadinessSnapshot"];
 
@@ -258,5 +266,92 @@ describe("defaultAuthorizedAgentForRole", () => {
 	it("stays usable when Claude Code is unavailable", () => {
 		expect(defaultAuthorizedAgentForRole([agent("codex")], [], "worker")).toBe("codex");
 		expect(defaultAuthorizedAgentForRole([], [], "worker")).toBe("");
+	});
+});
+
+describe("preferredAgentList", () => {
+	it("orders ready agents by how well AO integrates them", () => {
+		expect(preferredAgentList([agent("aider"), agent("codex"), agent("claude-code")])).toEqual([
+			"claude-code",
+			"codex",
+			"aider",
+		]);
+	});
+
+	it("puts installed, signed-in agents ahead of ones AO has not checked yet", () => {
+		expect(preferredAgentList([agent("claude-code", "unknown", "unknown"), agent("codex")])).toEqual([
+			"codex",
+			"claude-code",
+		]);
+	});
+
+	it("counts a configured credential as signed in", () => {
+		expect(preferredAgentList([agent("claude-code", "installed", "unknown"), agent("codex", "installed", "configured")])).toEqual([
+			"codex",
+			"claude-code",
+		]);
+	});
+
+	it("leaves out agents that are missing or signed out", () => {
+		expect(
+			preferredAgentList([agent("claude-code", "not_installed"), agent("codex", "installed", "unauthorized"), agent("cursor")]),
+		).toEqual(["cursor"]);
+	});
+
+	it("ranks agents outside AO's priority list after the ones in it", () => {
+		expect(preferredAgentList([agent("goose"), agent("aider")])).toEqual(["aider", "goose"]);
+	});
+});
+
+describe("preferredAgentNeedsChecks", () => {
+	it("waits for checks when nothing has been checked yet", () => {
+		expect(preferredAgentNeedsChecks([agent("claude-code", "unknown", "unknown"), agent("codex", "unknown", "unknown")])).toBe(true);
+	});
+
+	it("waits for checks when a more preferred agent could still outrank the confirmed one", () => {
+		expect(preferredAgentNeedsChecks([agent("claude-code", "unknown", "unknown"), agent("codex")])).toBe(true);
+	});
+
+	it("ranks right away once the most preferred usable agent is confirmed", () => {
+		expect(preferredAgentNeedsChecks([agent("claude-code"), agent("codex", "unknown", "unknown")])).toBe(false);
+		expect(preferredAgentNeedsChecks([agent("claude-code", "not_installed"), agent("codex", "installed", "configured")])).toBe(false);
+		expect(preferredAgentNeedsChecks([])).toBe(false);
+	});
+});
+
+describe("defaultProjectAgents", () => {
+	it("starts every role on the most preferred agent", () => {
+		expect(defaultProjectAgents([agent("claude-code", "not_installed"), agent("codex")])).toEqual({
+			workerAgent: "codex",
+			orchestratorAgent: "codex",
+			reviewerAgent: "codex",
+		});
+	});
+
+	it("reviews with the most preferred unattended-safe reviewer when the top agent is not one", () => {
+		expect(defaultProjectAgents([agent("cursor"), agent("opencode"), agent("codex", "unknown", "unknown")])).toEqual({
+			workerAgent: "cursor",
+			orchestratorAgent: "cursor",
+			reviewerAgent: "opencode",
+		});
+		// A ready reviewer outranks one AO has not checked yet.
+		expect(defaultProjectAgents([agent("cursor"), agent("opencode", "unknown", "unknown"), agent("kimchi")]).reviewerAgent).toBe("kimchi");
+	});
+
+	it("reviews with Claude Code when no unattended-safe reviewer is usable", () => {
+		expect(defaultProjectAgents([agent("cursor"), agent("codex", "not_installed")])).toEqual({
+			workerAgent: "cursor",
+			orchestratorAgent: "cursor",
+			reviewerAgent: "claude-code",
+		});
+		expect(defaultProjectAgents([agent("goose")]).reviewerAgent).toBe("claude-code");
+	});
+
+	it("falls back to Claude Code when no agent is usable", () => {
+		expect(defaultProjectAgents([])).toEqual({
+			workerAgent: "claude-code",
+			orchestratorAgent: "claude-code",
+			reviewerAgent: "claude-code",
+		});
 	});
 });

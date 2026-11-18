@@ -39,6 +39,7 @@ export interface Settings {
 	computerUse?: boolean;
 	/** Days an archived session with a released worktree is kept before the daemon deletes it; 0 keeps it. */
 	sessionRetentionDays?: number;
+	accountHandoff?: boolean;
 }
 
 const settingsReadTimeoutMs = 10_000;
@@ -81,6 +82,7 @@ export function useSettings(hostId?: string, enabled = true) {
 				computerUse: data?.computerUse ?? false,
 				// Absent on a daemon that predates retention, which keeps every session.
 				sessionRetentionDays: data?.sessionRetentionDays,
+				accountHandoff: data?.accountHandoff ?? false,
 			};
 		},
 	});
@@ -171,6 +173,26 @@ export function useUpdateSessionRetention() {
 
 	return {
 		update: (days: number) => mutation.mutate(days),
+		saving: mutation.isPending,
+		error: mutation.error ? apiErrorMessage(mutation.error) : undefined,
+	};
+}
+
+export function useUpdateAccountHandoff() {
+	const queryClient = useQueryClient();
+	const mutation = useMutation({
+		mutationFn: async (enabled: boolean) => {
+			const { data, error } = await apiClient.PATCH("/api/v1/settings/account-handoff", {
+				body: { enabled },
+			});
+			if (error) throw error;
+			return data;
+		},
+		onSuccess: () => queryClient.invalidateQueries({ queryKey: settingsQueryKey }),
+	});
+
+	return {
+		update: (enabled: boolean) => mutation.mutate(enabled),
 		saving: mutation.isPending,
 		error: mutation.error ? apiErrorMessage(mutation.error) : undefined,
 	};

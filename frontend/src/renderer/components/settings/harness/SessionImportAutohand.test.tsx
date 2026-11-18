@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { IMPORTABLE_AGENTS } from "./SessionImportPanel";
+import { IMPORTABLE_AGENTS } from "../../../lib/session-import-agents";
 
 describe("Autohand session import", () => {
 	it("offers the Terminal harness", () => {

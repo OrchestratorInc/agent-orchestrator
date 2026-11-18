@@ -1,5 +1,5 @@
 -- name: FindImportedSession :one
--- Matches the sessions_import_identity expressions, so this is an index search.
+-- Matches the sessions_import_identity expressions and predicate, so this is an index search.
 -- A terminated session no longer holds the conversation.
 SELECT id FROM sessions
 WHERE import_source <> '' AND is_terminated = 0

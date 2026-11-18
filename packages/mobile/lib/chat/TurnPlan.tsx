@@ -20,13 +20,13 @@ import { type LayoutChangeEvent, type NativeScrollEvent, type NativeSyntheticEve
 import Animated, { useAnimatedStyle, useSharedValue, withTiming } from "react-native-reanimated";
 import Svg, { Circle, Defs, LinearGradient, Path, Rect, Stop } from "react-native-svg";
 
-import { haptics } from "../haptics";
 import { Feather } from "../icons";
 import { LAYOUT_MS } from "../motion";
 import type { Theme } from "../theme";
 import { useTheme, useThemedStyles } from "../ThemeProvider";
-import { font, fontScaleCap, press, radius, space, type } from "../tokens";
-import { Spinning } from "../ui";
+import { usePressFeedback } from "../pressFeedback";
+import { font, fontScaleCap, radius, space, type } from "../tokens";
+import { Spinner } from "../Spinner";
 import { useReducedMotion } from "../useReducedMotion";
 import {
 	activePlanStep,
@@ -56,6 +56,7 @@ export const TurnPlan = memo(TurnPlanPanel, samePlanProps);
 function TurnPlanPanel({ plan, live }: TurnPlanProps) {
 	const t = useTheme();
 	const styles = useThemedStyles(makeStyles);
+	const feedback = usePressFeedback("row");
 	const reduceMotion = useReducedMotion();
 	const steps = plan.steps;
 	const done = steps.filter((step) => step.status === "completed").length;
@@ -148,11 +149,9 @@ function TurnPlanPanel({ plan, live }: TurnPlanProps) {
 				accessibilityState={{ expanded, busy: Boolean(live) && !allDone }}
 				accessibilityLabel={planAccessibilityLabel(steps)}
 				accessibilityHint={expanded ? "Collapses the plan" : "Expands the plan"}
-				onPress={() => {
-					haptics.tap();
-					setExpanded((open) => !open);
-				}}
-				style={({ pressed }) => [styles.header, pressed && { opacity: press.opacity }]}
+				onPress={() => setExpanded((open) => !open)}
+				android_ripple={feedback.android_ripple}
+				style={({ pressed }) => [styles.header, pressed && feedback.pressed]}
 			>
 				<PlanMark done={allDone} />
 				<Text numberOfLines={1} maxFontSizeMultiplier={fontScaleCap.chrome} style={styles.title}>Plan</Text>
@@ -269,17 +268,17 @@ function StepMark({ status, live, slotHeight }: { status: PlanStep["status"]; li
 					<Circle cx={8} cy={8} r={6.75} fill="none" stroke={t.textFaint} strokeWidth={1.25} strokeDasharray="2.6 2.7" />
 				</Svg>
 			) : status === "in_progress" ? (
-				// In progress: a faint ring with an arc turning round it, neutral like the
-				// turn's own Working indicator. It turns only while the turn runs: a turn
-				// that is stopped or fails, and a plan the agent keeps across turns, leave a
-				// step in progress, and a spinner there would say the agent is still at it.
-				// Held still under Reduce Motion too.
-				<Spinning enabled={live}>
+				// In progress: the system spinner, neutral like the turn's own Working
+				// indicator, only while the turn runs: a turn that is stopped or fails, and
+				// a plan the agent keeps across turns, leave a step in progress, and a
+				// spinner there would say the agent is still at it. Otherwise a faint ring
+				// with an arc on it.
+				live ? <Spinner size={16} color={t.textSecondary} /> : (
 					<Svg width={16} height={16} viewBox="0 0 16 16">
 						<Circle cx={8} cy={8} r={6.75} fill="none" stroke={t.textPrimary} strokeOpacity={0.18} strokeWidth={1.5} />
 						<Circle cx={8} cy={8} r={6.75} fill="none" stroke={t.textPrimary} strokeWidth={1.5} strokeLinecap="round" strokeDasharray="12 43" />
 					</Svg>
-				</Spinning>
+				)
 			) : (
 				// Done: an outlined circle with a tick, in the finished rows' quiet tone.
 				<Svg width={16} height={16} viewBox="0 0 16 16">

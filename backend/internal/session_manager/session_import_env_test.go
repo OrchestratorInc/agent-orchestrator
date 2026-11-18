@@ -155,6 +155,7 @@ func TestChatImportPreparationReusesEnvironmentThroughControllerGate(t *testing.
 	store.sessions[record.ID] = record
 	project := store.projects[string(record.ProjectID)]
 	project.Config.Env = map[string]string{"SYNTHETIC_WORKSPACE_ID": "project-value", "SYNTHETIC_CLEAR": ""}
+	project.Config.Worker = domain.RoleOverride{Harness: domain.HarnessCodex, AgentConfig: domain.AgentConfig{Model: "gpt-synthetic"}}
 	store.projects[project.ID] = project
 	issuer := &scriptedBrowserCapabilities{issues: []browserCapabilityIssue{{token: "synthetic-chat-token", verifier: "synthetic-chat-verifier"}}}
 	manager.browserCapabilities = issuer
@@ -173,6 +174,9 @@ func TestChatImportPreparationReusesEnvironmentThroughControllerGate(t *testing.
 	}
 	if store.sessions[record.ID].Metadata.BrowserCapabilityVerifier != "synthetic-chat-verifier" {
 		t.Fatal("retained Chat capability was not persisted for the controller")
+	}
+	if launcher.started[0].Model != "gpt-synthetic" || store.sessions[record.ID].Metadata.Model != "gpt-synthetic" {
+		t.Fatalf("import did not open on the project model: %q, %q", launcher.started[0].Model, store.sessions[record.ID].Metadata.Model)
 	}
 }
 

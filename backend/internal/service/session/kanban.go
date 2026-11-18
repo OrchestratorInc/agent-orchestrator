@@ -43,11 +43,13 @@ func toContractKanbanPRFacts(prs []domain.PRFacts, runs []domain.CurrentHeadRevi
 	for _, run := range runs {
 		facts := byPR[run.PRURL]
 		facts.Present = true
-		facts.Running = facts.Running || run.Status == domain.ReviewRunRunning
+		facts.Running = facts.Running || run.Status.IsActive()
 		facts.ChangesRequested = facts.ChangesRequested || run.Verdict == domain.VerdictChangesRequested
 		facts.Outcome = facts.Outcome || run.Verdict.Valid()
 		facts.Failed = facts.Failed || run.Status == domain.ReviewRunFailed
 		facts.Cancelled = facts.Cancelled || run.Status == domain.ReviewRunCancelled
+		facts.RetryExhausted = facts.RetryExhausted ||
+			(run.Status == domain.ReviewRunFailed && (run.AutoRetryBlocked || run.FailedAutoRuns >= domain.AutoReviewFailedRetryLimit))
 		byPR[run.PRURL] = facts
 	}
 
@@ -55,6 +57,9 @@ func toContractKanbanPRFacts(prs []domain.PRFacts, runs []domain.CurrentHeadRevi
 	for i, pr := range prs {
 		out[i] = contract.KanbanPRFacts{
 			URL:          pr.URL,
+			Host:         pr.Host,
+			Repo:         pr.Repo,
+			Number:       pr.Number,
 			Draft:        pr.Draft,
 			Merged:       pr.Merged,
 			Closed:       pr.Closed,
@@ -68,6 +73,7 @@ func toContractKanbanPRFacts(prs []domain.PRFacts, runs []domain.CurrentHeadRevi
 				ChangesRequested: pr.ExternalChangesRequested,
 				Comments:         pr.ExternalComments,
 			},
+			StackParent: pr.StackParent,
 		}
 	}
 	return out

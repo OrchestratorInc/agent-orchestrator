@@ -1,52 +1,20 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
-import { Loader2 } from "lucide-react";
+import { useNavigate } from "@tanstack/react-router";
+import { Loader2 } from "@/components/app-icons";
 import { agentLabel, type AgentId } from "../../../lib/agent-options";
-import { apiClient, apiErrorCode, apiErrorMessage } from "../../../lib/api-client";
-import { workspaceQueryKey, workspaceQueryOptions } from "../../../hooks/useWorkspaceQuery";
-import { CLOUD_PROJECT_KIND, STANDALONE_WORKSPACE_ID } from "../../../types/workspace";
+import { workspaceQueryOptions } from "../../../hooks/useWorkspaceQuery";
+import { formatTimeCompact } from "../../../lib/format-time";
+import { projectNavigateTarget, useNavigateToSession } from "../../../lib/navigate-to-session";
+import { folderName, importableProject, importChats, sessionImportPreviewQuery, type ImportCandidate as Candidate, type ImportResult } from "../../../lib/session-import";
+import { useUiStore } from "../../../stores/ui-store";
 import { Button } from "../../ui/button";
 import { Checkbox } from "../../ui/checkbox";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "../../ui/select";
-import type { components } from "../../../../api/schema";
+import { SettingsSearch } from "../SettingsSearch";
 
-type Candidate = components["schemas"]["SessionImportCandidate"];
-type ImportResult = components["schemas"]["SessionImportResult"];
-
-/** Agents whose local chats AO can import. */
-export const IMPORTABLE_AGENTS: ReadonlySet<AgentId> = new Set<AgentId>(["claude-code", "codex", "pi", "gemini", "copilot", "omp", "kimchi", "qwen", "autohand"]);
-
-const offerClosedKey = "ao.sessionImport.offerClosed";
-const offerListeners = new Set<() => void>();
 const folderFilter = "folder:";
-
-/** Home offers the import once: until the user imports or dismisses it. */
-export function sessionImportOfferClosed(): boolean {
-	try {
-		return window.localStorage.getItem(offerClosedKey) === "true";
-	} catch {
-		return false;
-	}
-}
-
-export function subscribeSessionImportOffer(listener: () => void): () => void {
-	offerListeners.add(listener);
-	return () => offerListeners.delete(listener);
-}
-
-export function closeSessionImportOffer(): void {
-	try {
-		window.localStorage.setItem(offerClosedKey, "true");
-	} catch {
-		// The offer comes back next launch; the agent page still has the import.
-	}
-	for (const listener of offerListeners) listener();
-}
-
-function folderName(path: string): string {
-	return path.split(/[\\/]/).filter(Boolean).at(-1) ?? path;
-}
 
 /** One agent's chats on this computer, from the daemon's validated preview. A
  * chat from a Git folder that is not a project yet adds that folder as a
@@ -54,44 +22,37 @@ function folderName(path: string): string {
 export function SessionImportPanel({ harness }: { harness: AgentId }) {
 	const { t } = useTranslation();
 	const [project, setProject] = useState("all");
+	const [query, setQuery] = useState("");
 	const [selected, setSelected] = useState(new Set<string>());
 	const [results, setResults] = useState<ImportResult[]>([]);
 	const [importing, setImporting] = useState(false);
 	// The scan an import runs after adding folders must not reset its results.
 	const importingRef = useRef(false);
+	// Choices made on the last list (a selection or an import) survive the next scan.
+	const keepChoicesRef = useRef(false);
 	const [error, setError] = useState<string>();
 	const queryClient = useQueryClient();
+	const navigate = useNavigate();
+	const navigateToSession = useNavigateToSession();
+	const closeSettings = useUiStore((state) => state.closeSettings);
 	const workspaces = useQuery(workspaceQueryOptions);
 	const projects = useMemo(
 		() =>
 			(workspaces.data ?? [])
-				.filter((w) => !w.hostId && w.kind !== CLOUD_PROJECT_KIND && w.id !== STANDALONE_WORKSPACE_ID)
+				.filter(importableProject)
 				.map((w) => ({ id: w.id, name: w.name })),
 		[workspaces.data],
 	);
-	const preview = useQuery({
-		queryKey: ["session-import-preview"],
-		retry: false,
-		staleTime: 0,
-		refetchOnWindowFocus: false,
-		refetchOnReconnect: false,
-		queryFn: async ({ signal }) => {
-			const response = await apiClient.GET("/api/v1/session-import", {
-				signal,
-			});
-			if (response.error) throw new Error(apiErrorMessage(response.error));
-			return response.data;
-		},
-	});
+	const preview = useQuery(sessionImportPreviewQuery);
 	useEffect(() => {
 		if (!preview.data || importingRef.current) return;
-		setSelected(
-			new Set(
-				preview.data.candidates
-					.filter((c) => c.suggested && !c.sessionId)
-					.map((c) => c.id),
-			),
-		);
+		const list = preview.data.candidates;
+		if (keepChoicesRef.current) {
+			const open = new Set(list.filter((c) => !c.sessionId).map((c) => c.id));
+			setSelected((current) => new Set([...current].filter((id) => open.has(id))));
+			return;
+		}
+		setSelected(new Set(list.filter((c) => !c.sessionId).map((c) => c.id)));
 		setResults([]);
 	}, [preview.data]);
 	const candidates = useMemo(
@@ -102,28 +63,41 @@ export function SessionImportPanel({ harness }: { harness: AgentId }) {
 		() => [...new Set(candidates.flatMap((c) => (c.folder ? [c.folder] : [])))].sort(),
 		[candidates],
 	);
-	const visible = useMemo(
-		() =>
-			candidates.filter(
-				(c) =>
-					project === "all" ||
-					(project === "standalone"
-						? !c.projectId && !c.folder
-						: project.startsWith(folderFilter)
-							? c.folder === project.slice(folderFilter.length)
-							: c.projectId === project),
-			),
-		[candidates, project],
-	);
-	const selectedVisible = visible.filter(
+	const names = useMemo(() => new Map(projects.map((p) => [p.id, p.name])), [projects]);
+	const projectName = (c: Candidate) =>
+		c.projectId
+			? (names.get(c.projectId) ?? c.projectId)
+			: c.folder
+				? t("sessionImport.newProject", { name: folderName(c.folder) })
+				: t("remote.standalone");
+	const needle = query.trim().toLocaleLowerCase();
+	const visible = candidates.filter(
 		(c) =>
-			selected.has(c.id) &&
-			!c.sessionId &&
-			!results.some((r) => r.id === c.id && r.status !== "failed"),
+			(project === "all" ||
+				(project === "standalone"
+					? !c.projectId && !c.folder
+					: project.startsWith(folderFilter)
+						? c.folder === project.slice(folderFilter.length)
+						: c.projectId === project)) &&
+			(!needle || [c.title, projectName(c), c.folder ?? ""].some((text) => text.toLocaleLowerCase().includes(needle))),
 	);
+	const importedIds = new Set(results.filter((r) => r.status !== "failed").map((r) => r.id));
+	const eligible = visible.filter((c) => !c.sessionId && !importedIds.has(c.id));
+	const selectedVisible = eligible.filter((c) => selected.has(c.id));
 	const newFolders = [...new Set(selectedVisible.flatMap((c) => (c.folder ? [c.folder] : [])))];
-	const names = new Map(projects.map((p) => [p.id, p.name]));
-	const toggle = (ids: string[], checked: boolean) =>
+	// Leaving Settings for an imported chat opens it; the sidebar reveals the open session.
+	const openSession = (c: Candidate, sessionId: string) => {
+		closeSettings();
+		navigateToSession(c.projectId, sessionId);
+	};
+	const created = results.flatMap((r) => {
+		const c = r.status === "created" && r.sessionId ? candidates.find((item) => item.id === r.id) : undefined;
+		return c && r.sessionId ? [{ candidate: c, sessionId: r.sessionId }] : [];
+	});
+	const createdProjects = new Set(created.map((x) => x.candidate.projectId));
+	const onlyProject = createdProjects.size === 1 ? [...createdProjects][0] : undefined;
+	const toggle = (ids: string[], checked: boolean) => {
+		keepChoicesRef.current = true;
 		setSelected((current) => {
 			const next = new Set(current);
 			for (const id of ids) {
@@ -132,49 +106,23 @@ export function SessionImportPanel({ harness }: { harness: AgentId }) {
 			}
 			return next;
 		});
-	const eligible = visible.filter(
-		(c) =>
-			!c.sessionId &&
-			!results.some((r) => r.id === c.id && r.status !== "failed"),
-	);
+	};
 	const importSelected = async () => {
 		setImporting(true);
 		importingRef.current = true;
+		keepChoicesRef.current = true;
 		setError(undefined);
 		const ids = selectedVisible.map((c) => c.id);
 		try {
-			// A chat imports into its folder's project: add new folders, then scan again.
-			for (const path of newFolders) {
-				const added = await apiClient.POST("/api/v1/projects", { body: { path } });
-				if (added.error && apiErrorCode(added.error) !== "PATH_ALREADY_REGISTERED") {
-					throw new Error(apiErrorMessage(added.error));
-				}
-			}
-			if (newFolders.length) {
-				setProject("all");
-				const rescan = await preview.refetch();
-				if (rescan.error) throw rescan.error;
-			}
-			const response = await apiClient.POST("/api/v1/session-import", {
-				body: { ids },
-			});
-			if (response.error) throw new Error(apiErrorMessage(response.error));
-			setResults(response.data.results);
-			setSelected(
-				new Set(
-					response.data.results
-						.filter((r) => r.status === "failed")
-						.map((r) => r.id),
-				),
-			);
-			if (response.data.results.some((r) => r.status === "created")) closeSessionImportOffer();
+			if (newFolders.length) setProject("all");
+			const imported = await importChats(queryClient, "settings", ids, newFolders);
+			setResults(imported);
+			setSelected(new Set(imported.filter((r) => r.status === "failed").map((r) => r.id)));
 		} catch (err) {
 			setError(
 				err instanceof Error ? err.message : t("sessionImport.failed"),
 			);
 		} finally {
-			// A request that fails partway may still have created sessions.
-			await queryClient.invalidateQueries({ queryKey: workspaceQueryKey });
 			importingRef.current = false;
 			setImporting(false);
 		}
@@ -196,9 +144,12 @@ export function SessionImportPanel({ harness }: { harness: AgentId }) {
 				<p className="text-xs text-muted-foreground">
 					{t("sessionImport.description", { agent: agentLabel(harness) })}
 				</p>
-				<div className="flex flex-wrap gap-3">
-					<div className="flex flex-col gap-1 text-xs">
-						<span aria-hidden="true">{t("newTask.project")}</span>
+				<SettingsSearch
+					value={query}
+					onChange={setQuery}
+					placeholder={t("sessionImport.searchPlaceholder")}
+					aria-label={t("sessionImport.searchPlaceholder")}
+					trailing={
 						<Select value={project} onValueChange={setProject} disabled={importing}>
 							<SelectTrigger size="sm" className="w-56 text-control" aria-label={t("newTask.project")}>
 								<SelectValue />
@@ -218,8 +169,8 @@ export function SessionImportPanel({ harness }: { harness: AgentId }) {
 								))}
 							</SelectContent>
 						</Select>
-					</div>
-				</div>
+					}
+				/>
 				<p className="text-xs text-muted-foreground">
 					{t("sessionImport.selectionHelp")}
 				</p>
@@ -235,91 +186,109 @@ export function SessionImportPanel({ harness }: { harness: AgentId }) {
 					</p>
 				) : null}
 			</div>
-			<div className="settings-thin-scrollbar min-h-0 w-full min-w-0 overflow-x-hidden overflow-y-auto overscroll-contain rounded-md border border-border">
-				<label className="sticky top-0 z-10 flex items-center gap-3 border-b border-border bg-surface px-3 py-2 text-xs">
-					<Checkbox
-						aria-label={t("sessionImport.selectAllAria")}
-						checked={
-							eligible.length > 0 && eligible.every((c) => selected.has(c.id))
-						}
-						onCheckedChange={(checked) =>
-							toggle(
-								eligible.map((c) => c.id),
-								checked === true,
-							)
-						}
-						disabled={importing || !eligible.length}
-					/>
-					{t("sessionImport.selectAll", { count: visible.length })}
-				</label>
-				{visible.map((c) => (
-					<ImportRow
-						key={c.id}
-						candidate={c}
-						projectName={
-							c.projectId
-								? (names.get(c.projectId) ?? c.projectId)
-								: c.folder
-									? t("sessionImport.newProject", { name: folderName(c.folder) })
-									: t("remote.standalone")
-						}
-						selected={selected.has(c.id)}
-						disabled={importing}
-						result={results.find((r) => r.id === c.id)}
-						onSelect={(checked) => toggle([c.id], checked)}
-					/>
-				))}
-				{!preview.isFetching && !visible.length ? (
-					<p className="p-6 text-sm text-muted-foreground">
-						{t("sessionImport.empty")}
-					</p>
-				) : null}
-			</div>
-			<div className="flex shrink-0 flex-col gap-3">
-				{newFolders.length ? (
-					<p className="text-xs text-muted-foreground">
-						{t("sessionImport.addsProjects", {
-							count: newFolders.length,
-							names: newFolders.map(folderName).join(", "),
-						})}
-					</p>
-				) : null}
-				{results.length ? (
-					<p role="status" className="text-sm">
-						{summarize(results)}
-					</p>
-				) : null}
-				<div className="flex items-center justify-between gap-3">
-					<Button
-						variant="ghost"
-						onClick={() => {
-							setError(undefined);
-							void preview.refetch();
-						}}
-						disabled={importing || preview.isFetching}
-					>
-						{t("sessionImport.scanAgain")}
-					</Button>
-					<Button
-						onClick={() => void importSelected()}
-						disabled={
-							!selectedVisible.length ||
-							selectedVisible.length > 500 ||
-							importing ||
-							preview.isFetching
-						}
-					>
-						{importing
-							? t("sessionImport.importing")
-							: t("sessionImport.import", { count: selectedVisible.length })}
-					</Button>
+			{preview.isPending ? null : (
+				<div className="flex min-h-0 w-full min-w-0 flex-col overflow-hidden rounded-md border border-border">
+					{/* Outside the scroller: rows never pass under it, so no fill is needed. */}
+					<label className="flex shrink-0 items-center gap-3 border-b border-border px-3 py-2 text-xs">
+						<Checkbox
+							aria-label={t("sessionImport.selectAllAria")}
+							checked={
+								eligible.length > 0 && eligible.every((c) => selected.has(c.id))
+							}
+							onCheckedChange={(checked) =>
+								toggle(
+									eligible.map((c) => c.id),
+									checked === true,
+								)
+							}
+							disabled={importing || !eligible.length}
+						/>
+						{t("sessionImport.selectAll", { count: eligible.length })}
+					</label>
+					<div className="settings-thin-scrollbar min-h-0 flex-1 overflow-x-hidden overflow-y-auto overscroll-contain">
+						{visible.map((c) => (
+							<ImportRow
+								key={c.id}
+								candidate={c}
+								projectName={projectName(c)}
+								selected={selected.has(c.id)}
+								disabled={importing}
+								result={results.find((r) => r.id === c.id)}
+								onSelect={(checked) => toggle([c.id], checked)}
+								onOpen={(sessionId) => openSession(c, sessionId)}
+							/>
+						))}
+						{!preview.isFetching && !visible.length ? (
+							<p className="p-6 text-sm text-muted-foreground">
+								{needle ? t("sessionImport.noMatches", { query: query.trim() }) : t("sessionImport.empty")}
+							</p>
+						) : null}
+					</div>
 				</div>
-				{selectedVisible.length > 500 ? (
-					<p role="alert" className="text-xs text-destructive">
-						{t("sessionImport.limit")}
-					</p>
-				) : null}
-			</div>
+			)}
+			{preview.isPending ? null : (
+				<div className="flex shrink-0 flex-col gap-3">
+					{newFolders.length ? (
+						<p className="text-xs text-muted-foreground">
+							{t("sessionImport.addsProjects", {
+								count: newFolders.length,
+								names: newFolders.map(folderName).join(", "),
+							})}
+						</p>
+					) : null}
+					{results.length ? (
+						<div className="flex flex-wrap items-center gap-x-3 gap-y-2">
+							<p role="status" className="text-sm">
+								{summarize(results)}
+							</p>
+							{created.length === 1 ? (
+								<Button size="sm" variant="secondary" onClick={() => openSession(created[0].candidate, created[0].sessionId)}>
+									{t("sessionImport.openChat")}
+								</Button>
+							) : onlyProject ? (
+								<Button
+									size="sm"
+									variant="secondary"
+									onClick={() => {
+										closeSettings();
+										void navigate(projectNavigateTarget(onlyProject));
+									}}
+								>
+									{t("sessionImport.showProject")}
+								</Button>
+							) : null}
+						</div>
+					) : null}
+					<div className="flex items-center justify-between gap-3">
+						<Button
+							variant="ghost"
+							onClick={() => {
+								setError(undefined);
+								keepChoicesRef.current = false;
+								// A rescan with an unchanged list keeps preview.data's identity, so the
+								// effect would not run: reset here.
+								setResults([]);
+								void preview.refetch().then(({ data }) => {
+									if (data && !keepChoicesRef.current) {
+										setSelected(new Set(data.candidates.filter((c) => !c.sessionId).map((c) => c.id)));
+									}
+								});
+							}}
+							disabled={importing || preview.isFetching}
+						>
+							{t("sessionImport.scanAgain")}
+						</Button>
+						<Button
+							onClick={() => void importSelected()}
+							disabled={!selectedVisible.length || importing}
+						>
+							{importing
+								? t("sessionImport.importing")
+								: t("sessionImport.import", { count: selectedVisible.length })}
+						</Button>
+					</div>
+				</div>
+			)}
 		</div>
 	);
 }
@@ -331,6 +300,7 @@ function ImportRow({
 	disabled,
 	result,
 	onSelect,
+	onOpen,
 }: {
 	candidate: Candidate;
 	projectName: string;
@@ -338,11 +308,13 @@ function ImportRow({
 	disabled: boolean;
 	result?: ImportResult;
 	onSelect: (checked: boolean) => void;
+	onOpen: (sessionId: string) => void;
 }) {
 	const { t, i18n } = useTranslation();
 	const imported = Boolean(
 		c.sessionId || (result && result.status !== "failed"),
 	);
+	const sessionId = c.sessionId || (result?.status !== "failed" ? result?.sessionId : undefined);
 	return (
 		<label className="flex cursor-pointer items-start gap-3 border-b border-border px-3 py-3 last:border-0">
 			<Checkbox
@@ -355,8 +327,10 @@ function ImportRow({
 			<span className="min-w-0 flex-1">
 				<span className="block truncate text-sm font-medium">{c.title}</span>
 				<span className="block truncate text-xs text-muted-foreground">
-					{projectName} · {agentLabel(c.harness)} · {t("sessionImport.messages", { count: c.messageCount })} ·{" "}
-					{new Date(c.lastActivity).toLocaleDateString(i18n.resolvedLanguage)}
+					<span title={c.folder}>{projectName}</span> · {t("sessionImport.messages", { count: c.messageCount })} ·{" "}
+					<time dateTime={c.lastActivity} title={new Date(c.lastActivity).toLocaleString(i18n.resolvedLanguage)}>
+						{formatTimeCompact(c.lastActivity, { longUnits: true })}
+					</time>
 				</span>
 				{c.shortened ? (
 					<span className="block text-xs text-warning">
@@ -364,8 +338,20 @@ function ImportRow({
 					</span>
 				) : null}
 				{imported ? (
-					<span className="block text-xs text-muted-foreground">
+					<span className="flex items-center gap-2 text-xs text-muted-foreground">
 						{t("sessionImport.alreadyImported")}
+						{sessionId ? (
+							<Button
+								size="xs"
+								variant="ghost"
+								onClick={(event) => {
+									event.preventDefault();
+									onOpen(sessionId);
+								}}
+							>
+								{t("sessionImport.open")}
+							</Button>
+						) : null}
 					</span>
 				) : null}
 				{result?.error ? (

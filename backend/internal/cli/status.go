@@ -61,7 +61,7 @@ func newStatusCommand(ctx *commandContext) *cobra.Command {
 	var opts statusOptions
 	cmd := &cobra.Command{
 		Use:   "status",
-		Short: "Show AO daemon status",
+		Short: "Show Orchestrator daemon status",
 		Args:  noArgs,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			st, err := ctx.inspectDaemon(cmd.Context())
@@ -173,7 +173,7 @@ func (c *commandContext) readProbe(ctx context.Context, port int, path string) (
 
 func verifyProbeOwner(probe probeResult, wantPID int, path string) error {
 	if probe.Service != daemonmeta.ServiceName {
-		return fmt.Errorf("%s: response is not from AO daemon", path)
+		return fmt.Errorf("%s: response is not from the Orchestrator daemon", path)
 	}
 	if probe.PID != wantPID {
 		return fmt.Errorf("%s: daemon pid %d does not match run-file pid %d", path, probe.PID, wantPID)
@@ -183,7 +183,7 @@ func verifyProbeOwner(probe probeResult, wantPID int, path string) error {
 
 func writeStatus(cmd *cobra.Command, st daemonStatus) error {
 	out := cmd.OutOrStdout()
-	if _, err := fmt.Fprintf(out, "AO daemon: %s\n", st.State); err != nil {
+	if _, err := fmt.Fprintf(out, "Orchestrator daemon: %s\n", st.State); err != nil {
 		return err
 	}
 	if st.PID != 0 {
