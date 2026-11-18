@@ -1,7 +1,7 @@
 import { useNavigation } from "expo-router";
 import { useHeaderHeight } from "expo-router/react-navigation";
-import { useCallback, useLayoutEffect, useMemo, useRef, type ReactElement } from "react";
-import { Platform, StyleSheet, View, type NativeScrollEvent, type NativeSyntheticEvent } from "react-native";
+import { useCallback, useLayoutEffect, useMemo, useRef, useState, type ReactElement, type ReactNode } from "react";
+import { Platform, StyleSheet, View, type LayoutChangeEvent, type NativeScrollEvent, type NativeSyntheticEvent } from "react-native";
 import Animated, { useAnimatedStyle, useSharedValue, withTiming, type SharedValue } from "react-native-reanimated";
 import { Frost, FROST_TAIL, frostStops } from "./frost";
 import { useTheme } from "./ThemeProvider";
@@ -36,17 +36,33 @@ export function largeTitleCollapsed(y: number): boolean {
  * the bar (`topInset` says how far, for anything else pinned to the page's top); `edge`
  * goes in the page after the scroll view, under anything that floats; and the
  * scroll view takes `onScroll`, which calls the one passed in too.
+ *
+ * `accessory` is a line that belongs under the title, such as the page's
+ * freshness line. On iOS it comes back as `accessory` for the page to place
+ * under its large title. On Android it is drawn by `edge`, pinned under the bar
+ * over the frost, and `topInset` (so `header`) grows by its height: placed in
+ * the page instead, it sat in the frost's fade and read washed out whenever
+ * nothing else (the machine chips) came first. The frost keeps to the bar, so
+ * the page's first row starts no deeper in its fade than it did without one.
  */
-export function useLargeTitle(title: string, onScroll?: ScrollHandler): {
+export function useLargeTitle(title: string, onScroll?: ScrollHandler, { accessory }: { accessory?: ReactNode } = {}): {
 	header: ReactElement | null;
 	edge: ReactElement | null;
 	onScroll: ScrollHandler | undefined;
 	topInset: number;
+	accessory: ReactNode;
 } {
 	const android = Platform.OS === "android";
 	const navigation = useNavigation();
 	const headerHeight = useHeaderHeight();
-	const topInset = android ? headerHeight : 0;
+	// The accessory's measured height; 0 while it draws nothing.
+	const [accessoryHeight, setAccessoryHeight] = useState(0);
+	const pinned = android && accessory != null && accessory !== false;
+	const topInset = android ? headerHeight + (pinned ? accessoryHeight : 0) : 0;
+	const measureAccessory = useCallback((event: LayoutChangeEvent) => {
+		const height = Math.round(event.nativeEvent.layout.height);
+		setAccessoryHeight((previous) => (previous === height ? previous : height));
+	}, []);
 	const collapsed = useSharedValue(0);
 	const last = useRef(0);
 	useLayoutEffect(() => {
@@ -66,8 +82,22 @@ export function useLargeTitle(title: string, onScroll?: ScrollHandler): {
 		onScroll?.(event);
 	}, [collapsed, onScroll]);
 	const header = useMemo(() => (android ? <View style={{ height: topInset }} /> : null), [android, topInset]);
-	const edge = useMemo(() => (android ? <Frost from="top" stops={frostStops(topInset)} style={[styles.frost, { height: topInset + FROST_TAIL }]} /> : null), [android, topInset]);
-	return { header, edge, onScroll: android ? handle : onScroll, topInset };
+	// Sized to the bar alone: grown to back the accessory too, its fade moved down
+	// onto the page's first row, which then read dimmed.
+	const frost = useMemo(() => (android ? <Frost from="top" stops={frostStops(headerHeight)} style={[styles.frost, { height: headerHeight + FROST_TAIL }]} /> : null), [android, headerHeight]);
+	const edge = android ? (
+		<>
+			{frost}
+			{pinned ? (
+				// Not collapsable, so it measures 0 (and the page closes up) when the
+				// accessory draws nothing; box-none so only its own controls take taps.
+				<View collapsable={false} pointerEvents="box-none" onLayout={measureAccessory} style={[styles.accessory, { top: headerHeight }]}>
+					{accessory}
+				</View>
+			) : null}
+		</>
+	) : null;
+	return { header, edge, onScroll: android ? handle : onScroll, topInset, accessory: android ? null : accessory ?? null };
 }
 
 function BarTitle({ title, collapsed }: { title: string; collapsed: SharedValue<number> }) {
@@ -92,4 +122,5 @@ const styles = StyleSheet.create({
 	// registers, and the text fell back to Roboto.
 	bar: { fontFamily: font.bold, fontSize: type.title1.fontSize, lineHeight: type.title1.lineHeight, letterSpacing: type.title1.letterSpacing, transformOrigin: "left center" },
 	frost: { position: "absolute", top: 0, start: 0, end: 0 },
+	accessory: { position: "absolute", start: 0, end: 0 },
 });

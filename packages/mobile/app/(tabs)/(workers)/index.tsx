@@ -1,6 +1,6 @@
 import { useFocusEffect, useRouter } from "expo-router";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { ActivityIndicator, FlatList, Keyboard, Platform, StyleSheet, View } from "react-native";
+import { ActivityIndicator, FlatList, Keyboard, StyleSheet, View } from "react-native";
 import { useLargeTitle } from "../../../lib/largeTitle";
 import { useTabBarFrost } from "../../../lib/frost";
 import { boardTitle } from "../../../lib/board-tabs";
@@ -52,7 +52,6 @@ export default function FleetScreen() {
 	const styles = useThemedStyles(makeStyles);
 
 	const router = useRouter();
-	const largeTitle = useLargeTitle(boardTitle("(workers)"));
 	const tabBar = useTabBarFrost();
 	const headerOverlap = useHeaderOverlap();
 	const { config, configured, configResolved, connection, loading, error, refreshAll, refreshHost, allSessions, allProjects, hostStates, cloud, notificationsUnread, phoneNetwork } = useApp();
@@ -232,9 +231,8 @@ export default function FleetScreen() {
 	const projectHostId = hostStates.some((host) => host.hostId === filteredProject?.hostId) ? filteredProject?.hostId : undefined;
 	const lineHostId = selectedHost?.hostId ?? projectHostId ?? (!cloudSelected && !cloud && hostStates.length === 1 ? hostStates[0].hostId : undefined);
 
-	// Inside the list rather than above it: the header is translucent and the page
-	// is laid out under it, so the list has to be the page's first view. Above the
-	// rows rather than inside ListEmptyComponent, because the case the line exists
+	// Above the rows rather than inside ListEmptyComponent (on iOS in the list's
+	// header, under the large title), because the case the line exists
 	// for is a populated board whose machine has stopped answering. An empty board's
 	// own state says why it is empty, so there the line keeps to the phone being
 	// offline (no host), which a project or idle empty state would not mention; the
@@ -242,14 +240,13 @@ export default function FleetScreen() {
 	const freshnessLine = boardEmpty && emptyView === "machine"
 		? null
 		: <FreshnessLine hostId={boardEmpty ? undefined : lineHostId} onRetry={retry} />;
-	// Under the large title on iOS. Android's title is in the bar, whose frost
-	// fades over the first stretch of the page and dimmed a line placed there;
-	// the chips draw above the frost, so the line goes beneath them.
-	const lineAboveChips = Platform.OS !== "android";
+	// The title's accessory: under the large title on iOS, pinned under the bar
+	// on Android, where the bar's frost washed out a line placed in the page.
+	const largeTitle = useLargeTitle(boardTitle("(workers)"), undefined, { accessory: unpaired ? null : freshnessLine });
 	const listHeader = unpaired ? largeTitle.header : (
 		<>
 			{largeTitle.header}
-			{lineAboveChips ? freshnessLine : null}
+			{largeTitle.accessory}
 			{showsEnvironmentFilter(environments) ? (
 				<WorkerEnvironmentFilter
 					environments={environments}
@@ -257,7 +254,6 @@ export default function FleetScreen() {
 					onSelectEnvironment={selectEnvironment}
 				/>
 			) : null}
-			{lineAboveChips ? null : freshnessLine}
 		</>
 	);
 
