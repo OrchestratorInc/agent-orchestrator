@@ -145,15 +145,11 @@ func setModelTime(byAccount map[string]map[string]time.Time, account, model stri
 	byAccount[account][model] = at.UTC()
 }
 
-func deleteModel(byAccount map[string]map[string]time.Time, account, model string) bool {
-	if _, ok := byAccount[account][model]; !ok {
-		return false
-	}
+func deleteModel(byAccount map[string]map[string]time.Time, account, model string) {
 	delete(byAccount[account], model)
 	if len(byAccount[account]) == 0 {
 		delete(byAccount, account)
 	}
-	return true
 }
 
 // Record stores a model Codex refused, at at, for the account with home. A
