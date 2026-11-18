@@ -2709,7 +2709,7 @@ describe("Sidebar", () => {
 
 	it.each(["ready", "stopped"] as const)("shows Report a bug failures when the daemon is %s", async (state) => {
 		reportDaemonState.current = state;
-		const launch = vi.spyOn(aoBridge.triage, "launch").mockResolvedValue({ ok: false, error: "report.failed" });
+		const launch = vi.spyOn(aoBridge.triage, "launch").mockRejectedValue(new Error("IPC unavailable"));
 		renderSidebar({ seed: (client) => client.setQueryData(["app-version"], "0.14.11-nightly.202611170300") });
 		if (state === "ready") vi.spyOn(window.localStorage, "setItem").mockImplementation(() => { throw new Error("quota"); });
 		await userEvent.click(screen.getByRole("button", { name: "Report a bug" }));
