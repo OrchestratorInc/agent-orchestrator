@@ -3323,7 +3323,7 @@
 	"settings.project.workersRequestReviewDescription": "When enabled, new workers start an Orchestrator review of their own PR once it is ready, and again after each fix. When disabled, workers ask before starting one.",
 	"settings.project.workersRequestReviewToggle": "Workers request a built-in review",
 	"settings.project.browser": "浏览器",
-	"settings.project.browserTemporaryDescription": "此项目中的新会话会以未登录状态打开浏览器，并在会话结束时清除其数据。关闭时，会话使用你的默认浏览器配置文件并保持登录。",
+	"settings.project.browserTemporaryDescription": "此项目中的会话会在未登录的临时浏览器中启动，会话结束时清除。关闭时，会话在你的默认浏览器配置文件中启动。为单个会话选择的配置文件始终对该会话生效。",
 	"settings.project.browserTemporaryToggle": "始终使用临时浏览器",
 	"settings.project.autoReviewDescription": "When enabled, new worker sessions will automatically review their pull requests. This can still be toggled per session after spawn.",
 	"artifacts.title": "Artifacts",
