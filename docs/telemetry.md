@@ -659,7 +659,7 @@ people choose and whether creation succeeds.
 The desktop product-telemetry controls described under "Turn desktop and daemon
 telemetry off" also control these events.
 
-## Performance
+## UI responsiveness
 
 When product telemetry is enabled, the desktop app adds launch timings to
 `ao.app.loaded` and sends `ao.ui.performance_summary`, a numeric summary of
@@ -709,9 +709,7 @@ Properties on `ao.ui.performance_summary`:
   `slow_interaction_count` (over 200 ms to the next frame),
   `very_slow_interaction_count` (over 500 ms), and `interaction_p98_ms`, the
   98th percentile computed the way Interaction to Next Paint is. These come
-  from the browser's Event Timing API. `slowest_area` is the part of the app
-  the slowest interaction was in: `sidebar`, `tabs`, `chat`, `composer`,
-  `terminal`, `board`, `inspector`, `browser`, `cmdk`, `settings`, or `other`.
+  from the browser's Event Timing API.
 - Frozen frames: `long_frame_count` (frames that took over 50 ms),
   `long_frame_blocking_ms` (their total blocking time), and
   `long_frame_top_cause`, the kind of work that blocked longest:
@@ -726,7 +724,7 @@ Properties on `ao.ui.performance_summary`:
   app processes since the previous summary, to one decimal place. The app
   samples these every 10 minutes. The daemon's own process is not included.
 
-A missing count means zero; a missing percentile, area or cause means nothing
+A missing count means zero; a missing percentile or cause means nothing
 was measured for it. Measurements count only while the window is
 visible. The summary window and its counts are kept in the app's local storage
 between launches and replaced after each send. Share usage analytics and the

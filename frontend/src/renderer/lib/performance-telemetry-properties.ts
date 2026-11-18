@@ -2,7 +2,7 @@
  * Property allowlists for the performance events: the launch fields on
  * ao.app.loaded and ao.ui.performance_summary. Only counts, durations, buckets
  * and values from the closed lists below pass. See docs/telemetry.md,
- * "Performance". Kept free of imports so telemetry.ts can delegate here.
+ * "UI responsiveness". Kept free of imports so telemetry.ts can delegate here.
  */
 
 type Properties = Record<string, unknown>;
@@ -11,20 +11,6 @@ export const PERFORMANCE_EVENTS: ReadonlySet<string> = new Set(["ao.app.loaded",
 
 export const LAUNCH_KINDS = ["cold", "warm", "update"] as const;
 export const FLUSH_REASONS = ["interval", "startup"] as const;
-/** Parts of the app a slow interaction can be attributed to, from the nearest data-telemetry-area. */
-export const PERFORMANCE_AREAS = [
-	"sidebar",
-	"tabs",
-	"chat",
-	"composer",
-	"terminal",
-	"board",
-	"inspector",
-	"browser",
-	"cmdk",
-	"settings",
-	"other",
-] as const;
 /** Long Animation Frame script invoker types, plus "other" for a frame with no script attributed. */
 export const LONG_FRAME_CAUSES = [
 	"event-listener",
@@ -91,7 +77,6 @@ export function sanitizePerformanceProperties(event: string, properties?: Proper
 		candidates.measurement_schema_version = properties?.measurement_schema_version === 1 ? 1 : undefined;
 		candidates.flush_reason = oneOf(properties?.flush_reason, FLUSH_REASONS);
 		for (const key of PERFORMANCE_SUMMARY_COUNTS) candidates[key] = wholeNumber(properties?.[key]);
-		candidates.slowest_area = oneOf(properties?.slowest_area, PERFORMANCE_AREAS);
 		candidates.long_frame_top_cause = oneOf(properties?.long_frame_top_cause, LONG_FRAME_CAUSES);
 		candidates.open_sessions_bucket = oneOf(properties?.open_sessions_bucket, OPEN_SESSIONS_BUCKETS);
 		candidates.renderer_mb_bucket = oneOf(properties?.renderer_mb_bucket, MEMORY_BUCKETS);

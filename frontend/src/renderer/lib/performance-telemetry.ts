@@ -4,7 +4,6 @@ import { queryClient } from "./query-client";
 import { captureRendererEvent, isDeniedEvent, withTelemetryContext } from "./telemetry";
 import {
 	LONG_FRAME_CAUSES,
-	PERFORMANCE_AREAS,
 	memoryBucket,
 	openSessionsBucket,
 	uptimeBucket,
@@ -15,11 +14,10 @@ import { sessionIsActive, type WorkspaceSummary } from "../types/workspace";
  * ao.ui.performance_summary: one numeric summary per 45 to 60 minutes of use,
  * covering session switch speed, slow clicks and keys, frozen frames, chat
  * open time, and memory and CPU. Measurements count only while the window is
- * visible. See docs/telemetry.md, "Performance".
+ * visible. See docs/telemetry.md, "UI responsiveness".
  *
- * The window schedule copies session-management-telemetry.ts. It moves to the
- * shared lib/windowed-summary.ts, and the area read to lib/telemetry-areas.ts,
- * once those land.
+ * The window schedule copies session-management-telemetry.ts. The slowest
+ * interaction's surface is added once the shared UI surface list lands.
  */
 
 const EVENT = "ao.ui.performance_summary";
@@ -40,7 +38,6 @@ const LONGEST_KEPT = 10;
 const SAMPLES_KEPT = 100;
 const SWITCH_BUCKETS_MS = [150, 500, 1000] as const;
 
-type Area = (typeof PERFORMANCE_AREAS)[number];
 type Cause = (typeof LONG_FRAME_CAUSES)[number];
 type SwitchBuckets = [number, number, number, number];
 
@@ -55,7 +52,7 @@ type Summary = {
 	slowInteractions: number;
 	verySlowInteractions: number;
 	/** The longest interactions in the window; id is 0 for ones from an earlier page. */
-	longest: Array<{ id: number; ms: number; area: Area }>;
+	longest: Array<{ id: number; ms: number }>;
 	longFrames: number;
 	longFrameBlockingMs: number;
 	causes: Partial<Record<Cause, number>>;
@@ -118,7 +115,7 @@ function loadState(storage: Storage, now: number): PersistedState {
 			isBuckets(summary.switchCached) && isBuckets(summary.switchUncached) &&
 			isCountList(summary.switchVisibleMs, SAMPLES_KEPT) && isCountList(summary.chatOpenMs, SAMPLES_KEPT) &&
 			Array.isArray(summary.longest) && summary.longest.length <= LONGEST_KEPT &&
-			summary.longest.every((entry) => isCount(entry?.ms) && (PERFORMANCE_AREAS as readonly string[]).includes(entry?.area)) &&
+			summary.longest.every((entry) => isCount(entry?.ms)) &&
 			typeof summary.causes === "object" && summary.causes !== null &&
 			Object.entries(summary.causes).every(([cause, ms]) => (LONG_FRAME_CAUSES as readonly string[]).includes(cause) && isCount(ms)) &&
 			(["activeMs", "switchVisibleSeen", "switchDropped", "interactions", "slowInteractions", "verySlowInteractions", "longFrames", "longFrameBlockingMs", "chatOpenSeen"] as const)
@@ -126,7 +123,7 @@ function loadState(storage: Storage, now: number): PersistedState {
 		) {
 			// Interaction ids restart with each page, so kept ones cannot be matched again.
 			const restored = summary as Summary;
-			return { ...(parsed as PersistedState), summary: { ...restored, longest: restored.longest.map((entry) => ({ ...entry, id: 0 })) } };
+			return { ...(parsed as PersistedState), summary: { ...restored, longest: restored.longest.map((entry) => ({ id: 0, ms: entry.ms })) } };
 		}
 	} catch {
 		// Replace malformed local state.
@@ -204,7 +201,7 @@ export class PerformanceAccumulator {
 		if (count > 0) this.state.summary.interactions += count;
 	}
 
-	recordInteraction(id: number, ms: number, area: Area): void {
+	recordInteraction(id: number, ms: number): void {
 		const summary = this.state.summary;
 		const prior = this.recentInteractions.get(id) ?? 0;
 		if (ms <= prior) return;
@@ -215,13 +212,12 @@ export class PerformanceAccumulator {
 		const existing = summary.longest.find((entry) => entry.id === id && id > 0);
 		if (existing) {
 			existing.ms = ms;
-			existing.area = area;
 		} else if (summary.longest.length < LONGEST_KEPT) {
-			summary.longest.push({ id, ms, area });
+			summary.longest.push({ id, ms });
 		} else {
 			const shortest = summary.longest.reduce((min, entry) => (entry.ms < min.ms ? entry : min));
 			if (ms <= shortest.ms) return;
-			Object.assign(shortest, { id, ms, area });
+			Object.assign(shortest, { id, ms });
 		}
 	}
 
@@ -297,7 +293,6 @@ export class PerformanceAccumulator {
 			slow_interaction_count: summary.slowInteractions,
 			very_slow_interaction_count: summary.verySlowInteractions,
 			interaction_p98_ms: Math.round(p98),
-			slowest_area: longest[0]?.area,
 			long_frame_count: summary.longFrames,
 			long_frame_blocking_ms: Math.round(summary.longFrameBlockingMs),
 			long_frame_top_cause: topCause,
@@ -331,7 +326,7 @@ export class PerformanceAccumulator {
 
 // --- Runtime: observers, input tracking and session open timing ---
 
-type EventTimingEntry = PerformanceEntry & { interactionId?: number; target?: Node | null };
+type EventTimingEntry = PerformanceEntry & { interactionId?: number };
 type LongFrameEntry = PerformanceEntry & { blockingDuration?: number; scripts?: Array<{ invokerType?: string; duration: number }> };
 
 type PendingOpen = {
@@ -349,12 +344,6 @@ let lastInputAt = Number.NEGATIVE_INFINITY;
 let pendingOpen: PendingOpen | null = null;
 /** Mounted local chat surfaces by session id: true once its messages rendered. */
 const chatTranscripts = new Map<string, boolean>();
-
-function areaOf(target: Node | null | undefined): Area {
-	const element = target instanceof Element ? target : target?.parentElement;
-	const value = element?.closest("[data-telemetry-area]")?.getAttribute("data-telemetry-area");
-	return (PERFORMANCE_AREAS as readonly string[]).includes(value ?? "") ? (value as Area) : "other";
-}
 
 function countOpenSessions(): number | undefined {
 	const workspaces = queryClient.getQueryData<WorkspaceSummary[]>(["workspaces"]);
@@ -523,7 +512,7 @@ export function startPerformanceTelemetry(): () => void {
 	const eventObserver = observe("event", (entries) => {
 		if (!visible()) return;
 		for (const entry of entries as EventTimingEntry[]) {
-			if (entry.interactionId) accumulator.recordInteraction(entry.interactionId, entry.duration, areaOf(entry.target));
+			if (entry.interactionId) accumulator.recordInteraction(entry.interactionId, entry.duration);
 		}
 	}, { durationThreshold: 40 });
 	const frameObserver = observe("long-animation-frame", (entries) => {

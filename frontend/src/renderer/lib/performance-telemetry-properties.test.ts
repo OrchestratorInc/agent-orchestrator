@@ -48,7 +48,6 @@ describe("sanitizePerformanceProperties", () => {
 			active_seconds: 1_200,
 			switch_cached_lt150_count: 12,
 			interaction_p98_ms: 216,
-			slowest_area: "composer",
 			long_frame_top_cause: "event-listener",
 			open_sessions_bucket: "4-10",
 			renderer_mb_bucket: "lt512",
@@ -72,7 +71,7 @@ describe("sanitizePerformanceProperties", () => {
 
 	it("is what the renderer client applies to both events", async () => {
 		expect(await sanitizeRendererProperties("ao.app.loaded", { launch_kind: "warm", to_usable_ms: 420, extra: 1 })).toEqual({ launch_kind: "warm", to_usable_ms: 420 });
-		expect(await sanitizeRendererProperties("ao.ui.performance_summary", { slowest_area: "sidebar", element_text: "Send" })).toEqual({ slowest_area: "sidebar" });
+		expect(await sanitizeRendererProperties("ao.ui.performance_summary", { long_frame_top_cause: "user-callback", element_text: "Send" })).toEqual({ long_frame_top_cause: "user-callback" });
 	});
 });
 

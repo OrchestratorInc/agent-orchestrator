@@ -64,16 +64,16 @@ describe("PerformanceAccumulator", () => {
 		expect(flushed()).not.toHaveProperty("switch_visible_p75_ms", expect.any(Number));
 	});
 
-	it("counts each slow interaction once and reports the INP-style p98 and slowest area", async () => {
+	it("counts each slow interaction once and reports the INP-style p98", async () => {
 		const accumulator = create();
 		accumulator.activity();
 		accumulator.addInteractionCount(120);
 		// One interaction reports several entries (pointerdown, pointerup, click).
-		accumulator.recordInteraction(7, 180, "sidebar");
-		accumulator.recordInteraction(7, 260, "sidebar");
-		accumulator.recordInteraction(7, 240, "sidebar");
-		accumulator.recordInteraction(8, 640, "composer");
-		accumulator.recordInteraction(9, 90, "chat");
+		accumulator.recordInteraction(7, 180);
+		accumulator.recordInteraction(7, 260);
+		accumulator.recordInteraction(7, 240);
+		accumulator.recordInteraction(8, 640);
+		accumulator.recordInteraction(9, 90);
 		now += 10_000;
 		await accumulator.flush();
 
@@ -83,7 +83,6 @@ describe("PerformanceAccumulator", () => {
 			very_slow_interaction_count: 1,
 			// 120 interactions skip the two longest: 640, 260, then 90.
 			interaction_p98_ms: 90,
-			slowest_area: "composer",
 		});
 	});
 
@@ -91,7 +90,7 @@ describe("PerformanceAccumulator", () => {
 		const accumulator = create();
 		accumulator.activity();
 		accumulator.addInteractionCount(10);
-		for (let id = 1; id <= 15; id++) accumulator.recordInteraction(id, id * 10, "tabs");
+		for (let id = 1; id <= 15; id++) accumulator.recordInteraction(id, id * 10);
 		now += 10_000;
 		await accumulator.flush();
 
@@ -164,7 +163,7 @@ describe("PerformanceAccumulator", () => {
 	});
 
 	it("replaces malformed stored state", async () => {
-		localStorage.setItem("ao.telemetry.performance.v1", JSON.stringify({ version: 1, windowStartedAt: 1, windowFlushAt: 2, summary: { longest: [{ ms: 5, area: "/Users/someone" }] } }));
+		localStorage.setItem("ao.telemetry.performance.v1", JSON.stringify({ version: 1, windowStartedAt: 1, windowFlushAt: 2, summary: { longest: [{ ms: "/Users/someone" }] } }));
 		const accumulator = create();
 		expect(accumulator.isFlushOverdue()).toBe(false);
 	});
