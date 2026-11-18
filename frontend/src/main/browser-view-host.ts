@@ -837,6 +837,9 @@ const BROWSER_VIEW_BORDER_RADIUS = 10;
 const PERSON_FOCUS_GRACE_MS = 1_500;
 // How long after the agent's last command its page loads may still settle.
 const AGENT_SETTLE_MS = 1_500;
+// How often to check, while the agent clicks or types, that its page has not
+// taken the keyboard.
+const KEYBOARD_WATCH_MS = 40;
 const DEFAULT_NETWORK_CAPTURE_SECONDS = 60;
 const MAX_NETWORK_CAPTURE_SECONDS = 300;
 const MAX_NETWORK_REQUESTS = 200;
@@ -1104,6 +1107,13 @@ export function createBrowserViewHost(
     session.agentBrowserCommands > 0 ||
     (session.agentQuietSince !== undefined &&
       Date.now() - session.agentQuietSince < AGENT_SETTLE_MS);
+  // The agent's input left its page holding the keyboard: give it back,
+  // unless that page is where the person was typing.
+  const keepKeyboardFromAgent = (entry: BrowserEntry): void => {
+    if (entry.view.webContents.isFocused?.() !== true) return;
+    if (personFocus?.entry === entry) return;
+    restorePersonFocus();
+  };
   const restorePersonFocus = (): void => {
     const last = personFocus;
     const stillInFront =
@@ -1674,7 +1684,9 @@ export function createBrowserViewHost(
       const personReached =
         entry.personInputAt !== undefined &&
         Date.now() - entry.personInputAt < PERSON_FOCUS_GRACE_MS;
-      if (!inFront || (agentAtWork(session) && !personReached)) {
+      // Where the person was typing already: theirs.
+      const personsPage = inFront && personFocus?.entry === entry;
+      if (!personsPage && (!inFront || (agentAtWork(session) && !personReached))) {
         restorePersonFocus();
         return;
       }
@@ -4795,6 +4807,11 @@ export function createBrowserViewHost(
               }
               markAgentUse(targetEntry);
               const agentInput = AGENT_INPUT_ACTIONS.has(nativeAction);
+              // Chromium hands the page keyboard focus on the agent's own
+              // click or key, without always telling us: watch while it acts.
+              const keyboardWatch = agentInput
+                ? setInterval(() => keepKeyboardFromAgent(targetEntry), KEYBOARD_WATCH_MS)
+                : undefined;
               if (agentInput) {
                 targetEntry.lastInputBy = "agent";
                 session.agentInputDepth = (session.agentInputDepth ?? 0) + 1;
@@ -4824,6 +4841,10 @@ export function createBrowserViewHost(
                 throw error;
               } finally {
                 if (agentInput) session.agentInputDepth = Math.max(0, (session.agentInputDepth ?? 1) - 1);
+                if (keyboardWatch !== undefined) {
+                  clearInterval(keyboardWatch);
+                  keepKeyboardFromAgent(targetEntry);
+                }
               }
               if (
                 nativeAction === "tab-select" &&

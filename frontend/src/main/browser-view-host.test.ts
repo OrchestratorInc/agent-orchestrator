@@ -7034,6 +7034,24 @@ describe("agent and person tabs", () => {
 		expect(pageFocusReports()).toBe(reported + 1);
 	});
 
+	it("takes the keyboard back when the agent's own click leaves its page holding it, unannounced", async () => {
+		const { host, views, shellFocus } = await open();
+		await host.execute("sess-1", "open", { url: "https://agent.example.test/" });
+		// Chromium focuses the page on the agent's click without a focus event.
+		let pageFocused = false;
+		(views[0]!.webContents as unknown as { isFocused: () => boolean }).isFocused = () => pageFocused;
+		shellFocus.mockClear();
+		pageFocused = true;
+		await host.execute("sess-1", "click", { ref: "e2" });
+		expect(shellFocus).toHaveBeenCalled();
+
+		// Not holding it: nothing to give back.
+		pageFocused = false;
+		shellFocus.mockClear();
+		await host.execute("sess-1", "click", { ref: "e2" });
+		expect(shellFocus).not.toHaveBeenCalled();
+	});
+
 	it("keeps the keyboard where the person is while the agent loads or drives the page in front", async () => {
 		const { host, views, sent, shellFocus, personClicks } = await open();
 		const pageFocusReports = () => sent.filter((event) => event.channel === "browser:pageFocus").length;
