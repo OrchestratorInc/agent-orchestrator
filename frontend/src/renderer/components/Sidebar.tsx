@@ -2936,7 +2936,7 @@ const SessionRow = memo(function SessionRow({
 										active || marker === "attention"
 											? "text-foreground"
 											: "text-muted-foreground group-hover/session-row:text-foreground",
-										shimmer && "chat-working-shimmer",
+										shimmer && "relative",
 									)}
 									data-session-name=""
 									onPointerUp={(event) => {
@@ -2950,6 +2950,7 @@ const SessionRow = memo(function SessionRow({
 									}}
 								>
 									{session.title}
+									{shimmer ? <span aria-hidden="true" className="sidebar-working-shimmer"><span><span>{session.title}</span></span></span> : null}
 								</span>
 								{hostLabel ? <Badge variant="outline" className="h-4 min-w-0 max-w-1/2 shrink justify-start px-1.5 text-2xs"><span className="truncate">{hostLabel}</span></Badge> : null}
 								{cloud ? <CloudMark /> : null}

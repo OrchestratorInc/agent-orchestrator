@@ -244,7 +244,7 @@ vi.mock("../lib/cloud-session", () => ({
 		session: shellMocks.state.cloudSessionStatus === "authenticated" ? { user: { id: "test-user" } } : null,
 	}),
 }));
-vi.mock("../hooks/useSettings", () => ({ useSettings: () => ({ settings: { cloudControlPlaneUrl: "" } }) }));
+vi.mock("../hooks/useSettings", () => ({ useSettings: () => ({ settings: { cloudControlPlaneUrl: "" } }), useSettingsPolling: () => undefined }));
 
 vi.mock("../hooks/useDaemonStatus", () => ({
 	useDaemonStatus: () => shellMocks.state.daemonStatus,

@@ -5139,13 +5139,13 @@ func (s *failFirstQueueCancellationStore) CancelAllQueuedTurns(
 	ctx context.Context,
 	conversationID string,
 	now time.Time,
-) error {
+) (int, error) {
 	s.mu.Lock()
 	s.calls++
 	call := s.calls
 	s.mu.Unlock()
 	if call == 1 {
-		return errors.New("injected queue cancellation failure")
+		return 0, errors.New("injected queue cancellation failure")
 	}
 	return s.Store.CancelAllQueuedTurns(ctx, conversationID, now)
 }

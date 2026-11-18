@@ -7524,7 +7524,11 @@ export interface components {
         ListSessionsResponse: {
             archived?: components["schemas"]["SessionArchiveSummary"];
             nextCursor?: string;
+            /** @enum {string} */
+            prState?: "open" | "draft" | "merged" | "closed";
             sessions: components["schemas"]["ControllersSessionView"][];
+            total?: null | number;
+            version?: string;
         };
         ListShellTerminalsResponse: {
             shellTerminals: components["schemas"]["ShellTerminalResponse"][];
@@ -7914,6 +7918,7 @@ export interface components {
             autoCompactWindow?: "200k" | "1m";
             effort?: string;
             fastMode?: boolean;
+            force?: boolean;
             idempotencyKey?: string;
             message?: components["schemas"]["SendConversationMessageRequest"];
             model?: string;
@@ -7923,8 +7928,13 @@ export interface components {
             ultracode?: boolean;
         };
         ProviderSwitchResponse: {
+            cancelledQueuedMessages?: number;
+            failedPendingApprovals?: boolean;
             message?: components["schemas"]["SendConversationMessageResponse"];
+            settingsUpdated?: boolean;
             status: string;
+            stoppedTurn?: boolean;
+            warnings?: string[];
         };
         PublishRenderRequest: {
             /** @description Also keep the page as a session artifact, a deliverable the user keeps. */
@@ -19230,6 +19240,8 @@ export interface operations {
                 limit?: number;
                 /** @description Opaque cursor returned by the previous page. Requires limit. */
                 cursor?: string;
+                /** @description Keep sessions owning a pull request in this state. The list is then ordered by when each session's newest such PR reached the state, and the response echoes prState and carries total. */
+                prState?: "open" | "draft" | "merged" | "closed";
             };
             header?: never;
             path?: never;

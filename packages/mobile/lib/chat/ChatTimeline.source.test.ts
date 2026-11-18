@@ -430,3 +430,24 @@ describe("keyboard frames on Android", () => {
 		expect(patch).toContain("restProps.ignoreSafeAreaKeyboardInsets ?? !restProps.useViewportSizeMeasurement");
 	});
 });
+
+describe("conversation list row motion", () => {
+	// Reanimated 4.5 holds a moved view at its old frame and steps it over on the
+	// UI thread. A stall longer than the move leaves only the last frame, which
+	// 4.5 drops, so the view stays put while the rows around it move: a settled
+	// turn's reply was drawn over the next turn. List rows jump instead.
+	const rowFiles = ["ChatTimeline.tsx", "TurnFoldMotion.tsx", "SessionStartup.tsx", "TurnPlan.tsx", "ChatMarkdown.tsx", "AutomationMessage.tsx", "RenderFrame.tsx"];
+	it.each(rowFiles)("%s gives no list row a layout transition", (file) => {
+		const rowSource = readFileSync(new URL(`./${file}`, import.meta.url), "utf8");
+		expect(rowSource).not.toMatch(/\blayout=\{/);
+		expect(rowSource).not.toMatch(/\b(Linear|Curved|Entering|Sequenced|Fading|Jumping)Transition\b/);
+	});
+
+	// With the rows below jumping into its place, a fading-out fold body would
+	// sit under them until the fade ends.
+	it("opens a fold with a fade and closes it at once", () => {
+		const motion = readFileSync(new URL("./TurnFoldMotion.tsx", import.meta.url), "utf8");
+		expect(motion).toContain("entering={FadeIn.duration(CROSSFADE_MS)}");
+		expect(motion).not.toContain("exiting=");
+	});
+});

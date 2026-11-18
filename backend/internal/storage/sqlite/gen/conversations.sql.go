@@ -443,10 +443,10 @@ func (q *Queries) BeginConversationEditProviderWork(ctx context.Context, arg Beg
 	return result.RowsAffected()
 }
 
-const bindConversationTurnProviderID = `-- name: BindConversationTurnProviderID :exec
+const bindConversationTurnProviderID = `-- name: BindConversationTurnProviderID :execrows
 UPDATE conversation_turns
 SET provider_turn_id = ?, started_at = COALESCE(started_at, ?)
-WHERE id = ?
+WHERE id = ? AND state IN ('queued', 'running')
 `
 
 type BindConversationTurnProviderIDParams struct {
@@ -455,9 +455,12 @@ type BindConversationTurnProviderIDParams struct {
 	ID             string
 }
 
-func (q *Queries) BindConversationTurnProviderID(ctx context.Context, arg BindConversationTurnProviderIDParams) error {
-	_, err := q.db.ExecContext(ctx, bindConversationTurnProviderID, arg.ProviderTurnID, arg.StartedAt, arg.ID)
-	return err
+func (q *Queries) BindConversationTurnProviderID(ctx context.Context, arg BindConversationTurnProviderIDParams) (int64, error) {
+	result, err := q.db.ExecContext(ctx, bindConversationTurnProviderID, arg.ProviderTurnID, arg.StartedAt, arg.ID)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected()
 }
 
 const bindProjectConversationSession = `-- name: BindProjectConversationSession :exec
@@ -476,7 +479,7 @@ func (q *Queries) BindProjectConversationSession(ctx context.Context, arg BindPr
 	return err
 }
 
-const cancelAllQueuedConversationTurns = `-- name: CancelAllQueuedConversationTurns :exec
+const cancelAllQueuedConversationTurns = `-- name: CancelAllQueuedConversationTurns :execrows
 UPDATE conversation_turns
 SET state = 'interrupted', completed_at = ?
 WHERE conversation_id = ? AND state = 'queued'
@@ -491,9 +494,12 @@ type CancelAllQueuedConversationTurnsParams struct {
 // lock before this runs. There can be no later accepted row to preserve, so the
 // correct operation is independent of wall-clock ordering and cancels the whole
 // durable queue.
-func (q *Queries) CancelAllQueuedConversationTurns(ctx context.Context, arg CancelAllQueuedConversationTurnsParams) error {
-	_, err := q.db.ExecContext(ctx, cancelAllQueuedConversationTurns, arg.CompletedAt, arg.ConversationID)
-	return err
+func (q *Queries) CancelAllQueuedConversationTurns(ctx context.Context, arg CancelAllQueuedConversationTurnsParams) (int64, error) {
+	result, err := q.db.ExecContext(ctx, cancelAllQueuedConversationTurns, arg.CompletedAt, arg.ConversationID)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected()
 }
 
 const cancelQueuedConversationTurnByID = `-- name: CancelQueuedConversationTurnByID :execrows
@@ -1741,10 +1747,10 @@ func (q *Queries) MarkConversationCompacted(ctx context.Context, arg MarkConvers
 	return err
 }
 
-const markConversationTurnStarted = `-- name: MarkConversationTurnStarted :exec
+const markConversationTurnStarted = `-- name: MarkConversationTurnStarted :execrows
 UPDATE conversation_turns
 SET state = 'running', started_at = COALESCE(started_at, ?)
-WHERE id = ?
+WHERE id = ? AND state IN ('queued', 'running')
 `
 
 type MarkConversationTurnStartedParams struct {
@@ -1752,9 +1758,12 @@ type MarkConversationTurnStartedParams struct {
 	ID        string
 }
 
-func (q *Queries) MarkConversationTurnStarted(ctx context.Context, arg MarkConversationTurnStartedParams) error {
-	_, err := q.db.ExecContext(ctx, markConversationTurnStarted, arg.StartedAt, arg.ID)
-	return err
+func (q *Queries) MarkConversationTurnStarted(ctx context.Context, arg MarkConversationTurnStartedParams) (int64, error) {
+	result, err := q.db.ExecContext(ctx, markConversationTurnStarted, arg.StartedAt, arg.ID)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected()
 }
 
 const markConversationTurnsRolledBack = `-- name: MarkConversationTurnsRolledBack :execrows
@@ -5341,6 +5350,45 @@ func (q *Queries) SettleRunningConversationActivitiesForTurn(ctx context.Context
 		arg.ConversationID,
 		arg.TurnID,
 	)
+	return err
+}
+
+const settleStrandedConversationActivities = `-- name: SettleStrandedConversationActivities :exec
+UPDATE conversation_activities
+SET status = CASE (SELECT settled.state FROM conversation_turns AS settled WHERE settled.id = conversation_activities.turn_id)
+        WHEN 'completed' THEN 'completed'
+        WHEN 'recovered' THEN 'recovered'
+        WHEN 'interrupted' THEN 'cancelled'
+        ELSE 'failed'
+    END,
+    revision = revision + 1,
+    updated_at = ?1
+WHERE conversation_activities.conversation_id = ?2
+  AND status = 'running'
+  -- An AO action runs on the daemon's clock, not the turn's: one recorded after
+  -- its turn settled is still in flight, and its terminal update skips a row that
+  -- is no longer running, so settling it here would lose the real outcome.
+  AND kind <> 'ao_action'
+  AND turn_id IN (
+      -- Every settled turn in the conversation, including turns an earlier
+      -- session handled before a handoff kept them in this timeline.
+      SELECT owner.id FROM conversation_turns AS owner
+      WHERE owner.conversation_id = ?2
+        AND owner.state IN ('completed', 'recovered', 'interrupted', 'failed', 'cancelled')
+  )
+`
+
+type SettleStrandedConversationActivitiesParams struct {
+	UpdatedAt      time.Time
+	ConversationID string
+}
+
+// A running row on a turn that has already settled can never finish. Older
+// daemons stored replayed provider retry/limit notices this way, after their turn
+// had ended, so clients showed a spinner that never stopped. Give each one the
+// status SettleTurn would have written (terminalActivityStatus).
+func (q *Queries) SettleStrandedConversationActivities(ctx context.Context, arg SettleStrandedConversationActivitiesParams) error {
+	_, err := q.db.ExecContext(ctx, settleStrandedConversationActivities, arg.UpdatedAt, arg.ConversationID)
 	return err
 }
 

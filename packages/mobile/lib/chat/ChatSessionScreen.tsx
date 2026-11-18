@@ -73,6 +73,8 @@ import { useStillHere } from "../useStillHere";
 import { ARCHIVE_SESSION_CONFIRM } from "../worker-action-model";
 import { changedPathCount, fileRoute, filesRoute, FilesNavigationContext, type FilesNavigation } from "../files/navigation";
 import { TurnArtifactsContext, useTurnArtifactSourceFor } from "./TurnArtifacts";
+import { TurnRecoveryContext, type TurnRecovery } from "./UsageLimitNotice";
+import { usageLimitedTurn } from "./usageLimit";
 import { useChangeSummary } from "../files/useChangeSummary";
 import { sessionLink } from "./automationMessages";
 import { readSession } from "./sessionLookup";
@@ -611,6 +613,17 @@ export function ChatSessionScreen({ session: boardSession }: { session: MobileCh
 	const currentAccount = agentAccounts.accounts.find((account) => account.id === agentAccounts.current);
 	const menuAccountName = currentAccount ? agentAccountLabel(currentAccount, agentAccounts.accounts) : undefined;
 	const menuAccountCanMove = agentAccounts.accounts.some((account) => account.signedIn && account.id !== agentAccounts.current);
+	const limitedTurnId = useMemo(() => conversation.snapshot ? usageLimitedTurn(conversation.snapshot)?.id : undefined, [conversation.snapshot]);
+	const { retryTurn, setTurnAutoResume } = conversation;
+	const turnRecovery = useMemo((): TurnRecovery => ({
+		limitedTurnId,
+		resume: retryTurn,
+		setAutoResume: setTurnAutoResume,
+		accountLabel: (accountId) => {
+			const account = agentAccounts.accounts.find((candidate) => candidate.id === accountId);
+			return account ? agentAccountLabel(account, agentAccounts.accounts) : undefined;
+		},
+	}), [agentAccounts.accounts, limitedTurnId, retryTurn, setTurnAutoResume]);
 	const menuGroups = useMemo(() => menuReady ? conversationMenuGroups({
 		previewReady,
 		artifactCount: menuArtifactCount,
@@ -898,6 +911,7 @@ export function ChatSessionScreen({ session: boardSession }: { session: MobileCh
 			<ChatLinkProvider onLinkOpen={openLink} sessionName={nameOfSession} onSessionNameNeeded={wantSessionName} onAddToChat={conversation.snapshot?.supportsExcerpts ? addResponseToChat : undefined}>
 				<FilesNavigationContext.Provider value={filesNavigation}>
 				<TurnArtifactsContext.Provider value={turnArtifacts}>
+				<TurnRecoveryContext.Provider value={turnRecovery}>
 				<ChatTimeline
 					snapshot={snapshot}
 					loadingOlder={conversation.loadingOlder}
@@ -922,6 +936,7 @@ export function ChatSessionScreen({ session: boardSession }: { session: MobileCh
 					composerGrowth={composerFieldGrowth}
 					jumpHidden={composerOpen}
 				/>
+				</TurnRecoveryContext.Provider>
 				</TurnArtifactsContext.Provider>
 				</FilesNavigationContext.Provider>
 			</ChatLinkProvider>

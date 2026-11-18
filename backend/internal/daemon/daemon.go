@@ -797,6 +797,14 @@ func Run(buildVersion string) (retErr error) {
 	}); ok {
 		chatSvc.SetOtherWriterCheck(check.ImportedChatWrittenElsewhere)
 	}
+	if resume, ok := sessMgr.(interface {
+		ResumeAgentWithMode(context.Context, domain.SessionID) (sessionmanager.RestoreResult, error)
+	}); ok {
+		chatSvc.SetResumeAgentCallback(func(ctx context.Context, id domain.SessionID) error {
+			_, err := resume.ResumeAgentWithMode(ctx, id)
+			return err
+		})
+	}
 	if tunable, ok := sessMgr.(interface {
 		SetModelCatalog(interface {
 			Models(context.Context, string, string, bool) (ports.AgentModelCatalog, error)
