@@ -1,6 +1,6 @@
 // @vitest-environment node
 import { execFileSync } from "node:child_process";
-import { existsSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { evaluate } from "@mdx-js/mdx";
@@ -85,6 +85,22 @@ it.each([
 ])("rejects empty, unsorted or non-data exports: %j", async (...data) => {
   // Vitest spreads array cases into arguments.
   await expect(render(fixture(), data as typeof rows)).rejects.toThrow(/Docs references:/);
+});
+
+it("keeps the previous JSON readable until a successful replacement", () => {
+  const root = mkdtempSync(join(tmpdir(), "docsref-"));
+  roots.push(root);
+  const output = join(root, "agent-harnesses.json");
+  const previous = JSON.stringify(rows);
+  const next = JSON.stringify(rows.map((row) => ({ ...row, chat: true })));
+  writeFileSync(output, previous);
+  vi.mocked(execFileSync).mockImplementation(() => {
+    expect(readFileSync(output, "utf8")).toBe(previous);
+    return next;
+  });
+  generateReferences(output);
+  expect(readFileSync(output, "utf8")).toBe(next);
+  expect(readdirSync(root)).toEqual(["agent-harnesses.json"]);
 });
 
 it.each(["missing Go", "invalid JSON", "empty export"])("removes stale data and fails the build on %s", (failure) => {

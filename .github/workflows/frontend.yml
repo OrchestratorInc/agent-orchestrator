@@ -272,6 +272,19 @@ jobs:
       - name: Build docs
         run: npm run build
 
+      - name: Save rendered reference proof
+        uses: actions/upload-artifact@v4
+        with:
+          name: docs-reference-proof
+          retention-days: 7
+          if-no-files-found: error
+          include-hidden-files: true
+          path: |
+            frontend/src/docs/.generated/agent-harnesses.json
+            frontend/src/docs/out/plugins/agents/index.html
+            frontend/src/docs/out/plugins/agents.md
+            frontend/src/docs/out/llms-full.txt
+
   boundary:
     if: contains(fromJSON(inputs.lanes), 'boundary')
     runs-on: ubuntu-latest

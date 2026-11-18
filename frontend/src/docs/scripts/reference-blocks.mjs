@@ -1,5 +1,5 @@
 import { execFileSync } from "node:child_process";
-import { mkdirSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, renameSync, rmSync, writeFileSync } from "node:fs";
 import { dirname } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 
@@ -23,8 +23,7 @@ function validateRows(rows) {
 }
 
 export function generateReferences(outputPath = referencesPath) {
-  // A failed run must leave nothing a later build could mistake for fresh data.
-  rmSync(outputPath, { force: true });
+  const temporaryPath = `${outputPath}.${process.pid}.tmp`;
   try {
     const json = execFileSync("go", ["run", "-p", "1", "./cmd/docsref"], {
       cwd: backend, encoding: "utf8", env: { ...process.env, GOTOOLCHAIN: "auto" },
@@ -32,9 +31,14 @@ export function generateReferences(outputPath = referencesPath) {
     });
     validateRows(JSON.parse(json));
     mkdirSync(dirname(outputPath), { recursive: true });
-    writeFileSync(outputPath, json);
+    writeFileSync(temporaryPath, json);
+    renameSync(temporaryPath, outputPath);
   } catch (cause) {
+    // A failed run must leave nothing a later build could mistake for fresh data.
+    rmSync(outputPath, { force: true });
     throw new Error("Docs references could not be generated. Install Go (see backend/go.mod) and rerun npm run build. No cached table will be used.", { cause });
+  } finally {
+    rmSync(temporaryPath, { force: true });
   }
 }
 
