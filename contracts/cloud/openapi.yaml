@@ -708,13 +708,14 @@ paths:
       operationId: listSharedArtifacts
       tags: [Artifacts]
       description: >-
-        Lists the active links other people published that open for the
+        Lists the active links other people published and shared with the
         signed-in person, newest change first: links shared with their
-        verified email, and public links they opened in Orchestrator
-        (saveSharedArtifact). A saved link that went private without inviting
-        them, or was unpublished, is no longer listed; their own links never
-        are. No owner is named. A link's file opens through viewArtifactShare.
-        Available only when artifact share links are on; otherwise 404.
+        verified email, and links shared with a team they are in, private or
+        public. They are listed without being opened; opening a link never
+        lists it. A link shared both ways is listed once. An unpublished link
+        is no longer listed; their own links never are. No owner is named. A
+        link's file opens through viewArtifactShare. Available only when
+        artifact share links are on; otherwise 404.
       responses:
         "200":
           description: The links shared with the signed-in person.
@@ -728,38 +729,6 @@ paths:
                     type: array
                     items:
                       $ref: "#/components/schemas/SharedArtifact"
-        default:
-          $ref: "#/components/responses/Error"
-  /api/cloud/v1/me/shared-artifacts/{linkId}:
-    parameters:
-      - name: linkId
-        in: path
-        required: true
-        description: The link's public ID, the slug of an ArtifactShare.
-        schema:
-          type: string
-    put:
-      operationId: saveSharedArtifact
-      tags: [Artifacts]
-      description: >-
-        Lists a link the signed-in person opened in Orchestrator among the
-        ones shared with them, and returns it as listed. Saving it again keeps
-        when it was first saved. A link shared with their email (via invited)
-        and their own link (via owner) are returned as they are, with nothing
-        saved. Like viewArtifactShare, a link that does not open for them,
-        private or not there at all, returns 404, and the call is rate-limited
-        per person (429 rate_limited).
-      responses:
-        "200":
-          description: The link as the signed-in person's list shows it.
-          content:
-            application/json:
-              schema:
-                type: object
-                required: [artifact]
-                properties:
-                  artifact:
-                    $ref: "#/components/schemas/SharedArtifact"
         default:
           $ref: "#/components/responses/Error"
   /api/cloud/v1/orgs/{orgId}/providers/{agent}/models:
@@ -9762,9 +9731,9 @@ components:
     SharedArtifact:
       type: object
       description: >-
-        A link someone else published that opens for the signed-in person, as
+        A link someone else published and shared with the signed-in person, as
         their Artifacts list shows it.
-      required: [linkId, name, contentType, size, updatedAt, access, via, sharedAt]
+      required: [linkId, name, contentType, size, updatedAt, access, via, teams, sharedAt]
       properties:
         linkId:
           type: string
@@ -9788,15 +9757,26 @@ components:
           description: The viewer page of the link; absent without a viewer.
         via:
           type: string
-          enum: [invited, saved, owner]
+          enum: [direct, team]
           description: >-
-            Why it is listed: invited, shared with their email; saved, they
-            opened the public link in Orchestrator; owner, their own link,
-            returned only by saveSharedArtifact and never listed.
+            How it reached them: direct, shared with their email (whether or
+            not also with a team of theirs); team, shared only with teams they
+            are in.
+        teams:
+          type: array
+          description: Every team of theirs the link is shared with; empty when none.
+          items:
+            type: object
+            required: [id, name]
+            properties:
+              id:
+                type: string
+              name:
+                type: string
         sharedAt:
           type: string
           format: date-time
-          description: When it was shared with them or they saved it.
+          description: When it was first shared with them.
     PublicArtifactShare:
       type: object
       additionalProperties: false
@@ -9834,6 +9814,12 @@ components:
             token in its vt query parameter.
         access:
           $ref: "#/components/schemas/ArtifactShareAccess"
+        viewerUrl:
+          type: string
+          description: >-
+            The link's viewer page; absent where the control plane has no
+            viewer. The desktop app opens a link sent from a viewer page only
+            when it came from this origin.
         you:
           type: object
           additionalProperties: false
