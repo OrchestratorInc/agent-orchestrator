@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
-import { annotationTextMatches, annotationTextRange, highlightChatAnnotation, renderedSnippetText } from "./chat-annotation-navigation";
+import { annotationTextMatches, annotationTextRange, annotationDiagramBlock, annotationReferenceRange, highlightChatAnnotation, renderedSnippetText } from "./chat-annotation-navigation";
+import type { ChatExcerptSnapshot } from "../../shared/chat-excerpt";
 
 describe("annotation navigation highlights", () => {
 	it("matches across formatted spans and collapsed whitespace", () => {
@@ -22,6 +23,38 @@ describe("annotation navigation highlights", () => {
 		expect(window.getSelection()?.rangeCount).toBe(0);
 		cleanup();
 		expect(body).not.toHaveClass("chat-annotation-target");
+	});
+});
+
+describe("diagram annotation navigation", () => {
+	function fixture() {
+		const source = document.createElement("div");
+		source.dataset.chatMessageRevision = "2";
+		source.innerHTML = '<div data-chat-message-body><div data-excerpt-flowchart data-excerpt-start="10" data-excerpt-end="40">same label</div><p>Between</p><div data-excerpt-flowchart data-excerpt-start="100" data-excerpt-end="130">same label</div></div>';
+		const snapshot: ChatExcerptSnapshot = { version: 1, rawText: "raw", captureMode: "block", containsFlowchart: true, sourceRange: { start: 0, end: 150, offsetUnit: "utf-16" }, diagramRange: { start: 100, end: 130, offsetUnit: "utf-16" } };
+		return { source, snapshot };
+	}
+	it("resolves the selected block even when two diagrams have identical labels", () => {
+		const { source, snapshot } = fixture();
+		expect(annotationDiagramBlock(source, { revision: 2, snapshot })).toBe(source.querySelectorAll("[data-excerpt-flowchart]")[1]);
+		expect(annotationReferenceRange(source, { text: "same label", revision: 2, snapshot })).toBeUndefined();
+	});
+	it("does not guess after a source revision change or when a block is missing or ambiguous", () => {
+		const { source, snapshot } = fixture();
+		expect(annotationDiagramBlock(source, { revision: 1, snapshot })).toBeUndefined();
+		expect(annotationDiagramBlock(source, { snapshot })).toBeUndefined();
+		const block = source.querySelectorAll("[data-excerpt-flowchart]")[1];
+		block.remove();
+		expect(annotationDiagramBlock(source, { revision: 2, snapshot })).toBeUndefined();
+		source.querySelector("[data-chat-message-body]")!.append(block, block.cloneNode(true));
+		expect(annotationDiagramBlock(source, { revision: 2, snapshot })).toBeUndefined();
+	});
+	it("supports old exact-block captures without guessing within broader old captures", () => {
+		const { source, snapshot } = fixture();
+		snapshot.diagramRange = undefined;
+		expect(annotationDiagramBlock(source, { revision: 2, snapshot })).toBeUndefined();
+		snapshot.sourceRange = { start: 100, end: 130, offsetUnit: "utf-16" };
+		expect(annotationDiagramBlock(source, { revision: 2, snapshot })).toBe(source.querySelectorAll("[data-excerpt-flowchart]")[1]);
 	});
 });
 

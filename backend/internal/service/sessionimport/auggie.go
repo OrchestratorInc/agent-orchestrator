@@ -23,7 +23,7 @@ func discoverAuggie(ctx context.Context, root string) ([]sourceFiles, error) {
 	if err != nil {
 		return nil, err
 	}
-	data, err := readOnlyCLIList(ctx, binary, "--augment-cache-dir", root, "session", "list", "--all", "--json", "--limit", "100")
+	data, err := readAuggieList(ctx, binary, "--augment-cache-dir", root, "session", "list", "--all", "--json", "--limit", "100")
 	if err != nil {
 		return nil, err
 	}

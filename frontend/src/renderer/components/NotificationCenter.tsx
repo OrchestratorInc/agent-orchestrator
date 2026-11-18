@@ -1,4 +1,5 @@
 import { AppLink } from "./AppLink";
+import { CloudMark } from "./CloudMark";
 import { useQueryClient } from "@tanstack/react-query";
 import { useTranslation } from "react-i18next";
 import { useParams } from "@tanstack/react-router";
@@ -16,7 +17,7 @@ import {
 	MessageSquareDiff,
 	MessageSquareDot,
 	X,
-} from "lucide-react";
+} from "@/components/app-icons";
 import { memo, useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import {
 	useClearAllNotificationsMutation,
@@ -24,6 +25,7 @@ import {
 	useMarkAllNotificationsReadMutation,
 	useNotificationsQuery,
 } from "../hooks/useNotificationsQuery";
+import { useAppMenuAction, useAppMenuAvailable } from "../hooks/useAppMenuCommand";
 import { useRestoreSession } from "../hooks/useRestoreSession";
 import { useSwipeToDismiss } from "../hooks/useSwipeToDismiss";
 import { useRemoteWorkspaces, useWorkspaceQuery } from "../hooks/useWorkspaceQuery";
@@ -46,12 +48,16 @@ import {
 import { useUiStore } from "../stores/ui-store";
 import { useNavigateToSession } from "../lib/navigate-to-session";
 import { captureRendererEvent } from "../lib/telemetry";
+import { captureTopbarAction } from "../lib/topbar-telemetry";
 import { recordManualWorkerOpen } from "../lib/session-management-telemetry";
 import { cn } from "../lib/utils";
-import { TopbarButton } from "./TopbarButton";
+import { Button } from "./ui/button";
+import { Pressable } from "./ui/pressable";
 import { Popover, PopoverAnchor, PopoverContent, PopoverTrigger } from "./ui/popover";
-import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "./ui/tooltip";
+import { TooltipProvider } from "./ui/tooltip";
 import { useCloudNotifications } from "../hooks/useCloudNotifications";
+import { useCloudCp } from "../hooks/useCloudCp";
+import { useCloudOrg } from "../hooks/useCloudOrg";
 import { clearRemoteNotification, clearRemoteNotifications, connectRemoteNotificationStreams, fetchRemoteNotificationsPage, markRemoteNotificationsRead, remoteNotificationsQueryKey, useRemoteNotificationHosts } from "../hooks/useRemoteNotifications";
 import type { CloudCpNotification } from "../lib/cloud-cp/types";
 
@@ -62,6 +68,8 @@ type NotificationCenterProps = {
 };
 
 const REMOTE_NOTIFICATION_PREFIX = "remote-notification:";
+const CLOUD_NOTIFICATION_PREFIX = "cloud-notification:";
+const EMPTY_CLOUD_NOTIFICATIONS: CloudCpNotification[] = [];
 const notificationKey = (hostId: HostId, id: string) => refKey({ host: hostId, id });
 
 function useNotificationTargetNavigation() {
@@ -71,7 +79,7 @@ function useNotificationTargetNavigation() {
 			const sessionId = notification.target.sessionId || notification.sessionId;
 			if (!sessionId) return;
 			recordManualWorkerOpen(sessionId);
-			void captureRendererEvent("ao.renderer.notification_opened", { target: "session" });
+			void captureRendererEvent("ao.notifications.opened", { target: "session" });
 			navigateToSession(notification.projectId, sessionId, hostId);
 		},
 		[navigateToSession],
@@ -80,7 +88,7 @@ function useNotificationTargetNavigation() {
 	const openPrimary = useCallback(
 		(notification: NotificationDTO, hostId: HostId = LOCAL_HOST) => {
 			if (notification.target.kind === "pr" && notification.target.prUrl) {
-				void captureRendererEvent("ao.renderer.notification_opened", { target: "pr" });
+				void captureRendererEvent("ao.notifications.opened", { target: "pr" });
 				window.open(notification.target.prUrl, "_blank", "noopener,noreferrer");
 				return;
 			}
@@ -183,14 +191,28 @@ function NotificationWorkspaceState({
 export function NotificationRuntime() {
 	const queryClient = useQueryClient();
 	const { openPrimary } = useNotificationTargetNavigation();
+	const navigateToSession = useNavigateToSession();
 	const unreadQuery = useNotificationsQuery("unread");
 	const remoteUnread = useRemoteNotificationHosts("unread");
-	const unreadCount = getCachedUnreadCount(unreadQuery.data) + remoteUnread.totalUnreadCount;
+	// CloudNotificationRuntime keeps the Cloud list live; this only reads it,
+	// so Cloud rows reach the badge and the OS as local ones do.
+	const cloudAll = useCloudNotifications("all", { live: false });
+	const cloudItems = cloudAll.items ?? EMPTY_CLOUD_NOTIFICATIONS;
+	const cloudItemsRef = useRef(cloudItems);
+	cloudItemsRef.current = cloudItems;
+	const { userId: cloudUserId } = useCloudCp();
+	const { org: cloudOrg } = useCloudOrg();
+	// Whose Cloud inbox is loaded; a new account or organization is a new inbox.
+	const cloudScope = cloudAll.data ? `${cloudUserId}:${cloudOrg?.id ?? ""}` : undefined;
+	// The same count as the bell's.
+	const unreadCount = getCachedUnreadCount(unreadQuery.data) + remoteUnread.totalUnreadCount + (cloudAll.data?.unreadCount ?? 0);
 	const params = useParams({ strict: false }) as { hostId?: string; sessionId?: string };
 	const routeRef = useRef(params);
 	routeRef.current = params;
 	const seenRemoteIds = useRef(new Map<HostId, Set<string>>());
 	const shownRemoteNotifications = useRef(new Map<string, NotificationDTO>());
+	const seenCloudIds = useRef<{ scope: string; ids: Set<string> } | undefined>(undefined);
+	const shownCloudNotifications = useRef(new Map<string, CloudCpNotification>());
 
 	// Being on the session route is not the same as watching the agent: its pane
 	// renders one terminal at a time, so a shell or reviewer tab hides the agent
@@ -251,8 +273,53 @@ export function NotificationRuntime() {
 		}
 	}, [remoteUnread.hosts]);
 
+	// A Cloud row that arrives while the list is loaded raises an OS
+	// notification, as a local one does; the list as first loaded (or after
+	// the account or organization changes it wholesale) is not replayed.
+	useEffect(() => {
+		if (cloudScope === undefined) return;
+		if (seenCloudIds.current?.scope !== cloudScope) {
+			seenCloudIds.current = { scope: cloudScope, ids: new Set(cloudItems.map((item) => item.id)) };
+			return;
+		}
+		const previous = seenCloudIds.current.ids;
+		for (const notification of cloudItems) {
+			if (previous.has(notification.id)) continue;
+			previous.add(notification.id);
+			if (previous.size > 512) previous.delete(previous.values().next().value!);
+			if (notification.status !== "unread" || notification.resolvedAt) continue;
+			const id = `${CLOUD_NOTIFICATION_PREFIX}${notification.id}`;
+			shownCloudNotifications.current.set(id, notification);
+			if (shownCloudNotifications.current.size > 256) {
+				shownCloudNotifications.current.delete(shownCloudNotifications.current.keys().next().value!);
+			}
+			const { hostId, sessionId } = routeRef.current;
+			const watched = notification.type === "needs_input" && !hostId && Boolean(sessionId) &&
+				sessionId === notification.sessionId && document.visibilityState === "visible" && document.hasFocus() &&
+				useUiStore.getState().visibleTerminalKindBySession[sessionUiKey(sessionId!)] === "worker";
+			void aoBridge.notifications.show({
+				id,
+				title: notification.title,
+				body: notification.body || undefined,
+				type: notification.type,
+				watched,
+			});
+		}
+	}, [cloudItems, cloudScope]);
+
 	useEffect(() => {
 		return aoBridge.notifications.onClick((id) => {
+			if (id.startsWith(CLOUD_NOTIFICATION_PREFIX)) {
+				const notificationId = id.slice(CLOUD_NOTIFICATION_PREFIX.length);
+				const notification = shownCloudNotifications.current.get(id) ??
+					cloudItemsRef.current.find((item) => item.id === notificationId);
+				if (notification?.sessionId && notification.projectId) {
+					recordManualWorkerOpen(notification.sessionId);
+					void captureRendererEvent("ao.notifications.opened", { target: "session" });
+					navigateToSession(notification.projectId, notification.sessionId);
+				}
+				return;
+			}
 			if (id.startsWith(REMOTE_NOTIFICATION_PREFIX)) {
 				try {
 					const { host, id: notificationId } = parseRefKey(id.slice(REMOTE_NOTIFICATION_PREFIX.length));
@@ -270,7 +337,7 @@ export function NotificationRuntime() {
 			);
 			if (notification) openPrimary(notification);
 		});
-	}, [openPrimary, queryClient]);
+	}, [navigateToSession, openPrimary, queryClient]);
 
 	return null;
 }
@@ -408,7 +475,7 @@ export function NotificationCenter({ style }: NotificationCenterProps) {
 
 		setMarkReadError(null);
 		void markAllMutate(newly)
-			.then(() => captureRendererEvent("ao.renderer.notification_mark_read_succeeded", { scope: "all" }))
+			.then(() => captureRendererEvent("ao.notifications.read", { scope: "all" }))
 			.catch((error: unknown) => {
 				void captureRendererEvent("ao.renderer.notification_mark_read_failed", { scope: "all" });
 				for (const id of newly) acknowledgedIdsRef.current.delete(id);
@@ -482,6 +549,7 @@ export function NotificationCenter({ style }: NotificationCenterProps) {
 
 	const setPanelOpen = useCallback((nextOpen: boolean) => {
 		setOpen(nextOpen);
+		if (nextOpen) captureTopbarAction("notifications");
 		if (!nextOpen) {
 			remoteHistoryGeneration.current += 1;
 			remoteFirstPageKeys.current.clear();
@@ -492,6 +560,16 @@ export function NotificationCenter({ style }: NotificationCenterProps) {
 			keepLatestNotificationsPage(queryClient, recentNotificationsQueryKey);
 		}
 	}, [queryClient]);
+
+	// A fullscreen pane mounts its own bell and covers the panel's; only the bell
+	// the user can see answers the menu.
+	const anchorRef = useRef<HTMLSpanElement>(null);
+	useAppMenuAvailable("toggle-notifications", true);
+	useAppMenuAction("toggle-notifications", () => {
+		const fullscreenElement = document.fullscreenElement;
+		if (fullscreenElement && !fullscreenElement.contains(anchorRef.current)) return;
+		setPanelOpen(!openRef.current);
+	});
 
 	const retryMarkRead = () => {
 		setMarkReadError(null);
@@ -537,7 +615,7 @@ export function NotificationCenter({ style }: NotificationCenterProps) {
 	// their cloud project, so they open through the same session route.
 	const openCloudSession = useCallback((projectId: string, sessionId: string) => {
 		recordManualWorkerOpen(sessionId);
-		void captureRendererEvent("ao.renderer.notification_opened", { target: "session" });
+		void captureRendererEvent("ao.notifications.opened", { target: "session" });
 		navigateToSession(projectId, sessionId);
 	}, [navigateToSession]);
 
@@ -672,13 +750,13 @@ export function NotificationCenter({ style }: NotificationCenterProps) {
 		<Popover onOpenChange={setPanelOpen} open={open}>
 			{/* Keep the drawer anchored to layout bounds while the bell scales on press. */}
 			<PopoverAnchor asChild>
-				<span className="inline-flex shrink-0">
+				<span className="inline-flex shrink-0" ref={anchorRef}>
 					<PopoverTrigger asChild>
-						<TopbarButton
+						<Button type="button" size="icon-sm"
 							aria-label={unreadCount > 0 ? t("notify.unreadCount", { count: unreadCount }) : t("notify.bell")}
 							className="relative"
 							style={style}
-							variant="icon"
+							variant="quiet"
 						>
 							{unreadCount > 0 ? (
 								<BellRing className="size-icon-base fill-current text-foreground" aria-hidden="true" />
@@ -690,7 +768,7 @@ export function NotificationCenter({ style }: NotificationCenterProps) {
 									{unreadCount > 99 ? "99+" : unreadCount}
 								</span>
 							) : null}
-						</TopbarButton>
+						</Button>
 					</PopoverTrigger>
 				</span>
 			</PopoverAnchor>
@@ -711,15 +789,16 @@ export function NotificationCenter({ style }: NotificationCenterProps) {
 						) : null}
 					</div>
 					<div className="flex shrink-0 items-center gap-1">
-						<button
-							className="inline-flex h-7 items-center gap-1.5 rounded-md px-2 text-caption font-medium text-muted-foreground transition-none hover:bg-interactive-hover hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/60 disabled:pointer-events-none disabled:opacity-40"
+						<Button
 							disabled={isEmpty || localLoading || clearingAll || clearAll.isPending}
 							onClick={handleClearAll}
+							size="sm"
 							type="button"
+							variant="quiet"
 						>
 							{clearingAll ? <LoaderCircle className="size-icon-sm animate-spin" aria-hidden="true" /> : null}
 							{t("notify.clearAll")}
-						</button>
+						</Button>
 					</div>
 				</div>
 				<TooltipProvider skipDelayDuration={0}>
@@ -732,13 +811,14 @@ export function NotificationCenter({ style }: NotificationCenterProps) {
 						className="flex items-center justify-between gap-2 border-b border-border bg-error/5 px-4 py-2 text-caption text-error"
 					>
 						<span>{markReadError}</span>
-						<button
-							className="shrink-0 rounded-sm font-medium underline underline-offset-2 hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/60"
+						<Button
+							className="shrink-0 font-medium"
+							variant="link"
 							onClick={retryMarkRead}
 							type="button"
 						>
 							{t("notify.retry")}
-						</button>
+						</Button>
 					</div>
 				) : null}
 				{actionError ? (
@@ -750,13 +830,14 @@ export function NotificationCenter({ style }: NotificationCenterProps) {
 						className="flex items-center justify-between gap-2 border-b border-border bg-error/5 px-4 py-2 text-caption text-error"
 					>
 						<span>{t("notify.workspaceLoadFailed")}</span>
-						<button
-							className="shrink-0 rounded-sm font-medium underline underline-offset-2 hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/60"
+						<Button
+							className="shrink-0 font-medium"
+							variant="link"
 							onClick={retryWorkspace}
 							type="button"
 						>
 							{t("notify.retry")}
-						</button>
+						</Button>
 					</div>
 				) : null}
 				{(localLoadFailed || remoteLoadFailed) && !isEmpty ? (
@@ -765,8 +846,9 @@ export function NotificationCenter({ style }: NotificationCenterProps) {
 						className="flex items-center justify-between gap-2 border-b border-border bg-error/5 px-4 py-2 text-caption text-error"
 					>
 						<span>{t("notify.loadFailed")}</span>
-						<button
-							className="shrink-0 rounded-sm font-medium underline underline-offset-2 hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/60"
+						<Button
+							className="shrink-0 font-medium"
+							variant="link"
 							onClick={() => {
 								if (localLoadFailed) void allQuery.refetch();
 								for (const host of remoteAll.hosts) {
@@ -776,7 +858,7 @@ export function NotificationCenter({ style }: NotificationCenterProps) {
 							type="button"
 						>
 							{t("notify.retry")}
-						</button>
+						</Button>
 					</div>
 				) : null}
 				{(localLoadFailed || remoteLoadFailed) && isEmpty ? (
@@ -863,13 +945,14 @@ export function NotificationCenter({ style }: NotificationCenterProps) {
 								className="flex items-center justify-center gap-2 border-t border-border bg-surface px-3 py-3 text-caption text-error"
 							>
 								{t("notify.earlierLoadFailed")}
-								<button
-									className="rounded-sm font-medium underline underline-offset-2 hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/60"
+								<Button
+									className="font-medium"
+									variant="link"
 									onClick={() => void allQuery.fetchNextPage()}
 									type="button"
 								>
 									{t("notify.retry")}
-								</button>
+								</Button>
 							</div>
 						) : allQuery.isFetchingNextPage ? (
 							<div
@@ -885,15 +968,15 @@ export function NotificationCenter({ style }: NotificationCenterProps) {
 							const cursor = older.length > 0 ? older[older.length - 1].nextCursor : host.data?.nextCursor;
 							if (!cursor || !host.data) return null;
 							return (
-								<button
-									className="block w-full border-t border-border bg-surface px-3 py-3 text-center text-caption font-medium text-muted-foreground transition-none hover:bg-interactive-hover hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring/60 disabled:opacity-50"
+								<Pressable
+									className="block w-full border-t border-border bg-surface px-3 py-3 text-center text-caption font-medium text-muted-foreground transition-none hover:bg-interactive-hover hover:text-foreground disabled:opacity-50"
 									disabled={remoteLoadingEarlierHost !== null}
 									key={host.hostId}
 									onClick={() => void loadRemoteEarlier(host.hostId, cursor)}
 									type="button"
 								>
 									{remoteLoadingEarlierHost === host.hostId ? t("notify.loadingEarlier") : t("notify.loadEarlierFromHost", { host: host.label })}
-								</button>
+								</Pressable>
 							);
 						})}
 						{remoteEarlierError ? <div aria-live="polite" className="px-4 py-2 text-caption text-error">{remoteEarlierError}</div> : null}
@@ -1001,7 +1084,7 @@ const NotificationItem = memo(function NotificationItem({
 						notificationIconClass(notification.type),
 					)}
 				>
-					<Icon className="size-icon-base" strokeWidth={1.75} aria-hidden="true" />
+					<Icon className="size-icon-base" aria-hidden="true" />
 				</div>
 				<div className="min-w-0">
 					<div className="flex min-h-5 items-start">
@@ -1021,7 +1104,7 @@ const NotificationItem = memo(function NotificationItem({
 										href={titleLink.url}
 										onClick={(event) => {
 											event.stopPropagation();
-											void captureRendererEvent("ao.renderer.notification_opened", { target: "pr" });
+											void captureRendererEvent("ao.notifications.opened", { target: "pr" });
 										}}
 										rel="noopener noreferrer"
 										target="_blank"
@@ -1055,9 +1138,10 @@ const NotificationItem = memo(function NotificationItem({
 							</p>
 						) : null}
 						{offerRestore && sessionId ? (
-							<button
+							<Button
 								title=""
-								className="inline-flex min-h-6 max-w-full items-center gap-1.5 rounded-sm text-left text-muted-foreground underline underline-offset-2 transition-none hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/60 disabled:pointer-events-none disabled:opacity-40"
+								className="min-h-6 max-w-full gap-1.5 whitespace-normal text-left text-muted-foreground"
+								variant="link"
 								disabled={restoreDisabled}
 								onClick={(event) => {
 									event.stopPropagation();
@@ -1068,7 +1152,7 @@ const NotificationItem = memo(function NotificationItem({
 							>
 								{restoring ? <LoaderCircle className="size-icon-sm shrink-0 animate-spin" aria-hidden="true" /> : null}
 								<span className="text-caption leading-snug">{restoring ? t("shell.restoringSession") : t("notify.restoreArchivedPrompt")}</span>
-							</button>
+							</Button>
 						) : null}
 						</div>
 					) : null}
@@ -1079,34 +1163,31 @@ const NotificationItem = memo(function NotificationItem({
 					</time>
 					<div className="flex items-center gap-0.5">
 
-					<Tooltip>
-						<TooltipTrigger asChild>
-							<button
-								aria-label={t("notify.clearOne", { title: hostLabel ? `${hostLabel}: ${copy.title}` : copy.title })}
-								title=""
-								className={cn(
-									"grid size-notification-icon place-items-center rounded-md text-muted-foreground transition-none hover:bg-interactive-active hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/60 disabled:pointer-events-none disabled:opacity-40",
-									clearing
-										? "opacity-100 disabled:opacity-100"
-										: "pointer-events-none opacity-0 group-hover:pointer-events-auto group-hover:opacity-100 group-focus-within:pointer-events-auto group-focus-within:opacity-100 focus-visible:pointer-events-auto focus-visible:opacity-100 [@media(hover:none)]:pointer-events-auto [@media(hover:none)]:opacity-100",
-								)}
-								disabled={clearDisabled}
-								onClick={(event) => {
-									event.stopPropagation();
-									void onClear(notification);
-								}}
-								onKeyDown={(event) => event.stopPropagation()}
-								type="button"
-							>
-								{clearing ? (
-									<LoaderCircle className="size-icon-sm animate-spin" aria-hidden="true" />
-								) : (
-									<X className="size-icon-sm" aria-hidden="true" />
-								)}
-							</button>
-						</TooltipTrigger>
-						<TooltipContent side="top">{t("notify.clearOneShort")}</TooltipContent>
-					</Tooltip>
+					<Button
+						aria-label={t("notify.clearOne", { title: hostLabel ? `${hostLabel}: ${copy.title}` : copy.title })}
+						title=""
+						className={cn(
+							"size-notification-icon",
+							clearing
+								? "opacity-100 disabled:opacity-100"
+								: "pointer-events-none opacity-0 group-hover:pointer-events-auto group-hover:opacity-100 group-focus-within:pointer-events-auto group-focus-within:opacity-100 focus-visible:pointer-events-auto focus-visible:opacity-100 [@media(hover:none)]:pointer-events-auto [@media(hover:none)]:opacity-100",
+						)}
+						disabled={clearDisabled}
+						onClick={(event) => {
+							event.stopPropagation();
+							void onClear(notification);
+						}}
+						onKeyDown={(event) => event.stopPropagation()}
+						size="none"
+						type="button"
+						variant="quiet"
+					>
+						{clearing ? (
+							<LoaderCircle className="size-icon-sm animate-spin" aria-hidden="true" />
+						) : (
+							<X className="size-icon-sm" aria-hidden="true" />
+						)}
+					</Button>
 					</div>
 				</div>
 			</div>
@@ -1118,7 +1199,7 @@ const cloudRowKey = (id: string) => `cloud:${id}`;
 
 /**
  * Cloud rows mirror NotificationItem exactly (open, restore, clear, meta line,
- * motion), plus a small "Cloud" tag. A cloud row opens only once its session is
+ * motion), plus a small cloud mark. A cloud row opens only once its session is
  * in the workspace tree; otherwise the route would have nothing to render.
  */
 const CloudNotificationItem = memo(function CloudNotificationItem({
@@ -1192,7 +1273,7 @@ const CloudNotificationItem = memo(function CloudNotificationItem({
 						notificationIconClass(notification.type),
 					)}
 				>
-					<Icon className="size-icon-base" strokeWidth={1.75} aria-hidden="true" />
+					<Icon className="size-icon-base" aria-hidden="true" />
 				</div>
 				<div className="min-w-0">
 					<div className="flex min-h-5 items-start gap-1.5">
@@ -1205,9 +1286,7 @@ const CloudNotificationItem = memo(function CloudNotificationItem({
 						>
 							{notification.title}
 						</span>
-						<span className="mt-0.5 shrink-0 rounded-sm border border-border bg-surface px-1 py-0.5 text-caption leading-none text-muted-foreground">
-							{t("notify.cloud")}
-						</span>
+						<CloudMark className="h-5" />
 					</div>
 					{notification.body ? (
 						<p className="mt-1 whitespace-pre-wrap break-words text-xs leading-relaxed text-muted-foreground">
@@ -1226,9 +1305,10 @@ const CloudNotificationItem = memo(function CloudNotificationItem({
 							</p>
 						) : null}
 						{offerRestore && sessionId && projectId ? (
-							<button
+							<Button
 								title=""
-								className="inline-flex min-h-6 max-w-full items-center gap-1.5 rounded-sm text-left text-muted-foreground underline underline-offset-2 transition-none hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/60 disabled:pointer-events-none disabled:opacity-40"
+								className="min-h-6 max-w-full gap-1.5 whitespace-normal text-left text-muted-foreground"
+								variant="link"
 								disabled={restoreDisabled}
 								onClick={(event) => {
 									event.stopPropagation();
@@ -1239,7 +1319,7 @@ const CloudNotificationItem = memo(function CloudNotificationItem({
 							>
 								{restoring ? <LoaderCircle className="size-icon-sm shrink-0 animate-spin" aria-hidden="true" /> : null}
 								<span className="text-caption leading-snug">{restoring ? t("shell.restoringSession") : t("notify.restoreArchivedPrompt")}</span>
-							</button>
+							</Button>
 						) : null}
 						</div>
 					) : null}
@@ -1250,34 +1330,31 @@ const CloudNotificationItem = memo(function CloudNotificationItem({
 					</time>
 					<div className="flex items-center gap-0.5">
 
-					<Tooltip>
-						<TooltipTrigger asChild>
-							<button
-								aria-label={t("notify.clearOne", { title: notification.title })}
-								title=""
-								className={cn(
-									"grid size-notification-icon place-items-center rounded-md text-muted-foreground transition-none hover:bg-interactive-active hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/60 disabled:pointer-events-none disabled:opacity-40",
-									clearing
-										? "opacity-100 disabled:opacity-100"
-										: "pointer-events-none opacity-0 group-hover:pointer-events-auto group-hover:opacity-100 group-focus-within:pointer-events-auto group-focus-within:opacity-100 focus-visible:pointer-events-auto focus-visible:opacity-100 [@media(hover:none)]:pointer-events-auto [@media(hover:none)]:opacity-100",
-								)}
-								disabled={clearDisabled}
-								onClick={(event) => {
-									event.stopPropagation();
-									void onClear(notification);
-								}}
-								onKeyDown={(event) => event.stopPropagation()}
-								type="button"
-							>
-								{clearing ? (
-									<LoaderCircle className="size-icon-sm animate-spin" aria-hidden="true" />
-								) : (
-									<X className="size-icon-sm" aria-hidden="true" />
-								)}
-							</button>
-						</TooltipTrigger>
-						<TooltipContent side="top">{t("notify.clearOneShort")}</TooltipContent>
-					</Tooltip>
+					<Button
+						aria-label={t("notify.clearOne", { title: notification.title })}
+						title=""
+						className={cn(
+							"size-notification-icon",
+							clearing
+								? "opacity-100 disabled:opacity-100"
+								: "pointer-events-none opacity-0 group-hover:pointer-events-auto group-hover:opacity-100 group-focus-within:pointer-events-auto group-focus-within:opacity-100 focus-visible:pointer-events-auto focus-visible:opacity-100 [@media(hover:none)]:pointer-events-auto [@media(hover:none)]:opacity-100",
+						)}
+						disabled={clearDisabled}
+						onClick={(event) => {
+							event.stopPropagation();
+							void onClear(notification);
+						}}
+						onKeyDown={(event) => event.stopPropagation()}
+						size="none"
+						type="button"
+						variant="quiet"
+					>
+						{clearing ? (
+							<LoaderCircle className="size-icon-sm animate-spin" aria-hidden="true" />
+						) : (
+							<X className="size-icon-sm" aria-hidden="true" />
+						)}
+					</Button>
 					</div>
 				</div>
 			</div>

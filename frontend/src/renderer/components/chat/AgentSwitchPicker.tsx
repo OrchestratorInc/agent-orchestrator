@@ -6,7 +6,7 @@
 
 import { useQueries, useQuery, useQueryClient } from "@tanstack/react-query";
 import type { TFunction } from "i18next";
-import { Brain, ChevronRight, Loader2, Star, TriangleAlert, X, Zap } from "lucide-react";
+import { Brain, ChevronRight, Loader2, Star, TriangleAlert, Zap } from "@/components/app-icons";
 import { Fragment, memo, useCallback, useMemo, useRef, useState, type ReactNode } from "react";
 import { useTranslation } from "react-i18next";
 import { agentModelsQueryOptions, type AgentModelCatalog } from "../../hooks/useAgentModelsQuery";
@@ -30,6 +30,7 @@ import {
 	type ModelVariant,
 } from "../../lib/model-variants";
 import { cn } from "../../lib/utils";
+import { GHOST_PILL_CLASS } from "../ui/button";
 import type { ApprovalMode, TurnSettings } from "../../types/conversation";
 import { formatEffortLabel } from "../settings/EffortPicker";
 import {
@@ -43,8 +44,12 @@ import {
 	OptionMenuTrigger,
 } from "../ui/option-menu";
 import { Switch } from "../ui/switch";
+import { CloseButton } from "../ui/close-button";
+import { Pressable } from "../ui/pressable";
 import { ModelMenuChoices } from "./ModelMenuChoices";
 import { ProviderMark } from "./ProviderMark";
+import { sharesAgentMark } from "../AgentAvatar";
+import { useCloudAgentCatalogOptions } from "../../hooks/useCloudModelCatalog";
 
 export interface PendingAgentSwitch {
 	harness: string;
@@ -80,6 +85,11 @@ export function compactsEarly(harness: string | undefined, model = ""): boolean 
 /** What the chat surface passes down to turn the model control into this one. */
 export interface AgentSwitchProps {
 	projectId: string;
+	/**
+	 * A Cloud task's organization: the agents' models are Cloud's for the
+	 * account (the ones its sessions run), not this computer's.
+	 */
+	cloudOrgId?: string;
 	hostId?: string;
 	pending?: PendingAgentSwitch;
 	/** The permission modes the pending agent runs in, strictest first, once known. */
@@ -97,6 +107,14 @@ export interface AgentSwitchProps {
 	agents?: Array<{ id: string; label: string }>;
 	/** Which agents settings "Manage agents" opens: a Cloud session's are the Cloud ones. */
 	harnessView?: "local" | "cloud";
+	account?: AccountChoice;
+}
+
+export interface AccountChoice {
+	options: Array<{ id: string; label: string; disabled?: boolean }>;
+	value?: string;
+	onPick: (id: string) => void;
+	disabled?: boolean;
 }
 
 export interface PickerModel {
@@ -135,10 +153,14 @@ export interface PickerSource {
 	onToggleThinking?: (next: boolean) => void;
 }
 
-const TRIGGER_CLASS =
-	"h-7 gap-1.5 bg-transparent rounded-lg px-2 text-[12px]! leading-none text-foreground hover:bg-interactive-active data-[state=open]:bg-interactive-active";
+const TRIGGER_CLASS = cn(
+	"h-7 gap-1.5 bg-transparent rounded-lg px-2 text-[12px]! leading-none text-foreground",
+	GHOST_PILL_CLASS,
+);
 const SUB_CLASS = "chat-settings-menu min-w-48 text-[12px]!";
 const DIVIDER = "mt-1 border-t border-border pt-1";
+// Shared with the review controls' reviewer picker, which is laid out like this menu.
+export { TRIGGER_CLASS as CHAT_PICKER_TRIGGER_CLASS, SUB_CLASS as CHAT_PICKER_SUB_CLASS, DIVIDER as CHAT_PICKER_DIVIDER };
 
 /** A variant-per-setting catalog as one model per family, with effort, thinking and speed as controls. */
 function variantSource(
@@ -217,6 +239,12 @@ export function AgentModelPicker({
 }) {
 	const { t } = useTranslation();
 	const { pending, onPendingChange, projectId, hostId } = agentSwitch;
+	const cloudCatalogOptions = useCloudAgentCatalogOptions(agentSwitch.cloudOrgId);
+	// Each agent's model list: Cloud's for a Cloud task, else this computer's.
+	// Both resolve to the pickers' catalog shape (Cloud's through its select),
+	// which is all the queries below read.
+	const catalogOptions = (harness: string) =>
+		(cloudCatalogOptions(harness) ?? agentModelsQueryOptions(harness, projectId, hostId)) as ReturnType<typeof agentModelsQueryOptions>;
 	// The agents to offer before a session exists, in place of the chat switch targets.
 	const choices = agentSwitch.agents;
 	const readiness = useAgentReadinessQuery(true, hostId).data?.agents;
@@ -260,7 +288,7 @@ export function AgentModelPicker({
 	const { settings: hostSettings } = useSettings(hostId);
 	// The agent's list is shared by every session, so it names the saved model at once.
 	// No saved model means the agent's own default, which Claude Code leaves unset.
-	const savedCatalog = useQuery({ ...agentModelsQueryOptions(currentHarness, projectId, hostId), enabled: Boolean(loadingModels) }).data;
+	const savedCatalog = useQuery({ ...catalogOptions(currentHarness), enabled: Boolean(loadingModels) }).data;
 	// Until the agent reports its own models, its list fills the menu; picks wait for the agent.
 	const starting = loadingModels && savedCatalog && !current.models.some((model) => model.id)
 		? otherAgentSource(
@@ -279,10 +307,10 @@ export function AgentModelPicker({
 	const queryClient = useQueryClient();
 	// Warmed on hover or focus, so the first keystrokes already search every agent.
 	const warmCatalogs = () => {
-		for (const agent of others) void queryClient.prefetchQuery(agentModelsQueryOptions(agent.id, projectId, hostId));
+		for (const agent of others) void queryClient.prefetchQuery(catalogOptions(agent.id));
 	};
 	const catalogs = useQueries({
-		queries: others.map((agent) => ({ ...agentModelsQueryOptions(agent.id, projectId, hostId), enabled: open })),
+		queries: others.map((agent) => ({ ...catalogOptions(agent.id), enabled: open })),
 	});
 	// A pending agent offers the models its own session will, so the catalog is narrowed to match.
 	const otherSource = (harness: string, held?: PendingAgentSwitch) => otherAgentSource(
@@ -299,7 +327,7 @@ export function AgentModelPicker({
 	const source = pending ? otherSource(pending.harness, pending) : currentSource;
 	const settable = !terminal || Boolean(pending);
 	// A catalog that could not be read says why, instead of an empty model list.
-	const shownCatalog = useQuery({ ...agentModelsQueryOptions(shownHarness, projectId, hostId), enabled: open && settable }).data;
+	const shownCatalog = useQuery({ ...catalogOptions(shownHarness), enabled: open && settable }).data;
 	const modelsProblem = !settable || source.models.some((model) => model.id)
 		? undefined
 		: catalogProblem(shownCatalog);
@@ -354,6 +382,11 @@ export function AgentModelPicker({
 	// A terminal's Switch button is in this menu, so a pick there must not close it.
 	const stayOpen = (event: Event) => { if (terminal) event.preventDefault(); };
 	const setups = favorites.filter((entry) => !terminal || entry.harness !== currentHarness);
+	// A favourite shows its agent's mark. The name is drawn too where the mark does not
+	// name the agent (OpenCode and OpenCode 2 share one), or another agent's favourite
+	// has the same model name.
+	const namesAgent = (favorite: ModelFavorite) =>
+		sharesAgentMark(favorite.harness) || setups.some((other) => other.label === favorite.label && other.harness !== favorite.harness);
 	const chosenModel = pending ? pending.model : currentSource.sendId ?? currentSource.modelId;
 	const searchRows = (open ? agents : []).flatMap((agent) => {
 		const listed = agent.id === currentHarness ? (terminal ? [] : currentSource.models) : otherSource(agent.id).models;
@@ -375,7 +408,7 @@ export function AgentModelPicker({
 	return (
 		// Not modal, so one click on the composer both closes the menu and focuses it.
 		<OptionMenu open={open} onOpenChange={setOpen} modal={false}>
-			<OptionMenuTrigger
+			<OptionMenuTrigger variant="ghost"
 				ref={management.triggerRef}
 				disabled={disabled && agentSwitch.disabled}
 				onPointerEnter={warmCatalogs}
@@ -440,11 +473,14 @@ export function AgentModelPicker({
 									{favorite.fast ? <Zap aria-label={t("agentSwitch.fastMode")} className="ml-1.5 size-3 shrink-0 fill-current" /> : null}
 									{favorite.thinking ? <Brain aria-label={t("agentSwitch.thinking")} className="ml-1.5 size-3 shrink-0" /> : null}
 									{favorite.effortLabel ? <span className="ml-1.5 shrink-0 text-muted-foreground">{favorite.effortLabel}</span> : null}
-									<FavoriteStar starred onToggle={() => toggleModelFavorite(favorite)} />
+									{/* Read after the model and its settings, so they are not taken for the agent's. */}
+									<span className="sr-only">{t("agentSwitch.favoriteAgent", { agent: agentLabel(favorite.harness) })}</span>
+									{namesAgent(favorite) ? <span aria-hidden="true" className="ml-auto shrink-0 pl-3 text-muted-foreground">{agentLabel(favorite.harness)}</span> : null}
+									<FavoriteStar starred onToggle={() => toggleModelFavorite(favorite)} className={namesAgent(favorite) ? "ml-2" : undefined} />
 								</OptionMenuItem>
 							))}
 							<div className={setups.length > 0 ? DIVIDER : undefined}>
-								<OptionMenuSub>
+								<OptionMenuSub closeOnSelect>
 									<OptionMenuSubTrigger label={t("agentSwitch.agent")} value={agentLabel(shownHarness)} />
 									<OptionMenuSubContent scrollable className={SUB_CLASS}>
 										<div className="model-menu-scroll max-h-[calc(var(--size-select-menu-max)-var(--space-2)*2)] overflow-y-auto overscroll-contain">
@@ -458,9 +494,10 @@ export function AgentModelPicker({
 													aria-disabled={oneShot(agent.id) || undefined}
 													title={oneShot(agent.id) ? t("agentSwitch.terminalOneShot", { agent: agent.label }) : undefined}
 													onSelect={(event) => {
-														// The menu stays open so the model and effort can be set too.
-														event.preventDefault();
-														if (oneShot(agent.id)) return;
+														if (oneShot(agent.id)) {
+															event.preventDefault();
+															return;
+														}
 														if (agent.id === currentHarness) keepCurrent();
 														else if (agent.id !== pending?.harness) onPendingChange({ harness: agent.id });
 													}}
@@ -477,7 +514,7 @@ export function AgentModelPicker({
 									</OptionMenuSubContent>
 								</OptionMenuSub>
 								{settable && source.models.length > 0 ? (
-									<OptionMenuSub>
+									<OptionMenuSub closeOnSelect>
 										<OptionMenuSubTrigger label={t("agentSwitch.model")} value={modelValue} />
 										<OptionMenuSubContent scrollable className={SUB_CLASS}>
 											<ModelRows source={shownHarness === "claude-code" ? { ...source, models: claudeOrder(mergeSameNamedModels(source.models, source.modelId)) } : source} harness={shownHarness} />
@@ -499,7 +536,7 @@ export function AgentModelPicker({
 									</OptionMenuItem>
 								) : null}
 								{settable && !waiting && source.efforts.length > 0 ? (
-									<OptionMenuSub>
+									<OptionMenuSub closeOnSelect>
 										<OptionMenuSubTrigger label={t("agentSwitch.effort")} value={source.efforts.find((choice) => choice.value === source.effort)?.label ?? t("agentSwitch.defaultModel")} />
 										<OptionMenuSubContent className={SUB_CLASS}>
 											{source.efforts.map((choice) => (
@@ -508,8 +545,7 @@ export function AgentModelPicker({
 													active={choice.value === source.effort}
 													radio
 													disabled={!source.onPickEffort}
-													onSelect={(event) => {
-														event.preventDefault();
+													onSelect={() => {
 														if (choice.value !== source.effort) source.onPickEffort?.(choice.value);
 													}}
 													className="text-xs text-foreground"
@@ -522,10 +558,11 @@ export function AgentModelPicker({
 									</OptionMenuSub>
 								) : settable && !waiting && !modelsProblem ? (
 									// The same row, disabled, so the menu does not change shape between models.
-									<OptionMenuSub>
+									<OptionMenuSub closeOnSelect>
 										<OptionMenuSubTrigger disabled className="opacity-50" label={t("agentSwitch.effort")} value={t("agentSwitch.defaultModel")} />
 									</OptionMenuSub>
 								) : null}
+								{agentSwitch.account && !pending && agentSwitch.account.options.length > 0 ? <AccountRows account={agentSwitch.account} /> : null}
 							</div>
 							{settable && !waiting && (source.fast !== undefined || source.thinking !== undefined) ? (
 								<div className={DIVIDER}>
@@ -549,6 +586,32 @@ export function AgentModelPicker({
 				{pending ? pendingFooter : null}
 			</OptionMenuContent>
 		</OptionMenu>
+	);
+}
+
+function AccountRows({ account }: { account: AccountChoice }) {
+	const { t } = useTranslation();
+	const chosen = account.options.find((option) => option.id === account.value);
+	return (
+		<OptionMenuSub closeOnSelect>
+			<OptionMenuSubTrigger disabled={account.disabled} className={account.disabled ? "opacity-50" : undefined} label={t("settings.agentAccounts.sessionAccount")} value={chosen?.label ?? ""} />
+			<OptionMenuSubContent scrollable className={SUB_CLASS}>
+				<div className="model-menu-scroll max-h-[calc(var(--size-select-menu-max)-var(--space-2)*2)] overflow-y-auto overscroll-contain">
+					{account.options.map((option) => (
+						<OptionMenuItem
+							key={option.id}
+							active={option.id === account.value}
+							radio
+							disabled={option.disabled}
+							onSelect={() => { if (option.id !== account.value) account.onPick(option.id); }}
+							className="text-xs text-foreground"
+						>
+							<span className="min-w-0 truncate">{option.label}</span>
+						</OptionMenuItem>
+					))}
+				</div>
+			</OptionMenuSubContent>
+		</OptionMenuSub>
 	);
 }
 
@@ -694,9 +757,7 @@ function ModelRows({ source, harness }: { source: PickerSource; harness: string 
 							searchActive={model.id === searchActiveID}
 							radio
 							disabled={!source.onPickModel || Boolean(model.unavailableReason)}
-							onSelect={(event) => {
-								// The menu stays open so effort and speed can be set too.
-								event.preventDefault();
+							onSelect={() => {
 								if (!active) source.onPickModel?.(model.id);
 							}}
 							className="group/model text-xs text-foreground"
@@ -737,7 +798,7 @@ function favoriteFor(harness: string, model: PickerModel, chosen: PickerSource |
 }
 
 /** The star at the end of a model row. It shows on hover, and stays once starred. */
-function FavoriteStar({ starred, onToggle }: { starred: boolean; onToggle: () => void }) {
+function FavoriteStar({ starred, onToggle, className }: { starred: boolean; onToggle: () => void; className?: string }) {
 	const { t } = useTranslation();
 	return (
 		<span
@@ -752,6 +813,7 @@ function FavoriteStar({ starred, onToggle }: { starred: boolean; onToggle: () =>
 			className={cn(
 				"ml-auto flex size-5 shrink-0 items-center justify-center rounded hover:bg-interactive-active",
 				starred ? "text-warning" : "text-muted-foreground opacity-0 group-hover/model:opacity-100 group-data-highlighted/model:opacity-100",
+				className,
 			)}
 		>
 			<Star aria-hidden="true" className={cn("size-3.5", starred ? "fill-current" : undefined)} />
@@ -766,16 +828,13 @@ function isUltraEffort(value: string | undefined): boolean {
 
 export function DismissButton({ label, onClick, disabled, className }: { label: string; onClick: () => void; disabled?: boolean; className?: string }) {
 	return (
-		<button type="button" aria-label={label} title={label} disabled={disabled} onClick={onClick}
-			className={cn("shrink-0 rounded p-0.5 text-muted-foreground hover:bg-interactive-active hover:text-foreground", className)}>
-			<X aria-hidden="true" className="size-3.5" />
-		</button>
+		<CloseButton size="icon-xs" aria-label={label} title={label} disabled={disabled} onClick={onClick} className={cn("-my-1", className)} />
 	);
 }
 
 /** An error from a switch, shown as a strip on top of the chat box. */
 export function ComposerErrorNotice(
-	{ title, message, onDismiss, dismissLabel }: { title: string; message: string; onDismiss: () => void; dismissLabel?: string },
+	{ title, message, action, onDismiss, dismissLabel }: { title: string; message: ReactNode; action?: ReactNode; onDismiss: () => void; dismissLabel?: string },
 ) {
 	const { t } = useTranslation();
 	return (
@@ -788,6 +847,7 @@ export function ComposerErrorNotice(
 			<div className="min-w-0 flex-1">
 				<p className="font-medium text-foreground">{title}</p>
 				<p className="break-words text-muted-foreground">{message}</p>
+				{action}
 			</div>
 			<DismissButton label={dismissLabel ?? t("agentSwitch.dismiss")} onClick={onDismiss} />
 		</div>
@@ -812,9 +872,8 @@ export function AutoCompactRow({ value, disabled, onChange, title }: AutoCompact
 			<span className="text-muted-foreground">{t("agentSwitch.autoCompact")}</span>
 			<span role="radiogroup" aria-label={t("agentSwitch.autoCompact")} className="ml-auto flex rounded-md bg-interactive-active p-0.5">
 				{AUTO_COMPACT_CHOICES.map((choice) => (
-					<button
+					<Pressable
 						key={choice.label}
-						type="button"
 						role="radio"
 						aria-checked={value === choice.value}
 						disabled={disabled || value === choice.value}
@@ -825,7 +884,7 @@ export function AutoCompactRow({ value, disabled, onChange, title }: AutoCompact
 						)}
 					>
 						{choice.value ? choice.label : t("agentSwitch.autoCompactAuto")}
-					</button>
+					</Pressable>
 				))}
 			</span>
 		</div>

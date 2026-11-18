@@ -98,7 +98,7 @@ func writeReviewerAgent(reviewerDir string, inv ports.ReviewInvocation) error {
 
 Kiro security and reporting rules:
 - Your process runs outside the checkout. Use the read, glob, and grep tools on the absolute worker checkout path from the task.
-- Shell is deny-by-default. Only the narrow git inspection and review-reporting command shapes configured by AO can run.
+- Shell is deny-by-default. Only the narrow git inspection and review-reporting command shapes configured by Orchestrator can run.
 - The supported git shell shapes are exactly: status with optional --short; diff with --no-ext-diff --no-textconv; log; and show. Additional arguments must be single whitespace-free refs, options, or paths. Filenames with spaces, extra shell quoting, compound commands, redirections, and complex ref expressions are intentionally unsupported; use read, glob, or grep instead.
 - For each JSON reporting body, base64-encode the UTF-8 JSON yourself and use the task's command with the JSON replaced by the base64 text: printf '%s' '<base64>' | base64 --decode | gh api ... or ... | ao review submit .... Use base64 -D instead of --decode on systems that require it.
 - Never request or attempt any write, unrestricted shell, commit, push, extension, MCP server, skill, steering, or project agent resource.
@@ -109,7 +109,7 @@ Kiro security and reporting rules:
 
 	config := map[string]any{
 		"name":           reviewerAgentName,
-		"description":    "AO read-only code reviewer",
+		"description":    "Orchestrator read-only code reviewer",
 		"prompt":         "file://" + filepath.ToSlash(kiroSystemPath),
 		"mcpServers":     map[string]any{},
 		"includeMcpJson": false,

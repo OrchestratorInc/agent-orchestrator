@@ -1,21 +1,29 @@
 import { useLocalSearchParams, useNavigation } from "expo-router";
 import { useLayoutEffect } from "react";
-import { ActivityIndicator, StyleSheet, Text, View } from "react-native";
+import { StyleSheet, Text, View } from "react-native";
 import { KeyboardAvoidingView } from "react-native-keyboard-controller";
 import { ReviewerComposer } from "../../lib/chat/ReviewerComposer";
 import { ChatTimeline } from "../../lib/chat/ChatTimeline";
+import { CloudReviewerScreen } from "../../lib/cloud/CloudReviewerScreen";
+import { isCloudHost } from "../../lib/cloud/mapping";
 import { useChatKeyboard } from "../../lib/chat/useChatKeyboard";
 import { useMobileConversation } from "../../lib/chat/useConversation";
 import { hostRouteMatches } from "../../lib/hostRoute";
+import { Spinner } from "../../lib/Spinner";
 import { HostScope, useApp } from "../../lib/store";
 import type { Theme } from "../../lib/theme";
-import { useTheme, useThemedStyles } from "../../lib/ThemeProvider";
+import { useThemedStyles } from "../../lib/ThemeProvider";
+import { SYSTEM_GLASS_HEADER } from "../../lib/stackScreenOptions";
+import { useGlassBarInset } from "../../lib/useHeaderOverlap";
+import { space, type } from "../../lib/tokens";
 import { Button, EmptyState } from "../../lib/ui";
 
 export { RouteErrorBoundary as ErrorBoundary } from "../../lib/RouteErrorBoundary";
 
 export default function ReviewerConversationScreen() {
-	const { hostId } = useLocalSearchParams<{ hostId?: string }>();
+	const { hostId, reviewId = "", sessionId = "", title } = useLocalSearchParams<{ hostId?: string; reviewId?: string; sessionId?: string; title?: string }>();
+	// A Cloud review's conversation comes from Orchestrator Cloud, not a daemon.
+	if (isCloudHost(hostId)) return <CloudReviewerScreen reviewId={reviewId} sessionId={sessionId.trim()} title={title} />;
 	return hostId ? <HostScope key={hostId} hostId={hostId}><ReviewerConversationContent /></HostScope> : <ReviewerConversationContent />;
 }
 
@@ -23,24 +31,24 @@ function ReviewerConversationContent() {
 	const { reviewId = "", sessionId = "", title, hostId: routeHostId } = useLocalSearchParams<{ reviewId: string; sessionId?: string; title?: string; hostId?: string }>();
 	const workerSessionId = sessionId.trim();
 	const navigation = useNavigation();
-	const { config, currentHostId } = useApp();
+	const { config, machine, currentHostId } = useApp();
 	const hostMatches = hostRouteMatches(routeHostId, currentHostId);
-	const t = useTheme();
 	const styles = useThemedStyles(makeStyles);
 	// The review id owns the conversation routes; the worker id owns attachment
 	// staging and SSE refresh. Never stage reviewer attachments under a review id.
-	const conversation = useMobileConversation(hostMatches ? config : null, workerSessionId, { reviewId, eventSessionId: workerSessionId });
+	const conversation = useMobileConversation(hostMatches ? config : null, hostMatches ? machine : "", workerSessionId, { reviewId, eventSessionId: workerSessionId });
 	// The session chat's keyboard handling, so the reviewer composer sits above
 	// the keyboard the same way on both platforms.
-	const chatKeyboard = useChatKeyboard();
+	const chatKeyboard = useChatKeyboard({ underHeader: SYSTEM_GLASS_HEADER });
+	const glassInset = useGlassBarInset();
 
 	useLayoutEffect(() => navigation.setOptions({ title: title ? `Review · ${title}` : "Reviewer chat" }), [navigation, title]);
 
-	if (!hostMatches) return <EmptyState icon="message-circle" title="Review belongs to another machine" message="Open it from that machine's session." />;
-	if (conversation.loading && !conversation.snapshot) return <View style={styles.center}><ActivityIndicator color={t.accent} /></View>;
-	if (!conversation.snapshot) return <EmptyState icon="message-circle" title="Reviewer chat unavailable" message={conversation.unavailable?.message || conversation.error || "The reviewer conversation has not started yet."} action={<Button title="Try again" icon="refresh-cw" variant="ghost" onPress={() => void conversation.refresh()} />} />;
+	if (!hostMatches) return <EmptyState icon="chat" title="Review belongs to another machine" message="Open it from that machine's session." />;
+	if (conversation.loading && !conversation.snapshot) return <View style={styles.center}><Spinner size="large" accessibilityLabel="Loading reviewer chat" /></View>;
+	if (!conversation.snapshot) return <EmptyState icon="chat" title="Reviewer chat unavailable" message={conversation.unavailable?.message || conversation.error || "The reviewer conversation has not started yet."} action={<Button title="Try again" icon="refresh" onPress={() => void conversation.refresh()} />} />;
 
-	return <KeyboardAvoidingView style={[styles.screen, chatKeyboard.rootStyle]} behavior={chatKeyboard.behavior} keyboardVerticalOffset={chatKeyboard.keyboardVerticalOffset}>
+	return <KeyboardAvoidingView style={[styles.screen, { paddingTop: glassInset }, chatKeyboard.rootStyle]} behavior={chatKeyboard.behavior} keyboardVerticalOffset={chatKeyboard.keyboardVerticalOffset}>
 		{conversation.unavailable?.message || conversation.error || conversation.actionError ? <Text accessibilityRole="alert" style={styles.error}>{conversation.unavailable?.message || conversation.error || conversation.actionError}</Text> : null}
 		{conversation.pendingSends.map((pendingSend) => pendingSend.state === "failed" ? <View key={pendingSend.id} style={styles.pending}><Text accessibilityRole="alert" style={styles.error}>{pendingSend.error || "Message delivery uncertain"}</Text><Button title={pendingSend.restored && pendingSend.hasAttachments ? "Refresh history" : "Retry"} onPress={() => void (pendingSend.restored && pendingSend.hasAttachments ? conversation.refresh() : conversation.retrySend(pendingSend.id)).catch(() => {})} /><Button title="Discard" variant="ghost" onPress={() => void conversation.discardSend(pendingSend.id).catch(() => {})} /></View> : null)}
 		<ChatTimeline snapshot={conversation.snapshot} loadingOlder={conversation.loadingOlder} onLoadOlder={() => void conversation.loadOlder()} approvalPending={conversation.pendingActions.includes("approval")} inputPending={conversation.pendingActions.includes("input")} onDecide={conversation.resolveApproval} onResolveInput={conversation.resolveInput} />
@@ -51,6 +59,6 @@ function ReviewerConversationContent() {
 const makeStyles = (t: Theme) => StyleSheet.create({
 	screen: { flex: 1, backgroundColor: t.bgBase },
 	center: { flex: 1, alignItems: "center", justifyContent: "center", backgroundColor: t.bgBase },
-	error: { color: t.red, fontSize: 12, paddingHorizontal: 16, paddingVertical: 8, backgroundColor: t.tintRed },
+	error: { ...type.footnote, color: t.red, paddingHorizontal: space.lg, paddingVertical: space.sm, backgroundColor: t.tintRed },
 	pending: { flexDirection: "row", alignItems: "center", flexWrap: "wrap" },
 });

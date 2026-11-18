@@ -25,6 +25,24 @@ describe("KeyboardShortcutsSettingsDialog", () => {
 		window.ao!.keybindings.setRecording = setRecording;
 		useKeybindingsStore.setState({ overrides: {}, loaded: true });
 	});
+	it("edits the selection shortcut, detects its conflicts, and restores the default", async () => {
+		const user = userEvent.setup();
+		renderDialog();
+		await user.click(screen.getByRole("button", { name: "Change Add selection to chat" }));
+		await waitFor(() => expect(setRecording).toHaveBeenCalledWith(true));
+		fireEvent.keyDown(window, { key: "j", code: "KeyJ", ctrlKey: true, shiftKey: true, altKey: true });
+		await waitFor(() => expect(persistBindings).toHaveBeenCalledWith({
+			"add-selection-to-chat": [{ key: "j", code: "KeyJ", ctrl: true, meta: false, shift: true, alt: true }],
+		}));
+		await user.click(screen.getByRole("button", { name: "More options for Add selection to chat" }));
+		await user.click(screen.getByRole("button", { name: "Reset Add selection to chat" }));
+		await waitFor(() => expect(useKeybindingsStore.getState().overrides).toEqual({}));
+		await user.click(screen.getByRole("button", { name: "Change New session" }));
+		fireEvent.keyDown(window, { key: "l", code: "KeyL", ctrlKey: true });
+		expect(await screen.findByRole("dialog", { name: "Shortcut already in use" })).toHaveTextContent("Add selection to chat");
+		await user.click(screen.getByRole("button", { name: "Reassign" }));
+		await waitFor(() => expect(useKeybindingsStore.getState().overrides["add-selection-to-chat"]).toEqual([]));
+	});
 
 	it("records an application-owned chord and makes Undo keyboard-accessible in the dialog", async () => {
 		const user = userEvent.setup();

@@ -2,10 +2,7 @@ package codex
 
 import (
 	"context"
-	"errors"
 	"fmt"
-	"io/fs"
-	"os"
 	"path/filepath"
 	"strings"
 
@@ -104,35 +101,11 @@ func codexRolloutStored(name, id string) bool {
 }
 
 func findCodexRollout(ctx context.Context, root, sessionID string, match func(name, id string) bool) (string, bool, error) {
-	var found string
-	err := filepath.WalkDir(root, func(path string, entry fs.DirEntry, walkErr error) error {
-		if walkErr != nil {
-			// One unreadable folder elsewhere in the tree does not hide this
-			// conversation, as the importer skips it too.
-			if path != root && errors.Is(walkErr, fs.ErrPermission) {
-				if entry != nil && entry.IsDir() {
-					return fs.SkipDir
-				}
-				return nil
-			}
-			return walkErr
-		}
-		if err := ctx.Err(); err != nil {
-			return err
-		}
-		if entry.Type().IsRegular() && match(entry.Name(), sessionID) {
-			found = path
-			return fs.SkipAll
-		}
-		return nil
-	})
-	if errors.Is(err, os.ErrNotExist) {
-		return "", false, nil
-	}
+	path, found, err := nativeconfig.FindFile(ctx, root, func(name string) bool { return match(name, sessionID) })
 	if err != nil {
 		return "", false, fmt.Errorf("codex: scan transcripts: %w", err)
 	}
-	return found, found != "", nil
+	return path, found, nil
 }
 
 func validateCodexNativeSessionID(value string) (string, error) {

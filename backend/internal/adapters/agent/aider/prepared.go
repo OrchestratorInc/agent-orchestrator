@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 	"strings"
 
+	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/agent/importcopy"
 	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
 )
 
@@ -84,7 +85,7 @@ func writeAiderPreparation(ctx context.Context, root *os.Root, r ports.ImportedS
 	if len(data) > 16<<10 {
 		return errors.New("aider private preparation exceeds read budget")
 	}
-	if err := writeAiderFile(ctx, root, aiderPreparationFile, data); err != nil && !errors.Is(err, os.ErrExist) {
+	if err := importcopy.WriteOnce(ctx, root, aiderPreparationFile, data); err != nil && !errors.Is(err, os.ErrExist) {
 		return err
 	}
 	verified, err := recoverAiderPreparation(ctx, root, r)

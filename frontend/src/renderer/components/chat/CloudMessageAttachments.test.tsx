@@ -1,8 +1,9 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import type { ReactNode } from "react";
-import { beforeEach, describe, expect, it, vi } from "vitest";
-import type { CloudAttachment } from "../../lib/cloud-attachments";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { cloudAttachmentReference, type CloudAttachment } from "../../lib/cloud-attachments";
+import { rememberSentAttachments, resetSentAttachmentPreviewsForTest } from "../../lib/sent-attachment-previews";
 import { useUiStore } from "../../stores/ui-store";
 import { CloudAttachmentSourceProvider, CloudMessageAttachments } from "./CloudMessageAttachments";
 
@@ -20,9 +21,9 @@ vi.mock("../../lib/bridge", async (importOriginal) => {
 	return { ...actual, aoBridge: { ...actual.aoBridge, chatImage: { ...actual.aoBridge.chatImage, save: mocks.save } } };
 });
 vi.mock("../PdfPreview", () => ({
-	PdfPreview: (props: { path: string; firstPageOnly?: boolean; load: () => Promise<Uint8Array> }) => {
+	PdfPreview: (props: { path: string; cover?: boolean; firstPageOnly?: boolean; load: () => Promise<Uint8Array> }) => {
 		mocks.pdfPreview(props);
-		return <div data-testid="pdf-preview" data-first-page={String(Boolean(props.firstPageOnly))}>{props.path}</div>;
+		return <div data-testid="pdf-preview" data-first-page={String(Boolean(props.cover || props.firstPageOnly))}>{props.path}</div>;
 	},
 }));
 
@@ -78,6 +79,7 @@ describe("CloudMessageAttachments", () => {
 		mocks.fetchCloudAttachment.mockResolvedValue(new Blob(["hello"], { type: "text/plain" }));
 		renderAttachments([attachment({})]);
 		const chip = screen.getByRole("button", { name: /notes\.txt/ });
+		expect(within(chip).getByText("TXT")).toBeInTheDocument();
 		expect(chip).toHaveTextContent("2.0 KB");
 		expect(chip).toHaveAttribute("title", "Save notes.txt");
 		fireEvent.click(chip);
@@ -109,5 +111,48 @@ describe("CloudMessageAttachments", () => {
 	it("cannot save a file without a session to read it from", () => {
 		renderAttachments([attachment({})], false);
 		expect(screen.getByRole("button", { name: /notes\.txt/ })).toBeDisabled();
+	});
+});
+
+describe("CloudMessageAttachments with a just-sent local copy", () => {
+	const originalCreate = URL.createObjectURL;
+	const originalRevoke = URL.revokeObjectURL;
+
+	beforeEach(() => {
+		URL.createObjectURL = vi.fn(() => "blob:app/sent");
+		URL.revokeObjectURL = vi.fn();
+	});
+
+	afterEach(() => {
+		resetSentAttachmentPreviewsForTest();
+		URL.createObjectURL = originalCreate;
+		URL.revokeObjectURL = originalRevoke;
+		vi.unstubAllGlobals();
+	});
+
+	it("reads an image from the control plane once its local copy fails", async () => {
+		const image = attachment({ id: "img", fileName: "shot.png", contentType: "image/png" });
+		rememberSentAttachments([{ path: cloudAttachmentReference(image), mimeType: "image/png", bytes: 4, file: new Blob(["png"]) }]);
+		mocks.fetchCloudAttachment.mockResolvedValue(new Blob([new Uint8Array([137, 80, 78, 71])], { type: "image/png" }));
+		renderAttachments([image]);
+		expect(screen.getByRole("img", { name: "shot.png" })).toHaveAttribute("src", "blob:app/sent");
+		expect(mocks.fetchCloudAttachment).not.toHaveBeenCalled();
+
+		fireEvent.error(screen.getByRole("img", { name: "shot.png" }));
+		await waitFor(() => expect(screen.getByRole("img", { name: "shot.png" })).toHaveAttribute("src", "data:image/png;base64,iVBORw=="));
+	});
+
+	it("reads a PDF from the control plane when its local copy cannot be fetched", async () => {
+		const pdf = attachment({ id: "doc", fileName: "spec.pdf", contentType: "application/pdf" });
+		rememberSentAttachments([{ path: cloudAttachmentReference(pdf), mimeType: "application/pdf", bytes: 4, file: new Blob(["%PDF"]) }]);
+		vi.stubGlobal("fetch", vi.fn(async () => {
+			throw new TypeError("Failed to fetch");
+		}));
+		mocks.fetchCloudAttachment.mockResolvedValue(new Blob([new Uint8Array([37, 80, 68, 70])], { type: "application/pdf" }));
+		renderAttachments([pdf]);
+
+		const { load } = mocks.pdfPreview.mock.calls[0]![0] as { load: () => Promise<Uint8Array> };
+		await expect(load()).resolves.toEqual(new Uint8Array([37, 80, 68, 70]));
+		expect(mocks.fetchCloudAttachment).toHaveBeenCalledWith(source.baseUrl, source.orgId, source.sessionId, expect.objectContaining({ id: "doc" }));
 	});
 });

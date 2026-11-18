@@ -38,9 +38,10 @@ func preparationFor(root, source, cwd, id, expected string) (preparation, error)
 	return preparation{Source: source, ID: id, CWD: cwd, Fingerprint: expected}, nil
 }
 
-// PreparedCopy reuses only a complete copy published for this exact selection.
-// Its native state may have advanced since publication and must not be replaced.
-func PreparedCopy(ctx context.Context, root, source, cwd, id, expected string) (string, bool, error) {
+// PreparedCopyIn reuses only a complete copy published for this exact
+// selection at layout's resume path. Its native state may have advanced since
+// publication and must not be replaced.
+func PreparedCopyIn(ctx context.Context, layout Layout, root, source, cwd, id, expected string) (string, bool, error) {
 	if expected == "" {
 		return "", false, nil
 	}
@@ -52,7 +53,7 @@ func PreparedCopy(ctx context.Context, root, source, cwd, id, expected string) (
 	if err != nil {
 		return "", false, err
 	}
-	target, err := SessionPath(root, cwd, id)
+	target, err := layout.path(root, cwd, id, expected)
 	if err != nil {
 		return "", false, err
 	}
@@ -89,7 +90,7 @@ func PreparedCopy(ctx context.Context, root, source, cwd, id, expected string) (
 	if got != want {
 		return "", false, errors.New("cursor target belongs to a different import selection")
 	}
-	if err := Verify(ctx, root, target, id); err != nil {
+	if err := Verify(ctx, root, target, layout.SessionID(id, cwd, expected)); err != nil {
 		return "", false, err
 	}
 	return target, true, nil

@@ -26,7 +26,8 @@ func TestCoordinatorDrainsAdditionalChunksImmediately(t *testing.T) {
 		return IngestResult{More: count == 1}, nil
 	})
 
-	cancel, done := startCoordinatorTest(t, store, ingestor, watcher, CoordinatorConfig{Workers: 1})
+	coordinator, cancel, done := startCoordinatorTest(t, store, ingestor, watcher, CoordinatorConfig{Workers: 1})
+	flushCoordinatorTest(t, coordinator)
 	waitForCoordinatorCalls(t, called, 2)
 	stopCoordinatorTest(t, cancel, done)
 
@@ -59,7 +60,8 @@ func TestCoordinatorRequeuesEventArrivingDuringIngestion(t *testing.T) {
 		return IngestResult{}, nil
 	})
 
-	cancel, done := startCoordinatorTest(t, store, ingestor, watcher, CoordinatorConfig{Workers: 1})
+	coordinator, cancel, done := startCoordinatorTest(t, store, ingestor, watcher, CoordinatorConfig{Workers: 1})
+	go coordinator.Flush(context.Background())
 	waitForCoordinatorSignal(t, firstStarted, "first ingestion did not start")
 	watcher.events <- TranscriptEvent{Path: path}
 	close(releaseFirst)
@@ -71,7 +73,7 @@ func TestCoordinatorRequeuesEventArrivingDuringIngestion(t *testing.T) {
 	}
 }
 
-func TestCoordinatorFilesystemEventPreemptsPersistedRetry(t *testing.T) {
+func TestCoordinatorDefersEventsUntilFlush(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "session.jsonl")
 	retryAt := time.Now().UTC().Add(time.Hour)
 	source := watchableTestSource(3, path)
@@ -85,13 +87,31 @@ func TestCoordinatorFilesystemEventPreemptsPersistedRetry(t *testing.T) {
 		return IngestResult{}, nil
 	})
 
-	cancel, done := startCoordinatorTest(t, store, ingestor, watcher, CoordinatorConfig{Workers: 1})
+	coordinator, cancel, done := startCoordinatorTest(t, store, ingestor, watcher, CoordinatorConfig{Workers: 1})
+	watcher.events <- TranscriptEvent{Path: path}
 	select {
 	case <-called:
-		t.Fatal("source was ingested before its persisted retry deadline")
+		t.Fatal("filesystem event was ingested before a flush")
 	case <-time.After(100 * time.Millisecond):
 	}
-	watcher.events <- TranscriptEvent{Path: path}
+	flushCoordinatorTest(t, coordinator)
+	waitForCoordinatorCalls(t, called, 1)
+	stopCoordinatorTest(t, cancel, done)
+}
+
+func TestCoordinatorIngestsFinalizingSourcesWithoutFlush(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "ended.jsonl")
+	store := &coordinatorTestStore{
+		sources:    []domain.UsageSourceRecord{watchableTestSource(5, path)},
+		finalizing: []int64{5},
+	}
+	called := make(chan struct{}, 1)
+	ingestor := coordinatorTestIngestor(func(context.Context, int64) (IngestResult, error) {
+		called <- struct{}{}
+		return IngestResult{}, nil
+	})
+
+	_, cancel, done := startCoordinatorTest(t, store, ingestor, newCoordinatorTestWatcher(), CoordinatorConfig{Workers: 1})
 	waitForCoordinatorCalls(t, called, 1)
 	stopCoordinatorTest(t, cancel, done)
 }
@@ -120,7 +140,8 @@ func TestCoordinatorReconcilesAfterMissingSource(t *testing.T) {
 		},
 	}
 
-	cancel, done := startCoordinatorTest(t, store, ingestor, watcher, cfg)
+	coordinator, cancel, done := startCoordinatorTest(t, store, ingestor, watcher, cfg)
+	go coordinator.Flush(context.Background())
 	waitForCoordinatorCalls(t, reconciledAfterIngest, 1)
 	stopCoordinatorTest(t, cancel, done)
 
@@ -144,7 +165,7 @@ func TestCoordinatorRebuildsWatcherAndReconcilesAfterWatcherError(t *testing.T) 
 		},
 	}
 
-	cancel, done := startCoordinatorTest(
+	_, cancel, done := startCoordinatorTest(
 		t,
 		store,
 		coordinatorTestIngestor(func(context.Context, int64) (IngestResult, error) {
@@ -251,14 +272,21 @@ func TestCoordinatorStopsWorkersWhenWatcherCloses(t *testing.T) {
 }
 
 type coordinatorTestStore struct {
-	mu      sync.Mutex
-	sources []domain.UsageSourceRecord
+	mu         sync.Mutex
+	sources    []domain.UsageSourceRecord
+	finalizing []int64
 }
 
 func (s *coordinatorTestStore) ListWatchableUsageSources(context.Context) ([]domain.UsageSourceRecord, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	return append([]domain.UsageSourceRecord(nil), s.sources...), nil
+}
+
+func (s *coordinatorTestStore) ListFinalizingUsageSourceIDs(context.Context) ([]int64, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return append([]int64(nil), s.finalizing...), nil
 }
 
 func (s *coordinatorTestStore) HasPendingUsageDiscovery(context.Context) (bool, error) {
@@ -307,6 +335,8 @@ func (w *coordinatorTestWatcher) Start(ctx context.Context) <-chan struct{} {
 	return w.done
 }
 
+func (w *coordinatorTestWatcher) SetRoots(context.Context, []string) error { return nil }
+
 func (w *coordinatorTestWatcher) Rebuild(_ context.Context, paths []string) error {
 	w.rebuilds.Add(1)
 	w.pathsMu.Lock()
@@ -342,11 +372,21 @@ func startCoordinatorTest(
 	ingestor sourceIngestor,
 	watcher transcriptWatcher,
 	cfg CoordinatorConfig,
-) (context.CancelFunc, <-chan struct{}) {
+) (*Coordinator, context.CancelFunc, <-chan struct{}) {
 	t.Helper()
 	ctx, cancel := context.WithCancel(context.Background())
-	done := NewCoordinator(store, ingestor, watcher, cfg).Start(ctx)
-	return cancel, done
+	coordinator := NewCoordinator(store, ingestor, watcher, cfg)
+	return coordinator, cancel, coordinator.Start(ctx)
+}
+
+func flushCoordinatorTest(t *testing.T, coordinator *Coordinator) {
+	t.Helper()
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	coordinator.Flush(ctx)
+	if ctx.Err() != nil {
+		t.Fatal("flush did not finish")
+	}
 }
 
 func stopCoordinatorTest(t *testing.T, cancel context.CancelFunc, done <-chan struct{}) {

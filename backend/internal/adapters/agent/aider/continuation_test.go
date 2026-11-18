@@ -60,8 +60,7 @@ func TestImportedAiderRestoresNativeHistoryFromWorktree(t *testing.T) {
 
 func TestAiderRelocationRefusesToReplaceExistingWorktreeHistory(t *testing.T) {
 	r := aiderImportFixture(t)
-	p := &Plugin{}
-	if err := p.RelocateImportedSession(context.Background(), r); err != nil {
+	if err := relocateAiderHistory(context.Background(), r); err != nil {
 		t.Fatal(err)
 	}
 	dst := filepath.Join(r.LaunchCWD, aiderHistoryFile)
@@ -72,7 +71,7 @@ func TestAiderRelocationRefusesToReplaceExistingWorktreeHistory(t *testing.T) {
 	if err := os.Remove(r.TranscriptPath); err != nil {
 		t.Fatal(err)
 	}
-	if err := p.RelocateImportedSession(context.Background(), r); err == nil {
+	if err := relocateAiderHistory(context.Background(), r); err == nil {
 		t.Fatal("accepted an existing native history file")
 	}
 	got, err := os.ReadFile(dst)
@@ -104,7 +103,7 @@ func TestAiderRefusesUnrelatedDestinationAndEscapingHistory(t *testing.T) {
 			case "wrong-id":
 				r.NativeSessionID = NativeHistoryID(t.TempDir())
 			}
-			if err := (&Plugin{}).RelocateImportedSession(context.Background(), r); err == nil {
+			if err := relocateAiderHistory(context.Background(), r); err == nil {
 				t.Fatal("accepted mismatched or escaping history")
 			}
 		})
@@ -118,7 +117,7 @@ func TestAiderMissingOrUnmatchedHistoryNeverBuildsRestore(t *testing.T) {
 	if cmd, ok, err := p.GetRestoreCommand(context.Background(), cfg); !errors.Is(err, ports.ErrNativeHistoryUnavailable) || ok || cmd != nil {
 		t.Fatalf("missing history = %v, %v, %v", cmd, ok, err)
 	}
-	if err := p.RelocateImportedSession(context.Background(), r); err != nil {
+	if err := relocateAiderHistory(context.Background(), r); err != nil {
 		t.Fatal(err)
 	}
 	if err := os.WriteFile(filepath.Join(r.LaunchCWD, aiderHistoryMarker), []byte(NativeHistoryID(t.TempDir())), 0o600); err != nil {

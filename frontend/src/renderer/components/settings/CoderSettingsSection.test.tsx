@@ -87,7 +87,7 @@ describe("CoderSettingsSection templates list", () => {
 		mocks.config.data = savedConfig;
 		mocks.templates.value = {
 			templates: [
-				{ id: "t-1", name: "ao-devkit-medium", displayName: "AO Dev-kit (Medium)", description: "4 vCPU / 16 GB", icon: "", parameters: [] },
+				{ id: "t-1", name: "ao-devkit-medium", displayName: "Orchestrator Dev-kit (Medium)", description: "4 vCPU / 16 GB", icon: "", parameters: [] },
 				{ id: "t-2", name: "ao-devkit-large", displayName: "", description: "", icon: "", parameters: [] },
 			],
 			isLoading: false,
@@ -98,7 +98,7 @@ describe("CoderSettingsSection templates list", () => {
 		// card (dividers come from the card), so there is no separate list element.
 		const list = within(screen.getByRole("heading", { name: "Templates on your Coder" }).closest("section")!);
 		// Prefers displayName, with the short description as subtext.
-		expect(list.getByText("AO Dev-kit (Medium)")).toBeInTheDocument();
+		expect(list.getByText("Orchestrator Dev-kit (Medium)")).toBeInTheDocument();
 		expect(list.getByText("4 vCPU / 16 GB")).toBeInTheDocument();
 		// Falls back to the slug name when no displayName is set.
 		expect(list.getByText("ao-devkit-large")).toBeInTheDocument();
@@ -352,7 +352,7 @@ describe("CoderSettingsSection removing the connection", () => {
 		renderSection(queryClient);
 		await user.click(screen.getByRole("button", { name: "Remove connection" }));
 		const dialog = await screen.findByRole("dialog");
-		expect(within(dialog).getByText(/New Coder sessions will run on AO's managed Coder/)).toBeInTheDocument();
+		expect(within(dialog).getByText(/New Coder sessions will run on Orchestrator's managed Coder/)).toBeInTheDocument();
 		expect(mocks.deleteOrgCoderConfig).not.toHaveBeenCalled();
 		await user.click(within(dialog).getByRole("button", { name: "Remove" }));
 		await waitFor(() => expect(mocks.deleteOrgCoderConfig).toHaveBeenCalledWith("org-1"));
