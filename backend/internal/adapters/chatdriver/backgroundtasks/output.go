@@ -25,6 +25,19 @@ var terminalEscape = regexp.MustCompile(`\x1b(?:\[[\x30-\x3f]*[\x20-\x2f]*[\x40-
 // terminal finally showed, then the last MaxOutputLines lines within
 // MaxOutputBytes. dropped says the caller already left out older output.
 func TailOutput(raw string, dropped bool) ports.ChatBackgroundTaskOutput {
+	// Cut to the last lines first so the escape pass skips discarded output.
+	if strings.Count(raw, "\n") > MaxOutputLines+1 {
+		trimmed := strings.TrimRight(raw, "\r\n")
+		cut := len(trimmed)
+		for n := 0; n <= MaxOutputLines && cut > 0; n++ {
+			if cut = strings.LastIndexByte(trimmed[:cut], '\n'); cut < 0 {
+				break
+			}
+		}
+		if cut > 0 {
+			raw, dropped = trimmed[cut+1:], true
+		}
+	}
 	if !utf8.ValidString(raw) {
 		raw = strings.ToValidUTF8(raw, "�")
 	}
@@ -95,9 +108,10 @@ func (b *OutputBuffer) Append(key, delta string) {
 	}
 	entry.written = b.clock
 	entry.data = append(entry.data, delta...)
-	// Trim in batches so a chatty process does not copy on every line.
+	// Trim in batches so a chatty process does not copy on every line. The
+	// tail moves to the front of the same array, so later appends do not regrow.
 	if len(entry.data) > 2*MaxOutputBytes {
-		entry.data = append([]byte(nil), entry.data[len(entry.data)-MaxOutputBytes:]...)
+		entry.data = entry.data[:copy(entry.data, entry.data[len(entry.data)-MaxOutputBytes:])]
 		entry.dropped = true
 	}
 }
