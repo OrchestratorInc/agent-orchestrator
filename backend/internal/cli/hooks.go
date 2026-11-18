@@ -24,6 +24,7 @@ import (
 	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/agent/claudecode"
 	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/agent/copilot"
 	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/agent/cursor"
+	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/agent/mastracode"
 	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/agent/memcode"
 	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/agent/openinterpreter"
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
@@ -975,6 +976,10 @@ func (c *commandContext) runHook(ctx context.Context, agent, event string) error
 	if domain.AgentHarness(agent) == domain.HarnessCopilot && event == "stop" && conversation.FinalAssistantMessage == "" {
 		// Copilot's stop hook names its event log instead of carrying the answer.
 		conversation.FinalAssistantMessage = capHookText(copilot.FinalAssistantMessage(payload), maxHookInteractionLen)
+	}
+	if domain.AgentHarness(agent) == domain.HarnessMastraCode && event == "stop" && conversation.FinalAssistantMessage == "" {
+		// Mastra's TUI Stop hook omits the answer; read it from native history.
+		conversation.FinalAssistantMessage = capHookText(mastracode.FinalAssistantMessage(payload), maxHookInteractionLen)
 	}
 	path := "sessions/" + url.PathEscape(sessionID) + "/activity"
 	req := setActivityAPIRequest{
