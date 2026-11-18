@@ -153,13 +153,14 @@ changes nothing else.
 
 `--human` clicks and drags need the agent's tab in front in a Browser panel
 that is visible on screen, and fail with `BROWSER_PANEL_HIDDEN` otherwise.
-`screenshot` paints the agent's tab outside the window when it is behind
-another tab or the panel is hidden, but a covered or minimized window can still
-stop painting: the command then runs until the request deadline and fails with
-a timeout rather than returning. Ordinary clicks and every text-based command
-keep working while the panel is hidden or the user is in another tab. Ask the
-user to bring the agent's tab forward if a `--human` action or a screenshot
-fails this way.
+`screenshot` captures your tab wherever it is: behind the user's tab, with the
+Browser panel closed, while the user looks at another session, or with the
+window minimized. A tab that was never on screen is drawn once, out of sight,
+before your first command there, so clicks and captures work on it too.
+`screenshot --annotate` off screen still asks the automation runtime first and
+can take longer. Ordinary clicks and every text-based command keep working
+while the panel is hidden or the user is in another tab. Ask the user to bring
+your tab forward only if a `--human` action fails with `BROWSER_PANEL_HIDDEN`.
 
 `screenshot --annotate` numbers the interactive elements in the image and prints
 the matching refs, so you can point at what you see (`[3]` is `ref=e3`). The

@@ -615,6 +615,9 @@ type BrowserEntry = {
   lastInputBy?: BrowserTabOwner;
   // A preview loaded here while another tab was in front (BrowserTabState).
   unseen?: boolean;
+  // Its page has drawn a frame (ensurePainted). Until it has, Chromium drops
+  // input to it and has nothing to capture.
+  painted?: boolean;
   // When the agent last worked in this tab (agentUseCounter), so that losing
   // its current tab returns it to the one it used most recently.
   agentUsedAt?: number;
@@ -827,6 +830,9 @@ const MAX_EXTERNAL_TEXT_BYTES = 1 << 20;
 // dispatched an action. It must never inherit agent-browser's 60 second command
 // timeout and hold every later command behind the per-session queue.
 const POPUP_TARGET_SYNC_TIMEOUT_MS = 5_000;
+// How long the agent's command waits for a tab never on screen to draw its
+// first frame (ensurePainted).
+const FIRST_FRAME_TIMEOUT_MS = 3_000;
 const AGENT_INPUT_ACTIONS = new Set([
   "click", "dblclick", "press", "fill", "type", "check", "uncheck", "select", "drag",
 ]);
@@ -2228,6 +2234,8 @@ export function createBrowserViewHost(
     session.activeTabId = tabId;
     session.activationRevision += 1;
     next.unseen = false;
+    // Shown on screen, it draws; the agent's next command need not wait for it.
+    if (session.visible) next.painted = true;
     if (previous && previous !== next) previous.driver().show(false);
     next.driver().show(true);
     if (session.devtools && isBlankBrowserEntry(next)) destroyDevTools(session);
@@ -3128,6 +3136,48 @@ export function createBrowserViewHost(
           )
         : image;
     return { mimeType: "image/png", data: resized.toPNG().toString("base64") };
+  };
+
+  // The agent's tab is drawn on screen now: in front in a visible panel of a
+  // window that is shown and not minimized.
+  const agentTabOnScreen = (session: BrowserSessionEntry, entry: BrowserEntry): boolean =>
+    session.activeTabId === entry.tabId &&
+    session.visible &&
+    options.mainWindow.isMinimized?.() !== true &&
+    options.mainWindow.isVisible?.() !== false;
+
+  // A tab the agent opened behind the person's tab, or in a panel never shown,
+  // has never drawn a frame. Chromium then drops the agent's input to it
+  // (clicks are "dispatched" but nothing happens) and has nothing to capture.
+  // Draw it once, out of sight, before the agent's first command there.
+  const ensurePainted = async (
+    session: BrowserSessionEntry,
+    entry: BrowserEntry,
+    signal?: AbortSignal,
+  ): Promise<void> => {
+    if (entry.painted) return;
+    const contents = entry.view.webContents;
+    if (agentTabOnScreen(session, entry) || typeof contents.capturePage !== "function") {
+      entry.painted = true;
+      return;
+    }
+    const restore = paintForCapture(session, entry);
+    try {
+      const deadline = Date.now() + FIRST_FRAME_TIMEOUT_MS;
+      for (;;) {
+        throwIfAborted(signal);
+        // Electron rejects a capture until the page has a frame.
+        const image = await contents.capturePage().catch(() => undefined);
+        if (image && !image.isEmpty()) {
+          entry.painted = true;
+          return;
+        }
+        if (Date.now() >= deadline) return;
+        await new Promise((resolve) => setTimeout(resolve, 50));
+      }
+    } finally {
+      restore();
+    }
   };
 
   // A page paints only while its view is shown. The agent's tab behind
@@ -4582,6 +4632,7 @@ export function createBrowserViewHost(
               const targetEntry = agentEntry(session);
               const targetTabId = targetEntry.tabId;
               await targetEntry.ready;
+              await ensurePainted(session, targetEntry, nativeSignal);
               const targetBeforeAction = agentActionTarget(targetEntry);
               const activationRevision = session.activationRevision;
               const watching = watchingAgent(session);
@@ -5136,17 +5187,9 @@ export function createBrowserViewHost(
                 await ensureNativeActiveTab(session, signal);
                 const targetEntry = agentEntry(session);
                 await targetEntry.ready;
+                await ensurePainted(session, targetEntry, signal);
                 const restore = paintForCapture(session, targetEntry);
-                try {
-                  const result = await options.agentBrowserRuntime!.screenshot(
-                    sessionId,
-                    agentBrowserTargets(session),
-                    signal,
-                    { annotate: args.annotate === true },
-                  );
-                  return { ...result, target: agentActionTarget(targetEntry) };
-                } catch (error) {
-                  if (!isAgentBrowserTimeout(error)) throw error;
+                const capturePage = async () => {
                   const image = await captureScreenshotFallback(targetEntry, signal);
                   if (image.isEmpty()) {
                     throw browserError("SCREENSHOT_UNAVAILABLE", "The browser page could not be captured");
@@ -5163,6 +5206,25 @@ export function createBrowserViewHost(
                     target: agentActionTarget(targetEntry),
                     untrustedExternalContent: true as const,
                   };
+                };
+                try {
+                  // agent-browser's capture waits for a frame Chromium never
+                  // draws for a page off screen (behind the person's tab, the
+                  // panel closed, the window minimized), and falls back only
+                  // after its timeout. Electron's own capture draws the page for
+                  // the capture: use it straight away. Numbered annotations come
+                  // only from agent-browser, so --annotate still asks it first.
+                  if (args.annotate !== true && !agentTabOnScreen(session, targetEntry)) return await capturePage();
+                  const result = await options.agentBrowserRuntime!.screenshot(
+                    sessionId,
+                    agentBrowserTargets(session),
+                    signal,
+                    { annotate: args.annotate === true },
+                  );
+                  return { ...result, target: agentActionTarget(targetEntry) };
+                } catch (error) {
+                  if (!isAgentBrowserTimeout(error)) throw error;
+                  return await capturePage();
                 } finally {
                   restore();
                 }

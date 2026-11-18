@@ -1246,6 +1246,7 @@ function setupTabHost(
 			close: ReturnType<typeof vi.fn>;
 			emitConsoleMessage: (level: number, message: string, line?: number, sourceId?: string) => void;
 			executeJavaScript: ReturnType<typeof vi.fn>;
+			capturePage: ReturnType<typeof vi.fn>;
 				session: {
 					fetch: ReturnType<typeof vi.fn>;
 					setPermissionCheckHandler: ReturnType<typeof vi.fn>;
@@ -1338,6 +1339,11 @@ function setupTabHost(
 			close: vi.fn(),
 			focus: vi.fn(),
 			sendInputEvent: vi.fn(),
+			capturePage: vi.fn(async () => ({
+				isEmpty: (): boolean => false,
+				toPNG: () => Buffer.from(`page:${currentURL}`),
+				getSize: () => ({ width: 800, height: 600 }),
+			})),
 			openDevTools: vi.fn(),
 			closeDevTools: vi.fn(),
 			session: electronSession,
@@ -4101,7 +4107,10 @@ describe("agent browser runtime", () => {
 	});
 
 	it("keeps popup reads and mutations on the reported tab and returns their AO target identity", async () => {
-		const { activeTargets, host, runtime, views } = setupTabHost();
+		const { activeTargets, emit, host, invoke, runtime, views } = setupTabHost();
+		// On screen, so agent-browser itself captures the popup in front.
+		const { viewId } = (await invoke("browser:ensure", "sess-1")) as { viewId: string };
+		emit("browser:setBounds", { viewId, revision: 1, rect: { x: 0, y: 0, width: 640, height: 420 }, visible: true });
 		await host.execute("sess-1", "open", { url: "https://a.example.test/page" });
 		await host.execute("sess-1", "click", { ref: "e2" });
 		views[0].webContents.openWindow("https://b.example.test/popup?token=secret");
@@ -5189,6 +5198,14 @@ describe("agent browser runtime", () => {
 });
 
 describe("agent browser screenshot", () => {
+	// The agent's tab in front in a visible panel: agent-browser captures it.
+	const showPanel = async (
+		invoke: (channel: string, ...args: unknown[]) => Promise<unknown>,
+		emit: (channel: string, zoomFactor: number, ...args: unknown[]) => unknown,
+	) => {
+		const { viewId } = (await invoke("browser:ensure", "sess-1")) as { viewId: string };
+		emit("browser:setBounds", 1, { viewId, revision: 1, rect: { x: 0, y: 0, width: 640, height: 480 }, visible: true });
+	};
 	it("captures through the native runtime", async () => {
 		const runtime = {
 			runAction: vi.fn(async () => ({})),
@@ -5201,7 +5218,8 @@ describe("agent browser screenshot", () => {
 			closeSession: vi.fn(async () => undefined),
 			dispose: vi.fn(async () => undefined),
 		} as unknown as import("./agent-browser-runtime").AgentBrowserRuntime;
-		const { host, webContents } = setupHost(runtime);
+		const { host, webContents, invoke, emit } = setupHost(runtime);
+		await showPanel(invoke, emit);
 
 		const result = await host.execute("sess-1", "screenshot");
 
@@ -5229,7 +5247,8 @@ describe("agent browser screenshot", () => {
 			closeSession: vi.fn(async () => undefined),
 			dispose: vi.fn(async () => undefined),
 		} as unknown as import("./agent-browser-runtime").AgentBrowserRuntime;
-		const { host, webContents } = setupHost(runtime);
+		const { host, webContents, invoke, emit } = setupHost(runtime);
+		await showPanel(invoke, emit);
 
 		const result = await host.execute("sess-1", "screenshot");
 
@@ -5251,7 +5270,8 @@ describe("agent browser screenshot", () => {
 			closeSession: vi.fn(async () => undefined),
 			dispose: vi.fn(async () => undefined),
 		} as unknown as import("./agent-browser-runtime").AgentBrowserRuntime;
-		const { host, webContents } = setupHost(runtime);
+		const { host, webContents, invoke, emit } = setupHost(runtime);
+		await showPanel(invoke, emit);
 		webContents.capturePage.mockResolvedValueOnce({
 			isEmpty: () => true,
 			toJPEG: () => Buffer.alloc(0),
@@ -5274,7 +5294,8 @@ describe("agent browser screenshot", () => {
 			closeSession: vi.fn(async () => undefined),
 			dispose: vi.fn(async () => undefined),
 		} as unknown as import("./agent-browser-runtime").AgentBrowserRuntime;
-		const { host, webContents } = setupHost(runtime);
+		const { host, webContents, invoke, emit } = setupHost(runtime);
+		await showPanel(invoke, emit);
 		webContents.capturePage.mockReturnValueOnce(new Promise(() => undefined));
 		const controller = new AbortController();
 		const screenshot = host.execute("sess-1", "screenshot", undefined, controller.signal);
@@ -5296,7 +5317,8 @@ describe("agent browser screenshot", () => {
 			closeSession: vi.fn(async () => undefined),
 			dispose: vi.fn(async () => undefined),
 		} as unknown as import("./agent-browser-runtime").AgentBrowserRuntime;
-		const { host, webContents } = setupHost(runtime);
+		const { host, webContents, invoke, emit } = setupHost(runtime);
+		await showPanel(invoke, emit);
 
 		await expect(host.execute("sess-1", "screenshot")).rejects.toMatchObject({
 			code: "AGENT_BROWSER_COMMAND_FAILED",
@@ -6705,7 +6727,9 @@ describe("browser human pointer and annotated screenshots", () => {
 	});
 
 	it("passes the annotate option to the screenshot runtime and returns its annotations", async () => {
-		const { host, runtime } = setupPointerHost();
+		const { host, runtime, invoke, emit } = setupPointerHost();
+		const { viewId } = (await invoke("browser:ensure", "sess-1")) as { viewId: string };
+		emit("browser:setBounds", 1, { viewId, revision: 1, rect: { x: 0, y: 0, width: 10, height: 10 }, visible: true });
 
 		const plain = await host.execute("sess-1", "screenshot", {});
 		const annotated = await host.execute("sess-1", "screenshot", { annotate: true });
@@ -6962,15 +6986,64 @@ describe("agent and person tabs", () => {
 	});
 
 	it("paints the agent's tab outside the window to capture it behind the person's tab", async () => {
-		const { host, invoke, views, viewId } = await open();
+		const { host, invoke, runtime, views, viewId } = await open();
 		await host.execute("sess-1", "open", { url: "https://agent.example.test/" });
 		await invoke("browser:openTab", { viewId, url: "https://mine.example.test/" });
 		views[0].setVisible.mockClear();
 		views[1].setVisible.mockClear();
 
-		expect(await host.execute("sess-1", "screenshot")).toMatchObject({ target: { tabId: "t1" } });
+		expect(await host.execute("sess-1", "screenshot")).toMatchObject({
+			data: Buffer.from("page:https://agent.example.test/").toString("base64"),
+			target: { tabId: "t1" },
+		});
 		expect(views[0].setVisible.mock.calls.map(([visible]) => visible)).toEqual([true, false]);
 		expect(views[1].setVisible).not.toHaveBeenCalled();
+		// Captured by Electron at once: agent-browser's capture would wait for a
+		// frame Chromium does not draw off screen.
+		expect(runtime.screenshot).not.toHaveBeenCalled();
+		expect(views[1].webContents.capturePage).not.toHaveBeenCalled();
+	});
+
+	it("draws an agent tab never on screen once before the agent's first input to it, and only once", async () => {
+		const { host, invoke, runtime, views, viewId } = await open();
+		await invoke("browser:openTab", { viewId, url: "https://mine.example.test/" });
+		// The agent's new tab opens behind the person's: never shown, no frame yet.
+		await host.execute("sess-1", "tab-new", { url: "https://agent.example.test/" });
+		const agentView = views[2]!;
+		let frames = 0;
+		agentView.webContents.capturePage.mockImplementation(async () => {
+			frames += 1;
+			if (frames < 3) throw new Error("UnknownVizError");
+			return { isEmpty: () => false, toPNG: () => Buffer.from("frame"), getSize: () => ({ width: 800, height: 600 }) };
+		});
+		agentView.setVisible.mockClear();
+
+		await host.execute("sess-1", "click", { ref: "e2" });
+		const clickOrder = vi.mocked(runtime.runAction).mock.invocationCallOrder.at(-1)!;
+		expect(frames).toBe(3);
+		expect(agentView.webContents.capturePage.mock.invocationCallOrder.at(-1)!).toBeLessThan(clickOrder);
+		// Shown out of sight for the frame, then hidden again behind the person's tab.
+		expect(agentView.setVisible.mock.calls.map(([visible]) => visible)).toEqual([true, false]);
+		expect(await invoke("browser:getTabs", viewId)).toMatchObject({ activeTabId: "t2" });
+
+		await host.execute("sess-1", "click", { ref: "e2" });
+		expect(frames).toBe(3);
+	});
+
+	it("captures the agent's tab through agent-browser while it is on screen, and asks it for annotations off screen", async () => {
+		const { emit, host, invoke, runtime, views, viewId } = await open();
+		await host.execute("sess-1", "open", { url: "https://agent.example.test/" });
+		emit("browser:setBounds", { viewId, revision: 1, rect: { x: 0, y: 0, width: 640, height: 420 }, visible: true });
+		views[0].webContents.capturePage.mockClear();
+		await host.execute("sess-1", "screenshot");
+		expect(runtime.screenshot).toHaveBeenCalledTimes(1);
+		expect(views[0].webContents.capturePage).not.toHaveBeenCalled();
+
+		// Behind the person's tab, numbered annotations still come from agent-browser.
+		await invoke("browser:openTab", { viewId, url: "https://mine.example.test/" });
+		await host.execute("sess-1", "screenshot", { annotate: true });
+		expect(runtime.screenshot).toHaveBeenCalledTimes(2);
+		expect(runtime.screenshot).toHaveBeenLastCalledWith("sess-1", expect.anything(), undefined, { annotate: true });
 	});
 
 	// The target provider is the boundary agent-browser sees, through the CDP
