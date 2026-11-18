@@ -83,18 +83,24 @@ func (p *Poller) Start(ctx context.Context) <-chan struct{} {
 		err := p.pollAndLog(ctx)
 		ticker := time.NewTicker(p.interval)
 		defer ticker.Stop()
+		source := p.changes
 		for {
 			tick := ticker.C
 			var changes <-chan struct{}
 			// Only a session change can give an idle poller something to watch.
-			if p.changes != nil && err == nil && len(p.seen) == 0 {
-				tick, changes = nil, p.changes
+			if source != nil && err == nil && len(p.seen) == 0 {
+				tick, changes = nil, source
 			}
 			select {
 			case <-ctx.Done():
 				return
 			case <-tick:
-			case <-changes:
+			case _, open := <-changes:
+				if !open {
+					// A closed channel would wake the loop forever; poll on the interval instead.
+					source = nil
+					continue
+				}
 			}
 			err = p.pollAndLog(ctx)
 		}

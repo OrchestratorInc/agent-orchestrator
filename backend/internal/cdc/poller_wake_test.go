@@ -2,6 +2,8 @@ package cdc
 
 import (
 	"context"
+	"errors"
+	"log/slog"
 	"sync"
 	"testing"
 	"testing/synctest"
@@ -13,6 +15,7 @@ type memorySource struct {
 	events []Event
 	reads  int
 	readAt []time.Time
+	fail   int
 }
 
 func (m *memorySource) add(seqs ...int64) {
@@ -28,6 +31,10 @@ func (m *memorySource) EventsAfter(_ context.Context, after int64, limit int) ([
 	defer m.mu.Unlock()
 	m.reads++
 	m.readAt = append(m.readAt, time.Now())
+	if m.fail > 0 {
+		m.fail--
+		return nil, errors.New("read failed")
+	}
 	var out []Event
 	for _, e := range m.events {
 		if e.Seq > after && len(out) < limit {
@@ -128,6 +135,37 @@ func TestPollerWithWakeCoalescesSignalsDuringTheWait(t *testing.T) {
 		src.mu.Unlock()
 		if reads != 2 {
 			t.Fatalf("reads = %d, want 2: the second poll covers both signals sent during its wait", reads)
+		}
+	})
+}
+
+func TestPollerWithWakeRetriesAFailedReadOfAConsumedSignal(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		src := &memorySource{}
+		wake := make(chan struct{}, 1)
+		p := NewPoller(src, NewBroadcaster(), PollerConfig{Interval: 100 * time.Millisecond, Wake: wake, Logger: slog.New(slog.DiscardHandler)})
+		p.fallback = time.Hour
+		ctx, cancel := context.WithCancel(context.Background())
+		done := p.Start(ctx)
+		defer func() { cancel(); <-done }()
+
+		wake <- struct{}{}
+		synctest.Wait()
+		for range 2 {
+			time.Sleep(10 * time.Millisecond)
+			wake <- struct{}{}
+			synctest.Wait()
+		}
+		src.mu.Lock()
+		src.fail = 1
+		src.mu.Unlock()
+		time.Sleep(time.Second)
+		synctest.Wait()
+		src.mu.Lock()
+		reads := src.reads
+		src.mu.Unlock()
+		if reads != 3 {
+			t.Fatalf("reads = %d, want 3: the failed read retries once for the signal it consumed", reads)
 		}
 	})
 }

@@ -91,3 +91,21 @@ func TestPollerWaitsForChangeWhileNothingIsWatched(t *testing.T) {
 		}
 	})
 }
+
+func TestPollerFallsBackToTheIntervalWhenChangesCloses(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		svc := &countingSessions{inner: &fakePreviewSessions{sessions: []domain.SessionRecord{workerSession("ao-1", t.TempDir(), "")}}}
+		changes := make(chan struct{}, 1)
+		ctx, cancel := context.WithCancel(context.Background())
+		done := NewPoller(svc, svc, "http://127.0.0.1:3001", PollerConfig{Interval: 10 * time.Millisecond, Changes: changes, Logger: discardLogger()}).Start(ctx)
+		defer func() { cancel(); <-done }()
+
+		synctest.Wait()
+		close(changes)
+		time.Sleep(25 * time.Millisecond)
+		synctest.Wait()
+		if n := svc.count(); n < 2 || n > 4 {
+			t.Fatalf("polls 25ms after Changes closed = %d, want interval polling (2 to 4)", n)
+		}
+	})
+}

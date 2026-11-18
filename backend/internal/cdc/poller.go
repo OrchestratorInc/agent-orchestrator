@@ -101,10 +101,10 @@ func (p *Poller) Start(ctx context.Context) <-chan struct{} {
 		}
 		t := time.NewTicker(tick)
 		defer t.Stop()
-		full := false
+		again := false
 		var last time.Time
 		for {
-			if !full {
+			if !again {
 				select {
 				case <-ctx.Done():
 					return
@@ -126,8 +126,10 @@ func (p *Poller) Start(ctx context.Context) <-chan struct{} {
 			}
 			// The read below sees every write committed before it, so a signal
 			// already pending is covered; one arriving during the read stays queued.
+			drained := false
 			select {
 			case <-p.wake:
+				drained = true
 			default:
 			}
 			last = time.Now()
@@ -135,7 +137,9 @@ func (p *Poller) Start(ctx context.Context) <-chan struct{} {
 			if err != nil {
 				p.logger.Error("cdc poller: poll failed", "err", err)
 			}
-			full = err == nil && n == p.batch
+			// A full batch reads on at once; a failed read retries once for the
+			// signal it consumed.
+			again = (err == nil && n == p.batch) || (err != nil && drained)
 		}
 	}()
 	return done
