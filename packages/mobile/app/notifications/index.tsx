@@ -166,8 +166,12 @@ function NotificationsContent() {
 				return [{ host, source, cursor: mode === "more" ? cursor : undefined }];
 			});
 			if (mode === "initial" && !loadedOnceRef.current) setLoading(true);
-			if (mode === "refresh") setRefreshing(true);
-			if (mode === "reload") setReloading(true);
+			// The newer pull or reload owns both indicators: a load it cuts off
+			// returns below without clearing either.
+			if (mode === "refresh" || mode === "reload") {
+				setRefreshing(mode === "refresh");
+				setReloading(mode === "reload");
+			}
 			if (mode === "more") {
 				loadingMoreRef.current = true;
 				setLoadingMore(true);

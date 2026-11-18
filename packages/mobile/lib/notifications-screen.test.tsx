@@ -428,6 +428,24 @@ describe("NotificationsScreen", () => {
 			expect(offlineState()).toHaveLength(0);
 		});
 
+		// The newer load owns the indicators: a pull's load that a Retry cut off
+		// returns without clearing anything.
+		it("hands the spinner to Retry when Retry cuts off a pull", async () => {
+			fixtures.offline.add("dev");
+			fixtures.offline.add("mac");
+			await act(async () => { renderer = create(<NotificationsScreen />); });
+			const retry = () => renderer!.root.findAll((node) => node.type === ("EmptyState" as never) && node.props.title === "Machines are offline")[0].props.action as { props: { loading?: boolean; onPress(): void } };
+			fixtures.offline.clear();
+			const load = holdNextLoad();
+			await act(async () => { void renderer!.root.findByType("SectionList" as never).props.refreshControl.props.onRefresh(); });
+			expect(refreshing()).toBe(true);
+			await act(async () => { retry().props.onPress(); });
+			expect(refreshing()).toBe(false);
+			expect(retry().props.loading).toBe(true);
+			await load.answer();
+			expect(refreshing()).toBe(false);
+		});
+
 		it("reloads after Clear all without turning on the pull-to-refresh spinner", async () => {
 			await act(async () => { renderer = create(<NotificationsScreen />); });
 			const clearAll = renderer!.root.find((node) => node.type === ("StackToolbarButton" as never) && node.props.accessibilityLabel === "Clear all");
