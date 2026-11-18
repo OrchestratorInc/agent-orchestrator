@@ -16,6 +16,7 @@ const mocks = vi.hoisted(() => ({
 	teams: true,
 	org: undefined as { id: string; displayName: string; kind?: string } | undefined,
 	candidates: [] as CloudCpShareCandidate[],
+	createTeam: vi.fn(),
 }));
 
 vi.mock("../lib/telemetry", async (importOriginal) => ({
@@ -31,6 +32,10 @@ vi.mock("../stores/ui-store", () => ({
 }));
 vi.mock("../hooks/useTeamsEnabled", () => ({ useTeamsEnabled: () => mocks.teams }));
 vi.mock("../hooks/useCloudOrg", () => ({ useCloudOrg: () => ({ org: mocks.org, isLoading: false, error: null, ready: true, refetch: async () => ({}) }) }));
+vi.mock("../hooks/useCloudCp", async (importOriginal) => ({
+	...await importOriginal<typeof import("../hooks/useCloudCp")>(),
+	useCloudCp: () => ({ client: { createTeam: mocks.createTeam }, baseUrl: "https://cp.test", ready: true, userId: "u-1" }),
+}));
 vi.mock("../hooks/useTeams", async (importOriginal) => ({
 	...await importOriginal<typeof import("../hooks/useTeams")>(),
 	useShareCandidates: () => ({ data: mocks.candidates, isPlaceholderData: false }),
@@ -63,6 +68,7 @@ beforeEach(() => {
 	mocks.teams = true;
 	mocks.org = { id: ORG_ID, displayName: "Acme", kind: "team" };
 	mocks.candidates = [{ kind: "team", teamId: TEAM_ID, name: "Design", memberCount: 3 }];
+	mocks.createTeam.mockReset();
 });
 
 describe("ShareArtifactButton on a team workspace", () => {
@@ -75,8 +81,9 @@ describe("ShareArtifactButton on a team workspace", () => {
 		renderButton(cloudFile);
 		await userEvent.click(await screen.findByRole("button", { name: "Published: report.html" }));
 		await screen.findByRole("combobox", { name: "Add people or teams" });
+		// Picking the team shares at once: there is no Add button.
 		await pickDesign();
-		await userEvent.click(screen.getByRole("button", { name: "Add" }));
+		expect(screen.queryByRole("button", { name: "Add" })).toBeNull();
 		expect(invite).toHaveBeenCalledExactlyOnceWith("https://cp.test", SHARE_ID, { orgId: ORG_ID, teamIds: [TEAM_ID] });
 		const people = await screen.findByRole("region", { name: "People with access" });
 		expect(within(people).getByText("Design")).toBeTruthy();
@@ -118,7 +125,6 @@ describe("ShareArtifactButton on a team workspace", () => {
 		await userEvent.click(await screen.findByRole("button", { name: "Publish: report.html" }));
 		await screen.findByRole("combobox", { name: "Add people or teams" });
 		await pickDesign();
-		await userEvent.click(screen.getByRole("button", { name: "Add" }));
 		expect(await screen.findByText("Gets access when you publish")).toBeTruthy();
 		await userEvent.click(screen.getByRole("button", { name: /Only people invited/ }));
 		await userEvent.click(screen.getByRole("menuitemradio", { name: /Everyone at Acme/ }));
@@ -128,6 +134,41 @@ describe("ShareArtifactButton on a team workspace", () => {
 		expect(publish.mock.calls[0]![0]).not.toHaveProperty("teamIds");
 		await waitFor(() => expect(invite).toHaveBeenCalledExactlyOnceWith("https://cp.test", SHARE_ID, { orgId: ORG_ID, teamIds: [TEAM_ID], workspace: true }));
 		expect(await screen.findByText("3 members")).toBeTruthy();
+	});
+
+	it("shares with a typed email on Enter", async () => {
+		mocks.candidates = [];
+		vi.spyOn(aoBridge.cloudShare, "inspect").mockResolvedValue({ ...inspection, shareId: SHARE_ID });
+		vi.spyOn(aoBridge.cloudShare, "list").mockResolvedValue({ ...links, shares: [share] });
+		vi.spyOn(aoBridge.cloudShare, "grants").mockResolvedValue(none);
+		const invite = vi.spyOn(aoBridge.cloudShare, "invite").mockResolvedValue({ ...none, people: [{ id: "4a0b0b4e-be7f-4a7d-be95-9b4d7a5b6c85", email: "maya@acme.co", createdAt: "" }] });
+		renderButton(cloudFile);
+		await userEvent.click(await screen.findByRole("button", { name: "Published: report.html" }));
+		await userEvent.type(await screen.findByRole("combobox", { name: "Add people or teams" }), "maya@acme.co{Enter}");
+		expect(invite).toHaveBeenCalledExactlyOnceWith("https://cp.test", SHARE_ID, { emails: ["maya@acme.co"] });
+		expect(await screen.findByText("maya@acme.co")).toBeTruthy();
+	});
+
+	it("makes a new team from the field, as session sharing does, and shares the link with it", async () => {
+		mocks.candidates = [];
+		vi.spyOn(aoBridge.cloudShare, "inspect").mockResolvedValue({ ...inspection, shareId: SHARE_ID });
+		vi.spyOn(aoBridge.cloudShare, "list").mockResolvedValue({ ...links, shares: [share] });
+		vi.spyOn(aoBridge.cloudShare, "grants").mockResolvedValue(none);
+		const invite = vi.spyOn(aoBridge.cloudShare, "invite").mockResolvedValue({ ...none, teams: [{ ...design, name: "Research" }] });
+		mocks.createTeam.mockResolvedValue({ team: { id: TEAM_ID, name: "Research", memberCount: 1 } });
+		renderButton(cloudFile);
+		await userEvent.click(await screen.findByRole("button", { name: "Published: report.html" }));
+		const field = await screen.findByRole("combobox", { name: "Add people or teams" });
+		await userEvent.type(field, "Research");
+		await userEvent.click(await screen.findByRole("option", { name: /New team/ }));
+		const dialog = await screen.findByRole("dialog", { name: "New team" });
+		expect((within(dialog).getByRole("textbox", { name: "Name" }) as HTMLInputElement).value).toBe("Research");
+		// The popover stays open behind the dialog.
+		expect(screen.getByRole("combobox", { name: "Add people or teams", hidden: true })).toBeTruthy();
+		await userEvent.click(within(dialog).getByRole("button", { name: "Create team" }));
+		expect(mocks.createTeam).toHaveBeenCalledWith(ORG_ID, { name: "Research", members: [] });
+		await waitFor(() => expect(invite).toHaveBeenCalledExactlyOnceWith("https://cp.test", SHARE_ID, { orgId: ORG_ID, teamIds: [TEAM_ID] }));
+		expect(await screen.findByText("Research")).toBeTruthy();
 	});
 
 	it("offers only email and the link's access on a personal workspace", async () => {

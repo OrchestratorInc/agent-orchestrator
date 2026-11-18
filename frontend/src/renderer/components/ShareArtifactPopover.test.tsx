@@ -177,8 +177,9 @@ describe("ShareArtifactButton on a cloud session's file", () => {
 		const remove = vi.spyOn(aoBridge.cloudShare, "removeGrant").mockResolvedValue();
 		await openPopover(cloudFile, "report.html", "Published");
 		const field = await screen.findByRole("textbox", { name: "Add people by email" });
-		await userEvent.type(field, "Maya@acme.co,");
-		await userEvent.click(screen.getByRole("button", { name: "Add" }));
+		// Enter shares at once: there is no Add button.
+		await userEvent.type(field, "Maya@acme.co{Enter}");
+		expect(screen.queryByRole("button", { name: "Add" })).toBeNull();
 		expect(invite).toHaveBeenCalledExactlyOnceWith("https://cp.test", SHARE_ID, { emails: ["Maya@acme.co"] });
 		expect(await screen.findByText("maya@acme.co")).toBeTruthy();
 		expect(screen.getByText("Can view")).toBeTruthy();
@@ -190,16 +191,13 @@ describe("ShareArtifactButton on a cloud session's file", () => {
 		expect(screen.getByText("Only you")).toBeTruthy();
 	});
 
-	it("keeps Add disabled while a chip is not an email address, and says which", async () => {
+	it("shares nothing while an address is not an email address, and says which", async () => {
 		stub({ ...inspection, shareId: SHARE_ID }, { ...links, shares: [share] });
 		const invite = vi.spyOn(aoBridge.cloudShare, "invite").mockResolvedValue({ people: [], teams: [], workspaces: [] });
 		await openPopover(cloudFile, "report.html", "Published");
 		const field = await screen.findByRole("textbox", { name: "Add people by email" });
-		await userEvent.type(field, "maya@acme.co ravi@acme ");
+		await userEvent.type(field, "maya@acme.co ravi@acme{Enter}");
 		expect(screen.getByRole("alert").textContent).toBe("“ravi@acme” isn't an email address.");
-		expect(screen.getByRole("button", { name: "Add" })).toBeDisabled();
-		await userEvent.click(screen.getByRole("button", { name: "Remove ravi@acme" }));
-		expect(screen.getByRole("button", { name: "Add" })).toBeEnabled();
 		expect(invite).not.toHaveBeenCalled();
 	});
 
@@ -417,7 +415,6 @@ describe("ShareArtifactButton on a cloud session's file", () => {
 		vi.spyOn(aoBridge.cloudShare, "invite").mockResolvedValue({ people: [maya, dev], teams: [], workspaces: [] });
 		const popover = await openPopover(cloudFile, "report.html", "Published");
 		await userEvent.type(await within(popover).findByRole("textbox", { name: "Add people by email" }), "dev@acme.co{Enter}");
-		await userEvent.click(within(popover).getByRole("button", { name: "Add" }));
 		expect(await within(popover).findByText("dev@acme.co")).toBeTruthy();
 		// The read started on opening lands last, without dev.
 		act(() => answerRead({ people: [maya], teams: [], workspaces: [] }));
@@ -439,9 +436,8 @@ describe("ShareArtifactButton on a file on this computer", () => {
 		await openPopover(localFile);
 		expect(await screen.findByText("2 of 3 free links left")).toBeTruthy();
 		expect(publishSpy).not.toHaveBeenCalled();
-		// The button beside the field says Add; people added get access when it is published.
-		await userEvent.type(screen.getByRole("textbox", { name: "Add people by email" }), "dev@acme.co");
-		await userEvent.click(screen.getByRole("button", { name: "Add" }));
+		// Enter adds them; people added get access when it is published.
+		await userEvent.type(screen.getByRole("textbox", { name: "Add people by email" }), "dev@acme.co{Enter}");
 		expect(await screen.findByText("dev@acme.co")).toBeTruthy();
 		expect(screen.getByText("Gets access when you publish")).toBeTruthy();
 		expect(screen.getByText("Only people invited")).toBeTruthy();
@@ -553,11 +549,11 @@ describe("ShareArtifactButton on a file on this computer", () => {
 		const emails = Array.from({ length: 50 }, (_, index) => `p${index}@acme.co`).join(", ");
 		await userEvent.click(field);
 		await userEvent.paste(emails);
-		await userEvent.click(within(popover).getByRole("button", { name: "Add" }));
+		await userEvent.keyboard("{Enter}");
 		await userEvent.type(field, "one-more@acme.co{Enter}");
-		await userEvent.click(within(popover).getByRole("button", { name: "Add" }));
 		expect(await within(popover).findByText("Add up to 50 people before publishing. You can add more once it's published.")).toBeTruthy();
-		expect(within(popover).queryByText("one-more@acme.co")).toBeTruthy();
+		// Not taken: it stays typed.
+		expect((field as HTMLInputElement).value).toBe("one-more@acme.co");
 		expect(publishSpy).not.toHaveBeenCalled();
 	});
 

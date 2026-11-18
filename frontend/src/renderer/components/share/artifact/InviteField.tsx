@@ -1,9 +1,7 @@
-import { useId, useRef, useState, type ClipboardEvent, type KeyboardEvent } from "react";
+import { useId, useState, type KeyboardEvent } from "react";
 import { useTranslation } from "react-i18next";
-import { X } from "@/components/app-icons";
 import { looksLikeEmail } from "../../../hooks/useTeams";
 import { cn } from "../../../lib/utils";
-import { Button } from "../../ui/button";
 
 /** Splits typed or pasted text into addresses: commas, semicolons and whitespace separate them. */
 export function splitEmails(text: string): string[] {
@@ -21,125 +19,62 @@ function withEmails(chips: readonly string[], added: readonly string[]): string[
 }
 
 /**
- * Email chips beside one action: Enter, a comma or a space turns what was typed
- * into a chip, and a pasted list becomes several. The action stays disabled
- * while a chip is not an email address, and the first such chip is named under
- * the field. Submitting takes what is still typed too.
+ * One email field, as session sharing's: type an address and press Enter (or
+ * a comma) to share the link with it at once; a pasted list shares with
+ * every address in it. An address that isn't one is named under the field
+ * and stays typed, to be fixed. There is no separate Add step.
  */
-export function InviteField({ actionLabel, busy = false, disabled = false, onSubmit }: {
-	/** Invite on a live link; Add while setting a link up before it is published. */
-	actionLabel: string;
+export function InviteField({ busy = false, disabled = false, onSubmit }: {
 	busy?: boolean;
 	disabled?: boolean;
 	/** Called with every address; resolves true when they were taken, clearing the field. */
 	onSubmit: (emails: string[]) => Promise<boolean> | boolean;
 }) {
 	const { t } = useTranslation();
-	const [chips, setChips] = useState<string[]>([]);
 	const [typed, setTyped] = useState("");
-	const inputRef = useRef<HTMLInputElement>(null);
+	const [invalid, setInvalid] = useState<string>();
 	const errorId = useId();
-	const invalid = chips.find((chip) => !looksLikeEmail(chip));
-	const pending = withEmails(chips, splitEmails(typed));
-	const canSubmit = !disabled && !busy && pending.length > 0 && pending.every(looksLikeEmail);
 
-	const commit = (text: string) => {
-		const added = splitEmails(text);
-		if (added.length > 0) setChips((current) => withEmails(current, added));
-		setTyped("");
-	};
 	const submit = async () => {
-		if (!canSubmit) {
-			commit(typed);
+		const emails = withEmails([], splitEmails(typed));
+		if (emails.length === 0 || disabled || busy) return;
+		const bad = emails.find((email) => !looksLikeEmail(email));
+		if (bad) {
+			setInvalid(bad);
 			return;
 		}
-		setChips(pending);
-		setTyped("");
-		// Only what was sent leaves the field: anything added while it was on
-		// its way stays, still to be sent.
-		if (await onSubmit(pending)) {
-			const sent = new Set(pending.map((email) => email.toLowerCase()));
-			setChips((current) => current.filter((chip) => !sent.has(chip.toLowerCase())));
-		}
+		setInvalid(undefined);
+		if (await onSubmit(emails)) setTyped((current) => current === typed ? "" : current);
 	};
 	const onKeyDown = (event: KeyboardEvent<HTMLInputElement>) => {
-		if (event.key === "Enter") {
+		if (event.key === "Enter" || ((event.key === "," || event.key === ";") && typed.trim())) {
+			// Enter that confirms an input method's composition isn't a submit.
+			if (event.nativeEvent.isComposing) return;
 			event.preventDefault();
-			// Enter on a typed address makes it a chip; on nothing typed, it submits.
-			if (typed.trim()) commit(typed);
-			else void submit();
-		} else if ((event.key === "," || event.key === " " || event.key === ";") && typed.trim()) {
-			event.preventDefault();
-			commit(typed);
-		} else if (event.key === "Backspace" && typed === "" && chips.length > 0) {
-			setChips((current) => current.slice(0, -1));
+			void submit();
 		}
-	};
-	const onPaste = (event: ClipboardEvent<HTMLInputElement>) => {
-		const text = event.clipboardData.getData("text");
-		if (splitEmails(text).length < 2) return;
-		event.preventDefault();
-		commit(`${typed} ${text}`);
 	};
 
 	return (
 		<div className="flex flex-col gap-1.5" data-invite-field="">
-			<div className="flex items-start gap-1.5">
-				<div
-					className={cn(
-						"flex min-h-control-md min-w-0 flex-1 cursor-text flex-wrap items-center gap-1 rounded-md bg-input/50 px-1.5 py-1 focus-within:ring-1 focus-within:ring-ring",
-						invalid && "ring-1 ring-destructive/60",
-					)}
-					onClick={() => inputRef.current?.focus()}
-				>
-					{chips.map((chip) => {
-						const bad = !looksLikeEmail(chip);
-						return (
-							<span
-								key={chip}
-								className={cn(
-									"inline-flex h-5 max-w-full items-center gap-0.5 rounded-sm pl-1.5 text-caption",
-									bad ? "bg-destructive/15 text-destructive" : "bg-muted text-foreground",
-								)}
-								data-invite-chip={bad ? "invalid" : ""}
-							>
-								<span className="truncate">{chip}</span>
-								<Button
-									aria-label={t("artifacts.share.people.removeChip", { email: chip })}
-									className="size-4 rounded-sm"
-									onClick={(event) => {
-										event.stopPropagation();
-										setChips((current) => current.filter((value) => value !== chip));
-									}}
-									size="none"
-									type="button"
-									variant="ghost"
-								>
-									<X aria-hidden="true" className="size-2.5" />
-								</Button>
-							</span>
-						);
-					})}
-					<input
-						ref={inputRef}
-						aria-describedby={invalid ? errorId : undefined}
-						aria-invalid={invalid ? true : undefined}
-						aria-label={t("artifacts.share.people.addByEmail")}
-						className="h-5 min-w-16 flex-1 bg-transparent px-1 text-caption text-foreground outline-none placeholder:text-muted-foreground disabled:cursor-not-allowed"
-						disabled={disabled}
-						onBlur={() => commit(typed)}
-						onChange={(event) => setTyped(event.target.value)}
-						onKeyDown={onKeyDown}
-						onPaste={onPaste}
-						placeholder={chips.length === 0 ? t("artifacts.share.people.addByEmail") : undefined}
-						type="email"
-						value={typed}
-					/>
-				</div>
-				<Button disabled={!canSubmit} onClick={() => void submit()} size="sm" type="button" variant="secondary">
-					{actionLabel}
-				</Button>
-			</div>
+			<input
+				aria-describedby={invalid ? errorId : undefined}
+				aria-invalid={invalid ? true : undefined}
+				aria-label={t("artifacts.share.people.addByEmail")}
+				className={cn(
+					"h-control-md w-full rounded-md bg-input/50 px-2.5 text-control text-foreground outline-none placeholder:text-muted-foreground focus-visible:ring-1 focus-visible:ring-ring disabled:cursor-not-allowed",
+					invalid && "ring-1 ring-destructive/60",
+				)}
+				disabled={disabled}
+				onChange={(event) => {
+					setTyped(event.target.value);
+					setInvalid(undefined);
+				}}
+				onKeyDown={onKeyDown}
+				placeholder={t("artifacts.share.people.addByEmail")}
+				type="email"
+				value={typed}
+			/>
 			{invalid ? (
 				<p id={errorId} role="alert" className="text-caption leading-4 text-error">
 					{t("artifacts.share.people.notEmail", { email: invalid })}

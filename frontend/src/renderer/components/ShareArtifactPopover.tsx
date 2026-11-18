@@ -36,7 +36,7 @@ import { STANDALONE_WORKSPACE_ID } from "../types/workspace";
 import { shareAccessIcon } from "./ArtifactShareMark";
 import { type ArtifactAudience, ArtifactGeneralAccess, accessName, accessSentence } from "./share/artifact/ArtifactGeneralAccess";
 import { type ArtifactPerson, type ArtifactTeam, ArtifactPeopleList, teamRemovingKey } from "./share/artifact/ArtifactPeopleList";
-import { type ArtifactRecipients, ArtifactRecipientField } from "./share/artifact/ArtifactRecipientField";
+import { type ArtifactRecipients, ArtifactRecipientField, dialogOverSharePopover } from "./share/artifact/ArtifactRecipientField";
 import { isPersonalWorkspace, workspaceDisplayName } from "./share/linkAccess";
 import { InviteField } from "./share/artifact/InviteField";
 import { Button } from "./ui/button";
@@ -457,6 +457,10 @@ export function ShareArtifactMenuPopover({ file, name, open, onOpenChange, inten
 					const justOpened = performance.now() - openedAt.current < MENU_HANDOFF_MS;
 					if (justOpened || (target && anchorRef.current?.contains(target))) event.preventDefault();
 				}}
+				// New team, opened from the panel, is a dialog outside it.
+				onInteractOutside={(event) => {
+					if (dialogOverSharePopover()) event.preventDefault();
+				}}
 			>
 				{open ? <SharePanel file={file} name={name} onClose={() => onOpenChange(false)} unpublishOnOpen={intent === "unpublish"} /> : null}
 			</PopoverContent>
@@ -563,7 +567,15 @@ export function ShareArtifactButton({ file, name, className, iconOnly = false, r
 		: <Share aria-hidden="true" className="size-icon-sm" />;
 	const amberDot = <span aria-hidden="true" className="pointer-events-none absolute top-0.5 right-0.5 size-1.5 rounded-full bg-status-in-review ring-1 ring-background" data-share-outdated="" />;
 	const panel = (
-		<PopoverContent align="end" className={POPOVER_CLASS} data-browser-native-overlay="true">
+		<PopoverContent
+			align="end"
+			className={POPOVER_CLASS}
+			data-browser-native-overlay="true"
+			// New team, opened from the panel, is a dialog outside it.
+			onInteractOutside={(event) => {
+				if (dialogOverSharePopover()) event.preventDefault();
+			}}
+		>
 			{open ? <SharePanel alreadyPublished={Boolean(share) || (!checked && published)} file={file} name={name} onClose={() => onOpenChange(false)} onChanged={recheck} republishOnOpen={republishOnOpen} /> : null}
 		</PopoverContent>
 	);
@@ -1159,13 +1171,12 @@ function SharePanel({
 						<div className="mt-3.5 flex flex-col gap-3.5">
 							{teamWorkspace ? (
 								<ArtifactRecipientField
-									actionLabel={t("artifacts.share.people.add")}
 									onSubmit={stageRecipients}
 									orgId={teamWorkspace.id}
 									unavailable={new Set([...staged.map((email) => `email:${email}`), ...stagedTeams.map(teamRemovingKey)])}
 								/>
 							) : (
-								<InviteField actionLabel={t("artifacts.share.people.add")} onSubmit={stageEmails} />
+								<InviteField onSubmit={stageEmails} />
 							)}
 							{stagedOver ? <p role="alert" className="-mt-2 text-caption leading-4 text-error">{t("artifacts.share.people.tooManyBeforePublish", { count: MAX_INVITES_PER_REQUEST })}</p> : viewersNote}
 							<ArtifactPeopleList
@@ -1286,14 +1297,12 @@ function SharePanel({
 							<>
 								{teamWorkspace ? (
 									<ArtifactRecipientField
-										actionLabel={t("artifacts.share.people.add")}
-										busy={inviting}
 										onSubmit={(recipients) => invite(phase, recipients)}
 										orgId={teamWorkspace.id}
 										unavailable={new Set([...people.map((person) => `email:${person.email}`), ...teams.map(teamRemovingKey)])}
 									/>
 								) : (
-									<InviteField actionLabel={t("artifacts.share.people.add")} busy={inviting} onSubmit={(emails) => invite(phase, { emails, teams: [] })} />
+									<InviteField busy={inviting} onSubmit={(emails) => invite(phase, { emails, teams: [] })} />
 								)}
 								{viewersNote}
 								{phase.grantsError ? (
