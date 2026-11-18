@@ -177,14 +177,16 @@ func (u *UnavailableModels) Record(home, model string, at time.Time) error {
 	return u.persistLocked()
 }
 
-// Forget drops a refusal for a model the account lists again, at at.
+// Forget drops a refusal for a model the account listed again when observed
+// at at. A refusal recorded after that observation is newer news and stays.
 func (u *UnavailableModels) Forget(home, model string, at time.Time) error {
 	account, model := AccountKey(home), strings.TrimSpace(model)
 	u.mu.Lock()
 	defer u.mu.Unlock()
-	if !deleteModel(u.state.Refused, account, model) {
+	if refusedAt, ok := u.state.Refused[account][model]; !ok || refusedAt.After(at) {
 		return u.retryLocked()
 	}
+	deleteModel(u.state.Refused, account, model)
 	setModelTime(u.state.Forgotten, account, model, at)
 	return u.persistLocked()
 }
