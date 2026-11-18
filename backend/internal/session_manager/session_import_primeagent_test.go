@@ -16,6 +16,7 @@ import (
 	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/agent/primeagent"
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
 	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
+	"github.com/aoagents/agent-orchestrator/backend/internal/sessionguard"
 )
 
 type primeImportIdentityStore struct{ *fakeStore }
@@ -72,7 +73,8 @@ func TestPrimeImportPrelaunchAdoptionAndReopenMakeNoMessengerWrites(t *testing.T
 	m, st, _ := newExitedResumeManager(t, rt, agent)
 	m.store = &primeImportIdentityStore{fakeStore: st}
 	messenger := &fakeMessenger{}
-	m.messenger = messenger
+	m.messenger = sessionguard.New(st, messenger, m.logger)
+	m.messenger.SetInputLease(m)
 	generation := 0
 	m.newLaunchID = func() string {
 		generation++
