@@ -10,6 +10,13 @@ import { useCloudSession } from "../lib/cloud-session";
 import { useArtifactsViewStore } from "../stores/artifacts-view-store";
 
 /**
+ * How long saving a link may take before it opens in its own window instead.
+ * One small request; past this the control plane is struggling, and a waiting
+ * save would hold every later link, which open one at a time.
+ */
+const SHARED_ARTIFACT_SAVE_TIMEOUT_MS = 15_000;
+
+/**
  * Opens a published artifact sent from its web page's "Open on orchestrator"
  * (ao-app://shared-artifact) on the Artifacts page: it is saved to the links
  * shared with this person, so it stays listed, and shown in the page's
@@ -63,7 +70,7 @@ export function SharedArtifactLinkHost() {
 		}
 		const savedFor = userId;
 		setSaving(true);
-		void client.saveSharedArtifact(linkId).then(({ artifact }) => {
+		void client.saveSharedArtifact(linkId, { signal: AbortSignal.timeout(SHARED_ARTIFACT_SAVE_TIMEOUT_MS) }).then(({ artifact }) => {
 			// Another account signed in meanwhile: this one's link is not shown to it.
 			if (currentUserId.current !== savedFor) return;
 			// Only the link ID reaches the control plane, so open it here only when

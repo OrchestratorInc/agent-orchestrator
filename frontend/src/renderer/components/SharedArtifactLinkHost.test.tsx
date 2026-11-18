@@ -62,7 +62,8 @@ describe("SharedArtifactLinkHost", () => {
 		renderHost();
 		await send(viewer);
 		await waitFor(() => expect(mocks.navigate).toHaveBeenCalledWith({ to: "/artifacts" }));
-		expect(mocks.save).toHaveBeenCalledWith("q3-report");
+		// With a deadline, so a save that never answers cannot hold later links.
+		expect(mocks.save).toHaveBeenCalledWith("q3-report", { signal: expect.any(AbortSignal) });
 		expect(useArtifactsViewStore.getState().openSharedArtifact).toEqual(saved);
 		expect(mocks.openWindow).not.toHaveBeenCalled();
 	});
@@ -77,7 +78,7 @@ describe("SharedArtifactLinkHost", () => {
 		expect(mocks.openWindow).not.toHaveBeenCalled();
 		mocks.status = "authenticated";
 		rerender(<QueryClientProvider client={new QueryClient()}><SharedArtifactLinkHost /></QueryClientProvider>);
-		await waitFor(() => expect(mocks.save).toHaveBeenCalledWith("q3-report"));
+		await waitFor(() => expect(mocks.save).toHaveBeenCalledWith("q3-report", expect.anything()));
 	});
 
 	it("keeps every link that arrived before the window, and opens them in order", async () => {
