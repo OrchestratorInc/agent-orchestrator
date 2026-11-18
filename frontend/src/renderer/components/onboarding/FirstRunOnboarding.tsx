@@ -1014,9 +1014,14 @@ function ToolsStep({ onNext, onSkip, login }: {
 		}
 	};
 
-	const closeLogin = () => {
-		void refresh();
-		if (workflow) void closeLoginWorkflow(workflow, setWorkflow, t("settings.harness.authFailed"));
+	// Close the terminal first, then verify that harness afresh, so the row
+	// settles as soon as Close returns instead of on the next 5 s check.
+	const closeLogin = async () => {
+		if (!workflow) {
+			void refresh();
+			return;
+		}
+		if (await closeLoginWorkflow(workflow, setWorkflow, t("settings.harness.authFailed"))) await verify([workflow.agentId]);
 	};
 	useLoginLifetime(workflow, setWorkflow, { timedOut: t("settings.harness.authTimedOut"), failed: t("settings.harness.authFailed") }, (agentId) => void verify([agentId]));
 
@@ -1173,7 +1178,7 @@ function ToolsStep({ onNext, onSkip, login }: {
 				<div className="overflow-hidden rounded-lg">
 					<HarnessAuthTerminalPanel
 						workflow={workflow}
-						onClose={closeLogin}
+						onClose={() => void closeLogin()}
 						onRetry={() => void signIn(workflow.agentId)}
 						onTerminalState={(state) => {
 							if (state === "exited" || state === "error") void verify([workflow.agentId]);
