@@ -3,6 +3,7 @@ import { LOCAL_HOST } from "../lib/hosts";
 import {
 	isQueryRefinement,
 	MACHINE_SEARCH_GATHER_MS,
+	MACHINE_SEARCH_TIMEOUT_MS,
 	mergeNewestFirst,
 	orderMachineSearchResults,
 	pickMachineSearchRows,
@@ -17,7 +18,11 @@ export type MachineSearchRowsInput = {
 	query: string;
 	/** This machine's answer for `query`; undefined until it lands (a placeholder is not an answer). */
 	local: SessionSearchResponse | undefined;
-	/** This machine's search for `query` finished and failed (its index is off or could not open). */
+	/**
+	 * This machine's search for `query` finished and failed (its index is off or
+	 * could not open). A search that does neither within MACHINE_SEARCH_TIMEOUT_MS
+	 * is treated the same way.
+	 */
 	localFailed: boolean;
 	remote: RemoteMachineSearch;
 	/** Rows wanted when one machine answers; more machines can add one row each. */
@@ -42,18 +47,32 @@ type Shown = { query: string; rows: MachineSearchResult[] };
  * its six-second limit) adds its rows below the ones on screen, so a slow
  * machine neither holds the list back nor moves the row under the cursor.
  *
+ * This machine gets the same deadline as every remote one,
+ * MACHINE_SEARCH_TIMEOUT_MS. A local search that has neither answered nor
+ * failed by then counts as done, so a hung local daemon cannot hide the
+ * machines that did answer; if it answers later, its rows are added below like
+ * any late machine's. The request itself is left to finish or be cancelled by
+ * the next query.
+ *
  * Until this query's list is ready, the previous list stays only when this
  * query refines it ("orb" then "orbit"); an unrelated query shows no rows
  * rather than ones Enter would open by mistake.
  */
 export function useMachineSearchRows({ query, local, localFailed, remote, limit }: MachineSearchRowsInput): MachineSearchRows {
-	const localDone = local !== undefined || localFailed;
+	// Each change of query starts its own waits, so typing back to an earlier
+	// query waits again rather than reusing that query's finished ones.
+	const episode = useMemo(() => ({ query }), [query]);
+	const localAnswered = local !== undefined || localFailed;
+	const [localExpiredFor, setLocalExpiredFor] = useState<{ query: string } | null>(null);
+	useEffect(() => {
+		if (localAnswered) return;
+		const timer = window.setTimeout(() => setLocalExpiredFor(episode), MACHINE_SEARCH_TIMEOUT_MS);
+		return () => window.clearTimeout(timer);
+	}, [episode, localAnswered]);
+	const localDone = localAnswered || localExpiredFor === episode;
 	// Remote answers for an earlier query are not this query's.
 	const remoteForQuery = remote.query === query;
 	const remoteSettled = remoteForQuery && remote.settled;
-	// Each change of query starts its own wait, so typing back to an earlier
-	// query waits again rather than reusing that query's finished one.
-	const episode = useMemo(() => ({ query }), [query]);
 	const [gatherEndedFor, setGatherEndedFor] = useState<{ query: string } | null>(null);
 	useEffect(() => {
 		if (!localDone || remoteSettled) return;

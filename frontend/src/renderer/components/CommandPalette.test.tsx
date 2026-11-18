@@ -1842,9 +1842,14 @@ describe("CommandPalette session-text search", () => {
 		fireEvent.change(input, { target: { value: "flaky2" } });
 		await waitFor(() => expect(getMock.mock.calls.some(([path, init]) =>
 			path === "/api/v1/search/sessions" && (init as { params?: { query?: { q?: string } } })?.params?.query?.q === "flaky2")).toBe(true), { timeout: 2_000 });
-		// The kept row is still shown while "flaky2" loads, but Enter leaves it.
-		expect(screen.getByText("fix flake")).toBeInTheDocument();
+		// The kept row is still shown while "flaky2" loads, but disabled: Enter,
+		// the arrow keys and a click all leave it.
+		const kept = screen.getByText("fix flake").closest("[cmdk-item]");
+		expect(kept?.getAttribute("data-disabled")).toBe("true");
 		fireEvent.keyDown(input, { key: "Enter" });
+		fireEvent.keyDown(input, { key: "ArrowDown" });
+		fireEvent.keyDown(input, { key: "Enter" });
+		fireEvent.click(kept!);
 		expect(navigateMock).not.toHaveBeenCalled();
 
 		await act(async () => {

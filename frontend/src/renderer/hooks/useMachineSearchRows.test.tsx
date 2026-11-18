@@ -1,6 +1,6 @@
 import { act, renderHook } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { MACHINE_SEARCH_GATHER_MS, type MachineSearchAnswer } from "../lib/session-search-machines";
+import { MACHINE_SEARCH_GATHER_MS, MACHINE_SEARCH_TIMEOUT_MS, type MachineSearchAnswer } from "../lib/session-search-machines";
 import { useMachineSearchRows, type MachineSearchRowsInput } from "./useMachineSearchRows";
 import type { SessionSearchResponse } from "./usePaletteSessionSearch";
 import type { RemoteMachineSearch } from "./useRemoteMachineSearch";
@@ -104,6 +104,20 @@ describe("useMachineSearchRows", () => {
 			vi.advanceTimersByTime(MACHINE_SEARCH_GATHER_MS);
 		});
 		expect(result.current.current).toBe(true);
+	});
+
+	// Review: a local search that never answers must not hide the machines that did.
+	it("shows the other machines' rows once this machine misses its deadline, and adds its rows if they come later", () => {
+		const air = remote("flaky", [remoteAnswer("h_air", [hit("air-1")])], true);
+		const { result, rerender } = render({ query: "flaky", local: undefined, localFailed: false, remote: air, limit: 8 });
+		expect(result.current).toEqual({ rows: [], current: false });
+		act(() => {
+			vi.advanceTimersByTime(MACHINE_SEARCH_TIMEOUT_MS);
+		});
+		expect(ids(result.current.rows)).toEqual(["air-1"]);
+		expect(result.current.current).toBe(true);
+		rerender({ query: "flaky", local: local("flaky", ["late-local"]), localFailed: false, remote: air, limit: 8 });
+		expect(ids(result.current.rows)).toEqual(["air-1", "late-local"]);
 	});
 
 	it("shows the other machines' rows when this machine's search failed", () => {

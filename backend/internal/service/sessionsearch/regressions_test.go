@@ -345,6 +345,26 @@ func TestASessionNamedForTheQueryLeadsEvenWithNothingButItsName(t *testing.T) {
 			}
 		}
 	}
+
+	// Review: a recency sort or a list of single messages still says which
+	// session is named for the query, though neither ranks by it.
+	for name, params := range map[string]domain.SessionSearchParams{
+		"recent":  {Sort: domain.SessionSearchSortRecent},
+		"message": {Group: domain.SessionSearchGroupMessage},
+	} {
+		results := searchWith(t, f.svc, "amp smoke test", params).Results
+		sawNamed := false
+		for _, result := range results {
+			want := result.SessionID == string(named.ID)
+			sawNamed = sawNamed || want
+			if result.NamedForQuery != want {
+				t.Fatalf("%s: %s namedForQuery = %v, want %v", name, result.SessionID, result.NamedForQuery, want)
+			}
+		}
+		if !sawNamed {
+			t.Fatalf("%s: the named session is missing from %v", name, sessionIDs(results))
+		}
+	}
 }
 
 // Main added deleting sessions (`ao session delete`, and archived-session

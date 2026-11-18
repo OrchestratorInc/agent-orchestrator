@@ -685,10 +685,15 @@ export const CommandPalette = memo(function CommandPalette() {
 	// Session-text rows are only shown once the query has settled, so a row the
 	// person is about to press cannot be replaced by a later response.
 	const sessionSearchSettled = normalizedSessionQuery === query.trim();
-	const sessionSearchItems = useMemo(
-		() => (sessionSearchSettled ? buildSessionSearchCommands(sessionSearchHits, query.trim(), t) : []),
-		[sessionSearchHits, query, sessionSearchSettled, t],
-	);
+	// Past-session rows kept from the previous query while this one answers are
+	// shown but disabled: they may not match what is typed now, so neither a
+	// click, the arrow keys nor Enter can pick one until this query's rows land.
+	const sessionRowsStale = !sessionSearchRows.current;
+	const sessionSearchItems = useMemo(() => {
+		if (!sessionSearchSettled) return [];
+		const items = buildSessionSearchCommands(sessionSearchHits, query.trim(), t);
+		return sessionRowsStale ? items.map((item) => ({ ...item, disabled: true })) : items;
+	}, [sessionSearchHits, query, sessionSearchSettled, sessionRowsStale, t]);
 
 	const groups = useMemo(() => {
 		if (view.mode === "session-actions") {
@@ -741,12 +746,7 @@ export const CommandPalette = memo(function CommandPalette() {
 		|| contentSearchQuery.isPlaceholderData
 		|| chatSearchQuery.isPlaceholderData
 		|| cloudChatSearchQuery.isPlaceholderData;
-	// Past-session rows kept from the previous query while this one answers are
-	// shown, but not picked: they may not match what is typed now.
-	const sessionRowsStale = !sessionSearchRows.current || normalizedSessionQuery !== query.trim();
-	const autoSelectable = (item: CommandItemModel) => !item.disabled
-		&& !(searchStale && isSearchGroup(item.group))
-		&& !(sessionRowsStale && item.group === "search");
+	const autoSelectable = (item: CommandItemModel) => !item.disabled && !(searchStale && isSearchGroup(item.group));
 	const value =
 		(visibleItems.some((item) => item.id === selectedValue && !item.disabled)
 			? selectedValue
