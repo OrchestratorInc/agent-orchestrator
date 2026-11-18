@@ -2839,7 +2839,7 @@ describe("browser profile partitions and replacement", () => {
 			controller.abort();
 			held.release();
 
-			await expect(pending).rejects.toBeTruthy();
+			await expect(pending).rejects.toMatchObject({ code: "BROWSER_COMMAND_CANCELED" });
 			expect(constructorOptions).toHaveLength(0);
 		});
 
