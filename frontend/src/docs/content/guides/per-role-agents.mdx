@@ -73,7 +73,7 @@ ao spawn --project my-project --kind worker \
 - Use **Chat** for structured messages, provider activity, approvals, plans, changed files, usage, compaction, and rollback. Chat support depends on the harness and installed version; see the [agent capability catalog](/plugins/agents#chat-versus-terminal-ui).
 - Use **Terminal UI** when you want the agent's native interface or a harness without native Chat support.
 
-Compatible Claude Code and Codex sessions expose **Switch to chat UI** or **Switch to terminal UI**. Idle sessions switch directly. When work is active, Orchestrator asks whether to finish and drain it or stop and interrupt it before switching controllers.
+Compatible sessions expose **Switch to chat UI** or **Switch to terminal UI**. Idle sessions switch directly. When work is active, Orchestrator asks whether to finish and drain it or stop and interrupt it before switching controllers.
 
 The default interface comes from **Settings → General**. Project `agentConfig.mode` does not set Chat or Terminal UI. A choice made for a task or with the CLI takes precedence.
 

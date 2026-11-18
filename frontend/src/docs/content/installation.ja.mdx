@@ -1,7 +1,7 @@
 ---
 title: インストール
 description: Orchestrator のデスクトップアプリをダウンロードし、使っているコーディングツールと接続します。
-translatedFrom: 7460247266d0
+translatedFrom: 145ebe190e04
 ---
 
 最新の安定版デスクトップビルドは、[Orchestrator の公式ダウンロードページ](https://orchestrator.inc/download/)から入手してください。ナイトリービルドとモバイルアプリもこのページにあります。デスクトップのパッケージを直接入手したい場合は、以下から選んでください。
@@ -35,10 +35,10 @@ brew upgrade --cask agentwrapper/tap/agent-orchestrator
 | --- | --- | --- |
 | Git | リポジトリのプロジェクト | 分離されたワークツリーとブランチを作成・管理します。 |
 | GitHub CLI `gh` | GitHub のプロジェクト | 既存の認証を使って、リポジトリとプルリクエストを操作します。 |
-| 外部のコーディングエージェント（Orchestrator ではハーネスと呼びます） | インストール済みの CLI を使うエージェントセッション | Claude Code、Codex、Cursor、Aider、OpenCode など、対応しているツールをインストールします。最新の一覧とインターフェースの対応状況は[エージェント一覧](/plugins/agents)を参照してください。Unreal Agent は、macOS と Linux の Chat 用に Orchestrator に組み込まれています。 |
+| 外部のコーディングエージェント（Orchestrator ではハーネスと呼びます） | インストール済みの CLI を使うエージェントセッション | 最新の一覧とインターフェースの対応状況は[エージェント一覧](/plugins/agents)を参照してください。 |
 | tmux | macOS の事前チェックと、旧来またはフォールバックのターミナルセッション | macOS・Linux のデスクトップパッケージに同梱されています。ソースから起動する場合は、システムの tmux が必要になることがあります。[Runtime](/plugins/runtimes) を参照してください。 |
 
-Orchestrator は、コンピューターにすでにインストールされ、サインイン済みのコーディングエージェントを使います。**Settings → Harness** では、対応エージェントのセットアップと準備状況のチェックができます。エージェントによっては、Orchestrator の外でインストールやサインインが必要です。Unreal Agent は例外で、Chat 専用の組み込みエージェントです。対応プラットフォームと権限には独自の制限があります。[エージェント一覧](/plugins/agents)を参照してください。
+Orchestrator は、コンピューターにすでにインストールされ、サインイン済みのコーディングエージェントを使います。**Settings → Harness** では、対応エージェントのセットアップと準備状況のチェックができます。エージェントによっては、Orchestrator の外でインストールやサインインが必要です。[エージェント一覧](/plugins/agents)を参照してください。
 
 <span id="set-up-ao" />
 <span id="set-up-orchestrator" />
@@ -131,7 +131,7 @@ Orchestrator のアプリケーションの状態は、既定ですべて `~/.ao
 
 <Accordions>
 	<Accordion title="使えるエージェントがない">
-		外部のハーネスの場合は、インストールして一度実行し、認証を済ませてから Orchestrator を再起動してください。デスクトップから起動したデーモンが、更新されたログインシェルの環境を受け取ります。Unreal Agent は、対応する macOS と Linux の Chat 用に Orchestrator に組み込まれています。CLI をインストールせずに、そのまま選んでください。
+		外部のハーネスの場合は、インストールして一度実行し、認証を済ませてから Orchestrator を再起動してください。デスクトップから起動したデーモンが、更新されたログインシェルの環境を受け取ります。
 	</Accordion>
 	<Accordion title="GitHub のデータが表示されない">
 		`gh auth status` を実行してください。有効なアカウントが、リポジトリとそのプルリクエストにアクセスできることを確認します。

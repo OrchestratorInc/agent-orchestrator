@@ -69,7 +69,7 @@ Every session commits to one interface at a time:
 
 Choose the default for new sessions in **Settings → General**. A choice made for a specific task takes precedence. If a requested interface is unavailable, Orchestrator uses Terminal UI as its compatibility fallback.
 
-Project `agentConfig.mode` selects a provider execution mode. It does not select Chat or Terminal UI. Choose the interface in the new-session flow or with `ao spawn --mode chat|tui`. Compatible Claude Code and Codex sessions can switch interfaces without changing the Orchestrator session or worktree.
+Project `agentConfig.mode` selects a provider execution mode. It does not select Chat or Terminal UI. Choose the interface in the new-session flow or with `ao spawn --mode chat|tui`. Compatible sessions can switch interfaces without changing the Orchestrator session or worktree.
 
 Manage recurring tasks in **Automations**, reusable project actions in **Cues**, installed provider readiness in **Settings → Harness**, and persistent profiles/imports in **Settings → Browser**. These features have their own settings/resources rather than legacy YAML keys.
 

@@ -1,7 +1,7 @@
 ---
 title: 安装
 description: 下载 Orchestrator 桌面应用，并连接你的编程工具。
-translatedFrom: 7460247266d0
+translatedFrom: 145ebe190e04
 ---
 
 如需最新的稳定版桌面构建，请从 [Orchestrator 官方下载页面](https://orchestrator.inc/download/)开始。该页面还列出了每夜构建和移动应用。如果你想直接获取桌面安装包，请从下面选择：
@@ -35,10 +35,10 @@ brew upgrade --cask agentwrapper/tap/agent-orchestrator
 | --- | --- | --- |
 | Git | 仓库项目 | 创建和管理隔离的工作树与分支。 |
 | GitHub CLI `gh` | GitHub 项目 | 使用你现有的认证执行仓库和拉取请求操作。 |
-| 外部编程代理（在 Orchestrator 中称为 harness） | 使用已安装 CLI 的代理会话 | 安装受支持的工具，例如 Claude Code、Codex、Cursor、Aider 或 OpenCode。当前列表和界面支持情况请参阅[代理目录](/plugins/agents)。Unreal Agent 内置于 Orchestrator，可在 macOS 和 Linux 上用于 Chat。 |
+| 外部编程代理（在 Orchestrator 中称为 harness） | 使用已安装 CLI 的代理会话 | 当前列表和界面支持情况请参阅[代理目录](/plugins/agents)。 |
 | tmux | macOS 预检，以及旧版或回退的终端会话 | macOS 和 Linux 的桌面安装包已包含它。从源码启动时可能需要系统中的 tmux；请参阅 [Runtime](/plugins/runtimes)。 |
 
-Orchestrator 使用你电脑上已经安装并登录的编程代理。**Settings → Harness** 提供受支持代理的设置和就绪检查；有些代理需要在 Orchestrator 之外安装或登录。Unreal Agent 是一个例外：它是内置的、仅用于 Chat 的代理，有自己的平台和权限限制。请参阅[代理目录](/plugins/agents)。
+Orchestrator 使用你电脑上已经安装并登录的编程代理。**Settings → Harness** 提供受支持代理的设置和就绪检查；有些代理需要在 Orchestrator 之外安装或登录。请参阅[代理目录](/plugins/agents)。
 
 <span id="set-up-ao" />
 <span id="set-up-orchestrator" />
@@ -131,7 +131,7 @@ Orchestrator 的所有应用状态默认都存放在 `~/.ao` 下，包括守护�
 
 <Accordions>
 	<Accordion title="没有可用的代理">
-		对于外部 harness，请安装它并运行一次以完成认证，然后重启 Orchestrator，让从桌面启动的守护进程获得更新后的登录 shell 环境。Unreal Agent 内置于 Orchestrator，可在受支持的 macOS 和 Linux 上用于 Chat；直接选择它即可，无需安装 CLI。
+		对于外部 harness，请安装它并运行一次以完成认证，然后重启 Orchestrator，让从桌面启动的守护进程获得更新后的登录 shell 环境。
 	</Accordion>
 	<Accordion title="缺少 GitHub 数据">
 		运行 `gh auth status`。确认当前账户能够访问该仓库及其拉取请求。
