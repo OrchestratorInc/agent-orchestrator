@@ -5365,6 +5365,10 @@ SET status = CASE (SELECT settled.state FROM conversation_turns AS settled WHERE
     updated_at = ?1
 WHERE conversation_activities.conversation_id = ?2
   AND status = 'running'
+  -- An AO action runs on the daemon's clock, not the turn's: one recorded after
+  -- its turn settled is still in flight, and its terminal update skips a row that
+  -- is no longer running, so settling it here would lose the real outcome.
+  AND kind <> 'ao_action'
   AND turn_id IN (
       -- Every settled turn in the conversation, including turns an earlier
       -- session handled before a handoff kept them in this timeline.

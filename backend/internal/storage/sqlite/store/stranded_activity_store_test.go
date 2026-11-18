@@ -148,3 +148,55 @@ func turnStates(t *testing.T, s *sqlite.Store, conversation string) map[string]d
 	}
 	return states
 }
+
+// An AO action recorded after its turn settled is still in flight, and its
+// terminal update only reaches a row that is still running. The cleanup leaves
+// it alone so the action's real outcome still lands.
+func TestSettleStrandedActivitiesLeavesInFlightAOActions(t *testing.T) {
+	s, session, conversation := conversationFixture(t)
+	ctx := context.Background()
+	if created, err := s.AppendUserMessage(ctx, conversation, session, "gen-1", domain.ConversationMessage{
+		ID: "turn-stopped-msg", Text: "spawn a worker", Origin: domain.MessageOriginHuman,
+	}, "turn-stopped", histClock); err != nil || !created {
+		t.Fatalf("append prompt: created=%v err=%v", created, err)
+	}
+	if err := s.BindTurnToProvider(ctx, "turn-stopped", "provider-turn-stopped", histClock); err != nil {
+		t.Fatalf("bind: %v", err)
+	}
+	if err := s.SettleTurn(ctx, conversation, "provider-turn-stopped", domain.TurnStateInterrupted, "", histClock); err != nil {
+		t.Fatalf("settle: %v", err)
+	}
+	later := histClock.Add(time.Minute)
+	upsert := func(id string, kind domain.ActivityKind, status domain.ActivityStatus) {
+		t.Helper()
+		if err := s.UpsertActivity(ctx, conversation, "provider-turn-stopped", domain.ConversationActivity{
+			ID: id, Kind: kind, Status: status, Summary: id, ProviderItemID: "item:" + id,
+		}, later); err != nil {
+			t.Fatalf("upsert %s %s: %v", id, status, err)
+		}
+	}
+	read := func(id string) domain.ActivityStatus {
+		t.Helper()
+		got, found, err := s.ActivityStatusByProviderItem(ctx, conversation, "item:"+id)
+		if err != nil || !found {
+			t.Fatalf("read %s: found=%v err=%v", id, found, err)
+		}
+		return got
+	}
+	upsert("action", domain.ActivityKindAOAction, domain.ActivityStatusRunning)
+	upsert("notice", domain.ActivityKindSystem, domain.ActivityStatusRunning)
+
+	if err := s.SettleStrandedActivities(ctx, conversation, later.Add(time.Minute)); err != nil {
+		t.Fatalf("SettleStrandedActivities: %v", err)
+	}
+	if got := read("notice"); got != domain.ActivityStatusCancelled {
+		t.Fatalf("stranded notice = %q, want cancelled", got)
+	}
+	if got := read("action"); got != domain.ActivityStatusRunning {
+		t.Fatalf("in-flight AO action = %q, want it left running", got)
+	}
+	upsert("action", domain.ActivityKindAOAction, domain.ActivityStatusCompleted)
+	if got := read("action"); got != domain.ActivityStatusCompleted {
+		t.Fatalf("AO action after its terminal update = %q, want completed", got)
+	}
+}
