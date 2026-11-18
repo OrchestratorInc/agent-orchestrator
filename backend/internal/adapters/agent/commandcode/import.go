@@ -146,46 +146,126 @@ func (*Plugin) RelocateImportedSession(ctx context.Context, r ports.ImportedSess
 	return copyCommandBundle(ctx, root, filepath.Dir(rel), r.ConfigDir, bucket, r.NativeSessionID)
 }
 
-// The shared workspace context preserves import provenance after adoption, even
-// if private files are removed. Only first open copies the native bundle; later
-// launches must find AO's existing turns and may not reseed from an old source.
-func prepareImportedCommandWorkspace(ctx context.Context, cfg ports.WorkspaceHookConfig) error {
-	if cfg.ImportConfigDir != "" {
-		if !commandNativeID.MatchString(cfg.NativeSessionID) {
-			return errors.New("invalid command-code imported identity")
-		}
-		switch cfg.RestoreMode {
-		case ports.WorkspaceRestoreImported:
-			home, err := PrepareSessionHome(cfg.DataDir, domain.SessionID(cfg.SessionID), cfg.SystemPrompt)
-			if err != nil {
-				return err
-			}
-			if home == "" {
-				return errors.New("command-code imported profile is unavailable")
-			}
-			bucket, err := commandNativeProjectBucket(cfg.WorkspacePath)
-			if err != nil {
-				return err
-			}
-			source, err := os.OpenRoot(cfg.ImportConfigDir)
-			if err != nil {
-				return err
-			}
-			err = copyCommandBundle(ctx, source, filepath.Join("projects", bucket), filepath.Join(home, ".commandcode"), bucket, cfg.NativeSessionID)
-			_ = source.Close()
-			if err != nil {
-				return err
-			}
-		case ports.WorkspaceRestoreNative:
-			// Preserve the managed copy, including all later AO turns.
-		default:
-			return errors.New("command-code import requires native restore context")
-		}
-		if err := verifyImportedCommandResume(ctx, cfg.DataDir, domain.SessionID(cfg.SessionID), cfg.WorkspacePath, cfg.NativeSessionID); err != nil {
-			return err
-		}
+// commandImportProof survives removal of the private profile, so a later resume
+// cannot silently reseed an imported conversation from its original source.
+type commandImportProof struct {
+	NativeID string `json:"nativeId"`
+	Bucket   string `json:"bucket"`
+}
+
+func commandImportProofPath(dataDir string, id domain.SessionID) string {
+	home := SessionHomeDir(dataDir, id)
+	if home == "" {
+		return ""
 	}
-	return commandCodeHooks.Install(ctx, cfg.WorkspacePath)
+	return filepath.Join(filepath.Dir(home), ".imports", filepath.Base(home)+".json")
+}
+
+func readCommandImportProof(dataDir string, id domain.SessionID) (commandImportProof, bool, error) {
+	var proof commandImportProof
+	path := commandImportProofPath(dataDir, id)
+	if path == "" {
+		return proof, false, nil
+	}
+	info, err := os.Lstat(path)
+	if errors.Is(err, os.ErrNotExist) {
+		return proof, false, nil
+	}
+	if err != nil {
+		return proof, false, err
+	}
+	if !info.Mode().IsRegular() || info.Size() > 4096 {
+		return proof, false, errors.New("invalid command-code import checkpoint")
+	}
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return proof, false, err
+	}
+	if json.Unmarshal(data, &proof) != nil || !commandNativeID.MatchString(proof.NativeID) || proof.Bucket == "" {
+		return proof, false, errors.New("invalid command-code import checkpoint")
+	}
+	return proof, true, nil
+}
+
+// PrepareImportedSession publishes only the selected native conversation into
+// the existing AO session home and checkpoints that private identity in AO.
+func (*Plugin) PrepareImportedSession(ctx context.Context, r ports.ImportedSessionRelocation) (ports.NativeSessionRef, error) {
+	var ref ports.NativeSessionRef
+	id := domain.SessionID(r.Env["AO_SESSION_ID"])
+	if !commandNativeID.MatchString(r.NativeSessionID) || id == "" || filepath.Base(string(id)) != string(id) || id == "." || id == ".." || SessionHomeDir(r.DataDir, id) == "" {
+		return ref, errors.New("invalid command-code import identity")
+	}
+	bucket, err := commandNativeProjectBucket(r.LaunchCWD)
+	if err != nil {
+		return ref, err
+	}
+	profile := filepath.Join(SessionHomeDir(r.DataDir, id), ".commandcode")
+	ref = ports.NativeSessionRef{NativeSessionID: r.NativeSessionID, ConfigDir: profile, TranscriptPath: filepath.Join(profile, "projects", bucket, r.NativeSessionID+".jsonl")}
+	proof, imported, err := readCommandImportProof(r.DataDir, id)
+	if err != nil {
+		return ports.NativeSessionRef{}, err
+	}
+	if imported {
+		if proof.NativeID != r.NativeSessionID || proof.Bucket != bucket {
+			return ports.NativeSessionRef{}, errors.New("command-code import checkpoint changed")
+		}
+		return ref, verifyImportedCommandResume(ctx, r.DataDir, id, r.LaunchCWD, r.NativeSessionID)
+	}
+	if err := ValidateNativeImport(ctx, r.ConfigDir, r.TranscriptPath, r.NativeSessionID); err != nil {
+		return ports.NativeSessionRef{}, err
+	}
+	if _, err := PrepareSessionHome(r.DataDir, id, ""); err != nil {
+		return ports.NativeSessionRef{}, err
+	}
+	root, err := os.OpenRoot(r.ConfigDir)
+	if err != nil {
+		return ports.NativeSessionRef{}, err
+	}
+	defer func() { _ = root.Close() }()
+	rel, err := filepath.Rel(r.ConfigDir, r.TranscriptPath)
+	if err != nil {
+		return ports.NativeSessionRef{}, err
+	}
+	if err := copyCommandBundle(ctx, root, filepath.Dir(rel), profile, bucket, r.NativeSessionID); err != nil {
+		return ports.NativeSessionRef{}, err
+	}
+	proofPath := commandImportProofPath(r.DataDir, id)
+	if err := os.MkdirAll(filepath.Dir(proofPath), 0o700); err != nil {
+		return ports.NativeSessionRef{}, err
+	}
+	data, err := json.Marshal(commandImportProof{NativeID: r.NativeSessionID, Bucket: bucket})
+	if err != nil {
+		return ports.NativeSessionRef{}, err
+	}
+	if err := writePrivateFile(proofPath, data); err != nil {
+		return ports.NativeSessionRef{}, err
+	}
+	return ref, nil
+}
+
+// PrepareNativeHistory is called by both Terminal restore and ACP configure.
+// Imported profiles are mandatory once checkpointed; ordinary older AO sessions
+// retain the existing best-effort migration behavior.
+func PrepareNativeHistory(ctx context.Context, dataDir string, sessionID domain.SessionID, nativeID, cwd string) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	proof, imported, err := readCommandImportProof(dataDir, sessionID)
+	if err != nil {
+		return err
+	}
+	if !imported {
+		MigrateNativeHistory(dataDir, sessionID, nativeID)
+		return nil
+	}
+	bucket, err := commandNativeProjectBucket(cwd)
+	if err != nil {
+		return err
+	}
+	if proof.NativeID != nativeID || proof.Bucket != bucket {
+		return errors.New("command-code imported identity or workspace changed")
+	}
+	return verifyImportedCommandResume(ctx, dataDir, sessionID, cwd, nativeID)
 }
 
 func verifyImportedCommandResume(ctx context.Context, dataDir string, sessionID domain.SessionID, cwd, nativeID string) error {

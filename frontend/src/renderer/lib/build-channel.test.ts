@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { isCommandPaletteEnabled, isNightlyBuild, parseNightlyVersion } from "./build-channel";
+import { isCommandPaletteEnabled, isNightlyBuild, isTeamsEnabled, parseNightlyVersion } from "./build-channel";
 
 describe("isNightlyBuild", () => {
 	it("detects -nightly. stamps and rejects everything else", () => {
@@ -18,6 +18,37 @@ describe("isCommandPaletteEnabled", () => {
 		expect(isCommandPaletteEnabled("0.10.4-nightly.202607071200+abc123", false)).toBe(true);
 		expect(isCommandPaletteEnabled("0.10.3", false)).toBe(false);
 		expect(isCommandPaletteEnabled(undefined, false)).toBe(false);
+	});
+});
+
+describe("isTeamsEnabled", () => {
+	const NIGHTLY = "0.14.2-nightly.202611050300";
+	const STABLE = "0.14.1";
+
+	it("with VITE_AO_TEAMS unset: on in dev and nightly builds, off in stable ones", () => {
+		expect(isTeamsEnabled(NIGHTLY, false, "")).toBe(true);
+		expect(isTeamsEnabled(STABLE, false, "")).toBe(false);
+		expect(isTeamsEnabled(STABLE, true, "")).toBe(true);
+		expect(isTeamsEnabled(undefined, true, undefined)).toBe(true);
+		// Before the version is known a packaged build has no Teams yet.
+		expect(isTeamsEnabled(undefined, false, "")).toBe(false);
+	});
+
+	it("VITE_AO_TEAMS=on gives stable builds Teams", () => {
+		expect(isTeamsEnabled(STABLE, false, "on")).toBe(true);
+		expect(isTeamsEnabled(undefined, false, "on")).toBe(true);
+		expect(isTeamsEnabled(NIGHTLY, false, "on")).toBe(true);
+	});
+
+	it("VITE_AO_TEAMS=off takes Teams from every build, dev and nightly too", () => {
+		expect(isTeamsEnabled(NIGHTLY, false, "off")).toBe(false);
+		expect(isTeamsEnabled(STABLE, true, "off")).toBe(false);
+		expect(isTeamsEnabled(STABLE, false, "off")).toBe(false);
+	});
+
+	it("an 11x-style or other non-nightly prerelease counts as stable", () => {
+		expect(isTeamsEnabled("0.14.0-rc.1", false, "")).toBe(false);
+		expect(isTeamsEnabled("0.0.1-teamsgate", false, "")).toBe(false);
 	});
 });
 

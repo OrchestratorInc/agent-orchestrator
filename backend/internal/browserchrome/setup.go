@@ -286,7 +286,7 @@ func (i Installer) wrapperScript() string {
 	if runtime.GOOS == "windows" {
 		return "@echo off\r\n\"" + i.Executable + "\" browser-host --endpoint \"" + i.Paths.Endpoint() + "\" %*\r\n"
 	}
-	return "#!/bin/sh\n# Agent Orchestrator: Chrome native messaging host for the AO Browser Bridge.\nexec " +
+	return "#!/bin/sh\n# Agent Orchestrator: Chrome native messaging host for the Orchestrator Browser Bridge.\nexec " +
 		quoteShell(i.Executable) + " browser-host --endpoint " + quoteShell(i.Paths.Endpoint()) + " \"$@\"\n"
 }
 

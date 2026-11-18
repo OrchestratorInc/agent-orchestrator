@@ -7,6 +7,8 @@ package importcopy
 import (
 	"bufio"
 	"bytes"
+	"context"
+	"crypto/rand"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -25,63 +27,91 @@ type RewriteLine func(line []byte) ([]byte, error)
 type Check func() error
 
 // CopyOnce copies the JSON Lines file src to dst, passing each record through
-// rewrite, unless dst already exists. It reports whether it wrote dst. check
-// may be nil. dst's directory is created (0700) when missing.
+// rewrite, unless dst already exists. check may be nil. dst's directory is
+// created (0700) when missing.
 //
 // The source is only read. dst appears whole or not at all: the copy is
 // written to a private temporary file in dst's directory and then linked into
 // place, which also refuses to replace a dst created concurrently. An existing
 // dst is kept as it is, because after the first resume it holds the provider's
 // later turns.
-func CopyOnce(src, dst string, rewrite RewriteLine, check Check) (bool, error) {
+func CopyOnce(src, dst string, rewrite RewriteLine, check Check) error {
 	if _, err := os.Lstat(dst); err == nil {
-		return false, nil
+		return nil
 	} else if !errors.Is(err, os.ErrNotExist) {
-		return false, err
+		return err
 	}
 	in, err := os.Open(src)
 	if err != nil {
-		return false, err
+		return err
 	}
 	defer func() { _ = in.Close() }()
 	dir := filepath.Dir(dst)
 	if err := os.MkdirAll(dir, 0o700); err != nil {
-		return false, err
+		return err
 	}
 	tmp, err := os.CreateTemp(dir, ".importcopy-*")
 	if err != nil {
-		return false, err
+		return err
 	}
 	tmpName := tmp.Name()
 	defer func() { _ = os.Remove(tmpName) }()
 	if err := tmp.Chmod(0o600); err != nil {
 		_ = tmp.Close()
-		return false, err
+		return err
 	}
 	if err := copyLines(in, tmp, rewrite); err != nil {
 		_ = tmp.Close()
-		return false, err
+		return err
 	}
 	if check != nil {
 		if err := check(); err != nil {
 			_ = tmp.Close()
-			return false, err
+			return err
 		}
 	}
 	if err := tmp.Sync(); err != nil {
 		_ = tmp.Close()
-		return false, err
+		return err
 	}
 	if err := tmp.Close(); err != nil {
-		return false, err
+		return err
 	}
-	if err := os.Link(tmpName, dst); err != nil {
-		if errors.Is(err, os.ErrExist) {
-			return false, nil
-		}
-		return false, err
+	if err := os.Link(tmpName, dst); err != nil && !errors.Is(err, os.ErrExist) {
+		return err
 	}
-	return true, nil
+	return nil
+}
+
+// WriteOnce writes body to name inside root, which never follows a link out
+// of it. As with CopyOnce, name appears whole or not at all: body is written
+// to a private temporary file beside it and then linked into place, so an
+// existing name is never replaced; that case reports os.ErrExist.
+func WriteOnce(ctx context.Context, root *os.Root, name string, body []byte) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	tmp := filepath.Join(filepath.Dir(name), ".importcopy-"+rand.Text())
+	f, err := root.OpenFile(tmp, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o600)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = root.Remove(tmp) }()
+	if _, err := f.Write(body); err != nil {
+		_ = f.Close()
+		return err
+	}
+	if err := f.Sync(); err != nil {
+		_ = f.Close()
+		return err
+	}
+	if err := f.Close(); err != nil {
+		return err
+	}
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	return root.Link(tmp, name)
 }
 
 func copyLines(in io.Reader, out io.Writer, rewrite RewriteLine) error {

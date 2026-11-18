@@ -46,7 +46,9 @@ func (m *Manager) prepareImportedNativeSession(ctx context.Context, rec domain.S
 			TranscriptPath:    rec.Metadata.NativeTranscriptPath,
 			SourceCWD:         source.CWD,
 			LaunchCWD:         launchPath,
+			Chat:              domain.NormalizeSessionMode(rec.Mode) == domain.SessionModeChat,
 			SourceFingerprint: source.Fingerprint,
+			DataDir:           m.dataDir,
 			Env:               maps.Clone(env),
 		})
 		if err != nil {
@@ -58,10 +60,7 @@ func (m *Manager) prepareImportedNativeSession(ctx context.Context, rec domain.S
 		next := *source
 		next.ResumeNativeID, next.ResumeConfigDir, next.ResumeCwd = ref.NativeSessionID, ref.ConfigDir, launchPath
 		next.ResumeTranscriptPath = ref.TranscriptPath
-		if next.SourceTranscriptPath == "" {
-			next.SourceTranscriptPath = rec.Metadata.NativeTranscriptPath
-		}
-		updated, err := m.store.SetSessionImportWorkspace(ctx, rec.ID, source, &next, rec.Metadata, m.clock())
+		updated, err := m.store.SetPreparedImportIdentity(ctx, rec.ID, source, &next, rec.Metadata, m.clock())
 		if err != nil {
 			return rec, err
 		}
@@ -81,15 +80,6 @@ func (m *Manager) prepareImportedNativeSession(ctx context.Context, rec domain.S
 	return rec, nil
 }
 
-// A failed interactive launch can have no published identity for its old
-// generation. A pinned pending import may retry its exact prepared target,
-// but must still complete native initialization for the new generation.
-func pendingPreparedNativeImport(rec domain.SessionRecord) bool {
-	source := rec.Metadata.ImportSource
-	return rec.NeedsImportResume() && source.Prepared && source.ResumeCwd != "" && source.ResumeNativeID != "" &&
-		rec.Metadata.AgentSessionID == source.ResumeNativeID && rec.Metadata.ProviderConversationID == source.ResumeNativeID
-}
-
 func nativeRestoreMetadata(rec domain.SessionRecord) map[string]string {
 	metadata := map[string]string{ports.MetadataKeyAgentSessionID: rec.Metadata.AgentSessionID}
 	if source := rec.Metadata.ImportSource; source != nil && rec.Metadata.AgentSessionID == importedNativeRef(source).NativeSessionID {
@@ -98,8 +88,4 @@ func nativeRestoreMetadata(rec domain.SessionRecord) map[string]string {
 		metadata[ports.MetadataKeyImportConfigDir] = importedNativeRef(source).ConfigDir
 	}
 	return metadata
-}
-
-type importedIdentityStore interface {
-	CommitImportedNativeSessionID(context.Context, domain.SessionID, *domain.SessionImportSource, string, string, string) (bool, error)
 }

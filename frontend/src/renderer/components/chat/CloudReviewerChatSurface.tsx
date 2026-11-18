@@ -1,5 +1,5 @@
 import { useMemo } from "react";
-import { AlertTriangle, Loader2 } from "lucide-react";
+import { AlertTriangle, Loader2 } from "@/components/app-icons";
 import { useTranslation } from "react-i18next";
 import { useCloudReviewerConversation } from "../../hooks/useCloudReviewerConversation";
 import { sessionUiKey } from "../../lib/hosts";

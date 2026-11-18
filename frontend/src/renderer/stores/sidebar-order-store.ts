@@ -2,6 +2,7 @@ import { create } from "zustand";
 
 export const PROJECT_ORDER_STORAGE_KEY = "ao.sidebar.project-order";
 const PENDING_CREATED_PROJECTS_STORAGE_KEY = "ao.sidebar.pending-created-projects";
+export const PINNED_PROJECTS_STORAGE_KEY = "ao.sidebar.pinned-projects";
 
 function readStoredOrder(storageKey: string): string[] {
 	try {
@@ -16,10 +17,13 @@ type SidebarOrderState = {
 	projectOrder: string[];
 	/** Creation priority retained until a snapshot includes the new project. */
 	pendingCreatedProjectIds: string[];
+	/** Projects pinned above the rest of the list. Order within comes from `projectOrder`. */
+	pinnedProjectIds: string[];
 	/** Display order of each mounted project's sessions, keyed by `sessionUiKey(projectId, hostId)`. */
 	sessionOrders: Record<string, string[]>;
 	setProjectOrder: (order: readonly string[], pendingCreatedProjectIds?: readonly string[]) => void;
 	moveProjectToTop: (projectId: string) => void;
+	setProjectPinned: (projectId: string, pinned: boolean) => void;
 	reconcileProjectOrder: (projectIds: readonly string[]) => void;
 	setSessionOrder: (projectKey: string, order: readonly string[]) => void;
 	clearSessionOrder: (projectKey: string) => void;
@@ -32,6 +36,7 @@ type SidebarOrderState = {
 export const useSidebarOrderStore = create<SidebarOrderState>((set, get) => ({
 	projectOrder: readStoredOrder(PROJECT_ORDER_STORAGE_KEY),
 	pendingCreatedProjectIds: readStoredOrder(PENDING_CREATED_PROJECTS_STORAGE_KEY),
+	pinnedProjectIds: readStoredOrder(PINNED_PROJECTS_STORAGE_KEY),
 	sessionOrders: {},
 	setProjectOrder: (order, pendingCreatedProjectIds = []) => {
 		const current = get();
@@ -59,6 +64,23 @@ export const useSidebarOrderStore = create<SidebarOrderState>((set, get) => ({
 			[projectId, ...projectOrder.filter((id) => id !== projectId)],
 			[projectId, ...pendingCreatedProjectIds.filter((id) => id !== projectId)],
 		);
+	},
+	setProjectPinned: (projectId, pinned) => {
+		const { pinnedProjectIds, projectOrder, setProjectOrder } = get();
+		if (pinnedProjectIds.includes(projectId) === pinned) return;
+		const next = pinned ? [...pinnedProjectIds, projectId] : pinnedProjectIds.filter((id) => id !== projectId);
+		try {
+			window.localStorage.setItem(PINNED_PROJECTS_STORAGE_KEY, JSON.stringify(next));
+		} catch {}
+		set({ pinnedProjectIds: next });
+		// Store the order as displayed (pinned group first), then put the
+		// project at the group boundary: a new pin lands at the bottom of the
+		// pinned group, an unpinned project at the top of the rest.
+		const others = new Set(next.filter((id) => id !== projectId));
+		const rest = projectOrder.filter((id) => id !== projectId);
+		const pinnedRest = rest.filter((id) => others.has(id));
+		const unpinnedRest = rest.filter((id) => !others.has(id));
+		setProjectOrder([...pinnedRest, projectId, ...unpinnedRest], get().pendingCreatedProjectIds);
 	},
 	reconcileProjectOrder: (projectIds) => {
 		const { projectOrder, pendingCreatedProjectIds, setProjectOrder } = get();

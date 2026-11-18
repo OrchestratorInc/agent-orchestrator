@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"math/rand/v2"
+	"sort"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -18,6 +19,13 @@ const (
 	// RetryMaximum caps the exponential failure retry delay.
 	RetryMaximum = time.Hour
 )
+
+// FetchResult reports either a complete validated catalog or a valid 304.
+type FetchResult struct {
+	Catalog     *Catalog
+	ETag        string
+	NotModified bool
+}
 
 // CatalogFetcher is the injected remote transport boundary.
 type CatalogFetcher interface {
@@ -186,11 +194,10 @@ func mergeInitialActivations(cached, remote []ProviderActivation) []ProviderActi
 		byProvider[activation.ProviderID] = activation
 	}
 	merged := make([]ProviderActivation, 0, len(byProvider))
-	for _, providerID := range []string{"anthropic", "openai", "zai"} {
-		if activation, ok := byProvider[providerID]; ok {
-			merged = append(merged, activation)
-		}
+	for _, activation := range byProvider {
+		merged = append(merged, activation)
 	}
+	sort.Slice(merged, func(i, j int) bool { return merged[i].ProviderID < merged[j].ProviderID })
 	return merged
 }
 

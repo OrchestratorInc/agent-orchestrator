@@ -26,7 +26,7 @@ func readCommandCodeTranscript(ctx context.Context, root string, paths ...string
 	if err := commandcode.ValidateNativeImport(ctx, t.root, paths[0], id); err != nil {
 		return t, err
 	}
-	t, err := readPiTranscript(ctx, t.root, paths...)
+	t, err := readPiFamilyTranscript(ctx, domain.HarnessCommandCode, t.root, paths...)
 	t.harness = domain.HarnessCommandCode
 	t.title = importTitle(t.title)
 	return t, err

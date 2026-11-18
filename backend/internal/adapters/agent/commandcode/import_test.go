@@ -168,15 +168,14 @@ func TestCommandCodeAdoptedImportCannotReseedMissingHistory(t *testing.T) {
 	source := filepath.Join(root, "projects", "source", id+".jsonl")
 	writeHomeFile(t, source, []byte(commandImportHeader(t, id)+commandImportUser))
 	p := New()
-	if err := p.RelocateImportedSession(context.Background(), ports.ImportedSessionRelocation{ConfigDir: root, NativeSessionID: id, TranscriptPath: source, LaunchCWD: cwd}); err != nil {
+	ref, err := p.PrepareImportedSession(context.Background(), ports.ImportedSessionRelocation{ConfigDir: root, NativeSessionID: id, TranscriptPath: source, LaunchCWD: cwd, DataDir: data, Env: map[string]string{"AO_SESSION_ID": "imported"}})
+	if err != nil {
 		t.Fatal(err)
 	}
-	cfg := ports.WorkspaceHookConfig{DataDir: data, SessionID: "imported", WorkspacePath: cwd, NativeSessionID: id, RestoreMode: ports.WorkspaceRestoreImported, ImportConfigDir: root}
-	if err := p.GetAgentHooks(context.Background(), cfg); err != nil {
-		t.Fatal(err)
+	if ref.ConfigDir == root {
+		t.Fatal("import did not bind the private profile")
 	}
-	cfg.RestoreMode = ports.WorkspaceRestoreNative
-	if err := p.GetAgentHooks(context.Background(), cfg); err != nil {
+	if err := PrepareNativeHistory(context.Background(), data, "imported", id, cwd); err != nil {
 		t.Fatal(err)
 	}
 	bucket, err := commandNativeProjectBucket(cwd)
@@ -187,7 +186,7 @@ func TestCommandCodeAdoptedImportCannotReseedMissingHistory(t *testing.T) {
 	if err := os.Remove(private); err != nil {
 		t.Fatal(err)
 	}
-	if err := p.GetAgentHooks(context.Background(), cfg); err == nil {
+	if err := PrepareNativeHistory(context.Background(), data, "imported", id, cwd); err == nil {
 		t.Fatal("adopted import accepted missing native history")
 	}
 	if _, err := os.Stat(private); !os.IsNotExist(err) {
