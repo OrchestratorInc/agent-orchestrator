@@ -396,6 +396,7 @@
 	"browser.agentAction": "エージェントが{{verb}}",
 	"browser.agentUsing": "エージェントがブラウザを使用中",
 	"browser.agentTab": "エージェントのタブ: {{title}}",
+	"browser.agentFrame": "エージェントのタブ",
 	"browser.find.close": "検索を閉じる",
 	"browser.find.matchCount": "{{total}} 件中 {{active}} 件目",
 	"browser.find.next": "次の一致",

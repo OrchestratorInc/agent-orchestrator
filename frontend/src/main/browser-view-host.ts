@@ -32,6 +32,7 @@ import type {
   BrowserAnnotationSubmitPayload,
 } from "../shared/browser-annotations";
 import { createBrowserAnnotationSession } from "../shared/browser-annotations";
+import { insetForAgentFrame } from "../shared/browser-agent-frame";
 import {
   browserProfilePartition,
   isValidBrowserProfileSessionId,
@@ -156,6 +157,8 @@ export type BrowserTabState = {
 export type BrowserTabsState = {
   viewId: string;
   activeTabId: string;
+  // The tab the agent's next command acts in, when it has one.
+  agentTabId?: string;
   tabs: BrowserTabState[];
   change?: {
     kind: "opened" | "popup" | "selected" | "closed";
@@ -1974,6 +1977,7 @@ export function createBrowserViewHost(
     if (!unused) return openTab(session, url, !personInFront(session), "opened", false, "agent");
     unused.owner = "agent";
     setAgentTab(session, unused.tabId);
+    reframe(session, unused);
     pushTabsState(options, session);
     if (url) await navigateEntry(unused, url);
     return unused;
@@ -2825,6 +2829,35 @@ export function createBrowserViewHost(
     return pushDevToolsState(session);
   };
 
+  // A tab the agent works in sits inside the Browser panel's agent frame: its
+  // page is inset by the frame (shared/browser-agent-frame.ts), and the panel
+  // draws the frame around it. Ownership of a tab rarely changes, so neither
+  // switching tabs nor the agent starting and stopping reflows its page.
+  function framedBounds(
+    session: BrowserSessionEntry,
+    entry: BrowserEntry,
+  ): BrowserRect {
+    const bounds = session.bounds;
+    if (entry.owner !== "agent" || entry.agentTab !== undefined) return bounds;
+    if (bounds.width <= 0 || bounds.height <= 0) return bounds;
+    const inset = insetForAgentFrame(bounds, session.zoomFactor);
+    if (inset === bounds) return bounds;
+    const x = Math.round(inset.x);
+    const y = Math.round(inset.y);
+    return {
+      x,
+      y,
+      width: Math.round(inset.x + inset.width) - x,
+      height: Math.round(inset.y + inset.height) - y,
+    };
+  }
+
+  // Lays the tab out again after it became the agent's while in front.
+  function reframe(session: BrowserSessionEntry, entry: BrowserEntry): void {
+    if (session.activeTabId === entry.tabId && !session.profileSwitching)
+      applySessionBounds(session, entry);
+  }
+
   function applySessionBounds(
     session: BrowserSessionEntry,
     entry: BrowserEntry,
@@ -2853,15 +2886,16 @@ export function createBrowserViewHost(
     // renderer show AO's empty-page UI instead of Chromium's white about:blank.
     // A destroyed WebContents (page called window.close()) leaves the view's
     // `webContents` undefined until the "destroyed" handler drops the tab.
+    const bounds = framedBounds(session, entry);
     const currentURL = entry.view.webContents?.getURL();
     if (!currentURL || currentURL === "about:blank") {
-      applyBrowserViewBounds(entry.view, session.bounds, false);
+      applyBrowserViewBounds(entry.view, bounds, false);
       return;
     }
     applyBrowserViewBounds(
       entry.view,
-      session.bounds,
-      session.bounds.width > 0 && session.bounds.height > 0,
+      bounds,
+      bounds.width > 0 && bounds.height > 0,
     );
   }
 
@@ -4272,7 +4306,12 @@ export function createBrowserViewHost(
 	// CSS-pixel size the streamed page is laid out at. Remote pointer and wheel
 	// input is mapped against this, so it must match what the capture shows.
 	function liveViewport(session: BrowserSessionEntry): { width: number; height: number } {
-		const source = session.visible ? session.bounds : session.lastVisibleSize ?? OFFSCREEN_BOUNDS;
+		// On screen, the page is the size the active tab is laid out at: an agent
+		// tab's is inset by its frame.
+		const shown = session.visible ? session.tabs.get(session.activeTabId) : undefined;
+		const source = session.visible
+			? shown ? framedBounds(session, shown) : session.bounds
+			: session.lastVisibleSize ?? OFFSCREEN_BOUNDS;
 		return {
 			width: Math.max(1, Math.round(source.width)),
 			height: Math.max(1, Math.round(source.height)),
@@ -4549,6 +4588,7 @@ export function createBrowserViewHost(
 			if (entry.owner === undefined && session.agentTabId === undefined) {
 				entry.owner = "agent";
 				setAgentTab(session, entry.tabId);
+				reframe(session, entry);
 			}
 			await navigateEntry(entry, normalizeAgentBrowserURL(target));
 			emitLiveState(session);
@@ -4597,6 +4637,10 @@ export function createBrowserViewHost(
       const commandId = randomUUID();
       setAgentBrowserActivity(session, action, true, commandId, "started");
       try {
+        // Awaited, so the activity ends when the command does: several
+        // actions below return their pending native call unawaited, which
+        // would otherwise run the finally (and end the activity) at once.
+        return await (async () => {
         if (session.agentTabId === undefined || !session.tabs.has(session.agentTabId)) {
           if (action === "tab-new" && !unusedTab()) {
             // Connecting agent-browser to zero targets bootstraps its own page
@@ -4680,7 +4724,11 @@ export function createBrowserViewHost(
               ) {
                 session.nativeActiveTabId = nativeArgs.tabId;
                 const requestedEntry = session.tabs.get(nativeArgs.tabId);
-                if (requestedEntry?.owner === "agent") setAgentTab(session, nativeArgs.tabId);
+                if (requestedEntry?.owner === "agent" && session.agentTabId !== nativeArgs.tabId) {
+                  setAgentTab(session, nativeArgs.tabId);
+                  // The panel marks the tab the agent is in, even behind.
+                  pushTabsState(options, session);
+                }
                 // The tab the agent moves to comes to the front only for a
                 // person who was watching the one it left: never over a tab
                 // they chose, nor over a newer selection of theirs.
@@ -5263,6 +5311,7 @@ export function createBrowserViewHost(
               `Unsupported browser action: ${action}`,
             );
         }
+        })();
       } finally {
         setAgentBrowserActivity(session, action, false, commandId, "finished");
       }
@@ -5350,7 +5399,7 @@ export function createBrowserViewHost(
       const session = entries.get(targetViewId);
       if (!session || !session.visible || !session.tabs.size) return;
       const entry = activeEntry(session);
-      const bounds = session.bounds;
+      const bounds = framedBounds(session, entry);
       if (bounds.width <= 0 || bounds.height <= 0) return;
       entry.view.setVisible?.(false);
       applyBrowserViewBounds(entry.view, {
@@ -5360,7 +5409,8 @@ export function createBrowserViewHost(
       setTimeout(() => {
         const current = entries.get(targetViewId);
         if (!current || !current.visible || !current.tabs.size) return;
-        applyBrowserViewBounds(activeEntry(current).view, current.bounds, true);
+        const shown = activeEntry(current);
+        applyBrowserViewBounds(shown.view, framedBounds(current, shown), true);
       }, 0);
     },
   };
@@ -6015,6 +6065,9 @@ function listTabs(
   return {
     viewId: session.viewId,
     activeTabId: session.activeTabId,
+    ...(session.agentTabId !== undefined && session.tabs.has(session.agentTabId)
+      ? { agentTabId: session.agentTabId }
+      : {}),
     tabs: [...session.tabs.values()].map((entry) =>
       tabResult(entry, entry.tabId === session.activeTabId),
     ),

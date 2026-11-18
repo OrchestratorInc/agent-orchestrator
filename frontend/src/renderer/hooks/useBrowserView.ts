@@ -105,6 +105,8 @@ export type BrowserViewModel = {
 	stopFindInPage: (focusPage?: boolean) => Promise<void>;
 	tabs: BrowserTabState[];
 	activeTabId: string;
+	/** The tab the agent's next command acts in ("" when it has none yet). */
+	agentTabId: string;
 	tabNotice: string;
 	selectTab: (tabId: string) => Promise<void>;
 	closeTab: (tabId: string) => Promise<void>;
@@ -1306,6 +1308,7 @@ export function useBrowserView({
 	const modelFindOpenRequest = stateBelongsToSession ? findOpenRequest : 0;
 	const modelTabs = stateBelongsToSession ? tabs : (switchingTo?.tabsState.tabs ?? EMPTY_TABS);
 	const modelActiveTabId = stateBelongsToSession ? tabsState.activeTabId : (switchingTo?.tabsState.activeTabId ?? "");
+	const modelAgentTabId = (stateBelongsToSession ? tabsState.agentTabId : switchingTo?.tabsState.agentTabId) ?? "";
 	const modelTabNotice = stateBelongsToSession ? tabNotice : "";
 	const modelClosedTabs = stateBelongsToSession ? closedTabs : EMPTY_CLOSED_TABS;
 	const modelDevtoolsState = stateBelongsToSession ? devtoolsState : EMPTY_DEVTOOLS_STATE;
@@ -1339,6 +1342,7 @@ export function useBrowserView({
 			stopFindInPage,
 			tabs: modelTabs,
 			activeTabId: modelActiveTabId,
+			agentTabId: modelAgentTabId,
 			tabNotice: modelTabNotice,
 			selectTab,
 			closeTab,
@@ -1362,7 +1366,7 @@ export function useBrowserView({
 		}),
 		[
 			modelViewId, modelNavState, slotRef, navigate, goBack, goForward, reload, stop, modelFindState,
-			modelFindOpenRequest, findInPage, stopFindInPage, modelTabs, modelActiveTabId, modelTabNotice, selectTab,
+			modelFindOpenRequest, findInPage, stopFindInPage, modelTabs, modelActiveTabId, modelAgentTabId, modelTabNotice, selectTab,
 			closeTab, openTab, openLink, reorderTabs, modelClosedTabs, reopenClosedTab, modelDevtoolsState,
 			modelProfileState, openDevTools, closeDevTools, setDevToolsPlacement, modelAgentBrowserActive,
 			modelAgentBrowserActivity, destroy, annotationMode, annotationState, setAnnotationMode, annotationAction,

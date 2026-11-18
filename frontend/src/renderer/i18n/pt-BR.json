@@ -397,6 +397,7 @@
 	"browser.agentAction": "Agente {{verb}}",
 	"browser.agentUsing": "Agente usando o navegador",
 	"browser.agentTab": "Aba do agente: {{title}}",
+	"browser.agentFrame": "Aba do agente",
 	"browser.find.close": "Fechar busca",
 	"browser.find.matchCount": "{{active}} de {{total}}",
 	"browser.find.next": "Próxima ocorrência",

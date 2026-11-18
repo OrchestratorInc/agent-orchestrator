@@ -16,6 +16,7 @@ import {
 	scaleBoundsForZoom,
 	shouldHandleAppShortcutInBrowserContext,
 } from "./browser-view-host";
+import { AGENT_FRAME_EDGE_PX, AGENT_FRAME_STRIP_PX, insetForAgentFrame } from "../shared/browser-agent-frame";
 import { browserProfilePartition, type BrowserProfile } from "../shared/browser-profiles";
 import type { BrowserProfileStore } from "./browser-profile-store";
 import type { BrowserHistoryStore } from "./browser-history-store";
@@ -3054,7 +3055,8 @@ describe("browser profile partitions and replacement", () => {
 		expect(
 			views.slice(2).some((view) =>
 				view.setBounds.mock.calls.some(
-					([bounds]) => JSON.stringify(bounds) === JSON.stringify({ x: 24, y: 32, width: 640, height: 420 }),
+					// The rebuilt agent tab keeps its frame.
+					([bounds]) => JSON.stringify(bounds) === JSON.stringify(insetForAgentFrame({ x: 24, y: 32, width: 640, height: 420 })),
 				),
 			),
 		).toBe(true);
@@ -3953,12 +3955,10 @@ describe("agent browser runtime", () => {
 			height: 720,
 		});
 		expect(views[1].setVisible).toHaveBeenLastCalledWith(true);
-		expect(views[1].setBounds).toHaveBeenLastCalledWith({
-			x: 10,
-			y: 20,
-			width: 320,
-			height: 240,
-		});
+		// The agent opened t2: its page sits inside the agent's frame.
+		expect(views[1].setBounds).toHaveBeenLastCalledWith(
+			insetForAgentFrame({ x: 10, y: 20, width: 320, height: 240 }),
+		);
 		await expect(host.execute("sess-1", "click", { ref: "e1" })).rejects.toMatchObject({
 			code: "STALE_REFERENCE",
 		});
@@ -7002,6 +7002,69 @@ describe("agent and person tabs", () => {
 		// frame Chromium does not draw off screen.
 		expect(runtime.screenshot).not.toHaveBeenCalled();
 		expect(views[1].webContents.capturePage).not.toHaveBeenCalled();
+	});
+
+	it("reports the agent acting until a slow command finishes, not only while it starts", async () => {
+		const { host, runtime, sent } = await open();
+		await host.execute("sess-1", "open", { url: "https://agent.example.test/" });
+		const runAction = vi.mocked(runtime.runAction);
+		const original = runAction.getMockImplementation()!;
+		let release: (() => void) | undefined;
+		runAction.mockImplementation(async (...args) => {
+			if (args[1] === "wait") await new Promise<void>((resolve) => { release = resolve; });
+			return original(...args);
+		});
+		const phases = () =>
+			sent
+				.filter((event) => event.channel === "browser:agentActivity")
+				.map((event) => event.payload as { action: string; phase?: string })
+				.filter((payload) => payload.action === "wait")
+				.map((payload) => payload.phase);
+
+		const waiting = host.execute("sess-1", "wait", { text: "Saved" });
+		await vi.waitFor(() => expect(release).toBeDefined());
+		expect(phases()).toEqual(["started"]);
+		release!();
+		await waiting;
+		expect(phases()).toEqual(["started", "finished"]);
+	});
+
+	it("lays the agent's tab out inside its frame and the person's tab at full size", async () => {
+		const { host, invoke, emit, views, viewId, tabs } = await open();
+		emit("browser:setBounds", { viewId, revision: 1, rect: { x: 10, y: 20, width: 320, height: 240 }, visible: true });
+		await host.execute("sess-1", "open", { url: "https://agent.example.test/" });
+		// Edge on three sides, strip along the bottom (shared/browser-agent-frame.ts).
+		const framed = {
+			x: 10 + AGENT_FRAME_EDGE_PX,
+			y: 20 + AGENT_FRAME_EDGE_PX,
+			width: 320 - AGENT_FRAME_EDGE_PX * 2,
+			height: 240 - AGENT_FRAME_EDGE_PX - AGENT_FRAME_STRIP_PX,
+		};
+		expect(views[0].setBounds).toHaveBeenLastCalledWith(framed);
+		expect(await tabs()).toMatchObject({ agentTabId: "t1" });
+
+		await invoke("browser:openTab", { viewId, url: "https://mine.example.test/" });
+		expect(views[1].setBounds).toHaveBeenLastCalledWith({ x: 10, y: 20, width: 320, height: 240 });
+		await invoke("browser:selectTab", { viewId, tabId: "t1" });
+		expect(views[0].setBounds).toHaveBeenLastCalledWith(framed);
+		// The panel resizing keeps the frame.
+		emit("browser:setBounds", { viewId, revision: 2, rect: { x: 0, y: 0, width: 400, height: 300 }, visible: true });
+		expect(views[0].setBounds).toHaveBeenLastCalledWith({
+			x: AGENT_FRAME_EDGE_PX,
+			y: AGENT_FRAME_EDGE_PX,
+			width: 400 - AGENT_FRAME_EDGE_PX * 2,
+			height: 300 - AGENT_FRAME_EDGE_PX - AGENT_FRAME_STRIP_PX,
+		});
+	});
+
+	it("tells the panel which tab the agent moved to, even behind the person's", async () => {
+		const { host, invoke, viewId, tabs } = await open();
+		await host.execute("sess-1", "open", { url: "https://agent.example.test/" });
+		await invoke("browser:openTab", { viewId, url: "https://mine.example.test/" });
+		await host.execute("sess-1", "tab-new", { url: "https://agent.example.test/two" });
+		expect(await tabs()).toMatchObject({ activeTabId: "t2", agentTabId: "t3" });
+		await host.execute("sess-1", "tab-select", { tabId: "t1" });
+		expect(await tabs()).toMatchObject({ activeTabId: "t2", agentTabId: "t1" });
 	});
 
 	it("draws an agent tab never on screen once before the agent's first input to it, and only once", async () => {
