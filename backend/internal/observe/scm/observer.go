@@ -13,6 +13,7 @@ import (
 	"fmt"
 	"log/slog"
 	"path/filepath"
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
@@ -1291,6 +1292,12 @@ func (o *Observer) discoverNewPRs(ctx context.Context, sessionRepos []sessionRep
 				headRepo = repoFullName(repo)
 			}
 			eligible := candidatesForHeadRepo(byRepo[repoKey], headRepo)
+			// Session IDs repeat across installations. GitHub reports whole seconds.
+			if !pr.CreatedAtProvider.IsZero() {
+				eligible = slices.DeleteFunc(eligible, func(sr sessionRepo) bool {
+					return pr.CreatedAtProvider.Before(sr.session.CreatedAt.Truncate(time.Second))
+				})
+			}
 			sr, ok := matchSession(eligible, pr.SourceBranch)
 			if !ok {
 				continue
