@@ -304,6 +304,10 @@ func (c *conversation) pump() {
 // notification that carries it. A model refusal is recorded only from these:
 // the provider's own time stays the same when a detached host replays the
 // notification, where the time AO received it would not.
+//
+// Codex reports whole seconds, so the refusal is dated to the last instant of
+// that second: a catalog observed within the same second cannot be shown to
+// come after the refusal, and must not clear it.
 func turnCompletedAt(n notification) (time.Time, bool) {
 	if n.Method != codexproto.MethodTurnCompleted {
 		return time.Time{}, false
@@ -312,7 +316,7 @@ func turnCompletedAt(n notification) (time.Time, bool) {
 	if json.Unmarshal(n.Params, &p) != nil || p.Turn.Error == nil || p.Turn.CompletedAt == nil || *p.Turn.CompletedAt <= 0 {
 		return time.Time{}, false
 	}
-	return time.Unix(*p.Turn.CompletedAt, 0).UTC(), true
+	return time.Unix(*p.Turn.CompletedAt+1, 0).Add(-time.Nanosecond).UTC(), true
 }
 
 // emit delivers an event, preferring to drop a delta over blocking the reader. A
