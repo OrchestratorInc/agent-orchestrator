@@ -2,9 +2,10 @@ import { useEffect, useMemo, useRef, useState, type MouseEvent } from "react";
 import { useQueryClient } from "@tanstack/react-query";
 import { useNavigate } from "@tanstack/react-router";
 import { useTranslation } from "react-i18next";
-import { Archive, Plus } from "lucide-react";
+import { Archive, Plus } from "@/components/app-icons";
 import { STANDALONE_WORKSPACE_ID, type WorkspaceSession } from "../types/workspace";
 import { archivedStandaloneSessions } from "../lib/standalone-archive";
+import { sessionNavigateTarget } from "../lib/navigate-to-session";
 import { useRestoreSession } from "../hooks/useRestoreSession";
 import {
 	useWorkspaceQuery,
@@ -14,11 +15,13 @@ import { useUiStore } from "../stores/ui-store";
 import { RestoreUnavailableDialog } from "./RestoreUnavailableDialog";
 import { ArchivedSessionCardAdapter } from "./SessionsBoardAdapters";
 import { DaemonStartupLoader } from "./DaemonStartupLoader";
-import { TopbarButton } from "./TopbarButton";
+import { Button } from "./ui/button";
 import { PageTopbar, PageTopbarTitle } from "./PageTopbar";
+import { useEdgeFadeRef } from "../hooks/useEdgeFade";
 
 
 export function StandaloneArchiveView() {
+	const fadeRef = useEdgeFadeRef<HTMLDivElement>();
 	const { t } = useTranslation();
 	const navigate = useNavigate();
 	const queryClient = useQueryClient();
@@ -66,10 +69,8 @@ export function StandaloneArchiveView() {
 			const result = await restoreSessionById(session.id);
 			if (!isStillMounted()) return;
 			if (result.status === "success") {
-				void navigate({
-					to: "/sessions/$sessionId",
-					params: { sessionId: session.id },
-				});
+				// A Cloud standalone agent opens on its own project's route.
+				void navigate(sessionNavigateTarget(session.cloud ? session.workspaceId : undefined, session.id));
 				return;
 			}
 			if (result.status === "not_resumable") {
@@ -97,15 +98,14 @@ export function StandaloneArchiveView() {
 					</PageTopbarTitle>
 				}
 				actions={
-					<TopbarButton
-						className="topbar-control--labeled"
+					<Button size="sm"
 						onClick={() => requestNewTask(STANDALONE_WORKSPACE_ID)}
 						type="button"
 						variant="primary"
 					>
 						<Plus className="size-icon-md" aria-hidden="true" />
 						{t("standalone.archive.newAgent")}
-					</TopbarButton>
+					</Button>
 				}
 			/>
 
@@ -116,7 +116,7 @@ export function StandaloneArchiveView() {
 			) : archivedSessions.length === 0 && workspaceQuery.isSuccess ? (
 				<StandaloneArchiveEmpty />
 			) : (
-				<div className="min-h-0 flex-1 overflow-y-auto px-3 py-3">
+				<div ref={fadeRef} className="edge-fade [--edge-fade-end-size:0px] min-h-0 flex-1 overflow-y-auto px-3 py-3">
 					<div
 						aria-label={t("shell.archivedSessions")}
 						className="standalone-archive-grid"

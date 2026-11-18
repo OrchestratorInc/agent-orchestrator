@@ -77,7 +77,7 @@ func TestMobileControlRejectsHostileBrowserBeforeSideEffects(t *testing.T) {
 	for _, origin := range []string{"http://standalone-1.localhost:3001", "http://ao-preview.mfxs2mi.localhost:3001", "http://127.0.0.1:8080", "http://[::1]:8080", "http://localhost", "http://evil.example", "null"} {
 		t.Run(origin, func(t *testing.T) {
 			router, bridge, lan, tunnel := mobileOriginRouter(t)
-			for _, path := range []string{"enable", "regenerate", "enable-lan-only", "enable-tunnel-only", "remote-access", "disable", "secure-pairing", "keep-awake", "browser-control", "status"} {
+			for _, path := range []string{"enable", "regenerate", "enable-lan-only", "enable-tunnel-only", "remote-access", "disable", "secure-pairing", "keep-awake", "browser-control", "pairing-code", "require-device-credentials", "status"} {
 				methods := []string{http.MethodPost, http.MethodOptions}
 				if path == "status" {
 					methods = []string{http.MethodGet}
@@ -237,5 +237,51 @@ func TestMobileControlOriginElectron(t *testing.T) {
 	state, err := mobilebridge.Load(bridge.ConfigPath)
 	if err != nil || !state.Enabled || state.Password == "" {
 		t.Fatal("trusted pairing state missing")
+	}
+}
+
+// Only this machine's app or CLI may make a pairing code, not a page on another origin.
+func TestPairingCodeIsMadeOnlyForTheLocalApp(t *testing.T) {
+	router, bridge, _, _ := mobileOriginRouter(t)
+	devices, err := mobilebridge.LoadAccessDevices(filepath.Join(filepath.Dir(bridge.ConfigPath), "access-devices.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	bridge.Devices, bridge.Codes = devices, mobilebridge.NewPairingCodes(nil)
+	post := func(path, origin string) *httptest.ResponseRecorder {
+		r := httptest.NewRequest(http.MethodPost, "/api/v1/mobile/"+path, strings.NewReader(`{"enabled":true}`))
+		if origin != "" {
+			r.Header.Set("Origin", origin)
+		}
+		w := httptest.NewRecorder()
+		router.ServeHTTP(w, r)
+		return w
+	}
+	// Remote access is off: there is nothing to pair with.
+	if w := post("pairing-code", "app://renderer"); w.Code != http.StatusConflict || !strings.Contains(w.Body.String(), "REMOTE_ACCESS_OFF") {
+		t.Fatalf("pairing code while off: status=%d body=%s", w.Code, w.Body.String())
+	}
+	if w := post("enable-lan-only", "app://renderer"); w.Code != http.StatusOK {
+		t.Fatalf("enable: status=%d body=%s", w.Code, w.Body.String())
+	}
+	for _, origin := range []string{"app://renderer", ""} {
+		w := post("pairing-code", origin)
+		var body struct{ Code string }
+		_ = json.Unmarshal(w.Body.Bytes(), &body)
+		if w.Code != http.StatusOK || len(body.Code) != 8 || w.Header().Get("Cache-Control") != "no-store" {
+			t.Fatalf("pairing code for origin %q: status=%d body=%s", origin, w.Code, w.Body.String())
+		}
+		if !bridge.Codes.Valid(body.Code) {
+			t.Fatalf("the code returned for origin %q is not valid", origin)
+		}
+	}
+	for _, path := range []string{"pairing-code", "require-device-credentials"} {
+		if w := post(path, "http://evil.example"); w.Code != http.StatusForbidden || !strings.Contains(w.Body.String(), "ORIGIN_FORBIDDEN") {
+			t.Fatalf("%s from another origin: status=%d body=%s", path, w.Code, w.Body.String())
+		}
+	}
+	state, err := mobilebridge.Load(bridge.ConfigPath)
+	if err != nil || state.RequireDeviceCredentials {
+		t.Fatalf("another origin changed the setting: %+v %v", state, err)
 	}
 }

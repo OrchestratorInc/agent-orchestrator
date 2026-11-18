@@ -2,15 +2,36 @@ import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
 
 const source = readFileSync(new URL("./ChatTimeline.tsx", import.meta.url), "utf8");
+const fieldSource = readFileSync(new URL("./ElicitationInputField.tsx", import.meta.url), "utf8");
 const turnSummarySource = source.slice(
 	source.indexOf("function TurnStatusRow"),
 	source.indexOf("function ChangedFiles"),
 );
 
+describe("chat turn results", () => {
+	// A failed or interrupted turn shows no tiles, so the changed-files card has
+	// to keep its artifact files: it takes turnResults' files and nothing else.
+	it("lists the changed files turnResults keeps, never a separately filtered diff", () => {
+		expect(turnSummarySource).toContain("const results = useMemo(() => turnResults(turn, source), [source, turn]);");
+		expect(turnSummarySource).toContain("<ChangedFiles turn={turn} changed={results.files} />");
+		expect(turnSummarySource).toContain("<TurnArtifacts artifacts={results.artifacts} source={source} />");
+		expect(turnSummarySource).not.toContain("splitTurnArtifacts");
+	});
+});
+
 describe("chat turn summary styling", () => {
 	it("shows the duration without a trailing divider line", () => {
 		expect(turnSummarySource).toContain("Worked for ${duration}");
 		expect(turnSummarySource).not.toContain("<View style={styles.ruleHalf} />");
+	});
+
+	// A turn replayed from the provider's history comes back "recovered", which
+	// the row once had no words for: it drew a blank band a touch target tall.
+	it("names every settled state, and draws no row with nothing to say", () => {
+		expect(turnSummarySource).toContain('turn.state === "recovered"');
+		expect(turnSummarySource).toContain('? foldable ? "Work recovered" : ""');
+		expect(turnSummarySource).toContain('"Turn cancelled"');
+		expect(turnSummarySource).toContain("if (!running && !label) return null;");
 	});
 
 	it("folds a settled turn's work behind the Worked for row and keeps its state above the list", () => {
@@ -33,6 +54,14 @@ describe("chat turn summary styling", () => {
 	});
 });
 
+describe("chat under the clear header", () => {
+	it("pads Android's list below the header, which iOS insets for itself", () => {
+		expect(source).toContain('const headerPad = Platform.OS === "ios" ? 0 : underHeader;');
+		expect(source).toContain("paddingTop: space.md + headerPad + topInset");
+		expect(source).toContain('contentInsetAdjustmentBehavior={underHeader ? "automatic" : undefined}');
+	});
+});
+
 describe("streaming response layout", () => {
 	it("keeps the live cursor inside the response instead of adding a new block", () => {
 		expect(source).toContain('showCursor ? `${item.text || ""} ▍`');
@@ -48,7 +77,7 @@ describe("streaming response layout", () => {
 
 describe("empty conversation", () => {
 	it("uses the AO mascot instead of a generic chat icon", () => {
-		const emptyConversation = source.slice(source.indexOf("function EmptyConversation"), source.indexOf("function Action"));
+		const emptyConversation = source.slice(source.indexOf("function EmptyConversation"), source.indexOf("function LabelValue"));
 		expect(emptyConversation).toContain("<MascotLamp size={48} />");
 		expect(emptyConversation).not.toContain('name="message-circle"');
 	});
@@ -58,7 +87,7 @@ describe("elicitation typography", () => {
 	it("matches the question to regular assistant copy", () => {
 		// The family is required next to every weight now, so this pins the parts
 		// that carry the intent: the question reads at assistant-copy size and weight.
-		expect(source).toContain('fontSize: type.callout.fontSize, lineHeight: type.callout.lineHeight, fontWeight: "500" }');
+		expect(fieldSource).toContain('fontSize: type.callout.fontSize, lineHeight: type.callout.lineHeight, fontWeight: "500" }');
 		expect(source).toContain("inputRequest: { marginVertical: space.md, paddingHorizontal: space.hair, paddingTop: space.xs, paddingBottom: space.xl, gap: space.md }");
 		expect(source).toContain('inputActions: { minHeight: 36, flexDirection: "row"');
 	});
@@ -81,6 +110,235 @@ describe("sent human message actions", () => {
 	});
 });
 
+// A comfortable gap over a floating composer, of which the keyboard takes back
+// a little in step with its own animation (the list's keyboard offset).
+describe("the conversation's end over the composer", () => {
+	it("ends a comfortable gap above the composer's height", () => {
+		expect(source).toContain("paddingBottom: bottomInset ? bottomInset + CONVERSATION_END_GAP : space.xxxl");
+	});
+	it("gives up only part of that gap while the keyboard is up", async () => {
+		const inset = await import("../session/keyboardInset");
+		expect(inset.KEYBOARD_END_GAP_TUCK).toBeGreaterThan(0);
+		expect(inset.KEYBOARD_END_GAP_TUCK).toBeLessThan(inset.CONVERSATION_END_GAP);
+	});
+});
+
+// One row closes a turn, under its reply, as on the desktop: copy, roll back,
+// and the time. It must never move the conversation: the copy row that came
+// and went under every reply was a band the composer and keyboard jumped over.
+describe("a turn's action row", () => {
+	const actions = source.slice(source.indexOf("function TurnActions"), source.indexOf("function SystemSignal"));
+	it("copies the reply, rolls the turn back, and says when it was written", () => {
+		expect(actions).toContain('accessibilityLabel="Copy response"');
+		expect(actions).toContain("<TurnRollbackButton turnId={turn.id} onRollback={onRollback} compact />");
+		expect(actions).toContain("formatReplyTime(reply?.createdAt ?? turn.completedAt)");
+	});
+	it("holds its height from the turn's start and takes its touch out by slop", () => {
+		expect(source).toContain("turnActions: { height: TURN_ACTION_SIZE + 2 * TURN_ACTION_SLOP, marginVertical: -TURN_ACTION_SLOP,");
+		expect(actions).toContain("<View style={styles.turnActions}>");
+		expect(actions).toContain("hitSlop={TURN_ACTION_SLOP}");
+	});
+	it("is drawn once per turn, under the final reply, and the summary no longer rolls back", () => {
+		expect(source).toContain("{renderRows(partition.final)}{actions}{summary}");
+		expect(source).not.toContain("styles.responseActions");
+		const summary = source.slice(source.indexOf("function TurnSummary"), source.indexOf("function ChangedFiles"));
+		expect(summary).not.toContain("TurnRollbackButton");
+	});
+});
+
+describe("jump to latest", () => {
+	// FlatList's scrollToEnd leaves out the content's bottom padding (the composer).
+	it("scrolls the ScrollView to its real end", () => {
+		expect(source).toContain("listRef.current?.getNativeScrollRef()");
+		expect(source).toContain("if (scroll?.scrollToEnd) scroll.scrollToEnd({ animated });");
+	});
+	// iOS ends the list's own scrolls with onMomentumScrollEnd; that must not stop the follow.
+	it("lets only a drag stop following the newest message", () => {
+		expect(source).toContain("if (followsTail.current && !atTail(event.nativeEvent, keyboardInset.current)) requestAnimationFrame(followTail);");
+	});
+	// Under a floating composer the list keeps its size and moves its content with the keyboard.
+	it("moves its own content with the keyboard under a floating composer", () => {
+		expect(source).toContain('keyboardLiftBehavior="always"');
+		expect(source).toContain("return { transform: [{ translateY: hold - growth }] };");
+		expect(source).toContain("const overflow = contentHeight.current - (viewportHeight.current - keyboardInset.current);");
+	});
+	// The keyboard shrinks the list while the composer rides up by a transform.
+	it("keeps the newest message in view when the list shrinks at its end", () => {
+		expect(source).toContain("const shrank = !measured && viewportHeight.current < previous;");
+		expect(source).toContain("if ((measured || shrank) && followsTail.current) requestAnimationFrame(() => scrollToLatest(shrank));");
+	});
+	// Each platform's own floating control (see JumpToLatest), not a bordered pill.
+	it("floats the native control over the list", () => {
+		expect(source).toContain("const jumpToLatest = () => { followsTail.current = true; setShowJump(false); scrollToLatest(true); };");
+		// Floating above what sits over the list's end, so it never moves the
+		// composer or the conversation, and fading rather than popping.
+		// It steps aside while the composer is open; only the jump re-renders for it.
+		expect(source).toContain("{showJump ? <JumpOverlay hidden={jumpHidden} bottom={bottomInset} onPress={jumpToLatest} /> : null}");
+		const screen = readFileSync(new URL("./ChatSessionScreen.tsx", import.meta.url), "utf8");
+		expect(screen).toContain("onExpandedChange={composerOpen.set}");
+		expect(source).toContain("<JumpToLatest onPress={onPress} />");
+		expect(source).not.toContain("styles.jump");
+	});
+});
+
+// TurnRollbackButton.test and ElicitationInputField.test render these controls.
+describe("turn rollback", () => {
+	const actions = source.slice(source.indexOf("function TurnActions"), source.indexOf("function SystemSignal"));
+
+	// Forgetting a turn cannot be undone, so the control asks through the
+	// system's destructive alert rather than a card drawn into the timeline.
+	it("offers the confirming control on a settled turn the provider knows", () => {
+		expect(actions).toContain("const canRollBack = settled && Boolean(onRollback) && Boolean(turn.providerTurnId) && !turn.rolledBack;");
+		expect(actions).toContain("{canRollBack && onRollback ? <TurnRollbackButton turnId={turn.id} onRollback={onRollback} compact /> : null}");
+		// Fork shares the row: it shows on a turn a fork can copy, beside Roll back.
+		expect(actions).toContain("const canFork = Boolean(onFork) && forkableTurn(turn);");
+		expect(actions).toContain("{canFork && onFork ? <TurnForkButton turnId={turn.id} onFork={onFork} compact /> : null}");
+		expect(actions).not.toContain("rollbackConfirm");
+		expect(actions).not.toContain("setConfirming");
+	});
+});
+
+describe("elicitation boolean input", () => {
+	// React Native's Android switch is the older SwitchCompat, beside M3 controls
+	// everywhere else in the flow.
+	it("hosts the universal native switch", () => {
+		expect(source).toContain("<ElicitationInputField key={name}");
+		expect(fieldSource).toContain('import { Host, Switch } from "@expo/ui";');
+		for (const file of [source, fieldSource]) expect(file).not.toMatch(/import \{[^}]*\bSwitch\b[^}]*\} from "react-native"/);
+	});
+});
+
+describe("request cards in the timeline", () => {
+	const approval = source.slice(source.indexOf("function ApprovalCard"), source.indexOf("function UserInputCard"));
+	const input = source.slice(source.indexOf("function UserInputCard"), source.indexOf("function CompactionMarker"));
+
+	// As in the composer's RequestCard: the press tapped and nothing said whether
+	// the answer landed. Now the outcome is the one haptic.
+	it("buzz once, when an answer lands or fails", () => {
+		expect(approval).toMatch(/onDecide\(activity\.requestId \?\? "", decision\.id\)\s*\.then\(\(\) => haptics\.success\(\)\)/);
+		expect(approval).toMatch(/setSubmitError\(userFacingError\(cause\)\);\s*haptics\.error\(\);/);
+		expect(approval).toContain("primary={index === 0} reportsOutcome");
+		expect(input).toMatch(/await onResolve\(activity\.requestId, action, content\);\s*haptics\.success\(\);/);
+		expect(input).toMatch(/setSubmitError\(userFacingError\(cause\)\);\s*haptics\.error\(\);/);
+		for (const label of ['label="Cancel" reportsOutcome', '"Decline" : "Skip"} reportsOutcome', '"Open link"} primary reportsOutcome', "step.primaryLabel} primary reportsOutcome"]) {
+			expect(input).toContain(label);
+		}
+	});
+
+	// Advancing to the next question is silent, so going back must be too.
+	it("step between questions without a haptic either way", () => {
+		expect(input).toContain('label="Back" reportsOutcome');
+		expect(input).toMatch(/if \(hasNextQuestion\) \{\s*setActiveQuestion\(\(current\) => current \+ 1\);\s*return;\s*\}/);
+	});
+
+	// The button sizes itself to its label; a width guessed from the label's
+	// length only cut long decisions short.
+	it("let each decision size itself", () => {
+		expect(approval).not.toContain("width=");
+		expect(source).not.toContain("actionControlWidth");
+	});
+});
+
+describe("disclosure rows", () => {
+	// Opening a fold or a page is not a haptic moment on either platform.
+	it("toggle and navigate without a haptic", () => {
+		expect(source).not.toContain("haptics.tap()");
+		expect(source).not.toContain("haptics.select()");
+	});
+
+	it("draw the system's disclosure chevron", () => {
+		expect(source).not.toMatch(/<Feather name=\{[^}]*chevron/);
+		expect(source.match(/<FoldChevron open=/g)?.length).toBeGreaterThanOrEqual(11);
+	});
+});
+
+describe("letter case", () => {
+	// Neither HIG nor Material sets labels in tracked capitals; they read as shouting.
+	it("labels in sentence case", () => {
+		for (const label of ["STEERED", "AGENT TYPED", "SUBAGENT", "HISTORY COMPACTED", "STILL CHANGING", "GROWING", "PROGRESS", "FULL"]) expect(source).not.toContain(label);
+		for (const label of [">Steered<", ">Agent typed<", "Subagent · {count}", "History compacted{", ">Growing<", ">Progress<"]) expect(source).toContain(label);
+		expect(source).not.toContain("{label.toUpperCase()}");
+		expect(source).not.toContain('textTransform: "uppercase"');
+		expect(source).not.toContain("letterSpacing");
+	});
+});
+
+describe("card shape", () => {
+	const styles = source.slice(source.indexOf("const makeStyles"));
+
+	// r8 with 1px, r12 with a hairline and r16 had grown up side by side.
+	it("gives every card one radius and one edge width", () => {
+		expect(styles).toContain('const card = { borderRadius: radius.md, borderCurve: "continuous", borderWidth: rowDividerWidth } as const;');
+		for (const name of ["systemSignal", "runDetail", "planCard", "requestCard", "errorCard"]) expect(styles).toMatch(new RegExp(`\\n\\t+${name}: \\{ \\.\\.\\.card,`));
+		expect(styles).not.toMatch(/borderRadius: \d/);
+		// The origin message's 2pt bar is a quote mark, not an edge.
+		expect(styles).not.toMatch(/[bB]order(?!LeftWidth: 2)\w*Width: \d/);
+		expect(styles).not.toContain("hairlineWidth");
+	});
+});
+
+describe("timeline rows", () => {
+	const styles = source.slice(source.indexOf("const makeStyles"));
+
+	it("are touch targets that press the platform's way", () => {
+		for (const row of ["activityRow", "runSummary", "subagentHeader", "planHeader", "fileRowTap", "originMore"]) expect(styles).toMatch(new RegExp(`\\n\\t+${row}: \\{[^}]*minHeight: touchTarget`));
+		expect(source.match(/usePressFeedback\("row"\)/g)?.length).toBeGreaterThanOrEqual(10);
+		expect(source).not.toContain("press.opacity");
+		expect(styles).toMatch(/\n\t+statusRow: \{ minHeight: touchTarget,/);
+		expect(source).not.toContain("STATUS_ROW_HEIGHT");
+	});
+
+	it("show work in progress with the system spinner", () => {
+		expect(source).not.toContain("<ActivityIndicator");
+	});
+
+	// Retry is a control, so it takes the system's glyph rather than a timeline one.
+	it("retry a failed attachment under the system refresh glyph", () => {
+		const attachment = source.slice(source.indexOf("function StagedAttachment"), source.indexOf("function deliveryCopy"));
+		expect(attachment).toContain('<AppSymbol name="refresh" size={iconSize.xs} color={t.textTertiary} />');
+		expect(attachment).not.toContain("refresh-cw");
+	});
+
+	it("set nothing below 13pt", () => {
+		expect(styles).not.toContain("type.caption2");
+		expect(styles).not.toContain("type.caption1");
+		expect(styles).toMatch(/turnState: \{[^}]*type\.footnote\.fontSize, lineHeight: type\.footnote\.lineHeight/);
+	});
+
+	// The status row takes the startup checklist header's place, so the two are
+	// one size and the handoff does not jump.
+	it("match the startup checklist header they hand off to", () => {
+		const startup = readFileSync(new URL("./SessionStartup.tsx", import.meta.url), "utf8");
+		expect(startup).toMatch(/\n\theader: \{ minHeight: touchTarget,/);
+		expect(startup).toMatch(/headerLabel: \{[^}]*type\.footnote\.fontSize, lineHeight: type\.footnote\.lineHeight/);
+		expect(styles).toMatch(/\n\t+statusRow: \{ minHeight: touchTarget,[^}]*paddingVertical: space\.xs, borderBottomWidth: rowDividerWidth/);
+		expect(startup).toMatch(/\n\theader: \{[^}]*paddingVertical: space\.xs, borderBottomWidth: rowDividerWidth/);
+	});
+
+	// The bullet's column is one line of the path at the user's text size, so the
+	// bullet stays level with the path's first line as the text grows.
+	it("draw a file list's bullets beside the selectable path", () => {
+		const fileList = source.slice(source.indexOf("function FileList"), source.indexOf("function printable"));
+		expect(fileList).toContain("<FirstLineMarker lineStyle={styles.fileLine} style={styles.fileBulletColumn}><View style={styles.fileBullet} /></FirstLineMarker>");
+		expect(fileList).not.toContain("•");
+		expect(styles).toContain("filePath: { flex: 1, color: t.textSecondary, ...fileLine },");
+		expect(styles).not.toMatch(/fileBullet: \{[^}]*marginTop/);
+	});
+});
+
+describe("state in words", () => {
+	it("names a failed command or tool call instead of only turning it red", () => {
+		const command = source.slice(source.indexOf("function GenericActivityRow"), source.indexOf("function TerminalInput"));
+		const tool = source.slice(source.indexOf("function McpToolRow"), source.indexOf("function JsonPayload"));
+		expect(command).toContain('{activity.status === "failed" ? <Text style={styles.runFailed}>failed</Text> : null}');
+		expect(tool).toContain('{failed && activity.status !== "running" ? <Text style={styles.runFailed}>failed</Text> : null}');
+	});
+
+	it("heads the empty conversation", () => {
+		expect(source).toContain('<Text accessibilityRole="header" style={styles.emptyTitle}>');
+	});
+});
+
 describe("message edit list identity", () => {
 	it("keeps the editable sets' identity while their contents are unchanged", () => {
 		expect(source).toContain("if (!sameEditableTurns(editsRef.current, nextEdits)) editsRef.current = nextEdits;");
@@ -88,6 +346,60 @@ describe("message edit list identity", () => {
 	});
 });
 
+
+describe("following the newest message", () => {
+	it("opens on the newest rows instead of drawing the oldest and jumping to an undrawn end", () => {
+		expect(source).toContain("openedAt.current ??= openingRow(groups.length, OPENING_ROWS);");
+		expect(source).toContain("initialScrollIndex={initialScrollIndex > 0 ? initialScrollIndex : undefined}");
+		expect(source).toContain("if (index === initialScrollIndex && followsTail.current) {");
+	});
+
+	// Drawn while it scrolled the rest of the way as rows measured, the
+	// conversation showed and then slid down to the newest message.
+	it("stays hidden until its opening scroll holds still, and no longer than a moment", () => {
+		expect(source).toContain("style={[styles.list, !opened && styles.opening]}");
+		expect(source).toContain("opening: { opacity: 0 },");
+		expect(source.match(/settleOpening\(\);/g)).toHaveLength(2);
+		expect(source).toContain("const cap = setTimeout(() => setOpened(true), OPENING_REVEAL_CAP_MS);");
+	});
+
+	it("stops following on the person's own drag and resumes only at rest at the end", () => {
+		expect(source).toContain("onScrollBeginDrag={() => { dragging.current = true; followsTail.current = false; }}");
+		expect(source).toContain("onScrollEndDrag={settle}");
+		expect(source).toContain("onMomentumScrollEnd={settle}");
+		expect(source).toContain("if (tail && !dragging.current) followsTail.current = true;");
+		// A scroll event alone never turns the follow off: rows drawn above change
+		// the content's size mid-drag without the person having left the end.
+		expect(source).not.toMatch(/followsTail\.current = contentSize\.height/);
+		expect(source).toContain("if (followsTail.current) requestAnimationFrame(followTail);");
+	});
+	// A follow from JS mid-keyboard jumped the list to the keyboard's end and back.
+	// A tap on a reply gives its selectable text focus; the list scrolled that
+	// text into view just as the keyboard began to close.
+	it("does not scroll to text a tap has focused", () => {
+		expect(source).toContain("scrollsChildToFocus={false}");
+		expect(source).toContain("onEditFocus={revealEdit}");
+	});
+
+	// With focus scrolling off, a request form's field reveals itself when it
+	// takes focus, after the keyboard opens, and only when it is hidden. Only the
+	// newest focus scrolls (createFieldReveals, tested in fieldReveal.test.ts).
+	it("reveals a focused request field above the keyboard and the composer", () => {
+		expect(source).toContain("<RevealFocusedField.Provider value={revealField}>");
+		expect(source).toContain("const [fieldReveals] = useState(() => createFieldReveals(Keyboard, FIELD_REVEAL_WAIT_MS));");
+		expect(source).toContain("useEffect(() => fieldReveals.cancel, [fieldReveals]);");
+		expect(source).toContain("if (target === undefined || !isCurrent()) return;");
+		expect(source).toContain("visibleBottom: Math.min(listBottom, keyboardTop ?? listBottom) - bottomInset - space.md,");
+		expect(source).toContain("if (fieldRevealOffset({ ...spans, offset: 0 }) === undefined) return;");
+	});
+
+	it("holds a follow to the end while the keyboard moves, and makes it once it stops", () => {
+		expect(source).toContain("if (keyboardOffset !== undefined && keyboardMoving.value) {");
+		expect(source).toContain("useEffect(() => onKeyboardEnd(() => latestFollow.current()), [onKeyboardEnd]);");
+		// One keyboard handler for the screen (see KeyboardMotionScope), not one of its own.
+		expect(source).not.toContain("useKeyboardHandler(");
+	});
+});
 
 describe("plan activity row", () => {
 	const planActivity = source.slice(source.indexOf("function PlanActivity"), source.indexOf("function ActivityRun"));
@@ -97,5 +409,24 @@ describe("plan activity row", () => {
 		// row's status is "running" while any step is unfinished, not while the turn runs.
 		expect(planActivity).toContain("<TurnPlan plan={{ explanation: activity.detail?.explanation, steps }} />");
 		expect(planActivity).not.toMatch(/<TurnPlan[^>]*\b(title|live)=/);
+	});
+});
+
+// Each keyboard frame committed the keyboard's transforms through React's
+// shadow tree, and every Compose host re-measured for the keyboard's insets.
+describe("keyboard frames on Android", () => {
+	const read = (path: string) => readFileSync(new URL(path, import.meta.url), "utf8");
+
+	it("applies Reanimated's non-layout props without a shadow tree commit", () => {
+		const pkg = JSON.parse(read("../../package.json")) as { reanimated?: { staticFeatureFlags?: Record<string, boolean> } };
+		expect(pkg.reanimated?.staticFeatureFlags?.ANDROID_SYNCHRONOUSLY_UPDATE_UI_PROPS).toBe(true);
+	});
+
+	it("keeps the keyboard from Compose hosts that ignore it", () => {
+		const patch = read("../../patches/@expo+ui+57.0.26.patch");
+		expect(patch).toContain("+    if (previous != null && previous != insets && sameButKeyboard(previous, insets)) {");
+		expect(patch).toContain("+    return super.dispatchApplyWindowInsets(withoutKeyboard(insets))");
+		expect(patch).toContain("+    if (heldInsetsAnimations.remove(animation)) return");
+		expect(patch).toContain("restProps.ignoreSafeAreaKeyboardInsets ?? !restProps.useViewportSizeMeasurement");
 	});
 });

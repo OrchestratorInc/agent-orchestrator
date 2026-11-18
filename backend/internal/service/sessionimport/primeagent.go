@@ -75,7 +75,7 @@ func readPrimeAgentTranscript(ctx context.Context, root string, paths ...string)
 	if json.Unmarshal(line, &header) != nil || header.Type != "session" || header.Version != 3 {
 		return transcript{}, errors.New("prime native history requires version 3")
 	}
-	t, err := readPiTranscript(ctx, root, paths...)
+	t, err := readPiFamilyTranscript(ctx, domain.HarnessPrimeAgent, root, paths...)
 	t.harness = domain.HarnessPrimeAgent
 	return t, err
 }
@@ -93,7 +93,7 @@ func discoverPrimeAgent(ctx context.Context, root string) ([]sourceFiles, error)
 		if err != nil {
 			return nil //nolint:nilerr // A concurrently removed source is ineligible.
 		}
-		files = append(files, sourceFiles{harness: domain.HarnessPrimeAgent, root: root, key: piNativeID(path), paths: []string{path}, modTime: info.ModTime(), size: info.Size()})
+		files = append(files, sourceFiles{harness: domain.HarnessPrimeAgent, root: root, key: piFamilyNativeID(path), paths: []string{path}, modTime: info.ModTime(), size: info.Size()})
 		return nil
 	})
 	return files, err

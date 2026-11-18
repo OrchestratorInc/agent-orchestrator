@@ -24,21 +24,28 @@ import (
 // Tool output and images dominate provider files, so whole files stream while
 // oversized records keep only their short top-level fields.
 const (
-	maxTranscriptBytes = 1 << 30
-	maxVisibleBytes    = 16 << 20
+	maxTranscriptBytes = 4 << 30
+	maxVisibleBytes    = 32 << 20
 	maxSkimMember      = 4 << 10
 )
 
-// Variables so tests can use small records. A string over maxSkimString in an
+// Variables so tests can use small limits. A string over maxSkimString in an
 // oversized record is omitted; it would exceed maxVisibleBytes on its own.
 var (
 	maxRecordBytes = 64 << 20
 	maxSkimString  = maxVisibleBytes
-	// Claude text held while the active branch is still unknown, across all branches.
-	maxClaudeHeld   = 2 * maxVisibleBytes
+	// Text a reader holds before it can trim, such as while the active branch
+	// is still unknown, across all branches.
+	maxHeldText     = 2 * maxVisibleBytes
 	nativeIDPattern = regexp.MustCompile(`^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$`)
 	// Codex injects these as separate user-role items; they are not prompts.
 	codexContextPrefixes = []string{"# AGENTS.md instructions", "<environment_context", "<user_instructions", "<INSTRUCTIONS>", "<external_codex_apps_open_page", "<recommended_plugins", "<skill>", "<codex_internal_context", "<turn_aborted"}
+)
+
+var (
+	errNativeIdentityMismatch = errors.New("native identity mismatch")
+	errNoReadableConversation = errors.New("no readable native conversation")
+	errRelativeCWD            = errors.New("transcript working directory must be absolute")
 )
 
 // Message is the readable archive; tool payloads and provider internal state are not display messages.
@@ -51,13 +58,22 @@ type transcript struct {
 	title                     string
 	messages                  []Message
 	last                      time.Time
-	// model is the model the conversation last answered with: a Claude model
-	// id, or Pi's provider/model. effort is Pi's thinking level.
-	model, effort string
 	// shortened reports visible text that was too large to keep.
 	shortened bool
 	// fingerprint is the optional native-input evidence captured by discovery.
 	fingerprint string
+	// placeAt is the checkout a chat belongs to once its own folder is gone.
+	placeAt string
+}
+
+// folder is where a chat belongs: its own folder, or placeAt once that is gone.
+func (t transcript) folder() string {
+	if t.placeAt != "" {
+		if info, err := os.Stat(t.cwd); err != nil || !info.IsDir() {
+			return t.placeAt
+		}
+	}
+	return t.cwd
 }
 
 type textBlock struct{ Type, Text string }
@@ -88,7 +104,6 @@ type record struct {
 	Message           struct {
 		ID      string      `json:"id"`
 		Role    string      `json:"role"`
-		Model   string      `json:"model"`
 		Content contentText `json:"content"`
 	} `json:"message"`
 	Payload struct {
@@ -173,11 +188,6 @@ func claudePrompt(text string) (string, bool) {
 		name += " " + args
 	}
 	return name, true
-}
-
-// codexThreadID is the rollout's own identity; copied fork ancestry never replaces it.
-func codexThreadID(path string) string {
-	return nativeconfig.CodexRolloutThread(path)
 }
 
 // eachRecord streams JSONL. A record too large to decode is rewritten as it
@@ -344,41 +354,31 @@ type tagged struct {
 
 // claudeNode keeps only display facts, so tool payloads are not retained while walking ancestry.
 type claudeNode struct {
-	typ, role, id, uuid, parent, logicalParent, cwd, text, model string
-	at                                                           time.Time
-	hidden, omitted, dropped                                     bool
+	typ, role, id, uuid, parent, logicalParent, cwd, text string
+	at                                                    time.Time
+	hidden, omitted, dropped                              bool
 }
 
 // readTranscript reads one native conversation; Codex segments are passed oldest first.
 func readTranscript(ctx context.Context, harness domain.AgentHarness, root string, paths ...string) (transcript, error) {
-	if importer, ok := harnessImporters[harness]; ok {
-		return importer.read(ctx, root, paths...)
+	if read := harnessImporters[harness].read; read != nil {
+		return read(ctx, root, paths...)
 	}
-	if harness == domain.HarnessOMP {
-		return readOMPTranscript(ctx, root, paths...)
-	}
-	if harness == domain.HarnessPi {
-		return readPiTranscript(ctx, root, paths...)
-	}
-	if harness == domain.HarnessKimchi {
-		return readKimchiTranscript(ctx, root, paths...)
-	}
+	return transcript{harness: harness, root: root}, errors.New("no transcript reader")
+}
+
+func readClaudeTranscript(ctx context.Context, root string, paths ...string) (transcript, error) {
+	return readJSONLTranscript(ctx, domain.HarnessClaudeCode, root, paths...)
+}
+
+func readCodexTranscript(ctx context.Context, root string, paths ...string) (transcript, error) {
+	return readJSONLTranscript(ctx, domain.HarnessCodex, root, paths...)
+}
+
+func readJSONLTranscript(ctx context.Context, harness domain.AgentHarness, root string, paths ...string) (transcript, error) {
 	t := transcript{harness: harness, root: root}
 	if len(paths) == 0 {
 		return t, errors.New("no transcript")
-	}
-	// Harnesses whose transcript format differs from the Claude/Codex JSONL
-	// handled below parse in their own file.
-	switch harness {
-	case domain.HarnessCopilot:
-		return readCopilotTranscript(ctx, root, paths...)
-	case domain.HarnessKimi:
-		return readKimiTranscript(ctx, root, paths...)
-	case domain.HarnessQwen:
-		return readQwenTranscript(ctx, root, paths...)
-	case domain.HarnessOpenCode:
-		// OpenCode's history lives in a SQLite database read by session id.
-		return readOpenCodeTranscript(ctx, root, paths...)
 	}
 	root = canonical(root)
 	providerRoot, err := os.OpenRoot(root)
@@ -391,11 +391,9 @@ func readTranscript(ctx context.Context, harness domain.AgentHarness, root strin
 	case domain.HarnessClaudeCode:
 		t.nativeID = strings.TrimSuffix(filepath.Base(paths[0]), ".jsonl")
 	case domain.HarnessCodex:
-		t.nativeID = codexThreadID(paths[0])
-	case domain.HarnessDroid:
-		t.nativeID = strings.TrimSuffix(filepath.Base(paths[0]), ".jsonl")
+		// The rollout's own identity; copied fork ancestry never replaces it.
+		t.nativeID = nativeconfig.CodexRolloutThread(paths[0])
 	}
-	var droidState droidParse
 	var (
 		items       []tagged
 		ids         = map[string]int{}
@@ -464,9 +462,6 @@ func readTranscript(ctx context.Context, harness domain.AgentHarness, root strin
 		if err := ctx.Err(); err != nil {
 			return err
 		}
-		if harness == domain.HarnessDroid {
-			return droidState.handle(line, &t, now, add)
-		}
 		var r record
 		if err := json.Unmarshal(line, &r); err != nil {
 			return nil //nolint:nilerr // A torn or foreign record does not hide the rest of the conversation.
@@ -489,7 +484,7 @@ func readTranscript(ctx context.Context, harness domain.AgentHarness, root strin
 			if title := strings.TrimSpace(r.AITitle); title != "" && own {
 				t.title = title
 			}
-			node := claudeNode{typ: r.Type, role: r.Message.Role, id: r.Message.ID, model: r.Message.Model, uuid: r.UUID, parent: r.ParentUUID, logicalParent: r.LogicalParentUUID, cwd: r.CWD, at: r.Timestamp, hidden: r.Meta || r.CompactSummary, omitted: r.Omitted}
+			node := claudeNode{typ: r.Type, role: r.Message.Role, id: r.Message.ID, uuid: r.UUID, parent: r.ParentUUID, logicalParent: r.LogicalParentUUID, cwd: r.CWD, at: r.Timestamp, hidden: r.Meta || r.CompactSummary, omitted: r.Omitted}
 			if r.Type == "user" || r.Type == "assistant" {
 				node.text = string(r.Message.Content)
 			}
@@ -516,13 +511,7 @@ func readTranscript(ctx context.Context, harness domain.AgentHarness, root strin
 				claude[index].text, claude[index].dropped = "", node.text != ""
 			}
 			claudeHeld += len(claude[index].text)
-			// Drop the oldest text first, as trimVisible would, but keep the opening prompt.
-			for ; claudeHeld > maxClaudeHeld && claudeDrop < len(claude); claudeDrop++ {
-				if claudeDrop != claudeFirst && claude[claudeDrop].text != "" {
-					claudeHeld -= len(claude[claudeDrop].text)
-					claude[claudeDrop].text, claude[claudeDrop].dropped = "", true
-				}
-			}
+			dropOldestHeld(claude, &claudeHeld, &claudeDrop, claudeFirst, func(n *claudeNode) (*string, *bool) { return &n.text, &n.dropped })
 			return nil
 		}
 		if r.Omitted && (r.Type == "response_item" || r.Type == "event_msg") {
@@ -535,7 +524,7 @@ func readTranscript(ctx context.Context, harness domain.AgentHarness, root strin
 			}
 			sawMeta = true
 			if !strings.EqualFold(r.Payload.ID, t.nativeID) {
-				return errors.New("native identity mismatch")
+				return errNativeIdentityMismatch
 			}
 			var source map[string]json.RawMessage
 			if json.Unmarshal(r.Payload.Source, &source) == nil && source["subagent"] != nil {
@@ -580,33 +569,17 @@ func readTranscript(ctx context.Context, harness domain.AgentHarness, root strin
 	}
 	t.path = t.paths[len(t.paths)-1]
 	if harness == domain.HarnessCodex && !sawMeta {
-		return t, errors.New("no readable native conversation")
-	}
-	if harness == domain.HarnessDroid && !droidState.sawStart {
-		return t, errors.New("no readable native conversation")
+		return t, errNoReadableConversation
 	}
 	chain := claude
 	if claudeLeaf != "" {
-		// Follow the active branch so rewound prompts are not shown as history.
-		chain = nil
-		visited := map[string]bool{}
-		for claudeLeaf != "" {
-			index, found := claudeIndex[claudeLeaf]
-			if !found || visited[claudeLeaf] {
-				break // Show the reachable branch; a dangling parent must not hide the conversation.
+		chain = activeBranch(claude, claudeIndex, claudeLeaf, func(n claudeNode) string {
+			// Compaction starts a new root; its logical parent continues the visible history.
+			if _, found := claudeIndex[n.logicalParent]; n.parent == "" && found {
+				return n.logicalParent
 			}
-			visited[claudeLeaf] = true
-			node := claude[index]
-			chain = append(chain, node)
-			claudeLeaf = node.parent
-			if claudeLeaf == "" {
-				// Compaction starts a new root; its logical parent continues the visible history.
-				if _, found := claudeIndex[node.logicalParent]; found {
-					claudeLeaf = node.logicalParent
-				}
-			}
-		}
-		slices.Reverse(chain)
+			return n.parent
+		})
 	}
 	for _, node := range chain {
 		if t.cwd == "" {
@@ -616,10 +589,6 @@ func readTranscript(ctx context.Context, harness domain.AgentHarness, root strin
 			continue
 		}
 		t.shortened = t.shortened || node.omitted || node.dropped
-		// Claude marks locally generated replies, such as errors, as "<synthetic>".
-		if node.model != "" && node.model != "<synthetic>" {
-			t.model = node.model
-		}
 		role := node.role
 		if role == "" {
 			role = node.typ
@@ -642,19 +611,24 @@ func readTranscript(ctx context.Context, harness domain.AgentHarness, root strin
 	if harness == domain.HarnessCodex {
 		prompted = true
 	}
-	if harness == domain.HarnessDroid {
-		prompted = droidState.prompted
-	}
 	trim()
 	for _, item := range items {
 		t.messages = append(t.messages, item.Message)
 	}
 	// A session of only slash commands, such as /login, is not a conversation to continue.
 	if !nativeIDPattern.MatchString(t.nativeID) || !prompted || !slices.ContainsFunc(t.messages, func(m Message) bool { return m.Role == domain.MessageRoleUser }) {
-		return t, errors.New("no readable native conversation")
+		return t, errNoReadableConversation
 	}
+	finishErr := finishTranscript(&t)
+	return t, finishErr
+}
+
+// finishTranscript rejects a relative working directory, dates
+// undated messages by the newest record or else the file's mtime, and titles an
+// untitled conversation by its opening prompt.
+func finishTranscript(t *transcript) error {
 	if t.cwd != "" && !filepath.IsAbs(t.cwd) {
-		return t, errors.New("transcript working directory must be absolute")
+		return errRelativeCWD
 	}
 	if t.last.IsZero() {
 		if info, err := os.Stat(t.path); err == nil {
@@ -674,11 +648,40 @@ func readTranscript(ctx context.Context, harness domain.AgentHarness, root strin
 			}
 		}
 	}
-	t.title = strings.Join(strings.Fields(t.title), " ")
-	if runes := []rune(t.title); len(runes) > 100 {
-		t.title = string(runes[:100]) + "…"
+	t.title = importTitle(t.title)
+	return nil
+}
+
+// activeBranch follows parent links back from leaf and returns the branch root
+// first, so rewound or abandoned turns are not shown as history. A missing link
+// or a cycle ends the walk: a dangling parent must not hide the conversation.
+func activeBranch[N any](nodes []N, index map[string]int, leaf string, parent func(N) string) []N {
+	var chain []N
+	visited := map[string]bool{}
+	for leaf != "" && !visited[leaf] {
+		i, found := index[leaf]
+		if !found {
+			break
+		}
+		visited[leaf] = true
+		chain = append(chain, nodes[i])
+		leaf = parent(nodes[i])
 	}
-	return t, nil
+	slices.Reverse(chain)
+	return chain
+}
+
+// dropOldestHeld clears held text oldest first, as trimVisible would, until at
+// most maxHeldText remains, keeping the opening text at index first. drop is
+// the oldest node whose text may still be held; fields names a node's text and
+// the flag that marks it dropped.
+func dropOldestHeld[N any](nodes []N, held, drop *int, first int, fields func(*N) (text *string, dropped *bool)) {
+	for ; *held > maxHeldText && *drop < len(nodes); *drop++ {
+		if text, dropped := fields(&nodes[*drop]); *drop != first && *text != "" {
+			*held -= len(*text)
+			*text, *dropped = "", true
+		}
+	}
 }
 
 // codexVisible keeps one representation of each message. Codex writes a prompt

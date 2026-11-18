@@ -15,9 +15,9 @@ import path from "node:path";
 import { writeFile } from "node:fs/promises";
 import type { Dialog, IpcMain, NativeImage, SaveDialogOptions, Session } from "electron";
 import { markDownloaded } from "./quarantine";
+import { MAX_CHAT_IMAGE_BYTES } from "../shared/chat-image";
 
-/** A chat image larger than this is not a screenshot; refuse rather than buffer it. */
-export const MAX_CHAT_IMAGE_BYTES = 64 * 1024 * 1024;
+export { MAX_CHAT_IMAGE_BYTES };
 
 export type ChatImageBytes = { bytes: Uint8Array; mimeType: string };
 

@@ -28,7 +28,7 @@ const repinPOSIX = `if [ -n "$AO_PATH_PIN" ]; then case ":$PATH:" in ":$AO_PATH_
 
 const repinPromptHook = `if [ -z "$_AO_PATH_REPINNED" ]; then _AO_PATH_REPINNED=1; ` + repinPOSIX + `; fi`
 
-const bashEnvWrapper = "# Written by AO: runs your BASH_ENV, then keeps AO's ao first on PATH.\n" +
+const bashEnvWrapper = "# Written by Orchestrator: runs your BASH_ENV, then keeps Orchestrator's ao first on PATH.\n" +
 	`if [ -n "$AO_USER_BASH_ENV" ] && [ -r "$AO_USER_BASH_ENV" ]; then . "$AO_USER_BASH_ENV"; fi` + "\n" +
 	repinPOSIX + "\n"
 
@@ -45,11 +45,11 @@ func LoginShellEnv(path string, getenv func(string) string, configured map[strin
 		return nil, fmt.Errorf("pinned PATH must start with an absolute directory, got %q", pin)
 	}
 	if !filepath.IsAbs(dataDir) {
-		return nil, fmt.Errorf("AO login-shell data directory must be absolute, got %q", dataDir)
+		return nil, fmt.Errorf("the Orchestrator login-shell data directory must be absolute, got %q", dataDir)
 	}
 	dir := filepath.Join(dataDir, "runtime", "login-shell")
 	if err := writeLoginShellFiles(dir); err != nil {
-		return nil, fmt.Errorf("write AO login-shell wrappers: %w", err)
+		return nil, fmt.Errorf("write Orchestrator login-shell wrappers: %w", err)
 	}
 	bashEnv := filepath.Join(dir, "bash_env")
 	lookup := func(key string) string {
@@ -87,7 +87,7 @@ func LoginShellEnv(path string, getenv func(string) string, configured map[strin
 }
 
 func zshWrapper(name string) string {
-	return "# Written by AO: runs your " + name + ", then keeps AO's ao first on PATH.\n" +
+	return "# Written by Orchestrator: runs your " + name + ", then keeps Orchestrator's ao first on PATH.\n" +
 		"_ao_zdotdir=\"$ZDOTDIR\"\n" +
 		"ZDOTDIR=\"${AO_USER_ZDOTDIR:-$HOME}\"\n" +
 		// /etc/zshrc names the history file after ZDOTDIR before .zshrc runs.

@@ -48,6 +48,7 @@ export function sideConversationMessage(message: SideMessage, turns: readonly Si
 		sequence: message.sequence,
 		revision: message.revision,
 		role: user ? "user" : "assistant",
+		clientMessageId: user ? turns.find((turn) => turn.id === message.turnId)?.clientMessageId : undefined,
 		origin: user ? "human" : "provider",
 		text: message.text,
 		streaming: message.streaming,
@@ -55,10 +56,12 @@ export function sideConversationMessage(message: SideMessage, turns: readonly Si
 		content: user
 			? (turns.find((turn) => turn.id === message.turnId)?.references ?? []).map((ref) => ({
 					type: "excerpt",
+					annotationId: ref.id, annotationOrder: ref.order,
 					text: ref.selection,
+					comment: ref.comment || undefined,
 					sourceConversationId: ref.conversationId,
 					sourceMessageId: ref.messageId,
-					sourceRevision: ref.revision,
+					sourceRevision: ref.revision, snapshot: ref.snapshot,
 				}))
 			: undefined,
 	};
@@ -120,6 +123,8 @@ function sideConversationTurn(turn: SideTurn): ConversationTurn {
 
 function controllerState(side: SideSnapshot["side"], running: boolean): ControllerState {
 	switch (side.state) {
+		case "draft":
+			return "ready";
 		case "ready":
 			return running ? "busy" : "ready";
 		case "opening":
@@ -139,7 +144,7 @@ function controllerState(side: SideSnapshot["side"], running: boolean): Controll
 export function sideConversationSnapshot(snapshot: SideSnapshot, olderPages: readonly SideSnapshot[] = []): ConversationSnapshot {
 	const pages = [...olderPages].reverse().concat(snapshot);
 	const turns = dedupe(pages.flatMap((page) => page.turns ?? []));
-	const queued = new Set(turns.filter((turn) => turn.state === "queued").map((turn) => turn.id));
+	const queued = new Set(turns.filter((turn) => turn.state === "queued" && turn.id !== snapshot.side.openingTurnId).map((turn) => turn.id));
 	const entries = [
 		...dedupe(pages.flatMap((page) => page.messages ?? []))
 			.filter((message) => !queued.has(message.turnId))

@@ -1,5 +1,6 @@
-import { Search } from "lucide-react";
-import { useCallback, useEffect, useId, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from "react";
+import { Search } from "@/components/app-icons";
+import { useCallback, useId, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from "react";
+import { useEdgeFade } from "../../hooks/useEdgeFade";
 import { useTranslation } from "react-i18next";
 import { cn } from "../../lib/utils";
 
@@ -72,17 +73,12 @@ export function ModelMenuChoices<T extends { id: string; label: string }>({
 	);
 	const searchRef = useRef<HTMLInputElement>(null);
 	const scrollRef = useRef<HTMLDivElement>(null);
-	const [canScrollDown, setCanScrollDown] = useState(false);
-	const updateScrollCue = useCallback(() => {
-		const element = scrollRef.current;
-		setCanScrollDown(Boolean(element && element.scrollHeight - element.scrollTop > element.clientHeight + 1));
-	}, []);
+	useEdgeFade(scrollRef);
 	const handleScroll = useCallback(() => {
-		updateScrollCue();
 		const element = scrollRef.current;
 		if (!element) return;
 		if (element.scrollHeight - element.scrollTop - element.clientHeight < 150) loadMore();
-	}, [loadMore, updateScrollCue]);
+	}, [loadMore]);
 	// A new search starts at the top; a refreshed (polled) list keeps its scroll.
 	// Not on mount: the list opens at the top, and reading scrollTop then forces a
 	// style pass over the whole page while the menu is still being inserted.
@@ -92,16 +88,6 @@ export function ModelMenuChoices<T extends { id: string; label: string }>({
 		searchedQuery.current = normalizedQuery;
 		if (scrollRef.current) scrollRef.current.scrollTop = 0;
 	}, [normalizedQuery]);
-	// Measured after paint: reading scrollHeight in a layout effect reflows every row per keystroke.
-	useEffect(() => {
-		const frame = requestAnimationFrame(updateScrollCue);
-		const element = scrollRef.current;
-		if (!element || typeof ResizeObserver === "undefined") return () => cancelAnimationFrame(frame);
-		const observer = new ResizeObserver(updateScrollCue);
-		observer.observe(element);
-		return () => { cancelAnimationFrame(frame); observer.disconnect(); };
-	}, [matches, updateScrollCue]);
-
 	return (
 		<div className="flex min-h-0 max-h-[calc(var(--size-select-menu-max)-var(--space-2)*2)] flex-col">
 			{showSearch && (
@@ -165,7 +151,7 @@ export function ModelMenuChoices<T extends { id: string; label: string }>({
 			<div className="relative grid min-h-0 flex-1 grid-rows-[minmax(0,1fr)] overflow-hidden">
 				<div
 					ref={scrollRef}
-					className="model-menu-scroll min-h-0 overflow-y-auto overscroll-contain"
+					className="model-menu-scroll edge-fade min-h-0 overflow-y-auto overscroll-contain"
 					onScroll={handleScroll}
 					onKeyDownCapture={(event) => {
 						// A submenu's keys bubble here through React, not the DOM; they are its own.
@@ -208,10 +194,6 @@ export function ModelMenuChoices<T extends { id: string; label: string }>({
 						<p className="px-2 py-1.5 text-xs text-settings-muted">{t("settings.models.noMatches")}</p>
 					)}
 				</div>
-				<div
-					className={cn("model-menu-overflow-cue", canScrollDown ? "opacity-100" : "opacity-0")}
-					aria-hidden="true"
-				/>
 			</div>
 		</div>
 	);

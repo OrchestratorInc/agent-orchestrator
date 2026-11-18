@@ -20,6 +20,7 @@ const (
 
 type coordinatorStore interface {
 	ListWatchableUsageSources(context.Context) ([]domain.UsageSourceRecord, error)
+	ListFinalizingUsageSourceIDs(context.Context) ([]int64, error)
 	HasPendingUsageDiscovery(context.Context) (bool, error)
 }
 
@@ -31,6 +32,7 @@ type transcriptWatcher interface {
 	Events() <-chan TranscriptEvent
 	Errors() <-chan error
 	Start(context.Context) <-chan struct{}
+	SetRoots(context.Context, []string) error
 	Rebuild(context.Context, []string) error
 }
 
@@ -44,10 +46,10 @@ type CoordinatorConfig struct {
 	Initialize    func(context.Context) error
 	Reconcile     func(context.Context) error
 	ReconcilePath func(context.Context, string) error
+	WatchRoots    func(context.Context) ([]string, error)
 }
 
-// Coordinator turns filesystem, hook, startup, and retry signals into bounded
-// source ingestion work.
+// Coordinator ingests unread usage sources when Flush asks, and finalizing sources at once.
 type Coordinator struct {
 	store         coordinatorStore
 	ingestor      sourceIngestor
@@ -60,8 +62,11 @@ type Coordinator struct {
 	initialize    func(context.Context) error
 	reconcile     func(context.Context) error
 	reconcilePath func(context.Context, string) error
+	watchRoots    func(context.Context) ([]string, error)
 	refresh       chan struct{}
 	inventory     chan struct{}
+	flushes       chan chan struct{}
+	stopped       chan struct{}
 }
 
 // NewCoordinator constructs an event-driven usage coordinator.
@@ -98,8 +103,11 @@ func NewCoordinator(
 		initialize:    cfg.Initialize,
 		reconcile:     cfg.Reconcile,
 		reconcilePath: cfg.ReconcilePath,
+		watchRoots:    cfg.WatchRoots,
 		refresh:       make(chan struct{}, 1),
 		inventory:     make(chan struct{}, 1),
+		flushes:       make(chan chan struct{}),
+		stopped:       make(chan struct{}),
 	}
 }
 
@@ -118,6 +126,23 @@ func (c *Coordinator) NotifyInventoryChanged() {
 	select {
 	case c.inventory <- struct{}{}:
 	default:
+	}
+}
+
+// Flush ingests every unread source and returns when none is queued or running, or ctx ends.
+func (c *Coordinator) Flush(ctx context.Context) {
+	done := make(chan struct{})
+	select {
+	case c.flushes <- done:
+	case <-c.stopped:
+		return
+	case <-ctx.Done():
+		return
+	}
+	select {
+	case <-done:
+	case <-c.stopped:
+	case <-ctx.Done():
 	}
 }
 
@@ -145,6 +170,7 @@ func (c *Coordinator) Start(ctx context.Context) <-chan struct{} {
 }
 
 func (c *Coordinator) run(ctx context.Context) {
+	defer close(c.stopped)
 	watcherDone := c.watcher.Start(ctx)
 	workerCtx, cancelWorkers := context.WithCancel(ctx)
 	work := make(chan int64, c.queueSize)
@@ -174,12 +200,17 @@ func (c *Coordinator) run(ctx context.Context) {
 	states := make(map[int64]*sourceWorkState)
 	retries := make(map[int64]time.Time)
 	paths := make(map[string][]int64)
+	unread := make(map[int64]struct{})
+	finalizing := make(map[int64]struct{})
+	var waiters []chan struct{}
 	var ready []int64
+	running := 0
 	var retryTimer *time.Timer
 	initializePending := c.initialize != nil
 
 	enqueue := func(sourceID int64) {
 		delete(retries, sourceID)
+		delete(unread, sourceID)
 		state := states[sourceID]
 		if state == nil {
 			state = &sourceWorkState{}
@@ -194,6 +225,15 @@ func (c *Coordinator) run(ctx context.Context) {
 		}
 		state.queued = true
 		ready = append(ready, sourceID)
+	}
+	mark := func(sourceID int64) {
+		if _, ok := finalizing[sourceID]; ok || len(waiters) > 0 {
+			enqueue(sourceID)
+			return
+		}
+		if state := states[sourceID]; state == nil || !state.queued {
+			unread[sourceID] = struct{}{}
+		}
 	}
 	scheduleRetry := func(sourceID int64, at time.Time) {
 		if sourceID != refreshRetryID {
@@ -222,12 +262,20 @@ func (c *Coordinator) run(ctx context.Context) {
 			}
 		}
 		sources, err := c.store.ListWatchableUsageSources(ctx)
+		var finalizingIDs []int64
+		if err == nil {
+			finalizingIDs, err = c.store.ListFinalizingUsageSourceIDs(ctx)
+		}
 		if err != nil {
 			if ctx.Err() == nil {
 				c.logger.Warn("load watchable usage sources failed", "err", err)
 				scheduleRetry(refreshRetryID, c.now().UTC().Add(c.retryDelay))
 			}
 			return
+		}
+		clear(finalizing)
+		for _, sourceID := range finalizingIDs {
+			finalizing[sourceID] = struct{}{}
 		}
 		nextPaths := make(map[string][]int64)
 		live := make(map[int64]struct{}, len(sources))
@@ -240,11 +288,24 @@ func (c *Coordinator) run(ctx context.Context) {
 				scheduleRetry(source.ID, *source.NextRetryAt)
 				continue
 			}
-			enqueue(source.ID)
+			mark(source.ID)
 		}
 		sourcePaths := make([]string, 0, len(nextPaths))
 		for path := range nextPaths {
 			sourcePaths = append(sourcePaths, path)
+		}
+		if c.watchRoots != nil {
+			roots, err := c.watchRoots(ctx)
+			if err == nil {
+				err = c.watcher.SetRoots(ctx, roots)
+			}
+			if err != nil {
+				if ctx.Err() == nil {
+					c.logger.Warn("resolve usage transcript watch roots failed", "err", err)
+					scheduleRetry(refreshRetryID, c.now().UTC().Add(c.retryDelay))
+				}
+				return
+			}
 		}
 		if err := c.watcher.Rebuild(ctx, sourcePaths); err != nil {
 			if ctx.Err() == nil {
@@ -259,6 +320,11 @@ func (c *Coordinator) run(ctx context.Context) {
 			}
 			if _, ok := live[sourceID]; !ok {
 				delete(retries, sourceID)
+			}
+		}
+		for sourceID := range unread {
+			if _, ok := live[sourceID]; !ok {
+				delete(unread, sourceID)
 			}
 		}
 		paths = nextPaths
@@ -293,6 +359,12 @@ func (c *Coordinator) run(ctx context.Context) {
 	events := c.watcher.Events()
 	watcherErrors := c.watcher.Errors()
 	for {
+		if len(waiters) > 0 && len(ready) == 0 && running == 0 {
+			for _, done := range waiters {
+				close(done)
+			}
+			waiters = nil
+		}
 		var workOut chan int64
 		var nextSourceID int64
 		if len(ready) > 0 {
@@ -309,10 +381,12 @@ func (c *Coordinator) run(ctx context.Context) {
 			return
 		case workOut <- nextSourceID:
 			ready = ready[1:]
+			running++
 			state := states[nextSourceID]
 			state.queued = false
 			state.running = true
 		case completed := <-results:
+			running--
 			state := states[completed.sourceID]
 			if state == nil {
 				state = &sourceWorkState{}
@@ -381,7 +455,7 @@ func (c *Coordinator) run(ctx context.Context) {
 				sourceIDs = paths[path]
 			}
 			for _, sourceID := range sourceIDs {
-				enqueue(sourceID)
+				mark(sourceID)
 			}
 		case err, ok := <-watcherErrors:
 			if !ok {
@@ -393,6 +467,11 @@ func (c *Coordinator) run(ctx context.Context) {
 			refreshInventory(true)
 		case <-c.inventory:
 			refreshInventory(false)
+		case done := <-c.flushes:
+			waiters = append(waiters, done)
+			for sourceID := range unread {
+				enqueue(sourceID)
+			}
 		case <-retryC:
 			now := c.now().UTC()
 			for sourceID, at := range retries {

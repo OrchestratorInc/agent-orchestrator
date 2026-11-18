@@ -22,6 +22,7 @@
 
 import { memo, useCallback, useEffect, useState, type MouseEvent } from "react";
 import { cn } from "../../lib/utils";
+import { Pressable } from "../ui/pressable";
 import { isWebLink, openLinkInSystemBrowser } from "../../lib/external-link-policy";
 import { isRenderableDiagram, renderMermaidDiagram, type DiagramTheme } from "../../lib/mermaid-diagram";
 import { CopyButton } from "./CopyButton";
@@ -143,8 +144,8 @@ export const MermaidBlock = memo(function MermaidBlock({
 	const showingDiagram = svg !== undefined && !showSource;
 
 	return (
-		<div className="chat-code group/code my-2.5 overflow-hidden rounded-lg border border-border bg-surface">
-			<div className="flex items-center gap-2 border-b border-border bg-raised/40 px-2.5 py-1">
+		<div data-chat-find-exclude="" className="chat-code group/code my-2.5 overflow-hidden rounded-lg border border-border bg-surface">
+			<div data-excerpt-exclude="" className="flex items-center gap-2 border-b border-border bg-raised/40 px-2.5 py-1">
 				<span className="text-caption text-muted-foreground">
 					mermaid
 				</span>
@@ -155,8 +156,7 @@ export const MermaidBlock = memo(function MermaidBlock({
 							aria-label="Diagram view"
 							className="flex items-center rounded-md border border-border bg-background p-0.5"
 						>
-							<button
-								type="button"
+							<Pressable
 								onClick={() => setShowSource(false)}
 								aria-pressed={!showSource}
 								className={cn(
@@ -167,9 +167,8 @@ export const MermaidBlock = memo(function MermaidBlock({
 								)}
 							>
 								Diagram
-							</button>
-							<button
-								type="button"
+							</Pressable>
+							<Pressable
 								onClick={() => setShowSource(true)}
 								aria-pressed={showSource}
 								className={cn(
@@ -180,7 +179,7 @@ export const MermaidBlock = memo(function MermaidBlock({
 								)}
 							>
 								Code
-							</button>
+							</Pressable>
 						</div>
 					) : null}
 					<div className="flex items-center gap-0.5 opacity-0 transition-opacity duration-150 focus-within:opacity-100 group-hover/code:opacity-100">
@@ -215,7 +214,7 @@ export const MermaidBlock = memo(function MermaidBlock({
 				</pre>
 			)}
 			{failed && !showSource ? (
-				<div className="border-t border-border px-3 py-1.5 text-caption text-muted-foreground">
+				<div data-excerpt-exclude="" className="border-t border-border px-3 py-1.5 text-caption text-muted-foreground">
 					Couldn&apos;t render this diagram — showing its source.
 				</div>
 			) : null}

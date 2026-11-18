@@ -4,6 +4,8 @@ The `ao` CLI is a thin Go/Cobra client for the local Agent Orchestrator daemon.
 It opens the desktop app and discovers, inspects, or stops its daemon through the
 loopback HTTP surface and the `running.json` handshake. It must not open SQLite
 directly or call runtime, workspace, tracker, or agent adapters in-process.
+The offline `ao triage` exception resolves agent executables and launches a local
+agent without the daemon, as described below.
 
 When using the CLI directly from a shell, make sure the daemon is running first
 by opening the desktop app or running `ao daemon` under a service manager. Product commands such as
@@ -19,7 +21,7 @@ go build -o ./bin/ao ./cmd/ao
 
 ## Current commands
 
-Every product command resolves to a daemon HTTP route. Run `ao <command>
+Product commands use daemon HTTP routes. The offline `ao triage` diagnostic launcher is an exception. Run `ao <command>
 --help` for the authoritative flag shape.
 
 ### Daemon control
@@ -41,13 +43,15 @@ to install the daemon with its Claude Chat runtime and start the OS user
 service. With `cloudflared` installed, setup `--tunnel` calls `ao remote-host
 enable --tunnel-only`: its authenticated listener binds only to loopback. At a
 terminal it then runs `ao remote-host link`; otherwise, or when the sign-in
-does not finish, it prints the host ID, address, and pairing password for
+does not finish, it prints the host ID, address, and a one-time pairing code for
 **Settings → Remote hosts** on another desktop. Direct
 `ao remote-host enable --tunnel` keeps both LAN and Cloudflare access for users
 who deliberately want both. Check `ao remote-host status` when the HTTPS
 address is ready.
-Running `enable` again prints the current details without rotating the
-password. `status` shows the password from the host's local shell. The LAN
+Running `enable` again prints the current details and a new pairing code
+without rotating the password. `ao remote-host pair` prints another code,
+`ao remote-host devices` lists and revokes paired devices, and
+`ao remote-host require-device-credentials on` stops accepting the password. The LAN
 listener uses plain HTTP; do not publish its port directly to the internet.
 Cloudflare terminates tunnel TLS and can see its traffic. Until the machine is
 linked to an account, by `ao remote-host link` or a signed-in desktop adding
@@ -65,6 +69,14 @@ it again to move the machine to another account. An agent
 without a terminal runs it in the background and reads its output; see
 [Set up a VM as an agent](../self-hosted-remote.md#set-up-a-vm-as-an-agent).
 
+### Report a problem
+
+Unreleased: `ao triage` collects bounded, redacted diagnostics and opens Claude Code
+or Codex to draft a report. It works with the daemon down and never starts it.
+Files go under `$AO_DATA_DIR/triage` when set, otherwise `~/.ao/triage`.
+After the agent exits, review the text and answer `[y/N]` before posting.
+See the [command reference](../../backend/internal/skillassets/using-ao/commands/triage.md).
+
 ### Product commands
 
 | Command                             | Daemon route                                   |
@@ -76,19 +88,25 @@ without a terminal runs it in the background and reads its output; see
 | `ao project rm <id>`                | `DELETE /api/v1/projects/{id}`                 |
 | `ao agent ls`                       | `POST /api/v1/agents/readiness/ensure` (`display`) |
 | `ao agent ls --refresh`             | `POST /api/v1/agents/refresh` (forced checks) |
+| `ao account ls`                     | `GET /api/v1/agents/accounts`                  |
+| `ao account default <account-id>`   | `POST /api/v1/agents/accounts/{id}/default`    |
+| `ao account show [<session-id>]`    | `GET /api/v1/agents/accounts/sessions/{id}`    |
+| `ao account switch <session-id> <account-id>` | `PUT /api/v1/agents/accounts/sessions/{id}`; `--wait` polls `GET /api/v1/sessions/{id}/interface-transition` |
 | `ao automation create/list/get/update/delete/runs` | `POST/GET/PATCH/DELETE /api/v1/automations` |
 | `ao cue create/list`                | `POST/GET /api/v1/projects/{id}/cues`         |
 | `ao spawn`                          | Targeted launch ensure, then `POST /api/v1/sessions` |
 | `ao session ls`                     | `GET /api/v1/sessions` plus per-session PR summaries; shows branch, PR, CI, review, unresolved threads, activity, and age. |
 | `ao session get <id>`               | `GET /api/v1/sessions/{id}`. `--transcript N` also reads `GET /api/v1/sessions/{id}/conversation` for chat sessions on the local daemon. |
+| `ao session interrupt <id>`         | `POST /api/v1/sessions/{id}/conversation/interrupt` |
 | `ao session kill <id>`              | `POST /api/v1/sessions/{id}/kill`              |
 | `ao session restore <id>`           | `POST /api/v1/sessions/{id}/restore`           |
 | `ao session exit-agent <id>`        | `POST /api/v1/sessions/{id}/exit-agent`        |
 | `ao session resume-agent <id>`      | `POST /api/v1/sessions/{id}/resume-agent`      |
 | `ao session rename <id> <name>`     | `PATCH /api/v1/sessions/{id}`                  |
 | `ao session cleanup`                | `POST /api/v1/sessions/cleanup`                |
-| `ao session delete <id>`            | `DELETE /api/v1/sessions/{id}`                 |
+| `ao session delete <id>`            | `DELETE /api/v1/sessions/{id}?keepArtifacts=true`; artifact files stay, view only, on the Artifacts page. `--delete-artifacts` drops `keepArtifacts` so they are deleted too. |
 | `ao session claim-pr [<id>] <pr-ref>` | `POST /api/v1/sessions/{id}/pr/claim`        |
+| `ao session fork <id> [--check]` | `POST /api/v1/sessions/{id}/fork`             |
 | `ao orchestrator ls`                | `GET /api/v1/orchestrators`                    |
 | `ao send`                           | `POST /api/v1/sessions/{id}/send`              |
 | `ao report ...`                     | `POST /api/v1/reports`                         |
@@ -116,6 +134,18 @@ branch, issue, or PR-claim options.
 `AO_SESSION_ID`. From an orchestrator or external shell, pass the target
 explicitly with `ao session claim-pr <session-id> <pr-ref>`. The explicit form
 remains supported for backward compatibility and cross-session coordination.
+
+To review someone else's PR, claim it as a review:
+`ao session claim-pr <pr-ref> --no-takeover --review`, or
+`ao spawn --claim-pr <pr-ref> --no-takeover --review`. Before the claim, the CLI
+turns off the session's automatic CI and review-comment fixing
+(`PATCH /api/v1/sessions/{id}/auto-inject-ci` and `.../auto-inject-review`) and
+its native auto-review (`PUT /api/v1/sessions/{id}/auto-review`), so the session
+gets none of the PR's CI failures, merge conflicts, or review comments. These
+switches cover every PR the session owns; if the claim is refused, the CLI puts
+them back. `--review` implies `--no-takeover`, so it never takes the PR from a
+session that is working on it. To take the PR over, run `ao session claim-pr <pr-ref> --review=false`,
+which turns CI and review-comment fixing back on.
 
 Both `ao session claim-pr` and `ao spawn --claim-pr` claim ownership metadata
 only. The claim step does not check out a branch or change HEAD, so
@@ -185,10 +215,17 @@ preview. Agents must not create it automatically. Static HTML and Markdown use
 the direct file preview and must not cause package-manager scaffolding,
 dependency installation, or a development server to be introduced.
 
-When a browser-displayable file is the requested artifact, agents should call
-`ao preview <workspace-path>` immediately after creating or materially updating
-the primary output. Markdown, HTML, PDF, SVG, and common images can be served
-directly. Supporting assets must not replace an active application preview.
+Agents do not open artifacts with `ao preview`. A deliverable registered with
+`ao artifact add` appears in the session's Artifacts tab whatever its file type.
+The tab previews supported formats; an unsupported binary file shows that it
+can't be previewed. When it is registered while you are viewing a running
+session, the desktop also opens that tab on it, unless you are watching a live
+page in Browser or reviewing Files, where it badges the Artifacts tab and shows
+a notice with an Open button instead; an artifact registered before you opened
+the session, or in a terminated session, waits in the Artifacts tab. `ao
+preview` is for workspace pages and running apps, or an artifact the user
+explicitly asks to see in the Browser panel. Supporting assets must not replace
+an active application preview.
 
 `ao browser` also resolves its target from `AO_SESSION_ID`, but controls the
 session-owned live Electron browser rather than only setting its preview URL.
@@ -244,7 +281,8 @@ The CLI and daemon share the same environment-driven config:
 | `AO_RUN_FILE`         | `~/.ao/running.json` | PID/port handshake.                                                                            |
 | `AO_DATA_DIR`         | `~/.ao/data`         | SQLite data directory.                                                                         |
 | `AO_REQUEST_TIMEOUT`  | `60s`                | REST request timeout.                                                                          |
-| `AO_SHUTDOWN_TIMEOUT` | `10s`                | Graceful shutdown cap. Also scales how long a new daemon waits for the data dir (9x + 18s).    |
+| `AO_SHUTDOWN_TIMEOUT` | `10s`                | Graceful shutdown cap. Also scales how long a new daemon waits for the data dir (8x + 18s, plus the installer wait). |
+| `AO_INSTALLER_SHUTDOWN_TIMEOUT` | about `285s` | How long the daemon waits at shutdown for an agent CLI install or update it started to stop and clean up. Never less than `AO_SHUTDOWN_TIMEOUT`. A new daemon on the same data directory waits for this too. Tests set it low. |
 | `AO_KEEP_DAEMON`      | unset (off)          | Keep the desktop app's daemon running after the window closes; stop only via `ao stop`. (fork) |
 | `AO_DISABLE_GPU`      | unset (off)          | Skip Chromium hardware acceleration; escape hatch for broken Linux GPU drivers.                |
 

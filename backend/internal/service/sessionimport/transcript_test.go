@@ -138,8 +138,7 @@ func TestCodexCompressedAndSegmentedThread(t *testing.T) {
 	segment := writeFile(t, filepath.Join(day, "08", "rollout-2026-10-08T04-09-28-"+codexThread+"_01a11885-8f9f-76d1-a6d0-3b60c45dc3a5.jsonl"), `{"type":"session_meta","payload":{"id":"`+codexThread+`","cwd":"/work/repo","source":"vscode"}}
 {"type":"event_msg","payload":{"type":"user_message","message":"second prompt"}}
 `)
-	svc := New(&importStore{}, "", chatSupported)
-	files, err := svc.discover(context.Background(), domain.HarnessCodex, canonical(root))
+	files, err := discoverFor(context.Background(), domain.HarnessCodex, canonical(root), nil)
 	if err != nil || len(files) != 1 || len(files[0].paths) != 2 {
 		t.Fatalf("files = %#v, %v", files, err)
 	}
@@ -156,12 +155,12 @@ func TestCodexCompressedAndSegmentedThread(t *testing.T) {
 	}
 	// While Codex compresses a segment both copies exist; the plain file is current.
 	zstdFile(t, segment+".zst", "corrupt")
-	files, err = svc.discover(context.Background(), domain.HarnessCodex, canonical(root))
+	files, err = discoverFor(context.Background(), domain.HarnessCodex, canonical(root), nil)
 	if err != nil || len(files) != 1 || len(files[0].paths) != 2 || strings.HasSuffix(files[0].paths[1], ".zst") {
 		t.Fatalf("twin files = %#v, %v", files, err)
 	}
 	writeFile(t, filepath.Join(root, "archived_sessions", "rollout-2026-01-01T00-00-00-01a99999-0000-7000-8000-000000000000.jsonl"), "{}")
-	if files, _ = svc.discover(context.Background(), domain.HarnessCodex, canonical(root)); len(files) != 1 {
+	if files, _ = discoverFor(context.Background(), domain.HarnessCodex, canonical(root), nil); len(files) != 1 {
 		t.Fatalf("archived Codex threads are not resumable: %#v", files)
 	}
 }
@@ -189,8 +188,8 @@ func TestClaudeTranscriptShapes(t *testing.T) {
 		t.Fatal(err)
 	}
 	wantTexts(t, got.messages, "user: start the refactor", "assistant: Working on it.", "user: /review PR 12", "assistant: Review posted.")
-	if got.title != "Refactor and review" || got.cwd != "/work/repo" || got.shortened || got.model != "claude-haiku-5-5" {
-		t.Fatalf("title=%q cwd=%q shortened=%v model=%q", got.title, got.cwd, got.shortened, got.model)
+	if got.title != "Refactor and review" || got.cwd != "/work/repo" || got.shortened {
+		t.Fatalf("title=%q cwd=%q shortened=%v", got.title, got.cwd, got.shortened)
 	}
 	custom := writeFile(t, path, body[:strings.LastIndex(body, "\n")]+"\n"+`{"type":"custom-title","customTitle":"My rename","sessionId":"`+id+`"}`+"\n")
 	if got, err = readTranscript(context.Background(), domain.HarnessClaudeCode, root, custom); err != nil || got.title != "My rename" {
@@ -461,17 +460,19 @@ func TestScanDestinations(t *testing.T) {
 	}
 }
 
-// Every readable conversation is listed; only the recent window is preselected.
-func TestScanListsOlderConversations(t *testing.T) {
+func TestScanOffersOnlyRecentConversations(t *testing.T) {
 	claude := t.TempDir()
 	now := time.Now()
-	for i, name := range []string{"11111111-1111-4111-8111-111111111111", "22222222-2222-4222-8222-222222222222", "33333333-3333-4333-8333-333333333333"} {
-		at := now.Add(time.Duration(-i) * 24 * time.Hour)
+	for i, name := range []string{"11111111-1111-4111-8111-111111111111", "22222222-2222-4222-8222-222222222222", "33333333-3333-4333-8333-333333333333", "44444444-4444-4444-8444-444444444444"} {
+		at, stamp := now.Add(time.Duration(-i)*24*time.Hour), now.AddDate(0, 0, -recentDays-1)
 		if i == 2 {
-			at = now.AddDate(0, 0, -recentDays-1)
+			at = stamp
+		}
+		if i < 2 {
+			stamp = at
 		}
 		path := writeClaude(t, claude, name, "", "claude "+name[:1], at)
-		if err := os.Chtimes(path, at, at); err != nil {
+		if err := os.Chtimes(path, stamp, stamp); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -483,10 +484,10 @@ func TestScanListsOlderConversations(t *testing.T) {
 	}
 	var titles []string
 	for _, c := range preview.Candidates {
-		titles = append(titles, fmt.Sprintf("%s %v", c.Title, c.Suggested))
+		titles = append(titles, c.Title)
 	}
 	sort.Strings(titles)
-	if strings.Join(titles, ",") != "claude 1 true,claude 2 true,claude 3 false" {
+	if strings.Join(titles, ",") != "claude 1,claude 2" {
 		t.Fatalf("titles=%q", titles)
 	}
 }
@@ -509,9 +510,9 @@ func TestClaudePromptOnlyStripsCommandRecords(t *testing.T) {
 // A long Claude history is not held whole while its branches are read: the
 // oldest text goes first, the opening prompt stays, and the row says so.
 func TestClaudeReadHoldsBoundedText(t *testing.T) {
-	held := maxClaudeHeld
-	maxClaudeHeld = 100
-	t.Cleanup(func() { maxClaudeHeld = held })
+	held := maxHeldText
+	maxHeldText = 100
+	t.Cleanup(func() { maxHeldText = held })
 	id := "6d842f77-b1fe-49f3-8585-8946df267bae"
 	var lines []string
 	parent := "null"
