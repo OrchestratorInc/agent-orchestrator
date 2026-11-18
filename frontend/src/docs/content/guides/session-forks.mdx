@@ -39,6 +39,15 @@ When Fork is greyed out, its tooltip, or the line under **Fork session** in the 
 
 Files from an older turn come from the snapshot AO saves before each turn. A turn from before this version of AO has no snapshot and can't be forked.
 
+## Standalone agents
+
+A standalone agent works in a plain folder with no git repository, so its fork is a copy of that folder instead of a new branch:
+
+- It can be forked at its latest turn only. AO keeps no snapshot of a plain folder before each turn, so older turns show no **Fork**.
+- The fork gets its own folder holding everything in the original's, dependency folders included, copied with copy-on-write where the disk supports it. Symlinks stay links; what they point to isn't copied.
+- The conversation, agent memory, attachments, artifacts and settings are copied as for any other fork.
+- Archiving or deleting the fork keeps its folder while it has files in it, as for any standalone agent.
+
 ## The original's pull requests
 
 A fork never owns the original's pull requests. The inspector's **Forks** section shows them as read-only links, and the fork's agent is told not to push to them, comment on them, or review them. `ao review trigger` from the fork refuses a PR the original owns.

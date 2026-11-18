@@ -2,12 +2,17 @@ package daemon
 
 import (
 	"context"
+	"crypto/rand"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"log/slog"
 	"os"
+	"path/filepath"
+	"strings"
 	"time"
 
+	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/workspace/dirseed"
 	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/workspace/forkseed"
 	"github.com/aoagents/agent-orchestrator/backend/internal/artifactversions"
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
@@ -111,6 +116,69 @@ func (forkSeeds) SnapshotHead(ctx context.Context, workspace, ref string) (strin
 	return head, err
 }
 
+// dirForkSeeds copies a plain folder for a fork: a standalone agent's, or a
+// Scratch project's session's. Seeds are kept under the data folder, on the
+// same volume as the workspaces, so applying one is a rename.
+type dirForkSeeds struct {
+	// root holds the seeds; managedRoot holds the plain folders a fork may
+	// copy.
+	root, managedRoot string
+}
+
+func newDirForkSeeds(dataDir string) dirForkSeeds {
+	return dirForkSeeds{root: filepath.Join(dataDir, dirseed.DirName), managedRoot: filepath.Join(dataDir, "worktrees")}
+}
+
+// plainFolderDepth is how deep a session's own folder sits under the managed
+// root: standalone/sessions/<id>, or <project>/workers/<id>. Anything
+// shallower holds other sessions' folders too.
+const plainFolderDepth = 3
+
+// Manages reports whether workspace, its links resolved, is one session's
+// folder under Orchestrator's managed root. The user's own folders are never
+// copied.
+func (d dirForkSeeds) Manages(workspace string) bool {
+	if strings.TrimSpace(workspace) == "" {
+		return false
+	}
+	root, err := filepath.EvalSymlinks(d.managedRoot)
+	if err != nil {
+		return false
+	}
+	path, err := filepath.EvalSymlinks(workspace)
+	if err != nil {
+		return false
+	}
+	if info, err := os.Stat(path); err != nil || !info.IsDir() {
+		return false
+	}
+	rel, err := filepath.Rel(root, path)
+	if err != nil || rel == "." || rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
+		return false
+	}
+	return len(strings.Split(rel, string(filepath.Separator))) >= plainFolderDepth
+}
+
+func (d dirForkSeeds) Capture(ctx context.Context, workspace string) (string, error) {
+	b := make([]byte, 8)
+	if _, err := rand.Read(b); err != nil {
+		return "", err
+	}
+	seed := filepath.Join(d.root, hex.EncodeToString(b))
+	if err := dirseed.Capture(ctx, workspace, seed); err != nil {
+		return "", err
+	}
+	return seed, nil
+}
+
+// Delete removes a seed; it refuses any path outside the seeds folder.
+func (d dirForkSeeds) Delete(_ context.Context, seed string) error {
+	if rel, err := filepath.Rel(d.root, seed); err != nil || rel == "." || strings.Contains(rel, string(filepath.Separator)) || strings.HasPrefix(rel, "..") {
+		return fmt.Errorf("session fork: %q is not a fork seed", seed)
+	}
+	return dirseed.Delete(seed)
+}
+
 // forkSpawner spawns through the session service, so a repeated client
 // request id returns the session the first click made.
 type forkSpawner struct{ svc *sessionsvc.Service }
@@ -121,13 +189,13 @@ func (f forkSpawner) Spawn(ctx context.Context, cfg ports.SpawnConfig) (domain.S
 }
 
 // wireSessionFork builds the session fork service and its hooks.
-func wireSessionFork(store *sqlite.Store, sessionSvc *sessionsvc.Service, mgr sessionLifecycle, chat *chatsvc.Service, drivers ports.ChatDriverRegistry, accounts sessionfork.Accounts, artifacts *artifactversions.Capturer, messenger ports.AgentMessenger, log *slog.Logger) *sessionfork.Service {
+func wireSessionFork(dataDir string, store *sqlite.Store, sessionSvc *sessionsvc.Service, mgr sessionLifecycle, chat *chatsvc.Service, drivers ports.ChatDriverRegistry, accounts sessionfork.Accounts, artifacts *artifactversions.Capturer, messenger ports.AgentMessenger, log *slog.Logger) *sessionfork.Service {
 	const enabled = true
 	terminal, _ := mgr.(terminalForkSources)
 	svc := sessionfork.New(sessionfork.Deps{
 		Enabled: enabled, Sessions: store, Projects: store, Lineage: store,
 		Spawner: forkSpawner{svc: sessionSvc}, Sources: forkSources{chat: chat, terminal: terminal, notes: chat}, Seeds: forkSeeds{},
-		Accounts: accounts, PRs: store, Requests: store,
+		DirSeeds: newDirForkSeeds(dataDir), Accounts: accounts, PRs: store, Requests: store,
 	})
 	if !enabled {
 		return svc
@@ -224,8 +292,18 @@ func claudeWorkspaceForker(drivers ports.ChatDriverRegistry) (sessionmanager.Cla
 	return fork, cleanup
 }
 
+// reapDirForkSeeds removes plain-folder copies a crash left behind.
+func reapDirForkSeeds(dataDir string, log *slog.Logger) {
+	if removed, err := dirseed.Reap(filepath.Join(dataDir, dirseed.DirName), forkSeedMaxAge, time.Now()); err != nil {
+		log.Debug("session fork: folder seed cleanup", "err", err)
+	} else if removed > 0 {
+		log.Info("session fork: removed leftover folder copies", "count", removed)
+	}
+}
+
 // reapForkSeeds removes fork file snapshots a crash left behind.
-func reapForkSeeds(ctx context.Context, store *sqlite.Store, log *slog.Logger) {
+func reapForkSeeds(ctx context.Context, dataDir string, store *sqlite.Store, log *slog.Logger) {
+	reapDirForkSeeds(dataDir, log)
 	projects, err := store.ListProjects(ctx)
 	if err != nil {
 		log.Warn("session fork: list projects for seed cleanup", "err", err)
