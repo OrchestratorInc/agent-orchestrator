@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/aoagents/agent-orchestrator/backend/internal/adapters"
 	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
@@ -283,6 +284,39 @@ func TestDefaultLaunchUsesNativePermissionsWithoutLosingSettings(t *testing.T) {
 	}
 	if cfg.Env["MASTRA_TELEMETRY_DISABLED"] != "1" {
 		t.Fatal("launch left native analytics writing outside the AO profile")
+	}
+}
+
+func TestFreshProfileSkipsNativeOnboardingOnce(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "profile", "settings.json")
+	now := time.Date(2026, 11, 18, 4, 7, 51, 0, time.UTC)
+	if err := skipNativeOnboarding(path, now); err != nil {
+		t.Fatal(err)
+	}
+	var settings struct {
+		Onboarding struct {
+			SkippedAt                   string `json:"skippedAt"`
+			Version                     int    `json:"version"`
+			QuietModePreferenceSelected bool   `json:"quietModePreferenceSelected"`
+		} `json:"onboarding"`
+	}
+	data, err := os.ReadFile(path)
+	if err != nil || json.Unmarshal(data, &settings) != nil {
+		t.Fatalf("settings = %s, %v", data, err)
+	}
+	if o := settings.Onboarding; o.SkippedAt != "2026-11-18T04:07:51.000Z" || o.Version != nativeOnboardingVersion || !o.QuietModePreferenceSelected {
+		t.Fatalf("onboarding = %+v", o)
+	}
+	// A completed native setup and unrelated fields are never rewritten.
+	completed := `{"onboarding":{"completedAt":"2026-01-01T00:00:00.000Z","version":1,"quietModePreferenceSelected":true},"models":{"activeModelPackId":"custom"}}`
+	if err := os.WriteFile(path, []byte(completed), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := skipNativeOnboarding(path, now); err != nil {
+		t.Fatal(err)
+	}
+	if data, _ := os.ReadFile(path); string(data) != completed {
+		t.Fatalf("completed setup rewritten: %s", data)
 	}
 }
 

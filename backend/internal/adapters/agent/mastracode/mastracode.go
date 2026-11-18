@@ -11,6 +11,7 @@ import (
 	"path/filepath"
 	"slices"
 	"strings"
+	"time"
 
 	"github.com/google/uuid"
 
@@ -140,6 +141,11 @@ func (*Plugin) PrepareRuntimeLaunch(ctx context.Context, cfg ports.WorkspaceHook
 	if err := ValidateNativeSettings(state.Profile, cfg.Config.Permissions); err != nil {
 		return err
 	}
+	if state.Profile == filepath.Join(cfg.DataDir, adapterID, "profile") {
+		if err := skipNativeOnboarding(filepath.Join(state.Profile, "settings.json"), time.Now()); err != nil {
+			return err
+		}
+	}
 	if ports.NormalizePermissionMode(cfg.Config.Permissions) != ports.PermissionModeBypassPermissions {
 		if state.Profile != filepath.Join(cfg.DataDir, adapterID, "profile") {
 			return errors.New("mastra-code native permission setup requires the AO-owned profile")
@@ -197,6 +203,52 @@ func (*Plugin) PrepareRuntimeLaunch(ctx context.Context, cfg ports.WorkspaceHook
 	}
 	cfg.Env["AO_MASTRA_RECEIPT_PATH"] = path
 	return nil
+}
+
+// nativeOnboardingVersion is ONBOARDING_VERSION in the pinned @mastra/code-sdk.
+const nativeOnboardingVersion = 1
+
+// skipNativeOnboarding records the native first-run answers in AO's profile,
+// as choosing Skip and keeping classic rendering would. Otherwise a fresh
+// profile opens the setup wizard and a quiet-mode question, and AO's first
+// task waits behind them while the session shows no signal. AO supplies the
+// model per launch. Answers already given, and every other field, are kept.
+func skipNativeOnboarding(path string, now time.Time) error {
+	settings, err := readObject(path)
+	if err != nil {
+		return err
+	}
+	onboarding := map[string]json.RawMessage{}
+	if raw, ok := settings["onboarding"]; ok && string(raw) != "null" {
+		if err := json.Unmarshal(raw, &onboarding); err != nil {
+			return err
+		}
+		if onboarding == nil {
+			onboarding = map[string]json.RawMessage{}
+		}
+	}
+	answered := func(key string) bool {
+		raw, ok := onboarding[key]
+		return ok && string(raw) != "null" && string(raw) != "false"
+	}
+	changed := false
+	if !answered("completedAt") && !answered("skippedAt") {
+		onboarding["skippedAt"], _ = json.Marshal(now.UTC().Format("2006-01-02T15:04:05.000Z"))
+		onboarding["version"], _ = json.Marshal(nativeOnboardingVersion)
+		changed = true
+	}
+	if !answered("quietModePreferenceSelected") {
+		onboarding["quietModePreferenceSelected"] = json.RawMessage("true")
+		changed = true
+	}
+	if !changed {
+		return nil
+	}
+	settings["onboarding"], _ = json.Marshal(onboarding)
+	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
+		return err
+	}
+	return writeObject(path, settings)
 }
 
 // ValidateNativeSettings rejects native settings outside qualified foreground ownership.

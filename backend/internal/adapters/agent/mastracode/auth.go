@@ -64,7 +64,7 @@ func (p *Plugin) AuthStatusWithDiagnostics(ctx context.Context) (ports.AgentAuth
 			step.NextStep = "Open Mastra Code in build mode and use /model or /setup in the same AO profile to select a build model, then check again."
 		case "mastra_sdk_unsupported":
 			step.Reason = "The installed Mastra version does not expose the reviewed authentication interface."
-			step.NextStep = "Use Mastra's native provider setup and verify access in a terminal."
+			step.NextStep = "Install mastracode 0.45.0 with @mastra/code-sdk pinned to 1.11.0 (see Install); a plain npm install resolves an unsupported SDK."
 		case "provider_rate_limited":
 			step.Reason = "The selected provider rate-limited the verification request; this is not a rejected login."
 			step.NextStep = "Wait for the provider limit to reset, then check again."

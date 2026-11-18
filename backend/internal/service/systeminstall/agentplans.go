@@ -287,7 +287,7 @@ func (s requestPlanner) agentMethodPlans(target Target, operation AgentOperation
 			plans = append(plans, s.planShellInstaller(target, "https://install.openhands.dev/install.sh", "sh"))
 		}
 	case TargetMastraCode:
-		plans = []Plan{manualPlan(target, "Install mastracode 0.45.0 (@mastra/code-sdk 1.11.0) with Node >=22.19. AO qualifies the native TUI only. ONNXRUNTIME_NODE_INSTALL=skip is the supported way to omit optional CUDA downloads for API-backed use.", agentDocumentationURLs[target])}
+		plans = []Plan{manualPlan(target, "Install mastracode 0.45.0 with @mastra/code-sdk pinned to 1.11.0 and Node >=22.19; AO qualifies the native TUI only. A plain `npm install -g mastracode@0.45.0` resolves @mastra/code-sdk 1.19.1, which needs a newer @mastra/core than mastracode pins and is unsupported. In an empty folder, create package.json with {\"dependencies\":{\"mastracode\":\"0.45.0\"},\"overrides\":{\"@mastra/code-sdk\":\"1.11.0\"}}, run `ONNXRUNTIME_NODE_INSTALL=skip npm install` there (the variable omits optional CUDA downloads for API-backed use), and add its node_modules/.bin to PATH.", agentDocumentationURLs[target])}
 	case TargetTau:
 		plans = []Plan{s.planUV(target, "tau-ai")}
 	case TargetOpenInterpreter:
