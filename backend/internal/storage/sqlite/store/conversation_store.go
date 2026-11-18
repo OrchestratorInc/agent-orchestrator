@@ -1892,8 +1892,16 @@ func (s *Store) SettleOrphanedTurns(ctx context.Context, session domain.SessionI
 		}); err != nil {
 		return fmt.Errorf("settle orphaned turns for %s: %w", session, err)
 	}
-	// Running rows already stranded on settled turns (replayed provider notices
-	// stored by older daemons) take the status their turn's settlement gives.
+	return nil
+}
+
+// SettleStrandedActivities gives running rows stranded on already-settled turns
+// (replayed provider notices stored by older daemons) the status their turn's
+// settlement writes. It touches settled turns only, so unlike SettleOrphanedTurns
+// it is safe while a live controller is attached.
+func (s *Store) SettleStrandedActivities(ctx context.Context, session domain.SessionID, now time.Time) error {
+	q, unlock := s.conversationWriter(ctx)
+	defer unlock()
 	if err := q.SettleStrandedConversationActivities(ctx,
 		gen.SettleStrandedConversationActivitiesParams{
 			UpdatedAt:          now,
