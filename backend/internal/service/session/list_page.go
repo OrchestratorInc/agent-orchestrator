@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/base64"
 	"fmt"
+	"hash/fnv"
 	"sort"
 	"strconv"
 	"strings"
@@ -29,6 +30,11 @@ type ListPage struct {
 	// Total counts every session a PR-state filter matched, across all pages.
 	// Nil when the list has no PR-state filter.
 	Total *int
+	// Version names the whole PR-state list: every matched session and when its
+	// PR reached the state, in order. Equal versions mean the same list, so a
+	// client can tell from one page whether anything moved, and whether the
+	// pages of one read came from the same list. Empty without a PR-state filter.
+	Version string
 }
 
 // ArchiveSummary is the size of the archive behind an active-only list, under
@@ -119,8 +125,10 @@ func (s *Service) selectByPRState(ctx context.Context, recs []domain.SessionReco
 	if err != nil {
 		return nil, nil, fmt.Errorf("list pr state times: %w", err)
 	}
-	kept := make([]domain.SessionRecord, 0, len(reached))
-	reachedAt := make(map[domain.SessionID]time.Time, len(reached))
+	// The PR-state read spans every project; the candidates may be far fewer.
+	size := min(len(recs), len(reached))
+	kept := make([]domain.SessionRecord, 0, size)
+	reachedAt := make(map[domain.SessionID]time.Time, size)
 	for _, rec := range recs {
 		at, ok := reached[rec.ID]
 		if !ok {
@@ -130,6 +138,19 @@ func (s *Service) selectByPRState(ctx context.Context, recs []domain.SessionReco
 		reachedAt[rec.ID] = at.UTC()
 	}
 	return kept, reachedAt, nil
+}
+
+// prStateListVersion hashes the ordered PR-state list: each session and when
+// its PR reached the state. recs must already be in list order.
+func prStateListVersion(recs []domain.SessionRecord, reachedAt map[domain.SessionID]time.Time) string {
+	h := fnv.New64a()
+	for _, rec := range recs {
+		h.Write([]byte(rec.ID))
+		h.Write([]byte{0})
+		h.Write([]byte(strconv.FormatInt(reachedAt[rec.ID].UnixNano(), 10)))
+		h.Write([]byte{'\n'})
+	}
+	return strconv.FormatUint(h.Sum64(), 16)
 }
 
 func encodeSessionCursor(key listPageKey) string {

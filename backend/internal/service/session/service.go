@@ -1701,9 +1701,8 @@ func (s *Service) ListPage(ctx context.Context, filter ListFilter) (ListPage, er
 		keyOf = func(rec domain.SessionRecord) listPageKey {
 			return listPageKey{updatedAt: reachedAt[rec.ID], id: rec.ID}
 		}
-		if filter.Limit == 0 {
-			sortSessionRecords(matched, keyOf)
-		}
+		sortSessionRecords(matched, keyOf)
+		page.Version = prStateListVersion(matched, reachedAt)
 	}
 	if filter.Limit > 0 {
 		matched, page.NextCursor = pageSessionRecords(matched, keyOf, after, filter.Limit)

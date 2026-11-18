@@ -669,6 +669,10 @@ type ListSessionsResponse struct {
 	PRState domain.PRState `json:"prState,omitempty" enum:"open,draft,merged,closed"`
 	// Total is present with prState: how many sessions match across all pages.
 	Total *int `json:"total,omitempty"`
+	// Version is present with prState and names the whole filtered list (its
+	// sessions and when each PR reached the state). Equal versions mean the
+	// same list, so one page tells a client whether anything moved.
+	Version string `json:"version,omitempty"`
 }
 
 // SessionArchiveSummary sizes the archive behind an active-only session list.

@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"reflect"
+	"sort"
 	"testing"
 	"time"
 
@@ -331,7 +332,74 @@ func TestListPagePRStateLoadsFactsForThePageOnly(t *testing.T) {
 	if page.Total == nil || *page.Total != 20 {
 		t.Fatalf("total = %v, want 20", page.Total)
 	}
-	if len(st.prFactIDs) != 2 {
-		t.Fatalf("PR facts loaded for %d sessions, want the page's 2", len(st.prFactIDs))
+	loaded := make([]string, 0, len(st.prFactIDs))
+	for _, id := range st.prFactIDs {
+		loaded = append(loaded, string(id))
+	}
+	sort.Strings(loaded)
+	if want := []string{"a-57", "a-60"}; !reflect.DeepEqual(loaded, want) {
+		t.Fatalf("PR facts loaded for %v, want exactly the page's %v", loaded, want)
+	}
+}
+
+// The version names the whole PR-state list: every page of one list carries
+// it, a re-read of the same list repeats it, and a change on a later page
+// changes it even when the total and the first page stay the same (one
+// archived session restored and another ended).
+func TestListPagePRStateVersionNamesTheWholeList(t *testing.T) {
+	base := time.Date(2026, 10, 1, 12, 0, 0, 0, time.UTC)
+	st := newFakeStore()
+	for i := 1; i <= 4; i++ {
+		rec := archivedRecord(fmt.Sprintf("m-%d", i), "ao", base)
+		st.sessions[rec.ID] = rec
+		st.prFacts[rec.ID] = []domain.PRFacts{mergedPR(i, base.Add(time.Duration(i)*time.Hour))}
+	}
+	svc := &Service{store: st}
+	filter := ListFilter{Active: boolPtr(false), PRState: domain.PRStateMerged, Limit: 2}
+	first, err := svc.ListPage(context.Background(), filter)
+	if err != nil {
+		t.Fatal(err)
+	}
+	filter.Cursor = first.NextCursor
+	second, err := svc.ListPage(context.Background(), filter)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if first.Version == "" || first.Version != second.Version {
+		t.Fatalf("versions = %q and %q, want one non-empty version for both pages", first.Version, second.Version)
+	}
+	again, err := svc.ListPage(context.Background(), ListFilter{Active: boolPtr(false), PRState: domain.PRStateMerged, Limit: 2})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if again.Version != first.Version {
+		t.Fatalf("re-read version = %q, want %q", again.Version, first.Version)
+	}
+
+	// m-1 is restored and m-0, merged earlier still, ends: same total, same
+	// first page (m-4, m-3), different second page.
+	restored := st.sessions["m-1"]
+	restored.IsTerminated = false
+	st.sessions["m-1"] = restored
+	ended := archivedRecord("m-0", "ao", base)
+	st.sessions[ended.ID] = ended
+	st.prFacts[ended.ID] = []domain.PRFacts{mergedPR(100, base)}
+	moved, err := svc.ListPage(context.Background(), ListFilter{Active: boolPtr(false), PRState: domain.PRStateMerged, Limit: 2})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := pageIDs(moved); !reflect.DeepEqual(got, pageIDs(first)) || *moved.Total != *first.Total {
+		t.Fatalf("first page %v total %d, want the same as before (%v, %d)", got, *moved.Total, pageIDs(first), *first.Total)
+	}
+	if moved.Version == first.Version {
+		t.Fatalf("version %q unchanged after a later page changed", moved.Version)
+	}
+
+	plain, err := svc.ListPage(context.Background(), ListFilter{Active: boolPtr(false), Limit: 2})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if plain.Version != "" {
+		t.Fatalf("list without prState has version %q", plain.Version)
 	}
 }

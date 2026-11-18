@@ -328,6 +328,7 @@ func (c *SessionsController) list(w http.ResponseWriter, r *http.Request) {
 		Archived:   archiveSummaryView(page.Archived),
 		PRState:    filter.PRState,
 		Total:      page.Total,
+		Version:    page.Version,
 	})
 }
 

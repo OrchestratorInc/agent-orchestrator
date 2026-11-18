@@ -1166,7 +1166,7 @@ func TestSessionsAPI_ListPagesTheArchiveAndSizesIt(t *testing.T) {
 func TestSessionsAPI_ListFiltersByPRState(t *testing.T) {
 	svc := newFakeSessionService()
 	total := 7
-	svc.listPage = &sessionsvc.ListPage{Sessions: []domain.Session{svc.sessions["ao-1"]}, NextCursor: "more", Total: &total}
+	svc.listPage = &sessionsvc.ListPage{Sessions: []domain.Session{svc.sessions["ao-1"]}, NextCursor: "more", Total: &total, Version: "9f3a"}
 	srv := newSessionTestServer(t, svc)
 
 	body, status, _ := doRequest(t, srv, "GET", "/api/v1/sessions?active=false&kind=worker&prState=merged&limit=50", "")
@@ -1180,15 +1180,16 @@ func TestSessionsAPI_ListFiltersByPRState(t *testing.T) {
 		PRState    string `json:"prState"`
 		Total      *int   `json:"total"`
 		NextCursor string `json:"nextCursor"`
+		Version    string `json:"version"`
 	}
 	mustJSON(t, body, &page)
-	if page.PRState != "merged" || page.Total == nil || *page.Total != 7 || page.NextCursor != "more" {
-		t.Fatalf("page = %+v, want prState merged, total 7, cursor more", page)
+	if page.PRState != "merged" || page.Total == nil || *page.Total != 7 || page.NextCursor != "more" || page.Version != "9f3a" {
+		t.Fatalf("page = %+v, want prState merged, total 7, cursor more, version 9f3a", page)
 	}
 
 	svc.listPage = nil
 	body, _, _ = doRequest(t, srv, "GET", "/api/v1/sessions", "")
-	if strings.Contains(string(body), "prState") || strings.Contains(string(body), "\"total\"") {
+	if strings.Contains(string(body), "prState") || strings.Contains(string(body), "\"total\"") || strings.Contains(string(body), "\"version\"") {
 		t.Fatalf("unfiltered list carries PR-state fields: %s", body)
 	}
 }

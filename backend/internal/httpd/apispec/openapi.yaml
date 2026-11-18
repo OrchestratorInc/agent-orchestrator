@@ -21722,6 +21722,8 @@ components:
           type:
           - "null"
           - integer
+        version:
+          type: string
       required:
       - sessions
       type: object
