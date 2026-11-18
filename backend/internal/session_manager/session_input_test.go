@@ -3,6 +3,7 @@ package sessionmanager
 import (
 	"context"
 	"errors"
+	"sync/atomic"
 	"testing"
 	"testing/synctest"
 	"time"
@@ -179,6 +180,26 @@ func TestKillWaitingForResumeHonorsContext(t *testing.T) {
 	})
 }
 
+// expiringContext reports an error from Err once expired but never closes
+// Done. It stands in for the moment a real deadline and Kill's 20ms poll are
+// ready together and select picks the poll: the only guard left is the
+// context check admission repeats under agentOpMu.
+type expiringContext struct {
+	context.Context
+	err atomic.Pointer[error]
+}
+
+func (c *expiringContext) Done() <-chan struct{} { return nil }
+
+func (c *expiringContext) Err() error {
+	if err := c.err.Load(); err != nil {
+		return *err
+	}
+	return nil
+}
+
+func (c *expiringContext) expire(err error) { c.err.Store(&err) }
+
 // A deadline that passes while Kill waits must not let it claim the slot the
 // resume frees at that same moment.
 func TestKillDoesNotClaimAFreedSlotPastItsDeadline(t *testing.T) {
@@ -188,17 +209,19 @@ func TestKillDoesNotClaimAFreedSlotPastItsDeadline(t *testing.T) {
 		if err := m.beginAgentResume(context.Background(), id); err != nil {
 			t.Fatal(err)
 		}
-		ctx, cancel := context.WithCancel(context.Background())
+		ctx := &expiringContext{Context: context.Background()}
 		killed := make(chan error, 1)
 		go func() { killed <- m.beginKillOperation(ctx, id) }()
+		// Kill is parked on its poll timer; Done never fires, so the poll is
+		// the branch it wakes on, after both changes below.
 		synctest.Wait()
-		cancel()
+		ctx.expire(context.DeadlineExceeded)
 		m.endAgentResume(id)
-		if err := <-killed; !errors.Is(err, context.Canceled) {
-			t.Fatalf("kill error = %v, want context.Canceled", err)
+		if err := <-killed; !errors.Is(err, context.DeadlineExceeded) {
+			t.Fatalf("kill error = %v, want context.DeadlineExceeded", err)
 		}
 		if m.SessionMutationInProgress(id) {
-			t.Fatal("a cancelled kill claimed the session")
+			t.Fatal("a kill past its deadline claimed the session")
 		}
 	})
 }
