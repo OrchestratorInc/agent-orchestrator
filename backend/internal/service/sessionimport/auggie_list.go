@@ -15,7 +15,7 @@ const (
 	auggieListMaxBytes = 8 << 20
 )
 
-var errAuggieListTooLarge = errors.New("Auggie conversation list exceeded the output limit")
+var errAuggieListTooLarge = errors.New("auggie conversation list exceeded the output limit")
 
 // readAuggieList is only for Auggie-defined, noninteractive list commands.
 // Callers supply fixed list arguments, never prompts or authentication commands.
