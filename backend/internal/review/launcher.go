@@ -91,6 +91,9 @@ type LaunchSpec struct {
 	// prompt. The engine uses this while replacing a live reviewer so the old
 	// process can be stopped before the replacement receives executable work.
 	DeferInitialMessage bool
+	// AOExecutable is populated at launch from the running, trusted daemon;
+	// Windows review prompts use it to avoid relying on a provider shell's PATH.
+	AOExecutable string
 }
 
 // LaunchResult is the terminal/runtime state created by a reviewer launch.
@@ -320,6 +323,13 @@ func reviewerHandleID(workerID domain.SessionID) string {
 }
 
 func (l *agentLauncher) invocation(spec LaunchSpec) ports.ReviewInvocation {
+	// A reviewer's nested Windows shell may drop the PATH pin. Give the task
+	// the actual daemon binary, not a shell lookup that can select a foreign ao.
+	if runtime.GOOS == "windows" {
+		if exe, err := l.executable(); err == nil && filepath.IsAbs(exe) && strings.EqualFold(filepath.Base(exe), "ao.exe") {
+			spec.AOExecutable = exe
+		}
+	}
 	prompt, systemPrompt := reviewTexts(spec)
 	return ports.ReviewInvocation{
 		ReviewerID:      reviewerHandleID(spec.WorkerID),

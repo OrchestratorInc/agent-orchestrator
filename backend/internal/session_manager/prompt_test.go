@@ -436,3 +436,21 @@ func TestBuildTaskPrompt_StackedTaskNamesItsBase(t *testing.T) {
 		t.Fatalf("empty prompt = %q", got)
 	}
 }
+
+func TestWorkerGitIsolationPromptUsesVerifiedOneOffAuthorIdentity(t *testing.T) {
+	prompt := workerGitIsolationPrompt()
+	for _, want := range []string{
+		"missing Git author identity",
+		"never change global or shared repository config",
+		"gh api user",
+		"@users.noreply.github.com",
+		"git -c user.name=",
+		"-c user.email=",
+		"permission gates still enforced",
+		"stop and request it",
+	} {
+		if !strings.Contains(prompt, want) {
+			t.Errorf("worker Git identity instructions missing %q", want)
+		}
+	}
+}
