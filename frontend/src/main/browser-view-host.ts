@@ -1150,6 +1150,11 @@ export function createBrowserViewHost(
   let personFocus: { session: BrowserSessionEntry; entry: BrowserEntry } | undefined;
   shellWebContents.on?.("focus", () => {
     personFocus = undefined;
+    // Back in the app's own UI (the address bar, the chat): a click the
+    // person gave a page just before no longer lets that page take the
+    // keyboard. Who owns the popups it opens (lastInputBy) is unaffected.
+    for (const session of entries.values())
+      for (const tab of session.tabs.values()) tab.personInputAt = undefined;
   });
   // The agent is working in the session, or just finished: a page load it
   // started can still be settling.

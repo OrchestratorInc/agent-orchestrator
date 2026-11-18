@@ -1445,6 +1445,7 @@ function setupTabHost(
 	const onNativeViewAdded = vi.fn();
 	const onTabCloseFailure = vi.fn();
 	const shellFocus = vi.fn();
+	const shellListeners = new Map<string, () => void>();
 	const host = createBrowserViewHost({
 		mainWindow: {
 			contentView: { addChildView, removeChildView: () => undefined },
@@ -1455,6 +1456,7 @@ function setupTabHost(
 			webContents: {
 				id: 1,
 				focus: shellFocus,
+				on: (event: string, listener: () => void) => shellListeners.set(event, listener),
 				send: (channel: string, payload: unknown) => sent.push({ channel, payload }),
 			},
 		} as never,
@@ -1525,6 +1527,8 @@ function setupTabHost(
 		sendFromTab,
 		sent,
 		shellFocus,
+		// The app's own UI (the address bar, the chat composer) takes the keyboard.
+		shellTakesFocus: () => shellListeners.get("focus")?.(),
 		views,
 		clearBrowserProfileData,
 	};
@@ -7134,6 +7138,30 @@ describe("agent and person tabs", () => {
 		} finally {
 			later.mockRestore();
 		}
+	});
+
+	it("forgets the person's click in a page once they go back to the address bar or chat", async () => {
+		const { host, views, sent, shellFocus, shellTakesFocus, personClicks } = await open();
+		const pageFocusReports = () => sent.filter((event) => event.channel === "browser:pageFocus").length;
+		const takesFocus = () => (views[0]!.listeners.get("focus") as () => void)();
+		await host.execute("sess-1", "open", { url: "https://agent.example.test/" });
+		const reported = pageFocusReports();
+
+		// The person clicks the agent's page, then straight away the address bar.
+		personClicks(0);
+		shellTakesFocus();
+		// The agent's next input focuses its page: the keyboard stays in the address bar.
+		shellFocus.mockClear();
+		takesFocus();
+		expect(shellFocus).toHaveBeenCalledTimes(1);
+		expect(pageFocusReports()).toBe(reported);
+
+		// A fresh click in the page is still the person reaching for it.
+		personClicks(0);
+		shellFocus.mockClear();
+		takesFocus();
+		expect(shellFocus).not.toHaveBeenCalled();
+		expect(pageFocusReports()).toBe(reported + 1);
 	});
 
 	it("reports the agent acting until a slow command finishes, not only while it starts", async () => {
