@@ -325,6 +325,9 @@ type Controller struct {
 	// replacement erases the other half and turns a percentage meter into a bare
 	// token count.
 	usage domain.ConversationUsage
+	// idleCompactionFor is the last-activity time of the idle period an idle
+	// compaction was last tried for, so each quiet period gets one attempt.
+	idleCompactionFor time.Time
 	// turnlessPlanItemID keys the plan row of the agent's current run of work
 	// outside any turn; see planItemID. Cleared when an event names a turn.
 	turnlessPlanItemID string

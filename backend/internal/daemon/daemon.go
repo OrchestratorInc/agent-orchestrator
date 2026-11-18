@@ -104,6 +104,10 @@ const usageReconcileTick = 3 * time.Minute
 
 const chatHibernateSweepTick = 30 * time.Second
 
+// idleCompactionSweepTick paces idle orchestrator compaction. Its window is
+// ten minutes wide, so a one-minute pass never misses it.
+const idleCompactionSweepTick = time.Minute
+
 // workspaceCleanupSweepTick paces the terminated-session cleanup reconcile.
 // Its work is retry and bookkeeping, not anything a user waits on.
 const workspaceCleanupSweepTick = 10 * time.Minute
@@ -1508,6 +1512,23 @@ func Run(buildVersion string) (retErr error) {
 					}
 					if err := sessMgr.HibernateIdleChats(ctx); err != nil && ctx.Err() == nil {
 						log.Warn("idle Chat hibernation failed", "err", err)
+					}
+				}
+			}
+		}()
+		go func() {
+			defer sentryobs.RecoverBackground()
+			// Orchestrators are never idle-hibernated, so they stay live and
+			// can be compacted while their prompt cache is still warm.
+			ticker := time.NewTicker(idleCompactionSweepTick)
+			defer ticker.Stop()
+			for {
+				select {
+				case <-ctx.Done():
+					return
+				case <-ticker.C:
+					if err := chatSvc.CompactIdleOrchestrators(ctx); err != nil && ctx.Err() == nil {
+						log.Warn("idle orchestrator compaction failed", "err", err)
 					}
 				}
 			}
