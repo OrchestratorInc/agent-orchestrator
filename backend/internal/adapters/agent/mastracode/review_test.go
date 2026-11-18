@@ -240,6 +240,36 @@ func TestUnframedApprovalCannotAdmitInput(t *testing.T) {
 	}
 }
 
+// The released TUI can draw the approval panel beside transcript boxes, so
+// each panel row follows other text on the same terminal row.
+func TestOverlaidApprovalReportsWaitingInput(t *testing.T) {
+	p := New()
+	screen := strings.Join([]string{
+		"╭──────────────────────  ⚠ Tool Approval Required",
+		"│ » Reply with exactly",
+		"│                        Tool: execute_command",
+		"╰──────────────────────  Category: Execute",
+		"                         Arguments:",
+		"  MASTRA-OK                command: sleep 10 && echo done",
+		"                         Allow? yes  no  always allow execute  Yolo",
+		"╭──────────────────────╮",
+		"│ •                    │",
+		"╰──────────────────────╯",
+		"▐build▌openai/gpt-5-mini▌ 3m45s",
+	}, "\n")
+	if state, ok := p.DetectTerminalActivity(screen); !ok || state != domain.ActivityWaitingInput {
+		t.Fatalf("overlaid approval = %s,%v", state, ok)
+	}
+	if err := p.ValidateTerminalMessage(screen, "task"); err == nil {
+		t.Fatal("overlaid approval accepted input")
+	}
+	// Transcript text quoting the panel words is not a pending decision.
+	quoted := strings.Replace(screen, "  ⚠ Tool Approval Required", " the docs say Tool Approval Required here", 1)
+	if state, _ := p.DetectTerminalActivity(quoted); state == domain.ActivityWaitingInput {
+		t.Fatal("quoted panel words reported waiting input")
+	}
+}
+
 func TestFailedFreshLaunchRetainsPriorExactRestore(t *testing.T) {
 	p, cfg := prepared(t)
 	history(t, cfg)

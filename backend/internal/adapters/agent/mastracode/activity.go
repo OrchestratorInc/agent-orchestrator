@@ -3,6 +3,7 @@ package mastracode
 import (
 	"errors"
 	"strings"
+	"unicode"
 
 	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/agent/terminalui"
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
@@ -18,6 +19,57 @@ func (p *Plugin) ValidateTerminalMessage(output, message string) error {
 		return errors.Join(ports.ErrTerminalMessageNotReady, errors.New("mastra-code requires an initialized empty composer; resolve native decisions or submit/clear your draft in the terminal"))
 	}
 	return nil
+}
+
+// TerminalMessageObserved confirms that AO's submission left the idle composer:
+// the native TUI turned busy, or it committed one more echo box ("│ » …")
+// holding the whole message than the pre-send screen did. Echoes render
+// markdown (backticks are dropped), so only letters and digits are compared.
+func (p *Plugin) TerminalMessageObserved(message, baseline, screen string) bool {
+	if screen == baseline || !p.ComposerIsEmpty(baseline) {
+		return false
+	}
+	if state, known := p.DetectTerminalActivity(screen); known && state == domain.ActivityActive {
+		return true
+	}
+	return committedEchoes(message, screen) > committedEchoes(message, baseline)
+}
+
+func echoKey(text string) string {
+	var b strings.Builder
+	for _, r := range text {
+		if unicode.IsLetter(r) || unicode.IsDigit(r) {
+			b.WriteRune(unicode.ToLower(r))
+		}
+	}
+	return b.String()
+}
+
+// committedEchoes counts native user-message boxes whose full text is message.
+func committedEchoes(message, screen string) int {
+	want := echoKey(message)
+	if want == "" {
+		return 0
+	}
+	count := 0
+	var block *strings.Builder
+	for _, line := range terminalui.PlainTerminalLines(screen) {
+		text := strings.TrimSpace(line)
+		inner := strings.TrimSpace(strings.TrimSuffix(strings.TrimPrefix(text, "│"), "│"))
+		switch {
+		case strings.HasPrefix(text, "│") && strings.HasPrefix(inner, "»"):
+			block = &strings.Builder{}
+			block.WriteString(strings.TrimPrefix(inner, "»"))
+		case block != nil && strings.HasPrefix(text, "│"):
+			block.WriteString(" " + inner)
+		case block != nil:
+			if echoKey(block.String()) == want {
+				count++
+			}
+			block = nil
+		}
+	}
+	return count
 }
 
 // DeriveActivityState maps native callbacks without inferring process exit from
@@ -53,19 +105,21 @@ func pendingDecision(output string) bool {
 			break
 		}
 	}
-	// Native tool approval replaces the input region with an unframed panel.
-	// Match its complete chrome rather than decision words in transcript text.
+	// Native tool approval replaces the input region with an unframed panel,
+	// which can be drawn beside transcript boxes on the same rows. Match its
+	// complete chrome, in order, as each row's trailing text rather than
+	// decision words anywhere in transcript text.
 	title, tool, arguments := false, false, false
 	for _, line := range lines[max(0, footer-24):footer] {
 		text := strings.TrimSpace(line)
 		switch {
-		case text == "⚠ Tool Approval Required":
+		case strings.HasSuffix(text, "⚠ Tool Approval Required"):
 			title = true
-		case title && strings.HasPrefix(text, "Tool: "):
+		case title && panelCell(text, "Tool: "):
 			tool = true
-		case tool && text == "Arguments:":
+		case tool && strings.HasSuffix(text, "Arguments:"):
 			arguments = true
-		case arguments && strings.HasPrefix(text, "Allow? ") && strings.Contains(text, "Yolo"):
+		case arguments && panelCell(text, "Allow? ") && strings.HasSuffix(text, "Yolo"):
 			return true
 		}
 	}
@@ -87,6 +141,16 @@ func pendingDecision(output string) bool {
 		}
 	}
 	return false
+}
+
+// panelCell reports whether row ends with a panel cell starting with prefix:
+// the row's own text, or text after the column gap of an overlaid panel.
+func panelCell(row, prefix string) bool {
+	if strings.HasPrefix(row, prefix) {
+		return true
+	}
+	at := strings.LastIndex(row, "  "+prefix)
+	return at >= 0
 }
 
 // ComposerIsEmpty requires the native framed composer and model footer. It

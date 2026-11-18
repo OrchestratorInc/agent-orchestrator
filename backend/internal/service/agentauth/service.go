@@ -366,6 +366,9 @@ func (s *Service) startReserved(ctx context.Context, plan Plan) (StartResult, er
 			return StartResult{}, apierr.Internal("AGENT_AUTH_DATA_HOME_UNAVAILABLE", "Mastra requires an absolute native profile.")
 		}
 		env["MASTRA_APP_DATA_DIR"] = profile
+		if env["MASTRA_TELEMETRY_DISABLED"] == "" {
+			env["MASTRA_TELEMETRY_DISABLED"] = "1"
+		}
 	}
 	if plan.AgentID == "opencode-v2" {
 		dataHome, err := opencodev2.DataHome(ctx)

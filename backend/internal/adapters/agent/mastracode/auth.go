@@ -96,7 +96,7 @@ func (p *Plugin) AuthStatusWithDiagnostics(ctx context.Context) (ports.AgentAuth
 	probeCtx, cancel := context.WithTimeout(ctx, 20*time.Second)
 	defer cancel()
 	cmd := aoprocess.CommandContext(probeCtx, node, "--input-type=module", "-e", nativeAuthProbe, "--", binary, profile)
-	cmd.Env = append(authprobe.Environ(ctx, os.Environ()), "MASTRA_APP_DATA_DIR="+profile)
+	cmd.Env = append(authprobe.Environ(ctx, os.Environ()), "MASTRA_APP_DATA_DIR="+profile, TelemetryDisabledEnv)
 	output := &authProbeOutput{}
 	cmd.Stdout, cmd.Stderr = output, io.Discard
 	err = cmd.Run()

@@ -278,4 +278,29 @@ func TestDefaultLaunchUsesNativePermissionsWithoutLosingSettings(t *testing.T) {
 	if err := p.PrepareRuntimeLaunch(context.Background(), cfg); err != nil || cfg.Env["MASTRACODE_YOLO"] != "1" {
 		t.Fatalf("explicit bypass = %s,%v", cfg.Env["MASTRACODE_YOLO"], err)
 	}
+	if cfg.Env["MASTRACODE_DISABLE_UPDATE_CHECK"] != "1" {
+		t.Fatal("pinned launch left the native self-update prompt enabled")
+	}
+	if cfg.Env["MASTRA_TELEMETRY_DISABLED"] != "1" {
+		t.Fatal("launch left native analytics writing outside the AO profile")
+	}
+}
+
+func TestTerminalMessageObservedNeedsANewCompleteEcho(t *testing.T) {
+	p := New()
+	const message = "Run `sleep 10`, then reply SECOND-OK."
+	echo := "╭──────────────────────────────╮\n│ » Run sleep 10, then reply   │\n│ SECOND-OK.                   │\n╰──────────────────────────────╯\n"
+	if !p.TerminalMessageObserved(message, emptyComposer, echo+emptyComposer) {
+		t.Fatal("wrapped native echo of the sent message was not observed")
+	}
+	if p.TerminalMessageObserved(message, echo+emptyComposer, echo+emptyComposer+"\n") {
+		t.Fatal("an earlier identical echo acknowledged a new send")
+	}
+	partial := "╭──────────────╮\n│ » Run sleep  │\n╰──────────────╯\n"
+	if p.TerminalMessageObserved(message, emptyComposer, partial+emptyComposer) {
+		t.Fatal("a partial echo acknowledged the send")
+	}
+	if p.TerminalMessageObserved(message, strings.Replace(emptyComposer, "› ", "› draft", 1), echo+emptyComposer) {
+		t.Fatal("a send from a non-empty composer was acknowledged")
+	}
 }

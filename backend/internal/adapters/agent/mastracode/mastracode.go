@@ -54,11 +54,19 @@ func (*Plugin) ResolveBinary(ctx context.Context) (string, error) {
 	return binaryutil.ResolveBinary(ctx, binarySpec)
 }
 
+// TelemetryDisabledEnv turns off the native SDK's analytics, which otherwise
+// writes a distinct ID to ~/.mastracode/analytics.json (outside AO's profile)
+// on every launch, login and authentication probe.
+const TelemetryDisabledEnv = "MASTRA_TELEMETRY_DISABLED=1"
+
 // AugmentRuntimeEnv isolates native application state, without redirecting HOME
 // or replacing the global/project hooks, plugin registries or instructions.
 func (*Plugin) AugmentRuntimeEnv(env map[string]string, dataDir string) {
 	if env["MASTRA_APP_DATA_DIR"] == "" {
 		env["MASTRA_APP_DATA_DIR"] = ProfileDir(dataDir)
+	}
+	if env["MASTRA_TELEMETRY_DISABLED"] == "" {
+		env["MASTRA_TELEMETRY_DISABLED"] = "1"
 	}
 }
 
@@ -166,6 +174,9 @@ func (*Plugin) PrepareRuntimeLaunch(ctx context.Context, cfg ports.WorkspaceHook
 	// Only a fresh launch carries AO's configured model in the launch descriptor.
 	cfg.Env["MASTRACODE_MODEL_ID"] = state.LaunchModel
 	cfg.Env["MASTRA_DB_PATH"] = state.Database
+	// The pinned release otherwise offers an inline self-update prompt that
+	// AO's next delivered keystrokes would answer.
+	cfg.Env["MASTRACODE_DISABLE_UPDATE_CHECK"] = "1"
 	if ports.NormalizePermissionMode(cfg.Config.Permissions) == ports.PermissionModeBypassPermissions {
 		cfg.Env["MASTRACODE_YOLO"] = "1"
 	} else {
