@@ -16,6 +16,7 @@ import (
 	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/workspace/forkseed"
 	"github.com/aoagents/agent-orchestrator/backend/internal/artifactversions"
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
+	"github.com/aoagents/agent-orchestrator/backend/internal/filesnapshot"
 	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
 	chatsvc "github.com/aoagents/agent-orchestrator/backend/internal/service/chat"
 	sessionsvc "github.com/aoagents/agent-orchestrator/backend/internal/service/session"
@@ -129,46 +130,84 @@ func newDirForkSeeds(dataDir string) dirForkSeeds {
 	return dirForkSeeds{root: filepath.Join(dataDir, dirseed.DirName), managedRoot: filepath.Join(dataDir, "worktrees")}
 }
 
-// plainFolderDepth is how deep a session's own folder sits under the managed
-// root: standalone/sessions/<id>, or <project>/workers/<id>. Anything
-// shallower holds other sessions' folders too.
-const plainFolderDepth = 3
-
-// Manages reports whether workspace, its links resolved, is one session's
-// folder under Orchestrator's managed root. The user's own folders are never
-// copied.
-func (d dirForkSeeds) Manages(workspace string) bool {
+// plainSessionFolder reports whether workspace, its links resolved, is one
+// session's plain folder under Orchestrator's managed root, as the scratch
+// workspace adapter lays them out: standalone/sessions/<id>, or
+// <project>/workers/<id> and <project>/orchestrators/<id> for a Scratch
+// project. It returns the session's id. Git worktrees, the folders holding
+// several sessions, and the user's own folders never match.
+func plainSessionFolder(managedRoot, workspace string) (string, bool) {
 	if strings.TrimSpace(workspace) == "" {
-		return false
+		return "", false
 	}
-	root, err := filepath.EvalSymlinks(d.managedRoot)
+	root, err := filepath.EvalSymlinks(managedRoot)
 	if err != nil {
-		return false
+		return "", false
 	}
 	path, err := filepath.EvalSymlinks(workspace)
 	if err != nil {
-		return false
+		return "", false
 	}
 	if info, err := os.Stat(path); err != nil || !info.IsDir() {
-		return false
+		return "", false
 	}
 	rel, err := filepath.Rel(root, path)
-	if err != nil || rel == "." || rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
-		return false
+	if err != nil {
+		return "", false
 	}
-	return len(strings.Split(rel, string(filepath.Separator))) >= plainFolderDepth
+	parts := strings.Split(rel, string(filepath.Separator))
+	if len(parts) != 3 || parts[0] == ".." || parts[0] == "." {
+		return "", false
+	}
+	switch {
+	case parts[0] == "standalone" && parts[1] == "sessions":
+	case parts[1] == "workers" || parts[1] == "orchestrators":
+	default:
+		return "", false
+	}
+	return parts[2], true
+}
+
+// Manages reports whether workspace is one session's plain folder; the
+// user's own folders are never copied.
+func (d dirForkSeeds) Manages(workspace string) bool {
+	_, ok := plainSessionFolder(d.managedRoot, workspace)
+	return ok
 }
 
 func (d dirForkSeeds) Capture(ctx context.Context, workspace string) (string, error) {
-	b := make([]byte, 8)
-	if _, err := rand.Read(b); err != nil {
+	seed, err := d.newSeedPath()
+	if err != nil {
 		return "", err
 	}
-	seed := filepath.Join(d.root, hex.EncodeToString(b))
 	if err := dirseed.Capture(ctx, workspace, seed); err != nil {
 		return "", err
 	}
 	return seed, nil
+}
+
+// CaptureTurn writes the files a turn left, from the folder's snapshot, to a
+// new seed.
+func (d dirForkSeeds) CaptureTurn(ctx context.Context, workspace, snapshotRef string) (string, error) {
+	seed, err := d.newSeedPath()
+	if err != nil {
+		return "", err
+	}
+	if err := filesnapshot.Export(ctx, workspace, snapshotRef, seed); err != nil {
+		if errors.Is(err, filesnapshot.ErrNotFound) || errors.Is(err, filesnapshot.ErrNotRepository) {
+			return "", sessionfork.ErrSnapshotMissing
+		}
+		return "", err
+	}
+	return seed, nil
+}
+
+func (d dirForkSeeds) newSeedPath() (string, error) {
+	b := make([]byte, 8)
+	if _, err := rand.Read(b); err != nil {
+		return "", err
+	}
+	return filepath.Join(d.root, hex.EncodeToString(b)), nil
 }
 
 // Delete removes a seed; it refuses any path outside the seeds folder.
@@ -177,6 +216,68 @@ func (d dirForkSeeds) Delete(_ context.Context, seed string) error {
 		return fmt.Errorf("session fork: %q is not a fork seed", seed)
 	}
 	return dirseed.Delete(seed)
+}
+
+// folderSnapshotsDir, under the data folder, holds each plain folder's
+// snapshot store, one per session.
+const folderSnapshotsDir = "folder-snapshots"
+
+// folderSnapshotStores keeps a plain session folder's turn snapshots in a git
+// store of its own under the data folder, so Chat rollback can restore its
+// files and a fork can start from an older turn, with nothing written into
+// the folder. A folder the agent made a repository of its own keeps its
+// snapshots there, as any repository does.
+func folderSnapshotStores(dataDir string) filesnapshot.DetachedStores {
+	managed, root := filepath.Join(dataDir, "worktrees"), filepath.Join(dataDir, folderSnapshotsDir)
+	return func(workspace string) (string, bool) {
+		id, ok := plainSessionFolder(managed, workspace)
+		if !ok {
+			return "", false
+		}
+		if _, err := os.Lstat(filepath.Join(workspace, ".git")); !errors.Is(err, os.ErrNotExist) {
+			return "", false
+		}
+		return filepath.Join(root, id+".git"), true
+	}
+}
+
+// folderSnapshotSessions reads whether a store's session still exists.
+type folderSnapshotSessions interface {
+	GetSession(ctx context.Context, id domain.SessionID) (domain.SessionRecord, bool, error)
+}
+
+// reapFolderSnapshots removes the snapshot stores of deleted sessions, and
+// stores a crash left half made.
+func reapFolderSnapshots(ctx context.Context, dataDir string, sessions folderSnapshotSessions, log *slog.Logger) {
+	root := filepath.Join(dataDir, folderSnapshotsDir)
+	entries, err := os.ReadDir(root)
+	if err != nil {
+		if !errors.Is(err, os.ErrNotExist) {
+			log.Debug("session fork: list folder snapshot stores", "err", err)
+		}
+		return
+	}
+	for _, entry := range entries {
+		name, path := entry.Name(), filepath.Join(root, entry.Name())
+		if strings.HasPrefix(name, ".new-store-") {
+			if info, err := entry.Info(); err == nil && time.Since(info.ModTime()) > forkSeedMaxAge {
+				_ = os.RemoveAll(path)
+			}
+			continue
+		}
+		id, ok := strings.CutSuffix(name, ".git")
+		if !ok {
+			continue
+		}
+		if _, found, err := sessions.GetSession(ctx, domain.SessionID(id)); err != nil || found {
+			continue
+		}
+		if err := os.RemoveAll(path); err != nil {
+			log.Debug("session fork: remove folder snapshot store", "session", id, "err", err)
+		} else {
+			log.Info("session fork: removed a deleted session's folder snapshots", "session", id)
+		}
+	}
 }
 
 // forkSpawner spawns through the session service, so a repeated client
@@ -191,6 +292,8 @@ func (f forkSpawner) Spawn(ctx context.Context, cfg ports.SpawnConfig) (domain.S
 // wireSessionFork builds the session fork service and its hooks.
 func wireSessionFork(dataDir string, store *sqlite.Store, sessionSvc *sessionsvc.Service, mgr sessionLifecycle, chat *chatsvc.Service, drivers ports.ChatDriverRegistry, accounts sessionfork.Accounts, artifacts *artifactversions.Capturer, messenger ports.AgentMessenger, log *slog.Logger) *sessionfork.Service {
 	const enabled = true
+	// Plain folders' snapshots serve Chat rollback as well as forks.
+	filesnapshot.SetDetachedStores(folderSnapshotStores(dataDir))
 	terminal, _ := mgr.(terminalForkSources)
 	svc := sessionfork.New(sessionfork.Deps{
 		Enabled: enabled, Sessions: store, Projects: store, Lineage: store,
@@ -304,6 +407,7 @@ func reapDirForkSeeds(dataDir string, log *slog.Logger) {
 // reapForkSeeds removes fork file snapshots a crash left behind.
 func reapForkSeeds(ctx context.Context, dataDir string, store *sqlite.Store, log *slog.Logger) {
 	reapDirForkSeeds(dataDir, log)
+	reapFolderSnapshots(ctx, dataDir, store, log)
 	projects, err := store.ListProjects(ctx)
 	if err != nil {
 		log.Warn("session fork: list projects for seed cleanup", "err", err)

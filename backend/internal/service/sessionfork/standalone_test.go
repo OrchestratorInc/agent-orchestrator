@@ -29,6 +29,10 @@ type fakeDirSeeds struct {
 	unmanaged bool
 	captured  *[]string
 	deleted   *[]string
+	// turns holds the snapshot refs with saved files; exported records the
+	// ones a fork exported.
+	turns    map[string]bool
+	exported *[]string
 	// onCapture runs as the folder is copied.
 	onCapture func()
 	err       error
@@ -45,6 +49,16 @@ func (f fakeDirSeeds) Capture(_ context.Context, workspace string) (string, erro
 	seed := "/data/fork-seeds/seed-" + workspace
 	if f.captured != nil {
 		*f.captured = append(*f.captured, seed)
+	}
+	return seed, nil
+}
+func (f fakeDirSeeds) CaptureTurn(_ context.Context, workspace, ref string) (string, error) {
+	if !f.turns[ref] {
+		return "", ErrSnapshotMissing
+	}
+	seed := "/data/fork-seeds/turn-" + ref
+	if f.exported != nil {
+		*f.exported = append(*f.exported, ref)
 	}
 	return seed, nil
 }
@@ -82,8 +96,8 @@ func TestStandaloneOptionsAllowedWithoutGit(t *testing.T) {
 	if !opts.Allowed || opts.Refusal != nil {
 		t.Fatalf("options = %+v, want allowed", opts)
 	}
-	if opts.AnyTurn {
-		t.Fatal("a standalone agent offered forks of older turns")
+	if !opts.AnyTurn {
+		t.Fatal("an agent that cuts its conversation at any turn should offer older turns")
 	}
 	if opts.SuggestedName != "Fork of Retry failed webhook deliveries" {
 		t.Fatalf("suggested name = %q", opts.SuggestedName)
@@ -128,16 +142,61 @@ func TestStandaloneForkOfLatestTurnByIDIsAllowed(t *testing.T) {
 	}
 }
 
-func TestStandaloneForkRefusesOlderTurn(t *testing.T) {
+// An older turn's files come from the snapshot saved before the turn after
+// it, never from the folder as it is now.
+func TestStandaloneForkOfOlderTurnUsesItsSnapshot(t *testing.T) {
+	var captured, exported []string
+	dirs := fakeDirSeeds{captured: &captured, exported: &exported, turns: map[string]bool{"refs/ao/snap": true}}
+	s, sp, ln := newStandaloneService(t, standaloneSource(), dirs)
+	if _, err := s.ForkTurn(context.Background(), "p-1", "req-1", "turn-2"); err != nil {
+		t.Fatal(err)
+	}
+	if len(captured) != 0 {
+		t.Fatalf("an older turn's fork copied the folder as it is now: %v", captured)
+	}
+	if len(exported) != 1 || exported[0] != "refs/ao/snap" {
+		t.Fatalf("exported %v, want the turn's snapshot", exported)
+	}
+	if len(sp.got) != 1 || sp.got[0].Fork.SeedDir != "/data/fork-seeds/turn-refs/ao/snap" {
+		t.Fatalf("spawned %+v", sp.got)
+	}
+	if sp.got[0].Fork.SeedRef != "" || sp.got[0].Fork.KeepSeedRef {
+		t.Fatalf("plain-folder fork carries git seed fields: %+v", sp.got[0].Fork)
+	}
+	if len(ln.rows) != 1 || ln.rows[0].SourceTurnID != "turn-2" {
+		t.Fatalf("lineage = %+v", ln.rows)
+	}
+}
+
+func TestStandaloneOlderTurnWithoutSnapshotIsRefused(t *testing.T) {
 	var captured []string
 	s, sp, _ := newStandaloneService(t, standaloneSource(), fakeDirSeeds{captured: &captured})
 	_, err := s.ForkTurn(context.Background(), "p-1", "req-1", "turn-2")
-	if code := refusalCode(t, err); code != CodeStandaloneOlderTurn {
-		t.Fatalf("refusal = %q, want %q", code, CodeStandaloneOlderTurn)
+	if code := refusalCode(t, err); code != CodeTurnFilesMissing {
+		t.Fatalf("refusal = %q, want %q", code, CodeTurnFilesMissing)
 	}
 	if len(sp.got) != 0 || len(captured) != 0 {
 		t.Fatalf("spawned %d, captured %v; want neither", len(sp.got), captured)
 	}
+}
+
+// An agent that can fork only its latest turn says so for a plain folder too.
+func TestStandaloneOlderTurnOfALatestOnlyAgentIsRefused(t *testing.T) {
+	s, _, _ := newStandaloneService(t, standaloneSource(), fakeDirSeeds{turns: map[string]bool{"refs/ao/snap": true}},
+		func(s *Service) { s.deps.Sources = latestOnlySources{} })
+	_, err := s.ForkTurn(context.Background(), "p-1", "req-1", "turn-2")
+	if code := refusalCode(t, err); code != CodeOlderTurn {
+		t.Fatalf("refusal = %q, want %q", code, CodeOlderTurn)
+	}
+}
+
+type latestOnlySources struct{}
+
+func (latestOnlySources) ForkSource(_ context.Context, _ domain.SessionRecord, turnID string) (Source, error) {
+	if turnID != "" && turnID != "turn-4" {
+		return Source{Refusal: CodeOlderTurn}, nil
+	}
+	return Source{LatestTurnID: "turn-4", ContextMode: domain.ForkContextTextHandoff}, nil
 }
 
 func TestStandaloneForkRefusesUnmanagedFolder(t *testing.T) {

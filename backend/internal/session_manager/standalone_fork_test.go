@@ -102,6 +102,30 @@ func TestStandaloneForkWorkspaceGetsSourceFiles(t *testing.T) {
 	}
 }
 
+// An older turn's files come without dependency folders, which snapshots
+// leave out; the fork clones them from its original, as a git fork does.
+func TestStandaloneOlderTurnForkGetsTheOriginalsDependencies(t *testing.T) {
+	m, _, root := standaloneForkManager(t)
+	src := standaloneSourceFolder(t, root)
+	writeTestFile(t, filepath.Join(src, "node_modules", "left-pad", "index.js"), "pad")
+	seed := filepath.Join(root, dirseed.DirName, "turn-seed")
+	writeTestFile(t, filepath.Join(seed, "draft.md"), "older draft")
+	cfg := ports.SpawnConfig{Kind: domain.KindWorker, Fork: &ports.SpawnFork{SourceSessionID: "standalone-1", SeedDir: seed, SourceWorkspace: src}}
+	ws, _, err := m.createSessionWorkspace(context.Background(), domain.ProjectRecord{}, cfg, "standalone-2", "", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if b, err := os.ReadFile(filepath.Join(ws.Path, "draft.md")); err != nil || string(b) != "older draft" {
+		t.Fatalf("draft.md = %q, %v; want the older turn's", b, err)
+	}
+	if _, err := os.Stat(filepath.Join(ws.Path, "data", "rows.csv")); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("the fork got the original's current files: %v", err)
+	}
+	if b, err := os.ReadFile(filepath.Join(ws.Path, "node_modules", "left-pad", "index.js")); err != nil || string(b) != "pad" {
+		t.Fatalf("node_modules not cloned: %q, %v", b, err)
+	}
+}
+
 // A seed that can't be applied fails the spawn, and the created folder is
 // returned empty so the caller's rollback removes it.
 func TestStandaloneForkApplyFailureReturnsWorkspace(t *testing.T) {

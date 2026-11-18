@@ -34,27 +34,24 @@ const (
 	CodeNativeMissing    = "FORK_NATIVE_SESSION_MISSING"
 	CodeTurnFilesMissing = "FORK_TURN_FILES_MISSING"
 	CodeOlderTurn        = "FORK_OLDER_TURN_UNSUPPORTED"
-	// CodeStandaloneOlderTurn: a plain folder keeps no files per turn.
-	CodeStandaloneOlderTurn = "FORK_STANDALONE_OLDER_TURN"
 	// CodeWorkspaceUnmanaged: a plain folder outside Orchestrator's own
 	// workspaces, such as the home folder, is never copied.
 	CodeWorkspaceUnmanaged = "FORK_WORKSPACE_UNMANAGED"
 )
 
 var refusalMessages = map[string]string{
-	CodeOrchestrator:        "Orchestrators can't be forked.",
-	CodeWorkspaceProject:    "Forking isn't available for multi-repo projects.",
-	CodeNotGit:              "Forking needs a git repository.",
-	CodeSourceTerminated:    "Restore this session to fork it.",
-	CodeSourceBusy:          "Wait for the agent to go idle to fork this session.",
-	CodeSourcePreparing:     "Wait for this session to finish setting up.",
-	CodeNoFinishedTurn:      "This session has no finished turn to fork yet.",
-	CodeAgentUnsupported:    "This agent can't be forked.",
-	CodeNativeMissing:       "This agent no longer has this conversation, so it can't be forked.",
-	CodeTurnFilesMissing:    "The files from this turn weren't saved, so it can't be forked.",
-	CodeOlderTurn:           "This agent can fork only from its latest turn.",
-	CodeStandaloneOlderTurn: "Standalone agents can be forked only from their latest turn.",
-	CodeWorkspaceUnmanaged:  "This session's folder can't be copied.",
+	CodeOrchestrator:       "Orchestrators can't be forked.",
+	CodeWorkspaceProject:   "Forking isn't available for multi-repo projects.",
+	CodeNotGit:             "Forking needs a git repository.",
+	CodeSourceTerminated:   "Restore this session to fork it.",
+	CodeSourceBusy:         "Wait for the agent to go idle to fork this session.",
+	CodeSourcePreparing:    "Wait for this session to finish setting up.",
+	CodeNoFinishedTurn:     "This session has no finished turn to fork yet.",
+	CodeAgentUnsupported:   "This agent can't be forked.",
+	CodeNativeMissing:      "This agent no longer has this conversation, so it can't be forked.",
+	CodeTurnFilesMissing:   "The files from this turn weren't saved, so it can't be forked.",
+	CodeOlderTurn:          "This agent can fork only from its latest turn.",
+	CodeWorkspaceUnmanaged: "This session's folder can't be copied.",
 }
 
 // ErrDisabled means session forks are turned off for this service.
@@ -167,6 +164,10 @@ type DirSeeds interface {
 	Manages(workspace string) bool
 	// Capture copies workspace to a new seed and returns where it is.
 	Capture(ctx context.Context, workspace string) (seed string, err error)
+	// CaptureTurn writes the files a turn left, from the snapshot under
+	// snapshotRef, to a new seed. It returns ErrSnapshotMissing when no
+	// snapshot was saved.
+	CaptureTurn(ctx context.Context, workspace, snapshotRef string) (seed string, err error)
 	Delete(ctx context.Context, seed string) error
 }
 
@@ -547,7 +548,7 @@ func (s *Service) plan(ctx context.Context, sourceID domain.SessionID, turnID st
 		return forkPlan{}, refuse(agent.Refusal)
 	}
 	if plainFolder {
-		if agent, err = s.plainFolderSource(ctx, rec, turnID, agent); err != nil {
+		if err := s.plainFolderSource(rec); err != nil {
 			return forkPlan{}, err
 		}
 	}
@@ -614,30 +615,33 @@ func (s *Service) plan(ctx context.Context, sourceID domain.SessionID, turnID st
 	return plan, nil
 }
 
-// plainFolderSource checks a plain-folder source: only an Orchestrator folder
-// is copied, and only as it is now, since no files were kept for older turns.
-func (s *Service) plainFolderSource(ctx context.Context, rec domain.SessionRecord, turnID string, agent Source) (Source, error) {
+// plainFolderSource checks a plain-folder source: only one of Orchestrator's
+// own folders is ever copied.
+func (s *Service) plainFolderSource(rec domain.SessionRecord) error {
 	if s.deps.DirSeeds == nil {
-		return Source{}, refuse(CodeNotGit)
+		return refuse(CodeNotGit)
 	}
 	if !s.deps.DirSeeds.Manages(rec.Metadata.WorkspacePath) {
-		return Source{}, refuse(CodeWorkspaceUnmanaged)
+		return refuse(CodeWorkspaceUnmanaged)
 	}
-	if turnID != "" {
-		latest, err := s.deps.Sources.ForkSource(ctx, rec, "")
-		if err != nil {
-			return Source{}, err
-		}
-		if latest.LatestTurnID != turnID {
-			return Source{}, refuse(CodeStandaloneOlderTurn)
-		}
-	}
-	agent.AnyTurn = false
-	return agent, nil
+	return nil
 }
 
-// captureFolder copies a plain-folder source's files for the fork.
+// captureFolder copies a plain-folder source's files for the fork: an older
+// turn's from the snapshot saved before the turn after it, the latest turn's
+// from the folder as it is now.
 func (s *Service) captureFolder(ctx context.Context, plan forkPlan) (forkPlan, error) {
+	if ref := plan.agent.FilesSnapshotRef; ref != "" {
+		seed, err := s.deps.DirSeeds.CaptureTurn(ctx, plan.source.Metadata.WorkspacePath, ref)
+		if errors.Is(err, ErrSnapshotMissing) {
+			return forkPlan{}, refuse(CodeTurnFilesMissing)
+		}
+		if err != nil {
+			return forkPlan{}, fmt.Errorf("read turn files: %w", err)
+		}
+		plan.seedDir = seed
+		return plan, nil
+	}
 	if plan.agent.Freeze != nil {
 		plan.agent.Freeze(ctx)
 	}

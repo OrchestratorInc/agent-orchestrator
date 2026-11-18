@@ -41,12 +41,14 @@ Files from an older turn come from the snapshot AO saves before each turn. A tur
 
 ## Standalone agents
 
-A standalone agent works in a plain folder with no git repository, so its fork is a copy of that folder instead of a new branch:
+A standalone agent works in a plain folder with no git repository. Its forks work like any other session's, from any finished turn for Claude Code and Codex and from the latest turn for other agents:
 
-- It can be forked at its latest turn only. AO keeps no snapshot of a plain folder before each turn, so older turns show no **Fork**.
-- The fork gets its own folder holding everything in the original's, dependency folders included, copied with copy-on-write where the disk supports it. Symlinks stay links; what they point to isn't copied.
-- The conversation, agent memory, attachments, artifacts and settings are copied as for any other fork.
-- Archiving or deleting the fork keeps its folder while it has files in it, as for any standalone agent.
+- The fork gets its own folder instead of a new branch. Forked at the latest turn, it holds everything in the original's folder, copied with copy-on-write where the disk supports it. Forked at an older turn, it holds the files as that turn left them.
+- AO saves the folder's files before each turn in a store of its own under the data folder, so nothing is written into the folder itself. The same snapshots let **Roll back** restore a standalone agent's files.
+- `node_modules` and `.venv` are left out of those snapshots, as a git project ignores them, and cloned into the fork from the original.
+- Symlinks stay links; what they point to isn't copied.
+- A folder with too many or too large files to snapshot before every turn (more than 5,000 files or 200 MiB, dependency folders aside) keeps no snapshots: its older turns can't be forked and **Roll back** leaves its files alone, but its latest turn can still be forked.
+- Archiving or deleting the fork keeps its folder while it has files in it, as for any standalone agent. Deleting a session removes its snapshots.
 
 ## The original's pull requests
 

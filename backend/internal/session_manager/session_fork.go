@@ -106,9 +106,8 @@ func (m *Manager) createForkWorkspace(ctx context.Context, fork *ports.SpawnFork
 }
 
 // createPlainForkWorkspace makes a plain-folder fork's workspace and moves
-// the copy of its original's folder into it. The copy already holds the
-// dependency folders, and a plain folder is never removed while it has files,
-// so there are no starting files to record. A folder that was created is
+// the copy of its original's files into it. A plain folder is never removed
+// while it has files, so there are no starting files to record. A folder that was created is
 // returned with any error, so the caller rolls it back.
 func (m *Manager) createPlainForkWorkspace(ctx context.Context, fork *ports.SpawnFork, cfg ports.WorkspaceConfig) (ports.WorkspaceInfo, *ports.WorkspaceProjectInfo, error) {
 	ws, err := m.workspace.Create(ctx, cfg)
@@ -127,6 +126,13 @@ func (m *Manager) createPlainForkWorkspace(ctx context.Context, fork *ports.Spaw
 	m.markForkWorkspace(ws.Path)
 	if err := m.restoreAttachments(ctx, cfg.SessionID, ws); err != nil {
 		m.logger.Warn("session fork: place attachments in the fork", "workspace", ws.Path, "err", err)
+	}
+	// An older turn's snapshot leaves dependency folders out; a copy of the
+	// folder as it is already has them, and those are left alone.
+	if fork.SourceWorkspace != "" {
+		if _, err := cloneForkDependencies(ctx, fork.SourceWorkspace, ws.Path); err != nil && !errors.Is(err, dirseed.ErrCloneUnsupported) {
+			m.logger.Warn("session fork: clone dependencies", "workspace", ws.Path, "err", err)
+		}
 	}
 	return ws, nil, nil
 }
