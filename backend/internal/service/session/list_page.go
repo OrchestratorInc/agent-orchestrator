@@ -112,53 +112,24 @@ func sortSessionRecords(recs []domain.SessionRecord, keyOf func(domain.SessionRe
 // selectByPRState keeps the rows owning a pull request in state, with when
 // each row's newest such PR reached it. That is the state change the daemon
 // observed, or the PR's last update for a row stored before state changes were
-// timed. Every candidate's PR facts come from one batched read.
+// timed. It reads only the PR table's sessions and times, so its cost follows
+// the PRs in that state, not the card facts of every candidate row.
 func (s *Service) selectByPRState(ctx context.Context, recs []domain.SessionRecord, state domain.PRState) ([]domain.SessionRecord, map[domain.SessionID]time.Time, error) {
-	ids := make([]domain.SessionID, 0, len(recs))
-	for _, rec := range recs {
-		ids = append(ids, rec.ID)
-	}
-	prsBySession, err := s.store.ListPRFactsForSessions(ctx, ids)
+	reached, err := s.store.ListPRStateTimes(ctx, state)
 	if err != nil {
-		return nil, nil, fmt.Errorf("list pr facts: %w", err)
+		return nil, nil, fmt.Errorf("list pr state times: %w", err)
 	}
-	kept := make([]domain.SessionRecord, 0, len(recs))
-	reachedAt := make(map[domain.SessionID]time.Time, len(recs))
+	kept := make([]domain.SessionRecord, 0, len(reached))
+	reachedAt := make(map[domain.SessionID]time.Time, len(reached))
 	for _, rec := range recs {
-		found := false
-		var newest time.Time
-		for _, pr := range prsBySession[rec.ID] {
-			if prFactsState(pr) != state {
-				continue
-			}
-			found = true
-			at := pr.StateChangedAt
-			if at.IsZero() {
-				at = pr.UpdatedAt
-			}
-			if at.After(newest) {
-				newest = at
-			}
+		at, ok := reached[rec.ID]
+		if !ok {
+			continue
 		}
-		if found {
-			kept = append(kept, rec)
-			reachedAt[rec.ID] = newest.UTC()
-		}
+		kept = append(kept, rec)
+		reachedAt[rec.ID] = at.UTC()
 	}
 	return kept, reachedAt, nil
-}
-
-func prFactsState(pr domain.PRFacts) domain.PRState {
-	switch {
-	case pr.Merged:
-		return domain.PRStateMerged
-	case pr.Closed:
-		return domain.PRStateClosed
-	case pr.Draft:
-		return domain.PRStateDraft
-	default:
-		return domain.PRStateOpen
-	}
 }
 
 func encodeSessionCursor(key listPageKey) string {

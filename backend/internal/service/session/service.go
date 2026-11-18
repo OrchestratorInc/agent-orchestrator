@@ -54,6 +54,7 @@ type Store interface {
 	GetDisplayPRFactsForSession(ctx context.Context, id domain.SessionID) (domain.PRFacts, bool, error)
 	ListPRFactsForSession(ctx context.Context, id domain.SessionID) ([]domain.PRFacts, error)
 	ListPRFactsForSessions(ctx context.Context, ids []domain.SessionID) (map[domain.SessionID][]domain.PRFacts, error)
+	ListPRStateTimes(ctx context.Context, state domain.PRState) (map[domain.SessionID]time.Time, error)
 	ListCurrentHeadReviewRunsForSession(ctx context.Context, id domain.SessionID) ([]domain.CurrentHeadReviewRun, error)
 	ListCurrentHeadReviewRunsForSessions(ctx context.Context, ids []domain.SessionID) (map[domain.SessionID][]domain.CurrentHeadReviewRun, error)
 	ListInterruptedSessions(ctx context.Context, ids []domain.SessionID) (map[domain.SessionID]bool, error)
@@ -1661,6 +1662,8 @@ func (s *Service) List(ctx context.Context, filter ListFilter) ([]domain.Session
 // filter.Limit is set, and reports the archive an active-only list left out.
 // The page is chosen from the stored rows before any read-model facts are
 // loaded, so a page of an archive of thousands costs a page's worth of reads.
+// A PR-state filter adds one narrow read of the PR table (session and time
+// only), not the card facts of every candidate.
 func (s *Service) ListPage(ctx context.Context, filter ListFilter) (ListPage, error) {
 	recoveryRevision := s.statusRecoveryRevision()
 	if filter.Limit < 0 || filter.Limit > MaxListLimit {

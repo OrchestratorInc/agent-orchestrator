@@ -308,3 +308,30 @@ func TestListPagePRStateKeepsTheOtherFilters(t *testing.T) {
 		t.Fatalf("project web merged = %v, want [other]", got)
 	}
 }
+
+// A PR-state page loads card facts for its own sessions only: which sessions
+// match comes from the narrow PR-state read, not from every candidate's facts.
+func TestListPagePRStateLoadsFactsForThePageOnly(t *testing.T) {
+	base := time.Date(2026, 10, 1, 12, 0, 0, 0, time.UTC)
+	st := &recordingStore{fakeStore: newFakeStore()}
+	for i := 1; i <= 60; i++ {
+		rec := archivedRecord(fmt.Sprintf("a-%02d", i), "ao", base.Add(time.Duration(i)*time.Minute))
+		st.sessions[rec.ID] = rec
+		if i%3 == 0 {
+			st.prFacts[rec.ID] = []domain.PRFacts{mergedPR(i, base.Add(time.Duration(i)*time.Hour))}
+		}
+	}
+	page, err := (&Service{store: st}).ListPage(context.Background(), ListFilter{Active: boolPtr(false), PRState: domain.PRStateMerged, Limit: 2})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got, want := pageIDs(page), []string{"a-60", "a-57"}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("page = %v, want %v", got, want)
+	}
+	if page.Total == nil || *page.Total != 20 {
+		t.Fatalf("total = %v, want 20", page.Total)
+	}
+	if len(st.prFactIDs) != 2 {
+		t.Fatalf("PR facts loaded for %d sessions, want the page's 2", len(st.prFactIDs))
+	}
+}
