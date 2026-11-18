@@ -23,6 +23,7 @@ vi.mock("@expo/ui/jetpack-compose", async () => {
 });
 vi.mock("@expo/ui/jetpack-compose/modifiers", () => ({
 	testID: (tag: string) => ({ testID: tag }),
+	semantics: (config: object) => ({ semantics: config }),
 	size: (width: number, height: number) => ({ size: [width, height] }),
 	clip: (shape: unknown) => ({ clip: shape }),
 	background: (color: string) => ({ background: color }),
@@ -103,6 +104,10 @@ it("puts a red or amber dot in the trailing slot of a machine that may not be cu
 	expect(dot(1)).toEqual([{ size: [7, 7] }, { clip: "circle" }, { background: "#red" }, { testID: "worker-environment-freshness-mac" }]);
 	expect(dot(2)).toContainEqual({ background: "#amber" });
 	expect(chips()[3].findAllByType("TrailingIconSlot" as never)).toHaveLength(0);
+	// TalkBack hears the state with the name; a live chip keeps its label alone.
+	expect(chips()[1].props.modifiers).toContainEqual({ semantics: { contentDescription: "Mac, can't reach" } });
+	expect(chips()[2].props.modifiers).toContainEqual({ semantics: { contentDescription: "PC, updates delayed" } });
+	expect(chips()[3].props.modifiers).toEqual([{ testID: "worker-environment-chip-vm" }]);
 	// The chosen chip keeps its check in the leading slot alongside the dot.
 	expect(chips()[1].findAllByType("LeadingIconSlot" as never)).toHaveLength(1);
 });

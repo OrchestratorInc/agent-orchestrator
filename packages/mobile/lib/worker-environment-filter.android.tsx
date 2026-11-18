@@ -1,6 +1,6 @@
 import { Box, FilterChip, Host, Icon, LazyRow, Text } from "@expo/ui/jetpack-compose";
-import { background, clip, Shapes, size, testID } from "@expo/ui/jetpack-compose/modifiers";
-import { freshnessColor, freshnessTone } from "./machineFreshness";
+import { background, clip, semantics, Shapes, size, testID } from "@expo/ui/jetpack-compose/modifiers";
+import { freshnessAccessibilityLabel, freshnessColor, freshnessTone } from "./machineFreshness";
 import { haptics } from "./haptics";
 import { useTheme, useThemeState } from "./ThemeProvider";
 import { materialDrawable } from "./toolbarIcon.android";
@@ -57,7 +57,12 @@ export function WorkerEnvironmentFilter({ environments, selectedEnvironmentId, o
 							}}
 							// Material outlines only the chips that are not chosen.
 							border={selected ? undefined : { width: 1, color: t.borderDefault }}
-							modifiers={[testID(`worker-environment-chip-${environment.id}`)]}
+							modifiers={[
+								testID(`worker-environment-chip-${environment.id}`),
+								// The dot is a picture; TalkBack hears its state with the name, as
+								// VoiceOver does on iOS. A live chip keeps its label alone.
+								...(tone ? [semantics({ contentDescription: `${environment.label}, ${freshnessAccessibilityLabel(environment.freshness)}` })] : []),
+							]}
 						>
 							{selected ? (
 								<FilterChip.LeadingIcon>
