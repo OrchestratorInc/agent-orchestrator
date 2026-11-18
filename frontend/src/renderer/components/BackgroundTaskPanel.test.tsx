@@ -28,14 +28,28 @@ beforeEach(() => {
 describe("background task panel", () => {
 	it("shows the task, its command and its output, and stops it", async () => {
 		render(<BackgroundTaskPanel isVisible sessionId="s" tab={{ task: task() }} />);
-		expect(screen.getByRole("heading", { name: "Dev server on port 3000" })).toBeVisible();
+		expect(screen.getByRole("region", { name: "Dev server on port 3000" })).toBeVisible();
 		expect(screen.getByText("Running")).toBeVisible();
 		expect(screen.getByText("12m")).toBeVisible();
 		expect(screen.getByText("npm run dev -- --port 3000")).toBeVisible();
+		expect(screen.getByText("2 lines")).toBeVisible();
 		expect(screen.getByRole("region", { name: "Output" })).toHaveTextContent("Local: http://localhost:3000/");
 		expect(outputMock).toHaveBeenCalledWith("s", "dev", { enabled: true, live: true });
 		await userEvent.click(screen.getByRole("button", { name: "Stop Dev server on port 3000" }));
 		expect(mutateMock).toHaveBeenCalledWith("dev");
+	});
+
+	it("counts the output's warnings and errors and tints their rows", () => {
+		outputMock.mockReturnValue(outputOf("✓ Ready in 1.4s\n⚠ Fast Refresh had to perform a full reload\nsrc/a.tsx:4:2 - error TS2322: nope\nFound 1 error.\n"));
+		render(<BackgroundTaskPanel isVisible sessionId="s" tab={{ task: task() }} />);
+		expect(screen.getByText("4 lines")).toBeVisible();
+		expect(screen.getByText("1 warning")).toBeVisible();
+		expect(screen.getByText("1 error")).toBeVisible();
+		const row = (text: string) => screen.getByText(text, { exact: false, selector: "pre > span" });
+		expect(row("Ready in 1.4s")).toHaveClass("text-(--color-term-green)");
+		expect(row("Fast Refresh")).toHaveClass("bg-(--color-term-yellow)/12");
+		expect(row("error TS2322")).toHaveClass("bg-(--color-term-red)/12");
+		expect(row("Found 1 error.").className).not.toMatch(/term-/);
 	});
 
 	it("keeps a finished task readable without a stop, and says when a task ended without an outcome", () => {
@@ -117,7 +131,7 @@ describe("tailed output", () => {
 	it("holds the text still while some of it is selected", () => {
 		const { rerender } = render(<TailedOutput label="Output" text="tick-1" truncated={false} />);
 		const region = screen.getByRole("region", { name: "Output" });
-		const line = region.querySelector("pre")!.firstChild!;
+		const line = region.querySelector("pre > span")!.firstChild!;
 		act(() => {
 			document.getSelection()!.setBaseAndExtent(line, 0, line, 4);
 			document.dispatchEvent(new Event("selectionchange"));

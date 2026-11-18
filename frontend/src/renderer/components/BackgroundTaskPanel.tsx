@@ -1,9 +1,10 @@
-import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 import type { TFunction } from "i18next";
 import { ArrowDown } from "@/components/app-icons";
 import { useBackgroundTaskOutput } from "../hooks/useBackgroundTasks";
 import type { BackgroundTaskTab } from "../stores/ui-store";
+import { lineTone, outputLines, outputSummary } from "../lib/output-lines";
 import { cn } from "../lib/utils";
 import { backgroundTaskName, elapsed, isLive, useNow, useTaskStops } from "./BackgroundTasks";
 import { Button } from "./ui/button";
@@ -30,20 +31,27 @@ export function BackgroundTaskPanel({ sessionId, tab, isVisible }: { sessionId: 
 	}, [isVisible, live, refetch]);
 
 	const status = ended ? t("backgroundTasks.state.ended") : stateLabel(task.state, t);
+	const isFailed = task.state === "failed" && !ended;
 	const time = elapsed(task, now);
 	const command = task.command && task.command !== name ? task.command : null;
+	const text = output.data?.availability === "ready" ? output.data.output : "";
+	const summary = useMemo(() => (text ? outputSummary(text) : null), [text]);
 
+	// The tab names the task, so the header starts with how it is doing.
 	return (
 		<section aria-label={name} className="flex h-full min-h-0 flex-col">
-			<header className="flex shrink-0 flex-col gap-1.5 px-3 pt-2.5 pb-3">
-				<div className="flex min-h-control-sm min-w-0 items-center gap-2">
-					<h2 className="min-w-0 flex-1 truncate text-sm font-medium text-foreground" title={name}>{name}</h2>
+			<header className="flex shrink-0 flex-col gap-0.5 border-b border-border pt-1.5 pr-2 pb-2.5 pl-3">
+				<div className="flex h-control-md min-w-0 items-center gap-1.5 text-xs">
+					{isFailed ? <span aria-hidden="true" className="size-1.5 shrink-0 rounded-full bg-destructive" /> : null}
+					<span className={cn("font-medium", isFailed ? "text-destructive" : "text-foreground")}>{status}</span>
+					{time ? <><span aria-hidden="true" className="text-muted-foreground">·</span><span className="text-muted-foreground tabular-nums">{time}</span></> : null}
+					{failed === task.id ? <span role="status" className="text-destructive">· {t("backgroundTasks.stopFailed")}</span> : null}
 					{live && task.stoppable ? (
 						<Button
 							type="button"
 							variant="quiet"
 							size="xs"
-							className="-mr-1 shrink-0"
+							className="ml-auto shrink-0"
 							aria-label={t("backgroundTasks.stop", { name })}
 							disabled={stopping.has(task.id)}
 							onClick={() => stop(task.id)}
@@ -53,19 +61,28 @@ export function BackgroundTaskPanel({ sessionId, tab, isVisible }: { sessionId: 
 						</Button>
 					) : null}
 				</div>
-				<p className="flex min-w-0 items-center gap-1.5 text-xs text-muted-foreground">
-					{task.state === "failed" && !ended ? <span aria-hidden="true" className="size-1.5 shrink-0 rounded-full bg-destructive" /> : null}
-					<span className={cn(task.state === "failed" && !ended && "text-destructive")}>{status}</span>
-					{time ? <><span aria-hidden="true">·</span><span className="tabular-nums">{time}</span></> : null}
-					{failed === task.id ? <span role="status" className="text-destructive">· {t("backgroundTasks.stopFailed")}</span> : null}
-				</p>
-				{command ? (
-					<code className="board-scrollbar max-h-20 overflow-y-auto font-mono text-xs break-all whitespace-pre-wrap text-muted-foreground select-text">
-						{command}
-					</code>
+				{command || summary ? (
+					<div className="flex min-w-0 items-baseline gap-3 pr-1">
+						{command ? (
+							<code className="board-scrollbar max-h-20 min-w-0 flex-1 overflow-y-auto font-mono text-xs leading-[18px] break-all whitespace-pre-wrap text-muted-foreground select-text">
+								{command}
+							</code>
+						) : null}
+						{summary ? (
+							<span className="ml-auto shrink-0 text-xs whitespace-nowrap text-muted-foreground tabular-nums">
+								{t("backgroundTasks.output.lines", { count: summary.lines })}
+								{summary.warnings ? (
+									<><span aria-hidden="true"> · </span><span className="text-(--color-term-yellow)">{t("backgroundTasks.output.warnings", { count: summary.warnings })}</span></>
+								) : null}
+								{summary.errors ? (
+									<><span aria-hidden="true"> · </span><span className="text-(--color-term-red)">{t("backgroundTasks.output.errors", { count: summary.errors })}</span></>
+								) : null}
+							</span>
+						) : null}
+					</div>
 				) : null}
 			</header>
-			<div className="flex min-h-0 flex-1 flex-col border-t border-border">
+			<div className="flex min-h-0 flex-1 flex-col">
 				{output.isError ? (
 					<p className="px-3 py-2.5 text-xs text-muted-foreground">{t("backgroundTasks.output.error")}</p>
 				) : output.data?.availability === "unavailable" ? (
@@ -109,6 +126,7 @@ export function TailedOutput({ text, truncated, label }: { text: string; truncat
 	latest.current = { text, truncated };
 	const live = following && !selecting;
 	const shown = live || !held ? { text, truncated } : held;
+	const lines = useMemo(() => outputLines(shown.text), [shown.text]);
 	const liveRef = useRef(live);
 	liveRef.current = live;
 
@@ -162,23 +180,48 @@ export function TailedOutput({ text, truncated, label }: { text: string; truncat
 		setSelecting(false);
 	};
 
+	// One row per line, so a warning or error tints its whole row and a wrapped
+	// line stays one block. The rows are blocks inside one <pre>, so a copied
+	// selection keeps its line breaks.
 	return (
-		<div className="relative flex min-h-0 flex-1">
+		<div className="flex min-h-0 flex-1 flex-col">
 			<div
 				aria-label={label}
-				className="board-scrollbar min-h-0 flex-1 overflow-y-auto overscroll-contain px-3 py-2 outline-none focus-visible:outline-2 focus-visible:outline-offset-[-2px] focus-visible:outline-ring"
+				className="board-scrollbar min-h-0 flex-1 overflow-y-auto overscroll-contain py-1.5 outline-none focus-visible:outline-2 focus-visible:outline-offset-[-2px] focus-visible:outline-ring"
 				onScroll={onScroll}
 				ref={scrollRef}
 				role="region"
 				tabIndex={0}
 			>
-				{shown.truncated ? <p className="pb-1 text-xs text-passive">{t("backgroundTasks.output.truncated")}</p> : null}
-				<pre className="font-mono text-xs leading-relaxed whitespace-pre-wrap text-foreground/90 select-text [overflow-wrap:anywhere]" ref={preRef}>
-					{shown.text}
+				{shown.truncated ? <p className="px-3 pb-1 text-xs text-passive">{t("backgroundTasks.output.truncated")}</p> : null}
+				<pre className="font-mono text-xs leading-[18px] text-foreground/90 select-text" ref={preRef}>
+					{lines.map((line, index) => {
+						const tone = lineTone(line);
+						return (
+							<span
+								// Rows hold no state, so reusing one for a shifted line costs only its text.
+								key={index}
+								className={cn(
+									"block min-h-6 px-3 py-[3px] whitespace-pre-wrap [overflow-wrap:anywhere]",
+									tone === "ok" && "text-(--color-term-green)",
+									tone === "warning" && "bg-(--color-term-yellow)/12 text-(--color-term-yellow)",
+									tone === "error" && "bg-(--color-term-red)/12 text-(--color-term-red)",
+								)}
+							>
+								{line}
+							</span>
+						);
+					})}
 				</pre>
 			</div>
 			{!following ? (
-				<Button type="button" variant="secondary" size="xs" className="absolute right-3 bottom-3" onClick={jumpToLatest}>
+				<Button
+					type="button"
+					variant="ghost"
+					size="none"
+					className="h-8 w-full gap-1.5 rounded-none border-t border-border bg-card text-xs font-medium"
+					onClick={jumpToLatest}
+				>
 					<ArrowDown aria-hidden="true" className="size-3" />
 					{t("backgroundTasks.output.jumpToLatest")}
 				</Button>
