@@ -32,6 +32,27 @@ func TestNativeDataRootPlatformDefaultsAndOverrides(t *testing.T) {
 	}
 }
 
+func TestNativeDataRootOverridesWithoutHome(t *testing.T) {
+	t.Setenv("HOME", "")
+	t.Setenv("USERPROFILE", "")
+	root := t.TempDir()
+	for _, key := range []string{"CRUSH_GLOBAL_DATA", "XDG_DATA_HOME"} {
+		env := map[string]string{"CRUSH_GLOBAL_DATA": "", "XDG_DATA_HOME": "", "LOCALAPPDATA": "", "USERPROFILE": ""}
+		env[key] = root
+		want := root
+		if key == "XDG_DATA_HOME" {
+			want = filepath.Join(root, "crush")
+		}
+		got, err := New().NativeSessionConfigDir(context.Background(), env)
+		if err != nil || got != want {
+			t.Fatalf("%s without home = %q, %v; want %q", key, got, err, want)
+		}
+	}
+	if _, err := New().NativeSessionConfigDir(context.Background(), map[string]string{"CRUSH_GLOBAL_DATA": "", "XDG_DATA_HOME": "", "LOCALAPPDATA": "", "USERPROFILE": ""}); err == nil {
+		t.Fatal("accepted missing home and data-root overrides")
+	}
+}
+
 func TestImportedRestorePinsDataDirectoryAcrossConfigAndAdoption(t *testing.T) {
 	workspace := t.TempDir()
 	for _, name := range []string{".crushrc", "crushrc"} {

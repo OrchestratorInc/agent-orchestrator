@@ -33,6 +33,12 @@ func (p *Plugin) NativeSessionConfigDir(ctx context.Context, env map[string]stri
 		}
 		return os.Getenv(key)
 	}
+	// Explicit data roots do not depend on a home directory. In particular,
+	// daemon launches can have HOME unset while selecting a valid override.
+	if lookup("CRUSH_GLOBAL_DATA") != "" || lookup("XDG_DATA_HOME") != "" ||
+		(runtime.GOOS == "windows" && (lookup("LOCALAPPDATA") != "" || lookup("USERPROFILE") != "")) {
+		return NativeDataRoot("", runtime.GOOS, lookup), nil
+	}
 	home, err := os.UserHomeDir()
 	if err != nil {
 		return "", err
