@@ -465,10 +465,46 @@ function interactionCount(): number {
 	return typeof count === "number" ? count : 0;
 }
 
-export function startPerformanceTelemetry(): () => void {
-	if (runtime || isDeniedEvent(EVENT)) return () => undefined;
+/** Drops the stored window, so nothing counted before an opt-out is sent after an opt-in. */
+export function discardPerformanceWindow(storage: Storage): void {
+	try {
+		storage.removeItem(STORAGE_KEY);
+	} catch {
+		// Telemetry must never affect the product.
+	}
+}
+
+let stopRuntime: (() => void) | null = null;
+let started = false;
+
+/** Starts the summary for this window once telemetry is enabled. */
+export function startPerformanceTelemetry(): void {
+	started = true;
+	startRuntime();
+}
+
+/**
+ * Applies the analytics opt-out at launch and whenever it changes. An opt-out
+ * stops the summary and discards what it counted, as the updater counts are,
+ * so nothing from before it is sent after a later opt-in. An opt-in starts a
+ * fresh window.
+ */
+export function applyPerformanceOptOut(optedOut: boolean): void {
+	if (optedOut) {
+		stopRuntime?.();
+		discardPerformanceWindow(window.localStorage);
+		return;
+	}
+	if (!started || runtime) return;
+	// Memory and CPU main kept during the opt-out start over too.
+	void aoBridge.telemetry.takeResourceSummary?.().catch(() => null);
+	startRuntime();
+}
+
+function startRuntime(): void {
+	if (runtime || isDeniedEvent(EVENT)) return;
 	const cohort = withTelemetryContext({}).experiment_cohort;
-	if (typeof cohort !== "number" || cohort >= SAMPLED_COHORTS) return () => undefined;
+	if (typeof cohort !== "number" || cohort >= SAMPLED_COHORTS) return;
 	const accumulator = new PerformanceAccumulator(
 		window.localStorage,
 		Date.now,
@@ -479,9 +515,11 @@ export function startPerformanceTelemetry(): () => void {
 	runtime = accumulator;
 	const visible = () => document.visibilityState === "visible";
 	let countedInteractions = interactionCount();
+	// A hidden window takes no input, so the count since the last sync is
+	// all visible use, even when the sync runs as the window hides.
 	const syncInteractionCount = () => {
 		const count = interactionCount();
-		if (visible()) accumulator.addInteractionCount(count - countedInteractions);
+		accumulator.addInteractionCount(count - countedInteractions);
 		countedInteractions = count;
 	};
 
@@ -536,7 +574,8 @@ export function startPerformanceTelemetry(): () => void {
 	if (accumulator.isFlushOverdue()) flush("startup");
 	else scheduleFlush();
 
-	return () => {
+	stopRuntime = () => {
+		stopRuntime = null;
 		window.clearInterval(checkpoint);
 		window.clearTimeout(flushTimer);
 		eventObserver?.disconnect();

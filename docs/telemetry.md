@@ -671,7 +671,7 @@ a measurement came from.
 
 | Event | When it is sent | Performance properties |
 | --- | --- | --- |
-| `ao.app.loaded` | Once per launch, when the window first shows the sidebar with live sessions, or 60 seconds after load if that frame never comes. A reload sends it at once, without these properties | `launch_kind`, `to_visible_ms`, `to_usable_ms` |
+| `ao.app.loaded` | Once per launch, when the window first shows the sidebar with live sessions, or when the window closes or 60 seconds pass without that frame (then without `to_usable_ms`). A reload sends it at once, without these properties | `launch_kind`, `to_visible_ms`, `to_usable_ms` |
 | `ao.ui.performance_summary` | At the end of each 45 to 60 minute window of use (the length is random in that range), or at the next launch for a window cut short by quitting. Nothing is sent for a window with no use. Only installs with `experiment_cohort` below 50 send it | see below |
 
 Launch properties on `ao.app.loaded`:
@@ -728,7 +728,9 @@ A missing count means zero; a missing percentile or cause means nothing
 was measured for it. Measurements count only while the window is
 visible. The summary window and its counts are kept in the app's local storage
 between launches and replaced after each send. Share usage analytics and the
-kill switch control both events.
+kill switch control both events. Turning Share usage analytics off stops the
+summary and deletes the window counted so far, so nothing from before is sent
+after it is turned back on.
 
 ## Chat import
 

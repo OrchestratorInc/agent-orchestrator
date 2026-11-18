@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { PerformanceAccumulator, percentile } from "./performance-telemetry";
+import { PerformanceAccumulator, discardPerformanceWindow, percentile } from "./performance-telemetry";
 
 type Capture = (event: string, properties: Record<string, unknown>) => Promise<void>;
 
@@ -160,6 +160,22 @@ describe("PerformanceAccumulator", () => {
 		await second.flush("startup");
 
 		expect(flushed()).toMatchObject({ flush_reason: "startup", switch_cached_lt150_count: 1, active_seconds: 60 });
+	});
+
+	it("sends nothing counted before an opt-out once the window is discarded", async () => {
+		const before = create();
+		before.activity();
+		before.recordOpen({ isSwitch: true, cached: true, chatLoaded: false, visibleMs: 20, usableMs: 100 });
+		now += 60_000;
+		before.pause();
+		discardPerformanceWindow(localStorage);
+
+		const after = create();
+		after.activity();
+		now += 10_000;
+		await after.flush();
+
+		expect(flushed()).toMatchObject({ switch_cached_lt150_count: 0, active_seconds: 10 });
 	});
 
 	it("replaces malformed stored state", async () => {

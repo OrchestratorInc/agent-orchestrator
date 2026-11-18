@@ -67,13 +67,19 @@ export async function takeLaunchStart(): Promise<LaunchTimingStart | null> {
 export async function launchProperties(start: LaunchTimingStart, appVersion: string): Promise<Record<string, unknown>> {
 	const launchKind = readLaunchKind(start.kind, appVersion);
 	let timer = 0;
+	let onPageHide = () => {};
+	// Closing the window first (a launch the daemon failed, then quit) still
+	// sends the event, without the usable time, as it was sent before timings.
 	const usableAt = await Promise.race([
 		usable,
 		new Promise<undefined>((resolve) => {
 			timer = window.setTimeout(() => resolve(undefined), USABLE_WAIT_MS);
+			onPageHide = () => resolve(undefined);
+			window.addEventListener("pagehide", onPageHide, { once: true });
 		}),
 	]);
 	window.clearTimeout(timer);
+	window.removeEventListener("pagehide", onPageHide);
 	if (hiddenDuringLaunch) return { launch_kind: launchKind };
 	const visibleAt = firstContentfulPaintAt();
 	return {
