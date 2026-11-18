@@ -1132,7 +1132,7 @@ describe("conversation branching commands", () => {
 			expect.objectContaining({ body: expect.objectContaining({ clientMessageId: "send-stable-1" }) }),
 		);
 		expect(postMock).toHaveBeenCalledWith(
-			"/api/v1/sessions/{sessionId}/conversation/steer",
+			"/api/v1/sessions/{sessionId}/conversation/steer-or-send",
 			expect.objectContaining({ body: { text: "steer once", clientMessageId: "steer-stable-1" } }),
 		);
 		expect(postMock).toHaveBeenCalledWith(
@@ -1317,7 +1317,7 @@ describe("steering refusals", () => {
 		});
 
 		expect(postMock).toHaveBeenCalledWith(
-			"/api/v1/sessions/{sessionId}/conversation/steer",
+			"/api/v1/sessions/{sessionId}/conversation/steer-or-send",
 			{
 				params: { path: { sessionId: "ao-1" } },
 				headers: { "X-AO-Attachment-Upload": "1" },

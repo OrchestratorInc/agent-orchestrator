@@ -1367,7 +1367,7 @@ export function useConversationCommands(
 		onError: (_error, _input, sent) => setSteerRefusedOn({ sentOn: sent?.sentOn, arrivedOn: currentTurnIdRef.current }),
 		mutationFn: async (input: { text: string; attachments?: WireImageContent[]; clientMessageId?: string; recoverOnly?: boolean }) => {
 			const { data, error } = await clientForSessionHost(hostId).POST(
-				"/api/v1/sessions/{sessionId}/conversation/steer",
+				"/api/v1/sessions/{sessionId}/conversation/steer-or-send",
 				{
 					params: { path: { sessionId: sessionId as string } },
 					headers: input.attachments?.length ? { "X-AO-Attachment-Upload": "1" } : undefined,
