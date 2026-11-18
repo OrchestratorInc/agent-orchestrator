@@ -64,7 +64,8 @@ import {
 	CLOUD_SHARE_PROGRESS_CHANNEL,
 	type CloudShareAccess,
 	type CloudShareFile,
-	type CloudShareGrant,
+	type CloudShareGrants,
+	type CloudShareInvite,
 	type CloudShareInspection,
 	type CloudShareLink,
 	type CloudShareLinks,
@@ -556,9 +557,9 @@ const api = {
 		unpublish: (baseUrl: string, shareId: string) => ipcRenderer.invoke("cloudShare:unpublish", { baseUrl, shareId }) as Promise<void>,
 		setAccess: (baseUrl: string, shareId: string, access: CloudShareAccess) =>
 			ipcRenderer.invoke("cloudShare:setAccess", { baseUrl, shareId, access }) as Promise<CloudShareLink>,
-		grants: (baseUrl: string, shareId: string) => ipcRenderer.invoke("cloudShare:grants", { baseUrl, shareId }) as Promise<CloudShareGrant[]>,
-		invite: (baseUrl: string, shareId: string, emails: string[]) =>
-			ipcRenderer.invoke("cloudShare:invite", { baseUrl, shareId, emails }) as Promise<CloudShareGrant[]>,
+		grants: (baseUrl: string, shareId: string) => ipcRenderer.invoke("cloudShare:grants", { baseUrl, shareId }) as Promise<CloudShareGrants>,
+		invite: (baseUrl: string, shareId: string, invite: CloudShareInvite) =>
+			ipcRenderer.invoke("cloudShare:invite", { baseUrl, shareId, ...invite }) as Promise<CloudShareGrants>,
 		removeGrant: (baseUrl: string, shareId: string, grantId: string) =>
 			ipcRenderer.invoke("cloudShare:removeGrant", { baseUrl, shareId, grantId }) as Promise<void>,
 		onProgress: (listener: (progress: CloudShareProgress) => void) => {

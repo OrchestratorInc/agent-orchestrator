@@ -175,10 +175,10 @@ export interface paths {
             };
             cookie?: never;
         };
-        /** @description Lists the emails an active link of the caller's is shared with, oldest first. Only the link's owner may list them; anyone else, and a revoked link, gets 404. */
+        /** @description Lists who an active link of the caller's is shared with, oldest first: people by email in grants, and, on a team workspace, its teams and the whole workspace. Only the link's owner may list them; anyone else, and a revoked link, gets 404. */
         get: operations["listArtifactShareGrants"];
         put?: never;
-        /** @description Shares an active link of the caller's with emails, at once, and lists everyone it is shared with now. Each gets view access once they sign in with that verified email; nobody is emailed. Emails are matched case-insensitively; one already listed, and the owner's own, change nothing. 400 for a value that is not a bare email address or more than 50 at once; 409 artifact_share_grant_limit past 200 emails on one link; 409 artifact_share_private_unavailable where links cannot be private. Only the link's owner may invite; anyone else gets 404. */
+        /** @description Shares an active link of the caller's with emails and, on a team workspace, with its teams or everyone in it, at once, and lists everyone it is shared with now. Each person gets view access once they sign in with that verified email; each member of a team or the workspace gets it while they are one, and the link is listed in their Artifacts. Nobody is emailed. Emails are matched case-insensitively; one already listed, the owner's own, and a team or workspace already listed change nothing. 400 for a value that is not a bare email address, more than 50 at once, nothing to share with, or teams or workspace without orgId; 403 when the caller is not an active member of orgId, and 403 team_workspace_required when orgId is a personal workspace: teams and workspaces are for team workspaces on a paid Cloud plan; 404 for a team that is not one of orgId's; 409 artifact_share_grant_limit past 200 emails, or 50 teams and workspaces, on one link; 409 artifact_share_private_unavailable where links cannot be private. Only the link's owner may invite; anyone else gets 404. */
         post: operations["addArtifactShareGrants"];
         delete?: never;
         options?: never;
@@ -199,7 +199,7 @@ export interface paths {
         get?: never;
         put?: never;
         post?: never;
-        /** @description Stops a link being shared with one email. Their next request for the file is refused, even with a view token they already hold; a page they have open keeps showing until it is refreshed. Only the link's owner may remove someone; anyone else gets 404. */
+        /** @description Stops a link being shared with one email, team or workspace, by the grant's id. Their next request for the file is refused, even with a view token they already hold; a page they have open keeps showing until it is refreshed. Only the link's owner may remove someone; anyone else gets 404. */
         delete: operations["removeArtifactShareGrant"];
         options?: never;
         head?: never;
@@ -4954,11 +4954,46 @@ export interface components {
             createdAt: string;
         };
         ArtifactShareGrantList: {
+            /** @description The people the link is shared with, by email. */
             grants: components["schemas"]["ArtifactShareGrant"][];
+            /** @description The teams the link is shared with. */
+            teams: components["schemas"]["ArtifactShareSubjectGrant"][];
+            /** @description The workspaces the link is shared with, everyone in each. */
+            workspaces: components["schemas"]["ArtifactShareSubjectGrant"][];
         };
+        ArtifactShareSubjectGrant: {
+            /**
+             * Format: uuid
+             * @description The grant's id, for removeArtifactShareGrant.
+             */
+            id: string;
+            /** Format: uuid */
+            orgId: string;
+            /**
+             * Format: uuid
+             * @description The team; absent for a workspace.
+             */
+            teamId?: string;
+            /** @description The team's or workspace's name; empty when the owner is no longer a member of the workspace. */
+            name: string;
+            /** @description Its members now; 0 when the owner is no longer one of the workspace. */
+            memberCount: number;
+            /** Format: date-time */
+            createdAt: string;
+        };
+        /** @description At least one of emails, teamIds and workspace. */
         ArtifactShareGrantsInput: {
             /** @description Bare email addresses to share the link with. */
-            emails: string[];
+            emails?: string[];
+            /**
+             * Format: uuid
+             * @description The team workspace teamIds and workspace belong to; required with either.
+             */
+            orgId?: string;
+            /** @description Teams of orgId to share the link with. */
+            teamIds?: string[];
+            /** @description Share the link with everyone in orgId. */
+            workspace?: boolean;
         };
         ArtifactSharePublishResult: {
             share: components["schemas"]["ArtifactShare"];
@@ -5110,12 +5145,17 @@ export interface components {
             /** @description The viewer page of the link; absent without a viewer. */
             viewerUrl?: string;
             /**
-             * @description How it reached them: direct, shared with their email (whether or not also with a team of theirs); team, shared only with teams they are in.
+             * @description How it reached them, the first that holds: direct, shared with their email; team, with a team they are in; workspace, with a workspace they are a member of.
              * @enum {string}
              */
-            via: "direct" | "team";
+            via: "direct" | "team" | "workspace";
             /** @description Every team of theirs the link is shared with; empty when none. */
             teams: {
+                id: string;
+                name: string;
+            }[];
+            /** @description Every workspace of theirs the link is shared with; empty when none. */
+            workspaces: {
                 id: string;
                 name: string;
             }[];
@@ -6628,7 +6668,7 @@ export interface operations {
         };
         requestBody?: never;
         responses: {
-            /** @description The email no longer has access. */
+            /** @description The email, team or workspace no longer has access. */
             204: {
                 headers: {
                     [name: string]: unknown;

@@ -5,8 +5,9 @@ import { Check, Copy, Loader2, Share } from "@/components/app-icons";
 import {
 	type CloudShareAccess,
 	type CloudShareFile,
-	type CloudShareGrant,
+	type CloudShareGrants,
 	type CloudShareInspection,
+	type CloudShareInvite,
 	type CloudShareLink,
 	type CloudShareLinks,
 	type CloudSharePageFiles,
@@ -17,6 +18,8 @@ import {
 	sameShareFingerprint,
 } from "../../shared/cloud-share";
 import { useCloudMeUserId } from "../hooks/useCloudMeUserId";
+import { useCloudOrg } from "../hooks/useCloudOrg";
+import { useTeamsEnabled } from "../hooks/useTeamsEnabled";
 import { keptArtifactsQueryKey } from "../hooks/useKeptArtifacts";
 import { workspaceQueryKeyForHost } from "../hooks/useWorkspaceQuery";
 import { useSettings } from "../hooks/useSettings";
@@ -31,8 +34,10 @@ import { cn } from "../lib/utils";
 import { useUiStore } from "../stores/ui-store";
 import { STANDALONE_WORKSPACE_ID } from "../types/workspace";
 import { shareAccessIcon } from "./ArtifactShareMark";
-import { ArtifactGeneralAccess, accessName, accessSentence } from "./share/artifact/ArtifactGeneralAccess";
-import { type ArtifactPerson, ArtifactPeopleList } from "./share/artifact/ArtifactPeopleList";
+import { type ArtifactAudience, ArtifactGeneralAccess, accessName, accessSentence } from "./share/artifact/ArtifactGeneralAccess";
+import { type ArtifactPerson, type ArtifactTeam, ArtifactPeopleList, teamRemovingKey } from "./share/artifact/ArtifactPeopleList";
+import { type ArtifactRecipients, ArtifactRecipientField } from "./share/artifact/ArtifactRecipientField";
+import { isPersonalWorkspace, workspaceDisplayName } from "./share/linkAccess";
 import { InviteField } from "./share/artifact/InviteField";
 import { Button } from "./ui/button";
 import { Popover, PopoverAnchor, PopoverContent, PopoverTrigger } from "./ui/popover";
@@ -50,8 +55,8 @@ type Phase =
 	| {
 		kind: "published";
 		share: CloudShareLink;
-		/** Who the link is shared with, once read. */
-		grants?: CloudShareGrant[];
+		/** Who the link is shared with (people, teams, workspaces), once read. */
+		grants?: CloudShareGrants;
 		/** Reading who the link is shared with failed: say so and offer to try again. */
 		grantsError?: boolean;
 		/** The file changed while it was being republished: say so, and offer its newest version. */
@@ -388,6 +393,9 @@ const MENU_HANDOFF_MS = 400;
 /** The most people one request may share a link with; a link holds more, added later. */
 export const MAX_INVITES_PER_REQUEST = 50;
 
+/** What a failed change of who the link is shared with says. */
+type GrantFailure = "artifacts.share.people.inviteFailed" | "artifacts.share.people.removeFailed" | "artifacts.share.people.teamsFailed" | "artifacts.share.access.changeFailed";
+
 /**
  * Closes an open popover when focus moves into a framed page. A click inside
  * an artifact preview lands in its iframe and never reaches this document, so
@@ -650,9 +658,20 @@ function SharePanel({
 	const [staged, setStaged] = useState<string[]>([]);
 	// Adding past what one publish can share the link with: said under the field.
 	const [stagedOver, setStagedOver] = useState(false);
+	// On a team workspace: its teams, and whether everyone in it, a file on
+	// this computer is shared with once its Publish has made the link.
+	const [stagedTeams, setStagedTeams] = useState<ArtifactTeam[]>([]);
+	const [stagedWorkspace, setStagedWorkspace] = useState(false);
 	const [inviting, setInviting] = useState(false);
 	const [removing, setRemoving] = useState<string>();
 	const [changingAccess, setChangingAccess] = useState(false);
+	// Teams and workspaces are for a team workspace on a paid Cloud plan, as
+	// session sharing offers them; anyone else shares with people by email,
+	// or by a private or public link.
+	const teamsBuild = useTeamsEnabled();
+	const { org } = useCloudOrg(teamsBuild && signedIn);
+	const teamWorkspace = teamsBuild && org && !isPersonalWorkspace(org) ? org : undefined;
+	const workspaceName = workspaceDisplayName(teamWorkspace?.displayName) ?? t("artifacts.share.access.yourWorkspace");
 	const shareFile = { ...file, baseUrl };
 	const key = pendingKey(baseUrl, file);
 	// A cloud session's file is already in the bucket: the click publishes it.
@@ -723,7 +742,8 @@ function SharePanel({
 	const showPublished = (share: CloudShareLink, extra: Partial<Extract<Phase, { kind: "published" }>> = {}) => {
 		setPhase({ kind: "published", share, ...extra });
 		// Who it is shared with; listed when it answers.
-		if (isPrivateShare(share) || share.grantCount) loadGrants(share);
+		// A team workspace's link can be shared with its teams even when public.
+		if (isPrivateShare(share) || share.grantCount || teamWorkspace) loadGrants(share);
 	};
 
 	// Shows how a publish ended. Its own refusal is shown as it came, not
@@ -733,6 +753,8 @@ function SharePanel({
 		switch (result.status) {
 			case "published":
 				setStaged([]);
+				setStagedTeams([]);
+				setStagedWorkspace(false);
 				showPublished(result.share, result.pageFiles ? { pageFiles: result.pageFiles } : {});
 				onChanged?.();
 				refreshArtifacts();
@@ -869,12 +891,17 @@ function SharePanel({
 	// With share, updates that active link in place: same URL, same slot, its
 	// access and who it is shared with kept. A new link starts as set up here:
 	// private and shared with nobody yet, unless the person chose otherwise.
-	const publish = async (inspection: CloudShareInspection, links: CloudShareLinks, share?: CloudShareLink, startsWith?: { access: CloudShareAccess; emails: string[] }) => {
+	const publish = async (inspection: CloudShareInspection, links: CloudShareLinks, share?: CloudShareLink, startsWith?: { access: CloudShareAccess; emails: string[]; teamIds?: string[]; workspace?: boolean }) => {
 		startAction();
 		const access = share ? (isPrivateShare(share) ? "restricted" : "anyone")
 			: links.privateLinks ? startsWith?.access ?? "restricted" : "anyone";
 		const emails = !share && links.privateLinks ? startsWith?.emails ?? [] : [];
-		const invited = share ? share.grantCount ?? 0 : emails.length;
+		// The teams and workspace staged here: publishing shares the link with
+		// people only, so they are added the moment it is live.
+		const subjects: CloudShareInvite | undefined = !share && links.privateLinks && teamWorkspace && ((startsWith?.teamIds?.length ?? 0) > 0 || startsWith?.workspace)
+			? { orgId: teamWorkspace.id, ...(startsWith?.teamIds?.length ? { teamIds: startsWith.teamIds } : {}), ...(startsWith?.workspace ? { workspace: true } : {}) }
+			: undefined;
+		const invited = share ? share.grantCount ?? 0 : emails.length + (subjects?.teamIds?.length ?? 0);
 		setPhase({ kind: "uploading", access, invited });
 		// The fingerprint ties the publish to what this popover showed. Access
 		// is sent only where links can be private: an older control plane
@@ -899,6 +926,7 @@ function SharePanel({
 			// Sent here, not in settle: this runs once per publish even if the panel closed meanwhile.
 			void captureRendererEvent(...publishResultEvent(result, Boolean(share)));
 			settle(result, links, share);
+			if (result.status === "published" && subjects) void addSubjects(result.share.id, subjects, "artifacts.share.people.teamsFailed");
 		} catch (error) {
 			void captureRendererEvent("ao.artifacts.publish_failed", { is_republish: Boolean(share), reason: "other" });
 			setPhase({ kind: "error", message: errorMessage(error) });
@@ -922,7 +950,7 @@ function SharePanel({
 		}
 	};
 
-	const changeAccess = async (shown: Extract<Phase, { kind: "published" }>, access: CloudShareAccess) => {
+	const changeAccess = async (shown: Extract<Phase, { kind: "published" }>, access: CloudShareAccess): Promise<boolean> => {
 		startAction();
 		setChangingAccess(true);
 		try {
@@ -932,50 +960,99 @@ function SharePanel({
 				: current);
 			onChanged?.();
 			shareLinksChanged();
+			return true;
 		} catch (error) {
 			setPhase((current) => current.kind === "published" ? { ...current, error: t("artifacts.share.access.changeFailed", { message: errorMessage(error) }) } : current);
+			return false;
 		} finally {
 			setChangingAccess(false);
 		}
 	};
 
-	// The link is live: Invite gives access at once.
-	const invite = async (shown: Extract<Phase, { kind: "published" }>, emails: string[]): Promise<boolean> => {
+	// On a team workspace, Everyone at it is a private link shared with the
+	// whole workspace; the other two choices stop sharing it with the workspace.
+	const changeAudience = async (shown: Extract<Phase, { kind: "published" }>, next: ArtifactAudience) => {
+		const access: CloudShareAccess = isPrivateShare(shown.share) ? "restricted" : "anyone";
+		if (!teamWorkspace) {
+			if (next !== "workspace") await changeAccess(shown, next);
+			return;
+		}
+		if (next === "workspace") {
+			if (access === "anyone" && !(await changeAccess(shown, "restricted"))) return;
+			setChangingAccess(true);
+			try {
+				await addSubjects(shown.share.id, { orgId: teamWorkspace.id, workspace: true }, "artifacts.share.access.changeFailed");
+			} finally {
+				setChangingAccess(false);
+			}
+			return;
+		}
+		const grant = shown.grants?.workspaces.find((workspace) => workspace.orgId === teamWorkspace.id);
+		if (grant) {
+			setChangingAccess(true);
+			const removed = await removeGrant(shown, grant.id, `workspace:${grant.orgId}`, "artifacts.share.access.changeFailed");
+			setChangingAccess(false);
+			if (!removed) return;
+		}
+		if (next !== access) await changeAccess(shown, next);
+	};
+
+	// The link is live: Invite gives access at once, to people, teams or the
+	// workspace, and the answer lists everyone it is shared with now.
+	const addSubjects = async (shareId: string, input: CloudShareInvite, failed: GrantFailure): Promise<boolean> => {
 		startAction();
 		setInviting(true);
 		const seq = ++grantsSeq.current;
 		try {
-			const grants = await aoBridge.cloudShare.invite(baseUrl, shown.share.id, emails);
-			setPhase((current) => current.kind === "published" && current.share.id === shown.share.id && seq === grantsSeq.current
-				? { ...current, grants, share: { ...current.share, grantCount: grants.length }, grantsError: undefined, error: undefined }
+			const grants = await aoBridge.cloudShare.invite(baseUrl, shareId, input);
+			setPhase((current) => current.kind === "published" && current.share.id === shareId && seq === grantsSeq.current
+				? { ...current, grants, share: { ...current.share, grantCount: grants.people.length }, grantsError: undefined, error: undefined }
 				: current);
 			return true;
 		} catch (error) {
-			setPhase((current) => current.kind === "published" ? { ...current, error: t("artifacts.share.people.inviteFailed", { message: errorMessage(error) }) } : current);
+			setPhase((current) => current.kind === "published" ? { ...current, error: t(failed, { message: errorMessage(error) }) } : current);
 			return false;
 		} finally {
 			setInviting(false);
 		}
 	};
+	const invite = (shown: Extract<Phase, { kind: "published" }>, { emails, teams }: ArtifactRecipients): Promise<boolean> =>
+		addSubjects(shown.share.id, {
+			...(emails.length > 0 ? { emails } : {}),
+			...(teams.length > 0 && teamWorkspace ? { orgId: teamWorkspace.id, teamIds: teams.map((team) => team.teamId) } : {}),
+		}, "artifacts.share.people.inviteFailed");
 
-	const removePerson = async (shown: Extract<Phase, { kind: "published" }>, person: ArtifactPerson) => {
-		if (!person.id) return;
+	// Stops the link being shared with one person, team or workspace.
+	const removeGrant = async (shown: Extract<Phase, { kind: "published" }>, grantId: string, removingKey: string, failed: GrantFailure = "artifacts.share.people.removeFailed"): Promise<boolean> => {
 		startAction();
-		setRemoving(person.email);
+		setRemoving(removingKey);
 		// A list read or invited before this is out of date once it lands.
 		++grantsSeq.current;
 		try {
-			await aoBridge.cloudShare.removeGrant(baseUrl, shown.share.id, person.id);
+			await aoBridge.cloudShare.removeGrant(baseUrl, shown.share.id, grantId);
 			setPhase((current) => {
 				if (current.kind !== "published" || current.share.id !== shown.share.id) return current;
-				const grants = (current.grants ?? []).filter((grant) => grant.id !== person.id);
-				return { ...current, grants, share: { ...current.share, grantCount: grants.length }, error: undefined };
+				const before = current.grants ?? { people: [], teams: [], workspaces: [] };
+				const grants: CloudShareGrants = {
+					people: before.people.filter((grant) => grant.id !== grantId),
+					teams: before.teams.filter((grant) => grant.id !== grantId),
+					workspaces: before.workspaces.filter((grant) => grant.id !== grantId),
+				};
+				return { ...current, grants, share: { ...current.share, grantCount: grants.people.length }, error: undefined };
 			});
+			return true;
 		} catch (error) {
-			setPhase((current) => current.kind === "published" ? { ...current, error: t("artifacts.share.people.removeFailed", { message: errorMessage(error) }) } : current);
+			setPhase((current) => current.kind === "published" ? { ...current, error: t(failed, { message: errorMessage(error) }) } : current);
+			return false;
 		} finally {
 			setRemoving(undefined);
 		}
+	};
+	const removePerson = (shown: Extract<Phase, { kind: "published" }>, person: ArtifactPerson) => {
+		if (person.id) void removeGrant(shown, person.id, person.email);
+	};
+	const removeTeam = (shown: Extract<Phase, { kind: "published" }>, team: ArtifactTeam) => {
+		if (team.id) void removeGrant(shown, team.id, teamRemovingKey(team));
 	};
 
 	// Every state is a title, its body, and one action row whose primary
@@ -1014,7 +1091,12 @@ function SharePanel({
 	const spinner = <Loader2 aria-hidden="true" className="size-3 animate-spin motion-reduce:animate-none" />;
 	const ownerIdentity = { name: owner?.displayName, email: owner?.email };
 	// Under the email field: who the people added there are.
-	const viewersNote = <p className="-mt-2 text-caption leading-4 text-muted-foreground" data-share-viewers-note="">{t("artifacts.share.people.whoCanView")}</p>;
+	const viewersNote = (
+		<p className="-mt-2 text-caption leading-4 text-muted-foreground" data-share-viewers-note="">
+			{t(teamWorkspace ? "artifacts.share.people.whoCanViewTeams" : "artifacts.share.people.whoCanView")}
+		</p>
+	);
+	const workspaceChoice = teamWorkspace ? { name: workspaceName } : undefined;
 
 	switch (phase.kind) {
 		case "loading":
@@ -1047,41 +1129,82 @@ function SharePanel({
 		case "setup": {
 			const { inspection, links } = phase;
 			const people: ArtifactPerson[] = staged.map((email) => ({ email, pending: true }));
+			// One publish shares the link with at most this many; more are added once it is live.
+			const stageEmails = (emails: string[]): boolean => {
+				const next = [...staged, ...emails.map((email) => email.toLowerCase()).filter((email, index, all) => !staged.includes(email) && all.indexOf(email) === index)];
+				if (next.length > MAX_INVITES_PER_REQUEST) {
+					setStagedOver(true);
+					return false;
+				}
+				setStagedOver(false);
+				setStaged(next);
+				return true;
+			};
+			const stageRecipients = ({ emails, teams }: ArtifactRecipients): boolean => {
+				const added = teams.filter((team, index, all) => !stagedTeams.some((staged) => staged.teamId === team.teamId) && all.findIndex((other) => other.teamId === team.teamId) === index);
+				if (stagedTeams.length + added.length > MAX_INVITES_PER_REQUEST) {
+					setStagedOver(true);
+					return false;
+				}
+				if (!stageEmails(emails)) return false;
+				setStagedTeams([...stagedTeams, ...added.map((team) => ({ teamId: team.teamId, name: team.name, memberCount: team.memberCount, pending: true }))]);
+				return true;
+			};
+			const stagedAudience: ArtifactAudience = stagedWorkspace ? "workspace" : stagedAccess;
 			return (
 				<>
 					{titled(t("artifacts.share.title.publish"))}
 					{phase.changed ? status(t("artifacts.share.changed"), "status") : phase.unpublished ? status(t("artifacts.share.unpublished")) : null}
 					{links.privateLinks ? (
 						<div className="mt-3.5 flex flex-col gap-3.5">
-							<InviteField
-								actionLabel={t("artifacts.share.people.add")}
-								onSubmit={(emails) => {
-									const next = [...staged, ...emails.map((email) => email.toLowerCase()).filter((email, index, all) => !staged.includes(email) && all.indexOf(email) === index)];
-									// One publish shares the link with at most this many; more are added once it is live.
-									if (next.length > MAX_INVITES_PER_REQUEST) {
-										setStagedOver(true);
-										return false;
-									}
-									setStagedOver(false);
-									setStaged(next);
-									return true;
-								}}
-							/>
+							{teamWorkspace ? (
+								<ArtifactRecipientField
+									actionLabel={t("artifacts.share.people.add")}
+									onSubmit={stageRecipients}
+									orgId={teamWorkspace.id}
+									unavailable={new Set([...staged.map((email) => `email:${email}`), ...stagedTeams.map(teamRemovingKey)])}
+								/>
+							) : (
+								<InviteField actionLabel={t("artifacts.share.people.add")} onSubmit={stageEmails} />
+							)}
 							{stagedOver ? <p role="alert" className="-mt-2 text-caption leading-4 text-error">{t("artifacts.share.people.tooManyBeforePublish", { count: MAX_INVITES_PER_REQUEST })}</p> : viewersNote}
 							<ArtifactPeopleList
 								onRemove={(person) => {
 									setStagedOver(false);
 									setStaged((current) => current.filter((email) => email !== person.email));
 								}}
+								onRemoveTeam={(team) => {
+									setStagedOver(false);
+									setStagedTeams((current) => current.filter((staged) => staged.teamId !== team.teamId));
+								}}
 								owner={ownerIdentity}
 								people={people}
+								teams={stagedTeams}
 							/>
-							<ArtifactGeneralAccess access={stagedAccess} invited={staged.length} onChange={setStagedAccess} />
+							<ArtifactGeneralAccess
+								access={stagedAudience}
+								invited={staged.length + stagedTeams.length}
+								onChange={(next) => {
+									setStagedWorkspace(next === "workspace");
+									setStagedAccess(next === "workspace" ? "restricted" : next);
+								}}
+								workspace={workspaceChoice}
+							/>
 						</div>
 					) : null}
 					{footer(
 						links.unlimited ? null : meta(t("artifacts.share.usage", { left: Math.max(0, links.limit - links.used), limit: links.limit })),
-						<Button onClick={() => void publish(inspection, links, undefined, { access: stagedAccess, emails: staged })} size="sm" type="button" variant="primary">
+						<Button
+							onClick={() => void publish(inspection, links, undefined, {
+								access: stagedAccess,
+								emails: staged,
+								teamIds: stagedTeams.map((team) => team.teamId),
+								workspace: stagedWorkspace,
+							})}
+							size="sm"
+							type="button"
+							variant="primary"
+						>
 							{t("artifacts.share.publish")}
 						</Button>,
 					)}
@@ -1125,7 +1248,9 @@ function SharePanel({
 			const { share, grants } = phase;
 			const link = artifactShareUrl(share);
 			const access: CloudShareAccess = isPrivateShare(share) ? "restricted" : "anyone";
-			const invited = grants?.length ?? share.grantCount ?? 0;
+			const invited = grants ? grants.people.length + grants.teams.length : share.grantCount ?? 0;
+			const sharedWithWorkspace = Boolean(teamWorkspace && grants?.workspaces.some((workspace) => workspace.orgId === teamWorkspace.id));
+			const audience: ArtifactAudience = access === "restricted" && sharedWithWorkspace ? "workspace" : access;
 			if (phase.unpublishing === "confirm" || phase.unpublishing === "busy") {
 				const busy = phase.unpublishing === "busy";
 				return (
@@ -1148,7 +1273,9 @@ function SharePanel({
 					</>
 				);
 			}
-			const people: ArtifactPerson[] = (grants ?? []).map((grant) => ({ email: grant.email, id: grant.id }));
+			const people: ArtifactPerson[] = (grants?.people ?? []).map((grant) => ({ email: grant.email, id: grant.id }));
+			const teams: ArtifactTeam[] = (grants?.teams ?? []).flatMap((grant) => grant.teamId
+				? [{ teamId: grant.teamId, name: grant.name, memberCount: grant.memberCount, id: grant.id }] : []);
 			return (
 				<>
 					{titled(t("artifacts.share.title.published"))}
@@ -1157,7 +1284,17 @@ function SharePanel({
 					<div className="mt-3.5 flex flex-col gap-3.5">
 						{privateLinks ? (
 							<>
-								<InviteField actionLabel={t("artifacts.share.people.add")} busy={inviting} onSubmit={(emails) => invite(phase, emails)} />
+								{teamWorkspace ? (
+									<ArtifactRecipientField
+										actionLabel={t("artifacts.share.people.add")}
+										busy={inviting}
+										onSubmit={(recipients) => invite(phase, recipients)}
+										orgId={teamWorkspace.id}
+										unavailable={new Set([...people.map((person) => `email:${person.email}`), ...teams.map(teamRemovingKey)])}
+									/>
+								) : (
+									<InviteField actionLabel={t("artifacts.share.people.add")} busy={inviting} onSubmit={(emails) => invite(phase, { emails, teams: [] })} />
+								)}
 								{viewersNote}
 								{phase.grantsError ? (
 									<div className="-mt-1 flex items-center justify-between gap-2" role="alert" data-share-grants-error="">
@@ -1166,19 +1303,22 @@ function SharePanel({
 									</div>
 								) : null}
 								<ArtifactPeopleList
-									onRemove={(person) => void removePerson(phase, person)}
+									onRemove={(person) => removePerson(phase, person)}
+									onRemoveTeam={(team) => removeTeam(phase, team)}
 									owner={ownerIdentity}
 									people={people}
 									removing={removing}
+									teams={teams}
 								/>
 							</>
 						) : null}
 						<ArtifactGeneralAccess
-							access={access}
+							access={audience}
 							choosable={privateLinks || access === "restricted"}
 							disabled={changingAccess}
 							invited={invited}
-							onChange={(next) => void changeAccess(phase, next)}
+							onChange={(next) => void changeAudience(phase, next)}
+							workspace={privateLinks ? workspaceChoice : undefined}
 						/>
 						{phase.narrowed && access === "restricted" ? note(t("artifacts.share.access.narrowed")) : null}
 					</div>

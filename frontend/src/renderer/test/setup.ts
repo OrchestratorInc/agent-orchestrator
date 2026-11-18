@@ -241,8 +241,8 @@ if (typeof window !== "undefined") {
 			setAccess: async () => {
 				throw new Error("not stubbed");
 			},
-			grants: async () => [],
-			invite: async () => [],
+			grants: async () => ({ people: [], teams: [], workspaces: [] }),
+			invite: async () => ({ people: [], teams: [], workspaces: [] }),
 			removeGrant: async () => undefined,
 			onProgress: () => () => undefined,
 		},

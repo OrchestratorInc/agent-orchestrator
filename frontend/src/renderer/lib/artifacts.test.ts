@@ -194,6 +194,15 @@ describe("sharedArtifactGroup", () => {
 		expect(sharedArtifactGroup([], "Shared with you")).toBeUndefined();
 		expect(sharedArtifactGroup(undefined, "Shared with you")).toBeUndefined();
 	});
+
+	it("names the team or workspace a link came through, and nothing for one shared with their email", () => {
+		const group = sharedArtifactGroup([
+			item("a", "a.html", "2026-10-03T00:00:00Z", { via: "team", teams: [{ id: "t-1", name: "Design" }], workspaces: [{ id: "o-1", name: "Acme" }] }),
+			item("b", "b.html", "2026-10-02T00:00:00Z", { via: "workspace", workspaces: [{ id: "o-1", name: "Acme" }] }),
+			item("c", "c.html", "2026-10-01T00:00:00Z", { teams: [{ id: "t-1", name: "Design" }] }),
+		], "Shared with you");
+		expect(group?.rows.map((row) => row.sessionTitle)).toEqual(["Design", "Acme", ""]);
+	});
 });
 
 describe("artifactOwner", () => {

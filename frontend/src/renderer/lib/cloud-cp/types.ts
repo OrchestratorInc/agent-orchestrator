@@ -817,7 +817,8 @@ export interface CloudCpChatSearchResponse {
 
 /**
  * A link someone else published and shared with the signed-in person
- * (listSharedArtifacts), by their email or a team they are in. It names no owner.
+ * (listSharedArtifacts), by their email, a team they are in, or a workspace
+ * they are a member of. It names no owner.
  */
 export interface CloudCpSharedArtifact {
 	linkId: string;
@@ -827,10 +828,12 @@ export interface CloudCpSharedArtifact {
 	updatedAt: string;
 	access: "restricted" | "anyone";
 	viewerUrl?: string;
-	/** direct: shared with their email (and maybe a team too); team: only with teams they are in. */
-	via: "direct" | "team";
+	/** The first that holds: direct, shared with their email; team, with a team they are in; workspace, with their workspace. */
+	via: "direct" | "team" | "workspace";
 	/** Every team of theirs the link is shared with; empty when none. */
 	teams: { id: string; name: string }[];
+	/** Every workspace of theirs the link is shared with; empty when none (and on an older control plane). */
+	workspaces?: { id: string; name: string }[];
 	sharedAt: string;
 }
 

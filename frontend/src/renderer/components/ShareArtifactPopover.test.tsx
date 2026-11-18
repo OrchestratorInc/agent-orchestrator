@@ -3,7 +3,7 @@ import { act, render, renderHook, screen, waitFor, within } from "@testing-libra
 import type { ReactNode } from "react";
 import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import type { CloudShareFile, CloudShareGrant, CloudShareInspection, CloudShareLink, CloudShareLinks, CloudSharePublishResult } from "../../shared/cloud-share";
+import type { CloudShareFile, CloudShareGrant, CloudShareGrants, CloudShareInspection, CloudShareLink, CloudShareLinks, CloudSharePublishResult } from "../../shared/cloud-share";
 import { keptArtifactsQueryKey } from "../hooks/useKeptArtifacts";
 import { workspaceQueryKeyForHost } from "../hooks/useWorkspaceQuery";
 import { aoBridge } from "../lib/bridge";
@@ -58,7 +58,7 @@ function stub(inspect: CloudShareInspection, list: CloudShareLinks, publish?: Cl
 	const inspectSpy = vi.spyOn(aoBridge.cloudShare, "inspect").mockResolvedValue(inspect);
 	const listSpy = vi.spyOn(aoBridge.cloudShare, "list").mockResolvedValue(list);
 	const publishSpy = vi.spyOn(aoBridge.cloudShare, "publish").mockResolvedValue(publish ?? { status: "cancelled" });
-	const grantsSpy = vi.spyOn(aoBridge.cloudShare, "grants").mockResolvedValue([]);
+	const grantsSpy = vi.spyOn(aoBridge.cloudShare, "grants").mockResolvedValue({ people: [], teams: [], workspaces: [] });
 	return { inspectSpy, listSpy, publishSpy, grantsSpy };
 }
 
@@ -173,13 +173,13 @@ describe("ShareArtifactButton on a cloud session's file", () => {
 
 	it("invites people on the live link at once, and removes them", async () => {
 		stub({ ...inspection, shareId: SHARE_ID }, { ...links, shares: [share] });
-		const invite = vi.spyOn(aoBridge.cloudShare, "invite").mockResolvedValue([maya]);
+		const invite = vi.spyOn(aoBridge.cloudShare, "invite").mockResolvedValue({ people: [maya], teams: [], workspaces: [] });
 		const remove = vi.spyOn(aoBridge.cloudShare, "removeGrant").mockResolvedValue();
 		await openPopover(cloudFile, "report.html", "Published");
 		const field = await screen.findByRole("textbox", { name: "Add people by email" });
 		await userEvent.type(field, "Maya@acme.co,");
 		await userEvent.click(screen.getByRole("button", { name: "Add" }));
-		expect(invite).toHaveBeenCalledExactlyOnceWith("https://cp.test", SHARE_ID, ["Maya@acme.co"]);
+		expect(invite).toHaveBeenCalledExactlyOnceWith("https://cp.test", SHARE_ID, { emails: ["Maya@acme.co"] });
 		expect(await screen.findByText("maya@acme.co")).toBeTruthy();
 		expect(screen.getByText("Can view")).toBeTruthy();
 		// With someone invited, Only you reads Only people invited.
@@ -192,7 +192,7 @@ describe("ShareArtifactButton on a cloud session's file", () => {
 
 	it("keeps Add disabled while a chip is not an email address, and says which", async () => {
 		stub({ ...inspection, shareId: SHARE_ID }, { ...links, shares: [share] });
-		const invite = vi.spyOn(aoBridge.cloudShare, "invite").mockResolvedValue([]);
+		const invite = vi.spyOn(aoBridge.cloudShare, "invite").mockResolvedValue({ people: [], teams: [], workspaces: [] });
 		await openPopover(cloudFile, "report.html", "Published");
 		const field = await screen.findByRole("textbox", { name: "Add people by email" });
 		await userEvent.type(field, "maya@acme.co ravi@acme ");
@@ -205,7 +205,7 @@ describe("ShareArtifactButton on a cloud session's file", () => {
 
 	it("lists who the link is shared with when it opens", async () => {
 		const { grantsSpy } = stub({ ...inspection, shareId: SHARE_ID }, { ...links, shares: [{ ...share, grantCount: 1 }] });
-		grantsSpy.mockResolvedValue([maya]);
+		grantsSpy.mockResolvedValue({ people: [maya], teams: [], workspaces: [] });
 		await openPopover(cloudFile, "report.html", "Published");
 		expect(await screen.findByText("maya@acme.co")).toBeTruthy();
 		expect(grantsSpy).toHaveBeenCalledWith("https://cp.test", SHARE_ID);
@@ -229,7 +229,7 @@ describe("ShareArtifactButton on a cloud session's file", () => {
 
 	it("unpublishes after an inline confirmation naming who it was shared with, then offers to publish again", async () => {
 		const { inspectSpy, listSpy, publishSpy, grantsSpy } = stub({ ...inspection, shareId: SHARE_ID }, { ...links, shares: [{ ...share, grantCount: 2 }] });
-		grantsSpy.mockResolvedValue([maya, { ...maya, id: "7f1c3a1e-2b4d-4c5e-8f7a-9b0c1d2e3f40", email: "dev@acme.co" }]);
+		grantsSpy.mockResolvedValue({ people: [maya, { ...maya, id: "7f1c3a1e-2b4d-4c5e-8f7a-9b0c1d2e3f40", email: "dev@acme.co" }], teams: [], workspaces: [] });
 		let finish: () => void = () => undefined;
 		const unpublish = vi.spyOn(aoBridge.cloudShare, "unpublish").mockImplementation(() => new Promise((resolve) => {
 			finish = () => {
@@ -401,7 +401,7 @@ describe("ShareArtifactButton on a cloud session's file", () => {
 
 	it("says when who it is shared with can't be read, and reads it again on Try again", async () => {
 		const { grantsSpy } = stub({ ...inspection, shareId: SHARE_ID }, { ...links, shares: [{ ...share, grantCount: 1 }] });
-		grantsSpy.mockRejectedValueOnce(new Error("offline")).mockResolvedValueOnce([maya]);
+		grantsSpy.mockRejectedValueOnce(new Error("offline")).mockResolvedValueOnce({ people: [maya], teams: [], workspaces: [] });
 		const popover = await openPopover(cloudFile, "report.html", "Published");
 		expect(await within(popover).findByText("Couldn't load who this link is shared with.")).toBeTruthy();
 		await userEvent.click(within(popover).getByRole("button", { name: "Try again" }));
@@ -411,16 +411,16 @@ describe("ShareArtifactButton on a cloud session's file", () => {
 
 	it("never lets an older list of who it is shared with replace an invite's answer", async () => {
 		const { grantsSpy } = stub({ ...inspection, shareId: SHARE_ID }, { ...links, shares: [share] });
-		let answerRead: (grants: CloudShareGrant[]) => void = () => undefined;
+		let answerRead: (grants: CloudShareGrants) => void = () => undefined;
 		grantsSpy.mockImplementation(() => new Promise((resolve) => { answerRead = resolve; }));
 		const dev = { ...maya, id: "7f1c3a1e-2b4d-4c5e-8f7a-9b0c1d2e3f40", email: "dev@acme.co" };
-		vi.spyOn(aoBridge.cloudShare, "invite").mockResolvedValue([maya, dev]);
+		vi.spyOn(aoBridge.cloudShare, "invite").mockResolvedValue({ people: [maya, dev], teams: [], workspaces: [] });
 		const popover = await openPopover(cloudFile, "report.html", "Published");
 		await userEvent.type(await within(popover).findByRole("textbox", { name: "Add people by email" }), "dev@acme.co{Enter}");
 		await userEvent.click(within(popover).getByRole("button", { name: "Add" }));
 		expect(await within(popover).findByText("dev@acme.co")).toBeTruthy();
 		// The read started on opening lands last, without dev.
-		act(() => answerRead([maya]));
+		act(() => answerRead({ people: [maya], teams: [], workspaces: [] }));
 		await new Promise((resolve) => setTimeout(resolve, 10));
 		expect(within(popover).getByText("dev@acme.co")).toBeTruthy();
 	});

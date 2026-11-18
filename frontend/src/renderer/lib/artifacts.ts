@@ -70,7 +70,18 @@ export type ArtifactRow = {
 export const SHARED_WITH_ME_GROUP_ID = "shared-with-me";
 
 /** What a shared link's row is made from: a listed link, or one opened from its page. */
-export type SharedArtifactLink = Pick<CloudCpSharedArtifact, "linkId" | "name" | "contentType" | "updatedAt" | "access" | "viewerUrl">;
+export type SharedArtifactLink = Pick<CloudCpSharedArtifact, "linkId" | "name" | "contentType" | "updatedAt" | "access" | "viewerUrl">
+	& Partial<Pick<CloudCpSharedArtifact, "via" | "teams" | "workspaces">>;
+
+/**
+ * The team or workspace a link reached this person through, for its row: a
+ * link shared with their email names neither.
+ */
+export function sharedThrough(item: SharedArtifactLink): string {
+	if (item.via === "team") return item.teams?.[0]?.name ?? "";
+	if (item.via === "workspace") return item.workspaces?.[0]?.name ?? "";
+	return "";
+}
 
 /** A shared link's row; see ArtifactRow.shared. */
 export function sharedArtifactRow(item: SharedArtifactLink): ArtifactRow {
@@ -85,7 +96,8 @@ export function sharedArtifactRow(item: SharedArtifactLink): ArtifactRow {
 		kind,
 		updatedAt: item.updatedAt,
 		sessionId: `shared:${item.linkId}`,
-		sessionTitle: "",
+		// Where a session's file names its session, a team's link names the team.
+		sessionTitle: sharedThrough(item),
 		shared: { linkId: item.linkId, ...(item.viewerUrl ? { viewerUrl: item.viewerUrl } : {}), access: item.access },
 	};
 }
