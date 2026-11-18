@@ -491,13 +491,19 @@ describe("side panel navigation and recovery", () => {
 	it.each([false, true])("retains the page boundary as new turns arrive (older history loaded: %s)", async (loadBeforeRefresh) => {
 		// The side transcript renders through the main chat's virtualized Timeline.
 		// A viewport taller than every row keeps the whole history mounted, so the
-		// assertions below can read it all.
+		// assertions below can read it all. The content is taller still: a history
+		// that fits the view loads older pages on its own, and this one waits for
+		// the reader's click.
 		const clientHeight = Object.getOwnPropertyDescriptor(Element.prototype, "clientHeight")!.get!;
+		const scrollHeight = Object.getOwnPropertyDescriptor(Element.prototype, "scrollHeight")!.get!;
 		const offsetHeight = Object.getOwnPropertyDescriptor(HTMLElement.prototype, "offsetHeight")!.get!;
 		const bounds = HTMLElement.prototype.getBoundingClientRect;
 		const tall = [
 			vi.spyOn(Element.prototype, "clientHeight", "get").mockImplementation(function (this: Element) {
 				return this.getAttribute("role") === "log" ? 1_000_000 : clientHeight.call(this);
+			}),
+			vi.spyOn(Element.prototype, "scrollHeight", "get").mockImplementation(function (this: Element) {
+				return this.getAttribute("role") === "log" ? 2_000_000 : scrollHeight.call(this);
 			}),
 			vi.spyOn(HTMLElement.prototype, "offsetHeight", "get").mockImplementation(function (this: HTMLElement) {
 				return this.getAttribute("role") === "log" ? 1_000_000 : offsetHeight.call(this);

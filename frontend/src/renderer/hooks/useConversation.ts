@@ -750,7 +750,9 @@ export function useConversation(sessionId: string | undefined, hostId?: string):
 		else if (cached.isInvalidated) refreshLocalConversationOnce(queryClient, sessionId);
 	}, [hostId, queryClient, sessionId]);
 
-	if (query.error && (!hostId || !query.data)) {
+	// An older page that failed leaves the pages already loaded usable: the chat
+	// stays, and the button above its first turn asks for that page again.
+	if (query.error && (!query.data || (!hostId && !query.isFetchNextPageError))) {
 		const code = apiErrorCode(query.error);
 		// The session is currently owned by Terminal UI (or its Chat controller is
 		// absent). A deliberate interface switch can change that later, but this
@@ -780,9 +782,15 @@ export function useConversation(sessionId: string | undefined, hostId?: string):
 		hasOlder: query.hasNextPage,
 		isLoadingOlder: query.isFetchingNextPage,
 		// A live refresh may be in flight; cancelling it would drop the newest
-		// page for good. The older page then loads on the next scroll or click.
+		// page for good. Asking during it joins the refresh, which loads no older
+		// page, so the older page is asked for again once the refresh lands.
 		loadOlder: () => {
-			const fetchOlder = () => void query.fetchNextPage({ cancelRefetch: false });
+			const fetchOlder = () => {
+				const state = sessionId ? queryClient.getQueryState(conversationQueryKey(sessionId, hostId)) : undefined;
+				const refreshing = state?.fetchStatus === "fetching" && !state.fetchMeta?.fetchMore;
+				const asked = query.fetchNextPage({ cancelRefetch: false });
+				if (refreshing) void asked.then(() => query.fetchNextPage({ cancelRefetch: false }));
+			};
 			// A local chat's open read is not a query fetch to join. An older-page fetch
 			// started during it copies the cached pages as it starts and writes them
 			// back over the live page the read puts in, so it waits for the read.

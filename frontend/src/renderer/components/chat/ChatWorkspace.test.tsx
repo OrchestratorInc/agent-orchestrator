@@ -762,6 +762,120 @@ describe("ChatWorkspace timeline", () => {
 		expect(onLoadOlder).toHaveBeenCalledTimes(1);
 	});
 
+	// A history shorter than the view cannot scroll, so no scroll ever comes to load
+	// older pages by: the chat sat under "Load earlier messages" until it was clicked.
+	describe("older history in a chat too short to scroll", () => {
+		const all = chatFixtureLongHistory(8);
+		/** The newest turns from `from` on, as a page that has older ones before it. */
+		const page = (from: number): ConversationSnapshot => {
+			const turns = all.turns.slice(from);
+			return { ...all, hasMoreBefore: from > 0, turns, items: all.items.filter((item) => turns.some((turn) => turn.id === item.turnId)) };
+		};
+		let log: { scroll: number; client: number };
+		let restore: () => void;
+		beforeEach(() => {
+			log = { scroll: 600, client: 800 };
+			const client = Object.getOwnPropertyDescriptor(Element.prototype, "clientHeight")!.get!;
+			const scroll = Object.getOwnPropertyDescriptor(Element.prototype, "scrollHeight")!.get!;
+			const spies = [
+				vi.spyOn(Element.prototype, "clientHeight", "get").mockImplementation(function (this: Element) {
+					return this.getAttribute("role") === "log" ? log.client : client.call(this);
+				}),
+				vi.spyOn(Element.prototype, "scrollHeight", "get").mockImplementation(function (this: Element) {
+					return this.getAttribute("role") === "log" ? log.scroll : scroll.call(this);
+				}),
+			];
+			restore = () => spies.forEach((spy) => spy.mockRestore());
+		});
+		afterEach(() => restore());
+
+		it("loads older pages on its own until the chat fills the view, once per page", () => {
+			const onLoadOlder = vi.fn();
+			const view = render(<ChatWorkspace snapshot={page(6)} hasOlder onLoadOlder={onLoadOlder} />);
+			expect(onLoadOlder).toHaveBeenCalledTimes(1);
+
+			// Not again while it loads, nor after a page that failed and added nothing.
+			view.rerender(<ChatWorkspace snapshot={page(6)} hasOlder loadingOlder onLoadOlder={onLoadOlder} />);
+			view.rerender(<ChatWorkspace snapshot={page(6)} hasOlder onLoadOlder={onLoadOlder} />);
+			expect(onLoadOlder).toHaveBeenCalledTimes(1);
+
+			// Nor when live rows arrive: a new step in the oldest turn, then a new turn.
+			const live = page(6);
+			const step = live.items.find((item) => item.turnId === live.turns[0]!.id && item.kind === "activity")!;
+			const withStep = { ...live, items: [...live.items, { ...step, id: "live-step", sequence: 10_000 }] };
+			view.rerender(<ChatWorkspace snapshot={withStep} hasOlder onLoadOlder={onLoadOlder} />);
+			const prompt = live.items.find((item) => item.kind === "message" && item.role === "user")!;
+			const withTurn = {
+				...withStep,
+				turns: [...withStep.turns, { ...live.turns.at(-1)!, id: "turn-live" }],
+				items: [...withStep.items, { ...prompt, id: "live-prompt", turnId: "turn-live", sequence: 10_001 }],
+			};
+			view.rerender(<ChatWorkspace snapshot={withTurn} hasOlder onLoadOlder={onLoadOlder} />);
+			expect(onLoadOlder).toHaveBeenCalledTimes(1);
+
+			// An older page that still leaves it short asks for the next one.
+			view.rerender(<ChatWorkspace snapshot={page(4)} hasOlder onLoadOlder={onLoadOlder} />);
+			expect(onLoadOlder).toHaveBeenCalledTimes(2);
+
+			// Once it can scroll, scrolling up loads the rest.
+			log.scroll = 2400;
+			view.rerender(<ChatWorkspace snapshot={page(2)} hasOlder onLoadOlder={onLoadOlder} />);
+			expect(onLoadOlder).toHaveBeenCalledTimes(2);
+		});
+
+		it("waits for a hidden chat to be shown, then fills it", () => {
+			const observed: Array<{ callback: ResizeObserverCallback; target: Element }> = [];
+			vi.stubGlobal("ResizeObserver", class {
+				constructor(private readonly callback: ResizeObserverCallback) {}
+				observe(target: Element) { observed.push({ callback: this.callback, target }); }
+				unobserve() {}
+				disconnect() {}
+			});
+			try {
+				log = { scroll: 0, client: 0 };
+				const onLoadOlder = vi.fn();
+				render(<ChatWorkspace snapshot={page(6)} hasOlder onLoadOlder={onLoadOlder} />);
+				expect(onLoadOlder).not.toHaveBeenCalled();
+
+				log = { scroll: 600, client: 800 };
+				const conversation = screen.getByRole("log");
+				act(() => observed.filter(({ target }) => target === conversation).forEach(({ callback }) => callback([], {} as ResizeObserver)));
+				expect(onLoadOlder).toHaveBeenCalledTimes(1);
+			} finally {
+				vi.unstubAllGlobals();
+			}
+		});
+
+		it("loads older history on an upward wheel or key once the reader is at the top", () => {
+			log.scroll = 4000;
+			const onLoadOlder = vi.fn();
+			const view = render(<ChatWorkspace snapshot={page(2)} hasOlder onLoadOlder={onLoadOlder} />);
+			const conversation = screen.getByRole("log");
+			stubGeometry(conversation, { scrollHeight: 4000, clientHeight: 800, scrollTop: 1200 });
+			fireEvent.wheel(conversation, { deltaY: -120 });
+			expect(onLoadOlder).not.toHaveBeenCalled();
+
+			conversation.scrollTop = 0;
+			fireEvent.wheel(conversation, { deltaY: 120 });
+			expect(onLoadOlder).not.toHaveBeenCalled();
+			fireEvent.wheel(conversation, { deltaY: -120 });
+			expect(onLoadOlder).toHaveBeenCalledTimes(1);
+			fireEvent.keyDown(conversation, { key: "PageUp" });
+			expect(onLoadOlder).toHaveBeenCalledTimes(2);
+
+			// A code block that can still scroll up takes the wheel.
+			const code = document.createElement("pre");
+			Object.defineProperty(code, "scrollTop", { configurable: true, value: 40 });
+			conversation.firstElementChild!.appendChild(code);
+			fireEvent.wheel(code, { deltaY: -120 });
+			expect(onLoadOlder).toHaveBeenCalledTimes(2);
+
+			view.rerender(<ChatWorkspace snapshot={page(2)} hasOlder loadingOlder onLoadOlder={onLoadOlder} />);
+			fireEvent.wheel(conversation, { deltaY: -120 });
+			expect(onLoadOlder).toHaveBeenCalledTimes(2);
+		});
+	});
+
 	it("keeps following when a wheel is consumed by a nested scroller or the reader clicks the margin", () => {
 		render(<ChatWorkspace snapshot={chatFixtureLongHistory(8)} />);
 		const log = screen.getByRole("log");
