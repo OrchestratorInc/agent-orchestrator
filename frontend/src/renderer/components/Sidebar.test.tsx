@@ -4360,7 +4360,7 @@ describe("Sidebar", () => {
 		expect(screen.getAllByLabelText("Restart to install update v9.9.9")).not.toHaveLength(0);
 	});
 
-	it("asks to restart a staged build from the same tinted pill", async () => {
+	it("asks to restart a staged build from a neutral Restart button", async () => {
 		updateStatusMock.mockResolvedValue({
 			state: "downloaded",
 			version: "9.9.9",
@@ -4371,8 +4371,11 @@ describe("Sidebar", () => {
 		renderSidebar();
 
 		const readyRow = await screen.findByTestId("sidebar-update-ready");
-		expect(within(readyRow).getByText("Ready to install")).toBeVisible();
-		expect(readyRow).not.toHaveTextContent("Restart to finish");
+		expect(within(readyRow).getByText("Update ready")).toBeVisible();
+		// The next step is named in words, on the app's primary surface, not brand blue.
+		const action = within(readyRow).getByText("Restart");
+		expect(action).toHaveClass("button-raised", "[--button-color:var(--primary)]");
+		expect(readyRow.querySelector(".bg-logo-accent")).toBeNull();
 		const pill = readyRow;
 		expect(pill).toHaveRole("button");
 		expect(pill).toHaveAccessibleName("Restart to install update v9.9.9");

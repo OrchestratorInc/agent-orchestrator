@@ -70,14 +70,14 @@ test("@P0 live update flow stays synchronized without reopening Settings", async
 	await page.evaluate(() => {
 		window.__aoFakeUpdates!.setStatus({ state: "preparing", version: "2.0.0", percent: 100, staged: { version: "2.0.0", stagedAt: 10, escalated: false, ready: false } });
 	});
-	await expect(page.getByTestId("sidebar-update-ready")).toContainText("Ready to install");
+	await expect(page.getByTestId("sidebar-update-ready")).toContainText("Update ready");
 	await expect(page.getByTestId("update-status-line")).toContainText("Preparing update…");
 	await expect(page.getByRole("button", { name: "Restart & install", exact: true })).toHaveCount(0);
 
 	await page.evaluate(() => {
 		window.__aoFakeUpdates!.setStatus({ state: "downloaded", version: "2.0.0" });
 	});
-	await expect(page.getByTestId("sidebar-update-ready")).toContainText("Ready to install");
+	await expect(page.getByTestId("sidebar-update-ready")).toContainText("Update ready");
 	await expect(page.getByTestId("sidebar-update-ready")).toHaveAccessibleName("Restart to install update v2.0.0");
 	await expect(page.getByRole("button", { name: "Restart & install", exact: true })).toBeEnabled();
 });
