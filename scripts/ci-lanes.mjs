@@ -12,7 +12,8 @@ export const LANES = {
   boundary: [FRONTEND, /^backend\/internal\/httpd\//],
   cloud: [/^packages\/cloud-client\//, /^contracts\/cloud\//],
   'product-ui': [/^packages\/product-ui\//],
-  mobile: [/^packages\/(mobile|shared)\//],
+  // The app copies the desktop's harness marks; its parity test reads them and the daemon's harness list.
+  mobile: [/^packages\/(mobile|shared)\//, /^frontend\/src\/renderer\/(assets\/agents\/|components\/AgentAvatar\.tsx$)/, /^backend\/internal\/domain\/harness\.go$/],
   'mac-native': [/^frontend\/native\//, /^frontend\/scripts\/build-(mac|update|wake|dictation)/, /^frontend\/assets\/(icon\.icns$|dmg\/)/],
   config: [/^\.github\//, /^scripts\//],
 };
