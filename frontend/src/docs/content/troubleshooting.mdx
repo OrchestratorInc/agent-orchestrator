@@ -86,11 +86,10 @@ Fix it in this order. Installing rtkit before raising the limits makes the kills
    busctl get-property org.freedesktop.RealtimeKit1 /org/freedesktop/RealtimeKit1 org.freedesktop.RealtimeKit1 RTTimeUSecMax
    ```
 
-   Only after that check passes, restart the desktop portal so it reads rtkit's budget, and confirm the portal reports the same value. If it still shows `x 0`, repeat this step:
+   Only after that check passes, restart the desktop portal so it reads rtkit's budget, and confirm the portal reports the same value. If the restart fails, or the portal shows `x 0`, an error, or a different value, fix the portal service and repeat this step. Continue only once the portal matches rtkit:
 
    ```bash
-   systemctl --user restart xdg-desktop-portal.service
-   busctl --user get-property org.freedesktop.portal.Desktop /org/freedesktop/portal/desktop org.freedesktop.portal.Realtime RTTimeUSecMax
+   systemctl --user restart xdg-desktop-portal.service && busctl --user get-property org.freedesktop.portal.Desktop /org/freedesktop/portal/desktop org.freedesktop.portal.Realtime RTTimeUSecMax
    ```
 
 5. Run the command from step 1 again to raise any process that started in the meantime.
