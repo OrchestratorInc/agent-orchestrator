@@ -106,6 +106,10 @@ function NotificationsContent() {
 	const loadedOnceRef = useRef(false);
 	const [loading, setLoading] = useState(true);
 	const [refreshing, setRefreshing] = useState(false);
+	// A reload nobody pulled for (Retry, after Clear all, a failed mark-read):
+	// it must not drive the RefreshControl, whose iOS spinner scrolls the list
+	// down to show itself and never scrolls it back.
+	const [reloading, setReloading] = useState(false);
 	const [loadingMore, setLoadingMore] = useState(false);
 	// Opening the screen marks what it loaded as read, as the desktop panel does.
 	// Those rows keep their unread look for this visit so the user can still see
@@ -148,7 +152,7 @@ function NotificationsContent() {
 	}, []);
 
 	const load = useCallback(
-		async (mode: "initial" | "refresh" | "more") => {
+		async (mode: "initial" | "refresh" | "reload" | "more") => {
 			if (mode === "more" && loadingMoreRef.current) return;
 			const hosts = hostsRef.current;
 			const currentFeeds = feedsRef.current;
@@ -163,6 +167,7 @@ function NotificationsContent() {
 			});
 			if (mode === "initial" && !loadedOnceRef.current) setLoading(true);
 			if (mode === "refresh") setRefreshing(true);
+			if (mode === "reload") setReloading(true);
 			if (mode === "more") {
 				loadingMoreRef.current = true;
 				setLoadingMore(true);
@@ -242,6 +247,7 @@ function NotificationsContent() {
 			loadedOnceRef.current = true;
 			setLoading(false);
 			setRefreshing(false);
+			setReloading(false);
 			loadingMoreRef.current = false;
 			setLoadingMore(false);
 		},
@@ -374,7 +380,7 @@ function NotificationsContent() {
 			} };
 		});
 		if (notification.status === "unread") {
-			markNotificationRead(source, notification.id).catch(() => void load("refresh"));
+			markNotificationRead(source, notification.id).catch(() => void load("reload"));
 		}
 		// What a tap does depends on the session behind it, exactly as the renderer
 		// decides: a terminated agent waiting on input is restored, not opened.
@@ -529,7 +535,7 @@ function NotificationsContent() {
 			notify(`${offline.map((feed) => feed.hostName).join(", ")} ${offline.length === 1 ? "is" : "are"} offline, so ${offline.length === 1 ? "its" : "their"} notifications were not cleared.`, "long");
 		}
 		// Also releases pagination that the generation bump cut off.
-		void load("refresh");
+		void load("reload");
 	}
 
 	// Memoized on whether there is anything to clear: the screen re-renders on
@@ -628,7 +634,7 @@ function NotificationsContent() {
 							icon="wifi-off"
 							title="Machines are offline"
 							message="Notifications will appear when at least one paired machine reconnects."
-							action={<Button title="Retry" icon="refresh-cw" onPress={() => void load("refresh")} />}
+							action={<Button title="Retry" icon="refresh-cw" loading={reloading} onPress={() => void load("reload")} />}
 						/>
 					) : hostStates.length === 0 && !cloud ? (
 						// Shared with the tabs: "Connecting…" while the launch race runs,

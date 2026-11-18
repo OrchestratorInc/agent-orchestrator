@@ -396,6 +396,61 @@ describe("NotificationsScreen", () => {
 		expect(renderer!.root.findAll((node) => node.type === ("StackToolbarButton" as never) && node.props.accessibilityLabel === "Clear all")).toHaveLength(0);
 	});
 
+	// iOS's refresh control scrolls the list down by its spinner's height when
+	// `refreshing` turns on without a pull, and never scrolls it back, so each
+	// Retry dropped the page ~60 pt. Only a pull may turn the spinner on.
+	describe("pull-to-refresh spinner", () => {
+		const refreshing = () => renderer!.root.findByType("SectionList" as never).props.refreshControl.props.refreshing;
+		/** The next load's requests, held until `answer`. */
+		function holdNextLoad() {
+			const base = fixtures.getNotifications.getMockImplementation()!;
+			const held: (() => void)[] = [];
+			fixtures.getNotifications.mockImplementation((config: { hostId: "dev" | "mac" }) => new Promise((resolve) => { held.push(() => resolve(base(config))); }));
+			return { answer: async () => { fixtures.getNotifications.mockImplementation(base); await act(async () => { for (const release of held) release(); }); } };
+		}
+
+		it("retries offline machines with Retry's own spinner, never the pull-to-refresh one", async () => {
+			fixtures.offline.add("dev");
+			fixtures.offline.add("mac");
+			await act(async () => { renderer = create(<NotificationsScreen />); });
+			const offlineState = () => renderer!.root.findAll((node) => node.type === ("EmptyState" as never) && node.props.title === "Machines are offline");
+			// The empty state's action, which this file's EmptyState stand-in holds as a prop.
+			const retry = () => offlineState()[0].props.action as { props: { title: string; loading?: boolean; onPress(): void } };
+			expect(retry().props.title).toBe("Retry");
+			fixtures.offline.clear();
+			const load = holdNextLoad();
+			await act(async () => { retry().props.onPress(); });
+			expect(fixtures.getNotifications).toHaveBeenCalled();
+			expect(refreshing()).toBe(false);
+			expect(retry().props.loading).toBe(true);
+			await load.answer();
+			expect(refreshing()).toBe(false);
+			expect(offlineState()).toHaveLength(0);
+		});
+
+		it("reloads after Clear all without turning on the pull-to-refresh spinner", async () => {
+			await act(async () => { renderer = create(<NotificationsScreen />); });
+			const clearAll = renderer!.root.find((node) => node.type === ("StackToolbarButton" as never) && node.props.accessibilityLabel === "Clear all");
+			act(() => { clearAll.props.onPress(); });
+			const [, , buttons] = fixtures.alert.mock.calls[0] as [string, string, { text: string; onPress?: () => void }[]];
+			const load = holdNextLoad();
+			await act(async () => { buttons.find((button) => button.text === "Clear all")!.onPress!(); });
+			expect(fixtures.getNotifications).toHaveBeenCalled();
+			expect(refreshing()).toBe(false);
+			await load.answer();
+			expect(refreshing()).toBe(false);
+		});
+
+		it("shows the pull-to-refresh spinner for a pull until the refresh lands", async () => {
+			await act(async () => { renderer = create(<NotificationsScreen />); });
+			const load = holdNextLoad();
+			await act(async () => { void renderer!.root.findByType("SectionList" as never).props.refreshControl.props.onRefresh(); });
+			expect(refreshing()).toBe(true);
+			await load.answer();
+			expect(refreshing()).toBe(false);
+		});
+	});
+
 	// Through openPage, like every page this one opens.
 	it("opens Pull Requests for a PR outcome through openPage", async () => {
 		const base = fixtures.getNotifications.getMockImplementation()!;
