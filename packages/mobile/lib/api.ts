@@ -657,6 +657,8 @@ export type ArchivedPRState = "merged" | "closed";
 export type PRStatePage = ArchivePage & {
 	/** How many archived workers match, across every page. */
 	total: number;
+	/** Names the whole filtered list; equal versions mean the same list. Null from a daemon that sends none. */
+	version: string | null;
 };
 
 /** Pages of archived workers by PR state are larger than the archive's: they are read to the end. */
@@ -683,6 +685,7 @@ export async function getArchivedPRSessions(
 		sessions: raw.filter((s) => s.kind !== "orchestrator" && s.isTerminated).map(mapSession),
 		nextCursor: typeof data?.nextCursor === "string" && data.nextCursor ? data.nextCursor : null,
 		total: typeof data?.total === "number" ? data.total : raw.length,
+		version: typeof data?.version === "string" && data.version ? data.version : null,
 	};
 }
 

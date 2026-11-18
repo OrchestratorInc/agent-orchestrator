@@ -31,23 +31,38 @@ type Stream = {
 	/** False once the daemon is known to predate the filter. */
 	supported: boolean;
 	error: string | null;
-	/** The rows are every match from one read that reached the end. */
+	/** The rows are every match from one read that reached the end, all from one list. */
 	complete: boolean;
+	/** The daemon's version of the list the rows came from, when complete. */
+	version: string | null;
 };
 
-const EMPTY_STREAM: Stream = { rows: [], total: 0, loading: false, supported: true, error: null, complete: false };
+const EMPTY_STREAM: Stream = { rows: [], total: 0, loading: false, supported: true, error: null, complete: false, version: null };
+
+/** Reads of a list that keeps moving under the cursor stop after this many tries. */
+const MAX_READ_ATTEMPTS = 3;
 
 /** "full" reads every page; "check" reads the first and stops when nothing moved. */
 type ReadMode = "full" | "check";
 
 /**
- * Whether a first page shows the same list a complete stream holds: the same
- * total and the same sessions leading it. A worker ending without a PR in
- * this state moves the archive's size but not this list, and costs one page.
+ * Whether a first page names the same list a complete stream holds. The
+ * daemon's version covers the whole list, so a later page that changed (one
+ * session restored, another ended: same total, same first page) still reads
+ * on. A worker ending without a PR in this state leaves the version alone and
+ * costs one page. Without a version nothing can be proven unchanged.
  */
-export function firstPageUnchanged(held: Pick<Stream, "rows" | "total" | "complete" | "supported">, first: PRStatePage): boolean {
-	if (!held.complete || !held.supported || first.total !== held.total) return false;
-	return first.sessions.every((session, index) => held.rows[index]?.id === session.id);
+export function firstPageUnchanged(held: Pick<Stream, "complete" | "supported" | "version">, first: PRStatePage): boolean {
+	return held.complete && held.supported && first.version !== null && first.version === held.version;
+}
+
+/**
+ * Whether one read saw one list end to end: every page from the same version,
+ * and as many sessions as that list holds. Pages fetched while the list moved
+ * under the cursor fail this, and the read starts over.
+ */
+export function readIsConsistent(rows: number, total: number, versions: ReadonlySet<string | null>): boolean {
+	return versions.size === 1 && rows === total;
 }
 
 const sourceKey = (source: Pick<ArchivedPRSource, "hostId" | "projectId">) => `${source.hostId}\n${source.projectId ?? ""}`;
@@ -60,7 +75,7 @@ const streamKey = (source: Pick<ArchivedPRSource, "hostId" | "projectId">, state
  */
 export async function readAllPRStatePages(
 	fetchPage: (cursor: string | null) => Promise<PRStatePage | null>,
-	onPage: (sessions: DashboardSession[], total: number) => void,
+	onPage: (sessions: DashboardSession[], page: PRStatePage) => void,
 	signal?: AbortSignal,
 ): Promise<"done" | "unsupported" | "aborted"> {
 	const seen = new Set<string>();
@@ -73,7 +88,7 @@ export async function readAllPRStatePages(
 		if (!page) return "unsupported";
 		const fresh = page.sessions.filter((session) => !seen.has(session.id));
 		for (const session of fresh) seen.add(session.id);
-		onPage(fresh, page.total);
+		onPage(fresh, page);
 		// A cursor seen before would loop forever; the list has been read.
 		if (!page.nextCursor || cursors.has(page.nextCursor)) return "done";
 		cursors.add(page.nextCursor);
@@ -161,8 +176,6 @@ export function useArchivedPRs(sources: readonly ArchivedPRSource[], options: { 
 			getArchivedPRSessions(config, { prState: state, cursor, projectId: source.projectId }, { signal: controller.signal });
 		const held = streamsRef.current[key] ?? EMPTY_STREAM;
 		const firstRead = held.rows.length === 0;
-		const rows: HostedSession[] = [];
-		let total = 0;
 		try {
 			// A moved archive count is checked against the first page before
 			// anything is shown as loading; most ended workers change nothing here.
@@ -173,30 +186,51 @@ export function useArchivedPRs(sources: readonly ArchivedPRSource[], options: { 
 				if (first && firstPageUnchanged(held, first)) return;
 			}
 			update(key, (stream) => ({ ...stream, loading: true, error: null }));
-			const outcome = await readAllPRStatePages(
-				(cursor) => cursor === null && first !== undefined ? Promise.resolve(first) : fetchPage(cursor),
-				(sessions, pageTotal) => {
-					rows.push(...sessions.map((session) => archivedPRRow(source, session, state)));
-					total = pageTotal;
-					if (firstRead) {
-						const shown = [...rows];
-						update(key, (stream) => ({ ...stream, rows: shown, total: pageTotal }));
-					}
-				},
-				controller.signal,
-			);
-			if (outcome === "aborted") return;
-			if (outcome === "unsupported") {
-				update(key, () => ({ ...EMPTY_STREAM, supported: false }));
-				return;
+			for (let attempt = 1; ; attempt += 1) {
+				const rows: HostedSession[] = [];
+				let total = 0;
+				const versions = new Set<string | null>();
+				// Only a first read shows pages as they land; a retry would shrink them.
+				const progressive = firstRead && attempt === 1;
+				const reuse = attempt === 1 ? first : undefined;
+				const outcome = await readAllPRStatePages(
+					(cursor) => cursor === null && reuse !== undefined ? Promise.resolve(reuse) : fetchPage(cursor),
+					(sessions, page) => {
+						rows.push(...sessions.map((session) => archivedPRRow(source, session, state)));
+						total = page.total;
+						versions.add(page.version);
+						if (progressive) {
+							const shown = [...rows];
+							update(key, (stream) => ({ ...stream, rows: shown, total: page.total }));
+						}
+					},
+					controller.signal,
+				);
+				if (outcome === "aborted") return;
+				if (outcome === "unsupported") {
+					update(key, () => ({ ...EMPTY_STREAM, supported: false }));
+					return;
+				}
+				if (readIsConsistent(rows.length, total, versions)) {
+					const [version] = versions;
+					update(key, () => ({ rows, total, loading: false, supported: true, error: null, complete: true, version: version ?? null }));
+					return;
+				}
+				if (attempt >= MAX_READ_ATTEMPTS) {
+					// The list kept moving under the cursor: show what was read, count
+					// only that, and let the next change or refresh read it again.
+					update(key, () => ({ rows, total: rows.length, loading: false, supported: true, error: null, complete: false, version: null }));
+					return;
+				}
 			}
-			update(key, () => ({ rows, total: Math.max(total, rows.length), loading: false, supported: true, error: null, complete: true }));
 		} catch (cause) {
 			if (controller.signal.aborted) return;
 			// Whatever was on screen stays; a pull to refresh reads again. The
-			// total shrinks to it, so the counts claim no PR the list cannot show.
+			// total shrinks to it, so the counts claim no PR the list cannot show,
+			// and the stream is no longer complete, so the next check reads it all.
 			update(key, (stream) => ({
-				...stream, total: stream.rows.length, loading: false, error: userFacingError(cause, "Couldn't load past pull requests."),
+				...stream, total: stream.rows.length, loading: false, complete: false, version: null,
+				error: userFacingError(cause, "Couldn't load past pull requests."),
 			}));
 		}
 	}, [configForHost, update]);

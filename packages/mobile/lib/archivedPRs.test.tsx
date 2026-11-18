@@ -16,15 +16,16 @@ vi.mock("./store", () => ({ useApp: () => ({ configForHost: fixtures.configForHo
 vi.mock("./connectionError", () => ({ userFacingError: (_cause: unknown, fallback: string) => fallback }));
 
 import {
-	archivedPRRow, firstPageUnchanged, mergeArchivedRows, readAllPRStatePages, unloadedArchivedSessions, useArchivedPRs, withArchivedPRSessions,
-	type ArchivedPRSource,
+	archivedPRRow, firstPageUnchanged, mergeArchivedRows, readAllPRStatePages, readIsConsistent, unloadedArchivedSessions, useArchivedPRs,
+	withArchivedPRSessions, type ArchivedPRSource,
 } from "./archivedPRs";
 
 const pr = (number: number, state: DashboardPR["state"] = "merged"): DashboardPR => ({ number, url: "", state });
 const session = (id: string, prs: DashboardPR[] = [pr(Number(id.replace(/\D/g, "")) || 1)]): DashboardSession =>
 	({ id, projectId: "p", isTerminated: true, prs } as DashboardSession);
 const hosted = (id: string, hostId = "mac"): HostedSession => ({ ...session(id), hostId, hostName: hostId });
-const page = (ids: string[], nextCursor: string | null, total = 0): PRStatePage => ({ sessions: ids.map((id) => session(id)), nextCursor, total });
+const page = (ids: string[], nextCursor: string | null, total = 0, version: string | null = "v1"): PRStatePage =>
+	({ sessions: ids.map((id) => session(id)), nextCursor, total, version });
 
 describe("readAllPRStatePages", () => {
 	it("follows the cursor to the end and keeps a session that moved between pages once", async () => {
@@ -232,14 +233,27 @@ describe("useArchivedPRs reconnects", () => {
 });
 
 describe("firstPageUnchanged", () => {
-	const held = { rows: [hosted("s3"), hosted("s2"), hosted("s1")], total: 3, complete: true, supported: true };
-	it("holds when the total and the leading sessions match a complete list", () => {
-		expect(firstPageUnchanged(held, page(["s3", "s2"], "c1", 3))).toBe(true);
+	const held = { complete: true, supported: true, version: "v1" };
+	it("holds when the page names the list a complete stream holds", () => {
+		expect(firstPageUnchanged(held, page(["s3", "s2"], "c1", 3, "v1"))).toBe(true);
 	});
-	it("does not hold for a new total, a new leader, or a list that never finished", () => {
-		expect(firstPageUnchanged(held, page(["s3", "s2"], "c1", 4))).toBe(false);
-		expect(firstPageUnchanged(held, page(["s4", "s3"], "c1", 3))).toBe(false);
-		expect(firstPageUnchanged({ ...held, complete: false }, page(["s3", "s2"], "c1", 3))).toBe(false);
+	// A later page can change with the total and first page intact; only the
+	// version covers it.
+	it("does not hold for a new version, even with the same first page and total", () => {
+		expect(firstPageUnchanged(held, page(["s3", "s2"], "c1", 3, "v2"))).toBe(false);
+	});
+	it("does not hold for a list that never finished or a daemon without versions", () => {
+		expect(firstPageUnchanged({ ...held, complete: false }, page(["s3", "s2"], "c1", 3, "v1"))).toBe(false);
+		expect(firstPageUnchanged({ ...held, version: null }, page(["s3", "s2"], "c1", 3, null))).toBe(false);
+	});
+});
+
+describe("readIsConsistent", () => {
+	it("needs one version across the pages and every session of the list", () => {
+		expect(readIsConsistent(3, 3, new Set(["v1"]))).toBe(true);
+		expect(readIsConsistent(3, 3, new Set([null]))).toBe(true);
+		expect(readIsConsistent(3, 3, new Set(["v1", "v2"]))).toBe(false);
+		expect(readIsConsistent(2, 3, new Set(["v1"]))).toBe(false);
 	});
 });
 
@@ -292,11 +306,74 @@ describe("useArchivedPRs as the archive moves", () => {
 			options?.cursor ? page(["s1"], null, 3) : page(["s3", "s2"], "c1", 3));
 		await render(10);
 		fixtures.getArchivedPRSessions.mockImplementation(async (_config: unknown, options?: { cursor: string | null }) =>
-			options?.cursor ? page(["s2", "s1"], null, 4) : page(["s4", "s3"], "c1", 4));
+			options?.cursor ? page(["s2", "s1"], null, 4, "v2") : page(["s4", "s3"], "c1", 4, "v2"));
 		await render(11);
 		// The checked first page is reused: one more request for the rest.
 		expect(fixtures.getArchivedPRSessions).toHaveBeenCalledTimes(4);
 		expect(latest.sessions.map((s) => s.id)).toEqual(["s4", "s3", "s2", "s1"]);
+	});
+
+	// One session restored and another ended: same total, same first page, a
+	// different second page. The version shows it, and the list reads on.
+	it("reads on when the first page and total match but the list's version moved", async () => {
+		fixtures.getArchivedPRSessions.mockImplementation(async (_config: unknown, options?: { cursor: string | null }) =>
+			options?.cursor ? page(["s1"], null, 3, "v1") : page(["s4", "s3"], "c1", 3, "v1"));
+		await render(10);
+		fixtures.getArchivedPRSessions.mockImplementation(async (_config: unknown, options?: { cursor: string | null }) =>
+			options?.cursor ? page(["s0"], null, 3, "v2") : page(["s4", "s3"], "c1", 3, "v2"));
+		await render(11);
+		expect(fixtures.getArchivedPRSessions).toHaveBeenCalledTimes(4);
+		expect(latest.sessions.map((s) => s.id)).toEqual(["s4", "s3", "s0"]);
+	});
+
+	// The list moved between two pages of one read: start over from page one.
+	it("reads again from page one when its pages came from different lists", async () => {
+		fixtures.getArchivedPRSessions
+			.mockResolvedValueOnce(page(["s4", "s3"], "c1", 3, "v1"))
+			.mockResolvedValueOnce(page(["s1"], null, 3, "v2"))
+			.mockResolvedValueOnce(page(["s4", "s3"], "c1", 3, "v2"))
+			.mockResolvedValueOnce(page(["s2"], null, 3, "v2"));
+		await render(10);
+		expect(fixtures.getArchivedPRSessions).toHaveBeenCalledTimes(4);
+		expect(fixtures.getArchivedPRSessions.mock.calls[2]?.[1]).toMatchObject({ cursor: null });
+		expect(latest.sessions.map((s) => s.id)).toEqual(["s4", "s3", "s2"]);
+		expect(latest.unloaded.merged).toBe(0);
+	});
+
+	it("stops retrying a list that keeps moving, showing what it read and counting only that", async () => {
+		let version = 0;
+		fixtures.getArchivedPRSessions.mockImplementation(async (_config: unknown, options?: { cursor: string | null }) => {
+			version += 1;
+			return options?.cursor ? page(["s1"], null, 5, `v${version}`) : page(["s3", "s2"], "c1", 5, `v${version}`);
+		});
+		await render(10);
+		expect(fixtures.getArchivedPRSessions).toHaveBeenCalledTimes(6);
+		expect(latest.sessions.map((s) => s.id)).toEqual(["s3", "s2", "s1"]);
+		expect(latest.unloaded.merged).toBe(0);
+		expect(latest.loading.merged).toBe(false);
+	});
+
+	// A re-read that failed on page two leaves its old rows, but they are no
+	// longer a proven-complete list: the next size change reads everything.
+	it("reads everything on the next change after a re-read failed partway", async () => {
+		fixtures.getArchivedPRSessions.mockImplementation(async (_config: unknown, options?: { cursor: string | null }) =>
+			options?.cursor ? page(["s1"], null, 3) : page(["s3", "s2"], "c1", 3));
+		await render(10);
+		fixtures.getArchivedPRSessions.mockReset();
+		// The list moved (a new version), so the check reads on and page two fails.
+		fixtures.getArchivedPRSessions
+			.mockResolvedValueOnce(page(["s3", "s2"], "c1", 3, "v2"))
+			.mockRejectedValueOnce(new Error("dropped"));
+		await render(11);
+		expect(latest.error).toBe("Couldn't load past pull requests.");
+
+		fixtures.getArchivedPRSessions.mockImplementation(async (_config: unknown, options?: { cursor: string | null }) =>
+			options?.cursor ? page(["s1"], null, 3) : page(["s3", "s2"], "c1", 3));
+		await render(12);
+		// Not the one-page shortcut: both pages are read again.
+		expect(fixtures.getArchivedPRSessions).toHaveBeenCalledTimes(4);
+		expect(latest.error).toBeNull();
+		expect(latest.sessions.map((s) => s.id)).toEqual(["s3", "s2", "s1"]);
 	});
 
 	it("lets a read in flight finish when the size moves, then checks once", async () => {

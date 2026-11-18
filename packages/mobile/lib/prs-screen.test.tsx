@@ -290,7 +290,7 @@ it("lists the merged PRs of ended sessions once Merged is open", async () => {
 	expect(fixture.getArchivedPRSessions).toHaveBeenCalledTimes(1);
 	expect(fixture.getArchivedPRSessions.mock.calls[0]?.[1]).toMatchObject({ prState: "merged", cursor: null });
 
-	await act(async () => release({ sessions: [ended], nextCursor: null, total: 1 }));
+	await act(async () => release({ sessions: [ended], nextCursor: null, total: 1, version: "v1" }));
 	const sections = renderer!.root.findByType("SectionList" as never).props.sections as { key: string; data: { session: HostedSession }[] }[];
 	expect(sections.map((section) => section.key)).toEqual(["merged"]);
 	expect(sections[0]?.data.map((item) => `${item.session.hostId}/${item.session.id}`)).toEqual(["mac/ended"]);

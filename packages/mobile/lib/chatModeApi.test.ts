@@ -186,6 +186,7 @@ describe("mobile Chat API boundaries", () => {
 		vi.mocked(fetch).mockResolvedValueOnce(response({
 			prState: "merged",
 			total: 3,
+			version: "9f3a",
 			nextCursor: "after-w-2",
 			sessions: [
 				{ id: "w-2", projectId: "p-1", mode: "chat", isTerminated: true, prs: [{ url: "https://github.com/a/b/pull/7", number: 7, state: "merged" }] },
@@ -194,9 +195,13 @@ describe("mobile Chat API boundaries", () => {
 		}));
 		const page = await getArchivedPRSessions(cfg, { prState: "merged", cursor: "after-w-3", projectId: "p-1" });
 		expect(vi.mocked(fetch).mock.calls[0]?.[0]).toBe("http://ao.test:3011/api/v1/sessions?active=false&kind=worker&prState=merged&limit=100&cursor=after-w-3&project=p-1");
-		expect(page).toMatchObject({ total: 3, nextCursor: "after-w-2" });
+		expect(page).toMatchObject({ total: 3, nextCursor: "after-w-2", version: "9f3a" });
 		expect(page?.sessions.map((s) => s.id)).toEqual(["w-2"]);
 		expect(page?.sessions[0]?.prs?.[0]).toMatchObject({ number: 7, state: "merged" });
+
+		// A page without a version reads as null: nothing can be proven unchanged.
+		vi.mocked(fetch).mockResolvedValueOnce(response({ prState: "merged", total: 0, sessions: [] }));
+		expect((await getArchivedPRSessions(cfg, { prState: "merged" }))?.version).toBeNull();
 
 		// An older daemon answers with the plain archive and no echo.
 		vi.mocked(fetch).mockResolvedValueOnce(response({ sessions: [{ id: "w-9", projectId: "p-1", mode: "chat", isTerminated: true }] }));
