@@ -97,7 +97,7 @@ surface (`npm run sqlc`, `npm run api`).
   Grok, Kilo Code, Kimchi, Kiro, Kimi, Muse, OpenCode 1 and 2, and Pi.
   Worker, Chat, and reviewer registries are separate. Experimental reviewer
   selection must be explicit; native modes and prompts are not OS or network
-  isolation. See the [public catalog](../frontend/src/docs/content/plugins/agents/index.mdx)
+  isolation. See the [public catalog](https://docs.orchestrator.inc/plugins/agents/)
   and `internal/adapters/reviewer/registry.go` for the current set.
 - The provider-neutral interactive-reviewer capability gateway and neutral
   AO-owned working-directory contract are available. The experimental
