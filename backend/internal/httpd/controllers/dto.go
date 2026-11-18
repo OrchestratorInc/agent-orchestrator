@@ -383,6 +383,7 @@ type ListSessionsQuery struct {
 	Kind             string `query:"kind,omitempty" enum:"worker,orchestrator" description:"Session kind filter. worker keeps every session that is not an orchestrator."`
 	Limit            int    `query:"limit,omitempty" minimum:"1" maximum:"200" description:"Page size. When set, sessions are ordered pinned first, then most recently updated, and nextCursor resumes the list. When omitted, every match is returned."`
 	Cursor           string `query:"cursor,omitempty" description:"Opaque cursor returned by the previous page. Requires limit."`
+	PRState          string `query:"prState,omitempty" enum:"open,draft,merged,closed" description:"Keep sessions owning a pull request in this state. The list is then ordered by when each session's newest such PR reached the state, and the response echoes prState and carries total."`
 }
 
 // CleanupSessionsQuery is the query string accepted by POST /api/v1/sessions/cleanup.
@@ -663,6 +664,15 @@ type ListSessionsResponse struct {
 	// same project and kind filters would have matched, so a client can show
 	// the archive's size without downloading it.
 	Archived *SessionArchiveSummary `json:"archived,omitempty"`
+	// PRState echoes the prState filter the list applied, so a client can tell
+	// a daemon that filtered from one that ignored the parameter.
+	PRState domain.PRState `json:"prState,omitempty" enum:"open,draft,merged,closed"`
+	// Total is present with prState: how many sessions match across all pages.
+	Total *int `json:"total,omitempty"`
+	// Version is present with prState and names the whole filtered list (its
+	// sessions and when each PR reached the state). Equal versions mean the
+	// same list, so one page tells a client whether anything moved.
+	Version string `json:"version,omitempty"`
 }
 
 // SessionArchiveSummary sizes the archive behind an active-only session list.

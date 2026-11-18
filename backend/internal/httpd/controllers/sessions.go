@@ -327,6 +327,9 @@ func (c *SessionsController) list(w http.ResponseWriter, r *http.Request) {
 		Sessions:   sessionViews(r, page.Sessions),
 		NextCursor: page.NextCursor,
 		Archived:   archiveSummaryView(page.Archived),
+		PRState:    filter.PRState,
+		Total:      page.Total,
+		Version:    page.Version,
 	})
 }
 
@@ -2880,6 +2883,13 @@ func parseSessionListFilter(r *http.Request) (sessionsvc.ListFilter, error) {
 			return sessionsvc.ListFilter{}, fmt.Errorf("limit must be an integer from 1 to %d", sessionsvc.MaxListLimit)
 		}
 		filter.Limit = limit
+	}
+	switch state := domain.PRState(q.Get("prState")); state {
+	case "":
+	case domain.PRStateOpen, domain.PRStateDraft, domain.PRStateMerged, domain.PRStateClosed:
+		filter.PRState = state
+	default:
+		return sessionsvc.ListFilter{}, errors.New("prState must be open, draft, merged or closed")
 	}
 	if filter.Cursor = q.Get("cursor"); filter.Cursor != "" && filter.Limit == 0 {
 		return sessionsvc.ListFilter{}, errors.New("cursor requires limit")

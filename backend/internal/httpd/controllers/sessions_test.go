@@ -1160,9 +1160,43 @@ func TestSessionsAPI_ListPagesTheArchiveAndSizesIt(t *testing.T) {
 	}
 }
 
+// The Merged list on a phone pages archived workers by PR state. The filter
+// reaches the service, and the response echoes it with the match count so the
+// phone can tell this daemon from one that ignored the parameter.
+func TestSessionsAPI_ListFiltersByPRState(t *testing.T) {
+	svc := newFakeSessionService()
+	total := 7
+	svc.listPage = &sessionsvc.ListPage{Sessions: []domain.Session{svc.sessions["ao-1"]}, NextCursor: "more", Total: &total, Version: "9f3a"}
+	srv := newSessionTestServer(t, svc)
+
+	body, status, _ := doRequest(t, srv, "GET", "/api/v1/sessions?active=false&kind=worker&prState=merged&limit=50", "")
+	if status != http.StatusOK {
+		t.Fatalf("GET sessions = %d, want 200; body=%s", status, body)
+	}
+	if f := svc.lastListFilter; f.PRState != domain.PRStateMerged || f.Active == nil || *f.Active || f.Limit != 50 {
+		t.Fatalf("filter = %+v, want archived merged page of 50", f)
+	}
+	var page struct {
+		PRState    string `json:"prState"`
+		Total      *int   `json:"total"`
+		NextCursor string `json:"nextCursor"`
+		Version    string `json:"version"`
+	}
+	mustJSON(t, body, &page)
+	if page.PRState != "merged" || page.Total == nil || *page.Total != 7 || page.NextCursor != "more" || page.Version != "9f3a" {
+		t.Fatalf("page = %+v, want prState merged, total 7, cursor more, version 9f3a", page)
+	}
+
+	svc.listPage = nil
+	body, _, _ = doRequest(t, srv, "GET", "/api/v1/sessions", "")
+	if strings.Contains(string(body), "prState") || strings.Contains(string(body), "\"total\"") || strings.Contains(string(body), "\"version\"") {
+		t.Fatalf("unfiltered list carries PR-state fields: %s", body)
+	}
+}
+
 func TestSessionsAPI_ListRejectsBadPagingQuery(t *testing.T) {
 	srv := newSessionTestServer(t, newFakeSessionService())
-	for _, query := range []string{"kind=reviewer", "limit=0", "limit=201", "limit=ten", "cursor=abc"} {
+	for _, query := range []string{"kind=reviewer", "limit=0", "limit=201", "limit=ten", "cursor=abc", "prState=shipped"} {
 		body, status, _ := doRequest(t, srv, "GET", "/api/v1/sessions?"+query, "")
 		if status != http.StatusBadRequest || !strings.Contains(string(body), "INVALID_QUERY") {
 			t.Fatalf("GET sessions?%s = %d %s, want 400 INVALID_QUERY", query, status, body)
