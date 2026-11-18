@@ -101,7 +101,10 @@ export function ModelMenuChoices<T extends { id: string; label: string }>({
 	const headerRef = useRef<HTMLDivElement>(null);
 	const footerRef = useRef<HTMLDivElement>(null);
 	// A row is the menu item's text line plus its py-1.5, with the surface's 1px gap between rows.
+	// The pane is fixed at that height rather than only capped by it: a search with no matches
+	// drops to a single line, and the menu must not shrink under the pointer while it is typed in.
 	const rowCap = rows === undefined ? undefined : {
+		minHeight: `calc((var(--line-height-row) + var(--space-1_5) * 2) * ${rows} + 1px * ${rows})`,
 		maxHeight: `calc((var(--line-height-row) + var(--space-1_5) * 2) * ${rows} + 1px * ${rows})`,
 	};
 	useEdgeFade(scrollRef);
@@ -276,7 +279,10 @@ export function ModelMenuChoices<T extends { id: string; label: string }>({
 					)}
 				</div>
 			</div>
-			{footer && !normalizedQuery ? (
+			{/* Hiding the footer during a search only frees room for the list while that list grows
+			    with its results. A capped list gains nothing, and the menu would lose a row the
+			    moment a key is typed, so the footer stays put. */}
+			{footer && (!normalizedQuery || rows !== undefined) ? (
 				<div
 					ref={footerRef}
 					className="shrink-0"

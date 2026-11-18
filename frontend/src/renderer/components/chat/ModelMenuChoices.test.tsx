@@ -170,13 +170,46 @@ describe("ModelMenuChoices", () => {
 		expect(screen.getAllByRole("menuitemradio")).toHaveLength(150);
 	});
 
-	it("caps the list at the requested number of rows, so a long catalog does not stretch the menu", () => {
+	it("fixes the list at the requested number of rows, so a search with no matches cannot shrink it", () => {
 		renderRows(generateModels(30), undefined, 3);
-		const scroller = document.querySelector<HTMLElement>(".model-menu-scroll");
-		expect(scroller).not.toBeNull();
-		expect(scroller!.style.maxHeight).toBe("calc((var(--line-height-row) + var(--space-1_5) * 2) * 3 + 1px * 3)");
+		const scroller = document.querySelector<HTMLElement>(".model-menu-scroll")!;
+		const height = "calc((var(--line-height-row) + var(--space-1_5) * 2) * 3 + 1px * 3)";
+		// Both bounds: a merely capped pane still shrinks to its content, which is a single line
+		// once nothing matches, and the menu drops out from under the pointer.
+		expect(scroller.style.maxHeight).toBe(height);
+		expect(scroller.style.minHeight).toBe(height);
 		// Every row still renders; the list scrolls under the cap.
 		expect(screen.getAllByRole("menuitemradio")).toHaveLength(30);
+	});
+
+	it("keeps the footer, and with it the menu's height, while searching a fixed-height list", async () => {
+		const user = userEvent.setup();
+		render(
+			<ModelMenuChoices models={generateModels(5)} searchable rows={3} footer={<div data-testid="footer" />}>
+				{(matches) => matches.map((model) => (
+					<button key={model.id} type="button" role="menuitemradio">{model.label}</button>
+				))}
+			</ModelMenuChoices>,
+		);
+		expect(screen.getByTestId("footer")).toBeInTheDocument();
+		await user.type(screen.getByRole("searchbox"), "zzz");
+		expect(screen.getByText("No matching models.")).toBeInTheDocument();
+		// A capped list gains no room from hiding the footer, so the menu would only lose a row.
+		expect(screen.getByTestId("footer")).toBeInTheDocument();
+	});
+
+	it("hides the footer while searching a list that grows with its results", async () => {
+		const user = userEvent.setup();
+		render(
+			<ModelMenuChoices models={generateModels(5)} searchable footer={<div data-testid="footer" />}>
+				{(matches) => matches.map((model) => (
+					<button key={model.id} type="button" role="menuitemradio">{model.label}</button>
+				))}
+			</ModelMenuChoices>,
+		);
+		expect(screen.getByTestId("footer")).toBeInTheDocument();
+		await user.type(screen.getByRole("searchbox"), "M");
+		expect(screen.queryByTestId("footer")).not.toBeInTheDocument();
 	});
 
 	it("takes the pane's own max height when no row cap is asked for", () => {
