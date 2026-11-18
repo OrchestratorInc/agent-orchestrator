@@ -1566,6 +1566,8 @@
 	"report.whatHappened": "发生了什么？",
 	"settings.agents": "订阅",
 	"sidebar.subscriptionAllowanceUnavailable": "订阅限额暂不可用",
+	"sidebar.subscriptionAllowanceNoAccounts": "Codex 和 Claude Code 账户可查看订阅余量",
+	"sidebar.subscriptionAllowanceSignIn": "登录 {{provider}} 以查看订阅余量",
 	"sidebar.providerSubscriptionAllowanceUnavailable": "{{provider}}订阅限额暂不可用",
 	"sidebar.subscriptionAllowanceRemaining": "{{provider}} · {{window}}：剩余 {{percent}}",
 	"sidebar.subscriptionAllowanceReset": "{{value}}后重置",

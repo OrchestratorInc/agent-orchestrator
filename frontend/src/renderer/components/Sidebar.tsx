@@ -1385,6 +1385,7 @@ export const Sidebar = memo(function Sidebar({
 								tabIndex={isCollapsed ? -1 : 0}
 							/>
 						</div>
+						<SidebarSubscriptionAllowance tabIndex={isCollapsed ? -1 : 0} />
 						<div className={FOOTER_BOTTOM_ROW_CLASS}>
 							<Pressable
 								className={FOOTER_NAV_BUTTON_CLASS}

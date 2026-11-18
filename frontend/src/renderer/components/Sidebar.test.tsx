@@ -22,6 +22,7 @@ import {
 	SIDEBAR_MIN_WIDTH,
 	resolveNextNavigationAfterSessionKill,
 } from "./Sidebar";
+import { SettingsProvider } from "./SettingsDialog";
 import {
 	STANDALONE_PROJECT_KIND,
 	STANDALONE_WORKSPACE_ID,
@@ -382,19 +383,21 @@ function renderSidebar({
 		<QueryClientProvider client={queryClient}>
 			<TooltipProvider>
 				<SidebarProvider defaultOpen={initialOpen}>
-					<Sidebar
-						topbarOffset={topbarOffset}
-						onCloneProject={onCloneProject}
-						onCreateProject={onCreateProject}
-						onInitializeProject={onInitializeProject}
-						onRemoveProject={onRemoveProject}
-						workspaces={workspaces}
-						remoteHosts={remoteHosts}
-						remoteWorkspaces={remoteWorkspaces}
-						onCreateRemoteProject={onCreateRemoteProject}
-						onInitializeRemoteProject={onInitializeRemoteProject}
-						onRemoveRemoteProject={onRemoveRemoteProject}
-					/>
+					<SettingsProvider>
+						<Sidebar
+							topbarOffset={topbarOffset}
+							onCloneProject={onCloneProject}
+							onCreateProject={onCreateProject}
+							onInitializeProject={onInitializeProject}
+							onRemoveProject={onRemoveProject}
+							workspaces={workspaces}
+							remoteHosts={remoteHosts}
+							remoteWorkspaces={remoteWorkspaces}
+							onCreateRemoteProject={onCreateRemoteProject}
+							onInitializeRemoteProject={onInitializeRemoteProject}
+							onRemoveRemoteProject={onRemoveRemoteProject}
+						/>
+					</SettingsProvider>
 				</SidebarProvider>
 			</TooltipProvider>
 		</QueryClientProvider>,
@@ -2678,6 +2681,14 @@ describe("Sidebar", () => {
 		await user.click(screen.getAllByRole("button", { name: "Settings" })[0]);
 		expect(useUiStore.getState().settingsModal).toEqual({ scope: "global" });
 		expect(navigateMock).not.toHaveBeenCalled();
+	});
+
+	it("keeps subscription allowance visible in the settings sidebar", async () => {
+		useUiStore.setState({ settingsModal: { scope: "global", section: "harness" } });
+		renderSidebar();
+
+		expect(await screen.findByText("Allowance is available for Codex and Claude Code accounts")).toBeVisible();
+		expect(screen.getByText("Back")).toBeVisible();
 	});
 
 	it("opens the Mobile settings page from the footer and starts pairing", async () => {

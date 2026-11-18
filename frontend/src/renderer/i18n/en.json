@@ -1574,6 +1574,8 @@
 	"report.whatHappened": "What happened?",
 	"settings.agents": "Subscriptions",
 	"sidebar.subscriptionAllowanceUnavailable": "Subscription limits unavailable",
+	"sidebar.subscriptionAllowanceNoAccounts": "Allowance is available for Codex and Claude Code accounts",
+	"sidebar.subscriptionAllowanceSignIn": "Sign in to {{provider}} to see allowance",
 	"sidebar.providerSubscriptionAllowanceUnavailable": "{{provider}} subscription limits unavailable",
 	"sidebar.subscriptionAllowanceRemaining": "{{provider}} · {{window}}: {{percent}} left",
 	"sidebar.subscriptionAllowanceReset": "Resets in {{value}}",

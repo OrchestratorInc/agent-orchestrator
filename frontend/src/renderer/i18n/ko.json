@@ -1584,6 +1584,8 @@
 	"report.whatHappened": "무슨 일이 있었나요?",
 	"settings.agents": "구독",
 	"sidebar.subscriptionAllowanceUnavailable": "구독 한도를 사용할 수 없습니다",
+	"sidebar.subscriptionAllowanceNoAccounts": "Codex 및 Claude Code 계정의 사용량을 확인할 수 있습니다",
+	"sidebar.subscriptionAllowanceSignIn": "사용량을 보려면 {{provider}}에 로그인하세요",
 	"sidebar.providerSubscriptionAllowanceUnavailable": "{{provider}} 구독 한도를 사용할 수 없습니다",
 	"sidebar.subscriptionAllowanceRemaining": "{{provider}} · {{window}}: {{percent}} 남음",
 	"sidebar.subscriptionAllowanceReset": "{{value}} 후 초기화",

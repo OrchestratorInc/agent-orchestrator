@@ -1613,6 +1613,8 @@
 	"report.whatHappened": "Que s'est-il passé ?",
 	"settings.agents": "Abonnements",
 	"sidebar.subscriptionAllowanceUnavailable": "Limites d’abonnement indisponibles",
+	"sidebar.subscriptionAllowanceNoAccounts": "Le quota est disponible pour les comptes Codex et Claude Code",
+	"sidebar.subscriptionAllowanceSignIn": "Connectez-vous à {{provider}} pour voir le quota",
 	"sidebar.providerSubscriptionAllowanceUnavailable": "Limites d’abonnement pour {{provider}} indisponibles",
 	"sidebar.subscriptionAllowanceRemaining": "{{provider}} · {{window}} : {{percent}} restants",
 	"sidebar.subscriptionAllowanceReset": "Réinitialisation dans {{value}}",

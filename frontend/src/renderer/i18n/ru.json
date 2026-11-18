@@ -1639,6 +1639,8 @@
 	"report.whatHappened": "Что произошло?",
 	"settings.agents": "Подписки",
 	"sidebar.subscriptionAllowanceUnavailable": "Лимиты подписки недоступны",
+	"sidebar.subscriptionAllowanceNoAccounts": "Данные доступны для аккаунтов Codex и Claude Code",
+	"sidebar.subscriptionAllowanceSignIn": "Войдите в {{provider}}, чтобы увидеть остаток",
 	"sidebar.providerSubscriptionAllowanceUnavailable": "Лимиты подписки {{provider}} недоступны",
 	"sidebar.subscriptionAllowanceRemaining": "{{provider}} · {{window}}: осталось {{percent}}",
 	"sidebar.subscriptionAllowanceReset": "Сброс через {{value}}",

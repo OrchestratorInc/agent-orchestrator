@@ -1613,6 +1613,8 @@
 	"report.whatHappened": "¿Qué ocurrió?",
 	"settings.agents": "Suscripciones",
 	"sidebar.subscriptionAllowanceUnavailable": "Los límites de suscripción no están disponibles",
+	"sidebar.subscriptionAllowanceNoAccounts": "La cuota está disponible para cuentas de Codex y Claude Code",
+	"sidebar.subscriptionAllowanceSignIn": "Inicia sesión en {{provider}} para ver la cuota",
 	"sidebar.providerSubscriptionAllowanceUnavailable": "Los límites de suscripción de {{provider}} no están disponibles",
 	"sidebar.subscriptionAllowanceRemaining": "{{provider}} · {{window}}: queda {{percent}}",
 	"sidebar.subscriptionAllowanceReset": "Se restablece en {{value}}",

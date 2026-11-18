@@ -1613,6 +1613,8 @@
 	"report.whatHappened": "O que aconteceu?",
 	"settings.agents": "Assinaturas",
 	"sidebar.subscriptionAllowanceUnavailable": "Limites da assinatura indisponíveis",
+	"sidebar.subscriptionAllowanceNoAccounts": "A cota está disponível para contas do Codex e Claude Code",
+	"sidebar.subscriptionAllowanceSignIn": "Entre no {{provider}} para ver a cota",
 	"sidebar.providerSubscriptionAllowanceUnavailable": "Limites da assinatura do {{provider}} indisponíveis",
 	"sidebar.subscriptionAllowanceRemaining": "{{provider}} · {{window}}: restam {{percent}}",
 	"sidebar.subscriptionAllowanceReset": "Redefine em {{value}}",

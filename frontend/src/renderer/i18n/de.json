@@ -1584,6 +1584,8 @@
 	"report.whatHappened": "Was ist passiert?",
 	"settings.agents": "Abonnements",
 	"sidebar.subscriptionAllowanceUnavailable": "Abonnementlimits nicht verfügbar",
+	"sidebar.subscriptionAllowanceNoAccounts": "Kontingent für Codex- und Claude-Code-Konten verfügbar",
+	"sidebar.subscriptionAllowanceSignIn": "Bei {{provider}} anmelden, um das Kontingent zu sehen",
 	"sidebar.providerSubscriptionAllowanceUnavailable": "Abonnementlimits für {{provider}} nicht verfügbar",
 	"sidebar.subscriptionAllowanceRemaining": "{{provider}} · {{window}}: {{percent}} übrig",
 	"sidebar.subscriptionAllowanceReset": "Zurückgesetzt in {{value}}",

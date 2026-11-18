@@ -73,7 +73,24 @@ describe("SidebarSubscriptionAllowance", () => {
 			error: null,
 		};
 		render(<SidebarSubscriptionAllowance />);
-		expect(screen.getByTestId("sidebar-subscription-allowance")).toHaveTextContent("Subscription limits unavailable");
+		expect(screen.getByTestId("sidebar-subscription-allowance")).toHaveTextContent("Sign in to Codex to see allowance");
+	});
+
+	it("explains when no supported subscription account is configured", () => {
+		accountsState.current = { data: [], isLoading: false, error: null };
+		render(<SidebarSubscriptionAllowance />);
+		expect(screen.getByTestId("sidebar-subscription-allowance")).toHaveTextContent("Allowance is available for Codex and Claude Code accounts");
+	});
+
+	it("does not invent allowance for an unsupported provider", () => {
+		accountsState.current = {
+			data: [{ id: "other", provider: "opencode", default: true, device: false, signedIn: true, loggedIn: true } as unknown as AgentAccount],
+			isLoading: false,
+			error: null,
+		};
+		render(<SidebarSubscriptionAllowance />);
+		expect(screen.getByTestId("sidebar-subscription-allowance")).toHaveTextContent("Allowance is available for Codex and Claude Code accounts");
+		expect(screen.queryByText(/OpenCode.*% left/)).not.toBeInTheDocument();
 	});
 
 	it("says limits are unavailable when the provider has not reported a window", () => {

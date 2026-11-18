@@ -1574,6 +1574,8 @@
 	"report.whatHappened": "Ne oldu?",
 	"settings.agents": "Abonelikler",
 	"sidebar.subscriptionAllowanceUnavailable": "Abonelik limitleri kullanılamıyor",
+	"sidebar.subscriptionAllowanceNoAccounts": "Kullanım hakkı Codex ve Claude Code hesapları için kullanılabilir",
+	"sidebar.subscriptionAllowanceSignIn": "Kullanım hakkını görmek için {{provider}} hesabında oturum açın",
 	"sidebar.providerSubscriptionAllowanceUnavailable": "{{provider}} abonelik limitleri kullanılamıyor",
 	"sidebar.subscriptionAllowanceRemaining": "{{provider}} · {{window}}: {{percent}} kaldı",
 	"sidebar.subscriptionAllowanceReset": "{{value}} içinde sıfırlanır",

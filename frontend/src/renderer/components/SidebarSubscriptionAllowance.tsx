@@ -22,8 +22,10 @@ export function SidebarSubscriptionAllowance({ tabIndex = 0 }: { tabIndex?: numb
 
 	const grouped = groupAccounts(accounts.data ?? []);
 	const summaries: Array<{ provider: string; text: string; reset?: string; checkedAt?: string; stale?: boolean }> = grouped.flatMap(({ provider, accounts: providerAccounts }) => {
-		const account = providerAccounts.find((candidate) => candidate.default && candidate.signedIn);
-		if (!account) return [];
+		const defaultAccount = providerAccounts.find((candidate) => candidate.default);
+		if (!defaultAccount) return [];
+		if (!defaultAccount.signedIn) return [{ provider, text: t("sidebar.subscriptionAllowanceSignIn", { provider: agentAccountProviderNames[provider] }) }];
+		const account = defaultAccount;
 		const window = account.limits?.windows.reduce<AgentAccountLimitWindow | undefined>((lowest, candidate) => {
 			if (!lowest || usedPercent(candidate.usedPercent) > usedPercent(lowest.usedPercent)) return candidate;
 			return lowest;
@@ -52,7 +54,10 @@ export function SidebarSubscriptionAllowance({ tabIndex = 0 }: { tabIndex?: numb
 
 	const visibleSummaries = summaries.length > 0
 		? summaries
-		: [{ provider: "unavailable", text: t("sidebar.subscriptionAllowanceUnavailable"), reset: undefined }];
+		: [{
+			provider: "unavailable",
+			text: accounts.error ? t("sidebar.subscriptionAllowanceUnavailable") : t("sidebar.subscriptionAllowanceNoAccounts"),
+		}];
 
 	return (
 		<div className="flex flex-col">
