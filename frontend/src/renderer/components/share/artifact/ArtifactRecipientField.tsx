@@ -19,21 +19,26 @@ export function dialogOverSharePopover(): boolean {
 }
 
 /**
- * On a team workspace, who to share a link with: the workspace's people and
- * teams by name, or anyone by email, in the session share dialog's field. An
- * artifact link has one role, Can view, so a pick (Enter, a comma, or a
- * click on a suggestion) shares at once; there is no Add step. "New team…"
- * makes a team, as session sharing does, and shares the link with it.
- * Everyone in the workspace is General access's choice, not a pick here.
+ * Who to share a link with, in the session share dialog's field: people the
+ * workspace knows by name, or anyone by email, with its suggestions as you
+ * type. An artifact link has one role, Can view, so a pick (Enter, a comma,
+ * or a click on a suggestion) shares at once; there is no Add step. On a
+ * team workspace (teams) its teams are offered too, and "New team…" makes
+ * one, as session sharing does, and shares the link with it. Everyone in
+ * the workspace is General access's choice, not a pick here.
  */
-export function ArtifactRecipientField({ orgId, unavailable, onSubmit }: {
+export function ArtifactRecipientField({ orgId, teams: teamsOffered, unavailable, onSubmit }: {
+	/** The workspace whose people (and teams) are suggested; empty until it is known. */
 	orgId: string;
+	/** Teams are offered: a team workspace on a paid Cloud plan. */
+	teams: boolean;
 	/** People (email:…) and teams (team:…) the link is already shared with. */
 	unavailable?: ReadonlySet<string>;
 	/** Called with each pick; resolves true when it was taken. */
 	onSubmit: (recipients: ArtifactRecipients) => Promise<boolean> | boolean;
 }) {
 	const { t } = useTranslation();
+	const label = t(teamsOffered ? "artifacts.share.people.addPeopleOrTeams" : "artifacts.share.people.addByEmail");
 	const [newTeamFor, setNewTeamFor] = useState<{ people: Recipient[]; name: string } | null>(null);
 	useEffect(() => {
 		if (!newTeamFor) return;
@@ -50,16 +55,17 @@ export function ArtifactRecipientField({ orgId, unavailable, onSubmit }: {
 	return (
 		<div data-artifact-recipient-field="">
 			<PeopleField
-				ariaLabel={t("artifacts.share.people.addPeopleOrTeams")}
+				allowTeams={teamsOffered}
+				ariaLabel={label}
 				commitOnBlur={false}
 				onChange={take}
-				onNewTeam={(_people, typed) => {
+				onNewTeam={teamsOffered ? (_people, typed) => {
 					// A typed email joins the new team; other text names it.
 					const email = looksLikeEmail(typed) ? typed.toLowerCase() : "";
 					setNewTeamFor({ people: email ? [{ kind: "person", email }] : [], name: email ? "" : typed });
-				}}
+				} : undefined}
 				orgId={orgId}
-				placeholder={t("artifacts.share.people.addPeopleOrTeams")}
+				placeholder={label}
 				unavailable={unavailable}
 				// Nothing waits in the field: each pick is shared as it is made.
 				value={[]}

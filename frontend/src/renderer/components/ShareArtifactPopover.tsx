@@ -38,7 +38,6 @@ import { type ArtifactAudience, ArtifactGeneralAccess, accessName, accessSentenc
 import { type ArtifactPerson, type ArtifactTeam, ArtifactPeopleList, teamRemovingKey } from "./share/artifact/ArtifactPeopleList";
 import { type ArtifactRecipients, ArtifactRecipientField, dialogOverSharePopover } from "./share/artifact/ArtifactRecipientField";
 import { isPersonalWorkspace, workspaceDisplayName } from "./share/linkAccess";
-import { InviteField } from "./share/artifact/InviteField";
 import { Button } from "./ui/button";
 import { Popover, PopoverAnchor, PopoverContent, PopoverTrigger } from "./ui/popover";
 import { Tooltip, TooltipContent, TooltipTrigger } from "./ui/tooltip";
@@ -674,14 +673,14 @@ function SharePanel({
 	// this computer is shared with once its Publish has made the link.
 	const [stagedTeams, setStagedTeams] = useState<ArtifactTeam[]>([]);
 	const [stagedWorkspace, setStagedWorkspace] = useState(false);
-	const [inviting, setInviting] = useState(false);
 	const [removing, setRemoving] = useState<string>();
 	const [changingAccess, setChangingAccess] = useState(false);
 	// Teams and workspaces are for a team workspace on a paid Cloud plan, as
 	// session sharing offers them; anyone else shares with people by email,
 	// or by a private or public link.
 	const teamsBuild = useTeamsEnabled();
-	const { org } = useCloudOrg(teamsBuild && signedIn);
+	// The workspace whose people the share field suggests, as session sharing's does.
+	const { org } = useCloudOrg(signedIn);
 	const teamWorkspace = teamsBuild && org && !isPersonalWorkspace(org) ? org : undefined;
 	const workspaceName = workspaceDisplayName(teamWorkspace?.displayName) ?? t("artifacts.share.access.yourWorkspace");
 	const shareFile = { ...file, baseUrl };
@@ -1013,7 +1012,6 @@ function SharePanel({
 	// workspace, and the answer lists everyone it is shared with now.
 	const addSubjects = async (shareId: string, input: CloudShareInvite, failed: GrantFailure): Promise<boolean> => {
 		startAction();
-		setInviting(true);
 		const seq = ++grantsSeq.current;
 		try {
 			const grants = await aoBridge.cloudShare.invite(baseUrl, shareId, input);
@@ -1024,8 +1022,6 @@ function SharePanel({
 		} catch (error) {
 			setPhase((current) => current.kind === "published" ? { ...current, error: t(failed, { message: errorMessage(error) }) } : current);
 			return false;
-		} finally {
-			setInviting(false);
 		}
 	};
 	const invite = (shown: Extract<Phase, { kind: "published" }>, { emails, teams }: ArtifactRecipients): Promise<boolean> =>
@@ -1102,12 +1098,6 @@ function SharePanel({
 	const meta = (text: string) => <span className="block truncate text-caption text-muted-foreground tabular-nums">{text}</span>;
 	const spinner = <Loader2 aria-hidden="true" className="size-3 animate-spin motion-reduce:animate-none" />;
 	const ownerIdentity = { name: owner?.displayName, email: owner?.email };
-	// Under the email field: who the people added there are.
-	const viewersNote = (
-		<p className="-mt-2 text-caption leading-4 text-muted-foreground" data-share-viewers-note="">
-			{t(teamWorkspace ? "artifacts.share.people.whoCanViewTeams" : "artifacts.share.people.whoCanView")}
-		</p>
-	);
 	const workspaceChoice = teamWorkspace ? { name: workspaceName } : undefined;
 
 	switch (phase.kind) {
@@ -1169,16 +1159,13 @@ function SharePanel({
 					{phase.changed ? status(t("artifacts.share.changed"), "status") : phase.unpublished ? status(t("artifacts.share.unpublished")) : null}
 					{links.privateLinks ? (
 						<div className="mt-3.5 flex flex-col gap-3.5">
-							{teamWorkspace ? (
-								<ArtifactRecipientField
-									onSubmit={stageRecipients}
-									orgId={teamWorkspace.id}
-									unavailable={new Set([...staged.map((email) => `email:${email}`), ...stagedTeams.map(teamRemovingKey)])}
-								/>
-							) : (
-								<InviteField onSubmit={stageEmails} />
-							)}
-							{stagedOver ? <p role="alert" className="-mt-2 text-caption leading-4 text-error">{t("artifacts.share.people.tooManyBeforePublish", { count: MAX_INVITES_PER_REQUEST })}</p> : viewersNote}
+							<ArtifactRecipientField
+								onSubmit={stageRecipients}
+								orgId={org?.id ?? ""}
+								teams={Boolean(teamWorkspace)}
+								unavailable={new Set([...staged.map((email) => `email:${email}`), ...stagedTeams.map(teamRemovingKey)])}
+							/>
+							{stagedOver ? <p role="alert" className="-mt-2 text-caption leading-4 text-error">{t("artifacts.share.people.tooManyBeforePublish", { count: MAX_INVITES_PER_REQUEST })}</p> : null}
 							<ArtifactPeopleList
 								onRemove={(person) => {
 									setStagedOver(false);
@@ -1295,16 +1282,12 @@ function SharePanel({
 					<div className="mt-3.5 flex flex-col gap-3.5">
 						{privateLinks ? (
 							<>
-								{teamWorkspace ? (
-									<ArtifactRecipientField
-										onSubmit={(recipients) => invite(phase, recipients)}
-										orgId={teamWorkspace.id}
-										unavailable={new Set([...people.map((person) => `email:${person.email}`), ...teams.map(teamRemovingKey)])}
-									/>
-								) : (
-									<InviteField busy={inviting} onSubmit={(emails) => invite(phase, { emails, teams: [] })} />
-								)}
-								{viewersNote}
+								<ArtifactRecipientField
+									onSubmit={(recipients) => invite(phase, recipients)}
+									orgId={org?.id ?? ""}
+									teams={Boolean(teamWorkspace)}
+									unavailable={new Set([...people.map((person) => `email:${person.email}`), ...teams.map(teamRemovingKey)])}
+								/>
 								{phase.grantsError ? (
 									<div className="-mt-1 flex items-center justify-between gap-2" role="alert" data-share-grants-error="">
 										<p className="text-caption leading-4 text-error">{t("artifacts.share.people.loadFailed")}</p>

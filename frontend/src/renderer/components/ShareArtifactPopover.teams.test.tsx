@@ -58,7 +58,7 @@ function renderButton(file: Omit<CloudShareFile, "baseUrl" | "shareId">) {
 }
 
 async function pickDesign() {
-	await userEvent.type(screen.getByRole("combobox", { name: "Add people or teams" }), "Des");
+	await userEvent.type(screen.getByRole("combobox", { name: "Add people by email or team" }), "Des");
 	await userEvent.click(await screen.findByRole("option", { name: /Design/ }));
 }
 
@@ -80,7 +80,7 @@ describe("ShareArtifactButton on a team workspace", () => {
 		const remove = vi.spyOn(aoBridge.cloudShare, "removeGrant").mockResolvedValue();
 		renderButton(cloudFile);
 		await userEvent.click(await screen.findByRole("button", { name: "Published: report.html" }));
-		await screen.findByRole("combobox", { name: "Add people or teams" });
+		await screen.findByRole("combobox", { name: "Add people by email or team" });
 		// Picking the team shares at once: there is no Add button.
 		await pickDesign();
 		expect(screen.queryByRole("button", { name: "Add" })).toBeNull();
@@ -123,7 +123,7 @@ describe("ShareArtifactButton on a team workspace", () => {
 		const invite = vi.spyOn(aoBridge.cloudShare, "invite").mockResolvedValue({ ...none, teams: [design], workspaces: [everyone] });
 		renderButton(localFile);
 		await userEvent.click(await screen.findByRole("button", { name: "Publish: report.html" }));
-		await screen.findByRole("combobox", { name: "Add people or teams" });
+		await screen.findByRole("combobox", { name: "Add people by email or team" });
 		await pickDesign();
 		expect(await screen.findByText("Gets access when you publish")).toBeTruthy();
 		await userEvent.click(screen.getByRole("button", { name: /Only people invited/ }));
@@ -144,7 +144,7 @@ describe("ShareArtifactButton on a team workspace", () => {
 		const invite = vi.spyOn(aoBridge.cloudShare, "invite").mockResolvedValue({ ...none, people: [{ id: "4a0b0b4e-be7f-4a7d-be95-9b4d7a5b6c85", email: "maya@acme.co", createdAt: "" }] });
 		renderButton(cloudFile);
 		await userEvent.click(await screen.findByRole("button", { name: "Published: report.html" }));
-		await userEvent.type(await screen.findByRole("combobox", { name: "Add people or teams" }), "maya@acme.co{Enter}");
+		await userEvent.type(await screen.findByRole("combobox", { name: "Add people by email or team" }), "maya@acme.co{Enter}");
 		expect(invite).toHaveBeenCalledExactlyOnceWith("https://cp.test", SHARE_ID, { emails: ["maya@acme.co"] });
 		expect(await screen.findByText("maya@acme.co")).toBeTruthy();
 	});
@@ -158,13 +158,13 @@ describe("ShareArtifactButton on a team workspace", () => {
 		mocks.createTeam.mockResolvedValue({ team: { id: TEAM_ID, name: "Research", memberCount: 1 } });
 		renderButton(cloudFile);
 		await userEvent.click(await screen.findByRole("button", { name: "Published: report.html" }));
-		const field = await screen.findByRole("combobox", { name: "Add people or teams" });
+		const field = await screen.findByRole("combobox", { name: "Add people by email or team" });
 		await userEvent.type(field, "Research");
 		await userEvent.click(await screen.findByRole("option", { name: /New team/ }));
 		const dialog = await screen.findByRole("dialog", { name: "New team" });
 		expect((within(dialog).getByRole("textbox", { name: "Name" }) as HTMLInputElement).value).toBe("Research");
 		// The popover stays open behind the dialog.
-		expect(screen.getByRole("combobox", { name: "Add people or teams", hidden: true })).toBeTruthy();
+		expect(screen.getByRole("combobox", { name: "Add people by email or team", hidden: true })).toBeTruthy();
 		await userEvent.click(within(dialog).getByRole("button", { name: "Create team" }));
 		expect(mocks.createTeam).toHaveBeenCalledWith(ORG_ID, { name: "Research", members: [] });
 		await waitFor(() => expect(invite).toHaveBeenCalledExactlyOnceWith("https://cp.test", SHARE_ID, { orgId: ORG_ID, teamIds: [TEAM_ID] }));
@@ -178,8 +178,12 @@ describe("ShareArtifactButton on a team workspace", () => {
 		vi.spyOn(aoBridge.cloudShare, "grants").mockResolvedValue(none);
 		renderButton(cloudFile);
 		await userEvent.click(await screen.findByRole("button", { name: "Published: report.html" }));
-		expect(await screen.findByRole("textbox", { name: "Add people by email" })).toBeTruthy();
-		expect(screen.queryByRole("combobox", { name: "Add people or teams" })).toBeNull();
+		// The session share field, for people only: no teams, no New team.
+		const field = await screen.findByRole("combobox", { name: "Add people by email" });
+		await userEvent.type(field, "Des");
+		expect(screen.queryByRole("option", { name: /Design/ })).toBeNull();
+		expect(screen.queryByRole("option", { name: /New team/ })).toBeNull();
+		await userEvent.clear(field);
 		await userEvent.click(screen.getByRole("button", { name: /Only you/ }));
 		expect(screen.queryByRole("menuitemradio", { name: /Everyone at/ })).toBeNull();
 		expect(screen.getAllByRole("menuitemradio")).toHaveLength(2);
