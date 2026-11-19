@@ -59,7 +59,7 @@ func claudeBackgroundTasks(ctx context.Context, conn *acpsdk.ClientSideConnectio
 		default:
 			return nil, fmt.Errorf("background task response has invalid state %q", task.State)
 		}
-		description := domain.SanitizeControlChars(task.Description)
+		description := domain.SanitizeTaskDescription(task.Description)
 		out = append(out, ports.ChatBackgroundTask{
 			ID: task.ID, RunID: task.RunID, Kind: task.Kind, Description: description, State: task.State,
 			StartedAt: task.StartedAt, EndedAt: task.EndedAt,

@@ -3136,7 +3136,9 @@ html.sidebar-reordering * {
 /* Five rows, then the list scrolls inside itself, never the transcript. */
 .chat-composer-tasks-list {
 	max-height: calc(2rem * 5 + 0.25rem);
+	overflow-x: hidden;
 	overflow-y: auto;
+	scrollbar-width: thin;
 	overscroll-behavior: contain;
 	padding-bottom: 0.25rem;
 }

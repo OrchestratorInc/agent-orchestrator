@@ -1,7 +1,7 @@
-import { useCallback, useEffect, useId, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useId, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 import type { TFunction } from "i18next";
-import { ChevronRight, ListTodo, Loader2, SquareTerminal } from "@/components/app-icons";
+import { ChevronRight, Circle, ListTodo, SquareTerminal } from "@/components/app-icons";
 import {
 	useBackgroundTasks,
 	useStopBackgroundTask,
@@ -11,6 +11,7 @@ import {
 import { cn } from "../lib/utils";
 import type { WorkspaceSession } from "../types/workspace";
 import { Button } from "./ui/button";
+import { Pressable } from "./ui/pressable";
 
 function taskSummary(tasks: BackgroundTask[], t: TFunction): string | null {
 	const live = tasks.filter((task) => task.state === "running");
@@ -35,7 +36,7 @@ export function BackgroundTasksBadge({ session, reading, stale = false }: {
 	const summary = reading && reading.availability !== "unavailable" ? taskSummary(reading.tasks, t) : null;
 	if (!summary) return null;
 	return (
-		<span className="inline-flex min-w-0 max-w-full items-center gap-1 text-xs text-muted-foreground">
+		<span className="inline-flex min-w-0 max-w-full items-center gap-1 px-3 text-xs text-muted-foreground">
 			<ListTodo aria-hidden="true" className="size-3 shrink-0" />
 			<span className="truncate">{summary}{stale ? ` · ${t("backgroundTasks.stale")}` : ""}</span>
 		</span>
@@ -51,8 +52,8 @@ const isLive = (task: BackgroundTask) => task.state === "running" || task.state 
 export function composerBackgroundTasks(reading?: BackgroundTaskReading): BackgroundTask[] {
 	if (!reading || reading.availability === "unavailable") return [];
 	const tasks = reading.tasks.filter((task) => task.kind !== "agent" && (isLive(task) || task.state === "failed"));
-	// Live work first; the daemon orders by state, but a failure must never lead.
-	return [...tasks.filter(isLive), ...tasks.filter((task) => !isLive(task))];
+	// Failures need attention and must remain visible above the five-row cap.
+	return [...tasks.filter((task) => !isLive(task)), ...tasks.filter(isLive)];
 }
 
 /** Seconds under a minute, minutes under an hour, then hours: "38s", "12m", "1h 5m". */
@@ -76,7 +77,7 @@ function useNow(tasks: BackgroundTask[]): number {
 	const [now, setNow] = useState(() => Date.now());
 	const live = tasks.filter(isLive);
 	const young = live.some((task) => task.startedAt && now - Date.parse(task.startedAt) < 60_000);
-	const ticking = live.length > 0;
+	const ticking = live.some((task) => !!task.startedAt);
 	useEffect(() => {
 		if (!ticking) return;
 		const timer = window.setInterval(() => setNow(Date.now()), young ? 1_000 : 10_000);
@@ -135,7 +136,7 @@ export function SessionBackgroundTasks({ session }: { session: WorkspaceSession 
 	const enabled = supportsLocalBackgroundTasks(session);
 	const query = useBackgroundTasks(session.id, enabled);
 	if (!enabled) return null;
-	return <ComposerBackgroundTasks sessionId={session.id} reading={query.data} />;
+	return <ComposerBackgroundTasks sessionId={session.id} reading={query.isError ? undefined : query.data} />;
 }
 
 export function ComposerBackgroundTasks({ sessionId, reading }: { sessionId: string; reading?: BackgroundTaskReading }) {
@@ -154,81 +155,116 @@ export function ComposerBackgroundTasks({ sessionId, reading }: { sessionId: str
 		setWasSeveral(several);
 		if (!several) setOpen(false);
 	}
+	const region = useRef<HTMLElement>(null);
+	const scope = useRef<HTMLElement | null>(null);
+	const focusedElement = useRef<HTMLElement | null>(null);
+	useLayoutEffect(() => {
+		if (region.current) scope.current = region.current.parentElement;
+		// A poll must not move focus that still belongs to a mounted control.
+		if (!focusedElement.current || focusedElement.current.isConnected || document.activeElement !== document.body) return;
+		focusedElement.current = null;
+		if (document.activeElement === document.body || region.current?.contains(document.activeElement)) {
+			const next =
+				region.current?.querySelector<HTMLElement>("[data-task-id] button:not(:disabled)") ??
+				region.current?.querySelector<HTMLElement>("button:not(:disabled)");
+			const editor = scope.current?.querySelector<HTMLElement>('[contenteditable="true"], textarea, [role="textbox"]');
+			(next ?? editor)?.focus();
+		}
+	}, [tasks]);
 	if (!tasks.length) return null;
 
 	const name = (task: BackgroundTask) => task.description || t(task.kind === "shell" ? "backgroundTasks.kind.shell" : "backgroundTasks.kind.other");
-	const status = (task: BackgroundTask) => isLive(task) ? (
-		<span role="img" aria-label={t("backgroundTasks.state.running")} className="grid size-3 shrink-0 place-items-center">
-			<Loader2 aria-hidden="true" className="size-3 animate-spin text-muted-foreground/60 motion-reduce:animate-none" />
-		</span>
-	) : (
-		<span role="img" aria-label={t("backgroundTasks.state.failed")} className="size-1.5 shrink-0 rounded-full bg-destructive" />
-	);
+	const status = (task: BackgroundTask) =>
+		isLive(task) ? (
+			<span role="img" aria-label={t("backgroundTasks.state.running")} className="grid size-3 shrink-0 place-items-center">
+				<Circle aria-hidden="true" className="size-2 fill-status-working text-status-working" />
+			</span>
+		) : (
+			<span role="img" aria-label={t("backgroundTasks.state.failed")} className="size-1.5 shrink-0 rounded-full bg-destructive" />
+		);
 	const time = (task: BackgroundTask) => {
 		if (failed === task.id) {
-			return <span role="status" className="shrink-0 text-[11px] text-destructive">{t("backgroundTasks.stopFailed")}</span>;
+			return (
+				<span role="status" className="shrink-0 text-caption text-destructive">
+					{t("backgroundTasks.stopFailed")}
+				</span>
+			);
 		}
 		const text = elapsed(task, now);
-		return text ? <span className="shrink-0 text-[11px] tabular-nums text-muted-foreground">{text}</span> : null;
+		return text ? <span className="shrink-0 text-caption tabular-nums text-muted-foreground">{text}</span> : null;
 	};
 	// Only a live task its provider can stop gets the square; the rest end flush.
-	const stopButton = (task: BackgroundTask) => isLive(task) && task.stoppable ? (
-		<Button
-			type="button"
-			variant="quiet"
-			size="icon-xs"
-			className="-mr-1 shrink-0"
-			aria-label={t("backgroundTasks.stop", { name: name(task) })}
-			disabled={stopping.has(task.id)}
-			onClick={() => stop(task.id)}
-		>
-			<span aria-hidden="true" className="size-2 rounded-[2px] bg-current" />
-		</Button>
-	) : null;
-
-	if (!several) {
-		const [task] = tasks;
-		return (
-			<section aria-label={t("backgroundTasks.title")} className="chat-composer-tasks">
-				<div className="flex h-8 min-w-0 items-center gap-2">
-					<SquareTerminal aria-hidden="true" className="size-4 shrink-0 text-muted-foreground" />
-					<span className="min-w-0 truncate text-xs font-medium text-foreground/90" title={name(task)}>{name(task)}</span>
-					<span className="ml-auto flex shrink-0 items-center gap-2 pl-2">
-						{status(task)}
-						{time(task)}
-					</span>
-					{stopButton(task)}
-				</div>
-			</section>
-		);
-	}
+	const stopButton = (task: BackgroundTask) =>
+		isLive(task) && task.stoppable ? (
+			<Button
+				type="button"
+				variant="quiet"
+				size="icon-xs"
+				className="shrink-0"
+				aria-label={t("backgroundTasks.stop", { name: name(task) })}
+				disabled={stopping.has(task.id)}
+				onClick={() => stop(task.id)}
+			>
+				<span aria-hidden="true" className="size-2 rounded-[2px] bg-current" />
+			</Button>
+		) : null;
 
 	return (
-		<section aria-label={t("backgroundTasks.title")} className="chat-composer-tasks">
-			<button
-				type="button"
-				aria-expanded={open}
-				aria-controls={open ? listId : undefined}
-				onClick={() => setOpen((value) => !value)}
-				className="flex h-8 w-full min-w-0 items-center gap-2 rounded-sm text-left focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
-			>
-				<SquareTerminal aria-hidden="true" className="size-4 shrink-0 text-muted-foreground" />
-				{live.length ? <span className="shrink-0 text-xs font-medium text-foreground/90">{t("backgroundTasks.runningCount", { count: live.length })}</span> : null}
-				{failedCount ? <span className="min-w-0 truncate text-[11px] text-destructive">{t("backgroundTasks.failedCount", { count: failedCount })}</span> : null}
-				<ChevronRight aria-hidden="true" className={cn("ml-auto size-3 shrink-0 text-muted-foreground/60 transition-transform motion-reduce:transition-none", open && "rotate-90")} />
-			</button>
-			{open ? (
-				<ul id={listId} className="chat-composer-tasks-list">
-					{tasks.map((task) => (
-						<li key={`${task.id}:${task.runId ?? ""}`} className="flex h-8 min-w-0 items-center gap-2">
-							<span className="grid size-4 shrink-0 place-items-center">{status(task)}</span>
-							<span className="min-w-0 flex-1 truncate text-xs font-medium text-foreground/90" title={name(task)}>{name(task)}</span>
-							{time(task)}
-							{stopButton(task)}
-						</li>
-					))}
-				</ul>
+		<section
+			ref={region}
+			aria-label={t("backgroundTasks.title")}
+			className="chat-composer-tasks"
+			onFocusCapture={(event) => {
+				focusedElement.current = event.target as HTMLElement;
+			}}
+			onBlurCapture={(event) => {
+				if (event.relatedTarget && !event.currentTarget.contains(event.relatedTarget as Node)) focusedElement.current = null;
+			}}
+		>
+			{several ? (
+				<Pressable
+					aria-expanded={open}
+					aria-controls={open ? listId : undefined}
+					onClick={() => setOpen((value) => !value)}
+					className="flex h-8 w-full min-w-0 items-center gap-2 rounded-sm focus-visible:ring-2 focus-visible:ring-ring"
+				>
+					<SquareTerminal aria-hidden="true" className="size-4 shrink-0 text-muted-foreground" />
+					{live.length ? (
+						<span className="shrink-0 text-xs font-medium text-foreground/90">{t("backgroundTasks.runningCount", { count: live.length })}</span>
+					) : null}
+					{live.length > 0 && failedCount > 0 ? (
+						<span aria-hidden="true" className="text-caption text-muted-foreground">
+							·
+						</span>
+					) : null}
+					{failedCount ? (
+						<span className="min-w-0 truncate text-caption text-destructive">{t("backgroundTasks.failedCount", { count: failedCount })}</span>
+					) : null}
+					<ChevronRight
+						aria-hidden="true"
+						className={cn("ml-auto size-3 shrink-0 text-muted-foreground/60 transition-transform motion-reduce:transition-none", open && "rotate-90")}
+					/>
+				</Pressable>
 			) : null}
+			<ul key="task-rows" id={listId} role={several ? "list" : "presentation"} className={several ? "chat-composer-tasks-list" : undefined}>
+				{!several || open
+					? tasks.map((task) => (
+							<li key={`${task.id}:${task.runId ?? ""}`} data-task-id={task.id} className="flex h-8 min-w-0 items-center gap-2">
+								{!several ? (
+									<SquareTerminal aria-hidden="true" className="size-4 shrink-0 text-muted-foreground" />
+								) : (
+									<span className="grid size-4 shrink-0 place-items-center">{status(task)}</span>
+								)}
+								<span className="min-w-0 flex-1 truncate text-xs font-medium text-foreground/90" title={name(task)}>
+									{name(task)}
+								</span>
+								{!several ? status(task) : null}
+								{time(task)}
+								{stopButton(task)}
+							</li>
+						))
+					: null}
+			</ul>
 		</section>
 	);
 }

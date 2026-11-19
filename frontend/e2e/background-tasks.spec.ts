@@ -165,8 +165,8 @@ test("several tasks fold to a count and open in place without moving into the qu
 	await toggle.click();
 	const rows = tab.getByRole("listitem");
 	await expect(rows).toHaveCount(3);
-	await expect(rows.nth(2)).toContainText("Run the Go linter");
-	await expect(rows.nth(2).getByRole("button")).toHaveCount(0);
+	await expect(rows.nth(0)).toContainText("Run the Go linter");
+	await expect(rows.nth(0).getByRole("button")).toHaveCount(0);
 	await expect(tab.getByRole("button", { name: /^Stop/ })).toHaveCount(2);
 	// Grown in the flow: the queue's footprint moved up, the composer did not.
 	await expectStacked(page, tab);
@@ -176,4 +176,42 @@ test("several tasks fold to a count and open in place without moving into the qu
 	const screenshot = testInfo.outputPath("background-tasks-open.png");
 	await page.screenshot({ path: screenshot });
 	await testInfo.attach("open task list beside an open queue", { path: screenshot, contentType: "image/png" });
+});
+
+test("task rows stay static, scroll vertically and return keyboard focus @T0", async ({ page }) => {
+	const fixture: { tasks: Task[] } = {
+		tasks: Array.from({ length: 6 }, (_, i) => ({ id: `shell-${i}`, kind: "shell", description: `Server ${i}`, state: "running", stoppable: true })),
+	};
+	await openWorker(page, fixture);
+	await page.goto(`/#/projects/${projectId}/sessions/${sessionId}`);
+	const tab = page.getByRole("region", { name: "Background tasks" });
+	await tab.getByRole("button", { name: /6 running/ }).click();
+	const list = tab.getByRole("list");
+	// Force a reserved scrollbar gutter, rather than relying on macOS overlays.
+	await list.evaluate((element) => {
+		element.style.scrollbarGutter = "stable";
+	});
+	const geometry = await list.evaluate((element) => ({
+		width: element.clientWidth,
+		scrollWidth: element.scrollWidth,
+		height: element.clientHeight,
+		scrollHeight: element.scrollHeight,
+		overflowX: getComputedStyle(element).overflowX,
+	}));
+	expect(geometry.overflowX).toBe("hidden");
+	expect(geometry.scrollWidth).toBeLessThanOrEqual(geometry.width);
+	expect(geometry.scrollHeight).toBeGreaterThan(geometry.height);
+	expect(await tab.locator(".animate-spin").count()).toBe(0);
+	await tab.getByRole("button", { name: "Stop Server 0" }).focus();
+	await page.keyboard.press("Enter");
+	await expect(tab.getByRole("button", { name: "Stop Server 1" })).toBeFocused();
+	// Repeated keyboard stops take the list through several -> one -> none.
+	for (let i = 1; i < 6; i++) {
+		const stop = tab.getByRole("button", { name: `Stop Server ${i}` });
+		await expect(stop).toBeFocused();
+		await page.keyboard.press("Enter");
+		if (i < 5) await expect(tab.getByRole("button", { name: `Stop Server ${i + 1}` })).toBeFocused();
+	}
+	await expect(tab).toHaveCount(0);
+	await expect(page.locator("form.cursor-chat-composer [contenteditable=true]")).toBeFocused();
 });

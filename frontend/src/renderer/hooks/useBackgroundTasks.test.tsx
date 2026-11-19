@@ -79,7 +79,7 @@ describe("background task queries", () => {
 
 describe("stopping a background task", () => {
 	beforeEach(() => vi.clearAllMocks());
-	it("posts the stop, treats a settled task as done, and rereads every task view", async () => {
+	it("posts the stop, treats a settled task as done, and rereads only the stopped session", async () => {
 		const client = new QueryClient({ defaultOptions: { queries: { retry: false }, mutations: { retry: false } } });
 		const invalidate = vi.spyOn(client, "invalidateQueries");
 		const outcomes: string[] = [];
@@ -99,7 +99,7 @@ describe("stopping a background task", () => {
 		expect(outcomes).toEqual(["ok:a", "ok:b", "error:c"]);
 		expect(postMock).toHaveBeenCalledWith("/api/v1/sessions/{sessionId}/background-tasks/{taskId}/stop", { params: { path: { sessionId: "s", taskId: "a" } } });
 		await waitFor(() => expect(invalidate).toHaveBeenCalledTimes(3));
-		expect(invalidate).toHaveBeenCalledWith({ queryKey: ["background-tasks"] });
+		expect(invalidate).toHaveBeenCalledWith({ queryKey: ["background-tasks", "s"] });
 		view.unmount();
 		client.clear();
 	});

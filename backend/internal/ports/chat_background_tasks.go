@@ -26,8 +26,8 @@ type ChatBackgroundTask struct {
 	Kind        string
 	Description string
 	State       string
-	// StartedAt is when the provider started the task, or else when AO first
-	// observed it. Nil when neither is known.
+	// StartedAt is the native start time or when AO observed its start event.
+	// Inventory membership alone leaves it nil.
 	StartedAt *time.Time
 	EndedAt   *time.Time
 	// Stoppable is true only when this provider can stop this running task.
@@ -44,12 +44,4 @@ type ChatBackgroundTaskInspector interface {
 // returns ErrBackgroundTaskNotStoppable when the provider has no stop control.
 type ChatBackgroundTaskStopper interface {
 	StopBackgroundTask(ctx context.Context, taskID string) error
-}
-
-// ChatBackgroundTaskDriver describes the reporting path provided by the
-// conversations a driver creates. "native" can enumerate provider-owned work;
-// "reported" observes explicit background events and returns partial readings.
-// Runtime availability still depends on the installed provider version.
-type ChatBackgroundTaskDriver interface {
-	BackgroundTaskReporting() string
 }

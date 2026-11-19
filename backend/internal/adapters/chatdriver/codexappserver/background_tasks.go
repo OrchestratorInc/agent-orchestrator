@@ -62,7 +62,10 @@ func (c *conversation) BackgroundTasks(ctx context.Context) ([]ports.ChatBackgro
 				return nil, errors.New("background-terminal response has missing or duplicate identity")
 			}
 			seenIDs[task.ProcessID] = true
-			out = append(out, ports.ChatBackgroundTask{ID: task.ProcessID, RunID: task.ItemID, Kind: "shell", Description: domain.SanitizeControlChars(task.Command), State: "running"})
+			c.mu.Lock()
+			started := c.backgroundCommands[task.ItemID].StartedAt
+			c.mu.Unlock()
+			out = append(out, ports.ChatBackgroundTask{ID: task.ProcessID, RunID: task.ItemID, Kind: "shell", Description: domain.SanitizeTaskDescription(task.Command), State: "running", StartedAt: started})
 		}
 		if response.NextCursor == nil || *response.NextCursor == "" {
 			c.backgroundObserved.ReconcileShells(out, time.Now())
@@ -151,6 +154,7 @@ func (c *conversation) observeBackgroundNotification(n notification) {
 			Type         string `json:"type"`
 			Tool         string `json:"tool"`
 			ProcessID    string `json:"processId"`
+			Command      string `json:"command"`
 			ExitCode     *int   `json:"exitCode"`
 			AgentsStates map[string]struct {
 				Status string `json:"status"`
@@ -161,7 +165,25 @@ func (c *conversation) observeBackgroundNotification(n notification) {
 		return
 	}
 	now := time.Now()
-	if params.Item.Type == "commandExecution" && n.Method == "item/completed" {
+	if params.Item.Type == "commandExecution" {
+		c.mu.Lock()
+		if n.Method == "item/started" {
+			if c.backgroundCommands == nil {
+				c.backgroundCommands = make(map[string]ports.ChatBackgroundTask)
+			}
+			if _, exists := c.backgroundCommands[params.Item.ID]; !exists {
+				c.backgroundCommands[params.Item.ID] = ports.ChatBackgroundTask{StartedAt: &now, Description: params.Item.Command}
+			}
+			c.mu.Unlock()
+			return
+		}
+		observed := c.backgroundCommands[params.Item.ID]
+		delete(c.backgroundCommands, params.Item.ID)
+		c.mu.Unlock()
+		// A foreground completion has no background process handle.
+		if params.Item.ProcessID == "" {
+			return
+		}
 		state := "completed"
 		if params.Item.ExitCode != nil && *params.Item.ExitCode != 0 {
 			state = "failed"
@@ -173,7 +195,11 @@ func (c *conversation) observeBackgroundNotification(n notification) {
 			delete(c.backgroundStopping, params.Item.ProcessID)
 		}
 		c.mu.Unlock()
-		c.backgroundObserved.Finish(params.Item.ProcessID, state, now)
+		description := params.Item.Command
+		if description == "" {
+			description = observed.Description
+		}
+		c.backgroundObserved.Update(ports.ChatBackgroundTask{ID: params.Item.ProcessID, RunID: params.Item.ID, Kind: "shell", Description: description, State: state, StartedAt: observed.StartedAt}, now)
 	}
 	if params.Item.Type == "collabAgentToolCall" {
 		// A child thread can execute more than once. Only calls that dispatch
@@ -200,7 +226,7 @@ func (c *conversation) observeBackgroundNotification(n notification) {
 			if state == "running" || runID != "" {
 				// Dispatch outcomes belong to their execution, not whichever
 				// execution of this child happens to be current when replayed.
-				c.backgroundObserved.Update(ports.ChatBackgroundTask{ID: "agent:" + id, RunID: runID, Kind: "agent", Description: "Subagent " + id, State: state}, now)
+				c.backgroundObserved.Update(ports.ChatBackgroundTask{ID: "agent:" + id, RunID: runID, Kind: "agent", Description: "Subagent " + id, State: state, StartedAt: &now}, now)
 			} else {
 				c.backgroundObserved.Finish("agent:"+id, state, now)
 			}

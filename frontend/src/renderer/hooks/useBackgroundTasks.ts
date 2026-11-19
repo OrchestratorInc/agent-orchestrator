@@ -41,7 +41,7 @@ export function useBackgroundTaskReadings(enabled: boolean, projectId?: string) 
 }
 
 /** Only attached providers are inspected; this read never wakes an agent. */
-export function useBackgroundTasks(sessionId: string, enabled: boolean, fast = false) {
+export function useBackgroundTasks(sessionId: string, enabled: boolean) {
 	return useQuery({
 		queryKey: [...backgroundTasksQueryRoot, sessionId],
 		enabled,
@@ -53,7 +53,7 @@ export function useBackgroundTasks(sessionId: string, enabled: boolean, fast = f
 			if (!isTaskReading(data)) throw new Error("Invalid background task response");
 			return data;
 		},
-		refetchInterval: fast ? 2_000 : 5_000,
+		refetchInterval: 5_000,
 		staleTime: 1_000,
 		retry: false,
 	});
@@ -72,6 +72,6 @@ export function useStopBackgroundTask(sessionId: string) {
 			});
 			if (error && response.status !== 409) throw error;
 		},
-		onSettled: () => queryClient.invalidateQueries({ queryKey: backgroundTasksQueryRoot }),
+		onSettled: () => queryClient.invalidateQueries({ queryKey: [...backgroundTasksQueryRoot, sessionId] }),
 	});
 }

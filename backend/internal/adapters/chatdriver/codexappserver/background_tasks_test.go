@@ -225,3 +225,55 @@ func TestStoppedCodexTerminalSettlesAsStopped(t *testing.T) {
 		time.Sleep(10 * time.Millisecond)
 	}
 }
+
+func TestBackgroundTasksCodexUsesCommandStartAndHidesUnknownAge(t *testing.T) {
+	d, srv := newTestDriver(t)
+	srv.reply("thread/backgroundTerminals/list", `{"data":[{"processId":"p","itemId":"cmd","command":"sleep 30"}]}`)
+	opened, err := d.Start(t.Context(), ports.ChatStartConfig{WorkspacePath: "/tmp/ws"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer opened.Close()
+	c := opened.(*conversation)
+	tasks, _ := c.BackgroundTasks(t.Context())
+	if len(tasks) != 1 || tasks[0].StartedAt != nil {
+		t.Fatalf("late attachment invented start: %+v", tasks)
+	}
+	before := time.Now()
+	c.observeBackgroundNotification(notification{Method: "item/started", Params: []byte(`{"item":{"id":"cmd","type":"commandExecution","command":"sleep 30"}}`)})
+	after := time.Now()
+	tasks, _ = c.BackgroundTasks(t.Context())
+	if len(tasks) != 1 || tasks[0].StartedAt == nil || tasks[0].StartedAt.Before(before) || tasks[0].StartedAt.After(after) {
+		t.Fatalf("lost command start: %+v", tasks)
+	}
+	first := *tasks[0].StartedAt
+	tasks, _ = c.BackgroundTasks(t.Context())
+	if !tasks[0].StartedAt.Equal(first) {
+		t.Fatal("poll moved command start")
+	}
+}
+
+func TestBackgroundTasksCodexCompletionSurvivesInventoryOrdering(t *testing.T) {
+	for _, listed := range []bool{false, true} {
+		c := &conversation{threadID: "root"}
+		c.observeBackgroundNotification(notification{Method: "item/started", Params: []byte(`{"item":{"id":"cmd","type":"commandExecution","command":"false"}}`)})
+		if len(c.backgroundObserved.Snapshot(time.Now())) != 0 {
+			t.Fatal("foreground start became background")
+		}
+		if listed {
+			c.backgroundObserved.ReconcileShells([]ports.ChatBackgroundTask{{ID: "p", RunID: "cmd", Kind: "shell", State: "running"}}, time.Now())
+		}
+		c.backgroundObserved.ReconcileShells(nil, time.Now())
+		c.observeBackgroundNotification(notification{Method: "item/completed", Params: []byte(`{"item":{"id":"cmd","type":"commandExecution","processId":"p","command":"false","exitCode":1}}`)})
+		c.backgroundObserved.ReconcileShells(nil, time.Now())
+		tasks := c.backgroundObserved.Snapshot(time.Now())
+		if len(tasks) != 1 || tasks[0].State != "failed" || tasks[0].StartedAt == nil || tasks[0].Description != "false" {
+			t.Fatalf("listed=%v tasks=%+v", listed, tasks)
+		}
+	}
+	c := &conversation{}
+	c.observeBackgroundNotification(notification{Method: "item/completed", Params: []byte(`{"item":{"id":"fg","type":"commandExecution","exitCode":1}}`)})
+	if len(c.backgroundObserved.Snapshot(time.Now())) != 0 {
+		t.Fatal("foreground completion became background")
+	}
+}

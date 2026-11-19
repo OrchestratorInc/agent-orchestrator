@@ -101,6 +101,7 @@ func New(plugin claudePlugin, log *slog.Logger, onAuthRejected func()) ports.Cha
 		PromptResponseFailure: claudePromptResponseFailure,
 		CanHibernate:          claudeCanHibernate,
 		BackgroundTasks:       claudeBackgroundTasks,
+		AsyncTasks:            true,
 		StopBackgroundTask:    claudeStopBackgroundTask,
 		HistoryNotice:         claudeTranscriptNotice,
 		// claude-agent-acp keeps one TaskCreate/TaskUpdate list for the session

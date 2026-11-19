@@ -49,9 +49,6 @@ func TestConversationProtocolMismatchSignalsReadyAndStopped(t *testing.T) {
 }
 
 func TestForegroundOnlyUnrealDoesNotAdvertiseBackgroundTasks(t *testing.T) {
-	if _, ok := any(New(nil, nil)).(ports.ChatBackgroundTaskDriver); ok {
-		t.Fatal("foreground-only Unreal driver advertises background tasks")
-	}
 	if _, ok := any(&conversation{}).(ports.ChatBackgroundTaskInspector); ok {
 		t.Fatal("foreground-only Unreal conversation exposes background tasks")
 	}

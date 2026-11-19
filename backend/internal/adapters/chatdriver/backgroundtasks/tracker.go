@@ -52,15 +52,11 @@ func (t *Tracker) Update(task ports.ChatBackgroundTask, now time.Time) {
 	if exists && old.RunID != "" && task.RunID != "" && old.RunID != task.RunID && task.State != "running" {
 		return
 	}
-	// A task keeps the time AO first saw it; a new run of the same id restarts it.
+	// Inventory reads do not establish a start. Preserve an observed event's
+	// timestamp across later reads/updates of the same run.
 	sameRun := exists && (task.RunID == "" || old.RunID == "" || task.RunID == old.RunID)
-	if task.StartedAt == nil {
-		if sameRun && old.StartedAt != nil {
-			task.StartedAt = old.StartedAt
-		} else {
-			at := now
-			task.StartedAt = &at
-		}
+	if sameRun && old.StartedAt != nil && (task.StartedAt == nil || old.StartedAt.Before(*task.StartedAt)) {
+		task.StartedAt = old.StartedAt
 	}
 	if task.RunID == "" {
 		task.RunID = old.RunID
@@ -68,7 +64,7 @@ func (t *Tracker) Update(task ports.ChatBackgroundTask, now time.Time) {
 	if task.Description == "" {
 		task.Description = old.Description
 	}
-	task.Description = domain.SanitizeControlChars(task.Description)
+	task.Description = domain.SanitizeTaskDescription(task.Description)
 	if task.Kind == "" {
 		task.Kind = old.Kind
 	}

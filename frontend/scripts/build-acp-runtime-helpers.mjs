@@ -421,7 +421,12 @@ export function patchClaudeBackgroundTasks(adapterPath) {
             // Only work in the background projection above: never a foreground call.
             if (typeof taskId !== "string" || !session.aoBackgroundLive?.has(taskId)) throw RequestError.invalidParams(undefined, "Background task is not running.");
             // The SDK settles it with a task_notification "stopped", which the projection records.
-            await session.query.stopTask(taskId);
+            try {
+                await session.query.stopTask(taskId);
+            } catch (error) {
+                if (!session.aoBackgroundLive?.has(taskId)) throw RequestError.invalidParams(undefined, "Background task is not running.");
+                throw error;
+            }
             return {};
         })
         `;

@@ -204,7 +204,7 @@ func TestBackgroundTasksAsyncReplaysDoNotBlockHibernation(t *testing.T) {
 }
 
 func TestBackgroundTasksCopilotAsyncShell(t *testing.T) {
-	for _, key := range []string{"task_id", "taskId", "backgroundTaskId", "background_id", "sessionID", "sessionId", "session_id", "processId", "process_id", "shellId", "shell_id"} {
+	for _, key := range []string{"task_id", "taskId", "backgroundTaskId", "background_id", "processId", "process_id", "shellId", "shell_id"} {
 		t.Run(key, func(t *testing.T) {
 			c := &conversation{}
 			c.observeBackgroundTool(&toolState{id: "tool", kind: acpsdk.ToolKindExecute, status: acpsdk.ToolCallStatusCompleted, rawInput: map[string]any{"command": "sleep 1800", "mode": "async"}, rawOutput: map[string]any{key: "native-shell"}})
@@ -229,7 +229,7 @@ func TestBackgroundTasksOpenCodeMachineOutputAndCompletion(t *testing.T) {
 	tool := &toolState{id: "launch", kind: acpsdk.ToolKindThink, status: acpsdk.ToolCallStatusCompleted, rawInput: map[string]any{"agent": "general", "background": true, "description": "Run demo"}, rawOutput: `{"sessionID":"ses_native","status":"running","truncated":false}`}
 	c.observeBackgroundTool(tool)
 	tasks, _ := c.BackgroundTasks(context.Background())
-	if len(tasks) != 1 || tasks[0].ID != "ses_native" || tasks[0].State != "running" || tasks[0].Kind != "agent" {
+	if len(tasks) != 1 || tasks[0].ID != "launch" || tasks[0].State != "running" || tasks[0].Kind != "agent" {
 		t.Fatal(tasks)
 	}
 	tool.rawOutput = `{"sessionID":"ses_native","status":"completed"}`
@@ -244,7 +244,35 @@ func TestBackgroundTasksWrappedMachineResult(t *testing.T) {
 	c := &conversation{}
 	c.observeBackgroundTool(&toolState{id: "launch", kind: acpsdk.ToolKindThink, status: acpsdk.ToolCallStatusCompleted, rawInput: map[string]any{"agent": "general", "background": true}, rawOutput: map[string]any{"output": `{"sessionID":"native-child","status":"running"}`}})
 	tasks, _ := c.BackgroundTasks(context.Background())
-	if len(tasks) != 1 || tasks[0].ID != "native-child" || tasks[0].Kind != "agent" {
+	if len(tasks) != 1 || tasks[0].ID != "launch" || tasks[0].Kind != "agent" {
 		t.Fatal(tasks)
+	}
+}
+
+func TestBackgroundTasksDoNotUseSharedSessionIdentity(t *testing.T) {
+	for _, key := range []string{"sessionId", "sessionID", "session_id"} {
+		t.Run(key, func(t *testing.T) {
+			c := &conversation{}
+			for _, id := range []string{"one", "two"} {
+				c.observeBackgroundTool(&toolState{id: id, kind: acpsdk.ToolKindExecute, status: acpsdk.ToolCallStatusInProgress, rawInput: map[string]any{"background": true}, rawOutput: map[string]any{key: "shared"}})
+			}
+			tasks, _ := c.BackgroundTasks(context.Background())
+			if len(tasks) != 2 {
+				t.Fatal(tasks)
+			}
+			c.observeBackgroundTool(&toolState{id: "three", kind: acpsdk.ToolKindExecute, status: acpsdk.ToolCallStatusCompleted, rawInput: map[string]any{"background": true}, rawOutput: map[string]any{key: "shared", "processId": "native"}})
+			tasks, _ = c.BackgroundTasks(context.Background())
+			if len(tasks) != 3 {
+				t.Fatal(tasks)
+			}
+			c.backgroundObserved.Finish("native", "completed", time.Now())
+			c.observeBackgroundTool(&toolState{id: "four", kind: acpsdk.ToolKindExecute, status: acpsdk.ToolCallStatusCompleted, rawInput: map[string]any{"background": true}, rawOutput: map[string]any{key: "shared", "processId": "native"}})
+			tasks, _ = c.BackgroundTasks(context.Background())
+			for _, task := range tasks {
+				if task.ID == "native" && (task.RunID != "four" || task.State != "running") {
+					t.Fatal(tasks)
+				}
+			}
+		})
 	}
 }

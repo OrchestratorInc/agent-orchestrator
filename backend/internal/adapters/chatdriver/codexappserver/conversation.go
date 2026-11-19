@@ -75,6 +75,8 @@ type conversation struct {
 	// backgroundStopping holds the terminals AO asked the app-server to
 	// terminate, so their completion reads as stopped, not failed.
 	backgroundStopping map[string]bool
+	// Command starts are observational until the native background list or a process ID confirms background work.
+	backgroundCommands map[string]ports.ChatBackgroundTask
 
 	// sendMu serializes turn dispatch so only one operation mutates the provider
 	// conversation at a time.

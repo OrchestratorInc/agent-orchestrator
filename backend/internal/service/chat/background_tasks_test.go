@@ -3,10 +3,16 @@ package chat_test
 import (
 	"context"
 	"errors"
+	"log/slog"
+	"sync/atomic"
 	"testing"
 	"time"
 
+	"github.com/google/uuid"
+
+	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
 	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
+	chatsvc "github.com/aoagents/agent-orchestrator/backend/internal/service/chat"
 )
 
 type backgroundConversation struct {
@@ -166,7 +172,7 @@ func TestStopBackgroundTaskRefusesProvidersWithoutStopAndNeverWakesASession(t *t
 	}
 }
 
-func TestBackgroundTasksFailedReadIsSharedForOneSecond(t *testing.T) {
+func TestBackgroundTasksFailedReadBacksOffLongerThanTimeout(t *testing.T) {
 	conv := &backgroundConversation{fakeConversation: newFakeConversation(), err: errors.New("provider hung")}
 	h := newHarnessWithConversation(t, conv)
 	for range 3 {
@@ -177,9 +183,51 @@ func TestBackgroundTasksFailedReadIsSharedForOneSecond(t *testing.T) {
 	if conv.calls != 1 {
 		t.Fatalf("failed reads in the same second made %d provider calls, want 1", conv.calls)
 	}
-	h.advance(time.Second)
+	h.advance(3 * time.Second)
+	if _, err := h.svc.BackgroundTasks(context.Background(), testSession); err == nil || conv.calls != 1 {
+		t.Fatalf("failure cache expired before backoff: %v %d", err, conv.calls)
+	}
+	h.advance(2 * time.Second)
 	conv.err = nil
 	if reading, err := h.svc.BackgroundTasks(context.Background(), testSession); err != nil || reading.Availability != "ready" || conv.calls != 2 {
 		t.Fatalf("reading after the failed sample expired=%+v err=%v calls=%d", reading, err, conv.calls)
+	}
+}
+
+type backgroundSessionReader struct {
+	chatsvc.SessionReader
+	fail atomic.Bool
+}
+
+func (r *backgroundSessionReader) GetSession(ctx context.Context, id domain.SessionID) (domain.SessionRecord, bool, error) {
+	if r.fail.Load() && id == testSession {
+		return domain.SessionRecord{}, false, errors.New("lookup failed")
+	}
+	return r.SessionReader.GetSession(ctx, id)
+}
+
+func TestBackgroundTasksProjectBatchIsolatesSessionLookupFailure(t *testing.T) {
+	st := openStore(t)
+	healthyRecord, err := st.CreateSession(t.Context(), domain.SessionRecord{ProjectID: testProject, Kind: domain.KindWorker, Harness: domain.HarnessCodex, Mode: domain.SessionModeChat, CreatedAt: time.Now(), UpdatedAt: time.Now()})
+	if err != nil {
+		t.Fatal(err)
+	}
+	healthy := healthyRecord.ID
+	reader := &backgroundSessionReader{SessionReader: st}
+	svc := chatsvc.New(chatsvc.Options{NewID: uuid.NewString, Store: st, Reader: fullSnapshotReader(st), Sessions: reader, Drivers: fakeRegistry{driver: fakeDriver{start: func(cfg ports.ChatStartConfig) (ports.ChatConversation, error) {
+		base := newFakeConversation()
+		base.providerConversationID = string(cfg.SessionID)
+		return &backgroundConversation{fakeConversation: base, tasks: []ports.ChatBackgroundTask{{ID: "live", Kind: "shell", State: "running"}}}, nil
+	}}}, Log: slog.New(slog.DiscardHandler)})
+	for _, id := range []domain.SessionID{testSession, healthy} {
+		if _, err := svc.Start(t.Context(), chatsvc.StartConfig{SessionID: id, ProjectID: testProject, Harness: domain.HarnessCodex, WorkspacePath: t.TempDir()}); err != nil {
+			t.Fatal(err)
+		}
+		t.Cleanup(func() { reader.fail.Store(false); _ = svc.Stop(context.Background(), id) })
+	}
+	reader.fail.Store(true)
+	readings, err := svc.ListBackgroundTasks(t.Context(), testProject)
+	if err != nil || len(readings) != 1 || readings[0].SessionID != healthy || readings[0].Availability != "ready" || len(readings[0].Tasks) != 1 {
+		t.Fatalf("readings=%+v err=%v", readings, err)
 	}
 }

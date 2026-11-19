@@ -137,6 +137,26 @@ describe("patchClaudeBackgroundTasks", () => {
 		return { emit: message => dispatch(session, message), read: () => handlers.get("_ao/session/background_tasks")({ params: { sessionId: "native" } }), session, handlers };
 	}
 
+	it("maps a stop racing completion to not-running but preserves genuine errors", async () => {
+		const h = harness();
+		h.emit({ subtype: "background_tasks_changed", tasks: [{ task_id: "server", task_type: "local_bash" }] });
+		const failure = new Error("transport failed");
+		h.session.query = {
+			stopTask: async () => {
+				throw failure;
+			},
+		};
+		const stop = () => h.handlers.get("_ao/session/stop_background_task")({ params: { sessionId: "native", taskId: "server" } });
+		await expect(stop()).rejects.toBe(failure);
+		h.session.query = {
+			stopTask: async () => {
+				h.emit({ subtype: "task_notification", task_id: "server", status: "completed" });
+				throw failure;
+			},
+		};
+		await expect(stop()).rejects.toThrow("invalid session");
+	});
+
 	it("counts only the complete native background set, not foreground starts", () => {
 		const h = harness();
 		expect(h.read).toThrow("unavailable");

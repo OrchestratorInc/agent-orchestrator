@@ -48,7 +48,14 @@ func (s *Service) BackgroundTasks(ctx context.Context, id domain.SessionID) (Bac
 	// Shared across board/detail polling and scoped to this exact controller.
 	controller.backgroundMu.Lock()
 	defer controller.backgroundMu.Unlock()
-	if controller.backgroundSampledAt.IsZero() || s.now().Sub(controller.backgroundSampledAt) >= time.Second {
+	cacheFor := time.Second
+	if controller.backgroundErr != nil {
+		cacheFor = 5 * time.Second
+	}
+	if err := ctx.Err(); err != nil {
+		return out, err
+	}
+	if controller.backgroundSampledAt.IsZero() || s.now().Sub(controller.backgroundSampledAt) >= cacheFor {
 		readCtx, cancel := context.WithTimeout(ctx, 3*time.Second)
 		tasks, readErr := inspector.BackgroundTasks(readCtx)
 		cancel()
@@ -56,7 +63,7 @@ func (s *Service) BackgroundTasks(ctx context.Context, id domain.SessionID) (Bac
 			return out, nil
 		}
 		if readErr != nil && !errors.Is(readErr, ports.ErrBackgroundTasksPartial) {
-			// Keep a failed sample for the same second, so concurrent and
+			// Keep a failed sample longer than the read timeout, so concurrent and
 			// repeated readers share this attempt instead of queueing for their
 			// own. A caller's own cancellation is not the provider's failure.
 			if ctx.Err() == nil {
@@ -93,6 +100,7 @@ func (s *Service) BackgroundTasks(ctx context.Context, id domain.SessionID) (Bac
 		if task.State != "running" && task.State != "paused" && (task.EndedAt == nil || s.now().Sub(*task.EndedAt) >= 30*time.Second) {
 			continue
 		}
+		task.Description = domain.SanitizeTaskDescription(task.Description)
 		out.Tasks = append(out.Tasks, task)
 	}
 	sort.SliceStable(out.Tasks, func(i, j int) bool {
@@ -156,7 +164,8 @@ func (s *Service) ListBackgroundTasks(ctx context.Context, projectID domain.Proj
 			if projectID != "" {
 				rec, found, err := s.sessions.GetSession(readCtx, id)
 				if err != nil {
-					return err
+					// Without a verified project association, omit only this session.
+					return nil //nolint:nilerr // One failed session lookup must not cancel unrelated reads.
 				}
 				if !found || rec.ProjectID != projectID {
 					return nil

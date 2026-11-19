@@ -57,6 +57,8 @@ type LaunchConfig struct {
 
 // Config binds one harness to an ACP agent implementation.
 type Config struct {
+	// AsyncTasks advertises the Air extension only for bindings verified to use it.
+	AsyncTasks   bool
 	Harness      domain.AgentHarness
 	Capabilities ports.ChatCapabilities
 	Probe        func(context.Context) error
@@ -1000,6 +1002,10 @@ func (d *Driver) initialize(
 
 	initCtx, cancel := context.WithTimeout(ctx, handshakeTimeout)
 	defer cancel()
+	airCapabilities := []string{"sessionFailure"}
+	if d.cfg.AsyncTasks {
+		airCapabilities = append(airCapabilities, "asyncTasks")
+	}
 	init, err := conv.conn.Initialize(initCtx, acpsdk.InitializeRequest{
 		Meta: map[string]any{
 			persistenthost.ACPInitialPermissionsMetaKey: string(ports.NormalizePermissionMode(cfg.Permissions)),
@@ -1025,7 +1031,7 @@ func (d *Driver) initialize(
 				"jetbrains": map[string]any{
 					"air": map[string]any{
 						"version":      1,
-						"capabilities": []string{"sessionFailure", "asyncTasks"},
+						"capabilities": airCapabilities,
 					},
 				},
 			},
@@ -1324,12 +1330,4 @@ func normalizeACPLoadError(operation string, err error) error {
 		return fmt.Errorf("%w: %s: %w", ports.ErrChatHistoryLoadFailed, operation, err)
 	}
 	return normalizeACPError(operation, err)
-}
-
-// BackgroundTaskReporting describes the task reader shared by every conversation.
-func (d *Driver) BackgroundTaskReporting() string {
-	if d.cfg.BackgroundTasks != nil {
-		return "native"
-	}
-	return "reported"
 }

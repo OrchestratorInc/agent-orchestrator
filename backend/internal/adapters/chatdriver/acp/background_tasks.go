@@ -113,11 +113,11 @@ func (c *conversation) observeBackgroundTool(tool *toolState) {
 	if description == "" {
 		description = tool.title
 	}
-	c.backgroundObserved.Update(ports.ChatBackgroundTask{ID: id, Kind: kind, Description: description, State: state}, now)
+	c.backgroundObserved.Update(ports.ChatBackgroundTask{ID: id, RunID: tool.id, Kind: kind, Description: description, State: state, StartedAt: &now}, now)
 }
 
 func backgroundTaskID(value map[string]any) string {
-	return stringField(value, "task_id", "taskId", "backgroundTaskId", "background_id", "sessionID", "sessionId", "session_id", "processId", "process_id", "shellId", "shell_id")
+	return stringField(value, "task_id", "taskId", "backgroundTaskId", "background_id", "processId", "process_id", "shellId", "shell_id")
 }
 
 func backgroundFlag(value map[string]any) bool {
@@ -185,7 +185,7 @@ func (c *conversation) observeAsyncTaskNotification(raw json.RawMessage) bool {
 		if description == "" {
 			description = update.Name
 		}
-		c.backgroundObserved.Update(ports.ChatBackgroundTask{ID: update.ID, Kind: update.TaskType, Description: description, State: "running"}, now)
+		c.backgroundObserved.Update(ports.ChatBackgroundTask{ID: update.ID, RunID: update.ToolCallID, Kind: update.TaskType, Description: description, State: "running", StartedAt: &now}, now)
 	case "async_task_state_update":
 		switch update.State {
 		case "running", "paused", "completed", "failed", "stopped":

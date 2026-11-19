@@ -101,6 +101,16 @@ emits no background metadata or async-task events cannot expose hidden native
 jobs through ACP; a partial empty reading means no jobs **reported**, not none
 running. Partial readings may miss completions as well as starts. Do not infer
 jobs from foreground tool duration, an idle turn, output prose, or process trees.
+Advertising the Air `asyncTasks` capability is binding-specific and enabled only
+for the verified Claude binding. Other bindings can still report explicit
+background tool metadata. Session IDs are not task handles; native task handles
+and the launching tool-call identity distinguish executions.
+
+Codex command-start events establish elapsed time. A terminal discovered only by
+inventory after attachment has no start timestamp, so its elapsed time is hidden.
+Completion events retain outcomes even if the shell exited between list reads.
+Provider labels are one line, capped at 240 characters, and redact obvious
+credential assignments and Bearer values; this is not general secret detection.
 
 `GET /api/v1/sessions/{sessionId}/background-tasks` and the batch route return
 `ready`, `partial`, or `unavailable`. Cache entries are controller-scoped, with
