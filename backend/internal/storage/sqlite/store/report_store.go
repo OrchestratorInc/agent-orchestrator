@@ -207,6 +207,64 @@ func (s *Store) DeferReportBatch(ctx context.Context, projectID domain.ProjectID
 	return len(rows), nil
 }
 
+// FailReportBatch marks the matching project batch permanently failed after reaching the attempt limit.
+func (s *Store) FailReportBatch(ctx context.Context, projectID domain.ProjectID, token string, at time.Time, lastError string) (int, error) {
+	if projectID == "" || token == "" || at.IsZero() {
+		return 0, domain.ErrInvalidReport
+	}
+	s.writeMu.Lock()
+	defer s.writeMu.Unlock()
+	rows, err := s.qw.FailReportBatch(ctx, gen.FailReportBatchParams{
+		ProjectID: string(projectID), ClaimToken: token, LastError: lastError,
+	})
+	if err != nil {
+		return 0, fmt.Errorf("fail project report batch: %w", err)
+	}
+	return len(rows), nil
+}
+
+// RetryUnacknowledgedReportBatch atomically records a submitted-but-unobserved
+// attempt and either defers the batch or fails it at the durable attempt limit.
+// The returned count includes only reports transitioned to failed.
+func (s *Store) RetryUnacknowledgedReportBatch(ctx context.Context, projectID domain.ProjectID, token string, retryAt time.Time, limit int, lastError string) (int, error) {
+	if projectID == "" || token == "" || retryAt.IsZero() || limit <= 0 {
+		return 0, domain.ErrInvalidReport
+	}
+	s.writeMu.Lock()
+	defer s.writeMu.Unlock()
+	failed := 0
+	err := s.inTx(ctx, "retry unacknowledged report batch", func(q *gen.Queries) error {
+		attempts, err := q.IncrementUnacknowledgedReportBatch(ctx, gen.IncrementUnacknowledgedReportBatchParams{
+			ProjectID: string(projectID), ClaimToken: token,
+		})
+		if err != nil || len(attempts) == 0 {
+			return err
+		}
+		for _, count := range attempts {
+			if count >= int64(limit) {
+				rows, err := q.FailReportBatch(ctx, gen.FailReportBatchParams{
+					ProjectID: string(projectID), ClaimToken: token, LastError: lastError,
+				})
+				failed = len(rows)
+				return err
+			}
+		}
+		_, err = q.DeferReportBatch(ctx, gen.DeferReportBatchParams{
+			ProjectID: string(projectID), ClaimToken: token, AvailableAt: retryAt, LastError: lastError,
+		})
+		return err
+	})
+	if err != nil {
+		return 0, fmt.Errorf("retry unacknowledged report batch: %w", err)
+	}
+	return failed, nil
+}
+
+// AbandonReportBatch aliases FailReportBatch for callers referencing abandonment.
+func (s *Store) AbandonReportBatch(ctx context.Context, projectID domain.ProjectID, token string, at time.Time, lastError string) (int, error) {
+	return s.FailReportBatch(ctx, projectID, token, at, lastError)
+}
+
 // AcquireReportInterrupt durably enforces the per-worker interruption window.
 func (s *Store) AcquireReportInterrupt(ctx context.Context, sessionID domain.SessionID, at time.Time, window time.Duration) (bool, time.Time, error) {
 	if sessionID == "" || at.IsZero() || window <= 0 {

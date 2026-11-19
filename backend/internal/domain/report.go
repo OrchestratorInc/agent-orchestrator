@@ -113,6 +113,8 @@ const (
 	ReportPending      ReportDeliveryState = "pending"
 	ReportClaimed      ReportDeliveryState = "claimed"
 	ReportAcknowledged ReportDeliveryState = "acknowledged"
+	ReportFailed       ReportDeliveryState = "failed"
+	ReportAbandoned    ReportDeliveryState = "abandoned"
 )
 
 // ReportRecord is the durable report and outbox persistence shape. State and
@@ -170,6 +172,10 @@ func (r ReportRecord) Validate() error {
 		}
 	case ReportAcknowledged:
 		if r.ClaimToken == "" || r.ClaimedAt.IsZero() || r.AcknowledgedAt.IsZero() {
+			return ErrInvalidReport
+		}
+	case ReportFailed, ReportAbandoned:
+		if r.ClaimToken != "" || !r.ClaimedAt.IsZero() || !r.AcknowledgedAt.IsZero() {
 			return ErrInvalidReport
 		}
 	default:
