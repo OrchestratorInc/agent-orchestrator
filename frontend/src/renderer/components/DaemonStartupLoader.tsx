@@ -20,7 +20,9 @@ function useOnboardingPending(): boolean {
 	const [pending, setPending] = useState(false);
 	useEffect(() => {
 		let mounted = true;
-		void aoBridge.appState.getFirstRunProjectPrompt()
+		// Inside the chain, so a bridge that can't answer (or throws) reads as not pending.
+		void Promise.resolve()
+			.then(() => aoBridge.appState.getFirstRunProjectPrompt())
 			.then((status) => { if (mounted) setPending(status === "pending"); })
 			.catch(() => undefined);
 		return () => { mounted = false; };
