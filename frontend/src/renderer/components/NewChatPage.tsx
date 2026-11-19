@@ -122,6 +122,8 @@ export function NewChatPage({ projectId, hostId, report }: { projectId: string; 
 		// reading while the window is hidden: the page still holds the worktree.
 		refetchIntervalInBackground: true,
 		queryFn: async () => {
+			// The host restarts the expiry as the read arrives, so time it from its start.
+			const readAt = Date.now();
 			const { data, error } = await (hostId ? clientForHost(hostId) : apiClient).GET("/api/v1/sessions/{sessionId}/workspace/files", {
 				params: { path: { sessionId: preparedId as string } },
 			});
@@ -129,15 +131,17 @@ export function NewChatPage({ projectId, hostId, report }: { projectId: string; 
 			return {
 				paths: (data?.files ?? []).filter((file) => file.status !== "deleted").map((file) => file.path),
 				truncated: Boolean(data?.truncated),
+				readAt,
 			};
 		},
 	});
 	// A read that answered restarted the host's expiry; the next visit offers a
 	// kept preparation by its time.
 	const { notePreparationUsed } = task;
+	const lastReadAt = workspaceFiles.data?.readAt;
 	useEffect(() => {
-		if (preparedId && workspaceFiles.dataUpdatedAt) notePreparationUsed(preparedId, workspaceFiles.dataUpdatedAt);
-	}, [notePreparationUsed, preparedId, workspaceFiles.dataUpdatedAt]);
+		if (preparedId && lastReadAt) notePreparationUsed(preparedId, lastReadAt);
+	}, [lastReadAt, notePreparationUsed, preparedId]);
 	const stagePrepared = useStageAttachments(preparedId, hostId);
 	// A Cloud task carries files when its control plane takes them: they ride
 	// the first message of its Chat session, up to the size one upload may be.
