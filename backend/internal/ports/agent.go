@@ -304,6 +304,11 @@ type NativeSessionResolveConfig struct {
 	DataDir   string
 	SessionID domain.SessionID
 	LaunchID  string
+	// Env is the session's runtime environment, as the runtime layers it over
+	// the daemon's for the agent process, for adapters whose lookup runs the
+	// agent CLI against a store that project-level settings or credentials
+	// select. nil means the caller has none.
+	Env map[string]string
 }
 
 // AgentBinaryResolutionInvalidator is an optional capability for adapters that
@@ -368,6 +373,15 @@ type AgentInterfaceHandoffHistoryProbe interface {
 		nativeConversationID string,
 		env map[string]string,
 	) (bool, error)
+}
+
+// AgentProcessConversationReader is an OPTIONAL capability for agents a user
+// starts by hand in a shell terminal: it names the native conversation a
+// running agent process is in, so the shell can resume exactly that one after
+// the app restarts. pid leads the agent's foreground process group. ok=false
+// when the process does not say.
+type AgentProcessConversationReader interface {
+	ProcessConversationID(ctx context.Context, pid int) (id string, ok bool, err error)
 }
 
 // AgentInterfaceHandoffStorageBridge is an OPTIONAL capability for adapters
@@ -566,6 +580,12 @@ const (
 	AgentExitDetectionSupervisor AgentExitDetectionMode = "supervisor"
 )
 
+// AgentInterruptInputProvider selects a native cancellation key for TUIs where
+// Ctrl+C does not cancel the active turn. The input is sent without Enter.
+type AgentInterruptInputProvider interface {
+	InterruptInput() string
+}
+
 // AgentExitDetector is an optional adapter capability. Adapters that omit it
 // keep their existing launch behavior.
 type AgentExitDetector interface {
@@ -638,6 +658,12 @@ type TerminalActivityOptionsProvider interface {
 	TerminalActivityOptions() TerminalActivityOptions
 }
 
+// TurnInterruptKey declares a key that stops a running turn without exiting
+// the harness. Harnesses without this capability refuse explicit Stop turn.
+type TurnInterruptKey interface {
+	InterruptKey() string
+}
+
 // EmptyComposerDetector is an opt-in safety capability for unsolicited
 // coordination sent to an already-running interactive agent. It must return
 // true only when current terminal evidence positively proves that the active
@@ -678,11 +704,16 @@ type WaitingTerminalActivityDetector interface {
 // TerminalActivityDetector, in which case AO waits for an authoritative idle
 // detection. A non-positive timeout always preserves immediate delivery.
 type PromptReadinessHints struct {
-	InitialDelay time.Duration
-	Patterns     []string
-	PollInterval time.Duration
-	Timeout      time.Duration
-	Lines        int
+	// RequireReady refuses delivery when startup markers are absent or the wait budget expires.
+	RequireReady bool
+	// RequireCurrentLaunchSignal requires the lifecycle's first signal for this launch in addition
+	// to a terminal marker. This prevents preserved pane history from proving current readiness.
+	RequireCurrentLaunchSignal bool
+	InitialDelay               time.Duration
+	Patterns                   []string
+	PollInterval               time.Duration
+	Timeout                    time.Duration
+	Lines                      int
 	// RenderedScreen matches against the runtime's rendered current viewport
 	// (StyledTerminalOutputReader) instead of the raw output ring. Full-screen
 	// TUIs draw on the alternate screen, so their text never appears as a

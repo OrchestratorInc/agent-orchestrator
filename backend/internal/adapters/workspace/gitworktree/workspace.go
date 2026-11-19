@@ -342,6 +342,9 @@ func (w *Workspace) Create(ctx context.Context, cfg ports.WorkspaceConfig) (port
 			return ports.WorkspaceInfo{}, err
 		}
 		cfg.BaseRef, seedRef = refs.baseRef, refs.seedRef
+		if cfg.StartPoint != "" {
+			seedRef = cfg.StartPoint
+		}
 		seedSHA, err = w.revParse(ctx, repo, seedRef)
 		if err != nil {
 			return ports.WorkspaceInfo{}, err
@@ -1517,6 +1520,14 @@ func (w *Workspace) Restore(ctx context.Context, cfg ports.WorkspaceConfig) (por
 		// until then.
 		if rec.Branch != "" {
 			recreateBranch = rec.Branch
+		}
+	} else if cfg.LastBranch != "" && cfg.LastBranch != cfg.Branch {
+		exists, err := w.refExists(ctx, repo, "refs/heads/"+cfg.LastBranch)
+		if err != nil {
+			return ports.WorkspaceInfo{}, err
+		}
+		if _, elsewhere := findWorktreeByBranch(records, cfg.LastBranch); exists && !elsewhere {
+			recreateBranch = cfg.LastBranch
 		}
 	}
 	if nonEmpty, err := pathExistsNonEmpty(path); err != nil {

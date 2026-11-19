@@ -41,6 +41,9 @@ export type SessionInterfaceTransition = {
 	sourceMode: "chat" | "tui";
 	targetMode: "chat" | "tui";
 	policy: "drain" | "interrupt";
+	/** Set when the transition moves the session to another subscription account. */
+	sourceAccountId?: string;
+	targetAccountId?: string;
 	phase:
 		| "requested"
 		| "preflighting"
@@ -260,6 +263,19 @@ export async function cancelQueuedConversationTurn(cfg: ServerConfig, sessionId:
 
 export async function promoteQueuedConversationTurn(cfg: ServerConfig, sessionId: string, turnId: string): Promise<void> {
 	await apiRequest(cfg, conversationPath(sessionId, `/turns/${encodeURIComponent(turnId)}/steer`), { method: "POST" });
+}
+
+/** Sends a failed turn's prompt again, as a new turn. */
+export async function retryConversationTurn(cfg: ServerConfig, sessionId: string, turnId: string): Promise<void> {
+	await apiRequest(cfg, conversationPath(sessionId, `/turns/${encodeURIComponent(turnId)}/retry`), { method: "POST" });
+}
+
+/** Asks the daemon to send a usage-limited prompt again at the reset, or stops it. */
+export async function setConversationTurnAutoResume(cfg: ServerConfig, sessionId: string, turnId: string, enabled: boolean): Promise<void> {
+	await apiRequest(cfg, conversationPath(sessionId, `/turns/${encodeURIComponent(turnId)}/auto-resume`), {
+		method: "PATCH",
+		body: JSON.stringify({ enabled }),
+	});
 }
 
 export async function compactConversation(cfg: ServerConfig, sessionId: string): Promise<void> {
@@ -596,4 +612,39 @@ async function streamError(res: Response): Promise<ApiError> {
 		// A proxy may answer HTML; the status remains enough to classify it.
 	}
 	return new ApiError(res.status, message, code, requestId, detail || undefined);
+}
+
+/** What the daemon reports about forking a session. */
+export type ForkOptions = {
+	allowed: boolean;
+	anyTurn?: boolean;
+	refusal?: { code: string; message: string };
+};
+
+/**
+ * Whether a session can be forked. Null when the daemon has session forks off
+ * (it answers 404), so the app shows no Fork action at all.
+ */
+export async function getForkOptions(cfg: ServerConfig, sessionId: string): Promise<ForkOptions | null> {
+	try {
+		const res = await apiRequest(cfg, `${API}/sessions/${encodeURIComponent(sessionId)}/fork-options`);
+		return (await res.json()) as ForkOptions;
+	} catch (cause) {
+		if ((cause as { status?: number })?.status === 404) return null;
+		throw cause;
+	}
+}
+
+/** Forks a session as it was at turnId into a new session, and returns it. */
+export async function forkSession(
+	cfg: ServerConfig,
+	sessionId: string,
+	turnId: string,
+	clientRequestId: string,
+): Promise<{ sessionId: string; displayName: string }> {
+	const res = await apiRequest(cfg, `${API}/sessions/${encodeURIComponent(sessionId)}/fork`, {
+		method: "POST",
+		body: JSON.stringify({ clientRequestId, turnId }),
+	});
+	return (await res.json()) as { sessionId: string; displayName: string };
 }

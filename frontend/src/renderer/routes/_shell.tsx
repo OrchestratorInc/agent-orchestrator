@@ -22,10 +22,13 @@ import { HarnessUpdateNotice } from "../components/HarnessUpdateNotice";
 import { TrayRuntime } from "../components/TrayRuntime";
 import { SharedWithYouNotifier } from "../components/teams/SharedWithYouNotifier";
 import { NewTaskNavigator } from "../components/NewTaskNavigator";
+import { FirstRunOnboarding } from "../components/onboarding/FirstRunOnboarding";
+import { GuidedTour } from "../components/onboarding/GuidedTour";
 import { ArchiveModalHost } from "../components/ArchiveModalHost";
 import { GlobalToast } from "../components/GlobalToast";
 import { SettingsPane, SettingsProvider, useSettingsPage } from "../components/SettingsDialog";
 import { ShareLinkHost } from "../components/OpenShareLinkDialog";
+import { SharedArtifactLinkHost } from "../components/SharedArtifactLinkHost";
 import { KeyboardShortcutsDialog } from "../components/KeyboardShortcutsDialog";
 import { QuitConfirmDialog } from "../components/QuitConfirmDialog";
 import { PageTopbar } from "../components/PageTopbar";
@@ -36,6 +39,7 @@ import { SessionImportDialog } from "../components/SessionImportDialog";
 import { Sidebar } from "../components/Sidebar";
 import type { CreateProjectInput } from "../components/CreateProjectFlow";
 import { useRemoteHosts } from "../hooks/useRemoteHosts";
+import { useSettingsPolling } from "../hooks/useSettings";
 import { SidebarProvider } from "../components/ui/sidebar";
 import { TitlebarNav, useCanGoForward } from "../components/TitlebarNav";
 import { SwipeNavigation } from "../components/SwipeNavigation";
@@ -97,7 +101,7 @@ import { useRemoteUnpinStore } from "../stores/remote-unpin-store";
 import { buildSidebarSessionOrder, sessionWantsAttention, stepSessionNav, type SidebarNavSession } from "../lib/sidebar-order";
 import { useSidebarOrderStore } from "../stores/sidebar-order-store";
 import { useAppMenuAvailable } from "../hooks/useAppMenuCommand";
-import { useAppShortcut } from "../hooks/useAppShortcut";
+import { onDedicatedShortcut, useAppShortcut } from "../hooks/useAppShortcut";
 import { recordManualWorkerOpen, recordSessionSurface } from "../lib/session-management-telemetry";
 
 const SHELL_LOADER_STALE_MS = 2_000;
@@ -165,6 +169,9 @@ function ShellLayoutWithSettings() {
 	return (
 		<SettingsProvider>
 			<ShellLayout />
+			{/* Outside ShellLayout, so links it holds survive every route and the
+			    startup loader that replaces the shell while the daemon restarts. */}
+			<SharedArtifactLinkHost />
 		</SettingsProvider>
 	);
 }
@@ -341,9 +348,10 @@ function ShellLayout() {
 	const { client: cloudClient } = useCloudCp();
 	const { org: cloudOrg } = useCloudOrg();
 	useWorkspacePolling();
+	useSettingsPolling();
 	const workspaceQuery = useWorkspaceQuery();
 	const workspaces = workspaceQuery.data ?? [];
-	const { hosts: remoteHosts, listed: remoteHostsListed, settled: remoteHostsSettled, refresh: refreshRemoteHosts } = useRemoteHosts();
+	const { hosts: remoteHosts, listed: remoteHostsListed, settled: remoteHostsSettled, retryNow: retryRemoteHostsNow } = useRemoteHosts();
 	const remoteHostIdsKey = remoteHosts.map((host) => host.hostId).join("\0");
 	const remoteHostIds = useMemo(() => remoteHostIdsKey ? remoteHostIdsKey.split("\0") : [], [remoteHostIdsKey]);
 	// What each host showed last stays only for the hosts still saved, and shows
@@ -362,10 +370,6 @@ function ShellLayout() {
 	}, [queryClient, refusedRemoteHostKey]);
 	const { data: remoteWorkspaces, failedHostIds: remoteFailedHostIds, loadedProjectHostIds: remoteLoadedProjectHostIds, loadedSessionHostIds: remoteLoadedSessionHostIds } = useRemoteWorkspaces({ cachedHostIds: remoteHostIds });
 	useAutoSpawnPauseNotice([...(workspaceQuery.data ?? EMPTY_PAUSE_PROJECTS), ...(remoteWorkspaces ?? EMPTY_PAUSE_PROJECTS)]);
-	const failedRemoteHostKey = remoteFailedHostIds.join("\0");
-	useEffect(() => {
-		if (failedRemoteHostKey) void refreshRemoteHosts();
-	}, [failedRemoteHostKey, refreshRemoteHosts]);
 	// Global shortcut listeners need the latest workspace list, but recreating
 	// those subscriptions for every streamed activity update is avoidable.
 	const workspacesRef = useRef(workspaces);
@@ -390,11 +394,14 @@ function ShellLayout() {
 	const centerPaneRef = useRef<HTMLDivElement>(null);
 	const prefersReducedMotion = useReducedMotion();
 	const themePreference = useUiStore((state) => state.themePreference);
-	const firstRunPromptActive = useUiStore((state) => state.firstRunPromptActive);
 	const resolvedTheme = useUiStore((state) => state.resolvedTheme);
 	const themeStyle = useUiStore((state) => state.themeStyle);
 	const windowTranslucency = useUiStore((state) => state.windowTranslucency);
 	const developerMode = useUiStore((state) => state.developerMode);
+	const firstRunOnboardingOpen = useUiStore((state) => state.firstRunOnboardingOpen);
+	// While the full-window onboarding shows, the shell behind it takes no
+	// focus or clicks; Settings opened from it lifts that, as it steps aside.
+	const onboardingCoversShell = useUiStore((state) => state.firstRunOnboardingOpen && state.settingsModal?.scope !== "global");
 	const chatHibernationSyncRef = useRef<Promise<void>>(Promise.resolve());
 	const isSidebarOpen = useUiStore(sidebarIsVisible);
 	const toggleSidebar = useUiStore((state) => state.toggleSidebar);
@@ -642,6 +649,17 @@ const replacementErrorCount = Object.keys(orchestratorReplacementErrors).length;
 		!usesPreviewWorkspaceData &&
 		!daemonStatus.code &&
 		(daemonStatus.state !== "ready" || workspaceStartupState === "loading" || (!workspaceQuery.isSuccess && !workspaceQuery.isError));
+	// Launch timing: the second frame runs once the first frame that shows the
+	// workspace is on screen. A daemon failure is not a launch, and main logs the
+	// first report only, so nothing is reported while one is showing.
+	const workspaceShown = !isStartupLoading && !daemonStatus.code && workspaceQuery.data !== undefined;
+	useEffect(() => {
+		if (!workspaceShown) return;
+		let frame = requestAnimationFrame(() => {
+			frame = requestAnimationFrame(() => aoBridge.app.reportSessionsShown());
+		});
+		return () => cancelAnimationFrame(frame);
+	}, [workspaceShown]);
 	// The startup loader renders no sidebar, so measure again once the shell
 	// mounts it. Otherwise the strip keeps the 240px default and its fill
 	// paints over the center panel's top-left corner beside a narrower sidebar.
@@ -1111,9 +1129,9 @@ const replacementErrorCount = Object.keys(orchestratorReplacementErrors).length;
 		[openProjectSettings],
 	);
 	const retryRemoteHosts = useCallback(() => {
-		void refreshRemoteHosts();
+		void retryRemoteHostsNow();
 		void queryClient.invalidateQueries({ queryKey: ["remote-workspaces"] });
-	}, [queryClient, refreshRemoteHosts]);
+	}, [queryClient, retryRemoteHostsNow]);
 	// A new handler on every shell render would rebuild the sidebar context and
 	// re-render every row button that reads it.
 	const handleSidebarOpenChange = useCallback((open: boolean) => {
@@ -1307,7 +1325,7 @@ const replacementErrorCount = Object.keys(orchestratorReplacementErrors).length;
 	// for the in-scope project, or a standalone agent when no project is in scope.
 	useEffect(
 		() =>
-			aoBridge.app.onNewSessionShortcut(() => {
+			onDedicatedShortcut("new-session", (handler) => aoBridge.app.onNewSessionShortcut(handler), () => {
 			// On the new chat page, stay with the project and host it shows.
 			if (newChatHost) {
 				requestNewTask(newChatProject ?? STANDALONE_WORKSPACE_ID, newChatHost);
@@ -1365,7 +1383,7 @@ const replacementErrorCount = Object.keys(orchestratorReplacementErrors).length;
 	// strip, so the shortcut does nothing outside a session (#4772).
 	useEffect(
 		() =>
-			aoBridge.app.onNewShellTerminalShortcut(() => {
+			onDedicatedShortcut("new-shell-terminal", (handler) => aoBridge.app.onNewShellTerminalShortcut(handler), () => {
 				if (routeParams.sessionId) requestNewShellTerminal();
 			}),
 		[requestNewShellTerminal, routeParams.sessionId],
@@ -1500,8 +1518,8 @@ const replacementErrorCount = Object.keys(orchestratorReplacementErrors).length;
 	}, [handleSessionDeepLink, sessionDeepLinksReady]);
 
 	useEffect(() => {
-		const disposePrevious = aoBridge.app.onPreviousSessionShortcut(() => navigateSession(-1));
-		const disposeNext = aoBridge.app.onNextSessionShortcut(() => navigateSession(1));
+		const disposePrevious = onDedicatedShortcut("previous-session", (handler) => aoBridge.app.onPreviousSessionShortcut(handler), () => navigateSession(-1));
+		const disposeNext = onDedicatedShortcut("next-session", (handler) => aoBridge.app.onNextSessionShortcut(handler), () => navigateSession(1));
 		return () => {
 			disposePrevious();
 			disposeNext();
@@ -1522,6 +1540,7 @@ const replacementErrorCount = Object.keys(orchestratorReplacementErrors).length;
 			openRemoteProjectSettings: (hostId: string, projectId: string) => openProjectSettings(projectId, hostId),
 			openProject,
 			remoteHosts,
+			removeProject,
 			retryRemoteHosts,
 			validateImport,
 		}),
@@ -1533,6 +1552,7 @@ const replacementErrorCount = Object.keys(orchestratorReplacementErrors).length;
 			openProjectSettings,
 			openProject,
 			remoteHosts,
+			removeProject,
 			retryRemoteHosts,
 			validateImport,
 			workspaceStartupState,
@@ -1564,7 +1584,7 @@ const replacementErrorCount = Object.keys(orchestratorReplacementErrors).length;
 			<AppBrowserLinkContext.Provider value={canOpenBrowserLink ? openBrowserLink : undefined}>
 			<SessionTopbarProvider>
 				<NotificationRuntime />
-				<HarnessUpdateNotice enabled={daemonStatus.state === "ready" && !firstRunPromptActive} />
+				{firstRunOnboardingOpen ? null : <HarnessUpdateNotice enabled={daemonStatus.state === "ready"} />}
 				<TrayRuntime />
 				<SharedWithYouNotifier />
 				{isDragActive ? (
@@ -1584,6 +1604,8 @@ const replacementErrorCount = Object.keys(orchestratorReplacementErrors).length;
 					</div>
 				) : null}
 				<NewTaskNavigator />
+				<FirstRunOnboarding />
+				<GuidedTour />
 				<ArchiveModalHost />
 				<GlobalToast />
 				<RestartToUpdateDialog />
@@ -1614,6 +1636,7 @@ const replacementErrorCount = Object.keys(orchestratorReplacementErrors).length;
 					isLinux && "platform-linux",
 					isFullScreen && "native-fullscreen",
 				)}
+				inert={onboardingCoversShell}
 			>
 				{/* Windows-only custom title bar (sidebar toggle + File/Edit/View/…
             menu); paints the chrome the frameless window drops. Renders null on

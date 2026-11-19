@@ -1025,6 +1025,30 @@ describe("CloudClient", () => {
     expect(fetchMock.mock.calls[0]?.[1]?.body).toBe(JSON.stringify({ text: "Use the new parser", attachmentIds: ["file"] }));
   });
 
+  it("steers a queued message through the public client", async () => {
+    const event = {
+      sessionId: "session", sequence: 9, type: "chat.turn_steer_requested", createdAt: "2026-11-13T00:00:00Z",
+      payload: { turnId: "running", text: "report progress", clientMessageId: "steer-key", queuedTurnId: "turn one" },
+    };
+    const fetchMock = vi.fn<
+      (input: RequestInfo | URL, init?: RequestInit) => Promise<Response>
+    >(async () => jsonResponse({ event }, 202));
+    const client = createCloudClient({
+      baseUrl: "https://cloud.example.com",
+      getAccessToken: () => "access-token",
+      fetch: fetchMock as typeof fetch,
+    });
+
+    await expect(client.steerQueuedMessage("tenant", "session", "turn one", { idempotencyKey: "steer-key", composerEpoch: 3 }))
+      .resolves.toEqual({ event });
+    expect(fetchMock.mock.calls[0]?.[0]).toBe(
+      "https://cloud.example.com/api/cloud/v1/orgs/tenant/sessions/session/turns/turn%20one/steer-queued",
+    );
+    expect(fetchMock.mock.calls[0]?.[1]?.method).toBe("POST");
+    expect(fetchMock.mock.calls[0]?.[1]?.body).toBe(JSON.stringify({ composerEpoch: 3 }));
+    expect(new Headers(fetchMock.mock.calls[0]?.[1]?.headers).get("Idempotency-Key")).toBe("steer-key");
+  });
+
   it("deletes a queued message through the public client", async () => {
     const fetchMock = vi.fn<
       (input: RequestInfo | URL, init?: RequestInit) => Promise<Response>

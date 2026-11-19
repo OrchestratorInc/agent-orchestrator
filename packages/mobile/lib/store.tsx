@@ -101,6 +101,8 @@ export type SpawnOptions = {
 	effort?: string;
 	/** The worker's starting approval mode; omitted keeps the project's. */
 	approvalMode?: ApprovalMode;
+	/** The subscription account the agent starts on; omitted uses the machine's default. */
+	accountId?: string;
 	attachments?: SpawnAttachmentInput[];
 	/** Mobile defaults to Chat; TUI remains an explicit compatibility choice. */
 	mode?: SessionMode;
@@ -188,9 +190,21 @@ type AppState = {
 	 *
 	 * Deliberately a getter rather than a value: a timestamp that changed on every
 	 * successful tick would re-render every consumer of this store once per poll.
-	 * Read it through useStaleness, which owns the clock.
+	 * Read it through useMachineFreshness or FreshnessLine, which own the clock.
 	 */
 	getLastSyncAt: () => number;
+	/**
+	 * The selected machine's last sync, when `hostId` is the machine that sync
+	 * belongs to; undefined for any other machine, whose snapshot is current.
+	 *
+	 * Unscoped: HostScope and Cloud repoint `currentHostId` and `getLastSyncAt`
+	 * at the machine their screen is about, while freshness is judged for every
+	 * machine at once, and the selected one's snapshot trails its polls. Keyed by
+	 * the owner rather than paired with a host id in the context value, because
+	 * FrozenAppScope holds an old value on a tab off screen: after a switch it
+	 * would name the old machine while the getter read the new one's time.
+	 */
+	getPrimaryLastSyncAt: (hostId: string) => number | undefined;
 	// actions
 	/**
 	 * Races the selected machine's endpoints. Null means none passed the host
@@ -430,6 +444,9 @@ export function AppProvider({ children }: { children: ReactNode }) {
 	// what "re-render the board on a change, not on the poll tick" removed. Only
 	// the banner subscribes to the passage of time; the board does not.
 	const lastSyncAtRef = useRef(0);
+	// The machine lastSyncAtRef belongs to, so getPrimaryLastSyncAt never hands
+	// one machine's time to a reader asking about another.
+	const lastSyncOwnerRef = useRef<string | null>(null);
 	// Whether the last failure had no HTTP status — nothing answered at all,
 	// which is what leaving a network looks like.
 	const lastFailUnreachableRef = useRef(false);
@@ -558,6 +575,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
 				setStats({});
 				setNotificationsUnread(0);
 				lastSyncAtRef.current = 0;
+				lastSyncOwnerRef.current = null;
 			}
 			// Let every other paired machine connect while the selected one's
 			// endpoint race is still waiting for an unreachable LAN or tunnel.
@@ -687,6 +705,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
 			setStats(incoming.stats);
 			setNotificationsUnread(incoming.notificationsUnread);
 			lastSyncAtRef.current = incoming.lastSyncAt;
+			lastSyncOwnerRef.current = incoming.hostId;
 			setConnection("open");
 			setLoading(false);
 			setError(null);
@@ -880,6 +899,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
 			recordLink(Date.now() - startedAt > SLOW_POLL_MS ? "slow" : "ok");
 			lastTickOkRef.current = true;
 			lastSyncAtRef.current = Date.now();
+			lastSyncOwnerRef.current = c.hostId ?? null;
 			if (!openRef.current) {
 				openRef.current = true;
 				const trigger = everConnectedRef.current ? "reconnect" : "launch";
@@ -1193,9 +1213,15 @@ export function AppProvider({ children }: { children: ReactNode }) {
 	const refreshHost = useCallback(async (hostId: string) => {
 		if (!mountedRef.current) return;
 		if (isCloudHost(hostId)) await refreshCloudRef.current();
-		else if (hostId === selectedHostId) await fetchAll(true);
+		else if (hostId === selectedHostId) {
+			// No verified config means its endpoint race failed and its poll has
+			// stopped, so a fetch would return at once and a Retry do nothing. Race
+			// again instead: a config that answers restarts the poll.
+			if (cfgRef.current) await fetchAll(true);
+			else await reloadConfig();
+		}
 		else await otherHosts.refreshHost(hostId);
-	}, [selectedHostId, fetchAll, otherHosts.refreshHost]);
+	}, [selectedHostId, fetchAll, reloadConfig, otherHosts.refreshHost]);
 	const hasCloud = Boolean(cloud);
 	const refreshAll = useCallback(async () => {
 		await Promise.all([
@@ -1212,13 +1238,13 @@ export function AppProvider({ children }: { children: ReactNode }) {
 	}, [activeProjectId, projects]);
 
 	const spawn = useCallback(
-		async ({ hostId, projectId, prompt, harness, model, effort, approvalMode, mode, attachments, clientRequestId }: SpawnOptions) => {
+		async ({ hostId, projectId, prompt, harness, model, effort, approvalMode, accountId, mode, attachments, clientRequestId }: SpawnOptions) => {
 			const resolvedMode = mode ?? "chat";
 			return trackFeature("spawn", async () => {
 				if (isCloudHost(hostId)) return spawnCloudWorker(cloudActionsRef.current, { projectId, prompt, harness, model, effort, approvalMode, mode: resolvedMode, attachments, clientRequestId });
 				const c = requireConfig(hostId);
 				if (projectId === STANDALONE_PROJECT) {
-					const session = await spawnSession(c, { prompt, harness, model, effort, approvalMode, mode: resolvedMode, attachments, clientRequestId });
+					const session = await spawnSession(c, { prompt, harness, model, effort, approvalMode, accountId, mode: resolvedMode, attachments, clientRequestId });
 					await refreshHost(hostId);
 					return session;
 				}
@@ -1232,6 +1258,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
 					model,
 					effort,
 					approvalMode,
+					accountId,
 					mode: resolvedMode,
 					attachments,
 					clientRequestId,
@@ -1334,6 +1361,10 @@ export function AppProvider({ children }: { children: ReactNode }) {
 	// Stable for the life of the provider, which is what lets it sit in the memo's
 	// dependency list below without ever busting it.
 	const getLastSyncAt = useCallback(() => lastSyncAtRef.current, []);
+	const getPrimaryLastSyncAt = useCallback(
+		(hostId: string) => (lastSyncOwnerRef.current === hostId ? lastSyncAtRef.current : undefined),
+		[],
+	);
 
 	const value = useMemo<AppState>(
 		() => ({
@@ -1370,6 +1401,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
 			phoneOffline,
 			phoneNetwork,
 			getLastSyncAt,
+			getPrimaryLastSyncAt,
 			reloadConfig,
 			switchHost,
 			refresh,
