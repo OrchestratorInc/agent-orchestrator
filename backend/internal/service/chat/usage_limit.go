@@ -87,16 +87,24 @@ func (s *Service) SetTurnAutoResume(ctx context.Context, id domain.SessionID, tu
 	if err == nil {
 		s.autoResumeMu.Lock()
 		delete(s.autoResumeRetryAt, turnID)
-		s.autoResumeIdle = false
-		if s.autoResumeWake != nil {
-			select {
-			case s.autoResumeWake <- struct{}{}:
-			default:
-			}
-		}
+		s.noteAutoResumeArmedLocked()
 		s.autoResumeMu.Unlock()
 	}
 	return err
+}
+
+// noteAutoResumeArmedLocked records that a turn was armed: the resume loop is
+// no longer idle, a scan already running cannot mark it idle when it ends, and
+// the loop is woken to scan at once. The caller holds autoResumeMu.
+func (s *Service) noteAutoResumeArmedLocked() {
+	s.autoResumeIdle = false
+	s.autoResumeArms++
+	if s.autoResumeWake != nil {
+		select {
+		case s.autoResumeWake <- struct{}{}:
+		default:
+		}
+	}
 }
 
 // AutoResumeArmed signals, coalesced, that a turn was armed for auto-resume,
@@ -260,6 +268,7 @@ func (s *Service) ResumeUsageLimitedTurns(ctx context.Context) error {
 		return nil
 	}
 	s.autoResumeScanning = true
+	armsAtStart := s.autoResumeArms
 	s.autoResumeMu.Unlock()
 	sources, err := store.AutoResumeTurns(ctx)
 	armed := make(map[string]bool, len(sources))
@@ -272,7 +281,9 @@ func (s *Service) ResumeUsageLimitedTurns(ctx context.Context) error {
 		s.autoResumeMu.Unlock()
 		return errors.Join(err, ctx.Err())
 	}
-	s.autoResumeIdle = len(sources) == 0
+	// A turn armed while this scan ran may be missing from sources; only a
+	// scan that started after the last arm can call the loop idle.
+	s.autoResumeIdle = len(sources) == 0 && s.autoResumeArms == armsAtStart
 	for id := range s.autoResumeRetryAt {
 		if !armed[id] {
 			delete(s.autoResumeRetryAt, id)

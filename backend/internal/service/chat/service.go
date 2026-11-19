@@ -108,8 +108,11 @@ type Service struct {
 	autoResumeScanning    bool
 	// autoResumeIdle is set when the last scan found no armed turn; the daemon's
 	// resume loop then waits longer, and arming a turn wakes it (autoResumeWake).
-	autoResumeIdle     bool
-	autoResumeWake     chan struct{}
+	autoResumeIdle bool
+	autoResumeWake chan struct{}
+	// autoResumeArms counts arming calls, so a scan that started before one
+	// does not mark the loop idle when it finishes.
+	autoResumeArms     uint64
 	usageLimitAccounts usageLimitAccountReader
 	handoffMu          sync.Mutex
 	handoff            accountHandoffDeps

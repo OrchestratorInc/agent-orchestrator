@@ -2,6 +2,7 @@ package activity
 
 import (
 	"context"
+	"errors"
 	"io"
 	"log/slog"
 	"path/filepath"
@@ -20,6 +21,7 @@ type countingTurnFailureSessions struct {
 	rows        []domain.TurnFailureCandidate
 	calls       int
 	cancellable bool
+	err         error
 }
 
 func (c *countingTurnFailureSessions) ListTurnFailureCandidates(ctx context.Context, harness domain.AgentHarness) ([]domain.TurnFailureCandidate, error) {
@@ -27,7 +29,16 @@ func (c *countingTurnFailureSessions) ListTurnFailureCandidates(ctx context.Cont
 	defer c.mu.Unlock()
 	c.calls++
 	c.cancellable = c.cancellable || ctx.Done() != nil
+	if c.err != nil {
+		return nil, c.err
+	}
 	return fakeTurnFailureSessions{rows: c.rows}.ListTurnFailureCandidates(ctx, harness)
+}
+
+func (c *countingTurnFailureSessions) fail(err error) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.err = err
 }
 
 func (c *countingTurnFailureSessions) snapshot() (int, bool) {
@@ -129,4 +140,19 @@ func waitForCalls(t *testing.T, sessions *countingTurnFailureSessions, n int) {
 			t.Fatalf("queried %d times, want at least %d", calls, n)
 		}
 	}
+}
+
+// A failed candidate query says nothing about whether a turn runs, so the
+// observer keeps its short tick rather than resting on the idle tick.
+func TestTurnFailureObserverStaysFastAfterAFailedPoll(t *testing.T) {
+	candidate := turnFailureCandidate(t, time.Now().UTC())
+	candidate.NativeTranscriptPath = filepath.Join(t.TempDir(), "not-written-yet.jsonl")
+	sessions := &countingTurnFailureSessions{rows: []domain.TurnFailureCandidate{candidate}}
+	stop := startTurnFailureObserver(t, sessions, make(chan struct{}))
+	defer stop()
+	waitForCalls(t, sessions, 2)
+	sessions.fail(errors.New("database is locked"))
+	calls, _ := sessions.snapshot()
+	// Five more polls at the 5 ms tick; the idle tick is an hour.
+	waitForCalls(t, sessions, calls+5)
 }

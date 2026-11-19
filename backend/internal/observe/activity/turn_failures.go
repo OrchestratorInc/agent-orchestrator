@@ -74,6 +74,9 @@ type TurnFailureObserver struct {
 	// observer stays on its short tick while there is one, even before a watch
 	// opens on it (its transcript may not be readable yet).
 	candidates int
+	// pollFailed records that the last poll returned an error. The observer
+	// does not know whether a turn runs then, so it keeps its short tick.
+	pollFailed bool
 	lastPoll   time.Time
 }
 
@@ -159,7 +162,11 @@ func (o *TurnFailureObserver) Start(ctx context.Context) <-chan struct{} {
 }
 
 // busy reports a turn in progress: a candidate session or an open watch.
-func (o *TurnFailureObserver) busy() bool { return o.candidates > 0 || len(o.watches) > 0 }
+// busy reports a turn in progress: a candidate session or an open watch, or
+// a failed poll, after which it cannot tell.
+func (o *TurnFailureObserver) busy() bool {
+	return o.pollFailed || o.candidates > 0 || len(o.watches) > 0
+}
 
 func (o *TurnFailureObserver) nextPoll(watching bool) time.Duration {
 	if watching {
@@ -170,7 +177,9 @@ func (o *TurnFailureObserver) nextPoll(watching bool) time.Duration {
 
 func (o *TurnFailureObserver) pollAndLog(ctx context.Context) {
 	o.lastPoll = time.Now()
-	if err := o.Poll(ctx); err != nil && ctx.Err() == nil {
+	err := o.Poll(ctx)
+	o.pollFailed = err != nil
+	if err != nil && ctx.Err() == nil {
 		o.logger.Error("turn failure observer: poll failed", "err", err)
 	}
 }
@@ -184,7 +193,7 @@ func (o *TurnFailureObserver) pollAndLog(ctx context.Context) {
 // idle session has nothing to recover.
 func (o *TurnFailureObserver) Poll(ctx context.Context) error {
 	watched := make(map[domain.SessionID]bool, len(o.watches))
-	o.candidates = 0
+	candidates := 0
 	for _, harness := range turnFailureHarnesses {
 		detector, ok := o.detector(harness)
 		if !ok {
@@ -196,7 +205,7 @@ func (o *TurnFailureObserver) Poll(ctx context.Context) error {
 		if err != nil {
 			return err
 		}
-		o.candidates += len(sessions)
+		candidates += len(sessions)
 		for _, session := range sessions {
 			watched[session.ID] = true
 			o.reconcile(ctx, session, detector)
@@ -207,6 +216,7 @@ func (o *TurnFailureObserver) Poll(ctx context.Context) error {
 			delete(o.watches, id)
 		}
 	}
+	o.candidates = candidates
 	return nil
 }
 

@@ -74,11 +74,20 @@ func (s *Service) SetAccountHandoff(enabled func(context.Context) bool, accounts
 
 // AccountHandoffIdle reports whether no account handoff is being claimed, is
 // running, or waits for its next step, so the loop that drives them may rest
-// while handoff is off.
+// while handoff is off. A finished handoff kept only to avoid repeating it
+// does not count.
 func (s *Service) AccountHandoffIdle() bool {
 	s.handoffMu.Lock()
 	defer s.handoffMu.Unlock()
-	return len(s.handoffs) == 0 && !s.handoffScanning
+	if s.handoffScanning {
+		return false
+	}
+	for _, h := range s.handoffs {
+		if !h.done {
+			return false
+		}
+	}
+	return true
 }
 
 // HandoffUsageLimitedTurns advances the automatic usage-limit account handoffs by one step.
