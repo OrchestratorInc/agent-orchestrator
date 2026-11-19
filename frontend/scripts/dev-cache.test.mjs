@@ -243,6 +243,7 @@ describe("decisions", () => {
 					"node_modules/b": { version: "2.0.0" },
 					"node_modules/c": { version: "1.0.0" },
 					"node_modules/fsevents": { version: "2.3.3", optional: true },
+					"node_modules/a/node_modules/bundled": { version: "1.0.0", inBundle: true },
 					"node_modules/a/node_modules/d": { version: "3.0.0" },
 				},
 			},

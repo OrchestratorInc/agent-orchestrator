@@ -341,8 +341,9 @@ function ensureDependencies({ dryRun, env }) {
 		return true;
 	}
 	if (env.AO_DEV_BUILD_CACHE === "0") {
-		log(`${what}; run \`npm ci\` in frontend/ and relaunch`);
-		return false;
+		// The escape hatch keeps the old behavior: warn, never block the launch.
+		log(`${what}; AO_DEV_BUILD_CACHE=0, so continuing (run \`npm ci\` in frontend/ if the app fails to start)`);
+		return true;
 	}
 	log(`${what}; refreshing it with dev:warm before building`);
 	const warm = path.join(path.dirname(fileURLToPath(import.meta.url)), "dev-warm.mjs");
@@ -353,7 +354,7 @@ function ensureDependencies({ dryRun, env }) {
 	}
 	const left = nodeModulesDrift(frontend);
 	if (left.length > 0) {
-		log(`node_modules still differs from package-lock.json after refreshing (${summarizeDrift(left)}); run \`npm ci\` in frontend/ and relaunch`);
+		log(`node_modules still differs from package-lock.json after refreshing (${summarizeDrift(left)}); run \`npm ci\` in frontend/ and relaunch, or set AO_DEV_BUILD_CACHE=0 to skip this check`);
 		return false;
 	}
 	return true;
