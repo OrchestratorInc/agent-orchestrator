@@ -53,8 +53,12 @@ const (
 	nativeUserEcho       = "● "
 	// display.cli_layout=modern (the default since at least v0.22.5) echoes
 	// submitted messages with the skin's prompt glyph instead of ●, between the
-	// same 40-cell transcript rules; cli_layout=classic keeps ●.
-	nativeModernUserEcho = "❯ "
+	// same 40-cell transcript rules; cli_layout=classic keeps ●. Built from
+	// nativePrompt so the echo and composer markers cannot drift apart. `❯ `
+	// is more common in assistant output (shell prompts) than ●, so a match
+	// still needs exact rules on both sides, the whole message and a rising
+	// count before it acknowledges a send.
+	nativeModernUserEcho = nativePrompt + " "
 	nativeCommandEcho    = "⚙️  "
 	nativeTranscriptRule = "────────────────────────────────────────"
 )
