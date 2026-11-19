@@ -64,6 +64,7 @@ import { refreshDaemonStatus } from "../lib/daemon-status";
 import { usesPreviewWorkspaceData } from "../lib/preview-mode";
 import { addRendererExceptionStep, captureRendererEvent, captureRendererException } from "../lib/telemetry";
 import { captureProjectAddFailed } from "../lib/project-lifecycle-telemetry";
+import { reportOnboardingProjectAdded } from "../lib/onboarding-telemetry";
 import { ShellProvider } from "../lib/shell-context";
 import { restartProjectOrchestrator } from "../lib/restart-orchestrator";
 import { captureOrchestratorReplacementFailure } from "../lib/orchestrator-replacement-telemetry";
@@ -813,6 +814,8 @@ const replacementErrorCount = Object.keys(orchestratorReplacementErrors).length;
 			project: components["schemas"]["Project"],
 			input: CreateProjectConfigInput,
 			source: "project_add" | "project_clone",
+			// The onboarding tour's project source; a prepared clone is added as a project but came from a clone.
+			onboardingSource: "clone" | "local_folder" = source === "project_add" ? "local_folder" : "clone",
 		) => {
 			const workspace: WorkspaceSummary = {
 				id: project.id,
@@ -825,6 +828,7 @@ const replacementErrorCount = Object.keys(orchestratorReplacementErrors).length;
 				sessions: [],
 			};
 			void captureRendererEvent(source === "project_add" ? "ao.projects.added" : "ao.renderer.project_clone_succeeded", { project_id: workspace.id });
+			reportOnboardingProjectAdded(onboardingSource, workspace.id);
 			// A pre-create list request must not erase the newly registered project.
 			await queryClient.cancelQueries({ queryKey: workspaceQueryKey });
 			// Ids come from the folder name: a folder removed and added again is the same id.
@@ -907,6 +911,8 @@ const replacementErrorCount = Object.keys(orchestratorReplacementErrors).length;
 					}
 					if (registeredWorkspace) {
 						if (input.clonePreparationId) {
+							// The clone registered before its response was lost: still a clone for the tour.
+							reportOnboardingProjectAdded("clone", registeredWorkspace.id);
 							setOrchestratorStartupError(registeredWorkspace.id, null);
 							setProjectProvisioning(registeredWorkspace.id, true);
 							await navigate({ to: "/projects/$projectId", params: { projectId: registeredWorkspace.id } });
@@ -932,7 +938,7 @@ const replacementErrorCount = Object.keys(orchestratorReplacementErrors).length;
 				reportFailure("NO_PROJECT");
 				throw new Error("Project creation returned no project");
 			}
-			await completeProjectCreation(data.project, input, "project_add");
+			await completeProjectCreation(data.project, input, "project_add", input.clonePreparationId ? "clone" : "local_folder");
 		},
 		[completeProjectCreation, navigate, provisionOrchestrator, queryClient, setOrchestratorStartupError, setProjectProvisioning, showGlobalToast],
 	);
