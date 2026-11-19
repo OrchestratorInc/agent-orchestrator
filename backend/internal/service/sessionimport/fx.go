@@ -245,7 +245,7 @@ func readFXBlob(root *os.Root, home, transcriptPath, hash string) (string, error
 	if !fxBlobPattern.MatchString(hash) {
 		return "", errors.New("invalid fx blob hash")
 	}
-	rel, err := filepath.Rel(home, filepath.Join(filepath.Dir(transcriptPath), "blobs", hash))
+	rel, err := filepath.Rel(home, filepath.Join(filepath.Dir(canonical(transcriptPath)), "blobs", hash))
 	if err != nil {
 		return "", err
 	}

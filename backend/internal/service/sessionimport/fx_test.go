@@ -124,7 +124,7 @@ func TestFXRefreshFindsConvertedConversation(t *testing.T) {
 					t.Fatal(err)
 				}
 			}
-			if store.sessions[0].Metadata.NativeTranscriptPath != oldPath {
+			if store.sessions[0].Metadata.NativeTranscriptPath != canonical(oldPath) {
 				t.Fatal("fixture did not retain the imported v1 locator")
 			}
 			if err := svc.RefreshArchive(context.Background(), store.sessions[0]); err != nil {
@@ -154,13 +154,20 @@ func TestFXImportRejectsInteriorCorruption(t *testing.T) {
 }
 
 func TestFXImportMessageBlobs(t *testing.T) {
-	for _, failure := range []string{"", "invalid-hash", "missing", "digest", "oversized", "symlink"} {
+	for _, failure := range []string{"", "root-alias", "invalid-hash", "missing", "digest", "oversized", "symlink"} {
 		name := failure
 		if name == "" {
 			name = "visible-messages"
 		}
 		t.Run(name, func(t *testing.T) {
 			root := t.TempDir()
+			if failure == "root-alias" {
+				alias := filepath.Join(t.TempDir(), "fx-home")
+				if err := os.Symlink(root, alias); err != nil {
+					t.Skipf("symlinks unavailable: %v", err)
+				}
+				root = alias
+			}
 			path := writeFXImport(t, root, t.TempDir(), true)
 			text := strings.Repeat("blob message ", 24000)
 			payload, err := json.Marshal(map[string]string{"text": text})
@@ -202,7 +209,7 @@ func TestFXImportMessageBlobs(t *testing.T) {
 			updated = strings.Replace(updated, `"text":"private tool output"`, `"$blob":"../ignored-tool"`, 1)
 			writeFile(t, path, updated)
 			got, err := readFXTranscript(context.Background(), root, path)
-			if failure != "" {
+			if failure != "" && failure != "root-alias" {
 				if err == nil {
 					t.Fatal("accepted an unverified message blob")
 				}
