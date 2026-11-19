@@ -857,11 +857,24 @@ export function useTaskLaunch({ projectId, hostId }: {
 		() => (isCloudProject ? withoutLocalAvailability(localOfferedModels) : localOfferedModels),
 		[isCloudProject, localOfferedModels],
 	);
+	// A model the project pins that the account's list lacks (Codex lists only the
+	// models an account offers) stays selectable, with a note, rather than reading
+	// as a bare id with no row behind it. The agent still decides at launch (#5679).
+	const unlistedProjectModel = !isCloudProject && localCatalog && isConcreteModelID(projectModelForSelectedAgent) &&
+		!offeredModels.some((item) => item.id === projectModelForSelectedAgent)
+		? projectModelForSelectedAgent
+		: "";
+	const pinnedNote = t("settings.models.pinnedNotListed", { agent: agentLabel(selectedAgent) });
+	const localModels = useMemo(() => {
+		if (unlistedProjectModel === "") return offeredModels;
+		const pinned: AgentModelOption & { note: string } = { id: unlistedProjectModel, label: unlistedProjectModel, isDefault: false, note: pinnedNote };
+		return [...offeredModels, pinned];
+	}, [offeredModels, pinnedNote, unlistedProjectModel]);
 	const localModelCatalog: TaskComposerModelCatalog | undefined = localCatalog
 		? {
 				allowCustom: localCatalog.allowCustom,
 				customModelEntry: localCatalog.customModelEntry,
-				models: offeredModels,
+				models: localModels,
 				refreshError: localCatalog.refreshError,
 				refreshState: localCatalog.refreshState,
 				retryAt: localCatalog.retryAt,
