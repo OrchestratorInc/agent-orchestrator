@@ -117,6 +117,26 @@ func TestStartupHealthKeepsChatStoppedWhenItsOpenWorkCannotSettle(t *testing.T) 
 	}
 }
 
+func TestStartupHealthKeepsAChatTheUserStoppedAfterTheReadStopped(t *testing.T) {
+	m, st, _, _ := newLifecycleManager()
+	launcher := &healthCheckLauncher{err: ports.ErrChatHostNotRunning}
+	m.chat = launcher
+	read := domain.SessionRecord{
+		ID: "mer-chat", ProjectID: "mer", Kind: domain.KindWorker, Harness: domain.HarnessCodex, Mode: domain.SessionModeChat,
+		Metadata: domain.SessionMetadata{WorkspacePath: "/ws/chat", Branch: "ao/chat/root", ProviderConversationID: "thread-1"},
+		Activity: domain.Activity{State: domain.ActivityActive},
+	}
+	stopped := read
+	stopped.Activity.State = domain.ActivityExited
+	st.sessions[read.ID] = stopped
+	if err := m.checkSessionHealth(context.Background(), read); err != nil {
+		t.Fatal(err)
+	}
+	if got := st.sessions[read.ID]; got.HibernatedAt != nil || got.Activity.State != domain.ActivityExited || len(launcher.settled) != 0 {
+		t.Fatalf("a chat the user stopped must stay stopped: settled=%v session=%+v", launcher.settled, got)
+	}
+}
+
 func TestStartupHealthInconclusiveChatProbePreservesSession(t *testing.T) {
 	m, st, rt, ws := newLifecycleManager()
 	launcher := &healthCheckLauncher{err: ports.ErrChatRecoveryInconclusive}

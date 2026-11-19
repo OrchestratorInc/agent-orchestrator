@@ -50,6 +50,11 @@ func (m *Manager) checkSessionHealth(ctx context.Context, rec domain.SessionReco
 		_, err = m.resumeChatController(ctx, "check session", rec, project,
 			workspaceInfo(rec), false, true, "", domain.SessionInterfaceTransitionHistoryStrict)
 		if errors.Is(err, ports.ErrChatHostNotRunning) {
+			if current, found, getErr := m.store.GetSession(ctx, rec.ID); getErr != nil {
+				return fmt.Errorf("check session %s: %w", rec.ID, getErr)
+			} else if found {
+				rec = current
+			}
 			if rec.Activity.State != domain.ActivityExited && canSleepStoppedChat(rec) && m.settleAbandonedChatWork(ctx, rec.ID) {
 				return m.sleepStoppedChat(ctx, rec)
 			}
