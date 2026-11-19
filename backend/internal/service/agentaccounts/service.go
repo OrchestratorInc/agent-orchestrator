@@ -363,15 +363,17 @@ func (s *Service) read(ctx context.Context, account domain.AgentAccount) *readin
 		r.renewalPending = errors.Is(err, ports.ErrAgentAccountRenewalPending)
 		s.mu.Lock()
 		prev := s.readings[account.ID]
-		if prev != nil && (prev.identityErr == "" || prev.renewalPending) {
+		// A failed reading already carries what the last good one found, so
+		// copying the previous reading keeps it across checks that fail in a row.
+		if prev != nil {
 			r.identity, r.limits = prev.identity, prev.limits
 		}
 		s.mu.Unlock()
 		switch {
-		case r.renewalPending && prev != nil && prev.mismatch:
-			// A pending renewal says nothing about whose login the folder holds,
-			// so one last found holding another login stays refused until a check
-			// confirms its own.
+		case prev != nil && prev.mismatch:
+			// A failed check, a pending renewal included, says nothing about
+			// whose login the folder holds, so one last found holding another
+			// login stays refused until a check confirms its own.
 			r.identity, r.mismatch = prev.identity, true
 			r.identityProblem, r.identityErr = prev.identityProblem, prev.identityErr
 		case r.renewalPending:
