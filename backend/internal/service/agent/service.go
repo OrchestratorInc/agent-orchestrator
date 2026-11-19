@@ -405,7 +405,7 @@ func (s *Service) modelCatalog(ctx context.Context, agentID, scope string, refre
 			cached.Catalog.RefreshRecommended = !retriesExhausted && (due || needsRecovery || cached.RefreshState == "error" || cached.RefreshState == "queued")
 			if !retriesExhausted && (due || needsRecovery) && (cached.RetryAt.IsZero() || !s.now().Before(cached.RetryAt)) {
 				go func() { _, _ = s.revalidateModels(s.ctx, agentID, projectID) }()
-			} else if retriesExhausted && s.claimSettledRediscovery(agentID, projectID) {
+			} else if retriesExhausted && s.claimSettledRediscovery(agentID, projectID, storedFailureIsSettled(cached.Catalog)) {
 				go func() { _, _ = s.coalesceModelLoad(s.ctx, agentID, projectID, modelLoadSettledRetry) }()
 				// Open views re-read a refreshing catalog, so they pick up the result.
 				if cached.Catalog.RefreshState == "" || cached.Catalog.RefreshState == "error" {
@@ -1157,6 +1157,11 @@ func (s *Service) persistCatalogState(ctx context.Context, cached decodedCatalog
 
 func (s *Service) saveFailedCatalog(ctx context.Context, previous decodedCatalog, catalog ports.AgentModelCatalog, generation int64, settled bool) error {
 	retryCount := previous.RetryCount + 1
+	if !settled && storedFailureIsSettled(previous.Catalog) {
+		// A settled failure spent the budget at once. A different failure after
+		// it (a rediscovery that timed out, say) gets the normal retries again.
+		retryCount = 1
+	}
 	s.markSettledCatalog(catalog.AgentID, previous.ProjectID, settled)
 	if settled && retryCount <= int64(modelCatalogMaxRetries) {
 		// Spend the retry budget at once: no background retries. A read
@@ -1265,14 +1270,19 @@ func (s *Service) markSettledCatalog(agentID, projectID string, settled bool) {
 }
 
 // claimSettledRediscovery reports whether a read should rediscover a catalog
-// whose last failure was settled, and records that it does.
-func (s *Service) claimSettledRediscovery(agentID, projectID string) bool {
+// whose last failure was settled, and records that it does. storedSettled is
+// what the saved catalog says, so a settled failure saved before a daemon
+// restart is still rediscovered by the next read.
+func (s *Service) claimSettledRediscovery(agentID, projectID string, storedSettled bool) bool {
 	s.settledMu.Lock()
 	defer s.settledMu.Unlock()
 	key := settledCatalogKey(agentID, projectID)
 	last, ok := s.settledCatalogs[key]
-	if !ok {
+	if !ok && !storedSettled {
 		return false
+	}
+	if s.settledCatalogs == nil {
+		s.settledCatalogs = make(map[string]time.Time)
 	}
 	now := s.now()
 	if !last.IsZero() && now.Sub(last) < modelCatalogSettledReadFloor {
@@ -1298,10 +1308,29 @@ func modelCatalogFailureIsSettled(err error) bool {
 	}
 	// A proxy asking for its own credentials is not the agent's sign-in.
 	text := strings.ReplaceAll(strings.ToLower(err.Error()), "proxy authentication required", "")
+	// A failure read back from a saved catalog is only its text.
+	for _, sentinel := range []error{ports.ErrAgentModelConfigurationMissing, ports.ErrAgentModelDiscoveryCredentialRejected, ports.ErrAgentModelDiscoveryCredentialExpired} {
+		if strings.Contains(text, strings.ToLower(sentinel.Error())) {
+			return true
+		}
+	}
 	for _, phrase := range []string{"not logged in", "not currently logged in", "authentication required", "set an auth method", "please log in", "please sign in", "not signed in"} {
 		if strings.Contains(text, phrase) {
 			return true
 		}
 	}
 	return false
+}
+
+// storedFailureIsSettled reports whether a saved catalog's last discovery
+// failed for a settled reason, from the failure text it keeps.
+func storedFailureIsSettled(catalog ports.AgentModelCatalog) bool {
+	if catalog.RefreshState != "error" {
+		return false
+	}
+	text := catalog.RefreshError
+	if text == "" {
+		text = catalog.Warning
+	}
+	return text != "" && modelCatalogFailureIsSettled(errors.New(text))
 }

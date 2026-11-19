@@ -97,20 +97,80 @@ func TestSettledRediscoveryWaitsForTheFloorBetweenReads(t *testing.T) {
 	if _, err := svc.Models(context.Background(), "cursor", "", true); err != nil {
 		t.Fatal(err)
 	}
-	if !svc.claimSettledRediscovery("cursor", "") {
+	if !svc.claimSettledRediscovery("cursor", "", false) {
 		t.Fatal("the first read after a settled failure must rediscover")
 	}
-	if svc.claimSettledRediscovery("cursor", "") {
+	if svc.claimSettledRediscovery("cursor", "", false) {
 		t.Fatal("a second read within the floor rediscovered again")
 	}
 	now = now.Add(modelCatalogSettledReadFloor)
-	if !svc.claimSettledRediscovery("cursor", "") {
+	if !svc.claimSettledRediscovery("cursor", "", false) {
 		t.Fatal("a read after the floor did not rediscover")
 	}
 	// An ordinary failure has its own timed retries and no read rediscovery.
 	svc.markSettledCatalog("cursor", "", false)
 	now = now.Add(time.Hour)
-	if svc.claimSettledRediscovery("cursor", "") {
+	if svc.claimSettledRediscovery("cursor", "", false) {
 		t.Fatal("a non-settled failure was rediscovered on read")
+	}
+}
+
+// The settled mark is in memory, but a saved catalog keeps its failure text: a
+// daemon that restarts after a settled failure still rediscovers it on read.
+func TestReadRediscoversASettledFailureAfterARestart(t *testing.T) {
+	discoverer := successfulModelDiscoverer()
+	discoverer.err = errors.New("auggie model discovery: exit status 1: You are not currently logged in to Augment")
+	cache := &fakeModelCache{}
+	agents := []agentregistry.HarnessAgent{harnessAgent("auggie", "Auggie", nil)}
+	first := newService(agents, cache, discoverer)
+	if _, err := first.Models(context.Background(), "auggie", "", true); err != nil {
+		t.Fatal(err)
+	}
+
+	restarted := newService(agents, cache, discoverer)
+	discoverer.mu.Lock()
+	discoverer.err = nil
+	discoverer.mu.Unlock()
+	read, err := restarted.Models(context.Background(), "auggie", "", false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if read.RefreshState != "refreshing" {
+		t.Fatalf("read after a restart reports %q, want refreshing", read.RefreshState)
+	}
+}
+
+// A settled failure spends the retry budget at once. When the rediscovery a
+// read starts then fails differently (a timeout, say), the normal timed
+// retries come back.
+func TestTransientFailureAfterASettledOneRetriesAgain(t *testing.T) {
+	discoverer := successfulModelDiscoverer()
+	discoverer.err = errors.New("auggie model discovery: exit status 1: You are not currently logged in to Augment")
+	svc := newService([]agentregistry.HarnessAgent{harnessAgent("auggie", "Auggie", nil)}, &fakeModelCache{}, discoverer)
+	if _, err := svc.Models(context.Background(), "auggie", "", true); err != nil {
+		t.Fatal(err)
+	}
+	discoverer.mu.Lock()
+	discoverer.err = errors.New("auggie model discovery: context deadline exceeded")
+	discoverer.mu.Unlock()
+	if _, err := svc.Models(context.Background(), "auggie", "", false); err != nil {
+		t.Fatal(err)
+	}
+	deadline := time.Now().Add(2 * time.Second)
+	for {
+		got, err := svc.Models(context.Background(), "auggie", "", false)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if discoverer.discoverCalls.Load() >= 2 && got.RefreshState == "error" {
+			if got.RetryAt == nil {
+				t.Fatalf("a timeout after a settled failure scheduled no retry: %#v", got)
+			}
+			return
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("the read did not rediscover: calls=%d state=%q", discoverer.discoverCalls.Load(), got.RefreshState)
+		}
+		time.Sleep(5 * time.Millisecond)
 	}
 }
