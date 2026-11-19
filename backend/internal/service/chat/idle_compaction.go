@@ -70,16 +70,8 @@ func (s *Service) CompactIdleOrchestrator(ctx context.Context, id domain.Session
 	if err != nil {
 		return false, err
 	}
-	if rec.Kind != domain.KindOrchestrator || rec.IsTerminated || rec.HibernatedAt != nil ||
-		rec.Activity.State != domain.ActivityIdle {
-		return false, nil
-	}
 	lastActive := rec.Activity.LastActivityAt
-	if lastActive.IsZero() {
-		return false, nil
-	}
-	idle := s.now().Sub(lastActive)
-	if idle < IdleBeforeCompaction || idle >= IdleCompactionDeadline {
+	if !s.idleCompactionEligible(rec, lastActive) {
 		return false, nil
 	}
 	controller.mu.Lock()
@@ -99,7 +91,18 @@ func (s *Service) CompactIdleOrchestrator(ctx context.Context, id domain.Session
 		return false, nil
 	}
 	if err == nil {
-		_, err = admitted.Compact(ctx)
+		// Admission can wait while a turn runs and finishes. Compact only if
+		// the session is still in the same quiet period that qualified.
+		current, readErr := s.requireChatSession(ctx, id)
+		switch {
+		case readErr != nil:
+			err = readErr
+		case !s.idleCompactionEligible(current, lastActive):
+			release()
+			return false, nil
+		default:
+			_, err = admitted.Compact(ctx)
+		}
 		release()
 	}
 	if err != nil {
@@ -110,4 +113,16 @@ func (s *Service) CompactIdleOrchestrator(ctx context.Context, id domain.Session
 		return false, err
 	}
 	return true, nil
+}
+
+// idleCompactionEligible reports whether rec is a quiet orchestrator still in
+// the idle period that began at lastActive, inside the warm-cache window.
+func (s *Service) idleCompactionEligible(rec domain.SessionRecord, lastActive time.Time) bool {
+	if rec.Kind != domain.KindOrchestrator || rec.IsTerminated || rec.HibernatedAt != nil ||
+		rec.Activity.State != domain.ActivityIdle || lastActive.IsZero() ||
+		!rec.Activity.LastActivityAt.Equal(lastActive) {
+		return false
+	}
+	idle := s.now().Sub(lastActive)
+	return idle >= IdleBeforeCompaction && idle < IdleCompactionDeadline
 }
