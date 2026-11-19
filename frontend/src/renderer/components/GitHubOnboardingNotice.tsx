@@ -119,9 +119,15 @@ export function useGitHubLogin() {
 	const close = () => {
 		setFocusRequested(false);
 		if (!terminal) return;
-		// Closed by the person before GitHub said signed in.
-		finishOnboardingAction("gh_sign_in", "cancelled", { target: "gh" });
-		closeTerminal(terminal.handleId, { onSuccess: terminalQuery.clear });
+		closeTerminal(terminal.handleId, {
+			onSuccess: () => {
+				// Closed by the person. Only once it's really gone, since a terminal
+				// that failed to close can still sign in. A sign-in GitHub already
+				// confirmed has ended the attempt, so this reports nothing then.
+				finishOnboardingAction("gh_sign_in", "cancelled", { target: "gh" });
+				terminalQuery.clear();
+			},
+		});
 	};
 	return {
 		/** Installed, but not signed in: the only time either part shows. */
