@@ -129,7 +129,9 @@ func TestConversationMessagesSearchIndexStaysInSync(t *testing.T) {
 	}
 	seedBranchTurns(t, s, session, conversation)
 
-	raw, err := sql.Open("sqlite", "file:"+filepath.Join(dataDir, "ao.db"))
+	// This test writes through a separate connection while the store is open.
+	// Use the store's normal busy timeout rather than failing on transient contention.
+	raw, err := sql.Open("sqlite", "file:"+filepath.Join(dataDir, "ao.db")+"?_pragma=busy_timeout(5000)")
 	if err != nil {
 		t.Fatal(err)
 	}
