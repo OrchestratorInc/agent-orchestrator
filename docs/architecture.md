@@ -1337,6 +1337,21 @@ Electron attaches its debugger directly to the selected session's
 AO renderer or a different session. The loopback `/api/v1/browser` surface is
 blocked entirely on the opt-in LAN listener.
 
+Within a session, each tab has an owner. The agent's commands act on the
+agent's own current tab, whichever tab the person has in front, and the
+automation runtime is only shown the agent's tabs. A tab the person opens
+(the new-tab button, a shortcut, or a link they click) is theirs: the agent
+cannot list, select, or close it. A session's first tab belongs to whichever
+of them uses it first. Previews load in the agent's tab, except when a
+remote or cloud session's agent-browser viewer is in front: the preview then
+goes to a tab already on its origin (or holding another preview), which keeps
+its owner (the agent's or the person's), else to a new tab of the person's.
+This decides
+which tabs the agent's commands can target; it is not a data boundary. All of
+a session's tabs share one browser profile, so cookies, local storage,
+IndexedDB, and service workers are shared, and an agent page on the same site
+as a person's tab sees the same sign-in state.
+
 Temporary browser profiles isolate sessions by default. Named persistent profiles can be reused across sessions, sharing their cookies/storage deliberately. Browser import reads supported source profiles without modifying them and stores results under AO data.
 
 Request observation is an explicit, temporary browser command rather than a

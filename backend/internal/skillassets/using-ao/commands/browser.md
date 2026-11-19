@@ -1,6 +1,6 @@
 # ao browser
 
-Inspect and control the current Orchestrator-managed session's target-isolated browser. The desktop app must be open. The agent and user share the same live page, cookies, navigation state, and `WebContentsView`; the runtime remains usable while the Browser panel is hidden, except for commands that need the page to be painted (see `--human` and `screenshot` below). Tabs in this worker share an ephemeral browser profile, while other workers use isolated profiles.
+Inspect and control the current Orchestrator-managed session's target-isolated browser. The desktop app must be open. The agent works in tabs of its own in the session's Browser panel. The user can see and use those tabs, so on them the agent and user share the same live page, cookies, navigation state, and `WebContentsView`; tabs the user opens are theirs alone (see `tabs` below). That separation is about which tabs your commands can target, not data: all the session's tabs share one browser profile, including cookies and site storage. The runtime remains usable while the Browser panel is hidden, except for commands that need the page to be painted (see `--human` and `screenshot` below). By default each worker gets its own temporary profile, isolated from other workers; workers set to the same named profile share its cookies and site storage.
 
 `AO_SESSION_ID` selects the target, so run these commands from inside a worker session.
 
@@ -67,8 +67,9 @@ agent sharing this session — run `--delta --full` instead of guessing.
 does **not** prove the application accepted the action. For consequential
 controls, request one postcondition with `--expect-url`, `--expect-text`,
 `--expect-dialog`, `--expect-navigation`, or `--expect-dom-change`. The result
-then reports `satisfied`, `already-satisfied`, `unmet`, or `cancelled`
-separately and includes the before/after URL and document/navigation
+then reports `satisfied`, `already-satisfied`, `unmet`, `cancelled`, or
+`unobservable` (the action closed the agent's only tab, so nothing is left to
+watch) separately and includes the before/after URL and document/navigation
 generations. `already-satisfied` means the requested URL or text existed before
 dispatch, so it cannot be attributed to this action. Orchestrator never retries merely
 because an application postcondition is unknown or unmet.
@@ -151,12 +152,16 @@ path instead of jumping straight to the element. Use it only when a page
 ignores an ordinary click because it watches pointer movement; it is slower and
 changes nothing else.
 
-`--human` clicks and drags, and `screenshot`, need the Browser panel to be
-visible on screen: a hidden or covered window stops painting, and these
-commands then run until the request deadline and fail with a timeout rather
-than returning. Ordinary clicks and every text-based command keep working while
-the panel is hidden. Ask the user to bring the panel forward if a `--human`
-action or a screenshot times out.
+`--human` clicks and drags need the agent's tab in front in a Browser panel
+that is visible on screen, and fail with `BROWSER_PANEL_HIDDEN` otherwise.
+`screenshot` captures your tab wherever it is: behind the user's tab, with the
+Browser panel closed, while the user looks at another session, or with the
+window minimized. A tab that was never on screen is drawn once, out of sight,
+before your first command there, so clicks and captures work on it too.
+`screenshot --annotate` off screen still asks the automation runtime first and
+can take longer. Ordinary clicks and every text-based command keep working
+while the panel is hidden or the user is in another tab. Ask the user to bring
+your tab forward only if a `--human` action fails with `BROWSER_PANEL_HIDDEN`.
 
 `screenshot --annotate` numbers the interactive elements in the image and prints
 the matching refs, so you can point at what you see (`[3]` is `ref=e3`). The
@@ -166,14 +171,25 @@ passing off an unlabelled image as an annotated one.
 
 `highlight` draws a non-mutating overlay around a snapshot ref until
 `unhighlight`, navigation, or target replacement.
-`tabs` reports stable logical IDs such as `t1` and marks the active tab.
-`tab new` creates and selects a tab, `tab select` changes the target of all
-following browser commands, and `tab close` defaults to the active tab.
-Allowed page popups are captured as new Orchestrator tabs instead of opening a separate
-OS browser. Take a new snapshot after switching tabs because element refs are
-invalidated at the tab boundary. The user can select or close these same tabs
-from the compact tab control in the Browser toolbar; the next agent command
-uses whichever tab the user selected.
+`tabs` lists the agent's own tabs with stable logical IDs such as `t1` and
+marks the one the agent is working in. `tab new` creates a tab and moves the
+agent to it, `tab select` changes the target of all following browser commands,
+and `tab close` defaults to the agent's current tab; the agent's only tab
+cannot be closed. Allowed page popups are captured as new Orchestrator tabs instead of
+opening a separate OS browser. A popup that opens right after the agent's own
+click or key press is the agent's, and following commands act there. Take a new
+snapshot after switching tabs because element refs are invalidated at the tab
+boundary.
+
+The user can select or close these same tabs from the Browser panel's tab
+strip, and has tabs of their own beside them. Which tab the user has in front
+never changes the agent's target: commands keep acting on the agent's tab, even
+behind another one, and the agent's tabs come to the front only while the user
+is already looking at one of them. Tabs the user opens, including links the
+user clicks, are not listed, and `tab select` or `tab close` on one fails with
+`TAB_NOT_FOUND`. Do not try to reach them; ask the user for the address
+instead. If the user closes the agent's last tab, the next command opens a new
+one.
 If the native automation runtime cannot reconcile its selected target with
 that Orchestrator tab, the command fails before reading or mutating a page with
 `BROWSER_TARGET_MISMATCH`; it never falls through to another tab. Structured
