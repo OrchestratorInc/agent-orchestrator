@@ -2,8 +2,11 @@ package sessionimport
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
+	"io"
 	"io/fs"
 	"os"
 	"path/filepath"
@@ -16,6 +19,7 @@ import (
 )
 
 var fxIDPattern = regexp.MustCompile(`^[A-Za-z0-9_-]{1,128}$`)
+var fxBlobPattern = regexp.MustCompile(`^[0-9a-f]{64}$`)
 
 func fxRoot(home string) string {
 	if root := strings.TrimSpace(os.Getenv("FX_HOME")); root != "" {
@@ -100,6 +104,7 @@ type fxImportRecord struct {
 	Value         json.RawMessage `json:"value"`
 	Data          struct {
 		Text string `json:"text"`
+		Blob string `json:"$blob"`
 	} `json:"data"`
 	Event struct {
 		User *struct {
@@ -112,10 +117,21 @@ type fxImportRecord struct {
 }
 
 func readFXTranscript(ctx context.Context, root string, paths ...string) (transcript, error) {
-	// First-open refresh receives the saved transcript path without its v1
-	// metadata sibling. Reopen that sibling through the same confined reader.
+	// First-open refresh can retain a v1 path after native FX converts the
+	// conversation. Rediscover that exact ID, preferring v2 over the old copy.
 	if len(paths) == 1 && filepath.Base(paths[0]) == "events.jsonl" {
-		paths = []string{filepath.Join(filepath.Dir(paths[0]), "session.json"), paths[0]}
+		id := filepath.Base(filepath.Dir(paths[0]))
+		files, err := discoverFX(ctx, root)
+		if err != nil {
+			return transcript{}, err
+		}
+		paths = nil
+		for _, file := range files {
+			if file.key == id {
+				paths = file.paths
+				break
+			}
+		}
 	}
 	t := transcript{harness: domain.HarnessFX, root: canonical(root), paths: paths}
 	if len(paths) == 0 {
@@ -133,6 +149,7 @@ func readFXTranscript(ctx context.Context, root string, paths ...string) (transc
 	defer func() { _ = r.Close() }()
 	var items []tagged
 	sawHeader := false
+	badRecord := false
 	add := func(role, text string, at time.Time) {
 		if role == "user" {
 			text = codexPrompt(text)
@@ -156,9 +173,13 @@ func readFXTranscript(ctx context.Context, root string, paths ...string) (transc
 		if err := ctx.Err(); err != nil {
 			return err
 		}
+		if badRecord {
+			return errors.New("fx transcript contains interior corruption")
+		}
 		var record fxImportRecord
 		if json.Unmarshal(line, &record) != nil {
-			return nil //nolint:nilerr // A torn tail does not hide the committed conversation.
+			badRecord = true
+			return nil //nolint:nilerr // Only a bad final record is tolerated; any following record rejects the source.
 		}
 		if record.ID != "" && (record.Kind == "session_created" || record.WorkspaceRoot != "") {
 			if record.ID != t.nativeID || record.Role == "child" || record.SubagentChild {
@@ -183,6 +204,13 @@ func readFXTranscript(ctx context.Context, root string, paths ...string) (transc
 		}
 		switch {
 		case record.Kind == "item" && (record.Type == "user" || record.Type == "assistant"):
+			if record.Data.Blob != "" {
+				text, err := readFXBlob(r, t.root, t.path, record.Data.Blob)
+				if err != nil {
+					return err
+				}
+				record.Data.Text = text
+			}
 			add(record.Type, record.Data.Text, at)
 		case record.Event.User != nil:
 			add("user", record.Event.User.Text, at)
@@ -209,4 +237,40 @@ func readFXTranscript(ctx context.Context, root string, paths ...string) (transc
 		t.title = string(title[:100]) + "…"
 	}
 	return t, nil
+}
+
+// Native FX stores large item data as JSON in a session-local SHA-256 blob.
+// Read only visible message blobs, with the same root confinement as the log.
+func readFXBlob(root *os.Root, home, transcriptPath, hash string) (string, error) {
+	if !fxBlobPattern.MatchString(hash) {
+		return "", errors.New("invalid fx blob hash")
+	}
+	rel, err := filepath.Rel(home, filepath.Join(filepath.Dir(transcriptPath), "blobs", hash))
+	if err != nil {
+		return "", err
+	}
+	info, err := root.Lstat(rel)
+	if err != nil || !info.Mode().IsRegular() || info.Size() > maxVisibleBytes {
+		return "", errors.New("fx blob is missing, oversized or not a regular file")
+	}
+	f, err := root.Open(rel)
+	if err != nil {
+		return "", err
+	}
+	defer func() { _ = f.Close() }()
+	body, err := io.ReadAll(io.LimitReader(f, maxVisibleBytes+1))
+	if err != nil {
+		return "", err
+	}
+	digest := sha256.Sum256(body)
+	if len(body) > maxVisibleBytes || hex.EncodeToString(digest[:]) != hash {
+		return "", errors.New("fx blob exceeds read budget or has a mismatched digest")
+	}
+	var data struct {
+		Text string `json:"text"`
+	}
+	if err := json.Unmarshal(body, &data); err != nil {
+		return "", err
+	}
+	return data.Text, nil
 }

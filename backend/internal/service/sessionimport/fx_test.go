@@ -2,10 +2,14 @@ package sessionimport
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
+	"encoding/json"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
 )
@@ -54,6 +58,7 @@ func TestFXImportLayoutsAndTerminalMode(t *testing.T) {
 			}
 			store := &importStore{projects: []domain.ProjectRecord{{ID: "synthetic-fx", Path: cwd}}}
 			svc := New(store, "", nil)
+			svc.now = func() time.Time { return time.UnixMilli(1793600000000).Add(24 * time.Hour) }
 			svc.roots = map[domain.AgentHarness]string{domain.HarnessFX: root}
 			preview, err := svc.Scan(context.Background())
 			if err != nil || len(preview.Candidates) != 1 {
@@ -87,6 +92,130 @@ func TestFXDiscoveryPrefersConvertedConversation(t *testing.T) {
 	}
 }
 
+func TestFXRefreshFindsConvertedConversation(t *testing.T) {
+	for _, removeV1 := range []bool{false, true} {
+		name := "retained-v1"
+		if removeV1 {
+			name = "removed-v1"
+		}
+		t.Run(name, func(t *testing.T) {
+			root, cwd := t.TempDir(), t.TempDir()
+			oldPath := writeFXImport(t, root, cwd, false)
+			store := &importStore{projects: []domain.ProjectRecord{{ID: "fx-converted", Path: cwd}}}
+			svc := New(store, "", nil)
+			svc.now = func() time.Time { return time.UnixMilli(1793600000000).Add(24 * time.Hour) }
+			svc.roots = map[domain.AgentHarness]string{domain.HarnessFX: root}
+			preview, err := svc.Scan(context.Background())
+			if err != nil || len(preview.Candidates) != 1 {
+				t.Fatalf("scan = %#v, %v", preview, err)
+			}
+			result, err := svc.Import(context.Background(), []string{preview.Candidates[0].ID})
+			if err != nil || len(result) != 1 || result[0].Status != "created" {
+				t.Fatalf("import = %#v, %v", result, err)
+			}
+			path := writeFXImport(t, root, cwd, true)
+			body, err := os.ReadFile(path)
+			if err != nil {
+				t.Fatal(err)
+			}
+			writeFile(t, path, strings.Replace(string(body), "synthetic answer", "new v2 answer", 1))
+			if removeV1 {
+				if err := os.RemoveAll(filepath.Dir(oldPath)); err != nil {
+					t.Fatal(err)
+				}
+			}
+			if store.sessions[0].Metadata.NativeTranscriptPath != oldPath {
+				t.Fatal("fixture did not retain the imported v1 locator")
+			}
+			if err := svc.RefreshArchive(context.Background(), store.sessions[0]); err != nil {
+				t.Fatal(err)
+			}
+			wantTexts(t, store.messages, "user: explain synthetic parser", "assistant: new v2 answer")
+		})
+	}
+}
+
+func TestFXImportRejectsInteriorCorruption(t *testing.T) {
+	root := t.TempDir()
+	path := writeFXImport(t, root, t.TempDir(), true)
+	body, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// The original malformed final record is tolerated, but not if followed
+	// by a later record as it would be in a corrupt native journal.
+	if _, err := readFXTranscript(context.Background(), root, path); err != nil {
+		t.Fatalf("torn final record: %v", err)
+	}
+	writeFile(t, path, string(body)+"\n"+`{"kind":"item","type":"assistant","data":{"text":"after corruption"}}`)
+	if _, err := readFXTranscript(context.Background(), root, path); err == nil {
+		t.Fatal("accepted a malformed interior record")
+	}
+}
+
+func TestFXImportMessageBlobs(t *testing.T) {
+	for _, failure := range []string{"", "invalid-hash", "missing", "digest", "oversized", "symlink"} {
+		name := failure
+		if name == "" {
+			name = "visible-messages"
+		}
+		t.Run(name, func(t *testing.T) {
+			root := t.TempDir()
+			path := writeFXImport(t, root, t.TempDir(), true)
+			text := strings.Repeat("blob message ", 24000)
+			payload, err := json.Marshal(map[string]string{"text": text})
+			if err != nil {
+				t.Fatal(err)
+			}
+			digest := sha256.Sum256(payload)
+			hash := hex.EncodeToString(digest[:])
+			blob := writeFile(t, filepath.Join(filepath.Dir(path), "blobs", hash), string(payload))
+			switch failure {
+			case "invalid-hash":
+				hash = "../outside"
+			case "missing":
+				if err := os.Remove(blob); err != nil {
+					t.Fatal(err)
+				}
+			case "digest":
+				writeFile(t, blob, `{"text":"altered"}`)
+			case "oversized":
+				if err := os.Truncate(blob, maxVisibleBytes+1); err != nil {
+					t.Fatal(err)
+				}
+			case "symlink":
+				if err := os.Remove(blob); err != nil {
+					t.Fatal(err)
+				}
+				outside := writeFile(t, filepath.Join(t.TempDir(), "outside"), string(payload))
+				if err := os.Symlink(outside, blob); err != nil {
+					t.Skipf("symlinks unavailable: %v", err)
+				}
+			}
+			body, err := os.ReadFile(path)
+			if err != nil {
+				t.Fatal(err)
+			}
+			updated := strings.Replace(string(body), `"text":"explain synthetic parser"`, `"$blob":"`+hash+`"`, 1)
+			updated = strings.Replace(updated, `"text":"synthetic answer"`, `"$blob":"`+hash+`"`, 1)
+			// Tool references are intentionally not opened, even if invalid.
+			updated = strings.Replace(updated, `"text":"private tool output"`, `"$blob":"../ignored-tool"`, 1)
+			writeFile(t, path, updated)
+			got, err := readFXTranscript(context.Background(), root, path)
+			if failure != "" {
+				if err == nil {
+					t.Fatal("accepted an unverified message blob")
+				}
+				return
+			}
+			if err != nil {
+				t.Fatal(err)
+			}
+			wantTexts(t, got.messages, "user: "+text, "assistant: "+text)
+		})
+	}
+}
+
 func TestFXScanRefusesV1ChildConversation(t *testing.T) {
 	root, cwd := t.TempDir(), t.TempDir()
 	path := writeFXImport(t, root, cwd, false)
@@ -104,6 +233,7 @@ func TestFXScanRefusesV1ChildConversation(t *testing.T) {
 	}
 	st := &importStore{projects: []domain.ProjectRecord{{ID: "synthetic-fx-child", Path: cwd}}}
 	svc := New(st, "", nil)
+	svc.now = func() time.Time { return time.UnixMilli(1793600000000).Add(24 * time.Hour) }
 	svc.roots = map[domain.AgentHarness]string{domain.HarnessFX: root}
 	preview, err := svc.Scan(context.Background())
 	if err != nil || len(preview.Candidates) != 0 {
