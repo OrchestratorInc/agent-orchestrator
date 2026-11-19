@@ -87,6 +87,8 @@ import {
 	writeUiSettings,
 	type UiSettings,
 } from "./main/ui-settings";
+import { findArtifactIssues, publishIssueArtifact } from "./main/github-issue-artifact";
+import type { GitHubIssueArtifact } from "./shared/github-issue-artifact";
 import { execFile, spawn, type ChildProcess } from "node:child_process";
 import { randomBytes, randomUUID } from "node:crypto";
 import { closeSync, existsSync, mkdirSync, openSync, readFileSync, renameSync, writeFileSync } from "node:fs";
@@ -3884,6 +3886,14 @@ async function listGitHubRepos(query: string): Promise<GitHubRepoSummary[]> {
 	}
 }
 
+ipcMain.handle("app:findArtifactIssues", async (_event, repo: string, query: string) => {
+	await ensureShellEnv();
+	return findArtifactIssues(repo, query, daemonEnv());
+});
+ipcMain.handle("app:publishIssueArtifact", async (_event, input: GitHubIssueArtifact) => {
+	await ensureShellEnv();
+	return publishIssueArtifact(input, daemonEnv());
+});
 ipcMain.handle("app:listGitHubRepos", (_event, query: unknown) => listGitHubRepos(typeof query === "string" ? query : ""));
 ipcMain.handle("app:getCachedGitHubOwners", () => cachedGitHubOwners);
 ipcMain.handle("app:refreshGitHubOwners", () => refreshGitHubOwners());

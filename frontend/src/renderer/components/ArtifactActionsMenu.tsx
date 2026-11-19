@@ -1,3 +1,7 @@
+import { issueArtifactType } from "../../shared/github-issue-artifact";
+import { GitHubIssueArtifactDialog } from "./GitHubIssueArtifactDialog";
+import { artifactContentUrl } from "../lib/artifact-content-url";
+import { cloudCpFetch } from "../lib/cloud-cp/renderer-client";
 import { useEffect, useLayoutEffect, useRef, useState, type ReactNode } from "react";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { useTranslation } from "react-i18next";
@@ -127,6 +131,7 @@ export function ArtifactActionsMenu({
 	const [copyError, setCopyError] = useState("");
 	const [confirmingDelete, setConfirmingDelete] = useState(false);
 	const [menuOpen, setMenuOpen] = useState(false);
+	const [issueOpen, setIssueOpen] = useState(false);
 	const [shareOpen, setShareOpen] = useState(false);
 	const [shareIntent, setShareIntent] = useState<"publish" | "unpublish">("publish");
 	const published = Boolean(artifact.shareUrl);
@@ -243,6 +248,14 @@ export function ArtifactActionsMenu({
 			setCopyError(error instanceof Error ? error.message : String(error));
 		}
 	};
+	const canAddToIssue = !iconOnly && owner && !session.cloud?.shared && Boolean(issueArtifactType(artifact.path));
+	const readIssueContent = async () => {
+		const url = session.cloud ? cloudFileUrl : artifactContentUrl(session.id, artifact.path, artifact.rawUrl);
+		if (!url) throw new Error(t("files.error.loadArtifact"));
+		const response = session.cloud ? await cloudCpFetch(url) : await fetch(url);
+		if (!response.ok) throw new Error(t("files.error.loadArtifact"));
+		return new TextDecoder("utf-8", { fatal: true }).decode(await response.arrayBuffer());
+	};
 	const copyable = owner && !fileMediaKind(artifact.path);
 	/** Copies the artifact's public link, showing why below the menu if the clipboard refuses. */
 	const copyPublicLink = async (url: string) => {
@@ -358,7 +371,7 @@ export function ArtifactActionsMenu({
 				>
 					{/* The caller's rows come first and end with their own separator, if any render. */}
 					{children}
-					{onTogglePin || onOpenInSession || canShare || published ? (
+					{onTogglePin || onOpenInSession || canShare || published || canAddToIssue ? (
 						<>
 							{canShare && !published ? (
 								<DropdownMenuItem onSelect={() => { sharing.current = true; setShareIntent("publish"); setShareOpen(true); }}>
@@ -370,6 +383,12 @@ export function ArtifactActionsMenu({
 								<DropdownMenuItem onSelect={() => void copyPublicLink(artifact.shareUrl ?? "")}>
 									<Link aria-hidden="true" />
 									{t("artifacts.share.copyPublicLink")}
+								</DropdownMenuItem>
+							) : null}
+							{canAddToIssue ? (
+								<DropdownMenuItem onSelect={() => { sharing.current = true; setIssueOpen(true); }}>
+									<ArrowUpRight aria-hidden="true" />
+									{t("issueArtifact.add")}
 								</DropdownMenuItem>
 							) : null}
 							{canShare && published ? (
@@ -460,6 +479,7 @@ export function ArtifactActionsMenu({
 					)}
 				</DropdownMenuContent>
 			</DropdownMenu> : null}
+			{issueOpen && <GitHubIssueArtifactDialog name={artifact.path.split("/").pop() || artifact.name} readContent={readIssueContent} onClose={() => setIssueOpen(false)} />}
 			<ConfirmDialog
 				busy={remove.isPending}
 				confirmLabel={t("artifacts.delete")}

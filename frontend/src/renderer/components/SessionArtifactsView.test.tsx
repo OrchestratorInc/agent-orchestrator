@@ -968,7 +968,7 @@ describe("SessionArtifactsView", () => {
 		expect(screen.getAllByText("plan.md")).toHaveLength(1);
 		await userEvent.click(screen.getByRole("button", { name: "plan.md" }));
 		const items = screen.getAllByRole("menuitem").map((item) => item.textContent);
-		expect(items).toEqual(["Version history", expect.stringMatching(/^Show in /), expect.stringMatching(/^Show in /), "Copy as Markdown", "Delete artifact"]);
+		expect(items).toEqual(["Version history", "Add to GitHub issue", expect.stringMatching(/^Show in /), expect.stringMatching(/^Show in /), "Copy as Markdown", "Delete artifact"]);
 		await userEvent.click(screen.getByRole("menuitem", { name: /^Show in (?!Terminal)/ }));
 		await userEvent.click(screen.getByRole("button", { name: "plan.md" }));
 		await userEvent.click(screen.getByRole("menuitem", { name: "Show in Terminal" }));
@@ -1035,9 +1035,9 @@ describe("SessionArtifactsView", () => {
 		{ location: "local", hostId: undefined, cloud: false, path: "chart.png", separators: 1, actions: [expect.stringMatching(/^Show in /), expect.stringMatching(/^Show in /), "Open in browser", "Delete artifact"] },
 		{ location: "remote", hostId: "remote-1", cloud: false, path: "chart.png", separators: 0, actions: ["Delete artifact"] },
 		{ location: "cloud", hostId: undefined, cloud: true, path: "chart.png", separators: 2, actions: [expect.stringMatching(/^Show in /), "Open in browser", "Download", "Delete artifact"] },
-		{ location: "local", hostId: undefined, cloud: false, path: "notes.md", separators: 2, actions: [expect.stringMatching(/^Show in /), expect.stringMatching(/^Show in /), "Copy as Markdown", "Delete artifact"] },
-		{ location: "remote", hostId: "remote-1", cloud: false, path: "notes.md", separators: 1, actions: ["Copy as Markdown", "Delete artifact"] },
-		{ location: "cloud", hostId: undefined, cloud: true, path: "notes.md", separators: 2, actions: [expect.stringMatching(/^Show in /), "Copy as Markdown", "Download", "Delete artifact"] },
+		{ location: "local", hostId: undefined, cloud: false, path: "notes.md", separators: 3, actions: ["Add to GitHub issue", expect.stringMatching(/^Show in /), expect.stringMatching(/^Show in /), "Copy as Markdown", "Delete artifact"] },
+		{ location: "remote", hostId: "remote-1", cloud: false, path: "notes.md", separators: 2, actions: ["Add to GitHub issue", "Copy as Markdown", "Delete artifact"] },
+		{ location: "cloud", hostId: undefined, cloud: true, path: "notes.md", separators: 3, actions: ["Add to GitHub issue", expect.stringMatching(/^Show in /), "Copy as Markdown", "Download", "Delete artifact"] },
 	])("separates only populated action groups for $location $path", async ({ hostId, cloud, path, separators, actions }) => {
 		const artifact: SessionArtifact = { kind: "file", name: path, path, size: 2, updatedAt: "2026-09-24T00:00:00Z" };
 		const currentSession = { ...session([artifact]), ...(cloud ? { cloud: { orgId: "org-1" } } : {}) } as WorkspaceSession;
@@ -1128,7 +1128,7 @@ describe("SessionArtifactsView", () => {
 		expect(viewer).toHaveAttribute("data-read-only", "false");
 		expect(viewer).toHaveAttribute("data-saves", "true");
 		await userEvent.click(screen.getByRole("button", { name: "notes.md" }));
-		expect(screen.getAllByRole("menuitem").map((item) => item.textContent)).toEqual(["Version history", expect.stringMatching(/^Show in /), "Copy as Markdown", "Download", "Delete artifact"]);
+		expect(screen.getAllByRole("menuitem").map((item) => item.textContent)).toEqual(["Version history", "Add to GitHub issue", expect.stringMatching(/^Show in /), "Copy as Markdown", "Download", "Delete artifact"]);
 		expect(screen.queryByText(/^View only\./)).toBeNull();
 	});
 
@@ -1159,7 +1159,7 @@ describe("SessionArtifactsView", () => {
 		renderView(<SessionArtifactsView request={{ key: 1, path: "notes.md" }} session={{ ...session(), cloud: { orgId: "org-1" } } as WorkspaceSession} />);
 
 		await userEvent.click(screen.getByRole("button", { name: "notes.md" }));
-		expect(screen.getAllByRole("menuitem").map((item) => item.textContent)).toEqual(["Version history", expect.stringMatching(/^Show in /), "Copy as Markdown", "Download", "Delete artifact"]);
+		expect(screen.getAllByRole("menuitem").map((item) => item.textContent)).toEqual(["Version history", "Add to GitHub issue", expect.stringMatching(/^Show in /), "Copy as Markdown", "Download", "Delete artifact"]);
 	});
 
 	it("opens a requested artifact and passes its feedback request through", () => {
