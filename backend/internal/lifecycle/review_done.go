@@ -379,7 +379,15 @@ func (m *Manager) reviewDoneMessage(ctx context.Context, run domain.ReviewRun) (
 		}
 	}
 	msg += fmt.Sprintf("\nInline comments observed: %d", count)
-	if run.Verdict == domain.VerdictChangesRequested {
+	switch {
+	case run.NoInject:
+		// A --no-inject pass never reaches the worker (#6810); its requester,
+		// such as an orchestrator, must not expect the worker to act on it.
+		if run.Verdict == domain.VerdictChangesRequested {
+			msg += "\nCheck the posted review for findings."
+		}
+		msg += "\nThis was a --no-inject review: its feedback was not delivered to the PR worker."
+	case run.Verdict == domain.VerdictChangesRequested:
 		msg += "\nCheck the posted review for findings. Inline feedback is forwarded separately to the PR worker."
 	}
 	return msg, true, nil

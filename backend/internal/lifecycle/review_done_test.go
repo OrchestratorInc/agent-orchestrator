@@ -739,3 +739,26 @@ func TestReviewDoneChangesRequestedBeforeSCMObservation(t *testing.T) {
 		})
 	}
 }
+
+// #6810: an orchestrator that ran a --no-inject review for a worker hears it
+// finished, and is told the feedback was not delivered to the PR worker rather
+// than that it is forwarded there.
+func TestReviewDoneNotice_NoInjectSaysFeedbackNotDelivered(t *testing.T) {
+	m, st, msg := newNoticeManager(t)
+	st.sessions["orchestrator"] = working("orchestrator")
+	run := doneRun("run", domain.ReviewRunCompleted, domain.VerdictChangesRequested, "777", "summary")
+	run.RequesterSessionID = "orchestrator"
+	run.NoInject, run.AutoInjectReview = true, false
+	st.runs = []domain.ReviewRun{run}
+	st.reviews[donePR] = []domain.PullRequestReview{observedReview("777")}
+	st.comments[donePR] = changesRequestedComments()
+	m.SweepReviewDoneNotices(ctx)
+	m.SweepReviewDoneNotices(ctx)
+	if len(msg.msgs) != 1 || msg.ids[0] != "orchestrator" {
+		t.Fatalf("want one notice to the orchestrator, got %v to %v", msg.msgs, msg.ids)
+	}
+	assertContains(t, msg.msgs[0], "AO review done: changes requested", "Inline comments observed: 2", "Check the posted review for findings.", "its feedback was not delivered to the PR worker")
+	if strings.Contains(msg.msgs[0], "forwarded separately") {
+		t.Fatalf("no-inject notice claims feedback was forwarded:\n%s", msg.msgs[0])
+	}
+}
