@@ -263,6 +263,40 @@ func TestCodexLoginStartProbeTimesOutWhenLauncherChildHoldsPipes(t *testing.T) {
 	}
 }
 
+func TestCodexLoginStartProbeReturnsWhenSuccessfulLauncherLeavesPipesOpen(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("shell launcher fixture is Unix-specific")
+	}
+	launcher := filepath.Join(t.TempDir(), "codex")
+	script := `#!/bin/sh
+[ "$1" = --version ] || exit 1
+/bin/sleep 5 &
+printf 'codex-cli 0.166.0\n'
+exit 0
+`
+	if err := os.WriteFile(launcher, []byte(script), 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	deps := Deps{In: strings.NewReader("1\n"), Out: io.Discard, Err: io.Discard}
+	cmd := newCodexLoginCommand(&commandContext{deps: deps.withDefaults()})
+	cmd.SetArgs([]string{"--executable", launcher})
+	cmd.SetIn(deps.In)
+	cmd.SetOut(deps.Out)
+	cmd.SetErr(deps.Err)
+
+	const limit = 2 * time.Second
+	ctx, cancel := context.WithTimeout(t.Context(), limit)
+	defer cancel()
+	err := cmd.ExecuteContext(ctx)
+	if ctx.Err() != nil {
+		t.Fatalf("codex-login did not return within %s while the child held its pipes open", limit)
+	}
+	if err == nil || err.Error() != "codex login failed: exit status 1" {
+		t.Fatalf("Execute error = %v, want Codex's own login failure", err)
+	}
+}
+
 func TestRunInteractiveCommandFindsNodeForNPMLauncherOutsidePATH(t *testing.T) {
 	if runtime.GOOS == "windows" {
 		t.Skip("npm env-node launcher is Unix-specific")

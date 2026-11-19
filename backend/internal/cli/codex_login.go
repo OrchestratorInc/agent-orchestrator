@@ -133,7 +133,8 @@ func codexStartFailure(ctx context.Context, codex string) string {
 	cmd.WaitDelay = 100 * time.Millisecond
 	cmd.Env = agentlaunch.ProcessEnvForLaunchBinary(probeCtx, codex)
 	output, err := cmd.CombinedOutput()
-	if err == nil || probeCtx.Err() != nil {
+	// ErrWaitDelay means the launcher exited successfully with pipes still open.
+	if err == nil || errors.Is(err, exec.ErrWaitDelay) || probeCtx.Err() != nil {
 		return ""
 	}
 	// Prefer Node's "Error: ..." line; newer launchers print a source location first.
