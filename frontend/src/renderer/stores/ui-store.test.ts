@@ -71,6 +71,16 @@ describe("theme preference", () => {
 		expect(window.localStorage.getItem("ao.theme")).toBe("system");
 	});
 
+	it("re-reads the OS appearance once main stops forcing a mode", async () => {
+		// The OS turns dark between the first lookup and the reveal.
+		vi.spyOn(aoBridge.theme, "systemAppearance").mockResolvedValueOnce("light").mockResolvedValue("dark");
+		useUiStore.getState().setThemePreference("system");
+
+		await vi.waitFor(() => expect(aoBridge.theme.systemAppearance).toHaveBeenCalledTimes(2));
+		await vi.waitFor(() => expect(useUiStore.getState().resolvedTheme).toBe("dark"));
+		expect(useUiStore.getState().themePreference).toBe("system");
+	});
+
 	it("drops a System lookup that a newer choice overtook", async () => {
 		let reportAppearance: (theme: "light" | "dark") => void = () => undefined;
 		vi.spyOn(aoBridge.theme, "systemAppearance").mockReturnValue(

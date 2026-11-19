@@ -554,8 +554,8 @@ export async function readSystemTheme(): Promise<Theme> {
 // after a newer choice is dropped.
 let themePreferenceRequest = 0;
 
-function sendThemePreference(themePreference: ThemePreference): void {
-	void aoBridge.theme?.set(themePreference)?.catch(() => undefined);
+function sendThemePreference(themePreference: ThemePreference): Promise<void> {
+	return aoBridge.theme?.set(themePreference)?.catch(() => undefined) ?? Promise.resolve();
 }
 
 const initialThemePreference = readStoredThemePreference();
@@ -617,7 +617,7 @@ export const useUiStore = create<UiState>((set, get) => ({
 			// An overtaken System choice may already have reached main (the lookup
 			// on Windows and Linux, an opaque window's early reveal). Send the
 			// current mode again; main skips it when nothing changed.
-			sendThemePreference(themePreference);
+			void sendThemePreference(themePreference);
 			return;
 		}
 		// The transition's callbacks run later too, so each one checks that no
@@ -635,7 +635,23 @@ export const useUiStore = create<UiState>((set, get) => ({
 				// The window's vibrancy material follows nativeTheme; flip it as the
 				// new frame is revealed so the tint and the material change together.
 				() => {
-					if (current()) sendThemePreference(themePreference);
+					if (!current()) return;
+					const sent = sendThemePreference(themePreference);
+					// The OS can change between the lookup and here. Once main stops
+					// forcing a mode, read it again: the media query may not move, so
+					// its listener would never correct a stale value.
+					if (themePreference !== "system") return;
+					void sent
+						.then(() => readSystemTheme())
+						.then((os) => {
+							const state = get();
+							if (!current() || state.themePreference !== "system" || state.resolvedTheme === os) return;
+							runThemeTransition(() => {
+								if (!current()) return;
+								applyDocumentTheme(os);
+								set({ resolvedTheme: os });
+							});
+						});
 				},
 			);
 		};
