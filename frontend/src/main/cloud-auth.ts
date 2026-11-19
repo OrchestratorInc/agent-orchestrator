@@ -329,16 +329,19 @@ export function writeAuthStore(
       }
       return;
     }
-    memoryStores.delete(dataDir);
+    // What is kept in memory is dropped only once the file is saved, so a
+    // failed write cannot lose a sign-in held nowhere else.
     if (store.session === null && unreadFiles.has(dataDir)) {
       // Read during the outage, this store never saw the file's session.
       const next = await onFileSession(dataDir, store);
       await writeStoreFile(dataDir, next);
+      memoryStores.delete(dataDir);
       noteFileRead(dataDir, next);
       return;
     }
-    unreadFiles.delete(dataDir);
     await writeStoreFile(dataDir, store);
+    memoryStores.delete(dataDir);
+    unreadFiles.delete(dataDir);
   });
 }
 
