@@ -1177,7 +1177,7 @@ describe("HarnessSettingsSection", () => {
 
 	it.each([
 		{ action: "setup", state: "authorized", loginLabel: "Open setup" },
-		{ action: "setup", state: "unknown", loginLabel: "Setup" },
+		{ action: "setup", state: "unknown", loginLabel: "Set up" },
 	])("offers DeepSeek setup/account $action when $state through the native web flow", async ({ action, state, loginLabel }) => {
 		const readiness = readyCatalog();
 		readiness.agents.push({ ...readiness.agents[0], id: "deepseek-harness", label: "DeepSeek", authentication: { ...readiness.agents[0].authentication, state } });
@@ -1195,10 +1195,11 @@ describe("HarnessSettingsSection", () => {
 		} } as never : (post as (path: string, options: unknown) => Promise<never>)(path, options));
 		renderSection();
 		const page = await findAgentRow("deepseek-harness");
-		expect(within(page).getByRole("button", { name: loginLabel })).toBeEnabled();
-		expect(within(page).queryByRole("button", { name: "Log out", exact: true })).toBeNull();
-		expect(within(page).queryByRole("button", { name: "Login", exact: true })).toBeNull();
-		await userEvent.click(within(page).getByRole("button", { name: loginLabel }));
+		const setupButton = await within(page).findByRole("button", { name: loginLabel });
+		expect(setupButton).toBeEnabled();
+		expect(within(page).queryByRole("button", { name: "Log out" })).toBeNull();
+		expect(within(page).queryByRole("button", { name: "Login" })).toBeNull();
+		await userEvent.click(setupButton);
 		await waitFor(() => expect(apiClient.POST).toHaveBeenCalledWith(endpoint, { params: { path: { agent: "deepseek-harness" } } }));
 		expect(await within(page).findByText("Finish in DeepSeek's native account UI.")).toBeInTheDocument();
 	});
