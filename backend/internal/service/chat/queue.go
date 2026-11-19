@@ -209,6 +209,14 @@ func (c *Controller) EditQueuedTurn(ctx context.Context, turnID string, edit Que
 			legacyText := strings.TrimRightFunc(text, unicode.IsSpace)
 			if strings.HasSuffix(legacyText, reports) {
 				text = strings.TrimSuffix(legacyText, reports)
+			} else if index := strings.LastIndex(legacyText, reports); index >= 0 {
+				// Older editors may leave the batch in the prose and append
+				// staged file references after it. Keep the files, but move the
+				// exact recorded batch back to the authoritative suffix.
+				footer := legacyText[index+len(reports):]
+				if strings.HasPrefix(footer, "\n\n") && stagedAttachmentFooterIndex(footer) == 0 {
+					text = legacyText[:index] + footer
+				}
 			}
 		}
 	}

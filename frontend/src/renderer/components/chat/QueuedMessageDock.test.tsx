@@ -67,7 +67,7 @@ function rowTexts() {
 }
 
 describe("QueuedMessageDock worker report boundary", () => {
-	it("keeps worker context out of the preview, tooltip and edit callback", async () => {
+	it("keeps worker context out of the preview and tooltip, and passes only the turn id to Edit", async () => {
 		const onBeginQueuedEdit = vi.fn();
 		const human = "Review café changes 👋";
 		const messages = queuedMessages([`${human}\n\n<ao-worker-reports>\n[checkpoint] worker one\n\npr_created: https://example.com/pr/1\n</ao-worker-reports>`]);
@@ -76,7 +76,7 @@ describe("QueuedMessageDock worker report boundary", () => {
 		expect(preview).toHaveAttribute("title", human);
 		expect(screen.getByTestId("queued-message-dock")).not.toHaveTextContent("worker one");
 		await userEvent.click(screen.getByRole("button", { name: "Edit queued message" }));
-		expect(onBeginQueuedEdit).toHaveBeenCalledWith("queued-1", human);
+		expect(onBeginQueuedEdit).toHaveBeenCalledWith("queued-1");
 		expect(messages[0]!.message.text).toContain("[checkpoint] worker one");
 	});
 });

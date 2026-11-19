@@ -16,11 +16,13 @@ import (
 func TestQueuedEditPreservesWorkerReports(t *testing.T) {
 	const suffix = "\n\n<ao-worker-reports>\n[checkpoint] worker one\n\n[done] worker two\npr_created: https://example.com/pr/1\n</ao-worker-reports>"
 	const example = "\n\n<ao-worker-reports>\nliteral user example\n</ao-worker-reports>"
+	const stagedFiles = "\n\nAttached files (read these files in the workspace):\n- .ao/attachments/attachment-added.png"
 	for _, tc := range []struct{ name, editedSuffix, humanSuffix string }{
 		{"human text only", "", ""},
 		{"legacy full text", suffix, ""},
 		{"legacy trailing newline", suffix + "\n", ""},
 		{"legacy trailing whitespace", suffix + "\r\n \t\u00a0", ""},
+		{"older client adds a staged file after the recorded reports", suffix + stagedFiles, stagedFiles},
 		{"authored report example", example, example},
 	} {
 		t.Run(tc.name, func(t *testing.T) {

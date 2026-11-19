@@ -700,6 +700,8 @@ export interface ChatWorkspaceProps {
 	 */
 	steeringQueuedTurnIds?: ReadonlySet<string>;
 	onEditQueuedTurn?: (turnId: string, text: string, options?: QueuedMessageEditOptions) => Promise<unknown>;
+	/** Desktop daemons can need the recorded report suffix in the save request. */
+	preserveQueuedWorkerReports?: boolean;
 	/** Which queued human messages onEditQueuedTurn can edit; every one when absent. */
 	canEditQueuedMessage?: (message: ConversationMessage) => boolean;
 	onCancelQueuedTurn?: (turnId: string) => Promise<unknown>;
@@ -951,6 +953,7 @@ function ChatWorkspaceContent({
 	queuedSteerErrors,
 	steeringQueuedTurnIds,
 	onEditQueuedTurn,
+	preserveQueuedWorkerReports = false,
 	canEditQueuedMessage,
 	onCancelQueuedTurn,
 	canCancelQueuedMessage,
@@ -1423,22 +1426,33 @@ function ChatWorkspaceContent({
 				if (!onEditQueuedTurn) {
 					throw new Error("chat.draft.queueUnavailable");
 				}
-				if (!queueEdit.clientMessageId && !queuedMessages.some((entry) => entry.turnId === queueEdit.turnId)) {
+				const message = queuedMessages.find((entry) => entry.turnId === queueEdit.turnId)?.message;
+				if (!queueEdit.clientMessageId && !message) {
 					throw new Error("chat.draft.queueMissing");
 				}
 				const currentEdit = queueEditRef.current;
 				if (!currentEdit || currentEdit.turnId !== queueEdit.turnId || currentEdit.ownerId !== queueEdit.ownerId) {
 					throw new Error("chat.draft.queueReplaced");
 				}
+				// Older daemons replace the entire stored string. Keep the report
+				// batch out of editable text but include it in the save request.
+				// Freeze the exact suffix on first dispatch for receipt retries,
+				// even after the turn leaves the queue or a previous build sent it.
+				const reportSuffix = currentEdit.clientMessageId
+					? currentEdit.reportSuffix
+					: preserveQueuedWorkerReports && message
+						? message.text.slice(humanVisibleText(message.text).length) || undefined
+						: undefined;
 				const prepared = updateQueueDraft({
 					...currentEdit,
+					reportSuffix,
 					saving: true,
 					clientMessageId: currentEdit.clientMessageId ?? crypto.randomUUID(),
 					nativeImages: currentEdit.nativeImages ?? Boolean(nativeImages),
 				}, currentEdit.revision);
 				if (!prepared.ok || !prepared.draft.queuedEdit) throw new Error("chat.draft.queuePrepareFailed");
 				try {
-					await onEditQueuedTurn(queueEdit.turnId, text, {
+					await onEditQueuedTurn(queueEdit.turnId, text + (prepared.draft.queuedEdit.reportSuffix ?? ""), {
 						clientMessageId: prepared.draft.queuedEdit.clientMessageId,
 						...(attachments?.length ? { attachments } : {}),
 						retainedContent: queueEdit.attachments === undefined ? undefined : retainedContent,
@@ -1457,7 +1471,7 @@ function ChatWorkspaceContent({
 					].includes(apiErrorCode(error) ?? "")) {
 						updateQueueDraft({
 							...prepared.draft.queuedEdit,
-							clientMessageId: undefined, saving: undefined, nativeImages: undefined,
+							clientMessageId: undefined, saving: undefined, nativeImages: undefined, reportSuffix: undefined,
 						}, prepared.draft.queuedEdit.revision);
 					}
 					throw error;
@@ -1476,7 +1490,7 @@ function ChatWorkspaceContent({
 			if (sent !== SENT_OUTSIDE_TRANSCRIPT) setComposerSends((count) => count + 1);
 			return sent;
 		},
-		[draftScope, onEditQueuedTurn, onSend, nativeImages, queueEdit, queuedMessages, updateQueueDraft],
+		[draftScope, onEditQueuedTurn, onSend, nativeImages, preserveQueuedWorkerReports, queueEdit, queuedMessages, updateQueueDraft],
 	);
 	const stableInterrupt = useStableCallback(onInterrupt);
 	const stableSteer = useStableCallback(onSteer);

@@ -1,9 +1,9 @@
 import { expect, test } from "@playwright/test";
 import { installFakeAgent } from "./support/fake-bridge";
 
-// Renderer e2e with a mocked daemon. Report retention at the service/provider
-// boundary is covered by TestQueuedEditPreservesWorkerReports in Go.
-test("queued edits expose only human text through reload, save and steer @T0", async ({ page }, testInfo) => {
+// Renderer e2e with mocked replacement and report-preserving daemons. Real
+// service/provider-boundary coverage lives in TestQueuedEditPreservesWorkerReports.
+for (const daemon of ["old", "updated"] as const) test(`queued edits retain hidden reports on the ${daemon} daemon through reload, save and steer @T0`, async ({ page }, testInfo) => {
 	test.setTimeout(120_000);
 	const sessionId = "queued-worker-reports";
 	const now = "2026-11-17T10:00:00Z";
@@ -33,9 +33,11 @@ test("queued edits expose only human text through reload, save and steer @T0", a
 		if (path.endsWith("/queue/edit")) {
 			const edit = route.request().postDataJSON();
 			edits.push(edit);
-			expect(edit.text).not.toContain("ao-worker-reports");
+			expect(edit.text).toBe("Review café changes carefully 👋" + suffix);
 			expect(edit.expectedRevision).toBe(revision);
-			text = edit.text + suffix;
+			// The old daemon stores the exact request. The updated daemon
+			// strips a matching suffix and appends its own authoritative copy.
+			text = daemon === "old" ? edit.text : edit.text.slice(0, -suffix.length) + suffix;
 			revision++;
 			await route.fulfill({ status: 204 });
 			return;
@@ -68,9 +70,6 @@ test("queued edits expose only human text through reload, save and steer @T0", a
 	await expect(field).toBeVisible({ timeout: 60_000 });
 	await field.fill("Keep my independent draft");
 	await page.getByRole("button", { name: "Edit queued message" }).click();
-	const screenshot = testInfo.outputPath("queued-edit.png");
-	await page.screenshot({ path: screenshot });
-	await testInfo.attach("queued-edit", { path: screenshot, contentType: "image/png" });
 	await expect(field).toHaveText(human);
 	await expect(page.locator(".queue-dock-row-text")).toHaveAttribute("title", human);
 	await expect(page.getByTestId("queued-message-dock")).not.toContainText("Internal checkpoint");
@@ -82,6 +81,9 @@ test("queued edits expose only human text through reload, save and steer @T0", a
 	await expect(field).toHaveText("Keep my independent draft");
 	await page.getByRole("button", { name: "Edit queued message" }).click();
 	await expect(field).toHaveText("Review café changes carefully 👋");
+	const screenshot = testInfo.outputPath("queued-edit-reopened.png");
+	await page.screenshot({ path: screenshot });
+	await testInfo.attach("queued-edit-reopened", { path: screenshot, contentType: "image/png" });
 	await page.getByRole("button", { name: "Cancel edit" }).click();
 	await page.getByRole("button", { name: "Steer this queued message into the running turn" }).click();
 	await expect.poll(() => steered).toBe(true);

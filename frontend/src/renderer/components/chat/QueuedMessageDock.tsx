@@ -108,7 +108,7 @@ function QueuedMessageRowContent({
 	canSteer?: boolean;
 	suppressHoverSteer?: boolean;
 	onPromoteQueuedTurn?: (turnId: string) => Promise<unknown>;
-	onBeginQueuedEdit?: (turnId: string, text: string) => void;
+	onBeginQueuedEdit?: (turnId: string) => void;
 	canEditMessage?: (message: ConversationMessage) => boolean;
 	onCancelQueuedTurn?: (turnId: string) => Promise<unknown>;
 	canCancelMessage?: (message: ConversationMessage) => boolean;
@@ -219,7 +219,7 @@ function QueuedMessageRowContent({
 						size="icon-sm"
 						disabled={busy}
 						className={steadyClass}
-						onClick={() => onBeginQueuedEdit(turnId, visibleText)}
+						onClick={() => onBeginQueuedEdit(turnId)}
 						aria-label="Edit queued message"
 						title="Edit"
 					>
@@ -291,7 +291,7 @@ function SortableQueuedMessageRow({
 	canSteer?: boolean;
 	suppressHoverSteer?: boolean;
 	onPromoteQueuedTurn?: (turnId: string) => Promise<unknown>;
-	onBeginQueuedEdit?: (turnId: string, text: string) => void;
+	onBeginQueuedEdit?: (turnId: string) => void;
 	canEditMessage?: (message: ConversationMessage) => boolean;
 	onCancelQueuedTurn?: (turnId: string) => Promise<unknown>;
 	canCancelMessage?: (message: ConversationMessage) => boolean;
@@ -402,7 +402,7 @@ export const QueuedMessageDock = memo(function QueuedMessageDock({
 	canSteerNext?: boolean;
 	steerNextRequest?: number;
 	onPromoteQueuedTurn?: (turnId: string) => Promise<unknown>;
-	onBeginQueuedEdit?: (turnId: string, text: string) => void;
+	onBeginQueuedEdit?: (turnId: string) => void;
 	/** Which human messages Edit is offered on; every one when absent. */
 	canEditMessage?: (message: ConversationMessage) => boolean;
 	onCancelQueuedTurn?: (turnId: string) => Promise<unknown>;
