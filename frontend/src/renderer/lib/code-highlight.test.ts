@@ -44,6 +44,7 @@ describe("canonicalLanguage", () => {
 		expect(canonicalLanguage("brainfuck")).toBeUndefined();
 		expect(canonicalLanguage("constructor")).toBeUndefined();
 		expect(canonicalLanguage("__proto__")).toBeUndefined();
+		expect(canonicalLanguage("ansi")).toBeUndefined();
 		expect(canonicalLanguage(undefined)).toBeUndefined();
 	});
 });

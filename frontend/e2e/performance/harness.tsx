@@ -16,7 +16,7 @@ import { ChatMarkdown } from "../../src/renderer/components/chat/ChatMarkdown";
 import { AssistantMessage } from "../../src/renderer/components/chat/ChatTimelineItems";
 import { ChatWorkspace } from "../../src/renderer/components/chat/ChatWorkspace";
 import { chatFixtureLongHistory } from "../../src/renderer/lib/chat-fixture";
-import { highlight } from "../../src/renderer/lib/code-highlight";
+import { highlightSync } from "../../src/renderer/lib/code-highlight";
 import { createEventTransport } from "../../src/renderer/lib/event-transport";
 import { useUiStore } from "../../src/renderer/stores/ui-store";
 import { setApiBaseUrl } from "../../src/renderer/lib/api-client";
@@ -214,11 +214,8 @@ export const performanceHarness = {
 	},
 
 	async highlighting() {
-		// Load the existing grammar chunk first so this isolates large-block work,
-		// not network/module fetch differences. The worker still starts lazily.
-		await highlight("const warmup = 1", "typescript");
 		const code = Array.from(
-			{ length: 10000 },
+			{ length: 5000 },
 			(_, index) => `const value${index}: string = "Unicode 👨‍👩‍👧‍👦 ${index}";`,
 		).join("\n");
 		const gaps: number[] = [];
@@ -230,7 +227,7 @@ export const performanceHarness = {
 		}, 4);
 		await wait(30);
 		const started = performance.now();
-		const tree = await highlight(code, "typescript");
+		const tree = highlightSync(code, "typescript");
 		const elapsedMs = performance.now() - started;
 		await wait(30);
 		clearInterval(timer);

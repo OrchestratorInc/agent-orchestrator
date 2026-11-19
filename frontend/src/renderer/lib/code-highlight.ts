@@ -20,7 +20,7 @@ export function canonicalLanguage(label: string | undefined): GrammarName | unde
 	if (!label) return undefined;
 	const name = label.toLowerCase();
 	const lang = ALIASES[name] ?? name;
-	return isSupportedLanguage(lang) ? lang : undefined;
+	return lang !== "ansi" && isSupportedLanguage(lang) ? lang : undefined;
 }
 
 const CODE_THEME: Theme = {

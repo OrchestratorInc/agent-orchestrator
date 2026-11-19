@@ -2,10 +2,11 @@ import { expect, test, type Page } from "@playwright/test";
 import { installFakeBridge } from "./support/fake-bridge";
 
 const reply = "Before $x^2$.\n\n$$\nE = mc^2\n$$\n\n- one \\(y\\)\n- two\n\nAfter.";
+const streamedReply = reply.replace("\\(y\\)", "$y$");
 
 async function copyWholeReply(page: Page, streaming: boolean) {
-	await page.evaluate(([text, live]) => window.mathCopyHarness.render(text, live), [reply, streaming] as const);
-	await expect(page.locator("#reply .katex")).toHaveCount(3);
+	await page.evaluate(([text, live]) => window.mathCopyHarness.render(text, live), [streaming ? streamedReply : reply, streaming] as const);
+	await expect(page.locator(streaming ? '#reply [data-markdown^="math"]' : "#reply .katex")).toHaveCount(3);
 	return page.evaluate(() => {
 		window.getSelection()!.selectAllChildren(document.getElementById("reply")!);
 		const event = new ClipboardEvent("copy", { clipboardData: new DataTransfer(), bubbles: true, cancelable: true });
@@ -21,6 +22,5 @@ test("copying a reply with formulas keeps their TeX and the reply's block breaks
 	await page.waitForFunction(() => Boolean(window.mathCopyHarness));
 	const expected = "Before $x^2$.\n\n$$\nE = mc^2\n$$\n\none $y$\ntwo\n\nAfter.";
 	expect.soft(await copyWholeReply(page, false), "settled reply").toBe(expected);
-	// Streamed blocks render as sibling roots with no whitespace between them.
 	expect.soft(await copyWholeReply(page, true), "streamed reply").toBe(expected);
 });

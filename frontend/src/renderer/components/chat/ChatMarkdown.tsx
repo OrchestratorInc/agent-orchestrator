@@ -77,7 +77,7 @@ import {
 } from "../../lib/workspace-file-path";
 import { HighlightedCode } from "./HighlightedCode";
 import { MermaidBlock } from "./MermaidBlock";
-import { MathFormula } from "./MathFormula";
+import { loadKatex, MathFormula } from "./MathFormula";
 import { CopyButton } from "./CopyButton";
 import { ChatImage, ChatImageGallery, ChatImageLinkScope, isImageOnlyParagraph } from "./ChatImage";
 import "./code-theme.css";
@@ -333,6 +333,9 @@ function CodeBlock({ code, language, sourceNode }: { code: string; language?: st
 function StreamingMarkdown({ text, math }: { text: string; math: boolean }) {
 	const [mounted, setMounted] = useState(false);
 	useEffect(() => setMounted(true), []);
+	useEffect(() => {
+		if (math) void loadKatex();
+	}, [math]);
 	return (
 		<WordsMarkdown
 			isAnimating

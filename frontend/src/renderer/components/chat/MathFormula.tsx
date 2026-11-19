@@ -22,7 +22,7 @@ type Katex = typeof import("katex").default;
 let katex: Katex | undefined;
 let katexPromise: Promise<Katex> | undefined;
 
-function loadKatex(): Promise<Katex> {
+export function loadKatex(): Promise<Katex> {
 	katexPromise ??= import("../../lib/katex").then((module) => (katex = module.default));
 	return katexPromise;
 }
