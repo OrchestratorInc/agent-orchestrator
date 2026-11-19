@@ -14,6 +14,7 @@ const {
 	setApiDaemonStatusMock,
 	ensureAgentReadinessMock,
 	cacheAgentReadinessMock,
+	loadAgentReadinessSnapshotMock,
 } = vi.hoisted(() => ({
 	getStatusMock: vi.fn(),
 	onStatusMock: vi.fn(),
@@ -24,6 +25,7 @@ const {
 	setApiDaemonStatusMock: vi.fn(),
 	ensureAgentReadinessMock: vi.fn(),
 	cacheAgentReadinessMock: vi.fn(),
+	loadAgentReadinessSnapshotMock: vi.fn(),
 }));
 
 vi.mock("../lib/bridge", () => ({
@@ -39,14 +41,31 @@ vi.mock("../lib/api-client", () => ({
 	setApiDaemonStatus: setApiDaemonStatusMock,
 }));
 
-vi.mock("./useAgentReadinessQuery", () => ({
+vi.mock("./useAgentReadinessQuery", async (importOriginal) => ({
 	agentReadinessQueryKey: ["agent-readiness"],
 	ensureAgentReadiness: ensureAgentReadinessMock,
 	cacheAgentReadiness: cacheAgentReadinessMock,
+	loadAgentReadinessSnapshot: loadAgentReadinessSnapshotMock,
+	focusReadinessIds: (await importOriginal<typeof import("./useAgentReadinessQuery")>()).focusReadinessIds,
 }));
 
 import { setEventsConnectionState } from "../lib/events-connection";
 import { useDaemonStatus } from "./useDaemonStatus";
+
+const checked = "2026-11-15T10:00:00Z";
+const focusAgent = (id: string, usageCount: number, installation: string, auth: string, authCheckedAt: string | null) => ({
+	id, label: id, usageCount, effectiveReadiness: "unknown",
+	installation: { state: installation, freshness: "fresh", checkedAt: checked, reasonCode: "" },
+	authentication: { state: auth, freshness: "fresh", checkedAt: authCheckedAt, reasonCode: "" },
+});
+// Used; not installed; installed and signed out; installed, unused and signed in; installed, unused, never checked.
+const focusAgents = [
+	focusAgent("used", 3, "installed", "authorized", checked),
+	focusAgent("missing", 0, "not_installed", "unknown", null),
+	focusAgent("signed-out", 0, "installed", "unauthorized", checked),
+	focusAgent("signed-in", 0, "installed", "authorized", checked),
+	focusAgent("unchecked", 0, "installed", "unknown", null),
+];
 
 function fakeQueryClient(): QueryClient {
 	return { invalidateQueries: vi.fn(), removeQueries: vi.fn(), setQueryData: vi.fn() } as unknown as QueryClient;
@@ -63,6 +82,7 @@ beforeEach(() => {
 	setApiBaseUrlMock.mockReset();
 	setApiDaemonStatusMock.mockReset();
 	ensureAgentReadinessMock.mockReset().mockResolvedValue({ agents: [] });
+	loadAgentReadinessSnapshotMock.mockReset().mockResolvedValue({ agents: focusAgents });
 	cacheAgentReadinessMock.mockReset();
 });
 
@@ -152,7 +172,7 @@ describe("useDaemonStatus", () => {
 		expect(queryClient.removeQueries).toHaveBeenCalledTimes(6);
 	});
 
-	it("ensures display readiness when the window regains focus", async () => {
+	it("re-checks on focus the agents a user may have changed, not every agent", async () => {
 		getStatusMock.mockResolvedValue({ state: "ready", port: 4555, pid: 101 });
 		const queryClient = fakeQueryClient();
 		renderHook(() => useDaemonStatus(queryClient));
@@ -160,8 +180,36 @@ describe("useDaemonStatus", () => {
 
 		act(() => window.dispatchEvent(new Event("focus")));
 
-		await waitFor(() => expect(ensureAgentReadinessMock).toHaveBeenCalledWith([], "display"));
+		await waitFor(() => expect(ensureAgentReadinessMock).toHaveBeenCalledWith(["used", "missing", "signed-out"], "display"));
 		expect(cacheAgentReadinessMock).toHaveBeenCalledWith(queryClient, { agents: [] });
+	});
+
+	it("re-checks on every return to the app, including the first one after launch", async () => {
+		getStatusMock.mockResolvedValue({ state: "ready", port: 4555, pid: 101 });
+		const queryClient = fakeQueryClient();
+		renderHook(() => useDaemonStatus(queryClient));
+		await waitFor(() => expect(onStatusMock).toHaveBeenCalled());
+
+		// A window reopened onto a daemon that has run for hours must not wait.
+		act(() => window.dispatchEvent(new Event("focus")));
+		await waitFor(() => expect(ensureAgentReadinessMock).toHaveBeenCalledTimes(1));
+		act(() => window.dispatchEvent(new Event("focus")));
+		await waitFor(() => expect(ensureAgentReadinessMock).toHaveBeenCalledTimes(2));
+	});
+
+	it("asks for nothing on focus when no agent needs a look", async () => {
+		getStatusMock.mockResolvedValue({ state: "ready", port: 4555, pid: 101 });
+		loadAgentReadinessSnapshotMock.mockResolvedValue({ agents: [focusAgents[3]] });
+		const queryClient = fakeQueryClient();
+		renderHook(() => useDaemonStatus(queryClient));
+		await waitFor(() => expect(onStatusMock).toHaveBeenCalled());
+		act(() => window.dispatchEvent(new Event("focus")));
+		await waitFor(() => expect(loadAgentReadinessSnapshotMock).toHaveBeenCalled());
+		await act(async () => {
+			await Promise.resolve();
+		});
+		// An empty list would mean "every agent" to the daemon.
+		expect(ensureAgentReadinessMock).not.toHaveBeenCalled();
 	});
 
 	it("refreshes non-ready status until the daemon is ready", async () => {

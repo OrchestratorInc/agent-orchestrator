@@ -4,7 +4,7 @@ import { type CSSProperties, type ReactNode, useEffect, useId, useLayoutEffect, 
 import { createPortal } from "react-dom";
 import { useTranslation } from "react-i18next";
 import { useAgentAuthPlans } from "../hooks/useAgentAuth";
-import { cacheAgentReadiness, ensureAgentReadiness, useAgentReadinessQuery, useEnsureAgentReadiness } from "../hooks/useAgentReadinessQuery";
+import { cacheAgentReadiness, ensureAgentReadiness, useAgentReadinessQuery, useEnsureAgentReadiness, type AgentReadinessSnapshot } from "../hooks/useAgentReadinessQuery";
 import { CLOUD_HARNESS_HOST, CLOUD_VERSIONED_HARNESSES, describeCloudHarness, useCloudHarnessVersions, type CloudHarnessDetails } from "../hooks/useCloudHarnessVersions";
 import { advisoryInUse, hasConfirmedHarnessUpdate, harnessUpdateNoticeKey, installedAgentIds, installerQueryKey, installersQueryOptions, installJobsQueryKey, installJobsQueryOptions, isActiveInstallJob, isFailedInstallJob, maintenanceMethodId, needsHarnessLogin, updateAdvisoryQueryKey, useHarnessUpdates, useStartHarnessUpdate, versionLabel, type AgentUpdateAdvisory, type HarnessInUse, type InstallJob } from "../hooks/useHarnessUpdates";
 import { publishHarnessUpdateNoticeRect } from "../hooks/useHarnessUpdateNoticeClearance";
@@ -29,15 +29,69 @@ function readDismissals(): Set<string> {
 	} catch { return new Set(); }
 }
 
+const INSTALLATION_SETTLE_TRIES = 10;
+
+function identityPending(agent: AgentReadinessSnapshot): boolean {
+	return agent.installation.state === "unknown" && agent.installation.reasonCode === "install_identity_pending";
+}
+
+/**
+ * True once a readiness snapshot fetched after `enabled` turned on holds an
+ * installation state for every harness. Cached data from before never counts.
+ * While the daemon's installation pass is still running some states read
+ * "unknown", so it re-reads the snapshot each second, giving up the wait after
+ * ten tries so one lookup that never settles cannot hold back the rest.
+ */
+function useFreshInstallationSnapshot(readiness: ReturnType<typeof useAgentReadinessQuery>, enabled: boolean): boolean {
+	const { refetch, dataUpdatedAt, isSuccess, data } = readiness;
+	const [since, setSince] = useState<number | null>(null);
+	const [tries, setTries] = useState(0);
+	useEffect(() => {
+		setTries(0);
+		if (!enabled) {
+			setSince(null);
+			return;
+		}
+		setSince(Date.now());
+		void refetch();
+	}, [enabled, refetch]);
+	const fresh = since !== null && isSuccess && dataUpdatedAt >= since;
+	// An identity-pending installation (Goose, Hermes: found on PATH, but only a
+	// run of the binary can confirm it) stays "unknown" after the pass; it does
+	// not hold the wait, and the notice confirms it below.
+	const pending = !data || data.agents.some((agent) => agent.installation.state === "unknown" && !identityPending(agent));
+	useEffect(() => {
+		if (!fresh || !pending || tries >= INSTALLATION_SETTLE_TRIES) return;
+		const timer = setTimeout(() => {
+			setTries((count) => count + 1);
+			void refetch();
+		}, 1_000);
+		return () => clearTimeout(timer);
+	}, [fresh, pending, tries, refetch]);
+	return enabled && fresh && (!pending || tries >= INSTALLATION_SETTLE_TRIES);
+}
+
 /** Always mounted in the shell, not in a route or Settings. Read-only checks
  * and updates share the Harness page's queries; a login hands off to that page. */
 export function HarnessUpdateNotice({ enabled }: { enabled: boolean }) {
 	const { t, i18n } = useTranslation();
 	const queryClient = useQueryClient();
 	const readiness = useAgentReadinessQuery(enabled);
-	const readinessComplete = useEnsureAgentReadiness({ enabled, retryOnError: true });
+	// Which harnesses are installed comes from the daemon's own installation
+	// pass (a PATH lookup, no CLI run), read from a snapshot fetched after
+	// mount. Sign-in state matters only for a harness with an update to offer,
+	// so only those get a fresh check before the notice shows them. A full
+	// check here ran every harness's sign-in probe on each launch.
+	const installationKnown = useFreshInstallationSnapshot(readiness, enabled);
+	// Confirm the identity-pending ones with a normal check (one run of each
+	// binary); until then they are not known to be installed and get no card.
+	const identityPendingIds = useMemo(() => (readiness.data?.agents ?? []).filter(identityPending).map((agent) => agent.id), [readiness.data]);
+	useEnsureAgentReadiness({ agentIds: identityPendingIds, enabled: installationKnown && identityPendingIds.length > 0, retryOnError: true });
 	const installed = useMemo(() => installedAgentIds(readiness.data), [readiness.data]);
-	const advisories = useHarnessUpdates(installed, undefined, readinessComplete && !readiness.isError);
+	const advisories = useHarnessUpdates(installed, undefined, installationKnown && !readiness.isError);
+	const updateCandidates = AGENT_OPTIONS.filter((id) => installed.has(id) && hasConfirmedHarnessUpdate(advisories.get(id)?.data));
+	const candidatesChecked = useEnsureAgentReadiness({ agentIds: updateCandidates, enabled: installationKnown && updateCandidates.length > 0, retryOnError: true });
+	const readinessComplete = installationKnown && (updateCandidates.length === 0 || candidatesChecked);
 	const installers = useQuery({ ...installersQueryOptions(), enabled });
 	const authPlans = useAgentAuthPlans(undefined, enabled);
 	const jobs = useQuery({ ...installJobsQueryOptions(), enabled });

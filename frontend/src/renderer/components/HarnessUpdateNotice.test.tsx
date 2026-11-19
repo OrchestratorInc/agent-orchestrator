@@ -379,7 +379,7 @@ describe("startup harness update notice", () => {
 		expect(apiClient.POST).not.toHaveBeenCalled();
 	});
 
-	it("waits for ensure completion even with cached installation and update evidence", async () => {
+	it("waits for a fresh check of the updatable harness even with cached installation and update evidence", async () => {
 		const pending = deferred<{ data: AgentReadiness }>();
 		vi.mocked(apiClient.POST).mockReturnValueOnce(pending.promise as never);
 		const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
@@ -387,9 +387,10 @@ describe("startup harness update notice", () => {
 		client.setQueryData(["agent-readiness"], readiness);
 		client.setQueryData(updateAdvisoryQueryKey("claude-code"), { status: "behind_latest", currentVersion: "2.1.291", latestVersion: "2.1.292", maintenanceMethod: "official-installer" });
 		mountNotice(true, client);
-		await waitFor(() => expect(apiClient.POST).toHaveBeenCalled());
+		// Cached installation data never opens the gate: the snapshot is read again first.
+		await waitFor(() => expect(apiClient.GET).toHaveBeenCalledWith("/api/v1/agents/readiness"));
+		await waitFor(() => expect(apiClient.POST).toHaveBeenCalledWith("/api/v1/agents/readiness/ensure", { body: { agentIds: ["claude-code"], purpose: "display" } }));
 		expect(screen.queryByRole("region")).toBeNull();
-		expect((vi.mocked(apiClient.GET).mock.calls as unknown[][]).some(([path]) => path === "/api/v1/agents/{agent}/update-advisory")).toBe(false);
 		await act(async () => pending.resolve({ data: readiness }));
 		expect(await screen.findByRole("article", { name: "Claude Code" })).toBeInTheDocument();
 	});
@@ -398,8 +399,69 @@ describe("startup harness update notice", () => {
 		vi.mocked(apiClient.POST).mockRejectedValue(new Error("readiness unavailable"));
 		const { client } = mountNotice();
 		await waitFor(() => expect(client.getQueryData(["agent-readiness"])).toBeDefined());
+		await waitFor(() => expect(apiClient.POST).toHaveBeenCalledWith("/api/v1/agents/readiness/ensure", { body: { agentIds: ["claude-code"], purpose: "display" } }));
 		expect(screen.queryByRole("region")).toBeNull();
+	});
+
+	it("checks sign-in only for harnesses with an update to offer", async () => {
+		const readiness = { agents: [agentReadiness("claude-code", "Claude Code"), agentReadiness("codex", "Codex"), agentReadiness("cursor", "Cursor", { installation: "not_installed" })] };
+		const get = vi.mocked(apiClient.GET).getMockImplementation()!;
+		vi.mocked(apiClient.GET).mockImplementation(async (path, options) => {
+			if (path === "/api/v1/agents/readiness") return { data: readiness } as never;
+			if (path === "/api/v1/agents/{agent}/update-advisory") {
+				const agent = (options as { params: { path: { agent: string } } }).params.path.agent;
+				return { data: agent === "claude-code"
+					? { agentId: agent, status: "behind_latest", currentVersion: "2.1.291", latestVersion: "2.1.292", maintenanceMethod: "official-installer" }
+					: { agentId: agent, status: "current", currentVersion: "1.0.0", latestVersion: "1.0.0" } } as never;
+			}
+			return (get as (path: string, options: unknown) => Promise<never>)(path, options);
+		});
+		vi.mocked(apiClient.POST).mockResolvedValue({ data: readiness } as never);
+		mountNotice();
+		expect(await screen.findByRole("region", { name: "Agent updates available" })).toBeInTheDocument();
+		const ensures = (vi.mocked(apiClient.POST).mock.calls as unknown[][]).filter(([path]) => path === "/api/v1/agents/readiness/ensure");
+		expect(ensures.map(([, options]) => (options as { body: { agentIds: string[] } }).body.agentIds)).toEqual([["claude-code"]]);
+	});
+
+	it("confirms an identity-pending install so its update still shows", async () => {
+		// Goose and Hermes are found on PATH, but only a run of the binary confirms
+		// them, so the daemon's process-free launch pass leaves them "unknown".
+		const pendingGoose = agentReadiness("goose", "Goose", { installation: "unknown" });
+		pendingGoose.installation.reasonCode = "install_identity_pending";
+		const confirmedGoose = agentReadiness("goose", "Goose");
+		const get = vi.mocked(apiClient.GET).getMockImplementation()!;
+		vi.mocked(apiClient.GET).mockImplementation(async (path, options) => {
+			if (path === "/api/v1/agents/readiness") return { data: { agents: [pendingGoose] } } as never;
+			if (path === "/api/v1/agents/installers") return { data: { agents: [{ agentId: "goose", methods: [{ id: "official-installer", available: true, updateAvailable: true }] }] } } as never;
+			if (path === "/api/v1/agents/auth-plans") return { data: { plans: [] } } as never;
+			if (path === "/api/v1/agents/{agent}/update-advisory") {
+				const agent = (options as { params: { path: { agent: string } } }).params.path.agent;
+				return { data: { agentId: agent, status: "behind_latest", currentVersion: "1.0.0", latestVersion: "1.1.0", maintenanceMethod: "official-installer" } } as never;
+			}
+			return (get as (path: string, options: unknown) => Promise<never>)(path, options);
+		});
+		vi.mocked(apiClient.POST).mockResolvedValue({ data: { agents: [confirmedGoose] } } as never);
+		mountNotice();
+		expect(await screen.findByRole("region", { name: "Agent updates available" }, { timeout: 4000 })).toBeInTheDocument();
+		const ensures = (vi.mocked(apiClient.POST).mock.calls as unknown[][]).filter(([path]) => path === "/api/v1/agents/readiness/ensure");
+		expect(ensures.map(([, options]) => (options as { body: { agentIds: string[] } }).body.agentIds)).toContainEqual(["goose"]);
+	});
+
+	it("waits for the daemon's installation pass before asking for updates", async () => {
+		let reads = 0;
+		const get = vi.mocked(apiClient.GET).getMockImplementation()!;
+		vi.mocked(apiClient.GET).mockImplementation(async (path, options) => {
+			if (path === "/api/v1/agents/readiness") {
+				reads += 1;
+				return { data: { agents: [agentReadiness("claude-code", "Claude Code", { installation: reads < 3 ? "unknown" : "installed" })] } } as never;
+			}
+			return (get as (path: string, options: unknown) => Promise<never>)(path, options);
+		});
+		mountNotice();
+		await waitFor(() => expect(reads).toBeGreaterThan(0));
 		expect((vi.mocked(apiClient.GET).mock.calls as unknown[][]).some(([path]) => path === "/api/v1/agents/{agent}/update-advisory")).toBe(false);
+		expect(await screen.findByRole("region", { name: "Agent updates available" }, { timeout: 4000 })).toBeInTheDocument();
+		expect(reads).toBeGreaterThanOrEqual(3);
 	});
 
 	it.each(["unknown", "configured"] as const)("does not mistake %s authentication for a required login", async (authentication) => {

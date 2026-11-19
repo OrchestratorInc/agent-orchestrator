@@ -24,7 +24,7 @@ func TestHarnessUpdateWarmupWaitsForReadinessAndChecksOnlyInstalledHarnesses(t *
 			func(context.Context) (agentsvc.Readiness, error) {
 				close(readinessCalled)
 				return agentsvc.Readiness{Agents: []domain.AgentReadinessSnapshot{
-					{ID: "codex", Installation: domain.AgentInstallationObservation{State: domain.AgentInstallationInstalled}},
+					{ID: "codex", UsageCount: 1, Installation: domain.AgentInstallationObservation{State: domain.AgentInstallationInstalled}},
 					{ID: "claude-code", Installation: domain.AgentInstallationObservation{State: domain.AgentInstallationNotInstalled}},
 					{ID: "cursor", Installation: domain.AgentInstallationObservation{State: domain.AgentInstallationUnknown}},
 					{ID: "unregistered", Installation: domain.AgentInstallationObservation{State: domain.AgentInstallationInstalled}},
@@ -109,7 +109,8 @@ func TestHarnessUpdateWatchRechecksEveryIntervalWithFreshLookups(t *testing.T) {
 		refresh bool
 	}
 	passes := make(chan pass, 16)
-	installed := []domain.AgentReadinessSnapshot{{ID: "codex", Installation: domain.AgentInstallationObservation{State: domain.AgentInstallationInstalled}}}
+	// codex has sessions, so the launch pass checks it; the periodic pass checks every installed harness.
+	installed := []domain.AgentReadinessSnapshot{{ID: "codex", UsageCount: 1, Installation: domain.AgentInstallationObservation{State: domain.AgentInstallationInstalled}}}
 	var mu sync.Mutex
 	done := make(chan struct{})
 	go func() {
@@ -158,5 +159,32 @@ func TestHarnessUpdateWatchRechecksEveryIntervalWithFreshLookups(t *testing.T) {
 	case <-done:
 	case <-time.After(time.Second):
 		t.Fatal("periodic update checks did not stop on shutdown")
+	}
+}
+
+func TestHarnessUpdateLaunchPassSkipsHarnessesWithoutSessions(t *testing.T) {
+	var checked []systeminstall.Target
+	readiness := func(context.Context) (agentsvc.Readiness, error) {
+		return agentsvc.Readiness{Agents: []domain.AgentReadinessSnapshot{
+			{ID: "codex", UsageCount: 2, Installation: domain.AgentInstallationObservation{State: domain.AgentInstallationInstalled}},
+			{ID: "claude-code", Installation: domain.AgentInstallationObservation{State: domain.AgentInstallationInstalled}},
+		}}, nil
+	}
+	var mu sync.Mutex
+	check := func(_ context.Context, target systeminstall.Target, _ bool) (systeminstall.UpdateAdvisory, error) {
+		mu.Lock()
+		defer mu.Unlock()
+		checked = append(checked, target)
+		return systeminstall.UpdateAdvisory{}, nil
+	}
+	log := slog.New(slog.NewTextHandler(io.Discard, nil))
+	checkInstalledHarnessUpdates(context.Background(), false, readiness, check, log)
+	if len(checked) != 1 || checked[0] != systeminstall.TargetCodex {
+		t.Fatalf("launch pass checked %v, want only codex", checked)
+	}
+	checked = nil
+	checkInstalledHarnessUpdates(context.Background(), true, readiness, check, log)
+	if len(checked) != 2 {
+		t.Fatalf("periodic pass checked %v, want both installed harnesses", checked)
 	}
 }

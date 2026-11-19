@@ -157,3 +157,31 @@ export function useProjectAgentDefaults(enabled: boolean, hostId?: string): () =
 	useEnsureAgentReadiness({ enabled, hostId });
 	return useCallback(() => loadProjectAgentDefaults(queryClient, hostId), [queryClient, hostId]);
 }
+
+/**
+ * The agents a return to the app re-checks: every agent with sessions, every
+ * agent not confirmed installed (the presence check runs no process), and every
+ * installed agent whose last sign-in check did not pass, since the user may have
+ * just fixed it in a terminal. An installed agent that is unused and signed in,
+ * or never checked, waits for a picker or a launch to ask, so focus never sets
+ * off a check of every agent on the machine. The daemon's display TTL decides
+ * which of these actually run.
+ */
+export function focusReadinessIds(agents: AgentReadinessSnapshot[]): string[] {
+	return agents
+		.filter((agent) =>
+			agent.usageCount > 0 ||
+			agent.installation.state !== "installed" ||
+			(agent.authentication.checkedAt != null && (agent.authentication.state === "unauthorized" || agent.authentication.state === "unknown")),
+		)
+		.map((agent) => agent.id);
+}
+
+/** The renderer's readiness snapshot, fetched once (no checks run) when it holds none. */
+export function loadAgentReadinessSnapshot(queryClient: QueryClient, hostId?: string): Promise<AgentReadiness> {
+	return queryClient.ensureQueryData({
+		...agentReadinessQueryOptions,
+		queryKey: agentReadinessQueryKeyForHost(hostId),
+		queryFn: () => fetchAgentReadiness(hostId),
+	});
+}
