@@ -137,6 +137,9 @@ type conversation struct {
 	// requireAdvertised refuses a config option the session did not advertise
 	// instead of sending it. See Config.RequireAdvertisedOptions.
 	requireAdvertised bool
+	// reapplySettings makes the next applyTurnSettings send every setting even
+	// where the catalog already names it current. See markSettingsApplied.
+	reapplySettings   bool
 	permissionMode    ports.PermissionMode
 	permissionFor     PermissionPolicy
 	initialPermission ports.PermissionMode
@@ -627,12 +630,17 @@ func (c *conversation) checkModelSwitch(ctx context.Context, model string) error
 // A live reconnect rebuilds the catalog from the host's session/new snapshot.
 // That snapshot predates initial_settings and every change since, so it names
 // the agent's launch defaults as current while the provider process is still
-// in the state AO last applied (#6758). The restored settings are that state;
-// a value the catalog does not offer is left where the snapshot had it, as
-// applyTurnSettings would leave it.
+// in the state AO last applied (#6758). The restored settings normally are that
+// state; a value the catalog does not offer is left where the snapshot had it,
+// as applyTurnSettings would leave it.
+//
+// They can also be a choice stored after the last turn and never sent: the
+// provider only receives settings with a turn. So nothing marked here counts
+// as acknowledged, and the next turn sends every setting again.
 func (c *conversation) markSettingsApplied(settings ports.ChatTurnSettings) {
 	c.mu.Lock()
 	modeFor, optionsFor := c.modeFor, c.optionsFor
+	c.reapplySettings = true
 	c.mu.Unlock()
 	if modeFor != nil && settings.Approval != "" {
 		if mode := modeFor(settings.Approval); mode != "" {
@@ -645,8 +653,16 @@ func (c *conversation) markSettingsApplied(settings ports.ChatTurnSettings) {
 		return
 	}
 	for _, option := range optionsFor(settings) {
-		if offered, known := c.configOptionOffers(option.ID, option.Value); known && offered {
-			c.applyAcceptedConfigOption(option.ID, ports.ChatConfigOptionValue{Select: option.Value})
+		value := option.Value
+		offered, known := c.configOptionOffers(option.ID, value)
+		if known && !offered && option.Name != "" {
+			if named := c.configOptionValueNamed(option.ID, option.Name); named != "" {
+				value = named
+				offered, known = c.configOptionOffers(option.ID, value)
+			}
+		}
+		if known && offered {
+			c.applyAcceptedConfigOption(option.ID, ports.ChatConfigOptionValue{Select: value})
 		}
 	}
 }
@@ -663,6 +679,7 @@ func (c *conversation) applyTurnSettings(ctx context.Context, settings ports.Cha
 	legacyModel := c.legacyModel && !c.modelConfigOption
 	legacyMode := c.legacyMode
 	configOptions := cloneConfigOptions(c.configOptions)
+	reapply := c.reapplySettings
 	c.mu.Unlock()
 	if sessionID == "" {
 		return errors.New("ACP session is not open")
@@ -677,8 +694,9 @@ func (c *conversation) applyTurnSettings(ctx context.Context, settings ports.Cha
 		options = optionsFor(settings)
 	}
 	// A setting the session already has is skipped (some agents take seconds
-	// per change) unless session/set_model made the list stale.
-	catalogStale := false
+	// per change) unless session/set_model made the list stale, or a live
+	// reconnect named current values the provider never acknowledged.
+	catalogStale := reapply
 	if legacyModel && settings.Model != "" {
 		// A binding may name the model differently from the turn settings.
 		model := settings.Model
@@ -715,7 +733,7 @@ func (c *conversation) applyTurnSettings(ctx context.Context, settings ports.Cha
 		switch {
 		case modelSkipped:
 			c.log.Warn("ACP session does not offer the chosen model; keeping its default", "model", settings.Model)
-		case c.configOptionCurrent("model") == model:
+		case !catalogStale && c.configOptionCurrent("model") == model:
 			c.applyAcceptedConfigOption("model", ports.ChatConfigOptionValue{Select: model})
 		default:
 			if err := c.legacyWire.setModel(ctx, sessionID, model); err != nil {
@@ -812,11 +830,14 @@ func (c *conversation) applyTurnSettings(ctx context.Context, settings ports.Cha
 			}
 		}
 	}
+	c.mu.Lock()
 	if settings.Approval != "" {
-		c.mu.Lock()
 		c.permissionMode = ports.NormalizePermissionMode(effectiveApproval)
-		c.mu.Unlock()
 	}
+	if reapply {
+		c.reapplySettings = false
+	}
+	c.mu.Unlock()
 	return nil
 }
 
