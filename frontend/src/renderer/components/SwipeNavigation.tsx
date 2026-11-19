@@ -189,7 +189,9 @@ export function SwipeNavigation({
 			gesture = null;
 			if (!ended) return;
 			const claimed = swipeClaimed();
-			if (ended.mode === "owned" || claimed) lastOwnedEndAt = performance.now();
+			// Content that scrolled, even on the swipe's only event, took it.
+			const scrolled = ended.scrollers.some(([el, start]) => el.scrollLeft !== start);
+			if (ended.mode === "owned" || claimed || scrolled) lastOwnedEndAt = performance.now();
 			// A flick whose deciding event never bubbled back to the window.
 			if (ended.flick) {
 				if (!claimed) navigate(ended.offset);
@@ -197,7 +199,7 @@ export function SwipeNavigation({
 			}
 			if (ended.mode !== "tracking") return;
 			release();
-			if (claimed || ended.scrollers.some(([el, start]) => el.scrollLeft !== start)) return;
+			if (claimed || scrolled) return;
 			navigate(ended.offset);
 		};
 
@@ -208,7 +210,8 @@ export function SwipeNavigation({
 		const afterWheel = () => {
 			if (!gesture) return;
 			const taken = swipeClaimed();
-			if (taken && (gesture.mode === "pending" || gesture.mode === "tracking")) {
+			// Including a flick decided on this event: its momentum tail stays owned.
+			if (taken && gesture.mode !== "owned") {
 				gesture.mode = "owned";
 				release();
 			}

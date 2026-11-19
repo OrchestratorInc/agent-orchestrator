@@ -442,6 +442,26 @@ describe("SwipeNavigation", () => {
 			swipe(claimer, [...drag(-30, 5), [-27, 0], [-24, 0], [-21, 0], [-18, 0]], 0);
 			expect(history.back).not.toHaveBeenCalled();
 			fingers("up");
+			// Its momentum, arriving as a new scroll over plain content, stays the claimer's.
+			fingers("down");
+			swipe(getByTestId("pane"), drag(-20, 10), 0);
+			fingers("up");
+			expect(history.back).not.toHaveBeenCalled();
+		});
+
+		it("keeps the momentum of a swipe that scrolled content on its only event", () => {
+			const { getByTestId } = render(<Harness><div data-testid="scroller" style={{ overflowX: "auto" }} /></Harness>);
+			const scroller = getByTestId("scroller");
+			Object.defineProperties(scroller, {
+				scrollWidth: { value: 800 }, clientWidth: { value: 400 }, scrollLeft: { value: 200, writable: true },
+			});
+			fingers("down");
+			swipe(scroller, [[-150, 0]], 0);
+			scroller.scrollLeft = 50;
+			fingers("up");
+			fingers("down");
+			swipe(getByTestId("pane"), drag(-20, 10), 0);
+			fingers("up");
 			expect(history.back).not.toHaveBeenCalled();
 		});
 
