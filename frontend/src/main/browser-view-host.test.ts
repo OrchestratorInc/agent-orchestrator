@@ -7335,16 +7335,26 @@ describe("agent and person tabs", () => {
 			release = resolve;
 		});
 		runAction.mockImplementation(async (sessionId, action, args, provider, signal) => {
-			if (action === "tab-select") await held;
+			if (action === "tab-close") await held;
 			return original(sessionId, action, args, provider, signal);
 		});
 
-		// The click is asked for with the agent's tab in front, then waits while
-		// agent-browser is pointed at that tab; meanwhile the person switches away.
+		// The person closes the agent's other tab: the close holds the native queue.
+		const closing = invoke("browser:closeTab", { viewId, tabId: "t1" });
+		await vi.waitFor(() => expect(runAction.mock.calls.some(([, action]) => action === "tab-close")).toBe(true));
+		// The click is asked for with the agent's tab in front: past the first
+		// check, it waits in the queue behind the close.
+		let settled = false;
 		const clicking = host.execute("sess-1", "click", { ref: "e2", human: true });
-		await vi.waitFor(() => expect(runAction.mock.calls.some(([, action]) => action === "tab-select")).toBe(true));
-		await invoke("browser:selectTab", { viewId, tabId: "t1" });
+		void clicking.catch(() => undefined).finally(() => {
+			settled = true;
+		});
+		await new Promise((resolve) => setTimeout(resolve, 20));
+		expect(settled).toBe(false);
+		// Meanwhile the person opens a tab of theirs, in front.
+		await invoke("browser:openTab", { viewId, url: "https://mine.example.test/" });
 		release();
+		await closing;
 
 		await expect(clicking).rejects.toMatchObject({ code: "BROWSER_PANEL_HIDDEN" });
 		expect(runAction.mock.calls.filter(([, action]) => action === "click")).toEqual([]);
@@ -7396,6 +7406,47 @@ describe("agent and person tabs", () => {
 		expect(views[2]!.webContents.loadURL).not.toHaveBeenCalled();
 	});
 
+	it("keeps the last preview's tab to clear when a preview address is rejected", async () => {
+		const { host, invoke, views, viewId } = await open();
+		await invoke("browser:navigate", { viewId, url: "https://mine.example.test/" });
+		await invoke("browser:navigate", { viewId, url: "http://localhost:3000/", preview: true });
+		await host.execute("sess-1", "tab-new", { url: "https://agent.example.test/work" });
+		await expect(invoke("browser:navigate", { viewId, url: "file:///etc/hosts", preview: true })).rejects.toThrow();
+
+		await invoke("browser:clear", viewId);
+		expect(views[1]!.webContents.getURL()).toBe("about:blank");
+		expect(views[2]!.webContents.getURL()).toBe("https://agent.example.test/work");
+	});
+
+	it("can clear the preview again after a clear that failed", async () => {
+		const { invoke, views, viewId } = await open();
+		await invoke("browser:navigate", { viewId, url: "https://mine.example.test/" });
+		await invoke("browser:navigate", { viewId, url: "http://localhost:3000/", preview: true });
+		views[1]!.webContents.loadURL.mockRejectedValueOnce(new Error("load failed"));
+		await expect(invoke("browser:clear", viewId)).rejects.toThrow();
+		expect(views[1]!.webContents.getURL()).toBe("http://localhost:3000/");
+
+		await invoke("browser:clear", viewId);
+		expect(views[1]!.webContents.getURL()).toBe("about:blank");
+	});
+
+	it("leaves a site the agent opened in the preview's tab alone", async () => {
+		const { host, invoke, views, viewId } = await open();
+		await invoke("browser:navigate", { viewId, url: "https://mine.example.test/" });
+		await invoke("browser:navigate", { viewId, url: "http://localhost:3000/", preview: true });
+		// Within the preview app, it is still the preview.
+		await host.execute("sess-1", "open", { url: "http://localhost:3000/settings" });
+		await invoke("browser:clear", viewId);
+		expect(views[1]!.webContents.getURL()).toBe("about:blank");
+
+		await invoke("browser:navigate", { viewId, url: "http://localhost:3000/", preview: true });
+		await host.execute("sess-1", "open", { url: "https://agent.example.test/research" });
+		views[1]!.webContents.loadURL.mockClear();
+		await invoke("browser:clear", viewId);
+		expect(views[1]!.webContents.loadURL).not.toHaveBeenCalled();
+		expect(views[1]!.webContents.getURL()).toBe("https://agent.example.test/research");
+	});
+
 	it("reports a click that closes the agent's only tab as done, without turning to the person's tab", async () => {
 		const { host, invoke, runtime, views, viewId, tabs } = await open();
 		await host.execute("sess-1", "open", { url: "https://agent.example.test/" });
@@ -7425,6 +7476,39 @@ describe("agent and person tabs", () => {
 			navigation: { status: "observed" },
 		});
 		expect((await tabs()).tabs.map((tab) => tab.id)).toEqual(["t2"]);
+	});
+
+	it("reports a postcondition as unobservable when the click closed the agent's only tab", async () => {
+		const { host, invoke, runtime, views, viewId } = await open();
+		await host.execute("sess-1", "open", { url: "https://agent.example.test/" });
+		await invoke("browser:openTab", { viewId, url: "https://mine.example.test/" });
+		const runAction = vi.mocked(runtime.runAction);
+		const original = runAction.getMockImplementation()!;
+		runAction.mockImplementation(async (sessionId, action, args, provider, signal) => {
+			if (action === "snapshot")
+				return { snapshot: '- button "Done" [ref=e2]', refs: { e2: { role: "button", name: "Done" } } };
+			if (action === "wait") throw { code: "TIMEOUT", message: "not yet" };
+			if (action === "click") {
+				const page = views[0] as unknown as { webContents?: unknown; listeners: Map<string, () => void> };
+				const destroyed = page.listeners.get("destroyed")!;
+				page.webContents = undefined;
+				destroyed();
+				return {};
+			}
+			return original(sessionId, action, args, provider, signal);
+		});
+
+		const result = await host.execute("sess-1", "act", {
+			instruction: "click Done",
+			postcondition: { kind: "url", value: "https://agent.example.test/done", timeoutMs: 50 },
+		});
+		expect(result).toMatchObject({
+			outcome: "matched",
+			inputDispatched: true,
+			tabClosed: true,
+			postcondition: { status: "unobservable", kind: "url", reason: "tab-closed" },
+		});
+		expect(runAction.mock.calls.filter(([, action]) => action === "wait").length).toBeLessThanOrEqual(1);
 	});
 
 	it("counts the person's click in one of the agent's tabs while the agent's input goes to another", async () => {

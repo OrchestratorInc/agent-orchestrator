@@ -744,9 +744,10 @@ type BrowserSessionEntry = {
   // The tab the agent's commands act on, whichever tab is in front
   // (activeTabId is the person's view). Unset until the agent has a tab.
   agentTabId?: string;
-  // The tab the last preview loaded in (`ao preview`), which `ao preview
-  // clear` blanks. Live only while that same tab is still open (livePreviewTab).
-  previewTab?: BrowserEntry;
+  // The tab the last preview loaded in (`ao preview`), and the preview's
+  // origin, which `ao preview clear` blanks. Live only while that same tab is
+  // open and still on the preview's origin (livePreviewTab).
+  previewTab?: { entry: BrowserEntry; origin: string | undefined };
   // Agent browser pages whose tabs closed here: they are closing, so the
   // agent tab sync must not bring them back meanwhile. A page a person closed
   // (closePage) stays closed for as long as reports still list it.
@@ -3251,10 +3252,14 @@ export function createBrowserViewHost(
     return { viewId, revision, rect: session.bounds, visible: true };
   };
 
-  // The tab the last preview loaded in, while it is still open.
+  // The tab the last preview loaded in, while it is still open and showing
+  // the preview: a page of another site there (the agent opened one) is not
+  // the preview, and is never cleared as one.
   const livePreviewTab = (session: BrowserSessionEntry): BrowserEntry | undefined => {
-    const entry = session.previewTab;
-    return entry && session.tabs.get(entry.tabId) === entry ? entry : undefined;
+    const preview = session.previewTab;
+    if (!preview || session.tabs.get(preview.entry.tabId) !== preview.entry) return undefined;
+    const origin = originOf(preview.entry.view.webContents.getURL());
+    return origin !== undefined && origin === preview.origin ? preview.entry : undefined;
   };
 
   const claimForPerson = (session: BrowserSessionEntry, entry: BrowserEntry): void => {
@@ -3282,8 +3287,10 @@ export function createBrowserViewHost(
         const entry = await ensureAgentTab(session);
         if (session.activeTabId !== entry.tabId && !personInFront(session))
           activateTab(session, entry.tabId);
-        session.previewTab = entry;
         const state = await navigateEntry(entry, url);
+        // Recorded once the preview has taken the tab: a rejected address
+        // leaves the last preview's tab as the one to clear.
+        session.previewTab = { entry, origin: originOf(normalizeBrowserURL(url).href) };
         if (session.activeTabId === entry.tabId) return state;
         // Loaded behind the person's tab: its tab shows it is new to them.
         entry.unseen = true;
@@ -3298,7 +3305,7 @@ export function createBrowserViewHost(
       // An address typed into the session's unused first tab makes it theirs.
       claimForPerson(session, entry);
       // Typed over the preview: there is no preview here to clear any more.
-      if (session.previewTab === entry) session.previewTab = undefined;
+      if (session.previewTab?.entry === entry) session.previewTab = undefined;
       return navigateEntry(entry, url);
     });
   };
@@ -3385,7 +3392,6 @@ export function createBrowserViewHost(
       // preview is in the person's tab behind it (where the renderer's
       // showPreview put it), which is blanked there.
       const previewTab = livePreviewTab(session);
-      session.previewTab = undefined;
       const entry =
         active.agentTab !== undefined
           ? [...session.tabs.values()].find(
@@ -3407,6 +3413,8 @@ export function createBrowserViewHost(
       });
       await entry.ready;
       entry.view.webContents.clearHistory();
+      // Forgotten only once cleared, so a clear that failed can be retried.
+      if (session.previewTab?.entry === entry) session.previewTab = undefined;
       return pushNavState(options, active);
     });
   };
@@ -4901,8 +4909,9 @@ export function createBrowserViewHost(
 				setAgentTab(session, entry.tabId);
 				reframe(session, entry);
 			}
-			session.previewTab = entry;
-			await navigateEntry(entry, normalizeAgentBrowserURL(target));
+			const href = normalizeAgentBrowserURL(target);
+			await navigateEntry(entry, href);
+			session.previewTab = { entry, origin: originOf(href) };
 			emitLiveState(session);
 		});
 	}
@@ -5268,7 +5277,14 @@ export function createBrowserViewHost(
                 nativeArgsForRef(candidate.ref),
               );
               inputWasDispatched = true;
-              const observed = postcondition
+              // The click closed its own tab and the agent has no other: there
+              // is no page left to watch for the postcondition.
+              const noTargetLeft =
+                session.tabs.get(actionEntry.tabId) !== actionEntry &&
+                (session.agentTabId === undefined || !session.tabs.has(session.agentTabId));
+              const observed = postcondition && noTargetLeft
+                ? { status: "unobservable", kind: postcondition.kind, reason: "tab-closed" }
+                : postcondition
                 ? await observeActionPostcondition(
                     postcondition,
                     session,

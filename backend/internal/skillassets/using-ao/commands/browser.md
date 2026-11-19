@@ -67,8 +67,9 @@ agent sharing this session — run `--delta --full` instead of guessing.
 does **not** prove the application accepted the action. For consequential
 controls, request one postcondition with `--expect-url`, `--expect-text`,
 `--expect-dialog`, `--expect-navigation`, or `--expect-dom-change`. The result
-then reports `satisfied`, `already-satisfied`, `unmet`, or `cancelled`
-separately and includes the before/after URL and document/navigation
+then reports `satisfied`, `already-satisfied`, `unmet`, `cancelled`, or
+`unobservable` (the action closed the agent's only tab, so nothing is left to
+watch) separately and includes the before/after URL and document/navigation
 generations. `already-satisfied` means the requested URL or text existed before
 dispatch, so it cannot be attributed to this action. Orchestrator never retries merely
 because an application postcondition is unknown or unmet.
