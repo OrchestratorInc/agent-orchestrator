@@ -1,6 +1,6 @@
 import { useState } from "react";
 import { act, create, type ReactTestInstance, type ReactTestRenderer } from "react-test-renderer";
-import { afterEach, beforeEach, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 Object.assign(globalThis, { IS_REACT_ACT_ENVIRONMENT: true });
 const { native } = vi.hoisted(() => {
@@ -16,7 +16,7 @@ vi.mock("@expo/ui/swift-ui", () => ({
 vi.mock("@expo/ui/swift-ui/modifiers", () => ({
 	...Object.fromEntries([
 		"accessibilityAddTraits", "accessibilityHidden", "buttonStyle", "contentShape", "controlSize", "disabled", "fixedSize", "font", "foregroundStyle", "frame",
-		"multilineTextAlignment", "padding", "textFieldStyle", "tint",
+		"lineLimit", "minimumScaleFactor", "multilineTextAlignment", "padding", "textFieldStyle", "tint",
 	].map((name) => [name, (...args: unknown[]) => ({ [name]: args })])),
 	shapes: { rectangle: () => ({ shape: "rectangle" }) },
 }));
@@ -25,9 +25,9 @@ vi.mock("../haptics", () => ({ haptics: { select: vi.fn(), tap: vi.fn() } }));
 vi.mock("../ThemeProvider", () => ({ useTheme: () => ({}), useThemeState: () => ({ scheme: "light" }) }));
 
 import { Host } from "@expo/ui";
-import { Button, Text, TextField } from "@expo/ui/swift-ui";
+import { Button, HStack, Spacer, Text, TextField } from "@expo/ui/swift-ui";
 import { haptics } from "../haptics";
-import { ElicitationAction, ElicitationTextField } from "./elicitation-native-controls.ios";
+import { ElicitationAction, ElicitationActionRow, ElicitationTextField } from "./elicitation-native-controls.ios";
 
 let renderer: ReactTestRenderer | undefined;
 let resetValue: (value: string | number) => void;
@@ -194,4 +194,56 @@ it("reports the field taking focus", () => {
 	act(() => renderer!.root.findByType(TextField).props.onFocusChange(true));
 	act(() => renderer!.root.findByType(TextField).props.onFocusChange(false));
 	expect(onFocus).toHaveBeenCalledOnce();
+});
+
+// An approval's decisions share one line, whatever their labels or the text
+// size: one native row lays them out, and a crowded row scales labels down a
+// little (then truncates) rather than wrapping the last decision under the rest.
+describe("action row", () => {
+	const decisions = () => [
+		{ key: "reject", label: "Deny", onPress: vi.fn() },
+		{ key: "allow", label: "Allow Once", primary: true, onPress: vi.fn() },
+		{ key: "always", label: "Always Allow", onPress: vi.fn() },
+	];
+
+	it("lays every decision out in one native row, right-aligned", () => {
+		act(() => { renderer = create(<ElicitationActionRow actions={decisions()} reportsOutcome />); });
+		expect(renderer!.root.findAllByType(Host)).toHaveLength(1);
+		const row = renderer!.root.findByType(HStack);
+		const [spacer, ...buttons] = row.children as ReactTestInstance[];
+		expect(spacer.type).toBe(Spacer);
+		expect(spacer.props.minLength).toBe(0);
+		expect(buttons.map((button) => button.findByType(Text).props.children)).toEqual(["Deny", "Allow Once", "Always Allow"]);
+	});
+
+	// The answer choices' type: at the default size three large buttons then fit
+	// at one size, where body text had the longer labels scaled down unevenly.
+	it("keeps each label on one line at one size, scaling it before it would wrap", () => {
+		act(() => { renderer = create(<ElicitationActionRow actions={decisions()} reportsOutcome />); });
+		for (const label of renderer!.root.findAllByType(Text)) {
+			expect(modifier(label, "font")).toEqual([{ textStyle: "subheadline", weight: "semibold" }]);
+			expect(modifier(label, "lineLimit")).toEqual([1]);
+			expect(modifier(label, "minimumScaleFactor")).toEqual([0.7]);
+		}
+	});
+
+	it("draws the primary prominent and the rest bordered, all at least the 44pt target", () => {
+		act(() => { renderer = create(<ElicitationActionRow actions={decisions()} reportsOutcome />); });
+		const buttons = renderer!.root.findAllByType(Button);
+		expect(buttons.map((button) => modifier(button, "buttonStyle"))).toEqual([["bordered"], ["borderedProminent"], ["bordered"]]);
+		for (const button of buttons) expect(modifier(button, "controlSize")).toEqual(["large"]);
+	});
+
+	it("presses the decision tapped, buzzing only when the caller doesn't", () => {
+		const actions = decisions();
+		vi.mocked(haptics.tap).mockClear();
+		act(() => { renderer = create(<ElicitationActionRow actions={actions} reportsOutcome />); });
+		act(() => renderer!.root.findAllByType(Button)[2].props.onPress());
+		expect(actions[2].onPress).toHaveBeenCalledOnce();
+		expect(actions[0].onPress).not.toHaveBeenCalled();
+		expect(haptics.tap).not.toHaveBeenCalled();
+		act(() => renderer!.update(<ElicitationActionRow actions={actions} />));
+		act(() => renderer!.root.findAllByType(Button)[0].props.onPress());
+		expect(haptics.tap).toHaveBeenCalledOnce();
+	});
 });

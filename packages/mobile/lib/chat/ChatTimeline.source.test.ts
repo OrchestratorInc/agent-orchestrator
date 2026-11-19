@@ -217,7 +217,7 @@ describe("request cards in the timeline", () => {
 	it("buzz once, when an answer lands or fails", () => {
 		expect(approval).toMatch(/onDecide\(activity\.requestId \?\? "", decision\.id\)\s*\.then\(\(\) => haptics\.success\(\)\)/);
 		expect(approval).toMatch(/setSubmitError\(userFacingError\(cause\)\);\s*haptics\.error\(\);/);
-		expect(approval).toContain("primary={decision.id === primaryId} reportsOutcome");
+		expect(approval).toContain("primary: decision.id === primaryId,");
 		expect(input).toMatch(/await onResolve\(activity\.requestId, action, content\);\s*haptics\.success\(\);/);
 		expect(input).toMatch(/setSubmitError\(userFacingError\(cause\)\);\s*haptics\.error\(\);/);
 		for (const label of ['label="Cancel" reportsOutcome', '"Decline" : "Skip"} reportsOutcome', '"Open link"} primary reportsOutcome', "step.primaryLabel} primary reportsOutcome"]) {
@@ -238,9 +238,12 @@ describe("request cards in the timeline", () => {
 		expect(approval).not.toContain("index === 0");
 	});
 
-	// The actions are separate buttons, so they sit apart rather than touching.
-	it("space the approval actions apart", () => {
-		expect(source).toMatch(/approvalActions: \{[^}]*gap: space\.sm/);
+	// Deny, Allow Once and Always Allow stay on one line, whatever their labels
+	// or the text size: one native row lays them out, instead of a wrapping view.
+	it("keep the approval's decisions on one line", () => {
+		expect(approval).toContain("<ElicitationActionRow reportsOutcome actions={activity.decisions.map((decision) => ({");
+		expect(approval).not.toContain("<ElicitationAction ");
+		expect(source).not.toMatch(/approvalActions: \{[^}]*flexWrap/);
 	});
 
 	// The button sizes itself to its label; a width guessed from the label's

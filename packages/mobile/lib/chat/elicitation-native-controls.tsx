@@ -1,9 +1,9 @@
-import { Button, Checkbox, Column, Host, ListItem, OutlinedTextField, RadioButton, Text, TextButton, useNativeState } from "@expo/ui/jetpack-compose";
-import { fillMaxWidth, selectable, selectableGroup, testID, toggleable, width as fixedWidth } from "@expo/ui/jetpack-compose/modifiers";
+import { Button, Checkbox, Column, Host, ListItem, OutlinedTextField, RadioButton, Row, Spacer, Text, TextButton, useNativeState } from "@expo/ui/jetpack-compose";
+import { fillMaxWidth, selectable, selectableGroup, testID, toggleable, weight, width as fixedWidth } from "@expo/ui/jetpack-compose/modifiers";
 import { StyleSheet, View } from "react-native";
 import { haptics } from "../haptics";
 import { useTheme, useThemeState } from "../ThemeProvider";
-import { font, type } from "../tokens";
+import { font, space, type } from "../tokens";
 import { useNativeTextInput } from "../useNativeTextInput";
 import { useActionFit } from "./elicitationActionFit";
 
@@ -35,6 +35,12 @@ export type ElicitationActionProps = {
 	/** The caller owns the press's haptic: one when the work lands (success or error), or none for a step between questions. The press itself stays silent. */
 	reportsOutcome?: boolean;
 	onPress(): void;
+};
+export type ElicitationRowAction = { key: string; label: string; primary?: boolean; disabled?: boolean; onPress(): void };
+export type ElicitationActionRowProps = {
+	actions: ElicitationRowAction[];
+	/** As for ElicitationAction: the caller owns the press's haptic. */
+	reportsOutcome?: boolean;
 };
 
 export function ElicitationChoiceList({ choices, selected, multi, onChange }: ElicitationChoiceListProps) {
@@ -154,8 +160,43 @@ export function ElicitationAction({ label, primary, disabled, reportsOutcome, on
 	);
 }
 
+/**
+ * A request's decisions on one line, whatever their labels or the text size.
+ * One Compose row lays them out: the weighted spacer takes whatever they leave,
+ * so they sit at the end, and a row too short for them all ellipsizes a label
+ * instead of wrapping a decision under the rest.
+ */
+export function ElicitationActionRow({ actions, reportsOutcome }: ElicitationActionRowProps) {
+	const t = useTheme();
+	const { scheme } = useThemeState();
+	return (
+		<Host matchContents={{ vertical: true }} colorScheme={scheme} style={styles.row}>
+			<Row horizontalArrangement={{ spacedBy: space.sm }} verticalAlignment="center" modifiers={[fillMaxWidth()]}>
+				<Spacer modifiers={[weight(1)]} />
+				{actions.map((action) => {
+					const title = <Text maxLines={1} overflow="ellipsis" style={{ typography: "labelLarge", fontFamily: font.semibold, textAlign: "center" }}>{action.label}</Text>;
+					const onClick = () => {
+						if (!reportsOutcome) haptics.tap();
+						action.onPress();
+					};
+					return action.primary ? (
+						<Button key={action.key} onClick={onClick} enabled={!action.disabled} colors={{ containerColor: t.accent, contentColor: t.onAccent }}>
+							{title}
+						</Button>
+					) : (
+						<TextButton key={action.key} onClick={onClick} enabled={!action.disabled} colors={{ contentColor: t.accent }}>
+							{title}
+						</TextButton>
+					);
+				})}
+			</Row>
+		</Host>
+	);
+}
+
 const styles = StyleSheet.create({
 	// Spans the row behind the actions, unseen and untouchable: it only measures.
 	measure: { position: "absolute", left: 0, right: 0, top: 0, bottom: 0, opacity: 0 },
 	action: { maxWidth: "100%" },
+	row: { width: "100%" },
 });

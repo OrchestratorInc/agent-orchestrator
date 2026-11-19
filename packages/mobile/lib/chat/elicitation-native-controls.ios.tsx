@@ -10,6 +10,8 @@ import {
 	font,
 	foregroundStyle,
 	frame,
+	lineLimit,
+	minimumScaleFactor,
 	multilineTextAlignment,
 	padding,
 	textFieldStyle,
@@ -20,9 +22,9 @@ import { glassPanel } from "../glass";
 import { haptics } from "../haptics";
 import { secondaryForeground } from "../swiftUIStyles";
 import { useTheme, useThemeState } from "../ThemeProvider";
-import type { ElicitationActionProps, ElicitationChoiceListProps, ElicitationTextFieldProps } from "./elicitation-native-controls";
+import type { ElicitationActionProps, ElicitationActionRowProps, ElicitationChoiceListProps, ElicitationTextFieldProps } from "./elicitation-native-controls";
 import { useActionFit } from "./elicitationActionFit";
-import { iconSize, touchTarget } from "../tokens";
+import { iconSize, space, touchTarget } from "../tokens";
 import { useNativeTextInput } from "../useNativeTextInput";
 
 export function ElicitationChoiceList({ choices, selected, multi, onChange }: ElicitationChoiceListProps) {
@@ -131,4 +133,37 @@ export function ElicitationAction({ label, primary, disabled, reportsOutcome, on
 			})}
 		</Host>
 	</>;
+}
+
+/**
+ * A request's decisions on one line, whatever their labels or the text size.
+ * One SwiftUI row lays them out: the spacer takes whatever they leave, so they
+ * sit at the end, and a row too short for them all scales its labels down a
+ * little (then truncates) instead of wrapping a decision under the rest.
+ */
+export function ElicitationActionRow({ actions, reportsOutcome }: ElicitationActionRowProps) {
+	const t = useTheme();
+	const { scheme } = useThemeState();
+	return <Host matchContents={{ vertical: true }} style={{ width: "100%" }} colorScheme={scheme}>
+		<HStack spacing={space.sm}>
+			<Spacer minLength={0} />
+			{actions.map((action) => <Button
+				key={action.key}
+				onPress={() => {
+					if (!reportsOutcome) haptics.tap();
+					action.onPress();
+				}}
+				modifiers={[
+					// As ElicitationAction: one prominent action, bordered secondaries,
+					// and large, which is at least the 44pt target.
+					buttonStyle(action.primary ? "borderedProminent" : "bordered"),
+					controlSize("large"),
+					tint(action.primary ? t.accent : t.textSecondary),
+					disabledModifier(action.disabled),
+				]}
+			>
+				<Text modifiers={[font({ textStyle: "subheadline", weight: "semibold" }), lineLimit(1), minimumScaleFactor(0.7)]}>{action.label}</Text>
+			</Button>)}
+		</HStack>
+	</Host>;
 }
