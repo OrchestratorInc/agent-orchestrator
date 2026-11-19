@@ -114,6 +114,7 @@ export const ChatMarkdown = memo(function ChatMarkdown({ text, streaming = false
 	const styles = useThemedStyles(makeStyles);
 	const selectionColor = textSelectionColors(t).selectionColor;
 	const blocks = parseBlocks(text, { relativeImages: Boolean(resolveImage) });
+	const openFiles = Boolean(useFilesNavigation());
 	if (continuousSelection) {
 		// Native selection cannot cross sibling views. Keep each run of response text
 		// in one text surface; only a table breaks the run, because a grid cannot
@@ -140,7 +141,7 @@ export const ChatMarkdown = memo(function ChatMarkdown({ text, streaming = false
 		if (block.kind === "paragraph" || block.kind === "heading") {
 			// iOS needs RN Text for inline links so VoiceOver can focus them.
 			// Keep those blocks separate without splitting the surrounding prose.
-			if (Platform.OS === "ios" && hasInlineLink(block.text, styles)) {
+			if (Platform.OS === "ios" && hasInlineLink(block.text, styles, openFiles)) {
 				flushProse();
 				content.push(<SelectableInlineText key={content.length} value={block.text} selectionColor={selectionColor} style={block.kind === "heading" ? [styles.heading, block.level > 2 && styles.smallHeading] : styles.body} styles={styles} />);
 			} else prose.push(block);
@@ -201,8 +202,8 @@ export function splitRuns(blocks: MarkdownBlock[], splitImages: boolean, splitDi
 	return runs;
 }
 
-function hasInlineLink(value: string, styles: ReturnType<typeof makeStyles>): boolean {
-	return containsLink(inline(value, styles));
+function hasInlineLink(value: string, styles: ReturnType<typeof makeStyles>, openFiles: boolean): boolean {
+	return containsLink(inline(value, styles, true, undefined, openFiles));
 }
 
 /** Whether any of these nodes is a link, including one nested in emphasis. */
@@ -212,9 +213,10 @@ function containsLink(nodes: ReactNode[]): boolean {
 }
 
 function SelectableProseGroup({ blocks, selectionColor, styles }: { blocks: Array<Extract<MarkdownBlock, { kind: "paragraph" | "heading" }>>; selectionColor: string; styles: ReturnType<typeof makeStyles> }) {
+	const openFiles = Boolean(useFilesNavigation());
 	return <Text selectable uiTextView selectionColor={selectionColor} style={styles.body}>
 		{blocks.map((block, index) => <Text key={index} style={block.kind === "heading" ? [styles.heading, block.level > 2 && styles.smallHeading] : styles.body}>
-			{index > 0 ? <Text style={styles.proseGap}>{"\n\n"}</Text> : null}{inline(block.text, styles)}
+			{index > 0 ? <Text style={styles.proseGap}>{"\n\n"}</Text> : null}{inline(block.text, styles, true, undefined, openFiles)}
 		</Text>)}
 	</Text>;
 }
@@ -228,23 +230,25 @@ export function SelectableResponseText({ blocks, source, onSelect }: { blocks: A
 	const select = useCallback((selected: string) => onSelect ? onSelect(selected) : source ? addToChat?.(selected, source) : addToChat?.(selected), [addToChat, onSelect, source]);
 	const onLayout = useAndroidResponseSelection(enabled ? select : null);
 	const styles = useThemedStyles(makeStyles);
+	const openFiles = Boolean(useFilesNavigation());
 	const selectionColor = textSelectionColors(t).selectionColor;
 	return <Text selectable uiTextView selectionColor={selectionColor} style={styles.body} onLayout={onLayout} addToChatEnabled={enabled} onAddToChat={(event) => select(event.nativeEvent.text)}>
 		{blocks.map((block, index) => {
 			const separator = index > 0 ? "\n\n" : "";
-			if (block.kind === "heading") return <Text key={index} style={[styles.heading, block.level > 2 && styles.smallHeading]}>{separator}{inline(block.text, styles)}</Text>;
-			if (block.kind === "paragraph") return <Text key={index}>{separator}{inline(block.text, styles)}</Text>;
-			if (block.kind === "quote") return <Text key={index} style={styles.quoteText}>{separator}{inline(block.text, styles)}</Text>;
-			if (block.kind === "list") return <Text key={index}>{separator}{block.items.map((item, itemIndex) => <Text key={itemIndex} style={item.checked ? styles.taskDone : undefined}>{itemIndex > 0 ? "\n" : ""}{item.checked !== undefined ? (item.checked ? "☑ " : "☐ ") : block.ordered ? `${itemIndex + 1}. ` : "• "}{inline(item.text, styles)}</Text>)}</Text>;
+			if (block.kind === "heading") return <Text key={index} style={[styles.heading, block.level > 2 && styles.smallHeading]}>{separator}{inline(block.text, styles, true, undefined, openFiles)}</Text>;
+			if (block.kind === "paragraph") return <Text key={index}>{separator}{inline(block.text, styles, true, undefined, openFiles)}</Text>;
+			if (block.kind === "quote") return <Text key={index} style={styles.quoteText}>{separator}{inline(block.text, styles, true, undefined, openFiles)}</Text>;
+			if (block.kind === "list") return <Text key={index}>{separator}{block.items.map((item, itemIndex) => <Text key={itemIndex} style={item.checked ? styles.taskDone : undefined}>{itemIndex > 0 ? "\n" : ""}{item.checked !== undefined ? (item.checked ? "☑ " : "☐ ") : block.ordered ? `${itemIndex + 1}. ` : "• "}{inline(item.text, styles, true, undefined, openFiles)}</Text>)}</Text>;
 			if (block.kind === "code") return <Text key={index} style={styles.selectionCode}>{separator}{block.language ? `${block.language}\n` : ""}{block.text}</Text>;
-			if (block.kind === "image") return <Text key={index} style={styles.imageCaption}>{separator}{inline(block.alt || block.url, styles)}</Text>;
+			if (block.kind === "image") return <Text key={index} style={styles.imageCaption}>{separator}{inline(block.alt || block.url, styles, true, undefined, openFiles)}</Text>;
 			return <Text key={index}>{separator}────────</Text>;
 		})}
 	</Text>;
 }
 
 function SelectableInlineText({ value, selectionColor, style, styles, codeStyle }: { value: string; selectionColor: string; style: StyleProp<TextStyle>; styles: ReturnType<typeof makeStyles>; codeStyle?: StyleProp<TextStyle> }) {
-	const content = inline(value, styles, true, codeStyle);
+	const openFiles = Boolean(useFilesNavigation());
+	const content = inline(value, styles, true, codeStyle, openFiles);
 	// The native UITextView flattens inline children into one accessibility node.
 	// Keep links on RN Text on iOS so VoiceOver can focus their link role.
 	const hasLink = containsLink(content);
@@ -380,7 +384,12 @@ function MarkdownLink({ url, label, style }: { url: string; label: string; style
 
 const WEB_OR_AO_LINK = /^(?:https?|ao):\/\//i;
 
-function inline(text: string, styles: ReturnType<typeof makeStyles>, linksPressable = true, codeStyle?: StyleProp<TextStyle>): ReactNode[] {
+/**
+ * `openFiles`: whether this surface can open a session's files. Where it cannot,
+ * a file link is its label as plain words, not a link that does nothing, so a
+ * paragraph of them stays one native text (iOS draws a link-holding block apart).
+ */
+function inline(text: string, styles: ReturnType<typeof makeStyles>, linksPressable = true, codeStyle?: StyleProp<TextStyle>, openFiles = true): ReactNode[] {
 	// Web links, AO's own `ao://` links, and file links (`[a.ts:12](src/a.ts:12)`); a bare session link stops before prose punctuation.
 	// A destination may hold balanced parentheses, as a route group does: `app/(tabs)/index.tsx`.
 	// Bold runs may hold a single `*` or `_` (italic, say) but not a closing pair.
@@ -399,6 +408,8 @@ function inline(text: string, styles: ReturnType<typeof makeStyles>, linksPressa
 			at = match.index + 1;
 			pattern.lastIndex = at;
 			continue;
+		} else if (match[3] && !openFiles && !WEB_OR_AO_LINK.test(match[3])) {
+			nodes.push(match[2]);
 		} else if ((match[2] && match[3]) || match[4] || match[11] || match[12]) {
 			const url = match[3] ?? match[4] ?? match[11] ?? match[12];
 			const label = match[2] ?? url;
@@ -407,11 +418,11 @@ function inline(text: string, styles: ReturnType<typeof makeStyles>, linksPressa
 			nodes.push(<Text key={`${match.index}-code`} style={codeStyle ? [styles.inlineCode, codeStyle] : styles.inlineCode}>{match[5]}</Text>);
 		} else if (match[6] || match[7]) {
 			// Emphasis holds inline Markdown of its own: a link inside bold is still a link.
-			nodes.push(<Text key={`${match.index}-strong`} style={styles.strong}>{inline(match[6] ?? match[7], styles, linksPressable, codeStyle)}</Text>);
+			nodes.push(<Text key={`${match.index}-strong`} style={styles.strong}>{inline(match[6] ?? match[7], styles, linksPressable, codeStyle, openFiles)}</Text>);
 		} else if (match[8]) {
-			nodes.push(<Text key={`${match.index}-strike`} style={styles.strike}>{inline(match[8], styles, linksPressable, codeStyle)}</Text>);
+			nodes.push(<Text key={`${match.index}-strike`} style={styles.strike}>{inline(match[8], styles, linksPressable, codeStyle, openFiles)}</Text>);
 		} else {
-			nodes.push(<Text key={`${match.index}-em`} style={styles.em}>{inline(match[9] ?? match[10], styles, linksPressable, codeStyle)}</Text>);
+			nodes.push(<Text key={`${match.index}-em`} style={styles.em}>{inline(match[9] ?? match[10], styles, linksPressable, codeStyle, openFiles)}</Text>);
 		}
 		at = match.index + match[0].length;
 	}

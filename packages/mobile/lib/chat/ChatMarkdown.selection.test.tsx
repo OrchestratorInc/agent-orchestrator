@@ -383,6 +383,19 @@ it("links a bare file name only when the session has that file", () => {
 	act(() => renderer.unmount());
 });
 
+it("keeps prose around an unopenable file link as one native text on iOS", () => {
+	platform.OS = "ios";
+	let renderer!: ReactTestRenderer;
+	// The Review screen, say: no session's files to open, so the link is words
+	// and the paragraphs stay one range to select, as before file links existed.
+	act(() => { renderer = create(<ChatMarkdown text={"First, [api.ts:12](lib/api.ts:12).\n\nSecond paragraph."} />); });
+	const selectable = renderer.root.findAll((node) => node.props.selectable === true);
+	expect(selectable).toHaveLength(1);
+	expect(selectable[0].props.uiTextView).toBe(true);
+	expect(textOf(selectable[0])).toBe("First, api.ts:12.\n\nSecond paragraph.");
+	act(() => renderer.unmount());
+});
+
 it("shows a file link's label as words where no session can open it", () => {
 	let renderer!: ReactTestRenderer;
 	act(() => { renderer = create(<ChatMarkdown text="See [api.ts:12](lib/api.ts:12) now" />); });
