@@ -143,10 +143,43 @@ export function isLocalSession(
 }
 
 const emptyStore = (): AuthStore => ({ session: null, pkce: null });
-const memoryStores = new Map<string, AuthStore>();
+
+// A store written while protected storage was unavailable, kept in this process
+// until it can be saved. One holding a credential (a sign-in or a rotated token)
+// replaces the file, which was deleted then. One without only adds a pending
+// sign-in on top of the file, which stays for when storage is back.
+interface MemoryStore {
+  store: AuthStore;
+  replacesFile: boolean;
+}
+const memoryStores = new Map<string, MemoryStore>();
+// Data dirs whose file could not be read during an outage, so the signed-out
+// store handed out then is not a sign-out.
+const unreadFiles = new Set<string>();
+const storeOps = new Map<string, Promise<void>>();
 const refreshes = new Map<string, Promise<CloudAccount | null>>();
 const authGenerations = new Map<string, number>();
 const authMutations = new Map<string, Promise<void>>();
+
+// Runs one operation per data dir at a time, in call order.
+async function serialize<T>(
+  queue: Map<string, Promise<void>>,
+  dataDir: string,
+  operation: () => Promise<T>,
+): Promise<T> {
+  const previous = queue.get(dataDir) ?? Promise.resolve();
+  const result = previous.catch(() => undefined).then(operation);
+  const settled = result.then(
+    () => undefined,
+    () => undefined,
+  );
+  queue.set(dataDir, settled);
+  try {
+    return await result;
+  } finally {
+    if (queue.get(dataDir) === settled) queue.delete(dataDir);
+  }
+}
 
 function authGeneration(dataDir: string): number {
   return authGenerations.get(dataDir) ?? 0;
@@ -158,24 +191,11 @@ export function invalidateAuthOperations(dataDir: string): number {
   return generation;
 }
 
-export async function withAuthMutation<T>(
+export function withAuthMutation<T>(
   dataDir: string,
   mutation: () => Promise<T>,
 ): Promise<T> {
-  const previous = authMutations.get(dataDir) ?? Promise.resolve();
-  const result = previous.catch(() => undefined).then(mutation);
-  const settled = result.then(
-    () => undefined,
-    () => undefined,
-  );
-  authMutations.set(dataDir, settled);
-  try {
-    return await result;
-  } finally {
-    if (authMutations.get(dataDir) === settled) {
-      authMutations.delete(dataDir);
-    }
-  }
+  return serialize(authMutations, dataDir, mutation);
 }
 
 /**
@@ -215,13 +235,7 @@ function decodeStore(value: Buffer): AuthStore {
   return JSON.parse(safeStorage.decryptString(value)) as AuthStore;
 }
 
-export async function readAuthStore(dataDir: string): Promise<AuthStore> {
-  const memoryStore = memoryStores.get(dataDir);
-  if (memoryStore) return memoryStore;
-  if (!protectedStorageAvailable()) {
-    await rm(storePath(dataDir), { force: true });
-    return emptyStore();
-  }
+async function readStoreFile(dataDir: string): Promise<AuthStore> {
   try {
     return decodeStore(await readFile(storePath(dataDir)));
   } catch {
@@ -230,31 +244,103 @@ export async function readAuthStore(dataDir: string): Promise<AuthStore> {
   }
 }
 
-export async function writeAuthStore(
-  dataDir: string,
-  store: AuthStore,
-): Promise<void> {
-  if (!protectedStorageAvailable()) {
-    // A rotating refresh token must never fall back to plaintext persistence.
-    // Linux's basic_text backend also reports encryption as available despite
-    // using an unprotected hardcoded password, so keep that process-local too.
-    memoryStores.set(dataDir, store);
-    await rm(storePath(dataDir), { force: true });
-    return;
-  }
-  memoryStores.delete(dataDir);
+async function writeStoreFile(dataDir: string, store: AuthStore): Promise<void> {
   await mkdir(dataDir, { recursive: true });
   const target = storePath(dataDir);
   await writeFile(target, encodeStore(store), { mode: 0o600 });
   await chmod(target, 0o600);
 }
 
-export async function removeAuthStore(dataDir: string): Promise<void> {
-  memoryStores.delete(dataDir);
-  await Promise.all([
-    rm(storePath(dataDir), { force: true }),
-    rm(path.join(dataDir, LEGACY_SESSION_FILE), { force: true }),
-  ]);
+// A pending sign-in written during an outage goes onto the session the file
+// still holds, so a sign-in that was started but never finished keeps it.
+async function onFileSession(dataDir: string, store: AuthStore): Promise<AuthStore> {
+  return { ...(await readStoreFile(dataDir)), pkce: store.pkce };
+}
+
+// The file was read for the first time since an outage hid it: show its
+// account again in every renderer.
+function noteFileRead(dataDir: string, store: AuthStore): void {
+  if (unreadFiles.delete(dataDir) && store.session) {
+    notifyRenderersFn?.(publicAccount(store.session));
+  }
+}
+
+export function readAuthStore(dataDir: string): Promise<AuthStore> {
+  return serialize(storeOps, dataDir, async () => {
+    const memory = memoryStores.get(dataDir);
+    if (!protectedStorageAvailable()) {
+      // An outage, such as a locked keychain or a keyring that has not started
+      // yet, is often temporary. The file stays for when storage is back and
+      // reads as signed out until then, unless this run signed in since.
+      if (!memory?.replacesFile) unreadFiles.add(dataDir);
+      return memory?.store ?? emptyStore();
+    }
+    if (memory) {
+      // Storage is back: save what was kept in memory.
+      const store = memory.replacesFile
+        ? memory.store
+        : await onFileSession(dataDir, memory.store);
+      try {
+        await writeStoreFile(dataDir, store);
+      } catch {
+        return store;
+      }
+      memoryStores.delete(dataDir);
+      noteFileRead(dataDir, store);
+      return store;
+    }
+    const store = await readStoreFile(dataDir);
+    noteFileRead(dataDir, store);
+    return store;
+  });
+}
+
+export function writeAuthStore(
+  dataDir: string,
+  store: AuthStore,
+): Promise<void> {
+  return serialize(storeOps, dataDir, async () => {
+    if (!protectedStorageAvailable()) {
+      // A rotating refresh token must never fall back to plaintext persistence.
+      // Linux's basic_text backend also reports encryption as available despite
+      // using an unprotected hardcoded password, so keep that process-local too.
+      const wasReplacing = memoryStores.get(dataDir)?.replacesFile === true;
+      memoryStores.set(dataDir, { store, replacesFile: wasReplacing || store.session !== null });
+      if (store.session !== null) {
+        // This credential is newer than the file's. Delete the file so the
+        // account it replaced can never come back.
+        unreadFiles.delete(dataDir);
+        await rm(storePath(dataDir), { force: true });
+        if (!wasReplacing) {
+          console.warn(
+            "Orchestrator Cloud sign-in is kept in memory only: secure storage is unavailable, so it will not survive a restart until storage is available again.",
+          );
+        }
+      }
+      return;
+    }
+    memoryStores.delete(dataDir);
+    if (store.session === null && unreadFiles.has(dataDir)) {
+      // Read during the outage, this store never saw the file's session.
+      const next = await onFileSession(dataDir, store);
+      await writeStoreFile(dataDir, next);
+      noteFileRead(dataDir, next);
+      return;
+    }
+    unreadFiles.delete(dataDir);
+    await writeStoreFile(dataDir, store);
+  });
+}
+
+export function removeAuthStore(dataDir: string): Promise<void> {
+  return serialize(storeOps, dataDir, async () => {
+    memoryStores.delete(dataDir);
+    unreadFiles.delete(dataDir);
+    await Promise.all([
+      rm(storePath(dataDir), { force: true }),
+      rm(path.join(dataDir, LEGACY_SESSION_FILE), { force: true }),
+    ]);
+  });
 }
 
 function displayName(user: User): string {
