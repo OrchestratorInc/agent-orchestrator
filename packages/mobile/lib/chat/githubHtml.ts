@@ -19,8 +19,10 @@ export type GitHubSegment =
 	| { kind: "markdown"; text: string }
 	| { kind: "details"; summary: string; body: GitHubSegment[] };
 
-// A fence runs to its closing fence, or to the end of the text when it has none (as in safeMarkdown).
-const FENCE = /^ {0,3}(?:`{3,}|~{3,})[^\n]*\n[\s\S]*?(?:\n {0,3}(?:`{3,}|~{3,})[ \t]*(?=\n|(?![\s\S]))|(?![\s\S]))/gm;
+// A fence runs to a closing fence of the same character at least as long as its
+// opening (CommonMark), or to the end of the text when it has none: a ``` line
+// inside a ```` example is code, so a `<details>` after it stays code too.
+const FENCE = /^ {0,3}(?:(`{3,})[^`\n]*\n[\s\S]*?(?:\n {0,3}\1`*[ \t]*(?=\n|(?![\s\S]))|(?![\s\S]))|(~{3,})[^\n]*\n[\s\S]*?(?:\n {0,3}\2~*[ \t]*(?=\n|(?![\s\S]))|(?![\s\S])))/gm;
 const CODE_SPAN = /`[^`\n]*`/g;
 // An unterminated comment hides the rest of the text, as it does on GitHub.
 const COMMENT = /<!--[\s\S]*?(?:-->|(?![\s\S]))/g;

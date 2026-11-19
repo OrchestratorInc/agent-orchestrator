@@ -95,6 +95,16 @@ describe("githubSegments", () => {
 		]);
 	});
 
+	it("ends a fence only at a closing fence of the same character, at least as long", () => {
+		const longer = "````md\n```\n<details><summary>s</summary>x</details>\n```\n````";
+		expect(githubSegments(longer)).toEqual([{ kind: "markdown", text: longer }]);
+		const tilde = "~~~\n```\n<details><summary>s</summary>x</details>\n~~~";
+		expect(githubSegments(tilde)).toEqual([{ kind: "markdown", text: tilde }]);
+		// A shorter run, or the other character, inside a fence is code; the fence then runs on to the end.
+		expect(githubSegments("````\n```\n<!-- kept -->")).toEqual([{ kind: "markdown", text: "````\n```\n<!-- kept -->" }]);
+		expect(githubSegments("```\ncode\n`````\n<b>bold</b>")).toEqual([{ kind: "markdown", text: "```\ncode\n`````\n**bold**" }]);
+	});
+
 	it("turns inline and block HTML into Markdown and decodes entities", () => {
 		expect(githubSegments('<p>Use <b>bold</b>, <em>this</em> and <code>a &lt; b</code>.<br>Next &amp; last</p>')).toEqual([
 			{ kind: "markdown", text: "Use **bold**, *this* and `a < b`.\nNext & last" },
