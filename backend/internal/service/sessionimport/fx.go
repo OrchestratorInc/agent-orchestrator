@@ -102,10 +102,7 @@ type fxImportRecord struct {
 	Role          string          `json:"role"`
 	Key           string          `json:"key"`
 	Value         json.RawMessage `json:"value"`
-	Data          struct {
-		Text string `json:"text"`
-		Blob string `json:"$blob"`
-	} `json:"data"`
+	Data          json.RawMessage `json:"data"`
 	Event struct {
 		User *struct {
 			Text string `json:"text"`
@@ -204,14 +201,21 @@ func readFXTranscript(ctx context.Context, root string, paths ...string) (transc
 		}
 		switch {
 		case record.Kind == "item" && (record.Type == "user" || record.Type == "assistant"):
-			if record.Data.Blob != "" {
-				text, err := readFXBlob(r, t.root, t.path, record.Data.Blob)
+			var data struct {
+				Text string `json:"text"`
+				Blob string `json:"$blob"`
+			}
+			if err := json.Unmarshal(record.Data, &data); err != nil {
+				return err
+			}
+			if data.Blob != "" {
+				text, err := readFXBlob(r, t.root, t.path, data.Blob)
 				if err != nil {
 					return err
 				}
-				record.Data.Text = text
+				data.Text = text
 			}
-			add(record.Type, record.Data.Text, at)
+			add(record.Type, data.Text, at)
 		case record.Event.User != nil:
 			add("user", record.Event.User.Text, at)
 		case record.Event.Assistant != nil:

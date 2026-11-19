@@ -153,6 +153,26 @@ func TestFXImportRejectsInteriorCorruption(t *testing.T) {
 	}
 }
 
+func TestFXImportAcceptsOpaqueNonVisibleData(t *testing.T) {
+	for _, data := range []string{`[1,2]`, `"opaque"`, `true`, `null`} {
+		t.Run(data, func(t *testing.T) {
+			root := t.TempDir()
+			path := writeFXImport(t, root, t.TempDir(), true)
+			body, err := os.ReadFile(path)
+			if err != nil {
+				t.Fatal(err)
+			}
+			opaque := `{"kind":"child_finished","child":"synthetic-child","work_id":"synthetic-work","outcome":"cancelled","data":` + data + "}\n"
+			writeFile(t, path, strings.Replace(string(body), `{"v":1,"seq":4`, opaque+`{"v":1,"seq":4`, 1))
+			got, err := readFXTranscript(context.Background(), root, path)
+			if err != nil {
+				t.Fatal(err)
+			}
+			wantTexts(t, got.messages, "user: explain synthetic parser", "assistant: synthetic answer")
+		})
+	}
+}
+
 func TestFXImportMessageBlobs(t *testing.T) {
 	for _, failure := range []string{"", "root-alias", "invalid-hash", "missing", "digest", "oversized", "symlink"} {
 		name := failure
