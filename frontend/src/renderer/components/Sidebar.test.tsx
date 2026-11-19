@@ -3486,6 +3486,18 @@ describe("Sidebar", () => {
 		expect(projectMarker()).toHaveClass("icon-circle-alert", "text-destructive");
 	});
 
+	it("keeps the open session read while its project is collapsed", () => {
+		useUiStore.setState({ projectAvatars: false });
+		useSessionReadStore.setState({ baseline: 0, readAt: {} });
+		mockParams.projectId = "proj-1";
+		mockParams.sessionId = "proj-1-open";
+		const open = { ...session, id: "proj-1-open", status: "idle", activity: { state: "idle", lastActivityAt: "2026-06-30T00:00:00Z" } } as const;
+		renderSidebar({ expandedProjectIds: [], workspaces: [{ ...workspace, sessions: [open] }] });
+
+		expect(document.querySelector("[data-project-folder-icon] [data-project-marker]")).not.toBeInTheDocument();
+		expect(useSessionReadStore.getState().readAt[sessionReadKey(open)]).toBe(Date.parse(open.updatedAt));
+	});
+
 	it.each(["ci_failed", "exited"] as const)("keeps the folder for a collapsed project with a %s session", (status) => {
 		useUiStore.setState({ projectAvatars: false });
 		renderSidebar({

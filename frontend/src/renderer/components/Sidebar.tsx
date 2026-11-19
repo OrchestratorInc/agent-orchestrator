@@ -1634,15 +1634,27 @@ const ProjectItem = memo(function ProjectItem({
 	// the orchestrator button's).
 	const readAt = useSessionReadStore((state) => state.readAt);
 	const readBaseline = useSessionReadStore((state) => state.baseline);
+	const markRead = useSessionReadStore((state) => state.markRead);
+	const openSessionId = selection.activeSessionId;
+	const openSession = visibleSessions.find((session) => session.id === openSessionId);
+	// The open session's row marks it read, but a collapsed project has no rows,
+	// so the project keeps it read too: nothing the user is looking at is unread.
+	useEffect(() => {
+		if (!openSession) return;
+		const updated = Date.parse(openSession.updatedAt);
+		if (Number.isFinite(updated)) markRead(sessionReadKey(openSession), updated);
+	}, [markRead, openSession]);
 	const projectActivity = useMemo(() => {
 		if (projectNeedsInput) return "attention" as const;
 		const indicators = visibleSessions.map((session) => getSessionRowIndicator(session));
 		if (indicators.includes("working")) return "working" as const;
 		const read = { readAt, baseline: readBaseline };
-		return visibleSessions.some((session, index) => indicators[index] === null && isSessionUnread(session, read))
+		return visibleSessions.some(
+			(session, index) => session.id !== openSessionId && indicators[index] === null && isSessionUnread(session, read),
+		)
 			? ("unread" as const)
 			: null;
-	}, [projectNeedsInput, readAt, readBaseline, visibleSessions]);
+	}, [openSessionId, projectNeedsInput, readAt, readBaseline, visibleSessions]);
 	const [sessionOrder, setSessionOrder] = useState<string[]>([]);
 	const sessions = useMemo(
 		() => {
