@@ -9,6 +9,7 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
+	"strconv"
 	"strings"
 	"time"
 
@@ -107,7 +108,7 @@ func prepareWorkspaceProject(ctx context.Context, logger *slog.Logger, parent st
 func workspaceIgnoreEntries(dirs []string) []string {
 	entries := make([]string, 0, len(dirs))
 	for _, dir := range dirs {
-		entries = append(entries, "/"+filepath.ToSlash(dir)+"/")
+		entries = append(entries, domain.WorkspaceIgnorePattern(dir))
 	}
 	return entries
 }
@@ -333,22 +334,30 @@ func workspaceParentIgnores(ctx context.Context, parent, name string) bool {
 	if len(fields) < 3 {
 		return true
 	}
-	source, pattern := fields[0], fields[2]
+	source, line, pattern := fields[0], fields[1], fields[2]
 	if strings.HasPrefix(pattern, "!") {
 		return false
 	}
-	return source != ".gitignore" || pattern != "/"+name+"/" || !addedByOrchestrator(ctx, parent, pattern)
+	return source != ".gitignore" || pattern != domain.WorkspaceIgnorePattern(name) || !addedByOrchestrator(ctx, parent, line)
 }
 
-// addedByOrchestrator reports whether the commit that first added line to the
-// parent's .gitignore is one Orchestrator made.
+// addedByOrchestrator reports whether the commit that introduced the current
+// line of the parent's .gitignore is one Orchestrator made. A line the user
+// removed and added back, or has not committed, belongs to the user.
 func addedByOrchestrator(ctx context.Context, parent, line string) bool {
-	out, err := gitOutput(ctx, parent, "log", "--format=%s", "-S"+line, "--", ".gitignore")
+	if n, err := strconv.Atoi(line); err != nil || n < 1 {
+		return false
+	}
+	out, err := gitOutput(ctx, parent, "blame", "--porcelain", "-L", line+","+line, "--", ".gitignore")
 	if err != nil {
 		return false
 	}
-	subjects := strings.Split(strings.TrimSpace(out), "\n")
-	return orchestratorGitignoreCommits[subjects[len(subjects)-1]]
+	for _, field := range strings.Split(out, "\n") {
+		if subject, ok := strings.CutPrefix(field, "summary "); ok {
+			return orchestratorGitignoreCommits[subject]
+		}
+	}
+	return false
 }
 
 func validateWorkspaceChild(ctx context.Context, child string) error {

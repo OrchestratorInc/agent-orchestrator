@@ -136,7 +136,7 @@ func (w *Workspace) excludeCopiedAssets(ctx context.Context, rootPath string, re
 	}
 	content.WriteString("# Workspace folders Orchestrator copied into this session\n")
 	for _, rel := range rels {
-		content.WriteString("/" + filepath.ToSlash(rel) + "/\n")
+		content.WriteString(domain.WorkspaceIgnorePattern(rel) + "\n")
 	}
 	path := filepath.Join(strings.TrimSpace(string(out)), assetExcludesFile)
 	if err := os.WriteFile(path, []byte(content.String()), 0o600); err != nil {
@@ -153,6 +153,10 @@ func (w *Workspace) excludeCopiedAssets(ctx context.Context, rootPath string, re
 func (w *Workspace) effectiveExcludesFile(ctx context.Context, rootPath string) string {
 	if out, err := w.run(ctx, w.binary, "-C", rootPath, "config", "--type=path", "--get", "core.excludesFile"); err == nil {
 		if path := strings.TrimSpace(string(out)); path != "" {
+			// Git reads a relative path from the directory it runs in.
+			if !filepath.IsAbs(path) {
+				path = filepath.Join(rootPath, path)
+			}
 			return path
 		}
 	}

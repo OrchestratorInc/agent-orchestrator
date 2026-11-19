@@ -1,6 +1,10 @@
 package domain
 
-import "time"
+import (
+	"path/filepath"
+	"strings"
+	"time"
+)
 
 const (
 	// ProjectKindSingleRepo is the existing one-repository project shape.
@@ -100,6 +104,23 @@ var workspaceDependencyDirs = map[string]bool{
 	".ruff_cache":      true,
 	".tox":             true,
 	".gradle":          true,
+}
+
+// WorkspaceIgnorePattern returns the root-anchored gitignore pattern that
+// matches exactly the folder at rel. Glob characters, backslashes and spaces
+// are escaped, so a folder named "notes[1]" never matches "notes1".
+func WorkspaceIgnorePattern(rel string) string {
+	var b strings.Builder
+	b.WriteByte('/')
+	for _, r := range filepath.ToSlash(rel) {
+		switch r {
+		case '\\', '*', '?', '[', ' ':
+			b.WriteByte('\\')
+		}
+		b.WriteRune(r)
+	}
+	b.WriteByte('/')
+	return b.String()
 }
 
 // IsWorkspaceDependencyDir reports whether name is a known dependency, build

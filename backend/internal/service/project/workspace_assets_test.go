@@ -184,3 +184,49 @@ func TestService_RepairWorkspaceAssetsDropsFoldersSessionsNeverReceive(t *testin
 		}
 	}
 }
+
+// A /<name>/ line the user removed and added back is the user's rule, even
+// though Orchestrator first wrote that same line.
+func TestService_RepairWorkspaceAssetsHonorsAUserReaddedIgnoreLine(t *testing.T) {
+	configureCommitter(t)
+	t.Setenv("GIT_CEILING_DIRECTORIES", os.TempDir())
+	ctx := context.Background()
+	store, err := sqlitetest.Open(t.TempDir())
+	if err != nil {
+		t.Fatalf("open store: %v", err)
+	}
+	t.Cleanup(func() { _ = store.Close() })
+	parent := t.TempDir()
+	gitRepoWithCommit(t, parent)
+	gitignore := filepath.Join(parent, ".gitignore")
+	for _, step := range []struct{ content, subject string }{
+		{"/api/\n/notes/\n/drafts/\n", "chore: configure AO workspace ignores"},
+		{"/api/\n/drafts/\n", "stop ignoring notes"},
+		{"/api/\n/drafts/\n/notes/\n", "ignore notes again"},
+	} {
+		if err := os.WriteFile(gitignore, []byte(step.content), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		gitIn(t, parent, "add", ".gitignore")
+		gitIn(t, parent, "commit", "-m", step.subject)
+	}
+	mkdirWithFile(t, filepath.Join(parent, "notes"))
+	mkdirWithFile(t, filepath.Join(parent, "drafts"))
+	gitRepoWithCommit(t, filepath.Join(parent, "api"))
+
+	now := time.Now()
+	row := domain.ProjectRecord{ID: "ws", Path: parent, DisplayName: "ws", RegisteredAt: now, Kind: domain.ProjectKindWorkspace}
+	repos := []domain.WorkspaceRepoRecord{
+		{ProjectID: "ws", Name: "api", RelativePath: "api", RegisteredAt: now, GitStatus: domain.GitStatusReady},
+		{ProjectID: "ws", Name: "drafts", RelativePath: "drafts", RegisteredAt: now, GitStatus: domain.GitStatusNeedsInit},
+		{ProjectID: "ws", Name: "notes", RelativePath: "notes", RegisteredAt: now, GitStatus: domain.GitStatusNeedsInit},
+	}
+	if err := store.UpsertWorkspaceProject(ctx, row, repos); err != nil {
+		t.Fatalf("seed workspace project: %v", err)
+	}
+
+	project.New(store).RepairWorkspaceAssets(ctx)
+	if got, want := workspaceRepoNames(t, store, "ws"), []string{"api", "drafts"}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("children = %v, want %v", got, want)
+	}
+}
