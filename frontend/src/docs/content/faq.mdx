@@ -56,6 +56,14 @@ description: Common questions about the current Orchestrator desktop product.
 		No. A session commits to one controller at a time. Compatible Claude Code and Codex sessions can hand off between interfaces, but Orchestrator drains or interrupts the old controller before activating the new one.
 	</Accordion>
 
+	<Accordion title="Where do I get help or report a bug?">
+		Join the [Orchestrator Discord](https://discord.com/invite/UZv7JjxbwG) for help and contributor discussion, open a [GitHub issue](https://github.com/OrchestratorInc/agent-orchestrator/issues) for bugs and feature requests, or use [GitHub Discussions](https://github.com/OrchestratorInc/agent-orchestrator/discussions) for broader questions. [@useOrchestrator](https://x.com/useOrchestrator) posts product updates.
+	</Accordion>
+
+	<Accordion title="How do I update Orchestrator?">
+		The desktop app normally updates itself. To refresh a Homebrew-managed install, run `brew upgrade --cask agentwrapper/tap/agent-orchestrator`. Release notes live on the [changelog](/changelog) page.
+	</Accordion>
+
 	<Accordion title="How do I uninstall Orchestrator?">
 		On macOS, first open **Settings → Stay Awake → Battery and heat protection** and choose **Revoke authorization…** if you authorized Low Power Mode. Disable Low Power Mode policies in other AO instances first. AO disables its automation, restores AO-owned changes, and asks for administrator approval to remove only `/etc/sudoers.d/ao-low-power-<your numeric uid>`. Canceling removal leaves automation disabled and the permission installed; retry before uninstalling. Existing user-owned power preferences are preserved.
 
