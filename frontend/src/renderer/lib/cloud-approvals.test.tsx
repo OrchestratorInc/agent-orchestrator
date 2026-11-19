@@ -18,6 +18,7 @@ vi.mock("./cloud-cp/session-events-hub", () => ({
 vi.mock("../hooks/useCloudCp", () => ({
 	useCloudCp: () => ({ ready: true, baseUrl: "https://cp.test/", client: { listBrowserApprovals: hooks.listBrowserApprovals } }),
 }));
+vi.mock("./telemetry", () => ({ captureRendererException: vi.fn() }));
 vi.mock("../hooks/useWorkspaceQuery", () => ({ useWorkspaceQuery: () => ({ data: [{ id: "p", sessions: hooks.sessions }] }) }));
 
 import { QueryClient, QueryClientProvider, focusManager } from "@tanstack/react-query";
@@ -186,6 +187,36 @@ describe("cloud approvals", () => {
 			focusManager.setFocused(undefined);
 			shell.unmount();
 			client.clear();
+			vi.useRealTimers();
+		}
+	});
+
+	it("shows a request in a window hidden from startup, even when the first read fails", async () => {
+		vi.useFakeTimers({ shouldAdvanceTime: true });
+		const visibility = vi.spyOn(document, "visibilityState", "get").mockReturnValue("hidden");
+		// The app's own client, with its focus handling.
+		const { queryClient: appClient } = await import("./query-client");
+		appClient.mount();
+		hooks.sessions = [{ id: "s-startup", cloud: { orgId: "org-1", desiredState: "running", observedState: "running" } }];
+		let reads = 0;
+		hooks.listBrowserApprovals.mockReset().mockImplementation(async (_org: string, sessionId: string) => {
+			if (sessionId !== "s-startup") return { pending: [] };
+			reads += 1;
+			if (reads === 1) throw new CloudCpError("not yet", { status: 503 });
+			return { pending: [cloudRequest({ id: "at-startup", sessionId: "s-startup", expiresAt: new Date(Date.now() + 300_000).toISOString() })] };
+		});
+		const warn = vi.spyOn(console, "warn").mockImplementation(() => undefined);
+		const wrapper = ({ children }: { children: ReactNode }) => <QueryClientProvider client={appClient}>{children}</QueryClientProvider>;
+		const shell = renderHook(() => useLiveCloudPendingApprovals(), { wrapper });
+		try {
+			await act(async () => { await vi.advanceTimersByTimeAsync(20_000); });
+			expect(shell.result.current.map((request) => request.id)).toContain("at-startup");
+		} finally {
+			shell.unmount();
+			appClient.clear();
+			appClient.unmount();
+			warn.mockRestore();
+			visibility.mockRestore();
 			vi.useRealTimers();
 		}
 	});
