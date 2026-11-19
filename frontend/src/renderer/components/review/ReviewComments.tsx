@@ -31,8 +31,6 @@ export type ReviewCommentActions = {
 	onRerequest?: (reviewerId: string, block: ReviewPRBlock) => Promise<void>;
 	onViewInFile?: (comment: ReviewComment, block: ReviewPRBlock) => void;
 	onOpenInBrowser?: (url: string) => void;
-	/** The Orchestrator reviewer's row in a PR's reviewer list starts a review. */
-	onReviewNow?: () => void;
 };
 
 const verdictTone: Record<ReviewReviewerStatus, string> = {
@@ -329,7 +327,11 @@ function ReviewerAvatar({ reviewer }: { reviewer: Pick<ReviewReviewer, "orchestr
 		: <PRAvatar bot={reviewer.isBot} name={reviewer.id} size="sm" />;
 }
 
-/** Who reviewed the PR and where each stands; picking one asks them again. */
+/**
+ * Who reviewed the PR and where each stands; picking a provider reviewer asks
+ * them again. The Orchestrator row only shows its verdict: a review runs for
+ * the whole session, so it starts from Review now, not from one PR's list.
+ */
 function ReviewersMenu({ actions, block }: { actions: ReviewCommentActions; block: ReviewPRBlock }) {
 	const { t } = useTranslation();
 	// Who was asked again, with the status the provider showed then. Pending shows
@@ -364,12 +366,12 @@ function ReviewersMenu({ actions, block }: { actions: ReviewCommentActions; bloc
 				{block.reviewers.map((reviewer) => {
 					const waiting = asked.has(reviewer.id) && asked.get(reviewer.id) === reviewer.status;
 					const status = waiting ? "pending" : reviewer.status;
-					const canAct = reviewer.orchestrator ? Boolean(actions.onReviewNow) : reviewer.canRerequest && !waiting && Boolean(actions.onRerequest);
+					const canAct = !reviewer.orchestrator && reviewer.canRerequest && !waiting && Boolean(actions.onRerequest);
 					return (
 						<DropdownMenuItem
 							disabled={!canAct}
 							key={reviewer.id}
-							onSelect={() => (reviewer.orchestrator ? actions.onReviewNow?.() : void rerequest(reviewer))}
+							onSelect={() => void rerequest(reviewer)}
 						>
 							<ReviewerAvatar reviewer={reviewer} />
 							<span className="min-w-0 truncate">{reviewer.orchestrator ? t("inspector.review.orchestrator") : reviewer.id}</span>

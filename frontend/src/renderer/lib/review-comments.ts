@@ -126,26 +126,36 @@ function providerVerdict(verdict: string | undefined): ReviewVerdict {
 }
 
 /**
- * A PR's full repository path from its page or API URL. GitLab nests projects
- * in groups ("group/sub/app"), so the path is everything before the PR part.
+ * A PR's forge host and full repository path from its page or API URL. GitLab
+ * nests projects in groups ("group/sub/app"), so the path is everything before
+ * the PR part; GitHub's API URLs name the same repository as its pages.
  */
-function prRepositoryPath(raw: string | undefined): string | undefined {
+function prLocation(raw: string | undefined): { host: string; path: string } | undefined {
 	if (!raw) return undefined;
 	try {
 		const url = new URL(raw);
-		const path = url.hostname === "api.github.com" ? url.pathname.replace(/^\/repos\//, "/") : url.pathname;
-		return path.match(/^\/(.+?)\/(?:pulls?|-\/merge_requests)\/\d+(?:\/|$)/)?.[1]?.toLowerCase();
+		const api = url.hostname === "api.github.com";
+		const path = (api ? url.pathname.replace(/^\/repos\//, "/") : url.pathname)
+			.match(/^\/(.+?)\/(?:pulls?|-\/merge_requests)\/\d+(?:\/|$)/)?.[1]?.toLowerCase();
+		return path ? { host: api ? "github.com" : url.hostname.toLowerCase(), path } : undefined;
 	} catch {
 		return undefined;
 	}
 }
 
+const prRepositoryPath = (raw: string | undefined) => prLocation(raw)?.path;
+
 type PRRef = { urls: Array<string | undefined>; number: number; repo?: string };
 
-/** Who a PR is: its repository path and number, from its URLs or a stated repository. */
+/**
+ * Who a PR is: its forge host, repository path and number, from its URLs. A
+ * GitHub PR and a GitLab MR can share a slug and number, so the host counts. A
+ * stated repository, which names no host, stands in only when no URL parses.
+ */
 function prIdentities(ref: PRRef): Set<string> {
-	const paths = [...ref.urls.map(prRepositoryPath), ref.repo?.toLowerCase()].filter(Boolean);
-	return new Set(paths.map((path) => `${path}#${ref.number}`));
+	const located = ref.urls.map(prLocation).filter((location): location is { host: string; path: string } => Boolean(location));
+	if (located.length > 0) return new Set(located.map(({ host, path }) => `${host}/${path}#${ref.number}`));
+	return ref.repo ? new Set([`${ref.repo.toLowerCase()}#${ref.number}`]) : new Set();
 }
 
 /**

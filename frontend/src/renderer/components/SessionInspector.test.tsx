@@ -3310,8 +3310,7 @@ describe("SessionInspector tabs", () => {
 
     await userEvent.click(screen.getByRole("tab", { name: "Reviews" }));
 
-    expect((await screen.findAllByText("Reviewer"))[0]).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: "Review now" })).not.toBeDisabled();
+    expect(await screen.findByRole("button", { name: "Review now" })).not.toBeDisabled();
   });
 
   it("hides the Reviews tab when every PR is merged or closed", async () => {
@@ -4131,6 +4130,19 @@ describe("SessionInspector summary reviews", () => {
     expect(screen.queryByText("1 open")).not.toBeInTheDocument();
     await userEvent.click(screen.getByRole("tab", { name: /^Resolved/ }));
     expect(await commentRowWith("Guard this optional value.")).toHaveTextContent("resolved");
+  });
+
+  it("lists an open PR the SCM summary reports before the session does", async () => {
+    const common = commonGetsResponder([], "reviewer-pane", []);
+    getMock.mockImplementation(async (path: string) => path === "/api/v1/sessions/{sessionId}/pr"
+      ? { data: { prs: [prSummary(3, "open"), prSummary(4, "open", { title: "Second change" }), prSummary(5, "merged")] } }
+      : common(path));
+
+    renderWithQuery(<SessionInspector session={session([pr(3, "open")])} />);
+    await openReviewsSection();
+
+    await waitFor(() => expect(screen.getAllByTestId("review-pr-block")).toHaveLength(2));
+    expect(screen.getAllByTestId("review-pr-block")[1]).toHaveTextContent("Second change");
   });
 
   it("says when a PR's comments could not be read and reads them again on Retry", async () => {
@@ -6033,11 +6045,7 @@ describe("SessionInspector Cloud reviews", () => {
 
     expect(screen.getByRole("tab", { name: "Reviews" })).toBeInTheDocument();
     await userEvent.click(screen.getByRole("tab", { name: "Reviews" }));
-    expect((await screen.findAllByText("Reviewer"))[0]).toBeInTheDocument();
-
-    await userEvent.click(
-      screen.getByRole("button", { name: "Review now" }),
-    );
+    await userEvent.click(await screen.findByRole("button", { name: "Review now" }));
 
     await waitFor(() =>
       expect(cloudCpMock.triggerSessionReviews).toHaveBeenCalledWith(

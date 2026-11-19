@@ -332,6 +332,18 @@ describe("buildReviewBlocks", () => {
 		expect(blocks.map((block) => block.repository)).toEqual(["team/sub/app", "team/sub/web"]);
 	});
 
+	it("keeps a GitHub PR and a GitLab MR with one slug and number apart", () => {
+		const gitlabUrl = "https://gitlab.com/acme/repo/-/merge_requests/3";
+		const blocks = buildReviewBlocks({
+			openPRs: [{ url: PR_URL, number: 3 }, { url: gitlabUrl, number: 3 }],
+			providerPRs: [summary({ title: "GitHub PR" }), summary({ url: gitlabUrl, htmlUrl: gitlabUrl, provider: "gitlab", title: "GitLab MR" })],
+			reviewStates: [],
+			runs: [],
+		});
+		expect(blocks.map((block) => [block.title, block.webUrl])).toEqual([["GitHub PR", PR_URL], ["GitLab MR", gitlabUrl]]);
+		expect(new Set(blocks.map((block) => block.key)).size).toBe(2);
+	});
+
 	it("does not pair by number alone when two PRs share it", () => {
 		const [block] = buildReviewBlocks({
 			openPRs: [{ url: "https://example.com/pr/3", number: 3 }],

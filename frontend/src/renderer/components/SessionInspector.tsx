@@ -2078,13 +2078,6 @@ function LocalReviewsSection({
 		if (currentHeadReviewed) setRerunConfirmation({ ownerKey: reviewerOwnerKey, heads: reviewHeads });
 		else triggerReview.mutate({ ownerKey: reviewerOwnerKey });
 	};
-	// A PR's reviewer list starts a review under the same locks as Review now.
-	const reviewNowAvailable = !reviewIsRunning(openReviewStates)
-		&& !triggerReview.isPending
-		&& !saveReviewer.isPending
-		&& !killReview.isPending
-		&& !cancelReview.isPending
-		&& !reviewRunDisabled(openReviewStates, false);
 	return (
 		<>
 			{/* Running a review is an action; reading them is a list. The action stays
@@ -2153,7 +2146,6 @@ function LocalReviewsSection({
 				githubPRs={openProviderPRs}
 				isLoading={scmSummary.isLoading || reviewsQuery.isLoading}
 				onOpenReviewFile={onOpenReviewFile}
-				onReviewNow={reviewNowAvailable ? reviewNow : undefined}
 				onWorkerMessageSent={onWorkerMessageSent}
 				reviewStates={reviewStates}
 				runs={reviewsQuery.data?.runs ?? []}
@@ -2285,14 +2277,6 @@ function CloudReviewsSection({
 	};
 	const reviewState = cloudReviewsToLocal(reviewsQuery.data, effectiveReviewerHarness);
 	const guest = session.cloud?.shared === true;
-	// A PR's reviewer list starts a review only when Review now could: the picked
-	// reviewer installed and credentialed, and nothing running or in flight.
-	const cloudReviewNowAvailable = selectedHarnessReady
-		&& selectedCredentialReady
-		&& !reviewState.reviews.some((review) => review.status === "running")
-		&& !triggerReview.isPending
-		&& !cancelReview.isPending
-		&& !reviewRunDisabled(openReviewStatesFor(cloudSession, reviewState.reviews), false);
 	return (
 		<>
 			<ReviewPanel
@@ -2313,7 +2297,7 @@ function CloudReviewsSection({
 				isCancelling={cancelReview.isPending}
 				isKilling={false}
 				isLoading={pullRequestsQuery.isLoading || reviewsQuery.isLoading}
-				isSwitchingReviewer={false}
+				isSwitchingReviewer={updateReviewerHarness.isPending}
 				activeReviewers={[]}
 				onOpenReviewer={() => undefined}
 				isTriggering={triggerReview.isPending}
@@ -2348,7 +2332,6 @@ function CloudReviewsSection({
 				isLoading={pullRequestsQuery.isLoading || reviewsQuery.isLoading}
 				prsLoaded={pullRequestsQuery.isSuccess}
 				onOpenReviewFile={onOpenReviewFile}
-				onReviewNow={cloudReviewNowAvailable ? () => triggerReview.mutate() : undefined}
 				onWorkerMessageSent={onWorkerMessageSent}
 				reviewStates={reviewState.reviews}
 				runs={reviewState.runs}
@@ -2434,7 +2417,6 @@ function MergedReviewsSection({
 	readOnly = false,
 	isLoading,
 	onOpenReviewFile,
-	onReviewNow,
 	onWorkerMessageSent,
 	prsLoaded = true,
 	reviewStates,
@@ -2451,8 +2433,6 @@ function MergedReviewsSection({
 	readOnly?: boolean;
 	isLoading: boolean;
 	onOpenReviewFile?: (target: { line?: number; path: string }) => void;
-	/** Starts an Orchestrator review, from a PR's reviewer list. */
-	onReviewNow?: () => void;
 	onWorkerMessageSent?: () => void;
 	/** Whether the session's PR list is known; Cloud fetches it, so "no PR" waits for it. */
 	prsLoaded?: boolean;
@@ -2466,9 +2446,17 @@ function MergedReviewsSection({
 	const openInAOBrowser = useSessionBrowserLink(session);
 	const workspaceKey = workspaceQueryKeyForHost(hostId);
 	const sendMessageToWorker = useSendToSessionWorker(session, hostId);
-	const openPRs = sortedPRs(session).filter((pr) => pr.state === "open" || pr.state === "draft");
+	const sessionOpenPRs = sortedPRs(session).filter((pr) => pr.state === "open" || pr.state === "draft");
+	// The SCM summary can report an open PR before the session's projection does.
+	const openPRs = [
+		...sessionOpenPRs.map((pr) => ({ url: pr.url, number: pr.number })),
+		...githubPRs
+			.filter((summary) => summary.state === "open" || summary.state === "draft")
+			.filter((summary) => !sessionOpenPRs.some((pr) => pr.url === summary.htmlUrl || pr.url === summary.url))
+			.map((summary) => ({ url: summary.htmlUrl || summary.url, number: summary.number, title: summary.title, repo: summary.repo })),
+	];
 	const blocks = buildReviewBlocks({
-		openPRs: openPRs.map((pr) => ({ url: pr.url, number: pr.number })),
+		openPRs,
 		providerPRs: githubPRs,
 		reviewStates: openReviewStatesFor(session, reviewStates),
 		runs,
@@ -2528,7 +2516,6 @@ function MergedReviewsSection({
 			if (comment.file) onOpenReviewFile({ line: comment.line, path: comment.file });
 		} : undefined,
 		onOpenInBrowser: openInAOBrowser,
-		onReviewNow,
 	};
 	return (
 		<ReviewCommentsSection
@@ -2722,8 +2709,9 @@ function ReviewPanel({
 	onCloudInstallHarness?: () => void;
 }) {
 	const { t } = useTranslation();
-	// Cloud learns of a session's PRs from the control plane, so only a local session waits for one here.
-	const hasOpenPR = Boolean(cloud) || sortedPRs(session).some((pr) => pr.state === "open" || pr.state === "draft");
+	// Cloud learns of a session's PRs from the control plane, so it counts as having one
+	// while that list loads; once loaded, the list says.
+	const hasOpenPR = sortedPRs(session).some((pr) => pr.state === "open" || pr.state === "draft") || (Boolean(cloud) && isLoading);
 	if (hasOpenPR && isLoading) {
 		return <Section surface={false} title={t("settings.models.reviewerRole")}><p className={inspectorEmptyClass}>{t("inspector.loadingReviews")}</p></Section>;
 	}
