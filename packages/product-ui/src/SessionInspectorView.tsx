@@ -229,7 +229,7 @@ export function InspectorSection({
 				<button
 					aria-controls={contentId}
 					aria-expanded={open}
-					className={cn(NAV_ROW_HIGHLIGHT_HOST_CLASS, "relative flex w-full items-center rounded-lg p-1.5 text-left text-muted-foreground")}
+					className={cn(NAV_ROW_HIGHLIGHT_HOST_CLASS, "relative flex w-full select-none items-center rounded-lg p-1.5 text-left text-muted-foreground")}
 					onClick={() => setOpen((current) => !current)}
 					type="button"
 				>

@@ -3822,7 +3822,9 @@ describe("SessionInspector summary reviews", () => {
 
     const row = await screen.findByTestId("review-comment");
     expect(row).toHaveTextContent("Orchestrator");
-    expect(row).toHaveTextContent("Codex");
+    // The agent shows as its logo, named on hover rather than in a chip.
+    expect(within(row).getByTitle("Orchestrator · Codex")).toBeInTheDocument();
+    expect(row).not.toHaveTextContent("Codex");
     expect(row).toHaveTextContent("Approved");
     await expandComment(row);
     expect(within(row).getByText("auth validation").tagName).toBe("STRONG");
@@ -4160,6 +4162,11 @@ describe("SessionInspector summary reviews", () => {
     expect(aoInline).not.toHaveTextContent("codebanditssss");
     const external = await commentRowWith("External comment.");
     expect(within(external).getByRole("status", { name: "Sent to agent" })).toBeInTheDocument();
+    // Not sent yet: open, with Send to agent in reach. Already sent: folded.
+    const header = (row: HTMLElement) => within(row).getAllByRole("button").find((button) => button.hasAttribute("aria-expanded"));
+    expect(header(aoInline)).toHaveAttribute("aria-expanded", "true");
+    expect(within(aoInline).getByRole("button", { name: "Send to agent" })).toBeInTheDocument();
+    expect(header(external)).toHaveAttribute("aria-expanded", "false");
 
     await userEvent.click(within(aoInline).getByRole("button", { name: "Actions for Orchestrator" }));
     await userEvent.click(await screen.findByRole("menuitem", { name: "Send to agent" }));
@@ -5158,6 +5165,17 @@ describe("SessionInspector summary reviews", () => {
       await screen.findByText("Reviewing #4"),
     ).toBeInTheDocument();
     expect(screen.queryByText(/Reviewing #3/)).not.toBeInTheDocument();
+  });
+
+  it("opens every PR's comments by default, even one with nothing open", async () => {
+    mockCommonGets([], "reviewer-pane", [reviewState(3, "needs_review", "sha-a"), reviewState(4, "needs_review", "sha-b")]);
+
+    renderWithQuery(<SessionInspector session={session([pr(3, "open"), pr(4, "open")])} />);
+    await userEvent.click(screen.getByRole("tab", { name: "Reviews" }));
+
+    const rows = await screen.findAllByTestId("review-pr-row");
+    expect(rows).toHaveLength(2);
+    for (const row of rows) expect(row).toHaveAttribute("aria-expanded", "true");
   });
 
   it("locks the reviewer choice while one is running", async () => {

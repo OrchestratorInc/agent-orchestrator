@@ -2,7 +2,7 @@ import { InspectorSection, commentTextLines, inspectorEmptyClass } from "@aoagen
 import { Reply } from "lucide-react";
 import { useEffect, useId, useState, type MouseEvent, type ReactNode } from "react";
 import { useTranslation } from "react-i18next";
-import { ArrowUpRight, Check, ChevronDown, ChevronRight, ChevronUp, FileCode2, Loader2, MoreHorizontal, Send } from "@/components/app-icons";
+import { ArrowUpRight, Check, ChevronDown, ChevronRight, ChevronUp, FileCode2, Loader2, MoreVertical, Send } from "@/components/app-icons";
 import { usePRDetailsLoad } from "../../hooks/usePRDetailsLoad";
 import { agentLabel } from "../../lib/agent-options";
 import { formatTimeCompact } from "../../lib/format-time";
@@ -108,7 +108,6 @@ export function ReviewCommentsSection({
 						<ReviewPRBlockView
 							actions={readOnly ? readOnlyActions(actions) : actions}
 							block={block}
-							defaultOpen={blocks.length === 1 || block.openCount > 0}
 							hostId={hostId}
 							key={block.key}
 							sessionId={sessionId}
@@ -128,21 +127,20 @@ function readOnlyActions(actions: ReviewCommentActions): ReviewCommentActions {
 function ReviewPRBlockView({
 	actions,
 	block,
-	defaultOpen,
 	hostId,
 	sessionId,
 }: {
 	actions: ReviewCommentActions;
 	block: ReviewPRBlock;
-	defaultOpen: boolean;
 	hostId?: string;
 	sessionId: string;
 }) {
 	const { t } = useTranslation();
-	const [open, setOpen] = useState(defaultOpen);
+	const [open, setOpen] = useState(true);
 	const [view, setView] = useState<"open" | "resolved">("open");
-	// Several comments can stay open while their worker fixes are read side by side.
-	const [expanded, setExpanded] = useState<ReadonlySet<string>>(() => new Set());
+	// A row the person opened or folded keeps that; otherwise an open comment not yet
+	// sent to the worker starts open, so its Send to agent is in reach, and the rest fold.
+	const [expandedHere, setExpandedHere] = useState<ReadonlyMap<string, boolean>>(() => new Map());
 	// Threads resolved from here move to Resolved at once, until the provider's state says so itself.
 	const [resolvedHere, setResolvedHere] = useState<ReadonlySet<string>>(() => new Set());
 	const [sent, setSent] = useState<ReadonlySet<string>>(() => new Set());
@@ -162,6 +160,9 @@ function ReviewPRBlockView({
 	const shown = view === "open" ? openComments : resolvedComments;
 	const unsent = openComments.filter((comment) => !comment.delivered && !sent.has(comment.key));
 	const markSent = (keys: string[]) => setSent((current) => new Set([...current, ...keys]));
+	const awaitingSend = (comment: ReviewComment) =>
+		Boolean(actions.onSend) && reviewCommentIsOpen(comment) && Boolean(comment.body) && !comment.delivered && !sent.has(comment.key);
+	const isExpanded = (comment: ReviewComment) => expandedHere.get(comment.key) ?? (view === "open" && awaitingSend(comment));
 	const meta = block.repository ? `#${block.number} · ${block.repository}` : `#${block.number}`;
 
 	const sendAll = async () => {
@@ -183,7 +184,7 @@ function ReviewPRBlockView({
 			<Pressable
 				aria-controls={open ? listId : undefined}
 				aria-expanded={open}
-				className="group flex w-full min-w-0 items-start gap-2 rounded-lg px-3 py-2.5"
+				className="group flex w-full min-w-0 select-none items-start gap-2 rounded-lg px-3 py-2.5"
 				data-testid="review-pr-row"
 				onClick={() => setOpen((current) => !current)}
 			>
@@ -192,7 +193,8 @@ function ReviewPRBlockView({
 					<span className="break-words text-sm-md font-semibold leading-snug text-foreground">{block.title}</span>
 					<span className="text-micro tabular-nums text-passive transition-colors group-hover:text-muted-foreground">{meta}</span>
 				</span>
-				{comments.length > 0 ? (
+				{/* Open, the tabs carry the counts; folded, the header says what is waiting. */}
+				{!open && comments.length > 0 ? (
 					<span className={cn("mt-0.5 shrink-0 whitespace-nowrap text-2xs", openComments.length > 0 ? "font-medium text-status-in-review" : "text-passive")}>
 						{openComments.length > 0 ? t("inspector.review.openCount", { count: openComments.length }) : t("inspector.review.allResolved")}
 					</span>
@@ -200,17 +202,19 @@ function ReviewPRBlockView({
 			</Pressable>
 			{open ? (
 				<div id={listId}>
-					<div className="flex min-w-0 items-center gap-0.5 border-b border-border/60 pr-2 pb-1.5 pl-3">
-						<div aria-label={t("inspector.review.comments")} className="flex items-center gap-0.5" role="tablist">
-							<Button aria-selected={view === "open"} data-active={view === "open"} onClick={() => { setView("open"); setExpanded(new Set()); }} role="tab" size="xs" variant="quiet">
-								{t("inspector.review.tabOpen")}
-								<span className="tabular-nums text-passive">{openComments.length}</span>
-							</Button>
-							<Button aria-selected={view === "resolved"} data-active={view === "resolved"} onClick={() => { setView("resolved"); setExpanded(new Set()); }} role="tab" size="xs" variant="quiet">
-								{t("inspector.review.tabResolved")}
-								<span className="tabular-nums text-passive">{resolvedComments.length}</span>
-							</Button>
-						</div>
+					<div className="flex min-w-0 select-none items-center gap-1 border-b border-border/60 pr-2 pb-1.5 pl-3">
+						{comments.length > 0 ? (
+							<div aria-label={t("inspector.review.comments")} className="flex items-center gap-0.5" role="tablist">
+								<Button aria-selected={view === "open"} data-active={view === "open"} onClick={() => { setView("open"); setExpandedHere(new Map()); }} role="tab" size="xs" variant="quiet">
+									{t("inspector.review.tabOpen")}
+									<span className="tabular-nums text-passive">{openComments.length}</span>
+								</Button>
+								<Button aria-selected={view === "resolved"} data-active={view === "resolved"} onClick={() => { setView("resolved"); setExpandedHere(new Map()); }} role="tab" size="xs" variant="quiet">
+									{t("inspector.review.tabResolved")}
+									<span className="tabular-nums text-passive">{resolvedComments.length}</span>
+								</Button>
+							</div>
+						) : null}
 						<span className="ml-auto" />
 						<ReviewersMenu actions={actions} block={block} />
 						<PRActionsMenu
@@ -228,23 +232,22 @@ function ReviewPRBlockView({
 									actions={actions}
 									block={block}
 									comment={comment}
-									expanded={expanded.has(comment.key)}
+									expanded={isExpanded(comment)}
 									key={comment.key}
-									onExpandedChange={(next) => setExpanded((current) => {
-										const updated = new Set(current);
-										if (next) updated.add(comment.key);
-										else updated.delete(comment.key);
-										return updated;
-									})}
+									onExpandedChange={(next) => setExpandedHere((current) => new Map(current).set(comment.key, next))}
 									onResolved={() => setResolvedHere((current) => new Set(current).add(comment.key))}
-									onSent={() => markSent([comment.key])}
+									onSent={() => {
+										// Stays open so "Sent to agent" shows where it was pressed.
+										setExpandedHere((current) => (current.has(comment.key) ? current : new Map(current).set(comment.key, true)));
+										markSent([comment.key]);
+									}}
 									sent={comment.delivered || sent.has(comment.key)}
 								/>
 							))}
 						</div>
 					) : (
 						<p className={cn(inspectorEmptyClass, "m-0 px-3 py-3.5")} role="tabpanel">
-							{view === "open" ? t("inspector.review.noOpenComments") : t("inspector.review.nothingResolved")}
+							{comments.length === 0 ? t("pr.comments.none") : view === "open" ? t("inspector.review.noOpenComments") : t("inspector.review.nothingResolved")}
 						</p>
 					)}
 				</div>
@@ -334,7 +337,7 @@ function PRActionsMenu({
 		<DropdownMenu>
 			<DropdownMenuTrigger asChild>
 				<Button aria-label={t("inspector.review.prActions")} size="icon-xs" title={t("inspector.review.prActions")} variant="quiet">
-					{sendingAll ? <Loader2 aria-hidden="true" className="size-icon-xs animate-spin" /> : <MoreHorizontal aria-hidden="true" className="size-icon-xs" />}
+					{sendingAll ? <Loader2 aria-hidden="true" className="size-icon-sm animate-spin" /> : <MoreVertical aria-hidden="true" className="size-icon-sm" />}
 				</Button>
 			</DropdownMenuTrigger>
 			<DropdownMenuContent align="end" className="min-w-52">
@@ -476,11 +479,11 @@ function ReviewCommentRow({
 			<DropdownMenuTrigger asChild>
 				<Button
 					aria-label={t("pr.comments.actionsFor", { name })}
-					className="opacity-0 group-hover/review-row:opacity-100 group-focus-within/review-row:opacity-100 data-[state=open]:opacity-100"
+					className={cn("-mr-1", !expanded && "opacity-0 group-hover/review-row:opacity-100 group-focus-within/review-row:opacity-100 data-[state=open]:opacity-100")}
 					size="icon-xs"
 					variant="quiet"
 				>
-					<MoreHorizontal aria-hidden="true" className="size-icon-xs" />
+					<MoreVertical aria-hidden="true" className="size-icon-sm" />
 				</Button>
 			</DropdownMenuTrigger>
 			<DropdownMenuContent align="end" className="min-w-44">{menuItems}</DropdownMenuContent>
@@ -489,7 +492,7 @@ function ReviewCommentRow({
 
 	return (
 		<div
-			className={cn("group/review-row relative min-w-0 px-3 py-2 text-xs transition-colors", expanded ? "bg-interactive-hover/40" : "cursor-pointer hover:bg-interactive-hover/30")}
+			className={cn("group/review-row relative min-w-0 select-none px-3 py-2 text-xs transition-colors", expanded ? "bg-interactive-hover/40" : "cursor-pointer hover:bg-interactive-hover/30")}
 			data-kind={comment.kind}
 			data-testid="review-comment"
 			onClick={openFromRow}
@@ -502,24 +505,33 @@ function ReviewCommentRow({
 					onClick={() => onExpandedChange(!expanded)}
 				>
 					{orchestrator ? <AgentAvatar className="size-4 shrink-0" decorative provider={comment.harness || "reviewer"} /> : <PRAvatar bot={comment.isBot} name={comment.author} size="sm" />}
-					<span className="truncate font-medium text-foreground">{name}</span>
-					{orchestrator && comment.harness ? <RowTag>{agentLabel(comment.harness)}</RowTag> : comment.isBot ? <RowTag>{t("pr.comments.bot")}</RowTag> : null}
+					{/* The agent logo says which agent reviewed; its name is on hover. */}
+					<span className="truncate font-medium text-foreground" title={orchestrator && comment.harness ? `${name} · ${agentLabel(comment.harness)}` : undefined}>{name}</span>
+					{!orchestrator && comment.isBot ? <span className="shrink-0 text-micro text-passive">{t("pr.comments.bot")}</span> : null}
 					{comment.resolved ? <span className="shrink-0 text-micro text-success">{t("pr.comments.resolvedTag")}</span> : null}
 					{comment.earlier ? <span className="shrink-0 text-micro text-passive">{t("inspector.review.earlier")}</span> : null}
 					{comment.requestedByAgent ? <span className="min-w-0 truncate text-micro text-passive">{t("inspector.review.requestedByAgent")}</span> : null}
 				</Pressable>
-				{sent ? (
-					<span aria-label={t("pr.comments.sentToAgent")} className="inline-flex size-6 shrink-0 items-center justify-center text-success" role="status" title={t("pr.comments.sentToAgent")}>
-						<Check aria-hidden="true" className="size-icon-xs" />
-					</span>
+				{sent && !expanded ? (
+					<span aria-label={t("pr.comments.sentToAgent")} className="shrink-0 whitespace-nowrap text-micro text-passive" role="status">{t("pr.comments.sentToAgent")}</span>
 				) : null}
-				{menu}
-				{comment.at ? <span className="shrink-0 text-micro tabular-nums text-passive" title={comment.at}>{formatTimeCompact(comment.at)}</span> : null}
+				{/* The time holds the row's right edge; on hover or focus its actions take its place, so nothing moves. */}
+				<span className={cn("relative flex h-6 shrink-0 items-center justify-end gap-1", menu && "min-w-6")}>
+					{comment.at ? (
+						<span
+							className={cn("text-micro tabular-nums text-passive", menu && !expanded && "group-hover/review-row:invisible group-focus-within/review-row:invisible group-has-[[data-state=open]]/review-row:invisible")}
+							title={comment.at}
+						>
+							{formatTimeCompact(comment.at)}
+						</span>
+					) : null}
+					{menu ? <span className={cn("flex items-center", !expanded && "absolute inset-y-0 right-0")}>{menu}</span> : null}
+				</span>
 			</div>
 			{expanded ? (
 				<div className="flex min-w-0 flex-col gap-1.5 pt-1 pl-5.5" id={bodyId}>
 					{where ? <div className="flex min-w-0">{where}</div> : null}
-					<div className="min-w-0 select-text text-muted-foreground">
+					<div className="min-w-0 cursor-text select-text text-muted-foreground">
 						<PRMarkdown body={comment.body} />
 					</div>
 					{comment.replies.map((replyItem) => (
@@ -529,13 +541,19 @@ function ReviewCommentRow({
 								<span className="truncate font-medium text-foreground">{replyItem.author}</span>
 								{replyItem.createdAt ? <span className="text-micro tabular-nums text-passive">{formatTimeCompact(replyItem.createdAt)}</span> : null}
 							</span>
-							<PRMarkdown body={replyItem.body} />
+							<div className="min-w-0 cursor-text select-text"><PRMarkdown body={replyItem.body} /></div>
 						</div>
 					))}
 					<div className="-ml-1.5 flex min-w-0 flex-wrap items-center gap-x-2 gap-y-1 pt-0.5">
-						{canSend ? (
-							<FootAction disabled={sent || sendState === "busy"} icon={sendState === "busy" ? <Loader2 className="animate-spin" /> : sent ? <Check /> : <Send />} onClick={() => void send()} tone={sent ? "success" : undefined}>
-								{sent ? t("pr.comments.sentToAgent") : t("pr.comments.sendToAgent")}
+						{canSend && sent ? (
+							// Done, not an action: reads as a fact where Send to agent was.
+							<span aria-label={t("pr.comments.sentToAgent")} className="inline-flex h-6 items-center gap-1.5 px-1.5 text-xs font-medium text-muted-foreground" role="status">
+								<Check aria-hidden="true" className="size-icon-sm text-success" />
+								{t("pr.comments.sentToAgent")}
+							</span>
+						) : canSend ? (
+							<FootAction disabled={sendState === "busy"} icon={sendState === "busy" ? <Loader2 className="animate-spin" /> : <Send />} onClick={() => void send()}>
+								{t("pr.comments.sendToAgent")}
 							</FootAction>
 						) : null}
 						{replyOffered && !replying ? <FootAction icon={<Reply />} onClick={() => setReplying(true)}>{t("pr.comments.reply")}</FootAction> : null}
@@ -575,10 +593,6 @@ function ReviewCommentRow({
 	);
 }
 
-function RowTag({ children }: { children: ReactNode }) {
-	return <span className="shrink-0 rounded-sm border border-border px-1 text-micro font-medium leading-4 text-muted-foreground">{children}</span>;
-}
-
 /** A quiet text action under an opened comment, as on the PR tab's cards. */
 function FootAction({
 	children,
@@ -587,7 +601,6 @@ function FootAction({
 	icon,
 	iconAfter,
 	onClick,
-	tone,
 }: {
 	children: ReactNode;
 	className?: string;
@@ -595,11 +608,10 @@ function FootAction({
 	icon?: ReactNode;
 	iconAfter?: ReactNode;
 	onClick: () => void;
-	tone?: "success";
 }) {
 	return (
 		<Button
-			className={cn("gap-1.5 px-1.5 font-medium [&_svg]:size-icon-sm", tone === "success" && "disabled:opacity-100 [&_svg]:text-success", className)}
+			className={cn("gap-1.5 px-1.5 font-medium [&_svg]:size-icon-sm", className)}
 			disabled={disabled}
 			onClick={onClick}
 			size="xs"

@@ -51,9 +51,14 @@ test("reviewer controls and comment rows fit the inspector at minimum width", as
 	await expect(rows.first()).toBeVisible();
 	await expect(block.getByText("prateek").first()).toBeVisible();
 
-	// A folded row is two lines: who and when, then where and the first line of the text.
+	// A comment not yet sent to the agent starts open with Send to agent in reach;
+	// its header folds it to two lines and opens it again.
 	const firstRow = rows.first();
 	const header = firstRow.locator("[aria-expanded]").first();
+	if ((await header.getAttribute("aria-expanded")) === "true") {
+		await expect(firstRow.getByRole("button", { name: "Send to agent" })).toBeVisible();
+		await header.click();
+	}
 	await expect(header).toHaveAttribute("aria-expanded", "false");
 	await header.click();
 	await expect(header).toHaveAttribute("aria-expanded", "true");

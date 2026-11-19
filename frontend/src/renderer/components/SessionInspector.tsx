@@ -34,7 +34,7 @@ import {
 	GitMerge,
 	Info,
 	Loader2,
-	MoreHorizontal,
+	MoreVertical,
 } from "@/components/app-icons";
 import { InfoRow, InfoRowButton, InfoRowLink } from "./InspectorInfoRow";
 import type { components } from "../../api/schema";
@@ -2708,7 +2708,7 @@ function ReviewPanel({
 
 	return (
 		<Section surface={false} title={t("settings.models.reviewerRole")}>
-			<div className="flex min-w-0 flex-col">
+			<div className="flex min-w-0 select-none flex-col">
 				{error ? (
 					<p className="m-0 pb-2 text-xs leading-normal text-error" role="alert">
 						{apiErrorMessage(error, t("inspector.reviewRequestFailed"))}
@@ -2819,7 +2819,7 @@ function ReviewPanel({
 								<DropdownMenu>
 									<DropdownMenuTrigger asChild>
 										<Button aria-label={t("inspector.review.moreActions")} size="icon-sm" title={t("inspector.review.moreActions")} type="button" variant="quiet">
-											<MoreHorizontal aria-hidden="true" className="size-icon-sm" />
+											<MoreVertical aria-hidden="true" className="size-icon-sm" />
 										</Button>
 									</DropdownMenuTrigger>
 									<DropdownMenuContent align="end" className="min-w-52">
