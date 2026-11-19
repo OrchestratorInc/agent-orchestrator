@@ -53,9 +53,9 @@ func TestCloudTranscriptUsesOnlyTheRecordedConversation(t *testing.T) {
 		t.Fatalf("recorded conversation: size %d, err %v; want %d", size, err, len(own))
 	}
 
-	rec.Harness = domain.HarnessCursor
+	rec.Harness = domain.HarnessAider
 	if _, err := m.CloudTranscriptSize(context.Background(), rec, domain.ProjectRecord{}); !errors.Is(err, ErrCloudTranscriptUnsupported) {
-		t.Fatalf("cursor: err = %v, want ErrCloudTranscriptUnsupported", err)
+		t.Fatalf("aider: err = %v, want ErrCloudTranscriptUnsupported", err)
 	}
 }
 

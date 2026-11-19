@@ -1873,7 +1873,7 @@ paths:
         - name: harness
           in: query
           required: true
-          schema: { type: string, enum: [claude-code, codex, opencode] }
+          schema: { type: string, enum: [claude-code, codex, cursor, opencode] }
         - name: agentSessionId
           in: query
           required: true

@@ -536,7 +536,7 @@ func (s *Service) MoveTranscript(ctx context.Context, id domain.SessionID) (Move
 	}
 	switch {
 	case errors.Is(err, sessionmanager.ErrCloudTranscriptUnsupported):
-		return MoveTranscript{}, apierr.Conflict("MOVE_TRANSCRIPT_UNSUPPORTED", "Orchestrator Cloud can resume only Claude Code, Codex and OpenCode 2 conversations.", nil)
+		return MoveTranscript{}, apierr.Conflict("MOVE_TRANSCRIPT_UNSUPPORTED", "Orchestrator Cloud can resume only Claude Code, Codex, OpenCode 2 and Cursor conversations.", nil)
 	case errors.Is(err, nativetransfer.ErrSegmented):
 		return MoveTranscript{}, apierr.Conflict("MOVE_TRANSCRIPT_UNSUPPORTED", "The Codex conversation continues in segment files, which a move does not carry yet.", nil)
 	case errors.Is(err, nativetransfer.ErrTooLarge):
@@ -617,7 +617,7 @@ func (s *Service) moveTargetRefusal(ctx context.Context, project domain.ProjectR
 
 // movesConversation reports a harness whose conversation a move carries.
 func movesConversation(h domain.AgentHarness) bool {
-	return h == domain.HarnessClaudeCode || h == domain.HarnessCodex || h == domain.HarnessOpenCodeV2
+	return h == domain.HarnessClaudeCode || h == domain.HarnessCodex || h == domain.HarnessOpenCodeV2 || h == domain.HarnessCursor
 }
 
 // carriesConversation reports a move/import carrying a conversation to place.

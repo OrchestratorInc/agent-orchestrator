@@ -459,7 +459,7 @@ function MoveHereDialogBody({ session, orgId, onClose }: { session: WorkspaceSes
 	// Try again moves into the project the first attempt chose or cloned, so it needs neither.
 	const ready = !loading && !unavailable && (step !== undefined || target !== undefined || cloneInto !== undefined);
 	const changes = preview.data?.changes ?? [];
-	const transcript = ["claude-code", "codex", "opencode"].includes(session.provider) ? preview.data?.transcript : undefined;
+	const transcript = ["claude-code", "codex", "opencode", "cursor"].includes(session.provider) ? preview.data?.transcript : undefined;
 
 	const start = async () => {
 		if (!ready || !cloudClient) return;

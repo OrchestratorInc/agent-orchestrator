@@ -8,6 +8,7 @@ import (
 	"os"
 	"strings"
 
+	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/agent/cursorstore"
 	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/chatdriver/opencodeidentity"
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
 	"github.com/aoagents/agent-orchestrator/backend/internal/nativetransfer"
@@ -15,7 +16,7 @@ import (
 )
 
 // ErrCloudTranscriptUnsupported reports an agent whose conversation AO Cloud
-// cannot resume. Claude Code's, Codex's and OpenCode 2's can be moved.
+// cannot resume. Claude Code's, Codex's, OpenCode 2's and Cursor's can be moved.
 var ErrCloudTranscriptUnsupported = errors.New("orchestrator cloud cannot resume this agent's conversation")
 
 // ErrNoRecordedConversation reports a session whose agent has not reported its
@@ -33,9 +34,16 @@ func (m *Manager) CloudTranscriptSize(ctx context.Context, rec domain.SessionRec
 	if err != nil {
 		return 0, err
 	}
-	if rec.Harness == domain.HarnessCodex {
+	switch rec.Harness {
+	case domain.HarnessCodex:
 		_, _, size, err := nativetransfer.CodexRollout(ctx, nativetransfer.CodexOptions{Home: opts.ConfigDir, NativeID: opts.NativeID})
 		return size, err
+	case domain.HarnessCursor:
+		path, err := cursorChat(ctx, opts)
+		if err != nil {
+			return 0, err
+		}
+		return cursorChatSize(path), nil
 	}
 	_, _, size, err := nativetransfer.ClaudeTranscript(ctx, opts)
 	return size, err
@@ -59,8 +67,19 @@ func (m *Manager) WriteCloudTranscript(ctx context.Context, rec domain.SessionRe
 	if err != nil {
 		return "", err
 	}
-	if rec.Harness == domain.HarnessCodex {
+	switch rec.Harness {
+	case domain.HarnessCodex:
 		return nativetransfer.WriteCodexRolloutForCloud(ctx, w, nativetransfer.CodexOptions{Home: opts.ConfigDir, NativeID: opts.NativeID}, maxBytes)
+	case domain.HarnessCursor:
+		path, err := cursorChat(ctx, opts)
+		if err != nil {
+			return "", err
+		}
+		if size := cursorChatSize(path); size > maxBytes {
+			return "", fmt.Errorf("%w: %d bytes, over %d", nativetransfer.ErrTooLarge, size, maxBytes)
+		}
+		archive, err := cursorstore.Pack(ctx, opts.ConfigDir, path, w)
+		return archive.ID, err
 	}
 	return nativetransfer.WriteClaudeTranscriptForCloud(ctx, w, opts, maxBytes)
 }
@@ -91,7 +110,7 @@ func (m *Manager) WriteCloudSidecar(ctx context.Context, rec domain.SessionRecor
 }
 
 func (m *Manager) cloudTranscriptOptions(ctx context.Context, rec domain.SessionRecord, project domain.ProjectRecord) (nativetransfer.ClaudeExportOptions, error) {
-	if rec.Harness != domain.HarnessClaudeCode && rec.Harness != domain.HarnessCodex {
+	if rec.Harness != domain.HarnessClaudeCode && rec.Harness != domain.HarnessCodex && rec.Harness != domain.HarnessCursor {
 		return nativetransfer.ClaudeExportOptions{}, ErrCloudTranscriptUnsupported
 	}
 	agent, ok := m.agents.Agent(rec.Harness)
@@ -124,6 +143,40 @@ func recordedConversation(rec domain.SessionRecord) (string, error) {
 		return id, nil
 	}
 	return "", ErrNoRecordedConversation
+}
+
+// cursorChat finds the session's Cursor chat store: the terminal CLI's for
+// its working directory, the Chat layout's, or a copy in another directory.
+func cursorChat(ctx context.Context, opts nativetransfer.ClaudeExportOptions) (string, error) {
+	for _, find := range []func() (string, error){
+		func() (string, error) { return cursorstore.SessionPath(opts.ConfigDir, opts.Cwd, opts.NativeID) },
+		func() (string, error) { return cursorstore.ACPSessionPath(opts.ConfigDir, opts.NativeID) },
+	} {
+		if path, err := find(); err == nil {
+			if _, err := os.Stat(path); err == nil {
+				return path, nil
+			}
+		}
+	}
+	path, found, err := cursorstore.Find(ctx, opts.ConfigDir, opts.NativeID)
+	if err != nil {
+		return "", err
+	}
+	if !found {
+		return "", fmt.Errorf("no Cursor chat %s: %w", opts.NativeID, os.ErrNotExist)
+	}
+	return path, nil
+}
+
+// cursorChatSize is a chat store's size with its WAL.
+func cursorChatSize(path string) int64 {
+	var size int64
+	for _, name := range []string{path, path + "-wal"} {
+		if info, err := os.Stat(name); err == nil {
+			size += info.Size()
+		}
+	}
+	return size
 }
 
 // conversationTransfer is an agent that exports and imports its own
@@ -184,7 +237,8 @@ func (m *Manager) nativeConfigDir(ctx context.Context, harness domain.AgentHarne
 
 // placeTransferConversation puts a moved conversation where the agent CLI
 // finds it from workspacePath and returns its native id. For Codex the
-// archive is the rollout itself, for OpenCode 2 its session export document.
+// archive is the rollout itself, for OpenCode 2 its session export document,
+// for Cursor a tar of the chat's store.db and meta.json.
 func (m *Manager) placeTransferConversation(ctx context.Context, harness domain.AgentHarness, workspacePath string, env map[string]string, archive string) (string, error) {
 	if harness == domain.HarnessOpenCodeV2 {
 		t, err := m.conversationTransfer(harness)
@@ -200,7 +254,7 @@ func (m *Manager) placeTransferConversation(ctx context.Context, harness domain.
 		}
 		return t.ImportConversation(ctx, data, workspacePath, env)
 	}
-	if harness != domain.HarnessClaudeCode && harness != domain.HarnessCodex {
+	if harness != domain.HarnessClaudeCode && harness != domain.HarnessCodex && harness != domain.HarnessCursor {
 		return "", ErrCloudTranscriptUnsupported
 	}
 	configDir, err := m.nativeConfigDir(ctx, harness, env)
@@ -209,6 +263,14 @@ func (m *Manager) placeTransferConversation(ctx context.Context, harness domain.
 	}
 	if harness == domain.HarnessCodex {
 		return nativetransfer.ImportCodex(ctx, archive, nativetransfer.CodexImportOptions{Home: configDir, Cwd: workspacePath})
+	}
+	if harness == domain.HarnessCursor {
+		f, err := os.Open(archive)
+		if err != nil {
+			return "", err
+		}
+		defer func() { _ = f.Close() }()
+		return cursorstore.Unpack(ctx, configDir, f, workspacePath)
 	}
 	f, err := os.Open(archive)
 	if err != nil {

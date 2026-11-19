@@ -9,7 +9,7 @@
 # GitHub is replaced by a git server container on the compose network
 # (AO_CLOUD_DEVELOPMENT_GITHUB_URL); the local repository reaches the same
 # server through url.insteadOf. The agent is HARNESS (claude-code, the
-# default, codex or opencode-v2, which Cloud runs as opencode), signed in on
+# default, codex, cursor or opencode-v2, which Cloud runs as opencode), signed in on
 # this machine; in Cloud it has a placeholder key, so it never runs a turn
 # there.
 #
@@ -258,8 +258,11 @@ check_local() { # want-tip want-snapshot-file
 }
 
 # CONVERSATIONS lists the files that may hold conversation $1: Claude Code's
-# transcripts or Codex's rollouts.
-if [[ "$HARNESS" == codex ]]; then
+# transcripts, Codex's rollouts or the meta.json beside a Cursor chat.
+if [[ "$HARNESS" == cursor ]]; then
+	CONVERSATIONS='ls "${CURSOR_DATA_DIR:-$HOME/.cursor}"/chats/*/"$1"/meta.json 2>/dev/null'
+	CLOUD_CONVERSATIONS='find /workspace -path "*/.cursor/chats/*/$1/meta.json" 2>/dev/null'
+elif [[ "$HARNESS" == codex ]]; then
 	CONVERSATIONS='find -L "${CODEX_HOME:-$HOME/.codex}/sessions" -name "rollout-*-$1.jsonl" 2>/dev/null'
 	CLOUD_CONVERSATIONS='find /workspace -name "rollout-*-$1.jsonl" -path "*/sessions/*" 2>/dev/null'
 else
@@ -429,7 +432,7 @@ cloud_to_local() {
 	[[ "$(json "[t['projectId'] for t in d['targets'] if not t.get('refusal')]" < "$W/targets.json")" == "['$LOCAL_PROJECT']" ]] || { cat "$W/targets.json"; fail "move targets"; }
 	cloud POST "/orgs/$ORG/sessions/$cid/move/export" > "$W/export.json"
 	# An exited agent can stay a zombie, since ao-worker runs as PID 1.
-	cloud_exec 'ps -eo stat=,comm= | grep -qE "^[^Z][^ ]* +(claude|codex|opencode)$"' && fail "Cloud's agent still runs after the export"
+	cloud_exec 'ps -eo stat=,comm= | grep -qE "^[^Z][^ ]* +(claude|codex|opencode|cursor-agent)$"' && fail "Cloud's agent still runs after the export"
 	tip=$(json "d['manifest']['tip']" < "$W/export.json") || { cat "$W/export.json"; fail "Cloud export"; }
 	[[ "$(json "d['manifest']['wip']" < "$W/export.json")" == "True" ]] || fail "Cloud export made no WIP commit"
 	[[ "$(remote_tip)" == "$tip" ]] || fail "origin $BRANCH is $(remote_tip), want the exported $tip"
