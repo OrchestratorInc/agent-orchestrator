@@ -108,3 +108,38 @@ func TestResolveProviderContextLeavesAnExpiredRenewableLoginToTheNextSession(t *
 		})
 	}
 }
+
+// When the CLI is asked, it may renew the login while it runs; the credential
+// the check goes on with is the one it left, not the one read before it.
+func TestResolveProviderContextReadsTheLoginTheCLILeft(t *testing.T) {
+	now := time.Now()
+	pinClaudeNow(t, now)
+	for _, name := range []string{"CLAUDE_CODE_OAUTH_TOKEN", "ANTHROPIC_API_KEY", "ANTHROPIC_AUTH_TOKEN", "ANTHROPIC_BASE_URL"} {
+		t.Setenv(name, "")
+	}
+	dir := t.TempDir()
+	t.Setenv("CLAUDE_CONFIG_DIR", dir)
+	t.Setenv("CLAUDE_SECURESTORAGE_CONFIG_DIR", dir)
+	writeLogin := func(token string) {
+		login, err := json.Marshal(map[string]any{"claudeAiOauth": map[string]any{
+			"accessToken": token, "refreshToken": "sk-ant-ort01-test",
+			"expiresAt": now.Add(time.Hour).UnixMilli(), "refreshTokenExpiresAt": now.Add(30 * 24 * time.Hour).UnixMilli(),
+		}})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(dir, ".credentials.json"), login, 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	writeLogin("sk-ant-oat01-before")
+	resolved := (&Plugin{}).resolveProviderContext(context.Background(), "claude", t.TempDir(),
+		map[string]string{"CLAUDE_CONFIG_DIR": dir},
+		func(context.Context, string, string, map[string]string) (claudeAuthReport, bool) {
+			writeLogin("sk-ant-oat01-renewed") // the CLI renews the token while it runs
+			return claudeAuthReport{}, false
+		})
+	if !resolved.found || resolved.credential.Secret != "sk-ant-oat01-renewed" {
+		t.Fatal("the check went on with the login read before the CLI ran, not the one it left")
+	}
+}

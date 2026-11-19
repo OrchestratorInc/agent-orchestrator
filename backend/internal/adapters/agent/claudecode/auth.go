@@ -247,6 +247,9 @@ func (p *Plugin) resolveProviderContext(
 	report, cliOK := claudeAuthReport{}, false
 	if !firstPartyFound || !firstParty.ExpiredButRenewable(claudeNow()) {
 		report, cliOK = reportFn(ctx, binary, workingDir, opts.CommandEnv)
+		// The CLI can renew a token that expired since the read above; read the
+		// login it left, not the one before it.
+		firstParty, firstPartyFound = agentcreds.ResolveLocal(ctx, agentcreds.ProviderFirstParty, opts)
 	}
 	reported := ""
 	if cliOK {

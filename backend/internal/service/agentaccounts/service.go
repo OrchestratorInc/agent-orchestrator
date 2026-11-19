@@ -362,13 +362,21 @@ func (s *Service) read(ctx context.Context, account domain.AgentAccount) *readin
 		// keep what the last good one found, so it does not read as signed out.
 		r.renewalPending = errors.Is(err, ports.ErrAgentAccountRenewalPending)
 		s.mu.Lock()
-		if prev := s.readings[account.ID]; prev != nil && (prev.identityErr == "" || prev.renewalPending) {
+		prev := s.readings[account.ID]
+		if prev != nil && (prev.identityErr == "" || prev.renewalPending) {
 			r.identity, r.limits = prev.identity, prev.limits
 		}
 		s.mu.Unlock()
-		// A login waiting on its token's renewal is signed in, even before any
-		// reading said who it is (#8724).
-		if r.renewalPending {
+		switch {
+		case r.renewalPending && prev != nil && prev.mismatch:
+			// A pending renewal says nothing about whose login the folder holds,
+			// so one last found holding another login stays refused until a check
+			// confirms its own.
+			r.identity, r.mismatch = prev.identity, true
+			r.identityProblem, r.identityErr = prev.identityProblem, prev.identityErr
+		case r.renewalPending:
+			// A login waiting on its token's renewal is signed in, even before
+			// any reading said who it is (#8724).
 			r.identity.SignedIn, r.identity.LoggedIn = true, true
 		}
 	}

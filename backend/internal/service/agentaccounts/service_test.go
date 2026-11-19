@@ -1101,3 +1101,38 @@ func TestAFailedNewerReadDoesNotHideANewerIdentity(t *testing.T) {
 		t.Fatalf("view = %+v, want the successful b@ reading", views[0])
 	}
 }
+
+// A pending renewal says nothing about whose login a folder holds, so a folder
+// last found holding another login stays refused while its token waits.
+func TestAWrongLoginStaysRefusedWhileItsTokenAwaitsRenewal(t *testing.T) {
+	ctx := context.Background()
+	root := t.TempDir()
+	claude := &fakeClaude{signedInAs: map[string]string{"": "a@example.com"}, pending: map[string]bool{}}
+	store := &memStore{defaults: map[domain.AgentAccountProvider]string{}, bindings: map[domain.SessionID]string{}}
+	svc := New(store, []ports.AgentAccountProviderCLI{claude}, root, fakeTerminals{}, nil)
+	start, _ := svc.StartLogin(ctx, domain.AgentAccountProviderClaude)
+	b := filepath.Join(root, "claude", start.OperationID)
+	claude.signedInAs[b] = "b@example.com"
+	if _, _, err := svc.VerifyLogin(ctx, start.OperationID); err != nil {
+		t.Fatal(err)
+	}
+	claude.signedInAs[b] = "someone-else@example.com" // the folder now holds another login
+	if _, err := svc.List(ctx, true); err != nil {
+		t.Fatal(err)
+	}
+	claude.pending[b] = true
+	for round := 1; round <= 2; round++ {
+		views, err := svc.List(ctx, true)
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, view := range views {
+			if view.Account.ID == start.OperationID && (view.SignedIn || view.IdentityProblem != domain.AgentAccountProblemOtherLogin) {
+				t.Fatalf("round %d: signed in %v, problem %q; want the wrong login still refused", round, view.SignedIn, view.IdentityProblem)
+			}
+		}
+	}
+	if err := svc.ValidateAccount(ctx, domain.HarnessClaudeCode, start.OperationID); !errors.Is(err, ports.ErrAgentAccountSignedOut) {
+		t.Fatalf("ValidateAccount = %v, want the wrong login refused", err)
+	}
+}
