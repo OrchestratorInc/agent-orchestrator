@@ -625,12 +625,19 @@ export const useUiStore = create<UiState>((set, get) => ({
 		const current = () => request === themePreferenceRequest;
 		const apply = (resolvedTheme: Theme) => {
 			if (!current()) return;
+			// An opaque window reveals before the update runs, so main can answer
+			// before System is in the store; the correction below waits for both.
+			let markCommitted: () => void = () => undefined;
+			const committed = new Promise<void>((resolve) => {
+				markCommitted = resolve;
+			});
 			runThemeTransition(
 				() => {
 					if (!current()) return;
 					getLocalStorage()?.setItem(themeStorageKey, themePreference);
 					applyDocumentTheme(resolvedTheme);
 					set({ themePreference, resolvedTheme });
+					markCommitted();
 				},
 				// The window's vibrancy material follows nativeTheme; flip it as the
 				// new frame is revealed so the tint and the material change together.
@@ -643,11 +650,10 @@ export const useUiStore = create<UiState>((set, get) => ({
 					if (themePreference !== "system") return;
 					// Skip the lookup once a newer choice exists: on Windows and Linux it
 					// sets themeSource to "system" again, over that choice.
-					void sent
+					void Promise.all([sent, committed])
 						.then(() => (current() ? readSystemTheme() : null))
 						.then((os) => {
-							const state = get();
-							if (!os || !current() || state.themePreference !== "system" || state.resolvedTheme === os) return;
+							if (!os || !current() || get().resolvedTheme === os) return;
 							runThemeTransition(() => {
 								if (!current()) return;
 								applyDocumentTheme(os);

@@ -81,6 +81,37 @@ describe("theme preference", () => {
 		expect(useUiStore.getState().themePreference).toBe("system");
 	});
 
+	it("keeps the OS correction until a deferred update commits System", async () => {
+		const updates: (() => void)[] = [];
+		Object.defineProperty(document, "startViewTransition", {
+			configurable: true,
+			writable: true,
+			value: (update: () => void) => {
+				updates.push(update);
+				return { ready: Promise.resolve(), finished: Promise.resolve() };
+			},
+		});
+		try {
+			// The OS turns dark between the first lookup and the reveal.
+			const lookup = vi.spyOn(aoBridge.theme, "systemAppearance").mockResolvedValueOnce("light").mockResolvedValue("dark");
+			useUiStore.getState().setThemePreference("system");
+			await vi.waitFor(() => expect(updates).toHaveLength(1));
+			// Main has answered theme:set, but the update has not run yet.
+			await new Promise((resolve) => setTimeout(resolve, 0));
+			expect(lookup).toHaveBeenCalledTimes(1);
+
+			updates[0]?.();
+			expect(useUiStore.getState().resolvedTheme).toBe("light");
+			await vi.waitFor(() => expect(updates).toHaveLength(2));
+			updates[1]?.();
+
+			expect(useUiStore.getState().themePreference).toBe("system");
+			expect(useUiStore.getState().resolvedTheme).toBe("dark");
+		} finally {
+			Reflect.deleteProperty(document, "startViewTransition");
+		}
+	});
+
 	it("skips the second OS lookup when a newer choice lands while System reaches main", async () => {
 		const lookup = vi.spyOn(aoBridge.theme, "systemAppearance").mockResolvedValue("light");
 		let releaseSet: () => void = () => undefined;
