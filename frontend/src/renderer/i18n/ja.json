@@ -3928,6 +3928,7 @@
 	"coder.templateOptions.settingsHint": "変更は新しいセッションに適用されます。",
 	"settings.models.selectModel": "モデルを選択",
 	"settings.models.useAgentModel": "エージェントのモデルを使用",
+	"settings.models.pinnedNotListed": "このプロジェクトで設定済み · {{agent}} はこのアカウントでは表示していません",
 	"settings.models.useAgentMode": "エージェントのモードを使用",
 	"settings.models.agentDefaultMode": "エージェントの既定",
 	"settings.models.clearEffort": "推論レベルをクリア",

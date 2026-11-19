@@ -33,7 +33,8 @@ export type ModelEffortSelection = Pick<ModelTuningControlsProps,
 	"effort" | "effortsWithoutModel" | "onEffortChange" | "onEffortReset" | "onValidityChange" | "roleLabel"
 >;
 
-type AgentModel = NonNullable<AgentModelCatalog["models"]>[number];
+// note is a quiet line under the name, such as why a kept model is not listed.
+type AgentModel = NonNullable<AgentModelCatalog["models"]>[number] & { note?: string };
 
 type IndexedModel = {
 	model: AgentModel;
@@ -452,6 +453,9 @@ export function AgentModelCombobox({
 												{item.model.unavailableReason && (
 													<p className="text-xs text-settings-muted">{item.model.unavailableReason}</p>
 												)}
+												{item.model.note && !item.model.unavailableReason && (
+													<p className="text-xs text-settings-muted">{item.model.note}</p>
+												)}
 											</div>
 											{modelHint?.id === item.id && (
 												<span className="ml-2 shrink-0 text-xs text-settings-muted">{modelHint.label}</span>
@@ -472,6 +476,9 @@ export function AgentModelCombobox({
 													)}
 													{item.model.unavailableReason && (
 														<p className="text-xs text-settings-muted">{item.model.unavailableReason}</p>
+													)}
+													{item.model.note && !item.model.unavailableReason && (
+														<p className="text-xs text-settings-muted">{item.model.note}</p>
 													)}
 												</div>
 												{modelHint?.id === item.id && (

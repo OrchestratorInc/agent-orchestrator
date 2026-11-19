@@ -3928,6 +3928,7 @@
 	"coder.templateOptions.settingsHint": "Änderungen gelten für neue Sitzungen.",
 	"settings.models.selectModel": "Modell auswählen",
 	"settings.models.useAgentModel": "Agentenmodell verwenden",
+	"settings.models.pinnedNotListed": "Für dieses Projekt festgelegt · {{agent}} führt es für dieses Konto nicht auf",
 	"settings.models.useAgentMode": "Agentenmodus verwenden",
 	"settings.models.agentDefaultMode": "Agent-Standard",
 	"settings.models.clearEffort": "Aufwand zurücksetzen",

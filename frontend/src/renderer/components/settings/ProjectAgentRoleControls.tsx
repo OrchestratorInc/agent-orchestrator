@@ -195,6 +195,11 @@ export function AgentModelField({
 	}));
 	if (supportedEfforts && isConcreteModelID(model) && !models.some((item) => item.id === model)) {
 		models.push({ id: model, label: model, efforts: [...supportedEfforts] });
+	} else if (followCatalogDefaults && catalog && isConcreteModelID(model) && !models.some((item) => item.id === model)) {
+		// A saved model the account's list lacks stays a row, noted, rather than
+		// a bare id with nothing to re-pick (#5679).
+		const pinned = { id: model, label: model, note: t("settings.models.pinnedNotListed", { agent: agentLabel(agentId) }) };
+		models.push(pinned);
 	}
 	// Cloud saves only explicit picks, but an unset model still names the one the
 	// agent uses by default rather than a generic placeholder.

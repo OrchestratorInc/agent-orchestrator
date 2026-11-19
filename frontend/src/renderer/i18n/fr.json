@@ -4024,6 +4024,7 @@
 	"coder.templateOptions.settingsHint": "Les modifications s'appliquent aux nouvelles sessions.",
 	"settings.models.selectModel": "Sélectionner un modèle",
 	"settings.models.useAgentModel": "Utiliser le modèle de l’agent",
+	"settings.models.pinnedNotListed": "Défini pour ce projet · {{agent}} ne le propose pas pour ce compte",
 	"settings.models.useAgentMode": "Utiliser le mode de l’agent",
 	"settings.models.agentDefaultMode": "Par défaut de l’agent",
 	"settings.models.clearEffort": "Effacer l’effort",

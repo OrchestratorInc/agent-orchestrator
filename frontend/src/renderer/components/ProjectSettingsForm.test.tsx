@@ -504,6 +504,35 @@ describe("ProjectSettingsForm", () => {
 		);
 	});
 
+	// #5679: a saved model the account's list lacks stays a noted row.
+	it("keeps a saved model the account's catalog lacks as a noted row", async () => {
+		getMock.mockImplementation(async (path: string) => {
+			if (path === "/api/v1/agents") return agentCatalogResponse;
+			if (path === "/api/v1/agents/{agent}/models") return { data: {
+				agent: "codex", selectionMode: "catalog", allowCustom: false,
+				models: [{ id: "gpt-5.1", label: "GPT-5.1", isDefault: true }],
+			} };
+			return { data: { status: "ok", project: {
+				id: "proj-1", name: "Project One", kind: "single_repo", path: "/repo/project-one",
+				repo: "", defaultBranch: "main", config: {
+					worker: { agent: "codex", agentConfig: { model: "gpt-5.4-mini" } },
+					orchestrator: { agent: "claude-code" },
+				},
+			} } };
+		});
+		renderSettings("proj-1", undefined, "agents");
+		const picker = await screen.findByRole("button", { name: "Worker model" });
+		await waitFor(() => expect(picker).toHaveTextContent("gpt-5.4-mini"));
+		await userEvent.click(picker);
+		const pinned = screen.getByRole("menuitem", { name: /gpt-5\.4-mini/ });
+		expect(pinned).toHaveTextContent("Set for this project · Codex doesn't list it for this account");
+		expect(pinned).not.toHaveAttribute("aria-disabled", "true");
+		await userEvent.click(pinned);
+		submitSettings();
+		await waitFor(() => expect(putMock).toHaveBeenCalledTimes(1));
+		expect(putMock.mock.calls[0][1].body.config.worker.agentConfig).toEqual(expect.objectContaining({ model: "gpt-5.4-mini" }));
+	});
+
 	it("saves Claude effort from the effort chip beside the model picker", async () => {
 		getMock.mockImplementation(async (path: string) => {
 			if (path === "/api/v1/agents") return agentCatalogResponse;
