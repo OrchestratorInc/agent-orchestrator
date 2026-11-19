@@ -46,3 +46,15 @@ it("continues after a failed write and keeps different sides independent", async
 	await receipt;
 	expect(put.mock.calls[2][1].body.contentJson).toBe("receipt");
 });
+
+it("skips an autosave queued before its side started closing", async () => {
+	let finish!: (value: object) => void;
+	put.mockImplementationOnce(() => new Promise(resolve => { finish = resolve; }));
+	const first = saveSideChatDraft("session", "closing", "first");
+	await vi.waitFor(() => expect(put).toHaveBeenCalledOnce());
+	let open = true;
+	const queued = saveSideChatDraft("session", "closing", "queued", () => open);
+	open = false; finish({});
+	await Promise.all([first, queued]);
+	expect(put).toHaveBeenCalledOnce();
+});

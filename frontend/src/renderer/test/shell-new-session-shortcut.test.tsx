@@ -73,6 +73,7 @@ const shellMocks = vi.hoisted(() => {
 			return vi.fn();
 		}),
 		resolveQuitConfirm: vi.fn(),
+		reportSessionsShown: vi.fn(),
 		onNewShellTerminalShortcut: vi.fn((listener: () => void) => {
 			state.newShellTerminalListener = listener;
 			return vi.fn();
@@ -173,6 +174,7 @@ vi.mock("../lib/bridge", () => ({
 			onKeyboardShortcutsHelp: shellMocks.onKeyboardShortcutsHelp,
 			onQuitConfirmRequest: shellMocks.onQuitConfirmRequest,
 			resolveQuitConfirm: shellMocks.resolveQuitConfirm,
+			reportSessionsShown: shellMocks.reportSessionsShown,
 			onNewShellTerminalShortcut: shellMocks.onNewShellTerminalShortcut,
 			onOpenSettingsShortcut: shellMocks.onOpenSettingsShortcut,
 			onPreviousSessionShortcut: shellMocks.onPreviousSessionShortcut,
@@ -237,7 +239,7 @@ vi.mock("../lib/cloud-session", () => ({
 		session: shellMocks.state.cloudSessionStatus === "authenticated" ? { user: { id: "test-user" } } : null,
 	}),
 }));
-vi.mock("../hooks/useSettings", () => ({ useSettings: () => ({ settings: { cloudControlPlaneUrl: "" } }) }));
+vi.mock("../hooks/useSettings", () => ({ useSettings: () => ({ settings: { cloudControlPlaneUrl: "" } }), useSettingsPolling: () => undefined }));
 
 vi.mock("../hooks/useDaemonStatus", () => ({
 	useDaemonStatus: () => shellMocks.state.daemonStatus,
@@ -347,6 +349,10 @@ vi.mock("../lib/shell-context", () => ({
 		return children;
 	},
 }));
+// First-run onboarding and the guided tour after it load their own queries;
+// this harness has no query provider and doesn't exercise them.
+vi.mock("../components/onboarding/FirstRunOnboarding", () => ({ FirstRunOnboarding: () => null }));
+vi.mock("../components/onboarding/GuidedTour", () => ({ GuidedTour: () => null }));
 vi.mock("../components/ui/sidebar", () => ({
 	SidebarProvider: ({ children, open }: PropsWithChildren<{ open?: boolean }>) => (
 		<div data-open={open ? "true" : "false"} data-testid="sidebar-provider">
@@ -536,17 +542,29 @@ describe("shell workspace startup", () => {
 	beforeAll(async () => {
 		await import("../components/chat/OrchestratorStartingChat");
 	});
-	it("rechecks a connected host when its session queries fail", async () => {
-		useUiStore.setState({ developerMode: true, remoteHosts: true });
-		const view = await renderShell();
-		await waitFor(() => expect(shellMocks.listRemoteHosts).toHaveBeenCalledTimes(1));
+	it("reports the first frame that shows the workspace, for launch timing", async () => {
+		shellMocks.reportSessionsShown.mockClear();
+		shellMocks.state.daemonStatus = { state: "ready", port: 4777 };
+		await renderShell();
+		await waitFor(() => expect(shellMocks.reportSessionsShown).toHaveBeenCalledTimes(1));
+	});
 
-		shellMocks.state.remoteFailedHostIds = ["box-a"];
-		view.rerender(<Suspense fallback={null}><ShellRoute /></Suspense>);
-		await waitFor(() => expect(shellMocks.listRemoteHosts).toHaveBeenCalledTimes(2));
+	it("reports no frame while the daemon has failed, even with workspace data cached", async () => {
+		shellMocks.reportSessionsShown.mockClear();
+		shellMocks.state.daemonStatus = { state: "error", code: "not_ready" };
+		expect(shellMocks.state.workspaceQuery.data).toBeDefined();
+		await renderShell();
+		await new Promise((resolve) => setTimeout(resolve, 100));
+		expect(shellMocks.reportSessionsShown).not.toHaveBeenCalled();
+	});
 
-		view.rerender(<Suspense fallback={null}><ShellRoute /></Suspense>);
-		expect(shellMocks.listRemoteHosts).toHaveBeenCalledTimes(2);
+	it("reports no frame while the startup loader is up", async () => {
+		shellMocks.reportSessionsShown.mockClear();
+		shellMocks.state.daemonStatus = { state: "starting", port: 4777 };
+		await renderShell();
+		expect(screen.getByTestId("daemon-startup-loader")).toBeInTheDocument();
+		await new Promise((resolve) => setTimeout(resolve, 100));
+		expect(shellMocks.reportSessionsShown).not.toHaveBeenCalled();
 	});
 
 	it("opens the shared Project settings dialog for the selected remote host", async () => {

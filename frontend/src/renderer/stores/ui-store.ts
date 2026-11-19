@@ -80,7 +80,7 @@ export type SettingsModal =
 
 /** Worker detail view toggles — Changes (Git rail) is the default. */
 export type WorkbenchTab = "changes" | "files" | "terminal";
-export type InspectorView = "summary" | "reviews" | "browser" | "sideChat" | "files" | "artifacts";
+export type InspectorView = "summary" | "reviews" | "browser" | "sideChat" | "subagents" | "files" | "artifacts";
 
 export type CloudReviewUiState = {
 	showChanges?: boolean;
@@ -100,6 +100,8 @@ export type InspectorSessionState = {
 	browserContentRevealed?: boolean;
 	/** Real browser activity occurred while Browser was not visible. */
 	browserUnseen?: boolean;
+	/** The session's chat has subagents, so the inspector offers its Subagents tab. */
+	subagentsAvailable?: boolean;
 	/** An artifact was registered while the user was busy in Browser or Files. */
 	artifactsUnseen?: boolean;
 	/** Files tab: review changed files directly. Defaults to true; false shows the full tree. */
@@ -159,6 +161,40 @@ export type ChatMessageFocusRequest = {
 	nonce: number;
 };
 
+/**
+ * A chat whose agent refused its login, waiting while the user logs in from the
+ * Agents page. A login that takes there closes the page; the chat then sends
+ * its refused message again when that is safe, or says the user is in.
+ */
+export type LoginReturn = {
+	sessionId: string;
+	agentId: string;
+	/** The remote host whose login is being fixed; omitted for this computer. */
+	hostId?: string;
+	/**
+	 * The account the session runs on, by id (the computer's own login is one
+	 * too). A login to another account does not fix the session, so it does not
+	 * count. Unknown for a remote host, whose accounts this app cannot read.
+	 */
+	accountId?: string;
+	/**
+	 * The account is still being read. A login that takes meanwhile is held until
+	 * it is known, since only that account's login fixes the session.
+	 */
+	accountPending?: boolean;
+	/** A login that took while the account was read, by the account it signed in. */
+	heldLogin?: { accountId?: string };
+	/** When the login took. */
+	loggedInAt?: number;
+	/** The chat has seen the login and sent nothing again: it says the user is in. */
+	settled?: boolean;
+	/**
+	 * The refused message the chat saw the login for. A refusal of another one
+	 * (the message sent again, refused once more) means the login did not fix it.
+	 */
+	turnId?: string;
+};
+
 /** What the archive modal shows. */
 export type ArchiveModalRequest = {
 	/** The project it starts scoped to; unset shows every project on the host. */
@@ -206,8 +242,6 @@ export type UiState = {
 	diagnostics: boolean;
 	/** Experimental side chats in the inspector. Only takes effect in Developer mode. Default off. */
 	sideChats: boolean;
-	/** Home offers the session import once: until the user imports or dismisses it. */
-	sessionImportOfferClosed: boolean;
 	/** Drag center tabs side by side into split panes. Only takes effect in Developer mode. Default off. */
 	splitPanes: boolean;
 	/** The PR view: a PR's own tab, its comments, stacks and actions. Only takes effect in Developer mode. Default off. */
@@ -237,6 +271,12 @@ export type UiState = {
 	// running in the background. The board renders a progress banner and gates
 	// session actions until the spawn settles, instead of blocking navigation.
 	provisioningProjectIds: ReadonlySet<string>;
+	// Full-window first-run onboarding is showing; transient shell notices wait.
+	firstRunOnboardingOpen: boolean;
+	setFirstRunOnboardingOpen: (open: boolean) => void;
+	/** Bumped by Developer mode's Replay onboarding; the flow reopens on each change. */
+	onboardingReplayRequest: number;
+	requestOnboardingReplay: () => void;
 	projectCreationPending: boolean;
 	// Freestyle cloud projects just created, whose board starts the orchestrator
 	// on its own instead of waiting for the Orchestrator button.
@@ -264,9 +304,6 @@ export type UiState = {
 	// Bumps to ask the sidebar's create-project flow to open (the ⌘N fallback
 	// when no project is in scope).
 	createProjectNonce: number;
-	/** True while the first-run project prompt is pending, so shell notices wait for it. */
-	firstRunPromptActive: boolean;
-	setFirstRunPromptActive: (active: boolean) => void;
 	// Transient "a folder was dropped onto the app window — open the
 	// create-project flow for this path" signal, mirroring newTaskRequest: the
 	// nonce always bumps so dropping the same folder twice in a row still
@@ -296,7 +333,6 @@ export type UiState = {
 	setRemoteHosts: (enabled: boolean) => void;
 	setDiagnostics: (enabled: boolean) => void;
 	setSideChats: (enabled: boolean) => void;
-	closeSessionImportOffer: () => void;
 	setSplitPanes: (enabled: boolean) => void;
 	setPRView: (enabled: boolean) => void;
 	setWindowTranslucency: (enabled: boolean) => void;
@@ -315,6 +351,20 @@ export type UiState = {
 	/** `options` as a string is the owning daemon's host ID (remote projects). */
 	openProjectSettings: (projectId: string, options?: string | { section?: ProjectSettingsSection; cloudOrgId?: string }) => void;
 	closeSettings: () => void;
+	loginReturn: LoginReturn | null;
+	/** Remember a chat whose agent refused its login while that login is fixed. */
+	startLoginReturn: (intent: Omit<LoginReturn, "loggedInAt" | "settled" | "turnId">) => void;
+	/** A login took: return to the waiting chat, if it is that chat's agent, host and account. */
+	completeLoginReturn: (agentId: string, hostId?: string, accountId?: string) => void;
+	/**
+	 * The account the waiting chat's session runs on, once read; only its login
+	 * counts. None (no account of its own, or the read failed) lets any login count.
+	 */
+	setLoginReturnAccount: (sessionId: string, accountId: string | undefined) => void;
+	/** The waiting chat saw the login for this refused message and sent nothing again. */
+	settleLoginReturn: (sessionId: string, turnId?: string) => void;
+	/** Drop the waiting chat, or only when it is this session's. */
+	clearLoginReturn: (sessionId?: string) => void;
 	/** Refresh resolvedTheme from OS without writing light/dark to storage. */
 	syncSystemTheme: () => void;
 	toggleSidebar: () => void;
@@ -331,6 +381,7 @@ export type UiState = {
 	initializeInspectorSession: (sessionId: string, hasBrowserContent: boolean, hasInspector: boolean) => void;
 	setBrowserContentRevealed: (sessionId: string, revealed: boolean) => void;
 	setBrowserUnseen: (sessionId: string, unseen: boolean) => void;
+	setSubagentsAvailable: (sessionId: string, available: boolean) => void;
 	setArtifactsUnseen: (sessionId: string, unseen: boolean) => void;
 	setFilesChangedOnly: (sessionId: string, changedOnly: boolean) => void;
 	setFilesSelection: (sessionId: string, selection: FilesSelection) => void;
@@ -377,7 +428,6 @@ const sidebarStorageKey = "ao.sidebar.open";
 const remoteHostsStorageKey = "ao.remoteHosts";
 const diagnosticsStorageKey = "ao.diagnostics";
 const sideChatsStorageKey = "ao.sideChats";
-const sessionImportOfferClosedStorageKey = "ao.sessionImport.offerClosed";
 const splitPanesStorageKey = "ao.splitPanes";
 const prViewStorageKey = "ao.prView";
 const terminalCopyOnSelectStorageKey = "ao.terminalCopyOnSelect";
@@ -417,14 +467,6 @@ function initialSideChats() {
 	return getLocalStorage()?.getItem(sideChatsStorageKey) === "true";
 }
 
-function initialSessionImportOfferClosed() {
-	try {
-		return getLocalStorage()?.getItem(sessionImportOfferClosedStorageKey) === "true";
-	} catch {
-		return false;
-	}
-}
-
 function initialTerminalClickMode(): TerminalClickMode {
 	return getLocalStorage()?.getItem(terminalClickModeStorageKey) === "select" ? "select" : "app";
 }
@@ -444,6 +486,17 @@ function initialChatSendKeyMode(): ChatSendKeyMode {
 function syncDeveloperModeToUpdater(enabled: boolean): void {
 	const request = aoBridge.updateSettings?.setMacDifferentialUpdates?.(enabled);
 	void request?.catch(() => undefined);
+}
+
+/** The waiting chat's login took: mark when, and close global settings back to the chat. */
+function loginTaken(state: UiState, waiting: LoginReturn): Partial<UiState> {
+	const modal = state.settingsModal;
+	// A login only finishes while the Agents page shows it, so closing global
+	// settings here returns the user to the chat they came from.
+	return {
+		loginReturn: { ...waiting, loggedInAt: Date.now() },
+		...(modal?.scope === "global" ? { settingsModal: modal.returnTo ?? null } : {}),
+	};
 }
 
 function inspectorState(sessions: Record<string, InspectorSessionState>, sessionId: string): InspectorSessionState {
@@ -499,7 +552,6 @@ export const useUiStore = create<UiState>((set, get) => ({
 	remoteHosts: initialRemoteHosts(),
 	diagnostics: initialDiagnostics(),
 	sideChats: initialSideChats(),
-	sessionImportOfferClosed: initialSessionImportOfferClosed(),
 	splitPanes: getLocalStorage()?.getItem(splitPanesStorageKey) === "true",
 	prView: getLocalStorage()?.getItem(prViewStorageKey) === "true",
 	windowTranslucency: readStoredWindowTranslucency(),
@@ -512,6 +564,10 @@ export const useUiStore = create<UiState>((set, get) => ({
 	projectAvatars: initialProjectAvatars(),
 	restartingProjectIds: new Set<string>(),
 	provisioningProjectIds: new Set<string>(),
+	firstRunOnboardingOpen: false,
+	setFirstRunOnboardingOpen: (open) => set({ firstRunOnboardingOpen: open }),
+	onboardingReplayRequest: 0,
+	requestOnboardingReplay: () => set((state) => ({ onboardingReplayRequest: state.onboardingReplayRequest + 1 })),
 	projectCreationPending: false,
 	autoStartOrchestratorProjectIds: new Set<string>(),
 	orchestratorReplacementErrors: {},
@@ -522,8 +578,6 @@ export const useUiStore = create<UiState>((set, get) => ({
 	newTaskRequest: null,
 	archiveModal: null,
 	newChatDraftRevision: 0,
-	firstRunPromptActive: false,
-	setFirstRunPromptActive: (active) => set({ firstRunPromptActive: active }),
 	workspaceFileOpenRequest: null,
 	chatMessageFocusRequest: null,
 	createProjectNonce: 0,
@@ -578,14 +632,6 @@ export const useUiStore = create<UiState>((set, get) => ({
 	setSideChats: (sideChats) => {
 		getLocalStorage()?.setItem(sideChatsStorageKey, String(sideChats));
 		set({ sideChats });
-	},
-	closeSessionImportOffer: () => {
-		try {
-			getLocalStorage()?.setItem(sessionImportOfferClosedStorageKey, "true");
-		} catch {
-			// The offer comes back next launch; the agent page still has the import.
-		}
-		set({ sessionImportOfferClosed: true });
 	},
 	setSplitPanes: (splitPanes) => {
 		getLocalStorage()?.setItem(splitPanesStorageKey, String(splitPanes));
@@ -663,6 +709,31 @@ export const useUiStore = create<UiState>((set, get) => ({
 		accountLogin: null,
 		settingsModal: state.settingsModal?.scope === "global" ? state.settingsModal.returnTo ?? null : null,
 	})),
+	loginReturn: null,
+	startLoginReturn: (intent) => set({ loginReturn: intent }),
+	completeLoginReturn: (agentId, hostId, accountId) => set((state) => {
+		const waiting = state.loginReturn;
+		if (!waiting || waiting.loggedInAt !== undefined || waiting.agentId !== agentId) return {};
+		if ((waiting.hostId ?? "local") !== (hostId ?? "local")) return {};
+		// Settings reports a login once: kept until the account is known, then matched.
+		if (waiting.accountPending) return { loginReturn: { ...waiting, heldLogin: accountId ? { accountId } : {} } };
+		if (waiting.accountId !== undefined && waiting.accountId !== accountId) return {};
+		return loginTaken(state, waiting);
+	}),
+	setLoginReturnAccount: (sessionId, accountId) => set((state) => {
+		if (state.loginReturn?.sessionId !== sessionId || state.loginReturn.loggedInAt !== undefined) return {};
+		const { heldLogin, ...waiting } = state.loginReturn;
+		const known: LoginReturn = { ...waiting, accountPending: false, ...(accountId ? { accountId } : {}) };
+		// A login held while the account was read counts now, by the same rule as any.
+		const counts = heldLogin && (known.accountId === undefined || known.accountId === heldLogin.accountId);
+		return counts ? loginTaken(state, known) : { loginReturn: known };
+	}),
+	settleLoginReturn: (sessionId, turnId) => set((state) =>
+		state.loginReturn?.sessionId === sessionId && state.loginReturn.loggedInAt !== undefined && !state.loginReturn.settled
+			? { loginReturn: { ...state.loginReturn, settled: true, ...(turnId ? { turnId } : {}) } }
+			: {}),
+	clearLoginReturn: (sessionId) => set((state) =>
+		!state.loginReturn || (sessionId !== undefined && state.loginReturn.sessionId !== sessionId) ? {} : { loginReturn: null }),
 	syncSystemTheme: () => {
 		const { themePreference, resolvedTheme } = get();
 		if (themePreference !== "system") return;
@@ -754,6 +825,17 @@ export const useUiStore = create<UiState>((set, get) => ({
 				inspectorSessions: {
 					...state.inspectorSessions,
 					[sessionId]: { ...current, browserUnseen },
+				},
+			};
+		}),
+	setSubagentsAvailable: (sessionId, subagentsAvailable) =>
+		set((state) => {
+			const current = inspectorState(state.inspectorSessions, sessionId);
+			if (Boolean(current.subagentsAvailable) === subagentsAvailable) return state;
+			return {
+				inspectorSessions: {
+					...state.inspectorSessions,
+					[sessionId]: { ...current, subagentsAvailable },
 				},
 			};
 		}),

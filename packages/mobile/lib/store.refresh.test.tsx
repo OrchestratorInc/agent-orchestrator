@@ -376,3 +376,19 @@ it("reconnects after a late credential repair even once a newer reload kept the 
 	await act(async () => { onRepaired({ ...inUse }); });
 	expect(state.resolve.mock.calls.length).toBe(races + 1);
 });
+
+// A failed endpoint race leaves the selected machine with no config, which
+// stops its poll; a refresh then had nothing to fetch with and returned at
+// once, so Retry on the freshness line did nothing. It races again instead.
+it("races the selected machine's endpoints again when Retry finds no config", async () => {
+	state.resolve.mockResolvedValueOnce(null);
+	await mount();
+	expect(current.config).toBeNull();
+	expect(state.sessions).not.toHaveBeenCalled();
+	const races = state.resolve.mock.calls.length;
+	await act(async () => { await current.refreshHost("a"); });
+	expect(state.resolve.mock.calls.length).toBe(races + 1);
+	await act(async () => { await vi.advanceTimersByTimeAsync(0); });
+	expect(state.sessions).toHaveBeenCalled();
+	expect(current.connection).toBe("open");
+});
