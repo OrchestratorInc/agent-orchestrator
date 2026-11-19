@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 	"sync"
 	"testing"
+	"testing/synctest"
 	"time"
 
 	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/workspace/gitworktree"
@@ -820,39 +821,46 @@ func TestTaskPreparationExpires(t *testing.T) {
 }
 
 func TestTaskPreparationRenewalDelaysExpiry(t *testing.T) {
-	m, st, _, _ := newManager()
-	m.runBackground = func(work func()) { work() }
-	m.taskPreparationTTL = 80 * time.Millisecond
+	// Fake time: expiry fires only when the bubble's clock passes the TTL.
+	synctest.Test(t, func(t *testing.T) {
+		m, st, _, _ := newManager()
+		m.runBackground = func(work func()) { work() }
+		m.taskPreparationTTL = time.Minute
 
-	token, err := m.PrepareTaskWorkspace(context.Background(), st.projects["mer"])
-	if err != nil {
-		t.Fatal(err)
-	}
-	active := func() bool {
-		m.taskPreparationsMu.Lock()
-		defer m.taskPreparationsMu.Unlock()
-		_, ok := m.taskPreparations[token]
-		return ok
-	}
-	// Renewed every 40ms, it outlives several TTLs.
-	for range 5 {
-		time.Sleep(40 * time.Millisecond)
-		m.RenewTaskPreparation(token)
-		if !active() {
-			t.Fatal("a renewed preparation expired")
+		token, err := m.PrepareTaskWorkspace(context.Background(), st.projects["mer"])
+		if err != nil {
+			t.Fatal(err)
 		}
-	}
-	// Left alone, it expires one TTL after the last renewal.
-	deadline := time.Now().Add(time.Second)
-	for active() && time.Now().Before(deadline) {
-		time.Sleep(5 * time.Millisecond)
-	}
-	if active() {
-		t.Fatal("preparation did not expire after renewals stopped")
-	}
-	// Renewing a token that is gone does nothing.
-	m.RenewTaskPreparation(token)
-	m.RenewTaskPreparation("unknown")
+		active := func() bool {
+			m.taskPreparationsMu.Lock()
+			defer m.taskPreparationsMu.Unlock()
+			_, ok := m.taskPreparations[token]
+			return ok
+		}
+		// Renewed just before each expiry, it outlives several TTLs.
+		for range 5 {
+			time.Sleep(m.taskPreparationTTL - time.Second)
+			m.RenewTaskPreparation(token)
+			synctest.Wait()
+			if !active() {
+				t.Fatal("a renewed preparation expired")
+			}
+		}
+		// Left alone, it expires one TTL after the last renewal.
+		time.Sleep(m.taskPreparationTTL - time.Second)
+		synctest.Wait()
+		if !active() {
+			t.Fatal("preparation expired before a full TTL since the last renewal")
+		}
+		time.Sleep(2 * time.Second)
+		synctest.Wait()
+		if active() {
+			t.Fatal("preparation did not expire after renewals stopped")
+		}
+		// Renewing a token that is gone does nothing.
+		m.RenewTaskPreparation(token)
+		m.RenewTaskPreparation("unknown")
+	})
 }
 
 func TestTaskPreparationExpiryDeletesUnmodifiedBranch(t *testing.T) {
