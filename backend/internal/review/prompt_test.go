@@ -4,6 +4,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
 	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
 )
 
@@ -27,6 +28,7 @@ func TestReviewTextsIncludesMultiPRQueue(t *testing.T) {
 		"* 1. https://github.com/o/r/pull/1 (head commit sha1, run run-1)",
 		"* 2. https://github.com/o/r/pull/2 (head commit sha2, run run-2)",
 		"Do these steps in order for each PR",
+		"skip it without retrying and continue with the next queued PR",
 		"gh api --method POST repos/{owner}/{repo}/pulls/{number}/reviews --input - --jq '.id' <<'AO_REVIEW_EOF'\n{",
 		"ao review submit --session mer-1 --run <run-id> --verdict <approved|changes_requested> --review-id <id-from-step-1> --body - <<'AO_REVIEW_EOF'\n<your full review markdown>\nAO_REVIEW_EOF\n",
 	} {
@@ -68,7 +70,7 @@ func TestReviewPromptRequiresInlineCommentsForRequiredChanges(t *testing.T) {
 // here-document temp file fall back to the printf pipe, and a failing submit
 // is retried at most twice instead of looping.
 func TestReviewPromptSubmitsThroughHeredocWithBoundedFallback(t *testing.T) {
-	prompt, _ := reviewTexts(LaunchSpec{WorkerID: "mer-1", PRURL: "https://github.com/o/r/pull/1", TargetSHA: "sha1", RunID: "run-1"})
+	prompt, _ := reviewTexts(launchSpec())
 	for _, want := range []string{
 		"Do not shell-escape anything inside it",
 		"Put the closing AO_REVIEW_EOF alone on its own line with no indentation",
@@ -87,6 +89,20 @@ func TestReviewPromptSubmitsThroughHeredocWithBoundedFallback(t *testing.T) {
 	for _, stale := range []string{"do not use a heredoc", "Keep the JSON on one line", "--reviews -"} {
 		if strings.Contains(prompt, stale) {
 			t.Fatalf("review prompt still contains %q:\n%s", stale, prompt)
+		}
+	}
+}
+
+func TestSingleLineSubmitExamples(t *testing.T) {
+	for _, harness := range []domain.ReviewerHarness{domain.ReviewerAider, domain.ReviewerKimchi, domain.ReviewerOpenCodeV2, domain.ReviewerCodex, domain.ReviewerKiro} {
+		post, record, _ := reviewSubmitExamples(LaunchSpec{Harness: harness, WorkerID: "worker-1"})
+		for _, cmd := range []string{post, record} {
+			if strings.Contains(cmd, "<<") || strings.Contains(cmd, "\n") || !strings.HasPrefix(cmd, "printf '%s'") {
+				t.Errorf("%s expected single-line pipeline, got %q", harness, cmd)
+			}
+			if strings.Contains(cmd, " | base64 --decode | ") != (harness == domain.ReviewerKiro) {
+				t.Errorf("%s unexpected encoding in %q", harness, cmd)
+			}
 		}
 	}
 }

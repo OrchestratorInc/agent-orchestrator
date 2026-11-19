@@ -490,6 +490,25 @@ func TestSubmitManySkipsSupersededRunAndRecordsSiblings(t *testing.T) {
 	}
 }
 
+func TestSingleSubmitAfterSupersededSibling(t *testing.T) {
+	st := &fakeStore{
+		ok: true,
+		batchRuns: []domain.ReviewRun{
+			{ID: "stale", SessionID: "mer-1", BatchID: "batch", PRURL: "pr1", Status: domain.ReviewRunCancelled},
+			{ID: "current", SessionID: "mer-1", BatchID: "batch", PRURL: "pr2", TargetSHA: "sha2", Status: domain.ReviewRunRunning},
+		},
+		prs: []domain.PullRequest{{URL: "pr2", HeadSHA: "sha2"}},
+	}
+	svc := New(nil, st)
+	if _, err := svc.Submit(context.Background(), "mer-1", "stale", domain.VerdictApproved, "ok", ""); !errors.Is(err, ErrInvalid) || !strings.Contains(err.Error(), "superseded: stale") {
+		t.Fatalf("expected superseded run error, got %v", err)
+	}
+	run, err := svc.Submit(context.Background(), "mer-1", "current", domain.VerdictApproved, "ok", "")
+	if err != nil || run.ID != "current" || run.Status != domain.ReviewRunComplete {
+		t.Fatalf("submit current sibling = %+v, %v", run, err)
+	}
+}
+
 func TestSubmitManyRejectsOnlySupersededRuns(t *testing.T) {
 	st := &fakeStore{
 		ok: true,

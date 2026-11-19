@@ -577,7 +577,7 @@ func (c *commandContext) emitArtifactNudge(agent, event, sessionID string, paylo
 
 // The review prompt's submit commands feed review text to one of
 // reviewerSubmitCommand's shapes: the GitHub review POST, or `ao review submit`
-// recording one run (--body -) or a JSON batch (--reviews -). Claude Code ≥
+// recording one run (--body -). Claude Code ≥
 // 2.1.257 prompts on any Bash command its analyzer cannot verify statically,
 // and allow rules never match such commands, so the headless reviewer would
 // hang. The text arrives through one of two inputs, both safe to auto-allow:
@@ -591,9 +591,8 @@ func (c *commandContext) emitArtifactNudge(agent, event, sessionID string, paylo
 //
 // The captured session id is checked against AO_REVIEW_WORKER_SESSION_ID
 // after the match.
-const reviewerSubmitCommand = `(?:gh api --method POST repos/[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+/pulls/[0-9]+/reviews --input - --jq '\.id'` +
-	`|ao review submit --session (?P<session>[A-Za-z0-9_-]+) ` +
-	`(?:--reviews -|--run [A-Za-z0-9_.:-]+ --verdict (?:approved|changes_requested)(?: --review-id [0-9]+)? --body -))`
+const reviewerSubmitCommand = `(?:` + ports.ReviewPostCommandPattern +
+	`|ao review submit --session (?P<session>[A-Za-z0-9_-]+) ` + ports.ReviewRunArgsPattern + `)`
 
 const reviewerSubmitJSONLiteral = `'[^']*(?:'\\''[^']*)*'`
 

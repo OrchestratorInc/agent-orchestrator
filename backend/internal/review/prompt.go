@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"strings"
 
+	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
 	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
 )
 
@@ -20,23 +21,16 @@ func reviewTexts(spec LaunchSpec) (prompt, systemPrompt string) {
 	systemPrompt = reviewSystemPrompt()
 
 	queueText := reviewQueueText(spec)
+	post, record, rules := reviewSubmitExamples(spec)
 	prompt = fmt.Sprintf(`Review the requested implementation pull request(s) owned by worker session %[1]s.
 %[2]s
 
 Complete every review task in the queue autonomously. Do not ask the user whether to continue to the next PR, and do not stop after the first PR unless the provider or checkout is genuinely unusable for every queued task.
 
 Do these steps in order for each PR:
-1. Post a separate review on the pull request and capture its id in one call. Post with `+"`gh api`"+` rather than `+"`gh pr review`"+`: it is the only way to attach inline comments, and its response carries the created review's id, so AO can tell the worker exactly which review to address. Pass the review as a JSON body through a quoted heredoc so the inline comments form a proper array of objects:
+1. Post a separate review on the pull request and capture its id in one call. Post with `+"`gh api`"+` rather than `+"`gh pr review`"+`: it is the only way to attach inline comments, and its response carries the created review's id, so AO can tell the worker exactly which review to address.
 
 ~~~sh
-gh api --method POST repos/{owner}/{repo}/pulls/{number}/reviews --input - --jq '.id' <<'%[3]s'
-{
-  "event": "COMMENT",
-  "body": "<summary>",
-  "comments": [
-    { "path": "<file>", "line": <n>, "body": "<finding>" }
-  ]
-}
 %[3]s
 ~~~
 
@@ -49,23 +43,39 @@ gh api --method POST repos/{owner}/{repo}/pulls/{number}/reviews --input - --jq 
 2. Record AO's bookkeeping for that already-posted review. The body here is plain Markdown, not JSON:
 
 ~~~sh
-ao review submit --session %[1]s --run <run-id> --verdict <approved|changes_requested> --review-id <id-from-step-1> --body - <<'%[3]s'
-<your full review markdown>
-%[3]s
+%[4]s
 ~~~
 
    - If step 1 produced no review id, leave out `+"`--review-id <id-from-step-1>`"+` entirely; still record the result so the run is not lost.
 
-Heredoc rules for both commands:
+%[5]s
+
+If step 2 reports that the run was superseded, skip it without retrying and continue with the next queued PR.
+Do not retry a failing submit command more than twice. If step 1 still fails, go on to step 2 without --review-id. If step 2 still fails, stop and report the command's error output in your final message instead of trying again.`,
+		spec.WorkerID, queueText, post, record, rules)
+	return prompt, systemPrompt
+}
+
+func reviewSubmitExamples(spec LaunchSpec) (post, record, rules string) {
+	const gh = "gh api --method POST repos/{owner}/{repo}/pulls/{number}/reviews --input - --jq '.id'"
+	ao := fmt.Sprintf("ao review submit --session %s --run <run-id> --verdict <approved|changes_requested> --review-id <id-from-step-1> --body -", spec.WorkerID)
+	const payload = `{"event":"COMMENT","body":"<summary>","comments":[{"path":"<file>","line":<n>,"body":"<finding>"}]}`
+	switch spec.Harness {
+	case domain.ReviewerClaudeCode:
+		const delimiter = ports.ReviewSubmitHeredocDelimiter
+		heredoc := " <<'" + delimiter + "'\n"
+		return gh + heredoc + payload + "\n" + delimiter, ao + heredoc + "<your full review markdown>\n" + delimiter, fmt.Sprintf(`Heredoc rules for both commands:
 - The quoted heredoc passes the text through exactly as written. Do not shell-escape anything inside it: apostrophes, quotes, backticks, and dollar signs are safe. Step 1's JSON must still be valid JSON (escape double quotes and write newlines inside strings as \n).
-- Put the closing %[3]s alone on its own line with no indentation, write nothing after it, and never write a line that is exactly %[3]s inside the review text.
+- Put the closing %s alone on its own line with no indentation, write nothing after it, and never write a line that is exactly %s inside the review text.
 - Run the command exactly as shown: no other commands, redirections, or files around it.
 
-If a heredoc command fails because the shell cannot create a temp file for the here document (some reviewer sandboxes are read-only), run the same command once more with the text piped through printf instead: `+"`printf '%%s' '<the same text>' | <the same command without the heredoc>`"+`. In that form, replace every single quote in the text with '\''.
-
-Do not retry a failing submit command more than twice. If step 1 still fails, go on to step 2 without --review-id. If step 2 still fails, stop and report the command's error output in your final message instead of trying again.`,
-		spec.WorkerID, queueText, ports.ReviewSubmitHeredocDelimiter)
-	return prompt, systemPrompt
+If a heredoc command fails because the shell cannot create a temp file for the here document (some reviewer sandboxes are read-only), run the same command once more with the text piped through printf instead: `+"`printf '%%s' '<the same text>' | <the same command without the heredoc>`"+`. In that form, replace every single quote in the text with '\''.`, delimiter, delimiter)
+	case domain.ReviewerKiro:
+		const pipe = "' | base64 --decode | "
+		return "printf '%s' '<base64 of review JSON>" + pipe + gh, "printf '%s' '<base64 of review Markdown>" + pipe + ao, "Encode the UTF-8 body as one unwrapped base64 string. Use base64 -D if your platform requires it. The GitHub JSON shape is " + payload
+	default:
+		return "printf '%s' '" + payload + "' | " + gh, "printf '%s' '<one-paragraph review Markdown>' | " + ao, `Keep each command on one physical line. In each printf operand replace every single quote with '\''. Encode newlines in JSON strings as \n.`
+	}
 }
 
 func reviewSystemPrompt() string {

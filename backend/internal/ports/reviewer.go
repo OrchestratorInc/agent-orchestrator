@@ -86,6 +86,11 @@ type ReviewerPromptReadinessProvider interface {
 // `ao review submit`. Reviewer permission rules match commands ending in it.
 const ReviewSubmitHeredocDelimiter = "AO_REVIEW_EOF"
 
+// ReviewPostCommandPattern and ReviewRunArgsPattern describe the shell command
+// fragments shared by reviewer policies that support regular expressions.
+const ReviewPostCommandPattern = `gh api --method POST repos/[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+/pulls/[0-9]+/reviews --input - --jq '[.]id'`
+const ReviewRunArgsPattern = `--run [A-Za-z0-9_.:-]+ --verdict (?:approved|changes_requested)(?: --review-id [0-9]+)? --body -`
+
 // ReviewInvocation describes one review pass for a reviewer to act on. All ids
 // the reviewer needs are passed explicitly here (and embedded in the prompt /
 // message), never through environment variables.

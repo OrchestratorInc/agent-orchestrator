@@ -50,18 +50,8 @@ var _ ports.ReviewerRestorer = (*Reviewer)(nil)
 // system entirely and ignores allow/deny rules — it launches in the default
 // mode where these rules are honored: allow rules auto-approve without
 // prompting, so the reviewer can read the checkout and run the few commands it
-// needs (git diff/log/show to inspect the PR, gh pr view/diff/checks to read
-// PR metadata, printf to pipe review text into the downstream commands when a
-// read-only sandbox cannot run the prompt's heredoc form, and
-// `ao review submit` to record the verdict).
-// Claude Code ≥ 2.1.257 still prompts on Bash commands its analyzer cannot
-// verify statically even when an allow rule matches; the PermissionRequest
-// hook AO installs answers those for reviewers (see
-// cli.reviewerPermissionDecision) so the pane never stalls. That hook is also
-// the only route for the `gh api --method POST .../reviews` call that posts
-// the review: a blanket Bash(gh:*) allow rule would admit merges, closes, and
-// arbitrary API mutations that a prefix deny list cannot enumerate (flag
-// spellings, flag order, graphql).
+// needs to inspect PRs. The PermissionRequest hook validates both the review
+// POST and the single-run AO submission, including their stdin transports.
 var reviewerAllowedTools = []string{
 	"Read",
 	"Grep",
@@ -74,7 +64,6 @@ var reviewerAllowedTools = []string{
 	"Bash(git log:*)",
 	"Bash(git show:*)",
 	"Bash(git status:*)",
-	"Bash(ao review submit:*)",
 }
 
 // reviewerDisallowedTools hard-denies the write paths as defense in depth, so a

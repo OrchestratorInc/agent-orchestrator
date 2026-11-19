@@ -2380,16 +2380,16 @@ func TestHooks_ReviewerPermissionRequestAnswersInsteadOfBlocking(t *testing.T) {
 		payload string
 		want    string
 	}{
-		{"ao review submit pipe", `{"tool_name":"Bash","tool_input":{"command":"printf '%s' ` + submitJSON + ` | ao review submit --session worker-7 --reviews -"}}`, "allow"},
+		{"ao review submit pipe", `{"tool_name":"Bash","tool_input":{"command":"printf '%s' ` + submitJSON + ` | ao review submit --session worker-7 --reviews -"}}`, "deny"},
 		{"gh api review post", `{"tool_name":"Bash","tool_input":{"command":"printf '%s' '{ \"event\": \"COMMENT\", \"body\": \"ok\" }' | gh api --method POST repos/acme/app/pulls/12/reviews --input - --jq '.id'"}}`, "allow"},
-		{"other worker session", `{"tool_name":"Bash","tool_input":{"command":"printf '%s' '{}' | ao review submit --session worker-9 --reviews -"}}`, "deny"},
-		{"unset worker session id", `{"tool_name":"Bash","tool_input":{"command":"printf '%s' '{}' | ao review submit --session worker-7 --reviews -"}}`, "deny"},
-		{"command substitution in operand", `{"tool_name":"Bash","tool_input":{"command":"printf '%s' '{}'$(id) | ao review submit --session worker-7 --reviews -"}}`, "deny"},
+		{"other worker session", `{"tool_name":"Bash","tool_input":{"command":"printf '%s' '{}' | ao review submit --session worker-9 --run run-1 --verdict approved --body -"}}`, "deny"},
+		{"unset worker session id", `{"tool_name":"Bash","tool_input":{"command":"printf '%s' '{}' | ao review submit --session worker-7 --run run-1 --verdict approved --body -"}}`, "deny"},
+		{"command substitution in operand", `{"tool_name":"Bash","tool_input":{"command":"printf '%s' '{}'$(id) | ao review submit --session worker-7 --run run-1 --verdict approved --body -"}}`, "deny"},
 		{"single-run body pipe", `{"tool_name":"Bash","tool_input":{"command":"printf '%s' 'it'\\''s fine' | ao review submit --session worker-7 --run run-1 --verdict approved --review-id 42 --body -"}}`, "allow"},
 		{"gh api review heredoc", `{"tool_name":"Bash","tool_input":{"command":"gh api --method POST repos/acme/app/pulls/12/reviews --input - --jq '.id' <<'AO_REVIEW_EOF'\n{\n  \"event\": \"COMMENT\",\n  \"body\": \"it's $(fine) ` + "`ok`" + `\"\n}\nAO_REVIEW_EOF"}}`, "allow"},
 		{"single-run body heredoc", `{"tool_name":"Bash","tool_input":{"command":"ao review submit --session worker-7 --run run-1 --verdict changes_requested --review-id 42 --body - <<'AO_REVIEW_EOF'\n## Review\nThe worker's nil check doesn't run.\nAO_REVIEW_EOF\n"}}`, "allow"},
 		{"single-run heredoc without review id", `{"tool_name":"Bash","tool_input":{"command":"ao review submit --session worker-7 --run run-1 --verdict approved --body - <<'AO_REVIEW_EOF'\nLooks good.\nAO_REVIEW_EOF"}}`, "allow"},
-		{"batch heredoc", `{"tool_name":"Bash","tool_input":{"command":"ao review submit --session worker-7 --reviews - <<'AO_REVIEW_EOF'\n{ \"reviews\": [] }\nAO_REVIEW_EOF"}}`, "allow"},
+		{"batch heredoc", `{"tool_name":"Bash","tool_input":{"command":"ao review submit --session worker-7 --reviews - <<'AO_REVIEW_EOF'\n{ \"reviews\": [] }\nAO_REVIEW_EOF"}}`, "deny"},
 		{"heredoc for other worker session", `{"tool_name":"Bash","tool_input":{"command":"ao review submit --session worker-9 --run run-1 --verdict approved --body - <<'AO_REVIEW_EOF'\nok\nAO_REVIEW_EOF"}}`, "deny"},
 		{"heredoc body ends early then runs a command", `{"tool_name":"Bash","tool_input":{"command":"ao review submit --session worker-7 --run run-1 --verdict approved --body - <<'AO_REVIEW_EOF'\nok\nAO_REVIEW_EOF\ntouch /tmp/pwned\nAO_REVIEW_EOF"}}`, "deny"},
 		{"heredoc with command after terminator", `{"tool_name":"Bash","tool_input":{"command":"ao review submit --session worker-7 --run run-1 --verdict approved --body - <<'AO_REVIEW_EOF'\nok\nAO_REVIEW_EOF\ntouch /tmp/pwned"}}`, "deny"},

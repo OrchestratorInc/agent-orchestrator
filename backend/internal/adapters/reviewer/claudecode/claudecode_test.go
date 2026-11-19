@@ -97,7 +97,7 @@ func TestReviewCommandLaunchesReadOnlyOffBypass(t *testing.T) {
 	if agent.got.SessionID != "review-w1" {
 		t.Fatalf("AO session id = %q, want review-w1", agent.got.SessionID)
 	}
-	if !contains(agent.got.AllowedTools, "Read") || !contains(agent.got.AllowedTools, "Bash(ao review submit:*)") {
+	if !contains(agent.got.AllowedTools, "Read") {
 		t.Fatalf("allowlist missing read-only review tools: %#v", agent.got.AllowedTools)
 	}
 	// A blanket Bash(gh:*) rule would admit merges and arbitrary API
@@ -188,15 +188,9 @@ func TestAllowlistCoversPromptRequiredPipedCommands(t *testing.T) {
 		t.Fatalf("allowlist missing printf for piped review commands: %#v", agent.got.AllowedTools)
 	}
 
-	submit := "printf '%s' '{ \"reviews\": [] }' | ao review submit --session sess-1 --reviews -"
-	if !compoundCommandCovered(agent.got.AllowedTools, submit) {
-		t.Fatalf("allowlist does not cover prompt-required command %q with tools %#v", submit, agent.got.AllowedTools)
-	}
-
-	// The review POST is deliberately not allowlisted: `gh api` can mutate
-	// anything, so the exact POST shape is admitted only by the PermissionRequest
-	// hook (cli.reviewerPermissionDecision, #4810).
+	// The PermissionRequest hook validates both downstream commands.
 	for _, cmd := range []string{
+		"ao review submit --session sess-1 --reviews -",
 		"printf '%s' '{ \"event\": \"COMMENT\", \"body\": \"x\" }' | gh api --method POST repos/o/r/pulls/1/reviews --input - --jq '.id'",
 		"gh api --method PUT repos/o/r/pulls/1/merge",
 		"gh api -XDELETE repos/o/r",
