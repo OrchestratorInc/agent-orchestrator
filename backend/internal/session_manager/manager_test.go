@@ -12558,6 +12558,57 @@ func TestKill_TerminatesEvenWhenTeardownBudgetExpires(t *testing.T) {
 	}
 }
 
+// Archiving a session while its wake holds the resume must wait for the wake
+// and then archive, not fail with ErrOperationInProgress (#8645).
+func TestKill_WaitsForAnInFlightWake(t *testing.T) {
+	m, st, rt, ws := newManager()
+	st.sessions["mer-1"] = mkLive("mer-1")
+	if err := m.beginAgentResume(ctx, "mer-1"); err != nil {
+		t.Fatal(err)
+	}
+	killed := make(chan error, 1)
+	go func() {
+		_, err := m.Kill(ctx, "mer-1")
+		killed <- err
+	}()
+	select {
+	case err := <-killed:
+		m.endAgentResume("mer-1")
+		t.Fatalf("Kill returned while the wake held the session: %v", err)
+	case <-time.After(100 * time.Millisecond):
+	}
+	m.endAgentResume("mer-1")
+	if err := <-killed; err != nil {
+		t.Fatalf("Kill after the wake finished: %v", err)
+	}
+	if !st.sessions["mer-1"].IsTerminated || rt.destroyed != 1 || ws.destroyed != 1 {
+		t.Fatalf("terminated=%v runtime=%d workspace=%d, want a full teardown",
+			st.sessions["mer-1"].IsTerminated, rt.destroyed, ws.destroyed)
+	}
+}
+
+// A wake that outlasts the limit leaves Kill's refusal in place and the
+// session untouched.
+func TestKill_GivesUpOnAWedgedWake(t *testing.T) {
+	m, st, rt, ws := newManager()
+	m.killResumeWait = 50 * time.Millisecond
+	st.sessions["mer-1"] = mkLive("mer-1")
+	if err := m.beginAgentResume(ctx, "mer-1"); err != nil {
+		t.Fatal(err)
+	}
+	defer m.endAgentResume("mer-1")
+	started := time.Now()
+	if _, err := m.Kill(ctx, "mer-1"); !errors.Is(err, ErrOperationInProgress) {
+		t.Fatalf("Kill = %v, want ErrOperationInProgress", err)
+	}
+	if waited := time.Since(started); waited < m.killResumeWait {
+		t.Fatalf("Kill refused after %v, want a wait of at least %v", waited, m.killResumeWait)
+	}
+	if st.sessions["mer-1"].IsTerminated || rt.destroyed != 0 || ws.destroyed != 0 {
+		t.Fatal("a refused kill touched the session")
+	}
+}
+
 func TestSpawn_ArtifactDirWriteFailureRollsBackSeedRowAndDir(t *testing.T) {
 	m, st, _, _ := newManager()
 	dataDir := t.TempDir()
