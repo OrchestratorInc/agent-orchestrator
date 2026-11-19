@@ -2,6 +2,7 @@ package report
 
 import (
 	"context"
+	"errors"
 	"strings"
 	"testing"
 	"time"
@@ -381,6 +382,35 @@ func TestCoordinatorEarlyFlushKeepsDeferredBatchScheduleAfterRestart(t *testing.
 	got := h.delivery.submitted()
 	if len(got) != 2 || !strings.Contains(got[0].message, "b progress") || !strings.Contains(got[1].message, "a finished") {
 		t.Fatalf("submissions = %#v, want the checkpoint batch at its retry time, then the done batch", got)
+	}
+}
+
+func TestCoordinatorEarlyFlushKeepsExponentialRetryDeadline(t *testing.T) {
+	start := time.Date(2026, 11, 17, 8, 0, 0, 0, time.UTC)
+	for _, cause := range []error{errors.New("temporary delivery failure"), ErrUnacknowledgedDelivery} {
+		t.Run(cause.Error(), func(t *testing.T) {
+			h := newEarlyFlushHarness(start)
+			h.c = NewCoordinator(CoordinatorDeps{Store: h.store, Delivery: h.delivery, Now: func() time.Time { return h.now }})
+			h.store.setSessions(earlyOrchestrator(), earlyWorker("a", domain.ActivityIdle, start))
+			h.store.add(doneAt("done-a", "a", start, "a finished"))
+			h.delivery.submitErr = cause
+			for attempt := range 4 {
+				h.now = start.Add(domain.ReportEarlyFlushDebounce + time.Duration(attempt)*OrchestratorBusyRetry)
+				if _, err := h.c.RunDue(t.Context()); !errors.Is(err, cause) {
+					t.Fatalf("attempt %d: want %v, got %v", attempt+1, cause, err)
+				}
+			}
+
+			h.delivery.submitErr = nil
+			h.now = start.Add(135 * time.Second)
+			if delay := h.run(t); delay != 10*time.Second || h.delivery.attempts != 4 {
+				t.Fatalf("at 135s: delay = %v, attempts = %d, want 10s and 4", delay, h.delivery.attempts)
+			}
+			h.now = start.Add(145 * time.Second)
+			if delay := h.run(t); delay != -1 || len(h.delivery.submitted()) != 1 {
+				t.Fatalf("at 145s: delay = %v, submissions = %d, want one delivery", delay, len(h.delivery.submitted()))
+			}
+		})
 	}
 }
 

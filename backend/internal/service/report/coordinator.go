@@ -555,18 +555,21 @@ func (c *Coordinator) retryLater(ctx context.Context, batch PreparedBatch, cause
 	if c.isExpired(batch) {
 		return c.fail(ctx, batch, cause)
 	}
-	delay := c.backoffDelay(batch)
+	retryAt := c.now().UTC().Add(c.backoffDelay(batch))
 	if isUnacknowledged(cause) {
-		n, err := c.store.RetryUnacknowledgedReportBatch(ctx, batch.ProjectID, batch.Token, c.now().UTC().Add(delay), c.maxDeliveryAttempts, cause.Error())
+		n, err := c.store.RetryUnacknowledgedReportBatch(ctx, batch.ProjectID, batch.Token, retryAt, c.maxDeliveryAttempts, cause.Error())
 		if err != nil {
 			return errors.Join(cause, err)
 		}
 		c.recordFailedBatch(ctx, batch, cause, n)
-		return cause
-	}
-	_, deferErr := c.store.DeferReportBatch(ctx, batch.ProjectID, batch.Token, c.now().UTC().Add(delay), cause.Error())
-	if deferErr != nil {
+		if n > 0 {
+			return cause
+		}
+	} else if _, deferErr := c.store.DeferReportBatch(ctx, batch.ProjectID, batch.Token, retryAt, cause.Error()); deferErr != nil {
 		return errors.Join(cause, deferErr)
+	}
+	if retryAt.After(c.earlyHold[batch.ProjectID]) && batch.hasState(domain.ReportDone) {
+		c.earlyHold[batch.ProjectID] = retryAt
 	}
 	return cause
 }
