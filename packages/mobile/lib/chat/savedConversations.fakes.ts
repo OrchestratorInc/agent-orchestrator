@@ -75,16 +75,6 @@ class File {
 		if (undeletable.has(this.uri)) throw new Error(`cannot delete ${this.uri}`);
 		if (!disk.delete(this.uri)) throw new Error(`no file at ${this.uri}`);
 	}
-	/** As expo-file-system without `overwrite`: fails when the destination exists. */
-	moveSync(destination: File) {
-		const file = disk.get(this.uri);
-		if (!file) throw new Error(`no file at ${this.uri}`);
-		if (disk.has(destination.uri)) throw new Error(`${destination.uri} exists`);
-		disk.delete(this.uri);
-		disk.set(destination.uri, file);
-		this.uri = destination.uri;
-		this.name = destination.name;
-	}
 }
 
 export const fileSystemModule = { Directory, File, Paths: { cache: new Directory("cache") } };
