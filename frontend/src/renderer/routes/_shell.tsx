@@ -63,6 +63,7 @@ import { refreshDaemonStatus } from "../lib/daemon-status";
 import { usesPreviewWorkspaceData } from "../lib/preview-mode";
 import { addRendererExceptionStep, captureRendererEvent, captureRendererException } from "../lib/telemetry";
 import { captureProjectAddFailed } from "../lib/project-lifecycle-telemetry";
+import { reportOnboardingProjectAdded, reportOnboardingProjectFailed } from "../lib/onboarding-telemetry";
 import { ShellProvider } from "../lib/shell-context";
 import { restartProjectOrchestrator } from "../lib/restart-orchestrator";
 import { captureOrchestratorReplacementFailure } from "../lib/orchestrator-replacement-telemetry";
@@ -821,6 +822,7 @@ const replacementErrorCount = Object.keys(orchestratorReplacementErrors).length;
 				sessions: [],
 			};
 			void captureRendererEvent(source === "project_add" ? "ao.projects.added" : "ao.renderer.project_clone_succeeded", { project_id: workspace.id });
+			reportOnboardingProjectAdded(source === "project_add" ? "local_folder" : "clone");
 			// A pre-create list request must not erase the newly registered project.
 			await queryClient.cancelQueries({ queryKey: workspaceQueryKey });
 			// Ids come from the folder name: a folder removed and added again is the same id.
@@ -850,10 +852,10 @@ const replacementErrorCount = Object.keys(orchestratorReplacementErrors).length;
 				operation: "project_add",
 				surface: "project_board",
 			});
-			const reportFailure = (code: string | undefined) => captureProjectAddFailed(
-				(event, properties) => { void captureRendererEvent(event, properties); },
-				code,
-			);
+			const reportFailure = (code: string | undefined) => {
+				captureProjectAddFailed((event, properties) => { void captureRendererEvent(event, properties); }, code);
+				reportOnboardingProjectFailed("project_add", code);
+			};
 			const status = await refreshDaemonStatus();
 			if (status.state !== "ready" || !status.port) {
 				reportFailure("DAEMON_NOT_READY");
@@ -950,6 +952,7 @@ const replacementErrorCount = Object.keys(orchestratorReplacementErrors).length;
 			});
 			const reportFailure = (code: string | undefined) => {
 				void captureRendererEvent("ao.projects.clone_failed", { error_code: code || "unknown" });
+				reportOnboardingProjectFailed("project_clone", code);
 			};
 			const status = await refreshDaemonStatus();
 			if (status.state !== "ready" || !status.port) {

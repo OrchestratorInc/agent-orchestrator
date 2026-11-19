@@ -204,8 +204,10 @@ Orchestrator.inc sends structured events in a few broad categories:
 - Your GitHub username, when Orchestrator.inc can resolve the account signed in
   to its GitHub integration, on every desktop and daemon event (previously only
   session-start events)
-- Desktop onboarding progress, such as viewing, completing, or leaving the
-  welcome and GitHub sign-in steps, and a one-time install event on first run
+- Desktop onboarding progress: each step viewed, completed, skipped or left,
+  installs and sign-ins started there and how they ended, how long onboarding
+  took, and whether the first chat message followed. See "Desktop onboarding
+  funnel" below. Also a one-time install event on first run
 - One-time lifecycle markers: `ao.app.installed` is sent once, on the first
   daemon start of a fresh installation, and says whether the desktop app or the
   CLI started the daemon (`launcher`). An installation whose local database
@@ -685,6 +687,136 @@ an imported chat.
 
 No chat title, chat content, folder name, path, project identifier, session
 identifier, or error message is sent.
+
+## Desktop onboarding funnel
+
+When desktop product telemetry is enabled, Orchestrator.inc records how new
+users move through first-run onboarding, so we can see where they stop and
+why. The flow is: the startup dependency dialog (only when git, tmux or a
+coding agent is missing), the welcome page and its three-part story (the last
+part shows CI and code review on GitHub), the optional AO Cloud sign-in, Your
+tools (the GitHub CLI and coding agents), then a guided tour of the real app
+(add a project, open its orchestrator, send the first message).
+
+These events carry only the closed values listed here, counts, buckets and
+durations. They never include a path, repository name or URL, project or
+session name, username, email, chat text or error message.
+
+### Steps
+
+Every step is identified by `step` and its position in the flow,
+`step_index`:
+
+| `step_index` | `step` | What it is |
+| --- | --- | --- |
+| 0 | `dependencies` | The startup dialog for missing git, tmux or a coding agent |
+| 1 | `welcome` | The first page and its story |
+| 2 | `sign_in` | The optional AO Cloud account page |
+| 3 | `tools` | Your tools: the GitHub CLI and coding agents |
+| 4 | `github_auth` | Signing the GitHub CLI in, on Your tools |
+| 5 | `import_chats` | Importing earlier chats. Not shown since the first-run prompt on Home was removed; recorded if it returns |
+| 6 | `tour_project` | Tour: open or add a project |
+| 7 | `tour_orchestrator` | Tour: open the project's orchestrator |
+| 8 | `first_task` | Tour: send the first message |
+| 9 | `finish` | Tour: the closing note |
+
+| Event | When it is sent | Onboarding-specific properties |
+| --- | --- | --- |
+| `ao.onboarding.step_viewed` | A step is shown | `step`, `step_index`, `run_kind`, `missing` (dependencies, tools), `agents_ready` (tools), `chats_found_bucket` (import_chats) |
+| `ao.onboarding.step_completed` | A step is done: Continue on a page, the tour moving on, the tool signed in | `step`, `step_index`, `run_kind`, `time_on_step_ms`; `story_points_seen` and `story_completed` (welcome); `agents_ready` and `gh_ready` (tools); `project_source` (tour_project) |
+| `ao.onboarding.step_skipped` | A step is passed over: automatically because there was nothing to do, by the person (Sign in's "do it later", Skip setup, Skip on the import step), or by closing the tour | `step`, `step_index`, `run_kind`, `reason`, `time_on_step_ms` |
+| `ao.onboarding.step_abandoned` | The window closes while the step is showing | `step`, `step_index`, `run_kind`, `time_on_step_ms` |
+| `ao.onboarding.back_clicked` | Back is clicked | `step`, `step_index`, `to_step`, `run_kind` |
+
+`step_viewed`, `step_completed`, `step_abandoned` and an automatic
+`step_skipped` are each sent at most once per installation (once per replay
+for a replay), so the counts read as a funnel. A person's skip and Back are
+sent on each click. `time_on_step_ms` runs from the step's latest showing in
+this launch. `step_index` is derived from `step` by the app, never taken from
+the page that sent the event.
+
+### The run
+
+| Event | When it is sent | Onboarding-specific properties |
+| --- | --- | --- |
+| `ao.onboarding.started` | Onboarding opens for the first time on this installation, or a replay starts | `step`, `step_index`, `run_kind` |
+| `ao.onboarding.resumed` | Onboarding opens on a later launch after the app was quit mid-flow | `step`, `step_index`, `run_kind`, `away_ms`, `away_bucket`, `launch_count` |
+| `ao.onboarding.abandoned` | The window closes mid-flow. At most once per launch | `step`, `step_index`, `run_kind`, `duration_ms`, `duration_bucket`, `launch_count` |
+| `ao.onboarding.completed` | Onboarding ends. Once per run | `step` (the last page shown), `step_index`, `run_kind`, `outcome`, `duration_ms`, `duration_bucket`, `launch_count`, `resumed`, `back_count`, `auto_skipped_count` |
+| `ao.onboarding.activated` | The first chat message delivered after a first run finished, within 7 days. Once per installation | `milestone`, `time_since_completed_ms`, `time_bucket`, `during_tour` |
+
+`abandoned` depends on the window getting to send it while it closes. A quit
+that does not is still visible: the run has `started` without `completed`, and
+a later launch sends `resumed`.
+
+### Actions
+
+Installs and sign-ins started during onboarding, and project clones and adds
+during the tour's project step, report how each attempt ended:
+
+| Event | When it is sent | Onboarding-specific properties |
+| --- | --- | --- |
+| `ao.onboarding.action_started` | An install or sign-in starts, by a click or (`auto`) by the page, as the GitHub CLI login does once | `action`, `target`, `step`, `step_index`, `attempt`, `auto` |
+| `ao.onboarding.action_finished` | That attempt ends, once. For a project clone or add, only when the tour's project step is showing | `action`, `target`, `step`, `step_index`, `attempt`, `outcome`, `reason`, `error_code`, `duration_ms` |
+
+`attempt` counts from 1 for each action and target in a launch, so a value
+above 1 is a retry. The existing `ao.projects.clone_failed`,
+`ao.projects.add_failed` and `ao.projects.added` events are unchanged.
+
+### Property values
+
+- `run_kind` is `first_run` or `replay` (Replay onboarding in Developer Mode,
+  in development builds only, so published builds send `first_run`). A replay
+  is a separate run with its own step counts and is never counted as
+  activation.
+- `missing` is a comma-separated list of `git`, `tmux`, `gh` (GitHub CLI not
+  installed), `gh_auth` (installed, signed out), `agent` (no coding agent
+  installed) and `agent_auth` (installed, none signed in).
+- `agents_ready` is the number of coding agents ready to use; `gh_ready` is
+  whether the GitHub CLI is installed and signed in.
+- `chats_found_bucket` is `0`, `1`, `2_5`, `6_20` or `21_plus`. The folders
+  picked are counted by `ao.session_imports.completed` (`source` `onboarding`).
+- `story_points_seen` is how many of the welcome story's three parts played
+  before Get started (1 to 3); `story_completed` is true once the whole story
+  played at least once, CI part included.
+- `project_source` is `clone`, `local_folder`, `existing` (a project that was
+  already there) or `other` (such as an AO Cloud project).
+- `reason` on `step_skipped` is `already_done`, `user` or `dismissed`.
+- `outcome` on `completed` is `finished` (the last page's Continue),
+  `skipped_setup` (Skip setup on Your tools) or `superseded` (a later launch
+  found a project, or an offer to bring over data from an older installation,
+  and closed onboarding for the person).
+- `duration_bucket` and `away_bucket` are `lt_1m`, `1m_3m`, `3m_10m`,
+  `10m_30m`, `30m_2h`, `2h_1d` or `gte_1d`. `launch_count` is how many launches
+  the run has spanned. Durations are capped at 30 days.
+- `time_bucket` on `activated` is `lt_5m`, `5m_15m`, `15m_1h`, `1h_1d` or
+  `1d_7d`. `milestone` is `first_message`. `during_tour` is true when the
+  message was the tour's task step.
+- `action` is `dependency_install`, `gh_install`, `gh_sign_in`,
+  `agent_install`, `agent_sign_in`, `cloud_sign_in`, `project_clone` or
+  `project_add`. `target` is the install target or agent id from AO's own
+  registry, such as `gh`, `tmux` or `claude-code`.
+- `outcome` on `action_finished` is `succeeded`, `failed`, `cancelled` (the
+  person closed the login or moved on), `timed_out` (a login left open 15
+  minutes) or `handed_off` (the agent signs in outside AO, so its guide
+  opened).
+- `reason` on `action_finished` is `start_failed`, `install_failed`,
+  `interrupted`, `unsupported`, `lost_contact`, `not_signed_in`,
+  `cleanup_failed`, `refused`, `request_failed`, `documentation` or `other`.
+  `error_code` is the API's error code (such as `CLONE_FAILED`), never its
+  message.
+
+`ao.renderer.cloud_signed_in` also carries `source` `onboarding` when the
+sign-in finished within 30 minutes of clicking Sign in on onboarding's account
+page. That note is kept in memory only.
+
+The renderer's usual limit of five events per name per minute applies per
+step and action for these events, so clicking quickly through onboarding does
+not drop later steps. They stop when Share usage analytics is off, and a
+kill-switch entry in `AO_TELEMETRY_DISABLED_EVENTS` silences them like any
+other event. `ao.onboarding.first_run_experiment_exposed` and
+`ao.onboarding.first_run_prompt_action` are no longer sent: they belonged to
+the first-run prompt on Home, which has been removed.
 
 ## What Orchestrator.inc does not intentionally send
 

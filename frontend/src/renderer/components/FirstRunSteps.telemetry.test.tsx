@@ -34,8 +34,8 @@ describe("GitHub onboarding step telemetry", () => {
 		auth.current = { ...auth.current, data: { satisfied: true } };
 		rerender(<GitHubSetupPanel onReady={onReady} />);
 		expect(capture.mock.calls).toEqual([
-			["ao.onboarding.step_viewed", { step: "github_auth" }],
-			["ao.onboarding.step_completed", { step: "github_auth" }],
+			["ao.onboarding.step_viewed", { run_kind: "first_run", step: "github_auth" }],
+			["ao.onboarding.step_completed", { run_kind: "first_run", step: "github_auth", time_on_step_ms: expect.any(Number) }],
 		]);
 		expect(onReady).toHaveBeenCalled();
 	});

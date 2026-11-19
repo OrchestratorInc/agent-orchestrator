@@ -5,7 +5,7 @@ import { useTranslation } from "react-i18next";
 import type { TerminalSessionState } from "../hooks/useTerminalSession";
 import { useCloseShellTerminal } from "../hooks/useShellTerminals";
 import { useGitHubAuthAutoLoginOffered, useGitHubAuthRequirement, useGitHubAuthTerminal, useStartGitHubAuthTerminal, useSystemRequirementsGate } from "../hooks/useSystemRequirementsGate";
-import { useOnboardingStep } from "../lib/onboarding-telemetry";
+import { finishOnboardingAction, startOnboardingAction, useOnboardingStep } from "../lib/onboarding-telemetry";
 import { useShellMaybe } from "../lib/shell-context";
 import { useResolvedTheme, useUiStore } from "../stores/ui-store";
 import { TerminalPane } from "./TerminalPane";
@@ -53,8 +53,18 @@ export function useGitHubLogin() {
 		if (!active || (state !== "exited" && state !== "error")) return;
 		if (exitCheckedTerminalRef.current === active.handleId) return;
 		exitCheckedTerminalRef.current = active.handleId;
-		void refetchAuthRef.current();
+		void refetchAuthRef.current().then((result) => {
+			// The login ended and GitHub still says signed out.
+			if (result.data && !result.data.satisfied) finishOnboardingAction("gh_sign_in", "failed", { target: "gh", reason: "not_signed_in" });
+		});
 	}, []);
+	// Signed in, from the terminal or outside the app: the attempt in progress succeeded.
+	useEffect(() => {
+		if (auth?.satisfied) finishOnboardingAction("gh_sign_in", "succeeded", { target: "gh" });
+	}, [auth?.satisfied]);
+	useEffect(() => {
+		if (startLogin.isError) finishOnboardingAction("gh_sign_in", "failed", { target: "gh", reason: "start_failed" });
+	}, [startLogin.isError]);
 	useEffect(() => {
 		if (!auth?.satisfied || !terminal) return;
 		if (completedTerminalRef.current === terminal.handleId) return;
@@ -74,6 +84,7 @@ export function useGitHubLogin() {
 			return;
 		}
 		autoLogin.markOffered();
+		startOnboardingAction("gh_sign_in", { target: "gh", step: "github_auth", auto: true });
 		startLogin.mutate();
 	}, [auth, autoLogin.markOffered, autoLogin.offered, gh?.satisfied, startLogin.isPending, startLogin.mutate, terminal]);
 
@@ -83,6 +94,7 @@ export function useGitHubLogin() {
 	const open = () => {
 		setFocusRequested(true);
 		autoLogin.markOffered();
+		startOnboardingAction("gh_sign_in", { target: "gh", step: "github_auth" });
 		startLogin.mutate();
 	};
 	const retry = () => {
@@ -91,6 +103,7 @@ export function useGitHubLogin() {
 		closeTerminal(terminal.handleId, {
 			onSuccess: () => {
 				terminalQuery.clear();
+				startOnboardingAction("gh_sign_in", { target: "gh", step: "github_auth" });
 				startLogin.mutate();
 			},
 		});
@@ -106,6 +119,8 @@ export function useGitHubLogin() {
 	const close = () => {
 		setFocusRequested(false);
 		if (!terminal) return;
+		// Closed by the person before GitHub said signed in.
+		finishOnboardingAction("gh_sign_in", "cancelled", { target: "gh" });
 		closeTerminal(terminal.handleId, { onSuccess: terminalQuery.clear });
 	};
 	return {

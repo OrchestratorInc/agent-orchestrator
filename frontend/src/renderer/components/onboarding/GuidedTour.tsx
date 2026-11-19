@@ -7,7 +7,14 @@ import { useWorkspaceQuery } from "../../hooks/useWorkspaceQuery";
 import { onComposerSent } from "../../lib/guided-tour-signals";
 import { IS_DEV } from "../../lib/is-dev";
 import { sessionNavigateTarget } from "../../lib/navigate-to-session";
-import { reportOnboardingStep } from "../../lib/onboarding-telemetry";
+import type { OnboardingStep } from "../../lib/onboarding-steps";
+import {
+	onboardingProjectSource,
+	reportOnboardingStep,
+	setOnboardingTourStep,
+	skipOnboardingStep,
+	useOnboardingActivation,
+} from "../../lib/onboarding-telemetry";
 import { cn } from "../../lib/utils";
 import { useUiStore } from "../../stores/ui-store";
 import { CLOUD_PROJECT_KIND, findProjectOrchestrator, STANDALONE_PROJECT_KIND } from "../../types/workspace";
@@ -26,6 +33,13 @@ import { Button } from "../ui/button";
 // an open dialog as owning Escape and focus. This is a guide beside the work.
 
 type TourStep = "project" | "orchestrator" | "task" | "done";
+/** Each tour step's step in the onboarding funnel (onboarding-steps.ts). */
+const FUNNEL_STEP: Record<TourStep, OnboardingStep> = {
+	project: "tour_project",
+	orchestrator: "tour_orchestrator",
+	task: "first_task",
+	done: "finish",
+};
 /** The steps the person does, counted on the card. */
 const COUNTED: readonly TourStep[] = ["project", "orchestrator", "task"];
 const COPY = {
@@ -128,7 +142,13 @@ function subscribe(listener: () => void) {
 /** Moves on from `from` only if the tour is still there (a late signal from a
  * step already passed changes nothing). */
 function moveOn(from: TourStep, to: TourStep, patch: Partial<TourState> = {}) {
-	if (state?.step === from) setState({ ...state, ...patch, step: to });
+	if (state?.step !== from) return;
+	// The project step records where its project came from (a clone, a local
+	// folder, one that was already there).
+	const projectId = patch.projectId;
+	const extra = from === "project" ? { project_source: onboardingProjectSource(!projectId || !(state.known ?? []).includes(projectId)) } : {};
+	reportOnboardingStep(FUNNEL_STEP[from], "completed", extra);
+	setState({ ...state, ...patch, step: to });
 }
 
 /** Starts the tour from its first step. Onboarding calls this once it has
@@ -309,6 +329,15 @@ export function GuidedTour() {
 	const pathname = useRouterState({ select: (routerState) => routerState.location.pathname });
 	const seen = useSeen(step);
 	const view = useWindowSize();
+	// Each tour step is a step of the onboarding funnel; a step moving on
+	// reports its completion (moveOn).
+	useEffect(() => {
+		setOnboardingTourStep(step ? FUNNEL_STEP[step] : undefined);
+		if (step) reportOnboardingStep(FUNNEL_STEP[step], "viewed");
+	}, [step]);
+	// The first message after onboarding, in the tour or not (activation). The
+	// task step may already have moved on to done when this listener runs.
+	useOnboardingActivation(() => state?.step === "task" || state?.step === "done");
 
 	// The first step also ends when a project appears that wasn't there at the
 	// start (Add Project can land on its board a beat later).
@@ -331,15 +360,17 @@ export function GuidedTour() {
 	// The last step ends when any chat sends a message.
 	useEffect(() => {
 		if (step !== "task") return;
-		reportOnboardingStep("first_task", "viewed");
-		return onComposerSent(() => {
-			reportOnboardingStep("first_task", "completed");
-			moveOn("task", "done");
-		});
+		return onComposerSent(() => moveOn("task", "done"));
 	}, [step]);
 
 	const end = () => {
-		if (state?.step === "task") reportOnboardingStep("first_task", "abandoned");
+		const current = state?.step;
+		if (current === "done") reportOnboardingStep("finish", "completed");
+		else if (current) {
+			skipOnboardingStep(FUNNEL_STEP[current], "dismissed");
+			// Kept from before step_skipped existed: closing the tour at the task.
+			if (current === "task") reportOnboardingStep("first_task", "abandoned");
+		}
 		setState(null);
 	};
 	const endRef = useRef(end);

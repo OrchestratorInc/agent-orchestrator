@@ -8,7 +8,7 @@ import aoMascot from "../../../assets/ao-mascot.svg";
 import { useCloseShellTerminal } from "../hooks/useShellTerminals";
 import { useGitHubAuthRequirement, useGitHubAuthTerminal, useStartGitHubAuthTerminal, useSystemRequirementsGate } from "../hooks/useSystemRequirementsGate";
 import type { TerminalSessionState } from "../hooks/useTerminalSession";
-import { completeOnboardingStepIfViewed, reportOnboardingStep } from "../lib/onboarding-telemetry";
+import { completeOnboardingStepIfViewed, reportOnboardingStep, skipOnboardingStep, useOnboardingStep } from "../lib/onboarding-telemetry";
 import { agentLabel } from "../lib/agent-options";
 import { type ImportCandidate, sessionImportPreviewQuery, useImportableAgents, useImportOfferShown } from "../lib/session-import";
 import { useShellMaybe } from "../lib/shell-context";
@@ -259,10 +259,26 @@ export function FirstRunImport({
 	useImportOfferShown("onboarding", true);
 	const chats = (preview.data?.candidates ?? []).filter(importableFromFolder);
 	const nothingToImport = !expanded && (preview.isError || (preview.isSuccess && !chats.length));
+	// The onboarding funnel's import step: Skip and Choose folders report
+	// themselves; the folder count is on ao.session_imports.completed.
+	const completeImport = useOnboardingStep("import_chats", !nothingToImport, {
+		autoComplete: false,
+		viewed: preview.isSuccess ? { chats_found: chats.length } : undefined,
+	});
+	const skip = () => {
+		skipOnboardingStep("import_chats", "user");
+		onSkip();
+	};
+	const imported = () => {
+		completeImport();
+		onImported();
+	};
 	const nothingRef = useRef(onNothingToImport);
 	nothingRef.current = onNothingToImport;
 	useEffect(() => {
-		if (nothingToImport) nothingRef.current();
+		if (!nothingToImport) return;
+		skipOnboardingStep("import_chats", "already_done");
+		nothingRef.current();
 	}, [nothingToImport]);
 	const agents = [...new Set(chats.map((chat) => chat.harness))];
 	const header = (
@@ -295,7 +311,7 @@ export function FirstRunImport({
 					</div>
 				</div>
 				<div className="flex items-center justify-end gap-3 p-4">
-					<Button type="button" variant="secondary" onClick={onSkip}>{t("firstRun.skip")}</Button>
+					<Button type="button" variant="secondary" onClick={skip}>{t("firstRun.skip")}</Button>
 					<Button type="button" variant="primary" disabled={!chats.length} onClick={() => setExpanded(true)}>{t("firstRun.importChoose")}</Button>
 				</div>
 			</div>
@@ -307,8 +323,8 @@ export function FirstRunImport({
 			<FolderImport
 				source="onboarding"
 				cancelLabel={t("firstRun.skip")}
-				onCancel={onSkip}
-				onImported={onImported}
+				onCancel={skip}
+				onImported={imported}
 				onImporting={setImporting}
 				bodyClassName="flex max-h-[min(360px,calc(100svh-240px))] min-h-0 flex-col gap-4 overflow-y-auto px-4 pt-4 settings-thin-scrollbar"
 				footerClassName="flex items-center justify-end gap-3 p-4"

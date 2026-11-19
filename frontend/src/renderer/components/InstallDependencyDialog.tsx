@@ -7,6 +7,8 @@ import type { MessageKey } from "../i18n";
 import { apiClient } from "../lib/api-client";
 import { apiErrorException } from "../lib/api-error-exception";
 import { aoBridge } from "../lib/bridge";
+import type { OnboardingStep } from "../lib/onboarding-steps";
+import { apiErrorCode, finishOnboardingAction, installJobOutcome, startOnboardingAction } from "../lib/onboarding-telemetry";
 import { cn } from "../lib/utils";
 import type { SystemRequirement } from "./SystemRequirementsChecklist";
 import { Button } from "./ui/button";
@@ -68,7 +70,7 @@ export async function checkRequirementsAgain(onRefetchRequirements: () => Promis
  *  interval while running. One target is ever in flight at a time — this
  *  gate only ever needs one, and serializing keeps the UI unambiguous about
  *  which command is running. */
-export function useInstallRunner(onSucceeded: () => void) {
+export function useInstallRunner(onSucceeded: () => void, telemetryStep?: OnboardingStep) {
 	const [target, setTarget] = useState<InstallTarget | null>(null);
 	const [job, setJob] = useState<InstallJobWithNotice | undefined>(undefined);
 	const [previews, setPreviews] = useState<Partial<Record<InstallTarget, InstallJobWithNotice>>>({});
@@ -80,6 +82,16 @@ export function useInstallRunner(onSucceeded: () => void) {
 	const inspectedRef = useRef(new Set<InstallTarget>());
 	const onSucceededRef = useRef(onSucceeded);
 	onSucceededRef.current = onSucceeded;
+	// Only the startup dialog reports its installs to the onboarding funnel.
+	const settleTelemetry = (doneTarget: InstallTarget, status: string | undefined, startFailed?: { errorCode?: string }) => {
+		if (!telemetryStep) return;
+		if (startFailed) {
+			finishOnboardingAction("dependency_install", "failed", { target: doneTarget, reason: "start_failed", errorCode: startFailed.errorCode });
+			return;
+		}
+		const end = installJobOutcome(status);
+		if (end) finishOnboardingAction("dependency_install", end.outcome, { target: doneTarget, reason: end.reason });
+	};
 	const markSucceeded = (doneTarget: InstallTarget) => {
 		setSucceededTargets((current) => new Set(current).add(doneTarget));
 		onSucceededRef.current();
@@ -104,6 +116,7 @@ export function useInstallRunner(onSucceeded: () => void) {
 				setJob(data as InstallJobWithNotice);
 				if (isActiveInstallJob(data)) return;
 				stopPolling();
+				settleTelemetry(polledTarget, data.status);
 				if (data.status === "succeeded") markSucceeded(polledTarget);
 			})();
 		}, POLL_INTERVAL_MS);
@@ -139,15 +152,24 @@ export function useInstallRunner(onSucceeded: () => void) {
 		setJob(undefined);
 		setStartError(undefined);
 		setIsStarting(true);
+		if (telemetryStep) startOnboardingAction("dependency_install", { target: nextTarget, step: telemetryStep });
 		try {
 			const { data, error } = await apiClient.POST("/api/v1/system/install/{target}", {
 				params: { path: { target: nextTarget } },
 			});
-			if (error || !data) throw apiErrorException(error, "Could not start the install.");
+			if (error || !data) {
+				settleTelemetry(nextTarget, undefined, { errorCode: apiErrorCode(error) });
+				throw apiErrorException(error, "Could not start the install.");
+			}
 			setJob(data as InstallJobWithNotice);
 			if (isActiveInstallJob(data)) poll(nextTarget);
-			else if (data.status === "succeeded") markSucceeded(nextTarget);
+			else {
+				settleTelemetry(nextTarget, data.status);
+				if (data.status === "succeeded") markSucceeded(nextTarget);
+			}
 		} catch (err) {
+			// A request that never answered (the refusal above already reported).
+			if (telemetryStep) finishOnboardingAction("dependency_install", "failed", { target: nextTarget, reason: "request_failed" });
 			setStartError(err instanceof Error ? err.message : "Could not start the install.");
 		} finally {
 			startingRef.current = false;
@@ -172,7 +194,7 @@ export function InstallDependencyDialog({
 	const { t } = useTranslation();
 	const [isCheckingAgain, setIsCheckingAgain] = useState(false);
 	const [checkAgainError, setCheckAgainError] = useState<string | undefined>();
-	const install = useInstallRunner(() => void onRefetchRequirements());
+	const install = useInstallRunner(() => void onRefetchRequirements(), "dependencies");
 
 	const byId = new Map(requirements.map((requirement) => [requirement.id, requirement]));
 	const git = byId.get("git");

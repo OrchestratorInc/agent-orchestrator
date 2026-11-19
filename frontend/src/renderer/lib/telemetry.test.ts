@@ -122,8 +122,10 @@ describe("telemetry sanitizers", () => {
 
 	it("allows only the closed onboarding step vocabulary", async () => {
 		for (const event of ["ao.onboarding.step_viewed", "ao.onboarding.step_completed", "ao.onboarding.step_abandoned"]) {
-			expect(await sanitizeRendererProperties(event, { step: "github_auth", email: "a@b.co", path: "/Users/x" })).toEqual({
+			// step_index is derived from the step (onboarding-telemetry-schema.ts), never passed through.
+			expect(await sanitizeRendererProperties(event, { step: "github_auth", step_index: 99, email: "a@b.co", path: "/Users/x" })).toEqual({
 				step: "github_auth",
+				step_index: 4,
 			});
 			expect(await sanitizeRendererProperties(event, { step: "/Users/x/secret" })).toEqual({});
 		}
