@@ -154,6 +154,51 @@ func defaultAgentConfig(sessionID string) (string, error) {
 	return string(data), nil
 }
 
+// foreignAgentConfig is the inline config for a private launch whose worktree
+// config belongs to another session. It selects this session's own AO agent
+// but merges into the inline settings the daemon already exported, so a daemon
+// model or provider override is not replaced along with the foreign agent.
+func foreignAgentConfig(existing, sessionID string) (string, error) {
+	config := map[string]json.RawMessage{}
+	if strings.TrimSpace(existing) != "" {
+		if err := json.Unmarshal([]byte(existing), &config); err != nil || config == nil {
+			return "", fmt.Errorf("opencode-v2: OPENCODE_CONFIG_CONTENT must be a JSON object")
+		}
+	}
+	agents := map[string]json.RawMessage{}
+	if raw, ok := config["agents"]; ok {
+		if err := json.Unmarshal(raw, &agents); err != nil || agents == nil {
+			return "", fmt.Errorf("opencode-v2: OPENCODE_CONFIG_CONTENT agents must be an object")
+		}
+	}
+	name := aoAgentName(sessionID)
+	agent := map[string]any{}
+	if raw, ok := agents[name]; ok {
+		if err := json.Unmarshal(raw, &agent); err != nil || agent == nil {
+			return "", fmt.Errorf("opencode-v2: OPENCODE_CONFIG_CONTENT agent %q must be an object", name)
+		}
+	}
+	agent["mode"] = "primary"
+	raw, err := json.Marshal(agent)
+	if err != nil {
+		return "", err
+	}
+	agents[name] = raw
+	config["agents"], err = json.Marshal(agents)
+	if err != nil {
+		return "", err
+	}
+	config["default_agent"], err = json.Marshal(name)
+	if err != nil {
+		return "", err
+	}
+	data, err := json.Marshal(config)
+	if err != nil {
+		return "", err
+	}
+	return string(data), nil
+}
+
 // The v2 root TUI has no --model/--agent flags. AO normally attaches the TUI
 // to one shared OpenCode 2 server and selects the AO agent through the
 // worktree's project config. A launch that cannot use the shared server keeps
@@ -222,7 +267,7 @@ func (p *Plugin) command(ctx context.Context, binary string, cfg ports.LaunchCon
 				return nil, err
 			}
 			if owner != "" && owner != aoAgentName(cfg.SessionID) {
-				injected, err = defaultAgentConfig(cfg.SessionID)
+				injected, err = foreignAgentConfig(os.Getenv("OPENCODE_CONFIG_CONTENT"), cfg.SessionID)
 				if err != nil {
 					return nil, err
 				}

@@ -1712,3 +1712,80 @@ func TestEnsureSharedServerHonorsRegistryLockCancellation(t *testing.T) {
 		t.Fatal("canceled launch registered a server handle")
 	}
 }
+
+func TestV2ForeignConfigKeepsInheritedInlineModel(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("POSIX executable fixture")
+	}
+	fakeBinary(t, "2.0.0")
+	// The daemon exported inline settings for this launch; they must survive
+	// even though the worktree config belongs to another session.
+	t.Setenv("OPENCODE_CONFIG_CONTENT", `{"model":"anthropic/claude-sonnet-4","agents":{"build":{"model":"inherit-model"}}}`)
+	workspace := sharedWorkspace(t)
+	configPath := filepath.Join(workspace, ".opencode", projectConfigFileName)
+	if err := os.WriteFile(configPath, []byte(`{"default_agent":"ao-sess-other-session"}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	cmd, err := New().GetLaunchCommand(context.Background(), ports.LaunchConfig{
+		DataDir:       t.TempDir(),
+		WorkspacePath: workspace,
+		SessionID:     "sess/newcomer",
+		Env:           map[string]string{},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(strings.Join(cmd, "\n"), "--standalone") {
+		t.Fatalf("argv = %#v, want the private-server path", cmd)
+	}
+	var injected string
+	for _, arg := range cmd {
+		if value, ok := strings.CutPrefix(arg, "OPENCODE_CONFIG_CONTENT="); ok {
+			injected = value
+		}
+	}
+	var config struct {
+		DefaultAgent string `json:"default_agent"`
+		Model        string `json:"model"`
+		Agents       map[string]struct {
+			Model string `json:"model"`
+			Mode  string `json:"mode"`
+		} `json:"agents"`
+	}
+	if err := json.Unmarshal([]byte(injected), &config); err != nil {
+		t.Fatalf("injected config %q: %v", injected, err)
+	}
+	if config.DefaultAgent != "ao-sess-newcomer" {
+		t.Fatalf("default_agent = %q, want this session's own agent", config.DefaultAgent)
+	}
+	if config.Model != "anthropic/claude-sonnet-4" {
+		t.Fatalf("inherited model = %q, want the daemon model preserved", config.Model)
+	}
+	if got := config.Agents["ao-sess-newcomer"].Mode; got != "primary" {
+		t.Fatalf("own agent mode = %q, want primary", got)
+	}
+	if got := config.Agents["build"].Model; got != "inherit-model" {
+		t.Fatalf("inherited build agent = %q, want it preserved", got)
+	}
+	// The foreign config stays untouched on disk.
+	data, err := os.ReadFile(configPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(data), "ao-sess-other-session") {
+		t.Fatalf("workspace config changed to %q", data)
+	}
+
+	// An inherited value that is not a JSON object is rejected, not silently
+	// replaced.
+	t.Setenv("OPENCODE_CONFIG_CONTENT", `[]`)
+	_, err = New().GetLaunchCommand(context.Background(), ports.LaunchConfig{
+		DataDir:       t.TempDir(),
+		WorkspacePath: workspace,
+		SessionID:     "sess/newcomer",
+		Env:           map[string]string{},
+	})
+	if err == nil || !strings.Contains(err.Error(), "must be a JSON object") {
+		t.Fatalf("launch error = %v, want the inline config guard", err)
+	}
+}
