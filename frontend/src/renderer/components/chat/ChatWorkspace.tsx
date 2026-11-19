@@ -2108,6 +2108,11 @@ function ChatWorkspaceContent({
 		return () => window.clearTimeout(timer);
 	}, [conversationEmpty]);
 
+	const markdownFileSource = useMemo(
+		() => markdownFilePreviewSource(snapshot.sessionId, activeRemoteHostId, session?.cloud?.orgId),
+		[snapshot.sessionId, activeRemoteHostId, session?.cloud?.orgId],
+	);
+
 	return (
  <FileAnnotationContext.Provider value={fileReferenceDelivery === "text" ? undefined : { sessionId: snapshot.sessionId, hostId: activeRemoteHostId, onOpen: onOpenFileAnnotation, generation: fileNavigationGeneration }}>
 		<section
@@ -2267,7 +2272,7 @@ function ChatWorkspaceContent({
 							remoteHost={Boolean(activeRemoteHostId)}
 							sessionLinkHostId={activeRemoteHostId}
 							sessionLinkSourceKind={session?.cloud ? "cloud" : undefined}
-							markdownFileSource={markdownFilePreviewSource(snapshot.sessionId, activeRemoteHostId, session?.cloud?.orgId)}
+							markdownFileSource={markdownFileSource}
 							workspacePaths={filePaths}
 						>
 							<ChatImageSourceProvider sessionId={snapshot.sessionId} assetBaseUrl={assetBaseUrl} remoteHost={Boolean(activeRemoteHostId)} artifacts={session?.artifactFiles} cloud={session?.cloud}>
