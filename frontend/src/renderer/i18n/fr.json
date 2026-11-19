@@ -151,6 +151,7 @@
 	"chat.quota.resetsIn": "Réinitialisation dans {{time}}",
 	"chat.quota.usedSession": "Limite d'utilisation de session : {{percent}} % utilisé.",
 	"chat.quota.usedWeekly": "Limite d'utilisation hebdomadaire : {{percent}} % utilisé.",
+	"chat.quota.usedUnknown": "Limite d'utilisation : {{percent}} % utilisé.",
 	"chat.usageLimit.autoResume": "Reprise automatique à la réinitialisation",
 	"settings.coder.navLabel": "Coder",
 	"settings.coder.templatesListLabel": "Templates on your Coder",

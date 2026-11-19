@@ -150,6 +150,7 @@
 	"chat.quota.resetsIn": "Zurückgesetzt in {{time}}",
 	"chat.quota.usedSession": "Sitzungs-Nutzungslimit zu {{percent}} % verbraucht.",
 	"chat.quota.usedWeekly": "Wöchentliches Nutzungslimit zu {{percent}} % verbraucht.",
+	"chat.quota.usedUnknown": "Nutzungslimit zu {{percent}} % verbraucht.",
 	"chat.usageLimit.autoResume": "Nach Zurücksetzung automatisch fortsetzen",
 	"settings.coder.navLabel": "Coder",
 	"settings.coder.templatesListLabel": "Templates on your Coder",

@@ -150,6 +150,7 @@
 	"chat.quota.resetsIn": "{{time}}后重置",
 	"chat.quota.usedSession": "会话用量上限已用 {{percent}}%。",
 	"chat.quota.usedWeekly": "每周用量上限已用 {{percent}}%。",
+	"chat.quota.usedUnknown": "用量上限已用 {{percent}}%。",
 	"chat.usageLimit.autoResume": "重置时自动恢复",
 	"settings.coder.navLabel": "Coder",
 	"settings.coder.templatesListLabel": "Templates on your Coder",

@@ -11,7 +11,7 @@ function limits(over: Partial<ConversationRateLimits> = {}): ConversationRateLim
 describe("QuotaReadout", () => {
 	it("only warns from 82%", () => {
 		expect(nearQuotaWindow(limits({ primaryUsedPercent: 81 }))).toBeUndefined();
-		expect(nearQuotaWindow(limits({ primaryUsedPercent: 82 }))?.kind).toBe("session");
+		expect(nearQuotaWindow(limits({ primaryUsedPercent: 82 }))?.percent).toBe(82);
 		expect(nearQuotaWindow(undefined)).toBeUndefined();
 	});
 
@@ -55,6 +55,36 @@ describe("QuotaReadout", () => {
 
 		rerender(<QuotaSign quota={{ percent: 100, kind: "weekly" }} />);
 		expect(screen.getByRole("button", { name: /Usage limit reached/ })).toHaveAttribute("data-severity", "full");
+	});
+
+	// Claude reports whichever window is nearest in the primary slot and names it in planLabel.
+	it("names the window the provider reports, and none when it does not say", () => {
+		expect(nearQuotaWindow(limits({ primaryUsedPercent: 85, planLabel: "seven day" }))?.kind).toBe("weekly");
+		expect(nearQuotaWindow(limits({ primaryUsedPercent: 85, planLabel: "seven day opus" }))?.kind).toBe("weekly");
+		expect(nearQuotaWindow(limits({ primaryUsedPercent: 85, planLabel: "five hour" }))?.kind).toBe("session");
+		// Codex: both slots reported, the plan in planLabel.
+		expect(nearQuotaWindow(limits({ primaryUsedPercent: 85, secondaryUsedPercent: 20, planLabel: "pro" }))?.kind).toBe("session");
+		expect(nearQuotaWindow(limits({ primaryUsedPercent: 85, planLabel: "pro" }))?.kind).toBe("unknown");
+	});
+
+	it("words a Claude weekly window as weekly, and an unnamed one generically", async () => {
+		const { unmount } = render(<QuotaSign quota={nearQuotaWindow(limits({ primaryUsedPercent: 85, primaryResetsInSeconds: 3 * 86_400, planLabel: "seven day" }))!} />);
+		await userEvent.hover(screen.getByRole("button", { name: /Approaching weekly limit/ }));
+		expect(await screen.findByRole("tooltip")).toHaveTextContent("Weekly usage limit 85% used. Resets in 3d.");
+		unmount();
+
+		render(<QuotaSign quota={{ percent: 85, kind: "unknown" }} />);
+		await userEvent.hover(screen.getByRole("button", { name: /Approaching limit/ }));
+		const tip = await screen.findByRole("tooltip");
+		expect(tip).toHaveTextContent("Usage limit 85% used.");
+		expect(tip).not.toHaveTextContent(/Session|Weekly/);
+	});
+
+	it("never says 100% while the sign still says approaching", () => {
+		render(<QuotaSign quota={{ percent: 99.6, kind: "session" }} />);
+		const sign = screen.getByRole("button", { name: /Approaching limit/ });
+		expect(sign).toHaveAccessibleName(/99% used/);
+		expect(sign).not.toHaveAccessibleName(/100%/);
 	});
 
 	it("shows the usage and reset on hover, in two lines and without the model", async () => {

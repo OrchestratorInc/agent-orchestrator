@@ -1801,7 +1801,8 @@ function ChatWorkspaceContent({
 	// Near the account's usage limit, a warning sign sits right of the model; its tooltip says why.
 	const nearQuota = useStableValue(nearQuotaWindow(snapshot.rateLimits));
 	// The running agent's limit; a pending switch names another agent, so the sign steps aside.
-	const quotaSign = nearQuota && !agentSwitch?.pending ? <QuotaSign quota={nearQuota} /> : null;
+	const runningQuota = agentSwitch?.pending ? undefined : nearQuota;
+	const quotaSign = runningQuota ? <QuotaSign quota={runningQuota} /> : null;
 	// A reroute describes the model it was recorded against; once the user picks a
 	// different model it no longer says anything about the next turn.
 	const currentModelReroute =
@@ -2427,7 +2428,7 @@ function ChatWorkspaceContent({
 											{agentSwitch ? null : <ContextMeter usage={snapshot.usage} compactsAt={compactsAt} />}
 											{/* Normally right of the model control; with no settings bar, beside the ring. */}
 											{composerSettings ? null : quotaSign}
-											<QuotaStatus quota={nearQuota} />
+											<QuotaStatus quota={runningQuota} />
 											{composerSettings}
 										</>}
 										addMenuItems={agentSwitch ? (

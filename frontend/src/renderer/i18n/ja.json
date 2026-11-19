@@ -150,6 +150,7 @@
 	"chat.quota.resetsIn": "{{time}}後にリセット",
 	"chat.quota.usedSession": "セッションの使用上限の {{percent}}% を使用済み。",
 	"chat.quota.usedWeekly": "週間の使用上限の {{percent}}% を使用済み。",
+	"chat.quota.usedUnknown": "使用上限の {{percent}}% を使用済み。",
 	"chat.usageLimit.autoResume": "リセット時に自動再開",
 	"settings.coder.navLabel": "Coder",
 	"settings.coder.templatesListLabel": "Templates on your Coder",

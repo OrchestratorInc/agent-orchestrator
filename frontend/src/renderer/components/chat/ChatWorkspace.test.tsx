@@ -1083,6 +1083,15 @@ describe("ChatWorkspace timeline", () => {
 	});
 
 	// The meter can warn about the account's quota, but only if it is handed it.
+	// The sign and its announcement describe the running agent; a pending switch names another one.
+	it.each([undefined, { harness: "codex" as const, model: "gpt-x", modelLabel: "GPT X" }])("only announces the running agent's limit without a pending switch (%j)", (pending) => {
+		const snapshot = { ...idleSnapshot(chatFixture), rateLimits: { primaryUsedPercent: 100, secondaryUsedPercent: -1, primaryResetsInSeconds: 8100 } };
+		const { container } = render(<ChatWorkspace snapshot={snapshot} agentSwitch={{ projectId: "p", pending, onPendingChange: () => undefined }} />);
+		const announced = screen.queryAllByRole("status").some((node) => node.textContent?.includes("Usage limit reached"));
+		expect(announced).toBe(!pending);
+		if (pending) expect(container.querySelector("[data-quota-sign]")).toBeNull();
+	});
+
 	it("keeps a warning sign beside the composer's own model controls, leaving the model in place", () => {
 		render(<ChatWorkspace snapshot={{ ...idleSnapshot(chatFixture), rateLimits: { primaryUsedPercent: 85, secondaryUsedPercent: -1 } }} />);
 		const composer = screen.getByLabelText("Message the agent").closest("form") as HTMLElement;

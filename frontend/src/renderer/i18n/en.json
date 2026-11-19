@@ -150,6 +150,7 @@
 	"chat.quota.resetsIn": "Resets in {{time}}",
 	"chat.quota.usedSession": "Session usage limit {{percent}}% used.",
 	"chat.quota.usedWeekly": "Weekly usage limit {{percent}}% used.",
+	"chat.quota.usedUnknown": "Usage limit {{percent}}% used.",
 	"chat.usageLimit.autoResume": "Auto-resume at reset",
 	"settings.coder.navLabel": "Coder",
 	"settings.coder.templatesListLabel": "Templates on your Coder",

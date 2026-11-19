@@ -12,7 +12,21 @@ import type { ConversationRateLimits } from "../../types/conversation";
 /** Where the warning sign appears. */
 export const QUOTA_WARN = 82;
 
-export type QuotaWindow = { percent: number; resetsIn?: number; kind: "session" | "weekly" };
+/** "unknown" when the provider did not say which window it is: the copy then names no window. */
+export type QuotaWindow = { percent: number; resetsIn?: number; kind: "session" | "weekly" | "unknown" };
+
+/**
+ * Which window the primary slot holds. Claude reports whichever window it is
+ * nearest (five hour, seven day, ...) in the primary slot and names it in
+ * planLabel; Codex fills both slots, the five-hour window first and the weekly
+ * one second, and uses planLabel for its plan. Anything else is left unnamed.
+ */
+function primaryKind(limits: ConversationRateLimits): QuotaWindow["kind"] {
+	const named = (limits.planLabel ?? "").toLowerCase();
+	if (/\bfive[ _]hour\b/.test(named)) return "session";
+	if (/\bseven[ _]day\b/.test(named)) return "weekly";
+	return limits.secondaryUsedPercent >= 0 ? "session" : "unknown";
+}
 
 /**
  * The tighter of the provider's two windows once it reaches QUOTA_WARN. Negative
@@ -21,7 +35,7 @@ export type QuotaWindow = { percent: number; resetsIn?: number; kind: "session" 
 export function nearQuotaWindow(limits: ConversationRateLimits | undefined): QuotaWindow | undefined {
 	if (!limits) return undefined;
 	const windows: QuotaWindow[] = [
-		{ percent: limits.primaryUsedPercent, resetsIn: limits.primaryResetsInSeconds, kind: "session" },
+		{ percent: limits.primaryUsedPercent, resetsIn: limits.primaryResetsInSeconds, kind: primaryKind(limits) },
 		{ percent: limits.secondaryUsedPercent, resetsIn: limits.secondaryResetsInSeconds, kind: "weekly" },
 	];
 	const tightest = windows
@@ -46,14 +60,22 @@ function useQuotaText(quota: QuotaWindow) {
 	const resets = quota.resetsIn && quota.resetsIn > 0 ? formatQuotaReset(quota.resetsIn) : undefined;
 	const label = full
 		? t("chat.usageLimit.title")
-		: t(quota.kind === "session" ? "chat.quota.approaching" : "chat.quota.approachingWeekly");
+		: t(quota.kind === "weekly" ? "chat.quota.approachingWeekly" : "chat.quota.approaching");
 	return { t, full, resets, label, Icon: full ? Clock : AlertTriangle, severity: full ? "full" : "warn" };
 }
+
+const USED_KEY = {
+	session: "chat.quota.usedSession",
+	weekly: "chat.quota.usedWeekly",
+	unknown: "chat.quota.usedUnknown",
+} as const;
 
 /** The sign beside the model: a warning, or a clock once full. Its tooltip wears the model menu's surface. */
 export function QuotaSign({ quota }: { quota: QuotaWindow }) {
 	const { t, resets, label, Icon, severity } = useQuotaText(quota);
-	const used = t(quota.kind === "session" ? "chat.quota.usedSession" : "chat.quota.usedWeekly", { percent: Math.min(100, Math.round(quota.percent)) });
+	// 100% only once the window is full (the clock); just below it reads 99%, never "approaching" and "100%" together.
+	const percent = quota.percent >= 100 ? 100 : Math.min(99, Math.round(quota.percent));
+	const used = t(USED_KEY[quota.kind], { percent });
 	const detail = resets ? `${used} ${t("chat.quota.resetsIn", { time: resets })}.` : used;
 	return (
 		<TooltipProvider><Tooltip>

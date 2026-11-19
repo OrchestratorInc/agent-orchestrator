@@ -144,6 +144,7 @@
 	"chat.quota.resetsIn": "Сброс через {{time}}",
 	"chat.quota.usedSession": "Использовано {{percent}}% лимита сессии.",
 	"chat.quota.usedWeekly": "Использовано {{percent}}% недельного лимита.",
+	"chat.quota.usedUnknown": "Использовано {{percent}}% лимита.",
 	"chat.usageLimit.autoResume": "Возобновить при сбросе лимита",
 	"settings.coder.navLabel": "Coder",
 	"settings.coder.templatesListLabel": "Шаблоны в вашем Coder",

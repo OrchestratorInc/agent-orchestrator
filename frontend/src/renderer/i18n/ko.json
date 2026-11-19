@@ -150,6 +150,7 @@
 	"chat.quota.resetsIn": "{{time}} 후 재설정",
 	"chat.quota.usedSession": "세션 사용 한도의 {{percent}}% 사용됨.",
 	"chat.quota.usedWeekly": "주간 사용 한도의 {{percent}}% 사용됨.",
+	"chat.quota.usedUnknown": "사용 한도의 {{percent}}% 사용됨.",
 	"chat.usageLimit.autoResume": "초기화 시 자동 재개",
 	"settings.coder.navLabel": "Coder",
 	"settings.coder.templatesListLabel": "Templates on your Coder",
