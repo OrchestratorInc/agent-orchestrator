@@ -2499,8 +2499,6 @@ export function createBrowserViewHost(
     session.activeTabId = tabId;
     session.activationRevision += 1;
     next.unseen = false;
-    // Shown on screen, it draws; the agent's next command need not wait for it.
-    if (session.visible) next.painted = true;
     if (previous && previous !== next) previous.driver().show(false);
     next.driver().show(true);
     if (session.devtools && isBlankBrowserEntry(next)) destroyDevTools(session);

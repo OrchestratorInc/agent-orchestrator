@@ -354,7 +354,8 @@ export function useBrowserView({
 	const [closedTabs, setClosedTabs] = useState<ClosedBrowserTab[]>([]);
 	const [agentBrowserActive, setAgentBrowserActive] = useState(false);
 	const [agentBrowserActivity, setAgentBrowserActivity] = useState<ObservedBrowserAgentActivity | null>(null);
-	const [agentGreeting, setAgentGreeting] = useState<{ tabId: string; seq: number } | null>(null);
+	// The agent's latest greeting, for the view it was sent to only.
+	const [agentGreeting, setAgentGreeting] = useState<{ viewId: string; tabId: string; seq: number } | null>(null);
 	const observedCommandStartsRef = useRef(new Set<string>());
 	const [stateSessionId, setStateSessionId] = useState(sessionId);
 	const slotNodeRef = useRef<HTMLDivElement | null>(null);
@@ -795,9 +796,14 @@ export function useBrowserView({
 	useEffect(() => {
 		return window.ao?.browser.onAgentGreeting?.((greeting) => {
 			if (greeting.viewId !== viewIdRef.current) return;
-			setAgentGreeting((current) => ({ tabId: greeting.tabId, seq: (current?.seq ?? 0) + 1 }));
+			setAgentGreeting((current) => ({ viewId: greeting.viewId, tabId: greeting.tabId, seq: (current?.seq ?? 0) + 1 }));
 		});
 	}, []);
+	// A greeting plays once, where it was sent: another session never shows it,
+	// and coming back does not replay it.
+	useEffect(() => {
+		setAgentGreeting((current) => (current && current.viewId !== viewId ? null : current));
+	}, [viewId]);
 
 	useEffect(
 		() => () => {
@@ -1357,7 +1363,7 @@ export function useBrowserView({
 	const modelProfileState = stateBelongsToSession ? profileState : EMPTY_PROFILE_STATE;
 	const modelAgentBrowserActive = stateBelongsToSession && agentBrowserActive;
 	const modelAgentBrowserActivity = stateBelongsToSession ? agentBrowserActivity : null;
-	const modelAgentGreeting = stateBelongsToSession ? agentGreeting : null;
+	const modelAgentGreeting = stateBelongsToSession && agentGreeting?.viewId === viewId ? agentGreeting : null;
 	const goBack = useCallback(() => (hasNativeBrowser ? withView((id) => window.ao!.browser.goBack(id)) : Promise.resolve()), [hasNativeBrowser, withView]);
 	const goForward = useCallback(() => (hasNativeBrowser ? withView((id) => window.ao!.browser.goForward(id)) : Promise.resolve()), [hasNativeBrowser, withView]);
 	const reload = useCallback(() => (hasNativeBrowser ? withView((id) => window.ao!.browser.reload(id)) : Promise.resolve()), [hasNativeBrowser, withView]);

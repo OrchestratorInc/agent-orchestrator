@@ -290,11 +290,31 @@ describe("useBrowserView", () => {
 		expect(result.current.agentGreeting).toBeNull();
 
 		act(() => bridge.emitGreeting({ viewId: "42:sess-1", tabId: "t1" }));
-		expect(result.current.agentGreeting).toEqual({ tabId: "t1", seq: 1 });
+		expect(result.current.agentGreeting).toMatchObject({ tabId: "t1", seq: 1 });
 		act(() => bridge.emitGreeting({ viewId: "42:other", tabId: "t9" }));
-		expect(result.current.agentGreeting).toEqual({ tabId: "t1", seq: 1 });
+		expect(result.current.agentGreeting).toMatchObject({ tabId: "t1", seq: 1 });
 		act(() => bridge.emitGreeting({ viewId: "42:sess-1", tabId: "t1" }));
-		expect(result.current.agentGreeting).toEqual({ tabId: "t1", seq: 2 });
+		expect(result.current.agentGreeting).toMatchObject({ tabId: "t1", seq: 2 });
+	});
+
+	it("plays a greeting only in its own session, and never again after switching back", async () => {
+		const bridge = setupBridge();
+		const { result, rerender } = renderHook(
+			({ sessionId }) => useBrowserView({ sessionId, active: true, poppedOut: false }),
+			{ initialProps: { sessionId: "sess-1" } },
+		);
+		await waitFor(() => expect(result.current.viewId).toBe("42:sess-1"));
+		act(() => bridge.emitGreeting({ viewId: "42:sess-1", tabId: "t1" }));
+		expect(result.current.agentGreeting).toMatchObject({ tabId: "t1" });
+
+		// Another session, whose tab IDs also start at t1, never shows it.
+		rerender({ sessionId: "sess-2" });
+		await waitFor(() => expect(result.current.viewId).toBe("42:sess-2"));
+		expect(result.current.agentGreeting).toBeNull();
+		// Back in the first session, the old greeting does not replay.
+		rerender({ sessionId: "sess-1" });
+		await waitFor(() => expect(result.current.viewId).toBe("42:sess-1"));
+		expect(result.current.agentGreeting).toBeNull();
 	});
 
 	it("marks only agent commands whose start this session saw", async () => {

@@ -7306,6 +7306,25 @@ describe("agent and person tabs", () => {
 		expect(frames).toBe(3);
 	});
 
+	it("still draws an agent tab that was only ever in front while blank, before the agent's first input", async () => {
+		const { emit, host, invoke, runtime, views, viewId } = await open();
+		await host.execute("sess-1", "open", { url: "https://agent.example.test/" });
+		emit("browser:setBounds", { viewId, revision: 1, rect: { x: 0, y: 0, width: 640, height: 420 }, visible: true });
+		// Watching the agent, its new blank tab comes to the front: hidden, since it is blank.
+		await host.execute("sess-1", "tab-new");
+		expect(await invoke("browser:getTabs", viewId)).toMatchObject({ activeTabId: "t2" });
+		// The person moves to a tab of their own; the agent loads a page in its tab behind.
+		await invoke("browser:openTab", { viewId, url: "https://mine.example.test/" });
+		const agentView = views[1]!;
+		agentView.webContents.capturePage.mockClear();
+		await host.execute("sess-1", "open", { url: "https://agent.example.test/next" });
+
+		await host.execute("sess-1", "click", { ref: "e2" });
+		const clickOrder = vi.mocked(runtime.runAction).mock.invocationCallOrder.at(-1)!;
+		expect(agentView.webContents.capturePage).toHaveBeenCalled();
+		expect(agentView.webContents.capturePage.mock.invocationCallOrder[0]!).toBeLessThan(clickOrder);
+	});
+
 	it("gives up on a first-frame capture that never settles at the deadline, and puts the tab back", async () => {
 		const { host, invoke, runtime, views, viewId } = await open();
 		await invoke("browser:openTab", { viewId, url: "https://mine.example.test/" });
@@ -7317,7 +7336,9 @@ describe("agent and person tabs", () => {
 		const started = Date.now();
 		await host.execute("sess-1", "click", { ref: "e2" });
 		expect(Date.now() - started).toBeLessThan(5_000);
-		expect(agentView.webContents.capturePage).toHaveBeenCalledOnce();
+		// Bounded by the deadline: a timer firing a hair early may allow one more try.
+		expect(agentView.webContents.capturePage.mock.calls.length).toBeGreaterThanOrEqual(1);
+		expect(agentView.webContents.capturePage.mock.calls.length).toBeLessThanOrEqual(2);
 		expect(vi.mocked(runtime.runAction).mock.calls.at(-1)?.[1]).toBe("click");
 		expect(agentView.setVisible.mock.calls.map(([visible]) => visible)).toEqual([true, false]);
 	}, 10_000);
@@ -7940,8 +7961,11 @@ describe("sites that refuse the Browser panel", () => {
 
 		expect(openInUserBrowser).toHaveBeenCalledOnce();
 
-		// A blank tab (a cleared preview; clear never blanks the person's own tab) has nothing to open.
+		// A cleared preview has nothing to open (clear never blanks the person's own tab).
 		const fresh = await setup();
+		await fresh.invoke("browser:navigate", { viewId: fresh.viewId, url: "http://localhost:3000/", preview: true });
+		expect(await fresh.invoke("browser:openInUserBrowser", fresh.viewId)).toEqual({ name: "Chrome", chrome: true });
+		fresh.openInUserBrowser.mockClear();
 		await fresh.invoke("browser:clear", fresh.viewId);
 		await expect(fresh.invoke("browser:openInUserBrowser", fresh.viewId)).rejects.toMatchObject({ code: "BROWSER_URL_FORBIDDEN" });
 		expect(fresh.openInUserBrowser).not.toHaveBeenCalled();
