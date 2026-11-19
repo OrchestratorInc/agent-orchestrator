@@ -1581,6 +1581,7 @@ func (m *Manager) markSpawned(
 	prepare func(context.Context) error,
 ) error {
 	launchID := strings.TrimSpace(metadata.RuntimeLaunchID)
+	var previous chan struct{}
 	reactivator, done, err := func() (sessionUsageReactivator, chan struct{}, error) {
 		m.mu.Lock()
 		defer m.mu.Unlock()
@@ -1643,7 +1644,10 @@ func (m *Manager) markSpawned(
 		}
 		// Registered while the spawn commit still holds mu, so a termination
 		// that follows it always finds the reactivation to wait for.
+		// An earlier spawn's reactivation may still run; this one's channel
+		// closes only after it, so waiting on the newest waits for both.
 		done := make(chan struct{})
+		previous = m.usageReactivations[id]
 		m.usageReactivations[id] = done
 		return m.usageReactivator, done, nil
 	}()
@@ -1662,6 +1666,9 @@ func (m *Manager) markSpawned(
 			close(done)
 		}()
 		reactivateSessionUsage(context.WithoutCancel(ctx), id, launchID, reactivator)
+		if previous != nil {
+			<-previous
+		}
 	}()
 	return nil
 }

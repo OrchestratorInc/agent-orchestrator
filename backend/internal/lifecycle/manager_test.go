@@ -1971,6 +1971,8 @@ type fakeUsageLifecycle struct {
 	sawLive          bool
 	reactivated      chan struct{}
 	release          chan struct{}
+	// blockLaunch limits release to one launch; empty blocks every call.
+	blockLaunch string
 }
 
 func (f *fakeUsageLifecycle) ReactivateSession(
@@ -1978,7 +1980,7 @@ func (f *fakeUsageLifecycle) ReactivateSession(
 	id domain.SessionID,
 	launchID string,
 ) error {
-	if f.release != nil {
+	if f.release != nil && (f.blockLaunch == "" || f.blockLaunch == launchID) {
 		<-f.release
 	}
 	f.reactivateCalls++
@@ -2058,6 +2060,51 @@ func TestMarkTerminatedFinalizesUsageAfterSpawnReactivation(t *testing.T) {
 	}
 	if !reactivatedFirst || !st.sessions["mer-1"].IsTerminated {
 		t.Fatalf("usage finalized before reactivation ended: reactivated first=%v terminated=%v", reactivatedFirst, st.sessions["mer-1"].IsTerminated)
+	}
+}
+
+func TestMarkTerminatedWaitsForEveryPendingSpawnReactivation(t *testing.T) {
+	m, st, _ := newManager()
+	st.sessions["mer-1"] = domain.SessionRecord{
+		ID:           "mer-1",
+		ProjectID:    "mer",
+		IsTerminated: true,
+		Activity:     domain.Activity{State: domain.ActivityExited},
+		Metadata:     domain.SessionMetadata{RuntimeLaunchID: "launch-old"},
+	}
+	release := make(chan struct{})
+	usage := &fakeUsageLifecycle{
+		fakeUsageFinalizer: fakeUsageFinalizer{store: st},
+		reactivated:        make(chan struct{}, 2),
+		release:            release,
+		blockLaunch:        "launch-1",
+	}
+	reactivatedBeforeFinalize := 0
+	usage.onFinalize = func(domain.SessionID, string, int64) error {
+		reactivatedBeforeFinalize = usage.reactivateCalls
+		return nil
+	}
+	m.SetUsageFinalizer(usage)
+
+	for _, launch := range []string{"launch-1", "launch-2"} {
+		if err := m.MarkSpawned(ctx, "mer-1", domain.SessionMetadata{RuntimeLaunchID: launch}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	<-usage.reactivated // the second spawn's reactivation ended; the first is held
+	terminated := make(chan error, 1)
+	go func() { terminated <- m.MarkTerminated(ctx, "mer-1") }()
+	select {
+	case err := <-terminated:
+		t.Fatalf("termination finished while the first spawn's usage reactivation was still running: %v", err)
+	case <-time.After(100 * time.Millisecond):
+	}
+	close(release)
+	if err := <-terminated; err != nil {
+		t.Fatal(err)
+	}
+	if reactivatedBeforeFinalize != 2 {
+		t.Fatalf("usage finalized after %d of 2 reactivations", reactivatedBeforeFinalize)
 	}
 }
 
