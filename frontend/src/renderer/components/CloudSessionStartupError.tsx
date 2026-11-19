@@ -1,7 +1,8 @@
 import { useMutation, useQueryClient } from "@tanstack/react-query";
-import { Check, ChevronDown, ChevronRight, Copy, Loader2, RotateCcw } from "lucide-react";
+import { Check, ChevronDown, ChevronRight, Copy, Loader2, RotateCcw } from "@/components/app-icons";
 import { useEffect, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
+import type { MessageKey } from "../i18n";
 import { useCloudCp } from "../hooks/useCloudCp";
 import { useCloudScriptRuns } from "../hooks/useCloudScriptRuns";
 import { cloudSessionsQueryKey } from "../hooks/useWorkspaceQuery";
@@ -62,6 +63,20 @@ function useRetryStalled(waiting: boolean, retry: object | undefined): boolean {
 	}, [retry, waiting]);
 	return stalled !== undefined && stalled === retry;
 }
+
+// The title of a failed startup whose code names what went wrong; any other
+// failure is titled as a failed start.
+const FAILED_STARTUP_TITLES: Partial<Record<string, MessageKey>> = {
+	workspace_setup_not_ready: "cloud.startupError.workspaceSetupNotReadyTitle",
+	project_setup_failed: "cloud.startupError.projectSetupFailedTitle",
+	repository_checkout_failed: "cloud.startupError.repositoryCheckoutFailedTitle",
+	working_directory_unusable: "cloud.startupError.workingDirectoryUnusableTitle",
+	working_directory_occupied: "cloud.startupError.workingDirectoryOccupiedTitle",
+	working_directory_not_durable: "cloud.startupError.workingDirectoryNotDurableTitle",
+	// A session that ran and whose compute then stopped responding did not
+	// fail to start: say what happened instead.
+	sandbox_unresponsive: "cloud.startupError.sandboxUnresponsiveTitle",
+};
 
 /**
  * Replaces a cloud session's pane once its runtime has ended without a worker:
@@ -138,27 +153,14 @@ export function CloudSessionStartupError({
 	});
 	const failed = problem.phase === "failed";
 	const failureDetail = problem.phase === "failed" ? problem.detail : undefined;
-	// The workspace's ready check never passed: the server message names the
-	// check, and the details carry its last output.
-	const setupNotReady = problem.phase === "failed" && problem.code === "workspace_setup_not_ready";
 	const projectSetupFailed = problem.phase === "failed" && problem.code === "project_setup_failed";
 	// A retried agent start runs no Setup, so it says what it does instead.
 	const agentStartFailed = problem.phase === "failed" && problem.code === "agent_start_failed";
 	const title = rerunning
 		? t(agentStartFailed ? "cloud.startupError.agentRestartingTitle" : "cloud.startupError.workspaceRerunningTitle")
-		: setupNotReady
-		? t("cloud.startupError.workspaceSetupNotReadyTitle")
-		: projectSetupFailed
-			? t("cloud.startupError.projectSetupFailedTitle")
-			: problem.phase === "failed" && problem.code === "repository_checkout_failed"
-				? t("cloud.startupError.repositoryCheckoutFailedTitle")
-				: problem.phase === "failed" && problem.code === "working_directory_unusable"
-					? t("cloud.startupError.workingDirectoryUnusableTitle")
-					: problem.phase === "failed" && problem.code === "working_directory_occupied"
-						? t("cloud.startupError.workingDirectoryOccupiedTitle")
-						: problem.phase === "failed" && problem.code === "working_directory_not_durable"
-							? t("cloud.startupError.workingDirectoryNotDurableTitle")
-							: failed ? t("cloud.startupError.title") : t("cloud.startupError.unavailableTitle");
+		: failed
+			? t(FAILED_STARTUP_TITLES[problem.code ?? ""] ?? "cloud.startupError.title")
+			: t("cloud.startupError.unavailableTitle");
 	// The failed Setup run as a step log, or the retry's run while it goes.
 	const latestSetup = projectSetupFailed || rerunning ? latestRun : undefined;
 	const setupRun = latestSetup && (latestSetup.status === "failed" || (rerunning && latestSetup.status === "running")) ? latestSetup : undefined;
@@ -205,7 +207,7 @@ export function CloudSessionStartupError({
 					) : failed ? (
 						<Button
 							type="button"
-							variant="outline"
+							variant="secondary"
 							className="mt-1"
 							disabled={retry.isPending || rerunning}
 							onClick={() => retry.mutate()}

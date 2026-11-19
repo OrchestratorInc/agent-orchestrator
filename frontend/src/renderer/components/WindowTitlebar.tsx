@@ -9,7 +9,7 @@ import {
   PanelLeft,
   Square,
   X,
-} from "lucide-react";
+} from "@/components/app-icons";
 import { useEffect, useState } from "react";
 import { sidebarIsVisible, useUiStore } from "../stores/ui-store";
 import { useCanGoForward } from "./TitlebarNav";
@@ -140,7 +140,7 @@ function WindowControls({
   );
 }
 
-export function WindowTitlebar() {
+export function WindowTitlebar({ onBack }: { onBack?: () => void }) {
   const { t } = useTranslation();
   const toggleSidebar = useUiStore((state) => state.toggleSidebar);
   const isSidebarOpen = useUiStore(sidebarIsVisible);
@@ -225,8 +225,8 @@ export function WindowTitlebar() {
             <Pressable
               aria-label={t("titlebar.goBack")}
               className="window-titlebar__toggle"
-              disabled={!canGoBack}
-              onClick={() => router.history.back()}
+              disabled={!onBack && !canGoBack}
+              onClick={onBack ?? (() => router.history.back())}
               type="button"
             >
               <ArrowLeft

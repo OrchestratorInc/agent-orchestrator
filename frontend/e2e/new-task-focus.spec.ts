@@ -167,6 +167,8 @@ test("renderer: New task from the command palette focuses the composer prompt @T
 	await page.goto(`/#/projects/${projectId}/sessions/${sessionA}`);
 	await expect(page.getByRole("combobox", { name: "Message the agent" })).toBeVisible();
 	await page.keyboard.press("ControlOrMeta+k");
+	// On a session page the project's actions wait for a search.
+	await page.keyboard.type("new task");
 	await page.getByRole("option", { name: /New task/ }).first().click();
 	await expectPromptTakesTyping(page);
 });
@@ -190,8 +192,8 @@ test("renderer: switching project with a draft never flashes the sample requests
 
 	const projectPicker = page.getByTestId("chat-conversation-panel").getByRole("button", { name: /^Project: / });
 	await projectPicker.click();
-	await page.getByRole("menuitem", { name: "Scratchpad" }).click();
-	await expect(projectPicker).toHaveText("Scratchpad");
+	await page.getByRole("menuitem", { name: "Sessions" }).click();
+	await expect(projectPicker).toHaveText("Sessions");
 	await expect(prompt).toHaveText("keep this");
 	expect(await page.evaluate(() => (window as unknown as { __samples: { flashed: boolean } }).__samples.flashed)).toBe(false);
 });

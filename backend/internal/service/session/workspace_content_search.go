@@ -150,8 +150,9 @@ func grepWorkspace(ctx context.Context, root workspaceGrepRoot, terms []string, 
 	// Exit 1 with nothing on stderr is git grep's "no match".
 	noMatch := func() bool { return cmd.ProcessState.ExitCode() == 1 && stderr.buffer.Len() == 0 }
 	if err := cmd.Run(); err != nil && !stdout.filled && (cmd.ProcessState == nil || !noMatch()) {
-		return nil, classifyWorkspaceGitError(ctx, err, strings.TrimSpace(stderr.buffer.String()))
+		return nil, classifyWorkspaceGitError(ctx, root.dir, "grep", err, strings.TrimSpace(stderr.buffer.String()))
 	}
+	noteWorkspaceGitReadOK(root.dir, "grep")
 	var hits []WorkspaceContentHit
 	for _, record := range bytes.Split(stdout.buffer.Bytes(), []byte{'\n'}) {
 		fields := bytes.SplitN(record, []byte{0}, 3)

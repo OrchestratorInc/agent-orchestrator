@@ -53,7 +53,7 @@ describe("describeConversationActivity", () => {
 		expect(describeConversationActivity(activity({
 			summary: "Created a pull request",
 			detail: { action: "custom.unlisted" },
-		}))?.label).toBe("AO action");
+		}))?.label).toBe("ao action");
 		expect(describeConversationActivity(activity({
 			activityKind: "command",
 			summary: "ao spawn reviewer",
