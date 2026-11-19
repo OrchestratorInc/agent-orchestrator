@@ -1,5 +1,5 @@
 import { OrchestratorStartingChat } from "./chat/OrchestratorStartingChat";
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useDeferredValue, useEffect, useMemo, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { useQueryClient } from "@tanstack/react-query";
 import { useNavigate } from "@tanstack/react-router";
@@ -22,6 +22,7 @@ import {
 	hasConfiguredOrchestratorAgent,
 } from "../types/workspace";
 import { isArchivedSession } from "../lib/standalone-archive";
+import { boardSearchTokens, filterBoardSessions } from "../lib/board-search";
 import {
 	boardKanbanColumnOrder,
 	getKanbanColumnView,
@@ -40,6 +41,7 @@ import { ShareSessionDialog } from "./ShareSessionDialog";
 import { BoardWelcome, ProjectBoardEmpty } from "./BoardEmptyStates";
 import { ProjectImportOffer } from "./ProjectImportOffer";
 import { PageTopbar, PageTopbarTitle } from "./PageTopbar";
+import { ToolbarSearch } from "./PageToolbar";
 import { restartProjectOrchestrator } from "../lib/restart-orchestrator";
 import { usesPreviewWorkspaceData } from "../lib/preview-mode";
 import { demoBoardSessions } from "../lib/demo-board-sessions";
@@ -188,6 +190,28 @@ export function SessionsBoard({ projectId, hostId }: SessionsBoardProps) {
 			? { ...session, kanbanColumn: "building" as const }
 			: session,
 	);
+	// Search narrows the cards already loaded for this board; lanes and their
+	// order are the grid's, so a match stays where it was. Each board scope
+	// starts unfiltered (the local project route keeps this component mounted).
+	const [searchQuery, setSearchQuery] = useState("");
+	const [searchScope, setSearchScope] = useState(scopeKey);
+	if (searchScope !== scopeKey) {
+		setSearchScope(scopeKey);
+		setSearchQuery("");
+	}
+	// Typing narrows on a deferred render; clearing (or a new scope) restores
+	// the whole board at once instead of one render with the old query.
+	const deferredQuery = useDeferredValue(searchQuery);
+	const deferredSearchQuery = searchQuery === "" ? "" : deferredQuery;
+	const searchToggleRef = useRef<HTMLButtonElement>(null);
+	const searching = boardSearchTokens(deferredSearchQuery).length > 0;
+	const visibleBoardSessions = filterBoardSessions(boardSessions, deferredSearchQuery);
+	const searchMissed = searching && boardSessions.length > 0 && visibleBoardSessions.length === 0;
+	const clearSearch = () => {
+		setSearchQuery("");
+		// The button that cleared it goes away with the empty state.
+		requestAnimationFrame(() => searchToggleRef.current?.focus());
+	};
 	const boardLabels = sessionsBoardLabels(t);
 	const presentation = useBoardPresentation({
 		projectId,
@@ -268,15 +292,29 @@ export function SessionsBoard({ projectId, hostId }: SessionsBoardProps) {
 		});
 	};
 
+	// Offered while the board has cards to narrow, and kept while a query is
+	// held so it can always be cleared.
+	const search = searchQuery !== "" || (boardSessions.length > 0 && !showWelcome && !showProjectEmpty) ? (
+		<ToolbarSearch label={t("board.search")} query={searchQuery} onQueryChange={setSearchQuery} toggleRef={searchToggleRef} />
+	) : null;
 	const actions = projectId && (!hostId || connected) ? (
 		<>
 			<ProjectTerminationFeedback projectId={projectId} hostId={hostId} />
 			{memoryLight}
+			{search}
 			{guest ? null : <ProjectBoardActions actions={projectActions} placement="header" quiet={showProjectEmpty} cloud={workspace?.kind === CLOUD_PROJECT_KIND} />}
 		</>
 	) : hostOffline ? (
-		<HostOfflineStatus host={savedHost} label={hostLabel ?? ""} updatedAt={workspace ? remoteProjectQuery.dataUpdatedAt : undefined} />
-	) : memoryLight ?? undefined;
+		<>
+			{search}
+			<HostOfflineStatus host={savedHost} label={hostLabel ?? ""} updatedAt={workspace ? remoteProjectQuery.dataUpdatedAt : undefined} />
+		</>
+	) : memoryLight || search ? (
+		<>
+			{memoryLight}
+			{search}
+		</>
+	) : undefined;
 
 	if (projectId && (isProvisioning || projectActions.isSpawning || autoStartPending)) {
 		return <OrchestratorStartingChat
@@ -358,6 +396,15 @@ export function SessionsBoard({ projectId, hostId }: SessionsBoardProps) {
 						actions={guest ? null : <ProjectBoardActions actions={projectActions} placement="empty" />}
 						offer={projectId && !hostId ? <ProjectImportOffer className="mt-8 w-full text-left" projectId={projectId} /> : null}
 					/>
+				) : searchMissed ? (
+					<div className="flex h-full min-h-0 flex-col items-center justify-center gap-1 px-4 pb-empty-offset-y text-center" data-testid="board-search-empty">
+						<p className="text-control font-medium text-foreground" role="status">
+							{t("board.searchNoMatches", { query: deferredSearchQuery.trim() })}
+						</p>
+						<Button type="button" variant="quiet" size="sm" onClick={clearSearch}>
+							{t("board.searchClear")}
+						</Button>
+					</div>
 				) : (
 					<SessionsBoardGridView
 						columns={columns}
@@ -380,7 +427,7 @@ export function SessionsBoard({ projectId, hostId }: SessionsBoardProps) {
 								session={session}
 							/>
 						)}
-						sessions={boardSessions}
+						sessions={visibleBoardSessions}
 					/>
 				)}
 			</div>

@@ -1,4 +1,4 @@
-import { useRef, useState } from "react";
+import { useRef, useState, type RefObject } from "react";
 import { Search, X } from "@/components/app-icons";
 import { Button } from "./ui/button";
 import { Input } from "./ui/input";
@@ -7,10 +7,12 @@ import { Tooltip, TooltipContent, TooltipTrigger } from "./ui/tooltip";
 /**
  * Search behind an icon for a page's filter row; the field shows while
  * focused or holding a query. Escape clears it and returns focus to the icon.
+ * `toggleRef` lets the page return focus to the icon after clearing elsewhere.
  */
-export function ToolbarSearch({ label, query, onQueryChange }: { label: string; query: string; onQueryChange: (query: string) => void }) {
+export function ToolbarSearch({ label, query, onQueryChange, toggleRef: externalToggleRef }: { label: string; query: string; onQueryChange: (query: string) => void; toggleRef?: RefObject<HTMLButtonElement | null> }) {
 	const [open, setOpen] = useState(false);
-	const toggleRef = useRef<HTMLButtonElement>(null);
+	const ownToggleRef = useRef<HTMLButtonElement>(null);
+	const toggleRef = externalToggleRef ?? ownToggleRef;
 	if (open || query) {
 		return (
 			<label className="relative me-1 block w-56 min-w-0 shrink">
