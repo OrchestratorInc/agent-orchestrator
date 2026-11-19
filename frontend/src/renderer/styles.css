@@ -6379,12 +6379,17 @@ html:root[data-theme="light"][data-window-translucent="true"] {
 	--ao-shell-tint: color-mix(in srgb, color-mix(in srgb, var(--sidebar), white 75%) 72%, transparent);
 }
 
-/* A named color theme is recognized by its canvas, which a 70% tint over the
- * blurred desktop washes out. Named themes keep the theme's own sidebar color,
- * in both modes, with only a little material showing through, and get the
- * solid content panel (below). The default theme keeps the looks above. */
+/* A named color theme is recognized by its canvas color, which a 70% sidebar
+ * tint washes out. Named themes tint the shell with the canvas color instead,
+ * a little stronger, so the theme reads at a glance and the blurred desktop
+ * still shows through. Light named themes skip the push toward white above,
+ * which would bleach their sidebar. The default theme keeps the looks above. */
 html:root[data-style-theme][data-window-translucent="true"] {
-	--ao-shell-tint: color-mix(in srgb, var(--sidebar) 88%, transparent);
+	--ao-shell-tint: color-mix(in srgb, var(--background) 80%, transparent);
+}
+
+html:root[data-style-theme][data-theme="light"][data-window-translucent="true"] {
+	--ao-shell-tint: color-mix(in srgb, var(--sidebar) 80%, transparent);
 }
 
 /* Chrome: clear canvases, overlay fills. Declared on body so the theme's
@@ -6428,12 +6433,11 @@ html[data-window-translucent="true"] :is(
 	--sidebar-accent: var(--solid-sidebar-accent);
 }
 
-/* Light and named themes: the center panel keeps the solid surfaces, so content
- * reads as it does in an opaque window and a named theme shows its canvas. It
- * clears over a live browser page exactly as the opaque panel does (the native
- * browser rules above). The default dark theme keeps the clear single-tint
- * panel. */
-html:is([data-theme="light"], [data-style-theme])[data-window-translucent="true"] .center-panel-surface {
+/* Light: the center panel keeps the solid surfaces, so content reads as it does
+ * in an opaque window. It clears over a live browser page exactly as the
+ * opaque panel does (the native browser rules above). Dark keeps the clear
+ * single-tint panel. */
+html[data-theme="light"][data-window-translucent="true"] .center-panel-surface {
 	--color-bg-primary: var(--solid-bg-primary);
 	--color-bg-secondary: var(--solid-bg-secondary);
 	--color-bg-tertiary: var(--solid-bg-tertiary);
