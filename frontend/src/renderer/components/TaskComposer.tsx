@@ -145,7 +145,15 @@ function keptPreparationKey(projectId: string, hostId?: string): string {
 
 function keepPreparation(key: string, preparation: KeptPreparation, hostId?: string): void {
 	const previous = keptPreparations.get(key);
-	if (previous && previous.token !== preparation.token) cancelTaskPreparation(previous.token, hostId);
+	if (previous && previous.token !== preparation.token) {
+		// A late answer to an older request must not replace a newer kept one,
+		// which has longer left before the host deletes it.
+		if (previous.createdAt > preparation.createdAt) {
+			cancelTaskPreparation(preparation.token, hostId);
+			return;
+		}
+		cancelTaskPreparation(previous.token, hostId);
+	}
 	keptPreparations.set(key, preparation);
 }
 

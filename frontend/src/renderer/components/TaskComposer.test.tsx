@@ -4605,6 +4605,47 @@ describe("useTaskLaunch on the new chat page", () => {
 		expect(h.delete).not.toHaveBeenCalled();
 	});
 
+	it("keeps the newer left worktree when an older request answers late", async () => {
+		const now = vi.spyOn(Date, "now");
+		try {
+			now.mockReturnValue(1_000_000);
+			h.get.mockResolvedValue({ data: { status: "ok", project: { id: "proj-1", config: {} } } });
+			h.delete.mockResolvedValue({});
+			let answerFirst!: (token: string) => void;
+			let prepares = 0;
+			h.post.mockImplementation(async (path: string) => {
+				if (path !== "/api/v1/projects/{id}/tasks/prepare") return { data: {} };
+				prepares += 1;
+				if (prepares === 1) return new Promise((done) => { answerFirst = (token) => done({ data: { taskPreparation: token } }); });
+				return { data: { taskPreparation: "proj-1-8" } };
+			});
+			function Launcher() {
+				const task = useTaskLaunch({ projectId: "proj-1" });
+				return <p>{task.preparedSessionId || "unprepared"}</p>;
+			}
+			// The first page leaves while its request is still out.
+			const first = render(<Wrap><Launcher /></Wrap>);
+			await waitFor(() => expect(prepares).toBe(1));
+			first.unmount();
+
+			// A later page gets its own preparation and leaves it unused.
+			now.mockReturnValue(1_000_000 + 60_000);
+			const second = render(<Wrap><Launcher /></Wrap>);
+			await screen.findByText("proj-1-8");
+			second.unmount();
+
+			// The first request answers last.
+			await act(async () => { answerFirst("proj-1-7"); });
+			expect(h.delete).toHaveBeenCalledWith("/api/v1/task-preparations/{token}", { params: { path: { token: "proj-1-7" } } });
+			expect(h.delete).not.toHaveBeenCalledWith("/api/v1/task-preparations/{token}", { params: { path: { token: "proj-1-8" } } });
+
+			render(<Wrap><Launcher /></Wrap>);
+			await screen.findByText("proj-1-8");
+		} finally {
+			now.mockRestore();
+		}
+	});
+
 	it("releases a left worktree too old to offer and prepares a new one", async () => {
 		const now = vi.spyOn(Date, "now");
 		try {
