@@ -10,7 +10,6 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/chatdriver/processenv"
 	aoprocess "github.com/aoagents/agent-orchestrator/backend/internal/process"
 )
 
@@ -55,7 +54,9 @@ func ensureSharedAdapter(ctx context.Context, socket string, rt runtimeLaunch, e
 	defer func() { _ = logFile.Close() }()
 	cmd := aoprocess.Command(rt.command, rt.server, socket) //nolint:gosec // packaged runtime paths.
 	cmd.Dir = filepath.Dir(socket)
-	cmd.Env = processenv.Merge(env)
+	for key, value := range env {
+		cmd.Env = append(cmd.Env, key+"="+value)
+	}
 	cmd.Stderr = logFile
 	cmd.SysProcAttr = &syscall.SysProcAttr{Setsid: true}
 	if err := cmd.Start(); err != nil {

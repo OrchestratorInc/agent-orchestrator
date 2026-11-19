@@ -2,6 +2,7 @@ package claudeacp
 
 import (
 	"context"
+	"os"
 	"strings"
 	"testing"
 
@@ -29,5 +30,55 @@ func TestSessionMetaCarriesSharedChatEnv(t *testing.T) {
 	}
 	if stored := sharedSessionEnv(id); len(stored) != 1 {
 		t.Fatalf("meta changed the stored env: %v", stored)
+	}
+}
+
+func TestSharedAdapterFollowsInheritedEnv(t *testing.T) {
+	rt := runtimeLaunch{command: "node", server: "acp-server.mjs"}
+	overlay := map[string]string{"AO_SESSION_ID": "s-1"}
+	t.Setenv("MAX_THINKING_TOKENS", "1000")
+	t.Setenv("AO_TEST_INHERITED", "old")
+	server, session := sharedAdapterEnvs(overlay, "/workspace")
+	first, err := sharedAdapterSocket("/data", rt, server)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if server["MAX_THINKING_TOKENS"] != "1000" || server["AO_TEST_INHERITED"] != "" {
+		t.Fatalf("adapter env = %v", server)
+	}
+	if session["AO_TEST_INHERITED"] != "old" || session["AO_SESSION_ID"] != "s-1" {
+		t.Fatalf("session env lacks inherited or launch values")
+	}
+
+	// The daemon restarts with a changed setting and without one variable.
+	t.Setenv("MAX_THINKING_TOKENS", "2000")
+	if err := os.Unsetenv("AO_TEST_INHERITED"); err != nil {
+		t.Fatal(err)
+	}
+	server, session = sharedAdapterEnvs(overlay, "/workspace")
+	second, err := sharedAdapterSocket("/data", rt, server)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if first == second {
+		t.Fatal("a changed inherited adapter setting reused the old adapter process")
+	}
+	if _, ok := session["AO_TEST_INHERITED"]; ok {
+		t.Fatal("a variable removed from the daemon env still reaches the session")
+	}
+}
+
+func TestSharedAdapterResolvesRelativeConfigDirPerWorkspace(t *testing.T) {
+	rt := runtimeLaunch{command: "node", server: "acp-server.mjs"}
+	overlay := map[string]string{"CLAUDE_CONFIG_DIR": ".claude-custom"}
+	serverA, sessionA := sharedAdapterEnvs(overlay, "/work/a")
+	serverB, _ := sharedAdapterEnvs(overlay, "/work/b")
+	if serverA["CLAUDE_CONFIG_DIR"] != "/work/a/.claude-custom" || sessionA["CLAUDE_CONFIG_DIR"] != "/work/a/.claude-custom" {
+		t.Fatalf("config dir = %q / %q", serverA["CLAUDE_CONFIG_DIR"], sessionA["CLAUDE_CONFIG_DIR"])
+	}
+	socketA, _ := sharedAdapterSocket("/data", rt, serverA)
+	socketB, _ := sharedAdapterSocket("/data", rt, serverB)
+	if socketA == socketB {
+		t.Fatal("two workspaces with different config dirs share one adapter")
 	}
 }
