@@ -214,8 +214,9 @@ export const performanceHarness = {
 	},
 
 	async highlighting() {
+		highlightSync("const warmup = 1", "typescript");
 		const code = Array.from(
-			{ length: 5000 },
+			{ length: 10000 },
 			(_, index) => `const value${index}: string = "Unicode 👨‍👩‍👧‍👦 ${index}";`,
 		).join("\n");
 		const gaps: number[] = [];

@@ -44,7 +44,7 @@ describe("canonicalLanguage", () => {
 		expect(canonicalLanguage("brainfuck")).toBeUndefined();
 		expect(canonicalLanguage("constructor")).toBeUndefined();
 		expect(canonicalLanguage("__proto__")).toBeUndefined();
-		expect(canonicalLanguage("ansi")).toBeUndefined();
+		for (const label of ["ansi", "text", "plain", "txt", "plaintext", "log"]) expect(canonicalLanguage(label)).toBeUndefined();
 		expect(canonicalLanguage(undefined)).toBeUndefined();
 	});
 });
@@ -68,7 +68,7 @@ describe("highlightSync", () => {
 		expect(highlightSync("x = 1", "klingon" as GrammarName)).toBeUndefined();
 	});
 
-	it("leaves code over half a million characters plain", () => {
-		expect(highlightSync("const a = 1;\n".repeat(40_000), "typescript")).toBeUndefined();
+	it("leaves code over a million characters plain", () => {
+		expect(highlightSync("const a = 1;\n".repeat(80_000), "typescript")).toBeUndefined();
 	});
 });

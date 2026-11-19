@@ -12,13 +12,14 @@ export type GrammarName = Lang;
 export type CodeLine = { tokens: ElementContent[]; signature: string };
 
 const ALIASES: Record<string, Lang> = { console: "bash", udiff: "diff" };
+const PLAIN = new Set(["ansi", "text", "plain", "txt", "plaintext", "log"]);
 
 /** The grammar for a fence label or file extension, or undefined to render plain. */
 export function canonicalLanguage(label: string | undefined): GrammarName | undefined {
 	if (!label) return undefined;
 	const name = label.toLowerCase();
 	const lang = ALIASES[name] ?? name;
-	return lang !== "ansi" && isSupportedLanguage(lang) ? lang : undefined;
+	return !PLAIN.has(lang) && isSupportedLanguage(lang) ? lang : undefined;
 }
 
 const CODE_THEME: Theme = {
@@ -69,7 +70,7 @@ function tokenNode(token: ThemedToken): ElementContent {
 	return classes.length ? { type: "element", tagName: "span", properties: { className: classes }, children: [text] } : text;
 }
 
-const MAX_CHARS = 500_000;
+const MAX_CHARS = 1_000_000;
 
 /** The highlighted tree, keeping the source's exact line endings. */
 export function highlightSync(code: string, language: GrammarName): Root | undefined {
