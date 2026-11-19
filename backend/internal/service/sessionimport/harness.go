@@ -42,6 +42,7 @@ var harnessImporters = map[domain.AgentHarness]harnessImporter{
 	domain.HarnessAider:      {discoverRegistered: discoverAiderRegistered, read: readAiderTranscript, mode: domain.SessionModeTUI},
 	domain.HarnessClaudeCode: {root: claudeRoot, discover: walkSources(domain.HarnessClaudeCode, "projects", jsonlKey), read: readClaudeTranscript},
 	domain.HarnessCodewhale:  {root: codewhaleRoot, discover: discoverCodewhale, read: readCodewhaleTranscript, mode: domain.SessionModeTUI},
+	domain.HarnessFX:         {root: fxRoot, discover: discoverFX, read: readFXTranscript, mode: domain.SessionModeTUI},
 	// Archived Codex threads are not resumable without unarchiving them in Codex.
 	domain.HarnessCodex:    {root: codexRoot, discover: walkSources(domain.HarnessCodex, "sessions", codexKey), read: readCodexTranscript},
 	domain.HarnessCopilot:  {root: copilotRoot, discover: discoverCopilot, read: readCopilotTranscript},
