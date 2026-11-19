@@ -76,6 +76,12 @@ func newContextMutex() *contextMutex {
 func (m *contextMutex) Lock(ctx context.Context) error {
 	select {
 	case <-m.token:
+		// Both selects can fire at once; a canceled launch must not run on
+		// with a token it only held for a moment.
+		if err := ctx.Err(); err != nil {
+			m.Unlock()
+			return err
+		}
 		return nil
 	case <-ctx.Done():
 		return ctx.Err()
@@ -93,10 +99,33 @@ func (m *contextMutex) TryLock() bool {
 
 func (m *contextMutex) Unlock() { m.token <- struct{}{} }
 
-var sharedServerRegistry = struct {
+// sharedServerRegistryEntry is one data-dir slot of the shared-server
+// registry. Every entry locks on its own mutex so launches for different data
+// dirs do not queue behind another startup; each lock is still held across the
+// server startup it serializes.
+type sharedServerRegistryEntry struct {
 	mu    *contextMutex
 	byDir map[string]*serverHandle
-}{mu: newContextMutex(), byDir: map[string]*serverHandle{}}
+}
+
+var sharedServerRegistry = struct {
+	mu    *contextMutex
+	byDir map[string]*sharedServerRegistryEntry
+}{mu: newContextMutex(), byDir: map[string]*sharedServerRegistryEntry{}}
+
+// registryFor returns the registry entry for one data-dir key, creating it on
+// first use. The outer lock only guards this map, never a server startup.
+func registryFor(key string) *sharedServerRegistryEntry {
+	// The outer lock only guards the map; Background never cancels.
+	_ = sharedServerRegistry.mu.Lock(context.Background())
+	defer sharedServerRegistry.mu.Unlock()
+	entry := sharedServerRegistry.byDir[key]
+	if entry == nil {
+		entry = &sharedServerRegistryEntry{mu: newContextMutex(), byDir: map[string]*serverHandle{}}
+		sharedServerRegistry.byDir[key] = entry
+	}
+	return entry
+}
 
 // prepareSharedServer writes the session's project config and returns the AO
 // server that launch should attach to. OpenCode 2 only resolves per-session
@@ -149,6 +178,15 @@ func prepareSharedServer(ctx context.Context, binary string, cfg ports.LaunchCon
 		return sharedServer{}, err
 	}
 	if content == "" {
+		// The workspace lock is still held, so no other AO launch can publish
+		// between the pre-start owner check and this re-read. Claiming the
+		// config here closes the window where another session's document
+		// appears after the early check and before the client attaches: the
+		// launch now either holds a config generated for this session or takes
+		// the private path with one injected inline.
+		if err := claimProjectConfig(ctx, cfg.WorkspacePath, cfg.SessionID, tempName); err != nil {
+			return sharedServer{}, err
+		}
 		return server, nil
 	}
 	// Startup can take seconds. Re-read the config afterwards: an editor, a
@@ -159,6 +197,33 @@ func prepareSharedServer(ctx context.Context, binary string, cfg ports.LaunchCon
 		return sharedServer{}, fmt.Errorf("%w: %w", errSharedServerConfig, err)
 	}
 	return server, nil
+}
+
+// claimProjectConfig gives an empty-content launch a project config generated
+// for its own session before the client attaches to the shared server. It runs
+// while the workspace lock is held, so the document another session could have
+// published after the pre-start check is either absent (this session publishes
+// its own minimal config) or present (the launch refuses to attach).
+func claimProjectConfig(ctx context.Context, workspacePath, sessionID, tempName string) error {
+	owner, err := projectConfigOwner(workspacePath)
+	if err != nil {
+		return err
+	}
+	if owner == aoAgentName(sessionID) {
+		return nil
+	}
+	if owner != "" {
+		return errProjectConfigForeign
+	}
+	own, err := defaultAgentConfig(sessionID)
+	if err != nil {
+		return err
+	}
+	if err := projectConfigPublishable(ctx, workspacePath, tempName); err != nil {
+		return err
+	}
+	_, err = writeProjectConfig(workspacePath, own, tempName)
+	return err
 }
 
 // revalidateProjectConfig makes the worktree config match content after the
@@ -268,12 +333,13 @@ func ensureSharedServer(ctx context.Context, binary, dataDir, dataHome string) (
 		key = dataHome
 	}
 
-	if err := sharedServerRegistry.mu.Lock(ctx); err != nil {
+	entry := registryFor(key)
+	if err := entry.mu.Lock(ctx); err != nil {
 		return sharedServer{}, err
 	}
-	defer sharedServerRegistry.mu.Unlock()
+	defer entry.mu.Unlock()
 
-	if handle, ok := sharedServerRegistry.byDir[key]; ok {
+	if handle, ok := entry.byDir[key]; ok {
 		if serverHealthy(handle.server.url, handle.server.password) {
 			return handle.server, nil
 		}
@@ -281,7 +347,7 @@ func ensureSharedServer(ctx context.Context, binary, dataDir, dataHome string) (
 			// A process that has exited no longer owns the data home; drop the
 			// handle so a later launch can start a fresh server.
 			if handle.done != nil && isClosed(handle.done) {
-				delete(sharedServerRegistry.byDir, key)
+				delete(entry.byDir, key)
 			} else {
 				// This process still owns a server for the data dir. Keep the
 				// handle so a later launch can reuse it if it recovers, and never
@@ -296,7 +362,7 @@ func ensureSharedServer(ctx context.Context, binary, dataDir, dataHome string) (
 			if serverListening(handle.server.url) {
 				return sharedServer{}, fmt.Errorf("%w: endpoint is listening but not healthy", errSharedServerUnavailable)
 			}
-			delete(sharedServerRegistry.byDir, key)
+			delete(entry.byDir, key)
 		}
 	}
 	if dataDir != "" {
@@ -313,10 +379,10 @@ func ensureSharedServer(ctx context.Context, binary, dataDir, dataHome string) (
 				// The record only blocks a fresh start; its endpoint is gone.
 				_ = os.Remove(filepath.Join(dataDir, serverStateFileName))
 			} else if serverHealthy(server.url, server.password) {
-				sharedServerRegistry.byDir[key] = &serverHandle{server: server}
+				entry.byDir[key] = &serverHandle{server: server}
 				return server, nil
 			} else if serverListening(server.url) {
-				sharedServerRegistry.byDir[key] = &serverHandle{server: server}
+				entry.byDir[key] = &serverHandle{server: server}
 				return sharedServer{}, fmt.Errorf("%w: persisted endpoint is listening but not healthy", errSharedServerUnavailable)
 			}
 		}
@@ -335,6 +401,11 @@ func ensureSharedServer(ctx context.Context, binary, dataDir, dataHome string) (
 	cmd.Env = sharedServerEnv(dataHome)
 	cmd.Stdout = output
 	cmd.Stderr = output
+	// The port and command work above can take time; a canceled launch must
+	// not start a process it will never use.
+	if err := ctx.Err(); err != nil {
+		return sharedServer{}, err
+	}
 	if err := cmd.Start(); err != nil {
 		return sharedServer{}, fmt.Errorf("opencode-v2: start shared server: %w", err)
 	}
@@ -346,11 +417,11 @@ func ensureSharedServer(ctx context.Context, binary, dataDir, dataHome string) (
 	go func() { //nolint:gosec // reaps a server that outlives the launch context
 		_ = cmd.Wait()
 		close(done)
-		_ = sharedServerRegistry.mu.Lock(context.Background())
-		if sharedServerRegistry.byDir[key] == handle {
-			delete(sharedServerRegistry.byDir, key)
+		_ = entry.mu.Lock(context.Background())
+		if entry.byDir[key] == handle {
+			delete(entry.byDir, key)
 		}
-		sharedServerRegistry.mu.Unlock()
+		entry.mu.Unlock()
 	}()
 
 	password, err := waitForSharedServer(ctx, url, output, done)
@@ -368,13 +439,13 @@ func ensureSharedServer(ctx context.Context, binary, dataDir, dataHome string) (
 				return sharedServer{}, err
 			}
 			handle.server = sharedServer{url: url}
-			sharedServerRegistry.byDir[key] = handle
+			entry.byDir[key] = handle
 			return sharedServer{}, fmt.Errorf("%w: shared server did not stop after a startup failure", errSharedServerUnavailable)
 		}
 	}
 	server := sharedServer{url: url, password: password}
 	handle.server = server
-	sharedServerRegistry.byDir[key] = handle
+	entry.byDir[key] = handle
 	if dataDir != "" {
 		persistServer(dataDir, server)
 	}

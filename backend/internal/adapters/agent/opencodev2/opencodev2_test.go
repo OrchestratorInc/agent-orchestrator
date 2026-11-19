@@ -1122,15 +1122,16 @@ func TestV2SharedServerBusyReturnsErrorInsteadOfPrivateFallback(t *testing.T) {
 	dataDir := t.TempDir()
 	workspace := sharedWorkspace(t)
 	handle := &serverHandle{server: sharedServer{url: "http://127.0.0.1:1", password: "pw"}, cmd: &exec.Cmd{}}
-	if err := sharedServerRegistry.mu.Lock(context.Background()); err != nil {
+	entry := registryFor(dataDir)
+	if err := entry.mu.Lock(context.Background()); err != nil {
 		t.Fatal(err)
 	}
-	sharedServerRegistry.byDir[dataDir] = handle
-	sharedServerRegistry.mu.Unlock()
+	entry.byDir[dataDir] = handle
+	entry.mu.Unlock()
 	t.Cleanup(func() {
-		_ = sharedServerRegistry.mu.Lock(context.Background())
-		delete(sharedServerRegistry.byDir, dataDir)
-		sharedServerRegistry.mu.Unlock()
+		_ = entry.mu.Lock(context.Background())
+		delete(entry.byDir, dataDir)
+		entry.mu.Unlock()
 	})
 
 	cmd, err := New().GetLaunchCommand(context.Background(), ports.LaunchConfig{
@@ -1158,23 +1159,24 @@ func TestEnsureSharedServerKeepsReattachedHandleWhenProbeFails(t *testing.T) {
 	defer info.Close()
 	key := t.TempDir()
 	handle := &serverHandle{server: sharedServer{url: info.URL, password: "pw"}}
-	if err := sharedServerRegistry.mu.Lock(context.Background()); err != nil {
+	entry := registryFor(key)
+	if err := entry.mu.Lock(context.Background()); err != nil {
 		t.Fatal(err)
 	}
-	sharedServerRegistry.byDir[key] = handle
-	sharedServerRegistry.mu.Unlock()
+	entry.byDir[key] = handle
+	entry.mu.Unlock()
 	t.Cleanup(func() {
-		_ = sharedServerRegistry.mu.Lock(context.Background())
-		delete(sharedServerRegistry.byDir, key)
-		sharedServerRegistry.mu.Unlock()
+		_ = entry.mu.Lock(context.Background())
+		delete(entry.byDir, key)
+		entry.mu.Unlock()
 	})
 
 	if _, err := ensureSharedServer(context.Background(), "unused", key, t.TempDir()); err == nil {
 		t.Fatal("ensureSharedServer accepted a listening but unhealthy reattached server")
 	}
-	_ = sharedServerRegistry.mu.Lock(context.Background())
-	got := sharedServerRegistry.byDir[key]
-	sharedServerRegistry.mu.Unlock()
+	_ = entry.mu.Lock(context.Background())
+	got := entry.byDir[key]
+	entry.mu.Unlock()
 	if got != handle {
 		t.Fatal("listening reattached server was dropped, so a duplicate could start")
 	}
@@ -1208,23 +1210,24 @@ func TestEnsureSharedServerKeepsOwnedHandleWhenProbeFails(t *testing.T) {
 		server: sharedServer{url: "http://127.0.0.1:1", password: "pw"},
 		cmd:    &exec.Cmd{},
 	}
-	if err := sharedServerRegistry.mu.Lock(context.Background()); err != nil {
+	entry := registryFor(key)
+	if err := entry.mu.Lock(context.Background()); err != nil {
 		t.Fatal(err)
 	}
-	sharedServerRegistry.byDir[key] = handle
-	sharedServerRegistry.mu.Unlock()
+	entry.byDir[key] = handle
+	entry.mu.Unlock()
 	t.Cleanup(func() {
-		_ = sharedServerRegistry.mu.Lock(context.Background())
-		delete(sharedServerRegistry.byDir, key)
-		sharedServerRegistry.mu.Unlock()
+		_ = entry.mu.Lock(context.Background())
+		delete(entry.byDir, key)
+		entry.mu.Unlock()
 	})
 
 	if _, err := ensureSharedServer(context.Background(), "unused", key, t.TempDir()); err == nil {
 		t.Fatal("ensureSharedServer accepted an unhealthy owned server")
 	}
-	_ = sharedServerRegistry.mu.Lock(context.Background())
-	got := sharedServerRegistry.byDir[key]
-	sharedServerRegistry.mu.Unlock()
+	_ = entry.mu.Lock(context.Background())
+	got := entry.byDir[key]
+	entry.mu.Unlock()
 	if got != handle {
 		t.Fatal("running server handle was dropped, so a replacement could leak a second server")
 	}
@@ -1515,5 +1518,104 @@ func TestPrepareSharedServerRequiresIgnoreOfExactTempName(t *testing.T) {
 	}
 	if _, statErr := os.Stat(filepath.Join(workspace, ".opencode", projectConfigFileName)); !errors.Is(statErr, os.ErrNotExist) {
 		t.Fatalf("project config published under an unignored staging name")
+	}
+}
+
+func TestPrepareSharedServerClaimsConfigForEmptyLaunch(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("POSIX executable fixture")
+	}
+	binary := fakeBinary(t, "2.0.0")
+	info := healthyInfoServer(t)
+	dataDir := t.TempDir()
+	persistServer(dataDir, sharedServer{url: info.URL, password: "pw"})
+	workspace := sharedWorkspace(t)
+	configPath := filepath.Join(workspace, ".opencode", projectConfigFileName)
+
+	// An empty-content launch must attach holding a config generated for its
+	// own session, not one that another session can still publish after the
+	// early owner check.
+	server, err := prepareSharedServer(context.Background(), binary, ports.LaunchConfig{
+		DataDir:       dataDir,
+		WorkspacePath: workspace,
+		SessionID:     "sess/claim",
+	}, t.TempDir(), "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if server.url != info.URL {
+		t.Fatalf("server = %#v, want the persisted shared server", server)
+	}
+	data, err := os.ReadFile(configPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var config struct {
+		DefaultAgent string `json:"default_agent"`
+	}
+	if err := json.Unmarshal(data, &config); err != nil {
+		t.Fatal(err)
+	}
+	if config.DefaultAgent != "ao-sess-claim" {
+		t.Fatalf("default_agent = %q, want this session's own config", config.DefaultAgent)
+	}
+
+	// A later empty-content launch in the same worktree now finds a foreign
+	// owner and must not attach.
+	foreign, err := prepareSharedServer(context.Background(), binary, ports.LaunchConfig{
+		DataDir:       dataDir,
+		WorkspacePath: workspace,
+		SessionID:     "sess/intruder",
+	}, t.TempDir(), "")
+	if foreign != (sharedServer{}) || !errors.Is(err, errProjectConfigForeign) {
+		t.Fatalf("second prepare = %#v, %v, want errProjectConfigForeign", foreign, err)
+	}
+	data, err = os.ReadFile(configPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(data), "ao-sess-claim") {
+		t.Fatalf("workspace config changed to %q", data)
+	}
+}
+
+func TestContextMutexPrefersCanceledCaller(t *testing.T) {
+	mu := newContextMutex()
+	if err := mu.Lock(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	// A canceled caller that gets the token anyway must return its
+	// cancellation, not run on with a lock it held for a moment.
+	if err := mu.Lock(ctx); err == nil {
+		mu.Unlock()
+		t.Fatal("Lock succeeded for a canceled context")
+	}
+	mu.Unlock()
+	if err := mu.Lock(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	mu.Unlock()
+}
+
+func TestPrepareSharedServerAbandonedOnCanceledContext(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("POSIX executable fixture")
+	}
+	binary := fakeBinary(t, "2.0.0")
+	workspace := sharedWorkspace(t)
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	_, err := prepareSharedServer(ctx, binary, ports.LaunchConfig{
+		DataDir:       t.TempDir(),
+		WorkspacePath: workspace,
+		SessionID:     "sess/canceled",
+	}, t.TempDir(), `{"default_agent":"ao-canceled"}`)
+	if err == nil {
+		t.Fatal("prepareSharedServer succeeded with a canceled context")
+	}
+	if _, statErr := os.Stat(filepath.Join(workspace, ".opencode", projectConfigFileName)); !errors.Is(statErr, os.ErrNotExist) {
+		t.Fatalf("project config written by a canceled launch: %v", statErr)
 	}
 }
