@@ -94,15 +94,44 @@ describe("action row", () => {
 		{ key: "always", label: "Always Allow", onPress: vi.fn() },
 	];
 
+	// Hidden copies, one per decision, measure each at its own width; the visible
+	// row is the last host.
+	function rowParts() {
+		const hosts = renderer!.root.findAllByType("Host" as never);
+		const visible = hosts[hosts.length - 1];
+		const buttons = visible.findAll((node) => ["Button", "TextButton"].includes(node.type as string));
+		return { copies: hosts.slice(0, -1), visible, frame: visible.parent!, buttons };
+	}
+
 	it("lays every decision out in one native row, right-aligned", () => {
 		act(() => { renderer = create(<ElicitationActionRow actions={decisions()} reportsOutcome />); });
-		expect(renderer!.root.findAllByType("Host" as never)).toHaveLength(1);
-		const row = renderer!.root.findByType("Row" as never);
+		const { copies, visible } = rowParts();
+		expect(copies).toHaveLength(3);
+		expect(copies[0].parent?.props).toMatchObject({ accessibilityElementsHidden: true, pointerEvents: "none" });
+		const row = visible.findByType("Row" as never);
 		const [spacer, ...buttons] = row.children as ReactTestInstance[];
 		// The spacer takes what the decisions leave, and nothing once they need it all.
 		expect(spacer.type).toBe("Spacer");
 		expect(modifiers(spacer)).toEqual([{ weight: [1] }]);
 		expect(buttons.map((button) => button.type)).toEqual(["TextButton", "Button", "TextButton"]);
+	});
+
+	// A long early label must not take the width later decisions need, the
+	// primary among them: once they don't fit, each is held to a fair share.
+	it("holds each decision to a fair share once the row runs short", () => {
+		act(() => { renderer = create(<ElicitationActionRow actions={decisions()} reportsOutcome />); });
+		const { copies, frame } = rowParts();
+		act(() => {
+			// 316 wide, less two 8-wide gaps: 300 for the decisions.
+			frame.props.onLayout({ nativeEvent: { layout: { width: 316 } } });
+			copies[0].props.onLayoutContent({ nativeEvent: { width: 400, height: 48 } });
+			copies[1].props.onLayoutContent({ nativeEvent: { width: 120, height: 48 } });
+			copies[2].props.onLayoutContent({ nativeEvent: { width: 130, height: 48 } });
+		});
+		expect(rowParts().buttons.map(modifiers)).toEqual([[{ width: [100] }], [{ width: [100] }], [{ width: [100] }]]);
+		// With room for them all, each keeps its own width.
+		act(() => frame.props.onLayout({ nativeEvent: { layout: { width: 800 } } }));
+		expect(rowParts().buttons.map(modifiers)).toEqual([undefined, undefined, undefined]);
 	});
 
 	it("keeps each label on one line, ellipsized when the row runs short", () => {
@@ -116,7 +145,7 @@ describe("action row", () => {
 		const actions = decisions();
 		vi.mocked(haptics.tap).mockClear();
 		act(() => { renderer = create(<ElicitationActionRow actions={actions} reportsOutcome />); });
-		const press = (index: number) => renderer!.root.findAll((node) => ["Button", "TextButton"].includes(node.type as string))[index].props.onClick();
+		const press = (index: number) => rowParts().buttons[index].props.onClick();
 		act(() => press(1));
 		expect(actions[1].onPress).toHaveBeenCalledOnce();
 		expect(haptics.tap).not.toHaveBeenCalled();
