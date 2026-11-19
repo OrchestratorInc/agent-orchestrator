@@ -160,9 +160,12 @@ export function steps({ platform = process.platform, arch = process.arch } = {})
 				if (work && work !== "off" && (work.startsWith("../") || path.isAbsolute(work))) {
 					return { uncacheable: "GOWORK points outside this checkout" };
 				}
+				// The selected workspace (say GOWORK=dev.go.work) decides replacements,
+				// so hash it even when it isn't the root go.work.
+				const workspace = work && work !== "off" ? [work, `${work}.sum`] : [];
 				const appVersion = JSON.parse(readFileSync(path.join(frontend, "package.json"), "utf8")).version;
 				return {
-					files: [...files, frontendFile("scripts/build-daemon.mjs"), frontendFile("scripts/go-version.mjs")],
+					files: [...files, ...workspace, frontendFile("scripts/build-daemon.mjs"), frontendFile("scripts/go-version.mjs")],
 					extra: { go, appVersion, workOSClientID: sha(process.env.VITE_WORKOS_CLIENT_ID?.trim() ?? "") },
 				};
 			},
