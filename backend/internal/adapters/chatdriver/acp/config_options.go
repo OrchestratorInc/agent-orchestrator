@@ -155,6 +155,7 @@ func (c *conversation) replaceConfigOptions(options []acpsdk.SessionConfigOption
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	c.configOptions = normalized
+	c.restoredFrom = nil // the provider has stated every current value
 	if len(normalized) > 0 {
 		c.capabilities[ports.ChatCapabilityConfigOptions] = true
 	}
@@ -167,6 +168,7 @@ func (c *conversation) replaceConfigOptions(options []acpsdk.SessionConfigOption
 func (c *conversation) applyAcceptedConfigOption(id string, value ports.ChatConfigOptionValue) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
+	delete(c.restoredFrom, id)
 	for i := range c.configOptions {
 		if c.configOptions[i].ID != id {
 			continue
