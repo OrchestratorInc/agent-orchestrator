@@ -42,7 +42,7 @@ var sharedAdapterSupported = sharedAdapterAvailable
 // sessionEnv holds each shared-adapter chat's full env for claudeSessionMeta.
 // One launch reads it once or twice within its startup (a failed session/load
 // falls back to session/new), so entries older than sessionEnvTTL are dropped.
-var sessionEnv sync.Map // domain.SessionID -> launchEnv
+var sessionEnv sync.Map // domain.SessionID -> *launchEnv
 
 const sessionEnvTTL = 10 * time.Minute
 
@@ -53,12 +53,13 @@ type launchEnv struct {
 
 func storeSessionEnv(id domain.SessionID, env map[string]string, now time.Time) {
 	sessionEnv.Range(func(key, value any) bool {
-		if entry, ok := value.(launchEnv); !ok || now.Sub(entry.stored) > sessionEnvTTL {
-			sessionEnv.Delete(key)
+		// Delete only the entry seen here, never a newer one stored meanwhile.
+		if entry, ok := value.(*launchEnv); !ok || now.Sub(entry.stored) > sessionEnvTTL {
+			sessionEnv.CompareAndDelete(key, value)
 		}
 		return true
 	})
-	sessionEnv.Store(id, launchEnv{env: env, stored: now})
+	sessionEnv.Store(id, &launchEnv{env: env, stored: now})
 }
 
 // sharedAdapterEnvs splits a chat's effective env (the daemon's env with the
@@ -129,7 +130,10 @@ func sharedAdapterLaunch(ctx context.Context, cfg acpdriver.LaunchConfig, rt run
 
 func sharedSessionEnv(id domain.SessionID) map[string]string {
 	value, _ := sessionEnv.Load(id)
-	stored, _ := value.(launchEnv)
+	stored, _ := value.(*launchEnv)
+	if stored == nil {
+		return nil
+	}
 	return stored.env
 }
 
