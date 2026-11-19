@@ -402,8 +402,14 @@ export async function prepare({ dryRun = false, env = process.env, platform = pr
 		if (dryRun) continue;
 
 		if (action === "restore") {
+			// Outside the recovery below: a rejected target must never be deleted.
 			try {
 				assertIgnoredOutputs(repoRoot, [path.posix.join("frontend", step.outDir)]);
+			} catch (error) {
+				log(`${step.name}: ${error.message}; stopping without touching it`);
+				return 1;
+			}
+			try {
 				rmSync(outDir, { recursive: true, force: true });
 				const method = cloneTree(cachedOutput, outDir);
 				stamps[step.name] = { key, fingerprint: outputFingerprint(outDir, step.sentinels) };
