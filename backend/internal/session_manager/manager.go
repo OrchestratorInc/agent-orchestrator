@@ -497,6 +497,11 @@ type Manager struct {
 	// Only pre-listener provisioning writes that failed may be retried after
 	// bind; scanning then would also sweep tasks created by this daemon.
 	startupProvisioningRetries []domain.SessionRecord
+	// Sessions that existed before the listener bound, with their creation
+	// times. A spawn this daemon is running has no workspace yet and would read
+	// as an interrupted one, so the background live pass checks only these.
+	// Nil when they could not be listed: the pass then checks every session.
+	startupSessions map[domain.SessionID]time.Time
 	// runBackground runs an asynchronous spawn's remaining work. Nil means a
 	// plain goroutine; tests substitute a synchronous runner.
 	runBackground     func(func())
@@ -4672,6 +4677,7 @@ func (m *Manager) ReconcileStartupSafety(ctx context.Context) error {
 	// background, where a slow or unavailable repository cannot delay boot.
 	m.startupTaskPreparations = []domain.SessionRecord{}
 	m.startupProvisioningRetries = nil
+	m.startupSessions = nil
 	// No branch naming survives a restart; clients show the branch it left.
 	if err := m.store.ClearSessionBranchNaming(ctx); err != nil {
 		m.logger.Warn("reconcile: interrupted branch naming could not be cleared", "error", err)
@@ -4680,7 +4686,9 @@ func (m *Manager) ReconcileStartupSafety(ctx context.Context) error {
 	if err != nil {
 		m.logger.Warn("reconcile: interrupted startup work could not be listed", "error", err)
 	} else {
+		m.startupSessions = make(map[domain.SessionID]time.Time, len(recs))
 		for _, rec := range recs {
+			m.startupSessions[rec.ID] = rec.CreatedAt
 			if rec.IsTaskPreparation {
 				m.startupTaskPreparations = append(m.startupTaskPreparations, rec)
 			}
@@ -4742,7 +4750,7 @@ func (m *Manager) ReconcileBackground(ctx context.Context) (resultErr error) {
 	if err != nil {
 		return fmt.Errorf("reconcile: list sessions: %w", err)
 	}
-	m.reconcileLivePass(ctx, recs)
+	m.reconcileLivePass(ctx, m.sessionsBeforeListener(recs))
 	for _, rec := range recs {
 		if !rec.IsTerminated {
 			continue
@@ -4757,6 +4765,20 @@ func (m *Manager) ReconcileBackground(ctx context.Context) (resultErr error) {
 	}
 	m.wakeTransitionMessageDispatcher()
 	return nil
+}
+
+// sessionsBeforeListener keeps the rows that existed when the listener bound.
+func (m *Manager) sessionsBeforeListener(recs []domain.SessionRecord) []domain.SessionRecord {
+	if m.startupSessions == nil {
+		return recs
+	}
+	kept := make([]domain.SessionRecord, 0, len(recs))
+	for _, rec := range recs {
+		if createdAt, ok := m.startupSessions[rec.ID]; ok && rec.CreatedAt.Equal(createdAt) {
+			kept = append(kept, rec)
+		}
+	}
+	return kept
 }
 
 func (m *Manager) reconcileLivePass(ctx context.Context, recs []domain.SessionRecord) {

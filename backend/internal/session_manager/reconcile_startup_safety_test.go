@@ -268,3 +268,32 @@ func TestBackgroundReconcileDoesNotFenceNewUnfinishedTasks(t *testing.T) {
 		}
 	}
 }
+
+func TestReconcileBackgroundKeepsSpawnsStartedAfterTheListenerBound(t *testing.T) {
+	st := newFakeStore()
+	st.projects["p1"] = domain.ProjectRecord{ID: "p1", Config: testRoleAgents()}
+	interrupted := domain.SessionRecord{ID: "s-interrupted", ProjectID: "p1", Harness: domain.HarnessClaudeCode}
+	st.sessions[interrupted.ID] = interrupted
+	m := New(Deps{
+		Runtime: &fakeRuntime{}, Agents: fakeAgents{}, Workspace: &fakeWorkspace{}, Store: st,
+		Messenger: &fakeMessenger{}, Lifecycle: &fakeLCM{store: st},
+		LookPath: func(string) (string, error) { return "/bin/true", nil },
+	})
+	if err := m.ReconcileStartupSafety(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	// A synchronous spawn's seed row, created after the listener bound and
+	// before its workspace exists.
+	spawning := domain.SessionRecord{ID: "s-spawning", ProjectID: "p1", Harness: domain.HarnessClaudeCode}
+	st.sessions[spawning.ID] = spawning
+
+	if err := m.ReconcileBackground(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := st.sessions[interrupted.ID]; ok {
+		t.Fatal("seed row left by a previous daemon should be removed")
+	}
+	if _, ok := st.sessions[spawning.ID]; !ok {
+		t.Fatal("seed row of a spawn started after the listener bound was removed")
+	}
+}
