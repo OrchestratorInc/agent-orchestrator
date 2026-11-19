@@ -3459,7 +3459,7 @@ describe("Sidebar", () => {
 		expect(dot("read task")).not.toHaveClass("bg-status-ready");
 	});
 
-	it("shows a collapsed project's strongest state: attention, then working, then an unread finished turn", () => {
+	it("badges a collapsed project's icon like the orchestrator button: attention, then working, then an unread finished turn", () => {
 		useUiStore.setState({ projectAvatars: false });
 		useSessionReadStore.setState({ baseline: 0, readAt: {} });
 		const idle = { state: "idle", lastActivityAt: "2026-06-30T00:00:00Z" } as const;
@@ -3468,15 +3468,17 @@ describe("Sidebar", () => {
 		const input = { ...session, id: "proj-1-input", status: "needs_input" } as const;
 		const projectMarker = () => document.querySelector<HTMLElement>("[data-project-folder-icon] [data-project-marker]");
 
+		// The folder stays; the state is a corner dot on it.
 		renderSidebar({ expandedProjectIds: [], workspaces: [{ ...workspace, sessions: [unread] }] });
 		expect(projectMarker()).toHaveAttribute("data-project-marker", "unread");
-		expect(projectMarker()?.firstElementChild).toHaveClass("bg-status-ready");
-		expect(document.querySelector("[data-project-folder-icon] .icon-folder")).not.toBeInTheDocument();
+		expect(projectMarker()).toHaveClass("bg-primary", "ring-sidebar");
+		expect(document.querySelector("[data-project-folder-icon] .icon-folder")).toBeInTheDocument();
 
 		cleanup();
 		renderSidebar({ expandedProjectIds: [], workspaces: [{ ...workspace, sessions: [unread, working] }] });
 		expect(projectMarker()).toHaveAttribute("data-project-marker", "working");
-		expect(projectMarker()).toHaveClass("animate-spin", "text-status-working");
+		expect(projectMarker()).toHaveClass("bg-muted-foreground", "animate-status-pulse");
+		expect(document.querySelector("[data-project-folder-icon] .icon-folder")).toBeInTheDocument();
 
 		cleanup();
 		renderSidebar({ expandedProjectIds: [], workspaces: [{ ...workspace, sessions: [unread, working, input] }] });

@@ -143,7 +143,7 @@ import { SharedProjectMark } from "./teams/SharedProjectMark";
 import { CloudMark } from "./CloudMark";
 import { ProjectIcon } from "./ProjectIcon";
 import { OrchestratorIcon } from "./icons";
-import { OrchestratorReplyIcon, orchestratorReplyLabel } from "./OrchestratorReplyIcon";
+import { OrchestratorReplyIcon, orchestratorReplyLabel, ReplyBadge } from "./OrchestratorReplyIcon";
 import { Badge } from "./ui/badge";
 import { cn } from "../lib/utils";
 import { recordManualWorkerOpen } from "../lib/session-management-telemetry";
@@ -608,7 +608,7 @@ function floatAttention(sessions: WorkspaceSession[], hasManualOrder: boolean): 
 // spinner. 12px with a -2px side margin, so the slot is the 8px the old dot used.
 // Each state has its own glyph, so colour is never the only difference: a red
 // alert needs you now, an orange alert is a person's review next, a green pull
-// request is ready to merge. The blue spinner (working) and the green dot (a
+// request is ready to merge. A row's blue spinner (working) and green dot (a
 // finished turn you have not opened) are drawn by SessionActivityGlyph.
 const SESSION_MARKER_ICONS = {
 	attention: { Icon: CircleAlert, tone: "text-destructive" },
@@ -1628,9 +1628,10 @@ const ProjectItem = memo(function ProjectItem({
 		[workspace.sessions, workspace.shared],
 	);
 	const projectNeedsInput = useMemo(() => visibleSessions.some(sessionNeedsInput), [visibleSessions]);
-	// What a collapsed project shows in place of its icon, strongest first: a
-	// session waiting on the user, then one whose agent is working, then a
-	// finished turn the user has not opened.
+	// What a collapsed project signals, strongest first: a session waiting on the
+	// user (the alert replaces the icon), then one whose agent is working, then a
+	// finished turn the user has not opened (both a corner dot on the icon, like
+	// the orchestrator button's).
 	const readAt = useSessionReadStore((state) => state.readAt);
 	const readBaseline = useSessionReadStore((state) => state.baseline);
 	const projectActivity = useMemo(() => {
@@ -2032,14 +2033,15 @@ const ProjectItem = memo(function ProjectItem({
 										{/* 1.2 — contextual icon swap on hover, instant (scale and opacity snap).
 										    Hover paint lives in styles.css (fine pointer only). */}
 										<span
-											className="inline-flex size-icon-md items-center justify-center"
+											className="relative inline-flex size-icon-md items-center justify-center"
 											data-project-folder-icon=""
 										>
 											{!expanded && projectActivity === "attention" ? (
 												<SessionMarkerIcon data-project-marker="attention" marker="attention" />
-											) : !expanded && projectActivity ? (
-												<SessionActivityGlyph data-project-marker={projectActivity} state={projectActivity} />
 											) : <ProjectIcon avatarUrl={avatarUrl} expanded={expanded} name={workspace.name} seed={workspace.path || workspace.id} />}
+											{!expanded && (projectActivity === "working" || projectActivity === "unread") ? (
+												<ReplyBadge data-project-marker={projectActivity} reply={projectActivity} surface="sidebar" />
+											) : null}
 										</span>
 										<span
 											className={cn(
