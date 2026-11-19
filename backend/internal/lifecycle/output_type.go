@@ -40,11 +40,7 @@ import (
 func (m *Manager) ReconcileSessionOutputType(ctx context.Context, id domain.SessionID) error {
 	m.reconcileMu.Lock()
 	defer m.reconcileMu.Unlock()
-	// Its reads are not cancellable: the artifacts observer runs this for every
-	// session each poll, and a cancellable context makes the SQLite driver and
-	// database/sql each start a watcher goroutine for every query.
-	readCtx := context.WithoutCancel(ctx)
-	rec, ok, err := m.store.GetSession(readCtx, id)
+	rec, ok, err := m.store.GetSession(ctx, id)
 	if err != nil || !ok {
 		return err
 	}
@@ -56,7 +52,7 @@ func (m *Manager) ReconcileSessionOutputType(ctx context.Context, id domain.Sess
 			backfilled = true
 		}
 	}
-	prs, err := m.store.ListPRsBySession(readCtx, id)
+	prs, err := m.store.ListPRsBySession(ctx, id)
 	if err != nil {
 		return err
 	}

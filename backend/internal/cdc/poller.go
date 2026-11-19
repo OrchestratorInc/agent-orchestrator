@@ -103,6 +103,11 @@ func (p *Poller) Start(ctx context.Context) <-chan struct{} {
 		defer t.Stop()
 		full := false
 		for {
+			// Reads are not cancellable (see poll), so a backlog of full batches
+			// must not keep the loop past cancellation.
+			if ctx.Err() != nil {
+				return
+			}
 			if !full {
 				select {
 				case <-ctx.Done():

@@ -3,6 +3,7 @@ package cdc_test
 import (
 	"context"
 	"testing"
+	"time"
 
 	"github.com/aoagents/agent-orchestrator/backend/internal/cdc"
 )
@@ -28,5 +29,33 @@ func TestPollReadsWithoutCancellableContext(t *testing.T) {
 	}
 	if len(src.readCancellable) != 1 || src.readCancellable[0] {
 		t.Fatalf("poll read with a cancellable context: %v", src.readCancellable)
+	}
+}
+
+// fullBatchSource always returns a full batch, as a long backlog does.
+type fullBatchSource struct{}
+
+func (s *fullBatchSource) EventsAfter(_ context.Context, after int64, limit int) ([]cdc.Event, error) {
+	evs := make([]cdc.Event, limit)
+	for i := range evs {
+		evs[i] = cdc.Event{Seq: after + int64(i) + 1}
+	}
+	return evs, nil
+}
+
+func (s *fullBatchSource) LatestSeq(context.Context) (int64, error) { return 0, nil }
+
+// Reads ignore cancellation, so a backlog of full batches must not keep the
+// loop running after its context is cancelled.
+func TestStartStopsOnCancelWhileDrainingFullBatches(t *testing.T) {
+	p := cdc.NewPoller(&fullBatchSource{}, cdc.NewBroadcaster(), cdc.PollerConfig{Batch: 2, Interval: time.Millisecond})
+	ctx, cancel := context.WithCancel(context.Background())
+	done := p.Start(ctx)
+	time.Sleep(20 * time.Millisecond)
+	cancel()
+	select {
+	case <-done:
+	case <-time.After(2 * time.Second):
+		t.Fatal("the poller kept draining full batches after cancellation")
 	}
 }
