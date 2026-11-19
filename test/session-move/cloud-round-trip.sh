@@ -8,9 +8,9 @@
 #
 # GitHub is replaced by a git server container on the compose network
 # (AO_CLOUD_DEVELOPMENT_GITHUB_URL); the local repository reaches the same
-# server through url.insteadOf. The local agent is HARNESS (default
-# claude-code, signed in on this machine); the Cloud agent is claude-code
-# with a placeholder key, so it never runs a turn.
+# server through url.insteadOf. The agent is HARNESS (claude-code, the
+# default, or codex), signed in on this machine; in Cloud it has a
+# placeholder key, so it never runs a turn there.
 #
 # Usage: AO_CONTROL_PLANE=<ao-control-plane checkout> test/session-move/cloud-round-trip.sh
 # Needs go, git, python3, curl, Docker with Compose and buildx, the agent CLI.
@@ -168,7 +168,7 @@ step "AO Cloud user, org, agent key, GitHub token, project"
 auth=$(cloud POST /auth/local/register '{"email":"move@example.com","displayName":"Move Test","password":"local-move-password","orgSlug":"move-test","orgName":"Move Test"}')
 TOKEN=$(echo "$auth" | json "d['token']") || { echo "$auth"; fail "register"; }
 ORG=$(echo "$auth" | json "d['organizations'][0]['id']")
-cloud PUT /me/providers/claude-code '{"credentialType":"api_key","secret":"ao-move-development-only"}' >/dev/null
+cloud PUT "/me/providers/$HARNESS" '{"credentialType":"api_key","secret":"ao-move-development-only"}' >/dev/null
 cloud PUT /me/github-pat '{"secret":"ao-move-development-only"}' >/dev/null
 features=$(cloud GET /me | json "d['offering']['features']")
 [[ "$features" == *session.branch* ]] || fail "offering.features lacks session.branch: $features"
@@ -252,12 +252,23 @@ check_local() { # want-tip want-snapshot-file
 	echo "  local $wt: $BRANCH at ${1:0:12}, $(wc -l < "$2" | tr -d ' ') files identical"
 }
 
+# CONVERSATIONS lists the files that may hold conversation $1: Claude Code's
+# transcripts or Codex's rollouts.
+if [[ "$HARNESS" == codex ]]; then
+	CONVERSATIONS='find -L "${CODEX_HOME:-$HOME/.codex}/sessions" -name "rollout-*-$1.jsonl" 2>/dev/null'
+	CLOUD_CONVERSATIONS='find /workspace -name "rollout-*-$1.jsonl" -path "*/sessions/*" 2>/dev/null'
+else
+	CONVERSATIONS='ls "${CLAUDE_CONFIG_DIR:-$HOME/.claude}"/projects/*/"$1".jsonl 2>/dev/null'
+	CLOUD_CONVERSATIONS=$CONVERSATIONS
+fi
+conversations() { sh -c "$CONVERSATIONS" _ "$1"; }
+
 # check_cloud_conversation checks Cloud placed conversation $1 for its agent,
 # with this machine's paths ($2) replaced, and resumed it.
 check_cloud_conversation() {
 	local file
 	for _ in $(seq 1 60); do
-		file=$(cloud_exec 'ls "${CLAUDE_CONFIG_DIR:-$HOME/.claude}"/projects/*/"$1".jsonl 2>/dev/null | head -1' "$1" || true)
+		file=$(cloud_exec "$CLOUD_CONVERSATIONS | head -1" "$1" || true)
 		[[ -n "$file" ]] && break
 		sleep 1
 	done
@@ -265,13 +276,16 @@ check_cloud_conversation() {
 	cloud_exec 'grep -q "/ao-moved/" "$1"' "$file" && fail "placeholders left in Cloud's $file"
 	cloud_exec 'grep -qF "$2" "$1"' "$file" "$2" && fail "Cloud's $file still names this machine's $2"
 	cloud_exec 'grep -qF "\"cwd\":\"$2\"" "$1"' "$file" "$CLOUD_REPO" || fail "Cloud's $file does not run in $CLOUD_REPO"
-	local sub
-	sub="$(dirname "$file")/$1/subagents/agent-probe.jsonl"
-	cloud_exec 'grep -qF "\"cwd\":\"$2\"" "$1"' "$sub" "$CLOUD_REPO" || fail "Cloud's $sub is missing or does not run in $CLOUD_REPO"
-	cloud_exec 'grep -qF "$2" "$1"' "$sub" "$2" && fail "Cloud's $sub still names this machine's $2"
-	[[ "$(cloud_exec 'cat "$1"' "$(dirname "$file")/$1/tool-results/probe.txt")" == "probe output" ]] || fail "Cloud did not place the saved tool output"
+	if [[ "$HARNESS" == claude-code ]]; then
+		local sub
+		sub="$(dirname "$file")/$1/subagents/agent-probe.jsonl"
+		cloud_exec 'grep -qF "\"cwd\":\"$2\"" "$1"' "$sub" "$CLOUD_REPO" || fail "Cloud's $sub is missing or does not run in $CLOUD_REPO"
+		cloud_exec 'grep -qF "$2" "$1"' "$sub" "$2" && fail "Cloud's $sub still names this machine's $2"
+		[[ "$(cloud_exec 'cat "$1"' "$(dirname "$file")/$1/tool-results/probe.txt")" == "probe output" ]] || fail "Cloud did not place the saved tool output"
+	fi
 	for _ in $(seq 1 60); do
-		cloud_exec 'ps -eo args | grep -v grep | grep -q -- "--resume $1"' "$1" && {
+		# claude --resume <id>, codex resume [options] <id>
+		cloud_exec 'ps -eo args | grep -v grep | grep -qE -- "resume (.* )?$1"' "$1" && {
 			echo "  Cloud agent resumed conversation $1 from $file"
 			return 0
 		}
@@ -287,17 +301,19 @@ check_cloud_conversation() {
 check_local_conversation() {
 	local wt file
 	wt=$(worktree_for)
-	file=$(grep -lF "\"cwd\":\"$wt\"" "${CLAUDE_CONFIG_DIR:-$HOME/.claude}"/projects/*/"$1".jsonl 2>/dev/null | head -1 || true)
+	file=$(conversations "$1" | while IFS= read -r f; do grep -lF "\"cwd\":\"$wt\"" "$f"; done | head -1 || true)
 	[[ -n "$file" ]] || fail "this machine did not place conversation $1 for $wt"
 	grep -qF "\"cwd\":\"$2\"" "$file" && fail "$file still runs in the sandbox's $2"
-	grep -qF "$3" "$file" && fail "$file still names the sandbox's $3"
-	local sub
-	sub="$(dirname "$file")/$1/subagents/agent-probe.jsonl"
-	grep -qF "\"cwd\":\"$wt\"" "$sub" 2>/dev/null || fail "$sub is missing or does not run in $wt"
-	grep -qF "\"cwd\":\"$2\"" "$sub" && fail "$sub still runs in the sandbox's $2"
-	[[ "$(cat "$(dirname "$file")/$1/tool-results/probe.txt")" == "probe output" ]] || fail "this machine did not place the saved tool output"
+	if [[ "$HARNESS" == claude-code ]]; then
+		grep -qF "$3" "$file" && fail "$file still names the sandbox's $3"
+		local sub
+		sub="$(dirname "$file")/$1/subagents/agent-probe.jsonl"
+		grep -qF "\"cwd\":\"$wt\"" "$sub" 2>/dev/null || fail "$sub is missing or does not run in $wt"
+		grep -qF "\"cwd\":\"$2\"" "$sub" && fail "$sub still runs in the sandbox's $2"
+		[[ "$(cat "$(dirname "$file")/$1/tool-results/probe.txt")" == "probe output" ]] || fail "this machine did not place the saved tool output"
+	fi
 	for _ in $(seq 1 60); do
-		pgrep -f -- "--resume $1" >/dev/null && {
+		pgrep -f -- "resume (.* )?$1" >/dev/null && {
 			echo "  local agent resumed conversation $1 from $file"
 			return 0
 		}
@@ -310,7 +326,7 @@ check_local_conversation() {
 # transcript and a saved tool output, as Claude Code keeps them beside it.
 add_sidecar_probe() {
 	local file dir
-	file=$(grep -lF "\"cwd\":\"$2\"" "${CLAUDE_CONFIG_DIR:-$HOME/.claude}"/projects/*/"$1".jsonl 2>/dev/null | head -1 || true)
+	file=$(conversations "$1" | while IFS= read -r f; do grep -lF "\"cwd\":\"$2\"" "$f"; done | head -1 || true)
 	[[ -n "$file" ]] || fail "no transcript of $1 for $2"
 	dir="$(dirname "$file")/$1"
 	mkdir -p "$dir/subagents" "$dir/tool-results"
@@ -330,27 +346,30 @@ local_to_cloud() {
 	echo "$out" | python3 -c "import json,sys; json.dump(json.load(sys.stdin), open('$W/export.json','w'))"
 	out=$(api GET "/sessions/$sid/move/transcript")
 	aid=$(echo "$out" | json "d['agentSessionId']") || { echo "$out"; fail "local transcript"; }
-	if [[ "$2" == 1 ]]; then
+	# Only Claude Code keeps a sidecar folder.
+	if [[ "$2" == 1 && "$HARNESS" == claude-code ]]; then
 		add_sidecar_probe "$aid" "$wt"
 		out=$(api GET "/sessions/$sid/move/transcript")
 	fi
 	echo "$out" > "$W/transcript.json"
 	python3 -c "import base64,json,sys; d=json.load(open(sys.argv[1])); open(sys.argv[2],'wb').write(base64.b64decode(d['transcriptGzip'])); open(sys.argv[3],'wb').write(base64.b64decode(d.get('sidecarGzip') or ''))" \
 		"$W/transcript.json" "$W/transcript.gz" "$W/sidecar.gz"
-	[[ -s "$W/sidecar.gz" ]] || fail "this machine's move/transcript carried no sidecar folder"
+	[[ -s "$W/sidecar.gz" || "$HARNESS" != claude-code ]] || fail "this machine's move/transcript carried no sidecar folder"
 	import=$(python3 -c 'import uuid; print(uuid.uuid4())')
 	code=$(curl -sS -o "$W/import.out" -w '%{http_code}' -X PUT \
-		"http://127.0.0.1:$AO_CLOUD_PORT/api/cloud/v1/orgs/$ORG/transcript-imports/$import?harness=claude-code&agentSessionId=$aid" \
+		"http://127.0.0.1:$AO_CLOUD_PORT/api/cloud/v1/orgs/$ORG/transcript-imports/$import?harness=$HARNESS&agentSessionId=$aid" \
 		-H "Authorization: Bearer $TOKEN" -H 'Content-Type: application/gzip' --data-binary @"$W/transcript.gz")
 	[[ "$code" == 204 ]] || { cat "$W/import.out"; fail "transcript upload answered $code"; }
-	code=$(curl -sS -o "$W/import.out" -w '%{http_code}' -X PUT \
-		"http://127.0.0.1:$AO_CLOUD_PORT/api/cloud/v1/orgs/$ORG/transcript-imports/$import/sidecar" \
-		-H "Authorization: Bearer $TOKEN" -H 'Content-Type: application/gzip' --data-binary @"$W/sidecar.gz")
-	[[ "$code" == 204 ]] || { cat "$W/import.out"; fail "sidecar upload answered $code"; }
-	body=$(python3 - "$W/export.json" "$CLOUD_PROJECT" "$import" <<'PY'
+	if [[ -s "$W/sidecar.gz" ]]; then
+		code=$(curl -sS -o "$W/import.out" -w '%{http_code}' -X PUT \
+			"http://127.0.0.1:$AO_CLOUD_PORT/api/cloud/v1/orgs/$ORG/transcript-imports/$import/sidecar" \
+			-H "Authorization: Bearer $TOKEN" -H 'Content-Type: application/gzip' --data-binary @"$W/sidecar.gz")
+		[[ "$code" == 204 ]] || { cat "$W/import.out"; fail "sidecar upload answered $code"; }
+	fi
+	body=$(python3 - "$W/export.json" "$CLOUD_PROJECT" "$import" "$HARNESS" <<'PY'
 import json, sys
 d = json.load(open(sys.argv[1])); m = d["manifest"]
-print(json.dumps({"projectId": sys.argv[2], "kind": "worker", "harness": "claude-code",
+print(json.dumps({"projectId": sys.argv[2], "kind": "worker", "harness": sys.argv[4],
                   "displayName": m.get("displayName") or "Move test", "prompt": d["handoffNote"], "branch": m["branch"],
                   "transcriptImportId": sys.argv[3]}))
 PY
@@ -377,7 +396,7 @@ cloud_to_local() {
 	[[ "$(json "[t['projectId'] for t in d['targets'] if not t.get('refusal')]" < "$W/targets.json")" == "['$LOCAL_PROJECT']" ]] || { cat "$W/targets.json"; fail "move targets"; }
 	cloud POST "/orgs/$ORG/sessions/$cid/move/export" > "$W/export.json"
 	# An exited agent can stay a zombie, since ao-worker runs as PID 1.
-	cloud_exec 'ps -eo stat=,comm= | grep -qE "^[^Z][^ ]* +claude$"' && fail "Cloud's agent still runs after the export"
+	cloud_exec 'ps -eo stat=,comm= | grep -qE "^[^Z][^ ]* +(claude|codex)$"' && fail "Cloud's agent still runs after the export"
 	tip=$(json "d['manifest']['tip']" < "$W/export.json") || { cat "$W/export.json"; fail "Cloud export"; }
 	[[ "$(json "d['manifest']['wip']" < "$W/export.json")" == "True" ]] || fail "Cloud export made no WIP commit"
 	[[ "$(remote_tip)" == "$tip" ]] || fail "origin $BRANCH is $(remote_tip), want the exported $tip"

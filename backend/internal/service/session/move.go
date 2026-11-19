@@ -90,9 +90,9 @@ type MoveImportInput struct {
 	Transcript *MoveImportTranscript
 }
 
-// MoveImportTranscript is a Claude Code conversation an AO Cloud sandbox kept.
+// MoveImportTranscript is a Claude Code or Codex conversation an AO Cloud sandbox kept.
 type MoveImportTranscript struct {
-	// ProjectDir is the Claude project folder it was in, whose paths, and the
+	// ProjectDir is the folder it was in. For Claude Code its paths, and the
 	// sandbox's working directory, become this machine's.
 	ProjectDir string
 	// AgentSessionID names the conversation; Gzip is its transcript.
@@ -308,13 +308,13 @@ func (s *Service) ImportMove(ctx context.Context, in MoveImportInput) (MoveImpor
 	}
 	var warnings []string
 	incomplete := false
-	if t := in.Transcript; t != nil && m.Harness == domain.HarnessClaudeCode {
+	if t := in.Transcript; t != nil && movesConversation(m.Harness) {
 		dir, err := os.MkdirTemp("", "ao-move-import-*")
 		if err != nil {
 			return MoveImportOutcome{}, err
 		}
 		defer func() { _ = os.RemoveAll(dir) }()
-		archive, sidecarWarning, err := writeImportArchive(ctx, dir, *t)
+		archive, sidecarWarning, err := writeImportArchive(ctx, dir, m.Harness, *t)
 		if sidecarWarning != "" {
 			warnings = append(warnings, sidecarWarning)
 			incomplete = true
@@ -532,7 +532,7 @@ func (s *Service) MoveTranscript(ctx context.Context, id domain.SessionID) (Move
 	}
 	switch {
 	case errors.Is(err, sessionmanager.ErrCloudTranscriptUnsupported):
-		return MoveTranscript{}, apierr.Conflict("MOVE_TRANSCRIPT_UNSUPPORTED", "Orchestrator Cloud can resume only Claude Code conversations.", nil)
+		return MoveTranscript{}, apierr.Conflict("MOVE_TRANSCRIPT_UNSUPPORTED", "Orchestrator Cloud can resume only Claude Code and Codex conversations.", nil)
 	case errors.Is(err, nativetransfer.ErrTooLarge):
 		return MoveTranscript{}, apierr.Conflict("MOVE_TRANSCRIPT_TOO_LARGE", "The conversation is over Orchestrator Cloud's 64 MiB limit.", map[string]any{"detail": err.Error()})
 	case err != nil:
@@ -609,22 +609,28 @@ func (s *Service) moveTargetRefusal(ctx context.Context, project domain.ProjectR
 	return apierr.Conflict("MOVE_CHECK_FAILED", "Could not check the branch here: "+err.Error(), nil)
 }
 
-// carriesConversation reports a move/import carrying a Claude Code conversation to place.
-func carriesConversation(in MoveImportInput) bool {
-	return in.Transcript != nil && in.Manifest.Harness == domain.HarnessClaudeCode
+// movesConversation reports a harness whose conversation a move carries.
+func movesConversation(h domain.AgentHarness) bool {
+	return h == domain.HarnessClaudeCode || h == domain.HarnessCodex
 }
 
-// conversationNotPlaced reports a moved Claude Code conversation the session
-// does not resume: the spawn records the conversation id only once it placed it.
+// carriesConversation reports a move/import carrying a conversation to place.
+func carriesConversation(in MoveImportInput) bool {
+	return in.Transcript != nil && movesConversation(in.Manifest.Harness)
+}
+
+// conversationNotPlaced reports a moved conversation the session does not
+// resume: the spawn records the conversation id only once it placed it.
 func conversationNotPlaced(in MoveImportInput, sess domain.Session) bool {
 	t := in.Transcript
-	return t != nil && in.Manifest.Harness == domain.HarnessClaudeCode && sess.Metadata.AgentSessionID != t.AgentSessionID
+	return carriesConversation(in) && sess.Metadata.AgentSessionID != t.AgentSessionID
 }
 
 // writeImportArchive unzips a transcript from AO Cloud, and its sidecar
-// folder, into dir and writes the archive the spawn places it from. A sidecar
-// that cannot be read is left out and described in the warning.
-func writeImportArchive(ctx context.Context, dir string, t MoveImportTranscript) (archive, warning string, err error) {
+// folder, into dir and writes the archive the spawn places it from: for
+// Codex, the rollout itself. A sidecar that cannot be read is left out and
+// described in the warning.
+func writeImportArchive(ctx context.Context, dir string, harness domain.AgentHarness, t MoveImportTranscript) (archive, warning string, err error) {
 	zr, err := gzip.NewReader(bytes.NewReader(t.Gzip))
 	if err != nil {
 		return "", "", err
@@ -646,6 +652,9 @@ func writeImportArchive(ctx context.Context, dir string, t MoveImportTranscript)
 	}
 	if n > CloudTranscriptMaxBytes {
 		return "", "", nativetransfer.ErrTooLarge
+	}
+	if harness == domain.HarnessCodex {
+		return transcript, "", nil
 	}
 	if len(t.SidecarGzip) > 0 {
 		sidecar := filepath.Join(dir, t.AgentSessionID)

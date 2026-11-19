@@ -129,17 +129,18 @@ export async function uploadCloudAttachment(
 }
 
 /**
- * Upload a moving Claude Code session's conversation, gzipped, for the Cloud
- * session createSession then starts from it (transcriptImportId = importId).
+ * Upload a moving session's conversation, gzipped, for the Cloud session
+ * createSession then starts from it (transcriptImportId = importId).
  */
 export async function uploadCloudTranscript(
 	baseUrl: string,
 	orgId: string,
 	importId: string,
+	harness: string,
 	agentSessionId: string,
 	gzip: Uint8Array,
 ): Promise<void> {
-	const query = new URLSearchParams({ harness: "claude-code", agentSessionId });
+	const query = new URLSearchParams({ harness, agentSessionId });
 	const response = await binaryRequest({
 		baseUrl,
 		path: `/api/cloud/v1/orgs/${encodeURIComponent(orgId)}/transcript-imports/${encodeURIComponent(importId)}?${query}`,

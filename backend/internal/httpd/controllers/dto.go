@@ -4798,7 +4798,7 @@ type MoveTranscriptInfo struct {
 // MoveTranscriptResponse is a stopped session's agent conversation for AO Cloud.
 type MoveTranscriptResponse struct {
 	AgentSessionID string `json:"agentSessionId"`
-	TranscriptGzip []byte `json:"transcriptGzip" description:"The transcript, gzipped and base64-encoded, with this machine's working directory and Claude project folder replaced by placeholders AO Cloud's worker fills in."`
+	TranscriptGzip []byte `json:"transcriptGzip" description:"The transcript, gzipped and base64-encoded, with this machine's working directory (and Claude Code's project folder) replaced by placeholders AO Cloud's worker fills in."`
 	SidecarGzip    []byte `json:"sidecarGzip,omitempty" description:"The transcript's sidecar folder (subagent transcripts, saved tool output) as a gzipped tar, base64-encoded, paths replaced the same way. Absent when there is none or it is over 64 MiB."`
 }
 
@@ -4835,15 +4835,15 @@ type MoveImportRequest struct {
 	MoveID      string                  `json:"moveId" minLength:"1" maxLength:"64" pattern:"^[A-Za-z0-9._-]+$"`
 	Manifest    sessionsvc.MoveManifest `json:"manifest"`
 	HandoffNote string                  `json:"handoffNote,omitempty"`
-	// Transcript is the Claude Code conversation from Orchestrator Cloud's
+	// Transcript is the agent's conversation from Orchestrator Cloud's
 	// move/export; the session resumes it instead of the note.
 	Transcript *MoveImportTranscript `json:"transcript,omitempty"`
 }
 
-// MoveImportTranscript is a Claude Code conversation an Orchestrator Cloud sandbox kept.
+// MoveImportTranscript is a Claude Code or Codex conversation an Orchestrator Cloud sandbox kept.
 type MoveImportTranscript struct {
 	AgentSessionID string `json:"agentSessionId" minLength:"1" pattern:"^[0-9a-fA-F-]{36}$"`
-	ProjectDir     string `json:"projectDir" minLength:"1" description:"The Claude project folder the transcript was in on Orchestrator Cloud; its paths and the sandbox's working directory become this machine's."`
+	ProjectDir     string `json:"projectDir" minLength:"1" description:"The folder the transcript was in on Orchestrator Cloud. For Claude Code its paths, and the sandbox's working directory, become this machine's."`
 	TranscriptGzip []byte `json:"transcriptGzip" description:"The transcript, gzipped and base64-encoded."`
 	SidecarGzip    []byte `json:"sidecarGzip,omitempty" description:"The transcript's sidecar folder as a gzipped tar, base64-encoded."`
 }

@@ -208,7 +208,7 @@ func TestWriteImportArchiveReadsTheCloudTranscript(t *testing.T) {
 	_ = sw.Close()
 	transcript := MoveImportTranscript{AgentSessionID: id, ProjectDir: "/home/agent/.claude/projects/-workspace-repository", Gzip: gz.Bytes(), SidecarGzip: sidecar.Bytes()}
 
-	archive, warning, err := writeImportArchive(context.Background(), t.TempDir(), transcript)
+	archive, warning, err := writeImportArchive(context.Background(), t.TempDir(), domain.HarnessClaudeCode, transcript)
 	if err != nil || warning != "" {
 		t.Fatal(err, warning)
 	}
@@ -224,7 +224,7 @@ func TestWriteImportArchiveReadsTheCloudTranscript(t *testing.T) {
 
 	// A sidecar that cannot be read stays behind; the transcript still moves.
 	transcript.SidecarGzip = []byte("plain")
-	if _, warning, err := writeImportArchive(context.Background(), t.TempDir(), transcript); err != nil || !strings.Contains(warning, "stayed in Orchestrator Cloud") {
+	if _, warning, err := writeImportArchive(context.Background(), t.TempDir(), domain.HarnessClaudeCode, transcript); err != nil || !strings.Contains(warning, "stayed in Orchestrator Cloud") {
 		t.Fatalf("unreadable sidecar: warning %q, err %v", warning, err)
 	}
 
@@ -232,9 +232,26 @@ func TestWriteImportArchiveReadsTheCloudTranscript(t *testing.T) {
 		"not gzip":   {AgentSessionID: id, ProjectDir: transcript.ProjectDir, Gzip: []byte("plain")},
 		"id as path": {AgentSessionID: "../" + id, ProjectDir: transcript.ProjectDir, Gzip: gz.Bytes()},
 	} {
-		if _, _, err := writeImportArchive(context.Background(), t.TempDir(), bad); err == nil {
+		if _, _, err := writeImportArchive(context.Background(), t.TempDir(), domain.HarnessClaudeCode, bad); err == nil {
 			t.Errorf("%s: no error", name)
 		}
+	}
+}
+
+func TestWriteImportArchivePassesACodexRolloutAsIs(t *testing.T) {
+	const id = "01a1f2eb-1c10-7462-9afc-a0787b4e965c"
+	rollout := `{"type":"session_meta","payload":{"id":"` + id + `","timestamp":"2026-11-19T08:27:36.895Z","cwd":"/workspace/repository"}}` + "\n"
+	var gz bytes.Buffer
+	zw := gzip.NewWriter(&gz)
+	_, _ = zw.Write([]byte(rollout))
+	_ = zw.Close()
+	path, warning, err := writeImportArchive(context.Background(), t.TempDir(), domain.HarnessCodex, MoveImportTranscript{AgentSessionID: id, Gzip: gz.Bytes()})
+	if err != nil || warning != "" {
+		t.Fatal(err, warning)
+	}
+	home, cwd := t.TempDir(), t.TempDir()
+	if got, err := nativetransfer.ImportCodex(context.Background(), path, nativetransfer.CodexImportOptions{Home: home, Cwd: cwd}); err != nil || got != id {
+		t.Fatalf("ImportCodex = %q, %v", got, err)
 	}
 }
 

@@ -195,8 +195,8 @@ it("moves the conversation when Orchestrator Cloud can resume it", async () => {
 	expect(await screen.findByText("Full transcript, 2 KB")).toBeTruthy();
 	await user.click(screen.getByRole("button", { name: "Move to Orchestrator Cloud" }));
 	await waitFor(() => expect(navigate).toHaveBeenCalledWith("cloud-proj", "cloud-9"));
-	const [baseUrl, orgId, importId, agentSessionId] = uploadCloudTranscript.mock.calls[0];
-	expect([baseUrl, orgId, agentSessionId]).toEqual(["http://cp.test", "org-1", "aid-1"]);
+	const [baseUrl, orgId, importId, harness, agentSessionId] = uploadCloudTranscript.mock.calls[0];
+	expect([baseUrl, orgId, harness, agentSessionId]).toEqual(["http://cp.test", "org-1", "claude-code", "aid-1"]);
 	expect(cloud.createSession.mock.calls[0][1]).toMatchObject({ transcriptImportId: importId });
 	expect(useUiStore.getState().globalToast?.body).toBeFalsy();
 });

@@ -72,7 +72,7 @@ export interface MoveDeps {
 	 * session to resume. Unset when Cloud cannot resume it, which leaves the
 	 * handoff note.
 	 */
-	uploadTranscript?: (importId: string, agentSessionId: string, gzip: Uint8Array) => Promise<void>;
+	uploadTranscript?: (importId: string, harness: string, agentSessionId: string, gzip: Uint8Array) => Promise<void>;
 	/** Uploads the conversation's sidecar folder (subagents, saved tool output) to the same import. */
 	uploadTranscriptSidecar?: (importId: string, gzip: Uint8Array) => Promise<void>;
 }
@@ -196,7 +196,8 @@ export async function moveSession(
 	deps.onStep?.("import");
 	const m = exported.data.manifest;
 	const sameAgent = target.harness === m.harness;
-	const transcriptImportId = state.current ? undefined : await carryTranscript(deps, path, moveId);
+	// Cloud resumes a conversation only in the agent that wrote it.
+	const transcriptImportId = state.current || !sameAgent ? undefined : await carryTranscript(deps, path, moveId, m.harness);
 	const request: CloudSessionRequest = state.current ?? {
 		projectId,
 		kind: "worker",
@@ -218,13 +219,13 @@ export async function moveSession(
  * and returns the id createSession names it by. Any failure returns
  * undefined: the session then starts from the handoff note.
  */
-async function carryTranscript(deps: MoveDeps, path: { params: { path: { sessionId: string } } }, moveId: string): Promise<string | undefined> {
+async function carryTranscript(deps: MoveDeps, path: { params: { path: { sessionId: string } } }, moveId: string, harness: string): Promise<string | undefined> {
 	if (!deps.uploadTranscript) return undefined;
 	try {
 		const transcript = await deps.source.GET("/api/v1/sessions/{sessionId}/move/transcript", path);
 		if (!transcript.data) return undefined;
 		const gzip = Uint8Array.from(atob(transcript.data.transcriptGzip), (c) => c.charCodeAt(0));
-		await deps.uploadTranscript(moveId, transcript.data.agentSessionId, gzip);
+		await deps.uploadTranscript(moveId, harness, transcript.data.agentSessionId, gzip);
 		const sidecar = transcript.data.sidecarGzip;
 		if (sidecar && deps.uploadTranscriptSidecar) {
 			// The transcript moves even when its sidecar folder cannot.

@@ -269,8 +269,8 @@ describe("moveSession", () => {
 			const result = await moveSession({ sessionId: "app-1", moveId: "m-5", target }, { source: fakeDaemon(replies, calls), cloud: cp, uploadTranscript });
 			expect(result).toEqual({ projectId: "proj-1", sessionId: "cloud-9", conversation: "transcript" });
 			expect(calls.indexOf("/api/v1/sessions/{sessionId}/move/transcript")).toBe(calls.indexOf("/api/v1/sessions/{sessionId}/move/export") + 1);
-			const [importId, agentSessionId, gzip] = uploadTranscript.mock.calls[0] as unknown as [string, string, Uint8Array];
-			expect([importId, agentSessionId, Array.from(gzip)]).toEqual(["m-5", "aid-1", [103, 122]]);
+			const [importId, harness, agentSessionId, gzip] = uploadTranscript.mock.calls[0] as unknown as [string, string, string, Uint8Array];
+			expect([importId, harness, agentSessionId, Array.from(gzip)]).toEqual(["m-5", "claude-code", "aid-1", [103, 122]]);
 			// The note stays the prompt: Cloud starts from it if it cannot place the conversation.
 			expect(cp.createSession.mock.calls[0][1]).toMatchObject({ transcriptImportId: "m-5", prompt: exported.handoffNote });
 		});
@@ -287,6 +287,14 @@ describe("moveSession", () => {
 			expect([importId, Array.from(gzip)]).toEqual(["m-9", [116, 97, 114]]);
 			expect(result.conversation).toBe("transcript");
 			expect(cp.createSession.mock.calls[0][1]).toMatchObject({ transcriptImportId: "m-9" });
+		});
+
+		it("is not uploaded when Cloud runs another agent", async () => {
+			const cp = cloud();
+			const uploadTranscript = vi.fn(async () => {});
+			const result = await moveSession({ sessionId: "app-1", moveId: "m-10", target: { ...target, harness: "codex" } }, { source: fakeDaemon(replies, []), cloud: cp, uploadTranscript });
+			expect(uploadTranscript).not.toHaveBeenCalled();
+			expect(result.conversation).toBe("note");
 		});
 
 		it("moves the handoff note alone when the upload fails", async () => {

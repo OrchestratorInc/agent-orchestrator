@@ -1046,7 +1046,7 @@ export interface paths {
             cookie?: never;
         };
         get?: never;
-        /** @description Uploads a coding agent's conversation, gzipped, for a session moving here from another machine, before createSession starts it. The transcript names the source's working directory as /ao-moved/cwd and its Claude project folder as /ao-moved/claude-project; the worker replaces them with its own. Uploading again under the same id replaces it; another user's id is 409. An upload no create uses is dropped after a day. */
+        /** @description Uploads a coding agent's conversation, gzipped, for a session moving here from another machine, before createSession starts it. The transcript names the source's working directory as /ao-moved/cwd and, for Claude Code, its project folder as /ao-moved/claude-project; the worker replaces them with its own. Uploading again under the same id replaces it; another user's id is 409. An upload no create uses is dropped after a day. */
         put: operations["putSessionTranscriptImport"];
         post?: never;
         delete?: never;
@@ -8328,7 +8328,7 @@ export interface operations {
     putSessionTranscriptImport: {
         parameters: {
             query: {
-                harness: "claude-code";
+                harness: "claude-code" | "codex";
                 /** @description The conversation's id, which the agent resumes. */
                 agentSessionId: string;
             };

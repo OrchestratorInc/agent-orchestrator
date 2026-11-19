@@ -171,7 +171,7 @@ function MoveSessionDialogBody({ session, onClose }: { session: WorkspaceSession
 					cloudRequest,
 					...(carriesTranscript
 						? {
-							uploadTranscript: (importId: string, agentSessionId: string, gzip: Uint8Array) => uploadCloudTranscript(cloudBaseUrl, target.orgId, importId, agentSessionId, gzip),
+							uploadTranscript: (importId: string, harness: string, agentSessionId: string, gzip: Uint8Array) => uploadCloudTranscript(cloudBaseUrl, target.orgId, importId, harness, agentSessionId, gzip),
 							uploadTranscriptSidecar: (importId: string, gzip: Uint8Array) => uploadCloudTranscriptSidecar(cloudBaseUrl, target.orgId, importId, gzip),
 						}
 						: {}),
@@ -459,7 +459,7 @@ function MoveHereDialogBody({ session, orgId, onClose }: { session: WorkspaceSes
 	// Try again moves into the project the first attempt chose or cloned, so it needs neither.
 	const ready = !loading && !unavailable && (step !== undefined || target !== undefined || cloneInto !== undefined);
 	const changes = preview.data?.changes ?? [];
-	const transcript = session.provider === "claude-code" ? preview.data?.transcript : undefined;
+	const transcript = session.provider === "claude-code" || session.provider === "codex" ? preview.data?.transcript : undefined;
 
 	const start = async () => {
 		if (!ready || !cloudClient) return;

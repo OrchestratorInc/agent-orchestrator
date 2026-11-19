@@ -18937,8 +18937,9 @@ components:
           pattern: ^[0-9a-fA-F-]{36}$
           type: string
         projectDir:
-          description: The Claude project folder the transcript was in on Orchestrator
-            Cloud; its paths and the sandbox's working directory become this machine's.
+          description: The folder the transcript was in on Orchestrator Cloud. For
+            Claude Code its paths, and the sandbox's working directory, become this
+            machine's.
           minLength: 1
           type: string
         sidecarGzip:
@@ -19021,8 +19022,8 @@ components:
           type: string
         transcriptGzip:
           description: The transcript, gzipped and base64-encoded, with this machine's
-            working directory and Claude project folder replaced by placeholders AO
-            Cloud's worker fills in.
+            working directory (and Claude Code's project folder) replaced by placeholders
+            AO Cloud's worker fills in.
           format: base64
           type: string
       required:

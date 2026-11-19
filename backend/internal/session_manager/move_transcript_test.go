@@ -52,9 +52,9 @@ func TestCloudTranscriptUsesOnlyTheRecordedConversation(t *testing.T) {
 		t.Fatalf("recorded conversation: size %d, err %v; want %d", size, err, len(own))
 	}
 
-	rec.Harness = domain.HarnessCodex
+	rec.Harness = domain.HarnessCursor
 	if _, err := m.CloudTranscriptSize(context.Background(), rec, domain.ProjectRecord{}); !errors.Is(err, ErrCloudTranscriptUnsupported) {
-		t.Fatalf("codex: err = %v, want ErrCloudTranscriptUnsupported", err)
+		t.Fatalf("cursor: err = %v, want ErrCloudTranscriptUnsupported", err)
 	}
 }
 
@@ -84,14 +84,21 @@ func TestSpawnTransferResumesOrFallsBackToTheNote(t *testing.T) {
 		t.Fatal(err)
 	}
 	_ = f.Close()
+	const codexID = "01a1f2eb-1c10-7462-9afc-a0787b4e965c"
+	rollout := filepath.Join(t.TempDir(), "rollout.jsonl")
+	if err := os.WriteFile(rollout, []byte(`{"type":"session_meta","payload":{"id":"`+codexID+`","timestamp":"2026-11-19T08:27:36.895Z","cwd":"/workspace/repository"}}`+"\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
 
 	for _, tc := range []struct {
 		name       string
+		harness    domain.AgentHarness
 		archive    string
-		wantResume bool
+		wantResume string
 	}{
-		{"placed", archive, true},
-		{"archive missing", filepath.Join(t.TempDir(), "missing.tgz"), false},
+		{"placed", domain.HarnessClaudeCode, archive, id},
+		{"codex placed", domain.HarnessCodex, rollout, codexID},
+		{"archive missing", domain.HarnessClaudeCode, filepath.Join(t.TempDir(), "missing.tgz"), ""},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			st := newFakeStore()
@@ -107,19 +114,19 @@ func TestSpawnTransferResumesOrFallsBackToTheNote(t *testing.T) {
 				LookPath:  func(string) (string, error) { return "/bin/true", nil },
 			})
 			rec, _, _, err := m.Spawn(ctx, ports.SpawnConfig{
-				ProjectID: "mer", Kind: domain.KindWorker, Harness: domain.HarnessClaudeCode,
+				ProjectID: "mer", Kind: domain.KindWorker, Harness: tc.harness,
 				Transfer: &ports.SpawnTransfer{NativeArchive: tc.archive, FallbackPrompt: "NOTE"},
 			})
 			if err != nil {
 				t.Fatal(err)
 			}
-			if tc.wantResume {
-				if agent.restoreCalls != 1 || agent.launchCalls != 0 || agent.lastRestore.Session.Metadata[ports.MetadataKeyAgentSessionID] != id {
+			if want := tc.wantResume; want != "" {
+				if agent.restoreCalls != 1 || agent.launchCalls != 0 || agent.lastRestore.Session.Metadata[ports.MetadataKeyAgentSessionID] != want {
 					t.Fatalf("restore calls %d, launch calls %d, resumed %q; want a resume of %s",
-						agent.restoreCalls, agent.launchCalls, agent.lastRestore.Session.Metadata[ports.MetadataKeyAgentSessionID], id)
+						agent.restoreCalls, agent.launchCalls, agent.lastRestore.Session.Metadata[ports.MetadataKeyAgentSessionID], want)
 				}
-				if rec.Metadata.AgentSessionID != id {
-					t.Fatalf("recorded conversation = %q, want %s", rec.Metadata.AgentSessionID, id)
+				if rec.Metadata.AgentSessionID != want {
+					t.Fatalf("recorded conversation = %q, want %s", rec.Metadata.AgentSessionID, want)
 				}
 				return
 			}

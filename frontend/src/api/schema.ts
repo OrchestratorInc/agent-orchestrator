@@ -6458,7 +6458,7 @@ export interface components {
         };
         ControllersMoveImportTranscript: {
             agentSessionId: string;
-            /** @description The Claude project folder the transcript was in on Orchestrator Cloud; its paths and the sandbox's working directory become this machine's. */
+            /** @description The folder the transcript was in on Orchestrator Cloud. For Claude Code its paths, and the sandbox's working directory, become this machine's. */
             projectDir: string;
             /**
              * Format: base64
@@ -6507,7 +6507,7 @@ export interface components {
             sidecarGzip?: string;
             /**
              * Format: base64
-             * @description The transcript, gzipped and base64-encoded, with this machine's working directory and Claude project folder replaced by placeholders AO Cloud's worker fills in.
+             * @description The transcript, gzipped and base64-encoded, with this machine's working directory (and Claude Code's project folder) replaced by placeholders AO Cloud's worker fills in.
              */
             transcriptGzip: string;
         };

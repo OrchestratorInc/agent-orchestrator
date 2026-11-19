@@ -13,7 +13,7 @@ import (
 )
 
 // ErrCloudTranscriptUnsupported reports an agent whose conversation AO Cloud
-// cannot resume. Only Claude Code's can be moved today.
+// cannot resume. Only Claude Code's and Codex's can be moved today.
 var ErrCloudTranscriptUnsupported = errors.New("orchestrator cloud cannot resume this agent's conversation")
 
 // ErrNoRecordedConversation reports a session whose agent has not reported its
@@ -27,16 +27,23 @@ func (m *Manager) CloudTranscriptSize(ctx context.Context, rec domain.SessionRec
 	if err != nil {
 		return 0, err
 	}
+	if rec.Harness == domain.HarnessCodex {
+		_, _, size, err := nativetransfer.CodexRollout(ctx, nativetransfer.CodexOptions{Home: opts.ConfigDir, NativeID: opts.NativeID})
+		return size, err
+	}
 	_, _, size, err := nativetransfer.ClaudeTranscript(ctx, opts)
 	return size, err
 }
 
 // WriteCloudTranscript writes a stopped session's transcript, with its paths
-// replaced by AO Cloud's placeholders, and returns its Claude session id.
+// replaced by AO Cloud's placeholders, and returns its conversation id.
 func (m *Manager) WriteCloudTranscript(ctx context.Context, rec domain.SessionRecord, project domain.ProjectRecord, w io.Writer, maxBytes int64) (string, error) {
 	opts, err := m.cloudTranscriptOptions(ctx, rec, project)
 	if err != nil {
 		return "", err
+	}
+	if rec.Harness == domain.HarnessCodex {
+		return nativetransfer.WriteCodexRolloutForCloud(ctx, w, nativetransfer.CodexOptions{Home: opts.ConfigDir, NativeID: opts.NativeID}, maxBytes)
 	}
 	return nativetransfer.WriteClaudeTranscriptForCloud(ctx, w, opts, maxBytes)
 }
@@ -44,7 +51,7 @@ func (m *Manager) WriteCloudTranscript(ctx context.Context, rec domain.SessionRe
 // CloudSidecarInfo sizes the sidecar folder a move to AO Cloud would carry.
 func (m *Manager) CloudSidecarInfo(ctx context.Context, rec domain.SessionRecord, project domain.ProjectRecord) (nativetransfer.ClaudeSidecar, error) {
 	opts, err := m.cloudTranscriptOptions(ctx, rec, project)
-	if err != nil {
+	if err != nil || rec.Harness == domain.HarnessCodex {
 		return nativetransfer.ClaudeSidecar{}, err
 	}
 	return nativetransfer.ClaudeSidecarInfo(ctx, opts)
@@ -54,14 +61,14 @@ func (m *Manager) CloudSidecarInfo(ctx context.Context, rec domain.SessionRecord
 // gzipped, and reports whether it has one.
 func (m *Manager) WriteCloudSidecar(ctx context.Context, rec domain.SessionRecord, project domain.ProjectRecord, w io.Writer, maxBytes int64) (bool, error) {
 	opts, err := m.cloudTranscriptOptions(ctx, rec, project)
-	if err != nil {
+	if err != nil || rec.Harness == domain.HarnessCodex {
 		return false, err
 	}
 	return nativetransfer.WriteClaudeSidecarForCloud(ctx, w, opts, maxBytes)
 }
 
 func (m *Manager) cloudTranscriptOptions(ctx context.Context, rec domain.SessionRecord, project domain.ProjectRecord) (nativetransfer.ClaudeExportOptions, error) {
-	if rec.Harness != domain.HarnessClaudeCode {
+	if rec.Harness != domain.HarnessClaudeCode && rec.Harness != domain.HarnessCodex {
 		return nativetransfer.ClaudeExportOptions{}, ErrCloudTranscriptUnsupported
 	}
 	agent, ok := m.agents.Agent(rec.Harness)
@@ -102,14 +109,18 @@ func (m *Manager) nativeConfigDir(ctx context.Context, harness domain.AgentHarne
 }
 
 // placeTransferConversation puts a moved conversation where the agent CLI
-// finds it from workspacePath and returns its native id.
+// finds it from workspacePath and returns its native id. For Codex the
+// archive is the rollout itself.
 func (m *Manager) placeTransferConversation(ctx context.Context, harness domain.AgentHarness, workspacePath string, env map[string]string, archive string) (string, error) {
-	if harness != domain.HarnessClaudeCode {
+	if harness != domain.HarnessClaudeCode && harness != domain.HarnessCodex {
 		return "", ErrCloudTranscriptUnsupported
 	}
 	configDir, err := m.nativeConfigDir(ctx, harness, env)
 	if err != nil {
 		return "", err
+	}
+	if harness == domain.HarnessCodex {
+		return nativetransfer.ImportCodex(ctx, archive, nativetransfer.CodexImportOptions{Home: configDir, Cwd: workspacePath})
 	}
 	f, err := os.Open(archive)
 	if err != nil {
