@@ -9,7 +9,8 @@ import type {
 	OnboardingProjectSource,
 	OnboardingRunKind,
 } from "./onboarding-telemetry-schema";
-import { captureRendererEvent } from "./telemetry";
+import { isAnalyticsOptedOut, onAnalyticsOptedOut } from "./analytics-opt-out";
+import { captureRendererEvent, captureRendererEventOnUnload } from "./telemetry";
 
 // The desktop onboarding funnel (docs/telemetry.md, "Desktop onboarding
 // funnel"). Two layers:
@@ -25,6 +26,10 @@ import { captureRendererEvent } from "./telemetry";
 // Every value is from a closed vocabulary (onboarding-telemetry-schema.ts,
 // enforced again by the allowlist in telemetry.ts); nothing user-authored is
 // sent. Durations are measured here, never read from the UI.
+//
+// While analytics is opted out nothing here is counted or stored, and an
+// opt-out drops the run, attempts and timings already held, so nothing from
+// the opted-out period reaches an event sent after a later opt-in.
 
 type StepPhase = "viewed" | "completed" | "abandoned";
 export type OnboardingPhase = StepPhase;
@@ -39,6 +44,8 @@ const PROJECT_NOTE_TTL_MS = 60_000;
 /** Identifies this launch, so a run reopened on a later launch reads as resumed. */
 const LAUNCH_ID = Math.random().toString(36).slice(2);
 const memory = new Set<string>();
+/** The pages whose position the run reports; sub-steps such as github_auth show inside one. */
+const RUN_PAGES: ReadonlySet<OnboardingStep> = new Set(["welcome", "sign_in", "tools"]);
 
 type RunRecord = {
 	kind: OnboardingRunKind;
@@ -112,6 +119,16 @@ function capture(event: string, properties: Record<string, unknown>) {
 	void captureRendererEvent(event, { run_kind: currentOnboardingRunKind(), ...properties });
 }
 
+/** For pagehide listeners: a queued event would be lost with the page (captureRendererEventOnUnload). */
+function captureOnUnload(event: string, properties: Record<string, unknown>) {
+	captureRendererEventOnUnload(event, { run_kind: currentOnboardingRunKind(), ...properties });
+}
+
+/** False while analytics is opted out: nothing is counted, stored or sent then. */
+function tracking(): boolean {
+	return !isAnalyticsOptedOut();
+}
+
 // ── Steps ────────────────────────────────────────────────────────────────────
 
 function readReported(): Set<string> {
@@ -153,7 +170,7 @@ function noteStepShown(step: OnboardingStep) {
 	const run = currentRun();
 	if (!run || run.completedAt) return;
 	run.lastSeenAt = Date.now();
-	if (flowOpen) run.step = step;
+	if (flowOpen && RUN_PAGES.has(step)) run.step = step;
 	saveRun(run);
 }
 
@@ -163,15 +180,19 @@ function noteStepShown(step: OnboardingStep) {
  * project came from).
  */
 export function reportOnboardingStep(step: OnboardingStep, phase: StepPhase, extra: Record<string, unknown> = {}): void {
+	if (!tracking()) return;
 	if (phase === "viewed") noteStepShown(step);
 	if (!reserveOnboardingPhase(step, phase)) return;
 	const timing = phase === "viewed" ? {} : { time_on_step_ms: timeOnStep(step) };
-	capture(`ao.onboarding.step_${phase}`, { step, ...extra, ...timing });
+	const properties = { step, ...extra, ...timing };
+	// Abandoned is only reported as the window closes.
+	if (phase === "abandoned") captureOnUnload("ao.onboarding.step_abandoned", properties);
+	else capture(`ao.onboarding.step_${phase}`, properties);
 }
 
 /** Reports a step's view unless it already has one, so a step that finishes the moment it starts still reads viewed, then completed. */
-export function ensureOnboardingStepViewed(step: OnboardingStep): void {
-	if (!readReported().has(`${step}:viewed`)) reportOnboardingStep(step, "viewed");
+export function ensureOnboardingStepViewed(step: OnboardingStep, extra?: Record<string, unknown>): void {
+	if (!readReported().has(`${step}:viewed`)) reportOnboardingStep(step, "viewed", extra);
 }
 
 /**
@@ -191,6 +212,7 @@ export function completeOnboardingStepIfViewed(step: OnboardingStep): void {
  * counted on every click.
  */
 export function skipOnboardingStep(step: OnboardingStep, reason: "already_done" | "user" | "dismissed"): void {
+	if (!tracking()) return;
 	if (reason === "already_done") {
 		if (!reserve(`${step}:skipped`)) return;
 		const run = currentRun();
@@ -206,6 +228,7 @@ export function skipOnboardingStep(step: OnboardingStep, reason: "already_done" 
 
 /** Back, from one page to an earlier one. Sent per click. */
 export function reportOnboardingBack(from: OnboardingStep, to: OnboardingStep): void {
+	if (!tracking()) return;
 	const run = currentRun();
 	if (run && !run.completedAt) {
 		run.backCount += 1;
@@ -248,13 +271,13 @@ export function useOnboardingStep(
 // ── The run ─────────────────────────────────────────────────────────────────
 
 function abandonRun() {
-	if (!flowOpen || abandonedThisLaunch) return;
+	if (!flowOpen || abandonedThisLaunch || !tracking()) return;
 	const run = currentRun();
 	if (!run || run.completedAt) return;
 	abandonedThisLaunch = true;
 	run.lastSeenAt = Date.now();
 	saveRun(run);
-	capture("ao.onboarding.abandoned", { step: run.step, duration_ms: Date.now() - run.startedAt, launch_count: run.launches });
+	captureOnUnload("ao.onboarding.abandoned", { step: run.step, duration_ms: Date.now() - run.startedAt, launch_count: run.launches });
 }
 
 /**
@@ -265,6 +288,12 @@ function abandonRun() {
 export function beginOnboardingRun(kind: OnboardingRunKind, step: OnboardingStep): () => void {
 	const now = Date.now();
 	flowOpen = true;
+	if (!tracking()) {
+		// Not counted while opted out; a later launch that reopens it starts the run then.
+		return () => {
+			flowOpen = false;
+		};
+	}
 	if (kind === "replay") {
 		replay = {
 			id: LAUNCH_ID + now,
@@ -301,6 +330,10 @@ export function beginOnboardingRun(kind: OnboardingRunKind, step: OnboardingStep
 
 /** The run ended: the last page's Continue (`finished`), Skip setup, or closed for the person (`superseded`). */
 export function completeOnboardingRun(outcome: OnboardingOutcome): void {
+	if (!tracking()) {
+		flowOpen = false;
+		return;
+	}
 	const run = currentRun();
 	if (!run || run.completedAt) return;
 	const now = Date.now();
@@ -338,7 +371,7 @@ export function supersedeOnboardingRun(): void {
 	completeOnboardingRun("superseded");
 }
 
-// ── Actions: installs, sign-ins, project clone and add ─────────────────────
+// ── Actions: installs and sign-ins ─────────────────────────────────────────
 
 const attempts = new Map<string, number>();
 const pending = new Map<string, { attempt: number; startedAt: number; step?: OnboardingStep }>();
@@ -352,6 +385,7 @@ export function startOnboardingAction(
 	action: OnboardingAction,
 	options: { target?: string; step?: OnboardingStep; auto?: boolean } = {},
 ): void {
+	if (!tracking()) return;
 	const key = actionKey(action, options.target);
 	const attempt = (attempts.get(key) ?? 0) + 1;
 	attempts.set(key, attempt);
@@ -365,6 +399,7 @@ export function finishOnboardingAction(
 	outcome: OnboardingActionOutcome,
 	options: { target?: string; reason?: OnboardingFailureReason; errorCode?: string; attempt?: number } = {},
 ): boolean {
+	if (!tracking()) return false;
 	const key = actionKey(action, options.target);
 	const attempt = pending.get(key);
 	if (!attempt) return false;
@@ -425,21 +460,22 @@ export function setOnboardingTourStep(step: OnboardingStep | undefined): void {
 	tourStep = step;
 }
 
-function reportProjectResult(action: "project_clone" | "project_add", outcome: OnboardingActionOutcome, errorCode?: string) {
-	if (tourStep !== "tour_project") return;
-	startOnboardingAction(action, { step: "tour_project" });
-	finishOnboardingAction(action, outcome, outcome === "failed" ? { reason: errorCode ? "refused" : "request_failed", errorCode } : {});
+/**
+ * Whether onboarding is showing now: the first-run window or a tour step.
+ * Setup that can also be reached later (the clone dialog's GitHub panel)
+ * reports to the funnel only then.
+ */
+export function onboardingInProgress(): boolean {
+	return flowOpen || tourStep !== undefined;
 }
 
-/** A project was cloned or added; the tour's project step reads where it came from. */
+/**
+ * A project was cloned or added; the tour's project step reads where it came
+ * from (project_source on its completion). Its success and failure are already
+ * ao.projects.added / add_failed / clone_failed, so no action is sent here.
+ */
 export function reportOnboardingProjectAdded(source: "clone" | "local_folder", projectId: string): void {
 	projectNote = { source, projectId, at: Date.now() };
-	reportProjectResult(source === "clone" ? "project_clone" : "project_add", "succeeded");
-}
-
-/** A clone or add failed while the tour's project step was showing. */
-export function reportOnboardingProjectFailed(action: "project_clone" | "project_add", errorCode: string | undefined): void {
-	reportProjectResult(action, "failed", errorCode && errorCode !== "unknown" ? errorCode : undefined);
 }
 
 /** Where the project that ended the tour's project step came from; only a note for that same project counts. */
@@ -456,7 +492,7 @@ export function onboardingProjectSource(projectId: string | undefined, isNew: bo
 
 /** The first chat message delivered after a first run finished, within a week, once per install. */
 export function recordOnboardingActivation(duringTour: boolean, now = Date.now()): void {
-	if (replay) return;
+	if (replay || !tracking()) return;
 	const run = readFirstRun();
 	if (!run?.completedAt || run.activated) return;
 	if (now - run.completedAt > ACTIVATION_WINDOW_MS) return;
@@ -475,6 +511,29 @@ export function useOnboardingActivation(duringTour: () => boolean): void {
 	duringTourRef.current = duringTour;
 	useEffect(() => onComposerSent(() => recordOnboardingActivation(duringTourRef.current())), []);
 }
+
+/**
+ * Drops what would otherwise be counted into a later event: the run (so a
+ * completion after an opt-in does not carry the opted-out period, or arrive
+ * without a start), attempts, pending actions and step timings. The step
+ * slots already reported stay, so an opt-in does not report them twice.
+ */
+function forgetOnOptOut() {
+	memoryRun = null;
+	try {
+		storage()?.removeItem(RUN_KEY);
+	} catch {
+		// Memory is cleared; capture is gated on the opt-out anyway.
+	}
+	replay = null;
+	abandonedThisLaunch = false;
+	stepStartedAt.clear();
+	attempts.clear();
+	pending.clear();
+	projectNote = undefined;
+}
+
+onAnalyticsOptedOut(forgetOnOptOut);
 
 /** Test seam: forgets this launch's in-memory state. */
 export function resetOnboardingTelemetryForTests(): void {

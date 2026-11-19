@@ -1,4 +1,5 @@
 import type posthogModule from "posthog-js/dist/module.full.no-external";
+import { setAnalyticsOptedOut } from "./analytics-opt-out";
 import { aoBridge } from "./bridge";
 import {
 	ARTIFACT_LINK_COPY_SURFACES,
@@ -496,6 +497,7 @@ export function resumePostHogAfterOptIn(client: PostHogFlagControls): void {
 
 export async function applyAnalyticsOptOut(optedOut: boolean): Promise<void> {
 	analyticsOptedOut = optedOut;
+	setAnalyticsOptedOut(optedOut);
 	if (optedOut) {
 		// A website visit not linked yet is dropped, not kept for a later opt-in.
 		pendingWebVisitor = null;
@@ -1586,6 +1588,23 @@ export function clearRendererTelemetryQueues(): void {}
 // Failure-reporting enablement is enforced in preload/main. It never opts the
 // independent PostHog client in or out.
 export function applyRendererTelemetryPolicy(_enabled: boolean): void {}
+
+/**
+ * Sends an onboarding event from a `pagehide` listener. PostHog flushes its
+ * queue from its own pagehide handler, registered at init and so before any
+ * of ours; an event queued after it dies with the page. This path sanitizes
+ * synchronously and sends at once with sendBeacon, which outlives the page.
+ */
+export function captureRendererEventOnUnload(event: string, properties?: Record<string, unknown>): boolean {
+	if (analyticsOptedOut || !posthogReady || !ONBOARDING_EVENTS.has(event) || isDeniedEvent(event)) return false;
+	const sanitizedProperties = sanitizeOnboardingProperties(event, properties);
+	if (!reserveCapture(onboardingRateLimitKey(event, sanitizedProperties) ?? event)) return false;
+	try {
+		return Boolean(posthog.capture(postHogEventName(event), withTelemetryContext(sanitizedProperties), { send_instantly: true, transport: "sendBeacon" }));
+	} catch {
+		return false;
+	}
+}
 
 export async function captureRendererEvent(event: string, properties?: Record<string, unknown>): Promise<boolean> {
 	// An opted-out renderer must not touch rate-limit slots or the persisted

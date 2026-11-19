@@ -373,11 +373,7 @@ export function GuidedTour() {
 	const end = () => {
 		const current = state?.step;
 		if (current === "done") reportOnboardingStep("finish", "completed");
-		else if (current) {
-			skipOnboardingStep(FUNNEL_STEP[current], "dismissed");
-			// Kept from before step_skipped existed: closing the tour at the task.
-			if (current === "task") reportOnboardingStep("first_task", "abandoned");
-		}
+		else if (current) skipOnboardingStep(FUNNEL_STEP[current], "dismissed");
 		setState(null);
 		endOnboardingReplay();
 	};

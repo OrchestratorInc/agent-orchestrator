@@ -693,7 +693,7 @@ identifier, or error message is sent.
 When desktop product telemetry is enabled, Orchestrator.inc records how new
 users move through first-run onboarding, so we can see where they stop and
 why. The flow is: the startup dependency dialog (only when git, tmux or a
-coding agent is missing), the welcome page and its three-part story (the last
+coding agent is missing, before onboarding), the welcome page and its three-part story (the last
 part shows CI and code review on GitHub), the optional AO Cloud sign-in, Your
 tools (the GitHub CLI and coding agents), then a guided tour of the real app
 (add a project, open its orchestrator, send the first message).
@@ -706,6 +706,20 @@ properties documented later in this file, including `github_actor` when the
 GitHub CLI is signed in and `ao_cloud_user_id` when signed in to AO Cloud.
 
 ### Steps
+
+The funnel to read is the pages and then the tour: `welcome` → `sign_in` →
+`tools` → `tour_project` → `tour_orchestrator` → `first_task` → `finish`.
+Three steps are conditional sub-steps, not stages every run passes through,
+so `step_index` is an order, not a dense funnel:
+
+- `dependencies` shows only when git, tmux or a coding agent is missing, and
+  before `started`. It counts only while onboarding has not been seen yet; the
+  same dialog after onboarding (a tool removed months later) sends nothing.
+- `github_auth` shows inside Your tools, or in the clone dialog opened from
+  the tour, only while the GitHub CLI needs installing or signing in. It has
+  no `already_done` skip when Your tools itself is skipped. The clone dialog
+  outside onboarding sends nothing.
+- `import_chats` is not reachable today.
 
 Every step is identified by `step` and its position in the flow,
 `step_index`:
@@ -728,7 +742,7 @@ Every step is identified by `step` and its position in the flow,
 | `ao.onboarding.step_viewed` | A step is shown | `step`, `step_index`, `run_kind`, `missing` (dependencies, tools), `agents_ready` (tools), `chats_found_bucket` (import_chats) |
 | `ao.onboarding.step_completed` | A step is done: Continue on a page, the tour moving on, the tool signed in | `step`, `step_index`, `run_kind`, `time_on_step_ms`; `story_points_seen` and `story_completed` (welcome); `agents_ready` and `gh_ready` (tools); `project_source` (tour_project) |
 | `ao.onboarding.step_skipped` | A step is passed over: automatically because there was nothing to do, by the person (Sign in's "do it later", Skip setup, Skip on the import step), or by closing the tour | `step`, `step_index`, `run_kind`, `reason`, `time_on_step_ms` |
-| `ao.onboarding.step_abandoned` | The window closes while the step is showing | `step`, `step_index`, `run_kind`, `time_on_step_ms` |
+| `ao.onboarding.step_abandoned` | The window closes while the step is showing. Sent at once with `sendBeacon` | `step`, `step_index`, `run_kind`, `time_on_step_ms` |
 | `ao.onboarding.back_clicked` | Back is clicked | `step`, `step_index`, `to_step`, `run_kind` |
 
 `step_viewed`, `step_completed`, `step_abandoned` and an automatic
@@ -736,7 +750,9 @@ Every step is identified by `step` and its position in the flow,
 for a replay), so the counts read as a funnel. A person's skip and Back are
 sent on each click. `time_on_step_ms` runs from the step's latest showing in
 this launch. `step_index` is derived from `step` by the app, never taken from
-the page that sent the event.
+the page that sent the event. Your tools sends its view once its checks have
+answered (at most 3 seconds), so `missing` and `agents_ready` are complete;
+leaving it sooner still sends the view first.
 
 ### The run
 
@@ -744,27 +760,40 @@ the page that sent the event.
 | --- | --- | --- |
 | `ao.onboarding.started` | Onboarding opens for the first time on this installation, or a replay starts | `step`, `step_index`, `run_kind` |
 | `ao.onboarding.resumed` | Onboarding opens on a later launch after the app was quit mid-flow | `step`, `step_index`, `run_kind`, `away_ms`, `away_bucket`, `launch_count` |
-| `ao.onboarding.abandoned` | The window closes mid-flow. At most once per launch | `step`, `step_index`, `run_kind`, `duration_ms`, `duration_bucket`, `launch_count` |
-| `ao.onboarding.completed` | Onboarding ends. Once per run | `step` (the last page shown), `step_index`, `run_kind`, `outcome`, `duration_ms`, `duration_bucket`, `launch_count`, `resumed`, `back_count`, `auto_skipped_count` |
+| `ao.onboarding.abandoned` | The window closes mid-flow. At most once per launch. Sent at once with `sendBeacon` | `step` (the page showing), `step_index`, `run_kind`, `duration_ms`, `duration_bucket`, `launch_count` |
+| `ao.onboarding.completed` | Onboarding ends. Once per run | `step` (the last page shown: `welcome`, `sign_in` or `tools`), `step_index`, `run_kind`, `outcome`, `duration_ms`, `duration_bucket`, `launch_count`, `resumed`, `back_count`, `auto_skipped_count` |
 | `ao.onboarding.activated` | The first chat message delivered after a first run finished, within 7 days. Once per installation | `milestone`, `time_since_completed_ms`, `time_bucket`, `during_tour` |
 
-`abandoned` depends on the window getting to send it while it closes. A quit
-that does not is still visible: the run has `started` without `completed`, and
-a later launch sends `resumed`.
+PostHog sends its queue from its own `pagehide` handler before the app's run,
+so `abandoned` and `step_abandoned` bypass the queue and go out with
+`sendBeacon`, which outlives the page. A quit that still loses them is
+visible: the run has `started` without `completed`, and a later launch sends
+`resumed`.
 
 ### Actions
 
-Installs and sign-ins started during onboarding, and project clones and adds
-during the tour's project step, report how each attempt ended:
+Installs and sign-ins started during onboarding report how each attempt
+ended. The tour's project step sends no action: its add or clone is already
+`ao.projects.added`, `ao.projects.add_failed` or `ao.projects.clone_failed`,
+and `project_source` on its `step_completed` says which it was.
 
 | Event | When it is sent | Onboarding-specific properties |
 | --- | --- | --- |
 | `ao.onboarding.action_started` | An install or sign-in starts, by a click or (`auto`) by the page, as the GitHub CLI login does once | `action`, `target`, `step`, `step_index`, `attempt`, `auto` |
-| `ao.onboarding.action_finished` | That attempt ends, once. For a project clone or add, only when the tour's project step is showing | `action`, `target`, `step`, `step_index`, `attempt`, `outcome`, `reason`, `error_code`, `duration_ms` |
+| `ao.onboarding.action_finished` | That attempt ends, once | `action`, `target`, `step`, `step_index`, `attempt`, `outcome`, `reason`, `error_code`, `duration_ms` |
 
 `attempt` counts from 1 for each action and target in a launch, so a value
 above 1 is a retry. The existing `ao.projects.clone_failed`,
 `ao.projects.add_failed` and `ao.projects.added` events are unchanged.
+
+Some events fire together for one thing that happened; count one of each pair,
+not both:
+
+- `step_completed` (`github_auth`) and `action_finished` (`gh_sign_in`,
+  `succeeded`) when the GitHub CLI signs in.
+- `action_finished` (`cloud_sign_in`, `succeeded`) and
+  `ao.renderer.cloud_signed_in` with `source` `onboarding`.
+- `activated` with `during_tour` true and `step_completed` (`first_task`).
 
 ### Property values
 
@@ -796,8 +825,7 @@ above 1 is a retry. The existing `ao.projects.clone_failed`,
   `1d_7d`. `milestone` is `first_message`. `during_tour` is true when the
   message was the tour's task step.
 - `action` is `dependency_install`, `gh_install`, `gh_sign_in`,
-  `agent_install`, `agent_sign_in`, `cloud_sign_in`, `project_clone` or
-  `project_add`. `target` is the install target or agent id from AO's own
+  `agent_install`, `agent_sign_in` or `cloud_sign_in`. `target` is the install target or agent id from AO's own
   registry, such as `gh`, `tmux` or `claude-code`.
 - `outcome` on `action_finished` is `succeeded`, `failed`, `cancelled` (the
   person closed the login or moved on), `timed_out` (a login left open 15
@@ -805,9 +833,8 @@ above 1 is a retry. The existing `ao.projects.clone_failed`,
   opened).
 - `reason` on `action_finished` is `start_failed`, `install_failed`,
   `interrupted`, `unsupported`, `lost_contact`, `not_signed_in`,
-  `cleanup_failed`, `refused`, `request_failed`, `documentation` or `other`.
-  `error_code` is the API's error code (such as `CLONE_FAILED`), never its
-  message.
+  `cleanup_failed`, `request_failed`, `documentation` or `other`.
+  `error_code` is the API's error code, never its message.
 
 `ao.renderer.cloud_signed_in` also carries `source` `onboarding` when the
 sign-in finished within 30 minutes of clicking Sign in on onboarding's account
@@ -815,11 +842,21 @@ page. That note is kept in memory only.
 
 The renderer's usual limit of five events per name per minute applies per
 step and action for these events, so clicking quickly through onboarding does
-not drop later steps. They stop when Share usage analytics is off, and a
-kill-switch entry in `AO_TELEMETRY_DISABLED_EVENTS` silences them like any
-other event. `ao.onboarding.first_run_experiment_exposed` and
-`ao.onboarding.first_run_prompt_action` are no longer sent: they belonged to
-the first-run prompt on Home, which has been removed.
+not drop later steps. A sixth quick retry of the same action within a minute
+drops both its `action_started` and its `action_finished`; it shows only as a
+gap in `attempt`.
+
+They stop when Share usage analytics is off, and a kill-switch entry in
+`AO_TELEMETRY_DISABLED_EVENTS` silences them like any other event. While
+analytics is off nothing is counted or stored for them either, and turning it
+off drops the run in progress, attempt counts and step timings, so an event
+sent after turning it back on carries nothing from the time it was off. A run
+that was off when it began has no `started`, and so sends no `completed`.
+
+`ao.onboarding.first_run_experiment_exposed` and
+`ao.onboarding.first_run_prompt_action` are no longer sent and their
+properties are no longer allowed: they belonged to the first-run prompt on
+Home, which has been removed. Builds from before that still send them.
 
 ## What Orchestrator.inc does not intentionally send
 

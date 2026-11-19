@@ -97,14 +97,17 @@ describe("onboarding telemetry allowlist", () => {
 		expect(sanitizeOnboardingProperties("ao.onboarding.action_started", { action: "agent_install", target: "claude-code", step: "tools", attempt: 2, auto: false }))
 			.toEqual({ action: "agent_install", target: "claude-code", step: "tools", step_index: 3, attempt: 2, auto: false });
 		expect(sanitizeOnboardingProperties("ao.onboarding.action_finished", {
-			action: "project_clone",
-			step: "tour_project",
+			action: "gh_install",
+			target: "gh",
+			step: "github_auth",
 			attempt: 1,
 			outcome: "failed",
-			reason: "refused",
-			error_code: "CLONE_FAILED",
+			reason: "start_failed",
+			error_code: "INSTALL_UNAVAILABLE",
 			duration_ms: 1500,
-		})).toEqual({ action: "project_clone", step: "tour_project", step_index: 6, attempt: 1, outcome: "failed", reason: "refused", error_code: "CLONE_FAILED", duration_ms: 1500 });
+		})).toEqual({ action: "gh_install", target: "gh", step: "github_auth", step_index: 4, attempt: 1, outcome: "failed", reason: "start_failed", error_code: "INSTALL_UNAVAILABLE", duration_ms: 1500 });
+		// The tour's project add and clone are reported by ao.projects.*, not as actions.
+		expect(sanitizeOnboardingProperties("ao.onboarding.action_finished", { action: "project_clone", reason: "refused" })).toEqual({});
 		expect(sanitizeOnboardingProperties("ao.onboarding.action_finished", {
 			action: "rm -rf",
 			target: "Claude Code",
@@ -126,12 +129,6 @@ describe("onboarding telemetry allowlist", () => {
 		expect([30_000, 120_000, 300_000, 1_200_000, 3_600_000, 36_000_000, 172_800_000].map(durationBucket))
 			.toEqual(["lt_1m", "1m_3m", "3m_10m", "10m_30m", "30m_2h", "2h_1d", "gte_1d"]);
 		expect([0, 1, 3, 20, 21].map(countBucket)).toEqual(["0", "1", "2_5", "6_20", "21_plus"]);
-	});
-
-	it("keeps the retired first-run prompt events closed", () => {
-		expect(sanitizeOnboardingProperties("ao.onboarding.first_run_experiment_exposed", { variant: "prompt", ...LEAKS })).toEqual({ variant: "prompt" });
-		expect(sanitizeOnboardingProperties("ao.onboarding.first_run_prompt_action", { action: "import", ...LEAKS })).toEqual({ action: "import" });
-		expect(sanitizeOnboardingProperties("ao.onboarding.first_run_prompt_action", { action: "/Users/x" })).toEqual({});
 	});
 
 	it("is what telemetry.ts applies to onboarding events", async () => {

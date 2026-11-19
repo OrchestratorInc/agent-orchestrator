@@ -8,7 +8,16 @@ import aoMascot from "../../../assets/ao-mascot.svg";
 import { useCloseShellTerminal } from "../hooks/useShellTerminals";
 import { useGitHubAuthRequirement, useGitHubAuthTerminal, useStartGitHubAuthTerminal, useSystemRequirementsGate } from "../hooks/useSystemRequirementsGate";
 import type { TerminalSessionState } from "../hooks/useTerminalSession";
-import { completeOnboardingStepIfViewed, reportOnboardingStep, skipOnboardingStep, useOnboardingStep } from "../lib/onboarding-telemetry";
+import {
+	completeOnboardingStepIfViewed,
+	finishOnboardingAction,
+	onboardingActionAttempt,
+	onboardingInProgress,
+	reportOnboardingStep,
+	skipOnboardingStep,
+	startOnboardingAction,
+	useOnboardingStep,
+} from "../lib/onboarding-telemetry";
 import { agentLabel } from "../lib/agent-options";
 import { type ImportCandidate, sessionImportPreviewQuery, useImportableAgents, useImportOfferShown } from "../lib/session-import";
 import { useShellMaybe } from "../lib/shell-context";
@@ -113,13 +122,15 @@ export function GitHubSetupPanel({ onReady, onSkip }: { onReady: () => void; onS
 	authRefetch.current = auth.refetch;
 	const readyRef = useRef(onReady);
 	readyRef.current = onReady;
+	// This panel also serves the clone dialog long after onboarding; it reports
+	// to the funnel only while onboarding (the first-run window or the tour) shows.
 	const install = useInstallRunner(() => {
 		void Promise.resolve(query.refetch())
 			.then(() => authRefetch.current())
 			.then((result) => {
 				if (result.data?.satisfied) readyRef.current();
 			});
-	});
+	}, () => (onboardingInProgress() ? { action: "gh_install", step: "github_auth" } : undefined));
 	const { inspect } = install;
 	useEffect(() => {
 		if (cliMissing) void inspect("gh");
@@ -129,7 +140,7 @@ export function GitHubSetupPanel({ onReady, onSkip }: { onReady: () => void; onS
 	// needed, abandoned if the window goes away first, completed once signed in.
 	const needsSetup = cliMissing || auth.data?.satisfied === false;
 	useEffect(() => {
-		if (!needsSetup) return;
+		if (!needsSetup || !onboardingInProgress()) return;
 		reportOnboardingStep("github_auth", "viewed");
 		const onHide = () => reportOnboardingStep("github_auth", "abandoned");
 		window.addEventListener("pagehide", onHide);
@@ -140,14 +151,27 @@ export function GitHubSetupPanel({ onReady, onSkip }: { onReady: () => void; onS
 	const signedIn = auth.data?.satisfied === true;
 	useEffect(() => {
 		if (!signedIn) return;
+		finishOnboardingAction("gh_sign_in", "succeeded", { target: "gh" });
 		completeOnboardingStepIfViewed("github_auth");
 		if (terminal) closeTerminal(terminal.handleId, { onSuccess: terminalQuery.clear });
 		readyRef.current();
 	}, [signedIn, terminal, closeTerminal, terminalQuery.clear]);
+	useEffect(() => {
+		if (startLogin.isError) finishOnboardingAction("gh_sign_in", "failed", { target: "gh", reason: "start_failed" });
+	}, [startLogin.isError]);
 	// The login process ending usually means it finished; confirm with a fresh check.
 	useEffect(() => {
-		if (terminalState === "exited" || terminalState === "error") void authRefetch.current();
+		if (terminalState !== "exited" && terminalState !== "error") return;
+		// The attempt this login belonged to, so a retry started before the check answers is left alone.
+		const attempt = onboardingActionAttempt("gh_sign_in", "gh");
+		void authRefetch.current().then((result) => {
+			if (attempt !== undefined && result.data && !result.data.satisfied) finishOnboardingAction("gh_sign_in", "failed", { target: "gh", reason: "not_signed_in", attempt });
+		});
 	}, [terminalState]);
+	const signIn = () => {
+		if (onboardingInProgress()) startOnboardingAction("gh_sign_in", { target: "gh", step: "github_auth" });
+		startLogin.mutate();
+	};
 
 	const loginEnded = terminalState === "exited" || terminalState === "error";
 	return (
@@ -171,8 +195,8 @@ export function GitHubSetupPanel({ onReady, onSkip }: { onReady: () => void; onS
 						className="w-full"
 						disabled={startLogin.isPending || (loginRunning && !loginEnded)}
 						onClick={() => {
-							if (loginEnded && terminal) closeTerminal(terminal.handleId, { onSuccess: () => { terminalQuery.clear(); setTerminalState("idle"); startLogin.mutate(); } });
-							else startLogin.mutate();
+							if (loginEnded && terminal) closeTerminal(terminal.handleId, { onSuccess: () => { terminalQuery.clear(); setTerminalState("idle"); signIn(); } });
+							else signIn();
 						}}
 					>
 						{startLogin.isPending ? t("startup.githubLoginStarting") : loginEnded ? t("startup.githubLoginTryAgain") : t("startup.githubLogin")}

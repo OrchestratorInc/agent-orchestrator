@@ -27,8 +27,6 @@ export const ONBOARDING_ACTIONS = [
 	"agent_install",
 	"agent_sign_in",
 	"cloud_sign_in",
-	"project_clone",
-	"project_add",
 ] as const;
 export type OnboardingAction = (typeof ONBOARDING_ACTIONS)[number];
 
@@ -42,7 +40,6 @@ export type OnboardingActionOutcome = (typeof ONBOARDING_ACTION_OUTCOMES)[number
  * - lost_contact: the daemon stopped answering while it ran
  * - not_signed_in: the login ended and the check still says signed out
  * - cleanup_failed: a login's terminal could not be closed
- * - refused: the daemon refused a project clone or add (see error_code)
  * - request_failed: the request never got an answer
  * - documentation: the agent signs in outside AO, so its guide was opened
  */
@@ -54,7 +51,6 @@ export const ONBOARDING_FAILURE_REASONS = [
 	"lost_contact",
 	"not_signed_in",
 	"cleanup_failed",
-	"refused",
 	"request_failed",
 	"documentation",
 	"other",
@@ -84,10 +80,6 @@ export const ONBOARDING_EVENTS = new Set([
 	"ao.onboarding.action_started",
 	"ao.onboarding.action_finished",
 	"ao.onboarding.activated",
-	// Not sent since #7767 removed the Home first-run prompt; kept so the
-	// allowlist stays closed if they return.
-	"ao.onboarding.first_run_experiment_exposed",
-	"ao.onboarding.first_run_prompt_action",
 ]);
 
 const MINUTE = 60_000;
@@ -167,12 +159,6 @@ export function sanitizeOnboardingProperties(event: string, properties?: Propert
 	const safe: Properties = {};
 	const p = properties;
 	switch (event) {
-		case "ao.onboarding.first_run_experiment_exposed":
-			if (p?.variant === "prompt" || p?.variant === "control") safe.variant = p.variant;
-			return safe;
-		case "ao.onboarding.first_run_prompt_action":
-			set(safe, "action", oneOf(p?.action, ["clone", "local_folder", "standalone", "import", "dismissed"]));
-			return safe;
 		case "ao.onboarding.activated": {
 			set(safe, "milestone", oneOf(p?.milestone, ONBOARDING_ACTIVATION_MILESTONES));
 			const since = duration(p?.time_since_completed_ms);

@@ -63,7 +63,7 @@ import { refreshDaemonStatus } from "../lib/daemon-status";
 import { usesPreviewWorkspaceData } from "../lib/preview-mode";
 import { addRendererExceptionStep, captureRendererEvent, captureRendererException } from "../lib/telemetry";
 import { captureProjectAddFailed } from "../lib/project-lifecycle-telemetry";
-import { reportOnboardingProjectAdded, reportOnboardingProjectFailed } from "../lib/onboarding-telemetry";
+import { reportOnboardingProjectAdded } from "../lib/onboarding-telemetry";
 import { ShellProvider } from "../lib/shell-context";
 import { restartProjectOrchestrator } from "../lib/restart-orchestrator";
 import { captureOrchestratorReplacementFailure } from "../lib/orchestrator-replacement-telemetry";
@@ -854,10 +854,10 @@ const replacementErrorCount = Object.keys(orchestratorReplacementErrors).length;
 				operation: "project_add",
 				surface: "project_board",
 			});
-			const reportFailure = (code: string | undefined) => {
-				captureProjectAddFailed((event, properties) => { void captureRendererEvent(event, properties); }, code);
-				reportOnboardingProjectFailed(input.clonePreparationId ? "project_clone" : "project_add", code);
-			};
+			const reportFailure = (code: string | undefined) => captureProjectAddFailed(
+				(event, properties) => { void captureRendererEvent(event, properties); },
+				code,
+			);
 			const status = await refreshDaemonStatus();
 			if (status.state !== "ready" || !status.port) {
 				reportFailure("DAEMON_NOT_READY");
@@ -907,6 +907,8 @@ const replacementErrorCount = Object.keys(orchestratorReplacementErrors).length;
 					}
 					if (registeredWorkspace) {
 						if (input.clonePreparationId) {
+							// The clone registered before its response was lost: still a clone for the tour.
+							reportOnboardingProjectAdded("clone", registeredWorkspace.id);
 							setOrchestratorStartupError(registeredWorkspace.id, null);
 							setProjectProvisioning(registeredWorkspace.id, true);
 							await navigate({ to: "/projects/$projectId", params: { projectId: registeredWorkspace.id } });
@@ -954,7 +956,6 @@ const replacementErrorCount = Object.keys(orchestratorReplacementErrors).length;
 			});
 			const reportFailure = (code: string | undefined) => {
 				void captureRendererEvent("ao.projects.clone_failed", { error_code: code || "unknown" });
-				reportOnboardingProjectFailed("project_clone", code);
 			};
 			const status = await refreshDaemonStatus();
 			if (status.state !== "ready" || !status.port) {

@@ -46,6 +46,7 @@ import type { OnboardingStep } from "../../lib/onboarding-steps";
 import {
 	beginOnboardingRun,
 	completeOnboardingRun,
+	ensureOnboardingStepViewed,
 	finishOnboardingAction,
 	onboardingActionAttempt,
 	onboardingActionPending,
@@ -98,6 +99,8 @@ const LEGACY_STEPS: Record<string, Step> = {
 const FUNNEL_STEP: Record<Step, OnboardingStep> = { welcome: "welcome", signin: "sign_in", tools: "tools" };
 // Resume on the same page after a relaunch mid-setup (per-viewer convenience).
 const STEP_STORAGE_KEY = "ao.firstRun.step";
+/** Longest the Tools page's view waits for its checks before reporting what it knows. */
+const TOOLS_VIEW_WAIT_MS = 3_000;
 // Always listed so a machine with no agents still has something to install.
 const SUGGESTED_AGENTS = ["claude-code", "codex"];
 // Where to get the GitHub CLI when it can't be installed from here.
@@ -301,6 +304,8 @@ function OnboardingFlow({ runKind, onFinish }: { runKind: OnboardingRunKind; onF
 	// over with the guided tour. `skipped`: the person moved on without doing
 	// the page (Sign in's "do it later").
 	const goNext = ({ skipped = false }: { skipped?: boolean } = {}) => {
+		// Tools reports its view once its checks answer; leaving sooner still reads viewed, then completed.
+		if (step === "tools") ensureOnboardingStepViewed("tools", toolsViewed());
 		if (skipped) skipOnboardingStep(FUNNEL_STEP[step], "user");
 		else reportOnboardingStep(FUNNEL_STEP[step], "completed", pageCompletion());
 		const passed: Step[] = [];
@@ -341,9 +346,19 @@ function OnboardingFlow({ runKind, onFinish }: { runKind: OnboardingRunKind; onF
 	};
 	useOnboardingStep("welcome", step === "welcome", { autoComplete: false });
 	useOnboardingStep("sign_in", step === "signin", { autoComplete: false });
-	useOnboardingStep("tools", step === "tools", {
+	const toolsViewed = () => ({ missing: toolsMissing(), agents_ready: readyAgentCount });
+	// Tools' view carries what it found missing, so it waits for the checks
+	// behind that (a resumed run can open straight onto it), or TOOLS_VIEW_WAIT_MS.
+	const toolsChecksAnswered = !toolsGate.checking && !ghAuth.isPending && readinessSettled === true;
+	const [toolsWaitOver, setToolsWaitOver] = useState(false);
+	useEffect(() => {
+		if (step !== "tools" || toolsWaitOver) return;
+		const timer = window.setTimeout(() => setToolsWaitOver(true), TOOLS_VIEW_WAIT_MS);
+		return () => window.clearTimeout(timer);
+	}, [step, toolsWaitOver]);
+	useOnboardingStep("tools", step === "tools" && (toolsChecksAnswered || toolsWaitOver), {
 		autoComplete: false,
-		viewed: step === "tools" ? { missing: toolsMissing(), agents_ready: readyAgentCount } : undefined,
+		viewed: step === "tools" ? toolsViewed() : undefined,
 	});
 	// A browser sign-in started on the Sign in page can come back after the
 	// person moved on; it still ends that attempt.

@@ -2,8 +2,14 @@ import { act, renderHook } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 const capture = vi.hoisted(() => vi.fn(async (_event: string, _props?: unknown) => undefined));
-vi.mock("./telemetry", () => ({ captureRendererEvent: capture }));
+// The window-close path, recorded in the same list so event order reads across both.
+const unload = vi.hoisted(() => vi.fn((event: string, props?: unknown) => {
+	void capture(event, props);
+	return true;
+}));
+vi.mock("./telemetry", () => ({ captureRendererEvent: capture, captureRendererEventOnUnload: unload }));
 
+import { setAnalyticsOptedOut } from "./analytics-opt-out";
 import { notifyComposerSent } from "./guided-tour-signals";
 import {
 	beginOnboardingRun,
@@ -14,11 +20,11 @@ import {
 	finishOnboardingAction,
 	installJobOutcome,
 	onboardingActionAttempt,
+	onboardingInProgress,
 	onboardingProjectSource,
 	recordOnboardingActivation,
 	reportOnboardingBack,
 	reportOnboardingProjectAdded,
-	reportOnboardingProjectFailed,
 	reportOnboardingStep,
 	resetOnboardingTelemetryForTests,
 	setOnboardingTourStep,
@@ -35,6 +41,8 @@ const lastProps = (event: string) => [...capture.mock.calls].reverse().find((cal
 describe("onboarding step telemetry", () => {
 	beforeEach(() => {
 		capture.mockClear();
+		unload.mockClear();
+		setAnalyticsOptedOut(false);
 		window.localStorage.clear();
 		resetOnboardingTelemetryForTests();
 	});
@@ -94,12 +102,14 @@ describe("onboarding step telemetry", () => {
 		expect(capture.mock.calls).toEqual([["ao.onboarding.step_viewed", { run_kind: "first_run", step: "sign_in", missing: "gh" }]]);
 	});
 
-	it("abandons when the window closes mid-step", () => {
+	it("abandons when the window closes mid-step, sent as the page goes away", () => {
 		renderHook(() => useOnboardingStep("welcome", true));
 		act(() => {
 			window.dispatchEvent(new Event("pagehide"));
 		});
 		expect(events()).toEqual(["ao.onboarding.step_viewed", "ao.onboarding.step_abandoned"]);
+		// A queued event would be lost with the page; only abandoned takes the unload path.
+		expect(unload.mock.calls).toEqual([["ao.onboarding.step_abandoned", expect.objectContaining({ run_kind: "first_run", step: "welcome" })]]);
 	});
 
 	it("counts an automatic skip once per install, and a person's skip and Back per click", () => {
@@ -123,6 +133,8 @@ describe("onboarding step telemetry", () => {
 describe("onboarding run telemetry", () => {
 	beforeEach(() => {
 		capture.mockClear();
+		unload.mockClear();
+		setAnalyticsOptedOut(false);
 		window.localStorage.clear();
 		resetOnboardingTelemetryForTests();
 	});
@@ -175,11 +187,34 @@ describe("onboarding run telemetry", () => {
 		window.dispatchEvent(new Event("pagehide"));
 		window.dispatchEvent(new Event("pagehide"));
 		expect(events().filter((event) => event === "ao.onboarding.abandoned")).toHaveLength(1);
+		expect(unload).toHaveBeenCalledWith("ao.onboarding.abandoned", expect.objectContaining({ step: "tools" }));
 		expect(lastProps("ao.onboarding.abandoned")).toMatchObject({ run_kind: "first_run", step: "tools", launch_count: 1 });
 		end();
 		resetOnboardingTelemetryForTests();
 		window.dispatchEvent(new Event("pagehide"));
 		expect(events().filter((event) => event === "ao.onboarding.abandoned")).toHaveLength(1);
+	});
+
+	it("keeps the run on its page while a sub-step inside it shows", () => {
+		beginOnboardingRun("first_run", "welcome");
+		reportOnboardingStep("tools", "viewed");
+		// github_auth and dependencies show inside a page or before the flow.
+		reportOnboardingStep("github_auth", "viewed");
+		reportOnboardingStep("dependencies", "viewed");
+		completeOnboardingRun("finished");
+		expect(lastProps("ao.onboarding.completed")).toMatchObject({ step: "tools" });
+	});
+
+	it("says onboarding is showing while its window or a tour step is", () => {
+		expect(onboardingInProgress()).toBe(false);
+		const end = beginOnboardingRun("first_run", "welcome");
+		expect(onboardingInProgress()).toBe(true);
+		end();
+		expect(onboardingInProgress()).toBe(false);
+		setOnboardingTourStep("tour_project");
+		expect(onboardingInProgress()).toBe(true);
+		setOnboardingTourStep(undefined);
+		expect(onboardingInProgress()).toBe(false);
 	});
 
 	it("ends a run left open when a project made onboarding unnecessary, and nothing for one never shown", () => {
@@ -235,6 +270,8 @@ describe("onboarding run telemetry", () => {
 describe("onboarding action telemetry", () => {
 	beforeEach(() => {
 		capture.mockClear();
+		unload.mockClear();
+		setAnalyticsOptedOut(false);
 		window.localStorage.clear();
 		resetOnboardingTelemetryForTests();
 	});
@@ -265,19 +302,11 @@ describe("onboarding action telemetry", () => {
 		expect(installJobOutcome("running")).toBeNull();
 	});
 
-	it("reports project clone and add results only during the tour's project step", () => {
-		reportOnboardingProjectFailed("project_clone", "CLONE_FAILED");
-		expect(capture).not.toHaveBeenCalled();
+	it("only notes a project for the tour; ao.projects.* already reports its result", () => {
 		setOnboardingTourStep("tour_project");
-		reportOnboardingProjectFailed("project_clone", "CLONE_FAILED");
-		reportOnboardingProjectFailed("project_clone", "unknown");
 		reportOnboardingProjectAdded("clone", "repo-a");
-		const finished = capture.mock.calls.filter((call) => call[0] === "ao.onboarding.action_finished").map((call) => call[1]);
-		expect(finished).toEqual([
-			expect.objectContaining({ action: "project_clone", attempt: 1, outcome: "failed", reason: "refused", error_code: "CLONE_FAILED" }),
-			expect.objectContaining({ action: "project_clone", attempt: 2, outcome: "failed", reason: "request_failed", error_code: undefined }),
-			expect.objectContaining({ action: "project_clone", attempt: 3, outcome: "succeeded" }),
-		]);
+		expect(capture).not.toHaveBeenCalled();
+		expect(onboardingProjectSource("repo-a", true)).toBe("clone");
 	});
 
 	it("reads where the tour's project came from, for that project only", () => {
@@ -304,6 +333,8 @@ describe("onboarding action telemetry", () => {
 describe("onboarding activation telemetry", () => {
 	beforeEach(() => {
 		capture.mockClear();
+		unload.mockClear();
+		setAnalyticsOptedOut(false);
 		window.localStorage.clear();
 		resetOnboardingTelemetryForTests();
 	});
@@ -354,5 +385,56 @@ describe("onboarding activation telemetry", () => {
 		capture.mockClear();
 		recordOnboardingActivation(false);
 		expect(capture.mock.calls).toEqual([["ao.onboarding.activated", expect.objectContaining({ during_tour: false })]]);
+	});
+});
+
+describe("onboarding telemetry while opted out", () => {
+	beforeEach(() => {
+		capture.mockClear();
+		unload.mockClear();
+		setAnalyticsOptedOut(false);
+		window.localStorage.clear();
+		resetOnboardingTelemetryForTests();
+	});
+	afterEach(() => {
+		setAnalyticsOptedOut(false);
+		vi.useRealTimers();
+	});
+
+	it("counts nothing while opted out, and drops the run and attempts held before it", () => {
+		vi.useFakeTimers();
+		beginOnboardingRun("first_run", "welcome");
+		startOnboardingAction("agent_install", { target: "codex", step: "tools" });
+		capture.mockClear();
+		setAnalyticsOptedOut(true);
+		reportOnboardingStep("tools", "viewed");
+		reportOnboardingBack("tools", "welcome");
+		skipOnboardingStep("sign_in", "already_done");
+		startOnboardingAction("agent_install", { target: "codex", step: "tools" });
+		vi.advanceTimersByTime(21 * 60_000);
+		window.dispatchEvent(new Event("pagehide"));
+		expect(capture).not.toHaveBeenCalled();
+		expect(window.localStorage.getItem("ao.telemetry.onboardingRun")).toBeNull();
+
+		setAnalyticsOptedOut(false);
+		// No completion without its start, and nothing from the opted-out period.
+		completeOnboardingRun("finished");
+		expect(events()).not.toContain("ao.onboarding.completed");
+		// The pending attempt went with the opt-out, and the count starts again.
+		expect(finishOnboardingAction("agent_install", "succeeded", { target: "codex" })).toBe(false);
+		startOnboardingAction("agent_install", { target: "codex", step: "tools" });
+		expect(lastProps("ao.onboarding.action_started")).toMatchObject({ attempt: 1 });
+		// A step viewed while opted out was not used up.
+		reportOnboardingStep("tools", "viewed");
+		expect(events()).toContain("ao.onboarding.step_viewed");
+	});
+
+	it("does not start a run while opted out", () => {
+		setAnalyticsOptedOut(true);
+		const end = beginOnboardingRun("first_run", "welcome");
+		end();
+		setAnalyticsOptedOut(false);
+		expect(capture).not.toHaveBeenCalled();
+		expect(window.localStorage.getItem("ao.telemetry.onboardingRun")).toBeNull();
 	});
 });
