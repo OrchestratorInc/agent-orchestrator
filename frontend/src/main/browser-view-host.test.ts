@@ -316,6 +316,7 @@ function setupHost(
 	const mainContentView = { addChildView: vi.fn(), removeChildView: vi.fn() };
 	const isWindowVisible = vi.fn(() => true);
 	const host = createBrowserViewHost({
+		agentTabPrimeMs: 0,
 		mainWindow: {
 			isVisible: isWindowVisible,
 			contentView: mainContentView,
@@ -1243,6 +1244,7 @@ function setupTabHost(
 	clearBrowserProfileData = vi.fn(async (_partition: string) => undefined),
 	overrides?: {
 		entryReadyTimeoutMs?: number;
+		agentTabPrimeMs?: number;
 		openInUserBrowser?: (url: string) => Promise<{ name: string; chrome: boolean }>;
 		routeBrowserPartition?: (partition: string, hostId: string) => Promise<void>;
 		/** Flip `destroyed` to model the BaseWindow closing under the host. */
@@ -1332,6 +1334,7 @@ function setupTabHost(
 				},
 				isAttached: () => debuggerAttached,
 				on: () => undefined,
+				removeListener: () => undefined,
 				sendCommand: async (method: string, params?: Record<string, unknown>) => {
 					debuggerCommands.push({ method, params });
 					if (method === "Page.navigate" && typeof params?.url === "string") currentURL = params.url;
@@ -1493,6 +1496,8 @@ function setupTabHost(
 		entryReadyTimeoutMs: overrides?.entryReadyTimeoutMs,
 		openInUserBrowser: overrides?.openInUserBrowser,
 		routeBrowserPartition: overrides?.routeBrowserPartition,
+		// Real hosts show a never-shown agent tab for 300 ms before parking it.
+		agentTabPrimeMs: overrides?.agentTabPrimeMs ?? 0,
 		onNativeViewAdded,
 		onTabCloseFailure,
 		// Kept only as a regression tripwire: the removed auto-send path used
@@ -4075,7 +4080,11 @@ describe("agent browser runtime", () => {
 			expect.objectContaining({ id: "t2", url: "http://localhost:4173/", active: true }),
 		]);
 		expect(views).toHaveLength(2);
-		expect(views[1].setVisible).not.toHaveBeenCalledWith(true);
+		// The agent's never-shown tab was shown once as a 1px sliver at the
+		// window's edge, then parked visible outside the window so it keeps drawing.
+		expect(views[1].setBounds).toHaveBeenCalledWith({ x: 799, y: 0, width: 1280, height: 720 });
+		expect(views[1].setVisible).toHaveBeenLastCalledWith(true);
+		expect(views[1].setBounds).toHaveBeenLastCalledWith({ x: -10_000, y: -10_000, width: 1280, height: 720 });
 		const ensured = (await invoke("browser:ensure", "sess-1")) as BrowserNavState;
 		emit("browser:setBounds", {
 			viewId: ensured.viewId,
@@ -4096,7 +4105,8 @@ describe("agent browser runtime", () => {
 		// The agent's selections never moved the panel off the person's tab.
 		expect(views[0].setVisible).toHaveBeenLastCalledWith(true);
 		expect(views[0].setBounds).toHaveBeenLastCalledWith({ x: 10, y: 20, width: 320, height: 240 });
-		expect(views[1].setVisible).not.toHaveBeenCalledWith(true);
+		expect(views[1].setVisible).toHaveBeenLastCalledWith(true);
+		expect(views[1].setBounds).toHaveBeenLastCalledWith({ x: -10_000, y: -10_000, width: 320, height: 240 });
 		await expect(host.execute("sess-1", "click", { ref: "e1" })).rejects.toMatchObject({
 			code: "STALE_REFERENCE",
 		});
@@ -4295,6 +4305,52 @@ describe("agent browser runtime", () => {
 		await expect(host.execute("sess-1", "click", { ref: "e1", human: true })).rejects.toMatchObject({
 			code: "BROWSER_PANEL_HIDDEN",
 		});
+	});
+
+	it("keeps the agent's background tab drawing offscreen until it comes to the front", async () => {
+		const { debuggerCommands, emit, host, invoke, views } = setupTabHost();
+		const { viewId } = (await invoke("browser:ensure", "sess-1")) as { viewId: string };
+		emit("browser:setBounds", { viewId, revision: 1, rect: { x: 10, y: 20, width: 320, height: 240 }, visible: true });
+		await host.execute("sess-1", "open", { url: "https://agent.example.test/" });
+		await invoke("browser:openTab", { viewId, url: "https://person.example.test/" });
+		(views[0].webContents as unknown as { debugger: { attach(version: string): void } }).debugger.attach("1.3");
+
+		await host.execute("sess-1", "get", { property: "url" });
+
+		// Visible, at the panel's size, outside the window, with a keepalive
+		// screencast so Chromium keeps drawing it.
+		expect(views[0].setVisible).toHaveBeenLastCalledWith(true);
+		expect(views[0].setBounds).toHaveBeenLastCalledWith({ x: -10_000, y: -10_000, width: 320, height: 240 });
+		expect(debuggerCommands).toContainEqual({
+			method: "Page.startScreencast",
+			params: expect.objectContaining({ maxWidth: 32, maxHeight: 32 }),
+		});
+		expect(debuggerCommands.some(({ method }) => method === "Page.stopScreencast")).toBe(false);
+
+		// Brought to the front, it draws in the panel: the keepalive stops.
+		await invoke("browser:selectTab", { viewId, tabId: "t1" });
+		expect(debuggerCommands.some(({ method }) => method === "Page.stopScreencast")).toBe(true);
+		expect(views[0].setBounds).toHaveBeenLastCalledWith({ x: 10, y: 20, width: 320, height: 240 });
+	});
+
+	it("parks the tab the agent left and keeps only its new tab drawing", async () => {
+		const { debuggerCommands, emit, host, invoke, views } = setupTabHost();
+		const { viewId } = (await invoke("browser:ensure", "sess-1")) as { viewId: string };
+		emit("browser:setBounds", { viewId, revision: 1, rect: { x: 10, y: 20, width: 320, height: 240 }, visible: true });
+		await host.execute("sess-1", "open", { url: "https://agent.example.test/" });
+		await invoke("browser:openTab", { viewId, url: "https://person.example.test/" });
+		(views[0].webContents as unknown as { debugger: { attach(version: string): void } }).debugger.attach("1.3");
+		await host.execute("sess-1", "get", { property: "url" });
+
+		await host.execute("sess-1", "tab-new", { url: "https://second-agent.example.test/" });
+
+		expect(debuggerCommands.some(({ method }) => method === "Page.stopScreencast")).toBe(true);
+		expect(views[0].setVisible).toHaveBeenLastCalledWith(false);
+		// The new tab was never on screen: shown for a moment as a 1px sliver
+		// at the window's edge, then parked visible outside the window.
+		expect(views[2].setBounds).toHaveBeenCalledWith({ x: 799, y: 0, width: 320, height: 240 });
+		expect(views[2].setVisible).toHaveBeenLastCalledWith(true);
+		expect(views[2].setBounds).toHaveBeenLastCalledWith({ x: -10_000, y: -10_000, width: 320, height: 240 });
 	});
 
 	it("emulates focus for the agent's tab while it works in the background", async () => {
@@ -6482,6 +6538,7 @@ describe("dispose after the window is destroyed", () => {
 			throw new Error("Object has been destroyed");
 		});
 		const host = createBrowserViewHost({
+		agentTabPrimeMs: 0,
 			mainWindow: {
 				get contentView() {
 					if (destroyed) throw new Error("Object has been destroyed");
@@ -6572,6 +6629,7 @@ describe("getLastFocusedPanelContents", () => {
 		const handlers = new Map<string, InvokeHandler>();
 		const record = (channel: string, fn: InvokeHandler) => handlers.set(channel, fn);
 		const host = createBrowserViewHost({
+		agentTabPrimeMs: 0,
 			mainWindow: {
 				contentView: { addChildView: () => undefined, removeChildView: () => undefined },
 				getContentBounds: () => ({ x: 0, y: 0, width: 800, height: 600 }),

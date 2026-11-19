@@ -183,7 +183,9 @@ new snapshot after switching tabs because element refs are invalidated at the
 tab boundary. The user can select or close these same tabs from the compact tab
 control in the Browser toolbar. If the user closes the agent's tab, the next
 agent command uses the tab in front and its `target` includes
-`retargeted: true`. `--human` pointer actions need the agent's tab in front.
+`retargeted: true`. While the user looks at another tab, the agent's tab keeps
+rendering out of sight, so screenshots, clicks, and typing work there as usual;
+`--human` pointer actions still need the agent's tab in front.
 If the native automation runtime cannot reconcile its selected target with
 that Orchestrator tab, the command fails before reading or mutating a page with
 `BROWSER_TARGET_MISMATCH`; it never falls through to another tab. Structured

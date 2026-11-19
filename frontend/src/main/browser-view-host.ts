@@ -590,6 +590,9 @@ export type BrowserViewHostOptions = {
   // Test hook: how long a tab's initial about:blank load may take before
   // awaiting callers get a typed failure instead of hanging forever.
   entryReadyTimeoutMs?: number;
+  // Test hook: how long a never-shown agent tab is put on screen (1px at the
+  // window edge) before it is parked offscreen. See keepAgentTabPainted.
+  agentTabPrimeMs?: number;
 };
 
 export type BrowserViewHost = {
@@ -671,6 +674,12 @@ type BrowserEntry = {
   // agent page after it is made.
   driver: () => TabDriver;
   ready: Promise<void>;
+  // Drawn on screen at least once. Chromium routes CDP input to a view only
+  // after that, so an agent tab that never was is shown briefly first.
+  painted?: boolean;
+  // Stops the keepalive screencast that keeps this tab drawing while the agent
+  // works on it parked offscreen (keepAgentTabPainted).
+  stopKeepalive?: () => void;
   state: BrowserNavState;
   // Set on a tab that shows the agent's own browser: the agent browser tab it
   // shows, for life ("" until its viewer first reports).
@@ -1031,6 +1040,17 @@ export function scaleBoundsForZoom(
 // entire command queue (#5369 wedge family). The default sits above the 55s
 // wait-action ceiling, so only a genuinely stuck load trips it.
 const DEFAULT_ENTRY_READY_TIMEOUT_MS = 60_000;
+const DEFAULT_AGENT_TAB_PRIME_MS = 300;
+// A screencast keeps Chromium drawing a view parked outside the window, so CDP
+// screenshots of it stay fresh. At this size and rate it delivers next to
+// nothing (no frames at all in the spike); it only has to be running.
+const AGENT_KEEPALIVE_SCREENCAST = {
+  format: "jpeg",
+  quality: 1,
+  maxWidth: 32,
+  maxHeight: 32,
+  everyNthFrame: 60,
+};
 
 const loadEntryReady = (
   view: { webContents: { loadURL: (url: string) => Promise<void> } },
@@ -1076,6 +1096,7 @@ export function createBrowserViewHost(
 ): BrowserViewHost {
   const entryReadyTimeoutMs =
     options.entryReadyTimeoutMs ?? DEFAULT_ENTRY_READY_TIMEOUT_MS;
+  const agentTabPrimeMs = options.agentTabPrimeMs ?? DEFAULT_AGENT_TAB_PRIME_MS;
   const entries = new Map<string, BrowserSessionEntry>();
   const historyFaviconCache = new WeakMap<
     Session,
@@ -1943,6 +1964,74 @@ export function createBrowserViewHost(
       setSiteBlock(session, entry, block);
     }, SITE_CHALLENGE_GRACE_MS);
     challenge.timer.unref?.();
+  };
+
+  // Starts the keepalive screencast on a parked agent tab. Best effort: it
+  // needs agent-browser's debugger attachment, and a page that refuses it
+  // only loses fresh screenshots (the capturePage fallback remains).
+  const startKeepalive = (entry: BrowserEntry): void => {
+    if (entry.stopKeepalive) return;
+    const debug = entry.view.webContents.debugger;
+    if (!debug?.isAttached()) return;
+    const listener = (_event: unknown, method: string, params: Record<string, unknown>) => {
+      if (method !== "Page.screencastFrame") return;
+      void debug.sendCommand("Page.screencastFrameAck", { sessionId: params.sessionId }).catch(() => undefined);
+    };
+    debug.on("message", listener);
+    const stop = () => {
+      if (entry.stopKeepalive !== stop) return;
+      entry.stopKeepalive = undefined;
+      debug.removeListener("message", listener);
+      if (debug.isAttached()) void debug.sendCommand("Page.stopScreencast").catch(() => undefined);
+    };
+    entry.stopKeepalive = stop;
+    void debug.sendCommand("Page.startScreencast", AGENT_KEEPALIVE_SCREENCAST).catch(stop);
+  };
+
+  // The agent's tab, when the person is not looking at it, stays drawing where
+  // they cannot see it: visible, at the panel's size, moved outside the window.
+  // Chromium draws nothing for a view outside its window (CDP screenshots time
+  // out), so a keepalive screencast keeps it drawing; and CDP clicks reach a
+  // view only once it has been on screen, so a tab that never was is first
+  // shown for a moment as a 1px sliver at the window's edge. Measured on
+  // Electron 44.7 / macOS (spike 7): screenshots, clicks, navigation and idle
+  // all work this way; without either step they do not.
+  const keepAgentTabPainted = async (
+    session: BrowserSessionEntry,
+    entry: BrowserEntry,
+  ): Promise<void> => {
+    // Only one agent tab draws offscreen: one it left goes back to parked.
+    for (const other of session.tabs.values()) {
+      if (other === entry || !other.stopKeepalive) continue;
+      other.stopKeepalive();
+      if (other.tabId !== session.activeTabId)
+        applyBrowserViewBounds(other.view, OFFSCREEN_BOUNDS, false);
+    }
+    if (entry.agentTab !== undefined || isTabOnScreen(session, entry)) return;
+    // The live stream already keeps the tab in front drawing offscreen.
+    if (session.live && entry.tabId === session.activeTabId) return;
+    const size = session.visible && session.bounds.width > 0 && session.bounds.height > 0
+      ? session.bounds
+      : session.lastVisibleSize ?? OFFSCREEN_BOUNDS;
+    const parked = {
+      x: OFFSCREEN_BOUNDS.x,
+      y: OFFSCREEN_BOUNDS.y,
+      width: Math.round(size.width),
+      height: Math.round(size.height),
+    };
+    // Show before moving, so Chromium takes the new bounds.
+    entry.view.setVisible?.(true);
+    if (!entry.painted) {
+      const window = options.mainWindow.getContentBounds();
+      entry.view.setBounds({ x: window.width - 1, y: 0, width: parked.width, height: parked.height });
+      if (agentTabPrimeMs > 0)
+        await new Promise((resolve) => setTimeout(resolve, agentTabPrimeMs));
+      entry.painted = true;
+      // The person may have brought it forward, or closed it, meanwhile.
+      if (session.tabs.get(entry.tabId) !== entry || isTabOnScreen(session, entry)) return;
+    }
+    entry.view.setBounds(parked);
+    startKeepalive(entry);
   };
 
   const ensureNativeActiveTab = async (
@@ -2968,11 +3057,14 @@ export function createBrowserViewHost(
       applyBrowserViewBounds(entry.view, session.bounds, false);
       return;
     }
-    applyBrowserViewBounds(
-      entry.view,
-      session.bounds,
-      session.bounds.width > 0 && session.bounds.height > 0,
-    );
+    const drawn = session.bounds.width > 0 && session.bounds.height > 0;
+    applyBrowserViewBounds(entry.view, session.bounds, drawn);
+    if (drawn) {
+      entry.painted = true;
+      // In the panel it draws anyway; the live stream may run its own
+      // screencast on this tab, which a keepalive would reconfigure.
+      entry.stopKeepalive?.();
+    }
   }
 
   const isRendererOwned = (
@@ -3312,6 +3404,7 @@ export function createBrowserViewHost(
 
   const destroyTabView = (entry: BrowserEntry): void => {
     clearSiteChallenge(entry);
+    entry.stopKeepalive?.();
     applyBrowserViewBounds(entry.view, OFFSCREEN_BOUNDS, false);
     options.mainWindow.contentView.removeChildView?.(entry.view);
     if (entry.view.webContents.debugger?.isAttached()) {
@@ -4685,6 +4778,7 @@ export function createBrowserViewHost(
               const targetEntry = agentEntry(session);
               const targetTabId = targetEntry.tabId;
               await targetEntry.ready;
+              await keepAgentTabPainted(session, targetEntry);
               await beforeDispatch?.(targetEntry);
               // An approved action may only land on the tab, document, and (for
               // act) element the user approved; checked in the same queued
@@ -4808,6 +4902,10 @@ export function createBrowserViewHost(
                 session.snapshotDeltaBaseline = undefined;
               if (nativeAction.startsWith("tab-"))
                 await ensureNativeActiveTab(session, nativeSignal, true);
+              // A tab the agent just moved to gets drawing now, not on its next
+              // command: a new one is shown for a moment first.
+              if (nativeAction === "tab-new" || nativeAction === "tab-select")
+                await keepAgentTabPainted(session, agentEntry(session));
               const targetAfterAction = session.tabs.get(targetTabId);
               return {
                 ...result,
@@ -5325,6 +5423,7 @@ export function createBrowserViewHost(
                 await ensureNativeActiveTab(session, signal);
                 const targetEntry = agentEntry(session);
                 await targetEntry.ready;
+                await keepAgentTabPainted(session, targetEntry);
                 await refuseIfCodeOnScreen(targetEntry);
                 try {
                   const result = await options.agentBrowserRuntime!.screenshot(
@@ -5725,6 +5824,20 @@ function activeEntry(session: BrowserSessionEntry): BrowserEntry {
       "Active browser tab is unavailable",
     );
   return entry;
+}
+
+// Drawn in the Browser panel: the panel is visible with a real size and this
+// is its tab in front. Every other tab is parked outside the window.
+function isTabOnScreen(
+  session: Pick<BrowserSessionEntry, "visible" | "activeTabId" | "bounds">,
+  entry: Pick<BrowserEntry, "tabId">,
+): boolean {
+  return (
+    session.visible &&
+    session.activeTabId === entry.tabId &&
+    session.bounds.width > 0 &&
+    session.bounds.height > 0
+  );
 }
 
 // The tab ID agent commands act on: the agent's own tab while it is open, else
