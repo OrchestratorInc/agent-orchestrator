@@ -977,3 +977,33 @@ func (s *Store) SetPRReviewOnly(ctx context.Context, prURL string, sessionID dom
 	}
 	return n > 0, nil
 }
+
+// NoInjectAOReviewPRURLs returns every URL the store knows pr under: its own,
+// the row a weak alias of it points to, and the rows its provider identity
+// matches. A --no-inject lookup made before the write that moves review runs
+// to pr.URL (a repo rename or transfer) still finds them (#6810).
+func (s *Store) NoInjectAOReviewPRURLs(ctx context.Context, pr domain.PullRequest) ([]string, error) {
+	pr = normalizedPRIdentity(pr)
+	urls := []string{}
+	seen := map[string]bool{}
+	add := func(url string) {
+		if url != "" && !seen[url] {
+			seen[url] = true
+			urls = append(urls, url)
+		}
+	}
+	add(pr.URL)
+	resolved, err := resolveWeakPRAlias(ctx, s.qr, pr)
+	if err != nil {
+		return nil, fmt.Errorf("resolve pr identity for %s: %w", pr.URL, err)
+	}
+	add(resolved.URL)
+	candidates, err := findPRIdentityCandidates(ctx, s.qr, resolved)
+	if err != nil {
+		return nil, fmt.Errorf("resolve pr identity for %s: %w", pr.URL, err)
+	}
+	for url := range candidates {
+		add(url)
+	}
+	return urls, nil
+}

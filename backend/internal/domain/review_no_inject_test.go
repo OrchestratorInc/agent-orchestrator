@@ -1,6 +1,7 @@
 package domain
 
 import (
+	"context"
 	"testing"
 	"time"
 )
@@ -96,5 +97,48 @@ func TestSuppressNoInjectWindowRowsUnknownTimeMatches(t *testing.T) {
 	}
 	if comments[0].AutoInjectReview || comments[1].AutoInjectReview || !comments[2].AutoInjectReview {
 		t.Fatalf("comments = %+v, want the account's comments without a provider time suppressed", comments)
+	}
+}
+
+// aliasSource lists --no-inject passes stored under a PR's earlier URL.
+type aliasSource struct {
+	urls    []string
+	windows map[string][]NoInjectReviewWindow
+	ids     map[string]map[string]bool
+}
+
+func (s aliasSource) NoInjectAOReviewPRURLs(context.Context, PullRequest) ([]string, error) {
+	return s.urls, nil
+}
+
+func (s aliasSource) NoInjectAOReviewIDs(_ context.Context, url string) (map[string]bool, error) {
+	return s.ids[url], nil
+}
+
+func (s aliasSource) NoInjectAOReviewWindows(_ context.Context, url string) ([]NoInjectReviewWindow, error) {
+	return s.windows[url], nil
+}
+
+// #6810: passes are looked up under every URL the PR is stored under, so a
+// renamed repo's new URL still finds the pass and review id recorded on the
+// old one.
+func TestSuppressNoInjectAOReviewsFollowsPRAliases(t *testing.T) {
+	start := time.Date(2026, 11, 15, 10, 0, 0, 0, time.UTC)
+	src := aliasSource{
+		urls:    []string{"new", "old"},
+		windows: map[string][]NoInjectReviewWindow{"old": {{Start: start}}},
+		ids:     map[string]map[string]bool{"old": {"987": true}},
+	}
+	comments := []PullRequestComment{
+		{ID: "by-id", ReviewID: "987", Author: "bot", CreatedAt: start.Add(-time.Hour), AutoInjectReview: true},
+		{ID: "by-window", Author: "me", CreatedAt: start.Add(time.Minute), AutoInjectReview: true},
+		{ID: "other", Author: "you", CreatedAt: start.Add(time.Minute), AutoInjectReview: true},
+	}
+	login := func(context.Context) (string, error) { return "me", nil }
+	if err := SuppressNoInjectAOReviews(context.Background(), src, login, PullRequest{URL: "new"}, time.Time{}, nil, comments); err != nil {
+		t.Fatal(err)
+	}
+	if comments[0].AutoInjectReview || comments[1].AutoInjectReview || !comments[2].AutoInjectReview {
+		t.Fatalf("comments = %+v, want the old URL's pass and id to apply", comments)
 	}
 }

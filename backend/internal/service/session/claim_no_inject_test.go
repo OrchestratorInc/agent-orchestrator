@@ -157,3 +157,7 @@ func TestClaimPRUnknownPostingTimeStaysNonInjecting(t *testing.T) {
 		t.Fatalf("comments = %+v, want the comment without a provider time stored non-injecting", claimer.gotComments)
 	}
 }
+
+func (c *noInjectClaimer) NoInjectAOReviewPRURLs(_ context.Context, pr domain.PullRequest) ([]string, error) {
+	return []string{pr.URL}, nil
+}

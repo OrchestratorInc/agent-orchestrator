@@ -325,3 +325,67 @@ func TestNoInjectKeepsNonWorkerRequester(t *testing.T) {
 		}
 	}
 }
+
+// #6810: on the first poll after a repo rename or transfer the observation has
+// the new URL while the --no-inject run is still stored under the old one; the
+// write that moves it comes after the lookup. The lookup follows the PR's
+// identity, so a comment that first observation brings in stays quiet.
+func TestNoInjectLookupFollowsRenamedPR(t *testing.T) {
+	s := newTestStore(t)
+	ctx := context.Background()
+	seedProject(t, s, "mer")
+	r, err := s.CreateSession(ctx, sampleRecord("mer"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	now := time.Now().UTC().Truncate(time.Second)
+	oldURL := "https://github.com/acme/repo/pull/9"
+	newURL := "https://github.com/acme-new/repo/pull/9"
+	identity := domain.PullRequest{SessionID: r.ID, Number: 9, Provider: "github", Host: "github.com", ProviderID: "PR_kwDO9", HeadSHA: "h", UpdatedAt: now, ObservedAt: now}
+	oldPR := identity
+	oldPR.URL = oldURL
+	if err := s.WriteSCMObservation(ctx, oldPR, nil, nil, nil, nil, ports.ReviewWritePreserve); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.UpsertReview(ctx, domain.Review{ID: "rev", SessionID: r.ID, ProjectID: "mer", Harness: "claude-code", PRURL: oldURL, CreatedAt: now, UpdatedAt: now}); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.InsertReviewRun(ctx, domain.ReviewRun{ID: "quiet", ReviewID: "rev", SessionID: r.ID, Harness: "claude-code", PRURL: oldURL, TargetSHA: "h", Status: domain.ReviewRunRunning, CreatedAt: now.Add(-time.Minute), NoInject: true}); err != nil {
+		t.Fatal(err)
+	}
+
+	newPR := identity
+	newPR.URL = newURL
+	newPR.ReviewObservedAt = now
+	threads := []domain.PullRequestReviewThread{{ThreadID: "t1", Path: "a.go", Line: 1, UpdatedAt: now}, {ThreadID: "t2", Path: "b.go", Line: 2, UpdatedAt: now}}
+	comments := []domain.PullRequestComment{
+		{ID: "c1", ThreadID: "t1", Author: "me", File: "a.go", Line: 1, Body: "fix", CreatedAt: now, AutoInjectReview: true},
+		{ID: "c2", ThreadID: "t2", Author: "you", File: "b.go", Line: 2, Body: "fix", CreatedAt: now, AutoInjectReview: true},
+	}
+	postingLogin := func(context.Context) (string, error) { return "me", nil }
+	if err := domain.SuppressNoInjectAOReviews(ctx, s, postingLogin, newPR, time.Time{}, nil, comments); err != nil {
+		t.Fatal(err)
+	}
+	if comments[0].AutoInjectReview || !comments[1].AutoInjectReview {
+		t.Fatalf("comments = %+v, want the --no-inject pass's comment suppressed before the write", comments)
+	}
+	if err := s.WriteSCMObservation(ctx, newPR, nil, nil, threads, comments, ports.ReviewWriteReplace); err != nil {
+		t.Fatal(err)
+	}
+	stored, err := s.ListPRComments(ctx, newURL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(stored) != 2 {
+		t.Fatalf("stored = %+v, want both comments under the new URL", stored)
+	}
+	for _, c := range stored {
+		if want := c.ID != "c1"; c.AutoInjectReview != want {
+			t.Fatalf("comment %s AutoInjectReview = %v, want %v", c.ID, c.AutoInjectReview, want)
+		}
+	}
+	// The write moved the run, so later lookups find it at the new URL.
+	if windows, err := s.NoInjectAOReviewWindows(ctx, newURL); err != nil || len(windows) != 1 {
+		t.Fatalf("windows at new URL = %+v err=%v, want the moved run", windows, err)
+	}
+}

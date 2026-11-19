@@ -100,14 +100,17 @@ func SuppressNoInjectWindowRows(windows []NoInjectReviewWindow, login string, un
 }
 
 // NoInjectReviewSource lists the --no-inject AO review passes on a PR: the
-// provider review ids they recorded and when each ran.
+// provider review ids they recorded and when each ran. NoInjectAOReviewPRURLs
+// lists every URL the PR is stored under, since a repo rename or transfer
+// shows the new URL before the write that moves its review runs there.
 type NoInjectReviewSource interface {
+	NoInjectAOReviewPRURLs(ctx context.Context, pr PullRequest) ([]string, error)
 	NoInjectAOReviewIDs(ctx context.Context, prURL string) (map[string]bool, error)
 	NoInjectAOReviewWindows(ctx context.Context, prURL string) ([]NoInjectReviewWindow, error)
 }
 
 // SuppressNoInjectAOReviews clears AutoInjectReview on the reviews and comments
-// that a --no-inject AO review pass on prURL posted, before they are stored:
+// that a --no-inject AO review pass on pr posted, before they are stored:
 // stored rows keep the value they were written with, so every writer of
 // observed review rows must call it (#6810). Rows are matched by the review id
 // a pass recorded, and by what postingLogin's account wrote while a pass ran,
@@ -116,24 +119,40 @@ type NoInjectReviewSource interface {
 // error or empty login mutes every author's rows within the window, so PR
 // updates can still be stored. A nil postingLogin matches by id only.
 // unknownAt is the time the writer filled in for rows the provider sent
-// without one (see SuppressNoInjectWindowRows).
-func SuppressNoInjectAOReviews(ctx context.Context, src NoInjectReviewSource, postingLogin func(context.Context) (string, error), prURL string, unknownAt time.Time, reviews []PullRequestReview, comments []PullRequestComment) error {
-	if src == nil || prURL == "" || (len(reviews) == 0 && len(comments) == 0) {
+// without one (see SuppressNoInjectWindowRows). Passes are looked up under
+// every URL pr is stored under, not just pr.URL.
+func SuppressNoInjectAOReviews(ctx context.Context, src NoInjectReviewSource, postingLogin func(context.Context) (string, error), pr PullRequest, unknownAt time.Time, reviews []PullRequestReview, comments []PullRequestComment) error {
+	if src == nil || pr.URL == "" || (len(reviews) == 0 && len(comments) == 0) {
 		return nil
 	}
-	ids, err := src.NoInjectAOReviewIDs(ctx, prURL)
+	urls, err := src.NoInjectAOReviewPRURLs(ctx, pr)
 	if err != nil {
 		return err
+	}
+	ids := map[string]bool{}
+	var windows []NoInjectReviewWindow
+	for _, url := range urls {
+		found, err := src.NoInjectAOReviewIDs(ctx, url)
+		if err != nil {
+			return err
+		}
+		for id := range found {
+			ids[id] = true
+		}
+		if postingLogin == nil {
+			continue
+		}
+		w, err := src.NoInjectAOReviewWindows(ctx, url)
+		if err != nil {
+			return err
+		}
+		windows = append(windows, w...)
 	}
 	if len(ids) > 0 {
 		SuppressNoInjectReviewRows(ids, reviews, comments)
 	}
-	if postingLogin == nil {
+	if postingLogin == nil || len(windows) == 0 {
 		return nil
-	}
-	windows, err := src.NoInjectAOReviewWindows(ctx, prURL)
-	if err != nil || len(windows) == 0 {
-		return err
 	}
 	login, err := postingLogin(ctx)
 	if err != nil {

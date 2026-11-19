@@ -742,7 +742,7 @@ func (o *Observer) Poll(ctx context.Context) (pollErr error) {
 			}
 			pr, checks, reviews, threads, comments = domainFromObservation(subj.session.ID, subj.session, prepared, local, pendingOpts, now)
 		}
-		if err := suppressNoInjectAOReviews(ctx, o.store, o.scopedIdentityResolver, subj.repo, pr.URL, now, reviews, comments); err != nil {
+		if err := suppressNoInjectAOReviews(ctx, o.store, o.scopedIdentityResolver, subj.repo, pr, now, reviews, comments); err != nil {
 			o.logger.Warn("scm observer: load no-inject AO reviews failed", "session", subj.session.ID, "pr", pr.URL, "err", err)
 			markRepoRefreshFailed(subj.repo)
 			continue

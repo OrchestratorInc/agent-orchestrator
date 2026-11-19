@@ -161,7 +161,7 @@ func (s *Service) ClaimPR(ctx context.Context, id domain.SessionID, ref string, 
 		// Rows snapshot the session's auto-inject setting and keep it once
 		// stored; a --no-inject AO review on this PR must still never be
 		// delivered, so match its rows the same way the SCM observer does.
-		if err := domain.SuppressNoInjectAOReviews(ctx, src, s.claimPostingLogin(repo, prURL), pr.URL, now, reviews, comments); err != nil {
+		if err := domain.SuppressNoInjectAOReviews(ctx, src, s.claimPostingLogin(repo, prURL), pr, now, reviews, comments); err != nil {
 			s.recordClaimed(ctx, id, pr, actionStatusForError(err), err)
 			return ClaimPRResult{}, err
 		}
