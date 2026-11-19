@@ -186,8 +186,9 @@ export type Automation =
 	| { kind: "gitAction"; action: GitAction; base?: string }
 	| { kind: "browserFeedback"; annotations: BrowserFeedback }
 	| { kind: "ciFailing"; pr: PullRequestRef; checks: FailedCheck[] }
-	| { kind: "reviewComments"; pr: PullRequestRef; comments: ReviewComment[] }
-	| { kind: "changesRequested"; pr: PullRequestRef; author?: string; body: string }
+	// `at` is when the event happened on the forge; absent in messages from before AO wrote it.
+	| { kind: "reviewComments"; pr: PullRequestRef; comments: ReviewComment[]; at?: string }
+	| { kind: "changesRequested"; pr: PullRequestRef; author?: string; body: string; at?: string }
 	| { kind: "mergeConflict"; pr: PullRequestRef }
 	| { kind: "notice"; notice: AutomationNotice };
 
@@ -196,6 +197,14 @@ const PR_IDENTITY = /PR #(\d+)(?: ("(?:[^"\\\n]|\\.)*"))?(?: \([^\n]*? → [^\n]
 const PR_LINE = /\nPR: (\S+)\s*$/;
 // A GitHub or GitLab login, or the daemon's stand-in. Never markup.
 const LOGIN = String.raw`[\w.-]+(?:\[bot\])?|unknown reviewer`;
+// The forge time lifecycle ends a nudge's first line with, in providerEventTime's
+// UTC RFC 3339. AO writes it after the PR identity, whose title is quoted and
+// whose branch names hold no spaces, so a title cannot end the line with one.
+const EVENT_TIME = String.raw`(\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z)\.$`;
+
+function firstLineTime(text: string, lead: string): string | undefined {
+	return new RegExp(String.raw` ${lead} ${EVENT_TIME}`).exec(text.split("\n", 1)[0]!)?.[1];
+}
 
 function pullRequest(text: string, url?: string): PullRequestRef | undefined {
 	const match = PR_IDENTITY.exec(text.split("\n", 1)[0]!);
@@ -271,13 +280,13 @@ function readPullRequestNudge(text: string): Automation | null {
 	if (announced) {
 		const pr = pullRequest(text, prURL);
 		const comments = pr ? reviewComments(text, Number(announced[1])) : null;
-		return pr && comments ? { kind: "reviewComments", pr, comments } : null;
+		return pr && comments ? { kind: "reviewComments", pr, comments, at: firstLineTime(text, "Newest comment posted at") } : null;
 	}
 	const reviewer = new RegExp(String.raw`^A changes-requested review from @(${LOGIN}) is on `).exec(text);
 	if (reviewer) {
 		const review = changesRequested(text.replace(PR_LINE, ""));
 		const pr = review ? pullRequest(text, review.url ?? prURL) : undefined;
-		return pr && review ? { kind: "changesRequested", pr, author: reviewer[1], body: review.body } : null;
+		return pr && review ? { kind: "changesRequested", pr, author: reviewer[1], body: review.body, at: firstLineTime(text, "Submitted at") } : null;
 	}
 	// AO's own reviewer, before its findings became GitHub reviews; only old history carries these.
 	if (text.startsWith("[AO reviewer] ")) {
@@ -450,9 +459,9 @@ export const GIT_ACTION_LABELS: Record<GitAction, string> = {
 };
 
 export const NOTICE_LABELS: Record<AutomationNotice, string> = {
-	orchestratorReplaced: "AO is replacing this orchestrator. A fresh one takes over in a new workspace.",
+	orchestratorReplaced: "The orchestrator agent is being replaced. A fresh one takes over in a new workspace.",
 	contextCarried: "Context carried over from the previous agent",
-	reviewTask: "AO gave this reviewer its review task",
+	reviewTask: "Review task assigned.",
 };
 
 /**

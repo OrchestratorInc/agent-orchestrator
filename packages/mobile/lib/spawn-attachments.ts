@@ -1,3 +1,4 @@
+import type { ComposerImageAsset } from "./chat/composerImages";
 import { sniffImageMimeType } from "./imageMime";
 
 export type SpawnAttachment = {
@@ -116,6 +117,49 @@ export function photoPickerAttachment(
 		previewUri: asset.uri,
 		readData: () => file.base64(),
 	};
+}
+
+/**
+ * Images pasted into the task's field (see `useImagePaste`), as picks. The
+ * native side sends the bytes inline. It leaves out an image over its 10 MB
+ * limit, sending only the size, and one it could not read, sending a size of 0;
+ * both are dropped here and named in `error` instead of reaching the size
+ * checks. `start` numbers the names after what is already attached.
+ */
+export function pastedSpawnAttachments(assets: readonly ComposerImageAsset[], start = 0): { picks: PickedSpawnAttachment[]; error?: string } {
+	const picks: PickedSpawnAttachment[] = [];
+	const errors: string[] = [];
+	assets.forEach((asset, index) => {
+		const data = asset.base64 ?? "";
+		const mimeType = (data && sniffImageMimeType(data)) || asset.mimeType || "image/png";
+		const name = `pasted-image-${start + index + 1}.${mimeType.split("/")[1] || "png"}`;
+		if (!data) {
+			errors.push(asset.fileSize ? `${name} must be under 10 MB.` : `Could not read ${name}.`);
+			return;
+		}
+		picks.push({
+			name,
+			mimeType,
+			bytes: asset.fileSize ?? Math.floor(data.length * 0.75),
+			previewUri: `data:${mimeType};base64,${data}`,
+			readData: async () => data,
+		});
+	});
+	return { picks, error: errors.length ? errors.join(" ") : undefined };
+}
+
+/**
+ * Joins what an attach left out into one message, skipping any part the
+ * message already says: a paste native cut at 8 images and a task that filled
+ * up at 8 both say "You can attach up to 8 files."
+ */
+export function joinAttachmentErrors(...parts: readonly (string | undefined)[]): string | undefined {
+	let message = "";
+	for (const part of parts) {
+		if (!part || message.includes(part)) continue;
+		message = message ? `${message} ${part}` : part;
+	}
+	return message || undefined;
 }
 
 /** Images the sheet can draw: a thumbnail in the row, full screen on tap. */

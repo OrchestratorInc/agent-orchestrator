@@ -46,7 +46,7 @@ export async function startMacUpdateProgress(options: {
 	child.once("exit", () => { exited = true; });
 	child.on("error", (error) => { processError = error; });
 	const assertAlive = () => {
-		if (exited || processError) throw new Error("The update progress window closed before installation. AO has stayed open. Please retry.");
+		if (exited || processError) throw new Error("The update progress window closed before installation. Orchestrator has stayed open. Please retry.");
 	};
 	await new Promise<void>((resolve, reject) => {
 		let output = "";
@@ -64,12 +64,12 @@ export async function startMacUpdateProgress(options: {
 			} else resolve();
 		};
 		const onError = (error: Error) => finish(error);
-		const onExit = () => finish(new Error("The update progress window could not start. AO has stayed open."));
+		const onExit = () => finish(new Error("The update progress window could not start. Orchestrator has stayed open."));
 		const onData = (chunk: Buffer) => {
 			output += chunk.toString();
 			if (output.includes("READY\n")) finish();
 		};
-		const timer = setTimeout(() => finish(new Error("The update progress window did not respond. AO has stayed open.")), 10_000);
+		const timer = setTimeout(() => finish(new Error("The update progress window did not respond. Orchestrator has stayed open.")), 10_000);
 		child.once("error", onError);
 		child.once("exit", onExit);
 		child.stdout?.on("data", onData);

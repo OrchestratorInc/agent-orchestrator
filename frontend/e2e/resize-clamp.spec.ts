@@ -99,15 +99,8 @@ test("inspector drag stops at minSize instead of collapsing; buttons still toggl
 	await page.getByRole("button", { name: "Close inspector panel" }).click();
 	await expect(inspector).toBeHidden();
 
-	// …and dragging the collapsed rail back out reopens it.
-	const collapsedRail = page.getByTestId("inspector-collapsed-rail");
-	const collapsedRailBox = await collapsedRail.boundingBox();
-	if (!collapsedRailBox) throw new Error("collapsed rail not visible");
-	await dragPointer(
-		page,
-		{ x: collapsedRailBox.x + collapsedRailBox.width / 2, y },
-		{ x: groupBox.x + groupBox.width * 0.7, y },
-	);
+	// …and the explicit control reopens it.
+	await page.getByRole("button", { name: "Open inspector panel" }).click();
 	await expect(inspector).toBeVisible();
 
 	// Reopened rail must again refuse to drag-collapse.

@@ -5,7 +5,7 @@ import { indentUnit, syntaxHighlighting, defaultHighlightStyle } from "@codemirr
 import { searchKeymap } from "@codemirror/search";
 import { EditorState } from "@codemirror/state";
 import { drawSelection, EditorView, highlightActiveLine, keymap, lineNumbers } from "@codemirror/view";
-import { Bold, Heading1, Heading2, Heading3, Heading4, Heading5, Image, Italic, Link, List, ListChecks, ListOrdered, MoreHorizontal, Pilcrow, Quote, Strikethrough } from "lucide-react";
+import { Bold, Heading1, Heading2, Heading3, Heading4, Heading5, Image, Italic, Link, List, ListChecks, ListOrdered, MoreHorizontal, Pilcrow, Quote, Strikethrough } from "@/components/app-icons";
 import { useCallback, useEffect, useRef } from "react";
 import { useTranslation } from "react-i18next";
 import { Button } from "./ui/button";
@@ -120,7 +120,7 @@ export function MarkdownEditor({ value, onChange, filePath }: { value: string; o
 		dispatchText(text, from, to, { anchor: from + 2, head: from + 10 });
 	}, [dispatchText]);
 	const action = (label: string, icon: React.ReactNode, onClick: () => void) => (
-		<Button aria-label={label} className="text-muted-foreground hover:text-foreground" onMouseDown={(event) => event.preventDefault()} onClick={onClick} size="icon-sm" type="button" variant="ghost">{icon}</Button>
+		<Button aria-label={label} onMouseDown={(event) => event.preventDefault()} onClick={onClick} size="icon-sm" type="button" variant="quiet">{icon}</Button>
 	);
 	return (
 		<div className="flex h-full min-h-64 flex-col">

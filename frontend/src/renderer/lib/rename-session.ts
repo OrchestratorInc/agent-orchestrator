@@ -1,5 +1,6 @@
+import { apiErrorException } from "./api-error-exception";
 import type { QueryClient } from "@tanstack/react-query";
-import { apiClient, apiErrorMessage } from "./api-client";
+import { apiClient } from "./api-client";
 import { clientForSessionHost } from "./host-clients";
 import type { CloudCpSession } from "./cloud-cp";
 import { createRendererCloudCpClient } from "./cloud-cp/renderer-client";
@@ -16,7 +17,7 @@ export async function renameSession(sessionId: string, displayName: string, host
 	});
 
 	if (error) {
-		throw new Error(apiErrorMessage(error, `Failed to rename session${response ? ` (${response.status})` : ""}`));
+		throw apiErrorException(error, `Failed to rename session${response ? ` (${response.status})` : ""}`);
 	}
 }
 

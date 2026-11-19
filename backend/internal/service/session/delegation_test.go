@@ -175,7 +175,7 @@ func TestDelegateTaskEmitsSpawnTelemetryOnce(t *testing.T) {
 		t.Fatalf("events = %#v, want one spawned", sink.events)
 	}
 	ev := sink.events[0]
-	if ev.Name != "ao.session.spawned" || ev.SessionID == nil || *ev.SessionID != "ao-2" || ev.Payload["kind"] != "worker" || ev.Payload["harness"] != "codex" {
+	if ev.Name != "ao.sessions.spawned" || ev.SessionID == nil || *ev.SessionID != "ao-2" || ev.Payload["kind"] != "worker" || ev.Payload["harness"] != "codex" {
 		t.Fatalf("spawned event = %#v", ev)
 	}
 
@@ -184,7 +184,7 @@ func TestDelegateTaskEmitsSpawnTelemetryOnce(t *testing.T) {
 	if _, err := svc.DelegateTask(context.Background(), DelegateTaskInput{ProjectID: "ao", RequestedAgent: domain.HarnessCodex}); err == nil {
 		t.Fatal("DelegateTask should fail")
 	}
-	if len(sink.events) != 1 || sink.events[0].Name != "ao.session.spawn_failed" || sink.events[0].Payload["harness"] != "codex" {
+	if len(sink.events) != 1 || sink.events[0].Name != "ao.sessions.spawn_failed" || sink.events[0].Payload["harness"] != "codex" {
 		t.Fatalf("events = %#v, want one spawn_failed", sink.events)
 	}
 }
@@ -199,7 +199,7 @@ func TestDelegateTaskEmitsFirstSessionOnboarding(t *testing.T) {
 	if _, err := svc.DelegateTask(context.Background(), DelegateTaskInput{ProjectID: "ao", TaskPreparation: "ao-1"}); err != nil {
 		t.Fatalf("DelegateTask: %v", err)
 	}
-	if len(sink.events) != 2 || sink.events[0].Name != "ao.session.spawned" || sink.events[1].Name != "ao.onboarding.first_session_spawned" {
+	if len(sink.events) != 2 || sink.events[0].Name != "ao.sessions.spawned" || sink.events[1].Name != "ao.sessions.first_spawned" {
 		t.Fatalf("events = %#v, want spawned + first_session", sink.events)
 	}
 }
