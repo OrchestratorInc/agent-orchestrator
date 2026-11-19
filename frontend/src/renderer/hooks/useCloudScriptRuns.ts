@@ -1,6 +1,7 @@
 import { hashKey, useQuery, useQueryClient, type QueryClient } from "@tanstack/react-query";
 import { useCallback, useEffect, useMemo, useRef, useSyncExternalStore } from "react";
 import { CloudCpError, type CloudCpClientEvent } from "../lib/cloud-cp";
+import { cloudChatHistoryPartial } from "../lib/cloud-chat-history";
 import { cloudSessionScriptsEnded, groupScriptRuns, mergeScriptStepEvents, SCRIPT_RUN_END_EVENTS, SCRIPT_STEP_EVENT, type ScriptRun } from "../lib/cloud-script-runs";
 import { useCloudCp } from "./useCloudCp";
 import { useCloudSessionEventListener } from "./useCloudSessionEvents";
@@ -94,7 +95,8 @@ function cloudSessionDeleting(lifecycle: CloudScriptRunsLifecycle | undefined): 
  * Setup and Cleanup runs for a Cloud session, oldest first.
  *
  * Reads, in order of preference: the chat surface's event list when it is
- * loaded or being loaded (it already refreshes while the chat is open), then the script-step
+ * loaded or being loaded and holds the session from its start (it already
+ * refreshes while the chat is open), then the script-step
  * cache the startup loader fills from its live stream. Otherwise it reads the
  * session's step events: only those (the `types` filter) where the control
  * plane supports it, every event where it does not, and on a later read only
@@ -130,7 +132,8 @@ export function useCloudScriptRuns(
 			const known = queryClient.getQueryData<CloudCpClientEvent[]>(cloudScriptStepsQueryKey(orgId!, sessionId!)) ?? [];
 			const chatKey = cloudChatEventsQueryKey(orgId!, sessionId!);
 			const chat = queryClient.getQueryData<CloudCpClientEvent[]>(chatKey) ?? await chatEventsInFlight(queryClient, chatKey, signal);
-			if (chat) return mergeScriptStepEvents(known, chat);
+			// A chat that loaded only its newest events lacks the older runs: read them here.
+			if (chat && !cloudChatHistoryPartial(queryClient, orgId!, sessionId!)) return mergeScriptStepEvents(known, chat);
 			// Every writer of the cache read the session from its start, so
 			// nothing it lacks precedes its newest event.
 			let after = known.at(-1)?.sequence ?? 0;

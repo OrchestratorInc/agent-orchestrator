@@ -28,8 +28,8 @@ type Store interface {
 	SetHarnessDefault(ctx context.Context, agent domain.AgentHarness, value domain.HarnessDefault, now time.Time) error
 	SetVersionRefresh(ctx context.Context, enabled bool, now time.Time) error
 	SetComputerUse(ctx context.Context, enabled bool, now time.Time) error
-	SetCardSummaries(ctx context.Context, enabled bool, now time.Time) error
 	SetSessionRetentionDays(ctx context.Context, days int, now time.Time) error
+	SetAccountHandoff(ctx context.Context, enabled bool, now time.Time) error
 }
 
 // Snapshot is the current preference set.
@@ -47,9 +47,11 @@ type Snapshot struct {
 	// released is kept before the daemon deletes it (Settings, General). 0, the
 	// default, keeps it.
 	SessionRetentionDays int
+	AccountHandoff       bool
 	// CardSummaries asks new workers to keep a one-line summary on their
-	// kanban card, and shows it on the board. Off by default; the desktop app
-	// turns it on with Developer mode.
+	// kanban card. It lives in memory and is off on every daemon start: the
+	// desktop app turns it on while Developer Mode and its Card summaries
+	// toggle are both on.
 	CardSummaries bool
 	UpdatedAt     time.Time
 }
@@ -106,6 +108,7 @@ type Service struct {
 	offering        Offering
 	now             func() time.Time
 	chatHibernation atomic.Bool
+	cardSummaries   atomic.Bool
 	// versionRefresh caches the durable toggle: 0 unread, 1 on, 2 off.
 	versionRefresh atomic.Int32
 	// cuaInstalled reports whether Cua Driver is installed; nil skips the check.
@@ -138,10 +141,25 @@ func (s *Service) Offering() Offering {
 func (s *Service) Get(ctx context.Context) (Snapshot, error) {
 	snapshot, err := s.store.GetAppSettings(ctx)
 	snapshot.ChatHibernationEnabled = s.chatHibernation.Load()
+	snapshot.CardSummaries = s.cardSummaries.Load()
 	if err == nil {
 		s.cacheVersionRefresh(snapshot.VersionRefresh)
 	}
 	return snapshot, err
+}
+
+// AccountHandoffEnabled reports the "Move to another account at a usage limit" setting.
+func (s *Service) AccountHandoffEnabled(ctx context.Context) bool {
+	snapshot, err := s.store.GetAppSettings(ctx)
+	return err == nil && snapshot.AccountHandoff
+}
+
+// SetAccountHandoff turns the usage-limit account handoff on or off.
+func (s *Service) SetAccountHandoff(ctx context.Context, enabled bool) (Snapshot, error) {
+	if err := s.store.SetAccountHandoff(ctx, enabled, s.now()); err != nil {
+		return Snapshot{}, err
+	}
+	return s.Get(ctx)
 }
 
 func (s *Service) cacheVersionRefresh(enabled bool) {
@@ -206,18 +224,13 @@ func (s *Service) SetComputerUse(ctx context.Context, enabled bool) (Snapshot, e
 }
 
 // CardSummariesEnabled reports whether new workers are asked to keep a kanban
-// card summary. It is read once per worker spawn; an unreadable store counts
-// as off.
-func (s *Service) CardSummariesEnabled(ctx context.Context) bool {
-	snapshot, err := s.store.GetAppSettings(ctx)
-	return err == nil && snapshot.CardSummaries
-}
+// card summary. Off on every daemon start until the desktop app turns it on.
+func (s *Service) CardSummariesEnabled(context.Context) bool { return s.cardSummaries.Load() }
 
-// SetCardSummaries changes whether new workers keep a kanban card summary.
+// SetCardSummaries changes the in-memory card summaries gate. Workers already
+// running keep the prompt they started with.
 func (s *Service) SetCardSummaries(ctx context.Context, enabled bool) (Snapshot, error) {
-	if err := s.store.SetCardSummaries(ctx, enabled, s.now()); err != nil {
-		return Snapshot{}, err
-	}
+	s.cardSummaries.Store(enabled)
 	return s.Get(ctx)
 }
 

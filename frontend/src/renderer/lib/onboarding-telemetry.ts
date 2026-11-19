@@ -42,6 +42,17 @@ export function reportOnboardingStep(step: OnboardingStep, phase: OnboardingPhas
 }
 
 /**
+ * Records completion of a step this install has already seen. Completion can be
+ * observed long after the step's UI is gone (GitHub sign-in finished in a
+ * terminal, outside the app, or on a later launch), so it is keyed to the
+ * install's recorded view rather than to the component that showed it.
+ */
+export function completeOnboardingStepIfViewed(step: OnboardingStep): void {
+	if (!readReported().has(`${step}:viewed`)) return;
+	reportOnboardingStep(step, "completed");
+}
+
+/**
  * Reports a step as viewed while `active`, abandoned if the window closes while
  * it is still active, and completed when it goes from active to inactive. The
  * returned function reports completion explicitly for steps whose component

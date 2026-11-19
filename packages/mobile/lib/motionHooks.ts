@@ -1,6 +1,6 @@
 import { useEffect, useRef } from "react";
 import { Animated, Easing } from "react-native";
-import { duration, easingCurve, press } from "./tokens";
+import { duration, easingCurve } from "./tokens";
 import { useReducedMotion } from "./useReducedMotion";
 
 /**
@@ -22,36 +22,6 @@ export const easing = {
 /** True when the platform asks for motion to be kept to a minimum. */
 export function useReduceMotion(): boolean {
 	return useReducedMotion();
-}
-
-/**
- * Press feedback for a surface the finger lands on: a short scale down and back.
- * Returns the animated style plus the handlers to spread onto a `Pressable`, so
- * the feedback stays interruptible (release mid-press and it comes straight
- * back).
- */
-export function usePressScale(disabled = false) {
-	const scale = useRef(new Animated.Value(1)).current;
-	const reduced = useReduceMotion();
-
-	function animate(toValue: number, ms: number): void {
-		if (reduced || disabled) {
-			scale.setValue(1);
-			return;
-		}
-		Animated.timing(scale, {
-			toValue,
-			duration: ms,
-			easing: easing.standard,
-			useNativeDriver: true,
-		}).start();
-	}
-
-	return {
-		style: { transform: [{ scale }] },
-		onPressIn: () => animate(press.scale, press.in),
-		onPressOut: () => animate(1, press.out),
-	};
 }
 
 /**

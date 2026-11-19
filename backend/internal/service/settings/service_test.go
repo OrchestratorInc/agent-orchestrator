@@ -25,10 +25,10 @@ func (*hibernationSettingsStore) SetVersionRefresh(context.Context, bool, time.T
 func (*hibernationSettingsStore) SetComputerUse(context.Context, bool, time.Time) error {
 	return nil
 }
-func (*hibernationSettingsStore) SetCardSummaries(context.Context, bool, time.Time) error {
+func (*hibernationSettingsStore) SetSessionRetentionDays(context.Context, int, time.Time) error {
 	return nil
 }
-func (*hibernationSettingsStore) SetSessionRetentionDays(context.Context, int, time.Time) error {
+func (*hibernationSettingsStore) SetAccountHandoff(context.Context, bool, time.Time) error {
 	return nil
 }
 
@@ -165,37 +165,20 @@ func TestComputerUseToggle(t *testing.T) {
 	}
 }
 
-type cardSummariesStore struct {
-	hibernationSettingsStore
-	enabled bool
-	err     error
-}
-
-func (s *cardSummariesStore) GetAppSettings(context.Context) (Snapshot, error) {
-	return Snapshot{CardSummaries: s.enabled}, s.err
-}
-
-func (s *cardSummariesStore) SetCardSummaries(_ context.Context, enabled bool, _ time.Time) error {
-	s.enabled = enabled
-	return nil
-}
-
-// Card summaries are off until a client turns them on, apply to the next spawn
-// without a restart, and an unreadable store never turns them on.
+// Card summaries are an in-memory Developer Mode gate: off on every daemon
+// start, and on or off for the next spawn without touching the store.
 func TestCardSummariesToggle(t *testing.T) {
 	ctx := context.Background()
-	store := &cardSummariesStore{}
-	svc := New(store, nil, Offering{}, nil)
+	svc := New(&hibernationSettingsStore{}, nil, Offering{}, nil)
 	if svc.CardSummariesEnabled(ctx) {
-		t.Fatal("card summaries are on by default")
+		t.Fatal("card summaries are on at daemon start")
 	}
 	snapshot, err := svc.SetCardSummaries(ctx, true)
 	if err != nil || !snapshot.CardSummaries || !svc.CardSummariesEnabled(ctx) {
 		t.Fatalf("after enabling: snapshot=%+v err=%v", snapshot, err)
 	}
-	store.err = errors.New("database is locked")
-	if svc.CardSummariesEnabled(ctx) {
-		t.Fatal("an unreadable store must count as off")
+	if snapshot, err := svc.SetCardSummaries(ctx, false); err != nil || snapshot.CardSummaries || svc.CardSummariesEnabled(ctx) {
+		t.Fatalf("after disabling: snapshot=%+v err=%v", snapshot, err)
 	}
 }
 

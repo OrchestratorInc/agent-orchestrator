@@ -20,12 +20,17 @@ func (f *fakeCardSummaryStore) UpdateSessionCardSummary(_ context.Context, _ dom
 	return f.found, nil
 }
 
+func (f *fakeCardSummaryStore) FillSessionCardSummary(_ context.Context, _ domain.SessionID, summary, _ string) (bool, error) {
+	f.writes = append(f.writes, summary)
+	return true, nil
+}
+
 func TestCardSummaryLimiter(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
 	store := &fakeCardSummaryStore{found: true}
 	now := time.Date(2026, 10, 30, 10, 0, 0, 0, time.UTC)
-	l := NewCardSummaryLimiter(store, func() time.Time { return now })
+	l := NewCardSummaryLimiter(store, func(context.Context) bool { return true }, func() time.Time { return now })
 	update := func(summary string, done bool) time.Duration {
 		t.Helper()
 		found, wait, err := l.Update(ctx, "ao-1", summary, done)
@@ -69,5 +74,23 @@ func TestCardSummaryLimiter(t *testing.T) {
 	store.found = true
 	if found, wait, _ := l.Update(ctx, "missing", "Fixing a bug", false); !found || wait != 0 {
 		t.Fatalf("a failed write must not start the interval: found=%v wait=%v", found, wait)
+	}
+}
+
+// While card summaries are off, nothing is written and the caller is told the
+// update went through, so a worker started while they were on is not nagged.
+func TestCardSummaryLimiterWritesNothingWhileOff(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	store := &fakeCardSummaryStore{found: true}
+	l := NewCardSummaryLimiter(store, func(context.Context) bool { return false }, time.Now)
+	if found, wait, err := l.Update(ctx, "ao-1", "Reading the board code", false); err != nil || !found || wait != 0 {
+		t.Fatalf("Update while off: found=%v wait=%v err=%v", found, wait, err)
+	}
+	if filled, err := l.FillSessionCardSummary(ctx, "ao-1", "Added card summaries", ""); err != nil || filled {
+		t.Fatalf("Fill while off: filled=%v err=%v", filled, err)
+	}
+	if len(store.writes) != 0 {
+		t.Fatalf("writes while off = %q", store.writes)
 	}
 }

@@ -4,10 +4,9 @@ import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { Settings } from "../../hooks/useSettings";
 
-const { settingsMock, updateRetentionMock, updateCardSummariesMock } = vi.hoisted(() => ({
+const { settingsMock, updateRetentionMock } = vi.hoisted(() => ({
 	settingsMock: vi.fn(),
 	updateRetentionMock: vi.fn(),
-	updateCardSummariesMock: vi.fn(),
 }));
 
 const idle = { update: vi.fn(), saving: false, error: undefined };
@@ -15,7 +14,6 @@ vi.mock("../../hooks/useSettings", () => ({
 	useSettings: () => ({ settings: settingsMock(), isLoading: false, error: null }),
 	useUpdateSessionInterface: () => idle,
 	useUpdateVersionRefresh: () => idle,
-	useUpdateCardSummaries: () => ({ update: updateCardSummariesMock, saving: false, error: undefined }),
 	useUpdateSessionRetention: () => ({ update: updateRetentionMock, saving: false, error: undefined }),
 }));
 
@@ -59,7 +57,6 @@ function settings(overrides: Partial<Settings>): Settings {
 beforeEach(() => {
 	settingsMock.mockReset();
 	updateRetentionMock.mockReset();
-	updateCardSummariesMock.mockReset();
 });
 
 describe("archived session retention", () => {
@@ -91,33 +88,22 @@ describe("archived session retention", () => {
 });
 
 describe("card summaries", () => {
-	it("turns card summaries on and off with Developer mode", async () => {
-		useUiStore.setState({ developerMode: false });
-		settingsMock.mockReturnValue(settings({ cardSummaries: false }));
-		renderSection();
-
-		await userEvent.click(screen.getByRole("switch", { name: "Developer mode" }));
-		expect(updateCardSummariesMock).toHaveBeenLastCalledWith(true);
-		await userEvent.click(screen.getByRole("switch", { name: "Developer mode" }));
-		expect(updateCardSummariesMock).toHaveBeenLastCalledWith(false);
+	beforeEach(() => {
+		settingsMock.mockReturnValue(settings({}));
+		useUiStore.setState({ cardSummaries: false });
 	});
 
-	it("shows the daemon's value under Developer mode and lets the user turn it off", async () => {
-		useUiStore.setState({ developerMode: true });
-		settingsMock.mockReturnValue(settings({ cardSummaries: true }));
-		renderSection();
-
-		const toggle = screen.getByRole("switch", { name: "Card summaries" });
-		expect(toggle).toBeChecked();
-		await userEvent.click(toggle);
-		expect(updateCardSummariesMock).toHaveBeenCalledWith(false);
-	});
-
-	it("hides the toggle outside Developer mode", () => {
+	it("shows an off toggle only in Developer mode, and Developer mode leaves it off", async () => {
 		useUiStore.setState({ developerMode: false });
-		settingsMock.mockReturnValue(settings({ cardSummaries: true }));
 		renderSection();
-
 		expect(screen.queryByRole("switch", { name: "Card summaries" })).not.toBeInTheDocument();
+
+		await userEvent.click(screen.getByRole("switch", { name: "Developer mode" }));
+		const toggle = screen.getByRole("switch", { name: "Card summaries" });
+		expect(toggle).not.toBeChecked();
+		expect(useUiStore.getState().cardSummaries).toBe(false);
+
+		await userEvent.click(toggle);
+		expect(useUiStore.getState().cardSummaries).toBe(true);
 	});
 });

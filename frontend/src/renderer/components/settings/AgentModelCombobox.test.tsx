@@ -2,6 +2,7 @@ import { act, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { useState } from "react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { useUiStore } from "../../stores/ui-store";
 import { AgentModelCombobox, buildModelSearchIndex, searchModelIndex } from "./AgentModelCombobox";
 
 function renderCombobox(
@@ -84,6 +85,20 @@ describe("AgentModelCombobox", () => {
 		expect(onChange).not.toHaveBeenCalled();
 		await userEvent.click(screen.getByRole("menuitem", { name: "Sonnet 5.5" }));
 		expect(onChange).toHaveBeenCalledWith("claude-sonnet-5-5");
+	});
+
+	it("offers Update Claude Code under a model that needs a newer CLI", async () => {
+		const openGlobalSettings = vi.spyOn(useUiStore.getState(), "openGlobalSettings").mockImplementation(() => undefined);
+		useUiStore.setState({ openGlobalSettings });
+		renderCombobox([
+			{ id: "claude-sonnet-5-5", label: "Sonnet 5.5" },
+			{ id: "claude-opus-5-5", label: "Opus 5.5", requiresVersion: "2.1.280", unavailableReason: "Requires Claude Code 2.1.280 or newer." },
+		], { compact: true, agentId: "claude-code", hostId: "remote-host" });
+		await userEvent.click(screen.getByRole("button", { name: "Worker model" }));
+		expect(screen.getByRole("menuitem", { name: /Opus 5\.5/ })).toHaveAttribute("aria-disabled", "true");
+		expect(screen.getAllByRole("menuitem", { name: "Update Claude Code" })).toHaveLength(1);
+		await userEvent.click(screen.getByRole("menuitem", { name: "Update Claude Code" }));
+		expect(openGlobalSettings).toHaveBeenCalledWith("harness", expect.objectContaining({ hostId: "remote-host", focusAgentId: "claude-code", harnessView: "local", preserveProject: true }));
 	});
 
 	it("closes only the effort submenu on Escape", async () => {

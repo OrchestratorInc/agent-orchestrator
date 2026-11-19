@@ -9,7 +9,7 @@ import (
 // on latest_assistant_update. The migration must replace it rather than fail,
 // which would stop the daemon from starting on those databases.
 func TestCardSummaryMigrationReplacesTheDevBuildTrigger(t *testing.T) {
-	db := openMigratedDatabaseCopy(t, 20261101173946025)
+	db := openMigratedDatabaseCopy(t, 20261119061500000)
 	if _, err := db.Exec(`CREATE TRIGGER sessions_card_summary_cdc
 AFTER UPDATE OF latest_assistant_update ON sessions
 WHEN NEW.latest_assistant_update <> OLD.latest_assistant_update

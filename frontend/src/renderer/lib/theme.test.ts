@@ -57,6 +57,44 @@ describe("runThemeTransition", () => {
 		expect(document.documentElement.dataset.themeTransition).toBe("active");
 	});
 
+	it("reveals a translucent window's theme in one frame and flips main on reveal", async () => {
+		document.documentElement.dataset.windowTranslucent = "true";
+		let ready!: () => void;
+		const readyPromise = new Promise<void>((resolve) => {
+			ready = resolve;
+		});
+		let callbackDone: Promise<unknown> = Promise.resolve();
+		const startViewTransition = vi.fn((callback: () => Promise<void>) => {
+			callbackDone = callback();
+			return {
+				finished: callbackDone.then(() => readyPromise),
+				ready: readyPromise,
+				updateCallbackDone: callbackDone,
+				skipTransition: () => undefined,
+			};
+		});
+		Object.defineProperty(document, "startViewTransition", {
+			configurable: true,
+			writable: true,
+			value: startViewTransition,
+		});
+		const onReveal = vi.fn();
+		try {
+			runThemeTransition(() => applyDocumentTheme("light"), onReveal);
+
+			expect(startViewTransition).toHaveBeenCalledOnce();
+			expect(document.documentElement.dataset.theme).toBe("light");
+			await callbackDone;
+			expect(onReveal).not.toHaveBeenCalled();
+			ready();
+			await readyPromise;
+			await Promise.resolve();
+			expect(onReveal).toHaveBeenCalledOnce();
+		} finally {
+			delete document.documentElement.dataset.windowTranslucent;
+		}
+	});
+
 	it("suppresses per-element transitions while the theme tokens swap", async () => {
 		Reflect.deleteProperty(document, "startViewTransition");
 		const update = vi.fn(() => {

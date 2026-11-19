@@ -75,7 +75,11 @@ export function requestDockModel(
 			pages: [{
 				// The reason reads as a question; the command is the fallback and is
 				// shown verbatim because it is what will actually run.
-				question: approval.detail?.reason?.trim() || approval.detail?.command || approval.summary || "",
+				// A file change has no command to show; without a summary of its
+				// own it asks the desktop's question for one.
+				question: approval.detail?.reason?.trim() || approval.detail?.command
+					|| (approval.detail?.subjectKind === "file_change" && (!approval.summary || approval.summary === "Permission required")
+						? "Do you want to allow these file changes?" : approval.summary) || "",
 				options: decisions.map((decision) => ({ id: decision.id, label: decision.label })),
 				multi: false,
 				required: true,
@@ -157,4 +161,23 @@ function freeTextFor(name: string, property: InputProperty): RequestDockFreeText
 		numeric: property.type === "number" || property.type === "integer",
 		maxLength: property.maxLength,
 	};
+}
+
+/** Share of the space above the keyboard the card may take; the chat keeps the rest. */
+const REQUEST_CARD_SHARE = 0.5;
+/** Enough for the header, a couple of lines of question and one answer row. */
+const REQUEST_CARD_MIN_HEIGHT = 180;
+
+/**
+ * The tallest the card may grow.
+ *
+ * The card stands in for the composer, and the composer's dock keeps its full
+ * height while the chat above it is the only thing that shrinks. So an uncapped
+ * card with a long question (an approval with no reason falls back to the raw
+ * command, verbatim) pushes the chat to nothing and its own answers off the
+ * bottom of the screen. Capped, the question scrolls inside the card instead.
+ */
+export function requestCardMaxHeight(windowHeight: number, keyboardHeight: number): number {
+	const room = Math.max(0, windowHeight - Math.max(0, keyboardHeight));
+	return Math.max(REQUEST_CARD_MIN_HEIGHT, Math.round(room * REQUEST_CARD_SHARE));
 }

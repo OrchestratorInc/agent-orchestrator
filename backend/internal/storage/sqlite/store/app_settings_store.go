@@ -33,10 +33,8 @@ type AppSettings struct {
 	// SessionRetentionDays is how long an archived session is kept before the
 	// daemon deletes it; 0 keeps it.
 	SessionRetentionDays int
-	// CardSummaries asks new workers to keep a one-line summary on their
-	// kanban card, and shows it on the board.
-	CardSummaries bool
-	UpdatedAt     time.Time
+	AccountHandoff       bool
+	UpdatedAt            time.Time
 }
 
 // GetAppSettings reads the preference row.
@@ -57,7 +55,7 @@ func (s *Store) GetAppSettings(ctx context.Context) (AppSettings, error) {
 		VersionRefresh:       row.VersionRefresh,
 		ComputerUse:          row.ComputerUse,
 		SessionRetentionDays: int(row.SessionRetentionDays),
-		CardSummaries:        row.CardSummaries,
+		AccountHandoff:       row.AccountHandoff,
 		UpdatedAt:            row.UpdatedAt,
 	}, nil
 }
@@ -104,19 +102,6 @@ func (s *Store) SetComputerUse(ctx context.Context, enabled bool, now time.Time)
 	return nil
 }
 
-// SetCardSummaries persists whether new workers keep a kanban card summary.
-func (s *Store) SetCardSummaries(ctx context.Context, enabled bool, now time.Time) error {
-	s.writeMu.Lock()
-	defer s.writeMu.Unlock()
-	if err := s.qw.SetCardSummaries(ctx, gen.SetCardSummariesParams{
-		CardSummaries: enabled,
-		UpdatedAt:     now,
-	}); err != nil {
-		return fmt.Errorf("set card summaries: %w", err)
-	}
-	return nil
-}
-
 // SetSessionRetentionDays persists how long archived sessions are kept.
 func (s *Store) SetSessionRetentionDays(ctx context.Context, days int, now time.Time) error {
 	s.writeMu.Lock()
@@ -126,6 +111,19 @@ func (s *Store) SetSessionRetentionDays(ctx context.Context, days int, now time.
 		UpdatedAt:            now,
 	}); err != nil {
 		return fmt.Errorf("set session retention: %w", err)
+	}
+	return nil
+}
+
+// SetAccountHandoff stores the usage-limit account handoff setting.
+func (s *Store) SetAccountHandoff(ctx context.Context, enabled bool, now time.Time) error {
+	s.writeMu.Lock()
+	defer s.writeMu.Unlock()
+	if err := s.qw.SetAccountHandoff(ctx, gen.SetAccountHandoffParams{
+		AccountHandoff: enabled,
+		UpdatedAt:      now,
+	}); err != nil {
+		return fmt.Errorf("set account handoff: %w", err)
 	}
 	return nil
 }

@@ -1,11 +1,31 @@
 package chat
 
 import (
+	"bytes"
+	"encoding/json"
 	"strings"
 	"unicode"
 
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
 )
+
+var aoSummaryMarker = []byte("ao summary")
+
+// cardSummaryFromCommandDetail reads the summary from a command activity's
+// JSON detail. Every command a worker runs passes through here, so anything
+// without the literal `ao summary` is dropped before any decoding.
+func cardSummaryFromCommandDetail(detail []byte) (string, bool) {
+	if !bytes.Contains(detail, aoSummaryMarker) {
+		return "", false
+	}
+	var d struct {
+		Command string `json:"command"`
+	}
+	if json.Unmarshal(detail, &d) != nil {
+		return "", false
+	}
+	return extractAOSummary(d.Command)
+}
 
 // extractAOSummary returns the summary an `ao summary ...` shell command sets
 // and whether it carries --done, or "" when the command is something else or

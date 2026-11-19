@@ -113,23 +113,6 @@ func (q *Queries) ListPRComments(ctx context.Context, prUrl string) ([]PRComment
 	return items, nil
 }
 
-const markPRCommentResolved = `-- name: MarkPRCommentResolved :execrows
-UPDATE pr_comment SET resolved = TRUE WHERE pr_url = ? AND comment_id = ?
-`
-
-type MarkPRCommentResolvedParams struct {
-	PRURL     string
-	CommentID string
-}
-
-func (q *Queries) MarkPRCommentResolved(ctx context.Context, arg MarkPRCommentResolvedParams) (int64, error) {
-	result, err := q.db.ExecContext(ctx, markPRCommentResolved, arg.PRURL, arg.CommentID)
-	if err != nil {
-		return 0, err
-	}
-	return result.RowsAffected()
-}
-
 const markPRCommentsResolvedForThread = `-- name: MarkPRCommentsResolvedForThread :execrows
 UPDATE pr_comment
 SET resolved = TRUE

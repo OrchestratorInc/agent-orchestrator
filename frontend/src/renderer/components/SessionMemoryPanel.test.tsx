@@ -165,7 +165,7 @@ describe("AppMemoryIndicator", () => {
 		expect(button).toHaveTextContent("2.0 GB");
 		expect(button).not.toHaveTextContent("Fine");
 		expect(button).toHaveAttribute("data-memory-state", "fine");
-		expect(button).toHaveAttribute("aria-label", "Fine · 20.0 GB free of 32.0 GB · AO holds 2.0 GB · pressure 0.0");
+		expect(button).toHaveAttribute("aria-label", "Fine · 20.0 GB free of 32.0 GB · Orchestrator holds 2.0 GB · pressure 0.0");
 
 		// Stalling on memory: the light colours, the phrase stays AO's own size.
 		appMemoryMock.mockReturnValue(appReading(3, 12, 20));
@@ -180,7 +180,7 @@ describe("AppMemoryIndicator", () => {
 		const tight = screen.getByTestId("app-memory-indicator");
 		expect(tight).toHaveAttribute("data-memory-state", "tight");
 		expect(tight).toHaveTextContent("2.0 GB");
-		expect(tight.textContent).not.toMatch(/apps|AO is only|not AO/i);
+		expect(tight.textContent).not.toMatch(/apps|Orchestrator is only|not Orchestrator/i);
 	});
 
 	it("goes grey and falls back to AO's own size where the host cannot be read", () => {
@@ -201,7 +201,7 @@ describe("AppMemoryIndicator", () => {
 		expect(within(within(table).getAllByTestId("session-memory-row")[0]).getByTestId("session-memory-process-count")).toHaveTextContent("2 processes");
 		// The memory card is the bar and its key, nothing else.
 		const machine = screen.getByTestId("session-memory-stacked");
-		expect(machine).toHaveTextContent("AO 2.0 GB");
+		expect(machine).toHaveTextContent("Orchestrator 2.0 GB");
 		expect(machine).toHaveTextContent("Available 20.0 GB");
 		expect(machine).not.toHaveTextContent("In use");
 		expect(machine).not.toHaveTextContent("Other");
@@ -212,7 +212,7 @@ describe("AppMemoryIndicator", () => {
 		expect(cpu).toHaveTextContent("CPU · 8 cores");
 		expect(cpu).toHaveTextContent("load 0.50");
 		expect(within(cpu).getByTestId("session-cpu-machine")).toHaveTextContent(/Machine CPU\s*40%/);
-		expect(within(cpu).getByTestId("session-cpu-ao")).toHaveTextContent(/AO CPU\s*20%/);
+		expect(within(cpu).getByTestId("session-cpu-ao")).toHaveTextContent(/Orchestrator CPU\s*20%/);
 		// Each graph tops out at the first of 10/25/50/100% that clears its peak.
 		expect(within(within(cpu).getByTestId("session-cpu-machine")).getByTestId("session-cpu-ceiling")).toHaveTextContent("50%");
 		expect(within(within(cpu).getByTestId("session-cpu-ao")).getByTestId("session-cpu-ceiling")).toHaveTextContent("25%");
@@ -347,7 +347,7 @@ describe("AppMemoryIndicator", () => {
 		expect(within(bigRow).getByTestId("session-memory-agent")).toHaveTextContent("claude-code");
 		// A session's type is its role.
 		expect(within(bigRow).getByTestId("session-memory-type")).toHaveTextContent("Worker");
-		expect(within(own).getByTestId("session-memory-type")).toHaveTextContent("AO");
+		expect(within(own).getByTestId("session-memory-type")).toHaveTextContent("Orchestrator");
 		expect(children[1]).not.toHaveTextContent("go test");
 		// Clicking a process line copies nothing and opens nothing.
 		await userEvent.click(children[0]);
@@ -641,7 +641,7 @@ describe("AppMemoryIndicator", () => {
 		await userEvent.click(copy);
 		const report = clipboardMock.mock.calls[0][0] as string;
 		// The machine first, then every session on screen — not just one.
-		expect(report).toContain("Memory   AO 2.0 GB · 20.0 GB free of 32.0 GB");
+		expect(report).toContain("Memory   Orchestrator 2.0 GB · 20.0 GB free of 32.0 GB");
 		expect(report).toContain("Sessions 2");
 		expect(report).toContain("big worker");
 		expect(report).toContain("small worker");

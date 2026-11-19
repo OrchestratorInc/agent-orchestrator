@@ -180,15 +180,19 @@ func TestDoctorChecksHarnessVersions(t *testing.T) {
 		"claude": "/bin/claude",
 		"codex":  "/bin/codex",
 		"muse":   "/bin/muse",
+		"tau":    "/bin/tau",
 	}
 	c := doctorContext(t, cmdPath, func(_ context.Context, name string, args ...string) ([]byte, error) {
 		switch name {
 		case "/bin/git":
 			return []byte("git version 2.43.0\n"), nil
-		case "/bin/claude", "/bin/codex", "/bin/muse":
+		case "/bin/claude", "/bin/codex", "/bin/muse", "/bin/tau":
 			if len(args) == 1 && args[0] == "--version" {
 				if name == "/bin/muse" {
 					return []byte("Muse Code 0.1.0 (0.1.0-R708.1)\n"), nil
+				}
+				if name == "/bin/tau" {
+					return []byte("tau 0.4.7\n"), nil
 				}
 				return []byte(strings.TrimPrefix(name, "/bin/") + " 1.2.3\n"), nil
 			}
@@ -205,11 +209,34 @@ func TestDoctorChecksHarnessVersions(t *testing.T) {
 	})
 
 	checks := c.runDoctor(context.Background())
-	for _, name := range []string{"claude-code", "codex", "muse"} {
+	for _, name := range []string{"claude-code", "codex", "muse", "tau"} {
 		check := findDoctorCheck(t, checks, name)
 		if check.Level != doctorPass || !strings.Contains(check.Message, "resolves to") {
 			t.Fatalf("%s check = %+v, want PASS with path/version", name, check)
 		}
+	}
+}
+
+func TestDoctorWarnsOnIncompatibleTauVersion(t *testing.T) {
+	setConfigEnv(t)
+	c := doctorContext(t, map[string]string{"git": "/bin/git", "tau": "/bin/tau"}, func(_ context.Context, name string, args ...string) ([]byte, error) {
+		switch name {
+		case "/bin/git":
+			return []byte("git version 2.43.0\n"), nil
+		case "/bin/tau":
+			if len(args) != 1 || args[0] != "--version" {
+				t.Fatalf("unexpected tau command: %s %v", name, args)
+			}
+			return []byte("tau 0.4.6\n"), nil
+		default:
+			t.Fatalf("unexpected command: %s %v", name, args)
+			return nil, nil
+		}
+	})
+
+	check := findDoctorCheck(t, c.runDoctor(context.Background()), "tau")
+	if check.Level != doctorWarn || !strings.Contains(check.Message, `reports "tau 0.4.6"`) || !strings.Contains(check.Message, "requires tau-ai 0.4.7 or newer") {
+		t.Fatalf("tau check = %+v, want WARN with found and minimum versions", check)
 	}
 }
 
@@ -553,6 +580,42 @@ func TestDoctorPathOnlyHarnessPassesOnFind(t *testing.T) {
 	}
 }
 
+// The CLI probes Open Interpreter like every other harness, through PATH and
+// its version line, never through the adapter. The pinned Rust release passes;
+// the older Python CLI that also installs `interpreter` does not.
+func TestDoctorOpenInterpreterRequiresPinnedRustVersion(t *testing.T) {
+	for _, tc := range []struct {
+		name    string
+		version string
+		want    doctorLevel
+		message string
+	}{
+		{"pinned Rust release", "interpreter 0.0.56\n", doctorPass, "interpreter resolves to /bin/interpreter (interpreter 0.0.56)"},
+		{"Python CLI collision", "Open Interpreter 0.4.3 Developer Preview\n", doctorWarn, "does not identify the expected CLI"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			setConfigEnv(t)
+			c := doctorContext(t,
+				map[string]string{"git": "/bin/git", "interpreter": "/bin/interpreter"},
+				func(_ context.Context, name string, args ...string) ([]byte, error) {
+					switch {
+					case name == "/bin/git":
+						return []byte("git version 2.43.0\n"), nil
+					case name == "/bin/interpreter" && len(args) == 1 && args[0] == "--version":
+						return []byte(tc.version), nil
+					}
+					t.Fatalf("unexpected CommandOutput call: %s %v", name, args)
+					return nil, nil
+				},
+			)
+			check := findDoctorCheck(t, c.runDoctor(context.Background()), "open-interpreter")
+			if check.Level != tc.want || !strings.Contains(check.Message, tc.message) {
+				t.Fatalf("open-interpreter check = %+v, want %s containing %q", check, tc.want, tc.message)
+			}
+		})
+	}
+}
+
 // TestDoctorNewVersionedHarnessPassesWithVersion verifies that a Tier-B
 // harness with a --version flag (e.g. opencode) resolves and reports correctly.
 func TestDoctorNewVersionedHarnessPassesWithVersion(t *testing.T) {
@@ -753,7 +816,7 @@ func TestDoctorCodexLaunchFlagsWarnOnRejectedFlag(t *testing.T) {
 		codexCanaryFake(t, "error: unexpected argument '--dangerously-bypass-hook-trust' found\n", errors.New("exit status 2")))
 
 	check := findDoctorCheck(t, c.runDoctor(context.Background()), "codex-launch-flags")
-	if check.Level != doctorWarn || !strings.Contains(check.Message, "rejected AO's launch flags") {
+	if check.Level != doctorWarn || !strings.Contains(check.Message, "rejected Orchestrator's launch flags") {
 		t.Fatalf("canary = %+v, want WARN rejected flags", check)
 	}
 }

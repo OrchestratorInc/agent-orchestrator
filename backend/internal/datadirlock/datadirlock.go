@@ -38,7 +38,7 @@ const retryInterval = 100 * time.Millisecond
 
 // ErrLocked is returned by Acquire when another live process still holds the
 // data-directory lock after the wait.
-var ErrLocked = errors.New("data dir is in use by another AO process")
+var ErrLocked = errors.New("data dir is in use by another Orchestrator process")
 
 // ErrUnsupported is returned by Acquire when the data dir's filesystem cannot
 // lock files at all (some NFS, SMB and FUSE mounts). Callers start without the
