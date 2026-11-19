@@ -57,6 +57,10 @@ const (
 	modelLoadCached modelLoadMode = iota
 	modelLoadRevalidate
 	modelLoadRefresh
+	// modelLoadSettledRetry is a revalidation a read starts for a catalog whose
+	// last failure was settled (signed out): it runs although the retry budget
+	// is spent, and keeps the saved catalog visible while it does.
+	modelLoadSettledRetry
 )
 
 type modelCatalogCall struct {
@@ -81,10 +85,18 @@ type Service struct {
 	dataDir            string // the AO data directory local sessions launch from
 	sessions           SessionUsageLookup
 	resolverMu         map[string]*sync.Mutex
-	modelCallMu        sync.Mutex
-	modelCalls         map[string]*modelCatalogCall
-	modelGeneration    map[string]int64
-	discoverySlots     chan struct{}
+	// settledCatalogs holds the catalogs whose last discovery failed for a
+	// reason only the user can change (signed out, no model configuration),
+	// with when a read last rediscovered one. Such a failure gets no background
+	// retries; a read (a picker opening) rediscovers it instead, at most once a
+	// modelCatalogSettledReadFloor, so a sign-in done outside AO shows the next
+	// time someone looks.
+	settledMu       sync.Mutex
+	settledCatalogs map[string]time.Time
+	modelCallMu     sync.Mutex
+	modelCalls      map[string]*modelCatalogCall
+	modelGeneration map[string]int64
+	discoverySlots  chan struct{}
 
 	savedDefaultLaunchEnv func(ctx context.Context, harness domain.AgentHarness) (map[string]string, error)
 
@@ -393,6 +405,12 @@ func (s *Service) modelCatalog(ctx context.Context, agentID, scope string, refre
 			cached.Catalog.RefreshRecommended = !retriesExhausted && (due || needsRecovery || cached.RefreshState == "error" || cached.RefreshState == "queued")
 			if !retriesExhausted && (due || needsRecovery) && (cached.RetryAt.IsZero() || !s.now().Before(cached.RetryAt)) {
 				go func() { _, _ = s.revalidateModels(s.ctx, agentID, projectID) }()
+			} else if retriesExhausted && s.claimSettledRediscovery(agentID, projectID) {
+				go func() { _, _ = s.coalesceModelLoad(s.ctx, agentID, projectID, modelLoadSettledRetry) }()
+				// Open views re-read a refreshing catalog, so they pick up the result.
+				if cached.Catalog.RefreshState == "" || cached.Catalog.RefreshState == "error" {
+					cached.Catalog.RefreshState = "refreshing"
+				}
 			} else if retriesExhausted {
 				go s.revalidateChangedInputs(agentID, projectID, cached.BinaryVersion)
 			} else if !due && agentID != "claude-code" {
@@ -847,7 +865,7 @@ func (s *Service) loadModels(ctx context.Context, agentID, projectID string, mod
 		return cached.Catalog, nil
 	}
 
-	if mode != modelLoadRefresh && hasCached && !inputsChanged && !explicitlyInvalidated && modelCatalogRetriesExhausted(cached) {
+	if mode != modelLoadRefresh && mode != modelLoadSettledRetry && hasCached && !inputsChanged && !explicitlyInvalidated && modelCatalogRetriesExhausted(cached) {
 		cached.Catalog.RefreshRecommended = false
 		return cached.Catalog, nil
 	}
@@ -888,6 +906,7 @@ func (s *Service) loadModels(ctx context.Context, agentID, projectID string, mod
 	}
 	if discoverErr != nil {
 		warningCode := modelCatalogWarningCode(discoverErr)
+		settledFailure := modelCatalogFailureIsSettled(discoverErr)
 		// Discovery failures are not sent to Sentry: a missing, outdated or
 		// misconfigured agent CLI (exec_exit included) is user setup state.
 		// Provider model IDs are credential-scoped. Reuse a cached catalog only
@@ -899,7 +918,7 @@ func (s *Service) loadModels(ctx context.Context, agentID, projectID string, mod
 			cached.Catalog.Warning = discoverErr.Error()
 			cached.Catalog.WarningCode = warningCode
 			cached.Catalog.RefreshRecommended = true
-			if err := s.saveFailedCatalog(persistCtx, cached, cached.Catalog, generation); err != nil {
+			if err := s.saveFailedCatalog(persistCtx, cached, cached.Catalog, generation, settledFailure); err != nil {
 				cached.Catalog.Warning = appendCacheWarning(cached.Catalog.Warning)
 			} else if updated, ok, _ := s.cachedCatalog(persistCtx, agentID, projectID); ok {
 				return updated.Catalog, nil
@@ -916,7 +935,7 @@ func (s *Service) loadModels(ctx context.Context, agentID, projectID string, mod
 				previous.Catalog.LastSuccessAt = nil
 				previous.Catalog.Metadata = catalogMetadata(request)
 			}
-			if err := s.saveFailedCatalog(persistCtx, previous, discovered, generation); err != nil {
+			if err := s.saveFailedCatalog(persistCtx, previous, discovered, generation, settledFailure); err != nil {
 				discovered.Warning = appendCacheWarning(discovered.Warning)
 			} else if updated, ok, _ := s.cachedCatalog(persistCtx, agentID, projectID); ok {
 				return updated.Catalog, nil
@@ -936,7 +955,7 @@ func (s *Service) loadModels(ctx context.Context, agentID, projectID string, mod
 			previous = decodedCatalog{Catalog: fallback, ProjectID: projectID}
 			previous.Catalog.Metadata = catalogMetadata(request)
 		}
-		if err := s.saveFailedCatalog(persistCtx, previous, fallback, generation); err == nil {
+		if err := s.saveFailedCatalog(persistCtx, previous, fallback, generation, settledFailure); err == nil {
 			if updated, found, _ := s.cachedCatalog(persistCtx, agentID, projectID); found {
 				return updated.Catalog, nil
 			}
@@ -1136,8 +1155,14 @@ func (s *Service) persistCatalogState(ctx context.Context, cached decodedCatalog
 	return s.saveCatalog(ctx, cached.ProjectID, catalog, generation, cached.RetryCount)
 }
 
-func (s *Service) saveFailedCatalog(ctx context.Context, previous decodedCatalog, catalog ports.AgentModelCatalog, generation int64) error {
+func (s *Service) saveFailedCatalog(ctx context.Context, previous decodedCatalog, catalog ports.AgentModelCatalog, generation int64, settled bool) error {
 	retryCount := previous.RetryCount + 1
+	s.markSettledCatalog(catalog.AgentID, previous.ProjectID, settled)
+	if settled && retryCount <= int64(modelCatalogMaxRetries) {
+		// Spend the retry budget at once: no background retries. A read
+		// rediscovers it instead (claimSettledRediscovery).
+		retryCount = int64(modelCatalogMaxRetries) + 1
+	}
 	catalog.LastSuccessAt = previous.Catalog.LastSuccessAt
 	catalog.RefreshState = "error"
 	catalog.RefreshError = catalog.Warning
@@ -1214,4 +1239,69 @@ func (s *Service) ResolveAgentBinary(ctx context.Context, agentID string) (strin
 	lock.Lock()
 	defer lock.Unlock()
 	return resolver.ResolveBinary(ctx)
+}
+
+// modelCatalogSettledReadFloor is the least time between two rediscoveries a
+// read starts for a catalog that failed for a settled reason.
+const modelCatalogSettledReadFloor = 30 * time.Second
+
+func settledCatalogKey(agentID, projectID string) string { return agentID + "\x00" + projectID }
+
+// markSettledCatalog records whether the catalog's latest failure was settled.
+func (s *Service) markSettledCatalog(agentID, projectID string, settled bool) {
+	s.settledMu.Lock()
+	defer s.settledMu.Unlock()
+	key := settledCatalogKey(agentID, projectID)
+	if !settled {
+		delete(s.settledCatalogs, key)
+		return
+	}
+	if s.settledCatalogs == nil {
+		s.settledCatalogs = make(map[string]time.Time)
+	}
+	if _, ok := s.settledCatalogs[key]; !ok {
+		s.settledCatalogs[key] = time.Time{}
+	}
+}
+
+// claimSettledRediscovery reports whether a read should rediscover a catalog
+// whose last failure was settled, and records that it does.
+func (s *Service) claimSettledRediscovery(agentID, projectID string) bool {
+	s.settledMu.Lock()
+	defer s.settledMu.Unlock()
+	key := settledCatalogKey(agentID, projectID)
+	last, ok := s.settledCatalogs[key]
+	if !ok {
+		return false
+	}
+	now := s.now()
+	if !last.IsZero() && now.Sub(last) < modelCatalogSettledReadFloor {
+		return false
+	}
+	s.settledCatalogs[key] = now
+	return true
+}
+
+// modelCatalogFailureIsSettled reports a discovery failure that only the user
+// can change: no model configuration, a rejected or expired credential, or a
+// CLI that says it is not signed in. Retrying it on a timer runs the CLI again
+// for the same answer, so it waits for the next real request instead: a read
+// (a picker opening, see claimSettledRediscovery), a refresh, a binary change.
+func modelCatalogFailureIsSettled(err error) bool {
+	if err == nil {
+		return false
+	}
+	if errors.Is(err, ports.ErrAgentModelConfigurationMissing) ||
+		errors.Is(err, ports.ErrAgentModelDiscoveryCredentialRejected) ||
+		errors.Is(err, ports.ErrAgentModelDiscoveryCredentialExpired) {
+		return true
+	}
+	// A proxy asking for its own credentials is not the agent's sign-in.
+	text := strings.ReplaceAll(strings.ToLower(err.Error()), "proxy authentication required", "")
+	for _, phrase := range []string{"not logged in", "not currently logged in", "authentication required", "set an auth method", "please log in", "please sign in", "not signed in"} {
+		if strings.Contains(text, phrase) {
+			return true
+		}
+	}
+	return false
 }

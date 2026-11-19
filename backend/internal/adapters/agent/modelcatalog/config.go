@@ -61,7 +61,7 @@ func discoverConfigCatalog(agentID, workingDir string, env map[string]string) (p
 		models = append(models, parsed...)
 	}
 	if !found {
-		return base, fmt.Errorf("%s model configuration was not found", agentID)
+		return base, fmt.Errorf("%s %w", agentID, ports.ErrAgentModelConfigurationMissing)
 	}
 	models = normalize(models)
 	if len(models) == 0 {
@@ -184,12 +184,12 @@ var hermesReasoningLevels = []string{"none", "minimal", "low", "medium", "high",
 // provider would launch against the wrong endpoint and are left out.
 func discoverHermesCatalog(base ports.AgentModelCatalog, paths []string) (ports.AgentModelCatalog, error) {
 	if len(paths) != 2 {
-		return base, fmt.Errorf("hermes model configuration was not found")
+		return base, fmt.Errorf("hermes %w", ports.ErrAgentModelConfigurationMissing)
 	}
 	raw, err := readModelConfig(paths[0])
 	if err != nil {
 		if os.IsNotExist(err) {
-			return base, fmt.Errorf("hermes model configuration was not found")
+			return base, fmt.Errorf("hermes %w", ports.ErrAgentModelConfigurationMissing)
 		}
 		return base, fmt.Errorf("hermes model discovery read %s: %w", paths[0], err)
 	}
