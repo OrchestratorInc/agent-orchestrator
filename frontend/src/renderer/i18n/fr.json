@@ -4226,8 +4226,6 @@
 	"settings.agentAccounts.checkSignIn": "Vérifier la connexion",
 	"settings.agentAccounts.loginWaiting": "Pas encore connecté. Terminez dans le terminal, puis vérifiez à nouveau.",
 	"settings.agentAccounts.loginNotSubscription": "Ceci est une clé d'API, pas un abonnement. Connectez-vous avec votre compte d'abonnement.",
-	"settings.agentAccounts.addTitle": "Ajouter un compte {{provider}}",
-	"settings.agentAccounts.signInAgainTitle": "Reconnecter {{name}}",
 	"settings.agentAccounts.meteredBadge": "Facturation API",
 	"settings.agentAccounts.setupTokenBadge": "Jeton de configuration",
 	"settings.agentAccounts.replaceToken": "Remplacer le jeton",

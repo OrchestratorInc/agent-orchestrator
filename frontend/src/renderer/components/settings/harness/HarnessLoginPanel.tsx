@@ -36,12 +36,10 @@ export type AccountLoginMode = {
 	named: boolean;
 };
 
-export function HarnessLoginPanel({ agentId, methods, hostId, providerKeys, providerKeysError, onRetryProviderKeys, onProviderKeysChanged, onVerify, onClose, onTerminal, account, title }: {
+export function HarnessLoginPanel({ agentId, methods, hostId, providerKeys, providerKeysError, onRetryProviderKeys, onProviderKeysChanged, onVerify, onClose, onTerminal, account }: {
 	agentId: AgentId;
 	/** Signs an account in instead of the computer's own login. */
 	account?: AccountLoginMode;
-	/** Replaces the panel's heading. */
-	title?: string;
 	methods: components["schemas"]["AgentLoginMethod"][];
 	hostId?: string;
 	/** Saved provider keys, without values, for this host. Undefined while loading or after a failed load. */
@@ -546,7 +544,7 @@ export function HarnessLoginPanel({ agentId, methods, hostId, providerKeys, prov
 	return <section ref={panelRef} aria-labelledby={titleId} className="@container min-w-0 space-y-3 px-3 py-3" data-settings-inline-edit="">
 		{/* While the method list shows, the Account heading and group captions already say what this is. */}
 		<div className={availableMethods.length > 0 && !connected && !running && !verifying && !remote ? "sr-only" : "space-y-1"}>
-			<h4 id={titleId} className="text-sm leading-5 font-medium text-settings-label">{title ?? t("settings.harness.loginUi.title", { agent: agentLabel(agentId) })}</h4>
+			<h4 id={titleId} className="text-sm leading-5 font-medium text-settings-label">{t("settings.harness.loginUi.title", { agent: agentLabel(agentId) })}</h4>
 			{!connected && !locked && (availableMethods.length === 0 || methodGroups.length < 2) && <p className="text-xs leading-4 text-settings-muted">{availableMethods.length ? t("settings.harness.loginUi.method") : t("settings.harness.loginUi.nativeInteractive")}</p>}
 			{remote && !connected && <p className="max-w-prose text-xs leading-4 text-settings-muted">{t(agentId === "codex" ? "settings.harness.loginUi.remoteCodex" : "settings.harness.loginUi.remoteClaude")}</p>}
 		</div>

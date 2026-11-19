@@ -4126,8 +4126,6 @@
 	"settings.agentAccounts.checkSignIn": "로그인 확인",
 	"settings.agentAccounts.loginWaiting": "아직 로그인하지 않았습니다. 터미널에서 마친 후 다시 확인하세요.",
 	"settings.agentAccounts.loginNotSubscription": "구독이 아니라 API 키입니다. 구독 계정으로 로그인하세요.",
-	"settings.agentAccounts.addTitle": "{{provider}} 계정 추가",
-	"settings.agentAccounts.signInAgainTitle": "{{name}} 다시 로그인",
 	"settings.agentAccounts.meteredBadge": "API 청구",
 	"settings.agentAccounts.setupTokenBadge": "설정 토큰",
 	"settings.agentAccounts.replaceToken": "토큰 교체",

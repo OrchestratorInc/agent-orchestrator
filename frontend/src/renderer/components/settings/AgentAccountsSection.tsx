@@ -327,9 +327,6 @@ export function AgentAccountsPanel({ provider, cliLogin: cliLoginControls, hostI
 				agentId={harness}
 				methods={methodsFor(signInTarget)}
 				hostId={hostId}
-				title={signInTarget
-					? t("settings.agentAccounts.signInAgainTitle", { name: agentAccountLabel(signInTarget, rows, t) })
-					: t("settings.agentAccounts.addTitle", { provider: providerNames[provider] })}
 				account={{ start: startAccountSignIn, named: !signInTarget }}
 				onVerify={verifyAccountSignIn}
 				onClose={closeSignIn}

@@ -4108,8 +4108,6 @@
 	"settings.agentAccounts.checkSignIn": "Check sign-in",
 	"settings.agentAccounts.loginWaiting": "Not signed in yet. Finish in the terminal, then check again.",
 	"settings.agentAccounts.loginNotSubscription": "This is an API key, not a subscription. Sign in with your subscription account.",
-	"settings.agentAccounts.addTitle": "Add a {{provider}} account",
-	"settings.agentAccounts.signInAgainTitle": "Sign {{name}} in again",
 	"settings.agentAccounts.meteredBadge": "API billing",
 	"settings.agentAccounts.setupTokenBadge": "Setup token",
 	"settings.agentAccounts.replaceToken": "Replace token",

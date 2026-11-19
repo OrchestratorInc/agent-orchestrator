@@ -4108,8 +4108,6 @@
 	"settings.agentAccounts.checkSignIn": "检查登录",
 	"settings.agentAccounts.loginWaiting": "尚未登录。请在终端中完成后再检查。",
 	"settings.agentAccounts.loginNotSubscription": "这是 API 密钥，不是订阅。请用你的订阅账号登录。",
-	"settings.agentAccounts.addTitle": "添加 {{provider}} 账户",
-	"settings.agentAccounts.signInAgainTitle": "重新登录 {{name}}",
 	"settings.agentAccounts.meteredBadge": "API 计费",
 	"settings.agentAccounts.setupTokenBadge": "设置令牌",
 	"settings.agentAccounts.replaceToken": "替换令牌",

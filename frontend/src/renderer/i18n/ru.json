@@ -4317,8 +4317,6 @@
 	"settings.agentAccounts.checkSignIn": "Проверить вход",
 	"settings.agentAccounts.loginWaiting": "Вход ещё не выполнен. Завершите его в терминале, затем проверьте снова.",
 	"settings.agentAccounts.loginNotSubscription": "Это API-ключ, а не подписка. Войдите в аккаунт с подпиской.",
-	"settings.agentAccounts.addTitle": "Добавить аккаунт {{provider}}",
-	"settings.agentAccounts.signInAgainTitle": "Снова войти в {{name}}",
 	"settings.agentAccounts.meteredBadge": "Оплата API",
 	"settings.agentAccounts.setupTokenBadge": "Токен настройки",
 	"settings.agentAccounts.replaceToken": "Заменить токен",

@@ -4226,8 +4226,6 @@
 	"settings.agentAccounts.checkSignIn": "Comprobar inicio de sesión",
 	"settings.agentAccounts.loginWaiting": "Aún no has iniciado sesión. Termina en la terminal y vuelve a comprobar.",
 	"settings.agentAccounts.loginNotSubscription": "Esto es una clave de API, no una suscripción. Inicia sesión con tu cuenta de suscripción.",
-	"settings.agentAccounts.addTitle": "Añadir una cuenta de {{provider}}",
-	"settings.agentAccounts.signInAgainTitle": "Volver a iniciar sesión en {{name}}",
 	"settings.agentAccounts.meteredBadge": "Facturación de API",
 	"settings.agentAccounts.setupTokenBadge": "Token de configuración",
 	"settings.agentAccounts.replaceToken": "Reemplazar token",

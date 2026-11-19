@@ -4126,8 +4126,6 @@
 	"settings.agentAccounts.checkSignIn": "サインインを確認",
 	"settings.agentAccounts.loginWaiting": "まだサインインしていません。ターミナルで完了してから、もう一度確認してください。",
 	"settings.agentAccounts.loginNotSubscription": "これはサブスクリプションではなく API キーです。サブスクリプションのアカウントでサインインしてください。",
-	"settings.agentAccounts.addTitle": "{{provider}} アカウントを追加",
-	"settings.agentAccounts.signInAgainTitle": "{{name}} に再度サインイン",
 	"settings.agentAccounts.meteredBadge": "API 課金",
 	"settings.agentAccounts.setupTokenBadge": "セットアップトークン",
 	"settings.agentAccounts.replaceToken": "トークンを置き換え",

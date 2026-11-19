@@ -4108,8 +4108,6 @@
 	"settings.agentAccounts.checkSignIn": "Oturum açmayı denetle",
 	"settings.agentAccounts.loginWaiting": "Henüz oturum açılmadı. Terminalde tamamlayıp yeniden denetleyin.",
 	"settings.agentAccounts.loginNotSubscription": "Bu bir API anahtarı, abonelik değil. Abonelik hesabınızla oturum açın.",
-	"settings.agentAccounts.addTitle": "{{provider}} hesabı ekle",
-	"settings.agentAccounts.signInAgainTitle": "{{name}} ile yeniden oturum aç",
 	"settings.agentAccounts.meteredBadge": "API faturalandırma",
 	"settings.agentAccounts.setupTokenBadge": "Kurulum belirteci",
 	"settings.agentAccounts.replaceToken": "Belirteci değiştir",
