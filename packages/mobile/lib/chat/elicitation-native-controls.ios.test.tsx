@@ -27,7 +27,6 @@ vi.mock("../ThemeProvider", () => ({ useTheme: () => ({}), useThemeState: () => 
 import { Host } from "@expo/ui";
 import { Button, Text, TextField } from "@expo/ui/swift-ui";
 import { haptics } from "../haptics";
-import { touchTarget } from "../tokens";
 import { ElicitationAction, ElicitationTextField } from "./elicitation-native-controls.ios";
 
 let renderer: ReactTestRenderer | undefined;
@@ -163,11 +162,16 @@ it("wraps a decision wider than its row instead of running past the card", () =>
 	expect(modifier(actionParts().button, "frame")).toBeUndefined();
 });
 
-it("gives every action at least a touch target", () => {
+// Plain secondary buttons had no shape and almost no gap, so "Allow Once" and
+// "Always Allow" read as one line of text beside the prominent button.
+it("draws secondary actions as bordered buttons the primary's size, at least a touch target", () => {
 	act(() => { renderer = create(<ElicitationAction label="Skip" onPress={vi.fn()} />); });
-	// A plain button is only as tappable as its label, so the label carries the target.
-	expect(modifier(actionParts().label, "frame")).toEqual([{ minWidth: touchTarget, minHeight: touchTarget }]);
+	expect(modifier(actionParts().button, "buttonStyle")).toEqual(["bordered"]);
+	expect(modifier(actionParts().button, "controlSize")).toEqual(["large"]);
+	// The button carries the target now, so the label needs no frame of its own.
+	expect(actionParts().label.props.modifiers).toBeUndefined();
 	act(() => renderer!.update(<ElicitationAction label="Submit" primary onPress={vi.fn()} />));
+	expect(modifier(actionParts().button, "buttonStyle")).toEqual(["borderedProminent"]);
 	expect(modifier(actionParts().button, "controlSize")).toEqual(["large"]);
 });
 

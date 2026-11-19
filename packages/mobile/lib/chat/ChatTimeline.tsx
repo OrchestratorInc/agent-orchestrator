@@ -45,6 +45,7 @@ import { requestPresentation } from "./chatPresentation";
 import { workingElapsedLabel } from "./conversationChrome";
 import { errorActivityDuplicatesTurn, providerErrorCopy } from "./providerError";
 import { ElicitationAction } from "./elicitation-native-controls";
+import { primaryDecisionId } from "./approvalDecisions";
 import { ElicitationInputField } from "./ElicitationInputField";
 import {
 	elicitationPromptCopy,
@@ -1394,6 +1395,7 @@ function ApprovalCard({ activity, busy, onDecide, handledBelow }: { activity: Co
 	const pending = activity.status === "pending";
 	const presentation = requestPresentation("approval", pending);
 	const command = activity.detail?.command ?? activity.summary;
+	const primaryId = primaryDecisionId(activity.decisions);
 	if (pending && handledBelow) return <RequestEcho title={presentation.title} detail={command} />;
 	if (!pending) return <View style={styles.approvalResolved}>
 		<Feather name={presentation.icon} size={iconSize.xs} color={t.textFaint} />
@@ -1408,10 +1410,10 @@ function ApprovalCard({ activity, busy, onDecide, handledBelow }: { activity: Co
 			<Text selectable style={styles.requestCommand}>{command}</Text>
 		</View>
 		{activity.detail?.cwd ? <LabelValue label="cwd" value={activity.detail.cwd} /> : null}
-		{activity.decisions?.length ? <View style={styles.approvalActions}>{activity.decisions.map((decision, index) => {
+		{activity.decisions?.length ? <View style={styles.approvalActions}>{activity.decisions.map((decision) => {
 			const label = submitting === decision.id ? "Sending…" : decision.label;
 			// One haptic per decision, when it lands: the press itself only starts the work.
-			return <ElicitationAction key={decision.id} label={label} primary={index === 0} reportsOutcome disabled={busy || Boolean(submitting) || !activity.requestId} onPress={() => {
+			return <ElicitationAction key={decision.id} label={label} primary={decision.id === primaryId} reportsOutcome disabled={busy || Boolean(submitting) || !activity.requestId} onPress={() => {
 				setSubmitting(decision.id);
 				setSubmitError(undefined);
 				void onDecide(activity.requestId ?? "", decision.id)
@@ -1706,7 +1708,7 @@ const makeStyles = (t: Theme) => {
 		approvalDot: { width: 7, height: 7, borderRadius: radius.pill, backgroundColor: t.amber },
 		approvalStatusText: { fontFamily: "DMSans_600SemiBold", color: t.textPrimary, fontSize: type.footnote.fontSize, fontWeight: "600" },
 		approvalCommandSurface: { flexDirection: "row", alignItems: "flex-start", gap: space.sm, borderRadius: radius.md, borderCurve: "continuous", backgroundColor: t.bgSubtle, paddingHorizontal: space.md, paddingVertical: space.md },
-		approvalActions: { minHeight: 36, flexDirection: "row", alignItems: "center", justifyContent: "flex-end", flexWrap: "wrap", gap: space.xxs, paddingTop: space.none },
+		approvalActions: { minHeight: 36, flexDirection: "row", alignItems: "center", justifyContent: "flex-end", flexWrap: "wrap", gap: space.sm, paddingTop: space.none },
 		approvalResolved: { minHeight: 38, marginVertical: space.sm, flexDirection: "row", alignItems: "center", gap: space.xs, paddingHorizontal: space.hair },
 		approvalResolvedLabel: { fontFamily: "DMSans_600SemiBold", color: t.textTertiary, fontSize: type.footnote.fontSize, fontWeight: "600" },
 		approvalResolvedCommand: { flex: 1, color: t.textFaint, fontSize: type.footnote.fontSize, fontFamily: t.fontMono },
