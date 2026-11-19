@@ -494,6 +494,7 @@ type Manager struct {
 	// Snapshot before the listener binds; background cleanup must never reclaim
 	// a preparation opened in this daemon after the listener is live.
 	startupTaskPreparations []domain.SessionRecord
+	startupHealthCutoff     time.Time
 	// Only pre-listener provisioning writes that failed may be retried after
 	// bind; scanning then would also sweep tasks created by this daemon.
 	startupProvisioningRetries []domain.SessionRecord
@@ -2342,17 +2343,8 @@ func (m *Manager) createSessionWorkspaceAt(ctx context.Context, project domain.P
 		return ports.WorkspaceInfo{}, nil, err
 	}
 	childRepos := make([]ports.WorkspaceProjectRepoConfig, 0, len(repos))
-	assets := make([]ports.WorkspaceProjectAssetConfig, 0)
 	for _, repo := range repos {
 		if repo.GitStatus == domain.GitStatusNeedsInit {
-			repoPath := filepath.Join(project.Path, filepath.FromSlash(repo.RelativePath))
-			if _, err := os.Stat(filepath.Join(repoPath, ".git")); err == nil {
-				continue
-			}
-			assets = append(assets, ports.WorkspaceProjectAssetConfig{
-				RelativePath: repo.RelativePath,
-				SourcePath:   repoPath,
-			})
 			continue
 		}
 		repoPath := filepath.Join(project.Path, filepath.FromSlash(repo.RelativePath))
@@ -2380,7 +2372,6 @@ func (m *Manager) createSessionWorkspaceAt(ctx context.Context, project domain.P
 		BaseRef:          baseRefs[filepath.Clean(project.Path)],
 		StartRef:         startRef,
 		Repos:            childRepos,
-		Assets:           assets,
 	})
 	if err != nil && (cfg.TaskPreparation == "" || len(info.Worktrees) == 0) {
 		return ports.WorkspaceInfo{}, nil, err
@@ -4670,6 +4661,7 @@ func (m *Manager) ReconcileStartupSafety(ctx context.Context) error {
 	}
 	// Capture only rows that predate the listener. Git cleanup belongs in the
 	// background, where a slow or unavailable repository cannot delay boot.
+	m.startupHealthCutoff = m.clock()
 	m.startupTaskPreparations = []domain.SessionRecord{}
 	m.startupProvisioningRetries = nil
 	// No branch naming survives a restart; clients show the branch it left.
@@ -4763,6 +4755,11 @@ func (m *Manager) reconcileLivePass(ctx context.Context, recs []domain.SessionRe
 	candidates := make([]domain.SessionRecord, 0, len(recs))
 	ids := make([]domain.SessionID, 0, len(recs))
 	for _, rec := range recs {
+		// A spawn accepted after the listener opened can still be between
+		// inserting its seed row and creating its workspace.
+		if !m.startupHealthCutoff.IsZero() && !rec.CreatedAt.Before(m.startupHealthCutoff) {
+			continue
+		}
 		if rec.IsTerminated || rec.IsTaskPreparation || rec.HibernatedAt != nil || rec.ProvisionState.WithDefault() != domain.SessionProvisionReady {
 			continue
 		}
