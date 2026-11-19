@@ -1878,6 +1878,8 @@ function daemonEnv(forceKeep = keepDaemonAlive(process.env)): NodeJS.ProcessEnv 
 			process.env.AO_ALLOWED_ORIGINS,
 			rendererUrl(),
 		);
+		// Dev keeps a line for every request; packaged daemons log routine reads at trace.
+		if (!process.env.AO_LOG_LEVEL) devExtras.AO_LOG_LEVEL = "trace";
 	}
 	// Windows keeps its native environment semantics while overlaying values
 	// exported by the selected login-shell probe.

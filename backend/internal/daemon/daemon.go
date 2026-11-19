@@ -1867,7 +1867,12 @@ func usagePipelineWatchRoots(roots usagesvc.SourceRoots) []string {
 // holds the data-dir lock (see deferredLogFile).
 func newDaemonLogger() (*slog.Logger, func(dataDir string)) {
 	file := &deferredLogFile{}
-	log := slog.New(slog.NewTextHandler(teeLogWriter{stderr: os.Stderr, file: file}, &slog.HandlerOptions{Level: slog.LevelDebug}))
+	// The level is debug, as it always was, so support keeps the detail of every
+	// readiness check and observer poll; AO_LOG_LEVEL (trace, debug, info, warn,
+	// error) overrides it. Routine reads from the desktop app's polls log at
+	// trace, below debug: they were most of the lines at rest, and each one is
+	// written here twice and copied again by the desktop app.
+	log := slog.New(slog.NewTextHandler(teeLogWriter{stderr: os.Stderr, file: file}, &slog.HandlerOptions{Level: logLevelFromEnv(os.Getenv("AO_LOG_LEVEL"))}))
 	return log, func(dataDir string) {
 		rotating, err := openRotatingLogFile(filepath.Join(dataDir, daemonLogName), maxDaemonLogBytes)
 		if err != nil {
@@ -1876,6 +1881,19 @@ func newDaemonLogger() (*slog.Logger, func(dataDir string)) {
 		}
 		file.attach(rotating)
 	}
+}
+
+// logLevelFromEnv maps AO_LOG_LEVEL to a slog level; empty or unknown is debug.
+func logLevelFromEnv(value string) slog.Level {
+	value = strings.TrimSpace(value)
+	if strings.EqualFold(value, "trace") {
+		return httpd.LevelTrace
+	}
+	var level slog.Level
+	if err := level.UnmarshalText([]byte(value)); err != nil || value == "" {
+		return slog.LevelDebug
+	}
+	return level
 }
 
 // dataDirTakeoverWait covers the capped shutdown stages plus one ordinary
