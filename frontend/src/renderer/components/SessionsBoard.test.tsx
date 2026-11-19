@@ -2358,9 +2358,19 @@ describe("SessionsBoard search", () => {
 		searchableBoard();
 		renderBoard("p1");
 		const mac = isMacPlatform();
+		// jsdom lays nothing out; the board only claims the chord for a field on screen.
+		Object.defineProperty(searchField(), "getClientRects", { configurable: true, value: () => [{ top: 0, bottom: 30 }] });
 
 		fireEvent.keyDown(window, { key: "f", code: "KeyF", metaKey: mac, ctrlKey: !mac });
 		await waitFor(() => expect(searchField()).toHaveFocus());
+
+		// Another text field keeps the chord for its own editing.
+		const other = document.createElement("textarea");
+		document.body.append(other);
+		other.focus();
+		fireEvent.keyDown(other, { key: "f", code: "KeyF", metaKey: mac, ctrlKey: !mac });
+		expect(other).toHaveFocus();
+		other.remove();
 	});
 
 	it("clears on Escape", async () => {
