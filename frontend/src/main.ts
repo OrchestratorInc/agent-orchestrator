@@ -4615,6 +4615,7 @@ app.whenReady().then(async () => {
 	powerMonitor.on("resume", () => recordUpdateDiagnostic("power-resume"));
 	void refreshGitHubOwners();
 	const authority = new TelemetryPolicyAuthority({ dataDir: desktopDataDir, packagedDefault: app.isPackaged, platform: process.platform });
+	let telemetryRetryTimer: ReturnType<typeof setInterval> | undefined;
 	const policyController = new DesktopTelemetryController({
 		authority,
 		environmentAllowsEvents: rendererTelemetryEnabled(process.env, app.isPackaged),
@@ -4623,6 +4624,9 @@ app.whenReady().then(async () => {
 		clearRendererQueues: clearRendererTelemetryQueues,
 		broadcast: (view) => {
 			for (const shellContents of trustedShellWebContents.values()) if (!shellContents.isDestroyed()) shellContents.send(TELEMETRY_POLICY_CHANGED_CHANNEL, view);
+			// Retry a pending policy write every second, only while one is pending.
+			if (!telemetryPolicyRetryable(view)) { clearInterval(telemetryRetryTimer); telemetryRetryTimer = undefined; }
+			else telemetryRetryTimer ??= setInterval(() => void policyController.retryPendingCleanup(), 1_000).unref();
 		},
 	});
 	telemetryPolicyController = policyController;
@@ -4631,7 +4635,6 @@ app.whenReady().then(async () => {
 	// Handled main failures (including any held from before this point) go
 	// through the same consent check as renderer captures.
 	setMainErrorSink((capture) => { policyController.captureMain(capture); });
-	setInterval(() => { if (telemetryPolicyRetryable(policyController.snapshot())) void policyController.retryPendingCleanup(); }, 1_000).unref();
 	// Capture install provenance BEFORE relocation. moveToApplicationsFolder()
 	// relaunches from /Applications WITHOUT forwarding our --installed-via arg, and
 	// code past a successful move never runs in this instance, so a post-move-only

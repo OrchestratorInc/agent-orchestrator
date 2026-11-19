@@ -1037,9 +1037,9 @@ describe("useWorkspacePolling", () => {
 			await vi.advanceTimersByTimeAsync(0);
 			const sessionFetches = () => getMock.mock.calls.filter(([url]) => url === "/api/v1/sessions").length;
 			const afterMount = sessionFetches();
-			await vi.advanceTimersByTimeAsync(15_000);
+			await vi.advanceTimersByTimeAsync(60_000);
 			expect(sessionFetches()).toBe(afterMount + 1);
-			await vi.advanceTimersByTimeAsync(15_000);
+			await vi.advanceTimersByTimeAsync(60_000);
 			expect(sessionFetches()).toBe(afterMount + 2);
 		} finally {
 			vi.useRealTimers();

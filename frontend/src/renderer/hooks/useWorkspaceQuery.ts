@@ -435,8 +435,10 @@ export const workspaceQueryOptions = {
 	staleTime: 10_000,
 };
 
+// CDC events over SSE refresh the list. Projects have no CDC event, so a slow poll catches
+// project changes made outside this window.
 export const workspaceRefetchInterval = (query: Query<WorkspaceSummary[]>) =>
-	workspaceStatusesChecking(query.state.data) ? 300 : 15_000;
+	workspaceStatusesChecking(query.state.data) ? 300 : 60_000;
 
 /**
  * Drives the workspace poll from one place. Mounted once by the shell; it never
