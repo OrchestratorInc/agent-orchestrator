@@ -531,6 +531,7 @@
 	"home.starUs": "Mit Stern markieren",
 	"browser.agentAction": "Agent {{verb}}",
 	"browser.agentUsing": "Agent nutzt den Browser",
+	"browser.agentTab": "Tab des Agenten: {{title}}",
 	"browser.find.close": "Suche schließen",
 	"browser.find.matchCount": "{{active}} von {{total}}",
 	"browser.find.next": "Nächster Treffer",

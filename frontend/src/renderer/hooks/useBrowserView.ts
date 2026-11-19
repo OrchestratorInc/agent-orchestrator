@@ -105,6 +105,8 @@ export type BrowserViewModel = {
 	stopFindInPage: (focusPage?: boolean) => Promise<void>;
 	tabs: BrowserTabState[];
 	activeTabId: string;
+	/** The tab the agent's next command acts in ("" when it has none yet). */
+	agentTabId: string;
 	tabNotice: string;
 	selectTab: (tabId: string) => Promise<void>;
 	closeTab: (tabId: string) => Promise<void>;
@@ -120,6 +122,8 @@ export type BrowserViewModel = {
 	setDevToolsPlacement: (placement: BrowserDevToolsPlacement) => Promise<void>;
 	agentBrowserActive: boolean;
 	agentBrowserActivity: ObservedBrowserAgentActivity | null;
+	/** The last time the agent was greeted in a tab on screen (seq counts up). */
+	agentGreeting: { tabId: string; seq: number } | null;
 	destroy: () => void;
 	annotationMode: boolean;
 	annotationState?: Pick<BrowserAnnotationStatePayload, "count" | "screenshotCount" | "hasDraft">;
@@ -350,6 +354,7 @@ export function useBrowserView({
 	const [closedTabs, setClosedTabs] = useState<ClosedBrowserTab[]>([]);
 	const [agentBrowserActive, setAgentBrowserActive] = useState(false);
 	const [agentBrowserActivity, setAgentBrowserActivity] = useState<ObservedBrowserAgentActivity | null>(null);
+	const [agentGreeting, setAgentGreeting] = useState<{ tabId: string; seq: number } | null>(null);
 	const observedCommandStartsRef = useRef(new Set<string>());
 	const [stateSessionId, setStateSessionId] = useState(sessionId);
 	const slotNodeRef = useRef<HTMLDivElement | null>(null);
@@ -787,6 +792,13 @@ export function useBrowserView({
 		});
 	}, []);
 
+	useEffect(() => {
+		return window.ao?.browser.onAgentGreeting?.((greeting) => {
+			if (greeting.viewId !== viewIdRef.current) return;
+			setAgentGreeting((current) => ({ tabId: greeting.tabId, seq: (current?.seq ?? 0) + 1 }));
+		});
+	}, []);
+
 	useEffect(
 		() => () => {
 			if (tabNoticeTimerRef.current !== null) window.clearTimeout(tabNoticeTimerRef.current);
@@ -1069,7 +1081,7 @@ export function useBrowserView({
 				return;
 			}
 			const activeTab = tabs.find((tab) => tab.active);
-			if (activeTab && !activeTab.remote && isBlankTabUrl(activeTab.url)) {
+			if (activeTab && !activeTab.remote && activeTab.owner !== "agent" && isBlankTabUrl(activeTab.url)) {
 				const state = await window.ao!.browser.navigate({ viewId: id, url });
 				if (viewIdRef.current === state.viewId) setNavState(state);
 				return;
@@ -1147,7 +1159,7 @@ export function useBrowserView({
 	}, [navState.url, setAnnotationMode]);
 
 	const navigate = useCallback(
-		(url: string) => {
+		(url: string, preview?: boolean) => {
 			if (!hasNativeBrowser) {
 				const normalized = url.trim();
 				setNavState((current) => ({
@@ -1158,18 +1170,20 @@ export function useBrowserView({
 				}));
 				return Promise.resolve();
 			}
-			return withView((id) => window.ao!.browser.navigate({ viewId: id, url }));
+			return withView((id) => window.ao!.browser.navigate({ viewId: id, url, ...(preview ? { preview } : {}) }));
 		},
 		[hasNativeBrowser, withView],
 	);
 
-	// A preview never lands in an agent tab: it goes to the person's preview
-	// tab (one on its origin or another preview's), else to a new tab.
+	// A preview loads in the tab the agent works in, whichever tab is in front
+	// (the main process picks it). It never lands in a tab showing the agent's
+	// own browser: with one in front it goes to the person's preview tab (one
+	// on its origin or another preview's), else to a new tab.
 	const showPreview = useCallback(
 		async (url: string) => {
 			const id = viewIdRef.current;
 			const tabs = hasNativeBrowser && id ? (await window.ao!.browser.getTabs(id).catch(() => null))?.tabs : undefined;
-			if (!tabs?.find((tab) => tab.active)?.remote) return navigate(url);
+			if (!tabs?.find((tab) => tab.active)?.remote) return navigate(url, true);
 			const preview = /^https:\/\/ao-preview-[0-9a-f]{32}\.localhost(?::\d+)?\//;
 			const own = tabs.find((tab) => !tab.remote && (sameBrowserOrigin(tab.url, url) || preview.test(tab.url)));
 			if (!own) return openTab(url);
@@ -1336,12 +1350,14 @@ export function useBrowserView({
 	const modelFindOpenRequest = stateBelongsToSession ? findOpenRequest : 0;
 	const modelTabs = stateBelongsToSession ? tabs : (switchingTo?.tabsState.tabs ?? EMPTY_TABS);
 	const modelActiveTabId = stateBelongsToSession ? tabsState.activeTabId : (switchingTo?.tabsState.activeTabId ?? "");
+	const modelAgentTabId = (stateBelongsToSession ? tabsState.agentTabId : switchingTo?.tabsState.agentTabId) ?? "";
 	const modelTabNotice = stateBelongsToSession ? tabNotice : "";
 	const modelClosedTabs = stateBelongsToSession ? closedTabs : EMPTY_CLOSED_TABS;
 	const modelDevtoolsState = stateBelongsToSession ? devtoolsState : EMPTY_DEVTOOLS_STATE;
 	const modelProfileState = stateBelongsToSession ? profileState : EMPTY_PROFILE_STATE;
 	const modelAgentBrowserActive = stateBelongsToSession && agentBrowserActive;
 	const modelAgentBrowserActivity = stateBelongsToSession ? agentBrowserActivity : null;
+	const modelAgentGreeting = stateBelongsToSession ? agentGreeting : null;
 	const goBack = useCallback(() => (hasNativeBrowser ? withView((id) => window.ao!.browser.goBack(id)) : Promise.resolve()), [hasNativeBrowser, withView]);
 	const goForward = useCallback(() => (hasNativeBrowser ? withView((id) => window.ao!.browser.goForward(id)) : Promise.resolve()), [hasNativeBrowser, withView]);
 	const reload = useCallback(() => (hasNativeBrowser ? withView((id) => window.ao!.browser.reload(id)) : Promise.resolve()), [hasNativeBrowser, withView]);
@@ -1369,6 +1385,7 @@ export function useBrowserView({
 			stopFindInPage,
 			tabs: modelTabs,
 			activeTabId: modelActiveTabId,
+			agentTabId: modelAgentTabId,
 			tabNotice: modelTabNotice,
 			selectTab,
 			closeTab,
@@ -1384,6 +1401,7 @@ export function useBrowserView({
 			setDevToolsPlacement,
 			agentBrowserActive: modelAgentBrowserActive,
 			agentBrowserActivity: modelAgentBrowserActivity,
+			agentGreeting: modelAgentGreeting,
 			destroy,
 			annotationMode,
 			annotationState,
@@ -1392,10 +1410,10 @@ export function useBrowserView({
 		}),
 		[
 			modelViewId, modelNavState, slotRef, navigate, goBack, goForward, reload, stop, modelFindState,
-			modelFindOpenRequest, findInPage, stopFindInPage, modelTabs, modelActiveTabId, modelTabNotice, selectTab,
+			modelFindOpenRequest, findInPage, stopFindInPage, modelTabs, modelActiveTabId, modelAgentTabId, modelTabNotice, selectTab,
 			closeTab, openTab, openLink, reorderTabs, modelClosedTabs, reopenClosedTab, modelDevtoolsState,
 			modelProfileState, openDevTools, closeDevTools, setDevToolsPlacement, modelAgentBrowserActive,
-			modelAgentBrowserActivity, destroy, annotationMode, annotationState, setAnnotationMode, annotationAction,
+			modelAgentBrowserActivity, modelAgentGreeting, destroy, annotationMode, annotationState, setAnnotationMode, annotationAction,
 		],
 	);
 }
