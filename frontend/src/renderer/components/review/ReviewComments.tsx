@@ -385,6 +385,7 @@ function ReviewCommentRow({
 	const [sendState, setSendState] = useState<Busy>("idle");
 	const [resolveState, setResolveState] = useState<Busy>("idle");
 	const [replying, setReplying] = useState(false);
+	const [menuOpen, setMenuOpen] = useState(false);
 	const [replyState, setReplyState] = useState<{ busy: boolean; error: string | null }>({ busy: false, error: null });
 	useEffect(() => {
 		if (!expanded) setReplying(false);
@@ -475,7 +476,7 @@ function ReviewCommentRow({
 		menuItems.push(<DropdownMenuItem key="copy" onSelect={() => copy(url)}>{t("pr.comments.copyLink")}</DropdownMenuItem>);
 	}
 	const menu = menuItems.length > 0 ? (
-		<DropdownMenu>
+		<DropdownMenu onOpenChange={setMenuOpen}>
 			<DropdownMenuTrigger asChild>
 				<Button
 					aria-label={t("pr.comments.actionsFor", { name })}
@@ -519,7 +520,7 @@ function ReviewCommentRow({
 				<span className={cn("relative flex h-6 shrink-0 items-center justify-end gap-1", menu && "min-w-6")}>
 					{comment.at ? (
 						<span
-							className={cn("text-micro tabular-nums text-passive", menu && !expanded && "group-hover/review-row:invisible group-focus-within/review-row:invisible group-has-[[data-state=open]]/review-row:invisible")}
+							className={cn("text-micro tabular-nums text-passive", menu && !expanded && (menuOpen ? "invisible" : "group-hover/review-row:invisible group-focus-within/review-row:invisible"))}
 							title={comment.at}
 						>
 							{formatTimeCompact(comment.at)}

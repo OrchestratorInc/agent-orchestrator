@@ -3680,7 +3680,7 @@ describe("SessionInspector summary reviews", () => {
   });
 
   it("offers no reviewer session actions before any reviewer exists", async () => {
-    mockCommonGets([], "", []);
+    mockCommonGets([], "", [reviewState(3, "needs_review")]);
     renderWithQuery(<SessionInspector session={session([pr(3, "open")])} />);
     await openReviewsSection();
     expect(await screen.findByRole("button", { name: "Review now" })).toBeEnabled();
@@ -3698,7 +3698,12 @@ describe("SessionInspector summary reviews", () => {
     getMock.mockImplementation(async (path: string) => path === "/api/v1/sessions/{sessionId}/reviews"
       ? stopped ? refresh : response
       : common(path));
-    postMock.mockImplementation(async () => { stopped = true; return { data: { reviewerHandleId: "", reviews } }; });
+    // Opening the PR card also POSTs for its details; only the kill ends the reviewer.
+    postMock.mockImplementation(async (path: string) => {
+      if (path !== "/api/v1/sessions/{sessionId}/reviews/kill") return { data: { ok: true } };
+      stopped = true;
+      return { data: { reviewerHandleId: "", reviews } };
+    });
     const { queryClient } = renderWithQuery(<SessionInspector session={session([pr(3, "open")])} />);
     await openReviewsSection();
     await userEvent.click(await screen.findByRole("button", { name: "More review actions" }));
@@ -3835,8 +3840,10 @@ describe("SessionInspector summary reviews", () => {
   const commentRowWith = async (text: string) =>
     (await screen.findByText(text, { exact: false })).closest("[data-testid='review-comment']") as HTMLElement;
   // A folded row opens from its header, the button that reports aria-expanded.
+  // The row's menu trigger reports it too, so skip popup triggers.
   const expandComment = async (row: HTMLElement) => {
-    const toggle = within(row).getAllByRole("button").find((button) => button.getAttribute("aria-expanded") === "false");
+    const toggle = within(row).getAllByRole("button").find((button) =>
+      button.getAttribute("aria-expanded") === "false" && !button.hasAttribute("aria-haspopup"));
     if (toggle) await userEvent.click(toggle);
   };
   const mayaThread = (id: string, path: string, line: number, body: string) => ({
@@ -3864,7 +3871,7 @@ describe("SessionInspector summary reviews", () => {
     expect(screen.getByText("Not reviewed yet")).toBeInTheDocument();
     const block = await screen.findByTestId("review-pr-block");
     expect(block).toHaveTextContent("Reviewable change 3");
-    expect(within(block).getByText("No open comments.")).toBeInTheDocument();
+    expect(within(block).getByText("No comments yet.")).toBeInTheDocument();
     expect(screen.queryByTestId("review-comment")).not.toBeInTheDocument();
   });
 
@@ -5672,11 +5679,11 @@ describe("SessionInspector Cloud reviews", () => {
       await waitFor(() => expect(screen.queryByText("Loading reviews...")).not.toBeInTheDocument());
       expect(screen.queryByRole("switch", { name: "Auto-review" })).not.toBeInTheDocument();
       expect(screen.queryByRole("combobox", { name: "Select reviewer agent" })).not.toBeInTheDocument();
-      expect(screen.queryByRole("button", { name: /^(run review|review latest commit)$/i })).not.toBeInTheDocument();
+      expect(screen.queryByRole("button", { name: "Review now" })).not.toBeInTheDocument();
     } else {
       expect(await screen.findByRole("switch", { name: "Auto-review" })).toBeInTheDocument();
       expect(screen.getByRole("combobox", { name: "Select reviewer agent" })).toBeInTheDocument();
-      expect(screen.getByRole("button", { name: /^(run review|review latest commit)$/i })).toBeInTheDocument();
+      expect(screen.getByRole("button", { name: "Review now" })).toBeInTheDocument();
     }
     expect(cloudCpMock.triggerSessionReviews).not.toHaveBeenCalled();
   });
