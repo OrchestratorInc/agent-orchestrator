@@ -1238,11 +1238,12 @@ func (q *Queries) ListSessionsWithPendingReviewRunNotices(ctx context.Context, m
 }
 
 const markReviewRunNoInject = `-- name: MarkReviewRunNoInject :execrows
-UPDATE review_run SET no_inject = TRUE, auto_inject_review = FALSE, requester_session_id = '' WHERE id = ? AND status IN ('queued', 'launching', 'running', 'cancelling')
+UPDATE review_run SET no_inject = TRUE, auto_inject_review = FALSE, requester_session_id = CASE WHEN requester_session_id = session_id THEN '' ELSE requester_session_id END WHERE id = ? AND status IN ('queued', 'launching', 'running', 'cancelling')
 `
 
 // A --no-inject trigger restarting a running pass makes that pass never
-// delivered too (#6810).
+// delivered too (#6810). A worker that triggered it gets no review-done
+// notice; another requester, such as an orchestrator, still does.
 func (q *Queries) MarkReviewRunNoInject(ctx context.Context, id string) (int64, error) {
 	result, err := q.db.ExecContext(ctx, markReviewRunNoInject, id)
 	if err != nil {

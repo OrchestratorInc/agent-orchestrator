@@ -273,3 +273,55 @@ func transitionNoInjectTestRun(ctx context.Context, t *testing.T, s *store.Store
 	now := time.Now().UTC()
 	return s.TransitionReviewRun(ctx, id, domain.ActiveReviewRunStatuses, status, domain.ReviewRunPatch{Verdict: verdict, Body: &body, GithubReviewID: &reviewID, AutoInjectReview: &inject, EndedAt: &now})
 }
+
+// #6810: a --no-inject pass never reaches the worker, so a worker that
+// triggered one gets no review-done notice; an orchestrator that triggered it
+// for the worker still does. Both at insert and when a restart marks a run.
+func TestNoInjectKeepsNonWorkerRequester(t *testing.T) {
+	s := newTestStore(t)
+	ctx := context.Background()
+	seedProject(t, s, "mer")
+	worker, err := s.CreateSession(ctx, sampleRecord("mer"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	orch, err := s.CreateSession(ctx, sampleRecord("mer"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	now := time.Now().UTC().Truncate(time.Second)
+	url := "https://github.com/acme/repo/pull/5"
+	if err := s.UpsertReview(ctx, domain.Review{ID: "rev", SessionID: worker.ID, ProjectID: "mer", Harness: "claude-code", PRURL: url, CreatedAt: now, UpdatedAt: now}); err != nil {
+		t.Fatal(err)
+	}
+	cases := []struct {
+		id        string
+		sha       string
+		requester domain.SessionID
+		noInject  bool
+		want      domain.SessionID
+	}{
+		{id: "self-insert", sha: "h1", requester: worker.ID, noInject: true, want: ""},
+		{id: "orch-insert", sha: "h2", requester: orch.ID, noInject: true, want: orch.ID},
+		{id: "self-mark", sha: "h3", requester: worker.ID, want: ""},
+		{id: "orch-mark", sha: "h4", requester: orch.ID, want: orch.ID},
+	}
+	for _, c := range cases {
+		run := domain.ReviewRun{ID: c.id, ReviewID: "rev", SessionID: worker.ID, Harness: "claude-code", PRURL: url, TargetSHA: c.sha, Status: domain.ReviewRunRunning, CreatedAt: now, NoInject: c.noInject, RequesterSessionID: c.requester}
+		if err := s.InsertReviewRun(ctx, run); err != nil {
+			t.Fatal(err)
+		}
+		if !c.noInject {
+			if ok, err := s.MarkReviewRunNoInject(ctx, c.id); err != nil || !ok {
+				t.Fatalf("mark %s: ok=%v err=%v", c.id, ok, err)
+			}
+		}
+		got, _, err := s.GetReviewRun(ctx, c.id)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !got.NoInject || got.RequesterSessionID != c.want {
+			t.Fatalf("run %s = no_inject %v requester %q, want no_inject and requester %q", c.id, got.NoInject, got.RequesterSessionID, c.want)
+		}
+	}
+}

@@ -238,8 +238,10 @@ func (s *Store) InsertReviewRun(ctx context.Context, r domain.ReviewRun) error {
 	if r.TriggerSource == "" {
 		r.TriggerSource = domain.ReviewTriggerManual
 	}
-	// Completion notices route through the requester ID.
-	if r.NoInject {
+	// Completion notices route through the requester ID. A --no-inject pass
+	// never reaches the worker, so a worker that triggered one gets no notice;
+	// another requester, such as an orchestrator, still does (#6810).
+	if r.NoInject && r.RequesterSessionID == r.SessionID {
 		r.RequesterSessionID = ""
 	}
 	err := s.qw.InsertReviewRun(ctx, gen.InsertReviewRunParams{
