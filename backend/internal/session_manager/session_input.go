@@ -189,17 +189,17 @@ func (m *Manager) admitAgentOperation(ctx context.Context, id domain.SessionID, 
 	}
 }
 
-// killResumeWait bounds how long Kill waits for an in-flight resume (a wake)
+// killResumeWaitBudget bounds how long Kill waits for an in-flight resume (a wake)
 // before reporting the session busy. A Chat wake normally finishes in seconds;
 // 30s leaves Kill 60s of its 90s teardown budget and keeps the archive request
 // inside the REST layer's 60s timeout.
-const killResumeWait = 30 * time.Second
+const killResumeWaitBudget = 30 * time.Second
 
 func (m *Manager) killResumeWaitLimit() time.Duration {
 	if m.killResumeWait > 0 {
 		return m.killResumeWait
 	}
-	return killResumeWait
+	return killResumeWaitBudget
 }
 
 // Some tests build a Manager without New, so the logger may be unset.
