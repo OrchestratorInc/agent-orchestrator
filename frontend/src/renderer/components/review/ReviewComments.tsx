@@ -183,14 +183,14 @@ function ReviewPRBlockView({
 			<Pressable
 				aria-controls={open ? listId : undefined}
 				aria-expanded={open}
-				className="flex w-full min-w-0 items-start gap-2 rounded-lg px-3 py-2.5 transition-colors hover:bg-interactive-hover/40"
+				className="group flex w-full min-w-0 items-start gap-2 rounded-lg px-3 py-2.5"
 				data-testid="review-pr-row"
 				onClick={() => setOpen((current) => !current)}
 			>
-				{open ? <ChevronDown aria-hidden="true" className="mt-0.5 size-icon-xs shrink-0 text-passive" /> : <ChevronRight aria-hidden="true" className="mt-0.5 size-icon-xs shrink-0 text-passive" />}
+				{open ? <ChevronDown aria-hidden="true" className="mt-0.5 size-icon-xs shrink-0 text-passive transition-colors group-hover:text-foreground" /> : <ChevronRight aria-hidden="true" className="mt-0.5 size-icon-xs shrink-0 text-passive transition-colors group-hover:text-foreground" />}
 				<span className="flex min-w-0 flex-1 flex-col gap-0.5">
 					<span className="break-words text-sm-md font-semibold leading-snug text-foreground">{block.title}</span>
-					<span className="text-micro tabular-nums text-passive">{meta}</span>
+					<span className="text-micro tabular-nums text-passive transition-colors group-hover:text-muted-foreground">{meta}</span>
 				</span>
 				{comments.length > 0 ? (
 					<span className={cn("mt-0.5 shrink-0 whitespace-nowrap text-2xs", openComments.length > 0 ? "font-medium text-status-in-review" : "text-passive")}>
