@@ -83,11 +83,20 @@ describe("streamingCodeHighlighter", () => {
 		const streamed = session.highlightLines!(options(source, false))!.fullHtml;
 		session.dispose();
 		const oneShot = streamingCodeHighlighter.highlight(options(source, false))!;
-		const text = (html: string) => html.replace(/<[^>]+>/g, "");
-		const colors = (html: string) => [...new Set(html.match(/--ao-code-[a-z]+/g))].sort();
-		expect(text(streamed)).toBe(text(oneShot));
-		expect(colors(streamed)).toEqual(colors(oneShot));
-		expect(colors(streamed)).toContain("--ao-code-comment");
+		const colored = (html: string) => {
+			const root = document.createElement("div");
+			root.innerHTML = html;
+			const walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT);
+			const chars: string[] = [];
+			while (walker.nextNode()) {
+				const node = walker.currentNode as Text;
+				const color = node.parentElement?.closest("[style*='--ao-code-']")?.getAttribute("style")?.match(/--ao-code-[a-z]+/)?.[0] ?? "";
+				for (const char of node.data) if (char !== "\n") chars.push(`${color} ${char}`);
+			}
+			return chars;
+		};
+		expect(colored(streamed)).toEqual(colored(oneShot));
+		expect(colored(streamed)).toContain("--ao-code-comment /");
 	});
 
 	it("resolves the same aliases as settled code", () => {
