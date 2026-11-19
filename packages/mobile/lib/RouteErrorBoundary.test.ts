@@ -39,6 +39,7 @@ const screenRoutes = [
 	"preview/[id].tsx",
 	"project/[id].tsx",
 	"render.tsx",
+	"shared-artifact.tsx",
 	"review/[sessionId].tsx",
 	"reviewer/[reviewId].tsx",
 	"session/[id].tsx",

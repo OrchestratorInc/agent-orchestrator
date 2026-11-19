@@ -725,6 +725,7 @@ WHERE id = ? AND state IN ('queued', 'running');
 -- name: SettleConversationTurn :exec
 UPDATE conversation_turns
 SET state = sqlc.arg(state), error_message = sqlc.arg(error_message), failure_code = sqlc.arg(failure_code),
+    started_at = COALESCE(started_at, sqlc.narg(started_at)),
     completed_at = COALESCE(completed_at, sqlc.narg(completed_at)),
     usage_limit_resets_at = COALESCE(sqlc.narg(usage_limit_resets_at), usage_limit_resets_at)
 WHERE id = sqlc.arg(id);
@@ -1210,6 +1211,12 @@ WHERE id = sqlc.arg(id)
   AND conversation_id = sqlc.arg(conversation_id)
   AND state = 'queued'
   AND promotion_started_at IS NOT NULL;
+
+-- name: MarkQueuedConversationBatchStarted :exec
+UPDATE conversation_turns
+SET started_at = COALESCE(started_at, sqlc.narg(started_at))
+WHERE conversation_id = sqlc.arg(conversation_id)
+  AND id IN (SELECT CAST(value AS TEXT) FROM json_each(CAST(sqlc.arg(turn_ids) AS TEXT)));
 
 -- A detached controller may have crossed the provider boundary before its
 -- batch receipt was recorded. Keep the source visible and fail closed on resume.

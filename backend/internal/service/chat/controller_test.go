@@ -5018,7 +5018,9 @@ func TestChatHandoffInterruptAbortAfterPreflightFailureResumesFencedQueue(t *tes
 	// queue; there may be no later completion event to trigger this drain.
 	h.svc.AbortChatHandoff(testSession)
 	h.awaitSnapshot(t, func(s store.ConversationSnapshot) bool {
-		return turnStateByText(t, s)["queued work survives preflight"] == domain.TurnStateRunning
+		// The asynchronous drain reserves the running turn before sending it.
+		return turnStateByText(t, s)["queued work survives preflight"] == domain.TurnStateRunning &&
+			len(h.conv.sentTexts()) >= 2
 	})
 	if got := h.conv.sentTexts(); len(got) != 2 || got[1] != "queued work survives preflight" {
 		t.Fatalf("provider received %v after abort, want preserved queue to resume", got)

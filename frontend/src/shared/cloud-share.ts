@@ -75,6 +75,38 @@ export interface CloudShareGrant {
 	createdAt: string;
 }
 
+/**
+ * One team, or a whole workspace, a link is shared with. Only a team
+ * workspace on a paid Cloud plan takes them. teamId is unset for a workspace;
+ * name is empty, and memberCount 0, when the owner has left the workspace.
+ */
+export interface CloudShareSubjectGrant {
+	id: string;
+	orgId: string;
+	teamId?: string;
+	name: string;
+	memberCount: number;
+	createdAt: string;
+}
+
+/** Everyone a link is shared with: people by email, teams, and workspaces. */
+export interface CloudShareGrants {
+	people: CloudShareGrant[];
+	teams: CloudShareSubjectGrant[];
+	workspaces: CloudShareSubjectGrant[];
+}
+
+/**
+ * Who to share a link with at once. teamIds and workspace name teams of, or
+ * everyone in, the team workspace orgId, which either needs.
+ */
+export interface CloudShareInvite {
+	emails?: string[];
+	orgId?: string;
+	teamIds?: string[];
+	workspace?: boolean;
+}
+
 /** One committed file of a cloud session. */
 export interface CloudSessionShareFile extends CloudShareFile {
 	source: "cloud";
