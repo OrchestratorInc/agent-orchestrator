@@ -3489,13 +3489,28 @@ describe("Sidebar", () => {
 	it("keeps the open session read while its project is collapsed", () => {
 		useUiStore.setState({ projectAvatars: false });
 		useSessionReadStore.setState({ baseline: 0, readAt: {} });
+		window.localStorage.setItem("ao.sidebar.expanded-projects", "[]");
 		mockParams.projectId = "proj-1";
 		mockParams.sessionId = "proj-1-open";
-		const open = { ...session, id: "proj-1-open", status: "idle", activity: { state: "idle", lastActivityAt: "2026-06-30T00:00:00Z" } } as const;
-		renderSidebar({ expandedProjectIds: [], workspaces: [{ ...workspace, sessions: [open] }] });
+		const open = { ...session, id: "proj-1-open", title: "open task", status: "idle", activity: { state: "idle", lastActivityAt: "2026-06-30T00:00:00Z" } } as const;
+		const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+		const noop = vi.fn().mockResolvedValue(undefined);
+		const tree = (sessions: WorkspaceSession[]) => (
+			<QueryClientProvider client={client}><TooltipProvider><SidebarProvider>
+				<Sidebar workspaces={[{ ...workspace, sessions }]} onCloneProject={noop} onCreateProject={noop} onInitializeProject={noop} onRemoveProject={noop} onCreateRemoteProject={noop} onInitializeRemoteProject={noop} />
+			</SidebarProvider></TooltipProvider></QueryClientProvider>
+		);
+		// The open session's project starts expanded; the user collapses it.
+		const view = render(tree([open]));
+		fireEvent.click(screen.getByLabelText("Toggle Project One sessions"));
+		expect(screen.getByLabelText("Toggle Project One sessions")).toHaveAttribute("aria-expanded", "false");
+		expect(screen.queryByLabelText("Open open task")).not.toBeInTheDocument();
 
+		// It updates while collapsed: still read, so no corner dot.
+		const updated = { ...open, updatedAt: "2026-07-02T00:00:00Z" };
+		view.rerender(tree([updated]));
+		expect(useSessionReadStore.getState().readAt[sessionReadKey(updated)]).toBe(Date.parse(updated.updatedAt));
 		expect(document.querySelector("[data-project-folder-icon] [data-project-marker]")).not.toBeInTheDocument();
-		expect(useSessionReadStore.getState().readAt[sessionReadKey(open)]).toBe(Date.parse(open.updatedAt));
 	});
 
 	it.each(["ci_failed", "exited"] as const)("keeps the folder for a collapsed project with a %s session", (status) => {
