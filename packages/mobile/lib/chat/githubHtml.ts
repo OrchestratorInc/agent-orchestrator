@@ -27,8 +27,9 @@ export type GitHubSegment =
 // ```code``` is a code span.
 const FENCE = /^ {0,3}(?:(`{3,})[^`\n]*(?=\n)(?:(?:\n[\s\S]*?)??\n {0,3}\1`*[ \t]*(?=\n|(?![\s\S]))|[\s\S]*(?![\s\S]))|(~{3,})[^\n]*(?=\n)(?:(?:\n[\s\S]*?)??\n {0,3}\2~*[ \t]*(?=\n|(?![\s\S]))|[\s\S]*(?![\s\S])))/gm;
 // A whole backtick run, then the first run of exactly that length (CommonMark): `` `<details>` `` is one span.
-// A span may wrap a line but not past a blank line or a fence line, which end the paragraph.
-const CODE_SPAN = /(?<!`)(`+)(?!`)((?:(?!\n[ \t]*\n|\n {0,3}(?:`{3}|~{3}))[\s\S])*?[^`])\1(?!`)/g;
+// A span may wrap a line but not past a blank line or a line that opens a fence (the
+// same opener FENCE takes), which end the paragraph; ```example` opens none.
+const CODE_SPAN = /(?<!`)(`+)(?!`)((?:(?!\n[ \t]*\n|\n {0,3}(?:`{3,}[^`\n]*|~{3,}[^\n]*)\n)[\s\S])*?[^`])\1(?!`)/g;
 // An unterminated comment hides the rest of the text, as it does on GitHub.
 const COMMENT = /<!--[\s\S]*?(?:-->|(?![\s\S]))/g;
 const DETAILS = /<details\b[^>]*>|<\/details\s*>/gi;

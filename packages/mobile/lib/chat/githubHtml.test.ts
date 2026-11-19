@@ -135,6 +135,8 @@ describe("githubSegments", () => {
 		expect(githubSegments("prefix <!--\n```\n-->\nVisible review with `code`.")).toEqual([{ kind: "markdown", text: "prefix\nVisible review with `code`." }]);
 		// A span stops at a fence line, so the fence keeps what follows as code.
 		expect(githubSegments("a `\n```\nx` <b>y</b>\n```")).toEqual([{ kind: "markdown", text: "a `\n```\nx` <b>y</b>\n```" }]);
+		// Only a line that really opens a fence stops it: ```example` holds a backtick, so it is not one.
+		expect(githubSegments("Use `<details>\n```example` here.")).toEqual([{ kind: "markdown", text: "Use `<details>\n```example` here." }]);
 		// Whichever starts first wins: a span that opens before a comment keeps it as code.
 		expect(githubSegments("`<!--` stays")).toEqual([{ kind: "markdown", text: "`<!--` stays" }]);
 		expect(githubSegments("```\n<!--\n```\nshown")).toEqual([{ kind: "markdown", text: "```\n<!--\n```\nshown" }]);
