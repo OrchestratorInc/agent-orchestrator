@@ -99,3 +99,39 @@ it.each([
 	expect(images).toEqual([]);
 	expect(text).toContain("status");
 });
+
+it("draws a bot's HTML review comment as its words, each <details> section folded under its summary", () => {
+	const icon = (name: string) => `<picture><img src="https://storage.googleapis.com/coderabbit/${name}.svg" width="16" height="16" alt=""></picture>`;
+	const body = [
+		"<!-- coderabbit-ai-generated:v1 -->",
+		"",
+		`**${icon("amber")} Minor** · **Quick win**`,
+		"",
+		"Qualify the isolation claim.",
+		"",
+		"<details>",
+		`<summary>${icon("bot")} Prompt for AI Agents</summary>`,
+		"<dl><dd>",
+		"",
+		"```",
+		"Fix the claim in browser.md.",
+		"```",
+		"",
+		"</dd></dl>",
+		"</details>",
+		"",
+		"<!-- This is an auto-generated comment by CodeRabbit -->",
+	].join("\n");
+	const item = message(reviewComment.replace(UNSAFE, body).replace("(@reviewer)", "(@coderabbitai)"));
+	const { text, images } = draw(item);
+	expect(text).not.toMatch(/<!--|<picture|<img|<details|<summary|<dl|<dd/);
+	expect(text).toContain("Minor");
+	expect(text).toContain("Qualify the isolation claim.");
+	expect(images).toEqual([]);
+	// The section is folded: its summary shows, its content does not until it is opened.
+	const section = renderer!.root.find((node) => node.props.accessibilityLabel === "Prompt for AI Agents");
+	expect(section.props.accessibilityState).toEqual({ expanded: false });
+	expect(text).not.toContain("Fix the claim in browser.md.");
+	act(() => section.props.onPress());
+	expect(textOf(renderer!.root)).toContain("Fix the claim in browser.md.");
+});
