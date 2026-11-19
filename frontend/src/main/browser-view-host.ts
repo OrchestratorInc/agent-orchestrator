@@ -1348,13 +1348,27 @@ export function createBrowserViewHost(
     session.agentTabId !== undefined && session.activeTabId === session.agentTabId;
   const agentTabsOf = (session: BrowserSessionEntry): BrowserEntry[] =>
     [...session.tabs.values()].filter((entry) => entry.owner === "agent");
+  // One of the agent's own tabs, by ID. Any other tab, the person's included,
+  // does not exist for the agent.
+  const agentOwnedEntry = (session: BrowserSessionEntry, tabId: string): BrowserEntry => {
+    const entry = session.tabs.get(tabId);
+    if (entry?.owner !== "agent")
+      throw browserError("TAB_NOT_FOUND", `Browser tab ${tabId} does not exist`);
+    return entry;
+  };
   // The agent closes only its own tabs, and never its last one.
   const assertAgentMayClose = (session: BrowserSessionEntry, tabId: string): void => {
-    if (session.tabs.get(tabId)?.owner !== "agent")
-      throw browserError("TAB_NOT_FOUND", `Browser tab ${tabId} does not exist`);
+    agentOwnedEntry(session, tabId);
     if (agentTabsOf(session).length === 1)
       throw browserError("CANNOT_CLOSE_LAST_TAB", "The agent's only browser tab cannot be closed");
   };
+  // The session's first tab while nobody has used it: it is whoever uses it
+  // first (claimForAgent, claimForPerson). Every other tab has its owner from
+  // the moment it opens.
+  const isUnusedTab = (entry: BrowserEntry): boolean =>
+    entry.owner === undefined && entry.agentTab === undefined;
+  const findUnusedTab = (session: BrowserSessionEntry): BrowserEntry | undefined =>
+    [...session.tabs.values()].find(isUnusedTab);
   let agentUseCounter = 0;
   const markAgentUse = (entry: BrowserEntry): void => {
     entry.agentUsedAt = ++agentUseCounter;
@@ -2224,14 +2238,9 @@ export function createBrowserViewHost(
   ): Promise<BrowserEntry> => {
     const current = session.agentTabId === undefined ? undefined : session.tabs.get(session.agentTabId);
     if (current) return current;
-    const unused = [...session.tabs.values()].find(
-      (entry) => entry.owner === undefined && entry.agentTab === undefined,
-    );
+    const unused = findUnusedTab(session);
     if (!unused) return openTab(session, url, !personInFront(session), "opened", false, "agent");
-    unused.owner = "agent";
-    setAgentTab(session, unused.tabId);
-    reframe(session, unused);
-    pushTabsState(options, session);
+    claimForAgent(session, unused);
     if (url) await navigateEntry(unused, url);
     return unused;
   };
@@ -2652,11 +2661,8 @@ export function createBrowserViewHost(
     return queueNativeOperation(
       session,
       async () => {
-        if (!session.tabs.has(tabId)) {
-          if (agentAsked) throw browserError("TAB_NOT_FOUND", `Browser tab ${tabId} does not exist`);
-          return listTabs(session);
-        }
         if (agentAsked) assertAgentMayClose(session, tabId);
+        else if (!session.tabs.has(tabId)) return listTabs(session);
         // agent-browser keeps a page of its own: its last one closes here.
         if (agentTabsOf(session).length === 1) return closeTab(session, tabId);
         try {
@@ -2899,20 +2905,10 @@ export function createBrowserViewHost(
       // Which tab is in front is the person's view (activateTab), not
       // agent-browser's to change: an explicit tab-select moves it (runNative).
       activateTarget: async (targetId) => {
-        const entry = session.tabs.get(targetId);
-        if (!entry || entry.owner !== "agent")
-          throw browserError(
-            "TAB_NOT_FOUND",
-            `Browser tab ${targetId} does not exist`,
-          );
-        await entry.ready;
+        await agentOwnedEntry(session, targetId).ready;
       },
       closeTarget: (targetId) => {
-        if (session.tabs.get(targetId)?.owner !== "agent")
-          throw browserError(
-            "TAB_NOT_FOUND",
-            `Browser tab ${targetId} does not exist`,
-          );
+        agentOwnedEntry(session, targetId);
         closeTab(session, targetId);
       },
     };
@@ -3263,10 +3259,18 @@ export function createBrowserViewHost(
   };
 
   const claimForPerson = (session: BrowserSessionEntry, entry: BrowserEntry): void => {
-    if (entry.owner !== undefined || entry.agentTab !== undefined) return;
+    if (!isUnusedTab(entry)) return;
     entry.owner = "person";
     pushTabsState(options, session);
   };
+  // The agent takes the unused first tab: it becomes the tab its commands
+  // act on, framed as the agent's.
+  function claimForAgent(session: BrowserSessionEntry, entry: BrowserEntry): void {
+    entry.owner = "agent";
+    setAgentTab(session, entry.tabId);
+    reframe(session, entry);
+    pushTabsState(options, session);
+  }
 
   const navigate = async ({
     viewId,
@@ -3397,7 +3401,7 @@ export function createBrowserViewHost(
           ? [...session.tabs.values()].find(
               (tab) => tab.agentTab === undefined && REMOTE_PREVIEW_URL.test(tab.view.webContents.getURL()),
             )
-          : previewTab ?? (active.owner === undefined ? active : undefined);
+          : previewTab ?? (isUnusedTab(active) ? active : undefined);
       if (!entry) return pushNavState(options, active);
       cancelAnnotation(options, entry, "navigation");
       if (entry === active) {
@@ -4904,11 +4908,7 @@ export function createBrowserViewHost(
 			// it is theirs now, and the preview does not load over it.
 			if (entry.owner === "person") return;
 			// As on the desktop (navigate), the preview's tab is the agent's.
-			if (entry.owner === undefined && session.agentTabId === undefined) {
-				entry.owner = "agent";
-				setAgentTab(session, entry.tabId);
-				reframe(session, entry);
-			}
+			if (isUnusedTab(entry) && session.agentTabId === undefined) claimForAgent(session, entry);
 			const href = normalizeAgentBrowserURL(target);
 			await navigateEntry(entry, href);
 			session.previewTab = { entry, origin: originOf(href) };
@@ -4948,10 +4948,7 @@ export function createBrowserViewHost(
       }
       // The session's first tab is the agent's to take while nobody has used
       // it (ensureAgentTab).
-      const unusedTab = () =>
-        [...session.tabs.values()].some(
-          (tab) => tab.owner === undefined && tab.agentTab === undefined,
-        );
+      const unusedTab = () => findUnusedTab(session) !== undefined;
       // Listing tabs opens none: without a tab of its own, the agent has none.
       if (action === "tabs" && session.agentTabId === undefined && !unusedTab())
         return agentTabsResult(session);
@@ -5481,11 +5478,7 @@ export function createBrowserViewHost(
               "tabId is required",
             );
             // A tab the person opened does not exist for the agent.
-            if (session.tabs.get(tabId)?.owner !== "agent")
-              throw browserError(
-                "TAB_NOT_FOUND",
-                `Browser tab ${tabId} does not exist`,
-              );
+            agentOwnedEntry(session, tabId);
             await runNative(action, { tabId });
             return agentTabResult(agentEntry(session), true);
           }
