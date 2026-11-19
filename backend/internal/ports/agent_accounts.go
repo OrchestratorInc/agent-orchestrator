@@ -23,6 +23,11 @@ var (
 	ErrAgentAccountDefaultUnusable  = errors.New("the default account is signed out or now holds another login")
 )
 
+// ErrAgentAccountRenewalPending skips a check of a stored login whose access
+// token expired and is renewed by the agent's next run. The login is still
+// signed in; asking the CLI would try the renewal itself.
+var ErrAgentAccountRenewalPending = errors.New("the saved login token expired")
+
 // AgentAccountProviderCLI reads and prepares one provider's CLI config
 // folders. home is empty for the computer's own folder. Implementations ask the
 // CLI itself; none of them reads a token.

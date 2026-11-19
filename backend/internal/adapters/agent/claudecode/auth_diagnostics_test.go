@@ -4,6 +4,8 @@ import (
 	"context"
 	"encoding/json"
 	"net/http"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -53,6 +55,55 @@ func TestClaudeAuthDiagnosticsKeepProviderEvidenceAndCacheAge(t *testing.T) {
 				if !cached.Cached || !cached.CheckedAt.Equal(step.CheckedAt) {
 					t.Fatalf("cached=%+v first=%+v", cached, step)
 				}
+			}
+		})
+	}
+}
+
+// `claude auth status` renews an expired stored login, and a refused renewal
+// wipes it, so a check racing the account's sessions signs it out about eight
+// hours after sign-in (#8724). An expired but renewable login is therefore not
+// put to the CLI; a current one still is.
+func TestResolveProviderContextLeavesAnExpiredRenewableLoginToTheNextSession(t *testing.T) {
+	now := time.Now()
+	pinClaudeNow(t, now)
+	for _, tc := range []struct {
+		name      string
+		expiresAt time.Time
+		wantCLI   int
+	}{
+		{name: "expired, renewable", expiresAt: now.Add(-time.Hour), wantCLI: 0},
+		{name: "current", expiresAt: now.Add(time.Hour), wantCLI: 1},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			for _, name := range []string{"CLAUDE_CODE_OAUTH_TOKEN", "ANTHROPIC_API_KEY", "ANTHROPIC_AUTH_TOKEN", "ANTHROPIC_BASE_URL"} {
+				t.Setenv(name, "")
+			}
+			dir := t.TempDir()
+			t.Setenv("CLAUDE_CONFIG_DIR", dir)
+			t.Setenv("CLAUDE_SECURESTORAGE_CONFIG_DIR", dir)
+			login, err := json.Marshal(map[string]any{"claudeAiOauth": map[string]any{
+				"accessToken": "sk-ant-oat01-test", "refreshToken": "sk-ant-ort01-test",
+				"expiresAt": tc.expiresAt.UnixMilli(), "refreshTokenExpiresAt": now.Add(30 * 24 * time.Hour).UnixMilli(),
+			}})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err := os.WriteFile(filepath.Join(dir, ".credentials.json"), login, 0o600); err != nil {
+				t.Fatal(err)
+			}
+			calls := 0
+			resolved := (&Plugin{}).resolveProviderContext(context.Background(), "claude", t.TempDir(),
+				map[string]string{"CLAUDE_CONFIG_DIR": dir},
+				func(context.Context, string, string, map[string]string) (claudeAuthReport, bool) {
+					calls++
+					return claudeAuthReport{}, false
+				})
+			if calls != tc.wantCLI {
+				t.Fatalf("claude auth status ran %d times, want %d", calls, tc.wantCLI)
+			}
+			if !resolved.found || resolved.credential.ExpiredButRenewable(now) != (tc.wantCLI == 0) {
+				t.Fatalf("resolved %+v found=%v, want the stored login", resolved.credential.ExpiresAt, resolved.found)
 			}
 		})
 	}

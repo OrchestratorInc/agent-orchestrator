@@ -92,6 +92,9 @@ type reading struct {
 	seq          uint64
 	confirmed    *domain.AgentAccountIdentityCheck
 	confirmedSeq uint64
+	// renewalPending: the check was skipped for a login waiting on its token's
+	// renewal (ports.ErrAgentAccountRenewalPending). It is still signed in.
+	renewalPending bool
 }
 
 // failedOnItsOwn reports a reading whose check failed in a way the next check
@@ -357,11 +360,17 @@ func (s *Service) read(ctx context.Context, account domain.AgentAccount) *readin
 		r.identityProblem = problemKind(err)
 		// A failed check (a timeout under load) says nothing about the login:
 		// keep what the last good one found, so it does not read as signed out.
+		r.renewalPending = errors.Is(err, ports.ErrAgentAccountRenewalPending)
 		s.mu.Lock()
-		if prev := s.readings[account.ID]; prev != nil && prev.identityErr == "" {
+		if prev := s.readings[account.ID]; prev != nil && (prev.identityErr == "" || prev.renewalPending) {
 			r.identity, r.limits = prev.identity, prev.limits
 		}
 		s.mu.Unlock()
+		// A login waiting on its token's renewal is signed in, even before any
+		// reading said who it is (#8724).
+		if r.renewalPending {
+			r.identity.SignedIn, r.identity.LoggedIn = true, true
+		}
 	}
 	s.mu.Lock()
 	known := s.lastOrg[account.ID]
