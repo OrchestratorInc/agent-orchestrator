@@ -3314,7 +3314,7 @@ export interface components {
              * @enum {string}
              */
             kind: "b2b" | "b2c" | "both" | "none";
-            /** @description The organization's product features (share lets it share sessions) and the deployment's own: attachments when the session attachment routes are on, queued-edit when a queued message can be edited (editQueuedMessage), queued-delete when a queued message can be deleted without stopping a started turn (deleteQueuedMessage), queued-steer when a queued message can be steered into the running turn (steerQueuedMessage). Empty when none apply. */
+            /** @description The organization's product features (share lets it share sessions) and the deployment's own: attachments when the session attachment routes are on, queued-edit when a queued message can be edited (editQueuedMessage), queued-delete when a queued message can be deleted without stopping a started turn (deleteQueuedMessage), queued-steer when a queued message can be steered into the running turn (steerQueuedMessage), orchestrator-on-coder when a project whose sessions run on Coder may run its orchestrator on Coder too (ProjectOrchestratorSandboxProvider): the deployment offers coder and freestyle, and the organization may run Coder as its own (customCoder). Empty when none apply. */
             features: string[];
             /**
              * Format: int64
@@ -3433,6 +3433,7 @@ export interface components {
             orchestratorRules?: components["schemas"]["ProjectRules"];
             workersRequestReview?: components["schemas"]["ProjectWorkersRequestReview"];
             coAuthorCommits?: components["schemas"]["ProjectCoAuthorCommits"];
+            orchestratorSandboxProvider?: components["schemas"]["ProjectOrchestratorSandboxProvider"];
             trackerIntake?: components["schemas"]["ProjectTrackerIntake"];
             /** @description "standalone" for a project created without a repository; "scratch" for one whose repository AO created. */
             source?: string;
@@ -3620,8 +3621,14 @@ export interface components {
             orchestratorRules?: components["schemas"]["ProjectRules"];
             workersRequestReview?: components["schemas"]["ProjectWorkersRequestReview"];
             coAuthorCommits?: components["schemas"]["ProjectCoAuthorCommits"];
+            orchestratorSandboxProvider?: components["schemas"]["ProjectOrchestratorSandboxProvider"];
             trackerIntake?: components["schemas"]["ProjectTrackerIntake"];
         };
+        /**
+         * @description Where the orchestrator of a project whose sessions run on Coder runs. freestyle, the default and the same as absent, runs it on an instant VM; coder runs it on the organization's Coder exactly as the project's workers run (the project's template and the organization's own Coder deployment and workspace rules). The project's workers run on Coder either way. Setting coder needs a project whose sessions run on Coder and an organization whose offering lists orchestrator-on-coder; otherwise the write is refused with 422 provider_unavailable. It is read when an orchestrator session is created, so an orchestrator that is running, paused or restored stays where it was created. When the organization can no longer run orchestrators on Coder, a new orchestrator runs on an instant VM. It has no effect on a project on any other provider, or on a deployment without instant VMs, where the orchestrator of a Coder project already runs on Coder.
+         * @enum {string}
+         */
+        ProjectOrchestratorSandboxProvider: "freestyle" | "coder";
         /** @description Workers request AO's review of their own pull request once it is pushed and ready, instead of waiting to be asked. Defaults to off. */
         ProjectWorkersRequestReview: boolean;
         /** @description Commits a session's agent makes carry a Co-authored-by trailer naming the AO GitHub App's bot account, so GitHub shows the App as a co-author beside the person the commit is authored as. Defaults to on. */
