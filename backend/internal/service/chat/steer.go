@@ -704,7 +704,7 @@ func steerOrSendReceipt(
 		if replayErr == nil {
 			return SteerOrSendResult{Steered: true, Duplicate: true, Steer: steered}, true, nil
 		}
-		if !errors.Is(replayErr, ErrNoActiveTurn) || recoverOnly {
+		if !errors.Is(replayErr, ErrNoActiveTurn) {
 			return SteerOrSendResult{}, true, replayErr
 		}
 	}

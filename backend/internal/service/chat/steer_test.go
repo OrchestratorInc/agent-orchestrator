@@ -1199,6 +1199,24 @@ func TestSteerOrSendRecoversWithoutControllerNeverRedispatches(t *testing.T) {
 	}
 }
 
+func TestSteerOrSendRecoveryTreatsANoTurnRejectionWithoutAMessageAsUncertain(t *testing.T) {
+	h, provider := steerHarness(t)
+	provider.failWith(ports.ErrChatNoSteerableTurn)
+	ctx := context.Background()
+	msg := ports.ChatUserMessage{
+		Text: "fallback still sending", ClientMessageID: "fallback-in-flight",
+		Origin: domain.MessageOriginHuman,
+	}
+	if _, err := h.svc.Steer(ctx, testSession, msg); !errors.Is(err, chatsvc.ErrNoActiveTurn) {
+		t.Fatalf("steer error = %v, want no active turn", err)
+	}
+	_, err := h.svc.SteerOrSend(ctx, testSession,
+		ports.ChatUserMessage{ClientMessageID: msg.ClientMessageID}, true)
+	if !errors.Is(err, chatsvc.ErrSteerDeliveryUncertain) || errors.Is(err, chatsvc.ErrNoActiveTurn) {
+		t.Fatalf("recovery error = %v, want uncertain until the fallback message is durable", err)
+	}
+}
+
 // withoutReplay compares a replayed steer receipt with the original: they
 // differ only in Replayed, which marks the retry.
 func withoutReplay(r chatsvc.SteerResult) chatsvc.SteerResult {
