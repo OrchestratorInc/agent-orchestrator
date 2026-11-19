@@ -1,5 +1,6 @@
 {
 	"issueArtifact.add": "Ajouter à un ticket GitHub",
+	"issueArtifact.addLatest": "Ajouter la dernière version à un ticket GitHub",
 	"issueArtifact.added": "Ajouté au ticket GitHub",
 	"issueArtifact.view": "Voir sur GitHub",
 	"issueArtifact.copy": "Ajoutez une copie de {{name}} au ticket sélectionné.",

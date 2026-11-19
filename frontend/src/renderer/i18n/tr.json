@@ -1,5 +1,6 @@
 {
 	"issueArtifact.add": "GitHub kaydına ekle",
+	"issueArtifact.addLatest": "En son sürümü GitHub kaydına ekle",
 	"issueArtifact.added": "GitHub kaydına eklendi",
 	"issueArtifact.view": "GitHub’da görüntüle",
 	"issueArtifact.copy": "{{name}} dosyasının bir kopyasını seçilen kayda ekleyin.",

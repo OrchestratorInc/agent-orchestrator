@@ -1,5 +1,6 @@
 {
 	"issueArtifact.add": "添加到 GitHub 议题",
+	"issueArtifact.addLatest": "将最新版本添加到 GitHub 议题",
 	"issueArtifact.added": "已添加到 GitHub 议题",
 	"issueArtifact.view": "在 GitHub 上查看",
 	"issueArtifact.copy": "将 {{name}} 的副本添加到所选议题。",

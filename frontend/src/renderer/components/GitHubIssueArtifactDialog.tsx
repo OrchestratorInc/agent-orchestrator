@@ -17,11 +17,12 @@ function parseIssueLink(value: string) {
 	return match && { repository: match[1], number: match[2] };
 }
 
-export function GitHubIssueArtifactDialog({ name, readContent, onClose, returnFocus }: {
+export function GitHubIssueArtifactDialog({ name, readContent, onClose, returnFocus, actionLabel }: {
 	name: string;
 	readContent: () => Promise<string>;
 	onClose: () => void;
 	returnFocus?: HTMLElement;
+	actionLabel?: string;
 }) {
 	const { t } = useTranslation();
 	const [remote, setRemote] = useState("");
@@ -91,7 +92,7 @@ export function GitHubIssueArtifactDialog({ name, readContent, onClose, returnFo
 				event.preventDefault();
 				returnFocus.focus();
 			}}>
-				<DialogTitle>{t(add.isSuccess ? "issueArtifact.added" : "issueArtifact.add")}</DialogTitle>
+				<DialogTitle>{add.isSuccess ? t("issueArtifact.added") : actionLabel ?? t("issueArtifact.add")}</DialogTitle>
 				<DialogDescription>{add.isSuccess ? `${repo}#${selected?.number} · ${selected?.title}` : t("issueArtifact.copy", { name })}</DialogDescription>
 				{add.isSuccess ? (
 					<Button onClick={() => void aoBridge.app.openExternal(add.data)}>{t("issueArtifact.view")}</Button>

@@ -1,5 +1,6 @@
 {
 	"issueArtifact.add": "GitHub 이슈에 추가",
+	"issueArtifact.addLatest": "최신 버전을 GitHub 이슈에 추가",
 	"issueArtifact.added": "GitHub 이슈에 추가됨",
 	"issueArtifact.view": "GitHub에서 보기",
 	"issueArtifact.copy": "선택한 이슈에 {{name}}의 사본을 추가합니다.",

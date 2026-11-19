@@ -126,7 +126,7 @@ function renderView(ui: ReactNode) {
 		</QueryClientProvider>
 	);
 	const view = render(wrap(ui));
-	return { ...view, rerender: (next: ReactNode) => view.rerender(wrap(next)) };
+	return { ...view, client, rerender: (next: ReactNode) => view.rerender(wrap(next)) };
 }
 
 const CLOUD_ROOT = "https://cp.test/api/cloud/v1/artifact-files/token/";
@@ -958,6 +958,24 @@ describe("SessionArtifactsView", () => {
 
 		expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
 		expect(screen.getByRole("list")).toBeInTheDocument();
+	});
+
+	it("identifies the latest version in both the menu and confirmation when viewing an older revision", async () => {
+		const { client } = renderView(<SessionArtifactsView request={{ key: 1, path: "reports/plan.md" }} session={session()} />);
+		const key = ["session-artifact-versions", "", "sess-1", "reports/plan.md"];
+		const versions = [2, 1].map(version => ({ version, source: "agent", harness: "codex", createdAt: new Date(version * 60000).toISOString(), size: 10, fileFingerprint: String(version) }));
+		client.setQueryDefaults(key, { staleTime: Infinity });
+		client.setQueryData(key, versions);
+		client.setQueryData([...key, 1], { ...versions[1], content: "# Older revision" });
+		const filename = screen.getByRole("button", { name: "plan.md" });
+		await userEvent.click(filename);
+		await userEvent.click(screen.getByRole("menuitem", { name: "Version history" }));
+		const history = await screen.findByRole("menu", { name: "Version history" });
+		await userEvent.click(within(history).getAllByRole("menuitem")[1]!);
+		await userEvent.click(filename);
+		const label = "Add latest version to GitHub issue";
+		await userEvent.click(screen.getByRole("menuitem", { name: label }));
+		expect(screen.getByRole("dialog", { name: label })).toBeVisible();
 	});
 
 	it("returns keyboard focus to the filename after closing the GitHub issue dialog", async () => {

@@ -83,6 +83,7 @@ export function ArtifactActionsMenu({
 	downloadUrl,
 	hostId,
 	session,
+	viewingHistoricalVersion = false,
 	iconOnly = false,
 	verticalDots = false,
 	share,
@@ -102,6 +103,7 @@ export function ArtifactActionsMenu({
 	downloadUrl?: string;
 	hostId?: string;
 	session: Pick<WorkspaceSession, "id" | "cloud">;
+	viewingHistoricalVersion?: boolean;
 	iconOnly?: boolean;
 	/** Draws the icon-only trigger as a vertical ellipsis. */
 	verticalDots?: boolean;
@@ -249,6 +251,7 @@ export function ArtifactActionsMenu({
 			setCopyError(error instanceof Error ? error.message : String(error));
 		}
 	};
+	const issueActionLabel = t(viewingHistoricalVersion ? "issueArtifact.addLatest" : "issueArtifact.add");
 	const canAddToIssue = !iconOnly && owner && !session.cloud?.shared && Boolean(issueArtifactType(artifact.path));
 	const readIssueContent = async () => {
 		const url = session.cloud ? cloudFileUrl : artifactContentUrl(session.id, artifact.path, artifact.rawUrl, undefined, hostId);
@@ -389,7 +392,7 @@ export function ArtifactActionsMenu({
 							{canAddToIssue ? (
 								<DropdownMenuItem onSelect={() => { sharing.current = true; setIssueOpener(filenameButton.current); }}>
 									<ArrowUpRight aria-hidden="true" />
-									{t("issueArtifact.add")}
+									{issueActionLabel}
 								</DropdownMenuItem>
 							) : null}
 							{canShare && published ? (
@@ -480,7 +483,7 @@ export function ArtifactActionsMenu({
 					)}
 				</DropdownMenuContent>
 			</DropdownMenu> : null}
-			{issueOpener && <GitHubIssueArtifactDialog returnFocus={issueOpener} name={artifact.path.split("/").pop() || artifact.name} readContent={readIssueContent} onClose={() => setIssueOpener(null)} />}
+			{issueOpener && <GitHubIssueArtifactDialog actionLabel={issueActionLabel} returnFocus={issueOpener} name={artifact.path.split("/").pop() || artifact.name} readContent={readIssueContent} onClose={() => setIssueOpener(null)} />}
 			<ConfirmDialog
 				busy={remove.isPending}
 				confirmLabel={t("artifacts.delete")}

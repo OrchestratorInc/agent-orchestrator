@@ -1,5 +1,6 @@
 {
 	"issueArtifact.add": "Añadir a una incidencia de GitHub",
+	"issueArtifact.addLatest": "Añadir la última versión a una incidencia de GitHub",
 	"issueArtifact.added": "Añadido a la incidencia de GitHub",
 	"issueArtifact.view": "Ver en GitHub",
 	"issueArtifact.copy": "Añade una copia de {{name}} a la incidencia seleccionada.",

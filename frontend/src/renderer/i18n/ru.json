@@ -1,5 +1,6 @@
 {
 	"issueArtifact.add": "Добавить в задачу GitHub",
+	"issueArtifact.addLatest": "Добавить последнюю версию в задачу GitHub",
 	"issueArtifact.added": "Добавлено в задачу GitHub",
 	"issueArtifact.view": "Открыть на GitHub",
 	"issueArtifact.copy": "Добавьте копию {{name}} в выбранную задачу.",

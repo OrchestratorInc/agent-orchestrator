@@ -1,5 +1,6 @@
 {
 	"issueArtifact.add": "GitHub Issue に追加",
+	"issueArtifact.addLatest": "最新版を GitHub Issue に追加",
 	"issueArtifact.added": "GitHub Issue に追加しました",
 	"issueArtifact.view": "GitHub で表示",
 	"issueArtifact.copy": "選択した Issue に {{name}} のコピーを追加します。",
