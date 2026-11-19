@@ -202,6 +202,7 @@ func TestKeychainValueFormats(t *testing.T) {
 		{"bare token", "Claude Code-credentials", "sk-ant-oat01-bare\n", "sk-ant-oat01-bare", KindOAuthToken},
 		{"bare token printed as hex", "Claude Code-credentials", hex.EncodeToString([]byte("sk-ant-oat01-bare\n")), "sk-ant-oat01-bare", KindOAuthToken},
 		{"managed key", "Claude Code", "sk-ant-api03-managed", "sk-ant-api03-managed", KindAPIKey},
+		{"API key in credentials item", "Claude Code-credentials", "sk-ant-api03-managed", "sk-ant-api03-managed", KindAPIKey},
 		{"unrecognised value", "Claude Code-credentials", "not-a-credential", "", ""},
 		{"unrecognised managed value", "Claude Code", "not-a-credential", "", ""},
 		{"JSON without a token", "Claude Code-credentials", hex.EncodeToString([]byte("{\n}")), "", ""},
