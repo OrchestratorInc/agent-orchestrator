@@ -53,6 +53,10 @@ func TestCardSummaryFromNote(t *testing.T) {
 	if n := len([]rune(got)); n == 0 || n > MaxCardSummaryRunes || !strings.HasSuffix(got, "word…") {
 		t.Fatalf("long note = %q (%d runes), want a word-boundary cut ending in an ellipsis", got, n)
 	}
+	// Characters the cleanup drops do not count toward the cut.
+	if got := CardSummaryFromNote(strings.Repeat("​", 199) + long); !strings.HasPrefix(got, "word word") || !strings.HasSuffix(got, "word…") {
+		t.Fatalf("long note after zero-width characters = %q, want its words", got)
+	}
 	if got := CardSummaryFromNote(" \t "); got != "" {
 		t.Fatalf("blank note = %q, want empty", got)
 	}

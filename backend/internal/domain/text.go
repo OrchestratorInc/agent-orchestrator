@@ -34,19 +34,24 @@ const MaxCardSummaryRunes = 200
 // event stream all go through it, so the same text is accepted or rejected
 // however the agent delivered it.
 func NormalizeCardSummary(s string) string {
-	// Bidi overrides and zero-width characters can make a card read differently
-	// from what it says, so they go too.
+	s = cleanCardSummary(s)
+	if utf8.RuneCountInString(s) > MaxCardSummaryRunes {
+		return ""
+	}
+	return s
+}
+
+// cleanCardSummary drops control characters and collapses whitespace to single
+// spaces. Bidi overrides and zero-width characters can make a card read
+// differently from what it says, so they go too.
+func cleanCardSummary(s string) string {
 	s = strings.Map(func(r rune) rune {
 		if unicode.Is(unicode.Cf, r) || r == '\u2028' || r == '\u2029' {
 			return -1
 		}
 		return r
 	}, SanitizeControlChars(s))
-	s = strings.Join(strings.Fields(s), " ")
-	if utf8.RuneCountInString(s) > MaxCardSummaryRunes {
-		return ""
-	}
-	return s
+	return strings.Join(strings.Fields(s), " ")
 }
 
 // CardSummaryFromNote turns free text, such as a worker's final report note,
@@ -54,17 +59,13 @@ func NormalizeCardSummary(s string) string {
 // note longer than MaxCardSummaryRunes is cut at a word boundary and marked
 // with an ellipsis instead of being refused.
 func CardSummaryFromNote(note string) string {
-	s := NormalizeCardSummary(note)
-	if s != "" {
-		return s
-	}
-	runes := []rune(strings.Join(strings.Fields(SanitizeControlChars(note)), " "))
+	runes := []rune(cleanCardSummary(note))
 	if len(runes) <= MaxCardSummaryRunes {
-		return "" // nothing usable was left after cleaning
+		return string(runes)
 	}
 	cut := string(runes[:MaxCardSummaryRunes-1])
 	if i := strings.LastIndex(cut, " "); i > 0 {
 		cut = cut[:i]
 	}
-	return NormalizeCardSummary(strings.TrimRight(cut, " ,;:-") + "…")
+	return strings.TrimRight(cut, " ,;:-") + "…"
 }

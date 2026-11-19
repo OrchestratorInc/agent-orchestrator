@@ -250,8 +250,23 @@ func TestCardSummaryUpdatePreservesNewerSessionState(t *testing.T) {
 	if _, err := s.RenameSession(ctx, rec.ID, "New title", time.Now().UTC()); err != nil {
 		t.Fatal(err)
 	}
+	before, err := s.LatestSeq(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
 	if updated, err := s.UpdateSessionCardSummary(ctx, rec.ID, "Inspecting navigation routes"); err != nil || !updated {
 		t.Fatalf("update card summary = %v, %v", updated, err)
+	}
+	events, err := s.EventsAfter(ctx, before, 100)
+	if err != nil {
+		t.Fatal(err)
+	}
+	invalidated := false
+	for _, e := range events {
+		invalidated = invalidated || (string(e.Type) == "session_updated" && e.SessionID == string(rec.ID))
+	}
+	if !invalidated {
+		t.Fatalf("summary update did not emit a session invalidation: %+v", events)
 	}
 	got, ok, err := s.GetSession(ctx, rec.ID)
 	if err != nil || !ok {
@@ -275,13 +290,6 @@ func TestCardSummaryUpdatePreservesNewerSessionState(t *testing.T) {
 	}
 	if after.Metadata.CardSummary != "Inspecting navigation routes" || after.Metadata.LatestAssistantUpdate != "All done, PR opened" {
 		t.Fatalf("hook write and summary collided: summary=%q update=%q", after.Metadata.CardSummary, after.Metadata.LatestAssistantUpdate)
-	}
-	events, err := s.EventsAfter(ctx, 0, 100)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len(events) == 0 || string(events[len(events)-1].Type) != "session_updated" || events[len(events)-1].SessionID != string(rec.ID) {
-		t.Fatalf("summary update did not emit a session invalidation: %+v", events)
 	}
 }
 

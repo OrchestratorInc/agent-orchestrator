@@ -62,11 +62,11 @@ func extractAOSummary(commandInput string) (string, bool) {
 	return domain.NormalizeCardSummary(strings.Join(text, " ")), done
 }
 
-// shellWords splits the arguments of one simple command. It stops at the first
-// unquoted control operator. It reports false for an unterminated quote and for
-// text the shell would change: a `$` or backtick outside single quotes, and
-// outside any quotes a glob or brace character, or a `#` or `~` starting a word
-// (a comment or a home directory).
+// shellWords splits the arguments of one simple command, skipping redirects.
+// It stops at the first unquoted control operator. It reports false for an
+// unterminated quote and for text the shell would change: a `$` or backtick
+// outside single quotes, and outside any quotes a glob or brace character, or a
+// `#` or `~` starting a word (a comment or a home directory).
 func shellWords(s string) ([]string, bool) {
 	var (
 		words   []string
@@ -90,12 +90,21 @@ func shellWords(s string) ([]string, bool) {
 			return words, true
 		case unicode.IsSpace(r):
 			flush()
-		case strings.ContainsRune("&|;<>()", r):
-			// `2>&1` is a redirect, not text: drop its file-descriptor prefix.
-			if inWord && digitsO && (r == '>' || r == '<') {
+		case r == '>' || r == '<':
+			// A redirect is not text, and arguments after it still count:
+			// drop a file-descriptor prefix (`2>&1`), then skip the operator
+			// and its target.
+			if inWord && digitsO {
 				word.Reset()
 				inWord = false
 			}
+			flush()
+			end, ok := skipRedirect(runes, i)
+			if !ok {
+				return nil, false
+			}
+			i = end
+		case strings.ContainsRune("&|;()", r):
 			flush()
 			return words, true
 		case r == '\'':
@@ -146,6 +155,30 @@ func shellWords(s string) ([]string, bool) {
 	}
 	flush()
 	return words, true
+}
+
+// skipRedirect reads the redirect starting at runes[i] (`>`, `>>`, `>&1`,
+// `< file`) and returns the index of its target's last rune. It reports false
+// for a heredoc, a missing target, and a target the shell would change or
+// whose end this cannot tell (quotes, `$`, backticks, backslashes).
+func skipRedirect(runes []rune, i int) (int, bool) {
+	if runes[i] == '<' && i+1 < len(runes) && runes[i+1] == '<' {
+		return 0, false
+	}
+	for i+1 < len(runes) && strings.ContainsRune(">&|", runes[i+1]) {
+		i++
+	}
+	for i+1 < len(runes) && (runes[i+1] == ' ' || runes[i+1] == '\t') {
+		i++
+	}
+	start := i + 1
+	for i+1 < len(runes) && !unicode.IsSpace(runes[i+1]) && !strings.ContainsRune("&|;<>()", runes[i+1]) {
+		if strings.ContainsRune("'\"$`\\", runes[i+1]) {
+			return 0, false
+		}
+		i++
+	}
+	return i, i >= start
 }
 
 func indexRune(runes []rune, from int, target rune) int {
