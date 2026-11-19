@@ -725,6 +725,7 @@ WHERE id = ? AND state IN ('queued', 'running');
 -- name: SettleConversationTurn :exec
 UPDATE conversation_turns
 SET state = sqlc.arg(state), error_message = sqlc.arg(error_message), failure_code = sqlc.arg(failure_code),
+    started_at = COALESCE(started_at, sqlc.narg(started_at)),
     completed_at = COALESCE(completed_at, sqlc.narg(completed_at)),
     usage_limit_resets_at = COALESCE(sqlc.narg(usage_limit_resets_at), usage_limit_resets_at)
 WHERE id = sqlc.arg(id);
@@ -763,6 +764,34 @@ SET status = 'completed',
 WHERE conversation_activities.conversation_id = sqlc.arg(conversation_id)
   AND turn_id = sqlc.arg(turn_id)
   AND kind = 'plan';
+
+-- A running row on a turn that has already settled can never finish. Older
+-- daemons stored replayed provider retry/limit notices this way, after their turn
+-- had ended, so clients showed a spinner that never stopped. Give each one the
+-- status SettleTurn would have written (terminalActivityStatus).
+-- name: SettleStrandedConversationActivities :exec
+UPDATE conversation_activities
+SET status = CASE (SELECT settled.state FROM conversation_turns AS settled WHERE settled.id = conversation_activities.turn_id)
+        WHEN 'completed' THEN 'completed'
+        WHEN 'recovered' THEN 'recovered'
+        WHEN 'interrupted' THEN 'cancelled'
+        ELSE 'failed'
+    END,
+    revision = revision + 1,
+    updated_at = sqlc.arg(updated_at)
+WHERE conversation_activities.conversation_id = sqlc.arg(conversation_id)
+  AND status = 'running'
+  -- An AO action runs on the daemon's clock, not the turn's: one recorded after
+  -- its turn settled is still in flight, and its terminal update skips a row that
+  -- is no longer running, so settling it here would lose the real outcome.
+  AND kind <> 'ao_action'
+  AND turn_id IN (
+      -- Every settled turn in the conversation, including turns an earlier
+      -- session handled before a handoff kept them in this timeline.
+      SELECT owner.id FROM conversation_turns AS owner
+      WHERE owner.conversation_id = sqlc.arg(conversation_id)
+        AND owner.state IN ('completed', 'recovered', 'interrupted', 'failed', 'cancelled')
+  );
 
 -- The same invariant applies when startup discovers work abandoned by a dead
 -- controller. This runs before SettleOrphanedConversationTurns while their turn
@@ -1182,6 +1211,12 @@ WHERE id = sqlc.arg(id)
   AND conversation_id = sqlc.arg(conversation_id)
   AND state = 'queued'
   AND promotion_started_at IS NOT NULL;
+
+-- name: MarkQueuedConversationBatchStarted :exec
+UPDATE conversation_turns
+SET started_at = COALESCE(started_at, sqlc.narg(started_at))
+WHERE conversation_id = sqlc.arg(conversation_id)
+  AND id IN (SELECT CAST(value AS TEXT) FROM json_each(CAST(sqlc.arg(turn_ids) AS TEXT)));
 
 -- A detached controller may have crossed the provider boundary before its
 -- batch receipt was recorded. Keep the source visible and fail closed on resume.

@@ -29,7 +29,7 @@ import type { Theme } from "../theme";
 import { useTheme, useThemedStyles } from "../ThemeProvider";
 import { Spinner } from "../Spinner";
 import { MascotLamp } from "../ui";
-import { FoldBody, FoldChevron, FoldLayout, StatusLabel, StatusSpinner } from "./TurnFoldMotion";
+import { FoldBody, FoldChevron } from "./TurnFoldMotion";
 import { LatticeLoader } from "./LatticeLoader";
 import { TurnPlan } from "./TurnPlan";
 import { ChatMarkdown } from "./ChatMarkdown";
@@ -44,7 +44,8 @@ import { MenuRowWidthScope, useMenuRowWidth } from "../useMenuRowWidth";
 import { requestPresentation } from "./chatPresentation";
 import { workingElapsedLabel } from "./conversationChrome";
 import { errorActivityDuplicatesTurn, providerErrorCopy } from "./providerError";
-import { ElicitationAction } from "./elicitation-native-controls";
+import { ElicitationAction, ElicitationActionRow } from "./elicitation-native-controls";
+import { primaryDecisionId } from "./approvalDecisions";
 import { ElicitationInputField } from "./ElicitationInputField";
 import {
 	elicitationPromptCopy,
@@ -676,12 +677,6 @@ function ConversationTurnGroup({ group, snapshot, approvalPending, inputPending,
 		</View>;
 	}
 	const partition = partitionTurnItems(items, group.turn);
-	// The prompt's editor grows as it opens and as lines are typed. The list
-	// misplaces rows whose layout transition runs under that growth, so the turn
-	// being edited lays out without the fold motion.
-	const editing = Boolean(editDraft && group.turnId === editDraft.turnId);
-	const WorkBody = editing ? View : FoldBody;
-	const BelowFold = editing ? View : FoldLayout;
 	const summary = group.turn ? <TurnSummary turn={group.turn} plan={group.plan} /> : null;
 	if (!partition || !group.turn) return <View>{renderRows(items)}{summary}</View>;
 	const reply = partition.final.find((item): item is ConversationMessage => item.kind === "message");
@@ -692,8 +687,8 @@ function ConversationTurnGroup({ group, snapshot, approvalPending, inputPending,
 	return <View>
 		{renderRows(partition.prompt)}
 		<TurnStatusRow turn={group.turn} foldable={partition.settled && partition.work.length > 0} open={workedOpen} onToggle={() => onToggleWorked(group.key)} />
-		{partition.settled ? (workedOpen ? <WorkBody style={{ gap: space.xs, paddingBottom: space.xs }}>{renderRows(partition.work)}</WorkBody> : null) : renderRows(partition.work)}
-		<BelowFold>{renderRows(partition.notices)}{renderRows(partition.final)}{actions}{summary}</BelowFold>
+		{partition.settled ? (workedOpen ? <FoldBody style={{ gap: space.xs, paddingBottom: space.xs }}>{renderRows(partition.work)}</FoldBody> : null) : renderRows(partition.work)}
+		{renderRows(partition.notices)}{renderRows(partition.final)}{actions}{summary}
 	</View>;
 }
 
@@ -1276,9 +1271,9 @@ function TurnStatusRow({ turn, foldable, open, onToggle }: { turn: ConversationT
 		accessibilityLabel={running ? (workingDuration ? `Working for ${workingDuration}` : "Working") : undefined}
 		style={[styles.turnState, running && styles.turnTimer, turn.state === "failed" && { color: t.red }]}
 	>{label}</Text>;
-	// One element throughout, so the spinner can leave and the label slide into
-	// its place when the turn settles instead of the whole row remounting. The row
-	// is a touch target tall, as is the startup checklist header it replaces.
+	// One element throughout, so a settling turn changes the row rather than
+	// remounting it. The row is a touch target tall, as is the startup checklist
+	// header it replaces.
 	return <Pressable
 		accessibilityRole={foldable ? "button" : undefined}
 		accessibilityState={foldable ? { expanded: open } : undefined}
@@ -1288,8 +1283,8 @@ function TurnStatusRow({ turn, foldable, open, onToggle }: { turn: ConversationT
 		style={({ pressed }) => [styles.statusRow, pressed && feedback.pressed]}
 	>
 		{/* The desktop's lattice; it holds still under Reduce Motion, where the ticking label still reads as in progress. */}
-		{running ? <StatusSpinner><LatticeLoader color={t.textTertiary} /></StatusSpinner> : null}
-		<StatusLabel>{text}</StatusLabel>
+		{running ? <LatticeLoader color={t.textTertiary} /> : null}
+		{text}
 		{foldable ? <FoldChevron open={open} color={t.textTertiary} /> : null}
 	</Pressable>;
 }
@@ -1400,6 +1395,7 @@ function ApprovalCard({ activity, busy, onDecide, handledBelow }: { activity: Co
 	const pending = activity.status === "pending";
 	const presentation = requestPresentation("approval", pending);
 	const command = activity.detail?.command ?? activity.summary;
+	const primaryId = primaryDecisionId(activity.decisions);
 	if (pending && handledBelow) return <RequestEcho title={presentation.title} detail={command} />;
 	if (!pending) return <View style={styles.approvalResolved}>
 		<Feather name={presentation.icon} size={iconSize.xs} color={t.textFaint} />
@@ -1414,10 +1410,13 @@ function ApprovalCard({ activity, busy, onDecide, handledBelow }: { activity: Co
 			<Text selectable style={styles.requestCommand}>{command}</Text>
 		</View>
 		{activity.detail?.cwd ? <LabelValue label="cwd" value={activity.detail.cwd} /> : null}
-		{activity.decisions?.length ? <View style={styles.approvalActions}>{activity.decisions.map((decision, index) => {
-			const label = submitting === decision.id ? "Sending…" : decision.label;
+		{activity.decisions?.length ? <View style={styles.approvalActions}><ElicitationActionRow reportsOutcome actions={activity.decisions.map((decision) => ({
+			key: decision.id,
+			label: submitting === decision.id ? "Sending…" : decision.label,
+			primary: decision.id === primaryId,
+			disabled: busy || Boolean(submitting) || !activity.requestId,
 			// One haptic per decision, when it lands: the press itself only starts the work.
-			return <ElicitationAction key={decision.id} label={label} primary={index === 0} reportsOutcome disabled={busy || Boolean(submitting) || !activity.requestId} onPress={() => {
+			onPress: () => {
 				setSubmitting(decision.id);
 				setSubmitError(undefined);
 				void onDecide(activity.requestId ?? "", decision.id)
@@ -1427,8 +1426,8 @@ function ApprovalCard({ activity, busy, onDecide, handledBelow }: { activity: Co
 						haptics.error();
 					})
 					.finally(() => setSubmitting(undefined));
-			}} />;
-		})}</View> : <Text style={[styles.partial, { color: t.amber }]}>The agent offered no decisions Orchestrator can present. Open diagnostics from the host.</Text>}
+			},
+		}))} /></View> : <Text style={[styles.partial, { color: t.amber }]}>The agent offered no decisions Orchestrator can present. Open diagnostics from the host.</Text>}
 		{submitError ? <Text accessibilityRole="alert" selectable style={styles.validation}>{submitError}</Text> : null}
 	</View>;
 }
@@ -1712,7 +1711,7 @@ const makeStyles = (t: Theme) => {
 		approvalDot: { width: 7, height: 7, borderRadius: radius.pill, backgroundColor: t.amber },
 		approvalStatusText: { fontFamily: "DMSans_600SemiBold", color: t.textPrimary, fontSize: type.footnote.fontSize, fontWeight: "600" },
 		approvalCommandSurface: { flexDirection: "row", alignItems: "flex-start", gap: space.sm, borderRadius: radius.md, borderCurve: "continuous", backgroundColor: t.bgSubtle, paddingHorizontal: space.md, paddingVertical: space.md },
-		approvalActions: { minHeight: 36, flexDirection: "row", alignItems: "center", justifyContent: "flex-end", flexWrap: "wrap", gap: space.xxs, paddingTop: space.none },
+		approvalActions: { minHeight: 36, paddingTop: space.none },
 		approvalResolved: { minHeight: 38, marginVertical: space.sm, flexDirection: "row", alignItems: "center", gap: space.xs, paddingHorizontal: space.hair },
 		approvalResolvedLabel: { fontFamily: "DMSans_600SemiBold", color: t.textTertiary, fontSize: type.footnote.fontSize, fontWeight: "600" },
 		approvalResolvedCommand: { flex: 1, color: t.textFaint, fontSize: type.footnote.fontSize, fontFamily: t.fontMono },

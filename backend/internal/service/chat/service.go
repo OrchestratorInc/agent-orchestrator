@@ -389,6 +389,26 @@ func cloneStartConfig(cfg StartConfig) StartConfig {
 	return cloned
 }
 
+// strandedActivitySettler is implemented by stores that can settle running rows
+// left on turns that have already settled.
+type strandedActivitySettler interface {
+	SettleStrandedActivities(ctx context.Context, conversationID string, now time.Time) error
+}
+
+// settleStrandedActivities stops the spinners older daemons left behind: they
+// stored replayed provider notices as running rows on long-settled turns. Like
+// settleOrphanedWork it is best-effort, so a failure is logged and never blocks
+// the session from starting.
+func (s *Service) settleStrandedActivities(ctx context.Context, session domain.SessionID, conversationID string) {
+	settler, ok := s.store.(strandedActivitySettler)
+	if !ok {
+		return
+	}
+	if err := settler.SettleStrandedActivities(ctx, conversationID, s.now()); err != nil {
+		s.log.Error("chat start: settle stranded activities", "session", session, "conversation", conversationID, "error", err)
+	}
+}
+
 // settleOrphanedWork closes out anything a previous controller left behind.
 //
 // Best-effort by design: a failure here must not stop a session from coming back,
@@ -1083,6 +1103,10 @@ func (s *Service) startLocked(ctx context.Context, cfg StartConfig) (*Controller
 		!queuedBeforeFirstController && !preserveUndispatchedQueue {
 		s.settleOrphanedWork(ctx, cfg.SessionID, conversation.ID)
 	}
+	// Unlike orphaned work, rows stranded on settled turns are never a live
+	// controller's, so a live reconnect cleans them too. The whole conversation:
+	// a handoff keeps turns another session handled in this timeline.
+	s.settleStrandedActivities(ctx, cfg.SessionID, conversation.ID)
 	// A fresh generation per launch, so events from the controller this one
 	// replaced can be told apart from the current one's.
 	controller := newController(

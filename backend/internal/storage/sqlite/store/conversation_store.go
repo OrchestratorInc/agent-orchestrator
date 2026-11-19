@@ -1895,6 +1895,24 @@ func (s *Store) SettleOrphanedTurns(ctx context.Context, session domain.SessionI
 	return nil
 }
 
+// SettleStrandedActivities gives running rows stranded on a conversation's
+// already-settled turns (replayed provider notices stored by older daemons) the
+// status their turn's settlement writes. It covers turns an earlier session
+// handled before a handoff, and touches settled turns only, so unlike
+// SettleOrphanedTurns it is safe while a live controller is attached.
+func (s *Store) SettleStrandedActivities(ctx context.Context, conversationID string, now time.Time) error {
+	q, unlock := s.conversationWriter(ctx)
+	defer unlock()
+	if err := q.SettleStrandedConversationActivities(ctx,
+		gen.SettleStrandedConversationActivitiesParams{
+			UpdatedAt:      now,
+			ConversationID: conversationID,
+		}); err != nil {
+		return fmt.Errorf("settle stranded activities in %s: %w", conversationID, err)
+	}
+	return nil
+}
+
 // SettleUnboundRunningTurn closes an ambiguous dispatch after live reconnect.
 // Recheck under the writer lock so a bound or queued turn is never settled.
 func (s *Store) SettleUnboundRunningTurn(ctx context.Context, conversationID string, session domain.SessionID, turnID string, now time.Time) error {
@@ -2748,6 +2766,23 @@ func (s *Store) ClaimQueuedBatch(ctx context.Context, conversationID string, dis
 	return batch, nil
 }
 
+// MarkQueuedBatchStarted preserves provider acceptance before binding or
+// completion can fail, including across controller reconnects.
+func (s *Store) MarkQueuedBatchStarted(ctx context.Context, conversationID string, turnIDs []string, now time.Time) error {
+	if len(turnIDs) == 0 {
+		return nil
+	}
+	ids, err := json.Marshal(turnIDs)
+	if err != nil {
+		return err
+	}
+	q, unlock := s.conversationWriter(ctx)
+	defer unlock()
+	return q.MarkQueuedConversationBatchStarted(ctx, gen.MarkQueuedConversationBatchStartedParams{
+		StartedAt: sql.NullTime{Time: now, Valid: true}, ConversationID: conversationID, TurnIds: string(ids),
+	})
+}
+
 // CompleteQueuedBatch links each source receipt to the provider turn that took
 // its input. The original messages keep their own transcript metadata.
 // steerActivityID names the steer that carried the turns into a running turn;
@@ -2797,13 +2832,14 @@ func (s *Store) ReleaseQueuedBatch(ctx context.Context, conversationID string, t
 }
 
 // FailQueuedBatch retains uncertain source messages without replaying them.
-func (s *Store) FailQueuedBatch(ctx context.Context, conversationID string, turnIDs []string, reason string, now time.Time) error {
+func (s *Store) FailQueuedBatch(ctx context.Context, conversationID string, turnIDs []string, reason string, now time.Time, accepted bool) error {
 	s.writeMu.Lock()
 	defer s.writeMu.Unlock()
 	return s.inTx(ctx, "fail queued batch", func(q *gen.Queries) error {
 		for _, id := range turnIDs {
 			if err := q.SettleConversationTurn(ctx, gen.SettleConversationTurnParams{
 				State: domain.TurnStateFailed, ErrorMessage: reason,
+				StartedAt:   sql.NullTime{Time: now, Valid: accepted},
 				CompletedAt: sql.NullTime{Time: now, Valid: true}, ID: id,
 			}); err != nil {
 				return fmt.Errorf("fail queued batch turn %s: %w", id, err)
