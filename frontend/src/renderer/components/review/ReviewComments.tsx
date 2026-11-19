@@ -1,10 +1,11 @@
 import { InspectorSection, commentTextLines, inspectorEmptyClass } from "@aoagents/product-ui";
 import * as TabsPrimitive from "@radix-ui/react-tabs";
+import { useQueryClient } from "@tanstack/react-query";
 import { Reply } from "lucide-react";
 import { useEffect, useId, useReducer, useRef, useState, type MouseEvent, type ReactNode } from "react";
 import { useTranslation } from "react-i18next";
 import { ArrowUpRight, Check, ChevronDown, ChevronRight, ChevronUp, FileCode2, Loader2, MoreVertical, Send } from "@/components/app-icons";
-import { usePRDetailsLoad } from "../../hooks/usePRDetailsLoad";
+import { prDetailsLoadQueryKey, usePRDetailsLoad } from "../../hooks/usePRDetailsLoad";
 import { agentLabel } from "../../lib/agent-options";
 import { formatTimeCompact } from "../../lib/format-time";
 import { reviewCommentIsOpen, type ReviewComment, type ReviewPRBlock, type ReviewReviewer, type ReviewReviewerStatus } from "../../lib/review-comments";
@@ -168,8 +169,13 @@ function ReviewPRBlockView({
 	const [sendingAll, setSendingAll] = useState(false);
 	const [sendAllError, setSendAllError] = useState(false);
 	const listId = useId();
+	const queryClient = useQueryClient();
 	// The SCM observer reads a PR's threads only for PRs it follows; ask once for the rest.
-	usePRDetailsLoad(block.provider, sessionId, hostId, open);
+	const detailsFailed = usePRDetailsLoad(block.provider, sessionId, hostId, open);
+	// Resetting the one-shot read runs it again.
+	const retryDetails = () => {
+		if (block.provider) void queryClient.resetQueries({ queryKey: prDetailsLoadQueryKey(block.provider.url, hostId) });
+	};
 
 	const comments = block.comments.map((comment) => (resolvedHere.has(resolvedKey(block, comment)) ? { ...comment, resolved: true } : comment));
 	const openComments = comments.filter(reviewCommentIsOpen);
@@ -275,7 +281,13 @@ function ReviewPRBlockView({
 							sendingAll={sendingAll}
 						/>
 					</div>
-					{comments.length === 0 ? (
+					{comments.length === 0 && detailsFailed ? (
+						// Not "No comments yet": the PR's comments could not be read, which is not the same.
+						<div className="flex min-w-0 items-center justify-between gap-2 px-3 py-2.5">
+							<p className={cn(inspectorEmptyClass, "m-0")} role="status">{t("pr.description.unavailable")}</p>
+							<Button onClick={retryDetails} size="xs" variant="quiet">{t("inspector.review.retry")}</Button>
+						</div>
+					) : comments.length === 0 ? (
 						<p className={cn(inspectorEmptyClass, "m-0 px-3 py-3.5")}>{t("pr.comments.none")}</p>
 					) : (
 						(["open", "resolved"] as const).map((tab) => (

@@ -4133,6 +4133,24 @@ describe("SessionInspector summary reviews", () => {
     expect(await commentRowWith("Guard this optional value.")).toHaveTextContent("resolved");
   });
 
+  it("says when a PR's comments could not be read and reads them again on Retry", async () => {
+    serveProviderPR(prSummary(3, "open"));
+    postMock.mockImplementation(async (path: string) => path === "/api/v1/prs/{id}/details"
+      ? { error: { code: "PR_DETAILS_FAILED", message: "provider unavailable" }, response: { status: 502 } }
+      : { data: { ok: true } });
+
+    renderWithQuery(<SessionInspector session={session([pr(3, "open")])} />);
+    await openReviewsSection();
+
+    const block = await screen.findByTestId("review-pr-block");
+    expect(await within(block).findByText("Couldn't load this PR's details.")).toBeInTheDocument();
+    expect(within(block).queryByText("No comments yet.")).not.toBeInTheDocument();
+    const detailsCalls = () => postMock.mock.calls.filter(([path]) => path === "/api/v1/prs/{id}/details").length;
+    const before = detailsCalls();
+    await userEvent.click(within(block).getByRole("button", { name: "Retry" }));
+    await waitFor(() => expect(detailsCalls()).toBe(before + 1));
+  });
+
   it("replies in a GitHub thread from its row", async () => {
     serveProviderPR(prSummary(3, "open", {
       threads: [mayaThread("PRRT_1", "src/panel.tsx", 42, "Guard this optional value.")],
