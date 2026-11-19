@@ -92,7 +92,17 @@ func (s *Service) CompactIdleOrchestrator(ctx context.Context, id domain.Session
 	if contextUsed < IdleCompactionMinContext || attempted {
 		return false, nil
 	}
-	if _, err := s.Compact(ctx, id); err != nil {
+	// Admit without waking: an update or version refresh can hibernate the
+	// session after the read above, and the sweep must not resume it.
+	admitted, release, err := s.admitController(ctx, id, false)
+	if errors.Is(err, errAsleep) {
+		return false, nil
+	}
+	if err == nil {
+		_, err = admitted.Compact(ctx)
+		release()
+	}
+	if err != nil {
 		if errors.Is(err, ErrCompactionWhileBusy) || errors.Is(err, ErrControllerHandoff) {
 			// The session is working again; its next idle period gets a new try.
 			return false, nil
