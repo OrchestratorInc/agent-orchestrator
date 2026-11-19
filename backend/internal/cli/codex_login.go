@@ -102,7 +102,7 @@ func (c *commandContext) runCodexLogin(ctx context.Context, executable string, u
 		return usageError{fmt.Errorf("login method must be 1, 2, 3, or 4")}
 	}
 
-	if err := c.deps.RunInteractiveCommand(ctx, codex, args, childInput, out, stderr); err != nil {
+	if err := c.deps.RunInteractiveCommand(ctx, codex, "", args, childInput, out, stderr); err != nil {
 		if reason := codexStartFailure(ctx, codex); reason != "" {
 			return fmt.Errorf("codex login failed: the Codex CLI at %s could not start (%s). Reinstall or update Codex (for an npm install: npm install -g @openai/codex@latest), then try again", codex, reason)
 		}
@@ -248,9 +248,11 @@ func readCodexLoginSelection(in io.Reader) (string, error) {
 	}
 }
 
-func runInteractiveCommand(ctx context.Context, name string, args []string, stdin io.Reader, stdout, stderr io.Writer) error {
+func runInteractiveCommand(ctx context.Context, name, dir string, args []string, stdin io.Reader, stdout, stderr io.Writer) error {
 	cmd := exec.CommandContext(ctx, name, args...) //nolint:gosec,forbidigo // interactive login must inherit the caller's console.
 	cmd.Env = agentlaunch.ProcessEnvForLaunchBinary(ctx, name)
+	configureCLIBatch(cmd)
+	cmd.Dir = dir
 	cmd.Stdin = stdin
 	cmd.Stdout = stdout
 	cmd.Stderr = stderr

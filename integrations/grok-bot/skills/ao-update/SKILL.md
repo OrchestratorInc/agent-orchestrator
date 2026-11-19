@@ -9,7 +9,7 @@ description: >-
 ---
 Follow the ao-rules skill. This runs on the bot's own cloud computer (the box), not on the user's computers. It changes only this bot's ao-* skills, and only after the user's yes.
 
-The skills are published in the public AO repository (`OrchestratorInc/agent-orchestrator`, folder `integrations/grok-bot/`) with a `manifest.json` that lists each skill's sha256. Every check reads the newest commit on `main`, then downloads the manifest and the skills from that exact commit, so the files always match each other.
+The skills are published in the public Orchestrator repository (`OrchestratorInc/agent-orchestrator`, folder `integrations/grok-bot/`) with a `manifest.json` that lists each skill's sha256. Every check reads the newest commit on `main`, then downloads the manifest and the skills from that exact commit, so the files always match each other.
 
 ## 1. Save the fetcher
 Save it on the box if `/workspace/ao-bot/fetch.py` is missing or differs:

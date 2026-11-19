@@ -209,3 +209,40 @@ INSERT INTO sessions (
 		t.Fatalf("preserved session automation_run_id = %q, want NULL", runID.String)
 	}
 }
+
+func TestAutomationMetadataMigrationPreservesExistingDefinitions(t *testing.T) {
+	dataDir := t.TempDir()
+	db := openMigratedDatabaseCopyAt(t, dataDir, 20261102100313400, pragmas)
+	now := time.Now().UTC()
+	mustExec(t, db, `
+INSERT INTO projects (id, path, display_name, registered_at) VALUES ('scheduled', '/tmp/scheduled', 'Scheduled', ?);
+INSERT INTO automations (id, project_id, display_name, prompt, kind, rrule_text, timezone, enabled, next_run_at, created_at, updated_at, model, mode, effort)
+VALUES ('old', 'scheduled', 'Old name', 'Old prompt', 'worker', 'FREQ=DAILY', 'UTC', 1, ?, ?, ?, 'gpt-5', 'smart', 'high');`, now, now, now, now)
+	if err := db.Close(); err != nil {
+		t.Fatal(err)
+	}
+	upgraded, err := Open(dataDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := upgraded.Close(); err != nil {
+		t.Fatal(err)
+	}
+	check, err := sql.Open("sqlite", databaseURI(dataDir)+pragmas)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = check.Close() })
+	var template, useCase, prompt, model, mode, effort string
+	if err := check.QueryRow(`SELECT template_id, use_case, prompt, model, mode, effort FROM automations WHERE id='old'`).Scan(&template, &useCase, &prompt, &model, &mode, &effort); err != nil {
+		t.Fatal(err)
+	}
+	if template != "custom" || useCase != "unknown" || prompt != "Old prompt" || model != "gpt-5" || mode != "smart" || effort != "high" {
+		t.Fatalf("old definition changed: %q %q %q %q %q %q", template, useCase, prompt, model, mode, effort)
+	}
+	for _, query := range []string{`UPDATE automations SET use_case='private prompt'`, `UPDATE automations SET template_id='private prompt'`} {
+		if _, err := check.Exec(query); err == nil {
+			t.Fatal("accepted unbounded intent metadata")
+		}
+	}
+}

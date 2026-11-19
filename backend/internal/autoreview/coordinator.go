@@ -19,7 +19,7 @@ const (
 	// DefaultSweepInterval is the cadence for reevaluating live sessions.
 	DefaultSweepInterval = time.Minute
 	// autoReviewFailedRetryLimit bounds retries for the same current PR head.
-	autoReviewFailedRetryLimit = 3
+	autoReviewFailedRetryLimit = domain.AutoReviewFailedRetryLimit
 )
 
 // Store provides the durable session, project, PR, and review facts used by
@@ -114,22 +114,21 @@ func (c *Coordinator) EvaluateSession(ctx context.Context, id domain.SessionID) 
 		return Result{}, err
 	}
 	harnessRuns := make([]domain.ReviewRun, 0, len(runs))
+	hasRunning := reviewcore.HasRunningRun(runs, harness)
 	for _, run := range runs {
 		if run.Harness == harness || run.Harness == "" {
 			harnessRuns = append(harnessRuns, run)
 		}
 	}
-	states := reviewcore.Plan(prs, harnessRuns)
+	states := reviewcore.PlanAuto(prs, harnessRuns)
 	if len(states) == 0 {
 		return Result{Reason: "no_pr"}, nil
 	}
 	eligible := false
-	hasRunning := false
 	reason := "planner_ineligible"
 	for _, state := range states {
 		switch state.Status {
 		case reviewcore.ReviewStateRunning:
-			hasRunning = true
 			reason = "review_running"
 		case reviewcore.ReviewStateUpToDate:
 			reason = "already_approved"
@@ -167,6 +166,9 @@ func triggerResultReason(prs []domain.PullRequest, result reviewcore.TriggerResu
 			return "review_running"
 		}
 	}
+	if reviewcore.HasRunningRun(result.Runs, harness) {
+		return "review_running"
+	}
 	runs := make([]domain.ReviewRun, 0, len(result.Runs))
 	for _, run := range result.Runs {
 		if run.Harness == harness || run.Harness == "" {
@@ -187,7 +189,7 @@ func existingHeadReason(runs []domain.ReviewRun, prURL, targetSHA string) string
 		if run.PRURL != prURL || run.TargetSHA != targetSHA {
 			continue
 		}
-		if run.Status == domain.ReviewRunRunning {
+		if run.Status.IsActive() {
 			return "review_running"
 		}
 		if run.Status == domain.ReviewRunCancelled {
@@ -198,6 +200,11 @@ func existingHeadReason(runs []domain.ReviewRun, prURL, targetSHA string) string
 		}
 		if run.Verdict == domain.VerdictChangesRequested {
 			return "changes_requested_same_sha"
+		}
+		if run.Status == domain.ReviewRunFailed && !run.FailureReason.AutoRetryable() {
+			// A failed preflight needs a person; an unconfirmed cancel may still
+			// have a reviewer working. Neither is retried automatically.
+			return "failed_not_retryable"
 		}
 		if run.Status == domain.ReviewRunFailed && run.TriggerSource == domain.ReviewTriggerAuto {
 			failedAutoRuns++

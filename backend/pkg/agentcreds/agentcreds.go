@@ -99,14 +99,21 @@ type Credential struct {
 	// cross-process lock and rotates the refresh token, so a second writer
 	// could sign the user out everywhere.
 	Renewable bool
+	// RefreshExpiresAt is the refresh-token expiry Claude Code recorded. Zero
+	// when the source records none, in which case the refresh token is assumed
+	// usable.
+	RefreshExpiresAt time.Time
 }
 
 // ExpiredButRenewable reports whether this is a stored subscription login
 // whose access token is past its recorded expiry while a refresh token
-// remains. The provider will reject the access token, but that is not
-// evidence the user is signed out: Claude Code renews it on its next run.
+// remains in date. The provider will reject the access token, but that is not
+// evidence the user is signed out: Claude Code renews it on its next run. A
+// refresh token past its own expiry cannot renew anything, so that login is
+// left for the provider probe to judge.
 func (c Credential) ExpiredButRenewable(now time.Time) bool {
-	return c.Renewable && !c.ExpiresAt.IsZero() && !now.Before(c.ExpiresAt)
+	return c.Renewable && !c.ExpiresAt.IsZero() && !now.Before(c.ExpiresAt) &&
+		(c.RefreshExpiresAt.IsZero() || now.Before(c.RefreshExpiresAt))
 }
 
 // Fingerprint identifies the credential and provider configuration used by a

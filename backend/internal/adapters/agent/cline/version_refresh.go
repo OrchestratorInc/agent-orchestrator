@@ -21,6 +21,9 @@ func (*Plugin) SupportsTerminalVersionRefresh() bool { return true }
 // SDK conversation/task ID in older hooks. Cline --id silently starts fresh
 // when its saved history is missing, so check before stopping the old process.
 func (*Plugin) NativeConversationExists(ctx context.Context, ref ports.SessionRef, nativeID string, env map[string]string) (bool, error) {
+	if ref.Metadata[ports.MetadataKeyImportSourceNativeID] != "" {
+		return importedClineConversationExists(ctx, ref, nativeID, env)
+	}
 	if err := ctx.Err(); err != nil {
 		return false, err
 	}

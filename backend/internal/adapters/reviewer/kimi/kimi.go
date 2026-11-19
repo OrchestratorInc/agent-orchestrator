@@ -73,7 +73,7 @@ func (r *Reviewer) ReviewCommand(ctx context.Context, inv ports.ReviewInvocation
 		return ports.ReviewCommandSpec{}, fmt.Errorf("kimi reviewer: create empty skills directory: %w", err)
 	}
 	message := fmt.Sprintf(
-		"Read and follow the AO reviewer role in `%s`, then %s",
+		"Read and follow the Orchestrator reviewer role in `%s`, then %s",
 		filepath.ToSlash(inv.SystemPromptFile),
 		strings.TrimSpace(inv.Prompt),
 	)
