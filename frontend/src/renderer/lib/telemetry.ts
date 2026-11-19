@@ -20,6 +20,8 @@ import type { TelemetryInstallContext } from "../../shared/telemetry";
 import { captureExceptionToSentry, initSentry } from "./sentry";
 import { reserveException } from "./reported-errors";
 import { installRendererErrorHandlers } from "../../shared/renderer-error-handlers";
+import { launchProperties, takeLaunchStart } from "./launch-telemetry";
+import { PERFORMANCE_EVENTS, sanitizePerformanceProperties } from "./performance-telemetry-properties";
 
 const POSTHOG_KEY = import.meta.env.VITE_AO_POSTHOG_KEY?.trim() || DEFAULT_POSTHOG_PROJECT_KEY;
 const POSTHOG_HOST = import.meta.env.VITE_AO_POSTHOG_HOST?.trim() || DEFAULT_POSTHOG_HOST;
@@ -376,6 +378,8 @@ let identifiedId: string | null = null;
 let identifyCalledFor: string | null = null;
 let posthogReady = false;
 let analyticsOptedOut = false;
+/** Counts opt-outs, so work measured before one is never sent after a later opt-in. */
+let optOutGeneration = 0;
 
 function registerBaseProperties(): void {
 	posthog.register({
@@ -499,6 +503,7 @@ export async function applyAnalyticsOptOut(optedOut: boolean): Promise<void> {
 	analyticsOptedOut = optedOut;
 	setAnalyticsOptedOut(optedOut);
 	if (optedOut) {
+		optOutGeneration += 1;
 		// A website visit not linked yet is dropped, not kept for a later opt-in.
 		pendingWebVisitor = null;
 		// Updater failures counted before the opt-out must not be exported
@@ -1097,6 +1102,7 @@ export async function sanitizeRendererProperties(
 ): Promise<TelemetryProperties> {
 	if (CLOUD_FUNNEL_EVENTS.has(event)) return sanitizeCloudFunnelProperties(event, properties);
 	if (ONBOARDING_EVENTS.has(event)) return sanitizeOnboardingProperties(event, properties);
+	if (PERFORMANCE_EVENTS.has(event)) return sanitizePerformanceProperties(event, properties);
 	const safe: TelemetryProperties = {};
 	switch (event) {
 		case "ao.app.active":
@@ -1563,6 +1569,14 @@ export async function initTelemetry(): Promise<boolean> {
 				withTelemetryContext(await sanitizeRendererProperties("ao.app.loaded")),
 			);
 		}
+		// Launch timings are their own event, sent once the window is usable, so a
+		// crash during that wait never costs ao.app.loaded. A reload has no start,
+		// and an opt-out during the wait discards the measurement.
+		const launchGeneration = optOutGeneration;
+		void takeLaunchStart()
+			.then((start) => (start ? launchProperties(start, bootstrap.appVersion) : undefined))
+			.then((launch) => (launch && launchGeneration === optOutGeneration ? captureRendererEvent("ao.launches.timed", launch) : undefined))
+			.catch(() => undefined);
 		return true;
 	})().catch(() => {
 		// A thrown error is transient (the bridge not ready yet, or a hiccup in

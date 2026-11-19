@@ -661,6 +661,84 @@ people choose and whether creation succeeds.
 The desktop product-telemetry controls described under "Turn desktop and daemon
 telemetry off" also control these events.
 
+## UI responsiveness
+
+When product telemetry is enabled, the desktop app sends launch timings in
+`ao.launches.timed` and sends `ao.usage.ui_performance`, a numeric summary of
+how fast the app responded. Their own properties are only counts, durations in
+milliseconds, buckets, and the closed values listed here; like every event,
+they also carry the shared context described above, such as `app_version` and
+`install_id`. They never include a
+session, project or file name, path, URL, message text, script URL, function
+name, element text, or CSS selector, and the summary does not say which session
+a measurement came from.
+
+| Event | When it is sent | Performance properties |
+| --- | --- | --- |
+| `ao.launches.timed` | Once per launch, when the window first shows the sidebar with live sessions, or when the window closes or 60 seconds pass without that frame (then without `to_usable_ms`). A reload sends none. `ao.app.loaded` is still sent at startup without these properties | `launch_kind`, `to_visible_ms`, `to_usable_ms` |
+| `ao.usage.ui_performance` | At the end of each window, 45 to 60 minutes of elapsed time (random in that range) that includes idle and hidden time, so a window can hold much less use than that. A window cut short by quitting is kept and sent at the next launch if its end has passed, otherwise when the rest of it runs out. Nothing is sent for a window with no use. Only installs with `experiment_cohort` below 50 send it | see below |
+
+Properties on `ao.launches.timed`:
+
+- `launch_kind` is `cold` (a new app process), `warm` (a window reopened while
+  the app kept running), or `update` (the first cold launch on a new
+  `app_version`).
+- `to_visible_ms` is the time from the start of the launch to the window's
+  first contentful paint. `to_usable_ms` is the time to the frame that first
+  shows the sidebar with live sessions, the same frame the desktop log's
+  "launch timing" line ends at. A cold launch starts when the app process
+  starts; a warm one when the window is requested.
+- A launch during which the window was hidden sends `launch_kind` only.
+
+Properties on `ao.usage.ui_performance`:
+
+- Window: `measurement_schema_version` (1), `flush_reason` (`interval` or
+  `startup`), `window_seconds`, `active_seconds` (time the window was visible
+  with input in the last 5 minutes), `open_sessions_bucket` (`0`, `1-3`,
+  `4-10`, `11-30`, or `31+` sessions that are not terminated), and
+  `uptime_hours_bucket` (how long the window has been open: `lt1`, `lt8`,
+  `lt24`, `lt72`, or `ge72` hours).
+- Session switches: `switch_cached_lt150_count`, `switch_cached_lt500_count`,
+  `switch_cached_lt1000_count`, `switch_cached_ge1000_count`, and the same four
+  `switch_uncached_*` counts. Each switch from one session to another is timed
+  from the click or key that asked for it (or from routing, for a menu
+  shortcut) to the frame that shows the destination's messages, and counted in
+  the bucket under 150, 500, or 1,000 ms, or 1,000 ms and over. Cached means
+  the destination showed its content in its first frame: a chat whose messages
+  were already in memory, or a terminal session. `switch_visible_p75_ms` is the
+  75th percentile time to the first frame that shows the destination.
+  `switch_dropped_count` counts switches not timed because the window was
+  hidden during them or they took over 30 seconds.
+- Clicks and keys: `interaction_count` (every click, tap and key press),
+  `slow_interaction_count` (over 200 ms to the next frame),
+  `very_slow_interaction_count` (over 500 ms), and `interaction_p98_ms`, the
+  98th percentile computed the way Interaction to Next Paint is. These come
+  from the browser's Event Timing API, which reports only interactions of
+  40 ms or more, so `interaction_p98_ms` is 0 when none reached 40 ms: a
+  fallback, not a measured duration.
+- Frozen frames: `long_frame_count` (frames that took over 50 ms),
+  `long_frame_blocking_ms` (their total blocking time), and
+  `long_frame_top_cause`, the kind of work that blocked longest:
+  `event-listener`, `user-callback` (timers and animation frames),
+  `resolve-promise`, `reject-promise`, `classic-script`, `module-script`, or
+  `other`.
+- Chat open: `chat_open_count` and `chat_open_p75_ms`, for opening a chat whose
+  messages were not in memory, from the click to the frame that shows them.
+- Memory and CPU: `renderer_mb_bucket` (the window's peak memory) and
+  `app_mb_bucket` (peak memory of all app processes), each `lt256`, `lt512`,
+  `lt1024`, `lt2048`, or `ge2048` MB; `app_cpu_avg_pct`, the average CPU of all
+  app processes since the previous summary, to one decimal place. The app
+  samples these every 10 minutes. The daemon's own process is not included.
+
+A missing count means zero; a missing percentile or cause means nothing
+was measured for it. Measurements other than memory and CPU count only while
+the window is visible; memory and CPU cover the whole time, so background use
+is included. The summary window and its counts are kept in the app's local storage
+between launches and replaced after each send. Share usage analytics and the
+kill switch control both events. Turning Share usage analytics off stops the
+summary and deletes the window counted so far, so nothing from before is sent
+after it is turned back on.
+
 ## Chat import
 
 When desktop product telemetry is enabled, Orchestrator.inc records these events

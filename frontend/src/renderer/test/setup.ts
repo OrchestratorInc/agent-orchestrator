@@ -301,6 +301,8 @@ if (typeof window !== "undefined") {
 			setCloudUser: async () => false,
 			getGithubLogin: async () => null,
 			getLifetimeSessions: async () => null,
+			takeLaunchStart: async () => null,
+			takeResourceSummary: async () => null,
 			claimFirstOpen: async () => "ineligible" as const,
 			getPolicy: async () => ({ eventsEnabled: false, consentGeneration: "test", updatedAt: new Date(0).toISOString(), acknowledged: false, state: "applied", environmentVeto: true, durabilitySupported: false }),
 			setEventsEnabled: async () => ({ eventsEnabled: false, consentGeneration: "test", updatedAt: new Date(0).toISOString(), acknowledged: false, state: "applied", environmentVeto: true, durabilitySupported: false }),
