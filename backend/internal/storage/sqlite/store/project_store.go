@@ -95,15 +95,7 @@ func (s *Store) RemoveWorkspaceRepos(ctx context.Context, projectID string, name
 			if drop[row.Name] {
 				continue
 			}
-			if err := q.UpsertWorkspaceRepo(ctx, gen.UpsertWorkspaceRepoParams{
-				ProjectID:     row.ProjectID,
-				Name:          row.Name,
-				RelativePath:  row.RelativePath,
-				RepoOriginURL: row.RepoOriginURL,
-				DefaultBranch: row.DefaultBranch,
-				RegisteredAt:  row.RegisteredAt,
-				GitStatus:     row.GitStatus,
-			}); err != nil {
+			if err := q.UpsertWorkspaceRepo(ctx, gen.UpsertWorkspaceRepoParams(row)); err != nil {
 				return err
 			}
 		}

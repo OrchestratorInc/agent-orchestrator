@@ -335,7 +335,7 @@ func workspaceParentIgnores(ctx context.Context, parent, name string) bool {
 	if strings.HasPrefix(pattern, "!") {
 		return false
 	}
-	return !(source == ".gitignore" && pattern == "/"+name+"/" && addedByOrchestrator(ctx, parent, pattern))
+	return source != ".gitignore" || pattern != "/"+name+"/" || !addedByOrchestrator(ctx, parent, pattern)
 }
 
 // addedByOrchestrator reports whether the commit that first added line to the
