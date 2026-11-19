@@ -56,6 +56,7 @@ func TestGetLaunchCommandOrdersFlagsAndProtectsPrompt(t *testing.T) {
 	want := []string{
 		"/bin/prime-agent",
 		"--session-dir", filepath.Join(dataDir, "agent-runtime", "prime-agent", "sessions"),
+		"--daemon-socket", filepath.Join(dataDir, "agent-runtime", "prime-agent", "daemon.sock"),
 		"--extension", filepath.Join(dataDir, "agent-runtime", "prime-agent", "ao-activity.ts"),
 		"--append-system-prompt", "follow repository rules",
 		"--model", "prime/model",
@@ -81,6 +82,7 @@ func TestGetLaunchCommandOmitsBlankOptionalArguments(t *testing.T) {
 	want := []string{
 		"prime-agent",
 		"--session-dir", filepath.Join(dataDir, "agent-runtime", "prime-agent", "sessions"),
+		"--daemon-socket", filepath.Join(dataDir, "agent-runtime", "prime-agent", "daemon.sock"),
 		"--extension", filepath.Join(dataDir, "agent-runtime", "prime-agent", "ao-activity.ts"),
 	}
 	if !reflect.DeepEqual(cmd, want) {
@@ -201,6 +203,7 @@ func TestGetRestoreCommandUsesNativeSessionAndRoleConfig(t *testing.T) {
 	want := []string{
 		"/bin/prime-agent",
 		"--session-dir", filepath.Join(dataDir, "agent-runtime", "prime-agent", "sessions"),
+		"--daemon-socket", filepath.Join(dataDir, "agent-runtime", "prime-agent", "daemon.sock"),
 		"--extension", filepath.Join(dataDir, "agent-runtime", "prime-agent", "ao-activity.ts"),
 		"--append-system-prompt", "coordinate workers only",
 		"--model", "anthropic/claude-opus-4-8",

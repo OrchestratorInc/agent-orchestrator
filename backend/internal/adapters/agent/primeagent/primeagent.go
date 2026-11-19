@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"path/filepath"
 	"strings"
 	"sync"
 
@@ -48,6 +49,7 @@ func (p *Plugin) AugmentRuntimeEnv(env map[string]string, dataDir string) {
 		return
 	}
 	env[primeAgentCodingAgentDirEnv] = dir
+	env["PRIME_AGENT_DAEMON_SOCKET"] = filepath.Join(dir, "daemon.sock")
 }
 
 var _ adapters.Adapter = (*Plugin)(nil)
@@ -120,7 +122,7 @@ func (p *Plugin) baseCommand(ctx context.Context, dataDir, systemPrompt, systemP
 		return nil, err
 	}
 
-	cmd := []string{binary, "--session-dir", sessions}
+	cmd := []string{binary, "--session-dir", sessions, "--daemon-socket", filepath.Join(filepath.Dir(sessions), "daemon.sock")}
 	if p.acceptsExtension(ctx, binary) {
 		cmd = append(cmd, "--extension", extensionPath)
 	}

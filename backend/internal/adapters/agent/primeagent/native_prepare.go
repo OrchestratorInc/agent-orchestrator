@@ -87,6 +87,7 @@ func (p *Plugin) PrepareImportedSession(ctx context.Context, r ports.ImportedSes
 		return empty, err
 	}
 	env[primeAgentCodingAgentDirEnv] = profile
+	env["PRIME_AGENT_DAEMON_SOCKET"] = filepath.Join(profile, "daemon.sock")
 	if expected.provider == "openai" {
 		env["OPENAI_BASE_URL"] = "https://api.openai.com/v1"
 	}
@@ -96,7 +97,7 @@ func (p *Plugin) PrepareImportedSession(ctx context.Context, r ports.ImportedSes
 	}
 	forkCtx, cancel := context.WithTimeout(ctx, 30*time.Second)
 	defer cancel()
-	_, err = runner(forkCtx, binary, workspace, env, "--mode", "rpc", "--offline", "--session-dir", root, "--cwd", workspace, "--fork", source)
+	_, err = runner(forkCtx, binary, workspace, env, "--mode", "rpc", "--offline", "--daemon-socket", env["PRIME_AGENT_DAEMON_SOCKET"], "--session-dir", root, "--cwd", workspace, "--fork", source)
 	if err != nil {
 		if ctxErr := forkCtx.Err(); ctxErr != nil {
 			return empty, ctxErr

@@ -78,7 +78,7 @@ func TestPrimeNativePreparationAdoptsBeforeLaunchAndLaterResumesExactID(t *testi
 	calls := 0
 	plugin.runCommand = func(_ context.Context, binary, cwd string, env map[string]string, args ...string) ([]byte, error) {
 		calls++
-		want := []string{"--mode", "rpc", "--offline", "--session-dir", targetRoot, "--cwd", workspace, "--fork", source}
+		want := []string{"--mode", "rpc", "--offline", "--daemon-socket", filepath.Join(dataDir, "agent-runtime", "prime-agent", "daemon.sock"), "--session-dir", targetRoot, "--cwd", workspace, "--fork", source}
 		if binary != "/synthetic/prime-agent" || cwd != workspace || !slices.Equal(args, want) || env["PRIME_AGENT_SESSION_DIR"] != targetRoot || env["SYNTHETIC_CLEAR"] != "" {
 			t.Fatalf("native preparation invocation = %q %q %v", binary, cwd, args)
 		}
@@ -331,5 +331,23 @@ func TestOpenAIImportedPrimeRestorePinsEndpointAfterLoginShell(t *testing.T) {
 	}
 	if !slices.Equal(argv[:3], []string{"env", "OPENAI_BASE_URL=https://api.openai.com/v1", "/synthetic/prime-agent"}) || !slices.Contains(argv, path) {
 		t.Fatalf("OpenAI native restore inherits a login-shell endpoint: %v", argv)
+	}
+}
+
+func TestPrimeManagedLaunchNeverUsesDefaultBackgroundService(t *testing.T) {
+	dataDir := t.TempDir()
+	p := primeTestPlugin()
+	argv, err := p.GetLaunchCommand(context.Background(), ports.LaunchConfig{DataDir: dataDir})
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := filepath.Join(dataDir, "agent-runtime", "prime-agent", "daemon.sock")
+	if !slices.Contains(argv, "--daemon-socket") || !slices.Contains(argv, want) {
+		t.Fatalf("managed Prime would attach to the user's existing daemon: %v", argv)
+	}
+	env := map[string]string{}
+	p.AugmentRuntimeEnv(env, dataDir)
+	if env["PRIME_AGENT_DAEMON_SOCKET"] != want {
+		t.Fatalf("native lifecycle commands select another daemon: %v", env)
 	}
 }
