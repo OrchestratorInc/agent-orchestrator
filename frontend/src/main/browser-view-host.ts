@@ -760,6 +760,16 @@ type BrowserSessionEntry = {
   // may still open and close tabs; profileSwitching refuses only new work.
   profileReplacing: boolean;
   profileSwitchTargetId: BrowserProfileId | null;
+  // The tab agent commands act on, apart from the tab the person has in front
+  // (activeTabId): selecting or opening a tab in the panel never moves it.
+  // Bound to the tab in front by the agent's first command; only the agent's
+  // own tab commands, or a popup its tab opens, move it after that.
+  // A tab ID left here after its tab closed (IDs are never reused) makes the
+  // agent's next command fall back to the tab in front and say so.
+  agentTargetTabId?: string;
+  // Set while the agent's own `tab new` runs: the tab it creates opens behind
+  // the person's tab and becomes the agent's.
+  agentOpeningTab?: boolean;
   nativeActiveTabId?: string;
   // Agent browser pages whose tabs closed here: they are closing, so the
   // agent tab sync must not bring them back meanwhile. A page a person closed
@@ -1507,7 +1517,13 @@ export function createBrowserViewHost(
         // Defer queries/layout until Electron has returned from that callback.
         setImmediate(() => {
           if (!isCurrentEntry() || session.tabs.get(popup.tabId) !== popup) return;
-          activateTab(session, popup.tabId, false);
+          // A popup from the agent's tab becomes the agent's. It comes to the
+          // front unless the agent opened it from a tab the person is not
+          // looking at.
+          const fromAgent = session.agentTargetTabId === entry.tabId;
+          if (fromAgent) session.agentTargetTabId = popup.tabId;
+          if (!fromAgent || session.activeTabId === entry.tabId)
+            activateTab(session, popup.tabId, false);
           queueNativeActiveTabSync(session);
           pushTabsState(options, session, { kind: "popup", tabId: popup.tabId });
         });
@@ -1936,8 +1952,10 @@ export function createBrowserViewHost(
     tabCommand = false,
   ): Promise<void> => {
     if (!options.agentBrowserRuntime) return;
-    while (session.nativeActiveTabId !== session.activeTabId) {
-      const tabId = session.activeTabId;
+    // agent-browser follows the agent's tab, not the one the person has in
+    // front: the two differ whenever the agent works in the background.
+    while (session.nativeActiveTabId !== agentTargetId(session)) {
+      const tabId = agentTargetId(session);
       const entry = session.tabs.get(tabId);
       if (!entry)
         throw browserError(
@@ -2709,10 +2727,22 @@ export function createBrowserViewHost(
         [...session.tabs.values()]
           .filter((entry) => entry.agentTab === undefined)
           .map(target),
-      createTarget: async (url) =>
-        target(
-          await openTab(session, url === "about:blank" ? undefined : url, true),
-        ),
+      createTarget: async (url) => {
+        // The agent's own `tab new` opens behind the person's tab (in front
+        // only when no tab is) and becomes the agent's; the person's "+"
+        // opens in front.
+        const forAgent = session.agentOpeningTab === true;
+        const entry = await openTab(
+          session,
+          url === "about:blank" ? undefined : url,
+          !forAgent || !session.tabs.has(session.activeTabId),
+        );
+        if (forAgent) session.agentTargetTabId = entry.tabId;
+        return target(entry);
+      },
+      // agent-browser activates the target it selects, which follows the
+      // agent's tab. The tab in front is the person's: only their selection,
+      // or AO itself, changes it.
       activateTarget: async (targetId) => {
         const entry = session.tabs.get(targetId);
         if (!entry)
@@ -2721,7 +2751,6 @@ export function createBrowserViewHost(
             `Browser tab ${targetId} does not exist`,
           );
         await entry.ready;
-        activateTab(session, targetId);
       },
       closeTarget: (targetId) => {
         closeTab(session, targetId);
@@ -4145,12 +4174,11 @@ export function createBrowserViewHost(
     if (!session || !isRendererOwned(event, input.viewId))
       return emptyTabsState(input.viewId);
     assertProfileStable(session);
-    return queueNativeOperation(session, async () => {
-      activateTab(session, input.tabId);
-      if (session.tabs.get(input.tabId)?.agentTab === undefined)
-        await ensureNativeActiveTab(session);
-      return listTabs(session);
-    });
+    // The person's selection only changes the tab in front. The agent keeps
+    // its own tab (agentTargetTabId), so this neither waits for an agent
+    // command in flight nor moves agent-browser.
+    activateTab(session, input.tabId);
+    return listTabs(session);
   });
   handle("browser:closeTab", (event, input: BrowserTabInput) => {
     const session = entries.get(input.viewId);
@@ -4602,7 +4630,7 @@ export function createBrowserViewHost(
       ) {
         const probed = options.credentialFiller.selectorProbeBlocked(
           sessionId,
-          vaultDocumentKey(activeEntry(session)),
+          vaultDocumentKey(agentEntry(session)),
           args,
         );
         if (probed) throw browserError("BROWSER_SECRET_FIELD_LOCKED", probed);
@@ -4618,11 +4646,19 @@ export function createBrowserViewHost(
               ? normalizeAgentBrowserURL(args.url)
               : undefined;
             await openUserTab(session, url);
-            return agentTabResult(activeEntry(session), true);
+            session.agentTargetTabId = session.activeTabId;
+            return agentTabResult(agentEntry(session), true);
           }
           await openTab(session, undefined, true);
         }
-        const entry = activeEntry(session);
+        // Set once, for this command: the agent's tab closed since its last
+        // command, so it now acts on the tab in front.
+        const retargeted = bindAgentTarget(session);
+        const actionTarget = (targetEntry: BrowserEntry) => ({
+          ...agentActionTarget(targetEntry),
+          ...(retargeted ? { retargeted: true as const } : {}),
+        });
+        const entry = agentEntry(session);
         const approvalBinding = parseApprovalBinding(args.approvalBinding);
         const runNative = async (
           nativeAction: string,
@@ -4646,7 +4682,7 @@ export function createBrowserViewHost(
             session,
             async () => {
               await ensureNativeActiveTab(session, nativeSignal, nativeAction.startsWith("tab-"));
-              const targetEntry = activeEntry(session);
+              const targetEntry = agentEntry(session);
               const targetTabId = targetEntry.tabId;
               await targetEntry.ready;
               await beforeDispatch?.(targetEntry);
@@ -4700,14 +4736,18 @@ export function createBrowserViewHost(
                     .then(() => true, () => false);
                 }
               }
-              const targetBeforeAction = agentActionTarget(targetEntry);
-              const activationRevision = session.activationRevision;
+              if (targetTabId !== session.activeTabId)
+                await emulateAgentFocus(targetEntry);
+              const targetBeforeAction = actionTarget(targetEntry);
               let result: Record<string, unknown>;
               if (nativeAction === "tab-select") {
                 // A failed selection may still have changed the native target.
                 // Require fresh synchronization before the next page action.
                 session.nativeActiveTabId = undefined;
               }
+              // The tab agent-browser creates for the agent's `tab new` is
+              // the agent's: createTarget opens it behind the person's tab.
+              if (nativeAction === "tab-new") session.agentOpeningTab = true;
               try {
                 result = await options.agentBrowserRuntime!.runAction(
                   sessionId,
@@ -4731,6 +4771,8 @@ export function createBrowserViewHost(
                   );
                 }
                 throw error;
+              } finally {
+                session.agentOpeningTab = false;
               }
               if (pressGuarded) {
                 // An Enter that opened a dialog leaves the page unable to
@@ -4754,14 +4796,10 @@ export function createBrowserViewHost(
               ) {
                 session.nativeActiveTabId = nativeArgs.tabId;
                 const requestedEntry = session.tabs.get(nativeArgs.tabId);
-                // An in-flight command must not overwrite a newer human selection,
-                // even if they switched away and back to the original tab.
-                if (
-                  session.activationRevision === activationRevision &&
-                  requestedEntry && requestedEntry.agentTab === undefined
-                ) {
-                  activateTab(session, nativeArgs.tabId);
-                }
+                // The agent's selection moves the agent, never the tab the
+                // person has in front.
+                if (requestedEntry && requestedEntry.agentTab === undefined)
+                  session.agentTargetTabId = nativeArgs.tabId;
               }
               if (nativeAction === "tab-new" || nativeAction === "tab-close") {
                 session.nativeActiveTabId = undefined;
@@ -4774,7 +4812,7 @@ export function createBrowserViewHost(
               return {
                 ...result,
                 target: targetAfterAction
-                  ? agentActionTarget(targetAfterAction)
+                  ? actionTarget(targetAfterAction)
                   : targetBeforeAction,
               };
             },
@@ -4808,7 +4846,7 @@ export function createBrowserViewHost(
           case "snapshot": {
             const interactive = Boolean(args.interactive);
             if (args.delta === true) {
-              const tabId = session.activeTabId;
+              const tabId = agentTargetId(session);
               const baseline = session.snapshotDeltaBaseline;
               const current =
                 baseline &&
@@ -4847,7 +4885,7 @@ export function createBrowserViewHost(
               // flight (a background tab closing, a profile switch) must win over
               // a response captured before it.
               session.snapshotDeltaBaseline =
-                session.activeTabId === tabId &&
+                agentTargetId(session) === tabId &&
                 session.snapshotDeltaBaseline === baseline
                   ? { tabId, interactive, revision: response.delta.revision }
                   : undefined;
@@ -4950,7 +4988,7 @@ export function createBrowserViewHost(
               retried: boolean,
               beforeSnapshot: string,
             ) => {
-              const actionEntry = activeEntry(session);
+              const actionEntry = agentEntry(session);
               const before = actionFacts(actionEntry);
               const generations = {
                 documentGeneration: actionEntry.documentGeneration,
@@ -4987,7 +5025,7 @@ export function createBrowserViewHost(
                     signal,
                   )
                 : undefined;
-              const resultEntry = activeEntry(session);
+              const resultEntry = agentEntry(session);
               const navigation =
                 resultEntry.tabId !== actionEntry.tabId ||
                 actionEntry.navigationGeneration >
@@ -5122,7 +5160,7 @@ export function createBrowserViewHost(
               );
               if (locked) throw browserError("BROWSER_SECRET_FIELD_LOCKED", locked);
             };
-            await refuseIfFilledFieldFocused(activeEntry(session));
+            await refuseIfFilledFieldFocused(agentEntry(session));
             return runNative(
               action,
               {
@@ -5164,7 +5202,7 @@ export function createBrowserViewHost(
                 ? normalizeAgentBrowserURL(args.url)
                 : undefined;
             await runNative(action, { url });
-            return agentTabResult(activeEntry(session), true);
+            return agentTabResult(agentEntry(session), true);
           }
           case "tab-select": {
             await runNative(action, {
@@ -5175,13 +5213,13 @@ export function createBrowserViewHost(
                 "tabId is required",
               ),
             });
-            return agentTabResult(activeEntry(session), true);
+            return agentTabResult(agentEntry(session), true);
           }
           case "tab-close": {
             const tabId =
               typeof args.tabId === "string" && args.tabId.trim()
                 ? args.tabId.trim()
-                : session.activeTabId;
+                : agentTargetId(session);
             if (session.tabs.size === 1) {
               throw browserError(
                 "CANNOT_CLOSE_LAST_TAB",
@@ -5274,7 +5312,7 @@ export function createBrowserViewHost(
               const blocked = await filler.screenshotBlocked(sessionId, vaultDocumentKey(shown), vaultCdp(shown));
               if (blocked) throw browserError("BROWSER_SECRET_ON_SCREEN", blocked);
             };
-            await refuseIfCodeOnScreen(activeEntry(session));
+            await refuseIfCodeOnScreen(agentEntry(session));
             if (!options.agentBrowserRuntime) {
               throw browserError(
                 "BROWSER_AUTOMATION_UNAVAILABLE",
@@ -5285,7 +5323,7 @@ export function createBrowserViewHost(
               session,
               async () => {
                 await ensureNativeActiveTab(session, signal);
-                const targetEntry = activeEntry(session);
+                const targetEntry = agentEntry(session);
                 await targetEntry.ready;
                 await refuseIfCodeOnScreen(targetEntry);
                 try {
@@ -5295,7 +5333,7 @@ export function createBrowserViewHost(
                     signal,
                     { annotate: args.annotate === true },
                   );
-                  return { ...result, target: agentActionTarget(targetEntry) };
+                  return { ...result, target: actionTarget(targetEntry) };
                 } catch (error) {
                   if (!isAgentBrowserTimeout(error)) throw error;
                   const image = await captureScreenshotFallback(targetEntry, signal);
@@ -5311,7 +5349,7 @@ export function createBrowserViewHost(
                     data: png.toString("base64"),
                     width,
                     height,
-                    target: agentActionTarget(targetEntry),
+                    target: actionTarget(targetEntry),
                     untrustedExternalContent: true as const,
                   };
                 }
@@ -5364,7 +5402,7 @@ export function createBrowserViewHost(
                 ref: stringArg(args, "ref", "REFERENCE_REQUIRED", "ref is required"),
               });
             }
-            const target = activeEntry(session);
+            const target = agentEntry(session);
             await ensureDebugger(target);
             const fillTarget = {
               cdp: target.view.webContents.debugger,
@@ -5412,7 +5450,7 @@ export function createBrowserViewHost(
           case "describe": {
             // Internal: the daemon's approval gate asks what a click, act,
             // or Enter would act on before it lets the action run.
-            const describeEntry = activeEntry(session);
+            const describeEntry = agentEntry(session);
             await describeEntry.ready;
             const contents = describeEntry.view.webContents;
             const describeDocument = describeEntry.documentGeneration;
@@ -5462,7 +5500,7 @@ export function createBrowserViewHost(
             // the tab moved on while they were read, discard them and let the
             // daemon ask for a fresh read.
             if (
-              activeEntry(session) !== describeEntry ||
+              agentEntry(session) !== describeEntry ||
               describeEntry.documentGeneration !== describeDocument
             ) {
               throw browserError(
@@ -5496,7 +5534,7 @@ export function createBrowserViewHost(
         if (!filler) return result;
         // Mask by element as well as by string: a filled field's current
         // value is masked even after it was edited.
-        const shown = session.tabs.size ? activeEntry(session) : undefined;
+        const shown = session.tabs.size ? agentEntry(session) : undefined;
         return shown
           ? filler.scrubLive(sessionId, vaultDocumentKey(shown), vaultCdp(shown), result)
           : filler.scrub(sessionId, result);
@@ -5687,6 +5725,33 @@ function activeEntry(session: BrowserSessionEntry): BrowserEntry {
       "Active browser tab is unavailable",
     );
   return entry;
+}
+
+// The tab ID agent commands act on: the agent's own tab while it is open, else
+// the tab in front (before the agent's first command binds one).
+function agentTargetId(session: BrowserSessionEntry): string {
+  const own = session.agentTargetTabId;
+  return own && session.tabs.has(own) ? own : session.activeTabId;
+}
+
+function agentEntry(session: BrowserSessionEntry): BrowserEntry {
+  const entry = session.tabs.get(agentTargetId(session));
+  if (!entry)
+    throw browserError(
+      "BROWSER_TARGET_UNAVAILABLE",
+      "Active browser tab is unavailable",
+    );
+  return entry;
+}
+
+// Binds the agent to the tab in front when it has no tab of its own yet, or
+// its tab closed. Returns true when an earlier tab was lost, so the command can
+// tell the agent it now acts on a different page.
+function bindAgentTarget(session: BrowserSessionEntry): boolean {
+  const own = session.agentTargetTabId;
+  if (own && session.tabs.has(own)) return false;
+  session.agentTargetTabId = session.activeTabId || undefined;
+  return own !== undefined;
 }
 
 function isBlankBrowserEntry(entry: BrowserEntry): boolean {
@@ -5959,8 +6024,10 @@ async function observeActionPostcondition(
   signal?: AbortSignal,
 ): Promise<Record<string, unknown>> {
   const deadline = Date.now() + postcondition.timeoutMs;
+  // A popup from the agent's tab moves the agent; the person switching tabs
+  // in the panel does not count as this action navigating.
   const activeTabChanged = () =>
-    activeEntry(session).tabId !== sourceEntry.tabId;
+    agentEntry(session).tabId !== sourceEntry.tabId;
   const satisfiedNavigation = () =>
     activeTabChanged() ||
     sourceEntry.navigationGeneration > before.navigationGeneration;
@@ -6129,12 +6196,16 @@ function agentTabResult(
 
 function agentTabsResult(
   session: BrowserSessionEntry,
-): BrowserTabsState & { untrustedExternalContent: true } {
+): BrowserTabsState & { panelTabId: string; untrustedExternalContent: true } {
+  // For the agent, the active tab is its own; panelTabId is the one the
+  // person has in front.
+  const agentTabId = agentTargetId(session);
   return {
     viewId: session.viewId,
-    activeTabId: session.activeTabId,
+    activeTabId: agentTabId,
+    panelTabId: session.activeTabId,
     tabs: [...session.tabs.values()].map((entry) =>
-      agentTabResult(entry, entry.tabId === session.activeTabId),
+      agentTabResult(entry, entry.tabId === agentTabId),
     ),
     untrustedExternalContent: true,
   };
@@ -6173,11 +6244,32 @@ type SnapshotDelta =
 // the command to the request deadline instead of failing with something the
 // agent can act on.
 function assertPanelPainted(session: BrowserSessionEntry): void {
-  if (session.visible) return;
-  throw browserError(
-    "BROWSER_PANEL_HIDDEN",
-    "Human pointer movement needs the Browser panel visible on screen. Ask the user to open it, or retry without --human.",
-  );
+  if (!session.visible)
+    throw browserError(
+      "BROWSER_PANEL_HIDDEN",
+      "Human pointer movement needs the Browser panel visible on screen. Ask the user to open it, or retry without --human.",
+    );
+  // The agent's tab behind the person's is parked offscreen: not painted.
+  if (agentTargetId(session) !== session.activeTabId)
+    throw browserError(
+      "BROWSER_PANEL_HIDDEN",
+      "Human pointer movement needs the agent's tab in front in the Browser panel. Ask the user to select it, or retry without --human.",
+    );
+}
+
+// CDP input reaches a tab the person is not looking at, but that page reads
+// document.hasFocus() as false, which some sites act on (rich-text editors,
+// autocomplete that closes on blur, validation on blur). Best effort:
+// agent-browser owns the debugger attachment, so a tab it has not attached
+// yet is left alone.
+async function emulateAgentFocus(entry: BrowserEntry): Promise<void> {
+  const debug = entry.view.webContents.debugger;
+  if (!debug?.isAttached()) return;
+  try {
+    await debug.sendCommand("Emulation.setFocusEmulationEnabled", { enabled: true });
+  } catch {
+    // The page still works without it; only focus-sensitive sites differ.
+  }
 }
 
 function parseSnapshotDelta(value: unknown): SnapshotDelta {
@@ -6743,7 +6835,7 @@ function networkEntryFor(session: BrowserSessionEntry): BrowserEntry {
     if (captured) return captured;
     session.networkTabId = undefined;
   }
-  return activeEntry(session);
+  return agentEntry(session);
 }
 
 async function startNetworkCapture(

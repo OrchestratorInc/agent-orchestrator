@@ -2406,12 +2406,12 @@ describe("ensureNativeActiveTab automation-runtime resync", () => {
 	// just whichever call happened to trigger it first — browser:closeTab's
 	// own try/catch never even ran, because the throw came from its unguarded
 	// ensureNativeActiveTab call sitting *before* that try block.
-	it("recovers browser:selectTab when the runtime rejects tab-select for the newly active tab", async () => {
+	it("recovers the agent's tab when the runtime rejects tab-select for it", async () => {
 		const { host, invoke, runtime } = setupTabHost();
 		const ensure = (await invoke("browser:ensure", "sess-1")) as { viewId: string };
 		const viewId = ensure.viewId;
-		await invoke("browser:openTab", { viewId }); // t1, t2 — t2 active
-		await host.execute("sess-1", "snapshot"); // agent-browser selects t2: natively synced
+		await host.execute("sess-1", "get", { property: "url" }); // the agent binds to t1
+		await invoke("browser:openTab", { viewId }); // the person's t2 in front, natively synced
 
 		const runAction = runtime.runAction as unknown as ReturnType<typeof vi.fn>;
 		const originalRunAction = runAction.getMockImplementation()! as (...args: unknown[]) => Promise<unknown>;
@@ -2428,8 +2428,8 @@ describe("ensureNativeActiveTab automation-runtime resync", () => {
 			return originalRunAction(sessionId, action, args, provider);
 		});
 
-		const result = (await invoke("browser:selectTab", { viewId, tabId: "t1" })) as { activeTabId: string };
-		expect(result.activeTabId).toBe("t1");
+		const result = (await host.execute("sess-1", "get", { property: "url" })) as { target: { tabId: string } };
+		expect(result.target.tabId).toBe("t1");
 		// Asked the runtime to refresh its own view (exactly what its error
 		// message suggests) before retrying, rather than giving up immediately.
 		expect(seenActions).toContain("tabs");
@@ -2470,8 +2470,9 @@ describe("ensureNativeActiveTab automation-runtime resync", () => {
 		const { activeTargets, host, invoke, runtime, views } = setupTabHost();
 		const ensure = (await invoke("browser:ensure", "sess-1")) as { viewId: string };
 		const viewId = ensure.viewId;
-		await invoke("browser:openTab", { viewId }); // t1, t2 — t2 active
-		await host.execute("sess-1", "snapshot"); // agent-browser selects t2: natively synced
+		await host.execute("sess-1", "get", { property: "url" }); // the agent binds to t1
+		await invoke("browser:openTab", { viewId }); // the person's t2 in front
+		const runtimeTarget = activeTargets.get("sess-1");
 
 		const runAction = runtime.runAction as unknown as ReturnType<typeof vi.fn>;
 		const dispatchedPageActions: string[] = [];
@@ -2485,20 +2486,17 @@ describe("ensureNativeActiveTab automation-runtime resync", () => {
 			return {};
 		});
 
-		await expect(invoke("browser:selectTab", { viewId, tabId: "t1" })).rejects.toMatchObject({
-			code: "BROWSER_TARGET_MISMATCH",
-			message: "Browser automation could not target Orchestrator tab t1",
-		});
 		await expect(host.execute("sess-1", "click", { ref: "e1" })).rejects.toMatchObject({
 			code: "BROWSER_TARGET_MISMATCH",
+			message: "Browser automation could not target Orchestrator tab t1",
 		});
 		await expect(host.execute("sess-1", "get", { property: "url" })).rejects.toMatchObject({
 			code: "BROWSER_TARGET_MISMATCH",
 		});
 
 		expect(dispatchedPageActions).toEqual([]);
-		expect(activeTargets.get("sess-1")).toBe("t2");
-		const repeated = (await invoke("browser:selectTab", { viewId, tabId: "t1" }).catch((error) => error)) as Error;
+		expect(activeTargets.get("sess-1")).toBe(runtimeTarget);
+		const repeated = (await host.execute("sess-1", "click", { ref: "e1" }).catch((error) => error)) as Error;
 		expect(repeated.message).not.toContain("agent-browser");
 
 		const closed = (await invoke("browser:closeTab", { viewId, tabId: "t1" })) as {
@@ -3970,7 +3968,9 @@ describe("agent browser runtime", () => {
 		});
 		expect(opened.url).not.toContain("popup.example.test");
 		expect(JSON.stringify(opened)).not.toContain("target-secret");
-		expect(tabs.activeTabId).toBe("t2");
+		// A target opened outside the agent's own `tab new` comes to the front;
+		// the agent stays on its tab.
+		expect(tabs).toMatchObject({ activeTabId: "t1", panelTabId: "t2" });
 		expect(tabs.tabs[1]).toMatchObject({ id: "t2", url: "https://popup.example.test/new?token=%5Bredacted%5D" });
 	});
 
@@ -4040,43 +4040,42 @@ describe("agent browser runtime", () => {
 		expect(runtime.reconcileTargets).toHaveBeenCalledWith("sess-1");
 		expect(views).toHaveLength(7);
 
-		// agent-browser's next command acts on the tab the person is looking at.
-		await host.execute("sess-1", "snapshot");
-		expect(runtime.runAction).toHaveBeenCalledWith("sess-1", "tab-select", { tabId: "t7" }, expect.anything(), undefined);
-		expect(activeTargets.get("sess-1")).toBe("t7");
+		// The agent stays on its own tab, not the one the person opened last.
+		const snapshot = (await host.execute("sess-1", "snapshot")) as { target: { tabId: string } };
+		expect(snapshot.target.tabId).toBe("t1");
+		expect(runtime.runAction).not.toHaveBeenCalledWith("sess-1", "tab-select", { tabId: "t7" }, expect.anything(), undefined);
+		expect(activeTargets.get("sess-1")).toBe("t1");
 
 		await invoke("browser:closeTab", { viewId: state.viewId, tabId: "t7" });
 
 		expect(views[6].webContents.close).toHaveBeenCalledTimes(1);
 	});
 
-	it("keeps stable logical tab IDs, separate targets, and the selected tab active", async () => {
+	it("keeps stable logical tab IDs, separate targets, and the agent's tab behind the person's", async () => {
 		const { emit, host, invoke, views } = setupTabHost();
 		await host.execute("sess-1", "open", { url: "http://localhost:3000" });
 		await host.execute("sess-1", "snapshot");
 		const created = (await host.execute("sess-1", "tab-new", {
 			url: "http://localhost:4173",
 		})) as { id: string; untrustedExternalContent: boolean };
-		expect(views[0].setBounds).toHaveBeenCalledWith({
-			x: -10_000,
-			y: -10_000,
-			width: 1280,
-			height: 720,
-		});
 
 		const listed = (await host.execute("sess-1", "tabs")) as {
 			activeTabId: string;
+			panelTabId: string;
 			tabs: Array<{ id: string; url: string; active: boolean }>;
 		};
 		expect(created.id).toBe("t2");
 		expect(created.untrustedExternalContent).toBe(true);
 		expect(listed).toMatchObject({ untrustedExternalContent: true });
+		// The agent works on its new tab; the panel stays on the person's.
 		expect(listed.activeTabId).toBe("t2");
+		expect(listed.panelTabId).toBe("t1");
 		expect(listed.tabs).toEqual([
 			expect.objectContaining({ id: "t1", url: "http://localhost:3000/", active: false }),
 			expect.objectContaining({ id: "t2", url: "http://localhost:4173/", active: true }),
 		]);
 		expect(views).toHaveLength(2);
+		expect(views[1].setVisible).not.toHaveBeenCalledWith(true);
 		const ensured = (await invoke("browser:ensure", "sess-1")) as BrowserNavState;
 		emit("browser:setBounds", {
 			viewId: ensured.viewId,
@@ -4084,28 +4083,20 @@ describe("agent browser runtime", () => {
 			rect: { x: 10, y: 20, width: 320, height: 240 },
 			visible: true,
 		});
+		expect(views[0].setBounds).toHaveBeenLastCalledWith({ x: 10, y: 20, width: 320, height: 240 });
 
 		await host.execute("sess-1", "tab-select", { tabId: "t1" });
 		const current = (await host.execute("sess-1", "get", { property: "url" })) as { value: string };
 		expect(current.value).toBe("http://localhost:3000/");
-		expect(views[1].setVisible).toHaveBeenLastCalledWith(false);
 		await host.execute("sess-1", "tab-select", { tabId: "t2" });
+		const background = (await host.execute("sess-1", "get", { property: "url" })) as { value: string };
+		expect(background.value).toBe("http://localhost:4173/");
 		await host.execute("sess-1", "tab-select", { tabId: "t1" });
 		await host.execute("sess-1", "tab-select", { tabId: "t2" });
-		expect(views[0].setVisible).toHaveBeenLastCalledWith(false);
-		expect(views[0].setBounds).toHaveBeenLastCalledWith({
-			x: -10_000,
-			y: -10_000,
-			width: 1280,
-			height: 720,
-		});
-		expect(views[1].setVisible).toHaveBeenLastCalledWith(true);
-		expect(views[1].setBounds).toHaveBeenLastCalledWith({
-			x: 10,
-			y: 20,
-			width: 320,
-			height: 240,
-		});
+		// The agent's selections never moved the panel off the person's tab.
+		expect(views[0].setVisible).toHaveBeenLastCalledWith(true);
+		expect(views[0].setBounds).toHaveBeenLastCalledWith({ x: 10, y: 20, width: 320, height: 240 });
+		expect(views[1].setVisible).not.toHaveBeenCalledWith(true);
 		await expect(host.execute("sess-1", "click", { ref: "e1" })).rejects.toMatchObject({
 			code: "STALE_REFERENCE",
 		});
@@ -4148,8 +4139,8 @@ describe("agent browser runtime", () => {
 	it.each([
 		{ name: "a different tab", selections: ["t3"], expectedTabId: "t3", expectedURL: "https://third.example.test/" },
 		{ name: "away and back", selections: ["t3", "t2"], expectedTabId: "t2", expectedURL: "https://second.example.test/" },
-	])("preserves independent activation $name during a native tab selection", async ({ selections, expectedTabId, expectedURL }) => {
-		const { activeTargets, host, runtime } = setupTabHost();
+	])("keeps the agent's selection while the person selects $name", async ({ selections, expectedTabId }) => {
+		const { activeTargets, host, invoke, runtime } = setupTabHost();
 		await host.execute("sess-1", "open", { url: "https://first.example.test/" });
 		await host.execute("sess-1", "tab-new", { url: "https://second.example.test/" });
 		await host.execute("sess-1", "tab-new", { url: "https://third.example.test/" });
@@ -4174,23 +4165,25 @@ describe("agent browser runtime", () => {
 			return originalRunAction(sessionId, action, args, provider, signal);
 		});
 
+		const { viewId } = (await invoke("browser:ensure", "sess-1")) as { viewId: string };
 		const selection = host.execute("sess-1", "tab-select", { tabId: "t1" });
 		try {
-			const provider = await started;
-			for (const tabId of selections) await provider.activateTarget(tabId);
+			await started;
+			// The person's clicks neither wait for the agent's command nor move it.
+			for (const tabId of selections) await invoke("browser:selectTab", { viewId, tabId });
 		} finally {
 			releaseSelect();
 		}
 		await selection;
-		expect(await host.execute("sess-1", "tabs")).toMatchObject({ activeTabId: expectedTabId });
+		expect(await host.execute("sess-1", "tabs")).toMatchObject({ activeTabId: "t1", panelTabId: expectedTabId });
 		expect(await host.execute("sess-1", "get", { property: "url" })).toMatchObject({
-			value: expectedURL,
-			target: { tabId: expectedTabId },
+			value: "https://first.example.test/",
+			target: { tabId: "t1" },
 		});
 	});
 
-	it("keeps a newer independent activation while background popup synchronization completes", async () => {
-		const { activeTargets, host, runtime, views } = setupTabHost();
+	it("keeps the person's newer selection while the agent's popup synchronization completes", async () => {
+		const { activeTargets, host, invoke, runtime, views } = setupTabHost();
 		await host.execute("sess-1", "open", { url: "https://first.example.test/" });
 		let notifyStarted: (provider: import("./agent-browser-cdp-bridge").AgentBrowserTargetProvider) => void = () => undefined;
 		const started = new Promise<import("./agent-browser-cdp-bridge").AgentBrowserTargetProvider>((resolve) => { notifyStarted = resolve; });
@@ -4210,18 +4203,20 @@ describe("agent browser runtime", () => {
 			return originalRunAction(sessionId, action, args, provider, signal);
 		});
 
+		const { viewId } = (await invoke("browser:ensure", "sess-1")) as { viewId: string };
 		views[0].webContents.openWindow("https://popup.example.test/");
 		try {
-			const provider = await started;
-			await provider.activateTarget("t1");
+			await started;
+			await invoke("browser:selectTab", { viewId, tabId: "t1" });
 		} finally {
 			releaseSelect();
 		}
+		// The popup came from the agent's tab, so it is the agent's; the person
+		// went back to t1 in the panel.
 		expect(await host.execute("sess-1", "get", { property: "url" })).toMatchObject({
-			value: "https://first.example.test/",
-			target: { tabId: "t1" },
+			target: { tabId: "t2" },
 		});
-		expect(await host.execute("sess-1", "tabs")).toMatchObject({ activeTabId: "t1" });
+		expect(await host.execute("sess-1", "tabs")).toMatchObject({ activeTabId: "t2", panelTabId: "t1" });
 	});
 
 	it("keeps the current AO tab after an explicit native selection fails", async () => {
@@ -4243,6 +4238,76 @@ describe("agent browser runtime", () => {
 			value: "https://second.example.test/",
 			target: { tabId: "t2" },
 		});
+	});
+
+	it("keeps the agent on its own tab while the person opens and uses another", async () => {
+		const { activeTargets, host, invoke } = setupTabHost();
+		const { viewId } = (await invoke("browser:ensure", "sess-1")) as { viewId: string };
+		await host.execute("sess-1", "open", { url: "https://agent.example.test/" });
+		await invoke("browser:openTab", { viewId, url: "https://person.example.test/" });
+		await invoke("browser:selectTab", { viewId, tabId: "t2" });
+
+		expect(await host.execute("sess-1", "get", { property: "url" })).toMatchObject({
+			value: "https://agent.example.test/",
+			target: { tabId: "t1" },
+		});
+		expect(activeTargets.get("sess-1")).toBe("t1");
+		expect(await host.execute("sess-1", "tabs")).toMatchObject({ activeTabId: "t1", panelTabId: "t2" });
+	});
+
+	it("falls back to the tab in front once, flagged, after the agent's tab closes", async () => {
+		const { host, invoke } = setupTabHost();
+		const { viewId } = (await invoke("browser:ensure", "sess-1")) as { viewId: string };
+		await host.execute("sess-1", "open", { url: "https://agent.example.test/" });
+		await invoke("browser:openTab", { viewId, url: "https://person.example.test/" });
+		await invoke("browser:closeTab", { viewId, tabId: "t1" });
+
+		const first = (await host.execute("sess-1", "get", { property: "url" })) as {
+			target: { tabId: string; retargeted?: boolean };
+		};
+		expect(first.target).toMatchObject({ tabId: "t2", retargeted: true });
+		const second = (await host.execute("sess-1", "get", { property: "url" })) as {
+			target: { tabId: string; retargeted?: boolean };
+		};
+		expect(second.target.tabId).toBe("t2");
+		expect(second.target).not.toHaveProperty("retargeted");
+	});
+
+	it("moves the agent, not the panel, to a popup its background tab opens", async () => {
+		const { host, invoke, views } = setupTabHost();
+		const { viewId } = (await invoke("browser:ensure", "sess-1")) as { viewId: string };
+		await host.execute("sess-1", "open", { url: "https://agent.example.test/" });
+		await invoke("browser:openTab", { viewId, url: "https://person.example.test/" });
+
+		views[0].webContents.openWindow("https://popup.example.test/");
+		await vi.waitFor(async () =>
+			expect(await host.execute("sess-1", "tabs")).toMatchObject({ activeTabId: "t3", panelTabId: "t2" }),
+		);
+	});
+
+	it("refuses a human pointer action while the agent's tab is behind the person's", async () => {
+		const { emit, host, invoke } = setupTabHost();
+		const { viewId } = (await invoke("browser:ensure", "sess-1")) as { viewId: string };
+		emit("browser:setBounds", { viewId, revision: 1, rect: { x: 10, y: 20, width: 320, height: 240 }, visible: true });
+		await host.execute("sess-1", "open", { url: "https://agent.example.test/" });
+		await invoke("browser:openTab", { viewId, url: "https://person.example.test/" });
+
+		await expect(host.execute("sess-1", "click", { ref: "e1", human: true })).rejects.toMatchObject({
+			code: "BROWSER_PANEL_HIDDEN",
+		});
+	});
+
+	it("emulates focus for the agent's tab while it works in the background", async () => {
+		const { debuggerCommands, host, invoke, views } = setupTabHost();
+		const { viewId } = (await invoke("browser:ensure", "sess-1")) as { viewId: string };
+		await host.execute("sess-1", "open", { url: "https://agent.example.test/" });
+		expect(debuggerCommands.some(({ method }) => method === "Emulation.setFocusEmulationEnabled")).toBe(false);
+		await invoke("browser:openTab", { viewId, url: "https://person.example.test/" });
+		(views[0].webContents as unknown as { debugger: { attach(version: string): void } }).debugger.attach("1.3");
+
+		await host.execute("sess-1", "get", { property: "url" });
+
+		expect(debuggerCommands).toContainEqual({ method: "Emulation.setFocusEmulationEnabled", params: { enabled: true } });
 	});
 
 	it("keeps popup reads and mutations on the reported tab and returns their AO target identity", async () => {
@@ -5344,17 +5409,14 @@ describe("agent browser runtime", () => {
 			tabId: "t1",
 		})) as { activeTabId: string };
 		expect(selected.activeTabId).toBe("t1");
-		expect(activeTargets.get("sess-1")).toBe("t1");
-		expect(runtime.runAction).toHaveBeenCalledWith(
-			"sess-1",
-			"tab-select",
-			{ tabId: "t1" },
-			expect.anything(),
-			undefined,
-		);
+		// The person's selection does not drive agent-browser; the agent's first
+		// command binds it to the tab in front and selects that natively.
+		expect(activeTargets.get("sess-1")).toBe("t2");
 		expect(await host.execute("sess-1", "get", { property: "url" })).toMatchObject({
 			value: "about:blank",
+			target: { tabId: "t1" },
 		});
+		expect(activeTargets.get("sess-1")).toBe("t1");
 
 		const closed = (await invoke("browser:closeTab", {
 			viewId: ensured.viewId,
