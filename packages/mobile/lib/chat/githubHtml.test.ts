@@ -105,6 +105,21 @@ describe("githubSegments", () => {
 		expect(githubSegments("```\ncode\n`````\n<b>bold</b>")).toEqual([{ kind: "markdown", text: "```\ncode\n`````\n**bold**" }]);
 	});
 
+	it("protects whole code spans of any backtick run, including ones that wrap a line", () => {
+		const double = "Write `` `<details>` `` literally.";
+		expect(githubSegments(double)).toEqual([{ kind: "markdown", text: double }]);
+		const wrapped = "See `<details>\n<summary>x</summary>` here.";
+		expect(githubSegments(wrapped)).toEqual([{ kind: "markdown", text: wrapped }]);
+		// A blank line ends the paragraph, so a lone backtick there opens no span.
+		expect(githubSegments("a ` b\n\n<b>c</b> `")).toEqual([{ kind: "markdown", text: "a ` b\n\n**c** `" }]);
+	});
+
+	it("keeps code spans inside HTML code as written", () => {
+		expect(githubSegments("<pre><code>const name = `world`;</code></pre>")).toEqual([{ kind: "markdown", text: "```\nconst name = `world`;\n```" }]);
+		expect(githubSegments("<pre>```\nfence\n```</pre>")).toEqual([{ kind: "markdown", text: "````\n```\nfence\n```\n````" }]);
+		expect(githubSegments("Run <code>a `b` c</code>.")).toEqual([{ kind: "markdown", text: "Run `` a `b` c ``." }]);
+	});
+
 	it("turns inline and block HTML into Markdown and decodes entities", () => {
 		expect(githubSegments('<p>Use <b>bold</b>, <em>this</em> and <code>a &lt; b</code>.<br>Next &amp; last</p>')).toEqual([
 			{ kind: "markdown", text: "Use **bold**, *this* and `a < b`.\nNext & last" },

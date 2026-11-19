@@ -23,7 +23,9 @@ export type GitHubSegment =
 // opening (CommonMark), or to the end of the text when it has none: a ``` line
 // inside a ```` example is code, so a `<details>` after it stays code too.
 const FENCE = /^ {0,3}(?:(`{3,})[^`\n]*\n[\s\S]*?(?:\n {0,3}\1`*[ \t]*(?=\n|(?![\s\S]))|(?![\s\S]))|(~{3,})[^\n]*\n[\s\S]*?(?:\n {0,3}\2~*[ \t]*(?=\n|(?![\s\S]))|(?![\s\S])))/gm;
-const CODE_SPAN = /`[^`\n]*`/g;
+// A whole backtick run, then the first run of exactly that length (CommonMark): `` `<details>` `` is one span.
+// A span may wrap a line but not a blank one, which ends the paragraph.
+const CODE_SPAN = /(?<!`)(`+)(?!`)((?:(?!\n[ \t]*\n)[\s\S])*?[^`])\1(?!`)/g;
 // An unterminated comment hides the rest of the text, as it does on GitHub.
 const COMMENT = /<!--[\s\S]*?(?:-->|(?![\s\S]))/g;
 const DETAILS = /<details\b[^>]*>|<\/details\s*>/gi;
@@ -75,12 +77,14 @@ function inlineCode(text: string): string {
 /** One stretch of comment HTML, without `<details>`, as the Markdown it reads as. */
 function toMarkdown(html: string, shelf: Shelf): string {
 	let out = html
+		// HTML code holds Markdown code spans already set aside; restore them first, so
+		// they stay as written and the delimiter chosen below sees their backticks.
 		.replace(/<pre\b[^>]*>([\s\S]*?)<\/pre\s*>/gi, (_pre, inner: string) => {
-			const code = decodeEntities(inner.replace(ANY_TAG, "")).replace(/^\n|\n$/g, "");
+			const code = decodeEntities(unshelve(shelf, inner).replace(ANY_TAG, "")).replace(/^\n|\n$/g, "");
 			const fence = "`".repeat(Math.max(2, ...[...code.matchAll(/`+/g)].map((run) => run[0].length)) + 1);
 			return `\n\n${shelve(shelf, `${fence}\n${code}\n${fence}`)}\n\n`;
 		})
-		.replace(/<code\b[^>]*>([\s\S]*?)<\/code\s*>/gi, (_code, inner: string) => shelve(shelf, inlineCode(inner)))
+		.replace(/<code\b[^>]*>([\s\S]*?)<\/code\s*>/gi, (_code, inner: string) => shelve(shelf, inlineCode(unshelve(shelf, inner))))
 		// `<picture>` unwraps to the `<img>` inside it, the light-mode image.
 		.replace(/<\/?(?:picture|source)\b[^<>]*>/gi, "")
 		// A dropped image takes the space after it, so `**<img> Minor**` still reads as bold.
