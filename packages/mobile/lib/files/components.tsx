@@ -171,7 +171,10 @@ export const DiffLine = memo(function DiffLine({
 			accessibilityActions={[{ name: "activate" }, { name: "extend", label: "Extend selection to this line" }]}
 			onAccessibilityAction={onAction}
 			onPress={() => { haptics.select(); onSelect(index); }}
-			style={[styles.line, tint ? { backgroundColor: tint } : null, cited && styles.lineCited, selected && styles.lineSelected]}
+			// Unwrapped, a row is exactly one line high: the file screen tells its list
+			// so (getItemLayout), and Android, which rounds a text's height to whole
+			// pixels, would otherwise drift from it row by row.
+			style={[styles.line, !wrap && { height: CODE_LINE_HEIGHT * scale }, tint ? { backgroundColor: tint } : null, cited && styles.lineCited, selected && styles.lineSelected]}
 		>
 			<View style={[styles.gutter, { width: gutterWidth(digits, scale) }]}>
 				<Text maxFontSizeMultiplier={CODE_MAX_SCALE} style={styles.gutterText}>{number ?? ""}</Text>
