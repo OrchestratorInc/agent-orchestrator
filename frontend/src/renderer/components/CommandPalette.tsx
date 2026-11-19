@@ -95,7 +95,7 @@ import {
 	type WorkspaceSession,
 	type WorkspaceSummary,
 } from "../types/workspace";
-import { readSystemTheme, useUiStore } from "../stores/ui-store";
+import { useUiStore } from "../stores/ui-store";
 import { useSessionImportStore } from "../stores/session-import-store";
 import { runAppShortcut, useAppShortcut } from "../hooks/useAppShortcut";
 import { CreateProjectFlow } from "./CreateProjectFlow";
@@ -170,8 +170,7 @@ export const CommandPalette = memo(function CommandPalette() {
 	const restoreSessionById = useRestoreSession();
 	const params = useParams({ strict: false }) as { hostId?: string; projectId?: string; sessionId?: string };
 	const { cloneProject, createProject, daemonStatus, initializeProjectRepository, removeProject } = useShell();
-	const resolvedTheme = useUiStore((s) => s.resolvedTheme);
-	const setThemePreference = useUiStore((s) => s.setThemePreference);
+	const toggleThemePreference = useUiStore((s) => s.toggleThemePreference);
 	const isOpen = useUiStore((s) => s.isCommandPaletteOpen);
 	const setOpen = useUiStore((s) => s.setCommandPaletteOpen);
 	const restartingProjectIds = useUiStore((s) => s.restartingProjectIds);
@@ -884,12 +883,7 @@ export const CommandPalette = memo(function CommandPalette() {
 		}
 	}, [view, scoped, t]);
 
-	// Toggling to the OS appearance picks System instead of pinning that mode,
-	// so toggling twice from System follows the OS again.
-	const toggleTheme = useCallback(() => {
-		const next = resolvedTheme === "dark" ? "light" : "dark";
-		void readSystemTheme().then((os) => setThemePreference(next === os ? "system" : next));
-	}, [resolvedTheme, setThemePreference]);
+	const toggleTheme = useCallback(() => toggleThemePreference(), [toggleThemePreference]);
 
 	const navigateToTarget = useCallback(
 		(target: NavigateTarget) => {

@@ -328,6 +328,8 @@ export type UiState = {
 	visibleTerminalKindBySession: Record<string, TerminalTarget["kind"]>;
 	setWorkbenchTab: (tab: WorkbenchTab) => void;
 	setThemePreference: (theme: ThemePreference) => void;
+	/** Flip light/dark; landing on the OS appearance picks System instead. */
+	toggleThemePreference: () => void;
 	setThemeStyle: (style: ThemeStyle) => void;
 	setDeveloperMode: (enabled: boolean) => void;
 	setRemoteHosts: (enabled: boolean) => void;
@@ -548,15 +550,11 @@ export async function readSystemTheme(): Promise<Theme> {
 	return systemTheme();
 }
 
-// The latest setThemePreference call; an older System lookup that resolves
+// The latest theme choice; an older System lookup or transition that finishes
 // after a newer choice is dropped.
 let themePreferenceRequest = 0;
-// A System lookup ran since main last got theme:set. On Windows and Linux the
-// lookup drops the forced mode, so main must hear the preference again.
-let systemLookupSinceThemeSet = false;
 
 function sendThemePreference(themePreference: ThemePreference): void {
-	systemLookupSinceThemeSet = false;
 	void aoBridge.theme?.set(themePreference)?.catch(() => undefined);
 }
 
@@ -616,32 +614,45 @@ export const useUiStore = create<UiState>((set, get) => ({
 	setThemePreference: (themePreference) => {
 		const request = ++themePreferenceRequest;
 		if (get().themePreference === themePreference) {
-			// Picking the current mode while a System lookup was pending: put
-			// main's forced mode back.
-			if (systemLookupSinceThemeSet) sendThemePreference(themePreference);
+			// An overtaken System choice may already have reached main (the lookup
+			// on Windows and Linux, an opaque window's early reveal). Send the
+			// current mode again; main skips it when nothing changed.
+			sendThemePreference(themePreference);
 			return;
 		}
+		// The transition's callbacks run later too, so each one checks that no
+		// newer choice has come in since.
+		const current = () => request === themePreferenceRequest;
 		const apply = (resolvedTheme: Theme) => {
-			if (request !== themePreferenceRequest) return;
+			if (!current()) return;
 			runThemeTransition(
 				() => {
+					if (!current()) return;
 					getLocalStorage()?.setItem(themeStorageKey, themePreference);
 					applyDocumentTheme(resolvedTheme);
 					set({ themePreference, resolvedTheme });
 				},
 				// The window's vibrancy material follows nativeTheme; flip it as the
 				// new frame is revealed so the tint and the material change together.
-				() => sendThemePreference(themePreference),
+				() => {
+					if (current()) sendThemePreference(themePreference);
+				},
 			);
 		};
 		// System comes from main: the media query still reports the forced mode
 		// until theme:set("system") lands, which happens only on reveal.
-		if (themePreference === "system") {
-			systemLookupSinceThemeSet = true;
-			void readSystemTheme().then(apply);
-		} else {
-			apply(themePreference);
-		}
+		if (themePreference === "system") void readSystemTheme().then(apply);
+		else apply(themePreference);
+	},
+	toggleThemePreference: () => {
+		// Counts as a choice right away, so a newer one cancels it while the OS
+		// appearance is read.
+		const request = ++themePreferenceRequest;
+		const next: Theme = get().resolvedTheme === "dark" ? "light" : "dark";
+		void readSystemTheme().then((os) => {
+			if (request !== themePreferenceRequest) return;
+			get().setThemePreference(next === os ? "system" : next);
+		});
 	},
 	setThemeStyle: (themeStyle) => {
 		if (get().themeStyle === themeStyle) return;

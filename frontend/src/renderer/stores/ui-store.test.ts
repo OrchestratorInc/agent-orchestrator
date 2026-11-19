@@ -87,6 +87,46 @@ describe("theme preference", () => {
 		expect(useUiStore.getState().resolvedTheme).toBe("light");
 	});
 
+	it("drops a System transition whose choice was overtaken before it ran", async () => {
+		let runUpdate: (() => void) | undefined;
+		Object.defineProperty(document, "startViewTransition", {
+			configurable: true,
+			writable: true,
+			value: (update: () => void) => {
+				runUpdate = update;
+				return { ready: Promise.resolve(), finished: Promise.resolve() };
+			},
+		});
+		try {
+			vi.spyOn(aoBridge.theme, "systemAppearance").mockResolvedValue("light");
+			useUiStore.getState().setThemePreference("system");
+			await vi.waitFor(() => expect(runUpdate).toBeDefined());
+			useUiStore.getState().setThemePreference("dark");
+			runUpdate?.();
+
+			expect(useUiStore.getState().themePreference).toBe("dark");
+			expect(useUiStore.getState().resolvedTheme).toBe("dark");
+		} finally {
+			Reflect.deleteProperty(document, "startViewTransition");
+		}
+	});
+
+	it("lets a newer choice cancel a pending toggle", async () => {
+		let reportAppearance: (theme: "light" | "dark") => void = () => undefined;
+		vi.spyOn(aoBridge.theme, "systemAppearance").mockReturnValue(
+			new Promise((resolve) => {
+				reportAppearance = resolve;
+			}),
+		);
+		useUiStore.getState().toggleThemePreference();
+		useUiStore.getState().setThemePreference("dark");
+		reportAppearance("light");
+		await new Promise((resolve) => setTimeout(resolve, 0));
+
+		expect(useUiStore.getState().themePreference).toBe("dark");
+		expect(useUiStore.getState().resolvedTheme).toBe("dark");
+	});
+
 	it("re-sends the current mode to main when it overtakes a System lookup", () => {
 		vi.spyOn(aoBridge.theme, "systemAppearance").mockReturnValue(new Promise(() => undefined));
 		const set = vi.spyOn(aoBridge.theme, "set");
