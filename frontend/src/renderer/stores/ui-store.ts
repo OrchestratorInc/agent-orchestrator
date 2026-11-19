@@ -23,15 +23,6 @@ import {
 	type ThemeStyle,
 } from "../lib/theme";
 
-/** A session to move to another computer, as the sidebar knows it. */
-export type MoveSessionRequest = {
-	sessionId: string;
-	/** Absent for this computer's daemon. */
-	hostId?: string;
-	projectId: string;
-	title: string;
-};
-
 export type { Theme, ThemePreference, ThemeStyle } from "../lib/theme";
 export { readStoredThemePreference, readStoredThemeStyle, resolveTheme } from "../lib/theme";
 
@@ -307,10 +298,6 @@ export type UiState = {
 	// Bumps to ask the sidebar's create-project flow to open (the ⌘N fallback
 	// when no project is in scope).
 	createProjectNonce: number;
-	/** The session the "Move to another computer" dialog is open for. */
-	moveSessionRequest: MoveSessionRequest | null;
-	requestMoveSession: (request: MoveSessionRequest) => void;
-	clearMoveSessionRequest: () => void;
 	/** Opens the sidebar's clone flow for another computer with the repository filled in. */
 	cloneElsewhereRequest: { hostId: string; remoteUrl: string; nonce: number } | null;
 	requestCloneElsewhere: (hostId: string, remoteUrl: string) => void;
@@ -592,9 +579,6 @@ export const useUiStore = create<UiState>((set, get) => ({
 	workspaceFileOpenRequest: null,
 	chatMessageFocusRequest: null,
 	createProjectNonce: 0,
-	moveSessionRequest: null,
-	requestMoveSession: (request) => set({ moveSessionRequest: request }),
-	clearMoveSessionRequest: () => set({ moveSessionRequest: null }),
 	cloneElsewhereRequest: null,
 	requestCloneElsewhere: (hostId, remoteUrl) =>
 		set((state) => ({ cloneElsewhereRequest: { hostId, remoteUrl, nonce: (state.cloneElsewhereRequest?.nonce ?? 0) + 1 } })),

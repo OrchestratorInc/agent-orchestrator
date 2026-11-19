@@ -3131,14 +3131,8 @@ function ControllerBanner({
 		}, OPEN_ELSEWHERE_RECHECK_MS);
 		return () => window.clearTimeout(timer);
 	}, [recheck]);
-	if (moving && controller.state === "stopped") {
-		return (
-			<div role="status" aria-atomic="true" className="flex shrink-0 items-center gap-2.5 border-b border-border bg-surface px-4 py-2.5">
-				<Loader2 aria-hidden="true" className="size-3.5 shrink-0 animate-spin text-[var(--color-status-working)]" />
-				<strong className="text-xs font-medium text-muted-foreground">{t("moveSession.moving", { host: moving })}</strong>
-			</div>
-		);
-	}
+	// The move banner above the session shows the move; the stopped agent is expected.
+	if (moving && controller.state === "stopped") return null;
 	if (pendingMove && controller.state === "stopped" && !terminated) {
 		return (
 			<div role="status" aria-atomic="true" className="flex shrink-0 items-start gap-2.5 border-b border-border bg-surface px-4 py-2.5">
@@ -3147,7 +3141,7 @@ function ControllerBanner({
 					<strong className="text-xs font-medium text-muted-foreground">{t("moveSession.pendingHeading", { host: pendingMove.label })}</strong>
 					<span className="text-xs leading-snug text-muted-foreground">{t("moveSession.pendingBody")}</span>
 					<div className="mt-1.5 flex flex-wrap gap-2">
-						<Button type="button" size="sm" variant="secondary" onClick={pendingMove.finish}>{t("moveSession.finish")}</Button>
+						<Button type="button" size="sm" variant="secondary" disabled={!pendingMove.finish} onClick={pendingMove.finish}>{t("moveSession.finish")}</Button>
 						<Button type="button" size="sm" variant="ghost" disabled={pendingMove.keeping} onClick={() => void pendingMove.keepHere()}>
 							{t("moveSession.keepHere")}
 						</Button>

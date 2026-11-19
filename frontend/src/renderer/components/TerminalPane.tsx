@@ -1,5 +1,5 @@
 import { useQueryClient } from "@tanstack/react-query";
-import { LoaderCircle, RotateCcw } from "@/components/app-icons";
+import { RotateCcw } from "@/components/app-icons";
 import {
 	createContext,
 	lazy,
@@ -1597,14 +1597,14 @@ function TerminalEndedStrip({ canRestore: restorable, error, isRestoring, onRest
 	const movedTo = useSessionMovedTo(terminated ? session : undefined);
 	const move = useMoveStore((state) => (session ? state.moves[moveKey(session.hostId, session.id)] : undefined));
 	const moving = move?.phase === "moving" || move?.phase === "done" ? move.targetLabel : undefined;
-	const canRestore = restorable && !movedTo && !moving;
+	const canRestore = restorable && !movedTo;
 	const agentExited = variant === "session" && sessionAgentExited(session);
 	// A move that did not finish keeps the agent from resuming; offer the two ways out instead.
 	const pendingMove = usePendingMove(agentExited && !moving ? session : undefined);
+	// The move banner above the session shows a move in progress.
+	if (moving) return null;
 	const startupFailed = variant === "session" && session?.provisionState === "failed";
-	const heading = moving
-		? t("moveSession.moving", { host: moving })
-		: pendingMove
+	const heading = pendingMove
 		? t("moveSession.pendingHeading", { host: pendingMove.label })
 		: movedTo
 		? t("moveSession.movedHeading", { host: movedTo.label })
@@ -1617,9 +1617,7 @@ function TerminalEndedStrip({ canRestore: restorable, error, isRestoring, onRest
 				: agentExited
 					? t("terminal.agentExited")
 					: t("terminal.ended");
-	const message = moving
-		? ""
-		: movedTo
+	const message = movedTo
 		? t("moveSession.movedMessage", { sessionId: movedTo.sessionId })
 		: reviewDelivered
 		? t("terminal.reviewerCompleted")
@@ -1641,18 +1639,17 @@ function TerminalEndedStrip({ canRestore: restorable, error, isRestoring, onRest
 							(terminated && !movedTo) || startupFailed ? "text-destructive" : "text-muted-foreground",
 						)}
 					>
-						{moving ? <LoaderCircle aria-hidden="true" className="mr-1.5 inline size-3 animate-spin align-[-2px] text-[var(--color-status-working)]" /> : null}
 						{heading}
 					</div>
 					<div className="mt-0.5 text-xs text-muted-foreground">
-						{moving ? null : pendingMove ? t("moveSession.pendingBody") : startupFailed && session?.provisionError ? session.provisionError : agentExited ? t("terminal.agentExitedHelp") : message}
+						{pendingMove ? t("moveSession.pendingBody") : startupFailed && session?.provisionError ? session.provisionError : agentExited ? t("terminal.agentExitedHelp") : message}
 					</div>
 				</div>
 				{error && <div className="max-w-content-max truncate text-xs text-destructive">{error}</div>}
-				{variant === "session" && session && !movedTo && !moving && !pendingMove ? <ResumeAgentControl session={session} /> : null}
+				{variant === "session" && session && !movedTo && !pendingMove ? <ResumeAgentControl session={session} /> : null}
 				{pendingMove ? (
 					<>
-						<Button type="button" variant="secondary" onClick={pendingMove.finish}>
+						<Button type="button" variant="secondary" disabled={!pendingMove.finish} onClick={pendingMove.finish}>
 							{t("moveSession.finish")}
 						</Button>
 						<Button type="button" variant="ghost" disabled={pendingMove.keeping} onClick={() => void pendingMove.keepHere()}>

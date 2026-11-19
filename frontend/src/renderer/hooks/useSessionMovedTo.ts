@@ -5,8 +5,8 @@ import { clientForSessionHost } from "../lib/host-clients";
 import { LOCAL_HOST } from "../lib/hosts";
 import { cancelMove } from "../lib/move-session";
 import { sessionNavigateTarget } from "../lib/navigate-to-session";
-import { useUiStore } from "../stores/ui-store";
 import type { WorkspaceSession } from "../types/workspace";
+import { useMoveSession, useMoveTargets } from "./useMoveSession";
 import { useRemoteWorkspaces, useWorkspaceQuery } from "./useWorkspaceQuery";
 
 const transferStateKey = (session: WorkspaceSession | undefined) =>
@@ -46,20 +46,23 @@ export function useSessionMovedTo(session: WorkspaceSession | undefined) {
 
 /**
  * A move that was prepared but not finished, which keeps the session from
- * resuming here. finish reopens the Move dialog; keepHere drops the move and
- * resumes the agent.
+ * resuming here. finish runs it again to the same computer, absent while that
+ * computer is not connected; keepHere drops the move and resumes the agent.
  */
 export function usePendingMove(session: WorkspaceSession | undefined) {
 	const queryClient = useQueryClient();
-	const requestMoveSession = useUiStore((state) => state.requestMoveSession);
-	const [keeping, setKeeping] = useState(false);
 	const pending = useTransferState(session)?.pending;
+	// Only an unfinished move needs the other computers' projects.
+	const { targets } = useMoveTargets(session, Boolean(pending));
+	const move = useMoveSession(session);
+	const [keeping, setKeeping] = useState(false);
 	if (!pending || !session || session.isTerminated) return undefined;
 	const source = { client: clientForSessionHost(session.hostId), hostId: session.hostId ?? LOCAL_HOST, sessionId: session.id, label: "" };
+	const target = targets.find((each) => each.hostId === (pending.hostId || LOCAL_HOST));
 	return {
 		label: pending.label,
 		keeping,
-		finish: () => requestMoveSession({ sessionId: session.id, hostId: session.hostId, projectId: session.workspaceId, title: session.title }),
+		finish: target && move ? () => move.start(target) : undefined,
 		keepHere: async () => {
 			setKeeping(true);
 			try {
