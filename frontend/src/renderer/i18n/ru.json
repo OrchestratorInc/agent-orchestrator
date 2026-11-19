@@ -2694,6 +2694,7 @@
 	"shell.sessionTerminationStatus": "Статус завершения сессии",
 	"shell.sessionsAria": "Сессии: {{label}}",
 	"shell.settings": "Настройки",
+	"shell.reportBug": "Сообщить об ошибке",
 	"shell.spawnOrchestrator": "Запустить оркестратор",
 	"shell.spawnOrchestratorLower": "Запустить оркестратор",
 	"shell.spawnProjectOrchestrator": "Запустить оркестратор {{name}}",

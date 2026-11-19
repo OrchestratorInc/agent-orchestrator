@@ -2216,6 +2216,7 @@
 	"shell.sessionTerminationStatus": "会话终止状态",
 	"shell.sessionsAria": "{{label}}会话",
 	"shell.settings": "设置",
+	"shell.reportBug": "报告错误",
 	"shell.spawnOrchestrator": "启动编排器",
 	"shell.spawnOrchestratorLower": "启动编排器",
 	"shell.spawnProjectOrchestrator": "启动 {{name}} 编排器",

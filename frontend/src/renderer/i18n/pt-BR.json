@@ -2263,6 +2263,7 @@
 	"shell.sessionTerminationStatus": "Status de encerramento da sessão",
 	"shell.sessionsAria": "Sessões {{label}}",
 	"shell.settings": "Configurações",
+	"shell.reportBug": "Relatar um erro",
 	"shell.spawnOrchestrator": "Iniciar orquestrador",
 	"shell.spawnOrchestratorLower": "Iniciar orchestrator",
 	"shell.spawnProjectOrchestrator": "Iniciar orchestrator de {{name}}",

@@ -2228,6 +2228,7 @@
 	"shell.sessionTerminationStatus": "Status der Sitzungsbeendigung",
 	"shell.sessionsAria": "{{label}} Sitzungen",
 	"shell.settings": "Einstellungen",
+	"shell.reportBug": "Fehler melden",
 	"shell.spawnOrchestrator": "Orchestrator-Agenten starten",
 	"shell.spawnOrchestratorLower": "Orchestrator-Agenten starten",
 	"shell.spawnProjectOrchestrator": "Orchestrator von {{name}} starten",

@@ -2228,6 +2228,7 @@
 	"shell.sessionTerminationStatus": "セッション終了ステータス",
 	"shell.sessionsAria": "{{label}} セッション",
 	"shell.settings": "設定",
+	"shell.reportBug": "バグを報告",
 	"shell.spawnOrchestrator": "オーケストレーターを起動",
 	"shell.spawnOrchestratorLower": "オーケストレーターを起動",
 	"shell.spawnProjectOrchestrator": "{{name}} のオーケストレーターを起動",

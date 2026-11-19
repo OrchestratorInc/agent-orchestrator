@@ -2612,6 +2612,7 @@
 	"shell.sessionTerminationStatus": "Oturum sonlandırma durumu",
 	"shell.sessionsAria": "{{label}} oturumları",
 	"shell.settings": "Ayarlar",
+	"shell.reportBug": "Hata bildir",
 	"shell.spawnOrchestrator": "Koordinatör aracı başlat",
 	"shell.spawnOrchestratorLower": "Düzenleyici oluştur",
 	"shell.spawnProjectOrchestrator": "{{name}} düzenleyicisini oluştur",

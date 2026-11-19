@@ -2612,6 +2612,7 @@
 	"shell.sessionTerminationStatus": "Session termination status",
 	"shell.sessionsAria": "{{label}} sessions",
 	"shell.settings": "Settings",
+	"shell.reportBug": "Report a bug",
 	"shell.spawnOrchestrator": "Spawn orchestrator agent",
 	"shell.spawnOrchestratorLower": "Spawn orchestrator",
 	"shell.spawnProjectOrchestrator": "Spawn {{name}} orchestrator",

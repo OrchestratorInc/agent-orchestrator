@@ -2228,6 +2228,7 @@
 	"shell.sessionTerminationStatus": "세션 종료 상태",
 	"shell.sessionsAria": "{{label}} 세션",
 	"shell.settings": "설정",
+	"shell.reportBug": "버그 신고",
 	"shell.spawnOrchestrator": "오케스트레이터 시작",
 	"shell.spawnOrchestratorLower": "오케스트레이터 시작",
 	"shell.spawnProjectOrchestrator": "{{name}} 오케스트레이터 시작",
