@@ -186,6 +186,7 @@ import {
 } from "./WorkerUpdates";
 import { AutomationMessage, SteeredBrowserFeedback, steeredBrowserFeedback } from "./AutomationMessage";
 import { HumanMessageEditor } from "./HumanMessageEditor";
+import { markdownFilePreviewSource } from "../../lib/markdown-file-preview";
 import { ChatLinkProvider, ChatOpeningRef } from "./ChatMarkdown";
 import { admitArrivals, ChatEntrance, createChatEntranceGate } from "./chat-entrance";
 import { pageHidden } from "../../lib/page-hidden";
@@ -2266,6 +2267,7 @@ function ChatWorkspaceContent({
 							remoteHost={Boolean(activeRemoteHostId)}
 							sessionLinkHostId={activeRemoteHostId}
 							sessionLinkSourceKind={session?.cloud ? "cloud" : undefined}
+							markdownFileSource={markdownFilePreviewSource(snapshot.sessionId, activeRemoteHostId, session?.cloud?.orgId)}
 							workspacePaths={filePaths}
 						>
 							<ChatImageSourceProvider sessionId={snapshot.sessionId} assetBaseUrl={assetBaseUrl} remoteHost={Boolean(activeRemoteHostId)} artifacts={session?.artifactFiles} cloud={session?.cloud}>
