@@ -2077,9 +2077,12 @@ func (w *Workspace) resolveAutomaticDefault(ctx, remoteCtx context.Context, repo
 }
 
 // refreshRemoteHeadInBackground asks the remote for its HEAD off the caller's
-// path. The attempt is recorded first, so concurrent starts launch one lookup.
+// path. The first caller to claim the recheck window launches it; concurrent
+// starts that also found the window expired launch nothing.
 func (w *Workspace) refreshRemoteHeadInBackground(repo string) {
-	w.recordLiveDefault(repo)
+	if !w.claimLiveDefault(repo) {
+		return
+	}
 	w.headRefreshes.Add(1)
 	go func() {
 		defer w.headRefreshes.Done()
@@ -2110,6 +2113,24 @@ func (w *Workspace) liveDefaultCurrent(repo string) bool {
 	defer w.liveDefaultMu.Unlock()
 	at, ok := w.liveDefaultAt[filepath.Clean(repo)]
 	return ok && w.clock().Sub(at) < automaticDefaultRecheck
+}
+
+// claimLiveDefault records a live lookup attempt for repo unless one inside
+// automaticDefaultRecheck is already recorded, reporting whether it did. The
+// check and the record share one lock, so only one caller wins a window.
+func (w *Workspace) claimLiveDefault(repo string) bool {
+	w.liveDefaultMu.Lock()
+	defer w.liveDefaultMu.Unlock()
+	key := filepath.Clean(repo)
+	now := w.clock()
+	if at, ok := w.liveDefaultAt[key]; ok && now.Sub(at) < automaticDefaultRecheck {
+		return false
+	}
+	if w.liveDefaultAt == nil {
+		w.liveDefaultAt = make(map[string]time.Time)
+	}
+	w.liveDefaultAt[key] = now
+	return true
 }
 
 func (w *Workspace) recordLiveDefault(repo string) {

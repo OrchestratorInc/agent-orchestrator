@@ -18,6 +18,8 @@ type fakeOrigin struct {
 	present  bool
 	lsRemote int
 	fetches  int
+	// advertised is the branch the remote names as HEAD; empty means main.
+	advertised string
 }
 
 func (o *fakeOrigin) counts() (lsRemote, fetches int) {
@@ -40,7 +42,11 @@ func (o *fakeOrigin) runner(t *testing.T) commandRunner {
 			return nil, commandError{args: args, err: exitOne}
 		case strings.Contains(joined, "ls-remote --symref -- origin HEAD"):
 			o.lsRemote++
-			return []byte("ref: refs/heads/main\tHEAD\nabc123\tHEAD\n"), nil
+			advertised := o.advertised
+			if advertised == "" {
+				advertised = "main"
+			}
+			return []byte("ref: refs/heads/" + advertised + "\tHEAD\nabc123\tHEAD\n"), nil
 		case strings.Contains(joined, " fetch "):
 			o.fetches++
 			o.present = true
@@ -169,5 +175,37 @@ func TestBackgroundLookupFetchesARenamedDefault(t *testing.T) {
 	}
 	if got.BaseRef != "refs/remotes/origin/main" || got.Fetched {
 		t.Fatalf("resolve = %#v, want the cached new default", got)
+	}
+}
+
+func TestConcurrentStartsLaunchOneBackgroundLookup(t *testing.T) {
+	origin := &fakeOrigin{cached: true, present: true}
+	ws, repo := newAutoDefaultWorkspace(t, origin)
+
+	var wg sync.WaitGroup
+	for i := 0; i < 8; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			ws.refreshRemoteHeadInBackground(repo)
+		}()
+	}
+	wg.Wait()
+	ws.waitForHeadRefreshes()
+	if lsRemote, _ := origin.counts(); lsRemote != 1 {
+		t.Fatalf("eight concurrent starts ran ls-remote %d times, want one lookup per window", lsRemote)
+	}
+}
+
+func TestBackgroundLookupFetchesARenamedDefaultWithAnOldRef(t *testing.T) {
+	// The cached HEAD still names main; the remote now names develop, and an
+	// origin/develop ref from long ago is still present locally.
+	origin := &fakeOrigin{cached: true, present: true, advertised: "develop"}
+	ws, repo := newAutoDefaultWorkspace(t, origin)
+
+	ws.refreshRemoteHeadInBackground(repo)
+	ws.waitForHeadRefreshes()
+	if lsRemote, fetches := origin.counts(); lsRemote != 1 || fetches != 1 {
+		t.Fatalf("lookup ran ls-remote %d and fetch %d times, want the renamed default fetched before it is cached", lsRemote, fetches)
 	}
 }
