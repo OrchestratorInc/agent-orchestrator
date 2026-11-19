@@ -113,7 +113,7 @@ async function openChatSession(page: Page, fullText = after, selectedPath = file
 	if (checkingSide) await page.evaluate(async () => {
 		const modulePath = "/src/renderer/stores/ui-store.ts";
 		const { useUiStore } = await import(/* @vite-ignore */ modulePath);
-		useUiStore.setState({ developerMode: true, sideChats: true });
+		useUiStore.setState({ sideChats: true });
 	});
 	const composer = page.getByRole("combobox", { name: "Message the agent" });
 	await expect(composer).toBeVisible();

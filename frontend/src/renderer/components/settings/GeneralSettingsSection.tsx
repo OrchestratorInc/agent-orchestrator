@@ -464,6 +464,7 @@ export function GeneralSettingsSection({
 						onChange={setChatSendKeyMode}
 					/>
 				</SettingsRow>
+				<SideChatsRow />
 				<VersionRefreshRow />
 				<SessionRetentionRow />
 				<TerminalShellRows />
@@ -519,7 +520,6 @@ export function GeneralSettingsSection({
 				{developerMode && <DiagnosticsRow />}
 				<CliLinkSettings enabled={developerMode} />
 				<CliShadowSettingsRow />
-				{developerMode && <SideChatsRow />}
 				{developerMode && <SplitPanesRow />}
 				{developerMode && <PRViewRow />}
 				{developerMode && <ChromeAgentsRow />}
@@ -615,8 +615,8 @@ function DiagnosticsRow() {
 }
 
 /**
- * Developer Mode-only toggle for side chats. Renderer state like Diagnostics:
- * off hides the inspector tab, /btw, and "Add to side chat".
+ * Side chats switch, on by default. Renderer state like Diagnostics: off hides
+ * the inspector tab, /btw, and "Add to side chat".
  */
 function SideChatsRow() {
 	const { t } = useTranslation();

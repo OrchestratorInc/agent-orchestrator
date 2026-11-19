@@ -248,6 +248,26 @@ describe("remoteHosts flag", () => {
 	});
 });
 
+describe("side chats flag", () => {
+	beforeEach(() => {
+		window.localStorage.clear();
+		vi.resetModules();
+	});
+
+	it("is on by default, without Developer mode", async () => {
+		const store = (await bootStore()).getState();
+		expect(store.developerMode).toBe(false);
+		expect(store.sideChats).toBe(true);
+	});
+
+	it("keeps an explicit opt-out across a restart", async () => {
+		(await bootStore()).getState().setSideChats(false);
+		expect(window.localStorage.getItem("ao.sideChats")).toBe("false");
+		vi.resetModules();
+		expect((await bootStore()).getState().sideChats).toBe(false);
+	});
+});
+
 describe("navigation gestures", () => {
 	beforeEach(() => {
 		window.localStorage.clear();

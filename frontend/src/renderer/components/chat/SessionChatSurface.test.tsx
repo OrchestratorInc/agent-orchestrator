@@ -1391,16 +1391,17 @@ describe("SessionChatSurface continuation identity", () => {
 
 describe("side command routing", () => {
 	beforeEach(() => {
-		useUiStore.setState({ developerMode: true, sideChats: true });
+		// Developer mode stays off: side chats no longer depend on it.
+		useUiStore.setState({ developerMode: false, sideChats: true });
 		conversationState.snapshot = { ...conversationState.snapshot, capabilities: ["resume"] };
 	});
 	afterEach(() => {
-		useUiStore.setState({ developerMode: false, sideChats: false });
+		useUiStore.setState({ developerMode: false, sideChats: true });
 	});
 
 	it.each([
-		["side chats are off", { developerMode: true, sideChats: false }, "codex"],
-		["Developer mode is off", { developerMode: false, sideChats: true }, "codex"],
+		["side chats are off", { sideChats: false }, "codex"],
+		["side chats are off in Developer mode", { developerMode: true, sideChats: false }, "codex"],
 	] as const)("sends /btw to the main chat when %s", async (_case, flags, provider) => {
 		useUiStore.setState(flags);
 		sideMocks.create.mockReset();
@@ -1549,7 +1550,7 @@ describe("SessionChatSurface startup recovery", () => {
 describe("selection side-chat operation ownership", () => {
 	const excerpt: ChatDraftExcerptReference = { id: "selection-operation", conversationId: "conv-sess-1", messageId: "message", revision: 1, text: "selected text", role: "assistant" };
 	function mount() {
-		useUiStore.setState({ developerMode:true, sideChats:true });
+		useUiStore.setState({ sideChats:true });
 		conversationState.snapshot = { ...snapshotFor(session.id), capabilities:["resume"] };
 		sideMocks.create.mockReset(); sideMocks.addReference.mockReset(); sideMocks.show.mockReset();
 		sideMocks.activeId = undefined; sideMocks.sides = [];

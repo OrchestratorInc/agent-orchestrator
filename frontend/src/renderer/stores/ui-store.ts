@@ -240,7 +240,7 @@ export type UiState = {
 	remoteHosts: boolean;
 	/** Memory and CPU monitoring (card chips, memory light, Diagnostics page). Only takes effect in Developer mode. Default off. */
 	diagnostics: boolean;
-	/** Experimental side chats in the inspector. Only takes effect in Developer mode. Default off. */
+	/** Side chats in the inspector, /btw and "Add to side chat". Default on. */
 	sideChats: boolean;
 	/** Drag center tabs side by side into split panes. Only takes effect in Developer mode. Default off. */
 	splitPanes: boolean;
@@ -464,7 +464,8 @@ function initialDiagnostics() {
 }
 
 function initialSideChats() {
-	return getLocalStorage()?.getItem(sideChatsStorageKey) === "true";
+	// On by default; only an explicit "off" from the settings switch is kept.
+	return getLocalStorage()?.getItem(sideChatsStorageKey) !== "false";
 }
 
 function initialTerminalClickMode(): TerminalClickMode {

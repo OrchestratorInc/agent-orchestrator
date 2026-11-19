@@ -355,15 +355,17 @@ describe("GlobalSettingsForm", () => {
 		expect(screen.getByTestId("default-cloud-sandbox-section")).toBeInTheDocument();
 	});
 
-	it("reveals the Side chats toggle only in Developer mode and persists it", async () => {
+	it("shows the Side chats switch outside Developer mode and persists it", async () => {
 		const user = userEvent.setup();
+		useUiStore.setState({ sideChats: true });
 		renderForm("general");
-		await screen.findByRole("switch", { name: "Developer mode" });
-		expect(screen.queryByRole("switch", { name: "Side chats" })).not.toBeInTheDocument();
+		expect(await screen.findByRole("switch", { name: "Developer mode" })).toHaveAttribute("aria-checked", "false");
+		const toggle = screen.getByRole("switch", { name: "Side chats" });
+		expect(toggle).toHaveAttribute("aria-checked", "true");
 
-		await user.click(screen.getByRole("switch", { name: "Developer mode" }));
-		const toggle = await screen.findByRole("switch", { name: "Side chats" });
-		expect(toggle).toHaveAttribute("aria-checked", "false");
+		await user.click(toggle);
+		expect(window.localStorage.getItem("ao.sideChats")).toBe("false");
+		expect(useUiStore.getState().sideChats).toBe(false);
 
 		await user.click(toggle);
 		expect(window.localStorage.getItem("ao.sideChats")).toBe("true");
