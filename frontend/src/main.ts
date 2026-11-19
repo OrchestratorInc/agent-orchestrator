@@ -1,3 +1,5 @@
+import { parseSharedArtifactLink } from "../../packages/shared/artifacts/shared-artifact-link";
+import { openSharedArtifact, SHARED_ARTIFACT_VIEWER_ORIGINS } from "./main/shared-artifact-window";
 import type { SideCloseRequest, SideCloseState } from "./shared/side-close";
 import { SideCloseRecovery, type SideSnapshotCoverage } from "./main/side-close";
 import { SideCloseController } from "./main/side-close-controller";
@@ -797,11 +799,16 @@ function applyRuntimeAppIcon(): void {
 // sooner (focusMainWindow, deep links, the dock) can still show it directly.
 const WINDOW_SHOW_FALLBACK_MS = 2_500;
 
+/** Windows created hidden whose showWhenRendererLoaded has not shown them yet. */
+const windowsAwaitingFirstShow = new WeakSet<BaseWindow>();
+
 function showWhenRendererLoaded(window: BaseWindow, contents: WebContents): void {
 	let shown = false;
+	windowsAwaitingFirstShow.add(window);
 	const show = () => {
 		if (shown) return;
 		shown = true;
+		windowsAwaitingFirstShow.delete(window);
 		clearTimeout(fallback);
 		if (window.isDestroyed() || window.isVisible()) return;
 		window.show();
@@ -1171,7 +1178,7 @@ async function createWindowInternal(): Promise<void> {
 		// artifact's inline origin) is not the page navigating away.
 		const app = shellWebContents.mainFrame;
 		if (event.initiator?.processId === app.processId && event.initiator.routingId === app.routingId) return;
-		if (blocksRenderFrameNavigation(event.frame.url, event.url)) event.preventDefault();
+		if (blocksRenderFrameNavigation(event.frame.url, event.url, (url) => remoteRegistry.isRenderUrl(url))) event.preventDefault();
 	});
 
 	// A cloud artifact frame's page can open another file of its session; the
@@ -1196,11 +1203,11 @@ async function createWindowInternal(): Promise<void> {
 	shellWebContents.session.webRequest.onBeforeRequest((details, callback) => {
 		// Loading an agent page into a frame is always allowed: the page's own
 		// CSP sandboxes it, and it is judged by its own rule from then on.
-		if (details.resourceType === "subFrame" && isAgentPageUrl(details.url)) return callback({});
+		if (details.resourceType === "subFrame" && (isAgentPageUrl(details.url) || remoteRegistry.isRenderUrl(details.url))) return callback({});
 		let pageUrl: string | undefined;
 		try {
 			for (let frame = details.frame; frame && !pageUrl; frame = frame.parent) {
-				if (isAgentPageUrl(frame.url)) pageUrl = frame.url;
+				if (isAgentPageUrl(frame.url) || remoteRegistry.isRenderUrl(frame.url)) pageUrl = frame.url;
 			}
 		} catch {
 			// The frame went away mid-request; nothing of its page is left to load.
@@ -3422,6 +3429,20 @@ ipcMain.handle("theme:set", (_event, preference: "light" | "dark" | "system") =>
 	}
 });
 
+// The OS appearance, for resolving "System". The renderer's prefers-color-scheme
+// follows themeSource, so while Light or Dark is forced it reports that mode,
+// not the OS. macOS reads the appearance without touching themeSource, so the
+// window material still flips with the new frame (theme:set on reveal).
+// Elsewhere there is no reading independent of themeSource; dropping the
+// forced mode first is safe there because no material sits under the page.
+ipcMain.handle("theme:system-appearance", (): "light" | "dark" => {
+	if (process.platform === "darwin") {
+		return systemPreferences.getUserDefault("AppleInterfaceStyle", "string") === "Dark" ? "dark" : "light";
+	}
+	nativeTheme.themeSource = "system";
+	return nativeTheme.shouldUseDarkColors ? "dark" : "light";
+});
+
 ipcMain.handle("theme:set-window-background", (_event, color: unknown) => {
 	if (typeof color === "string" && /^#[0-9a-f]{6}$/i.test(color)) {
 		rendererWindowBackground = color;
@@ -3944,6 +3965,10 @@ registerCloudShareIpc({
 	getToken: () => getCloudAccessToken(cloudDataDir()),
 	fetch: (url, init) => net.fetch(url, init),
 	records: new ShareLinkRecords(path.join(desktopDataDir, "share-links.json")),
+	// A remote host's file is read through its loopback proxy, which adds the
+	// host's credential; Node's fetch sends no Origin, as the proxy requires.
+	hostApiBase: (hostId) => remoteRegistry.apiBase(hostId),
+	fetchHost: (url, init) => fetch(url, init),
 });
 // Session and project share links this device made, so Copy link works again
 // later; only the signed-in account's, which the file names.
@@ -4404,6 +4429,21 @@ ipcMain.handle("cloud:takePendingShareLink", () => {
 	return link ?? null;
 });
 
+// Published artifacts' viewer URLs from ao-app://shared-artifact, already
+// checked by parseSharedArtifactLink, kept in arrival order until the renderer
+// takes them one by one. Bounded, so a flood of links cannot grow it forever.
+const MAX_PENDING_SHARED_ARTIFACTS = 20;
+const pendingSharedArtifacts: string[] = [];
+
+ipcMain.handle("cloud:takePendingSharedArtifact", () => pendingSharedArtifacts.shift() ?? null);
+
+// The renderer's fallback: openSharedArtifact accepts only a published
+// artifact's page on a known viewer origin, and its window has no preload or
+// credentials.
+ipcMain.handle("cloud:openSharedArtifactWindow", (_event, viewerUrl: unknown) => {
+	if (typeof viewerUrl === "string") openSharedArtifact(viewerUrl);
+});
+
 function isShareDeepLink(raw: string): boolean {
 	try {
 		const url = new URL(raw);
@@ -4414,6 +4454,43 @@ function isShareDeepLink(raw: string): boolean {
 }
 
 async function handleCloudDeepLinkAndFocus(url: string): Promise<void> {
+	// A published artifact's "Open on orchestrator": the Artifacts page opens it,
+	// or hands it back to openSharedArtifact's isolated window when it cannot.
+	// Only a page on a known viewer: any other site is not an Orchestrator artifact.
+	const artifact = parseSharedArtifactLink(url, SHARED_ARTIFACT_VIEWER_ORIGINS);
+	if (artifact) {
+		await app.whenReady();
+		if (getShellWebContents()) {
+			// Focused by name: a shared-artifact window left open would otherwise
+			// be the first window and take focus. A shell still loading shows
+			// itself once ready, so it is left hidden until then.
+			if (!mainWindow || !windowsAwaitingFirstShow.has(mainWindow)) focusMainWindow();
+		} else {
+			// A replacement shell shows itself, and so takes focus, once its
+			// renderer has loaded (showWhenRendererLoaded).
+			try {
+				await createWindow();
+			} catch (error) {
+				// With no shell to take it, the link opens in its own window.
+				console.error("AO: could not reopen the window for a shared artifact", error);
+				openSharedArtifact(artifact);
+				return;
+			}
+		}
+		// Held until the renderer takes it: a page that has loaded may not have
+		// subscribed yet, so the send only tells a listening host to take it now.
+		if (!pendingSharedArtifacts.includes(artifact)) {
+			// Past the bound, a new link opens in its own window rather than being lost.
+			if (pendingSharedArtifacts.length >= MAX_PENDING_SHARED_ARTIFACTS) {
+				openSharedArtifact(artifact);
+				return;
+			}
+			pendingSharedArtifacts.push(artifact);
+		}
+		const contents = getShellWebContents();
+		if (contents && !contents.isDestroyed() && !contents.isLoading()) contents.send("cloud:openSharedArtifact", artifact);
+		return;
+	}
 	// macOS keeps the app (and tray) alive after the close button —
 	// window-all-closed does not quit — and a link clicked then fires open-url
 	// without activate, so nothing else recreates the shell. Hidden utility

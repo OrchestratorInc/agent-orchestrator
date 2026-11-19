@@ -223,18 +223,18 @@ func TestReviewRunCDC_EmitsOnInsertAndLifecycleUpdates(t *testing.T) {
 	}
 
 	insertRun("run-complete", "sha-1", domain.ReviewTriggerAuto)
-	if ok, err := s.UpdateReviewRunResult(ctx, "run-complete", domain.ReviewRunComplete, domain.VerdictApproved, "done", "gh-review-1", true); err != nil || !ok {
+	if ok, err := finishReviewRun(ctx, s, "run-complete", domain.ReviewRunCompleted, domain.VerdictApproved, "done", "gh-review-1", true); err != nil || !ok {
 		t.Fatalf("complete update ok=%v err=%v", ok, err)
 	}
 
 	insertRun("run-failed", "sha-2", domain.ReviewTriggerManual)
-	if n, err := s.SupersedeStaleRunningReviewRuns(ctx, rec.ID, review.PRURL, "sha-new", "stale"); err != nil || n != 1 {
-		t.Fatalf("supersede stale runs n=%d err=%v", n, err)
+	if ids, err := s.TransitionReviewRunsForOlderSHA(ctx, rec.ID, review.PRURL, "sha-new", domain.ActiveReviewRunStatuses, domain.ReviewRunSuperseded, domain.ReviewRunPatch{}); err != nil || len(ids) != 1 {
+		t.Fatalf("supersede stale runs ids=%v err=%v", ids, err)
 	}
 
 	insertRun("run-cancelled", "sha-3", domain.ReviewTriggerManual)
-	if n, err := s.CancelRunningReviewRunsBySession(ctx, rec.ID, "cancelled"); err != nil || n != 1 {
-		t.Fatalf("cancel runs n=%d err=%v", n, err)
+	if ids, err := s.TransitionReviewRunsBySession(ctx, rec.ID, nil, domain.ActiveReviewRunStatuses, domain.ReviewRunCancelled, domain.ReviewRunPatch{CancelledBy: domain.ReviewCancelledByUser}); err != nil || len(ids) != 1 {
+		t.Fatalf("cancel runs ids=%v err=%v", ids, err)
 	}
 
 	rows, err := s.EventsAfter(ctx, 0, 100)
@@ -267,7 +267,7 @@ func TestReviewRunCDC_EmitsOnInsertAndLifecycleUpdates(t *testing.T) {
 	if err := json.Unmarshal(updated[0].Payload, &updatedPayload); err != nil {
 		t.Fatalf("updated payload JSON: %v", err)
 	}
-	if updatedPayload["id"] != "run-complete" || updatedPayload["status"] != "complete" || updatedPayload["githubReviewId"] != "gh-review-1" {
+	if updatedPayload["id"] != "run-complete" || updatedPayload["status"] != "completed" || updatedPayload["githubReviewId"] != "gh-review-1" {
 		t.Fatalf("updated payload = %#v", updatedPayload)
 	}
 }

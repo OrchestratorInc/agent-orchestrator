@@ -9,7 +9,8 @@ import userEvent from "@testing-library/user-event";
 import { Activity, Profiler, useState } from "react";
 import { placeLexicalCaret, typeInLexicalEditor } from "../../test/lexical";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { activityRevealScrollDelta, ChatWorkspace, SENT_OUTSIDE_TRANSCRIPT, forgetReadingPositions, promptSpacerHeight, promptTopInset, type ChatFindRequest } from "./ChatWorkspace";
+import { activityRevealScrollDelta, ChatWorkspace, SENT_OUTSIDE_TRANSCRIPT, currentScrollMarker, forgetReadingPositions, promptSpacerHeight, promptTopInset, type ChatFindRequest } from "./ChatWorkspace";
+import { onComposerSent } from "../../lib/guided-tour-signals";
 import { AssistantMessage, HumanMessage, OriginMessage } from "./ChatTimelineItems";
 import { AutomationMessage } from "./AutomationMessage";
 import { ChatLinkProvider } from "./ChatMarkdown";
@@ -771,6 +772,120 @@ describe("ChatWorkspace timeline", () => {
 		log.scrollTop = 300;
 		fireEvent.scroll(log);
 		expect(onLoadOlder).toHaveBeenCalledTimes(1);
+	});
+
+	// A history shorter than the view cannot scroll, so no scroll ever comes to load
+	// older pages by: the chat sat under "Load earlier messages" until it was clicked.
+	describe("older history in a chat too short to scroll", () => {
+		const all = chatFixtureLongHistory(8);
+		/** The newest turns from `from` on, as a page that has older ones before it. */
+		const page = (from: number): ConversationSnapshot => {
+			const turns = all.turns.slice(from);
+			return { ...all, hasMoreBefore: from > 0, turns, items: all.items.filter((item) => turns.some((turn) => turn.id === item.turnId)) };
+		};
+		let log: { scroll: number; client: number };
+		let restore: () => void;
+		beforeEach(() => {
+			log = { scroll: 600, client: 800 };
+			const client = Object.getOwnPropertyDescriptor(Element.prototype, "clientHeight")!.get!;
+			const scroll = Object.getOwnPropertyDescriptor(Element.prototype, "scrollHeight")!.get!;
+			const spies = [
+				vi.spyOn(Element.prototype, "clientHeight", "get").mockImplementation(function (this: Element) {
+					return this.getAttribute("role") === "log" ? log.client : client.call(this);
+				}),
+				vi.spyOn(Element.prototype, "scrollHeight", "get").mockImplementation(function (this: Element) {
+					return this.getAttribute("role") === "log" ? log.scroll : scroll.call(this);
+				}),
+			];
+			restore = () => spies.forEach((spy) => spy.mockRestore());
+		});
+		afterEach(() => restore());
+
+		it("loads older pages on its own until the chat fills the view, once per page", () => {
+			const onLoadOlder = vi.fn();
+			const view = render(<ChatWorkspace snapshot={page(6)} hasOlder onLoadOlder={onLoadOlder} />);
+			expect(onLoadOlder).toHaveBeenCalledTimes(1);
+
+			// Not again while it loads, nor after a page that failed and added nothing.
+			view.rerender(<ChatWorkspace snapshot={page(6)} hasOlder loadingOlder onLoadOlder={onLoadOlder} />);
+			view.rerender(<ChatWorkspace snapshot={page(6)} hasOlder onLoadOlder={onLoadOlder} />);
+			expect(onLoadOlder).toHaveBeenCalledTimes(1);
+
+			// Nor when live rows arrive: a new step in the oldest turn, then a new turn.
+			const live = page(6);
+			const step = live.items.find((item) => item.turnId === live.turns[0]!.id && item.kind === "activity")!;
+			const withStep = { ...live, items: [...live.items, { ...step, id: "live-step", sequence: 10_000 }] };
+			view.rerender(<ChatWorkspace snapshot={withStep} hasOlder onLoadOlder={onLoadOlder} />);
+			const prompt = live.items.find((item) => item.kind === "message" && item.role === "user")!;
+			const withTurn = {
+				...withStep,
+				turns: [...withStep.turns, { ...live.turns.at(-1)!, id: "turn-live" }],
+				items: [...withStep.items, { ...prompt, id: "live-prompt", turnId: "turn-live", sequence: 10_001 }],
+			};
+			view.rerender(<ChatWorkspace snapshot={withTurn} hasOlder onLoadOlder={onLoadOlder} />);
+			expect(onLoadOlder).toHaveBeenCalledTimes(1);
+
+			// An older page that still leaves it short asks for the next one.
+			view.rerender(<ChatWorkspace snapshot={page(4)} hasOlder onLoadOlder={onLoadOlder} />);
+			expect(onLoadOlder).toHaveBeenCalledTimes(2);
+
+			// Once it can scroll, scrolling up loads the rest.
+			log.scroll = 2400;
+			view.rerender(<ChatWorkspace snapshot={page(2)} hasOlder onLoadOlder={onLoadOlder} />);
+			expect(onLoadOlder).toHaveBeenCalledTimes(2);
+		});
+
+		it("waits for a hidden chat to be shown, then fills it", () => {
+			const observed: Array<{ callback: ResizeObserverCallback; target: Element }> = [];
+			vi.stubGlobal("ResizeObserver", class {
+				constructor(private readonly callback: ResizeObserverCallback) {}
+				observe(target: Element) { observed.push({ callback: this.callback, target }); }
+				unobserve() {}
+				disconnect() {}
+			});
+			try {
+				log = { scroll: 0, client: 0 };
+				const onLoadOlder = vi.fn();
+				render(<ChatWorkspace snapshot={page(6)} hasOlder onLoadOlder={onLoadOlder} />);
+				expect(onLoadOlder).not.toHaveBeenCalled();
+
+				log = { scroll: 600, client: 800 };
+				const conversation = screen.getByRole("log");
+				act(() => observed.filter(({ target }) => target === conversation).forEach(({ callback }) => callback([], {} as ResizeObserver)));
+				expect(onLoadOlder).toHaveBeenCalledTimes(1);
+			} finally {
+				vi.unstubAllGlobals();
+			}
+		});
+
+		it("loads older history on an upward wheel or key once the reader is at the top", () => {
+			log.scroll = 4000;
+			const onLoadOlder = vi.fn();
+			const view = render(<ChatWorkspace snapshot={page(2)} hasOlder onLoadOlder={onLoadOlder} />);
+			const conversation = screen.getByRole("log");
+			stubGeometry(conversation, { scrollHeight: 4000, clientHeight: 800, scrollTop: 1200 });
+			fireEvent.wheel(conversation, { deltaY: -120 });
+			expect(onLoadOlder).not.toHaveBeenCalled();
+
+			conversation.scrollTop = 0;
+			fireEvent.wheel(conversation, { deltaY: 120 });
+			expect(onLoadOlder).not.toHaveBeenCalled();
+			fireEvent.wheel(conversation, { deltaY: -120 });
+			expect(onLoadOlder).toHaveBeenCalledTimes(1);
+			fireEvent.keyDown(conversation, { key: "PageUp" });
+			expect(onLoadOlder).toHaveBeenCalledTimes(2);
+
+			// A code block that can still scroll up takes the wheel.
+			const code = document.createElement("pre");
+			Object.defineProperty(code, "scrollTop", { configurable: true, value: 40 });
+			conversation.firstElementChild!.appendChild(code);
+			fireEvent.wheel(code, { deltaY: -120 });
+			expect(onLoadOlder).toHaveBeenCalledTimes(2);
+
+			view.rerender(<ChatWorkspace snapshot={page(2)} hasOlder loadingOlder onLoadOlder={onLoadOlder} />);
+			fireEvent.wheel(conversation, { deltaY: -120 });
+			expect(onLoadOlder).toHaveBeenCalledTimes(2);
+		});
 	});
 
 	it("keeps following when a wheel is consumed by a nested scroller or the reader clicks the margin", () => {
@@ -4439,6 +4554,46 @@ describe("ChatWorkspace timeline", () => {
 		expect(screen.getByRole("tooltip")).not.toHaveTextContent("Automatic compaction completed");
 	});
 
+	it("keeps exactly one minimap tick current at every scroll position, between turns included", () => {
+		useUiStore.setState({
+			inspectorSessions: { "ao-long": { isOpen: false, view: "summary" } },
+		});
+		// Four 600px turns with 100px of non-turn rows between them, in a 500px viewport:
+		// most positions have no turn's middle on screen, which used to light no tick.
+		const turnTop = (index: number) => index * 700;
+		const original = HTMLElement.prototype.getBoundingClientRect;
+		const spy = vi.spyOn(HTMLElement.prototype, "getBoundingClientRect").mockImplementation(function (this: HTMLElement) {
+			if (!this.hasAttribute("data-chat-scroll-anchor")) return original.call(this);
+			const anchors = Array.from(this.parentElement?.querySelectorAll(":scope > [data-chat-scroll-anchor]") ?? []);
+			const log = this.closest<HTMLElement>("[role='log']");
+			const top = turnTop(anchors.indexOf(this)) - (log?.scrollTop ?? 0);
+			return { top, bottom: top + 600, height: 600, left: 0, right: 0, width: 0, x: 0, y: top } as DOMRect;
+		});
+		try {
+			render(<ChatWorkspace snapshot={chatFixtureLongHistory(4)} />);
+			const log = screen.getByRole("log");
+			const scrollbar = screen.getByTestId("chat-conversation-minimap");
+			stubGeometry(scrollbar, { scrollHeight: 600, clientHeight: 600, scrollTop: 0 });
+			const maxScroll = 2700 - 500;
+			for (let scrollTop = 0; scrollTop <= maxScroll; scrollTop += 50) {
+				stubGeometry(log, { scrollHeight: 2700, clientHeight: 500, scrollTop });
+				fireEvent.scroll(log);
+				const ticks = Array.from(scrollbar.querySelectorAll(".chat-scroll-marker"));
+				expect(ticks).toHaveLength(4);
+				const current = ticks.flatMap((tick, index) =>
+					tick.classList.contains("chat-scroll-marker-current") ? [index] : [],
+				);
+				const readingLine = scrollTop + 250;
+				const expected = scrollTop >= maxScroll - 2
+					? 3
+					: ([0, 1, 2, 3].findLast((index) => turnTop(index) <= readingLine) ?? 0);
+				expect({ scrollTop, current }).toEqual({ scrollTop, current: [expected] });
+			}
+		} finally {
+			spy.mockRestore();
+		}
+	});
+
 	it("fades the welcome heading out in place on the first send instead of popping it off", () => {
 		vi.useFakeTimers();
 		try {
@@ -6617,6 +6772,25 @@ describe("promptSpacerHeight", () => {
 		expect(promptTopInset(800)).toBe(160);
 		expect(promptTopInset(300)).toBe(80);
 	});
+
+	it("picks the turn whose top last crossed the mid-viewport reading line as the current tick", () => {
+		const tops = [40, 700, 1400, 3000];
+		const at = (scrollTop: number, atEnd = false) => currentScrollMarker(tops, { scrollTop, viewportHeight: 600, atEnd });
+		expect(currentScrollMarker([], { scrollTop: 0, viewportHeight: 600, atEnd: false })).toBe(-1);
+		// Top of the chat, and above the first turn (a header or load-older row).
+		expect(at(0)).toBe(0);
+		expect(currentScrollMarker([500, 900], { scrollTop: 0, viewportHeight: 600, atEnd: false })).toBe(0);
+		// The line is exactly on a turn's top: that turn.
+		expect(at(400)).toBe(1);
+		expect(at(399)).toBe(0);
+		// Deep inside a long reply, no prompt on screen: still the turn being read.
+		expect(at(2000)).toBe(2);
+		expect(at(2699)).toBe(2);
+		expect(at(2700)).toBe(3);
+		// At the end the last turn wins even if its top has not reached the line.
+		expect(at(1500, true)).toBe(3);
+		expect(currentScrollMarker([0], { scrollTop: 0, viewportHeight: 600, atEnd: false })).toBe(0);
+	});
 });
 
 describe("ChatWorkspace shell tabs", () => {
@@ -7265,6 +7439,46 @@ describe("sent message recall", () => {
 		expect(composerText()).toBe("Beta ask");
 		expect(press("ArrowUp")).toBe(false);
 		expect(readChatSessionDraft("recall-alpha").composer.text).toBe("");
+	});
+});
+
+describe("ChatWorkspace guided tour signal", () => {
+	const holding = (snapshot: ConversationSnapshot, clientMessageId: string): ConversationSnapshot => {
+		const next = structuredClone(snapshot);
+		next.items.push({
+			kind: "message",
+			id: `durable-${clientMessageId}`,
+			sequence: 1,
+			revision: 0,
+			role: "user",
+			origin: "human",
+			clientMessageId,
+			text: "Fix the flaky test",
+			streaming: false,
+			createdAt: "2026-09-09T00:00:00Z",
+		} as ConversationMessage);
+		return next;
+	};
+
+	it.each([
+		["the send's answer came back", (onSend: ReturnType<typeof vi.fn>) => onSend.mockResolvedValue(undefined)],
+		["the send's answer was lost", (onSend: ReturnType<typeof vi.fn>) => onSend.mockRejectedValue(new Error("network"))],
+	])("tells the tour once the chat holds the message, when %s", async (when, answer) => {
+		const sent = vi.fn();
+		const stop = onComposerSent(sent);
+		const onSend = vi.fn();
+		answer(onSend);
+		const snapshot = idleSnapshot({ ...chatFixtureEmpty, sessionId: `tour-signal-${when.replace(/\W+/g, "-")}` });
+		const view = render(<ChatWorkspace snapshot={snapshot} onSend={onSend} />);
+		await typeInLexicalEditor(screen.getByRole("combobox", { name: "Message the agent" }), "Fix the flaky test");
+		fireEvent.keyDown(screen.getByRole("combobox", { name: "Message the agent" }), { key: "Enter" });
+		await waitFor(() => expect(onSend).toHaveBeenCalled());
+		const clientMessageId = onSend.mock.calls[0]![2] as string;
+		// Sending isn't arriving: nothing yet.
+		expect(sent).not.toHaveBeenCalled();
+		view.rerender(<ChatWorkspace snapshot={holding(snapshot, clientMessageId)} onSend={onSend} />);
+		expect(sent).toHaveBeenCalledOnce();
+		stop();
 	});
 });
 

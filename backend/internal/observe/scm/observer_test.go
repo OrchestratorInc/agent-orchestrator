@@ -418,6 +418,15 @@ func TestMetadataHashLeavesOutPRDetails(t *testing.T) {
 	}
 }
 
+func TestMetadataHashChangesWhenDraftBecomesReadyAtSameHead(t *testing.T) {
+	draft := ports.SCMObservation{Provider: "github", Repo: "o/r", PR: ports.SCMPRObservation{URL: "u", Number: 1, HeadSHA: "sha1", Draft: true, UpdatedAtProvider: time.Unix(50, 0).UTC()}}
+	ready := draft
+	ready.PR.Draft = false
+	if metadataSemanticHash(draft) == metadataSemanticHash(ready) {
+		t.Fatal("draft readiness must change the metadata hash without a new head or provider timestamp")
+	}
+}
+
 func TestDomainFromObservationPreservesStableIdentityAndAliases(t *testing.T) {
 	oldURL := "https://github.com/old-owner/repo/pull/7"
 	currentURL := "https://github.com/new-owner/repo/pull/7"
@@ -962,6 +971,36 @@ func TestPoll_DiscoversSiblingUnderRootSessionNamespace(t *testing.T) {
 	}
 	if len(lc.observed) != 1 {
 		t.Fatalf("lifecycle observations = %d, want 1", len(lc.observed))
+	}
+}
+
+func TestPoll_SkipsPRsOpenedBeforeSession(t *testing.T) {
+	created := time.Date(2026, 11, 12, 8, 4, 0, 500_000_000, time.UTC)
+	store := testStoreWithSession()
+	store.sessions[0].Metadata.Branch = "ao/p-1/root"
+	store.sessions[0].CreatedAt = created
+	older, newer, sameSecond := testObs(1), testObs(2), testObs(3)
+	older.PR.SourceBranch, older.PR.HeadRepo, older.PR.CreatedAtProvider = "ao/p-1/old", "o/r", created.Add(-time.Hour)
+	newer.PR.SourceBranch, newer.PR.HeadRepo, newer.PR.CreatedAtProvider = "ao/p-1/new", "o/r", created.Add(time.Hour)
+	sameSecond.PR.SourceBranch, sameSecond.PR.HeadRepo, sameSecond.PR.CreatedAtProvider = "ao/p-1/same", "o/r", created.Truncate(time.Second)
+	provider := &fakeProvider{
+		repoGuards:   map[string]ports.SCMGuardResult{prKey(testRepo, 0): {ETag: "v2"}},
+		openPRs:      map[string][]ports.SCMPRObservation{prKey(testRepo, 0): {older.PR, newer.PR, sameSecond.PR}},
+		observations: map[string]ports.SCMObservation{prKey(testRepo, 1): older, prKey(testRepo, 2): newer, prKey(testRepo, 3): sameSecond},
+	}
+	lc := &fakeLifecycle{}
+	if err := newTestObserver(store, provider, lc, time.Unix(1, 0).UTC()).Poll(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	written := map[int]domain.SessionID{}
+	for _, w := range store.writes {
+		written[w.pr.Number] = w.pr.SessionID
+	}
+	if _, ok := written[1]; ok {
+		t.Fatal("PR opened before the session was attached")
+	}
+	if written[2] != "p-1" || written[3] != "p-1" {
+		t.Fatalf("PRs opened after the session: sessions = %q, %q, want p-1", written[2], written[3])
 	}
 }
 

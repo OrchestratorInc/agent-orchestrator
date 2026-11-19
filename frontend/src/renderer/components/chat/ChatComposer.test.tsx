@@ -291,6 +291,23 @@ describe("send keys", () => {
 		expect(await screen.findByText("Each file must be under 25 MB.")).toBeInTheDocument();
 		expect(stage).not.toHaveBeenCalled();
 	});
+	it("stages a file far over the old 50 MB cap without reading it", async () => {
+		const stage = vi.fn().mockResolvedValue([".ao/attachments/attachment-x.mov"]);
+		const { field } = renderComposer({ draftSessionId: "composer-large-file", onStageAttachments: stage });
+		const huge = new File([new Uint8Array(1)], "clip.mov", { type: "video/quicktime" });
+		Object.defineProperty(huge, "size", { value: 3 * 1024 * 1024 * 1024 });
+		fireEvent.paste(field, { clipboardData: clipboardData([huge]) });
+		expect(await screen.findByRole("button", { name: "Remove clip.mov" })).toBeInTheDocument();
+		expect(stage).toHaveBeenCalledWith([{ mimeType: "video/quicktime", data: "", file: huge, name: "clip.mov" }], expect.anything());
+		expect(screen.queryByRole("alert")).not.toBeInTheDocument();
+	});
+	it("clears the notice about a refused file once the user types on", async () => {
+		const { field } = renderComposer({ draftSessionId: "composer-notice-clears", onStageAttachments: vi.fn() });
+		fireEvent.paste(field, { clipboardData: clipboardData([new File(["<svg/>"], "logo.svg", { type: "image/svg+xml" })]) });
+		expect(await screen.findByText("SVG files are not supported for security reasons.")).toBeInTheDocument();
+		fireEvent.keyDown(field, { key: "a" });
+		await waitFor(() => expect(screen.queryByText("SVG files are not supported for security reasons.")).not.toBeInTheDocument());
+	});
 	it("lays attachments beside annotations and clears only annotation references", async () => {
 		const sessionId = "composer-shared-attachment-row";
 		writeChatExcerptReferences(sessionId, EXCERPTS);
@@ -906,14 +923,15 @@ describe("send keys", () => {
 		expect(onSend.mock.calls[0]?.[4]).toEqual(excerpts.map(upgradeExcerpt));
 	});
 
-	it.each([
+	it.each<[string, string, string?]>([
 		["CHAT_CONTROLLER_NOT_READY", "Request was rejected"],
 		["validation_error", "Request was rejected"],
 		["CHAT_RESUME_FAILED", "The provider could not reopen the saved conversation"],
 		// A refused /btw or /side launch must not lock the main draft.
 		["CHAT_SIDE_UNSUPPORTED", "side chats support Codex, Claude Code, and OpenCode"],
 		["CHAT_SIDE_UNAVAILABLE", "side chats are unavailable"],
-	])("unlocks a definitively rejected first send (%s) and gives the edited send a new identity", async (code, message) => {
+		["CHAT_OPEN_ELSEWHERE", "open in another process", "This chat is open in another Claude Code session, such as a terminal or an IDE. Quit it there, then send your message again."],
+	])("unlocks a definitively rejected first send (%s) and gives the edited send a new identity", async (code, message, shown = message) => {
 		const sessionId = `composer-first-send-refused-${code}`;
 		const onSend = vi.fn()
 			.mockRejectedValueOnce({ code, message })
@@ -924,7 +942,7 @@ describe("send keys", () => {
 		fireEvent.keyDown(field, { key: "Enter" });
 		await waitFor(() => expect(onSend).toHaveBeenCalledOnce());
 		await waitFor(() => expect(field).toHaveAttribute("contenteditable", "true"));
-		expect(screen.getByRole("alert")).toHaveTextContent(message);
+		expect(screen.getByRole("alert")).toHaveTextContent(shown);
 		expect(readChatSessionDraft(sessionId).composer.delivery).toBeUndefined();
 		first.unmount();
 		render(<ChatComposer draftSessionId={sessionId} onSend={onSend} />);
@@ -2083,6 +2101,32 @@ describe("slash commands", () => {
 		expect(onSend).toHaveBeenCalledWith("/rev");
 	});
 
+	// While the agent's list is still on its way, `/` says so instead of looking broken.
+	it("says the skills are loading, without taking Enter, while they are on their way", async () => {
+		const { onSend, field } = renderComposer({ skills: [], skillsLoading: true });
+		await typeInComposer(field, "/rev");
+		expect(screen.getByText("Loading skills…")).toBeInTheDocument();
+		// A note, not a row: nothing to pick, so Enter still sends.
+		expect(screen.queryByRole("option")).toBeNull();
+		await userEvent.keyboard("{Enter}");
+		expect(onSend).toHaveBeenCalledWith("/rev");
+	});
+
+	it("shows the loading note under the commands that already match", async () => {
+		const { field } = renderComposer({ skills: SKILLS, skillsLoading: true });
+		await typeInComposer(field, "/");
+		expect(screen.getAllByRole("option")).toHaveLength(3);
+		expect(screen.getByText("Loading skills…")).toBeInTheDocument();
+	});
+
+	it("closes the loading note with Escape", async () => {
+		const { field } = renderComposer({ skills: [], skillsLoading: true });
+		await typeInComposer(field, "/");
+		expect(screen.getByText("Loading skills…")).toBeInTheDocument();
+		await userEvent.keyboard("{Escape}");
+		expect(screen.queryByText("Loading skills…")).toBeNull();
+	});
+
 	it("opens on a slash after existing text", async () => {
 		const { field } = renderComposer({ skills: SKILLS });
 		await typeInComposer(field, "look here /rev");
@@ -2287,6 +2331,115 @@ describe("slash commands", () => {
 		await typeInComposer(field, "/");
 		await userEvent.click(screen.getByText("Ship"));
 		expect(field.querySelector('[data-composer-token="skill"]')).toHaveTextContent("/ship");
+	});
+
+	describe("/model", () => {
+		// Stands in for the settings row's model menu: openComposerModelPicker
+		// opens it with an Enter keydown, which a Radix trigger answers.
+		function renderWithModelMenu(props: Partial<Parameters<typeof ChatComposer>[0]> = {}) {
+			const opened = vi.fn();
+			const rendered = renderComposer({
+				skills: SKILLS,
+				settings: (
+					<button type="button" data-shortcut-target="model-picker" onKeyDown={(event) => { if (event.key === "Enter") opened(); }}>
+						Opus 5.5
+					</button>
+				),
+				...props,
+			});
+			return { ...rendered, opened };
+		}
+
+		it("opens the model menu on Enter instead of sending", async () => {
+			const { field, onSend, opened } = renderWithModelMenu();
+			await typeInComposer(field, "/model");
+			// Typing the name only selects it; the menu waits for Enter.
+			await new Promise((resolve) => setTimeout(resolve, 20));
+			expect(opened).not.toHaveBeenCalled();
+
+			await userEvent.keyboard("{Enter}");
+			await waitFor(() => expect(opened).toHaveBeenCalledOnce());
+			expect(onSend).not.toHaveBeenCalled();
+			expect(composerWireText(field)).toBe("");
+		});
+
+		it("still opens the menu when /model is sent with the suggestions dismissed", async () => {
+			const sessionId = "model-command-dismissed";
+			const { field, onSend, opened } = renderWithModelMenu({ draftSessionId: sessionId });
+			await typeInComposer(field, "/model");
+			await waitFor(() => expect(readChatSessionDraft(sessionId).composer.text).toBe("/model"));
+			await userEvent.keyboard("{Escape}");
+			await userEvent.keyboard("{Enter}");
+			await waitFor(() => expect(opened).toHaveBeenCalledOnce());
+			expect(onSend).not.toHaveBeenCalled();
+			expect(composerWireText(field)).toBe("");
+			// The saved draft is cleared too, so /model does not return on remount.
+			await waitFor(() => expect(readChatSessionDraft(sessionId).composer.text).toBe(""));
+		});
+
+		it("leaves /model as text in a queued message being edited", async () => {
+			const onSend = vi.fn();
+			const opened = vi.fn();
+			render(
+				<ChatComposer
+					onSend={onSend}
+					skills={SKILLS}
+					editingQueuedTurnId="queued-model"
+					draftSeed={{ id: "queued-model", text: "/model" }}
+					settings={<button type="button" data-shortcut-target="model-picker" onKeyDown={(event) => { if (event.key === "Enter") opened(); }}>Opus 5.5</button>}
+				/>,
+			);
+			fireEvent.submit(screen.getByLabelText("Message the agent").closest("form")!);
+			await waitFor(() => expect(onSend).toHaveBeenCalledWith("/model", undefined, undefined, []));
+			expect(opened).not.toHaveBeenCalled();
+		});
+
+		it.each(["Enter", "Tab"])("is not AO's while a queued message is edited (%s)", async (key) => {
+			const { field, onSend, opened } = renderWithModelMenu({
+				editingQueuedTurnId: "queued-model-key",
+				draftSeed: { id: "queued-model-key", text: "" },
+			});
+			await typeInComposer(field, "/mod");
+			expect(screen.queryAllByRole("option").some((option) => /^Model/.test(option.textContent ?? ""))).toBe(false);
+			await typeInComposer(field, "el");
+			await userEvent.keyboard(`{${key}}`);
+			await new Promise((resolve) => setTimeout(resolve, 20));
+			expect(opened).not.toHaveBeenCalled();
+			if (key === "Enter") await waitFor(() => expect(onSend).toHaveBeenCalledWith("/model", undefined, undefined, []));
+			else expect(composerWireText(field)).toBe("/model");
+		});
+
+		const unusableMenus = {
+			"a settings row with no model menu": <span>Context 12%</span>,
+			"a disabled model menu": <button type="button" disabled data-shortcut-target="model-picker">Opus 5.5</button>,
+		};
+		it.each(Object.entries(unusableMenus))("keeps /model in the box with %s", async (_, settings) => {
+			const { field, onSend } = renderComposer({ skills: SKILLS, settings });
+			await typeInComposer(field, "/mod");
+			expect(screen.queryAllByRole("option").some((option) => /^Model/.test(option.textContent ?? ""))).toBe(false);
+			await typeInComposer(field, "el");
+			await userEvent.keyboard("{Escape}");
+			await userEvent.keyboard("{Enter}");
+			await new Promise((resolve) => setTimeout(resolve, 20));
+			expect(onSend).not.toHaveBeenCalled();
+			expect(composerWireText(field)).toBe("/model");
+		});
+
+		it("replaces an agent's own /model with AO's", async () => {
+			const { field } = renderWithModelMenu({
+				skills: [...SKILLS, { name: "model", displayName: "model", description: "Set the AI model", source: "agent" }],
+			});
+			await typeInComposer(field, "/mode");
+			const options = screen.getAllByRole("option").filter((option) => /^Model/.test(option.textContent ?? ""));
+			expect(options).toHaveLength(1);
+			expect(options[0]?.textContent).toContain("Choose the agent, model and effort");
+		});
+
+		it("is not offered where the composer has no model menu", async () => {
+			const { field } = renderComposer({ skills: SKILLS });
+			await typeInComposer(field, "/");
+			expect(screen.getAllByRole("option").some((option) => /^Model/.test(option.textContent ?? ""))).toBe(false);
+		});
 	});
 });
 

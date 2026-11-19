@@ -1,4 +1,4 @@
-import { render, screen } from "@testing-library/react";
+import { fireEvent, render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { describe, expect, it, vi } from "vitest";
 import { SessionFileTabs } from "./SessionFileTabs";
@@ -29,7 +29,7 @@ describe("SessionFileTabs", () => {
 		expect(onCloseFile).toHaveBeenCalledWith("src/App.tsx");
 	});
 
-	it("replaces the file icon with a visible dirty dot until the file is saved", () => {
+	it("shows a dirty dot in the right-edge close slot until the file is saved", () => {
 		render(
 			<TooltipProvider>
 				<div role="tablist">
@@ -44,10 +44,35 @@ describe("SessionFileTabs", () => {
 		);
 
 		// Keyboard focus swaps the dot for the close icon just like hover does.
-		expect(screen.getByTestId("unsaved-tab-indicator")).toHaveClass("group-hover:hidden", "group-has-[:focus-visible]:hidden");
+		expect(screen.getByTestId("unsaved-tab-indicator")).toHaveClass("group-hover:hidden", "focus-visible-in-group:hidden");
 		const closeIcon = screen.getByRole("button", { name: "Close App.tsx" }).querySelector("svg:not([data-testid])");
-		expect(closeIcon).toHaveClass("hidden", "group-hover:block", "group-has-[:focus-visible]:block");
+		expect(closeIcon).toHaveClass("hidden", "group-hover:block", "focus-visible-in-group:block");
 		expect(screen.getByTestId("unsaved-tab-indicator")).toHaveClass("rounded-full", "bg-foreground", "group-hover:hidden");
+		const slot = screen.getByRole("button", { name: "Close App.tsx" }).closest("[data-terminal-tab-action]");
+		expect(slot).not.toHaveClass("opacity-0");
+		// The dot sits after the title; the file's own icon stays in the tab.
+		expect(slot?.previousElementSibling).toBe(screen.getByRole("tab", { name: "App.tsx" }));
+		expect(screen.getByRole("tab", { name: "App.tsx" }).querySelector('[aria-hidden="true"]')).toBeInTheDocument();
+	});
+
+	it("closes on a middle-click and shows an unselected tab's close on hover", () => {
+		const onCloseFile = vi.fn();
+		render(
+			<TooltipProvider>
+				<div role="tablist">
+					<SessionFileTabs
+						state={{ openPaths: ["src/App.tsx", "src/main.ts"], activePath: "src/App.tsx" }}
+						onActivateFile={vi.fn()}
+						onCloseFile={onCloseFile}
+					/>
+				</div>
+			</TooltipProvider>,
+		);
+
 		expect(screen.getByRole("button", { name: "Close App.tsx" }).closest("[data-terminal-tab-action]")).not.toHaveClass("opacity-0");
+		expect(screen.getByRole("button", { name: "Close main.ts" }).closest("[data-terminal-tab-action]")).toHaveClass("opacity-0", "group-hover:opacity-100");
+		const frame = screen.getByRole("tab", { name: "main.ts" }).closest("[data-terminal-tab-frame]")!;
+		fireEvent(frame, new MouseEvent("auxclick", { bubbles: true, button: 1 }));
+		expect(onCloseFile).toHaveBeenCalledWith("src/main.ts");
 	});
 });

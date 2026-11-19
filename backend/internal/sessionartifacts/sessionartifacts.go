@@ -49,12 +49,91 @@ const MaxVisited = 10000
 // ignored are skipped, as are unreadable entries rather than failing the walk.
 // A cancelled ctx stops the walk and returns its error.
 func List(ctx context.Context, dir string) ([]domain.SessionArtifactFile, error) {
-	return list(ctx, dir, nil)
+	return list(ctx, dir, nil, MaxFiles)
 }
 
-// list is List that also records each file's identity in quick, when quick is
-// not nil.
-func list(ctx context.Context, dir string, quick map[string]domain.FileIdentity) ([]domain.SessionArtifactFile, error) {
+// errFound stops HasFiles' walk at the first file.
+var errFound = errors.New("found")
+
+// HasFiles reports whether a session's artifact directory holds any file List
+// would return. It stops at the first one, so a sweep over many sessions does
+// not walk whole trees. A missing directory has none.
+//
+// Unlike List it is strict, since a false answer lets the caller delete the
+// directory: an entry it cannot read or stat is an error, and a walk that
+// reaches MaxVisited without an answer counts as having files.
+func HasFiles(ctx context.Context, dir string) (bool, error) {
+	dir = strings.TrimSpace(dir)
+	if dir == "" {
+		return false, nil
+	}
+	root, err := filepath.Abs(dir)
+	if err != nil {
+		return false, err
+	}
+	visited := 0
+	err = filepath.WalkDir(root, func(path string, d fs.DirEntry, walkErr error) error {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+		if walkErr != nil {
+			return walkErr
+		}
+		visited++
+		if visited > MaxVisited {
+			return errFound
+		}
+		if d.Type()&os.ModeSymlink != 0 {
+			if d.IsDir() {
+				return filepath.SkipDir
+			}
+			return nil
+		}
+		if path != root && ignored(d.Name()) {
+			if d.IsDir() {
+				return filepath.SkipDir
+			}
+			return nil
+		}
+		if d.IsDir() {
+			if d.Name() == VersionsDir && filepath.Dir(path) == root {
+				return filepath.SkipDir
+			}
+			return nil
+		}
+		info, err := d.Info()
+		if err != nil {
+			return err
+		}
+		if info.Mode().IsRegular() {
+			return errFound
+		}
+		return nil
+	})
+	switch {
+	case errors.Is(err, errFound):
+		return true, nil
+	case err == nil:
+		return false, nil
+	case errors.Is(err, fs.ErrNotExist):
+		// A missing artifact directory reads as empty; a file vanishing
+		// mid-walk, or a root that cannot be checked again, stays an error.
+		_, statErr := os.Lstat(root)
+		if errors.Is(statErr, fs.ErrNotExist) {
+			return false, nil
+		}
+		if statErr != nil {
+			return false, statErr
+		}
+		return false, err
+	default:
+		return false, err
+	}
+}
+
+// list is List, stopping after maxFiles files, that also records each file's
+// identity in quick, when quick is not nil.
+func list(ctx context.Context, dir string, quick map[string]domain.FileIdentity, maxFiles int) ([]domain.SessionArtifactFile, error) {
 	dir = strings.TrimSpace(dir)
 	if dir == "" {
 		return nil, nil
@@ -79,7 +158,7 @@ func list(ctx context.Context, dir string, quick map[string]domain.FileIdentity)
 			return nil
 		}
 		visited++
-		if len(files) >= MaxFiles || visited > MaxVisited {
+		if len(files) >= maxFiles || visited > MaxVisited {
 			return filepath.SkipAll
 		}
 		if d.Type()&os.ModeSymlink != 0 {
@@ -235,7 +314,7 @@ func ListRegistered(ctx context.Context, dir string, registered []string) ([]dom
 }
 
 func listRegistered(ctx context.Context, dir string, registered []string, quick map[string]domain.FileIdentity) ([]domain.SessionArtifactFile, error) {
-	files, err := list(ctx, dir, quick)
+	files, err := list(ctx, dir, quick, MaxFiles)
 	if err != nil || len(registered) == 0 {
 		return files, err
 	}
@@ -302,7 +381,7 @@ func missedFiles(ctx context.Context, dir, rel string, seen map[string]bool, qui
 	if quick != nil {
 		inner = make(map[string]domain.FileIdentity)
 	}
-	inside, err := list(ctx, full, inner)
+	inside, err := list(ctx, full, inner, MaxFiles)
 	if err != nil {
 		return nil, err
 	}

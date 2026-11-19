@@ -33,6 +33,7 @@ var plans = []Plan{
 	plan("grok", ActionLogin, "Log in to Grok", []string{"grok", "login"}, "Native login; device-auth remains available inside the CLI", "https://docs.x.ai/build/overview"),
 	kimiLoginPlan(),
 	piLoginPlan(),
+	tauLoginPlan(),
 	plan("amp", ActionLogin, "Log in to Amp", []string{"amp", "login"}, "Native browser flow", "https://ampcode.com/manual"),
 	plan("auggie", ActionLogin, "Log in to Auggie", []string{"auggie", "login"}, "Native browser flow", "https://docs.augmentcode.com/cli/overview"),
 	terminalInputPlan("droid", ActionLogin, "Log in to Droid", []string{"droid"}, "/login\r", "Select Open login after Droid finishes starting", "https://docs.factory.ai/droid-cli/cli-reference"),
@@ -66,6 +67,10 @@ var plans = []Plan{
 	plan("command-code", ActionLogin, "Log in to Command Code", []string{"command-code", "login"}, "Native browser flow; an API key can be pasted in the terminal", "https://commandcode.ai/docs/quickstart"),
 	plan("hermes", ActionSetup, "Set up Hermes Agent", []string{"hermes", "model"}, "Native provider setup: choose a provider, then paste an API key or finish its OAuth flow", "https://hermes-agent.nousresearch.com/docs"),
 	plan("stakpak", ActionLogin, "Log in to Stakpak", []string{"stakpak", "auth", "login"}, "Native provider login: create a Stakpak API key in the browser, or paste an Anthropic, OpenAI or Gemini key", "https://github.com/stakpak/agent#authentication"),
+	// Native login covers the built-in OpenAI provider. The plan also lists
+	// Open Interpreter in the provider-key catalog, which offers the keys its
+	// generated Anthropic, Gemini, OpenRouter and DeepSeek providers read.
+	plan("open-interpreter", ActionLogin, "Log in to Open Interpreter", []string{"interpreter", "login"}, "Native sign-in for the built-in OpenAI provider; other providers use a saved API key", "https://www.openinterpreter.com/docs/terminal/install"),
 }
 
 func terminalInputPlan(agentID string, action Action, title string, command []string, terminalInput, guidance, docs string) Plan {
@@ -119,6 +124,19 @@ func piLoginPlan() Plan {
 		{Text: "0.0%/"},
 		{Text: "Pi can explain its own features"},
 	}
+	p.sendInitialInputOnReadyTimeout = true
+	return p
+}
+
+// tauLoginPlan opens Tau's TUI and injects /login, which opens Tau's native
+// login-method picker (subscription OAuth, provider API key, or a custom
+// provider); Tau has no login subcommand. The input is sent once the composer
+// placeholder renders, the same marker Tau's adapter waits on before typing a
+// task, or after the bounded ready wait if a future Tau renames it.
+func tauLoginPlan() Plan {
+	p := plan("tau", ActionLogin, "Log in to Tau", []string{"tau"}, "Tau opens its login picker automatically", "https://twotimespi.dev/guides/providers-and-models/")
+	p.initialInput = "/login"
+	p.initialInputReadyStates = []shellterm.InitialInputReadyState{{Text: "Ask Tau…"}}
 	p.sendInitialInputOnReadyTimeout = true
 	return p
 }
@@ -230,6 +248,8 @@ func logoutCommand(agentID string) []string {
 		return []string{"devin", "auth", "logout"}
 	case "minimax-code":
 		return []string{"mcode", "logout"}
+	case "open-interpreter":
+		return []string{"interpreter", "logout"}
 	default:
 		return nil
 	}

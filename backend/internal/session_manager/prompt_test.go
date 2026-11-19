@@ -106,6 +106,8 @@ func TestBuildSystemPrompt_OrchestratorRequiresConfirmationAndAOOnlyDelegation(t
 		"You may coordinate multiple workers, but workers only",
 		"ao session claim-pr <worker-session-id> <pr-ref>",
 		"must pass the target worker session explicitly",
+		"ao session interrupt <session-id>",
+		"ao session kill <session-id>",
 		"Add `--model <id>` when the human or task explicitly requests a specific model",
 		"Never drop an explicitly requested `--model` or substitute another model automatically",
 		"ask the human to choose an alternative",
@@ -393,7 +395,7 @@ func TestBuildSystemPrompt_WorkerNativeReviewFollowsProjectPolicy(t *testing.T) 
 	}
 
 	on := build(true, true)
-	for _, want := range append(common, "This project asks workers to request it", "run `ao review trigger` again for the new head", "findings arrive in this session as PR review comments", "check `ao review ls` for the verdict before reporting the work done", "`ao review trigger --pr <url>`", "If it shows the run failed or was cancelled") {
+	for _, want := range append(common, "This project asks workers to request it", "run `ao review trigger` again for the new head", "findings arrive in this session as PR review comments", "one \"AO review done\" message with the verdict", "`ao review trigger --pr <url>`", "sends the requesting session") {
 		if !strings.Contains(on, want) {
 			t.Fatalf("opted-in worker prompt missing %q:\n%s", want, on)
 		}

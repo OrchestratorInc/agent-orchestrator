@@ -22,10 +22,13 @@ import { HarnessUpdateNotice } from "../components/HarnessUpdateNotice";
 import { TrayRuntime } from "../components/TrayRuntime";
 import { SharedWithYouNotifier } from "../components/teams/SharedWithYouNotifier";
 import { NewTaskNavigator } from "../components/NewTaskNavigator";
+import { FirstRunOnboarding } from "../components/onboarding/FirstRunOnboarding";
+import { GuidedTour } from "../components/onboarding/GuidedTour";
 import { ArchiveModalHost } from "../components/ArchiveModalHost";
 import { GlobalToast } from "../components/GlobalToast";
 import { SettingsPane, SettingsProvider, useSettingsPage } from "../components/SettingsDialog";
 import { ShareLinkHost } from "../components/OpenShareLinkDialog";
+import { SharedArtifactLinkHost } from "../components/SharedArtifactLinkHost";
 import { KeyboardShortcutsDialog } from "../components/KeyboardShortcutsDialog";
 import { QuitConfirmDialog } from "../components/QuitConfirmDialog";
 import { PageTopbar } from "../components/PageTopbar";
@@ -36,6 +39,7 @@ import { SessionImportDialog } from "../components/SessionImportDialog";
 import { Sidebar } from "../components/Sidebar";
 import type { CreateProjectInput } from "../components/CreateProjectFlow";
 import { useRemoteHosts } from "../hooks/useRemoteHosts";
+import { useSettingsPolling } from "../hooks/useSettings";
 import { SidebarProvider } from "../components/ui/sidebar";
 import { TitlebarNav, useCanGoForward } from "../components/TitlebarNav";
 import { SwipeNavigation } from "../components/SwipeNavigation";
@@ -165,6 +169,9 @@ function ShellLayoutWithSettings() {
 	return (
 		<SettingsProvider>
 			<ShellLayout />
+			{/* Outside ShellLayout, so links it holds survive every route and the
+			    startup loader that replaces the shell while the daemon restarts. */}
+			<SharedArtifactLinkHost />
 		</SettingsProvider>
 	);
 }
@@ -341,6 +348,7 @@ function ShellLayout() {
 	const { client: cloudClient } = useCloudCp();
 	const { org: cloudOrg } = useCloudOrg();
 	useWorkspacePolling();
+	useSettingsPolling();
 	const workspaceQuery = useWorkspaceQuery();
 	const workspaces = workspaceQuery.data ?? [];
 	const { hosts: remoteHosts, listed: remoteHostsListed, settled: remoteHostsSettled, retryNow: retryRemoteHostsNow } = useRemoteHosts();
@@ -386,11 +394,14 @@ function ShellLayout() {
 	const centerPaneRef = useRef<HTMLDivElement>(null);
 	const prefersReducedMotion = useReducedMotion();
 	const themePreference = useUiStore((state) => state.themePreference);
-	const firstRunPromptActive = useUiStore((state) => state.firstRunPromptActive);
 	const resolvedTheme = useUiStore((state) => state.resolvedTheme);
 	const themeStyle = useUiStore((state) => state.themeStyle);
 	const windowTranslucency = useUiStore((state) => state.windowTranslucency);
 	const developerMode = useUiStore((state) => state.developerMode);
+	const firstRunOnboardingOpen = useUiStore((state) => state.firstRunOnboardingOpen);
+	// While the full-window onboarding shows, the shell behind it takes no
+	// focus or clicks; Settings opened from it lifts that, as it steps aside.
+	const onboardingCoversShell = useUiStore((state) => state.firstRunOnboardingOpen && state.settingsModal?.scope !== "global");
 	const chatHibernationSyncRef = useRef<Promise<void>>(Promise.resolve());
 	const isSidebarOpen = useUiStore(sidebarIsVisible);
 	const toggleSidebar = useUiStore((state) => state.toggleSidebar);
@@ -1253,10 +1264,11 @@ const replacementErrorCount = Object.keys(orchestratorReplacementErrors).length;
 	// transparency").
 	const windowTranslucent = isMac && windowTranslucency;
 
-	// Match the native window background to the sidebar fill. Deferred a frame so
-	// data-theme has been applied before the token is read. A translucent window
-	// paints no background, and the read forces a whole-document style recalc
-	// mid-switch, so it is skipped there.
+	// Match the native window background to the sidebar fill, following both the
+	// mode and the color theme. Deferred a frame so data-theme and
+	// data-style-theme have been applied before the token is read. A translucent
+	// window paints no background, and the read forces a whole-document style
+	// recalc mid-switch, so it is skipped there.
 	useEffect(() => {
 		if (windowTranslucent) return;
 		const frame = requestAnimationFrame(() => {
@@ -1264,7 +1276,7 @@ const replacementErrorCount = Object.keys(orchestratorReplacementErrors).length;
 			if (color) void aoBridge.theme?.setWindowBackground(color);
 		});
 		return () => cancelAnimationFrame(frame);
-	}, [resolvedTheme, windowTranslucent]);
+	}, [resolvedTheme, themeStyle, windowTranslucent]);
 	useEffect(() => {
 		if (!isMac) return;
 		applyWindowTranslucency(windowTranslucent);
@@ -1573,7 +1585,7 @@ const replacementErrorCount = Object.keys(orchestratorReplacementErrors).length;
 			<AppBrowserLinkContext.Provider value={canOpenBrowserLink ? openBrowserLink : undefined}>
 			<SessionTopbarProvider>
 				<NotificationRuntime />
-				<HarnessUpdateNotice enabled={daemonStatus.state === "ready" && !firstRunPromptActive} />
+				{firstRunOnboardingOpen ? null : <HarnessUpdateNotice enabled={daemonStatus.state === "ready"} />}
 				<TrayRuntime />
 				<SharedWithYouNotifier />
 				{isDragActive ? (
@@ -1593,6 +1605,8 @@ const replacementErrorCount = Object.keys(orchestratorReplacementErrors).length;
 					</div>
 				) : null}
 				<NewTaskNavigator />
+				<FirstRunOnboarding />
+				<GuidedTour />
 				<ArchiveModalHost />
 				<GlobalToast />
 				<RestartToUpdateDialog />
@@ -1623,6 +1637,7 @@ const replacementErrorCount = Object.keys(orchestratorReplacementErrors).length;
 					isLinux && "platform-linux",
 					isFullScreen && "native-fullscreen",
 				)}
+				inert={onboardingCoversShell}
 			>
 				{/* Windows-only custom title bar (sidebar toggle + File/Edit/View/…
             menu); paints the chrome the frameless window drops. Renders null on

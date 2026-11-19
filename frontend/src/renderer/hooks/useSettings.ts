@@ -6,7 +6,7 @@
  * kept in one client would look correct in Settings and disagree with the others.
  */
 
-import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { type Query, useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import type { components } from "../../api/schema";
 import { apiClient, apiErrorMessage } from "../lib/api-client";
 import { clientForHost } from "../lib/host-clients";
@@ -44,18 +44,18 @@ export interface Settings {
 
 const settingsReadTimeoutMs = 10_000;
 
-export function useSettings(hostId?: string, enabled = true) {
-	const query = useQuery({
+// Settings gate the cloud sign-in UI, so this query must recover from a
+// transient startup failure. The daemon can still be booting on first fetch
+// ("AO daemon is starting"); without a refetch the whole cloud offering stays
+// hidden until a manual reload. Poll like the workspace query so it self-heals
+// once the daemon is ready.
+const settingsRefetchInterval = 15_000;
+
+function settingsQueryOptions(hostId?: string) {
+	return {
 		queryKey: hostId ? ["settings", hostId] : settingsQueryKey,
-		enabled,
-		// Settings gate the cloud sign-in UI, so this query must recover from a
-		// transient startup failure. The daemon can still be booting on first
-		// fetch ("AO daemon is starting"); without a refetch the whole cloud
-		// offering stays hidden until a manual reload. Poll like the workspace
-		// query so it self-heals once the daemon is ready.
-		refetchInterval: 15_000,
 		retry: 5,
-		queryFn: async ({ signal }): Promise<Settings> => {
+		queryFn: async ({ signal }: { signal: AbortSignal }): Promise<Settings> => {
 			// The read is one SQLite row, but the renderer shares six connections
 			// to the daemon with its event streams and slow probes, so a read can
 			// sit queued behind them. Bound it: a read that never completes would
@@ -85,6 +85,30 @@ export function useSettings(hostId?: string, enabled = true) {
 				accountHandoff: data?.accountHandoff ?? false,
 			};
 		},
+	};
+}
+
+export function useSettings(hostId?: string, enabled = true) {
+	// A function default would need the query's own types; treat it as 0.
+	const clientStaleTime = useQueryClient().getDefaultOptions().queries?.staleTime;
+	const defaultStaleTime = typeof clientStaleTime === "function" ? 0 : clientStaleTime;
+	const query = useQuery({
+		...settingsQueryOptions(hostId),
+		enabled,
+		// Each observer runs its own refetch-interval and stale timers, and every
+		// settings update re-arms all of them. The local query has hundreds of
+		// observers, so useSettingsPolling() owns the interval. A reader still
+		// refetches on mount once the data is older than the client's stale time,
+		// but its own stale time is only 0 or Infinity, and neither arms a timer. A
+		// disabled reader is never stale, so it stays at Infinity.
+		...(hostId
+			? { refetchInterval: settingsRefetchInterval }
+			: {
+					staleTime: enabled
+						? (settingsQuery: Query<Settings>) =>
+								settingsQuery.isStaleByTime(defaultStaleTime) ? 0 : Infinity
+						: Infinity,
+				}),
 	});
 
 	return {
@@ -92,6 +116,14 @@ export function useSettings(hostId?: string, enabled = true) {
 		isLoading: query.isLoading,
 		error: query.error ? apiErrorMessage(query.error) : undefined,
 	};
+}
+
+/**
+ * Drives the local settings poll from one place. Mounted once by the shell; it
+ * never re-renders its host (notifyOnChangeProps: []), it only keeps the timer.
+ */
+export function useSettingsPolling() {
+	useQuery({ ...settingsQueryOptions(), refetchInterval: settingsRefetchInterval, notifyOnChangeProps: [] });
 }
 
 export function useUpdateSessionInterface() {
