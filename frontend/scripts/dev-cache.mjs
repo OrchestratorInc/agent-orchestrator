@@ -385,7 +385,8 @@ export function nodeModulesDrift(frontend, { read = (file) => readJSON(file, nul
 	const drift = [];
 	const prefix = "node_modules/";
 	for (const [key, want] of Object.entries(wanted)) {
-		if (!key.startsWith(prefix)) continue;
+		// Bundled packages ship inside their parent's tarball.
+		if (!key.startsWith(prefix) || want.inBundle) continue;
 		const name = key.slice(key.lastIndexOf(prefix) + prefix.length);
 		const have = installed[key];
 		const required = !want.optional && !want.devOptional;
