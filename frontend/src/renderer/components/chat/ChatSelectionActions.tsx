@@ -3,7 +3,7 @@ import { effectiveShortcutBindings, matchesAppShortcut, shortcutBindingLabel } f
 import { useKeybindingsStore } from "../../stores/keybindings-store";
 import { isDialogOrMenuOpen } from "../../lib/dom-selectors";
 import { useLatestCallback } from "../../hooks/useStable";
-import { useEffect, useLayoutEffect, useRef, useState, type MutableRefObject, type RefObject } from "react";
+import { useContext, useEffect, useLayoutEffect, useMemo, useRef, useState, type MutableRefObject, type RefObject } from "react";
 import { useTranslation } from "react-i18next";
 import { useChatSelectionPosition } from "../../hooks/useChatSelectionPosition";
 import { apiErrorMessage } from "../../lib/api-client";
@@ -13,7 +13,8 @@ import {
 	selectionToolbarClass,
 } from "../../lib/selection-toolbar";
 import { cn } from "../../lib/utils";
-import { Check, MessageSquarePlus, Trash2 } from "@/components/app-icons";
+import { Check, MessageSquare, MessageSquarePlus, Trash2 } from "@/components/app-icons";
+import { CommentMarkersContext, commentDraftForSelection } from "./AsideMarker";
 import { Button } from "../ui/button";
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "../ui/tooltip";
 import type { ChatDraftExcerptReference } from "../../lib/chat-drafts";
@@ -50,6 +51,13 @@ export function ChatSelectionActions({
 		.map((binding) => shortcutBindingLabel(binding, isMacPlatform())).join(" / ");
 	const translateDraft = useChatDraftTranslation();
 	const editing = Boolean(onRemove);
+	// In a shared Cloud session with comments, a passage of one message can
+	// start a comment for people; the box below then asks the agent.
+	const commentMarkers = useContext(CommentMarkersContext);
+	const commentDraft = useMemo(
+		() => (commentMarkers?.canComment && !editing ? commentDraftForSelection(selection.range) : undefined),
+		[commentMarkers?.canComment, editing, selection.range],
+	);
 	const buttonRef = useRef<HTMLDivElement>(null);
 	const textareaRef = useRef<HTMLTextAreaElement>(null);
 	const [comment, setComment] = useState(selection.excerpt.comment ?? "");
@@ -177,6 +185,24 @@ export function ChatSelectionActions({
 					if (event.target !== textareaRef.current) event.preventDefault();
 				}}
 			>
+				{commentDraft ? (
+					<Button
+						type="button"
+						variant="quiet"
+						size="sm"
+						className="shrink-0 self-center"
+						disabled={pending}
+						data-selection-comment=""
+						onClick={() => {
+							commentMarkers?.startComment(commentDraft);
+							onInvalid();
+							window.getSelection()?.removeAllRanges();
+						}}
+					>
+						<MessageSquare aria-hidden="true" className="size-3.5" />
+						{t("comment.action")}
+					</Button>
+				) : null}
 				<textarea
 					ref={textareaRef}
 					rows={1}
@@ -184,7 +210,7 @@ export function ChatSelectionActions({
 					maxLength={ANNOTATION_COMMENT_MAX_LENGTH}
 					disabled={pending}
 					aria-label={t("chat.annotation.commentLabel")}
-					placeholder={t("chat.annotation.commentPlaceholder")}
+					placeholder={commentDraft ? t("comment.askAgentPlaceholder") : t("chat.annotation.commentPlaceholder")}
 					className="board-scrollbar max-h-32 min-h-7 min-w-0 flex-1 resize-none self-center border-0 bg-transparent px-2 py-1 font-sans text-[13px] leading-5 text-foreground outline-none [field-sizing:content] placeholder:text-muted-foreground disabled:opacity-60"
 					onFocus={() => setPinned(true)}
 					onChange={(event) => setComment(event.target.value)}

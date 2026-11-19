@@ -60,21 +60,21 @@ describe("Settings › Notifications with asides", () => {
 		client.setMyNotificationPreferences.mockReset().mockImplementation(async (change) => ({ mentions: true, teamMentions: true, asideReplies: true, ...change }));
 	});
 
-	it("adds a third switch for replies in asides, on by default, under Mentions and asides", async () => {
+	it("adds a third switch for replies in asides, on by default, under Mentions and comments", async () => {
 		renderSection();
-		const replies = await screen.findByRole("switch", { name: "New replies in asides I'm in" });
+		const replies = await screen.findByRole("switch", { name: "New replies to comments I'm in" });
 		expect(replies).toBeChecked();
 		expect(screen.getAllByRole("switch")).toHaveLength(3);
-		expect(screen.getByText("Mentions and asides")).toBeInTheDocument();
+		expect(screen.getByText("Mentions and comments")).toBeInTheDocument();
 		expect(screen.getAllByText("Desktop alert and phone")).toHaveLength(3);
 		expect(screen.getByText("These always show in the bell. Turning a switch off only stops the alert.")).toBeInTheDocument();
 	});
 
 	it("saves the replies switch on its own", async () => {
 		renderSection();
-		await userEvent.click(await screen.findByRole("switch", { name: "New replies in asides I'm in" }));
+		await userEvent.click(await screen.findByRole("switch", { name: "New replies to comments I'm in" }));
 		await waitFor(() => expect(client.setMyNotificationPreferences).toHaveBeenCalledWith({ asideReplies: false }));
-		await waitFor(() => expect(screen.getByRole("switch", { name: "New replies in asides I'm in" })).not.toBeChecked());
+		await waitFor(() => expect(screen.getByRole("switch", { name: "New replies to comments I'm in" })).not.toBeChecked());
 		expect(screen.getByRole("switch", { name: "Someone mentions me" })).toBeChecked();
 	});
 
@@ -83,7 +83,7 @@ describe("Settings › Notifications with asides", () => {
 		renderSection();
 		await screen.findByRole("switch", { name: "Someone mentions me" });
 		expect(screen.getAllByRole("switch")).toHaveLength(2);
-		expect(screen.queryByText("Mentions and asides")).toBeNull();
+		expect(screen.queryByText("Mentions and comments")).toBeNull();
 	});
 });
 

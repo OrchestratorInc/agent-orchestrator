@@ -60,9 +60,23 @@ import { useCloudInboxSupport } from "../../hooks/useCloudNotifications";
 import { useCloudOrg } from "../../hooks/useCloudOrg";
 import { useWindowAttention } from "../../hooks/useWindowAttention";
 import type { CloudCpAsideListResponse, CloudCpMentionCandidates, CloudCpNotificationListResponse } from "../../lib/cloud-cp/types";
-import { ASIDE_REPLY_EVENT, asideIdOf, asideReplyOf, closeAside, cloudAsidesKey, openAside, toggleAside, useOpenAside } from "../../lib/cloud-asides";
-import { AsideMarkersContext, type AsideIconState, type AsideMarkers } from "./AsideMarker";
-import { CloudAsidePane, type AsideFallback } from "./AsidePane";
+import {
+	ASIDE_REPLY_EVENT,
+	ASIDE_STATE_EVENTS,
+	asideIdOf,
+	asideIsOpen,
+	asideReplyOf,
+	closeAside,
+	cloudAsidesKey,
+	fromAsideOf,
+	openAside,
+	openCommentDraft,
+	openMessageComments,
+	toggleAside,
+	useOpenAside,
+} from "../../lib/cloud-asides";
+import { CommentMarkersContext, type CommentMarkers, type MessageComments } from "./AsideMarker";
+import { CloudAsidePane, CloudCommentDraftPane, CommentThreadListView, type AsideFallback } from "./AsidePane";
 import { Button } from "../ui/button";
 import { artifactAtPath } from "../../../../../packages/shared/artifacts/deliverables";
 
@@ -901,6 +915,20 @@ export function withoutFailedSetupAttempts(items: ConversationItem[], startFaile
  * The people and teams a message or steer named, as its event recorded them,
  * for drawing chips, and the aside it started (a dashed box with the aside icon).
  */
+/** A message "Also send to agent" sent carries its thread: drawn as a card, not its text. */
+function fromAsideItem(payload: EventPayload): Pick<ConversationMessage, "fromAside"> {
+	const thread = fromAsideOf(payload as Record<string, unknown>);
+	if (!thread) return {};
+	return {
+		fromAside: {
+			asideId: thread.asideId,
+			...(thread.quote ? { quote: thread.quote } : {}),
+			...(thread.anchorExcerpt ? { anchorExcerpt: thread.anchorExcerpt } : {}),
+			comments: thread.comments.map(({ authorName, text }) => ({ authorName, text })),
+		},
+	};
+}
+
 function mentionsOf(payload: EventPayload): { mentions?: ReturnType<typeof parseEventMentions>; asideId?: string } {
 	const mentions = parseEventMentions(payload.mentions);
 	const asideId = typeof payload.asideId === "string" && payload.asideId !== "" ? payload.asideId : undefined;
@@ -1080,8 +1108,8 @@ export function toSnapshot(session: WorkspaceSession, events: CloudCpClientEvent
 		if (asideId && typeof key === "string" && key !== "") steerAsides.set(key, asideId);
 	}
 	for (const event of events) {
-		// A reply in an aside is between people: it is shown in the aside's pane, never in the conversation.
-		if (event.type === ASIDE_REPLY_EVENT) continue;
+		// Comments are between people: they show in the comment pane, never in the conversation.
+		if (event.type === ASIDE_REPLY_EVENT || ASIDE_STATE_EVENTS.has(event.type)) continue;
 		if (event.type === "chat.user_message_edited") {
 			// The edit of a message still queued: it reads as edited, in place,
 			// and starts nothing of its own. One whose message is not loaded has
@@ -1343,6 +1371,7 @@ export function toSnapshot(session: WorkspaceSession, events: CloudCpClientEvent
 				senderLabel: automation && typeof payload.senderLabel === "string" ? payload.senderLabel : undefined,
 				senderSessionId, senderProjectId, senderDisplayName,
 				...(automation ? {} : mentionsOf(payload)),
+				...(automation ? {} : fromAsideItem(payload)),
 				...(attachments.length > 0 ? { cloudAttachments: attachments } : {}),
 				streaming: false, delivery: "accepted", createdAt: event.createdAt,
 			};
@@ -2489,20 +2518,12 @@ export function CloudSessionChatSurface({
 		if (mentionFocus?.teamId) teamIds.add(mentionFocus.teamId);
 		return { userId: me || undefined, teamIds };
 	}, [inbox?.items, me, mentionFocus?.teamId]);
-	// Asides: a message that tags people started one, named by its event. The
-	// control plane names them only once it has asides, so until then a
-	// message draws as before. The list gives each aside icon its unread dot;
-	// the pane opens beside the conversation on the open aside.
+	// Comments: threads between people about a message (a tagged message
+	// starts one too). The list gives every message's comment icon, its unread
+	// state and the passages to highlight; a control plane without comments
+	// answers it with an error, and then every message draws as before.
 	const chatEvents = eventsQuery.data ?? fallbackEvents;
-	const asideIds = useMemo(() => {
-		const ids = new Set<string>();
-		for (const event of chatEvents ?? []) {
-			const asideId = asideIdOf(event);
-			if (asideId) ids.add(asideId);
-		}
-		return ids;
-	}, [chatEvents]);
-	const asidesOn = Boolean(cloud && ready && asideIds.size > 0);
+	const asidesOn = Boolean(cloud && ready);
 	const asides = useQuery<CloudCpAsideListResponse>({
 		queryKey: cloudAsidesKey(cloud?.orgId ?? "", session.id),
 		enabled: asidesOn,
@@ -2510,38 +2531,74 @@ export function CloudSessionChatSurface({
 		retry: 1,
 		queryFn: ({ signal }) => client.listSessionAsides(cloud?.orgId ?? "", session.id, { signal }),
 	});
-	// A new tagged message or a new reply changes the dots: read the list again.
-	const newestReply = useMemo(() => (chatEvents ?? []).reduce((newest, event) => event.type === ASIDE_REPLY_EVENT && asideReplyOf(event) ? Math.max(newest, event.sequence) : newest, 0), [chatEvents]);
-	const asidesSeen = useRef("");
+	// A new tagged message, comment, resolve or reopen: read the list again.
+	const newestAsideEvent = useMemo(() => (chatEvents ?? []).reduce((newest, event) =>
+		(event.type === ASIDE_REPLY_EVENT && asideReplyOf(event)) || ASIDE_STATE_EVENTS.has(event.type) || asideIdOf(event) ? Math.max(newest, event.sequence) : newest, 0), [chatEvents]);
+	const asidesSeen = useRef(0);
 	useEffect(() => {
 		if (!asidesOn) return;
-		const key = `${asideIds.size}:${newestReply}`;
-		if (asidesSeen.current === "" || asidesSeen.current === key) {
-			asidesSeen.current = key;
+		if (asidesSeen.current === 0 || asidesSeen.current === newestAsideEvent) {
+			asidesSeen.current = newestAsideEvent;
 			return;
 		}
-		asidesSeen.current = key;
+		asidesSeen.current = newestAsideEvent;
 		void queryClient.invalidateQueries({ queryKey: cloudAsidesKey(cloud?.orgId ?? "", session.id) });
-	}, [asideIds.size, asidesOn, cloud?.orgId, newestReply, queryClient, session.id]);
+	}, [asidesOn, cloud?.orgId, newestAsideEvent, queryClient, session.id]);
 	const openAsideState = useOpenAside(session.id);
 	const shownAside = cloud && chatInFront ? openAsideState : undefined;
-	const asideMarkers = useMemo<AsideMarkers | undefined>(() => {
-		if (!asidesOn) return undefined;
-		const unread = new Set((asides.data?.items ?? []).filter((aside) => aside.unread).map((aside) => aside.asideId));
+	const commentMarkers = useMemo<CommentMarkers | undefined>(() => {
+		if (!asidesOn || !asides.isSuccess) return undefined;
+		const open = (asides.data?.items ?? []).filter(asideIsOpen);
 		return {
-			stateOf: (asideId): AsideIconState => shownAside?.asideId === asideId ? "open" : unread.has(asideId) ? "unread" : "closed",
-			toggle: (asideId) => toggleAside(session.id, asideId),
+			canComment: session.isTerminated !== true,
+			forMessage: (sequence, asideId) => {
+				const threads = open
+					.filter((aside) => (asideId !== undefined && aside.asideId === asideId) || (sequence !== undefined && aside.anchor.sequence === sequence))
+					.sort((a, b) => (Date.parse(b.lastReplyAt ?? "") || 0) - (Date.parse(a.lastReplyAt ?? "") || 0));
+				if (threads.length === 0) return undefined;
+				const ids = threads.map((aside) => aside.asideId);
+				const active = (shownAside?.asideId !== undefined && ids.includes(shownAside.asideId)) || (sequence !== undefined && shownAside?.messageSequence === sequence);
+				const comments: MessageComments = {
+					state: active ? "active" : threads.some((aside) => aside.unread) ? "unread" : "idle",
+					asideIds: ids,
+					quotes: threads.flatMap((aside) => aside.quote ? [{ asideId: aside.asideId, quote: aside.quote, active: shownAside?.asideId === aside.asideId }] : []),
+				};
+				return comments;
+			},
+			openMessage: (sequence, comments) => {
+				if (comments.asideIds.length === 1) toggleAside(session.id, comments.asideIds[0]!);
+				else if (shownAside?.messageSequence === sequence) closeAside(session.id);
+				else openMessageComments(session.id, sequence);
+			},
+			openThread: (asideId) => openAside(session.id, asideId),
+			startComment: (draft) => openCommentDraft(session.id, draft),
 		};
-	}, [asides.data?.items, asidesOn, session.id, shownAside?.asideId]);
+	}, [asides.data?.items, asides.isSuccess, asidesOn, session.id, session.isTerminated, shownAside?.asideId, shownAside?.messageSequence]);
 	const attentive = useWindowAttention();
-	// Opened from a notification with nothing cached: what it said shows until the aside loads.
-	const asideFallback = useMemo<AsideFallback | undefined>(() => mentionFocus && mentionFocus.asideId === shownAside?.asideId
+	// Opened from a notification with nothing cached: what it said shows until the thread loads.
+	const asideFallback = useMemo<AsideFallback | undefined>(() => mentionFocus && shownAside?.asideId && mentionFocus.asideId === shownAside.asideId
 		? { kind: mentionFocus.kind, body: mentionFocus.body, authorName: mentionFocus.authorName, createdAt: mentionFocus.createdAt }
 		: undefined, [mentionFocus, shownAside?.asideId]);
-	const asidePane = shownAside && cloud ? (
+	const paneWorkspace = cloud && activeOrg?.id === cloud.orgId ? activeOrg?.displayName : undefined;
+	const listedThreads = shownAside?.messageSequence !== undefined
+		? (asides.data?.items ?? []).filter((aside) => asideIsOpen(aside) && aside.anchor.sequence === shownAside.messageSequence)
+		: [];
+	const asidePane = !shownAside || !cloud ? undefined : shownAside.draft ? (
+		<CloudCommentDraftPane
+			draft={shownAside.draft}
+			focusKey={shownAside.focusKey}
+			key={`draft:${shownAside.focusKey ?? 0}`}
+			onClose={() => closeAside(session.id)}
+			orgId={cloud.orgId}
+			sessionId={session.id}
+			sessionTitle={session.title}
+			workspaceName={paneWorkspace}
+		/>
+	) : shownAside.asideId ? (
 		<CloudAsidePane
 			asideId={shownAside.asideId}
 			attentive={attentive}
+			canPrompt={!readOnly}
 			ended={session.isTerminated === true}
 			events={eventsQuery.data}
 			fallback={asideFallback}
@@ -2551,11 +2608,25 @@ export function CloudSessionChatSurface({
 			orgId={cloud.orgId}
 			sessionId={session.id}
 			sessionTitle={session.title}
-			workspaceName={activeOrg?.id === cloud.orgId ? activeOrg?.displayName : undefined}
+			workspaceName={paneWorkspace}
+		/>
+	) : listedThreads.length > 0 ? (
+		<CommentThreadListView
+			onClose={() => closeAside(session.id)}
+			onOpen={(asideId) => openAside(session.id, asideId)}
+			sessionTitle={session.title}
+			threads={listedThreads.map((aside) => ({
+				asideId: aside.asideId,
+				...(aside.quote ? { quote: aside.quote } : {}),
+				...(aside.startedBy ? { startedBy: aside.startedBy.name } : {}),
+				replyCount: aside.replyCount,
+				...(aside.lastReplyAt ? { lastAt: aside.lastReplyAt } : {}),
+				unread: aside.unread,
+			}))}
 		/>
 	) : undefined;
 	return (
-		<AsideMarkersContext.Provider value={asideMarkers}>
+		<CommentMarkersContext.Provider value={commentMarkers}>
 		<MentionTintContext.Provider value={mentionTint}>
 		<CloudAttachmentSourceProvider source={attachmentSource}>
 		{/* Replies pace their reveal to how the stream arrives (a poll at a time while it is down). */}
@@ -2773,6 +2844,6 @@ export function CloudSessionChatSurface({
 		</AdaptiveStreamPacingContext.Provider>
 		</CloudAttachmentSourceProvider>
 		</MentionTintContext.Provider>
-		</AsideMarkersContext.Provider>
+		</CommentMarkersContext.Provider>
 	);
 }

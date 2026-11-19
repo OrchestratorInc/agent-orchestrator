@@ -69,6 +69,7 @@ import {
 	Keyboard,
 	ListChecks,
 	Loader2,
+	MessageSquare,
 	Package,
 	Paintbrush,
 	Pencil,
@@ -141,7 +142,7 @@ import { ProviderMark } from "./ProviderMark";
 import { CopyButton } from "./CopyButton";
 import { CollapsibleHumanBody } from "./CollapsibleHumanBody";
 import { MentionedText, MentionTintContext } from "./MentionChip";
-import { AsideIcon, asideBoxClass, NO_MENTION_TINT, useAsideMarker } from "./AsideMarker";
+import { asideBoxClass, NO_MENTION_TINT, useAsideMarker } from "./AsideMarker";
 import type { TimelineMention } from "../../lib/cloud-mentions";
 import { LatticeLoader } from "./LatticeLoader";
 import { ScriptRunPanel } from "../ScriptRunPanel";
@@ -1237,7 +1238,7 @@ export function HumanMessage({
 	const showBubble = Boolean(body) || !hasAttachments;
 	// A message that tags people started an aside: it draws as only a dashed box
 	// with its text and chips (no author line, no fill, no tint), the same for
-	// everyone, with the aside icon right under it at its left edge.
+	// everyone. Its thread's marker is the comment icon in the right margin.
 	const aside = useAsideMarker(message.asideId) && !editing ? message.asideId : undefined;
 	// Hover-only actions float under the bubble instead of reserving a blank row;
 	// a branch navigator is always visible, so it keeps its place in the flow.
@@ -1306,7 +1307,9 @@ export function HumanMessage({
 							<CloudMessageAttachments attachments={message.cloudAttachments} className="contents" />
 						</AttachmentStrip>
 					) : null}
-					{aside ? (
+					{message.fromAside ? (
+						<FromCommentThreadCard thread={message.fromAside} className={cn(animateIn && "chat-human-message-enter")} />
+					) : aside ? (
 						<div className={cn("flex max-w-[min(78%,560px)] flex-col items-start gap-1", animateIn && "chat-human-message-enter")} data-chat-aside={aside}>
 							<div className={asideBoxClass(queued)} data-chat-aside-box="" data-queued={queued ? "" : undefined}>
 								<MentionTintContext.Provider value={NO_MENTION_TINT}>
@@ -1319,7 +1322,6 @@ export function HumanMessage({
 									</CollapsibleHumanBody>
 								</MentionTintContext.Provider>
 							</div>
-							<AsideIcon asideId={aside} />
 						</div>
 					) : showBubble ? (
 						<div
@@ -1385,6 +1387,35 @@ export function HumanMessage({
 			{message.delivery && message.delivery !== "accepted" && message.delivery !== "sending" ? (
 				<DeliveryNote state={message.delivery} />
 			) : null}
+		</div>
+	);
+}
+
+/**
+ * A message "Also send to agent" sent: the comment thread as it was sent (the
+ * quoted passage, or what the thread was about, then every comment in order),
+ * in the sender's bubble. The agent got the same as plain text.
+ */
+export function FromCommentThreadCard({ thread, className }: { thread: NonNullable<ConversationMessage["fromAside"]>; className?: string }) {
+	const { t } = useTranslation();
+	return (
+		<div className={cn(humanBubbleClass(), "flex min-w-0 flex-col gap-1.5", className)} data-chat-message-body="" data-from-comment-thread={thread.asideId}>
+			<div className="flex items-center gap-1.5 text-caption text-muted-foreground">
+				<MessageSquare aria-hidden="true" className="size-3" />
+				<span>{t("comment.fromThread")}</span>
+				<span className="tabular-nums">· {t("comment.count", { count: thread.comments.length })}</span>
+			</div>
+			{thread.quote || thread.anchorExcerpt ? (
+				<div className="border-l-2 border-[var(--comment-quote-edge)] pl-2 text-control text-foreground/85" data-from-comment-quote="">
+					{thread.quote ? `“${thread.quote}”` : thread.anchorExcerpt}
+				</div>
+			) : null}
+			{thread.comments.map((comment, index) => (
+				<p className="whitespace-pre-wrap break-words text-sm leading-[1.5]" key={`${index}:${comment.authorName}`}>
+					<span className="mr-1.5 font-medium">{comment.authorName}</span>
+					{comment.text}
+				</p>
+			))}
 		</div>
 	);
 }
@@ -3579,7 +3610,7 @@ export function SteerMessage({
 	const { body, attachments } = stagedAttachmentParts(visibleText);
 	// Only the person's own steer is marked; a steer from another session is not theirs.
 	const renderText = useUserTextRenderer(sessionId, body, attachments, apiBaseUrl, activity.detail?.mentions);
-	// Guidance that tags people started an aside: a dashed box with the aside icon, as a message.
+	// Guidance that tags people started an aside: a dashed box, as a message.
 	const asideShown = useAsideMarker(activity.detail?.asideId);
 	const aside = asideShown && !senderSessionId ? activity.detail?.asideId : undefined;
 	const longReport = body.length > ORIGIN_REPORT_COLLAPSE_AT;
@@ -3668,7 +3699,6 @@ export function SteerMessage({
 									</MentionTintContext.Provider>
 								) : null}
 							</div>
-							<AsideIcon asideId={aside} />
 						</div>
 					) : body || (!annotationSummary && attachments.length === 0 && remainingContent.length === 0) ? (
 						<div className="break-words text-sm leading-[1.55] w-fit max-w-[min(78%,560px)] rounded-[10px] bg-raised px-3 py-2.5 text-foreground" data-chat-focus-bubble="">

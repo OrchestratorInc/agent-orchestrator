@@ -139,3 +139,42 @@ describe("chat selection actions", () => {
 		expect(props.onInvalid).not.toHaveBeenCalled();
 	});
 });
+
+describe("commenting on a selected passage", () => {
+	it("offers Comment for people beside asking the agent, in a session with comments", async () => {
+		const { CommentMarkersContext } = await import("./AsideMarker");
+		const props = setup();
+		const message = document.createElement("div");
+		message.dataset.testChatSelection = "";
+		message.dataset.commentAnchor = "60";
+		message.dataset.commentKind = "agent_message";
+		message.innerHTML = "<div data-chat-message-body><p>The time goes to the additional repositories.</p></div>";
+		document.body.append(message);
+		const text = message.querySelector("p")!.firstChild!;
+		props.selection.range.setStart(text, 21);
+		props.selection.range.setEnd(text, 31);
+		const startComment = vi.fn();
+		const markers = { canComment: true, forMessage: () => undefined, openMessage: vi.fn(), openThread: vi.fn(), startComment };
+		render(
+			<CommentMarkersContext.Provider value={markers}>
+				<ChatSelectionActions {...props} viewportRef={{ current: message }} />
+			</CommentMarkersContext.Provider>,
+		);
+		expect(screen.getByRole("textbox", { name: "Comment on the selected text" })).toHaveAttribute("placeholder", "Ask the agent");
+		fireEvent.click(screen.getByRole("button", { name: "Comment" }));
+		expect(startComment).toHaveBeenCalledWith({ anchor: { sequence: 60, kind: "agent_message" }, quote: "additional", excerpt: "The time goes to the additional repositories." });
+		expect(props.onInvalid).toHaveBeenCalled();
+		expect(props.onAdd).not.toHaveBeenCalled();
+	});
+
+	it("keeps the toolbar as it was outside a session with comments", () => {
+		const props = setup();
+		const viewport = document.createElement("div");
+		viewport.dataset.testChatSelection = ""; viewport.textContent = "selected chat text";
+		document.body.append(viewport);
+		props.selection.range.selectNodeContents(viewport);
+		render(<ChatSelectionActions {...props} viewportRef={{ current: viewport }} />);
+		expect(screen.queryByRole("button", { name: "Comment" })).toBeNull();
+		expect(screen.getByRole("textbox", { name: "Comment on the selected text" })).toHaveAttribute("placeholder", "Add a comment");
+	});
+});

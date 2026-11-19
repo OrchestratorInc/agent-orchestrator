@@ -1237,14 +1237,14 @@ describe("NotificationCenter aside reply rows", () => {
 		cloudNotificationsMock.mockReturnValue(cloudNotificationsResult([reply, mention]));
 	});
 
-	it("lists a reply in an aside with the messages-square icon in blue, the line, and its session and project", async () => {
+	it("lists a reply to a comment with the comment icon in blue, the line, and its session and project", async () => {
 		renderNotificationCenter();
 		await clickOpen();
 		const row = screen.getByText("Priya Nair replied in an aside").closest<HTMLElement>("[data-notification-source=cloud]")!;
 		expect(within(row).getByText("1 s with jitter looks right. Approved.")).toBeInTheDocument();
 		expect(within(row).getByText("checkout-service")).toBeInTheDocument();
 		expect(within(row).getByText("Fix flaky payment retry test")).toBeInTheDocument();
-		const icon = row.querySelector(".icon-messages-square");
+		const icon = row.querySelector(".icon-message-square");
 		expect(icon).not.toBeNull();
 		expect(icon?.parentElement).toHaveClass("text-status-working");
 		// Both kinds of row sit side by side.

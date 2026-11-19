@@ -17,7 +17,7 @@ import {
 	LoaderCircle,
 	MessageSquareDiff,
 	MessageSquareDot,
-	MessagesSquare,
+	MessageSquare,
 	X,
 } from "@/components/app-icons";
 import { memo, useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
@@ -1437,7 +1437,7 @@ function notificationIcon(type: string) {
 		case "mentioned":
 			return AtSign;
 		case "aside_reply":
-			return MessagesSquare;
+			return MessageSquare;
 		case "needs_input":
 			return MessageSquareDot;
 		case "review_feedback":

@@ -252,8 +252,18 @@ export interface ConversationMessage {
 	authorName?: string;
 	/** The people and teams a human message in a shared Cloud session named, drawn as chips in its text. */
 	mentions?: TimelineMention[];
-	/** The aside a shared Cloud message that names people started: it draws as a dashed box with the aside icon. */
+	/** The aside a shared Cloud message that names people started: it draws as a dashed box. */
 	asideId?: string;
+	/**
+	 * A shared Cloud message "Also send to agent" sent: the comment thread as it
+	 * was sent, drawn as a "From a comment thread" card instead of its text.
+	 */
+	fromAside?: {
+		asideId: string;
+		quote?: string;
+		anchorExcerpt?: string;
+		comments: Array<{ authorName: string; text: string }>;
+	};
 	/** Set when origin is a worker or automation, for the attribution line. */
 	senderLabel?: string;
 	senderSessionId?: string;

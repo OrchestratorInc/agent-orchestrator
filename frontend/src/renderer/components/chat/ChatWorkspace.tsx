@@ -56,6 +56,7 @@ import { Archive, ArrowDown, Columns2, FlaskConical, ListTodo, Loader2, Notebook
 import { AnimatePresence, motion, Reorder, useReducedMotion } from "motion/react";
 import { useTranslation } from "react-i18next";
 import { ChatSelectionActions } from "./ChatSelectionActions";
+import { CommentMarkersContext, CommentTarget } from "./AsideMarker";
 import { ChatAnnotationMarkers, DraftAnnotationMarkers, numberedReferences } from "./ChatAnnotationMarkers";
 import { selectionRangesEqual } from "../../lib/selection-toolbar";
 import { useScrollFollow } from "../../hooks/useScrollFollow";
@@ -3534,6 +3535,8 @@ export function Timeline({
 		edgeFadeRef(node);
 	}, [edgeFadeRef]);
 	const scrollContent = useRef<HTMLDivElement>(null);
+	// A shared Cloud session with comments keeps a right margin for their icons.
+	const commentGutter = Boolean(useContext(CommentMarkersContext));
 	const virtualContent = useRef<HTMLDivElement>(null);
 	const [virtualScrollMargin, setVirtualScrollMargin] = useState(20);
 	const measuredVirtualGroups = useRef(new WeakSet<TimelineGroup>());
@@ -5766,7 +5769,7 @@ export function Timeline({
 				style={virtualized ? { overflowAnchor: "none" } : undefined}
 			>
 				<TurnSettleSnapshot liveKey={groups.find((group) => group.live)?.key} capture={captureSettle} restore={restoreSettle} />
-				<div ref={scrollContent} className={cn("mx-auto flex w-full min-w-0 max-w-3xl flex-col gap-4.5", revealTranscript && "chat-transcript-reveal")}>
+				<div ref={scrollContent} className={cn("mx-auto flex w-full min-w-0 max-w-3xl flex-col gap-4.5", commentGutter && "max-w-[calc(48rem+2.5rem)] pr-10", revealTranscript && "chat-transcript-reveal")}>
 					{annotationNavigationError ? <p role="status" className="text-xs text-muted-foreground">{annotationNavigationError}</p> : null}
 					{hasOlder ? (
 						<div className="flex justify-center pb-1">
@@ -6674,13 +6677,15 @@ function TimelineItem({
 	if (item.kind === "message") {
 		if (item.role === "assistant") {
 			return (
-				<AssistantMessage
-					message={item}
-					showCopy={showCopy}
-					live={live}
-					onRollback={onRollback}
-					rollbackDisabled={rollbackDisabled}
-				/>
+				<CommentTarget finished={!item.streaming && !live} kind="agent_message" sequence={item.sequence} text={item.text}>
+					<AssistantMessage
+						message={item}
+						showCopy={showCopy}
+						live={live}
+						onRollback={onRollback}
+						rollbackDisabled={rollbackDisabled}
+					/>
+				</CommentTarget>
 			);
 		}
 		// A continue after a stop reaches the agent as a message, but the user did
@@ -6695,6 +6700,14 @@ function TimelineItem({
 			);
 			const editing = Boolean(item.turnId && messageEdit?.turnId === item.turnId);
 			return (
+				<CommentTarget
+					asideId={item.asideId}
+					authorName={item.authorName}
+					finished={!queued && !editing && (item.delivery === undefined || item.delivery === "accepted")}
+					kind="user_message"
+					sequence={item.sequence}
+					text={item.text}
+				>
 				<HumanMessage
 					message={item}
 					sessionId={sessionId}
@@ -6722,6 +6735,7 @@ function TimelineItem({
 					onSelectAnnotation={onSelectAnnotation}
 					status={status}
 				/>
+				</CommentTarget>
 			);
 		}
 		return (
@@ -6755,7 +6769,9 @@ function TimelineItem({
 				{annotations ? (
 					<SteeredBrowserFeedback annotations={annotations} />
 				) : (
-					<SteerMessage activity={item} sessionId={sessionId} apiBaseUrl={apiBaseUrl} onSelectAnnotation={onSelectAnnotation} />
+					<CommentTarget asideId={item.detail?.asideId} finished kind="steer" sequence={item.sequence} text={item.detail?.text ?? ""}>
+						<SteerMessage activity={item} sessionId={sessionId} apiBaseUrl={apiBaseUrl} onSelectAnnotation={onSelectAnnotation} />
+					</CommentTarget>
 				)}
 			</FromAgent>
 		);

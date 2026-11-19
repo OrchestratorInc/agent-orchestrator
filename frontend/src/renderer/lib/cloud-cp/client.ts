@@ -76,8 +76,11 @@ import type {
 	CloudCpMentionCandidatesQuery,
 	CloudCpAside,
 	CloudCpAsideListResponse,
+	CloudCpAsideCreateRequest,
 	CloudCpAsideReply,
 	CloudCpAsideReplyRequest,
+	CloudCpAsideSentMessage,
+	CloudCpMentionToken,
 	CloudCpAsideThread,
 	CloudCpAsideThreadQuery,
 	CloudCpMyNotificationStateChange,
@@ -623,7 +626,17 @@ export interface CloudCpClient {
 	/** One aside: the message that started it and a page of its replies, oldest first. */
 	getSessionAside(orgId: string, sessionId: string, asideId: string, query?: CloudCpAsideThreadQuery, options?: CloudCpRequestOptions): Promise<CloudCpAsideThread>;
 	/** Replies in an aside; anyone who can open the session may, a viewer too. The agent never reads it. */
-	replyToSessionAside(orgId: string, sessionId: string, asideId: string, body: CloudCpAsideReplyRequest, options?: CloudCpRequestOptions): Promise<{ reply: CloudCpAsideReply }>;
+	replyToSessionAside(orgId: string, sessionId: string, asideId: string, body: CloudCpAsideReplyRequest, options?: CloudCpRequestOptions): Promise<{ reply?: CloudCpAsideReply; aside?: CloudCpAside; sentMessage?: CloudCpAsideSentMessage }>;
+	/** Starts a comment thread on one message, with its first comment. Nothing reaches the agent. */
+	createSessionAside(orgId: string, sessionId: string, body: CloudCpAsideCreateRequest, options?: CloudCpRequestOptions): Promise<{ aside: CloudCpAside; reply: CloudCpAsideReply }>;
+	/** Resolves a comment thread without telling the agent. */
+	resolveSessionAside(orgId: string, sessionId: string, asideId: string, options?: CloudCpRequestOptions): Promise<CloudCpAside>;
+	/** Reopens a resolved comment thread. */
+	reopenSessionAside(orgId: string, sessionId: string, asideId: string, options?: CloudCpRequestOptions): Promise<CloudCpAside>;
+	/** Edits one of the caller's own comments. */
+	editSessionAsideReply(orgId: string, sessionId: string, asideId: string, replyId: string, body: { text: string; mentions?: CloudCpMentionToken[] }, options?: CloudCpRequestOptions): Promise<{ reply: CloudCpAsideReply }>;
+	/** Deletes one of the caller's own comments (the first one of a comment thread deletes the thread). */
+	deleteSessionAsideReply(orgId: string, sessionId: string, asideId: string, replyId: string, options?: CloudCpRequestOptions): Promise<void>;
 	/** Marks the aside read for the caller, with its reply notification. */
 	markSessionAsideRead(orgId: string, sessionId: string, asideId: string, options?: CloudCpRequestOptions): Promise<CloudCpAside>;
 	/** Mutes or unmutes the aside's replies for the caller. */
@@ -1371,6 +1384,16 @@ export function createCloudCpClient(options: CloudCpClientOptions): CloudCpClien
 			requestJson("POST", `/orgs/${seg(orgId)}/sessions/${seg(sessionId)}/asides/${seg(asideId)}/read`, { signal: o?.signal }),
 		muteSessionAside: (orgId, sessionId, asideId, muted, o) =>
 			requestJson("PUT", `/orgs/${seg(orgId)}/sessions/${seg(sessionId)}/asides/${seg(asideId)}/mute`, { body: { muted }, signal: o?.signal }),
+		createSessionAside: (orgId, sessionId, body, o) =>
+			requestJson("POST", `/orgs/${seg(orgId)}/sessions/${seg(sessionId)}/asides`, { body, signal: o?.signal }),
+		resolveSessionAside: (orgId, sessionId, asideId, o) =>
+			requestJson("POST", `/orgs/${seg(orgId)}/sessions/${seg(sessionId)}/asides/${seg(asideId)}/resolve`, { signal: o?.signal }),
+		reopenSessionAside: (orgId, sessionId, asideId, o) =>
+			requestJson("POST", `/orgs/${seg(orgId)}/sessions/${seg(sessionId)}/asides/${seg(asideId)}/reopen`, { signal: o?.signal }),
+		editSessionAsideReply: (orgId, sessionId, asideId, replyId, body, o) =>
+			requestJson("PATCH", `/orgs/${seg(orgId)}/sessions/${seg(sessionId)}/asides/${seg(asideId)}/replies/${seg(replyId)}`, { body, signal: o?.signal }),
+		deleteSessionAsideReply: (orgId, sessionId, asideId, replyId, o) =>
+			requestVoid("DELETE", `/orgs/${seg(orgId)}/sessions/${seg(sessionId)}/asides/${seg(asideId)}/replies/${seg(replyId)}`, { signal: o?.signal }),
 
 		createTerminalTicket: (orgId, sessionId, body, o) =>
 			requestJson("POST", `/orgs/${seg(orgId)}/sessions/${seg(sessionId)}/terminal-ticket`, {

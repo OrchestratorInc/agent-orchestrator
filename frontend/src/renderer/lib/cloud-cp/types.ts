@@ -317,16 +317,62 @@ export interface CloudCpMentionCandidatesQuery {
 // it, which the agent never reads.
 // ---------------------------------------------------------------------------
 
-/** GET /orgs/{orgId}/sessions/{sessionId}/asides: one aside as the caller sees it. */
+/** What kind of message a comment thread is about. */
+export type CloudCpAsideAnchorKind = "user_message" | "steer" | "agent_message";
+
+/** A person named on a comment thread: who started, resolved or sent it. Never an email address. */
+export interface CloudCpAsidePerson {
+	userId: string;
+	name: string;
+}
+
+/**
+ * GET /orgs/{orgId}/sessions/{sessionId}/asides: one aside (a comment thread,
+ * as the person sees it) as the caller sees it.
+ */
 export interface CloudCpAside {
 	asideId: string;
-	/** The message that started it. */
-	anchor: { sequence: number; turnId?: string; clientMessageId?: string };
+	/** The message it is about. */
+	anchor: { sequence: number; kind?: CloudCpAsideAnchorKind; turnId?: string; itemId?: string; clientMessageId?: string };
 	replyCount: number;
 	lastReplyAt?: string;
 	/** The caller is in it and something by someone else is newer than when they last read it. */
 	unread: boolean;
 	muted: boolean;
+	/** `tag`: a message that mentioned people started it; `comment`: someone commented. Absent means `tag`. */
+	origin?: "tag" | "comment";
+	/** The exact passage it is about; absent for a thread on the whole message. */
+	quote?: string;
+	startedBy?: CloudCpAsidePerson;
+	resolvedAt?: string;
+	resolvedBy?: CloudCpAsidePerson;
+	sentToAgentAt?: string;
+	sentToAgentBy?: CloudCpAsidePerson;
+}
+
+/** POST /orgs/{orgId}/sessions/{sessionId}/asides: a new comment thread with its first comment; idempotent on clientMessageId. */
+export interface CloudCpAsideCreateRequest {
+	anchor: { sequence: number };
+	quote?: string;
+	text: string;
+	mentions?: CloudCpMentionToken[];
+	clientMessageId: string;
+}
+
+/** The message a reply with sendToAgent sent the agent. */
+export interface CloudCpAsideSentMessage {
+	sequence: number;
+	turnId?: string;
+	clientMessageId?: string;
+}
+
+/** A thread as "Also send to agent" sent it, on the user message the agent got. */
+export interface CloudCpFromAside {
+	asideId: string;
+	quote?: string;
+	anchorKind?: CloudCpAsideAnchorKind;
+	anchorExcerpt?: string;
+	comments: Array<{ authorUserId?: string; authorName: string; text: string }>;
 }
 
 export interface CloudCpAsideListResponse {
@@ -335,6 +381,7 @@ export interface CloudCpAsideListResponse {
 
 /** The message that started an aside, as the transcript shows it. */
 export interface CloudCpAsideMessage {
+	kind?: CloudCpAsideAnchorKind;
 	sequence: number;
 	turnId?: string;
 	text: string;
@@ -352,6 +399,8 @@ export interface CloudCpAsideReply {
 	authorUserId: string;
 	authorName: string;
 	createdAt: string;
+	/** When its author last edited it. */
+	editedAt?: string;
 }
 
 /** GET /orgs/{orgId}/sessions/{sessionId}/asides/{asideId}: the message and a page of replies, oldest first. */
@@ -373,6 +422,8 @@ export interface CloudCpAsideReplyRequest {
 	text: string;
 	mentions?: CloudCpMentionToken[];
 	clientMessageId: string;
+	/** Also send the whole thread to the agent and resolve it ("Also send to agent"). */
+	sendToAgent?: boolean;
 }
 
 export interface CloudCpNotificationEvent {
