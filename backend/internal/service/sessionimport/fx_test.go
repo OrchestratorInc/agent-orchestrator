@@ -137,20 +137,28 @@ func TestFXRefreshFindsConvertedConversation(t *testing.T) {
 }
 
 func TestFXImportRejectsInteriorCorruption(t *testing.T) {
-	root := t.TempDir()
-	path := writeFXImport(t, root, t.TempDir(), true)
-	body, err := os.ReadFile(path)
-	if err != nil {
-		t.Fatal(err)
-	}
-	// The original malformed final record is tolerated, but not if followed
-	// by a later record as it would be in a corrupt native journal.
-	if _, err := readFXTranscript(context.Background(), root, path); err != nil {
-		t.Fatalf("torn final record: %v", err)
-	}
-	writeFile(t, path, string(body)+"\n"+`{"kind":"item","type":"assistant","data":{"text":"after corruption"}}`)
-	if _, err := readFXTranscript(context.Background(), root, path); err == nil {
-		t.Fatal("accepted a malformed interior record")
+	for _, tail := range []string{`{torn`, `{"kind":"item","type":"assistant","data":{"text":123}}`} {
+		t.Run(tail, func(t *testing.T) {
+			root := t.TempDir()
+			path := writeFXImport(t, root, t.TempDir(), true)
+			body, err := os.ReadFile(path)
+			if err != nil {
+				t.Fatal(err)
+			}
+			body = []byte(strings.Replace(string(body), "{torn", tail, 1))
+			writeFile(t, path, string(body))
+			// Neither broken outer JSON nor invalid inline data at EOF hides
+			// the readable prefix; either is fatal if another record follows.
+			got, err := readFXTranscript(context.Background(), root, path)
+			if err != nil {
+				t.Fatalf("torn final record: %v", err)
+			}
+			wantTexts(t, got.messages, "user: explain synthetic parser", "assistant: synthetic answer")
+			writeFile(t, path, string(body)+"\n"+`{"kind":"item","type":"assistant","data":{"text":"after corruption"}}`)
+			if _, err := readFXTranscript(context.Background(), root, path); err == nil {
+				t.Fatal("accepted a malformed interior record")
+			}
+		})
 	}
 }
 

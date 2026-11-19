@@ -206,7 +206,8 @@ func readFXTranscript(ctx context.Context, root string, paths ...string) (transc
 				Blob string `json:"$blob"`
 			}
 			if err := json.Unmarshal(record.Data, &data); err != nil {
-				return err
+				badRecord = true
+				return nil //nolint:nilerr // Malformed inline data has the same final-record tolerance as the outer record.
 			}
 			if data.Blob != "" {
 				text, err := readFXBlob(r, t.root, t.path, data.Blob)
