@@ -9,6 +9,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 	"testing/iotest"
@@ -777,5 +778,34 @@ func TestReviewListDefaultsToCallingSession(t *testing.T) {
 	}
 	if capture.path != "/api/v1/sessions/mer-3/reviews" {
 		t.Fatalf("path = %q, want the calling session", capture.path)
+	}
+}
+
+func TestReviewPostGitHubEndpoint(t *testing.T) {
+	for _, endpoint := range []string{"repos/o/r/pulls/1?extra/reviews", "repos/o/r/pulls/1/more/reviews", "repos/o/../pulls/1/reviews", "repos/o/r/pulls/1 --extra/reviews"} {
+		input := `{"endpoint":"` + endpoint + `","review":{"event":"COMMENT"}}`
+		_, _, err := executeCLI(t, Deps{In: strings.NewReader(input)}, "review", "post-github")
+		if err == nil || !strings.Contains(err.Error(), "expected a GitHub pull request reviews endpoint") {
+			t.Fatalf("endpoint %q: %v", endpoint, err)
+		}
+	}
+}
+
+func TestReviewPostGitHubForwardsReview(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("POSIX gh fixture")
+	}
+	bin := t.TempDir()
+	// Echo the argv and stdin so the test checks the exact provider call.
+	if err := os.WriteFile(filepath.Join(bin, "gh"), []byte("#!/bin/sh\nprintf '%s\\n' \"$@\"\ncat\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", bin+string(os.PathListSeparator)+os.Getenv("PATH"))
+	const review = `{"event":"COMMENT","body":"summary","comments":[{"path":"main.go","line":2,"body":"check this"}]}`
+	input := `{"endpoint":"repos/o/r/pulls/1/reviews","review":` + review + `}`
+	out, _, err := executeCLI(t, Deps{In: strings.NewReader(input)}, "review", "post-github")
+	want := "api\n--method\nPOST\nrepos/o/r/pulls/1/reviews\n--input\n-\n--jq\n.id\n" + review
+	if err != nil || out != want {
+		t.Fatalf("got %q, %v; want %q", out, err, want)
 	}
 }
