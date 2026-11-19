@@ -74,6 +74,9 @@ export async function installFakeBridge(page: Page, opts: FakeBridgeOptions = {}
 			// resolves — an incomplete object would throw the moment the app touched
 			// a missing method.
 			const ao = {
+				awake: {
+					onState: () => () => undefined,
+				},
 				triage: {
 					launch: async () => ({ ok: true }),
 				},
@@ -1089,6 +1092,9 @@ export async function installFakeAgent(page: Page, opts: FakeAgentOptions = {}):
 				...(error ? { error } : {}),
 			});
 			const ao = {
+				awake: {
+					onState: () => () => undefined,
+				},
 				triage: {
 					launch: async () => ({ ok: true }),
 				},
