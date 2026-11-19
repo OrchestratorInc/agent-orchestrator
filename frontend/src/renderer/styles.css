@@ -2272,6 +2272,7 @@ textarea,
 .chat-md-stream pre > [data-markdown="code"] { @apply font-mono text-xs leading-[1.6] text-foreground; }
 .chat-md-stream [data-markdown="code-lines"] { display: block; }
 .chat-md-stream [data-animated="true"] { animation: stream-char-in 300ms ease backwards; }
+.chat-md-stream :is(pre, [data-markdown="code"]) [data-animated="true"] { animation: none; }
 
 @keyframes chat-working-shimmer {
 	from { background-position: -10% center, 0 0; }
