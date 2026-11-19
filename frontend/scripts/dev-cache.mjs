@@ -117,7 +117,7 @@ export function gitSourceFiles(repoRoot, pathspecs, { ignoredSuffixes = [], run 
 }
 
 const IMPORT_PATTERN =
-	/(?:^|[\s;])(?:import|export)\s[^'"`;]*?\bfrom\s*["'](\.{1,2}\/[^"']+)["']|\bimport\s*\(\s*["'](\.{1,2}\/[^"']+)["']\s*\)|(?:^|[\s;])import\s*["'](\.{1,2}\/[^"']+)["']/gm;
+	/(?:^|[\s;])(?:import|export)(?=[\s{*])[^'"`;]*?\bfrom\s*["'](\.{1,2}\/[^"']+)["']|\bimport\s*\(\s*["'](\.{1,2}\/[^"']+)["']\s*\)|(?:^|[\s;])import\s*["'](\.{1,2}\/[^"']+)["']/gm;
 const RESOLVE_SUFFIXES = ["", ".ts", ".tsx", ".mts", ".js", ".mjs", "/index.ts", "/index.tsx", "/index.js"];
 
 export function relativeImports(source) {
@@ -253,9 +253,14 @@ export function entryDir(root, name, key) {
 	return path.join(root, name, key);
 }
 
+// An entry is usable only with both its metadata and its output.
+function entryIsComplete(dir) {
+	return existsSync(path.join(dir, "meta.json")) && existsSync(path.join(dir, "output"));
+}
+
 export function lookupEntry(root, name, key) {
 	const dir = entryDir(root, name, key);
-	if (!existsSync(path.join(dir, "meta.json")) || !existsSync(path.join(dir, "output"))) return null;
+	if (!entryIsComplete(dir)) return null;
 	const now = new Date();
 	try {
 		utimesSync(dir, now, now); // recency for pruning
@@ -269,7 +274,7 @@ export function lookupEntry(root, name, key) {
 // caches); `files` maps extra entry file names to source paths copied beside it.
 export function storeEntry(root, name, key, sourceDir, meta, { clone = cloneTree, omit = [], files = {} } = {}) {
 	const final = entryDir(root, name, key);
-	if (existsSync(path.join(final, "meta.json"))) return final;
+	if (entryIsComplete(final)) return final;
 	const temp = path.join(root, name, `.tmp-${key}-${process.pid}-${Date.now()}`);
 	try {
 		mkdirSync(temp, { recursive: true });
@@ -277,18 +282,18 @@ export function storeEntry(root, name, key, sourceDir, meta, { clone = cloneTree
 		for (const rel of omit) rmSync(path.join(temp, "output", rel), { recursive: true, force: true });
 		for (const [fileName, source] of Object.entries(files)) cpSync(source, path.join(temp, fileName));
 		writeFileSync(path.join(temp, "meta.json"), `${JSON.stringify({ name, key, createdAt: new Date().toISOString(), ...meta }, null, 2)}\n`);
-		if (existsSync(path.join(final, "meta.json"))) {
+		if (entryIsComplete(final)) {
 			// Another checkout finished the same key while this one cloned: keep theirs,
 			// readers may already be cloning from it.
 			rmSync(temp, { recursive: true, force: true });
 			return final;
 		}
-		if (existsSync(final)) rmSync(final, { recursive: true, force: true }); // incomplete leftover without meta.json
+		if (existsSync(final)) rmSync(final, { recursive: true, force: true }); // incomplete leftover
 		renameSync(temp, final);
 	} catch (error) {
 		rmSync(temp, { recursive: true, force: true });
 		// Another checkout stored the same key first: theirs is equivalent.
-		if (existsSync(path.join(final, "meta.json"))) return final;
+		if (entryIsComplete(final)) return final;
 		throw error;
 	}
 	return final;
@@ -368,10 +373,11 @@ export function planStep({ key, stampCurrent, cachedOutput }) {
 // package-lock.json asks for. npm records what it installed in
 // node_modules/.package-lock.json, so a merge that adds or bumps a package
 // (directly or transitively) shows up here even though nobody reinstalled.
-// Optional packages may be absent (other platforms). Returns [] when the two
+// Optional packages may be absent (other platforms); a required package must
+// also still be on disk. Returns [] when the two
 // agree or there is nothing to compare, and ["node_modules is missing"] when
 // there is no install at all.
-export function nodeModulesDrift(frontend, { read = (file) => readJSON(file, null), hasDir = isDirectory } = {}) {
+export function nodeModulesDrift(frontend, { read = (file) => readJSON(file, null), hasDir = isDirectory, exists = existsSync } = {}) {
 	if (!hasDir(path.join(frontend, "node_modules"))) return ["node_modules is missing"];
 	const wanted = read(path.join(frontend, "package-lock.json"))?.packages;
 	const installed = read(path.join(frontend, "node_modules", ".package-lock.json"))?.packages;
@@ -382,8 +388,12 @@ export function nodeModulesDrift(frontend, { read = (file) => readJSON(file, nul
 		if (!key.startsWith(prefix)) continue;
 		const name = key.slice(key.lastIndexOf(prefix) + prefix.length);
 		const have = installed[key];
+		const required = !want.optional && !want.devOptional;
 		if (!have) {
-			if (!want.optional && !want.devOptional) drift.push(`${name} missing`);
+			if (required) drift.push(`${name} missing`);
+		} else if (required && !exists(path.join(frontend, key))) {
+			// Deleted by hand while npm's record still lists it.
+			drift.push(`${name} missing`);
 		} else if (want.version && have.version && want.version !== have.version) {
 			drift.push(`${name} ${have.version} (lockfile ${want.version})`);
 		}
@@ -398,15 +408,15 @@ export function summarizeDrift(drift, limit = 3) {
 }
 
 // How to provide frontend/node_modules.
-// - keep: already installed from this exact key.
+// - keep: already installed from this exact key and still matching the lockfile.
 // - foreign: an install dev-warm did not make; leave it alone while it still
-//   matches the lockfile (foreignDrift false).
+//   matches the lockfile.
+// `drift` (node_modules no longer matches package-lock.json) rules out both.
 // - clone: identical lockfile in the store; clone it.
 // - install: run a real `npm ci` (and seed the store afterwards).
-export function planDeps({ hasNodeModules, installedKey, key, storeHit, lockfilesIdentical, cloneSupported, foreignDrift = false }) {
-	if (hasNodeModules && installedKey === key) return { action: "keep", reason: "node_modules already matches the lockfile" };
-	// Once a foreign install drifts (a merge added or bumped a package), replace it.
-	if (hasNodeModules && !installedKey && !foreignDrift) {
+export function planDeps({ hasNodeModules, installedKey, key, storeHit, lockfilesIdentical, cloneSupported, drift = false }) {
+	if (hasNodeModules && installedKey === key && !drift) return { action: "keep", reason: "node_modules already matches the lockfile" };
+	if (hasNodeModules && !installedKey && !drift) {
 		return { action: "foreign", reason: "node_modules was not installed by dev:warm; leaving it untouched (pass --replace to swap it)" };
 	}
 	if (!cloneSupported) return { action: "install", reason: "cloning node_modules is not supported on this platform" };

@@ -156,6 +156,10 @@ export function steps({ platform = process.platform, arch = process.arch } = {})
 				if (!files) return { uncacheable: "not a git checkout" };
 				const go = goToolchain();
 				if (!go) return { uncacheable: "go is unavailable" };
+				const work = go.env.GOWORK;
+				if (work && work !== "off" && (work.startsWith("../") || path.isAbsolute(work))) {
+					return { uncacheable: "GOWORK points outside this checkout" };
+				}
 				const appVersion = JSON.parse(readFileSync(path.join(frontend, "package.json"), "utf8")).version;
 				return {
 					files: [...files, frontendFile("scripts/build-daemon.mjs"), frontendFile("scripts/go-version.mjs")],
@@ -298,6 +302,9 @@ function reuseDaemon(binary, platform) {
 	const source = path.resolve(binary);
 	if (!existsSync(source)) throw new Error(`AO_DEV_DAEMON_REUSE: ${source} does not exist`);
 	const outDir = path.join(frontend, "daemon");
+	if (source === outDir || source.startsWith(outDir + path.sep)) {
+		throw new Error(`AO_DEV_DAEMON_REUSE: ${source} is inside ${outDir}; use a binary from another checkout`);
+	}
 	assertIgnoredOutputs(repoRoot, ["frontend/daemon"]);
 	rmSync(outDir, { recursive: true, force: true });
 	mkdirSync(outDir, { recursive: true });
@@ -342,7 +349,10 @@ function ensureDependencies({ dryRun, env }) {
 		return false;
 	}
 	const left = nodeModulesDrift(frontend);
-	if (left.length > 0) log(`node_modules still differs from package-lock.json after refreshing (${summarizeDrift(left)}); continuing`);
+	if (left.length > 0) {
+		log(`node_modules still differs from package-lock.json after refreshing (${summarizeDrift(left)}); run \`npm ci\` in frontend/ and relaunch`);
+		return false;
+	}
 	return true;
 }
 
@@ -412,7 +422,9 @@ export async function prepare({ dryRun = false, env = process.env, platform = pr
 			try {
 				rmSync(outDir, { recursive: true, force: true });
 				const method = cloneTree(cachedOutput, outDir);
-				stamps[step.name] = { key, fingerprint: outputFingerprint(outDir, step.sentinels) };
+				const restored = outputFingerprint(outDir, step.sentinels);
+				if (!restored) throw new Error("the cached output is missing a required file");
+				stamps[step.name] = { key, fingerprint: restored };
 				result.reason += ` (${method})`;
 				result.seconds = (Date.now() - t0) / 1000;
 				continue;
@@ -444,7 +456,18 @@ export async function prepare({ dryRun = false, env = process.env, platform = pr
 				return false;
 			}
 			const fingerprint = outputFingerprint(outDir, step.sentinels);
-			if (key && fingerprint) {
+			// An input edited while the build ran may be in the output, which then
+			// no longer belongs to `key`: keep it, but don't stamp or share it.
+			let after = null;
+			try {
+				after = key ? stepKey(step, platform, arch).key : null;
+			} catch {
+				after = null;
+			}
+			if (key && after !== key) {
+				log(`${step.name}: inputs changed during the build; not caching this output`);
+				delete stamps[step.name];
+			} else if (key && fingerprint) {
 				stamps[step.name] = { key, fingerprint };
 				try {
 					storeEntry(root, step.name, key, outDir, { outDir: step.outDir });
