@@ -3,6 +3,7 @@ package claudeacp
 import (
 	"context"
 	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -73,7 +74,8 @@ func TestSharedAdapterResolvesRelativeConfigDirPerWorkspace(t *testing.T) {
 	overlay := map[string]string{"CLAUDE_CONFIG_DIR": ".claude-custom"}
 	serverA, sessionA := sharedAdapterEnvs(overlay, "/work/a")
 	serverB, _ := sharedAdapterEnvs(overlay, "/work/b")
-	if serverA["CLAUDE_CONFIG_DIR"] != "/work/a/.claude-custom" || sessionA["CLAUDE_CONFIG_DIR"] != "/work/a/.claude-custom" {
+	want := filepath.Join("/work/a", ".claude-custom")
+	if serverA["CLAUDE_CONFIG_DIR"] != want || sessionA["CLAUDE_CONFIG_DIR"] != want {
 		t.Fatalf("config dir = %q / %q", serverA["CLAUDE_CONFIG_DIR"], sessionA["CLAUDE_CONFIG_DIR"])
 	}
 	socketA, _ := sharedAdapterSocket("/data", rt, serverA)
