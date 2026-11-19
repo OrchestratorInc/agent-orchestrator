@@ -65,6 +65,12 @@ func (s *Service) SetOtherWriterCheck(check func(context.Context, domain.Session
 	s.otherWriter = check
 }
 
+// SetResumeAgentCallback connects a Chat session whose agent exited to Session
+// Manager's resume-agent path, so a provider switch has a source to hand over from.
+func (s *Service) SetResumeAgentCallback(resume func(context.Context, domain.SessionID) error) {
+	s.resumeAgent = resume
+}
+
 // SetChatView records a short-lived view lease. Registration and the final
 // hibernation check use the same controller gate, so opening a view either
 // prevents shutdown or waits for shutdown and then wakes the native session.

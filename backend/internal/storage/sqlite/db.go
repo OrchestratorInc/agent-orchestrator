@@ -382,7 +382,7 @@ func OpenPreMigrated(dataDir string) (*Store, error) {
 	return store, nil
 }
 
-func migrate(db *sql.DB) error {
+func migrate(db *sql.DB) (err error) {
 	gooseMu.Lock()
 	defer gooseMu.Unlock()
 	goose.SetBaseFS(migrationsFS)
@@ -390,6 +390,24 @@ func migrate(db *sql.DB) error {
 	if err := goose.SetDialect("sqlite3"); err != nil {
 		return fmt.Errorf("set goose dialect: %w", err)
 	}
+	migrations, err := goose.CollectMigrations("migrations", 0, goose.MaxVersion)
+	if err != nil {
+		return fmt.Errorf("collect migrations: %w", err)
+	}
+	versions := make([]int64, len(migrations))
+	for i, migration := range migrations {
+		versions[i] = migration.Version
+	}
+	ctx := context.Background()
+	triggers, err := prepareTimestampSchemaMigration(ctx, db, versions)
+	if err != nil {
+		return fmt.Errorf("prepare timestamp tracking for schema migrations: %w", err)
+	}
+	defer func() {
+		if restoreErr := restoreTimestampProgressTriggers(ctx, db, triggers); restoreErr != nil {
+			err = errors.Join(err, fmt.Errorf("restore timestamp repair triggers: %w", restoreErr))
+		}
+	}()
 	if err := repairRenumberedAgentInstallJobsMigrationHistory(db); err != nil {
 		return fmt.Errorf("repair renumbered agent-install-jobs migration history: %w", err)
 	}
@@ -2268,7 +2286,9 @@ func reconcileHarnessConstraint(db *sql.DB) error {
 	needsCommandCode := !strings.Contains(schema, "'command-code'")
 	needsStakpak := !strings.Contains(schema, "'stakpak'")
 	needsMiniMaxCode := !strings.Contains(schema, "'minimax-code'")
-	if !needsNativeAssistant && !needsMemcode && !needsStakpak && !needsMuse && !needsKimchi && !needsPrimeAgent && !needsOMP && !needsGemini && !needsUnreal && !needsCodewhale && !needsMiMo && !needsDeepSeek && !needsOpenHands && !needsCommandCode && !needsDockerAgent && !needsFX && !needsOpenCodeV2 && !needsMiniMaxCode {
+	needsOpenInterpreter := !strings.Contains(schema, "'open-interpreter'")
+	needsTau := !strings.Contains(schema, "'tau'")
+	if !needsNativeAssistant && !needsMemcode && !needsStakpak && !needsMuse && !needsKimchi && !needsPrimeAgent && !needsOMP && !needsGemini && !needsUnreal && !needsCodewhale && !needsMiMo && !needsDeepSeek && !needsOpenHands && !needsCommandCode && !needsDockerAgent && !needsFX && !needsOpenCodeV2 && !needsMiniMaxCode && !needsOpenInterpreter && !needsTau {
 		return nil
 	}
 	if _, err := db.Exec(`PRAGMA writable_schema = ON`); err != nil {
@@ -2308,6 +2328,24 @@ func reconcileHarnessConstraint(db *sql.DB) error {
 			return fmt.Errorf("schema repair: normalize MiniMax Code constraint: %w", err)
 		}
 		needsMiniMaxCode = true
+	}
+	if !needsOpenInterpreter {
+		// Open Interpreter's migration runs after MiniMax Code's, so it is last
+		// before 'fake' on a fresh database. Remove it the same way and append
+		// it again after MiniMax Code.
+		if _, err := db.Exec(`UPDATE sqlite_master SET sql = replace(sql, '''open-interpreter'', ', '') WHERE type = 'table' AND name = 'sessions'`); err != nil {
+			return fmt.Errorf("schema repair: normalize Open Interpreter constraint: %w", err)
+		}
+		needsOpenInterpreter = true
+	}
+	if !needsTau {
+		// Tau's migration runs after Open Interpreter's, so it is last before
+		// 'fake' on a fresh database. Remove it the same way and append it
+		// again after Open Interpreter.
+		if _, err := db.Exec(`UPDATE sqlite_master SET sql = replace(sql, '''tau'', ', '') WHERE type = 'table' AND name = 'sessions'`); err != nil {
+			return fmt.Errorf("schema repair: normalize Tau constraint: %w", err)
+		}
+		needsTau = true
 	}
 	type replacement struct {
 		old string
@@ -2442,6 +2480,14 @@ func reconcileHarnessConstraint(db *sql.DB) error {
 	if needsMiniMaxCode {
 		repairs = append(repairs, replacement{"'fake'))", "'minimax-code', 'fake'))"})
 	}
+	// Open Interpreter's migration runs after MiniMax Code's, so it follows it.
+	if needsOpenInterpreter {
+		repairs = append(repairs, replacement{"'fake'))", "'open-interpreter', 'fake'))"})
+	}
+	// Tau's migration runs after Open Interpreter's, so it follows it.
+	if needsTau {
+		repairs = append(repairs, replacement{"'fake'))", "'tau', 'fake'))"})
+	}
 	for _, r := range repairs {
 		if _, err := db.Exec(
 			`UPDATE sqlite_master
@@ -2508,6 +2554,12 @@ WHERE type = 'table' AND name = 'sessions'`,
 	}
 	if !strings.Contains(schema, "'stakpak'") {
 		return fmt.Errorf("schema repair: sessions harness constraint is missing Stakpak")
+	}
+	if !strings.Contains(schema, "'open-interpreter'") {
+		return fmt.Errorf("schema repair: sessions harness constraint is missing Open Interpreter")
+	}
+	if !strings.Contains(schema, "'tau'") {
+		return fmt.Errorf("schema repair: sessions harness constraint is missing Tau")
 	}
 	return nil
 }

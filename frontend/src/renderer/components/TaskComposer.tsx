@@ -41,6 +41,8 @@ import { useProviderConnections } from "../hooks/useProviderConnections";
 import { CLOUD_AGENT_PROVIDERS, cloudAgentInfos, connectedCredentialType, credentialModelScope } from "../lib/cloud-agents";
 import { CloudTaskFilesNeedChatError, CloudTaskFilesUndeliveredError, createCloudChatSessionWithFiles, createCloudSession } from "../lib/cloud-session-create";
 import { uploadCloudAttachment } from "../lib/cloud-attachments";
+import { readBlobAsBase64, toWireAttachments } from "../lib/attachment-uploads";
+import { MAX_CLOUD_CP_BINARY_BYTES } from "../../shared/cloud-binary";
 import { reportCloudSessionCreateRequested } from "../lib/cloud-telemetry";
 import { rememberStandaloneAgent } from "../lib/cloud-standalone-agents";
 import { cloudDefaultModel, cloudModelLabel, isConcreteModelID, isModelSelectable, modelChoiceLabel, splitClaudeModels, withoutLocalAvailability } from "../lib/agent-model-choices";
@@ -182,6 +184,12 @@ export type LaunchReplay = {
  * with, and the create call for local, remote, cloud, and standalone targets.
  * The new chat page and TaskComposer render it.
  */
+/** The decoded size of standard base64, as an inline attachment carries its bytes. */
+function base64Bytes(data: string): number {
+	const padding = data.endsWith("==") ? 2 : data.endsWith("=") ? 1 : 0;
+	return Math.floor((data.length * 3) / 4) - padding;
+}
+
 export function useTaskLaunch({ projectId, hostId }: {
 	projectId?: string;
 	hostId?: string;
@@ -274,6 +282,21 @@ export function useTaskLaunch({ projectId, hostId }: {
 						: t("newTask.cloudAttachmentsNeedChatDefault", { defaultValue: "Files can start a Cloud task only in Chat. Set the default session interface to Chat in Settings > General, or remove the files." }),
 					"CLOUD_ATTACHMENTS_NEED_CHAT");
 				}
+				// AO Cloud says how large one upload may be, and the main process carries
+				// no more than MAX_CLOUD_CP_BINARY_BYTES in one request; both read the
+				// bytes whole. Every file is held to that limit, including one already
+				// read inline; a file kept on disk is read now if it fits.
+				const cloudMaxBytes = Math.min(cloudOffering.maxAttachmentBytes ?? 0, MAX_CLOUD_CP_BINARY_BYTES);
+				const cloudFiles = await Promise.all(files.map(async (file) => {
+					const size = file.file?.size ?? base64Bytes(file.data);
+					if (!(file.data || file.file) || size > cloudMaxBytes) {
+						throw new TaskCreateError(t("newTask.cloudAttachmentTooLarge", {
+							size: Math.floor(cloudMaxBytes / (1024 * 1024)),
+							defaultValue: "AO Cloud takes files up to {{size}} MB each. Remove the larger ones to start this task.",
+						}), "CLOUD_ATTACHMENT_TOO_LARGE");
+					}
+					return file.data || !file.file ? file : { ...file, data: await readBlobAsBase64(file.file) };
+				}));
 				if (!cloudOrg?.id) throw new Error(t("newTask.unableToStart"));
 				// The agent is always the one the picker shows; with none there is nothing to start.
 				if (!input.agent) throw new Error(t("newTask.noReadyAgent"));
@@ -307,7 +330,7 @@ export function useTaskLaunch({ projectId, hostId }: {
 					session = created.session;
 				} else if (files.length > 0) {
 					({ session } = await createCloudChatSessionWithFiles(cloudClient, orgId,
-						{ projectId: input.projectId, kind: "worker", ...body, interfaceMode: "chat" }, files,
+						{ projectId: input.projectId, kind: "worker", ...body, interfaceMode: "chat" }, cloudFiles,
 						(sessionId, file, signal) => uploadCloudAttachment(cloudBaseUrl, orgId, sessionId, { name: file.name || "attachment", data: file.data }, { signal }),
 						{ idempotencyKey: input.clientRequestId }));
 				} else {
@@ -351,6 +374,8 @@ export function useTaskLaunch({ projectId, hostId }: {
 	const createDaemonTask = useCallback(
 		async (input: CreateTaskInput): Promise<string> => {
 			try {
+				// A file too large to inline is streamed from disk to the daemon first.
+				const wireAttachments = input.attachments?.length ? await toWireAttachments(input.attachments, hostId) : undefined;
 				const { data, error } = await (hostId ? clientForHost(hostId) : apiClient).POST("/api/v1/orchestrators/delegate", {
 					headers: input.attachments?.length ? { "X-AO-Attachment-Upload": "1" } : undefined,
 					body: {
@@ -364,7 +389,7 @@ export function useTaskLaunch({ projectId, hostId }: {
 						...(input.mode ? { mode: input.mode } : {}),
 						...(input.approvalMode ? { approvalMode: input.approvalMode } : {}),
 						...(input.accountId ? { accountId: input.accountId } : {}),
-						...(input.attachments && input.attachments.length > 0 ? { attachments: input.attachments } : {}),
+						...(wireAttachments ? { attachments: wireAttachments } : {}),
 						...(input.taskPreparation ? { taskPreparation: input.taskPreparation } : {}),
 					},
 				});
@@ -402,6 +427,8 @@ export function useTaskLaunch({ projectId, hostId }: {
 		async (input: CreateTaskInput): Promise<string> => {
 			try {
 			const displayName = sessionNameFromBrief(input.brief) || input.agent || "Standalone agent";
+			// A file too large to inline is streamed from disk to the daemon first.
+			const wireAttachments = input.attachments?.length ? await toWireAttachments(input.attachments, hostId) : undefined;
 			const { data, error } = await (hostId ? clientForHost(hostId) : apiClient).POST("/api/v1/sessions", {
 				headers: input.attachments?.length ? { "X-AO-Attachment-Upload": "1" } : undefined,
 				body: {
@@ -415,7 +442,7 @@ export function useTaskLaunch({ projectId, hostId }: {
 					...(input.mode ? { mode: input.mode } : {}),
 					...(input.approvalMode ? { approvalMode: input.approvalMode } : {}),
 					...(input.accountId ? { accountId: input.accountId } : {}),
-					...(input.attachments && input.attachments.length > 0 ? { attachments: input.attachments } : {}),
+					...(wireAttachments ? { attachments: wireAttachments } : {}),
 				},
 			});
 			if (error) {

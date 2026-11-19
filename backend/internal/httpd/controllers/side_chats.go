@@ -43,6 +43,8 @@ func writeSideChatError(w http.ResponseWriter, r *http.Request, err error) {
 		envelope.WriteAPIError(w, r, http.StatusConflict, "conflict", "CHAT_SIDE_RECREATE_REQUIRED", err.Error(), nil)
 	case errors.Is(err, chatsvc.ErrSideNotReady):
 		envelope.WriteAPIError(w, r, http.StatusConflict, "conflict", "CHAT_SIDE_NOT_READY", err.Error(), nil)
+	case errors.Is(err, chatsvc.ErrSideSettingsUnavailable):
+		envelope.WriteAPIError(w, r, http.StatusConflict, "conflict", "CHAT_SIDE_SETTINGS_UNAVAILABLE", err.Error(), nil)
 	case errors.Is(err, chatsvc.ErrSideUnavailable), errors.Is(err, chatsvc.ErrSideLaunchUnclaimed):
 		envelope.WriteAPIError(w, r, http.StatusConflict, "conflict", "CHAT_SIDE_UNAVAILABLE", err.Error(), nil)
 	case errors.Is(err, chatsvc.ErrSideProviderUnsupported), errors.Is(err, chatsvc.ErrForkUnsupported):
@@ -53,6 +55,8 @@ func writeSideChatError(w http.ResponseWriter, r *http.Request, err error) {
 		envelope.WriteAPIError(w, r, http.StatusNotFound, "not_found", "CHAT_SIDE_CLOSED", err.Error(), nil)
 	case errors.Is(err, chatsvc.ErrSideIdempotencyConflict):
 		envelope.WriteAPIError(w, r, http.StatusConflict, "conflict", "CHAT_SIDE_IDEMPOTENCY_CONFLICT", err.Error(), nil)
+	case errors.Is(err, chatsvc.ErrSideLabelInvalid):
+		envelope.WriteAPIError(w, r, http.StatusBadRequest, "validation", "CHAT_SIDE_LABEL_INVALID", err.Error(), nil)
 	case errors.Is(err, chatsvc.ErrSideCreateKeyRequired), errors.Is(err, chatsvc.ErrSideQuestionInvalid), errors.Is(err, chatsvc.ErrSideDraftTooLarge):
 		envelope.WriteAPIError(w, r, http.StatusBadRequest, "validation", "CHAT_SIDE_INVALID_REQUEST", err.Error(), nil)
 	default:

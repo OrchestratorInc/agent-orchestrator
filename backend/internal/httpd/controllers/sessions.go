@@ -38,6 +38,7 @@ import (
 	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
 	previewutil "github.com/aoagents/agent-orchestrator/backend/internal/preview"
 	"github.com/aoagents/agent-orchestrator/backend/internal/previewserver"
+	chatsvc "github.com/aoagents/agent-orchestrator/backend/internal/service/chat"
 	projectsvc "github.com/aoagents/agent-orchestrator/backend/internal/service/project"
 	sessionsvc "github.com/aoagents/agent-orchestrator/backend/internal/service/session"
 	usagesvc "github.com/aoagents/agent-orchestrator/backend/internal/service/usage"
@@ -52,23 +53,27 @@ const (
 	maxDisplayNameLen = 100
 	maxIdempotencyKey = 128
 
-	// Attachment limits guard the daemon against oversized spawn bodies. Files
-	// are pasted/dropped into the task brief and inlined as base64 in the JSON
-	// body, so the caps are deliberately conservative.
-	maxAttachments      = 8
-	maxAttachmentBytes  = attachmentstore.MaxFileBytes // 50 MiB per file, decoded
-	maxAttachmentsBytes = 100 << 20                    // 100 MiB total, decoded
-	// maxSpawnBodyBytes bounds the raw request body before it is decoded. The
-	// per-attachment and total caps above only apply after the whole body is
-	// materialized, so without this an oversized body (base64 inflates the
-	// decoded total by ~4/3) would allocate in full first. Derived from the
-	// decoded total plus headroom for the prompt and JSON envelope.
-	maxSpawnBodyBytes = maxAttachmentsBytes*4/3 + (2 << 20)
-	// maxSendBodyBytes is the /send equivalent of maxSpawnBodyBytes, sized off
-	// maxAttachmentBytes (one attachment) rather than maxAttachmentsBytes
-	// (spawn's up-to-eight): unlike spawn, a send carries at most one inline
-	// attachment.
-	maxSendBodyBytes = maxAttachmentBytes*4/3 + (2 << 20)
+	// Attachment bytes inlined as base64 in a JSON body are held in memory
+	// whole while the body is decoded, so those bodies stay bounded. A file of
+	// any size is streamed to disk first through POST /api/v1/attachment-uploads
+	// (uploadAttachment) and named by its uploadId, which costs a few bytes here;
+	// clients inline only small files. The count cap stays: it bounds how many
+	// files one message names, not how big they are.
+	maxAttachments = 8
+	// maxInlineAttachmentsBytes is the decoded total one body may inline.
+	maxInlineAttachmentsBytes = 100 << 20
+	// maxSpawnBodyBytes bounds the raw request body before it is decoded, so an
+	// oversized body (base64 inflates the decoded total by ~4/3) cannot allocate
+	// in full first. Derived from the inline total plus headroom for the prompt
+	// and JSON envelope.
+	maxSpawnBodyBytes = maxInlineAttachmentsBytes*4/3 + (2 << 20)
+	// maxSendBodyBytes is the /send equivalent of maxSpawnBodyBytes, sized for
+	// the one attachment a send carries.
+	maxSendBodyBytes = (50<<20)*4/3 + (2 << 20)
+	// uploadIdleTimeout ends an upload whose client stops sending. An upload
+	// has no overall deadline: a large file over a slow link takes as long as
+	// it takes while bytes keep arriving.
+	uploadIdleTimeout = 2 * time.Minute
 )
 
 // blockedAttachmentMimes contains MIME types that are explicitly rejected for
@@ -245,6 +250,7 @@ func (c *SessionsController) Register(r chi.Router) {
 		r.Method(method, "/sessions/{sessionId}/agent-browser/*", http.HandlerFunc(c.agentBrowser))
 	}
 	r.Post("/sessions/{sessionId}/attachments", c.stageAttachments)
+	r.Post("/attachment-uploads", c.uploadAttachment)
 	r.Post("/sessions/{sessionId}/conversation/file-references/resolve", c.resolveFileReference)
 	r.Get("/sessions/{sessionId}/workspace/manifest", c.getWorkspaceManifest)
 	r.Get("/sessions/{sessionId}/workspace/history", c.getWorkspaceHistory)
@@ -321,6 +327,9 @@ func (c *SessionsController) list(w http.ResponseWriter, r *http.Request) {
 		Sessions:   sessionViews(r, page.Sessions),
 		NextCursor: page.NextCursor,
 		Archived:   archiveSummaryView(page.Archived),
+		PRState:    filter.PRState,
+		Total:      page.Total,
+		Version:    page.Version,
 	})
 }
 
@@ -425,6 +434,8 @@ func extensionForMimeType(mimeType string) string {
 		"image/jpg":       ".jpg",
 		"text/plain":      ".txt",
 		"video/quicktime": ".mov",
+		// Go's table also lists .f4v for MP4, and which comes first differs by platform.
+		"video/mp4": ".mp4",
 	}
 
 	// Check if we have a preferred extension for this MIME type
@@ -461,16 +472,28 @@ func extensionForMimeType(mimeType string) string {
 	return ".bin"
 }
 
-// decodeAttachment validates and base64-decodes a single inline file
-// attachment shared by spawn, delegate, stage, send, and chat requests, enforcing
-// the blocked-MIME-type rule and the caller's per-file cap. Callers handling multiple
-// attachments are responsible for the count and total-size caps.
+// decodeAttachment validates a single file attachment shared by spawn,
+// delegate, stage, send, and chat requests: it enforces the blocked-MIME-type
+// rule, base64-decodes inline data, and checks an upload id's shape. maxBytes
+// caps inline data (0 leaves it to the body limit); a caller with a cap, such
+// as native chat images, which go to the model inline, takes no uploads.
+// Callers handling multiple attachments are responsible for the count and
+// total-size caps.
 func decodeAttachment(a AttachmentInput, maxBytes int) (ports.SpawnAttachment, *attachmentError) {
 	mimeType := strings.ToLower(strings.TrimSpace(a.MimeType))
 	if blockedAttachmentMimes[mimeType] {
 		return ports.SpawnAttachment{}, &attachmentError{"UNSUPPORTED_ATTACHMENT_TYPE", "unsupported attachment type"}
 	}
 	ext := extensionForMimeType(mimeType)
+	if upload := strings.TrimSpace(a.UploadID); upload != "" {
+		if maxBytes > 0 || strings.TrimSpace(a.Data) != "" {
+			return ports.SpawnAttachment{}, &attachmentError{"INVALID_ATTACHMENT_DATA", "attachment must carry either data or an uploadId"}
+		}
+		if attachmentstore.ValidateUploadID(upload) != nil {
+			return ports.SpawnAttachment{}, &attachmentError{"INVALID_ATTACHMENT_UPLOAD", "attachment uploadId is invalid"}
+		}
+		return ports.SpawnAttachment{Ext: ext, Upload: upload}, nil
+	}
 	data, err := base64.StdEncoding.DecodeString(strings.TrimSpace(a.Data))
 	if err != nil {
 		return ports.SpawnAttachment{}, &attachmentError{"INVALID_ATTACHMENT_DATA", "attachment data is not valid base64"}
@@ -478,18 +501,21 @@ func decodeAttachment(a AttachmentInput, maxBytes int) (ports.SpawnAttachment, *
 	if len(data) == 0 {
 		return ports.SpawnAttachment{}, &attachmentError{"INVALID_ATTACHMENT_DATA", "attachment is empty"}
 	}
-	if len(data) > maxBytes {
+	if maxBytes > 0 && len(data) > maxBytes {
 		return ports.SpawnAttachment{}, &attachmentError{"ATTACHMENT_TOO_LARGE", "attachment is too large"}
 	}
 	return ports.SpawnAttachment{Ext: ext, Data: data}, nil
 }
 
+// decodeSpawnAttachments decodes workspace file attachments, which have no
+// size cap: inline data is bounded by the request body limit, and an upload
+// was streamed to disk.
 func decodeSpawnAttachments(in []AttachmentInput) ([]ports.SpawnAttachment, *attachmentError) {
-	return decodeAttachments(in, maxAttachmentBytes, maxAttachmentsBytes)
+	return decodeAttachments(in, 0, 0)
 }
 
-// decodeAttachments enforces the caller's count and size caps, accepting any
-// MIME type except explicitly blocked ones (e.g., SVG).
+// decodeAttachments enforces the count cap and the caller's size caps (0 for
+// none), accepting any MIME type except explicitly blocked ones (e.g., SVG).
 func decodeAttachments(in []AttachmentInput, maxFileBytes, maxTotalBytes int) ([]ports.SpawnAttachment, *attachmentError) {
 	if len(in) == 0 {
 		return nil, nil
@@ -505,12 +531,60 @@ func decodeAttachments(in []AttachmentInput, maxFileBytes, maxTotalBytes int) ([
 			return nil, err
 		}
 		total += len(attachment.Data)
-		if total > maxTotalBytes {
+		if maxTotalBytes > 0 && total > maxTotalBytes {
 			return nil, &attachmentError{"ATTACHMENTS_TOO_LARGE", "attachments are too large"}
 		}
 		out = append(out, attachment)
 	}
 	return out, nil
+}
+
+// uploadAttachment streams a request body to disk and answers with the id a
+// spawn, stage, delegate, or send names as uploadId in place of inline data.
+// The body is the file's raw bytes. Nothing is read into memory, so there is
+// no size cap; the only deadline is uploadIdleTimeout between reads.
+func (c *SessionsController) uploadAttachment(w http.ResponseWriter, r *http.Request) {
+	if c.Attachments == nil {
+		apispec.NotImplemented(w, r, "POST", "/api/v1/attachment-uploads")
+		return
+	}
+	rc := http.NewResponseController(w)
+	defer func() { _ = rc.SetReadDeadline(time.Time{}) }()
+	id, size, err := c.Attachments.Upload(r.Context(), idleDeadlineReader{rc: rc, body: r.Body, idle: uploadIdleTimeout})
+	if err != nil {
+		if errors.Is(err, attachmentstore.ErrEmpty) {
+			envelope.WriteAPIError(w, r, http.StatusBadRequest, "bad_request", "INVALID_ATTACHMENT_DATA", "attachment is empty", nil)
+			return
+		}
+		envelope.WriteError(w, r, fmt.Errorf("store attachment upload: %w", err))
+		return
+	}
+	envelope.WriteJSON(w, http.StatusCreated, AttachmentUploadResponse{UploadID: id, Bytes: size})
+}
+
+// idleDeadlineReader pushes the connection's read deadline out before every
+// read, so an upload fails only when its client stops sending.
+type idleDeadlineReader struct {
+	rc   *http.ResponseController
+	body io.Reader
+	idle time.Duration
+}
+
+func (r idleDeadlineReader) Read(p []byte) (int, error) {
+	_ = r.rc.SetReadDeadline(time.Now().Add(r.idle))
+	return r.body.Read(p)
+}
+
+// writeAttachmentWriteError answers a failed attachment write, naming an
+// upload that is gone (swept after UploadTTL, or from another machine) so the
+// client can say to attach the file again.
+func writeAttachmentWriteError(w http.ResponseWriter, r *http.Request, err error) {
+	if errors.Is(err, attachmentstore.ErrUploadNotFound) {
+		envelope.WriteAPIError(w, r, http.StatusBadRequest, "bad_request", "ATTACHMENT_UPLOAD_NOT_FOUND",
+			"An attached file is no longer on this machine. Attach it again.", nil)
+		return
+	}
+	envelope.WriteError(w, r, err)
 }
 
 func (c *SessionsController) get(w http.ResponseWriter, r *http.Request) {
@@ -2281,7 +2355,7 @@ func (c *SessionsController) send(w http.ResponseWriter, r *http.Request) {
 	}
 	var attachment *ports.SpawnAttachment
 	if in.Attachment != nil {
-		decoded, attachErr := decodeAttachment(*in.Attachment, maxAttachmentBytes)
+		decoded, attachErr := decodeAttachment(*in.Attachment, 0)
 		if attachErr != nil {
 			envelope.WriteAPIError(w, r, http.StatusBadRequest, "bad_request", attachErr.code, attachErr.message, nil)
 			return
@@ -2300,8 +2374,13 @@ func (c *SessionsController) send(w http.ResponseWriter, r *http.Request) {
 	} else {
 		err = c.Svc.Send(r.Context(), sessionID(r), message, attachment)
 	}
+	if errors.Is(err, chatsvc.ErrControllerHandoff) {
+		envelope.WriteAPIError(w, r, http.StatusConflict, "conflict", "CHAT_INTERFACE_TRANSITION",
+			"the session is switching agents or interfaces; send again after the handoff completes", nil)
+		return
+	}
 	if err != nil {
-		envelope.WriteError(w, r, err)
+		writeAttachmentWriteError(w, r, err)
 		return
 	}
 	if recorder, ok := c.Svc.(UserMessageRecorder); ok {
@@ -2399,6 +2478,11 @@ func clientRequestFingerprint(route string, request any, attachments []ports.Spa
 	for _, attachment := range attachments {
 		_, _ = fmt.Fprintf(h, "%d:%s:%d:", len(attachment.Ext), attachment.Ext, len(attachment.Data))
 		_, _ = h.Write(attachment.Data)
+		// An upload is named, not hashed: its id is unique to its bytes, and a
+		// retry of the same request names the same upload.
+		if attachment.Upload != "" {
+			_, _ = fmt.Fprintf(h, "upload:%d:%s:", len(attachment.Upload), attachment.Upload)
+		}
 	}
 	return "v1:" + hex.EncodeToString(h.Sum(nil))
 }
@@ -2799,6 +2883,13 @@ func parseSessionListFilter(r *http.Request) (sessionsvc.ListFilter, error) {
 			return sessionsvc.ListFilter{}, fmt.Errorf("limit must be an integer from 1 to %d", sessionsvc.MaxListLimit)
 		}
 		filter.Limit = limit
+	}
+	switch state := domain.PRState(q.Get("prState")); state {
+	case "":
+	case domain.PRStateOpen, domain.PRStateDraft, domain.PRStateMerged, domain.PRStateClosed:
+		filter.PRState = state
+	default:
+		return sessionsvc.ListFilter{}, errors.New("prState must be open, draft, merged or closed")
 	}
 	if filter.Cursor = q.Get("cursor"); filter.Cursor != "" && filter.Limit == 0 {
 		return sessionsvc.ListFilter{}, errors.New("cursor requires limit")

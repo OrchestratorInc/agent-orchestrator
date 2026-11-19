@@ -823,6 +823,8 @@ export function XtermTerminal(props: XtermTerminalProps) {
 			callbacksRef.current.onChangeFontSize?.(delta);
 		});
 		const activateLink = (event: MouseEvent, uri: string) => {
+			// The link is being followed: its preview has done its job.
+			linkPreviewControlsRef.current.hide(true);
 			// Open on a plain click even while the pane tracks the mouse, like web
 			// links: tmux (mouse on) and fullscreen TUIs keep tracking on, so a
 			// modifier gate here made plain clicks do nothing.

@@ -80,6 +80,40 @@ describe("TurnPlan", () => {
 		}
 	});
 
+	it("stops a completed step's arc after its fade while the turn continues", () => {
+		vi.useFakeTimers();
+		try {
+			const { container, rerender } = render(<TurnPlan plan={plan} live />);
+			rerender(<TurnPlan plan={{ ...plan, steps: plan.steps.map((step) => ({ ...step, status: step.status === "in_progress" ? "completed" : step.status })) }} live />);
+			expect(container.querySelectorAll(".animate-spin[data-turning]")).toHaveLength(1);
+			act(() => {
+				vi.advanceTimersByTime(200);
+			});
+			expect(container.querySelectorAll(".animate-spin[data-turning]")).toHaveLength(0);
+		} finally {
+			vi.useRealTimers();
+		}
+	});
+
+	it("keeps the arc turning when the turn resumes during the fade", () => {
+		vi.useFakeTimers();
+		try {
+			const { container, rerender } = render(<TurnPlan plan={plan} live />);
+			rerender(<TurnPlan plan={plan} />);
+			act(() => {
+				vi.advanceTimersByTime(100);
+			});
+			rerender(<TurnPlan plan={plan} live />);
+			act(() => {
+				vi.advanceTimersByTime(200);
+			});
+			expect(container.querySelectorAll(".animate-spin[data-turning]")).toHaveLength(1);
+			expect(container.querySelector(".animate-spin[data-turning]")).not.toHaveClass("opacity-0");
+		} finally {
+			vi.useRealTimers();
+		}
+	});
+
 	// A finished plan is not still planning, even on a turn that is technically live.
 	it("stops claiming to be planning once every step is done", () => {
 		render(

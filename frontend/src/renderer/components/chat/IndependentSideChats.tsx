@@ -8,21 +8,23 @@ import { applyCloseSummary, beginClose, canMutateSide, closeStatus, emptyClosePr
 import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore, type ReactNode } from "react";
 import { ArrowUp, Loader2, MessageSquare, Pencil, Plus, Square, X } from "@/components/app-icons";
 import type { components } from "../../../api/schema";
-import type { ChatDraftExcerptReference } from "../../lib/chat-drafts";
+import type { ChatDraftAttachment, ChatDraftExcerptReference } from "../../lib/chat-drafts";
 import type { ChatSkill } from "../../types/conversation";
 import type { ChatModel } from "../../types/conversation";
 import { apiClient, apiErrorMessage, eventStreamBaseUrl, getApiBaseUrl, subscribeApiBaseUrl } from "../../lib/api-client";
 import { aoBridge } from "../../lib/bridge";
 import { ApprovalCard } from "./ChatTimelineItems";
 import { Timeline } from "./ChatWorkspace";
+import type { ConversationLocalEcho } from "../../hooks/useConversation";
+import { attachmentURL } from "./messageAttachments";
 import { sideConversationActivity, sideConversationSnapshot } from "./sideConversation";
 import { ComposerEditor, type ComposerEditorHandle, type ComposerTrigger } from "./ComposerEditor";
 import { ComposerSuggestMenu } from "./ComposerSuggestMenu";
 import { rankSkills, moveHighlight } from "./composerSuggest";
 import { ChatAnnotationSummary, type ChatAnnotationSummaryItem } from "./ChatAnnotationSummary";
-import { emptySideChatDraft, parseSideChatDraft, type SideChatDraft, type SideDeliveryReceipt } from "./sideChatDraft";
+import { emptySideChatDraft, mergeSideChatDraft, parseSideChatDraft, type SideChatDraft, type SideDeliveryReceipt } from "./sideChatDraft";
 import { TurnSettingsBar } from "./TurnSettingsBar";
-import { QueuedMessageDock } from "./QueuedMessageDock";
+import { QueuedMessageDock, type QueuedMessage } from "./QueuedMessageDock";
 import { Button } from "../ui/button";
 import { TabCloseButton, TerminalTabFrame, terminalTabRenameInputClassName } from "../TerminalTabFrame";
 import { ConfirmDialog } from "../ConfirmDialog";
@@ -32,6 +34,7 @@ import { saveSideChatDraft, readSideChatDraft } from "./sideChatDraftWriter";
 import { useTabScrollEdges } from "../../hooks/useTabScrollEdges";
 import { MAX_SESSION_DISPLAY_NAME_LEN } from "../../hooks/useSessionRename";
 import { useUiStore } from "../../stores/ui-store";
+import { INLINE_ATTACHMENT_BYTES, readBlobAsBase64, type OutgoingAttachment } from "../../lib/attachment-uploads";
 
 type Side = components["schemas"]["SideConversation"];
 type Snapshot = components["schemas"]["SideSnapshot"];
@@ -355,24 +358,30 @@ export function SideComposer({
 	);
 }
 
-async function sideFilePayload(file: File): Promise<{ mimeType: string; data: string }> {
-	const dataUrl = await new Promise<string>((resolve, reject) => {
-		const reader = new FileReader();
-		reader.onload = () => resolve(String(reader.result));
-		reader.onerror = () => reject(reader.error);
-		reader.readAsDataURL(file);
-	});
-	return {
-		mimeType: file.type || "application/octet-stream",
-		data: dataUrl.split(",", 2)[1] ?? "",
-	};
+async function sideFilePayload(file: File): Promise<OutgoingAttachment> {
+	const mimeType = file.type || "application/octet-stream";
+	// A large file is not read: staging streams it from disk to the daemon.
+	if (file.size > INLINE_ATTACHMENT_BYTES) return { mimeType, data: "", file };
+	return { mimeType, data: await readBlobAsBase64(file) };
+}
+
+async function sideImagePayloads(sessionId: string, staged: ChatDraftAttachment[], files: { path: string; file: File }[]) {
+	const images = await Promise.all(staged.filter(file => /^image\/(png|jpeg|gif|webp)$/i.test(file.mimeType) && file.bytes <= INLINE_ATTACHMENT_BYTES).map(async saved => {
+		const live = files.find(file => file.path === saved.path)?.file;
+		if (live) return live.size <= INLINE_ATTACHMENT_BYTES ? sideFilePayload(live) : undefined;
+		const response = await fetch(attachmentURL(getApiBaseUrl(), sessionId, saved.path));
+		if (!response.ok) throw new Error(`Could not load attached image: ${saved.name}`);
+		const blob = await response.blob();
+		return blob.size <= INLINE_ATTACHMENT_BYTES ? sideFilePayload(new File([blob], saved.name, { type: saved.mimeType })) : undefined;
+	}));
+	return images.filter((image): image is OutgoingAttachment => image !== undefined);
 }
 
 export function useIndependentSideChats(
 	sessionId: string,
 	models: ChatModel[],
 	skills: ChatSkill[],
-	stageAttachments: (items: { mimeType: string; data: string }[]) => Promise<string[]>,
+	stageAttachments: (items: OutgoingAttachment[]) => Promise<string[]>,
 	nativeImages: boolean,
 	enabled = true,
 	onNavigate?: (annotation: ChatAnnotationSummaryItem) => void,
@@ -402,10 +411,32 @@ export function useIndependentSideChats(
 	const [olderPages, setOlderPages] = useState<Snapshot[]>([]);
 	const olderPagesRef = useRef(olderPages);
 	olderPagesRef.current = olderPages;
-	const [drafts, setDrafts] = useState<Record<string, SideChatDraft>>({});
+	const [drafts, setDraftsState] = useState<Record<string, SideChatDraft>>({});
 	const draftsRef = useRef(drafts);
-	draftsRef.current = drafts;
+	const setDrafts = useCallback((update: Record<string, SideChatDraft> | ((current: Record<string, SideChatDraft>) => Record<string, SideChatDraft>)) => {
+		const next = typeof update === "function" ? update(draftsRef.current) : update;
+		draftsRef.current = next;
+		setDraftsState(next);
+	}, []);
+	const draftLoads = useRef(new Map<string, { scope: object; saved?: SideChatDraft; ready: boolean; promise?: Promise<SideChatDraft> }>());
+	const editedDraftText = useRef(new Set<string>());
+	const recreations = useRef(new Map<string, Promise<void>>());
+	const [, setRecreationRevision] = useState(0);
 	const [attachments, setAttachments] = useState<Record<string, { path: string; file: File }[]>>({});
+	const [localEchos, setLocalEchos] = useState<Record<string, ConversationLocalEcho[]>>({});
+	const localEchosRef = useRef(localEchos);
+	const settingsWrites = useRef(new Map<string, Promise<{ error?: unknown }>>());
+	localEchosRef.current = localEchos;
+	useEffect(() => {
+		if (!liveSnapshot?.turns?.length) return;
+		const id = liveSnapshot.side.id;
+		const accepted = new Set(liveSnapshot.turns.map(turn => turn.clientMessageId));
+		setLocalEchos(current => {
+			const entries = current[id];
+			if (!entries?.some(echo => accepted.has(echo.clientMessageId))) return current;
+			return { ...current, [id]: entries.filter(echo => !accepted.has(echo.clientMessageId)) };
+		});
+	}, [liveSnapshot]);
 	const [focusKey, setFocusKey] = useState(0);
 	const [renameText, setRenameText] = useState<string>();
 	const [renameId, setRenameId] = useState<string>();
@@ -493,7 +524,9 @@ export function useIndependentSideChats(
 	const closingSidesRef = { current: { has: (id: string) => !canMutateSide(closeProjection.current, id) } };
 	const isClosing = (id: string) => closeInvocations.current.has(id) || closeStatus(closeProjection.current, id) === "closing";
 	const closing = Boolean(confirmClose && (closeInvocations.current.get(confirmClose.sideId) === confirmClose.requestId || (closeProjection.current.attempts[confirmClose.sideId]?.requestId === confirmClose.requestId && closeProjection.current.attempts[confirmClose.sideId]?.busy)));
-	const snapshot = liveSnapshot?.side.id === activeId ? liveSnapshot : activeId && closingSidesRef.current.has(activeId) ? retainedSnapshots.current.get(activeId)?.snapshot : undefined;
+	const loadedSnapshot = liveSnapshot?.side.id === activeId ? liveSnapshot : activeId && closingSidesRef.current.has(activeId) ? retainedSnapshots.current.get(activeId)?.snapshot : undefined;
+	const draftSide = sides.find(side => side.id === activeId && side.state === "draft");
+	const snapshot = useMemo<Snapshot | undefined>(() => loadedSnapshot ?? (draftSide ? { side: draftSide, turns: [], messages: [], activities: [], hasMore: false } : undefined), [loadedSnapshot, draftSide]);
 	const lifecycleRevision = useRef(0);
 	const listRequests = useRef(0);
 	const appliedCloseStateRequest = useRef(0);
@@ -526,11 +559,85 @@ export function useIndependentSideChats(
 	const creationScope = useMemo(() => ({ active: true, pending: new Set<symbol>() }), [sessionId, enabled, baseUrl, attachmentRevision]);
 	const creationScopeRef = useRef(creationScope);
 	creationScopeRef.current = creationScope;
+	// Keep acknowledgements across receipt copies, within this controller generation.
+	const acceptedDeliveries = useMemo(() => new Map<string, Set<string>>(), [creationScope]);
 	const operationCurrent = useCallback((sideId: string) => {
 		const scope = creationScopeRef.current;
 		const revision = sideRevisions.current.get(sideId);
 		return () => scope.active && creationScopeRef.current === scope && sessionRef.current === sessionId && revision === sideRevisions.current.get(sideId) && !closedSidesRef.current.has(sideId) && !closingSidesRef.current.has(sideId);
 	}, [sessionId]);
+	const loadDraft = useCallback((sideId: string): Promise<SideChatDraft> => {
+		const scope = creationScopeRef.current;
+		const available = operationCurrent(sideId);
+		if (!available()) return Promise.reject(new Error("Side chat is no longer active."));
+		const previous = draftLoads.current.get(sideId);
+		if (previous?.scope === scope) {
+			if (previous.ready) return Promise.resolve(draftsRef.current[sideId] ?? previous.saved!);
+			if (previous.promise) return previous.promise;
+		}
+		const load: { scope: object; saved?: SideChatDraft; ready: boolean; promise?: Promise<SideChatDraft> } = { scope, ready: false };
+		draftLoads.current.set(sideId, load);
+		load.promise = (async () => {
+			const { data, error } = await readSideChatDraft(sessionId, sideId);
+			if (error) throw error;
+			if (!available() || draftLoads.current.get(sideId) !== load) throw new Error("Side chat is no longer active.");
+			const saved = parseSideChatDraft(data?.contentJson ?? "");
+			const next = mergeSideChatDraft(saved, draftsRef.current[sideId]);
+			load.saved = saved;
+			load.ready = true;
+			setDrafts(current => ({ ...current, [sideId]: next }));
+			clearSideError(sideId, "draft-read");
+			return next;
+		})().finally(() => {
+			load.promise = undefined;
+			if (!load.ready && draftLoads.current.get(sideId) === load) draftLoads.current.delete(sideId);
+		});
+		return load.promise;
+	}, [sessionId, operationCurrent, setDrafts, clearSideError]);
+	// Capture local choices at Send, then fill in saved context when hydration ends.
+	// Changes made during the wait belong to the next draft, not this submission.
+	const loadSubmissionDraft = useCallback(async (sideId: string) => {
+		const edited = draftsRef.current[sideId];
+		const previous = draftLoads.current.get(sideId);
+		const ready = previous?.scope === creationScopeRef.current && previous.ready;
+		await loadDraft(sideId);
+		return ready ? edited ?? emptySideChatDraft() : mergeSideChatDraft(draftLoads.current.get(sideId)!.saved!, edited);
+	}, [loadDraft]);
+	const acceptDelivery = useCallback(async (sideId: string, receipt: SideDeliveryReceipt, opening: boolean) => {
+		const available = operationCurrent(sideId);
+		const current = draftsRef.current[sideId];
+		if (!available() || current?.pendingDelivery?.clientMessageId !== receipt.clientMessageId) return;
+		const accepted = acceptedDeliveries.get(sideId) ?? new Set<string>();
+		accepted.add(receipt.clientMessageId);
+		acceptedDeliveries.set(sideId, accepted);
+		const { pendingDelivery: _, ...rest } = current;
+		const next: SideChatDraft = {
+			...rest,
+			text: current.text === receipt.submitted.text ? "" : current.text,
+			attachments: current.attachments.filter(file => !receipt.submitted.attachments.some(sent => JSON.stringify(sent) === JSON.stringify(file))),
+			references: current.references.filter(ref => !receipt.submitted.references.some(sent => JSON.stringify(sent) === JSON.stringify(ref))),
+			openingDelivery: opening ? {
+				clientMessageId: receipt.clientMessageId, createdAt: receipt.createdAt,
+				submitted: receipt.submitted,
+				request: { text: receipt.request.text, clientMessageId: receipt.clientMessageId, resources: receipt.request.resources },
+			} : current.openingDelivery,
+			lastHandoffDelivery: receipt.handoff ? { ...receipt, failure: undefined, recreateRequired: undefined } : current.lastHandoffDelivery,
+		};
+		setDrafts(drafts => ({ ...drafts, [sideId]: next }));
+		setAttachments(files => ({ ...files, [sideId]: (files[sideId] ?? []).filter(file => next.attachments.some(saved => saved.path === file.path)) }));
+		clearSideError(sideId, "delivery");
+		sendingRef.current.delete(sideId);
+		setSendingRevision(version => version + 1);
+		try {
+			const saved = await saveSideChatDraft(sessionId, sideId, JSON.stringify(next), available);
+			if (saved.error) throw saved.error;
+			if (available() && draftsRef.current[sideId] === next) clearSideError(sideId, "draft-save");
+			if (available()) await aoBridge.sideChats.capture().catch(() => undefined);
+		} catch (cause) {
+			// The daemon already owns this message. A failed local save must never resend it.
+			if (available()) setSideError({ id: sideId, message: apiErrorMessage(cause), kind: "draft-save" });
+		}
+	}, [sessionId, operationCurrent, setDrafts, clearSideError, setSideError, acceptedDeliveries]);
 	useEffect(() => {
 		creationScope.active = true;
 		closeInvocations.current.clear();
@@ -584,7 +691,12 @@ export function useIndependentSideChats(
 		setSnapshot(undefined);
 		setOlderPages([]);
 		setDrafts({});
+		draftLoads.current.clear();
+		editedDraftText.current.clear();
+		recreations.current.clear();
 		setAttachments({});
+		setLocalEchos({});
+		settingsWrites.current.clear();
 		setRenameId(undefined);
 		setRenameText(undefined);
 		setConfirmClose(undefined);
@@ -598,6 +710,7 @@ export function useIndependentSideChats(
 	const removeSide = useCallback((sideId: string) => {
 		lifecycleRevision.current++;
 		localCreates.current.delete(sideId);
+		acceptedDeliveries.delete(sideId);
 		closePlaceholders.current.delete(sideId);
 		retainedSnapshots.current.delete(sideId);
 		clearSideError(sideId);
@@ -615,13 +728,17 @@ export function useIndependentSideChats(
 		setSnapshot(current => current?.side.id === sideId ? undefined : current);
 		setDrafts(current => { const next = { ...current }; delete next[sideId]; return next; });
 		setAttachments(current => { const next = { ...current }; delete next[sideId]; return next; });
+		setLocalEchos(current => { const next = { ...current }; delete next[sideId]; return next; });
+		settingsWrites.current.delete(sideId);
+		draftLoads.current.delete(sideId);
+		editedDraftText.current.delete(sideId);
 		setConfirmClose(current => current?.sideId === sideId ? undefined : current);
 		if (targetFocused) window.setTimeout(() => {
 			if (!scope.active || creationScopeRef.current !== scope || confirmCloseRef.current || document.activeElement !== document.body) return;
 			const header = tabRowRef.current;
 			(header?.querySelector<HTMLElement>('[role="tab"][aria-selected="true"], [data-tab-strip-action] button:not(:disabled)') ?? header)?.focus();
 		}, 0);
-	}, [setSides, clearSideError, setConfirmClose]);
+	}, [setSides, clearSideError, setConfirmClose, acceptedDeliveries]);
 
 	const reconcileCloseSummary = useCallback((summary: SideCloseState, adoptEpoch = false) => {
 		const previous = closeProjection.current;
@@ -787,6 +904,16 @@ export function useIndependentSideChats(
 			stream?.close();
 		};
 	}, [sessionId, activeId, baseUrl, snapshotRefreshKey, enabled, closeRevision, operationCurrent, creationScope]);
+	useEffect(() => {
+		if (!liveSnapshot || liveSnapshot.side.id !== activeId || liveSnapshot.side.sessionId !== sessionId) return;
+		const id = liveSnapshot.side.id;
+		const load = draftLoads.current.get(id);
+		const receipt = drafts[id]?.pendingDelivery;
+		if (!receipt || !load?.ready || load.scope !== creationScope) return;
+		// Attachment/excerpt-only sends get their display text from the daemon.
+		const turn = liveSnapshot.turns?.find(turn => turn.clientMessageId === receipt.clientMessageId && (turn.text === receipt.request.text || !receipt.request.text.trim()));
+		if (turn) void acceptDelivery(id, receipt, turn.id === liveSnapshot.side.openingTurnId);
+	}, [liveSnapshot, activeId, sessionId, drafts, creationScope, closeRevision, acceptDelivery]);
 
 	const loadOlder = useCallback(async () => {
 		if (!activeId || !snapshot || loadingOlderRef.current || closingSidesRef.current.has(activeId)) return;
@@ -825,21 +952,13 @@ export function useIndependentSideChats(
 	}, [sessionId, activeId, snapshot, olderPages, operationCurrent]);
 
 	useEffect(() => {
-		if (!activeId || drafts[activeId] !== undefined || closingSidesRef.current.has(activeId) || closedSidesRef.current.has(activeId)) return;
+		if (!activeId || !enabled || closingSidesRef.current.has(activeId) || closedSidesRef.current.has(activeId)) return;
 		const available = operationCurrent(activeId);
-		void readSideChatDraft(sessionId, activeId)
-			.then(({ data }) => {
-				if (!available()) return;
-				if (data)
-					setDrafts((current) => ({
-						...current,
-						[activeId]: current[activeId] ?? parseSideChatDraft(data.contentJson),
-					}));
-			})
+		void loadDraft(activeId)
 			.catch((error) => {
-				if (available()) setSideError({ id: activeId, message: String(error) });
+				if (available()) setSideError({ id: activeId, message: apiErrorMessage(error), kind: "draft-read" });
 			});
-	}, [sessionId, activeId, drafts, sendingRevision, closeRevision, operationCurrent]);
+	}, [sessionId, activeId, enabled, creationScope, closeRevision, operationCurrent, loadDraft]);
 
 	const create = useCallback(
 		async (excerpt?: ChatDraftExcerptReference, forceNew = false, idempotencyKey: string = crypto.randomUUID(),
@@ -883,19 +1002,14 @@ export function useIndependentSideChats(
 				const available = () => current() && !["closing", "unconfirmed", "cleanup_pending", "closed"].includes(closeStatus(closeProjection.current, data.side.id) ?? "");
 				if (!available())
 					throw new Error("Side chat is no longer active.");
-				await aoBridge.sideChats.capture().catch(() => undefined);
+				void aoBridge.sideChats.capture().catch(() => undefined);
 				if (!available()) throw new Error("Side chat is no longer active.");
 				if (excerpt) {
 					if (!canMutateSide(closeProjection.current, data.side.id)) throw new Error("Side chat status is unavailable.");
 					// An unconfirmed create can recover an existing, inactive side. Load
 					// its draft before appending, and save without focusing any composer.
-					let draft = draftsRef.current[data.side.id];
-					if (!draft) {
-						const { data: saved, error: draftError } = await readSideChatDraft(sessionId, data.side.id);
-						if (draftError) throw draftError;
-						if (!available()) throw new Error("Side chat is no longer active.");
-						draft = draftsRef.current[data.side.id] ?? parseSideChatDraft(saved?.contentJson ?? "");
-					}
+					const draft = await loadDraft(data.side.id);
+					if (!available()) throw new Error("Side chat is no longer active.");
 					// Commit a functional merge before saving: another side (or this
 					// one) may have an edit queued in the same React batch as the read.
 					const loadedDraft = draft;
@@ -923,7 +1037,7 @@ export function useIndependentSideChats(
 						? current.map((side) => (side.id === data.side.id ? data.side : side))
 						: [...current, data.side],
 				);
-				if (!options || (activationRevision.current.revision === activation && options.shouldActivate())) {
+				if (activationRevision.current.revision === activation && (options?.shouldActivate() ?? true)) {
 					setActiveId(data.side.id);
 					setVisible(true);
 					setFocusKey((key) => key + 1);
@@ -937,11 +1051,15 @@ export function useIndependentSideChats(
 				if (owned()) setPending(creationScope.pending.size > 0);
 			}
 		},
-		[sessionId, enabled, canCreate, creationScope],
+		[sessionId, enabled, canCreate, creationScope, loadDraft],
 	);
 
 	const updateDraft = useCallback((sideId: string, text: string) => {
 		if (closingSidesRef.current.has(sideId) || closedSidesRef.current.has(sideId)) return;
+		// The editor mounts before its draft read completes. Its initial empty
+		// value must not replace staged attachments or a recovered delivery.
+		if (!text && !Object.hasOwn(draftsRef.current, sideId)) return;
+		if (text !== (draftsRef.current[sideId]?.text ?? "")) editedDraftText.current.add(sideId);
 		setDrafts((current) => ({
 			...current,
 			[sideId]: { ...(current[sideId] ?? emptySideChatDraft()), text },
@@ -952,11 +1070,14 @@ export function useIndependentSideChats(
 			if (closingSidesRef.current.has(sideId) || closedSidesRef.current.has(sideId)) throw new Error("Side chat is closing.");
 			const available = operationCurrent(sideId);
 			if (!available()) return;
+			await loadDraft(sideId);
+			if (!available()) return;
 			const next = {
 				...draft,
 				pendingDelivery: draftsRef.current[sideId]?.pendingDelivery,
 				pendingCommand: draftsRef.current[sideId]?.pendingCommand,
 				lastHandoffDelivery: draftsRef.current[sideId]?.lastHandoffDelivery,
+				openingDelivery: draftsRef.current[sideId]?.openingDelivery,
 			};
 			// Apply the edit before awaiting I/O so its response cannot overwrite a newer receipt.
 			draftsRef.current = { ...draftsRef.current, [sideId]: next };
@@ -970,12 +1091,14 @@ export function useIndependentSideChats(
 				await aoBridge.sideChats.capture();
 			} catch (cause) { if (available()) throw cause; }
 		},
-		[sessionId, operationCurrent],
+		[sessionId, operationCurrent, loadDraft],
 	);
 
 	const addReference = useCallback(async (sideId: string, excerpt: ChatDraftExcerptReference) => {
 		if (closingSidesRef.current.has(sideId) || closedSidesRef.current.has(sideId)) throw new Error("Side chat is closing.");
 		const available = operationCurrent(sideId);
+		if (!available()) return;
+		await loadDraft(sideId);
 		if (!available()) return;
 		const draft = draftsRef.current[sideId] ?? emptySideChatDraft();
 		const result = appendReference(draft, excerpt);
@@ -988,13 +1111,15 @@ export function useIndependentSideChats(
 			if (requestError) throw requestError;
 			setFocusKey(key => key + 1);
 		} catch (cause) { if (available()) throw cause; }
-	}, [sessionId, operationCurrent]);
+	}, [sessionId, operationCurrent, loadDraft]);
 
 	const attachFiles = useCallback(
 		async (sideId: string, files: File[]) => {
 			if (files.length === 0 || closingSidesRef.current.has(sideId) || closedSidesRef.current.has(sideId)) return;
 			const available = operationCurrent(sideId);
 			try {
+				await loadDraft(sideId);
+				if (!available()) return;
 				const payloads = await Promise.all(files.map(sideFilePayload));
 				if (!available()) return;
 				const paths = await stageAttachments(payloads);
@@ -1024,7 +1149,7 @@ export function useIndependentSideChats(
 				if (available()) setSideError({ id: sideId, message: apiErrorMessage(cause) });
 			}
 		},
-		[stageAttachments, operationCurrent],
+		[stageAttachments, operationCurrent, loadDraft],
 	);
 
 	useEffect(() => {
@@ -1033,16 +1158,19 @@ export function useIndependentSideChats(
 		const draft = drafts[activeId];
 		const save = () => {
 			if (!available() || (sendingRef.current.has(activeId) && activeIdRef.current === activeId && sessionRef.current === sessionId)) return;
+			const load = draftLoads.current.get(activeId);
+			if (!load?.ready || load.scope !== creationScopeRef.current) return;
 			const currentDraft = draftsRef.current[activeId] ?? draft;
 			void saveSideChatDraft(sessionId, activeId, JSON.stringify(currentDraft), available)
 				.then(({ error: requestError }) => {
 					if (requestError) throw requestError;
+					if (available() && draftsRef.current[activeId] === currentDraft) clearSideError(activeId, "draft-save");
 					if (available()) return aoBridge.sideChats.capture();
 					return;
 				})
 				.catch((cause) => {
 					if (available())
-						setSideError({ id: activeId, message: apiErrorMessage(cause) });
+						setSideError({ id: activeId, message: apiErrorMessage(cause), kind: "draft-save" });
 				});
 		};
 		const timer = window.setTimeout(() => {
@@ -1056,7 +1184,7 @@ export function useIndependentSideChats(
 			)
 				save();
 		};
-	}, [sessionId, activeId, drafts, sendingRevision, closeRevision, operationCurrent]);
+	}, [sessionId, activeId, drafts, sendingRevision, closeRevision, operationCurrent, clearSideError]);
 
 	const cancelHandoff = useCallback(async (sideId: string) => {
 		const pending = draftsRef.current[sideId]?.pendingCommand;
@@ -1131,14 +1259,9 @@ export function useIndependentSideChats(
 					await aoBridge.sideChats.capture();
 				};
 				try {
-					if (!Object.hasOwn(draftsRef.current, sideId)) {
-						const loaded = await readSideChatDraft(sessionId, sideId);
-						if (loaded.error) throw loaded.error;
-						if (!available()) return;
-						draftsRef.current = { ...draftsRef.current, [sideId]: draftsRef.current[sideId] ?? parseSideChatDraft(loaded.data?.contentJson ?? "") };
-						command = draftsRef.current[sideId].pendingCommand;
-					}
-					const draft = draftsRef.current[sideId] ?? emptySideChatDraft();
+					const draft = await loadSubmissionDraft(sideId);
+					if (!available()) return;
+					command = draft.pendingCommand;
 					if (command?.cancelRequested) {
 						if (sendingRef.current.get(sideId) === token) sendingRef.current.delete(sideId);
 						await cancelHandoff(sideId);
@@ -1151,7 +1274,7 @@ export function useIndependentSideChats(
 						const parentId = sides.find((side) => side.id === sideId)?.mainConversationId;
 						if (submitted.references.some((ref) => ref.conversationId !== parentId))
 							throw new Error("References from another side cannot be transferred. Remove them before creating a new side.");
-						const images = [...extraAttachments, ...(await Promise.all((attachments[sideId] ?? []).filter(({ file }) => /^image\/(png|jpeg|gif|webp)$/i.test(file.type)).map(({ file }) => sideFilePayload(file))))];
+						const images = nativeImages ? [...extraAttachments, ...await sideImagePayloads(sessionId, draft.attachments, attachments[sideId] ?? [])] : [];
 						if (!available()) return;
 						const staged = extraAttachments.length ? await stageAttachments(extraAttachments) : [];
 						if (staged.length !== extraAttachments.length) throw new Error("Could not stage every attached file.");
@@ -1238,44 +1361,71 @@ export function useIndependentSideChats(
 			sendingRef.current.set(sideId, token);
 			setSendingRevision((version) => version + 1);
 			clearSideError(sideId, "delivery");
+			const sendScope = creationScopeRef.current;
+			let dispatchStarted = false;
+			const submittedSettings = settingsWrites.current.get(sideId);
+			let failureKind: "rejected" | "unconfirmed" = "unconfirmed";
 			let receipt = draftsRef.current[sideId]?.pendingDelivery ?? preparedReceipt;
+			let inheritedReceipt = Boolean(receipt);
+			const existingEchos = localEchosRef.current[sideId] ?? [];
+			const currentSnapshot = liveSnapshotRef.current?.side.id === sideId ? liveSnapshotRef.current : undefined;
+			const draftOpening = sidesRef.current.find(side => side.id === sideId)?.state === "draft" && !currentSnapshot?.turns?.length;
+			const previousOpening = draftOpening ? existingEchos.find(echo => echo.opening && !echo.turnId) : undefined;
+			let deliveryId = receipt?.clientMessageId ?? handoffClientMessageId ?? previousOpening?.clientMessageId ?? crypto.randomUUID();
+			const sentAt = receipt?.createdAt ?? previousOpening?.createdAt ?? new Date().toISOString();
+			const opening = draftOpening && (!existingEchos.length || Boolean(previousOpening));
+			const echo: ConversationLocalEcho = {
+				clientMessageId: deliveryId, text: receipt?.request.text || text, createdAt: sentAt, opening,
+				queued: !opening && Boolean(currentSnapshot?.turns?.some(turn => turn.state === "running" || turn.state === "queued") || existingEchos.some(entry => !currentSnapshot?.turns?.some(turn => turn.clientMessageId === entry.clientMessageId))),
+				excerpts: overrideReferences ?? draftsRef.current[sideId]?.references,
+			};
+			const updateEcho = (update: Partial<ConversationLocalEcho>) => {
+				if (!available()) return;
+				const entries = localEchosRef.current[sideId] ?? [];
+				const previous = entries.find(entry => entry.clientMessageId === echo.clientMessageId);
+				const next = [...entries.filter(entry => entry.clientMessageId !== echo.clientMessageId), { ...echo, ...previous, ...update }];
+				localEchosRef.current = { ...localEchosRef.current, [sideId]: next };
+				setLocalEchos(localEchosRef.current);
+			};
+			updateEcho({ text: echo.text, excerpts: echo.excerpts, delivery: undefined });
 			try {
-				if (!Object.hasOwn(draftsRef.current, sideId)) {
-					const { data, error } = await readSideChatDraft(sessionId, sideId);
-					if (error) throw error;
-					if (!dispatchAvailable()) return;
-					const loaded = parseSideChatDraft(data?.contentJson ?? "");
-					const current = draftsRef.current[sideId] ?? loaded;
-					draftsRef.current = { ...draftsRef.current, [sideId]: current };
-					receipt = current.pendingDelivery ?? preparedReceipt;
+				const draft = await loadSubmissionDraft(sideId);
+				if (!dispatchAvailable()) return;
+				if (receipt && acceptedDeliveries.get(sideId)?.has(receipt.clientMessageId)) return;
+				receipt = draft.pendingDelivery ?? preparedReceipt;
+				if (receipt && acceptedDeliveries.get(sideId)?.has(receipt.clientMessageId)) return;
+				inheritedReceipt = Boolean(receipt);
+				if (receipt && receipt.clientMessageId !== deliveryId) {
+					const entries = localEchosRef.current[sideId] ?? [];
+					localEchosRef.current = { ...localEchosRef.current, [sideId]: entries.filter(entry => entry.clientMessageId !== deliveryId) };
+					deliveryId = receipt.clientMessageId;
+					echo.clientMessageId = deliveryId;
 				}
-				const draft = draftsRef.current[sideId] ?? emptySideChatDraft();
+				updateEcho({ text: receipt?.request.text ?? text, excerpts: receipt?.submitted.references ?? overrideReferences ?? draft.references, createdAt: receipt?.createdAt ?? sentAt });
 				if (draft.pendingCommand) throw new Error("Retry the original handoff before sending another question.");
 				if (!receipt && handoffClientMessageId && draft.lastHandoffDelivery?.clientMessageId === handoffClientMessageId)
 					receipt = draft.lastHandoffDelivery;
+				inheritedReceipt = Boolean(receipt);
 				if (receipt && handoffClientMessageId && receipt.clientMessageId !== handoffClientMessageId)
 					throw new Error("This side chat has a different pending delivery.");
 				const files = attachments[sideId] ?? [];
 				if (!receipt) {
 					const imagePayloads = [
 						...extraAttachments,
-						...(await Promise.all(
-							files
-								.filter(({ file }) => /^image\/(png|jpeg|gif|webp)$/i.test(file.type))
-								.map(({ file }) => sideFilePayload(file)),
-						)),
+						...nativeImages ? await sideImagePayloads(sessionId, draft.attachments, files) : [],
 					];
 					if (!dispatchAvailable()) return;
 					const paths = extraAttachments.length ? await stageAttachments(extraAttachments) : [];
+					if (paths.length !== extraAttachments.length) throw new Error("Could not stage every attached file.");
 					const allPaths = [...draft.attachments.map((file) => file.path), ...paths];
 
-					const clientMessageId = handoffClientMessageId ?? crypto.randomUUID();
+					const clientMessageId = deliveryId;
 					receipt = {
-						clientMessageId,
+						clientMessageId, createdAt: sentAt,
 						submitted: {
-							text: draft.text,
+							text,
 							attachments: draft.attachments,
-							references: draft.references,
+							references: overrideReferences ?? draft.references,
 						},
 						request: {
 							text,
@@ -1295,7 +1445,8 @@ export function useIndependentSideChats(
 					};
 				}
 				if (!dispatchAvailable()) return;
-				const frozen = receipt;
+				const frozen = { ...receipt, failure: undefined, handoff: receipt.handoff || Boolean(handoffClientMessageId) || undefined };
+				receipt = frozen;
 				const pending = {
 					...(draftsRef.current[sideId] ?? draft),
 					pendingDelivery: frozen,
@@ -1309,67 +1460,100 @@ export function useIndependentSideChats(
 				const saved = await saveSideChatDraft(sessionId, sideId, JSON.stringify(pending), available);
 				if (saved.error) throw saved.error;
 				await aoBridge.sideChats.capture();
+				const settings = await submittedSettings;
+				if (settings?.error) throw settings.error;
+				if (acceptedDeliveries.get(sideId)?.has(frozen.clientMessageId)) return;
 				if (!available() || (canDispatch && !canDispatch())) {
 					if (propagateError) throw new Error("Side chat is no longer active.");
 					return;
 				}
-				const { error: requestError, response } = await apiClient.POST(
+				dispatchStarted = true;
+				const { data: accepted, error: requestError, response } = await apiClient.POST(
 					"/api/v1/sessions/{sessionId}/conversation/side-chats/{sideId}/messages",
 					{
 						params: { path: { sessionId, sideId } },
 						body: frozen.request,
 					},
 				);
+				if (acceptedDeliveries.get(sideId)?.has(frozen.clientMessageId)) return;
 				if (!available()) {
 					if (propagateError && requestError) throw requestError;
 					return;
 				}
 				if (requestError) {
-					// Server errors can occur after acceptance; keep their receipt too.
-					if (response && response.status < 500)
+					// A rejected opening still owns its question and files. Repairable
+					// conflicts retry that receipt; invalid input recreates an editable draft.
+					const code = typeof requestError === "object" && "code" in requestError ? requestError.code : undefined;
+					let conflictConfirmed = false;
+					if (code === "CHAT_SIDE_IDEMPOTENCY_CONFLICT") {
+						const result = await apiClient.GET("/api/v1/sessions/{sessionId}/conversation/side-chats/{sideId}", { params: { path: { sessionId, sideId } } });
+						if (!available()) return;
+						conflictConfirmed = Boolean(result.data?.snapshot?.turns?.some(turn => turn.clientMessageId === deliveryId));
+						if (conflictConfirmed) setSnapshotRefreshKey(key => key + 1);
+					}
+					const rejected = conflictConfirmed || Boolean(response && response.status < 500 && response.status !== 408 && response.status !== 429 && code !== "CHAT_SIDE_IDEMPOTENCY_CONFLICT");
+					failureKind = rejected ? "rejected" : "unconfirmed";
+					if (opening && (response?.status === 400 || code === "CHAT_SIDE_UNSUPPORTED" || code === "CHAT_SIDE_RECREATE_REQUIRED")) {
+						setDrafts(current => {
+							const d = current[sideId];
+							return d?.pendingDelivery === frozen ? { ...current, [sideId]: { ...d, pendingDelivery: { ...frozen, recreateRequired: true } } } : current;
+						});
+					} else if (rejected && !opening || conflictConfirmed) {
+						localEchosRef.current = { ...localEchosRef.current, [sideId]: (localEchosRef.current[sideId] ?? []).filter(entry => entry.clientMessageId !== deliveryId) };
+						setLocalEchos(localEchosRef.current);
 						setDrafts((current) => {
 							const d = current[sideId];
 							if (!d || d.pendingDelivery !== frozen) return current;
 							const { pendingDelivery: _, ...rest } = d;
 							return { ...current, [sideId]: rest };
 						});
+					}
 					throw requestError;
 				}
+				if (accepted?.turn) updateEcho({ turnId: accepted.turn.id });
+				setSnapshotRefreshKey(key => key + 1);
 				await aoBridge.sideChats.capture().catch(() => undefined);
 				if (!available()) return;
-				const d = draftsRef.current[sideId];
-				if (d?.pendingDelivery === frozen) {
-					const { pendingDelivery: _, ...rest } = d;
-					const sentTextUnchanged =
-						d.text === frozen.submitted.text &&
-						JSON.stringify(d.attachments) === JSON.stringify(frozen.submitted.attachments);
-					const unsentReferences = d.references.filter((reference) =>
-						!frozen.submitted.references.some((submitted) => JSON.stringify(submitted) === JSON.stringify(reference)));
-					const next: SideChatDraft = {
-						...(sentTextUnchanged ? emptySideChatDraft() : rest),
-						references: unsentReferences,
-						lastHandoffDelivery: handoffClientMessageId ? frozen : d.lastHandoffDelivery,
-					};
-					draftsRef.current = { ...draftsRef.current, [sideId]: next };
-					setDrafts((current) => ({ ...current, [sideId]: next }));
-					const saved = await saveSideChatDraft(sessionId, sideId, JSON.stringify(next), available);
-					if (saved.error) throw saved.error;
-					await aoBridge.sideChats.capture().catch(() => undefined);
-				}
-
-				setAttachments((current) => (current[sideId] === files ? { ...current, [sideId]: [] } : current));
+				await acceptDelivery(sideId, frozen, opening);
 				// The first accepted question may have named this tab. A list refresh
 				// failure must not turn an accepted delivery into a failed send.
 				void refreshList(false).catch(() => undefined);
 			} catch (cause) {
-				if (available()) setSideError({ id: sideId, message: apiErrorMessage(cause), kind: "delivery" });
-				if (propagateError) throw cause;
+				if (available() && !acceptedDeliveries.get(sideId)?.has(deliveryId)) {
+					const message = apiErrorMessage(cause);
+					if (!dispatchStarted && !inheritedReceipt) failureKind = "rejected";
+					const retainedEcho = localEchosRef.current[sideId]?.find(entry => entry.clientMessageId === deliveryId);
+					if (retainedEcho && !retainedEcho.turnId) updateEcho({ delivery: failureKind === "rejected" ? "failed" : "uncertain" });
+					setSideError({ id: sideId, message, kind: "delivery" });
+					const current = draftsRef.current[sideId];
+					if (current?.pendingDelivery?.clientMessageId === deliveryId) {
+						const next = { ...current, pendingDelivery: { ...current.pendingDelivery, failure: { kind: failureKind, message } } };
+						setDrafts(drafts => ({ ...drafts, [sideId]: next }));
+					}
+					const settled = draftsRef.current[sideId];
+					if (settled && draftLoads.current.get(sideId)?.ready && (settled.pendingDelivery?.clientMessageId === deliveryId || failureKind === "rejected")) {
+						await saveSideChatDraft(sessionId, sideId, JSON.stringify(settled), available)
+							.then(({ error }) => { if (error) throw error; return aoBridge.sideChats.capture(); })
+							.catch(() => undefined);
+					}
+				}
+				if (propagateError && !acceptedDeliveries.get(sideId)?.has(deliveryId)) throw cause;
 			} finally {
+				// A failed local read/staging step owns no delivery. Do not leave a
+				// fresh follow-up bubble that later sends mistake for queued work.
+				// Existing uncertain receipts keep their bubble and stable identity.
+				if (!dispatchStarted && !opening && sendScope.active && creationScopeRef.current === sendScope && sessionRef.current === sessionId && draftsRef.current[sideId]?.pendingDelivery?.clientMessageId !== deliveryId && !existingEchos.some(entry => entry.clientMessageId === deliveryId)) {
+					const entries = localEchosRef.current[sideId] ?? [];
+					if (entries.some(entry => entry.clientMessageId === deliveryId)) {
+						localEchosRef.current = { ...localEchosRef.current, [sideId]: entries.filter(entry => entry.clientMessageId !== deliveryId) };
+						setLocalEchos(localEchosRef.current);
+					}
+				}
 				if (sendingRef.current.get(sideId) === token) sendingRef.current.delete(sideId);
 				setSendingRevision((version) => version + 1);
 			}
 		},
-		[sessionId, attachments, stageAttachments, nativeImages, create, sides, cancelHandoff, refreshList],
+		[sessionId, attachments, stageAttachments, nativeImages, create, sides, cancelHandoff, refreshList, loadSubmissionDraft, acceptDelivery, acceptedDeliveries],
 	);
 
 	const close = useCallback(async (sideId: string, requestId: string = crypto.randomUUID()) => {
@@ -1453,15 +1637,76 @@ export function useIndependentSideChats(
 	const resolveInput = useCallback((sideId: string, requestId: string, action: "accept" | "decline" | "cancel") => runSideMutation(sideId, "input:" + requestId, () => apiClient.POST(
 		"/api/v1/sessions/{sessionId}/conversation/side-chats/{sideId}/inputs/{requestId}/resolve", { params: { path: { sessionId, sideId, requestId } }, body: { action, content: action === "accept" ? inputAnswers[sideId]?.[requestId] ?? {} : {} } },
 	)), [sessionId, inputAnswers, runSideMutation]);
-	const updateSettings = useCallback((sideId: string, model: string, effort: string) => runSideMutation(sideId, "settings", () => apiClient.PATCH(
-		"/api/v1/sessions/{sessionId}/conversation/side-chats/{sideId}/settings", { params: { path: { sessionId, sideId } }, body: { model, effort } },
-	)), [sessionId, runSideMutation]);
+	const updateSettings = useCallback((sideId: string, model: string, effort: string) => {
+		const available = operationCurrent(sideId);
+		if (!available()) return;
+		const previous = settingsWrites.current.get(sideId);
+		const request = Promise.resolve(previous).catch(() => undefined).then(() => {
+			if (!available()) throw new Error("Side chat is no longer active.");
+			return apiClient.PATCH("/api/v1/sessions/{sessionId}/conversation/side-chats/{sideId}/settings", {
+				params: { path: { sessionId, sideId } }, body: { model, effort },
+			});
+		});
+		settingsWrites.current.set(sideId, request);
+		return runSideMutation(sideId, "settings", () => request);
+	}, [sessionId, runSideMutation, operationCurrent]);
 	const retry = useCallback((sideId: string, turnId: string) => runSideMutation(sideId, "retry:" + turnId, () => apiClient.POST(
 		"/api/v1/sessions/{sessionId}/conversation/side-chats/{sideId}/turns/{turnId}/retry", { params: { path: { sessionId, sideId, turnId } } },
 	)), [sessionId, runSideMutation]);
 	const recover = useCallback((sideId: string) => runSideMutation(sideId, "recover", () => apiClient.POST(
 		"/api/v1/sessions/{sessionId}/conversation/side-chats/{sideId}/recover", { params: { path: { sessionId, sideId } } },
 	)), [sessionId, runSideMutation]);
+	const recreate = useCallback((sideId: string): Promise<void> => {
+		const previous = recreations.current.get(sideId);
+		if (previous) return previous;
+		const available = operationCurrent(sideId);
+		const activation = activationRevision.current.revision;
+		clearSideError(sideId, "recreate");
+		const action = (async () => {
+			const draft = await loadDraft(sideId);
+			if (!available()) return;
+			const receipt = draft.openingDelivery ?? draft.pendingDelivery;
+			// Activate only after copying, so the replacement's editor cannot
+			// accept edits that a late draft read or the copy would overwrite.
+			const destination = await create(undefined, true, undefined, { isCurrent: available, shouldActivate: () => false });
+			const activate = () => {
+				if (!available() || !operationCurrent(destination.id)() || activationRevision.current.revision !== activation) return;
+				setActiveId(destination.id);
+				setVisible(true);
+				setFocusKey(key => key + 1);
+			};
+			if (!receipt) { activate(); return; }
+			if (!available() || !operationCurrent(destination.id)()) return;
+			await loadDraft(destination.id);
+			if (!available() || !operationCurrent(destination.id)()) return;
+			const destinationDraft = draftsRef.current[destination.id];
+			// A tab can be selected manually before its recovery copy completes.
+			// Once the reader submits there, that submission owns the destination.
+			if (sendingRef.current.has(destination.id) || destinationDraft.pendingDelivery || destinationDraft.pendingCommand || destinationDraft.openingDelivery || sidesRef.current.some(side => side.id === destination.id && side.state !== "draft")) return;
+			const next = { ...emptySideChatDraft(), text: receipt.request.text, attachments: receipt.submitted.attachments, references: receipt.submitted.references };
+			for (const resource of receipt.request.resources ?? []) {
+				if (next.attachments.some(file => file.path === resource.uri)) continue;
+				const extension = resource.uri.split(".").at(-1)?.toLowerCase();
+				const mimeType = extension === "jpg" || extension === "jpeg" ? "image/jpeg" : ["png", "gif", "webp"].includes(extension ?? "") ? `image/${extension}` : "application/octet-stream";
+				next.attachments = [...next.attachments, { id: crypto.randomUUID(), path: resource.uri, name: resource.name || "Attachment", mimeType, bytes: 0 }];
+			}
+			const copied = mergeSideChatDraft(next, { ...destinationDraft, text: editedDraftText.current.has(destination.id) ? destinationDraft.text : next.text });
+			setDrafts(current => ({ ...current, [destination.id]: copied }));
+			const saved = await saveSideChatDraft(sessionId, destination.id, JSON.stringify(copied), operationCurrent(destination.id));
+			if (saved.error) throw saved.error;
+			await aoBridge.sideChats.capture();
+			activate();
+		})().catch(cause => {
+			if (available()) setSideError({ id: sideId, message: apiErrorMessage(cause), kind: "recreate" });
+			throw cause;
+		}).finally(() => {
+			if (recreations.current.get(sideId) === action) recreations.current.delete(sideId);
+			setRecreationRevision(value => value + 1);
+		});
+		recreations.current.set(sideId, action);
+		setRecreationRevision(value => value + 1);
+		return action;
+	}, [sessionId, create, operationCurrent, loadDraft, setDrafts, setSideError, clearSideError]);
 	const cancelQueuedTurn = useCallback((sideId: string, turnId: string) => runSideMutation(sideId, "cancel:" + turnId, () => apiClient.POST(
 		"/api/v1/sessions/{sessionId}/conversation/side-chats/{sideId}/turns/{turnId}/cancel", { params: { path: { sessionId, sideId, turnId } } },
 	)), [sessionId, runSideMutation]);
@@ -1487,6 +1732,34 @@ export function useIndependentSideChats(
 	const status = activeId ? closeStatus(closeProjection.current, activeId) : undefined;
 	const warning = activeId && status && !canMutateSide(closeProjection.current, activeId) && status !== "closing" ? (status === "cleanup_pending" ? "cleanup_pending" : "unconfirmed") : status === "rejected_open" ? "open" : undefined;
 	const activeError = error || listError || (activeId ? Object.values(sideErrors[activeId] ?? {}).at(-1) : undefined);
+	const activeEchos = useMemo(() => {
+		const entries = activeId ? localEchos[activeId] ?? [] : [];
+		const receipt = activeId ? drafts[activeId]?.pendingDelivery : undefined;
+		if (!receipt || entries.some(echo => echo.clientMessageId === receipt.clientMessageId) || snapshot?.turns?.some(turn => turn.clientMessageId === receipt.clientMessageId)) return entries;
+		return [...entries, { clientMessageId: receipt.clientMessageId, text: receipt.request.text, createdAt: receipt.createdAt ?? snapshot?.side.openingStartedAt ?? snapshot?.side.createdAt ?? new Date().toISOString(), opening: snapshot?.side.state === "draft", queued: snapshot?.turns?.some(turn => turn.state === "running" || turn.state === "queued"), excerpts: receipt.submitted.references, delivery: receipt.failure ? receipt.failure.kind === "rejected" ? "failed" as const : "uncertain" as const : undefined }];
+	}, [activeId, localEchos, drafts, snapshot]);
+	const queuedMessages = useMemo((): QueuedMessage[] => {
+		if (!snapshot) return [];
+		const known = new Set(snapshot.turns?.map(turn => turn.clientMessageId));
+		return [
+			...(snapshot.turns ?? []).filter(turn => turn.state === "queued" && turn.id !== snapshot.side.openingTurnId).map((turn, index): QueuedMessage => ({
+				turnId: turn.id,
+				message: { kind: "message", id: `queued-${turn.id}`, turnId: turn.id, clientMessageId: turn.clientMessageId, sequence: index + 1, revision: 1, role: "user", origin: "human", text: turn.text, streaming: false, createdAt: turn.createdAt },
+			})),
+			...activeEchos.filter(echo => echo.queued && !echo.opening && !known.has(echo.clientMessageId)).map((echo): QueuedMessage => ({
+				turnId: echo.turnId ?? `local:${echo.clientMessageId}`, pending: true,
+				message: { kind: "message", id: `local:${echo.clientMessageId}`, turnId: echo.turnId ?? `local:${echo.clientMessageId}`, clientMessageId: echo.clientMessageId, sequence: (snapshot.turns?.length ?? 0) + 1, revision: 0, role: "user", origin: "human", text: echo.text, streaming: false, delivery: "queued", createdAt: echo.createdAt },
+			})),
+		];
+	}, [snapshot, activeEchos]);
+	const openingTurn = snapshot?.turns?.find(turn => turn.id === snapshot.side.openingTurnId);
+	const pendingDelivery = activeId ? drafts[activeId]?.pendingDelivery : undefined;
+	const pendingAccepted = Boolean(pendingDelivery && snapshot?.turns?.some(turn => turn.clientMessageId === pendingDelivery.clientMessageId));
+	const recreateOpening = Boolean(snapshot?.side.recreateRequired || !pendingAccepted && pendingDelivery?.recreateRequired);
+	const restoredOpening = Boolean(pendingDelivery && !pendingAccepted && !sending && (pendingDelivery.failure || pendingDelivery.recreateRequired || !activeId || !localEchos[activeId]?.some(echo => echo.clientMessageId === pendingDelivery.clientMessageId)));
+	const openingFailure = !readOnly && (snapshot?.side.state === "failed" && Boolean(snapshot.side.openingTurnId) && openingTurn?.state !== "completed" || activeEchos.some(echo => echo.opening) && Boolean(restoredOpening || activeId && sideErrors[activeId]?.delivery));
+	const openingError = snapshot?.side.errorMessage || (!pendingAccepted ? pendingDelivery?.failure?.message : undefined) || (activeId ? sideErrors[activeId]?.delivery : undefined) || (restoredOpening ? t("sideChat.deliveryIsUnconfirmedRetryTheOriginalQuestionBeforeSendingAnother") : undefined);
+	const openingInFlight = openingTurn ? ["queued", "running"].includes(openingTurn.state) : activeEchos.some(echo => echo.opening);
 	const conversation = useMemo(
 		() => (snapshot && snapshot.side.id === activeId ? sideConversationSnapshot(snapshot, readOnly ? retainedSnapshots.current.get(snapshot.side.id)?.olderPages ?? [] : olderPages) : undefined),
 		[snapshot, olderPages, activeId, readOnly],
@@ -1772,15 +2045,15 @@ export function useIndependentSideChats(
 				{warning ? <div role="alert" className="shrink-0 border-b border-border bg-surface px-4 py-3 text-xs text-warning">{t(warning === "open" ? "sideChat.closeFailedOpen" : warning === "cleanup_pending" ? "sideChat.closeCleanupPending" : "sideChat.closeUnconfirmed")}</div> : null}
 				{snapshot && snapshot.side.id === activeId ? (
 					<>
-						{!readOnly && snapshot.side.state !== "ready" ? (
+						{!readOnly && (snapshot.side.state === "recovering" && !openingInFlight || snapshot.side.state === "failed" && !openingFailure) ? (
 							<p className="border-b border-border px-4 py-2 text-xs text-muted-foreground" role="status">
 								{snapshot.side.errorMessage ||
-									(snapshot.side.state === "recovering" ? t("sideChat.reconnecting") : snapshot.side.state)}
+									t("sideChat.reconnecting")}
 							</p>
 						) : null}
 						{conversation ? (
 							<div className="relative flex min-h-0 flex-1 flex-col">
-								{!readOnly && conversation.items.length === 0 ? (
+								{!readOnly && conversation.items.length === 0 && !activeEchos.length ? (
 									// The Timeline draws nothing for an empty transcript.
 									<div className="mx-auto flex max-w-sm flex-1 flex-col items-center justify-center gap-2 px-4 py-8 text-center text-sm">
 										<h3 className="font-medium">{t("sideChat.askASideQuestion")}</h3>
@@ -1791,6 +2064,17 @@ export function useIndependentSideChats(
 									sideChat
 									key={activeId}
 									snapshot={conversation}
+									localEchos={readOnly ? [] : activeEchos}
+									openingStartedAt={readOnly || openingFailure || !openingInFlight ? undefined : snapshot.side.openingStartedAt ?? activeEchos.find(echo => echo.opening)?.createdAt}
+									openingStartupLabel={["draft", "opening", "recovering"].includes(snapshot.side.state) ? t("sideChat.starting") : undefined}
+									startup={openingFailure ? {
+										failed: true, steps: [], agentName: "", label: t("sideChat.sideChatIsUnavailable"),
+										openingTurnId: snapshot.side.openingTurnId ?? (activeEchos.find(echo => echo.opening) ? `local:${activeEchos.find(echo => echo.opening)!.clientMessageId}` : undefined),
+										error: openingError,
+										retrying: sending || recreations.current.has(activeId),
+										retryLabel: recreateOpening ? t("sideChat.newSideChat") : undefined,
+										onRetry: recreateOpening ? () => void recreate(activeId).catch(() => undefined) : () => snapshot.side.state === "failed" ? void recover(activeId) : void send(activeId, drafts[activeId]?.pendingDelivery ? "" : activeEchos.find(echo => echo.opening)?.text ?? ""),
+									} : undefined}
 									annotationNavigationRef={timelineNavigationRef}
 									draftScope={timelineDraftScope!}
 									draftPersistenceAvailable={false}
@@ -1811,7 +2095,7 @@ export function useIndependentSideChats(
 									onForeignAnnotation={(annotation) => onNavigate?.(annotation)}
 									onDecide={readOnly ? undefined : (requestId, decisionId) => void resolveApproval(activeId, requestId, decisionId)}
 									busy={!readOnly && conversation.controller.state === "busy"}
-									retryControl={readOnly ? undefined : { retry: (turnId) => retry(activeId, turnId) }}
+									retryControl={readOnly || openingFailure ? undefined : { retry: (turnId) => retry(activeId, turnId) }}
 								/>
 							</div>
 						) : null}
@@ -1827,12 +2111,12 @@ export function useIndependentSideChats(
 								type="button"
 								variant="secondary"
 								size="sm"
-								onClick={() => void create(undefined, true).catch(() => undefined)}
-								disabled={!canCreate || pending}
+								onClick={() => void recreate(activeId).catch(() => undefined)}
+								disabled={!canCreate || pending || recreations.current.has(activeId)}
 							>
 								{t("sideChat.newSideChat")}
 							</Button>
-						) : !readOnly && snapshot.side.state === "failed" ? (
+						) : !readOnly && snapshot.side.state === "failed" && !openingFailure ? (
 							<Button
 								type="button"
 								variant="secondary"
@@ -1842,7 +2126,7 @@ export function useIndependentSideChats(
 								{t("sideChat.retryConnection")}
 							</Button>
 						) : null}
-						{!readOnly && (drafts[activeId]?.pendingDelivery || drafts[activeId]?.pendingCommand) && !sendingRef.current.has(activeId) ? (
+						{!readOnly && !openingFailure && (drafts[activeId]?.pendingDelivery || drafts[activeId]?.pendingCommand) && !sendingRef.current.has(activeId) ? (
 							<div className="px-3 text-xs text-muted-foreground">
 								<p>{t("sideChat.deliveryIsUnconfirmedRetryTheOriginalQuestionBeforeSendingAnother")}</p>
 								<Button
@@ -1887,7 +2171,7 @@ export function useIndependentSideChats(
 								}
 							}}
 							files={[]}
-							ready={snapshot.side.state === "ready"}
+							ready={["draft", "opening", "ready"].includes(snapshot.side.state)}
 							deliveryPending={Boolean(drafts[activeId]?.pendingDelivery || drafts[activeId]?.pendingCommand)}
 							skills={skills}
 							focusKey={focusKey}
@@ -1916,26 +2200,10 @@ export function useIndependentSideChats(
 							side={snapshot.side}
 							onSettings={(model, effort) => void updateSettings(activeId, model, effort)}
 							queuedDock={
-								(snapshot.turns ?? []).some((turn) => turn.state === "queued") ? (
+								queuedMessages.length ? (
 									<>
 										<QueuedMessageDock
-											messages={(snapshot.turns ?? [])
-												.filter((turn) => turn.state === "queued")
-												.map((turn, index) => ({
-													turnId: turn.id,
-													message: {
-														kind: "message",
-														id: `queued-${turn.id}`,
-														turnId: turn.id,
-														sequence: index + 1,
-														revision: 1,
-														role: "user",
-														origin: "human",
-														text: turn.text,
-														streaming: false,
-														createdAt: turn.createdAt,
-													},
-												}))}
+											messages={queuedMessages}
 											onCancelQueuedTurn={(turnId) => cancelQueuedTurn(activeId, turnId)}
 											onBeginQueuedEdit={(turnId, text) => {
 												if (!operationCurrent(activeId)()) return;
@@ -2004,6 +2272,14 @@ export function useIndependentSideChats(
 				{activeError ? (
 					<div className="shrink-0 border-t border-border bg-surface px-4 py-3 text-xs" role="alert">
 						<p className="break-words text-destructive">{translateDraft(activeError!)}</p>
+						{activeId && sideErrors[activeId]?.["draft-read"] ? (
+							<Button type="button" size="sm" variant="ghost" onClick={() => {
+								const available = operationCurrent(activeId);
+								void loadDraft(activeId).catch(cause => {
+									if (available()) setSideError({ id: activeId, message: apiErrorMessage(cause), kind: "draft-read" });
+								});
+							}}>{t("sideChat.retryLoading")}</Button>
+						) : null}
 					</div>
 				) : null}
 			</aside>
