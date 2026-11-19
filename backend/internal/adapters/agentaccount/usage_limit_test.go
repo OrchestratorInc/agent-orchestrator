@@ -4,6 +4,9 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"os"
+	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 	"time"
@@ -99,5 +102,53 @@ func TestCodexLimitsPreservesPrivateSafeReset(t *testing.T) {
 		if err != nil || strings.Contains(string(encoded), "AutoResume") || strings.Contains(string(encoded), "autoResume") {
 			t.Fatalf("private reset leaked into account JSON: %s, %v", encoded, err)
 		}
+	}
+}
+
+func TestCodexLimitsReachedBucketLeavesNoHandoffRoom(t *testing.T) {
+	spark := "GPT-5.3-Codex-Spark"
+	for _, tc := range []struct {
+		name     string
+		capacity ports.CodexCapacityObservation
+		model    string
+		ok       bool
+	}{
+		{"reached overall bucket at 12%", ports.CodexCapacityObservation{
+			Overall: &domain.CodexCapacityBucket{LimitID: "codex", Reached: domain.CodexCapacityReached, Primary: &domain.CodexCapacityWindow{UsedPercent: 12}},
+		}, "", false},
+		{"reached spark bucket without windows", ports.CodexCapacityObservation{
+			Overall:           &domain.CodexCapacityBucket{LimitID: "codex", Primary: &domain.CodexCapacityWindow{UsedPercent: 20}},
+			AdditionalBuckets: []domain.CodexCapacityBucket{{LimitID: "spark", DisplayName: &spark, Reached: domain.CodexCapacityReached}},
+		}, "gpt-5.3-codex-spark", false},
+		{"another model ignores the reached spark bucket", ports.CodexCapacityObservation{
+			Overall:           &domain.CodexCapacityBucket{LimitID: "codex", Primary: &domain.CodexCapacityWindow{UsedPercent: 20}},
+			AdditionalBuckets: []domain.CodexCapacityBucket{{LimitID: "spark", DisplayName: &spark, Reached: domain.CodexCapacityReached}},
+		}, "gpt-5.5", true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			cli := &Codex{Accounts: &limitsAccountFactory{client: &limitsAccountClient{capacity: tc.capacity}}}
+			limits, err := cli.Limits(context.Background(), "/codex")
+			if err != nil {
+				t.Fatal(err)
+			}
+			if room, ok := limits.HandoffHeadroom(domain.AgentAccountProviderCodex, tc.model); ok != tc.ok {
+				t.Fatalf("HandoffHeadroom = %v, %v; want ok %v (windows %+v)", room, ok, tc.ok, limits.Windows)
+			}
+		})
+	}
+}
+
+func TestClaudeLimitsReportsUnavailableUsageAsError(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("shell stub")
+	}
+	bin := filepath.Join(t.TempDir(), "claude")
+	reply := `{"type":"control_response","response":{"subtype":"success","request_id":"ao-usage","response":{"rate_limits_available":true,"rate_limits":null}}}`
+	if err := os.WriteFile(bin, []byte("#!/bin/sh\nread -r _\necho '"+reply+"'\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	c := &Claude{Binary: func(context.Context) (string, error) { return bin, nil }}
+	if _, err := c.Limits(context.Background(), ""); err == nil || !strings.Contains(err.Error(), "could not fetch") {
+		t.Fatalf("Limits error = %v, want could not fetch", err)
 	}
 }

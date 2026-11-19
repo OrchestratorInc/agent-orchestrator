@@ -121,9 +121,9 @@ describe("MarkdownFileView", () => {
 
 	it("opens external links in the system browser", () => {
 		const openExternal = vi.spyOn(aoBridge.app, "openExternal").mockResolvedValue(undefined);
-		render(view("[AO docs](https://example.com/docs)"));
+		render(view("[Orchestrator docs](https://example.com/docs)"));
 
-		fireEvent.click(screen.getByRole("link", { name: "AO docs" }));
+		fireEvent.click(screen.getByRole("link", { name: "Orchestrator docs" }));
 
 		expect(openExternal).toHaveBeenCalledWith("https://example.com/docs");
 	});

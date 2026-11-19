@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { WEEKDAY_CODES, buildRRuleFromSchedule, parseHourMinute, parseTimeValue, scheduleFieldsFromRRule } from "./automation-schedule";
+import { WEEKDAY_CODES, buildRRuleFromSchedule, describeSchedule, parseHourMinute, parseTimeValue, scheduleFieldsFromRRule } from "./automation-schedule";
 
 describe("automation-schedule", () => {
 	it("roundtrips every weekday the form can choose", () => {
@@ -96,4 +96,24 @@ it.each([
 		expect(parseHourMinute(fields.hour, fields.minute)).not.toBeNull();
 		expect(buildRRuleFromSchedule(fields)).toBe(raw);
 	}
+});
+
+describe("describeSchedule", () => {
+	const nine = { hour: 9, minute: 0 };
+	it.each([
+		["FREQ=DAILY;BYHOUR=9;BYMINUTE=0;BYSECOND=0", { kind: "daily", time: nine }],
+		["FREQ=WEEKLY;BYDAY=MO,TU,WE,TH,FR;BYHOUR=9;BYMINUTE=0;BYSECOND=0", { kind: "weekdays", time: nine }],
+		["FREQ=WEEKLY;BYDAY=FR,MO,WE;BYHOUR=9;BYMINUTE=0", { kind: "weekly", days: ["MO", "WE", "FR"], time: nine }],
+		["FREQ=WEEKLY;BYDAY=SU;BYHOUR=9;BYMINUTE=0", { kind: "weekly", days: ["SU"], time: nine }],
+		["FREQ=WEEKLY;BYDAY=MO,TU,WE,TH,FR,SA,SU;BYHOUR=9;BYMINUTE=0", { kind: "daily", time: nine }],
+		["FREQ=MONTHLY;BYMONTHDAY=15;BYHOUR=9;BYMINUTE=0", { kind: "monthly", day: 15, time: nine }],
+		["DTSTART;TZID=Asia/Kolkata:20261001T183600\nRRULE:FREQ=DAILY;BYHOUR=9;BYMINUTE=0", { kind: "daily", time: nine }],
+		["FREQ=DAILY", { kind: "daily", time: null }],
+		["FREQ=HOURLY", { kind: "other", frequency: "hourly", time: null }],
+		["FREQ=DAILY;INTERVAL=2;BYHOUR=9;BYMINUTE=0", { kind: "other", frequency: "daily", time: nine }],
+		["FREQ=WEEKLY;BYDAY=1MO;BYHOUR=9;BYMINUTE=0", { kind: "other", frequency: "weekly", time: nine }],
+		["FREQ=MONTHLY;BYMONTHDAY=-1", { kind: "other", frequency: "monthly", time: null }],
+	])("summarizes %s", (rule, expected) => {
+		expect(describeSchedule(rule)).toEqual(expected);
+	});
 });

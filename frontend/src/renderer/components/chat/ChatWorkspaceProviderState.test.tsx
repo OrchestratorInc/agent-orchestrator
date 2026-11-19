@@ -203,7 +203,9 @@ describe("plan", () => {
 			};
 			const { container } = render(<ChatWorkspace snapshot={ended} />);
 			expect(screen.getByLabelText("Run the backend tests — in progress")).toBeInTheDocument();
-			expect(container.querySelector("[data-turn-plan] .animate-spin")).toHaveClass("opacity-0");
+			const arc = container.querySelector("[data-turn-plan] .animate-spin");
+			expect(arc).toHaveClass("opacity-0");
+			expect(arc).not.toHaveAttribute("data-turning");
 		},
 	);
 
@@ -374,10 +376,10 @@ describe("model reroute", () => {
 		expect(trigger.getAttribute("title")).toMatch(
 			/answered with gpt-5\.6-terra-mini instead of gpt-5\.6-terra/,
 		);
-		expect(screen.getByLabelText(/Substituted for gpt-5\.6-terra$/)).toBeInTheDocument();
+		expect(screen.queryByLabelText(/Substituted for/)).not.toBeInTheDocument();
 	});
 
-	it("carries the provider's own reason", () => {
+	it("leaves the reroute out of the timeline", () => {
 		render(
 			<ChatWorkspace
 				snapshot={chatFixtureRerouted}
@@ -389,8 +391,9 @@ describe("model reroute", () => {
 			fireEvent.click(trigger);
 		}
 		expect(
-			screen.getByText(/The requested model is at capacity for this account tier/),
-		).toBeInTheDocument();
+			screen.queryByText(/The requested model is at capacity for this account tier/),
+		).not.toBeInTheDocument();
+		expect(screen.queryByText(/Answered by/)).not.toBeInTheDocument();
 	});
 
 	it("keeps naming the chosen model when nothing was substituted", () => {

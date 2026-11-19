@@ -14,7 +14,7 @@ ao project <subcommand> [args] [flags]
 
 ### ao project add
 
-Register a local git repo as a project so sessions can be spawned in it. The path must be an existing git repository on disk. With `--as-workspace`, the path may be a parent folder containing direct child git repositories; AO initializes/adopts the parent as the root repo and gitignores children.
+Register a local git repo as a project so sessions can be spawned in it. The path must be an existing git repository on disk. With `--as-workspace`, the path may be a parent folder containing direct child git repositories; Orchestrator initializes/adopts the parent as the root repo and gitignores children.
 
 **Syntax:**
 ```
@@ -126,7 +126,7 @@ ao project rm agent-orchestrator -y
 
 ### ao project set-config
 
-Update a project's saved configuration. AO reads these settings when it spawns a session. Flags change only the fields they name and keep the rest of the saved config; a repeatable flag replaces that whole list or map. `--config-json` replaces the full object, and `--clear` removes all configuration.
+Update a project's saved configuration. Orchestrator reads these settings when it spawns a session. Flags change only the fields they name and keep the rest of the saved config; a repeatable flag replaces that whole list or map. `--config-json` replaces the full object, and `--clear` removes all configuration.
 
 **Warning:** `--config-json` replaces the whole config. The CLI silently ignores unknown keys in it, so a typo can leave the replacement empty. See the [full-config warning](https://docs.orchestrator.inc/configuration/projects/#update-from-the-cli) before updating project settings from the CLI.
 

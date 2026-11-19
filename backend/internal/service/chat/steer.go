@@ -127,12 +127,45 @@ func (s *Service) Steer(
 	if msg.SenderSessionID != "" {
 		msg.Origin = domain.MessageOriginAutomation
 	}
+	record, err := s.requireChatSession(ctx, id)
+	if err != nil {
+		return SteerResult{}, err
+	}
+	if _, writerErr := s.checkOtherWriter(ctx, record); writerErr != nil {
+		if result, found, err := s.steerReceipt(ctx, id, msg); found || err != nil {
+			return result, err
+		}
+		return SteerResult{}, writerErr
+	}
 	controller, release, err := s.workingController(ctx, id)
 	if err != nil {
 		return SteerResult{}, err
 	}
 	defer release()
 	return controller.Steer(ctx, msg)
+}
+
+func (s *Service) steerReceipt(ctx context.Context, id domain.SessionID, msg ports.ChatUserMessage) (SteerResult, bool, error) {
+	if msg.ClientMessageID == "" {
+		return SteerResult{}, false, nil
+	}
+	conversation, err := s.store.ConversationForSession(ctx, id)
+	if err != nil {
+		return SteerResult{}, false, fmt.Errorf("%w: load conversation: %w", ErrSteerDeliveryUncertain, err)
+	}
+	delivery, found, err := s.store.SteerDelivery(ctx, conversation.ID, msg.ClientMessageID)
+	if err != nil || !found {
+		if err != nil {
+			err = fmt.Errorf("%w: load prior result: %w", ErrSteerDeliveryUncertain, err)
+		}
+		return SteerResult{}, false, err
+	}
+	requestJSON, err := encodeSteerDeliveryRequest(msg)
+	if err != nil {
+		return SteerResult{}, true, err
+	}
+	result, err := replaySteerDelivery(delivery, requestJSON)
+	return result, true, err
 }
 
 // RecoverSteer reads only the durable receipt. A missing controller or a changed
@@ -175,6 +208,22 @@ func (s *Service) SteerOrSend(
 	// targets render the same way.
 	if msg.SenderSessionID != "" {
 		msg.Origin = domain.MessageOriginAutomation
+	}
+	if !recoverOnly {
+		record, err := s.requireChatSession(ctx, id)
+		if err != nil {
+			return SteerOrSendResult{}, err
+		}
+		if _, writerErr := s.checkOtherWriter(ctx, record); writerErr != nil {
+			conversation, err := s.store.ConversationForSession(ctx, id)
+			if err != nil {
+				return SteerOrSendResult{}, fmt.Errorf("%w: load conversation: %w", ErrSteerDeliveryUncertain, err)
+			}
+			if result, done, err := steerOrSendReceipt(ctx, s.store, conversation.ID, msg, false); done {
+				return result, err
+			}
+			return SteerOrSendResult{}, writerErr
+		}
 	}
 	controller, release, err := s.workingController(ctx, id)
 	if err != nil {
@@ -484,7 +533,7 @@ func (c *Controller) steerLocked(ctx context.Context, msg ports.ChatUserMessage)
 		wrapped := classify(fmt.Errorf("steer turn %s: %w", turn, err))
 		if len(batch) > 0 {
 			if failErr := c.store.FailQueuedBatch(context.WithoutCancel(ctx), c.conversation.ID,
-				queuedBatchIDs(batch), ErrSteerDeliveryUncertain.Error(), c.now()); failErr != nil {
+				queuedBatchIDs(batch), ErrSteerDeliveryUncertain.Error(), c.now(), false); failErr != nil {
 				c.log.Error("failed to settle uncertain steered batch", "error", failErr)
 			}
 		}
@@ -497,6 +546,9 @@ func (c *Controller) steerLocked(ctx context.Context, msg ports.ChatUserMessage)
 	landed := ref.ProviderTurnID
 	if landed == "" {
 		landed = turn
+	}
+	if err := c.store.MarkQueuedBatchStarted(context.WithoutCancel(ctx), c.conversation.ID, queuedBatchIDs(batch), c.now()); err != nil {
+		c.log.Error("failed to record steered batch acceptance", "error", err)
 	}
 	providerInput := steerProviderInput{
 		Text: providerMessage.Text, Content: providerMessage.Content,
@@ -511,7 +563,7 @@ func (c *Controller) steerLocked(ctx context.Context, msg ports.ChatUserMessage)
 		}
 		if err != nil {
 			if failErr := c.store.FailQueuedBatch(context.WithoutCancel(ctx), c.conversation.ID,
-				queuedBatchIDs(batch), ErrSteerDeliveryUncertain.Error(), c.now()); failErr != nil {
+				queuedBatchIDs(batch), ErrSteerDeliveryUncertain.Error(), c.now(), true); failErr != nil {
 				c.log.Error("failed to settle steered batch with unrecorded provider input", "error", failErr)
 			}
 			return SteerResult{ProviderTurnID: landed}, fmt.Errorf("%w: record steered batch provider input: %w", ErrSteerDeliveryUncertain, err)
@@ -522,7 +574,7 @@ func (c *Controller) steerLocked(ctx context.Context, msg ports.ChatUserMessage)
 		if recordErr != nil {
 			if len(batch) > 0 {
 				_ = c.store.FailQueuedBatch(context.WithoutCancel(ctx), c.conversation.ID,
-					queuedBatchIDs(batch), ErrSteerDeliveryUncertain.Error(), c.now())
+					queuedBatchIDs(batch), ErrSteerDeliveryUncertain.Error(), c.now(), true)
 			}
 			// The guidance IS with the agent; only AO's record of it failed. Reporting the
 			// error rather than swallowing it, because a steer the timeline never mentions
@@ -530,9 +582,9 @@ func (c *Controller) steerLocked(ctx context.Context, msg ports.ChatUserMessage)
 			return SteerResult{ProviderTurnID: landed}, recordErr
 		}
 		if len(batch) > 0 {
-			if err := c.store.CompleteQueuedBatch(context.WithoutCancel(ctx), c.conversation.ID, queuedBatchIDs(batch), landed, c.now()); err != nil {
+			if err := c.store.CompleteQueuedBatch(context.WithoutCancel(ctx), c.conversation.ID, queuedBatchIDs(batch), landed, activityID, c.now()); err != nil {
 				_ = c.store.FailQueuedBatch(context.WithoutCancel(ctx), c.conversation.ID,
-					queuedBatchIDs(batch), ErrSteerDeliveryUncertain.Error(), c.now())
+					queuedBatchIDs(batch), ErrSteerDeliveryUncertain.Error(), c.now(), true)
 				return SteerResult{ProviderTurnID: landed, ActivityID: activityID}, fmt.Errorf("%w: complete pending messages: %w", ErrSteerDeliveryUncertain, err)
 			}
 		}
@@ -554,7 +606,7 @@ func (c *Controller) steerLocked(ctx context.Context, msg ports.ChatUserMessage)
 	if completeErr != nil {
 		if len(batch) > 0 {
 			_ = c.store.FailQueuedBatch(context.WithoutCancel(ctx), c.conversation.ID,
-				queuedBatchIDs(batch), ErrSteerDeliveryUncertain.Error(), c.now())
+				queuedBatchIDs(batch), ErrSteerDeliveryUncertain.Error(), c.now(), true)
 		}
 		return SteerResult{}, fmt.Errorf("%w: %w", ErrSteerDeliveryUncertain, completeErr)
 	}
@@ -571,54 +623,8 @@ func (c *Controller) SteerOrSend(
 	c.sendMu.Lock()
 	defer c.sendMu.Unlock()
 
-	if existing, found, err := c.store.ConversationMessageByClientID(
-		ctx, c.conversation.ID, msg.ClientMessageID,
-	); err != nil {
-		return SteerOrSendResult{}, fmt.Errorf("recover sent message: %w", err)
-	} else if found {
-		if !recoverOnly {
-			hash, err := clientPayloadHash(msg)
-			if err != nil {
-				return SteerOrSendResult{}, err
-			}
-			if existing.ClientPayloadHash != "" {
-				if existing.ClientPayloadHash != hash {
-					return SteerOrSendResult{}, domain.ErrClientMessageConflict
-				}
-			} else if !legacyMessageMatches(existing, msg) {
-				return SteerOrSendResult{}, domain.ErrClientMessageConflict
-			}
-		}
-		turn, err := c.store.TurnByID(ctx, existing.TurnID)
-		if err != nil {
-			return SteerOrSendResult{}, fmt.Errorf("recover sent turn: %w", err)
-		}
-		return SteerOrSendResult{Duplicate: true, Turn: turn}, nil
-	}
-
-	requestJSON, err := encodeSteerDeliveryRequest(msg)
-	if err != nil {
-		return SteerOrSendResult{}, err
-	}
-	if delivery, found, err := c.store.SteerDelivery(
-		ctx, c.conversation.ID, msg.ClientMessageID,
-	); err != nil {
-		return SteerOrSendResult{}, fmt.Errorf("%w: load prior result: %w", ErrSteerDeliveryUncertain, err)
-	} else if found {
-		replayRequest := requestJSON
-		if recoverOnly {
-			replayRequest = delivery.RequestJSON
-		}
-		steered, replayErr := replaySteerDelivery(delivery, replayRequest)
-		if replayErr == nil {
-			return SteerOrSendResult{Steered: true, Duplicate: true, Steer: steered}, nil
-		}
-		if !errors.Is(replayErr, ErrNoActiveTurn) || recoverOnly {
-			return SteerOrSendResult{}, replayErr
-		}
-	}
-	if recoverOnly {
-		return SteerOrSendResult{}, ErrSteerDeliveryUncertain
+	if result, done, err := steerOrSendReceipt(ctx, c.store, c.conversation.ID, msg, recoverOnly); done {
+		return result, err
 	}
 
 	if _, active := c.awaitAcknowledgedTurn(ctx); active {
@@ -650,7 +656,7 @@ func (c *Controller) SteerOrSend(
 	if err != nil {
 		if len(batch) > 0 {
 			if failErr := c.store.FailQueuedBatch(context.WithoutCancel(ctx), c.conversation.ID,
-				queuedBatchIDs(batch), ErrSteerDeliveryUncertain.Error(), c.now()); failErr != nil {
+				queuedBatchIDs(batch), ErrSteerDeliveryUncertain.Error(), c.now(), false); failErr != nil {
 				c.log.Error("failed to settle fallback batch", "error", failErr)
 			}
 		}
@@ -662,6 +668,44 @@ func (c *Controller) SteerOrSend(
 		}
 	}
 	return SteerOrSendResult{Turn: turn}, nil
+}
+
+func steerOrSendReceipt(
+	ctx context.Context,
+	st Store,
+	conversationID string,
+	msg ports.ChatUserMessage,
+	recoverOnly bool,
+) (SteerOrSendResult, bool, error) {
+	if turn, found, err := sentMessageReceipt(ctx, st, conversationID, msg, recoverOnly); found || err != nil {
+		return SteerOrSendResult{Duplicate: found, Turn: turn}, true, err
+	}
+
+	requestJSON, err := encodeSteerDeliveryRequest(msg)
+	if err != nil {
+		return SteerOrSendResult{}, true, err
+	}
+	if delivery, found, err := st.SteerDelivery(
+		ctx, conversationID, msg.ClientMessageID,
+	); err != nil {
+		return SteerOrSendResult{}, true, fmt.Errorf("%w: load prior result: %w", ErrSteerDeliveryUncertain, err)
+	} else if found {
+		replayRequest := requestJSON
+		if recoverOnly {
+			replayRequest = delivery.RequestJSON
+		}
+		steered, replayErr := replaySteerDelivery(delivery, replayRequest)
+		if replayErr == nil {
+			return SteerOrSendResult{Steered: true, Duplicate: true, Steer: steered}, true, nil
+		}
+		if !errors.Is(replayErr, ErrNoActiveTurn) || recoverOnly {
+			return SteerOrSendResult{}, true, replayErr
+		}
+	}
+	if recoverOnly {
+		return SteerOrSendResult{}, true, ErrSteerDeliveryUncertain
+	}
+	return SteerOrSendResult{}, false, nil
 }
 
 type steerDeliveryRequest struct {
