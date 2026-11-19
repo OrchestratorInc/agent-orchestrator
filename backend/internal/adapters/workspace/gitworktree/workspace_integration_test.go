@@ -1365,6 +1365,48 @@ func TestWorkspaceIntegrationWorkspaceProjectChecksOutTrackedFolders(t *testing.
 	}
 }
 
+// A start cancelled after its root worktree exists must still remove that
+// root; otherwise a retry finds it and treats the half-built session as ready.
+func TestWorkspaceIntegrationWorkspaceProjectCancelledStartRemovesRoot(t *testing.T) {
+	git := requireGit(t)
+	tmp := t.TempDir()
+	rootRepo := setupOriginClone(t, git, filepath.Join(tmp, "root"))
+	childRepo := setupOriginClone(t, git, filepath.Join(tmp, "api"))
+	ws, err := New(Options{Binary: git, ManagedRoot: filepath.Join(tmp, "managed"), RepoResolver: StaticRepoResolver{"proj": rootRepo}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	cancelled := false
+	ws.run = func(runCtx context.Context, binary string, args ...string) ([]byte, error) {
+		out, err := runCommand(runCtx, binary, args...)
+		joined := strings.Join(args, " ")
+		if err == nil && !cancelled && strings.Contains(joined, "worktree add") {
+			cancelled = true
+			cancel() // the root worktree now exists; fail every later step
+		}
+		return out, err
+	}
+
+	_, err = ws.CreateWorkspaceProject(ctx, ports.WorkspaceProjectConfig{
+		ProjectID: "proj", SessionID: "sess", Kind: "worker", Branch: "ao/cancelled",
+		RootRepoPath: rootRepo,
+		Repos:        []ports.WorkspaceProjectRepoConfig{{Name: "api", RelativePath: "api", RepoPath: childRepo}},
+	})
+	if err == nil || !cancelled {
+		t.Fatalf("create after cancellation = %v (cancelled %v), want an error after the root was added", err, cancelled)
+	}
+	ws.waitForDiscards()
+	rootPath := filepath.Join(tmp, "managed", "proj", "worker", "sess")
+	if _, statErr := os.Stat(rootPath); !errors.Is(statErr, os.ErrNotExist) {
+		t.Fatalf("root worktree left behind after a cancelled start: %v", statErr)
+	}
+	if list := gitOutput(t, git, rootRepo, "worktree", "list", "--porcelain"); strings.Contains(list, filepath.Join("managed", "proj", "worker", "sess")) {
+		t.Fatalf("root worktree still registered after a cancelled start:\n%s", list)
+	}
+}
+
 func TestWorkspaceIntegrationWorkspaceProjectRepairsRemotelessRootDefault(t *testing.T) {
 	git := requireGit(t)
 	for _, kind := range []domain.SessionKind{domain.KindWorker, domain.KindOrchestrator} {

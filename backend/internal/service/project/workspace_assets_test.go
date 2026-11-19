@@ -86,8 +86,8 @@ func TestManager_AddWorkspaceRegistersOnlyReposFromPlainParent(t *testing.T) {
 	}
 }
 
-// In the user's own repository, Orchestrator lists only child repositories in
-// .gitignore, and never copies tracked, ignored, dependency or dot-folders.
+// In the user's own repository, Orchestrator registers only child
+// repositories, adds only them to .gitignore, and commits nothing else.
 func TestManager_AddWorkspaceAdoptedParentIgnoresOnlyChildRepos(t *testing.T) {
 	configureCommitter(t)
 	t.Setenv("GIT_CEILING_DIRECTORIES", os.TempDir())
@@ -110,6 +110,9 @@ func TestManager_AddWorkspaceAdoptedParentIgnoresOnlyChildRepos(t *testing.T) {
 		mkdirWithFile(t, filepath.Join(parent, dir))
 	}
 	gitRepoWithCommit(t, filepath.Join(parent, "api"))
+	// A repository nested in a plain folder must be ignored too, or a later
+	// `git add -A` in the parent records it as a gitlink.
+	gitRepoWithCommit(t, filepath.Join(parent, "packages", "foo"))
 
 	if _, err := m.Add(ctx, project.AddInput{Path: parent, ProjectID: ptr("ws"), AsWorkspace: true}); err != nil {
 		t.Fatalf("Add workspace: %v", err)
@@ -121,7 +124,7 @@ func TestManager_AddWorkspaceAdoptedParentIgnoresOnlyChildRepos(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got, want := string(ignored), "/data/\n/api/\n"; got != want {
+	if got, want := string(ignored), "/data/\n/api/\n/packages/foo/\n"; got != want {
 		t.Fatalf(".gitignore = %q, want %q", got, want)
 	}
 	if files := strings.TrimSpace(gitIn(t, parent, "show", "--name-only", "--format=", "HEAD")); files != ".gitignore" {

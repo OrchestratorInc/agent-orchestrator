@@ -71,9 +71,11 @@ func prepareWorkspaceProject(ctx context.Context, parent string, projectID domai
 		})
 	}
 	if parentIsGit {
-		// The parent is the user's repository: list only the child repositories,
-		// which must be ignored to keep gitlinks out of its index.
-		if err := adoptWorkspaceParent(ctx, parent, workspaceIgnoreEntries(children.repoDirs)); err != nil {
+		// The parent is the user's repository: list only repositories, which must
+		// be ignored to keep gitlinks out of its index. That includes a repository
+		// nested in a plain folder, which a later `git add -A` would record.
+		repos := append(append([]string(nil), children.repoDirs...), untrackedNestedRepos(ctx, parent, children.plainDirs)...)
+		if err := adoptWorkspaceParent(ctx, parent, workspaceIgnoreEntries(repos)); err != nil {
 			return nil, err
 		}
 	} else {
@@ -88,6 +90,27 @@ func prepareWorkspaceProject(ctx context.Context, parent string, projectID domai
 		return nil, err
 	}
 	return children.records, nil
+}
+
+// untrackedNestedRepos returns the repositories inside the plain folders dirs
+// that the parent neither tracks nor ignores. Git lists each as one "dir/"
+// entry instead of its files.
+func untrackedNestedRepos(ctx context.Context, parent string, dirs []string) []string {
+	if len(dirs) == 0 {
+		return nil
+	}
+	args := append([]string{"ls-files", "--others", "--exclude-standard", "-z", "--"}, dirs...)
+	out, err := gitOutput(ctx, parent, args...)
+	if err != nil {
+		return nil
+	}
+	var repos []string
+	for _, path := range strings.Split(out, "\x00") {
+		if repo, ok := strings.CutSuffix(path, "/"); ok && repo != "" {
+			repos = append(repos, repo)
+		}
+	}
+	return repos
 }
 
 func workspaceIgnoreEntries(dirs []string) []string {
