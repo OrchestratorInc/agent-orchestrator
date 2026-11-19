@@ -66,6 +66,10 @@ describe("highlightSync", () => {
 	it("degrades to no tree for a grammar it does not have", () => {
 		expect(highlightSync("x = 1", "klingon" as GrammarName)).toBeUndefined();
 	});
+
+	it("leaves code over half a million characters plain", () => {
+		expect(highlightSync("const a = 1;\n".repeat(40_000), "typescript")).toBeUndefined();
+	});
 });
 
 describe("streamingCodeHighlighter", () => {

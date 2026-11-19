@@ -2248,8 +2248,6 @@ textarea,
 	from { opacity: 0; }
 }
 
-/* A streaming reply, rendered by Words. Mirrors the settled ChatMarkdown
-   elements so the hand-off to react-markdown does not move the text. */
 .chat-md-stream [data-markdown="h1"] { @apply mb-1.5 mt-4 text-subtitle font-semibold leading-snug text-foreground first:mt-0; }
 .chat-md-stream [data-markdown="h2"] { @apply mb-1.5 mt-3.5 text-sm font-semibold leading-snug text-foreground first:mt-0; }
 .chat-md-stream [data-markdown="h3"] { @apply mb-1 mt-3 text-sm font-semibold leading-snug text-foreground first:mt-0; }

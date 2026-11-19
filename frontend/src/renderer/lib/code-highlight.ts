@@ -71,8 +71,11 @@ function tokenNode(token: ThemedToken): ElementContent {
 	return classes.length ? { type: "element", tagName: "span", properties: { className: classes }, children: [text] } : text;
 }
 
+const MAX_CHARS = 500_000;
+
 /** The highlighted tree, keeping the source's exact line endings. */
 export function highlightSync(code: string, language: GrammarName): Root | undefined {
+	if (code.length > MAX_CHARS) return undefined;
 	try {
 		const { tokens } = codeToTokens(code.replace(/\r\n|\r/g, "\n"), { lang: language, theme: CODE_THEME });
 		const endings = code.match(/\r\n|\r|\n/g) ?? [];

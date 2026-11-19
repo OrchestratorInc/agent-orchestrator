@@ -239,8 +239,6 @@ export const ChatMarkdown = memo(function ChatMarkdown({
 		const base = renderMath ? MATH_PLUGINS : PLUGINS;
 		return remarkPlugins ? [...base, ...remarkPlugins] : base;
 	}, [renderMath, remarkPlugins]);
-	const [mounted, setMounted] = useState(false);
-	useEffect(() => setMounted(true), []);
 	const settledPlugins = useMemo<NonNullable<Options["rehypePlugins"]>>(
 		() => [...(rehypePlugins ?? []), [rehypeExcerptSource, { offset: 0 }]],
 		[rehypePlugins],
@@ -257,19 +255,7 @@ export const ChatMarkdown = memo(function ChatMarkdown({
 				)}
 			>
 				{streaming ? (
-					<WordsMarkdown
-						isAnimating
-						animated={mounted && STREAM_FADE}
-						math={renderMath}
-						plugins={STREAM_PLUGINS}
-						controls={false}
-						lineNumbers={false}
-						urlTransform={streamUrlTransform}
-						onClickCapture={inertLinks}
-						onAuxClickCapture={inertLinks}
-					>
-						{text}
-					</WordsMarkdown>
+					<StreamingMarkdown text={text} math={renderMath} />
 				) : (
 					<Markdown remarkPlugins={plugins} rehypePlugins={settledPlugins} components={COMPONENTS} urlTransform={chatUrlTransform}>
 						{text}
@@ -341,6 +327,26 @@ function CodeBlock({ code, language, sourceNode }: { code: string; language?: st
 				</code>
 			</pre>
 		</div>
+	);
+}
+
+function StreamingMarkdown({ text, math }: { text: string; math: boolean }) {
+	const [mounted, setMounted] = useState(false);
+	useEffect(() => setMounted(true), []);
+	return (
+		<WordsMarkdown
+			isAnimating
+			animated={mounted && STREAM_FADE}
+			math={math}
+			plugins={STREAM_PLUGINS}
+			controls={false}
+			lineNumbers={false}
+			urlTransform={streamUrlTransform}
+			onClickCapture={inertLinks}
+			onAuxClickCapture={inertLinks}
+		>
+			{text}
+		</WordsMarkdown>
 	);
 }
 
