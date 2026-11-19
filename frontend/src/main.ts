@@ -220,6 +220,7 @@ import { BrowserHistoryStore } from "./main/browser-history-store";
 import { createAwakeTrayMonitor } from "./main/awake-tray";
 import { createAwakeDownloadBridge } from "./main/awake-download-bridge";
 import { createBrowserDownloadManager } from "./main/browser-download-manager";
+import { configureBrowserWebAuthn, createWebAuthnAccountChooser } from "./main/browser-webauthn";
 import { registerAgentLoginIpc } from "./main/agent-login-ipc";
 import { registerChatImageIpc } from "./main/chat-image-ipc";
 import { createArtifactSnapshotStore, registerArtifactSnapshotIpc, registerArtifactSnapshotProtocol } from "./main/artifact-snapshots";
@@ -1308,6 +1309,10 @@ async function createWindowInternal(): Promise<void> {
 			historyPath: path.join(desktopDataDir, "browser-downloads.json"),
 			shell,
 			notify: (state) => { awakeDownloads.update(state); shellWebContents.send("browser:downloadsChanged", state); },
+		}),
+		webAuthnAccountChooser: createWebAuthnAccountChooser({
+			showMessageBox: (options) =>
+				mainWindow && !mainWindow.isDestroyed() ? dialog.showMessageBox(mainWindow, options) : dialog.showMessageBox(options),
 		}),
 		clearBrowserProfileData: clearElectronBrowserProfileData,
 		openInUserBrowser: (url) => userBrowser.open(url),
@@ -4604,6 +4609,8 @@ async function writeAppStateOnLaunch(): Promise<void> {
 app.whenReady().then(async () => {
 	applyUserAgentFallback(app);
 	launchTiming.mark("appReady");
+	// Before any window exists, so a Browser tab's first passkey request can use Touch ID.
+	configureBrowserWebAuthn({ app, platform: process.platform, resourcesPath: process.resourcesPath });
 	// Before any browser partition exists; both run in the background.
 	void sweepTemporaryBrowserPartitions(app.getPath("userData")).then(({ removed, failed }) => {
 		if (removed || failed) console.info(`browser storage: removed ${removed} leftover temporary profiles${failed ? `, ${failed} failed` : ""}`);
