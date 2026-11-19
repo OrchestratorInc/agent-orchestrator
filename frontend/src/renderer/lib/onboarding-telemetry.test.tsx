@@ -265,7 +265,7 @@ describe("onboarding run telemetry", () => {
 	});
 
 	it("still completes a run when storage refuses writes", () => {
-		const setItem = vi.spyOn(Storage.prototype, "setItem").mockImplementation(() => {
+		const setItem = vi.spyOn(window.localStorage, "setItem").mockImplementation(() => {
 			throw new Error("QuotaExceededError");
 		});
 		try {
