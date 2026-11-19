@@ -180,9 +180,12 @@ export function AgentModelCombobox({
 	// model is chosen, so the control never reads as unset.
 	const aoDefaultEffort = fallbackEffort(effortOptions, providerEffort);
 	const effectiveEffort = explicitEffort || defaultEffort || aoDefaultEffort || "";
+	// A caller that pins choices treats an unset model as "follow the agent", so
+	// AO's fallback level is not written for it: that would pin an effort right
+	// after the choices were cleared.
 	useApplyEffortDefault(
 		explicitModel,
-		tuning && !explicitEffort ? aoDefaultEffort : undefined,
+		tuning && !explicitEffort && !(preserveDefaultSelection && !explicitModel) ? aoDefaultEffort : undefined,
 		tuning?.onEffortChange ?? ignoreEffortChange,
 		{ disabled: disabled || !tuning },
 	);
