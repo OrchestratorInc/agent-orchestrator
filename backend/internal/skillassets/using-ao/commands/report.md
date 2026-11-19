@@ -53,10 +53,9 @@ user-authorized scope.
 requests immediate delivery plus a rate-limited interrupt. Informational work
 batches for up to one hour. The first done report opens a five minute
 settlement window: the batch, including pending informational reports, is
-delivered about 15 seconds after no other worker of the project is still
+scheduled for delivery about 15 seconds after no other project worker is still
 working, and at the latest when the window closes. Idle, waiting, exited, or
-killed workers do not hold the batch, so the last finishing worker's report
-arrives within seconds.
+killed workers do not hold the batch. Reports stay pending without an active orchestrator.
 
 **Examples:**
 
