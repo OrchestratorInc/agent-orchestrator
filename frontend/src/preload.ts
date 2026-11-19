@@ -952,6 +952,8 @@ const api = {
 		setRecording: (active: boolean) => ipcRenderer.invoke("keybindings:setRecording", active) as Promise<void>,
 	},
 	awake: {
+		// Main pushes Stay Awake changes on this bridge; stubs set false and keep polling.
+		pushes: true,
 		// Main reads the daemon's Stay Awake state every 5 s for the menu bar and
 		// forwards each change here, so the sidebar need not poll the same endpoint.
 		onState: (listener: (state: unknown) => void) => {

@@ -75,6 +75,7 @@ export async function installFakeBridge(page: Page, opts: FakeBridgeOptions = {}
 			// a missing method.
 			const ao = {
 				awake: {
+					pushes: false,
 					onState: () => () => undefined,
 				},
 				triage: {
@@ -1093,6 +1094,7 @@ export async function installFakeAgent(page: Page, opts: FakeAgentOptions = {}):
 			});
 			const ao = {
 				awake: {
+					pushes: false,
 					onState: () => () => undefined,
 				},
 				triage: {

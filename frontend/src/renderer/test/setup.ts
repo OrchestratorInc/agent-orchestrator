@@ -143,6 +143,7 @@ if (typeof window !== "undefined") {
 	window.ao = {
 		triage: { launch: async () => ({ ok: true }) },
 		awake: {
+			pushes: false,
 			onState: () => () => undefined,
 		},
 		dictation: {

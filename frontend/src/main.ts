@@ -4832,11 +4832,10 @@ app.whenReady().then(async () => {
 			baseURL: () => daemonStatus.state === "ready" && daemonStatus.port ? `http://127.0.0.1:${daemonStatus.port}` : null,
 			request: (url, init) => fetch(url, init),
 			setState: (active) => trayController?.setAwakeState(active),
-			// Every window that shows Stay Awake gets each change, not only the shell.
+			// Every shell window shows Stay Awake in its sidebar and gets each change.
+			// The shell is a WebContentsView, so BrowserWindow.getAllWindows() misses it.
 			onAwakeState: (state) => {
-				for (const window of BrowserWindow.getAllWindows()) {
-					if (!window.isDestroyed()) window.webContents.send("awake:state", state);
-				}
+				for (const shellContents of trustedShellWebContents.values()) if (!shellContents.isDestroyed()) shellContents.send("awake:state", state);
 			},
 		});
 		app.once("will-quit", () => awakeTray.dispose());

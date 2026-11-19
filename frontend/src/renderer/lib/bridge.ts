@@ -12,6 +12,7 @@ export const aoBridge: AoBridge =
 			launch: async () => ({ ok: false, error: "report.desktopRequired" as const }),
 		},
 		awake: {
+			pushes: false,
 			onState: () => () => undefined,
 		},
 		dictation: {

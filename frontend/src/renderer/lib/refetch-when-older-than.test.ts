@@ -12,4 +12,10 @@ describe("refetchWhenOlderThan", () => {
 		expect(decide({ state: { dataUpdatedAt: 90_000 } })).toBe("always");
 		expect(decide({ state: { dataUpdatedAt: 0 } })).toBe("always");
 	});
+
+	it("refetches data an event invalidated, whatever its age", () => {
+		vi.useFakeTimers();
+		vi.setSystemTime(100_000);
+		expect(refetchWhenOlderThan(10_000)({ state: { dataUpdatedAt: 99_000, isInvalidated: true } })).toBe("always");
+	});
 });

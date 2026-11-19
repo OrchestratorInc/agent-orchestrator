@@ -34,7 +34,7 @@ export function useAwake(enabled = true, detailed = false) {
 	const cache = useQueryClient();
 	// Only the real desktop bridge on macOS pushes (main reads the state for its menu
 	// bar there); tests, the browser preview and other platforms keep polling.
-	const pushed = !detailed && Boolean(window.ao?.awake) && isMacPlatform();
+	const pushed = !detailed && window.ao?.awake?.pushes === true && isMacPlatform();
 	useEffect(() => {
 		if (!enabled || !pushed) return;
 		return aoBridge.awake.onState((state) => {
