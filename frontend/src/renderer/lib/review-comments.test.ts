@@ -209,6 +209,15 @@ describe("buildReviewBlocks", () => {
 		expect(block.comments.every((comment) => comment.kind === "inline" && comment.threadId === undefined)).toBe(true);
 	});
 
+	it("keeps one sent identity for a comment read from a link and then from its thread", () => {
+		const link = { body: "Open one.", file: "src/a.ts", line: 3, url: `${PR_URL}#discussion_t1`, autoInjectReview: false };
+		const review = { decision: "changes_requested" as const, hasUnresolvedHumanComments: true, unresolvedBy: [{ reviewerId: "maya", count: 1, links: [link] }] };
+		const before = blockFor({ provider: summary({ threads: undefined, review }) }).comments[0]!;
+		const after = blockFor({ provider: summary({ threads: [thread("t1", "maya", "Open one.")], review }) }).comments[0]!;
+		expect(before.key).not.toBe(after.key);
+		expect(after.sentKey).toBe(before.sentKey);
+	});
+
 	it("lists top-level PR comments, but not the author's or a deploy bot's", () => {
 		const block = blockFor({
 			provider: summary({
@@ -307,6 +316,56 @@ describe("buildReviewBlocks", () => {
 			runs: [],
 		});
 		expect(block!.provider).toBeUndefined();
+	});
+
+	it("keeps two GitLab subgroup projects' MRs with one number apart", () => {
+		const mr = (path: string) => `https://gitlab.com/${path}/-/merge_requests/3`;
+		const gitlab = (path: string, title: string) => summary({ url: mr(path), htmlUrl: mr(path), repo: undefined, provider: "gitlab", title });
+		const blocks = buildReviewBlocks({
+			openPRs: [{ url: mr("team/sub/app"), number: 3 }, { url: mr("team/sub/web"), number: 3 }],
+			providerPRs: [gitlab("team/sub/app", "App MR"), gitlab("team/sub/web", "Web MR")],
+			reviewStates: [],
+			runs: [],
+		});
+		expect(blocks.map((block) => block.title)).toEqual(["App MR", "Web MR"]);
+		expect(new Set(blocks.map((block) => block.key)).size).toBe(2);
+		expect(blocks.map((block) => block.repository)).toEqual(["team/sub/app", "team/sub/web"]);
+	});
+
+	it("does not pair by number alone when two PRs share it", () => {
+		const [block] = buildReviewBlocks({
+			openPRs: [{ url: "https://example.com/pr/3", number: 3 }],
+			providerPRs: [summary(), summary({ url: "https://api.github.com/repos/acme/web/pulls/3", htmlUrl: "https://github.com/acme/web/pull/3", repo: "acme/web" })],
+			reviewStates: [],
+			runs: [],
+		});
+		expect(block!.provider).toBeUndefined();
+	});
+
+	it("lists a state's own completed pass when the runs list holds only other PRs' runs", () => {
+		const block = blockFor({
+			states: [state({ latestRun: run({ id: "embedded", body: "From the state." }) })],
+			runs: [run({ id: "other", prUrl: "https://github.com/acme/repo/pull/9", body: "Another PR." })],
+		});
+		expect(bodies(block.comments)).toEqual(["From the state."]);
+	});
+
+	it("lets a bodyless approval replace the reviewer's older change request", () => {
+		const block = blockFor({
+			provider: summary({
+				review: {
+					decision: "approved",
+					hasUnresolvedHumanComments: false,
+					unresolvedBy: [],
+					reviews: [
+						{ reviewerId: "maya", verdict: "changes_requested", submittedAt: "2026-06-15T11:00:00Z", reviewUrl: `${PR_URL}#pullrequestreview-1`, body: "Add tests.", autoInjectReview: true },
+						{ reviewerId: "maya", verdict: "approved", submittedAt: "2026-06-16T11:00:00Z", reviewUrl: `${PR_URL}#pullrequestreview-2`, body: "", autoInjectReview: true },
+					],
+				},
+			}),
+		});
+		expect(block.comments.map((comment) => [comment.body, comment.earlier])).toEqual([["Add tests.", true]]);
+		expect(block.openCount).toBe(0);
 	});
 
 	it("names the repository only when the session's PRs span several", () => {

@@ -116,6 +116,7 @@ import {
 	openReviewStatesFor,
 	reviewIsRunning,
 	reviewPhase,
+	reviewPhaseRun,
 	reviewRunDisabled,
 	sessionReviewsQueryOptions,
 	sessionReviewsQueryKey,
@@ -2077,7 +2078,13 @@ function LocalReviewsSection({
 		if (currentHeadReviewed) setRerunConfirmation({ ownerKey: reviewerOwnerKey, heads: reviewHeads });
 		else triggerReview.mutate({ ownerKey: reviewerOwnerKey });
 	};
-	const reviewNowAvailable = !reviewIsRunning(openReviewStates) && !triggerReview.isPending && !reviewRunDisabled(openReviewStates, false);
+	// A PR's reviewer list starts a review under the same locks as Review now.
+	const reviewNowAvailable = !reviewIsRunning(openReviewStates)
+		&& !triggerReview.isPending
+		&& !saveReviewer.isPending
+		&& !killReview.isPending
+		&& !cancelReview.isPending
+		&& !reviewRunDisabled(openReviewStates, false);
 	return (
 		<>
 			{/* Running a review is an action; reading them is a list. The action stays
@@ -2278,6 +2285,14 @@ function CloudReviewsSection({
 	};
 	const reviewState = cloudReviewsToLocal(reviewsQuery.data, effectiveReviewerHarness);
 	const guest = session.cloud?.shared === true;
+	// A PR's reviewer list starts a review only when Review now could: the picked
+	// reviewer installed and credentialed, and nothing running or in flight.
+	const cloudReviewNowAvailable = selectedHarnessReady
+		&& selectedCredentialReady
+		&& !reviewState.reviews.some((review) => review.status === "running")
+		&& !triggerReview.isPending
+		&& !cancelReview.isPending
+		&& !reviewRunDisabled(openReviewStatesFor(cloudSession, reviewState.reviews), false);
 	return (
 		<>
 			<ReviewPanel
@@ -2331,8 +2346,9 @@ function CloudReviewsSection({
 				githubPRs={[]}
 				readOnly={guest}
 				isLoading={pullRequestsQuery.isLoading || reviewsQuery.isLoading}
+				prsLoaded={pullRequestsQuery.isSuccess}
 				onOpenReviewFile={onOpenReviewFile}
-				onReviewNow={reviewState.reviews.some((review) => review.status === "running") || triggerReview.isPending ? undefined : () => triggerReview.mutate()}
+				onReviewNow={cloudReviewNowAvailable ? () => triggerReview.mutate() : undefined}
 				onWorkerMessageSent={onWorkerMessageSent}
 				reviewStates={reviewState.reviews}
 				runs={reviewState.runs}
@@ -2420,10 +2436,15 @@ function MergedReviewsSection({
 	onOpenReviewFile,
 	onReviewNow,
 	onWorkerMessageSent,
+	prsLoaded = true,
 	reviewStates,
 	runs,
 	session,
 }: {
+	/**
+	 * The provider's PR summaries. Cloud passes none: its provider threads are not
+	 * read here, since Reply, Resolve and the details load go to the local daemon.
+	 */
 	githubPRs: SessionPRSummary[];
 	hostId?: string;
 	/** Reached through a share: the reviews show, but only the owner acts on them. */
@@ -2433,6 +2454,8 @@ function MergedReviewsSection({
 	/** Starts an Orchestrator review, from a PR's reviewer list. */
 	onReviewNow?: () => void;
 	onWorkerMessageSent?: () => void;
+	/** Whether the session's PR list is known; Cloud fetches it, so "no PR" waits for it. */
+	prsLoaded?: boolean;
 	reviewStates: PRReviewState[];
 	runs: ReviewRunFacts[];
 	session: WorkspaceSession;
@@ -2501,9 +2524,9 @@ function MergedReviewsSection({
 			if (error) throw apiErrorException(error, t("inspector.rereviewRequestFailed"));
 			void refreshProvider();
 		},
-		onViewInFile: (comment) => {
-			if (comment.file) onOpenReviewFile?.({ line: comment.line, path: comment.file });
-		},
+		onViewInFile: onOpenReviewFile ? (comment) => {
+			if (comment.file) onOpenReviewFile({ line: comment.line, path: comment.file });
+		} : undefined,
 		onOpenInBrowser: openInAOBrowser,
 		onReviewNow,
 	};
@@ -2513,7 +2536,7 @@ function MergedReviewsSection({
 			blocks={blocks}
 			hostId={hostId}
 			loading={isLoading}
-			noPR={openPRs.length === 0}
+			noPR={prsLoaded && openPRs.length === 0}
 			readOnly={readOnly}
 			sessionId={session.id}
 		/>
@@ -2711,7 +2734,9 @@ function ReviewPanel({
 	// first run reported the wrong agent as the one working. Prefer the run
 	// actually in flight, then the newest recorded one.
 	const runningStates = openReviewStates.filter((review) => review.status === "running");
-	const runningRun = runningStates[0]?.latestRun;
+	const phase = reviewPhase(openReviewStates, reviewerActivityState, reviewerActivityHarness);
+	// The phase and the run it describes come together: the run waiting for input, not whichever PR is first.
+	const runningRun = reviewPhaseRun(openReviewStates, phase, reviewerActivityHarness) ?? runningStates[0]?.latestRun;
 	// A push since the last pass leaves that pass as previousRun, and it still says when the PR was last reviewed.
 	const newestRun = openReviewStates
 		.flatMap((review) => [review.latestRun, review.previousRun])
@@ -2734,7 +2759,6 @@ function ReviewPanel({
 	// Auto-review does not lock the reviewer or Review now: a manual pass reuses one
 	// already running, and a reviewed head asks before reviewing it again.
 	const reviewerControlsLocked = reviewRunning || isKilling || isSwitchingReviewer || isTriggering || isCancelling;
-	const phase = reviewPhase(openReviewStates, reviewerActivityState, reviewerActivityHarness);
 	const runDisabled = !hasOpenPR || isKilling || isSwitchingReviewer || isCancelling || (cloud && !cloudReviewerReady) || reviewRunDisabled(openReviewStates, isTriggering);
 	const hasReviewerSession = reviewerHandleId.trim() !== "" ||
 		Boolean(reviewerSurface?.mode === "chat" && reviewerSurface.reviewId);
@@ -2899,6 +2923,7 @@ function ReviewPanel({
 						lastCompleted={lastCompletedRun}
 						notice={notice ?? null}
 						phase={phase}
+						phaseRun={runningRun}
 						running={runningStates}
 						selectedHarness={selectedHarness}
 					/>
@@ -2938,6 +2963,7 @@ function ReviewStatusLine({
 	lastCompleted,
 	notice,
 	phase,
+	phaseRun: runningRun,
 	running,
 	selectedHarness,
 }: {
@@ -2949,11 +2975,12 @@ function ReviewStatusLine({
 	lastCompleted?: ReviewRunFacts;
 	notice: string | null;
 	phase: ReturnType<typeof reviewPhase>;
+	/** The run behind the phase, whose commit and start time show. */
+	phaseRun?: PRReviewState["latestRun"];
 	running: PRReviewState[];
 	selectedHarness: string;
 }) {
 	const { t } = useTranslation();
-	const runningRun = running[0]?.latestRun;
 	const startedAt = runningRun ? runningRun.startedAt || runningRun.launchingAt || runningRun.createdAt : undefined;
 	const now = useNowWhile(Boolean(phase && startedAt));
 	const lineClass = "m-0 flex min-h-5 min-w-0 items-center gap-1.5 text-xs leading-normal";

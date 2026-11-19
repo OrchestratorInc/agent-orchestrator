@@ -4111,6 +4111,7 @@ describe("SessionInspector summary reviews", () => {
     await openReviewsSection();
 
     await commentRowWith("Guard this optional value.");
+    expect(screen.getByText("1 open")).toBeInTheDocument();
     await userEvent.click(screen.getByRole("button", { name: "Actions for maya" }));
     await userEvent.click(await screen.findByRole("menuitem", { name: "View in file" }));
     expect(onOpenReviewFile).toHaveBeenCalledWith({ path: "src/panel.tsx", line: 42 });
@@ -4124,8 +4125,10 @@ describe("SessionInspector summary reviews", () => {
         commentUrl: "https://github.com/acme/repo/pull/3#discussion_PRRT_1",
       },
     }));
-    // It moves to Resolved at once, before the provider's next summary says so.
+    // It moves to Resolved at once, before the provider's next summary says so,
+    // and the section's open count moves with it.
     await waitFor(() => expect(screen.queryByText("Guard this optional value.", { exact: false })).not.toBeInTheDocument());
+    expect(screen.queryByText("1 open")).not.toBeInTheDocument();
     await userEvent.click(screen.getByRole("tab", { name: /^Resolved/ }));
     expect(await commentRowWith("Guard this optional value.")).toHaveTextContent("resolved");
   });

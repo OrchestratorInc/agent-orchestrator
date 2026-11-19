@@ -1,6 +1,7 @@
 import { InspectorSection, commentTextLines, inspectorEmptyClass } from "@aoagents/product-ui";
+import * as TabsPrimitive from "@radix-ui/react-tabs";
 import { Reply } from "lucide-react";
-import { useEffect, useId, useState, type MouseEvent, type ReactNode } from "react";
+import { useEffect, useId, useReducer, useRef, useState, type MouseEvent, type ReactNode } from "react";
 import { useTranslation } from "react-i18next";
 import { ArrowUpRight, Check, ChevronDown, ChevronRight, ChevronUp, FileCode2, Loader2, MoreVertical, Send } from "@/components/app-icons";
 import { usePRDetailsLoad } from "../../hooks/usePRDetailsLoad";
@@ -95,7 +96,17 @@ export function ReviewCommentsSection({
 	sessionId: string;
 }) {
 	const { t } = useTranslation();
-	const total = blocks.reduce((count, block) => count + block.openCount, 0);
+	// Threads resolved from here move to Resolved at once, until the provider's state says so itself.
+	// Held here, not per card, so the section's count moves with the card's.
+	const [resolvedHere, setResolvedHere] = useState<ReadonlySet<string>>(() => new Set());
+	useEffect(() => {
+		const confirmed = new Set(blocks.flatMap((block) => block.comments.filter((comment) => comment.resolved).map((comment) => resolvedKey(block, comment))));
+		setResolvedHere((current) => ([...current].some((key) => confirmed.has(key)) ? new Set([...current].filter((key) => !confirmed.has(key))) : current));
+	}, [blocks]);
+	const total = blocks.reduce(
+		(count, block) => count + block.comments.filter((comment) => reviewCommentIsOpen(comment) && !resolvedHere.has(resolvedKey(block, comment))).length,
+		0,
+	);
 	return (
 		<InspectorSection meta={total > 0 ? t("inspector.review.openCount", { count: total }) : undefined} surface={false} title={t("inspector.review.comments")}>
 			{noPR ? (
@@ -110,6 +121,8 @@ export function ReviewCommentsSection({
 							block={block}
 							hostId={hostId}
 							key={block.key}
+							onResolved={(comment) => setResolvedHere((current) => new Set(current).add(resolvedKey(block, comment)))}
+							resolvedHere={resolvedHere}
 							sessionId={sessionId}
 						/>
 					))}
@@ -118,6 +131,8 @@ export function ReviewCommentsSection({
 		</InspectorSection>
 	);
 }
+
+const resolvedKey = (block: ReviewPRBlock, comment: ReviewComment) => `${block.key}\u0000${comment.key}`;
 
 /** A shared session reads everything and opens links, but changes nothing. */
 function readOnlyActions(actions: ReviewCommentActions): ReviewCommentActions {
@@ -128,11 +143,15 @@ function ReviewPRBlockView({
 	actions,
 	block,
 	hostId,
+	onResolved,
+	resolvedHere,
 	sessionId,
 }: {
 	actions: ReviewCommentActions;
 	block: ReviewPRBlock;
 	hostId?: string;
+	onResolved: (comment: ReviewComment) => void;
+	resolvedHere: ReadonlySet<string>;
 	sessionId: string;
 }) {
 	const { t } = useTranslation();
@@ -141,40 +160,63 @@ function ReviewPRBlockView({
 	// A row the person opened or folded keeps that; otherwise an open comment not yet
 	// sent to the worker starts open, so its Send to agent is in reach, and the rest fold.
 	const [expandedHere, setExpandedHere] = useState<ReadonlyMap<string, boolean>>(() => new Map());
-	// Threads resolved from here move to Resolved at once, until the provider's state says so itself.
-	const [resolvedHere, setResolvedHere] = useState<ReadonlySet<string>>(() => new Set());
 	const [sent, setSent] = useState<ReadonlySet<string>>(() => new Set());
+	// Comments on their way to the worker, from a row or Send all, so the other cannot send them twice.
+	// A ref, so two clicks before the next render still see each other.
+	const sending = useRef<Set<string>>(new Set());
+	const [, rerender] = useReducer((count: number) => count + 1, 0);
 	const [sendingAll, setSendingAll] = useState(false);
 	const [sendAllError, setSendAllError] = useState(false);
 	const listId = useId();
 	// The SCM observer reads a PR's threads only for PRs it follows; ask once for the rest.
 	usePRDetailsLoad(block.provider, sessionId, hostId, open);
-	useEffect(() => {
-		const confirmed = new Set(block.comments.filter((comment) => comment.resolved).map((comment) => comment.key));
-		setResolvedHere((current) => ([...current].some((key) => confirmed.has(key)) ? new Set([...current].filter((key) => !confirmed.has(key))) : current));
-	}, [block.comments]);
 
-	const comments = block.comments.map((comment) => (resolvedHere.has(comment.key) ? { ...comment, resolved: true } : comment));
+	const comments = block.comments.map((comment) => (resolvedHere.has(resolvedKey(block, comment)) ? { ...comment, resolved: true } : comment));
 	const openComments = comments.filter(reviewCommentIsOpen);
 	const resolvedComments = comments.filter((comment) => !reviewCommentIsOpen(comment));
 	const shown = view === "open" ? openComments : resolvedComments;
-	const unsent = openComments.filter((comment) => !comment.delivered && !sent.has(comment.key));
+	const isSent = (comment: ReviewComment) => comment.delivered || sent.has(comment.sentKey);
+	// Only a comment with text can be sent, one at a time or all together.
+	const unsent = openComments.filter((comment) => Boolean(comment.body) && !isSent(comment) && !sending.current.has(comment.sentKey));
 	const markSent = (keys: string[]) => setSent((current) => new Set([...current, ...keys]));
+	const hold = (keys: string[], held: boolean) => {
+		for (const key of keys) {
+			if (held) sending.current.add(key);
+			else sending.current.delete(key);
+		}
+		rerender();
+	};
 	const awaitingSend = (comment: ReviewComment) =>
-		Boolean(actions.onSend) && reviewCommentIsOpen(comment) && Boolean(comment.body) && !comment.delivered && !sent.has(comment.key);
+		Boolean(actions.onSend) && reviewCommentIsOpen(comment) && Boolean(comment.body) && !isSent(comment);
 	const isExpanded = (comment: ReviewComment) => expandedHere.get(comment.key) ?? (view === "open" && awaitingSend(comment));
 	const meta = block.repository ? `#${block.number} · ${block.repository}` : `#${block.number}`;
 
+	const sendOne = async (comment: ReviewComment) => {
+		if (!actions.onSend || sending.current.has(comment.sentKey) || isSent(comment)) return;
+		hold([comment.sentKey], true);
+		try {
+			await actions.onSend(comment, block);
+			// Stays open so "Sent to agent" shows where it was pressed.
+			setExpandedHere((current) => (current.has(comment.key) ? current : new Map(current).set(comment.key, true)));
+			markSent([comment.sentKey]);
+		} finally {
+			hold([comment.sentKey], false);
+		}
+	};
 	const sendAll = async () => {
-		if (!actions.onSendAll || unsent.length === 0) return;
+		const batch = unsent.filter((comment) => !sending.current.has(comment.sentKey));
+		if (!actions.onSendAll || batch.length === 0) return;
+		const keys = batch.map((comment) => comment.sentKey);
+		hold(keys, true);
 		setSendingAll(true);
 		setSendAllError(false);
 		try {
-			await actions.onSendAll(block, unsent);
-			markSent(unsent.map((comment) => comment.key));
+			await actions.onSendAll(block, batch);
+			markSent(keys);
 		} catch {
 			setSendAllError(true);
 		} finally {
+			hold(keys, false);
 			setSendingAll(false);
 		}
 	};
@@ -201,19 +243,27 @@ function ReviewPRBlockView({
 				) : null}
 			</Pressable>
 			{open ? (
-				<div id={listId}>
+				<TabsPrimitive.Root
+					id={listId}
+					onValueChange={(next) => { setView(next === "resolved" ? "resolved" : "open"); setExpandedHere(new Map()); }}
+					value={view}
+				>
 					<div className="flex min-w-0 select-none items-center gap-1 border-b border-border/60 pr-2 pb-1.5 pl-3">
 						{comments.length > 0 ? (
-							<div aria-label={t("inspector.review.comments")} className="flex items-center gap-0.5" role="tablist">
-								<Button aria-selected={view === "open"} data-active={view === "open"} onClick={() => { setView("open"); setExpandedHere(new Map()); }} role="tab" size="xs" variant="quiet">
-									{t("inspector.review.tabOpen")}
-									<span className="tabular-nums text-passive">{openComments.length}</span>
-								</Button>
-								<Button aria-selected={view === "resolved"} data-active={view === "resolved"} onClick={() => { setView("resolved"); setExpandedHere(new Map()); }} role="tab" size="xs" variant="quiet">
-									{t("inspector.review.tabResolved")}
-									<span className="tabular-nums text-passive">{resolvedComments.length}</span>
-								</Button>
-							</div>
+							<TabsPrimitive.List aria-label={t("inspector.review.comments")} className="flex items-center gap-0.5">
+								<TabsPrimitive.Trigger asChild value="open">
+									<Button data-active={view === "open"} size="xs" variant="quiet">
+										{t("inspector.review.tabOpen")}
+										<span className="tabular-nums text-passive">{openComments.length}</span>
+									</Button>
+								</TabsPrimitive.Trigger>
+								<TabsPrimitive.Trigger asChild value="resolved">
+									<Button data-active={view === "resolved"} size="xs" variant="quiet">
+										{t("inspector.review.tabResolved")}
+										<span className="tabular-nums text-passive">{resolvedComments.length}</span>
+									</Button>
+								</TabsPrimitive.Trigger>
+							</TabsPrimitive.List>
 						) : null}
 						<span className="ml-auto" />
 						<ReviewersMenu actions={actions} block={block} />
@@ -225,32 +275,37 @@ function ReviewPRBlockView({
 							sendingAll={sendingAll}
 						/>
 					</div>
-					{shown.length > 0 ? (
-						<div className="divide-y divide-border/60" role="tabpanel">
-							{shown.map((comment) => (
-								<ReviewCommentRow
-									actions={actions}
-									block={block}
-									comment={comment}
-									expanded={isExpanded(comment)}
-									key={comment.key}
-									onExpandedChange={(next) => setExpandedHere((current) => new Map(current).set(comment.key, next))}
-									onResolved={() => setResolvedHere((current) => new Set(current).add(comment.key))}
-									onSent={() => {
-										// Stays open so "Sent to agent" shows where it was pressed.
-										setExpandedHere((current) => (current.has(comment.key) ? current : new Map(current).set(comment.key, true)));
-										markSent([comment.key]);
-									}}
-									sent={comment.delivered || sent.has(comment.key)}
-								/>
-							))}
-						</div>
+					{comments.length === 0 ? (
+						<p className={cn(inspectorEmptyClass, "m-0 px-3 py-3.5")}>{t("pr.comments.none")}</p>
 					) : (
-						<p className={cn(inspectorEmptyClass, "m-0 px-3 py-3.5")} role="tabpanel">
-							{comments.length === 0 ? t("pr.comments.none") : view === "open" ? t("inspector.review.noOpenComments") : t("inspector.review.nothingResolved")}
-						</p>
+						(["open", "resolved"] as const).map((tab) => (
+							<TabsPrimitive.Content className="outline-none" key={tab} value={tab}>
+								{shown.length > 0 ? (
+									<div className="divide-y divide-border/60">
+										{shown.map((comment) => (
+											<ReviewCommentRow
+												actions={actions}
+												block={block}
+												comment={comment}
+												expanded={isExpanded(comment)}
+												key={comment.key}
+												onExpandedChange={(next) => setExpandedHere((current) => new Map(current).set(comment.key, next))}
+												onResolved={() => onResolved(comment)}
+												onSend={() => sendOne(comment)}
+												sending={sending.current.has(comment.sentKey)}
+												sent={isSent(comment)}
+											/>
+										))}
+									</div>
+								) : (
+									<p className={cn(inspectorEmptyClass, "m-0 px-3 py-3.5")}>
+										{view === "open" ? t("inspector.review.noOpenComments") : t("inspector.review.nothingResolved")}
+									</p>
+								)}
+							</TabsPrimitive.Content>
+						))
 					)}
-				</div>
+				</TabsPrimitive.Root>
 			) : null}
 		</article>
 	);
@@ -265,7 +320,9 @@ function ReviewerAvatar({ reviewer }: { reviewer: Pick<ReviewReviewer, "orchestr
 /** Who reviewed the PR and where each stands; picking one asks them again. */
 function ReviewersMenu({ actions, block }: { actions: ReviewCommentActions; block: ReviewPRBlock }) {
 	const { t } = useTranslation();
-	const [asked, setAsked] = useState<ReadonlySet<string>>(() => new Set());
+	// Who was asked again, with the status the provider showed then. Pending shows
+	// until the provider's status moves: it confirms the request or a newer review lands.
+	const [asked, setAsked] = useState<ReadonlyMap<string, ReviewReviewerStatus>>(() => new Map());
 	const [failed, setFailed] = useState<ReadonlySet<string>>(() => new Set());
 	if (block.reviewers.length === 0) return null;
 	const rerequest = async (reviewer: ReviewReviewer) => {
@@ -273,7 +330,7 @@ function ReviewersMenu({ actions, block }: { actions: ReviewCommentActions; bloc
 		setFailed((current) => { const next = new Set(current); next.delete(reviewer.id); return next; });
 		try {
 			await actions.onRerequest(reviewer.id, block);
-			setAsked((current) => new Set(current).add(reviewer.id));
+			setAsked((current) => new Map(current).set(reviewer.id, reviewer.status));
 		} catch {
 			setFailed((current) => new Set(current).add(reviewer.id));
 		}
@@ -293,8 +350,9 @@ function ReviewersMenu({ actions, block }: { actions: ReviewCommentActions; bloc
 			<DropdownMenuContent align="end" className="w-64">
 				<DropdownMenuLabel>{t("inspector.review.reviewersHint")}</DropdownMenuLabel>
 				{block.reviewers.map((reviewer) => {
-					const status = asked.has(reviewer.id) ? "pending" : reviewer.status;
-					const canAct = reviewer.orchestrator ? Boolean(actions.onReviewNow) : reviewer.canRerequest && !asked.has(reviewer.id) && Boolean(actions.onRerequest);
+					const waiting = asked.has(reviewer.id) && asked.get(reviewer.id) === reviewer.status;
+					const status = waiting ? "pending" : reviewer.status;
+					const canAct = reviewer.orchestrator ? Boolean(actions.onReviewNow) : reviewer.canRerequest && !waiting && Boolean(actions.onRerequest);
 					return (
 						<DropdownMenuItem
 							disabled={!canAct}
@@ -368,7 +426,8 @@ function ReviewCommentRow({
 	expanded,
 	onExpandedChange,
 	onResolved,
-	onSent,
+	onSend,
+	sending,
 	sent,
 }: {
 	actions: ReviewCommentActions;
@@ -377,13 +436,17 @@ function ReviewCommentRow({
 	expanded: boolean;
 	onExpandedChange: (expanded: boolean) => void;
 	onResolved: () => void;
-	onSent: () => void;
+	/** Sends through the card, which keeps a row send and Send all from sending it twice. */
+	onSend: () => Promise<void>;
+	/** On its way to the worker, from this row or Send all. */
+	sending: boolean;
 	sent: boolean;
 }) {
 	const { t } = useTranslation();
 	const bodyId = useId();
 	const [sendState, setSendState] = useState<Busy>("idle");
 	const [resolveState, setResolveState] = useState<Busy>("idle");
+	const [rerequestState, setRerequestState] = useState<Busy>("idle");
 	const [replying, setReplying] = useState(false);
 	const [menuOpen, setMenuOpen] = useState(false);
 	const [replyState, setReplyState] = useState<{ busy: boolean; error: string | null }>({ busy: false, error: null });
@@ -405,15 +468,25 @@ function ReviewCommentRow({
 	const replyOffered = Boolean(actions.onReply) && block.provider?.provider === "github"
 		&& (comment.kind === "inline" ? Boolean(comment.threadId) : comment.source === "provider");
 
+	const sendBusy = sendState === "busy" || sending;
 	const send = async () => {
-		if (!actions.onSend || sendState === "busy" || sent) return;
+		if (!actions.onSend || sendBusy || sent) return;
 		setSendState("busy");
 		try {
-			await actions.onSend(comment, block);
+			await onSend();
 			setSendState("idle");
-			onSent();
 		} catch {
 			setSendState("error");
+		}
+	};
+	const rerequest = async (reviewerId: string) => {
+		if (!actions.onRerequest || rerequestState === "busy") return;
+		setRerequestState("busy");
+		try {
+			await actions.onRerequest(reviewerId, block);
+			setRerequestState("idle");
+		} catch {
+			setRerequestState("error");
 		}
 	};
 	const resolve = async () => {
@@ -460,13 +533,13 @@ function ReviewCommentRow({
 	) : null;
 
 	const menuItems: ReactNode[] = [];
-	if (canSend && !sent) menuItems.push(<DropdownMenuItem disabled={sendState === "busy"} key="send" onSelect={() => void send()}>{t("pr.comments.sendToAgent")}</DropdownMenuItem>);
+	if (canSend && !sent) menuItems.push(<DropdownMenuItem disabled={sendBusy} key="send" onSelect={() => void send()}>{t("pr.comments.sendToAgent")}</DropdownMenuItem>);
 	if (canResolve) menuItems.push(<DropdownMenuItem disabled={resolveState === "busy"} key="resolve" onSelect={() => void resolve()}>{t("pr.comments.resolve")}</DropdownMenuItem>);
 	if (comment.file && actions.onViewInFile) menuItems.push(<DropdownMenuItem key="file" onSelect={() => actions.onViewInFile?.(comment, block)}>{t("inspector.viewInFile")}</DropdownMenuItem>);
 	if (replyOffered && !comment.resolved) menuItems.push(<DropdownMenuItem key="reply" onSelect={() => { onExpandedChange(true); setReplying(true); }}>{t("pr.comments.reply")}</DropdownMenuItem>);
 	if (comment.rerequestReviewerId && actions.onRerequest) {
 		const reviewerId = comment.rerequestReviewerId;
-		menuItems.push(<DropdownMenuItem key="rerequest" onSelect={() => void actions.onRerequest?.(reviewerId, block).catch(() => {})}>{t("inspector.requestRereviewPR")}</DropdownMenuItem>);
+		menuItems.push(<DropdownMenuItem disabled={rerequestState === "busy"} key="rerequest" onSelect={() => void rerequest(reviewerId)}>{t("inspector.requestRereviewPR")}</DropdownMenuItem>);
 	}
 	if (comment.url) {
 		const url = comment.url;
@@ -553,7 +626,7 @@ function ReviewCommentRow({
 								{t("pr.comments.sentToAgent")}
 							</span>
 						) : canSend ? (
-							<FootAction disabled={sendState === "busy"} icon={sendState === "busy" ? <Loader2 className="animate-spin" /> : <Send />} onClick={() => void send()}>
+							<FootAction disabled={sendBusy} icon={sendBusy ? <Loader2 className="animate-spin" /> : <Send />} onClick={() => void send()}>
 								{t("pr.comments.sendToAgent")}
 							</FootAction>
 						) : null}
@@ -578,6 +651,7 @@ function ReviewCommentRow({
 					) : null}
 					{sendState === "error" ? <p className="m-0 text-2xs font-medium text-error" role="status">{t("pr.comments.sendFailed")}</p> : null}
 					{resolveState === "error" ? <p className="m-0 text-2xs font-medium text-error" role="status">{t("pr.comments.resolveFailed")}</p> : null}
+					{rerequestState === "error" ? <p className="m-0 text-2xs font-medium text-error" role="status">{t("inspector.rereviewRequestFailed")}</p> : null}
 				</div>
 			) : (
 				<div className="flex min-w-0 items-center gap-1.5 pt-0.5 pl-5.5 text-muted-foreground">
@@ -585,9 +659,9 @@ function ReviewCommentRow({
 					<span className="min-w-0 truncate">{preview}</span>
 				</div>
 			)}
-			{!expanded && (sendState === "error" || resolveState === "error") ? (
+			{!expanded && (sendState === "error" || resolveState === "error" || rerequestState === "error") ? (
 				<p className="m-0 pt-1 pl-5.5 text-2xs font-medium text-error" role="status">
-					{sendState === "error" ? t("pr.comments.sendFailed") : t("pr.comments.resolveFailed")}
+					{sendState === "error" ? t("pr.comments.sendFailed") : resolveState === "error" ? t("pr.comments.resolveFailed") : t("inspector.rereviewRequestFailed")}
 				</p>
 			) : null}
 		</div>
