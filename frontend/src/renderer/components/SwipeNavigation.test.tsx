@@ -445,17 +445,21 @@ describe("SwipeNavigation", () => {
 			expect(history.back).not.toHaveBeenCalled();
 		});
 
-		it("does not navigate when the target prevents the default of the swipe's only event", () => {
-			const { getByTestId } = render(<Harness><div data-testid="panner" /></Harness>);
-			const panner = getByTestId("panner");
-			// A zoomed image panning, or a strip scrolling itself.
-			panner.addEventListener("wheel", (event) => event.preventDefault(), { passive: false });
-			fingers("down");
-			act(() => {
-				panner.dispatchEvent(new WheelEvent("wheel", { bubbles: true, cancelable: true, deltaX: -120, deltaMode: 0 }));
-			});
-			fingers("up");
-			expect(history.back).not.toHaveBeenCalled();
+		it("still navigates when a scroll lock prevents the wheel's default", () => {
+			const { getByTestId } = render(<Harness><div data-testid="content" /></Harness>);
+			// A modal's scroll lock (react-remove-scroll) prevents every wheel event that cannot scroll.
+			const lock = (event: Event) => event.preventDefault();
+			document.addEventListener("wheel", lock, { passive: false });
+			try {
+				fingers("down");
+				act(() => {
+					getByTestId("content").dispatchEvent(new WheelEvent("wheel", { bubbles: true, cancelable: true, deltaX: -150, deltaMode: 0 }));
+				});
+				fingers("up");
+				expect(history.back).toHaveBeenCalledTimes(1);
+			} finally {
+				document.removeEventListener("wheel", lock);
+			}
 		});
 	});
 });

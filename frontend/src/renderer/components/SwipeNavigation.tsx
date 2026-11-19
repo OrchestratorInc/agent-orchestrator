@@ -202,11 +202,12 @@ export function SwipeNavigation({
 		};
 
 		// Runs after the event's own handlers, which the capture listener cannot
-		// see: one that claimed the swipe or prevented its default (a strip that
-		// scrolls itself, a zoomed image that pans) took it, even on its last event.
-		const afterWheel = (event: WheelEvent) => {
+		// see: one that claimed the swipe took it, even on its last event. A
+		// prevented default says nothing here; modal scroll locks prevent every
+		// wheel event that cannot scroll.
+		const afterWheel = () => {
 			if (!gesture) return;
-			const taken = swipeClaimed() || event.defaultPrevented;
+			const taken = swipeClaimed();
 			if (taken && (gesture.mode === "pending" || gesture.mode === "tracking")) {
 				gesture.mode = "owned";
 				release();
