@@ -74,6 +74,8 @@ type Selection = { anchor: number; focus: number };
 const STEP_IN_HEADER = Platform.OS === "ios";
 /** Material's floating toolbar: 64dp, and the gap it keeps above what it floats over. */
 const FLOATING_TOOLBAR_CLEARANCE = 64 + space.sm;
+/** Lines shown above a cited line when the file opens at it. */
+const CITED_CONTEXT_ROWS = 4;
 
 export default function SessionFileScreen() {
 	const { hostId } = useLocalSearchParams<{ hostId?: string }>();
@@ -112,10 +114,12 @@ function SessionFileContent() {
 	const [loading, setLoading] = useState(true);
 	const [loadError, setLoadError] = useState<string>();
 	const [mode, setMode] = useState<Mode>(params.mode === "file" ? "file" : "diff");
-	const [wrap, setWrap] = useState(true);
 	// A line a chat link cited (`file.ts:12`): the file opens there, and a
-	// markdown file shows its source, where that line is.
+	// markdown file shows its source, where that line is. It opens unwrapped:
+	// every row is then one line high, which is what lets the list open at line
+	// 4000 at once (see `rowLayout`). Wrap lines turns wrapping back on.
 	const citedLine = Number(params.line) > 0 ? Math.floor(Number(params.line)) : undefined;
+	const [wrap, setWrap] = useState(!citedLine);
 	const [rendered, setRendered] = useState(!citedLine);
 	const [revealed, setRevealed] = useState<Record<string, number>>({});
 	const [selection, setSelection] = useState<Selection | null>(null);
@@ -337,66 +341,24 @@ function SessionFileContent() {
 		const timer = setTimeout(() => list.current?.scrollToIndex({ index: selection.focus, viewPosition: 0.3, animated: true }), 60);
 		return () => clearTimeout(timer);
 	}, [drag.dragging, selection]);
-	// Jump to the cited line once it is among the rows. Wrapped rows have no
-	// fixed height, so no offset can be computed for a line not drawn yet; the
-	// list is walked forward until it is.
-	// A jump belongs to the list it was made for: switching the view, the wrap or
-	// the file swaps the list under it, where the cited index may not exist, so
-	// that cancels a pending retry, and a retry never scrolls past the rows now
-	// shown (a quiet reload can shorten them). A jump lands once per file, cited
-	// line, view and wrap, the changes that lay the list out again: once it has
-	// landed, a comment added above the line, or a reload, only moves the tint,
-	// and the reader keeps their place. One still under way follows the line to
-	// its new index.
-	const jumpTo = useRef(-1);
-	const jumpTries = useRef(0);
-	const jumpRetry = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
-	const jumpFailed = useRef(false);
-	const jumpPending = useRef("");
-	const jumpedFor = useRef("");
-	const jumpKey = `${path}|${citedLine ?? ""}|${effectiveMode}|${wrap}`;
-	const rowCount = useRef(0);
-	rowCount.current = rows.length;
-	// The list reports a row it cannot reach yet synchronously, from inside
-	// scrollToIndex; a call that returns without that report has landed.
-	const attemptJump = useCallback((index: number) => {
-		if (index !== jumpTo.current || index >= rowCount.current) return;
-		jumpFailed.current = false;
-		list.current?.scrollToIndex({ index, viewPosition: 0.3, animated: false });
-		if (!jumpFailed.current) {
-			jumpedFor.current = jumpPending.current;
-			jumpTo.current = -1;
-		}
-	}, []);
+	// Unwrapped code rows are all one line high, so the list is told every row's
+	// place instead of measuring each one. It then opens at the cited line (a
+	// few lines of context above it) drawing only the rows there: line 4000 opens
+	// as fast as line 1. A wrapped row, or a comment card, has no known height;
+	// such a list is laid out by measuring, as before.
+	const rowHeight = CODE_LINE_HEIGHT * codeScale;
+	const uniformRows = !wrap && rows.every((row) => row.type === "line");
+	const rowLayout = useCallback((_: ArrayLike<DisplayRow> | null | undefined, index: number) => ({ length: rowHeight, offset: rowHeight * index, index }), [rowHeight]);
+	const openAt = citedIndex > 0 ? Math.max(0, citedIndex - CITED_CONTEXT_ROWS) : 0;
+	// Without known heights, a cited line is scrolled to once per list, roughly.
+	const roughJumpFor = useRef("");
+	const listKey = `${path}:${effectiveMode}:${wrap}`;
 	useEffect(() => {
-		if (citedIndex < 0 || jumpedFor.current === jumpKey) return;
-		if (jumpPending.current !== jumpKey) jumpTries.current = 0;
-		jumpPending.current = jumpKey;
-		jumpTo.current = citedIndex;
-		const timer = setTimeout(() => attemptJump(citedIndex), 0);
-		return () => {
-			clearTimeout(timer);
-			clearTimeout(jumpRetry.current);
-			jumpTo.current = -1;
-		};
-	}, [attemptJump, citedIndex, jumpKey]);
-	const onScrollToIndexFailed = useCallback(({ index, highestMeasuredFrameIndex }: { index: number; highestMeasuredFrameIndex: number }) => {
-		jumpFailed.current = true;
-		if (index === jumpTo.current) {
-			if (jumpTries.current++ < 40) {
-				// The furthest drawn row can always be scrolled to, and reaching it
-				// draws the rows past it: step there, then try the cited line again.
-				list.current?.scrollToIndex({ index: highestMeasuredFrameIndex, viewPosition: 0, animated: false });
-				clearTimeout(jumpRetry.current);
-				jumpRetry.current = setTimeout(() => attemptJump(index), 60);
-				return;
-			}
-			// Out of tries: stop here rather than chase the line forever.
-			jumpedFor.current = jumpPending.current;
-			jumpTo.current = -1;
-		}
-		list.current?.scrollToOffset({ offset: index * CODE_LINE_HEIGHT * codeScale, animated: true });
-	}, [attemptJump, codeScale]);
+		if (uniformRows || citedIndex < 0 || roughJumpFor.current === listKey) return;
+		roughJumpFor.current = listKey;
+		const timer = setTimeout(() => list.current?.scrollToIndex({ index: citedIndex, viewPosition: 0.3, animated: false }), 0);
+		return () => clearTimeout(timer);
+	}, [citedIndex, listKey, uniformRows]);
 	const label = chosen.length ? selectionLabel(chosen) : "";
 
 	const act = useCallback(async (action: ComposerAction, text: string) => {
@@ -522,7 +484,9 @@ function SessionFileContent() {
 				maxToRenderPerBatch={60}
 				windowSize={15}
 				onViewableItemsChanged={onViewable}
-				onScrollToIndexFailed={onScrollToIndexFailed}
+				getItemLayout={uniformRows ? rowLayout : undefined}
+				initialScrollIndex={uniformRows && openAt > 0 ? openAt : undefined}
+				onScrollToIndexFailed={({ index }) => list.current?.scrollToOffset({ offset: index * CODE_LINE_HEIGHT * codeScale, animated: true })}
 				contentContainerStyle={{ paddingBottom: (selection ? 260 : review.comments.length ? 140 : 96) + stepperClearance }}
 				renderItem={({ item, index }) => item.type === "fold" ? (
 					<FoldRow hidden={item.hidden} section={item.section} expandable={item.expandable} onExpand={() => expand(item.id)} />
