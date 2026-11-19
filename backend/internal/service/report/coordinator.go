@@ -315,11 +315,9 @@ func claimsDone(pending []domain.ReportRecord) bool {
 }
 
 // earlyFlushAt reports when a project's pending done batch may flush early.
-// It may not while another worker is still working: a live worker session
-// whose activity is active and that has not itself reported done. Idle,
-// waiting, blocked, exited, and terminated workers, reviewers (which are not
-// sessions), and orchestrators never hold a batch. Without an active
-// orchestrator the batch keeps its deadline, so no retry loop starts early.
+// Live workers that are active or provisioning hold the batch unless they have
+// already reported done. Without an active orchestrator the batch keeps its
+// deadline, so no retry loop starts early.
 func (c *Coordinator) earlyFlushAt(ctx context.Context, projectID domain.ProjectID, pending []domain.ReportRecord) (time.Time, bool, error) {
 	recs, err := c.store.ListSessions(ctx, projectID)
 	if err != nil {
@@ -343,7 +341,7 @@ func (c *Coordinator) earlyFlushAt(ctx context.Context, projectID domain.Project
 		if rec.Kind != domain.KindWorker || rec.IsTaskPreparation {
 			continue
 		}
-		if !rec.IsTerminated && rec.Activity.State == domain.ActivityActive {
+		if !rec.IsTerminated && (rec.Activity.State == domain.ActivityActive || rec.ProvisionState.IsProvisioning()) {
 			if !reporters[rec.ID] {
 				return time.Time{}, false, nil
 			}

@@ -114,6 +114,28 @@ func TestCoordinatorEarlyFlushWaitsForWorkingWorker(t *testing.T) {
 	}
 }
 
+func TestCoordinatorEarlyFlushWaitsForProvisioningWorker(t *testing.T) {
+	start := time.Date(2026, 10, 12, 10, 30, 0, 0, time.UTC)
+	h := newEarlyFlushHarness(start)
+	finished := earlyWorker("a", domain.ActivityIdle, start)
+	provisioning := earlyWorker("b", domain.ActivityIdle, start)
+	provisioning.ProvisionState = domain.SessionProvisionProvisioning
+	h.store.setSessions(earlyOrchestrator(), finished, provisioning)
+	h.store.add(doneAt("done-a", "a", start, "a finished"))
+
+	h.now = start.Add(time.Minute)
+	if delay := h.run(t); delay != domain.ReportSettlementWindow-time.Minute || len(h.delivery.submitted()) != 0 {
+		t.Fatalf("provisioning worker delay = %v, submissions = %d", delay, len(h.delivery.submitted()))
+	}
+
+	provisioning.ProvisionState = domain.SessionProvisionReady
+	h.store.setSessions(earlyOrchestrator(), finished, provisioning)
+	h.run(t)
+	if got := h.delivery.submitted(); len(got) != 1 || !strings.Contains(got[0].message, "a finished") {
+		t.Fatalf("submissions = %#v, want one batch after provisioning ends", got)
+	}
+}
+
 func TestCoordinatorEarlyFlushKeepsSettlementUpperBound(t *testing.T) {
 	start := time.Date(2026, 10, 12, 11, 0, 0, 0, time.UTC)
 	h := newEarlyFlushHarness(start)
