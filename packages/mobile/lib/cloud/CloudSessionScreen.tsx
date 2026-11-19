@@ -20,6 +20,8 @@ import { SessionStartupStatus } from "../chat/SessionStartup";
 import type { ChatConfigOption, ChatImage, ChatResource, MessageFile, TurnSettings } from "../chat/types";
 import { useChatKeyboard } from "../chat/useChatKeyboard";
 import { cloudFilesBackend } from "../files/cloudBackend";
+import { isAbsoluteFileReference, matchAbsoluteFile, matchBareFile } from "../chat/fileLinks";
+import { useStillHere } from "../useStillHere";
 import { changedPathCount, fileRoute, filesRoute, FilesNavigationContext, type FilesNavigation } from "../files/navigation";
 import { useBackendChangeSummary } from "../files/useChangeSummary";
 import { Frost, FROST_TAIL, frostStops } from "../frost";
@@ -424,18 +426,62 @@ export function CloudSessionScreen({ sessionId }: { sessionId: string }) {
 		}
 		void openGitHub(url);
 	}, [router]);
-	// Every surface that shows the agent changed files opens them, as a local
-	// chat's does: the turn's changed-files card and the composer's chip.
-	const filesNavigation = useMemo<FilesNavigation>(() => ({
-		openChanges: () => router.push(filesRoute(sessionId, CLOUD_HOST_ID, title)),
-		openFile: (path, previousPath) => router.push(fileRoute(sessionId, path, CLOUD_HOST_ID, previousPath)),
-	}), [router, sessionId, title]);
 	// git's totals, re-read when a turn reports edits. Only while the sandbox
 	// runs: the read goes to its worker, and would wake a paused one.
 	const lastTurn = snapshot?.turns.at(-1);
 	const changeSignal = `${changedPathCount(snapshot?.turns)}:${lastTurn?.id ?? ""}:${lastTurn?.state ?? ""}:${lastTurn?.diff?.files.length ?? 0}`;
 	const filesBackend = useMemo(() => org?.id ? cloudFilesBackend(client, org.id) : null, [client, org?.id]);
+	// Every surface that shows the agent changed files opens them, as a local
+	// chat's does: the turn's changed-files card, the composer's chip, and a
+	// reply's file links. Cloud has no route that places an absolute path, so
+	// one is found by its name and matched to the worktree path it ends with;
+	// it opens only if it is still the latest file action on this chat.
 	const workspaceLive = Boolean(session?.runtimeConnected && !session.isTerminated);
+	// A bare name in a reply (`README.md:3`) is a link only when the worktree has
+	// that file: each name is searched once, while the sandbox runs (a search
+	// would wake a paused one), and matched exactly or to the one file by that name.
+	const [bareFiles, setBareFiles] = useState<Readonly<Record<string, string | null>>>({});
+	const bareLookups = useRef(new Set<string>());
+	const fileOpenRequest = useRef(0);
+	const fileOpenStillHere = useStillHere(sessionId, () => navigation.isFocused?.() !== false);
+	const filesNavigation = useMemo<FilesNavigation>(() => ({
+		openChanges: () => {
+			fileOpenRequest.current++;
+			router.push(filesRoute(sessionId, CLOUD_HOST_ID, title));
+		},
+		openFile: (path, previousPath, line) => {
+			const request = ++fileOpenRequest.current;
+			if (!filesBackend || !isAbsoluteFileReference(path)) {
+				router.push(fileRoute(sessionId, path, CLOUD_HOST_ID, previousPath, line));
+				return;
+			}
+			const here = fileOpenStillHere();
+			const current = () => request === fileOpenRequest.current && here();
+			const name = path.slice(path.lastIndexOf("/") + 1);
+			// The changed files too: a turn's card names files it deleted, which a
+			// search of the worktree no longer finds.
+			void Promise.all([
+				filesBackend.search(sessionId, name),
+				filesBackend.manifest(sessionId).catch(() => null),
+			]).then(([{ results }, manifest]) => {
+				if (!current()) return;
+				const found = matchAbsoluteFile(path, [...results.map((result) => result.path), ...(manifest?.files.map((file) => file.path) ?? [])]);
+				if (found) router.push(fileRoute(sessionId, found, CLOUD_HOST_ID, previousPath, line));
+				else Alert.alert("Outside this session", `${path} isn't in this session's worktree.`);
+			}, () => {
+				if (current()) Alert.alert("Couldn't open this file", `${path} couldn't be found in this session.`);
+			});
+		},
+		bareFile: (name) => workspaceLive && filesBackend ? bareFiles[name] : null,
+		wantBareFile: (name) => {
+			if (!workspaceLive || !filesBackend || bareLookups.current.has(name)) return;
+			bareLookups.current.add(name);
+			void filesBackend.search(sessionId, name).then(
+				({ results, truncated }) => matchBareFile(name, results.map((result) => result.path), !truncated),
+				() => null,
+			).then((found) => setBareFiles((known) => ({ ...known, [name]: found })));
+		},
+	}), [bareFiles, fileOpenStillHere, filesBackend, router, sessionId, title, workspaceLive]);
 	const changeSummary = useBackendChangeSummary(workspaceLive ? filesBackend : null, sessionId, changeSignal);
 	const nameOfSession = useCallback((id: string) => {
 		const named = sessions.find((item) => item.id === id);
