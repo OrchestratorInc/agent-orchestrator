@@ -1,5 +1,5 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import type { ReactNode } from "react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { HoverCard } from "../ui/hover-card";
@@ -144,11 +144,13 @@ describe("MarkdownFrontmatterPreview", () => {
 
 	it("ignores a stale response from a previous path", async () => {
 		let releaseFirst: () => void = () => undefined;
+		let firstPromise: Promise<unknown> | undefined;
 		getMock.mockImplementation((_url: string, init: { params: { query: { path: string } } }) => {
 			if (init.params.query.path === "docs/first.md") {
-				return new Promise((resolve) => {
+				firstPromise = new Promise((resolve) => {
 					releaseFirst = () => resolve(fileResponse("---\nname: First file\ndescription: Old\n---\n"));
 				});
+				return firstPromise;
 			}
 			return Promise.resolve(fileResponse("---\nname: Second file\ndescription: Current\n---\n"));
 		});
@@ -165,9 +167,17 @@ describe("MarkdownFrontmatterPreview", () => {
 			</QueryClientProvider>,
 		);
 		expect(await screen.findByText("Second file")).toBeInTheDocument();
-		releaseFirst();
-		await waitFor(() => expect(screen.queryByText("First file")).not.toBeInTheDocument());
+		expect(screen.getByText("Current")).toBeInTheDocument();
+		await act(async () => {
+			releaseFirst();
+			await firstPromise;
+		});
+		await waitFor(() => {
+			expect(screen.queryByText("First file")).not.toBeInTheDocument();
+			expect(screen.queryByText("Old")).not.toBeInTheDocument();
+		});
 		expect(screen.getByText("Second file")).toBeInTheDocument();
+		expect(screen.getByText("Current")).toBeInTheDocument();
 	});
 });
 
@@ -182,7 +192,7 @@ describe("markdown link hover", () => {
 	function renderLinks(text: string, source?: MarkdownFilePreviewSource) {
 		const onFileOpen = vi.fn();
 		renderWithQuery(
-			<ChatLinkProvider markdownFileSource={source} onFileOpen={onFileOpen} workspacePaths={["docs/check.md", "docs/other.md"]}>
+			<ChatLinkProvider markdownFileSource={source} onFileOpen={onFileOpen} workspacePaths={["docs/check.md", "docs/other.md", "docs/a#b.md"]}>
 				<ChatMarkdown text={text} />
 			</ChatLinkProvider>,
 		);
@@ -224,9 +234,20 @@ describe("markdown link hover", () => {
 		await waitFor(() => expect(screen.queryByText("Steps to verify a build before deployment.")).not.toBeInTheDocument());
 	});
 
-	it("does not read a parent path", () => {
+	it("renders preview for a file with # in its name", async () => {
+		getMock.mockResolvedValue(fileResponse(doc));
+		renderLinks("[Check](docs/a%23b.md)", { kind: "workspace", sessionId: "sess-1" });
+		fireEvent.pointerOver(screen.getByRole("link", { name: "Check" }), { pointerType: "mouse" });
+		expect(await screen.findByText("Steps to verify a build before deployment.")).toBeInTheDocument();
+		expect(getMock).toHaveBeenCalledWith("/api/v1/sessions/{sessionId}/workspace/file", expect.objectContaining({
+			params: { path: { sessionId: "sess-1" }, query: { path: "docs/a#b.md" } },
+		}));
+	});
+
+	it("does not read a parent path", async () => {
 		renderLinks("[Outside](../secret.md)", { kind: "workspace", sessionId: "sess-1" });
 		fireEvent.pointerOver(screen.getByRole("link", { name: "Outside" }), { pointerType: "mouse" });
+		expect(await screen.findByText("Unable to load this file.")).toBeInTheDocument();
 		expect(getMock).not.toHaveBeenCalledWith("/api/v1/sessions/{sessionId}/workspace/file", expect.anything());
 	});
 });

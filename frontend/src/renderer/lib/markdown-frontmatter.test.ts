@@ -65,6 +65,9 @@ describe("parseMarkdownFrontmatter", () => {
 		expect(isMarkdownPreviewPath("docs/Guide.markdown")).toBe(true);
 		expect(isMarkdownPreviewPath("docs/README.md?raw=true")).toBe(true);
 		expect(isMarkdownPreviewPath("https://example.com/README.md")).toBe(true);
+		expect(isMarkdownPreviewPath("https://example.com/README.md#heading")).toBe(true);
+		expect(isMarkdownPreviewPath("docs/a#b.md")).toBe(true);
+		expect(isMarkdownPreviewPath("docs/a#b.markdown")).toBe(true);
 		expect(isMarkdownPreviewPath("docs/notes.txt")).toBe(false);
 		expect(isMarkdownPreviewPath("docs/page.html")).toBe(false);
 	});

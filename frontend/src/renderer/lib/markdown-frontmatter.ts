@@ -22,8 +22,11 @@ export function stripMarkdownFrontmatter(content: string): string {
 }
 
 export function isMarkdownPreviewPath(path: string): boolean {
-	const bare = path.split(/[?#]/, 1)[0] ?? "";
-	return /\.(?:md|markdown)$/i.test(bare);
+	const withoutQuery = path.split("?", 1)[0] ?? "";
+	if (/\.(?:md|markdown)$/i.test(withoutQuery)) return true;
+	const hashIndex = withoutQuery.lastIndexOf("#");
+	if (hashIndex < 0) return false;
+	return /\.(?:md|markdown)$/i.test(withoutQuery.slice(0, hashIndex));
 }
 
 export function parseMarkdownFrontmatter(content: string): MarkdownFrontmatter {
