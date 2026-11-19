@@ -1177,15 +1177,18 @@ const replacementErrorCount = Object.keys(orchestratorReplacementErrors).length;
 			// Serialize toggles so an older enable request cannot finish after disable.
 			chatHibernationSyncRef.current = chatHibernationSyncRef.current.then(async () => {
 				if (cancelled) return;
-				// Independent settings: one failing must not hold the others back.
-				const results = await Promise.all([
+				// Independent settings: one failing must not hold the others back,
+				// and the chain moves on only once all three have settled.
+				const results = await Promise.allSettled([
 					apiClient.PATCH("/api/v1/settings/chat-hibernation", { body: { enabled: developerMode } }),
 					apiClient.PUT("/api/v1/usage/limit-history", { body: { enabled: developerMode } }),
 					// In daemon memory: a restarted daemon is off until this runs again.
 					apiClient.PATCH("/api/v1/settings/card-summaries", { body: { enabled: cardSummaries } }),
 				]);
-				const failed = results.find((result) => result.error);
-				if (failed) throw failed.error;
+				for (const result of results) {
+					if (result.status === "rejected") throw result.reason;
+					if (result.value.error) throw result.value.error;
+				}
 			}).catch(() => {
 				if (!cancelled) retry = setTimeout(sync, 5_000);
 			});
