@@ -114,7 +114,8 @@ export type ConversationMessage = {
 	createdAt: string;
 };
 
-export type DecisionOption = { id: string; label: string };
+/** `kind` is the agent's own category for the option, when it sends one: allow_once, allow_always, reject_once, reject_always. */
+export type DecisionOption = { id: string; label: string; kind?: string };
 export type FileChange = DiffFile & { patch?: string; patchTruncated?: boolean };
 export type InputProperty = {
 	type?: "string" | "number" | "integer" | "boolean" | "array";

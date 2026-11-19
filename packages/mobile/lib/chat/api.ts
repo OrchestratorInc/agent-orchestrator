@@ -592,7 +592,8 @@ function readDecisions(detail: ActivityDetail): DecisionOption[] | undefined {
 	if (!Array.isArray(detail.decisions)) return undefined;
 	const decisions = detail.decisions.flatMap((option): DecisionOption[] => {
 		if (!option || typeof option !== "object" || typeof option.id !== "string" || !option.id) return [];
-		return [{ id: option.id, label: typeof option.label === "string" && option.label ? option.label : option.id }];
+		const label = typeof option.label === "string" && option.label ? option.label : option.id;
+		return [typeof option.kind === "string" && option.kind ? { id: option.id, label, kind: option.kind } : { id: option.id, label }];
 	});
 	return decisions.length > 0 ? decisions : undefined;
 }
