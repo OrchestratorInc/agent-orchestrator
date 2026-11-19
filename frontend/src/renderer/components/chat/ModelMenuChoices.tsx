@@ -101,12 +101,30 @@ export function ModelMenuChoices<T extends { id: string; label: string }>({
 	const headerRef = useRef<HTMLDivElement>(null);
 	const footerRef = useRef<HTMLDivElement>(null);
 	// A row is the menu item's text line plus its py-1.5, with the surface's 1px gap between rows.
-	// The pane is fixed at that height rather than only capped by it: a search with no matches
-	// drops to a single line, and the menu must not shrink under the pointer while it is typed in.
-	const rowCap = rows === undefined ? undefined : {
-		minHeight: `calc((var(--line-height-row) + var(--space-1_5) * 2) * ${rows} + 1px * ${rows})`,
-		maxHeight: `calc((var(--line-height-row) + var(--space-1_5) * 2) * ${rows} + 1px * ${rows})`,
-	};
+	// The pane starts at that height whatever it lists: a search with no matches drops to a single
+	// line, and the menu must not shrink under the pointer while it is typed in. It only grows into
+	// room the held height below leaves it.
+	const rowsHeight = rows === undefined ? undefined : `calc((var(--line-height-row) + var(--space-1_5) * 2) * ${rows} + 1px * ${rows})`;
+	const rowCap = rowsHeight === undefined ? undefined : { flex: `1 1 ${rowsHeight}`, minHeight: rowsHeight };
+	const rootRef = useRef<HTMLDivElement>(null);
+	const holdsHeight = rows !== undefined;
+	// While open, the menu never gets shorter: when the rows under the list shrink (another agent
+	// has fewer settings), the list takes the room instead of the menu's edge moving under the pointer.
+	useLayoutEffect(() => {
+		const root = rootRef.current;
+		if (!holdsHeight || !root || typeof ResizeObserver === "undefined") return;
+		let tallest = 0;
+		const observer = new ResizeObserver(() => {
+			if (root.offsetHeight <= tallest) return;
+			tallest = root.offsetHeight;
+			root.style.minHeight = `${tallest}px`;
+		});
+		observer.observe(root);
+		return () => {
+			observer.disconnect();
+			root.style.minHeight = "";
+		};
+	}, [holdsHeight]);
 	useEdgeFade(scrollRef);
 	const clearSearch = useCallback(() => setSearch(""), []);
 	// The header's own tab stop (the rail's chosen agent), if it has one.
@@ -157,7 +175,7 @@ export function ModelMenuChoices<T extends { id: string; label: string }>({
 		if (scrollRef.current) scrollRef.current.scrollTop = 0;
 	}, [listKey]);
 	return (
-		<div className={cn("flex min-h-0 max-h-[calc(var(--size-select-menu-max)-var(--space-2)*2)] flex-col", className)}>
+		<div ref={rootRef} className={cn("flex min-h-0 max-h-[calc(var(--size-select-menu-max)-var(--space-2)*2)] flex-col", className)}>
 			{showSearch && (
 				<div
 					// No inline padding: the field then shares the menu rows' silhouette,
@@ -246,10 +264,9 @@ export function ModelMenuChoices<T extends { id: string; label: string }>({
 					{header({ clearSearch })}
 				</div>
 			) : null}
-			<div className="relative grid min-h-0 flex-1 grid-rows-[minmax(0,1fr)] overflow-hidden">
+			<div className="relative grid min-h-0 flex-1 grid-rows-[minmax(0,1fr)] overflow-hidden" style={rowCap}>
 				<div
 					ref={scrollRef}
-					style={rowCap}
 					className="model-menu-scroll edge-fade min-h-0 overflow-y-auto overscroll-contain"
 					onScroll={handleScroll}
 					onKeyDownCapture={(event) => {

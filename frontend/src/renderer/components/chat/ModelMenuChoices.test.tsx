@@ -1,6 +1,6 @@
-import { fireEvent, render, screen } from "@testing-library/react";
+import { act, fireEvent, render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, onTestFinished, vi } from "vitest";
 import { ModelMenuChoices } from "./ModelMenuChoices";
 
 describe("ModelMenuChoices", () => {
@@ -172,12 +172,12 @@ describe("ModelMenuChoices", () => {
 
 	it("fixes the list at the requested number of rows, so a search with no matches cannot shrink it", () => {
 		renderRows(generateModels(30), undefined, 3);
-		const scroller = document.querySelector<HTMLElement>(".model-menu-scroll")!;
+		const pane = document.querySelector<HTMLElement>(".model-menu-scroll")!.parentElement!;
 		const height = "calc((var(--line-height-row) + var(--space-1_5) * 2) * 3 + 1px * 3)";
-		// Both bounds: a merely capped pane still shrinks to its content, which is a single line
-		// once nothing matches, and the menu drops out from under the pointer.
-		expect(scroller.style.maxHeight).toBe(height);
-		expect(scroller.style.minHeight).toBe(height);
+		// Starts at the rows' height whatever it lists, and never below it: a pane sized by its
+		// content is a single line once nothing matches, and the menu drops out from under the pointer.
+		expect(pane.style.flexBasis).toBe(height);
+		expect(pane.style.minHeight).toBe(height);
 		// Every row still renders; the list scrolls under the cap.
 		expect(screen.getAllByRole("menuitemradio")).toHaveLength(30);
 	});
@@ -214,6 +214,36 @@ describe("ModelMenuChoices", () => {
 
 	it("takes the pane's own max height when no row cap is asked for", () => {
 		renderRows(generateModels(30));
-		expect(document.querySelector<HTMLElement>(".model-menu-scroll")!.style.maxHeight).toBe("");
+		expect(document.querySelector<HTMLElement>(".model-menu-scroll")!.parentElement!.style.minHeight).toBe("");
+	});
+
+	it("holds the tallest height it reached while open, so shorter settings rows leave the room to the list", () => {
+		// Only the observer watching the menu's root; the list's edge fade has its own.
+		const watching = new Map<Element, () => void>();
+		const original = window.ResizeObserver;
+		window.ResizeObserver = class {
+			callback: () => void;
+			constructor(callback: () => void) { this.callback = callback; }
+			observe(target: Element) { watching.set(target, this.callback); }
+			unobserve() {}
+			disconnect() {}
+		} as unknown as typeof ResizeObserver;
+		onTestFinished(() => { window.ResizeObserver = original; });
+		let height = 240;
+		const offsetHeight = vi.spyOn(HTMLElement.prototype, "offsetHeight", "get").mockImplementation(() => height);
+		onTestFinished(() => offsetHeight.mockRestore());
+		const { container } = renderRows(generateModels(5), undefined, 3);
+		const root = container.firstElementChild as HTMLElement;
+		const notify = () => watching.get(root)?.();
+		act(() => notify());
+		expect(root.style.minHeight).toBe("240px");
+		// Another agent's footer is one row shorter: the menu keeps its height.
+		height = 204;
+		act(() => notify());
+		expect(root.style.minHeight).toBe("240px");
+		// A taller one grows it, and that becomes the height held.
+		height = 276;
+		act(() => notify());
+		expect(root.style.minHeight).toBe("276px");
 	});
 });
