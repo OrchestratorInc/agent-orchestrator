@@ -321,12 +321,38 @@ func TestEffectiveHarnessAndAgentConfig(t *testing.T) {
 	if h := effectiveHarness("", domain.KindOrchestrator, cfg); h != domain.HarnessClaudeCode {
 		t.Fatalf("orchestrator harness = %q, want claude-code", h)
 	}
+	// Reviewer falls back to worker harness/config when no reviewer is configured.
+	if h := effectiveHarness("", domain.KindReviewer, cfg); h != domain.HarnessCodex {
+		t.Fatalf("reviewer harness = %q, want codex", h)
+	}
 
 	// Role override merges over the base agent config (set fields win; unset keep base).
 	got := effectiveAgentConfig(domain.HarnessCodex, domain.KindWorker, cfg)
 	if got.Model != "worker" || got.Effort != "high" || got.Mode != "high" || got.Permissions != domain.PermissionModeAuto {
 		t.Fatalf("merged worker config = %#v, want model=worker mode=high permissions=auto", got)
 	}
+	// Reviewer inherits worker model and effort when reviewer is not configured.
+	gotReviewer := effectiveAgentConfig(domain.HarnessCodex, domain.KindReviewer, cfg)
+	if gotReviewer.Model != "worker" || gotReviewer.Effort != "high" {
+		t.Fatalf("reviewer fallback config = %#v, want model=worker effort=high", gotReviewer)
+	}
+
+	// Explicit reviewer config routes the reviewer role model and effort.
+	cfgWithReviewer := cfg
+	cfgWithReviewer.Reviewers = []domain.ReviewerConfig{
+		{
+			Harness:     domain.ReviewerClaudeCode,
+			AgentConfig: domain.AgentConfig{Model: "reviewer-model", Effort: "medium"},
+		},
+	}
+	if h := effectiveHarness("", domain.KindReviewer, cfgWithReviewer); h != domain.HarnessClaudeCode {
+		t.Fatalf("configured reviewer harness = %q, want claude-code", h)
+	}
+	gotConfiguredReviewer := effectiveAgentConfig(domain.HarnessClaudeCode, domain.KindReviewer, cfgWithReviewer)
+	if gotConfiguredReviewer.Model != "reviewer-model" || gotConfiguredReviewer.Effort != "medium" {
+		t.Fatalf("configured reviewer config = %#v, want model=reviewer-model effort=medium", gotConfiguredReviewer)
+	}
+
 	// Orchestrator has no agent-config override, so the base config is used as-is.
 	if got := effectiveAgentConfig(domain.HarnessClaudeCode, domain.KindOrchestrator, cfg); got.Model != "base" {
 		t.Fatalf("orchestrator config = %#v, want base", got)

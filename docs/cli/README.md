@@ -181,7 +181,7 @@ and outputs through it without claiming, acknowledging, waking, or interrupting
 delivery.
 
 If `--agent` / `--harness` is omitted, `ao spawn` uses the resolved project's
-`worker.agent` config. Before spawning, the CLI performs one targeted launch
+role config (`worker.agent` for workers, `orchestrator.agent` for orchestrators, or the configured reviewer for reviewers). Before spawning, the CLI performs one targeted launch
 ensure. It fails early for unsupported or definitely missing harnesses and
 warns-but-continues for unauthorized or unknown observations; daemon session
 creation repeats launch validation and native launch remains authoritative.

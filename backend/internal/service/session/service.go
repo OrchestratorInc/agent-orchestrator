@@ -77,7 +77,7 @@ type ListFilter struct {
 	OrchestratorOnly bool
 	Fresh            bool
 	// Kind keeps one kind of session. KindWorker matches every session that is
-	// not an orchestrator, so rows written before kinds existed still list.
+	// neither an orchestrator nor a reviewer, so rows written before kinds existed still list.
 	Kind domain.SessionKind
 	// Limit pages the list: at most Limit sessions, pinned first and then most
 	// recently updated, resuming after Cursor. Zero lists every match in store
@@ -1801,7 +1801,11 @@ func matchesSessionFilter(rec domain.SessionRecord, filter ListFilter) bool {
 			return false
 		}
 	case domain.KindWorker:
-		if rec.Kind == domain.KindOrchestrator {
+		if rec.Kind == domain.KindOrchestrator || rec.Kind == domain.KindReviewer {
+			return false
+		}
+	case domain.KindReviewer:
+		if rec.Kind != domain.KindReviewer {
 			return false
 		}
 	}

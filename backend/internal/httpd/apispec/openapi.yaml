@@ -7228,15 +7228,16 @@ paths:
           - "null"
           - boolean
       - description: Session kind filter. worker keeps every session that is not an
-          orchestrator.
+          orchestrator or reviewer.
         in: query
         name: kind
         schema:
           description: Session kind filter. worker keeps every session that is not
-            an orchestrator.
+            an orchestrator or reviewer.
           enum:
           - worker
           - orchestrator
+          - reviewer
           type: string
       - description: Page size. When set, sessions are ordered pinned first, then
           most recently updated, and nextCursor resumes the list. When omitted, every
@@ -25705,6 +25706,7 @@ components:
           enum:
           - worker
           - orchestrator
+          - reviewer
           type: string
         mode:
           enum:

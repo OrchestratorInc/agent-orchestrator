@@ -1196,11 +1196,23 @@ func TestSessionsAPI_ListFiltersByPRState(t *testing.T) {
 
 func TestSessionsAPI_ListRejectsBadPagingQuery(t *testing.T) {
 	srv := newSessionTestServer(t, newFakeSessionService())
-	for _, query := range []string{"kind=reviewer", "limit=0", "limit=201", "limit=ten", "cursor=abc", "prState=shipped"} {
+	for _, query := range []string{"kind=invalid", "limit=0", "limit=201", "limit=ten", "cursor=abc", "prState=shipped"} {
 		body, status, _ := doRequest(t, srv, "GET", "/api/v1/sessions?"+query, "")
 		if status != http.StatusBadRequest || !strings.Contains(string(body), "INVALID_QUERY") {
 			t.Fatalf("GET sessions?%s = %d %s, want 400 INVALID_QUERY", query, status, body)
 		}
+	}
+}
+
+func TestSessionsAPI_ListAcceptsReviewerKind(t *testing.T) {
+	svc := newFakeSessionService()
+	srv := newSessionTestServer(t, svc)
+	body, status, _ := doRequest(t, srv, "GET", "/api/v1/sessions?kind=reviewer", "")
+	if status != http.StatusOK {
+		t.Fatalf("GET sessions?kind=reviewer = %d, want 200; body=%s", status, body)
+	}
+	if svc.lastListFilter.Kind != domain.KindReviewer {
+		t.Fatalf("filter.Kind = %q, want reviewer", svc.lastListFilter.Kind)
 	}
 }
 

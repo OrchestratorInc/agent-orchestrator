@@ -9075,7 +9075,7 @@ export interface components {
             harness?: "claude-code" | "codex" | "aider" | "opencode" | "opencode-v2" | "grok" | "droid" | "amp" | "agy" | "crush" | "cursor" | "qwen" | "gemini" | "copilot" | "goose" | "auggie" | "continue" | "devin" | "cline" | "kimi" | "muse" | "kiro" | "kilocode" | "vibe" | "pi" | "kimchi" | "omp" | "fx" | "prime-agent" | "autohand" | "unreal-agent" | "codewhale" | "mimo-code" | "minimax-code" | "deepseek-harness" | "openhands" | "command-code" | "docker-agent" | "memcode" | "hermes" | "stakpak" | "open-interpreter" | "tau";
             issueId?: string;
             /** @enum {string} */
-            kind?: "worker" | "orchestrator";
+            kind?: "worker" | "orchestrator" | "reviewer";
             /** @enum {string} */
             mode?: "chat" | "tui";
             model?: string;
@@ -19142,8 +19142,8 @@ export interface operations {
                 orchestratorOnly?: null | boolean;
                 /** @description When true, return only fresh non-terminated sessions. */
                 fresh?: null | boolean;
-                /** @description Session kind filter. worker keeps every session that is not an orchestrator. */
-                kind?: "worker" | "orchestrator";
+                /** @description Session kind filter. worker keeps every session that is not an orchestrator or reviewer. */
+                kind?: "worker" | "orchestrator" | "reviewer";
                 /** @description Page size. When set, sessions are ordered pinned first, then most recently updated, and nextCursor resumes the list. When omitted, every match is returned. */
                 limit?: number;
                 /** @description Opaque cursor returned by the previous page. Requires limit. */

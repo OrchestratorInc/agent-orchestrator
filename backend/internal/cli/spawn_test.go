@@ -675,6 +675,8 @@ func TestSpawnOutputRejectsInvalidUse(t *testing.T) {
 	}{
 		{name: "unknown value", args: []string{"--output", "slides"}, want: `--output must be "artifact"`},
 		{name: "orchestrator", args: []string{"--output", "artifact", "--kind", "orchestrator"}, want: "--output is supported for worker sessions only"},
+		{name: "reviewer", args: []string{"--output", "artifact", "--kind", "reviewer"}, want: "--output is supported for worker sessions only"},
+		{name: "review flag defaults to reviewer", args: []string{"--output", "artifact", "--review", "--claim-pr", "123"}, want: "--output is supported for worker sessions only"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			args := append([]string{"spawn", "--project", "demo", "--name", "worker"}, tc.args...)
@@ -1132,14 +1134,57 @@ func TestSpawnUnknownAuthEnsureWarnsAndAllows(t *testing.T) {
 }
 
 // TestSpawnCommand_RejectsInvalidKind asserts `ao spawn` rejects a --kind value
-// outside worker/orchestrator at the CLI boundary, without contacting the daemon.
+// outside worker/orchestrator/reviewer at the CLI boundary, without contacting the daemon.
 func TestSpawnCommand_RejectsInvalidKind(t *testing.T) {
 	// Pass a valid --name so this exercises the --kind boundary specifically:
 	// spawn validates the required --name before --kind, so omitting it would
 	// trip the "--name is required" error instead of the kind error.
 	_, _, err := executeCLI(t, Deps{}, "spawn", "--project", "demo", "--name", "orch", "--kind", "orchestartor")
-	if err == nil || ExitCode(err) != 2 || !strings.Contains(err.Error(), `--kind must be "worker" or "orchestrator"`) {
+	if err == nil || ExitCode(err) != 2 || !strings.Contains(err.Error(), `--kind must be "worker", "orchestrator", or "reviewer"`) {
 		t.Fatalf("err=%v exit=%d, want --kind validation error", err, ExitCode(err))
+	}
+}
+
+// TestResolveSpawnHarness_ReviewerDefault asserts the reviewer role falls back
+// to the project's reviewer agent, falling back to the worker agent if unconfigured.
+func TestResolveSpawnHarness_ReviewerDefault(t *testing.T) {
+	project := projectDetails{
+		ID: "demo",
+		Config: &projectConfig{
+			Worker:    roleOverride{Agent: "codex"},
+			Reviewers: []reviewerConfig{{Harness: "claude-code"}},
+		},
+	}
+	if got, err := resolveSpawnHarness("", "reviewer", project); err != nil || got != "claude-code" {
+		t.Fatalf("reviewer default: got %q err %v, want claude-code", got, err)
+	}
+	if got, err := resolveSpawnHarness("aider", "reviewer", project); err != nil || got != "aider" {
+		t.Fatalf("explicit reviewer agent: got %q err %v, want aider", got, err)
+	}
+	// With no reviewers configured, falls back to worker.agent.
+	noReviewer := projectDetails{
+		ID: "demo",
+		Config: &projectConfig{
+			Worker: roleOverride{Agent: "codex"},
+		},
+	}
+	if got, err := resolveSpawnHarness("", "reviewer", noReviewer); err != nil || got != "codex" {
+		t.Fatalf("reviewer fallback to worker: got %q err %v, want codex", got, err)
+	}
+	// When worker agent is not an unattended-safe reviewer (e.g. aider), falls back to claude-code.
+	unattendedUnsafeWorker := projectDetails{
+		ID: "demo",
+		Config: &projectConfig{
+			Worker: roleOverride{Agent: "aider"},
+		},
+	}
+	if got, err := resolveSpawnHarness("", "reviewer", unattendedUnsafeWorker); err != nil || got != "claude-code" {
+		t.Fatalf("reviewer fallback for unsafe worker: got %q err %v, want claude-code", got, err)
+	}
+	// With no reviewers and no worker agent configured, surfaces --reviewer hint.
+	noAgent := projectDetails{ID: "demo", Config: &projectConfig{}}
+	if _, err := resolveSpawnHarness("", "reviewer", noAgent); err == nil || !strings.Contains(err.Error(), "--reviewer") {
+		t.Fatalf("missing reviewer agent: err=%v, want --reviewer hint", err)
 	}
 }
 

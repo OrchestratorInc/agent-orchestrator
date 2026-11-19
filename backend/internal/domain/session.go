@@ -24,6 +24,7 @@ type SessionKind string
 const (
 	KindWorker       SessionKind = "worker"
 	KindOrchestrator SessionKind = "orchestrator"
+	KindReviewer     SessionKind = "reviewer"
 )
 
 // ConversationCheckpointState records which main-turn boundaries AO has

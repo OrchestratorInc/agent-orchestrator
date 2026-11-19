@@ -1293,7 +1293,7 @@ func (m *Manager) Spawn(ctx context.Context, cfg ports.SpawnConfig) (result doma
 		}
 	}
 
-	asyncChat := cfg.Async && mode == domain.SessionModeChat && m.chat != nil && (cfg.Kind == domain.KindOrchestrator || cfg.Kind == domain.KindWorker)
+	asyncChat := cfg.Async && mode == domain.SessionModeChat && m.chat != nil && (cfg.Kind == domain.KindOrchestrator || cfg.Kind == domain.KindWorker || cfg.Kind == domain.KindReviewer)
 
 	var prep *taskPreparation
 	if cfg.AutomationRunID == nil && cfg.Branch == "" {
@@ -2635,10 +2635,14 @@ func effectiveHarness(explicit domain.AgentHarness, kind domain.SessionKind, cfg
 }
 
 func roleConfigName(kind domain.SessionKind) string {
-	if kind == domain.KindOrchestrator {
+	switch kind {
+	case domain.KindOrchestrator:
 		return "orchestrator"
+	case domain.KindReviewer:
+		return "reviewer"
+	default:
+		return "worker"
 	}
-	return "worker"
 }
 
 // effectiveAgentConfig merges the role override's agent config over the
@@ -2792,10 +2796,34 @@ func validateSpawnModel(harness domain.AgentHarness, model string) error {
 }
 
 func roleOverride(kind domain.SessionKind, cfg domain.ProjectConfig) domain.RoleOverride {
-	if kind == domain.KindOrchestrator {
+	switch kind {
+	case domain.KindOrchestrator:
 		return cfg.Orchestrator
+	case domain.KindReviewer:
+		if len(cfg.Reviewers) > 0 {
+			return domain.RoleOverride{
+				Harness:     domain.AgentHarness(cfg.Reviewers[0].Harness),
+				AgentConfig: cfg.Reviewers[0].AgentConfig,
+			}
+		}
+		if harness, config := cfg.DefaultWorkerReviewer(); harness != "" {
+			return domain.RoleOverride{
+				Harness:     domain.AgentHarness(harness),
+				AgentConfig: config,
+			}
+		}
+		if cfg.Worker.Harness != "" {
+			return domain.RoleOverride{
+				Harness:     domain.AgentHarness(cfg.ResolveReviewerHarness(cfg.Worker.Harness)),
+				AgentConfig: cfg.AgentConfig,
+			}
+		}
+		return domain.RoleOverride{
+			AgentConfig: cfg.AgentConfig,
+		}
+	default:
+		return cfg.Worker
 	}
-	return cfg.Worker
 }
 
 // sessionPrefix returns the display prefix for a project: the explicit
@@ -6507,7 +6535,7 @@ func promptRoleForKind(kind domain.SessionKind) sessionPromptRole {
 	switch kind {
 	case domain.KindOrchestrator:
 		return sessionPromptRoleOrchestrator
-	case domain.KindWorker:
+	case domain.KindWorker, domain.KindReviewer:
 		return sessionPromptRoleWorker
 	default:
 		return ""
@@ -6670,7 +6698,7 @@ func (m *Manager) buildSystemPrompt(ctx context.Context, kind domain.SessionKind
 			return "", err
 		}
 		cfg.OrchestratorRules = rules
-	case domain.KindWorker:
+	case domain.KindWorker, domain.KindReviewer:
 		if projectID != "" {
 			orchestratorID, ok, err := m.activeOrchestratorSessionID(ctx, projectID)
 			if err != nil {
