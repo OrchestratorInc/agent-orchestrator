@@ -202,15 +202,16 @@ export function ChatSessionScreen({ session: boardSession }: { session: MobileCh
 
 	// Agent switching, from the model menu's "Other agents" (the new task's
 	// menu). As on desktop, a pick only records the agent the next message goes
-	// to; the send then switches and sends in one request. Not offered to
-	// orchestrators or terminated sessions, which desktop leaves out too.
-	const isWorker = !("projectName" in session);
+	// to; the send then switches and sends in one request. Orchestrators switch
+	// too, as on desktop, including once their agent has stopped at a usage
+	// limit: the daemon wakes it to hand over. Not offered to terminated
+	// sessions, which must be restored first.
 	const currentHarness = conversation.snapshot?.harness || "";
 	const agentSwitchMenu = useAgentSwitchMenu({
 		cfg: config,
 		current: currentHarness,
 		projectId: session.projectId,
-		enabled: isWorker && !terminated && Boolean(currentHarness),
+		enabled: !terminated && Boolean(currentHarness),
 	});
 	const [chosenSwitch, setChosenSwitch] = useState<PendingAgentSwitch>();
 	const pendingSwitch = pendingSwitchFor(chosenSwitch, currentHarness || undefined);
