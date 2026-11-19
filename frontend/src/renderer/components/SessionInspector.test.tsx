@@ -11,7 +11,7 @@ import {
 import userEvent from "@testing-library/user-event";
 import type { ComponentProps, ReactNode } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { resetPRFocus, SessionInspector } from "./SessionInspector";
+import { PRSummaryCard, resetPRFocus, SessionInspector } from "./SessionInspector";
 import { subscribeChatComposerText } from "../lib/chat-context-bus";
 import { sessionUiKey } from "../lib/hosts";
 import { resetPRMergeMethods } from "./PRActions";
@@ -238,7 +238,7 @@ function commonGetsResponder(
 ) {
   return async (path: string) => {
     if (path === "/api/v1/agents/readiness") {
-      const agents = ["claude-code", "codex", "opencode"].map((id) => agentReadiness(id));
+      const agents = ["claude-code", "codex", "opencode"].map((id) => agentReadiness(id, id, { canStopTurn: id !== "opencode" }));
       return { data: { agents } };
     }
     if (path === "/api/v1/agents/{agent}/models") {
@@ -313,7 +313,7 @@ const approvedReview = {
   reviewId: "review-1",
   sessionId: "sess-1",
   harness: "codex",
-  status: "complete",
+  status: "completed",
   verdict: "approved",
   body: "Looks good.",
   prUrl: "https://example.com/pr/3",
@@ -454,6 +454,23 @@ describe("SessionInspector tabs", () => {
 
     expect(screen.getByRole("tab", { name: "Artifacts" })).toHaveAttribute("aria-selected", "true");
     expect(screen.getByRole("tab", { name: "Summary" })).toBeInTheDocument();
+  });
+
+  it("adds its chat's Subagents panel to an orchestrator's inspector", () => {
+    const onViewChange = vi.fn();
+    renderWithQuery(
+      <SessionInspector
+        orchestrator
+        session={session([], { kind: "orchestrator" })}
+        subagentsView={<div data-testid="subagents-slot" />}
+        view="subagents"
+        onViewChange={onViewChange}
+      />,
+    );
+    expect(screen.getAllByRole("tab").map((tab) => tab.textContent?.trim())).toEqual(["Summary", "Browser", "Subagents"]);
+    expect(screen.getByRole("tab", { name: "Subagents" })).toHaveAttribute("aria-selected", "true");
+    expect(screen.getByTestId("subagents-slot")).toBeInTheDocument();
+    expect(onViewChange).not.toHaveBeenCalled();
   });
 
   it("gives the Browser viewport the full inspector body without the default content gutter", async () => {
@@ -1950,6 +1967,77 @@ describe("SessionInspector PR section", () => {
 
   });
 
+  it("stops an active TUI turn without archiving its session", async () => {
+    renderWithQuery(
+      <SessionInspector session={session([], {
+        mode: "tui",
+        status: "working",
+        activity: { state: "active", lastActivityAt: "2026-06-15T10:00:00Z" },
+      })} />,
+    );
+
+    await userEvent.click(await screen.findByRole("button", { name: "Stop turn" }));
+    await waitFor(() => expect(postMock).toHaveBeenCalledWith(
+      "/api/v1/sessions/{sessionId}/stop-turn",
+      { params: { path: { sessionId: "sess-1" } } },
+    ));
+    expect(postCallsFor("/api/v1/sessions/{sessionId}/kill")).toHaveLength(0);
+    const requested = await screen.findByRole("button", { name: "Stop requested" });
+    expect(requested).toBeDisabled();
+    await userEvent.click(requested);
+    expect(postCallsFor("/api/v1/sessions/{sessionId}/stop-turn")).toHaveLength(1);
+  });
+
+  it("shows Stop requested when another client already stopped the turn", async () => {
+    postMock.mockResolvedValue({
+      error: { error: "conflict", code: "SESSION_TURN_STOP_PENDING", message: "a stop was already sent for this turn" },
+      response: { status: 409 },
+    });
+    renderWithQuery(<SessionInspector session={session([], { mode: "tui", activity: { state: "active", lastActivityAt: "2026-06-15T10:00:00Z" } })} />);
+    await userEvent.click(await screen.findByRole("button", { name: "Stop turn" }));
+    expect(await screen.findByRole("button", { name: "Stop requested" })).toBeDisabled();
+    expect(screen.queryByRole("alert")).not.toBeInTheDocument();
+  });
+
+  it("shows a stop failure and allows a retry", async () => {
+    postMock.mockResolvedValue({
+      error: { error: "conflict", code: "SESSION_COMPOSER_BUSY", message: "Clear the draft first" },
+      response: { status: 409 },
+    });
+    renderWithQuery(<SessionInspector session={session([], { mode: "tui", activity: { state: "active", lastActivityAt: "2026-06-15T10:00:00Z" } })} />);
+    await userEvent.click(await screen.findByRole("button", { name: "Stop turn" }));
+    expect(await screen.findByRole("alert")).toHaveTextContent("Clear the draft first");
+    expect(screen.getByRole("button", { name: "Stop turn" })).toBeEnabled();
+  });
+
+  it.each([
+    { activity: { state: "idle", lastActivityAt: "2026-06-15T10:00:00Z" } },
+    { mode: "chat" },
+    { cloud: { orgId: "org-1" } },
+    { provider: "opencode" },
+    { isTerminated: true },
+  ] satisfies Partial<WorkspaceSession>[])("hides Stop turn for an ineligible session %j", (overrides) => {
+    renderWithQuery(<SessionInspector session={session([pr(7, "open")], {
+      mode: "tui", activity: { state: "active", lastActivityAt: "2026-06-15T10:00:00Z" }, ...overrides,
+    })} />, undefined, (client) => client.setQueryData(["agent-readiness"], {
+      agents: ["claude-code", "opencode"].map((id) => agentReadiness(id, id, { canStopTurn: id === "claude-code" })),
+    }));
+    expect(screen.queryByRole("button", { name: "Stop turn" })).not.toBeInTheDocument();
+  });
+
+  it("allows Stop turn again when a new prompt starts a turn", async () => {
+    const active = session([], { mode: "tui", activity: { state: "active", lastActivityAt: "2026-06-15T10:00:00Z" } });
+    const { rerender, queryClient } = renderWithQuery(<SessionInspector session={active} />);
+    await userEvent.click(await screen.findByRole("button", { name: "Stop turn" }));
+    expect(await screen.findByRole("button", { name: "Stop requested" })).toBeDisabled();
+    rerender(
+      <QueryClientProvider client={queryClient}>
+        <TooltipProvider><SessionInspector session={{ ...active, lastUserMessageAt: "2026-06-15T10:01:00Z" }} /></TooltipProvider>
+      </QueryClientProvider>,
+    );
+    expect(screen.getByRole("button", { name: "Stop turn" })).toBeEnabled();
+  });
+
   it("persists the CI injection policy", async () => {
     renderWithQuery(<SessionInspector session={session([pr(7, "open")])} />);
 
@@ -3184,6 +3272,46 @@ describe("SessionInspector tabs", () => {
     expect(screen.queryByText("Pull request")).not.toBeInTheDocument();
   });
 
+  it("offers a Subagents tab after Side chat while the chat passes its panel", async () => {
+    mockCommonGets([], "", [reviewState(1, "needs_review")]);
+    renderWithQuery(
+      <SessionInspector
+        session={session([pr(1, "open")])}
+        sideChatView={<div />}
+        subagentsView={<div data-testid="subagents-slot" />}
+      />,
+    );
+    const tabs = screen.getAllByRole("tab").map((el) => el.textContent?.trim());
+    expect(tabs).toEqual(["Summary", "Files", "Reviews", "Browser", "Side chat", "Subagents"]);
+
+    await userEvent.click(screen.getByRole("tab", { name: "Subagents" }));
+
+    expect(screen.getByTestId("subagents-slot")).toBeInTheDocument();
+  });
+
+  it("keeps a Subagents selection while the chat has not reported its subagents yet", () => {
+    mockCommonGets([], "", []);
+    const onViewChange = vi.fn();
+    const inspector = (subagentsView?: ReactNode) => (
+      <SessionInspector session={session([])} sideChatView={<div />} subagentsView={subagentsView} view="subagents" onViewChange={onViewChange} />
+    );
+    const { rerender, queryClient } = renderWithQuery(inspector());
+
+    // Back on the session, the chat has not listed its subagents yet: Summary shows
+    // through the gap, but the reader's choice is not overwritten.
+    expect(screen.getByRole("tab", { name: "Summary" })).toHaveAttribute("aria-selected", "true");
+    expect(onViewChange).not.toHaveBeenCalled();
+
+    rerender(
+      <QueryClientProvider client={queryClient}>
+        <TooltipProvider>{inspector(<div data-testid="subagents-slot" />)}</TooltipProvider>
+      </QueryClientProvider>,
+    );
+    expect(screen.getByRole("tab", { name: "Subagents" })).toHaveAttribute("aria-selected", "true");
+    expect(screen.getByTestId("subagents-slot")).toBeInTheDocument();
+    expect(onViewChange).not.toHaveBeenCalled();
+  });
+
   it("keeps the Reviews tab available for draft PRs", async () => {
     mockCommonGets([], "", [reviewState(1, "needs_review")]);
     renderWithQuery(<SessionInspector session={session([pr(1, "draft")])} />);
@@ -3712,7 +3840,7 @@ describe("SessionInspector summary reviews", () => {
 
     renderWithQuery(<SessionInspector session={session([pr(3, "open")])} />);
     await openReviewsSection();
-    await screen.findByText("Review in progress · Codex");
+    await screen.findByText("Reviewing... · Codex");
 
     expect(screen.queryByText("Reviewable change 3")).not.toBeInTheDocument();
     expect(screen.queryByText("Review summary")).not.toBeInTheDocument();
@@ -4100,6 +4228,111 @@ describe("SessionInspector summary reviews", () => {
     expect(screen.getAllByText("Earlier-pass comment.")).toHaveLength(1);
   });
 
+  it("lists a bot's inline comments and the PR's top-level comments with the review summary, rendering its HTML", async () => {
+    const previous = getMock.getMockImplementation()!;
+    getMock.mockImplementation(async (path: string, opts?: unknown) => {
+      if (path === "/api/v1/sessions/{sessionId}/pr") {
+        return {
+          data: {
+            prs: [prSummary(3, "open", {
+              author: "aditi",
+              review: {
+                decision: "none",
+                hasUnresolvedHumanComments: false,
+                reviews: [{
+                  reviewerId: "coderabbitai",
+                  verdict: "none",
+                  isBot: true,
+                  autoInjectReview: true,
+                  reviewUrl: "https://example.com/pr/3#review-1",
+                  submittedAt: "2026-06-15T10:00:00Z",
+                  body: "<!-- coderabbit-ai-generated:v1 -->\n\n**Actionable comments posted: 1**\n\n<details>\n<summary>Prompt to fix all issues</summary>\n\nFix the schema.\n\n</details>",
+                }],
+                // The summary leaves bots out; their comments live on the threads.
+                unresolvedBy: [],
+              },
+              threads: [{
+                id: "thread-1",
+                path: "contracts/openapi.yaml",
+                line: 12,
+                resolved: false,
+                comments: [{
+                  id: "c-1",
+                  author: "coderabbitai[bot]",
+                  isBot: true,
+                  url: "https://example.com/pr/3#discussion_r1",
+                  createdAt: "2026-06-15T10:00:00Z",
+                  body: "<!-- coderabbit-ai-generated:v1 -->\n\n**<picture><img src=\"https://example.com/amber.svg\" width=\"16\" height=\"16\" alt=\"\"></picture> Minor** · **Quick win**\n\n**Encode the schedule requirement.**",
+                }],
+              }],
+              conversation: [{
+                id: "walk-1",
+                author: "coderabbitai",
+                isBot: true,
+                url: "https://example.com/pr/3#issuecomment-1",
+                createdAt: "2026-06-15T09:00:00Z",
+                body: "## Walkthrough\n\nAdds cloud automations.",
+              }, {
+                id: "note-1",
+                author: "maya",
+                isBot: false,
+                url: "https://example.com/pr/3#issuecomment-2",
+                createdAt: "2026-06-15T11:00:00Z",
+                body: "Please also update the docs.",
+              }, {
+                // The worker's own `gh pr comment` note, posted as the PR author.
+                id: "note-2",
+                author: "aditi",
+                isBot: false,
+                url: "https://example.com/pr/3#issuecomment-3",
+                createdAt: "2026-06-15T12:00:00Z",
+                body: "Pushed the schema fix.",
+              }, {
+                // A deploy bot that never reviewed: not review feedback.
+                id: "deploy-1",
+                author: "vercel[bot]",
+                isBot: true,
+                url: "https://example.com/pr/3#issuecomment-4",
+                createdAt: "2026-06-15T12:30:00Z",
+                body: "Preview deployed to example.vercel.app.",
+              }],
+            })],
+          },
+        };
+      }
+      return previous(path, opts);
+    });
+
+    renderWithQuery(<SessionInspector session={session([pr(3, "open")])} />);
+    await openReviewsSection();
+
+    // The review summary's <details> is a real disclosure, and its hidden state never shows.
+    const summary = await screen.findByText("Prompt to fix all issues");
+    expect(summary.tagName).toBe("SUMMARY");
+    expect(document.body.textContent).not.toMatch(/<details|<summary|<!--|coderabbit-ai-generated/);
+    // Top-level comments sit beside the review.
+    expect(screen.getByText("Adds cloud automations.")).toBeInTheDocument();
+    expect(screen.getByText("Please also update the docs.")).toBeInTheDocument();
+    // The PR author's own note is not feedback, so it gets no card to send back.
+    expect(screen.queryByText("Pushed the schema fix.")).not.toBeInTheDocument();
+    expect(screen.queryByText("Preview deployed to example.vercel.app.")).not.toBeInTheDocument();
+    // A top-level comment's time reads as a comment, not a review.
+    const mayaCard = screen.getByText("Please also update the docs.").closest("[data-testid=github-review-card]") as HTMLElement;
+    expect(mayaCard).toHaveTextContent(/Commented \d/);
+    expect(mayaCard).not.toHaveTextContent(/Reviewed \d/);
+
+    // The bot's inline comment is listed under its review, previewed as words.
+    await userEvent.click(screen.getByRole("button", { name: /coderabbitai.*Commented/i }));
+    expect(await screen.findByText("contracts/openapi.yaml:12")).toBeInTheDocument();
+    expect(screen.getByText("Minor · Quick win")).toBeInTheDocument();
+    await userEvent.click(screen.getByText("Minor · Quick win"));
+    const body = screen.getByTestId("inline-comment-body");
+    expect(body).toHaveTextContent("Encode the schedule requirement.");
+    expect(body.querySelector("strong")).not.toBeNull();
+    // The 16px icon is decoration, not an image to open.
+    expect(body.querySelector("[data-testid='pr-description-image']")).toBeNull();
+  });
+
   it("passes an inline review location to the Files diff viewer", async () => {
     const onOpenReviewFile = vi.fn();
     const previous = getMock.getMockImplementation()!;
@@ -4168,7 +4401,7 @@ describe("SessionInspector summary reviews", () => {
         previousRun: {
           ...approvedReview,
           id: "run-previous",
-          status: "delivered",
+          status: "completed",
           verdict: previousVerdict,
           body: "Previous review summary with actionable detail.",
           githubReviewId: "98765",
@@ -4213,7 +4446,7 @@ describe("SessionInspector summary reviews", () => {
       // word on the button.
       if (status === "running") {
         expect(
-          screen.getByText("Review in progress · Codex"),
+          screen.getByText("Reviewing... · Codex"),
         ).toBeInTheDocument();
       } else {
         expect(
@@ -5543,7 +5776,7 @@ describe("SessionInspector summary reviews", () => {
         ...approvedReview,
         id: "run-done",
         harness: "claude-code",
-        status: "complete",
+        status: "completed",
       },
     };
     const running = {
@@ -5565,10 +5798,10 @@ describe("SessionInspector summary reviews", () => {
     await openReviewsSection();
 
     expect(
-      await screen.findByText("Review in progress · Codex"),
+      await screen.findByText("Reviewing... · Codex"),
     ).toBeInTheDocument();
     expect(
-      screen.queryByText("Review in progress · Claude Code"),
+      screen.queryByText("Reviewing... · Claude Code"),
     ).not.toBeInTheDocument();
   });
 
@@ -5659,13 +5892,13 @@ describe("SessionInspector summary reviews", () => {
 
     // AO runs one reviewer per worker, so a second harness cannot start
     // alongside it. Say so rather than silently ignoring the choice.
-    expect(screen.getByText("Review in progress · Codex")).toBeInTheDocument();
+    expect(screen.getByText("Reviewing... · Codex")).toBeInTheDocument();
     expect(
       screen.getByRole("button", { name: /Select reviewer agent/ }),
     ).toBeDisabled();
   });
 
-  it("hides the review in progress strip when the reviewer hook reports idle", async () => {
+  it("keeps showing the run state when the reviewer hook reports idle", async () => {
     const running = {
       ...reviewState(3, "running", "sha-1"),
       latestRun: {
@@ -5681,9 +5914,11 @@ describe("SessionInspector summary reviews", () => {
     renderWithQuery(<SessionInspector session={session([pr(3, "open")])} />);
     await openReviewsSection();
 
+    // The daemon owns the run: an idle reviewer that does not submit is failed
+    // by the daemon after its grace period, so the UI never guesses.
     expect(
-      screen.queryByText("Review in progress · Codex"),
-    ).not.toBeInTheDocument();
+      await screen.findByText("Reviewing... · Codex"),
+    ).toBeInTheDocument();
     expect(
       screen.getByRole("button", { name: "Stop review" }),
     ).toBeInTheDocument();
@@ -5706,7 +5941,7 @@ describe("SessionInspector summary reviews", () => {
     await openReviewsSection();
 
     expect(
-      await screen.findByText("Review in progress · Codex"),
+      await screen.findByText("Reviewing... · Codex"),
     ).toBeInTheDocument();
   });
 
@@ -5716,7 +5951,7 @@ describe("SessionInspector summary reviews", () => {
       previousRun: {
         ...approvedReview,
         id: "run-previous",
-        status: "delivered",
+        status: "completed",
         verdict: "changes_requested",
         targetSha: "sha-previous",
       },
@@ -5850,7 +6085,8 @@ describe("SessionInspector summary reviews", () => {
     const failedAutoReview = {
       ...failedReview,
       triggerSource: "auto",
-      body: 'reviewer preflight: reviewer harness "kimi" is unauthorized',
+      body: "",
+      failureReason: "preflight_failed",
     };
     mockCommonGets([], "", [
       {
@@ -5867,15 +6103,16 @@ describe("SessionInspector summary reviews", () => {
     await openReviewsSection();
 
     expect(screen.getByRole("status")).toHaveTextContent(
-      'Auto review Failed: reviewer preflight: reviewer harness "kimi" is unauthorized',
+      "Auto review: Review failed. Please try again.",
     );
   });
 
-  it("surfaces the stored reason of a failed manual review", async () => {
+  it("surfaces a failed manual review", async () => {
     const failedManualReview = {
       ...failedReview,
       triggerSource: "manual",
-      body: "launch reviewer: reviewer replace stale pane: no such session",
+      body: "",
+      failureReason: "turn_ended_without_submit",
     };
     mockCommonGets([], "", [
       {
@@ -5887,9 +6124,11 @@ describe("SessionInspector summary reviews", () => {
     renderWithQuery(<SessionInspector session={session([pr(3, "open")])} />);
     await openReviewsSection();
 
+    // The reason code is for diagnostics; people get one message and a retry.
     expect(screen.getByRole("status")).toHaveTextContent(
-      "Review Failed: launch reviewer: reviewer replace stale pane: no such session",
+      "Review: Review failed. Please try again.",
     );
+    expect(screen.getByRole("status")).not.toHaveTextContent("turn_ended_without_submit");
   });
 
   it("hides Reviews and the review preference when the session has no PR", async () => {
@@ -6189,7 +6428,7 @@ describe("SessionInspector Cloud reviews", () => {
             triggerSource: "manual",
             pullRequestUrl: "https://github.com/acme/repo/pull/7",
             targetSha: "head-7",
-            status: "delivered",
+            status: "completed",
             verdict: "approved",
             body: "Cloud review is ready for the worker.",
             providerReviewId: "98765",
@@ -6209,7 +6448,7 @@ describe("SessionInspector Cloud reviews", () => {
           triggerSource: "manual",
           pullRequestUrl: "https://github.com/acme/repo/pull/7",
           targetSha: "head-7",
-          status: "delivered",
+          status: "completed",
           verdict: "approved",
           body: "Cloud review is ready for the worker.",
           providerReviewId: "98765",
@@ -6617,6 +6856,47 @@ describe("SessionInspector branch summary", () => {
     expect(await screen.findByRole("button", { name: "Updating from main…" })).toBeDisabled();
   });
 
+  it("leads with merge when the PR can merge, and keeps the update in the menu", async () => {
+    const ready = prSummary(7, "open", { sourceBranch: "feat/ns", review: { decision: "approved", hasUnresolvedHumanComments: false, unresolvedBy: [] } });
+    mockGitState({ committed: [changedFile("src/a.ts", 5, 0)], prs: [ready] });
+    renderWithQuery(
+      <SessionInspector session={session([pr(7, "open")], { branchState: { ...pushed(2), base: "main", behind: 3 } })} />,
+      undefined,
+      (client) => seedPRSummaries(client, [ready]),
+    );
+
+    // Being behind main doesn't hold up a merge GitHub allows.
+    expect(await screen.findByText("3 commits behind main")).toBeInTheDocument();
+    expect(await screen.findByRole("button", { name: "Squash and merge: PR #7" })).toBeEnabled();
+    expect(screen.queryByRole("button", { name: "Update from main" })).not.toBeInTheDocument();
+    await userEvent.click(screen.getByRole("button", { name: "More actions for PR #7" }));
+    expect(await screen.findByRole("menuitem", { name: "Update from main" })).toBeInTheDocument();
+  });
+
+  it("waits for the stack before replacing update with a separate merge button", async () => {
+    const ready = prSummary(7, "open", { provider: "github", sourceBranch: "feat/ns", review: { decision: "approved", hasUnresolvedHumanComments: false, unresolvedBy: [] } });
+    const stackRead = Promise.withResolvers<{ data: unknown }>();
+    mockGitState({ committed: [changedFile("src/a.ts", 5, 0)], prs: [ready] });
+    const respond = getMock.getMockImplementation() ?? commonGetsResponder();
+    getMock.mockImplementation((path: string) => path === "/api/v1/prs/{id}/stack" ? stackRead.promise : respond(path));
+    renderWithQuery(
+      <SessionInspector session={session([pr(7, "open")], { branchState: { ...pushed(2), base: "main", behind: 3 } })} />,
+      undefined,
+      (client) => seedPRSummaries(client, [ready]),
+    );
+
+    const update = await screen.findByRole("button", { name: "Update from main" });
+    expect(update).toBeDisabled();
+    fireEvent.mouseDown(update);
+    await act(async () => stackRead.resolve({ data: {} }));
+    const merge = await screen.findByRole("button", { name: "Squash and merge: PR #7" });
+    expect(merge).toBeEnabled();
+    expect(merge).not.toBe(update);
+    fireEvent.mouseUp(update);
+    expect(postCallsFor("/api/v1/prs/{id}/merge")).toHaveLength(0);
+    expect(postCallsFor("/api/v1/prs/{id}/stack/merge")).toHaveLength(0);
+  });
+
   it("asks the agent to resolve conflicts with the base, naming the conflicting files", async () => {
     const conflicting = prSummary(7, "open", {
       sourceBranch: "feat/ns",
@@ -6682,6 +6962,57 @@ describe("SessionInspector branch summary", () => {
     expect(message).toContain("The conflicting files are `README.md`.");
     expect(message).toContain("push the branch to update PR #8.");
     expect(await within(screen.getByTestId("pr-card")).findByRole("button", { name: "Resolving conflicts…" })).toBeDisabled();
+  });
+
+  it("states the diff once in the PR card: the commits row has it, so the branch line leaves it off", async () => {
+    const same = prSummary(7, "open", { sourceBranch: "feat/ns", additions: 5, deletions: 2 });
+    mockGitState({ committed: [changedFile("src/a.ts", 5, 2)], prs: [same] });
+    renderWithQuery(
+      <SessionInspector session={session([pr(7, "open")], { branchState: pushed(2) })} />,
+      undefined,
+      (client) => seedPRSummaries(client, [same]),
+    );
+
+    const card = within(await screen.findByTestId("pr-card"));
+    expect(await card.findByText("2 commits")).toBeInTheDocument();
+    expect(card.getAllByText("+5")).toHaveLength(1);
+    // The branch line keeps the file count and drops the numbers.
+    const meta = within(card.getByTestId("pr-meta"));
+    expect(meta.getByText("2 files")).toBeInTheDocument();
+    expect(meta.queryByText("+5")).toBeNull();
+  });
+
+  it("keeps diff counts on standalone cards even when matching work is supplied", async () => {
+    const summary = prSummary(7, "open", { additions: 5, deletions: 2 });
+    renderWithQuery(
+      <PRSummaryCard
+        canOpenReviews={false}
+        onOpenReviews={() => {}}
+        pr={summary}
+        sessionId="sess-1"
+        work={{ content: <div>Branch work</div>, hasRows: true, diff: { additions: 5, deletions: 2 } }}
+      />,
+    );
+
+    const meta = within(await screen.findByTestId("pr-meta"));
+    expect(meta.getByText("+5")).toBeInTheDocument();
+    expect(meta.getByText("−2")).toBeInTheDocument();
+    expect(screen.queryByText("Branch work")).not.toBeInTheDocument();
+  });
+
+  it("keeps both sets of numbers when the branch differs from the PR", async () => {
+    const behindPR = prSummary(7, "open", { sourceBranch: "feat/ns", additions: 5, deletions: 2 });
+    mockGitState({ committed: [changedFile("src/a.ts", 9, 2)], prs: [behindPR] });
+    renderWithQuery(
+      <SessionInspector session={session([pr(7, "open")], { branchState: { ...pushed(3), unpushed: 1 } })} />,
+      undefined,
+      (client) => seedPRSummaries(client, [behindPR]),
+    );
+
+    const card = within(await screen.findByTestId("pr-card"));
+    expect(await card.findByText("3 commits")).toBeInTheDocument();
+    expect(within(card.getByTestId("pr-meta")).getByText("+5")).toBeInTheDocument();
+    expect(card.getByText("+9")).toBeInTheDocument();
   });
 
   it.each([
@@ -6990,6 +7321,19 @@ describe("SessionInspector branch summary", () => {
     expect(conflicts).toHaveTextContent("ConflictsNone");
     expect(conflicts.querySelector("[data-state='passed'] svg")).not.toBeNull();
     expect(conflicts.parentElement?.querySelector("span[aria-hidden='true'].rounded-full")).toBeNull();
+    // The label leads in full colour; a state that is in the way takes its colour
+    // on the words, one that is fine stays plain.
+    expect(screen.getByText("Conflicts")).toHaveClass("text-foreground");
+    expect(conflicts.querySelector("[data-state='passed']")).not.toHaveClass("text-error");
+    const tally = screen.getByTestId("pr-checks-tally");
+    expect(within(tally).getByText("Checks")).toHaveClass("text-foreground");
+    expect(tally.querySelector("[data-state='failed']")).toHaveClass("text-error");
+    // What opens under a row sits in from it.
+    expect(screen.getByTestId("pr-checks").parentElement).toHaveClass("pl-4");
+    // The label keeps the row's size and its state sits two sizes below it.
+    expect(screen.getByText("Conflicts")).not.toHaveClass("text-micro");
+    expect(conflicts.querySelector("[data-state='passed']")).toHaveClass("text-micro");
+    expect(tally.querySelector("[data-state='failed']")).toHaveClass("text-micro");
   });
 
   it("says the PR row opens a tab, until that tab is showing", async () => {

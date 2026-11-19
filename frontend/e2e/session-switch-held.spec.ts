@@ -206,6 +206,68 @@ async function recordSwitch(page: Page): Promise<() => Promise<SwitchFrame[]>> {
 	});
 }
 
+/** SESSION_HOLD_LIMIT_MS in useHeldSession.ts. */
+const HOLD_LIMIT_MS = 500;
+
+type HoldTimes = { inert: [number, boolean][]; tasks: [number, number][]; drain: () => void };
+
+/**
+ * Records, in the page's own clock, each time the session workspace turns
+ * inert or stops, and every long task. Must run before the page loads.
+ */
+async function watchHolds(page: Page) {
+	await page.addInitScript((id) => {
+		const times: HoldTimes = { inert: [], tasks: [], drain: () => undefined };
+		(window as unknown as { __holdTimes: HoldTimes }).__holdTimes = times;
+		const record = (entries: PerformanceEntryList) => {
+			for (const entry of entries) times.tasks.push([entry.startTime, entry.duration]);
+		};
+		const longTasks = new PerformanceObserver((list) => record(list.getEntries()));
+		longTasks.observe({ type: "longtask" });
+		// The observer's callback runs in a later, low-priority task, so take
+		// the entries it has not delivered yet.
+		times.drain = () => record(longTasks.takeRecords());
+		const watched = new WeakSet<Element>();
+		new MutationObserver(() => {
+			const workspace = document.getElementById(id);
+			if (!workspace || watched.has(workspace)) return;
+			watched.add(workspace);
+			// A workspace can mount already held, before this sees it.
+			if (workspace.hasAttribute("inert")) times.inert.push([performance.now(), true]);
+			// Watched per element: a held workspace that leaves the page
+			// still reports its release.
+			new MutationObserver(() => times.inert.push([performance.now(), workspace.hasAttribute("inert")]))
+				.observe(workspace, { attributes: true, attributeFilter: ["inert"] });
+		}).observe(document, { childList: true, subtree: true });
+	}, "session-workspace");
+	return {
+		now: () => page.evaluate(() => performance.now()),
+		/**
+		 * The first hold after `since`. Past the limit the destination renders
+		 * and commits in one uninterrupted task, and the hold ends inside it,
+		 * so that task's start is where the hold stopped waiting. Of the wait,
+		 * `blocked` is the time long tasks held the main thread after the
+		 * limit was due, when its timer could not fire.
+		 */
+		after: (since: number) => page.evaluate(({ since, limit }) => {
+			const { inert, tasks, drain } = (window as unknown as { __holdTimes: HoldTimes }).__holdTimes;
+			// The render that ended the hold may not have reached the callback yet.
+			drain();
+			const from = inert.find(([at, on]) => on && at >= since)?.[0];
+			if (from === undefined) return undefined;
+			const until = inert.find(([at, on]) => !on && at > from)?.[0];
+			if (until === undefined) return { waited: Infinity, blocked: 0, rendered: 0 };
+			// A task's reported end can fall a hair before the commit's own
+			// timestamp at the very end of it.
+			const render = tasks.find(([start, duration]) => start >= from && start <= until && until <= start + duration + 5);
+			const rendering = render?.[0] ?? until;
+			const due = from + limit;
+			const blocked = tasks.reduce((sum, [start, duration]) => sum + Math.max(0, Math.min(start + duration, rendering) - Math.max(start, due)), 0);
+			return { waited: Math.round(rendering - from), blocked: Math.round(blocked), rendered: Math.round(until - rendering) };
+		}, { since, limit: HOLD_LIMIT_MS }),
+	};
+}
+
 test.afterEach(async ({ page }) => {
 	// Leave the next test an unthrottled browser even if this one failed.
 	await throttle(page, 1).catch(() => undefined);
@@ -214,8 +276,10 @@ test.afterEach(async ({ page }) => {
 test("renderer: streaming replies keep updating through rapid session switches @T0", async ({ page }) => {
 	const errors: string[] = [];
 	page.on("pageerror", (error) => errors.push(error.message));
-	// Seven switches on a 4x throttled dev build outlast the default timeout.
-	test.setTimeout(120_000);
+	// Seven switches on a 4x throttled dev build outlast the default timeout,
+	// and on a busy CI runner they have taken over two minutes.
+	test.setTimeout(240_000);
+	const holds = await watchHolds(page);
 	const harness = await heldHarness(page);
 	harness.startStreaming();
 	await throttle(page, 4);
@@ -224,23 +288,26 @@ test("renderer: streaming replies keep updating through rapid session switches @
 		for (const session of [sessions[1], sessions[2], sessions[0], sessions[2], sessions[1], sessions[0], sessions[1]]) {
 			const clicked = Date.now();
 			const firstRequest = harness.requests.length;
+			const since = await holds.now();
 			const timeline = await recordSwitch(page);
 			await page.getByRole("button", { name: `Open ${session.title}`, exact: true }).click();
 			await expectShowing(page, session);
 			const frames = await timeline();
+			const hold = await holds.after(since);
 			// A streaming session on screen must not stall the switch: every
 			// streamed update restarts the destination's background render, so
-			// the hold gives way after a bounded time. Routing before the hold
-			// and the destination's own render are a throttled dev build's speed,
-			// not the hold's, so only the hold itself is bounded: its 500 ms limit
-			// plus one forced render, which CI measured at about 1.6 s here. A
-			// stalled hold, the failure this guards, lasted over 15 s.
-			const heldFrom = frames.find((frame) => frame.inert)?.at;
-			const heldUntil = heldFrom === undefined ? undefined : frames.find((frame) => frame.at > heldFrom && !frame.inert)?.at;
+			// the hold gives way after its 500 ms limit. Only the hold's own
+			// share is bounded: its wait, less the long tasks that kept the
+			// limit's timer from firing once it was due. Those tasks and the
+			// destination's render after the wait are a throttled dev build's
+			// speed; on busy CI runners they stretched the hold past 5 s, while
+			// its own share stays near the limit (0.5 to 0.9 s locally at 4x to
+			// 16x throttling). A stalled hold, the failure this guards, keeps
+			// waiting while a reply streams.
 			const fetches = harness.requests.slice(firstRequest)
 				.map((entry) => `${entry.sessionId === session.id ? "dest" : "other"} ${entry.sent - clicked}->${entry.answered === undefined ? "pending" : entry.answered - clicked}`);
-			const report = `frames (ms since click | route | inert | log): ${frames.map((frame) => `${frame.at} ${frame.route} ${frame.inert ? "inert" : "-"} ${frame.log}`).join("; ")}; conversation fetches: ${fetches.join(", ")}`;
-			if (heldFrom !== undefined) expect((heldUntil ?? Infinity) - heldFrom, `the hold outlasted its limit; ${report}`).toBeLessThan(5_000);
+			const report = `hold: ${hold ? `waited ${hold.waited} ms (${hold.blocked} ms blocked), then rendered ${hold.rendered} ms` : "none"}; frames (ms since click | route | inert | log): ${frames.map((frame) => `${frame.at} ${frame.route} ${frame.inert ? "inert" : "-"} ${frame.log}`).join("; ")}; conversation fetches: ${fetches.join(", ")}`;
+			if (hold) expect(hold.waited - hold.blocked, `the hold outlasted its limit; ${report}`).toBeLessThan(2_000);
 			// Once the destination shows, the previous session never comes back.
 			const shownAt = frames.find((frame) => frame.log === session.title)?.at ?? Infinity;
 			expect(frames.filter((frame) => frame.at > shownAt && frame.log === previous.title), report).toEqual([]);

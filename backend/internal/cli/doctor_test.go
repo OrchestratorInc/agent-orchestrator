@@ -553,6 +553,42 @@ func TestDoctorPathOnlyHarnessPassesOnFind(t *testing.T) {
 	}
 }
 
+// The CLI probes Open Interpreter like every other harness, through PATH and
+// its version line, never through the adapter. The pinned Rust release passes;
+// the older Python CLI that also installs `interpreter` does not.
+func TestDoctorOpenInterpreterRequiresPinnedRustVersion(t *testing.T) {
+	for _, tc := range []struct {
+		name    string
+		version string
+		want    doctorLevel
+		message string
+	}{
+		{"pinned Rust release", "interpreter 0.0.56\n", doctorPass, "interpreter resolves to /bin/interpreter (interpreter 0.0.56)"},
+		{"Python CLI collision", "Open Interpreter 0.4.3 Developer Preview\n", doctorWarn, "does not identify the expected CLI"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			setConfigEnv(t)
+			c := doctorContext(t,
+				map[string]string{"git": "/bin/git", "interpreter": "/bin/interpreter"},
+				func(_ context.Context, name string, args ...string) ([]byte, error) {
+					switch {
+					case name == "/bin/git":
+						return []byte("git version 2.43.0\n"), nil
+					case name == "/bin/interpreter" && len(args) == 1 && args[0] == "--version":
+						return []byte(tc.version), nil
+					}
+					t.Fatalf("unexpected CommandOutput call: %s %v", name, args)
+					return nil, nil
+				},
+			)
+			check := findDoctorCheck(t, c.runDoctor(context.Background()), "open-interpreter")
+			if check.Level != tc.want || !strings.Contains(check.Message, tc.message) {
+				t.Fatalf("open-interpreter check = %+v, want %s containing %q", check, tc.want, tc.message)
+			}
+		})
+	}
+}
+
 // TestDoctorNewVersionedHarnessPassesWithVersion verifies that a Tier-B
 // harness with a --version flag (e.g. opencode) resolves and reports correctly.
 func TestDoctorNewVersionedHarnessPassesWithVersion(t *testing.T) {

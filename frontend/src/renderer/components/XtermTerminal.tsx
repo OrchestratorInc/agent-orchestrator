@@ -1,4 +1,4 @@
-// Self-contained xterm.js surface, ported from yyork's terminal architecture.
+// Self-contained xterm.js surface.
 //
 // Design rules (the reason this component exists):
 //  - The mount effect is dependency-free: the terminal instance is created once

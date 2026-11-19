@@ -5,6 +5,7 @@ import { TooltipProvider } from "../ui/tooltip";
 import { lexicalEditorText, typeInLexicalEditor } from "../../test/lexical";
 import { beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import { useIndependentSideChats } from "./IndependentSideChats";
+import { aoBridge } from "../../lib/bridge";
 import type { SideCloseRequest } from "../../../shared/side-close";
 
 const { get, post, put, remove, patch, closeProtocol } = vi.hoisted(() => ({
@@ -311,6 +312,61 @@ describe("side delivery draft ownership", () => {
 		});
 		expect(hook.result.current.sides).toEqual([]);
 		expect(put.mock.calls.length).toBe(savedCount);
+	});
+
+	/** Holds each side list GET until the test answers it; refresh() starts another one the way a close-state change does. */
+	function holdSideLists() {
+		let notifyCloseState!: Parameters<typeof aoBridge.sideChats.onCloseStateChanged>[0];
+		const listen = vi.spyOn(aoBridge.sideChats, "onCloseStateChanged").mockImplementation((listener) => {
+			notifyCloseState = listener;
+			return () => {};
+		});
+		onTestFinished(() => listen.mockRestore());
+		const lists: ((sides: object[]) => void)[] = [];
+		const originalGet = get.getMockImplementation()!;
+		get.mockImplementation((path: string, ...args: unknown[]) => {
+			if (path.endsWith("/side-chats")) return new Promise((resolve) => lists.push((sides) => resolve({ data: { sides } })));
+			return originalGet(path, ...args);
+		});
+		const refresh = () => notifyCloseState({ protocolVersion: 1, epoch: "test-daemon", revision: 0, recovery: "ready", sessionId: "session", sides: [] });
+		return { lists, refresh };
+	}
+
+	it("ignores an older empty side list that lands after a newer one", async () => {
+		const { lists, refresh } = holdSideLists();
+		const hook = renderHook(() => useIndependentSideChats("session", [], [], async () => [], false));
+		await waitFor(() => expect(lists).toHaveLength(1));
+		act(() => refresh());
+		await waitFor(() => expect(lists).toHaveLength(2));
+		await act(async () => lists[1]([{ id: "side", sessionId: "session", state: "ready" }]));
+		await waitFor(() => expect(hook.result.current.activeId).toBe("side"));
+		await act(async () => lists[0]([]));
+		expect(hook.result.current.sides.map((side) => side.id)).toEqual(["side"]);
+		expect(hook.result.current.activeId).toBe("side");
+	});
+
+	it("applies a slow side list even after the next poll has started", async () => {
+		const { lists, refresh } = holdSideLists();
+		const hook = renderHook(() => useIndependentSideChats("session", [], [], async () => [], false));
+		await waitFor(() => expect(lists).toHaveLength(1));
+		act(() => refresh());
+		await waitFor(() => expect(lists).toHaveLength(2));
+		await act(async () => lists[0]([{ id: "side", sessionId: "session", state: "ready" }]));
+		expect(hook.result.current.loaded).toBe(true);
+		expect(hook.result.current.sides.map((side) => side.id)).toEqual(["side"]);
+	});
+
+	it("keeps a side created while an empty list from before it is in flight", async () => {
+		const { lists, refresh } = holdSideLists();
+		const hook = renderHook(() => useIndependentSideChats("session", [], [], async () => [], false));
+		await waitFor(() => expect(lists).toHaveLength(1));
+		await act(async () => lists[0]([]));
+		act(() => refresh());
+		await waitFor(() => expect(lists).toHaveLength(2));
+		post.mockResolvedValue({ data: { side: { id: "new-side", sessionId: "session", state: "ready" } } });
+		await act(async () => { await hook.result.current.create(undefined, true); });
+		await act(async () => lists[1]([]));
+		expect(hook.result.current.sides.map((side) => side.id)).toEqual(["new-side"]);
 	});
 });
 

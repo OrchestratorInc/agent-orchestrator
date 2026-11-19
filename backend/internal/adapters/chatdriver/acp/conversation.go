@@ -124,6 +124,9 @@ type conversation struct {
 	configOptions     []ports.ChatConfigOption
 	skills            []ports.ChatSkill
 	skillsKnown       bool
+	// compactAdvertised is whether the agent's own list, before HideCommand,
+	// named compact; start derives compaction from it, not from the shown skills.
+	compactAdvertised bool
 	closed            bool
 	// sessionLost records that the agent stopped holding this conversation's
 	// session and the provider was stopped for it. See providerSessionLost.
@@ -211,6 +214,7 @@ type conversation struct {
 	sessionPromptResponseFailure func(string, acpsdk.PromptResponse, bool) error
 	hibernationCheck             func(context.Context, *acpsdk.ClientSideConnection, acpsdk.SessionId) (bool, error)
 	historyNotice                func(string) bool
+	hideCommand                  func(acpsdk.AvailableCommand) bool
 	// promptErrorFailure: see Config.PromptErrorFailure.
 	promptErrorFailure func(error, bool) error
 	// historyUserChunkIsMessage: see Config.HistoryUserChunkIsMessage.
@@ -417,7 +421,7 @@ func (c *conversation) start(
 	}
 	if c.skillsKnown {
 		c.capabilities[ports.ChatCapabilitySkills] = true
-		c.capabilities[ports.ChatCapabilityCompaction] = hasCompactSkill(c.skills)
+		c.capabilities[ports.ChatCapabilityCompaction] = c.compactAdvertised
 	}
 	c.modeFor = modeFor
 	c.optionsFor = optionsFor

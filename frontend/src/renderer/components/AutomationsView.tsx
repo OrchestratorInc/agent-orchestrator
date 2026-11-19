@@ -670,6 +670,17 @@ function AutomationFormDialog({
 	const nextRun = schedule.legacyRaw || (automation && automation.timezone !== Intl.DateTimeFormat().resolvedOptions().timeZone)
 		? null
 		: nextScheduledRun(schedule);
+	// Re-render when the shown run passes or the day turns, so Next run and its
+	// Today/Tomorrow label stay true for as long as the dialog is open.
+	const [clockTick, setClockTick] = useState(0);
+	const nextRunAt = nextRun?.getTime();
+	useEffect(() => {
+		if (!open || nextRunAt === undefined) return;
+		const now = Date.now();
+		const midnight = new Date(now).setHours(24, 0, 0, 0);
+		const timer = window.setTimeout(() => setClockTick((tick) => tick + 1), Math.min(nextRunAt, midnight) - now + 1000);
+		return () => window.clearTimeout(timer);
+	}, [open, nextRunAt, clockTick]);
 	// Automations run on this machine's daemon, which knows no Cloud project (it
 	// answers "Unknown project"), and a Cloud standalone agent takes no session
 	// but its own: neither is a project for an automation.
@@ -789,13 +800,17 @@ function AutomationFormDialog({
 		<Dialog open={open} onOpenChange={onOpenChange}>
 			<DialogContent showCloseButton={false} className={cn(centeredOnboardingDialogClass, "h-[min(720px,calc(100svh-24px))] max-h-none w-[min(960px,calc(100vw-24px))] rounded-panel")}>
 				<div className="flex shrink-0 items-center gap-2 border-b border-border py-2 ps-4 pe-2">
-					<DialogTitle className="settings-dialog-title min-w-0 flex-1 truncate">
-						{t(editing ? "automations.edit" : "automations.create")}
-					</DialogTitle>
+					{/* Breadcrumb from the page behind the dialog to the dialog itself. */}
+					<div className="flex min-w-0 flex-1 items-center gap-1.5">
+						<span className="shrink-0 text-heading-sm text-muted-foreground">{t("automations.title")}</span>
+						<span aria-hidden="true" className="text-heading-sm text-passive">/</span>
+						<DialogTitle className="settings-dialog-title min-w-0 truncate">
+							{t(editing ? "automations.edit" : "automations.new")}
+						</DialogTitle>
+					</div>
 					<DialogDescription className="sr-only">
 						{t(editing ? "automations.edit.description" : "automations.create.description")}
 					</DialogDescription>
-					{editing ? null : <TemplateMenu disabled={busy} onSelect={applyTemplate} />}
 					<DialogClose asChild>
 						<CloseButton disabled={busy} aria-label={t("automations.create.close")} />
 					</DialogClose>
@@ -1061,31 +1076,6 @@ function AutomationFormDialog({
 				</form>
 			</DialogContent>
 		</Dialog>
-	);
-}
-
-/** Fills the create form from a bundled starter; nothing is created until submit. */
-function TemplateMenu({ disabled, onSelect }: { disabled: boolean; onSelect: (id: StarterTemplateID) => void }) {
-	const { t } = useTranslation();
-	const scheduleLabel = useScheduleLabel();
-	return (
-		<DropdownMenu>
-			<DropdownMenuTrigger asChild>
-				<Button type="button" size="sm" variant="quiet" disabled={disabled}>
-					{t("automations.templates.use")}
-					<ChevronDown aria-hidden="true" className="size-icon-sm" />
-				</Button>
-			</DropdownMenuTrigger>
-			<DropdownMenuContent align="end" className="w-80" data-browser-native-overlay="true">
-				{AUTOMATION_TEMPLATES.map((template) => (
-					<DropdownMenuItem key={template.id} onSelect={() => onSelect(template.id)} className="flex-col items-start gap-0.5 py-2">
-						<span className="text-caption text-passive">{scheduleLabel(template.rrule)}</span>
-						<span className="font-medium text-foreground">{t(`automations.template.${template.id}`)}</span>
-						<span className="text-pretty text-xs leading-5 text-muted-foreground">{t(`automations.template.${template.id}.description`)}</span>
-					</DropdownMenuItem>
-				))}
-			</DropdownMenuContent>
-		</DropdownMenu>
 	);
 }
 

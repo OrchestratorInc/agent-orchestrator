@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { WEEKDAY_CODES, buildRRuleFromSchedule, describeSchedule, parseHourMinute, parseTimeValue, scheduleFieldsFromRRule } from "./automation-schedule";
+import { WEEKDAY_CODES, buildRRuleFromSchedule, describeSchedule, nextScheduledRun, parseHourMinute, parseTimeValue, scheduleFieldsFromRRule } from "./automation-schedule";
 
 describe("automation-schedule", () => {
 	it("roundtrips every weekday the form can choose", () => {
@@ -116,5 +116,25 @@ describe("describeSchedule", () => {
 		["FREQ=MONTHLY;BYMONTHDAY=-1", { kind: "other", frequency: "monthly", time: null }],
 	])("summarizes %s", (rule, expected) => {
 		expect(describeSchedule(rule)).toEqual(expected);
+	});
+});
+
+describe("nextScheduledRun", () => {
+	// Saturday 14 November 2026, 10:00 local time.
+	const saturday = new Date(2026, 10, 14, 10, 0);
+	const weekdays = scheduleFieldsFromRRule("FREQ=WEEKLY;BYDAY=MO,TU,WE,TH,FR;BYHOUR=9;BYMINUTE=0;BYSECOND=0");
+
+	it("finds the next matching day and time", () => {
+		expect(nextScheduledRun(weekdays, saturday)).toEqual(new Date(2026, 10, 16, 9, 0));
+		expect(nextScheduledRun({ ...weekdays, preset: "daily", time: "11:30" }, saturday)).toEqual(new Date(2026, 10, 14, 11, 30));
+	});
+
+	it.each([
+		["an empty time", { time: "" }],
+		["a half-typed time", { time: "09:" }],
+		["an empty custom hour", { preset: "custom" as const, customFrequency: "daily" as const, hour: "", minute: "0" }],
+		["an out-of-range custom minute", { preset: "custom" as const, customFrequency: "daily" as const, hour: "9", minute: "75" }],
+	])("shows no preview for %s", (_, draft) => {
+		expect(nextScheduledRun({ ...weekdays, ...draft }, saturday)).toBeNull();
 	});
 });
