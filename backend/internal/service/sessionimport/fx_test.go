@@ -119,12 +119,13 @@ func TestFXRefreshFindsConvertedConversation(t *testing.T) {
 				t.Fatal(err)
 			}
 			writeFile(t, path, strings.Replace(string(body), "synthetic answer", "new v2 answer", 1))
+			wantLocator := canonical(oldPath)
 			if removeV1 {
 				if err := os.RemoveAll(filepath.Dir(oldPath)); err != nil {
 					t.Fatal(err)
 				}
 			}
-			if store.sessions[0].Metadata.NativeTranscriptPath != canonical(oldPath) {
+			if store.sessions[0].Metadata.NativeTranscriptPath != wantLocator {
 				t.Fatal("fixture did not retain the imported v1 locator")
 			}
 			if err := svc.RefreshArchive(context.Background(), store.sessions[0]); err != nil {
