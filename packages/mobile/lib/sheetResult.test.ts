@@ -70,12 +70,12 @@ describe("route builders", () => {
 	});
 
 	it("passes an empty legacy machine id to a reconnect form", () => {
-		const route = connectSheetRoute(vi.fn(), "");
+		const route = connectRoute(vi.fn(), "");
 		expect(route.params.hostId).toBe("");
 	});
 
 	it("omits the machine id for a new connection", () => {
-		const route = connectSheetRoute(vi.fn());
+		const route = connectRoute(vi.fn());
 		expect("hostId" in route.params).toBe(false);
 	});
 
