@@ -124,8 +124,9 @@ func (p *Plugin) SessionInfo(ctx context.Context, ref ports.SessionRef) (ports.S
 // command builds the argv shared by launch and restore. A model override is
 // delivered as an `env` argv prefix, which the tmux runtime's shell and the
 // Windows ConPTY spawner both apply to the child environment. Note that
-// --override-with-envs also applies any LLM_API_KEY/LLM_BASE_URL already set in
-// the session environment. env is that environment over the daemon's own.
+// --override-with-envs applies any LLM_API_KEY/LLM_MODEL/LLM_BASE_URL already
+// set in the session environment, without putting a key in argv. env is that
+// environment over the daemon's own.
 func (p *Plugin) command(ctx context.Context, mode ports.PermissionMode, cfg ports.AgentConfig, allow, deny []string, env map[string]string) ([]string, error) {
 	if len(allow) != 0 || len(deny) != 0 {
 		return nil, fmt.Errorf("openhands: tool restrictions are not supported by this adapter")
@@ -140,9 +141,9 @@ func (p *Plugin) command(ctx context.Context, mode ports.PermissionMode, cfg por
 	var cmd []string
 	if model := strings.TrimSpace(cfg.Model); model != "" {
 		cmd = append(cmd, "env", modelEnvVar+"="+model, bin, "--override-with-envs")
-	} else if sessionEnv(env, "LLM_API_KEY") != "" {
-		// OpenHands ignores LLM_API_KEY without this flag. The saved native
-		// model remains in effect when AO did not request a model override.
+	} else if sessionEnv(env, "LLM_API_KEY") != "" || sessionEnv(env, "LLM_MODEL") != "" || sessionEnv(env, "LLM_BASE_URL") != "" {
+		// OpenHands ignores all LLM_* overrides without this flag. Unset
+		// fields retain their saved native values.
 		cmd = append(cmd, bin, "--override-with-envs")
 	} else {
 		cmd = append(cmd, bin)

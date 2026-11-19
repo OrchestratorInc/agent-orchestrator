@@ -101,13 +101,15 @@ func readOpenHandsTranscript(ctx context.Context, root string, paths ...string) 
 	if err != nil || folder != strings.ReplaceAll(folderID.String(), "-", "") {
 		return t, errors.New("invalid openhands conversation directory")
 	}
-	// Both preview and Import can retain multiple paths. Always refresh only
-	// this conversation's event list, without recursion or global rediscovery.
-	paths, err = openhands.ConversationFiles(ctx, root, folderID.String())
+	// Fingerprint before enumerating, so the final comparison also catches
+	// events appended while the retained path list is being refreshed.
+	fingerprint, err := openhands.ConversationFingerprint(ctx, root, folderID.String())
 	if err != nil {
 		return t, err
 	}
-	fingerprint, err := openhands.ConversationFingerprint(ctx, root, folderID.String())
+	// Both preview and Import can retain multiple paths. Always refresh only
+	// this conversation's event list, without recursion or global rediscovery.
+	paths, err = openhands.ConversationFiles(ctx, root, folderID.String())
 	if err != nil {
 		return t, err
 	}

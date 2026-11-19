@@ -54,7 +54,10 @@ func TestOpenHandsImportCheckpointFailureRecoversPrivateHistory(t *testing.T) {
 	agent := &openHandsRetryImportAgent{}
 	runtime := &fakeRuntime{}
 	m, store, _ := newExitedResumeManager(t, runtime, agent)
-	m.dataDir = t.TempDir()
+	m.dataDir, err = filepath.EvalSymlinks(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
 	m.store = &failingImportWorkspaceStore{fakeStore: store, failAt: 1}
 	rec := store.sessions["mer-1"]
 	rec.Mode, rec.Harness, rec.Activity.State = domain.SessionModeTUI, domain.HarnessOpenHands, domain.ActivityIdle

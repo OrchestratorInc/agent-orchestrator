@@ -15,6 +15,11 @@ import (
 func openHandsImportFixture(t *testing.T) ports.ImportedSessionRelocation {
 	t.Helper()
 	r := ports.ImportedSessionRelocation{NativeSessionID: "12345678-1234-1234-1234-123456789012", ConfigDir: t.TempDir(), LaunchCWD: t.TempDir(), DataDir: t.TempDir()}
+	dataDir, err := filepath.EvalSymlinks(r.DataDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	r.DataDir = dataDir
 	dir := filepath.Join(r.ConfigDir, strings.ReplaceAll(r.NativeSessionID, "-", ""))
 	if err := os.MkdirAll(filepath.Join(dir, "events"), 0o700); err != nil {
 		t.Fatal(err)
