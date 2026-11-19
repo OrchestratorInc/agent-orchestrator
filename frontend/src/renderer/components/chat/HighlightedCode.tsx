@@ -15,7 +15,7 @@
 import { memo, useEffect, useMemo, useRef, type ReactNode } from "react";
 import type { ElementContent, RootContent } from "hast";
 import type { LiveTokenizer } from "@pierre/highlights";
-import { createLiveHighlight, highlightSync, liveLine, type CodeLine, type GrammarName } from "../../lib/code-highlight";
+import { createLiveHighlight, highlightSync, liveLine, MAX_CHARS, type CodeLine, type GrammarName } from "../../lib/code-highlight";
 // The token colours live with the engine rather than with one caller: they are
 // scoped under `.chat-code`/`.markdown-code`, so anything rendering these class
 // names has to be inside one of those containers and has to have loaded this sheet.
@@ -67,6 +67,7 @@ function useLiveLines(code: string, language: GrammarName | undefined): CodeLine
 }
 
 function nextLive(previous: Live | undefined, code: string, language: GrammarName): Live | undefined {
+	if (code.length > MAX_CHARS) return undefined;
 	if (previous?.language === language && code.startsWith(previous.code)) {
 		const { tokenizer } = previous;
 		const last = tokenizer.lineCount - 1;

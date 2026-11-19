@@ -30,4 +30,14 @@ describe("highlighted code", () => {
 		const { container: fresh } = render(<HighlightedCode code={code} language="typescript" />);
 		expect(fresh.innerHTML).toBe(container.innerHTML);
 	});
+
+	it("drops a streaming fence to plain code once it grows past the size cap", () => {
+		const head = `const s = "${"x".repeat(999_970)}";\n`;
+		const { container, rerender } = render(<HighlightedCode code={head} language="typescript" streaming />);
+		expect(container.querySelector(".hljs-string")).not.toBeNull();
+		const code = head + "const t = 1;\n".repeat(4);
+		rerender(<HighlightedCode code={code} language="typescript" streaming />);
+		expect(container.querySelector("[class*=hljs]")).toBeNull();
+		expect(container.textContent).toBe(code);
+	});
 });

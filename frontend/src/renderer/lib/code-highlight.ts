@@ -70,7 +70,7 @@ function tokenNode(token: ThemedToken): ElementContent {
 	return classes.length ? { type: "element", tagName: "span", properties: { className: classes }, children: [text] } : text;
 }
 
-const MAX_CHARS = 1_000_000;
+export const MAX_CHARS = 1_000_000;
 
 /** The highlighted tree, keeping the source's exact line endings. */
 export function highlightSync(code: string, language: GrammarName): Root | undefined {
@@ -93,7 +93,6 @@ export function highlightSync(code: string, language: GrammarName): Root | undef
 }
 
 export function createLiveHighlight(code: string, language: GrammarName): LiveTokenizer | undefined {
-	if (code.length > MAX_CHARS) return undefined;
 	try {
 		return new LiveTokenizer({ code, lang: language, theme: CODE_THEME });
 	} catch (cause) {
