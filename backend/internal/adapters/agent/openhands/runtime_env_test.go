@@ -29,16 +29,12 @@ func TestOpenHandsRuntimeEnvironmentPreservesProviderOverrides(t *testing.T) {
 		"OPENAI_BASE_URL": "https://unrelated.invalid/v1",
 		"UNRELATED":       "retained",
 	}
-	New().AugmentRuntimeEnv(env, t.TempDir())
 	want := map[string]string{
 		"LLM_API_KEY":     "session-synthetic-key",
 		"LLM_MODEL":       "openai/gpt-4.1-mini",
 		"LLM_BASE_URL":    "https://explicit-provider.invalid/v1",
-		"OPENAI_BASE_URL": "https://api.openai.com/v1",
+		"OPENAI_BASE_URL": "https://unrelated.invalid/v1",
 		"UNRELATED":       "retained",
-	}
-	if !reflect.DeepEqual(env, want) {
-		t.Fatal("runtime environment did not retain the OpenHands overrides and replace the unrelated endpoint")
 	}
 	cmd, err := testPlugin().GetLaunchCommand(t.Context(), ports.LaunchConfig{Env: env})
 	if err != nil || !reflect.DeepEqual(cmd, []string{"openhands", "--override-with-envs"}) {
@@ -46,6 +42,9 @@ func TestOpenHandsRuntimeEnvironmentPreservesProviderOverrides(t *testing.T) {
 	}
 	if strings.Contains(strings.Join(cmd, " "), "synthetic-key") {
 		t.Fatal("provider key entered command arguments")
+	}
+	if !reflect.DeepEqual(env, want) {
+		t.Fatal("runtime environment did not retain explicit provider endpoints")
 	}
 }
 
@@ -56,10 +55,6 @@ func TestOpenHandsRuntimeEnvironmentDoesNotMaterializeInheritedCredentials(t *te
 	t.Setenv("LLM_BASE_URL", "https://api.openai.com/v1")
 	env := map[string]string{}
 	dataDir := t.TempDir()
-	New().AugmentRuntimeEnv(env, dataDir)
-	if !reflect.DeepEqual(env, map[string]string{"OPENAI_BASE_URL": "https://api.openai.com/v1"}) {
-		t.Fatal("inherited provider values were copied into the launch override map")
-	}
 	entries, err := os.ReadDir(dataDir)
 	if err != nil || len(entries) != 0 {
 		t.Fatalf("runtime environment wrote files: %v, %v", entries, err)
@@ -70,6 +65,9 @@ func TestOpenHandsRuntimeEnvironmentDoesNotMaterializeInheritedCredentials(t *te
 	})
 	if want := []string{"openhands", "--override-with-envs", "--resume", "native"}; err != nil || !ok || !reflect.DeepEqual(cmd, want) {
 		t.Fatalf("inherited environment restore = %q, %v, %v", cmd, ok, err)
+	}
+	if len(env) != 0 {
+		t.Fatal("inherited provider values were copied into the launch override map")
 	}
 }
 
@@ -84,6 +82,51 @@ func TestOpenHandsAppliesEachProcessEnvironmentOverride(t *testing.T) {
 			cmd, err := testPlugin().GetLaunchCommand(t.Context(), ports.LaunchConfig{Env: map[string]string{name: value}})
 			if err != nil || !reflect.DeepEqual(cmd, []string{"openhands", "--override-with-envs"}) {
 				t.Fatalf("override launch = %q, %v", cmd, err)
+			}
+		})
+	}
+}
+
+func TestOpenHandsImportedEndpointScope(t *testing.T) {
+	clearOpenHandsLLMEnv(t)
+	t.Setenv("OPENAI_BASE_URL", "https://ambient.invalid/v1")
+	for _, tc := range []struct {
+		name     string
+		imported bool
+		model    string
+		env      map[string]string
+		pin      bool
+	}{
+		{"imported OpenAI ambient fallback", true, "openai/gpt-4.1-mini", nil, true},
+		{"managed OpenAI", false, "openai/gpt-4.1-mini", nil, false},
+		{"explicit project endpoint", true, "openai/gpt-4.1-mini", map[string]string{"OPENAI_BASE_URL": "https://gateway.invalid/v1"}, false},
+		{"explicit clear", true, "openai/gpt-4.1-mini", map[string]string{"OPENAI_BASE_URL": ""}, false},
+		{"explicit native endpoint", true, "openai/gpt-4.1-mini", map[string]string{"LLM_BASE_URL": "https://native-gateway.invalid/v1"}, false},
+		{"other provider", true, "anthropic/claude-sonnet", nil, false},
+		{"unknown saved model", true, "", nil, false},
+		{"explicit process model", true, "", map[string]string{"LLM_MODEL": "openai/gpt-4.1-mini"}, true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			metadata := map[string]string{ports.MetadataKeyAgentSessionID: "native"}
+			if tc.imported {
+				metadata[ports.MetadataKeyImportSourceNativeID] = "source"
+			}
+			before := make(map[string]string, len(tc.env))
+			for k, v := range tc.env {
+				before[k] = v
+			}
+			cmd, ok, err := testPlugin().GetRestoreCommand(t.Context(), ports.RestoreConfig{Session: ports.SessionRef{Metadata: metadata}, Config: ports.AgentConfig{Model: tc.model}, Env: tc.env})
+			if err != nil || !ok {
+				t.Fatalf("restore command = %v, %v", ok, err)
+			}
+			pinned := len(cmd) > 1 && cmd[0] == "env" && cmd[1] == "OPENAI_BASE_URL=https://api.openai.com/v1"
+			if pinned != tc.pin {
+				t.Fatalf("endpoint pin = %v, want %v: %q", pinned, tc.pin, cmd)
+			}
+			for k, v := range before {
+				if tc.env[k] != v {
+					t.Fatalf("explicit environment changed: %s", k)
+				}
 			}
 		})
 	}
