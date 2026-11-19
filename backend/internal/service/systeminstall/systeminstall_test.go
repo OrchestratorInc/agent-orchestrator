@@ -678,6 +678,42 @@ func TestAgentVendorScriptInstallPersistsInstallVerifySuccessLifecycle(t *testin
 	}
 }
 
+func TestAgentInstallReportsLiveOutputWithoutDuplicatingDiagnostics(t *testing.T) {
+	s := newTestService("linux", "bash")
+	s.jobStore = newInstallJobStoreFake()
+	started, release := make(chan struct{}), make(chan struct{})
+	defer close(release)
+	s.installScripts = installScriptRunnerFunc(func(_ context.Context, _ ports.InstallScriptCommand, stdout, _ io.Writer) (ports.InstallScriptResult, error) {
+		_, _ = io.WriteString(stdout, "Retrying download in 1s (attempt 2/3)\n")
+		close(started)
+		<-release
+		return ports.InstallScriptResult{}, errors.New("download failed")
+	})
+	if _, err := s.StartAgent(context.Background(), TargetCursor, "official-installer"); err != nil {
+		t.Fatal(err)
+	}
+	<-started
+	job, err := s.Status(context.Background(), TargetCursor)
+	if err != nil || job.Status != StatusInstalling || !strings.Contains(job.Output, "attempt 2/3") {
+		t.Fatalf("live job = %+v, error = %v", job, err)
+	}
+	jobs, err := s.AgentJobs(context.Background())
+	if err != nil || len(jobs) != 1 || jobs[0].Output != job.Output {
+		t.Fatalf("live jobs = %+v, error = %v", jobs, err)
+	}
+	// Let the worker finish before checking the persisted output.
+	release <- struct{}{}
+	waitForStatus(t, s, TargetCursor, StatusFailed)
+	job, _ = s.Status(context.Background(), TargetCursor)
+	if strings.Count(job.Output, "attempt 2/3") != 1 {
+		t.Fatalf("duplicated diagnostics: %q", job.Output)
+	}
+	record, _, err := s.jobStore.GetAgentInstallJob(context.Background(), string(TargetCursor))
+	if err != nil || record.Output != job.Output {
+		t.Fatalf("persisted output = %q, error = %v", record.Output, err)
+	}
+}
+
 func TestAgentVendorScriptInstallPreservesPlanEnvironment(t *testing.T) {
 	s := newTestService("windows", "pwsh.exe")
 	captured := make(chan ports.InstallScriptCommand, 1)

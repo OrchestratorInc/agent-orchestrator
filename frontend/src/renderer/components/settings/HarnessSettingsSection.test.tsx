@@ -106,6 +106,23 @@ describe("HarnessSettingsSection", () => {
 
 	afterEach(() => vi.restoreAllMocks());
 
+	it("shows live download retry progress without exposing technical diagnostics", async () => {
+		const job = {
+			target: "cursor", status: "installing", method: "official-installer",
+			output: "[installer] Downloading installer (attempt 1/3).\ndownload attempt 1/3 elapsed=10s: TLS handshake timeout\n[installer] Retrying download in 1s (attempt 2/3).\n",
+		};
+		vi.mocked(apiClient.GET).mockImplementation(async (path) => {
+			if (path === "/api/v1/agents/readiness") return { data: catalog } as never;
+			if (path === "/api/v1/agents/installers") return { data: plans } as never;
+			if (path === "/api/v1/agents/install-jobs") return { data: { jobs: [job] } } as never;
+			if (path === "/api/v1/agents/{agent}/install") return { data: job } as never;
+			return { data: undefined } as never;
+		});
+		renderSection();
+		expect(await screen.findByText("Retrying download in 1s (attempt 2/3).")).toBeInTheDocument();
+		expect(screen.queryByText(/TLS handshake timeout/)).not.toBeInTheDocument();
+	});
+
 	it("shows installed harnesses and install actions without authentication UI", async () => {
 		renderSection();
 		await waitFor(() => expect(screen.getAllByText("Installed").length).toBeGreaterThan(0), { timeout: 10_000 });

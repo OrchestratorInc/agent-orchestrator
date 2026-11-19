@@ -896,7 +896,14 @@ func (s *Service) run(parent context.Context, argv []string, job *Job) {
 func (s *Service) runAgentInstall(parent context.Context, plan Plan, job *Job) {
 	ctx, cancel := context.WithTimeout(parent, s.installTimeout)
 	defer cancel()
-	out := &capturedOutput{max: maxOutputBytes}
+	s.mu.Lock()
+	initialOutput := job.Output
+	s.mu.Unlock()
+	out := &capturedOutput{max: maxOutputBytes, onWrite: func(output string) {
+		s.mu.Lock()
+		job.Output = combineOutput(initialOutput, output)
+		s.mu.Unlock()
+	}}
 	env := []string{
 		"CI=1", "NONINTERACTIVE=1", "HOMEBREW_NO_AUTO_UPDATE=1",
 		"NPM_CONFIG_AUDIT=false", "NPM_CONFIG_FUND=false",
@@ -923,19 +930,19 @@ func (s *Service) runAgentInstall(parent context.Context, plan Plan, job *Job) {
 		runErr = s.commands.Run(ctx, plan.Command, out, out)
 	}
 	if ctx.Err() == context.DeadlineExceeded {
-		s.finishAgentJob(job, StatusFailed, out.String(), fmt.Sprintf("install timed out after %s", s.installTimeout), "")
+		s.finishAgentJob(job, StatusFailed, "", fmt.Sprintf("install timed out after %s", s.installTimeout), "")
 		return
 	}
 	if ctx.Err() == context.Canceled {
-		s.finishAgentJob(job, StatusInterrupted, out.String(), "daemon shutdown interrupted the install", "")
+		s.finishAgentJob(job, StatusInterrupted, "", "daemon shutdown interrupted the install", "")
 		return
 	}
 	if runErr != nil {
-		s.finishAgentJob(job, StatusFailed, out.String(), runErr.Error(), "")
+		s.finishAgentJob(job, StatusFailed, "", runErr.Error(), "")
 		return
 	}
 
-	if err := s.transitionAgentJob(job, StatusVerifying, out.String(), "", ""); err != nil {
+	if err := s.transitionAgentJob(job, StatusVerifying, "", "", ""); err != nil {
 		s.finishAgentJob(job, StatusFailed, "", fmt.Sprintf("persist verifying state: %v", err), "")
 		return
 	}
@@ -1076,9 +1083,10 @@ func displayCommand(plan Plan) string {
 // capturedOutput is an io.Writer that keeps only the last max bytes written,
 // trimming from the front.
 type capturedOutput struct {
-	mu  sync.Mutex
-	buf bytes.Buffer
-	max int
+	mu      sync.Mutex
+	buf     bytes.Buffer
+	max     int
+	onWrite func(string)
 }
 
 func (c *capturedOutput) Write(p []byte) (int, error) {
@@ -1089,6 +1097,9 @@ func (c *capturedOutput) Write(p []byte) (int, error) {
 		tail := c.buf.String()[c.buf.Len()-c.max:]
 		c.buf.Reset()
 		c.buf.WriteString(tail)
+	}
+	if c.onWrite != nil {
+		c.onWrite(c.buf.String())
 	}
 	return len(p), nil
 }

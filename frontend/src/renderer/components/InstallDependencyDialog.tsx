@@ -7,6 +7,7 @@ import type { components } from "../../api/schema";
 import type { MessageKey } from "../i18n";
 import { apiClient, apiErrorMessage } from "../lib/api-client";
 import { aoBridge } from "../lib/bridge";
+import { installerProgress } from "../lib/installer-progress";
 import { cn } from "../lib/utils";
 import { requirementDetailText, requirementDisplayLabel, type SystemRequirement } from "./SystemRequirementsChecklist";
 import {
@@ -381,8 +382,8 @@ function InstallAction({
 	if (running) {
 		return (
 			<div className="flex flex-col gap-1.5">
-				<p className="text-caption text-settings-muted">
-					{job?.command ? t("startup.installingCommand", { command: job.command }) : t("startup.installingEllipsis")}
+				<p className="text-caption text-settings-muted" role="status">
+					{(job?.status !== "verifying" ? installerProgress(job?.output) : undefined) ?? (job?.command ? t("startup.installingCommand", { command: job.command }) : t("startup.installingEllipsis"))}
 				</p>
 				<div className="ao-install-progress" aria-hidden="true">
 					<div className="ao-install-progress__bar" />
