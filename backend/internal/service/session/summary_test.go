@@ -17,7 +17,7 @@ func TestToSessionWithFactsCarriesCardSummary(t *testing.T) {
 		UpdatedAt: time.Date(2026, 9, 23, 10, 0, 0, 0, time.UTC),
 	}
 	rec.Metadata.CardSummary = "Adding retry logic to checkout flow"
-	sess, err := (&Service{store: st, clock: func() time.Time { return rec.UpdatedAt.Add(2 * time.Minute) }}).toSessionWithFacts(context.Background(), rec, nil, nil, false, domain.SessionCleanupRecord{})
+	sess, err := (&Service{store: st, clock: func() time.Time { return rec.UpdatedAt.Add(2 * time.Minute) }}).toSessionWithFacts(context.Background(), rec, nil, nil, false, nil, domain.SessionCleanupRecord{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -29,7 +29,7 @@ func TestToSessionWithFactsCarriesCardSummary(t *testing.T) {
 func TestToSessionWithFactsLeavesSummaryEmptyUntilTheAgentSetsOne(t *testing.T) {
 	t.Parallel()
 	rec := domain.SessionRecord{ID: "sum-5", ProjectID: "sum", UpdatedAt: time.Date(2026, 9, 23, 10, 0, 0, 0, time.UTC)}
-	sess, err := (&Service{store: newFakeStore(), clock: func() time.Time { return rec.UpdatedAt }}).toSessionWithFacts(context.Background(), rec, nil, nil, false, domain.SessionCleanupRecord{})
+	sess, err := (&Service{store: newFakeStore(), clock: func() time.Time { return rec.UpdatedAt }}).toSessionWithFacts(context.Background(), rec, nil, nil, false, nil, domain.SessionCleanupRecord{})
 	if err != nil {
 		t.Fatal(err)
 	}
