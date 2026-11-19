@@ -1619,3 +1619,96 @@ func TestPrepareSharedServerAbandonedOnCanceledContext(t *testing.T) {
 		t.Fatalf("project config written by a canceled launch: %v", statErr)
 	}
 }
+
+func TestContextMutexCanceledCallerWithFreeToken(t *testing.T) {
+	mu := newContextMutex()
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	// Both select arms are ready on a free mutex. Go picks at random, so the
+	// post-acquire check is what keeps a canceled caller out; run enough
+	// iterations that a missing check cannot pass by luck.
+	for i := 0; i < 1000; i++ {
+		if err := mu.Lock(ctx); err == nil {
+			mu.Unlock()
+			t.Fatalf("Lock succeeded for a canceled context on iteration %d", i)
+		}
+	}
+	if err := mu.Lock(context.Background()); err != nil {
+		t.Fatalf("token leaked after canceled callers: %v", err)
+	}
+	mu.Unlock()
+}
+
+func TestLockWorkspacePreparationHonorsWaitingCallerCancellation(t *testing.T) {
+	workspace := t.TempDir()
+	release, err := lockWorkspacePreparation(context.Background(), workspace)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	time.AfterFunc(50*time.Millisecond, cancel)
+	result := make(chan error, 1)
+	go func() {
+		unlock, err := lockWorkspacePreparation(ctx, workspace)
+		if err == nil {
+			unlock()
+		}
+		result <- err
+	}()
+	select {
+	case err := <-result:
+		if !errors.Is(err, context.Canceled) {
+			t.Fatalf("waiting caller error = %v, want context.Canceled", err)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("canceled caller stayed queued for the workspace lock")
+	}
+	release()
+	// The abandoned waiter must not leak a reference: the workspace entry is
+	// gone and a fresh caller can take the lock.
+	cleanedKey := filepath.Clean(workspace)
+	workspacePreparations.mu.Lock()
+	remaining := workspacePreparations.byDir[cleanedKey]
+	workspacePreparations.mu.Unlock()
+	if remaining != nil {
+		t.Fatal("canceled waiter left the workspace entry registered")
+	}
+	again, err := lockWorkspacePreparation(context.Background(), workspace)
+	if err != nil {
+		t.Fatalf("lock after canceled waiter: %v", err)
+	}
+	again()
+}
+
+func TestEnsureSharedServerHonorsRegistryLockCancellation(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("POSIX executable fixture")
+	}
+	binary := fakeBinary(t, "2.0.0")
+	key := t.TempDir()
+	entry := registryFor(key)
+	if err := entry.mu.Lock(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	defer entry.mu.Unlock()
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	time.AfterFunc(50*time.Millisecond, cancel)
+	result := make(chan error, 1)
+	go func() {
+		_, err := ensureSharedServer(ctx, binary, key, t.TempDir())
+		result <- err
+	}()
+	select {
+	case err := <-result:
+		if !errors.Is(err, context.Canceled) {
+			t.Fatalf("ensureSharedServer error = %v, want context.Canceled", err)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("canceled caller stayed queued for the data-dir lock")
+	}
+	if _, ok := entry.byDir[key]; ok {
+		t.Fatal("canceled launch registered a server handle")
+	}
+}
