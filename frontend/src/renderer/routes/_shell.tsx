@@ -1264,10 +1264,11 @@ const replacementErrorCount = Object.keys(orchestratorReplacementErrors).length;
 	// transparency").
 	const windowTranslucent = isMac && windowTranslucency;
 
-	// Match the native window background to the sidebar fill. Deferred a frame so
-	// data-theme has been applied before the token is read. A translucent window
-	// paints no background, and the read forces a whole-document style recalc
-	// mid-switch, so it is skipped there.
+	// Match the native window background to the sidebar fill, following both the
+	// mode and the color theme. Deferred a frame so data-theme and
+	// data-style-theme have been applied before the token is read. A translucent
+	// window paints no background, and the read forces a whole-document style
+	// recalc mid-switch, so it is skipped there.
 	useEffect(() => {
 		if (windowTranslucent) return;
 		const frame = requestAnimationFrame(() => {
@@ -1275,7 +1276,7 @@ const replacementErrorCount = Object.keys(orchestratorReplacementErrors).length;
 			if (color) void aoBridge.theme?.setWindowBackground(color);
 		});
 		return () => cancelAnimationFrame(frame);
-	}, [resolvedTheme, windowTranslucent]);
+	}, [resolvedTheme, themeStyle, windowTranslucent]);
 	useEffect(() => {
 		if (!isMac) return;
 		applyWindowTranslucency(windowTranslucent);

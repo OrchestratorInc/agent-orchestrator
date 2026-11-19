@@ -533,6 +533,25 @@ export function sidebarOccupiesLayout(state: Pick<UiState, "isSidebarOpen">): bo
 	return state.isSidebarOpen;
 }
 
+/**
+ * The OS light/dark appearance. prefers-color-scheme follows Electron's
+ * nativeTheme, so while Light or Dark is forced it reports that mode rather
+ * than the OS; main reads the real one.
+ */
+export async function readSystemTheme(): Promise<Theme> {
+	try {
+		const theme = await aoBridge.theme?.systemAppearance?.();
+		if (theme === "light" || theme === "dark") return theme;
+	} catch {
+		// Fall back to the media query below.
+	}
+	return systemTheme();
+}
+
+// The latest setThemePreference call; an older System lookup that resolves
+// after a newer choice is dropped.
+let themePreferenceRequest = 0;
+
 const initialThemePreference = readStoredThemePreference();
 const initialThemeStyle = readStoredThemeStyle();
 const initialDeveloperModeValue = initialDeveloperMode();
@@ -587,18 +606,25 @@ export const useUiStore = create<UiState>((set, get) => ({
 	visibleTerminalKindBySession: {},
 	setWorkbenchTab: (workbenchTab) => set({ workbenchTab }),
 	setThemePreference: (themePreference) => {
+		const request = ++themePreferenceRequest;
 		if (get().themePreference === themePreference) return;
-		runThemeTransition(
-			() => {
-				const resolvedTheme = resolveTheme(themePreference);
-				getLocalStorage()?.setItem(themeStorageKey, themePreference);
-				applyDocumentTheme(resolvedTheme);
-				set({ themePreference, resolvedTheme });
-			},
-			// The window's vibrancy material follows nativeTheme; flip it as the
-			// new frame is revealed so the tint and the material change together.
-			() => void aoBridge.theme?.set(themePreference)?.catch(() => undefined),
-		);
+		const apply = (resolvedTheme: Theme) => {
+			if (request !== themePreferenceRequest) return;
+			runThemeTransition(
+				() => {
+					getLocalStorage()?.setItem(themeStorageKey, themePreference);
+					applyDocumentTheme(resolvedTheme);
+					set({ themePreference, resolvedTheme });
+				},
+				// The window's vibrancy material follows nativeTheme; flip it as the
+				// new frame is revealed so the tint and the material change together.
+				() => void aoBridge.theme?.set(themePreference)?.catch(() => undefined),
+			);
+		};
+		// System comes from main: the media query still reports the forced mode
+		// until theme:set("system") lands, which happens only on reveal.
+		if (themePreference === "system") void readSystemTheme().then(apply);
+		else apply(themePreference);
 	},
 	setThemeStyle: (themeStyle) => {
 		if (get().themeStyle === themeStyle) return;

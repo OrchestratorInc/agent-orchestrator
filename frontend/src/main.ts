@@ -3429,6 +3429,20 @@ ipcMain.handle("theme:set", (_event, preference: "light" | "dark" | "system") =>
 	}
 });
 
+// The OS appearance, for resolving "System". The renderer's prefers-color-scheme
+// follows themeSource, so while Light or Dark is forced it reports that mode,
+// not the OS. macOS reads the appearance without touching themeSource, so the
+// window material still flips with the new frame (theme:set on reveal).
+// Elsewhere there is no reading independent of themeSource; dropping the
+// forced mode first is safe there because no material sits under the page.
+ipcMain.handle("theme:system-appearance", (): "light" | "dark" => {
+	if (process.platform === "darwin") {
+		return systemPreferences.getUserDefault("AppleInterfaceStyle", "string") === "Dark" ? "dark" : "light";
+	}
+	nativeTheme.themeSource = "system";
+	return nativeTheme.shouldUseDarkColors ? "dark" : "light";
+});
+
 ipcMain.handle("theme:set-window-background", (_event, color: unknown) => {
 	if (typeof color === "string" && /^#[0-9a-f]{6}$/i.test(color)) {
 		rendererWindowBackground = color;

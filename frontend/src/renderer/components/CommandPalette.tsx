@@ -95,7 +95,7 @@ import {
 	type WorkspaceSession,
 	type WorkspaceSummary,
 } from "../types/workspace";
-import { useUiStore } from "../stores/ui-store";
+import { readSystemTheme, useUiStore } from "../stores/ui-store";
 import { useSessionImportStore } from "../stores/session-import-store";
 import { runAppShortcut, useAppShortcut } from "../hooks/useAppShortcut";
 import { CreateProjectFlow } from "./CreateProjectFlow";
@@ -884,8 +884,11 @@ export const CommandPalette = memo(function CommandPalette() {
 		}
 	}, [view, scoped, t]);
 
+	// Toggling to the OS appearance picks System instead of pinning that mode,
+	// so toggling twice from System follows the OS again.
 	const toggleTheme = useCallback(() => {
-		setThemePreference(resolvedTheme === "dark" ? "light" : "dark");
+		const next = resolvedTheme === "dark" ? "light" : "dark";
+		void readSystemTheme().then((os) => setThemePreference(next === os ? "system" : next));
 	}, [resolvedTheme, setThemePreference]);
 
 	const navigateToTarget = useCallback(

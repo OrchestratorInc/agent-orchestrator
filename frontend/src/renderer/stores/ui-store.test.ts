@@ -1,7 +1,8 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { rememberedFileDisplayMode, sidebarIsVisible, sidebarOccupiesLayout, useUiStore } from "./ui-store";
 import { sessionUiKey } from "../lib/hosts";
 import { previewDocumentThemeStyle } from "../lib/theme";
+import { aoBridge } from "../lib/bridge";
 
 describe("sidebar visibility", () => {
 	beforeEach(() => {
@@ -46,6 +47,44 @@ describe("subagents tab availability", () => {
 		const before = useUiStore.getState().inspectorSessions;
 		useUiStore.getState().setSubagentsAvailable(sessionUiKey("session-3"), false);
 		expect(useUiStore.getState().inspectorSessions).toBe(before);
+	});
+});
+
+describe("theme preference", () => {
+	beforeEach(() => {
+		window.localStorage.clear();
+		useUiStore.setState({ themePreference: "dark", resolvedTheme: "dark" });
+	});
+
+	afterEach(() => {
+		vi.restoreAllMocks();
+	});
+
+	it("resolves System from the OS appearance main reports, not the forced media query", async () => {
+		// The test media query reports dark, as a forced Dark themeSource would.
+		vi.spyOn(aoBridge.theme, "systemAppearance").mockResolvedValue("light");
+		useUiStore.getState().setThemePreference("system");
+
+		await vi.waitFor(() => expect(useUiStore.getState().resolvedTheme).toBe("light"));
+		expect(useUiStore.getState().themePreference).toBe("system");
+		expect(document.documentElement.dataset.theme).toBe("light");
+		expect(window.localStorage.getItem("ao.theme")).toBe("system");
+	});
+
+	it("drops a System lookup that a newer choice overtook", async () => {
+		let reportAppearance: (theme: "light" | "dark") => void = () => undefined;
+		vi.spyOn(aoBridge.theme, "systemAppearance").mockReturnValue(
+			new Promise((resolve) => {
+				reportAppearance = resolve;
+			}),
+		);
+		useUiStore.getState().setThemePreference("system");
+		useUiStore.getState().setThemePreference("light");
+		reportAppearance("dark");
+		await new Promise((resolve) => setTimeout(resolve, 0));
+
+		expect(useUiStore.getState().themePreference).toBe("light");
+		expect(useUiStore.getState().resolvedTheme).toBe("light");
 	});
 });
 
