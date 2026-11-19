@@ -505,6 +505,8 @@ const api = {
 		// WebContentsView previews (which follow prefers-color-scheme) stay in sync
 		// with the shell. "system" lets both follow the OS.
 		set: (preference: "light" | "dark" | "system") => ipcRenderer.invoke("theme:set", preference) as Promise<void>,
+		// The OS light/dark appearance, even while the app forces Light or Dark.
+		systemAppearance: () => ipcRenderer.invoke("theme:system-appearance") as Promise<"light" | "dark">,
 		persistTerminal: (scheme: "light" | "dark") =>
 			ipcRenderer.invoke("theme:persist-terminal", scheme) as Promise<void>,
 		// The shell goes transparent over a live native browser page, so whatever
