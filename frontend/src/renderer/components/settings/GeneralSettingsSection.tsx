@@ -34,6 +34,8 @@ import type { EditorId } from "../../../shared/editor-handoff";
 import type { SessionMode } from "../../types/workspace";
 import type { TerminalShellKind } from "../../../shared/ui-locale";
 import { isMacPlatform, isWindowsPlatform } from "../../lib/platform";
+import { useWindowTransparency } from "../../lib/window-translucency";
+import { windowTransparencyPresentation } from "../../lib/window-transparency-presentation";
 import type { TerminalClickMode } from "../../lib/terminal-mouse";
 
 /**
@@ -419,7 +421,7 @@ export function GeneralSettingsSection({
 						/>
 					</div>
 				</SettingsRow>
-				{isMacPlatform() && <WindowTranslucencyRow />}
+				<WindowTranslucencyRow />
 				<SettingsRow label={t("settings.projectAvatars")} description={t("settings.projectAvatars.description")}>
 					<Switch aria-label={t("settings.projectAvatars")} checked={projectAvatars} onCheckedChange={setProjectAvatars} />
 				</SettingsRow>
@@ -713,19 +715,20 @@ function ReplayOnboardingRow() {
 	);
 }
 
-/**
- * macOS Appearance toggle for window translucency: native
- * vibrancy blurs the desktop behind a translucent shell. Renderer state.
- */
+/** Saved Appearance preference; main reports capability and system suppression. */
 function WindowTranslucencyRow() {
 	const { t } = useTranslation();
+	const transparency = useWindowTransparency();
+	const presentation = windowTransparencyPresentation(transparency, { mac: isMacPlatform(), windows: isWindowsPlatform() });
 	const windowTranslucency = useUiStore((state) => state.windowTranslucency);
 	const setWindowTranslucency = useUiStore((state) => state.setWindowTranslucency);
+	if (!presentation.visible) return null;
 	return (
-		<SettingsRow label={t("settings.windowTranslucency")} description={t("settings.windowTranslucencyHint")}>
+		<SettingsRow label={t("settings.windowTranslucency")} description={t(presentation.hint)}>
 			<Switch
 				aria-label={t("settings.windowTranslucency")}
 				checked={windowTranslucency}
+				disabled={presentation.disabled}
 				onCheckedChange={setWindowTranslucency}
 			/>
 		</SettingsRow>

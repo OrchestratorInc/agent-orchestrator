@@ -32,10 +32,14 @@ describe("theme tokens", () => {
 	it("emits a dark and a light block for every named theme, never for Orchestrate", () => {
 		const css = buildThemeStylesheet();
 		for (const theme of THEMES.slice(1)) {
-			expect(css).toContain(`:root[data-style-theme="${theme.id}"] {`);
-			expect(css).toContain(`:root[data-style-theme="${theme.id}"][data-theme="light"] {`);
+			for (const mode of ["dark", "light"] as const) {
+				const selector = `:root[data-style-theme="${theme.id}"]${mode === "light" ? '[data-theme="light"]' : ""}`;
+				const block = css.split(`${selector} {`)[1]?.split("}")[0];
+				expect(block).toContain(`--background: ${theme[mode].bg};`);
+			}
 		}
 		expect(css).not.toContain('"orchestrate"');
+		expect(css).not.toContain("html:root");
 	});
 
 	it("keeps the Validating lane off the yellow that In review already uses", () => {

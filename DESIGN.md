@@ -75,13 +75,15 @@ Never use visual polish to obscure a state transition, destructive action, conne
 - **Color:** rare, semantic, and stateful. A colored element must answer “what does this mean?”
 - **Shape:** modest radius, not a field of pills. A rounded control should read as a control; a panel should read as one composed container; ordinary metadata should remain text.
 - **Density:** compact by default. AO is used all day and needs high information capacity without cramped target sizes.
-- **Personality:** quiet competence. No gradients, glass, glow, stock imagery, decorative textures, emoji, or novelty visual language in the working UI, except the transient glass surfaces defined below.
+- **Personality:** quiet competence. No gradients, glass, glow, stock imagery, decorative textures, emoji, or novelty visual language in the working UI, except the native window transparency and transient glass surfaces defined below.
 
 ## 3. App architecture expressed visually
 
 AO has one persistent shell; routes replace the center surface rather than replacing the app's orientation.
 
 ### Shell
+
+Windows 11 may offer opt-in native Acrylic with the same sidebar tint and overlay recipe as macOS: 70% tint opacity in dark mode and 72% in light mode. Agent/chat and inspector working surfaces stay translucent in both Windows modes; Windows terminal canvases stay opaque with their accelerated renderer. Floating surfaces retain solid theme tokens where they overlap working content. Preserve the existing macOS vibrancy and terminal appearance. Native transparency respects system transparency and contrast preferences on both platforms; macOS Reduce transparency or Increase contrast pauses vibrancy without discarding the saved preference. This exception does not authorize decorative glass elsewhere in the working UI.
 
 - **Sidebar:** persistent project navigation and global utility. It answers “where am I?” and “what can I switch to?”
 - **Center:** the primary task surface: home, board, session, terminals, settings, or setup.
@@ -374,7 +376,7 @@ Test meaningful variants: dark/light theme, expanded/collapsed sidebar, long pro
 Reject these patterns in renderer work unless a specific exception is approved:
 
 - Generic SaaS hero/feature-grid language inside the application shell.
-- Decorative gradients, glows, glass (except the Cmd+K, archive, and cloud New task surfaces defined above), blobs, textures, or ornamental shadows.
+- Decorative gradients, glows, glass (except the opt-in Windows native window transparency and the Cmd+K, archive, and cloud New task surfaces defined above), blobs, textures, or ornamental shadows.
 - ALL CAPS labels, uppercase tracking used as decoration, or mono used to make ordinary prose look technical.
 - A rainbow of status colors, decorative accent borders, or color-only meaning.
 - Oversized avatars or icons that compete with task names and state.
@@ -450,3 +452,4 @@ Approve only when the answer to every applicable check is yes. Otherwise classif
 | 2026-11-10 | The board's archive is a searchable modal of session cards in the Cmd+K surface, opened from a quiet Archive button under the lanes | The inline archive could not be searched and crowded the board. Compact palette-style rows were tried and rejected: the person wants the archived cards themselves, only inside the modal. |
 | 2026-11-13 | The archive's entry points (board button, sidebar project menu, Cmd+K) are labelled Archived sessions, not Archive | A bare Archive beside a project's other actions read as the verb, archiving the whole project. A noun names the place; Archive stays the verb for one session. |
 | 2026-11-18 | Looping animations animate only `transform` or `opacity`; working sidebar titles sweep a masked copy of the title with `transform` | The old `background-position` sweep repainted every working row each frame and delayed typing while replies streamed (ADEMark A8 median 50.1 to 35.4 ms). |
+| 2026-11-19 | Opt-in Windows 11 Acrylic shares macOS sidebar tint and overlays; Windows agent/chat and inspector surfaces are translucent in light and dark, while terminal canvases stay opaque and accelerated. macOS keeps its existing appearance and both platforms respect system transparency/contrast settings | The user requested the macOS glass treatment instead of the stronger Windows-only tint and solid content panel, while retaining normal terminal rendering. |

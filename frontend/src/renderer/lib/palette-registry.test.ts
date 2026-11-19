@@ -6,6 +6,27 @@ import { filterCommands } from "./command-palette";
 const t = appI18n.t.bind(appI18n);
 
 describe("palette registry", () => {
+	it("offers transparency on Windows without requiring macOS or a capability response", () => {
+		expect(buildSettingsCommands(t, { developerMode: false, diagnostics: false, windows: true })
+			.some((item) => item.id === "setting:transparency")).toBe(true);
+	});
+	it.each([
+		[{ supported: null, enabled: false, reason: null }, false, "settings.windowTranslucencyHint"],
+		[{ supported: true, enabled: true, reason: null }, false, "settings.windowTranslucencyHint"],
+		[{ supported: false, enabled: false, reason: "unsupported" }, true, "settings.windowTranslucencyUnsupported"],
+		[{ supported: null, enabled: false, reason: "error" }, false, "settings.windowTranslucencyError"],
+		[{ supported: true, enabled: false, reason: "system" }, false, "settings.windowTranslucencySystem"],
+	] as const)("keeps command search availability consistent with Appearance for %j", (transparency, disabled, hint) => {
+		const item = buildSettingsCommands(t, { developerMode: false, diagnostics: false, windows: true, transparency })
+			.find((item) => item.id === "setting:transparency")!;
+		expect(item).toBeDefined();
+		expect(Boolean(item.disabled)).toBe(disabled);
+		expect(item.subtitle).toBe(t(hint));
+		if (disabled) {
+			expect(item.action).toBeUndefined();
+			expect(item.disabledReason).toBe(t(hint));
+		}
+	});
 	it("offers shortcut actions by their localized names, search-only", () => {
 		const items = buildShortcutCommands(t);
 		const sidebar = items.find((item) => item.id === "shortcut:toggle-sidebar");
@@ -57,7 +78,7 @@ describe("palette registry", () => {
 		expect(developer).toContain("setting:diagnostics");
 	});
 
-	it("offers Developer Mode rows only in Developer Mode and Window translucency only on macOS", () => {
+	it("offers Developer Mode rows only in Developer Mode and transparency on macOS", () => {
 		const regular = buildSettingsCommands(t, { developerMode: false, diagnostics: false }).map((item) => item.id);
 		const developerMac = buildSettingsCommands(t, { developerMode: true, diagnostics: false, mac: true }).map((item) => item.id);
 		for (const id of ["side-chats", "split-panes", "cli-link", "transparency"]) {

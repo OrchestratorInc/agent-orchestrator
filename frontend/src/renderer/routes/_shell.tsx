@@ -68,7 +68,7 @@ import { ShellProvider } from "../lib/shell-context";
 import { restartProjectOrchestrator } from "../lib/restart-orchestrator";
 import { captureOrchestratorReplacementFailure } from "../lib/orchestrator-replacement-telemetry";
 import { applyDocumentTheme, applyDocumentThemeStyle } from "../lib/theme";
-import { applyWindowTranslucency } from "../lib/window-translucency";
+import { applyWindowTranslucency, useWindowTransparency } from "../lib/window-translucency";
 import { aoBridge } from "../lib/bridge";
 import { handleModifierLinkClick } from "../lib/external-link-policy";
 import { recordProjectOpened } from "../lib/project-history";
@@ -1259,27 +1259,30 @@ const replacementErrorCount = Object.keys(orchestratorReplacementErrors).length;
 		void aoBridge.theme?.persistTerminal(resolvedTheme);
 	}, [resolvedTheme]);
 
-	// macOS Appearance preference: the shell becomes one
-	// translucent plate over the native vibrancy blur (styles.css, "macOS window
-	// transparency").
-	const windowTranslucent = isMac && windowTranslucency;
+	// Effective native state drives the shell, Browser cutout, and terminals.
+	const windowTranslucent = useWindowTransparency().enabled;
 
 	// Match the native window background to the sidebar fill. Deferred a frame so
-	// data-theme has been applied before the token is read. A translucent window
-	// paints no background, and the read forces a whole-document style recalc
-	// mid-switch, so it is skipped there.
+	// data-theme has been applied before the token is read.
 	useEffect(() => {
-		if (windowTranslucent) return;
-		const frame = requestAnimationFrame(() => {
-			const color = resolveCssColorToHex("--sidebar");
-			if (color) void aoBridge.theme?.setWindowBackground(color);
-		});
-		return () => cancelAnimationFrame(frame);
-	}, [resolvedTheme, windowTranslucent]);
+		let frame = 0;
+		const update = () => {
+			cancelAnimationFrame(frame);
+			frame = requestAnimationFrame(() => {
+				const color = resolveCssColorToHex("--sidebar");
+				if (color) void aoBridge.theme?.setWindowBackground(color);
+			});
+		};
+		// Palette previews do not update the store. Keep the opaque fallback
+		// current even while glass is active, ready for system suppression.
+		const observer = new MutationObserver(update);
+		observer.observe(document.documentElement, { attributes: true, attributeFilter: ["data-theme", "data-style-theme"] });
+		update();
+		return () => { observer.disconnect(); cancelAnimationFrame(frame); };
+	}, [resolvedTheme, themeStyle, windowTranslucent]);
 	useEffect(() => {
-		if (!isMac) return;
-		applyWindowTranslucency(windowTranslucent);
-	}, [windowTranslucent]);
+		void applyWindowTranslucency(windowTranslucency);
+	}, [windowTranslucency]);
 
 	// Follow OS appearance while the user keeps Theme on System — updates
 	// resolvedTheme (and thus React consumers) without writing light/dark to storage.

@@ -68,7 +68,8 @@ import type { MenuEntry } from "./menu-model";
 import { useSplitPanesEnabled } from "../lib/split-panes";
 import { isDialogOrMenuOpen } from "../lib/dom-selectors";
 import { LOCAL_HOST } from "../lib/hosts";
-import { isMacPlatform } from "../lib/platform";
+import { isMacPlatform, isWindowsPlatform } from "../lib/platform";
+import { useWindowTransparency } from "../lib/window-translucency";
 import { revealSessionSearchMatch } from "../lib/session-search-reveal";
 import { PALETTE_SESSION_SEARCH_LIMIT, usePaletteSessionSearch, useSessionSearchIndexStatus } from "../hooks/usePaletteSessionSearch";
 import { useConnectedHosts } from "../hooks/useHostConnection";
@@ -452,6 +453,7 @@ export const CommandPalette = memo(function CommandPalette() {
 	const terminalClickMode = useUiStore((s) => s.terminalClickMode);
 	const chatSendKeyMode = useUiStore((s) => s.chatSendKeyMode);
 	const windowTranslucency = useUiStore((s) => s.windowTranslucency);
+	const windowTransparency = useWindowTransparency();
 	const projectAvatars = useUiStore((s) => s.projectAvatars);
 	const renderMath = useUiStore((s) => s.renderMath);
 	const navigationGestures = useUiStore((s) => s.navigationGestures);
@@ -519,7 +521,7 @@ export const CommandPalette = memo(function CommandPalette() {
 					? { session: currentSession && !currentSession.cloud && !currentSession.hostId && !params.hostId ? "local" as const : "elsewhere" as const }
 					: {}),
 			}),
-			...buildSettingsCommands(t, { developerMode, diagnostics, mac: isMac, prefs }),
+			...buildSettingsCommands(t, { developerMode, diagnostics, mac: isMac, windows: isWindowsPlatform(), transparency: windowTransparency, prefs }),
 			// The bell's panel and the footer's Connect mobile, which have no route.
 			{ id: "global-notifications", group: "global" as const, title: t("notify.title"), icon: <Bell aria-hidden="true" />, keywords: ["alerts", "inbox", "bell"], action: { kind: "run" as const, run: () => runAppMenuAction("toggle-notifications") } },
 			...(isMac && stayAwake.supported
@@ -527,7 +529,7 @@ export const CommandPalette = memo(function CommandPalette() {
 				: []),
 			{ id: "global-connect-mobile", group: "global" as const, title: t("settings.connectMobile"), icon: <Smartphone aria-hidden="true" />, keywords: ["phone", "pair", "ios", "android", "qr code"], searchOnly: true, action: { kind: "run" as const, run: () => useUiStore.getState().openGlobalSettings("mobile", { startPairing: true }) } },
 		],
-		[workspaces, currentProjectId, currentSession, params.hostId, params.sessionId, restartingProjectIds, reviewStatesForCommands, cloudReady, developerMode, diagnostics, splitPanes, prefs, stayAwake.on, stayAwake.supported, t, i18n.resolvedLanguage],
+		[workspaces, currentProjectId, currentSession, params.hostId, params.sessionId, restartingProjectIds, reviewStatesForCommands, cloudReady, developerMode, diagnostics, splitPanes, prefs, windowTransparency, stayAwake.on, stayAwake.supported, t, i18n.resolvedLanguage],
 	);
 	const scoped = useMemo(
 		() => (view.mode === "session-actions" ? findSession(workspaces, view.sessionId) : undefined),

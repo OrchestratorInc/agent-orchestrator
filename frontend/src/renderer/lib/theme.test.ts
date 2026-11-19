@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
 	applyDocumentTheme,
 	applyDocumentThemeStyle,
@@ -110,8 +110,30 @@ describe("runThemeTransition", () => {
 });
 
 describe("applyDocumentThemeStyle", () => {
+	beforeEach(() => {
+		document.getElementById("ao-theme-catalog")?.remove();
+	});
+
 	afterEach(() => {
 		delete document.documentElement.dataset.styleTheme;
+		document.getElementById("ao-theme-catalog")?.remove();
+	});
+
+	it("leaves the named-theme catalog unconstructed on default startup", () => {
+		applyDocumentThemeStyle("orchestrate");
+		expect(document.getElementById("ao-theme-catalog")).toBeNull();
+		expect(document.documentElement.dataset.styleTheme).toBeUndefined();
+	});
+
+	it("installs the named-theme catalog only on first use and reuses it", () => {
+		applyDocumentThemeStyle("github");
+		const catalog = document.getElementById("ao-theme-catalog");
+		expect(catalog?.textContent).toContain(':root[data-style-theme="github"]');
+		applyDocumentThemeStyle("nord");
+		expect(document.getElementById("ao-theme-catalog")).toBe(catalog);
+		applyDocumentThemeStyle("orchestrate");
+		expect(document.getElementById("ao-theme-catalog")).toBe(catalog);
+		expect(document.documentElement.dataset.styleTheme).toBeUndefined();
 	});
 
 	it("clears data-style-theme for orchestrate", () => {
