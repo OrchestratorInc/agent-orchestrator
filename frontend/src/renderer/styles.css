@@ -663,7 +663,7 @@ html[data-ao-platform="darwin"] .settings-dialog-body :is(button, a, input, sele
 /* The last tab's trailing gap already spaces New terminal from it; the action
  * region starts one gap after it; and the reserve for the panel's trailing
  * controls drops the surface's 1px edge padding. */
-.center-panel-shell--floating-topbar [data-testid="session-tab-strip-action"] {
+.center-panel-shell--tab-pills [data-testid="session-tab-strip-action"] {
 	padding-inline-start: 0;
 }
 
@@ -757,11 +757,12 @@ html[data-ao-platform="darwin"] .settings-dialog-body :is(button, a, input, sele
 	background: transparent;
 }
 
-/* Floating session tabs use the secondary control surface when selected and
- * an instant ghost hover fill when inactive. Tabs have no press effect. Every
- * strip built on the tab frame (the session's, the Browser panel's pages, side
- * chats) wears this look, the Browser's also while it is popped out. */
-:is(.center-panel-shell--floating-topbar, .browser-popout-overlay--mac-windowed) [data-terminal-tab-frame] {
+/* macOS session tabs (the windowed floating bar and native fullscreen) use the
+ * secondary control surface when selected and an instant ghost hover fill when
+ * inactive. Tabs have no press effect. Every strip built on the tab frame (the
+ * session's, the Browser panel's pages, side chats) wears this look, the
+ * Browser's also while it is popped out. The legacy underline never shows. */
+:is(.center-panel-shell--tab-pills, .browser-popout-overlay--tab-pills) [data-terminal-tab-frame] {
 	--floating-tab-gap: var(--space-1);
 	--floating-tab-separator: color-mix(in oklch, var(--color-foreground) 16%, transparent);
 	font-size: var(--font-size-md);
@@ -777,8 +778,14 @@ html[data-ao-platform="darwin"] .settings-dialog-body :is(button, a, input, sele
 	background: none;
 }
 
+/* Native fullscreen puts the panel flush against the sidebar, so the strip
+ * starts one tab gap in, the same space its last tab leaves before New terminal. */
+.center-panel-shell--tab-pills.center-panel-shell--fullscreen [data-tab-scroll-region] > div {
+	padding-inline-start: var(--space-1);
+}
+
 /* The pill. */
-:is(.center-panel-shell--floating-topbar, .browser-popout-overlay--mac-windowed) [data-terminal-tab-frame]::before {
+:is(.center-panel-shell--tab-pills, .browser-popout-overlay--tab-pills) [data-terminal-tab-frame]::before {
 	content: "";
 	position: absolute;
 	z-index: -1;
@@ -790,7 +797,7 @@ html[data-ao-platform="darwin"] .settings-dialog-body :is(button, a, input, sele
 }
 
 /* The separator, centered in the trailing gap. */
-:is(.center-panel-shell--floating-topbar, .browser-popout-overlay--mac-windowed) [data-terminal-tab-frame]::after {
+:is(.center-panel-shell--tab-pills, .browser-popout-overlay--tab-pills) [data-terminal-tab-frame]::after {
 	content: "";
 	position: absolute;
 	top: 50%;
@@ -804,9 +811,9 @@ html[data-ao-platform="darwin"] .settings-dialog-body :is(button, a, input, sele
 
 /* Leave both sides of the selected pill clear, including the fixed session
  * tab before the first tab in the reorder group. */
-:is(.center-panel-shell--floating-topbar, .browser-popout-overlay--mac-windowed) [data-terminal-tab-frame][data-active]::after,
-.center-panel-shell--floating-topbar [data-terminal-tab-key]:has(+ [data-terminal-tab-key] [data-terminal-tab-frame][data-active]) [data-terminal-tab-frame]::after,
-.center-panel-shell--floating-topbar [data-terminal-tab-key]:has(+ div > [data-terminal-tab-key]:first-child [data-terminal-tab-frame][data-active]) [data-terminal-tab-frame]::after {
+:is(.center-panel-shell--tab-pills, .browser-popout-overlay--tab-pills) [data-terminal-tab-frame][data-active]::after,
+.center-panel-shell--tab-pills [data-terminal-tab-key]:has(+ [data-terminal-tab-key] [data-terminal-tab-frame][data-active]) [data-terminal-tab-frame]::after,
+.center-panel-shell--tab-pills [data-terminal-tab-key]:has(+ div > [data-terminal-tab-key]:first-child [data-terminal-tab-frame][data-active]) [data-terminal-tab-frame]::after {
 	content: none;
 }
 
@@ -814,40 +821,40 @@ html[data-ao-platform="darwin"] .settings-dialog-body :is(button, a, input, sele
  * ends one gap before New terminal, the same space a tab leaves before a
  * separator. It is the reorder group's last tab, or the session tab when that
  * group is empty; its frame sits inside the tab's context-menu trigger. */
-.center-panel-shell--floating-topbar :is([data-tab-scroll-region] > div > div:last-child > [data-terminal-tab-key]:last-child, [data-tab-scroll-region] > div > [data-terminal-tab-key]:has(+ div:empty:last-child)) [data-terminal-tab-frame] {
+.center-panel-shell--tab-pills :is([data-tab-scroll-region] > div > div:last-child > [data-terminal-tab-key]:last-child, [data-tab-scroll-region] > div > [data-terminal-tab-key]:has(+ div:empty:last-child)) [data-terminal-tab-frame] {
 	margin-inline-end: var(--floating-tab-gap);
 }
 
-.center-panel-shell--floating-topbar :is([data-tab-scroll-region] > div > div:last-child > [data-terminal-tab-key]:last-child, [data-tab-scroll-region] > div > [data-terminal-tab-key]:has(+ div:empty:last-child)) [data-terminal-tab-frame]::after {
+.center-panel-shell--tab-pills :is([data-tab-scroll-region] > div > div:last-child > [data-terminal-tab-key]:last-child, [data-tab-scroll-region] > div > [data-terminal-tab-key]:has(+ div:empty:last-child)) [data-terminal-tab-frame]::after {
 	content: none;
 }
 
 /* With nothing after the strip (orchestrators have no New terminal), the last
  * tab ends at its pill. */
-.center-panel-shell--floating-topbar [data-testid="session-terminal-region"]:not(:has(> [data-testid="session-tab-strip-action"])) :is([data-tab-scroll-region] > div > div:last-child > [data-terminal-tab-key]:last-child, [data-tab-scroll-region] > div > [data-terminal-tab-key]:has(+ div:empty:last-child)) [data-terminal-tab-frame] {
+.center-panel-shell--tab-pills [data-testid="session-terminal-region"]:not(:has(> [data-testid="session-tab-strip-action"])) :is([data-tab-scroll-region] > div > div:last-child > [data-terminal-tab-key]:last-child, [data-tab-scroll-region] > div > [data-terminal-tab-key]:has(+ div:empty:last-child)) [data-terminal-tab-frame] {
 	margin-inline-end: 0;
 }
 
-:is(.center-panel-shell--floating-topbar, .browser-popout-overlay--mac-windowed) [data-terminal-tab-frame]:hover::before,
-:is(.center-panel-shell--floating-topbar, .browser-popout-overlay--mac-windowed) [data-terminal-tab-frame]:has(:focus-visible)::before {
+:is(.center-panel-shell--tab-pills, .browser-popout-overlay--tab-pills) [data-terminal-tab-frame]:hover::before,
+:is(.center-panel-shell--tab-pills, .browser-popout-overlay--tab-pills) [data-terminal-tab-frame]:has(:focus-visible)::before {
 	inset: 0;
 	background-color: var(--color-interactive-hover);
 }
 
 .session-inspector__tab-button[aria-selected="true"],
-:is(.center-panel-shell--floating-topbar, .browser-popout-overlay--mac-windowed) [data-terminal-tab-frame][data-active] {
+:is(.center-panel-shell--tab-pills, .browser-popout-overlay--tab-pills) [data-terminal-tab-frame][data-active] {
 	color: var(--secondary-foreground);
 }
 
 @supports (color: contrast-color(red)) {
 	.session-inspector__tab-button[aria-selected="true"],
-	:is(.center-panel-shell--floating-topbar, .browser-popout-overlay--mac-windowed) [data-terminal-tab-frame][data-active] {
+	:is(.center-panel-shell--tab-pills, .browser-popout-overlay--tab-pills) [data-terminal-tab-frame][data-active] {
 		color: contrast-color(color-mix(in srgb-linear, var(--secondary) 49.796664%, black));
 	}
 }
 
 .session-inspector__tab-button[aria-selected="true"],
-:is(.center-panel-shell--floating-topbar, .browser-popout-overlay--mac-windowed) [data-terminal-tab-frame][data-active]::before {
+:is(.center-panel-shell--tab-pills, .browser-popout-overlay--tab-pills) [data-terminal-tab-frame][data-active]::before {
 	inset: 0;
 	border-color: color-mix(in oklab, var(--secondary), #000 5%);
 	background-color: var(--secondary);
@@ -855,17 +862,17 @@ html[data-ao-platform="darwin"] .settings-dialog-body :is(button, a, input, sele
 }
 
 .session-inspector__tab-button[aria-selected="true"]:hover,
-:is(.center-panel-shell--floating-topbar, .browser-popout-overlay--mac-windowed) [data-terminal-tab-frame][data-active]:hover::before {
+:is(.center-panel-shell--tab-pills, .browser-popout-overlay--tab-pills) [data-terminal-tab-frame][data-active]:hover::before {
 	background-color: color-mix(in oklab, var(--secondary), #000 7%);
 }
 
 /* Light: the selected tab's fill leans toward the panel's surface, keeps the
  * control edge, and does not darken on hover. */
-html[data-theme="light"] :is(.center-panel-shell--floating-topbar, .browser-popout-overlay--mac-windowed) [data-terminal-tab-frame][data-active]::before {
+html[data-theme="light"] :is(.center-panel-shell--tab-pills, .browser-popout-overlay--tab-pills) [data-terminal-tab-frame][data-active]::before {
 	background-color: color-mix(in oklab, var(--color-bg-primary), var(--secondary));
 }
 
-:is(.center-panel-shell--floating-topbar, .browser-popout-overlay--mac-windowed) [data-terminal-tab-frame]:has(> button:focus-visible)::before {
+:is(.center-panel-shell--tab-pills, .browser-popout-overlay--tab-pills) [data-terminal-tab-frame]:has(> button:focus-visible)::before {
 	outline: 2px solid var(--ring);
 	outline-offset: 2px;
 }
@@ -878,7 +885,7 @@ html[data-theme="light"] .browser-popout-overlay--mac-windowed .workspace-topbar
 	color: var(--color-foreground);
 }
 
-:is(.center-panel-shell--floating-topbar, .browser-popout-overlay--mac-windowed) [data-testid="active-terminal-tab-indicator"] {
+:is(.center-panel-shell--tab-pills, .browser-popout-overlay--tab-pills) [data-testid="active-terminal-tab-indicator"] {
 	display: none;
 }
 
@@ -886,16 +893,16 @@ html[data-theme="light"] .browser-popout-overlay--mac-windowed .workspace-topbar
  * lists its tabs flat: each child of [data-tab-strip] holds one frame. The
  * same divider rules as the session strip's above: none beside the selected
  * pill, none after the last tab, which ends one gap before New tab. */
-:is(.center-panel-shell--floating-topbar, .browser-popout-overlay--mac-windowed) [data-tab-strip] > :has(+ * [data-terminal-tab-frame][data-active]) [data-terminal-tab-frame]::after,
-:is(.center-panel-shell--floating-topbar, .browser-popout-overlay--mac-windowed) [data-tab-strip] > :last-child [data-terminal-tab-frame]::after {
+:is(.center-panel-shell--tab-pills, .browser-popout-overlay--tab-pills) [data-tab-strip] > :has(+ * [data-terminal-tab-frame][data-active]) [data-terminal-tab-frame]::after,
+:is(.center-panel-shell--tab-pills, .browser-popout-overlay--tab-pills) [data-tab-strip] > :last-child [data-terminal-tab-frame]::after {
 	content: none;
 }
 
-:is(.center-panel-shell--floating-topbar, .browser-popout-overlay--mac-windowed) [data-tab-strip] > :last-child [data-terminal-tab-frame] {
+:is(.center-panel-shell--tab-pills, .browser-popout-overlay--tab-pills) [data-tab-strip] > :last-child [data-terminal-tab-frame] {
 	margin-inline-end: var(--floating-tab-gap);
 }
 
-:is(.center-panel-shell--floating-topbar, .browser-popout-overlay--mac-windowed) [data-tab-strip-action] {
+:is(.center-panel-shell--tab-pills, .browser-popout-overlay--tab-pills) [data-tab-strip-action] {
 	padding-inline-start: 0;
 }
 
@@ -7014,15 +7021,15 @@ body.is-pane-dragging webview {
 
 /* On the floating top bar a tab is a pill: round the ghost to match and
    drop the trailing gap and separator, which sit outside the measured box. */
-.pane-drag-ghost.center-panel-shell--floating-topbar {
+.pane-drag-ghost.center-panel-shell--tab-pills {
 	border-radius: var(--radius-topbar-control);
 }
 
-.pane-drag-ghost.center-panel-shell--floating-topbar > [data-terminal-tab-frame] {
+.pane-drag-ghost.center-panel-shell--tab-pills > [data-terminal-tab-frame] {
 	margin-inline-end: 0;
 }
 
-.pane-drag-ghost.center-panel-shell--floating-topbar > [data-terminal-tab-frame]::after {
+.pane-drag-ghost.center-panel-shell--tab-pills > [data-terminal-tab-frame]::after {
 	content: none;
 }
 

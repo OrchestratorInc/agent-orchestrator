@@ -60,7 +60,8 @@ for (const mode of ["chat", "tui"] as const) {
 			}
 			const expanded = await geometry(page);
 			const expandedTab = await page.getByRole("tab").first().boundingBox();
-			expect(Math.abs(expandedTab!.x - expanded.region.x)).toBeLessThanOrEqual(1);
+			// Fullscreen's flush panel starts the pill strip one 4px tab gap in.
+			expect(Math.abs(expandedTab!.x - expanded.region.x - (fullScreen ? 4 : 0))).toBeLessThanOrEqual(1);
 			await nav.getByRole("button", { name: "Collapse sidebar", exact: true }).click();
 			await expect.poll(async () => (await geometry(page)).region.x).toBeLessThan(expanded.region.x);
 			const collapsed = await geometry(page);
