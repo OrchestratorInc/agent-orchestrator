@@ -145,11 +145,28 @@ func TestCodexLoginReportsMissingBinaryAndNativeFailure(t *testing.T) {
 			deps: Deps{
 				In:       strings.NewReader("1\n"),
 				LookPath: func(string) (string, error) { return "/codex", nil },
-				RunInteractiveCommand: func(context.Context, string, string, []string, io.Reader, io.Writer, io.Writer) error {
+				RunInteractiveCommand: func(_ context.Context, _, _ string, args []string, _ io.Reader, _, _ io.Writer) error {
+					if slices.Equal(args, []string{"--version"}) {
+						return nil // Codex starts; the sign-in itself failed
+					}
 					return errors.New("exit status 1")
 				},
 			},
 			want: "codex login failed",
+		},
+		{
+			// An npm launcher whose native binary is gone fails every run with a
+			// raw spawn error (#7579).
+			name: "codex cannot start",
+			deps: Deps{
+				In:       strings.NewReader("1\n"),
+				LookPath: func(string) (string, error) { return "/nvm/bin/codex", nil },
+				RunInteractiveCommand: func(_ context.Context, _, _ string, _ []string, _ io.Reader, stdout, _ io.Writer) error {
+					_, _ = io.WriteString(stdout, "Error: spawn /nvm/lib/node_modules/@openai/codex/vendor/aarch64-apple-darwin/codex/codex ENOENT\n")
+					return errors.New("exit status 1")
+				},
+			},
+			want: "the Codex CLI at /nvm/bin/codex could not start (Error: spawn /nvm/lib/node_modules/@openai/codex/vendor/aarch64-apple-darwin/codex/codex ENOENT). Reinstall or update Codex, then try again",
 		},
 	}
 	for _, tt := range tests {
