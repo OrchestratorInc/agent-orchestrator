@@ -8328,8 +8328,8 @@ export interface operations {
     putSessionTranscriptImport: {
         parameters: {
             query: {
-                harness: "claude-code" | "codex";
-                /** @description The conversation's id, which the agent resumes. */
+                harness: "claude-code" | "codex" | "opencode";
+                /** @description The conversation's id, which the agent resumes: a UUID, or for OpenCode a session id such as ses_e34d0cd52ffeMzGW05mHN4RIm7. */
                 agentSessionId: string;
             };
             header?: never;

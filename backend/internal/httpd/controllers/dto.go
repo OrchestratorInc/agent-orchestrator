@@ -4840,9 +4840,9 @@ type MoveImportRequest struct {
 	Transcript *MoveImportTranscript `json:"transcript,omitempty"`
 }
 
-// MoveImportTranscript is a Claude Code or Codex conversation an Orchestrator Cloud sandbox kept.
+// MoveImportTranscript is an agent conversation an Orchestrator Cloud sandbox kept.
 type MoveImportTranscript struct {
-	AgentSessionID string `json:"agentSessionId" minLength:"1" pattern:"^[0-9a-fA-F-]{36}$"`
+	AgentSessionID string `json:"agentSessionId" minLength:"1" maxLength:"80" pattern:"^[A-Za-z0-9_-]+$"`
 	ProjectDir     string `json:"projectDir" minLength:"1" description:"The folder the transcript was in on Orchestrator Cloud. For Claude Code its paths, and the sandbox's working directory, become this machine's."`
 	TranscriptGzip []byte `json:"transcriptGzip" description:"The transcript, gzipped and base64-encoded."`
 	SidecarGzip    []byte `json:"sidecarGzip,omitempty" description:"The transcript's sidecar folder as a gzipped tar, base64-encoded."`

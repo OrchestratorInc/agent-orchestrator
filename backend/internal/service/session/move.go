@@ -90,7 +90,7 @@ type MoveImportInput struct {
 	Transcript *MoveImportTranscript
 }
 
-// MoveImportTranscript is a Claude Code or Codex conversation an AO Cloud sandbox kept.
+// MoveImportTranscript is an agent conversation an AO Cloud sandbox kept.
 type MoveImportTranscript struct {
 	// ProjectDir is the folder it was in. For Claude Code its paths, and the
 	// sandbox's working directory, become this machine's.
@@ -260,6 +260,10 @@ func (s *Service) moveSource(ctx context.Context, id domain.SessionID, stopped b
 // note, and claims its pull requests. A retry with the same move id returns
 // the session it already created.
 func (s *Service) ImportMove(ctx context.Context, in MoveImportInput) (MoveImportOutcome, error) {
+	// Orchestrator Cloud's opencode is OpenCode 2, which this machine runs as opencode-v2.
+	if in.Manifest.Harness == domain.HarnessOpenCode {
+		in.Manifest.Harness = domain.HarnessOpenCodeV2
+	}
 	m := in.Manifest
 	if in.MoveID == "" || m.Branch == "" || m.Tip == "" || m.Harness == "" {
 		return MoveImportOutcome{}, apierr.Invalid("MOVE_MANIFEST_INVALID", "moveId, branch, tip and harness are required", nil)
@@ -532,7 +536,7 @@ func (s *Service) MoveTranscript(ctx context.Context, id domain.SessionID) (Move
 	}
 	switch {
 	case errors.Is(err, sessionmanager.ErrCloudTranscriptUnsupported):
-		return MoveTranscript{}, apierr.Conflict("MOVE_TRANSCRIPT_UNSUPPORTED", "Orchestrator Cloud can resume only Claude Code and Codex conversations.", nil)
+		return MoveTranscript{}, apierr.Conflict("MOVE_TRANSCRIPT_UNSUPPORTED", "Orchestrator Cloud can resume only Claude Code, Codex and OpenCode 2 conversations.", nil)
 	case errors.Is(err, nativetransfer.ErrSegmented):
 		return MoveTranscript{}, apierr.Conflict("MOVE_TRANSCRIPT_UNSUPPORTED", "The Codex conversation continues in segment files, which a move does not carry yet.", nil)
 	case errors.Is(err, nativetransfer.ErrTooLarge):
@@ -613,7 +617,7 @@ func (s *Service) moveTargetRefusal(ctx context.Context, project domain.ProjectR
 
 // movesConversation reports a harness whose conversation a move carries.
 func movesConversation(h domain.AgentHarness) bool {
-	return h == domain.HarnessClaudeCode || h == domain.HarnessCodex
+	return h == domain.HarnessClaudeCode || h == domain.HarnessCodex || h == domain.HarnessOpenCodeV2
 }
 
 // carriesConversation reports a move/import carrying a conversation to place.
@@ -630,7 +634,7 @@ func conversationNotPlaced(in MoveImportInput, sess domain.Session) bool {
 
 // writeImportArchive unzips a transcript from AO Cloud, and its sidecar
 // folder, into dir and writes the archive the spawn places it from: for
-// Codex, the rollout itself. A sidecar that cannot be read is left out and
+// Codex the rollout itself, for OpenCode 2 its session export document. A sidecar that cannot be read is left out and
 // described in the warning.
 func writeImportArchive(ctx context.Context, dir string, harness domain.AgentHarness, t MoveImportTranscript) (archive, warning string, err error) {
 	zr, err := gzip.NewReader(bytes.NewReader(t.Gzip))
@@ -655,7 +659,7 @@ func writeImportArchive(ctx context.Context, dir string, harness domain.AgentHar
 	if n > CloudTranscriptMaxBytes {
 		return "", "", nativetransfer.ErrTooLarge
 	}
-	if harness == domain.HarnessCodex {
+	if harness != domain.HarnessClaudeCode {
 		return transcript, "", nil
 	}
 	if len(t.SidecarGzip) > 0 {

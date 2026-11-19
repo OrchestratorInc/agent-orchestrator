@@ -195,9 +195,9 @@ export async function moveSession(
 
 	deps.onStep?.("import");
 	const m = exported.data.manifest;
-	const sameAgent = target.harness === m.harness;
+	const sameAgent = target.harness === cloudHarness(m.harness);
 	// Cloud resumes a conversation only in the agent that wrote it.
-	const transcriptImportId = state.current || !sameAgent ? undefined : await carryTranscript(deps, path, moveId, m.harness);
+	const transcriptImportId = state.current || !sameAgent ? undefined : await carryTranscript(deps, path, moveId, target.harness);
 	const request: CloudSessionRequest = state.current ?? {
 		projectId,
 		kind: "worker",
@@ -212,6 +212,16 @@ export async function moveSession(
 	state.current = request;
 	state.pushed = { branch: m.branch, tip: m.tip, wip: m.wip };
 	return startInCloud(request, state.pushed);
+}
+
+/** Orchestrator Cloud runs OpenCode 2 as "opencode"; this machine runs it as "opencode-v2". */
+export function cloudHarness(local: string): string {
+	return local === "opencode-v2" ? "opencode" : local;
+}
+
+/** The harness this machine runs Orchestrator Cloud's harness as. */
+export function localHarness(cloud: string): string {
+	return cloud === "opencode" ? "opencode-v2" : cloud;
 }
 
 /**

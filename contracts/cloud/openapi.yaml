@@ -1873,12 +1873,14 @@ paths:
         - name: harness
           in: query
           required: true
-          schema: { type: string, enum: [claude-code, codex] }
+          schema: { type: string, enum: [claude-code, codex, opencode] }
         - name: agentSessionId
           in: query
           required: true
-          schema: { type: string, format: uuid }
-          description: The conversation's id, which the agent resumes.
+          schema: { type: string, maxLength: 80 }
+          description: >-
+            The conversation's id, which the agent resumes: a UUID, or for
+            OpenCode a session id such as ses_e34d0cd52ffeMzGW05mHN4RIm7.
       requestBody:
         required: true
         content:

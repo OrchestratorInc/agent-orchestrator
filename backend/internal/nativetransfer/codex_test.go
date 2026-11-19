@@ -123,3 +123,19 @@ func TestCodexSegmentedThreadIsRefused(t *testing.T) {
 		}
 	}
 }
+
+func TestRewriteOpenCodeExport(t *testing.T) {
+	doc := `{"info":{"id":"ses_1","location":{"directory":"/Users/me/app"}},"messages":[{"text":"edit /Users/me/app/a.go, not /Users/me/app2/b.go <ok>"}]}`
+	got, err := RewriteOpenCodeExport([]byte(doc), CloudCwdPlaceholder)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{`"directory":"/ao-moved/cwd"`, `edit /ao-moved/cwd/a.go, not /Users/me/app2/b.go <ok>`} {
+		if !strings.Contains(string(got), want) {
+			t.Errorf("rewritten document lacks %s:\n%s", want, got)
+		}
+	}
+	if _, err := RewriteOpenCodeExport([]byte(`{"info":{"id":"ses_1"}}`), CloudCwdPlaceholder); err == nil {
+		t.Error("a document naming no directory was rewritten")
+	}
+}

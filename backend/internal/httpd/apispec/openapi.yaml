@@ -18933,8 +18933,9 @@ components:
     ControllersMoveImportTranscript:
       properties:
         agentSessionId:
+          maxLength: 80
           minLength: 1
-          pattern: ^[0-9a-fA-F-]{36}$
+          pattern: ^[A-Za-z0-9_-]+$
           type: string
         projectDir:
           description: The folder the transcript was in on Orchestrator Cloud. For

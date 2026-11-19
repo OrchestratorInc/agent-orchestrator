@@ -340,6 +340,40 @@ func pushedBranch(t *testing.T) (string, string) {
 	return root + "/repo", git(src, "rev-parse", "HEAD")
 }
 
+// Orchestrator Cloud's opencode is OpenCode 2: the session here runs as
+// opencode-v2 and resumes the session export document as it came.
+func TestImportMoveRunsCloudOpenCodeAsOpenCodeV2(t *testing.T) {
+	repo, tip := pushedBranch(t)
+	const id = "ses_e34d0cd52ffeMzGW05mHN4RIm7"
+	doc := `{"info":{"id":"` + id + `","location":{"directory":"/workspace/repository"}},"messages":[]}`
+	var gz bytes.Buffer
+	zw := gzip.NewWriter(&gz)
+	_, _ = zw.Write([]byte(doc))
+	_ = zw.Close()
+	st := newFakeStore()
+	st.projects["mer"] = domain.ProjectRecord{ID: "mer", Path: repo, RepoOriginURL: "https://github.com/acme/app"}
+	var spawned ports.SpawnConfig
+	var placed []byte
+	fc := &fakeCommander{spawnFunc: func(cfg ports.SpawnConfig) domain.SessionRecord {
+		spawned = cfg
+		if cfg.Transfer != nil {
+			placed, _ = os.ReadFile(cfg.Transfer.NativeArchive)
+		}
+		return domain.SessionRecord{ID: "mer-9", ProjectID: cfg.ProjectID, Kind: cfg.Kind, Harness: cfg.Harness}
+	}}
+	manifest := importManifest(tip)
+	manifest.Harness = domain.HarnessOpenCode
+	if _, err := NewWithDeps(Deps{Manager: fc, Store: moveStore{st}}).ImportMove(context.Background(), MoveImportInput{
+		ProjectID: "mer", MoveID: "m-opencode", Manifest: manifest, HandoffNote: "NOTE",
+		Transcript: &MoveImportTranscript{AgentSessionID: id, ProjectDir: "/workspace/.ao/home", Gzip: gz.Bytes()},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if spawned.Harness != domain.HarnessOpenCodeV2 || string(placed) != doc {
+		t.Fatalf("spawned %s with %q, want opencode-v2 with the document", spawned.Harness, placed)
+	}
+}
+
 func TestImportMoveStartsFromTheNoteWhenTheConversationCannotBeRead(t *testing.T) {
 	repo, tip := pushedBranch(t)
 	var gz bytes.Buffer

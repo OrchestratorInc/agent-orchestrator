@@ -9,8 +9,9 @@
 # GitHub is replaced by a git server container on the compose network
 # (AO_CLOUD_DEVELOPMENT_GITHUB_URL); the local repository reaches the same
 # server through url.insteadOf. The agent is HARNESS (claude-code, the
-# default, or codex), signed in on this machine; in Cloud it has a
-# placeholder key, so it never runs a turn there.
+# default, codex or opencode-v2, which Cloud runs as opencode), signed in on
+# this machine; in Cloud it has a placeholder key, so it never runs a turn
+# there.
 #
 # Usage: AO_CONTROL_PLANE=<ao-control-plane checkout> test/session-move/cloud-round-trip.sh
 # Needs go, git, python3, curl, Docker with Compose and buildx, the agent CLI.
@@ -23,6 +24,8 @@ source "$cp_root/scripts/lib/docker-local.sh"
 CP_IMAGE=ao-move-control-plane:local
 WORKER_IMAGE=ao-move-worker:local
 HARNESS=${HARNESS:-claude-code}
+CLOUD_HARNESS=$HARNESS CREDENTIAL_TYPE=api_key
+[[ "$HARNESS" == opencode-v2 ]] && CLOUD_HARNESS=opencode CREDENTIAL_TYPE=opencode_api_key
 SESSION_LABEL=${AO_SESSION_ID:-cloud-round-trip}
 
 # Compose binds data directories from here, so it must be inside $HOME, which
@@ -168,7 +171,7 @@ step "AO Cloud user, org, agent key, GitHub token, project"
 auth=$(cloud POST /auth/local/register '{"email":"move@example.com","displayName":"Move Test","password":"local-move-password","orgSlug":"move-test","orgName":"Move Test"}')
 TOKEN=$(echo "$auth" | json "d['token']") || { echo "$auth"; fail "register"; }
 ORG=$(echo "$auth" | json "d['organizations'][0]['id']")
-cloud PUT "/me/providers/$HARNESS" '{"credentialType":"api_key","secret":"ao-move-development-only"}' >/dev/null
+cloud PUT "/me/providers/$CLOUD_HARNESS" "{\"credentialType\":\"$CREDENTIAL_TYPE\",\"secret\":\"ao-move-development-only\"}" >/dev/null
 cloud PUT /me/github-pat '{"secret":"ao-move-development-only"}' >/dev/null
 features=$(cloud GET /me | json "d['offering']['features']")
 [[ "$features" == *session.branch* ]] || fail "offering.features lacks session.branch: $features"
@@ -181,6 +184,8 @@ mkdir -p "$W/daemon"
 # Run from inside a Claude Code session, the agent would inherit that session's
 # variables, run as its child and save no transcript of its own.
 while read -r name; do unset "$name"; done < <(compgen -e | grep -E '^(CLAUDECODE|CLAUDE_)')
+# OpenCode 2's data home is a sibling of XDG_DATA_HOME's: keep it in $W.
+export XDG_DATA_HOME="$W/xdg"
 AO_DATA_DIR="$W/daemon" AO_RUN_FILE="$W/daemon/running.json" AO_PORT=$PORT AO_CLOUD_OFFERING=off \
 	"$W/bin/ao" daemon > "$W/daemon.log" 2>&1 &
 pids+=($!)
@@ -263,9 +268,29 @@ else
 fi
 conversations() { sh -c "$CONVERSATIONS" _ "$1"; }
 
+# OpenCode keeps sessions in a database; these read session $1 as it exports.
+opencode_local() { XDG_DATA_HOME="$W/xdg/opencode-v2-home" opencode session export "$1" --standalone 2>/dev/null; }
+opencode_cloud() { cloud_exec 'opencode session export "$1" --standalone 2>/dev/null' "$1"; }
+# check_opencode DOC DIR NOT: the session runs in DIR and names neither NOT nor a placeholder.
+check_opencode() {
+	python3 -c 'import json,sys; d=json.loads(sys.argv[1]); assert d["info"]["location"]["directory"]==sys.argv[2], d["info"]["location"]' "$1" "$2" || return 1
+	[[ "$1" != *"/ao-moved/"* && "$1" != *"\"$3"* ]]
+}
+
 # check_cloud_conversation checks Cloud placed conversation $1 for its agent,
 # with this machine's paths ($2) replaced, and resumed it.
 check_cloud_conversation() {
+	if [[ "$HARNESS" == opencode-v2 ]]; then
+		local doc=""
+		for _ in $(seq 1 60); do doc=$(opencode_cloud "$1" || true); [[ -n "$doc" ]] && break; sleep 1; done
+		check_opencode "$doc" "$CLOUD_REPO" "$2" || fail "Cloud did not place OpenCode session $1 in $CLOUD_REPO"
+		for _ in $(seq 1 60); do
+			cloud_exec 'ps -eo args | grep -v grep | grep -q -- "--session $1"' "$1" && { echo "  Cloud agent resumed OpenCode session $1 in $CLOUD_REPO"; return 0; }
+			sleep 1
+		done
+		cloud_exec 'ps -eo args' >&2 || true
+		fail "the Cloud agent did not resume OpenCode session $1"
+	fi
 	local file
 	for _ in $(seq 1 60); do
 		file=$(cloud_exec "$CLOUD_CONVERSATIONS | head -1" "$1" || true)
@@ -301,6 +326,14 @@ check_cloud_conversation() {
 check_local_conversation() {
 	local wt file
 	wt=$(worktree_for)
+	if [[ "$HARNESS" == opencode-v2 ]]; then
+		check_opencode "$(opencode_local "$1")" "$wt" "$2" || fail "this machine did not place OpenCode session $1 in $wt"
+		for _ in $(seq 1 60); do
+			pgrep -f -- "--session $1" >/dev/null && { echo "  local agent resumed OpenCode session $1 in $wt"; return 0; }
+			sleep 1
+		done
+		fail "the local agent did not resume OpenCode session $1"
+	fi
 	file=$(conversations "$1" | while IFS= read -r f; do grep -lF "\"cwd\":\"$wt\"" "$f"; done | head -1 || true)
 	[[ -n "$file" ]] || fail "this machine did not place conversation $1 for $wt"
 	grep -qF "\"cwd\":\"$2\"" "$file" && fail "$file still runs in the sandbox's $2"
@@ -357,7 +390,7 @@ local_to_cloud() {
 	[[ -s "$W/sidecar.gz" || "$HARNESS" != claude-code ]] || fail "this machine's move/transcript carried no sidecar folder"
 	import=$(python3 -c 'import uuid; print(uuid.uuid4())')
 	code=$(curl -sS -o "$W/import.out" -w '%{http_code}' -X PUT \
-		"http://127.0.0.1:$AO_CLOUD_PORT/api/cloud/v1/orgs/$ORG/transcript-imports/$import?harness=$HARNESS&agentSessionId=$aid" \
+		"http://127.0.0.1:$AO_CLOUD_PORT/api/cloud/v1/orgs/$ORG/transcript-imports/$import?harness=$CLOUD_HARNESS&agentSessionId=$aid" \
 		-H "Authorization: Bearer $TOKEN" -H 'Content-Type: application/gzip' --data-binary @"$W/transcript.gz")
 	[[ "$code" == 204 ]] || { cat "$W/import.out"; fail "transcript upload answered $code"; }
 	if [[ -s "$W/sidecar.gz" ]]; then
@@ -366,7 +399,7 @@ local_to_cloud() {
 			-H "Authorization: Bearer $TOKEN" -H 'Content-Type: application/gzip' --data-binary @"$W/sidecar.gz")
 		[[ "$code" == 204 ]] || { cat "$W/import.out"; fail "sidecar upload answered $code"; }
 	fi
-	body=$(python3 - "$W/export.json" "$CLOUD_PROJECT" "$import" "$HARNESS" <<'PY'
+	body=$(python3 - "$W/export.json" "$CLOUD_PROJECT" "$import" "$CLOUD_HARNESS" <<'PY'
 import json, sys
 d = json.load(open(sys.argv[1])); m = d["manifest"]
 print(json.dumps({"projectId": sys.argv[2], "kind": "worker", "harness": sys.argv[4],
@@ -396,7 +429,7 @@ cloud_to_local() {
 	[[ "$(json "[t['projectId'] for t in d['targets'] if not t.get('refusal')]" < "$W/targets.json")" == "['$LOCAL_PROJECT']" ]] || { cat "$W/targets.json"; fail "move targets"; }
 	cloud POST "/orgs/$ORG/sessions/$cid/move/export" > "$W/export.json"
 	# An exited agent can stay a zombie, since ao-worker runs as PID 1.
-	cloud_exec 'ps -eo stat=,comm= | grep -qE "^[^Z][^ ]* +(claude|codex)$"' && fail "Cloud's agent still runs after the export"
+	cloud_exec 'ps -eo stat=,comm= | grep -qE "^[^Z][^ ]* +(claude|codex|opencode)$"' && fail "Cloud's agent still runs after the export"
 	tip=$(json "d['manifest']['tip']" < "$W/export.json") || { cat "$W/export.json"; fail "Cloud export"; }
 	[[ "$(json "d['manifest']['wip']" < "$W/export.json")" == "True" ]] || fail "Cloud export made no WIP commit"
 	[[ "$(remote_tip)" == "$tip" ]] || fail "origin $BRANCH is $(remote_tip), want the exported $tip"

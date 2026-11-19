@@ -289,6 +289,16 @@ describe("moveSession", () => {
 			expect(cp.createSession.mock.calls[0][1]).toMatchObject({ transcriptImportId: "m-9" });
 		});
 
+		it("uploads an OpenCode 2 conversation for Cloud's opencode", async () => {
+			const cp = cloud();
+			const uploadTranscript = vi.fn(async () => {});
+			const v2 = { ...replies, "/api/v1/sessions/{sessionId}/move/export": ok({ ...exported, manifest: { ...exported.manifest, harness: "opencode-v2" } }) };
+			const result = await moveSession({ sessionId: "app-1", moveId: "m-11", target: { ...target, harness: "opencode" } }, { source: fakeDaemon(v2, []), cloud: cp, uploadTranscript });
+			expect((uploadTranscript.mock.calls[0] as unknown as string[])[1]).toBe("opencode");
+			expect(result.conversation).toBe("transcript");
+			expect(cp.createSession.mock.calls[0][1]).toMatchObject({ harness: "opencode", transcriptImportId: "m-11" });
+		});
+
 		it("is not uploaded when Cloud runs another agent", async () => {
 			const cp = cloud();
 			const uploadTranscript = vi.fn(async () => {});

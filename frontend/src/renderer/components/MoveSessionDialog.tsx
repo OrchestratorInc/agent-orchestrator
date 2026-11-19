@@ -14,7 +14,7 @@ import { CLOUD_AGENT_PROVIDERS } from "../lib/cloud-agents";
 import { clientForSessionHost, labelForHost } from "../lib/host-clients";
 import { LOCAL_HOST, type HostId } from "../lib/hosts";
 import { CloudCpError } from "../lib/cloud-cp";
-import { MoveError, moveSession, moveSessionHere, type CloudSessionRequest, type MoveHereResult, type MoveResult, type MoveStep, type MoveTarget } from "../lib/move-session";
+import { cloudHarness, localHarness, MoveError, moveSession, moveSessionHere, type CloudSessionRequest, type MoveHereResult, type MoveResult, type MoveStep, type MoveTarget } from "../lib/move-session";
 import { useNavigateToSession } from "../lib/navigate-to-session";
 import { repoKey } from "../lib/repo-key";
 import { cn } from "../lib/utils";
@@ -112,7 +112,7 @@ function MoveSessionDialogBody({ session, onClose }: { session: WorkspaceSession
 	const newProject = !loading && !project && repo.startsWith("github.com/")
 		? { displayName: sourceRepo.data?.name || repo.split("/").at(-1) || repo, repositoryUrl: `https://${repo}`, defaultBranch: sourceRepo.data?.defaultBranch || "main" }
 		: undefined;
-	const harness = session.provider;
+	const harness = cloudHarness(session.provider);
 	const branch = preview.data?.branch ?? "";
 	// Cloud refuses a second live session on a branch, but only after the push.
 	// Checked before the first attempt only: after it, the holder can be this move's own session.
@@ -434,7 +434,7 @@ function MoveHereDialogBody({ session, orgId, onClose }: { session: WorkspaceSes
 		retry: false,
 		gcTime: 0,
 	});
-	const agent = readiness.data?.agents.find((candidate) => candidate.id === session.provider);
+	const agent = readiness.data?.agents.find((candidate) => candidate.id === localHarness(session.provider));
 	// The targets query stops once a move starts; a clone then changes its key, leaving it pending.
 	const loading = Boolean(cloudClient) && (preview.isPending || cloudProjects.isPending || (step === undefined && Boolean(repo && branch) && targets.isPending));
 	const candidates = targets.data ?? [];
@@ -459,7 +459,7 @@ function MoveHereDialogBody({ session, orgId, onClose }: { session: WorkspaceSes
 	// Try again moves into the project the first attempt chose or cloned, so it needs neither.
 	const ready = !loading && !unavailable && (step !== undefined || target !== undefined || cloneInto !== undefined);
 	const changes = preview.data?.changes ?? [];
-	const transcript = session.provider === "claude-code" || session.provider === "codex" ? preview.data?.transcript : undefined;
+	const transcript = ["claude-code", "codex", "opencode"].includes(session.provider) ? preview.data?.transcript : undefined;
 
 	const start = async () => {
 		if (!ready || !cloudClient) return;
