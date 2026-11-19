@@ -1,12 +1,7 @@
 name: Hidden code guard tests
 
 on:
-  pull_request:
-    paths:
-      - ".github/scripts/hidden-code-guard.mjs"
-      - ".github/scripts/hidden-code-guard.test.mjs"
-      - ".github/workflows/hidden-code-guard.yml"
-      - ".github/workflows/hidden-code-guard-tests.yml"
+  workflow_call:
 
 permissions:
   contents: read
