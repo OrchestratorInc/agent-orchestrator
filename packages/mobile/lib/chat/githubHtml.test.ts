@@ -105,6 +105,19 @@ describe("githubSegments", () => {
 		expect(githubSegments("```\ncode\n`````\n<b>bold</b>")).toEqual([{ kind: "markdown", text: "```\ncode\n`````\n**bold**" }]);
 	});
 
+	it("closes an empty fence at the very next line", () => {
+		for (const fence of ["```", "~~~"]) {
+			expect(githubSegments(`${fence}\n${fence}\n<details><summary>Note</summary>body</details>`)).toEqual([
+				{ kind: "markdown", text: `${fence}\n${fence}` },
+				{ kind: "details", summary: "Note", body: [{ kind: "markdown", text: "body" }] },
+			]);
+		}
+		// Each block closes at its own fence, so the HTML between two blocks is read.
+		expect(githubSegments("```\n```\n<b>between</b>\n```\nb\n```")).toEqual([{ kind: "markdown", text: "```\n```\n**between**\n```\nb\n```" }]);
+		// Backticks after the opening run make it an inline code span, not a fence.
+		expect(githubSegments("```code``` and <b>bold</b>")).toEqual([{ kind: "markdown", text: "```code``` and **bold**" }]);
+	});
+
 	it("protects whole code spans of any backtick run, including ones that wrap a line", () => {
 		const double = "Write `` `<details>` `` literally.";
 		expect(githubSegments(double)).toEqual([{ kind: "markdown", text: double }]);

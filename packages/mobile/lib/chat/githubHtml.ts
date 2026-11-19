@@ -21,8 +21,11 @@ export type GitHubSegment =
 
 // A fence runs to a closing fence of the same character at least as long as its
 // opening (CommonMark), or to the end of the text when it has none: a ``` line
-// inside a ```` example is code, so a `<details>` after it stays code too.
-const FENCE = /^ {0,3}(?:(`{3,})[^`\n]*\n[\s\S]*?(?:\n {0,3}\1`*[ \t]*(?=\n|(?![\s\S]))|(?![\s\S]))|(~{3,})[^\n]*\n[\s\S]*?(?:\n {0,3}\2~*[ \t]*(?=\n|(?![\s\S]))|(?![\s\S])))/gm;
+// inside a ```` example is code, so a `<details>` after it stays code too. The
+// body is optional, tried empty first, so an empty block closes at the next line.
+// An opening line ends in a newline and, for backticks, holds no other backtick:
+// ```code``` is a code span.
+const FENCE = /^ {0,3}(?:(`{3,})[^`\n]*(?=\n)(?:(?:\n[\s\S]*?)??\n {0,3}\1`*[ \t]*(?=\n|(?![\s\S]))|[\s\S]*(?![\s\S]))|(~{3,})[^\n]*(?=\n)(?:(?:\n[\s\S]*?)??\n {0,3}\2~*[ \t]*(?=\n|(?![\s\S]))|[\s\S]*(?![\s\S])))/gm;
 // A whole backtick run, then the first run of exactly that length (CommonMark): `` `<details>` `` is one span.
 // A span may wrap a line but not a blank one, which ends the paragraph.
 const CODE_SPAN = /(?<!`)(`+)(?!`)((?:(?!\n[ \t]*\n)[\s\S])*?[^`])\1(?!`)/g;
