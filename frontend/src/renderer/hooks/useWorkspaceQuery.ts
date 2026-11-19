@@ -999,6 +999,24 @@ export function useRemoteProjectQuery(hostId: string, projectId: string) {
 	});
 }
 
+/** Whether the project list already loaded for this host (the local daemon's,
+ * or a remote host's) has this project. It reads the cache only and never
+ * fetches, so it is false until something else has loaded that list. Cloud
+ * projects are never in these lists. */
+export function useCachedProjectListed(projectId?: string, hostId?: string): boolean {
+	const select = useCallback(
+		(projects: { id: string }[]) => projects.some((project) => project.id === projectId),
+		[projectId],
+	);
+	const listed = useQuery({
+		queryKey: hostId ? remoteProjectsQueryKey(hostId) : workspaceQueryKey,
+		queryFn: (): Promise<{ id: string }[]> => hostId ? fetchRemoteProjects(hostId) : fetchWorkspaces(),
+		select,
+		enabled: false,
+	});
+	return Boolean(projectId) && listed.data === true;
+}
+
 /** Every project on one remote host, from the same cache as the board's
  * project query. The archive modal reads it, only while it is open. */
 export function useRemoteHostWorkspacesQuery(hostId: string, options: WorkspaceSubscriptionOptions = {}) {

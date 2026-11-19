@@ -36,6 +36,8 @@ const h = vi.hoisted(() => ({
 	cloudUserId: "user-1",
 	cloudMaxAttachmentBytes: undefined as number | undefined,
 	cloudUpload: vi.fn(),
+	// Projects the host's already-loaded project list has.
+	listedProjects: [] as string[],
 }));
 
 vi.mock("../hooks/useChatPermissionModes", async (importOriginal) => {
@@ -114,6 +116,7 @@ vi.mock("../hooks/useWorkspaceQuery", () => ({
 	cloudSessionsQueryKey: ["cloud-sessions"] as const,
 	seedCreatedFreestyleSession: vi.fn(),
 	seedCreatedStandaloneAgent: h.seedCreatedStandaloneAgent,
+	useCachedProjectListed: (projectId?: string) => Boolean(projectId) && h.listedProjects.includes(projectId ?? ""),
 }));
 
 vi.mock("../hooks/useCloudOrg", () => ({
@@ -142,7 +145,7 @@ vi.mock("../lib/cloud-attachments", async (importOriginal) => ({
 	uploadCloudAttachment: h.cloudUpload,
 }));
 
-import { TaskComposer, useTaskLaunch } from "./TaskComposer";
+import { resetKeptTaskPreparationsForTests, TaskComposer, useTaskLaunch } from "./TaskComposer";
 import { CloudCpError } from "../lib/cloud-cp";
 import { agentReadiness } from "../test/agent-readiness-fixtures";
 import { AGENT_OPTIONS, agentLabel } from "../lib/agent-options";
@@ -288,6 +291,8 @@ afterEach(() => {
 	h.cloudUserId = "user-1";
 	h.cloudMaxAttachmentBytes = undefined;
 	h.cloudUpload.mockReset();
+	h.listedProjects.length = 0;
+	resetKeptTaskPreparationsForTests();
 	vi.unstubAllGlobals();
 	h.agentValues.length = 0;
 	window.localStorage.removeItem("ao.taskComposer.preferences.v1");
@@ -4561,6 +4566,70 @@ describe("useTaskLaunch on the new chat page", () => {
 		});
 		// Answered, the send releases it as any send does.
 		expect(h.delete).toHaveBeenCalledWith("/api/v1/task-preparations/{token}", { params: { path: { token: "proj-1-7" } } });
+	});
+
+	it("prepares a listed project's worktree before the project read answers", async () => {
+		h.listedProjects.push("proj-1");
+		h.get.mockImplementation(() => new Promise(() => {}));
+		h.post.mockImplementation(async (path: string) => path === "/api/v1/projects/{id}/tasks/prepare"
+			? { data: { taskPreparation: "proj-1-7" } }
+			: { data: {} });
+		function Launcher() {
+			const task = useTaskLaunch({ projectId: "proj-1" });
+			return <p>{task.preparedSessionId || "unprepared"}</p>;
+		}
+		render(<Wrap><Launcher /></Wrap>);
+		await screen.findByText("proj-1-7");
+		expect(h.post).toHaveBeenCalledWith("/api/v1/projects/{id}/tasks/prepare", { params: { path: { id: "proj-1" } } });
+	});
+
+	it("offers the next visit the worktree a page left unused", async () => {
+		h.get.mockResolvedValue({ data: { status: "ok", project: { id: "proj-1", config: {} } } });
+		h.delete.mockResolvedValue({});
+		h.post.mockImplementation(async (path: string) => path === "/api/v1/projects/{id}/tasks/prepare"
+			? { data: { taskPreparation: "proj-1-7" } }
+			: { data: {} });
+		function Launcher() {
+			const task = useTaskLaunch({ projectId: "proj-1" });
+			return <p>{task.preparedSessionId || "unprepared"}</p>;
+		}
+		const first = render(<Wrap><Launcher /></Wrap>);
+		await screen.findByText("proj-1-7");
+		first.unmount();
+		expect(h.delete).not.toHaveBeenCalled();
+
+		render(<Wrap><Launcher /></Wrap>);
+		await screen.findByText("proj-1-7");
+		const prepares = h.post.mock.calls.filter(([path]) => path === "/api/v1/projects/{id}/tasks/prepare");
+		expect(prepares).toHaveLength(1);
+		expect(h.delete).not.toHaveBeenCalled();
+	});
+
+	it("releases a left worktree too old to offer and prepares a new one", async () => {
+		const now = vi.spyOn(Date, "now");
+		try {
+			now.mockReturnValue(1_000_000);
+			h.get.mockResolvedValue({ data: { status: "ok", project: { id: "proj-1", config: {} } } });
+			h.delete.mockResolvedValue({});
+			let next = 7;
+			h.post.mockImplementation(async (path: string) => path === "/api/v1/projects/{id}/tasks/prepare"
+				? { data: { taskPreparation: `proj-1-${next++}` } }
+				: { data: {} });
+			function Launcher() {
+				const task = useTaskLaunch({ projectId: "proj-1" });
+				return <p>{task.preparedSessionId || "unprepared"}</p>;
+			}
+			const first = render(<Wrap><Launcher /></Wrap>);
+			await screen.findByText("proj-1-7");
+			first.unmount();
+
+			now.mockReturnValue(1_000_000 + 4 * 60_000);
+			render(<Wrap><Launcher /></Wrap>);
+			await screen.findByText("proj-1-8");
+			expect(h.delete).toHaveBeenCalledWith("/api/v1/task-preparations/{token}", { params: { path: { token: "proj-1-7" } } });
+		} finally {
+			now.mockRestore();
+		}
 	});
 });
 

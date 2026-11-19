@@ -56,7 +56,7 @@ import {
 	unknownAgentReadiness,
 	type AgentInfo,
 } from "../lib/agent-select-options";
-import { cloudSessionsQueryKey, seedCreatedFreestyleSession, seedCreatedStandaloneAgent, useCloudProjectsQuery } from "../hooks/useWorkspaceQuery";
+import { cloudSessionsQueryKey, seedCreatedFreestyleSession, seedCreatedStandaloneAgent, useCachedProjectListed, useCloudProjectsQuery } from "../hooks/useWorkspaceQuery";
 import {
 	agentModelsQueryKey,
 	agentModelsQueryOptions,
@@ -125,6 +125,43 @@ function cancelTaskPreparation(token: string, hostId?: string): void {
 	} catch {
 		// A disconnected host will reclaim this preparation on its own TTL.
 	}
+}
+
+// A host deletes a preparation five minutes after making it (the daemon's
+// defaultTaskPreparationTTL). A kept one is offered again for a minute less, so
+// a send does not race its expiry; a send that does only falls back to making
+// its own worktree.
+const KEPT_PREPARATION_REUSE_MS = 4 * 60_000;
+
+type KeptPreparation = { token: string; createdAt: number };
+
+// The preparation a page left behind, per host and project, so the next visit
+// to that project starts from a worktree that already exists.
+const keptPreparations = new Map<string, KeptPreparation>();
+
+function keptPreparationKey(projectId: string, hostId?: string): string {
+	return `${hostId ?? ""}\u0000${projectId}`;
+}
+
+function keepPreparation(key: string, preparation: KeptPreparation, hostId?: string): void {
+	const previous = keptPreparations.get(key);
+	if (previous && previous.token !== preparation.token) cancelTaskPreparation(previous.token, hostId);
+	keptPreparations.set(key, preparation);
+}
+
+/** Hands a page the kept preparation for its project, unless it is too old to offer. */
+function takeKeptPreparation(key: string, hostId?: string): KeptPreparation | undefined {
+	const kept = keptPreparations.get(key);
+	if (!kept) return undefined;
+	keptPreparations.delete(key);
+	if (Date.now() - kept.createdAt < KEPT_PREPARATION_REUSE_MS) return kept;
+	cancelTaskPreparation(kept.token, hostId);
+	return undefined;
+}
+
+/** Test seam: forget every kept preparation. */
+export function resetKeptTaskPreparationsForTests(): void {
+	keptPreparations.clear();
 }
 
 class TaskCreateError extends Error {
@@ -222,6 +259,8 @@ export function useTaskLaunch({ projectId, hostId }: {
 	}, [projectId, hostId]);
 	const [fallbackAction, setFallbackAction] = useState<FallbackAction>();
 	const taskPreparationRef = useRef("");
+	// When the held preparation was requested, so a kept one is not reused past its expiry.
+	const taskPreparationCreatedAtRef = useRef(0);
 	// The preparation a send in flight will claim. Leaving the page or project does not
 	// cancel it; the send does, once answered.
 	const launchingPreparationRef = useRef("");
@@ -478,8 +517,16 @@ export function useTaskLaunch({ projectId, hostId }: {
 			return data.project as Project;
 		},
 	});
+	// A project the host's loaded project list already has is prepared at once,
+	// without waiting for the project read above: that read can wait on GitHub
+	// for the repo's canonical name, and the preparation's git work is the long
+	// part. Any other project still waits for the read.
+	const projectListed = useCachedProjectListed(projectId, hostId);
+	const prepareProjectId = isCloudProject || isStandalone
+		? undefined
+		: projectListed ? projectId : projectQuery.data?.id;
 	useEffect(() => {
-		const id = projectQuery.data?.id;
+		const id = prepareProjectId;
 		if (!id) return;
 		let client;
 		try {
@@ -488,31 +535,47 @@ export function useTaskLaunch({ projectId, hostId }: {
 			return;
 		}
 		let disposed = false;
-		taskPreparationRef.current = "";
-		setPreparedSessionId("");
-		void client.POST("/api/v1/projects/{id}/tasks/prepare", {
-			params: { path: { id } },
-		}).then(
-			({ data }) => {
-				const token = data?.taskPreparation ?? "";
-				if (!token) return;
-				if (disposed) {
-					cancelTaskPreparation(token, hostId);
-					return;
-				}
-				taskPreparationRef.current = token;
-				setPreparedSessionId(token);
-			},
-			() => undefined,
-		);
+		const key = keptPreparationKey(id, hostId);
+		const hold = (token: string, createdAt: number) => {
+			taskPreparationRef.current = token;
+			taskPreparationCreatedAtRef.current = createdAt;
+			setPreparedSessionId(token);
+		};
+		const kept = takeKeptPreparation(key, hostId);
+		if (kept) {
+			hold(kept.token, kept.createdAt);
+		} else {
+			taskPreparationRef.current = "";
+			setPreparedSessionId("");
+			const requestedAt = Date.now();
+			void client.POST("/api/v1/projects/{id}/tasks/prepare", {
+				params: { path: { id } },
+			}).then(
+				({ data }) => {
+					const token = data?.taskPreparation ?? "";
+					if (!token) return;
+					// A page that has gone keeps it for the next visit to this project.
+					if (disposed) {
+						keepPreparation(key, { token, createdAt: requestedAt }, hostId);
+						return;
+					}
+					hold(token, requestedAt);
+				},
+				() => undefined,
+			);
+		}
 		return () => {
 			disposed = true;
 			const token = taskPreparationRef.current;
 			taskPreparationRef.current = "";
 			setPreparedSessionId("");
-			if (token !== launchingPreparationRef.current) cancelTaskPreparation(token, hostId);
+			// A send in flight claims its preparation; any other is kept for the
+			// next visit to this project rather than thrown away.
+			if (token && token !== launchingPreparationRef.current) {
+				keepPreparation(key, { token, createdAt: taskPreparationCreatedAtRef.current }, hostId);
+			}
 		};
-	}, [hostId, projectQuery.data?.id]);
+	}, [hostId, prepareProjectId]);
 	const agentsQuery = useAgentReadinessQuery(true, hostId);
 	const { settings, error: settingsError } = useSettings(hostId);
 	// The composer preselects the agent and model a spawn would actually use
