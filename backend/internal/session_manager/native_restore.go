@@ -150,7 +150,6 @@ func (m *Manager) verifyNativeRestore(ctx context.Context, verifier ports.Native
 	}
 	proofCtx, cancel := context.WithTimeout(ctx, wait)
 	defer cancel()
-	var readErr error
 	for {
 		output, err := reader.GetStyledOutput(proofCtx, handle, 32)
 		if err != nil {
@@ -160,13 +159,11 @@ func (m *Manager) verifyNativeRestore(ctx context.Context, verifier ports.Native
 			if proofCtx.Err() != nil {
 				return errors.Join(proofCtx.Err(), err)
 			}
-			readErr = err
-			if err := sleepContext(proofCtx, 250*time.Millisecond); err != nil {
-				return errors.Join(err, readErr)
+			if sleepErr := sleepContext(proofCtx, 250*time.Millisecond); sleepErr != nil {
+				return errors.Join(sleepErr, err)
 			}
 			continue
 		}
-		readErr = nil
 		ready, err := verifier.VerifyNativeRestore(proofCtx, cfg, generation, output)
 		if err != nil {
 			return err

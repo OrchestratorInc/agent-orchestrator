@@ -3,6 +3,7 @@ package mastracode
 import (
 	"context"
 	"database/sql"
+	"os"
 	"path/filepath"
 	"testing"
 
@@ -31,6 +32,9 @@ func TestTerminalTurnReplyReadsNativeHistory(t *testing.T) {
 	// through the hook's environment or payload.
 	dataDir, workspace := t.TempDir(), t.TempDir()
 	t.Setenv("MASTRA_DB_PATH", filepath.Join(t.TempDir(), "decoy.db"))
+	if err := os.MkdirAll(configPath(workspace), 0o700); err != nil {
+		t.Fatal(err)
+	}
 	if err := writeNativeState(dataDir, "mc-1", workspace, nativeState{Owner: sentinel, Profile: t.TempDir(), Database: database}); err != nil {
 		t.Fatal(err)
 	}
