@@ -5,6 +5,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"log/slog"
 	"os"
 	"path/filepath"
 	"sort"
@@ -17,6 +18,8 @@ import (
 	aoprocess "github.com/aoagents/agent-orchestrator/backend/internal/process"
 )
 
+// workspaceRootIgnoreDenylist is written only to a workspace root that
+// Orchestrator initializes itself, so its first `git add -A` skips them.
 var workspaceRootIgnoreDenylist = []string{
 	"node_modules/",
 	"dist/",
@@ -29,15 +32,36 @@ var workspaceRootIgnoreDenylist = []string{
 	"temp/",
 }
 
-func prepareWorkspaceProject(ctx context.Context, parent string, projectID domain.ProjectID, registeredAt time.Time) ([]domain.WorkspaceRepoRecord, error) {
+// workspaceChildren is what registration found directly under a workspace
+// parent.
+type workspaceChildren struct {
+	// records are the rows to store: every child repository, plus each plain
+	// folder that session workspaces receive a copy of.
+	records []domain.WorkspaceRepoRecord
+	// repoDirs name the child folders holding a Git repository, ready or not.
+	// The parent must ignore them so it never records a gitlink.
+	repoDirs []string
+	// plainDirs name every other top-level folder, copied or not.
+	plainDirs []string
+	// skipped lists the plain folders sessions do not receive, with why.
+	skipped []skippedWorkspaceFolder
+}
+
+type skippedWorkspaceFolder struct {
+	name   string
+	reason string
+}
+
+func prepareWorkspaceProject(ctx context.Context, logger *slog.Logger, parent string, projectID domain.ProjectID, registeredAt time.Time) ([]domain.WorkspaceRepoRecord, error) {
 	if err := validateWorkspaceParent(ctx, parent); err != nil {
 		return nil, err
 	}
-	children, err := detectWorkspaceChildren(ctx, parent, projectID, registeredAt)
+	parentIsGit := isGitRepo(parent)
+	children, err := detectWorkspaceChildren(ctx, parent, projectID, registeredAt, parentIsGit)
 	if err != nil {
 		return nil, err
 	}
-	if len(children) == 0 {
+	if len(children.records) == 0 {
 		return nil, apierr.Invalid("WORKSPACE_REPOS_REQUIRED", "Workspace project must contain at least one direct child git repository", map[string]any{
 			"suggestedFix": "Create or move child repositories directly under the workspace folder, then retry.",
 		})
@@ -45,7 +69,7 @@ func prepareWorkspaceProject(ctx context.Context, parent string, projectID domai
 	// Require at least one fully resolved repo; a workspace with only
 	// needs_init children has nothing to build worktrees from.
 	hasReady := false
-	for _, c := range children {
+	for _, c := range children.records {
 		if c.GitStatus == domain.GitStatusReady {
 			hasReady = true
 			break
@@ -56,19 +80,36 @@ func prepareWorkspaceProject(ctx context.Context, parent string, projectID domai
 			"suggestedFix": "Initialize at least one child repository with a remote origin, then retry.",
 		})
 	}
-	if isGitRepo(parent) {
-		if err := adoptWorkspaceParent(ctx, parent, children); err != nil {
+	if parentIsGit {
+		// The parent is the user's repository: list only the child repositories,
+		// which must be ignored to keep gitlinks out of its index.
+		if err := adoptWorkspaceParent(ctx, parent, workspaceIgnoreEntries(children.repoDirs)); err != nil {
 			return nil, err
 		}
 	} else {
-		if err := initWorkspaceParent(ctx, parent, children); err != nil {
+		// Orchestrator creates this repository and stages it with `git add -A`,
+		// so every folder that is not the root's own content stays out of it.
+		ignores := workspaceIgnoreEntries(append(append([]string(nil), children.repoDirs...), children.plainDirs...))
+		if err := initWorkspaceParent(ctx, parent, append(ignores, workspaceRootIgnoreDenylist...)); err != nil {
 			return nil, err
 		}
 	}
 	if err := guardNoGitlinks(ctx, parent); err != nil {
 		return nil, err
 	}
-	return children, nil
+	for _, folder := range children.skipped {
+		logger.InfoContext(ctx, "workspace project: folder is not copied into sessions",
+			"projectID", projectID, "folder", folder.name, "reason", folder.reason)
+	}
+	return children.records, nil
+}
+
+func workspaceIgnoreEntries(dirs []string) []string {
+	entries := make([]string, 0, len(dirs))
+	for _, dir := range dirs {
+		entries = append(entries, "/"+filepath.ToSlash(dir)+"/")
+	}
+	return entries
 }
 
 // validateWorkspaceParent checks that the parent folder is not a linked
@@ -153,12 +194,16 @@ func validateWorkspaceParent(ctx context.Context, parent string) error {
 	return nil
 }
 
-func detectWorkspaceChildren(ctx context.Context, parent string, projectID domain.ProjectID, registeredAt time.Time) ([]domain.WorkspaceRepoRecord, error) {
+func detectWorkspaceChildren(ctx context.Context, parent string, projectID domain.ProjectID, registeredAt time.Time, parentIsGit bool) (workspaceChildren, error) {
+	var out workspaceChildren
 	entries, err := os.ReadDir(parent)
 	if err != nil {
-		return nil, apierr.Invalid("INVALID_PATH", "Workspace path could not be read", nil)
+		return out, apierr.Invalid("INVALID_PATH", "Workspace path could not be read", nil)
 	}
-	var repos []domain.WorkspaceRepoRecord
+	var tracked map[string]bool
+	if parentIsGit {
+		tracked = workspaceParentTrackedDirs(ctx, parent)
+	}
 	for _, entry := range entries {
 		if !entry.IsDir() {
 			continue
@@ -169,39 +214,46 @@ func detectWorkspaceChildren(ctx context.Context, parent string, projectID domai
 		}
 		child := filepath.Join(parent, name)
 		if name == domain.RootWorkspaceRepoName {
-			return nil, apierr.Invalid("WORKSPACE_CHILD_RESERVED_NAME",
+			return out, apierr.Invalid("WORKSPACE_CHILD_RESERVED_NAME",
 				"Child repository name is reserved for internal use",
 				map[string]any{
 					"path":         child,
 					"suggestedFix": fmt.Sprintf("Rename the directory %q — the name %q is reserved by Orchestrator for the workspace root.", child, domain.RootWorkspaceRepoName),
 				})
 		}
+		needsInit := domain.WorkspaceRepoRecord{
+			ProjectID:    projectID,
+			Name:         name,
+			RelativePath: filepath.ToSlash(name),
+			RegisteredAt: registeredAt,
+			GitStatus:    domain.GitStatusNeedsInit,
+		}
 		if !isGitRepo(child) {
-			repos = append(repos, domain.WorkspaceRepoRecord{
-				ProjectID:    projectID,
-				Name:         name,
-				RelativePath: filepath.ToSlash(name),
-				RegisteredAt: registeredAt,
-				GitStatus:    domain.GitStatusNeedsInit,
-			})
+			if hasGitMetadata(child) {
+				// A repository git cannot open yet; it is not copied, and the
+				// parent still has to ignore it.
+				out.records = append(out.records, needsInit)
+				out.repoDirs = append(out.repoDirs, name)
+				continue
+			}
+			out.plainDirs = append(out.plainDirs, name)
+			if reason := workspaceFolderSkipReason(ctx, parent, name, tracked); reason != "" {
+				out.skipped = append(out.skipped, skippedWorkspaceFolder{name: name, reason: reason})
+				continue
+			}
+			out.records = append(out.records, needsInit)
 			continue
 		}
+		out.repoDirs = append(out.repoDirs, name)
 		if err := validateWorkspaceChild(ctx, child); err != nil {
 			var apiErr *apierr.Error
 			if errors.As(err, &apiErr) && (apiErr.Code == "WORKSPACE_CHILD_ORIGIN_REQUIRED" || apiErr.Code == "WORKSPACE_CHILD_UNBORN" || apiErr.Code == "WORKSPACE_CHILD_IS_WORKTREE") {
-				repos = append(repos, domain.WorkspaceRepoRecord{
-					ProjectID:     projectID,
-					Name:          name,
-					RelativePath:  filepath.ToSlash(name),
-					RepoOriginURL: "",
-					RegisteredAt:  registeredAt,
-					GitStatus:     domain.GitStatusNeedsInit,
-				})
+				out.records = append(out.records, needsInit)
 				continue
 			}
-			return nil, err
+			return out, err
 		}
-		repos = append(repos, domain.WorkspaceRepoRecord{
+		out.records = append(out.records, domain.WorkspaceRepoRecord{
 			ProjectID:     projectID,
 			Name:          name,
 			RelativePath:  filepath.ToSlash(name),
@@ -214,8 +266,87 @@ func detectWorkspaceChildren(ctx context.Context, parent string, projectID domai
 			GitStatus:     domain.GitStatusReady,
 		})
 	}
-	sort.Slice(repos, func(i, j int) bool { return repos[i].Name < repos[j].Name })
-	return repos, nil
+	sort.Slice(out.records, func(i, j int) bool { return out.records[i].Name < out.records[j].Name })
+	return out, nil
+}
+
+// workspaceFolderSkipReason says why sessions do not receive a copy of the
+// plain top-level folder name, or returns "" when they do. tracked is nil for
+// a parent that is not a Git repository yet.
+func workspaceFolderSkipReason(ctx context.Context, parent, name string, tracked map[string]bool) string {
+	switch {
+	case strings.HasPrefix(name, "."):
+		return "dot-folder"
+	case domain.IsWorkspaceDependencyDir(name):
+		return "dependency or build folder"
+	case tracked == nil:
+		return ""
+	case tracked[name]:
+		// The root worktree checks it out already.
+		return "tracked by the parent repository"
+	case workspaceParentIgnores(ctx, parent, name):
+		return "ignored by the parent repository"
+	}
+	return ""
+}
+
+// workspaceParentTrackedDirs returns the top-level folders the parent's HEAD
+// commit holds, which every root worktree checks out. An unborn HEAD tracks
+// nothing.
+func workspaceParentTrackedDirs(ctx context.Context, parent string) map[string]bool {
+	tracked := map[string]bool{}
+	out, err := gitOutput(ctx, parent, "ls-tree", "-d", "-z", "--name-only", "HEAD")
+	if err != nil {
+		return tracked
+	}
+	for _, name := range strings.Split(out, "\x00") {
+		if name != "" {
+			tracked[name] = true
+		}
+	}
+	return tracked
+}
+
+// orchestratorGitignoreCommits are the subjects of the commits Orchestrator
+// makes when it writes a workspace parent's .gitignore.
+var orchestratorGitignoreCommits = map[string]bool{
+	"chore: initialize AO workspace root":             true,
+	"chore: configure AO workspace ignores":           true,
+	"chore: configure Orchestrator workspace ignores": true,
+}
+
+// workspaceParentIgnores reports whether the parent repository ignores the
+// top-level folder name. Earlier releases ignored every plain folder they
+// copied with a `/<name>/` line; such a line does not count, so a project
+// registered then keeps receiving the folders it always received.
+func workspaceParentIgnores(ctx context.Context, parent, name string) bool {
+	cmd := aoprocess.CommandContext(ctx, "git", "-C", parent, "check-ignore", "-v", "-z", "--", name)
+	out, err := cmd.Output()
+	if err != nil {
+		// Exit 1 means not ignored; anything else leaves the folder as it was.
+		return false
+	}
+	// -v -z prints source, line number, pattern and path, each NUL-terminated.
+	fields := strings.Split(string(out), "\x00")
+	if len(fields) < 3 {
+		return true
+	}
+	source, pattern := fields[0], fields[2]
+	if strings.HasPrefix(pattern, "!") {
+		return false
+	}
+	return !(source == ".gitignore" && pattern == "/"+name+"/" && addedByOrchestrator(ctx, parent, pattern))
+}
+
+// addedByOrchestrator reports whether the commit that first added line to the
+// parent's .gitignore is one Orchestrator made.
+func addedByOrchestrator(ctx context.Context, parent, line string) bool {
+	out, err := gitOutput(ctx, parent, "log", "--format=%s", "-S"+line, "--", ".gitignore")
+	if err != nil {
+		return false
+	}
+	subjects := strings.Split(strings.TrimSpace(out), "\n")
+	return orchestratorGitignoreCommits[subjects[len(subjects)-1]]
 }
 
 func validateWorkspaceChild(ctx context.Context, child string) error {
@@ -250,8 +381,8 @@ func validateWorkspaceChild(ctx context.Context, child string) error {
 	return nil
 }
 
-func adoptWorkspaceParent(ctx context.Context, parent string, repos []domain.WorkspaceRepoRecord) error {
-	changed, err := ensureWorkspaceGitignore(parent, repos)
+func adoptWorkspaceParent(ctx context.Context, parent string, ignores []string) error {
+	changed, err := ensureWorkspaceGitignore(parent, ignores)
 	if err != nil {
 		return apierr.Invalid("WORKSPACE_PARENT_GITIGNORE_FAILED", "Failed to update workspace parent .gitignore", map[string]any{"error": err.Error()})
 	}
@@ -289,13 +420,13 @@ func recordWorkspaceDefault(ctx context.Context, parent string) error {
 	return err
 }
 
-func initWorkspaceParent(ctx context.Context, parent string, repos []domain.WorkspaceRepoRecord) error {
-	return initWorkspaceParentWithGit(ctx, parent, repos, gitOutput)
+func initWorkspaceParent(ctx context.Context, parent string, ignores []string) error {
+	return initWorkspaceParentWithGit(ctx, parent, ignores, gitOutput)
 }
 
 type workspaceGitRunner func(context.Context, string, ...string) (string, error)
 
-func initWorkspaceParentWithGit(ctx context.Context, parent string, repos []domain.WorkspaceRepoRecord, runGit workspaceGitRunner) (retErr error) {
+func initWorkspaceParentWithGit(ctx context.Context, parent string, ignores []string, runGit workspaceGitRunner) (retErr error) {
 	// Snapshot the original .gitignore so we can restore it on failure.
 	// If the file doesn't exist, originalGitignore is nil.
 	gitignorePath := filepath.Join(parent, ".gitignore")
@@ -324,7 +455,7 @@ func initWorkspaceParentWithGit(ctx context.Context, parent string, repos []doma
 		return apierr.Invalid("WORKSPACE_PARENT_INIT_FAILED", "Failed to record the workspace root default branch", map[string]any{"error": err.Error()})
 	}
 
-	if _, err := ensureWorkspaceGitignore(parent, repos); err != nil {
+	if _, err := ensureWorkspaceGitignore(parent, ignores); err != nil {
 		return apierr.Invalid("WORKSPACE_PARENT_GITIGNORE_FAILED", "Failed to write workspace parent .gitignore", map[string]any{"error": err.Error()})
 	}
 	if _, err := runGit(ctx, parent, "add", "-A"); err != nil {
@@ -339,7 +470,8 @@ func initWorkspaceParentWithGit(ctx context.Context, parent string, repos []doma
 	return nil
 }
 
-func ensureWorkspaceGitignore(parent string, repos []domain.WorkspaceRepoRecord) (bool, error) {
+// ensureWorkspaceGitignore appends each entry the parent's .gitignore lacks.
+func ensureWorkspaceGitignore(parent string, entries []string) (bool, error) {
 	path := filepath.Join(parent, ".gitignore")
 	seen := map[string]bool{}
 	var lines []string
@@ -357,13 +489,8 @@ func ensureWorkspaceGitignore(parent string, repos []domain.WorkspaceRepoRecord)
 		return false, err
 	}
 
-	var additions []string
-	for _, repo := range repos {
-		additions = append(additions, "/"+filepath.ToSlash(repo.RelativePath)+"/")
-	}
-	additions = append(additions, workspaceRootIgnoreDenylist...)
 	changed := false
-	for _, entry := range additions {
+	for _, entry := range entries {
 		if seen[entry] {
 			continue
 		}

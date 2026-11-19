@@ -74,6 +74,43 @@ func (s *Store) writeWorkspaceProject(ctx context.Context, label string, r domai
 	})
 }
 
+// RemoveWorkspaceRepos drops the named child rows of a workspace project in
+// one transaction, keeping every other row unchanged.
+func (s *Store) RemoveWorkspaceRepos(ctx context.Context, projectID string, names []string) error {
+	drop := make(map[string]bool, len(names))
+	for _, name := range names {
+		drop[name] = true
+	}
+	s.writeMu.Lock()
+	defer s.writeMu.Unlock()
+	return s.inTx(ctx, "remove workspace repos", func(q *gen.Queries) error {
+		rows, err := q.ListWorkspaceRepos(ctx, domain.ProjectID(projectID))
+		if err != nil {
+			return err
+		}
+		if err := q.DeleteWorkspaceReposByProject(ctx, domain.ProjectID(projectID)); err != nil {
+			return err
+		}
+		for _, row := range rows {
+			if drop[row.Name] {
+				continue
+			}
+			if err := q.UpsertWorkspaceRepo(ctx, gen.UpsertWorkspaceRepoParams{
+				ProjectID:     row.ProjectID,
+				Name:          row.Name,
+				RelativePath:  row.RelativePath,
+				RepoOriginURL: row.RepoOriginURL,
+				DefaultBranch: row.DefaultBranch,
+				RegisteredAt:  row.RegisteredAt,
+				GitStatus:     row.GitStatus,
+			}); err != nil {
+				return err
+			}
+		}
+		return nil
+	})
+}
+
 // ListWorkspaceRepos returns the registered direct child repos for a workspace project.
 func (s *Store) ListWorkspaceRepos(ctx context.Context, projectID string) ([]domain.WorkspaceRepoRecord, error) {
 	rows, err := s.qr.ListWorkspaceRepos(ctx, domain.ProjectID(projectID))

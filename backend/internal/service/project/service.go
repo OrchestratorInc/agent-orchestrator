@@ -371,7 +371,7 @@ func (m *Service) Add(ctx context.Context, in AddInput) (Project, error) {
 		Config:       projectConfig,
 	}
 	if in.AsWorkspace {
-		repos, err := prepareWorkspaceProject(ctx, path, domain.ProjectID(row.ID), registeredAt)
+		repos, err := prepareWorkspaceProject(ctx, m.logger, path, domain.ProjectID(row.ID), registeredAt)
 		if err != nil {
 			return Project{}, err
 		}
