@@ -21,6 +21,7 @@ import { toReviewerHarnessId } from "../lib/reviewer-harnesses";
 import { captureRendererEvent } from "../lib/telemetry";
 import { aoBridge } from "../lib/bridge";
 import { withQueryFields } from "../lib/query-result";
+import { refetchWhenOlderThan } from "../lib/refetch-when-older-than";
 import { clientForHost } from "../lib/host-clients";
 import { useConnectedHosts } from "./useHostConnection";
 import { requestRemoteHostCheck } from "./useRemoteHosts";
@@ -432,7 +433,14 @@ export const workspaceQueryOptions = {
 	// /projects + /sessions about 0.75s past "daemon listening" on cold launch.
 	// Fail fast instead; the daemon status change refetches.
 	retry: (failureCount: number, error: Error) => !(error instanceof DaemonNotReadyError) && failureCount < 1,
-	staleTime: 10_000,
+	// The poll below and event invalidations keep this fresh. A finite staleTime
+	// (10 s, under the 15 s poll) made every subscriber arm a timer after each
+	// fetch that fired before the next one, for data that had not changed. With
+	// Infinity TanStack arms none; a mount or a return to the window still
+	// refetches data older than 10 s, as the finite staleTime did on mount.
+	staleTime: Number.POSITIVE_INFINITY,
+	refetchOnMount: refetchWhenOlderThan(10_000),
+	refetchOnWindowFocus: refetchWhenOlderThan(10_000),
 };
 
 export const workspaceRefetchInterval = (query: Query<WorkspaceSummary[]>) =>

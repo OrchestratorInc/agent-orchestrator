@@ -5,8 +5,15 @@ import {
 	useQuery,
 	useQueryClient,
 } from "@tanstack/react-query";
+import { useEffect } from "react";
 import type { components } from "../../api/schema";
 import { apiClient } from "../lib/api-client";
+import { aoBridge } from "../lib/bridge";
+import { isMacPlatform } from "../lib/platform";
+
+// With the desktop bridge, main forwards each change it reads for the menu bar
+// (every 5 s), so the sidebar's own poll only backs that up.
+const AWAKE_PUSH_BACKSTOP_MS = 60_000;
 
 export type AwakeState = components["schemas"]["AwakeState"];
 export type AwakeSettings = components["schemas"]["AwakeSettings"];
@@ -25,6 +32,17 @@ type Action =
 
 export function useAwake(enabled = true, detailed = false) {
 	const cache = useQueryClient();
+	// Only the real desktop bridge on macOS pushes (main reads the state for its menu
+	// bar there); tests, the browser preview and other platforms keep polling.
+	const pushed = !detailed && Boolean(window.ao?.awake) && isMacPlatform();
+	useEffect(() => {
+		if (!enabled || !pushed) return;
+		return aoBridge.awake.onState((state) => {
+			// A read already in flight started before this change: drop it, so its
+			// older answer cannot replace the pushed one until the next backstop.
+			void cache.cancelQueries({ queryKey: awakeQueryKey, exact: true }).then(() => cache.setQueryData(awakeQueryKey, state as AwakeState));
+		});
+	}, [cache, enabled, pushed]);
 	const query = useQuery<AwakeState>({
 		queryKey: detailed ? [...awakeQueryKey, "observations"] : awakeQueryKey,
 		enabled,
@@ -38,7 +56,7 @@ export function useAwake(enabled = true, detailed = false) {
 		},
 		// Back off while the endpoint is failing (Stay Awake disabled at startup,
 		// daemon restarting) so every poll is not reported as a fresh API error.
-		refetchInterval: enabled ? (q) => (q.state.status === "error" ? 60_000 : 5_000) : false,
+		refetchInterval: enabled ? (q) => (q.state.status === "error" ? 60_000 : pushed ? AWAKE_PUSH_BACKSTOP_MS : 5_000) : false,
 		retry: false,
 	});
 	const mutation = useMutation<AwakeState, Error, Action>({
