@@ -7256,6 +7256,21 @@ paths:
         schema:
           description: Opaque cursor returned by the previous page. Requires limit.
           type: string
+      - description: Keep sessions owning a pull request in this state. The list is
+          then ordered by when each session's newest such PR reached the state, and
+          the response echoes prState and carries total.
+        in: query
+        name: prState
+        schema:
+          description: Keep sessions owning a pull request in this state. The list
+            is then ordered by when each session's newest such PR reached the state,
+            and the response echoes prState and carries total.
+          enum:
+          - open
+          - draft
+          - merged
+          - closed
+          type: string
       responses:
         "200":
           content:
@@ -21692,10 +21707,23 @@ components:
           $ref: '#/components/schemas/SessionArchiveSummary'
         nextCursor:
           type: string
+        prState:
+          enum:
+          - open
+          - draft
+          - merged
+          - closed
+          type: string
         sessions:
           items:
             $ref: '#/components/schemas/ControllersSessionView'
           type: array
+        total:
+          type:
+          - "null"
+          - integer
+        version:
+          type: string
       required:
       - sessions
       type: object
@@ -22707,6 +22735,8 @@ components:
           type: string
         fastMode:
           type: boolean
+        force:
+          type: boolean
         idempotencyKey:
           type: string
         message:
@@ -22730,10 +22760,22 @@ components:
       type: object
     ProviderSwitchResponse:
       properties:
+        cancelledQueuedMessages:
+          type: integer
+        failedPendingApprovals:
+          type: boolean
         message:
           $ref: '#/components/schemas/SendConversationMessageResponse'
+        settingsUpdated:
+          type: boolean
         status:
           type: string
+        stoppedTurn:
+          type: boolean
+        warnings:
+          items:
+            type: string
+          type: array
       required:
       - status
       type: object
@@ -23346,6 +23388,22 @@ components:
           - auto
           type: string
         verdict:
+          type: string
+        workerNotice:
+          enum:
+          - ""
+          - pending
+          - sent
+          - failed
+          type: string
+        workerNoticeAttemptedAt:
+          format: date-time
+          type:
+          - "null"
+          - string
+        workerNoticeAttempts:
+          type: integer
+        workerNoticeError:
           type: string
       required:
       - id
@@ -24575,6 +24633,8 @@ components:
           type: string
         messageId:
           type: string
+        namedForQuery:
+          type: boolean
         projectId:
           type: string
         projectName:
@@ -26230,6 +26290,10 @@ components:
           description: Return 409 instead of reusing when every open PR head is already
             being reviewed or already has a review.
           type: boolean
+        requesterSessionId:
+          description: Agent session that requested the pass and should receive its
+            final outcome.
+          type: string
         rerun:
           description: Start a fresh pass for already-reviewed current heads; a different
             reviewer may run alongside one that is still running. A person's rerun

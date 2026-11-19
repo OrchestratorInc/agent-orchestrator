@@ -163,6 +163,10 @@ vi.mock("./TurnArtifacts", async () => {
 	const React = await import("react");
 	return { TurnArtifactsContext: React.createContext(null), useTurnArtifactSourceFor: () => null };
 });
+vi.mock("./UsageLimitNotice", async () => {
+	const React = await import("react");
+	return { TurnRecoveryContext: React.createContext(null) };
+});
 vi.mock("./automationMessages", () => ({ sessionLink: () => undefined }));
 vi.mock("./sessionLookup", () => ({ readSession: vi.fn(async () => undefined) }));
 

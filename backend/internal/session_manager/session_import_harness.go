@@ -32,6 +32,7 @@ var importedHarnesses = map[domain.AgentHarness]importedHarnessHooks{
 	domain.HarnessGrok:       {configEnvKey: "GROK_HOME", ownedElsewhere: grokImportOwnedElsewhere, adoptedOwnedElsewhere: grokImportOwnedElsewhere},
 	domain.HarnessKimchi:     {configEnvKey: "KIMCHI_CODING_AGENT_DIR"},
 	domain.HarnessOMP:        {configEnvKey: "PI_CODING_AGENT_DIR"},
+	domain.HarnessMemcode:    {},
 	domain.HarnessOpenCode:   {configEnvKey: "OPENCODE_DATA_DIR"},
 	domain.HarnessPi:         {configEnvKey: "PI_CODING_AGENT_DIR"},
 	domain.HarnessQwen:       {configEnvKey: "QWEN_HOME"},
@@ -40,4 +41,4 @@ var importedHarnesses = map[domain.AgentHarness]importedHarnessHooks{
 // writableTranscriptOwner also covers providers without a session registry.
 // Node-based CLIs normally appear as their binary name or node in lsof output.
 // This is best-effort evidence, not a substitute for provider writer locks.
-var importedProcessNames = []string{"claude", "codex", "gemini", "node", "copilot", "omp", "aider", "cline", "cursor-agent", "grok", "prime-agent", "codewhale", "crush"}
+var importedProcessNames = []string{"claude", "codex", "gemini", "node", "copilot", "omp", "aider", "cline", "cursor-agent", "grok", "prime-agent", "codewhale", "crush", "memcode"}

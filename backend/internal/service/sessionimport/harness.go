@@ -48,6 +48,7 @@ var harnessImporters = map[domain.AgentHarness]harnessImporter{
 	domain.HarnessCrush:    {root: crushRoot, discover: discoverCrush, read: readCrushTranscript},
 	domain.HarnessKimchi:   {root: kimchiRoot, discover: walkSources(domain.HarnessKimchi, "sessions", jsonlKey), read: piFamilyReader(domain.HarnessKimchi)},
 	domain.HarnessOMP:      {root: ompRoot, discover: walkSources(domain.HarnessOMP, "sessions", jsonlKey), read: piFamilyReader(domain.HarnessOMP)},
+	domain.HarnessMemcode:  {discoverRegistered: discoverMemcodeRegistered, read: readMemcodeTranscript, mode: domain.SessionModeTUI},
 	domain.HarnessOpenCode: {root: openCodeRoot, discover: discoverOpenCode, read: readOpenCodeTranscript},
 	domain.HarnessPi:       {root: piRoot, discover: walkSources(domain.HarnessPi, "sessions", jsonlKey), read: piFamilyReader(domain.HarnessPi)},
 	domain.HarnessQwen:     {root: qwenRoot, discover: walkSources(domain.HarnessQwen, "projects", qwenKey), read: readQwenTranscript},
