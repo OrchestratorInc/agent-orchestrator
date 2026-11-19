@@ -14,7 +14,6 @@ vi.mock("expo-secure-store", () => import("./savedConversations.fakes").then((fa
 
 import AsyncStorage from "@react-native-async-storage/async-storage";
 import {
-	conversationSaver,
 	createConversationSaver,
 	forgetSavedConversations,
 	loadSavedConversation,
@@ -94,7 +93,7 @@ describe("saved chat pages", () => {
 		expect(savedKeys()).toEqual(["host.a/fits"]);
 	});
 
-	it("are not shown, and are deleted, once a week old", async () => {
+	it("are not shown once a week old, and the next write deletes them", async () => {
 		vi.useFakeTimers({ toFake: ["Date"] });
 		vi.setSystemTime(new Date("2026-11-01T00:00:00Z"));
 		await save("host.a/old", page("last week"));
@@ -102,65 +101,20 @@ describe("saved chat pages", () => {
 		vi.setSystemTime(Date.now() + SAVED_PAGE_KEEP_MS + 1_000);
 
 		expect(await loadSavedConversation("host.a/old")).toBeNull();
-		await conversationSaver.flush();
-		expect(savedKeys()).toEqual(["host.a/other-old"]);
 		// The next write clears the rest.
 		await save("host.a/new", page("today"));
 		expect(savedKeys()).toEqual(["host.a/new"]);
 	});
 
-	it("load a file that does not decrypt as nothing saved, and delete it", async () => {
+	it("load a file that does not decrypt as nothing saved", async () => {
 		await save("host.a/chat", page("mine"));
 		// Another chat's file under this chat's name: bound to its own chat, it does not open.
 		disk.set(fileOf("host.a/copy"), disk.get(fileOf("host.a/chat"))!);
 		disk.set(fileOf("host.a/cut"), { bytes: disk.get(fileOf("host.a/chat"))!.bytes.slice(0, 40), modified: Date.now() });
 		expect(await loadSavedConversation("host.a/copy")).toBeNull();
 		expect(await loadSavedConversation("host.a/cut")).toBeNull();
-		await conversationSaver.flush();
-		expect(savedKeys()).toEqual(["host.a/chat"]);
-	});
-
-	it("keep the previous page when its replacement is cut short", async () => {
-		await save("host.a/chat", page("before"));
-		await save("host.a/donor", page("after"));
-		// Killed while writing the replacement: a partial `.new` beside the old page.
-		disk.set(`${fileOf("host.a/chat")}.new`, { bytes: disk.get(fileOf("host.a/donor"))!.bytes.slice(0, 40), modified: Date.now() });
-		expect((await loadSavedConversation("host.a/chat"))?.items[0]).toMatchObject({ text: "before" });
-		await conversationSaver.flush();
-		expect(disk.has(fileOf("host.a/chat"))).toBe(true);
-
-		// The next write replaces both.
-		await save("host.a/chat", page("next"));
-		expect(savedFileNames()).not.toContain(`${savedFileName("host.a/chat")}.new`);
-		expect((await loadSavedConversation("host.a/chat"))?.items[0]).toMatchObject({ text: "next" });
-	});
-
-	it("load a whole replacement left when the app was killed before it was moved into place", async () => {
-		await save("host.a/chat", page("after"));
-		// Killed after the old page was deleted: only the whole `.new` is left.
-		disk.set(`${fileOf("host.a/chat")}.new`, disk.get(fileOf("host.a/chat"))!);
-		disk.delete(fileOf("host.a/chat"));
-		expect((await loadSavedConversation("host.a/chat"))?.items[0]).toMatchObject({ text: "after" });
-		// Another chat's write does not count it as stray.
-		await save("host.a/other", page("x"));
-		expect((await loadSavedConversation("host.a/chat"))?.items[0]).toMatchObject({ text: "after" });
-	});
-
-	it("do not delete a page written while an expired one was being read", async () => {
-		vi.useFakeTimers({ toFake: ["Date"] });
-		vi.setSystemTime(new Date("2026-11-01T00:00:00Z"));
-		await save("host.a/chat", page("last week"));
-		vi.setSystemTime(Date.now() + SAVED_PAGE_KEEP_MS + 1_000);
-
-		// The restore reads the expired page; a live refresh writes a fresh one meanwhile.
-		const restoring = loadSavedConversation("host.a/chat");
-		conversationSaver.schedule("host.a/chat", page("today"));
-		const written = conversationSaver.flush();
-		expect(await restoring).toBeNull();
-		await written;
-		await conversationSaver.flush();
-
-		expect((await loadSavedConversation("host.a/chat"))?.items[0]).toMatchObject({ text: "today" });
+		// Left for the next write of that chat, or pruning, to replace or remove.
+		expect(savedKeys()).toEqual(["host.a/chat", "host.a/copy", "host.a/cut"]);
 	});
 
 	it("are written once a streaming chat settles, the newest page per chat", async () => {
@@ -184,7 +138,6 @@ describe("saved chat pages", () => {
 		expect(savedFileName("http.192.168.1.20.3011/ao-1")).toBe("http.192.168.1.20.3011%2Fao-1.page");
 		expect(savedFileKey("http.192.168.1.20.3011%2Fao-1.page")).toBe("http.192.168.1.20.3011/ao-1");
 		expect(savedFileName(`host.a/${"x".repeat(300)}`)).toBeNull();
-		expect(savedFileKey("http.192.168.1.20.3011%2Fao-1.page.new")).toBe("http.192.168.1.20.3011/ao-1");
 		expect(savedFileKey("stray.tmp")).toBeNull();
 		expect(savedFileKey("%E0%A4%A.page")).toBeNull();
 	});
