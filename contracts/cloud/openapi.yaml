@@ -2586,6 +2586,92 @@ paths:
           $ref: "#/components/responses/ValidationError"
         default:
           $ref: "#/components/responses/Error"
+  /api/cloud/v1/orgs/{orgId}/sessions/{sessionId}/asides/{asideId}/replies/{replyId}:
+    parameters:
+      - $ref: "#/components/parameters/OrgId"
+      - $ref: "#/components/parameters/SessionId"
+      - $ref: "#/components/parameters/AsideId"
+      - name: replyId
+        in: path
+        required: true
+        schema:
+          type: string
+          format: uuid
+    patch:
+      operationId: editSessionAsideReply
+      tags: [Sessions]
+      description: >-
+        Edits one of the caller's own comments. Only its author may. Everyone
+        watching gets chat.aside_reply_edited. A person or team member the
+        edit newly mentions joins the thread and gets a mentioned
+        notification; nobody else is notified.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              required: [text]
+              properties:
+                text:
+                  type: string
+                  minLength: 1
+                  maxLength: 65536
+                mentions:
+                  type: array
+                  maxItems: 20
+                  items:
+                    $ref: "#/components/schemas/MentionToken"
+      responses:
+        "200":
+          description: The comment after the edit.
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: false
+                required: [reply]
+                properties:
+                  reply:
+                    $ref: "#/components/schemas/AsideReply"
+        "403":
+          description: "`not_author`: the caller didn't write it."
+          $ref: "#/components/responses/Error"
+        "404":
+          description: The caller can't open the session, or there is no such comment.
+          $ref: "#/components/responses/Error"
+        "409":
+          description: "`SESSION_TERMINATED`: the session ended or was deleted."
+          $ref: "#/components/responses/Error"
+        "422":
+          description: "`validation_error` on `text` or `mentions`, as on replyToSessionAside."
+          $ref: "#/components/responses/ValidationError"
+        default:
+          $ref: "#/components/responses/Error"
+    delete:
+      operationId: deleteSessionAsideReply
+      tags: [Sessions]
+      description: >-
+        Deletes one of the caller's own comments. Only its author may.
+        Everyone watching gets chat.aside_reply_deleted. Deleting the first
+        comment of a comment thread (origin `comment`) deletes the whole
+        thread, as in a shared document: everyone watching gets
+        chat.aside_deleted, and it is no longer listed.
+      responses:
+        "204":
+          description: Deleted.
+        "403":
+          description: "`not_author`: the caller didn't write it."
+          $ref: "#/components/responses/Error"
+        "404":
+          description: The caller can't open the session, or there is no such comment.
+          $ref: "#/components/responses/Error"
+        "409":
+          description: "`SESSION_TERMINATED`: the session ended or was deleted."
+          $ref: "#/components/responses/Error"
+        default:
+          $ref: "#/components/responses/Error"
   /api/cloud/v1/orgs/{orgId}/sessions/{sessionId}/asides/{asideId}/read:
     parameters:
       - $ref: "#/components/parameters/OrgId"
@@ -9176,6 +9262,10 @@ components:
         createdAt:
           type: string
           format: date-time
+        editedAt:
+          type: string
+          format: date-time
+          description: When its author last edited it (editSessionAsideReply). Absent if never edited.
     AsideThread:
       type: object
       additionalProperties: false
@@ -12515,6 +12605,96 @@ components:
         createdAt:
           type: string
           format: date-time
+    AsideReplyEditedEvent:
+      type: object
+      additionalProperties: false
+      required: [sessionId, sequence, type, payload, createdAt]
+      description: A comment was edited (editSessionAsideReply). Hidden from the agent.
+      properties:
+        sessionId:
+          type: string
+        sequence:
+          type: integer
+          format: int64
+          maximum: 9007199254740991
+        type:
+          const: chat.aside_reply_edited
+        payload:
+          type: object
+          additionalProperties: false
+          required: [asideId, replyId, text, mentions, editedAt]
+          properties:
+            asideId:
+              type: string
+              format: uuid
+            replyId:
+              type: string
+              format: uuid
+            text:
+              type: string
+            mentions:
+              type: array
+              items:
+                $ref: "#/components/schemas/EventMention"
+            editedAt:
+              type: string
+              format: date-time
+        createdAt:
+          type: string
+          format: date-time
+    AsideReplyDeletedEvent:
+      type: object
+      additionalProperties: false
+      required: [sessionId, sequence, type, payload, createdAt]
+      description: A comment was deleted (deleteSessionAsideReply). Hidden from the agent.
+      properties:
+        sessionId:
+          type: string
+        sequence:
+          type: integer
+          format: int64
+          maximum: 9007199254740991
+        type:
+          const: chat.aside_reply_deleted
+        payload:
+          type: object
+          additionalProperties: false
+          required: [asideId, replyId]
+          properties:
+            asideId:
+              type: string
+              format: uuid
+            replyId:
+              type: string
+              format: uuid
+        createdAt:
+          type: string
+          format: date-time
+    AsideDeletedEvent:
+      type: object
+      additionalProperties: false
+      required: [sessionId, sequence, type, payload, createdAt]
+      description: A comment thread was deleted with its first comment. Hidden from the agent.
+      properties:
+        sessionId:
+          type: string
+        sequence:
+          type: integer
+          format: int64
+          maximum: 9007199254740991
+        type:
+          const: chat.aside_deleted
+        payload:
+          type: object
+          additionalProperties: false
+          required: [asideId]
+          properties:
+            asideId:
+              type: string
+              format: uuid
+        createdAt:
+          type: string
+          format: date-time
     ClientEvent:
       oneOf:
         - $ref: "#/components/schemas/UserMessageEvent"
@@ -12534,6 +12714,9 @@ components:
         - $ref: "#/components/schemas/AsideCreatedEvent"
         - $ref: "#/components/schemas/AsideResolvedEvent"
         - $ref: "#/components/schemas/AsideReopenedEvent"
+        - $ref: "#/components/schemas/AsideReplyEditedEvent"
+        - $ref: "#/components/schemas/AsideReplyDeletedEvent"
+        - $ref: "#/components/schemas/AsideDeletedEvent"
     ClientEventPage:
       type: object
       additionalProperties: false
