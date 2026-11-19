@@ -768,17 +768,20 @@ export function XtermTerminal(props: XtermTerminalProps) {
 	useEffect(() => {
 		// buildTerminalThemes() reads live CSS vars from :root. Parent shell effects
 		// run after child effects, so sync both independent theme axes here before
-		// reading. Retained terminals subscribe to themeStyle directly and update
-		// their live palette without being torn down or losing scrollback.
-		applyDocumentTheme(props.theme);
-		applyDocumentThemeStyle(themeStyle);
+		// reading. Parked terminals may still hold stale props while their cache
+		// catches up, so only a visible terminal may synchronize the document.
+		// Retained terminals still update their palette without losing scrollback.
+		if (props.isVisible !== false) {
+			applyDocumentTheme(props.theme);
+			applyDocumentThemeStyle(themeStyle);
+		}
 		const term = termRef.current;
 		if (!term) return;
 		const { dark, light } = buildTerminalThemes(translucent);
 		term.options.theme = props.theme === "dark" ? dark : light;
 		webglLeaseRef.current?.setEnabled(!translucent);
 		colorSchemeReporterRef.current?.(props.theme, themeStyle);
-	}, [props.theme, themeStyle, translucent]);
+	}, [props.theme, props.isVisible, themeStyle, translucent]);
 
 	useEffect(() => {
 		if (!termRef.current || !props.supportsCursorColorScheme) return;
