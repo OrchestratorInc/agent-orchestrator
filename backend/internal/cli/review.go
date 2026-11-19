@@ -14,6 +14,8 @@ import (
 
 	"github.com/spf13/cobra"
 	"github.com/spf13/pflag"
+
+	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
 )
 
 const (
@@ -36,8 +38,14 @@ type reviewRun struct {
 	GithubReviewID string     `json:"githubReviewId"`
 	CreatedAt      time.Time  `json:"createdAt"`
 	DeliveredAt    *time.Time `json:"deliveredAt,omitempty"`
-	FailureReason  string     `json:"failureReason,omitempty"`
-	CancelledBy    string     `json:"cancelledBy,omitempty"`
+	// Worker notice fields mirror domain.ReviewRun: the "review done" message
+	// state and its last failed delivery.
+	WorkerNotice            string     `json:"workerNotice,omitempty"`
+	WorkerNoticeAttempts    int        `json:"workerNoticeAttempts,omitempty"`
+	WorkerNoticeError       string     `json:"workerNoticeError,omitempty"`
+	WorkerNoticeAttemptedAt *time.Time `json:"workerNoticeAttemptedAt,omitempty"`
+	FailureReason           string     `json:"failureReason,omitempty"`
+	CancelledBy             string     `json:"cancelledBy,omitempty"`
 }
 
 type reviewState struct {
@@ -70,6 +78,7 @@ type triggerReviewRequest struct {
 	Harness            string             `json:"harness,omitempty"`
 	AgentConfig        *reviewAgentConfig `json:"agentConfig,omitempty"`
 	PRURL              string             `json:"prUrl,omitempty"`
+	RequesterSessionID string             `json:"requesterSessionId,omitempty"`
 	Source             string             `json:"source,omitempty"`
 	RejectReviewedHead bool               `json:"rejectReviewedHead,omitempty"`
 	Rerun              bool               `json:"rerun,omitempty"`
@@ -419,7 +428,8 @@ func (c *commandContext) triggerReview(cmd *cobra.Command, args []string, opts r
 	}
 	// A request from inside an AO session (a worker reviewing its own PR, or an
 	// orchestrator) is labelled as such, so it is never mistaken for a person.
-	if strings.TrimSpace(os.Getenv("AO_SESSION_ID")) != "" {
+	if requester := strings.TrimSpace(os.Getenv("AO_SESSION_ID")); requester != "" {
+		req.RequesterSessionID = requester
 		req.Source = "agent"
 	}
 	path := "sessions/" + url.PathEscape(session) + "/reviews/trigger"
@@ -515,7 +525,33 @@ func writeReviewList(cmd *cobra.Command, session string, res listReviewsResponse
 			return err
 		}
 	}
-	return tw.Flush()
+	if err := tw.Flush(); err != nil {
+		return err
+	}
+	// A "review done" message the worker has not received yet is easy to
+	// miss; name the run and why its last delivery failed.
+	for _, review := range res.Reviews {
+		run := review.LatestRun
+		if run == nil || run.WorkerNoticeError == "" {
+			continue
+		}
+		var state string
+		switch run.WorkerNotice {
+		case "pending":
+			state = "not delivered yet"
+		case "failed":
+			state = "not delivered, gave up"
+		default:
+			continue
+		}
+		// The error comes from the worker's runtime; strip control characters
+		// before writing it to the terminal.
+		reason := domain.SanitizeControlChars(run.WorkerNoticeError)
+		if _, err := fmt.Fprintf(out, "#%d: review done message for run %s %s after %d failed attempt(s): %s\n", review.PRNumber, run.ID, state, run.WorkerNoticeAttempts, reason); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 // reviewRunLabel names the latest pass's state, with the daemon's reason code
