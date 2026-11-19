@@ -5,6 +5,7 @@ import (
 	"log/slog"
 
 	"github.com/aoagents/agent-orchestrator/backend/internal/httpd/controllers"
+	"github.com/aoagents/agent-orchestrator/backend/internal/observe/sentryobs"
 	awakesvc "github.com/aoagents/agent-orchestrator/backend/internal/service/awake"
 )
 
@@ -19,6 +20,6 @@ func startAwake(ctx context.Context, store awakesvc.Store, host awakesvc.Host, b
 	}
 	awakeCtx, cancel := context.WithCancel(ctx)
 	done := make(chan struct{})
-	go func() { defer close(done); svc.Run(awakeCtx) }()
+	go func() { defer sentryobs.RecoverBackground(); defer close(done); svc.Run(awakeCtx) }()
 	return svc, func() { cancel(); <-done }
 }

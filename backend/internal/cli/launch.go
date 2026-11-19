@@ -17,7 +17,7 @@ import (
 func newLaunchCommand(ctx *commandContext) *cobra.Command {
 	return &cobra.Command{
 		Use:    "launch",
-		Short:  "Launch an AO-managed agent process (internal)",
+		Short:  "Launch an Orchestrator-managed agent process (internal)",
 		Hidden: true,
 		Args:   noArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {

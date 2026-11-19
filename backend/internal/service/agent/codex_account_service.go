@@ -9,6 +9,7 @@ import (
 	"strings"
 	"time"
 
+	codexagent "github.com/aoagents/agent-orchestrator/backend/internal/adapters/agent/codex"
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
 	"github.com/aoagents/agent-orchestrator/backend/internal/httpd/apierr"
 	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
@@ -18,6 +19,10 @@ import (
 // sessions start on, when they start on one, and otherwise by Codex's
 // structured account check.
 func (s *Service) authenticationWithAccount(ctx context.Context, agentID string, purpose domain.AgentReadinessPurpose) (domain.AgentAuthenticationObservation, bool) {
+	// Accounts sign in to OpenAI; the adapter checks a custom provider's key instead.
+	if agentID == string(domain.HarnessCodex) && codexagent.UsesCustomModelProvider() {
+		return domain.AgentAuthenticationObservation{}, false
+	}
 	if observation, handled := s.savedDefaultAuthentication(ctx, agentID); handled {
 		return observation, true
 	}
@@ -40,6 +45,11 @@ func (s *Service) codexAuthenticationWithAccount(ctx context.Context, agentID st
 // sign-in, not the computer's own login, is whether the harness is ready.
 func (s *Service) SetSavedDefaultSignIn(signedIn func(ctx context.Context, harness domain.AgentHarness) (domain.AgentAccountIdentityCheck, bool)) {
 	s.savedDefaultSignIn = signedIn
+}
+
+// SetSavedDefaultLaunchEnv supplies the account context new tasks will use.
+func (s *Service) SetSavedDefaultLaunchEnv(launchEnv func(context.Context, domain.AgentHarness) (map[string]string, error)) {
+	s.savedDefaultLaunchEnv = launchEnv
 }
 
 func (s *Service) savedDefaultAuthentication(ctx context.Context, agentID string) (domain.AgentAuthenticationObservation, bool) {

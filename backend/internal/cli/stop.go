@@ -23,7 +23,7 @@ func newStopCommand(ctx *commandContext) *cobra.Command {
 	opts := stopOptions{timeout: defaultStopTimeout}
 	cmd := &cobra.Command{
 		Use:   "stop",
-		Short: "Stop the AO daemon",
+		Short: "Stop the Orchestrator daemon",
 		Args:  noArgs,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			st, err := ctx.stopDaemon(cmd.Context(), opts)
@@ -34,7 +34,7 @@ func newStopCommand(ctx *commandContext) *cobra.Command {
 				return writeJSON(cmd.OutOrStdout(), st)
 			}
 			if st.State == stateStopped {
-				_, err = fmt.Fprintln(cmd.OutOrStdout(), "AO daemon stopped")
+				_, err = fmt.Fprintln(cmd.OutOrStdout(), "Orchestrator daemon stopped")
 				return err
 			}
 			return writeStatus(cmd, st)
@@ -73,7 +73,53 @@ func (c *commandContext) stopDaemon(ctx context.Context, opts stopOptions) (daem
 	if err := c.requestShutdown(ctx, st.Port); err != nil {
 		return daemonStatus{}, fmt.Errorf("request daemon shutdown: %w", err)
 	}
+	// inspectDaemon verified this daemon either by its PID or, when the PID is
+	// hidden from this process (see probeOwnedDaemon), over loopback only.
+	if !st.pidVisible {
+		return c.waitForHiddenStopped(ctx, st.PID, cfg.RunFilePath, cfg.DataDir, opts.timeout)
+	}
 	return c.waitForStopped(ctx, st.PID, cfg.RunFilePath, cfg.DataDir, opts.timeout)
+}
+
+// waitForHiddenStopped waits for a daemon whose PID this process cannot see
+// to finish the shutdown it accepted. Without the PID, the daemon's own
+// run-file is the only exit signal: the daemon closes its listeners as soon as
+// it starts draining and removes the run-file once it has drained, so a failed
+// probe does not mean it has stopped. The CLI never removes the run-file here.
+// It cannot tell a draining daemon from a crashed one, a successor daemon may
+// publish its own run-file at the same path, and a sandboxed CLI often cannot
+// write the file at all.
+func (c *commandContext) waitForHiddenStopped(ctx context.Context, pid int, runFilePath, dataDir string, timeout time.Duration) (daemonStatus, error) {
+	if timeout <= 0 {
+		timeout = defaultStopTimeout
+	}
+	stopped := daemonStatus{State: stateStopped, RunFile: runFilePath, DataDir: dataDir}
+	deadline := c.deps.Now().Add(timeout)
+	for {
+		select {
+		case <-ctx.Done():
+			return daemonStatus{}, ctx.Err()
+		default:
+		}
+		info, err := runfile.Read(runFilePath)
+		if err != nil {
+			return daemonStatus{}, err
+		}
+		if info == nil || info.PID != pid {
+			// Removed by the daemon, or replaced by a new one.
+			return stopped, nil
+		}
+		if !c.deps.Now().Before(deadline) {
+			if _, err := c.probeOwnedDaemon(ctx, info); err == nil {
+				return daemonStatus{}, fmt.Errorf("daemon pid %d did not stop within %s", pid, timeout)
+			}
+			// The daemon accepted /shutdown and no longer answers. It may
+			// still be draining or may have crashed; either way its run-file
+			// is left for the daemon, or the next start's stale check.
+			return stopped, nil
+		}
+		c.deps.Sleep(100 * time.Millisecond)
+	}
 }
 
 func (c *commandContext) requestShutdown(ctx context.Context, port int) error {

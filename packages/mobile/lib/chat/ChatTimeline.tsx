@@ -1,65 +1,94 @@
 import { Feather } from "../icons";
 import * as Clipboard from "expo-clipboard";
 import * as Linking from "expo-linking";
-import { memo, useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
+import { memo, useCallback, useContext, useEffect, useMemo, useRef, useState, type ComponentProps, type ReactNode } from "react";
 import {
-	ActivityIndicator,
 	FlatList,
 	Image,
 	Keyboard,
 	Platform,
 	Pressable,
 	StyleSheet,
-	Switch,
 	Text,
-	TextInput,
+	useWindowDimensions,
 	View,
+	type NativeScrollEvent,
+	type NativeSyntheticEvent,
+	type ScrollViewProps,
 } from "react-native";
+import { KeyboardChatScrollView, useReanimatedKeyboardAnimation } from "react-native-keyboard-controller";
+import Animated, { FadeIn, FadeOut, useAnimatedStyle, useSharedValue, type SharedValue } from "react-native-reanimated";
 import { usePreventRemove } from "expo-router/build/react-navigation/core";
+import { AppSymbol } from "../AppSymbol";
 import { authHeaders, httpBase } from "../config";
 import { rowDividerWidth } from "../divider";
 import { haptics } from "../haptics";
+import { usePressFeedback } from "../pressFeedback";
 import { useApp } from "../store";
 import type { Theme } from "../theme";
 import { useTheme, useThemedStyles } from "../ThemeProvider";
-import { MascotLamp, Spinning } from "../ui";
-import { FoldBody, FoldChevron, FoldLayout, StatusLabel, StatusSpinner } from "./TurnFoldMotion";
+import { Spinner } from "../Spinner";
+import { MascotLamp } from "../ui";
+import { FoldBody, FoldChevron } from "./TurnFoldMotion";
+import { LatticeLoader } from "./LatticeLoader";
+import { TurnPlan } from "./TurnPlan";
 import { ChatMarkdown } from "./ChatMarkdown";
+import { FirstLineMarker } from "./FirstLineMarker";
+import { ProviderSwitchMarker } from "./ProviderSwitchMarker";
 import { RenderFrame } from "./RenderFrame";
-import { notifyRenderViewport, readRenderRef } from "./renderFrameModel";
+import { artifactRenderRef, notifyRenderViewport, readArtifactRef, readRenderRef } from "./renderFrameModel";
 import { HighlightedCodeText } from "./HighlightedCodeText";
 import { caretNotation, commandOutputText } from "./ansi";
-import { jumpToLatestColors, userMessageSurfaceStyle } from "./chatChrome";
-import { actionControlWidth, requestPresentation } from "./chatPresentation";
+import { userMessageSurfaceStyle } from "./chatChrome";
+import { MenuRowWidthScope, useMenuRowWidth } from "../useMenuRowWidth";
+import { requestPresentation } from "./chatPresentation";
 import { workingElapsedLabel } from "./conversationChrome";
 import { errorActivityDuplicatesTurn, providerErrorCopy } from "./providerError";
-import { ElicitationAction, ElicitationChoiceList, ElicitationTextField } from "./elicitation-native-controls";
+import { ElicitationAction } from "./elicitation-native-controls";
+import { ElicitationInputField } from "./ElicitationInputField";
 import {
 	elicitationPromptCopy,
 	elicitationStepPresentation,
 	groupedQuestionInputs,
 	humanizeInputName,
 	initialInputValue,
-	inputOptions,
 	missingRequiredInputs,
 	safeHttpURL,
-	toggleInputValue,
 	validateInput,
 } from "./elicitationModel";
 import { previewFilePath } from "../api";
 import { ImageViewer } from "../ImageViewer";
 import { attachmentName, attachmentTileSize, editableMessageText, isImageAttachment, isSameAttachmentLoad, stagedAttachmentParts, type AttachmentImageSource } from "./messageAttachments";
+import { isDrawnImageFile, MessageFileGoneError, MessageFileSourceContext } from "./messageFiles";
 import { InlineMessageEditor, type MessageEditDraft } from "./InlineMessageEditor";
+import { JumpToLatest } from "./JumpToLatest";
+import { useFlagValue, type Flag } from "./flag";
+import { KeyboardMotionScope, useKeyboardMotion } from "./keyboardMotion";
+import { atTail, openingRow } from "./timelineScroll";
+import { createFieldReveals, fieldRevealOffset, RevealFocusedField } from "./fieldReveal";
+
+/** The jump back to the newest message fades in and out rather than popping. */
+const JUMP_FADE_MS = 160;
+/** Rows drawn first: the newest ones, enough to fill the screen at the end (see `openingRow`). */
+const OPENING_ROWS = 4;
+// How long the list's size has to hold still before an opening conversation is
+// shown, and the longest it stays hidden whatever it does.
+const OPENING_SETTLE_MS = 90;
+const OPENING_REVEAL_CAP_MS = 600;
+/** The longest a focused request field waits for the keyboard to open (none comes with a hardware keyboard). */
+const FIELD_REVEAL_WAIT_MS = 600;
 import { useMessageEdit } from "./useMessageEdit";
 import { MessageContextMenu } from "./MessageContextMenu";
 import type {
 	ConversationActivity,
 	ConversationItem,
 	ConversationMessage,
+	ConversationPlan,
 	ConversationSnapshot,
 	ConversationTurn,
+	DiffFile,
 	FileChange,
-	InputProperty,
+	MessageFile,
 } from "./types";
 import {
 	activityHierarchy,
@@ -71,6 +100,7 @@ import {
 	sameEditableTurns,
 	countActivityNodes,
 	partitionTurnItems,
+	settledTurnItems,
 	readableConversationItems,
 	startupPlacement,
 	streamingCursorMessageId,
@@ -78,10 +108,19 @@ import {
 	type ActivityNode,
 	type ConversationGroup,
 } from "./timelineModel";
-import { press, type, space } from "../tokens";
+import { iconSize, radius, type, space, touchTarget } from "../tokens";
 import { useFilesNavigation } from "../files/navigation";
 import { userFacingError } from "../connectionError";
 import { SentResponseQuotes } from "./SentResponseQuotes";
+import { forkableTurn, latestForkableTurnId } from "./forkTurns";
+import { TurnForkButton } from "./TurnForkButton";
+import { TURN_ACTION_SIZE, TURN_ACTION_SLOP, TurnRollbackButton, turnActionControl } from "./TurnRollbackButton";
+import { formatReplyTime } from "./replyTime";
+import { CONVERSATION_END_GAP, KEYBOARD_END_GAP_TUCK } from "../session/keyboardInset";
+import { AccountHandoffRow, UsageLimitNotice } from "./UsageLimitNotice";
+import { accountHandoffNote } from "./usageLimit";
+import { TurnArtifacts, useTurnArtifactSource } from "./TurnArtifacts";
+import { turnResults } from "./turnArtifactsModel";
 import { ConversationHarness, LatestWorkerUpdates, OriginMessageView, WorkerSessionsProvider, WorkerUpdateRows } from "./AutomationMessage";
 import { humanVisibleText, latestWorkerUpdateKeys, piggybackedUpdates } from "./automationMessages";
 import { SessionStartupStatus } from "./SessionStartup";
@@ -94,7 +133,12 @@ type TimelineRow =
 	| { kind: "single"; key: string; items: [ConversationItem] }
 	| { kind: "activities"; key: string; items: ConversationActivity[] };
 
-export const ChatTimeline = memo(function ChatTimeline({
+/** The conversation's rows; its user rows share one width (see `MenuRowWidthScope`). */
+export const ChatTimeline = memo(function ChatTimeline(props: ComponentProps<typeof Timeline>) {
+	return <KeyboardMotionScope><MenuRowWidthScope><Timeline {...props} /></MenuRowWidthScope></KeyboardMotionScope>;
+});
+
+function Timeline({
 	snapshot,
 	loadingOlder,
 	onLoadOlder,
@@ -103,12 +147,20 @@ export const ChatTimeline = memo(function ChatTimeline({
 	onDecide,
 	onResolveInput,
 	onRollback,
+	onFork,
+	forkAnyTurn = false,
 	onEditMessage,
 	onEditingChange,
 	jumpToSequence,
 	onJumpHandled,
 	answeredBelow,
 	startup,
+	underHeader = 0,
+	topInset = 0,
+	bottomInset = 0,
+	keyboardOffset,
+	composerGrowth,
+	jumpHidden,
 }: {
 	snapshot: ConversationSnapshot;
 	loadingOlder: boolean;
@@ -118,6 +170,10 @@ export const ChatTimeline = memo(function ChatTimeline({
 	onDecide(requestId: string, decisionId: string): Promise<void>;
 	onResolveInput(requestId: string, action: "accept" | "decline" | "cancel", content?: Record<string, unknown>): Promise<void>;
 	onRollback?(turnId: string): Promise<number>;
+	/** Forks the session as a turn left it. Absent when session forks are off. */
+	onFork?(turnId: string): Promise<void>;
+	/** Every finished turn can be forked, not just the latest. */
+	forkAnyTurn?: boolean;
 	/** Branches before an earlier human prompt and resends it edited. */
 	onEditMessage?(turnId: string, text: string, clientMessageId: string): Promise<void>;
 	/** Whether a prompt is open in its inline editor, so the screen can make room. */
@@ -132,12 +188,101 @@ export const ChatTimeline = memo(function ChatTimeline({
 	answeredBelow?: number;
 	/** Setup progress for a session that is still starting. */
 	startup?: TimelineStartup;
+	/**
+	 * How far a clear header covers the timeline's top (iOS 26's glass bar). The
+	 * list insets itself for it, so the system blurs what scrolls beneath the
+	 * bar; the empty states pad for it.
+	 */
+	underHeader?: number;
+	/** What floats over the list's top below the header (the screen's banners). */
+	topInset?: number;
+	/** What floats over the list's end (the composer), so the newest message clears it. */
+	bottomInset?: number;
+	/**
+	 * Set when the composer floats over the list: the list makes room for the
+	 * keyboard itself, less this much (see `listKeyboardOffset`).
+	 */
+	keyboardOffset?: number;
+	/** How much the floating composer has grown past one line; the conversation rises by it. */
+	composerGrowth?: SharedValue<number>;
+	/** Hides the jump to the newest message (while the composer is open); a flag, so only the jump re-renders. */
+	jumpHidden?: Flag;
 }) {
 	const t = useTheme();
 	const styles = useThemedStyles(makeStyles);
+	const olderFeedback = usePressFeedback("button");
 	const listRef = useRef<FlatList<ConversationGroup>>(null);
+	// Follows new output only while the person is at the newest message: a drag
+	// stops it, and only coming to rest at the end starts it again. Rows drawn
+	// above as they scroll up change the content's size, and that must not read
+	// as a reason to pull them back down.
 	const followsTail = useRef(true);
+	// The list's own height and its content's, for `scrollToLatest`.
+	const viewportHeight = useRef(0);
+	const contentHeight = useRef(0);
+	// The room the list has made below its content for the keyboard (see `keyboardOffset`).
+	const keyboardInset = useRef(0);
+	// keyboard-controller's chat scroll view moves the content with the keyboard
+	// on the UI thread; a list that shrank and chased its end from JS jittered.
+	// "always": "whenAtEnd" read a cached content size that could be stale.
+	const renderScrollComponent = useMemo(() => keyboardOffset === undefined ? undefined : (props: ScrollViewProps) => (
+		<KeyboardChatScrollView
+			{...props}
+			keyboardLiftBehavior="always"
+			offset={keyboardOffset}
+			onContentInsetChange={(insets) => { keyboardInset.current = insets.bottom; }}
+		/>
+	), [keyboardOffset]);
+	// The conversation rises with lines typed (see `composerGrowth`). On Android
+	// it is also held to the composer through the keyboard's stretch behind the
+	// navigation bar, where the composer has already come to rest (ChatComposer's
+	// `dockRise`).
+	const keyboard = useReanimatedKeyboardAnimation();
+	const keyboardRest = keyboardOffset === undefined ? 0 : keyboardOffset - KEYBOARD_END_GAP_TUCK;
+	// A conversation shorter than the list is lifted only as far as it can
+	// scroll, not on the straight line, so it is not held either.
+	const fillsList = useSharedValue(false);
+	const growthLift = useAnimatedStyle(() => {
+		const growth = composerGrowth ? composerGrowth.value : 0;
+		let hold = 0;
+		if (Platform.OS === "android" && keyboardOffset !== undefined && fillsList.value) {
+			const height = -keyboard.height.value;
+			const progress = keyboard.progress.value;
+			const full = progress > 0.01 ? height / progress : 0;
+			if (full > keyboardOffset && full > keyboardRest) {
+				const lifted = height * (full - keyboardOffset) / full;
+				const owed = Math.max(0, height - keyboardRest) * (full - keyboardOffset) / (full - keyboardRest);
+				hold = lifted - owed;
+			}
+		}
+		return { transform: [{ translateY: hold - growth }] };
+	}, [composerGrowth, keyboardOffset, keyboardRest]);
+	const measureFill = () => { fillsList.value = viewportHeight.current > 0 && contentHeight.current >= viewportHeight.current; };
+	// A follow to the end from JS while the keyboard scrolls the list jumped it;
+	// it waits for the keyboard to stop.
+	const { moving: keyboardMoving, onEnd: onKeyboardEnd } = useKeyboardMotion();
+	const followAfterKeyboard = useRef(false);
+	const latestFollow = useRef<() => void>(() => {});
+	useEffect(() => onKeyboardEnd(() => latestFollow.current()), [onKeyboardEnd]);
+	const dragging = useRef(false);
+	// Fixed when the list first draws (see `openingRow`); cleared while there is no list.
+	const openedAt = useRef<number | undefined>(undefined);
 	const [showJump, setShowJump] = useState(false);
+	// The list opens a few rows above the end and scrolls the rest of the way as
+	// those rows measure. Drawn while it did, the conversation showed and then
+	// slid down to the newest message, so it stays hidden until its size holds
+	// still and is shown already at the end.
+	const [opened, setOpened] = useState(false);
+	const openingSettle = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
+	const settleOpening = () => {
+		if (opened) return;
+		clearTimeout(openingSettle.current);
+		openingSettle.current = setTimeout(() => setOpened(true), OPENING_SETTLE_MS);
+	};
+	useEffect(() => {
+		const cap = setTimeout(() => setOpened(true), OPENING_REVEAL_CAP_MS);
+		return () => { clearTimeout(cap); clearTimeout(openingSettle.current); };
+	}, []);
 	// Held above the virtualized list so a "Worked for" fold keeps its state when its row scrolls away and back.
 	const [openWorked, setOpenWorked] = useState<ReadonlySet<string>>(() => new Set());
 	const toggleWorked = useCallback((key: string) => {
@@ -157,15 +302,25 @@ export const ChatTimeline = memo(function ChatTimeline({
 	const latestSignature = useMemo(() => [...latestKeys].sort().join("\n"), [latestKeys]);
 	// Keyed on the signature, not the set: a new set with the same keys keeps the old one.
 	const latestUpdates = useMemo(() => latestKeys, [latestSignature]);
-	const plan = useMemo(() => conversationTimelineRenderPlan(snapshot, items, Platform.OS === "android" ? "android" : "ios"), [items, snapshot.turns]);
+	const plan = useMemo(() => conversationTimelineRenderPlan(snapshot, items), [items, snapshot.turns]);
 	const groups = plan.groups;
-	const inverted = plan.inverted;
+	// iOS insets the list for the clear header itself (`contentInsetAdjustmentBehavior`);
+	// Android has no such inset, so its first message sat behind the header's frost.
+	const headerPad = Platform.OS === "ios" ? 0 : underHeader;
+	// Over a floating composer, its height and then a comfortable gap: the
+	// reply's action row ended flush against the pill. Never less: ending the
+	// list inside the composer's height hid a last activity row under the dock.
+	// The keyboard takes back a little of the gap (see `keyboardOffset`).
+	const contentStyle = useMemo(() => headerPad || topInset || bottomInset
+		? [styles.content, { paddingTop: space.md + headerPad + topInset, paddingBottom: bottomInset ? bottomInset + CONVERSATION_END_GAP : space.xxxl }]
+		: styles.content, [bottomInset, headerPad, styles.content, topInset]);
 	// Recomputed per snapshot but kept by identity while its contents are the
 	// same, so `extraData` changes (and every row re-renders) only when they do.
 	const nextEdits = useMemo(() => onEditMessage ? editableHumanTurns(snapshot) : undefined, [onEditMessage, snapshot]);
 	const editsRef = useRef(nextEdits);
 	if (!sameEditableTurns(editsRef.current, nextEdits)) editsRef.current = nextEdits;
 	const edits = editsRef.current;
+	const latestForkTurnId = useMemo(() => latestForkableTurnId(snapshot.turns), [snapshot.turns]);
 	const stopFollowingTail = useCallback(() => { followsTail.current = false; }, []);
 	const { editDraft, editing, detached, startEdit, cancelEdit, submitEdit } = useMessageEdit({ items: snapshot.items, onEditMessage, onEditingChange, onStart: stopFollowingTail });
 	// Back closes the edit first, as Escape does on the desktop, rather than
@@ -173,11 +328,45 @@ export const ChatTimeline = memo(function ChatTimeline({
 	// predictive back on Android, so this guards the screen's removal instead.
 	usePreventRemove(editing, cancelEdit);
 	const rowState = useMemo(() => ({ openWorked, edits, editDraft }), [editDraft, edits, openWorked]);
-	const jumpViewPosition = inverted ? 0.82 : 0.18;
+	const jumpViewPosition = 0.18;
+	// The ScrollView's own end, not FlatList's: FlatList measures to the last row
+	// and footer and leaves out the content's bottom padding, so it stopped short
+	// of the newest message by the composer's height.
+	//
+	// Under the iOS glass header the list rests at minus the header's height
+	// (`contentInsetAdjustmentBehavior`), but the native scrollToEnd never goes
+	// above 0. A conversation shorter than the screen was pushed up under the
+	// header by exactly that much, jumping there as it opened. Short content
+	// scrolls to its true end here instead, which is never above the header,
+	// and nothing scrolls until the list has measured itself (the content can
+	// report its size first; `onLayout` then makes the scroll).
 	const scrollToLatest = (animated: boolean) => {
-		if (inverted) listRef.current?.scrollToOffset({ offset: 0, animated });
+		const scroll = listRef.current?.getNativeScrollRef() as { scrollToEnd?(options: { animated: boolean }): void } | null | undefined;
+		const clampsUnderHeader = Platform.OS === "ios" && underHeader > 0;
+		if (clampsUnderHeader && !viewportHeight.current) return;
+		const overflow = contentHeight.current - (viewportHeight.current - keyboardInset.current);
+		// `scrollToOffset` passes a negative offset through; FlatList's own
+		// scrollToEnd, the fallback below, clamps it to 0. The native scrollTo
+		// then clamps to the list's own content inset, which leaves out the one
+		// the header adds, unless `scrollToOverflowEnabled` is set (it is, below).
+		if (clampsUnderHeader && overflow < 0) listRef.current?.scrollToOffset({ offset: Math.max(overflow, -underHeader), animated });
+		else if (scroll?.scrollToEnd) scroll.scrollToEnd({ animated });
 		else listRef.current?.scrollToEnd({ animated });
 	};
+	// The follow to the newest message that output and measuring rows ask for.
+	const followTail = () => {
+		if (keyboardOffset !== undefined && keyboardMoving.value) {
+			followAfterKeyboard.current = true;
+			return;
+		}
+		scrollToLatest(false);
+	};
+	latestFollow.current = () => {
+		if (!followAfterKeyboard.current) return;
+		followAfterKeyboard.current = false;
+		if (followsTail.current) scrollToLatest(false);
+	};
+	const jumpToLatest = () => { followsTail.current = true; setShowJump(false); scrollToLatest(true); };
 
 	useEffect(() => {
 		if (jumpToSequence === undefined) return;
@@ -186,12 +375,12 @@ export const ChatTimeline = memo(function ChatTimeline({
 		// turn never matched and the jump silently did nothing.
 		const index = groups.findIndex((group) => group.anchor === jumpToSequence || group.items.some((item) => item.sequence === jumpToSequence));
 		if (index >= 0) {
-			followsTail.current = index === (inverted ? 0 : groups.length - 1);
+			followsTail.current = index === groups.length - 1;
 			setShowJump(!followsTail.current);
 			requestAnimationFrame(() => listRef.current?.scrollToIndex({ index, animated: true, viewPosition: jumpViewPosition }));
 		}
 		onJumpHandled?.();
-	}, [groups, inverted, jumpToSequence, jumpViewPosition, onJumpHandled]);
+	}, [groups, jumpToSequence, jumpViewPosition, onJumpHandled]);
 
 	// The keyboard shrinks the list, so bring the prompt being edited back into view.
 	const editingTurnId = editDraft?.turnId;
@@ -200,9 +389,9 @@ export const ChatTimeline = memo(function ChatTimeline({
 		const index = groups.findIndex((group) => group.turnId === editingTurnId);
 		if (index < 0) return;
 		// A row is the whole turn, so pin its top (the prompt) to the top of the
-		// viewport; on an inverted list that is the row's far end.
-		requestAnimationFrame(() => listRef.current?.scrollToIndex({ index, animated: true, viewPosition: inverted ? 1 : 0, viewOffset: inverted ? -space.md : space.md }));
-	}, [editingTurnId, groups, inverted]);
+		// viewport.
+		requestAnimationFrame(() => listRef.current?.scrollToIndex({ index, animated: true, viewPosition: 0, viewOffset: space.md + underHeader + topInset }));
+	}, [editingTurnId, groups, topInset, underHeader]);
 	useEffect(() => {
 		if (!editingTurnId) return;
 		revealEdit();
@@ -213,11 +402,70 @@ export const ChatTimeline = memo(function ChatTimeline({
 		// eslint-disable-next-line react-hooks/exhaustive-deps
 	}, [editingTurnId]);
 
+	// Where the list was last scrolled to, for `revealField` when it cannot read
+	// the field's place in the content.
+	const scrollOffset = useRef(0);
+	// A request-form field that takes focus comes into view above the keyboard
+	// and the composer: the list does not scroll a focused child into view (see
+	// `scrollsChildToFocus`). It is measured once the keyboard is up, and only a
+	// field that is hidden moves the list, by as little as shows it, so focusing
+	// one in view never nudges the conversation.
+	//
+	// A field focused with the keyboard down waits for it to finish opening (and
+	// for the list's lift with it); with it up, nothing moves first. Only the
+	// newest focus is revealed: an earlier field's wait or measurement is
+	// cancelled, so it never scrolls back to that field once another took focus.
+	const [fieldReveals] = useState(() => createFieldReveals(Keyboard, FIELD_REVEAL_WAIT_MS));
+	useEffect(() => fieldReveals.cancel, [fieldReveals]);
+	const revealField = useCallback((field: View | null, input?: View | null) => {
+		const scroll = listRef.current?.getNativeScrollRef() as (View & { getInnerViewRef?(): View | null }) | null | undefined;
+		if (!field || !scroll?.measureInWindow) {
+			fieldReveals.cancel();
+			return;
+		}
+		// The input on its own, so a long hint never keeps it under the keyboard.
+		const measureInput = (done: (top?: number, height?: number) => void) => {
+			if (input?.measureInWindow) input.measureInWindow((_x, top, _width, height) => done(top, height));
+			else done();
+		};
+		fieldReveals.request((isCurrent) => requestAnimationFrame(() => {
+			if (!isCurrent()) return;
+			field.measureInWindow((_x, fieldTop, _width, fieldHeight) => measureInput((inputTop, inputHeight) => scroll.measureInWindow((_listX, listTop, _listWidth, listHeight) => {
+				const listBottom = listTop + listHeight;
+				const keyboardTop = Keyboard.isVisible() ? Keyboard.metrics()?.screenY : undefined;
+				const spans = {
+					fieldTop,
+					fieldBottom: fieldTop + fieldHeight,
+					inputTop,
+					inputBottom: inputTop === undefined || inputHeight === undefined ? undefined : inputTop + inputHeight,
+					visibleTop: listTop + underHeader + topInset + space.md,
+					visibleBottom: Math.min(listBottom, keyboardTop ?? listBottom) - bottomInset - space.md,
+				};
+				const scrollTo = (offset: number) => {
+					const target = fieldRevealOffset({ ...spans, offset });
+					// A later focus took over while this one measured.
+					if (target === undefined || !isCurrent()) return;
+					// A move of ours, not the person's: the list stops following new
+					// output until it comes back to the end.
+					followsTail.current = false;
+					listRef.current?.scrollToOffset({ offset: Math.max(target, Platform.OS === "ios" ? -underHeader : 0), animated: true });
+				};
+				if (fieldRevealOffset({ ...spans, offset: 0 }) === undefined) return;
+				// The list's offset right now, from where the field sits in the content
+				// and on screen: the last scroll event can trail the keyboard's lift.
+				const content = scroll.getInnerViewRef?.();
+				if (content) field.measureLayout(content, (_contentX, contentTop) => scrollTo(listTop + contentTop - fieldTop), () => scrollTo(scrollOffset.current));
+				else scrollTo(scrollOffset.current);
+			})));
+		}));
+	}, [bottomInset, fieldReveals, topInset, underHeader]);
+
+	if (plan.kind === "empty") openedAt.current = undefined;
 	if (plan.kind === "empty" && startup?.visible) {
 		// No brief in the timeline (a promptless start): the checklist stands alone.
 		return (
 			<View style={styles.timelineWrap}>
-				<View style={[styles.list, styles.content]}>
+				<View style={[styles.list, styles.content, { paddingTop: space.md + underHeader + topInset }]}>
 					<SessionStartupStatus startup={startup.view} onRetry={startup.onRetry} retrying={startup.retrying} />
 				</View>
 			</View>
@@ -226,12 +474,27 @@ export const ChatTimeline = memo(function ChatTimeline({
 	if (plan.kind === "empty") {
 		return (
 			<View style={styles.timelineWrap}>
-				<View style={styles.emptySurface}>
+				<View style={[styles.emptySurface, { paddingTop: underHeader + topInset }]}>
 					<EmptyConversation controller={snapshot.controller.state} />
 				</View>
 			</View>
 		);
 	}
+	openedAt.current ??= openingRow(groups.length, OPENING_ROWS);
+	const initialScrollIndex = Math.min(openedAt.current, groups.length - 1);
+	const settle = (event: NativeSyntheticEvent<NativeScrollEvent>) => {
+		scrollOffset.current = event.nativeEvent.contentOffset.y;
+		// iOS reports the end of the list's own scrolls (the opening one, each
+		// follow) as momentum ending too. Only a drag decides whether to follow;
+		// one of ours that landed short of an end still moving goes again.
+		if (!dragging.current) {
+			if (followsTail.current && !atTail(event.nativeEvent, keyboardInset.current)) requestAnimationFrame(followTail);
+			return;
+		}
+		dragging.current = false;
+		followsTail.current = atTail(event.nativeEvent, keyboardInset.current);
+		setShowJump(!followsTail.current);
+	};
 	const placement = startupPlacement(groups, openingTurnId, Boolean(startup?.visible));
 	// A checklist no loaded turn can host sits at the live edge instead.
 	const standaloneStartup = placement === "standalone" && startup ? (
@@ -240,11 +503,13 @@ export const ChatTimeline = memo(function ChatTimeline({
 	const olderControl = snapshot.hasMoreBefore ? (
 		<Pressable
 			accessibilityRole="button"
+			accessibilityState={{ disabled: loadingOlder, busy: loadingOlder }}
 			disabled={loadingOlder}
-			onPress={() => { haptics.tap(); void onLoadOlder(); }}
-			style={styles.older}
+			onPress={() => void onLoadOlder()}
+			android_ripple={olderFeedback.android_ripple}
+			style={({ pressed }) => [styles.older, pressed && olderFeedback.pressed]}
 		>
-			{loadingOlder ? <ActivityIndicator size="small" /> : <Feather name="clock" size={12} />}
+			{loadingOlder ? <Spinner size={iconSize.sm} color={t.textTertiary} /> : <AppSymbol name="history" size={iconSize.sm} color={t.textTertiary} />}
 			<Text style={styles.olderText}>{loadingOlder ? "Loading history…" : "Load earlier messages"}</Text>
 		</Pressable>
 	) : null;
@@ -253,42 +518,78 @@ export const ChatTimeline = memo(function ChatTimeline({
 		<WorkerSessionsProvider>
 			<ConversationHarness.Provider value={snapshot.harness}>
 				<LatestWorkerUpdates.Provider value={latestUpdates}>
-					<View style={styles.timelineWrap}>
+					<Animated.View style={[styles.timelineWrap, growthLift]}>
+						<RevealFocusedField.Provider value={revealField}>
 						<FlatList<ConversationGroup>
 							ref={listRef}
+							renderScrollComponent={renderScrollComponent}
 							data={groups}
 							extraData={rowState}
-							inverted={plan.inverted}
 							keyExtractor={(group) => group.key}
-							style={styles.list}
-							contentContainerStyle={styles.content}
+							style={[styles.list, !opened && styles.opening]}
+							contentContainerStyle={contentStyle}
+							contentInsetAdjustmentBehavior={underHeader ? "automatic" : undefined}
+							// Lets `scrollToLatest` rest a short conversation just below the header.
+							scrollToOverflowEnabled={Platform.OS === "ios" && underHeader > 0}
+							scrollIndicatorInsets={{ bottom: bottomInset }}
 							keyboardShouldPersistTaps="handled"
-							initialNumToRender={4}
+							// A tap gives Android's selectable text focus, and scrolling it into
+							// view nudged the conversation as the keyboard closed. The list's
+							// fields reveal themselves: the message editor (`revealEdit`) and a
+							// request form's fields (`revealField`).
+							scrollsChildToFocus={false}
+							initialNumToRender={OPENING_ROWS}
+							initialScrollIndex={initialScrollIndex > 0 ? initialScrollIndex : undefined}
 							maxToRenderPerBatch={4}
 							updateCellsBatchingPeriod={32}
 							windowSize={5}
 							// Content off screen can resize (a page measured ahead, earlier history
 							// loading in); what is on screen stays put on both platforms.
 							maintainVisibleContentPosition={{ minIndexForVisible: 0 }}
+							onScrollBeginDrag={() => { dragging.current = true; followsTail.current = false; }}
+							onScrollEndDrag={settle}
+							onMomentumScrollBegin={() => { dragging.current = true; }}
+							onMomentumScrollEnd={settle}
 							onScroll={(event) => {
-								const { contentOffset, contentSize, layoutMeasurement } = event.nativeEvent;
-								followsTail.current = inverted
-									? Math.abs(contentOffset.y) < 120
-									: contentSize.height - layoutMeasurement.height - contentOffset.y < 120;
-								setShowJump(!followsTail.current);
+								// Only the person's own scrolling stops the follow (see `followsTail`);
+								// passing the end without a drag, as a jump does, resumes it.
+								scrollOffset.current = event.nativeEvent.contentOffset.y;
+								const tail = atTail(event.nativeEvent, keyboardInset.current);
+								if (tail && !dragging.current) followsTail.current = true;
+								setShowJump(!followsTail.current && !tail);
 								notifyRenderViewport();
 							}}
 							scrollEventThrottle={100}
-							onContentSizeChange={() => {
+							onLayout={(event) => {
+								const previous = viewportHeight.current;
+								const measured = !previous;
+								viewportHeight.current = event.nativeEvent.layout.height;
+								measureFill();
+								// The keyboard shrinks the list from below while the composer rides
+								// up over it, so a list at its end would leave the newest message
+								// behind the composer. Following the end, it stays at the end.
+								const shrank = !measured && viewportHeight.current < previous;
+								if ((measured || shrank) && followsTail.current) requestAnimationFrame(() => scrollToLatest(shrank));
+								settleOpening();
+							}}
+							onContentSizeChange={(_width, height) => {
+								contentHeight.current = height;
+								measureFill();
 								notifyRenderViewport();
-								if (followsTail.current) requestAnimationFrame(() => scrollToLatest(false));
+								if (followsTail.current) requestAnimationFrame(followTail);
+								settleOpening();
 							}}
 							onScrollToIndexFailed={({ index, averageItemLength }) => {
+								// The opening scroll can ask before its rows have measured; the end is where it was going.
+								if (index === initialScrollIndex && followsTail.current) {
+									requestAnimationFrame(() => scrollToLatest(false));
+									return;
+								}
 								listRef.current?.scrollToOffset({ offset: Math.max(0, index * averageItemLength), animated: true });
 								setTimeout(() => listRef.current?.scrollToIndex({ index, animated: true, viewPosition: jumpViewPosition }), 120);
 							}}
-							ListHeaderComponent={inverted ? standaloneStartup : olderControl}
-							ListFooterComponent={inverted ? olderControl : standaloneStartup}
+							ListHeaderComponent={olderControl}
+							ListFooterComponent={standaloneStartup}
 							renderItem={({ item: group }) => <ConversationTurnGroup
 								group={group}
 								snapshot={snapshot}
@@ -297,6 +598,7 @@ export const ChatTimeline = memo(function ChatTimeline({
 								onDecide={onDecide}
 								onResolveInput={onResolveInput}
 								onRollback={onRollback}
+								onFork={onFork && (forkAnyTurn || group.turn?.id === latestForkTurnId) ? onFork : undefined}
 								editableTurns={edits?.editable}
 								onEditMessage={onEditMessage ? startEdit : undefined}
 								editDraft={editDraft}
@@ -309,20 +611,23 @@ export const ChatTimeline = memo(function ChatTimeline({
 								startup={placement === "turn" && group.turnId === openingTurnId ? startup : undefined}
 							/>}
 						/>
+						</RevealFocusedField.Provider>
 						{/* An unresolved edit whose prompt left the conversation keeps its Retry and
 						    Abandon controls here, apart from the list, as the desktop does. */}
 						{detached && editDraft ? <View style={styles.detachedEditor}>
 							<InlineMessageEditor key={editDraft.turnId} draft={editDraft} blocked onCancel={cancelEdit} onEdit={submitEdit} />
 						</View> : null}
-						{showJump ? <Pressable accessibilityRole="button" accessibilityLabel="Jump to latest message" onPress={() => { haptics.tap(); followsTail.current = true; setShowJump(false); scrollToLatest(true); }} style={styles.jump}><Feather name="arrow-down" size={15} color={jumpToLatestColors(t).foregroundColor} /><Text style={styles.jumpText}>Latest</Text></Pressable> : null}
-					</View>
+						{/* Floating above whatever sits over the list's end, so it never moves
+						    the composer or the conversation; it fades rather than pops. */}
+						{showJump ? <JumpOverlay hidden={jumpHidden} bottom={bottomInset} onPress={jumpToLatest} /> : null}
+					</Animated.View>
 				</LatestWorkerUpdates.Provider>
 			</ConversationHarness.Provider>
 		</WorkerSessionsProvider>
 	);
-});
+}
 
-function ConversationTurnGroup({ group, snapshot, approvalPending, inputPending, onDecide, onResolveInput, onRollback, editableTurns, onEditMessage, editDraft, onCancelEdit, onSubmitEdit, onEditFocus, answeredBelow, workedOpen, onToggleWorked, startup }: {
+function ConversationTurnGroup({ group, snapshot, approvalPending, inputPending, onDecide, onResolveInput, onRollback, onFork, editableTurns, onEditMessage, editDraft, onCancelEdit, onSubmitEdit, onEditFocus, answeredBelow, workedOpen, onToggleWorked, startup }: {
 	group: ConversationGroup;
 	snapshot: ConversationSnapshot;
 	approvalPending: boolean;
@@ -330,6 +635,7 @@ function ConversationTurnGroup({ group, snapshot, approvalPending, inputPending,
 	onDecide(requestId: string, decisionId: string): Promise<void>;
 	onResolveInput(requestId: string, action: "accept" | "decline" | "cancel", content?: Record<string, unknown>): Promise<void>;
 	onRollback?(turnId: string): Promise<number>;
+	onFork?(turnId: string): Promise<void>;
 	editableTurns?: ReadonlySet<string>;
 	onEditMessage?(message: ConversationMessage): void;
 	editDraft?: MessageEditDraft;
@@ -345,9 +651,9 @@ function ConversationTurnGroup({ group, snapshot, approvalPending, inputPending,
 	// turn's errorMessage below it. The turn keeps it — that line carries the
 	// outcome and the rollback — so the activity restating it is dropped.
 	const turnError = group.turn?.state === "failed" ? group.turn.errorMessage : undefined;
-	const items = turnError
+	const items = settledTurnItems(turnError
 		? group.items.filter((item) => !(item.kind === "activity" && errorActivityDuplicatesTurn(item, turnError)))
-		: group.items;
+		: group.items, group.turn);
 	const cursorMessageId = streamingCursorMessageId(items);
 	// Only the prompt being edited gets an element, so every other row keeps its memo.
 	const editorFor = (item: ConversationItem) => editDraft && item.kind === "message" && item.role === "user" && item.origin === "human" && item.turnId === editDraft.turnId
@@ -370,23 +676,27 @@ function ConversationTurnGroup({ group, snapshot, approvalPending, inputPending,
 		</View>;
 	}
 	const partition = partitionTurnItems(items, group.turn);
-	// The prompt's editor grows as it opens and as lines are typed. Android's
-	// inverted list misplaces rows whose layout transition runs under that growth,
-	// so the turn being edited lays out without the fold motion.
-	const editing = Boolean(editDraft && group.turnId === editDraft.turnId);
-	const WorkBody = editing ? View : FoldBody;
-	const BelowFold = editing ? View : FoldLayout;
-	const summary = group.turn ? <TurnSummary turn={group.turn} onRollback={canRollbackTurn(snapshot, group.turn) ? onRollback : undefined} /> : null;
+	const summary = group.turn ? <TurnSummary turn={group.turn} plan={group.plan} /> : null;
 	if (!partition || !group.turn) return <View>{renderRows(items)}{summary}</View>;
+	const reply = partition.final.find((item): item is ConversationMessage => item.kind === "message");
+	const actions = <TurnActions turn={group.turn} reply={reply} onRollback={canRollbackTurn(snapshot, group.turn) ? onRollback : undefined} onFork={onFork} />;
 	// Running: the prompt, a live Working row, then the work as it streams in.
 	// Settled: the same row becomes "Worked for", folding the work away and
 	// leaving the notices and the final reply in view.
 	return <View>
 		{renderRows(partition.prompt)}
 		<TurnStatusRow turn={group.turn} foldable={partition.settled && partition.work.length > 0} open={workedOpen} onToggle={() => onToggleWorked(group.key)} />
-		{partition.settled ? (workedOpen ? <WorkBody style={{ gap: space.xs, paddingBottom: space.xs }}>{renderRows(partition.work)}</WorkBody> : null) : renderRows(partition.work)}
-		<BelowFold>{renderRows(partition.notices)}{renderRows(partition.final)}{summary}</BelowFold>
+		{partition.settled ? (workedOpen ? <FoldBody style={{ gap: space.xs, paddingBottom: space.xs }}>{renderRows(partition.work)}</FoldBody> : null) : renderRows(partition.work)}
+		{renderRows(partition.notices)}{renderRows(partition.final)}{actions}{summary}
 	</View>;
+}
+
+/** The jump back to the newest message, stepping aside while `hidden` is set. */
+function JumpOverlay({ hidden, bottom, onPress }: { hidden?: Flag; bottom: number; onPress(): void }) {
+	const composerOpen = useFlagValue(hidden);
+	return composerOpen ? null : <Animated.View entering={FadeIn.duration(JUMP_FADE_MS)} exiting={FadeOut.duration(JUMP_FADE_MS)} pointerEvents="box-none" style={[StyleSheet.absoluteFill, { bottom }]}>
+		<JumpToLatest onPress={onPress} />
+	</Animated.View>;
 }
 
 const TimelineItem = memo(function TimelineItem({
@@ -418,8 +728,15 @@ const TimelineItem = memo(function TimelineItem({
 	answeredBelow?: number;
 	showCursor?: boolean;
 }) {
-	const t = useTheme();
 	const styles = useThemedStyles(makeStyles);
+	// The long-press menu hosts the bubble in a SwiftUI view sized to its
+	// content, which gives the bubble no width to wrap against: a percentage
+	// there resolves against nothing and the message runs out as one line past
+	// the screen. So the bubble's widest is in points, 88% of the row it sits
+	// in, estimated from the window until the row has measured itself.
+	const { width: windowWidth } = useWindowDimensions();
+	const userRow = useMenuRowWidth();
+	const bubbleWidth = Math.floor((userRow.width ?? windowWidth - 2 * space.xl) * 0.88);
 	if (item.kind === "message") {
 		if (item.role === "user" && item.origin === "human") {
 			if (editor) return <View style={styles.userRow}>{editor}</View>;
@@ -433,15 +750,16 @@ const TimelineItem = memo(function TimelineItem({
 			return (
 				<>
 				{reports.length > 0 ? <WorkerUpdateRows updates={reports} /> : null}
-				<View style={styles.userRow}>
-					<MessageContextMenu style={styles.userMenu} canEdit={Boolean(onEdit)} onAction={(action) => {
+				<View ref={userRow.ref} style={styles.userRow} onLayout={userRow.onLayout}>
+					<MessageContextMenu canEdit={Boolean(onEdit)} onAction={(action) => {
 						if (action === "edit") onEdit?.(item);
 						else { void Clipboard.setStringAsync(editableMessageText(humanVisibleText(item.text)).body.trim()); haptics.success(); }
 					}}>
-						<View style={[styles.userBubble, styles.menuBubble, item.content?.some((content) => content.type === "excerpt" && content.text) && styles.quotedBubble]}>
+						<View style={[styles.userBubble, { maxWidth: bubbleWidth }, item.content?.some((content) => content.type === "excerpt" && content.text) && { width: bubbleWidth }]}>
 							<SentResponseQuotes content={item.content} />
 							{body ? <Text style={styles.userText}>{body}</Text> : null}
 							{attachments.length > 0 ? <StagedAttachments sessionId={sessionId} paths={attachments} spaced={Boolean(body)} /> : null}
+							{item.files?.length ? <MessageFiles files={item.files} spaced={Boolean(body) || attachments.length > 0} /> : null}
 							{delivery ? <Text style={styles.delivery}>{delivery}</Text> : null}
 						</View>
 					</MessageContextMenu>
@@ -456,9 +774,6 @@ const TimelineItem = memo(function TimelineItem({
 			<View style={styles.assistantRow}>
 				{item.senderLabel ? <Text style={styles.sender}>{item.senderLabel}</Text> : null}
 				<ChatMarkdown text={showCursor ? `${item.text || ""} ▍` : item.text} streaming={item.streaming} continuousSelection selectionSource={completed && !item.streaming ? { conversationId, messageId: item.id, revision: item.revision } : undefined} />
-				{!item.streaming && item.text ? <View style={styles.responseActions}>
-					<Pressable accessibilityRole="button" accessibilityLabel="Copy response" hitSlop={10} onPress={() => { void Clipboard.setStringAsync(item.text); haptics.success(); }} style={styles.copy}><Feather name="copy" size={12} color={t.textFaint} /></Pressable>
-				</View> : null}
 			</View>
 		);
 	}
@@ -471,25 +786,85 @@ const TimelineItem = memo(function TimelineItem({
 	if (item.activityKind === "system" && item.detail?.event === "compaction") {
 		return <CompactionMarker activity={item} />;
 	}
+	if (item.detail?.event === "provider_switch") {
+		return <ProviderSwitchMarker activity={item} />;
+	}
 	if (item.activityKind === "system" && item.detail?.event === "steer") {
 		const { body, attachments } = stagedAttachmentParts(item.detail.text || item.summary);
-		const steered = <View style={styles.userRow}><View style={[styles.userBubble, styles.steerBubble]}><Text style={styles.steerLabel}>STEERED</Text>{body ? <Text selectable style={styles.userText}>{body}</Text> : null}{attachments.length > 0 ? <StagedAttachments sessionId={sessionId} paths={attachments} spaced={Boolean(body)} /> : null}</View></View>;
+		const steered = <View style={styles.userRow}><View style={[styles.userBubble, styles.steerBubble]}><Text style={styles.steerLabel}>Steered</Text>{body ? <Text selectable style={styles.userText}>{body}</Text> : null}{attachments.length > 0 ? <StagedAttachments sessionId={sessionId} paths={attachments} spaced={Boolean(body)} /> : null}</View></View>;
 		// Another agent's message that arrived mid-turn names its sender, as one between turns does.
 		return item.detail.senderSessionId ? <OriginMessageView message={item} fallback={steered} /> : steered;
 	}
 	// A page the agent published with html_render / ao render.
 	const render = item.activityKind === "system" ? readRenderRef(item.detail) : undefined;
 	if (render) return <RenderFrame render={render} />;
-	if (item.detail?.event === "model.rerouted") return <SystemSignal icon="shuffle" title={`Answered by ${item.detail.toModel || "another model"}`} detail={item.detail.fromModel ? `Instead of ${item.detail.fromModel}${item.detail.reason ? ` · ${item.detail.reason}` : ""}` : item.detail.reason} />;
+	// An HTML page the agent reported with ao report --artifact, in the same frame.
+	const artifact = item.activityKind === "system" ? readArtifactRef(item.detail) : undefined;
+	const artifactPage = artifact ? artifactRenderRef(sessionId, artifact) : undefined;
+	if (artifact && artifactPage) return <RenderFrame render={artifactPage} artifact={{ sessionId, path: artifact.path }} />;
 	if (item.detail?.event === "auth.reauth_required") return <SystemSignal icon="key" danger title="The provider asked you to sign in again" detail={item.detail.reason} />;
+	const handoff = accountHandoffNote(item.detail);
+	if (handoff) return <AccountHandoffRow note={handoff} />;
 	if (item.activityKind === "error") return <ErrorActivity activity={item} />;
 	return <ActivityRow activity={item} />;
 });
 
+/**
+ * The row a turn closes on, under its reply: copy, fork, roll back, and when the reply
+ * was written (the desktop's TurnActions; the time shows outright, a phone
+ * having no hover). One per turn, not one under every fragment of prose.
+ *
+ * Its height is held from the moment the turn starts, so settling fills the row
+ * rather than adding one, and the controls are small with their touch taken out
+ * by slop: the row never moves the conversation or the composer over it.
+ */
+function TurnActions({ turn, reply, onRollback, onFork }: { turn: ConversationTurn; reply?: ConversationMessage; onRollback?(turnId: string): Promise<number>; onFork?(turnId: string): Promise<void> }) {
+	const styles = useThemedStyles(makeStyles);
+	const settled = turn.state !== "running" && turn.state !== "queued";
+	const copyText = settled && reply && !reply.streaming && reply.text.trim() ? reply.text : undefined;
+	const canRollBack = settled && Boolean(onRollback) && Boolean(turn.providerTurnId) && !turn.rolledBack;
+	const canFork = Boolean(onFork) && forkableTurn(turn);
+	const time = settled ? formatReplyTime(reply?.createdAt ?? turn.completedAt) : "";
+	return (
+		<View style={styles.turnActions}>
+			{copyText ? <CopyResponseButton text={copyText} /> : null}
+			{canFork && onFork ? <TurnForkButton turnId={turn.id} onFork={onFork} compact /> : null}
+			{canRollBack && onRollback ? <TurnRollbackButton turnId={turn.id} onRollback={onRollback} compact /> : null}
+			{time ? <Text style={styles.turnTime} accessibilityLabel={`Written ${time}`}>{time}</Text> : null}
+		</View>
+	);
+}
+
+/** How long the copy control shows its checkmark before it turns back. */
+const COPIED_MS = 1_400;
+
+/** Copies the whole reply, as the agent wrote it, in one tap. */
+function CopyResponseButton({ text }: { text: string }) {
+	const t = useTheme();
+	const styles = useThemedStyles(makeStyles);
+	const feedback = usePressFeedback("icon");
+	const [copied, setCopied] = useState(false);
+	useEffect(() => {
+		if (!copied) return;
+		const timer = setTimeout(() => setCopied(false), COPIED_MS);
+		return () => clearTimeout(timer);
+	}, [copied]);
+	return <Pressable
+		accessibilityRole="button"
+		accessibilityLabel="Copy response"
+		onPress={() => { void Clipboard.setStringAsync(text); haptics.success(); setCopied(true); }}
+		hitSlop={TURN_ACTION_SLOP}
+		android_ripple={feedback.android_ripple}
+		style={({ pressed }) => [styles.turnAction, pressed && feedback.pressed]}
+	>
+		<AppSymbol name={copied ? "checkmark" : "copy"} size={iconSize.sm} color={copied ? t.green : t.textTertiary} />
+	</Pressable>;
+}
+
 function SystemSignal({ icon, title, detail, danger }: { icon: keyof typeof Feather.glyphMap; title: string; detail?: unknown; danger?: boolean }) {
 	const t = useTheme();
 	const styles = useThemedStyles(makeStyles);
-	return <View style={[styles.systemSignal, danger && { borderColor: t.red }]}><Feather name={icon} size={15} color={danger ? t.red : t.textTertiary} /><View style={{ flex: 1 }}><Text style={[styles.systemTitle, danger && { color: t.red }]}>{title}</Text>{detail ? <Text style={styles.systemDetail}>{String(detail)}</Text> : null}</View></View>;
+	return <View style={[styles.systemSignal, danger && { borderColor: t.red }]}><Feather name={icon} size={iconSize.sm} color={danger ? t.red : t.textTertiary} /><View style={{ flex: 1 }}><Text style={[styles.systemTitle, danger && { color: t.red }]}>{title}</Text>{detail ? <Text style={styles.systemDetail}>{String(detail)}</Text> : null}</View></View>;
 }
 
 /**
@@ -515,27 +890,82 @@ function StagedAttachments({ sessionId, paths, spaced }: { sessionId: string; pa
 	</View>;
 }
 
+/**
+ * Files a message carries as uploads (a cloud session's attachments). Images
+ * load from a local copy the screen's source provides and open full-screen like
+ * staged ones; anything else is a name chip.
+ */
+function MessageFiles({ files, spaced }: { files: MessageFile[]; spaced: boolean }) {
+	const styles = useThemedStyles(makeStyles);
+	const tileSize = attachmentTileSize(files.filter(isDrawnImageFile).length);
+	return <View style={[styles.attachments, spaced && styles.attachmentsSpaced]}>
+		{files.map((file) => <MessageFileView key={file.id} file={file} tileSize={tileSize} />)}
+	</View>;
+}
+
+function MessageFileView({ file, tileSize }: { file: MessageFile; tileSize: number }) {
+	const t = useTheme();
+	const styles = useThemedStyles(makeStyles);
+	const chipFeedback = usePressFeedback("button");
+	const source = useContext(MessageFileSourceContext);
+	const image = Boolean(source) && isDrawnImageFile(file);
+	const [uri, setUri] = useState<string>();
+	// "gone": the file was deleted (an archived cloud session's are), so there
+	// is nothing to retry; "retry": anything else, which may load next time.
+	const [failed, setFailed] = useState<"retry" | "gone">();
+	const [attempt, setAttempt] = useState(0);
+	useEffect(() => {
+		if (!image || !source) return;
+		let live = true;
+		setFailed(undefined);
+		source(file).then((value) => { if (live) setUri(value); }, (error: unknown) => { if (live) setFailed(error instanceof MessageFileGoneError ? "gone" : "retry"); });
+		return () => { live = false; };
+		// The file's id names its bytes; a retry asks again.
+		// eslint-disable-next-line react-hooks/exhaustive-deps
+	}, [file.id, image, source, attempt]);
+	if (!image) return <StagedAttachment name={file.name} tileSize={tileSize} />;
+	if (failed === "gone") {
+		return <View accessibilityLabel={`${file.name}, no longer available`} style={styles.attachmentChip}>
+			<Feather name="file-text" size={iconSize.xs} color={t.textTertiary} />
+			<Text numberOfLines={1} style={styles.attachmentName}>{file.name}</Text>
+			<Text style={styles.attachmentGone}>No longer available</Text>
+		</View>;
+	}
+	if (failed) {
+		return <Pressable accessibilityRole="button" accessibilityLabel={`Retry loading ${file.name}`} hitSlop={space.md} onPress={() => setAttempt((value) => value + 1)} android_ripple={chipFeedback.android_ripple} style={({ pressed }) => [styles.attachmentChip, pressed && chipFeedback.pressed]}>
+			<AppSymbol name="refresh" size={iconSize.xs} color={t.textTertiary} />
+			<Text numberOfLines={1} style={styles.attachmentName}>{file.name}</Text>
+			<Text style={styles.attachmentRetry}>Tap to retry</Text>
+		</Pressable>;
+	}
+	if (!uri) return <View accessibilityLabel={`Loading ${file.name}`} style={[styles.attachmentTile, styles.attachmentLoading, { width: tileSize, height: tileSize }]}><Spinner size={iconSize.sm} color={t.textTertiary} /></View>;
+	return <StagedAttachment name={file.name} source={{ uri, headers: {} }} tileSize={tileSize} />;
+}
+
 function StagedAttachment({ name, source, tileSize }: { name: string; source?: AttachmentImageSource; tileSize: number }) {
 	const t = useTheme();
 	const styles = useThemedStyles(makeStyles);
+	// The image covers the tile, so the ripple has to draw over it.
+	const tileFeedback = usePressFeedback("button", { foreground: true });
+	const chipFeedback = usePressFeedback("button");
 	// The failure belongs to the load that failed, so a reconnect to another address
 	// or a rotated password retries on its own; tapping the chip retries in place.
 	const [failedLoad, setFailedLoad] = useState<AttachmentImageSource>();
 	const [viewerOpen, setViewerOpen] = useState(false);
 	if (!source) {
-		return <View style={styles.attachmentChip}><Feather name="file-text" size={12} color={t.textTertiary} /><Text numberOfLines={1} style={styles.attachmentName}>{name}</Text></View>;
+		return <View style={styles.attachmentChip}><Feather name="file-text" size={iconSize.xs} color={t.textTertiary} /><Text numberOfLines={1} style={styles.attachmentName}>{name}</Text></View>;
 	}
 	if (!isSameAttachmentLoad(failedLoad, source)) {
 		// Cover-cropping a square reads as a deliberate thumbnail; the viewer shows the whole image.
 		return <>
-			<Pressable accessibilityRole="imagebutton" accessibilityLabel={`Open ${name}`} onPress={() => { haptics.tap(); setViewerOpen(true); }} style={[styles.attachmentTile, { width: tileSize, height: tileSize }]}>
+			<Pressable accessibilityRole="imagebutton" accessibilityLabel={`Open ${name}`} onPress={() => setViewerOpen(true)} android_ripple={tileFeedback.android_ripple} style={({ pressed }) => [styles.attachmentTile, { width: tileSize, height: tileSize }, pressed && tileFeedback.pressed]}>
 				<Image accessibilityIgnoresInvertColors source={Platform.OS === "android" ? [source] : source} resizeMode="cover" onError={() => setFailedLoad(source)} style={styles.attachmentTileImage} />
 			</Pressable>
 			<ImageViewer visible={viewerOpen} name={name} source={source} onClose={() => setViewerOpen(false)} />
 		</>;
 	}
-	return <Pressable accessibilityRole="button" accessibilityLabel={`Retry loading ${name}`} hitSlop={6} onPress={() => { haptics.tap(); setFailedLoad(undefined); }} style={styles.attachmentChip}>
-		<Feather name="refresh-cw" size={12} color={t.textTertiary} />
+	return <Pressable accessibilityRole="button" accessibilityLabel={`Retry loading ${name}`} hitSlop={space.md} onPress={() => setFailedLoad(undefined)} android_ripple={chipFeedback.android_ripple} style={({ pressed }) => [styles.attachmentChip, pressed && chipFeedback.pressed]}>
+		<AppSymbol name="refresh" size={iconSize.xs} color={t.textTertiary} />
 		<Text numberOfLines={1} style={styles.attachmentName}>{name}</Text>
 		<Text style={styles.attachmentRetry}>Tap to retry</Text>
 	</Pressable>;
@@ -554,12 +984,13 @@ function deliveryCopy(state?: string): string | undefined {
 function OriginMessage({ message }: { message: Extract<ConversationItem, { kind: "message" }> }) {
 	const t = useTheme();
 	const styles = useThemedStyles(makeStyles);
+	const feedback = usePressFeedback("button");
 	const long = message.text.length > 600;
 	const [expanded, setExpanded] = useState(false);
 	return <View style={styles.originMessage}>
-		<View style={styles.originHeader}><Feather name="radio" size={12} color={t.textTertiary} /><Text style={styles.originLabel}>{message.senderLabel || (message.origin === "automation" ? "Automation" : "Orchestrator")}</Text></View>
+		<View style={styles.originHeader}><Feather name="radio" size={iconSize.xs} color={t.textTertiary} /><Text style={styles.originLabel}>{message.senderLabel || (message.origin === "automation" ? "Automation" : "Orchestrator")}</Text></View>
 		{long && expanded ? <ChatMarkdown text={message.text} /> : <Text selectable numberOfLines={long ? 5 : undefined} style={styles.originText}>{message.text}</Text>}
-		{long ? <Pressable accessibilityRole="button" accessibilityState={{ expanded }} onPress={() => { haptics.tap(); setExpanded((value) => !value); }} style={styles.originMore}><Feather name={expanded ? "chevron-up" : "chevron-right"} size={12} color={t.accent} /><Text style={styles.originMoreText}>{expanded ? "Hide report" : "Show full report"}</Text></Pressable> : null}
+		{long ? <Pressable accessibilityRole="button" accessibilityState={{ expanded }} onPress={() => setExpanded((value) => !value)} android_ripple={feedback.android_ripple} style={({ pressed }) => [styles.originMore, pressed && feedback.pressed]}><FoldChevron open={expanded} color={t.accent} /><Text style={styles.originMoreText}>{expanded ? "Hide report" : "Show full report"}</Text></Pressable> : null}
 	</View>;
 }
 
@@ -597,6 +1028,7 @@ function ActivityRow({ activity }: { activity: ConversationActivity }) {
 function GenericActivityRow({ activity }: { activity: ConversationActivity }) {
 	const t = useTheme();
 	const styles = useThemedStyles(makeStyles);
+	const feedback = usePressFeedback("row");
 	const detail = activity.detail ?? {};
 	const output = commandOutputText(detail.output ?? detail.result ?? detail.error ?? detail.patchOutput);
 	const [openOverride, setOpenOverride] = useState<boolean | null>(null);
@@ -609,16 +1041,19 @@ function GenericActivityRow({ activity }: { activity: ConversationActivity }) {
 				accessibilityRole={expandable ? "button" : undefined}
 				accessibilityState={expandable ? { expanded: open } : undefined}
 				disabled={!expandable}
-				onPress={() => { haptics.tap(); setOpenOverride(!open); }}
-				style={styles.activityRow}
+				onPress={() => setOpenOverride(!open)}
+				android_ripple={feedback.android_ripple}
+				style={({ pressed }) => [styles.activityRow, !expandable && styles.activityRowStatic, pressed && feedback.pressed]}
 			>
-				<Feather name={meta.icon} size={12} color={meta.color(t)} />
+				<Feather name={meta.icon} size={iconSize.xs} color={meta.color(t)} />
 				<Text numberOfLines={open ? undefined : 2} style={[styles.activitySummary, activity.status === "failed" && { color: t.red }]}>
 					{meta.prefix ? `${meta.prefix} ` : ""}{detail.command || detail.toolName || activity.summary}
 				</Text>
-				{activity.status === "running" ? <ActivityIndicator size="small" color={t.orange} /> : null}
+				{activity.status === "running" ? <Spinner size={iconSize.sm} color={t.orange} /> : null}
 				{activity.status === "cancelled" ? <Text style={styles.activityStopped}>stopped</Text> : null}
-				{expandable ? <Feather name={open ? "chevron-up" : "chevron-right"} size={12} color={t.textFaint} /> : null}
+				{/* Red alone would be the only sign the command failed. */}
+				{activity.status === "failed" ? <Text style={styles.runFailed}>failed</Text> : null}
+				{expandable ? <FoldChevron open={open} color={t.textTertiary} /> : null}
 			</Pressable>
 			{open ? (
 				<View style={styles.activityDetail}>
@@ -638,43 +1073,46 @@ function GenericActivityRow({ activity }: { activity: ConversationActivity }) {
 function TerminalInput({ text, truncated }: { text: string; truncated?: boolean }) {
 	const t = useTheme();
 	const styles = useThemedStyles(makeStyles);
-	return <View style={styles.terminalInput}><View style={styles.terminalInputTitle}><Feather name="corner-down-right" size={12} color={t.textTertiary} /><Text style={styles.detailLabel}>AGENT TYPED</Text></View><CodeOutput value={caretNotation(text)} />{truncated ? <Text style={styles.partial}>Orchestrator stopped recording keystrokes at its cap; more were sent.</Text> : null}</View>;
+	return <View style={styles.terminalInput}><View style={styles.terminalInputTitle}><Feather name="corner-down-right" size={iconSize.xs} color={t.textTertiary} /><Text style={styles.detailHeading}>Agent typed</Text></View><CodeOutput value={caretNotation(text)} />{truncated ? <Text style={styles.partial}>Orchestrator stopped recording keystrokes at its cap; more were sent.</Text> : null}</View>;
 }
 
 function McpToolRow({ activity }: { activity: ConversationActivity }) {
 	const t = useTheme();
 	const styles = useThemedStyles(makeStyles);
+	const feedback = usePressFeedback("row");
 	const [open, setOpen] = useState(activity.status === "failed");
 	const detail = activity.detail ?? {};
 	const failed = activity.status === "failed" || detail.success === false || Boolean(detail.error);
 	const body = detail.arguments !== undefined || detail.result !== undefined || Boolean(detail.error || detail.progress);
 	return <View style={styles.activityWrap}>
-		<Pressable disabled={!body} accessibilityRole={body ? "button" : undefined} accessibilityState={body ? { expanded: open } : undefined} onPress={() => { haptics.tap(); setOpen((value) => !value); }} style={styles.activityRow}>
-			<Feather name="tool" size={12} color={failed ? t.red : t.textSecondary} />
+		<Pressable disabled={!body} accessibilityRole={body ? "button" : undefined} accessibilityState={body ? { expanded: open } : undefined} onPress={() => setOpen((value) => !value)} android_ripple={feedback.android_ripple} style={({ pressed }) => [styles.activityRow, pressed && feedback.pressed]}>
+			<Feather name="tool" size={iconSize.xs} color={failed ? t.red : t.textSecondary} />
 			<Text style={[styles.server, failed && { color: t.red }]}>{detail.server ?? detail.namespace ? `${detail.server ?? detail.namespace}/` : ""}</Text>
 			<Text numberOfLines={1} style={[styles.activitySummary, failed && { color: t.red }]}>{detail.toolName || activity.summary}</Text>
 			{detail.progress ? <Text numberOfLines={1} style={styles.activityProgress}>{lastLine(detail.progress)}</Text> : null}
-			{activity.status === "running" ? <ActivityIndicator size="small" color={t.orange} /> : activity.status === "cancelled" ? <Text style={styles.activityStopped}>stopped</Text> : body ? <Feather name={open ? "chevron-up" : "chevron-right"} size={12} color={t.textFaint} /> : null}
+			{failed && activity.status !== "running" ? <Text style={styles.runFailed}>failed</Text> : null}
+			{activity.status === "running" ? <Spinner size={iconSize.sm} color={t.orange} /> : activity.status === "cancelled" ? <Text style={styles.activityStopped}>stopped</Text> : body ? <FoldChevron open={open} color={t.textTertiary} /> : null}
 		</Pressable>
-		{open && body ? <View style={styles.activityDetail}>{detail.error ? <Text style={[styles.detailCopy, { color: t.red }]}>{detail.error}</Text> : null}{detail.arguments !== undefined ? <JsonPayload label="Arguments" value={detail.arguments} /> : null}{detail.result !== undefined ? <JsonPayload label="Result" value={detail.result} /> : null}{detail.progress ? <View><Text style={styles.detailLabel}>PROGRESS</Text><CodeOutput value={detail.progress} />{detail.progressTruncated ? <Text style={styles.partial}>Progress was longer than Orchestrator stores.</Text> : null}</View> : null}</View> : null}
+		{open && body ? <View style={styles.activityDetail}>{detail.error ? <Text style={[styles.detailCopy, { color: t.red }]}>{detail.error}</Text> : null}{detail.arguments !== undefined ? <JsonPayload label="Arguments" value={detail.arguments} /> : null}{detail.result !== undefined ? <JsonPayload label="Result" value={detail.result} /> : null}{detail.progress ? <View><Text style={styles.detailHeading}>Progress</Text><CodeOutput value={detail.progress} />{detail.progressTruncated ? <Text style={styles.partial}>Progress was longer than Orchestrator stores.</Text> : null}</View> : null}</View> : null}
 	</View>;
 }
 
 function JsonPayload({ label, value }: { label: string; value: unknown }) {
 	const styles = useThemedStyles(makeStyles);
 	const note = truncationNote(value);
-	return <View><Text style={styles.detailLabel}>{label.toUpperCase()}</Text>{note ? <Text style={styles.detailCopy}>{note}</Text> : <CodeOutput value={printable(value)} />}</View>;
+	return <View><Text style={styles.detailHeading}>{label}</Text>{note ? <Text style={styles.detailCopy}>{note}</Text> : <CodeOutput value={printable(value)} />}</View>;
 }
 
 function AutoReviewRow({ activity }: { activity: ConversationActivity }) {
 	const t = useTheme();
 	const styles = useThemedStyles(makeStyles);
+	const feedback = usePressFeedback("row");
 	const [open, setOpen] = useState(false);
 	const detail = activity.detail ?? {};
 	const denied = String(detail.status ?? "").toLowerCase().includes("den");
 	const paths = reviewPaths(detail.files);
 	const body = Boolean(detail.rationale || detail.command || detail.cwd || detail.host || detail.decisionSource || paths.length);
-	return <View style={styles.activityWrap}><Pressable disabled={!body} accessibilityRole={body ? "button" : undefined} accessibilityState={body ? { expanded: open } : undefined} onPress={() => { haptics.tap(); setOpen((value) => !value); }} style={styles.activityRow}><Feather name={denied ? "shield-off" : "shield"} size={12} color={denied ? t.red : t.green} /><Text style={[styles.reviewDecision, denied && { color: t.red }]}>{denied ? "Auto-declined" : "Auto-approved"}</Text><Text numberOfLines={1} style={styles.activitySummary}>{activity.summary}</Text>{detail.riskLevel ? <Text style={[styles.risk, ["high", "critical"].includes(detail.riskLevel.toLowerCase()) && { color: t.red }]}>{detail.riskLevel}</Text> : null}{body ? <Feather name={open ? "chevron-up" : "chevron-right"} size={12} color={t.textFaint} /> : null}</Pressable>{open && body ? <View style={styles.activityDetail}><Text style={styles.detailCopy}>{denied ? "The provider declined this on your behalf. You were not asked." : "The provider allowed this on your behalf. You were not asked."}</Text>{detail.rationale ? <Text style={styles.reviewRationale}>{detail.rationale}</Text> : null}{detail.command ? <LabelValue label="cmd" value={detail.command} /> : null}{detail.cwd ? <LabelValue label="cwd" value={detail.cwd} /> : null}{detail.host ? <LabelValue label="host" value={detail.host} /> : null}{paths.length ? <LabelValue label="files" value={paths.join(", ")} /> : null}{detail.decisionSource ? <LabelValue label="by" value={detail.decisionSource} /> : null}</View> : null}</View>;
+	return <View style={styles.activityWrap}><Pressable disabled={!body} accessibilityRole={body ? "button" : undefined} accessibilityState={body ? { expanded: open } : undefined} onPress={() => setOpen((value) => !value)} android_ripple={feedback.android_ripple} style={({ pressed }) => [styles.activityRow, pressed && feedback.pressed]}><Feather name={denied ? "shield-off" : "shield"} size={iconSize.xs} color={denied ? t.red : t.green} /><Text style={[styles.reviewDecision, denied && { color: t.red }]}>{denied ? "Auto-declined" : "Auto-approved"}</Text><Text numberOfLines={1} style={styles.activitySummary}>{activity.summary}</Text>{detail.riskLevel ? <Text style={[styles.risk, ["high", "critical"].includes(detail.riskLevel.toLowerCase()) && { color: t.red }]}>{sentenceCase(detail.riskLevel)}</Text> : null}{body ? <FoldChevron open={open} color={t.textTertiary} /> : null}</Pressable>{open && body ? <View style={styles.activityDetail}><Text style={styles.detailCopy}>{denied ? "The provider declined this on your behalf. You were not asked." : "The provider allowed this on your behalf. You were not asked."}</Text>{detail.rationale ? <Text style={styles.reviewRationale}>{detail.rationale}</Text> : null}{detail.command ? <LabelValue label="cmd" value={detail.command} /> : null}{detail.cwd ? <LabelValue label="cwd" value={detail.cwd} /> : null}{detail.host ? <LabelValue label="host" value={detail.host} /> : null}{paths.length ? <LabelValue label="files" value={paths.join(", ")} /> : null}{detail.decisionSource ? <LabelValue label="by" value={detail.decisionSource} /> : null}</View> : null}</View>;
 }
 
 function FileChangeActivity({ activity }: { activity: ConversationActivity }) {
@@ -685,19 +1123,21 @@ function FileChangeActivity({ activity }: { activity: ConversationActivity }) {
 function ExpandableFileList({ title, files, fallbackPatch, fallbackPatchTruncated, live }: { title: string; files: ReturnType<typeof fileChanges>; fallbackPatch?: string; fallbackPatchTruncated?: boolean; live?: boolean }) {
 	const t = useTheme();
 	const styles = useThemedStyles(makeStyles);
+	const feedback = usePressFeedback("row");
 	const [openOverride, setOpenOverride] = useState<boolean | null>(null);
 	const open = openOverride ?? Boolean(live && (fallbackPatch || files.some((file) => file.patch)));
 	const expandable = files.length > 0 || Boolean(fallbackPatch);
-	return <View><Pressable disabled={!expandable} accessibilityRole={expandable ? "button" : undefined} accessibilityState={expandable ? { expanded: open } : undefined} onPress={() => { haptics.tap(); setOpenOverride(!open); }} style={styles.activityRow}><Feather name="edit-3" size={12} color={t.accent} /><Text numberOfLines={2} style={styles.activitySummary}>{title}</Text>{expandable ? <Feather name={open ? "chevron-up" : "chevron-right"} size={12} color={t.textFaint} /> : null}</Pressable>{open ? <View style={styles.activityDetail}>{files.map((file) => <FileChangeRow key={`${file.oldPath ?? ""}:${file.path}`} file={file} live={live} />)}{fallbackPatch ? <PatchBlock patch={fallbackPatch} truncated={fallbackPatchTruncated} /> : null}</View> : null}</View>;
+	return <View><Pressable disabled={!expandable} accessibilityRole={expandable ? "button" : undefined} accessibilityState={expandable ? { expanded: open } : undefined} onPress={() => setOpenOverride(!open)} android_ripple={feedback.android_ripple} style={({ pressed }) => [styles.activityRow, pressed && feedback.pressed]}><Feather name="edit-3" size={iconSize.xs} color={t.accent} /><Text numberOfLines={2} style={styles.activitySummary}>{title}</Text>{expandable ? <FoldChevron open={open} color={t.textTertiary} /> : null}</Pressable>{open ? <View style={styles.activityDetail}>{files.map((file) => <FileChangeRow key={`${file.oldPath ?? ""}:${file.path}`} file={file} live={live} />)}{fallbackPatch ? <PatchBlock patch={fallbackPatch} truncated={fallbackPatchTruncated} /> : null}</View> : null}</View>;
 }
 
 function FileChangeRow({ file, live }: { file: ReturnType<typeof fileChanges>[number]; live?: boolean }) {
 	const t = useTheme();
 	const styles = useThemedStyles(makeStyles);
+	const feedback = usePressFeedback("row");
 	const [open, setOpen] = useState(Boolean(live && file.patch));
 	const hasPatch = Boolean(file.patch);
 	const mark = file.status === "added" ? "A" : file.status === "deleted" ? "D" : file.status === "renamed" ? "R" : "M";
-	return <View><Pressable disabled={!hasPatch} accessibilityRole={hasPatch ? "button" : undefined} accessibilityState={hasPatch ? { expanded: open } : undefined} onPress={() => { haptics.tap(); setOpen((value) => !value); }} style={styles.fileRow}><Text style={[styles.fileMark, { color: file.status === "deleted" ? t.red : file.status === "added" ? t.green : t.accent }]}>{mark}</Text><Text selectable numberOfLines={2} style={styles.filePath}>{file.oldPath ? `${file.oldPath} → ${file.path}` : file.path}</Text><Text style={styles.fileStat}>+{file.additions} −{file.deletions}</Text>{hasPatch ? <Feather name={open ? "chevron-up" : "chevron-right"} size={12} color={t.textFaint} /> : null}</Pressable>{open && file.patch ? <PatchBlock patch={file.patch} truncated={file.patchTruncated} /> : null}</View>;
+	return <View><Pressable disabled={!hasPatch} accessibilityRole={hasPatch ? "button" : undefined} accessibilityState={hasPatch ? { expanded: open } : undefined} onPress={() => setOpen((value) => !value)} android_ripple={feedback.android_ripple} style={({ pressed }) => [styles.fileRow, hasPatch && styles.fileRowTap, pressed && feedback.pressed]}><Text style={[styles.fileMark, { color: file.status === "deleted" ? t.red : file.status === "added" ? t.green : t.accent }]}>{mark}</Text><Text selectable numberOfLines={2} style={styles.filePath}>{file.oldPath ? `${file.oldPath} → ${file.path}` : file.path}</Text><Text style={styles.fileStat}>+{file.additions} −{file.deletions}</Text>{hasPatch ? <FoldChevron open={open} color={t.textTertiary} /> : null}</Pressable>{open && file.patch ? <PatchBlock patch={file.patch} truncated={file.patchTruncated} /> : null}</View>;
 }
 
 function PatchBlock({ patch, truncated }: { patch: string; truncated?: boolean }) {
@@ -709,19 +1149,30 @@ function PatchBlock({ patch, truncated }: { patch: string; truncated?: boolean }
 function PlanActivity({ activity }: { activity: ConversationActivity }) {
 	const t = useTheme();
 	const styles = useThemedStyles(makeStyles);
+	const feedback = usePressFeedback("row");
 	const [open, setOpen] = useState(activity.status === "running");
 	const steps = activity.detail?.steps ?? [];
+	// A plan activity is hidden when its turn carries a turn-level plan, so this row
+	// shows a plan whose turn has none: one AO could not match to a turn, such as a
+	// plan from before the controller started. With steps it is the same checklist,
+	// so it gets the same panel, drawn as the desktop draws it. Not the summary as a title: for Codex it is "Plan 3/7:
+	// <step>", which repeats the header's count and current step. Not `live`
+	// either: the row is "running" while any step is unfinished, not while the
+	// turn runs, so an interrupted turn's plan would stay busy for good.
+	if (steps.length) return <TurnPlan plan={{ explanation: activity.detail?.explanation, steps }} />;
 	return <View style={styles.planCard}><Pressable
 			accessibilityRole="button"
 			accessibilityState={{ expanded: open }}
-			style={styles.planHeader}
-			onPress={() => { haptics.tap(); setOpen((value) => !value); }}
-			><Feather name="list" size={12} color={t.textTertiary} /><Text style={styles.planTitle}>{activity.summary || "Plan updated"}</Text><Text style={styles.planCount}>{steps.filter((step) => step.status === "completed").length}/{steps.length}</Text><Feather name={open ? "chevron-up" : "chevron-down"} size={12} color={t.textTertiary} /></Pressable>{open ? <View style={styles.planBody}>{activity.detail?.explanation ? <Text style={styles.detailCopy}>{activity.detail.explanation}</Text> : null}{steps.map((step, index) => <View key={index} style={styles.planStep}><Feather name={step.status === "completed" ? "check-circle" : "circle"} size={15} color={step.status === "completed" ? t.green : step.status === "in_progress" ? t.orange : t.textFaint} /><Text style={[styles.planStepText, step.status === "completed" && styles.planDone]}>{step.text}</Text></View>)}{!steps.length ? <Text style={styles.detailCopy}>{activity.detail?.text || activity.summary}</Text> : null}</View> : null}</View>;
+			onPress={() => setOpen((value) => !value)}
+			android_ripple={feedback.android_ripple}
+			style={({ pressed }) => [styles.planHeader, pressed && feedback.pressed]}
+			><Feather name="list" size={iconSize.xs} color={t.textTertiary} /><Text style={styles.planTitle}>{activity.summary || "Plan updated"}</Text><FoldChevron open={open} color={t.textTertiary} /></Pressable>{open ? <View style={styles.planBody}><Text style={styles.detailCopy}>{activity.detail?.text || activity.summary}</Text></View> : null}</View>;
 }
 
 function ActivityRun({ activities }: { activities: ConversationActivity[] }) {
 	const t = useTheme();
 	const styles = useThemedStyles(makeStyles);
+	const feedback = usePressFeedback("row");
 	const [override, setOverride] = useState<boolean | null>(null);
 	const hierarchy = activityHierarchy(activities);
 	if (activities.length === 1 && hierarchy[0]?.children.length === 0) return <ActivityRow activity={activities[0]} />;
@@ -734,27 +1185,28 @@ function ActivityRun({ activities }: { activities: ConversationActivity[] }) {
 		<Pressable
 			accessibilityRole="button"
 			accessibilityState={{ expanded: open }}
-			onPress={() => { haptics.tap(); setOverride(!open); }}
-			style={styles.runSummary}
+			onPress={() => setOverride(!open)}
+			android_ripple={feedback.android_ripple}
+			style={({ pressed }) => [styles.runSummary, pressed && feedback.pressed]}
 		>
 			<Text style={styles.runText}>{summarizeActivities(activities)}</Text>
 			{failed ? <Text style={styles.runFailed}>{failed} failed</Text> : null}
 			{cancelled ? <Text style={styles.runStopped}>{cancelled} stopped</Text> : null}
-			{running ? <ActivityIndicator size="small" color={t.textTertiary} /> : null}
-			<Feather name={open ? "chevron-down" : "chevron-right"} size={12} color={t.textFaint} />
+			{running ? <Spinner size={iconSize.sm} color={t.textTertiary} /> : null}
+			<FoldChevron open={open} color={t.textTertiary} />
 		</Pressable>
 		{open ? <View style={styles.runDetail}>{hierarchy.map((node) => <ActivityTree key={node.activity.id} node={node} />)}</View> : null}
 	</View>;
 }
 
 function ActivityTree({ node }: { node: ActivityNode }) {
-	const styles = useThemedStyles(makeStyles);
 	return <View><ActivityRow activity={node.activity} />{node.children.length ? <NestedAgentRun nodes={node.children} /> : null}</View>;
 }
 
 function NestedAgentRun({ nodes }: { nodes: ActivityNode[] }) {
 	const t = useTheme();
 	const styles = useThemedStyles(makeStyles);
+	const feedback = usePressFeedback("row");
 	const [open, setOpen] = useState(false);
 	const count = countActivityNodes(nodes);
 	const running = activityNodesRunning(nodes);
@@ -763,26 +1215,29 @@ function NestedAgentRun({ nodes }: { nodes: ActivityNode[] }) {
 			accessibilityRole="button"
 			accessibilityLabel={`${open ? "Hide" : "Show"} subagent work, ${count} ${count === 1 ? "step" : "steps"}`}
 			accessibilityState={{ expanded: open }}
-			onPress={() => { haptics.tap(); setOpen((value) => !value); }}
-			style={styles.subagentHeader}
+			onPress={() => setOpen((value) => !value)}
+			android_ripple={feedback.android_ripple}
+			style={({ pressed }) => [styles.subagentHeader, pressed && feedback.pressed]}
 		>
-			<Feather name="git-branch" size={12} color={t.textTertiary} />
-			<Text style={styles.subagentLabel}>SUBAGENT · {count} {count === 1 ? "STEP" : "STEPS"}</Text>
-			{running ? <ActivityIndicator size="small" color={t.textTertiary} /> : null}
-			<Feather name={open ? "chevron-down" : "chevron-right"} size={12} color={t.textFaint} />
+			<Feather name="git-branch" size={iconSize.xs} color={t.textTertiary} />
+			<Text style={styles.subagentLabel}>Subagent · {count} {count === 1 ? "step" : "steps"}</Text>
+			{running ? <Spinner size={iconSize.sm} color={t.textTertiary} /> : null}
+			<FoldChevron open={open} color={t.textTertiary} />
 		</Pressable>
 		{open ? nodes.map((child) => <ActivityTree key={child.activity.id} node={child} />) : null}
 	</View>;
 }
 
 /**
- * The turn's status row, which sits between the prompt and the work: a ticking
- * "Working · 12s" while the turn runs, then "Worked for 20s" once it settles. When
- * there is folded work the settled row is the toggle that reveals it.
+ * The turn's status row, which sits between the prompt and the work: the lattice
+ * and a ticking "12s" while the turn runs (no "Working", like the desktop: the
+ * lattice is the liveness), then "Worked for 20s" once it settles. When there is
+ * folded work the settled row is the toggle that reveals it.
  */
 function TurnStatusRow({ turn, foldable, open, onToggle }: { turn: ConversationTurn; foldable: boolean; open: boolean; onToggle(): void }) {
 	const t = useTheme();
 	const styles = useThemedStyles(makeStyles);
+	const feedback = usePressFeedback("row");
 	const running = turn.state === "running";
 	const [nowMs, setNowMs] = useState(() => Date.now());
 	useEffect(() => {
@@ -801,101 +1256,68 @@ function TurnStatusRow({ turn, foldable, open, onToggle }: { turn: ConversationT
 				? duration ? `Failed after ${duration}` : "Turn failed"
 				: turn.state === "interrupted"
 					? duration ? `Stopped after ${duration}` : "Turn stopped"
-					: workingDuration ? `Working · ${workingDuration}` : "Working";
-	const text = <Text style={[styles.turnState, turn.state === "failed" && { color: t.red }]}>{label}</Text>;
-	// One element throughout, so the spinner can leave and the label slide into
-	// its place when the turn settles instead of the whole row remounting.
+					: turn.state === "cancelled"
+						? "Turn cancelled"
+						// Replayed history carries no real duration, so it names only the
+						// work it folds, and with none there is nothing to say.
+						: turn.state === "recovered"
+							? foldable ? "Work recovered" : ""
+							: workingDuration ?? "";
+	// A settled turn with nothing to name draws no row: an unlabelled one was a
+	// blank band the height of a touch target, with only its divider showing.
+	if (!running && !label) return null;
+	const text = <Text
+		accessibilityLabel={running ? (workingDuration ? `Working for ${workingDuration}` : "Working") : undefined}
+		style={[styles.turnState, running && styles.turnTimer, turn.state === "failed" && { color: t.red }]}
+	>{label}</Text>;
+	// One element throughout, so a settling turn changes the row rather than
+	// remounting it. The row is a touch target tall, as is the startup checklist
+	// header it replaces.
 	return <Pressable
 		accessibilityRole={foldable ? "button" : undefined}
 		accessibilityState={foldable ? { expanded: open } : undefined}
 		disabled={!foldable}
-		onPress={() => { haptics.tap(); onToggle(); }}
-		style={styles.statusRow}
+		onPress={onToggle}
+		android_ripple={feedback.android_ripple}
+		style={({ pressed }) => [styles.statusRow, pressed && feedback.pressed]}
 	>
-		{/* Spinning holds the glyph still under Reduce Motion; loader still reads as in progress. */}
-		{running ? <StatusSpinner><Spinning enabled><Feather name="loader" size={12} color={t.textTertiary} /></Spinning></StatusSpinner> : null}
-		<StatusLabel>{text}</StatusLabel>
-		{foldable ? <FoldChevron open={open} color={t.textFaint} /> : null}
+		{/* The desktop's lattice; it holds still under Reduce Motion, where the ticking label still reads as in progress. */}
+		{running ? <LatticeLoader color={t.textTertiary} /> : null}
+		{text}
+		{foldable ? <FoldChevron open={open} color={t.textTertiary} /> : null}
 	</Pressable>;
 }
 
-function TurnSummary({ turn, onRollback }: { turn: ConversationTurn; onRollback?(turnId: string): Promise<number> }) {
-	const t = useTheme();
+function TurnSummary({ turn, plan }: { turn: ConversationTurn; plan?: ConversationPlan }) {
 	const styles = useThemedStyles(makeStyles);
-	const [confirming, setConfirming] = useState(false);
-	const [rollingBack, setRollingBack] = useState(false);
-	const [rollbackError, setRollbackError] = useState<string>();
-	const settled = turn.state !== "running" && turn.state !== "queued";
-	const canRollBack = Boolean(onRollback && settled && turn.providerTurnId && !turn.rolledBack);
+	// The deliverables a completed turn made show as tiles; every other changed
+	// file stays in the changed-files card, so nothing shows twice or goes
+	// missing (the desktop's TurnResults).
+	const source = useTurnArtifactSource();
+	const results = useMemo(() => turnResults(turn, source), [source, turn]);
+	// Nothing to show draws nothing: an empty one still padded every turn's end,
+	// most of the gap between a reply and the next prompt.
+	// A usage limit gets its own notice, which carries the provider's message.
+	const usageLimited = turn.state === "failed" && turn.usageLimit ? { ...turn, usageLimit: turn.usageLimit } : undefined;
+	if (!plan && !results.artifacts.length && !results.files.length && !turn.errorMessage && !usageLimited) return null;
 	return (
 		<View style={styles.turnWrap}>
-			{turn.plan?.steps.length ? <TurnPlan turn={turn} /> : null}
-			{turn.diff?.files.length ? <ChangedFiles turn={turn} /> : null}
-			{canRollBack ? <View style={styles.turnLine}>
-				<Pressable accessibilityLabel="Roll back to before this turn" hitSlop={8} onPress={() => { haptics.warning(); setConfirming(true); }}>
-					<Feather name="rotate-ccw" size={12} color={t.textTertiary} />
-				</Pressable>
-			</View> : null}
-			{turn.errorMessage ? <Text style={styles.turnError}>{turn.errorMessage}</Text> : null}
-			{confirming ? (
-				<View style={styles.rollbackConfirm}>
-					<Text style={styles.rollbackTitle}>Make the agent forget this turn and everything after it?</Text>
-					<Text style={styles.rollbackCopy}>Files stay changed. Only conversation memory is rolled back, and this cannot be undone.</Text>
-					<View style={styles.actions}>
-						<Action label="Cancel" disabled={rollingBack} onPress={() => { setRollbackError(undefined); setConfirming(false); }} />
-						<Action label={rollingBack ? "Rolling back…" : "Roll back"} disabled={rollingBack} tone="danger" onPress={() => {
-							if (!onRollback || rollingBack) return;
-							setRollingBack(true);
-							setRollbackError(undefined);
-							void onRollback(turn.id).then(() => setConfirming(false)).catch((cause) => {
-								setRollbackError(userFacingError(cause));
-							}).finally(() => setRollingBack(false));
-						}} />
-					</View>
-					{rollbackError ? <Text style={styles.validation}>{rollbackError}</Text> : null}
-				</View>
-			) : null}
+			{plan ? <TurnPlan plan={plan} live={turn.state === "running"} /> : null}
+			{results.artifacts.length && source ? <TurnArtifacts artifacts={results.artifacts} source={source} /> : null}
+			{results.files.length ? <ChangedFiles turn={turn} changed={results.files} /> : null}
+			{usageLimited ? <UsageLimitNotice turn={usageLimited} /> : null}
+			{turn.errorMessage && !usageLimited ? <Text style={styles.turnError}>{turn.errorMessage}</Text> : null}
 		</View>
 	);
 }
 
-function TurnPlan({ turn }: { turn: ConversationTurn }) {
+function ChangedFiles({ turn, changed }: { turn: ConversationTurn; changed: DiffFile[] }) {
 	const t = useTheme();
 	const styles = useThemedStyles(makeStyles);
-	const [open, setOpen] = useState(turn.state === "running");
-	const done = turn.plan?.steps.filter((step) => step.status === "completed").length ?? 0;
-	return (
-		<View style={styles.planCard}>
-			<Pressable
-				accessibilityRole="button"
-				accessibilityState={{ expanded: open }}
-				style={styles.planHeader}
-				onPress={() => { haptics.tap(); setOpen((value) => !value); }}
-				>
-				<Feather name="list" size={12} color={t.textTertiary} />
-				<Text style={styles.planTitle}>Plan</Text>
-				{turn.state === "running" ? <Text style={styles.planLive}>STILL CHANGING</Text> : null}
-				<Text style={styles.planCount}>{done}/{turn.plan?.steps.length ?? 0}</Text>
-				<Feather name={open ? "chevron-up" : "chevron-down"} size={12} color={t.textTertiary} />
-			</Pressable>
-			{open ? <View style={styles.planBody}>
-				{turn.plan?.explanation ? <Text style={styles.detailCopy}>{turn.plan.explanation}</Text> : null}
-				{turn.plan?.steps.map((step, index) => <View key={index} accessibilityLabel={`${step.status.replace("_", " ")}: ${step.text}`} style={styles.planStep}>
-					<Feather name={step.status === "completed" ? "check-circle" : step.status === "in_progress" ? "circle" : "circle"} size={15} color={step.status === "completed" ? t.green : step.status === "in_progress" ? t.orange : t.textFaint} />
-					<Text style={[styles.planStepText, step.status === "completed" && styles.planDone]}>{step.text}</Text>
-					<Text style={styles.planStepState}>{step.status.replace("_", " ")}</Text>
-				</View>)}
-			</View> : null}
-		</View>
-	);
-}
-
-function ChangedFiles({ turn }: { turn: ConversationTurn }) {
-	const t = useTheme();
-	const styles = useThemedStyles(makeStyles);
+	const feedback = usePressFeedback("row");
+	const reviewFeedback = usePressFeedback("button");
 	const files = useFilesNavigation();
 	const [open, setOpen] = useState(false);
-	const changed = turn.diff?.files ?? [];
 	const additions = changed.reduce((sum, file) => sum + file.additions, 0);
 	const deletions = changed.reduce((sum, file) => sum + file.deletions, 0);
 	return <View style={styles.planCard}>
@@ -904,25 +1326,27 @@ function ChangedFiles({ turn }: { turn: ConversationTurn }) {
 				accessibilityRole="button"
 				accessibilityState={{ expanded: open }}
 				accessibilityLabel={`${changed.length} changed ${changed.length === 1 ? "file" : "files"}, ${additions} lines added, ${deletions} removed`}
-				style={[styles.planHeader, styles.changedToggle]}
-				onPress={() => { haptics.tap(); setOpen((value) => !value); }}
+				onPress={() => setOpen((value) => !value)}
+				android_ripple={feedback.android_ripple}
+				style={({ pressed }) => [styles.planHeader, styles.changedToggle, pressed && feedback.pressed]}
 				>
-				<Feather name="file-text" size={12} color={t.textTertiary} />
+				<Feather name="file-text" size={iconSize.xs} color={t.textTertiary} />
 				<Text numberOfLines={1} style={[styles.planTitle, styles.changedTitle]}>{files ? `${changed.length} ${changed.length === 1 ? "file" : "files"}` : `${changed.length} changed ${changed.length === 1 ? "file" : "files"}`}</Text>
-				{turn.state === "running" ? <><Text numberOfLines={1} style={styles.planLive}>GROWING</Text><ActivityIndicator size="small" color={t.textTertiary} /></> : null}
-				<Text style={{ fontFamily: "Geist_400Regular", color: t.green, fontSize: type.caption2.fontSize }}>+{additions}</Text>
-				<Text style={{ fontFamily: "Geist_400Regular", color: t.red, fontSize: type.caption2.fontSize }}>−{deletions}</Text>
-				<Feather name={open ? "chevron-up" : "chevron-down"} size={12} color={t.textTertiary} />
+				{turn.state === "running" ? <><Text numberOfLines={1} style={styles.planLive}>Growing</Text><Spinner size={iconSize.sm} color={t.textTertiary} /></> : null}
+				<Text style={[styles.changedStat, { color: t.green }]}>+{additions}</Text>
+				<Text style={[styles.changedStat, { color: t.red }]}>−{deletions}</Text>
+				<FoldChevron open={open} color={t.textTertiary} />
 			</Pressable>
 			{files ? <Pressable
 				accessibilityRole="button"
 				accessibilityLabel="Review changes"
 				accessibilityHint="Opens every changed file in this session"
-				hitSlop={6}
-				onPress={() => { haptics.tap(); files.openChanges(); }}
-				style={({ pressed }) => [styles.changedReview, pressed && { opacity: press.opacity }]}
+				hitSlop={(touchTarget - REVIEW_PILL_HEIGHT) / 2}
+				onPress={() => files.openChanges()}
+				android_ripple={reviewFeedback.android_ripple}
+				style={({ pressed }) => [styles.changedReview, pressed && reviewFeedback.pressed]}
 			>
-				<Feather name="file-diff" size={12} color={t.textPrimary} />
+				<AppSymbol name="diff" size={iconSize.sm} color={t.textPrimary} />
 				<Text style={styles.changedReviewText}>Review</Text>
 			</Pressable> : null}
 		</View>
@@ -931,7 +1355,7 @@ function ChangedFiles({ turn }: { turn: ConversationTurn }) {
 				<Text style={[styles.fileMark, { color: file.status === "deleted" ? t.red : file.status === "added" ? t.green : t.accent }]}>{file.status[0].toUpperCase()}</Text>
 				<Text selectable={!files} style={styles.filePath}>{file.oldPath ? `${file.oldPath} → ${file.path}` : file.path}</Text>
 				<Text style={styles.fileStat}>+{file.additions} −{file.deletions}</Text>
-				{files ? <Feather name="chevron-right" size={12} color={t.textFaint} /> : null}
+				{files ? <AppSymbol name="chevronForward" size={iconSize.sm} color={t.textTertiary} /> : null}
 			</>;
 			return files
 				? <Pressable
@@ -939,8 +1363,9 @@ function ChangedFiles({ turn }: { turn: ConversationTurn }) {
 					accessibilityRole="button"
 					accessibilityLabel={`${file.path}, ${file.status}, ${file.additions} added, ${file.deletions} removed`}
 					accessibilityHint="Opens the diff"
-					onPress={() => { haptics.tap(); files.openFile(file.path, file.oldPath); }}
-					style={({ pressed }) => [styles.fileRow, styles.fileRowTap, pressed && { opacity: press.opacity }]}
+					onPress={() => files.openFile(file.path, file.oldPath)}
+					android_ripple={feedback.android_ripple}
+					style={({ pressed }) => [styles.fileRow, styles.fileRowTap, pressed && feedback.pressed]}
 				>{row}</Pressable>
 				: <View key={`${file.oldPath}:${file.path}`} style={styles.fileRow}>{row}</View>;
 		})}{turn.diff?.truncated ? <Text style={[styles.partial, { color: t.amber }]}>{files ? "This turn changed more files than Orchestrator lists here. Review changes shows all of them." : "This turn changed more files than Orchestrator lists here. Open the worktree shell for the complete diff."}</Text> : null}</View> : null}
@@ -971,7 +1396,7 @@ function ApprovalCard({ activity, busy, onDecide, handledBelow }: { activity: Co
 	const command = activity.detail?.command ?? activity.summary;
 	if (pending && handledBelow) return <RequestEcho title={presentation.title} detail={command} />;
 	if (!pending) return <View style={styles.approvalResolved}>
-		<Feather name={presentation.icon} size={12} color={t.textFaint} />
+		<Feather name={presentation.icon} size={iconSize.xs} color={t.textFaint} />
 		<Text style={styles.approvalResolvedLabel}>{presentation.title}</Text>
 		<Text selectable numberOfLines={1} style={styles.approvalResolvedCommand}>{command}</Text>
 	</View>;
@@ -979,16 +1404,23 @@ function ApprovalCard({ activity, busy, onDecide, handledBelow }: { activity: Co
 		<View style={styles.approvalStatus}><View style={styles.approvalDot} /><Text style={styles.approvalStatusText}>{presentation.title}</Text></View>
 		{activity.detail?.reason ? <Text selectable style={styles.requestCopy}>{activity.detail.reason}</Text> : null}
 		<View style={styles.approvalCommandSurface}>
-			<Feather name="terminal" size={12} color={t.textTertiary} />
+			<Feather name="terminal" size={iconSize.xs} color={t.textTertiary} />
 			<Text selectable style={styles.requestCommand}>{command}</Text>
 		</View>
 		{activity.detail?.cwd ? <LabelValue label="cwd" value={activity.detail.cwd} /> : null}
 		{activity.decisions?.length ? <View style={styles.approvalActions}>{activity.decisions.map((decision, index) => {
 			const label = submitting === decision.id ? "Sending…" : decision.label;
-			return <ElicitationAction key={decision.id} label={label} width={actionControlWidth(label, index === 0)} primary={index === 0} disabled={busy || Boolean(submitting) || !activity.requestId} onPress={() => {
+			// One haptic per decision, when it lands: the press itself only starts the work.
+			return <ElicitationAction key={decision.id} label={label} primary={index === 0} reportsOutcome disabled={busy || Boolean(submitting) || !activity.requestId} onPress={() => {
 				setSubmitting(decision.id);
 				setSubmitError(undefined);
-				void onDecide(activity.requestId ?? "", decision.id).catch((cause) => setSubmitError(userFacingError(cause))).finally(() => setSubmitting(undefined));
+				void onDecide(activity.requestId ?? "", decision.id)
+					.then(() => haptics.success())
+					.catch((cause) => {
+						setSubmitError(userFacingError(cause));
+						haptics.error();
+					})
+					.finally(() => setSubmitting(undefined));
 			}} />;
 		})}</View> : <Text style={[styles.partial, { color: t.amber }]}>The agent offered no decisions Orchestrator can present. Open diagnostics from the host.</Text>}
 		{submitError ? <Text accessibilityRole="alert" selectable style={styles.validation}>{submitError}</Text> : null}
@@ -1018,17 +1450,22 @@ function UserInputCard({ activity, busy, onResolve, handledBelow }: { activity: 
 		if (submitting || !activity.requestId) return;
 		setSubmitting(true);
 		setSubmitError(undefined);
-		try { await onResolve(activity.requestId, action, content); }
-		catch (cause) { setSubmitError(userFacingError(cause)); }
-		finally { setSubmitting(false); }
+		// One haptic per answer, when it lands: the press itself only starts the work.
+		try {
+			await onResolve(activity.requestId, action, content);
+			haptics.success();
+		} catch (cause) {
+			setSubmitError(userFacingError(cause));
+			haptics.error();
+		} finally { setSubmitting(false); }
 	};
 	const submit = () => {
 		const visibleRequired = visibleProperties.flatMap(([name]) => schema?.required?.includes(name) ? [name] : []);
 		const missing = missingRequiredInputs(visibleRequired, values);
-		if (missing.length) { setValidationError(`Complete ${missing.join(", ")} before continuing.`); return; }
+		if (missing.length) { setValidationError(`Complete ${missing.join(", ")} before continuing.`); haptics.error(); return; }
 		for (const [name, property] of visibleProperties) {
 			const problem = validateInput(property, values[name]);
-			if (problem) { setValidationError(`${property.title || humanizeInputName(name)} ${problem}.`); return; }
+			if (problem) { setValidationError(`${property.title || humanizeInputName(name)} ${problem}.`); haptics.error(); return; }
 		}
 		setValidationError(undefined);
 		if (hasNextQuestion) {
@@ -1042,53 +1479,35 @@ function UserInputCard({ activity, busy, onResolve, handledBelow }: { activity: 
 		{promptCopy ? <Text style={styles.requestCopy}>{promptCopy}</Text> : null}
 		{pending && activity.detail?.inputMode === "url" ? <View style={styles.urlBox}><Text selectable style={styles.urlText}>{url?.href ?? "The provider supplied an unsafe or invalid URL."}</Text></View> : null}
 		{pending && activity.detail?.inputMode !== "url" && schema?.properties ? <View style={styles.form}>
-			{visibleProperties.map(([name, property]) => <InputField key={name} name={name} property={property} required={schema.required?.includes(name) ?? false} value={values[name]} onChange={(value) => { setValidationError(undefined); setValues((old) => ({ ...old, [name]: value })); }} />)}
+			{visibleProperties.map(([name, property]) => <ElicitationInputField key={name} name={name} property={property} required={schema.required?.includes(name) ?? false} value={values[name]} onChange={(value) => { setValidationError(undefined); setValues((old) => ({ ...old, [name]: value })); }} />)}
 		</View> : null}
 		{validationError ? <Text accessibilityRole="alert" style={styles.validation}>{validationError}</Text> : null}
 		{submitError ? <Text accessibilityRole="alert" style={styles.validation}>{submitError}</Text> : null}
 		{pending && activity.requestId ? <View style={styles.inputActions}>
-			<ElicitationAction label="Cancel" disabled={busy || submitting} onPress={() => void resolve("cancel")} />
-			<ElicitationAction label={activity.detail?.inputMode === "url" ? "Decline" : "Skip"} disabled={busy || submitting} onPress={() => void resolve("decline")} />
+			<ElicitationAction label="Cancel" reportsOutcome disabled={busy || submitting} onPress={() => void resolve("cancel")} />
+			<ElicitationAction label={activity.detail?.inputMode === "url" ? "Decline" : "Skip"} reportsOutcome disabled={busy || submitting} onPress={() => void resolve("decline")} />
 			<View style={{ flex: 1 }} />
-			{activity.detail?.inputMode !== "url" && hasPreviousQuestion ? <ElicitationAction label="Back" disabled={busy || submitting} onPress={() => { setValidationError(undefined); setActiveQuestion((current) => Math.max(0, current - 1)); }} /> : null}
-			{activity.detail?.inputMode === "url" ? <ElicitationAction label={submitting ? "Opening…" : "Open link"} primary disabled={busy || submitting || !url} onPress={() => {
+			{/* Stepping between questions is navigation, silent both ways. */}
+			{activity.detail?.inputMode !== "url" && hasPreviousQuestion ? <ElicitationAction label="Back" reportsOutcome disabled={busy || submitting} onPress={() => { setValidationError(undefined); setActiveQuestion((current) => Math.max(0, current - 1)); }} /> : null}
+			{activity.detail?.inputMode === "url" ? <ElicitationAction label={submitting ? "Opening…" : "Open link"} primary reportsOutcome disabled={busy || submitting || !url} onPress={() => {
 				if (!url) return;
 				void Linking.openURL(url.href)
 					.then(() => resolve("accept"))
-					.catch(() => setValidationError("This link could not be opened on this device."));
-			}} /> : <ElicitationAction label={submitting ? "Sending…" : step.primaryLabel} primary disabled={busy || submitting} onPress={submit} />}
+					.catch(() => {
+						setValidationError("This link could not be opened on this device.");
+						haptics.error();
+					});
+			}} /> : <ElicitationAction label={submitting ? "Sending…" : step.primaryLabel} primary reportsOutcome disabled={busy || submitting} onPress={submit} />}
 		</View> : pending ? <Text style={[styles.partial, { color: t.amber }]}>This request has no provider identity, so Orchestrator cannot answer it safely. Open diagnostics on the host.</Text> : <Text style={styles.partial}>Already answered. This card is kept for the record.</Text>}
 	</View>;
 }
-
-function InputField({ name, property, required, value, onChange }: { name: string; property: InputProperty; required: boolean; value: unknown; onChange(value: unknown): void }) {
-	const t = useTheme();
-	const styles = useThemedStyles(makeStyles);
-	const label = `${property.title || humanizeInputName(name)}${required ? " *" : ""}`;
-	if (property.type === "boolean") return <View style={styles.switchRow}><Text style={styles.inputLabel}>{label}</Text><Switch accessibilityLabel={label} value={Boolean(value)} onValueChange={onChange} trackColor={{ true: t.accent }} /></View>;
-	const options = inputOptions(property);
-	if (options.length) {
-		const multi = property.type === "array";
-		return <View style={styles.field}>
-			<Text style={styles.inputEyebrow}>{label}</Text>
-			{property.description ? <Text style={styles.inputQuestion}>{property.description}</Text> : null}
-			<ElicitationChoiceList choices={options} multi={multi} selected={(choice) => multi ? Array.isArray(value) && value.includes(choice) : value === choice} onChange={(choice) => onChange(multi ? toggleInputValue(Array.isArray(value) ? value : [], choice) : choice)} />
-		</View>;
-	}
-	return <View style={styles.field}>
-		<Text style={styles.inputLabel}>{label}</Text>
-		{property.description ? <Text style={styles.inputHint}>{property.description}</Text> : null}
-		<ElicitationTextField label={label} value={value} numeric={property.type === "number" || property.type === "integer"} maxLength={property.maxLength} onChange={onChange} />
-	</View>;
-}
-
 
 function CompactionMarker({ activity }: { activity: ConversationActivity }) {
 	const t = useTheme();
 	const styles = useThemedStyles(makeStyles);
 	const after = activity.detail?.tokensAfter;
 	const window = activity.detail?.contextWindow;
-	return <View style={styles.compaction}><Feather name="archive" size={12} color={t.textFaint} /><Text style={styles.compactionText}>HISTORY COMPACTED{activity.detail?.tokensReclaimed ? `  −${formatTokens(activity.detail.tokensReclaimed)}` : ""}{after && window ? `  ${Math.round((after / window) * 100)}% FULL` : ""}</Text></View>;
+	return <View style={styles.compaction}><Feather name="archive" size={iconSize.xs} color={t.textFaint} /><Text style={styles.compactionText}>History compacted{activity.detail?.tokensReclaimed ? ` · −${formatTokens(activity.detail.tokensReclaimed)}` : ""}{after && window ? ` · ${Math.round((after / window) * 100)}% full` : ""}</Text></View>;
 }
 
 function ErrorActivity({ activity }: { activity: ConversationActivity }) {
@@ -1098,25 +1517,17 @@ function ErrorActivity({ activity }: { activity: ConversationActivity }) {
 	// usage-limit text as both summary and detail.error — so rendering each in
 	// turn printed one failure twice inside this card. Same rule as the renderer.
 	const { headline, detail } = providerErrorCopy(activity);
-	return <View style={[styles.errorCard, { borderColor: t.tintRed }]}><Feather name="alert-triangle" size={15} color={t.red} /><View style={{ flex: 1 }}><Text style={styles.errorTitle}>{headline}</Text>{detail ? <Text selectable style={styles.errorCopy}>{detail}</Text> : null}</View></View>;
+	return <View style={[styles.errorCard, { borderColor: t.tintRed }]}><Feather name="alert-triangle" size={iconSize.sm} color={t.red} /><View style={{ flex: 1 }}><Text style={styles.errorTitle}>{headline}</Text>{detail ? <Text selectable style={styles.errorCopy}>{detail}</Text> : null}</View></View>;
 }
 
 function EmptyConversation({ controller }: { controller: string }) {
 	const styles = useThemedStyles(makeStyles);
-	return <View style={styles.empty}><View style={styles.emptyMascot}><MascotLamp size={48} /></View><Text style={styles.emptyTitle}>{controller === "connecting" ? "Connecting to the agent…" : "Start with a task"}</Text></View>;
-}
-
-function Action({ label, hint, onPress, primary, tone, disabled }: { label: string; hint?: string; onPress(): void; primary?: boolean; tone?: "danger"; disabled?: boolean }) {
-	const t = useTheme();
-	const styles = useThemedStyles(makeStyles);
-	const fill = tone === "danger" ? t.tintRed : primary ? t.accent : t.bgElevated;
-	const ink = tone === "danger" ? t.red : primary ? t.onAccent : t.textPrimary;
-	return <Pressable accessibilityRole="button" accessibilityState={{ disabled }} disabled={disabled} onPress={() => { if (tone === "danger") haptics.warning(); else haptics.tap(); onPress(); }} style={({ pressed }) => [styles.action, { backgroundColor: fill }, pressed && { opacity: 0.75 }, disabled && { opacity: 0.45 }]}><Text style={[styles.actionLabel, { color: ink }]}>{label}</Text>{hint ? <Text style={styles.actionHint}>{hint}</Text> : null}</Pressable>;
+	return <View style={styles.empty}><View style={styles.emptyMascot}><MascotLamp size={48} /></View><Text accessibilityRole="header" style={styles.emptyTitle}>{controller === "connecting" ? "Connecting to the agent…" : "Start with a task"}</Text></View>;
 }
 
 function LabelValue({ label, value }: { label: string; value: string }) { const styles = useThemedStyles(makeStyles); return <View style={styles.labelValue}><Text style={styles.detailLabel}>{label}</Text><Text selectable style={styles.detailValue}>{value}</Text></View>; }
 function CodeOutput({ value }: { value: string }) { const styles = useThemedStyles(makeStyles); return <Pressable onLongPress={() => { void Clipboard.setStringAsync(value); haptics.success(); }}><Text selectable style={styles.output}>{value}</Text></Pressable>; }
-function FileList({ files }: { files: unknown[] }) { const styles = useThemedStyles(makeStyles); return <View style={styles.fileBody}>{files.map((file, index) => <Text key={index} selectable style={styles.filePath}>• {typeof file === "string" ? file : printable(file)}</Text>)}</View>; }
+function FileList({ files }: { files: unknown[] }) { const styles = useThemedStyles(makeStyles); return <View style={styles.fileBody}>{files.map((file, index) => <View key={index} style={styles.fileListRow}><FirstLineMarker lineStyle={styles.fileLine} style={styles.fileBulletColumn}><View style={styles.fileBullet} /></FirstLineMarker><Text selectable style={styles.filePath}>{typeof file === "string" ? file : printable(file)}</Text></View>)}</View>; }
 
 function printable(value: unknown): string {
 	if (value === null || value === undefined) return "";
@@ -1154,6 +1565,9 @@ function formatBytes(bytes: number): string {
 	return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
 }
 
+/** "high" or "HIGH" as "High": a provider's word, shown in sentence case. */
+function sentenceCase(value: string): string { return value ? value[0].toUpperCase() + value.slice(1).toLowerCase() : value; }
+
 function lastLine(value: string): string { return value.trimEnd().split("\n").at(-1) ?? ""; }
 
 function activityMeta(activity: ConversationActivity): { icon: keyof typeof Feather.glyphMap; prefix?: string; color(t: Theme): string } {
@@ -1168,148 +1582,154 @@ function activityMeta(activity: ConversationActivity): { icon: keyof typeof Feat
 
 function elapsed(start?: string, end?: string): string | undefined { if (!start || !end) return undefined; const ms = Date.parse(end) - Date.parse(start); if (!Number.isFinite(ms) || ms < 0) return undefined; const seconds = Math.round(ms / 1000); return seconds < 60 ? `${seconds}s` : `${Math.floor(seconds / 60)}m ${seconds % 60}s`; }
 function formatTokens(value: number): string { return value >= 1_000 ? `${(value / 1_000).toFixed(value >= 10_000 ? 0 : 1)}k` : String(value); }
-const makeStyles = (t: Theme) => StyleSheet.create({
-	timelineWrap: { flex: 1, position: "relative", backgroundColor: t.bgBase },
-	detachedEditor: { paddingHorizontal: space.md, paddingTop: space.xs, paddingBottom: space.xs, backgroundColor: t.bgBase },
-	emptySurface: { flex: 1, justifyContent: "center" },
-	list: { flex: 1, backgroundColor: t.bgBase },
-	content: { paddingHorizontal: space.xl, paddingTop: space.md, paddingBottom: space.xxxl },
-	older: { alignSelf: "center", flexDirection: "row", gap: space.xs, alignItems: "center", paddingHorizontal: space.md, paddingVertical: space.sm, marginBottom: space.md },
-	olderText: { fontFamily: "Geist_400Regular", color: t.textTertiary, fontSize: type.caption1.fontSize },
-	userRow: { alignItems: "flex-end", paddingTop: space.lg, paddingBottom: space.sm },
-	userMenu: { maxWidth: "88%" },
-	menuBubble: { maxWidth: "100%" },
-	userBubble: { maxWidth: "88%", backgroundColor: userMessageSurfaceStyle(t).backgroundColor, borderRadius: 20, borderCurve: "continuous", paddingHorizontal: space.lg, paddingVertical: space.md },
-	quotedBubble: { width: "88%" },
-	userText: { fontFamily: "Geist_400Regular", color: userMessageSurfaceStyle(t).foregroundColor, fontSize: type.callout.fontSize, lineHeight: type.callout.lineHeight },
-	delivery: { fontFamily: "Geist_400Regular", marginTop: space.xxs, color: t.amber, fontSize: type.caption2.fontSize },
-	attachments: { flexDirection: "row", flexWrap: "wrap", gap: space.xs },
-	attachmentsSpaced: { marginTop: space.sm },
-	attachmentTile: { overflow: "hidden", borderRadius: 8, backgroundColor: t.bgColumn },
-	attachmentTileImage: { width: "100%", height: "100%" },
-	// alignSelf keeps a chip its own height next to a tile: the row container's
-	// default stretch would otherwise blow it up to the tile's 104/160px.
-	attachmentChip: { alignSelf: "flex-start", flexDirection: "row", alignItems: "center", gap: space.xs, borderRadius: 8, borderWidth: 1, borderColor: t.borderSubtle, paddingHorizontal: space.sm, paddingVertical: space.xs },
-	attachmentName: { fontFamily: "Geist_400Regular", flexShrink: 1, color: t.textSecondary, fontSize: type.caption1.fontSize },
-	attachmentRetry: { fontFamily: "Geist_600SemiBold", color: t.accent, fontSize: type.caption2.fontSize, fontWeight: "600" },
-	originMessage: { marginVertical: space.sm, borderLeftWidth: 2, borderLeftColor: t.borderStrong, paddingLeft: space.sm, gap: space.xxs },
-	originHeader: { flexDirection: "row", alignItems: "center", gap: space.xxs },
-	originLabel: { fontFamily: "Geist_600SemiBold", color: t.textTertiary, fontSize: type.caption2.fontSize, fontWeight: "600", textTransform: "uppercase", letterSpacing: 0.7 },
-	originText: { fontFamily: "Geist_400Regular", color: t.textSecondary, fontSize: type.subheadline.fontSize, lineHeight: type.subheadline.lineHeight },
-	originMore: { alignSelf: "flex-start", flexDirection: "row", alignItems: "center", gap: space.xxs, paddingVertical: space.xxs },
-	originMoreText: { fontFamily: "Geist_600SemiBold", color: t.accent, fontSize: type.caption2.fontSize, fontWeight: "600" },
-	steerBubble: { backgroundColor: t.bgSubtle },
-	steerLabel: { fontFamily: "Geist_600SemiBold", color: t.textTertiary, fontSize: type.caption2.fontSize, letterSpacing: 1, fontWeight: "600", marginBottom: space.hair },
-	assistantRow: { paddingVertical: space.lg },
-	sender: { fontFamily: "Geist_600SemiBold", color: t.textTertiary, fontSize: type.caption2.fontSize, fontWeight: "600", marginBottom: space.xxs },
-	responseActions: { flexDirection: "row", alignItems: "center", gap: space.md },
-	copy: { alignSelf: "flex-start", alignItems: "center", justifyContent: "center", width: 28, height: 28, marginTop: space.hair, marginLeft: -7 },
-	jump: { position: "absolute", right: 14, bottom: 12, minHeight: 36, flexDirection: "row", alignItems: "center", gap: space.xs, paddingHorizontal: space.md, borderRadius: 16, backgroundColor: jumpToLatestColors(t).backgroundColor, borderWidth: 1, borderColor: t.borderStrong },
-	jumpText: { fontFamily: "Geist_600SemiBold", color: t.textPrimary, fontSize: type.caption2.fontSize, fontWeight: "600" },
-	systemSignal: { marginVertical: space.xs, flexDirection: "row", alignItems: "flex-start", gap: space.sm, borderWidth: 1, borderColor: t.borderDefault, borderRadius: 8, backgroundColor: t.bgSurface, padding: space.sm },
-	systemTitle: { fontFamily: "Geist_600SemiBold", color: t.textPrimary, fontSize: type.caption2.fontSize, fontWeight: "600" },
-	systemDetail: { fontFamily: "Geist_400Regular", color: t.textTertiary, fontSize: type.caption2.fontSize, lineHeight: type.caption2.lineHeight, marginTop: space.hair },
-	activityWrap: { paddingVertical: space.hair },
-	activityRow: { minHeight: 34, flexDirection: "row", alignItems: "center", gap: space.sm, paddingVertical: space.xs },
-	activitySummary: { flex: 1, color: t.textSecondary, fontSize: type.footnote.fontSize, lineHeight: type.footnote.lineHeight, fontFamily: t.fontMono },
-	server: { color: t.textTertiary, fontSize: type.caption2.fontSize, fontFamily: t.fontMono },
-	activityProgress: { fontFamily: "Geist_400Regular", maxWidth: "28%", color: t.textFaint, fontSize: type.caption2.fontSize },
-	activityStopped: { fontFamily: "Geist_600SemiBold", color: t.textFaint, fontSize: type.caption2.fontSize, fontWeight: "600" },
-	activityDetail: { marginLeft: space.xl, marginBottom: space.xs, borderLeftWidth: 1, borderLeftColor: t.borderSubtle, paddingLeft: space.md, gap: space.xs },
-	terminalInput: { gap: space.xxs },
-	terminalInputTitle: { flexDirection: "row", alignItems: "center", gap: space.xxs },
-	reviewDecision: { fontFamily: "Geist_600SemiBold", color: t.green, fontSize: type.caption2.fontSize, fontWeight: "600" },
-	risk: { fontFamily: "Geist_600SemiBold", color: t.amber, fontSize: type.caption2.fontSize, fontWeight: "600", textTransform: "uppercase" },
-	reviewRationale: { fontFamily: "Geist_400Regular", color: t.textPrimary, backgroundColor: t.bgColumn, borderRadius: 8, padding: space.sm, fontSize: type.caption2.fontSize, lineHeight: type.caption2.lineHeight },
-	runWrap: { paddingVertical: space.hair },
-	runSummary: { minHeight: 34, flexDirection: "row", alignItems: "center", gap: space.sm, paddingVertical: space.xs },
-	runText: { fontFamily: "Geist_400Regular", flex: 1, color: t.textTertiary, fontSize: type.caption1.fontSize },
-	runFailed: { fontFamily: "Geist_600SemiBold", color: t.red, fontSize: type.caption2.fontSize, fontWeight: "600" },
-	runStopped: { fontFamily: "Geist_600SemiBold", color: t.textFaint, fontSize: type.caption2.fontSize, fontWeight: "600" },
-	runDetail: { marginBottom: space.xs, borderRadius: 8, borderWidth: 1, borderColor: t.borderSubtle, backgroundColor: t.bgSubtle, paddingHorizontal: space.sm, paddingVertical: space.hair },
-	subagent: { marginLeft: space.xl, marginBottom: space.xxs, borderLeftWidth: 1, borderLeftColor: t.borderStrong, paddingLeft: space.sm },
-	subagentHeader: { minHeight: 34, flexDirection: "row", alignItems: "center", gap: space.xs, paddingVertical: space.xs },
-	subagentLabel: { fontFamily: "Geist_400Regular", flex: 1, color: t.textFaint, fontSize: type.caption2.fontSize, letterSpacing: 0.8 },
-	detailCopy: { fontFamily: "Geist_400Regular", color: t.textSecondary, fontSize: type.footnote.fontSize, lineHeight: type.footnote.lineHeight },
-	labelValue: { flexDirection: "row", gap: space.sm },
-	detailLabel: { width: 30, color: t.textFaint, fontSize: type.caption2.fontSize, fontFamily: t.fontMono },
-	detailValue: { flex: 1, color: t.textSecondary, fontSize: type.caption2.fontSize, fontFamily: t.fontMono },
-	output: { color: t.textSecondary, backgroundColor: t.bgColumn, borderRadius: 8, padding: space.sm, fontFamily: t.fontMono, fontSize: type.caption2.fontSize, lineHeight: type.caption2.lineHeight },
-	partial: { fontFamily: "Geist_400Regular", color: t.textFaint, fontSize: type.caption2.fontSize },
-	turnWrap: { paddingTop: space.sm, paddingBottom: space.lg, gap: space.sm },
-	turnLine: { flexDirection: "row", alignItems: "center", justifyContent: "flex-end", gap: space.sm },
-	// Full width with a rule under it, matching the desktop's Working / Worked
-	// rows and the setup checklist header, so the line holds through the handoff.
-	statusRow: { minHeight: 34, flexDirection: "row", alignItems: "center", gap: space.xs, paddingVertical: space.xs, borderBottomWidth: rowDividerWidth, borderBottomColor: t.borderDefault },
-	turnState: { fontFamily: "Geist_500Medium", color: t.textTertiary, fontSize: type.caption1.fontSize, fontWeight: "500" },
-	turnError: { fontFamily: "Geist_400Regular", color: t.red, fontSize: type.caption1.fontSize, lineHeight: type.caption1.lineHeight, textAlign: "right" },
-	rollbackConfirm: { marginTop: space.xxs, backgroundColor: t.bgElevated, borderWidth: 1, borderColor: t.borderDefault, borderRadius: 12, padding: space.md, gap: space.xs },
-	rollbackTitle: { fontFamily: "Geist_600SemiBold", color: t.textPrimary, fontWeight: "600", fontSize: type.footnote.fontSize },
-	rollbackCopy: { fontFamily: "Geist_400Regular", color: t.textSecondary, fontSize: type.caption1.fontSize, lineHeight: type.caption1.lineHeight },
-	planCard: { backgroundColor: t.bgSurface, borderRadius: 12, borderCurve: "continuous", borderWidth: StyleSheet.hairlineWidth, borderColor: t.borderDefault, overflow: "hidden" },
-	planHeader: { minHeight: 44, flexDirection: "row", alignItems: "center", gap: space.sm, paddingHorizontal: space.md },
-	changedHeader: { flexDirection: "row", alignItems: "center", paddingRight: space.sm },
-	changedToggle: { flex: 1, minWidth: 0 },
-	changedTitle: { flexShrink: 1 },
-	changedReview: { minHeight: 32, flexDirection: "row", alignItems: "center", gap: space.xxs, paddingHorizontal: space.sm, borderRadius: 999, backgroundColor: t.bgElevatedHover, borderWidth: StyleSheet.hairlineWidth, borderColor: t.borderDefault },
-	changedReviewText: { fontFamily: "Geist_500Medium", fontSize: type.caption1.fontSize, color: t.textPrimary },
-	planTitle: { fontFamily: "Geist_600SemiBold", flex: 1, color: t.textSecondary, fontSize: type.caption1.fontSize, fontWeight: "600" },
-	planLive: { fontFamily: "Geist_600SemiBold", color: t.orange, fontSize: type.caption2.fontSize, letterSpacing: 0.7, fontWeight: "600" },
-	planCount: { color: t.textFaint, fontFamily: t.fontMono, fontSize: type.caption2.fontSize },
-	planBody: { paddingHorizontal: space.sm, paddingBottom: space.sm, gap: space.xs },
-	planStep: { flexDirection: "row", alignItems: "flex-start", gap: space.sm },
-	planStepText: { fontFamily: "Geist_400Regular", flex: 1, color: t.textSecondary, fontSize: type.caption1.fontSize, lineHeight: type.caption1.lineHeight },
-	planStepState: { fontFamily: "Geist_400Regular", color: t.textFaint, fontSize: type.caption2.fontSize, textTransform: "uppercase" },
-	planDone: { color: t.textTertiary, textDecorationLine: "line-through" },
-	fileBody: { paddingHorizontal: space.sm, paddingBottom: space.sm, gap: space.xxs },
-	fileRow: { flexDirection: "row", alignItems: "center", gap: space.xs },
-	fileRowTap: { minHeight: 36 },
-	fileMark: { width: 13, fontFamily: t.fontMono, fontSize: type.caption2.fontSize, fontWeight: "600" },
-	filePath: { flex: 1, color: t.textSecondary, fontFamily: t.fontMono, fontSize: type.caption2.fontSize, lineHeight: type.caption2.lineHeight },
-	fileStat: { color: t.textFaint, fontFamily: t.fontMono, fontSize: type.caption2.fontSize },
-	approvalRequest: { marginVertical: space.md, paddingHorizontal: space.hair, paddingTop: space.xs, paddingBottom: space.lg, gap: space.md },
-	approvalStatus: { flexDirection: "row", alignItems: "center", gap: space.sm },
-	approvalDot: { width: 7, height: 7, borderRadius: 4, backgroundColor: t.amber },
-	approvalStatusText: { fontFamily: "Geist_600SemiBold", color: t.textPrimary, fontSize: type.footnote.fontSize, fontWeight: "600" },
-	approvalCommandSurface: { flexDirection: "row", alignItems: "flex-start", gap: space.sm, borderRadius: 12, borderCurve: "continuous", backgroundColor: t.bgSubtle, paddingHorizontal: space.md, paddingVertical: space.md },
-	approvalActions: { minHeight: 36, flexDirection: "row", alignItems: "center", justifyContent: "flex-end", flexWrap: "wrap", gap: space.xxs, paddingTop: space.none },
-	approvalResolved: { minHeight: 38, marginVertical: space.sm, flexDirection: "row", alignItems: "center", gap: space.xs, paddingHorizontal: space.hair },
-	approvalResolvedLabel: { fontFamily: "Geist_600SemiBold", color: t.textTertiary, fontSize: type.caption2.fontSize, fontWeight: "600" },
-	approvalResolvedCommand: { flex: 1, color: t.textFaint, fontSize: type.caption2.fontSize, fontFamily: t.fontMono },
-	requestCard: { marginVertical: space.sm, backgroundColor: t.bgSurface, borderWidth: StyleSheet.hairlineWidth, borderColor: t.borderDefault, borderRadius: 16, borderCurve: "continuous", padding: space.md, gap: space.md },
-	requestCardResolved: { backgroundColor: t.bgSubtle },
-	requestTitle: { flexDirection: "row", alignItems: "center", gap: space.sm },
-	requestIcon: { width: 32, height: 32, borderRadius: 8, alignItems: "center", justifyContent: "center" },
-	requestHeading: { fontFamily: "Geist_600SemiBold", flex: 1, color: t.textPrimary, fontSize: type.footnote.fontSize, fontWeight: "600" },
-	requestBadge: { borderRadius: 8, paddingHorizontal: space.sm, paddingVertical: space.xxs },
-	requestBadgeText: { fontFamily: "Geist_600SemiBold", fontSize: type.caption2.fontSize, fontWeight: "600" },
-	requestCopy: { fontFamily: "Geist_400Regular", color: t.textSecondary, fontSize: type.footnote.fontSize, lineHeight: type.footnote.lineHeight },
-	inputRequest: { marginVertical: space.md, paddingHorizontal: space.hair, paddingTop: space.xs, paddingBottom: space.xl, gap: space.md },
-	inputRequestStatus: { flexDirection: "row", alignItems: "center", gap: space.sm },
-	inputRequestDot: { width: 7, height: 7, borderRadius: 4 },
-	inputRequestStatusText: { fontFamily: "Geist_600SemiBold", color: t.textTertiary, fontSize: type.caption1.fontSize, fontWeight: "600" },
-	inputActions: { minHeight: 36, flexDirection: "row", alignItems: "center", gap: space.hair, paddingTop: space.hair },
-	requestCommand: { flex: 1, color: t.textPrimary, fontFamily: t.fontMono, fontSize: type.caption2.fontSize, lineHeight: type.caption2.lineHeight },
-	actions: { flexDirection: "row", alignItems: "center", justifyContent: "flex-end", gap: space.sm, flexWrap: "wrap", paddingTop: space.hair },
-	action: { minHeight: 44, justifyContent: "center", borderRadius: 12, borderCurve: "continuous", paddingHorizontal: space.lg, borderWidth: StyleSheet.hairlineWidth, borderColor: t.borderDefault },
-	actionLabel: { fontFamily: "Geist_600SemiBold", fontSize: type.caption1.fontSize, fontWeight: "600" },
-	actionHint: { fontFamily: "Geist_400Regular", maxWidth: 180, color: t.textTertiary, fontSize: type.caption2.fontSize, lineHeight: type.caption2.lineHeight, marginTop: space.hair },
-	form: { gap: space.sm },
-	field: { gap: space.xs },
-	inputEyebrow: { fontFamily: "Geist_600SemiBold", color: t.textTertiary, fontSize: type.caption2.fontSize, fontWeight: "600", letterSpacing: 0.7, textTransform: "uppercase" },
-	inputQuestion: { fontFamily: "Geist_500Medium", color: t.textPrimary, fontSize: type.callout.fontSize, lineHeight: type.callout.lineHeight, fontWeight: "500" },
-	inputLabel: { fontFamily: "Geist_600SemiBold", color: t.textPrimary, fontSize: type.caption1.fontSize, fontWeight: "600" },
-	inputHint: { fontFamily: "Geist_400Regular", color: t.textTertiary, fontSize: type.caption2.fontSize, lineHeight: type.caption2.lineHeight },
-	switchRow: { flexDirection: "row", alignItems: "center", justifyContent: "space-between" },
-	urlBox: { backgroundColor: t.bgColumn, borderRadius: 8, padding: space.sm },
-	urlText: { color: t.textSecondary, fontFamily: t.fontMono, fontSize: type.caption2.fontSize, lineHeight: type.caption2.lineHeight },
-	validation: { fontFamily: "Geist_400Regular", color: t.red, fontSize: type.caption2.fontSize, lineHeight: type.caption2.lineHeight },
-	compaction: { alignSelf: "center", flexDirection: "row", alignItems: "center", gap: space.xs, marginVertical: space.sm, paddingHorizontal: space.sm, paddingVertical: space.xs, borderRadius: 12, backgroundColor: t.bgSubtle },
-	compactionText: { fontFamily: "Geist_400Regular", color: t.textFaint, fontSize: type.caption2.fontSize, letterSpacing: 1 },
-	errorCard: { marginVertical: space.sm, flexDirection: "row", gap: space.sm, backgroundColor: t.tintRed, borderRadius: 12, borderCurve: "continuous", borderWidth: StyleSheet.hairlineWidth, padding: space.md },
-	errorTitle: { fontFamily: "Geist_600SemiBold", color: t.red, fontSize: type.caption1.fontSize, fontWeight: "600" },
-	errorCopy: { fontFamily: "Geist_400Regular", marginTop: space.xxs, color: t.textSecondary, fontSize: type.caption2.fontSize, lineHeight: type.caption2.lineHeight },
-	empty: { paddingVertical: 90, alignItems: "center", paddingHorizontal: space.xxl },
-	emptyMascot: { marginBottom: space.lg },
-	emptyTitle: { fontFamily: "Geist_600SemiBold", color: t.textPrimary, fontSize: type.body.fontSize, fontWeight: "600" },
-});
+/** The Review pill's drawn height; its hit slop makes up the rest of a touch target. */
+const REVIEW_PILL_HEIGHT = 32;
+
+const makeStyles = (t: Theme) => {
+	// Every card in the timeline has one shape: the card radius, and the
+	// divider's width for its edge.
+	const card = { borderRadius: radius.md, borderCurve: "continuous", borderWidth: rowDividerWidth } as const;
+	// One line of a file list's path; its bullet is held level with it.
+	const fileLine = { fontFamily: t.fontMono, fontSize: type.footnote.fontSize, lineHeight: type.footnote.lineHeight };
+	return StyleSheet.create({
+		timelineWrap: { flex: 1, position: "relative", backgroundColor: t.bgBase },
+		detachedEditor: { paddingHorizontal: space.md, paddingTop: space.xs, paddingBottom: space.xs, backgroundColor: t.bgBase },
+		emptySurface: { flex: 1, justifyContent: "center" },
+		list: { flex: 1, backgroundColor: t.bgBase },
+		opening: { opacity: 0 },
+		content: { paddingHorizontal: space.xl, paddingTop: space.md, paddingBottom: space.xxxl },
+		older: { alignSelf: "center", minHeight: touchTarget, flexDirection: "row", gap: space.xs, alignItems: "center", paddingHorizontal: space.md, marginBottom: space.xs },
+		olderText: { fontFamily: "DMSans_400Regular", color: t.textTertiary, fontSize: type.footnote.fontSize },
+		// A turn's gaps: a reply's foot to the next prompt is the one break between
+		// turns, and a prompt sits close over its own reply. Each was a full 16pt,
+		// which with the copy button's row left a screen-height of air per exchange.
+		userRow: { alignItems: "flex-end", paddingTop: space.md, paddingBottom: space.xs },
+		userBubble: { maxWidth: "88%", backgroundColor: userMessageSurfaceStyle(t).backgroundColor, borderRadius: radius.xl, borderCurve: "continuous", paddingHorizontal: space.lg, paddingVertical: space.md },
+		userText: { fontFamily: "DMSans_400Regular", color: userMessageSurfaceStyle(t).foregroundColor, fontSize: type.callout.fontSize, lineHeight: type.callout.lineHeight },
+		delivery: { fontFamily: "DMSans_400Regular", marginTop: space.xxs, color: t.amber, fontSize: type.footnote.fontSize },
+		attachments: { flexDirection: "row", flexWrap: "wrap", gap: space.xs },
+		attachmentsSpaced: { marginTop: space.sm },
+		attachmentTile: { overflow: "hidden", borderRadius: radius.sm, backgroundColor: t.bgColumn },
+		attachmentLoading: { alignItems: "center", justifyContent: "center" },
+		attachmentTileImage: { width: "100%", height: "100%" },
+		// alignSelf keeps a chip its own height next to a tile: the row container's
+		// default stretch would otherwise blow it up to the tile's 104/160px.
+		attachmentChip: { alignSelf: "flex-start", flexDirection: "row", alignItems: "center", gap: space.xs, borderRadius: radius.sm, overflow: "hidden", borderWidth: rowDividerWidth, borderColor: t.borderSubtle, paddingHorizontal: space.sm, paddingVertical: space.xs },
+		attachmentName: { fontFamily: "DMSans_400Regular", flexShrink: 1, color: t.textSecondary, fontSize: type.footnote.fontSize },
+		attachmentRetry: { fontFamily: "DMSans_600SemiBold", color: t.accent, fontSize: type.footnote.fontSize, fontWeight: "600" },
+		attachmentGone: { fontFamily: "DMSans_400Regular", color: t.textTertiary, fontSize: type.footnote.fontSize },
+		originMessage: { marginVertical: space.sm, borderLeftWidth: 2, borderLeftColor: t.borderStrong, paddingLeft: space.sm, gap: space.xxs },
+		originHeader: { flexDirection: "row", alignItems: "center", gap: space.xxs },
+		originLabel: { fontFamily: "DMSans_600SemiBold", color: t.textTertiary, fontSize: type.footnote.fontSize, fontWeight: "600" },
+		originText: { fontFamily: "DMSans_400Regular", color: t.textSecondary, fontSize: type.subheadline.fontSize, lineHeight: type.subheadline.lineHeight },
+		originMore: { alignSelf: "flex-start", minHeight: touchTarget, flexDirection: "row", alignItems: "center", gap: space.xxs },
+		originMoreText: { fontFamily: "DMSans_600SemiBold", color: t.accent, fontSize: type.footnote.fontSize, fontWeight: "600" },
+		steerBubble: { backgroundColor: t.bgSubtle },
+		steerLabel: { fontFamily: "DMSans_600SemiBold", color: t.textTertiary, fontSize: type.footnote.fontSize, fontWeight: "600", marginBottom: space.hair },
+		assistantRow: { paddingTop: space.sm, paddingBottom: space.xs },
+		sender: { fontFamily: "DMSans_600SemiBold", color: t.textTertiary, fontSize: type.footnote.fontSize, fontWeight: "600", marginBottom: space.xxs },
+		// The glyph lines up with the reply's left edge, and the row ends at its
+		// foot. The target reaches into the row's bottom padding rather than up
+		// over the text, where a long press selects.
+		systemSignal: { ...card, marginVertical: space.xs, flexDirection: "row", alignItems: "flex-start", gap: space.sm, borderColor: t.borderDefault, backgroundColor: t.bgSurface, padding: space.sm },
+		systemTitle: { fontFamily: "DMSans_600SemiBold", color: t.textPrimary, fontSize: type.footnote.fontSize, fontWeight: "600" },
+		systemDetail: { fontFamily: "DMSans_400Regular", color: t.textTertiary, fontSize: type.footnote.fontSize, lineHeight: type.footnote.lineHeight, marginTop: space.hair },
+		activityWrap: { paddingVertical: space.hair },
+		activityRow: { minHeight: touchTarget, flexDirection: "row", alignItems: "center", gap: space.sm, paddingVertical: space.xs },
+		// A row with nothing to open is no touch target, so it is only as tall as
+		// its line: held to one, it left a band of nothing under "Restored a session".
+		activityRowStatic: { minHeight: 0, paddingVertical: space.sm },
+		activitySummary: { flex: 1, color: t.textSecondary, fontSize: type.footnote.fontSize, lineHeight: type.footnote.lineHeight, fontFamily: t.fontMono },
+		server: { color: t.textTertiary, fontSize: type.footnote.fontSize, fontFamily: t.fontMono },
+		activityProgress: { fontFamily: "DMSans_400Regular", maxWidth: "28%", color: t.textFaint, fontSize: type.footnote.fontSize },
+		activityStopped: { fontFamily: "DMSans_600SemiBold", color: t.textFaint, fontSize: type.footnote.fontSize, fontWeight: "600" },
+		activityDetail: { marginLeft: space.xl, marginBottom: space.xs, borderLeftWidth: rowDividerWidth, borderLeftColor: t.borderSubtle, paddingLeft: space.md, gap: space.xs },
+		terminalInput: { gap: space.xxs },
+		terminalInputTitle: { flexDirection: "row", alignItems: "center", gap: space.xxs },
+		reviewDecision: { fontFamily: "DMSans_600SemiBold", color: t.green, fontSize: type.footnote.fontSize, fontWeight: "600" },
+		risk: { fontFamily: "DMSans_600SemiBold", color: t.amber, fontSize: type.footnote.fontSize, fontWeight: "600" },
+		reviewRationale: { fontFamily: "DMSans_400Regular", color: t.textPrimary, backgroundColor: t.bgColumn, borderRadius: radius.sm, padding: space.sm, fontSize: type.footnote.fontSize, lineHeight: type.footnote.lineHeight },
+		runWrap: { paddingVertical: space.hair },
+		runSummary: { minHeight: touchTarget, flexDirection: "row", alignItems: "center", gap: space.sm, paddingVertical: space.xs },
+		runText: { fontFamily: "DMSans_400Regular", flex: 1, color: t.textTertiary, fontSize: type.footnote.fontSize },
+		runFailed: { fontFamily: "DMSans_600SemiBold", color: t.red, fontSize: type.footnote.fontSize, fontWeight: "600" },
+		runStopped: { fontFamily: "DMSans_600SemiBold", color: t.textFaint, fontSize: type.footnote.fontSize, fontWeight: "600" },
+		runDetail: { ...card, marginBottom: space.xs, borderColor: t.borderSubtle, backgroundColor: t.bgSubtle, paddingHorizontal: space.sm, paddingVertical: space.hair },
+		subagent: { marginLeft: space.xl, marginBottom: space.xxs, borderLeftWidth: rowDividerWidth, borderLeftColor: t.borderStrong, paddingLeft: space.sm },
+		subagentHeader: { minHeight: touchTarget, flexDirection: "row", alignItems: "center", gap: space.xs, paddingVertical: space.xs },
+		subagentLabel: { fontFamily: "DMSans_400Regular", flex: 1, color: t.textFaint, fontSize: type.footnote.fontSize },
+		detailCopy: { fontFamily: "DMSans_400Regular", color: t.textSecondary, fontSize: type.footnote.fontSize, lineHeight: type.footnote.lineHeight },
+		labelValue: { flexDirection: "row", gap: space.sm },
+		detailLabel: { minWidth: space.huge, color: t.textFaint, fontSize: type.footnote.fontSize, fontFamily: t.fontMono },
+		// Names a block of detail: what the agent typed, a tool's arguments or result.
+		detailHeading: { fontFamily: "DMSans_600SemiBold", color: t.textTertiary, fontSize: type.footnote.fontSize, fontWeight: "600" },
+		detailValue: { flex: 1, color: t.textSecondary, fontSize: type.footnote.fontSize, fontFamily: t.fontMono },
+		output: { color: t.textSecondary, backgroundColor: t.bgColumn, borderRadius: radius.sm, padding: space.sm, fontFamily: t.fontMono, fontSize: type.footnote.fontSize, lineHeight: type.footnote.lineHeight },
+		partial: { fontFamily: "DMSans_400Regular", color: t.textFaint, fontSize: type.footnote.fontSize },
+		turnWrap: { paddingTop: space.sm, paddingBottom: space.lg, gap: space.sm },
+		// The leading glyph lines up with the reply's text above it.
+		// A full touch target, so the controls' slop is inside it; the margins
+		// keep its footprint at the controls' size.
+		turnActions: { height: TURN_ACTION_SIZE + 2 * TURN_ACTION_SLOP, marginVertical: -TURN_ACTION_SLOP, flexDirection: "row", alignItems: "center", gap: space.xxs, marginLeft: -(TURN_ACTION_SIZE - iconSize.sm) / 2 },
+		turnAction: turnActionControl,
+		turnTime: { fontFamily: "DMSans_400Regular", paddingHorizontal: space.xs, color: t.textTertiary, fontSize: type.footnote.fontSize, lineHeight: type.footnote.lineHeight, fontVariant: ["tabular-nums"] },
+		// Full width with a rule under it, matching the desktop's Working / Worked
+		// rows and the setup checklist header, so the line holds through the handoff.
+		statusRow: { minHeight: touchTarget, flexDirection: "row", alignItems: "center", gap: space.xs, paddingVertical: space.xs, borderBottomWidth: rowDividerWidth, borderBottomColor: t.borderDefault },
+		// Even-width digits, so the ticking timer doesn't shift as it counts.
+		turnTimer: { fontVariant: ["tabular-nums"] },
+		turnState: { fontFamily: "DMSans_500Medium", color: t.textTertiary, fontSize: type.footnote.fontSize, lineHeight: type.footnote.lineHeight, fontWeight: "500" },
+		turnError: { fontFamily: "DMSans_400Regular", color: t.red, fontSize: type.footnote.fontSize, lineHeight: type.footnote.lineHeight, textAlign: "right" },
+		planCard: { ...card, backgroundColor: t.bgSurface, borderColor: t.borderDefault, overflow: "hidden" },
+		planHeader: { minHeight: touchTarget, flexDirection: "row", alignItems: "center", gap: space.sm, paddingHorizontal: space.md },
+		changedHeader: { flexDirection: "row", alignItems: "center", paddingRight: space.sm },
+		changedToggle: { flex: 1, minWidth: 0 },
+		changedTitle: { flexShrink: 1 },
+		changedReview: { minHeight: REVIEW_PILL_HEIGHT, flexDirection: "row", alignItems: "center", gap: space.xxs, paddingHorizontal: space.sm, borderRadius: radius.pill, overflow: "hidden", backgroundColor: t.bgElevatedHover, borderWidth: rowDividerWidth, borderColor: t.borderDefault },
+		changedStat: { fontFamily: "DMSans_400Regular", fontSize: type.footnote.fontSize },
+		changedReviewText: { fontFamily: "DMSans_500Medium", fontSize: type.footnote.fontSize, color: t.textPrimary },
+		planTitle: { fontFamily: "DMSans_600SemiBold", flex: 1, color: t.textSecondary, fontSize: type.footnote.fontSize, fontWeight: "600" },
+		planLive: { fontFamily: "DMSans_600SemiBold", color: t.orange, fontSize: type.footnote.fontSize, fontWeight: "600" },
+		planBody: { paddingHorizontal: space.sm, paddingBottom: space.sm, gap: space.xs },
+		fileBody: { paddingHorizontal: space.sm, paddingBottom: space.sm, gap: space.xxs },
+		fileRow: { flexDirection: "row", alignItems: "center", gap: space.xs },
+		fileRowTap: { minHeight: touchTarget },
+		fileListRow: { flexDirection: "row", alignItems: "flex-start", gap: space.xs },
+		fileBulletColumn: { width: 4 },
+		fileBullet: { width: 4, height: 4, borderRadius: radius.pill, backgroundColor: t.textTertiary },
+		fileMark: { width: 13, fontFamily: t.fontMono, fontSize: type.footnote.fontSize, fontWeight: "600" },
+		fileLine,
+		filePath: { flex: 1, color: t.textSecondary, ...fileLine },
+		fileStat: { color: t.textFaint, fontFamily: t.fontMono, fontSize: type.footnote.fontSize },
+		approvalRequest: { marginVertical: space.md, paddingHorizontal: space.hair, paddingTop: space.xs, paddingBottom: space.lg, gap: space.md },
+		approvalStatus: { flexDirection: "row", alignItems: "center", gap: space.sm },
+		approvalDot: { width: 7, height: 7, borderRadius: radius.pill, backgroundColor: t.amber },
+		approvalStatusText: { fontFamily: "DMSans_600SemiBold", color: t.textPrimary, fontSize: type.footnote.fontSize, fontWeight: "600" },
+		approvalCommandSurface: { flexDirection: "row", alignItems: "flex-start", gap: space.sm, borderRadius: radius.md, borderCurve: "continuous", backgroundColor: t.bgSubtle, paddingHorizontal: space.md, paddingVertical: space.md },
+		approvalActions: { minHeight: 36, flexDirection: "row", alignItems: "center", justifyContent: "flex-end", flexWrap: "wrap", gap: space.xxs, paddingTop: space.none },
+		approvalResolved: { minHeight: 38, marginVertical: space.sm, flexDirection: "row", alignItems: "center", gap: space.xs, paddingHorizontal: space.hair },
+		approvalResolvedLabel: { fontFamily: "DMSans_600SemiBold", color: t.textTertiary, fontSize: type.footnote.fontSize, fontWeight: "600" },
+		approvalResolvedCommand: { flex: 1, color: t.textFaint, fontSize: type.footnote.fontSize, fontFamily: t.fontMono },
+		requestCard: { ...card, marginVertical: space.sm, backgroundColor: t.bgSurface, borderColor: t.borderDefault, padding: space.md, gap: space.md },
+		requestCardResolved: { backgroundColor: t.bgSubtle },
+		requestCopy: { fontFamily: "DMSans_400Regular", color: t.textSecondary, fontSize: type.footnote.fontSize, lineHeight: type.footnote.lineHeight },
+		inputRequest: { marginVertical: space.md, paddingHorizontal: space.hair, paddingTop: space.xs, paddingBottom: space.xl, gap: space.md },
+		inputRequestStatus: { flexDirection: "row", alignItems: "center", gap: space.sm },
+		inputRequestDot: { width: 7, height: 7, borderRadius: radius.pill },
+		inputRequestStatusText: { fontFamily: "DMSans_600SemiBold", color: t.textTertiary, fontSize: type.footnote.fontSize, fontWeight: "600" },
+		inputActions: { minHeight: 36, flexDirection: "row", alignItems: "center", gap: space.hair, paddingTop: space.hair },
+		requestCommand: { flex: 1, color: t.textPrimary, fontFamily: t.fontMono, fontSize: type.footnote.fontSize, lineHeight: type.footnote.lineHeight },
+		form: { gap: space.sm },
+		urlBox: { backgroundColor: t.bgColumn, borderRadius: radius.sm, padding: space.sm },
+		urlText: { color: t.textSecondary, fontFamily: t.fontMono, fontSize: type.footnote.fontSize, lineHeight: type.footnote.lineHeight },
+		validation: { fontFamily: "DMSans_400Regular", color: t.red, fontSize: type.footnote.fontSize, lineHeight: type.footnote.lineHeight },
+		compaction: { alignSelf: "center", flexDirection: "row", alignItems: "center", gap: space.xs, marginVertical: space.sm, paddingHorizontal: space.sm, paddingVertical: space.xs, borderRadius: radius.pill, backgroundColor: t.bgSubtle },
+		compactionText: { fontFamily: "DMSans_400Regular", color: t.textFaint, fontSize: type.footnote.fontSize },
+		errorCard: { ...card, marginVertical: space.sm, flexDirection: "row", gap: space.sm, backgroundColor: t.tintRed, padding: space.md },
+		errorTitle: { fontFamily: "DMSans_600SemiBold", color: t.red, fontSize: type.footnote.fontSize, fontWeight: "600" },
+		errorCopy: { fontFamily: "DMSans_400Regular", marginTop: space.xxs, color: t.textSecondary, fontSize: type.footnote.fontSize, lineHeight: type.footnote.lineHeight },
+		empty: { paddingVertical: 90, alignItems: "center", paddingHorizontal: space.xxl },
+		emptyMascot: { marginBottom: space.lg },
+		emptyTitle: { fontFamily: "DMSans_600SemiBold", color: t.textPrimary, fontSize: type.body.fontSize, fontWeight: "600" },
+	});
+};

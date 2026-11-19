@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
+	"github.com/aoagents/agent-orchestrator/backend/internal/httpd/apierr"
 	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
 )
 
@@ -18,10 +19,8 @@ const chatViewLease = 30 * time.Second
 const chatHibernateGrace = 30 * time.Second
 
 // IdleBeforeHibernate is how long a quiet provider stays parked, prompt
-// cache and all, before idle hibernation may stop it. Most follow-ups arrive
-// within a minute or two; stopping the process after 30 s made each of them
-// pay a full cold start for a few hundred megabytes of memory saved.
-const IdleBeforeHibernate = 90 * time.Second
+// cache and all, before idle hibernation may stop it.
+const IdleBeforeHibernate = 10 * time.Minute
 
 type wakeRun struct {
 	done    chan struct{}
@@ -58,6 +57,18 @@ type hibernationTurnReader interface {
 // resume path. It is installed after both services have been constructed.
 func (s *Service) SetWakeCallback(wake func(context.Context, domain.SessionID) error) {
 	s.wakeChat = wake
+}
+
+// SetOtherWriterCheck reports whether another process has a chat open, and
+// otherwise whether one wrote to it after the given time when that time is set.
+func (s *Service) SetOtherWriterCheck(check func(context.Context, domain.SessionRecord, time.Time) (bool, bool)) {
+	s.otherWriter = check
+}
+
+// SetResumeAgentCallback connects a Chat session whose agent exited to Session
+// Manager's resume-agent path, so a provider switch has a source to hand over from.
+func (s *Service) SetResumeAgentCallback(resume func(context.Context, domain.SessionID) error) {
+	s.resumeAgent = resume
 }
 
 // SetChatView records a short-lived view lease. Registration and the final
@@ -189,10 +200,11 @@ type hibernateOptions struct {
 	// ignoreViews lets a refresh run under an open view: the user's next
 	// message is about to wake the session anyway.
 	ignoreViews bool
+	otherWriter bool
 }
 
 func (o hibernateOptions) enabled(s *Service) bool {
-	if o.versionRefresh || o.forUpdate {
+	if o.versionRefresh || o.forUpdate || o.otherWriter {
 		return true
 	}
 	return s.hibernationEnabled != nil && s.hibernationEnabled()
@@ -639,6 +651,7 @@ func (s *Service) wakeHibernated(ctx context.Context, id domain.SessionID) error
 		if resultErr != nil {
 			s.log.Warn("chat wake failed", "session", id,
 				"took", time.Since(run.started).Round(time.Millisecond), "err", resultErr)
+			captureChatFault(ctx, resultErr, "", "chat_wake", "wake")
 		} else {
 			s.log.Info("chat wake finished", "session", id,
 				"took", time.Since(run.started).Round(time.Millisecond))
@@ -700,9 +713,56 @@ func (s *Service) startBackgroundWake(id domain.SessionID) {
 		}
 		if err := s.DrainQueued(ctx, id); err != nil {
 			s.log.Warn("chat session woke but could not deliver its queued messages", "session", id, "err", err)
+			captureChatFault(ctx, err, "", "chat_wake", "drain")
 			s.failQueuedTurns(ctx, id, fmt.Sprintf("could not deliver the message: %v", err))
 		}
 	}()
+}
+
+// ErrChatOpenElsewhere reports a message refused because another Claude Code
+// process has the chat open.
+var ErrChatOpenElsewhere = apierr.Conflict("CHAT_OPEN_ELSEWHERE", "This chat is open in another Claude Code session, such as a terminal or an IDE. Quit it there, then send your message again.", nil)
+
+// checkOtherWriter refuses a delivery while another process has the chat open.
+// When one wrote turns and left, it stops the idle provider so its next start
+// reads them, and reports the stop.
+func (s *Service) checkOtherWriter(ctx context.Context, rec domain.SessionRecord) (bool, error) {
+	if s.otherWriter == nil || rec.IsTerminated {
+		return false, nil
+	}
+	var controller *Controller
+	var state ports.ChatControllerState
+	if rec.HibernatedAt == nil {
+		if live, err := s.Controller(rec.ID); err == nil {
+			controller, state = live, live.State()
+		}
+	}
+	var since time.Time
+	if state == ports.ChatControllerReady || state == ports.ChatControllerBusy {
+		since = controller.started
+		if since.IsZero() {
+			since = rec.CreatedAt
+		}
+	}
+	open, wrote := s.otherWriter(ctx, rec, since)
+	if open {
+		return false, ErrChatOpenElsewhere
+	}
+	if !wrote {
+		return false, nil
+	}
+	if state == ports.ChatControllerBusy {
+		return false, ErrChatOpenElsewhere
+	}
+	stopped, err := s.hibernateChat(ctx, rec.ID, hibernateOptions{otherWriter: true, ignoreViews: true})
+	if !stopped {
+		if err != nil {
+			s.log.Warn("could not stop a chat another process wrote", "session", rec.ID, "err", err)
+		}
+		return false, ErrChatOpenElsewhere
+	}
+	s.log.Info("chat session stopped to read turns another process wrote", "session", rec.ID)
+	return true, nil
 }
 
 func (s *Service) failQueuedTurns(ctx context.Context, id domain.SessionID, message string) {

@@ -1,13 +1,13 @@
 ---
 title: Troubleshooting
-description: Diagnose desktop, daemon, agent, session, GitHub, preview, and mobile problems.
+description: Diagnose desktop, daemon, agent, session, GitHub, preview, and mobile problems, including the app disappearing on Linux.
 ---
 
 ## Start with the desktop app
 
 The desktop app owns the local daemon. First quit completely and reopen Orchestrator, then confirm the project and selected session still appear. On macOS, use the menu-bar tray's **Quit AO Completely** action for this restart. The app discovers or restarts its daemon and reconnects live event and terminal streams.
 
-On macOS, closing the window or using **Quit / Cmd+Q** destroys the desktop window but leaves Orchestrator in the Dock and menu-bar tray. Its daemon and enabled mobile/remote access keep running while the Mac stays awake and reachable. Click the Dock icon or **Show Agent Orchestrator** in the tray to reopen the window. Existing unsaved-draft warnings still apply; desktop browser previews and browser automation stop until the window reopens. Windows and Linux quit behavior is unchanged.
+On macOS, closing the window or using **Quit / Cmd+Q** destroys the desktop window but leaves Orchestrator in the Dock and menu-bar tray. Its daemon and enabled mobile/remote access keep running while the Mac stays awake and reachable. Click the Dock icon or **Show Orchestrator** in the tray to reopen the window. Existing unsaved-draft warnings still apply; desktop browser previews and browser automation stop until the window reopens. Windows and Linux quit behavior is unchanged.
 
 If you use the optional CLI, `ao status` and `ao doctor` provide additional local diagnostics:
 
@@ -34,7 +34,72 @@ ao doctor --json
 	<Accordion title="The UI looks stale after a daemon restart">
 		Leave the app open briefly so its SSE connection can reconnect and invalidate current queries. If it does not recover, restart the desktop app. The event stream supports replay, but a full app restart is the safest user-level recovery.
 	</Accordion>
+	<Accordion title="An automatic update check failed">
+		Orchestrator retries failed automatic checks with increasing delays, up to four hours. A manual check remains available from the update menu. A failed check does not turn off update checks.
+	</Accordion>
 </Accordions>
+
+## Orchestrator disappears on Linux without an error
+
+If the Orchestrator window closes by itself, with no error dialog and nothing in the logs, and your agents stop shortly after, check the app's realtime CPU limit:
+
+```bash
+for p in $(pgrep -x agent-orchestra); do grep "realtime timeout" /proc/$p/limits; done | sort | uniq -c
+```
+
+If both values are `0` and the symptoms match, this is the likely cause. With a limit of 0, the Linux kernel kills a process as soon as one of its threads uses realtime scheduling or a CPU-time timer, and logs nothing unless fatal-signal logging is turned on. Orchestrator does not set this limit; it inherits it from the program that launched it, so other apps started the same way can disappear too.
+
+The usual source is a desktop without rtkit. The desktop portal then reports a realtime budget of 0, PipeWire applies that budget to your session's shell, and every app you launch inherits it. Omarchy 4.5.0 and earlier ship without rtkit on x86; Omarchy's own fix is [omacom/omarchy#16824](https://github.com/omacom/omarchy/pull/16824). To confirm on Arch-based systems, including Omarchy:
+
+```bash
+pacman -Q rtkit
+busctl --user get-property org.freedesktop.portal.Desktop /org/freedesktop/portal/desktop org.freedesktop.portal.Realtime RTTimeUSecMax
+```
+
+`package 'rtkit' was not found` and `x 0` confirm it.
+
+Fix it in this order. Installing rtkit before raising the limits makes the kills more frequent, because rtkit can then give realtime priority to processes that still hold a limit of 0. These steps repair only your own processes, so if other users are logged in to this machine, have them log out first.
+
+1. Raise the limit of every process of yours that holds a 0. This takes effect immediately, without restarting anything, but only lasts until you log out:
+
+   ```bash
+   u=$(id -u); for d in /proc/[0-9]*; do [ "$(awk '/^Uid:/{print $2}' $d/status 2>/dev/null)" = "$u" ] && [ "$(awk '/realtime timeout/{print $5}' $d/limits 2>/dev/null)" = 0 ] && sudo prlimit --pid ${d#/proc/} --rttime=200000:200000; done
+   ```
+
+2. Hold rtkit back so it cannot start halfway through the install, then install it. The install runs only if the hold succeeds:
+
+   ```bash
+   sudo systemctl mask --runtime rtkit-daemon.service && sudo pacman -S --needed rtkit
+   ```
+
+   If the install fails or you cancel it, run this step again. To stop the repair here instead, reboot rather than releasing rtkit by hand. Until step 3 or a reboot releases rtkit, it stays held back, which grants nothing and kills nothing.
+
+3. Run the command from step 1 again to raise processes that started during the install, then release rtkit:
+
+   ```bash
+   sudo systemctl unmask --runtime rtkit-daemon.service
+   ```
+
+4. Confirm rtkit answers with a budget above 0, such as `x 200000`. If it shows `x 0` or an error, fix the rtkit service and repeat this check before continuing:
+
+   ```bash
+   busctl get-property org.freedesktop.RealtimeKit1 /org/freedesktop/RealtimeKit1 org.freedesktop.RealtimeKit1 RTTimeUSecMax
+   ```
+
+   Only after that check passes, restart the desktop portal so it reads rtkit's budget, and confirm the portal reports the same value. If the restart fails, or the portal shows `x 0`, an error, or a different value, fix the portal service and repeat this step. Continue only once the portal matches rtkit:
+
+   ```bash
+   systemctl --user restart xdg-desktop-portal.service && busctl --user get-property org.freedesktop.portal.Desktop /org/freedesktop/portal/desktop org.freedesktop.portal.Realtime RTTimeUSecMax
+   ```
+
+5. Run the command from step 1 again to raise any process that started in the meantime.
+6. Optional: restart audio so PipeWire also runs with realtime priority. This briefly interrupts sound:
+
+   ```bash
+   systemctl --user restart pipewire pipewire-pulse wireplumber
+   ```
+
+To verify, relaunch Orchestrator from your usual launcher and run the first check again. It should print at least one row, and no row should show `0`. An empty result means no Orchestrator process was found, so it does not confirm the fix. New sessions start with the correct limit once rtkit is installed. On Omarchy, updating to a release that includes its fix does all of this for you.
 
 ## Agents and sessions
 
@@ -57,6 +122,15 @@ ao doctor --json
 	<Accordion title="A session will not restore">
 		Use the desktop restore action or `ao session restore <session-id>`. Restore reuses the same session and worktree when the selected adapter supports recovery. Check that the harness remains installed and authenticated. For a stopped controller on a non-terminated session use `ao session resume-agent <id>` instead. A disabled interface switch can indicate unavailable native history, an unsupported direction, or pending recovery; inspect its reason before retrying.
 	</Accordion>
+	<Accordion title="A session says its workspace no longer exists">
+		The Files pane stops refreshing that session after the daemon confirms its project folder is missing. Restore the folder, then use Retry in Files. Other sessions and hosts continue refreshing normally.
+	</Accordion>
+	<Accordion title="A suggested next message disappears">
+		Prompt suggestions wait until the Chat controller is ready and the previous turn is complete. A suggestion can disappear while the agent reconnects or resumes, then return when the conversation is ready again.
+	</Accordion>
+	<Accordion title="A new task cannot start">
+		Choose an installed, signed-in agent in Harness Settings. If a saved model or effort is no longer supported, review the selected agent default and press Start again. If a branch is checked out elsewhere, enter a new branch name and press Start to confirm it. If the base branch cannot be resolved, set it in Project Settings.
+	</Accordion>
 </Accordions>
 
 ## GitHub and pull requests
@@ -77,6 +151,8 @@ ao doctor --json
 </Accordions>
 
 ## Browser preview
+
+A failed external link preview shows the plain link. Orchestrator waits briefly before trying that same URL again; previews for other URLs still load.
 
 <Accordions>
 	<Accordion title="The Browser tab is blank">
@@ -111,3 +187,6 @@ ao doctor --json
 | macOS Gatekeeper says the developer cannot be verified | Follow the Gatekeeper steps in [Common Installation Problems](/installation#common-installation-problems). |
 
 Open an issue in the [Orchestrator repository](https://github.com/Untrivial-ai/agent-orchestrator/issues). Include the desktop version, operating system, agent harness and interface mode, reproduction steps, and sanitized `ao doctor --json` output when the CLI is available. Never attach credentials, provider transcripts, or the entire `~/.ao` directory.
+
+Unreleased: **Settings → Report a problem** opens an agent to gather diagnostics and draft a report for your approval.
+If the daemon is down, the same action opens a terminal; you can also run `ao triage` directly.

@@ -56,14 +56,14 @@ export function evaluateUrl(policy: SitePolicy, rawUrl: string | undefined): Pol
 		return { allowed: false, reason: "The page address is not a web URL" };
 	}
 	if (url.protocol !== "http:" && url.protocol !== "https:") {
-		return { allowed: false, reason: `AO agents cannot act on ${url.protocol} pages` };
+		return { allowed: false, reason: `Agents from Orchestrator cannot act on ${url.protocol} pages` };
 	}
 	const host = url.hostname;
 	if (policy.deny.some((pattern) => hostMatches(host, pattern))) {
-		return { allowed: false, reason: `${host} is on the AO Browser Bridge deny list` };
+		return { allowed: false, reason: `${host} is on the Orchestrator Browser Bridge deny list` };
 	}
 	if (policy.allow.length > 0 && !policy.allow.some((pattern) => hostMatches(host, pattern))) {
-		return { allowed: false, reason: `${host} is not on the AO Browser Bridge allow list` };
+		return { allowed: false, reason: `${host} is not on the Orchestrator Browser Bridge allow list` };
 	}
 	return { allowed: true };
 }

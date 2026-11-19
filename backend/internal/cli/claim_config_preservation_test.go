@@ -8,7 +8,7 @@ import (
 
 func TestCanonicalConfigPreservesExistingSettings(t *testing.T) {
 	cfg := setConfigEnv(t)
-	srv, capture := projectServer(t, http.StatusOK, `{"status":"ok","project":{"id":"demo","config":{"containerReap":{"disabled":true},"reviewers":[{"harness":"codex","agentConfig":{"model":"gpt-5","mode":"high"}}],"env":{"KEEP":"value"}}}}`)
+	srv, capture := projectServer(t, http.StatusOK, `{"status":"ok","project":{"id":"demo","config":{"containerReap":{"disabled":true},"reviewers":[{"harness":"codex","agentConfig":{"model":"gpt-5","mode":"high"}}],"env":{"KEEP":"value"},"preRemove":["docker compose down -v"]}}}`)
 	writeRunFileFor(t, cfg, srv)
 	deps := Deps{ProcessAlive: func(int) bool { return true }}
 	out, _, err := executeCLI(t, deps, "project", "get", "demo", "--json")
@@ -42,5 +42,9 @@ func TestCanonicalConfigPreservesExistingSettings(t *testing.T) {
 	}
 	if body.Config.Env["KEEP"] != "value" || body.Config.CanonicalRepoURL != got.Project.Config.CanonicalRepoURL {
 		t.Fatalf("config lost: %s", capture.body)
+	}
+	// #7514: a Cleanup script set in the app must survive a get -> write-back.
+	if len(body.Config.PreRemove) != 1 || body.Config.PreRemove[0] != "docker compose down -v" {
+		t.Fatalf("preRemove lost: %s", capture.body)
 	}
 }
