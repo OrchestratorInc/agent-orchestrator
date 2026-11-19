@@ -3,6 +3,7 @@ package agentcreds
 import (
 	"context"
 	"crypto/sha256"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"os/user"
@@ -112,12 +113,8 @@ func readKeychain(ctx context.Context, opts ResolveOptions) (storedOAuth, bool) 
 		return storedOAuth{}, false
 	}
 	if err == nil {
-		if stored, ok := oauthTokenFromCredentialsJSON(out); ok {
+		if stored, ok := keychainCredential(out); ok {
 			return stored, true
-		}
-		// Older entries store the bare token rather than a JSON document.
-		if raw := strings.TrimSpace(string(out)); raw != "" && !strings.HasPrefix(raw, "{") {
-			return storedOAuth{token: raw, kind: KindOAuthToken}, true
 		}
 	}
 
@@ -132,19 +129,31 @@ func readKeychain(ctx context.Context, opts ResolveOptions) (storedOAuth, bool) 
 	if apiKeyErr != nil {
 		return storedOAuth{}, false
 	}
-	if raw := strings.TrimSpace(string(apiKeyOut)); raw != "" && !strings.HasPrefix(raw, "{") {
-		return storedOAuth{token: raw, kind: kindForToken(raw)}, true
+	return keychainCredential(apiKeyOut)
+}
+
+// keychainCredential reads a value printed by `security find-generic-password -w`:
+// a credentials JSON document, or a bare Claude token (older entries and the
+// managed key). Anything else is no credential, so it is never sent anywhere.
+func keychainCredential(out []byte) (storedOAuth, bool) {
+	value := strings.TrimSpace(string(out))
+	// `security -w` prints a value as hex when it is not plain printable text,
+	// and a newline in a pretty-printed JSON document is enough for that.
+	if decoded, err := hex.DecodeString(value); err == nil {
+		value = strings.TrimSpace(string(decoded))
 	}
-	if stored, ok := oauthTokenFromCredentialsJSON(apiKeyOut); ok {
+	if stored, ok := oauthTokenFromCredentialsJSON([]byte(value)); ok {
 		return stored, true
 	}
-	return storedOAuth{}, false
+	if !strings.HasPrefix(value, "sk-ant-") {
+		return storedOAuth{}, false
+	}
+	return storedOAuth{token: value, kind: kindForToken(value)}, true
 }
 
 // kindForToken selects the auth header from the token prefix. Claude Code
 // console keys are sk-ant-api* (x-api-key); setup tokens and subscription
-// logins are sk-ant-oat* (Bearer). Anything unrecognised defaults to API key
-// so the probe still runs rather than silently skipping a credential.
+// logins are sk-ant-oat* (Bearer).
 func kindForToken(token string) Kind {
 	if strings.HasPrefix(strings.TrimSpace(token), "sk-ant-oat") {
 		return KindOAuthToken
