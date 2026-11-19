@@ -169,6 +169,12 @@ func (*Plugin) AfterStartCommand(ctx context.Context, cfg ports.LaunchConfig) (s
 	if cfg.Config.Model == "" {
 		return "", nil
 	}
+	if cfg.Config.Model == "sol" {
+		if !memcodeSolPinned(ctx, cfg.WorkspacePath) {
+			return "", errors.New("memcode sol workspace model was not prepared")
+		}
+		return "/effort medium", nil
+	}
 	return "/model " + cfg.Config.Model, nil
 }
 
@@ -177,6 +183,9 @@ func (*Plugin) AfterStartCommandApplied(cfg ports.LaunchConfig, output string) b
 	model := cfg.Config.Model
 	if model == "" || !emptyComposer(output) {
 		return false
+	}
+	if model == "sol" {
+		return memcodeSolEffortApplied(cfg.WorkspacePath, output)
 	}
 	// Only the newest confirmation in the current viewport is authoritative.
 	confirmed := ""

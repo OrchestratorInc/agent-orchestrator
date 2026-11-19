@@ -129,6 +129,11 @@ func (*Plugin) GetAgentHooks(ctx context.Context, cfg ports.WorkspaceHookConfig)
 	if cfg.Config.Model != "" && cfg.Env["MEMCODE_ENDPOINT_URL"] != "" {
 		return errors.New("memcode custom endpoint models must be selected in the native TUI")
 	}
+	if cfg.Config.Model == "sol" {
+		if err := pinMemcodeSol(ctx, cfg.WorkspacePath); err != nil {
+			return err
+		}
+	}
 	instructions := []byte(cfg.SystemPrompt)
 	if cfg.SystemPromptFile != "" {
 		b, err := os.ReadFile(cfg.SystemPromptFile)
