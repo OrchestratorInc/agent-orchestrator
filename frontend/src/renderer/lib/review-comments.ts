@@ -160,8 +160,8 @@ function prIdentities(ref: PRRef): Set<string> {
 
 /**
  * The item that is the same PR as the target: an exact URL first, then the same
- * repository and number. A number alone pairs only when one item has it and one
- * side names no repository (a forge the parser does not know).
+ * repository and number. A number alone pairs only when exactly one item has it
+ * and one side names no repository (a forge the parser does not know).
  */
 function findPR<T>(target: PRRef, items: T[], ref: (item: T) => PRRef): T | undefined {
 	const urls = new Set(target.urls.filter(Boolean));
@@ -171,8 +171,9 @@ function findPR<T>(target: PRRef, items: T[], ref: (item: T) => PRRef): T | unde
 	const sameNumber = items.filter((item) => ref(item).number === target.number);
 	const sameRepo = sameNumber.find((item) => [...prIdentities(ref(item))].some((id) => ids.has(id)));
 	if (sameRepo) return sameRepo;
-	const unknown = sameNumber.filter((item) => ids.size === 0 || prIdentities(ref(item)).size === 0);
-	return unknown.length === 1 ? unknown[0] : undefined;
+	if (sameNumber.length !== 1) return undefined;
+	const [only] = sameNumber;
+	return ids.size === 0 || prIdentities(ref(only)).size === 0 ? only : undefined;
 }
 
 /** Completed Orchestrator passes with something to read, newest first. Falls back to the state's own runs against a daemon predating the runs list. */

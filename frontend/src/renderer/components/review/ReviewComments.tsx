@@ -166,6 +166,21 @@ function ReviewPRBlockView({
 	const [, rerender] = useReducer((count: number) => count + 1, 0);
 	const [sendingAll, setSendingAll] = useState(false);
 	const [sendAllError, setSendAllError] = useState(false);
+	// One re-request per reviewer at a time: the Reviewers menu and a review's row
+	// ask through here, and a second ask while one is out waits on that one.
+	const rerequests = useRef<Map<string, Promise<void>>>(new Map());
+	const onRerequest = actions.onRerequest;
+	const cardActions: ReviewCommentActions = onRerequest ? {
+		...actions,
+		onRerequest: (reviewerId, target) => {
+			const key = reviewerId.trim().toLowerCase();
+			const pending = rerequests.current.get(key);
+			if (pending) return pending;
+			const request = onRerequest(reviewerId, target).finally(() => rerequests.current.delete(key));
+			rerequests.current.set(key, request);
+			return request;
+		},
+	} : actions;
 	const listId = useId();
 	const queryClient = useQueryClient();
 	// The SCM observer reads a PR's threads only for PRs it follows; ask once for the rest.
@@ -270,7 +285,7 @@ function ReviewPRBlockView({
 							</TabsPrimitive.List>
 						) : null}
 						<span className="ml-auto" />
-						<ReviewersMenu actions={actions} block={block} />
+						<ReviewersMenu actions={cardActions} block={block} />
 						<PRActionsMenu
 							block={block}
 							onOpenInBrowser={actions.onOpenInBrowser}
@@ -296,7 +311,7 @@ function ReviewPRBlockView({
 									<div className="divide-y divide-border/60">
 										{shown.map((comment) => (
 											<ReviewCommentRow
-												actions={actions}
+												actions={cardActions}
 												block={block}
 												comment={comment}
 												expanded={isExpanded(comment)}

@@ -2450,7 +2450,8 @@ function MergedReviewsSection({
 	const blocks = buildReviewBlocks({
 		openPRs: openPRs.map((pr) => ({ url: pr.url, number: pr.number })),
 		providerPRs: githubPRs,
-		reviewStates: openReviewStatesFor(session, reviewStates),
+		// Unfiltered: a PR the SCM summary adds before the session lists it still finds its state.
+		reviewStates,
 		runs,
 	});
 	const providerUrl = (block: ReviewPRBlock) => block.provider?.url ?? block.prUrl;
@@ -2507,7 +2508,8 @@ function MergedReviewsSection({
 		onViewInFile: onOpenReviewFile ? (comment) => {
 			if (comment.file) onOpenReviewFile({ line: comment.line, path: comment.file });
 		} : undefined,
-		onOpenInBrowser: openInAOBrowser,
+		// A Cloud session's link has no Browser to open in here; the forge link stays.
+		onOpenInBrowser: session.cloud ? undefined : openInAOBrowser,
 	};
 	return (
 		<ReviewCommentsSection
@@ -2716,7 +2718,8 @@ function ReviewPanel({
 	const runningStates = openReviewStates.filter((review) => review.status === "running");
 	const phase = reviewPhase(openReviewStates, reviewerActivityState, reviewerActivityHarness);
 	// The phase and the run it describes come together: the run waiting for input, not whichever PR is first.
-	const runningRun = reviewPhaseRun(openReviewStates, phase, reviewerActivityHarness) ?? runningStates[0]?.latestRun;
+	// With no run for the phase, the label shows alone rather than another run's commit and timer.
+	const runningRun = reviewPhaseRun(openReviewStates, phase, reviewerActivityHarness);
 	// A push since the last pass leaves that pass as previousRun, and it still says when the PR was last reviewed.
 	const newestRun = openReviewStates
 		.flatMap((review) => [review.latestRun, review.previousRun])

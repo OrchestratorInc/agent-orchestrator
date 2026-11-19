@@ -354,6 +354,20 @@ describe("buildReviewBlocks", () => {
 		expect(block!.provider).toBeUndefined();
 	});
 
+	it("does not pair by number with an unnamed PR when another repository has the number too", () => {
+		const opaque = "https://example.com/pr/3";
+		const [block] = buildReviewBlocks({
+			openPRs: [{ url: "https://github.com/acme/app/pull/3", number: 3 }],
+			providerPRs: [
+				summary({ url: "https://api.github.com/repos/acme/web/pulls/3", htmlUrl: "https://github.com/acme/web/pull/3", repo: "acme/web" }),
+				summary({ url: opaque, htmlUrl: opaque, repo: undefined }),
+			],
+			reviewStates: [],
+			runs: [],
+		});
+		expect(block!.provider).toBeUndefined();
+	});
+
 	it("lists a state's own completed pass when the runs list holds only other PRs' runs", () => {
 		const block = blockFor({
 			states: [state({ latestRun: run({ id: "embedded", body: "From the state." }) })],
