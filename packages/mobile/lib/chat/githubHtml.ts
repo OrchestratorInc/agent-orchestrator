@@ -25,12 +25,19 @@ export type GitHubSegment =
 // body is optional, tried empty first, so an empty block closes at the next line.
 // An opening line ends in a newline and, for backticks, holds no other backtick:
 // ```code``` is a code span.
-const FENCE = /^ {0,3}(?:(`{3,})[^`\n]*(?=\n)(?:(?:\n[\s\S]*?)??\n {0,3}\1`*[ \t]*(?=\n|(?![\s\S]))|[\s\S]*(?![\s\S]))|(~{3,})[^\n]*(?=\n)(?:(?:\n[\s\S]*?)??\n {0,3}\2~*[ \t]*(?=\n|(?![\s\S]))|[\s\S]*(?![\s\S])))/gm;
+const FENCE = /^ {0,3}(?:(`{3,})[^`\n]*(?=\n)(?:(?:\n[\s\S]*?)??\n {0,3}\1`*[ \t]*(?=\n|(?![\s\S]))|[\s\S]*(?![\s\S]))|(~{3,})[^\n]*(?=\n)(?:(?:\n[\s\S]*?)??\n {0,3}\2~*[ \t]*(?=\n|(?![\s\S]))|[\s\S]*(?![\s\S])))/;
 // A whole backtick run, then the first run of exactly that length (CommonMark): `` `<details>` `` is one span.
 // A span may wrap a line but not a blank one, which ends the paragraph.
-const CODE_SPAN = /(?<!`)(`+)(?!`)((?:(?!\n[ \t]*\n)[\s\S])*?[^`])\1(?!`)/g;
+const CODE_SPAN = /(?<!`)(`+)(?!`)((?:(?!\n[ \t]*\n)[\s\S])*?[^`])\1(?!`)/;
 // An unterminated comment hides the rest of the text, as it does on GitHub.
-const COMMENT = /<!--[\s\S]*?(?:-->|(?![\s\S]))/g;
+const COMMENT = /<!--[\s\S]*?(?:-->|(?![\s\S]))/;
+// Code and comments are each read in one pass, left to right, so whichever starts
+// first wins (CommonMark): a backtick or a fence inside a closed comment is part
+// of it and cannot reach past its `-->`, and `<!--` inside code stays code. Fences
+// and comments that open a line are blocks, read before code spans and the rest.
+const BLOCKS = new RegExp(String.raw`${FENCE.source}|^ {0,3}${COMMENT.source}`, "gm");
+const INLINE = new RegExp(String.raw`${CODE_SPAN.source}|${COMMENT.source}`, "g");
+const isComment = (match: string) => match.trimStart().startsWith("<!--");
 const DETAILS = /<details\b[^>]*>|<\/details\s*>/gi;
 const SUMMARY = /^\s*<summary\b[^>]*>([\s\S]*?)<\/summary\s*>/i;
 
@@ -152,11 +159,10 @@ function segmentsOf(parts: ReadonlyArray<string | GitHubSegment>, shelf: Shelf):
 /** A GitHub comment's body as Markdown runs and the `<details>` sections between them. */
 export function githubSegments(body: string): GitHubSegment[] {
 	const shelf: Shelf = [];
-	// Fences first, then the code spans outside them; comments go once code is set aside.
+	// Comments are dropped and code set aside, blocks first, then what is inline.
 	const text = body.replace(/\r\n?/g, "\n").replace(/\u0000/g, "")
-		.replace(FENCE, (fence) => shelve(shelf, fence))
-		.replace(CODE_SPAN, (span) => shelve(shelf, span))
-		.replace(COMMENT, "");
+		.replace(BLOCKS, (match) => isComment(match) ? "" : shelve(shelf, match))
+		.replace(INLINE, (match) => isComment(match) ? "" : shelve(shelf, match));
 	const stack: Frame[] = [{ parts: [] }];
 	let at = 0;
 	for (const match of text.matchAll(DETAILS)) {

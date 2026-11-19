@@ -127,6 +127,15 @@ describe("githubSegments", () => {
 		expect(githubSegments("a ` b\n\n<b>c</b> `")).toEqual([{ kind: "markdown", text: "a ` b\n\n**c** `" }]);
 	});
 
+	it("reads a closed comment as a whole, whatever backticks or fences it holds", () => {
+		expect(githubSegments("<!-- note: ` -->\nVisible review with `code`.")).toEqual([{ kind: "markdown", text: "Visible review with `code`." }]);
+		expect(githubSegments("Use `x` <!-- a ` b --> and `y`.")).toEqual([{ kind: "markdown", text: "Use `x`  and `y`." }]);
+		expect(githubSegments("<!--\n```\n-->\nVisible <b>text</b>")).toEqual([{ kind: "markdown", text: "Visible **text**" }]);
+		// Whichever starts first wins: a span that opens before a comment keeps it as code.
+		expect(githubSegments("`<!--` stays")).toEqual([{ kind: "markdown", text: "`<!--` stays" }]);
+		expect(githubSegments("```\n<!--\n```\nshown")).toEqual([{ kind: "markdown", text: "```\n<!--\n```\nshown" }]);
+	});
+
 	it("keeps code spans inside HTML code as written", () => {
 		expect(githubSegments("<pre><code>const name = `world`;</code></pre>")).toEqual([{ kind: "markdown", text: "```\nconst name = `world`;\n```" }]);
 		expect(githubSegments("<pre>```\nfence\n```</pre>")).toEqual([{ kind: "markdown", text: "````\n```\nfence\n```\n````" }]);
