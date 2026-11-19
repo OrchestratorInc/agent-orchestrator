@@ -107,6 +107,8 @@ describe("cloud approvals", () => {
 		await waitFor(() => expect(reader.result.current.map((request) => request.id)).toEqual(["a-1"]));
 		expect(hooks.listBrowserApprovals.mock.calls).toEqual([["org-1", "s-1"]]);
 		shell.unmount();
+		// The reader follows the shared cache, not the shell's lifetime.
+		act(() => client.removeQueries({ queryKey: ["approvals", "pending", "cloud"] }));
 		await waitFor(() => expect(reader.result.current).toEqual([]));
 		client.clear();
 	});
