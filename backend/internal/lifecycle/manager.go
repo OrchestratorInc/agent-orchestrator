@@ -262,6 +262,11 @@ type Manager struct {
 	projects         projectConfigLoader
 	operationGateMu  sync.RWMutex
 	operationGate    sessionOperationGate
+
+	// usageReactivations holds a spawn's background usage reactivation until it
+	// ends. Termination waits for it before finalizing usage. Guarded by mu.
+	usageReactivations map[domain.SessionID]chan struct{}
+
 	// dataDir backs ReconcileSessionOutputType's artifact-dir fallback for
 	// sessions rows created before session_output_type/artifact_dir existed.
 	dataDir string
@@ -314,6 +319,7 @@ func New(store sessionStore, messenger ports.AgentMessenger, opts ...Option) *Ma
 		clock:                       clock,
 		react:                       newReactionState(),
 		flights:                     map[domain.SessionID]*toolFlight{},
+		usageReactivations:          map[domain.SessionID]chan struct{}{},
 		steps:                       map[domain.SessionID][]domain.SessionStep{},
 		pendingLaunches:             map[domain.SessionID]pendingLaunch{},
 		steerActive:                 func(domain.AgentHarness) bool { return false },
@@ -505,6 +511,7 @@ func (m *Manager) ApplyRuntimeObservation(ctx context.Context, id domain.Session
 		return err
 	}
 
+	m.awaitUsageReactivation(ctx, id)
 	finalizeSessionUsage(ctx, id, terminationLaunch, terminationRevision, finalizer)
 
 	terminated := false
@@ -1636,9 +1643,42 @@ func (m *Manager) markSpawned(
 	if err != nil {
 		return err
 	}
-	// Usage collection catches up in the background; a new agent's first prompt does not wait for it.
-	go reactivateSessionUsage(context.WithoutCancel(ctx), id, launchID, reactivator)
+	if reactivator == nil {
+		return nil
+	}
+	// Usage collection catches up in the background; a new agent's first prompt
+	// does not wait for it. Termination waits for it before finalizing usage.
+	done := make(chan struct{})
+	m.mu.Lock()
+	m.usageReactivations[id] = done
+	m.mu.Unlock()
+	go func() {
+		defer func() {
+			m.mu.Lock()
+			if m.usageReactivations[id] == done {
+				delete(m.usageReactivations, id)
+			}
+			m.mu.Unlock()
+			close(done)
+		}()
+		reactivateSessionUsage(context.WithoutCancel(ctx), id, launchID, reactivator)
+	}()
 	return nil
+}
+
+// awaitUsageReactivation waits for a spawn's background usage reactivation, so
+// it cannot reopen a binding that termination has started to finalize.
+func (m *Manager) awaitUsageReactivation(ctx context.Context, id domain.SessionID) {
+	m.mu.Lock()
+	done := m.usageReactivations[id]
+	m.mu.Unlock()
+	if done == nil {
+		return
+	}
+	select {
+	case <-done:
+	case <-ctx.Done():
+	}
 }
 
 // CommitControllerEpoch atomically changes which controller owns a live
@@ -1812,6 +1852,7 @@ func (m *Manager) MarkTerminated(ctx context.Context, id domain.SessionID) error
 		m.mu.Lock()
 		finalizer := m.usageFinalizer
 		m.mu.Unlock()
+		m.awaitUsageReactivation(ctx, id)
 		finalizeSessionUsage(ctx, id, launchID, sessionRevision, finalizer)
 
 		const (

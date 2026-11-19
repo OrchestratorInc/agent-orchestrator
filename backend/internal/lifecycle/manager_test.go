@@ -1970,6 +1970,7 @@ type fakeUsageLifecycle struct {
 	reactivateLaunch string
 	sawLive          bool
 	reactivated      chan struct{}
+	release          chan struct{}
 }
 
 func (f *fakeUsageLifecycle) ReactivateSession(
@@ -1977,6 +1978,9 @@ func (f *fakeUsageLifecycle) ReactivateSession(
 	id domain.SessionID,
 	launchID string,
 ) error {
+	if f.release != nil {
+		<-f.release
+	}
 	f.reactivateCalls++
 	f.reactivateID = id
 	f.reactivateLaunch = launchID
@@ -2017,6 +2021,43 @@ func TestMarkSpawnedReactivatesUsageAfterLifecycleTransition(t *testing.T) {
 		usage.reactivateLaunch != "launch-new" || !usage.sawLive {
 		t.Fatalf("usage reactivation = calls:%d id:%q launch:%q live:%v",
 			usage.reactivateCalls, usage.reactivateID, usage.reactivateLaunch, usage.sawLive)
+	}
+}
+
+func TestMarkTerminatedFinalizesUsageAfterSpawnReactivation(t *testing.T) {
+	m, st, _ := newManager()
+	st.sessions["mer-1"] = domain.SessionRecord{
+		ID:           "mer-1",
+		ProjectID:    "mer",
+		IsTerminated: true,
+		Activity:     domain.Activity{State: domain.ActivityExited},
+		Metadata:     domain.SessionMetadata{RuntimeLaunchID: "launch-old"},
+	}
+	release := make(chan struct{})
+	usage := &fakeUsageLifecycle{fakeUsageFinalizer: fakeUsageFinalizer{store: st}, release: release}
+	reactivatedFirst := false
+	usage.onFinalize = func(domain.SessionID, string, int64) error {
+		reactivatedFirst = usage.reactivateCalls == 1
+		return nil
+	}
+	m.SetUsageFinalizer(usage)
+
+	if err := m.MarkSpawned(ctx, "mer-1", domain.SessionMetadata{RuntimeLaunchID: "launch-new"}); err != nil {
+		t.Fatal(err)
+	}
+	terminated := make(chan error, 1)
+	go func() { terminated <- m.MarkTerminated(ctx, "mer-1") }()
+	select {
+	case err := <-terminated:
+		t.Fatalf("termination finished while the spawn's usage reactivation was still running: %v", err)
+	case <-time.After(100 * time.Millisecond):
+	}
+	close(release)
+	if err := <-terminated; err != nil {
+		t.Fatal(err)
+	}
+	if !reactivatedFirst || !st.sessions["mer-1"].IsTerminated {
+		t.Fatalf("usage finalized before reactivation ended: reactivated first=%v terminated=%v", reactivatedFirst, st.sessions["mer-1"].IsTerminated)
 	}
 }
 
