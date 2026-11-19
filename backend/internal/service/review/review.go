@@ -64,6 +64,10 @@ func reviewErrorKind(err error) string {
 // Manager is the reviews surface the HTTP controller depends on.
 type Manager interface {
 	RecoverChatReviewers(ctx context.Context) error
+	// ReviewerObserver is the review side of the runtime reaper: the reaper
+	// probes reviewers serving an in-progress run and this reduces each pass
+	// into review-run transitions.
+	ReviewerObserver() ports.ReviewerObserver
 	TriggerRequested(ctx context.Context, workerID domain.SessionID, req TriggerRequest) (TriggerOutcome, error)
 	RequestRereview(ctx context.Context, workerID domain.SessionID, prURL, reviewer string) error
 	ResolveReviewComment(ctx context.Context, workerID domain.SessionID, prURL, commentURL string) error
@@ -91,6 +95,7 @@ type Service struct {
 	codexOperationGate ports.CodexOperationGate
 	notifications      reviewNotificationSink
 	prRefresher        PRRefresher
+	reviewRefresher    ThreadRefresher
 	// engineTrigger indirects the engine's source-tagged trigger so the
 	// instrumented path can be exercised without standing up a full engine and
 	// its eighteen-method store. Defaulted in New; only tests replace it.
@@ -110,6 +115,12 @@ func (s *Service) RecoverChatReviewers(ctx context.Context) error {
 	return s.engine.RecoverChatReviewers(ctx)
 }
 
+// ReviewerObserver returns the engine as the runtime reaper's reviewer
+// observer.
+func (s *Service) ReviewerObserver() ports.ReviewerObserver {
+	return s.engine
+}
+
 // Store is the review_run persistence surface owned by the service submit path.
 type Store interface {
 	GetReviewByID(ctx context.Context, id string) (domain.Review, bool, error)
@@ -117,11 +128,13 @@ type Store interface {
 	GetReviewRun(ctx context.Context, id string) (domain.ReviewRun, bool, error)
 	GetSession(ctx context.Context, id domain.SessionID) (domain.SessionRecord, bool, error)
 	SetSessionAutoInjectReview(ctx context.Context, id domain.SessionID, autoInject bool, updatedAt time.Time) (bool, error)
-	UpdateReviewRunResult(ctx context.Context, id string, status domain.ReviewRunStatus, verdict domain.ReviewVerdict, body, githubReviewID string, autoInjectReview bool) (bool, error)
+	TransitionReviewRun(ctx context.Context, id string, from []domain.ReviewRunStatus, to domain.ReviewRunStatus, patch domain.ReviewRunPatch) (bool, error)
 	ListPRsBySession(ctx context.Context, id domain.SessionID) ([]domain.PullRequest, error)
 	ListPRReviews(ctx context.Context, prURL string) ([]domain.PullRequestReview, error)
 	ListPRComments(ctx context.Context, prURL string) ([]domain.PullRequestComment, error)
-	MarkPRCommentResolved(ctx context.Context, prURL, commentID string) (bool, error)
+	// MarkPRReviewThreadResolved records a thread resolved along with all its
+	// comments; the PR summary reads a thread's state from the thread row.
+	MarkPRReviewThreadResolved(ctx context.Context, prURL, threadID string) error
 }
 
 // PRRefresher fetches one pull request fresh from its provider and records it
@@ -129,6 +142,23 @@ type Store interface {
 // never takes one over from another active session.
 type PRRefresher interface {
 	RefreshPR(ctx context.Context, workerID domain.SessionID, prURL string) error
+}
+
+// BranchPRFinder finds open PRs from the worker's own branch that AO does not
+// track yet, so a review requested right after opening a PR can attach it
+// instead of failing until the SCM observer's next poll.
+type BranchPRFinder interface {
+	FindBranchPRs(ctx context.Context, workerID domain.SessionID) (BranchPRs, error)
+}
+
+// BranchPRs are the open PR URLs a branch lookup found, split by who opened
+// them.
+type BranchPRs struct {
+	// Own are the PRs opened by the account AO is signed in with.
+	Own []string
+	// OtherAuthor are the PRs another account opened on the same branch; they
+	// are attached only when named with --pr.
+	OtherAuthor []string
 }
 
 // prRefreshTimeout bounds the provider fetch a trigger waits for before
@@ -142,6 +172,19 @@ type Option func(*Service)
 // requested review, so the pass covers the commit actually on the PR.
 func WithPRRefresher(r PRRefresher) Option {
 	return func(s *Service) { s.prRefresher = r }
+}
+
+// ThreadRefresher asks SCM observation to read one PR's review threads now
+// rather than on its next scheduled poll. It must not block.
+type ThreadRefresher interface {
+	RequestReviewRefresh(prURL string)
+}
+
+// WithThreadRefresher refreshes a PR's review threads as soon as an AO review
+// posted to the provider is submitted, so its comments reach the worker
+// without waiting for the poller to notice them.
+func WithThreadRefresher(r ThreadRefresher) Option {
+	return func(s *Service) { s.reviewRefresher = r }
 }
 
 // WithClock overrides the service clock for tests.
@@ -399,7 +442,8 @@ func (s *Service) ResolveReviewComment(ctx context.Context, workerID domain.Sess
 		return fmt.Errorf("%w: review comment is not tracked for this PR", ErrNotFound)
 	}
 	if target.Resolved {
-		return nil
+		// Already resolved on the provider; make sure the thread row agrees.
+		return s.store.MarkPRReviewThreadResolved(ctx, pr.URL, target.ThreadID)
 	}
 	ref, err := reviewRequestRef(pr)
 	if err != nil {
@@ -414,10 +458,10 @@ func (s *Service) ResolveReviewComment(ctx context.Context, workerID domain.Sess
 		}
 		return err
 	}
-	if updated, err := s.store.MarkPRCommentResolved(ctx, pr.URL, target.ID); err != nil {
+	// Mark the whole thread, not just this comment: the summary takes a thread's
+	// state from its row, so a comment-only mark left the card open until the next poll.
+	if err := s.store.MarkPRReviewThreadResolved(ctx, pr.URL, target.ThreadID); err != nil {
 		return err
-	} else if !updated {
-		return fmt.Errorf("%w: review comment is not tracked for this PR", ErrNotFound)
 	}
 	s.emit(ctx, "ao.review.comment_resolved", workerID, map[string]any{"provider": pr.Provider})
 	return nil
@@ -464,17 +508,19 @@ func (s *Service) TriggerRequested(ctx context.Context, workerID domain.SessionI
 	if req.Rerun && req.RejectReviewedHead {
 		return TriggerOutcome{}, fmt.Errorf("%w: rerun cannot be combined with rejecting an already-reviewed head", ErrInvalid)
 	}
-	if err := s.refreshPRs(ctx, workerID, strings.TrimSpace(req.PRURL)); err != nil {
+	branchLookupFoundNone, err := s.refreshPRs(ctx, workerID, strings.TrimSpace(req.PRURL))
+	if err != nil {
 		return TriggerOutcome{}, err
 	}
 	result, err := s.triggerWithOptions(ctx, workerID, reviewcore.TriggerOptions{
-		Harness:            req.Harness,
-		Config:             req.Config,
-		Source:             source,
-		InterfaceMode:      req.InterfaceMode,
-		PRURL:              strings.TrimSpace(req.PRURL),
-		RejectReviewedHead: req.RejectReviewedHead,
-		Rerun:              req.Rerun,
+		Harness:                 req.Harness,
+		Config:                  req.Config,
+		Source:                  source,
+		InterfaceMode:           req.InterfaceMode,
+		PRURL:                   strings.TrimSpace(req.PRURL),
+		RejectReviewedHead:      req.RejectReviewedHead,
+		Rerun:                   req.Rerun,
+		BranchPRLookupFoundNone: branchLookupFoundNone,
 	})
 	if err != nil {
 		return TriggerOutcome{}, err
@@ -510,16 +556,20 @@ func (s *Service) TriggerRequested(ctx context.Context, workerID domain.SessionI
 // not track it yet; failing to fetch it is an error, because there is nothing
 // else to review. Refreshing already-tracked PRs is best effort: on failure the
 // trigger proceeds with the facts AO has, and its same-commit checks still
-// report a push AO has not observed.
-func (s *Service) refreshPRs(ctx context.Context, workerID domain.SessionID, prURL string) error {
+// report a push AO has not observed. It reports whether a lookup of the
+// worker's branch ran and found no open PR.
+func (s *Service) refreshPRs(ctx context.Context, workerID domain.SessionID, prURL string) (bool, error) {
 	if s.prRefresher == nil {
-		return nil
+		return false, nil
 	}
 	ctx, cancel := context.WithTimeout(ctx, prRefreshTimeout)
 	defer cancel()
 	tracked, err := s.store.ListPRsBySession(ctx, workerID)
 	if err != nil {
-		return err
+		return false, err
+	}
+	if prURL == "" && !hasOpenPR(tracked) {
+		return s.attachBranchPR(ctx, workerID)
 	}
 	if prURL != "" {
 		known := false
@@ -530,11 +580,11 @@ func (s *Service) refreshPRs(ctx context.Context, workerID domain.SessionID, prU
 			}
 		}
 		if err := s.prRefresher.RefreshPR(ctx, workerID, prURL); err != nil && !known {
-			return err
+			return false, err
 		} else if err != nil {
 			slog.Default().WarnContext(ctx, "review trigger: refresh named PR failed; using stored facts", "session", workerID, "err", err)
 		}
-		return nil
+		return false, nil
 	}
 	for _, pr := range tracked {
 		if pr.Merged || pr.Closed {
@@ -544,7 +594,65 @@ func (s *Service) refreshPRs(ctx context.Context, workerID domain.SessionID, prU
 			slog.Default().WarnContext(ctx, "review trigger: refresh PR failed; using stored facts", "session", workerID, "err", err)
 		}
 	}
-	return nil
+	return false, nil
+}
+
+// hasOpenPR reports whether any tracked PR is still open. A session whose
+// only tracked PRs are closed or merged may have opened a new one on the same
+// branch.
+func hasOpenPR(prs []domain.PullRequest) bool {
+	for _, pr := range prs {
+		if !pr.Merged && !pr.Closed {
+			return true
+		}
+	}
+	return false
+}
+
+// attachBranchPR attaches the one open PR from the worker's branch when AO
+// tracks no open PR yet, typically because the PR was opened moments ago. Finding
+// nothing leaves the engine to report that no PR is tracked, and is reported
+// as true so the engine can say the branch has none; a failed lookup, several
+// candidates, and a PR another account opened are reported with the exact
+// retry command. Another account's PR is never attached without --pr, the
+// same rule the SCM observer follows.
+func (s *Service) attachBranchPR(ctx context.Context, workerID domain.SessionID) (bool, error) {
+	finder, ok := s.prRefresher.(BranchPRFinder)
+	if !ok {
+		return false, nil
+	}
+	found, err := finder.FindBranchPRs(ctx, workerID)
+	if err != nil {
+		// Nothing is tracked, so the review cannot go ahead; say the lookup
+		// failed rather than that the branch has no PR.
+		slog.Default().WarnContext(ctx, "review trigger: find PR on worker branch failed", "session", workerID, "err", err)
+		return false, fmt.Errorf("%w: Orchestrator is not tracking an open PR for worker %q yet and could not look up open PRs from its branch (%w); if you just opened one, run `ao review trigger %s --pr <url>` with that PR's URL", ErrInvalid, workerID, err, workerID)
+	}
+	switch len(found.Own) {
+	case 0:
+		if len(found.OtherAuthor) > 0 {
+			return false, fmt.Errorf("%w: Orchestrator is not tracking an open PR for worker %q yet; found a PR from another author on its branch, which Orchestrator does not attach automatically; to review it anyway, run %s", ErrInvalid, workerID, retryCommands(workerID, found.OtherAuthor))
+		}
+		return true, nil
+	case 1:
+		// The PR may have closed since the lookup, seconds ago; say it was
+		// found, so a not-found or not-open error does not read as a miss.
+		prURL := found.Own[0]
+		if err := s.prRefresher.RefreshPR(ctx, workerID, prURL); err != nil {
+			return false, fmt.Errorf("found PR %s on worker %q's branch but could not attach it: %w; run `ao review trigger %s --pr %s` to try again", prURL, workerID, err, workerID, prURL)
+		}
+		return false, nil
+	}
+	return false, fmt.Errorf("%w: worker %q has %d open PRs from its branch that Orchestrator does not track yet; name one: %s", ErrInvalid, workerID, len(found.Own), retryCommands(workerID, found.Own))
+}
+
+// retryCommands lists the `ao review trigger --pr` command for each URL.
+func retryCommands(workerID domain.SessionID, urls []string) string {
+	cmds := make([]string, len(urls))
+	for i, prURL := range urls {
+		cmds[i] = fmt.Sprintf("`ao review trigger %s --pr %s`", workerID, prURL)
+	}
+	return strings.Join(cmds, ", ")
 }
 
 func firstNonEmpty(values ...string) string {
@@ -575,7 +683,7 @@ func (s *Service) triggerWithOptions(
 	triggeredPayload := map[string]any{"trigger": string(source), "rerun": opts.Rerun}
 	if err := config.Validate(); err != nil {
 		err = fmt.Errorf("%w: reviewer config: %w", ErrInvalid, err)
-		s.emit(ctx, "ao.review.trigger_failed", workerID, map[string]any{
+		s.emit(ctx, "ao.reviews.trigger_failed", workerID, map[string]any{
 			"error_kind": reviewErrorKind(err),
 			"trigger":    string(source),
 		})
@@ -593,7 +701,7 @@ func (s *Service) triggerWithOptions(
 	}
 	result, err := s.engineTrigger(ctx, workerID, opts)
 	if err != nil {
-		s.emit(ctx, "ao.review.trigger_failed", workerID, map[string]any{
+		s.emit(ctx, "ao.reviews.trigger_failed", workerID, map[string]any{
 			"error_kind": reviewErrorKind(err),
 			"trigger":    string(source),
 		})
@@ -609,7 +717,7 @@ func (s *Service) triggerWithOptions(
 		return result, nil
 	}
 	triggeredPayload["created_runs"] = len(result.CreatedRuns)
-	s.emit(ctx, "ao.review.triggered", workerID, triggeredPayload)
+	s.emit(ctx, "ao.reviews.triggered", workerID, triggeredPayload)
 	return result, nil
 }
 
@@ -619,7 +727,7 @@ func (s *Service) Cancel(ctx context.Context, workerID domain.SessionID) (review
 	if err != nil {
 		return result, err
 	}
-	s.emit(ctx, "ao.review.cancelled", workerID, map[string]any{
+	s.emit(ctx, "ao.reviews.cancelled", workerID, map[string]any{
 		"cancelled_runs": len(result.CancelledRuns),
 	})
 	return result, nil
@@ -713,6 +821,14 @@ func (s *Service) ApplyReviewActivitySignal(ctx context.Context, reviewSessionID
 			return nil
 		}
 		return fmt.Errorf("%w: review session %q", ErrNotFound, reviewSessionID)
+	}
+	if s.engine != nil && signal.State != "" {
+		// Activity is evidence for the run lifecycle, never run state itself.
+		review.ReviewerActivityState = signal.State
+		if signal.LaunchID != "" {
+			review.ReviewerLaunchID = signal.LaunchID
+		}
+		return s.engine.ObserveReviewActivity(ctx, review, signal.LaunchID, signal.State)
 	}
 	return nil
 }
@@ -810,7 +926,9 @@ func (s *Service) submitOne(ctx context.Context, workerID domain.SessionID, revi
 	}
 
 	switch run.Status {
-	case domain.ReviewRunRunning:
+	case domain.ReviewRunLaunching, domain.ReviewRunRunning:
+		// A fast reviewer can submit before the trigger records that its prompt
+		// was delivered; that submit also proves the delivery.
 		session, found, err := s.store.GetSession(ctx, workerID)
 		if err != nil {
 			return domain.ReviewRun{}, err
@@ -818,22 +936,37 @@ func (s *Service) submitOne(ctx context.Context, workerID domain.SessionID, revi
 		if !found {
 			return domain.ReviewRun{}, fmt.Errorf("%w: worker session %q", ErrNotFound, workerID)
 		}
-		updated, err := s.store.UpdateReviewRunResult(ctx, run.ID, domain.ReviewRunComplete, verdict, body, githubReviewID, session.AutoInjectReview)
+		now := s.clock()
+		patch := domain.ReviewRunPatch{
+			Verdict:          verdict,
+			Body:             &body,
+			GithubReviewID:   &githubReviewID,
+			AutoInjectReview: &session.AutoInjectReview,
+			EndedAt:          &now,
+		}
+		if run.StartedAt == nil {
+			patch.StartedAt = &now
+		}
+		updated, err := s.store.TransitionReviewRun(ctx, run.ID, []domain.ReviewRunStatus{domain.ReviewRunLaunching, domain.ReviewRunRunning}, domain.ReviewRunCompleted, patch)
 		if err != nil {
 			return domain.ReviewRun{}, err
 		}
 		if !updated {
 			return domain.ReviewRun{}, fmt.Errorf("%w: review run %q is not running", errRunSuperseded, runID)
 		}
-		run.Status = domain.ReviewRunComplete
+		run.Status = domain.ReviewRunCompleted
+		run.EndedAt = &now
 		run.Verdict = verdict
 		run.Body = body
 		run.GithubReviewID = githubReviewID
 		run.AutoInjectReview = session.AutoInjectReview
-		// Only on the real running -> complete transition. Re-submitting an
-		// already-complete run returns early below, so telemetry stays idempotent
+		if githubReviewID != "" && s.reviewRefresher != nil {
+			s.reviewRefresher.RequestReviewRefresh(run.PRURL)
+		}
+		// Only on the real running -> completed transition. Re-submitting an
+		// already-completed run returns early below, so telemetry stays idempotent
 		// the same way the store does.
-		s.emit(ctx, "ao.review.submitted", workerID, map[string]any{
+		s.emit(ctx, "ao.reviews.submitted", workerID, map[string]any{
 			"harness":            string(run.Harness),
 			"verdict":            string(verdict),
 			"duration_ms":        s.clock().Sub(run.CreatedAt).Milliseconds(),
@@ -850,7 +983,7 @@ func (s *Service) submitOne(ctx context.Context, workerID domain.SessionID, revi
 			// all, recorded at the moment it is snapshotted onto the run.
 			"auto_inject": session.AutoInjectReview,
 		})
-	case domain.ReviewRunComplete:
+	case domain.ReviewRunCompleted:
 		if run.Verdict != verdict {
 			return domain.ReviewRun{}, fmt.Errorf("%w: review run %q already recorded verdict %q", ErrInvalid, runID, run.Verdict)
 		}
@@ -860,8 +993,6 @@ func (s *Service) submitOne(ctx context.Context, workerID domain.SessionID, revi
 		if githubReviewID != "" && githubReviewID != run.GithubReviewID {
 			return domain.ReviewRun{}, fmt.Errorf("%w: review run %q already recorded GitHub review id %q", ErrInvalid, runID, run.GithubReviewID)
 		}
-	case domain.ReviewRunDelivered:
-		return run, nil
 	default:
 		return domain.ReviewRun{}, fmt.Errorf("%w: review run %q is not running", errRunSuperseded, runID)
 	}

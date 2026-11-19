@@ -93,7 +93,7 @@ it("says Cleanup does not run for a project on a provider without it", async () 
 	mocks.get.mockResolvedValue({ project: project({ ...withoutCoder, sandboxProvider: "createos" }) });
 	renderScripts();
 	await userEvent.click(await screen.findByRole("tab", { name: "Cleanup" }));
-	expect(screen.getByText(/Cleanup runs before AO deletes a Coder, Freestyle or Docker workspace/)).toBeInTheDocument();
+	expect(screen.getByText(/Cleanup runs before Orchestrator deletes a Coder, Freestyle or Docker workspace/)).toBeInTheDocument();
 });
 
 it("reports unsaved edits as dirty without the autosave Saving state, and lists the variables plainly", async () => {

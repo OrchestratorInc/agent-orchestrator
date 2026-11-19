@@ -45,11 +45,12 @@ type Identity struct {
 	writeFile  func(path string, data []byte) error
 	removeFile func(path string) error
 
-	mu          sync.RWMutex
-	installID   string
-	anonymousID string
-	onRetired   func()
-	cloudUserID string
+	mu             sync.RWMutex
+	installID      string
+	anonymousID    string
+	onRetired      func()
+	cloudUserID    string
+	cloudUserKnown bool
 	// persistFailed is set while the last SetCloudUserID could not persist.
 	persistFailed bool
 	githubLogin   string
@@ -78,7 +79,15 @@ func NewIdentity(dataDir string) (*Identity, error) {
 			return nil, fmt.Errorf("record telemetry anonymous id: %w", err)
 		}
 	}
-	return &Identity{writeFile: writeFileAtomic, removeFile: os.Remove, dataDir: dataDir, installID: id, anonymousID: anon, optOutPath: filepath.Join(dataDir, OptOutFile), fresh: freshInstall(dataDir)}, nil
+	ident := &Identity{writeFile: writeFileAtomic, removeFile: os.Remove, dataDir: dataDir, installID: id, anonymousID: anon, optOutPath: filepath.Join(dataDir, OptOutFile), fresh: freshInstall(dataDir)}
+	// The bound user is the last sign-in the desktop handed off and the daemon
+	// recorded; a sign-out removes it. Restoring it lets a restarted or
+	// CLI-started daemon report under the signed-in Cloud ID without waiting
+	// for the desktop to push it again. Signed out, nothing is restored.
+	if cloudUserIDPattern.MatchString(bound) {
+		ident.cloudUserID, ident.cloudUserKnown = bound, true
+	}
+	return ident, nil
 }
 
 // FreshInstall reports whether this process is the first run of a brand new
@@ -152,6 +161,15 @@ func (i *Identity) InstallID() string {
 	return i.installID
 }
 
+// DaysSinceInstall uses the durable install ID file modification timestamp.
+func (i *Identity) DaysSinceInstall(now time.Time) (int, bool) {
+	info, err := os.Stat(filepath.Join(i.dataDir, installIDFile))
+	if err != nil || info.ModTime().After(now) {
+		return 0, false
+	}
+	return int(now.UTC().Sub(info.ModTime().UTC()).Hours() / 24), true
+}
+
 // AnonymousID is the distinct ID used when no Cloud user is bound.
 func (i *Identity) AnonymousID() string {
 	i.mu.RLock()
@@ -177,12 +195,18 @@ func (i *Identity) SetCloudUserID(ctx context.Context, id string) error {
 	i.mu.Lock()
 	defer i.mu.Unlock()
 	i.cloudUserID = id
+	i.cloudUserKnown = true
 	err := i.bindLocked(id)
 	i.persistFailed = err != nil
 	return err
 }
 
 func (i *Identity) bindLocked(id string) error {
+	// The desktop retires a binding itself on sign-out (so it holds while the
+	// daemon is down); pick up the anonymous ID it wrote.
+	if anon, err := readTrimmed(filepath.Join(i.dataDir, anonymousIDFile)); err == nil && anon != "" {
+		i.anonymousID = anon
+	}
 	boundPath := filepath.Join(i.dataDir, boundUserFile)
 	bound, err := readTrimmed(boundPath)
 	if err != nil {
@@ -259,6 +283,7 @@ func (i *Identity) Snapshot() ports.TelemetryIdentity {
 	snap := ports.TelemetryIdentity{InstallID: i.installID, AnonymousID: i.anonymousID, OptedOut: optedOut || i.persistFailed}
 	if !snap.OptedOut {
 		snap.CloudUserID, snap.GitHubLogin = i.cloudUserID, i.githubLogin
+		snap.CloudUserKnown = i.cloudUserKnown
 	}
 	return snap
 }

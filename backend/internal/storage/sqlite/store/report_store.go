@@ -75,38 +75,12 @@ func (s *Store) ListReportsBySession(ctx context.Context, id domain.SessionID) (
 }
 
 // ListReportedPRURLs returns only a worker's structured created-PR outputs.
-// A URL that is a known alias, such as a renamed repository's old name,
-// resolves to its tracked PR URL.
 func (s *Store) ListReportedPRURLs(ctx context.Context, id domain.SessionID) ([]string, error) {
 	urls, err := s.qr.ListReportedPRURLs(ctx, string(id))
 	if err != nil {
 		return nil, fmt.Errorf("list reported PR URLs for %s: %w", id, err)
 	}
-	for i, raw := range urls {
-		if urls[i], err = s.resolveReportedPRURL(ctx, raw); err != nil {
-			return nil, fmt.Errorf("resolve reported PR URL %s: %w", raw, err)
-		}
-	}
 	return urls, nil
-}
-
-// resolveReportedPRURL tries the URL as typed (claim aliases keep that form)
-// and then its normalized form (discovery aliases use that form).
-func (s *Store) resolveReportedPRURL(ctx context.Context, raw string) (string, error) {
-	candidates := []string{raw}
-	if ref, err := domain.ParseChangeRequestURL(raw); err == nil && ref.URL != raw {
-		candidates = append(candidates, ref.URL)
-	}
-	for _, url := range candidates {
-		pr, err := s.qr.GetPRByURLOrAlias(ctx, url)
-		if err == nil {
-			return pr.URL, nil
-		}
-		if !errors.Is(err, sql.ErrNoRows) {
-			return "", err
-		}
-	}
-	return raw, nil
 }
 
 // ListReportsByProject is the read-only persisted report projection. Consumers
@@ -215,6 +189,64 @@ func (s *Store) DeferReportBatch(ctx context.Context, projectID domain.ProjectID
 		return 0, fmt.Errorf("defer project report batch: %w", err)
 	}
 	return len(rows), nil
+}
+
+// FailReportBatch marks the matching project batch permanently failed after reaching the attempt limit.
+func (s *Store) FailReportBatch(ctx context.Context, projectID domain.ProjectID, token string, at time.Time, lastError string) (int, error) {
+	if projectID == "" || token == "" || at.IsZero() {
+		return 0, domain.ErrInvalidReport
+	}
+	s.writeMu.Lock()
+	defer s.writeMu.Unlock()
+	rows, err := s.qw.FailReportBatch(ctx, gen.FailReportBatchParams{
+		ProjectID: string(projectID), ClaimToken: token, LastError: lastError,
+	})
+	if err != nil {
+		return 0, fmt.Errorf("fail project report batch: %w", err)
+	}
+	return len(rows), nil
+}
+
+// RetryUnacknowledgedReportBatch atomically records a submitted-but-unobserved
+// attempt and either defers the batch or fails it at the durable attempt limit.
+// The returned count includes only reports transitioned to failed.
+func (s *Store) RetryUnacknowledgedReportBatch(ctx context.Context, projectID domain.ProjectID, token string, retryAt time.Time, limit int, lastError string) (int, error) {
+	if projectID == "" || token == "" || retryAt.IsZero() || limit <= 0 {
+		return 0, domain.ErrInvalidReport
+	}
+	s.writeMu.Lock()
+	defer s.writeMu.Unlock()
+	failed := 0
+	err := s.inTx(ctx, "retry unacknowledged report batch", func(q *gen.Queries) error {
+		attempts, err := q.IncrementUnacknowledgedReportBatch(ctx, gen.IncrementUnacknowledgedReportBatchParams{
+			ProjectID: string(projectID), ClaimToken: token,
+		})
+		if err != nil || len(attempts) == 0 {
+			return err
+		}
+		for _, count := range attempts {
+			if count >= int64(limit) {
+				rows, err := q.FailReportBatch(ctx, gen.FailReportBatchParams{
+					ProjectID: string(projectID), ClaimToken: token, LastError: lastError,
+				})
+				failed = len(rows)
+				return err
+			}
+		}
+		_, err = q.DeferReportBatch(ctx, gen.DeferReportBatchParams{
+			ProjectID: string(projectID), ClaimToken: token, AvailableAt: retryAt, LastError: lastError,
+		})
+		return err
+	})
+	if err != nil {
+		return 0, fmt.Errorf("retry unacknowledged report batch: %w", err)
+	}
+	return failed, nil
+}
+
+// AbandonReportBatch aliases FailReportBatch for callers referencing abandonment.
+func (s *Store) AbandonReportBatch(ctx context.Context, projectID domain.ProjectID, token string, at time.Time, lastError string) (int, error) {
+	return s.FailReportBatch(ctx, projectID, token, at, lastError)
 }
 
 // AcquireReportInterrupt durably enforces the per-worker interruption window.

@@ -2,11 +2,13 @@ package store_test
 
 import (
 	"context"
+	"errors"
 	"strings"
 	"testing"
 	"time"
 
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
+	reportsvc "github.com/aoagents/agent-orchestrator/backend/internal/service/report"
 	"github.com/aoagents/agent-orchestrator/backend/internal/storage/sqlite"
 )
 
@@ -236,3 +238,183 @@ func TestReportStoreInterruptLimitSurvivesRestart(t *testing.T) {
 		t.Fatalf("boundary acquired = %v, err = %v", acquired, err)
 	}
 }
+
+func TestReportStoreDeferredBatchYieldsScheduleToOtherProjects(t *testing.T) {
+	s := newTestStore(t)
+	ctx := context.Background()
+	seedProject(t, s, "ao")
+	seedProject(t, s, "other")
+	refusing, err := s.CreateSession(ctx, sampleRecord("ao"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	healthy, err := s.CreateSession(ctx, sampleRecord("other"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	now := time.Now().UTC().Truncate(time.Second)
+	for _, rec := range []domain.ReportRecord{
+		{ID: "rpt_refused", SessionID: refusing.ID, ProjectID: "ao", Message: "stuck", CreatedAt: now.Add(-time.Minute), DeliveryState: domain.ReportPending, AvailableAt: now.Add(-time.Minute), RepeatCount: 1},
+		{ID: "rpt_waiting", SessionID: healthy.ID, ProjectID: "other", Message: "done", CreatedAt: now, DeliveryState: domain.ReportPending, AvailableAt: now, RepeatCount: 1},
+	} {
+		if _, err := s.CreateReport(ctx, rec); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if claimed, err := s.ClaimPendingReportBatch(ctx, "ao", "token-1", now); err != nil || len(claimed) != 1 {
+		t.Fatalf("claimed = %+v, err = %v", claimed, err)
+	}
+	if _, err := s.DeferReportBatch(ctx, "ao", "token-1", now.Add(5*time.Second), "composer is not empty"); err != nil {
+		t.Fatal(err)
+	}
+	next, err := s.ListPendingReportSchedule(ctx, 1)
+	if err != nil || len(next) != 1 || next[0].ID != "rpt_waiting" {
+		t.Fatalf("next = %+v, err = %v; the refused batch kept the front of the schedule", next, err)
+	}
+	refused, ok, err := s.GetReport(ctx, "rpt_refused")
+	if err != nil || !ok || refused.DeliveryState != domain.ReportPending || refused.LastError != "composer is not empty" || !refused.AvailableAt.Equal(now.Add(5*time.Second)) || refused.DeliveryBatchID == "" {
+		t.Fatalf("refused = %+v ok=%v err=%v", refused, ok, err)
+	}
+}
+
+func TestReportStoreFailBatchTransitionsToTerminalFailed(t *testing.T) {
+	s := newTestStore(t)
+	ctx := context.Background()
+	seedProject(t, s, "ao")
+	sess, err := s.CreateSession(ctx, sampleRecord("ao"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	now := time.Now().UTC().Truncate(time.Second)
+	rec := domain.ReportRecord{
+		ID: "rpt_fail", SessionID: sess.ID, ProjectID: "ao", Message: "checkpoint",
+		CreatedAt: now, DeliveryState: domain.ReportPending, AvailableAt: now, RepeatCount: 1,
+	}
+	if _, err := s.CreateReport(ctx, rec); err != nil {
+		t.Fatal(err)
+	}
+	claimed, err := s.ClaimPendingReportBatch(ctx, "ao", "token-fail", now)
+	if err != nil || len(claimed) != 1 {
+		t.Fatalf("claim = %+v err = %v", claimed, err)
+	}
+	count, err := s.FailReportBatch(ctx, "ao", "token-fail", now, "attempts exceeded")
+	if err != nil {
+		t.Fatalf("FailReportBatch: %v", err)
+	}
+	if count != 1 {
+		t.Fatalf("failed count = %d, want 1", count)
+	}
+	next, err := s.ListPendingReportSchedule(ctx, 10)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(next) != 0 {
+		t.Fatalf("pending reports = %+v, want none after terminal failure", next)
+	}
+	failed, ok, err := s.GetReport(ctx, "rpt_fail")
+	if err != nil || !ok {
+		t.Fatalf("GetReport ok=%v err=%v", ok, err)
+	}
+	if failed.DeliveryState != domain.ReportFailed {
+		t.Fatalf("delivery state = %s, want %s", failed.DeliveryState, domain.ReportFailed)
+	}
+	if failed.LastError != "attempts exceeded" {
+		t.Fatalf("last error = %q, want 'attempts exceeded'", failed.LastError)
+	}
+	if failed.ClaimToken != "" || !failed.ClaimedAt.IsZero() {
+		t.Fatalf("claim token = %q, claimed_at = %v, want claim released", failed.ClaimToken, failed.ClaimedAt)
+	}
+}
+
+func TestReportRetryBudgetSurvivesCoordinatorAndStoreRestart(t *testing.T) {
+	ctx := context.Background()
+	dir := t.TempDir()
+	s, err := sqlite.Open(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = s.Close() })
+	seedProject(t, s, "ao")
+	worker, err := s.CreateSession(ctx, sampleRecord("ao"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	orch := sampleRecord("ao")
+	orch.Kind, orch.Mode = domain.KindOrchestrator, domain.SessionModeChat
+	if _, err := s.CreateSession(ctx, orch); err != nil {
+		t.Fatal(err)
+	}
+	now := time.Now().UTC().Truncate(time.Second)
+	if _, err := s.CreateReport(ctx, domain.ReportRecord{
+		ID: "restart-budget", SessionID: worker.ID, ProjectID: "ao", Message: "checkpoint",
+		CreatedAt: now, AvailableAt: now, DeliveryState: domain.ReportPending, RepeatCount: 1,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	delivery := &retryBudgetDelivery{err: reportsvc.ErrOrchestratorBusy}
+	newCoordinator := func() *reportsvc.Coordinator {
+		return reportsvc.NewCoordinator(reportsvc.CoordinatorDeps{
+			Store: s, Delivery: delivery, Now: func() time.Time { return now },
+			MaxDeliveryAttempts: 3, Expiry: -1,
+		})
+	}
+	c := newCoordinator()
+	// Busy retries must never consume the persisted unacknowledged budget.
+	for i := 0; i < 3; i++ {
+		if _, err := c.RunDue(ctx); err != nil {
+			t.Fatal(err)
+		}
+		now = now.Add(time.Minute)
+	}
+	delivery.err = reportsvc.ErrUnacknowledgedDelivery
+	for i := 0; i < 2; i++ {
+		if _, err := c.RunDue(ctx); !errors.Is(err, delivery.err) {
+			t.Fatalf("RunDue: %v", err)
+		}
+		rec, ok, err := s.GetReport(ctx, "restart-budget")
+		if err != nil || !ok || rec.DeliveryState != domain.ReportPending {
+			t.Fatalf("before restart: report=%+v, ok=%v, err=%v", rec, ok, err)
+		}
+		now = rec.AvailableAt
+	}
+	// A stale token must not increment the durable budget or terminate the batch.
+	if n, err := s.RetryUnacknowledgedReportBatch(ctx, "ao", "stale", now, 3, "stale"); err != nil || n != 0 {
+		t.Fatalf("stale retry: failed=%d err=%v", n, err)
+	}
+	if err := s.Close(); err != nil {
+		t.Fatal(err)
+	}
+	s, err = sqlite.Open(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	c = newCoordinator()
+	if _, err := c.RunDue(ctx); !errors.Is(err, delivery.err) {
+		t.Fatalf("RunDue after restart: %v", err)
+	}
+	rec, ok, err := s.GetReport(ctx, "restart-budget")
+	if err != nil || !ok || rec.DeliveryState != domain.ReportFailed || rec.DeliveryAttempts != 6 {
+		t.Fatalf("after restart: report=%+v, ok=%v, err=%v", rec, ok, err)
+	}
+	if c.UndeliveredCount("ao") != 1 {
+		t.Fatal("terminal transition did not record failure notice")
+	}
+	submissions := delivery.submissions
+	if _, err := c.RunDue(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if delivery.submissions != submissions {
+		t.Fatal("retried a terminal report")
+	}
+}
+
+type retryBudgetDelivery struct {
+	err         error
+	submissions int
+}
+
+func (d *retryBudgetDelivery) Submit(context.Context, domain.SessionID, string, string) error {
+	d.submissions++
+	return d.err
+}
+func (*retryBudgetDelivery) Interrupt(context.Context, domain.SessionID) error { return nil }

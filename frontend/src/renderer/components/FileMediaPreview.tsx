@@ -4,9 +4,11 @@ import { useHostConnection } from "../hooks/useHostConnection";
 import { snapshotBlobUrl, type FilesSource } from "../hooks/useSessionWorkspaceFiles";
 import { getApiBaseUrl } from "../lib/api-client";
 import { artifactContentUrl } from "../lib/artifact-content-url";
+import { useArtifactZoomTarget } from "../lib/artifact-zoom";
 import { mediaCrossOrigin, type FileMediaKind } from "../lib/file-media";
 import { PdfPreview } from "./PdfPreview";
 import { PanelMessage, RetryButton } from "./WorkspaceDiffView";
+import { ZoomableImage } from "./ZoomableImage";
 
 export function FileMediaPreview({ hostId, kind, path, sessionId, source, version, side = "after" }: {
 	side?: "before" | "after";
@@ -22,10 +24,12 @@ export function FileMediaPreview({ hostId, kind, path, sessionId, source, versio
 	const [failedSrc, setFailedSrc] = useState<string | null>(null);
 	// The file version a fresh cloud link was already taken for.
 	const [refreshedFor, setRefreshedFor] = useState<string | null>(null);
+	// An image in the artifact viewer zooms; a PDF hooks the same zoom into its own scale.
+	const imageZoom = useArtifactZoomTarget(kind === "image");
 	const base = hostId ? remoteBaseUrl : getApiBaseUrl();
 	// Use the streamed preview route: the image-diff blob route buffers whole
 	// revisions and caps them at 16 MiB, which is too small for recordings.
-	const rawUrl = source.kind === "snapshot" ? base === undefined ? undefined : snapshotBlobUrl(base,sessionId,path,source,side) : source.kind === "artifact" ? artifactContentUrl(sessionId, path, source.rawUrl) : base === undefined ? undefined
+	const rawUrl = source.kind === "snapshot" ? base === undefined ? undefined : snapshotBlobUrl(base,sessionId,path,source,side) : source.kind === "artifact" ? artifactContentUrl(sessionId, path, source.rawUrl, source.savedVersion) : base === undefined ? undefined
 		: `${base}/api/v1/sessions/${encodeURIComponent(sessionId)}/preview/files/${path.split("/").map(encodeURIComponent).join("/")}?raw=true&v=${encodeURIComponent(version)}`;
 	// A cloud file's URL already carries its version.
 	const src = source.kind === "artifact" && rawUrl && !source.cloud ? `${rawUrl}${rawUrl.includes("?") ? "&" : "?"}v=${encodeURIComponent(version)}` : rawUrl;
@@ -48,15 +52,19 @@ export function FileMediaPreview({ hostId, kind, path, sessionId, source, versio
 			refreshLink();
 		}
 	};
-	if (kind === "pdf") return <PdfPreview key={src} onError={onError} path={path} src={src} />;
+	if (kind === "pdf") return <PdfPreview cloud={source.kind === "artifact" && source.cloud} key={src} onError={onError} path={path} src={src} />;
+	// Only the daemon needs the renderer Origin; the control plane sends no CORS headers, so a cross-origin request to it would fail on a localhost control plane.
+	const crossOrigin = source.kind === "artifact" && source.cloud ? undefined : mediaCrossOrigin(src);
 	return (
 		<div className="grid min-h-0 min-w-0 flex-1 grid-rows-[minmax(0,1fr)] place-items-center overflow-hidden p-3">
-			{kind === "image" ? (
-				<img crossOrigin={mediaCrossOrigin(src)} alt={path} aria-label={path} className="size-full min-h-0 min-w-0 object-contain" key={src} onError={onError} src={src} />
+			{kind === "image" && imageZoom.controller ? (
+				<ZoomableImage controller={imageZoom.controller} crossOrigin={crossOrigin} alt={path} aria-label={path} key={src} onError={onError} src={src} />
+			) : kind === "image" ? (
+				<img crossOrigin={crossOrigin} alt={path} aria-label={path} className="size-full min-h-0 min-w-0 object-contain" key={src} onError={onError} src={src} />
 			) : kind === "video" ? (
-				<video crossOrigin={mediaCrossOrigin(src)} aria-label={path} className="size-full min-h-0 min-w-0 object-contain" controls key={src} onError={onError} playsInline preload="metadata" src={src} />
+				<video crossOrigin={crossOrigin} aria-label={path} className="size-full min-h-0 min-w-0 object-contain" controls key={src} onError={onError} playsInline preload="metadata" src={src} />
 			) : (
-				<audio crossOrigin={mediaCrossOrigin(src)} aria-label={path} className="w-full max-w-lg" controls key={src} onError={onError} preload="metadata" src={src} />
+				<audio crossOrigin={crossOrigin} aria-label={path} className="w-full max-w-lg" controls key={src} onError={onError} preload="metadata" src={src} />
 			)}
 		</div>
 	);

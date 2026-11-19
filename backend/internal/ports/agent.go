@@ -20,6 +20,9 @@ var (
 	// ErrNativeHistoryUnavailable means an interactive native restorer has no
 	// saved conversation yet; ordinary restore may launch fresh in its workspace.
 	ErrNativeHistoryUnavailable = errors.New("agent native history unavailable")
+	// ErrAgentVersionTooOld means the provider rejected the selected model
+	// because the installed agent CLI predates it; updating the CLI fixes it.
+	ErrAgentVersionTooOld = errors.New("agent CLI is too old for the selected model")
 )
 
 // ErrAgentBinaryNotFound is returned by agent adapters when neither PATH nor
@@ -132,6 +135,33 @@ func (e *AuthEvidence) Identity() domain.AgentAccountIdentity {
 	return e.identity
 }
 
+type authEnvironmentKey struct{}
+
+// WithAuthEnvironment returns a context whose authentication checks see
+// overrides on top of AO's own environment, as the harness's sessions do: AO
+// exports every saved provider key to itself, but holds back from a harness a
+// key that would replace its own sign-in. An empty value reads as unset.
+func WithAuthEnvironment(ctx context.Context, overrides map[string]string) context.Context {
+	if len(overrides) == 0 {
+		return ctx
+	}
+	return context.WithValue(ctx, authEnvironmentKey{}, overrides)
+}
+
+// AuthEnvironmentOverride reports the value an authentication check must use
+// for name instead of AO's environment, if the context carries one.
+func AuthEnvironmentOverride(ctx context.Context, name string) (string, bool) {
+	overrides, _ := ctx.Value(authEnvironmentKey{}).(map[string]string)
+	value, ok := overrides[name]
+	return value, ok
+}
+
+// AuthEnvironmentOverrides returns every override the context carries.
+func AuthEnvironmentOverrides(ctx context.Context) map[string]string {
+	overrides, _ := ctx.Value(authEnvironmentKey{}).(map[string]string)
+	return overrides
+}
+
 // RecordAuthDiagnostic retains an adapter-authored check outcome, including
 // unsuccessful attempts. Never pass raw errors, credential values or CLI output.
 func RecordAuthDiagnostic(ctx context.Context, diagnostic domain.AgentAuthDiagnostic) {
@@ -162,6 +192,31 @@ type AgentAuthDiagnosticsChecker interface {
 	AuthStatusWithDiagnostics(context.Context) (AgentAuthStatus, domain.AgentAccountIdentity, []domain.AgentAuthDiagnostic, error)
 }
 
+// AgentRuntimeAuthChecker checks sign-in with the credentials AO adds when it
+// launches a session from dataDir (such as a login AO saved itself), so a
+// readiness or switch check agrees with what that session would actually use.
+type AgentRuntimeAuthChecker interface {
+	AuthStatusForRuntime(ctx context.Context, dataDir string) (AgentAuthStatus, domain.AgentAccountIdentity, []domain.AgentAuthDiagnostic, error)
+}
+
+// AgentRuntimeCredentialEnv reports the credential environment AO adds when it
+// launches a local session from dataDir (such as a login AO saved itself), so
+// work done outside a session, like model discovery or the computer's account
+// check, sees the same credential. base is the environment that work already
+// has over the daemon's own (the keys AO holds back from the harness), and the
+// credential is chosen against it as a session launch chooses it. It returns
+// base plus that credential, or nil when both are empty. base is not mutated.
+type AgentRuntimeCredentialEnv interface {
+	RuntimeCredentialEnv(dataDir string, base map[string]string) map[string]string
+}
+
+// AgentAuthCacheInvalidator is implemented by an adapter that remembers what its
+// own authentication checks found, so a recheck after a login sees the login
+// instead of the answer from before it.
+type AgentAuthCacheInvalidator interface {
+	InvalidateAuthCache()
+}
+
 // Agent is the contract every CLI coding agent adapter (claude-code, codex, …)
 // must satisfy. It supplies the argv and process configuration the Session
 // Manager needs to launch, restore, and read back a native agent session.
@@ -188,6 +243,15 @@ type Agent interface {
 	// SessionInfo reads agent-owned session metadata such as native session id,
 	// display title, or summary. ok=false means no info is available.
 	SessionInfo(ctx context.Context, session SessionRef) (info SessionInfo, ok bool, err error)
+}
+
+// AgentNativeRestoreCommand is an optional refinement for adapters that can
+// recover a different native session ID while building a restore command.
+// When ok is true, sessionID is the exact identity selected by cmd. The manager
+// uses it for native history validation instead of the potentially stale stored ID.
+// Implementations must return the command and identity from the same lookup.
+type AgentNativeRestoreCommand interface {
+	GetRestoreCommandWithSessionID(ctx context.Context, cfg RestoreConfig) (cmd []string, sessionID string, ok bool, err error)
 }
 
 // AgentAuthChecker is the optional capability for adapters whose native CLI has
@@ -240,6 +304,11 @@ type NativeSessionResolveConfig struct {
 	DataDir   string
 	SessionID domain.SessionID
 	LaunchID  string
+	// Env is the session's runtime environment, as the runtime layers it over
+	// the daemon's for the agent process, for adapters whose lookup runs the
+	// agent CLI against a store that project-level settings or credentials
+	// select. nil means the caller has none.
+	Env map[string]string
 }
 
 // AgentBinaryResolutionInvalidator is an optional capability for adapters that
@@ -306,6 +375,15 @@ type AgentInterfaceHandoffHistoryProbe interface {
 	) (bool, error)
 }
 
+// AgentProcessConversationReader is an OPTIONAL capability for agents a user
+// starts by hand in a shell terminal: it names the native conversation a
+// running agent process is in, so the shell can resume exactly that one after
+// the app restarts. pid leads the agent's foreground process group. ok=false
+// when the process does not say.
+type AgentProcessConversationReader interface {
+	ProcessConversationID(ctx context.Context, pid int) (id string, ok bool, err error)
+}
+
 // AgentInterfaceHandoffStorageBridge is an OPTIONAL capability for adapters
 // whose native conversation files live in interface-specific storage roots.
 // Session Manager calls it only after the source controller is stopped.
@@ -368,6 +446,13 @@ type AgentModelInfo struct {
 	// is this model. It is derived from session history on every read, never
 	// stored on the cached catalog, and absent for a model no session ran.
 	LastUsedAt *time.Time `json:"lastUsedAt,omitempty"`
+	// RequiresVersion is the oldest agent CLI version that can use this model.
+	// It is set only when the installed CLI is older, so a picker can show the
+	// model as unavailable instead of letting a launch fail.
+	RequiresVersion string `json:"requiresVersion,omitempty"`
+	// UnavailableReason is display text explaining why the model cannot be
+	// selected right now and how to fix it.
+	UnavailableReason string `json:"unavailableReason,omitempty"`
 }
 
 // AgentModelCatalog is AO's normalized model-picker response.
@@ -495,6 +580,12 @@ const (
 	AgentExitDetectionSupervisor AgentExitDetectionMode = "supervisor"
 )
 
+// AgentInterruptInputProvider selects a native cancellation key for TUIs where
+// Ctrl+C does not cancel the active turn. The input is sent without Enter.
+type AgentInterruptInputProvider interface {
+	InterruptInput() string
+}
+
 // AgentExitDetector is an optional adapter capability. Adapters that omit it
 // keep their existing launch behavior.
 type AgentExitDetector interface {
@@ -567,6 +658,12 @@ type TerminalActivityOptionsProvider interface {
 	TerminalActivityOptions() TerminalActivityOptions
 }
 
+// TurnInterruptKey declares a key that stops a running turn without exiting
+// the harness. Harnesses without this capability refuse explicit Stop turn.
+type TurnInterruptKey interface {
+	InterruptKey() string
+}
+
 // EmptyComposerDetector is an opt-in safety capability for unsolicited
 // coordination sent to an already-running interactive agent. It must return
 // true only when current terminal evidence positively proves that the active
@@ -607,11 +704,26 @@ type WaitingTerminalActivityDetector interface {
 // TerminalActivityDetector, in which case AO waits for an authoritative idle
 // detection. A non-positive timeout always preserves immediate delivery.
 type PromptReadinessHints struct {
-	InitialDelay time.Duration
-	Patterns     []string
-	PollInterval time.Duration
-	Timeout      time.Duration
-	Lines        int
+	// RequireReady refuses delivery when startup markers are absent or the wait budget expires.
+	RequireReady bool
+	// RequireCurrentLaunchSignal requires the lifecycle's first signal for this launch in addition
+	// to a terminal marker. This prevents preserved pane history from proving current readiness.
+	RequireCurrentLaunchSignal bool
+	InitialDelay               time.Duration
+	Patterns                   []string
+	PollInterval               time.Duration
+	Timeout                    time.Duration
+	Lines                      int
+	// RenderedScreen matches against the runtime's rendered current viewport
+	// (StyledTerminalOutputReader) instead of the raw output ring. Full-screen
+	// TUIs draw on the alternate screen, so their text never appears as a
+	// contiguous run in raw output. Runtimes without a rendered view for the
+	// handle fall back to raw output.
+	RenderedScreen bool
+	// BlockingPatterns hold readiness while any of them is visible, for startup
+	// dialogs that also show a ready marker. If one is still visible when
+	// Timeout elapses, delivery is abandoned instead of typed into the dialog.
+	BlockingPatterns []string
 }
 
 // AgentResolver maps a session's harness onto the Agent adapter that drives it,
@@ -690,12 +802,11 @@ type ActiveTurnSteerer interface {
 	SteersActiveTurn() bool
 }
 
-// MetadataKeyAgentSessionID is the SessionRef.Metadata key that carries an
-// agent's native session id. It matches the json tag on
-// domain.SessionMetadata.AgentSessionID and the key the adapters read, so the
-// Session Manager can bridge its typed metadata onto a SessionRef without
-// either side hard-coding the other's vocabulary.
-const MetadataKeyAgentSessionID = "agentSessionId"
+// MetadataKeyAgentSessionID and MetadataKeyNativeTranscriptPath bridge typed session metadata onto SessionRef without adapters hard-coding domain JSON vocabulary.
+const (
+	MetadataKeyAgentSessionID       = "agentSessionId"
+	MetadataKeyNativeTranscriptPath = "nativeTranscriptPath"
+)
 
 // MetadataKeySessionMode is the SessionRef.Metadata key that carries the
 // current session mode (e.g. "chat" or "tui").
@@ -770,8 +881,10 @@ type LaunchConfig struct {
 	WorkspacePath    string
 	// Env is the environment the runtime layers over the daemon's own for this
 	// launch (the project env plus AO's variables). The session manager sets it
-	// for PreLaunch, so an adapter prepares the provider config the launched
-	// process will actually read (for example a project CLAUDE_CONFIG_DIR).
+	// for PreLaunch and command construction, so an adapter prepares the
+	// provider config, and picks the flags, the launched process will actually
+	// read (for example a project CLAUDE_CONFIG_DIR). A key set to "" is unset
+	// in the launch; a key absent here keeps the daemon's value. Read-only.
 	Env map[string]string
 }
 
@@ -784,6 +897,11 @@ type WorkspaceHookConfig struct {
 	SystemPrompt     string
 	SystemPromptFile string
 	WorkspacePath    string
+	// Restore fields are empty for fresh launches. NativeSessionID is the exact
+	// selected identity after imported-session preparation, never a guessed id;
+	// ImportConfigDir is set only while that identity is an import's.
+	NativeSessionID string
+	ImportConfigDir string
 }
 
 // RestoreConfig carries inputs needed to continue an existing native agent session.
@@ -806,6 +924,9 @@ type RestoreConfig struct {
 	// system-prompt flag should re-apply this in their resume command.
 	SystemPrompt     string
 	SystemPromptFile string
+	// Env is the environment the runtime layers over the daemon's own for the
+	// resumed process, as LaunchConfig.Env is for a launch.
+	Env map[string]string
 }
 
 // SessionRef identifies an AO session whose agent-owned metadata may be read.

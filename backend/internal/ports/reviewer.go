@@ -67,6 +67,14 @@ type ReviewerRestorer interface {
 	ReviewRestoreCommand(ctx context.Context, inv ReviewInvocation) (cmd ReviewCommandSpec, ok bool, err error)
 }
 
+// ReviewerActivityHooks is implemented by reviewer adapters whose terminal
+// reviewer reliably reports active and idle through AO's activity hooks. The
+// review run lifecycle applies its first-activity and idle rules only to
+// these; every other reviewer is judged by liveness and its maximum duration.
+type ReviewerActivityHooks interface {
+	ReviewActivityHooks() bool
+}
+
 // ReviewerReusePolicy is implemented by interactive reviewer adapters that
 // need a fresh TUI for each task because request-scoped context is fixed at
 // process launch. Returning false forces a fresh launch for every pass.

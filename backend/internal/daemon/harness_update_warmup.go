@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
+	"github.com/aoagents/agent-orchestrator/backend/internal/observe/sentryobs"
 	agentsvc "github.com/aoagents/agent-orchestrator/backend/internal/service/agent"
 	"github.com/aoagents/agent-orchestrator/backend/internal/service/systeminstall"
 )
@@ -73,6 +74,7 @@ func checkInstalledHarnessUpdates(
 			continue
 		}
 		wg.Go(func() {
+			defer sentryobs.RecoverBackground()
 			if _, err := check(ctx, target, refresh); err != nil && ctx.Err() == nil {
 				log.Warn("harness update check failed", "agent", agent.ID, "err", err)
 			}

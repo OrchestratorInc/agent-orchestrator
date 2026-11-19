@@ -13,6 +13,8 @@ import (
 
 	"github.com/charmbracelet/x/term"
 	"github.com/spf13/cobra"
+
+	"github.com/aoagents/agent-orchestrator/backend/internal/agentlaunch"
 )
 
 const codexFileStoreOverride = `cli_auth_credentials_store="file"`
@@ -98,7 +100,7 @@ func (c *commandContext) runCodexLogin(ctx context.Context, executable string, u
 		return usageError{fmt.Errorf("login method must be 1, 2, 3, or 4")}
 	}
 
-	if err := c.deps.RunInteractiveCommand(ctx, codex, args, childInput, out, stderr); err != nil {
+	if err := c.deps.RunInteractiveCommand(ctx, codex, "", args, childInput, out, stderr); err != nil {
 		return fmt.Errorf("codex login failed: %w", err)
 	}
 	if _, err := fmt.Fprintf(out, "\n%s\n", style.success("Codex sign-in complete.")); err != nil {
@@ -202,8 +204,11 @@ func readCodexLoginSelection(in io.Reader) (string, error) {
 	}
 }
 
-func runInteractiveCommand(ctx context.Context, name string, args []string, stdin io.Reader, stdout, stderr io.Writer) error {
+func runInteractiveCommand(ctx context.Context, name, dir string, args []string, stdin io.Reader, stdout, stderr io.Writer) error {
 	cmd := exec.CommandContext(ctx, name, args...) //nolint:gosec,forbidigo // interactive login must inherit the caller's console.
+	cmd.Env = agentlaunch.ProcessEnvForLaunchBinary(ctx, name)
+	configureCLIBatch(cmd)
+	cmd.Dir = dir
 	cmd.Stdin = stdin
 	cmd.Stdout = stdout
 	cmd.Stderr = stderr

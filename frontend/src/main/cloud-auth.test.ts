@@ -1,4 +1,4 @@
-import { mkdtemp, readFile, rm } from "node:fs/promises";
+import { mkdtemp, readdir, readFile, rm } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -70,6 +70,7 @@ import {
   installCloudIPC,
   readAuthStore,
   resolveCloudAuthDir,
+  resolveCloudAuthRedirect,
   showCloudSignInFailure,
   signOutCloud,
   writeAuthStore,
@@ -121,10 +122,13 @@ describe("native WorkOS authentication", () => {
       }),
     );
 
-    const session = await handleCloudDeepLink(
+    const signIn = await handleCloudDeepLink(
       "ao-app://callback?code=code_123&state=state_123",
       dataDir,
     );
+    // A completed sign-in is marked even without the website's visitor id.
+    expect(signIn?.signIn).toEqual({});
+    const session = signIn?.account;
     expect(session).toMatchObject({
       authProvider: "workos",
       user: {
@@ -143,9 +147,10 @@ describe("native WorkOS authentication", () => {
   it("silently accepts the same completed callback without exchanging its code again", async () => {
     await beginCloudSignIn(dataDir);
     const callback = "ao-app://callback?code=code_123&state=state_123";
-    const account = await handleCloudDeepLink(callback, dataDir);
+    const first = await handleCloudDeepLink(callback, dataDir);
 
-    await expect(handleCloudDeepLink(callback, dataDir)).resolves.toEqual(account);
+    // The repeat returns the same account, and no completed sign-in to report again.
+    await expect(handleCloudDeepLink(callback, dataDir)).resolves.toEqual({ account: first?.account });
     expect(mocks.authenticateWithCode).toHaveBeenCalledTimes(1);
     expect(mocks.showMessageBox).not.toHaveBeenCalled();
   });
@@ -158,31 +163,33 @@ describe("native WorkOS authentication", () => {
       handleCloudDeepLink(callback, dataDir),
     ]);
 
-    expect(accounts[0]).toEqual(accounts[1]);
+    expect(accounts[0]?.account).toEqual(accounts[1]?.account);
+    // Only the call that exchanged the code reports a completed sign-in.
+    expect(accounts.filter((result) => result?.signIn)).toHaveLength(1);
     expect(mocks.authenticateWithCode).toHaveBeenCalledTimes(1);
   });
 
   it("ignores callbacks with no login pending without changing the signed-in account", async () => {
     await beginCloudSignIn(dataDir);
-    const account = await handleCloudDeepLink("ao-app://callback?code=code_123&state=state_123", dataDir);
+    const account = (await handleCloudDeepLink("ao-app://callback?code=code_123&state=state_123", dataDir))?.account;
     await expect(handleCloudDeepLink(
       "ao-app://callback?code=different_code&state=state_123", dataDir,
-    )).resolves.toEqual(account);
+    )).resolves.toEqual({ account });
     await expect(handleCloudDeepLink(
       "ao-app://callback?code=code_123&state=unverified_state", dataDir,
-    )).resolves.toEqual(account);
+    )).resolves.toEqual({ account });
     expect(mocks.authenticateWithCode).toHaveBeenCalledTimes(1);
   });
 
   it("quietly returns to an account saved before callback deduplication was added", async () => {
     await beginCloudSignIn(dataDir);
     const callback = "ao-app://callback?code=code_123&state=state_123";
-    const account = await handleCloudDeepLink(callback, dataDir);
+    const account = (await handleCloudDeepLink(callback, dataDir))?.account;
     const store = await readAuthStore(dataDir);
     delete store.completedCallback;
     await writeAuthStore(dataDir, store);
 
-    await expect(handleCloudDeepLink(callback, dataDir)).resolves.toEqual(account);
+    await expect(handleCloudDeepLink(callback, dataDir)).resolves.toEqual({ account });
     expect(mocks.authenticateWithCode).toHaveBeenCalledTimes(1);
   });
 
@@ -200,18 +207,151 @@ describe("native WorkOS authentication", () => {
   it("keeps a newer pending login when an already completed callback repeats", async () => {
     await beginCloudSignIn(dataDir);
     const callback = "ao-app://callback?code=code_123&state=state_123";
-    const account = await handleCloudDeepLink(callback, dataDir);
+    const account = (await handleCloudDeepLink(callback, dataDir))?.account;
     mocks.getAuthorizationUrlWithPKCE.mockResolvedValueOnce({
       url: "https://workos.example/authorize", state: "state_456", codeVerifier: "verifier_456",
     });
     await beginCloudSignIn(dataDir);
 
-    await expect(handleCloudDeepLink(callback, dataDir)).resolves.toEqual(account);
+    await expect(handleCloudDeepLink(callback, dataDir)).resolves.toEqual({ account });
     await handleCloudDeepLink("ao-app://callback?code=code_456&state=state_456", dataDir);
     expect(mocks.authenticateWithCode).toHaveBeenCalledTimes(2);
     expect(mocks.authenticateWithCode).toHaveBeenLastCalledWith(expect.objectContaining({
       code: "code_456", codeVerifier: "verifier_456",
     }));
+  });
+
+  // The orchestrator.inc return page adds web_distinct_id for visitors who
+  // accepted website analytics. It must never change how signing in goes.
+  describe("website visitor id on the return link", () => {
+    const VISITOR = "019a3f5e-8c2b-7d41-b6f0-3e2d1c0b9a87";
+    const callback = (extra = "") => `ao-app://callback?code=code_123&state=state_123${extra}`;
+
+    // Everything the sign-in produced, for comparing a run with and without the id.
+    async function signInWith(extra: string) {
+      await beginCloudSignIn(dataDir);
+      const result = await handleCloudDeepLink(callback(extra), dataDir);
+      const store = await readAuthStore(dataDir);
+      return {
+        result,
+        account: result && { ...result.account, storedAt: "<time>" },
+        exchange: [...mocks.authenticateWithCode.mock.calls],
+        store: { ...store, session: store.session && { ...store.session, storedAt: "<time>" } },
+      };
+    }
+
+    async function filesUnder(dir: string): Promise<string> {
+      const names = await readdir(dir, { recursive: true, withFileTypes: true });
+      const files = names.filter((entry) => entry.isFile()).map((entry) => path.join(entry.parentPath, entry.name));
+      return (await Promise.all(files.map((file) => readFile(file, "utf8")))).join("\n");
+    }
+
+    it("signs in exactly as without it, and hands a well-formed id over with the account", async () => {
+      const without = await signInWith("");
+      await signOutCloud(dataDir);
+      mocks.authenticateWithCode.mockClear();
+      const withVisitor = await signInWith(`&web_distinct_id=${VISITOR}`);
+
+      expect(withVisitor.exchange).toEqual(without.exchange);
+      expect(withVisitor.exchange).toEqual([[{ clientId: "client_test", code: "code_123", codeVerifier: "verifier_123" }]]);
+      expect(withVisitor.store).toEqual(without.store);
+      expect(withVisitor.account).toEqual(without.account);
+      expect(without.result).toEqual({ account: without.result?.account, signIn: {} });
+      expect(withVisitor.result).toEqual({ account: withVisitor.result?.account, signIn: { webDistinctId: VISITOR } });
+    });
+
+    it("decodes the id the website percent-encodes", async () => {
+      const { result } = await signInWith("&web_distinct_id=%24device%3Aabc.123_x-y");
+      expect(result?.signIn?.webDistinctId).toBe("$device:abc.123_x-y");
+    });
+
+    it.each([
+      ["empty", ""],
+      ["a space", "abc%20def"],
+      ["a slash", "abc%2Fdef"],
+      ["markup", "%3Cscript%3E"],
+      ["non-ASCII", "caf%C3%A9"],
+      ["too long", "a".repeat(201)],
+      ["a placeholder PostHog never merges", "undefined"],
+      ["the cookieless placeholder", "%24posthog_cookieless"],
+    ])("ignores an id with %s and signs in the same", async (_name, value) => {
+      const without = await signInWith("");
+      await signOutCloud(dataDir);
+      mocks.authenticateWithCode.mockClear();
+      const invalid = await signInWith(`&web_distinct_id=${value}`);
+
+      expect(invalid.result).toEqual({ account: invalid.result?.account, signIn: {} });
+      expect(invalid.exchange).toEqual(without.exchange);
+      expect(invalid.store).toEqual(without.store);
+      expect(invalid.account).toEqual(without.account);
+    });
+
+    it("accepts the longest id the website sends", async () => {
+      const { result } = await signInWith(`&web_distinct_id=${"a".repeat(200)}`);
+      expect(result?.signIn?.webDistinctId).toBe("a".repeat(200));
+    });
+
+    it("hands the id over once: a repeated return link signs nothing in and carries none", async () => {
+      await beginCloudSignIn(dataDir);
+      const link = callback(`&web_distinct_id=${VISITOR}`);
+      const first = await handleCloudDeepLink(link, dataDir);
+      const again = await handleCloudDeepLink(link, dataDir);
+      // The same code and state with a different id is still the same callback.
+      const otherVisitor = await handleCloudDeepLink(callback("&web_distinct_id=someone-else"), dataDir);
+
+      expect(first?.signIn?.webDistinctId).toBe(VISITOR);
+      expect(again).toEqual({ account: first?.account });
+      expect(otherVisitor).toEqual({ account: first?.account });
+      expect(mocks.authenticateWithCode).toHaveBeenCalledTimes(1);
+    });
+
+    it("hands the id over once when the OS delivers the link twice at the same time", async () => {
+      await beginCloudSignIn(dataDir);
+      const link = callback(`&web_distinct_id=${VISITOR}`);
+      const results = await Promise.all([handleCloudDeepLink(link, dataDir), handleCloudDeepLink(link, dataDir)]);
+      expect(results.filter((result) => result?.signIn?.webDistinctId === VISITOR)).toHaveLength(1);
+      expect(mocks.authenticateWithCode).toHaveBeenCalledTimes(1);
+    });
+
+    it("never stores or logs the id", async () => {
+      const logs = [vi.spyOn(console, "log"), vi.spyOn(console, "info"), vi.spyOn(console, "warn"), vi.spyOn(console, "error")];
+      await signInWith(`&web_distinct_id=${VISITOR}`);
+      // The test safeStorage mock "encrypts" to plain text, so the store is readable here.
+      const stored = await readFile(path.join(dataDir, "cloud-auth.bin"), "utf8");
+      expect(stored).toContain("user_123");
+      expect(stored).not.toContain(VISITOR);
+      expect(await filesUnder(dataDir)).not.toContain(VISITOR);
+      expect(JSON.stringify(await readAuthStore(dataDir))).not.toContain(VISITOR);
+      for (const log of logs) expect(JSON.stringify(log.mock.calls)).not.toContain(VISITOR);
+    });
+
+    it("keeps an error return exactly as before, whatever id rides along", async () => {
+      await beginCloudSignIn(dataDir);
+      const pending = await readAuthStore(dataDir);
+      await expect(handleCloudDeepLink(
+        `ao-app://callback?error=access_denied&error_description=User%20cancelled&web_distinct_id=${VISITOR}`,
+        dataDir,
+      )).rejects.toThrow("User cancelled");
+      await expect(handleCloudDeepLink(
+        `ao-app://callback?error=access_denied&web_distinct_id=${VISITOR}`,
+        dataDir,
+      )).rejects.toThrow("WorkOS sign-in failed: access_denied");
+      expect(mocks.authenticateWithCode).not.toHaveBeenCalled();
+      await expect(readAuthStore(dataDir)).resolves.toEqual(pending);
+    });
+
+    it("keeps a state mismatch a failure, whatever id rides along", async () => {
+      await beginCloudSignIn(dataDir);
+      await expect(handleCloudDeepLink(
+        `ao-app://callback?code=code_123&state=attacker_state&web_distinct_id=${VISITOR}`,
+        dataDir,
+      )).rejects.toThrow("state did not match");
+      await expect(handleCloudDeepLink(
+        `ao-app://callback?web_distinct_id=${VISITOR}`,
+        dataDir,
+      )).rejects.toThrow("WorkOS callback is incomplete");
+      expect(mocks.authenticateWithCode).not.toHaveBeenCalled();
+    });
   });
 
   it("requires an AO Cloud session before starting provider login", async () => {
@@ -224,7 +364,7 @@ describe("native WorkOS authentication", () => {
         baseUrl: "https://cloud.example",
         provider: "codex",
       }),
-    ).rejects.toThrow("Sign in to AO Cloud before connecting a provider.");
+    ).rejects.toThrow("Sign in to Orchestrator Cloud before connecting a provider.");
   });
 
   describe("Claude browser login local fallback token", () => {
@@ -254,7 +394,7 @@ describe("native WorkOS authentication", () => {
 
     it("does not leave a local token behind when the cloud save fails", async () => {
       vi.spyOn(globalThis, "fetch").mockResolvedValue(new Response("{}", { status: 500 }));
-      await expect(connect()).rejects.toThrow("AO Cloud could not save the provider credential.");
+      await expect(connect()).rejects.toThrow("Orchestrator Cloud could not save the provider credential.");
       await expect(readFile(tokenFile(), "utf8")).rejects.toMatchObject({ code: "ENOENT" });
     });
 
@@ -262,6 +402,70 @@ describe("native WorkOS authentication", () => {
       vi.spyOn(globalThis, "fetch").mockRejectedValue(new TypeError("fetch failed"));
       await expect(connect()).rejects.toThrow("fetch failed");
       await expect(readFile(tokenFile(), "utf8")).rejects.toMatchObject({ code: "ENOENT" });
+    });
+
+    // Local sessions use the default account's login: an account login is
+    // kept locally only when the control plane saved it as the default.
+    const connectAccount = async (account: string) => {
+      const handler = mocks.ipcHandle.mock.calls.find(
+        ([channel]) => channel === "cloud:connectProviderAuth",
+      )?.[1] as (event: unknown, input: unknown) => Promise<void>;
+      return handler({}, { baseUrl: "https://cloud.example", provider: "claude-code", persistLocalClaudeToken: true, account });
+    };
+
+    it("keeps an added account's token only when the control plane made it the default", async () => {
+      const answer = (isDefault: boolean) => new Response(JSON.stringify({ agentAccount: { id: "a", isDefault } }), { status: 201 });
+      vi.spyOn(globalThis, "fetch").mockResolvedValueOnce(answer(false));
+      await connectAccount("new");
+      await expect(readFile(tokenFile(), "utf8")).rejects.toMatchObject({ code: "ENOENT" });
+
+      vi.spyOn(globalThis, "fetch").mockResolvedValueOnce(answer(true));
+      await connectAccount("new");
+      await expect(readFile(tokenFile(), "utf8")).resolves.toBe("sk-ant-oat01-test-token");
+    });
+
+    it("keeps a signed-in-again account's token only when it is the default", async () => {
+      vi.spyOn(globalThis, "fetch").mockResolvedValueOnce(
+        new Response(JSON.stringify({ agentAccount: { id: "a", isDefault: false } }), { status: 200 }));
+      await connectAccount("33333333-3333-4333-8333-333333333333");
+      await expect(readFile(tokenFile(), "utf8")).rejects.toMatchObject({ code: "ENOENT" });
+    });
+  });
+
+  describe("Cloud agent accounts", () => {
+    const connect = (account: unknown) => {
+      const handler = mocks.ipcHandle.mock.calls.find(
+        ([channel]) => channel === "cloud:connectProviderAuth",
+      )?.[1] as (event: unknown, input: unknown) => Promise<void>;
+      return handler({}, { baseUrl: "https://cloud.example", provider: "codex", account });
+    };
+    const accountId = "33333333-3333-4333-8333-333333333333";
+
+    beforeEach(async () => {
+      await beginCloudSignIn(dataDir);
+      await handleCloudDeepLink("ao-app://callback?code=code_123&state=state_123", dataDir);
+      mocks.providerAuthenticate.mockResolvedValue({ provider: "codex", credentialType: "auth_json", secret: "{\"tokens\":{}}" });
+    });
+
+    it("saves a login as another account, or signs an account in again", async () => {
+      const fetchMock = vi.spyOn(globalThis, "fetch").mockResolvedValue(new Response("{}", { status: 201 }));
+      await connect("new");
+      await connect(accountId);
+      const requests = fetchMock.mock.calls.map(([url, init]) => ({ url: String(url), method: init?.method, body: JSON.parse(String(init?.body)) }));
+      expect(requests).toEqual([
+        { url: "https://cloud.example/api/cloud/v1/me/agent-accounts", method: "POST", body: { agent: "codex", credentialType: "auth_json", secret: "{\"tokens\":{}}" } },
+        { url: `https://cloud.example/api/cloud/v1/me/agent-accounts/${accountId}/credential`, method: "PUT", body: { credentialType: "auth_json", secret: "{\"tokens\":{}}" } },
+      ]);
+    });
+
+    it("refuses an account that is not an id before the login starts", async () => {
+      await expect(connect("../providers/codex")).rejects.toThrow("Invalid Cloud provider login request.");
+      expect(mocks.providerAuthenticate).not.toHaveBeenCalled();
+    });
+
+    it("shows why the control plane refused the login", async () => {
+      vi.spyOn(globalThis, "fetch").mockResolvedValue(new Response(JSON.stringify({ code: "AGENT_ACCOUNT_DUPLICATE", message: "That login is already saved." }), { status: 409 }));
+      await expect(connect("new")).rejects.toThrow("That login is already saved.");
     });
   });
 
@@ -278,12 +482,12 @@ describe("native WorkOS authentication", () => {
   it("keeps the auth store in memory when OS encryption is unavailable", async () => {
     mocks.encryptionAvailable = false;
     await beginCloudSignIn(dataDir);
-    const account = await handleCloudDeepLink(
+    const signIn = await handleCloudDeepLink(
       "ao-app://callback?code=code_123&state=state_123",
       dataDir,
     );
 
-    expect(account?.user.email).toBe("person@example.com");
+    expect(signIn?.account.user.email).toBe("person@example.com");
     await expect(
       readFile(path.join(dataDir, "cloud-auth.bin")),
     ).rejects.toMatchObject({ code: "ENOENT" });
@@ -297,12 +501,12 @@ describe("native WorkOS authentication", () => {
     vi.spyOn(process, "platform", "get").mockReturnValue("linux");
     mocks.selectedStorageBackend = "basic_text";
     await beginCloudSignIn(dataDir);
-    const account = await handleCloudDeepLink(
+    const signIn = await handleCloudDeepLink(
       "ao-app://callback?code=code_123&state=state_123",
       dataDir,
     );
 
-    expect(account?.user.email).toBe("person@example.com");
+    expect(signIn?.account.user.email).toBe("person@example.com");
     await expect(
       readFile(path.join(dataDir, "cloud-auth.bin")),
     ).rejects.toMatchObject({ code: "ENOENT" });
@@ -319,8 +523,8 @@ describe("native WorkOS authentication", () => {
 
     expect(mocks.showMessageBox).toHaveBeenCalledWith({
       type: "error",
-      title: "AO Cloud sign-in failed",
-      message: "Unable to sign in to AO Cloud",
+      title: "Orchestrator Cloud sign-in failed",
+      message: "Unable to sign in to Orchestrator Cloud",
       detail:
         "The WorkOS sign-in request expired. Start sign-in again to continue.",
     });
@@ -678,5 +882,131 @@ describe("resolveCloudAuthDir", () => {
   it("uses ~/.ao for a packaged build and ~/.ao/dev for a development build", () => {
     expect(resolveCloudAuthDir({}, "/Users/someone", "/work", true)).toBe("/Users/someone/.ao");
     expect(resolveCloudAuthDir({ AO_DATA_DIR: "  " }, "/Users/someone", "/work", false)).toBe("/Users/someone/.ao/dev");
+  });
+});
+
+describe("the sign-in redirect each build sends", () => {
+  const PRODUCTION_CLIENT = "client_01KZ3VRKTDKBZ3JA8AMKTF6W2X";
+  // The baked default, which belongs to the staging WorkOS environment.
+  const STAGING_CLIENT = "client_01KZ3VRKC374HS91XGRDPT3671";
+  const WEBSITE_PAGE = "https://orchestrator.inc/app/auth/return/";
+  const CONTROL_PLANE_PAGE = "https://api.aoagents.dev/app/auth/return";
+  const LOOPBACK = "http://127.0.0.1:3000/callback";
+
+  it.each([
+    ["a release build (stable, nightly, preview) on the production client", true, PRODUCTION_CLIENT, WEBSITE_PAGE],
+    ["a packaged build on the baked staging client", true, STAGING_CLIENT, CONTROL_PLANE_PAGE],
+    ["a packaged build on any other client", true, "client_someone_else", CONTROL_PLANE_PAGE],
+    ["a development build on the production client", false, PRODUCTION_CLIENT, LOOPBACK],
+    ["a development build on the baked staging client", false, STAGING_CLIENT, LOOPBACK],
+  ])("%s", (_name, isPackaged, clientId, redirect) => {
+    expect(resolveCloudAuthRedirect({}, isPackaged, clientId)).toBe(redirect);
+    // The control plane a build talks to plays no part in it.
+    expect(resolveCloudAuthRedirect({ AO_CLOUD_CONTROL_PLANE_URL: "https://staging-api.aoagents.dev" }, isPackaged, clientId)).toBe(redirect);
+  });
+
+  it.each([true, false])("lets AO_CLOUD_AUTH_REDIRECT override every default (packaged: %s)", (isPackaged) => {
+    for (const clientId of [PRODUCTION_CLIENT, STAGING_CLIENT]) {
+      expect(resolveCloudAuthRedirect(
+        { AO_CLOUD_AUTH_REDIRECT: " https://staging-api.aoagents.dev/app/auth/return " },
+        isPackaged,
+        clientId,
+      )).toBe("https://staging-api.aoagents.dev/app/auth/return");
+    }
+    expect(resolveCloudAuthRedirect({ AO_CLOUD_AUTH_REDIRECT: "   " }, isPackaged, PRODUCTION_CLIENT)).toBe(isPackaged ? WEBSITE_PAGE : LOOPBACK);
+  });
+
+  describe("at sign-in", () => {
+    let dataDir: string;
+
+    beforeEach(async () => {
+      dataDir = await mkdtemp(path.join(os.tmpdir(), "ao-cloud-redirect-"));
+    });
+
+    afterEach(async () => {
+      vi.unstubAllEnvs();
+      vi.resetModules();
+      await rm(dataDir, { recursive: true, force: true });
+    });
+
+    // cloud-auth picks its client and redirect once at import.
+    async function startSignIn(clientId: string) {
+      vi.resetModules();
+      vi.stubEnv("VITE_WORKOS_CLIENT_ID", clientId);
+      vi.stubEnv("AO_CLOUD_AUTH_REDIRECT", "");
+      mocks.getAuthorizationUrlWithPKCE.mockReset().mockResolvedValue({
+        url: "https://workos.example/authorize",
+        state: "state_123",
+        codeVerifier: "verifier_123",
+      });
+      const { beginCloudSignIn: begin } = await import("./cloud-auth");
+      await begin(dataDir);
+      return mocks.getAuthorizationUrlWithPKCE.mock.calls[0]?.[0];
+    }
+
+    it("sends the website page with the production client", async () => {
+      await expect(startSignIn(PRODUCTION_CLIENT)).resolves.toMatchObject({
+        clientId: PRODUCTION_CLIENT,
+        redirectUri: WEBSITE_PAGE,
+      });
+    });
+
+    it("keeps the control plane page with the staging client, which staging WorkOS accepts", async () => {
+      await expect(startSignIn(STAGING_CLIENT)).resolves.toMatchObject({
+        clientId: STAGING_CLIENT,
+        redirectUri: CONTROL_PLANE_PAGE,
+      });
+    });
+  });
+});
+
+describe("cloud:signOut", () => {
+  it("finishes the signed-out hook before telling the renderers", async () => {
+    const dataDir = await mkdtemp(path.join(os.tmpdir(), "ao-cloud-auth-"));
+    const order: string[] = [];
+    mocks.ipcHandle.mockClear();
+    mocks.notifyRenderers.mockImplementation(() => order.push("notified"));
+    installCloudIPC(() => dataDir, mocks.notifyRenderers, async () => {
+      await new Promise((resolve) => setTimeout(resolve, 5));
+      order.push("telemetry retired");
+    });
+    const handler = mocks.ipcHandle.mock.calls.find(([channel]) => channel === "cloud:signOut")?.[1] as () => Promise<void>;
+    await handler();
+    expect(order).toEqual(["telemetry retired", "notified"]);
+    await rm(dataDir, { recursive: true, force: true });
+  });
+});
+
+describe("cloud:signOut with telemetry", () => {
+  it("retires a handed-off account's telemetry binding before renderers are told, with the daemon down", async () => {
+    const { existsSync } = await import("node:fs");
+    const { readFile, writeFile } = await import("node:fs/promises");
+    const { TelemetryIdentityController } = await import("./telemetry-identity");
+    const telemetryDir = await mkdtemp(path.join(os.tmpdir(), "ao-telemetry-"));
+    const authDir = await mkdtemp(path.join(os.tmpdir(), "ao-cloud-auth-"));
+    let daemonUp = true;
+    const fetcher = vi.fn(async () => {
+      if (!daemonUp) throw new Error("connection refused");
+      return new Response(null, { status: 204 });
+    });
+    const ctl = new TelemetryIdentityController(telemetryDir, () => "http://127.0.0.1:4010", fetcher as never);
+    // A normal signed-in hand-off: the daemon recorded user_A.
+    expect(await ctl.setCloudUser("user_A")).toBe(true);
+    await writeFile(path.join(telemetryDir, "telemetry_bound_user"), "user_A\n");
+    await writeFile(path.join(telemetryDir, "telemetry_anonymous_id"), "anon_linked\n");
+    daemonUp = false;
+
+    const bindingAtNotify: boolean[] = [];
+    mocks.ipcHandle.mockClear();
+    installCloudIPC(() => authDir, () => {
+      bindingAtNotify.push(existsSync(path.join(telemetryDir, "telemetry_bound_user")));
+    }, () => ctl.signOut());
+    const handler = mocks.ipcHandle.mock.calls.find(([channel]) => channel === "cloud:signOut")?.[1] as () => Promise<void>;
+    await handler();
+
+    expect(bindingAtNotify).toEqual([false]);
+    expect((await readFile(path.join(telemetryDir, "telemetry_anonymous_id"), "utf8")).trim()).not.toBe("anon_linked");
+    await rm(telemetryDir, { recursive: true, force: true });
+    await rm(authDir, { recursive: true, force: true });
   });
 });

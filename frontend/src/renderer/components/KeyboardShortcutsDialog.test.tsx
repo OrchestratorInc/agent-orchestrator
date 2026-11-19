@@ -1,7 +1,7 @@
 import { fireEvent, render as renderUi, screen, within } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { KeyboardShortcutsDialog } from "./KeyboardShortcutsDialog";
-import { APP_SHORTCUTS } from "../../shared/shortcuts";
+import { APP_SHORTCUTS, isSplitPaneShortcut } from "../../shared/shortcuts";
 import { shortcutLabelKeys } from "../i18n/key-maps";
 import { enMessages } from "../i18n/messages";
 import type { ReactNode } from "react";
@@ -43,11 +43,13 @@ describe("KeyboardShortcutsDialog", () => {
 		render(<KeyboardShortcutsDialog open onOpenChange={vi.fn()} isMac />);
 
 		for (const { id } of APP_SHORTCUTS) {
-			if (id === "keyboard-shortcuts") continue;
+			// Dictation and split panes are listed only in Developer mode, which is off here.
+			if (id === "keyboard-shortcuts" || id === "dictate" || isSplitPaneShortcut(id)) continue;
 			const label = enMessages[shortcutLabelKeys[id] as keyof typeof enMessages] as string;
 			expect(screen.getAllByText(label), `${id} (${label})`).toHaveLength(1);
 		}
 		expect(screen.getByText("Jump to session 1–9")).toBeInTheDocument();
+		expect(screen.queryByText("Dictate")).toBeNull();
 	});
 
 	it("uses macOS symbols in Apple's modifier order and spells them out for screen readers", () => {

@@ -1,6 +1,7 @@
 package ports
 
 import (
+	"context"
 	"time"
 
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
@@ -26,18 +27,55 @@ type RuntimeFacts struct {
 	LaunchID   string
 }
 
+// ReviewerTarget is one reviewer the runtime reaper watches because it serves
+// an in-progress review run. A reviewer has no session row of its own: it is
+// identified by its review row and the worker it reviews.
+type ReviewerTarget struct {
+	ReviewID  string
+	SessionID domain.SessionID
+	// HandleID is the reviewer's runtime (or Chat) handle; empty when no
+	// reviewer was ever recorded, which the reaper reports as dead unprobed.
+	HandleID string
+	LaunchID string
+}
+
+// ReviewerObservation is one probe of a reviewer, reported like RuntimeFacts
+// are for a worker. A failed probe is never a death conclusion.
+type ReviewerObservation struct {
+	Target     ReviewerTarget
+	ObservedAt time.Time
+	Reviewer   ProbeResult
+}
+
+// ReviewerObservationPass is everything the reaper observed about reviewers in
+// one cycle. Boot marks the first pass after the daemon started, when runs a
+// previous daemon left in progress are settled.
+type ReviewerObservationPass struct {
+	ObservedAt   time.Time
+	Boot         bool
+	Observations []ReviewerObservation
+}
+
+// ReviewerObserver is the review side of the reaper's observe -> update split.
+// The reaper lists the reviewers worth probing (only those serving an
+// in-progress run), probes each through ProbeReviewer, and hands the pass to
+// ApplyReviewerObservations, which reduces it into review-run transitions.
+type ReviewerObserver interface {
+	ListObservableReviewers(ctx context.Context) ([]ReviewerTarget, error)
+	ProbeReviewer(ctx context.Context, target ReviewerTarget) (bool, error)
+	ApplyReviewerObservations(ctx context.Context, pass ReviewerObservationPass) error
+}
+
 // ActivitySignal is pushed by the agent hooks. Only a Valid activity state is
 // authoritative; a stale/absent one is ignored rather than read as idleness.
 // AgentSessionID may be supplied independently by metadata-only hooks such as
 // SessionStart, allowing lifecycle to persist the native resume handle without
 // inventing an activity transition.
 //
-// Event/ToolName/ToolUseID are optional correlation facts: the AO hook
-// sub-command that produced the state and, for tool-use hooks, the native
-// tool call it concerns. Lifecycle uses them to clear a stale blocked state
-// only when the specific approved tool finishes. A signal without an Event
-// (old CLIs, adapters with no tool identity) keeps plain last-writer-wins
-// state semantics.
+// Event/ToolName/ToolUseID are optional correlation facts used by lifecycle's
+// tool-flight reducer. AgentSessionID is optional native metadata discovered by
+// a hook and persisted for later restore. A signal without these fields keeps
+// plain state-only semantics.
 type ActivitySignal struct {
 	Valid     bool
 	State     domain.ActivityState

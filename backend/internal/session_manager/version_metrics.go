@@ -11,7 +11,7 @@ import (
 // EventVersionSwitch records a session moving to a newly installed harness
 // release: how (chat, tui or update_when_idle), whether it worked, and how
 // long the session ran the old release first.
-const EventVersionSwitch = "ao.harness.version_switch"
+const EventVersionSwitch = "ao.harnesses.version_switched"
 
 // SetVersionTelemetry late-binds the sink for version-move events.
 func (m *Manager) SetVersionTelemetry(sink ports.EventSink) {

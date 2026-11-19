@@ -21,7 +21,9 @@ import { createEventTransport } from "../../src/renderer/lib/event-transport";
 import { useUiStore } from "../../src/renderer/stores/ui-store";
 import { setApiBaseUrl } from "../../src/renderer/lib/api-client";
 import type { ConversationMessage } from "../../src/renderer/types/conversation";
+import type { ReviewTarget } from "../../src/renderer/hooks/useSessionWorkspaceFiles";
 import "../../src/renderer/styles.css";
+import { chatRenderCostWorkload } from "./chat-render-cost";
 
 const root = createRoot(document.getElementById("performance-root")!);
 const client = new QueryClient({
@@ -57,6 +59,30 @@ function assistant(text: string, streaming = true): ConversationMessage {
 }
 
 export const performanceHarness = {
+	chatRenderCost: chatRenderCostWorkload(render, frame),
+	async largeReview() {
+		const [{ WorkspaceReviewPane }, { largeReviewFiles, largeReviewPatch }] = await Promise.all([
+			import("../../src/renderer/components/diffs/WorkspaceReviewPane"),
+			import("../support/large-review-fixture"),
+		]);
+		setApiBaseUrl(window.location.origin);
+		const originalFetch = window.fetch;
+		window.fetch = async (input, init) => {
+			const request = new Request(input, init);
+			if (request.url.endsWith("/workspace/diffs")) {
+				const { paths } = await request.json() as { paths: string[] };
+				return Response.json({ sessionId: "large-review", workspaceVersion: "large-workspace", groups: [{ repository: "", patch: paths.map(largeReviewPatch).join(""), includedPaths: paths, deferred: [], truncated: false }] });
+			}
+			return originalFetch(input, init);
+		};
+		const target: ReviewTarget = {
+			key: "large-review", branch: { kind: "checked_out" }, changes: { kind: "uncommitted" },
+			scope: "uncommitted", selectionKey: "", workspaceVersion: "large-workspace",
+			files: largeReviewFiles.map((file) => ({ ...file, status: "modified" as const })), openable: false, state: "ready",
+		};
+		const noop = () => {};
+		render(<WorkspaceReviewPane annotation={{ targets: [], status: "idle", error: "", begin: noop, draftFor: () => "", statusFor: () => "idle", setDraft: noop, cancel: noop, submit: async () => {} }} target={target} filter="" sessionId="large-review" split={false} />);
+	},
 	async events() {
 		const original = window.EventSource;
 		const sources: BenchSource[] = [];
@@ -280,3 +306,6 @@ export const performanceHarness = {
 (
 	window as unknown as { performanceHarness: typeof performanceHarness }
 ).performanceHarness = performanceHarness;
+
+if (new URLSearchParams(window.location.search).get("workload") === "largeReview") void performanceHarness.largeReview();
+if (new URLSearchParams(window.location.search).get("workload") === "chatRenderCost") void performanceHarness.chatRenderCost();

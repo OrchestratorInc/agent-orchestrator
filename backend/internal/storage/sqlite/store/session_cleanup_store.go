@@ -34,6 +34,7 @@ func (s *Store) UpsertSessionCleanupFacts(ctx context.Context, rec domain.Sessio
 		LastAttemptAt:        timeToNullTime(rec.LastAttemptAt),
 		NextAttemptAt:        timeToNullTime(rec.NextAttemptAt),
 		FailureCode:          rec.FailureCode,
+		ReportOnly:           rec.ReportOnly,
 	})
 }
 
@@ -134,5 +135,6 @@ func sessionCleanupFromGen(row gen.SessionCleanupFact) domain.SessionCleanupReco
 		LastAttemptAt:        nullTimeToTime(row.LastAttemptAt),
 		NextAttemptAt:        nullTimeToTime(row.NextAttemptAt),
 		FailureCode:          row.FailureCode,
+		ReportOnly:           row.ReportOnly,
 	}
 }

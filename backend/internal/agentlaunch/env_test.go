@@ -3,6 +3,7 @@ package agentlaunch
 import (
 	"context"
 	"errors"
+	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -24,10 +25,15 @@ func TestProjectEnvMergeAndRedaction(t *testing.T) {
 	if got := RedactValues("long-secret", project); got != "[REDACTED]" {
 		t.Fatalf("redacted overlapping values = %q", got)
 	}
-	cause := errors.New("failed with long-secret")
+	sentinel := errors.New("agent requires authentication")
+	cause := fmt.Errorf("failed with long-secret: %w", sentinel)
 	redacted := RedactError(cause, project)
-	if redacted.Error() != "failed with [REDACTED]" || errors.Is(redacted, cause) {
+	var reached interface{ Unwrap() error }
+	if redacted.Error() != "failed with [REDACTED]: agent requires authentication" || errors.As(redacted, &reached) {
 		t.Fatalf("redacted error = %v, want hidden value without the original cause", redacted)
+	}
+	if !errors.Is(redacted, sentinel) {
+		t.Fatalf("redacted error = %v lost its sentinel", redacted)
 	}
 }
 
@@ -116,5 +122,48 @@ func TestConfiguredPATHWindowsUsesExactProtectedSpelling(t *testing.T) {
 	}
 	if got := configuredPATH(map[string]string{"Path": "project"}, true); got != "project" {
 		t.Fatalf("case-insensitive configured PATH = %q, want project", got)
+	}
+}
+
+func TestProcessEnvForLaunchBinaryAddsNodeForNPMLauncher(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("npm env-node launcher is Unix-specific")
+	}
+	home := t.TempDir()
+	nodeDir := filepath.Join(home, ".nvm", "versions", "node", "v22.11.0", "bin")
+	if err := os.MkdirAll(nodeDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(nodeDir, "node"), []byte("#!/bin/sh\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	launcher := filepath.Join(home, "npm-global", "bin", "codex")
+	if err := os.MkdirAll(filepath.Dir(launcher), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(launcher, []byte("#!/usr/bin/env node\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	daemonPATH := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("PATH", daemonPATH)
+	t.Setenv("AO_TEST_KEEP", "kept")
+
+	env := ProcessEnvForLaunchBinary(context.Background(), launcher)
+
+	var paths []string
+	kept := false
+	for _, entry := range env {
+		if value, ok := strings.CutPrefix(entry, "PATH="); ok {
+			paths = append(paths, value)
+		}
+		kept = kept || entry == "AO_TEST_KEEP=kept"
+	}
+	want := strings.Join([]string{filepath.Dir(launcher), nodeDir, daemonPATH}, string(os.PathListSeparator))
+	if len(paths) != 1 || paths[0] != want {
+		t.Fatalf("PATH entries = %q, want exactly %q", paths, want)
+	}
+	if !kept {
+		t.Fatal("process environment was not preserved")
 	}
 }

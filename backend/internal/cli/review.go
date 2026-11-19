@@ -36,6 +36,8 @@ type reviewRun struct {
 	GithubReviewID string     `json:"githubReviewId"`
 	CreatedAt      time.Time  `json:"createdAt"`
 	DeliveredAt    *time.Time `json:"deliveredAt,omitempty"`
+	FailureReason  string     `json:"failureReason,omitempty"`
+	CancelledBy    string     `json:"cancelledBy,omitempty"`
 }
 
 type reviewState struct {
@@ -151,7 +153,7 @@ type reviewListOptions struct {
 func newReviewCommand(ctx *commandContext) *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "review",
-		Short: "Manage AO code reviews of a worker's PR",
+		Short: "Manage Orchestrator code reviews of a worker's PR",
 	}
 	cmd.AddCommand(newReviewListCommand(ctx))
 	cmd.AddCommand(newReviewSubmitCommand(ctx))
@@ -170,7 +172,7 @@ func newReviewListCommand(ctx *commandContext) *cobra.Command {
 		RunE: func(cmd *cobra.Command, args []string) error {
 			session := reviewTargetSession(args, "")
 			if session == "" {
-				return usageError{errors.New("usage: worker session id is required outside an AO session")}
+				return usageError{errors.New("usage: worker session id is required outside an Orchestrator-managed session")}
 			}
 			var res listReviewsResponse
 			path := "sessions/" + url.PathEscape(session) + "/reviews"
@@ -353,25 +355,28 @@ func newReviewTriggerCommand(ctx *commandContext) *cobra.Command {
 	cmd := &cobra.Command{
 		Use:     "trigger [worker-session-id]",
 		Aliases: []string{"execute", "restart"},
-		Short:   "Start an AO review of a worker's PR (default: this session's PR)",
-		Long: `Start an independent AO reviewer on the worker session's open PR heads.
+		Short:   "Start an Orchestrator review of a worker's PR (default: this session's PR)",
+		Long: `Start an independent Orchestrator reviewer on the worker session's open PR heads.
 
-With no session argument the calling AO session is reviewed, so a worker can
-request a review of its own PR. AO fetches the session's PRs fresh from the
-provider first, so the pass reviews the commit really on the PR. Right after
-opening a PR, pass --pr <url>: AO attaches it to the session if it does not
-track it yet (never taking it from another active session) and reviews only it. The reviewer defaults to the session's reviewer
+With no session argument the calling Orchestrator-managed session is reviewed, so a
+worker can request a review of its own PR. Orchestrator fetches the session's
+PRs fresh from the provider first, so the pass reviews the commit really on the
+PR. Right after opening a PR, pass --pr <url>: Orchestrator attaches it to the
+session if it does not track it yet (never taking it from another active
+session) and reviews only it. The reviewer defaults to the session's reviewer
 choice, then the project's reviewer config, then the project's default worker
 agent and model; --agent, --model, and --effort override it for this pass only.
+A pass-only --agent override reviewer retires from the session's pane once its
+pass ends.
 
 A head that is already being reviewed, or already has a review, is not reviewed
 again: the command fails and says why. Pass --rerun to review the same commit
 again, or to add a different --agent alongside one that is still running.
 
 The worker session's review auto-inject is turned on so the reviewer's inline
-review comments are delivered to the worker; pass --no-inject to leave
-that setting unchanged. AO's review is internal: an approval is not a GitHub
-approval and does not authorize merging.`,
+review comments are delivered to the worker; pass --no-inject to leave that
+setting unchanged. Orchestrator's review is internal: an approval is not a
+GitHub approval and does not authorize merging.`,
 		Args: atMostOneArg,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			return ctx.triggerReview(cmd, args, opts)
@@ -384,8 +389,8 @@ approval and does not authorize merging.`,
 		}
 		return pflag.NormalizedName(name)
 	})
-	f.StringVar(&opts.session, "session", "", "Worker session id (or pass it positionally; default: this AO session)")
-	f.StringVar(&opts.prURL, "pr", "", "Review only this pull request URL, attaching it to the session if AO does not track it yet (default: every eligible PR on the session)")
+	f.StringVar(&opts.session, "session", "", "Worker session id (or pass it positionally; default: this Orchestrator-managed session)")
+	f.StringVar(&opts.prURL, "pr", "", "Review only this pull request URL, attaching it to the session if Orchestrator does not track it yet (default: every eligible PR on the session)")
 	f.StringVar(&opts.harness, "harness", "", "Reviewer agent / --agent for this pass only (e.g. claude-code, codex)")
 	f.StringVar(&opts.model, "model", "", "Reviewer model for this pass only")
 	f.StringVar(&opts.effort, "effort", "", "Reviewer reasoning effort for this pass only")
@@ -400,7 +405,7 @@ func (c *commandContext) triggerReview(cmd *cobra.Command, args []string, opts r
 	}
 	session := reviewTargetSession(args, opts.session)
 	if session == "" {
-		return usageError{errors.New("usage: worker session id is required (positional or --session) outside an AO session")}
+		return usageError{errors.New("usage: worker session id is required (positional or --session) outside an Orchestrator-managed session")}
 	}
 	req := triggerReviewRequest{
 		Harness:            strings.TrimSpace(opts.harness),
@@ -448,11 +453,22 @@ func (c *commandContext) triggerReview(cmd *cobra.Command, args []string, opts r
 	return nil
 }
 
-// startedRuns returns the running passes on the PR heads the trigger covered.
+// reviewRunActive mirrors domain.ReviewRunStatus.IsActive for the CLI's
+// hand-mirrored DTOs.
+func reviewRunActive(status string) bool {
+	switch status {
+	case "queued", "launching", "running", "cancelling":
+		return true
+	default:
+		return false
+	}
+}
+
+// startedRuns returns the active passes on the PR heads the trigger covered.
 func startedRuns(res triggerReviewResponse) []reviewRun {
 	var out []reviewRun
 	for _, review := range res.Reviews {
-		if review.LatestRun != nil && review.LatestRun.Status == "running" {
+		if review.LatestRun != nil && reviewRunActive(review.LatestRun.Status) {
 			out = append(out, *review.LatestRun)
 		}
 	}
@@ -469,7 +485,7 @@ func shortReviewSHA(sha string) string {
 func (c *commandContext) stopReview(cmd *cobra.Command, args []string, opts reviewSessionOptions) error {
 	session := reviewTargetSession(args, opts.session)
 	if session == "" {
-		return usageError{errors.New("usage: worker session id is required (positional or --session) outside an AO session")}
+		return usageError{errors.New("usage: worker session id is required (positional or --session) outside an Orchestrator-managed session")}
 	}
 	path := "sessions/" + url.PathEscape(session) + "/reviews/cancel"
 	if err := c.postJSON(cmd.Context(), path, struct{}{}, nil); err != nil {
@@ -487,7 +503,7 @@ func writeReviewList(cmd *cobra.Command, session string, res listReviewsResponse
 	}
 
 	tw := tabwriter.NewWriter(out, 0, 4, 2, ' ', 0)
-	if _, err := fmt.Fprintln(tw, "PR\tSTATUS\tVERDICT\tTITLE"); err != nil {
+	if _, err := fmt.Fprintln(tw, "PR\tSTATUS\tRUN\tVERDICT\tTITLE"); err != nil {
 		return err
 	}
 	for _, review := range res.Reviews {
@@ -495,11 +511,25 @@ func writeReviewList(cmd *cobra.Command, session string, res listReviewsResponse
 		if review.LatestRun != nil && review.LatestRun.Verdict != "" {
 			verdict = review.LatestRun.Verdict
 		}
-		if _, err := fmt.Fprintf(tw, "#%d\t%s\t%s\t%s\n", review.PRNumber, review.Status, verdict, review.Title); err != nil {
+		if _, err := fmt.Fprintf(tw, "#%d\t%s\t%s\t%s\t%s\n", review.PRNumber, review.Status, reviewRunLabel(review.LatestRun), verdict, review.Title); err != nil {
 			return err
 		}
 	}
 	return tw.Flush()
+}
+
+// reviewRunLabel names the latest pass's state, with the daemon's reason code
+// for a failed pass so a person can tell a launch problem from a reviewer that
+// stopped without submitting.
+func reviewRunLabel(run *reviewRun) string {
+	switch {
+	case run == nil || run.Status == "":
+		return "-"
+	case run.Status == "failed" && run.FailureReason != "":
+		return "failed (" + run.FailureReason + ")"
+	default:
+		return run.Status
+	}
 }
 
 func readReviewItems(cmd *cobra.Command, path string) ([]submitReviewItem, error) {

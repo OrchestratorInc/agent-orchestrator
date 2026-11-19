@@ -5,6 +5,7 @@ import { RouterProvider } from "@tanstack/react-router";
 import { I18nextProvider } from "react-i18next";
 import "@xterm/xterm/css/xterm.css";
 import "./styles.css";
+import { preloadMarkdownFonts } from "./hooks/useMarkdownFontsReady";
 import { queryClient } from "./lib/query-client";
 import { mergeUnreadNotification, unreadNotificationsQueryKey } from "./lib/notifications";
 import { playNotificationSound } from "./lib/notification-sound-player";
@@ -13,7 +14,7 @@ import { TelemetryBoundary } from "./components/TelemetryBoundary";
 import { CloudOnboardingGate } from "./components/CloudOnboardingGate";
 import { CloudNotificationRuntime } from "./components/CloudNotificationRuntime";
 import { TelemetryIdentityRuntime } from "./components/TelemetryIdentityRuntime";
-import { applyAnalyticsOptOut, applyRendererTelemetryPolicy, clearRendererTelemetryQueues, initTelemetry, isDeniedEvent } from "./lib/telemetry";
+import { applyAnalyticsOptOut, applyRendererTelemetryPolicy, bindRendererErrorHandlers, clearRendererTelemetryQueues, initTelemetry, isDeniedEvent } from "./lib/telemetry";
 import { aoBridge } from "./lib/bridge";
 import { startDaemonFailureTelemetry } from "./lib/daemon-telemetry";
 import { startUpdateTelemetry } from "./lib/update-telemetry";
@@ -24,6 +25,11 @@ import { useSoundNotificationsStore } from "./stores/sound-notifications-store";
 import { useTelemetryPolicyStore } from "./stores/telemetry-policy-store";
 import { useAnalyticsOptOutStore } from "./stores/analytics-opt-out-store";
 
+// Bind before the first render: errors during route setup and the first
+// render used to fire before TelemetryBoundary's effect bound these. Captures
+// made before the consent policy arrives are held by preload.
+bindRendererErrorHandlers();
+void preloadMarkdownFonts();
 const router = createAppRouter(queryClient);
 
 // Main owns consent and only acknowledges opt-out after every live AO shell

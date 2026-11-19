@@ -3,6 +3,7 @@ package store_test
 import (
 	"context"
 	"errors"
+	"reflect"
 	"testing"
 	"time"
 
@@ -243,37 +244,18 @@ func TestLegacyPRWriteResolvesStoredURLAlias(t *testing.T) {
 	}
 }
 
-func TestReportedPRURLResolvesStoredURLAlias(t *testing.T) {
+func TestRepositoryRenameKeepsLatestName(t *testing.T) {
 	s := newTestStore(t)
 	ctx := context.Background()
-	seedProject(t, s, "repo")
-	session, err := s.CreateSession(ctx, sampleRecord("repo"))
-	if err != nil {
-		t.Fatal(err)
+	for _, name := range []string{"middle-owner/example", "new-owner/example"} {
+		if err := s.RecordRepositoryRename(ctx, domain.RepositoryRename{Host: "github.com", OldName: "old-owner/example", Name: name}); err != nil {
+			t.Fatal(err)
+		}
 	}
-	now := time.Now().UTC()
-	oldURL := "https://github.com/old-owner/example/pull/31"
-	currentURL := "https://github.com/new-owner/example/pull/31"
-	if err := s.WriteSCMObservation(ctx, domain.PullRequest{
-		URL: currentURL, URLAlias: oldURL, SessionID: session.ID, Number: 31, Provider: "github", Host: "github.com", ProviderID: "PR_stable_31", UpdatedAt: now,
-	}, nil, nil, nil, nil, ports.ReviewWritePreserve); err != nil {
-		t.Fatal(err)
-	}
-	external := "https://github.com/other/example/pull/31"
-	if _, err := s.CreateReport(ctx, domain.ReportRecord{
-		ID: "rpt_alias", SessionID: session.ID, ProjectID: session.ProjectID,
-		Outputs: []domain.ReportOutput{
-			{Kind: domain.ReportOutputPRCreated, Reference: oldURL},
-			{Kind: domain.ReportOutputPRCreated, Reference: "http://www.github.com/Old-Owner/example/pull/31/"},
-			{Kind: domain.ReportOutputPRCreated, Reference: external},
-		},
-		CreatedAt: now, DeliveryState: domain.ReportPending, AvailableAt: now, RepeatCount: 1,
-	}); err != nil {
-		t.Fatal(err)
-	}
-	urls, err := s.ListReportedPRURLs(ctx, session.ID)
-	if err != nil || len(urls) != 3 || urls[0] != currentURL || urls[1] != currentURL || urls[2] != external {
-		t.Fatalf("reported PR URLs = %v, err=%v; want every old-name spelling resolved to %s", urls, err, currentURL)
+	got, err := s.ListRepositoryRenames(ctx)
+	want := []domain.RepositoryRename{{Host: "github.com", OldName: "old-owner/example", Name: "new-owner/example"}}
+	if err != nil || !reflect.DeepEqual(got, want) {
+		t.Fatalf("renames = %#v, err=%v; want %#v", got, err, want)
 	}
 }
 
@@ -337,8 +319,8 @@ func TestPRReconciliationRepointsNotificationAndReviewHistory(t *testing.T) {
 		t.Fatal(err)
 	}
 	for _, run := range []domain.ReviewRun{
-		{ID: "old-run", ReviewID: review.ID, SessionID: session.ID, Harness: review.Harness, PRURL: oldURL, TargetSHA: "old-head", Status: domain.ReviewRunComplete, Verdict: domain.VerdictApproved, CreatedAt: now},
-		{ID: "current-run", ReviewID: review.ID, SessionID: session.ID, Harness: review.Harness, PRURL: currentURL, TargetSHA: "current-head", Status: domain.ReviewRunComplete, Verdict: domain.VerdictApproved, CreatedAt: now.Add(time.Minute)},
+		{ID: "old-run", ReviewID: review.ID, SessionID: session.ID, Harness: review.Harness, PRURL: oldURL, TargetSHA: "old-head", Status: domain.ReviewRunCompleted, Verdict: domain.VerdictApproved, CreatedAt: now},
+		{ID: "current-run", ReviewID: review.ID, SessionID: session.ID, Harness: review.Harness, PRURL: currentURL, TargetSHA: "current-head", Status: domain.ReviewRunCompleted, Verdict: domain.VerdictApproved, CreatedAt: now.Add(time.Minute)},
 	} {
 		if err := s.InsertReviewRun(ctx, run); err != nil {
 			t.Fatal(err)

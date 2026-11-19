@@ -4,6 +4,7 @@ import type { CloudCpAgentProvider, CloudCpProviderConnection } from "./cloud-cp
 import { CLOUD_AGENT_PROVIDERS } from "./cloud-agents";
 import { selectActiveOrganization } from "./cloud-offering";
 import { settingsQueryKey, type Settings } from "../hooks/useSettings";
+import { seedCreatedFreestyleSession } from "../hooks/useWorkspaceQuery";
 import { captureRendererEvent } from "./telemetry";
 import { cloudDefaultInterfaceMode, createCloudSession } from "./cloud-session-create";
 
@@ -106,6 +107,7 @@ export async function spawnCloudOrchestrator(queryClient: QueryClient, projectId
 			prompt: "",
 			defaultInterfaceMode: cloudDefaultInterfaceMode(settings),
 		});
+		seedCreatedFreestyleSession(queryClient, baseUrl, orgId, session);
 		void captureRendererEvent("ao.renderer.cloud_orchestrator_spawn_succeeded", { project_id: projectId });
 		return session.id;
 	} catch (error) {

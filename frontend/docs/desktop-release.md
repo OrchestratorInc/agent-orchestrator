@@ -82,6 +82,76 @@ a ZIP for electron-updater. The ZIP and `latest-mac.yml` must remain available:
 electron-updater cannot install an update from a DMG. Nightly and preview
 channels omit the first-install DMG.
 
+The conductor chooses asset names. Since OrchestratorInc/ao-releases#50 the
+stable DMG is `Orchestrator-darwin-<arch>.dmg`, and the conductor rejects the old
+`agent-orchestrator-darwin-<arch>.dmg`. After each stable is published,
+`release-latest-guard.yml` fails if an asset linked from `README.md`,
+`translations/` or the docs `InstallDownloads` table is missing. It does not
+check the Grok setup skill, orchestrator.inc or other docs pages.
+
+## Local lifecycle logs
+
+Two more local records sit in the same `logs/` directory (normally `~/.ao/logs`):
+
+- `desktop-lifecycle.jsonl`: Electron main's start (with the Linux cgroup and
+  OOM score), quit sequence and process exit code, uncaught exceptions and
+  unhandled rejections, `render-process-gone` and `child-process-gone`, a
+  `previous_run_unclean` record when the last run never reached a clean exit,
+  and every daemon spawn, exit (code, signal, uptime), restart decision and
+  cancellation. A respawn's reason is written before the respawn.
+- `daemon-lifecycle.jsonl`: the daemon's start, supervisor-link loss, the
+  shutdown cause (signal name, request, or server error) and the error `Run`
+  returned. `daemon-crash.log` receives Go's fatal crash output (panics,
+  runtime faults such as SIGBUS) through `debug.SetCrashOutput`.
+
+Each JSONL file rotates at 2 MiB and keeps two older generations; the crash log
+rotates at 1 MiB. Files are mode `0600`. Records hold fixed event names and
+scalar facts; error text is scrubbed of URLs, credentials, long opaque tokens and
+long quoted strings, and the home directory is shown as `~`. Prompts and terminal
+output are never written. Nothing is uploaded.
+
+On Linux, `AO_DAEMON_SCOPE=systemd` (experimental) starts the daemon in its own
+transient user scope in `app-ao.slice`, so the daemon, tmux and agents leave the
+desktop app's scope. `AO_DAEMON_MEMORY_HIGH` / `AO_DAEMON_MEMORY_MAX` (systemd
+values such as `12G` or `80%`) limit that scope. Without a reachable systemd user
+manager (Flatpak, containers, non-systemd distros) it raises the daemon's
+`oom_score_adj` to 300 instead, which agents inherit. The probe uses the same
+slice and memory properties as the launch; if a scoped daemon still exits before
+it is ready, AO stops using the scope for that run and retries once with the
+`oom_score_adj` fallback.
+
+## Local updater diagnostics
+
+AO writes updater decisions to `logs/updater.jsonl` beside `staged-update.json`
+(normally `~/.ao/logs/updater.jsonl`, using the configured run-file directory).
+These local records survive relaunches even when a packaged GUI
+launch discards stdout/stderr. They are not sent through renderer telemetry.
+The log retains one rotated file, `updater.jsonl.1`, with each file capped at
+1 MiB and created with mode `0600` on macOS/POSIX. Network URLs and authorization
+text are redacted; native error messages, stacks, codes, and causes remain for
+diagnosis. Treat the files as local diagnostics and inspect them before sharing.
+
+For a preparation failure, preserve both files before retrying. Correlate their
+timestamps, process IDs, running/target versions, and operation/request context
+with `~/Library/Caches/dev.agent-orchestrator.desktop.ShipIt/ShipIt_stderr.log`
+and `ShipItState.plist`. `native-preparation-watchdog` identifies the exact
+timeout branch and last progress sample; `native-error` preserves an original
+native error before its message is rewritten for the UI. Preparation samples
+include elapsed/inactive time, bytes, free space, and update-directory creation
+time. Probe records include read errors and traversal-budget exhaustion. Late
+native completion records whether AO accepted it.
+`power-suspend` / `power-resume` and process uptime help correlate a timeout
+with laptop sleep or a wall-clock change. The macOS preparation watchdog pauses
+on suspend, excludes sleep from its elapsed-time caps, and grants a fresh
+inactivity window on resume. Its active-time limits remain unchanged.
+
+A watchdog timeout does not cancel Squirrel's native staging. A later native
+success for the same owned target and channel clears that timeout and restores
+the install confirmation. It never resumes an install request that already
+failed. A native error or discarded target invalidates this recovery. If native
+staging remains blocked, the dialog offers **Relaunch AO**, which starts a fresh
+process rather than trying to reset Squirrel in place.
+
 ## Isolated macOS differential v2
 
 Current AO uses full-ZIP macOS updates. It explicitly sets

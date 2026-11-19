@@ -241,7 +241,9 @@ func TestWiring_AgentResolverResolvesRealAdapters(t *testing.T) {
 		{domain.HarnessFX, "fx"},
 		{domain.HarnessUnreal, "unreal-agent"},
 		{domain.HarnessCommandCode, "command-code"},
+		{domain.HarnessOpenInterpreter, "open-interpreter"},
 		{domain.HarnessMemcode, "memcode"},
+		{domain.HarnessStakpak, "stakpak"},
 	} {
 		agent, ok := resolver.Agent(tc.harness)
 		if !ok {
@@ -372,7 +374,7 @@ func TestWiring_StartSessionBuildsSessionService(t *testing.T) {
 	if err != nil {
 		t.Fatalf("buildAgentResolver: %v", err)
 	}
-	svc, reviewSvc, lc, err := startSession(context.Background(), cfg, rt, store, lcm, nil, messenger, telemetryadapter.NoopSink{}, nil, agents, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, log)
+	svc, reviewSvc, lc, err := startSession(context.Background(), cfg, rt, store, lcm, nil, messenger, telemetryadapter.NoopSink{}, nil, agents, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, log)
 	if err != nil {
 		t.Fatalf("startSession: %v", err)
 	}
@@ -433,7 +435,7 @@ func TestWiring_StartSessionSpawnsScratchWithoutGitRepo(t *testing.T) {
 	if err != nil {
 		t.Fatalf("buildAgentResolver: %v", err)
 	}
-	svc, _, _, err := startSession(context.Background(), cfg, runtime, store, lcm, nil, messenger, telemetryadapter.NoopSink{}, nil, agents, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, log)
+	svc, _, _, err := startSession(context.Background(), cfg, runtime, store, lcm, nil, messenger, telemetryadapter.NoopSink{}, nil, agents, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, log)
 	if err != nil {
 		t.Fatalf("startSession: %v", err)
 	}
@@ -490,7 +492,7 @@ func TestStartSession_SpawnDoesNotPanicWhenNoTrackerToken(t *testing.T) {
 	if agentsErr != nil {
 		t.Fatalf("buildAgentResolver: %v", agentsErr)
 	}
-	svc, _, _, err := startSession(context.Background(), cfg, rt, store, lcm, nil, messenger, telemetryadapter.NoopSink{}, nil, agents, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, log)
+	svc, _, _, err := startSession(context.Background(), cfg, rt, store, lcm, nil, messenger, telemetryadapter.NoopSink{}, nil, agents, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, log)
 	if err != nil {
 		t.Fatalf("startSession: %v", err)
 	}
@@ -524,7 +526,7 @@ func TestStartTrackerIntake_RunsEvenWithoutEnabledProjects(t *testing.T) {
 	if agentsErr != nil {
 		t.Fatalf("buildAgentResolver: %v", agentsErr)
 	}
-	svc, _, _, err := startSession(context.Background(), cfg, rt, store, lcm, nil, messenger, telemetryadapter.NoopSink{}, nil, agents, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, log)
+	svc, _, _, err := startSession(context.Background(), cfg, rt, store, lcm, nil, messenger, telemetryadapter.NoopSink{}, nil, agents, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, log)
 	if err != nil {
 		t.Fatalf("startSession: %v", err)
 	}
@@ -840,6 +842,9 @@ func TestWiring_MergeConflictNudgeReArmsAfterConflictClears(t *testing.T) {
 		ProjectID: "p",
 		Kind:      domain.KindWorker,
 		Activity:  domain.Activity{State: domain.ActivityIdle, LastActivityAt: time.Now()},
+		// Spawned sessions start with automatic CI fixing on; that switch also
+		// gates the merge-conflict nudge.
+		AutoInjectCI: true,
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -952,6 +957,8 @@ type fakeSessionLifecycle struct {
 	restoreAllCalled          bool
 	reconcileErr              error
 	restoreErr                error
+	interrupted               domain.SessionID
+	interruptErr              error
 }
 
 func (f *fakeSessionLifecycle) Send(context.Context, domain.SessionID, string, *ports.SpawnAttachment) error {
@@ -960,6 +967,11 @@ func (f *fakeSessionLifecycle) Send(context.Context, domain.SessionID, string, *
 
 func (f *fakeSessionLifecycle) Kill(_ context.Context, _ domain.SessionID) (bool, error) {
 	return false, nil
+}
+
+func (f *fakeSessionLifecycle) StopTUITurn(_ context.Context, id domain.SessionID) error {
+	f.interrupted = id
+	return f.interruptErr
 }
 
 func (f *fakeSessionLifecycle) Reconcile(_ context.Context) error {
@@ -981,7 +993,8 @@ func (f *fakeSessionLifecycle) ReconcileBackground(_ context.Context) error {
 	return f.reconcileErr
 }
 
-func (*fakeSessionLifecycle) HibernateIdleChats(context.Context) error { return nil }
+func (*fakeSessionLifecycle) HibernateIdleChats(context.Context) error        { return nil }
+func (*fakeSessionLifecycle) ReconcileWorkspaceCleanup(context.Context) error { return nil }
 func (*fakeSessionLifecycle) RefreshStaleChats(context.Context, time.Duration) error {
 	return nil
 }
@@ -997,8 +1010,12 @@ func (*fakeSessionLifecycle) StopHarnessSessions(context.Context, domain.AgentHa
 func (*fakeSessionLifecycle) ResumeHarnessSessions(context.Context, []domain.SessionID) error {
 	return nil
 }
+func (*fakeSessionLifecycle) SessionRuntimeEnv(context.Context, domain.SessionRecord) (map[string]string, error) {
+	return nil, nil
+}
 func (*fakeSessionLifecycle) SetVersionTelemetry(ports.EventSink)                                {}
 func (*fakeSessionLifecycle) SetVersionRefreshPolicy(func() sessionmanager.VersionRefreshPolicy) {}
+func (*fakeSessionLifecycle) SetComputerUseEnabled(func(context.Context) bool)                   {}
 func (*fakeSessionLifecycle) RetryVersionMoves(context.Context) error                            { return nil }
 func (*fakeSessionLifecycle) ObserveChatVersionSwitch(domain.SessionID, string, string)          {}
 func (*fakeSessionLifecycle) MarkHarnessUpdated(context.Context, domain.AgentHarness, string, time.Time) error {
@@ -1015,6 +1032,7 @@ func (f *fakeSessionLifecycle) RestoreAll(_ context.Context) error {
 
 func (*fakeSessionLifecycle) WaitAgentSwitchWorkers(context.Context) error { return nil }
 func (*fakeSessionLifecycle) WaitBackgroundWorkers(context.Context) error  { return nil }
+func (*fakeSessionLifecycle) StopAgentsForQuit(context.Context) error      { return nil }
 
 func (f *fakeSessionLifecycle) SetShellTerminalCloser(sessionmanager.ShellTerminalCloser) {}
 func (f *fakeSessionLifecycle) SetTerminalInputGate(sessionmanager.TerminalInputGate)     {}
@@ -1022,10 +1040,11 @@ func (f *fakeSessionLifecycle) AcquireSessionInput(domain.SessionID) (func(), bo
 	return func() {}, true
 }
 
-func (f *fakeSessionLifecycle) SessionMutationInProgress(domain.SessionID) bool         { return false }
-func (f *fakeSessionLifecycle) SetReviewerTerminator(sessionmanager.ReviewerTerminator) {}
-func (f *fakeSessionLifecycle) SetHarnessUseGate(sessionmanager.HarnessUseGate)         {}
-func (f *fakeSessionLifecycle) CodexAccountSwitchInProgress() bool                      { return false }
+func (f *fakeSessionLifecycle) SessionMutationInProgress(domain.SessionID) bool                 { return false }
+func (f *fakeSessionLifecycle) SetReviewerTerminator(sessionmanager.ReviewerTerminator)         {}
+func (f *fakeSessionLifecycle) SetHarnessUseGate(sessionmanager.HarnessUseGate)                 {}
+func (f *fakeSessionLifecycle) SetImportArchiveRefresher(sessionmanager.ImportArchiveRefresher) {}
+func (f *fakeSessionLifecycle) CodexAccountSwitchInProgress() bool                              { return false }
 func (f *fakeSessionLifecycle) StartCodexAccountSwitch(context.Context, ports.CodexAccountSwitchConfig) (domain.CodexAccountSwitch, error) {
 	return domain.CodexAccountSwitch{}, nil
 }

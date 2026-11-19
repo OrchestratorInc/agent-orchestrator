@@ -25,9 +25,11 @@
 //     | Pipeline status        | domain.CIState |
 //     |------------------------|----------------|
 //     | success                | passing        |
-//     | failed, canceled       | failing        |
+//     | failed                 | failing        |
 //     | running, pending, ...  | pending        |
+//     | canceled               | unknown        |
 //     | skipped, manual, ""    | unknown        |
+//     A canceled pipeline with a failed required job is still failing.
 //
 //   - Review: GitLab has no "changes_requested" concept. Approval is
 //     derived from the merge_request/approvals endpoint's `approved` bool

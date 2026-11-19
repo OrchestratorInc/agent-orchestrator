@@ -1,5 +1,6 @@
 import {
 	resetClosedTabsForTest,
+	resetNativeViewCacheForTest,
 	resetConsumedPreviewTriggersForTest,
 	useBrowserView,
 	type BrowserNavState,
@@ -151,6 +152,8 @@ function setupBridge() {
 		getRuntimeState: vi.fn(async () => ({ connected: false, connecting: false, rejected: false })),
 		historySuggestions: vi.fn(async () => []),
 		historyFavicon: vi.fn(async () => undefined),
+		userBrowser: vi.fn(async () => ({ name: "Chrome", chrome: true })),
+		openInUserBrowser: vi.fn(async () => ({ name: "Chrome", chrome: true })),
 		captureScreenshot: vi.fn(async () => undefined),
 		downloads: {
 			list: vi.fn(async () => ({ downloads: [] })),
@@ -233,6 +236,7 @@ describe("useBrowserView", () => {
 		document.body.replaceChildren();
 		resetConsumedPreviewTriggersForTest();
 		resetClosedTabsForTest();
+		resetNativeViewCacheForTest();
 	});
 
 	it("ensures a scoped browser view and reports the measured slot bounds", async () => {
@@ -269,6 +273,181 @@ describe("useBrowserView", () => {
 			),
 		).toBe(true);
 		expect(result.current.viewId).toBe("42:sess-1");
+	});
+
+	it("marks only agent commands whose start this session saw", async () => {
+		const bridge = setupBridge();
+		const { result, rerender } = renderHook(
+			({ sessionId }) => useBrowserView({ sessionId, active: true, poppedOut: false }),
+			{ initialProps: { sessionId: "sess-1" } },
+		);
+		await waitFor(() => expect(result.current.viewId).toBe("42:sess-1"));
+
+		act(() => bridge.emitActivity({ viewId: "42:sess-1", active: true, action: "open", phase: "started", commandId: "seen" }));
+		act(() => bridge.emitActivity({ viewId: "42:sess-1", active: false, action: "open", phase: "finished", commandId: "seen" }));
+		expect(result.current.agentBrowserActivity).toMatchObject({ commandId: "seen", phase: "finished", startObserved: true });
+
+		// Started while the user was on another session: only the finish arrives here.
+		act(() => bridge.emitActivity({ viewId: "42:sess-1", active: false, action: "open", phase: "finished", commandId: "unseen" }));
+		expect(result.current.agentBrowserActivity).toMatchObject({ commandId: "unseen", startObserved: false });
+
+		// A start seen before switching away does not carry over to a later visit.
+		act(() => bridge.emitActivity({ viewId: "42:sess-1", active: true, action: "open", phase: "started", commandId: "left" }));
+		rerender({ sessionId: "sess-2" });
+		await waitFor(() => expect(result.current.viewId).toBe("42:sess-2"));
+		rerender({ sessionId: "sess-1" });
+		await waitFor(() => expect(result.current.viewId).toBe("42:sess-1"));
+		act(() => bridge.emitActivity({ viewId: "42:sess-1", active: false, action: "open", phase: "finished", commandId: "left" }));
+		expect(result.current.agentBrowserActivity).toMatchObject({ commandId: "left", startObserved: false });
+	});
+
+	it("keeps the same model across renders until its state changes", async () => {
+		setupBridge();
+		const { result, rerender } = renderHook(
+			({ sessionId }) => useBrowserView({ sessionId, active: true, poppedOut: false }),
+			{ initialProps: { sessionId: "sess-1" } },
+		);
+		await waitFor(() => expect(result.current.viewId).toBe("42:sess-1"));
+		await act(async () => {});
+		const settled = result.current;
+
+		// A parent render with nothing new hands the panel the same object.
+		rerender({ sessionId: "sess-1" });
+		expect(result.current).toBe(settled);
+
+		rerender({ sessionId: "sess-2" });
+		await waitFor(() => expect(result.current.viewId).toBe("42:sess-2"));
+		expect(result.current).not.toBe(settled);
+		expect(result.current.goBack).toBe(settled.goBack);
+	});
+
+	it("swaps straight to a session's cached native view when switching back", async () => {
+		const bridge = setupBridge();
+		const slot = createSlot();
+		const live = (viewId: string) => ({ viewId, url: "http://localhost:3000/", title: "", canGoBack: false, canGoForward: false, isLoading: false });
+		const { result, rerender } = renderHook(
+			({ sessionId }) => useBrowserView({ sessionId, active: true, poppedOut: false }),
+			{ initialProps: { sessionId: "sess-1" } },
+		);
+		act(() => result.current.slotRef(slot));
+		await waitFor(() => expect(result.current.viewId).toBe("42:sess-1"));
+		act(() => bridge.emit(live("42:sess-1")));
+		rerender({ sessionId: "sess-2" });
+		await waitFor(() => expect(result.current.viewId).toBe("42:sess-2"));
+		act(() => bridge.emit(live("42:sess-2")));
+
+		// Hold the lookup so only the cached view can be on screen.
+		bridge.ensure.mockImplementationOnce(() => new Promise<BrowserNavState>(() => undefined));
+		bridge.setBounds.mockClear();
+		rerender({ sessionId: "sess-1" });
+
+		// The panel keeps showing the live page, and the first frame's native swap
+		// shows the destination before hiding the departing view.
+		expect(result.current.viewId).toBe("42:sess-1");
+		expect(result.current.navState.url).toBe("http://localhost:3000/");
+		await waitFor(() =>
+			expect(bridge.setBounds).toHaveBeenCalledWith(expect.objectContaining({ viewId: "42:sess-1", visible: true })),
+		);
+		const calls = bridge.setBounds.mock.calls.map(([input]) => [input.viewId, input.visible]);
+		const shown = calls.findIndex(([viewId, visible]) => viewId === "42:sess-1" && visible);
+		const hidden = calls.findIndex(([viewId, visible]) => viewId === "42:sess-2" && !visible);
+		expect(shown).toBeGreaterThanOrEqual(0);
+		expect(hidden).toBeGreaterThan(shown);
+		expect(calls.some(([viewId, visible]) => viewId === "42:sess-1" && !visible)).toBe(false);
+	});
+
+	it("moves the native page on every frame of the inspector slide", async () => {
+		const bridge = setupBridge();
+		const slot = createSlot();
+		const gap = document.createElement("div");
+		gap.setAttribute("data-slot", "inspector-gap");
+		document.body.appendChild(gap);
+		const { result } = renderHook(() => useBrowserView({ sessionId: "sess-1", active: true, poppedOut: false }));
+		act(() => result.current.slotRef(slot));
+		await waitFor(() => expect(result.current.viewId).toBe("42:sess-1"));
+		act(() => bridge.emit({ viewId: "42:sess-1", url: "http://localhost:3000/", title: "", canGoBack: false, canGoForward: false, isLoading: false }));
+		const slide = (type: string) => {
+			const event = new Event(type, { bubbles: true });
+			Object.defineProperty(event, "propertyName", { value: "width" });
+			gap.dispatchEvent(event);
+		};
+		await new Promise((resolve) => setTimeout(resolve, 350));
+		bridge.setBounds.mockClear();
+
+		act(() => slide("transitionrun"));
+		await waitFor(() => expect(bridge.setBounds.mock.calls.length).toBeGreaterThanOrEqual(3));
+		act(() => slide("transitionend"));
+		const settled = bridge.setBounds.mock.calls.length;
+		await new Promise((resolve) => setTimeout(resolve, 100));
+		expect(bridge.setBounds.mock.calls.length).toBe(settled);
+		expect(bridge.setBounds).toHaveBeenLastCalledWith(expect.objectContaining({ viewId: "42:sess-1", visible: true }));
+	});
+
+	it("leaves a hidden page alone while another inspector tab slides", async () => {
+		const bridge = setupBridge();
+		const slot = createSlot();
+		const gap = document.createElement("div");
+		gap.setAttribute("data-slot", "inspector-gap");
+		document.body.appendChild(gap);
+		const { result } = renderHook(() => useBrowserView({ sessionId: "sess-1", active: false, poppedOut: false }));
+		act(() => result.current.slotRef(slot));
+		await waitFor(() => expect(result.current.viewId).toBe("42:sess-1"));
+		await new Promise((resolve) => setTimeout(resolve, 350));
+		bridge.setBounds.mockClear();
+
+		const event = new Event("transitionrun", { bubbles: true });
+		Object.defineProperty(event, "propertyName", { value: "width" });
+		act(() => { gap.dispatchEvent(event); });
+		await new Promise((resolve) => setTimeout(resolve, 100));
+		expect(bridge.setBounds).not.toHaveBeenCalled();
+	});
+
+	it("shows a cached session's latest page when switching back", async () => {
+		const bridge = setupBridge();
+		const slot = createSlot();
+		const live = (viewId: string, url: string) => ({ viewId, url, title: "", canGoBack: false, canGoForward: false, isLoading: false });
+		const { result, rerender } = renderHook(
+			({ sessionId }) => useBrowserView({ sessionId, active: true, poppedOut: false }),
+			{ initialProps: { sessionId: "sess-1" } },
+		);
+		act(() => result.current.slotRef(slot));
+		await waitFor(() => expect(result.current.viewId).toBe("42:sess-1"));
+		act(() => bridge.emit(live("42:sess-1", "http://localhost:3000/")));
+		rerender({ sessionId: "sess-2" });
+		await waitFor(() => expect(result.current.viewId).toBe("42:sess-2"));
+
+		// An agent navigates sess-1's page while the user is on sess-2.
+		act(() => bridge.emit(live("42:sess-1", "http://localhost:3000/next")));
+		bridge.ensure.mockImplementationOnce(() => new Promise<BrowserNavState>(() => undefined));
+		rerender({ sessionId: "sess-1" });
+
+		expect(result.current.navState.url).toBe("http://localhost:3000/next");
+	});
+
+	it("hides the departing view even when ensure answers with a new view first", async () => {
+		const bridge = setupBridge();
+		const slot = createSlot();
+		const live = (viewId: string) => ({ viewId, url: "http://localhost:3000/", title: "", canGoBack: false, canGoForward: false, isLoading: false });
+		const { result, rerender } = renderHook(
+			({ sessionId }) => useBrowserView({ sessionId, active: true, poppedOut: false }),
+			{ initialProps: { sessionId: "sess-1" } },
+		);
+		act(() => result.current.slotRef(slot));
+		await waitFor(() => expect(result.current.viewId).toBe("42:sess-1"));
+		act(() => bridge.emit(live("42:sess-1")));
+		rerender({ sessionId: "sess-2" });
+		await waitFor(() => expect(result.current.viewId).toBe("42:sess-2"));
+		act(() => bridge.emit(live("42:sess-2")));
+
+		// sess-1's view was recreated while the user was away.
+		bridge.ensure.mockImplementationOnce(async () => live("43:sess-1"));
+		bridge.setBounds.mockClear();
+		rerender({ sessionId: "sess-1" });
+
+		await waitFor(() => expect(result.current.viewId).toBe("43:sess-1"));
+		await waitFor(() =>
+			expect(bridge.setBounds).toHaveBeenCalledWith(expect.objectContaining({ viewId: "42:sess-2", visible: false })),
+		);
 	});
 
 	it("leaves the runtime link state to the Browser panel (#6466)", async () => {
@@ -1067,6 +1246,41 @@ describe("useBrowserView", () => {
 				visible: true,
 			})),
 		);
+	});
+
+	it("keeps the inspector viewport width while sliding out of and back into the workspace", async () => {
+		const bridge = setupBridge();
+		const split = document.createElement("div");
+		split.className = "session-split";
+		const column = document.createElement("div");
+		column.setAttribute("data-panel", "");
+		column.dataset.slot = "inspector-container";
+		const slot = createSlot();
+		const rect = slot.getBoundingClientRect();
+		let offset = 0;
+		split.getBoundingClientRect = () => ({ ...rect, x: 0, left: 0, right: 800, width: 800 });
+		column.getBoundingClientRect = () => ({
+			...rect, x: 500 + offset, left: 500 + offset, right: 800 + offset, width: 300,
+		});
+		slot.getBoundingClientRect = () => ({
+			...rect, x: 506 + offset, left: 506 + offset, right: 800 + offset, width: 294,
+		});
+		column.appendChild(slot);
+		split.appendChild(column);
+		document.body.appendChild(split);
+
+		const { result } = renderHook(() => useBrowserView({ sessionId: "sess-1", active: true, poppedOut: false }));
+		await waitFor(() => expect(result.current.viewId).toBe("42:sess-1"));
+		act(() => result.current.slotRef(slot));
+
+		for (const position of [0, 150, 300, 150, 0]) {
+			offset = position;
+			act(() => window.dispatchEvent(new Event("resize")));
+			await waitFor(() => expect(bridge.setBounds).toHaveBeenLastCalledWith(expect.objectContaining({
+				rect: { x: 506 + position, y: 34, width: 294, height: 240 },
+				visible: true,
+			})));
+		}
 	});
 
 	it("re-measures after a layout transition settles, catching a position-only shift", async () => {
@@ -1994,6 +2208,61 @@ describe("useBrowserView", () => {
 		expect(bridge.clear).not.toHaveBeenCalled();
 	});
 
+	it("reopens an available artifact after daemon termination destroys its native target", async () => {
+		const bridge = setupBridge();
+		const { rerender } = renderHook(
+			({ sessionEnded }) => useBrowserView({
+				sessionId: "sess-1", active: true, poppedOut: false, terminated: false, sessionEnded,
+				previewUrl: "http://ao-preview-artifact.onwxg.localhost:3300/report.html", previewRevision: 1,
+			}),
+			{ initialProps: { sessionEnded: false } },
+		);
+		await waitFor(() => expect(bridge.navigate).toHaveBeenCalledTimes(1));
+		rerender({ sessionEnded: true });
+		await waitFor(() => expect(bridge.navigate).toHaveBeenCalledTimes(2));
+		expect(bridge.ensure).toHaveBeenCalledTimes(2);
+		expect(bridge.destroy).not.toHaveBeenCalled();
+	});
+
+	it("preserves manual navigation when revisiting an already-ended artifact session", async () => {
+		const bridge = setupBridge();
+		const options = {
+			sessionId: "sess-1", active: true, poppedOut: false, terminated: false, sessionEnded: true,
+			previewUrl: "http://ao-preview-artifact.onwxg.localhost:3300/report.html", previewRevision: 1,
+		};
+		const first = renderHook(() => useBrowserView(options));
+		await waitFor(() => expect(bridge.navigate).toHaveBeenCalledTimes(1));
+		await act(() => first.result.current.navigate("https://example.com/manual"));
+		first.unmount();
+		const second = renderHook(() => useBrowserView(options));
+		await waitFor(() => expect(second.result.current.viewId).toBe("42:sess-1"));
+		expect(bridge.navigate).toHaveBeenCalledTimes(2);
+	});
+
+	it("does not create a browser for an already terminated session", () => {
+		const bridge = setupBridge();
+		const { result } = renderHook(() => useBrowserView({
+			sessionId: "sess-1", active: true, poppedOut: false, terminated: true,
+		}));
+		expect(bridge.ensure).not.toHaveBeenCalled();
+		expect(result.current.viewId).toBe("");
+	});
+
+	it("destroys a browser that finishes creating after termination", async () => {
+		const bridge = setupBridge();
+		let finish!: (state: BrowserNavState) => void;
+		bridge.ensure.mockImplementationOnce(() => new Promise((resolve) => { finish = resolve; }));
+		const { result, rerender } = renderHook(
+			({ terminated }) => useBrowserView({ sessionId: "sess-1", active: true, poppedOut: false, terminated }),
+			{ initialProps: { terminated: false } },
+		);
+		rerender({ terminated: true });
+		await act(async () => finish(bridge.stateFor("42:sess-1")));
+		expect(bridge.destroy).toHaveBeenCalledWith("42:sess-1");
+		expect(result.current.viewId).toBe("");
+		expect(bridge.navigate).not.toHaveBeenCalled();
+	});
+
 	it("destroys the complete browser target when the session is terminated", async () => {
 		const bridge = setupBridge();
 		const { rerender, result } = renderHook(
@@ -2017,6 +2286,12 @@ describe("useBrowserView", () => {
 		expect(bridge.clear).not.toHaveBeenCalled();
 		expect(bridge.navigate).toHaveBeenCalledTimes(1);
 		expect(result.current.viewId).toBe("");
+
+		// Restoring re-creates the target without a route change or remount.
+		rerender({ terminated: false });
+		await waitFor(() => expect(result.current.viewId).toBe("42:sess-1"));
+		expect(bridge.ensure).toHaveBeenCalledTimes(2);
+		await waitFor(() => expect(bridge.navigate).toHaveBeenCalledTimes(2));
 	});
 
 	it("hides the native view while an element outside the slot is fullscreen, and restores it on exit", async () => {
@@ -2123,5 +2398,117 @@ describe("useBrowserView", () => {
 				}),
 			),
 		);
+	});
+});
+
+describe("useBrowserView scroll geometry", () => {
+	afterEach(() => {
+		vi.restoreAllMocks();
+		document.body.replaceChildren();
+		resetConsumedPreviewTriggersForTest();
+		resetClosedTabsForTest();
+		resetNativeViewCacheForTest();
+	});
+
+	async function shownSlot() {
+		const bridge = setupBridge();
+		const column = document.createElement("div");
+		const chat = document.createElement("div");
+		document.body.append(column, chat);
+		const slot = createSlot();
+		column.appendChild(slot);
+		const { result } = renderHook(() => useBrowserView({ sessionId: "sess-1", active: true, poppedOut: false }));
+		await waitFor(() => expect(bridge.ensure).toHaveBeenCalled());
+		act(() => bridge.emit({ viewId: "42:sess-1", url: "http://localhost:3000/", title: "", canGoBack: false, canGoForward: false, isLoading: false }));
+		act(() => result.current.slotRef(slot));
+		await waitFor(() => expect(bridge.setBounds).toHaveBeenCalledWith(expect.objectContaining({ visible: true })));
+		// Let the ref-handoff and settle measures finish.
+		await new Promise((resolve) => setTimeout(resolve, 350));
+		bridge.setBounds.mockClear();
+		const nextFrame = () => new Promise((resolve) => setTimeout(resolve, 40));
+		return { bridge, column, chat, slot, nextFrame };
+	}
+
+	it("ignores scrolling beside the browser, such as the chat", async () => {
+		const { bridge, chat, nextFrame } = await shownSlot();
+		for (let i = 0; i < 5; i++) {
+			act(() => { chat.dispatchEvent(new Event("scroll")); });
+			await nextFrame();
+		}
+		expect(bridge.setBounds).not.toHaveBeenCalled();
+	});
+
+	it("sends nothing when a scroll around the browser leaves it where it was", async () => {
+		const { bridge, column, nextFrame } = await shownSlot();
+		act(() => { column.dispatchEvent(new Event("scroll")); });
+		await nextFrame();
+		expect(bridge.setBounds).not.toHaveBeenCalled();
+	});
+
+	it("follows a scroll that moves the browser", async () => {
+		const { bridge, column, slot, nextFrame } = await shownSlot();
+		vi.mocked(slot.getBoundingClientRect).mockReturnValue({
+			x: 12, y: 4, width: 320, height: 240, top: 4, right: 332, bottom: 244, left: 12, toJSON: () => ({}),
+		} as DOMRect);
+		act(() => { column.dispatchEvent(new Event("scroll")); });
+		await nextFrame();
+		expect(bridge.setBounds).toHaveBeenCalledTimes(1);
+		expect(bridge.setBounds).toHaveBeenLastCalledWith(expect.objectContaining({ rect: expect.objectContaining({ y: 4 }), visible: true }));
+	});
+
+	it("still re-sends unchanged geometry for non-scroll layout changes", async () => {
+		const { bridge, nextFrame } = await shownSlot();
+		act(() => { window.dispatchEvent(new Event("resize")); });
+		await nextFrame();
+		expect(bridge.setBounds).toHaveBeenCalledWith(expect.objectContaining({ visible: true }));
+	});
+});
+
+describe("useBrowserView scroll geometry while hidden", () => {
+	afterEach(() => {
+		vi.restoreAllMocks();
+		document.body.replaceChildren();
+		resetConsumedPreviewTriggersForTest();
+		resetClosedTabsForTest();
+		resetNativeViewCacheForTest();
+	});
+
+	const nextFrame = () => new Promise((resolve) => setTimeout(resolve, 40));
+
+	it("does not re-send hidden bounds for every scroll while the panel is closed", async () => {
+		const bridge = setupBridge();
+		const chat = document.createElement("div");
+		document.body.append(chat);
+		renderHook(() => useBrowserView({ sessionId: "sess-1", active: false, poppedOut: false }));
+		await waitFor(() => expect(bridge.ensure).toHaveBeenCalled());
+		act(() => bridge.emit({ viewId: "42:sess-1", url: "http://localhost:3000/", title: "", canGoBack: false, canGoForward: false, isLoading: false }));
+		await new Promise((resolve) => setTimeout(resolve, 350));
+		// The view is hidden by now; scrolling must not keep saying so.
+		bridge.setBounds.mockClear();
+		for (let i = 0; i < 5; i++) {
+			act(() => { chat.dispatchEvent(new Event("scroll")); });
+			act(() => { document.dispatchEvent(new Event("scroll")); });
+			await nextFrame();
+		}
+		expect(bridge.setBounds.mock.calls.filter(([input]) => input.visible === true)).toEqual([]);
+		expect(bridge.setBounds.mock.calls.length).toBeLessThanOrEqual(1);
+	});
+
+	it("still sends a hide that comes from something other than scrolling", async () => {
+		const bridge = setupBridge();
+		const slot = createSlot();
+		const { result, rerender } = renderHook(({ active }) => useBrowserView({ sessionId: "sess-1", active, poppedOut: false }), { initialProps: { active: true } });
+		await waitFor(() => expect(bridge.ensure).toHaveBeenCalled());
+		act(() => bridge.emit({ viewId: "42:sess-1", url: "http://localhost:3000/", title: "", canGoBack: false, canGoForward: false, isLoading: false }));
+		act(() => result.current.slotRef(slot));
+		await new Promise((resolve) => setTimeout(resolve, 350));
+		rerender({ active: false });
+		await nextFrame();
+		bridge.setBounds.mockClear();
+		// Hiding again (another deactivation path) is never deduplicated.
+		rerender({ active: true });
+		rerender({ active: false });
+		await nextFrame();
+		expect(bridge.setBounds).toHaveBeenCalledWith(expect.objectContaining({ viewId: "42:sess-1", visible: false }));
 	});
 });

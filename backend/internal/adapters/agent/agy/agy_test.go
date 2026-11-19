@@ -26,27 +26,45 @@ func TestManifest(t *testing.T) {
 }
 
 func TestGetLaunchCommand(t *testing.T) {
-	plugin := &Plugin{resolvedBinary: "agy"}
+	for _, tc := range []struct {
+		name  string
+		mode  ports.PermissionMode
+		flags []string
+	}{
+		{name: "default", mode: ports.PermissionModeDefault},
+		{name: "accept-edits", mode: ports.PermissionModeAcceptEdits, flags: []string{"--mode", "accept-edits"}},
+		{name: "auto", mode: ports.PermissionModeAuto, flags: []string{"--mode", "auto"}},
+		{name: "bypass-permissions", mode: ports.PermissionModeBypassPermissions, flags: []string{"--dangerously-skip-permissions"}},
+		// NormalizePermissionMode collapses unknown and empty modes to default.
+		{name: "unknown", mode: ports.PermissionMode("bogus")},
+		{name: "empty", mode: ports.PermissionMode("")},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			plugin := &Plugin{resolvedBinary: "agy"}
 
-	cmd, err := plugin.GetLaunchCommand(context.Background(), ports.LaunchConfig{
-		Permissions:   ports.PermissionModeBypassPermissions,
-		Prompt:        "fix this",
-		WorkspacePath: "/tmp/ws",
-		Config:        ports.AgentConfig{Model: "gemini-3-pro"},
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
+			cmd, err := plugin.GetLaunchCommand(context.Background(), ports.LaunchConfig{
+				Permissions:   tc.mode,
+				Prompt:        "fix this",
+				WorkspacePath: "/tmp/ws",
+				Config:        ports.AgentConfig{Model: "gemini-3-pro"},
+			})
+			if err != nil {
+				t.Fatal(err)
+			}
 
-	want := []string{
-		"agy",
-		"--add-dir", "/tmp/ws",
-		"--dangerously-skip-permissions",
-		"--model", "gemini-3-pro",
-		"--prompt-interactive", "fix this",
-	}
-	if !reflect.DeepEqual(cmd, want) {
-		t.Fatalf("unexpected command\nwant: %#v\n got: %#v", want, cmd)
+			want := []string{
+				"agy",
+				"--add-dir", "/tmp/ws",
+			}
+			want = append(want, tc.flags...)
+			want = append(want, []string{
+				"--model", "gemini-3-pro",
+				"--prompt-interactive", "fix this",
+			}...)
+			if !reflect.DeepEqual(cmd, want) {
+				t.Fatalf("unexpected command\nwant: %#v\n got: %#v", want, cmd)
+			}
+		})
 	}
 }
 
@@ -85,32 +103,50 @@ func TestGetPromptDeliveryStrategy(t *testing.T) {
 }
 
 func TestGetRestoreCommand(t *testing.T) {
-	plugin := &Plugin{resolvedBinary: "agy"}
+	for _, tc := range []struct {
+		name  string
+		mode  ports.PermissionMode
+		flags []string
+	}{
+		{name: "default", mode: ports.PermissionModeDefault},
+		{name: "accept-edits", mode: ports.PermissionModeAcceptEdits, flags: []string{"--mode", "accept-edits"}},
+		{name: "auto", mode: ports.PermissionModeAuto, flags: []string{"--mode", "auto"}},
+		{name: "bypass-permissions", mode: ports.PermissionModeBypassPermissions, flags: []string{"--dangerously-skip-permissions"}},
+		// NormalizePermissionMode collapses unknown and empty modes to default.
+		{name: "unknown", mode: ports.PermissionMode("bogus")},
+		{name: "empty", mode: ports.PermissionMode("")},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			plugin := &Plugin{resolvedBinary: "agy"}
 
-	cmd, ok, err := plugin.GetRestoreCommand(context.Background(), ports.RestoreConfig{
-		Permissions: ports.PermissionModeBypassPermissions,
-		Config:      ports.AgentConfig{Model: "gemini-3-flash"},
-		Session: ports.SessionRef{
-			Metadata:      map[string]string{ports.MetadataKeyAgentSessionID: "native-id-123"},
-			WorkspacePath: "/tmp/ws",
-		},
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if !ok {
-		t.Fatal("expected ok=true")
-	}
+			cmd, ok, err := plugin.GetRestoreCommand(context.Background(), ports.RestoreConfig{
+				Permissions: tc.mode,
+				Config:      ports.AgentConfig{Model: "gemini-3-flash"},
+				Session: ports.SessionRef{
+					Metadata:      map[string]string{ports.MetadataKeyAgentSessionID: "native-id-123"},
+					WorkspacePath: "/tmp/ws",
+				},
+			})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if !ok {
+				t.Fatal("expected ok=true")
+			}
 
-	want := []string{
-		"agy",
-		"--add-dir", "/tmp/ws",
-		"--dangerously-skip-permissions",
-		"--model", "gemini-3-flash",
-		"--conversation", "native-id-123",
-	}
-	if !reflect.DeepEqual(cmd, want) {
-		t.Fatalf("unexpected command\nwant: %#v\n got: %#v", want, cmd)
+			want := []string{
+				"agy",
+				"--add-dir", "/tmp/ws",
+			}
+			want = append(want, tc.flags...)
+			want = append(want, []string{
+				"--model", "gemini-3-flash",
+				"--conversation", "native-id-123",
+			}...)
+			if !reflect.DeepEqual(cmd, want) {
+				t.Fatalf("unexpected command\nwant: %#v\n got: %#v", want, cmd)
+			}
+		})
 	}
 }
 

@@ -24,8 +24,8 @@ func TestMigrateRepairsRenumberedCodexProfileHistory(t *testing.T) {
 	}
 
 	assertAppliedMigrations(t, db, 117, 118, 119, 120, 121, 122)
-	assertTableSQLContains(t, db, "usage_bindings", "'kimi'")
-	assertTableSQLContains(t, db, "usage_sources", "'kimi_wire'")
+	assertTableSQLContains(t, db, "usage_bindings", "trim(harness)")
+	assertTableSQLContains(t, db, "usage_sources", "trim(kind)")
 	assertTableSQLContains(t, db, "conversation_turns", "'cancelled'")
 	var stagingTable int
 	if err := db.QueryRow(`SELECT COUNT(*) FROM sqlite_master WHERE type = 'table' AND name = 'conversation_turns_next'`).Scan(&stagingTable); err != nil {
@@ -44,6 +44,9 @@ func TestMigrateRepairsRenumberedCodexProfileHistory(t *testing.T) {
 	if err := migrate(db); err != nil {
 		t.Fatalf("second migration pass: %v", err)
 	}
+	assertAppliedMigrations(t, db, 117)
+	assertTableSQLContains(t, db, "usage_bindings", "trim(harness)")
+	assertTableSQLContains(t, db, "usage_sources", "trim(kind)")
 }
 
 type legacyCodexProfileMigration struct {

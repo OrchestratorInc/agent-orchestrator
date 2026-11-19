@@ -11,6 +11,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"regexp"
+	"runtime"
 	"strconv"
 	"strings"
 	"time"
@@ -39,6 +40,23 @@ const (
 // handshakeTimeout bounds initialize and thread open. These are local IPC calls
 // that normally settle in well under a second.
 const handshakeTimeout = 60 * time.Second
+
+// sandboxProbeTimeout bounds the probe's command/exec call. A host that denies
+// the sandbox fails this command almost immediately; the timeout only exists
+// so a wedged provider cannot hold the review trigger open. It deliberately
+// does not cover spawning app-server and the initialize handshake, which keep
+// their usual handshakeTimeout so a slow cold start is not mistaken for a
+// broken sandbox.
+const sandboxProbeTimeout = 20 * time.Second
+
+// sandboxProbeExecTimeoutMs is the timeoutMs the probe asks Codex to enforce
+// on the no-op command itself.
+const sandboxProbeExecTimeoutMs = 10_000
+
+// codexExecTimeoutExitCode is the exit code Codex's command/exec reports when
+// it kills a command for exceeding timeoutMs (the shell convention used by
+// timeout(1)). The probe's no-op cannot exit 124 on its own.
+const codexExecTimeoutExitCode = 124
 
 // codexPlugin is the subset of AO's existing Codex agent plugin that the Chat
 // driver reuses. Binary resolution and local auth probing already live there and
@@ -115,8 +133,7 @@ var _ ports.ChatDriver = (*Driver)(nil)
 // Harness reports which agent this driver serves.
 func (d *Driver) Harness() domain.AgentHarness { return domain.HarnessCodex }
 
-// capabilities is what a Codex app-server of a supported version provides. Each
-// entry here was exercised against a live app-server rather than read off a doc.
+// capabilities is what a Codex app-server of a supported version provides.
 func capabilities() ports.ChatCapabilities {
 	return ports.ChatCapabilities{
 		ports.ChatCapabilityStreaming:   true,
@@ -130,6 +147,7 @@ func capabilities() ports.ChatCapabilities {
 		ports.ChatCapabilityPlans:       true,
 		ports.ChatCapabilityPlanMode:    true,
 		ports.ChatCapabilityInteractive: true,
+		ports.ChatCapabilityElicitation: true,
 		ports.ChatCapabilityModels:      true,
 		// The account's quota position is both pushed (account/rateLimits/updated)
 		// and readable on demand (account/rateLimits/read), verified against a live
@@ -184,12 +202,12 @@ func (d *Driver) Probe(ctx context.Context) (ports.ChatCapabilities, error) {
 	}
 	installed, ok := parseCodexVersion(versionOutput)
 	if !ok {
-		return nil, fmt.Errorf("%w: unrecognized Codex version %q (AO requires %s or newer)",
+		return nil, fmt.Errorf("%w: unrecognized Codex version %q (Orchestrator requires %s or newer)",
 			ports.ErrChatDriverIncompatible, strings.TrimSpace(versionOutput), minimumCodexVersion)
 	}
 	minimum, _ := parseCodexVersion(minimumCodexVersion)
 	if installed.less(minimum) {
-		return nil, fmt.Errorf("%w: Codex %s is older than AO's tested minimum %s",
+		return nil, fmt.Errorf("%w: Codex %s is older than Orchestrator's tested minimum %s",
 			ports.ErrChatDriverIncompatible, installed, minimumCodexVersion)
 	}
 
@@ -216,6 +234,98 @@ func (d *Driver) Probe(ctx context.Context) (ports.ChatCapabilities, error) {
 	}
 
 	return capabilities(), nil
+}
+
+// ProbeSandbox proves the read-only sandbox a reviewer runs in can start on
+// this host.
+//
+// Reviewers cannot fall back to a looser posture: approvals are disabled and
+// every read and every submit is a sandboxed shell command. A host whose
+// seccomp, AppArmor, or user-namespace policy denies the sandbox (the reported
+// symptom is `bwrap: setting up uid map: Permission denied`) would otherwise
+// spend a whole model turn on commands that never start, then report only
+// "reviewer Chat turn ended without submitting a result".
+func (d *Driver) ProbeSandbox(ctx context.Context, cfg ports.ChatSandboxProbeConfig) error {
+	workdir := strings.TrimSpace(cfg.WorkspacePath)
+	if !filepath.IsAbs(workdir) {
+		workdir = ""
+	}
+	if workdir == "" {
+		workdir = os.TempDir()
+	}
+	conv, err := d.connect(ctx, workdir, nil, "")
+	if err != nil {
+		return err
+	}
+	defer func() { _ = conv.Close() }()
+
+	var resp struct {
+		ExitCode int64  `json:"exitCode"`
+		Stdout   string `json:"stdout"`
+		Stderr   string `json:"stderr"`
+	}
+	params := map[string]any{
+		"command": sandboxProbeCommand(),
+		"cwd":     workdir,
+		// Match the reviewer turn's policy exactly (applyTurnSettings with
+		// readOnly and network left on). On Linux, networkAccess=false makes
+		// Codex add network isolation to the sandbox setup, so probing without
+		// network would exercise a different sandbox from the one the reviewer
+		// actually gets.
+		"sandboxPolicy": map[string]any{"type": "readOnly", "networkAccess": true},
+		"timeoutMs":     int64(sandboxProbeExecTimeoutMs),
+	}
+	probeCtx, cancel := context.WithTimeout(ctx, sandboxProbeTimeout)
+	defer cancel()
+	if err := conv.conn.request(probeCtx, "command/exec", params, &resp); err != nil {
+		var refused *rpcError
+		if !errors.As(err, &refused) {
+			// A timeout or a dropped connection says nothing about the
+			// sandbox, so it is reported as the probe failure it is.
+			return fmt.Errorf("sandbox probe: %w", err)
+		}
+		switch refused.Code {
+		case -32601, -32602:
+			// The provider predates command/exec (-32601) or rejects this
+			// request shape (-32602, e.g. SandboxPolicy drift in another Codex
+			// version). Either way the probe cannot answer, so the launch is
+			// left as it was rather than blocked on an unsupported preflight.
+			return nil
+		}
+		return fmt.Errorf("%w: %w", ports.ErrChatSandboxUnavailable, err)
+	}
+	if resp.ExitCode == codexExecTimeoutExitCode {
+		// Codex hit its own timeoutMs before the no-op finished. Like a caller
+		// timeout, that says nothing about whether the sandbox can start.
+		return fmt.Errorf("sandbox probe: provider timed out after %dms: %w", sandboxProbeExecTimeoutMs, context.DeadlineExceeded)
+	}
+	if resp.ExitCode != 0 {
+		return fmt.Errorf("%w: %s", ports.ErrChatSandboxUnavailable, sandboxProbeFailure(resp.ExitCode, resp.Stdout, resp.Stderr))
+	}
+	return nil
+}
+
+// sandboxProbeCommand is a no-op that still has to be spawned inside the
+// provider sandbox. Setup failures happen before it runs, which is the point.
+func sandboxProbeCommand() []string {
+	if runtime.GOOS == "windows" {
+		return []string{"cmd.exe", "/c", "exit", "0"}
+	}
+	return []string{"/bin/sh", "-c", "exit 0"}
+}
+
+func sandboxProbeFailure(exitCode int64, stdout, stderr string) string {
+	output := strings.TrimSpace(stderr)
+	if output == "" {
+		output = strings.TrimSpace(stdout)
+	}
+	if len(output) > 500 {
+		output = output[:500] + "..."
+	}
+	if output == "" {
+		return fmt.Sprintf("probe command exited %d", exitCode)
+	}
+	return fmt.Sprintf("probe command exited %d: %s", exitCode, output)
 }
 
 // DiscoverModels reads the account's current provider catalog without opening
@@ -471,6 +581,10 @@ func codexThreadMissing(err error) bool {
 		(strings.Contains(message, "rollout") && strings.Contains(message, "is empty"))
 }
 
+// aoToolTimeoutSec is past the daemon's two-minute computer-use call budget,
+// so the daemon's own answer reaches the agent first.
+const aoToolTimeoutSec = 150
+
 // threadConfig is the config override sent with thread/start and
 // thread/resume. Codex layers it above config.toml for this thread only.
 //
@@ -479,6 +593,10 @@ func codexThreadMissing(err error) bool {
 // Verified live on codex-cli 0.160.1: a tool not marked read-only raised that
 // request under on-request and was refused under never/read-only, and
 // default_tools_approval_mode "approve" removed both.
+//
+// Codex gives an MCP tool call 60 s by default, under a computer-use
+// run_steps batch, which may run the driver's full 60 s before its report and
+// closing read; the daemon allows that call two minutes.
 func threadConfig(effort string, servers []ports.ChatMCPServerConfig) map[string]any {
 	config := map[string]any{}
 	if effort != "" {
@@ -492,6 +610,7 @@ func threadConfig(effort string, servers []ports.ChatMCPServerConfig) map[string
 		entry := map[string]any{}
 		if server.Name == "ao" {
 			entry["default_tools_approval_mode"] = "approve"
+			entry["tool_timeout_sec"] = aoToolTimeoutSec
 		}
 		if server.Type == "http" {
 			entry["url"] = server.URL
@@ -802,7 +921,7 @@ func codexProcessEnv(ctx context.Context, bin string, env map[string]string) []s
 	if _, ok := overlay["PATH"]; !ok {
 		overlay["PATH"] = os.Getenv("PATH")
 	}
-	agentlaunch.AugmentRuntimePATHForLaunchBinary(ctx, overlay, []string{bin}, exec.LookPath, agentlaunch.PinnedDir(os.Executable, overlay["AO_DATA_DIR"]))
+	agentlaunch.AugmentRuntimePATHForLaunchBinary(ctx, overlay, []string{bin}, exec.LookPath, agentlaunch.PinnedDir(agentlaunch.Executable, overlay["AO_DATA_DIR"]))
 	return envSlice(overlay)
 }
 

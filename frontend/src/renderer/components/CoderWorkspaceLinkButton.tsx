@@ -1,7 +1,6 @@
-import { SquareArrowOutUpRight } from "lucide-react";
+import { SquareArrowOutUpRight } from "@/components/app-icons";
 import { useTranslation } from "react-i18next";
 import { isWebLink, openLinkInSystemBrowser } from "../lib/external-link-policy";
-import { TopbarButton } from "./TopbarButton";
 import { Button } from "./ui/button";
 import { Tooltip, TooltipContent, TooltipTrigger } from "./ui/tooltip";
 
@@ -19,10 +18,9 @@ export function CoderWorkspaceLinkButton({ url }: { url?: string }) {
 			<TooltipTrigger asChild>
 				<Button
 					type="button"
-					variant="ghost"
+					variant="quiet"
 					size="icon-sm"
 					aria-label={label}
-					className="text-muted-foreground hover:text-foreground"
 					data-testid="coder-workspace-link"
 					onClick={() => void openLinkInSystemBrowser(url)}
 				>
@@ -63,17 +61,16 @@ export function CoderWorkspaceTopbarButton({ url, style }: { url?: string; style
 		<Tooltip>
 			<TooltipTrigger asChild>
 				<span className="inline-flex" style={style}>
-					<TopbarButton
+					<Button type="button" size="sm"
 						aria-label={label}
-						className="topbar-control--labeled"
 						data-priority="secondary"
 						data-testid="coder-workspace-topbar-link"
-						variant="accent"
+						variant="quiet"
 						onClick={() => void openLinkInSystemBrowser(url)}
 					>
 						<SquareArrowOutUpRight className="size-icon-md" aria-hidden="true" />
 						{name ? <span data-compact-label className="max-w-48 truncate font-mono text-xs">{name}</span> : null}
-					</TopbarButton>
+					</Button>
 				</span>
 			</TooltipTrigger>
 			<TooltipContent side="bottom">{label}</TooltipContent>

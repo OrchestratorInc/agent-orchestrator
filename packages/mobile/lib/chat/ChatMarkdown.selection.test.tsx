@@ -5,7 +5,7 @@ Object.assign(globalThis, { IS_REACT_ACT_ENVIRONMENT: true, IS_REACT_NATIVE_TEST
 
 const { platform, theme } = vi.hoisted(() => ({
 	platform: { OS: "ios" },
-	theme: { accent: "#f4f5f7", accentBorder: "rgba(244,245,247,0.28)", highlight: "#79b0dc", selection: "rgba(121,176,220,0.28)" },
+	theme: { accent: "#f4f5f7", accentBorder: "rgba(244,245,247,0.28)", accentTint: "rgba(244,245,247,0.14)", highlight: "#79b0dc", selection: "rgba(121,176,220,0.28)" },
 }));
 
 vi.mock("react-native", () => ({
@@ -19,7 +19,6 @@ vi.mock("react-native", () => ({
 	Text: "Text",
 	View: "View",
 }));
-vi.mock("../icons", () => ({ Feather: "Feather" }));
 vi.mock("@bsky.app/react-native-uitextview", () => ({ UITextView: "UITextView" }));
 vi.mock("expo-clipboard", () => ({ setStringAsync: vi.fn() }));
 vi.mock("../haptics", () => ({ haptics: { tap: vi.fn(), select: vi.fn(), success: vi.fn() } }));
@@ -258,4 +257,130 @@ it("adds the exact native selection without changing the response or link handle
 	expect(onAddToChat).toHaveBeenCalledExactlyOnceWith(selection, source);
 	expect(textOf(root)).toBe("Heading\n\n• One\n• Two");
 	act(() => renderer.unmount());
+});
+
+describe("list markers outside the selection surface", () => {
+	// Characters standing in for controls read as text to a screen reader and
+	// draw at the font's whim; the separate-block path draws them instead.
+	it("draws bullets and task boxes rather than typing them", () => {
+		let renderer!: ReactTestRenderer;
+		act(() => { renderer = create(<ChatMarkdown text={"- Plain item\n- [x] Finished task\n- [ ] Open task"} />); });
+		const text = renderer.root.findAllByType("UITextView" as never).map(textOf).join("\n");
+		for (const glyph of ["•", "☑", "☐"]) expect(text).not.toContain(glyph);
+		const boxes = renderer.root.findAllByType("SymbolView" as never);
+		expect(boxes.map((box) => box.props.accessibilityLabel)).toEqual(["Done", "Not done"]);
+		act(() => renderer.unmount());
+	});
+
+	it("keeps an ordered list's numbers as text", () => {
+		let renderer!: ReactTestRenderer;
+		act(() => { renderer = create(<ChatMarkdown text={"1. First\n2. Second"} />); });
+		const text = renderer.root.findAllByType("UITextView" as never).map(textOf);
+		expect(text).toEqual(expect.arrayContaining(["1.", "2."]));
+		act(() => renderer.unmount());
+	});
+});
+
+describe("code block actions", () => {
+	const render = () => {
+		let renderer!: ReactTestRenderer;
+		act(() => { renderer = create(<ChatMarkdown text={"```ts\nconst answer = 42;\n```"} />); });
+		return renderer;
+	};
+
+	// Wrap is a toggle, so its state is announced, not carried by the glyph's
+	// colour alone.
+	it("announces Wrap as a toggle button", () => {
+		const renderer = render();
+		const wrap = () => renderer.root.findByProps({ accessibilityLabel: "Wrap code" });
+		expect(wrap().props.accessibilityRole).toBe("button");
+		expect(wrap().props.accessibilityState).toEqual({ selected: false });
+		act(() => wrap().props.onPress());
+		expect(wrap().props.accessibilityState).toEqual({ selected: true });
+		act(() => renderer.unmount());
+	});
+
+	it("confirms a copy with a checkmark", () => {
+		const renderer = render();
+		act(() => renderer.root.findByProps({ accessibilityLabel: "Copy code" }).props.onPress());
+		expect(renderer.root.findByProps({ accessibilityLabel: "Copy code" }).findByType("SymbolView" as never).props.name).toMatchObject({ ios: "checkmark" });
+		act(() => renderer.unmount());
+	});
+});
+
+it.each([false, true])("opens an orchestrator's ao://sessions links as sessions, a bare one named for its session (continuous: %s)", (continuousSelection) => {
+	const onLinkOpen = vi.fn();
+	const sessionName = (id: string) => id === "ao-259" ? "Fix table rendering" : undefined;
+	let renderer!: ReactTestRenderer;
+	act(() => {
+		renderer = create(<ChatLinkProvider onLinkOpen={onLinkOpen} sessionName={sessionName}>
+			<ChatMarkdown continuousSelection={continuousSelection} text={"Done: ao://sessions/proj/ao-259. Also [the review](ao://sessions/proj/ao-241) and <ao://sessions/proj/ao-999>."} />
+		</ChatLinkProvider>);
+	});
+	const links = renderer.root.findAll((node) => typeof node.type === "string" && node.props.accessibilityRole === "link");
+	// Named for the session when the board knows it, its id otherwise; an authored label is kept. Prose punctuation stays prose.
+	expect(links.map(textOf)).toEqual(["Fix table rendering", "the review", "ao-999"]);
+	expect(textOf(renderer.root)).toContain("Fix table rendering. Also");
+	act(() => links[0]!.props.onPress());
+	expect(onLinkOpen).toHaveBeenCalledWith("ao://sessions/proj/ao-259");
+	act(() => renderer.unmount());
+});
+
+it("leaves an ao:// link as words where nothing knows which machine it is on", () => {
+	let renderer!: ReactTestRenderer;
+	act(() => { renderer = create(<ChatMarkdown text="See ao://sessions/proj/ao-259 now" />); });
+	expect(renderer.root.findAll((node) => typeof node.type === "string" && node.props.accessibilityRole === "link")).toEqual([]);
+	expect(textOf(renderer.root)).toContain("See ao-259 now");
+	act(() => renderer.unmount());
+});
+
+it("asks once for the name of a session the surface does not know, then shows it", () => {
+	const wanted = vi.fn();
+	const names: Record<string, string> = {};
+	const tree = () => <ChatLinkProvider onLinkOpen={vi.fn()} sessionName={(id) => names[id]} onSessionNameNeeded={wanted}><ChatMarkdown text="Archived: ao://sessions/proj/ao-241" /></ChatLinkProvider>;
+	let renderer!: ReactTestRenderer;
+	act(() => { renderer = create(tree()); });
+	const link = () => renderer.root.find((node) => typeof node.type === "string" && node.props.accessibilityRole === "link");
+	expect(textOf(link())).toBe("ao-241");
+	expect(wanted).toHaveBeenCalledExactlyOnceWith("ao-241");
+	names["ao-241"] = "Review PR #7113";
+	act(() => renderer.update(tree()));
+	expect(textOf(link())).toBe("Review PR #7113");
+	expect(wanted).toHaveBeenCalledTimes(1);
+	act(() => renderer.unmount());
+});
+
+describe("inline Markdown nested in emphasis", () => {
+	const links = (renderer: ReactTestRenderer) => renderer.root.findAll((node) => typeof node.type === "string" && node.props.accessibilityRole === "link");
+
+	it.each(["ios", "android"])("draws a link inside bold as a link, not its source, on %s", (os) => {
+		platform.OS = os;
+		const open = vi.fn();
+		let renderer!: ReactTestRenderer;
+		try {
+			act(() => { renderer = create(<ChatLinkProvider onLinkOpen={open}><ChatMarkdown text="Read **the [setup guide](https://example.com/setup) first** please." /></ChatLinkProvider>); });
+			const text = renderer.root.findAll((node) => node.props.selectable === true).map(textOf).join("");
+			expect(text).toBe("Read the setup guide first please.");
+			const [link] = links(renderer);
+			expect(textOf(link)).toBe("setup guide");
+			act(() => link.props.onPress());
+			expect(open).toHaveBeenCalledWith("https://example.com/setup");
+			// iOS keeps a paragraph with a link on RN Text so VoiceOver can focus it, nested or not.
+			let surface = link.parent;
+			while (surface && surface.props.selectable !== true) surface = surface.parent;
+			if (os === "ios") expect(surface?.props.uiTextView).toBe(false);
+			act(() => renderer.unmount());
+		} finally {
+			platform.OS = "ios";
+		}
+	});
+
+	it("nests code, italic and strikethrough inside bold and italic", () => {
+		let renderer!: ReactTestRenderer;
+		act(() => { renderer = create(<ChatMarkdown text="**run `make` *now* please** and *see ~~old~~ [new](https://x.dev)*" />); });
+		const text = renderer.root.findAll((node) => node.props.selectable === true).map(textOf).join("");
+		expect(text).toBe("run make now please and see old new");
+		expect(links(renderer).map(textOf)).toEqual(["new"]);
+		act(() => renderer.unmount());
+	});
 });

@@ -2,9 +2,12 @@
 # Fresh Ubuntu x64 entry point. The lower-level installer owns AO releases and service setup.
 set -euo pipefail
 
+# Braced so bash reads the whole script before running any of it: a download
+# cut off mid-way by `curl ... | bash` runs nothing.
+{
 usage() {
 	printf '%s\n' 'Usage: bootstrap-self-hosted.sh [--nightly | --source-ref BRANCH] [--lan]'
-	printf '%s\n' 'Installs prerequisites, then installs released AO or builds a source branch.'
+	printf '%s\n' 'Installs prerequisites, then installs released Orchestrator or builds a source branch.'
 	printf '%s\n' 'Downloads stable by default; --nightly installs the newest published nightly.'
 }
 
@@ -35,7 +38,7 @@ sudo apt-get update
 sudo apt-get install -y ca-certificates curl gh git python3
 sudo loginctl enable-linger "$(id -un)"
 systemctl --user show-environment >/dev/null || {
-	printf '%s\n' 'A systemd user session is required for an always-on AO host.' >&2; exit 1;
+	printf '%s\n' 'A systemd user session is required for an always-on Orchestrator host.' >&2; exit 1;
 }
 
 if "$tunnel" && ! command -v cloudflared >/dev/null; then
@@ -51,26 +54,30 @@ stage="$(mktemp -d)"
 trap 'rm -rf -- "$stage"' EXIT
 installer="$stage/setup-self-hosted.sh"
 if [[ -z "$source_ref" ]]; then
-	curl -fsSL https://raw.githubusercontent.com/Untrivial-ai/agent-orchestrator/main/scripts/setup-self-hosted.sh -o "$installer"
+	curl -fsSL https://raw.githubusercontent.com/OrchestratorInc/agent-orchestrator/main/scripts/setup-self-hosted.sh -o "$installer"
 else
 	sudo apt-get install -y build-essential pkg-config xz-utils
 	tools="$HOME/.local/ao-build-tools"
 	mkdir -p "$tools"
-	if [[ ! -x "$tools/go/bin/go" ]]; then
-		curl -fsSL https://go.dev/dl/go1.27.1.linux-amd64.tar.gz -o "$stage/go.tar.gz"
-		printf '%s  %s\n' 63d339f0da5ab53635a56f2490a7984dfe12dfcff22ad749f63edaf590168445 "$stage/go.tar.gz" | sha256sum -c -
+	# Replace a cached Go older than the one backend/go.mod requires; keep a newer one.
+	go_version=1.27.4
+	cached_go="$(GOTOOLCHAIN=local "$tools/go/bin/go" env GOVERSION 2>/dev/null || true)"
+	if [[ "$(printf '%s\n' "$go_version" "${cached_go#go}" | sort -V | head -n1)" != "$go_version" ]]; then
+		rm -rf "$tools/go"
+		curl -fsSL "https://go.dev/dl/go${go_version}.linux-amd64.tar.gz" -o "$stage/go.tar.gz"
+		printf '%s  %s\n' 7226736c2339719cda28fbf3a54d71aa63bcefe376e98cef00034268dab24840 "$stage/go.tar.gz" | sha256sum -c -
 		tar -xzf "$stage/go.tar.gz" -C "$tools"
 	fi
-	if [[ ! -x "$tools/node-v22.23.2-linux-x64/bin/node" ]]; then
-		curl -fsSL https://nodejs.org/dist/v22.23.2/node-v22.23.2-linux-x64.tar.xz -o "$stage/node.tar.xz"
-		curl -fsSL https://nodejs.org/dist/v22.23.2/SHASUMS256.txt -o "$stage/SHASUMS256.txt"
-		expected="$(awk '$2 == "node-v22.23.2-linux-x64.tar.xz" { print $1 }' "$stage/SHASUMS256.txt")"
+	if [[ ! -x "$tools/node-v22.23.5-linux-x64/bin/node" ]]; then
+		curl -fsSL https://nodejs.org/dist/v22.23.5/node-v22.23.5-linux-x64.tar.xz -o "$stage/node.tar.xz"
+		curl -fsSL https://nodejs.org/dist/v22.23.5/SHASUMS256.txt -o "$stage/SHASUMS256.txt"
+		expected="$(awk '$2 == "node-v22.23.5-linux-x64.tar.xz" { print $1 }' "$stage/SHASUMS256.txt")"
 		[[ "$expected" =~ ^[0-9a-f]{64}$ ]] || { printf '%s\n' 'Node checksum missing.' >&2; exit 1; }
 		printf '%s  %s\n' "$expected" "$stage/node.tar.xz" | sha256sum -c -
 		tar -xJf "$stage/node.tar.xz" -C "$tools"
 	fi
-	export PATH="$tools/go/bin:$tools/node-v22.23.2-linux-x64/bin:$PATH"
-	git clone --depth 1 --single-branch --branch "$source_ref" https://github.com/Untrivial-ai/agent-orchestrator.git "$stage/source"
+	export PATH="$tools/go/bin:$tools/node-v22.23.5-linux-x64/bin:$PATH"
+	git clone --depth 1 --single-branch --branch "$source_ref" https://github.com/OrchestratorInc/agent-orchestrator.git "$stage/source"
 	(
 		cd "$stage/source/frontend"
 		export GOMAXPROCS=2 NODE_OPTIONS=--max-old-space-size=1536
@@ -94,3 +101,4 @@ bash "$installer" "${args[@]}"
 
 printf '\nDay-two commands: %s\n' "$HOME/.ao/host/current/resources/daemon/ao remote-host status"
 printf 'Service logs: journalctl --user -u ao-self-hosted.service -n 100 --no-pager\n'
+}
