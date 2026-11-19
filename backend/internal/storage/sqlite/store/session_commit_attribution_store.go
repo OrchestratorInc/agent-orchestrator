@@ -33,3 +33,32 @@ func (s *Store) SessionCommitAttribution(ctx context.Context, id domain.SessionI
 	}
 	return coAuthor, nil
 }
+
+// SetSessionPRFooter records whether a session started with the Orchestrator
+// PR footer, so its prompt keeps that choice when it is rebuilt later.
+func (s *Store) SetSessionPRFooter(ctx context.Context, id domain.SessionID, footer bool) error {
+	s.writeMu.Lock()
+	defer s.writeMu.Unlock()
+	value := sql.NullInt64{Valid: true}
+	if footer {
+		value.Int64 = 1
+	}
+	if err := s.qw.UpsertSessionPRFooter(ctx, gen.UpsertSessionPRFooterParams{SessionID: string(id), PRFooter: value}); err != nil {
+		return fmt.Errorf("record PR footer choice for session %s: %w", id, err)
+	}
+	return nil
+}
+
+// SessionPRFooter returns the PR footer choice a session started with.
+// recorded is false for a session with no recorded choice: one started before
+// the choice was kept, whose prompt follows the current settings.
+func (s *Store) SessionPRFooter(ctx context.Context, id domain.SessionID) (footer, recorded bool, err error) {
+	value, err := s.qr.GetSessionPRFooter(ctx, string(id))
+	if errors.Is(err, sql.ErrNoRows) {
+		return false, false, nil
+	}
+	if err != nil {
+		return false, false, fmt.Errorf("read PR footer choice for session %s: %w", id, err)
+	}
+	return value.Valid && value.Int64 == 1, value.Valid, nil
+}

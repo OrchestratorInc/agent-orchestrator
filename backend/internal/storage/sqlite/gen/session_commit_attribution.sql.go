@@ -7,6 +7,7 @@ package gen
 
 import (
 	"context"
+	"database/sql"
 )
 
 const getSessionCommitAttribution = `-- name: GetSessionCommitAttribution :one
@@ -18,6 +19,17 @@ func (q *Queries) GetSessionCommitAttribution(ctx context.Context, sessionID str
 	var co_author string
 	err := row.Scan(&co_author)
 	return co_author, err
+}
+
+const getSessionPRFooter = `-- name: GetSessionPRFooter :one
+SELECT pr_footer FROM session_commit_attribution WHERE session_id = ?
+`
+
+func (q *Queries) GetSessionPRFooter(ctx context.Context, sessionID string) (sql.NullInt64, error) {
+	row := q.db.QueryRowContext(ctx, getSessionPRFooter, sessionID)
+	var pr_footer sql.NullInt64
+	err := row.Scan(&pr_footer)
+	return pr_footer, err
 }
 
 const upsertSessionCommitAttribution = `-- name: UpsertSessionCommitAttribution :exec
@@ -33,5 +45,21 @@ type UpsertSessionCommitAttributionParams struct {
 
 func (q *Queries) UpsertSessionCommitAttribution(ctx context.Context, arg UpsertSessionCommitAttributionParams) error {
 	_, err := q.db.ExecContext(ctx, upsertSessionCommitAttribution, arg.SessionID, arg.CoAuthor)
+	return err
+}
+
+const upsertSessionPRFooter = `-- name: UpsertSessionPRFooter :exec
+INSERT INTO session_commit_attribution (session_id, co_author, pr_footer)
+VALUES (?, '', ?)
+ON CONFLICT (session_id) DO UPDATE SET pr_footer = excluded.pr_footer
+`
+
+type UpsertSessionPRFooterParams struct {
+	SessionID string
+	PRFooter  sql.NullInt64
+}
+
+func (q *Queries) UpsertSessionPRFooter(ctx context.Context, arg UpsertSessionPRFooterParams) error {
+	_, err := q.db.ExecContext(ctx, upsertSessionPRFooter, arg.SessionID, arg.PRFooter)
 	return err
 }

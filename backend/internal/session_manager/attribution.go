@@ -81,6 +81,33 @@ const (
 // child repository has its own worktree below it; every one is configured.
 // Failures are logged, never fatal: a missing trailer must not stop a session
 // from starting.
+// recordPRFooterChoice keeps whether a starting session's agents sign PRs, so
+// its prompt says the same when it is rebuilt for a relaunch, a restore or a
+// switch between Chat and the terminal, whatever the settings say by then.
+func (m *Manager) recordPRFooterChoice(ctx context.Context, project domain.ProjectRecord, sessionID domain.SessionID) {
+	if m.store == nil || sessionID == "" {
+		return
+	}
+	if err := m.store.SetSessionPRFooter(ctx, sessionID, m.prFooterWanted(ctx, project)); err != nil {
+		m.logger.Warn("attribution: record PR footer choice", "sessionID", sessionID, "error", err)
+	}
+}
+
+// sessionPRFooter reports whether this session's prompt asks for the PR
+// footer: the choice it started with, or the current settings for a session
+// with none recorded (one still starting, or one from before choices were kept).
+func (m *Manager) sessionPRFooter(ctx context.Context, project domain.ProjectRecord, sessionID domain.SessionID) bool {
+	if m.store != nil && sessionID != "" {
+		footer, recorded, err := m.store.SessionPRFooter(ctx, sessionID)
+		if err != nil {
+			m.logger.Warn("attribution: read PR footer choice", "sessionID", sessionID, "error", err)
+		} else if recorded {
+			return footer
+		}
+	}
+	return m.prFooterWanted(ctx, project)
+}
+
 func (m *Manager) applyCommitAttribution(ctx context.Context, project domain.ProjectRecord, sessionID domain.SessionID, workspacePath string, choice attributionChoice) {
 	if workspacePath == "" {
 		return
@@ -96,6 +123,7 @@ func (m *Manager) applyCommitAttribution(ctx context.Context, project domain.Pro
 		} else {
 			m.forgetSessionCommitAttribution(ctx, sessionID)
 		}
+		m.recordPRFooterChoice(ctx, project, sessionID)
 	case attributionRecorded:
 		recorded, err := m.store.SessionCommitAttribution(ctx, sessionID)
 		if err != nil {

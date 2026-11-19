@@ -56,6 +56,7 @@ type fakeStore struct {
 	workspaceRepo                      map[string][]domain.WorkspaceRepoRecord
 	commitAttributionMu                sync.Mutex
 	commitAttribution                  map[domain.SessionID]string
+	prFooter                           map[domain.SessionID]bool
 	num                                int
 	deleteErr                          error
 	upsertWTErr                        error
@@ -115,6 +116,21 @@ func (f *fakeStore) SessionCommitAttribution(_ context.Context, id domain.Sessio
 	f.commitAttributionMu.Lock()
 	defer f.commitAttributionMu.Unlock()
 	return f.commitAttribution[id], nil
+}
+func (f *fakeStore) SetSessionPRFooter(_ context.Context, id domain.SessionID, footer bool) error {
+	f.commitAttributionMu.Lock()
+	defer f.commitAttributionMu.Unlock()
+	if f.prFooter == nil {
+		f.prFooter = map[domain.SessionID]bool{}
+	}
+	f.prFooter[id] = footer
+	return nil
+}
+func (f *fakeStore) SessionPRFooter(_ context.Context, id domain.SessionID) (footer, recorded bool, err error) {
+	f.commitAttributionMu.Lock()
+	defer f.commitAttributionMu.Unlock()
+	footer, recorded = f.prFooter[id]
+	return footer, recorded, nil
 }
 func (f *fakeStore) CreateSession(_ context.Context, rec domain.SessionRecord) (domain.SessionRecord, error) {
 	f.num++

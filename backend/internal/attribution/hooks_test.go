@@ -116,6 +116,62 @@ func TestHookKeepsOtherCoAuthors(t *testing.T) {
 
 // A -m or -F message is taken as written, so a "#" line in its trailer block
 // stays, as it does in a commit without Orchestrator.
+// An unedited commit.template still aborts the commit, as it does without
+// Orchestrator; an edited one is committed with the trailer.
+func TestHookKeepsTheUntouchedTemplateAbort(t *testing.T) {
+	r := newRepo(t, testCoAuthor, func(r repo) {
+		tpl := filepath.Join(r.main, ".gitmessage")
+		if err := os.WriteFile(tpl, []byte("Replace this with your summary\n\nWhy:\n"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		r.git(r.main, "config", "commit.template", tpl)
+	})
+	before := r.git(r.worktree, "rev-parse", "HEAD")
+	commit := func(editor string) (string, error) {
+		cmd := exec.Command("git", "-C", r.worktree, "commit", "--allow-empty")
+		cmd.Env = append(os.Environ(), "GIT_CONFIG_GLOBAL=/dev/null", "GIT_CONFIG_NOSYSTEM=1", "GIT_EDITOR="+editor,
+			"GIT_AUTHOR_NAME=Dev", "GIT_AUTHOR_EMAIL=dev@example.com", "GIT_COMMITTER_NAME=Dev", "GIT_COMMITTER_EMAIL=dev@example.com")
+		out, err := cmd.CombinedOutput()
+		return string(out), err
+	}
+	if out, err := commit("true"); err == nil || !strings.Contains(out, "did not edit the message") {
+		t.Fatalf("untouched template was committed: err=%v\n%s", err, out)
+	}
+	if after := r.git(r.worktree, "rev-parse", "HEAD"); after != before {
+		t.Fatalf("HEAD moved from %s to %s", before, after)
+	}
+	editor := filepath.Join(t.TempDir(), "edit.sh")
+	if err := os.WriteFile(editor, []byte("#!/bin/sh\nprintf 'feat: edited summary\\n' > \"$1\"\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if out, err := commit(editor); err != nil {
+		t.Fatalf("edited template: %v\n%s", err, out)
+	}
+	if msg := r.message("HEAD"); !strings.HasPrefix(msg, "feat: edited summary") || countTrailer(msg) != 1 {
+		t.Fatalf("want the edited message with one trailer, got:\n%s", msg)
+	}
+}
+
+// A template passed with -t, not in config, is held to the same rule.
+func TestHookKeepsTheUntouchedTemplateAbortForDashT(t *testing.T) {
+	r := newRepo(t, testCoAuthor, nil)
+	tpl := filepath.Join(t.TempDir(), "tpl.txt")
+	if err := os.WriteFile(tpl, []byte("Replace this with your summary\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	cmd := exec.Command("git", "-C", r.worktree, "commit", "--allow-empty", "-t", tpl)
+	cmd.Env = append(os.Environ(), "GIT_CONFIG_GLOBAL=/dev/null", "GIT_CONFIG_NOSYSTEM=1", "GIT_EDITOR=true",
+		"GIT_AUTHOR_NAME=Dev", "GIT_AUTHOR_EMAIL=dev@example.com", "GIT_COMMITTER_NAME=Dev", "GIT_COMMITTER_EMAIL=dev@example.com")
+	if out, err := cmd.CombinedOutput(); err == nil || !strings.Contains(string(out), "did not edit the message") {
+		t.Fatalf("untouched -t template was committed: err=%v\n%s", err, out)
+	}
+	// Nothing is left behind: the next commit gets its trailer.
+	r.commit("-m", "feat: after")
+	if countTrailer(r.message("HEAD")) != 1 {
+		t.Fatalf("trailer missing after an aborted template commit:\n%s", r.message("HEAD"))
+	}
+}
+
 func TestHookKeepsCommentLikeLinesInALiteralMessage(t *testing.T) {
 	r := newRepo(t, testCoAuthor, nil)
 	r.commit("-m", "feat: note\n\nCo-authored-by: Agent <agent@example.com>\n# retain this note\nSigned-off-by: Dev <dev@example.com>")

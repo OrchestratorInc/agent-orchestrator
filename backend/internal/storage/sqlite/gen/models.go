@@ -880,6 +880,7 @@ type SessionCleanupFact struct {
 type SessionCommitAttribution struct {
 	SessionID string
 	CoAuthor  string
+	PRFooter  sql.NullInt64
 }
 
 type SessionFork struct {

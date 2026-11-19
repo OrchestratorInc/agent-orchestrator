@@ -373,6 +373,8 @@ type Store interface {
 	ListWorkspaceRepos(ctx context.Context, projectID string) ([]domain.WorkspaceRepoRecord, error)
 	SetSessionCommitAttribution(ctx context.Context, id domain.SessionID, coAuthor string) error
 	SessionCommitAttribution(ctx context.Context, id domain.SessionID) (string, error)
+	SetSessionPRFooter(ctx context.Context, id domain.SessionID, footer bool) error
+	SessionPRFooter(ctx context.Context, id domain.SessionID) (footer, recorded bool, err error)
 	CreateSession(ctx context.Context, rec domain.SessionRecord) (domain.SessionRecord, error)
 	CreateAutomationSession(ctx context.Context, rec domain.SessionRecord) (domain.SessionRecord, bool, error)
 	CreateClientRequestSession(ctx context.Context, rec domain.SessionRecord) (domain.SessionRecord, bool, error)
@@ -6723,7 +6725,7 @@ func (m *Manager) buildSystemPrompt(ctx context.Context, kind domain.SessionKind
 	if privacy := macPrivacyPromptFor(chat, desktopOwnedDaemon()); privacy != "" {
 		cfg.AdditionalSections = append(cfg.AdditionalSections, privacy)
 	}
-	if projectID != "" && m.prFooterWanted(ctx, project) {
+	if projectID != "" && m.sessionPRFooter(ctx, project, sessionID) {
 		cfg.AdditionalSections = append(cfg.AdditionalSections, prAttributionPrompt())
 	}
 	if artifactPrompt := strings.TrimSpace(m.artifactPrompt(sessionID, chat)); artifactPrompt != "" {

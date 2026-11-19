@@ -321,6 +321,81 @@ func TestPRFooterPromptFollowsBetaProjectAndRemote(t *testing.T) {
 	}
 }
 
+// A session keeps the PR footer choice it started with when its prompt is
+// rebuilt later (a relaunch, a restore, a switch between Chat and the
+// terminal), whatever the settings say by then.
+func TestPRFooterPromptKeepsTheSessionsChoiceAfterSettingsChange(t *testing.T) {
+	ctx := context.Background()
+	for _, tc := range []struct {
+		name          string
+		betaAtStart   bool
+		betaAtRebuild bool
+	}{
+		{"started with the footer, beta turned off", true, false},
+		{"started without the footer, beta turned on", false, true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			m, st, _, _ := newManager()
+			project := st.projects["mer"]
+			project.RepoOriginURL = "https://github.com/o/r"
+			st.projects["mer"] = project
+			beta := tc.betaAtStart
+			m.SetCommitAttributionEnabled(func(context.Context) bool { return beta })
+			prompt, err := m.buildSystemPrompt(ctx, domain.KindWorker, "mer", "mer-1", "", false)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if got := strings.Contains(prompt, attribution.PRFooter); got != tc.betaAtStart {
+				t.Fatalf("footer at start = %v, want %v", got, tc.betaAtStart)
+			}
+			// Setting up the workspace records the choice the session started with.
+			m.applyCommitAttribution(ctx, project, "mer-1", t.TempDir(), attributionFromSettings)
+
+			beta = tc.betaAtRebuild
+			for _, chat := range []bool{false, true} {
+				prompt, err := m.buildSystemPrompt(ctx, domain.KindWorker, "mer", "mer-1", "", chat)
+				if err != nil {
+					t.Fatal(err)
+				}
+				if got := strings.Contains(prompt, attribution.PRFooter); got != tc.betaAtStart {
+					t.Fatalf("footer after the settings change (chat=%v) = %v, want the starting %v", chat, got, tc.betaAtStart)
+				}
+			}
+			// A new session follows the settings as they are now.
+			prompt, err = m.buildSystemPrompt(ctx, domain.KindWorker, "mer", "mer-2", "", false)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if got := strings.Contains(prompt, attribution.PRFooter); got != tc.betaAtRebuild {
+				t.Fatalf("footer for a new session = %v, want %v", got, tc.betaAtRebuild)
+			}
+		})
+	}
+}
+
+// A session with no recorded choice, from before choices were kept, follows
+// the current settings, as it did before.
+func TestPRFooterPromptFollowsSettingsWithoutARecordedChoice(t *testing.T) {
+	ctx := context.Background()
+	m, st, _, _ := newManager()
+	project := st.projects["mer"]
+	project.RepoOriginURL = "https://github.com/o/r"
+	st.projects["mer"] = project
+	if err := st.SetSessionCommitAttribution(ctx, "mer-1", attribution.Bot.CoAuthor()); err != nil {
+		t.Fatal(err)
+	}
+	for _, beta := range []bool{true, false} {
+		m.SetCommitAttributionEnabled(func(context.Context) bool { return beta })
+		prompt, err := m.buildSystemPrompt(ctx, domain.KindWorker, "mer", "mer-1", "", false)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if got := strings.Contains(prompt, attribution.PRFooter); got != beta {
+			t.Fatalf("beta %v: footer = %v", beta, got)
+		}
+	}
+}
+
 func TestPRFooterPromptForWorkspaceChildRemotes(t *testing.T) {
 	ctx := context.Background()
 	for _, tc := range []struct {

@@ -72,6 +72,37 @@ has_message() {
 	' "$1"
 }
 
+# A commit whose message comes from a template (commit.template or -t) is
+# snapshotted by prepare-commit-msg, before the editor opens. Git aborts the
+# commit if the message is still that template ("you did not edit the
+# message"); adding the trailer would change it and let the commit through, so
+# commit-msg leaves an unedited template alone.
+template_snapshot() {
+	git rev-parse --git-path ORCHESTRATOR_TEMPLATE 2>/dev/null
+}
+
+# snapshot_template records message file $1 when $2, the commit source, is a
+# template, and clears any snapshot an earlier, aborted commit left.
+snapshot_template() {
+	snap=$(template_snapshot) || return 0
+	[ -n "$snap" ] || return 0
+	rm -f "$snap"
+	if [ "$2" = template ] && [ -n "$1" ] && [ -f "$1" ]; then
+		git stripspace --strip-comments <"$1" >"$snap" 2>/dev/null || rm -f "$snap"
+	fi
+}
+
+# template_untouched reports whether message file $1 is still the template
+# this commit started from, and consumes the snapshot.
+template_untouched() {
+	snap=$(template_snapshot) || return 1
+	[ -n "$snap" ] && [ -f "$snap" ] || return 1
+	stripped=$(git stripspace --strip-comments <"$1" 2>/dev/null)
+	snapshot=$(cat "$snap")
+	rm -f "$snap"
+	[ "$stripped" = "$snapshot" ]
+}
+
 # insert_trailer adds trailer $2 to message file $1 with none of the person's
 # trailer.* config: no separators, placement, or trailer.<token>.cmd that
 # could rewrite or duplicate it. git runs outside any repository with the
@@ -126,8 +157,12 @@ add_trailer() {
 	# -m and -F messages are taken as written: nothing in them is a comment.
 	# Otherwise, with nothing written yet the editor is about to open; commit-msg
 	# adds the trailer after it closes, and an empty message still aborts.
-	if [ "$2" != message ]; then
+	if [ "$2" = template ]; then
+		# Left to commit-msg, after the editor, so an unedited template still aborts.
+		return 0
+	elif [ "$2" != message ]; then
 		has_message "$msg" || return 0
+		template_untouched "$msg" && return 0
 		insert_trailer "$msg" "Co-authored-by: $coauthor"
 	elif grep -q '[^[:space:]]' "$msg"; then
 		insert_trailer "$msg" "Co-authored-by: $coauthor" literal
@@ -137,6 +172,9 @@ add_trailer() {
 original=$(original_hook)
 case "$hook" in
 prepare-commit-msg | commit-msg)
+	if [ "$hook" = prepare-commit-msg ]; then
+		snapshot_template "$1" "$2"
+	fi
 	if [ -n "$original" ]; then
 		"$original" "$@" || exit $?
 	fi
