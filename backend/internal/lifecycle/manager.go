@@ -980,7 +980,7 @@ retryProjection:
 	}
 	// A late prompt was still submitted: its metadata-only projection is what
 	// records its delivery as accepted, so it is not skipped.
-	if !s.Valid && !metadataChanged && !(lateSignal && semanticDeliveryStore != nil) {
+	if !s.Valid && !metadataChanged && (!lateSignal || semanticDeliveryStore == nil) {
 		m.mu.Unlock()
 		return nil
 	}
