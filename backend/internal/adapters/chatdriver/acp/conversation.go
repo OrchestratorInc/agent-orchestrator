@@ -138,7 +138,10 @@ type conversation struct {
 	requireAdvertised bool
 	// reapplySettings makes the next applyTurnSettings send every setting even
 	// where the catalog already names it current. See markSettingsApplied.
-	reapplySettings   bool
+	reapplySettings bool
+	// restoredFrom maps each option markSettingsApplied moved to the value the
+	// snapshot had, until the provider accepts a value or reports its catalog.
+	restoredFrom      map[string]string
 	permissionMode    ports.PermissionMode
 	permissionFor     PermissionPolicy
 	initialPermission ports.PermissionMode
@@ -644,7 +647,7 @@ func (c *conversation) markSettingsApplied(settings ports.ChatTurnSettings) {
 	if modeFor != nil && settings.Approval != "" {
 		if mode := modeFor(settings.Approval); mode != "" {
 			if offered, known := c.configOptionOffers("mode", mode); known && offered {
-				c.applyAcceptedConfigOption("mode", ports.ChatConfigOptionValue{Select: mode})
+				c.markRestored("mode", mode)
 			}
 		}
 	}
@@ -661,8 +664,36 @@ func (c *conversation) markSettingsApplied(settings ports.ChatTurnSettings) {
 			}
 		}
 		if known && offered {
-			c.applyAcceptedConfigOption(option.ID, ports.ChatConfigOptionValue{Select: value})
+			c.markRestored(option.ID, value)
 		}
+	}
+}
+
+// markRestored names value current for option id and remembers the snapshot's
+// value, so a provider that rejects the restored value gets it back.
+func (c *conversation) markRestored(id, value string) {
+	previous := c.configOptionCurrent(id)
+	if previous == value {
+		return
+	}
+	c.applyAcceptedConfigOption(id, ports.ChatConfigOptionValue{Select: value})
+	c.mu.Lock()
+	if c.restoredFrom == nil {
+		c.restoredFrom = make(map[string]string)
+	}
+	c.restoredFrom[id] = previous
+	c.mu.Unlock()
+}
+
+// revertRestored puts back the snapshot's value of an option whose restored
+// value the provider has just rejected. The catalog then no longer claims the
+// restored value, so a later turn asking for it sends it again.
+func (c *conversation) revertRestored(id string) {
+	c.mu.Lock()
+	previous, ok := c.restoredFrom[id]
+	c.mu.Unlock()
+	if ok {
+		c.applyAcceptedConfigOption(id, ports.ChatConfigOptionValue{Select: previous})
 	}
 }
 
@@ -854,6 +885,7 @@ func (c *conversation) setSessionOption(ctx context.Context, sessionID string, o
 		// An optional setting the chosen model lacks is skipped; session/set_model
 		// does not return the new model's options to check in advance.
 		if option.Optional && isACPInvalidParams(err) {
+			c.revertRestored(option.ID)
 			return nil
 		}
 		if isACPMethodNotFound(err) {

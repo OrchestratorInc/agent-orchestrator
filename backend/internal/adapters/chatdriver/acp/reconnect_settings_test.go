@@ -104,7 +104,8 @@ func TestPersistentACPReconnectSendsRestoredSettingsOnTheNextTurn(t *testing.T) 
 
 // liveReconnect resumes onto a persistent host that still holds the provider
 // session, whose session/new snapshot names every setting at its default. A
-// non-empty modelName makes the binding name its model choice by that name.
+// non-empty modelName makes the binding name its model choice by that name. Its
+// model option is optional, as Claude Code's is.
 func liveReconnect(t *testing.T, resume ports.ChatResumeConfig, modelName string) (*conversation, *fakeAgent) {
 	t.Helper()
 	initialize, err := json.Marshal(acpsdk.InitializeResponse{
@@ -151,7 +152,7 @@ func liveReconnect(t *testing.T, resume ports.ChatResumeConfig, modelName string
 		SessionOptions: func(settings ports.ChatTurnSettings) []SessionOption {
 			var options []SessionOption
 			if settings.Model != "" {
-				options = append(options, SessionOption{ID: "model", Value: settings.Model, Name: modelName})
+				options = append(options, SessionOption{ID: "model", Value: settings.Model, Name: modelName, Optional: true})
 			}
 			if settings.Effort != "" {
 				options = append(options, SessionOption{ID: "effort", Value: settings.Effort})
@@ -181,4 +182,36 @@ func liveReconnect(t *testing.T, resume ports.ChatResumeConfig, modelName string
 		t.Fatalf("live reconnect returned %T, want *conversation", opened)
 	}
 	return conv, agent
+}
+
+// A provider that rejects an optional restored setting (a model the session
+// cannot switch to) has not applied it, so the catalog goes back to the value
+// the snapshot had instead of claiming the restored one. A later turn asking
+// for it then sends it again rather than skipping a value marked current.
+func TestPersistentACPReconnectRevertsARejectedRestoredSetting(t *testing.T) {
+	conv, agent := liveReconnect(t, ports.ChatResumeConfig{Model: "opus"}, "")
+	agent.mu.Lock()
+	agent.configErr = acpsdk.NewInvalidParams(map[string]any{"error": "model unavailable"})
+	agent.mu.Unlock()
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	if err := conv.ActivateLiveReconnect(ctx, ""); err != nil {
+		t.Fatalf("ActivateLiveReconnect: %v", err)
+	}
+	settings := ports.ChatTurnSettings{Model: "opus"}
+	if err := conv.applyTurnSettings(ctx, settings); err != nil {
+		t.Fatalf("first turn settings: %v", err)
+	}
+	if current := conv.configOptionCurrent("model"); current != "default" {
+		t.Fatalf("model current after rejection = %q, want the snapshot's default", current)
+	}
+	if err := conv.applyTurnSettings(ctx, settings); err != nil {
+		t.Fatalf("second turn settings: %v", err)
+	}
+	agent.mu.Lock()
+	calls := agent.setCalls
+	agent.mu.Unlock()
+	if calls != 2 {
+		t.Fatalf("setter calls = %d, want the rejected model sent on both turns", calls)
+	}
 }
