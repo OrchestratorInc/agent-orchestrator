@@ -13,7 +13,7 @@ for (const { harness, providerLabel } of [
 			await page.goto(`/e2e/usage-limit/harness.html?harness=${harness}&delay=60000`);
 			await expect(page.getByRole("note")).toHaveText("UI-only simulation. No daemon runs here; auto-resume does not execute.");
 			await expect(page.getByRole("tab", { name: `Usage-limit recovery · ${providerLabel}`, exact: true })).toBeVisible();
-			const recoveryNotice = page.getByTestId("usage-limit-notice").filter({ has: page.locator("time") });
+			const recoveryNotice = page.getByTestId("usage-limit-notice");
 			await expect(recoveryNotice).toBeVisible();
 			await expect(page.getByRole("button", { name: "Resume", exact: true })).toHaveCount(0);
 			await page.getByRole("button", { name: "Auto-resume at reset" }).click();
@@ -38,7 +38,7 @@ for (const { harness, providerLabel } of [
 			await page.goto(`/e2e/usage-limit/harness.html?harness=${harness}&delay=60000`);
 			await expect(page.getByRole("note")).toHaveText("UI-only simulation. No daemon runs here; auto-resume does not execute.");
 			await expect(page.getByRole("tab", { name: `Usage-limit recovery · ${providerLabel}`, exact: true })).toBeVisible();
-			const recoveryNotice = page.getByTestId("usage-limit-notice").filter({ has: page.locator("time") });
+			const recoveryNotice = page.getByTestId("usage-limit-notice");
 			await page.getByRole("button", { name: "Auto-resume at reset" }).click();
 
 			const cancel = page.getByRole("button", { name: "Cancel auto-resume" });
@@ -73,11 +73,13 @@ for (const { harness, providerLabel } of [
 
 		test("keeps Cancel and Resume available without loading the paginated prompt", async ({ page }) => {
 			await page.setViewportSize({ width: 390, height: 844 });
-			await page.goto(`/e2e/usage-limit/harness.html?harness=${harness}&paginated=1&armed=1&delay=-1000`);
+			// The chat is too short to scroll, so it asks for the older page holding the
+			// prompt on its own. That page stays loading here: recovery must not need it.
+			await page.goto(`/e2e/usage-limit/harness.html?harness=${harness}&paginated=1&olderPending=1&armed=1&delay=-1000`);
 			await expect(page.getByRole("note")).toHaveText("UI-only simulation. No daemon runs here; auto-resume does not execute.");
 			const prompt = page.getByText("Continue improving the session experience.", { exact: true });
 			await expect(prompt).toHaveCount(0);
-			await expect(page.getByRole("button", { name: "Load earlier messages" })).toBeVisible();
+			await expect(page.getByRole("button", { name: "Load earlier messages" })).toBeDisabled();
 			const cancel = page.getByRole("button", { name: "Cancel auto-resume" });
 			await expect(cancel).toBeEnabled();
 			await cancel.click();
@@ -93,13 +95,13 @@ for (const { harness, providerLabel } of [
 			await page.goto(`/e2e/usage-limit/harness.html?harness=${harness}&unknown=1`);
 			await expect(page.getByRole("note")).toHaveText("UI-only simulation. No daemon runs here; auto-resume does not execute.");
 			await expect(page.getByRole("tab", { name: `Usage-limit recovery · ${providerLabel}`, exact: true })).toBeVisible();
-			await expect(page.getByText("The provider did not supply a reset time.")).toBeVisible();
+			await expect(page.getByTestId("usage-limit-marker")).toBeVisible();
 			await expect(page.getByRole("button", { name: "Resume", exact: true })).toBeEnabled();
 			await expect(page.getByRole("button", { name: "Auto-resume at reset" })).toHaveCount(0);
 			await expect(page.getByRole("button", { name: "Cancel auto-resume" })).toHaveCount(0);
 			expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true);
 			await page.getByRole("button", { name: "Resume", exact: true }).click();
-			await expect(page.getByText("The provider did not supply a reset time.")).toHaveCount(0);
+			await expect(page.getByTestId("usage-limit-notice")).toHaveCount(0);
 			await expect(page.getByRole("button", { name: "Resume", exact: true })).toHaveCount(0);
 		});
 	});

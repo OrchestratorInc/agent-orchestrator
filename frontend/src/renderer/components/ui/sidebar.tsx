@@ -4,7 +4,7 @@ import { useSidebarChromeGeometry } from "../../hooks/useSidebarChromeGeometry";
 
 import * as React from "react";
 import { cva, type VariantProps } from "class-variance-authority";
-import { PanelLeftIcon } from "lucide-react";
+import { PanelLeftIcon } from "@/components/app-icons";
 import { motion, useReducedMotion } from "motion/react";
 import { Slot } from "radix-ui";
 import { useTranslation } from "react-i18next";
@@ -14,6 +14,7 @@ import { SHELL_PANEL_SPRING } from "@/lib/motion-spring";
 import { cn } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
+import { Pressable } from "@/components/ui/pressable";
 import { Separator } from "@/components/ui/separator";
 import { Sheet, SheetContent, SheetDescription, SheetHeader, SheetTitle } from "@/components/ui/sheet";
 import { Skeleton } from "@/components/ui/skeleton";
@@ -302,8 +303,8 @@ function SidebarTrigger({ className, onClick, ...props }: React.ComponentProps<t
 			data-sidebar="trigger"
 			data-slot="sidebar-trigger"
 			variant="ghost"
-			size="icon"
-			className={cn("size-7", className)}
+			size="icon-sm"
+			className={className}
 			onClick={(event) => {
 				onClick?.(event);
 				toggleSidebar();
@@ -321,7 +322,7 @@ function SidebarRail({ className, ...props }: React.ComponentProps<"button">) {
 	const { toggleSidebar } = useSidebar();
 
 	return (
-		<button
+		<Pressable
 			data-sidebar="rail"
 			data-slot="sidebar-rail"
 			aria-label={t("shortcut.toggle-sidebar")}
@@ -537,7 +538,6 @@ function SidebarMenuButton({
 	tooltip?: string | React.ComponentProps<typeof TooltipContent>;
 } & VariantProps<typeof sidebarMenuButtonVariants>) {
 	const Comp = asChild ? Slot.Root : "button";
-	const { isMobile, state } = useSidebar();
 
 	const button = (
 		<Comp
@@ -563,9 +563,17 @@ function SidebarMenuButton({
 	return (
 		<Tooltip>
 			<TooltipTrigger asChild>{button}</TooltipTrigger>
-			<TooltipContent side="right" align="center" hidden={state !== "collapsed" || isMobile} {...tooltip} />
+			<SidebarMenuButtonTooltipContent {...tooltip} />
 		</Tooltip>
 	);
+}
+
+// Reads the sidebar state here rather than in SidebarMenuButton, so collapsing
+// or expanding the sidebar re-renders only each tooltip's content, not every
+// row button with its trigger.
+function SidebarMenuButtonTooltipContent(props: React.ComponentProps<typeof TooltipContent>) {
+	const { isMobile, state } = useSidebar();
+	return <TooltipContent side="right" align="center" hidden={state !== "collapsed" || isMobile} {...props} />;
 }
 
 function SidebarMenuAction({

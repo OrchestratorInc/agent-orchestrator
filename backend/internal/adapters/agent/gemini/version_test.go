@@ -28,3 +28,33 @@ func TestVersionProbeAcceptsSupportedCLIAndRejectsOldCLI(t *testing.T) {
 		})
 	}
 }
+
+// An npm-installed Gemini is a `#!/usr/bin/env node` launcher. The probe must
+// find a Node manager's runtime when the daemon PATH omits it, as a Dock-
+// launched daemon's PATH does when the login-shell probe fails.
+func TestVersionProbeFindsNodeOutsideDaemonPATH(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("npm env-node launcher is Unix-specific")
+	}
+	home := t.TempDir()
+	nodeDir := filepath.Join(home, ".nvm", "versions", "node", "v22.11.0", "bin")
+	if err := os.MkdirAll(nodeDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(nodeDir, "node"), []byte("#!/bin/sh\necho 0.61.0\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	launcher := filepath.Join(home, "npm-global", "bin", "gemini")
+	if err := os.MkdirAll(filepath.Dir(launcher), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(launcher, []byte("#!/usr/bin/env node\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("HOME", home)
+	t.Setenv("PATH", t.TempDir())
+
+	if err := checkVersion(context.Background(), launcher); err != nil {
+		t.Fatalf("checkVersion = %v, want the npm launcher to find node", err)
+	}
+}

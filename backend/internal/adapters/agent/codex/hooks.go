@@ -90,12 +90,12 @@ var codexManagedHooks = []codexHookSpec{
 func appendSessionHookFlags(cmd *[]string) error {
 	executable, err := agentlaunch.Executable()
 	if err != nil {
-		return fmt.Errorf("resolve AO hook executable: %w", err)
+		return fmt.Errorf("resolve Orchestrator hook executable: %w", err)
 	}
 	if !filepath.IsAbs(executable) {
 		executable, err = filepath.Abs(executable)
 		if err != nil {
-			return fmt.Errorf("make AO hook executable absolute: %w", err)
+			return fmt.Errorf("make Orchestrator hook executable absolute: %w", err)
 		}
 	}
 	appendSessionHookFlagsForExecutable(cmd, executable)

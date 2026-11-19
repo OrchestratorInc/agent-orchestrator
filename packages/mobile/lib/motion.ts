@@ -10,7 +10,7 @@ import { duration, press, spring } from "./tokens";
  *     sliding out. Each is a number lifted from the screen that first needed it,
  *     so a change here is a visible decision rather than a drive-by edit.
  *   - **The ladders and hooks** — the duration/easing/press steps in `tokens.ts`
- *     plus the press and entrance hooks every shared control uses.
+ *     plus the entrance hook the shared controls use.
  *
  * Two rules decide everything here:
  *
@@ -30,37 +30,6 @@ import { duration, press, spring } from "./tokens";
 /** `Dot`'s pulse half-period. */
 export const BREATHE_MS = 1200;
 
-/**
- * One full turn of a progress spinner.
- *
- * 1000ms linear, because that is what the desktop's spinner is: it draws the
- * same glyph with Tailwind's `animate-spin`, which is `spin 1s linear infinite`
- * (HarnessSettingsSection and the Codex account rows are the reference). A
- * spinner is a promise that something is still happening, so matching the
- * renderer's cadence matters more here than matching its own duration ladder —
- * and anything eased appears to hitch once per turn.
- */
-export const SPIN_MS = 1000;
-
-/**
- * The sidebar drawer's spring.
- *
- * Note for a future Reanimated port: these are `Animated.spring` parameters. The
- * companion flick threshold in sidebar-gesture.ts is expressed in PanResponder's
- * px/ms, while Reanimated reports px/s — that constant must be converted, not
- * copied.
- */
-export const DRAWER_SPRING = { damping: 24, stiffness: 240, mass: 0.8 } as const;
-
-/**
- * One sweep of a loading skeleton's shimmer, then a rest before the next.
- *
- * Slow and linear: the sweep says "still loading", and a quick or eased one
- * reads as busy. The rest keeps a screen with several skeletons from strobing.
- */
-export const SHIMMER_MS = 1300;
-export const SHIMMER_REST_MS = 400;
-
 /** Fallback used when the keyboard event carries no duration. */
 export const KEYBOARD_FALLBACK_MS = 250;
 
@@ -78,16 +47,7 @@ export const CROSSFADE_MS = 140;
 export const PAGE_SLIDE_MS = 200;
 /** A status colour changing on a rail or dot. */
 export const TINT_MS = 200;
-/**
- * A board row moving between sections — pinned, or promoted by a delivery event.
- *
- * Still the longest of the three, because this one is meant to be *followed*:
- * the point is to see which row moved and where it went. Kept tight all the same —
- * folding a section moves a whole run of rows, and the eye reads the destination
- * long before a longer curve would have finished.
- */
-export const ROW_MOVE_MS = 170;
-/** A row arriving in or leaving a section. Shorter, so it never outlasts the move. */
+/** A row arriving or leaving. Shorter than `LAYOUT_MS`, so it never outlasts the move beside it. */
 export const ROW_ENTER_MS = 120;
 
 export type MotionDurations = {
@@ -131,17 +91,6 @@ export function shouldAnimateLayout(reduced: boolean): boolean {
 /** Whether the breathing status dot should loop. */
 export function shouldBreathe(reduced: boolean, breathing: boolean): boolean {
 	return breathing && !reduced;
-}
-
-/**
- * Whether a spinner should turn.
- *
- * The same rule as the breathing dot, and for the same reason: Reduce Motion
- * means the loop never starts, rather than starting and being cancelled. A
- * continuous rotation is the thing that setting is most often asking us to stop.
- */
-export function shouldSpin(reduced: boolean, spinning: boolean): boolean {
-	return spinning && !reduced;
 }
 
 export { duration, press, spring };

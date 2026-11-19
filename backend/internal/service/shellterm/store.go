@@ -16,12 +16,29 @@ type ShellTerminalRecord struct {
 	SessionID  domain.SessionID
 	WorkingDir string
 	Title      string
-	AppRunID   string
-	CreatedAt  time.Time
-	Transient  bool // Trusted auth terminal, owned by its app launch.
+	// TitleExplicit marks Title as chosen, so a program's title cannot outrank it.
+	TitleExplicit bool
+	// AppTitle is the title the shell's program last set.
+	AppTitle     string
+	AppRunID     string
+	CreatedAt    time.Time
+	Transient    bool // Trusted auth terminal, owned by its app launch.
+	CommandOwner string
 	// PreviewCapabilityVerifier authorizes only managed preview lifecycle calls
 	// from this session-scoped shell; the bearer stays in its process environment.
 	PreviewCapabilityVerifier string
+	EndedAt                   *time.Time
+	LastAgentHarness          domain.AgentHarness
+	AgentConversationID       string
+}
+
+// ShellTerminalEnd is what a shell's row keeps when its process ends, so the
+// tab can be restored where it was.
+type ShellTerminalEnd struct {
+	EndedAt             time.Time
+	WorkingDir          string
+	AgentHarness        domain.AgentHarness
+	AgentConversationID string
 }
 
 // Store is the shell terminal service's persistence surface. The SQLite store
@@ -37,4 +54,8 @@ type Store interface {
 	SelectShellTerminalsFromPreviousAppRuns(ctx context.Context, appRunID string) ([]ShellTerminalRecord, error)
 	DeleteShellTerminalByHandleID(ctx context.Context, handleID string) (bool, error)
 	DeleteShellTerminalsFromPreviousAppRuns(ctx context.Context, appRunID string) (int64, error)
+	MarkShellTerminalEnded(ctx context.Context, handleID string, end ShellTerminalEnd) (bool, error)
+	UpdateShellTerminalAgentHarness(ctx context.Context, handleID string, harness domain.AgentHarness) error
+	ReplaceShellTerminal(ctx context.Context, oldHandleID string, rec ShellTerminalRecord) (bool, error)
+	AdoptShellTerminal(ctx context.Context, handleID, appRunID string) (bool, error)
 }

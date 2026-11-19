@@ -53,8 +53,8 @@ func TestIdentityStampsEveryEventAndSetsPersonOnce(t *testing.T) {
 	if anon["install_id"] != stableInstallID {
 		t.Fatal("anonymous event missing installation ID")
 	}
-	if _, ok := anon["is_signed_in"]; ok {
-		t.Fatal("unresolved Cloud sign-in state was exported")
+	if anon["is_signed_in"] != false {
+		t.Fatalf("anonymous event has is_signed_in = %#v, want false", anon["is_signed_in"])
 	}
 
 	sink.Identity().SetGitHubLogin("octocat")
@@ -433,31 +433,67 @@ func TestInstallIDRetiredAcrossRestartAndDirectSwitch(t *testing.T) {
 	}
 }
 
-func TestBoundInstallKeepsAnonymousDistinctIDAcrossRestarts(t *testing.T) {
+// A restarted (or CLI-started) daemon must keep exporting under the signed-in
+// Cloud ID: the desktop may not be running to hand it off again. Sign-out
+// removes the binding, so later restarts are anonymous on a rotated ID, and a
+// second sign-in is identified again. The install ID never changes.
+func TestCloudIdentitySurvivesRestartAcrossSignInSignOutSignIn(t *testing.T) {
 	dir := t.TempDir()
-	first, err := NewIdentity(dir)
-	if err != nil {
-		t.Fatal(err)
+	ctx := context.Background()
+	restart := func() *Identity {
+		t.Helper()
+		ident, err := NewIdentity(dir)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return ident
 	}
-	if err := first.SetCloudUserID(context.Background(), "user_A"); err != nil {
+	first := restart()
+	install := first.InstallID()
+	if err := first.SetCloudUserID(ctx, "user_A"); err != nil {
 		t.Fatal(err)
 	}
 
-	// Startup events can export before the desktop restores the Cloud user.
-	second, err := NewIdentity(dir)
+	signedIn := restart().Snapshot()
+	if signedIn.DistinctID() != "user_A" || signedIn.CloudUserID != "user_A" || !signedIn.CloudUserKnown || signedIn.InstallID != install {
+		t.Fatalf("restart while signed in = %+v, want user_A with the same install ID", signedIn)
+	}
+
+	second := restart()
+	if err := second.SetCloudUserID(ctx, ""); err != nil {
+		t.Fatal(err)
+	}
+	signedOut := restart().Snapshot()
+	if signedOut.CloudUserID != "" || signedOut.DistinctID() == "user_A" || signedOut.DistinctID() == install || signedOut.InstallID != install {
+		t.Fatalf("restart after sign-out = %+v, want a rotated anonymous ID", signedOut)
+	}
+	if again := restart().Snapshot(); again.DistinctID() != signedOut.DistinctID() {
+		t.Fatalf("signed-out anonymous ID changed across restart: %q then %q", signedOut.DistinctID(), again.DistinctID())
+	}
+
+	third := restart()
+	if err := third.SetCloudUserID(ctx, "user_A"); err != nil {
+		t.Fatal(err)
+	}
+	if back := restart().Snapshot(); back.DistinctID() != "user_A" || back.InstallID != install {
+		t.Fatalf("second sign-in after restart = %+v, want user_A", back)
+	}
+}
+
+func TestMalformedBoundUserIsNotRestored(t *testing.T) {
+	dir := t.TempDir()
+	if _, err := NewIdentity(dir); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, boundUserFile), []byte("/Users/someone/path\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	ident, err := NewIdentity(dir)
 	if err != nil {
 		t.Fatal(err)
 	}
-	want := second.Snapshot().DistinctID()
-	if want == first.InstallID() {
-		t.Fatal("bound install reused the install ID before Cloud identity was restored")
-	}
-	third, err := NewIdentity(dir)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if got := third.Snapshot().DistinctID(); got != want {
-		t.Fatalf("anonymous distinct ID changed across restart: got %q, want %q", got, want)
+	if snap := ident.Snapshot(); snap.CloudUserID != "" || snap.CloudUserKnown {
+		t.Fatalf("restored malformed bound user: %+v", snap)
 	}
 }
 
@@ -647,5 +683,42 @@ func TestSinkExportsNothingWhileIdentityIsUnpersisted(t *testing.T) {
 	sink.send(context.Background(), activeEvent())
 	if hits.Load() != 0 {
 		t.Fatalf("exported %d request(s) with an unpersisted identity", hits.Load())
+	}
+}
+
+// The desktop retires the binding itself on sign-out, so a sign-out the daemon
+// never received (down, or the app quit) still holds: a daemon started later,
+// for example by the CLI, comes up anonymous on the rotated ID, and a running
+// daemon that later receives the hand-off adopts that ID too.
+func TestDesktopRetiredBindingHoldsWithoutTheDaemon(t *testing.T) {
+	dir := t.TempDir()
+	running, err := NewIdentity(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := running.SetCloudUserID(context.Background(), "user_A"); err != nil {
+		t.Fatal(err)
+	}
+	// What TelemetryIdentityController.retireBinding writes.
+	if err := os.WriteFile(filepath.Join(dir, anonymousIDFile), []byte("anon_rotated_by_desktop\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Remove(filepath.Join(dir, boundUserFile)); err != nil {
+		t.Fatal(err)
+	}
+
+	cliStarted, err := NewIdentity(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if snap := cliStarted.Snapshot(); snap.CloudUserID != "" || snap.DistinctID() != "anon_rotated_by_desktop" {
+		t.Fatalf("daemon started after the sign-out = %+v, want anonymous on the rotated ID", snap)
+	}
+
+	if err := running.SetCloudUserID(context.Background(), ""); err != nil {
+		t.Fatal(err)
+	}
+	if got := running.Snapshot().DistinctID(); got != "anon_rotated_by_desktop" {
+		t.Fatalf("running daemon distinct ID after the hand-off = %q, want the desktop's rotated ID", got)
 	}
 }

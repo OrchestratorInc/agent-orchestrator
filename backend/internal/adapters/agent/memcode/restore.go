@@ -68,6 +68,9 @@ func (p *restorePlan) Ready(ctx context.Context, generation, output string) (boo
 	if err := ctx.Err(); err != nil {
 		return false, err
 	}
+	if err := memcodeRestoreCrash(output); err != nil {
+		return false, err
+	}
 	if err := p.verifyHistory(); err != nil {
 		return false, err
 	}
@@ -91,6 +94,9 @@ func (p *restorePlan) Ready(ctx context.Context, generation, output string) (boo
 // Restored implements the native TUI adapter contract.
 func (p *restorePlan) Restored(ctx context.Context, generation, output string) (bool, error) {
 	if err := ctx.Err(); err != nil {
+		return false, err
+	}
+	if err := memcodeRestoreCrash(output); err != nil {
 		return false, err
 	}
 	if err := p.verifyHistory(); err != nil {

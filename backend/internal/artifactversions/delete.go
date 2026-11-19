@@ -34,6 +34,10 @@ const trashDir = "artifacts-trash"
 func (c *Capturer) DeleteSession(ctx context.Context, id domain.SessionID) error {
 	c.mu.Lock()
 	defer c.mu.Unlock()
+	// Every blob goes with the session's files.
+	c.trackMu.Lock()
+	delete(c.freed, id)
+	c.trackMu.Unlock()
 	dir := sessionartifacts.Dir(c.dataDir, id)
 	if dir == "" {
 		return errors.New("delete artifacts: no data directory")
