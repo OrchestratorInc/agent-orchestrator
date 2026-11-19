@@ -59,6 +59,22 @@ describe("the file viewer", () => {
 		expect(file).toContain("gutterWidth: gutterWidth(digits, codeScale) + MARKER_WIDTH * codeScale,");
 	});
 
+	// A cited line opens unwrapped, where every row's place is known, so the list
+	// starts at the line instead of drawing every row on the way to it.
+	it("opens a cited line at once through a known row layout", () => {
+		expect(file).toContain("const [wrap, setWrap] = useState(!citedLine);");
+		expect(file).toContain("getItemLayout={uniformRows ? rowLayout : undefined}");
+		expect(file).toContain("initialScrollIndex={uniformRows && openAt > 0 ? openAt : undefined}");
+	});
+
+	// The cited view (text, source, unwrapped) belongs to the cited file: the
+	// next changed file opens on its diff, as Files opens any changed file.
+	it("drops a cited line's view when stepping to another file", () => {
+		const step = file.slice(file.indexOf("const go = useCallback"), file.indexOf("const onSelect = useCallback"));
+		expect(step).toContain('line: ""');
+		expect(step).toMatch(/if \(citedLine\) \{\s*setMode\("diff"\);\s*setRendered\(true\);\s*setWrap\(true\);/);
+	});
+
 	// The composer rides the keyboard by a transform, which no layout reports, so
 	// the toast over it counts the keyboard's lift as well as the composer's height.
 	it("keeps a toast above the composer while the keyboard is up", () => {

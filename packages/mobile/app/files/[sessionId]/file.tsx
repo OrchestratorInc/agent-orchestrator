@@ -211,7 +211,15 @@ function SessionFileContent() {
 		const target = changes[position + offset];
 		if (!target) return;
 		router.setParams({ path: target.path, previousPath: target.previousPath ?? "", mode: "diff", line: "" });
-	}, [changes, position, router]);
+		// A cited line chose this file's view (its text, a markdown file's source,
+		// unwrapped); the next file opens as Files opens any changed file. A view
+		// the reader chose themselves carries on, as it always has.
+		if (citedLine) {
+			setMode("diff");
+			setRendered(true);
+			setWrap(true);
+		}
+	}, [changes, citedLine, position, router]);
 
 	const onSelect = useCallback((index: number) => {
 		setActionError(undefined);
