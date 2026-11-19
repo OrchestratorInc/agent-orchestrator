@@ -752,7 +752,8 @@ sent on each click. `time_on_step_ms` runs from the step's latest showing in
 this launch. `step_index` is derived from `step` by the app, never taken from
 the page that sent the event. Your tools sends its view once its checks have
 answered (at most 3 seconds), so `missing` and `agents_ready` are complete;
-leaving it sooner still sends the view first.
+leaving it or closing the window sooner still sends the view first, with what
+was known. Its `time_on_step_ms` runs from when it opened.
 
 ### The run
 

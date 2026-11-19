@@ -112,6 +112,45 @@ describe("onboarding step telemetry", () => {
 		expect(unload.mock.calls).toEqual([["ao.onboarding.step_abandoned", expect.objectContaining({ run_kind: "first_run", step: "welcome" })]]);
 	});
 
+	it("holds back only the view while it is not ready, timing the step from when it opened", () => {
+		vi.useFakeTimers();
+		try {
+			const { rerender } = renderHook(({ ready }) => useOnboardingStep("tools", true, { autoComplete: false, viewReady: ready, viewed: { missing: "gh" } }), {
+				initialProps: { ready: false },
+			});
+			expect(capture).not.toHaveBeenCalled();
+			vi.advanceTimersByTime(2_000);
+			act(() => rerender({ ready: true }));
+			expect(capture.mock.calls).toEqual([["ao.onboarding.step_viewed", { run_kind: "first_run", step: "tools", missing: "gh" }]]);
+			vi.advanceTimersByTime(1_000);
+			act(() => {
+				window.dispatchEvent(new Event("pagehide"));
+			});
+			expect(events()).toEqual(["ao.onboarding.step_viewed", "ao.onboarding.step_abandoned"]);
+			expect(lastProps("ao.onboarding.step_abandoned")).toMatchObject({ time_on_step_ms: 3_000 });
+		} finally {
+			vi.useRealTimers();
+		}
+	});
+
+	it("still reports a step closed a second after it opened, before its checks answered", () => {
+		vi.useFakeTimers();
+		try {
+			renderHook(() => useOnboardingStep("tools", true, { autoComplete: false, viewReady: false, viewed: { missing: "gh" } }));
+			vi.advanceTimersByTime(1_000);
+			act(() => {
+				window.dispatchEvent(new Event("pagehide"));
+			});
+			// Both go out as the page closes; a queued view would be lost with it.
+			expect(unload.mock.calls).toEqual([
+				["ao.onboarding.step_viewed", { run_kind: "first_run", step: "tools", missing: "gh" }],
+				["ao.onboarding.step_abandoned", { run_kind: "first_run", step: "tools", time_on_step_ms: 1_000 }],
+			]);
+		} finally {
+			vi.useRealTimers();
+		}
+	});
+
 	it("counts an automatic skip once per install, and a person's skip and Back per click", () => {
 		skipOnboardingStep("sign_in", "already_done");
 		skipOnboardingStep("sign_in", "already_done");
@@ -427,6 +466,23 @@ describe("onboarding telemetry while opted out", () => {
 		// A step viewed while opted out was not used up.
 		reportOnboardingStep("tools", "viewed");
 		expect(events()).toContain("ao.onboarding.step_viewed");
+	});
+
+	it("does not bring back a run that storage failed to remove at the opt-out", () => {
+		beginOnboardingRun("first_run", "welcome");
+		const removeItem = vi.spyOn(Storage.prototype, "removeItem").mockImplementation(() => {
+			throw new Error("SecurityError");
+		});
+		try {
+			setAnalyticsOptedOut(true);
+		} finally {
+			removeItem.mockRestore();
+		}
+		expect(window.localStorage.getItem("ao.telemetry.onboardingRun")).not.toBeNull();
+		setAnalyticsOptedOut(false);
+		capture.mockClear();
+		completeOnboardingRun("finished");
+		expect(capture).not.toHaveBeenCalled();
 	});
 
 	it("does not note a project added while opted out", () => {

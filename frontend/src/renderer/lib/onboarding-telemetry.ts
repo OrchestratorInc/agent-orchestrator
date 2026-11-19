@@ -68,6 +68,8 @@ let flowOpen = false;
 let abandonedThisLaunch = false;
 /** This launch's latest first-run record, for when storage can't be written. */
 let memoryRun: RunRecord | null = null;
+/** An opt-out dropped the stored run this launch; a copy storage failed to remove must not come back. */
+let storedRunDiscarded = false;
 const stepStartedAt = new Map<OnboardingStep, number>();
 
 function storage(): Storage | null {
@@ -97,6 +99,7 @@ function writeJson(key: string, value: unknown) {
 function readFirstRun(): RunRecord | null {
 	// Written this launch: newer than storage, and kept when storage refused it.
 	if (memoryRun) return { ...memoryRun };
+	if (storedRunDiscarded) return null;
 	const record = readJson<RunRecord>(RUN_KEY);
 	return record && typeof record.startedAt === "number" ? record : null;
 }
@@ -180,19 +183,30 @@ function noteStepShown(step: OnboardingStep) {
  * project came from).
  */
 export function reportOnboardingStep(step: OnboardingStep, phase: StepPhase, extra: Record<string, unknown> = {}): void {
+	// Abandoned is only reported as the window closes.
+	reportStep(step, phase, extra, { onUnload: phase === "abandoned" });
+}
+
+/**
+ * `onUnload`: the window is closing, so the event is sent at once rather than
+ * queued. `shown: false`: a view whose showing was already noted (by
+ * useOnboardingStep when the step opened), so its time on step runs from then.
+ */
+function reportStep(step: OnboardingStep, phase: StepPhase, extra: Record<string, unknown>, options: { onUnload?: boolean; shown?: boolean } = {}): void {
 	if (!tracking()) return;
-	if (phase === "viewed") noteStepShown(step);
+	if (phase === "viewed" && options.shown !== false) noteStepShown(step);
 	if (!reserveOnboardingPhase(step, phase)) return;
 	const timing = phase === "viewed" ? {} : { time_on_step_ms: timeOnStep(step) };
 	const properties = { step, ...extra, ...timing };
-	// Abandoned is only reported as the window closes.
-	if (phase === "abandoned") captureOnUnload("ao.onboarding.step_abandoned", properties);
+	if (options.onUnload) captureOnUnload(`ao.onboarding.step_${phase}`, properties);
 	else capture(`ao.onboarding.step_${phase}`, properties);
 }
 
 /** Reports a step's view unless it already has one, so a step that finishes the moment it starts still reads viewed, then completed. */
-export function ensureOnboardingStepViewed(step: OnboardingStep, extra?: Record<string, unknown>): void {
-	if (!readReported().has(`${step}:viewed`)) reportOnboardingStep(step, "viewed", extra);
+export function ensureOnboardingStepViewed(step: OnboardingStep, extra: Record<string, unknown> = {}): void {
+	if (readReported().has(`${step}:viewed`)) return;
+	// A step useOnboardingStep already noted as shown keeps its start time.
+	reportStep(step, "viewed", extra, { shown: !stepStartedAt.has(step) });
 }
 
 /**
@@ -242,15 +256,18 @@ export function reportOnboardingBack(from: OnboardingStep, to: OnboardingStep): 
  * it is still active, and completed when it goes from active to inactive. The
  * returned function reports completion explicitly for steps whose component
  * unmounts as part of finishing. Pass `autoComplete: false` for a page that
- * can be left by Back, which reports its own completion.
+ * can be left by Back, which reports its own completion. `viewReady: false`
+ * holds back only the view (until its `viewed` properties are known); a close
+ * before then still reports the view, with what is known, and the abandon.
  */
 export function useOnboardingStep(
 	step: OnboardingStep,
 	active: boolean,
-	options: { autoComplete?: boolean; viewed?: Record<string, unknown> } = {},
+	options: { autoComplete?: boolean; viewed?: Record<string, unknown>; viewReady?: boolean } = {},
 ): (extra?: Record<string, unknown>) => void {
 	const wasActive = useRef(false);
 	const autoComplete = options.autoComplete ?? true;
+	const viewReady = options.viewReady ?? true;
 	const viewed = useRef(options.viewed);
 	viewed.current = options.viewed;
 	useEffect(() => {
@@ -260,11 +277,19 @@ export function useOnboardingStep(
 			return;
 		}
 		wasActive.current = true;
-		reportOnboardingStep(step, "viewed", viewed.current);
-		const onHide = () => reportOnboardingStep(step, "abandoned");
+		// Shown from now, even while its view waits for viewReady.
+		if (tracking()) noteStepShown(step);
+		const onHide = () => {
+			// Closed before the view was sent: send it with what is known, then the abandon.
+			if (!readReported().has(`${step}:viewed`)) reportStep(step, "viewed", viewed.current ?? {}, { onUnload: true, shown: false });
+			reportOnboardingStep(step, "abandoned");
+		};
 		window.addEventListener("pagehide", onHide);
 		return () => window.removeEventListener("pagehide", onHide);
 	}, [step, active, autoComplete]);
+	useEffect(() => {
+		if (active && viewReady) reportStep(step, "viewed", viewed.current ?? {}, { shown: false });
+	}, [step, active, viewReady]);
 	return useCallback((extra?: Record<string, unknown>) => reportOnboardingStep(step, "completed", extra), [step]);
 }
 
@@ -521,6 +546,7 @@ export function useOnboardingActivation(duringTour: () => boolean): void {
  */
 function forgetOnOptOut() {
 	memoryRun = null;
+	storedRunDiscarded = true;
 	try {
 		storage()?.removeItem(RUN_KEY);
 	} catch {
@@ -540,6 +566,7 @@ onAnalyticsOptedOut(forgetOnOptOut);
 export function resetOnboardingTelemetryForTests(): void {
 	memory.clear();
 	memoryRun = null;
+	storedRunDiscarded = false;
 	replay = null;
 	flowOpen = false;
 	abandonedThisLaunch = false;

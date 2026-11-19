@@ -356,8 +356,9 @@ function OnboardingFlow({ runKind, onFinish }: { runKind: OnboardingRunKind; onF
 		const timer = window.setTimeout(() => setToolsWaitOver(true), TOOLS_VIEW_WAIT_MS);
 		return () => window.clearTimeout(timer);
 	}, [step, toolsWaitOver]);
-	useOnboardingStep("tools", step === "tools" && (toolsChecksAnswered || toolsWaitOver), {
+	useOnboardingStep("tools", step === "tools", {
 		autoComplete: false,
+		viewReady: toolsChecksAnswered || toolsWaitOver,
 		viewed: step === "tools" ? toolsViewed() : undefined,
 	});
 	// A browser sign-in started on the Sign in page can come back after the
