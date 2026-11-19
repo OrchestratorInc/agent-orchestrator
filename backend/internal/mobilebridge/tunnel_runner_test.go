@@ -610,11 +610,17 @@ func TestTunnelRunnerWaitsForARelinkAfterANewPassword(t *testing.T) {
 		cloud, src := newFixedSource(t)
 		bin, _ := fakeCloudflared(t, registeredLine)
 		r := namedRunner(t, bin, src)
+		// The relink lands well inside its window, however slowly the race
+		// detector runs this; with no relink the window is short to keep the
+		// test quick.
 		r.recheckEvery, r.relinkWait = time.Hour, 300*time.Millisecond
+		if relinked {
+			r.relinkWait = 10 * time.Second
+		}
 		nudge := make(chan struct{}, 1)
 		r.nudge = nudge
 
-		ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 		done := make(chan error, 1)
 		go func() { done <- r.runOnce(ctx) }()
 		for deadline := time.Now().Add(10 * time.Second); r.Runtime.UnsettledHostname() == ""; time.Sleep(20 * time.Millisecond) {
@@ -624,29 +630,47 @@ func TestTunnelRunnerWaitsForARelinkAfterANewPassword(t *testing.T) {
 		}
 		link(t, src, "") // the new password
 		nudge <- struct{}{}
-		time.Sleep(100 * time.Millisecond)
-		if relinked {
-			link(t, src, "new-account-digest")
-		}
-		select {
-		case err := <-done:
-			if relinked || !errors.Is(err, errFixedTunnelChanged) {
-				t.Fatalf("relinked %v: runOnce = %v", relinked, err)
-			}
-		case <-time.After(time.Second):
-			if !relinked {
+		if !relinked {
+			select {
+			case err := <-done:
+				if !errors.Is(err, errFixedTunnelChanged) {
+					t.Fatalf("runOnce = %v, want the withdrawn fixed address", err)
+				}
+			case <-time.After(10 * time.Second):
 				t.Fatal("kept the fixed address with no link")
 			}
+			cancel()
+			continue
+		}
+		// The watcher drops the cached tunnel when it finds the machine
+		// unlinked, so it is waiting for the link once the cache is gone.
+		for deadline := time.Now().Add(10 * time.Second); ; time.Sleep(10 * time.Millisecond) {
+			if _, err := os.Stat(src.CachePath); errors.Is(err, os.ErrNotExist) {
+				break
+			}
+			if time.Now().After(deadline) {
+				t.Fatal("the nudge never found the machine unlinked")
+			}
+		}
+		link(t, src, "new-account-digest")
+		for deadline := time.Now().Add(10 * time.Second); ; time.Sleep(10 * time.Millisecond) {
 			cloud.mu.Lock()
 			got := cloud.digests[len(cloud.digests)-1]
 			cloud.mu.Unlock()
-			if got != "new-account-digest" {
-				t.Fatalf("asked with %q", got)
+			if got == "new-account-digest" {
+				break
 			}
-			cancel()
-			<-done
+			if time.Now().After(deadline) {
+				t.Fatalf("never asked with the new link; last asked with %q", got)
+			}
+		}
+		select {
+		case err := <-done:
+			t.Fatalf("gave up the fixed address despite the relink: %v", err)
+		case <-time.After(200 * time.Millisecond): // the answer kept it
 		}
 		cancel()
+		<-done
 	}
 }
 
