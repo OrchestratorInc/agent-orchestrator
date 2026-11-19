@@ -22,7 +22,9 @@ type styledRune struct {
 // suggestion text, or the reverse-video cell of the agent's own cursor. Claude
 // Code puts that cursor on the first letter of a dim suggestion while it
 // believes its terminal has focus (#7523), so the letter under it is not typed
-// text either. A typed draft still reads as one: its other letters are normal.
+// text either. A typed draft still reads as one: its other letters are normal,
+// and styledTerminalLines keeps a reversed letter only when dim text follows
+// it, so the cursor on a one-letter draft is still that draft.
 func (r styledRune) placeholder() bool { return r.dim || r.reverse }
 
 // PlainTerminalText removes terminal control sequences while preserving the
@@ -287,7 +289,29 @@ func styledTerminalLines(output string) [][]styledRune {
 		}
 		lines[len(lines)-1] = append(lines[len(lines)-1], styledRune{value: r, dim: dim, bold: bold, reverse: reverse})
 	}
+	for _, line := range lines {
+		keepSuggestionCursor(line)
+	}
 	return lines
+}
+
+// keepSuggestionCursor clears reverse video from a letter unless dim
+// suggestion text follows it. Claude's cursor on a suggestion is the reversed
+// first letter of dim text; a reversed letter with no dim text after it is
+// typed text under the cursor. A reversed space stays a bare cursor.
+func keepSuggestionCursor(line []styledRune) {
+	for i := range line {
+		if !line[i].reverse || unicode.IsSpace(line[i].value) {
+			continue
+		}
+		j := i + 1
+		for j < len(line) && line[j].reverse {
+			j++
+		}
+		if j == len(line) || !line[j].dim {
+			line[i].reverse = false
+		}
+	}
 }
 
 func consumeEscape(output string, start int) (next int, params string, sgr bool) {

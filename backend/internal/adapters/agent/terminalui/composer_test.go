@@ -203,6 +203,9 @@ func TestLastBorderedPromptComposerStateReadsTheCursorOverASuggestionAsEmpty(t *
 		{name: "draft, cursor on its first letter", row: "❯ \x1b[7mg\x1b[27mo fix", want: ComposerDraft},
 		{name: "draft, cursor inside it", row: "❯ go \x1b[7mf\x1b[27mix", want: ComposerDraft},
 		{name: "reset ends the cursor", row: "❯ \x1b[7mg\x1b[0mo fix", want: ComposerDraft},
+		// No dim suggestion follows the reversed letter, so it is typed text.
+		{name: "one-letter draft under the cursor", row: "❯ \x1b[7mg\x1b[27m", want: ComposerDraft},
+		{name: "one-letter draft, cursor and padding", row: "❯ \x1b[7mg\x1b[27m   ", want: ComposerDraft},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
