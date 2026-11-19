@@ -18,6 +18,65 @@ function setup(overrides: Partial<QuitOptions> = {}) {
 }
 
 describe("desktop quit", () => {
+	it("backgrounds an ordinary Windows Quit without touching the Dock", () => {
+		const { options, controller, event } = setup({ platform: "win32" });
+		vi.mocked(options.quit).mockImplementation(() => {
+			expect(controller.handleBeforeQuit(event)).toBe(true);
+		});
+		controller.backgroundQuit();
+		controller.windowClosed();
+		expect(options.closeWindow).toHaveBeenCalledOnce();
+		expect(options.hideDock).not.toHaveBeenCalled();
+		expect(event.preventDefault).toHaveBeenCalledOnce();
+		// An external quit or cleanup continuation is a separate request.
+		expect(controller.handleBeforeQuit({ preventDefault: vi.fn() })).toBe(false);
+	});
+
+	it("keeps Windows backgrounded when ordinary Quit has no window", () => {
+		const { options, controller, event } = setup({ platform: "win32", hasWindow: () => false });
+		vi.mocked(options.quit).mockImplementation(() => {
+			expect(controller.handleBeforeQuit(event)).toBe(true);
+		});
+		controller.backgroundQuit();
+		expect(options.closeWindow).not.toHaveBeenCalled();
+		expect(options.hideDock).not.toHaveBeenCalled();
+	});
+
+	it("clears Windows background intent even if Quit throws", () => {
+		const { options, controller, event } = setup({ platform: "win32" });
+		vi.mocked(options.quit).mockImplementation(() => { throw new Error("quit failed"); });
+		expect(() => controller.backgroundQuit()).toThrow("quit failed");
+		expect(controller.handleBeforeQuit(event)).toBe(false);
+	});
+
+	it.each(["no tray", "update", "full quit", "linux"])("does not background ordinary Quit during %s", (reason) => {
+		const { options, controller, event } = setup({
+			platform: reason === "linux" ? "linux" : "win32",
+			hasTray: () => reason !== "no tray",
+			isUpdateRestartRequested: () => reason === "update",
+		});
+		if (reason === "full quit") controller.quitCompletely();
+		vi.mocked(options.quit).mockImplementation(() => {
+			expect(controller.handleBeforeQuit(event)).toBe(false);
+		});
+		controller.backgroundQuit();
+		expect(event.preventDefault).not.toHaveBeenCalled();
+	});
+
+	it("restores Windows close-to-tray after canceled full quit and draft close", () => {
+		const { options, controller, event } = setup({ platform: "win32" });
+		controller.quitCompletely();
+		controller.cancelQuit();
+		vi.mocked(options.quit).mockImplementation(() => {
+			expect(controller.handleBeforeQuit(event)).toBe(true);
+			controller.windowCloseCanceled();
+		});
+		controller.backgroundQuit();
+		controller.backgroundQuit();
+		expect(options.closeWindow).toHaveBeenCalledTimes(2);
+		expect(controller.handleBeforeQuit(event)).toBe(false);
+	});
+
 	it("closes the macOS window without quitting the tray or daemon owner", () => {
 		const { options, controller, event } = setup();
 		expect(controller.handleBeforeQuit(event)).toBe(true);

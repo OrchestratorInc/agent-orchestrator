@@ -74,7 +74,7 @@ function setup() {
 		openSync, closeSync: vi.fn(),
 		process: { env, platform: "linux", resourcesPath: "/owned/lab", kill: vi.fn() },
 		os: { homedir: () => "/owned/home" }, app, ipcMain: { handle: (name: string, handler: () => unknown) => ipc.set(name, handler) },
-		browserQuitRequested: false, daemonOutput: "", supervisorLink: { dispose: supervisorDisposed }, appRunId: "test-app",
+		browserQuitRequested: false, windowsSessionEnding: false, daemonOutput: "", supervisorLink: { dispose: supervisorDisposed }, appRunId: "test-app",
 		browserRuntimeRecoveryDecision, browserRuntimeRecoveryAttempted: false,
 		forceReplaceAdoptedRequested: false, cachedShellEnv: {}, earlyShellEnvProbe: null,
 		repairDevAcpRuntime: async () => undefined, ensureShellEnv: async () => undefined, retryFailedEarlyShellEnvProbe: async () => undefined,
