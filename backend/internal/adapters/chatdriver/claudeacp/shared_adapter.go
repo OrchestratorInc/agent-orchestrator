@@ -53,7 +53,7 @@ type launchEnv struct {
 
 func storeSessionEnv(id domain.SessionID, env map[string]string, now time.Time) {
 	sessionEnv.Range(func(key, value any) bool {
-		if now.Sub(value.(launchEnv).stored) > sessionEnvTTL {
+		if entry, ok := value.(launchEnv); !ok || now.Sub(entry.stored) > sessionEnvTTL {
 			sessionEnv.Delete(key)
 		}
 		return true
