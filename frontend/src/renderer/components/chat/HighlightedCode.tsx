@@ -56,7 +56,18 @@ function useLiveLines(code: string, language: GrammarName | undefined): CodeLine
 	}, []);
 	const previous = live.current;
 	if (previous?.code === code && previous.language === language) return previous.lines;
-	if (language && previous?.language === language && code.startsWith(previous.code)) {
+	try {
+		live.current = language ? nextLive(previous, code, language) : undefined;
+	} catch (cause) {
+		console.warn(`chat: could not highlight ${language}`, cause);
+		live.current = undefined;
+	}
+	if (previous && previous.tokenizer !== live.current?.tokenizer) previous.tokenizer.dispose();
+	return live.current?.lines;
+}
+
+function nextLive(previous: Live | undefined, code: string, language: GrammarName): Live | undefined {
+	if (previous?.language === language && code.startsWith(previous.code)) {
 		const { tokenizer } = previous;
 		const last = tokenizer.lineCount - 1;
 		const end = { line: last, character: tokenizer.getLineLength(last) };
@@ -66,18 +77,10 @@ function useLiveLines(code: string, language: GrammarName | undefined): CodeLine
 			const changed = Array.from({ length: change.newEndLine - change.newStartLine }, (_, index) => liveLine(tokenizer, change.newStartLine + index));
 			lines.splice(change.oldStartLine, change.oldEndLine - change.oldStartLine, ...changed);
 		}
-		live.current = { tokenizer, code, language, lines };
-		return lines;
+		return { tokenizer, code, language, lines };
 	}
-	previous?.tokenizer.dispose();
-	const tokenizer = language ? createLiveHighlight(code, language) : undefined;
-	if (!tokenizer || !language) {
-		live.current = undefined;
-		return undefined;
-	}
-	const lines = Array.from({ length: tokenizer.lineCount }, (_, line) => liveLine(tokenizer, line));
-	live.current = { tokenizer, code, language, lines };
-	return lines;
+	const tokenizer = createLiveHighlight(code, language);
+	return tokenizer && { tokenizer, code, language, lines: Array.from({ length: tokenizer.lineCount }, (_, line) => liveLine(tokenizer, line)) };
 }
 
 // Split the tree, preserving nested scopes on each line. Putting ancestor and
