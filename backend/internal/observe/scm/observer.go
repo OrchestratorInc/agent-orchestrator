@@ -13,6 +13,7 @@ import (
 	"fmt"
 	"log/slog"
 	"path/filepath"
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
@@ -1200,7 +1201,8 @@ func (o *Observer) discoverNewPRs(ctx context.Context, sessionRepos []sessionRep
 		}
 		// Incremental discovery: request only MRs updated since the last
 		// successful cursor minus an overlap window. Zero cursor (first poll)
-		// requests a full listing
+		// requests a full listing. GitHub has no such filter and always lists
+		// every open PR, which terminal reconciliation below relies on.
 		repoKey := prKey(repo, 0)
 		cursor := o.Cache.LastSyncCursor[repoKey]
 		updatedAfter := time.Time{}
@@ -1291,6 +1293,12 @@ func (o *Observer) discoverNewPRs(ctx context.Context, sessionRepos []sessionRep
 				headRepo = repoFullName(repo)
 			}
 			eligible := candidatesForHeadRepo(byRepo[repoKey], headRepo)
+			// Session IDs repeat across installations. GitHub reports whole seconds.
+			if !pr.CreatedAtProvider.IsZero() {
+				eligible = slices.DeleteFunc(eligible, func(sr sessionRepo) bool {
+					return pr.CreatedAtProvider.Before(sr.session.CreatedAt.Truncate(time.Second))
+				})
+			}
 			sr, ok := matchSession(eligible, pr.SourceBranch)
 			if !ok {
 				continue

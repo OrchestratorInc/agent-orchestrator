@@ -142,7 +142,7 @@ import { SharedProjectMark } from "./teams/SharedProjectMark";
 import { CloudMark } from "./CloudMark";
 import { ProjectIcon } from "./ProjectIcon";
 import { OrchestratorIcon } from "./icons";
-import { OrchestratorReplyIcon, orchestratorReplyLabel } from "./OrchestratorReplyIcon";
+import { OrchestratorReplyIcon, orchestratorReplyLabel, ReplyBadge } from "./OrchestratorReplyIcon";
 import { Badge } from "./ui/badge";
 import { cn } from "../lib/utils";
 import { recordManualWorkerOpen } from "../lib/session-management-telemetry";
@@ -153,7 +153,7 @@ import { SettingsSaveStatus, useSettingsPage } from "./SettingsDialog";
 import { useUiStore } from "../stores/ui-store";
 import { useSidebarOrderStore } from "../stores/sidebar-order-store";
 import { useSessionImportStore } from "../stores/session-import-store";
-import { sessionReadKey, useSessionReadStore, useSessionUnread } from "../stores/session-read-store";
+import { isSessionUnread, sessionReadKey, useSessionReadStore, useSessionUnread } from "../stores/session-read-store";
 import { useOrchestratorReplyState } from "../stores/orchestrator-reply-store";
 import { applyOrder, pinnedFirst } from "../lib/sidebar-order";
 import { useKeybindingsStore } from "../stores/keybindings-store";
@@ -607,7 +607,8 @@ function floatAttention(sessions: WorkspaceSession[], hasManualOrder: boolean): 
 // spinner. 12px with a -2px side margin, so the slot is the 8px the old dot used.
 // Each state has its own glyph, so colour is never the only difference: a red
 // alert needs you now, an orange alert is a person's review next, a green pull
-// request is ready to merge.
+// request is ready to merge. A row's blue spinner (working) and its dot are
+// drawn by SessionActivityGlyph.
 const SESSION_MARKER_ICONS = {
 	attention: { Icon: CircleAlert, tone: "text-destructive" },
 	ready: { Icon: GitPullRequest, tone: "text-status-ready" },
@@ -629,6 +630,33 @@ function SessionMarkerIcon({ marker, popped, onPopEnd, ...rest }: {
 			onAnimationEnd={onPopEnd}
 			{...rest}
 		/>
+	);
+}
+
+// The spinner and the dot: a blue spinner while the agent works, a filled grey
+// dot for a session that changed since the user last opened it, a hollow grey
+// ring otherwise.
+function SessionActivityGlyph({ state, ...rest }: {
+	state: "working" | "unread" | "read";
+} & Record<`data-${string}`, string | undefined>) {
+	if (state === "working") {
+		return (
+			<LoaderCircle
+				className="-mx-0.5 size-3 animate-spin text-status-working motion-reduce:animate-none"
+				{...rest}
+			/>
+		);
+	}
+	return (
+		<span className="-mx-0.5 inline-flex size-3 items-center justify-center" {...rest}>
+			<span
+				className={cn(
+					"size-2 rounded-full",
+					state === "unread" ? "bg-muted-foreground/60" : "border border-muted-foreground/60",
+				)}
+				data-session-unread={state === "unread" ? "" : undefined}
+			/>
+		</span>
 	);
 }
 
@@ -669,24 +697,13 @@ export function SessionStatusDot({ session, indicator }: {
 					popped={popped}
 				/>
 			) : working ? (
-				<LoaderCircle
-					className="-mx-0.5 size-3 animate-spin text-muted-foreground motion-reduce:animate-none"
-					data-session-status={session.status}
-					data-session-spinner=""
-				/>
+				<SessionActivityGlyph data-session-spinner="" data-session-status={session.status} state="working" />
 			) : (
-				<span
-					className="-mx-0.5 inline-flex size-3 items-center justify-center"
+				<SessionActivityGlyph
 					data-session-idle={stopped ? "stopped" : "idle"}
 					data-session-status={session.status}
-				>
-					<span
-						className={cn(
-							"size-2 rounded-full",
-							unread ? "bg-muted-foreground/60" : "border border-muted-foreground/60",
-						)}
-					/>
-				</span>
+					state={unread ? "unread" : "read"}
+				/>
 			)}
 		</span>
 	);
@@ -1609,6 +1626,33 @@ const ProjectItem = memo(function ProjectItem({
 		[workspace.sessions, workspace.shared],
 	);
 	const projectNeedsInput = useMemo(() => visibleSessions.some(sessionNeedsInput), [visibleSessions]);
+	// What a collapsed project signals, strongest first: a session waiting on the
+	// user (the alert replaces the icon), then one whose agent is working, then a
+	// finished turn the user has not opened (both a corner dot on the icon, like
+	// the orchestrator button's).
+	const readAt = useSessionReadStore((state) => state.readAt);
+	const readBaseline = useSessionReadStore((state) => state.baseline);
+	const markRead = useSessionReadStore((state) => state.markRead);
+	const openSessionId = selection.activeSessionId;
+	const viewedSession = visibleSessions.find((session) => session.id === openSessionId);
+	// The open session's row marks it read, but a collapsed project has no rows,
+	// so the project keeps it read too: nothing the user is looking at is unread.
+	useEffect(() => {
+		if (!viewedSession) return;
+		const updated = Date.parse(viewedSession.updatedAt);
+		if (Number.isFinite(updated)) markRead(sessionReadKey(viewedSession), updated);
+	}, [markRead, viewedSession]);
+	const projectActivity = useMemo(() => {
+		if (projectNeedsInput) return "attention" as const;
+		const indicators = visibleSessions.map((session) => getSessionRowIndicator(session));
+		if (indicators.includes("working")) return "working" as const;
+		const read = { readAt, baseline: readBaseline };
+		return visibleSessions.some(
+			(session, index) => session.id !== openSessionId && indicators[index] === null && isSessionUnread(session, read),
+		)
+			? ("unread" as const)
+			: null;
+	}, [openSessionId, projectNeedsInput, readAt, readBaseline, visibleSessions]);
 	const [sessionOrder, setSessionOrder] = useState<string[]>([]);
 	const sessions = useMemo(
 		() => {
@@ -1996,12 +2040,15 @@ const ProjectItem = memo(function ProjectItem({
 										{/* 1.2 — contextual icon swap on hover, instant (scale and opacity snap).
 										    Hover paint lives in styles.css (fine pointer only). */}
 										<span
-											className="inline-flex size-icon-md items-center justify-center"
+											className="relative inline-flex size-icon-md items-center justify-center"
 											data-project-folder-icon=""
 										>
-											{!expanded && projectNeedsInput ? (
+											{!expanded && projectActivity === "attention" ? (
 												<SessionMarkerIcon data-project-marker="attention" marker="attention" />
 											) : <ProjectIcon avatarUrl={avatarUrl} expanded={expanded} name={workspace.name} seed={workspace.path || workspace.id} />}
+											{!expanded && (projectActivity === "working" || projectActivity === "unread") ? (
+												<ReplyBadge data-project-marker={projectActivity} reply={projectActivity} surface="sidebar" />
+											) : null}
 										</span>
 										<span
 											className={cn(
@@ -2932,7 +2979,7 @@ const SessionRow = memo(function SessionRow({
 										active || marker === "attention"
 											? "text-foreground"
 											: "text-muted-foreground group-hover/session-row:text-foreground",
-										shimmer && "chat-working-shimmer",
+										shimmer && "relative",
 									)}
 									data-session-name=""
 									onPointerUp={(event) => {
@@ -2946,6 +2993,7 @@ const SessionRow = memo(function SessionRow({
 									}}
 								>
 									{session.title}
+									{shimmer ? <span aria-hidden="true" className="sidebar-working-shimmer"><span><span>{session.title}</span></span></span> : null}
 								</span>
 								{hostLabel ? <Badge variant="outline" className="h-4 min-w-0 max-w-1/2 shrink justify-start px-1.5 text-2xs"><span className="truncate">{hostLabel}</span></Badge> : null}
 								{cloud ? <CloudMark /> : null}

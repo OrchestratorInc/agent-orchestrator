@@ -2124,11 +2124,6 @@ func TestManager_AddWorkspaceRejectsReservedChildName(t *testing.T) {
 	wantCode(t, err, "WORKSPACE_CHILD_RESERVED_NAME")
 }
 
-// TestManager_AddWorkspaceNonGitChildWithNestedRepo verifies that a non-git
-// child folder containing a nested git repo is retained internally as an asset
-// but omitted from the repository list. The child is gitignored in the parent,
-// so the nested repo is never staged by git add -A and guardNoGitlinks never
-// fires.
 func TestManager_AddWorkspaceNonGitChildWithNestedRepo(t *testing.T) {
 	configureCommitter(t)
 	ctx := context.Background()
@@ -2138,8 +2133,6 @@ func TestManager_AddWorkspaceNonGitChildWithNestedRepo(t *testing.T) {
 	// One direct committed child repo — valid on its own.
 	gitRepoWithCommit(t, filepath.Join(parent, "app"))
 	// A non-git child folder containing a nested git repo at depth 2.
-	// detectWorkspaceChildren registers packages/ as needs_init; it gets
-	// gitignored in the parent, so packages/foo is never staged as a gitlink.
 	pkgs := filepath.Join(parent, "packages")
 	if err := os.MkdirAll(pkgs, 0o755); err != nil {
 		t.Fatalf("mkdir packages: %v", err)

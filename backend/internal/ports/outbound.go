@@ -76,6 +76,27 @@ type AgentMessenger interface {
 	Send(ctx context.Context, id domain.SessionID, message string) error
 }
 
+type clientMessageIDKey struct{}
+
+// WithClientMessageID asks the AgentMessenger that receives ctx to deliver its
+// message under clientMessageID, a stable id a Chat session records with the
+// message. A caller uses it to find out later whether that exact message
+// reached the agent. Messengers that cannot carry an id ignore it.
+func WithClientMessageID(ctx context.Context, clientMessageID string) context.Context {
+	return context.WithValue(ctx, clientMessageIDKey{}, clientMessageID)
+}
+
+// ClientMessageIDFromContext returns the id set by WithClientMessageID, or "".
+func ClientMessageIDFromContext(ctx context.Context) string {
+	id, _ := ctx.Value(clientMessageIDKey{}).(string)
+	return id
+}
+
+// ErrDeliveryUnconfirmed is returned by an AgentMessenger that wrote the
+// message to the agent but could not confirm the agent accepted it. The
+// message is not lost; callers must not resend it as if it never arrived.
+var ErrDeliveryUnconfirmed = errors.New("session: message delivery was not acknowledged")
+
 // ---- runtime / agent / workspace plugin ports ----
 
 // Runtime is the full runtime adapter contract: session creation/teardown plus
@@ -240,6 +261,8 @@ type RuntimeConfig struct {
 	// (user and command shells, not agents) need not pay it continuously.
 	// Runtimes that always render ignore it.
 	LazyStyledOutput bool
+	ReplayFile       string
+	OutputLines      int
 }
 
 // RuntimeHandle identifies a live runtime instance. Its ID is opaque outside
@@ -646,14 +669,6 @@ type WorkspaceProjectConfig struct {
 	// import sets it; child repositories already start from their BaseRef.
 	StartRef string
 	Repos    []WorkspaceProjectRepoConfig
-	Assets   []WorkspaceProjectAssetConfig
-}
-
-// WorkspaceProjectAssetConfig describes a non-repository child directory that
-// is copied from the canonical workspace into each session workspace.
-type WorkspaceProjectAssetConfig struct {
-	RelativePath string
-	SourcePath   string
 }
 
 // WorkspaceProjectRepoConfig describes one registered child repo in a

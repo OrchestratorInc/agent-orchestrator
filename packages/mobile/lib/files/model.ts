@@ -287,6 +287,17 @@ export function diffDisplayRows(rows: DiffRow[], lines: string[] | null, reveale
 }
 
 /** The whole file as rows, for the File tab: one context row per line. */
+/**
+ * The lines of a file the machine cut short (past its size limit): all that
+ * arrived, less the last line, which the cut may have split, unless it is the
+ * only one (a minified file). The File view reads these; a diff cannot, since
+ * its folds would open onto lines that are not there.
+ */
+export function previewLines(content: string): string[] {
+	const lines = content.replace(/\r\n?/g, "\n").split("\n");
+	return lines.length > 1 ? lines.slice(0, -1) : lines;
+}
+
 export function fileDisplayRows(lines: string[]): DisplayRow[] {
 	return lines.map((text, index) => ({ type: "line", key: `f:${index + 1}`, row: { kind: "context", oldNo: index + 1, newNo: index + 1, text } }));
 }

@@ -806,7 +806,8 @@ func (c *commandContext) emitComputerUsePermissionNotice(agent, event, sessionID
 
 const reviewerPermissionDenyMessage = "Orchestrator headless reviewer: no human can answer permission prompts. " +
 	"Use only the allowlisted read commands (git diff/log/show/status, gh pr view/diff/checks, Read, Grep, Glob) " +
-	"and the exact single-line `printf '%s' '<json>' | ...` submit commands from the review task."
+	"and the exact submit commands from the review task, fed by a quoted <<'" + ports.ReviewSubmitHeredocDelimiter + "' heredoc " +
+	"or, in a read-only sandbox, by `printf '%s' '<text>' | ...`."
 
 // reviewerPermissionDecision answers a Claude Code reviewer's PermissionRequest:
 // allow the exact submit shapes (claudecode.ReviewerSubmitCommandAllowed, which
@@ -962,7 +963,7 @@ func (c *commandContext) runHook(ctx context.Context, agent, event string) error
 	case domain.HarnessClaudeCode, domain.HarnessCodex, domain.HarnessContinue:
 		conversation = hookConversationFacts(domain.AgentHarness(agent), event, payload)
 	case domain.HarnessOpenCode, domain.HarnessGrok, domain.HarnessKilocode,
-		domain.HarnessOMP, domain.HarnessPi,
+		domain.HarnessOMP, domain.HarnessPi, domain.HarnessTau,
 		domain.HarnessAmp, domain.HarnessPrimeAgent, domain.HarnessMiniMaxCode:
 		conversation = hookSemanticAcceptanceFacts(event, payload)
 		if domain.AgentHarness(agent) == domain.HarnessPi {
