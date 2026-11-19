@@ -363,9 +363,11 @@ export function useGhInstall(onInstalled: () => void) {
 	// the command to run instead of an Install that is bound to fail.
 	useEffect(() => {
 		let current = true;
+		// An install started while this lookup is out owns what comes next; its answer is older.
+		const lookedUpAt = generation.current;
 		void apiClient.GET("/api/v1/system/install/{target}", { params: { path: { target: "gh" } } })
 			.then(({ data }) => {
-				if (!current || !data) return;
+				if (!current || !data || lookedUpAt !== generation.current) return;
 				// An install started here before the page was left (Back) is still
 				// followed to its end.
 				if (onboardingActionPending("gh_install", "gh")) {
