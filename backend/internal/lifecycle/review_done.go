@@ -14,15 +14,9 @@ import (
 	"github.com/aoagents/agent-orchestrator/backend/internal/sessionguard"
 )
 
-// reviewNoticeObserveGrace bounds how long a finished pass that posted a
-// provider review waits for the SCM observer to see that review. Waiting lets
-// the notice report the real inline-comment count and follow the forwarded
-// comments; past the grace the notice goes out without them.
-const reviewNoticeObserveGrace = 3 * time.Minute
-
 // DefaultReviewNoticeSweepInterval is how often the daemon retries "review
-// done" notices that could not be sent yet: the worker was busy or awaiting
-// the user, the provider review was not observed yet, or the daemon restarted.
+// done" notices that could not be sent yet: the session was busy or awaiting
+// the user, or the daemon restarted.
 const DefaultReviewNoticeSweepInterval = 30 * time.Second
 
 const reviewNoticeBodyLimit = 4000
@@ -41,7 +35,6 @@ type reviewNoticeStore interface {
 	ListSessionsWithPendingReviewRunNotices(ctx context.Context) ([]domain.SessionID, error)
 	MarkReviewRunNoticeSent(ctx context.Context, id string) (bool, error)
 	RecordReviewRunNoticeFailure(ctx context.Context, id, sendErr string, at time.Time) (bool, error)
-	ListReviewRunsBySession(ctx context.Context, id domain.SessionID) ([]domain.ReviewRun, error)
 }
 
 // reviewNoticeChatStore reads the Chat turn behind a notice or feedback
@@ -100,17 +93,7 @@ func chatNoticeDeliveryState(ctx context.Context, chat reviewNoticeChatStore, id
 	return state, failure, nil
 }
 
-// DeliverReviewDoneNotices sends the worker one message for each of its AO
-// review passes that reached a final state (approved, changes requested,
-// failed, cancelled) and still owes a notice. The store marks a notice pending
-// on the pass's final status write, only while the session receives review
-// feedback; a notice is marked sent only after it reached the worker, so a
-// suppressed or failed send is retried and a sent one is never repeated,
-// across restarts too. A failed send records its error on the run and is
-// retried with backoff, at most domain.ReviewWorkerNoticeMaxAttempts times;
-// later passes wait behind a notice still retrying, not one that gave up.
-// A changes-requested notice whose inline comments were all forwarded already
-// is marked sent without a message: those comments are the result.
+// DeliverReviewDoneNotices delivers durable terminal outcomes to the requesting session.
 func (m *Manager) DeliverReviewDoneNotices(ctx context.Context, id domain.SessionID) error {
 	store, ok := m.store.(reviewNoticeStore)
 	if !ok || m.guard == nil {
@@ -124,7 +107,6 @@ func (m *Manager) DeliverReviewDoneNotices(ctx context.Context, id domain.Sessio
 		return err
 	}
 	if rec.IsTerminated || rec.Activity.State == domain.ActivityExited {
-		m.forgetReviewNoticeWaits(id)
 		return nil
 	}
 	runs, err := store.ListPendingReviewRunNotices(ctx, id)
@@ -133,12 +115,9 @@ func (m *Manager) DeliverReviewDoneNotices(ctx context.Context, id domain.Sessio
 	}
 	chat, chatOK := m.store.(reviewNoticeChatStore)
 	isChat := chatOK && domain.NormalizeSessionMode(rec.Mode) == domain.SessionModeChat
-	var sessionRuns []domain.ReviewRun
 	for _, run := range runs {
 		// Keep notices in the order the passes were requested: a later pass
-		// is not announced ahead of an earlier one that is still waiting for
-		// its review to be observed, its retry backoff, or a sleeping Chat
-		// session to take it.
+		// waits for earlier deliveries in retry backoff or a sleeping Chat session.
 		if !m.reviewNoticeRetryDue(run) {
 			return nil
 		}
@@ -151,29 +130,7 @@ func (m *Manager) DeliverReviewDoneNotices(ctx context.Context, id domain.Sessio
 				continue
 			}
 		}
-		if sessionRuns == nil {
-			if sessionRuns, err = store.ListReviewRunsBySession(ctx, id); err != nil {
-				return err
-			}
-		}
-		msg, ready, redundant, err := m.reviewDoneNotice(ctx, run, sessionRuns)
-		if err != nil {
-			return err
-		}
-		if !ready {
-			return nil
-		}
-		if redundant {
-			// Every inline comment of this changes-requested review already
-			// reached the worker as review feedback, and those comments are
-			// the result. A notice on top of them only reads as "nothing new".
-			slog.Default().InfoContext(ctx, "lifecycle: review done notice skipped; its inline comments were already forwarded", "session", id, "run", run.ID)
-			if _, err := store.MarkReviewRunNoticeSent(ctx, run.ID); err != nil {
-				return err
-			}
-			delete(m.reviewNoticeSeen, run.ID)
-			continue
-		}
+		msg := formatReviewDoneNotice(run)
 		sendCtx := ctx
 		if isChat {
 			sendCtx = ports.WithClientMessageID(ctx, reviewNoticeClientID(run, run.WorkerNoticeAttempts))
@@ -228,7 +185,6 @@ func (m *Manager) DeliverReviewDoneNotices(ctx context.Context, id domain.Sessio
 		if _, err := store.MarkReviewRunNoticeSent(ctx, run.ID); err != nil {
 			return err
 		}
-		delete(m.reviewNoticeSeen, run.ID)
 	}
 	return nil
 }
@@ -248,7 +204,6 @@ func (m *Manager) settleChatNotice(ctx context.Context, store reviewNoticeStore,
 		if _, err := store.MarkReviewRunNoticeSent(ctx, run.ID); err != nil {
 			return false, false, err
 		}
-		delete(m.reviewNoticeSeen, run.ID)
 		return true, false, nil
 	case chatNoticeQueued:
 		return false, true, nil
@@ -273,23 +228,6 @@ func (m *Manager) reviewNoticeRetryDue(run domain.ReviewRun) bool {
 		delay = min(reviewNoticeRetryBase<<shift, reviewNoticeRetryMax)
 	}
 	return !m.clock().Before(run.WorkerNoticeAttemptedAt.Add(delay))
-}
-
-// reviewNoticeWait is when a finished pass was first found waiting for its
-// provider review to be observed, and whose worker it belongs to.
-type reviewNoticeWait struct {
-	session domain.SessionID
-	since   time.Time
-}
-
-// forgetReviewNoticeWaits drops the observe waits of a worker that can no
-// longer take a notice. Caller holds reviewNoticeMu.
-func (m *Manager) forgetReviewNoticeWaits(id domain.SessionID) {
-	for runID, wait := range m.reviewNoticeSeen {
-		if wait.session == id {
-			delete(m.reviewNoticeSeen, runID)
-		}
-	}
 }
 
 // SweepReviewDoneNotices retries every worker's pending notices once.
@@ -332,122 +270,6 @@ func (m *Manager) StartReviewDoneSweep(ctx context.Context, interval time.Durati
 		}
 	}()
 	return done
-}
-
-// reviewDoneNotice renders run's notice and reports whether it may be sent
-// now. A pass that posted a provider review waits (up to the grace) until the
-// SCM observer has recorded that review, so its inline comments are forwarded
-// first and the count is real. sessionRuns are the worker's review passes,
-// used to tell the worker when a newer pass exists. redundant reports a
-// changes-requested notice whose inline comments were all forwarded already:
-// it is marked sent without being delivered. Caller holds reviewNoticeMu.
-func (m *Manager) reviewDoneNotice(ctx context.Context, run domain.ReviewRun, sessionRuns []domain.ReviewRun) (msg string, ready, redundant bool, err error) {
-	posted := run.Status == domain.ReviewRunCompleted && run.GithubReviewID != ""
-	inline, observed := 0, false
-	reviewURL := ""
-	var owned []domain.PullRequestComment
-	if posted {
-		comments, err := m.store.ListPRComments(ctx, run.PRURL)
-		if err != nil {
-			return "", false, false, fmt.Errorf("list comments for %s: %w", run.PRURL, err)
-		}
-		for _, c := range comments {
-			if strings.TrimSpace(c.ReviewID) == run.GithubReviewID {
-				owned = append(owned, c)
-			}
-		}
-		inline = len(owned)
-		reviews, err := m.store.ListPRReviews(ctx, run.PRURL)
-		if err != nil {
-			return "", false, false, fmt.Errorf("list reviews for %s: %w", run.PRURL, err)
-		}
-		for _, r := range reviews {
-			if r.ID == run.GithubReviewID || strings.HasSuffix(r.URL, "#pullrequestreview-"+run.GithubReviewID) {
-				observed = true
-				reviewURL = r.URL
-				break
-			}
-		}
-		observed = observed || inline > 0
-		if !observed {
-			now := m.clock()
-			wait, seen := m.reviewNoticeSeen[run.ID]
-			if !seen {
-				m.reviewNoticeSeen[run.ID] = reviewNoticeWait{session: run.SessionID, since: now}
-				return "", false, false, nil
-			}
-			if now.Sub(wait.since) < reviewNoticeObserveGrace {
-				return "", false, false, nil
-			}
-		}
-	}
-	later := reviewNoticeLater{newer: newerReviewRun(run, sessionRuns)}
-	pr, ok, err := m.store.GetPR(ctx, run.PRURL)
-	if err != nil {
-		return "", false, false, fmt.Errorf("get PR %s: %w", run.PRURL, err)
-	}
-	if ok {
-		later.head = pr.HeadSHA
-	}
-	// A changes-requested review's result is its inline comments. Once each
-	// one reached the worker as review feedback, the notice adds nothing. A
-	// pass about an earlier commit or with a newer pass still gets its note.
-	if run.Verdict == domain.VerdictChangesRequested && posted && observed && inline > 0 && later.laterNote(run) == "" {
-		forwarded, waiting, err := m.reviewCommentsForwarded(ctx, run, owned)
-		if err != nil || waiting {
-			return "", false, false, err
-		}
-		if forwarded {
-			return "", true, true, nil
-		}
-	}
-	return formatReviewDoneNotice(run, reviewURL, inline, observed, later), true, false, nil
-}
-
-// reviewCommentsForwarded reports whether every comment in comments already
-// reached the worker as review feedback. Chat checks the keyed turn receipt;
-// terminal delivery uses the reaction ledger persisted on the PR. Waiting
-// means a feedback turn is still queued. Caller holds
-// reviewNoticeMu; forwarding never holds react.mu while it delivers notices,
-// so taking it here keeps the order reviewNoticeMu, then react.mu.
-func (m *Manager) reviewCommentsForwarded(ctx context.Context, run domain.ReviewRun, comments []domain.PullRequestComment) (forwarded, waiting bool, err error) {
-	m.react.mu.Lock()
-	defer m.react.mu.Unlock()
-	prURL := run.PRURL
-	if prURL != "" && !m.react.loaded[prURL] {
-		if err := m.loadPRSignaturesLocked(ctx, prURL); err != nil {
-			return false, false, fmt.Errorf("load review feedback ledger for %s: %w", prURL, err)
-		}
-		m.react.loaded[prURL] = true
-	}
-	rec, found, err := m.store.GetSession(ctx, run.SessionID)
-	if err != nil {
-		return false, false, err
-	}
-	chat, chatOK := m.store.(reviewNoticeChatStore)
-	isChat := chatOK && found && domain.NormalizeSessionMode(rec.Mode) == domain.SessionModeChat
-	forwarded = true
-	for _, c := range comments {
-		obs := []ports.PRCommentObservation{{ID: c.ID, ThreadID: c.ThreadID}}
-		sig := reviewCommentsSignature(obs)
-		key := commentNudgeKey(prURL, obs[0])
-		if isChat {
-			attempts := m.react.attempts[key]
-			if attempts == 0 || sig == "" {
-				forwarded = false
-				continue
-			}
-			delivered, queued, err := chatReviewFeedbackState(ctx, chat, run.SessionID, key, sig, attempts-1)
-			if err != nil {
-				return false, false, err
-			}
-			forwarded = forwarded && delivered
-			waiting = waiting || queued
-		} else if sig == "" || m.react.seen[key] != sig {
-			forwarded = false
-		}
-	}
-	return forwarded, waiting, nil
 }
 
 func reviewFeedbackClientID(key, sig string, attempt int) string {
@@ -499,175 +321,32 @@ func (m *Manager) sendChatReviewFeedbackLocked(ctx context.Context, chat reviewN
 	return sendOnceSuppressed, nil
 }
 
-// reviewNoticeLater is what happened on the PR after a pass started: its
-// current head and the newest later pass, if any. It keeps a notice for an
-// earlier commit from reading as new work.
-type reviewNoticeLater struct {
-	head  string
-	newer *domain.ReviewRun
-}
-
-// headMoved reports whether the PR's head is no longer the commit run reviewed.
-func (l reviewNoticeLater) headMoved(run domain.ReviewRun) bool {
-	return l.head != "" && run.TargetSHA != "" && l.head != run.TargetSHA
-}
-
-// newerReviewRun returns the newest pass on the same PR requested after run.
-func newerReviewRun(run domain.ReviewRun, runs []domain.ReviewRun) *domain.ReviewRun {
-	var newest *domain.ReviewRun
-	for i := range runs {
-		r := &runs[i]
-		if r.ID == run.ID || r.PRURL != run.PRURL || !reviewRunAfter(*r, run) {
-			continue
-		}
-		if newest == nil || reviewRunAfter(*r, *newest) {
-			newest = r
-		}
-	}
-	return newest
-}
-
-func reviewRunAfter(a, b domain.ReviewRun) bool {
-	if !a.CreatedAt.Equal(b.CreatedAt) {
-		return a.CreatedAt.After(b.CreatedAt)
-	}
-	return a.ID > b.ID
-}
-
-// laterNote tells the worker that run is about an earlier commit or has been
-// followed by a newer pass. It is empty when neither is true.
-func (l reviewNoticeLater) laterNote(run domain.ReviewRun) string {
-	var parts []string
-	if l.headMoved(run) {
-		parts = append(parts, fmt.Sprintf("This review is about an earlier commit (%s); the PR head is now %s.", shortNoticeSHA(run.TargetSHA), shortNoticeSHA(l.head)))
-	}
-	if n := l.newer; n != nil {
-		var state string
-		switch n.Status {
-		case domain.ReviewRunRunning:
-			state = "is running"
-		case domain.ReviewRunCompleted:
-			state = "finished: " + reviewDoneVerdict(*n)
-		case domain.ReviewRunCancelled:
-			if n.CancelledBy == domain.ReviewCancelledByUser || n.Body == domain.ReviewRunCancelledByUserReason {
-				state = "was cancelled by the user"
-			} else {
-				state = "was cancelled"
-			}
-		default:
-			state = "ended: " + reviewDoneVerdict(*n)
-		}
-		parts = append(parts, fmt.Sprintf("A newer review of this PR (run %s, head %s) %s.", n.ID, shortNoticeSHA(n.TargetSHA), state))
-	}
-	return strings.Join(parts, " ")
-}
-
-func shortNoticeSHA(sha string) string {
-	sha = domain.SanitizeControlChars(sha)
-	if len(sha) > 7 {
-		return sha[:7]
-	}
-	return sha
-}
-
-func formatReviewDoneNotice(run domain.ReviewRun, reviewURL string, inline int, observed bool, later reviewNoticeLater) string {
-	posted := run.Status == domain.ReviewRunCompleted && run.GithubReviewID != ""
-	note := later.laterNote(run)
+func formatReviewDoneNotice(run domain.ReviewRun) string {
 	var msg strings.Builder
-	fmt.Fprintf(&msg, "AO review done: %s\n", reviewDoneVerdict(run))
-	fmt.Fprintf(&msg, "PR: %s\n", domain.SanitizeControlChars(run.PRURL))
-	if run.TargetSHA != "" {
-		fmt.Fprintf(&msg, "Reviewed commit: %s\n", domain.SanitizeControlChars(run.TargetSHA))
-	}
-	if later.headMoved(run) {
-		fmt.Fprintf(&msg, "PR head now: %s\n", domain.SanitizeControlChars(later.head))
-	}
-	reviewer := string(run.Harness)
-	if run.ReviewerModel != "" {
-		reviewer += " (model " + run.ReviewerModel + ")"
-	}
-	fmt.Fprintf(&msg, "Reviewer: %s\n", domain.SanitizeControlChars(reviewer))
-	fmt.Fprintf(&msg, "Run: %s\n", run.ID)
-	if run.Status == domain.ReviewRunCompleted {
-		switch {
-		case reviewURL != "":
-			fmt.Fprintf(&msg, "Review: %s\n", domain.SanitizeControlChars(reviewURL))
-		case posted:
-			fmt.Fprintf(&msg, "Review ID: %s\n", domain.SanitizeControlChars(run.GithubReviewID))
-		default:
-			msg.WriteString("Review: not posted to the PR\n")
-		}
-		if posted && observed {
-			fmt.Fprintf(&msg, "Inline comments: %d\n", inline)
+	fmt.Fprintf(&msg, "AO review done: %s\nPR: %s\nReviewed commit: %s\nRun: %s", reviewDoneVerdict(run), domain.SanitizeControlChars(run.PRURL), domain.SanitizeControlChars(run.TargetSHA), run.ID)
+	if run.Harness != "" {
+		fmt.Fprintf(&msg, "\nReviewer: %s", run.Harness)
+		if run.ReviewerModel != "" {
+			fmt.Fprintf(&msg, " (model %s)", domain.SanitizeControlChars(run.ReviewerModel))
 		}
 	}
-
-	body := strings.TrimSpace(domain.SanitizeControlChars(run.Body))
-	if r := []rune(body); len(r) > reviewNoticeBodyLimit {
-		body = string(r[:reviewNoticeBodyLimit]) + "\n[truncated; see the review on the PR]"
-	}
-	switch run.Status {
-	case domain.ReviewRunFailed, domain.ReviewRunCancelled, domain.ReviewRunSuperseded:
-		reason := body
+	if run.Status != domain.ReviewRunCompleted {
+		reason := strings.TrimSpace(domain.SanitizeControlChars(run.Body))
 		if reason == "" {
 			switch run.Status {
 			case domain.ReviewRunFailed:
 				reason = strings.ReplaceAll(string(run.FailureReason), "_", " ")
 			case domain.ReviewRunCancelled:
-				if run.CancelledBy == domain.ReviewCancelledByUser {
-					reason = domain.ReviewRunCancelledByUserReason
-				} else {
-					reason = "cancelled by worker session lifecycle"
-				}
+				reason = string(run.CancelledBy)
 			case domain.ReviewRunSuperseded:
 				reason = domain.ReviewRunSupersededReason
 			}
 		}
+		if r := []rune(reason); len(r) > reviewNoticeBodyLimit {
+			reason = string(r[:reviewNoticeBodyLimit]) + "…"
+		}
 		if reason != "" {
-			fmt.Fprintf(&msg, "Reason: %s\n", reason)
-		}
-		msg.WriteString("\nNo review result was recorded for this pass. ")
-		switch {
-		case run.Status == domain.ReviewRunSuperseded || run.Body == domain.ReviewRunSupersededReason:
-			// The trigger that superseded this pass already started a review
-			// of the newer head; re-triggering would race it.
-			msg.WriteString("A review of the newer head is already under way; wait for its own review done message instead of requesting another review.")
-		case run.CancelledBy == domain.ReviewCancelledByUser || run.Body == domain.ReviewRunCancelledByUserReason:
-			msg.WriteString("The user stopped this review on purpose; do not request another unless they ask.")
-		case later.newer != nil && later.newer.Status.IsActive():
-			msg.WriteString("A newer review is already under way; wait for its result instead of requesting another review.")
-		default:
-			msg.WriteString("Request another review if you still need one.")
-		}
-		if note != "" && run.Status != domain.ReviewRunSuperseded && run.Body != domain.ReviewRunSupersededReason {
-			msg.WriteString(" " + note)
-		}
-		return msg.String()
-	}
-	if note != "" {
-		return formatLaterReviewDoneNotice(&msg, run, body, posted, observed, inline, note)
-	}
-	// Changes requested with inline comments: the required changes are those
-	// comments, forwarded as their own review-feedback messages. The summary is
-	// not repeated here so it cannot turn optional suggestions into required
-	// work.
-	if run.Verdict == domain.VerdictChangesRequested && posted && observed && inline > 0 {
-		fmt.Fprintf(&msg, "\nThe %d inline comment(s) on this review are delivered as separate review-feedback messages. This review round is complete: address them, push once, and request another review if you need one.", inline)
-		return msg.String()
-	}
-	if body != "" {
-		fmt.Fprintf(&msg, "\nReview body:\n%s\n", body)
-	}
-	msg.WriteString("\n")
-	if posted && !observed {
-		msg.WriteString("AO has not observed this review on the PR yet; any inline comments on it arrive as separate review-feedback messages. ")
-	}
-	if run.Verdict == domain.VerdictChangesRequested {
-		msg.WriteString("Address the requested changes, push once, and request another review if you need one.")
-	} else {
-		msg.WriteString("An AO approval is not a GitHub approval and does not authorize merging.")
-		if inline > 0 {
-			fmt.Fprintf(&msg, " Its %d inline comment(s) are delivered as separate review-feedback messages.", inline)
+			fmt.Fprintf(&msg, "\nReason: %s", reason)
 		}
 	}
 	return msg.String()
@@ -686,23 +365,4 @@ func reviewDoneVerdict(run domain.ReviewRun) string {
 		return "changes requested"
 	}
 	return "approved"
-}
-
-// formatLaterReviewDoneNotice finishes the notice of a completed pass that is
-// about an earlier commit or has a newer pass: its findings are context to
-// check against the current head, not new work by themselves.
-func formatLaterReviewDoneNotice(msg *strings.Builder, run domain.ReviewRun, body string, posted, observed bool, inline int, note string) string {
-	if body != "" && (run.Verdict != domain.VerdictChangesRequested || !posted || !observed || inline == 0) {
-		fmt.Fprintf(msg, "\nReview body:\n%s\n", body)
-	}
-	msg.WriteString("\n" + note)
-	if inline > 0 {
-		fmt.Fprintf(msg, " Its %d inline comment(s) are delivered as separate review-feedback messages.", inline)
-	}
-	if run.Verdict == domain.VerdictChangesRequested {
-		msg.WriteString(" Change code only for findings that still apply to the current head.")
-	} else {
-		msg.WriteString(" This approval covers the reviewed commit only; an AO approval is not a GitHub approval and does not authorize merging.")
-	}
-	return msg.String()
 }

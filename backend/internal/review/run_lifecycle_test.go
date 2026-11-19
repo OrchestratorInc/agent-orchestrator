@@ -41,7 +41,7 @@ func TestRelaunchPersistsReviewerModel(t *testing.T) {
 			ctx := context.Background()
 			launcher := &fakeLauncher{alive: true, handle: "reviewer"}
 			s := newLifecycleEngine(t, launcher)
-			res, err := s.TriggerWithOptions(ctx, s.worker.ID, TriggerOptions{Config: domain.AgentConfig{Model: "gpt-5"}})
+			res, err := s.TriggerWithOptions(ctx, s.worker.ID, TriggerOptions{Source: domain.ReviewTriggerAgent, RequesterSessionID: s.worker.ID, Config: domain.AgentConfig{Model: "gpt-5"}})
 			if err != nil {
 				t.Fatal(err)
 			}

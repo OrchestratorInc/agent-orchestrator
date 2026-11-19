@@ -78,6 +78,7 @@ type triggerReviewRequest struct {
 	Harness            string             `json:"harness,omitempty"`
 	AgentConfig        *reviewAgentConfig `json:"agentConfig,omitempty"`
 	PRURL              string             `json:"prUrl,omitempty"`
+	RequesterSessionID string             `json:"requesterSessionId,omitempty"`
 	Source             string             `json:"source,omitempty"`
 	RejectReviewedHead bool               `json:"rejectReviewedHead,omitempty"`
 	Rerun              bool               `json:"rerun,omitempty"`
@@ -425,7 +426,8 @@ func (c *commandContext) triggerReview(cmd *cobra.Command, args []string, opts r
 	}
 	// A request from inside an AO session (a worker reviewing its own PR, or an
 	// orchestrator) is labelled as such, so it is never mistaken for a person.
-	if strings.TrimSpace(os.Getenv("AO_SESSION_ID")) != "" {
+	if requester := strings.TrimSpace(os.Getenv("AO_SESSION_ID")); requester != "" {
+		req.RequesterSessionID = requester
 		req.Source = "agent"
 	}
 	path := "sessions/" + url.PathEscape(session) + "/reviews/trigger"

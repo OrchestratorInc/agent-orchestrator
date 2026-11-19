@@ -354,7 +354,7 @@ func (f *fakeDoneNotifier) DeliverReviewDoneNotices(_ context.Context, id domain
 func TestSubmitAsksForTheReviewDoneNotice(t *testing.T) {
 	st := &fakeStore{
 		ok:  true,
-		run: domain.ReviewRun{ID: "run-1", SessionID: "mer-1", PRURL: "pr1", TargetSHA: "sha1", Status: domain.ReviewRunRunning},
+		run: domain.ReviewRun{ID: "run-1", SessionID: "mer-1", RequesterSessionID: "orch", PRURL: "pr1", TargetSHA: "sha1", Status: domain.ReviewRunRunning},
 	}
 	notifier := &fakeDoneNotifier{err: errors.New("pane gone")}
 	svc := New(nil, st, WithReviewDoneNotifier(notifier))
@@ -362,7 +362,7 @@ func TestSubmitAsksForTheReviewDoneNotice(t *testing.T) {
 	if _, err := svc.Submit(context.Background(), "mer-1", "run-1", domain.VerdictApproved, "LGTM", "987"); err != nil {
 		t.Fatalf("Submit: %v", err)
 	}
-	if len(notifier.calls) != 1 || notifier.calls[0] != "mer-1" {
+	if len(notifier.calls) != 1 || notifier.calls[0] != "orch" {
 		t.Fatalf("notifier calls = %v, want one for the worker", notifier.calls)
 	}
 }

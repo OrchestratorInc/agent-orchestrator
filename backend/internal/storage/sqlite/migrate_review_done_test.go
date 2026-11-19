@@ -71,6 +71,16 @@ VALUES ('w', 'p', 1, 'codex', ?, ?, ?, TRUE);`, at, at, at)
 	mustExec(t, db, `INSERT INTO review (id, session_id, project_id, harness, created_at, updated_at)
 VALUES ('r', 'w', 'p', 'codex', ?, ?);`, at, at)
 
+	for _, reason := range []string{"preflight_failed", "launch_failed"} {
+		mustExec(t, db, `INSERT INTO review_run (id, review_id, session_id, harness, status, created_at, trigger_source, requester_session_id)
+ VALUES (?, 'r','w','codex','launching',?,'agent','w')`, reason, at)
+		mustExec(t, db, `UPDATE review_run SET status='failed',failure_reason=? WHERE id=?`, reason, reason)
+		var notice string
+		if err := db.QueryRow(`SELECT worker_notice FROM review_run WHERE id=?`, reason).Scan(&notice); err != nil || notice != "" {
+			t.Fatalf("synchronous %s: notice=%q error=%v", reason, notice, err)
+		}
+	}
+
 	for _, tc := range []struct {
 		from, to, want string
 	}{
@@ -88,8 +98,8 @@ VALUES ('r', 'w', 'p', 'codex', ?, ?);`, at, at)
 	} {
 		t.Run(tc.from+"_to_"+tc.to, func(t *testing.T) {
 			id := tc.from + "-" + tc.to
-			mustExec(t, db, `INSERT INTO review_run (id, review_id, session_id, harness, status, created_at)
-VALUES (?, 'r', 'w', 'codex', ?, ?);`, id, tc.from, at)
+			mustExec(t, db, `INSERT INTO review_run (id, review_id, session_id, harness, status, created_at, trigger_source, requester_session_id)
+VALUES (?, 'r', 'w', 'codex', ?, ?, 'agent', 'w');`, id, tc.from, at)
 			mustExec(t, db, `UPDATE review_run SET status = ? WHERE id = ?;`, tc.to, id)
 			var notice string
 			if err := db.QueryRow(`SELECT worker_notice FROM review_run WHERE id = ?;`, id).Scan(&notice); err != nil {

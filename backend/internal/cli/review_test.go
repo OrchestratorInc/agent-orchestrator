@@ -686,7 +686,7 @@ func TestReviewTriggerDefaultsToCallingSessionAsAgent(t *testing.T) {
 	if err := json.Unmarshal([]byte(capture.body), &body); err != nil {
 		t.Fatalf("decode body %q: %v", capture.body, err)
 	}
-	if body["source"] != "agent" || body["rejectReviewedHead"] != true || body["enableAutoInject"] != true {
+	if body["requesterSessionId"] != "mer-9" || body["source"] != "agent" || body["rejectReviewedHead"] != true || body["enableAutoInject"] != true {
 		t.Fatalf("body = %v, want source=agent, rejectReviewedHead and enableAutoInject", body)
 	}
 	if _, ok := body["rerun"]; ok {

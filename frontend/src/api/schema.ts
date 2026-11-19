@@ -9296,6 +9296,8 @@ export interface components {
             prUrl?: string;
             /** @description Return 409 instead of reusing when every open PR head is already being reviewed or already has a review. */
             rejectReviewedHead?: boolean;
+            /** @description Agent session that requested the pass and should receive its final outcome. */
+            requesterSessionId?: string;
             /** @description Start a fresh pass for already-reviewed current heads; a different reviewer may run alongside one that is still running. A person's rerun reuses an active pass from the same reviewer; an agent's rerun returns 409 REVIEW_ALREADY_RUNNING instead. */
             rerun?: boolean;
             /**

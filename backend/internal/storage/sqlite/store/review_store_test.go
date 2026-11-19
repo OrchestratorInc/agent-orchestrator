@@ -907,6 +907,10 @@ func TestReviewRunFinalStatusQueuesWorkerNotice(t *testing.T) {
 	if err != nil {
 		t.Fatalf("create session: %v", err)
 	}
+	requester, err := s.CreateSession(ctx, sampleRecord("mer"))
+	if err != nil {
+		t.Fatal(err)
+	}
 	now := time.Now().UTC().Truncate(time.Second)
 	for _, sess := range []domain.SessionRecord{on, off} {
 		if err := s.UpsertReview(ctx, domain.Review{ID: "rev-" + string(sess.ID), SessionID: sess.ID, ProjectID: sess.ProjectID, Harness: domain.ReviewerCodex, CreatedAt: now, UpdatedAt: now}); err != nil {
@@ -915,7 +919,7 @@ func TestReviewRunFinalStatusQueuesWorkerNotice(t *testing.T) {
 	}
 	insert := func(id string, sess domain.SessionRecord, sha string, at time.Time) {
 		t.Helper()
-		run := domain.ReviewRun{ID: id, ReviewID: "rev-" + string(sess.ID), SessionID: sess.ID, Harness: domain.ReviewerCodex, ReviewerModel: "gpt-5.5",
+		run := domain.ReviewRun{ID: id, ReviewID: "rev-" + string(sess.ID), SessionID: sess.ID, Harness: domain.ReviewerCodex, ReviewerModel: "gpt-5.5", RequesterSessionID: requester.ID, TriggerSource: domain.ReviewTriggerAgent,
 			PRURL: "https://example/pr/" + string(sess.ID), TargetSHA: sha, Status: domain.ReviewRunRunning, CreatedAt: at, AutoInjectReview: sess.AutoInjectReview}
 		if err := s.InsertReviewRun(ctx, run); err != nil {
 			t.Fatalf("insert %s: %v", id, err)
@@ -954,7 +958,27 @@ func TestReviewRunFinalStatusQueuesWorkerNotice(t *testing.T) {
 		t.Fatalf("feedback-off notice = %q, want none", got)
 	}
 
-	pending, err := s.ListPendingReviewRunNotices(ctx, on.ID)
+	for _, source := range []domain.ReviewTriggerSource{domain.ReviewTriggerManual, domain.ReviewTriggerAuto} {
+		run := notice("approved")
+		run.ID = string(source)
+		run.TargetSHA = string(source)
+		run.Status = domain.ReviewRunRunning
+		run.Verdict = domain.VerdictNone
+		run.TriggerSource = source
+		if err := s.InsertReviewRun(ctx, run); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := finishReviewRun(ctx, s, run.ID, domain.ReviewRunCompleted, domain.VerdictApproved, "", "", true); err != nil {
+			t.Fatal(err)
+		}
+		if got := notice(run.ID).WorkerNotice; got != domain.ReviewWorkerNoticeNone {
+			t.Fatalf("%s queued notice %q", source, got)
+		}
+	}
+	if notices, err := s.ListPendingReviewRunNotices(ctx, on.ID); err != nil || len(notices) != 0 {
+		t.Fatalf("PR owner queue: %v, %v", notices, err)
+	}
+	pending, err := s.ListPendingReviewRunNotices(ctx, requester.ID)
 	if err != nil {
 		t.Fatalf("list pending: %v", err)
 	}
@@ -966,7 +990,7 @@ func TestReviewRunFinalStatusQueuesWorkerNotice(t *testing.T) {
 		t.Fatalf("pending notices = %v, want oldest first", ids)
 	}
 	sessions, err := s.ListSessionsWithPendingReviewRunNotices(ctx)
-	if err != nil || len(sessions) != 1 || sessions[0] != on.ID {
+	if err != nil || len(sessions) != 1 || sessions[0] != requester.ID {
 		t.Fatalf("sessions with pending notices = %v err=%v", sessions, err)
 	}
 
@@ -1005,7 +1029,7 @@ func TestReviewRunFinalStatusQueuesWorkerNotice(t *testing.T) {
 	if got := notice("rerun"); got.WorkerNotice != domain.ReviewWorkerNoticeFailed || got.WorkerNoticeAttempts != domain.ReviewWorkerNoticeMaxAttempts || got.WorkerNoticeError != "still no controller" {
 		t.Fatalf("after the last attempt: %+v", got)
 	}
-	queued, err := s.ListPendingReviewRunNotices(ctx, on.ID)
+	queued, err := s.ListPendingReviewRunNotices(ctx, requester.ID)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1016,8 +1040,7 @@ func TestReviewRunFinalStatusQueuesWorkerNotice(t *testing.T) {
 	}
 
 	// A terminated worker cannot take a message; the sweep skips it.
-	term := notice("rerun")
-	rec, _, err := s.GetSession(ctx, term.SessionID)
+	rec, _, err := s.GetSession(ctx, requester.ID)
 	if err != nil {
 		t.Fatal(err)
 	}

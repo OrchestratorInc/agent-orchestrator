@@ -188,7 +188,7 @@ func WithThreadRefresher(r ThreadRefresher) Option {
 	return func(s *Service) { s.reviewRefresher = r }
 }
 
-// DoneNotifier sends the worker its pending "review done" messages.
+// DoneNotifier sends the requesting session its pending "review done" messages.
 // Lifecycle owns delivery so the message follows forwarded review comments.
 type DoneNotifier interface {
 	DeliverReviewDoneNotices(ctx context.Context, workerID domain.SessionID) error
@@ -488,8 +488,9 @@ type TriggerRequest struct {
 	Config  domain.AgentConfig
 	// Source is manual (a person) or agent (an AO session through the CLI).
 	// Automatic passes come only from the daemon through TriggerAuto.
-	Source        domain.ReviewTriggerSource
-	InterfaceMode domain.ReviewerInterfaceMode
+	RequesterSessionID domain.SessionID
+	Source             domain.ReviewTriggerSource
+	InterfaceMode      domain.ReviewerInterfaceMode
 	// PRURL restricts the pass to one PR, attaching it to the worker first when
 	// AO does not track it yet.
 	PRURL              string
@@ -530,6 +531,7 @@ func (s *Service) TriggerRequested(ctx context.Context, workerID domain.SessionI
 		Harness:                 req.Harness,
 		Config:                  req.Config,
 		Source:                  source,
+		RequesterSessionID:      req.RequesterSessionID,
 		InterfaceMode:           req.InterfaceMode,
 		PRURL:                   strings.TrimSpace(req.PRURL),
 		RejectReviewedHead:      req.RejectReviewedHead,
@@ -744,19 +746,25 @@ func (s *Service) Cancel(ctx context.Context, workerID domain.SessionID) (review
 	s.emit(ctx, "ao.reviews.cancelled", workerID, map[string]any{
 		"cancelled_runs": len(result.CancelledRuns),
 	})
-	s.notifyReviewDone(ctx, workerID)
+	s.notifyReviewDone(ctx, result.CancelledRuns)
 	return result, nil
 }
 
-// notifyReviewDone delivers the worker's pending "review done" messages. A
-// failure leaves them pending for the notifier's sweep; it never fails the
-// caller's already-recorded result.
-func (s *Service) notifyReviewDone(ctx context.Context, workerID domain.SessionID) {
+// notifyReviewDone attempts prompt delivery. The durable sweep retries outstanding notices.
+func (s *Service) notifyReviewDone(ctx context.Context, runs []domain.ReviewRun) {
 	if s.doneNotifier == nil {
 		return
 	}
-	if err := s.doneNotifier.DeliverReviewDoneNotices(ctx, workerID); err != nil {
-		slog.Default().WarnContext(ctx, "review done notice delivery failed", "session", workerID, "err", err)
+	seen := make(map[domain.SessionID]bool)
+	for _, run := range runs {
+		id := run.RequesterSessionID
+		if id == "" || seen[id] {
+			continue
+		}
+		seen[id] = true
+		if err := s.doneNotifier.DeliverReviewDoneNotices(ctx, id); err != nil {
+			slog.Default().WarnContext(ctx, "review done notice delivery failed", "session", id, "err", err)
+		}
 	}
 }
 
@@ -920,13 +928,7 @@ func (s *Service) SubmitMany(ctx context.Context, workerID domain.SessionID, rev
 		}
 		return nil, fmt.Errorf("%w: no submittable review runs in submission", ErrInvalid)
 	}
-	// The findings reach the worker through the PR itself: the reviewer posts
-	// its review on the provider, and the SCM observer forwards unresolved
-	// review comments to the worker like any other reviewer's. AO adds at most
-	// a short "review done" notice per pass, so the worker knows the round
-	// ended even when there are no comments to forward; a changes-requested
-	// pass whose comments all reached the worker needs none.
-	s.notifyReviewDone(ctx, workerID)
+	s.notifyReviewDone(ctx, runs)
 	return runs, nil
 }
 

@@ -281,9 +281,10 @@ type RestoreReviewerResult struct {
 // for one trigger.
 type TriggerOptions struct {
 	// Harness and Config override the resolved reviewer for this pass only.
-	Harness domain.ReviewerHarness
-	Config  domain.AgentConfig
-	Source  domain.ReviewTriggerSource
+	Harness            domain.ReviewerHarness
+	Config             domain.AgentConfig
+	RequesterSessionID domain.SessionID
+	Source             domain.ReviewTriggerSource
 	// InterfaceMode chooses Chat or Terminal for the reviewer; empty keeps the
 	// reviewer's persisted surface or the adapter default.
 	InterfaceMode domain.ReviewerInterfaceMode
@@ -356,6 +357,20 @@ func (e *Engine) TriggerWithOptions(ctx stdctx.Context, workerID domain.SessionI
 	}
 	if !ok {
 		return TriggerResult{}, fmt.Errorf("%w: worker session %q", ErrNotFound, workerID)
+	}
+	if opts.RequesterSessionID != "" {
+		if source != domain.ReviewTriggerAgent {
+			return TriggerResult{}, fmt.Errorf("%w: only agent triggers can specify a requesting session", ErrInvalid)
+		}
+		if opts.RequesterSessionID != workerID {
+			caller, found, err := e.sessions.GetSession(ctx, opts.RequesterSessionID)
+			if err != nil {
+				return TriggerResult{}, err
+			}
+			if !found || caller.ProjectID != worker.ProjectID || caller.IsTerminated {
+				return TriggerResult{}, fmt.Errorf("%w: requesting session must be active in this project", ErrInvalid)
+			}
+		}
 	}
 	if source == domain.ReviewTriggerAuto {
 		if reason := autoReviewSessionReason(worker, e.clock()); reason != "" {
@@ -564,17 +579,18 @@ func (e *Engine) TriggerWithOptions(ctx stdctx.Context, workerID domain.SessionI
 			batchID = e.newID()
 		}
 		run := domain.ReviewRun{
-			ID:            e.newID(),
-			ReviewID:      reviewRow.ID,
-			SessionID:     workerID,
-			BatchID:       batchID,
-			Harness:       harness,
-			TriggerSource: source,
-			PRURL:         reviewState.PRURL,
-			TargetSHA:     reviewState.TargetSHA,
-			Status:        domain.ReviewRunQueued,
-			Verdict:       domain.VerdictNone,
-			CreatedAt:     now,
+			ID:                 e.newID(),
+			ReviewID:           reviewRow.ID,
+			SessionID:          workerID,
+			BatchID:            batchID,
+			Harness:            harness,
+			TriggerSource:      source,
+			RequesterSessionID: opts.RequesterSessionID,
+			PRURL:              reviewState.PRURL,
+			TargetSHA:          reviewState.TargetSHA,
+			Status:             domain.ReviewRunQueued,
+			Verdict:            domain.VerdictNone,
+			CreatedAt:          now,
 			// Completion refreshes this snapshot before delivery. Keeping the
 			// trigger-time value also makes a running pass truthful in the API.
 			AutoInjectReview: worker.AutoInjectReview,

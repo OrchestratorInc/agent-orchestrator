@@ -744,6 +744,7 @@ type ReviewRun struct {
 	FirstActivityAt         sql.NullTime
 	CancelRequestedAt       sql.NullTime
 	EndedAt                 sql.NullTime
+	RequesterSessionID      domain.SessionID
 }
 
 type Session struct {

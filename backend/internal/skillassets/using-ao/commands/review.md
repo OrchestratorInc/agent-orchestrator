@@ -160,12 +160,7 @@ just pushed and it still says already reviewed, wait a few seconds and retry. Th
 
 By default the command turns on the worker session's review auto-inject. The
 reviewer posts an inline GitHub comment for each change it requires, and AO
-forwards those comments to the worker like any other review comments. When a
-run ends, AO sends the worker one "AO review done" message with the verdict
-(approved, changes requested, failed, or cancelled) and whether another review
-is worth requesting. A changes-requested review whose inline comments all
-reached the worker ends with those comments instead. With review feedback
-delivery off no message is sent; check the verdict with `ao review ls`.
+forwards those comments to the worker like any other review comments. For reviews requested by a worker or orchestrator, Orchestrator sends the final verdict to the requesting session when review feedback delivery is enabled. Trigger failures appear in the command result. Human-triggered and scheduled reviews are available in the UI and through `ao review ls`. Inline findings go to the worker that owns the PR.
 
 **Examples:**
 

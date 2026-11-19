@@ -26230,6 +26230,10 @@ components:
           description: Return 409 instead of reusing when every open PR head is already
             being reviewed or already has a review.
           type: boolean
+        requesterSessionId:
+          description: Agent session that requested the pass and should receive its
+            final outcome.
+          type: string
         rerun:
           description: Start a fresh pass for already-reviewed current heads; a different
             reviewer may run alongside one that is still running. A person's rerun

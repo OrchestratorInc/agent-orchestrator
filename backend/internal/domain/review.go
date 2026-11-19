@@ -75,6 +75,8 @@ type ReviewRun struct {
 	// legacy/single-run delivery.
 	BatchID string          `json:"batchId"`
 	Harness ReviewerHarness `json:"harness"`
+	// RequesterSessionID is the agent to notify when this pass ends.
+	RequesterSessionID SessionID `json:"-"`
 	// TriggerSource records whether this pass was requested by a user, by an
 	// AO agent session through the CLI, or by the daemon auto-review coordinator.
 	TriggerSource ReviewTriggerSource `json:"triggerSource" enum:"manual,agent,auto"`
@@ -100,7 +102,7 @@ type ReviewRun struct {
 	// ReviewerModel is the model the reviewer ran with for this pass; empty
 	// means the harness default.
 	ReviewerModel string `json:"-"`
-	// WorkerNotice tracks the one "review done" message owed to the worker
+	// WorkerNotice tracks the one "review done" message owed to the requesting session
 	// once this pass is final. The store marks it pending on the final status
 	// write when the session receives review feedback.
 	WorkerNotice ReviewWorkerNotice `json:"workerNotice,omitempty" enum:",pending,sent,failed"`
