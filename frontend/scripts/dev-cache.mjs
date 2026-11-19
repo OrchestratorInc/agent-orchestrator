@@ -364,14 +364,49 @@ export function planStep({ key, stampCurrent, cachedOutput }) {
 	return "build";
 }
 
+// What node_modules is missing, or has at another version, compared with what
+// package-lock.json asks for. npm records what it installed in
+// node_modules/.package-lock.json, so a merge that adds or bumps a package
+// (directly or transitively) shows up here even though nobody reinstalled.
+// Optional packages may be absent (other platforms). Returns [] when the two
+// agree or there is nothing to compare, and ["node_modules is missing"] when
+// there is no install at all.
+export function nodeModulesDrift(frontend, { read = (file) => readJSON(file, null), hasDir = isDirectory } = {}) {
+	if (!hasDir(path.join(frontend, "node_modules"))) return ["node_modules is missing"];
+	const wanted = read(path.join(frontend, "package-lock.json"))?.packages;
+	const installed = read(path.join(frontend, "node_modules", ".package-lock.json"))?.packages;
+	if (!wanted || !installed) return [];
+	const drift = [];
+	const prefix = "node_modules/";
+	for (const [key, want] of Object.entries(wanted)) {
+		if (!key.startsWith(prefix)) continue;
+		const name = key.slice(key.lastIndexOf(prefix) + prefix.length);
+		const have = installed[key];
+		if (!have) {
+			if (!want.optional && !want.devOptional) drift.push(`${name} missing`);
+		} else if (want.version && have.version && want.version !== have.version) {
+			drift.push(`${name} ${have.version} (lockfile ${want.version})`);
+		}
+	}
+	return drift;
+}
+
+// The first few differences, for a log line.
+export function summarizeDrift(drift, limit = 3) {
+	const shown = drift.slice(0, limit).join(", ");
+	return drift.length > limit ? `${shown}, and ${drift.length - limit} more` : shown;
+}
+
 // How to provide frontend/node_modules.
 // - keep: already installed from this exact key.
-// - foreign: an install dev-warm did not make; leave it alone.
+// - foreign: an install dev-warm did not make; leave it alone while it still
+//   matches the lockfile (foreignDrift false).
 // - clone: identical lockfile in the store; clone it.
 // - install: run a real `npm ci` (and seed the store afterwards).
-export function planDeps({ hasNodeModules, installedKey, key, storeHit, lockfilesIdentical, cloneSupported }) {
+export function planDeps({ hasNodeModules, installedKey, key, storeHit, lockfilesIdentical, cloneSupported, foreignDrift = false }) {
 	if (hasNodeModules && installedKey === key) return { action: "keep", reason: "node_modules already matches the lockfile" };
-	if (hasNodeModules && !installedKey) {
+	// Once a foreign install drifts (a merge added or bumped a package), replace it.
+	if (hasNodeModules && !installedKey && !foreignDrift) {
 		return { action: "foreign", reason: "node_modules was not installed by dev:warm; leaving it untouched (pass --replace to swap it)" };
 	}
 	if (!cloneSupported) return { action: "install", reason: "cloning node_modules is not supported on this platform" };

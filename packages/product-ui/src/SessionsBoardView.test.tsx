@@ -257,6 +257,33 @@ describe("SessionsBoardView", () => {
 		expect(onOpen).toHaveBeenCalledTimes(1);
 	});
 
+	it("shows a session branch as its topic and hides it when it only repeats the title", () => {
+		const renderCard = (branch: string, title: string) =>
+			render(
+				<SessionCardView
+					externalLink={ExternalLink}
+					labels={{
+						formatTime: () => "5m ago",
+						intakeIssue: (id) => `Issue ${id}`,
+						pr: progressLabels,
+						updatedAt: (timestamp) => `Updated ${timestamp}`,
+					}}
+					onOpen={vi.fn()}
+					renderAvatar={(provider) => <span role="img" aria-label={provider}>C</span>}
+					selected={false}
+					session={{ ...baseSession, branch, title }}
+				/>,
+			);
+
+		const first = renderCard("ao/agent-orchestrator-132/archived-sessions-label", "Rename the archive");
+		const topic = screen.getByText("archived-sessions-label");
+		expect(topic).toHaveAttribute("title", "ao/agent-orchestrator-132/archived-sessions-label");
+		first.unmount();
+
+		renderCard("ao/fix-login/root", "Fix login");
+		expect(screen.queryByText("fix-login")).not.toBeInTheDocument();
+	});
+
 	it("fills a selected list card and keeps the board card's own hover otherwise", () => {
 		const labels = {
 			formatTime: () => "5m ago",
@@ -678,6 +705,58 @@ describe("SessionsBoardView", () => {
 		expect(screen.getByText(getSessionStatusView("ci_failed").label)).toBeInTheDocument();
 	});
 
+	it("counts a multi-PR session's other PRs beside the daemon's status", () => {
+		const labels = {
+			formatTime: () => "1h ago",
+			intakeIssue: (id: string) => `Issue ${id}`,
+			pr: {
+				short: "PR",
+				states: { closed: "closed", draft: "draft", merged: "merged", open: "open" },
+			},
+			updatedAt: (timestamp: string) => `Updated ${timestamp}`,
+		};
+		const session: BoardSessionPresentation = {
+			...baseSession,
+			displayStatus: "Awaiting review",
+			kanbanColumn: "needs_review",
+			prMix: { lead: "2 awaiting review", detail: "1 waiting on #8277" },
+			status: "review_pending",
+		};
+		const { rerender } = render(
+			<SessionCardView
+				externalLink={ExternalLink}
+				labels={labels}
+				renderAvatar={(provider) => <span role="img" aria-label={provider}>C</span>}
+				session={session}
+			/>,
+		);
+		expect(screen.getByTestId("session-status")).toHaveTextContent("2 awaiting review · 1 waiting on #8277");
+		expect(screen.queryByText("Awaiting review")).not.toBeInTheDocument();
+
+		// The daemon's phrase decides the tone even where the older derived status still reads mergeable.
+		rerender(
+			<SessionCardView
+				externalLink={ExternalLink}
+				labels={labels}
+				renderAvatar={(provider) => <span role="img" aria-label={provider}>C</span>}
+				session={{ ...baseSession, displayStatus: "Waiting on base PR", kanbanColumn: "needs_review", status: "mergeable" }}
+			/>,
+		);
+		expect(screen.getByTestId("session-status")).toHaveTextContent("Waiting on base PR");
+		expect(screen.getByTestId("session-status")).not.toHaveClass("text-success");
+
+		// While the status is still being checked, the counts stay out of it.
+		rerender(
+			<SessionCardView
+				externalLink={ExternalLink}
+				labels={labels}
+				renderAvatar={(provider) => <span role="img" aria-label={provider}>C</span>}
+				session={{ ...session, statusReadiness: "checking" }}
+			/>,
+		);
+		expect(screen.getByTestId("session-status")).not.toHaveTextContent("1 waiting on #8277");
+	});
+
 	it("translates the daemon's display status instead of printing raw English", () => {
 		render(
 			<SessionCardView
@@ -757,5 +836,33 @@ describe("SessionsBoardView", () => {
 		expect(status).not.toHaveClass("rounded-sm", "border");
 		expect(status?.style.getPropertyValue("--session-status-tone")).toBe("");
 		expect(status?.querySelector(".rounded-full")).toBeNull();
+	});
+
+	it("paints a merged PR purple inside the Ready lane", () => {
+		const { container } = render(
+			<SessionCardView
+				externalLink={ExternalLink}
+				labels={{
+					formatTime: () => "1h ago",
+					intakeIssue: (id) => `Issue ${id}`,
+					pr: {
+						short: "PR",
+						states: { closed: "closed", draft: "draft", merged: "merged", open: "open" },
+					},
+					updatedAt: (timestamp) => `Updated ${timestamp}`,
+				}}
+				renderAvatar={(provider) => <span role="img" aria-label={provider}>C</span>}
+				session={{
+					...baseSession,
+					displayStatus: "Merged",
+					kanbanColumn: "ready",
+					status: "merged",
+				}}
+			/>,
+		);
+
+		const status = container.querySelector('[data-kanban-column="ready"]');
+		expect(status).toHaveClass("text-status-merged");
+		expect(status).not.toHaveClass("text-status-ready");
 	});
 });

@@ -15,6 +15,7 @@
 //
 // Usage: node scripts/dev-warm.mjs [--worktree <path>] [--dry-run]
 //          [--skip-prepare] [--replace] [--reuse-daemon <path to ao>]
+// --worktree defaults to the checkout containing the current directory.
 import { spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import { existsSync, readFileSync, realpathSync, rmSync } from "node:fs";
@@ -30,6 +31,8 @@ import {
 	isDirectory,
 	log,
 	lookupEntry,
+	nodeModulesDrift,
+	summarizeDrift,
 	planDeps,
 	pruneEntries,
 	readJSON,
@@ -119,7 +122,7 @@ function gitStatus(root) {
 }
 
 function resolveWorktree(requested) {
-	const start = requested ? path.resolve(requested) : path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..", "..");
+	const start = path.resolve(requested ?? process.cwd());
 	const top = runGit(start, ["rev-parse", "--show-toplevel"])?.trim();
 	if (!top) throw new Error(`${start} is not inside a git checkout`);
 	const root = realpathSync(top);
@@ -170,6 +173,8 @@ async function warmDeps({ root, frontend }, options) {
 	const store = warmStoreRoot();
 	const hasNodeModules = isDirectory(nodeModules);
 	const installedKey = hasNodeModules ? (readJSON(path.join(nodeModules, INSTALL_STAMP), null)?.key ?? null) : null;
+	// Only an install dev:warm didn't make needs this: its own carry the key.
+	const foreignDrift = hasNodeModules && !installedKey ? nodeModulesDrift(frontend) : [];
 	const entry = lookupEntry(store, STORE_NAME, key);
 	const cachedLock = entry ? path.join(path.dirname(entry), "package-lock.json") : null;
 	const plan = planDeps({
@@ -180,13 +185,20 @@ async function warmDeps({ root, frontend }, options) {
 		lockfilesIdentical: Boolean(cachedLock) && fileIsIdentical(cachedLock, path.join(frontend, "package-lock.json")),
 		// npm links `file:` packages with absolute junctions on Windows.
 		cloneSupported: process.platform !== "win32" && cloneStrategies(process.platform).length > 1,
+		foreignDrift: foreignDrift.length > 0,
 	});
 	log(`node_modules: ${plan.action} - ${plan.reason} (key ${key.slice(0, 12)}, store ${store})`);
 	if (options.dryRun || plan.action === "keep" || plan.action === "foreign") return;
 
 	assertIgnoredOutputs(root, ["frontend/node_modules"]);
 	if (hasNodeModules) {
-		log(installedKey ? "removing the previous dev:warm install (its inputs changed)" : "removing the existing node_modules (--replace)");
+		log(
+			installedKey
+				? "removing the previous dev:warm install (its inputs changed)"
+				: foreignDrift.length > 0
+					? `removing the existing node_modules: it no longer matches package-lock.json (${summarizeDrift(foreignDrift)})`
+					: "removing the existing node_modules (--replace)",
+		);
 		rmSync(nodeModules, { recursive: true, force: true });
 	}
 	const t0 = Date.now();
@@ -211,19 +223,21 @@ async function warmDeps({ root, frontend }, options) {
 	writeJSON(path.join(nodeModules, INSTALL_STAMP), { key, from: "npm ci" });
 }
 
-function prepare({ frontend }, options) {
-	const script = path.join(frontend, "scripts", "dev-prepare.mjs");
+// The checkout's own dev-prepare when it has one; otherwise (a branch that
+// predates it) the copy beside this script, pointed at the checkout.
+function prepare({ root, frontend }, options) {
+	const own = path.join(frontend, "scripts", "dev-prepare.mjs");
+	const bundled = path.join(path.dirname(fileURLToPath(import.meta.url)), "dev-prepare.mjs");
+	const args = existsSync(own) ? [own] : [bundled, "--worktree", root];
+	if (!existsSync(own)) {
+		log("this checkout predates dev-prepare.mjs; using dev:warm's copy. Launch with `npm run dev --ignore-scripts` so its old predev chain does not rebuild everything");
+	}
+	if (options.dryRun) args.push("--dry-run");
 	const env = { ...process.env };
 	if (options.reuseDaemon) env.AO_DEV_DAEMON_REUSE = path.resolve(options.reuseDaemon);
-	const [command, args] = existsSync(script)
-		? [process.execPath, [script, ...(options.dryRun ? ["--dry-run"] : [])]]
-		: [npmCommand(), ["run", "predev"]]; // an older checkout without dev-prepare
-	if (options.dryRun && command !== process.execPath) {
-		log("predev: would run `npm run predev` (this checkout predates dev-prepare.mjs)");
-		return;
-	}
-	const result = spawnSync(command, args, { cwd: frontend, env, stdio: "inherit", windowsHide: true, shell: command !== process.execPath && process.platform === "win32" });
+	const result = spawnSync(process.execPath, args, { cwd: frontend, env, stdio: "inherit", windowsHide: true });
 	if (result.error || result.status !== 0) throw new Error(`predev steps failed (${result.error?.message ?? `exit ${result.status}`})`);
+	return !existsSync(own);
 }
 
 export async function main(argv) {
@@ -233,17 +247,19 @@ export async function main(argv) {
 	log(`${options.dryRun ? "dry run for" : "warming"} ${checkout.root}`);
 	const statusBefore = gitStatus(checkout.root);
 
+	let legacy = false;
 	await warmDeps(checkout, options);
 	if (!options.skipPrepare) {
 		if (!options.dryRun && !isDirectory(path.join(checkout.frontend, "node_modules"))) throw new Error("node_modules is missing; cannot run the predev steps");
-		prepare(checkout, options);
+		legacy = prepare(checkout, options);
 	}
 
 	const statusAfter = gitStatus(checkout.root);
 	if (statusBefore !== statusAfter) {
 		throw new Error(`git status changed while warming ${checkout.root}; dev:warm only writes ignored paths, so inspect \`git status\` now`);
 	}
-	log(`${options.dryRun ? "dry run finished" : "ready for `npm run dev`"} in ${seconds(started)}`);
+	const launch = legacy ? "`npm run dev --ignore-scripts`" : "`npm run dev`";
+	log(`${options.dryRun ? "dry run finished" : `ready for ${launch} in frontend/`} in ${seconds(started)}`);
 }
 
 if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {

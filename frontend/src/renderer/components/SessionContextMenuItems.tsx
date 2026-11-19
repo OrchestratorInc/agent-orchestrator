@@ -1,7 +1,7 @@
 import { useCallback, useRef } from "react";
 import { useQueryClient } from "@tanstack/react-query";
 import { useTranslation } from "react-i18next";
-import { Archive, Code2, Copy, ExternalLink, GitBranch, Pencil, Pin, PinOff, Play } from "@/components/app-icons";
+import { Archive, Code2, Copy, ExternalLink, GitBranch, GitFork, Pencil, Pin, PinOff, Play } from "@/components/app-icons";
 import type { OpenTarget } from "../../shared/editor-handoff";
 import { resumeAgentOnOpen, useCanResumeAgent } from "../hooks/useCanResumeAgent";
 import { conversationQueryKey } from "../hooks/useConversation";
@@ -14,6 +14,7 @@ import { useUiStore } from "../stores/ui-store";
 import { isOrchestratorSession, primaryPR, type WorkspaceSession } from "../types/workspace";
 import { MenuEntries, type MenuEntry } from "./menu-model";
 import { OpenTargetIcon } from "./OpenTargetIcon";
+import { useForkSessionFromMenu, useSessionForkOptions } from "./SessionForkControls";
 
 /** Copy from a menu, which has no inline place to confirm the copy. */
 export function useCopyToClipboard() {
@@ -58,6 +59,11 @@ export function useSessionMenuEntries(session: WorkspaceSession | undefined, { o
 	// Remote and Cloud sessions have no local workspace for Electron to hand off.
 	const hasLocalWorkspace = Boolean(session && !session.hostId && !session.cloud);
 	const workspaceEntries = useSessionWorkspaceEntries(hasLocalWorkspace ? session : undefined);
+	const forkSession = useForkSessionFromMenu();
+	// Cloud sessions can't be forked here; for the rest the daemon says
+	// whether this one can, and why not.
+	const forkable = Boolean(session && !session.cloud);
+	const forkOptions = useSessionForkOptions(session, forkable);
 	if (!session) return [];
 
 	const branch = sessionBranchPresentation(session).branch;
@@ -107,6 +113,21 @@ export function useSessionMenuEntries(session: WorkspaceSession | undefined, { o
 	}
 	if (canResume) {
 		entries.push({ kind: "item", id: "session-resume", icon: <Play aria-hidden="true" />, label: t("command.resumeAgent"), onSelect: resume });
+	}
+	// Forks at the latest finished turn; terminal sessions have no turn rows,
+	// so this is their way to fork. A session that can't be forked shows the
+	// item disabled, with the reason under it.
+	if (forkable) {
+		const refused = forkOptions.data && !forkOptions.data.allowed ? forkOptions.data : undefined;
+		entries.push({
+			kind: "item",
+			id: "session-fork",
+			icon: <GitFork aria-hidden="true" />,
+			label: t("sessionFork.forkSession"),
+			disabled: Boolean(refused),
+			description: refused?.refusal?.message,
+			onSelect: () => forkSession(session),
+		});
 	}
 	entries.push({ kind: "separator", id: "session-links-sep" });
 	if (pr) {

@@ -13,6 +13,7 @@ import {
 	hashFiles,
 	importClosure,
 	lookupEntry,
+	nodeModulesDrift,
 	overrideDir,
 	planDeps,
 	planStep,
@@ -20,6 +21,7 @@ import {
 	stableStringify,
 	stampIsCurrent,
 	storeEntry,
+	summarizeDrift,
 } from "./dev-cache.mjs";
 import { normalizeGoEnv } from "./dev-prepare.mjs";
 import { dependencyFields, depsKeyParts, parseArgs } from "./dev-warm.mjs";
@@ -225,6 +227,39 @@ describe("decisions", () => {
 		assert.equal(planDeps({ ...base, hasNodeModules: true, installedKey: "k" }).action, "keep");
 		assert.equal(planDeps({ ...base, hasNodeModules: true, installedKey: null }).action, "foreign");
 		assert.equal(planDeps({ ...base, hasNodeModules: true, installedKey: "stale" }).action, "clone");
+		assert.equal(planDeps({ ...base, hasNodeModules: true, installedKey: null, foreignDrift: true }).action, "clone");
+	});
+
+	test("nodeModulesDrift reports missing and mismatched packages, not optional ones", () => {
+		const files = {
+			"/f/package-lock.json": {
+				packages: {
+					"": { name: "app" },
+					"node_modules/a": { version: "1.0.0" },
+					"node_modules/b": { version: "2.0.0" },
+					"node_modules/c": { version: "1.0.0" },
+					"node_modules/fsevents": { version: "2.3.3", optional: true },
+					"node_modules/a/node_modules/d": { version: "3.0.0" },
+				},
+			},
+			"/f/node_modules/.package-lock.json": {
+				packages: {
+					"node_modules/a": { version: "1.0.0" },
+					"node_modules/b": { version: "1.9.0" },
+					"node_modules/a/node_modules/d": { version: "3.0.0" },
+				},
+			},
+		};
+		const read = (file) => files[file] ?? null;
+		assert.deepEqual(nodeModulesDrift("/f", { read, hasDir: () => true }), ["b 1.9.0 (lockfile 2.0.0)", "c missing"]);
+		assert.deepEqual(nodeModulesDrift("/f", { read, hasDir: () => false }), ["node_modules is missing"]);
+		// Without npm's hidden lockfile there is nothing to compare, so no drift.
+		assert.deepEqual(nodeModulesDrift("/f", { read: (file) => (file.includes(".package-lock") ? null : read(file)), hasDir: () => true }), []);
+	});
+
+	test("summarizeDrift caps the list", () => {
+		assert.equal(summarizeDrift(["a", "b"]), "a, b");
+		assert.equal(summarizeDrift(["a", "b", "c", "d", "e"]), "a, b, c, and 2 more");
 	});
 
 	test("assertIgnoredOutputs rejects unignored or tracked targets", () => {

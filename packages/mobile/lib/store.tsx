@@ -44,6 +44,7 @@ import { pollResultIsCurrent, sameServerConfig } from "./sameConfig";
 import { shouldShowLoading } from "./configLoading";
 import { isDesktopUnreachable, shouldKeepPolling, userFacingError } from "./connectionError";
 import {
+	ANSWER_TRUSTED_FOR_MS,
 	classifyLink,
 	EMPTY_LINK_TRACKER,
 	failedPollOutcome,
@@ -51,12 +52,15 @@ import {
 	networkChangeNeedsRace,
 	recordPoll,
 	SLOW_POLL_MS,
+	trustedPhoneNetwork,
 	UNKNOWN_PHONE_NETWORK,
+	worthProbingForRecovery,
 	type LinkHealth,
 	type PhoneNetwork,
 	type PollOutcome,
 } from "./linkHealth";
 import { IncompatibleHostVersionError } from "./race";
+import { lastAnsweredRequestAt, onRequestAnswered } from "./answeredRequests";
 import { primeInstallId } from "./installId";
 import { collectPRs } from "./prView";
 import { rememberLastProject } from "./lastProject";
@@ -97,6 +101,8 @@ export type SpawnOptions = {
 	effort?: string;
 	/** The worker's starting approval mode; omitted keeps the project's. */
 	approvalMode?: ApprovalMode;
+	/** The subscription account the agent starts on; omitted uses the machine's default. */
+	accountId?: string;
 	attachments?: SpawnAttachmentInput[];
 	/** Mobile defaults to Chat; TUI remains an explicit compatibility choice. */
 	mode?: SessionMode;
@@ -184,9 +190,21 @@ type AppState = {
 	 *
 	 * Deliberately a getter rather than a value: a timestamp that changed on every
 	 * successful tick would re-render every consumer of this store once per poll.
-	 * Read it through useStaleness, which owns the clock.
+	 * Read it through useMachineFreshness or FreshnessLine, which own the clock.
 	 */
 	getLastSyncAt: () => number;
+	/**
+	 * The selected machine's last sync, when `hostId` is the machine that sync
+	 * belongs to; undefined for any other machine, whose snapshot is current.
+	 *
+	 * Unscoped: HostScope and Cloud repoint `currentHostId` and `getLastSyncAt`
+	 * at the machine their screen is about, while freshness is judged for every
+	 * machine at once, and the selected one's snapshot trails its polls. Keyed by
+	 * the owner rather than paired with a host id in the context value, because
+	 * FrozenAppScope holds an old value on a tab off screen: after a switch it
+	 * would name the old machine while the getter read the new one's time.
+	 */
+	getPrimaryLastSyncAt: (hostId: string) => number | undefined;
 	// actions
 	/**
 	 * Races the selected machine's endpoints. Null means none passed the host
@@ -426,6 +444,9 @@ export function AppProvider({ children }: { children: ReactNode }) {
 	// what "re-render the board on a change, not on the poll tick" removed. Only
 	// the banner subscribes to the passage of time; the board does not.
 	const lastSyncAtRef = useRef(0);
+	// The machine lastSyncAtRef belongs to, so getPrimaryLastSyncAt never hands
+	// one machine's time to a reader asking about another.
+	const lastSyncOwnerRef = useRef<string | null>(null);
 	// Whether the last failure had no HTTP status — nothing answered at all,
 	// which is what leaving a network looks like.
 	const lastFailUnreachableRef = useRef(false);
@@ -433,13 +454,34 @@ export function AppProvider({ children }: { children: ReactNode }) {
 	// Refs because the poll and the network listener run outside render; the
 	// classified result is the only part screens see.
 	const linkTrackerRef = useRef(EMPTY_LINK_TRACKER);
+	// phoneNetworkRef is the OS's raw report; phoneNetworkReportedAtRef is when
+	// that report last changed. Everything that decides whether the phone is
+	// offline reads trustedNetwork(), which lets an answered request overrule
+	// an OS that wrongly says there is no network (#8282).
 	const phoneNetworkRef = useRef<PhoneNetwork & { type?: string }>(UNKNOWN_PHONE_NETWORK);
+	const phoneNetworkReportedAtRef = useRef(0);
+	const trustedNetwork = useCallback(
+		() => trustedPhoneNetwork(phoneNetworkRef.current, phoneNetworkReportedAtRef.current, lastAnsweredRequestAt(), Date.now()),
+		[],
+	);
+	// Wakes publishLink when the answer overruling the OS stops counting, in
+	// case no poll or answer comes along to do it.
+	const answerExpiryRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 	const [linkHealth, setLinkHealth] = useState<LinkHealth>("ok");
 	const [phoneNetwork, setPhoneNetwork] = useState<PhoneNetwork>(UNKNOWN_PHONE_NETWORK);
 	const phoneOffline = isPhoneOffline(phoneNetwork);
 	const publishLink = useCallback(() => {
-		setLinkHealth(classifyLink(linkTrackerRef.current, phoneNetworkRef.current, Date.now()));
-	}, []);
+		const trusted = trustedNetwork();
+		setPhoneNetwork((current) => current.connected === trusted.connected && current.internet === trusted.internet ? current : trusted);
+		setLinkHealth(classifyLink(linkTrackerRef.current, trusted, Date.now()));
+		if (answerExpiryRef.current) clearTimeout(answerExpiryRef.current);
+		answerExpiryRef.current = null;
+		const os = phoneNetworkRef.current;
+		if (trusted.connected !== os.connected || trusted.internet !== os.internet) {
+			const left = lastAnsweredRequestAt() + ANSWER_TRUSTED_FOR_MS - Date.now();
+			answerExpiryRef.current = setTimeout(() => { if (mountedRef.current) publishLink(); }, Math.max(0, left));
+		}
+	}, [trustedNetwork]);
 	const recordLink = useCallback((outcome: PollOutcome) => {
 		linkTrackerRef.current = recordPoll(linkTrackerRef.current, outcome, Date.now());
 		publishLink();
@@ -533,6 +575,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
 				setStats({});
 				setNotificationsUnread(0);
 				lastSyncAtRef.current = 0;
+				lastSyncOwnerRef.current = null;
 			}
 			// Let every other paired machine connect while the selected one's
 			// endpoint race is still waiting for an unreachable LAN or tunnel.
@@ -662,6 +705,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
 			setStats(incoming.stats);
 			setNotificationsUnread(incoming.notificationsUnread);
 			lastSyncAtRef.current = incoming.lastSyncAt;
+			lastSyncOwnerRef.current = incoming.hostId;
 			setConnection("open");
 			setLoading(false);
 			setError(null);
@@ -722,10 +766,13 @@ export function AppProvider({ children }: { children: ReactNode }) {
 	// Without this, a failed initial endpoint race leaves it closed until a tap.
 	useEffect(() => {
 		if (!appActive || !configResolved || selectedHostId === null || config) return;
-		// Pointless while the phone has no network: the network listener races
-		// the moment it comes back.
+		// Pointless while the phone has no network at all: the network listener
+		// races the moment it comes back. On a network the OS wrongly calls
+		// offline, its report never changes, so this probe is the only way back.
 		const timer = setInterval(() => {
-			if (!isPhoneOffline(phoneNetworkRef.current)) void reloadConfig();
+			if (worthProbingForRecovery(phoneNetworkRef.current, phoneNetworkReportedAtRef.current, lastAnsweredRequestAt(), Date.now())) {
+				void reloadConfig();
+			}
 		}, 15_000);
 		return () => clearInterval(timer);
 	}, [appActive, configResolved, selectedHostId, config, reloadConfig]);
@@ -742,7 +789,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
 			// Offline, the race can only fail, and a failed race clears the config
 			// and with it the rows "You're offline" promises to keep. Checked before
 			// the resume flag is consumed so a resume still counts once back online.
-			if (isPhoneOffline(phoneNetworkRef.current)) return;
+			if (isPhoneOffline(trustedNetwork())) return;
 			const resumed = resumedRef.current;
 			resumedRef.current = false;
 			let known: Endpoint[] = [];
@@ -852,6 +899,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
 			recordLink(Date.now() - startedAt > SLOW_POLL_MS ? "slow" : "ok");
 			lastTickOkRef.current = true;
 			lastSyncAtRef.current = Date.now();
+			lastSyncOwnerRef.current = c.hostId ?? null;
 			if (!openRef.current) {
 				openRef.current = true;
 				const trigger = everConnectedRef.current ? "reconnect" : "launch";
@@ -993,7 +1041,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
 				failStreak.current += 1;
 				const now = Date.now();
 				if (
-					!isPhoneOffline(phoneNetworkRef.current) &&
+					!isPhoneOffline(trustedNetwork()) &&
 					shouldReRace({
 						consecutiveFailures: failStreak.current,
 						lastReRaceAt: lastReRaceAt.current,
@@ -1036,8 +1084,11 @@ export function AppProvider({ children }: { children: ReactNode }) {
 			const next = { connected: state.isConnected, internet: state.isInternetReachable, type: state.type };
 			const previous = phoneNetworkRef.current;
 			phoneNetworkRef.current = next;
-			setPhoneNetwork((current) => current.connected === next.connected && current.internet === next.internet
-				? current : { connected: next.connected, internet: next.internet });
+			// Only a change resets the clock: Android repeats an unchanged report,
+			// and each repeat would otherwise discard the answers that overrule it.
+			if (previous.connected !== next.connected || previous.internet !== next.internet || previous.type !== next.type) {
+				phoneNetworkReportedAtRef.current = Date.now();
+			}
 			publishLink();
 			if (!networkChangeNeedsRace(previous, next) || !pollActiveRef.current) return;
 			// reloadConfig keeps the same config object when the winning endpoint
@@ -1048,9 +1099,14 @@ export function AppProvider({ children }: { children: ReactNode }) {
 		};
 		void getNetworkStateAsync().then(apply).catch(() => {});
 		const sub = addNetworkStateListener(apply);
+		// An answer from any machine or from Cloud can overrule the OS. Cheap on
+		// the poll's pace: publishLink only re-renders when the result changes.
+		const unsubscribeAnswered = onRequestAnswered(publishLink);
 		return () => {
 			live = false;
 			sub.remove();
+			unsubscribeAnswered();
+			if (answerExpiryRef.current) clearTimeout(answerExpiryRef.current);
 		};
 	}, [publishLink, reloadConfig, restartLoad]);
 
@@ -1157,9 +1213,15 @@ export function AppProvider({ children }: { children: ReactNode }) {
 	const refreshHost = useCallback(async (hostId: string) => {
 		if (!mountedRef.current) return;
 		if (isCloudHost(hostId)) await refreshCloudRef.current();
-		else if (hostId === selectedHostId) await fetchAll(true);
+		else if (hostId === selectedHostId) {
+			// No verified config means its endpoint race failed and its poll has
+			// stopped, so a fetch would return at once and a Retry do nothing. Race
+			// again instead: a config that answers restarts the poll.
+			if (cfgRef.current) await fetchAll(true);
+			else await reloadConfig();
+		}
 		else await otherHosts.refreshHost(hostId);
-	}, [selectedHostId, fetchAll, otherHosts.refreshHost]);
+	}, [selectedHostId, fetchAll, reloadConfig, otherHosts.refreshHost]);
 	const hasCloud = Boolean(cloud);
 	const refreshAll = useCallback(async () => {
 		await Promise.all([
@@ -1176,13 +1238,13 @@ export function AppProvider({ children }: { children: ReactNode }) {
 	}, [activeProjectId, projects]);
 
 	const spawn = useCallback(
-		async ({ hostId, projectId, prompt, harness, model, effort, approvalMode, mode, attachments, clientRequestId }: SpawnOptions) => {
+		async ({ hostId, projectId, prompt, harness, model, effort, approvalMode, accountId, mode, attachments, clientRequestId }: SpawnOptions) => {
 			const resolvedMode = mode ?? "chat";
 			return trackFeature("spawn", async () => {
 				if (isCloudHost(hostId)) return spawnCloudWorker(cloudActionsRef.current, { projectId, prompt, harness, model, effort, approvalMode, mode: resolvedMode, attachments, clientRequestId });
 				const c = requireConfig(hostId);
 				if (projectId === STANDALONE_PROJECT) {
-					const session = await spawnSession(c, { prompt, harness, model, effort, approvalMode, mode: resolvedMode, attachments, clientRequestId });
+					const session = await spawnSession(c, { prompt, harness, model, effort, approvalMode, accountId, mode: resolvedMode, attachments, clientRequestId });
 					await refreshHost(hostId);
 					return session;
 				}
@@ -1196,6 +1258,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
 					model,
 					effort,
 					approvalMode,
+					accountId,
 					mode: resolvedMode,
 					attachments,
 					clientRequestId,
@@ -1298,6 +1361,10 @@ export function AppProvider({ children }: { children: ReactNode }) {
 	// Stable for the life of the provider, which is what lets it sit in the memo's
 	// dependency list below without ever busting it.
 	const getLastSyncAt = useCallback(() => lastSyncAtRef.current, []);
+	const getPrimaryLastSyncAt = useCallback(
+		(hostId: string) => (lastSyncOwnerRef.current === hostId ? lastSyncAtRef.current : undefined),
+		[],
+	);
 
 	const value = useMemo<AppState>(
 		() => ({
@@ -1334,6 +1401,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
 			phoneOffline,
 			phoneNetwork,
 			getLastSyncAt,
+			getPrimaryLastSyncAt,
 			reloadConfig,
 			switchHost,
 			refresh,

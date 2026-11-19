@@ -127,7 +127,8 @@ describe.each(["enter", "mod-enter"] as const)("IME Enter in %s mode", (mode) =>
 			expect(screen.getByTestId("queued-message-queued-1")).toBeInTheDocument();
 
 			if (mode === "enter") {
-				fireEvent.keyDown(field, { key: "Enter" });
+				// Once composition ends, Cmd/Ctrl+Enter steers the next message.
+				fireEvent.keyDown(field, { key: "Enter", ctrlKey: true });
 				await waitFor(() => expect(onPromoteQueuedTurn).toHaveBeenCalledWith("queued-1"));
 			} else {
 				await act(async () => {

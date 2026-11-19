@@ -12,7 +12,7 @@ describe("the Files list", () => {
 	// A folder is a page of its own: the edge swipe, Android's back and the back
 	// button's history all climb one level instead of leaving Files.
 	it("opens each folder as a page titled with its name", () => {
-		expect(source("./useFileActions.ts")).toContain('router.push({ pathname: "/files/[sessionId]/folder", params: { sessionId, dir, hostId } })');
+		expect(source("./useFileActions.ts")).toContain('router.push({ pathname: "/files/[sessionId]/folder", params: { sessionId, dir, hostId, ...picked } })');
 		expect(source("../../app/files/[sessionId]/folder.tsx")).toContain("navigation.setOptions({ title: name })");
 	});
 
@@ -25,6 +25,23 @@ describe("the Files list", () => {
 		expect(index).toContain('if (searchActive) setTab("all");');
 		expect(index).toContain('if (next !== "all") dismissSearch();');
 		expect(source("./FileSearch.tsx")).toContain("bar.current?.cancelSearch();");
+	});
+});
+
+describe("the Files list's loading state", () => {
+	// A worktree pick has no groups until a manifest arrives, so a failed first
+	// read must end the spinner and show its error with Try again.
+	// One degraded poll must not drop the pickers and the pick, and a branch list
+	// that failed to load comes back with a pull to refresh.
+	it("settles the pickers once per machine and retries a failed branch list", () => {
+		const index = source("../../app/files/[sessionId]/index.tsx");
+		expect(index).toContain("const capable = useGitCapable(");
+		expect(index).not.toContain("scopesAvailable(manifest)");
+		expect(index).toContain("reloadBranches();");
+	});
+
+	it("shows a failed manifest read instead of loading forever", () => {
+		expect(source("../../app/files/[sessionId]/index.tsx")).toContain("!(error && fromManifest)");
 	});
 });
 
