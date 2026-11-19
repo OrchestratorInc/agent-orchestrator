@@ -48,7 +48,7 @@ func TestRenderedInputRejectionCannotWriteOrRecordDelivery(t *testing.T) {
 		g := New(&fakeStore{rec: record(domain.ActivityIdle, false), ok: true}, messenger, nil)
 		g.SetInputLease(lease)
 		recorded := false
-		outcome, err := g.DeliverWithPostWrite(context.Background(), "s1", "task", func(context.Context) error { recorded = true; return nil })
+		outcome, err := g.DeliverWithComposerCheck(context.Background(), "s1", "task", nil, func(context.Context) error { recorded = true; return nil })
 		if !lease.checked || lease.held {
 			t.Fatal("composer not checked under a released lease")
 		}

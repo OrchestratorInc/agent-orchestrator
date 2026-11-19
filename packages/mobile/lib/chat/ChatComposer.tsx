@@ -635,7 +635,10 @@ function Composer({
 		<View style={styles.steerDisc}><AppSymbol name={steer} size={iconSize.sm} color={t.accent} /></View>
 	</Pressable> : null;
 	const attachMenu = <ChatAttachmentMenu disabled={stopped || submitting || Boolean(attachmentsUnavailable)} canAttachFile={Boolean(canEmbedFiles || fileUploads)} onChoosePhoto={() => void addImage()} onChooseFile={() => void addFile()} />;
-	const canDictate = voice.state !== "unavailable" && voice.state !== "denied";
+	// A denied mic still dictates from here: its tap opens Settings, where the
+	// microphone can be turned back on.
+	const canDictate = voice.state !== "unavailable";
+	const micDenied = voice.state === "denied";
 	// One round button that follows the prompt, as on the new-task sheet: it
 	// stops the mic while it is open, stops the turn while one runs and nothing
 	// is drafted, sends once there is something to send, and otherwise dictates.
@@ -648,7 +651,7 @@ function Composer({
 			? <Pressable accessibilityRole="button" accessibilityLabel={active ? "Queue message" : "Send message"} accessibilityState={{ disabled: sendBlocked }} disabled={sendBlocked || nothingToSend} android_ripple={sendFeedback.android_ripple} onPress={() => void submit("send")} style={({ pressed }) => [styles.roundTarget, pressed && sendFeedback.pressed, (sendBlocked || nothingToSend) && styles.inactive]}><View style={[styles.roundDisc, styles.roundAccent]}>{pending || submitting ? <ActivityIndicator size="small" color={t.onAccent} /> : <AppSymbol name="send" size={iconSize.sm} weight="bold" color={t.onAccent} />}</View></Pressable>
 			: <Pressable
 				accessibilityRole="button"
-				accessibilityLabel={primary === "stopDictation" ? "Stop dictating" : primary === "transcribing" ? "Transcribing" : "Dictate a message"}
+				accessibilityLabel={primary === "stopDictation" ? "Stop dictating" : primary === "transcribing" ? "Transcribing" : micDenied ? "Turn on microphone access in Settings" : "Dictate a message"}
 				accessibilityState={{ disabled: stopped || submitting || transcribing, busy: transcribing }}
 				disabled={stopped || submitting || transcribing}
 				android_ripple={sendFeedback.android_ripple}
@@ -656,7 +659,7 @@ function Composer({
 				style={({ pressed }) => [styles.roundTarget, pressed && sendFeedback.pressed, (stopped || submitting) && styles.inactive]}
 			>
 				<View style={[styles.roundDisc, primary === "stopDictation" ? styles.dictating : styles.roundAccent]}>
-					{transcribing ? <ActivityIndicator size="small" color={t.onAccent} /> : <AppSymbol name={primary === "stopDictation" ? "stop" : dictateGlyph} size={iconSize.sm} weight="bold" color={primary === "stopDictation" ? t.onDestructive : t.onAccent} />}
+					{transcribing ? <ActivityIndicator size="small" color={t.onAccent} /> : <AppSymbol name={primary === "stopDictation" ? "stop" : micDenied ? "micOff" : dictateGlyph} size={iconSize.sm} weight="bold" color={primary === "stopDictation" ? t.onDestructive : t.onAccent} />}
 				</View>
 			</Pressable>;
 	// The corner controls stay where they are; the pill grows up around them. The

@@ -145,7 +145,7 @@ var (
 	// harness never confirmed that the agent became active before the
 	// confirmation budget was exhausted (e.g. trailing Enter absorbed or dropped).
 	// The API maps it to a 409; the caller retries or inspects the terminal.
-	ErrDeliveryUnconfirmed = errors.New("session: message delivery was not acknowledged")
+	ErrDeliveryUnconfirmed = ports.ErrDeliveryUnconfirmed
 
 	// Spawn-stage sentinels. Each is the existing log word after "spawn" /
 	// "spawn <id>:" so wrapping them does not change daemon-log wording, while
@@ -1552,8 +1552,9 @@ func (m *Manager) Spawn(ctx context.Context, cfg ports.SpawnConfig) (result doma
 		}
 		return domain.SessionRecord{}, 0, 0, wrapSpawnStage(id, ErrWorkspaceCreate, err)
 	}
-	// Per-project workspace provisioning: symlink shared files, then run any
-	// post-create commands (e.g. `pnpm install`) before the agent launches.
+	// Per-project workspace provisioning: symlink shared files, copy the files
+	// .worktreeinclude names, then run any post-create commands (e.g.
+	// `pnpm install`) before the agent launches.
 	provisioned := BeginSpawnStep(ctx, SpawnStepSetup)
 	err = m.provisionWorkspace(ctx, project, ws.Path)
 	provisioned(err)
@@ -5462,9 +5463,21 @@ func (m *Manager) SendWithOptions(ctx context.Context, id domain.SessionID, mess
 	return m.send(ctx, id, message, "", options)
 }
 
+// SendWithClientMessageID delivers an automated message under a caller-chosen
+// client message id. A Chat session records the id with the message, so the
+// caller can later read whether that exact message reached the agent, was
+// queued for a sleeping session, or failed. Terminal sessions deliver as Send.
+func (m *Manager) SendWithClientMessageID(ctx context.Context, id domain.SessionID, message, clientMessageID string) error {
+	return m.send(ctx, id, message, clientMessageID, ports.MessageDeliveryOptions{InteractionAt: m.clock()})
+}
+
 type semanticDeliveryStore interface {
 	SemanticDeliveryAccepted(ctx context.Context, id domain.SessionID, runtimeLaunchID, deliveryID string) (bool, error)
 }
+
+// ErrPromptSubmissionUnobserved reports a prompt that was submitted to the agent,
+// but whose acceptance confirmation was never observed before the deadline.
+var ErrPromptSubmissionUnobserved = errors.New("prompt submission was not observed")
 
 // SendSemantic delivers an internal message and returns only after the target
 // agent has accepted that exact message. Chat uses its native accepted-turn
@@ -5547,7 +5560,7 @@ func (m *Manager) SendSemantic(ctx context.Context, id domain.SessionID, message
 		case <-ctx.Done():
 			return ctx.Err()
 		case <-deadline.C:
-			return fmt.Errorf("%w: prompt submission was not observed", ErrSemanticAcceptanceUnsupported)
+			return fmt.Errorf("%w: %w", ErrSemanticAcceptanceUnsupported, ErrPromptSubmissionUnobserved)
 		case <-ticker.C:
 		}
 	}
@@ -7292,12 +7305,19 @@ func HookPATH(executable func() (string, error), getenv func(string) string, pro
 }
 
 // provisionWorkspace applies the project's per-workspace setup after the
-// worktree exists: symlink shared files from the project repo, then run any
-// post-create commands. Either failing aborts the spawn so a half-provisioned
-// workspace never launches an agent.
+// worktree exists: symlink shared files from the project repo, copy the files
+// .worktreeinclude names, then run any post-create commands. Symlinks go first
+// so the explicit project setting wins over the repository's file. Any step
+// failing aborts the spawn so a half-provisioned workspace never launches an
+// agent.
 func (m *Manager) provisionWorkspace(ctx context.Context, project domain.ProjectRecord, workspacePath string) error {
 	if err := applySymlinks(project.Path, workspacePath, project.Config.Symlinks); err != nil {
 		return err
+	}
+	if project.Kind.WithDefault() != domain.ProjectKindScratch {
+		if err := copyWorktreeInclude(ctx, project, workspacePath, m.workspace); err != nil {
+			return err
+		}
 	}
 	var aoEnv map[string]string
 	if m.takeForkWorkspace(workspacePath) {

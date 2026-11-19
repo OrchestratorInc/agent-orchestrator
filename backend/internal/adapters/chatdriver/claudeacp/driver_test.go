@@ -427,7 +427,7 @@ func TestReviewerPermissionPolicyAllowsOnlyTheSubmitCommands(t *testing.T) {
 		}}
 	}
 	post := `printf '%s' '{"event":"COMMENT"}' | gh api --method POST repos/acme/app/pulls/12/reviews --input - --jq '.id'`
-	submit := `printf '%s' '[{"id":1}]' | ao review submit --session ` + worker + ` --reviews -`
+	submit := `printf '%s' 'ok' | ao review submit --session ` + worker + ` --run run-1 --verdict approved --body -`
 	tests := []struct {
 		name   string
 		worker string

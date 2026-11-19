@@ -6,7 +6,7 @@ import { computeSseRetryDelayMs } from "./sse-backoff";
 import { workspaceQueryKey } from "../hooks/useWorkspaceQuery";
 import { keptArtifactsQueryKey } from "../hooks/useKeptArtifacts";
 import { sessionScmSummaryQueryKey } from "../hooks/useSessionScmSummary";
-import { conversationQueryKey, conversationQueryRoot, conversationSettled, refreshLocalConversationTail, refreshRemoteConversationOnce } from "../hooks/useConversation";
+import { conversationQueryKey, conversationQueryRoot, conversationSettled, forgetRemoteConversationRereads, refreshLocalConversationTail, refreshRemoteConversationOnce } from "../hooks/useConversation";
 import {
 	reviewerConversationQueryKey,
 	reviewerConversationQueryRoot,
@@ -194,6 +194,8 @@ export function createEventTransport(queryClient: QueryClient): EventTransport {
 				invalidate(["remote-workspaces", hostId]);
 				invalidate(["project", hostId]);
 				invalidate(["project-config", hostId]);
+				// A reconnect may follow a host restart, which settles stranded rows.
+				if (reconnect) forgetRemoteConversationRereads(queryClient, hostId);
 				if (reconnect) invalidate(["remote-conversation", hostId]);
 				if (reconnect) invalidate(["reviewer-conversation", hostId]);
 				invalidate(["session-scm-summary", hostId]);

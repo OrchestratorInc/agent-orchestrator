@@ -57,6 +57,9 @@ var providerEnvironment = map[string][]LoginMethod{
 	// with /model; its built-in OpenAI provider uses native sign-in instead.
 	"open-interpreter": {{"env_ANTHROPIC_API_KEY", "Anthropic API key", true}, {"env_GEMINI_API_KEY", "Gemini API key", true}, {"env_OPENROUTER_API_KEY", "OpenRouter API key", true}, {"env_DEEPSEEK_API_KEY", "DeepSeek API key", true}, {"env_ZAI_API_KEY", "Z.AI API key", true}},
 	"tau":              {{"env_ANTHROPIC_API_KEY", "Anthropic API key", true}, {"env_OPENAI_API_KEY", "OpenAI API key", true}, {"env_GEMINI_API_KEY", "Gemini API key", true}, {"env_OPENROUTER_API_KEY", "OpenRouter API key", true}, {"env_DEEPSEEK_API_KEY", "DeepSeek API key", true}, {"env_ZAI_API_KEY", "Z.AI API key", true}, {"env_MINIMAX_API_KEY", "MiniMax API key", true}},
+	// Mastra Code reads these provider keys (its native provider registry);
+	// native `mastracode login` covers OAuth providers.
+	"mastra-code": {{"env_OPENAI_API_KEY", "OpenAI API key", true}, {"env_ANTHROPIC_API_KEY", "Anthropic API key", true}, {"env_GOOGLE_GENERATIVE_AI_API_KEY", "Google API key", true}, {"env_OPENROUTER_API_KEY", "OpenRouter API key", true}, {"env_DEEPSEEK_API_KEY", "DeepSeek API key", true}, {"env_MINIMAX_API_KEY", "MiniMax API key", true}, {"env_ZHIPU_API_KEY", "Z.AI API key", true}},
 }
 
 func environmentMethod(agentID, method string) (string, bool) {

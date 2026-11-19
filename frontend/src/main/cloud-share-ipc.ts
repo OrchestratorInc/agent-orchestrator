@@ -16,7 +16,8 @@ import {
 	sameShareFingerprint,
 	type CloudShareAccess,
 	type CloudShareFile,
-	type CloudShareGrant,
+	type CloudShareGrants,
+	type CloudShareInvite,
 	type CloudShareInspection,
 	type CloudShareLinks,
 	type CloudSharePageFiles,
@@ -130,6 +131,21 @@ function emailsArgument(value: unknown): string[] | undefined {
 		throw new CloudShareError("invalid_request", "Not a list of emails.");
 	}
 	return value as string[];
+}
+
+function inviteArgument(value: unknown): CloudShareInvite {
+	const { emails, orgId, teamIds, workspace } = (value ?? {}) as Record<string, unknown>;
+	if (orgId !== undefined && typeof orgId !== "string") throw new CloudShareError("invalid_request", "Not a workspace.");
+	if (teamIds !== undefined && (!Array.isArray(teamIds) || !teamIds.every((id) => typeof id === "string"))) {
+		throw new CloudShareError("invalid_request", "Not a list of teams.");
+	}
+	if (workspace !== undefined && typeof workspace !== "boolean") throw new CloudShareError("invalid_request", "Not a workspace.");
+	return {
+		emails: emailsArgument(emails),
+		...(orgId !== undefined ? { orgId } : {}),
+		...(teamIds !== undefined ? { teamIds: teamIds as string[] } : {}),
+		...(workspace !== undefined ? { workspace } : {}),
+	};
 }
 
 function shareFileArgument(value: unknown): CloudShareFile {
@@ -471,14 +487,16 @@ export function registerCloudShareIpc(deps: CloudShareIpcDeps): void {
 		return share;
 	});
 
-	deps.ipcMain.handle("cloudShare:grants", async (_event, value: unknown): Promise<CloudShareGrant[]> =>
+	deps.ipcMain.handle("cloudShare:grants", async (_event, value: unknown): Promise<CloudShareGrants> =>
 		listShareGrants(deps, baseUrlArgument(value), shareIdArgument(value)));
 
-	deps.ipcMain.handle("cloudShare:invite", async (event, value: unknown): Promise<CloudShareGrant[]> => {
+	deps.ipcMain.handle("cloudShare:invite", async (event, value: unknown): Promise<CloudShareGrants> => {
 		requireMainFrame(event);
-		const emails = emailsArgument((value as { emails?: unknown } | null)?.emails);
-		if (!emails || emails.length === 0) throw new CloudShareError("invalid_request", "Not a list of emails.");
-		return inviteShareGrants(deps, baseUrlArgument(value), shareIdArgument(value), emails);
+		const invite = inviteArgument(value);
+		if ((invite.emails?.length ?? 0) === 0 && (invite.teamIds?.length ?? 0) === 0 && !invite.workspace) {
+			throw new CloudShareError("invalid_request", "Not a list of emails.");
+		}
+		return inviteShareGrants(deps, baseUrlArgument(value), shareIdArgument(value), invite);
 	});
 
 	deps.ipcMain.handle("cloudShare:removeGrant", async (event, value: unknown): Promise<void> => {
