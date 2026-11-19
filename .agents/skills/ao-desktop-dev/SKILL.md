@@ -157,7 +157,7 @@ Once one PR merges, prefer rebasing the remaining PR onto current `main`; the no
 
   Without all three the instances still collide, on the profile lock, the run
   file, or the daemon's SQLite data.
-- After merging `main`, if the window shows a Vite `Failed to resolve import` overlay for a package the merge added, the warm `node_modules` is stale: stop the app, run `npm ci` in `frontend/`, and relaunch.
+- After merging `main`, `npm run dev` re-syncs `node_modules` with `package-lock.json` on its own before building. If the window still shows a Vite `Failed to resolve import` overlay for a package the merge added, stop the app, run `npm ci` in `frontend/`, and relaunch.
 - An inherited `AO_DATA_DIR` changes dev mode from isolated data to real data. Always choose and report the mode instead of inheriting it accidentally.
 - Repeated `/healthz/` 404 entries from external probes can be noisy; readiness is determined by Electron's daemon status and successful API traffic, not by log volume.
 
