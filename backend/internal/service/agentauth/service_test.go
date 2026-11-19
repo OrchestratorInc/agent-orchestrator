@@ -592,6 +592,7 @@ func TestLogoutRejectsUnknownUnsupportedAndMissingExecutable(t *testing.T) {
 	for _, tc := range []struct{ agent, code string }{
 		{"not-a-harness", "AGENT_AUTH_TARGET_UNKNOWN"},
 		{"aider", "AGENT_LOGOUT_UNSUPPORTED"},
+		{"deepseek-harness", "AGENT_LOGOUT_UNSUPPORTED"},
 		{"codex", "AGENT_AUTH_UNAVAILABLE"},
 	} {
 		t.Run(tc.agent, func(t *testing.T) {
@@ -608,15 +609,15 @@ func TestLogoutRejectsUnknownUnsupportedAndMissingExecutable(t *testing.T) {
 	}
 }
 
-func TestDeepSeekLogoutOpensNativeAccountUI(t *testing.T) {
+func TestDeepSeekSetupRequiresAPIKeyWithoutLogout(t *testing.T) {
 	opener := &recordingTerminalOpener{}
 	svc := NewWithAgentResolver(nil, managedExecutableResolver{agentID: "deepseek-harness", path: "/managed/dsh"}, opener, "")
 	plan, err := svc.Plan(context.Background(), "deepseek-harness")
 	if err != nil {
 		t.Fatal(err)
 	}
-	if plan.LogoutCommand != "dsh --profile web" || plan.Action != ActionSetup {
-		t.Fatalf("DeepSeek account controls unavailable: %+v", plan)
+	if plan.LogoutCommand != "" || plan.Action != ActionSetup {
+		t.Fatalf("unexpected DeepSeek setup/logout capability: %+v", plan)
 	}
 	setup, err := svc.Start(context.Background(), "deepseek-harness")
 	if err != nil {
@@ -624,15 +625,5 @@ func TestDeepSeekLogoutOpensNativeAccountUI(t *testing.T) {
 	}
 	if setup.Action != ActionSetup || !strings.Contains(setup.Guidance, "Settings → Models") || !strings.Contains(setup.Guidance, "API key") {
 		t.Fatalf("default session setup must configure an API key: %+v", setup)
-	}
-	result, err := svc.Logout(context.Background(), "deepseek-harness")
-	if err != nil {
-		t.Fatal(err)
-	}
-	if !reflect.DeepEqual(opener.input.Argv, []string{"/managed/dsh", "--profile", "web"}) || opener.input.Title != "Log out of DeepSeek" || result.Action != ActionLogout {
-		t.Fatalf("unexpected logout: %+v, input %+v", result, opener.input)
-	}
-	if !strings.Contains(result.Guidance, "sidebar account menu") || !strings.Contains(result.Guidance, "API keys") {
-		t.Fatalf("logout must explain the native sign-out and separate API keys: %q", result.Guidance)
 	}
 }

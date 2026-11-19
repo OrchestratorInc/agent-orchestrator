@@ -65,9 +65,12 @@ Browser sign-in under **Settings → Account** belongs to the separate
 so a browser grant alone leaves readiness unknown. Account-aware readiness is
 not supported until AO can verify that the session uses that route.
 
-**Log out** opens the native web UI: choose **Sign out** from the sidebar account
-menu and confirm. It does not remove the API key. Leave the terminal running
-until you finish, then close it so AO can check authentication again.
+AO does not offer a DeepSeek **Log out** action: session readiness does not
+identify a browser account, and an empty store yields unknown rather than a
+confirmed sign-out. To manage a browser account, open Setup, then use
+**Settings → Account** to sign in or the sidebar account menu to **Sign out**.
+This does not remove the API key. Account controls in AO require independent
+account evidence and a verifiable sign-out result before they can be enabled.
 
 The ACP server advertises no auth methods and its `authenticate` call always
 succeeds. AO checks only the API key in the native store or environment for

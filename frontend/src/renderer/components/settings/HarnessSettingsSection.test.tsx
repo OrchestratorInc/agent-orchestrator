@@ -1178,7 +1178,6 @@ describe("HarnessSettingsSection", () => {
 	it.each([
 		{ action: "setup", state: "authorized", loginLabel: "Open setup" },
 		{ action: "setup", state: "unknown", loginLabel: "Setup" },
-		{ action: "logout", state: "authorized", loginLabel: "Open setup" },
 	])("offers DeepSeek setup/account $action when $state through the native web flow", async ({ action, state, loginLabel }) => {
 		const readiness = readyCatalog();
 		readiness.agents.push({ ...readiness.agents[0], id: "deepseek-harness", label: "DeepSeek", authentication: { ...readiness.agents[0].authentication, state } });
@@ -1186,10 +1185,10 @@ describe("HarnessSettingsSection", () => {
 		const get = vi.mocked(apiClient.GET).getMockImplementation()!;
 		vi.mocked(apiClient.GET).mockImplementation(async (path, options) => path === "/api/v1/agents/{agent}/models" ? { data: { agentId: "deepseek-harness", models: [] } } as never : path === "/api/v1/agents/auth-plans" ? { data: { plans: [{
 			agentId: "deepseek-harness", action: "setup", launchMode: "terminal", available: true,
-			displayCommand: "dsh --profile web", logoutCommand: "dsh --profile web",
+			displayCommand: "dsh --profile web",
 		}] } } as never : (get as (path: string, options: unknown) => Promise<never>)(path, options));
 		const post = vi.mocked(apiClient.POST).getMockImplementation()!;
-		const endpoint = action === "logout" ? "/api/v1/agents/{agent}/logout" : "/api/v1/agents/{agent}/auth";
+		const endpoint = "/api/v1/agents/{agent}/auth";
 		vi.mocked(apiClient.POST).mockImplementation(async (path, options) => path === endpoint ? { data: {
 			agentId: "deepseek-harness", action, guidance: "Finish in DeepSeek's native account UI.",
 			terminal: { handleId: `deepseek-${action}`, workingDir: "/tmp", title: `DeepSeek ${action}`, createdAt: "2026-10-27T00:00:00Z" },
@@ -1197,13 +1196,9 @@ describe("HarnessSettingsSection", () => {
 		renderSection();
 		const page = await findAgentRow("deepseek-harness");
 		expect(within(page).getByRole("button", { name: loginLabel })).toBeEnabled();
-		expect(within(page).getByRole("button", { name: "Log out" })).toBeEnabled();
+		expect(within(page).queryByRole("button", { name: "Log out", exact: true })).toBeNull();
 		expect(within(page).queryByRole("button", { name: "Login", exact: true })).toBeNull();
-		await userEvent.click(within(page).getByRole("button", { name: action === "logout" ? "Log out" : loginLabel }));
-		if (action === "logout") {
-			expect(apiClient.POST).not.toHaveBeenCalledWith(endpoint, expect.anything());
-			await userEvent.click(within(screen.getByRole("dialog", { name: "Log out of DeepSeek?" })).getByRole("button", { name: "Log out" }));
-		}
+		await userEvent.click(within(page).getByRole("button", { name: loginLabel }));
 		await waitFor(() => expect(apiClient.POST).toHaveBeenCalledWith(endpoint, { params: { path: { agent: "deepseek-harness" } } }));
 		expect(await within(page).findByText("Finish in DeepSeek's native account UI.")).toBeInTheDocument();
 	});

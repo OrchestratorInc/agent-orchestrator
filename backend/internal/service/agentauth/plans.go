@@ -229,8 +229,8 @@ func nativeLogoutCommand(agentID string, command []string) []string {
 	return command
 }
 
-// Only verified native sign-out flows belong here. DeepSeek uses its web UI.
-// An absent entry means unsupported; never delete credential files.
+// Only documented CLI subcommands belong here. An absent entry explicitly
+// means unsupported; do not infer logout from login or delete credential files.
 func logoutCommand(agentID string) []string {
 	switch agentID {
 	case "claude-code":
@@ -251,8 +251,6 @@ func logoutCommand(agentID string) []string {
 		return []string{"mcode", "logout"}
 	case "open-interpreter":
 		return []string{"interpreter", "logout"}
-	case "deepseek-harness":
-		return []string{"dsh", "--profile", "web"}
 	default:
 		return nil
 	}
