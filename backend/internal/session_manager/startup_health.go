@@ -53,6 +53,9 @@ func (m *Manager) checkSessionHealth(ctx context.Context, rec domain.SessionReco
 			if current, found, getErr := m.store.GetSession(ctx, rec.ID); getErr != nil {
 				return fmt.Errorf("check session %s: %w", rec.ID, getErr)
 			} else if found {
+				if current.ControllerOwner() != rec.ControllerOwner() {
+					return nil
+				}
 				rec = current
 			}
 			if rec.Activity.State != domain.ActivityExited && canSleepStoppedChat(rec) && m.settleAbandonedChatWork(ctx, rec.ID) {

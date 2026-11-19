@@ -137,6 +137,29 @@ func TestStartupHealthKeepsAChatTheUserStoppedAfterTheReadStopped(t *testing.T) 
 	}
 }
 
+func TestStartupHealthLeavesATerminalTheChatSwitchedToAlone(t *testing.T) {
+	m, st, _, _ := newLifecycleManager()
+	launcher := &healthCheckLauncher{err: ports.ErrChatHostNotRunning}
+	m.chat = launcher
+	read := domain.SessionRecord{
+		ID: "mer-chat", ProjectID: "mer", Kind: domain.KindWorker, Harness: domain.HarnessCodex, Mode: domain.SessionModeChat,
+		Metadata: domain.SessionMetadata{WorkspacePath: "/ws/chat", Branch: "ao/chat/root", ProviderConversationID: "thread-1", ControllerGeneration: "gen-1"},
+		Activity: domain.Activity{State: domain.ActivityActive},
+	}
+	switched := read
+	switched.Mode = domain.SessionModeTUI
+	switched.Metadata.ControllerGeneration = ""
+	switched.Metadata.RuntimeHandleID = "tmux-2"
+	switched.Metadata.RuntimeLaunchID = "launch-2"
+	st.sessions[read.ID] = switched
+	if err := m.checkSessionHealth(context.Background(), read); err != nil {
+		t.Fatal(err)
+	}
+	if got := st.sessions[read.ID]; got.HibernatedAt != nil || got.Activity.State != domain.ActivityActive || len(launcher.settled) != 0 {
+		t.Fatalf("a missing chat host must not stop the terminal that replaced it: settled=%v state=%s hibernatedAt=%v", launcher.settled, got.Activity.State, got.HibernatedAt)
+	}
+}
+
 func TestStartupHealthInconclusiveChatProbePreservesSession(t *testing.T) {
 	m, st, rt, ws := newLifecycleManager()
 	launcher := &healthCheckLauncher{err: ports.ErrChatRecoveryInconclusive}
