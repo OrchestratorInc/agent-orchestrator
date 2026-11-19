@@ -323,7 +323,8 @@ function OnboardingFlow({ runKind, onFinish }: { runKind: OnboardingRunKind; onF
 	};
 	// Pages report their view here and their completion from goNext, never on
 	// leaving, since Back leaves a page without finishing it.
-	const readyAgentCount = agentReadiness.data?.agents.filter((agent) => agent.effectiveReadiness === "ready").length ?? 0;
+	// Unknown (not sent) until the check answers, rather than a false 0.
+	const readyAgentCount = agentReadiness.data?.agents.filter((agent) => agent.effectiveReadiness === "ready").length;
 	const ghInstalled = toolsGate.requirements.find((requirement) => requirement.id === "gh")?.satisfied;
 	const toolsMissing = (): string | undefined => {
 		const agents = agentReadiness.data?.agents;
