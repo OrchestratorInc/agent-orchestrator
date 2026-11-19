@@ -475,6 +475,7 @@ export function onboardingInProgress(): boolean {
  * ao.projects.added / add_failed / clone_failed, so no action is sent here.
  */
 export function reportOnboardingProjectAdded(source: "clone" | "local_folder", projectId: string): void {
+	if (!tracking()) return;
 	projectNote = { source, projectId, at: Date.now() };
 }
 

@@ -429,6 +429,13 @@ describe("onboarding telemetry while opted out", () => {
 		expect(events()).toContain("ao.onboarding.step_viewed");
 	});
 
+	it("does not note a project added while opted out", () => {
+		setAnalyticsOptedOut(true);
+		reportOnboardingProjectAdded("clone", "repo-a");
+		setAnalyticsOptedOut(false);
+		expect(onboardingProjectSource("repo-a", true)).toBe("other");
+	});
+
 	it("does not start a run while opted out", () => {
 		setAnalyticsOptedOut(true);
 		const end = beginOnboardingRun("first_run", "welcome");
