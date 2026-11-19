@@ -4687,7 +4687,6 @@
 	"automations.templates.title": "Bir şablonla başlayın",
 	"automations.templates.description": "Bir başlangıç noktası seçin, kendinize göre düzenleyin ve gerisini aracınıza bırakın.",
 	"automations.section.runIn": "Çalıştırma yeri",
-	"automations.templates.use": "Şablonu kullanın",
 	"automations.templates.label": "Şablonlar",
 	"automations.filter.status": "Durum",
 	"automations.filter.project": "Proje",

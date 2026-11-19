@@ -708,7 +708,6 @@ function AutomationFormDialog({
 					<DialogDescription className="sr-only">
 						{t(editing ? "automations.edit.description" : "automations.create.description")}
 					</DialogDescription>
-					{editing ? null : <TemplateMenu disabled={busy} onSelect={applyTemplate} />}
 					<DialogClose asChild>
 						<CloseButton disabled={busy} aria-label={t("automations.create.close")} />
 					</DialogClose>
@@ -974,31 +973,6 @@ function AutomationFormDialog({
 				</form>
 			</DialogContent>
 		</Dialog>
-	);
-}
-
-/** Fills the create form from a bundled starter; nothing is created until submit. */
-function TemplateMenu({ disabled, onSelect }: { disabled: boolean; onSelect: (id: StarterTemplateID) => void }) {
-	const { t } = useTranslation();
-	const scheduleLabel = useScheduleLabel();
-	return (
-		<DropdownMenu>
-			<DropdownMenuTrigger asChild>
-				<Button type="button" size="sm" variant="quiet" disabled={disabled}>
-					{t("automations.templates.use")}
-					<ChevronDown aria-hidden="true" className="size-icon-sm" />
-				</Button>
-			</DropdownMenuTrigger>
-			<DropdownMenuContent align="end" className="w-80" data-browser-native-overlay="true">
-				{AUTOMATION_TEMPLATES.map((template) => (
-					<DropdownMenuItem key={template.id} onSelect={() => onSelect(template.id)} className="flex-col items-start gap-0.5 py-2">
-						<span className="text-caption text-passive">{scheduleLabel(template.rrule)}</span>
-						<span className="font-medium text-foreground">{t(`automations.template.${template.id}`)}</span>
-						<span className="text-pretty text-xs leading-5 text-muted-foreground">{t(`automations.template.${template.id}.description`)}</span>
-					</DropdownMenuItem>
-				))}
-			</DropdownMenuContent>
-		</DropdownMenu>
 	);
 }
 

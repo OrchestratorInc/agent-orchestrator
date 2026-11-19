@@ -4756,7 +4756,6 @@
 	"automations.templates.title": "Empieza con una plantilla",
 	"automations.templates.description": "Elige un punto de partida, personalízalo y deja que tu agente se encargue.",
 	"automations.section.runIn": "Ejecutar en",
-	"automations.templates.use": "Usar plantilla",
 	"automations.templates.label": "Plantillas",
 	"automations.filter.status": "Estado",
 	"automations.filter.project": "Proyecto",

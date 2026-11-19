@@ -4627,7 +4627,6 @@
 	"automations.templates.title": "テンプレートから始める",
 	"automations.templates.description": "出発点を選んでカスタマイズし、エージェントに任せましょう。",
 	"automations.section.runIn": "実行場所",
-	"automations.templates.use": "テンプレートを使用",
 	"automations.templates.label": "テンプレート",
 	"automations.filter.status": "ステータス",
 	"automations.filter.project": "プロジェクト",

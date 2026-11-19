@@ -670,27 +670,11 @@ describe("AutomationsView", () => {
 		expect(within(dialog).queryByText(/purpose|more options/i)).not.toBeInTheDocument();
 	});
 
-	it("fills the create form from Use template without creating anything", async () => {
-		const user = userEvent.setup();
-		renderView();
-		await openBlankCreate(user);
-		const dialog = screen.getByRole("dialog", { name: "New automation" });
-		await user.click(within(dialog).getByRole("button", { name: "Use template" }));
-		await user.click(await screen.findByRole("menuitem", { name: /Weekly release notes/ }));
-		expect(within(dialog).getByRole("textbox", { name: "Name" })).toHaveValue("Weekly release notes");
-		expect((within(dialog).getByRole("textbox", { name: "Prompt" }) as HTMLTextAreaElement).value).toMatch(/^Draft weekly release notes/);
-		expect(within(dialog).getByRole("combobox", { name: "Schedule" })).toHaveTextContent("Weekly");
-		expect(within(dialog).getByRole("combobox", { name: "Day" })).toHaveTextContent("Friday");
-		expect(mocks.create).not.toHaveBeenCalled();
-	});
-
 	it("offers Weekdays as a schedule with one time field", async () => {
 		const user = userEvent.setup();
 		renderView();
-		await openBlankCreate(user);
+		await user.click(screen.getByRole("button", { name: "PR review inbox" }));
 		const dialog = screen.getByRole("dialog", { name: "New automation" });
-		await user.click(within(dialog).getByRole("button", { name: "Use template" }));
-		await user.click(await screen.findByRole("menuitem", { name: /PR review inbox/ }));
 		expect(within(dialog).getByRole("combobox", { name: "Schedule" })).toHaveTextContent("Weekdays");
 		expect(within(dialog).getByLabelText("Time")).toHaveValue("09:00");
 		expect(within(dialog).queryByRole("combobox", { name: "Frequency" })).not.toBeInTheDocument();
