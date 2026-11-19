@@ -4163,6 +4163,27 @@ describe("SessionInspector summary reviews", () => {
     await waitFor(() => expect(detailsCalls()).toBe(before + 1));
   });
 
+  it("keeps the summary's comments listed beside a failed details read", async () => {
+    serveProviderPR(prSummary(3, "open", {
+      review: {
+        decision: "changes_requested",
+        hasUnresolvedHumanComments: true,
+        unresolvedBy: [{ reviewerId: "maya", count: 1, links: [{ body: "Guard this optional value.", file: "src/panel.tsx", line: 42, url: "https://github.com/acme/repo/pull/3#discussion_r9", autoInjectReview: false }] }],
+      },
+    }));
+    postMock.mockImplementation(async (path: string) => path === "/api/v1/prs/{id}/details"
+      ? { error: { code: "PR_DETAILS_FAILED", message: "provider unavailable" }, response: { status: 502 } }
+      : { data: { ok: true } });
+
+    renderWithQuery(<SessionInspector session={session([pr(3, "open")])} />);
+    await openReviewsSection();
+
+    const block = await screen.findByTestId("review-pr-block");
+    expect(await within(block).findByText("Couldn't load this PR's details.")).toBeInTheDocument();
+    expect(within(block).getByRole("button", { name: "Retry" })).toBeInTheDocument();
+    expect(await commentRowWith("Guard this optional value.")).toBeInTheDocument();
+  });
+
   it("replies in a GitHub thread from its row", async () => {
     serveProviderPR(prSummary(3, "open", {
       threads: [mayaThread("PRRT_1", "src/panel.tsx", 42, "Guard this optional value.")],

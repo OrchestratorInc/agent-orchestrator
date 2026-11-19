@@ -279,14 +279,16 @@ function ReviewPRBlockView({
 							sendingAll={sendingAll}
 						/>
 					</div>
-					{comments.length === 0 && detailsFailed ? (
-						// Not "No comments yet": the PR's comments could not be read, which is not the same.
-						<div className="flex min-w-0 items-center justify-between gap-2 px-3 py-2.5">
+					{detailsFailed ? (
+						// The PR's threads could not be read: say so above whatever the summary already gave,
+						// which stays while Retry runs. With nothing listed, it replaces "No comments yet".
+						<div className={cn("flex min-w-0 items-center justify-between gap-2 px-3 py-2", comments.length > 0 && "border-b border-border/60")}>
 							<p className={cn(inspectorEmptyClass, "m-0")} role="status">{t("pr.description.unavailable")}</p>
 							<Button onClick={retryDetails} size="xs" variant="quiet">{t("inspector.review.retry")}</Button>
 						</div>
-					) : comments.length === 0 ? (
-						<p className={cn(inspectorEmptyClass, "m-0 px-3 py-3.5")}>{t("pr.comments.none")}</p>
+					) : null}
+					{comments.length === 0 ? (
+						detailsFailed ? null : <p className={cn(inspectorEmptyClass, "m-0 px-3 py-3.5")}>{t("pr.comments.none")}</p>
 					) : (
 						(["open", "resolved"] as const).map((tab) => (
 							<TabsPrimitive.Content className="outline-none" key={tab} value={tab}>
