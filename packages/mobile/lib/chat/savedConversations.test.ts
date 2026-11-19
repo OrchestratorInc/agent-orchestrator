@@ -12,7 +12,9 @@ vi.mock("expo-file-system", () => import("./savedConversations.fakes").then((fak
 vi.mock("expo-crypto", () => import("./savedConversations.fakes").then((fakes) => fakes.cryptoModule));
 vi.mock("expo-secure-store", () => import("./savedConversations.fakes").then((fakes) => fakes.secureStoreModule));
 
+import AsyncStorage from "@react-native-async-storage/async-storage";
 import {
+	conversationSaver,
 	createConversationSaver,
 	forgetSavedConversations,
 	loadSavedConversation,
@@ -26,7 +28,7 @@ import {
 	savedPageEvictions,
 	savedPageView,
 } from "./savedConversations";
-import { disk, resetSavedChatFakes, savedFileNames, secrets } from "./savedConversations.fakes";
+import { disk, resetSavedChatFakes, savedFileNames, secrets, undeletable } from "./savedConversations.fakes";
 import type { ConversationPage } from "./snapshot";
 
 const page = (text: string, sessionId = "s") => ({ sessionId, conversationId: "c", latestSequence: 1, items: [{ kind: "message", id: "m", text }], turns: [] } as unknown as ConversationPage);
@@ -100,6 +102,7 @@ describe("saved chat pages", () => {
 		vi.setSystemTime(Date.now() + SAVED_PAGE_KEEP_MS + 1_000);
 
 		expect(await loadSavedConversation("host.a/old")).toBeNull();
+		await conversationSaver.flush();
 		expect(savedKeys()).toEqual(["host.a/other-old"]);
 		// The next write clears the rest.
 		await save("host.a/new", page("today"));
@@ -113,7 +116,51 @@ describe("saved chat pages", () => {
 		disk.set(fileOf("host.a/cut"), { bytes: disk.get(fileOf("host.a/chat"))!.bytes.slice(0, 40), modified: Date.now() });
 		expect(await loadSavedConversation("host.a/copy")).toBeNull();
 		expect(await loadSavedConversation("host.a/cut")).toBeNull();
+		await conversationSaver.flush();
 		expect(savedKeys()).toEqual(["host.a/chat"]);
+	});
+
+	it("keep the previous page when its replacement is cut short", async () => {
+		await save("host.a/chat", page("before"));
+		await save("host.a/donor", page("after"));
+		// Killed while writing the replacement: a partial `.new` beside the old page.
+		disk.set(`${fileOf("host.a/chat")}.new`, { bytes: disk.get(fileOf("host.a/donor"))!.bytes.slice(0, 40), modified: Date.now() });
+		expect((await loadSavedConversation("host.a/chat"))?.items[0]).toMatchObject({ text: "before" });
+		await conversationSaver.flush();
+		expect(disk.has(fileOf("host.a/chat"))).toBe(true);
+
+		// The next write replaces both.
+		await save("host.a/chat", page("next"));
+		expect(savedFileNames()).not.toContain(`${savedFileName("host.a/chat")}.new`);
+		expect((await loadSavedConversation("host.a/chat"))?.items[0]).toMatchObject({ text: "next" });
+	});
+
+	it("load a whole replacement left when the app was killed before it was moved into place", async () => {
+		await save("host.a/chat", page("after"));
+		// Killed after the old page was deleted: only the whole `.new` is left.
+		disk.set(`${fileOf("host.a/chat")}.new`, disk.get(fileOf("host.a/chat"))!);
+		disk.delete(fileOf("host.a/chat"));
+		expect((await loadSavedConversation("host.a/chat"))?.items[0]).toMatchObject({ text: "after" });
+		// Another chat's write does not count it as stray.
+		await save("host.a/other", page("x"));
+		expect((await loadSavedConversation("host.a/chat"))?.items[0]).toMatchObject({ text: "after" });
+	});
+
+	it("do not delete a page written while an expired one was being read", async () => {
+		vi.useFakeTimers({ toFake: ["Date"] });
+		vi.setSystemTime(new Date("2026-11-01T00:00:00Z"));
+		await save("host.a/chat", page("last week"));
+		vi.setSystemTime(Date.now() + SAVED_PAGE_KEEP_MS + 1_000);
+
+		// The restore reads the expired page; a live refresh writes a fresh one meanwhile.
+		const restoring = loadSavedConversation("host.a/chat");
+		conversationSaver.schedule("host.a/chat", page("today"));
+		const written = conversationSaver.flush();
+		expect(await restoring).toBeNull();
+		await written;
+		await conversationSaver.flush();
+
+		expect((await loadSavedConversation("host.a/chat"))?.items[0]).toMatchObject({ text: "today" });
 	});
 
 	it("are written once a streaming chat settles, the newest page per chat", async () => {
@@ -137,6 +184,7 @@ describe("saved chat pages", () => {
 		expect(savedFileName("http.192.168.1.20.3011/ao-1")).toBe("http.192.168.1.20.3011%2Fao-1.page");
 		expect(savedFileKey("http.192.168.1.20.3011%2Fao-1.page")).toBe("http.192.168.1.20.3011/ao-1");
 		expect(savedFileName(`host.a/${"x".repeat(300)}`)).toBeNull();
+		expect(savedFileKey("http.192.168.1.20.3011%2Fao-1.page.new")).toBe("http.192.168.1.20.3011/ao-1");
 		expect(savedFileKey("stray.tmp")).toBeNull();
 		expect(savedFileKey("%E0%A4%A.page")).toBeNull();
 	});
@@ -235,17 +283,37 @@ describe("forgetting a machine", () => {
 		expect(order).toEqual(["write:host.a/under-way", "remove:host.a/x:false", "write:host.b/kept"]);
 	});
 
-	it("deletes every saved chat and the key when no machine is named", async () => {
+	it("deletes the rest of the machine's chats when one file will not go, then reports it", async () => {
 		await save("host.h_one/s1", page("one"));
+		await save("host.h_one/s2", page("one"));
+		await save("http.host-one.3011/s4", page("migrated"));
 		await save("host.h_two/s3", page("two"));
-		await forgetSavedConversations(null);
+		undeletable.add(fileOf("host.h_one/s1"));
+
+		await expect(forgetSavedConversations(host)).rejects.toThrow("cannot delete");
+		expect(savedKeys()).toEqual(["host.h_one/s1", "host.h_two/s3"]);
+	});
+
+	it("deletes every saved chat and the key when no machine is named", async () => {
+		// A fresh module holds no key in memory, so the pages below must store one.
+		vi.resetModules();
+		const fresh = await import("./savedConversations");
+		const saver = fresh.createConversationSaver();
+		saver.schedule("host.h_one/s1", page("one"));
+		saver.schedule("host.h_two/s3", page("two"));
+		await saver.flush();
+		expect(savedKeys()).toEqual(["host.h_one/s1", "host.h_two/s3"]);
+		expect([...secrets.keys()]).toEqual(["ao.chat.savedPagesKey"]);
+
+		await fresh.forgetSavedConversations(null);
 		expect(savedKeys()).toEqual([]);
 		expect(secrets.size).toBe(0);
 
 		// The next save makes a new key.
-		await save("host.h_one/s1", page("again"));
+		saver.schedule("host.h_one/s1", page("again"));
+		await saver.flush();
 		expect(secrets.size).toBe(1);
-		expect(await loadSavedConversation("host.h_one/s1")).not.toBeNull();
+		expect(await fresh.loadSavedConversation("host.h_one/s1")).not.toBeNull();
 	});
 });
 
@@ -264,9 +332,11 @@ describe("pages older builds kept in AsyncStorage", () => {
 	it("are removed the first time a chat is opened, leaving the rest of the app's data", async () => {
 		legacy();
 		const saved = await fresh();
+		vi.mocked(AsyncStorage.multiRemove).mockClear();
 		expect(await saved.loadSavedConversation("host.a/s")).toBeNull();
-		await saved.clearLegacySavedPages();
-		expect([...stored.keys()]).toEqual(["ao.chat.draft.host.a/s"]);
+		// Opening the chat starts the cleanup itself, without waiting on it.
+		await vi.waitFor(() => expect([...stored.keys()]).toEqual(["ao.chat.draft.host.a/s"]));
+		expect(AsyncStorage.multiRemove).toHaveBeenCalledWith(["ao.chat.saved.v1", "ao.chat.saved.v1.host.a/s"]);
 	});
 
 	it("are removed before the first page is written", async () => {
