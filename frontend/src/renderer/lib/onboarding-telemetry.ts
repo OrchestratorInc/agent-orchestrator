@@ -59,6 +59,8 @@ let replay: (RunRecord & { id: string; reported: Set<string> }) | null = null;
 /** Whether the onboarding window is showing a run right now. */
 let flowOpen = false;
 let abandonedThisLaunch = false;
+/** This launch's latest first-run record, for when storage can't be written. */
+let memoryRun: RunRecord | null = null;
 const stepStartedAt = new Map<OnboardingStep, number>();
 
 function storage(): Storage | null {
@@ -86,6 +88,8 @@ function writeJson(key: string, value: unknown) {
 }
 
 function readFirstRun(): RunRecord | null {
+	// Written this launch: newer than storage, and kept when storage refused it.
+	if (memoryRun) return { ...memoryRun };
 	const record = readJson<RunRecord>(RUN_KEY);
 	return record && typeof record.startedAt === "number" ? record : null;
 }
@@ -96,6 +100,7 @@ function currentRun(): RunRecord | null {
 
 function saveRun(record: RunRecord) {
 	if (replay && record === replay) return;
+	memoryRun = { ...record };
 	writeJson(RUN_KEY, record);
 }
 
@@ -113,7 +118,8 @@ function readReported(): Set<string> {
 	if (replay) return replay.reported;
 	try {
 		const parsed: unknown = JSON.parse(window.localStorage.getItem(STEPS_KEY) ?? "[]");
-		return new Set(Array.isArray(parsed) ? parsed.filter((value): value is string => typeof value === "string") : []);
+		// Plus this launch's own, in case storage refused a write.
+		return new Set([...(Array.isArray(parsed) ? parsed.filter((value): value is string => typeof value === "string") : []), ...memory]);
 	} catch {
 		return memory;
 	}
@@ -161,6 +167,11 @@ export function reportOnboardingStep(step: OnboardingStep, phase: StepPhase, ext
 	if (!reserveOnboardingPhase(step, phase)) return;
 	const timing = phase === "viewed" ? {} : { time_on_step_ms: timeOnStep(step) };
 	capture(`ao.onboarding.step_${phase}`, { step, ...extra, ...timing });
+}
+
+/** Reports a step's view unless it already has one, so a step that finishes the moment it starts still reads viewed, then completed. */
+export function ensureOnboardingStepViewed(step: OnboardingStep): void {
+	if (!readReported().has(`${step}:viewed`)) reportOnboardingStep(step, "viewed");
 }
 
 /**
@@ -305,6 +316,13 @@ export function completeOnboardingRun(outcome: OnboardingOutcome): void {
 		back_count: run.backCount,
 		auto_skipped_count: run.autoSkipped,
 	});
+	// A finished replay goes on into its tour, which ends it (endOnboardingReplay).
+	if (run === replay && outcome !== "finished") replay = null;
+}
+
+/** A replay's tour ended, so the replay has: what follows counts for the first run again. */
+export function endOnboardingReplay(): void {
+	if (replay?.completedAt) replay = null;
 }
 
 /**
@@ -345,11 +363,13 @@ export function startOnboardingAction(
 export function finishOnboardingAction(
 	action: OnboardingAction,
 	outcome: OnboardingActionOutcome,
-	options: { target?: string; reason?: OnboardingFailureReason; errorCode?: string } = {},
+	options: { target?: string; reason?: OnboardingFailureReason; errorCode?: string; attempt?: number } = {},
 ): boolean {
 	const key = actionKey(action, options.target);
 	const attempt = pending.get(key);
 	if (!attempt) return false;
+	// A check that outlived its attempt (a retry started meanwhile) leaves the new one alone.
+	if (options.attempt !== undefined && options.attempt !== attempt.attempt) return false;
 	pending.delete(key);
 	capture("ao.onboarding.action_finished", {
 		action,
@@ -366,6 +386,11 @@ export function finishOnboardingAction(
 
 export function onboardingActionPending(action: OnboardingAction, target?: string): boolean {
 	return pending.has(actionKey(action, target));
+}
+
+/** The attempt in progress for (action, target), to pass back to finishOnboardingAction from an async check. */
+export function onboardingActionAttempt(action: OnboardingAction, target?: string): number | undefined {
+	return pending.get(actionKey(action, target))?.attempt;
 }
 
 /** An install job's end state, as an action outcome. */
@@ -393,7 +418,7 @@ export function apiErrorCode(error: unknown): string | undefined {
 // ── The guided tour's project step ──────────────────────────────────────────
 
 let tourStep: OnboardingStep | undefined;
-let projectNote: { source: "clone" | "local_folder"; at: number } | undefined;
+let projectNote: { source: "clone" | "local_folder"; projectId: string; at: number } | undefined;
 
 /** The tour step showing now, or undefined; set by GuidedTour. */
 export function setOnboardingTourStep(step: OnboardingStep | undefined): void {
@@ -407,8 +432,8 @@ function reportProjectResult(action: "project_clone" | "project_add", outcome: O
 }
 
 /** A project was cloned or added; the tour's project step reads where it came from. */
-export function reportOnboardingProjectAdded(source: "clone" | "local_folder"): void {
-	projectNote = { source, at: Date.now() };
+export function reportOnboardingProjectAdded(source: "clone" | "local_folder", projectId: string): void {
+	projectNote = { source, projectId, at: Date.now() };
 	reportProjectResult(source === "clone" ? "project_clone" : "project_add", "succeeded");
 }
 
@@ -417,11 +442,13 @@ export function reportOnboardingProjectFailed(action: "project_clone" | "project
 	reportProjectResult(action, "failed", errorCode && errorCode !== "unknown" ? errorCode : undefined);
 }
 
-/** Where the project that ended the tour's project step came from. */
-export function onboardingProjectSource(isNew: boolean): OnboardingProjectSource {
+/** Where the project that ended the tour's project step came from; only a note for that same project counts. */
+export function onboardingProjectSource(projectId: string | undefined, isNew: boolean): OnboardingProjectSource {
 	const note = projectNote;
-	projectNote = undefined;
-	if (note && Date.now() - note.at < PROJECT_NOTE_TTL_MS) return note.source;
+	if (note && note.projectId === projectId) {
+		projectNote = undefined;
+		if (Date.now() - note.at < PROJECT_NOTE_TTL_MS) return note.source;
+	}
 	return isNew ? "other" : "existing";
 }
 
@@ -452,6 +479,7 @@ export function useOnboardingActivation(duringTour: () => boolean): void {
 /** Test seam: forgets this launch's in-memory state. */
 export function resetOnboardingTelemetryForTests(): void {
 	memory.clear();
+	memoryRun = null;
 	replay = null;
 	flowOpen = false;
 	abandonedThisLaunch = false;

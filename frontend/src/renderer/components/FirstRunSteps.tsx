@@ -259,11 +259,12 @@ export function FirstRunImport({
 	useImportOfferShown("onboarding", true);
 	const chats = (preview.data?.candidates ?? []).filter(importableFromFolder);
 	const nothingToImport = !expanded && (preview.isError || (preview.isSuccess && !chats.length));
-	// The onboarding funnel's import step: Skip and Choose folders report
+	// The onboarding funnel's import step, viewed once the scan has found chats
+	// to offer (so the view carries how many): Skip and Choose folders report
 	// themselves; the folder count is on ao.session_imports.completed.
-	const completeImport = useOnboardingStep("import_chats", !nothingToImport, {
+	const completeImport = useOnboardingStep("import_chats", preview.isSuccess && chats.length > 0, {
 		autoComplete: false,
-		viewed: preview.isSuccess ? { chats_found: chats.length } : undefined,
+		viewed: { chats_found: chats.length },
 	});
 	const skip = () => {
 		skipOnboardingStep("import_chats", "user");
@@ -277,7 +278,8 @@ export function FirstRunImport({
 	nothingRef.current = onNothingToImport;
 	useEffect(() => {
 		if (!nothingToImport) return;
-		skipOnboardingStep("import_chats", "already_done");
+		// Only a scan that answered says there is nothing to do; a failed one moves on unreported.
+		if (preview.isSuccess) skipOnboardingStep("import_chats", "already_done");
 		nothingRef.current();
 	}, [nothingToImport]);
 	const agents = [...new Set(chats.map((chat) => chat.harness))];

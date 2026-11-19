@@ -47,6 +47,7 @@ import {
 	beginOnboardingRun,
 	completeOnboardingRun,
 	finishOnboardingAction,
+	onboardingActionAttempt,
 	onboardingActionPending,
 	reportOnboardingBack,
 	reportOnboardingStep,
@@ -243,7 +244,8 @@ export function FirstRunOnboarding() {
 				// The tour starts on Home, where projects are added, once it's
 				// showing (not on whatever page was behind the onboarding). A
 				// skipped setup has no harness to show it with, so it goes without.
-				if (tour) void navigate({ to: "/" }).then(startGuidedTour);
+				const replay = runKind.current === "replay";
+				if (tour) void navigate({ to: "/" }).then(() => startGuidedTour({ replay }));
 			}}
 		/>
 	);
@@ -324,7 +326,9 @@ function OnboardingFlow({ runKind, onFinish }: { runKind: OnboardingRunKind; onF
 	// Pages report their view here and their completion from goNext, never on
 	// leaving, since Back leaves a page without finishing it.
 	// Unknown (not sent) until the check answers, rather than a false 0.
-	const readyAgentCount = agentReadiness.data?.agents.filter((agent) => agent.effectiveReadiness === "ready").length;
+	// A harness still being checked doesn't count as not ready (as in useAgentInventoryTelemetry).
+	const readinessSettled = agentReadiness.data?.agents.every((agent) => agent.installation.freshness !== "checking" && agent.authentication.freshness !== "checking");
+	const readyAgentCount = readinessSettled ? agentReadiness.data?.agents.filter((agent) => agent.effectiveReadiness === "ready").length : undefined;
 	const ghInstalled = toolsGate.requirements.find((requirement) => requirement.id === "gh")?.satisfied;
 	const toolsMissing = (): string | undefined => {
 		const agents = agentReadiness.data?.agents;
@@ -884,7 +888,10 @@ function SignInStep({ onNext, onSkip }: { onNext: () => void; onSkip: () => void
 		// The hosted sign-in page opens in the browser; the session arrives
 		// through cloud:sessionChanged and flips this page to the account row.
 		setWaiting(true);
-		cloud.signIn();
+		// As cloud.signIn, but the browser failing to open ends the attempt.
+		void aoBridge.cloud.signIn().catch(() => {
+			finishOnboardingAction("cloud_sign_in", "failed", { reason: "start_failed" });
+		});
 	};
 	return (
 		<StepSplit
@@ -1106,12 +1113,13 @@ function ToolsStep({ onNext, onSkip, login }: {
 		}
 	};
 	// Once a verify has settled, a sign-in still pending ends as signed in or not.
-	const settleSignIn = (agentId: string, notReady: "cancelled" | "failed") => {
+	// `attempt`: the one the verify was started for, so a newer one is left alone.
+	const settleSignIn = (agentId: string, notReady: "cancelled" | "failed", attempt?: number) => {
 		if (!onboardingActionPending("agent_sign_in", agentId)) return;
 		const ready = queryClient.getQueryData<AgentReadiness>(agentReadinessQueryKey)?.agents
 			.some((agent) => agent.id === agentId && agent.effectiveReadiness === "ready");
-		if (ready) finishOnboardingAction("agent_sign_in", "succeeded", { target: agentId });
-		else finishOnboardingAction("agent_sign_in", notReady, { target: agentId, reason: notReady === "failed" ? "not_signed_in" : undefined });
+		if (ready) finishOnboardingAction("agent_sign_in", "succeeded", { target: agentId, attempt });
+		else finishOnboardingAction("agent_sign_in", notReady, { target: agentId, attempt, reason: notReady === "failed" ? "not_signed_in" : undefined });
 	};
 	// A harness that turns ready ends its sign-in, wherever the login finished.
 	const readyIds = [...agents, ...more].filter((row) => row.state === "ready").map((row) => row.agent.id).join(",");
@@ -1133,10 +1141,11 @@ function ToolsStep({ onNext, onSkip, login }: {
 			void refresh();
 			return;
 		}
+		const attempt = onboardingActionAttempt("agent_sign_in", workflow.agentId);
 		if (await closeLoginWorkflow(workflow, setWorkflow, t("settings.harness.authFailed"))) {
 			await verify([workflow.agentId]);
 			// Closed by the person before the harness was signed in.
-			settleSignIn(workflow.agentId, "cancelled");
+			if (attempt !== undefined) settleSignIn(workflow.agentId, "cancelled", attempt);
 		}
 	};
 	useLoginLifetime(workflow, setWorkflow, { timedOut: t("settings.harness.authTimedOut"), failed: t("settings.harness.authFailed") }, (agentId) => void verify([agentId]));
@@ -1299,7 +1308,8 @@ function ToolsStep({ onNext, onSkip, login }: {
 						onTerminalState={(state) => {
 							if (state === "exited" || state === "error") {
 								const agentId = workflow.agentId;
-								void verify([agentId]).then(() => settleSignIn(agentId, "failed"));
+								const attempt = onboardingActionAttempt("agent_sign_in", agentId);
+								void verify([agentId]).then(() => { if (attempt !== undefined) settleSignIn(agentId, "failed", attempt); });
 							}
 						}}
 					/>

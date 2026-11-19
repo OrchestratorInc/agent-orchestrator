@@ -9,8 +9,11 @@ import {
 	beginOnboardingRun,
 	completeOnboardingRun,
 	completeOnboardingStepIfViewed,
+	endOnboardingReplay,
+	ensureOnboardingStepViewed,
 	finishOnboardingAction,
 	installJobOutcome,
+	onboardingActionAttempt,
 	onboardingProjectSource,
 	recordOnboardingActivation,
 	reportOnboardingBack,
@@ -187,6 +190,28 @@ describe("onboarding run telemetry", () => {
 		expect(lastProps("ao.onboarding.completed")).toMatchObject({ outcome: "superseded" });
 	});
 
+	it("still completes a run when storage refuses writes", () => {
+		const setItem = vi.spyOn(Storage.prototype, "setItem").mockImplementation(() => {
+			throw new Error("QuotaExceededError");
+		});
+		try {
+			beginOnboardingRun("first_run", "welcome");
+			reportOnboardingStep("welcome", "viewed");
+			reportOnboardingStep("welcome", "viewed");
+			completeOnboardingRun("finished");
+			expect(events()).toEqual(["ao.onboarding.started", "ao.onboarding.step_viewed", "ao.onboarding.completed"]);
+		} finally {
+			setItem.mockRestore();
+		}
+	});
+
+	it("reports a view before a completion that came first, and only once", () => {
+		ensureOnboardingStepViewed("tour_project");
+		ensureOnboardingStepViewed("tour_project");
+		reportOnboardingStep("tour_project", "completed");
+		expect(events()).toEqual(["ao.onboarding.step_viewed", "ao.onboarding.step_completed"]);
+	});
+
 	it("gives each replay its own run and its own step dedupe", () => {
 		beginOnboardingRun("first_run", "welcome");
 		reportOnboardingStep("welcome", "viewed");
@@ -246,7 +271,7 @@ describe("onboarding action telemetry", () => {
 		setOnboardingTourStep("tour_project");
 		reportOnboardingProjectFailed("project_clone", "CLONE_FAILED");
 		reportOnboardingProjectFailed("project_clone", "unknown");
-		reportOnboardingProjectAdded("clone");
+		reportOnboardingProjectAdded("clone", "repo-a");
 		const finished = capture.mock.calls.filter((call) => call[0] === "ao.onboarding.action_finished").map((call) => call[1]);
 		expect(finished).toEqual([
 			expect.objectContaining({ action: "project_clone", attempt: 1, outcome: "failed", reason: "refused", error_code: "CLONE_FAILED" }),
@@ -255,12 +280,24 @@ describe("onboarding action telemetry", () => {
 		]);
 	});
 
-	it("reads where the tour's project came from", () => {
-		reportOnboardingProjectAdded("local_folder");
-		expect(onboardingProjectSource(true)).toBe("local_folder");
+	it("reads where the tour's project came from, for that project only", () => {
+		reportOnboardingProjectAdded("local_folder", "repo-a");
+		// Another project opened meanwhile keeps its own answer, and leaves the note.
+		expect(onboardingProjectSource("repo-b", false)).toBe("existing");
+		expect(onboardingProjectSource("repo-a", true)).toBe("local_folder");
 		// The note is used up.
-		expect(onboardingProjectSource(true)).toBe("other");
-		expect(onboardingProjectSource(false)).toBe("existing");
+		expect(onboardingProjectSource("repo-a", true)).toBe("other");
+		expect(onboardingProjectSource(undefined, false)).toBe("existing");
+	});
+
+	it("lets a check finish only the attempt it was started for", () => {
+		startOnboardingAction("gh_sign_in", { target: "gh", step: "github_auth" });
+		const first = onboardingActionAttempt("gh_sign_in", "gh");
+		// A retry starts before the first attempt's check answers.
+		startOnboardingAction("gh_sign_in", { target: "gh", step: "github_auth" });
+		expect(finishOnboardingAction("gh_sign_in", "failed", { target: "gh", reason: "not_signed_in", attempt: first })).toBe(false);
+		expect(finishOnboardingAction("gh_sign_in", "succeeded", { target: "gh", attempt: onboardingActionAttempt("gh_sign_in", "gh") })).toBe(true);
+		expect(lastProps("ao.onboarding.action_finished")).toMatchObject({ attempt: 2, outcome: "succeeded" });
 	});
 });
 
@@ -294,11 +331,28 @@ describe("onboarding activation telemetry", () => {
 		expect(capture).not.toHaveBeenCalled();
 	});
 
-	it("does not count a replay as activation", () => {
+	it("does not count a message during a replay as activation", () => {
+		// A finished, not yet activated first run, so only the replay guard stops it.
+		beginOnboardingRun("first_run", "welcome")();
+		completeOnboardingRun("finished");
 		beginOnboardingRun("replay", "welcome");
 		completeOnboardingRun("finished");
 		capture.mockClear();
-		recordOnboardingActivation(false);
+		recordOnboardingActivation(true);
 		expect(capture).not.toHaveBeenCalled();
+		// Its tour ended: the next message counts for the first run.
+		endOnboardingReplay();
+		recordOnboardingActivation(false);
+		expect(events()).toEqual(["ao.onboarding.activated"]);
+	});
+
+	it("ends a replay whose setup was skipped, so later messages count again", () => {
+		beginOnboardingRun("first_run", "welcome")();
+		completeOnboardingRun("finished");
+		beginOnboardingRun("replay", "welcome")();
+		completeOnboardingRun("skipped_setup");
+		capture.mockClear();
+		recordOnboardingActivation(false);
+		expect(capture.mock.calls).toEqual([["ao.onboarding.activated", expect.objectContaining({ during_tour: false })]]);
 	});
 });

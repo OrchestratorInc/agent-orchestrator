@@ -79,6 +79,9 @@ export function useInstallRunner(onSucceeded: () => void, telemetryStep?: Onboar
 	const [startError, setStartError] = useState<string | undefined>(undefined);
 	const [succeededTargets, setSucceededTargets] = useState<ReadonlySet<InstallTarget>>(new Set());
 	const pollRef = useRef<number | null>(null);
+	// Bumped on every install start: a poll answer from an earlier attempt,
+	// still in flight, must not settle (or stop polling for) the new one.
+	const generationRef = useRef(0);
 	const inspectedRef = useRef(new Set<InstallTarget>());
 	const onSucceededRef = useRef(onSucceeded);
 	onSucceededRef.current = onSucceeded;
@@ -107,11 +110,13 @@ export function useInstallRunner(onSucceeded: () => void, telemetryStep?: Onboar
 
 	const poll = (polledTarget: InstallTarget) => {
 		stopPolling();
+		const generation = generationRef.current;
 		pollRef.current = window.setInterval(() => {
 			void (async () => {
 				const { data, error } = await apiClient.GET("/api/v1/system/install/{target}", {
 					params: { path: { target: polledTarget } },
 				});
+				if (generation !== generationRef.current) return;
 				if (error || !data) return; // transient — try again next tick
 				setJob(data as InstallJobWithNotice);
 				if (isActiveInstallJob(data)) return;
@@ -147,6 +152,7 @@ export function useInstallRunner(onSucceeded: () => void, telemetryStep?: Onboar
 		// One install request at a time: a second click before the daemon answers does nothing.
 		if (startingRef.current) return;
 		startingRef.current = true;
+		generationRef.current += 1;
 		stopPolling();
 		setTarget(nextTarget);
 		setJob(undefined);

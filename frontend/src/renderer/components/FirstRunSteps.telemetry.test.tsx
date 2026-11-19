@@ -19,12 +19,14 @@ vi.mock("./InstallDependencyDialog", () => ({
 vi.mock("./GitHubRepoPicker", () => ({ GitHubRepoPicker: () => null, preloadGitHubRepos: vi.fn() }));
 vi.mock("./TerminalPane", () => ({ TerminalPane: () => null }));
 
+import { resetOnboardingTelemetryForTests } from "../lib/onboarding-telemetry";
 import { GitHubSetupPanel } from "./FirstRunSteps";
 
 describe("GitHub onboarding step telemetry", () => {
 	beforeEach(() => {
 		capture.mockClear();
 		window.localStorage.clear();
+		resetOnboardingTelemetryForTests();
 	});
 
 	it("reports github_auth viewed while sign-in is needed and completed once signed in", () => {

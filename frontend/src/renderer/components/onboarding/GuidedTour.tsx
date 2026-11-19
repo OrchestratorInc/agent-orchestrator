@@ -9,6 +9,8 @@ import { IS_DEV } from "../../lib/is-dev";
 import { sessionNavigateTarget } from "../../lib/navigate-to-session";
 import type { OnboardingStep } from "../../lib/onboarding-steps";
 import {
+	endOnboardingReplay,
+	ensureOnboardingStepViewed,
 	onboardingProjectSource,
 	reportOnboardingStep,
 	setOnboardingTourStep,
@@ -105,14 +107,16 @@ function findVisible(selectors: readonly string[]): Element | null {
 // `known`: the projects there when the tour started, so the first step can
 // tell a new one (null until the list loads). `projectId`: the project the
 // tour settled on (added or opened). A per-viewer convenience, so localStorage.
-type TourState = { step: TourStep; known: string[] | null; projectId?: string };
+// `replay`: started by a Developer Mode replay, which lasts one launch, so it
+// isn't brought back on the next one.
+type TourState = { step: TourStep; known: string[] | null; projectId?: string; replay?: boolean };
 const STORAGE_KEY = "ao.guidedTour";
 const STEPS: readonly TourStep[] = [...COUNTED, "done"];
 
 function readState(): TourState | null {
 	try {
 		const parsed = JSON.parse(window.localStorage.getItem(STORAGE_KEY) ?? "null") as Partial<TourState> | null;
-		if (!parsed || !STEPS.includes(parsed.step as TourStep)) return null;
+		if (!parsed || !STEPS.includes(parsed.step as TourStep) || parsed.replay) return null;
 		return {
 			step: parsed.step as TourStep,
 			known: Array.isArray(parsed.known) ? parsed.known.filter((id): id is string => typeof id === "string") : null,
@@ -146,15 +150,18 @@ function moveOn(from: TourStep, to: TourStep, patch: Partial<TourState> = {}) {
 	// The project step records where its project came from (a clone, a local
 	// folder, one that was already there).
 	const projectId = patch.projectId;
-	const extra = from === "project" ? { project_source: onboardingProjectSource(!projectId || !(state.known ?? []).includes(projectId)) } : {};
+	const extra = from === "project" ? { project_source: onboardingProjectSource(projectId, !projectId || !(state.known ?? []).includes(projectId)) } : {};
+	// A step can end before its view effect runs (the tour restored on a page
+	// already past it), so its view is reported first.
+	ensureOnboardingStepViewed(FUNNEL_STEP[from]);
 	reportOnboardingStep(FUNNEL_STEP[from], "completed", extra);
 	setState({ ...state, ...patch, step: to });
 }
 
 /** Starts the tour from its first step. Onboarding calls this once it has
  * closed and Home, where projects are added, is showing. */
-export function startGuidedTour() {
-	setState({ step: "project", known: null });
+export function startGuidedTour({ replay = false }: { replay?: boolean } = {}) {
+	setState({ step: "project", known: null, ...(replay ? { replay } : {}) });
 }
 
 // ── Following the control on screen ─────────────────────────────────────────
@@ -372,6 +379,7 @@ export function GuidedTour() {
 			if (current === "task") reportOnboardingStep("first_task", "abandoned");
 		}
 		setState(null);
+		endOnboardingReplay();
 	};
 	const endRef = useRef(end);
 	endRef.current = end;

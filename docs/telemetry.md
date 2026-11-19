@@ -698,9 +698,12 @@ part shows CI and code review on GitHub), the optional AO Cloud sign-in, Your
 tools (the GitHub CLI and coding agents), then a guided tour of the real app
 (add a project, open its orchestrator, send the first message).
 
-These events carry only the closed values listed here, counts, buckets and
-durations. They never include a path, repository name or URL, project or
-session name, username, email, chat text or error message.
+The onboarding properties below are only the closed values listed here,
+counts, buckets and durations: never a path, repository name or URL, project
+or session name, username, email, chat text or error message. Like every
+renderer event, these events also carry the shared context and identity
+properties documented later in this file, including `github_actor` when the
+GitHub CLI is signed in and `ao_cloud_user_id` when signed in to AO Cloud.
 
 ### Steps
 
