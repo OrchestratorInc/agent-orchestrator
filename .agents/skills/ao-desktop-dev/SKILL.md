@@ -21,7 +21,7 @@ Ask only when the request does not make the desired data source clear.
 
 1. Work from the repository root and inspect `git status --short --branch`.
 2. Read `frontend/package.json`, `frontend/src/main.ts`, and `frontend/forge.config.ts` when the launch behavior may have changed. Treat source as authoritative over this skill.
-3. Confirm Node/npm and the Go version required by `backend/go.mod` are available. Run `npm ci` in `frontend/` only when dependencies are absent or inconsistent; do not reinstall on every launch.
+3. Confirm Node/npm and the Go version required by `backend/go.mod` are available. In a fresh checkout run `npm run dev:warm` in `frontend/`: it clones a cached real install for an identical lockfile (or runs `npm ci`) and restores cached predev outputs. Otherwise run `npm ci` only when dependencies are absent or inconsistent; do not reinstall on every launch.
 4. Check for an existing dev instance from this exact checkout before starting another. Do not kill by process name alone, and never terminate every Electron process.
 
 On macOS/Linux, inspect checkout-scoped processes and listeners with finite commands:
