@@ -1246,6 +1246,18 @@ describe("ChatMarkdown math", () => {
 		expect([...streamed.querySelectorAll("pre")].map((pre) => pre.textContent)).toEqual(['const s = "\\\\(no\\\\)";\n', "\\(indented\\)\n", "\\(quoted\\)\n"]);
 	});
 
+	it("typesets padded and digit-followed dollar formulas while streaming as once settled", async () => {
+		useUiStore.setState({ renderMath: true });
+		const text = "The result is $ x^2 $. Costs $5 and $10, $  w $ or $$ y $$.";
+		const formulas = (container: HTMLElement) => [...container.querySelectorAll<HTMLElement>("[data-math]")].map((node) => `${node.dataset.math} ${node.dataset.tex} ${node.querySelector(".katex") ? "typeset" : "source"}`);
+		const streamed = render(<ChatMarkdown text={text} streaming />).container;
+		await waitFor(() => expect(streamed.querySelector(".katex")).not.toBeNull());
+		const settled = render(<ChatMarkdown text={text} />).container;
+		await waitFor(() => expect(settled.querySelector(".katex")).not.toBeNull());
+		expect(formulas(streamed)).toEqual(formulas(settled));
+		expect(formulas(settled)).toHaveLength(4);
+	});
+
 	it("leaves dollar signs as text while the setting is off", () => {
 		const { container } = render(<ChatMarkdown text="Costs $5 and $10, or $x^2$." />);
 		expect(container).toHaveTextContent("Costs $5 and $10, or $x^2$.");

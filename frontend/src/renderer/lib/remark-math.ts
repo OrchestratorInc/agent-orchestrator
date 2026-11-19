@@ -43,7 +43,13 @@ function backslashFormulas(node: Nodes, source: string, edits: Edit[]): void {
 		const start = node.position!.start.offset!;
 		const end = node.position!.end.offset!;
 		const raw = source.slice(start, end);
-		if (raw[0] !== "\\") return;
+		if (raw[0] !== "\\") {
+			const tex = node.value.trim();
+			if (node.type !== "inlineMath" || raw[1] === "$" || !tex) return;
+			const text = /\d/.test(source[end] ?? "") ? `$$${tex}$$` : `$${tex}$`;
+			if (text !== raw) edits.push({ start, end, text });
+			return;
+		}
 		const closed = raw.endsWith(raw[1] === "(" ? "\\)" : "\\]");
 		const indent = source.slice(source.lastIndexOf("\n", start - 1) + 1, start).replace(/[^\s>]/g, " ");
 		const text = node.type !== "math"
@@ -60,7 +66,7 @@ export function createDollarDelimiters(): (text: string) => string {
 	let stable = 0;
 	let done = "";
 	return (text) => {
-		if (!text.includes("\\(") && !text.includes("\\[")) return text;
+		if (!text.includes("$") && !text.includes("\\(") && !text.includes("\\[")) return text;
 		const from = source && text.startsWith(source.slice(0, stable)) ? stable : 0;
 		const tail = text.slice(from);
 		const tree = mathParser.parse(tail);

@@ -20,6 +20,17 @@ describe("createDollarDelimiters", () => {
 		expect(createDollarDelimiters()("\\[w\\]\n\n> - \\[v\\]")).toBe("$$\nw\n$$\n\n> - $$\n>   v\n>   $$");
 	});
 
+	it("unpads dollar formulas and doubles one a digit follows, as Words reads only those", () => {
+		const convert = createDollarDelimiters();
+		const padded = "The result is $ x^2 $. Costs $5 and $10, or $y$, $  w $ and $$ z $$.";
+		const expected = "The result is $x^2$. Costs $$5 and$$10, or $y$, $w$ and $$ z $$.";
+		let out = "";
+		for (let end = 1; end <= padded.length; end++) out = convert(padded.slice(0, end));
+		expect(out).toBe(expected);
+		expect(createDollarDelimiters()(padded)).toBe(expected);
+		expect(createDollarDelimiters()("`$ x $` and\n\n```sh\necho $ HOME $\n```")).toBe("`$ x $` and\n\n```sh\necho $ HOME $\n```");
+	});
+
 	it("keeps an open display formula open", () => {
 		expect(createDollarDelimiters()("\\[\nE = m")).toBe("$$\nE = m");
 	});
