@@ -47,6 +47,29 @@ const verdictKey = {
 	pending: "inspector.review.requested",
 } as const;
 
+/** A GitLab merge request, from its summary or, before that loads, its URL. */
+function onGitLab(block: ReviewPRBlock): boolean {
+	return block.provider ? block.provider.provider === "gitlab" : /\/-\/merge_requests\/\d+/.test(block.webUrl);
+}
+
+/**
+ * A review summary's one-line preview. The verdict already shows beside it, so a
+ * body that opens by restating it ("## Changes requested", "Approved. The fix…")
+ * previews from what comes after.
+ */
+export function summaryPreview(lines: string[], verdictLabels: string[]): string {
+	const [first = "", ...rest] = lines;
+	const labels = [...new Set(verdictLabels.map((label) => label.trim()).filter(Boolean))];
+	for (const label of labels) {
+		const lead = new RegExp(`^${label.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}(?:\\s*[:.!—–-]\\s*|\\s*$)`, "i");
+		if (!lead.test(first)) continue;
+		const remainder = first.replace(lead, "").trim();
+		if (remainder) return remainder.charAt(0).toUpperCase() + remainder.slice(1);
+		return rest[0] ?? first;
+	}
+	return first;
+}
+
 /**
  * The Reviews tab's Comments: one list per open PR holding the Orchestrator
  * reviewer's comments and the provider's together, Open first and Resolved
@@ -323,7 +346,7 @@ function PRActionsMenu({
 				) : null}
 				<DropdownMenuItem onSelect={() => window.open(block.webUrl, "_blank", "noopener,noreferrer")}>
 					<ArrowUpRight aria-hidden="true" />
-					{t("inspector.review.openPROnProvider")}
+					{onGitLab(block) ? t("inspector.review.openMROnGitLab") : t("inspector.review.openPROnProvider")}
 				</DropdownMenuItem>
 				{onOpenInBrowser ? (
 					<DropdownMenuItem onSelect={() => onOpenInBrowser(block.webUrl)}>{t("inspector.openInAOBrowser")}</DropdownMenuItem>
@@ -368,7 +391,10 @@ function ReviewCommentRow({
 	const name = orchestrator ? t("inspector.review.orchestrator") : comment.author;
 	const location = comment.file ? `${comment.file}${comment.line ? `:${comment.line}` : ""}` : "";
 	const shortLocation = comment.file ? `${comment.file.split("/").pop()}${comment.line ? `:${comment.line}` : ""}` : "";
-	const preview = commentTextLines(comment.body)[0] ?? "";
+	const preview = summaryPreview(
+		commentTextLines(comment.body),
+		comment.kind === "summary" && comment.verdict ? [t(verdictKey[comment.verdict]), t(verdictKey[comment.verdict], { lng: "en" })] : [],
+	);
 	const canSend = Boolean(actions.onSend) && !comment.resolved && !comment.earlier && Boolean(comment.body);
 	const canResolve = Boolean(actions.onResolve) && comment.kind === "inline" && !comment.resolved && Boolean(comment.url);
 	// A thread takes a reply in place; a provider review or comment is answered by quoting it.
@@ -441,7 +467,7 @@ function ReviewCommentRow({
 	if (comment.url) {
 		const url = comment.url;
 		if (menuItems.length > 0) menuItems.push(<DropdownMenuSeparator key="links" />);
-		menuItems.push(<DropdownMenuItem key="provider" onSelect={() => window.open(url, "_blank", "noopener,noreferrer")}>{t("pr.comments.openOnProvider")}</DropdownMenuItem>);
+		menuItems.push(<DropdownMenuItem key="provider" onSelect={() => window.open(url, "_blank", "noopener,noreferrer")}>{onGitLab(block) ? t("inspector.review.openOnGitLab") : t("pr.comments.openOnProvider")}</DropdownMenuItem>);
 		if (actions.onOpenInBrowser) menuItems.push(<DropdownMenuItem key="browser" onSelect={() => actions.onOpenInBrowser?.(url)}>{t("inspector.openInAOBrowser")}</DropdownMenuItem>);
 		menuItems.push(<DropdownMenuItem key="copy" onSelect={() => copy(url)}>{t("pr.comments.copyLink")}</DropdownMenuItem>);
 	}
@@ -514,7 +540,7 @@ function ReviewCommentRow({
 						) : null}
 						{replyOffered && !replying ? <FootAction icon={<Reply />} onClick={() => setReplying(true)}>{t("pr.comments.reply")}</FootAction> : null}
 						{comment.url ? (
-							<FootAction icon={<ArrowUpRight />} onClick={() => window.open(comment.url, "_blank", "noopener,noreferrer")}>{t("pr.comments.openOnProvider")}</FootAction>
+							<FootAction icon={<ArrowUpRight />} onClick={() => window.open(comment.url, "_blank", "noopener,noreferrer")}>{onGitLab(block) ? t("inspector.review.openOnGitLab") : t("pr.comments.openOnProvider")}</FootAction>
 						) : null}
 						<FootAction className="ml-auto" iconAfter={<ChevronUp />} onClick={() => onExpandedChange(false)}>{t("pr.comments.collapse")}</FootAction>
 					</div>

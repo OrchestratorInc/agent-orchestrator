@@ -1072,6 +1072,8 @@
 	"inspector.review.reviewersHint": "审查者 · 选择以再次请求",
 	"inspector.review.prActions": "拉取请求操作",
 	"inspector.review.sendAllOpen": "将所有未解决的发送给代理",
+	"inspector.review.openMROnGitLab": "在 GitLab 上打开 MR",
+	"inspector.review.openOnGitLab": "在 GitLab 上打开",
 	"inspector.review.openPROnProvider": "在 GitHub 上打开 PR",
 	"inspector.review.autoReviewLabel": "自动审查",
 	"inspector.review.autoReviewHint": "使用上方的审查者审查此会话 PR 的每次新推送。关闭后仅在你请求时审查。",

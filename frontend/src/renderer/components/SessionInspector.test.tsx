@@ -5269,6 +5269,22 @@ describe("SessionInspector summary reviews", () => {
     expect(screen.queryByText("Not reviewed yet")).not.toBeInTheDocument();
   });
 
+  // With auto-review off its failure stays quiet, and the line still names the earlier completed pass.
+  it("names the last completed pass when a later automatic pass failed", async () => {
+    mockCommonGets([], "reviewer-pane", [{
+      ...reviewState(3, "needs_review", "sha-new"),
+      latestRun: { ...failedReview, targetSha: "sha-new", triggerSource: "auto", createdAt: "2026-06-16T11:00:00Z" },
+      previousRun: { ...approvedReview, id: "run-old", targetSha: "c040adb1f2", verdict: "changes_requested" },
+    }]);
+
+    renderWithQuery(<SessionInspector session={session([pr(3, "open")])} />);
+    await openReviewsSection();
+
+    expect((await screen.findByText(/Last reviewed/)).closest("p")).toHaveTextContent("c040adb");
+    expect(screen.queryByText("Not reviewed yet")).not.toBeInTheDocument();
+    expect(screen.queryByText("Last review failed.")).not.toBeInTheDocument();
+  });
+
   it.each([false, true])("confirms a same-commit re-review before sending it (confirm=%s)", async (confirm) => {
     mockCommonGets([approvedReview], "reviewer-pane", [reviewState(3, "up_to_date")]);
     postMock.mockResolvedValue({

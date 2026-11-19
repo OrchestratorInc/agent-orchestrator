@@ -1073,6 +1073,8 @@
 	"inspector.review.reviewersHint": "レビュアー · 選ぶと再レビューを依頼",
 	"inspector.review.prActions": "プルリクエストの操作",
 	"inspector.review.sendAllOpen": "未解決をすべてエージェントに送信",
+	"inspector.review.openMROnGitLab": "GitLab で MR を開く",
+	"inspector.review.openOnGitLab": "GitLab で開く",
 	"inspector.review.openPROnProvider": "GitHub で PR を開く",
 	"inspector.review.autoReviewLabel": "自動レビュー",
 	"inspector.review.autoReviewHint": "このセッションの PR への新しいプッシュごとに、上のレビュアーでレビューします。オフにすると依頼したときだけレビューします。",

@@ -1089,6 +1089,8 @@
 	"inspector.review.reviewersHint": "Ревьюеры · выберите, чтобы запросить снова",
 	"inspector.review.prActions": "Действия с pull request",
 	"inspector.review.sendAllOpen": "Отправить все открытые агенту",
+	"inspector.review.openMROnGitLab": "Открыть MR на GitLab",
+	"inspector.review.openOnGitLab": "Открыть на GitLab",
 	"inspector.review.openPROnProvider": "Открыть PR на GitHub",
 	"inspector.review.autoReviewLabel": "Авторевью",
 	"inspector.review.autoReviewHint": "Проверяет каждый новый push в PR этой сессии ревьюером выше. Выключите, чтобы проверять только по запросу.",

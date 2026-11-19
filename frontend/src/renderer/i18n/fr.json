@@ -1087,6 +1087,8 @@
 	"inspector.review.reviewersHint": "Relecteurs · choisissez-en un pour redemander",
 	"inspector.review.prActions": "Actions de la pull request",
 	"inspector.review.sendAllOpen": "Envoyer tous les ouverts à l'agent",
+	"inspector.review.openMROnGitLab": "Ouvrir la MR sur GitLab",
+	"inspector.review.openOnGitLab": "Ouvrir sur GitLab",
 	"inspector.review.openPROnProvider": "Ouvrir la PR sur GitHub",
 	"inspector.review.autoReviewLabel": "Revue automatique",
 	"inspector.review.autoReviewHint": "Relit chaque nouveau push sur les PR de cette session avec le relecteur ci-dessus. Désactivez-la pour ne relire qu'à la demande.",

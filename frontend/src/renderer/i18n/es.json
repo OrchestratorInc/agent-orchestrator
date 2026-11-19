@@ -1087,6 +1087,8 @@
 	"inspector.review.reviewersHint": "Revisores · elige uno para pedírsela de nuevo",
 	"inspector.review.prActions": "Acciones del pull request",
 	"inspector.review.sendAllOpen": "Enviar todos los abiertos al agente",
+	"inspector.review.openMROnGitLab": "Abrir MR en GitLab",
+	"inspector.review.openOnGitLab": "Abrir en GitLab",
 	"inspector.review.openPROnProvider": "Abrir PR en GitHub",
 	"inspector.review.autoReviewLabel": "Revisión automática",
 	"inspector.review.autoReviewHint": "Revisa cada nuevo push a los PR de esta sesión con el revisor de arriba. Desactívala para revisar solo cuando lo pidas.",

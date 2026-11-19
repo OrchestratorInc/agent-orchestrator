@@ -2676,6 +2676,11 @@ function ReviewPanel({
 		.filter((run): run is NonNullable<typeof run> => Boolean(run))
 		.sort((a, b) => b.createdAt.localeCompare(a.createdAt))[0];
 	const latest = runningRun ?? newestRun;
+	// A failed pass after a completed one still leaves the PR reviewed at that earlier pass.
+	const lastCompletedRun = openReviewStates
+		.flatMap((review) => [review.latestRun, review.previousRun])
+		.filter((run): run is NonNullable<typeof run> => run?.status === "completed")
+		.sort((a, b) => b.createdAt.localeCompare(a.createdAt))[0];
 	const resolvedDefaultHarness = resolveDefaultReviewerHarness(config, session.provider);
 	const selectedHarness = cloud ? cloudReviewerHarness : reviewerOverride || resolvedDefaultHarness;
 	const activeReviewerHarness = latest?.harness || selectedHarness;
@@ -2849,7 +2854,7 @@ function ReviewPanel({
 						failed={Boolean(reviewFailure)}
 						hasOpenPR={hasOpenPR}
 						isCancelling={isCancelling}
-						latest={newestRun}
+						lastCompleted={lastCompletedRun}
 						notice={notice ?? null}
 						phase={phase}
 						running={runningStates}
@@ -2888,7 +2893,7 @@ function ReviewStatusLine({
 	failed,
 	hasOpenPR,
 	isCancelling,
-	latest,
+	lastCompleted,
 	notice,
 	phase,
 	running,
@@ -2898,7 +2903,8 @@ function ReviewStatusLine({
 	failed: boolean;
 	hasOpenPR: boolean;
 	isCancelling: boolean;
-	latest?: ReviewRunFacts;
+	/** The newest completed pass, which says when the PR was last reviewed. */
+	lastCompleted?: ReviewRunFacts;
 	notice: string | null;
 	phase: ReturnType<typeof reviewPhase>;
 	running: PRReviewState[];
@@ -2934,7 +2940,7 @@ function ReviewStatusLine({
 	}
 	if (notice) return <p className={cn(lineClass, "text-muted-foreground")} role="status">{notice}</p>;
 	if (failed) return <p className={cn(lineClass, "text-error")} role="status">{t("inspector.review.lastFailed")}</p>;
-	const lastReviewed = latest?.status === "completed" ? latest : undefined;
+	const lastReviewed = lastCompleted;
 	if (!lastReviewed) return <p className={cn(lineClass, "text-muted-foreground")}>{t("inspector.review.notReviewedYet")}</p>;
 	return (
 		<p className={cn(lineClass, "text-muted-foreground")}>
