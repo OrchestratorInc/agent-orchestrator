@@ -31,6 +31,8 @@ import {
 	isDirectory,
 	log,
 	lookupEntry,
+	nodeModulesDrift,
+	summarizeDrift,
 	planDeps,
 	pruneEntries,
 	readJSON,
@@ -171,6 +173,8 @@ async function warmDeps({ root, frontend }, options) {
 	const store = warmStoreRoot();
 	const hasNodeModules = isDirectory(nodeModules);
 	const installedKey = hasNodeModules ? (readJSON(path.join(nodeModules, INSTALL_STAMP), null)?.key ?? null) : null;
+	// Only an install dev:warm didn't make needs this: its own carry the key.
+	const foreignDrift = hasNodeModules && !installedKey ? nodeModulesDrift(frontend) : [];
 	const entry = lookupEntry(store, STORE_NAME, key);
 	const cachedLock = entry ? path.join(path.dirname(entry), "package-lock.json") : null;
 	const plan = planDeps({
@@ -181,13 +185,20 @@ async function warmDeps({ root, frontend }, options) {
 		lockfilesIdentical: Boolean(cachedLock) && fileIsIdentical(cachedLock, path.join(frontend, "package-lock.json")),
 		// npm links `file:` packages with absolute junctions on Windows.
 		cloneSupported: process.platform !== "win32" && cloneStrategies(process.platform).length > 1,
+		foreignDrift: foreignDrift.length > 0,
 	});
 	log(`node_modules: ${plan.action} - ${plan.reason} (key ${key.slice(0, 12)}, store ${store})`);
 	if (options.dryRun || plan.action === "keep" || plan.action === "foreign") return;
 
 	assertIgnoredOutputs(root, ["frontend/node_modules"]);
 	if (hasNodeModules) {
-		log(installedKey ? "removing the previous dev:warm install (its inputs changed)" : "removing the existing node_modules (--replace)");
+		log(
+			installedKey
+				? "removing the previous dev:warm install (its inputs changed)"
+				: foreignDrift.length > 0
+					? `removing the existing node_modules: it no longer matches package-lock.json (${summarizeDrift(foreignDrift)})`
+					: "removing the existing node_modules (--replace)",
+		);
 		rmSync(nodeModules, { recursive: true, force: true });
 	}
 	const t0 = Date.now();

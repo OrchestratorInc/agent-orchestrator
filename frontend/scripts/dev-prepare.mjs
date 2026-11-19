@@ -29,12 +29,14 @@ import {
 	importClosure,
 	log,
 	lookupEntry,
+	nodeModulesDrift,
 	outputFingerprint,
 	planStep,
 	pruneEntries,
 	readJSON,
 	stampIsCurrent,
 	storeEntry,
+	summarizeDrift,
 	writeJSON,
 } from "./dev-cache.mjs";
 
@@ -118,6 +120,20 @@ function viteEnv() {
 
 const frontendFile = (rel) => `frontend/${rel}`;
 
+// The helper executables build-daemon.mjs writes next to ao (the chat host
+// and ao-mcp), when this checkout's build script makes them. The daemon falls
+// back to running ao itself without them, so a missing one is easy to miss.
+const DAEMON_HELPERS = ["ao-chat-host", "ao-mcp"];
+function daemonHelpers(win) {
+	let script = "";
+	try {
+		script = readFileSync(path.join(frontend, "scripts", "build-daemon.mjs"), "utf8");
+	} catch {
+		return [];
+	}
+	return DAEMON_HELPERS.filter((name) => script.includes(`"${name}"`) || script.includes(`./cmd/${name}`)).map((name) => (win ? `${name}.exe` : name));
+}
+
 // Every predev step, in the order the old chain ran them. `inputs` returns the
 // key material, or { uncacheable: reason } to always run the real build.
 export function steps({ platform = process.platform, arch = process.arch } = {}) {
@@ -127,7 +143,7 @@ export function steps({ platform = process.platform, arch = process.arch } = {})
 		{
 			name: "daemon",
 			outDir: "daemon",
-			sentinels: [win ? "ao.exe" : "ao"],
+			sentinels: [win ? "ao.exe" : "ao", ...daemonHelpers(win)],
 			command: ["scripts/build-daemon.mjs", "--dev"],
 			inputs() {
 				// Windows dev builds write a fresh dev-<time> folder plus a manifest
@@ -287,10 +303,52 @@ function reuseDaemon(binary, platform) {
 	mkdirSync(outDir, { recursive: true });
 	copyFileSync(source, path.join(outDir, "ao"));
 	chmodSync(path.join(outDir, "ao"), 0o755);
+	// Bring the helpers built beside that ao, so the reused daemon serves chat
+	// tools and hosts the way a fresh build does.
+	const missing = [];
+	for (const name of daemonHelpers(false)) {
+		const helper = path.join(path.dirname(source), name);
+		if (!existsSync(helper)) {
+			missing.push(name);
+			continue;
+		}
+		copyFileSync(helper, path.join(outDir, name));
+		chmodSync(path.join(outDir, name), 0o755);
+	}
+	if (missing.length > 0) log(`AO_DEV_DAEMON_REUSE: no ${missing.join(" or ")} beside ${source}; the daemon falls back to running ao for those`);
+}
+
+// `npm run dev` after a merge that added or bumped a package would otherwise
+// start Electron on the old node_modules, and Vite fails to resolve the import.
+// Bring node_modules back in line first: dev:warm clones a cached install for
+// this lockfile, or runs npm ci.
+function ensureDependencies({ dryRun, env }) {
+	const drift = nodeModulesDrift(frontend);
+	if (drift.length === 0) return true;
+	const what = `node_modules no longer matches package-lock.json (${summarizeDrift(drift)})`;
+	if (dryRun) {
+		log(`${what}; a real run refreshes it first`);
+		return true;
+	}
+	if (env.AO_DEV_BUILD_CACHE === "0") {
+		log(`${what}; run \`npm ci\` in frontend/ and relaunch`);
+		return false;
+	}
+	log(`${what}; refreshing it with dev:warm before building`);
+	const warm = path.join(path.dirname(fileURLToPath(import.meta.url)), "dev-warm.mjs");
+	const result = spawnSync(process.execPath, [warm, "--skip-prepare", "--worktree", repoRoot], { cwd: frontend, env, stdio: "inherit", windowsHide: true });
+	if (result.error || result.status !== 0) {
+		log("refreshing node_modules failed; run `npm ci` in frontend/ and relaunch");
+		return false;
+	}
+	const left = nodeModulesDrift(frontend);
+	if (left.length > 0) log(`node_modules still differs from package-lock.json after refreshing (${summarizeDrift(left)}); continuing`);
+	return true;
 }
 
 export async function prepare({ dryRun = false, env = process.env, platform = process.platform, arch = process.arch } = {}) {
 	const started = Date.now();
+	if (!ensureDependencies({ dryRun, env })) return 1;
 	const all = steps({ platform, arch });
 
 	if (env.AO_DEV_BUILD_CACHE === "0") {
