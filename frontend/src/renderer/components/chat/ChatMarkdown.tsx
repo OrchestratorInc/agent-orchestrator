@@ -415,7 +415,7 @@ function CodeBlock({ code, language, sourceNode }: { code: string; language?: st
 					<CopyButton text={code} label="Copy code" />
 				</div>
 			</div>
-			<pre className="scrollbar-none overflow-x-auto px-3 py-2.5">
+			<pre data-no-swipe-nav="" className="scrollbar-none overflow-x-auto px-3 py-2.5">
 				<code {...positions} data-excerpt-kind="block-code" className="font-mono text-xs leading-[1.6] text-foreground">
 					<HighlightedCode code={code} language={grammar} streaming={streaming} />
 				</code>
@@ -860,7 +860,7 @@ const COMPONENTS: Components = {
 	// Wide tables scroll inside their own container so the conversation column
 	// never scrolls sideways.
 	table: ({ children }) => (
-		<div className="my-2.5 overflow-x-auto rounded-lg border border-border">
+		<div data-no-swipe-nav="" className="my-2.5 overflow-x-auto rounded-lg border border-border">
 			<table className="w-full border-collapse text-xs">{children}</table>
 		</div>
 	),
