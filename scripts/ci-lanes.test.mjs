@@ -1,5 +1,6 @@
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
+import { matchesGlob } from 'node:path';
 import test from 'node:test';
 
 import { LANES, outputs, pickLanes } from './ci-lanes.mjs';
@@ -10,6 +11,26 @@ const pr = (paths, extra = {}) => ({
   ...extra,
 });
 const everyLane = Object.keys(LANES).filter(lane => lane !== 'mac-native');
+
+test('docs reference sources trigger validation and main deploy', () => {
+  const deploy = readFileSync(new URL('../.github/workflows/deploy-docs.yml', import.meta.url), 'utf8');
+  const patterns = [...deploy.matchAll(/^      - "([^"]+)"$/gm)].map(match => match[1]);
+  for (const path of [
+    'backend/cmd/docsref/main.go',
+    'backend/internal/adapters/agent/registry/registry.go',
+    'backend/internal/adapters/agent/codewhale/codewhale.go',
+    'backend/internal/adapters/chatdriver/registry/registry.go',
+    'backend/internal/adapters/reviewer/registry.go',
+    'backend/internal/adapters/registry.go',
+    'backend/internal/domain/harness.go',
+    'backend/internal/domain/reviewerharness.go',
+    'backend/go.mod', 'backend/go.sum',
+  ]) {
+    assert.ok(pickLanes(pr([path])).lanes.includes('docs'), `docs lane misses ${path}`);
+    assert.ok(patterns.some(pattern => matchesGlob(path, pattern)), `deploy misses ${path}`);
+  }
+  assert.ok(!pickLanes(pr(['backend/internal/service/project.go'])).lanes.includes('docs'));
+});
 
 test('a push to main runs every lane in full', () => {
   assert.deepEqual(pickLanes({ event: 'push' }), { lanes: Object.keys(LANES), full: true, macos: true, vitest: 'all' });

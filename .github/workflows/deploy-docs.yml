@@ -5,6 +5,15 @@ on:
     branches: [main]
     paths:
       - "frontend/src/docs/**"
+      - "backend/cmd/docsref/**"
+      - "backend/internal/adapters/agent/**"
+      - "backend/internal/adapters/chatdriver/**"
+      - "backend/internal/adapters/reviewer/**"
+      - "backend/internal/adapters/registry.go"
+      - "backend/internal/domain/harness.go"
+      - "backend/internal/domain/reviewerharness.go"
+      - "backend/go.mod"
+      - "backend/go.sum"
       - ".github/workflows/deploy-docs.yml"
   workflow_dispatch:
 
@@ -25,6 +34,9 @@ jobs:
       - uses: actions/checkout@v4
         with:
           fetch-depth: 0 # full history, so the sitemap's lastmod dates come from git
+      - uses: ./.github/actions/setup-go-cached
+        with:
+          name: docs-deploy-reference
       - uses: actions/setup-node@v4
         with:
           node-version: 24
