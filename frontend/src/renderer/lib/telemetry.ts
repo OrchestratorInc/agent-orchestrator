@@ -1,4 +1,5 @@
 import type posthogModule from "posthog-js/dist/module.full.no-external";
+import { setAnalyticsOptedOut } from "./analytics-opt-out";
 import { aoBridge } from "./bridge";
 import {
 	ARTIFACT_LINK_COPY_SURFACES,
@@ -8,7 +9,7 @@ import {
 	ARTIFACT_SIGN_IN_PROMPT_REASONS,
 } from "./artifact-telemetry";
 import { isLoopbackHostname } from "./loopback";
-import { ONBOARDING_STEPS } from "./onboarding-steps";
+import { ONBOARDING_EVENTS, onboardingRateLimitKey, sanitizeOnboardingProperties } from "./onboarding-telemetry-schema";
 import { ORCHESTRATOR_SPAWN_SOURCES } from "./orchestrator-spawn-sources";
 import { IMPORTABLE_AGENTS } from "./session-import-agents";
 import { TOPBAR_ACTIONS, TOPBAR_VIEWS } from "./topbar-actions";
@@ -498,6 +499,7 @@ export function resumePostHogAfterOptIn(client: PostHogFlagControls): void {
 
 export async function applyAnalyticsOptOut(optedOut: boolean): Promise<void> {
 	analyticsOptedOut = optedOut;
+	setAnalyticsOptedOut(optedOut);
 	if (optedOut) {
 		// A website visit not linked yet is dropped, not kept for a later opt-in.
 		pendingWebVisitor = null;
@@ -927,7 +929,7 @@ async function sanitizeRendererContextProperties(properties?: TelemetryPropertie
 // reported as "other" so a free-form string can never leak through.
 const CLOUD_PROVIDERS = new Set(["coder", "freestyle", "docker", "nodeops", "ecs", "daytona", "default"]);
 const CLOUD_SIGN_IN_METHODS = new Set(["workos", "local"]);
-const CLOUD_SIGN_IN_SOURCES = new Set(["artifact_publish", "other"]);
+const CLOUD_SIGN_IN_SOURCES = new Set(["artifact_publish", "onboarding", "other"]);
 const CLOUD_SESSION_KINDS = new Set(["worker", "orchestrator"]);
 const CLOUD_FAILURE_STAGES = new Set(["create", "startup"]);
 const CLOUD_UPGRADE_SOURCES = new Set(["settings", "plan_refusal", "banner", "other"]);
@@ -951,7 +953,7 @@ async function sanitizeCloudFunnelProperties(event: string, properties?: Telemet
 	switch (event) {
 		case "ao.renderer.cloud_signed_in":
 			safe.method = enumValue(properties?.method, CLOUD_SIGN_IN_METHODS, "other");
-			// Whether Publish's Sign in started it (artifact_publish) or anything else.
+			// Whether Publish's Sign in (artifact_publish) or onboarding's started it, or anything else.
 			if (typeof properties?.source === "string" && CLOUD_SIGN_IN_SOURCES.has(properties.source)) safe.source = properties.source;
 			// Signing in again as the account already signed in; absent on events sent before it was counted.
 			if (typeof properties?.same_account === "boolean") safe.same_account = properties.same_account;
@@ -1096,6 +1098,7 @@ export async function sanitizeRendererProperties(
 	properties?: TelemetryProperties,
 ): Promise<TelemetryProperties> {
 	if (CLOUD_FUNNEL_EVENTS.has(event)) return sanitizeCloudFunnelProperties(event, properties);
+	if (ONBOARDING_EVENTS.has(event)) return sanitizeOnboardingProperties(event, properties);
 	if (PERFORMANCE_EVENTS.has(event)) return sanitizePerformanceProperties(event, properties);
 	const safe: TelemetryProperties = {};
 	switch (event) {
@@ -1106,11 +1109,6 @@ export async function sanitizeRendererProperties(
 			if (typeof properties?.surface === "string" && properties.surface.trim() !== "") {
 				safe.surface = properties.surface;
 			}
-			break;
-		case "ao.onboarding.step_viewed":
-		case "ao.onboarding.step_completed":
-		case "ao.onboarding.step_abandoned":
-			if (typeof properties?.step === "string" && ONBOARDING_STEPS.some((step) => step === properties.step)) safe.step = properties.step;
 			break;
 		case "ao.app.loaded":
 			break;
@@ -1132,12 +1130,6 @@ export async function sanitizeRendererProperties(
 			break;
 		case "ao.agents.install_clicked":
 			if (typeof properties?.agent === "string" && /^[a-z][a-z0-9-]{0,31}$/.test(properties.agent)) safe.agent = properties.agent;
-			break;
-		case "ao.onboarding.first_run_experiment_exposed":
-			if (properties?.variant === "prompt" || properties?.variant === "control") safe.variant = properties.variant;
-			break;
-		case "ao.onboarding.first_run_prompt_action":
-			if (properties?.action === "clone" || properties?.action === "local_folder" || properties?.action === "standalone" || properties?.action === "import" || properties?.action === "dismissed") safe.action = properties.action;
 			break;
 		case "ao.projects.added":
 		case "ao.projects.removed":
@@ -1605,6 +1597,23 @@ export function clearRendererTelemetryQueues(): void {}
 // independent PostHog client in or out.
 export function applyRendererTelemetryPolicy(_enabled: boolean): void {}
 
+/**
+ * Sends an onboarding event from a `pagehide` listener. PostHog flushes its
+ * queue from its own pagehide handler, registered at init and so before any
+ * of ours; an event queued after it dies with the page. This path sanitizes
+ * synchronously and sends at once with sendBeacon, which outlives the page.
+ */
+export function captureRendererEventOnUnload(event: string, properties?: Record<string, unknown>): boolean {
+	if (analyticsOptedOut || !posthogReady || !ONBOARDING_EVENTS.has(event) || isDeniedEvent(event)) return false;
+	const sanitizedProperties = sanitizeOnboardingProperties(event, properties);
+	if (!reserveCapture(onboardingRateLimitKey(event, sanitizedProperties) ?? event)) return false;
+	try {
+		return Boolean(posthog.capture(postHogEventName(event), withTelemetryContext(sanitizedProperties), { send_instantly: true, transport: "sendBeacon" }));
+	} catch {
+		return false;
+	}
+}
+
 export async function captureRendererEvent(event: string, properties?: Record<string, unknown>): Promise<boolean> {
 	// An opted-out renderer must not touch rate-limit slots or the persisted
 	// updater counts, which would otherwise be exported after an opt-in.
@@ -1621,7 +1630,7 @@ export async function captureRendererEvent(event: string, properties?: Record<st
 	if (event === "ao.routes.viewed") {
 		const surface = typeof sanitizedProperties.surface === "string" ? sanitizedProperties.surface : "other";
 		if (!reserveRouteViewCapture(telemetryStorage(), surface)) return false;
-	} else if (event !== "ao.updates.failed" && !reserveCapture(event)) {
+	} else if (event !== "ao.updates.failed" && !reserveCapture(onboardingRateLimitKey(event, sanitizedProperties) ?? event)) {
 		return false;
 	}
 	if (!(await initTelemetry()) || analyticsOptedOut) return false;

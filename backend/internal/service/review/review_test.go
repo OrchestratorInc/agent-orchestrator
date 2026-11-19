@@ -316,8 +316,8 @@ func TestRequestRereviewRejectsUnknownReviewer(t *testing.T) {
 	}
 }
 
-// AO never sends the worker a separate verdict message: the reviewer's posted
-// review reaches the worker through the SCM observer like any other review. A
+// The reviewer's posted findings reach the worker through the SCM observer
+// like any other review; the service never stamps a run delivered. A
 // submitted result is recorded and stays complete.
 func TestSubmitRecordsTheResultWithoutASeparateDelivery(t *testing.T) {
 	st := &fakeStore{
@@ -336,6 +336,34 @@ func TestSubmitRecordsTheResultWithoutASeparateDelivery(t *testing.T) {
 		if run.Status != domain.ReviewRunCompleted || run.DeliveredAt != nil {
 			t.Fatalf("%s: run = %+v, want complete and never stamped delivered", verdict, run)
 		}
+	}
+}
+
+type fakeDoneNotifier struct {
+	calls []domain.SessionID
+	err   error
+}
+
+func (f *fakeDoneNotifier) DeliverReviewDoneNotices(_ context.Context, id domain.SessionID) error {
+	f.calls = append(f.calls, id)
+	return f.err
+}
+
+// Submitting a result hands the worker's "review done" notice to lifecycle at
+// once; a delivery failure leaves it to the sweep and never fails the submit.
+func TestSubmitAsksForTheReviewDoneNotice(t *testing.T) {
+	st := &fakeStore{
+		ok:  true,
+		run: domain.ReviewRun{ID: "run-1", SessionID: "mer-1", RequesterSessionID: "orch", PRURL: "pr1", TargetSHA: "sha1", Status: domain.ReviewRunRunning},
+	}
+	notifier := &fakeDoneNotifier{err: errors.New("pane gone")}
+	svc := New(nil, st, WithReviewDoneNotifier(notifier))
+
+	if _, err := svc.Submit(context.Background(), "mer-1", "run-1", domain.VerdictApproved, "LGTM", "987"); err != nil {
+		t.Fatalf("Submit: %v", err)
+	}
+	if len(notifier.calls) != 1 || notifier.calls[0] != "orch" {
+		t.Fatalf("notifier calls = %v, want one for the worker", notifier.calls)
 	}
 }
 
@@ -565,6 +593,25 @@ func TestSubmitManySkipsSupersededRunAndRecordsSiblings(t *testing.T) {
 	}
 	if len(runs) != 1 || runs[0].ID != "run-1" || runs[0].Status != domain.ReviewRunCompleted {
 		t.Fatalf("want only run-1 recorded, got %+v", runs)
+	}
+}
+
+func TestSingleSubmitAfterSupersededSibling(t *testing.T) {
+	st := &fakeStore{
+		ok: true,
+		batchRuns: []domain.ReviewRun{
+			{ID: "stale", SessionID: "mer-1", BatchID: "batch", PRURL: "pr1", Status: domain.ReviewRunSuperseded},
+			{ID: "current", SessionID: "mer-1", BatchID: "batch", PRURL: "pr2", TargetSHA: "sha2", Status: domain.ReviewRunRunning},
+		},
+		prs: []domain.PullRequest{{URL: "pr2", HeadSHA: "sha2"}},
+	}
+	svc := New(nil, st)
+	if _, err := svc.Submit(context.Background(), "mer-1", "stale", domain.VerdictApproved, "ok", ""); !errors.Is(err, ErrInvalid) || !strings.Contains(err.Error(), "superseded: stale") {
+		t.Fatalf("expected superseded run error, got %v", err)
+	}
+	run, err := svc.Submit(context.Background(), "mer-1", "current", domain.VerdictApproved, "ok", "")
+	if err != nil || run.ID != "current" || run.Status != domain.ReviewRunCompleted {
+		t.Fatalf("submit current sibling = %+v, %v", run, err)
 	}
 }
 

@@ -7,7 +7,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 const posthogStub = {
 	init: vi.fn(),
 	register: vi.fn(),
-	capture: vi.fn((_event?: string, _properties?: Record<string, unknown>): object | undefined => ({})),
+	capture: vi.fn((_event?: string, _properties?: Record<string, unknown>, _options?: Record<string, unknown>): object | undefined => ({})),
 	captureException: vi.fn(),
 	addExceptionStep: vi.fn(),
 	identify: vi.fn(),
@@ -61,6 +61,34 @@ describe("initTelemetry recovery", () => {
 		}
 		const legacy = new Set(Object.values(LEGACY_EVENT_NAMES).flat());
 		expect(posthogStub.capture.mock.calls.some(([event]) => legacy.has(String(event)))).toBe(false);
+	});
+
+	it("sends an onboarding event from a closing window at once by sendBeacon, sanitized", async () => {
+		await initializedUpdateCapture();
+		const { captureRendererEventOnUnload } = await import("./telemetry");
+		expect(captureRendererEventOnUnload("ao.onboarding.abandoned", { step: "tools", run_kind: "first_run", duration_ms: 60_000, path: "/Users/me/repo" })).toBe(true);
+		expect(posthogStub.capture).toHaveBeenCalledTimes(1);
+		const [event, properties, options] = posthogStub.capture.mock.calls[0]!;
+		expect(event).toBe("ao.onboarding.abandoned");
+		expect(properties).toMatchObject({ step: "tools", step_index: 3, run_kind: "first_run", duration_ms: 60_000 });
+		expect(properties).not.toHaveProperty("path");
+		expect(options).toEqual({ send_instantly: true, transport: "sendBeacon" });
+	});
+
+	it("sends nothing from a closing window for other events or once opted out", async () => {
+		await initializedUpdateCapture();
+		const { applyAnalyticsOptOut, captureRendererEventOnUnload } = await import("./telemetry");
+		expect(captureRendererEventOnUnload("ao.app.loaded")).toBe(false);
+		await applyAnalyticsOptOut(true);
+		expect(captureRendererEventOnUnload("ao.onboarding.step_abandoned", { step: "tools" })).toBe(false);
+		expect(posthogStub.capture).not.toHaveBeenCalled();
+	});
+
+	it("sends nothing from a closing window before PostHog is ready", async () => {
+		mockPosthog();
+		const { captureRendererEventOnUnload } = await import("./telemetry");
+		expect(captureRendererEventOnUnload("ao.onboarding.abandoned", { step: "tools" })).toBe(false);
+		expect(posthogStub.capture).not.toHaveBeenCalled();
 	});
 
 	it("writes log-only events to the console instead of PostHog", async () => {

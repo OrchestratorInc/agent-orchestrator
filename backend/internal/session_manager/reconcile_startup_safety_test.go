@@ -268,3 +268,26 @@ func TestBackgroundReconcileDoesNotFenceNewUnfinishedTasks(t *testing.T) {
 		}
 	}
 }
+
+func TestBackgroundHealthCheckPreservesPostStartupSeed(t *testing.T) {
+	m, st, _, _ := newManager()
+	before := m.clock().Add(-time.Hour)
+	interrupted := domain.SessionRecord{ID: "mer-1", ProjectID: "mer", Kind: domain.KindWorker, CreatedAt: before}
+	st.sessions[interrupted.ID] = interrupted
+	if err := m.ReconcileStartupSafety(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	// A synchronous spawn has committed its row and is about to bind its
+	// account. It has no workspace path until later in the same request.
+	starting := domain.SessionRecord{ID: "mer-2", ProjectID: "mer", Kind: domain.KindWorker, CreatedAt: m.clock()}
+	st.sessions[starting.ID] = starting
+	if err := m.ReconcileBackground(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := st.sessions[interrupted.ID]; ok {
+		t.Fatal("interrupted seed survived startup cleanup")
+	}
+	if rec, ok := st.sessions[starting.ID]; !ok || rec.IsTerminated {
+		t.Fatal("startup cleanup removed or terminated the active spawn")
+	}
+}
