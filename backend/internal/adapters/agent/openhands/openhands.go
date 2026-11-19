@@ -108,6 +108,10 @@ func (p *Plugin) GetRestoreCommand(ctx context.Context, cfg ports.RestoreConfig)
 		return nil, false, err
 	}
 	cmd = append(cmd, "--resume", id)
+	cmd, err = importedConversationCommand(cmd, cfg)
+	if err != nil {
+		return nil, false, err
+	}
 	cmd = importedEndpointCommand(cmd, cfg)
 	appendTask(&cmd, cfg.Prompt)
 	return cmd, true, nil

@@ -110,6 +110,7 @@ func TestOpenHandsImportedEndpointScope(t *testing.T) {
 			metadata := map[string]string{ports.MetadataKeyAgentSessionID: "native"}
 			if tc.imported {
 				metadata[ports.MetadataKeyImportSourceNativeID] = "source"
+				metadata[ports.MetadataKeyImportConfigDir] = t.TempDir()
 			}
 			before := make(map[string]string, len(tc.env))
 			for k, v := range tc.env {
@@ -127,6 +128,45 @@ func TestOpenHandsImportedEndpointScope(t *testing.T) {
 				if tc.env[k] != v {
 					t.Fatalf("explicit environment changed: %s", k)
 				}
+			}
+		})
+	}
+}
+
+func TestOpenHandsImportedRestorePinsPrivateRootOnEveryOpen(t *testing.T) {
+	clearOpenHandsLLMEnv(t)
+	r := openHandsImportFixture(t)
+	ref, err := New().PrepareImportedSession(t.Context(), r)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, tc := range []struct {
+		name string
+		env  map[string]string
+	}{
+		{"first open", map[string]string{"OPENHANDS_CONVERSATIONS_DIR": ref.ConfigDir}},
+		// The source still has the same UUID. A generic environment lookup can
+		// consequently omit the private root on an adopted restore.
+		{"adopted reopen", nil},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			cfg := ports.RestoreConfig{Session: ports.SessionRef{Metadata: map[string]string{
+				ports.MetadataKeyAgentSessionID:       ref.NativeSessionID,
+				ports.MetadataKeyImportSourceNativeID: r.NativeSessionID,
+				ports.MetadataKeyImportConfigDir:      ref.ConfigDir,
+			}}, Env: tc.env}
+			cmd, ok, err := testPlugin().GetRestoreCommand(t.Context(), cfg)
+			want := []string{"env", "OPENHANDS_CONVERSATIONS_DIR=" + ref.ConfigDir, "openhands", "--resume", ref.NativeSessionID}
+			if err != nil || !ok || !reflect.DeepEqual(cmd, want) {
+				t.Fatalf("private restore = %q, %v, %v; want %q", cmd, ok, err, want)
+			}
+			cfg.Env = map[string]string{"OPENHANDS_CONVERSATIONS_DIR": r.ConfigDir}
+			if _, _, err := testPlugin().GetRestoreCommand(t.Context(), cfg); err == nil {
+				t.Fatal("accepted a source-store override for the private import")
+			}
+			delete(cfg.Session.Metadata, ports.MetadataKeyImportConfigDir)
+			if _, _, err := testPlugin().GetRestoreCommand(t.Context(), cfg); err == nil {
+				t.Fatal("accepted an imported restore without a recorded store")
 			}
 		})
 	}
