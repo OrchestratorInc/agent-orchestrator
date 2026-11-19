@@ -1581,16 +1581,16 @@ func (m *Manager) markSpawned(
 	prepare func(context.Context) error,
 ) error {
 	launchID := strings.TrimSpace(metadata.RuntimeLaunchID)
-	reactivator, err := func() (sessionUsageReactivator, error) {
+	reactivator, done, err := func() (sessionUsageReactivator, chan struct{}, error) {
 		m.mu.Lock()
 		defer m.mu.Unlock()
 		defer m.finishLaunchLocked(id, launchID)
 		rec, ok, err := m.store.GetSession(ctx, id)
 		if err != nil {
-			return nil, err
+			return nil, nil, err
 		}
 		if !ok {
-			return nil, fmt.Errorf("lifecycle: MarkSpawned for unknown session %q", id)
+			return nil, nil, fmt.Errorf("lifecycle: MarkSpawned for unknown session %q", id)
 		}
 		now := m.clock()
 		if rec.IsTerminated {
@@ -1614,23 +1614,23 @@ func (m *Manager) markSpawned(
 		rec.UpdatedAt = now
 		if boundary == nil {
 			if err := m.store.UpdateSession(ctx, rec); err != nil {
-				return nil, err
+				return nil, nil, err
 			}
 		} else if prepare == nil {
 			writer, ok := m.store.(chatSpawnStore)
 			if !ok {
-				return nil, errors.New("lifecycle: atomic Chat spawn persistence is unavailable")
+				return nil, nil, errors.New("lifecycle: atomic Chat spawn persistence is unavailable")
 			}
 			if err := writer.CommitChatSpawn(ctx, rec, *boundary); err != nil {
-				return nil, err
+				return nil, nil, err
 			}
 		} else {
 			writer, ok := m.store.(preparedChatSpawnStore)
 			if !ok {
-				return nil, errors.New("lifecycle: atomic Chat provider-history persistence is unavailable")
+				return nil, nil, errors.New("lifecycle: atomic Chat provider-history persistence is unavailable")
 			}
 			if err := writer.CommitChatSpawnPrepared(ctx, rec, *boundary, handoff, prepare); err != nil {
-				return nil, err
+				return nil, nil, err
 			}
 		}
 		if rec.Harness == domain.HarnessKimi {
@@ -1638,20 +1638,20 @@ func (m *Manager) markSpawned(
 			// approval callbacks must not inherit the prior launch's cache.
 			delete(m.flights, id)
 		}
-		return m.usageReactivator, nil
+		if m.usageReactivator == nil {
+			return nil, nil, nil
+		}
+		// Registered while the spawn commit still holds mu, so a termination
+		// that follows it always finds the reactivation to wait for.
+		done := make(chan struct{})
+		m.usageReactivations[id] = done
+		return m.usageReactivator, done, nil
 	}()
-	if err != nil {
+	if err != nil || done == nil {
 		return err
-	}
-	if reactivator == nil {
-		return nil
 	}
 	// Usage collection catches up in the background; a new agent's first prompt
 	// does not wait for it. Termination waits for it before finalizing usage.
-	done := make(chan struct{})
-	m.mu.Lock()
-	m.usageReactivations[id] = done
-	m.mu.Unlock()
 	go func() {
 		defer func() {
 			m.mu.Lock()
