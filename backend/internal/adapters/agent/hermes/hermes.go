@@ -512,7 +512,8 @@ func probeNativeVersion(ctx context.Context, path string) (ok bool, reason strin
 
 // qualifiedReleaseLines are the major.minor release lines whose composer,
 // busy, modal and transcript chrome AO's terminal detection was checked
-// against (v0.21.6 on Linux, v0.22.2 on macOS, v0.23.1 on macOS and Linux).
+// against (v0.21.6 on Linux, v0.22.2 on macOS, v0.23.1 on macOS and Linux,
+// and v0.23.2 live through AO's pty-host).
 // The modern layout, the default on 0.22 and 0.23, echoes submitted messages
 // with its prompt glyph, which committedMessageEchoes accepts alongside ●.
 // A newer line stays installed but unverified until its markers are

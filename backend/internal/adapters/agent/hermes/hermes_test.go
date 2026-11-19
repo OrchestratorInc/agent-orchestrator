@@ -171,7 +171,7 @@ func TestTerminalMessageObservedRequiresNewCommittedEchoOrBusyFrame(t *testing.T
 // session title and a status footer below.
 func TestModernEchoCountsOnTheModernScreen(t *testing.T) {
 	rule := strings.Repeat("─", 40)
-	composer := strings.Repeat("─", 90) + " ao-repo-1-7b19500aef6c \n" +
+	composer := strings.Repeat("─", 85) + " ao-repo-1-7b19500aef6c ─\n" +
 		"\x1b[38;5;230m❯ \x1b[38;5;136;3mFind and fix a failing test\x1b[m\n" +
 		strings.Repeat("─", 110) + "\n" +
 		" ☤ lab-model · ctx -- · [░░░░░░░░░░] -- · 42s · ⏲ 0s · …repo-1 (ao/h823/root)"
@@ -179,13 +179,25 @@ func TestModernEchoCountsOnTheModernScreen(t *testing.T) {
 	if got := committedMessageEchoes("first task", composer); got != 0 {
 		t.Fatalf("echoes before the send = %d, want 0", got)
 	}
-	if got := committedMessageEchoes("first task", echo+"\n"+rule+"\n☤ Hermes\nlab reply\n\n"+composer); got != 1 {
+	sent := echo + "\n" + rule + "\n☤ Hermes\nlab reply\n\n" + composer
+	if got := committedMessageEchoes("first task", sent); got != 1 {
 		t.Fatalf("echoes after the send = %d, want 1", got)
+	}
+	// End to end: the modern idle composer is the baseline, and the finished
+	// turn's screen confirms the send.
+	if !New().TerminalMessageObserved("first task", composer, sent) {
+		t.Fatal("modern send not confirmed")
+	}
+	if New().TerminalMessageObserved("first task", composer, composer) {
+		t.Fatal("unchanged modern screen confirmed a send")
 	}
 	// The composer's draft is not an echo, even when it holds the same text.
 	draft := strings.Replace(composer, "\x1b[38;5;136;3mFind and fix a failing test\x1b[m", "first task", 1)
 	if got := committedMessageEchoes("first task", draft); got != 0 {
 		t.Fatalf("draft counted as %d echoes, want 0", got)
+	}
+	if New().TerminalMessageObserved("first task", composer, draft) {
+		t.Fatal("same-text draft confirmed a send")
 	}
 }
 
