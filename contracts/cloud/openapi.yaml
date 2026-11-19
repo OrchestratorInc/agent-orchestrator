@@ -425,7 +425,11 @@ paths:
         everyone it is shared with now. Each person gets view access once
         they sign in with that verified email; each member of a team or the
         workspace gets it while they are one, and the link is listed in their
-        Artifacts. Nobody is emailed. Emails are matched case-insensitively;
+        Artifacts. A team or workspace grant works only while the link's
+        owner is an active member of that workspace too: if the owner leaves
+        or is removed, it stays, dormant (listed to the owner unnamed, to
+        remove), and works again if they are added back. Email grants do not
+        depend on it. Nobody is emailed. Emails are matched case-insensitively;
         one already listed, the owner's own, and a team or workspace already
         listed change nothing. 400 for a value that is not a bare email
         address, more than 50 at once, nothing to share with, or teams or
