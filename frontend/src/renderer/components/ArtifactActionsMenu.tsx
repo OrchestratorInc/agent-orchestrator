@@ -131,7 +131,8 @@ export function ArtifactActionsMenu({
 	const [copyError, setCopyError] = useState("");
 	const [confirmingDelete, setConfirmingDelete] = useState(false);
 	const [menuOpen, setMenuOpen] = useState(false);
-	const [issueOpen, setIssueOpen] = useState(false);
+	const filenameButton = useRef<HTMLButtonElement>(null);
+	const [issueOpener, setIssueOpener] = useState<HTMLButtonElement | null>(null);
 	const [shareOpen, setShareOpen] = useState(false);
 	const [shareIntent, setShareIntent] = useState<"publish" | "unpublish">("publish");
 	const published = Boolean(artifact.shareUrl);
@@ -250,7 +251,7 @@ export function ArtifactActionsMenu({
 	};
 	const canAddToIssue = !iconOnly && owner && !session.cloud?.shared && Boolean(issueArtifactType(artifact.path));
 	const readIssueContent = async () => {
-		const url = session.cloud ? cloudFileUrl : artifactContentUrl(session.id, artifact.path, artifact.rawUrl);
+		const url = session.cloud ? cloudFileUrl : artifactContentUrl(session.id, artifact.path, artifact.rawUrl, undefined, hostId);
 		if (!url) throw new Error(t("files.error.loadArtifact"));
 		const response = session.cloud ? await cloudCpFetch(url) : await fetch(url);
 		if (!response.ok) throw new Error(t("files.error.loadArtifact"));
@@ -281,7 +282,7 @@ export function ArtifactActionsMenu({
 		return () => clearTimeout(timer);
 	}, [error, resetBrowser, resetOpen]);
 	const menuTrigger = (
-		<DropdownMenuTrigger asChild>
+		<DropdownMenuTrigger asChild ref={filenameButton}>
 			<Button
 				aria-label={iconOnly ? `${t("files.moreFileActions")}: ${artifact.name}` : undefined}
 				className={cn(!iconOnly && "min-w-0 gap-1 px-1.5", actionClassName)}
@@ -386,7 +387,7 @@ export function ArtifactActionsMenu({
 								</DropdownMenuItem>
 							) : null}
 							{canAddToIssue ? (
-								<DropdownMenuItem onSelect={() => { sharing.current = true; setIssueOpen(true); }}>
+								<DropdownMenuItem onSelect={() => { sharing.current = true; setIssueOpener(filenameButton.current); }}>
 									<ArrowUpRight aria-hidden="true" />
 									{t("issueArtifact.add")}
 								</DropdownMenuItem>
@@ -479,7 +480,7 @@ export function ArtifactActionsMenu({
 					)}
 				</DropdownMenuContent>
 			</DropdownMenu> : null}
-			{issueOpen && <GitHubIssueArtifactDialog name={artifact.path.split("/").pop() || artifact.name} readContent={readIssueContent} onClose={() => setIssueOpen(false)} />}
+			{issueOpener && <GitHubIssueArtifactDialog returnFocus={issueOpener} name={artifact.path.split("/").pop() || artifact.name} readContent={readIssueContent} onClose={() => setIssueOpener(null)} />}
 			<ConfirmDialog
 				busy={remove.isPending}
 				confirmLabel={t("artifacts.delete")}

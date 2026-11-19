@@ -36,6 +36,20 @@ it("rejects other files and invalid destinations before invoking gh", async () =
 });
 
 it("excludes a pull request entered by number", async () => {
-	reply(JSON.stringify({ number: 12, title: "PR", pull_request: {} }));
+	reply(JSON.stringify({ number: 12, title: "PR", repository_url: "https://api.github.com/repos/acme/web", pull_request: {} }));
 	await expect(findArtifactIssues("acme/web", "#12", {})).resolves.toEqual([]);
+});
+
+it("matches issue numbers only within the selected repository, ignoring case", async () => {
+	const issue = { number: 12, title: "Bug" };
+	reply(JSON.stringify({ ...issue, repository_url: "https://api.github.com/repos/Acme/web" }));
+	await expect(findArtifactIssues("acme/web", "#12", {})).resolves.toEqual([issue]);
+	reply(JSON.stringify({ ...issue, repository_url: "https://api.github.com/repos/acme/moved" }));
+	await expect(findArtifactIssues("acme/web", "12", {})).resolves.toEqual([]);
+});
+
+it("strips parentheses from the posted name while preserving Markdown content", async () => {
+	const stdin = reply("https://github.com/acme/web/issues/12/artifacts/1");
+	await publishIssueArtifact({ ...destination, name: "plan (1).md" }, {});
+	expect(JSON.parse(stdin.end.mock.calls[0]![0])).toEqual({ type: "generic", name: "plan 1.md", body: destination.body });
 });

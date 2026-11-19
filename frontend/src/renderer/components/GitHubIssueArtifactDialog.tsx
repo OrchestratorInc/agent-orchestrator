@@ -17,10 +17,11 @@ function parseIssueLink(value: string) {
 	return match && { repository: match[1], number: match[2] };
 }
 
-export function GitHubIssueArtifactDialog({ name, readContent, onClose }: {
+export function GitHubIssueArtifactDialog({ name, readContent, onClose, returnFocus }: {
 	name: string;
 	readContent: () => Promise<string>;
 	onClose: () => void;
+	returnFocus?: HTMLElement;
 }) {
 	const { t } = useTranslation();
 	const [remote, setRemote] = useState("");
@@ -85,7 +86,11 @@ export function GitHubIssueArtifactDialog({ name, readContent, onClose }: {
 	};
 	return (
 		<Dialog open onOpenChange={(open) => { if (!open && !add.isPending) onClose(); }}>
-			<DialogContent data-browser-native-overlay="true" showCloseButton={!add.isPending}>
+			<DialogContent data-browser-native-overlay="true" showCloseButton={!add.isPending} onCloseAutoFocus={event => {
+				if (!returnFocus?.isConnected) return;
+				event.preventDefault();
+				returnFocus.focus();
+			}}>
 				<DialogTitle>{t(add.isSuccess ? "issueArtifact.added" : "issueArtifact.add")}</DialogTitle>
 				<DialogDescription>{add.isSuccess ? `${repo}#${selected?.number} · ${selected?.title}` : t("issueArtifact.copy", { name })}</DialogDescription>
 				{add.isSuccess ? (

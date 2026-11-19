@@ -960,6 +960,16 @@ describe("SessionArtifactsView", () => {
 		expect(screen.getByRole("list")).toBeInTheDocument();
 	});
 
+	it("returns keyboard focus to the filename after closing the GitHub issue dialog", async () => {
+		renderView(<SessionArtifactsView request={{ key: 1, path: "reports/plan.md" }} session={session()} />);
+		const filename = screen.getByRole("button", { name: "plan.md" });
+		await userEvent.click(filename);
+		await userEvent.click(screen.getByRole("menuitem", { name: "Add to GitHub issue" }));
+		expect(screen.getByRole("dialog", { name: "Add to GitHub issue" })).toBeVisible();
+		await userEvent.keyboard("{Escape}");
+		await vi.waitFor(() => expect(filename).toHaveFocus());
+	});
+
 	it("names the open artifact once, as a menu that reveals it in the file manager and the terminal", async () => {
 		const openArtifacts = vi.spyOn(aoBridge.editorHandoff, "openArtifacts");
 		renderView(<SessionArtifactsView request={{ key: 1, path: "reports/plan.md" }} session={session()} />);

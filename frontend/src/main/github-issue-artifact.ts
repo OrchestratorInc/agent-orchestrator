@@ -26,16 +26,16 @@ function ghApi(endpoint: string, env: NodeJS.ProcessEnv, body?: object): Promise
 export async function findArtifactIssues(repo: string, query: string, env: NodeJS.ProcessEnv): Promise<GitHubIssueChoice[]> {
 	const path = issuePath(repo);
 	const term = query.trim();
+	const belongsToRepository = (row: { repository_url?: string; pull_request?: unknown }) =>
+		!row.pull_request && row.repository_url?.toLowerCase() === `https://api.github.com/repos/${repo.toLowerCase()}`;
 	if (/^#?\d+$/.test(term)) {
 		const row = JSON.parse(await ghApi(`${path}/${term.replace(/^#/, "")}`, env));
-		return row.pull_request ? [] : [{ number: row.number, title: row.title }];
+		return belongsToRepository(row) ? [{ number: row.number, title: row.title }] : [];
 	}
 	const params = new URLSearchParams({ q: `repo:${repo} is:issue ${term}`, sort: "updated", per_page: "20" });
 	const data = JSON.parse(await ghApi(`search/issues?${params}`, env));
 	// Search qualifiers in a user's query can broaden the result set.
-	return data.items.filter((row: { repository_url: string; pull_request?: unknown }) =>
-		!row.pull_request && row.repository_url.toLowerCase() === `https://api.github.com/repos/${repo.toLowerCase()}`,
-	).map(({ number, title }: GitHubIssueChoice) => ({ number, title }));
+	return data.items.filter(belongsToRepository).map(({ number, title }: GitHubIssueChoice) => ({ number, title }));
 }
 
 export async function publishIssueArtifact(input: GitHubIssueArtifact, env: NodeJS.ProcessEnv): Promise<string> {
@@ -44,6 +44,6 @@ export async function publishIssueArtifact(input: GitHubIssueArtifact, env: Node
 	if (!type || !Number.isSafeInteger(input.issue) || input.issue < 1 || typeof input.body !== "string") {
 		throw new Error("Select an issue and an HTML or Markdown file.");
 	}
-	const result = await ghApi(`${path}/${input.issue}/artifacts`, env, { type, name: input.name, body: input.body });
+	const result = await ghApi(`${path}/${input.issue}/artifacts`, env, { type, name: input.name.replace(/[()]/g, ""), body: input.body });
 	return result.trim();
 }
