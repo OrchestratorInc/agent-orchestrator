@@ -1,9 +1,9 @@
 import type { TFunction } from "i18next";
-import { Check, type AppIcon } from "@/components/app-icons";
+import { Check } from "@/components/app-icons";
 import type { ReactNode } from "react";
 import { useTranslation } from "react-i18next";
 import { cn } from "../../lib/utils";
-import { MenuTriggerLabel, OptionMenu, OptionMenuContent, OptionMenuItem, OptionMenuTrigger } from "../ui/option-menu";
+import { OptionMenu, OptionMenuContent, OptionMenuItem, OptionMenuTrigger } from "../ui/option-menu";
 
 export type EffortChoice = { value: string; label?: string };
 export type EffortAvailability = "supported" | "unsupported" | "unknown" | "launch-unavailable";
@@ -88,7 +88,7 @@ export function EffortMenuItems({ value, choices, onChange, defaultValue = "", d
 	</>;
 }
 
-export function EffortPicker(props: EffortMenuProps & { disabled?: boolean; label?: string; icon?: AppIcon; triggerClassName?: string; triggerVariant?: "secondary" | "ghost"; menuClassName?: string; footer?: ReactNode; /** Trigger text while following the default; "Effort" when omitted. */ followLabel?: string }) {
+export function EffortPicker(props: EffortMenuProps & { disabled?: boolean; label?: string; triggerClassName?: string; triggerVariant?: "secondary" | "ghost"; menuClassName?: string; footer?: ReactNode; /** Trigger text while following the default; "Effort" when omitted. */ followLabel?: string }) {
 	const { t } = useTranslation();
 	const following = props.value === (props.defaultValue ?? "") || (!props.value && props.defaultValue === "default");
 	const label = effortDisplayLabel({
@@ -101,7 +101,7 @@ export function EffortPicker(props: EffortMenuProps & { disabled?: boolean; labe
 	if (!props.choices.some((choice) => choice.value && choice.value.toLowerCase() !== "default") && (!props.value || following)) return null;
 	return <OptionMenu>
 		<OptionMenuTrigger variant={props.triggerVariant} disabled={props.disabled} aria-label={props.label || t("settings.models.effort")} className={props.triggerClassName}>
-			<MenuTriggerLabel icon={props.icon}><span className="min-w-0 truncate">{label}</span></MenuTriggerLabel>
+			<span className="min-w-0 truncate">{label}</span>
 		</OptionMenuTrigger>
 		<OptionMenuContent align="end" className={cn("w-[min(16rem,calc(100vw-2rem))]! min-w-0! max-w-[calc(100vw-2rem)]!", props.menuClassName)}><EffortMenuItems {...props} />{props.footer ? <div className="mt-1 border-t border-border pt-1">{props.footer}</div> : null}</OptionMenuContent>
 	</OptionMenu>;

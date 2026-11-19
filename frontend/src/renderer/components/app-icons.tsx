@@ -90,7 +90,6 @@ import {
 	Message as MynaMessage,
 	MessageDots as MynaMessageDots,
 	MessagePlus as MynaMessagePlus,
-	Microchip as MynaMicrochip,
 	Microphone as MynaMicrophone,
 	Minimize as MynaMinimize,
 	Minus as MynaMinus,
@@ -412,7 +411,6 @@ export const MessageSquareDiff = fromLucide(LucideMessageSquareDiff, "message-sq
 export const MessageSquareDot = fromMyna(MynaMessageDots, "message-square-dot", "full");
 export const MessageSquarePlus = fromMyna(MynaMessagePlus, "message-square-plus", "full");
 export const MessageSquareQuote = fromLucide(LucideMessageSquareQuote, "message-square-quote");
-export const Microchip = fromMyna(MynaMicrochip, "microchip");
 export const Mic = fromMyna(MynaMicrophone, "mic");
 export const Minimize2 = fromMyna(MynaMinimize, "minimize-2");
 export const Minus = fromMyna(MynaMinus, "minus");
