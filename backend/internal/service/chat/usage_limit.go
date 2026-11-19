@@ -87,9 +87,36 @@ func (s *Service) SetTurnAutoResume(ctx context.Context, id domain.SessionID, tu
 	if err == nil {
 		s.autoResumeMu.Lock()
 		delete(s.autoResumeRetryAt, turnID)
+		s.autoResumeIdle = false
+		if s.autoResumeWake != nil {
+			select {
+			case s.autoResumeWake <- struct{}{}:
+			default:
+			}
+		}
 		s.autoResumeMu.Unlock()
 	}
 	return err
+}
+
+// AutoResumeArmed signals, coalesced, that a turn was armed for auto-resume,
+// so a resume loop waiting out an idle interval scans again at once.
+func (s *Service) AutoResumeArmed() <-chan struct{} {
+	s.autoResumeMu.Lock()
+	defer s.autoResumeMu.Unlock()
+	if s.autoResumeWake == nil {
+		s.autoResumeWake = make(chan struct{}, 1)
+	}
+	return s.autoResumeWake
+}
+
+// AutoResumeIdle reports whether the last scan found no armed turn and none is
+// being resumed. Only SetTurnAutoResume arms a turn, and it wakes the loop, so
+// an idle loop can scan rarely without missing a deadline.
+func (s *Service) AutoResumeIdle() bool {
+	s.autoResumeMu.Lock()
+	defer s.autoResumeMu.Unlock()
+	return s.autoResumeIdle && len(s.autoResumeInFlight) == 0
 }
 
 func validateUsageLimitSession(record domain.SessionRecord) error {
@@ -245,6 +272,7 @@ func (s *Service) ResumeUsageLimitedTurns(ctx context.Context) error {
 		s.autoResumeMu.Unlock()
 		return errors.Join(err, ctx.Err())
 	}
+	s.autoResumeIdle = len(sources) == 0
 	for id := range s.autoResumeRetryAt {
 		if !armed[id] {
 			delete(s.autoResumeRetryAt, id)

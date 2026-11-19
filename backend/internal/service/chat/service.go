@@ -106,12 +106,16 @@ type Service struct {
 	autoResumeRetryAt     map[string]time.Time
 	autoResumeInFlight    map[string]bool
 	autoResumeScanning    bool
-	usageLimitAccounts    usageLimitAccountReader
-	handoffMu             sync.Mutex
-	handoff               accountHandoffDeps
-	handoffSince          time.Time
-	handoffScanning       bool
-	handoffs              map[string]*accountHandoff
+	// autoResumeIdle is set when the last scan found no armed turn; the daemon's
+	// resume loop then waits longer, and arming a turn wakes it (autoResumeWake).
+	autoResumeIdle     bool
+	autoResumeWake     chan struct{}
+	usageLimitAccounts usageLimitAccountReader
+	handoffMu          sync.Mutex
+	handoff            accountHandoffDeps
+	handoffSince       time.Time
+	handoffScanning    bool
+	handoffs           map[string]*accountHandoff
 	// updateStops are sessions stopped so an update could replace their
 	// executable; the update starts them again, so their queue is kept.
 	updateStops map[domain.SessionID]bool
