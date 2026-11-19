@@ -494,6 +494,7 @@ type Manager struct {
 	// Snapshot before the listener binds; background cleanup must never reclaim
 	// a preparation opened in this daemon after the listener is live.
 	startupTaskPreparations []domain.SessionRecord
+	startupHealthCutoff     time.Time
 	// Only pre-listener provisioning writes that failed may be retried after
 	// bind; scanning then would also sweep tasks created by this daemon.
 	startupProvisioningRetries []domain.SessionRecord
@@ -4660,6 +4661,7 @@ func (m *Manager) ReconcileStartupSafety(ctx context.Context) error {
 	}
 	// Capture only rows that predate the listener. Git cleanup belongs in the
 	// background, where a slow or unavailable repository cannot delay boot.
+	m.startupHealthCutoff = m.clock()
 	m.startupTaskPreparations = []domain.SessionRecord{}
 	m.startupProvisioningRetries = nil
 	// No branch naming survives a restart; clients show the branch it left.
@@ -4753,6 +4755,11 @@ func (m *Manager) reconcileLivePass(ctx context.Context, recs []domain.SessionRe
 	candidates := make([]domain.SessionRecord, 0, len(recs))
 	ids := make([]domain.SessionID, 0, len(recs))
 	for _, rec := range recs {
+		// A spawn accepted after the listener opened can still be between
+		// inserting its seed row and creating its workspace.
+		if !m.startupHealthCutoff.IsZero() && !rec.CreatedAt.Before(m.startupHealthCutoff) {
+			continue
+		}
 		if rec.IsTerminated || rec.IsTaskPreparation || rec.HibernatedAt != nil || rec.ProvisionState.WithDefault() != domain.SessionProvisionReady {
 			continue
 		}
