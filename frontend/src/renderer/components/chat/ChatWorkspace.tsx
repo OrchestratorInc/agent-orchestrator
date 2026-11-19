@@ -5273,7 +5273,7 @@ export function Timeline({
 		const content = virtualContent.current;
 		if (!node || !content || !initialLayoutDone.current || pendingReading.current) return undefined;
 		const top = node.getBoundingClientRect().top;
-		const rows: HistoryAnchor = [];
+		const rows: HistoryAnchor["rows"] = [];
 		for (const child of Array.from(content.children) as HTMLElement[]) {
 			const key = child.dataset.chatTurn;
 			if (!key) continue;
@@ -5283,21 +5283,24 @@ export function Timeline({
 			rows.push({ key, offset: rect.top - top });
 			if (rows.length === HISTORY_ANCHOR_ROWS) break;
 		}
-		return rows.length > 0 ? rows : undefined;
+		return rows.length > 0 ? { scrollTop: node.scrollTop, rows } : undefined;
 	}, []);
-	const restoreHistoryAnchor = useCallback((rows: HistoryAnchor) => {
+	const restoreHistoryAnchor = useCallback((anchor: HistoryAnchor) => {
 		const node = scroller.current;
 		const content = virtualContent.current;
 		if (!node || !content) return;
 		const elements = new Map((Array.from(content.children) as HTMLElement[]).map((child) => [child.dataset.chatTurn, child]));
-		const row = rows.find((candidate) => elements.has(candidate.key));
+		const row = anchor.rows.find((candidate) => elements.has(candidate.key));
 		if (!row) return;
+		// Reading layout clamps scrollTop first when rows dropped above shrank the log.
 		const delta = elements.get(row.key)!.getBoundingClientRect().top - node.getBoundingClientRect().top - row.offset;
-		if (Math.abs(delta) < 0.5) return;
-		const before = node.scrollTop;
 		// Moves a glide in flight (a send) along with the view, so it carries on from here.
-		shiftScroll(delta);
-		historyShift.current = node.scrollTop - before;
+		if (Math.abs(delta) >= 0.5) shiftScroll(delta);
+		// The whole move since before the commit, clamp included: the settle restore
+		// adds it to the position it noted then.
+		const moved = node.scrollTop - anchor.scrollTop;
+		if (Math.abs(moved) < 0.5) return;
+		historyShift.current = moved;
 		queueMicrotask(() => { historyShift.current = 0; });
 		lastScrollTop.current = node.scrollTop;
 		updateScrollbar();
@@ -6942,8 +6945,11 @@ function forkableGroup(group: TimelineGroup): boolean {
 	return state === "completed" || state === "recovered";
 }
 
-/** The first rows the reader could see, top down, each with its distance from the view's top. */
-type HistoryAnchor = Array<{ key: string; offset: number }>;
+/**
+ * The log's scrollTop and the first rows the reader could see, top down, each with
+ * its distance from the view's top, all read just before the commit.
+ */
+type HistoryAnchor = { scrollTop: number; rows: Array<{ key: string; offset: number }> };
 const HISTORY_ANCHOR_ROWS = 4;
 
 type SettleAnchor = {
