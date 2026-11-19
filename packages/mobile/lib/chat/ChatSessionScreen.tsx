@@ -28,7 +28,7 @@ import { headerBackOptions } from "../headerBack";
 import { HeaderPill, HeaderPillButton, pillBackOptions } from "../headerPill";
 import { stackScreenOptions, SYSTEM_GLASS_HEADER } from "../stackScreenOptions";
 import { useTheme, useThemedStyles } from "../ThemeProvider";
-import { getWorkspacePaths, openSessionShell, forkSession, getForkOptions, type ForkOptions } from "./api";
+import { getWorkspacePaths, openSessionShell, forkSession, getForkOptions, resolveWorkspacePath, type ForkOptions } from "./api";
 import { requestDockModel } from "./requestDockModel";
 import type { ResponseQuoteRequest } from "./responseQuotes";
 import { ChatComposer } from "./ChatComposer";
@@ -72,6 +72,7 @@ import { agentAccountLabel, agentAccountOptions, moveSessionAgentAccount, useAge
 import { useStillHere } from "../useStillHere";
 import { ARCHIVE_SESSION_CONFIRM } from "../worker-action-model";
 import { changedPathCount, fileRoute, filesRoute, FilesNavigationContext, type FilesNavigation } from "../files/navigation";
+import { isAbsoluteFileReference } from "./fileLinks";
 import { TurnArtifactsContext, useTurnArtifactSourceFor } from "./TurnArtifacts";
 import { TurnRecoveryContext, type TurnRecovery } from "./UsageLimitNotice";
 import { usageLimitedTurn } from "./usageLimit";
@@ -315,8 +316,20 @@ export function ChatSessionScreen({ session: boardSession }: { session: MobileCh
 	// Codex-style: every surface that shows the agent changed files can open them.
 	const filesNavigation = useMemo<FilesNavigation>(() => ({
 		openChanges: () => router.push(filesRoute(session.id, currentHostId, sessionName)),
-		openFile: (path, previousPath) => router.push(fileRoute(session.id, path, currentHostId, previousPath)),
-	}), [currentHostId, router, session.id, sessionName]);
+		openFile: (path, previousPath, line) => {
+			// Agents also cite absolute paths (`/…/worktree/src/a.ts:12`): the
+			// daemon places those, in the worktree or among the session's artifacts.
+			if (!config || !isAbsoluteFileReference(path)) {
+				router.push(fileRoute(session.id, path, currentHostId, previousPath, line));
+				return;
+			}
+			void resolveWorkspacePath(config, session.id, path).then((resolved) => {
+				if (resolved.kind === "workspace" && resolved.path) router.push(fileRoute(session.id, resolved.path, currentHostId, previousPath, line));
+				else if (resolved.kind === "artifact" && resolved.path) router.push({ pathname: "/artifact/[sessionId]", params: { sessionId: session.id, path: resolved.path, hostId: currentHostId } });
+				else Alert.alert("Outside this session", `${path} isn't in this session's worktree.`);
+			}, () => router.push(fileRoute(session.id, path, currentHostId, previousPath, line)));
+		},
+	}), [config, currentHostId, router, session.id, sessionName]);
 	// The artifacts a turn made, drawn as cards under its reply.
 	const turnArtifacts = useTurnArtifactSourceFor(session.id, conversation.snapshot?.turns, currentHostId);
 	// Re-read git's totals when a turn reports edits, not on a timer.

@@ -129,6 +129,7 @@ export const DiffLine = memo(function DiffLine({
 	digits,
 	selected,
 	commented,
+	cited = false,
 	selectionActive,
 	edge,
 	onSelect,
@@ -143,6 +144,8 @@ export const DiffLine = memo(function DiffLine({
 	digits: number;
 	selected: boolean;
 	commented: boolean;
+	/** The line a chat link pointed at (`file.ts:12`), marked until something is selected. */
+	cited?: boolean;
 	selectionActive: boolean;
 	onSelect: (index: number) => void;
 	onExtend: (index: number) => void;
@@ -162,13 +165,13 @@ export const DiffLine = memo(function DiffLine({
 	return (
 		<Pressable
 			accessibilityRole="button"
-			accessibilityLabel={`${lineWord(row)} ${number ?? ""}${commented ? ", has a comment" : ""}: ${row.text.trim() || "blank line"}`}
+			accessibilityLabel={`${lineWord(row)} ${number ?? ""}${commented ? ", has a comment" : ""}${cited ? ", linked line" : ""}: ${row.text.trim() || "blank line"}`}
 			accessibilityHint={selectionActive ? "Selects this line. Use the extend action to grow the selection." : "Selects this line to comment or ask about it. Hold and drag to select more lines."}
 			accessibilityState={{ selected }}
 			accessibilityActions={[{ name: "activate" }, { name: "extend", label: "Extend selection to this line" }]}
 			onAccessibilityAction={onAction}
 			onPress={() => { haptics.select(); onSelect(index); }}
-			style={[styles.line, tint ? { backgroundColor: tint } : null, selected && styles.lineSelected]}
+			style={[styles.line, tint ? { backgroundColor: tint } : null, cited && styles.lineCited, selected && styles.lineSelected]}
 		>
 			<View style={[styles.gutter, { width: gutterWidth(digits, scale) }]}>
 				<Text maxFontSizeMultiplier={CODE_MAX_SCALE} style={styles.gutterText}>{number ?? ""}</Text>
@@ -396,6 +399,7 @@ const makeStyles = (t: Theme) => StyleSheet.create({
 
 	line: { flexDirection: "row", alignItems: "flex-start", minHeight: CODE_LINE_HEIGHT, paddingRight: space.lg },
 	lineSelected: { backgroundColor: t.accentTint },
+	lineCited: { backgroundColor: t.tintAmber },
 	selectionBar: { position: "absolute", left: SELECTION_BAR_INSET, top: 0, bottom: 0, width: SELECTION_BAR_WIDTH, backgroundColor: t.accent },
 	gutter: { flexDirection: "row", justifyContent: "flex-end", alignItems: "center", paddingRight: space.xs, minHeight: CODE_LINE_HEIGHT },
 	gutterText: { fontFamily: t.fontMono, fontSize: CODE_FONT_SIZE, lineHeight: CODE_LINE_HEIGHT, color: t.textFaint },

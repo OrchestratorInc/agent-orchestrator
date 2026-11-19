@@ -29,6 +29,7 @@ vi.mock("../ThemeProvider", () => ({
 }));
 
 import { ChatLinkProvider, ChatMarkdown, SelectableResponseText } from "./ChatMarkdown";
+import { FilesNavigationContext } from "../files/navigation";
 import { parseBlocks } from "./markdownBlocks";
 import * as androidSelection from "./useAndroidResponseSelection";
 
@@ -323,6 +324,35 @@ it.each([false, true])("opens an orchestrator's ao://sessions links as sessions,
 	expect(textOf(renderer.root)).toContain("Fix table rendering. Also");
 	act(() => links[0]!.props.onPress());
 	expect(onLinkOpen).toHaveBeenCalledWith("ao://sessions/proj/ao-259");
+	act(() => renderer.unmount());
+});
+
+it.each([false, true])("opens a file link at the line it cites (continuous: %s)", (continuousSelection) => {
+	const openFile = vi.fn();
+	const onLinkOpen = vi.fn();
+	let renderer!: ReactTestRenderer;
+	act(() => {
+		renderer = create(<ChatLinkProvider onLinkOpen={onLinkOpen}>
+			<FilesNavigationContext.Provider value={{ openChanges: vi.fn(), openFile }}>
+				<ChatMarkdown continuousSelection={continuousSelection} text={"See [browser-view-host.ts:1748](frontend/src/main/browser-view-host.ts:1748) and [mail](mailto:a@example.com)."} />
+			</FilesNavigationContext.Provider>
+		</ChatLinkProvider>);
+	});
+	const links = renderer.root.findAll((node) => typeof node.type === "string" && node.props.accessibilityRole === "link");
+	expect(links.map(textOf)).toEqual(["browser-view-host.ts:1748"]);
+	// Neither a page nor a file: the Markdown stays as written.
+	expect(textOf(renderer.root)).toContain("[mail](mailto:a@example.com)");
+	act(() => links[0]!.props.onPress());
+	expect(openFile).toHaveBeenCalledWith("frontend/src/main/browser-view-host.ts", undefined, 1748);
+	expect(onLinkOpen).not.toHaveBeenCalled();
+	act(() => renderer.unmount());
+});
+
+it("shows a file link's label as words where no session can open it", () => {
+	let renderer!: ReactTestRenderer;
+	act(() => { renderer = create(<ChatMarkdown text="See [api.ts:12](lib/api.ts:12) now" />); });
+	expect(renderer.root.findAll((node) => typeof node.type === "string" && node.props.accessibilityRole === "link")).toEqual([]);
+	expect(textOf(renderer.root)).toContain("See api.ts:12 now");
 	act(() => renderer.unmount());
 });
 

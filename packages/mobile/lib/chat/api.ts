@@ -411,6 +411,20 @@ export async function stageConversationAttachments(
 	return body.paths ?? [];
 }
 
+/** Where the daemon places a path: in the worktree, among the session's artifacts, or outside both. */
+export type WorkspacePathResolution = { kind: "workspace" | "artifact" | "outside"; path?: string };
+
+/**
+ * Place a path an agent wrote, absolute or `~/`, relative to the session. The
+ * daemon follows symlinks, so a link that leaves the worktree is "outside".
+ */
+export async function resolveWorkspacePath(cfg: ServerConfig, sessionId: string, path: string): Promise<WorkspacePathResolution> {
+	const res = await apiRequest(cfg, `${API}/sessions/${encodeURIComponent(sessionId)}/workspace/resolve?${new URLSearchParams({ path })}`);
+	const body = (await res.json()) as { kind?: string; path?: string };
+	const kind = body.kind === "workspace" || body.kind === "artifact" ? body.kind : "outside";
+	return { kind, path: body.path?.trim() || undefined };
+}
+
 export async function getWorkspacePaths(cfg: ServerConfig, sessionId: string): Promise<{ paths: string[]; truncated: boolean }> {
 	const res = await apiRequest(cfg, `${API}/sessions/${encodeURIComponent(sessionId)}/workspace/files`);
 	const body = (await res.json()) as { files?: Array<{ path: string; status?: string }>; truncated?: boolean };

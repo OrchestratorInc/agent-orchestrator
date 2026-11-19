@@ -20,6 +20,8 @@ import { parseBlocks, type MarkdownBlock, type TableAlign } from "./markdownBloc
 import { iconSize, prose, radius, space, touchTarget, type } from "../tokens";
 import type { ChatExcerpt } from "./types";
 import { sessionLink } from "./automationMessages";
+import { chatFileReference } from "./fileLinks";
+import { useFilesNavigation } from "../files/navigation";
 
 // The diagram renderer (a WebView and the engine's loader) loads on the first
 // Mermaid fence, so text without one never pulls it in.
@@ -343,6 +345,7 @@ function CodeBlock({ text, language, streaming, nestedScroll = false }: { text: 
 
 function MarkdownLink({ url, label, style }: { url: string; label: string; style: StyleProp<TextStyle> }) {
 	const provided = useContext(OpenChatLink);
+	const files = useFilesNavigation();
 	const names = useContext(SessionNameOf);
 	const session = sessionLink(url);
 	// A bare link reads as the session it names, asked for once when the surface does not know it; an authored label is kept.
@@ -357,14 +360,22 @@ function MarkdownLink({ url, label, style }: { url: string; label: string; style
 		if (!provided) return <Text>{text}</Text>;
 		return <Text accessibilityRole="link" accessibilityHint="Opens this session's chat" style={style} onPress={() => provided(url)}>{text}</Text>;
 	}
+	const file = WEB_OR_AO_LINK.test(url) ? undefined : chatFileReference(url);
+	if (file) {
+		// Only a session's surface can open its files; elsewhere the label stays words.
+		if (!files) return <Text>{label}</Text>;
+		return <Text accessibilityRole="link" accessibilityHint={`Opens ${file.path}`} style={style} onPress={() => { haptics.tap(); files.openFile(file.path, undefined, file.line); }}>{label}</Text>;
+	}
 	const open = provided ?? defaultOpenChatLink;
 	return <Text accessibilityRole="link" style={style} onPress={() => open(url)}>{label}</Text>;
 }
 
+const WEB_OR_AO_LINK = /^(?:https?|ao):\/\//i;
+
 function inline(text: string, styles: ReturnType<typeof makeStyles>, linksPressable = true, codeStyle?: StyleProp<TextStyle>): ReactNode[] {
-	// Web links, and AO's own `ao://` links; a bare session link stops before prose punctuation.
+	// Web links, AO's own `ao://` links, and file links (`[a.ts:12](src/a.ts:12)`); a bare session link stops before prose punctuation.
 	// Bold runs may hold a single `*` or `_` (italic, say) but not a closing pair.
-	const pattern = /(\[([^\]]+)\]\(((?:https?|ao):\/\/[^\s)]+)\)|<((?:https?|ao):\/\/[^\s>]+)>|`([^`]+)`|\*\*((?:[^*]|\*(?!\*))+)\*\*|__((?:[^_]|_(?!_))+)__|~~([^~]+)~~|\*([^*\n]+)\*|_([^_\n]+)_|(https?:\/\/[^\s<]+)|(ao:\/\/sessions\/[^\s<>()]*[^\s<>().,;:!?'"]))/g;
+	const pattern = /(\[([^\]]+)\]\(([^\s)]+)\)|<((?:https?|ao):\/\/[^\s>]+)>|`([^`]+)`|\*\*((?:[^*]|\*(?!\*))+)\*\*|__((?:[^_]|_(?!_))+)__|~~([^~]+)~~|\*([^*\n]+)\*|_([^_\n]+)_|(https?:\/\/[^\s<]+)|(ao:\/\/sessions\/[^\s<>()]*[^\s<>().,;:!?'"]))/g;
 	const nodes: ReactNode[] = [];
 	let at = 0;
 	let match: RegExpExecArray | null;
@@ -372,6 +383,13 @@ function inline(text: string, styles: ReturnType<typeof makeStyles>, linksPressa
 		if (match.index > at) nodes.push(text.slice(at, match.index));
 		if ((match[7] || match[10]) && !allowsUnderscoreEmphasis(text, match.index, pattern.lastIndex)) {
 			nodes.push(match[0]);
+		} else if (match[3] && !WEB_OR_AO_LINK.test(match[3]) && !chatFileReference(match[3])) {
+			// Neither a page nor a file (mailto:, an anchor): keep the Markdown as
+			// written, and keep reading inside it so its code and emphasis render.
+			nodes.push("[");
+			at = match.index + 1;
+			pattern.lastIndex = at;
+			continue;
 		} else if ((match[2] && match[3]) || match[4] || match[11] || match[12]) {
 			const url = match[3] ?? match[4] ?? match[11] ?? match[12];
 			const label = match[2] ?? url;

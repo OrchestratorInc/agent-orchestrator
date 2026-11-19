@@ -428,7 +428,7 @@ export function CloudSessionScreen({ sessionId }: { sessionId: string }) {
 	// chat's does: the turn's changed-files card and the composer's chip.
 	const filesNavigation = useMemo<FilesNavigation>(() => ({
 		openChanges: () => router.push(filesRoute(sessionId, CLOUD_HOST_ID, title)),
-		openFile: (path, previousPath) => router.push(fileRoute(sessionId, path, CLOUD_HOST_ID, previousPath)),
+		openFile: (path, previousPath, line) => router.push(fileRoute(sessionId, path, CLOUD_HOST_ID, previousPath, line)),
 	}), [router, sessionId, title]);
 	// git's totals, re-read when a turn reports edits. Only while the sandbox
 	// runs: the read goes to its worker, and would wake a paused one.

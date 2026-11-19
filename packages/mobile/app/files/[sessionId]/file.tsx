@@ -81,7 +81,7 @@ export default function SessionFileScreen() {
 }
 
 function SessionFileContent() {
-	const params = useLocalSearchParams<{ sessionId: string; path: string; mode?: Mode; previousPath?: string; hostId?: string } & SelectionParams>();
+	const params = useLocalSearchParams<{ sessionId: string; path: string; mode?: Mode; previousPath?: string; hostId?: string; line?: string } & SelectionParams>();
 	// What the Files screen was comparing; a file opened from chat has none, the worktree's base.
 	const pick = useRouteSelection(params);
 	const picked = Object.keys(selectionParams(pick)).length > 0;
@@ -113,7 +113,10 @@ function SessionFileContent() {
 	const [loadError, setLoadError] = useState<string>();
 	const [mode, setMode] = useState<Mode>(params.mode === "file" ? "file" : "diff");
 	const [wrap, setWrap] = useState(true);
-	const [rendered, setRendered] = useState(true);
+	// A line a chat link cited (`file.ts:12`): the file opens there, and a
+	// markdown file shows its source, where that line is.
+	const citedLine = Number(params.line) > 0 ? Math.floor(Number(params.line)) : undefined;
+	const [rendered, setRendered] = useState(!citedLine);
 	const [revealed, setRevealed] = useState<Record<string, number>>({});
 	const [selection, setSelection] = useState<Selection | null>(null);
 	const [busy, setBusy] = useState(false);
@@ -184,6 +187,7 @@ function SessionFileContent() {
 	const fileComments = useMemo(() => review.all.filter((comment) => comment.target.path === path && inPick(comment.target, context)), [context, path, review.all]);
 	const commentById = useMemo(() => new Map(fileComments.map((comment) => [comment.id, comment])), [fileComments]);
 	const rows = useMemo(() => withInlineComments(baseRows, fileComments), [baseRows, fileComments]);
+	const citedIndex = useMemo(() => citedLine ? rows.findIndex((row) => row.type === "line" && row.row.kind !== "del" && row.row.newNo === citedLine) : -1, [citedLine, rows]);
 	const digits = useMemo(() => String(rows.reduce((max, row) => row.type === "line" ? Math.max(max, row.row.newNo ?? 0, row.row.oldNo ?? 0) : max, 0)).length, [rows]);
 	const language = languageForPath(path);
 	const { name, dir } = splitPath(path);
@@ -202,7 +206,7 @@ function SessionFileContent() {
 	const go = useCallback((offset: number) => {
 		const target = changes[position + offset];
 		if (!target) return;
-		router.setParams({ path: target.path, previousPath: target.previousPath ?? "", mode: "diff" });
+		router.setParams({ path: target.path, previousPath: target.previousPath ?? "", mode: "diff", line: "" });
 	}, [changes, position, router]);
 
 	const onSelect = useCallback((index: number) => {
@@ -333,6 +337,28 @@ function SessionFileContent() {
 		const timer = setTimeout(() => list.current?.scrollToIndex({ index: selection.focus, viewPosition: 0.3, animated: true }), 60);
 		return () => clearTimeout(timer);
 	}, [drag.dragging, selection]);
+	// Jump to the cited line once it is among the rows. Wrapped rows have no
+	// fixed height, so no offset can be computed for a line not drawn yet; the
+	// list is walked forward until it is.
+	const jumpTo = useRef(-1);
+	const jumpTries = useRef(0);
+	useEffect(() => {
+		if (citedIndex < 0) return;
+		jumpTo.current = citedIndex;
+		jumpTries.current = 0;
+		const timer = setTimeout(() => list.current?.scrollToIndex({ index: citedIndex, viewPosition: 0.3, animated: false }), 0);
+		return () => clearTimeout(timer);
+	}, [citedIndex, effectiveMode, wrap]);
+	const onScrollToIndexFailed = useCallback(({ index, highestMeasuredFrameIndex }: { index: number; highestMeasuredFrameIndex: number }) => {
+		if (index === jumpTo.current && jumpTries.current++ < 40) {
+			// The furthest drawn row can always be scrolled to, and reaching it
+			// draws the rows past it: step there, then try the cited line again.
+			list.current?.scrollToIndex({ index: highestMeasuredFrameIndex, viewPosition: 0, animated: false });
+			setTimeout(() => list.current?.scrollToIndex({ index, viewPosition: 0.3, animated: false }), 60);
+			return;
+		}
+		list.current?.scrollToOffset({ offset: index * CODE_LINE_HEIGHT * codeScale, animated: true });
+	}, [codeScale]);
 	const label = chosen.length ? selectionLabel(chosen) : "";
 
 	const act = useCallback(async (action: ComposerAction, text: string) => {
@@ -458,7 +484,7 @@ function SessionFileContent() {
 				maxToRenderPerBatch={60}
 				windowSize={15}
 				onViewableItemsChanged={onViewable}
-				onScrollToIndexFailed={({ index }) => list.current?.scrollToOffset({ offset: index * CODE_LINE_HEIGHT * codeScale, animated: true })}
+				onScrollToIndexFailed={onScrollToIndexFailed}
 				contentContainerStyle={{ paddingBottom: (selection ? 260 : review.comments.length ? 140 : 96) + stepperClearance }}
 				renderItem={({ item, index }) => item.type === "fold" ? (
 					<FoldRow hidden={item.hidden} section={item.section} expandable={item.expandable} onExpand={() => expand(item.id)} />
@@ -472,6 +498,7 @@ function SessionFileContent() {
 						wrap={wrap}
 						digits={digits}
 						selected={index >= selectionStart && index <= selectionEnd}
+						cited={index === citedIndex && !selection}
 						edge={index === selectionStart && index === selectionEnd ? "both" : index === selectionStart ? "start" : index === selectionEnd ? "end" : undefined}
 						commented={commented.has(item.row.kind === "del" ? `old:${item.row.oldNo}` : `new:${item.row.newNo}`)}
 						selectionActive={Boolean(selection)}
