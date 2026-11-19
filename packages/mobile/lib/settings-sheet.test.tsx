@@ -26,6 +26,8 @@ vi.mock("./OnboardingGate", () => ({ OnboardingGate: () => null }));
 vi.mock("./TelemetryManager", () => ({ TelemetryManager: () => null }));
 vi.mock("./PushManager", () => ({ PushManager: () => null }));
 vi.mock("./UpdatesManager", () => ({ UpdatesManager: () => null }));
+vi.mock("./UpdateScreen", () => ({ UpdateScreen: () => null }));
+vi.mock("./UpdateRouteKeeper", () => ({ UpdateRouteKeeper: () => null }));
 vi.mock("./StoreUpdateManager", () => ({ StoreUpdateManager: () => null }));
 
 import RootLayout from "../app/_layout";

@@ -17,6 +17,8 @@ import { TelemetryManager } from "../lib/TelemetryManager";
 import { rootTouchStart } from "../lib/touchOutside";
 import { PushManager } from "../lib/PushManager";
 import { UpdatesManager } from "../lib/UpdatesManager";
+import { UpdateScreen } from "../lib/UpdateScreen";
+import { UpdateRouteKeeper } from "../lib/UpdateRouteKeeper";
 import { StoreUpdateManager } from "../lib/StoreUpdateManager";
 import { boardTitle } from "../lib/board-tabs";
 import { GLASS_HEADER_OPTIONS, stackScreenOptions } from "../lib/stackScreenOptions";
@@ -176,6 +178,8 @@ function Shell() {
 			<TelemetryManager />
 			<PushManager />
 			<UpdatesManager />
+			<UpdateScreen />
+			<UpdateRouteKeeper />
 			<StoreUpdateManager />
 			<OnboardingGate />
 			{/* The navigator paints surfaces of its own, and it reads them from *its*

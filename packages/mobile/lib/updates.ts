@@ -1,8 +1,10 @@
 // OTA update policy. No expo-updates/React Native imports so vitest can run it;
 // callers pass the real `expo-updates` module in. Native already checks and
 // downloads on cold start (ON_LOAD) and applies on the next one; this adds the
-// resume path: after the app has been in the background a while, apply a
-// downloaded update or check for one.
+// resume path: after the app has been in the background a while, offer a
+// downloaded update again or check for one. The app never restarts on its own:
+// a downloaded update raises the update screen (updateScreenState.ts), and the
+// restart waits for the user's tap.
 
 import type { UpdateCheckResult, UpdateFetchResult } from "expo-updates";
 
@@ -19,7 +21,7 @@ export type UpdateOutcome =
 	| { kind: "downloaded" }
 	| { kind: "error"; error: unknown };
 
-/** Time in the background after which a resume applies a pending update or checks for one. */
+/** Time in the background after which a resume offers a pending update again or checks for one. */
 export const MIN_BACKGROUND_MS = 15 * 60 * 1000;
 
 export function onForeground(
@@ -27,9 +29,9 @@ export function onForeground(
 	backgroundedAt: number | null,
 	now: number,
 	minBackground = MIN_BACKGROUND_MS,
-): "reload" | "check" | "none" {
+): "prompt" | "check" | "none" {
 	if (backgroundedAt === null || now - backgroundedAt < minBackground) return "none";
-	return pending ? "reload" : "check";
+	return pending ? "prompt" : "check";
 }
 
 let inflight: Promise<UpdateOutcome> | null = null;
@@ -78,4 +80,14 @@ export function describeUpdateRow(input: UpdateRowInput): UpdateRow {
 	if (input.lastManual?.kind === "error") return { value: "Couldn't check", tone: "bad", busy: false, action: "check" };
 	if (input.lastManual?.kind === "up-to-date") return { value: "Up to date", tone: "good", busy: false, action: "check" };
 	return { value: "Check now", tone: "default", busy: false, action: "check" };
+}
+
+/**
+ * Whether a downloaded update should raise the update screen: once per update,
+ * so "Not now" holds until a different update lands (or a long absence offers
+ * it again through `onForeground`). An update without an id — a rollback to the
+ * embedded bundle — is keyed as one stand-in update.
+ */
+export function shouldOfferUpdate(pending: boolean, updateId: string | undefined, lastOffered: string | null): boolean {
+	return pending && (updateId ?? "embedded") !== lastOffered;
 }

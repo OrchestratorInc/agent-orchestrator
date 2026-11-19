@@ -4,6 +4,7 @@ import {
 	describeUpdateRow,
 	MIN_BACKGROUND_MS,
 	onForeground,
+	shouldOfferUpdate,
 	type UpdatesApi,
 } from "./updates";
 
@@ -25,8 +26,8 @@ describe("onForeground", () => {
 		expect(onForeground(true, away, away + MIN_BACKGROUND_MS - 1)).toBe("none");
 	});
 
-	it("applies a pending update after a long absence, otherwise checks", () => {
-		expect(onForeground(true, away, away + MIN_BACKGROUND_MS)).toBe("reload");
+	it("offers a pending update again after a long absence, otherwise checks", () => {
+		expect(onForeground(true, away, away + MIN_BACKGROUND_MS)).toBe("prompt");
 		expect(onForeground(false, away, away + MIN_BACKGROUND_MS)).toBe("check");
 	});
 });
@@ -130,5 +131,26 @@ describe("describeUpdateRow", () => {
 			action: "check",
 		});
 		expect(describeUpdateRow(idle)).toEqual({ value: "Check now", tone: "default", busy: false, action: "check" });
+	});
+});
+
+describe("shouldOfferUpdate", () => {
+	it("offers a downloaded update once", () => {
+		expect(shouldOfferUpdate(true, "u1", null)).toBe(true);
+		expect(shouldOfferUpdate(true, "u1", "u1")).toBe(false);
+	});
+
+	it("offers a newer update even after the last one was put off", () => {
+		expect(shouldOfferUpdate(true, "u2", "u1")).toBe(true);
+	});
+
+	it("offers nothing until an update is downloaded", () => {
+		expect(shouldOfferUpdate(false, undefined, null)).toBe(false);
+		expect(shouldOfferUpdate(false, "u1", null)).toBe(false);
+	});
+
+	it("keys a rollback without an id as one update", () => {
+		expect(shouldOfferUpdate(true, undefined, null)).toBe(true);
+		expect(shouldOfferUpdate(true, undefined, "embedded")).toBe(false);
 	});
 });
