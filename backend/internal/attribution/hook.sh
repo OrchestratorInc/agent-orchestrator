@@ -88,8 +88,21 @@ snapshot_template() {
 	[ -n "$snap" ] || return 0
 	rm -f "$snap"
 	if [ "$2" = template ] && [ -n "$1" ] && [ -f "$1" ]; then
-		git stripspace --strip-comments <"$1" >"$snap" 2>/dev/null || rm -f "$snap"
+		message_text "$1" >"$snap" || rm -f "$snap"
 	fi
+}
+
+# message_text prints the message in file $1 the way git reads it: without
+# comment lines, and without the `commit -v` scissors line and the diff below it.
+message_text() {
+	sed '/------------------------ >8 ------------------------/,$d' "$1" | git stripspace --strip-comments 2>/dev/null
+}
+
+# only_signoffs reports whether text $1 holds nothing but blank lines and
+# Signed-off-by lines: git treats such a message as empty, and a template
+# followed only by them as unedited.
+only_signoffs() {
+	printf '%s\n' "$1" | awk '!/^[[:space:]]*$/ && !/^Signed-off-by: / { found = 1 } END { exit found }'
 }
 
 # template_untouched reports whether message file $1 is still the template
@@ -97,10 +110,15 @@ snapshot_template() {
 template_untouched() {
 	snap=$(template_snapshot) || return 1
 	[ -n "$snap" ] && [ -f "$snap" ] || return 1
-	stripped=$(git stripspace --strip-comments <"$1" 2>/dev/null)
+	text=$(message_text "$1")
 	snapshot=$(cat "$snap")
 	rm -f "$snap"
-	[ "$stripped" = "$snapshot" ]
+	# Git's own rule: the template, then nothing but whitespace and sign-offs.
+	case "$text" in
+	"$snapshot"*) rest=${text#"$snapshot"} ;;
+	*) rest=$text ;;
+	esac
+	only_signoffs "$rest"
 }
 
 # insert_trailer adds trailer $2 to message file $1 with none of the person's
@@ -163,6 +181,8 @@ add_trailer() {
 	elif [ "$2" != message ]; then
 		has_message "$msg" || return 0
 		template_untouched "$msg" && return 0
+		# Nothing but sign-offs: git aborts it as an empty message.
+		only_signoffs "$(message_text "$msg")" && return 0
 		insert_trailer "$msg" "Co-authored-by: $coauthor"
 	elif grep -q '[^[:space:]]' "$msg"; then
 		insert_trailer "$msg" "Co-authored-by: $coauthor" literal

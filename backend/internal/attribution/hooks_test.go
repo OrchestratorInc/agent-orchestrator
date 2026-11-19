@@ -172,6 +172,64 @@ func TestHookKeepsTheUntouchedTemplateAbortForDashT(t *testing.T) {
 	}
 }
 
+// Git's own rule for an unedited template: the template followed by nothing
+// but whitespace and sign-offs, ignoring a `commit -v` diff. The hook follows
+// it, so these still abort.
+func TestHookFollowsGitsUnchangedTemplateRule(t *testing.T) {
+	r := newRepo(t, testCoAuthor, func(r repo) {
+		tpl := filepath.Join(r.main, ".gitmessage")
+		if err := os.WriteFile(tpl, []byte("Replace this with your summary\n"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		r.git(r.main, "config", "commit.template", tpl)
+	})
+	dir := t.TempDir()
+	editor := func(name, body string) string {
+		path := filepath.Join(dir, name)
+		if err := os.WriteFile(path, []byte("#!/bin/sh\n"+body+"\n"), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		return path
+	}
+	run := func(ed string, args ...string) (string, error) {
+		cmd := exec.Command("git", append([]string{"-C", r.worktree, "commit", "--allow-empty"}, args...)...)
+		cmd.Env = append(os.Environ(), "GIT_CONFIG_GLOBAL=/dev/null", "GIT_CONFIG_NOSYSTEM=1", "GIT_EDITOR="+ed,
+			"GIT_AUTHOR_NAME=Dev", "GIT_AUTHOR_EMAIL=dev@example.com", "GIT_COMMITTER_NAME=Dev", "GIT_COMMITTER_EMAIL=dev@example.com")
+		out, err := cmd.CombinedOutput()
+		return string(out), err
+	}
+	dropDiff := editor("drop-diff.sh", `awk '{ print } /------------------------ >8 ------------------------/ { exit }' "$1" > "$1.tmp" && mv "$1.tmp" "$1"`)
+	addSignoff := editor("add-signoff.sh", `printf '\nSigned-off-by: Dev <dev@example.com>\n' >> "$1"`)
+	onlySignoff := editor("only-signoff.sh", `printf 'Signed-off-by: Dev <dev@example.com>\n' > "$1"`)
+	for _, tc := range []struct {
+		name   string
+		editor string
+		args   []string
+	}{
+		{"verbose diff removed", dropDiff, []string{"-v"}},
+		{"sign-off appended", addSignoff, nil},
+		{"with -s", "true", []string{"-s"}},
+		{"only a sign-off", onlySignoff, nil},
+	} {
+		before := r.git(r.worktree, "rev-parse", "HEAD")
+		if out, err := run(tc.editor, tc.args...); err == nil {
+			t.Fatalf("%s: committed, want an abort:\n%s\n%s", tc.name, out, r.message("HEAD"))
+		}
+		if after := r.git(r.worktree, "rev-parse", "HEAD"); after != before {
+			t.Fatalf("%s: HEAD moved", tc.name)
+		}
+	}
+	// A real edit with -s still commits, with the sign-off and one trailer last.
+	edit := editor("edit.sh", `{ printf 'feat: edited\n\n'; grep '^Signed-off-by' "$1"; } > "$1.tmp" && mv "$1.tmp" "$1"`)
+	if out, err := run(edit, "-s"); err != nil {
+		t.Fatalf("edited with -s: %v\n%s", err, out)
+	}
+	msg := r.message("HEAD")
+	if !strings.Contains(msg, "Signed-off-by: Dev <dev@example.com>") || countTrailer(msg) != 1 || !strings.HasSuffix(strings.TrimSpace(msg), testCoAuthor) {
+		t.Fatalf("want sign-off kept and one trailer last, got:\n%s", msg)
+	}
+}
+
 func TestHookKeepsCommentLikeLinesInALiteralMessage(t *testing.T) {
 	r := newRepo(t, testCoAuthor, nil)
 	r.commit("-m", "feat: note\n\nCo-authored-by: Agent <agent@example.com>\n# retain this note\nSigned-off-by: Dev <dev@example.com>")
