@@ -470,7 +470,8 @@ describe("onboarding telemetry while opted out", () => {
 
 	it("does not bring back a run that storage failed to remove at the opt-out", () => {
 		beginOnboardingRun("first_run", "welcome");
-		const removeItem = vi.spyOn(Storage.prototype, "removeItem").mockImplementation(() => {
+		// The test setup installs its own localStorage, so the spy goes on that object.
+		const removeItem = vi.spyOn(window.localStorage, "removeItem").mockImplementation(() => {
 			throw new Error("SecurityError");
 		});
 		try {
