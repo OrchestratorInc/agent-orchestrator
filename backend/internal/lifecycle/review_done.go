@@ -19,6 +19,8 @@ import (
 // the user, or the daemon restarted.
 const DefaultReviewNoticeSweepInterval = 30 * time.Second
 
+const reviewNoticeObserveGrace = 3 * time.Minute
+
 const reviewNoticeBodyLimit = 4000
 
 // Failed deliveries are retried with a backoff that starts at the sweep
@@ -130,7 +132,10 @@ func (m *Manager) DeliverReviewDoneNotices(ctx context.Context, id domain.Sessio
 				continue
 			}
 		}
-		msg := formatReviewDoneNotice(run)
+		msg, ready, err := m.reviewDoneMessage(ctx, run)
+		if err != nil || !ready {
+			return err
+		}
 		sendCtx := ctx
 		if isChat {
 			sendCtx = ports.WithClientMessageID(ctx, reviewNoticeClientID(run, run.WorkerNoticeAttempts))
@@ -319,6 +324,65 @@ func (m *Manager) sendChatReviewFeedbackLocked(ctx context.Context, chat reviewN
 		return sendOnceAccounted, nil
 	}
 	return sendOnceSuppressed, nil
+}
+
+// A posted review can finish before its findings reach the local SCM snapshot.
+// Use the persisted completion time so a restart cannot extend the grace period.
+func (m *Manager) reviewDoneMessage(ctx context.Context, run domain.ReviewRun) (string, bool, error) {
+	msg := formatReviewDoneNotice(run)
+	if run.Status != domain.ReviewRunCompleted || run.GithubReviewID == "" {
+		return msg, true, nil
+	}
+	anchor := "#pullrequestreview-" + run.GithubReviewID
+	reviews, err := m.store.ListPRReviews(ctx, run.PRURL)
+	if err != nil {
+		return "", false, err
+	}
+	observed := false
+	reviewURL := ""
+	for _, r := range reviews {
+		if r.ID == run.GithubReviewID || strings.HasSuffix(r.URL, anchor) {
+			observed, reviewURL = true, r.URL
+			break
+		}
+	}
+	if !observed && run.EndedAt != nil && m.clock().Before(run.EndedAt.Add(reviewNoticeObserveGrace)) {
+		return "", false, nil
+	}
+	if reviewURL == "" {
+		webURL := run.PRURL
+		if pr, found, err := m.store.GetPR(ctx, run.PRURL); err != nil {
+			return "", false, err
+		} else if found && pr.HTMLURL != "" {
+			webURL = pr.HTMLURL
+		}
+		if ref, err := domain.ParseChangeRequestURL(webURL); err == nil && ref.Provider == "github" {
+			reviewURL = ref.URL + anchor
+		}
+	}
+	if reviewURL != "" {
+		msg += "\nReview: " + domain.SanitizeControlChars(reviewURL)
+	} else {
+		msg += "\nReview ID: " + domain.SanitizeControlChars(run.GithubReviewID)
+	}
+	if !observed {
+		return msg + "\nInline comments: unknown. Orchestrator has not observed the posted review yet. Check the review before acting on this verdict.", true, nil
+	}
+	comments, err := m.store.ListPRComments(ctx, run.PRURL)
+	if err != nil {
+		return "", false, err
+	}
+	count := 0
+	for _, c := range comments {
+		if c.ReviewID == run.GithubReviewID {
+			count++
+		}
+	}
+	msg += fmt.Sprintf("\nInline comments observed: %d", count)
+	if run.Verdict == domain.VerdictChangesRequested {
+		msg += "\nCheck the posted review for findings. Inline feedback is forwarded separately to the PR worker."
+	}
+	return msg, true, nil
 }
 
 func formatReviewDoneNotice(run domain.ReviewRun) string {

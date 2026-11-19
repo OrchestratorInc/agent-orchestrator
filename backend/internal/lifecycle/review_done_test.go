@@ -671,6 +671,7 @@ func TestReviewCompletionGoesToRequesterEvenAfterFeedback(t *testing.T) {
 	run := doneRun("run", domain.ReviewRunCompleted, domain.VerdictChangesRequested, "777", "Optional summary")
 	run.RequesterSessionID = "orchestrator"
 	st.runs = []domain.ReviewRun{run}
+	st.reviews[donePR] = []domain.PullRequestReview{observedReview("777")}
 	if err := m.DeliverReviewDoneNotices(ctx, run.SessionID); err != nil {
 		t.Fatal(err)
 	}
@@ -681,5 +682,60 @@ func TestReviewCompletionGoesToRequesterEvenAfterFeedback(t *testing.T) {
 	m.SweepReviewDoneNotices(ctx)
 	if len(msg.msgs) != 1 || msg.ids[0] != "orchestrator" || !strings.Contains(msg.msgs[0], "AO review done: changes requested") || strings.Contains(msg.msgs[0], run.Body) {
 		t.Fatalf("unexpected requester notices: %v", msg.msgs)
+	}
+}
+
+func TestReviewDoneChangesRequestedBeforeSCMObservation(t *testing.T) {
+	for _, observed := range []bool{true, false} {
+		t.Run(fmt.Sprintf("observed_%t", observed), func(t *testing.T) {
+			m, st, msg := newNoticeManager(t)
+			ended := time.Now()
+			now := ended
+			m.clock = func() time.Time { return now }
+			run := doneRun("run", domain.ReviewRunCompleted, domain.VerdictChangesRequested, "777", "summary")
+			run.EndedAt = &ended
+			st.runs = []domain.ReviewRun{run}
+			st.reviews[donePR] = []domain.PullRequestReview{observedReview("888")}
+			if err := m.DeliverReviewDoneNotices(ctx, run.RequesterSessionID); err != nil {
+				t.Fatal(err)
+			}
+			if len(msg.msgs) != 0 || st.notice(run.ID) != domain.ReviewWorkerNoticePending {
+				t.Fatal("announced unobserved review on submit")
+			}
+			// A restarted daemon honors the original deadline and the exact review ID.
+			m = New(st, msg)
+			m.clock = func() time.Time { return now }
+			now = ended.Add(reviewNoticeObserveGrace - time.Second)
+			m.SweepReviewDoneNotices(ctx)
+			if len(msg.msgs) != 0 {
+				t.Fatal("announced before observation grace expired")
+			}
+			if observed {
+				st.reviews[donePR] = append(st.reviews[donePR], observedReview("777"))
+				st.comments[donePR] = append(changesRequestedComments(), domain.PullRequestComment{ReviewID: "888"})
+				if err := m.ApplyPRObservation(ctx, run.SessionID, ports.PRObservation{Fetched: true, URL: donePR}); err != nil {
+					t.Fatal(err)
+				}
+			} else {
+				now = ended.Add(reviewNoticeObserveGrace)
+			}
+			m.SweepReviewDoneNotices(ctx)
+			m.SweepReviewDoneNotices(ctx)
+			var done []string
+			for _, message := range msg.msgs {
+				if strings.HasPrefix(message, "AO review done:") {
+					done = append(done, message)
+				}
+			}
+			if len(done) != 1 || st.notice(run.ID) != domain.ReviewWorkerNoticeSent {
+				t.Fatalf("messages=%v notice=%s", msg.msgs, st.notice(run.ID))
+			}
+			assertContains(t, done[0], "changes requested", donePR+"#pullrequestreview-777")
+			if observed {
+				assertContains(t, done[0], "Inline comments observed: 2")
+			} else {
+				assertContains(t, done[0], "Inline comments: unknown", "Check the review")
+			}
+		})
 	}
 }
