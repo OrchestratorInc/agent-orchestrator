@@ -24,10 +24,10 @@ func TestMemcodeNativeCrashRefusesBeforeRestoreAdoption(t *testing.T) {
 		"github.com/memcode-ai/memcode/internal/vxui.Run(0x123)",
 		"fatal error: concurrent map writes",
 	} {
-		if ok, err := p.Ready(context.Background(), "launch-1", output); ok || err == nil {
+		if ok, err := p.Ready(context.Background(), "launch-1", output); ok || err == nil || err.Error() != "memcode native terminal crashed during restore" {
 			t.Fatal("native crash accepted before resume")
 		}
-		if ok, err := p.Restored(context.Background(), "launch-1", output); ok || err == nil {
+		if ok, err := p.Restored(context.Background(), "launch-1", output); ok || err == nil || err.Error() != "memcode native terminal crashed during restore" {
 			t.Fatal("native crash accepted after resume")
 		}
 	}

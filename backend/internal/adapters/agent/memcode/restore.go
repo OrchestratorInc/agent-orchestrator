@@ -198,6 +198,9 @@ func transcript(workspace, id string) ([32]byte, int, error) {
 		if m.Content == nil || m.Role != "user" && m.Role != "assistant" && m.Role != "system" && m.Role != "tool" {
 			return zero, 0, errors.New("memcode invalid native wire history")
 		}
+		if err := ValidateNativeContent(m.Content); err != nil {
+			return zero, 0, err
+		}
 	}
 	messages, err := json.Marshal(history.Messages)
 	if err != nil {

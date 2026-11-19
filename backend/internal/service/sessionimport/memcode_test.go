@@ -112,6 +112,25 @@ func TestMemcodeImportRejectsMismatchedAndMalformedWireHistory(t *testing.T) {
 	}
 }
 
+func TestMemcodeDiscoveryRefusesUndecodableHiddenBlocks(t *testing.T) {
+	for _, block := range []string{`1`, `{"type":"text","text":1}`, `{"type":"tool_result","content_blocks":[1]}`, `{"type":"image","source":{"data":1}}`} {
+		project := t.TempDir()
+		body := `{"session_id":"sess_01234567","messages":[{"role":"user","content":[{"type":"text","text":"valid prompt"}]},{"role":"assistant","content":[` + block + `]}]}`
+		path := writeFile(t, filepath.Join(project, ".memcode", "sessions", "sess_01234567", "messages.json"), body)
+		if _, err := readMemcodeTranscript(context.Background(), project, path); err == nil {
+			t.Fatalf("preview accepted native-incompatible hidden block %s", block)
+		}
+		groups, err := discoverMemcodeProject(context.Background(), project)
+		if err != nil || len(groups) != 0 {
+			t.Fatal("discovery offered a native-incompatible conversation", groups, err)
+		}
+		got, err := os.ReadFile(path)
+		if err != nil || string(got) != body {
+			t.Fatal("discovery changed native history", err)
+		}
+	}
+}
+
 func TestMemcodeImportConfinesRepositoryHistory(t *testing.T) {
 	project := t.TempDir()
 	outside := writeFile(t, filepath.Join(t.TempDir(), "messages.json"), memcodeImportFixture)

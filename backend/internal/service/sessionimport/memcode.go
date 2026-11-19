@@ -142,6 +142,9 @@ func readMemcodeTranscript(ctx context.Context, root string, paths ...string) (t
 		if json.Unmarshal(message.Content, &blocks) != nil || blocks == nil {
 			return t, errors.New("memcode native message has invalid wire content")
 		}
+		if err := memcode.ValidateNativeContent(blocks); err != nil {
+			return t, err
+		}
 		if message.Role != "user" && message.Role != "assistant" {
 			if message.Role != "system" && message.Role != "tool" {
 				return t, errors.New("memcode native message has invalid role")
