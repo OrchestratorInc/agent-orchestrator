@@ -620,6 +620,36 @@ func (c *conversation) checkModelSwitch(ctx context.Context, model string) error
 	return nil
 }
 
+// markSettingsApplied records settings the live session already runs with as
+// the catalog's current values, without asking the provider.
+//
+// A live reconnect rebuilds the catalog from the host's session/new snapshot.
+// That snapshot predates initial_settings and every change since, so it names
+// the agent's launch defaults as current while the provider process is still
+// in the state AO last applied (#6758). The restored settings are that state;
+// a value the catalog does not offer is left where the snapshot had it, as
+// applyTurnSettings would leave it.
+func (c *conversation) markSettingsApplied(settings ports.ChatTurnSettings) {
+	c.mu.Lock()
+	modeFor, optionsFor := c.modeFor, c.optionsFor
+	c.mu.Unlock()
+	if modeFor != nil && settings.Approval != "" {
+		if mode := modeFor(settings.Approval); mode != "" {
+			if offered, known := c.configOptionOffers("mode", mode); known && offered {
+				c.applyAcceptedConfigOption("mode", ports.ChatConfigOptionValue{Select: mode})
+			}
+		}
+	}
+	if optionsFor == nil {
+		return
+	}
+	for _, option := range optionsFor(settings) {
+		if offered, known := c.configOptionOffers(option.ID, option.Value); known && offered {
+			c.applyAcceptedConfigOption(option.ID, ports.ChatConfigOptionValue{Select: option.Value})
+		}
+	}
+}
+
 func (c *conversation) applyTurnSettings(ctx context.Context, settings ports.ChatTurnSettings) error {
 	c.mu.Lock()
 	sessionID := c.sessionID
