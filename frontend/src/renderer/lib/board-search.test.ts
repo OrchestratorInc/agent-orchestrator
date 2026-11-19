@@ -20,7 +20,7 @@ describe("board search", () => {
 	const sessions = [
 		session({ id: "ao-12", title: "Fix login redirect", branch: "ao/login-fix", prs: [pr(812)] }),
 		session({ id: "ao-13", title: "Board search", branch: "ao/board-search" }),
-		session({ id: "ao-14", title: "Theme picker", branch: "ao/themes", prs: [pr(77), pr(81)] }),
+		session({ id: "ao-14", title: "Theme picker", branch: "ao/themes", prs: [pr(77), pr(95)] }),
 	];
 	const ids = (query: string) => filterBoardSessions(sessions, query).map((candidate) => candidate.id);
 
@@ -28,7 +28,7 @@ describe("board search", () => {
 		expect(ids("LOGIN")).toEqual(["ao-12"]);
 		expect(ids("ao-13")).toEqual(["ao-13"]);
 		expect(ids("ao/themes")).toEqual(["ao-14"]);
-		expect(ids("#81")).toEqual(["ao-14"]);
+		expect(ids("#95")).toEqual(["ao-14"]);
 		expect(ids("812")).toEqual(["ao-12"]);
 	});
 
