@@ -8,8 +8,10 @@ import (
 	"errors"
 	"io"
 	"io/fs"
+	"math"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 
 	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
@@ -190,7 +192,7 @@ func readPrimeNativeHistory(ctx context.Context, root, path string, prefix int) 
 				row["parentId"] = parent
 			}
 		}
-		encoded, err := json.Marshal(row)
+		encoded, err := json.Marshal(primeNativeNumbers(row))
 		if err != nil {
 			return history, err
 		}
@@ -203,6 +205,62 @@ func readPrimeNativeHistory(ctx context.Context, root, path string, prefix int) 
 	}
 	copy(history.digest[:], hash.Sum(nil))
 	return history, nil
+}
+
+// Prime's serde_json reader converts decimal numbers by casting a u64
+// significand to f64 and scaling by a power of ten. Its native fork can thus
+// serialize a cost such as 0.0036488000000000002 as 0.0036488. Mirror that
+// conversion, retaining every field and exact integer counters. Unsupported
+// magnitudes remain exact and fail closed if the provider changes them.
+func primeNativeNumbers(value any) any {
+	switch value := value.(type) {
+	case map[string]any:
+		for key, child := range value {
+			value[key] = primeNativeNumbers(child)
+		}
+	case []any:
+		for i, child := range value {
+			value[i] = primeNativeNumbers(child)
+		}
+	case json.Number:
+		text := value.String()
+		if !strings.ContainsAny(text, ".eE") {
+			return value
+		}
+		mantissa, power, _ := strings.Cut(strings.ToLower(text), "e")
+		exponent := 0
+		if power != "" {
+			var err error
+			exponent, err = strconv.Atoi(power)
+			if err != nil || exponent < -308 || exponent > 308 {
+				return value
+			}
+		}
+		negative := strings.HasPrefix(mantissa, "-")
+		mantissa = strings.TrimPrefix(mantissa, "-")
+		if dot := strings.IndexByte(mantissa, '.'); dot >= 0 {
+			exponent -= len(mantissa) - dot - 1
+			mantissa = mantissa[:dot] + mantissa[dot+1:]
+		}
+		significand, err := strconv.ParseUint(mantissa, 10, 64)
+		if err != nil || exponent < -308 || exponent > 308 {
+			return value
+		}
+		number := float64(significand)
+		if exponent < 0 {
+			number /= math.Pow10(-exponent)
+		} else {
+			number *= math.Pow10(exponent)
+		}
+		if math.IsInf(number, 0) {
+			return value
+		}
+		if negative {
+			number = -number
+		}
+		return number
+	}
+	return value
 }
 
 // LocateTranscript finds the exact native header, never a recent or partial id.

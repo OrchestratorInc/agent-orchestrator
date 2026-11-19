@@ -286,3 +286,36 @@ func TestPrimeForkMatchesCurrentAndLegacyNativeIDs(t *testing.T) {
 		})
 	}
 }
+
+func TestPrimePreparationMatchesProviderDecimalRoundTrip(t *testing.T) {
+	for _, changedCost := range []bool{false, true} {
+		t.Run(map[bool]string{false: "native numeric round trip", true: "changed cost refused"}[changedCost], func(t *testing.T) {
+			root, cwd, workspace := t.TempDir(), t.TempDir(), t.TempDir()
+			row := `{"type":"message","id":"assistant-1","parentId":null,"message":{"role":"assistant","content":[{"type":"text","text":"synthetic tool result"}],"usage":{"input":9122,"output":148,"totalTokens":9270,"cost":{"input":0.0036488000000000002,"output":0.0002368,"total":0.0038856000000000003}}}}`
+			source := writePrimeNativeFixture(t, root, primeSourceID, cwd, "", row)
+			request := ports.ImportedSessionRelocation{NativeSessionID: primeSourceID, ConfigDir: root, TranscriptPath: source, SourceCWD: cwd, LaunchCWD: workspace, DataDir: t.TempDir()}
+			plugin := primeTestPlugin()
+			const forkID = "01a1f34e-2789-7342-8012-f8817604abb0"
+			plugin.runCommand = func(context.Context, string, string, map[string]string, ...string) ([]byte, error) {
+				target, err := sessionDir(request.DataDir)
+				if err != nil {
+					t.Fatal(err)
+				}
+				forkRow := strings.ReplaceAll(strings.ReplaceAll(row, "0.0036488000000000002", "0.0036488"), "0.0038856000000000003", "0.0038856")
+				if changedCost {
+					forkRow = strings.ReplaceAll(forkRow, "0.0036488", "0.004")
+				}
+				writePrimeNativeFixture(t, target, forkID, workspace, source, forkRow)
+				return nil, nil
+			}
+			ref, err := plugin.PrepareImportedSession(context.Background(), request)
+			if changedCost {
+				if err == nil || ref.NativeSessionID != "" {
+					t.Fatalf("changed native cost accepted: %#v, %v", ref, err)
+				}
+			} else if err != nil || ref.NativeSessionID != forkID {
+				t.Fatalf("provider decimal round trip rejected: %#v, %v", ref, err)
+			}
+		})
+	}
+}
