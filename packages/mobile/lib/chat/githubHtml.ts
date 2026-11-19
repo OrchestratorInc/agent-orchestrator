@@ -25,19 +25,12 @@ export type GitHubSegment =
 // body is optional, tried empty first, so an empty block closes at the next line.
 // An opening line ends in a newline and, for backticks, holds no other backtick:
 // ```code``` is a code span.
-const FENCE = /^ {0,3}(?:(`{3,})[^`\n]*(?=\n)(?:(?:\n[\s\S]*?)??\n {0,3}\1`*[ \t]*(?=\n|(?![\s\S]))|[\s\S]*(?![\s\S]))|(~{3,})[^\n]*(?=\n)(?:(?:\n[\s\S]*?)??\n {0,3}\2~*[ \t]*(?=\n|(?![\s\S]))|[\s\S]*(?![\s\S])))/;
+const FENCE = /^ {0,3}(?:(`{3,})[^`\n]*(?=\n)(?:(?:\n[\s\S]*?)??\n {0,3}\1`*[ \t]*(?=\n|(?![\s\S]))|[\s\S]*(?![\s\S]))|(~{3,})[^\n]*(?=\n)(?:(?:\n[\s\S]*?)??\n {0,3}\2~*[ \t]*(?=\n|(?![\s\S]))|[\s\S]*(?![\s\S])))/gm;
 // A whole backtick run, then the first run of exactly that length (CommonMark): `` `<details>` `` is one span.
-// A span may wrap a line but not a blank one, which ends the paragraph.
-const CODE_SPAN = /(?<!`)(`+)(?!`)((?:(?!\n[ \t]*\n)[\s\S])*?[^`])\1(?!`)/;
+// A span may wrap a line but not past a blank line or a fence line, which end the paragraph.
+const CODE_SPAN = /(?<!`)(`+)(?!`)((?:(?!\n[ \t]*\n|\n {0,3}(?:`{3}|~{3}))[\s\S])*?[^`])\1(?!`)/g;
 // An unterminated comment hides the rest of the text, as it does on GitHub.
-const COMMENT = /<!--[\s\S]*?(?:-->|(?![\s\S]))/;
-// Code and comments are each read in one pass, left to right, so whichever starts
-// first wins (CommonMark): a backtick or a fence inside a closed comment is part
-// of it and cannot reach past its `-->`, and `<!--` inside code stays code. Fences
-// and comments that open a line are blocks, read before code spans and the rest.
-const BLOCKS = new RegExp(String.raw`${FENCE.source}|^ {0,3}${COMMENT.source}`, "gm");
-const INLINE = new RegExp(String.raw`${CODE_SPAN.source}|${COMMENT.source}`, "g");
-const isComment = (match: string) => match.trimStart().startsWith("<!--");
+const COMMENT = /<!--[\s\S]*?(?:-->|(?![\s\S]))/g;
 const DETAILS = /<details\b[^>]*>|<\/details\s*>/gi;
 const SUMMARY = /^\s*<summary\b[^>]*>([\s\S]*?)<\/summary\s*>/i;
 
@@ -76,6 +69,35 @@ export function isDecorativeIcon(alt: string | undefined, width: string | undefi
 type Shelf = string[];
 const shelve = (shelf: Shelf, code: string) => `\u0000${shelf.push(code) - 1}\u0000`;
 const unshelve = (shelf: Shelf, text: string) => text.replace(/\u0000(\d+)\u0000/g, (_token, index: string) => shelf[Number(index)] ?? "");
+
+/**
+ * Drops comments and sets code aside in one pass, left to right, with one rule:
+ * whichever starts first wins. A backtick or a fence line inside a closed comment
+ * is part of it and cannot reach past its `-->`; a fence or span that opens before
+ * `<!--` keeps it as code. A fence wins a tie with a span at the same spot.
+ */
+function setAside(text: string, shelf: Shelf): string {
+	const readers = [FENCE, COMMENT, CODE_SPAN];
+	// Each reader's next match from where the scan stands; a reader is searched again only once the scan passes it.
+	const next: Array<RegExpExecArray | null | undefined> = readers.map(() => undefined);
+	let out = "";
+	let at = 0;
+	for (;;) {
+		let first: RegExpExecArray | null = null;
+		readers.forEach((reader, index) => {
+			if (next[index] === undefined || (next[index] && next[index]!.index < at)) {
+				reader.lastIndex = at;
+				next[index] = reader.exec(text);
+			}
+			const match = next[index];
+			if (match && (!first || match.index < first.index)) first = match;
+		});
+		if (!first) return out + text.slice(at);
+		const match: RegExpExecArray = first;
+		out += text.slice(at, match.index) + (match[0].startsWith("<!--") ? "" : shelve(shelf, match[0]));
+		at = match.index + match[0].length;
+	}
+}
 
 function inlineCode(text: string): string {
 	const code = decodeEntities(text.replace(ANY_TAG, "")).replace(/\s*\n\s*/g, " ");
@@ -159,10 +181,7 @@ function segmentsOf(parts: ReadonlyArray<string | GitHubSegment>, shelf: Shelf):
 /** A GitHub comment's body as Markdown runs and the `<details>` sections between them. */
 export function githubSegments(body: string): GitHubSegment[] {
 	const shelf: Shelf = [];
-	// Comments are dropped and code set aside, blocks first, then what is inline.
-	const text = body.replace(/\r\n?/g, "\n").replace(/\u0000/g, "")
-		.replace(BLOCKS, (match) => isComment(match) ? "" : shelve(shelf, match))
-		.replace(INLINE, (match) => isComment(match) ? "" : shelve(shelf, match));
+	const text = setAside(body.replace(/\r\n?/g, "\n").replace(/\u0000/g, ""), shelf);
 	const stack: Frame[] = [{ parts: [] }];
 	let at = 0;
 	for (const match of text.matchAll(DETAILS)) {
