@@ -1,6 +1,7 @@
 import type { LocalProjectSource } from "./newLocalProject";
 import type { BrowseTarget, NewLocalProject } from "./useNewLocalProject";
 import type { RemoteMode, RemoteSetup } from "./useRemoteSetup";
+import type { FormFocus } from "../formFocus";
 
 /** Where a new project lives: on one of the paired machines, or in Orchestrator Cloud. */
 export type ProjectPlacement = "local" | "cloud";
@@ -72,6 +73,8 @@ export function cloneTargetNote(preview: string | undefined): string | undefined
 export type LocalProjectFormProps = {
 	project: NewLocalProject;
 	placement?: PlacementChoice;
+	/** iOS: tracks the form's text fields, so Create can take focus off them first (see useFormFocus). */
+	focus?: FormFocus;
 };
 
 // ---- Git setup and the remote, as the desktop asks for them ----------------

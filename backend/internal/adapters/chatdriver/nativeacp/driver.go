@@ -74,17 +74,27 @@ type Config struct {
 	PromptErrorFailure func(error, bool) error
 	// HistoryReconciler rewrites a completed session/load replay. See
 	// acpdriver.Config.HistoryReconciler.
-	HistoryReconciler            func([]ports.ChatEvent) []ports.ChatEvent
-	PermissionPolicy             acpdriver.PermissionPolicy
-	ClientExtension              acpdriver.ClientExtensionHandler
-	ClientExtensionAliases       map[string]string
+	HistoryReconciler      func([]ports.ChatEvent) []ports.ChatEvent
+	PermissionPolicy       acpdriver.PermissionPolicy
+	ClientExtension        acpdriver.ClientExtensionHandler
+	ClientExtensionAliases map[string]string
+	// SteerRequest, SteerDrain and SteerPrompt: see acpdriver.Config.
+	SteerRequest                 *acpdriver.SteerRequest
+	SteerDrain                   *acpdriver.SteerDrain
+	SteerPrompt                  *acpdriver.SteerPrompt
 	ValidateTurnSettings         acpdriver.TurnSettingsValidator
 	EncodeProviderConversationID func(string) string
 	DecodeProviderConversationID func(string) (string, error)
 	// VersionProbe optionally gates admission on a minimum binary version.
 	VersionProbe VersionProbe
+	// Preflight checks provider prerequisites that do not depend on session environment.
+	Preflight func(context.Context) error
+	// ValidateEnvironment checks required native configuration using launch overrides.
+	ValidateEnvironment func(context.Context, map[string]string) error
 	// QuickStop: see acpdriver.Config.QuickStop.
 	QuickStop bool
+	// HideCommand: see acpdriver.Config.HideCommand.
+	HideCommand func(acpsdk.AvailableCommand) bool
 }
 
 // New creates a Chat driver that launches the exact executable resolved by the
@@ -107,12 +117,18 @@ func buildConfig(plugin Plugin, cfg Config, log *slog.Logger) acpdriver.Config {
 	}
 
 	return acpdriver.Config{
-		Harness:      cfg.Harness,
-		Capabilities: capabilities,
+		Harness:             cfg.Harness,
+		ValidateEnvironment: cfg.ValidateEnvironment,
+		Capabilities:        capabilities,
 		Probe: func(ctx context.Context) error {
 			if cfg.Configure == nil {
 				return fmt.Errorf("%w: incomplete native ACP binding for %s",
 					ports.ErrChatDriverUnavailable, cfg.Harness)
+			}
+			if cfg.Preflight != nil {
+				if err := cfg.Preflight(ctx); err != nil {
+					return fmt.Errorf("%w: %w", ports.ErrChatDriverUnavailable, err)
+				}
 			}
 			bin, err := plugin.ResolveBinary(ctx)
 			if err != nil {
@@ -184,9 +200,13 @@ func buildConfig(plugin Plugin, cfg Config, log *slog.Logger) acpdriver.Config {
 		PermissionPolicy:             cfg.PermissionPolicy,
 		ClientExtension:              cfg.ClientExtension,
 		ClientExtensionAliases:       cfg.ClientExtensionAliases,
+		SteerRequest:                 cfg.SteerRequest,
+		SteerDrain:                   cfg.SteerDrain,
+		SteerPrompt:                  cfg.SteerPrompt,
 		ValidateTurnSettings:         cfg.ValidateTurnSettings,
 		EncodeProviderConversationID: cfg.EncodeProviderConversationID,
 		DecodeProviderConversationID: cfg.DecodeProviderConversationID,
 		QuickStop:                    cfg.QuickStop,
+		HideCommand:                  cfg.HideCommand,
 	}
 }

@@ -56,7 +56,8 @@ func New(plugin Plugin, log *slog.Logger) ports.ChatDriver {
 
 func config(plugin Plugin) nativeacp.Config {
 	return nativeacp.Config{
-		Harness: domain.HarnessCopilot,
+		Harness:     domain.HarnessCopilot,
+		HideCommand: hiddenCommands,
 		Capabilities: ports.ChatCapabilities{
 			// Copilot reports token usage on every prompt response.
 			ports.ChatCapabilityUsage: true,

@@ -177,7 +177,7 @@ func (c *commandContext) doJSONPathWithHeadersAndTimeout(
 	if info == nil {
 		return daemonUnavailableError{message: "Orchestrator daemon is not running — start it with `ao start`", cause: errDaemonNotRunning}
 	}
-	if !c.deps.ProcessAlive(info.PID) {
+	if !c.daemonAlive(ctx, info) {
 		return daemonUnavailableError{message: fmt.Sprintf("Orchestrator daemon is not running (stale run-file at %s) — start it with `ao start`", cfg.RunFilePath), cause: errDaemonNotRunning}
 	}
 

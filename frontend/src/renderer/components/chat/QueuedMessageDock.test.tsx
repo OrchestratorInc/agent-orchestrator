@@ -309,3 +309,34 @@ describe("ChatWorkspace queue reorder", () => {
 		});
 	});
 });
+
+describe("QueuedMessageDock action errors", () => {
+	it("shows the daemon's reason when steering a queued message is refused", async () => {
+		// The typed client throws the API error envelope, not an Error instance.
+		const onPromoteQueuedTurn = vi.fn().mockRejectedValue({
+			error: {
+				code: "CHAT_TURN_NOT_STEERABLE",
+				message: "the running turn cannot take guidance: it collects between tool calls",
+			},
+		});
+		render(
+			<QueuedMessageDock
+				messages={queuedMessages(["use staging instead"])}
+				canSteer
+				onPromoteQueuedTurn={onPromoteQueuedTurn}
+			/>,
+		);
+
+		await userEvent.click(
+			screen.getAllByRole("button", { name: "Steer this queued message into the running turn" })[0]!,
+		);
+
+		await waitFor(() => {
+			expect(screen.getByTestId("queued-message-dock")).toHaveTextContent(
+				"the running turn cannot take guidance: it collects between tool calls",
+			);
+		});
+		expect(screen.getByTestId("queued-message-dock")).not.toHaveTextContent("That action failed.");
+		expect(screen.getByTestId("queued-message-queued-1")).toBeInTheDocument();
+	});
+});

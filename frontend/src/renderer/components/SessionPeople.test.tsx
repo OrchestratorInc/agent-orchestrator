@@ -25,9 +25,17 @@ vi.mock("../hooks/useCloudCp", () => ({
 }));
 vi.mock("../hooks/useCloudSessionLive", () => ({ useCloudSessionLive: () => mocks.live }));
 vi.mock("./ShareSessionDialog", () => ({
-	ShareSessionDialog: (props: { open: boolean; people?: boolean; sessionId?: string }) => {
+	ShareSessionDialog: (props: { open: boolean; people?: boolean; sessionId?: string; sessionName?: string; projectName?: string }) => {
 		mocks.dialog(props.open);
-		return props.open ? <div data-testid="share-dialog" data-people={String(props.people)} data-session={props.sessionId ?? ""} /> : null;
+		return props.open ? (
+			<div
+				data-testid="share-dialog"
+				data-people={String(props.people)}
+				data-session={props.sessionId ?? ""}
+				data-session-name={props.sessionName ?? ""}
+				data-project-name={props.projectName ?? ""}
+			/>
+		) : null;
 	},
 }));
 
@@ -156,6 +164,31 @@ describe("SessionPeopleControl", () => {
 		expect(container.querySelector("[data-session-people] img")?.getAttribute("src")).toBe("https://lh3.googleusercontent.com/bob");
 		fireEvent.click(container.querySelector("[data-session-people]")!);
 		expect(screen.getByTestId("share-dialog")).toBeTruthy();
+	});
+
+	it("shares the whole project from an orchestrator, from the Share button and from the circles, never the session", () => {
+		mocks.live = live([{ userId: "me", name: "Mohak" }]);
+		const alone = render(<SessionPeopleControl orgId="org" projectId="project" sessionId="orchestrator" sessionName="Orchestrator" projectName="acme/web" canShare shareProject />);
+		fireEvent.click(screen.getByRole("button", { name: "Share" }));
+		const dialog = screen.getByTestId("share-dialog");
+		// No session: the dialog shares the project only, titled with its name.
+		expect(dialog.dataset.session).toBe("");
+		expect(dialog.dataset.sessionName).toBe("");
+		expect(dialog.dataset.projectName).toBe("acme/web");
+		alone.unmount();
+
+		mocks.live = live([{ userId: "me", name: "Mohak" }, { userId: "b", name: "Bob" }], "b");
+		const { container } = render(<SessionPeopleControl orgId="org" projectId="project" sessionId="orchestrator" projectName="acme/web" canShare shareProject />);
+		fireEvent.click(container.querySelector("[data-session-people]")!);
+		expect(screen.getByTestId("share-dialog").dataset.session).toBe("");
+	});
+
+	it("keeps both the session and the project to share from a worker", () => {
+		mocks.live = live([{ userId: "me", name: "Mohak" }]);
+		render(<SessionPeopleControl orgId="org" projectId="project" sessionId="worker" sessionName="Fix login" projectName="acme/web" canShare />);
+		fireEvent.click(screen.getByRole("button", { name: "Share" }));
+		expect(screen.getByTestId("share-dialog").dataset.session).toBe("worker");
+		expect(screen.getByTestId("share-dialog").dataset.sessionName).toBe("Fix login");
 	});
 
 	it("shows a guest only who else is here, never a way to share", () => {
