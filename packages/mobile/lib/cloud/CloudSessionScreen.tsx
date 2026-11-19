@@ -20,7 +20,7 @@ import { SessionStartupStatus } from "../chat/SessionStartup";
 import type { ChatConfigOption, ChatImage, ChatResource, MessageFile, TurnSettings } from "../chat/types";
 import { useChatKeyboard } from "../chat/useChatKeyboard";
 import { cloudFilesBackend } from "../files/cloudBackend";
-import { isAbsoluteFileReference, matchAbsoluteFile } from "../chat/fileLinks";
+import { isAbsoluteFileReference, matchAbsoluteFile, matchBareFile } from "../chat/fileLinks";
 import { useStillHere } from "../useStillHere";
 import { changedPathCount, fileRoute, filesRoute, FilesNavigationContext, type FilesNavigation } from "../files/navigation";
 import { useBackendChangeSummary } from "../files/useChangeSummary";
@@ -436,6 +436,12 @@ export function CloudSessionScreen({ sessionId }: { sessionId: string }) {
 	// reply's file links. Cloud has no route that places an absolute path, so
 	// one is found by its name and matched to the worktree path it ends with;
 	// it opens only if it is still the latest file action on this chat.
+	const workspaceLive = Boolean(session?.runtimeConnected && !session.isTerminated);
+	// A bare name in a reply (`README.md:3`) is a link only when the worktree has
+	// that file: each name is searched once, while the sandbox runs (a search
+	// would wake a paused one), and matched exactly or to the one file by that name.
+	const [bareFiles, setBareFiles] = useState<Readonly<Record<string, string | null>>>({});
+	const bareLookups = useRef(new Set<string>());
 	const fileOpenRequest = useRef(0);
 	const fileOpenStillHere = useStillHere(sessionId, () => navigation.isFocused?.() !== false);
 	const filesNavigation = useMemo<FilesNavigation>(() => ({
@@ -461,8 +467,16 @@ export function CloudSessionScreen({ sessionId }: { sessionId: string }) {
 				if (current()) Alert.alert("Couldn't open this file", `${path} couldn't be found in this session.`);
 			});
 		},
-	}), [fileOpenStillHere, filesBackend, router, sessionId, title]);
-	const workspaceLive = Boolean(session?.runtimeConnected && !session.isTerminated);
+		bareFile: (name) => workspaceLive && filesBackend ? bareFiles[name] : null,
+		wantBareFile: (name) => {
+			if (!workspaceLive || !filesBackend || bareLookups.current.has(name)) return;
+			bareLookups.current.add(name);
+			void filesBackend.search(sessionId, name).then(
+				({ results, truncated }) => matchBareFile(name, results.map((result) => result.path), !truncated),
+				() => null,
+			).then((found) => setBareFiles((known) => ({ ...known, [name]: found })));
+		},
+	}), [bareFiles, fileOpenStillHere, filesBackend, router, sessionId, title, workspaceLive]);
 	const changeSummary = useBackendChangeSummary(workspaceLive ? filesBackend : null, sessionId, changeSignal);
 	const nameOfSession = useCallback((id: string) => {
 		const named = sessions.find((item) => item.id === id);

@@ -346,7 +346,8 @@ export function ChatSessionScreen({ session: boardSession }: { session: MobileCh
 			});
 		},
 		bareFile: (name) => filePathsLoaded ? matchBareFile(name, filePaths, !filePathsTruncated) : undefined,
-		wantFiles: () => loadFilePaths.current(),
+		// One list answers every bare name, so any name loads all of it once.
+		wantBareFile: () => loadFilePaths.current(),
 	}), [config, currentHostId, fileOpenStillHere, filePaths, filePathsLoaded, filePathsTruncated, router, session.id, sessionName]);
 	// The artifacts a turn made, drawn as cards under its reply.
 	const turnArtifacts = useTurnArtifactSourceFor(session.id, conversation.snapshot?.turns, currentHostId);

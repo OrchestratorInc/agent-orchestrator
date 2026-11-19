@@ -11,8 +11,8 @@ export type FilesNavigation = {
 	 * file list has loaded. Absent where the surface has no file list.
 	 */
 	bareFile?(name: string): string | null | undefined;
-	/** Loads the file list `bareFile` reads, the first time a bare name needs it. */
-	wantFiles?(): void;
+	/** Looks up what `bareFile` answers for this name, the first time a reply needs it. */
+	wantBareFile?(name: string): void;
 };
 
 export const FilesNavigationContext = createContext<FilesNavigation | null>(null);

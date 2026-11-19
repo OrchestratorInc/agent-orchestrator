@@ -357,9 +357,10 @@ function MarkdownLink({ url, label, style }: { url: string; label: string; style
 	const file = session || WEB_OR_AO_LINK.test(url) ? undefined : chatFileReference(url);
 	const bare = Boolean(file && isBareFileReference(file.path));
 	const bareTarget = bare && file ? files?.bareFile?.(file.path) : undefined;
+	const bareName = bare && file ? file.path : "";
 	useEffect(() => {
-		if (bare && bareTarget === undefined) files?.wantFiles?.();
-	}, [bare, bareTarget, files]);
+		if (bareName && bareTarget === undefined) files?.wantBareFile?.(bareName);
+	}, [bareName, bareTarget, files]);
 	if (session) {
 		const text = bareSessionId ? known || bareSessionId : label;
 		// Without a provider nothing knows which machine the session is on, so it stays words.
