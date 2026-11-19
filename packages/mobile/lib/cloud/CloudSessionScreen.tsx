@@ -458,9 +458,14 @@ export function CloudSessionScreen({ sessionId }: { sessionId: string }) {
 			const here = fileOpenStillHere();
 			const current = () => request === fileOpenRequest.current && here();
 			const name = path.slice(path.lastIndexOf("/") + 1);
-			void filesBackend.search(sessionId, name).then(({ results }) => {
+			// The changed files too: a turn's card names files it deleted, which a
+			// search of the worktree no longer finds.
+			void Promise.all([
+				filesBackend.search(sessionId, name),
+				filesBackend.manifest(sessionId).catch(() => null),
+			]).then(([{ results }, manifest]) => {
 				if (!current()) return;
-				const found = matchAbsoluteFile(path, results.map((result) => result.path));
+				const found = matchAbsoluteFile(path, [...results.map((result) => result.path), ...(manifest?.files.map((file) => file.path) ?? [])]);
 				if (found) router.push(fileRoute(sessionId, found, CLOUD_HOST_ID, previousPath, line));
 				else Alert.alert("Outside this session", `${path} isn't in this session's worktree.`);
 			}, () => {
