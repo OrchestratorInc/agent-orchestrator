@@ -75,6 +75,11 @@ type conversation struct {
 	pending       map[string]*parkedRequest
 	pendingInputs map[string]*parkedInput
 	closed        bool
+	// backgroundRuns maps each listed background terminal to its exec item,
+	// the key of its buffered output, so a settled terminal's output stays
+	// readable after it leaves the 30-second inventory. The oldest goes first.
+	backgroundRuns     map[string]string
+	backgroundRunOrder []string
 
 	// sendMu serializes turn dispatch so only one operation mutates the provider
 	// conversation at a time.

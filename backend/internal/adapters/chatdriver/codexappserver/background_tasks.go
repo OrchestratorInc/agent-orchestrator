@@ -60,6 +60,7 @@ func (c *conversation) BackgroundTasks(ctx context.Context) ([]ports.ChatBackgro
 				return nil, errors.New("background-terminal response has missing or duplicate identity")
 			}
 			seenIDs[task.ProcessID] = true
+			c.rememberBackgroundRun(task.ProcessID, task.ItemID)
 			command := domain.SanitizeControlChars(task.Command)
 			out = append(out, ports.ChatBackgroundTask{ID: task.ProcessID, RunID: task.ItemID, Kind: "shell", Description: command, Command: command, State: "running"})
 		}
@@ -85,25 +86,46 @@ var _ ports.ChatBackgroundTaskOutputReader = (*conversation)(nil)
 // this controller attached. The app-server keeps streaming a backgrounded
 // command's output on its exec item after the turn ends (codex-cli 0.158.0),
 // but offers no read, so earlier output and output from before a reconnect
-// are not available.
+// are not available. A terminal stays readable after it leaves the inventory,
+// so an open tab keeps a stopped terminal's output.
 func (c *conversation) BackgroundTaskOutput(_ context.Context, taskID string) (ports.ChatBackgroundTaskOutput, error) {
 	c.mu.Lock()
 	closed := c.closed
+	runID, known := c.backgroundRuns[taskID]
 	c.mu.Unlock()
 	if closed {
 		return ports.ChatBackgroundTaskOutput{}, errConversationClosed
 	}
-	for _, task := range c.backgroundObserved.Snapshot(time.Now()) {
-		if task.ID != taskID || task.Kind != "shell" || task.RunID == "" {
-			continue
-		}
-		if output, ok := c.backgroundOutput.Read(task.RunID); ok {
-			return output, nil
-		}
-		// A known terminal that has printed nothing yet.
-		return ports.ChatBackgroundTaskOutput{}, nil
+	if !known {
+		return ports.ChatBackgroundTaskOutput{}, ports.ErrBackgroundTaskOutputUnavailable
 	}
-	return ports.ChatBackgroundTaskOutput{}, ports.ErrBackgroundTaskOutputUnavailable
+	if output, ok := c.backgroundOutput.Read(runID); ok {
+		return output, nil
+	}
+	// A known terminal that has printed nothing yet.
+	return ports.ChatBackgroundTaskOutput{}, nil
+}
+
+// backgroundRunsKept bounds how many terminals keep their output key.
+const backgroundRunsKept = 32
+
+func (c *conversation) rememberBackgroundRun(processID, itemID string) {
+	if itemID == "" {
+		return
+	}
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if c.backgroundRuns == nil {
+		c.backgroundRuns = make(map[string]string)
+	}
+	if _, ok := c.backgroundRuns[processID]; !ok {
+		if len(c.backgroundRunOrder) >= backgroundRunsKept {
+			delete(c.backgroundRuns, c.backgroundRunOrder[0])
+			c.backgroundRunOrder = c.backgroundRunOrder[1:]
+		}
+		c.backgroundRunOrder = append(c.backgroundRunOrder, processID)
+	}
+	c.backgroundRuns[processID] = itemID
 }
 
 func (c *conversation) observeBackgroundNotification(n notification) {

@@ -168,3 +168,34 @@ func TestBackgroundTasksCodexKeepsTerminalOutputAfterTheTurn(t *testing.T) {
 		t.Fatalf("unknown task err=%v", err)
 	}
 }
+
+func TestBackgroundTasksCodexTerminalOutputOutlivesTheInventory(t *testing.T) {
+	ctx := context.Background()
+	d, srv := newTestDriver(t)
+	srv.reply("thread/backgroundTerminals/list", `{"data":[{"processId":"93667","itemId":"exec-1","command":"npm run dev"}],"nextCursor":null}`)
+	conv, err := d.Start(ctx, ports.ChatStartConfig{WorkspacePath: "/tmp/ws"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = conv.Close() }()
+	c := conv.(*conversation)
+	params, _ := json.Marshal(map[string]string{"threadId": c.threadID, "itemId": "exec-1", "turnId": "turn-1", "delta": "ready on :3000\n"})
+	c.observeBackgroundNotification(notification{Method: "item/commandExecution/outputDelta", Params: params})
+	inspector := conv.(ports.ChatBackgroundTaskInspector)
+	if tasks, _ := inspector.BackgroundTasks(ctx); len(tasks) != 1 {
+		t.Fatalf("tasks=%+v", tasks)
+	}
+
+	// The terminal was stopped more than 30 seconds ago, so the inventory
+	// has dropped it.
+	srv.reply("thread/backgroundTerminals/list", `{"data":[],"nextCursor":null}`)
+	c.backgroundObserved.Finish("93667", "stopped", time.Now().Add(-31*time.Second))
+	if tasks, _ := inspector.BackgroundTasks(ctx); len(tasks) != 0 {
+		t.Fatalf("expired tasks=%+v", tasks)
+	}
+	// Switching back to its open tab reads the output again.
+	got, err := conv.(ports.ChatBackgroundTaskOutputReader).BackgroundTaskOutput(ctx, "93667")
+	if err != nil || got.Text != "ready on :3000" {
+		t.Fatalf("output=%+v err=%v", got, err)
+	}
+}

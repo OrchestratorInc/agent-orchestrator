@@ -249,3 +249,43 @@ func TestBackgroundTaskOutputShowsTheLogACommandWritesTo(t *testing.T) {
 		t.Fatalf("unknown task err=%v", err)
 	}
 }
+
+// stoppableOutputConversation prints Claude Code's "[killed]" marker once a
+// task is stopped.
+type stoppableOutputConversation struct {
+	*outputConversation
+}
+
+func (c *stoppableOutputConversation) StopBackgroundTask(context.Context, string) error {
+	c.output = ports.ChatBackgroundTaskOutput{Text: "\n[killed]"}
+	return nil
+}
+
+func TestBackgroundTaskOutputKeepsTheLogAfterTheTaskLeavesTheInventory(t *testing.T) {
+	ctx := context.Background()
+	logPath := filepath.Join(t.TempDir(), "server.log")
+	if err := os.WriteFile(logPath, []byte("ready on :3000\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	started := time.Now().Add(-time.Minute)
+	task := ports.ChatBackgroundTask{ID: "shell", Kind: "shell", State: "running", Stoppable: true, Command: "npm run dev > '" + logPath + "' 2>&1", StartedAt: &started}
+	conv := &stoppableOutputConversation{outputConversation: &outputConversation{backgroundConversation: &backgroundConversation{fakeConversation: newFakeConversation(), tasks: []ports.ChatBackgroundTask{task}}}}
+	h := newHarnessWithConversation(t, conv)
+	if _, err := h.svc.BackgroundTasks(ctx, testSession); err != nil {
+		t.Fatal(err)
+	}
+	if err := h.svc.StopBackgroundTask(ctx, testSession, "shell"); err != nil {
+		t.Fatal(err)
+	}
+
+	// 30 seconds after the stop, the provider's inventory no longer has it.
+	conv.tasks = nil
+	h.advance(31 * time.Second)
+	if reading, err := h.svc.BackgroundTasks(ctx, testSession); err != nil || len(reading.Tasks) != 0 {
+		t.Fatalf("expired reading=%+v err=%v", reading, err)
+	}
+	// Switching back to its open tab reads the log again.
+	if got, err := h.svc.BackgroundTaskOutput(ctx, testSession, "shell"); err != nil || got.Text != "ready on :3000\n[killed]" {
+		t.Fatalf("output=%+v err=%v", got, err)
+	}
+}

@@ -62,6 +62,9 @@ func (s *Service) BackgroundTasks(ctx context.Context, id domain.SessionID) (Bac
 		}
 		controller.backgroundPartial = errors.Is(readErr, ports.ErrBackgroundTasksPartial)
 		controller.backgroundTasks = append([]ports.ChatBackgroundTask(nil), tasks...)
+		for _, task := range tasks {
+			controller.rememberBackgroundCommand(task)
+		}
 		controller.backgroundSampledAt = s.now()
 	}
 	// Provider I/O can cross termination, a handoff, or a provider replacement.
@@ -170,23 +173,40 @@ func (s *Service) BackgroundTaskOutput(ctx context.Context, id domain.SessionID,
 }
 
 // redirectedBackgroundOutput reads the log file a background task's command
-// sends its output to. The command comes from the controller's latest task
-// reading, so it is known only once the task has been read.
+// sends its output to. The command comes from the controller's task readings,
+// so it is known only once the task has been read, and stays known after the
+// task leaves the inventory.
 func (c *Controller) redirectedBackgroundOutput(taskID string) (ports.ChatBackgroundTaskOutput, bool) {
 	c.backgroundMu.Lock()
-	var command string
-	var startedAt *time.Time
-	for _, task := range c.backgroundTasks {
-		if task.ID == taskID {
-			command, startedAt = task.Command, task.StartedAt
-			break
-		}
-	}
+	task, ok := c.backgroundCommands[taskID]
 	c.backgroundMu.Unlock()
-	if command == "" {
+	if !ok {
 		return ports.ChatBackgroundTaskOutput{}, false
 	}
-	return backgroundtasks.RedirectedOutput(command, c.workDir, startedAt)
+	return backgroundtasks.RedirectedOutput(task.Command, c.workDir, task.StartedAt)
+}
+
+// backgroundCommandsKept bounds how many tasks keep their command.
+const backgroundCommandsKept = 32
+
+// rememberBackgroundCommand keeps a read task's command after the task leaves
+// the 30-second inventory, so an open tab keeps showing its log file. The
+// oldest goes first. Caller holds backgroundMu.
+func (c *Controller) rememberBackgroundCommand(task ports.ChatBackgroundTask) {
+	if task.Command == "" {
+		return
+	}
+	if c.backgroundCommands == nil {
+		c.backgroundCommands = make(map[string]ports.ChatBackgroundTask)
+	}
+	if _, ok := c.backgroundCommands[task.ID]; !ok {
+		if len(c.backgroundCommandOrder) >= backgroundCommandsKept {
+			delete(c.backgroundCommands, c.backgroundCommandOrder[0])
+			c.backgroundCommandOrder = c.backgroundCommandOrder[1:]
+		}
+		c.backgroundCommandOrder = append(c.backgroundCommandOrder, task.ID)
+	}
+	c.backgroundCommands[task.ID] = task
 }
 
 // ListBackgroundTasks inspects only already attached controllers. Sessions
