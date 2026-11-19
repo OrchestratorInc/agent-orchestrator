@@ -239,6 +239,9 @@ export function useLiveCloudPendingApprovals(): PendingApproval[] {
 					throw error;
 				}),
 			refetchInterval: target.watched ? CLOUD_APPROVAL_WATCHED_POLL_MS : CLOUD_APPROVAL_POLL_MS,
+			// People step away while an agent works: a request must reach the
+			// app while its window is hidden or unfocused, not on its return.
+			refetchIntervalInBackground: true,
 		})),
 	});
 	const all = results.flatMap((result) => result.data ?? []);
