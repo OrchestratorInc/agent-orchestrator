@@ -11,7 +11,7 @@ Run the Electron application from the current checkout and verify it in the nati
 
 Ask only when the request does not make the desired data source clear.
 
-- Use **isolated mode** by default for implementation and destructive testing. Electron uses port `3002`, `~/.ao/dev/running.json`, `~/.ao/dev/data`, and `~/.ao/dev/electron`.
+- Use **isolated mode** by default for implementation and destructive testing. The default launch gives each checkout `~/.ao/dev/run-<checkout>/` (data, run file, Electron profile) and a free port from 3500-3599. The foreground fallback uses the shared port `3002`, `~/.ao/dev/running.json`, `~/.ao/dev/data`, and `~/.ao/dev/electron`.
 - Use **real-data mode** only when the user explicitly asks to see this machine's actual AO projects or sessions. Start the checkout's dev daemon on the isolated dev port/run file while pointing `AO_DATA_DIR` at the real AO data directory. This is a separate daemon process using real data; do not describe it as the installed app's daemon.
 - Never try to attach an unpackaged Electron app directly to a packaged daemon from another checkout. The supervisor intentionally rejects daemon identity mismatches.
 - Warn before actions in real-data mode that create, terminate, rename, or otherwise mutate sessions. Merely opening and inspecting the UI is expected.
@@ -21,7 +21,7 @@ Ask only when the request does not make the desired data source clear.
 
 1. Work from the repository root and inspect `git status --short --branch`.
 2. Read `frontend/package.json`, `frontend/src/main.ts`, and `frontend/forge.config.ts` when the launch behavior may have changed. Treat source as authoritative over this skill.
-3. Confirm Node/npm and the Go version required by `backend/go.mod` are available. In a fresh checkout run `npm run dev:warm` in `frontend/`: it clones a cached real install for an identical lockfile (or runs `npm ci`) and restores cached predev outputs. Otherwise run `npm ci` only when dependencies are absent or inconsistent; do not reinstall on every launch.
+3. Confirm Node/npm and the Go version required by `backend/go.mod` are available. Before every launch, run `npm run dev:warm` in `frontend/`. It clones a cached real install for an identical lockfile (or runs `npm ci`) and restores cached predev outputs, so a fresh checkout is ready in seconds and an already-warm one is a no-op. It ends with `ready for npm run dev`. If it fails, report the error and fall back to `npm ci`.
 4. Check for an existing dev instance from this exact checkout before starting another. Do not kill by process name alone, and never terminate every Electron process.
 
 On macOS/Linux, inspect checkout-scoped processes and listeners with finite commands:
@@ -35,11 +35,25 @@ Use the full command paths and start times to distinguish this checkout from oth
 
 ## Launch the app
 
-Run Electron Forge in a foreground interactive process so its output and restart input remain available. Do not append `&`, use a detached shell, or start a browser preview instead.
+Keep Electron Forge's output and restart input available: run it in a foreground interactive process, or, on macOS/Linux, in a tmux session on its own socket (the default below) so you can read its log and send `rs`. Do not append `&`, use a bare detached shell, or start a browser preview instead.
 
-### Isolated mode
+### Isolated mode (default)
 
-On macOS/Linux:
+Give each checkout its own data directory, run file, Electron profile and port, so it never collides with another worktree's dev app or with the installed app. On macOS/Linux, from the repository root after `npm run dev:warm`:
+
+```bash
+NAME=$(basename "$(git rev-parse --show-toplevel)" | tr ".:" "--")
+BASE=$HOME/.ao/dev/run-$NAME
+PORT=$(for p in $(seq 3500 3599); do lsof -nP -iTCP:$p -sTCP:LISTEN >/dev/null || { echo $p; break; }; done)
+mkdir -p "$BASE"
+cd frontend
+tmux -L ao-dev new-session -d -s "$NAME" \
+  "env -u AO_SESSION_ID AO_DATA_DIR=$BASE/data AO_RUN_FILE=$BASE/running.json AO_DEV_ELECTRON_DIR=$BASE/electron AO_PORT=$PORT npm run dev 2>&1 | tee $BASE.log"
+```
+
+Wait for `Launched Electron app` and `daemon listening` on `$PORT` in `$BASE.log` (about 25 s from a warm checkout). Restart the main process with `tmux -L ao-dev send-keys -t "$NAME" rs Enter`. Report the branch, port and data directory.
+
+Without tmux, or on Windows, run Forge in the foreground with the shared isolated dev paths instead:
 
 ```bash
 cd frontend
@@ -82,7 +96,7 @@ Do not print unrelated environment variables: Orchestrator-managed sessions may 
 Wait for all of these signals:
 
 - Electron Forge reports `Launched Electron app`.
-- The daemon reports `daemon listening`, normally on `127.0.0.1:3002` unless it explicitly reports another bound port.
+- The daemon reports `daemon listening` on the chosen port (`$PORT` for the default launch, `127.0.0.1:3002` for the shared paths) unless it explicitly reports another bound port.
 - The renderer makes successful requests such as `/api/v1/projects` and `/api/v1/sessions`.
 - The native Electron window shows the checkout's UI. A Vite URL opened in a normal browser is not equivalent because it lacks the Electron preload bridge.
 
@@ -118,7 +132,7 @@ Once one PR merges, prefer rebasing the remaining PR onto current `main`; the no
 
 ## Stop without collateral damage
 
-1. Send Ctrl+C to the foreground dev process and wait briefly for Electron and its managed daemon to exit.
+1. Send Ctrl+C to the dev process (`tmux -L ao-dev send-keys -t "$NAME" C-c` for the default launch) and wait briefly for Electron and its managed daemon to exit. Then kill the tmux session with `tmux -L ao-dev kill-session -t "$NAME"`.
 2. Re-run the checkout-scoped process query. If the exact process group remains, identify the group created by this launch before sending `TERM` to that group.
 3. On Windows, terminate the verified parent tree only. Never use a broad Electron, Node, Go, or port-based kill.
 4. Confirm the captured Electron PID and dev daemon listener are gone. Leave installed AO and other worktrees untouched.
@@ -143,6 +157,7 @@ Once one PR merges, prefer rebasing the remaining PR onto current `main`; the no
 
   Without all three the instances still collide, on the profile lock, the run
   file, or the daemon's SQLite data.
+- After merging `main`, `npm run dev` re-syncs `node_modules` with `package-lock.json` on its own before building. If the window still shows a Vite `Failed to resolve import` overlay for a package the merge added, stop the app, run `npm ci` in `frontend/`, and relaunch.
 - An inherited `AO_DATA_DIR` changes dev mode from isolated data to real data. Always choose and report the mode instead of inheriting it accidentally.
 - Repeated `/healthz/` 404 entries from external probes can be noisy; readiness is determined by Electron's daemon status and successful API traffic, not by log volume.
 
