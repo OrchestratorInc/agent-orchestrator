@@ -55,22 +55,25 @@ never supplies, so AO rejects that exact task text instead of blocking.
 
 DeepSeek Harness owns its credentials, which live in its own store
 (`~/.dsh/.credentials.yaml`, or `$DSH_HOME`). In Settings → Agent Harnesses,
-**Login** / **Log in again** and **Log out** open `dsh --profile web` using the
-same executable AO launches for sessions. In DeepSeek's web UI, use
-**Settings → Account** to sign in through your browser, or choose **Sign out**
-from the sidebar account menu to sign out. To switch accounts, sign out there
-before signing in again. Leave the authentication terminal running until the
-native flow finishes, then close it so AO can check authentication again.
+**Setup** / **Open setup** opens `dsh --profile web` using the same executable
+AO launches for sessions. Open **Settings → Models** to configure a DeepSeek API
+key. AO's default ACP and headless sessions use `deepseek-official`; browser
+sign-in does not provide credentials for that route.
 
-API keys remain separate, under DeepSeek's **Settings → Models**. Signing out
-of an account does not remove an API key, so AO may still observe configured
-credentials afterward. Missing credentials stay unknown because private
-profiles may configure other providers; AO does not assume sign-out succeeded.
+Browser sign-in under **Settings → Account** belongs to the separate
+`deepseek-account` route. AO does not infer session routing from a stored grant,
+so a browser grant alone leaves readiness unknown. Account-aware readiness is
+not supported until AO can verify that the session uses that route.
 
-The ACP server itself advertises no auth methods and its `authenticate` call
-always succeeds. AO reads the store only to report whether a DeepSeek API key
-or production browser-account grant is present — values are never copied,
-logged, or forwarded. Device records alone do not count as a signed-in account.
+**Log out** opens the native web UI: choose **Sign out** from the sidebar account
+menu and confirm. It does not remove the API key. Leave the terminal running
+until you finish, then close it so AO can check authentication again.
+
+The ACP server advertises no auth methods and its `authenticate` call always
+succeeds. AO checks only the API key in the native store or environment for
+default-session readiness; values are never copied, logged, or forwarded.
+Missing credentials stay unknown because private profiles may configure other
+providers; AO does not assume sign-out succeeded.
 
 ## Permissions
 

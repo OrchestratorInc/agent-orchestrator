@@ -32,8 +32,8 @@ const deepseekCredentialKey = "DEEPSEEK_API_KEY" //nolint:gosec // a credential'
 // AuthStatus reports whether DeepSeek Harness has a DeepSeek credential. The
 // Harness ACP server advertises no authentication surface (its initialize
 // response carries no auth methods and authenticate always succeeds), so the
-// local evidence is the API key or browser-account grant in the credential store,
-// then the environment. Absent
+// local evidence is the API key in the credential store or environment. A browser
+// grant cannot authorize the default deepseek-official session route. Absent
 // evidence stays unknown: Harness may be routed through a provider configured in
 // its profile, which AO cannot see from here.
 func (p *Plugin) AuthStatus(ctx context.Context) (ports.AgentAuthStatus, error) {
@@ -98,8 +98,9 @@ func deepseekCredentialsPath() (string, error) {
 // layout and a nested secret — because AO only decides whether to show the
 // setup action, and Harness owns the document's real validation.
 //
-// The native browser-account grant is also evidence; other scoped records
-// stay unknown rather than claiming a route AO cannot attribute to DeepSeek.
+// Browser grants belong to deepseek-account, not the default deepseek-official
+// route used by AO sessions. Without verified session routing, they are not
+// readiness evidence.
 func deepseekCredentialsStatus(ctx context.Context, path string) (ports.AgentAuthStatus, bool, error) {
 	data, err := os.ReadFile(path) //nolint:gosec // path is the Harness credential store, resolved above
 	if os.IsNotExist(err) {
@@ -119,27 +120,7 @@ func deepseekCredentialsStatus(ctx context.Context, path string) (ports.AgentAut
 		ports.RecordAuthEvidence(ctx, authprobe.FileSource(path).WithMethod(domain.AgentAccountMethodAPIKey))
 		return ports.AgentAuthStatusAuthorized, true, nil
 	}
-	if deepseekAccountCredentialPresent(store) {
-		ports.RecordAuthEvidence(ctx, authprobe.FileSource(path).WithMethod(domain.AgentAccountMethodAccount))
-		return ports.AgentAuthStatusAuthorized, true, nil
-	}
 	return ports.AgentAuthStatusUnknown, false, nil
-}
-
-// DeepSeek's Platform account provider owns exactly this grant. Device records
-// and other providers do not establish account login. Restrict evidence to the
-// production issuer: private profile overrides cannot be inferred from a store.
-func deepseekAccountCredentialPresent(store any) bool {
-	root, _ := store.(map[string]any)
-	records, _ := root["records"].(map[string]any)
-	record, _ := records["deepseek-account-platform/default"].(map[string]any)
-	if record["kind"] != "grant" {
-		return false
-	}
-	payload, _ := record["payload"].(map[string]any)
-	token, _ := payload["token"].(string)
-	return payload["version"] == 1 && payload["issuer"] == "https://platform.deepseek.com" &&
-		strings.TrimSpace(token) != "" && !strings.HasPrefix(token, "dsh_mock_")
 }
 
 // supportedStoreLayout reports whether the document is one a current DeepSeek

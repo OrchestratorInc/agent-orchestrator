@@ -49,9 +49,9 @@ var plans = []Plan{
 	ompLoginPlan(),
 	plan("fx", ActionLogin, "Log in to fx", []string{"fx", "login"}, "Select Vercel, Codex, or Grok in fx's native login flow", "https://fx.sh/docs"),
 	documentationPlan("unreal-agent", "View Unreal Agent documentation", "Configure an OpenAI, OpenRouter, Fireworks, Codex, or Ollama provider for AO's built-in Unreal Agent", "https://github.com/Untrivial-ai/agent-orchestrator/blob/main/docs/harnesses/unreal-agent.md"),
-	// DeepSeek owns browser sign-in and sign-out in its web UI, rather than
-	// exposing login/logout CLI subcommands. The web profile opens that UI.
-	plan("deepseek-harness", ActionLogin, "Log in to DeepSeek", []string{"dsh", "--profile", "web"}, "In DeepSeek's web UI, open Settings → Account to sign in through your browser. To switch accounts, sign out from the sidebar account menu first. API keys remain available in Settings → Models. Leave this terminal running until you finish.", "https://github.com/deepseek-ai/deepseek-harness"),
+	// AO's default ACP/headless routes use deepseek-official, which requires an
+	// API key. Browser account login only authorizes deepseek-account.
+	plan("deepseek-harness", ActionSetup, "Set up DeepSeek", []string{"dsh", "--profile", "web"}, "In DeepSeek's web UI, open Settings → Models to configure a DeepSeek API key for AO's default sessions. Browser sign-in under Settings → Account only authorizes the separate deepseek-account route and does not make the default session route ready. Leave this terminal running until you finish.", "https://github.com/deepseek-ai/deepseek-harness"),
 	plan("openhands", ActionSetup, "Set up OpenHands", []string{"openhands"}, "Native first-run LLM settings; AO forwards terminal input without persisting or logging the raw input, while OpenHands stores settings in ~/.openhands", "https://docs.openhands.dev/openhands/usage/cli/quick-start"),
 	plan("command-code", ActionLogin, "Log in to Command Code", []string{"command-code", "login"}, "Native browser flow; an API key can be pasted in the terminal", "https://commandcode.ai/docs/quickstart"),
 	plan("hermes", ActionSetup, "Set up Hermes Agent", []string{"hermes", "model"}, "Native provider setup: choose a provider, then paste an API key or finish its OAuth flow", "https://hermes-agent.nousresearch.com/docs"),

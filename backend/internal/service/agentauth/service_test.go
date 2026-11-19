@@ -551,8 +551,15 @@ func TestDeepSeekLogoutOpensNativeAccountUI(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if plan.LogoutCommand != "dsh --profile web" || plan.Action != ActionLogin {
+	if plan.LogoutCommand != "dsh --profile web" || plan.Action != ActionSetup {
 		t.Fatalf("DeepSeek account controls unavailable: %+v", plan)
+	}
+	setup, err := svc.Start(context.Background(), "deepseek-harness")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if setup.Action != ActionSetup || !strings.Contains(setup.Guidance, "Settings → Models") || !strings.Contains(setup.Guidance, "API key") {
+		t.Fatalf("default session setup must configure an API key: %+v", setup)
 	}
 	result, err := svc.Logout(context.Background(), "deepseek-harness")
 	if err != nil {
