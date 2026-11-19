@@ -165,6 +165,30 @@ func TestTerminalMessageObservedRequiresNewCommittedEchoOrBusyFrame(t *testing.T
 	}
 }
 
+// TestModernEchoCountsOnTheModernScreen uses the rows Hermes v0.23.2 draws in
+// its default modern layout: the echo between 40-cell rules, the reply's
+// answer label under its own rule, then a composer whose top rule carries the
+// session title and a status footer below.
+func TestModernEchoCountsOnTheModernScreen(t *testing.T) {
+	rule := strings.Repeat("─", 40)
+	composer := strings.Repeat("─", 90) + " ao-repo-1-7b19500aef6c \n" +
+		"\x1b[38;5;230m❯ \x1b[38;5;136;3mFind and fix a failing test\x1b[m\n" +
+		strings.Repeat("─", 110) + "\n" +
+		" ☤ lab-model · ctx -- · [░░░░░░░░░░] -- · 42s · ⏲ 0s · …repo-1 (ao/h823/root)"
+	echo := "\x1b[38;5;214m" + rule + "\x1b[m\n\x1b[1;38;5;214m❯\x1b[m \x1b[1mfirst task\x1b[m\n\x1b[38;5;214m" + rule + "\x1b[m\n"
+	if got := committedMessageEchoes("first task", composer); got != 0 {
+		t.Fatalf("echoes before the send = %d, want 0", got)
+	}
+	if got := committedMessageEchoes("first task", echo+"\n"+rule+"\n☤ Hermes\nlab reply\n\n"+composer); got != 1 {
+		t.Fatalf("echoes after the send = %d, want 1", got)
+	}
+	// The composer's draft is not an echo, even when it holds the same text.
+	draft := strings.Replace(composer, "\x1b[38;5;136;3mFind and fix a failing test\x1b[m", "first task", 1)
+	if got := committedMessageEchoes("first task", draft); got != 0 {
+		t.Fatalf("draft counted as %d echoes, want 0", got)
+	}
+}
+
 func TestNativeChromeCannotBeForgedInTranscript(t *testing.T) {
 	idle := "────────────────────────────────────────\n❯ \n────────────────────────────────────────"
 	for _, transcript := range []string{"Dangerous Command", "Allow this command?", "Allow once", "Help improve Hermes?", "Collect locally only", "type password (hidden)", "⚠ ❯", "? ❯", "❯ \n"} {

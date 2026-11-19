@@ -51,9 +51,9 @@ const (
 	nativeWarningPrompt  = "⚠ ❯"
 	nativeQuestionPrompt = "? ❯"
 	nativeUserEcho       = "● "
-	// display.cli_layout=modern (the Hermes >= 0.23 default) echoes submitted
-	// messages with the skin's prompt glyph instead of ●, after the same
-	// transcript rule; cli_layout=classic keeps ●.
+	// display.cli_layout=modern (the default since at least v0.22.5) echoes
+	// submitted messages with the skin's prompt glyph instead of ●, between the
+	// same 40-cell transcript rules; cli_layout=classic keeps ●.
 	nativeModernUserEcho = "❯ "
 	nativeCommandEcho    = "⚙️  "
 	nativeTranscriptRule = "────────────────────────────────────────"
@@ -498,11 +498,11 @@ func probeNativeVersion(ctx context.Context, path string) (ok bool, reason strin
 
 // qualifiedReleaseLines are the major.minor release lines whose composer,
 // busy, modal and transcript chrome AO's terminal detection was checked
-// against (v0.21.6 on Linux, v0.22.2 on macOS, v0.23.1 on macOS and Linux —
-// the 0.23 line echoes submitted messages with the modern layout's prompt
-// glyph, which committedMessageEchoes accepts alongside ●). A newer line
-// stays installed
-// but unverified until its markers are revalidated. Only major.minor is
+// against (v0.21.6 on Linux, v0.22.2 on macOS, v0.23.1 on macOS and Linux).
+// The modern layout, the default on 0.22 and 0.23, echoes submitted messages
+// with its prompt glyph, which committedMessageEchoes accepts alongside ●.
+// A newer line stays installed but unverified until its markers are
+// revalidated. Only major.minor is
 // compared: Hermes derives its banner from git tags, so the same build can
 // report v0.21.6 or v0.21.5+N.g<sha> depending on a checkout under HERMES_HOME.
 var qualifiedReleaseLines = [][2]int{{0, 21}, {0, 22}, {0, 23}}
@@ -1796,7 +1796,7 @@ func (p *Plugin) TerminalMessageObserved(message, baseline, screen string) bool 
 
 // userEchoPrefix reports which native echo prefix a rendered line starts with:
 // ● for cli_layout=classic, or the skin's prompt glyph for the modern layout
-// (the Hermes >= 0.23 default). Empty when the line is not a user echo.
+// (the default on 0.22 and 0.23). Empty when the line is not a user echo.
 func userEchoPrefix(line string) string {
 	for _, echo := range []string{nativeUserEcho, nativeModernUserEcho} {
 		if strings.HasPrefix(line, echo) {
