@@ -220,7 +220,8 @@ func applyAssetDir(path string, mode os.FileMode) error {
 	if !errors.Is(err, os.ErrNotExist) {
 		return err
 	}
-	return os.Mkdir(path, mode)
+	// Keep owner access so the copy can fill a read-only source directory.
+	return os.Mkdir(path, mode|0o700)
 }
 
 func applyAssetSymlink(path, target string) error {

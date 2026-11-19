@@ -130,3 +130,24 @@ func TestCopyWorkspaceAssetsSkipsDependencyDotAndMissingFolders(t *testing.T) {
 		t.Fatalf("destination = %v, want nothing copied", entries)
 	}
 }
+
+func TestCopyWorkspaceAssetsFillsReadOnlySourceDirectories(t *testing.T) {
+	root := physicalTempDir(t)
+	dest := physicalTempDir(t)
+	notes := filepath.Join(root, "notes")
+	cache := filepath.Join(notes, "cache")
+	writeAssetFile(t, filepath.Join(cache, "entry.txt"), "cached")
+	if err := os.Chmod(cache, 0o555); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.Chmod(cache, 0o755) })
+
+	ws := &Workspace{}
+	err := ws.copyWorkspaceAssets(context.Background(), root, dest, []ports.WorkspaceProjectAssetConfig{{RelativePath: "notes", SourcePath: notes}})
+	if err != nil {
+		t.Fatalf("copy read-only directory: %v", err)
+	}
+	if got, err := os.ReadFile(filepath.Join(dest, "notes", "cache", "entry.txt")); err != nil || string(got) != "cached" {
+		t.Fatalf("entry.txt = %q, %v", got, err)
+	}
+}
