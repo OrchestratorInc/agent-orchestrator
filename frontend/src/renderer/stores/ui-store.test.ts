@@ -81,6 +81,25 @@ describe("theme preference", () => {
 		expect(useUiStore.getState().themePreference).toBe("system");
 	});
 
+	it("skips the second OS lookup when a newer choice lands while System reaches main", async () => {
+		const lookup = vi.spyOn(aoBridge.theme, "systemAppearance").mockResolvedValue("light");
+		let releaseSet: () => void = () => undefined;
+		vi.spyOn(aoBridge.theme, "set").mockImplementationOnce(
+			() =>
+				new Promise<void>((resolve) => {
+					releaseSet = resolve;
+				}),
+		);
+		useUiStore.getState().setThemePreference("system");
+		await vi.waitFor(() => expect(useUiStore.getState().themePreference).toBe("system"));
+		useUiStore.getState().setThemePreference("dark");
+		releaseSet();
+		await new Promise((resolve) => setTimeout(resolve, 0));
+
+		expect(lookup).toHaveBeenCalledTimes(1);
+		expect(useUiStore.getState().themePreference).toBe("dark");
+	});
+
 	it("drops a System lookup that a newer choice overtook", async () => {
 		let reportAppearance: (theme: "light" | "dark") => void = () => undefined;
 		vi.spyOn(aoBridge.theme, "systemAppearance").mockReturnValue(

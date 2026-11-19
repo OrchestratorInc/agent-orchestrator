@@ -641,11 +641,13 @@ export const useUiStore = create<UiState>((set, get) => ({
 					// forcing a mode, read it again: the media query may not move, so
 					// its listener would never correct a stale value.
 					if (themePreference !== "system") return;
+					// Skip the lookup once a newer choice exists: on Windows and Linux it
+					// sets themeSource to "system" again, over that choice.
 					void sent
-						.then(() => readSystemTheme())
+						.then(() => (current() ? readSystemTheme() : null))
 						.then((os) => {
 							const state = get();
-							if (!current() || state.themePreference !== "system" || state.resolvedTheme === os) return;
+							if (!os || !current() || state.themePreference !== "system" || state.resolvedTheme === os) return;
 							runThemeTransition(() => {
 								if (!current()) return;
 								applyDocumentTheme(os);
