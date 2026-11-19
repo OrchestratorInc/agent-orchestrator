@@ -1245,6 +1245,9 @@ type fakeWorkspace struct {
 	resolves    []resolveDefaultBranchCall
 	resolved    map[string]ports.WorkspaceDefaultBranch
 	fetchFunc   func(context.Context, string, ports.WorkspaceDefaultBranch) error
+	// resolveRemoteFunc stands in for a live remote lookup during resolution;
+	// it gets the caller's shared network deadline.
+	resolveRemoteFunc func(remoteCtx context.Context, repoPath string) error
 	// createRepoPath, when set, is returned as the RepoPath of a single-repo
 	// Create so tests can assert it survives the spawn->teardown metadata round
 	// trip (production Create resolves this path; the zero default keeps every
@@ -1311,6 +1314,14 @@ func (w *fakeWorkspace) ResolveDefaultBranch(_ context.Context, repoPath, config
 		Branch:  branch,
 		BaseRef: "refs/remotes/origin/" + branch,
 	}, nil
+}
+
+func (w *fakeWorkspace) ResolveDefaultBranchWithin(ctx, remoteCtx context.Context, repoPath, configuredBranch string) (ports.WorkspaceDefaultBranch, error) {
+	if w.resolveRemoteFunc != nil {
+		// A lookup that hit the deadline still answers from local refs.
+		_ = w.resolveRemoteFunc(remoteCtx, repoPath)
+	}
+	return w.ResolveDefaultBranch(ctx, repoPath, configuredBranch)
 }
 
 func (w *fakeWorkspace) FetchDefaultBranch(ctx context.Context, repoPath string, target ports.WorkspaceDefaultBranch) error {
@@ -6087,6 +6098,32 @@ func TestSpawn_SkipsFetchWhenResolutionAlreadyFetched(t *testing.T) {
 	}
 	if got, want := ws.lastCfg.BaseRef, "refs/remotes/origin/main"; got != want {
 		t.Fatalf("create base ref = %q, want %q", got, want)
+	}
+}
+
+func TestRefreshDefaultBranchesSharesOneBudgetAcrossResolution(t *testing.T) {
+	m, st, _, ws := newManager()
+	project := domain.ProjectRecord{ID: "mer", Path: "/repo/mer", Kind: domain.ProjectKindWorkspace, Config: testRoleAgents()}
+	for i := 0; i < 3; i++ {
+		name := fmt.Sprintf("child-%d", i)
+		st.workspaceRepo["mer"] = append(st.workspaceRepo["mer"], domain.WorkspaceRepoRecord{Name: name, RelativePath: name})
+	}
+	m.defaultBranchRefreshTimeout = 25 * time.Millisecond
+	// Every repository's live HEAD lookup hangs until the deadline it is given.
+	ws.resolveRemoteFunc = func(remoteCtx context.Context, _ string) error {
+		<-remoteCtx.Done()
+		return remoteCtx.Err()
+	}
+
+	started := time.Now()
+	baseRefs := m.refreshDefaultBranchesBestEffort(context.Background(), project)
+	elapsed := time.Since(started)
+
+	if elapsed > 250*time.Millisecond {
+		t.Fatalf("resolving four stalled repositories took %s, want one shared 25ms budget", elapsed)
+	}
+	if got, want := len(baseRefs), 4; got != want {
+		t.Fatalf("resolved base refs = %d, want root plus three children (%d) from local refs", got, want)
 	}
 }
 

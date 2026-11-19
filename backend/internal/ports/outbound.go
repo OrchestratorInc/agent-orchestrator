@@ -445,6 +445,14 @@ type WorkspaceDefaultBranchRefresher interface {
 	FetchDefaultBranch(ctx context.Context, repoPath string, target WorkspaceDefaultBranch) error
 }
 
+// WorkspaceDefaultBranchBudgetedResolver resolves a default branch with its
+// network work bounded by remoteCtx instead of a budget of its own, so the
+// repositories of one start share a single deadline. ctx still bounds the
+// local Git reads, which keep working after remoteCtx expires.
+type WorkspaceDefaultBranchBudgetedResolver interface {
+	ResolveDefaultBranchWithin(ctx, remoteCtx context.Context, repoPath, configuredBranch string) (WorkspaceDefaultBranch, error)
+}
+
 // WorkspaceDefaultBranch is a locally resolved default-branch target. BaseRef
 // is canonical (for example refs/remotes/upstream/main), so materialization
 // never has to reconstruct the remote decision from an ambiguous slash.

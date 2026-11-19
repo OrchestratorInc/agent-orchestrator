@@ -2229,12 +2229,25 @@ func (m *Manager) refreshDefaultBranchesBestEffort(ctx context.Context, project 
 		}
 	}
 
+	// One deadline covers the complete workspace refresh, resolution and fetch
+	// alike. A slow or offline repository cannot multiply spawn latency by the
+	// number of child repos.
+	fetchCtx, cancel := context.WithTimeout(ctx, m.defaultBranchRefreshTimeout)
+	defer cancel()
+	resolve := refresher.ResolveDefaultBranch
+	if budgeted, ok := refresher.(ports.WorkspaceDefaultBranchBudgetedResolver); ok {
+		resolve = func(ctx context.Context, repoPath, configuredBranch string) (ports.WorkspaceDefaultBranch, error) {
+			return budgeted.ResolveDefaultBranchWithin(ctx, fetchCtx, repoPath, configuredBranch)
+		}
+	}
+
 	// Resolve every canonical ref before the fetches below. This preserves
 	// each repository's own inferred origin/HEAD even if an earlier fetch uses
 	// the entire shared refresh budget. Resolution is local except for an
-	// automatic default's periodic remote HEAD lookup, which the adapter bounds.
+	// automatic default's live remote HEAD lookup when Git has none cached,
+	// which stops at the shared deadline.
 	for i := range targets {
-		resolved, err := refresher.ResolveDefaultBranch(ctx, targets[i].repoPath, targets[i].configuredBranch)
+		resolved, err := resolve(ctx, targets[i].repoPath, targets[i].configuredBranch)
 		if err != nil {
 			m.logger.Warn("spawn: default branch resolution failed; continuing with adapter fallback",
 				"projectID", project.ID,
@@ -2250,10 +2263,6 @@ func (m *Manager) refreshDefaultBranchesBestEffort(ctx context.Context, project 
 		}
 	}
 
-	// One deadline covers the complete workspace refresh. A slow or offline
-	// repository cannot multiply spawn latency by the number of child repos.
-	fetchCtx, cancel := context.WithTimeout(ctx, m.defaultBranchRefreshTimeout)
-	defer cancel()
 	for _, target := range targets {
 		if target.resolved.BaseRef == "" {
 			continue

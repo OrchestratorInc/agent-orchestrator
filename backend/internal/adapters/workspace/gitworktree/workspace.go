@@ -145,6 +145,7 @@ type commandRunner func(ctx context.Context, binary string, args ...string) ([]b
 
 var _ ports.Workspace = (*Workspace)(nil)
 var _ ports.WorkspaceDefaultBranchRefresher = (*Workspace)(nil)
+var _ ports.WorkspaceDefaultBranchBudgetedResolver = (*Workspace)(nil)
 var _ ports.WorkspaceProject = (*Workspace)(nil)
 var _ ports.WorkspaceObserver = (*Workspace)(nil)
 var _ ports.WorkspaceReclaimer = (*Workspace)(nil)
@@ -189,14 +190,20 @@ func New(opts Options) (*Workspace, error) {
 // automatic default goes through resolveAutomaticDefault, whose network work is
 // bounded by defaultBranchResolutionBudget.
 func (w *Workspace) ResolveDefaultBranch(ctx context.Context, repoPath, configuredBranch string) (ports.WorkspaceDefaultBranch, error) {
+	remoteCtx, cancelRemote := context.WithTimeout(ctx, defaultBranchResolutionBudget)
+	defer cancelRemote()
+	return w.ResolveDefaultBranchWithin(ctx, remoteCtx, repoPath, configuredBranch)
+}
+
+// ResolveDefaultBranchWithin is ResolveDefaultBranch with its network work
+// bounded by the caller's remoteCtx, which several repositories can share.
+func (w *Workspace) ResolveDefaultBranchWithin(ctx, remoteCtx context.Context, repoPath, configuredBranch string) (ports.WorkspaceDefaultBranch, error) {
 	repo, err := physicalAbs(repoPath)
 	if err != nil {
 		return ports.WorkspaceDefaultBranch{}, fmt.Errorf("gitworktree: repo path: %w", err)
 	}
 	branch := strings.TrimSpace(configuredBranch)
 	if branch == "" {
-		remoteCtx, cancelRemote := context.WithTimeout(ctx, defaultBranchResolutionBudget)
-		defer cancelRemote()
 		resolution, fetched, err := w.resolveAutomaticDefault(ctx, remoteCtx, repo, true)
 		if err != nil {
 			return ports.WorkspaceDefaultBranch{}, fmt.Errorf("gitworktree: resolve repository default for %q: %w", repo, err)
