@@ -13,6 +13,8 @@ import (
 	"strings"
 	"syscall"
 	"time"
+
+	"github.com/aoagents/agent-orchestrator/backend/internal/agentlaunch"
 )
 
 // defaultSpawnHost launches the current AO executable as a detached pty-host.
@@ -27,7 +29,12 @@ func defaultSpawnHost(ctx context.Context, sessionID, cwd string, argv []string,
 		return "", 0, fmt.Errorf("%s pty spawn: resolve executable: %w", runtime.GOOS, err)
 	}
 
-	envAssignments, argv := stripEnvAssignments(argv)
+	envAssignments, command, ok := agentlaunch.SplitEnvAssignments(argv)
+	if ok {
+		argv = command
+	} else {
+		envAssignments = nil
+	}
 	args := ptyHostArgs(sessionID, cwd, argv, opts)
 	merged := interactiveTerminalEnv(os.Environ(), env, envAssignments)
 
