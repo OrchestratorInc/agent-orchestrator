@@ -171,6 +171,11 @@ func (p *Plugin) GetRestoreCommand(ctx context.Context, cfg ports.RestoreConfig)
 		if !filepath.IsAbs(cfg.Session.WorkspacePath) {
 			return nil, false, errors.New("crush imported workspace must be absolute")
 		}
+		// Pending imports can lack native context in workspace hooks. The
+		// restore metadata identifies the import before its first launch.
+		if err := markCrushImportedProjectInitialized(cfg.Session.WorkspacePath); err != nil {
+			return nil, false, err
+		}
 		// CLI dataDir wins over .crushrc/crushrc and JSON config, including
 		// on later adopted resumes (config/load.go:735-744).
 		cmd = append(cmd, "--data-dir", filepath.Join(cfg.Session.WorkspacePath, ".crush"))

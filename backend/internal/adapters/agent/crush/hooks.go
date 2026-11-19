@@ -47,30 +47,7 @@ func (p *Plugin) GetAgentHooks(ctx context.Context, cfg ports.WorkspaceHookConfi
 		return errors.New("crush.GetAgentHooks: WorkspacePath is required")
 	}
 	if cfg.NativeSessionID != "" && cfg.ImportConfigDir != "" {
-		// v0.99 skips --session loading while project initialization is shown.
-		// This is already an imported conversation, not a new project task.
-		root, err := os.OpenRoot(cfg.WorkspacePath)
-		if err != nil {
-			return err
-		}
-		defer func() { _ = root.Close() }()
-		if err := root.Mkdir(".crush", 0o700); err != nil && !errors.Is(err, os.ErrExist) {
-			return err
-		}
-		marker := filepath.Join(".crush", "init")
-		if info, err := root.Lstat(marker); err == nil {
-			if !info.Mode().IsRegular() {
-				return errors.New("crush imported initialization marker is not a regular file")
-			}
-		} else if errors.Is(err, os.ErrNotExist) {
-			file, err := root.OpenFile(marker, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o600)
-			if err != nil {
-				return err
-			}
-			if err := file.Close(); err != nil {
-				return err
-			}
-		} else {
+		if err := markCrushImportedProjectInitialized(cfg.WorkspacePath); err != nil {
 			return err
 		}
 	}
@@ -350,4 +327,34 @@ func crushStringSlice(v any) []string {
 		}
 	}
 	return out
+}
+
+func markCrushImportedProjectInitialized(workspace string) error {
+	// v0.99 skips --session loading while project initialization is shown.
+	// This is already an imported conversation, not a new project task.
+	root, err := os.OpenRoot(workspace)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = root.Close() }()
+	if err := root.Mkdir(".crush", 0o700); err != nil && !errors.Is(err, os.ErrExist) {
+		return err
+	}
+	marker := filepath.Join(".crush", "init")
+	if info, err := root.Lstat(marker); err == nil {
+		if !info.Mode().IsRegular() {
+			return errors.New("crush imported initialization marker is not a regular file")
+		}
+	} else if errors.Is(err, os.ErrNotExist) {
+		file, err := root.OpenFile(marker, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o600)
+		if err != nil {
+			return err
+		}
+		if err := file.Close(); err != nil {
+			return err
+		}
+	} else {
+		return err
+	}
+	return nil
 }
