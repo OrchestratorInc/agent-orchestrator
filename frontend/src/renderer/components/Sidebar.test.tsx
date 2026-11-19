@@ -775,7 +775,7 @@ describe("Sidebar", () => {
 		expect(screen.getAllByLabelText("Sign in")).toHaveLength(2);
 	});
 
-	it("shows the Artifacts row under Automations with a count of live artifacts", async () => {
+	it("shows the Artifacts row under Automations with a count of every listed artifact, archived sessions' included", async () => {
 		const user = userEvent.setup();
 		const withArtifacts: WorkspaceSummary = {
 			...workspace,
@@ -802,7 +802,7 @@ describe("Sidebar", () => {
 		const automations = screen.getByRole("button", { name: "Automations" });
 		const artifacts = screen.getByRole("button", { name: "Artifacts" });
 		expect(automations.compareDocumentPosition(artifacts) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
-		expect(artifacts).toHaveTextContent("2");
+		expect(artifacts).toHaveTextContent("3");
 		expect(artifacts).not.toHaveAttribute("aria-current");
 
 		await user.click(artifacts);
@@ -1223,12 +1223,14 @@ describe("Sidebar", () => {
 		expect(section).toContainElement(screen.getByText("baby"));
 		const agentRow = screen.getByText("Fix the flake").closest("[data-session-row]")!;
 		expect(section).toContainElement(agentRow as HTMLElement);
-		// Only the Cloud agent carries the badge that tells it from a local one.
-		expect(within(agentRow as HTMLElement).getByText("Cloud")).toBeInTheDocument();
-		expect(within(screen.getByText("baby").closest("[data-session-row]") as HTMLElement).queryByText("Cloud")).toBeNull();
+		// Only the Cloud agent carries the cloud mark that tells it from a local one.
+		expect(within(agentRow as HTMLElement).getByRole("img", { name: "Cloud" })).toBeInTheDocument();
+		expect(within(screen.getByText("baby").closest("[data-session-row]") as HTMLElement).queryByRole("img", { name: "Cloud" })).toBeNull();
 		// It is no project of its own; a standalone agent shared with the person stays with the shared projects.
 		expect(document.querySelector('li[data-project-id="agent-1"]')).toBeNull();
 		expect(document.querySelector('li[data-project-id="agent-shared"]')).not.toBeNull();
+		// A Cloud project row carries the same cloud mark, not a text pill.
+		expect(within(document.querySelector('li[data-project-id="agent-shared"]') as HTMLElement).getByRole("img", { name: "Cloud" })).toBeInTheDocument();
 		expect(section).not.toContainElement(screen.queryByText("Their work"));
 
 		await user.click(screen.getByText("Fix the flake"));
@@ -1575,7 +1577,7 @@ describe("Sidebar", () => {
 		expect(openSession).toHaveClass("pr-[36px]");
 		expect(openSession).toHaveClass(
 			"group-hover/session-row:pr-sidebar-project-actions",
-			"group-has-[:focus-visible]/session-row:pr-sidebar-project-actions",
+			"focus-visible-in-session-row:pr-sidebar-project-actions",
 		);
 		expect(label).toHaveClass("min-w-0", "flex-1", "truncate");
 		expect(actions).toHaveAttribute("data-session-actions");
@@ -1585,18 +1587,19 @@ describe("Sidebar", () => {
 			"gap-0.5",
 			"opacity-0",
 			"scale-[0.8]",
-			"duration-normal",
-			"group-has-[:focus-visible]/session-row:pointer-events-auto",
-			"group-has-[:focus-visible]/session-row:scale-100",
-			"group-has-[:focus-visible]/session-row:opacity-100",
+			"focus-visible-in-session-row:pointer-events-auto",
+			"focus-visible-in-session-row:scale-100",
+			"focus-visible-in-session-row:opacity-100",
 		);
+		// Hover shows them at once, with no transition.
+		expect(actionButtons?.className).not.toMatch(/\btransition/);
 		expect(actionButtons).toHaveAttribute("data-session-action-buttons", "");
 		expect(time).toHaveAttribute("datetime", lastUserMessageAt);
 		expect(time).toHaveClass(
 			"absolute",
 			"right-2",
 			"opacity-100",
-			"group-has-[:focus-visible]/session-row:opacity-0",
+			"focus-visible-in-session-row:opacity-0",
 		);
 		expect(openSession).toHaveClass("pl-1.5");
 		expect(openSession.closest("li")).toHaveClass("pl-0.5");
@@ -2744,6 +2747,39 @@ describe("Sidebar", () => {
 		expect(dialog).toHaveTextContent("repository folder");
 	});
 
+	it("names a Cloud project's removal as a permanent delete, unlike a local one", async () => {
+		const user = userEvent.setup();
+		const cloudProject: WorkspaceSummary = { ...workspace, id: "cloud-1", name: "Cloud One", kind: "cloud", cloudOrgId: "org-1", path: "", sessions: [] };
+		const onRemoveProject = renderSidebar({ workspaces: [cloudProject] });
+
+		await user.click(screen.getByLabelText("Project actions for Cloud One"));
+		expect(screen.queryByRole("menuitem", { name: "Remove project" })).not.toBeInTheDocument();
+		await user.click(await screen.findByRole("menuitem", { name: "Delete project" }));
+
+		const dialog = await screen.findByRole("dialog", { name: "Delete project" });
+		expect(dialog).toHaveTextContent("This will permanently delete Cloud One");
+		// No grey explainer under the lead: it said what the lead already says.
+		expect(dialog).not.toHaveTextContent("sandboxes");
+		expect(within(dialog).queryByRole("button", { name: "Remove" })).not.toBeInTheDocument();
+		await user.click(within(dialog).getByRole("button", { name: "Delete permanently" }));
+		await waitFor(() => expect(onRemoveProject).toHaveBeenCalledWith("cloud-1", true));
+	});
+
+	it("offers no Delete project on a Cloud project someone else shared: only its own organization deletes it", async () => {
+		const user = userEvent.setup();
+		const sharedProject: WorkspaceSummary = { ...workspace, id: "their-cloud", name: "Their Cloud", kind: "cloud", cloudOrgId: "org-2", path: "", sessions: [], shared: { source: "link" } };
+		renderSidebar({ workspaces: [sharedProject] });
+
+		// The guest's row has no project ⋮ menu; its right-click menu is the way in.
+		expect(screen.queryByLabelText("Project actions for Their Cloud")).toBeNull();
+		const row = document.querySelector('li[data-project-id="their-cloud"]') as HTMLElement;
+		fireEvent.contextMenu(within(row).getAllByText("Their Cloud")[0]!);
+		expect(await screen.findByRole("menuitem", { name: /Pin to top/ })).toBeInTheDocument();
+		expect(screen.queryByRole("menuitem", { name: "Delete project" })).not.toBeInTheDocument();
+		expect(screen.queryByRole("menuitem", { name: "Remove project" })).not.toBeInTheDocument();
+		await user.keyboard("{Escape}");
+	});
+
 	it("warns when removing a project would hide open pull requests", async () => {
 		const user = userEvent.setup();
 		const workspaceWithPullRequests = {
@@ -2810,6 +2846,7 @@ describe("Sidebar", () => {
 			"Copy path",
 			"Rename",
 			"Pin session",
+			"Fork session",
 			"Archive session",
 		]);
 		expect(renameItem).toHaveTextContent(/^Rename$/);
@@ -3441,10 +3478,8 @@ describe("Sidebar", () => {
 		resetSessionPreviewWarmth();
 		expect(screen.queryByTestId("board-session-card")).not.toBeInTheDocument();
 		await user.hover(screen.getByLabelText("Open preview task"));
-		// The first preview waits out a short hover before it opens.
-		expect(screen.queryByTestId("board-session-card")).not.toBeInTheDocument();
-
-		const card = await screen.findByTestId("board-session-card");
+		// The preview opens on hover, with no wait.
+		const card = screen.getByTestId("board-session-card");
 		expect(card).toHaveTextContent("preview task");
 		expect(within(card).getByTestId("session-status")).toHaveTextContent("Blocked");
 		// Static: attention styling without the pulse, and no card-level click target.
@@ -3481,7 +3516,6 @@ describe("Sidebar", () => {
 		await user.hover(screen.getByLabelText("Open first task"));
 		expect(await screen.findByTestId("board-session-card")).toHaveTextContent("first task");
 
-		// Well inside the first-open delay: only a warm preview can appear this fast.
 		await user.hover(screen.getByLabelText("Open second task"));
 		await waitFor(
 			() => {
@@ -3535,21 +3569,21 @@ describe("Sidebar", () => {
 		});
 
 		resetSessionPreviewWarmth();
-		// All three hovers land inside the first-open delay, so none has opened yet.
+		// Each hover replaces the previous row's preview.
 		await user.hover(screen.getByLabelText("Open sweep a"));
 		await user.hover(screen.getByLabelText("Open sweep b"));
 		await user.hover(screen.getByLabelText("Open sweep c"));
 
 		const card = await screen.findByTestId("board-session-card");
 		expect(card).toHaveTextContent("sweep c");
-		// Past every row's delay: nothing from the rows swept over may open late.
+		// Nothing from the rows swept over may open late.
 		await new Promise((resolve) => setTimeout(resolve, 600));
 		const cards = screen.getAllByTestId("board-session-card");
 		expect(cards).toHaveLength(1);
 		expect(cards[0]).toHaveTextContent("sweep c");
 	});
 
-	it("goes back to a delayed first preview after the pointer has left every row", async () => {
+	it("opens the preview instantly again after the pointer has left every row", async () => {
 		const user = userEvent.setup();
 		renderSidebar({
 			workspaces: [
@@ -3566,8 +3600,7 @@ describe("Sidebar", () => {
 
 		await new Promise((resolve) => setTimeout(resolve, 400));
 		await user.hover(row);
-		expect(screen.queryByTestId("board-session-card")).not.toBeInTheDocument();
-		const card = await screen.findByTestId("board-session-card");
+		const card = screen.getByTestId("board-session-card");
 		expect(card.closest('[data-slot="hover-card-content"]')?.className).not.toMatch(/animate-in/);
 	});
 

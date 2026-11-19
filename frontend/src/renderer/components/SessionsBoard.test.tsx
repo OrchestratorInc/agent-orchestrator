@@ -28,6 +28,9 @@ const {
 	workspaceQueryMock,
 	cloudProjectsMock,
 	spawnCloudOrchestratorMock,
+	offeringMock,
+	participantsMock,
+	shareDialogMock,
 	routerListeners,
 	fakeRouter,
 } = vi.hoisted(() => {
@@ -52,12 +55,25 @@ const {
 		workspaceQueryMock: vi.fn(),
 		cloudProjectsMock: vi.fn((): { id: string; config?: object }[] | undefined => undefined),
 		spawnCloudOrchestratorMock: vi.fn(),
+		offeringMock: vi.fn((): Record<string, unknown> => ({ defaultProvider: "coder" })),
+		participantsMock: vi.fn((): ReadonlyMap<string, unknown[]> => new Map()),
+		shareDialogMock: vi.fn(),
 	};
 });
 
 vi.mock("../lib/cloud-orchestrator", () => ({ spawnCloudOrchestrator: spawnCloudOrchestratorMock }));
 
-vi.mock("../hooks/useCloudOffering", () => ({ useCloudOffering: () => ({ defaultProvider: "coder" }) }));
+vi.mock("../hooks/useCloudOffering", () => ({ useCloudOffering: () => offeringMock() }));
+vi.mock("../hooks/useSessionParticipants", () => ({ useSessionParticipants: () => participantsMock() }));
+vi.mock("../hooks/useTeamsEnabled", () => ({ useTeamsEnabled: () => true }));
+vi.mock("./ShareSessionDialog", () => ({
+	ShareSessionDialog: (props: { open: boolean; sessionId?: string; sessionName?: string; projectName?: string; orgId: string; projectId: string }) => {
+		shareDialogMock(props);
+		return props.open ? (
+			<div role="dialog" aria-label="Share dialog" data-session={props.sessionId ?? ""} data-session-name={props.sessionName ?? ""} data-project-name={props.projectName ?? ""} data-org={props.orgId} data-project={props.projectId} />
+		) : null;
+	},
+}));
 
 
 vi.mock("@tanstack/react-router", () => ({
@@ -188,6 +204,9 @@ beforeEach(() => {
 	workspaceQueryMock.mockReset().mockReturnValue({ data: [], isError: false });
 	appMemoryMock.mockReset().mockReturnValue({ data: undefined, isError: false });
 	sessionMemoryMock.mockReset().mockReturnValue({ data: undefined, isError: false });
+	offeringMock.mockReset().mockReturnValue({ defaultProvider: "coder" });
+	participantsMock.mockReset().mockReturnValue(new Map());
+	shareDialogMock.mockReset();
 });
 
 describe("SessionsBoard", () => {
@@ -312,6 +331,51 @@ describe("SessionsBoard", () => {
 			body: { displayName: "Fix login redirect" },
 		}));
 		expect(navigateMock).not.toHaveBeenCalled();
+	});
+
+	describe("sharing from a card", () => {
+		const shareName = (title: string) => `Share “${title}”`;
+		function cloudBoard(sessions: WorkspaceSession[], project: Partial<WorkspaceSummary> = {}) {
+			offeringMock.mockReturnValue({ defaultProvider: "coder", features: ["share"], org: { id: "org-mine" } });
+			workspaceQueryMock.mockReturnValue({
+				data: [{ ...workspaceWithSessions(sessions), name: "acme/web", kind: "cloud", cloudOrgId: "org-mine", ...project }],
+				isSuccess: true, isError: false,
+			});
+		}
+
+		it("opens the session's share dialog from its card, without opening the session", async () => {
+			cloudBoard([boardSession({ id: "s1", title: "Fix login", status: "working", cloud: { orgId: "org-mine" } })]);
+			renderBoard("p1");
+			expect(screen.queryByRole("dialog", { name: "Share dialog" })).toBeNull();
+			await userEvent.click(await screen.findByRole("button", { name: shareName("Fix login") }));
+			const dialog = await screen.findByRole("dialog", { name: "Share dialog" });
+			expect(dialog.dataset).toMatchObject({ session: "s1", sessionName: "Fix login", projectName: "acme/web", org: "org-mine", project: "p1" });
+			expect(navigateMock).not.toHaveBeenCalled();
+		});
+
+		it("opens the same dialog from the people circles on an already shared session", async () => {
+			cloudBoard([boardSession({ id: "s1", title: "Fix login", status: "working", cloud: { orgId: "org-mine" } })]);
+			participantsMock.mockReturnValue(new Map([["s1", [{ userId: "v", name: "Vaanya", present: true, state: "idle" }]]]));
+			renderBoard("p1");
+			const circles = await screen.findByRole("button", { name: /Vaanya/ });
+			await userEvent.click(circles);
+			expect((await screen.findByRole("dialog", { name: "Share dialog" })).dataset.session).toBe("s1");
+			expect(navigateMock).not.toHaveBeenCalled();
+		});
+
+		it.each([
+			["a local session", boardSession({ id: "s1", title: "Fix login", status: "working" }), {}, { features: ["share"], org: { id: "org-mine" } }],
+			["a session shared from another organization", boardSession({ id: "s1", title: "Fix login", status: "working", cloud: { orgId: "org-elsewhere", shared: true } }), {}, { features: ["share"], org: { id: "org-mine" } }],
+			["an organization without sharing", boardSession({ id: "s1", title: "Fix login", status: "working", cloud: { orgId: "org-mine" } }), {}, { features: [], org: { id: "org-mine" } }],
+			["a terminated session", boardSession({ id: "s1", title: "Fix login", status: "working", isTerminated: true, cloud: { orgId: "org-mine" } }), {}, { features: ["share"], org: { id: "org-mine" } }],
+		])("offers no Share on %s", async (_name, session, project, offering) => {
+			cloudBoard([session, boardSession({ id: "s2", title: "Other task", status: "working" })], project);
+			offeringMock.mockReturnValue({ defaultProvider: "coder", ...offering });
+			renderBoard("p1");
+			await screen.findByText("Other task");
+			expect(screen.queryByRole("button", { name: shareName("Fix login") })).toBeNull();
+			expect(document.querySelector("[data-board-share-session]")).toBeNull();
+		});
 	});
 
 	it("says a session's status could not be verified, without offering a retry", () => {

@@ -49,7 +49,7 @@ beforeEach(() => {
 	api.POST.mockReset();
 	window.localStorage.clear();
 	useSessionImportStore.setState({ dialog: null, dismissedProjects: [], importedCounts: {} });
-	useUiStore.setState({ sessionImportOfferClosed: false, globalToasts: [] });
+	useUiStore.setState({ globalToasts: [] });
 });
 
 it("imports this project's chats from the row and confirms it", async () => {
@@ -138,7 +138,6 @@ it("preselects busy folders, folds the rest and adds the picked ones as projects
 	await waitFor(() => expect(useSessionImportStore.getState().dialog).toBeNull());
 	expect(api.POST).toHaveBeenNthCalledWith(1, "/api/v1/projects", { body: { path: "/code/alpha" } });
 	expect(api.POST).toHaveBeenNthCalledWith(2, "/api/v1/session-import", { body: { ids: ["a", "bb", "ccc"] } });
-	expect(useUiStore.getState().sessionImportOfferClosed).toBe(true);
 	const [toast] = useUiStore.getState().globalToasts;
 	expect(toast?.title).toBe("Imported 3 chats");
 	expect(toast?.action).toBeUndefined();

@@ -25,6 +25,7 @@ Natural-language-to-command mappings for common Orchestrator tasks.
 | Register a repo as a project | `ao project add --path <abs-path> --name <name>` |
 | List projects | `ao project ls` |
 | Check installed agent harnesses and readiness | `ao agent ls --refresh` |
+| Start on, or move a session to, another Claude Code or Codex account | `ao account ls`, then `ao spawn --account <id>` or `ao account switch <session> <id>`; see [commands/account.md](commands/account.md) |
 | Save a repetitive agent task or exact command as a Cue | `ao cue list --json`, then `ao cue create --name "..." --prompt "..."` or `--command "..."` |
 | Rename a worker session (not the orchestrator) | `ao session rename <id> "<name>"` |
 | Restore a killed session | `ao session restore <id>` |

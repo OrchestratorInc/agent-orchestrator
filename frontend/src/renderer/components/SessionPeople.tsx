@@ -113,9 +113,10 @@ function SessionPersonAvatar({ person }: { person: SessionPerson }) {
  * access, General access and Copy link. While someone else has the session
  * open it shows who is there as circles instead, which open the same dialog
  * for the owner; a guest only sees who is there. The whole project is shared
- * from the dialog or from Project settings.
+ * from the dialog or from Project settings. An orchestrator is never shared on
+ * its own: its Share shares the whole project.
  */
-export function SessionPeopleControl({ orgId, projectId, sessionId, canShare, sessionName, projectName, standaloneAgent }: {
+export function SessionPeopleControl({ orgId, projectId, sessionId, canShare, sessionName, projectName, standaloneAgent, shareProject = false }: {
 	orgId: string;
 	projectId: string;
 	sessionId: string;
@@ -124,6 +125,8 @@ export function SessionPeopleControl({ orgId, projectId, sessionId, canShare, se
 	projectName?: string;
 	/** The session is a Cloud standalone agent's: shared on its own, never as a project. */
 	standaloneAgent?: boolean;
+	/** The session is the project's orchestrator: Share opens the whole project, with no session to switch to. */
+	shareProject?: boolean;
 }) {
 	const { t } = useTranslation();
 	const { userId } = useCloudCp();
@@ -152,8 +155,8 @@ export function SessionPeopleControl({ orgId, projectId, sessionId, canShare, se
 					onOpenChange={setOpen}
 					orgId={orgId}
 					projectId={projectId}
-					sessionId={sessionId}
-					sessionName={sessionName}
+					sessionId={shareProject ? undefined : sessionId}
+					sessionName={shareProject ? undefined : sessionName}
 					projectName={projectName}
 					people={teams}
 					standaloneAgent={standaloneAgent}

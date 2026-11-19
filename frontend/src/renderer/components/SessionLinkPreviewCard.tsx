@@ -24,7 +24,7 @@ import { LOCAL_HOST } from "../lib/hosts";
 import type { SessionArtifact, WorkspaceSession } from "../types/workspace";
 import { AgentAvatar } from "./AgentAvatar";
 import { Button } from "./ui/button";
-import { HoverCardContent } from "./ui/hover-card";
+import { HoverCardContent, useHoverCardDismiss } from "./ui/hover-card";
 import { Skeleton } from "./ui/skeleton";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "./ui/table";
 
@@ -209,6 +209,7 @@ export function SessionLinkPreviewCard({
 	const workspace = target ? source.workspaces.find((candidate) => candidate.id === target.projectId) : undefined;
 	const session = workspace?.sessions.find((candidate) => candidate.id === target?.sessionId);
 	const restoreHostId = sourceHostId && sourceHostId !== LOCAL_HOST ? sourceHostId : undefined;
+	const dismiss = useHoverCardDismiss();
 	if (session) {
 		const terminated = session.isTerminated === true || session.status === "terminated";
 		// A terminated card already holds its own Resume button, so only a live one opens on click.
@@ -219,7 +220,10 @@ export function SessionLinkPreviewCard({
 				collisionPadding={8}
 				sideOffset={6}
 				className={cn(SESSION_CARD_CLASS, openable && "cursor-pointer transition-colors hover:bg-accent")}
-				onClick={openable ? onOpen : undefined}
+				onClick={openable ? () => {
+					dismiss();
+					onOpen();
+				} : undefined}
 			>
 				{terminated ? <TerminatedCard session={session} hostId={restoreHostId} /> : <SessionCardBody session={session} />}
 			</HoverCardContent>

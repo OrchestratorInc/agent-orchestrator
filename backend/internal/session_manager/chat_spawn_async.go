@@ -58,7 +58,7 @@ func (m *Manager) beginAsyncChatSpawn(ctx context.Context, in asyncChatSpawn) (d
 	if !in.retry && len(in.cfg.Attachments) > 0 {
 		stageStarted := time.Now()
 		for i, attachment := range in.cfg.Attachments {
-			if err := m.attachments.PutCanonical(ctx, id, spawnAttachmentName(i, attachment), attachment.Data); err != nil {
+			if err := m.attachments.PutCanonicalSource(ctx, id, spawnAttachmentName(i, attachment), attachmentSource(attachment)); err != nil {
 				rollback()
 				return domain.SessionRecord{}, 0, 0, wrapSpawnStage(id, ErrSpawnAttachments, err)
 			}
@@ -508,6 +508,15 @@ func (m *Manager) retryFailedChatSpawn(ctx context.Context, rec domain.SessionRe
 		ProjectID: rec.ProjectID, IssueID: rec.IssueID, Kind: rec.Kind,
 		Harness: rec.Harness, RequestedMode: domain.SessionModeChat,
 		AgentConfig: config, AgentConfigResolved: true, Async: true,
+	}
+	if m.forkRetry != nil && m.isSessionFork(ctx, rec.ID) {
+		// A fork that failed to start is copied again from its original;
+		// a plain restart would leave an empty chat in a blank worktree.
+		fork, err := m.forkRetry(ctx, rec)
+		if err != nil {
+			return RestoreResult{}, false, fmt.Errorf("retry fork %s: %w", rec.ID, err)
+		}
+		cfg.Fork = fork
 	}
 	if rec.Harness == domain.HarnessCodex {
 		// ChatUI can change the saved model independently of effort, and provider

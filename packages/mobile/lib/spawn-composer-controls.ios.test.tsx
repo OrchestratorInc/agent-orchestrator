@@ -61,7 +61,7 @@ vi.mock("./spawn-composer", async () => {
 	// The shared shell is tested on its own; here it only holds the settings.
 	return { SpawnComposer: ({ settings, ...props }: { settings?: React.ReactNode }) => React.createElement("SpawnComposer", props, settings) };
 });
-import { SpawnComposerControls } from "./spawn-composer-controls.ios";
+import { HarnessImage, SpawnComposerControls } from "./spawn-composer-controls.ios";
 import { rootTouchStart } from "./touchOutside";
 import { touchTarget } from "./tokens";
 
@@ -118,6 +118,25 @@ const identified = (root: ReactTestInstance, id: string) =>
 	root.findAll((node) => hostType(node) !== "" && modifiers(node).some((entry) => entry.modifier === "accessibilityIdentifier" && entry.args[0] === id))[0];
 const choices = (menu: ReactTestInstance) => menu.findAll((node) => hostType(node) === "Toggle");
 const choiceLabel = (choice: ReactTestInstance): string => choice.props.label ?? choice.findByType("Label" as never).props.title;
+
+describe("iOS harness mark", () => {
+	const drawn = async (harness: string) => {
+		await act(async () => { renderer = create(<HarnessImage harness={harness} />); });
+		const image = renderer!.root.findByType("Image" as never);
+		return { assetName: image.props.assetName, systemName: image.props.systemName };
+	};
+
+	it("draws a mark the binary's catalog has by name", async () => {
+		expect(await drawn("codex")).toEqual({ assetName: "HarnessLogo-codex", systemName: undefined });
+	});
+
+	// gemini has a mark, but its image set only reaches users with the next store
+	// build; asking an older catalog for it would draw an empty slot.
+	it("draws the terminal symbol for a harness whose image set the binary may lack", async () => {
+		expect(await drawn("gemini")).toEqual({ assetName: undefined, systemName: "terminal" });
+		expect(await drawn("some-new-agent")).toEqual({ assetName: undefined, systemName: "terminal" });
+	});
+});
 
 describe("iOS spawn selectors", () => {
 	// Each machine with its glyph, as each project has its folder.
