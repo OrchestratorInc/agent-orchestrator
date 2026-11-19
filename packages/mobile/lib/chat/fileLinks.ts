@@ -84,9 +84,14 @@ export function isBareFileReference(path: string): boolean {
 	return !path.includes("/") && !isAbsoluteFileReference(path);
 }
 
-/** The workspace path a bare name names: the exact path, else the one file with that name. */
-export function matchBareFile(name: string, paths: readonly string[]): string | null {
+/**
+ * The workspace path a bare name names: the exact path, else the one file with
+ * that name. A list cut short (`complete` false) proves an exact path but not
+ * that a name is unique, so then only the exact path counts.
+ */
+export function matchBareFile(name: string, paths: readonly string[], complete = true): string | null {
 	if (paths.includes(name)) return name;
+	if (!complete) return null;
 	let found: string | null = null;
 	for (const path of paths) {
 		if (path.slice(path.lastIndexOf("/") + 1) !== name) continue;

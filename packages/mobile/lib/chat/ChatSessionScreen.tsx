@@ -345,9 +345,9 @@ export function ChatSessionScreen({ session: boardSession }: { session: MobileCh
 				if (current()) router.push(fileRoute(session.id, path, currentHostId, previousPath, line));
 			});
 		},
-		bareFile: (name) => filePathsLoaded ? matchBareFile(name, filePaths) : undefined,
+		bareFile: (name) => filePathsLoaded ? matchBareFile(name, filePaths, !filePathsTruncated) : undefined,
 		wantFiles: () => loadFilePaths.current(),
-	}), [config, currentHostId, fileOpenStillHere, filePaths, filePathsLoaded, router, session.id, sessionName]);
+	}), [config, currentHostId, fileOpenStillHere, filePaths, filePathsLoaded, filePathsTruncated, router, session.id, sessionName]);
 	// The artifacts a turn made, drawn as cards under its reply.
 	const turnArtifacts = useTurnArtifactSourceFor(session.id, conversation.snapshot?.turns, currentHostId);
 	// Re-read git's totals when a turn reports edits, not on a timer.

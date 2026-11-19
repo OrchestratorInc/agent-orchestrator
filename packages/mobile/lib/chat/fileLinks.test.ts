@@ -59,6 +59,9 @@ describe("chat file links", () => {
 		// Two api.ts: no telling which one was meant.
 		expect(matchBareFile("api.ts", paths)).toBeNull();
 		expect(matchBareFile("example.com", paths)).toBeNull();
+		// A list cut short may leave out a second file by the same name.
+		expect(matchBareFile("README.md", paths, false)).toBe("README.md");
+		expect(matchBareFile("fileLinks.ts", paths, false)).toBeNull();
 	});
 
 	it("matches an absolute path to the longest worktree path it ends with", () => {
