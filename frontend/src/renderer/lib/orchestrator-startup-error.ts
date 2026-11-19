@@ -26,5 +26,5 @@ export function formatOrchestratorStartupError(message: string): string {
 	const guidance = isChild
 		? "Check this child's default branch and remote HEAD configuration, then retry starting the orchestrator."
 		: "Set its default branch in Project Settings, or check its remote configuration, then retry starting the orchestrator.";
-	return `Project added, but orchestrator did not start. AO could not determine the default branch for the ${repoLabel}. ${guidance}\n\nDetails: ${message}`;
+	return `Project added, but the orchestrator agent did not start. The default branch for the ${repoLabel} could not be determined. ${guidance}\n\nDetails: ${message}`;
 }

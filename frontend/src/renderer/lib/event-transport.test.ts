@@ -35,6 +35,9 @@ vi.mock("./bridge", () => ({
 }));
 
 vi.mock("./api-client", () => ({
+	apiErrorCode: () => undefined,
+	// Streams keep the daemon base URL here; api-client.test.ts covers the stream host.
+	eventStreamBaseUrl: (baseUrl: string) => baseUrl.replace(/\/+$/, ""),
 	getApiBaseUrl: getApiBaseUrlMock,
 	hasTrustedApiBaseUrl: hasTrustedApiBaseUrlMock,
 	subscribeApiBaseUrl: subscribeApiBaseUrlMock,
@@ -47,7 +50,9 @@ vi.mock("./host-clients", () => ({
 }));
 
 import { createEventTransport } from "./event-transport";
+import { interfaceTransitionRefetchInterval } from "../hooks/useSessionInterfaceTransition";
 import { getEventsConnectionState, setEventsConnectionState } from "./events-connection";
+import { conversationQueryOptions } from "../hooks/useConversation";
 
 class EventSourceStub {
 	static instances: EventSourceStub[] = [];
@@ -76,23 +81,30 @@ class EventSourceStub {
 	}
 }
 
-function fakeQueryClient() {
+/** openChats are the remote chats a view is showing: [hostId, sessionId]. */
+function fakeQueryClient(openChats: Array<[string, string]> = []) {
+	const open = openChats.map(([hostId, sessionId]) => ({ queryKey: ["remote-conversation", hostId, sessionId] }));
+	const matches = (key: readonly unknown[], prefix: readonly unknown[]) => prefix.every((part, index) => key[index] === part);
 	return {
 		invalidateQueries: vi.fn().mockResolvedValue(undefined),
 		isFetching: vi.fn().mockReturnValue(0),
 		refetchQueries: vi.fn().mockResolvedValue(undefined),
 		setQueryData: vi.fn(),
 		getQueryData: vi.fn(),
+		getQueryCache: () => ({
+			find: ({ queryKey }: { queryKey: readonly unknown[] }) => open.find((query) => query.queryKey.length === queryKey.length && matches(query.queryKey, queryKey)),
+			findAll: ({ queryKey }: { queryKey: readonly unknown[] }) => open.filter((query) => matches(query.queryKey, queryKey)),
+		}),
 	} as unknown as Parameters<typeof createEventTransport>[0];
 }
+
+const remoteLivePage = (sessionId: string) => ({
+	params: { path: { sessionId }, query: { beforeSequence: undefined, limit: 30, outputLimit: 512 } },
+});
 
 function cdcSources() {
 	// The local stream has no path prefix; remote hosts are mounted under /<host>/.
 	return EventSourceStub.instances.filter((source) => /^http:\/\/127\.0\.0\.1:\d+\/api\/v1\/events\?after=latest$/.test(source.url));
-}
-
-function accountSources() {
-	return EventSourceStub.instances.filter((source) => source.url.endsWith("/agents/codex/accounts/events"));
 }
 
 beforeEach(() => {
@@ -125,7 +137,7 @@ describe("createEventTransport", () => {
 		try {
 			connectedHostsMock.mockReturnValue(["tunnel", "direct"]);
 			baseUrlForHostMock.mockImplementation((hostId) => `http://127.0.0.1:4000/${hostId}`);
-			const client = fakeQueryClient();
+			const client = fakeQueryClient([["tunnel", "open-chat"]]);
 			const disconnect = createEventTransport(client).connect();
 			expect(EventSourceStub.instances.map((source) => source.url)).toContain("http://127.0.0.1:4000/tunnel/api/v1/events?after=latest");
 			expect(EventSourceStub.instances.map((source) => source.url)).toContain("http://127.0.0.1:4000/direct/api/v1/events?after=latest");
@@ -134,6 +146,8 @@ describe("createEventTransport", () => {
 			expect(client.invalidateQueries).toHaveBeenCalledWith({ queryKey: ["remote-workspaces", "tunnel"] }, { cancelRefetch: false });
 			expect(client.invalidateQueries).toHaveBeenCalledWith({ queryKey: ["reviewer-conversation", "tunnel"] }, { cancelRefetch: false });
 			expect(client.invalidateQueries).not.toHaveBeenCalledWith({ queryKey: ["remote-conversation", "tunnel"] }, { cancelRefetch: false });
+			// Without a stream, the open chat's live page is part of the poll.
+			expect(remoteGetMock).toHaveBeenCalledWith("/api/v1/sessions/{sessionId}/conversation", remoteLivePage("open-chat"));
 			expect(client.invalidateQueries).toHaveBeenCalledWith({ queryKey: ["remote-workspaces", "direct"] }, { cancelRefetch: false });
 			EventSourceStub.instances.find((source) => source.url.includes("/direct/"))!.emit("cursor", "0");
 			vi.mocked(client.invalidateQueries).mockClear();
@@ -149,7 +163,7 @@ describe("createEventTransport", () => {
 	});
 
 	it("streams each connected remote host and refreshes only its live conversation page", async () => {
-		const client = fakeQueryClient();
+		const client = fakeQueryClient([["box-a", "same"]]);
 		connectedHostsMock.mockReturnValue(["box-a", "box-b"]);
 		baseUrlForHostMock.mockImplementation((hostId) => `http://127.0.0.1:4000/${hostId}`);
 		const disconnect = createEventTransport(client).connect();
@@ -158,29 +172,33 @@ describe("createEventTransport", () => {
 		expect(remoteA.url).toBe("http://127.0.0.1:4000/box-a/api/v1/events?after=latest");
 		expect(remoteB.url).toBe("http://127.0.0.1:4000/box-b/api/v1/events?after=latest");
 		await Promise.resolve();
+		// The first frame proves the stream is live, which refreshes everything once.
+		remoteA.emit("cursor", "0");
+		expect(client.invalidateQueries).toHaveBeenCalledWith({ queryKey: ["remote-conversation", "box-a"] }, { cancelRefetch: false });
+		expect(client.invalidateQueries).toHaveBeenCalledWith({ queryKey: ["reviewer-conversation", "box-a"] }, { cancelRefetch: false });
+		await Promise.resolve();
 		vi.mocked(client.invalidateQueries).mockClear();
 
 		remoteA.emit("session_updated", JSON.stringify({ sessionId: "same", payload: { conversationId: "remote-conversation" } }));
+		remoteA.emit("session_updated", JSON.stringify({ sessionId: "closed", payload: { conversationId: "closed-conversation" } }));
 		remoteA.emit("review_run_updated", JSON.stringify({ sessionId: "same", payload: { reviewId: "review-1", conversationId: "review-conversation" } }));
+		// Conversation events refresh only the open chat, not the host's lists.
+		expect(client.invalidateQueries).not.toHaveBeenCalledWith({ queryKey: ["remote-workspaces", "box-a"] }, { cancelRefetch: false });
+		expect(client.invalidateQueries).toHaveBeenCalledWith({ queryKey: ["reviewer-conversation", "box-a", "review-1"] }, { cancelRefetch: false });
+		await vi.waitFor(() => expect(remoteGetMock).toHaveBeenCalledWith("/api/v1/sessions/{sessionId}/conversation", remoteLivePage("same")));
+		expect(remoteGetMock).not.toHaveBeenCalledWith("/api/v1/sessions/{sessionId}/conversation", remoteLivePage("closed"));
+		remoteA.emit("pr_updated", JSON.stringify({ sessionId: "same", payload: { id: "pr-1" } }));
 		expect(client.invalidateQueries).toHaveBeenCalledWith({ queryKey: ["remote-workspaces", "box-a"] }, { cancelRefetch: false });
 		expect(client.invalidateQueries).toHaveBeenCalledWith({ queryKey: ["project-config", "box-a"] }, { cancelRefetch: false });
 		expect(client.invalidateQueries).toHaveBeenCalledWith({ queryKey: ["session-usage", "detail", "box-a"] }, { cancelRefetch: false });
 		expect(client.invalidateQueries).toHaveBeenCalledWith({ queryKey: ["session-reviews", "box-a"] }, { cancelRefetch: false });
-		expect(client.invalidateQueries).toHaveBeenCalledWith({ queryKey: ["reviewer-conversation", "box-a", "review-1"] }, { cancelRefetch: false });
 		expect(client.invalidateQueries).toHaveBeenCalledWith({ queryKey: ["session-interface-transition", "box-a"] }, { cancelRefetch: false });
-		await vi.waitFor(() => expect(remoteGetMock).toHaveBeenCalledWith("/api/v1/sessions/{sessionId}/conversation", {
-			params: { path: { sessionId: "same" }, query: { beforeSequence: undefined, limit: 200 } },
-		}));
-		expect(client.invalidateQueries).toHaveBeenCalledWith({ queryKey: ["remote-conversation", "box-a"] }, { cancelRefetch: false });
 		expect(client.invalidateQueries).not.toHaveBeenCalledWith({ queryKey: ["remote-workspaces", "box-b"] }, { cancelRefetch: false });
 		expect(client.invalidateQueries).not.toHaveBeenCalledWith({ queryKey: ["project-config", "box-b"] }, { cancelRefetch: false });
 		expect(client.invalidateQueries).not.toHaveBeenCalledWith({ queryKey: ["session-usage", "detail", "box-b"] }, { cancelRefetch: false });
 		expect(client.invalidateQueries).not.toHaveBeenCalledWith({ queryKey: ["session-reviews", "box-b"] }, { cancelRefetch: false });
 		expect(client.invalidateQueries).not.toHaveBeenCalledWith({ queryKey: ["reviewer-conversation", "box-b", "review-1"] }, { cancelRefetch: false });
 		expect(client.invalidateQueries).not.toHaveBeenCalledWith({ queryKey: ["session-interface-transition", "box-b"] }, { cancelRefetch: false });
-		remoteA.emit("cursor", "0");
-		expect(client.invalidateQueries).toHaveBeenCalledWith({ queryKey: ["remote-conversation", "box-a"] }, { cancelRefetch: false });
-		expect(client.invalidateQueries).toHaveBeenCalledWith({ queryKey: ["reviewer-conversation", "box-a"] }, { cancelRefetch: false });
 
 		connectedHostsMock.mockReturnValue(["box-b"]);
 		const hostsChanged = subscribeConnectedHostsMock.mock.calls[0][0] as () => void;
@@ -197,7 +215,7 @@ describe("createEventTransport", () => {
 		baseUrlForHostMock.mockReturnValue("http://127.0.0.1:4000/box-a");
 		const replies: Array<(value: unknown) => void> = [];
 		remoteGetMock.mockImplementation(() => new Promise((resolve) => replies.push(resolve)));
-		const disconnect = createEventTransport(fakeQueryClient()).connect();
+		const disconnect = createEventTransport(fakeQueryClient([["box-a", "same"]])).connect();
 		const remote = EventSourceStub.instances.find((source) => source.url.includes("/box-a/"))!;
 		const event = JSON.stringify({ sessionId: "same", payload: { conversationId: "remote-conversation" } });
 		for (let i = 0; i < 10; i += 1) remote.emit("session_updated", event);
@@ -207,6 +225,32 @@ describe("createEventTransport", () => {
 		replies[1]({ data: { conversationId: "remote-conversation", sessionId: "same", mode: "chat", controller: "idle", latestSequence: 0, messages: [], activities: [] } });
 		await vi.waitFor(() => expect(remoteGetMock).toHaveBeenCalledTimes(2));
 		disconnect();
+	});
+
+	it("rate limits id-only remote session updates and refreshes a chat that is not ready", async () => {
+		vi.useFakeTimers();
+		try {
+			connectedHostsMock.mockReturnValue(["box-a"]);
+			baseUrlForHostMock.mockReturnValue("http://127.0.0.1:4000/box-a");
+			const client = fakeQueryClient([["box-a", "waking"]]);
+			const disconnect = createEventTransport(client).connect();
+			const remote = EventSourceStub.instances.find((source) => source.url.includes("/box-a/"))!;
+			remote.emit("cursor", "0");
+			await vi.advanceTimersByTimeAsync(0);
+			vi.mocked(client.invalidateQueries).mockClear();
+			remoteGetMock.mockClear();
+			const idOnly = JSON.stringify({ type: "session_updated", sessionId: "waking", payload: { id: "waking" } });
+			remote.emit("session_updated", idOnly);
+			remote.emit("session_updated", idOnly);
+			// The stream opening refreshed the lists just now, so the id-only updates wait.
+			expect(client.invalidateQueries).not.toHaveBeenCalledWith({ queryKey: ["remote-workspaces", "box-a"] }, { cancelRefetch: false });
+			// The chat has no ready controller in the cache, so it reads its page.
+			expect(remoteGetMock).toHaveBeenCalledWith("/api/v1/sessions/{sessionId}/conversation", remoteLivePage("waking"));
+			await vi.advanceTimersByTimeAsync(5_000);
+			const listRefreshes = vi.mocked(client.invalidateQueries).mock.calls.filter(([filters]) => JSON.stringify(filters) === JSON.stringify({ queryKey: ["remote-workspaces", "box-a"] }));
+			expect(listRefreshes).toHaveLength(1);
+			disconnect();
+		} finally { vi.useRealTimers(); }
 	});
 
 	it("refetches only the affected host when its live stream drops", async () => {
@@ -226,6 +270,65 @@ describe("createEventTransport", () => {
 		vi.mocked(client.invalidateQueries).mockClear();
 		remoteA.onerror?.();
 		expect(client.invalidateQueries).not.toHaveBeenCalled();
+		disconnect();
+	});
+
+	it("reopens a dropped host stream and stops polling once it delivers again", async () => {
+		vi.useFakeTimers();
+		try {
+			connectedHostsMock.mockReturnValue(["box-a"]);
+			baseUrlForHostMock.mockReturnValue("http://127.0.0.1:4000/box-a");
+			const client = fakeQueryClient();
+			const disconnect = createEventTransport(client).connect();
+			const streams = () => EventSourceStub.instances.filter((source) => source.url.includes("/box-a/"));
+			const listPolled = async () => {
+				// A refresh still settling queues one catch-up; let it land first.
+				await vi.advanceTimersByTimeAsync(0);
+				vi.mocked(client.invalidateQueries).mockClear();
+				await vi.advanceTimersByTimeAsync(2_000);
+				return vi.mocked(client.invalidateQueries).mock.calls.some(([filters]) => JSON.stringify(filters) === JSON.stringify({ queryKey: ["remote-workspaces", "box-a"] }));
+			};
+			streams()[0].emit("cursor", "0");
+			expect(await listPolled()).toBe(false);
+
+			// The host stays connected, so nothing else would ever reopen the stream.
+			streams()[0].onerror?.();
+			expect(await listPolled()).toBe(true);
+			await vi.advanceTimersByTimeAsync(5_000);
+			expect(streams()).toHaveLength(2);
+			streams()[1].emit("cursor", "0");
+			expect(await listPolled()).toBe(false);
+
+			// A host that leaves cancels the pending reopen.
+			streams()[1].onerror?.();
+			connectedHostsMock.mockReturnValue([]);
+			(subscribeConnectedHostsMock.mock.calls[0][0] as () => void)();
+			await vi.advanceTimersByTimeAsync(120_000);
+			expect(streams()).toHaveLength(2);
+			disconnect();
+		} finally { vi.useRealTimers(); }
+	});
+
+	it("clears an open chat's failed read when its host returns, with no event to prompt one", async () => {
+		const refreshFailed = ["remote-conversation-refresh-error", "box-a", "same"];
+		connectedHostsMock.mockReturnValue(["box-a"]);
+		baseUrlForHostMock.mockReturnValue("http://127.0.0.1:4000/box-a");
+		const client = fakeQueryClient([["box-a", "same"]]);
+		const disconnect = createEventTransport(client).connect();
+		const hostsChanged = subscribeConnectedHostsMock.mock.calls[0][0] as () => void;
+		const stream = () => EventSourceStub.instances.filter((source) => source.url.includes("/box-a/")).at(-1)!;
+		remoteGetMock.mockRejectedValueOnce(new Error("host away"));
+		stream().emit("session_updated", JSON.stringify({ sessionId: "same", payload: { conversationId: "remote-conversation" } }));
+		await vi.waitFor(() => expect(client.setQueryData).toHaveBeenCalledWith(refreshFailed, true));
+
+		connectedHostsMock.mockReturnValue([]);
+		hostsChanged();
+		connectedHostsMock.mockReturnValue(["box-a"]);
+		hostsChanged();
+		vi.mocked(client.setQueryData).mockClear();
+		// The stream answers at once, so the fallback poll never ticks.
+		stream().emit("cursor", "0");
+		await vi.waitFor(() => expect(client.setQueryData).toHaveBeenCalledWith(refreshFailed, false));
 		disconnect();
 	});
 
@@ -258,20 +361,16 @@ describe("createEventTransport", () => {
 			const client = fakeQueryClient();
 			const disconnect = createEventTransport(client).connect();
 			const cdc = cdcSources()[0];
-			const accounts = accountSources()[0];
 			disconnect();
 			cdc.onopen?.();
 			cdc.onerror?.();
-			accounts.onopen?.();
-			accounts.onerror?.();
-			accounts.emit("codex_account", JSON.stringify({ accounts: [], accountRevision: 1 }));
 			onStatusMock.mock.calls[0][0]();
 			await vi.advanceTimersByTimeAsync(60_000);
 			expect(client.invalidateQueries).not.toHaveBeenCalled();
 			expect(client.refetchQueries).not.toHaveBeenCalled();
 			expect(client.setQueryData).not.toHaveBeenCalled();
 			expect(getEventsConnectionState()).toBe("idle");
-			expect(EventSourceStub.instances).toHaveLength(2);
+			expect(EventSourceStub.instances).toHaveLength(1);
 		} finally { vi.useRealTimers(); }
 	});
 
@@ -304,20 +403,17 @@ describe("createEventTransport", () => {
 		}
 	});
 
-	it("opens the CDC and Codex account SSE connections on connect", () => {
+	it("opens the CDC SSE connection on connect", () => {
 		createEventTransport(fakeQueryClient()).connect();
 
-		expect(EventSourceStub.instances).toHaveLength(2);
+		expect(EventSourceStub.instances).toHaveLength(1);
 		expect(cdcSources()).toHaveLength(1);
-		expect(accountSources()).toHaveLength(1);
 		expect(cdcSources()[0].url).toBe("http://127.0.0.1:3001/api/v1/events?after=latest");
-		expect(accountSources()[0].url).toBe("http://127.0.0.1:3001/api/v1/agents/codex/accounts/events");
 		// All CDC event types plus onmessage are wired up.
 		expect(cdcSources()[0].listeners).toContain("session_updated");
 		expect(cdcSources()[0].listeners).toContain("review_run_created");
 		expect(cdcSources()[0].listeners).toContain("review_run_updated");
 		expect(cdcSources()[0].onmessage).toBeTypeOf("function");
-		expect(accountSources()[0].listeners).toContain("codex_account");
 	});
 
 	it("does not reconnect when a daemon status keeps the same base URL", () => {
@@ -326,22 +422,19 @@ describe("createEventTransport", () => {
 
 		onStatusHandler();
 
-		expect(EventSourceStub.instances).toHaveLength(2);
+		expect(EventSourceStub.instances).toHaveLength(1);
 	});
 
 	it("closes the old connection and reconnects when the base URL changes", () => {
 		createEventTransport(fakeQueryClient()).connect();
 		const first = cdcSources()[0];
-		const firstAccount = accountSources()[0];
 		const onStatusHandler = onStatusMock.mock.calls[0][0] as () => void;
 
 		getApiBaseUrlMock.mockReturnValue("http://127.0.0.1:3099");
 		onStatusHandler();
 
 		expect(first.closed).toBe(true);
-		expect(firstAccount.closed).toBe(true);
 		expect(cdcSources()).toHaveLength(2);
-		expect(accountSources()).toHaveLength(2);
 		expect(cdcSources()[1].url).toBe("http://127.0.0.1:3099/api/v1/events?after=latest");
 	});
 
@@ -359,13 +452,11 @@ describe("createEventTransport", () => {
 			vi.advanceTimersByTime(computeSseRetryDelayMs(failure, () => 0.5));
 		}
 		const beforeCdcMove = cdcSources().length;
-		const beforeAccountMove = accountSources().length;
 
 		// The daemon comes back on a different port: a fresh target.
 		getApiBaseUrlMock.mockReturnValue("http://127.0.0.1:3099");
 		onStatusHandler();
 		expect(cdcSources()).toHaveLength(beforeCdcMove + 1);
-		expect(accountSources()).toHaveLength(beforeAccountMove + 1);
 
 		const moved = cdcSources().at(-1)!;
 		moved.readyState = 2;
@@ -382,15 +473,13 @@ describe("createEventTransport", () => {
 	it("closes the source and skips reconnecting when the base URL is untrusted", () => {
 		createEventTransport(fakeQueryClient()).connect();
 		const first = cdcSources()[0];
-		const firstAccount = accountSources()[0];
 		const onStatusHandler = onStatusMock.mock.calls[0][0] as () => void;
 
 		hasTrustedApiBaseUrlMock.mockReturnValue(false);
 		onStatusHandler();
 
 		expect(first.closed).toBe(true);
-		expect(firstAccount.closed).toBe(true);
-		expect(EventSourceStub.instances).toHaveLength(2);
+		expect(EventSourceStub.instances).toHaveLength(1);
 		expect(getEventsConnectionState()).toBe("disconnected");
 	});
 
@@ -634,6 +723,50 @@ describe("createEventTransport", () => {
 		}
 	});
 
+	it("refreshes spent switch readiness on session-row CDC without resuming unbounded polling", async () => {
+		vi.useFakeTimers();
+		const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false, refetchOnWindowFocus: false } } });
+		const queryKey = ["session-interface-transition", "slow-setup"] as const;
+		const waiting = { supported: false, targetMode: "chat", reasonCode: "NATIVE_SESSION_MISSING" };
+		const queryFn = vi.fn().mockResolvedValue(waiting);
+		const observer = new QueryObserver(queryClient, {
+			queryKey, queryFn, refetchInterval: interfaceTransitionRefetchInterval,
+		});
+		const unsubscribe = observer.subscribe(() => {});
+		const disconnect = createEventTransport(queryClient).connect();
+		try {
+			await vi.advanceTimersByTimeAsync(30_000);
+			expect(queryFn).toHaveBeenCalledTimes(11);
+			const emit = (payload: object) => cdcSources()[0].emit("session_updated", JSON.stringify({
+				type: "session_updated", sessionId: "slow-setup", payload,
+			}));
+			// Usage bookkeeping cannot reopen the spent readiness window.
+			emit({ id: "slow-setup" });
+			await vi.advanceTimersByTimeAsync(30_000);
+			expect(queryFn).toHaveBeenCalledTimes(11);
+			// A row update can still precede the native hook. It rechecks once,
+			// but the unchanged reason does not replenish the polling budget.
+			emit({ id: "slow-setup", activity: "active", provisionState: "ready" });
+			await vi.advanceTimersByTimeAsync(30_000);
+			expect(queryFn).toHaveBeenCalledTimes(12);
+			expect(queryClient.getQueryData(queryKey)).toEqual(waiting);
+			// Native identity changes emit the same row payload, even if activity
+			// did not change. That event must clear the stale disabled switch.
+			queryFn.mockResolvedValue({ supported: true, targetMode: "chat" });
+			emit({ id: "slow-setup", activity: "active", provisionState: "ready" });
+			await vi.advanceTimersByTimeAsync(200);
+			expect(queryClient.getQueryData(queryKey)).toEqual({ supported: true, targetMode: "chat" });
+			expect(queryFn).toHaveBeenCalledTimes(13);
+			await vi.advanceTimersByTimeAsync(30_000);
+			expect(queryFn).toHaveBeenCalledTimes(13);
+		} finally {
+			unsubscribe();
+			disconnect();
+			queryClient.clear();
+			vi.useRealTimers();
+		}
+	});
+
 	it("invalidates the named interface transition status for transition CDC", () => {
 		vi.useFakeTimers();
 		try {
@@ -664,59 +797,12 @@ describe("createEventTransport", () => {
 		}
 	});
 
-	it("normalizes account stream snapshots without invalidating workspaces", () => {
-		let cached: unknown;
-		const queryClient = {
-			invalidateQueries: vi.fn(),
-			setQueryData: vi.fn((_key: readonly string[], update: unknown) => {
-				cached = typeof update === "function" ? update(undefined) : update;
-			}),
-		} as unknown as Parameters<typeof createEventTransport>[0];
-		createEventTransport(queryClient).connect();
-
-		accountSources()[0].emit("codex_account", JSON.stringify({
-			activeAccountId: "account-1",
-			accountRevision: 2,
-			accounts: [{ id: "account-1", active: true }],
-			capabilities: {},
-			deviceReconciliation: {
-				status: "verified",
-				activeAccountVerified: true,
-				reasonCode: "verified",
-				retryable: false,
-			},
-		}));
-
-		expect(cached).toMatchObject({ activeAccountId: "account-1", accountRevision: 2 });
-		expect(cached).toMatchObject({ accounts: [{ id: "account-1", active: true }] });
-		expect(queryClient.invalidateQueries).not.toHaveBeenCalledWith({ queryKey: ["workspaces"] }, { cancelRefetch: false });
-	});
-
-	it("keeps account stream open and CDC invalidation within their own cache domains", () => {
-		vi.useFakeTimers();
-		try {
-			const queryClient = fakeQueryClient();
-			createEventTransport(queryClient).connect();
-			accountSources()[0].onopen?.();
-			expect(queryClient.invalidateQueries).toHaveBeenCalledWith({ queryKey: ["codex-accounts"] });
-			expect(queryClient.invalidateQueries).not.toHaveBeenCalledWith({ queryKey: ["workspaces"] }, { cancelRefetch: false });
-
-			vi.mocked(queryClient.invalidateQueries).mockClear();
-			cdcSources()[0].emit("session_updated", JSON.stringify({ sessionId: "session-1", payload: {} }));
-			vi.advanceTimersByTime(200);
-			expect(queryClient.invalidateQueries).not.toHaveBeenCalledWith({ queryKey: ["codex-accounts"] });
-		} finally {
-			vi.useRealTimers();
-		}
-	});
-
 	it("tears down the source and the daemon listener on disconnect", () => {
 		const disconnect = createEventTransport(fakeQueryClient()).connect();
 
 		disconnect();
 
 		expect(cdcSources()[0].closed).toBe(true);
-		expect(accountSources()[0].closed).toBe(true);
 		expect(removeStatusMock).toHaveBeenCalledTimes(1);
 	});
 
@@ -837,15 +923,12 @@ describe("createEventTransport", () => {
 		expect(subscribeApiBaseUrlMock).toHaveBeenCalledTimes(1);
 		const onBaseUrlChange = subscribeApiBaseUrlMock.mock.calls[0][0] as () => void;
 		const first = cdcSources()[0];
-		const firstAccount = accountSources()[0];
 
 		getApiBaseUrlMock.mockReturnValue("http://127.0.0.1:4555");
 		onBaseUrlChange();
 
 		expect(first.closed).toBe(true);
-		expect(firstAccount.closed).toBe(true);
 		expect(cdcSources()).toHaveLength(2);
-		expect(accountSources()).toHaveLength(2);
 		expect(cdcSources()[1].url).toBe("http://127.0.0.1:4555/api/v1/events?after=latest");
 	});
 
@@ -1200,4 +1283,103 @@ it("refreshes again when a root catch-up joins an older targeted conversation fe
 		client.clear();
 		vi.useRealTimers();
 	}
+});
+
+describe("local chat tail refresh", () => {
+	const wire = (extra: Record<string, unknown>) => ({
+		data: { conversationId: "c1", sessionId: "local-chat", mode: "chat", controller: "busy", latestSequence: 4, activeBranchId: "b1", turns: [], messages: [], activities: [], ...extra },
+	});
+	const wireTurn = (id: string, state: string) => ({ id, state, requestedAt: `2026-11-03T00:00:0${id.slice(-1)}Z` });
+	const wireMessage = (id: string, turnId: string, sequence: number, text = id) => ({ kind: "message", id, turnId, sequence, revision: 1, role: "user", origin: "human", text, createdAt: "" });
+	// t1 settled at 1-2, so the floor is 2; t2 is still running at 3-4.
+	const wholePage = wire({ oldestSequence: 1, turns: [wireTurn("t1", "completed"), wireTurn("t2", "running")], messages: [wireMessage("m1", "t1", 1), wireMessage("r1", "t1", 2), wireMessage("m2", "t2", 3), wireMessage("r2", "t2", 4, "partial")] });
+	const emit = () => cdcSources()[0].emit("session_updated", JSON.stringify({ sessionId: "local-chat", payload: { conversationId: "c1" } }));
+	const queries = () => remoteGetMock.mock.calls.map((call) => call[1].params.query);
+
+	it("catches up after an older-page read that overlapped a merged tail lands", async () => {
+		const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+		// t0 is on the older page at 1-2; the live page holds t1 (settled, 3-4) and t2 (running, 5-6), so its floor is 4.
+		let liveText = "partial";
+		const livePage = () => wire({
+			latestSequence: 6, oldestSequence: 3, hasMoreBefore: true,
+			turns: [wireTurn("t1", "completed"), wireTurn("t2", "running")],
+			messages: [wireMessage("m1", "t1", 3), wireMessage("r1", "t1", 4), wireMessage("m2", "t2", 5), wireMessage("r2", "t2", 6, liveText)],
+		});
+		const olderPage = wire({ latestSequence: 2, oldestSequence: 1, turns: [wireTurn("t0", "completed")], messages: [wireMessage("m0", "t0", 1), wireMessage("r0", "t0", 2)] });
+		let finishTail: ((value: unknown) => void) | undefined;
+		let finishOlder: ((value: unknown) => void) | undefined;
+		let olderReads = 0;
+		let fullReads = 0;
+		remoteGetMock.mockReset().mockImplementation((_path: string, init: { params: { query: { afterSequence?: number; beforeSequence?: number } } }) => {
+			const { afterSequence, beforeSequence } = init.params.query;
+			if (afterSequence) return new Promise((resolve) => { finishTail = resolve; });
+			if (beforeSequence) {
+				// The first older read is the user's scroll, held open past the tail.
+				olderReads++;
+				return olderReads === 1 ? new Promise((resolve) => { finishOlder = resolve; }) : Promise.resolve(olderPage);
+			}
+			fullReads++;
+			return Promise.resolve(livePage());
+		});
+		const observer = new InfiniteQueryObserver(client, conversationQueryOptions("local-chat"));
+		const unsubscribe = observer.subscribe(() => undefined);
+		const disconnect = createEventTransport(client).connect();
+		const data = () => client.getQueryData<{ pages: Array<{ items: Array<{ id: string; text?: string }> }> }>(["conversation", "local-chat"]);
+		const text = (id: string) => data()?.pages[0].items.find((item) => item.id === id)?.text;
+		try {
+			await vi.waitFor(() => expect(text("r2")).toBe("partial"));
+			emit();
+			await vi.waitFor(() => expect(finishTail).toBeDefined());
+			void observer.fetchNextPage();
+			await vi.waitFor(() => expect(finishOlder).toBeDefined());
+
+			// The tail lands first and merges.
+			liveText = "partial and more";
+			finishTail!(wire({ afterSequence: 4, latestSequence: 6, oldestSequence: 5, turns: [wireTurn("t2", "running")], messages: [wireMessage("m2", "t2", 5), wireMessage("r2", "t2", 6, "partial and more")] }));
+			await vi.waitFor(() => expect(text("r2")).toBe("partial and more"));
+			const readsBeforeOlder = fullReads;
+
+			// The older page lands last and writes back the live page it captured; a catch-up reads the chat again.
+			finishOlder!(olderPage);
+			await vi.waitFor(() => {
+				expect(data()?.pages).toHaveLength(2);
+				expect(text("r2")).toBe("partial and more");
+				expect(fullReads).toBeGreaterThan(readsBeforeOlder);
+			});
+		} finally {
+			disconnect();
+			unsubscribe();
+			client.clear();
+		}
+	});
+
+	it("reads only an open chat's tail and refetches the whole chat only when the tail cannot be merged", async () => {
+		const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+		remoteGetMock.mockReset().mockResolvedValueOnce(wholePage);
+		const observer = new InfiniteQueryObserver(client, conversationQueryOptions("local-chat"));
+		const unsubscribe = observer.subscribe(() => undefined);
+		const disconnect = createEventTransport(client).connect();
+		const text = (id: string) => client.getQueryData<{ pages: Array<{ items: Array<{ id: string; text?: string }> }> }>(["conversation", "local-chat"])
+			?.pages[0].items.find((item) => item.id === id)?.text;
+		try {
+			await vi.waitFor(() => expect(text("r2")).toBe("partial"));
+
+			remoteGetMock.mockResolvedValueOnce(wire({ afterSequence: 2, oldestSequence: 3, turns: [wireTurn("t2", "running")], messages: [wireMessage("m2", "t2", 3), wireMessage("r2", "t2", 4, "partial and more")] }));
+			emit();
+			await vi.waitFor(() => expect(text("r2")).toBe("partial and more"));
+			expect(queries()).toEqual([{ beforeSequence: undefined, limit: 30 }, { afterSequence: 2, limit: 30 }]);
+
+			// The turn settles: the tail no longer merges, so the whole chat is read as before.
+			remoteGetMock
+				.mockResolvedValueOnce(wire({ afterSequence: 2, oldestSequence: 3, turns: [wireTurn("t2", "completed")], messages: [wireMessage("m2", "t2", 3), wireMessage("r2", "t2", 4, "done")] }))
+				.mockResolvedValueOnce(wire({ oldestSequence: 1, turns: [wireTurn("t1", "completed"), wireTurn("t2", "completed")], messages: [wireMessage("m1", "t1", 1), wireMessage("r1", "t1", 2), wireMessage("m2", "t2", 3), wireMessage("r2", "t2", 4, "done")] }));
+			emit();
+			await vi.waitFor(() => expect(text("r2")).toBe("done"));
+			expect(queries().slice(2)).toEqual([{ afterSequence: 2, limit: 30 }, { beforeSequence: undefined, limit: 30 }]);
+		} finally {
+			disconnect();
+			unsubscribe();
+			client.clear();
+		}
+	});
 });

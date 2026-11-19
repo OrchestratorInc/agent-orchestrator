@@ -83,14 +83,31 @@ func (m *Manager) initializeNativeRestore(parent context.Context, original domai
 	if err := poll(plan.Restored); err != nil {
 		return err
 	}
-	if err := m.lcm.ApplyActivitySignal(ctx, original.ID, ports.ActivitySignal{ExpectedHarness: original.Harness, LaunchID: launchID, AgentSessionID: plan.TargetID(), Event: "session-start", Valid: true, State: domain.ActivityIdle, Timestamp: m.clock()}); err != nil {
+	target := strings.TrimSpace(plan.TargetID())
+	if target == "" || target != plan.TargetID() {
+		return errors.New("native restore did not identify its conversation")
+	}
+	if target != original.Metadata.AgentSessionID {
+		return errors.New("native restore changed the requested conversation")
+	}
+	current, err := m.getRecord(ctx, original.ID)
+	if err != nil {
+		return err
+	}
+	if current.IsTerminated {
+		return errors.New("native restore terminated before publication")
+	}
+	if err := m.exactLaunchPreWrite(original.ID, original.Harness, handle, launchID, errors.New("native restore generation lost before publication"))(ctx, current); err != nil {
+		return err
+	}
+	if err := m.lcm.ApplyActivitySignal(ctx, original.ID, ports.ActivitySignal{ExpectedHarness: original.Harness, LaunchID: launchID, AgentSessionID: target, Event: "session-start", Valid: true, State: domain.ActivityIdle, Timestamp: m.clock()}); err != nil {
 		return err
 	}
 	rec, err := m.getRecord(ctx, original.ID)
 	if err != nil {
 		return err
 	}
-	if rec.IsTerminated || rec.Metadata.RuntimeHandleID != handle.ID || rec.Metadata.RuntimeLaunchID != launchID || rec.Metadata.AgentSessionID != plan.TargetID() || rec.Metadata.AgentSessionIDLaunchID != launchID {
+	if rec.IsTerminated || rec.Metadata.RuntimeHandleID != handle.ID || rec.Metadata.RuntimeLaunchID != launchID || rec.Metadata.AgentSessionID != target || rec.Metadata.AgentSessionIDLaunchID != launchID {
 		return errors.New("native restore identity publication not confirmed")
 	}
 	return nil

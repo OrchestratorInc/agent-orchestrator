@@ -1,5 +1,6 @@
+import { apiErrorException } from "../lib/api-error-exception";
 import { useQuery } from "@tanstack/react-query";
-import { apiClient, apiErrorMessage } from "../lib/api-client";
+import { apiClient } from "../lib/api-client";
 
 type WorkerTuning = { model?: string; mode?: string; effort?: string };
 
@@ -16,7 +17,7 @@ export function useProjectWorkerDefaults(projectId: string) {
 			const { data, error } = await apiClient.GET("/api/v1/projects/{id}", {
 				params: { path: { id: projectId } },
 			});
-			if (error) throw new Error(apiErrorMessage(error));
+			if (error) throw apiErrorException(error);
 			if (data?.status !== "ok") throw new Error("Project config unavailable");
 			return data.project as { agent?: string; config?: { agentConfig?: WorkerTuning; worker?: { agent?: string; agentConfig?: WorkerTuning } } };
 		},

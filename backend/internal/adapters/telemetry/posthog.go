@@ -20,20 +20,39 @@ import (
 
 	"github.com/google/uuid"
 
+	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
 	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
 )
 
 const postHogBufferSize = 128
 const maxCommandShapeLength = 48
-const remoteTelemetrySchemaVersion = 2
 
-var remoteEventNameAliases = map[string]string{
-	"ao.app.active":              "ao.v2.app.active",
-	"ao.cli.invoked":             "ao.v2.cli.invoked",
-	"ao.renderer.route_viewed":   "ao.v2.renderer.route_viewed",
-	"ao.renderer.loaded":         "ao.v2.renderer.loaded",
-	"ao.renderer.api_error":      "ao.v2.renderer.api_error",
-	"ao.renderer.daemon_failure": "ao.v2.renderer.daemon_failure",
+// 3 marks the {product}.{object}.{verb} names: legacy clients sent ao.cli.invoked
+// and ao.app.active without a version, and 2 used the ao.v2.* names.
+const remoteTelemetrySchemaVersion = 3
+
+// legacyEventNames lists the names an event was exported under before the
+// {product}.{object}.{past_tense_verb} rename. Export uses the current name only;
+// these exist so a kill-switch entry written against an old name
+// (AO_TELEMETRY_DISABLED_EVENTS) still silences the renamed stream.
+var legacyEventNames = map[string][]string{
+	"ao.sessions.spawned":            {"ao.session.spawned"},
+	"ao.sessions.spawn_failed":       {"ao.session.spawn_failed"},
+	"ao.sessions.input_wait_started": {"ao.session.waiting_input_entered"},
+	"ao.sessions.input_wait_ended":   {"ao.session.waiting_input_exited"},
+	"ao.sessions.first_spawned":      {"ao.onboarding.first_session_spawned"},
+	"ao.projects.first_added":        {"ao.onboarding.first_project_added"},
+	"ao.reviews.triggered":           {"ao.review.triggered"},
+	"ao.reviews.submitted":           {"ao.review.submitted"},
+	"ao.reviews.trigger_failed":      {"ao.review.trigger_failed"},
+	"ao.reviews.cancelled":           {"ao.review.cancelled"},
+	"ao.usage.cli_usage_errors":      {"ao.cli.usage_errors"},
+	"ao.harnesses.updated":           {"ao.harness.update"},
+	"ao.harnesses.version_switched":  {"ao.harness.version_switch"},
+	// ao.app.active is the desktop heartbeat's current name, so it does not
+	// silence the CLI one; the shared pre-rename ao.v2.app.active does.
+	"ao.cli.active":  {"ao.v2.app.active"},
+	"ao.cli.invoked": {"ao.v2.cli.invoked"},
 }
 
 var remoteCommandTokens = map[string]struct{}{
@@ -85,6 +104,15 @@ var remoteCommandTokens = map[string]struct{}{
 }
 
 var remotePayloadAllowlist = map[string]map[string]struct{}{
+	"ao.automation.created":     {"use_case": {}, "template_id": {}},
+	"ao.daemon.write_lock_held": {"caller": {}, "duration_ms": {}},
+
+	// Artifact registrations: where they came from, their content category and
+	// size band and how many, or why the daemon refused one. Never a name,
+	// path or session.
+	"ao.artifacts.registered":      {"source": {}, "content_category": {}, "size_bucket": {}, "count": {}},
+	"ao.artifacts.register_failed": {"source": {}, "reason": {}},
+
 	// count is direct human Chat messages; steer_count and send_count are the
 	// other human sends; the surface counts split all three by client.
 	"ao.usage.messages_sent": {
@@ -142,7 +170,7 @@ var remotePayloadAllowlist = map[string]map[string]struct{}{
 	"ao.mobile.device_connected": {
 		"transport": {},
 	},
-	"ao.app.active": {
+	"ao.cli.active": {
 		"actor_type":   {},
 		"channel":      {},
 		"command":      {},
@@ -153,7 +181,7 @@ var remotePayloadAllowlist = map[string]map[string]struct{}{
 		"command":      {},
 		"command_path": {},
 	},
-	"ao.cli.usage_errors": {
+	"ao.usage.cli_usage_errors": {
 		"component":    {},
 		"command":      {},
 		"command_path": {},
@@ -187,9 +215,6 @@ var remotePayloadAllowlist = map[string]map[string]struct{}{
 	"ao.app.installed": {
 		"launcher": {},
 	},
-	"ao.install.created": {
-		"launcher": {},
-	},
 	"ao.daemon.started": {
 		"agent": {},
 		"port":  {},
@@ -199,32 +224,31 @@ var remotePayloadAllowlist = map[string]map[string]struct{}{
 		"window_start": {},
 		"window_end":   {},
 	},
-	"ao.onboarding.first_project_added": {
+	"ao.projects.first_added": {
 		"has_git_remote": {},
 		"kind":           {},
 		"github_org":     {},
 		"scm_provider":   {},
 	},
-	"ao.onboarding.first_session_spawned": {
+	"ao.sessions.first_spawned": {
 		"harness":                {},
 		"kind":                   {},
 		"since_first_project_ms": {},
 	},
-	"ao.app.first_opened":      {},
-	"ao.cli.first_used":        {},
-	"ao.app.next_day_returned": {},
-	"ao.review.triggered": {
+	"ao.app.first_opened": {},
+	"ao.cli.first_used":   {},
+	"ao.reviews.triggered": {
 		"created_runs": {},
 		"harness":      {},
 		"rerun":        {},
 
 		"trigger": {},
 	},
-	"ao.review.trigger_failed": {
+	"ao.reviews.trigger_failed": {
 		"error_kind": {},
 		"trigger":    {},
 	},
-	"ao.review.submitted": {
+	"ao.reviews.submitted": {
 		"auto_inject":        {},
 		"body_bytes":         {},
 		"duration_ms":        {},
@@ -233,7 +257,7 @@ var remotePayloadAllowlist = map[string]map[string]struct{}{
 		"trigger":            {},
 		"verdict":            {},
 	},
-	"ao.review.cancelled": {
+	"ao.reviews.cancelled": {
 		"cancelled_runs": {},
 	},
 	"ao.projects.created": {
@@ -243,15 +267,52 @@ var remotePayloadAllowlist = map[string]map[string]struct{}{
 		"github_org":        {},
 		"scm_provider":      {},
 	},
-	"ao.session.spawn_failed": {
-		"component":   {},
-		"duration_ms": {},
-		"error_code":  {},
-		"error_kind":  {},
-		"fingerprint": {},
-		"harness":     {},
-		"kind":        {},
-		"operation":   {},
+	"ao.sessions.spawn_failed": {
+		"component":         {},
+		"duration_ms":       {},
+		"spawn_duration_ms": {},
+		"error_code":        {},
+		"error_kind":        {},
+		"fingerprint":       {},
+		"harness":           {},
+		"kind":              {},
+		"operation":         {},
+		"created_by":        {},
+		"surface":           {},
+		"failed_step":       {},
+		"cause":             {},
+		"model_check_ms":    {},
+		"branch_fetch_ms":   {},
+		"worktree_ms":       {},
+		"setup_ms":          {},
+		"agent_start_ms":    {},
+		"mode":              {},
+		"async":             {},
+		"model":             {},
+	},
+	// A start cancelled on purpose; same props as spawn_failed.
+	"ao.sessions.spawn_cancelled": {
+		"component":         {},
+		"duration_ms":       {},
+		"spawn_duration_ms": {},
+		"error_code":        {},
+		"error_kind":        {},
+		"fingerprint":       {},
+		"harness":           {},
+		"kind":              {},
+		"operation":         {},
+		"created_by":        {},
+		"surface":           {},
+		"failed_step":       {},
+		"cause":             {},
+		"model_check_ms":    {},
+		"branch_fetch_ms":   {},
+		"worktree_ms":       {},
+		"setup_ms":          {},
+		"agent_start_ms":    {},
+		"mode":              {},
+		"async":             {},
+		"model":             {},
 	},
 	"ao.session.relaunch_failed": {
 		"cause_type":  {},
@@ -263,14 +324,23 @@ var remotePayloadAllowlist = map[string]map[string]struct{}{
 		"operation":   {},
 		"step":        {},
 	},
-	"ao.session.spawned": {
+	"ao.sessions.spawned": {
 		"created_by":        {},
 		"duration_ms":       {},
+		"spawn_duration_ms": {},
 		"first_for_install": {},
 		"harness":           {},
 		"kind":              {},
 		"github_actor":      {},
 		"surface":           {},
+		"model_check_ms":    {},
+		"branch_fetch_ms":   {},
+		"worktree_ms":       {},
+		"setup_ms":          {},
+		"agent_start_ms":    {},
+		"mode":              {},
+		"async":             {},
+		"model":             {},
 	},
 	// Whether a session delivered: outcome is pr_opened, completed, killed,
 	// failed or abandoned (internal/deliverytelemetry).
@@ -285,10 +355,10 @@ var remotePayloadAllowlist = map[string]map[string]struct{}{
 		"outcome":              {},
 		"waiting_input_count":  {},
 	},
-	"ao.session.waiting_input_entered": {
+	"ao.sessions.input_wait_started": {
 		"state": {},
 	},
-	"ao.harness.update": {
+	"ao.harnesses.updated": {
 		"harness":       {},
 		"level":         {},
 		"live_sessions": {},
@@ -299,13 +369,13 @@ var remotePayloadAllowlist = map[string]map[string]struct{}{
 		"sessions": {},
 		"wait_ms":  {},
 	},
-	"ao.harness.version_switch": {
+	"ao.harnesses.version_switched": {
 		"harness":    {},
 		"latency_ms": {},
 		"mode":       {},
 		"result":     {},
 	},
-	"ao.session.waiting_input_exited": {
+	"ao.sessions.input_wait_ended": {
 		"dwell_ms":  {},
 		"exited_to": {},
 		"state":     {},
@@ -524,7 +594,7 @@ func (s *PostHogSink) send(ctx context.Context, ev ports.TelemetryEvent) {
 
 func (s *PostHogSink) sendQueued(ctx context.Context, entry queuedPostHogEvent) {
 	ev := entry.event
-	eventName := remoteEventName(ev.Name)
+	eventName := ev.Name
 	// A stable per-event UUID, reused across every attempt, is PostHog's
 	// idempotency key. A transport error only means AO received no response;
 	// PostHog may already have ingested the first attempt, so without a shared
@@ -635,9 +705,6 @@ func (s *PostHogSink) propertiesWithCount(ev ports.TelemetryEvent, lifetimeSessi
 		// PostHog's default; pinned so coarse geo breakdowns can't silently flip off.
 		"$geoip_disable": false,
 	}
-	if remoteEventName(ev.Name) != ev.Name {
-		props["legacy_event_name"] = ev.Name
-	}
 	// Without this, every daemon event lands with no version at all, so a
 	// failure rate cannot be attributed to a release. Renderer events already
 	// carry app_version; these are the matching daemon-side values.
@@ -691,9 +758,9 @@ func (s *PostHogSink) propertiesWithCount(ev ports.TelemetryEvent, lifetimeSessi
 		if age, ok := s.ident.DaysSinceInstall(time.Now()); ok {
 			props["days_since_install"] = age
 		}
-		if snap := s.ident.Snapshot(); snap.CloudUserKnown {
-			props["is_signed_in"] = snap.CloudUserID != ""
-		}
+		// The durable binding (telemetry_bound_user) restores a sign-in across
+		// restarts, so no binding means not signed in on this install.
+		props["is_signed_in"] = s.ident.Snapshot().CloudUserID != ""
 	}
 	return props
 }
@@ -748,11 +815,28 @@ var stalePersonProperties = []string{"ao_version", "app_version", "build_mode", 
 
 func personSetKey(actor, uid string) string { return actor + "|" + uid }
 
-func remoteEventName(name string) string {
-	if alias, ok := remoteEventNameAliases[name]; ok {
-		return alias
+// validArtifactValue reports whether value is allowed for the artifact
+// telemetry property key: a closed vocabulary, or a count.
+func validArtifactValue(key string, value any) bool {
+	if key == "count" {
+		count, ok := value.(int)
+		return ok && count > 0
 	}
-	return name
+	text, ok := value.(string)
+	if !ok {
+		return false
+	}
+	switch key {
+	case "source":
+		return domain.ValidArtifactSource(text)
+	case "content_category":
+		return domain.ValidArtifactContentCategory(text)
+	case "size_bucket":
+		return domain.ValidArtifactSizeBucket(text)
+	case "reason":
+		return domain.ValidArtifactRegisterFailure(text)
+	}
+	return false
 }
 
 func sanitizeRemotePayload(name string, payload map[string]any) map[string]any {
@@ -765,6 +849,15 @@ func sanitizeRemotePayload(name string, payload map[string]any) map[string]any {
 		value, ok := payload[key]
 		if !ok {
 			continue
+		}
+		if (name == "ao.artifacts.registered" || name == "ao.artifacts.register_failed") && !validArtifactValue(key, value) {
+			continue
+		}
+		if name == "ao.automation.created" {
+			text, ok := value.(string)
+			if !ok || (key == "use_case" && !domain.ValidAutomationUseCase(text)) || (key == "template_id" && !domain.ValidAutomationTemplateID(text)) {
+				continue
+			}
 		}
 		if safe, ok := sanitizeRemoteValue(key, value); ok {
 			sanitized[key] = safe

@@ -1,6 +1,6 @@
 # ao doctor
 
-Run local AO health checks. Use this to diagnose setup problems or verify the environment is correctly configured.
+Run local Orchestrator health checks. Use this to diagnose setup problems or verify the environment is correctly configured.
 
 ## Syntax
 

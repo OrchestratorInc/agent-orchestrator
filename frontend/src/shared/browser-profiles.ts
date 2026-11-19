@@ -35,6 +35,11 @@ export type BrowserProfileRegistry = {
 	bindings: Record<string, BrowserProfileBinding>;
 	/** Profile new sessions fall back to when they have no session-specific binding. */
 	defaultProfileId: BrowserProfileId | null;
+	/**
+	 * Set once the oldest profile has been offered as the default. Registries
+	 * saved without it get that default on load, so a later unset stays unset.
+	 */
+	defaultProfileSeeded: true;
 };
 
 export type BrowserProfileStoreError = {

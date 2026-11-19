@@ -31,6 +31,8 @@ one flag per deliverable, not its supporting files. Examples include a requested
 document, a rendered dashboard, or another output the orchestrator or human
 needs to open directly. `--artifact` takes only a path to a file in the session
 artifact directory; mention issues, links, and other URLs in the note.
+`--artifact` does not make a file appear as a session artifact: run
+[`ao artifact add`](artifact.md) for that, before you report it.
 In a chat session, an HTML file from the artifact directory that you attach
 with `--artifact` also shows in the thread.
 
@@ -41,7 +43,7 @@ when a separate deliverable is useful, prefer one consolidated report over
 individual logs. Ordinary progress updates and concise final answers do not
 need separate artifact files.
 
-Saving a local artifact or attaching its reference to an AO report is not
+Saving a local artifact or attaching its reference to an Orchestrator report is not
 external publishing authorization. Publish externally only within the
 user-authorized scope.
 
@@ -49,8 +51,12 @@ user-authorized scope.
 
 `--needs-input` requests immediate non-interrupting delivery. `--stuck`
 requests immediate delivery plus a rate-limited interrupt. Informational work
-batches for up to one hour, while the first done report opens a fixed five
-minute settlement window.
+batches for up to one hour. The first done report opens a five minute
+settlement window: the batch, including pending informational reports, is
+scheduled for delivery about 15 seconds after no other project worker is still
+working, and at the latest when the window closes. Provisioning counts as work.
+After provisioning, idle, waiting, or exited workers do not hold the batch.
+Killed workers do not hold it. Reports stay pending without an active orchestrator.
 
 **Examples:**
 

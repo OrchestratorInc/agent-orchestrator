@@ -19,20 +19,13 @@ import (
 
 type fakeUsageSummaryService struct {
 	projectID domain.ProjectID
-	sessionID domain.SessionID
 	items     []domain.CompactSessionUsage
-	detail    domain.SessionUsageSummary
 	err       error
 }
 
 func (f *fakeUsageSummaryService) ListCompact(_ context.Context, projectID domain.ProjectID) ([]domain.CompactSessionUsage, error) {
 	f.projectID = projectID
 	return f.items, f.err
-}
-
-func (f *fakeUsageSummaryService) Get(_ context.Context, sessionID domain.SessionID) (domain.SessionUsageSummary, error) {
-	f.sessionID = sessionID
-	return f.detail, f.err
 }
 
 func newUsageTestServer(t *testing.T, svc *fakeUsageSummaryService) *httptest.Server {
@@ -104,119 +97,15 @@ func TestUsageAPIListsCompactProjectUsage(t *testing.T) {
 	}
 }
 
-func TestUsageAPIShowsDetailedEstimatedCostAndProviderAttribution(t *testing.T) {
-	input := int64(1000)
-	uncached := int64(600)
-	output := int64(200)
-	zero := int64(0)
-	cachedInput := int64(400)
-	processed := int64(1200)
-	svc := &fakeUsageSummaryService{detail: domain.SessionUsageSummary{
-		SessionID: "reverb-12", Incomplete: true,
-		Totals: domain.UsageMetricTotals{
-			InputTokens: &input, CachedInputTokens: &cachedInput, UncachedInputTokens: &uncached,
-			OutputTokens: &output, ProcessedTokens: &processed,
-			EstimatedCost: &domain.EstimatedCost{
-				TotalNanos: 135, InputNanos: &input, CachedInputNanos: &zero,
-				OutputNanos: &output, Coverage: domain.EstimatedCostCoveragePartial,
-				ProviderAttribution: domain.EstimatedCostProviderAttributionMixed,
-			},
-		},
-		Harnesses: []domain.HarnessUsageSummary{{
-			Harness: domain.HarnessCodex,
-			Models: []domain.ModelUsageSummary{{
-				ModelID: "gpt-5.6",
-				Totals: domain.UsageMetricTotals{EstimatedCost: &domain.EstimatedCost{
-					TotalNanos: 0, InputNanos: &zero, CachedInputNanos: &zero,
-					OutputNanos: &zero, Coverage: domain.EstimatedCostCoverageComplete,
-					ProviderAttribution: domain.EstimatedCostProviderAttributionObserved,
-				}},
-			}},
-		}},
-	}}
-	srv := newUsageTestServer(t, svc)
-
-	body, status, _ := doRequest(t, srv, http.MethodGet, "/api/v1/usage/sessions/reverb-12", "")
-	if status != http.StatusOK {
-		t.Fatalf("status = %d, want 200; body=%s", status, body)
-	}
-	if svc.sessionID != "reverb-12" {
-		t.Fatalf("session id = %q", svc.sessionID)
-	}
-	// Provider-shaped counters and per-metric provenance are no longer projected
-	// onto this boundary; the bounded provider object owns them now.
-	for _, forbidden := range []string{
-		`"cost"`, `"valueNanos"`, `"pricingVersion"`,
-		`"provenance"`, `"providerDetails"`, `"cacheWriteTokens"`, `"reasoningTokens"`,
-	} {
-		if strings.Contains(string(body), forbidden) {
-			t.Fatalf("detailed usage exposed %s: %s", forbidden, body)
-		}
-	}
-	var got struct {
-		SessionID  string `json:"sessionId"`
-		Incomplete bool   `json:"incomplete"`
-		Totals     struct {
-			InputTokens         int64 `json:"inputTokens"`
-			CachedInputTokens   int64 `json:"cachedInputTokens"`
-			UncachedInputTokens int64 `json:"uncachedInputTokens"`
-			OutputTokens        int64 `json:"outputTokens"`
-			ProcessedTokens     int64 `json:"processedTokens"`
-			CacheReadTokens     int64 `json:"cacheReadTokens"`
-			EstimatedCost       struct {
-				TotalNanos          int64  `json:"totalNanos"`
-				InputNanos          *int64 `json:"inputNanos"`
-				CachedInputNanos    *int64 `json:"cachedInputNanos"`
-				Coverage            string `json:"coverage"`
-				ProviderAttribution string `json:"providerAttribution"`
-			} `json:"estimatedCost"`
-		} `json:"totals"`
-		Harnesses []struct {
-			Models []struct {
-				ProviderID string `json:"providerId"`
-				ModelID    string `json:"modelId"`
-				Totals     struct {
-					EstimatedCost struct {
-						TotalNanos          int64  `json:"totalNanos"`
-						Coverage            string `json:"coverage"`
-						ProviderAttribution string `json:"providerAttribution"`
-					} `json:"estimatedCost"`
-				} `json:"totals"`
-			} `json:"models"`
-		} `json:"harnesses"`
-	}
-	mustJSON(t, body, &got)
-	if got.SessionID != "reverb-12" || !got.Incomplete || got.Totals.InputTokens != 1000 ||
-		got.Totals.EstimatedCost.TotalNanos != 135 ||
-		got.Totals.EstimatedCost.InputNanos == nil || *got.Totals.EstimatedCost.InputNanos != 1000 ||
-		got.Totals.EstimatedCost.CachedInputNanos == nil || *got.Totals.EstimatedCost.CachedInputNanos != 0 ||
-		got.Totals.EstimatedCost.Coverage != "partial" ||
-		got.Totals.EstimatedCost.ProviderAttribution != "mixed" ||
-		got.Totals.CachedInputTokens != 400 || got.Totals.UncachedInputTokens != 600 ||
-		got.Totals.OutputTokens != 200 ||
-		got.Totals.ProcessedTokens != 1200 || got.Totals.CacheReadTokens != 400 ||
-		len(got.Harnesses) != 1 || len(got.Harnesses[0].Models) != 1 ||
-		got.Harnesses[0].Models[0].ModelID != "gpt-5.6" ||
-		got.Harnesses[0].Models[0].Totals.EstimatedCost.TotalNanos != 0 ||
-		got.Harnesses[0].Models[0].Totals.EstimatedCost.Coverage != "complete" ||
-		got.Harnesses[0].Models[0].Totals.EstimatedCost.ProviderAttribution != "observed" {
-		t.Fatalf("response = %+v", got)
-	}
-}
-
 func TestUsageAPILogsServiceErrors(t *testing.T) {
 	var logs bytes.Buffer
 	srv := newUsageTestServerWithLogger(t, &fakeUsageSummaryService{err: errors.New("usage unavailable")}, slog.New(slog.NewTextHandler(&logs, nil)))
 
-	for _, path := range []string{"/api/v1/usage/sessions?projectId=reverb", "/api/v1/usage/sessions/reverb-12"} {
-		body, status, _ := doRequest(t, srv, http.MethodGet, path, "")
-		if status != http.StatusInternalServerError {
-			t.Fatalf("status = %d, want 500; body=%s", status, body)
-		}
+	body, status, _ := doRequest(t, srv, http.MethodGet, "/api/v1/usage/sessions?projectId=reverb", "")
+	if status != http.StatusInternalServerError {
+		t.Fatalf("status = %d, want 500; body=%s", status, body)
 	}
-	for _, message := range []string{"failed to list compact session usage", "failed to get session usage"} {
-		if !strings.Contains(logs.String(), message) {
-			t.Fatalf("logs = %q, want %q", logs.String(), message)
-		}
+	if !strings.Contains(logs.String(), "failed to list compact session usage") {
+		t.Fatalf("logs = %q, want the list failure", logs.String())
 	}
 }
