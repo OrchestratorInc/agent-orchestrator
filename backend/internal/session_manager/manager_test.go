@@ -6110,7 +6110,13 @@ func TestRefreshDefaultBranchesSharesOneBudgetAcrossResolution(t *testing.T) {
 	}
 	m.defaultBranchRefreshTimeout = 25 * time.Millisecond
 	// Every repository's live HEAD lookup hangs until the deadline it is given.
+	var deadlines []time.Time
 	ws.resolveRemoteFunc = func(remoteCtx context.Context, _ string) error {
+		deadline, ok := remoteCtx.Deadline()
+		if !ok {
+			t.Error("lookup got no deadline")
+		}
+		deadlines = append(deadlines, deadline)
 		<-remoteCtx.Done()
 		return remoteCtx.Err()
 	}
@@ -6119,6 +6125,15 @@ func TestRefreshDefaultBranchesSharesOneBudgetAcrossResolution(t *testing.T) {
 	baseRefs := m.refreshDefaultBranchesBestEffort(context.Background(), project)
 	elapsed := time.Since(started)
 
+	// Separate budgets would each get their own deadline, one after another.
+	if got, want := len(deadlines), 4; got != want {
+		t.Fatalf("lookups = %d, want root plus three children (%d)", got, want)
+	}
+	for i, deadline := range deadlines {
+		if !deadline.Equal(deadlines[0]) {
+			t.Fatalf("lookup %d deadline = %s, want the shared deadline %s", i, deadline, deadlines[0])
+		}
+	}
 	if elapsed > 250*time.Millisecond {
 		t.Fatalf("resolving four stalled repositories took %s, want one shared 25ms budget", elapsed)
 	}
