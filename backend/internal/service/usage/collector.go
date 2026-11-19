@@ -35,6 +35,13 @@ const (
 	maxCodexChildIDs               = 4096
 	defaultCodexLogicalSourceLimit = 4096
 	defaultDiscoveryLimit          = 64
+	// finalizingDiscoveryGrace is how long a finalizing binding keeps looking for
+	// a transcript that was never found. An agent writes its transcript as it
+	// runs, so one still missing an hour after the session stopped has been
+	// deleted or was never written. Until the binding settles, every reconcile
+	// pass globs the provider's whole transcript tree for it, and the pipeline
+	// keeps retrying discovery every 30 seconds.
+	finalizingDiscoveryGrace = time.Hour
 )
 
 var nativeUsageIDPattern = regexp.MustCompile(`^[A-Za-z0-9_-]+$`)
@@ -1420,6 +1427,23 @@ func (c *Collector) reconcileBinding(ctx context.Context, binding domain.UsageBi
 				return childErr
 			}
 		}
+		if finalizingDiscoveryExpired(binding, targetState, now) {
+			unread, unreadErr := c.hasUnreadUsageSource(ctx, binding.ID)
+			if unreadErr != nil {
+				return unreadErr
+			}
+			// Settle with what was collected. A source still waiting to be read,
+			// such as a Codex child registered above, keeps the binding
+			// finalizing so the pipeline reads it first. A resumed session
+			// reactivates a settled binding, so a transcript that appears later
+			// is still read.
+			if !unread {
+				_, err = c.store.UpdateUsageBindingState(
+					ctx, binding.ID, domain.UsageBindingPartial, domain.UsageErrorArtifactMissing, now,
+				)
+				return err
+			}
+		}
 		targetState, lastErrorCode, stateErr := c.preserveCodexBudgetState(
 			ctx,
 			binding,
@@ -1487,6 +1511,32 @@ func (c *Collector) reconcileBinding(ctx context.Context, binding domain.UsageBi
 		return c.settleFinalizingBinding(ctx, binding.ID, now)
 	}
 	return nil
+}
+
+// finalizingDiscoveryExpired reports whether a finalizing binding has waited
+// out finalizingDiscoveryGrace for its transcript. Writes that change nothing
+// are skipped, so UpdatedAt is when the binding started waiting.
+func finalizingDiscoveryExpired(binding domain.UsageBindingRecord, targetState domain.UsageBindingState, now time.Time) bool {
+	return binding.State == domain.UsageBindingFinalizing &&
+		targetState == domain.UsageBindingFinalizing &&
+		binding.LastErrorCode == domain.UsageErrorSourceDiscoveryPending &&
+		!binding.UpdatedAt.IsZero() &&
+		now.Sub(binding.UpdatedAt) >= finalizingDiscoveryGrace
+}
+
+// hasUnreadUsageSource reports whether the binding has a source that the
+// ingestion pipeline has not finished reading.
+func (c *Collector) hasUnreadUsageSource(ctx context.Context, bindingID int64) (bool, error) {
+	sources, err := c.store.ListUsageSourcesForBinding(ctx, bindingID)
+	if err != nil {
+		return false, err
+	}
+	for _, source := range sources {
+		if source.State == domain.UsageSourcePending || source.State == domain.UsageSourceActive {
+			return true, nil
+		}
+	}
+	return false, nil
 }
 
 func (c *Collector) preserveCodexBudgetState(

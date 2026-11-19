@@ -796,6 +796,14 @@ func Run(buildVersion string) (retErr error) {
 	}); ok {
 		chatSvc.SetOtherWriterCheck(check.ImportedChatWrittenElsewhere)
 	}
+	if resume, ok := sessMgr.(interface {
+		ResumeAgentWithMode(context.Context, domain.SessionID) (sessionmanager.RestoreResult, error)
+	}); ok {
+		chatSvc.SetResumeAgentCallback(func(ctx context.Context, id domain.SessionID) error {
+			_, err := resume.ResumeAgentWithMode(ctx, id)
+			return err
+		})
+	}
 	if tunable, ok := sessMgr.(interface {
 		SetModelCatalog(interface {
 			Models(context.Context, string, string, bool) (ports.AgentModelCatalog, error)
@@ -1139,6 +1147,7 @@ func Run(buildVersion string) (retErr error) {
 	lcStack.automationDone = automationDone
 	autoReview := autoreview.New(store, reviewSvc, autoreview.Config{Logger: log})
 	lcStack.autoReviewDone = autoReview.Start(ctx)
+	lcStack.reviewDoneDone = lcStack.LCM.StartReviewDoneSweep(ctx, 0)
 	// Push-device registry: persisted phones that receive OS push notifications.
 	// A load failure must not block boot — degrade to no push rather than refusing
 	// to start the daemon. pushRegistry (interface) is assigned only when load
@@ -1744,6 +1753,9 @@ func (d reportSemanticDelivery) Submit(ctx context.Context, id domain.SessionID,
 	err := d.sessions.SendSemantic(ctx, id, message, idempotencyKey)
 	if errors.Is(err, sessionmanager.ErrComposerBusy) {
 		return fmt.Errorf("%w: %w", reportsvc.ErrOrchestratorBusy, err)
+	}
+	if errors.Is(err, sessionmanager.ErrPromptSubmissionUnobserved) || (err != nil && strings.Contains(err.Error(), "prompt submission was not observed")) {
+		return fmt.Errorf("%w: %w", reportsvc.ErrUnacknowledgedDelivery, err)
 	}
 	return err
 }

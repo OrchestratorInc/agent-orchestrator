@@ -149,6 +149,19 @@ describe("SpawnComposer", () => {
 		expect(button.props.testID).toBe("spawn-submit");
 	});
 
+	// Access being off is not a missing recogniser: the mic stays, crossed out,
+	// and its tap is the way to Settings.
+	it("keeps a crossed-out mic that goes to Settings while access is off", async () => {
+		const props = baseProps({ prompt: "", voice: { ...baseProps().voice, state: "denied" } });
+		const button = primary(await render(props));
+		expect(button.props.testID).toBe("spawn-dictate");
+		expect(button.props.accessibilityLabel).toBe("Turn on microphone access in Settings");
+		expect(button.props.disabled).toBe(false);
+		expect(button.findByProps({ name: "micOff" })).toBeTruthy();
+		await act(async () => button.props.onPress());
+		expect(props.voice.onToggleLatched).toHaveBeenCalledOnce();
+	});
+
 	// iOS focuses with the page; Android's focus is lost mid-transition, so it
 	// focuses once the push ends, and not again on coming back from a sheet.
 	it("opens onto the keyboard on Android once the push has finished, and only once", async () => {

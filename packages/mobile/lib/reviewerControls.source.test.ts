@@ -41,9 +41,9 @@ describe("reviewer control integration", () => {
 	});
 
 	it("renders every reviewer through the shared harness logo registry", () => {
-		expect(pickerIOS).toContain('import { HarnessImage, useHarnessLogoUris } from "./spawn-composer-controls.ios"');
-		expect(pickerIOS).toContain("<HarnessImage uri={logoUris[agent.id]} harness={agent.id} />");
-		expect(picker).toContain("const source = logoFor(harness);");
+		expect(pickerIOS).toContain('import { HarnessImage } from "./spawn-composer-controls.ios"');
+		expect(pickerIOS).toContain("<HarnessImage harness={agent.id} />");
+		expect(picker).toContain("const source = logoFor(harness, scheme);");
 	});
 
 	it("keeps Android review actions scrolling inside the sheet", () => {

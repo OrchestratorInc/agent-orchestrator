@@ -1965,6 +1965,32 @@ it("keeps a live refresh that is in flight when older history starts loading", a
 	await act(async () => { refresh.resolve(page(21)); });
 
 	await waitFor(() => expect(result.current.snapshot?.latestSequence).toBe(21));
+	// Asked for during the refresh, the older page loads once the refresh lands.
+	await waitFor(() => expect(result.current.hasOlder).toBe(false));
+	expect(getMock.mock.calls.at(-1)?.[1].params.query).toMatchObject({ beforeSequence: 20 });
+	expect(result.current.snapshot?.latestSequence).toBe(21);
+});
+
+it("keeps a local chat on screen when only its older page fails", async () => {
+	const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false, retryDelay: 0 } } });
+	const local = ({ children }: { children: ReactNode }) => <QueryClientProvider client={queryClient}>{children}</QueryClientProvider>;
+	getMock.mockReset().mockImplementation((_path, options) => Promise.resolve(options.params.query.beforeSequence === undefined
+		? { data: {
+			conversationId: "conv-1", sessionId: "ao-1", harness: "codex", mode: "chat", controller: "ready", settings: {},
+			latestSequence: 20, oldestSequence: 20, hasMoreBefore: true, turns: [], activities: [],
+			messages: [{ id: "m20", sequence: 20, revision: 1, role: "assistant", origin: "provider", text: "Latest", streaming: false, createdAt: "2026-11-18T00:00:00Z" }],
+		} }
+		: { error: { code: "INTERNAL", message: "older page failed" } }));
+	const { result } = renderHook(() => useConversation("ao-1"), { wrapper: local });
+	await waitFor(() => expect(result.current.snapshot?.items).toHaveLength(1));
+
+	act(() => result.current.loadOlder());
+	await waitFor(() => expect(queryClient.getQueryCache().find({ queryKey: ["conversation", "ao-1"] })?.state.error).toBeTruthy());
+	await waitFor(() => expect(result.current.isLoadingOlder).toBe(false));
+	expect(result.current.error).toBeUndefined();
+	expect(result.current.snapshot?.items.map((item) => item.id)).toEqual(["m20"]);
+	expect(result.current.hasOlder).toBe(true);
+	queryClient.clear();
 });
 
 describe("opening a local chat it has cached", () => {

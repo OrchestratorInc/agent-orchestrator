@@ -29,7 +29,7 @@ import type { Theme } from "../theme";
 import { useTheme, useThemedStyles } from "../ThemeProvider";
 import { Spinner } from "../Spinner";
 import { MascotLamp } from "../ui";
-import { FoldBody, FoldChevron, FoldLayout, StatusLabel, StatusSpinner } from "./TurnFoldMotion";
+import { FoldBody, FoldChevron } from "./TurnFoldMotion";
 import { LatticeLoader } from "./LatticeLoader";
 import { TurnPlan } from "./TurnPlan";
 import { ChatMarkdown } from "./ChatMarkdown";
@@ -100,6 +100,7 @@ import {
 	sameEditableTurns,
 	countActivityNodes,
 	partitionTurnItems,
+	settledTurnItems,
 	readableConversationItems,
 	startupPlacement,
 	streamingCursorMessageId,
@@ -116,6 +117,8 @@ import { TurnForkButton } from "./TurnForkButton";
 import { TURN_ACTION_SIZE, TURN_ACTION_SLOP, TurnRollbackButton, turnActionControl } from "./TurnRollbackButton";
 import { formatReplyTime } from "./replyTime";
 import { CONVERSATION_END_GAP, KEYBOARD_END_GAP_TUCK } from "../session/keyboardInset";
+import { AccountHandoffRow, UsageLimitNotice } from "./UsageLimitNotice";
+import { accountHandoffNote } from "./usageLimit";
 import { TurnArtifacts, useTurnArtifactSource } from "./TurnArtifacts";
 import { turnResults } from "./turnArtifactsModel";
 import { ConversationHarness, LatestWorkerUpdates, OriginMessageView, WorkerSessionsProvider, WorkerUpdateRows } from "./AutomationMessage";
@@ -648,9 +651,9 @@ function ConversationTurnGroup({ group, snapshot, approvalPending, inputPending,
 	// turn's errorMessage below it. The turn keeps it — that line carries the
 	// outcome and the rollback — so the activity restating it is dropped.
 	const turnError = group.turn?.state === "failed" ? group.turn.errorMessage : undefined;
-	const items = turnError
+	const items = settledTurnItems(turnError
 		? group.items.filter((item) => !(item.kind === "activity" && errorActivityDuplicatesTurn(item, turnError)))
-		: group.items;
+		: group.items, group.turn);
 	const cursorMessageId = streamingCursorMessageId(items);
 	// Only the prompt being edited gets an element, so every other row keeps its memo.
 	const editorFor = (item: ConversationItem) => editDraft && item.kind === "message" && item.role === "user" && item.origin === "human" && item.turnId === editDraft.turnId
@@ -673,12 +676,6 @@ function ConversationTurnGroup({ group, snapshot, approvalPending, inputPending,
 		</View>;
 	}
 	const partition = partitionTurnItems(items, group.turn);
-	// The prompt's editor grows as it opens and as lines are typed. The list
-	// misplaces rows whose layout transition runs under that growth, so the turn
-	// being edited lays out without the fold motion.
-	const editing = Boolean(editDraft && group.turnId === editDraft.turnId);
-	const WorkBody = editing ? View : FoldBody;
-	const BelowFold = editing ? View : FoldLayout;
 	const summary = group.turn ? <TurnSummary turn={group.turn} plan={group.plan} /> : null;
 	if (!partition || !group.turn) return <View>{renderRows(items)}{summary}</View>;
 	const reply = partition.final.find((item): item is ConversationMessage => item.kind === "message");
@@ -689,8 +686,8 @@ function ConversationTurnGroup({ group, snapshot, approvalPending, inputPending,
 	return <View>
 		{renderRows(partition.prompt)}
 		<TurnStatusRow turn={group.turn} foldable={partition.settled && partition.work.length > 0} open={workedOpen} onToggle={() => onToggleWorked(group.key)} />
-		{partition.settled ? (workedOpen ? <WorkBody style={{ gap: space.xs, paddingBottom: space.xs }}>{renderRows(partition.work)}</WorkBody> : null) : renderRows(partition.work)}
-		<BelowFold>{renderRows(partition.notices)}{renderRows(partition.final)}{actions}{summary}</BelowFold>
+		{partition.settled ? (workedOpen ? <FoldBody style={{ gap: space.xs, paddingBottom: space.xs }}>{renderRows(partition.work)}</FoldBody> : null) : renderRows(partition.work)}
+		{renderRows(partition.notices)}{renderRows(partition.final)}{actions}{summary}
 	</View>;
 }
 
@@ -806,6 +803,8 @@ const TimelineItem = memo(function TimelineItem({
 	const artifactPage = artifact ? artifactRenderRef(sessionId, artifact) : undefined;
 	if (artifact && artifactPage) return <RenderFrame render={artifactPage} artifact={{ sessionId, path: artifact.path }} />;
 	if (item.detail?.event === "auth.reauth_required") return <SystemSignal icon="key" danger title="The provider asked you to sign in again" detail={item.detail.reason} />;
+	const handoff = accountHandoffNote(item.detail);
+	if (handoff) return <AccountHandoffRow note={handoff} />;
 	if (item.activityKind === "error") return <ErrorActivity activity={item} />;
 	return <ActivityRow activity={item} />;
 });
@@ -1271,9 +1270,9 @@ function TurnStatusRow({ turn, foldable, open, onToggle }: { turn: ConversationT
 		accessibilityLabel={running ? (workingDuration ? `Working for ${workingDuration}` : "Working") : undefined}
 		style={[styles.turnState, running && styles.turnTimer, turn.state === "failed" && { color: t.red }]}
 	>{label}</Text>;
-	// One element throughout, so the spinner can leave and the label slide into
-	// its place when the turn settles instead of the whole row remounting. The row
-	// is a touch target tall, as is the startup checklist header it replaces.
+	// One element throughout, so a settling turn changes the row rather than
+	// remounting it. The row is a touch target tall, as is the startup checklist
+	// header it replaces.
 	return <Pressable
 		accessibilityRole={foldable ? "button" : undefined}
 		accessibilityState={foldable ? { expanded: open } : undefined}
@@ -1283,8 +1282,8 @@ function TurnStatusRow({ turn, foldable, open, onToggle }: { turn: ConversationT
 		style={({ pressed }) => [styles.statusRow, pressed && feedback.pressed]}
 	>
 		{/* The desktop's lattice; it holds still under Reduce Motion, where the ticking label still reads as in progress. */}
-		{running ? <StatusSpinner><LatticeLoader color={t.textTertiary} /></StatusSpinner> : null}
-		<StatusLabel>{text}</StatusLabel>
+		{running ? <LatticeLoader color={t.textTertiary} /> : null}
+		{text}
 		{foldable ? <FoldChevron open={open} color={t.textTertiary} /> : null}
 	</Pressable>;
 }
@@ -1298,13 +1297,16 @@ function TurnSummary({ turn, plan }: { turn: ConversationTurn; plan?: Conversati
 	const results = useMemo(() => turnResults(turn, source), [source, turn]);
 	// Nothing to show draws nothing: an empty one still padded every turn's end,
 	// most of the gap between a reply and the next prompt.
-	if (!plan && !results.artifacts.length && !results.files.length && !turn.errorMessage) return null;
+	// A usage limit gets its own notice, which carries the provider's message.
+	const usageLimited = turn.state === "failed" && turn.usageLimit ? { ...turn, usageLimit: turn.usageLimit } : undefined;
+	if (!plan && !results.artifacts.length && !results.files.length && !turn.errorMessage && !usageLimited) return null;
 	return (
 		<View style={styles.turnWrap}>
 			{plan ? <TurnPlan plan={plan} live={turn.state === "running"} /> : null}
 			{results.artifacts.length && source ? <TurnArtifacts artifacts={results.artifacts} source={source} /> : null}
 			{results.files.length ? <ChangedFiles turn={turn} changed={results.files} /> : null}
-			{turn.errorMessage ? <Text style={styles.turnError}>{turn.errorMessage}</Text> : null}
+			{usageLimited ? <UsageLimitNotice turn={usageLimited} /> : null}
+			{turn.errorMessage && !usageLimited ? <Text style={styles.turnError}>{turn.errorMessage}</Text> : null}
 		</View>
 	);
 }
