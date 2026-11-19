@@ -79,5 +79,6 @@ func TestEscapingProviderHelper(t *testing.T) {
 		os.Exit(3)
 	}
 	_ = os.WriteFile(os.Getenv("AO_CHAT_HOST_ESCAPED_PID_FILE"), []byte(strconv.Itoa(helper.Process.Pid)), 0o600)
-	select {}
+	// A pending timer keeps the runtime from reporting a deadlock and exiting.
+	time.Sleep(300 * time.Second)
 }
