@@ -176,7 +176,7 @@ describe("ModelMenuChoices", () => {
 		const height = "calc((var(--line-height-row) + var(--space-1_5) * 2) * 3 + 1px * 3)";
 		// Starts at the rows' height whatever it lists, and never below it: a pane sized by its
 		// content is a single line once nothing matches, and the menu drops out from under the pointer.
-		expect(pane.style.flexBasis).toBe(height);
+		expect(pane.style.flexBasis).toBe("0px");
 		expect(pane.style.minHeight).toBe(height);
 		// Every row still renders; the list scrolls under the cap.
 		expect(screen.getAllByRole("menuitemradio")).toHaveLength(30);

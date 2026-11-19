@@ -105,7 +105,9 @@ export function ModelMenuChoices<T extends { id: string; label: string }>({
 	// line, and the menu must not shrink under the pointer while it is typed in. It only grows into
 	// room the held height below leaves it.
 	const rowsHeight = rows === undefined ? undefined : `calc((var(--line-height-row) + var(--space-1_5) * 2) * ${rows} + 1px * ${rows})`;
-	const rowCap = rowsHeight === undefined ? undefined : { flex: `1 1 ${rowsHeight}`, minHeight: rowsHeight };
+	// A 0px basis rather than flex-1's 0%: a percentage of the menu's undetermined height counts as
+	// the list's full content, which would stretch the menu to every model.
+	const rowCap = rowsHeight === undefined ? undefined : { flexGrow: 1, flexShrink: 1, flexBasis: "0px", minHeight: rowsHeight };
 	const rootRef = useRef<HTMLDivElement>(null);
 	const holdsHeight = rows !== undefined;
 	// While open, the menu never gets shorter: when the rows under the list shrink (another agent
