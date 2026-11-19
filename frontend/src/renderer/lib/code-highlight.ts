@@ -6,8 +6,6 @@
 
 import type { ElementContent, Root } from "hast";
 import { codeToTokens, isSupportedLanguage, type Lang, type Theme, type ThemedToken } from "@pierre/highlights";
-import type { CodeHighlighterPlugin, CodeOptions } from "@pierre/words/html";
-import { createHighlightsPlugin } from "@pierre/words/highlights";
 
 export type GrammarName = Lang;
 
@@ -92,19 +90,3 @@ export function highlightSync(code: string, language: GrammarName): Root | undef
 		return undefined;
 	}
 }
-
-const pierrePlugin = createHighlightsPlugin({ theme: CODE_THEME });
-
-const withGrammar = (options: CodeOptions): CodeOptions => ({ ...options, language: canonicalLanguage(options.language) ?? "" });
-
-export const streamingCodeHighlighter: CodeHighlighterPlugin = {
-	highlight: (options) => pierrePlugin.highlight(withGrammar(options)),
-	createSession() {
-		const session = pierrePlugin.createSession!();
-		return {
-			highlight: (options) => session.highlight(withGrammar(options)),
-			highlightLines: (options) => session.highlightLines!(withGrammar(options)),
-			dispose: () => session.dispose(),
-		};
-	},
-};

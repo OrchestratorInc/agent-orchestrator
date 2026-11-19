@@ -9,6 +9,8 @@ const root = createRoot(document.getElementById("reply")!);
 useUiStore.setState({ renderMath: true });
 
 export const mathCopyHarness = {
+	// A streaming reply renders as one react-markdown root per block; a settled
+	// one opened from history renders as a single root.
 	render(text: string, streaming: boolean) {
 		root.render(<ChatMarkdown key={String(streaming)} text={text} streaming={streaming} />);
 	},

@@ -10,7 +10,9 @@
  *
  * Loading shows the source as plain text and swaps in the diagram when the
  * engine chunk arrives — the same plain-first pattern as syntax highlighting,
- * so there is no spinner flash and no layout shift on first paint.
+ * so there is no spinner flash and no layout shift on first paint. A fence
+ * that is still streaming never starts a render at all: its text changes per
+ * delta, and each attempt would join the cache under a key nothing rereads.
  *
  * On any failure (syntax error, oversized block, engine chunk that will not
  * load) the block stays source text with a quiet caption. A missing diagram
@@ -57,10 +59,13 @@ function useDiagramTheme(): DiagramTheme {
 
 export const MermaidBlock = memo(function MermaidBlock({
 	code,
+	streaming = false,
 	interactive = true,
 	onLinkOpen,
 }: {
 	code: string;
+	/** Text still arriving. A block that changes per delta is not worth laying out. */
+	streaming?: boolean;
 	/** Passive document thumbnails render the diagram without buttons or link actions. */
 	interactive?: boolean;
 	/**
@@ -77,9 +82,9 @@ export const MermaidBlock = memo(function MermaidBlock({
 	const [showSource, setShowSource] = useState(false);
 
 	useEffect(() => {
-		if (!isRenderableDiagram(code)) {
+		if (streaming || !isRenderableDiagram(code)) {
 			setSvg(undefined);
-			setFailed(code.trim().length > 0);
+			setFailed(!streaming && !isRenderableDiagram(code) && code.trim().length > 0);
 			return;
 		}
 		let live = true;
@@ -96,7 +101,7 @@ export const MermaidBlock = memo(function MermaidBlock({
 		return () => {
 			live = false;
 		};
-	}, [code, theme]);
+	}, [code, theme, streaming]);
 
 	// A `click A https://…` directive in the source becomes a live anchor in
 	// the SVG. Letting it navigate would drive the whole renderer to that

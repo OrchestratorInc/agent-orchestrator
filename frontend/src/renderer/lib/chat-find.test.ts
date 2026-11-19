@@ -1,6 +1,5 @@
 import { describe, expect, it } from "vitest";
 import fixtures from "../../../../test/chat-find.json";
-import { createHtmlRenderer } from "@pierre/words/html";
 import { findBlocks, findTextOccurrences, renderedFindBlocks, findRange } from "./chat-find";
 
 describe("chat find shared contract", () => {
@@ -32,14 +31,5 @@ describe("chat find shared contract", () => {
 		expect(blocks.map((block) => block.text)).toEqual(["parent", "child", "hello\nworld"]);
 		const [hit] = findTextOccurrences(blocks[2].text, "hello world");
 		expect(findRange(blocks[2].nodes, hit.start, hit.end)?.toString()).toBe("helloworld");
-	});
-
-	it("indexes a streaming reply's blocks like its source, skipping diagram and math fences", () => {
-		const source = "Intro\n\n```mermaid\ngraph TD\n```\n\n```Math\nx^2\n```\n\n```ts\nconst a = 1\n```\n\nOutro";
-		const root = document.createElement("div");
-		const renderer = createHtmlRenderer();
-		root.innerHTML = renderer.render(source, true, true).html;
-		renderer.dispose();
-		expect(renderedFindBlocks(root).map((block) => block.text)).toEqual(findBlocks(source, true));
 	});
 });

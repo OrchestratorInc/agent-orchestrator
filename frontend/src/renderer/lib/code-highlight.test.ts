@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { Element, Root, RootContent } from "hast";
-import { canonicalLanguage, highlightSync, streamingCodeHighlighter, type GrammarName } from "./code-highlight";
+import { canonicalLanguage, highlightSync, type GrammarName } from "./code-highlight";
 
 function classesIn(tree: Root): string[] {
 	const found: string[] = [];
@@ -70,41 +70,5 @@ describe("highlightSync", () => {
 
 	it("leaves code over half a million characters plain", () => {
 		expect(highlightSync("const a = 1;\n".repeat(40_000), "typescript")).toBeUndefined();
-	});
-});
-
-describe("streamingCodeHighlighter", () => {
-	const options = (code: string, isIncomplete = true, language = "javascript") => ({ code, language, isIncomplete });
-
-	it("highlights a streamed fence like a one-shot pass", () => {
-		const source = "/* open\ncontinued */\nconst value = `first\nsecond ${true}`;\n";
-		const session = streamingCodeHighlighter.createSession!();
-		for (let end = 1; end < source.length; end += 5) session.highlightLines!(options(source.slice(0, end)));
-		const streamed = session.highlightLines!(options(source, false))!.fullHtml;
-		session.dispose();
-		const oneShot = streamingCodeHighlighter.highlight(options(source, false))!;
-		const colored = (html: string) => {
-			const root = document.createElement("div");
-			root.innerHTML = html;
-			const walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT);
-			const chars: string[] = [];
-			while (walker.nextNode()) {
-				const node = walker.currentNode as Text;
-				const color = node.parentElement?.closest("[style*='--ao-code-']")?.getAttribute("style")?.match(/--ao-code-[a-z]+/)?.[0] ?? "";
-				for (const char of node.data) if (char !== "\n") chars.push(`${color} ${char}`);
-			}
-			return chars;
-		};
-		expect(colored(streamed)).toEqual(colored(oneShot));
-		expect(colored(streamed)).toContain("--ao-code-comment /");
-	});
-
-	it("resolves the same aliases as settled code", () => {
-		expect(streamingCodeHighlighter.highlight(options("$ echo hi\n", false, "console"))).toContain("var(--ao-code-");
-	});
-
-	it("leaves unknown languages plain", () => {
-		expect(streamingCodeHighlighter.highlight(options("x", false, "klingon"))).toBeNull();
-		expect(streamingCodeHighlighter.createSession!().highlightLines!(options("x", true, "klingon"))).toBeNull();
 	});
 });

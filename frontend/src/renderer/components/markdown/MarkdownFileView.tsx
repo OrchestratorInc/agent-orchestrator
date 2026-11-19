@@ -16,8 +16,8 @@ import type { FilesSource } from "../../hooks/useSessionWorkspaceFiles";
  *     active-content tags forbidden), and formulas, which the shared
  *     `MathFormula` typesets with KaTeX's `trust: false`, matching the chat surface.
  *   - Fenced code reuses the app's highlighter (`lib/code-highlight.ts`).
- *     Its JavaScript regex engine needs no WASM or CSP exception, and its
- *     syntax classes use AO's existing palette in both themes.
+ *     Its WebAssembly runs under the renderer's existing `wasm-unsafe-eval`, and
+ *     its syntax classes use AO's existing palette in both themes.
  *
  * Document colors follow AO's active CSS tokens, including custom themes,
  * rather than the operating system's preferred color scheme.

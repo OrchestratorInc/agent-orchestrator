@@ -21,5 +21,6 @@ test("copying a reply with formulas keeps their TeX and the reply's block breaks
 	await page.waitForFunction(() => Boolean(window.mathCopyHarness));
 	const expected = "Before $x^2$.\n\n$$\nE = mc^2\n$$\n\none $y$\ntwo\n\nAfter.";
 	expect.soft(await copyWholeReply(page, false), "settled reply").toBe(expected);
+	// Streamed blocks render as sibling roots with no whitespace between them.
 	expect.soft(await copyWholeReply(page, true), "streamed reply").toBe(expected);
 });

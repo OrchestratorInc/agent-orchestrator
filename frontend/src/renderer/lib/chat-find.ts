@@ -89,16 +89,14 @@ export function occurrenceKey(hit: FindOccurrence): string {
 export function renderedFindBlocks(root: HTMLElement): Array<{ text: string; nodes: Text[] }> {
 	const blocks = new Map<Element, { text: string; nodes: Text[] }>();
 	// Inline file references are message text rendered as buttons, not toolbar controls.
-	const excluded = "button:not([data-chat-find-include]), svg, img, iframe, script, style, [aria-hidden='true'], .katex, [data-chat-find-exclude], [data-markdown='code-header'], [data-markdown='code-block']:is([data-language='mermaid' i], [data-language='math' i])";
+	const excluded = "button:not([data-chat-find-include]), svg, img, iframe, script, style, [aria-hidden='true'], .katex, [data-chat-find-exclude]";
 	const walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT | NodeFilter.SHOW_ELEMENT);
 	while (walker.nextNode()) {
 		const current = walker.currentNode;
 		if (current.nodeType === Node.ELEMENT_NODE && (current as Element).tagName !== "BR") continue;
 		// React Markdown emits <br> followed by a newline text node for a hard
 		// break. Use that real node once, preserving offsets and Range endpoints.
-		let next = current.nextSibling;
-		while (next instanceof Element && next.getAttribute("data-animated") === "true") next = next.firstChild;
-		if (current.nodeType === Node.ELEMENT_NODE && next?.nodeType === Node.TEXT_NODE && next.textContent?.startsWith("\n")) continue;
+		if (current.nodeType === Node.ELEMENT_NODE && current.nextSibling?.nodeType === Node.TEXT_NODE && current.nextSibling.textContent?.startsWith("\n")) continue;
 		const node = current.nodeType === Node.TEXT_NODE ? current as Text : document.createTextNode("\n");
 		const parent = current.parentElement;
 		if (!node.data || parent?.closest(excluded)) continue;
