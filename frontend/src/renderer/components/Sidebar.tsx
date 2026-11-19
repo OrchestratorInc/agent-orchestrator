@@ -1636,14 +1636,14 @@ const ProjectItem = memo(function ProjectItem({
 	const readBaseline = useSessionReadStore((state) => state.baseline);
 	const markRead = useSessionReadStore((state) => state.markRead);
 	const openSessionId = selection.activeSessionId;
-	const openSession = visibleSessions.find((session) => session.id === openSessionId);
+	const viewedSession = visibleSessions.find((session) => session.id === openSessionId);
 	// The open session's row marks it read, but a collapsed project has no rows,
 	// so the project keeps it read too: nothing the user is looking at is unread.
 	useEffect(() => {
-		if (!openSession) return;
-		const updated = Date.parse(openSession.updatedAt);
-		if (Number.isFinite(updated)) markRead(sessionReadKey(openSession), updated);
-	}, [markRead, openSession]);
+		if (!viewedSession) return;
+		const updated = Date.parse(viewedSession.updatedAt);
+		if (Number.isFinite(updated)) markRead(sessionReadKey(viewedSession), updated);
+	}, [markRead, viewedSession]);
 	const projectActivity = useMemo(() => {
 		if (projectNeedsInput) return "attention" as const;
 		const indicators = visibleSessions.map((session) => getSessionRowIndicator(session));
