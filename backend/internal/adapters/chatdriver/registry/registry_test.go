@@ -64,9 +64,16 @@ func TestShippedChatDrivers(t *testing.T) {
 
 // Iterate the real registry rather than maintaining another harness allowlist.
 // A wrapper or new transport that drops reporting must fail this release check.
-func TestEveryShippedChatDriverProvidesBackgroundTaskReporting(t *testing.T) {
+func TestShippedChatDriverBackgroundTaskReporting(t *testing.T) {
 	r := Build(nil, nil)
 	for harness, driver := range r.drivers {
+		// Unreal v0.1.1 has foreground tools only, no native background mode.
+		if harness == domain.HarnessUnreal {
+			if _, ok := driver.(ports.ChatBackgroundTaskDriver); ok {
+				t.Error("foreground-only Unreal must not advertise background reporting")
+			}
+			continue
+		}
 		reporter, ok := driver.(ports.ChatBackgroundTaskDriver)
 		if !ok {
 			t.Errorf("%s Chat driver drops background-task reporting", harness)

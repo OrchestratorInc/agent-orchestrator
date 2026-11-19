@@ -38,7 +38,6 @@ import (
 	"github.com/unreallabsai/unreal-agent/harness/tool/bash"
 	"github.com/unreallabsai/unreal-agent/harness/tool/viewimage"
 
-	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/chatdriver/backgroundtasks"
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
 	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
 )
@@ -62,13 +61,12 @@ type activeTurnState struct {
 }
 
 type providerRuntime struct {
-	backgroundTasks backgroundtasks.Tracker
-	ctx             context.Context
-	cfg             providerConfig
-	store           *localfile.Store
-	client          providerClient
-	model           string
-	journal         *eventJournal
+	ctx     context.Context
+	cfg     providerConfig
+	store   *localfile.Store
+	client  providerClient
+	model   string
+	journal *eventJournal
 
 	mu           sync.Mutex
 	active       activeTurnState
@@ -190,9 +188,6 @@ func (runtime *providerRuntime) handleCommand(cmd command) error {
 		return runtime.interrupt(cmd.ProviderTurnID)
 	case "ack":
 		return runtime.journal.ack(cmd.EventID)
-	case "background_tasks":
-		tasks := runtime.backgroundTasks.Snapshot(time.Now())
-		return runtime.journal.writeControl(frame{Version: protocolVersion, Type: "background_tasks", RequestID: cmd.RequestID, BackgroundTasks: &tasks})
 	case "replay":
 		return runtime.journal.replay()
 	default:
@@ -322,10 +317,14 @@ func (runtime *providerRuntime) startCoordinator() error {
 	if len(skills) != 0 {
 		toolNames = append(toolNames, tool.SkillUseName)
 	}
+	operationDirectory := filepath.Join(runtime.cfg.DataDir, "agent-runtime", string(domain.HarnessUnreal), "operations", runtime.cfg.ProviderConversationID)
+	if err := os.MkdirAll(operationDirectory, 0o700); err != nil {
+		return fmt.Errorf("create Unreal Agent operation directory: %w", err)
+	}
 	registry := tool.NewRegistry(tool.StaticTranslators{
 		Bash: bash.New(bash.Config{
 			Shell: shell(), Directory: runtime.cfg.WorkspacePath,
-			BaseDirectory: filepath.Join(runtime.cfg.DataDir, "agent-runtime", string(domain.HarnessUnreal), "operations", runtime.cfg.ProviderConversationID),
+			BaseDirectory: operationDirectory,
 		}),
 		ViewImage: viewimage.New(viewimage.Config{Directory: runtime.cfg.WorkspacePath}),
 	}, toolNames...)
@@ -446,13 +445,6 @@ func (runtime *providerRuntime) observeModelResponse(turnID string, stored sessi
 			if call.Name == tool.BashName {
 				kind = domain.ActivityKindCommand
 			}
-			if kind == domain.ActivityKindCommand {
-				var arguments struct {
-					Command string `json:"command"`
-				}
-				_ = json.Unmarshal([]byte(call.Arguments), &arguments)
-				runtime.backgroundTasks.Update(ports.ChatBackgroundTask{ID: call.CallID, RunID: turnID, Kind: "shell", Description: arguments.Command, State: "running"}, time.Now())
-			}
 
 			runtime.mu.Lock()
 			runtime.pendingTools[call.CallID] = kind
@@ -479,8 +471,19 @@ func (runtime *providerRuntime) failTurn(turnID string, err error) {
 }
 
 func (runtime *providerRuntime) observeToolStatus(turnID string, status sessionstore.ToolCallStatus) {
-	if len(status.Status.WaitingFor) != 0 {
-		return
+	// WaitingFor identifies the operations even after reconciliation finishes.
+	// Only their actual states establish whether this foreground tool settled.
+	terminal := make(map[operation.ID]bool, len(status.Operations))
+	for _, value := range status.Operations {
+		switch value.Status {
+		case operation.StatusCompleted, operation.StatusFailed, operation.StatusCanceled:
+			terminal[value.ID] = true
+		}
+	}
+	for _, id := range status.Status.WaitingFor {
+		if !terminal[id] {
+			return
+		}
 	}
 	state := domain.ActivityStatusCompleted
 	if status.Status.Error != "" {
@@ -493,7 +496,6 @@ func (runtime *providerRuntime) observeToolStatus(turnID string, status sessions
 	if kind == "" {
 		kind = domain.ActivityKindMCPTool
 	}
-	runtime.backgroundTasks.Finish(status.CallID, string(state), time.Now())
 	detail, _ := json.Marshal(map[string]string{"error": status.Status.Error})
 	_ = runtime.emit(wireEvent{Kind: ports.ChatEventActivityCompleted, ProviderTurnID: turnID, ProviderItemID: status.CallID, ActivityKind: kind, ActivityStatus: state, Detail: detail})
 }
