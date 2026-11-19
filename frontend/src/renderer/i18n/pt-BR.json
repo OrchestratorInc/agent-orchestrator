@@ -1769,7 +1769,7 @@
 	"settings.project.coAuthorCommitsToggle": "Add Orchestrator as a commit co-author",
 	"settings.cloudProject.coAuthorCommitsUnsupported": "This Cloud control plane does not support the co-author setting yet, so it stays on.",
 	"settings.project.details": "Detalhes do projeto",
-	"settings.project.idleOrchestratorCompactionDescription": "Antes que o cache de prompts do orquestrador expire, resume o histórico para que a próxima mensagem comece com pouco contexto. Só é executado com cache de uma hora e pelo menos 150k tokens de contexto. O resumo mantém menos detalhes que o histórico completo.",
+	"settings.project.idleOrchestratorCompactionDescription": "Pouco antes de o cache de prompts do orquestrador expirar, resume o histórico para que a próxima mensagem comece com pouco contexto. Segue a duração do cache informada pelo Claude (uma hora ou cinco minutos) e exige pelo menos 150k tokens de contexto. O resumo mantém menos detalhes que o histórico completo.",
 	"settings.project.idleOrchestratorCompactionToggle": "Compactar quando ocioso",
 	"settings.project.issues": "Issues",
 	"settings.project.pullRequests": "Pull requests",

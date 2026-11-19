@@ -146,41 +146,93 @@ func recordTranscriptUsage(t *testing.T, h *harness, providerUsage string) {
 	}
 }
 
-// A large orchestrator that has gone quiet is compacted while its prompt cache
-// is still warm, and only once for that quiet period.
-func TestCompactIdleOrchestratorCompactsOncePerIdlePeriod(t *testing.T) {
-	h, conv := idleOrchestrator(t, defaultIdleOrchestrator())
-	ctx := context.Background()
+// window returns the compaction window for a cache lifetime Claude reports.
+func window(t *testing.T, lifetime time.Duration) chatsvc.IdleCompactionWindow {
+	t.Helper()
+	w, ok := chatsvc.IdleCompactionWindowFor(lifetime)
+	if !ok {
+		t.Fatalf("no idle compaction window for %v", lifetime)
+	}
+	return w
+}
 
-	compacted, err := h.svc.CompactIdleOrchestrator(ctx, testSession)
-	if err != nil || !compacted || conv.compactCalls() != 1 {
-		t.Fatalf("first pass: compacted=%v err=%v calls=%d, want one compaction", compacted, err, conv.compactCalls())
+// A large orchestrator that has gone quiet is compacted inside the window for
+// the cache lifetime Claude reported, and only once for that quiet period.
+func TestCompactIdleOrchestratorCompactsOncePerIdlePeriod(t *testing.T) {
+	tests := []struct {
+		name       string
+		cacheUsage string
+		lifetime   time.Duration
+	}{
+		{name: "one-hour cache", cacheUsage: oneHourCacheWrite, lifetime: time.Hour},
+		{name: "five-minute cache", cacheUsage: fiveMinCacheWrite, lifetime: 5 * time.Minute},
 	}
-	// The next sweep finds the same quiet period: a second compaction would be
-	// a wasted summary turn.
-	if err := h.svc.CompactIdleOrchestrators(ctx); err != nil {
-		t.Fatalf("second pass: %v", err)
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			setup := defaultIdleOrchestrator()
+			setup.cacheUsage = tt.cacheUsage
+			w := window(t, tt.lifetime)
+			setup.idle = (w.Start + w.Deadline) / 2
+			h, conv := idleOrchestrator(t, setup)
+			ctx := context.Background()
+
+			compacted, err := h.svc.CompactIdleOrchestrator(ctx, testSession)
+			if err != nil || !compacted || conv.compactCalls() != 1 {
+				t.Fatalf("first pass: compacted=%v err=%v calls=%d, want one compaction", compacted, err, conv.compactCalls())
+			}
+			// The next sweep finds the same quiet period: a second compaction
+			// would be a wasted summary turn.
+			if err := h.svc.CompactIdleOrchestrators(ctx); err != nil {
+				t.Fatalf("second pass: %v", err)
+			}
+			if conv.compactCalls() != 1 {
+				t.Fatalf("compactions = %d after a repeat pass, want 1", conv.compactCalls())
+			}
+		})
 	}
-	if conv.compactCalls() != 1 {
-		t.Fatalf("compactions = %d after a repeat pass, want 1", conv.compactCalls())
+}
+
+// Each cache lifetime has its own window, and the window sits before expiry.
+func TestIdleCompactionWindowsEndBeforeTheCacheExpires(t *testing.T) {
+	for _, lifetime := range []time.Duration{time.Hour, 5 * time.Minute} {
+		w := window(t, lifetime)
+		if w.Start <= 0 || w.Start >= w.Deadline || w.Deadline >= lifetime {
+			t.Errorf("window for %v = %+v, want 0 < start < deadline < lifetime", lifetime, w)
+		}
+	}
+	if _, ok := chatsvc.IdleCompactionWindowFor(0); ok {
+		t.Error("an unknown cache lifetime has a window, want none")
 	}
 }
 
 func TestCompactIdleOrchestratorSkipsIneligibleSessions(t *testing.T) {
+	hour, fiveMin := window(t, time.Hour), window(t, 5*time.Minute)
 	tests := []struct {
 		name   string
 		change func(*idleOrchestratorSetup)
 	}{
 		// Workers can lose mid-task code context, and many never wake again.
 		{name: "worker", change: func(s *idleOrchestratorSetup) { s.kind = domain.KindWorker }},
-		{name: "not idle long enough", change: func(s *idleOrchestratorSetup) { s.idle = chatsvc.IdleBeforeCompaction - time.Minute }},
+		{name: "one-hour cache, not idle long enough", change: func(s *idleOrchestratorSetup) { s.idle = hour.Start - time.Minute }},
 		// After the cache has expired, compacting pays the full re-write itself.
-		{name: "cache already expired", change: func(s *idleOrchestratorSetup) { s.idle = chatsvc.IdleCompactionDeadline }},
+		{name: "one-hour cache already expired", change: func(s *idleOrchestratorSetup) { s.idle = hour.Deadline }},
+		{name: "five-minute cache, not idle long enough", change: func(s *idleOrchestratorSetup) {
+			s.cacheUsage, s.idle = fiveMinCacheWrite, fiveMin.Start-10*time.Second
+		}},
+		{name: "five-minute cache already expired", change: func(s *idleOrchestratorSetup) {
+			s.cacheUsage, s.idle = fiveMinCacheWrite, fiveMin.Deadline
+		}},
+		// The one-hour window would compact a five-minute cache long after expiry.
+		{name: "five-minute cache idle for most of an hour", change: func(s *idleOrchestratorSetup) {
+			s.cacheUsage, s.idle = fiveMinCacheWrite, 50*time.Minute
+		}},
+		// The five-minute window would compact a one-hour cache needlessly early.
+		{name: "one-hour cache idle a few minutes", change: func(s *idleOrchestratorSetup) {
+			s.idle = (fiveMin.Start + fiveMin.Deadline) / 2
+		}},
 		{name: "small context", change: func(s *idleOrchestratorSetup) { s.contextUsed = chatsvc.IdleCompactionMinContext - 1 }},
 		{name: "working", change: func(s *idleOrchestratorSetup) { s.state = domain.ActivityActive }},
 		{name: "project has not opted in", change: func(s *idleOrchestratorSetup) { s.optedOut = true }},
-		// A five-minute cache expired long before the idle window opens.
-		{name: "five-minute cache", change: func(s *idleOrchestratorSetup) { s.cacheUsage = fiveMinCacheWrite }},
 		{name: "cache lifetime not recorded", change: func(s *idleOrchestratorSetup) { s.cacheUsage = "" }},
 		{name: "only cache reads recorded", change: func(s *idleOrchestratorSetup) { s.cacheUsage = cacheReadOnlyUsage }},
 		{name: "latest turn failed", change: func(s *idleOrchestratorSetup) { s.turnState = domain.TurnStateFailed }},

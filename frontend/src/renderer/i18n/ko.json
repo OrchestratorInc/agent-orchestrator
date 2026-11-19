@@ -1739,7 +1739,7 @@
 	"settings.project.coAuthorCommitsToggle": "Add Orchestrator as a commit co-author",
 	"settings.cloudProject.coAuthorCommitsUnsupported": "This Cloud control plane does not support the co-author setting yet, so it stays on.",
 	"settings.project.details": "프로젝트 세부 정보",
-	"settings.project.idleOrchestratorCompactionDescription": "오케스트레이터의 프롬프트 캐시가 만료되기 전에 기록을 요약해 다음 메시지가 작은 컨텍스트로 시작되게 합니다. 1시간 캐시이고 컨텍스트가 15만 토큰 이상일 때만 실행됩니다. 요약은 전체 기록보다 세부 정보가 적습니다.",
+	"settings.project.idleOrchestratorCompactionDescription": "오케스트레이터의 프롬프트 캐시가 만료되기 직전에 기록을 요약해 다음 메시지가 작은 컨텍스트로 시작되게 합니다. Claude가 보고하는 캐시 수명(1시간 또는 5분)을 따르며 컨텍스트가 15만 토큰 이상이어야 합니다. 요약은 전체 기록보다 세부 정보가 적습니다.",
 	"settings.project.idleOrchestratorCompactionToggle": "유휴 시 압축",
 	"settings.project.issues": "이슈",
 	"settings.project.pullRequests": "풀 리퀘스트",

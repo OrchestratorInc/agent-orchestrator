@@ -104,9 +104,10 @@ const usageReconcileTick = 3 * time.Minute
 
 const chatHibernateSweepTick = 30 * time.Second
 
-// idleCompactionSweepTick paces idle orchestrator compaction. Its window is
-// ten minutes wide, so a one-minute pass never misses it.
-const idleCompactionSweepTick = time.Minute
+// idleCompactionSweepTick paces idle orchestrator compaction. The narrowest
+// window, for a five-minute prompt cache, is one minute wide, so a 15-second
+// pass reaches it several times.
+const idleCompactionSweepTick = 15 * time.Second
 
 // workspaceCleanupSweepTick paces the terminated-session cleanup reconcile.
 // Its work is retry and bookkeeping, not anything a user waits on.

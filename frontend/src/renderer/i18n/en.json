@@ -2110,7 +2110,7 @@
 	"settings.project.coAuthorCommitsToggle": "Add Orchestrator as a commit co-author",
 	"settings.cloudProject.coAuthorCommitsUnsupported": "This Cloud control plane does not support the co-author setting yet, so it stays on.",
 	"settings.project.details": "Project details",
-	"settings.project.idleOrchestratorCompactionDescription": "Before the orchestrator's prompt cache expires, summarize its history so the next message it gets starts small. Only runs on a one-hour cache with at least 150k tokens of context. The summary keeps less detail than the full history.",
+	"settings.project.idleOrchestratorCompactionDescription": "Shortly before the orchestrator's prompt cache expires, summarize its history so the next message it gets starts small. Follows the cache lifetime Claude reports (one hour or five minutes) and needs at least 150k tokens of context. The summary keeps less detail than the full history.",
 	"settings.project.idleOrchestratorCompactionToggle": "Compact when idle",
 	"settings.project.issues": "Issues",
 	"settings.project.pullRequests": "Pull requests",
