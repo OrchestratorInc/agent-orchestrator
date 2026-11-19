@@ -320,7 +320,9 @@ var orchestratorGitignoreCommits = map[string]bool{
 // copied with a `/<name>/` line; such a line does not count, so a project
 // registered then keeps receiving the folders it always received.
 func workspaceParentIgnores(ctx context.Context, parent, name string) bool {
-	cmd := aoprocess.CommandContext(ctx, "git", "-C", parent, "check-ignore", "-v", "-z", "--", name)
+	// git accepts -z only with --stdin.
+	cmd := aoprocess.CommandContext(ctx, "git", "-C", parent, "check-ignore", "-v", "-z", "--stdin")
+	cmd.Stdin = strings.NewReader(name + "\x00")
 	out, err := cmd.Output()
 	if err != nil {
 		// Exit 1 means not ignored; anything else leaves the folder as it was.
