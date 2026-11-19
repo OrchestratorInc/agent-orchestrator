@@ -72,7 +72,7 @@ import { agentAccountLabel, agentAccountOptions, moveSessionAgentAccount, useAge
 import { useStillHere } from "../useStillHere";
 import { ARCHIVE_SESSION_CONFIRM } from "../worker-action-model";
 import { changedPathCount, fileRoute, filesRoute, FilesNavigationContext, type FilesNavigation } from "../files/navigation";
-import { isAbsoluteFileReference } from "./fileLinks";
+import { isAbsoluteFileReference, matchBareFile } from "./fileLinks";
 import { TurnArtifactsContext, useTurnArtifactSourceFor } from "./TurnArtifacts";
 import { TurnRecoveryContext, type TurnRecovery } from "./UsageLimitNotice";
 import { usageLimitedTurn } from "./usageLimit";
@@ -155,6 +155,9 @@ export function ChatSessionScreen({ session: boardSession }: { session: MobileCh
 	const restoreRequest = useCallback(() => setDismissedRequest(undefined), []);
 	const [filePaths, setFilePaths] = useState<string[]>([]);
 	const [filePathsTruncated, setFilePathsTruncated] = useState(false);
+	// Whether `filePaths` has been read: a bare file name in a reply waits for it.
+	const [filePathsLoaded, setFilePathsLoaded] = useState(false);
+	const loadFilePaths = useRef<() => void>(() => {});
 	const filePathsRequest = useRef<Promise<{ paths: string[]; truncated: boolean }> | null>(null);
 	const [openingShell, setOpeningShell] = useState(false);
 	const [resuming, setResuming] = useState(false);
@@ -342,7 +345,9 @@ export function ChatSessionScreen({ session: boardSession }: { session: MobileCh
 				if (current()) router.push(fileRoute(session.id, path, currentHostId, previousPath, line));
 			});
 		},
-	}), [config, currentHostId, fileOpenStillHere, router, session.id, sessionName]);
+		bareFile: (name) => filePathsLoaded ? matchBareFile(name, filePaths) : undefined,
+		wantFiles: () => loadFilePaths.current(),
+	}), [config, currentHostId, fileOpenStillHere, filePaths, filePathsLoaded, router, session.id, sessionName]);
 	// The artifacts a turn made, drawn as cards under its reply.
 	const turnArtifacts = useTurnArtifactSourceFor(session.id, conversation.snapshot?.turns, currentHostId);
 	// Re-read git's totals when a turn reports edits, not on a timer.
@@ -466,6 +471,7 @@ export function ChatSessionScreen({ session: boardSession }: { session: MobileCh
 			.then((result) => {
 				setFilePaths(result.paths);
 				setFilePathsTruncated(result.truncated);
+				setFilePathsLoaded(true);
 				return result;
 			})
 			.catch(() => ({ paths: filePaths, truncated: filePathsTruncated }))
@@ -473,6 +479,7 @@ export function ChatSessionScreen({ session: boardSession }: { session: MobileCh
 		filePathsRequest.current = request;
 		return request;
 	}, [config, conversation.snapshot, filePaths, filePathsTruncated, session.id]);
+	loadFilePaths.current = () => { void loadWorkspaceFiles(); };
 
 	const openShell = useCallback(async () => {
 		if (!config || openingShell) return;

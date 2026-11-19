@@ -5,6 +5,14 @@ export type FilesNavigation = {
 	openChanges(): void;
 	/** `line` is a line a chat link cited; the file then opens at it. */
 	openFile(path: string, previousPath?: string, line?: number): void;
+	/**
+	 * The worktree file a bare name in chat (`README.md`) names: its path, null
+	 * when the session has none (or several) by that name, undefined until the
+	 * file list has loaded. Absent where the surface has no file list.
+	 */
+	bareFile?(name: string): string | null | undefined;
+	/** Loads the file list `bareFile` reads, the first time a bare name needs it. */
+	wantFiles?(): void;
 };
 
 export const FilesNavigationContext = createContext<FilesNavigation | null>(null);

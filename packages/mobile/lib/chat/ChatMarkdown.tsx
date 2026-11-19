@@ -20,7 +20,7 @@ import { parseBlocks, type MarkdownBlock, type TableAlign } from "./markdownBloc
 import { iconSize, prose, radius, space, touchTarget, type } from "../tokens";
 import type { ChatExcerpt } from "./types";
 import { sessionLink } from "./automationMessages";
-import { chatFileReference } from "./fileLinks";
+import { chatFileReference, isBareFileReference } from "./fileLinks";
 import { useFilesNavigation } from "../files/navigation";
 
 // The diagram renderer (a WebView and the engine's loader) loads on the first
@@ -354,17 +354,24 @@ function MarkdownLink({ url, label, style }: { url: string; label: string; style
 	useEffect(() => {
 		if (bareSessionId && !known) names?.want?.(bareSessionId);
 	}, [bareSessionId, known, names]);
+	const file = session || WEB_OR_AO_LINK.test(url) ? undefined : chatFileReference(url);
+	const bare = Boolean(file && isBareFileReference(file.path));
+	const bareTarget = bare && file ? files?.bareFile?.(file.path) : undefined;
+	useEffect(() => {
+		if (bare && bareTarget === undefined) files?.wantFiles?.();
+	}, [bare, bareTarget, files]);
 	if (session) {
 		const text = bareSessionId ? known || bareSessionId : label;
 		// Without a provider nothing knows which machine the session is on, so it stays words.
 		if (!provided) return <Text>{text}</Text>;
 		return <Text accessibilityRole="link" accessibilityHint="Opens this session's chat" style={style} onPress={() => provided(url)}>{text}</Text>;
 	}
-	const file = WEB_OR_AO_LINK.test(url) ? undefined : chatFileReference(url);
 	if (file) {
-		// Only a session's surface can open its files; elsewhere the label stays words.
-		if (!files) return <Text>{label}</Text>;
-		return <Text accessibilityRole="link" accessibilityHint={`Opens ${file.path}`} style={style} onPress={() => { haptics.tap(); files.openFile(file.path, undefined, file.line); }}>{label}</Text>;
+		// Only a session's surface can open its files, and a bare name only when
+		// the session has that file; otherwise the label stays words.
+		const target = bare ? bareTarget : file.path;
+		if (!files || !target) return <Text>{label}</Text>;
+		return <Text accessibilityRole="link" accessibilityHint={`Opens ${target}`} style={style} onPress={() => { haptics.tap(); files.openFile(target, undefined, file.line); }}>{label}</Text>;
 	}
 	const open = provided ?? defaultOpenChatLink;
 	return <Text accessibilityRole="link" style={style} onPress={() => open(url)}>{label}</Text>;

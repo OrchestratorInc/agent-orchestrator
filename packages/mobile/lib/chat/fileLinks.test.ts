@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { fileRoute } from "../files/navigation";
-import { chatFileReference, isAbsoluteFileReference } from "./fileLinks";
+import { chatFileReference, isAbsoluteFileReference, isBareFileReference, matchAbsoluteFile, matchBareFile } from "./fileLinks";
 
 describe("chat file links", () => {
 	it("reads the workspace path and line agents cite", () => {
@@ -47,5 +47,23 @@ describe("chat file links", () => {
 		expect(fileRoute("s1", "src/a.ts", "h1", undefined, 12).params).toMatchObject({ path: "src/a.ts", mode: "file", line: "12", hostId: "h1" });
 		expect(fileRoute("s1", "src/a.ts", "h1").params).toMatchObject({ mode: "diff" });
 		expect(fileRoute("s1", "src/a.ts", "h1").params).not.toHaveProperty("line");
+	});
+
+	it("names a bare file only when the session has exactly one by that name", () => {
+		const paths = ["README.md", "lib/chat/api.ts", "lib/files/api.ts", "lib/chat/fileLinks.ts"];
+		expect(isBareFileReference("README.md")).toBe(true);
+		expect(isBareFileReference("lib/api.ts")).toBe(false);
+		expect(isBareFileReference("/abs/api.ts")).toBe(false);
+		expect(matchBareFile("README.md", paths)).toBe("README.md");
+		expect(matchBareFile("fileLinks.ts", paths)).toBe("lib/chat/fileLinks.ts");
+		// Two api.ts: no telling which one was meant.
+		expect(matchBareFile("api.ts", paths)).toBeNull();
+		expect(matchBareFile("example.com", paths)).toBeNull();
+	});
+
+	it("matches an absolute path to the longest worktree path it ends with", () => {
+		const found = ["src/a.ts", "pkg/src/a.ts", "other/a.ts"];
+		expect(matchAbsoluteFile("/sandbox/repo/pkg/src/a.ts", found)).toBe("pkg/src/a.ts");
+		expect(matchAbsoluteFile("/sandbox/repo/lib/a.ts", found)).toBeNull();
 	});
 });

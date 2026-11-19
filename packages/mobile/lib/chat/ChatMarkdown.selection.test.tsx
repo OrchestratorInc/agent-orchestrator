@@ -364,6 +364,25 @@ it("keeps a route group's parentheses in a file link", () => {
 	act(() => renderer.unmount());
 });
 
+it("links a bare file name only when the session has that file", () => {
+	const openFile = vi.fn();
+	const wantFiles = vi.fn();
+	const files = (bareFile: (name: string) => string | null | undefined) => ({ openChanges: vi.fn(), openFile, bareFile, wantFiles });
+	const text = "See [README.md:3](README.md:3) and [docs](example.com).";
+	const links = (renderer: ReactTestRenderer) => renderer.root.findAll((node) => typeof node.type === "string" && node.props.accessibilityRole === "link");
+	let renderer!: ReactTestRenderer;
+	// Until the file list loads, both stay words and the list is asked for.
+	act(() => { renderer = create(<FilesNavigationContext.Provider value={files(() => undefined)}><ChatMarkdown text={text} /></FilesNavigationContext.Provider>); });
+	expect(links(renderer)).toEqual([]);
+	expect(wantFiles).toHaveBeenCalled();
+	act(() => renderer.update(<FilesNavigationContext.Provider value={files((name) => name === "README.md" ? "docs/README.md" : null)}><ChatMarkdown text={text} /></FilesNavigationContext.Provider>));
+	expect(links(renderer).map(textOf)).toEqual(["README.md:3"]);
+	expect(textOf(renderer.root)).toContain("and docs.");
+	act(() => links(renderer)[0]!.props.onPress());
+	expect(openFile).toHaveBeenCalledWith("docs/README.md", undefined, 3);
+	act(() => renderer.unmount());
+});
+
 it("shows a file link's label as words where no session can open it", () => {
 	let renderer!: ReactTestRenderer;
 	act(() => { renderer = create(<ChatMarkdown text="See [api.ts:12](lib/api.ts:12) now" />); });

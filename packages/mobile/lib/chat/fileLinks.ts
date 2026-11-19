@@ -74,3 +74,37 @@ export function chatFileReference(href: string): ChatFileReference | undefined {
 export function isAbsoluteFileReference(path: string): boolean {
 	return path.startsWith("/") || path === "~" || path.startsWith("~/") || /^[A-Za-z]:\//.test(path);
 }
+
+/**
+ * A bare name (`README.md`, `api.ts:12`) has no folder to say it is a file:
+ * `example.com` has the same shape. Like the desktop, it is a file only when
+ * the session has one by that name.
+ */
+export function isBareFileReference(path: string): boolean {
+	return !path.includes("/") && !isAbsoluteFileReference(path);
+}
+
+/** The workspace path a bare name names: the exact path, else the one file with that name. */
+export function matchBareFile(name: string, paths: readonly string[]): string | null {
+	if (paths.includes(name)) return name;
+	let found: string | null = null;
+	for (const path of paths) {
+		if (path.slice(path.lastIndexOf("/") + 1) !== name) continue;
+		if (found) return null;
+		found = path;
+	}
+	return found;
+}
+
+/**
+ * The workspace path an absolute path names, from candidates the worktree has:
+ * the longest one the absolute path ends with. For a backend that cannot place
+ * an absolute path itself (Orchestrator Cloud).
+ */
+export function matchAbsoluteFile(absolute: string, candidates: readonly string[]): string | null {
+	let best: string | null = null;
+	for (const candidate of candidates) {
+		if ((absolute === candidate || absolute.endsWith(`/${candidate}`)) && (!best || candidate.length > best.length)) best = candidate;
+	}
+	return best;
+}
