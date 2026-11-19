@@ -25,7 +25,7 @@ func openHandsImportFixture(t *testing.T) ports.ImportedSessionRelocation {
 		t.Fatal(err)
 	}
 	r.TranscriptPath = filepath.Join(dir, "base_state.json")
-	raw, err := json.Marshal(map[string]any{"id": r.NativeSessionID, "workspace": map[string]string{"kind": "LocalWorkspace", "working_dir": t.TempDir()}, "agent": map[string]any{"llm": map[string]string{"api_key": "**********"}}, "leaf_event_id": "87654321-1234-1234-1234-123456789012"})
+	raw, err := json.Marshal(map[string]any{"id": r.NativeSessionID, "persistence_dir": dir, "workspace": map[string]string{"kind": "LocalWorkspace", "working_dir": t.TempDir()}, "agent": map[string]any{"llm": map[string]string{"api_key": "**********"}}, "leaf_event_id": "87654321-1234-1234-1234-123456789012"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -66,13 +66,19 @@ func TestOpenHandsPrivatePreparationAndCheckpointRetry(t *testing.T) {
 		t.Fatal(err)
 	}
 	var state struct {
-		Workspace struct {
+		PersistenceDir string `json:"persistence_dir"`
+		Workspace      struct {
 			Kind string `json:"kind"`
 			CWD  string `json:"working_dir"`
 		} `json:"workspace"`
 	}
 	if err := json.Unmarshal(raw, &state); err != nil || state.Workspace.CWD != r.LaunchCWD || state.Workspace.Kind != "LocalWorkspace" {
 		t.Fatalf("private workspace = %+v, %v", state, err)
+	}
+	// Native deserialization can use this persisted path for later state and
+	// event writes, independently of the CLI's selected conversation root.
+	if state.PersistenceDir != filepath.Dir(ref.TranscriptPath) {
+		t.Fatalf("native persistence still targets source: %q", state.PersistenceDir)
 	}
 	paths, err := ConversationFiles(ctx, r.ConfigDir, r.NativeSessionID)
 	if err != nil {

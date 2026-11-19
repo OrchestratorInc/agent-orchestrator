@@ -103,10 +103,6 @@ func (p *Plugin) PrepareImportedSession(ctx context.Context, r ports.ImportedSes
 		return empty, err
 	}
 	state["workspace"] = workspace
-	privateState, err := json.Marshal(state)
-	if err != nil {
-		return empty, err
-	}
 	copyRoot, err := os.MkdirTemp(parent, ".native-"+key+"-")
 	if err != nil {
 		return empty, err
@@ -118,6 +114,18 @@ func (p *Plugin) PrepareImportedSession(ctx context.Context, r ports.ImportedSes
 		}
 	}()
 	conversation := filepath.Join(copyRoot, name)
+	// The native SDK restores this field from base_state.json. Merely
+	// redirecting conversation discovery leaves subsequent writes pointing
+	// at the source store, even when tools use the new workspace.
+	persistence, err := json.Marshal(conversation)
+	if err != nil {
+		return empty, err
+	}
+	state["persistence_dir"] = persistence
+	privateState, err := json.Marshal(state)
+	if err != nil {
+		return empty, err
+	}
 	if err := os.MkdirAll(filepath.Join(conversation, "events"), 0o700); err != nil {
 		return empty, err
 	}
