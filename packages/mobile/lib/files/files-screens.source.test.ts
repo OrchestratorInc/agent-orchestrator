@@ -12,7 +12,7 @@ describe("the Files list", () => {
 	// A folder is a page of its own: the edge swipe, Android's back and the back
 	// button's history all climb one level instead of leaving Files.
 	it("opens each folder as a page titled with its name", () => {
-		expect(source("./useFileActions.ts")).toContain('router.push({ pathname: "/files/[sessionId]/folder", params: { sessionId, dir, hostId } })');
+		expect(source("./useFileActions.ts")).toContain('router.push({ pathname: "/files/[sessionId]/folder", params: { sessionId, dir, hostId, ...picked } })');
 		expect(source("../../app/files/[sessionId]/folder.tsx")).toContain("navigation.setOptions({ title: name })");
 	});
 
@@ -28,6 +28,23 @@ describe("the Files list", () => {
 	});
 });
 
+describe("the Files list's loading state", () => {
+	// A worktree pick has no groups until a manifest arrives, so a failed first
+	// read must end the spinner and show its error with Try again.
+	// One degraded poll must not drop the pickers and the pick, and a branch list
+	// that failed to load comes back with a pull to refresh.
+	it("settles the pickers once per machine and retries a failed branch list", () => {
+		const index = source("../../app/files/[sessionId]/index.tsx");
+		expect(index).toContain("const capable = useGitCapable(");
+		expect(index).not.toContain("scopesAvailable(manifest)");
+		expect(index).toContain("reloadBranches();");
+	});
+
+	it("shows a failed manifest read instead of loading forever", () => {
+		expect(source("../../app/files/[sessionId]/index.tsx")).toContain("!(error && fromManifest)");
+	});
+});
+
 describe("the file viewer", () => {
 	const file = source("../../app/files/[sessionId]/file.tsx");
 
@@ -40,6 +57,30 @@ describe("the file viewer", () => {
 	// At a large text size the drag strip has to cover the scaled +/− column too.
 	it("sizes the drag-to-select strip to the scaled gutter and marker", () => {
 		expect(file).toContain("gutterWidth: gutterWidth(digits, codeScale) + MARKER_WIDTH * codeScale,");
+	});
+
+	// A cited line opens unwrapped, where every row's place is known, so the list
+	// starts at the line instead of drawing every row on the way to it.
+	it("opens a cited line at once through a known row layout", () => {
+		expect(file).toContain("const [wrap, setWrap] = useState(!citedLine);");
+		expect(file).toContain("getItemLayout={uniformRows ? rowLayout : undefined}");
+		expect(file).toContain("initialScrollIndex={uniformRows && openAt > 0 ? openAt : undefined}");
+	});
+
+	// Past the machine's size limit a file arrives cut short; the File view shows
+	// what arrived, and a cited line past it opens where it ends, saying so.
+	it("shows a file cut short, and says when a cited line is past it", () => {
+		expect(file).toContain("fileDisplayRows(lines ?? preview ?? [])");
+		expect(file).toContain("Line ${citedLine} is past the part shown, which ends at line ${preview.length}.");
+		expect(file).toContain("const jumpIndex = citedIndex >= 0 ? citedIndex : citedPast ? rows.length - 1 : -1;");
+	});
+
+	// The cited view (text, source, unwrapped) belongs to the cited file: the
+	// next changed file opens on its diff, as Files opens any changed file.
+	it("drops a cited line's view when stepping to another file", () => {
+		const step = file.slice(file.indexOf("const go = useCallback"), file.indexOf("const onSelect = useCallback"));
+		expect(step).toContain('line: ""');
+		expect(step).toMatch(/if \(citedLine\) \{\s*setMode\("diff"\);\s*setRendered\(true\);\s*setWrap\(true\);/);
 	});
 
 	// The composer rides the keyboard by a transform, which no layout reports, so

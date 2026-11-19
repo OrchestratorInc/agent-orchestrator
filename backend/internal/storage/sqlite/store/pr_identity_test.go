@@ -319,8 +319,8 @@ func TestPRReconciliationRepointsNotificationAndReviewHistory(t *testing.T) {
 		t.Fatal(err)
 	}
 	for _, run := range []domain.ReviewRun{
-		{ID: "old-run", ReviewID: review.ID, SessionID: session.ID, Harness: review.Harness, PRURL: oldURL, TargetSHA: "old-head", Status: domain.ReviewRunComplete, Verdict: domain.VerdictApproved, CreatedAt: now},
-		{ID: "current-run", ReviewID: review.ID, SessionID: session.ID, Harness: review.Harness, PRURL: currentURL, TargetSHA: "current-head", Status: domain.ReviewRunComplete, Verdict: domain.VerdictApproved, CreatedAt: now.Add(time.Minute)},
+		{ID: "old-run", ReviewID: review.ID, SessionID: session.ID, Harness: review.Harness, PRURL: oldURL, TargetSHA: "old-head", Status: domain.ReviewRunCompleted, Verdict: domain.VerdictApproved, CreatedAt: now},
+		{ID: "current-run", ReviewID: review.ID, SessionID: session.ID, Harness: review.Harness, PRURL: currentURL, TargetSHA: "current-head", Status: domain.ReviewRunCompleted, Verdict: domain.VerdictApproved, CreatedAt: now.Add(time.Minute)},
 	} {
 		if err := s.InsertReviewRun(ctx, run); err != nil {
 			t.Fatal(err)

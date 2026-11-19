@@ -346,6 +346,8 @@ while IFS= read -r line; do
 	case "$line" in
 		"Address: "*) addresses+=("$line") ;;
 		"Password: "*) password="${line#Password: }" ;;
+		# A fresh code is printed with the pairing details at the end.
+		"Pairing code: "* | "One device can use it"*) ;;
 		*) printf '%s\n' "$line" ;;
 	esac
 done <<< "$enable_output"
@@ -401,7 +403,20 @@ if "$tunnel" && [[ "$link_help" == *--no-qr* ]]; then
 	printf '\nThe host is not linked to an Orchestrator account. To link it, run: %s remote-host link\n' "$host_root/current/resources/daemon/ao"
 	printf '%s\n' 'Or pair it by hand with these details.'
 fi
+# A one-time pairing code, made now so its 10 minutes start here. A release
+# without `pair` prints its parent's help, and the password is shown instead.
+code=""
+if pair_output="$("$host_root/current/resources/daemon/ao" remote-host pair 2>/dev/null)"; then
+	while IFS= read -r line; do
+		[[ "$line" == "Pairing code: "* ]] && code="${line#Pairing code: }"
+	done <<< "$pair_output"
+fi
 printf '\nPair this host\n\n'
 printf '%s\n' "${addresses[@]}"
-printf '\nPassword: %s\n\n' "$password"
+if [[ -n "$code" ]]; then
+	printf '\nPairing code: %s\n' "$code"
+	printf 'One device can use it, within 10 minutes. For another, run: %s remote-host pair\n\n' "$host_root/current/resources/daemon/ao"
+else
+	printf '\nPassword: %s\n\n' "$password"
+fi
 printf 'On your laptop: Settings → Remote hosts → Add host.\n'

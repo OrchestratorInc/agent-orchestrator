@@ -8,6 +8,17 @@ const turnSummarySource = source.slice(
 	source.indexOf("function ChangedFiles"),
 );
 
+describe("chat turn results", () => {
+	// A failed or interrupted turn shows no tiles, so the changed-files card has
+	// to keep its artifact files: it takes turnResults' files and nothing else.
+	it("lists the changed files turnResults keeps, never a separately filtered diff", () => {
+		expect(turnSummarySource).toContain("const results = useMemo(() => turnResults(turn, source), [source, turn]);");
+		expect(turnSummarySource).toContain("<ChangedFiles turn={turn} changed={results.files} />");
+		expect(turnSummarySource).toContain("<TurnArtifacts artifacts={results.artifacts} source={source} />");
+		expect(turnSummarySource).not.toContain("splitTurnArtifacts");
+	});
+});
+
 describe("chat turn summary styling", () => {
 	it("shows the duration without a trailing divider line", () => {
 		expect(turnSummarySource).toContain("Worked for ${duration}");
@@ -99,16 +110,39 @@ describe("sent human message actions", () => {
 	});
 });
 
-describe("response copy control", () => {
-	const control = source.slice(source.indexOf("function CopyResponseButton"), source.indexOf("function SystemSignal"));
+// A comfortable gap over a floating composer, of which the keyboard takes back
+// a little in step with its own animation (the list's keyboard offset).
+describe("the conversation's end over the composer", () => {
+	it("ends a comfortable gap above the composer's height", () => {
+		expect(source).toContain("paddingBottom: bottomInset ? bottomInset + CONVERSATION_END_GAP : space.xxxl");
+	});
+	it("gives up only part of that gap while the keyboard is up", async () => {
+		const inset = await import("../session/keyboardInset");
+		expect(inset.KEYBOARD_END_GAP_TUCK).toBeGreaterThan(0);
+		expect(inset.KEYBOARD_END_GAP_TUCK).toBeLessThan(inset.CONVERSATION_END_GAP);
+	});
+});
 
-	// A 12pt faint glyph in a 28pt box was nearly invisible and under the
-	// minimum target on both platforms.
-	it("is a visible system glyph in a touch-target-sized button", () => {
-		expect(control).toContain('accessibilityLabel="Copy response"');
-		expect(control).toContain('<AppSymbol name={copied ? "checkmark" : "copy"} size={iconSize.md} color={copied ? t.green : t.textTertiary} />');
-		expect(source).toMatch(/copy: \{[^}]*width: touchTarget, height: touchTarget/);
-		expect(control).not.toContain("t.textFaint");
+// One row closes a turn, under its reply, as on the desktop: copy, roll back,
+// and the time. It must never move the conversation: the copy row that came
+// and went under every reply was a band the composer and keyboard jumped over.
+describe("a turn's action row", () => {
+	const actions = source.slice(source.indexOf("function TurnActions"), source.indexOf("function SystemSignal"));
+	it("copies the reply, rolls the turn back, and says when it was written", () => {
+		expect(actions).toContain('accessibilityLabel="Copy response"');
+		expect(actions).toContain("<TurnRollbackButton turnId={turn.id} onRollback={onRollback} compact />");
+		expect(actions).toContain("formatReplyTime(reply?.createdAt ?? turn.completedAt)");
+	});
+	it("holds its height from the turn's start and takes its touch out by slop", () => {
+		expect(source).toContain("turnActions: { height: TURN_ACTION_SIZE + 2 * TURN_ACTION_SLOP, marginVertical: -TURN_ACTION_SLOP,");
+		expect(actions).toContain("<View style={styles.turnActions}>");
+		expect(actions).toContain("hitSlop={TURN_ACTION_SLOP}");
+	});
+	it("is drawn once per turn, under the final reply, and the summary no longer rolls back", () => {
+		expect(source).toContain("{renderRows(partition.final)}{actions}{summary}");
+		expect(source).not.toContain("styles.responseActions");
+		const summary = source.slice(source.indexOf("function TurnSummary"), source.indexOf("function ChangedFiles"));
+		expect(summary).not.toContain("TurnRollbackButton");
 	});
 });
 
@@ -120,7 +154,13 @@ describe("jump to latest", () => {
 	});
 	// iOS ends the list's own scrolls with onMomentumScrollEnd; that must not stop the follow.
 	it("lets only a drag stop following the newest message", () => {
-		expect(source).toContain("if (followsTail.current && !atTail(event.nativeEvent)) requestAnimationFrame(() => scrollToLatest(false));");
+		expect(source).toContain("if (followsTail.current && !atTail(event.nativeEvent, keyboardInset.current)) requestAnimationFrame(followTail);");
+	});
+	// Under a floating composer the list keeps its size and moves its content with the keyboard.
+	it("moves its own content with the keyboard under a floating composer", () => {
+		expect(source).toContain('keyboardLiftBehavior="always"');
+		expect(source).toContain("return { transform: [{ translateY: hold - growth }] };");
+		expect(source).toContain("const overflow = contentHeight.current - (viewportHeight.current - keyboardInset.current);");
 	});
 	// The keyboard shrinks the list while the composer rides up by a transform.
 	it("keeps the newest message in view when the list shrinks at its end", () => {
@@ -132,27 +172,29 @@ describe("jump to latest", () => {
 		expect(source).toContain("const jumpToLatest = () => { followsTail.current = true; setShowJump(false); scrollToLatest(true); };");
 		// Floating above what sits over the list's end, so it never moves the
 		// composer or the conversation, and fading rather than popping.
-		// It steps aside while the composer is open.
-		expect(source).toContain('{showJump && !jumpHidden ? <Animated.View entering={FadeIn.duration(JUMP_FADE_MS)} exiting={FadeOut.duration(JUMP_FADE_MS)} pointerEvents="box-none" style={[StyleSheet.absoluteFill, { bottom: bottomInset }]}>');
+		// It steps aside while the composer is open; only the jump re-renders for it.
+		expect(source).toContain("{showJump ? <JumpOverlay hidden={jumpHidden} bottom={bottomInset} onPress={jumpToLatest} /> : null}");
 		const screen = readFileSync(new URL("./ChatSessionScreen.tsx", import.meta.url), "utf8");
-		expect(screen).toContain("jumpHidden={composerOpen}");
-		expect(screen).toContain("onExpandedChange={setComposerOpen}");
-		expect(source).toContain("<JumpToLatest onPress={jumpToLatest} />");
+		expect(screen).toContain("onExpandedChange={composerOpen.set}");
+		expect(source).toContain("<JumpToLatest onPress={onPress} />");
 		expect(source).not.toContain("styles.jump");
 	});
 });
 
 // TurnRollbackButton.test and ElicitationInputField.test render these controls.
 describe("turn rollback", () => {
-	const summary = source.slice(source.indexOf("function TurnSummary"), source.indexOf("function TurnPlan"));
+	const actions = source.slice(source.indexOf("function TurnActions"), source.indexOf("function SystemSignal"));
 
 	// Forgetting a turn cannot be undone, so the control asks through the
 	// system's destructive alert rather than a card drawn into the timeline.
 	it("offers the confirming control on a settled turn the provider knows", () => {
-		expect(summary).toContain("const canRollBack = settled && Boolean(turn.providerTurnId) && !turn.rolledBack;");
-		expect(summary).toContain("{onRollback && canRollBack ? <View style={styles.turnLine}><TurnRollbackButton turnId={turn.id} onRollback={onRollback} /></View> : null}");
-		expect(summary).not.toContain("rollbackConfirm");
-		expect(summary).not.toContain("setConfirming");
+		expect(actions).toContain("const canRollBack = settled && Boolean(onRollback) && Boolean(turn.providerTurnId) && !turn.rolledBack;");
+		expect(actions).toContain("{canRollBack && onRollback ? <TurnRollbackButton turnId={turn.id} onRollback={onRollback} compact /> : null}");
+		// Fork shares the row: it shows on a turn a fork can copy, beside Roll back.
+		expect(actions).toContain("const canFork = Boolean(onFork) && forkableTurn(turn);");
+		expect(actions).toContain("{canFork && onFork ? <TurnForkButton turnId={turn.id} onFork={onFork} compact /> : null}");
+		expect(actions).not.toContain("rollbackConfirm");
+		expect(actions).not.toContain("setConfirming");
 	});
 });
 
@@ -175,7 +217,7 @@ describe("request cards in the timeline", () => {
 	it("buzz once, when an answer lands or fails", () => {
 		expect(approval).toMatch(/onDecide\(activity\.requestId \?\? "", decision\.id\)\s*\.then\(\(\) => haptics\.success\(\)\)/);
 		expect(approval).toMatch(/setSubmitError\(userFacingError\(cause\)\);\s*haptics\.error\(\);/);
-		expect(approval).toContain("primary={index === 0} reportsOutcome");
+		expect(approval).toContain("primary: decision.id === primaryId,");
 		expect(input).toMatch(/await onResolve\(activity\.requestId, action, content\);\s*haptics\.success\(\);/);
 		expect(input).toMatch(/setSubmitError\(userFacingError\(cause\)\);\s*haptics\.error\(\);/);
 		for (const label of ['label="Cancel" reportsOutcome', '"Decline" : "Skip"} reportsOutcome', '"Open link"} primary reportsOutcome', "step.primaryLabel} primary reportsOutcome"]) {
@@ -187,6 +229,21 @@ describe("request cards in the timeline", () => {
 	it("step between questions without a haptic either way", () => {
 		expect(input).toContain('label="Back" reportsOutcome');
 		expect(input).toMatch(/if \(hasNextQuestion\) \{\s*setActiveQuestion\(\(current\) => current \+ 1\);\s*return;\s*\}/);
+	});
+
+	// As on desktop, Allow Once is the prominent action and Deny a secondary one.
+	// The first decision used to be prominent, and Claude lists Deny first.
+	it("make the approval's primary action the one desktop does", () => {
+		expect(approval).toContain("const primaryId = primaryDecisionId(activity.decisions);");
+		expect(approval).not.toContain("index === 0");
+	});
+
+	// Deny, Allow Once and Always Allow stay on one line, whatever their labels
+	// or the text size: one native row lays them out, instead of a wrapping view.
+	it("keep the approval's decisions on one line", () => {
+		expect(approval).toContain("<ElicitationActionRow reportsOutcome actions={activity.decisions.map((decision) => ({");
+		expect(approval).not.toContain("<ElicitationAction ");
+		expect(source).not.toMatch(/approvalActions: \{[^}]*flexWrap/);
 	});
 
 	// The button sizes itself to its label; a width guessed from the label's
@@ -329,7 +386,33 @@ describe("following the newest message", () => {
 		// A scroll event alone never turns the follow off: rows drawn above change
 		// the content's size mid-drag without the person having left the end.
 		expect(source).not.toMatch(/followsTail\.current = contentSize\.height/);
-		expect(source).toContain("if (followsTail.current) requestAnimationFrame(() => scrollToLatest(false));");
+		expect(source).toContain("if (followsTail.current) requestAnimationFrame(followTail);");
+	});
+	// A follow from JS mid-keyboard jumped the list to the keyboard's end and back.
+	// A tap on a reply gives its selectable text focus; the list scrolled that
+	// text into view just as the keyboard began to close.
+	it("does not scroll to text a tap has focused", () => {
+		expect(source).toContain("scrollsChildToFocus={false}");
+		expect(source).toContain("onEditFocus={revealEdit}");
+	});
+
+	// With focus scrolling off, a request form's field reveals itself when it
+	// takes focus, after the keyboard opens, and only when it is hidden. Only the
+	// newest focus scrolls (createFieldReveals, tested in fieldReveal.test.ts).
+	it("reveals a focused request field above the keyboard and the composer", () => {
+		expect(source).toContain("<RevealFocusedField.Provider value={revealField}>");
+		expect(source).toContain("const [fieldReveals] = useState(() => createFieldReveals(Keyboard, FIELD_REVEAL_WAIT_MS));");
+		expect(source).toContain("useEffect(() => fieldReveals.cancel, [fieldReveals]);");
+		expect(source).toContain("if (target === undefined || !isCurrent()) return;");
+		expect(source).toContain("visibleBottom: Math.min(listBottom, keyboardTop ?? listBottom) - bottomInset - space.md,");
+		expect(source).toContain("if (fieldRevealOffset({ ...spans, offset: 0 }) === undefined) return;");
+	});
+
+	it("holds a follow to the end while the keyboard moves, and makes it once it stops", () => {
+		expect(source).toContain("if (keyboardOffset !== undefined && keyboardMoving.value) {");
+		expect(source).toContain("useEffect(() => onKeyboardEnd(() => latestFollow.current()), [onKeyboardEnd]);");
+		// One keyboard handler for the screen (see KeyboardMotionScope), not one of its own.
+		expect(source).not.toContain("useKeyboardHandler(");
 	});
 });
 
@@ -341,5 +424,45 @@ describe("plan activity row", () => {
 		// row's status is "running" while any step is unfinished, not while the turn runs.
 		expect(planActivity).toContain("<TurnPlan plan={{ explanation: activity.detail?.explanation, steps }} />");
 		expect(planActivity).not.toMatch(/<TurnPlan[^>]*\b(title|live)=/);
+	});
+});
+
+// Each keyboard frame committed the keyboard's transforms through React's
+// shadow tree, and every Compose host re-measured for the keyboard's insets.
+describe("keyboard frames on Android", () => {
+	const read = (path: string) => readFileSync(new URL(path, import.meta.url), "utf8");
+
+	it("applies Reanimated's non-layout props without a shadow tree commit", () => {
+		const pkg = JSON.parse(read("../../package.json")) as { reanimated?: { staticFeatureFlags?: Record<string, boolean> } };
+		expect(pkg.reanimated?.staticFeatureFlags?.ANDROID_SYNCHRONOUSLY_UPDATE_UI_PROPS).toBe(true);
+	});
+
+	it("keeps the keyboard from Compose hosts that ignore it", () => {
+		const patch = read("../../patches/@expo+ui+57.0.26.patch");
+		expect(patch).toContain("+    if (previous != null && previous != insets && sameButKeyboard(previous, insets)) {");
+		expect(patch).toContain("+    return super.dispatchApplyWindowInsets(withoutKeyboard(insets))");
+		expect(patch).toContain("+    if (heldInsetsAnimations.remove(animation)) return");
+		expect(patch).toContain("restProps.ignoreSafeAreaKeyboardInsets ?? !restProps.useViewportSizeMeasurement");
+	});
+});
+
+describe("conversation list row motion", () => {
+	// Reanimated 4.5 holds a moved view at its old frame and steps it over on the
+	// UI thread. A stall longer than the move leaves only the last frame, which
+	// 4.5 drops, so the view stays put while the rows around it move: a settled
+	// turn's reply was drawn over the next turn. List rows jump instead.
+	const rowFiles = ["ChatTimeline.tsx", "TurnFoldMotion.tsx", "SessionStartup.tsx", "TurnPlan.tsx", "ChatMarkdown.tsx", "AutomationMessage.tsx", "RenderFrame.tsx"];
+	it.each(rowFiles)("%s gives no list row a layout transition", (file) => {
+		const rowSource = readFileSync(new URL(`./${file}`, import.meta.url), "utf8");
+		expect(rowSource).not.toMatch(/\blayout=\{/);
+		expect(rowSource).not.toMatch(/\b(Linear|Curved|Entering|Sequenced|Fading|Jumping)Transition\b/);
+	});
+
+	// With the rows below jumping into its place, a fading-out fold body would
+	// sit under them until the fade ends.
+	it("opens a fold with a fade and closes it at once", () => {
+		const motion = readFileSync(new URL("./TurnFoldMotion.tsx", import.meta.url), "utf8");
+		expect(motion).toContain("entering={FadeIn.duration(CROSSFADE_MS)}");
+		expect(motion).not.toContain("exiting=");
 	});
 });

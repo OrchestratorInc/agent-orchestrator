@@ -71,9 +71,7 @@ export function deriveThemeTokens(p: ThemePalette, mode: Mode): Record<string, s
 
 		"--color-status-working": p.blue,
 		"--color-status-needs-you": p.orange,
-		// tokens.css picks between these by the new sidebar design flag.
-		"--color-status-validating-new": validating,
-		"--color-status-validating-legacy": p.yellow,
+		"--color-status-validating": validating,
 		"--color-status-in-review": inReview,
 		"--color-status-ready": p.green,
 		"--color-status-merged": p.purple,

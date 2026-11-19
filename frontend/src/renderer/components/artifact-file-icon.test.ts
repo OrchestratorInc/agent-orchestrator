@@ -1,11 +1,11 @@
 import { describe, expect, it } from "vitest";
-import { Archive, ChartBar, Code2, Database, File, FileText, Globe, Image, Music, Presentation, Table2, Video } from "@/components/app-icons";
+import { Archive, ChartBar, Code2, Database, File, FileCode2, FileText, Image, Music, Presentation, Table2, Video } from "@/components/app-icons";
 import { artifactFileIcon } from "./artifact-file-icon";
 
 describe("artifactFileIcon", () => {
 	it.each([
-		["html", "dashboard.html", Globe],
-		["file", "legacy.HTM", Globe],
+		["html", "dashboard.html", FileCode2],
+		["file", "legacy.HTM", FileCode2],
 		["markdown", "notes.md", FileText],
 		["file", "guide.markdown", FileText],
 		["file", "report.pdf", File],

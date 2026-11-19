@@ -8,8 +8,10 @@ import { fileURLToPath, URL } from "node:url";
 import { TanStackRouterVite } from "@tanstack/router-plugin/vite";
 import react from "@vitejs/plugin-react";
 import tailwindcss from "@tailwindcss/vite";
+import { ARTIFACT_SNAPSHOT_SCHEME } from "./src/shared/artifact-snapshot";
 import { DEFAULT_POSTHOG_HOST } from "./src/shared/posthog-config";
 import { parseTeamsFlag } from "./src/shared/teams-flag";
+import { sentrySourceMaps } from "./vite.sentry";
 
 // Read once, when the renderer is built or served: a value that is neither
 // "on" nor "off" stops here instead of shipping a build that guessed.
@@ -104,6 +106,10 @@ const CLOUD_CP_ORIGINS = (() => {
 	return origins;
 })();
 
+// Where published artifact links serve their files (one subdomain per link),
+// framed by the Artifacts page's preview of a link shared with this person.
+const SHARE_CONTENT_ORIGINS = ["https://*.orchestratorusercontent-staging.com", "https://*.orchestratorusercontent.com"];
+
 const CLOUD_CP_WS_ORIGINS = CLOUD_CP_ORIGINS.map((origin) => origin.replace(/^http/, "ws"));
 
 // CSP for the renderer. The daemon is loopback-only, so network access is
@@ -133,7 +139,11 @@ export function contentSecurityPolicy(mode: "build" | "serve"): string {
 		// draws its tile from the composer's copy (sent-attachment-previews.ts),
 		// and copying an image re-encodes it through one. Only the renderer's own
 		// scripts can mint a blob: URL, so it opens no network access.
-		"img-src 'self' data: blob: http://127.0.0.1:* http://*.localhost:* https:",
+		//
+		// The snapshot scheme is where main serves the cached artifact previews that gallery cards
+		// show as plain images (main/artifact-snapshots.ts). 'self' is only the app:// origin, so
+		// without it every cached card is refused in a packaged build and falls back to live.
+		`img-src 'self' data: blob: http://127.0.0.1:* http://*.localhost:* https: ${ARTIFACT_SNAPSHOT_SCHEME}:`,
 		// A cloud session's audio and video artifacts stream from its control plane.
 		["media-src 'self' blob: http://127.0.0.1:* http://*.localhost:*", ...CLOUD_CP_ORIGINS].join(" "),
 		"font-src 'self' data:",
@@ -166,7 +176,7 @@ export function contentSecurityPolicy(mode: "build" | "serve"): string {
 		// *.localhost is the inline-artifact origin an HTML artifact is framed from.
 		// A cloud session's HTML artifact is framed from its control plane, whose
 		// response CSP sandboxes it.
-		["frame-src 'self' http://127.0.0.1:* http://*.localhost:*", ...CLOUD_CP_ORIGINS].join(" "),
+		["frame-src 'self' http://127.0.0.1:* http://*.localhost:*", ...CLOUD_CP_ORIGINS, ...SHARE_CONTENT_ORIGINS].join(" "),
 	].join("; ");
 }
 
@@ -209,6 +219,8 @@ const productUiReactBoundary: Plugin = {
 	},
 };
 
+const sentry = sentrySourceMaps();
+
 export default defineConfig({
 	define: {
 		"import.meta.env.VITE_AO_GIT_BRANCH": JSON.stringify(DEV_BUILD_INFO.branch),
@@ -238,6 +250,16 @@ export default defineConfig({
 			),
 		},
 	},
+	// The app, plus the hidden page main renders cached artifact previews in.
+	build: {
+		sourcemap: sentry.sourcemap,
+		rollupOptions: {
+			input: {
+				index: fileURLToPath(new URL("./index.html", import.meta.url)),
+				"artifact-snapshot": fileURLToPath(new URL("./artifact-snapshot.html", import.meta.url)),
+			},
+		},
+	},
 	// Dev proxy for VITE_NO_ELECTRON=1 browser preview — forwards /api and /mux
 	// to the daemon so the renderer can be tested against a running daemon from
 	// a plain browser without an Electron shell.
@@ -265,6 +287,7 @@ export default defineConfig({
 		react(),
 		tailwindcss(),
 		injectCspMeta,
+		...sentry.plugins,
 	],
 	test: {
 		environment: "jsdom",

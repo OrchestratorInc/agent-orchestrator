@@ -1,6 +1,6 @@
 import { Host } from "@expo/ui";
-import { HStack, Menu, Picker, RNHostView, Section, Spacer, Text, Toggle } from "@expo/ui/swift-ui";
-import { pickerStyle, tag } from "@expo/ui/swift-ui/modifiers";
+import { HStack, Label, Menu, Picker, RNHostView, Section, Spacer, Text, Toggle } from "@expo/ui/swift-ui";
+import { accessibilityIdentifier, disabled as disabledModifier, pickerStyle, tag } from "@expo/ui/swift-ui/modifiers";
 import { useState } from "react";
 import { StyleSheet } from "react-native";
 import { haptics } from "../haptics";
@@ -8,6 +8,8 @@ import { approvalSymbol } from "../approvalSymbol";
 import { EffortGaugeButton } from "../effort-gauge";
 import { ApprovalMenu, Choice, ModelCapsuleLabel, useTriggerModifiers } from "../model-controls.ios";
 import { HarnessImage } from "../spawn-composer-controls.ios";
+import { defaultModelChoice } from "../spawnModel";
+import { AUTOMATIC_MODEL } from "../agentSwitch";
 import type { IOSSymbol } from "../symbols";
 import { useThemeState } from "../ThemeProvider";
 import { space, touchTarget } from "../tokens";
@@ -27,7 +29,7 @@ const topicSymbols: Partial<Record<NonNullable<ReturnType<typeof turnSettingTopi
  * models as the new task's lists each agent's, then any other setting the
  * provider offers, such as Fast mode.
  */
-export function ChatTurnSettingsControl({ snapshot, models, options, disabled, onSettings, onOption, effort }: ChatTurnSettingsControlProps) {
+export function ChatTurnSettingsControl({ snapshot, models, options, disabled, onSettings, onOption, effort, otherAgents }: ChatTurnSettingsControlProps) {
 	const { scheme } = useThemeState();
 	const rows = turnSettingsRows(snapshot, models, options);
 	const select = (topic: string) => rows.find((row) => row.kind === "select" && turnSettingTopic(row) === topic);
@@ -43,10 +45,18 @@ export function ChatTurnSettingsControl({ snapshot, models, options, disabled, o
 	// saved; they have long closed, so nothing visibly moves.
 	const [generation, setGeneration] = useState(0);
 
+	const pending = otherAgents?.pending;
 	const choose = (row: TurnSettingRow, choice: string | boolean) => {
 		const write = turnSettingWrite(snapshot.settings, row, choice);
 		const saved = write.kind === "option" ? onOption(write.id, write.value) : onSettings(write.settings);
 		void saved.then(() => {}, () => setGeneration((value) => value + 1));
+	};
+
+	// The running agent's model chosen again keeps the running agent: the pick
+	// drops, and the model is saved only if it changed (desktop's keepCurrent).
+	const chooseCurrent = (row: TurnSettingRow, choice: { value: string; selected: boolean }) => {
+		if (pending) otherAgents?.onPick(undefined);
+		if (!choice.selected) choose(row, choice.value);
 	};
 
 	return (
@@ -57,17 +67,50 @@ export function ChatTurnSettingsControl({ snapshot, models, options, disabled, o
 			<HStack spacing={space.none}>
 				<Menu
 					key={`model-${generation}`}
-					label={<ModelCapsuleLabel mark={snapshot.harness ? <HarnessImage harness={snapshot.harness} /> : null} title={parts.model || "Model"} />}
-					modifiers={useTriggerModifiers({ label: parts.model ? `Model, ${parts.model}` : "Model", id: "chat-model", disabled: off })}
+					label={pending
+						? <ModelCapsuleLabel mark={<HarnessImage harness={pending.harness} />} title={pending.modelLabel} />
+						: <ModelCapsuleLabel mark={snapshot.harness ? <HarnessImage harness={snapshot.harness} /> : null} title={parts.model || "Model"} />}
+					modifiers={useTriggerModifiers({ label: pending ? `Next message switches to ${otherAgents?.agents.find((agent) => agent.id === pending.harness)?.label ?? pending.harness}, ${pending.modelLabel}` : parts.model ? `Model, ${parts.model}` : "Model", id: "chat-model", disabled: off })}
 				>
-					{modelChoices.latest.map((choice) => <Choice key={choice.value} label={choice.label} selected={choice.selected} onChoose={() => choose(modelRow!, choice.value)} />)}
+					{modelChoices.latest.map((choice) => <Choice key={choice.value} label={choice.label} selected={!pending && choice.selected} onChoose={() => chooseCurrent(modelRow!, choice)} />)}
 					{/* Older versions one level down, as on Android: the newest of
 					    each family is what most turns want. */}
 					{modelChoices.older.length ? (
 						<Section>
 							<Menu label="Older models" systemImage="clock.arrow.circlepath">
-								{modelChoices.older.map((choice) => <Choice key={choice.value} label={choice.label} selected={choice.selected} onChoose={() => choose(modelRow!, choice.value)} />)}
+								{modelChoices.older.map((choice) => <Choice key={choice.value} label={choice.label} selected={!pending && choice.selected} onChoose={() => chooseCurrent(modelRow!, choice)} />)}
 							</Menu>
+						</Section>
+					) : null}
+					{/* The other agents, each opening onto its models as in the new
+					    task's menu; choosing one switches the session's agent. */}
+					{otherAgents?.agents.length ? (
+						<Section title="Other agents">
+							{otherAgents.agents.map((agent) => {
+								const list = otherAgents.models[agent.id];
+								const choice = (model: { id: string; label: string }) => (
+									<Choice
+										key={model.id}
+										label={model.label}
+										selected={pending?.harness === agent.id && (pending.model ?? AUTOMATIC_MODEL) === model.id}
+										onChoose={() => otherAgents.onPick({
+											harness: agent.id,
+											model: model.id === AUTOMATIC_MODEL ? undefined : model.id,
+											modelLabel: model.id === AUTOMATIC_MODEL ? list?.defaultLabel ?? "Default model" : model.label,
+										})}
+									/>
+								);
+								return (
+									<Menu key={agent.id} label={<Label title={agent.label} icon={<HarnessImage harness={agent.id} />} />} modifiers={[accessibilityIdentifier(`chat-agent-${agent.id}`), disabledModifier(Boolean(otherAgents.disabled))]}>
+										{[{ id: AUTOMATIC_MODEL, label: defaultModelChoice(list?.defaultLabel) }, ...(list?.models ?? [])].map(choice)}
+										{list?.older?.length ? (
+											<Menu label="Older models" systemImage="clock.arrow.circlepath">
+												{list.older.map(choice)}
+											</Menu>
+										) : null}
+									</Menu>
+								);
+							})}
 						</Section>
 					) : null}
 					{otherRows.length ? (

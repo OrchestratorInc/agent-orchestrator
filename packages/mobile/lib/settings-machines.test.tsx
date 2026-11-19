@@ -73,6 +73,12 @@ vi.mock("expo-constants", () => ({ default: { expoConfig: {} } }));
 vi.mock("expo-updates", () => ({ isEnabled: false, updateId: null, channel: null, runtimeVersion: "1", useUpdates: () => ({}) }));
 vi.mock("./account", () => ({ loadAccount: async () => fixtures.account, signInToAccount: vi.fn(), signOutOfAccount: fixtures.signOut }));
 vi.mock("./accountHosts", () => ({ clearAccountHosts: fixtures.clearAccountHosts, syncAccountHosts: vi.fn() }));
+// Signed out of Orchestrator Cloud: its row stays out of the machine list. Its
+// sign-out is the account's, then forgetting the account's machines.
+vi.mock("./cloud/CloudProvider", () => ({ useCloud: () => ({
+	status: "signed-out", connections: [], connectionsLoaded: false,
+	signOut: async () => { await fixtures.signOut(); await fixtures.clearAccountHosts(); },
+}) }));
 vi.mock("./config", () => ({ isConfigured: () => false }));
 vi.mock("./hosts", () => ({ activeHost: async () => fixtures.hosts[0], loadHosts: async () => fixtures.hosts }));
 vi.mock("./haptics", () => ({ haptics: { tap: vi.fn(), select: fixtures.select, success: vi.fn(), error: vi.fn() } }));

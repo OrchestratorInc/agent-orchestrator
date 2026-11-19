@@ -8,6 +8,7 @@ const hooks = vi.hoisted(() => ({
 	identifyCloudUser: vi.fn(async () => undefined),
 	clearCloudUser: vi.fn(),
 	noteCloudSignInWebVisitor: vi.fn(),
+	noteCloudSignInCompleted: vi.fn(),
 	sessionListeners: [] as ((account: unknown) => void)[],
 	unsubscribe: vi.fn(),
 	// What main holds for the renderer to take, once (cloud:takePendingSignIn).
@@ -32,6 +33,8 @@ vi.mock("../lib/telemetry", () => ({
 	clearCloudUser: hooks.clearCloudUser,
 	noteCloudSignInWebVisitor: hooks.noteCloudSignInWebVisitor,
 }));
+
+vi.mock("../lib/cloud-telemetry", () => ({ noteCloudSignInCompleted: hooks.noteCloudSignInCompleted }));
 
 import { BINDING_RETRY_MS, TelemetryIdentityRuntime } from "./TelemetryIdentityRuntime";
 
@@ -218,6 +221,8 @@ describe("TelemetryIdentityRuntime", () => {
 			["user_01H", "019a3f5e-8c2b"],
 			[null, "019a3f5e-8c2b"],
 		]);
+		// Each completed sign-in is reported to the sign-in count too, once.
+		expect(hooks.noteCloudSignInCompleted.mock.calls).toEqual([[account("workos")], [account("local")]]);
 
 		view.unmount();
 		expect(hooks.unsubscribe).toHaveBeenCalledTimes(1);

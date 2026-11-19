@@ -59,6 +59,9 @@ type ForegroundPayload struct {
 	PGID int      `json:"pgid"`
 	Argv []string `json:"argv,omitempty"`
 	Busy bool     `json:"busy"`
+	// EchoOnly marks a settled-screen update whose only new output was the
+	// echo of typed input. Hosts from before this field never set it.
+	EchoOnly bool `json:"echoOnly,omitempty"`
 }
 
 // TitlePayload is the MsgTitleState body: the normalized title the program last

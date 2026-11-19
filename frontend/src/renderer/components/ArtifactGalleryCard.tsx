@@ -1,9 +1,10 @@
-import { artifactFileIcon } from "./artifact-file-icon";
 import { useId, type ReactNode } from "react";
+import { File } from "@/components/app-icons";
 import type { ArtifactRow } from "../lib/artifacts";
 import { formatTimeCompact } from "../lib/format-time";
 import { cn } from "../lib/utils";
-import { ArtifactThumbnail } from "./ArtifactThumbnail";
+import { ArtifactShareMark } from "./ArtifactShareMark";
+import { ArtifactSnapshotThumbnail } from "./ArtifactSnapshotThumbnail";
 import { Checkbox } from "./ui/checkbox";
 import { Pressable } from "./ui/pressable";
 
@@ -34,13 +35,15 @@ export function ArtifactGalleryCard({ row, context, onPreview, actions, previewL
 	previewLive?: boolean;
 	selection?: ArtifactCardSelection;
 }) {
-	const KindIcon = artifactFileIcon(row);
 	const toggle = selection && !selection.disabledReason ? selection.onToggle : undefined;
 	const descriptionId = useId();
 	return (
 		<li className={cn("group relative min-w-0 rounded-md bg-card ring-1 ring-foreground/10", selection?.selected && "ring-2 ring-primary")}>
 			<span className="pointer-events-none absolute inset-x-0 top-0 z-[1] block aspect-[16/9] overflow-hidden rounded-t-md border-b border-border">
-				<ArtifactThumbnail key={`${row.rawUrl}:${row.inlineUrl}:${row.updatedAt}`} row={row} previewLive={previewLive} />
+				{row.shared
+					// Someone else's link has no copy here to draw a preview from.
+					? <span className="flex size-full items-center justify-center bg-[var(--solid-muted,var(--muted))] text-muted-foreground"><File aria-hidden="true" className="size-6" /></span>
+					: <ArtifactSnapshotThumbnail key={`${row.rawUrl}:${row.inlineUrl}:${row.updatedAt}`} row={row} previewLive={previewLive} />}
 			</span>
 			<Pressable
 				className={cn("block w-full overflow-hidden rounded-md hover:bg-accent", selection?.disabledReason && "cursor-not-allowed hover:bg-transparent")}
@@ -51,11 +54,11 @@ export function ArtifactGalleryCard({ row, context, onPreview, actions, previewL
 				<span className="relative block aspect-[16/9] border-b border-border bg-[var(--solid-muted,var(--muted))]" />
 				<span className="block space-y-1 px-3 py-2.5">
 					<span className="flex min-w-0 items-center gap-1.5 text-control font-medium leading-5 text-foreground">
-						<KindIcon aria-hidden="true" className="size-icon-sm shrink-0 text-muted-foreground" />
 						<span className="truncate">{row.name}</span>
 					</span>
 					<span className="flex min-w-0 items-center gap-1.5 text-caption leading-4 text-muted-foreground">
 						{context ? <><span className="truncate">{context}</span><span aria-hidden="true">·</span></> : null}
+						<ArtifactShareMark row={row} className="relative z-[2]" iconClassName="size-3" />
 						<time dateTime={row.updatedAt} className="shrink-0 tabular-nums">{formatTimeCompact(row.updatedAt)}</time>
 					</span>
 				</span>

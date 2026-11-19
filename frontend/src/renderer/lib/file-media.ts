@@ -1,15 +1,5 @@
-import { isRasterImagePath } from "./image-files";
-
-export type FileMediaKind = "image" | "video" | "audio" | "pdf";
-
-/** Common media containers; decoding failures stay in the viewer. */
-export function fileMediaKind(path: string): FileMediaKind | undefined {
-	if (isRasterImagePath(path)) return "image";
-	if (/\.(m4v|mov|mp4|ogv|webm)$/i.test(path)) return "video";
-	if (/\.(aac|flac|m4a|mp3|oga|ogg|opus|wav)$/i.test(path)) return "audio";
-	if (/\.pdf$/i.test(path)) return "pdf";
-	return undefined;
-}
+// The format lists are shared with the mobile app, so both preview the same files.
+export { fileMediaKind, type FileMediaKind } from "../../../../packages/shared/files/file-formats";
 
 /**
  * Internal media must carry the renderer Origin through the daemon/proxy guard.

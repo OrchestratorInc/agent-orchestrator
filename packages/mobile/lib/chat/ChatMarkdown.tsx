@@ -1,6 +1,6 @@
 import { UITextView as Text } from "@bsky.app/react-native-uitextview";
 import * as Clipboard from "expo-clipboard";
-import { createContext, isValidElement, memo, useCallback, useContext, useEffect, useMemo, useState, type ReactNode } from "react";
+import { createContext, isValidElement, lazy, memo, Suspense, useCallback, useContext, useEffect, useMemo, useState, type ReactNode } from "react";
 import { Image, Platform, Pressable, ScrollView, StyleSheet, View, type StyleProp, type TextStyle } from "react-native";
 import { AppSymbol } from "../AppSymbol";
 import { rowDividerWidth } from "../divider";
@@ -14,11 +14,23 @@ import { imageSourceForPlatform } from "../imageSource";
 import { useAndroidResponseSelection } from "./useAndroidResponseSelection";
 import { FirstLineMarker } from "./FirstLineMarker";
 import { HighlightedCodeText } from "./HighlightedCodeText";
+import { isMermaidFence } from "./mermaidFence";
 import { allowsUnderscoreEmphasis } from "./inlineEmphasis";
 import { parseBlocks, type MarkdownBlock, type TableAlign } from "./markdownBlocks";
 import { iconSize, prose, radius, space, touchTarget, type } from "../tokens";
 import type { ChatExcerpt } from "./types";
 import { sessionLink } from "./automationMessages";
+import { chatFileReference, isBareFileReference } from "./fileLinks";
+import { useFilesNavigation } from "../files/navigation";
+
+// The diagram renderer (a WebView and the engine's loader) loads on the first
+// Mermaid fence, so text without one never pulls it in.
+const LazyMermaidBlock = lazy(() => import("./MermaidBlock").then((module) => ({ default: module.MermaidBlock })));
+
+/** A Mermaid fence: its diagram once the renderer loads, the code block until then. */
+function DiagramFence({ code, streaming, codeBlock }: { code: string; streaming?: boolean; codeBlock: ReactNode }) {
+	return <Suspense fallback={codeBlock}><LazyMermaidBlock code={code} streaming={streaming} codeBlock={codeBlock} /></Suspense>;
+}
 
 // The conversation screen decides how a tapped link opens (it knows the AO host
 // that the agent's localhost links map onto); the renderer only reports the tap.
@@ -67,7 +79,7 @@ export function ChatLinkProvider({ onLinkOpen, onAddToChat, sessionName, onSessi
  * readable text; the renderer never hides content because a provider used
  * syntax it does not know.
  */
-export const ChatMarkdown = memo(function ChatMarkdown({ text, streaming = false, continuousSelection = false, selectionSource, onAddSelection, resolveImage, imagesInPlace = false, nestedScroll = false }: {
+export const ChatMarkdown = memo(function ChatMarkdown({ text, streaming = false, continuousSelection = false, selectionSource, onAddSelection, resolveImage, imagesInPlace = false, nestedScroll = false, diagrams = true }: {
 	text: string;
 	streaming?: boolean;
 	continuousSelection?: boolean;
@@ -92,19 +104,27 @@ export const ChatMarkdown = memo(function ChatMarkdown({ text, streaming = false
 	 * no touches, as in a filmstrip preview.
 	 */
 	nestedScroll?: boolean;
+	/**
+	 * Draws ```mermaid fences as diagrams, as the desktop does. Off for a
+	 * passive preview (a gallery card), where a fence stays code.
+	 */
+	diagrams?: boolean;
 }) {
 	const t = useTheme();
 	const styles = useThemedStyles(makeStyles);
 	const selectionColor = textSelectionColors(t).selectionColor;
 	const blocks = parseBlocks(text, { relativeImages: Boolean(resolveImage) });
+	const openFiles = Boolean(useFilesNavigation());
 	if (continuousSelection) {
 		// Native selection cannot cross sibling views. Keep each run of response text
 		// in one text surface; only a table breaks the run, because a grid cannot
 		// live inside text. Image previews follow without repeating captions.
 		const images = imagesInPlace ? [] : blocks.filter((block): block is Extract<MarkdownBlock, { kind: "image" }> => block.kind === "image");
 		return <View style={styles.root}>
-			{splitRuns(blocks, imagesInPlace).map((run, index) => Array.isArray(run)
+			{splitRuns(blocks, imagesInPlace, diagrams && !streaming).map((run, index) => Array.isArray(run)
 				? <SelectableResponseText key={index} blocks={run} source={selectionSource} onSelect={onAddSelection} />
+				: run.kind === "code"
+					? <DiagramFence key={index} code={run.text} codeBlock={<CodeBlock {...run} nestedScroll={nestedScroll} />} />
 				: run.kind === "image"
 					? <MarkdownImage key={index} alt={run.alt} url={run.url} selectionColor={selectionColor} resolve={resolveImage} />
 					: <MarkdownTable key={index} headers={run.headers} align={run.align} rows={run.rows} selectionColor={selectionColor} nestedScroll={nestedScroll} />)}
@@ -121,7 +141,7 @@ export const ChatMarkdown = memo(function ChatMarkdown({ text, streaming = false
 		if (block.kind === "paragraph" || block.kind === "heading") {
 			// iOS needs RN Text for inline links so VoiceOver can focus them.
 			// Keep those blocks separate without splitting the surrounding prose.
-			if (Platform.OS === "ios" && hasInlineLink(block.text, styles)) {
+			if (Platform.OS === "ios" && hasInlineLink(block.text, styles, openFiles)) {
 				flushProse();
 				content.push(<SelectableInlineText key={content.length} value={block.text} selectionColor={selectionColor} style={block.kind === "heading" ? [styles.heading, block.level > 2 && styles.smallHeading] : styles.body} styles={styles} />);
 			} else prose.push(block);
@@ -129,7 +149,8 @@ export const ChatMarkdown = memo(function ChatMarkdown({ text, streaming = false
 		}
 		flushProse();
 		const index = content.length;
-		if (block.kind === "code") content.push(<CodeBlock key={index} {...block} streaming={streaming} nestedScroll={nestedScroll} />);
+		if (block.kind === "code" && diagrams && isMermaidFence(block.language)) content.push(<DiagramFence key={index} code={block.text} streaming={streaming} codeBlock={<CodeBlock {...block} streaming={streaming} nestedScroll={nestedScroll} />} />);
+		else if (block.kind === "code") content.push(<CodeBlock key={index} {...block} streaming={streaming} nestedScroll={nestedScroll} />);
 		else if (block.kind === "image") content.push(<MarkdownImage key={index} alt={block.alt} url={block.url} selectionColor={selectionColor} resolve={resolveImage} />);
 		else if (block.kind === "table") content.push(<MarkdownTable key={index} headers={block.headers} align={block.align} rows={block.rows} selectionColor={selectionColor} nestedScroll={nestedScroll} />);
 		else if (block.kind === "rule") content.push(<View key={index} style={styles.rule} />);
@@ -160,27 +181,29 @@ function ListMarker({ checked, number, styles }: { checked?: boolean; number?: n
 
 type TableBlock = Extract<MarkdownBlock, { kind: "table" }>;
 type ImageBlock = Extract<MarkdownBlock, { kind: "image" }>;
+type CodeFence = Extract<MarkdownBlock, { kind: "code" }>;
 
 /** What a markdown image loads: its URL, with headers when it needs the connection's credential. */
 export type MarkdownImageSource = { uri: string; headers?: Record<string, string> };
 
 /**
  * Runs of text one selection can span, broken by a table (a grid cannot live
- * inside text) and, for a document, by each image so it sits in place.
+ * inside text), by a Mermaid fence drawn as its diagram, and, for a document,
+ * by each image so it sits in place.
  */
-function splitRuns(blocks: MarkdownBlock[], splitImages: boolean): Array<Array<Exclude<MarkdownBlock, TableBlock>> | TableBlock | ImageBlock> {
-	const runs: Array<Array<Exclude<MarkdownBlock, TableBlock>> | TableBlock | ImageBlock> = [];
+export function splitRuns(blocks: MarkdownBlock[], splitImages: boolean, splitDiagrams = false): Array<Array<Exclude<MarkdownBlock, TableBlock>> | TableBlock | ImageBlock | CodeFence> {
+	const runs: Array<Array<Exclude<MarkdownBlock, TableBlock>> | TableBlock | ImageBlock | CodeFence> = [];
 	for (const block of blocks) {
 		const last = runs[runs.length - 1];
-		if (block.kind === "table" || (splitImages && block.kind === "image")) runs.push(block);
+		if (block.kind === "table" || (splitImages && block.kind === "image") || (splitDiagrams && block.kind === "code" && isMermaidFence(block.language))) runs.push(block);
 		else if (Array.isArray(last)) last.push(block);
 		else runs.push([block]);
 	}
 	return runs;
 }
 
-function hasInlineLink(value: string, styles: ReturnType<typeof makeStyles>): boolean {
-	return containsLink(inline(value, styles));
+function hasInlineLink(value: string, styles: ReturnType<typeof makeStyles>, openFiles: boolean): boolean {
+	return containsLink(inline(value, styles, true, undefined, openFiles));
 }
 
 /** Whether any of these nodes is a link, including one nested in emphasis. */
@@ -190,9 +213,10 @@ function containsLink(nodes: ReactNode[]): boolean {
 }
 
 function SelectableProseGroup({ blocks, selectionColor, styles }: { blocks: Array<Extract<MarkdownBlock, { kind: "paragraph" | "heading" }>>; selectionColor: string; styles: ReturnType<typeof makeStyles> }) {
+	const openFiles = Boolean(useFilesNavigation());
 	return <Text selectable uiTextView selectionColor={selectionColor} style={styles.body}>
 		{blocks.map((block, index) => <Text key={index} style={block.kind === "heading" ? [styles.heading, block.level > 2 && styles.smallHeading] : styles.body}>
-			{index > 0 ? <Text style={styles.proseGap}>{"\n\n"}</Text> : null}{inline(block.text, styles)}
+			{index > 0 ? <Text style={styles.proseGap}>{"\n\n"}</Text> : null}{inline(block.text, styles, true, undefined, openFiles)}
 		</Text>)}
 	</Text>;
 }
@@ -206,23 +230,25 @@ export function SelectableResponseText({ blocks, source, onSelect }: { blocks: A
 	const select = useCallback((selected: string) => onSelect ? onSelect(selected) : source ? addToChat?.(selected, source) : addToChat?.(selected), [addToChat, onSelect, source]);
 	const onLayout = useAndroidResponseSelection(enabled ? select : null);
 	const styles = useThemedStyles(makeStyles);
+	const openFiles = Boolean(useFilesNavigation());
 	const selectionColor = textSelectionColors(t).selectionColor;
 	return <Text selectable uiTextView selectionColor={selectionColor} style={styles.body} onLayout={onLayout} addToChatEnabled={enabled} onAddToChat={(event) => select(event.nativeEvent.text)}>
 		{blocks.map((block, index) => {
 			const separator = index > 0 ? "\n\n" : "";
-			if (block.kind === "heading") return <Text key={index} style={[styles.heading, block.level > 2 && styles.smallHeading]}>{separator}{inline(block.text, styles)}</Text>;
-			if (block.kind === "paragraph") return <Text key={index}>{separator}{inline(block.text, styles)}</Text>;
-			if (block.kind === "quote") return <Text key={index} style={styles.quoteText}>{separator}{inline(block.text, styles)}</Text>;
-			if (block.kind === "list") return <Text key={index}>{separator}{block.items.map((item, itemIndex) => <Text key={itemIndex} style={item.checked ? styles.taskDone : undefined}>{itemIndex > 0 ? "\n" : ""}{item.checked !== undefined ? (item.checked ? "☑ " : "☐ ") : block.ordered ? `${itemIndex + 1}. ` : "• "}{inline(item.text, styles)}</Text>)}</Text>;
+			if (block.kind === "heading") return <Text key={index} style={[styles.heading, block.level > 2 && styles.smallHeading]}>{separator}{inline(block.text, styles, true, undefined, openFiles)}</Text>;
+			if (block.kind === "paragraph") return <Text key={index}>{separator}{inline(block.text, styles, true, undefined, openFiles)}</Text>;
+			if (block.kind === "quote") return <Text key={index} style={styles.quoteText}>{separator}{inline(block.text, styles, true, undefined, openFiles)}</Text>;
+			if (block.kind === "list") return <Text key={index}>{separator}{block.items.map((item, itemIndex) => <Text key={itemIndex} style={item.checked ? styles.taskDone : undefined}>{itemIndex > 0 ? "\n" : ""}{item.checked !== undefined ? (item.checked ? "☑ " : "☐ ") : block.ordered ? `${itemIndex + 1}. ` : "• "}{inline(item.text, styles, true, undefined, openFiles)}</Text>)}</Text>;
 			if (block.kind === "code") return <Text key={index} style={styles.selectionCode}>{separator}{block.language ? `${block.language}\n` : ""}{block.text}</Text>;
-			if (block.kind === "image") return <Text key={index} style={styles.imageCaption}>{separator}{inline(block.alt || block.url, styles)}</Text>;
+			if (block.kind === "image") return <Text key={index} style={styles.imageCaption}>{separator}{inline(block.alt || block.url, styles, true, undefined, openFiles)}</Text>;
 			return <Text key={index}>{separator}────────</Text>;
 		})}
 	</Text>;
 }
 
 function SelectableInlineText({ value, selectionColor, style, styles, codeStyle }: { value: string; selectionColor: string; style: StyleProp<TextStyle>; styles: ReturnType<typeof makeStyles>; codeStyle?: StyleProp<TextStyle> }) {
-	const content = inline(value, styles, true, codeStyle);
+	const openFiles = Boolean(useFilesNavigation());
+	const content = inline(value, styles, true, codeStyle, openFiles);
 	// The native UITextView flattens inline children into one accessibility node.
 	// Keep links on RN Text on iOS so VoiceOver can focus their link role.
 	const hasLink = containsLink(content);
@@ -323,6 +349,7 @@ function CodeBlock({ text, language, streaming, nestedScroll = false }: { text: 
 
 function MarkdownLink({ url, label, style }: { url: string; label: string; style: StyleProp<TextStyle> }) {
 	const provided = useContext(OpenChatLink);
+	const files = useFilesNavigation();
 	const names = useContext(SessionNameOf);
 	const session = sessionLink(url);
 	// A bare link reads as the session it names, asked for once when the surface does not know it; an authored label is kept.
@@ -331,20 +358,42 @@ function MarkdownLink({ url, label, style }: { url: string; label: string; style
 	useEffect(() => {
 		if (bareSessionId && !known) names?.want?.(bareSessionId);
 	}, [bareSessionId, known, names]);
+	const file = session || WEB_OR_AO_LINK.test(url) ? undefined : chatFileReference(url);
+	const bare = Boolean(file && isBareFileReference(file.path));
+	const bareTarget = bare && file ? files?.bareFile?.(file.path) : undefined;
+	const bareName = bare && file ? file.path : "";
+	useEffect(() => {
+		if (bareName && bareTarget === undefined) files?.wantBareFile?.(bareName);
+	}, [bareName, bareTarget, files]);
 	if (session) {
 		const text = bareSessionId ? known || bareSessionId : label;
 		// Without a provider nothing knows which machine the session is on, so it stays words.
 		if (!provided) return <Text>{text}</Text>;
 		return <Text accessibilityRole="link" accessibilityHint="Opens this session's chat" style={style} onPress={() => provided(url)}>{text}</Text>;
 	}
+	if (file) {
+		// Only a session's surface can open its files, and a bare name only when
+		// the session has that file; otherwise the label stays words.
+		const target = bare ? bareTarget : file.path;
+		if (!files || !target) return <Text>{label}</Text>;
+		return <Text accessibilityRole="link" accessibilityHint={`Opens ${target}`} style={style} onPress={() => { haptics.tap(); files.openFile(target, undefined, file.line); }}>{label}</Text>;
+	}
 	const open = provided ?? defaultOpenChatLink;
 	return <Text accessibilityRole="link" style={style} onPress={() => open(url)}>{label}</Text>;
 }
 
-function inline(text: string, styles: ReturnType<typeof makeStyles>, linksPressable = true, codeStyle?: StyleProp<TextStyle>): ReactNode[] {
-	// Web links, and AO's own `ao://` links; a bare session link stops before prose punctuation.
+const WEB_OR_AO_LINK = /^(?:https?|ao):\/\//i;
+
+/**
+ * `openFiles`: whether this surface can open a session's files. Where it cannot,
+ * a file link is its label as plain words, not a link that does nothing, so a
+ * paragraph of them stays one native text (iOS draws a link-holding block apart).
+ */
+function inline(text: string, styles: ReturnType<typeof makeStyles>, linksPressable = true, codeStyle?: StyleProp<TextStyle>, openFiles = true): ReactNode[] {
+	// Web links, AO's own `ao://` links, and file links (`[a.ts:12](src/a.ts:12)`); a bare session link stops before prose punctuation.
+	// A destination may hold balanced parentheses, as a route group does: `app/(tabs)/index.tsx`.
 	// Bold runs may hold a single `*` or `_` (italic, say) but not a closing pair.
-	const pattern = /(\[([^\]]+)\]\(((?:https?|ao):\/\/[^\s)]+)\)|<((?:https?|ao):\/\/[^\s>]+)>|`([^`]+)`|\*\*((?:[^*]|\*(?!\*))+)\*\*|__((?:[^_]|_(?!_))+)__|~~([^~]+)~~|\*([^*\n]+)\*|_([^_\n]+)_|(https?:\/\/[^\s<]+)|(ao:\/\/sessions\/[^\s<>()]*[^\s<>().,;:!?'"]))/g;
+	const pattern = /(\[([^\]]+)\]\(((?:[^\s()]|\([^\s()]*\))+)\)|<((?:https?|ao):\/\/[^\s>]+)>|`([^`]+)`|\*\*((?:[^*]|\*(?!\*))+)\*\*|__((?:[^_]|_(?!_))+)__|~~([^~]+)~~|\*([^*\n]+)\*|_([^_\n]+)_|(https?:\/\/[^\s<]+)|(ao:\/\/sessions\/[^\s<>()]*[^\s<>().,;:!?'"]))/g;
 	const nodes: ReactNode[] = [];
 	let at = 0;
 	let match: RegExpExecArray | null;
@@ -352,6 +401,15 @@ function inline(text: string, styles: ReturnType<typeof makeStyles>, linksPressa
 		if (match.index > at) nodes.push(text.slice(at, match.index));
 		if ((match[7] || match[10]) && !allowsUnderscoreEmphasis(text, match.index, pattern.lastIndex)) {
 			nodes.push(match[0]);
+		} else if (match[3] && !WEB_OR_AO_LINK.test(match[3]) && !chatFileReference(match[3])) {
+			// Neither a page nor a file (mailto:, an anchor): keep the Markdown as
+			// written, and keep reading inside it so its code and emphasis render.
+			nodes.push("[");
+			at = match.index + 1;
+			pattern.lastIndex = at;
+			continue;
+		} else if (match[3] && !openFiles && !WEB_OR_AO_LINK.test(match[3])) {
+			nodes.push(match[2]);
 		} else if ((match[2] && match[3]) || match[4] || match[11] || match[12]) {
 			const url = match[3] ?? match[4] ?? match[11] ?? match[12];
 			const label = match[2] ?? url;
@@ -360,11 +418,11 @@ function inline(text: string, styles: ReturnType<typeof makeStyles>, linksPressa
 			nodes.push(<Text key={`${match.index}-code`} style={codeStyle ? [styles.inlineCode, codeStyle] : styles.inlineCode}>{match[5]}</Text>);
 		} else if (match[6] || match[7]) {
 			// Emphasis holds inline Markdown of its own: a link inside bold is still a link.
-			nodes.push(<Text key={`${match.index}-strong`} style={styles.strong}>{inline(match[6] ?? match[7], styles, linksPressable, codeStyle)}</Text>);
+			nodes.push(<Text key={`${match.index}-strong`} style={styles.strong}>{inline(match[6] ?? match[7], styles, linksPressable, codeStyle, openFiles)}</Text>);
 		} else if (match[8]) {
-			nodes.push(<Text key={`${match.index}-strike`} style={styles.strike}>{inline(match[8], styles, linksPressable, codeStyle)}</Text>);
+			nodes.push(<Text key={`${match.index}-strike`} style={styles.strike}>{inline(match[8], styles, linksPressable, codeStyle, openFiles)}</Text>);
 		} else {
-			nodes.push(<Text key={`${match.index}-em`} style={styles.em}>{inline(match[9] ?? match[10], styles, linksPressable, codeStyle)}</Text>);
+			nodes.push(<Text key={`${match.index}-em`} style={styles.em}>{inline(match[9] ?? match[10], styles, linksPressable, codeStyle, openFiles)}</Text>);
 		}
 		at = match.index + match[0].length;
 	}

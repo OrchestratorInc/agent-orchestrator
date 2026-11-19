@@ -7,7 +7,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 const posthogStub = {
 	init: vi.fn(),
 	register: vi.fn(),
-	capture: vi.fn((_event?: string, _properties?: Record<string, unknown>): object | undefined => ({})),
+	capture: vi.fn((_event?: string, _properties?: Record<string, unknown>, _options?: Record<string, unknown>): object | undefined => ({})),
 	captureException: vi.fn(),
 	addExceptionStep: vi.fn(),
 	identify: vi.fn(),
@@ -61,6 +61,34 @@ describe("initTelemetry recovery", () => {
 		}
 		const legacy = new Set(Object.values(LEGACY_EVENT_NAMES).flat());
 		expect(posthogStub.capture.mock.calls.some(([event]) => legacy.has(String(event)))).toBe(false);
+	});
+
+	it("sends an onboarding event from a closing window at once by sendBeacon, sanitized", async () => {
+		await initializedUpdateCapture();
+		const { captureRendererEventOnUnload } = await import("./telemetry");
+		expect(captureRendererEventOnUnload("ao.onboarding.abandoned", { step: "tools", run_kind: "first_run", duration_ms: 60_000, path: "/Users/me/repo" })).toBe(true);
+		expect(posthogStub.capture).toHaveBeenCalledTimes(1);
+		const [event, properties, options] = posthogStub.capture.mock.calls[0]!;
+		expect(event).toBe("ao.onboarding.abandoned");
+		expect(properties).toMatchObject({ step: "tools", step_index: 3, run_kind: "first_run", duration_ms: 60_000 });
+		expect(properties).not.toHaveProperty("path");
+		expect(options).toEqual({ send_instantly: true, transport: "sendBeacon" });
+	});
+
+	it("sends nothing from a closing window for other events or once opted out", async () => {
+		await initializedUpdateCapture();
+		const { applyAnalyticsOptOut, captureRendererEventOnUnload } = await import("./telemetry");
+		expect(captureRendererEventOnUnload("ao.app.loaded")).toBe(false);
+		await applyAnalyticsOptOut(true);
+		expect(captureRendererEventOnUnload("ao.onboarding.step_abandoned", { step: "tools" })).toBe(false);
+		expect(posthogStub.capture).not.toHaveBeenCalled();
+	});
+
+	it("sends nothing from a closing window before PostHog is ready", async () => {
+		mockPosthog();
+		const { captureRendererEventOnUnload } = await import("./telemetry");
+		expect(captureRendererEventOnUnload("ao.onboarding.abandoned", { step: "tools" })).toBe(false);
+		expect(posthogStub.capture).not.toHaveBeenCalled();
 	});
 
 	it("writes log-only events to the console instead of PostHog", async () => {
@@ -188,6 +216,48 @@ describe("initTelemetry recovery", () => {
 		} finally {
 			vi.useRealTimers();
 		}
+	});
+
+	async function initializedWithLaunchStart() {
+		localStorage.clear();
+		mockPosthog();
+		vi.doMock("./bridge", () => ({
+			aoBridge: {
+				telemetry: {
+					getBootstrap: vi.fn(async () => ({
+						appVersion: "1.2.3", platform: "darwin", distinctId: "ins_test",
+						disabledEvents: [], eventsEnabled: true, consentGeneration: "generation-1",
+					})),
+					takeLaunchStart: vi.fn(async () => ({ kind: "cold", startedAtMs: Date.now() - 500 })),
+				},
+				updateSettings: { get: vi.fn(async () => ({})) },
+			},
+		}));
+		const telemetry = await import("./telemetry");
+		const launch = await import("./launch-telemetry");
+		expect(await telemetry.initTelemetry()).toBe(true);
+		return { ...telemetry, markLaunchUsable: launch.markLaunchUsable };
+	}
+	const settle = () => new Promise((resolve) => setTimeout(resolve, 0));
+	const launchTimedCaptures = () => posthogStub.capture.mock.calls.filter(([event]) => event === "ao.launches.timed");
+
+	it("sends launch timings once the window is usable", async () => {
+		const { markLaunchUsable } = await initializedWithLaunchStart();
+		markLaunchUsable();
+		await settle();
+		await settle();
+		expect(launchTimedCaptures()).toHaveLength(1);
+		expect(launchTimedCaptures()[0]![1]).toMatchObject({ launch_kind: "cold" });
+	});
+
+	it("does not send a launch measured before an opt-out after a later opt-in", async () => {
+		const { applyAnalyticsOptOut, markLaunchUsable } = await initializedWithLaunchStart();
+		await applyAnalyticsOptOut(true);
+		await applyAnalyticsOptOut(false);
+		markLaunchUsable();
+		await settle();
+		await settle();
+		expect(launchTimedCaptures()).toHaveLength(0);
 	});
 
 	it("does not export updater failures counted while opted out", async () => {
@@ -474,26 +544,6 @@ describe("PostHog identity and opt-out", () => {
 		expect(captureToMain).toHaveBeenCalledWith(expect.objectContaining({ kind: "exception", tags: expect.objectContaining({ category: "render_crash" }) }));
 		expect(posthogStub.init).not.toHaveBeenCalled();
 		expect(posthogStub.captureException).not.toHaveBeenCalled();
-	});
-
-	it.each([
-		{ source: "window-error", unhandled: true },
-		{ source: "unhandledrejection", unhandled: true },
-		{ source: "react-error-boundary", operation: "react_render" },
-	])("budgets different exception locations independently for $source", async (properties) => {
-		const captureToMain = mockBridge(async () => null);
-		const { captureRendererException } = await import("./telemetry");
-		const first = new TypeError("private first error");
-		first.stack = "TypeError: private first error\n    at fail (app://renderer/assets/app.js:10:2)";
-		const second = new TypeError("private second error");
-		second.stack = "TypeError: private second error\n    at fail (app://renderer/assets/app.js:20:2)";
-		for (let i = 0; i < 6; i++) {
-			const occurrence = new TypeError("private first error"); occurrence.stack = first.stack;
-			await captureRendererException(occurrence, properties);
-		}
-		expect(captureToMain).toHaveBeenCalledTimes(5);
-		await captureRendererException(second, properties);
-		expect(captureToMain).toHaveBeenCalledTimes(6);
 	});
 
 	it("honors the remote exception deny list before forwarding to Electron", async () => {

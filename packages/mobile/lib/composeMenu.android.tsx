@@ -1,10 +1,9 @@
-import { Box, DropdownMenuItem, Icon, Text } from "@expo/ui/jetpack-compose";
-import { background, clip, size, Shapes, width as widthModifier } from "@expo/ui/jetpack-compose/modifiers";
+import { DropdownMenuItem, Icon, Text } from "@expo/ui/jetpack-compose";
+import { width as widthModifier } from "@expo/ui/jetpack-compose/modifiers";
 import { useEffect, type ReactNode } from "react";
 import { BackHandler } from "react-native";
-import { chipColorFor } from "./harnessLogo";
 import { logoFor } from "./harnessLogoAssets";
-import { useTheme } from "./ThemeProvider";
+import { useTheme, useThemeState } from "./ThemeProvider";
 import { materialDrawable } from "./toolbarIcon.android";
 import { font, iconSize } from "./tokens";
 
@@ -62,24 +61,15 @@ export function MenuRow({ label, leading, trailing, selected = false, width, onC
 	);
 }
 
-// The mark's box, and the chip it sits on when it needs one to stay visible.
-// Same arithmetic as `AgentLogo`: a 16% inset and a 28% corner radius.
 const MARK_SIZE = iconSize.lg;
-const CHIP_INSET = Math.round(MARK_SIZE * 0.16);
-const CHIP_RADIUS = Math.round(MARK_SIZE * 0.28);
 
 /** A harness's brand mark in its own colours, or the terminal symbol when it has none. */
 export function HarnessMark({ harness }: { harness: string }) {
 	const t = useTheme();
-	const source = logoFor(harness);
+	const { scheme } = useThemeState();
+	// The menu follows the app's colour scheme, so the mark drawn for that scheme
+	// stays visible on it: white marks such as opencode's ship a dark twin.
+	const source = logoFor(harness, scheme);
 	if (!source) return <Icon source={materialDrawable("terminal")} size={MARK_SIZE} tint={t.textSecondary} />;
-	// White marks (opencode, cursor) vanish on a light menu; `chipColorFor`
-	// says which need a backdrop, as it does for every other surface.
-	const chip = chipColorFor(harness);
-	if (!chip) return <Icon source={source} size={MARK_SIZE} tint={null} />;
-	return (
-		<Box contentAlignment="center" modifiers={[size(MARK_SIZE, MARK_SIZE), clip(Shapes.RoundedCorner(CHIP_RADIUS)), background(chip)]}>
-			<Icon source={source} size={MARK_SIZE - CHIP_INSET * 2} tint={null} />
-		</Box>
-	);
+	return <Icon source={source} size={MARK_SIZE} tint={null} />;
 }

@@ -11,6 +11,9 @@ type TerminalForeground struct {
 	PGID int
 	Argv []string
 	Busy bool
+	// EchoOnly reports a quiet-screen update caused only by typed-input echo,
+	// so a caller can keep its last screen reading instead of reading again.
+	EchoOnly bool
 }
 
 // ErrTerminalForegroundUnavailable reports a terminal that cannot name its
