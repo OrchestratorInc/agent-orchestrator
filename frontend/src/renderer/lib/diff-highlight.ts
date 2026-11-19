@@ -1,6 +1,6 @@
 // Syntax coloring for diff lines, layered on top of the structural diff
 // (diff-parser.ts) and the shared highlighter (code-highlight.ts).
-// Pure, no React, no DOM — the sync/async orchestration lives in
+// Pure, no React, no DOM — the React side lives in
 // hooks/useDiffHighlight.ts.
 
 import type { Root, RootContent } from "hast";

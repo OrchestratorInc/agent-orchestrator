@@ -380,6 +380,7 @@ let preferredWrap = false;
  */
 function CodeBlock({ code, language, sourceNode }: { code: string; language?: string; sourceNode?: HastElement }) {
 	const positions = excerptElementProps(sourceNode);
+	const streaming = useContext(StreamingProse);
 	const grammar = canonicalLanguage(language);
 	const [wrap, setWrap] = useState(preferredWrap);
 
@@ -416,7 +417,7 @@ function CodeBlock({ code, language, sourceNode }: { code: string; language?: st
 			</div>
 			<pre className="scrollbar-none overflow-x-auto px-3 py-2.5">
 				<code {...positions} data-excerpt-kind="block-code" className="font-mono text-xs leading-[1.6] text-foreground">
-					<HighlightedCode code={code} language={grammar} />
+					<HighlightedCode code={code} language={grammar} streaming={streaming} />
 				</code>
 			</pre>
 		</div>

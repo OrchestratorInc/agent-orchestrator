@@ -5,7 +5,7 @@
  */
 
 import type { ElementContent, Root } from "hast";
-import { codeToTokens, isSupportedLanguage, type Lang, type Theme, type ThemedToken } from "@pierre/highlights";
+import { codeToTokens, isSupportedLanguage, LiveTokenizer, type Lang, type Theme, type ThemedToken } from "@pierre/highlights";
 
 export type GrammarName = Lang;
 
@@ -90,4 +90,20 @@ export function highlightSync(code: string, language: GrammarName): Root | undef
 		console.warn(`chat: could not highlight ${language}`, cause);
 		return undefined;
 	}
+}
+
+export function createLiveHighlight(code: string, language: GrammarName): LiveTokenizer | undefined {
+	if (code.length > MAX_CHARS) return undefined;
+	try {
+		return new LiveTokenizer({ code, lang: language, theme: CODE_THEME });
+	} catch (cause) {
+		console.warn(`chat: could not highlight ${language}`, cause);
+		return undefined;
+	}
+}
+
+export function liveLine(tokenizer: LiveTokenizer, line: number): CodeLine {
+	const tokens = tokenizer.getLineTokens(line).tokens.filter((token) => token.content !== "").map(tokenNode);
+	if (line < tokenizer.lineCount - 1) tokens.push({ type: "text", value: "\n" });
+	return { tokens, signature: JSON.stringify(tokens) };
 }
