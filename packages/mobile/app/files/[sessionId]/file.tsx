@@ -343,15 +343,20 @@ function SessionFileContent() {
 	// A jump belongs to the list it was made for: switching the view, the wrap or
 	// the file swaps the list under it, where the cited index may not exist, so
 	// that cancels a pending retry, and a retry never scrolls past the rows now
-	// shown (a quiet reload can shorten them). Reloads do not re-jump: the
+	// shown (a quiet reload can shorten them). The jump runs once per file,
+	// cited line, view and wrap, the changes that lay the list out again: a
+	// comment added above the line, or a reload, only moves the tint, and the
 	// reader keeps their place.
 	const jumpTo = useRef(-1);
 	const jumpTries = useRef(0);
 	const jumpRetry = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
+	const jumpedFor = useRef("");
+	const jumpKey = `${path}|${citedLine ?? ""}|${effectiveMode}|${wrap}`;
 	const rowCount = useRef(0);
 	rowCount.current = rows.length;
 	useEffect(() => {
-		if (citedIndex < 0) return;
+		if (citedIndex < 0 || jumpedFor.current === jumpKey) return;
+		jumpedFor.current = jumpKey;
 		jumpTo.current = citedIndex;
 		jumpTries.current = 0;
 		const timer = setTimeout(() => list.current?.scrollToIndex({ index: citedIndex, viewPosition: 0.3, animated: false }), 0);
@@ -360,7 +365,7 @@ function SessionFileContent() {
 			clearTimeout(jumpRetry.current);
 			jumpTo.current = -1;
 		};
-	}, [citedIndex, effectiveMode, wrap]);
+	}, [citedIndex, jumpKey]);
 	const onScrollToIndexFailed = useCallback(({ index, highestMeasuredFrameIndex }: { index: number; highestMeasuredFrameIndex: number }) => {
 		if (index === jumpTo.current && jumpTries.current++ < 40) {
 			// The furthest drawn row can always be scrolled to, and reaching it
