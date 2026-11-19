@@ -29,3 +29,14 @@ describe("redirectSystemPath", () => {
 		expect(redirectSystemPath({ path: "ao-app://agent-login", initial: true })).toBe("/");
 	});
 });
+
+
+describe("shared artifact intent", () => {
+	it("preserves the published link on cold and warm launches", () => {
+		const viewer = "https://orchestrator.inc/artifact/abcdefghijklmnopqrstuvwxyz";
+		for (const initial of [true, false]) {
+			expect(redirectSystemPath({ path: `ao-app://shared-artifact?url=${encodeURIComponent(viewer)}`, initial }))
+				.toBe(`/shared-artifact?url=${encodeURIComponent(viewer)}`);
+		}
+	});
+});
