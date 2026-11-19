@@ -550,7 +550,10 @@ describe("ShareArtifactButton on a file on this computer", () => {
 		expect(await within(popover).findByText("p49@acme.co")).toBeTruthy();
 		await userEvent.type(field, "one-more@acme.co{Enter}");
 		expect(await within(popover).findByText("Add up to 50 people before publishing. You can add more once it's published.")).toBeTruthy();
-		expect(within(popover).queryByText("one-more@acme.co")).toBeNull();
+		// Refused, it stays in the field for another try, and is not added.
+		const held = within(popover).getAllByText("one-more@acme.co");
+		expect(held).toHaveLength(1);
+		expect(held[0].closest("[data-artifact-recipient-field]")).not.toBeNull();
 		expect(publishSpy).not.toHaveBeenCalled();
 	});
 

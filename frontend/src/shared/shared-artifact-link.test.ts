@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { parseSharedArtifactLink, sharedArtifactAppURL, sharedArtifactLinkId, sharedArtifactURL } from "../../../packages/shared/artifacts/shared-artifact-link";
+import { artifactViewerOrigins, parseSharedArtifactLink, sharedArtifactAppURL, sharedArtifactLinkId, sharedArtifactURL } from "../../../packages/shared/artifacts/shared-artifact-link";
 
 const viewer = "https://orchestrator.inc/artifact/abcdefghijklmnopqrstuvwxyz";
 const link = `ao-app://shared-artifact?url=${encodeURIComponent(viewer)}`;
@@ -30,5 +30,19 @@ describe("published artifact links", () => {
 			`${link}&url=${encodeURIComponent(viewer)}`, `${link}&other=x`, `${link}#fragment`, "ao-app://shared-artifact", "ao-app://callback"]) {
 			expect(parseSharedArtifactLink(value)).toBeNull();
 		}
+	});
+	it("opens only a known viewer's pages: production, plus one configured https origin", () => {
+		const evil = "https://evil.example/artifact/x";
+		expect(parseSharedArtifactLink(`ao-app://shared-artifact?url=${encodeURIComponent(evil)}`)).toBeNull();
+		expect(sharedArtifactAppURL(evil)).toBeNull();
+		expect(sharedArtifactURL("https://orchestrator.inc.evil.example/artifact/x")).toBeNull();
+		const staging = artifactViewerOrigins("https://staging.orchestrator.inc/");
+		expect(staging).toEqual(["https://orchestrator.inc", "https://staging.orchestrator.inc"]);
+		expect(sharedArtifactAppURL("https://staging.orchestrator.inc/artifact/x", staging)).toBe("https://staging.orchestrator.inc/artifact/x?inApp=1");
+		for (const configured of ["http://staging.example", "https://staging.example/path", "https://u:p@staging.example", "not a url", "", undefined]) {
+			expect(artifactViewerOrigins(configured)).toEqual(["https://orchestrator.inc"]);
+		}
+		// Naming a link checks only its shape; opening it checks the origin.
+		expect(sharedArtifactLinkId("https://staging.example/artifact/abc")).toBe("abc");
 	});
 });

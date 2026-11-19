@@ -149,6 +149,53 @@ describe("ShareArtifactButton on a team workspace", () => {
 		expect(await screen.findByText("maya@acme.co")).toBeTruthy();
 	});
 
+	it("keeps a pick that failed to share in the field, and Enter tries it again", async () => {
+		mocks.candidates = [];
+		vi.spyOn(aoBridge.cloudShare, "inspect").mockResolvedValue({ ...inspection, shareId: SHARE_ID });
+		vi.spyOn(aoBridge.cloudShare, "list").mockResolvedValue({ ...links, shares: [share] });
+		vi.spyOn(aoBridge.cloudShare, "grants").mockResolvedValue(none);
+		const maya = { id: "4a0b0b4e-be7f-4a7d-be95-9b4d7a5b6c85", email: "maya@acme.co", createdAt: "" };
+		const invite = vi.spyOn(aoBridge.cloudShare, "invite")
+			.mockRejectedValueOnce(new Error("offline"))
+			.mockResolvedValueOnce({ ...none, people: [maya] });
+		renderButton(cloudFile);
+		await userEvent.click(await screen.findByRole("button", { name: "Published: report.html" }));
+		const field = await screen.findByRole("combobox", { name: "Add people by email or team" });
+		await userEvent.type(field, "maya@acme.co{Enter}");
+		const kept = await screen.findByText("maya@acme.co");
+		expect(kept.closest("[data-artifact-recipient-field]")).not.toBeNull();
+		await userEvent.type(field, "{Enter}");
+		await waitFor(() => expect(invite).toHaveBeenCalledTimes(2));
+		expect(invite).toHaveBeenLastCalledWith("https://cp.test", SHARE_ID, { emails: ["maya@acme.co"] });
+		await waitFor(() => expect(screen.getByText("maya@acme.co").closest("[data-artifact-recipient-field]")).toBeNull());
+	});
+
+	it("sends quick picks one after another, so the last answer lists them all", async () => {
+		mocks.candidates = [];
+		vi.spyOn(aoBridge.cloudShare, "inspect").mockResolvedValue({ ...inspection, shareId: SHARE_ID });
+		vi.spyOn(aoBridge.cloudShare, "list").mockResolvedValue({ ...links, shares: [share] });
+		vi.spyOn(aoBridge.cloudShare, "grants").mockResolvedValue(none);
+		const maya = { id: "4a0b0b4e-be7f-4a7d-be95-9b4d7a5b6c85", email: "maya@acme.co", createdAt: "" };
+		const ravi = { id: "5b1c1c5f-cf80-4b8e-cfa6-ac5e8b6c7d96", email: "ravi@acme.co", createdAt: "" };
+		let release!: () => void;
+		const first = new Promise<CloudShareGrants>((resolve) => { release = () => resolve({ ...none, people: [maya] }); });
+		const invite = vi.spyOn(aoBridge.cloudShare, "invite")
+			.mockReturnValueOnce(first)
+			.mockResolvedValueOnce({ ...none, people: [maya, ravi] });
+		renderButton(cloudFile);
+		await userEvent.click(await screen.findByRole("button", { name: "Published: report.html" }));
+		const field = await screen.findByRole("combobox", { name: "Add people by email or team" });
+		await userEvent.type(field, "maya@acme.co{Enter}");
+		await userEvent.type(field, "ravi@acme.co{Enter}");
+		// The second waits for the first to be saved.
+		expect(invite).toHaveBeenCalledOnce();
+		release();
+		await waitFor(() => expect(invite).toHaveBeenCalledTimes(2));
+		expect(invite).toHaveBeenLastCalledWith("https://cp.test", SHARE_ID, { emails: ["ravi@acme.co"] });
+		expect(await screen.findByText("maya@acme.co")).toBeTruthy();
+		expect(await screen.findByText("ravi@acme.co")).toBeTruthy();
+	});
+
 	it("makes a new team from the field, as session sharing does, and shares the link with it", async () => {
 		mocks.candidates = [];
 		vi.spyOn(aoBridge.cloudShare, "inspect").mockResolvedValue({ ...inspection, shareId: SHARE_ID });

@@ -1,5 +1,5 @@
 import { parseSharedArtifactLink } from "../../packages/shared/artifacts/shared-artifact-link";
-import { openSharedArtifact } from "./main/shared-artifact-window";
+import { openSharedArtifact, SHARED_ARTIFACT_VIEWER_ORIGINS } from "./main/shared-artifact-window";
 import type { SideCloseRequest, SideCloseState } from "./shared/side-close";
 import { SideCloseRecovery, type SideSnapshotCoverage } from "./main/side-close";
 import { SideCloseController } from "./main/side-close-controller";
@@ -4424,7 +4424,8 @@ const pendingSharedArtifacts: string[] = [];
 ipcMain.handle("cloud:takePendingSharedArtifact", () => pendingSharedArtifacts.shift() ?? null);
 
 // The renderer's fallback: openSharedArtifact accepts only a published
-// artifact's https viewer URL, and its window has no preload or credentials.
+// artifact's page on a known viewer origin, and its window has no preload or
+// credentials.
 ipcMain.handle("cloud:openSharedArtifactWindow", (_event, viewerUrl: unknown) => {
 	if (typeof viewerUrl === "string") openSharedArtifact(viewerUrl);
 });
@@ -4441,7 +4442,8 @@ function isShareDeepLink(raw: string): boolean {
 async function handleCloudDeepLinkAndFocus(url: string): Promise<void> {
 	// A published artifact's "Open on orchestrator": the Artifacts page opens it,
 	// or hands it back to openSharedArtifact's isolated window when it cannot.
-	const artifact = parseSharedArtifactLink(url);
+	// Only a page on a known viewer: any other site is not an Orchestrator artifact.
+	const artifact = parseSharedArtifactLink(url, SHARED_ARTIFACT_VIEWER_ORIGINS);
 	if (artifact) {
 		await app.whenReady();
 		if (getShellWebContents()) {

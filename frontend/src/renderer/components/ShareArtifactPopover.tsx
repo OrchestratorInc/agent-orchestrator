@@ -733,6 +733,8 @@ function SharePanel({
 	// number. A full list (a read, or an invite's answer) is shown only if
 	// nothing started after it, so an older answer never replaces a newer one.
 	const grantsSeq = useRef(0);
+	// The invite last sent; it never rejects (sendSubjects answers false).
+	const invitesInFlight = useRef<Promise<unknown>>(Promise.resolve());
 	// Every action taken in the panel (publish, unpublish, access, people)
 	// takes the next number. The refresh behind an opening from a cached list
 	// only applies while none started since: it never overwrites what an
@@ -1009,8 +1011,15 @@ function SharePanel({
 	};
 
 	// The link is live: Invite gives access at once, to people, teams or the
-	// workspace, and the answer lists everyone it is shared with now.
-	const addSubjects = async (shareId: string, input: CloudShareInvite, failed: GrantFailure): Promise<boolean> => {
+	// workspace, and the answer lists everyone it is shared with now. Picks
+	// made in quick succession are sent one after another, so each answer is
+	// read after the one before it saved, and the last lists them all.
+	const addSubjects = (shareId: string, input: CloudShareInvite, failed: GrantFailure): Promise<boolean> => {
+		const sent = invitesInFlight.current.then(() => sendSubjects(shareId, input, failed));
+		invitesInFlight.current = sent;
+		return sent;
+	};
+	const sendSubjects = async (shareId: string, input: CloudShareInvite, failed: GrantFailure): Promise<boolean> => {
 		startAction();
 		const seq = ++grantsSeq.current;
 		try {
