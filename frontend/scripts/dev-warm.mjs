@@ -88,8 +88,9 @@ function capture(command, args, options = {}) {
 
 // Key for an install: the lockfile, the dependency fields of package.json and
 // of each `file:` package it links, and the Node/npm/platform that ran npm ci.
-export function depsKeyParts({ lockfile, packageJSON, linkedPackageJSONs, node, npm, platform, arch }) {
+export function depsKeyParts({ lockfile, packageJSON, linkedPackageJSONs, node, npm, platform, arch, selection = {} }) {
 	return {
+		selection,
 		store: STORE_NAME,
 		lockfile: sha(lockfile),
 		packageJSON: dependencyFields(packageJSON),
@@ -99,6 +100,17 @@ export function depsKeyParts({ lockfile, packageJSON, linkedPackageJSONs, node, 
 		platform,
 		arch,
 	};
+}
+
+// Settings that change which dependencies `npm ci` installs (an install made
+// with npm_config_omit=dev has no Electron Forge), so they are part of the key.
+export function npmSelection(env = process.env) {
+	const picked = {};
+	for (const name of ["npm_config_omit", "npm_config_include", "npm_config_production", "npm_config_only", "NODE_ENV"]) {
+		const value = env[name] ?? env[name.toUpperCase()];
+		if (value) picked[name] = value;
+	}
+	return picked;
 }
 
 function linkedPackages(frontend, packageJSON) {
@@ -168,13 +180,14 @@ async function warmDeps({ root, frontend }, options) {
 			npm,
 			platform: process.platform,
 			arch: process.arch,
+			selection: npmSelection(),
 		}),
 	);
 	const store = warmStoreRoot();
 	const hasNodeModules = isDirectory(nodeModules);
 	const installedKey = hasNodeModules ? (readJSON(path.join(nodeModules, INSTALL_STAMP), null)?.key ?? null) : null;
-	// Only an install dev:warm didn't make needs this: its own carry the key.
-	const foreignDrift = hasNodeModules && !installedKey ? nodeModulesDrift(frontend) : [];
+	// Even a stamped install can drift (a package deleted or reinstalled by hand).
+	const drift = hasNodeModules ? nodeModulesDrift(frontend) : [];
 	const entry = lookupEntry(store, STORE_NAME, key);
 	const cachedLock = entry ? path.join(path.dirname(entry), "package-lock.json") : null;
 	const plan = planDeps({
@@ -185,7 +198,7 @@ async function warmDeps({ root, frontend }, options) {
 		lockfilesIdentical: Boolean(cachedLock) && fileIsIdentical(cachedLock, path.join(frontend, "package-lock.json")),
 		// npm links `file:` packages with absolute junctions on Windows.
 		cloneSupported: process.platform !== "win32" && cloneStrategies(process.platform).length > 1,
-		foreignDrift: foreignDrift.length > 0,
+		drift: drift.length > 0,
 	});
 	log(`node_modules: ${plan.action} - ${plan.reason} (key ${key.slice(0, 12)}, store ${store})`);
 	if (options.dryRun || plan.action === "keep" || plan.action === "foreign") return;
@@ -193,10 +206,10 @@ async function warmDeps({ root, frontend }, options) {
 	assertIgnoredOutputs(root, ["frontend/node_modules"]);
 	if (hasNodeModules) {
 		log(
-			installedKey
-				? "removing the previous dev:warm install (its inputs changed)"
-				: foreignDrift.length > 0
-					? `removing the existing node_modules: it no longer matches package-lock.json (${summarizeDrift(foreignDrift)})`
+			drift.length > 0
+				? `removing the existing node_modules: it no longer matches package-lock.json (${summarizeDrift(drift)})`
+				: installedKey
+					? "removing the previous dev:warm install (its inputs changed)"
 					: "removing the existing node_modules (--replace)",
 		);
 		rmSync(nodeModules, { recursive: true, force: true });

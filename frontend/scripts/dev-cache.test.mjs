@@ -24,7 +24,7 @@ import {
 	summarizeDrift,
 } from "./dev-cache.mjs";
 import { normalizeGoEnv } from "./dev-prepare.mjs";
-import { dependencyFields, depsKeyParts, parseArgs } from "./dev-warm.mjs";
+import { dependencyFields, depsKeyParts, npmSelection, parseArgs } from "./dev-warm.mjs";
 
 const temps = [];
 function tempDir() {
@@ -91,6 +91,7 @@ describe("import closure", () => {
 			'import React from "react";',
 		].join("\n");
 		assert.deepEqual(relativeImports(source), ["./a", "./side.css", "../shared/b.js", "./c"]);
+		assert.deepEqual(relativeImports('import{s}from"../shared/s.js";export*from"./all";'), ["../shared/s.js", "./all"]);
 	});
 
 	test("follows relative imports across folders and reports what it cannot resolve", () => {
@@ -227,12 +228,15 @@ describe("decisions", () => {
 		assert.equal(planDeps({ ...base, hasNodeModules: true, installedKey: "k" }).action, "keep");
 		assert.equal(planDeps({ ...base, hasNodeModules: true, installedKey: null }).action, "foreign");
 		assert.equal(planDeps({ ...base, hasNodeModules: true, installedKey: "stale" }).action, "clone");
-		assert.equal(planDeps({ ...base, hasNodeModules: true, installedKey: null, foreignDrift: true }).action, "clone");
+		assert.equal(planDeps({ ...base, hasNodeModules: true, installedKey: null, drift: true }).action, "clone");
+		// A stamped install that drifted is replaced too.
+		assert.equal(planDeps({ ...base, hasNodeModules: true, installedKey: "k", drift: true }).action, "clone");
 	});
 
 	test("nodeModulesDrift reports missing and mismatched packages, not optional ones", () => {
+		const f = path.join(path.sep, "f");
 		const files = {
-			"/f/package-lock.json": {
+			[path.join(f, "package-lock.json")]: {
 				packages: {
 					"": { name: "app" },
 					"node_modules/a": { version: "1.0.0" },
@@ -242,7 +246,7 @@ describe("decisions", () => {
 					"node_modules/a/node_modules/d": { version: "3.0.0" },
 				},
 			},
-			"/f/node_modules/.package-lock.json": {
+			[path.join(f, "node_modules", ".package-lock.json")]: {
 				packages: {
 					"node_modules/a": { version: "1.0.0" },
 					"node_modules/b": { version: "1.9.0" },
@@ -251,10 +255,14 @@ describe("decisions", () => {
 			},
 		};
 		const read = (file) => files[file] ?? null;
-		assert.deepEqual(nodeModulesDrift("/f", { read, hasDir: () => true }), ["b 1.9.0 (lockfile 2.0.0)", "c missing"]);
-		assert.deepEqual(nodeModulesDrift("/f", { read, hasDir: () => false }), ["node_modules is missing"]);
+		const exists = () => true;
+		assert.deepEqual(nodeModulesDrift(f, { read, hasDir: () => true, exists }), ["b 1.9.0 (lockfile 2.0.0)", "c missing"]);
+		assert.deepEqual(nodeModulesDrift(f, { read, hasDir: () => false, exists }), ["node_modules is missing"]);
+		// A required package deleted by hand while npm's record still lists it.
+		const gone = path.join(f, "node_modules", "a", "node_modules", "d");
+		assert.deepEqual(nodeModulesDrift(f, { read, hasDir: () => true, exists: (dir) => dir !== gone }), ["b 1.9.0 (lockfile 2.0.0)", "c missing", "d missing"]);
 		// Without npm's hidden lockfile there is nothing to compare, so no drift.
-		assert.deepEqual(nodeModulesDrift("/f", { read: (file) => (file.includes(".package-lock") ? null : read(file)), hasDir: () => true }), []);
+		assert.deepEqual(nodeModulesDrift(f, { read: (file) => (file.includes(".package-lock") ? null : read(file)), hasDir: () => true, exists }), []);
 	});
 
 	test("summarizeDrift caps the list", () => {
@@ -294,6 +302,8 @@ describe("dev-warm", () => {
 		assert.equal(cacheKey(depsKeyParts({ ...parts, packageJSON: { ...packageJSON, scripts: { dev: "b" } } })), key);
 		assert.notEqual(cacheKey(depsKeyParts({ ...parts, lockfile: Buffer.from("lock2") })), key);
 		assert.notEqual(cacheKey(depsKeyParts({ ...parts, node: "v24.2.0" })), key);
+		assert.notEqual(cacheKey(depsKeyParts({ ...parts, selection: npmSelection({ npm_config_omit: "dev" }) })), key);
+		assert.deepEqual(npmSelection({ PATH: "/bin" }), {});
 		assert.notEqual(cacheKey(depsKeyParts({ ...parts, linkedPackageJSONs: { "../packages/ui": { dependencies: { a: "1" } } } })), key);
 	});
 });
