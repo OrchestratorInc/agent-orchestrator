@@ -1902,7 +1902,7 @@ describe("SessionsBoard", () => {
 		]);
 	});
 
-	it("uses the shared minimal scrollbar styling for every Kanban lane", () => {
+	it("hides the scrollbar on every Kanban lane", () => {
 		workspaceQueryMock.mockReturnValue({
 			data: [
 				workspaceWithSessions([
@@ -1925,7 +1925,7 @@ describe("SessionsBoard", () => {
 			.flatMap((column) => Array.from(column.querySelectorAll<HTMLElement>(".overflow-y-auto")));
 		expect(laneScrollers).toHaveLength(4);
 		for (const scroller of laneScrollers) {
-			expect(scroller).toHaveClass("board-scrollbar", "overflow-y-auto");
+			expect(scroller).toHaveClass("scrollbar-none", "overflow-y-auto");
 		}
 	});
 

@@ -1945,34 +1945,6 @@ textarea,
 	background-clip: padding-box;
 }
 
-/* Chromium uses the desktop theme's chunky native horizontal scrollbar on
-   Linux. Keep the board scroller compact and rounded there without changing
-   macOS overlay scrollbars or Windows behavior. */
-.platform-linux .board-horizontal-scrollbar::-webkit-scrollbar {
-	height: 6px;
-}
-
-.platform-linux .board-horizontal-scrollbar::-webkit-scrollbar-button {
-	display: none;
-	width: 0;
-	height: 0;
-}
-
-.platform-linux .board-horizontal-scrollbar::-webkit-scrollbar-track,
-.platform-linux .board-horizontal-scrollbar::-webkit-scrollbar-corner {
-	background: transparent;
-}
-
-.platform-linux .board-horizontal-scrollbar::-webkit-scrollbar-thumb {
-	min-width: 24px;
-	border-radius: 999px;
-	background-color: color-mix(in srgb, var(--color-scrollbar) 42%, transparent);
-}
-
-.platform-linux .board-horizontal-scrollbar::-webkit-scrollbar-thumb:hover {
-	background-color: color-mix(in srgb, var(--color-scrollbar) 56%, transparent);
-}
-
 /* Thin project-list scrollbar: keeps a scroll affordance without the chunky
    system thumb. Linux also suppresses the end-cap buttons below. */
 .project-sidebar-scrollbar {
@@ -6869,7 +6841,7 @@ html:not([data-window-translucent="true"]) .onboarding-preview-stage {
 /* The preview board never scrolls; letting its lanes overflow means a card
  * moving between lanes stays visible for the whole trip instead of being
  * clipped at its lane's edge. */
-.onboarding-preview-board :is(.board-horizontal-scrollbar, .board-horizontal-scrollbar > .grid > *, .board-scrollbar) {
+.onboarding-preview-board :is(.board-horizontal-scrollbar, .board-horizontal-scrollbar > .grid > *, .board-horizontal-scrollbar .scrollbar-none) {
 	overflow: visible;
 }
 
