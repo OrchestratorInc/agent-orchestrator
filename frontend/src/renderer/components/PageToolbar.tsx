@@ -7,31 +7,37 @@ import { Tooltip, TooltipContent, TooltipTrigger } from "./ui/tooltip";
 /**
  * Search behind an icon for a page's filter row; the field shows while
  * focused or holding a query. Escape clears it and returns focus to the icon.
- * `toggleRef` lets the page return focus to the icon after clearing elsewhere.
+ * `persistent` keeps the field always shown (no icon, no autofocus): Escape
+ * clears the text, and a second Escape leaves the field.
  */
-export function ToolbarSearch({ label, query, onQueryChange, toggleRef: externalToggleRef }: { label: string; query: string; onQueryChange: (query: string) => void; toggleRef?: RefObject<HTMLButtonElement | null> }) {
+export function ToolbarSearch({ label, query, onQueryChange, persistent = false, inputRef }: { label: string; query: string; onQueryChange: (query: string) => void; persistent?: boolean; inputRef?: RefObject<HTMLInputElement | null> }) {
 	const [open, setOpen] = useState(false);
-	const ownToggleRef = useRef<HTMLButtonElement>(null);
-	const toggleRef = externalToggleRef ?? ownToggleRef;
-	if (open || query) {
+	const toggleRef = useRef<HTMLButtonElement>(null);
+	if (persistent || open || query) {
 		return (
 			<label className="relative me-1 block w-56 min-w-0 shrink">
 				<Search aria-hidden="true" className="pointer-events-none absolute start-2.5 top-1/2 size-icon-sm -translate-y-1/2 text-passive" />
 				<Input
 					aria-label={label}
-					autoFocus
+					autoFocus={!persistent}
 					className="inspector-field-input ps-8 [&::-webkit-search-cancel-button]:appearance-none"
-					onBlur={() => setOpen(false)}
+					onBlur={persistent ? undefined : () => setOpen(false)}
 					onChange={(event) => onQueryChange(event.target.value)}
 					onKeyDown={(event) => {
 						if (event.key !== "Escape") return;
+						if (persistent && !query) {
+							event.currentTarget.blur();
+							return;
+						}
 						// Escape clears search first; a later one reaches the page.
 						event.preventDefault();
 						onQueryChange("");
+						if (persistent) return;
 						setOpen(false);
 						requestAnimationFrame(() => toggleRef.current?.focus());
 					}}
 					placeholder={label}
+					ref={inputRef}
 					type="search"
 					value={query}
 				/>

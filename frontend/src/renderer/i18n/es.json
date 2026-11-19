@@ -401,7 +401,7 @@
 	"cloud.startupError.sandboxUnresponsiveTitle": "El sandbox dejó de responder",
 	"board.empty.body": "Describe una tarea y el orquestador la planifica, crea sesiones de trabajo y las sigue aquí a medida que avanza el trabajo.",
 	"board.empty.title": "Aún no hay sesiones de trabajo",
-	"board.search": "Buscar sesiones",
+	"board.search": "Buscar en el tablero",
 	"board.searchClear": "Borrar búsqueda",
 	"board.searchNoMatches": "Ninguna sesión coincide con “{{query}}”",
 	"home.folderMissing": "Carpeta no encontrada",

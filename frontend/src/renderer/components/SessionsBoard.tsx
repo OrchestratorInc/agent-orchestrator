@@ -29,7 +29,7 @@ import {
 	type KanbanColumnView,
 } from "../lib/session-presentation";
 import { useSessionMenuAvailable } from "../hooks/useAppMenuCommand";
-import { useSessionShortcut } from "../hooks/useAppShortcut";
+import { isSettingsPageOpen, useAppShortcut, useSessionShortcut } from "../hooks/useAppShortcut";
 import { useTerminateSession } from "../hooks/useTerminateSession";
 import { useCloudCp } from "../hooks/useCloudCp";
 import { useSessionParticipants } from "../hooks/useSessionParticipants";
@@ -67,6 +67,9 @@ import {
 	BoardSessionCardAdapter,
 	sessionsBoardLabels,
 } from "./SessionsBoardAdapters";
+
+/** Focus here keeps Cmd/Ctrl+F for itself (its own find, or plain text editing). */
+const BOARD_FIND_YIELDS_TO = "[role='dialog'], input, textarea, [contenteditable='true'], [role='textbox'], .xterm, .terminal-surface, .monaco-editor, .cm-editor, iframe, webview, [data-chat-find-scope], [data-chat-find-surface]";
 
 type SessionsBoardProps = {
 	/** When set, the board shows only this project's sessions. */
@@ -203,15 +206,34 @@ export function SessionsBoard({ projectId, hostId }: SessionsBoardProps) {
 	// the whole board at once instead of one render with the old query.
 	const deferredQuery = useDeferredValue(searchQuery);
 	const deferredSearchQuery = searchQuery === "" ? "" : deferredQuery;
-	const searchToggleRef = useRef<HTMLButtonElement>(null);
+	const boardRef = useRef<HTMLDivElement>(null);
+	const searchInputRef = useRef<HTMLInputElement>(null);
 	const searching = boardSearchTokens(deferredSearchQuery).length > 0;
 	const visibleBoardSessions = filterBoardSessions(boardSessions, deferredSearchQuery);
 	const searchMissed = searching && boardSessions.length > 0 && visibleBoardSessions.length === 0;
 	const clearSearch = () => {
 		setSearchQuery("");
 		// The button that cleared it goes away with the empty state.
-		requestAnimationFrame(() => searchToggleRef.current?.focus());
+		requestAnimationFrame(() => searchInputRef.current?.focus());
 	};
+	// Cmd/Ctrl+F is find-in-chat's chord, claimed by whichever surface is in
+	// front. The board takes it while its field is on screen, unless a dialog,
+	// terminal, editor or another field has focus, or a chat on screen owns it.
+	const canFocusSearch = useCallback(() => {
+		const input = searchInputRef.current;
+		if (!input || input.getClientRects().length === 0 || isSettingsPageOpen() || useUiStore.getState().archiveModal) return false;
+		const focused = document.activeElement;
+		if (focused === input) return true;
+		if (focused instanceof Element && focused !== document.body) {
+			if (focused.closest(BOARD_FIND_YIELDS_TO)) return false;
+			if (boardRef.current?.contains(focused)) return true;
+		}
+		return !Array.from(document.querySelectorAll("[data-chat-find-surface]")).some((surface) => surface.getClientRects().length > 0);
+	}, []);
+	useAppShortcut("find-in-chat", () => {
+		searchInputRef.current?.focus();
+		searchInputRef.current?.select();
+	}, true, canFocusSearch);
 	const boardLabels = sessionsBoardLabels(t);
 	const presentation = useBoardPresentation({
 		projectId,
@@ -292,11 +314,7 @@ export function SessionsBoard({ projectId, hostId }: SessionsBoardProps) {
 		});
 	};
 
-	// Offered while the board has cards to narrow, and kept while a query is
-	// held so it can always be cleared.
-	const search = searchQuery !== "" || (boardSessions.length > 0 && !showWelcome && !showProjectEmpty) ? (
-		<ToolbarSearch label={t("board.search")} query={searchQuery} onQueryChange={setSearchQuery} toggleRef={searchToggleRef} />
-	) : null;
+	const search = <ToolbarSearch persistent inputRef={searchInputRef} label={t("board.search")} query={searchQuery} onQueryChange={setSearchQuery} />;
 	const actions = projectId && (!hostId || connected) ? (
 		<>
 			<ProjectTerminationFeedback projectId={projectId} hostId={hostId} />
@@ -309,12 +327,12 @@ export function SessionsBoard({ projectId, hostId }: SessionsBoardProps) {
 			{search}
 			<HostOfflineStatus host={savedHost} label={hostLabel ?? ""} updatedAt={workspace ? remoteProjectQuery.dataUpdatedAt : undefined} />
 		</>
-	) : memoryLight || search ? (
+	) : (
 		<>
 			{memoryLight}
 			{search}
 		</>
-	) : undefined;
+	);
 
 	if (projectId && (isProvisioning || projectActions.isSpawning || autoStartPending)) {
 		return <OrchestratorStartingChat
@@ -326,7 +344,7 @@ export function SessionsBoard({ projectId, hostId }: SessionsBoardProps) {
 	}
 
 	return (
-		<div className="relative flex h-full min-h-0 flex-col bg-background text-foreground" data-testid="board" data-host-id={hostId} data-project-id={projectId}>
+		<div className="relative flex h-full min-h-0 flex-col bg-background text-foreground" data-testid="board" ref={boardRef} data-host-id={hostId} data-project-id={projectId}>
 			<PageTopbar
 				lead={showWelcome ? undefined : (
 					<PageTopbarTitle

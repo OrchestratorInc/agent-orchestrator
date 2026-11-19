@@ -362,7 +362,7 @@
 	"cloud.startupError.sandboxUnresponsiveTitle": "Korumalı alan yanıt vermeyi durdurdu",
 	"board.empty.body": "Bir görevi anlatın; düzenleyici planlar, çalışan oturumları başlatır ve iş ilerledikçe burada takip eder.",
 	"board.empty.title": "Henüz çalışan oturumu yok",
-	"board.search": "Oturumlarda ara",
+	"board.search": "Panoda ara",
 	"board.searchClear": "Aramayı temizle",
 	"board.searchNoMatches": "\"{{query}}\" ile eşleşen oturum yok",
 	"home.folderMissing": "Klasör bulunamadı",

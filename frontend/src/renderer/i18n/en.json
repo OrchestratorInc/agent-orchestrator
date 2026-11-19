@@ -362,7 +362,7 @@
 	"cloud.startupError.sandboxUnresponsiveTitle": "The sandbox stopped responding",
 	"board.empty.body": "Describe a task and the orchestrator plans it, spawns worker sessions, and tracks them here as work moves forward.",
 	"board.empty.title": "No worker sessions yet",
-	"board.search": "Search sessions",
+	"board.search": "Search through board",
 	"board.searchClear": "Clear search",
 	"board.searchNoMatches": "No sessions match “{{query}}”",
 	"home.folderMissing": "Folder missing",

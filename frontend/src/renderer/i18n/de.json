@@ -400,7 +400,7 @@
 	"cloud.startupError.sandboxUnresponsiveTitle": "Die Sandbox reagiert nicht mehr",
 	"board.empty.body": "Beschreiben Sie eine Aufgabe — der Orchestrator plant sie, startet Worker-Sitzungen und verfolgt sie hier, während die Arbeit voranschreitet.",
 	"board.empty.title": "Noch keine Worker-Sitzungen",
-	"board.search": "Sitzungen durchsuchen",
+	"board.search": "Board durchsuchen",
 	"board.searchClear": "Suche löschen",
 	"board.searchNoMatches": "Keine Sitzungen passen zu „{{query}}“",
 	"home.folderMissing": "Ordner fehlt",

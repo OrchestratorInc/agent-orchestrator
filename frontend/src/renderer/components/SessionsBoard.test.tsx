@@ -2304,9 +2304,10 @@ describe("SessionsBoard search", () => {
 		});
 	}
 
+	const searchField = () => screen.getByRole("searchbox", { name: "Search through board" });
+
 	async function search(query: string) {
-		await userEvent.click(screen.getByRole("button", { name: "Search sessions" }));
-		await userEvent.type(screen.getByRole("searchbox", { name: "Search sessions" }), query);
+		await userEvent.type(searchField(), query);
 	}
 
 	it("narrows the cards in place by title, session id, branch and PR number", async () => {
@@ -2322,7 +2323,7 @@ describe("SessionsBoard search", () => {
 		expect(screen.getAllByTestId("board-column")).toHaveLength(4);
 		expect(screen.getByRole("button", { name: /^Archived sessions, 1$/ })).toBeInTheDocument();
 
-		const field = screen.getByRole("searchbox", { name: "Search sessions" });
+		const field = searchField();
 		for (const [query, title] of [["ao-14", "Board search"], ["#812", "Theme picker"], ["ao/login-fix", "Fix login redirect"]] as const) {
 			await userEvent.clear(field);
 			await userEvent.type(field, query);
@@ -2342,7 +2343,24 @@ describe("SessionsBoard search", () => {
 		await userEvent.click(screen.getByRole("button", { name: "Clear search" }));
 		await waitFor(() => expect(screen.getAllByTestId("board-session-card")).toHaveLength(3));
 		expect(screen.queryByTestId("board-search-empty")).not.toBeInTheDocument();
-		await waitFor(() => expect(screen.getByRole("button", { name: "Search sessions" })).toHaveFocus());
+		await waitFor(() => expect(searchField()).toHaveFocus());
+	});
+
+	it("keeps the field on screen, unfocused, before any search", () => {
+		searchableBoard();
+		renderBoard("p1");
+
+		expect(searchField()).toHaveAttribute("placeholder", "Search through board");
+		expect(searchField()).not.toHaveFocus();
+	});
+
+	it("focuses the field on Cmd/Ctrl+F", async () => {
+		searchableBoard();
+		renderBoard("p1");
+		const mac = isMacPlatform();
+
+		fireEvent.keyDown(window, { key: "f", code: "KeyF", metaKey: mac, ctrlKey: !mac });
+		await waitFor(() => expect(searchField()).toHaveFocus());
 	});
 
 	it("clears on Escape", async () => {
@@ -2353,7 +2371,10 @@ describe("SessionsBoard search", () => {
 		await waitFor(() => expect(screen.getAllByTestId("board-session-card")).toHaveLength(1));
 		await userEvent.keyboard("{Escape}");
 		await waitFor(() => expect(screen.getAllByTestId("board-session-card")).toHaveLength(3));
-		expect(screen.queryByRole("searchbox")).not.toBeInTheDocument();
+		expect(searchField()).toHaveValue("");
+		expect(searchField()).toHaveFocus();
+		await userEvent.keyboard("{Escape}");
+		expect(searchField()).not.toHaveFocus();
 	});
 
 	it("starts each project's board unfiltered", async () => {
@@ -2382,7 +2403,7 @@ describe("SessionsBoard search", () => {
 		);
 		await waitFor(() => expect(screen.getAllByTestId("board-session-card")).toHaveLength(1));
 		expect(screen.getByText("Other work")).toBeInTheDocument();
-		expect(screen.queryByRole("searchbox")).not.toBeInTheDocument();
+		expect(searchField()).toHaveValue("");
 	});
 });
 

@@ -401,7 +401,7 @@
 	"cloud.startupError.sandboxUnresponsiveTitle": "O sandbox parou de responder",
 	"board.empty.body": "Descreva uma tarefa e o orchestrator a planeja, inicia sessões de worker e as acompanha aqui conforme o trabalho avança.",
 	"board.empty.title": "Nenhuma sessão de worker ainda",
-	"board.search": "Pesquisar sessões",
+	"board.search": "Pesquisar no quadro",
 	"board.searchClear": "Limpar pesquisa",
 	"board.searchNoMatches": "Nenhuma sessão corresponde a “{{query}}”",
 	"home.folderMissing": "Pasta não encontrada",

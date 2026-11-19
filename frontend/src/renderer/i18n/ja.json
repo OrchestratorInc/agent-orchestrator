@@ -400,7 +400,7 @@
 	"cloud.startupError.sandboxUnresponsiveTitle": "サンドボックスが応答しなくなりました",
 	"board.empty.body": "タスクを説明すると、オーケストレーターが計画を立て、ワーカーセッションを起動し、進捗に合わせてここで追跡します。",
 	"board.empty.title": "ワーカーセッションはまだありません",
-	"board.search": "セッションを検索",
+	"board.search": "ボードを検索",
 	"board.searchClear": "検索をクリア",
 	"board.searchNoMatches": "「{{query}}」に一致するセッションはありません",
 	"home.folderMissing": "フォルダがありません",

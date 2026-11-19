@@ -400,7 +400,7 @@
 	"cloud.startupError.sandboxUnresponsiveTitle": "샌드박스가 응답하지 않습니다",
 	"board.empty.body": "작업을 설명하면 오케스트레이터가 계획을 세우고 워커 세션을 생성하며, 진행 상황을 여기서 추적합니다.",
 	"board.empty.title": "아직 워커 세션이 없습니다",
-	"board.search": "세션 검색",
+	"board.search": "보드 검색",
 	"board.searchClear": "검색 지우기",
 	"board.searchNoMatches": "“{{query}}”과(와) 일치하는 세션이 없습니다",
 	"home.folderMissing": "폴더가 없습니다",
