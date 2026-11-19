@@ -665,8 +665,10 @@ telemetry off" also control these events.
 
 When product telemetry is enabled, the desktop app sends launch timings in
 `ao.launches.timed` and sends `ao.usage.ui_performance`, a numeric summary of
-how fast the app responded. They carry only counts, durations in
-milliseconds, buckets, and the closed values listed here. They never include a
+how fast the app responded. Their own properties are only counts, durations in
+milliseconds, buckets, and the closed values listed here; like every event,
+they also carry the shared context described above, such as `app_version` and
+`install_id`. They never include a
 session, project or file name, path, URL, message text, script URL, function
 name, element text, or CSS selector, and the summary does not say which session
 a measurement came from.
@@ -674,7 +676,7 @@ a measurement came from.
 | Event | When it is sent | Performance properties |
 | --- | --- | --- |
 | `ao.launches.timed` | Once per launch, when the window first shows the sidebar with live sessions, or when the window closes or 60 seconds pass without that frame (then without `to_usable_ms`). A reload sends none. `ao.app.loaded` is still sent at startup without these properties | `launch_kind`, `to_visible_ms`, `to_usable_ms` |
-| `ao.usage.ui_performance` | At the end of each 45 to 60 minute window of use (the length is random in that range), or at the next launch for a window cut short by quitting. Nothing is sent for a window with no use. Only installs with `experiment_cohort` below 50 send it | see below |
+| `ao.usage.ui_performance` | At the end of each window, 45 to 60 minutes of elapsed time (random in that range) that includes idle and hidden time, so a window can hold much less use than that. A window cut short by quitting is kept and sent at the next launch if its end has passed, otherwise when the rest of it runs out. Nothing is sent for a window with no use. Only installs with `experiment_cohort` below 50 send it | see below |
 
 Properties on `ao.launches.timed`:
 
@@ -711,7 +713,9 @@ Properties on `ao.usage.ui_performance`:
   `slow_interaction_count` (over 200 ms to the next frame),
   `very_slow_interaction_count` (over 500 ms), and `interaction_p98_ms`, the
   98th percentile computed the way Interaction to Next Paint is. These come
-  from the browser's Event Timing API.
+  from the browser's Event Timing API, which reports only interactions of
+  40 ms or more, so `interaction_p98_ms` is 0 when none reached 40 ms: a
+  fallback, not a measured duration.
 - Frozen frames: `long_frame_count` (frames that took over 50 ms),
   `long_frame_blocking_ms` (their total blocking time), and
   `long_frame_top_cause`, the kind of work that blocked longest:

@@ -378,6 +378,8 @@ let identifiedId: string | null = null;
 let identifyCalledFor: string | null = null;
 let posthogReady = false;
 let analyticsOptedOut = false;
+/** Counts opt-outs, so work measured before one is never sent after a later opt-in. */
+let optOutGeneration = 0;
 
 function registerBaseProperties(): void {
 	posthog.register({
@@ -501,6 +503,7 @@ export async function applyAnalyticsOptOut(optedOut: boolean): Promise<void> {
 	analyticsOptedOut = optedOut;
 	setAnalyticsOptedOut(optedOut);
 	if (optedOut) {
+		optOutGeneration += 1;
 		// A website visit not linked yet is dropped, not kept for a later opt-in.
 		pendingWebVisitor = null;
 		// Updater failures counted before the opt-out must not be exported
@@ -1567,9 +1570,12 @@ export async function initTelemetry(): Promise<boolean> {
 			);
 		}
 		// Launch timings are their own event, sent once the window is usable, so a
-		// crash during that wait never costs ao.app.loaded. A reload has no start.
+		// crash during that wait never costs ao.app.loaded. A reload has no start,
+		// and an opt-out during the wait discards the measurement.
+		const launchGeneration = optOutGeneration;
 		void takeLaunchStart()
-			.then((start) => (start ? launchProperties(start, bootstrap.appVersion).then((launch) => captureRendererEvent("ao.launches.timed", launch)) : undefined))
+			.then((start) => (start ? launchProperties(start, bootstrap.appVersion) : undefined))
+			.then((launch) => (launch && launchGeneration === optOutGeneration ? captureRendererEvent("ao.launches.timed", launch) : undefined))
 			.catch(() => undefined);
 		return true;
 	})().catch(() => {
