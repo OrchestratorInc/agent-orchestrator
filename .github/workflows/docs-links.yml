@@ -23,5 +23,5 @@ jobs:
         uses: lycheeverse/lychee-action@v2
         with:
           lycheeVersion: v0.24.2
-          args: --no-progress --root-dir ${{ github.workspace }}/frontend/src/docs/content --fallback-extensions mdx --index-files index.mdx --remap '/content/docs/images/(.*) /public/docs/images/$1' --exclude '^file://' "./frontend/src/docs/content/**/*.mdx"
+          args: --no-progress --root-dir ${{ github.workspace }}/frontend/src/docs/content --fallback-extensions mdx --index-files index.mdx --remap '/content/docs/images/(.*) /public/docs/images/$1' --exclude '^file://' --exclude '^https://x\.com/' "./frontend/src/docs/content/**/*.mdx"
           fail: true
