@@ -5,6 +5,8 @@ import (
 	"context"
 	"errors"
 	"io"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -26,6 +28,10 @@ func TestCodexLoginRunsSelectedNativeLoginMethod(t *testing.T) {
 		{name: "API key", selection: "3\n", secret: "sk-test-secret", wantArgs: []string{"-c", `cli_auth_credentials_store="file"`, "login", "--with-api-key"}, wantStdin: "sk-test-secret\n"},
 		{name: "access token", selection: "4\n", secret: "token-test-secret", wantArgs: []string{"-c", `cli_auth_credentials_store="file"`, "login", "--with-access-token"}, wantStdin: "token-test-secret\n"},
 	}
+	openAI := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(http.StatusOK) }))
+	t.Cleanup(openAI.Close)
+	t.Setenv("CODEX_HOME", t.TempDir())
+	t.Setenv("OPENAI_BASE_URL", "")
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			var stdout bytes.Buffer
@@ -40,6 +46,7 @@ func TestCodexLoginRunsSelectedNativeLoginMethod(t *testing.T) {
 				ReadSecret: func(io.Reader) ([]byte, error) {
 					return []byte(tt.secret), nil
 				},
+				OpenAIRESTBase: openAI.URL,
 				RunInteractiveCommand: func(_ context.Context, name, dir string, args []string, stdin io.Reader, _, _ io.Writer) error {
 					gotName = name
 					gotArgs = append([]string(nil), args...)
@@ -197,5 +204,85 @@ func TestRunInteractiveCommandFindsNodeForNPMLauncherOutsidePATH(t *testing.T) {
 	}
 	if got := strings.TrimSpace(out.String()); got != "login --device-auth" {
 		t.Fatalf("output = %q, want npm launcher to run under node", got)
+	}
+}
+
+// `codex login --with-api-key` saves any string and reports success, so AO asks
+// OpenAI first (#5029). A refused key is not saved; a key for another provider,
+// or one OpenAI can't be reached to check, is saved unchecked and says so.
+func TestCodexLoginChecksAnAPIKeyWithOpenAIFirst(t *testing.T) {
+	const key = "sk-garbage"
+	for _, tc := range []struct {
+		name       string
+		status     int // what OpenAI answers; 0 means unreachable
+		provider   string
+		wantErr    string
+		wantSaved  bool
+		wantAsked  bool
+		wantOutput string
+	}{
+		{name: "refused", status: http.StatusUnauthorized, wantErr: "OpenAI refused this API key (HTTP 401), so it was not saved", wantAsked: true},
+		{name: "accepted", status: http.StatusOK, wantSaved: true, wantAsked: true, wantOutput: "OpenAI accepted the key."},
+		{name: "another provider", status: http.StatusUnauthorized, provider: "azure", wantSaved: true, wantOutput: "Saved without checking"},
+		{name: "unreachable", wantSaved: true, wantOutput: "Couldn't reach OpenAI to check the key"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			home := t.TempDir()
+			t.Setenv("CODEX_HOME", home)
+			t.Setenv("OPENAI_BASE_URL", "")
+			if tc.provider != "" {
+				config := "model_provider = \"" + tc.provider + "\"\n\n[model_providers." + tc.provider + "]\nbase_url = \"https://example.invalid/openai/v1\"\n"
+				if err := os.WriteFile(filepath.Join(home, "config.toml"), []byte(config), 0o600); err != nil {
+					t.Fatal(err)
+				}
+			}
+			asked, gotAuth := false, ""
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				asked, gotAuth = true, r.Header.Get("Authorization")
+				w.WriteHeader(tc.status)
+			}))
+			base := server.URL
+			if tc.status == 0 {
+				server.Close() // nothing listens there now
+			} else {
+				t.Cleanup(server.Close)
+			}
+			var stdout bytes.Buffer
+			saved := false
+			deps := Deps{
+				In: strings.NewReader("3\n"), Out: &stdout, Err: &stdout,
+				LookPath:       func(string) (string, error) { return "/usr/local/bin/codex", nil },
+				ReadSecret:     func(io.Reader) ([]byte, error) { return []byte(key), nil },
+				OpenAIRESTBase: base,
+				RunInteractiveCommand: func(context.Context, string, string, []string, io.Reader, io.Writer, io.Writer) error {
+					saved = true
+					return nil
+				},
+			}
+			cmd := newCodexLoginCommand(&commandContext{deps: deps.withDefaults()})
+			cmd.SetIn(deps.In)
+			cmd.SetOut(deps.Out)
+			cmd.SetErr(deps.Err)
+			err := cmd.Execute()
+			if tc.wantErr != "" {
+				if err == nil || !strings.Contains(err.Error(), tc.wantErr) {
+					t.Fatalf("Execute error = %v, want %q", err, tc.wantErr)
+				}
+			} else if err != nil {
+				t.Fatalf("Execute: %v", err)
+			}
+			if saved != tc.wantSaved || asked != tc.wantAsked {
+				t.Fatalf("saved %v, OpenAI asked %v; want saved %v, asked %v", saved, asked, tc.wantSaved, tc.wantAsked)
+			}
+			if asked && gotAuth != "Bearer "+key {
+				t.Fatalf("Authorization = %q, want the key as a Bearer token", gotAuth)
+			}
+			if !strings.Contains(stdout.String(), tc.wantOutput) {
+				t.Fatalf("output %q lacks %q", stdout.String(), tc.wantOutput)
+			}
+			if strings.Contains(stdout.String(), key) || (err != nil && strings.Contains(err.Error(), key)) {
+				t.Fatal("the key leaked into output or the error")
+			}
+		})
 	}
 }
