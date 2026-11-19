@@ -69,14 +69,13 @@ func discoverMemcodeProject(ctx context.Context, project string) ([]sourceFiles,
 			continue
 		}
 		path := filepath.Join(project, rel)
-		snapshot, err := readMemcodeTranscript(ctx, project, path)
-		if err != nil {
+		if _, err := readMemcodeTranscript(ctx, project, path); err != nil {
 			if ctx.Err() != nil {
 				return nil, ctx.Err()
 			}
 			continue
 		}
-		out = append(out, sourceFiles{harness: domain.HarnessMemcode, root: project, key: entry.Name(), paths: []string{path}, modTime: info.ModTime(), size: info.Size(), fingerprint: snapshot.fingerprint})
+		out = append(out, sourceFiles{harness: domain.HarnessMemcode, root: project, key: entry.Name(), paths: []string{path}, modTime: info.ModTime(), size: info.Size()})
 	}
 	sort.Slice(out, func(i, j int) bool { return out[i].modTime.After(out[j].modTime) })
 	return out, nil

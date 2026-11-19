@@ -2,13 +2,14 @@ package sessionimport
 
 import (
 	"context"
-	"errors"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
 
+	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/agent/memcode"
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
+	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
 )
 
 const memcodeImportFixture = `{"session_id":"sess_01234567","saved_at":"2026-11-01T10:00:00Z","messages":[{"role":"system","content":[{"type":"text","text":"hidden instructions"}]},{"role":"user","content":[{"type":"text","text":"make a greeting"}]},{"role":"assistant","content":[{"type":"thinking","thinking":"private thought"},{"type":"text","text":"Hello"},{"type":"tool_use","name":"bash","input":{"command":"private command"}}]},{"role":"user","content":[{"type":"tool_result","content":"private result"}]}]}`
@@ -25,8 +26,8 @@ func TestMemcodeDiscoversOnlyResumableProjectHistory(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if groups[0].fingerprint == "" || groups[0].fingerprint != got.fingerprint {
-		t.Fatalf("native snapshot was not fingerprinted: %+v", groups[0])
+	if got.fingerprint != memcode.NativeHistoryFingerprint([]byte(memcodeImportFixture)) {
+		t.Fatal("fresh native read did not fingerprint the selected bytes")
 	}
 	wantTexts(t, got.messages, "user: make a greeting", "assistant: Hello")
 	if got.nativeID != groups[0].key || got.cwd != canonical(project) || got.last.Format("15:04") != "10:00" {
@@ -57,11 +58,15 @@ func TestMemcodeRegisteredProjectNativeTerminalImportAndRefresh(t *testing.T) {
 	if rec.Metadata.ImportSource.Fingerprint == "" {
 		t.Fatal("import did not persist its selected snapshot")
 	}
-	if err := svc.RefreshArchive(context.Background(), rec); !errors.Is(err, errSourceFingerprintChanged) {
-		t.Fatalf("changed pinned source was accepted: %v", err)
+	// Main refreshes an unprepared archive from current native history. The
+	// native preparer independently refuses bytes that no longer match selection.
+	if _, err := memcode.New().PrepareImportedSession(context.Background(), ports.ImportedSessionRelocation{
+		NativeSessionID: rec.Metadata.AgentSessionID, ConfigDir: canonical(project),
+		SourceCWD: canonical(project), LaunchCWD: t.TempDir(), TranscriptPath: path,
+		SourceFingerprint: rec.Metadata.ImportSource.Fingerprint,
+	}); err == nil {
+		t.Fatal("changed pinned source was prepared for native resume")
 	}
-	// Legacy imports without selection evidence retain archive refresh behavior.
-	rec.Metadata.ImportSource.Fingerprint = ""
 	if err := svc.RefreshArchive(context.Background(), rec); err != nil {
 		t.Fatal(err)
 	}
