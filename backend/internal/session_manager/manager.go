@@ -1151,7 +1151,12 @@ func (m *Manager) Spawn(ctx context.Context, cfg ports.SpawnConfig) (result doma
 			cfg.RequireNewBranch = true
 		}
 	}
-	if cfg.ParentSessionID != "" && cfg.AgentConfig.Permissions == "" {
+	// A worker an orchestrator spawns takes the orchestrator's approval mode
+	// (#4898), but only when the project sets none for the role: an explicit
+	// project permission is the user's choice for that role and wins (#5954).
+	// A permission the spawn itself names wins over both.
+	if cfg.ParentSessionID != "" && cfg.AgentConfig.Permissions == "" &&
+		effectiveAgentConfig(cfg.Harness, cfg.Kind, project.Config).Permissions == "" {
 		permissions, err := m.inheritedSpawnPermissions(ctx, cfg.ProjectID, cfg.ParentSessionID)
 		if err != nil {
 			return domain.SessionRecord{}, 0, 0, fmt.Errorf("spawn: %w", err)

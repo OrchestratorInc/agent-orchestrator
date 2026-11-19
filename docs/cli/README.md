@@ -131,6 +131,12 @@ paths. If `AO_SESSION_ID` is set but the session cannot be fetched, pass
 or registering a project. Standalone sessions do not support orchestrator,
 branch, issue, or PR-claim options.
 
+A spawned session's permission mode is `--permission` when given, otherwise
+the project's setting for the role (`<role>.agentConfig.permissions`, then
+`agentConfig.permissions`). When the project sets none, a worker spawned from
+an orchestrator session takes that orchestrator's Chat approval mode, and any
+other spawn defaults to `auto`.
+
 `ao session claim-pr <pr-ref>` attaches a PR to the current worker by reading
 `AO_SESSION_ID`. From an orchestrator or external shell, pass the target
 explicitly with `ao session claim-pr <session-id> <pr-ref>`. The explicit form
