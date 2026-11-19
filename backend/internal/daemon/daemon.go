@@ -1830,8 +1830,7 @@ func (c pluginBinaryCache) InvalidateBinaryResolution(harness domain.AgentHarnes
 	}
 }
 
-// preferredProjectAgent ranks this machine's agents the way the desktop's
-// loadRankedProjectAgentDefaults does: from the cached readiness snapshot,
+// preferredProjectAgent ranks this machine's installed agents from the cached readiness snapshot,
 // running display checks first when the agent AO prefers most is not confirmed
 // yet or no agent has been found installed. It returns "" when the checks have
 // found no launchable agent installed, so a guess is never saved.

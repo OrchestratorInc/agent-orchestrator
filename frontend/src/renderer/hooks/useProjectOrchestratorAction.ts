@@ -16,7 +16,7 @@ import { addRendererExceptionStep, captureRendererException } from "../lib/telem
 import { useUiStore } from "../stores/ui-store";
 import { useCanResumeAgent } from "./useCanResumeAgent";
 import { openRemoteOrchestrator } from "../lib/remote-orchestrator";
-import { fillMissingProjectRoleAgents } from "../lib/project-role-agents";
+import { apiErrorCode } from "../lib/api-client";
 import { sessionUiKey } from "../lib/hosts";
 import { sessionNavigateTarget } from "../lib/navigate-to-session";
 import { useConnectedHosts } from "./useHostConnection";
@@ -98,19 +98,20 @@ export function useProjectOrchestratorAction({
 			if (earlyResume && resumableOrchestrator && activeRoute.current === routeKey) {
 				void navigate(sessionNavigateTarget(projectId, resumableOrchestrator.id, hostId));
 			}
-			// A project that lost a role's agent starts on the ranked default. This
-			// daemon fills empty roles as it starts; a remote host may run an older
-			// one that refuses instead, so fill there first (worker included).
-			if (hostId && !orchestrator && project && project.kind !== CLOUD_PROJECT_KIND) {
-				await fillMissingProjectRoleAgents(queryClient, projectId, hostId);
+			let openedSessionId: string;
+			try {
+				openedSessionId = hostId
+					? await openRemoteOrchestrator(hostId, projectId, orchestrator, mode, false, source)
+					: resumableOrchestrator
+					? (await earlyResume, resumableOrchestrator.id)
+					: project?.kind === CLOUD_PROJECT_KIND
+						? await spawnCloudOrchestrator(queryClient, projectId)
+						: await spawnOrchestrator(projectId, source, false, mode);
+			} catch (cause) {
+				if (!hostId || apiErrorCode(cause) !== "AGENT_REQUIRED" || activeRoute.current !== routeKey) throw cause;
+				useUiStore.getState().openProjectSettings(projectId, { hostId, section: "agents" });
+				return;
 			}
-			const openedSessionId = hostId
-				? await openRemoteOrchestrator(hostId, projectId, orchestrator, mode, false, source)
-				: resumableOrchestrator
-				? (await earlyResume, resumableOrchestrator.id)
-				: project?.kind === CLOUD_PROJECT_KIND
-					? await spawnCloudOrchestrator(queryClient, projectId)
-					: await spawnOrchestrator(projectId, source, false, mode);
 			await queryClient.invalidateQueries({
 				queryKey: project?.kind === CLOUD_PROJECT_KIND ? cloudSessionsQueryKey : workspaceQueryKeyForHost(hostId),
 			});

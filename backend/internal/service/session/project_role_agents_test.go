@@ -49,18 +49,43 @@ func TestSpawnOrchestratorFillsMissingProjectRoleAgents(t *testing.T) {
 	}
 }
 
+func TestOrchestratorStartFillsMissingWorkerWithoutChangingOrchestrator(t *testing.T) {
+	st := &roleFillingStore{fakeStore: newFakeStore()}
+	st.projects["mer"] = domain.ProjectRecord{ID: "mer", Config: domain.ProjectConfig{
+		Orchestrator: domain.RoleOverride{Harness: domain.HarnessCodex},
+	}}
+	fc := &fakeCommander{spawnRecord: domain.SessionRecord{
+		ID: "mer-9", ProjectID: "mer", Kind: domain.KindOrchestrator, Harness: domain.HarnessCodex,
+	}}
+	svc := &Service{manager: fc, store: st}
+	svc.SetPreferredProjectAgent(pickAgent(domain.HarnessClaudeCode))
+
+	if _, err := svc.SpawnOrchestrator(context.Background(), "mer", false, "", ""); err != nil {
+		t.Fatalf("SpawnOrchestrator: %v", err)
+	}
+	got := st.projects["mer"].Config
+	if got.Worker.Harness != domain.HarnessClaudeCode || got.Orchestrator.Harness != domain.HarnessCodex {
+		t.Fatalf("roles = worker %q orchestrator %q", got.Worker.Harness, got.Orchestrator.Harness)
+	}
+	if fc.spawnedCfg.Harness != "" {
+		t.Fatalf("spawn overrode configured orchestrator with %q", fc.spawnedCfg.Harness)
+	}
+}
+
 func TestFillMissingRoleAgentsLeavesProjectAlone(t *testing.T) {
-	named := domain.ProjectRecord{ID: "mer", Config: domain.ProjectConfig{Orchestrator: domain.RoleOverride{Harness: domain.HarnessCodex}}}
+	named := domain.ProjectRecord{ID: "mer", Config: domain.ProjectConfig{
+		Worker:       domain.RoleOverride{Harness: domain.HarnessClaudeCode},
+		Orchestrator: domain.RoleOverride{Harness: domain.HarnessCodex},
+	}}
 	empty := domain.ProjectRecord{ID: "mer"}
 	cases := []struct {
 		name    string
 		project domain.ProjectRecord
-		kind    domain.SessionKind
 		pick    func(context.Context) domain.AgentHarness
 	}{
-		{"role names an agent", named, domain.KindOrchestrator, pickAgent(domain.HarnessClaudeCode)},
-		{"no preferred agent source", empty, domain.KindOrchestrator, nil},
-		{"no agent could be ranked", empty, domain.KindWorker, pickAgent("")},
+		{"both roles name an agent", named, pickAgent(domain.HarnessClaudeCode)},
+		{"no preferred agent source", empty, nil},
+		{"no agent could be ranked", empty, pickAgent("")},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -68,7 +93,7 @@ func TestFillMissingRoleAgentsLeavesProjectAlone(t *testing.T) {
 			st.projects["mer"] = tc.project
 			svc := &Service{store: st}
 			svc.SetPreferredProjectAgent(tc.pick)
-			got := svc.fillMissingRoleAgents(context.Background(), tc.project, tc.kind)
+			got := svc.fillMissingRoleAgents(context.Background(), tc.project)
 			if len(st.fills) != 0 {
 				t.Fatalf("fills = %v, want none", st.fills)
 			}
@@ -81,7 +106,7 @@ func TestFillMissingRoleAgentsLeavesProjectAlone(t *testing.T) {
 	// A store that cannot fill leaves the spawn to report the missing agent.
 	svc := &Service{store: newFakeStore()}
 	svc.SetPreferredProjectAgent(pickAgent(domain.HarnessClaudeCode))
-	if got := svc.fillMissingRoleAgents(context.Background(), empty, domain.KindWorker); got.Config.Worker.Harness != "" {
+	if got := svc.fillMissingRoleAgents(context.Background(), empty); got.Config.Worker.Harness != "" {
 		t.Fatalf("worker = %q, want empty", got.Config.Worker.Harness)
 	}
 }

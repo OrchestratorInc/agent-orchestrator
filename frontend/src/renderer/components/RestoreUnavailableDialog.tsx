@@ -1,12 +1,11 @@
 import * as Dialog from "@radix-ui/react-dialog";
 import { Loader2 } from "@/components/app-icons";
-import { useQueryClient } from "@tanstack/react-query";
 import { useState } from "react";
 import { useTranslation } from "react-i18next";
 import { useWorkspaceScope } from "../hooks/useWorkspaceQuery";
 import { spawnOrchestrator } from "../lib/spawn-orchestrator";
 import { openRemoteOrchestrator } from "../lib/remote-orchestrator";
-import { fillMissingProjectRoleAgents } from "../lib/project-role-agents";
+import { apiErrorCode } from "../lib/api-client";
 import { useUiStore } from "../stores/ui-store";
 import { hasConfiguredOrchestratorAgent, isOrchestratorSession } from "../types/workspace";
 import type { WorkspaceSession } from "../types/workspace";
@@ -29,7 +28,6 @@ type RestoreUnavailableDialogProps = {
 
 export function RestoreUnavailableDialog({ open, session, hostId, onOpenChange, onRecreated }: RestoreUnavailableDialogProps) {
 	const { t } = useTranslation();
-	const queryClient = useQueryClient();
 	const workspaceQuery = useWorkspaceScope(session.workspaceId, undefined, hostId);
 	const [busy, setBusy] = useState(false);
 	const [error, setError] = useState<string | undefined>();
@@ -49,16 +47,19 @@ export function RestoreUnavailableDialog({ open, session, hostId, onOpenChange, 
 		setBusy(true);
 		setError(undefined);
 		try {
-			// A project that lost a role's agent starts on the ranked default. This
-			// daemon fills empty roles as it starts; a remote host may run an older
-			// one that refuses instead, so fill there first (worker included).
-			if (hostId) await fillMissingProjectRoleAgents(queryClient, session.workspaceId, hostId);
+			// With no configured agent, an older daemon or one without a ranked
+			// default can reject the start. Reuse any live orchestrator in that case.
 			const id = hostId
-				? await openRemoteOrchestrator(hostId, session.workspaceId, undefined, undefined, true, "restore_dialog")
-				: await spawnOrchestrator(session.workspaceId, "restore_dialog", true);
+				? await openRemoteOrchestrator(hostId, session.workspaceId, undefined, undefined, hasOrchestratorAgent, "restore_dialog")
+				: await spawnOrchestrator(session.workspaceId, "restore_dialog", hasOrchestratorAgent);
 			onOpenChange(false);
 			onRecreated(id);
 		} catch (err) {
+			if (apiErrorCode(err) === "AGENT_REQUIRED") {
+				onOpenChange(false);
+				useUiStore.getState().openProjectSettings(session.workspaceId, { hostId, section: "agents" });
+				return;
+			}
 			setError(err instanceof Error ? err.message : t("restoreUnavailable.createFailed"));
 		} finally {
 			setBusy(false);

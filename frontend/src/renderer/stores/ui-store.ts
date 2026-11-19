@@ -349,7 +349,7 @@ export type UiState = {
 	closeUpdateInstallPrompt: () => void;
 	openGlobalSettings: (section?: GlobalSettingsSection, options?: { focusAgentId?: string; hostId?: string; harnessView?: "local" | "cloud"; startLogin?: boolean; loginAccountId?: string; startPairing?: boolean; showDiagnostics?: HarnessDiagnosticsRequest; preserveProject?: boolean; focusSetting?: string }) => void;
 	/** `options` as a string is the owning daemon's host ID (remote projects). */
-	openProjectSettings: (projectId: string, options?: string | { section?: ProjectSettingsSection; cloudOrgId?: string }) => void;
+	openProjectSettings: (projectId: string, options?: string | { section?: ProjectSettingsSection; cloudOrgId?: string; hostId?: string }) => void;
 	closeSettings: () => void;
 	loginReturn: LoginReturn | null;
 	/** Remember a chat whose agent refused its login while that login is fixed. */
@@ -695,16 +695,19 @@ export const useUiStore = create<UiState>((set, get) => ({
 					: {}),
 		},
 	})),
-	openProjectSettings: (projectId, options) => set({
-		accountLogin: null,
-		settingsModal: {
-			scope: "project",
-			projectId,
-			...(typeof options === "string" && options !== "local" ? { hostId: options } : {}),
-			...(typeof options === "object" && options?.section ? { section: options.section } : {}),
-			...(typeof options === "object" && options?.cloudOrgId !== undefined ? { cloudOrgId: options.cloudOrgId } : {}),
-		},
-	}),
+	openProjectSettings: (projectId, options) => {
+		const hostId = typeof options === "string" ? options : options?.hostId;
+		set({
+			accountLogin: null,
+			settingsModal: {
+				scope: "project",
+				projectId,
+				...(hostId && hostId !== "local" ? { hostId } : {}),
+				...(typeof options === "object" && options.section ? { section: options.section } : {}),
+				...(typeof options === "object" && options.cloudOrgId !== undefined ? { cloudOrgId: options.cloudOrgId } : {}),
+			},
+		});
+	},
 	closeSettings: () => set((state) => ({
 		accountLogin: null,
 		settingsModal: state.settingsModal?.scope === "global" ? state.settingsModal.returnTo ?? null : null,

@@ -2786,9 +2786,23 @@ func TestFillProjectRoleAgentsFillsOnlyEmptyRoles(t *testing.T) {
 	s := newTestStore(t)
 	ctx := context.Background()
 	now := time.Now().UTC().Truncate(time.Second)
+	worker := domain.RoleOverride{
+		Harness:     domain.HarnessCodex,
+		AgentConfig: domain.AgentConfig{Model: "gpt-5.2", Effort: "xhigh"},
+	}
+	orchestrator := domain.RoleOverride{
+		Harness:     domain.HarnessClaudeCode,
+		AgentConfig: domain.AgentConfig{Permissions: domain.PermissionModeAcceptEdits},
+	}
 	if err := s.UpsertProject(ctx, domain.ProjectRecord{
 		ID: "half", DisplayName: "Half", Path: "/tmp/half", RegisteredAt: now,
-		Config: domain.ProjectConfig{DefaultBranch: "develop", Worker: domain.RoleOverride{Harness: domain.HarnessCodex}},
+		Config: domain.ProjectConfig{
+			DefaultBranch: "develop",
+			Worker:        worker,
+			Orchestrator: domain.RoleOverride{AgentConfig: domain.AgentConfig{
+				Model: "gpt-5.2", Mode: "high", Effort: "xhigh", Permissions: domain.PermissionModeAcceptEdits,
+			}},
+		},
 	}); err != nil {
 		t.Fatalf("seed half: %v", err)
 	}
@@ -2797,15 +2811,15 @@ func TestFillProjectRoleAgentsFillsOnlyEmptyRoles(t *testing.T) {
 	if err != nil || !changed {
 		t.Fatalf("fill half: changed=%v err=%v", changed, err)
 	}
-	if row.Config.Worker.Harness != domain.HarnessCodex || row.Config.Orchestrator.Harness != domain.HarnessClaudeCode {
-		t.Fatalf("returned roles = worker %q orchestrator %q", row.Config.Worker.Harness, row.Config.Orchestrator.Harness)
+	if row.Config.Worker != worker || row.Config.Orchestrator != orchestrator {
+		t.Fatalf("returned roles = worker %+v orchestrator %+v", row.Config.Worker, row.Config.Orchestrator)
 	}
 	got, _, err := s.GetProject(ctx, "half")
 	if err != nil {
 		t.Fatalf("get half: %v", err)
 	}
-	// The chosen worker, the rest of the config and the name are kept.
-	if got.Config.Worker.Harness != domain.HarnessCodex || got.Config.Orchestrator.Harness != domain.HarnessClaudeCode ||
+	// The chosen worker, approval setting, and unrelated project details survive.
+	if got.Config.Worker != worker || got.Config.Orchestrator != orchestrator ||
 		got.Config.DefaultBranch != "develop" || got.DisplayName != "Half" {
 		t.Fatalf("stored project = %+v", got)
 	}

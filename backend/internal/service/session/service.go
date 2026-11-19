@@ -315,14 +315,11 @@ type projectRoleAgentFiller interface {
 	FillProjectRoleAgents(ctx context.Context, id string, agent domain.AgentHarness) (domain.ProjectRecord, bool, error)
 }
 
-// fillMissingRoleAgents gives a project whose role for kind names no agent
-// the ranked default agent, saved to its config, so the spawn resolves one
-// instead of failing with AGENT_REQUIRED. Projects registered before every
-// create path filled both roles (`ao project add --worker-agent X`, session
-// import) heal here. Roles that name an agent are never changed, and a failed
-// fill leaves the spawn to report the missing agent as before.
-func (s *Service) fillMissingRoleAgents(ctx context.Context, project domain.ProjectRecord, kind domain.SessionKind) domain.ProjectRecord {
-	if roleHarness(project, kind) != "" || s.preferredAgent == nil {
+// fillMissingRoleAgents gives every empty role the ranked default before a
+// project session starts. The transaction preserves concurrent settings edits
+// and roles that already name an agent.
+func (s *Service) fillMissingRoleAgents(ctx context.Context, project domain.ProjectRecord) domain.ProjectRecord {
+	if !project.Config.MissingRoleAgent() || s.preferredAgent == nil {
 		return project
 	}
 	filler, ok := s.store.(projectRoleAgentFiller)
@@ -509,10 +506,11 @@ func (s *Service) spawn(ctx context.Context, cfg ports.SpawnConfig) (domain.Sess
 		if err != nil {
 			return domain.Session{}, 0, 0, err
 		}
-		if cfg.Harness == "" && roleHarness(project, cfg.Kind) == "" {
-			project = s.fillMissingRoleAgents(ctx, project, cfg.Kind)
-			// The daemon picked this agent, so the launch gate below checks it
-			// like an explicit one.
+		needsHarness := cfg.Harness == "" && roleHarness(project, cfg.Kind) == ""
+		project = s.fillMissingRoleAgents(ctx, project)
+		if needsHarness {
+			// A daemon-selected agent goes through the same launch checks as
+			// an explicit one.
 			cfg.Harness = roleHarness(project, cfg.Kind)
 		}
 	} else {

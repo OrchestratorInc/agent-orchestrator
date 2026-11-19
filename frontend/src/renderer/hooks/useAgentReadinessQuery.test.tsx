@@ -18,7 +18,6 @@ import {
 	agentReadinessQueryOptions,
 	agentReadinessQueryKey,
 	loadProjectAgentDefaults,
-	loadRankedProjectAgentDefaults,
 	mergeAgentReadiness,
 	useAgentReadinessQuery,
 	useEnsureAgentReadiness,
@@ -121,35 +120,19 @@ describe("agent readiness query", () => {
 });
 
 describe("project agent defaults", () => {
-	it("ranks the launchable agents for an existing project", async () => {
-		await expect(loadRankedProjectAgentDefaults(new QueryClient())).resolves.toMatchObject({ workerAgent: "codex", orchestratorAgent: "codex" });
-	});
-
-	it("picks nothing for an existing project when no agent can launch, but a new project still falls back", async () => {
+	it("rechecks readiness before falling back when no agent can launch", async () => {
 		const none = { data: { agents: [agentReadiness("codex", "Codex", { installation: "not_installed" })] }, error: undefined };
 		getMock.mockResolvedValue(none);
 		postMock.mockResolvedValue(none);
 
-		await expect(loadRankedProjectAgentDefaults(new QueryClient())).resolves.toBeNull();
-		// The cached snapshot was rechecked before giving up.
+		await expect(loadProjectAgentDefaults(new QueryClient())).resolves.toMatchObject({ workerAgent: "claude-code", orchestratorAgent: "claude-code" });
 		expect(postMock).toHaveBeenCalledWith("/api/v1/agents/readiness/ensure", { body: { agentIds: [], purpose: "display" } });
-		await expect(loadProjectAgentDefaults(new QueryClient())).resolves.toMatchObject({ workerAgent: "claude-code", orchestratorAgent: "claude-code" });
-	});
-
-	it("saves no guess to an existing project while no agent has been found installed", async () => {
-		const unchecked = { installation: "unknown", authentication: "unknown" } as const;
-		const response = { data: { agents: [agentReadiness("claude-code", "Claude Code", unchecked), agentReadiness("codex", "Codex", unchecked)] }, error: undefined };
-		getMock.mockResolvedValue(response);
-		postMock.mockResolvedValue(response);
-
-		await expect(loadRankedProjectAgentDefaults(new QueryClient())).resolves.toBeNull();
-		await expect(loadProjectAgentDefaults(new QueryClient())).resolves.toMatchObject({ workerAgent: "claude-code", orchestratorAgent: "claude-code" });
 	});
 
 	it("rechecks a cached snapshot with no launchable agent and ranks what the daemon finds", async () => {
 		getMock.mockResolvedValue({ data: { agents: [agentReadiness("codex", "Codex", { installation: "not_installed" })] }, error: undefined });
 
-		await expect(loadRankedProjectAgentDefaults(new QueryClient())).resolves.toMatchObject({ workerAgent: "codex", orchestratorAgent: "codex" });
+		await expect(loadProjectAgentDefaults(new QueryClient())).resolves.toMatchObject({ workerAgent: "codex", orchestratorAgent: "codex" });
 	});
 
 	it("ranks the daemon's latest snapshot when the checks outlast the limit", async () => {

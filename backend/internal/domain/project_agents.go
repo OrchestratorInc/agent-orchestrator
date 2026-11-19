@@ -127,20 +127,21 @@ func (c ProjectConfig) MissingRoleAgent() bool {
 	return c.Worker.Harness == "" || c.Orchestrator.Harness == ""
 }
 
-// FillRoleAgents gives agent to the worker and orchestrator roles that name
-// none. A role the user already set is never changed. It reports whether
-// anything changed.
+// FillRoleAgents assigns agent to each empty role and clears its
+// provider-specific tuning. It reports whether anything changed.
 func (c *ProjectConfig) FillRoleAgents(agent AgentHarness) bool {
 	if agent == "" {
 		return false
 	}
 	changed := false
-	if c.Worker.Harness == "" {
-		c.Worker.Harness = agent
-		changed = true
-	}
-	if c.Orchestrator.Harness == "" {
-		c.Orchestrator.Harness = agent
+	for _, role := range []*RoleOverride{&c.Worker, &c.Orchestrator} {
+		if role.Harness != "" {
+			continue
+		}
+		role.Harness = agent
+		role.AgentConfig.Model = ""
+		role.AgentConfig.Mode = ""
+		role.AgentConfig.Effort = ""
 		changed = true
 	}
 	return changed

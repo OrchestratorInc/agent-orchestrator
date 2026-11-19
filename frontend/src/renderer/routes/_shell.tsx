@@ -92,7 +92,6 @@ import { clientForHost } from "../lib/host-clients";
 import { useCloudSession } from "../lib/cloud-session";
 import { useCloudAccountSwitchReset } from "../hooks/useCloudAccountSwitchReset";
 import { openRemoteOrchestrator } from "../lib/remote-orchestrator";
-import { fillMissingProjectRoleAgents } from "../lib/project-role-agents";
 import { projectNavigateTarget, sessionNavigateTarget } from "../lib/navigate-to-session";
 import { sessionUiKey } from "../lib/hosts";
 import { pageHasTopbar } from "../lib/shell-topbar";
@@ -1102,22 +1101,22 @@ const replacementErrorCount = Object.keys(orchestratorReplacementErrors).length;
 		if (uiState.provisioningProjectIds.has(projectKey) || uiState.restartingProjectIds.has(projectKey)) return;
 		setOrchestratorStartupError(projectId, null, hostId);
 		try {
-			// A project that lost a role's agent starts on the ranked default. The
-			// host may run a daemon too old to fill empty roles itself, so fill
-			// them first (worker included) unless an orchestrator is already open.
 			const activeOrchestrator = newestActiveOrchestrator(workspace.sessions);
-			if (!activeOrchestrator) await fillMissingProjectRoleAgents(queryClient, projectId, hostId);
 			const sessionId = await openRemoteOrchestrator(hostId, projectId, activeOrchestrator);
 			const refresh = queryClient.invalidateQueries({ queryKey: remoteWorkspaceQueryKey(hostId) });
 			// Only a new orchestrator must be in the list before its route can find it.
 			if (!workspace.sessions.some((session) => session.id === sessionId)) await refresh;
 			void navigate(sessionNavigateTarget(projectId, sessionId, hostId));
 		} catch (cause) {
+			if (apiErrorCode(cause) === "AGENT_REQUIRED") {
+				openProjectSettings(projectId, { hostId, section: "agents" });
+				return;
+			}
 			const message = cause instanceof Error ? cause.message : t("shell.couldNotSpawn");
 			setOrchestratorStartupError(projectId, message, hostId);
 			showGlobalToast(t("shell.couldNotSpawn"), message, "error");
 		}
-	}, [navigate, queryClient, remoteWorkspaces, setOrchestratorStartupError, showGlobalToast, t]);
+	}, [navigate, openProjectSettings, queryClient, remoteWorkspaces, setOrchestratorStartupError, showGlobalToast, t]);
 	// The sidebar is memoized, and the shell re-renders several times per route
 	// change. Handlers that keep their identity let those renders skip it.
 	const openRemoteProjectFromSidebar = useCallback((hostId: string, projectId: string) => {

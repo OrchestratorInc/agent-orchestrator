@@ -29,9 +29,6 @@ const { getMock, postMock, deleteMock, navigateMock, chooseDirectoryMock, clipbo
 	paramsMock: { projectId: undefined as string | undefined, sessionId: undefined as string | undefined },
 }));
 
-const fillRoleAgentsMock = vi.hoisted(() => vi.fn(async () => undefined));
-vi.mock("../../lib/project-role-agents", () => ({ fillMissingProjectRoleAgents: fillRoleAgentsMock }));
-
 vi.mock("../../lib/platform", async (importOriginal) => ({
 	...await importOriginal<typeof import("../../lib/platform")>(),
 }));
@@ -539,8 +536,6 @@ describe("project board with no sessions", () => {
 		await userEvent.click(spawnButton);
 
 		await waitFor(() => expect(spawnOrchestratorMock).toHaveBeenCalledWith("proj-1", "board", false, undefined));
-		// The local daemon fills the empty role itself as it starts.
-		expect(fillRoleAgentsMock).not.toHaveBeenCalled();
 		expect(useUiStore.getState().settingsModal).toBeNull();
 	});
 

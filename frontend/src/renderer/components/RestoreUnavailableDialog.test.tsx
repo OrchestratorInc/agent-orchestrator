@@ -3,15 +3,15 @@ import { render as renderBase, screen, waitFor } from "@testing-library/react";
 import type { ReactElement } from "react";
 import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { OrchestratorSpawnError } from "../lib/spawn-orchestrator";
 import { useUiStore } from "../stores/ui-store";
 import type { WorkspaceSession, WorkspaceSummary } from "../types/workspace";
 import { RestoreUnavailableDialog } from "./RestoreUnavailableDialog";
 
-const { spawnMock, remoteSpawnMock, workspaceQueryMock, fillRoleAgentsMock } = vi.hoisted(() => ({
+const { spawnMock, remoteSpawnMock, workspaceQueryMock } = vi.hoisted(() => ({
 	spawnMock: vi.fn(),
 	remoteSpawnMock: vi.fn(),
 	workspaceQueryMock: vi.fn(),
-	fillRoleAgentsMock: vi.fn(),
 }));
 
 function render(ui: ReactElement) {
@@ -23,11 +23,11 @@ vi.mock("../hooks/useWorkspaceQuery", () => ({
 	useWorkspaceScope: (projectId: string, sessionId?: string, hostId?: string) => workspaceQueryMock(projectId, sessionId, hostId),
 }));
 
-vi.mock("../lib/spawn-orchestrator", () => ({
+vi.mock("../lib/spawn-orchestrator", async (importOriginal) => ({
+	...await importOriginal<typeof import("../lib/spawn-orchestrator")>(),
 	spawnOrchestrator: spawnMock,
 }));
 vi.mock("../lib/remote-orchestrator", () => ({ openRemoteOrchestrator: remoteSpawnMock }));
-vi.mock("../lib/project-role-agents", () => ({ fillMissingProjectRoleAgents: fillRoleAgentsMock }));
 
 const session: WorkspaceSession = {
 	id: "orch-old",
@@ -60,7 +60,6 @@ describe("RestoreUnavailableDialog", () => {
 		const onOpenChange = vi.fn();
 		const onRecreated = vi.fn();
 		spawnMock.mockResolvedValue("orch-new");
-		fillRoleAgentsMock.mockResolvedValue(undefined);
 		workspaceQueryMock.mockReturnValue({
 			data: { project: { ...workspace, orchestratorAgent: undefined } },
 			isLoading: false,
@@ -77,8 +76,7 @@ describe("RestoreUnavailableDialog", () => {
 		await userEvent.click(screen.getByRole("button", { name: "Create new orchestrator" }));
 
 		await waitFor(() => expect(onRecreated).toHaveBeenCalledWith("orch-new"));
-		// The local daemon fills the empty role itself as it starts.
-		expect(fillRoleAgentsMock).not.toHaveBeenCalled();
+		expect(spawnMock).toHaveBeenCalledWith("proj-1", "restore_dialog", false);
 		expect(useUiStore.getState().settingsModal).toBeNull();
 	});
 
@@ -112,15 +110,11 @@ describe("RestoreUnavailableDialog", () => {
 		await waitFor(() => expect(onRecreated).toHaveBeenCalledWith("remote-new"));
 		expect(workspaceQueryMock).toHaveBeenCalledWith("proj-1", undefined, "box-b");
 		expect(remoteSpawnMock).toHaveBeenCalledWith("box-b", "proj-1", undefined, undefined, true, "restore_dialog");
-		// The host may run an older daemon, so a missing worker agent is filled
-		// first even though the orchestrator agent is set.
-		expect(fillRoleAgentsMock).toHaveBeenCalledWith(expect.anything(), "proj-1", "box-b");
 		expect(spawnMock).not.toHaveBeenCalled();
 	});
 
-	it("fills a remote project's missing orchestrator agent on its own host before recreating", async () => {
+	it("lets the remote daemon recreate an orchestrator when the project has no agent", async () => {
 		remoteSpawnMock.mockResolvedValue("remote-new");
-		fillRoleAgentsMock.mockResolvedValue(undefined);
 		workspaceQueryMock.mockReturnValue({ data: { project: { ...workspace, orchestratorAgent: undefined } }, isLoading: false });
 		const onRecreated = vi.fn();
 		render(<RestoreUnavailableDialog open hostId="box-b" session={session} onOpenChange={vi.fn()} onRecreated={onRecreated} />);
@@ -128,8 +122,24 @@ describe("RestoreUnavailableDialog", () => {
 		await userEvent.click(screen.getByRole("button", { name: "Create new orchestrator" }));
 
 		await waitFor(() => expect(onRecreated).toHaveBeenCalledWith("remote-new"));
-		expect(fillRoleAgentsMock).toHaveBeenCalledWith(expect.anything(), "proj-1", "box-b");
+		expect(remoteSpawnMock).toHaveBeenCalledWith("box-b", "proj-1", undefined, undefined, false, "restore_dialog");
 		expect(spawnMock).not.toHaveBeenCalled();
 		expect(useUiStore.getState().settingsModal).toBeNull();
+	});
+
+	it("closes restore and opens the owning host's agent settings when the daemon requires an agent", async () => {
+		const onOpenChange = vi.fn();
+		const onRecreated = vi.fn();
+		workspaceQueryMock.mockReturnValue({ data: { project: { ...workspace, orchestratorAgent: undefined } }, isLoading: false });
+		remoteSpawnMock.mockRejectedValueOnce(new OrchestratorSpawnError("Configure an orchestrator agent", "AGENT_REQUIRED"));
+		render(<RestoreUnavailableDialog open hostId="box-b" session={session} onOpenChange={onOpenChange} onRecreated={onRecreated} />);
+
+		await userEvent.click(screen.getByRole("button", { name: "Create new orchestrator" }));
+
+		expect(onOpenChange).toHaveBeenCalledWith(false);
+		expect(onRecreated).not.toHaveBeenCalled();
+		expect(useUiStore.getState().settingsModal).toEqual({
+			scope: "project", projectId: "proj-1", hostId: "box-b", section: "agents",
+		});
 	});
 });

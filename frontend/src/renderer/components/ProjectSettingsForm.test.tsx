@@ -1,6 +1,6 @@
 import { useState, type ReactElement } from "react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { act, fireEvent, render as rtlRender, screen, waitFor } from "@testing-library/react";
+import { fireEvent, render as rtlRender, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { agentReadiness } from "../test/agent-readiness-fixtures";
@@ -1363,10 +1363,7 @@ describe("ProjectSettingsForm", () => {
 		expect(putMock).not.toHaveBeenCalled();
 	});
 
-	it.each([
-		{ name: "no role agents", config: {}, worker: "claude-code", workerLabel: "Claude Code" },
-		{ name: "only a worker agent", config: { worker: { agent: "codex" } }, worker: "codex", workerLabel: "Codex" },
-	])("fills and saves missing role agents from the ranked default for $name", async ({ config, worker, workerLabel }) => {
+	it("requires worker and orchestrator agents for existing projects missing role config", async () => {
 		mockProject({
 			id: "proj-1",
 			name: "Project One",
@@ -1374,177 +1371,20 @@ describe("ProjectSettingsForm", () => {
 			path: "/repo/project-one",
 			repo: "",
 			defaultBranch: "main",
-			config,
+			config: {},
 		});
 
-		// The shell has loaded the project's sessions by the time settings open.
-		renderSettings("proj-1", [], "agents");
+		renderSettings("proj-1", undefined, "agents");
 
-		await waitFor(() => expect(screen.getByRole("button", { name: "Orchestrator agent" })).toHaveTextContent("Claude Code"));
-		expect(screen.getByRole("button", { name: "Worker agent" })).toHaveTextContent(workerLabel);
-		expect(screen.queryByText("Worker and orchestrator agents are required.")).not.toBeInTheDocument();
-		await waitFor(() => expect(putMock).toHaveBeenCalledWith("/api/v1/projects/{id}", expect.objectContaining({
-			body: expect.objectContaining({
-				config: expect.objectContaining({
-					worker: expect.objectContaining({ agent: worker }),
-					orchestrator: expect.objectContaining({ agent: "claude-code" }),
-				}),
-			}),
-		})));
-		// Filling the empty role is not an orchestrator change: nothing is replaced.
-		expect(postMock).not.toHaveBeenCalled();
-	});
+		expect(await screen.findByText("Worker and orchestrator agents are required.")).toBeInTheDocument();
+		expect(screen.getByRole("button", { name: "Worker agent" })).toHaveTextContent("Select worker agent");
+		expect(screen.getByRole("button", { name: "Orchestrator agent" })).toHaveTextContent(
+			"Select orchestrator agent",
+		);
 
-	it("fills a missing orchestrator role with the running orchestrator's agent", async () => {
-		mockProject({
-			id: "proj-1",
-			name: "Project One",
-			kind: "single_repo",
-			path: "/repo/project-one",
-			repo: "",
-			defaultBranch: "main",
-			config: { worker: { agent: "claude-code" } },
-		});
+		submitSettings();
 
-		renderSettings("proj-1", [
-			{
-				id: "proj-1",
-				name: "Project One",
-				path: "/repo/project-one",
-				sessions: [
-					{
-						id: "proj-1-orchestrator",
-						workspaceId: "proj-1",
-						workspaceName: "Project One",
-						title: "Orchestrator",
-						provider: "codex",
-						kind: "orchestrator",
-						branch: "ao/proj-1-orchestrator",
-						status: "working",
-						createdAt: "2026-07-03T00:00:00Z",
-						updatedAt: "2026-07-03T00:00:00Z",
-						prs: [],
-					},
-				],
-			},
-		], "agents");
-
-		await waitFor(() => expect(screen.getByRole("button", { name: "Orchestrator agent" })).toHaveTextContent("Codex"));
-		await waitFor(() => expect(putMock).toHaveBeenCalledWith("/api/v1/projects/{id}", expect.objectContaining({
-			body: expect.objectContaining({
-				config: expect.objectContaining({ orchestrator: expect.objectContaining({ agent: "codex" }) }),
-			}),
-		})));
-		// The running orchestrator already uses that agent, so it is not replaced.
-		expect(postMock).not.toHaveBeenCalled();
-	});
-
-	it("fills a missing worker role without replacing an orchestrator running on another agent", async () => {
-		mockProject({
-			id: "proj-1",
-			name: "Project One",
-			kind: "single_repo",
-			path: "/repo/project-one",
-			repo: "",
-			defaultBranch: "main",
-			config: { orchestrator: { agent: "codex" } },
-		});
-
-		renderSettings("proj-1", [
-			{
-				id: "proj-1",
-				name: "Project One",
-				path: "/repo/project-one",
-				sessions: [
-					{
-						id: "proj-1-orchestrator",
-						workspaceId: "proj-1",
-						workspaceName: "Project One",
-						title: "Orchestrator",
-						provider: "claude-code",
-						kind: "orchestrator",
-						branch: "ao/proj-1-orchestrator",
-						status: "working",
-						createdAt: "2026-07-03T00:00:00Z",
-						updatedAt: "2026-07-03T00:00:00Z",
-						prs: [],
-					},
-				],
-			},
-		], "agents");
-
-		await waitFor(() => expect(putMock).toHaveBeenCalledWith("/api/v1/projects/{id}", expect.objectContaining({
-			body: expect.objectContaining({
-				config: expect.objectContaining({
-					worker: expect.objectContaining({ agent: "claude-code" }),
-					orchestrator: expect.objectContaining({ agent: "codex" }),
-				}),
-			}),
-		})));
-		// Only the worker was filled; the Claude Code orchestrator someone started
-		// on purpose keeps running.
-		expect(postMock).not.toHaveBeenCalled();
-	});
-
-	it("saves a filled orchestrator role without replacing an orchestrator that started after the fill", async () => {
-		mockProject({
-			id: "proj-1",
-			name: "Project One",
-			kind: "single_repo",
-			path: "/repo/project-one",
-			repo: "",
-			defaultBranch: "main",
-			config: { worker: { agent: "claude-code" } },
-		});
-
-		const queryClient = renderSettings("proj-1", [], "agents");
-		await waitFor(() => expect(screen.getByRole("button", { name: "Orchestrator agent" })).toHaveTextContent("Claude Code"));
-		// A Codex orchestrator shows up before the filled role autosaves.
-		act(() => {
-			queryClient.setQueryData(workspaceQueryKey, [{
-				id: "proj-1",
-				name: "Project One",
-				path: "/repo/project-one",
-				sessions: [{
-					id: "proj-1-orchestrator",
-					workspaceId: "proj-1",
-					workspaceName: "Project One",
-					title: "Orchestrator",
-					provider: "codex",
-					kind: "orchestrator",
-					branch: "ao/proj-1-orchestrator",
-					status: "working",
-					createdAt: "2026-07-03T00:00:00Z",
-					updatedAt: "2026-07-03T00:00:00Z",
-					prs: [],
-				}],
-			}]);
-		});
-
-		await waitFor(() => expect(putMock).toHaveBeenCalledWith("/api/v1/projects/{id}", expect.objectContaining({
-			body: expect.objectContaining({
-				config: expect.objectContaining({ orchestrator: expect.objectContaining({ agent: "claude-code" }) }),
-			}),
-		})));
-		// The user didn't pick Claude Code, so the running Codex orchestrator stays.
-		expect(postMock).not.toHaveBeenCalled();
-	});
-
-	it("leaves missing role agents empty when agent readiness can't be loaded", async () => {
-		mockProject({
-			id: "proj-1",
-			name: "Project One",
-			kind: "single_repo",
-			path: "/repo/project-one",
-			repo: "",
-			defaultBranch: "main",
-			config: { worker: { agent: "claude-code" } },
-		}, { data: undefined, error: { message: "daemon unavailable" } } as unknown as typeof agentCatalogResponse);
-
-		renderSettings("proj-1", [], "agents");
-
-		// The readiness query retries once after about a second before failing.
-		expect(await screen.findByText("Worker and orchestrator agents are required.", undefined, { timeout: 3000 })).toBeInTheDocument();
+		expect(await screen.findAllByText("Worker and orchestrator agents are required.")).toHaveLength(2);
 		expect(putMock).not.toHaveBeenCalled();
 	});
 

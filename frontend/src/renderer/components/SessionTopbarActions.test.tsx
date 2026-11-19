@@ -18,6 +18,7 @@ import { ProjectBoardActions } from "./ProjectBoardActions";
 import { useProjectOrchestratorAction } from "../hooks/useProjectOrchestratorAction";
 import { sessionInterfaceTransitionQueryKey } from "../hooks/useSessionInterfaceTransition";
 import { sessionInterfaceTransitionStatus } from "../test/interface-transition-fixtures";
+import { OrchestratorSpawnError } from "../lib/spawn-orchestrator";
 
 const { locationMock, navigateMock, onKilledMock, paramsMock, postMock, spawnMock, useWorkspaceQueryMock } = vi.hoisted(() => ({
 	locationMock: { pathname: "/" },
@@ -28,9 +29,6 @@ const { locationMock, navigateMock, onKilledMock, paramsMock, postMock, spawnMoc
 	spawnMock: vi.fn(),
 	useWorkspaceQueryMock: vi.fn(),
 }));
-
-const fillRoleAgentsMock = vi.hoisted(() => vi.fn(async () => undefined));
-vi.mock("../lib/project-role-agents", () => ({ fillMissingProjectRoleAgents: fillRoleAgentsMock }));
 
 vi.mock("@tanstack/react-router", async (importOriginal) => {
 	const actual = await importOriginal<typeof import("@tanstack/react-router")>();
@@ -567,9 +565,21 @@ describe("SessionTopbarActions orchestrator actions", () => {
 		await userEvent.click(screen.getByRole("button", { name: "Open orchestrator" }));
 
 		await waitFor(() => expect(spawnMock).toHaveBeenCalled());
-		// The local daemon fills the empty role itself as it starts.
-		expect(fillRoleAgentsMock).not.toHaveBeenCalled();
 		expect(useUiStore.getState().settingsModal).toBeNull();
+	});
+
+	it("opens remote project agent settings when the daemon cannot fill a missing agent", async () => {
+		paramsMock.hostId = "box-a";
+		spawnMock.mockRejectedValueOnce(new OrchestratorSpawnError("Configure an orchestrator agent", "AGENT_REQUIRED"));
+		renderTopbarSessions([{ ...worker, hostId: "box-a" }], worker.id);
+
+		await userEvent.click(screen.getByRole("button", { name: "Open orchestrator" }));
+
+		await waitFor(() => expect(useUiStore.getState().settingsModal).toEqual({
+			scope: "project", projectId: "proj-1", hostId: "box-a", section: "agents",
+		}));
+		expect(spawnMock).toHaveBeenCalledWith("proj-1", "topbar", false, undefined, undefined, "box-a");
+		expect(navigateMock).not.toHaveBeenCalled();
 	});
 
 	it("opens the project orchestrator from the open-orchestrator shortcut", () => {

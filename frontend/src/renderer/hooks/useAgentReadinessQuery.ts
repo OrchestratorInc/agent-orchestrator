@@ -124,18 +124,6 @@ export async function loadProjectAgentDefaults(queryClient: QueryClient, hostId?
 	return defaultProjectAgents((await readProjectAgentSnapshotWithDeadline(queryClient, hostId)) ?? []);
 }
 
-/**
- * Default agents ranked from this machine's (or host's) readiness, or null when
- * readiness could not be loaded or AO has found no launchable agent installed.
- * Use it when the pick is saved to an existing project, so a guess (an
- * unchecked agent or the fallback) is never written.
- */
-export async function loadRankedProjectAgentDefaults(queryClient: QueryClient, hostId?: string): Promise<ProjectAgentDefaults | null> {
-	const agents = await readProjectAgentSnapshotWithDeadline(queryClient, hostId);
-	if (!agents || !hasInstalledAgent(agents)) return null;
-	return defaultProjectAgents(agents);
-}
-
 export function useAgentReadinessQuery(enabled = true, hostId?: string) {
 	return useQuery({
 		...agentReadinessQueryOptions,
