@@ -601,7 +601,9 @@ describe("shell workspace startup", () => {
 	it("resyncs Developer Mode when an attached daemon restarts on the same port", async () => {
 		useUiStore.setState({ developerMode: true, cardSummaries: false });
 		const hibernationSyncs = () =>
-			vi.mocked(apiClient.PATCH).mock.calls.filter(([path]) => path === "/api/v1/settings/chat-hibernation").length;
+			(vi.mocked(apiClient.PATCH).mock.calls as unknown as [string, unknown][]).filter(
+				([path]) => path === "/api/v1/settings/chat-hibernation",
+			).length;
 		shellMocks.state.daemonStatus = { state: "ready", port: 4777, pid: 101 };
 		const view = await renderShell();
 		await waitFor(() => expect(hibernationSyncs()).toBe(1));
