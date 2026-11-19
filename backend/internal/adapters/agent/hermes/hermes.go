@@ -1755,7 +1755,10 @@ func (*Plugin) DetectTerminalActivity(output string) (domain.ActivityState, bool
 // footer is dropped and a titled top rule becomes a plain rule. busy reports
 // the spinner, which the modern layout draws at every width.
 func modernComposer(output string) (string, bool) {
-	raw := strings.Split(output, "\n")
+	// A CRLF capture reads as LF rows. A bare \r still splits a row, as the
+	// plain lines do, so raw and plain rows stay aligned.
+	output = strings.ReplaceAll(output, "\r\n", "\n")
+	raw := strings.Split(strings.ReplaceAll(output, "\r", "\n"), "\n")
 	plain := terminalui.PlainTerminalLines(output)
 	if len(raw) != len(plain) {
 		return output, false

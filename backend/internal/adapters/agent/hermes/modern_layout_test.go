@@ -3,6 +3,7 @@ package hermes
 import (
 	"strings"
 	"testing"
+	"unicode/utf8"
 
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
 )
@@ -16,15 +17,28 @@ func modernRule(width int) string {
 	return "\x1b[38;5;102m" + strings.Repeat("─", width) + "\x1b[m"
 }
 
-// modernTopRule is the composer's top rule with the session title at its end.
+// cells is a title's terminal width: CJK runes, the only wide ones these
+// fixtures use, take two cells.
+func cells(title string) int {
+	n := utf8.RuneCountInString(title)
+	for _, r := range title {
+		if r >= 0x2E80 {
+			n++
+		}
+	}
+	return n
+}
+
+// modernTopRule is the composer's top rule with the session title at its end,
+// width cells wide.
 func modernTopRule(width int, title string) string {
-	return "\x1b[38;5;102m" + strings.Repeat("─", width-len(title)-3) + " \x1b[38;5;178m" + title + "\x1b[38;5;102m ─\x1b[m"
+	return "\x1b[38;5;102m" + strings.Repeat("─", width-cells(title)-3) + " \x1b[38;5;178m" + title + "\x1b[38;5;102m ─\x1b[m"
 }
 
 // modernBusyRule is the top rule while a turn runs: spinner, activity, time.
 func modernBusyRule(width int, frame, activity, title string) string {
 	left := "── " + frame + " " + activity + " · 5s "
-	fill := width - len([]rune(left)) - len(title) - 3
+	fill := width - utf8.RuneCountInString(left) - cells(title) - 3
 	return "\x1b[38;5;102m── \x1b[38;5;214;1m" + frame + " \x1b[m" + activity + "\x1b[38;5;101m · 5s\x1b[38;5;102m " +
 		strings.Repeat("─", fill) + " \x1b[38;5;178m" + title + "\x1b[38;5;102m ─\x1b[m"
 }
@@ -50,8 +64,9 @@ func TestModernLayoutComposerActivity(t *testing.T) {
 	}{
 		{"wide idle", []string{modernTopRule(110, "Lab title 2"), modernIdlePrompt, modernRule(110), modernIdleFooter}, domain.ActivityIdle, true},
 		{"wide idle with key hints", []string{modernTopRule(110, "Lab title 2"), modernIdlePrompt, modernRule(110), modernHintFooter}, domain.ActivityIdle, true},
+		{"wide idle captured with CRLF", []string{modernTopRule(110, "Lab title 2") + "\r", modernIdlePrompt + "\r", modernRule(110) + "\r", modernIdleFooter}, domain.ActivityIdle, true},
 		{"wide idle before a title", []string{modernRule(110), modernIdlePrompt, modernRule(110), modernIdleFooter}, domain.ActivityIdle, true},
-		{"wide idle with a wide title character", []string{modernTopRule(109, "計画"), modernIdlePrompt, modernRule(110), modernIdleFooter}, domain.ActivityIdle, true},
+		{"wide idle with a wide title character", []string{modernTopRule(110, "計画"), modernIdlePrompt, modernRule(110), modernIdleFooter}, domain.ActivityIdle, true},
 		{"wide busy", []string{modernBusyRule(110, "⠸", "( •_•)>⌐■-■ processing...", "Lab title 2"), modernBusyPrompt, modernRule(110), modernBusyFooter}, domain.ActivityActive, false},
 		{"wide busy with typed guidance", []string{modernBusyRule(110, "⠴", "Working…", "Lab title 2"), modernDraft, modernRule(110), modernBusyFooter}, domain.ActivityActive, false},
 		{"wide draft", []string{modernTopRule(110, "Lab title 2"), modernDraft, modernRule(110), modernIdleFooter}, domain.ActivityBlocked, false},
