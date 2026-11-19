@@ -1235,15 +1235,15 @@ describe("ChatMarkdown math", () => {
 
 	it("typesets the same formulas while streaming as once settled", async () => {
 		useUiStore.setState({ renderMath: true });
-		const text = "Euler $e^{i\\pi}+1=0$, \\(x^2\\), \\[y\\] and $$z$$.\n\n\\[\n\\int_0^1 x\\,dx\n\\]\n\n$$\nE=mc^2\n$$\n\n```math\na^2\n```\n\nCode `\\(no\\)` stays.\n\n```ts\nconst s = \"\\\\(no\\\\)\";\n```";
+		const text = "Euler $e^{i\\pi}+1=0$, \\(x^2\\), \\[y\\] and $$z$$.\n\n\\[\n\\int_0^1 x\\,dx\n\\]\n\n$$\nE=mc^2\n$$\n\n```math\na^2\n```\n\nCode `\\(no\\)` stays.\n\n```ts\nconst s = \"\\\\(no\\\\)\";\n```\n\n    \\(indented\\)\n\n> ~~~\n> \\(quoted\\)\n> ~~~\n\n\\[w\\]";
 		const formulas = (container: HTMLElement) => [...container.querySelectorAll<HTMLElement>("[data-math]")].map((node) => `${node.dataset.math} ${node.dataset.tex} ${node.querySelector(".katex") ? "typeset" : "source"}`);
 		const streamed = render(<ChatMarkdown text={text} streaming />).container;
 		await waitFor(() => expect(streamed.querySelector(".katex")).not.toBeNull());
 		const settled = render(<ChatMarkdown text={text} />).container;
 		expect(formulas(streamed)).toEqual(formulas(settled));
-		expect(formulas(streamed)).toHaveLength(7);
+		expect(formulas(streamed)).toHaveLength(8);
 		expect(streamed.querySelector("code")).toHaveTextContent("\\(no\\)");
-		expect(streamed.querySelector("pre")).toHaveTextContent('const s = "\\\\(no\\\\)";');
+		expect([...streamed.querySelectorAll("pre")].map((pre) => pre.textContent)).toEqual(['const s = "\\\\(no\\\\)";\n', "\\(indented\\)\n", "\\(quoted\\)\n"]);
 	});
 
 	it("leaves dollar signs as text while the setting is off", () => {

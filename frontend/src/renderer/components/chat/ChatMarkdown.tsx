@@ -50,7 +50,7 @@ import { Pressable } from "../ui/pressable";
 import { isHostLocalWebLink } from "../../lib/loopback";
 import { canonicalLanguage, streamingCodeHighlighter } from "../../lib/code-highlight";
 import { fenceOf, textOf } from "../../lib/markdown-fence";
-import { dollarDelimiters, isInlineMath, remarkMath } from "../../lib/remark-math";
+import { createDollarDelimiters, isInlineMath, remarkMath } from "../../lib/remark-math";
 import { useUiStore } from "../../stores/ui-store";
 import { artifactLinkForPath, artifactLinkForTarget, findSessionLinks, hasArtifactDirectorySegment, isAoLink, isSessionLink, remarkSessionLinks, sessionArtifactPath } from "../../lib/session-links";
 import { useSessionLinkSource } from "../../lib/use-session-link-navigation";
@@ -336,6 +336,7 @@ function StreamingMarkdown({ text, math }: { text: string; math: boolean }) {
 	const [mounted, setMounted] = useState(false);
 	useEffect(() => setMounted(true), []);
 	const katex = useKatex(math || MATH_FENCE.test(text));
+	const dollarDelimiters = useMemo(createDollarDelimiters, []);
 	const components = useMemo(() => ({
 		svg: (html: string) => {
 			const formula = MATH_SVG.exec(html);

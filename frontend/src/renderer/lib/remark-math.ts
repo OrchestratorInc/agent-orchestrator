@@ -17,9 +17,11 @@
 // unified's `Data`, as remark-math's own types do.
 /// <reference types="remark-parse" />
 
+import type { Nodes } from "mdast";
 import { mathFromMarkdown } from "mdast-util-math";
 import { math } from "micromark-extension-llm-math";
-import type { Processor } from "unified";
+import remarkParse from "remark-parse";
+import { unified, type Processor } from "unified";
 
 export function remarkMath(this: Processor) {
 	const data = this.data();
@@ -32,11 +34,51 @@ export function isInlineMath(className: string | undefined): boolean {
 	return className?.includes("math-inline") ?? false;
 }
 
-const TEX_DELIMITED = /(^|\n) {0,3}(`{3,}|~{3,})[^\n]*(?:\n[\s\S]*?(?:\n {0,3}\2[`~]*[ \t]*(?=\n|$)|$)|$)|(`+)(?:[\s\S]*?[^`])?\3(?!`)|(?<!\\)\\\(((?:(?!\n[ \t]*\n)[\s\S])+?)\\\)|(?<!\\)\\\[((?:(?!\n[ \t]*\n)[\s\S])+?)\\\]/g;
+const mathParser = unified().use(remarkParse).use(remarkMath);
 
-export function dollarDelimiters(text: string): string {
-	if (!text.includes("\\(") && !text.includes("\\[")) return text;
-	return text.replace(TEX_DELIMITED, (match, _line, _fence, _ticks, inline?: string, display?: string) =>
-		inline !== undefined ? `$${inline.trim()}$` : display !== undefined ? `$$${display}$$` : match,
-	);
+type Edit = { start: number; end: number; text: string };
+
+function backslashFormulas(node: Nodes, source: string, edits: Edit[]): void {
+	if (node.type === "math" || node.type === "inlineMath") {
+		const start = node.position!.start.offset!;
+		const end = node.position!.end.offset!;
+		const raw = source.slice(start, end);
+		if (raw[0] !== "\\") return;
+		const closed = raw.endsWith(raw[1] === "(" ? "\\)" : "\\]");
+		const indent = source.slice(source.lastIndexOf("\n", start - 1) + 1, start).replace(/[^\s>]/g, " ");
+		const text = node.type !== "math"
+			? `${raw[1] === "[" ? "$$" : "$"}${raw.slice(2, -2).trim()}${raw[1] === "[" ? "$$" : "$"}`
+			: closed && !raw.includes("\n")
+				? `$$\n${indent}${raw.slice(2, -2).trim()}\n${indent}$$`
+				: `$$${raw.slice(2, closed ? -2 : undefined)}${closed ? "$$" : ""}`;
+		edits.push({ start, end, text });
+	} else if ("children" in node) for (const child of node.children) backslashFormulas(child, source, edits);
+}
+
+export function createDollarDelimiters(): (text: string) => string {
+	let source = "";
+	let stable = 0;
+	let done = "";
+	return (text) => {
+		if (!text.includes("\\(") && !text.includes("\\[")) return text;
+		const from = source && text.startsWith(source.slice(0, stable)) ? stable : 0;
+		const tail = text.slice(from);
+		const tree = mathParser.parse(tail);
+		const edits: Edit[] = [];
+		backslashFormulas(tree, tail, edits);
+		const apply = (start: number, end: number) => {
+			let out = "";
+			let at = start;
+			for (const edit of edits) if (edit.start >= start && edit.end <= end) {
+				out += tail.slice(at, edit.start) + edit.text;
+				at = edit.end;
+			}
+			return out + tail.slice(at, end);
+		};
+		const last = tree.children.at(-1)?.position?.start.offset ?? 0;
+		done = (from ? done : "") + apply(0, last);
+		stable = from + last;
+		source = text;
+		return done + apply(last, tail.length);
+	};
 }
