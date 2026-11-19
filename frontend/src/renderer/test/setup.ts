@@ -241,8 +241,8 @@ if (typeof window !== "undefined") {
 			setAccess: async () => {
 				throw new Error("not stubbed");
 			},
-			grants: async () => [],
-			invite: async () => [],
+			grants: async () => ({ people: [], teams: [], workspaces: [] }),
+			invite: async () => ({ people: [], teams: [], workspaces: [] }),
 			removeGrant: async () => undefined,
 			onProgress: () => () => undefined,
 		},
@@ -536,6 +536,9 @@ if (typeof window !== "undefined") {
 			onSessionChanged: () => () => undefined,
 			onOpenShareLink: () => () => undefined,
 			takePendingShareLink: async () => null,
+			onOpenSharedArtifact: () => () => undefined,
+			takePendingSharedArtifact: async () => null,
+			openSharedArtifactWindow: async () => undefined,
 			pushFolderToRepository: async () => ({ status: "error", code: "invalid_request", message: "not available in tests" }),
 			previewFolderUpload: async () => ({ status: "ok", source: "import", leftOut: [] }),
 			takePendingSignIn: async () => null,

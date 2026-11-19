@@ -281,9 +281,10 @@ type RestoreReviewerResult struct {
 // for one trigger.
 type TriggerOptions struct {
 	// Harness and Config override the resolved reviewer for this pass only.
-	Harness domain.ReviewerHarness
-	Config  domain.AgentConfig
-	Source  domain.ReviewTriggerSource
+	Harness            domain.ReviewerHarness
+	Config             domain.AgentConfig
+	RequesterSessionID domain.SessionID
+	Source             domain.ReviewTriggerSource
 	// InterfaceMode chooses Chat or Terminal for the reviewer; empty keeps the
 	// reviewer's persisted surface or the adapter default.
 	InterfaceMode domain.ReviewerInterfaceMode
@@ -356,6 +357,20 @@ func (e *Engine) TriggerWithOptions(ctx stdctx.Context, workerID domain.SessionI
 	}
 	if !ok {
 		return TriggerResult{}, fmt.Errorf("%w: worker session %q", ErrNotFound, workerID)
+	}
+	if opts.RequesterSessionID != "" {
+		if source != domain.ReviewTriggerAgent {
+			return TriggerResult{}, fmt.Errorf("%w: only agent triggers can specify a requesting session", ErrInvalid)
+		}
+		if opts.RequesterSessionID != workerID {
+			caller, found, err := e.sessions.GetSession(ctx, opts.RequesterSessionID)
+			if err != nil {
+				return TriggerResult{}, err
+			}
+			if !found || caller.ProjectID != worker.ProjectID || caller.IsTerminated {
+				return TriggerResult{}, fmt.Errorf("%w: requesting session must be active in this project", ErrInvalid)
+			}
+		}
 	}
 	if source == domain.ReviewTriggerAuto {
 		if reason := autoReviewSessionReason(worker, e.clock()); reason != "" {
@@ -564,20 +579,22 @@ func (e *Engine) TriggerWithOptions(ctx stdctx.Context, workerID domain.SessionI
 			batchID = e.newID()
 		}
 		run := domain.ReviewRun{
-			ID:            e.newID(),
-			ReviewID:      reviewRow.ID,
-			SessionID:     workerID,
-			BatchID:       batchID,
-			Harness:       harness,
-			TriggerSource: source,
-			PRURL:         reviewState.PRURL,
-			TargetSHA:     reviewState.TargetSHA,
-			Status:        domain.ReviewRunQueued,
-			Verdict:       domain.VerdictNone,
-			CreatedAt:     now,
+			ID:                 e.newID(),
+			ReviewID:           reviewRow.ID,
+			SessionID:          workerID,
+			BatchID:            batchID,
+			Harness:            harness,
+			TriggerSource:      source,
+			RequesterSessionID: opts.RequesterSessionID,
+			PRURL:              reviewState.PRURL,
+			TargetSHA:          reviewState.TargetSHA,
+			Status:             domain.ReviewRunQueued,
+			Verdict:            domain.VerdictNone,
+			CreatedAt:          now,
 			// Completion refreshes this snapshot before delivery. Keeping the
 			// trigger-time value also makes a running pass truthful in the API.
 			AutoInjectReview: worker.AutoInjectReview,
+			ReviewerModel:    config.Model,
 		}
 		if err := e.store.InsertReviewRun(ctx, run); err != nil {
 			if errors.Is(err, domain.ErrDuplicateReviewRun) {
@@ -619,17 +636,20 @@ func (e *Engine) TriggerWithOptions(ctx stdctx.Context, workerID domain.SessionI
 		return TriggerResult{Run: firstReusableRun(reviews), ReviewerHandleID: legacyReviewerHandle(reviewRow), Created: false, Reviews: reviews, Runs: runs, ReviewerSurface: reviewerSurface(reviewRow)}, nil
 	}
 
-	failRuns := func(reason domain.ReviewFailureReason, err error) error {
-		if failErr := e.failRuns(ctx, created, reason, err); failErr != nil {
+	failRunsWithContext := func(settleCtx stdctx.Context, reason domain.ReviewFailureReason, err error) error {
+		if failErr := e.failRuns(settleCtx, created, reason, err); failErr != nil {
 			err = errors.Join(err, failErr)
 		}
 		// A restarted pass whose replacement did not start is still served by
 		// the previous reviewer. If that reviewer was stopped, rollback has
 		// already failed it and this is a no-op.
-		if revertErr := e.revertRelaunch(ctx, restarted); revertErr != nil {
+		if revertErr := e.revertRelaunch(settleCtx, restarted); revertErr != nil {
 			err = errors.Join(err, revertErr)
 		}
 		return err
+	}
+	failRuns := func(reason domain.ReviewFailureReason, err error) error {
+		return failRunsWithContext(ctx, reason, err)
 	}
 
 	previousHandleID := reviewRow.ReviewerHandleID
@@ -646,13 +666,13 @@ func (e *Engine) TriggerWithOptions(ctx stdctx.Context, workerID domain.SessionI
 				cause = errors.Join(cause, fmt.Errorf("cleanup replacement reviewer: %w", cleanupErr))
 			}
 		}
+		rollbackCtx, cancel := stdctx.WithTimeout(stdctx.WithoutCancel(ctx), 5*time.Second)
+		defer cancel()
 		if hasReview {
 			if previousStopped {
 				previousReview.ControllerGeneration = ""
 				previousReview.ReviewerActivityState = domain.ActivityExited
 			}
-			rollbackCtx, cancel := stdctx.WithTimeout(stdctx.WithoutCancel(ctx), 5*time.Second)
-			defer cancel()
 			if previousReview.IsArchived || modeChanging || (hasConfigOverride && selectedMode == domain.ReviewerInterfaceChat) {
 				if ok, rollbackErr := e.store.RestoreReviewLaunchState(rollbackCtx, previousReview, rollbackNow); rollbackErr != nil {
 					cause = errors.Join(cause, fmt.Errorf("restore previous reviewer surface: %w", rollbackErr))
@@ -664,11 +684,11 @@ func (e *Engine) TriggerWithOptions(ctx stdctx.Context, workerID domain.SessionI
 			}
 		}
 		if previousStopped {
-			if err := e.failRuns(ctx, restarted, domain.ReviewFailureLaunchFailed, cause); err != nil {
+			if err := e.failRuns(rollbackCtx, restarted, domain.ReviewFailureLaunchFailed, cause); err != nil {
 				cause = errors.Join(cause, err)
 			}
 		}
-		return failRuns(domain.ReviewFailureLaunchFailed, cause)
+		return failRunsWithContext(rollbackCtx, domain.ReviewFailureLaunchFailed, cause)
 	}
 
 	queueRuns := append([]domain.ReviewRun{}, restarted...)
@@ -714,7 +734,7 @@ func (e *Engine) TriggerWithOptions(ctx stdctx.Context, workerID domain.SessionI
 		}
 		// A restarted pass is now waiting on the replacement launch, so a hung
 		// launch is bounded by LaunchTimeout like a new one.
-		if err := e.markRunsRelaunching(ctx, restarted, launchID); err != nil {
+		if err := e.markRunsRelaunching(ctx, restarted, launchID, config.Model); err != nil {
 			return TriggerResult{}, rollbackReplacement(err)
 		}
 		reviewRow, err = e.upsertReview(ctx, worker, harness, reviewRow.ReviewerHandleID, launchAgentSessionID, launchID, "", now)

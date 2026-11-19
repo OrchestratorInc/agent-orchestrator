@@ -151,9 +151,17 @@ Status is derived from durable runtime, PR, CI, and review facts. The renderer c
 
 Use one fixed status slot where status belongs. Prefer an icon/glyph over a prose badge.
 
-1. If the session is actively working, show the working spinner.
+1. If the session is actively working, show the working spinner in `--color-status-working`.
 2. Otherwise, if a PR is relevant, show the PR glyph tinted by its actionable state.
 3. Otherwise, show a dot: amber/red for attention, muted for idle/complete.
+
+Sidebar session rows apply these rules with distinct shapes, so colour is never the only signal:
+
+- Working: blue spinner (`--color-status-working`). The title sweep is tinted toward the same blue at low strength (40% mixed into the foreground). The open row keeps the spinner without the sweep, and reduced motion stops both.
+- Waiting on the user, CI failing, merge conflicts, changes requested: red alert icon. A person's review next: orange alert icon.
+- Ready to merge: green pull-request icon. Merged: dimmed purple merge icon.
+- A session that changed since the user last opened it: filled muted dot. Once opened: hollow muted ring. The dots stay grey so the sidebar's colour goes to working and to what needs the user.
+- A collapsed project shows its strongest state, in this order: a red alert in place of its icon when any session waits on the user; otherwise its icon keeps the orchestrator button's corner dot, breathing muted while any agent works and solid accent for an unopened finished turn.
 
 Do not show multiple competing status chips on a session card or sidebar row. Text labels are allowed when needed for accessibility, an empty state, an inspector summary, or a decision the user must make.
 
@@ -451,3 +459,4 @@ Approve only when the answer to every applicable check is yes. Otherwise classif
 | 2026-11-13 | The archive's entry points (board button, sidebar project menu, Cmd+K) are labelled Archived sessions, not Archive | A bare Archive beside a project's other actions read as the verb, archiving the whole project. A noun names the place; Archive stays the verb for one session. |
 | 2026-11-18 | Looping animations animate only `transform` or `opacity`; working sidebar titles sweep a masked copy of the title with `transform` | The old `background-position` sweep repainted every working row each frame and delayed typing while replies streamed (ADEMark A8 median 50.1 to 35.4 ms). |
 | 2026-11-18 | A Browser tab the agent works in is framed: its page is inset by a 6px edge on every side, with a faint 1px Working-blue edge at rest. When the agent starts working after 30s quiet and its tab is on screen, it is greeted for about 3s: a streak of Working-blue light runs around the page's edge twice and fades (a rotating gradient, animating only `transform`), and the AO mascot (72px) pops up over the page's bottom-left corner with a hop and a wiggle, leaving at once when the pointer reaches it. A glow that stayed on while the agent worked was tried and rejected: the person wants the light to play and go away. In the tab strip, agent tabs carry a mascot badge and a Working-blue underline that glows while the agent acts there. Approved exception to "no glow" and to motion limits: the light and the mascot greet a live Working state, never decoration, and reduced motion keeps them still | Every tab looked the same, so the person could not tell which tab the agent was using or when it was acting. A permanent bottom bar with the mascot was tried and rejected: the person wants the logo only as a brief greeting when the agent starts. The frame paints beside the page and the mascot is its own native view, so neither is in the agent's screenshots and neither holds up the person's clicks. |
+| 2026-11-19 | Sidebar activity carries colour: the working spinner is blue, the working title sweep is tinted blue at low strength, the unread dot stays filled grey, and a collapsed project keeps its icon with the orchestrator button's corner dot for working and unopened finished turns (the red attention alert still replaces it) | Working and finished turns were both grey, so a long list had to be read row by row; the board already used the working blue. A green unread dot was tried and dropped: it competed with ready-to-merge green and made every changed row loud. Swapping a project's avatar for a spinner or dot hid which project it was; the corner dot already means "new reply" on the orchestrator button. |

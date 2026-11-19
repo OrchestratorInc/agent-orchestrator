@@ -2165,7 +2165,9 @@ textarea,
 	overflow: hidden;
 	text-overflow: ellipsis;
 	white-space: nowrap;
-	color: var(--color-foreground);
+	/* Tinted toward the working blue at low strength, like the row's spinner, so a
+	   working title reads apart from an idle one without a row fill. */
+	color: color-mix(in oklab, var(--color-status-working) 40%, var(--color-foreground));
 }
 
 @keyframes sidebar-working-shimmer {
