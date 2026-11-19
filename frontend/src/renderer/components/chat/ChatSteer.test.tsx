@@ -504,7 +504,7 @@ describe("ChatWorkspace steering", () => {
 		expect(onPromoteQueuedTurn).toHaveBeenCalledWith("queued-2");
 
 		await userEvent.click(within(screen.getByTestId("queued-message-queued-1")).getByRole("button", { name: "Edit queued message" }));
-		expect(onBeginQueuedEdit).toHaveBeenCalledWith("queued-1", "first queued");
+		expect(onBeginQueuedEdit).toHaveBeenCalledWith("queued-1");
 
 		await userEvent.click(within(screen.getByTestId("queued-message-queued-1")).getByRole("button", { name: "Delete queued message" }));
 		expect(onCancelQueuedTurn).toHaveBeenCalledWith("queued-1");

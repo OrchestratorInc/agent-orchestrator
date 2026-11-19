@@ -13,7 +13,7 @@ import type { ChatSkill } from "../../types/conversation";
 import type { ChatModel } from "../../types/conversation";
 import { apiClient, apiErrorMessage, eventStreamBaseUrl, getApiBaseUrl, subscribeApiBaseUrl } from "../../lib/api-client";
 import { aoBridge } from "../../lib/bridge";
-import { ApprovalCard } from "./ChatTimelineItems";
+import { ApprovalCard, humanVisibleText } from "./ChatTimelineItems";
 import { Timeline } from "./ChatWorkspace";
 import { sideConversationActivity, sideConversationSnapshot } from "./sideConversation";
 import { ComposerEditor, type ComposerEditorHandle, type ComposerTrigger } from "./ComposerEditor";
@@ -1936,9 +1936,11 @@ export function useIndependentSideChats(
 													},
 												}))}
 											onCancelQueuedTurn={(turnId) => cancelQueuedTurn(activeId, turnId)}
-											onBeginQueuedEdit={(turnId, text) => {
+											onBeginQueuedEdit={(turnId) => {
 												if (!operationCurrent(activeId)()) return;
-												setQueuedEditors(current => ({ ...current, [activeId]: { turnId, text } }));
+												const turn = (snapshot.turns ?? []).find(turn => turn.id === turnId && turn.state === "queued");
+												if (!turn) return;
+												setQueuedEditors(current => ({ ...current, [activeId]: { turnId, text: humanVisibleText(turn.text) } }));
 											}}
 										/>
 										{editingTurnId ? (
