@@ -72,7 +72,13 @@ func (o *fakeOrigin) runner(t *testing.T) commandRunner {
 
 func newAutoDefaultWorkspace(t *testing.T, origin *fakeOrigin) (*Workspace, string) {
 	t.Helper()
-	repo := t.TempDir()
+	// The resolved path, as a project's repository arrives in production. On
+	// macOS t.TempDir() is under the /var symlink, and the recheck window is
+	// keyed by the resolved path, so a raw path would never match it.
+	repo, err := physicalAbs(t.TempDir())
+	if err != nil {
+		t.Fatalf("repo path: %v", err)
+	}
 	ws, err := New(Options{ManagedRoot: t.TempDir(), RepoResolver: StaticRepoResolver{"proj": repo}})
 	if err != nil {
 		t.Fatalf("new: %v", err)
