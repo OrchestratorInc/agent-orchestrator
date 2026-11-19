@@ -103,7 +103,7 @@ type fxImportRecord struct {
 	Key           string          `json:"key"`
 	Value         json.RawMessage `json:"value"`
 	Data          json.RawMessage `json:"data"`
-	Event struct {
+	Event         struct {
 		User *struct {
 			Text string `json:"text"`
 		} `json:"user"`
