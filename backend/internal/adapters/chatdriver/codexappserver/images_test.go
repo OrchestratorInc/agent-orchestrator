@@ -113,8 +113,28 @@ func TestImagesCapabilityMatchesTheDeclaredProtocol(t *testing.T) {
 		t.Fatalf("generated protocol (%s) does not declare %s",
 			codexproto.ProviderVersion, codexproto.MethodTurnStart)
 	}
+	url := "data:image/png;base64," + redPixelPNG
+	got, err := json.Marshal(codexproto.UserInput{Type: codexproto.UserInputTypeImage, URL: &url})
+	want := `{"type":"image","url":"` + url + `"}`
+	if err != nil || string(got) != want {
+		t.Fatalf("generated image input = %s, err = %v; want %s", got, err, want)
+	}
 	if !capabilities().Has(ports.ChatCapabilityImages) {
-		t.Error("the driver can send input_image but does not advertise the images capability")
+		t.Error("the driver can send image input but does not advertise the images capability")
+	}
+}
+
+func TestTurnInputNormalizesJPEGAndRejectsUnsupportedMIME(t *testing.T) {
+	for _, mime := range []string{"IMAGE/JPG", "image/jpeg"} {
+		got, err := turnInput(ports.ChatUserMessage{Content: []ports.ChatContent{{Type: "image", MIMEType: mime, Data: "aGVsbG8="}}})
+		if err != nil || len(got) != 1 || got[0].URL == nil || *got[0].URL != "data:image/jpeg;base64,aGVsbG8=" {
+			t.Fatalf("turnInput(%q) = %v, %v", mime, got, err)
+		}
+	}
+	for _, mime := range []string{"image/bmp", "text/plain"} {
+		if _, err := turnInput(ports.ChatUserMessage{Content: []ports.ChatContent{{Type: "image", MIMEType: mime, Data: "aGVsbG8="}}}); err == nil {
+			t.Fatalf("turnInput(%q) accepted unsupported input", mime)
+		}
 	}
 }
 
@@ -153,8 +173,9 @@ func TestLiveTurnCarriesNativeImages(t *testing.T) {
 		DataDir:       dataDir,
 		WorkspacePath: workspace,
 		Env:           envMap(),
-		Permissions:   ports.PermissionModeDefault,
-		SystemPrompt:  "You are in an automated test. Follow instructions literally.",
+		// Reading the supplied image needs no full-access sandbox.
+		Permissions:  ports.PermissionModeAcceptEdits,
+		SystemPrompt: "You are in an automated test. Follow instructions literally.",
 	})
 	if err != nil {
 		t.Fatalf("Start: %v", err)

@@ -649,6 +649,7 @@ export interface ChatWorkspaceProps {
 	cloudAttachments?: { maxBytes: number };
 	/** The provider negotiated native image prompt blocks. */
 	nativeImages?: boolean;
+	limitCodexNativeImages?: boolean;
 	/**
 	 * Deliver guidance into the turn already running, instead of queueing a message
 	 * behind it. Absent means this harness cannot steer and no control is drawn —
@@ -923,6 +924,7 @@ function ChatWorkspaceContent({
 	onStageAttachments,
 	cloudAttachments,
 	nativeImages,
+	limitCodexNativeImages,
 	onSteer,
 	showSteerButton,
 	sendPending,
@@ -1413,6 +1415,7 @@ function ChatWorkspaceContent({
 					saving: true,
 					clientMessageId: currentEdit.clientMessageId ?? crypto.randomUUID(),
 					nativeImages: currentEdit.nativeImages ?? Boolean(nativeImages),
+					limitCodexNativeImages: currentEdit.clientMessageId ? currentEdit.limitCodexNativeImages : limitCodexNativeImages,
 				}, currentEdit.revision);
 				if (!prepared.ok || !prepared.draft.queuedEdit) throw new Error("chat.draft.queuePrepareFailed");
 				try {
@@ -1435,7 +1438,7 @@ function ChatWorkspaceContent({
 					].includes(apiErrorCode(error) ?? "")) {
 						updateQueueDraft({
 							...prepared.draft.queuedEdit,
-							clientMessageId: undefined, saving: undefined, nativeImages: undefined,
+							clientMessageId: undefined, saving: undefined, nativeImages: undefined, limitCodexNativeImages: undefined,
 						}, prepared.draft.queuedEdit.revision);
 					}
 					throw error;
@@ -1454,7 +1457,7 @@ function ChatWorkspaceContent({
 			if (sent !== SENT_OUTSIDE_TRANSCRIPT) setComposerSends((count) => count + 1);
 			return sent;
 		},
-		[draftScope, onEditQueuedTurn, onSend, nativeImages, queueEdit, queuedMessages, updateQueueDraft],
+		[draftScope, onEditQueuedTurn, onSend, nativeImages, limitCodexNativeImages, queueEdit, queuedMessages, updateQueueDraft],
 	);
 	const stableInterrupt = useStableCallback(onInterrupt);
 	const stableSteer = useStableCallback(onSteer);
@@ -2459,6 +2462,7 @@ function ChatWorkspaceContent({
 										onHeldAttachmentsChange={onHeldAttachmentsChange}
 										attachmentsRefusal={attachmentsRefusal}
 										nativeImages={queueEdit?.clientMessageId ? queueEdit.nativeImages ?? nativeImages : nativeImages}
+										limitCodexNativeImages={queueEdit?.clientMessageId ? queueEdit.limitCodexNativeImages : limitCodexNativeImages}
 										autoFocus={!reviewerActive}
 										autoFocusKey={draftScope.sessionId}
 										// Steering is only meaningful into a turn that is running. A queued turn

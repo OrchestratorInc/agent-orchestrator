@@ -104,6 +104,25 @@ func TestSteerSendsTheProvidersPreconditionShape(t *testing.T) {
 	}
 }
 
+func TestSteerSendsAnImageWithoutText(t *testing.T) {
+	conv, srv := steerConversation(t)
+	if _, err := conv.Steer(context.Background(), "turn-1", ports.ChatUserMessage{
+		Text: "  ", Origin: domain.MessageOriginHuman,
+		Content: []ports.ChatContent{{Type: "image", Data: redPixelPNG, MIMEType: "image/png"}},
+	}); err != nil {
+		t.Fatalf("Steer: %v", err)
+	}
+	sent := srv.awaitFrame(func(f frame) bool { return f.Method == codexproto.MethodTurnSteer })
+	var params codexproto.TurnSteerParams
+	if err := json.Unmarshal(sent.Params, &params); err != nil {
+		t.Fatal(err)
+	}
+	if len(params.Input) != 1 || params.Input[0].Type != codexproto.UserInputTypeImage ||
+		params.Input[0].URL == nil || *params.Input[0].URL != "data:image/png;base64,"+redPixelPNG {
+		t.Fatalf("turn/steer input = %+v, want one image", params.Input)
+	}
+}
+
 // An empty turn id falls back to the turn the conversation last saw, so a caller
 // that has not tracked one is not forced to guess.
 func TestSteerFallsBackToTheKnownActiveTurn(t *testing.T) {

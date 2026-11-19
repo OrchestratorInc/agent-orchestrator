@@ -65,9 +65,8 @@ func (c *conversation) Steer(
 	msg ports.ChatUserMessage,
 ) (ports.ChatTurnRef, error) {
 	providerTurnID = c.nativeID(providerTurnID)
-	if strings.TrimSpace(msg.Text) == "" {
-		// Same rule as SendTurn: there is no keystroke concept here, so an empty
-		// steer is a caller bug rather than a way to nudge the agent.
+	if strings.TrimSpace(msg.Text) == "" && len(msg.Content) == 0 {
+		// Just like SendTurn, an empty message is a caller error, not a nudge.
 		return ports.ChatTurnRef{}, errors.New("steer message text is empty")
 	}
 

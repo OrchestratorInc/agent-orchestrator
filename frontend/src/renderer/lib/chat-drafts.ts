@@ -65,6 +65,7 @@ export interface ChatDraftInlineEdit {
 export interface ChatDraftQueuedEdit {
 	/** Original request mode, independent of current controller capabilities. */
 	nativeImages?: boolean;
+	limitCodexNativeImages?: boolean;
 	/** Stable daemon receipt key for the exact pending save. */
 	clientMessageId?: string;
 	/** Stable for one editing attempt, including remounts and staged reads. */
@@ -96,6 +97,7 @@ export interface ChatComposerDelivery {
 	fileReferenceFormat?: "quoted-v1";
 	/** Original request mode, kept across capability changes during recovery. */
 	nativeImages?: boolean;
+	limitCodexNativeImages?: boolean;
 	kind: "send" | "steer";
 	state: ChatDraftDeliveryState;
 	/** Exact composer revision this delivery was created from. */
@@ -188,6 +190,7 @@ export type DraftDeliveryResult<Mutation> =
 
 export interface PrepareChatComposerDeliveryInput {
 	nativeImages?: boolean;
+	limitCodexNativeImages?: boolean;
 	optimistic?: boolean;
 	kind: ChatComposerDelivery["kind"];
 	composerText: string;
@@ -799,6 +802,7 @@ function isComposerDelivery(value: unknown): value is ChatComposerDelivery {
 		(delivery.excerpts === undefined ||
 			(Array.isArray(delivery.excerpts) && delivery.excerpts.every(isExcerptReference))) &&
 		(!("nativeImages" in delivery) || typeof delivery.nativeImages === "boolean") &&
+		(delivery.limitCodexNativeImages === undefined || typeof delivery.limitCodexNativeImages === "boolean") &&
 		(delivery.draft === undefined || (delivery.draft !== null &&
 			typeof delivery.draft === "object" &&
 			typeof delivery.draft.text === "string" &&
@@ -864,6 +868,7 @@ function isChatSessionDraft(value: unknown, scope: ChatDraftScope): value is Cha
 			typeof draft.queuedEdit.turnId === "string" && draft.queuedEdit.turnId.length > 0 &&
 			typeof draft.queuedEdit.text === "string" &&
 			(draft.queuedEdit.nativeImages === undefined || typeof draft.queuedEdit.nativeImages === "boolean") &&
+			(draft.queuedEdit.limitCodexNativeImages === undefined || typeof draft.queuedEdit.limitCodexNativeImages === "boolean") &&
 			(draft.queuedEdit.clientMessageId === undefined || typeof draft.queuedEdit.clientMessageId === "string") &&
 			(draft.queuedEdit.ownerId === undefined || typeof draft.queuedEdit.ownerId === "string") &&
 			(draft.queuedEdit.expectedRevision === undefined || (Number.isSafeInteger(draft.queuedEdit.expectedRevision) && draft.queuedEdit.expectedRevision >= 0)) &&
@@ -1069,6 +1074,7 @@ export function prepareChatComposerDelivery(
 	const mutation: ChatComposerDelivery = {
 		fileReferenceFormat: "quoted-v1",
 		...(input.nativeImages === undefined ? {} : { nativeImages: input.nativeImages }),
+		...(input.limitCodexNativeImages === undefined ? {} : { limitCodexNativeImages: input.limitCodexNativeImages }),
 		kind: input.kind,
 		state: "dispatching",
 		revision,

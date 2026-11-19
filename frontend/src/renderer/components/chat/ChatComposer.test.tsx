@@ -2686,6 +2686,53 @@ describe("attachments", () => {
 		expect(onSend.mock.calls[0]?.[1]).toBeUndefined();
 	});
 
+	it("keeps BMPs and images beyond the Codex inline budget on the workspace path", async () => {
+		const paths = [".ao/attachments/inline.png", ".ao/attachments/large.png", ".ao/attachments/legacy.bmp"];
+		const stage = vi.fn().mockResolvedValue(paths);
+		const { onSend, field } = renderComposer({ onStageAttachments: stage, nativeImages: true, limitCodexNativeImages: true });
+		const first = png("inline.png");
+		const second = png("large.png");
+		Object.defineProperty(first, "size", { value: 3 * 1024 * 1024 });
+		Object.defineProperty(second, "size", { value: 2 * 1024 * 1024 });
+		const bmp = new File(["BM"], "legacy.bmp", { type: "image/bmp" });
+		fireEvent.drop(field, {
+			dataTransfer: { files: [first, second, bmp], items: [{ kind: "file" }, { kind: "file" }, { kind: "file" }], getData: () => "" },
+		});
+		await waitFor(() => expect(screen.getAllByRole("listitem")).toHaveLength(3));
+		await typeInComposer(field, "compare these");
+		await userEvent.keyboard("{Enter}");
+		await waitFor(() => expect(onSend).toHaveBeenCalledTimes(1));
+		for (const path of paths) expect(onSend.mock.calls[0]?.[0]).toContain(path);
+		expect(onSend.mock.calls[0]?.[1]).toEqual([{ mimeType: "image/png", data: expect.any(String) }]);
+	});
+
+	it("retries the exact Codex attachment fallback after a lost response and remount", async () => {
+		const sessionId = "composer-codex-inline-retry";
+		const path = ".ao/attachments/legacy.bmp";
+		const stage = vi.fn().mockResolvedValue([path]);
+		const onSend = vi.fn().mockRejectedValueOnce(new Error("lost response")).mockResolvedValue(undefined);
+		let view = render(<ChatComposer parkUnsentSends={false} onSend={onSend} draftSessionId={sessionId} nativeImages limitCodexNativeImages onStageAttachments={stage} />);
+		try {
+			const field = screen.getByLabelText("Message the agent");
+			fireEvent.drop(field, { dataTransfer: { files: [new File(["BM"], "legacy.bmp", { type: "image/bmp" })], items: [{ kind: "file" }], getData: () => "" } });
+			await screen.findByLabelText("Remove legacy.bmp");
+			await typeInComposer(field, "inspect this");
+			fireEvent.keyDown(field, { key: "Enter" });
+			await screen.findByRole("button", { name: "Retry message safely" });
+			const first = onSend.mock.calls[0];
+			expect(first?.[0]).toContain(path);
+			expect(first?.[1]).toBeUndefined();
+			view.unmount();
+			purgeFileAttachmentsForSession(sessionId);
+			view = render(<ChatComposer parkUnsentSends={false} onSend={onSend} draftSessionId={sessionId} nativeImages onStageAttachments={stage} />);
+			await userEvent.click(await screen.findByRole("button", { name: "Retry message safely" }));
+			await waitFor(() => expect(onSend).toHaveBeenCalledTimes(2));
+			expect(onSend.mock.calls[1]).toEqual(first);
+		} finally {
+			view.unmount();
+		}
+	});
+
 	it("stages non-images by path without sending them as native image blocks", async () => {
 		const stage = vi.fn().mockResolvedValue([
 			".ao/attachments/attachment-native.png",

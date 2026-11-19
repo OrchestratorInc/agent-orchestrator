@@ -359,10 +359,18 @@ func turnInput(msg ports.ChatUserMessage) ([]codexproto.UserInput, error) {
 	for _, item := range msg.Content {
 		switch item.Type {
 		case "image":
-			if item.Data == "" || !strings.HasPrefix(strings.ToLower(item.MIMEType), "image/") {
-				return nil, fmt.Errorf("image requires data and an image MIME type")
+			if item.Data == "" {
+				return nil, errors.New("image requires data")
 			}
-			url := "data:" + item.MIMEType + ";base64," + item.Data
+			mimeType := strings.ToLower(strings.TrimSpace(item.MIMEType))
+			switch mimeType {
+			case "image/jpg":
+				mimeType = "image/jpeg"
+			case "image/png", "image/jpeg", "image/gif", "image/webp":
+			default:
+				return nil, fmt.Errorf("unsupported Codex image MIME type %q", item.MIMEType)
+			}
+			url := "data:" + mimeType + ";base64," + item.Data
 			input = append(input, codexproto.UserInput{Type: codexproto.UserInputTypeImage, URL: &url})
 		default:
 			return nil, fmt.Errorf("unsupported chat content type %q", item.Type)

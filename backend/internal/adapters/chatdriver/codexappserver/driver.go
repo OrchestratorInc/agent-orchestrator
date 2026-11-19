@@ -158,11 +158,9 @@ func capabilities() ports.ChatCapabilities {
 		// interrupt-and-resend, which throws the turn's context and in-flight work
 		// away.
 		ports.ChatCapabilitySteer: true,
-		// Native image prompts. turn/start and turn/steer take the same input_image
-		// URL shape, and the steer path carrying it was driven against a live
-		// app-server (TestLiveSteerKeepsTheTurnAndItsWork, codex-cli 0.146.0);
-		// turnInput builds both payloads from that one conversion. Without this a
-		// Codex chat can only ever see an image as a staged file path.
+		// Native image prompts use the generated UserInputTypeImage URL shape for
+		// both turn/start and turn/steer. Scripted tests cover the wire shape;
+		// TestLiveTurnCarriesNativeImages separately checks real provider delivery.
 		ports.ChatCapabilityImages: true,
 	}
 }

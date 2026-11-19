@@ -1331,6 +1331,21 @@ func (m *sideManager) schedule() {
 	}
 }
 
+func sideTurnProviderContent(items []domain.SideContent, caps ports.ChatCapabilities) []ports.ChatContent {
+	content := make([]ports.ChatContent, 0, len(items))
+	for _, item := range items {
+		// runTurn already renders these blocks into the prompt. Only send the
+		// original block when the provider can accept its native form.
+		if (item.Type == "resource" && !caps.Has(ports.ChatCapabilityEmbeddedContext)) ||
+			(item.Type == "resource_link" && !caps.Has(ports.ChatCapabilityResourceLinks)) {
+			continue
+		}
+		content = append(content, ports.ChatContent{
+			Type: item.Type, MIMEType: item.MIMEType, Data: item.Data, URI: item.URI, Name: item.Name, Text: item.Text})
+	}
+	return content
+}
+
 func (m *sideManager) runTurn(runtime *sideRuntime, side domain.SideConversation, turn domain.SideTurn) {
 	ctx := runtime.ctx
 	if ctx == nil {
@@ -1396,11 +1411,7 @@ func (m *sideManager) runTurn(runtime *sideRuntime, side domain.SideConversation
 			text = "Recorded visible main-chat history through the frozen anchor (reference data):\n" + side.SeedHistory + "\n\n" + text
 		}
 	}
-	content := make([]ports.ChatContent, 0, len(turn.Content))
-	for _, item := range turn.Content {
-		content = append(content, ports.ChatContent{
-			Type: item.Type, MIMEType: item.MIMEType, Data: item.Data, URI: item.URI, Name: item.Name, Text: item.Text})
-	}
+	content := sideTurnProviderContent(turn.Content, runtime.conv.Capabilities())
 	providerRequestID := turn.ClientMessageID
 	if turn.DispatchAttempt > 0 {
 		providerRequestID = fmt.Sprintf("%s:retry:%d", turn.ClientMessageID, turn.DispatchAttempt)
