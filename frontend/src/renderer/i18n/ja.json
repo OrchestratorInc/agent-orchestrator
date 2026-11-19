@@ -3021,8 +3021,6 @@
 	"settings.help": "Help",
 	"settings.diagnostics": "診断",
 	"settings.diagnosticsToggleHint": "セッションカードとボードにメモリと CPU の使用量を表示し、診断ページを表示します。",
-	"settings.sideChats": "サイドチャット",
-	"settings.sideChatsHint": "インスペクターで別のサイド会話を開き、/btw で質問します。",
 	"settings.splitPanes": "分割ペイン",
 	"settings.splitPanesHint": "タブを中央ペインの端にドラッグすると、現在のタブと並べて表示します。依頼したときに限り、セッション内のエージェントも分割を作成し、ターミナルでコマンドを実行できます。",
 	"settings.prView": "PR ビュー",

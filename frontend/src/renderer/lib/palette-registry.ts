@@ -112,7 +112,6 @@ const SETTINGS_ENTRIES: SettingsEntry[] = [
 	{ id: "session-interface", section: "general", label: "settings.sessionInterface.label", keywords: ["chat or terminal", "default view"] },
 	{ id: "default-editor", section: "general", label: "settings.defaultEditor.label", keywords: ["preferred editor", "ide", "vscode"] },
 	{ id: "chat-send-key", section: "general", label: "settings.chatSendKey.label", keywords: ["enter to send", "newline", "submit"] },
-	{ id: "side-chats", section: "general", label: "settings.sideChats", keywords: ["side chat", "secondary chat"] },
 	{ id: "version-refresh", section: "general", label: "settings.versionRefresh.label", keywords: ["auto upgrade sessions"] },
 	{ id: "session-retention", section: "general", label: "settings.sessionRetention.label", keywords: ["retention", "cleanup", "purge"] },
 	{ id: "terminal-shell", section: "general", label: "settings.terminalShell.label", keywords: ["zsh", "bash", "fish", "powershell", "shell path"] },
@@ -171,7 +170,6 @@ const TOGGLES = {
 	"copy-on-select": (on: boolean) => useUiStore.getState().setTerminalCopyOnSelect(on),
 	sound: (on: boolean) => void useSoundNotificationsStore.getState().setEnabled(on),
 	"developer-mode": (on: boolean) => useUiStore.getState().setDeveloperMode(on),
-	"side-chats": (on: boolean) => useUiStore.getState().setSideChats(on),
 	"split-panes": (on: boolean) => useUiStore.getState().setSplitPanes(on),
 } satisfies Record<string, (on: boolean) => void>;
 export type ToggleId = keyof typeof TOGGLES;

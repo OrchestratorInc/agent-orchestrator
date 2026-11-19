@@ -3021,8 +3021,6 @@
 	"settings.help": "Help",
 	"settings.diagnostics": "Diagnose",
 	"settings.diagnosticsToggleHint": "Speicher- und CPU-Auslastung auf Sitzungskarten und im Board sowie die Diagnoseseite anzeigen.",
-	"settings.sideChats": "Seiten-Chats",
-	"settings.sideChatsHint": "Separate Seitenunterhaltungen im Inspektor öffnen und mit /btw eine Frage stellen.",
 	"settings.splitPanes": "Geteilte Bereiche",
 	"settings.splitPanesHint": "Ziehe einen Tab an einen Rand des mittleren Bereichs, um ihn neben dem aktuellen anzuzeigen. Wenn du sie darum bittest, können Agenten in deinen Sitzungen auch Bereiche teilen und Befehle in Terminals ausführen.",
 	"settings.prView": "PR-Ansicht",

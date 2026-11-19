@@ -89,7 +89,7 @@ async function stubWorkspace(page: Page, id: string, fullText = after, selectedP
 }
 
 /** A Chat-mode worker with one changed file, opened on its Files tab. */
-async function openChatSession(page: Page, fullText = after, selectedPath = filePath, text = "", files = true, checkingSide = false) {
+async function openChatSession(page: Page, fullText = after, selectedPath = filePath, text = "", files = true) {
 	await installFakeAgent(page, { projectId, projectName: projectId, workers: [{ id: chatSession, provider: "codex", title: "Add to chat", mode: "chat" }] });
 	await page.route("http://127.0.0.1:8080/api/v1/**", async (route) => {
 		if (route.request().headers().accept?.includes("text/event-stream")) return quietEventStream(route);
@@ -110,11 +110,6 @@ async function openChatSession(page: Page, fullText = after, selectedPath = file
 	const sentToChat = await stubWorkspace(page, chatSession, fullText, selectedPath);
 	const inspector = files ? await openFilesTab(page, chatSession, projectId, selectedPath) : page.locator("#inspector");
 	if (!files) await page.goto(`${origin}/#/projects/${projectId}/sessions/${chatSession}`, { waitUntil: "domcontentloaded" });
-	if (checkingSide) await page.evaluate(async () => {
-		const modulePath = "/src/renderer/stores/ui-store.ts";
-		const { useUiStore } = await import(/* @vite-ignore */ modulePath);
-		useUiStore.setState({ sideChats: true });
-	});
 	const composer = page.getByRole("combobox", { name: "Message the agent" });
 	await expect(composer).toBeVisible();
 	return { inspector, composer, sentToChat };
@@ -260,7 +255,7 @@ test.describe("Add to chat from highlighted code", () => {
 	});
 
 	test("Escape dismisses a native mouse transcript selection without focusing the log", async ({ page }) => {
-		await openChatSession(page, after, filePath, "Select this sentence with the mouse to dismiss its toolbar.", false, true);
+		await openChatSession(page, after, filePath, "Select this sentence with the mouse to dismiss its toolbar.", false);
 		const body = page.getByRole("log", { name: "Conversation" }).locator("[data-chat-message-body]");
 		await expect(body).toBeVisible();
 		const box = (await body.boundingBox())!;
@@ -279,7 +274,7 @@ test.describe("Add to chat from highlighted code", () => {
 
 	test("a tall chat selection flips below its first line, pins after scrolling, and keeps the disabled side-chat label", async ({ page }) => {
 		const text = Array.from({ length: 80 }, (_, i) => `Selected parent context line ${i + 1}.`).join("\n\n");
-		await openChatSession(page, after, filePath, text, false, true);
+		await openChatSession(page, after, filePath, text, false);
 		const log = page.getByRole("log", { name: "Conversation" });
 		await expect(log.locator("[data-chat-message-body]")).toBeVisible();
 		await log.hover();

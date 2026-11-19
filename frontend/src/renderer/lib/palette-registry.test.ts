@@ -64,8 +64,9 @@ describe("palette registry", () => {
 			expect(regular).not.toContain(`setting:${id}`);
 			expect(developerMac).toContain(`setting:${id}`);
 		}
-		// Side chats left Developer Mode.
-		expect(regular).toContain("setting:side-chats");
+		// Side chats have no setting: they are always on.
+		expect(regular).not.toContain("setting:side-chats");
+		expect(developerMac).not.toContain("setting:side-chats");
 	});
 
 	it("lists only rows the settings pages still show", () => {

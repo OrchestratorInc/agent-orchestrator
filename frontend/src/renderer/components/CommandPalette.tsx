@@ -456,7 +456,6 @@ export const CommandPalette = memo(function CommandPalette() {
 	const renderMath = useUiStore((s) => s.renderMath);
 	const navigationGestures = useUiStore((s) => s.navigationGestures);
 	const terminalCopyOnSelect = useUiStore((s) => s.terminalCopyOnSelect);
-	const sideChats = useUiStore((s) => s.sideChats);
 	const soundNotifications = useSoundNotificationsStore((s) => s.enabled);
 	// Stay Awake, as the sidebar's switch: polled only while the palette is open.
 	const stayAwake = useStayAwake(isOpen && isMac);
@@ -494,10 +493,9 @@ export const CommandPalette = memo(function CommandPalette() {
 			"copy-on-select": terminalCopyOnSelect,
 			sound: soundNotifications,
 			"developer-mode": developerMode,
-			"side-chats": sideChats,
 			"split-panes": splitPanes,
 		},
-	}), [themePreference, themeStyle, locale, terminalClickMode, chatSendKeyMode, windowTranslucency, projectAvatars, renderMath, navigationGestures, terminalCopyOnSelect, soundNotifications, developerMode, sideChats, splitPanes]);
+	}), [themePreference, themeStyle, locale, terminalClickMode, chatSendKeyMode, windowTranslucency, projectAvatars, renderMath, navigationGestures, terminalCopyOnSelect, soundNotifications, developerMode, splitPanes]);
 
 	const rootItems = useMemo(
 		() => [

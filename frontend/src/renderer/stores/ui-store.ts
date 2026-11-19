@@ -240,8 +240,6 @@ export type UiState = {
 	remoteHosts: boolean;
 	/** Memory and CPU monitoring (card chips, memory light, Diagnostics page). Only takes effect in Developer mode. Default off. */
 	diagnostics: boolean;
-	/** Side chats in the inspector, /btw and "Add to side chat". Default on. */
-	sideChats: boolean;
 	/** Drag center tabs side by side into split panes. Only takes effect in Developer mode. Default off. */
 	splitPanes: boolean;
 	/** The PR view: a PR's own tab, its comments, stacks and actions. Only takes effect in Developer mode. Default off. */
@@ -332,7 +330,6 @@ export type UiState = {
 	setDeveloperMode: (enabled: boolean) => void;
 	setRemoteHosts: (enabled: boolean) => void;
 	setDiagnostics: (enabled: boolean) => void;
-	setSideChats: (enabled: boolean) => void;
 	setSplitPanes: (enabled: boolean) => void;
 	setPRView: (enabled: boolean) => void;
 	setWindowTranslucency: (enabled: boolean) => void;
@@ -427,7 +424,6 @@ export type OrchestratorReplacementFailure = {
 const sidebarStorageKey = "ao.sidebar.open";
 const remoteHostsStorageKey = "ao.remoteHosts";
 const diagnosticsStorageKey = "ao.diagnostics";
-const sideChatsStorageKey = "ao.sideChats";
 const splitPanesStorageKey = "ao.splitPanes";
 const prViewStorageKey = "ao.prView";
 const terminalCopyOnSelectStorageKey = "ao.terminalCopyOnSelect";
@@ -440,6 +436,9 @@ const projectAvatarsStorageKey = "ao.projectAvatars";
 // The retired Developer Mode opt-out from the old left sidebar. Ignored, and
 // cleared at startup so a stored "false" leaves nothing behind.
 const retiredNewSidebarDesignStorageKey = "ao.newSidebarDesign";
+// The retired Side chats switch. Side chats are always on; a stored "false" is
+// ignored and cleared at startup.
+const retiredSideChatsStorageKey = "ao.sideChats";
 function getLocalStorage() {
 	if (typeof window === "undefined" || !window.localStorage) return null;
 	return window.localStorage;
@@ -461,11 +460,6 @@ function initialRemoteHosts() {
 
 function initialDiagnostics() {
 	return getLocalStorage()?.getItem(diagnosticsStorageKey) === "true";
-}
-
-function initialSideChats() {
-	// On by default; only an explicit "off" from the settings switch is kept.
-	return getLocalStorage()?.getItem(sideChatsStorageKey) !== "false";
 }
 
 function initialTerminalClickMode(): TerminalClickMode {
@@ -552,7 +546,6 @@ export const useUiStore = create<UiState>((set, get) => ({
 	developerMode: initialDeveloperModeValue,
 	remoteHosts: initialRemoteHosts(),
 	diagnostics: initialDiagnostics(),
-	sideChats: initialSideChats(),
 	splitPanes: getLocalStorage()?.getItem(splitPanesStorageKey) === "true",
 	prView: getLocalStorage()?.getItem(prViewStorageKey) === "true",
 	windowTranslucency: readStoredWindowTranslucency(),
@@ -629,10 +622,6 @@ export const useUiStore = create<UiState>((set, get) => ({
 	setDiagnostics: (diagnostics) => {
 		getLocalStorage()?.setItem(diagnosticsStorageKey, String(diagnostics));
 		set({ diagnostics });
-	},
-	setSideChats: (sideChats) => {
-		getLocalStorage()?.setItem(sideChatsStorageKey, String(sideChats));
-		set({ sideChats });
 	},
 	setSplitPanes: (splitPanes) => {
 		getLocalStorage()?.setItem(splitPanesStorageKey, String(splitPanes));
@@ -1079,6 +1068,7 @@ export const useUiStore = create<UiState>((set, get) => ({
 
 try {
 	getLocalStorage()?.removeItem(retiredNewSidebarDesignStorageKey);
+	getLocalStorage()?.removeItem(retiredSideChatsStorageKey);
 } catch {
 	// Storage can be unavailable (private mode, quota); nothing to clean then.
 }

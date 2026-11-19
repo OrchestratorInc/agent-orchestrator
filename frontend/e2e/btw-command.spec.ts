@@ -42,9 +42,6 @@ for (const completion of ["Enter", "Tab"])
 				},
 			],
 		});
-		await page.addInitScript(() => {
-			localStorage.setItem("ao.sideChats", "true");
-		});
 		const sides = [
 			{
 				id: "existing",

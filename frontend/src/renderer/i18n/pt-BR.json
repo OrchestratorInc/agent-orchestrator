@@ -3085,8 +3085,6 @@
 	"settings.help": "Help",
 	"settings.diagnostics": "Diagnóstico",
 	"settings.diagnosticsToggleHint": "Mostra o uso de memória e CPU nos cartões de sessão e no quadro, além da página de Diagnóstico.",
-	"settings.sideChats": "Chats laterais",
-	"settings.sideChatsHint": "Abra conversas laterais separadas no inspetor e use /btw para fazer uma pergunta.",
 	"settings.splitPanes": "Painéis divididos",
 	"settings.splitPanesHint": "Arraste uma aba para uma borda do painel central para mostrá-la ao lado da atual. Quando você pedir, agentes das suas sessões também podem dividir painéis e executar comandos em terminais.",
 	"settings.prView": "Visualização de PR",

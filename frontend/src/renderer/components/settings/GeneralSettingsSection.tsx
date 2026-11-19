@@ -464,7 +464,6 @@ export function GeneralSettingsSection({
 						onChange={setChatSendKeyMode}
 					/>
 				</SettingsRow>
-				<SideChatsRow />
 				<VersionRefreshRow />
 				<SessionRetentionRow />
 				<TerminalShellRows />
@@ -610,21 +609,6 @@ function DiagnosticsRow() {
 	return (
 		<SettingsRow label={t("settings.diagnostics")} description={t("settings.diagnosticsToggleHint")}>
 			<Switch aria-label={t("settings.diagnostics")} checked={diagnostics} onCheckedChange={setDiagnostics} />
-		</SettingsRow>
-	);
-}
-
-/**
- * Side chats switch, on by default. Renderer state like Diagnostics: off hides
- * the inspector tab, /btw, and "Add to side chat".
- */
-function SideChatsRow() {
-	const { t } = useTranslation();
-	const sideChats = useUiStore((state) => state.sideChats);
-	const setSideChats = useUiStore((state) => state.setSideChats);
-	return (
-		<SettingsRow label={t("settings.sideChats")} description={t("settings.sideChatsHint")}>
-			<Switch aria-label={t("settings.sideChats")} checked={sideChats} onCheckedChange={setSideChats} />
 		</SettingsRow>
 	);
 }
