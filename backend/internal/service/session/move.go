@@ -486,7 +486,7 @@ func (s *Service) moveTranscriptInfo(ctx context.Context, rec domain.SessionReco
 	}
 	size, err := t.CloudTranscriptSize(ctx, rec, project)
 	switch {
-	case errors.Is(err, sessionmanager.ErrCloudTranscriptUnsupported):
+	case errors.Is(err, sessionmanager.ErrCloudTranscriptUnsupported), errors.Is(err, nativetransfer.ErrSegmented):
 		return MoveTranscriptInfo{Unavailable: "unsupported"}
 	case err != nil:
 		return MoveTranscriptInfo{Unavailable: "not_found"}
@@ -533,6 +533,8 @@ func (s *Service) MoveTranscript(ctx context.Context, id domain.SessionID) (Move
 	switch {
 	case errors.Is(err, sessionmanager.ErrCloudTranscriptUnsupported):
 		return MoveTranscript{}, apierr.Conflict("MOVE_TRANSCRIPT_UNSUPPORTED", "Orchestrator Cloud can resume only Claude Code and Codex conversations.", nil)
+	case errors.Is(err, nativetransfer.ErrSegmented):
+		return MoveTranscript{}, apierr.Conflict("MOVE_TRANSCRIPT_UNSUPPORTED", "The Codex conversation continues in segment files, which a move does not carry yet.", nil)
 	case errors.Is(err, nativetransfer.ErrTooLarge):
 		return MoveTranscript{}, apierr.Conflict("MOVE_TRANSCRIPT_TOO_LARGE", "The conversation is over Orchestrator Cloud's 64 MiB limit.", map[string]any{"detail": err.Error()})
 	case err != nil:

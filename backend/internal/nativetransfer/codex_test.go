@@ -3,6 +3,7 @@ package nativetransfer
 import (
 	"bytes"
 	"context"
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
@@ -85,5 +86,40 @@ func TestImportCodexPlacesTheRolloutWhereCodexResumesIt(t *testing.T) {
 				t.Errorf("the compressed copy stayed: %v", err)
 			}
 		})
+	}
+}
+
+// A thread continued in segment files is refused both ways rather than moved
+// without its later turns.
+func TestCodexSegmentedThreadIsRefused(t *testing.T) {
+	enc, _ := zstd.NewWriter(nil)
+	day := func(home, d string) string { return filepath.Join(home, "sessions", "2026", "10", d) }
+	segment := "rollout-2026-10-08T04-09-28-" + codexID + "_01a11885-8f9f-76d1-a6d0-3b60c45dc3a5.jsonl"
+	layouts := map[string]func(home string){
+		"compressed base and a later segment": func(home string) {
+			writeFile(t, filepath.Join(day(home, "04"), "rollout-2026-10-04T01-41-32-"+codexID+".jsonl.zst"),
+				string(enc.EncodeAll([]byte(codexRolloutText("/Users/me/work/app")), nil)))
+			writeFile(t, filepath.Join(day(home, "08"), segment), codexRolloutText("/Users/me/work/app"))
+		},
+		"segment only": func(home string) {
+			writeFile(t, filepath.Join(day(home, "08"), segment+".zst"), "x")
+		},
+	}
+	cwd := t.TempDir()
+	from := filepath.Join(t.TempDir(), "in.jsonl")
+	writeFile(t, from, codexRolloutText("/workspace/repository"))
+	for name, layout := range layouts {
+		home := t.TempDir()
+		layout(home)
+		var out bytes.Buffer
+		if _, err := WriteCodexRolloutForCloud(context.Background(), &out, CodexOptions{Home: home, NativeID: codexID}, 1<<20); !errors.Is(err, ErrSegmented) || out.Len() > 0 {
+			t.Errorf("%s: export = %v with %d bytes, want ErrSegmented", name, err, out.Len())
+		}
+		if _, err := ImportCodex(context.Background(), from, CodexImportOptions{Home: home, Cwd: cwd}); !errors.Is(err, ErrSegmented) {
+			t.Errorf("%s: import = %v, want ErrSegmented", name, err)
+		}
+		if _, err := os.Stat(filepath.Join(home, "sessions", "2026", "11")); !os.IsNotExist(err) {
+			t.Errorf("%s: import placed a rollout beside the segments", name)
+		}
 	}
 }

@@ -15,10 +15,17 @@ import (
 	"time"
 
 	"github.com/klauspost/compress/zstd"
+
+	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/agent/nativeconfig"
 )
 
 // HarnessCodex is the harness id for Codex.
 const HarnessCodex = "codex"
+
+// ErrSegmented reports a Codex thread continued in segment files
+// (rollout-<time>-<id>_<segment>.jsonl). A move carries one rollout file, so
+// it refuses these rather than drop the later turns.
+var ErrSegmented = errors.New("nativetransfer: the Codex conversation continues in segment files, which a move does not carry")
 
 // CodexOptions selects a Codex conversation.
 type CodexOptions struct {
@@ -173,7 +180,8 @@ func codexSessionMeta(data []byte) (codexMeta, error) {
 }
 
 // findCodexRollout returns the path of id's rollout under <home>/sessions,
-// preferring a plain one, or "" when there is none.
+// preferring a plain one, or "" when there is none. A thread with segment
+// files is ErrSegmented.
 func findCodexRollout(ctx context.Context, home, id string) (string, error) {
 	sessions := filepath.Join(home, "sessions")
 	// An account home links its sessions to the computer's own; WalkDir does
@@ -181,8 +189,8 @@ func findCodexRollout(ctx context.Context, home, id string) (string, error) {
 	if resolved, err := filepath.EvalSymlinks(sessions); err == nil {
 		sessions = resolved
 	}
-	suffix := "-" + id + ".jsonl"
 	var plain, compressed string
+	segmented := false
 	err := filepath.WalkDir(sessions, func(p string, entry fs.DirEntry, err error) error {
 		if err != nil {
 			return err
@@ -190,16 +198,17 @@ func findCodexRollout(ctx context.Context, home, id string) (string, error) {
 		if err := ctx.Err(); err != nil {
 			return err
 		}
-		name := entry.Name()
-		if !entry.Type().IsRegular() || !strings.HasPrefix(name, "rollout-") {
+		if !entry.Type().IsRegular() || nativeconfig.CodexRolloutThread(p) != id {
 			return nil
 		}
-		switch {
-		case strings.HasSuffix(name, suffix):
-			plain = p
+		switch name := entry.Name(); {
+		case strings.Contains(name, id+"_"):
+			segmented = true
 			return fs.SkipAll
-		case strings.HasSuffix(name, suffix+".zst"):
+		case strings.HasSuffix(name, ".zst"):
 			compressed = p
+		default:
+			plain = p
 		}
 		return nil
 	})
@@ -208,6 +217,9 @@ func findCodexRollout(ctx context.Context, home, id string) (string, error) {
 	}
 	if err != nil {
 		return "", err
+	}
+	if segmented {
+		return "", ErrSegmented
 	}
 	if plain != "" {
 		return plain, nil
