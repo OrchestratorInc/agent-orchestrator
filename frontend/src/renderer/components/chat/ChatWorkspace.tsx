@@ -8,6 +8,7 @@ import "./chat-find.css";
 import { ForkableTurnContext, ForkTextCopyNotice, LatestForkTurnContext } from "../SessionForkControls";
 import type { ChatFileReference, OpenFileAnnotation } from "../../../shared/chat-file-reference";
 import { TurnWorkSummary } from "./TurnWorkSummary";
+import { HistoryAnchorSnapshot } from "./HistoryAnchorSnapshot";
 import { TurnSettleSnapshot } from "./TurnSettleSnapshot";
 import { useChatDraftTranslation } from "../../lib/chat-draft-messages";
 import { cloudAttachmentReference } from "../../lib/cloud-attachments";
@@ -3525,6 +3526,7 @@ export function Timeline({
 		isFlying,
 		isGliding,
 		reaim,
+		shift: shiftScroll,
 		endFlight,
 	} = useScrollFollow(getScroller);
 	// Set when the reader sends or jumps to the latest: the next layout glides there
@@ -4605,11 +4607,18 @@ export function Timeline({
 			if (!instance.scrollElement) return;
 			// A resize restores its anchor after the new row positions reach the DOM.
 			if (viewportResize.current) return;
-			// An instant write would abort our smooth glide (and land at a stale offset).
-			// Let the glide carry the adjustment: re-aim it at the new end instead. The
-			// next scroll event re-syncs the virtualizer's offset.
+			// While our smooth glide is in flight, writing the virtualizer's offset would
+			// abort it and land at a stale spot (its offset lags the animation). A plain
+			// write re-aims the glide at the new end instead. A size change above the view
+			// (adjustments) moves what is on screen, though: dropped, the reader sees the
+			// chat jump and then ride back down, so the view moves by that much from where
+			// the glide is now, and the glide goes on from there (shiftScroll). The next
+			// scroll event re-syncs the virtualizer's offset.
 			if (isFlying()) {
-				reaim();
+				if (adjustments !== 0 && !spacerTakesResize.current) {
+					shiftScroll(adjustments);
+					lastScrollTop.current = instance.scrollElement.scrollTop;
+				} else reaim();
 				return;
 			}
 			// Anchored to the end, the virtualizer moves the view by every change in the
@@ -5123,6 +5132,8 @@ export function Timeline({
 	// Keeps a settled turn's row still under a reader who scrolled up, while its rows
 	// re-measure (a reply leaving its streaming render, code highlighting landing).
 	const settleHold = useRef<{ observer: ResizeObserver; timer: number } | undefined>(undefined);
+	// How far the history anchor moved the view in the commit running now (see captureHistoryAnchor).
+	const historyShift = useRef(0);
 	const releaseSettleHold = useCallback(() => {
 		const hold = settleHold.current;
 		if (!hold) return;
@@ -5195,7 +5206,9 @@ export function Timeline({
 		let held: Element | undefined;
 		if (settle.following) {
 			const end = Math.max(0, node.scrollHeight - node.clientHeight);
-			const top = Math.min(settle.scrollTop, end);
+			// A reload that settles the turn can also re-page the history above it, which
+			// the history anchor just moved the view by (it runs first in the commit).
+			const top = Math.min(settle.scrollTop + historyShift.current, end);
 			if (Math.abs(node.scrollTop - top) >= 0.5) node.scrollTop = top;
 			markWritten(node.scrollTop);
 			lastScrollTop.current = node.scrollTop;
@@ -5247,6 +5260,48 @@ export function Timeline({
 			row.animate([{ transform: from }, { transform: "none" }], { duration: SETTLE_SLIDE_MS, easing: SETTLE_EASE });
 		});
 	}, [virtualized, virtualizer, spacerTakes, syncPromptSpacer, markWritten, updateScrollbar, releaseSettleHold]);
+
+	// Rows above the view come and go: an older page loads in, or a reload re-reads the
+	// chat's pages from its new newest row and drops the oldest ones (every send does
+	// this). The log has no scroll anchoring of its own (it is off for the prompt
+	// spacer), so whatever was added or dropped above would move the rows on screen:
+	// the reader would see some earlier part of the chat, then ride back down to the
+	// end. So hold the first rows they can see where they were. Several are noted, as
+	// a reload can re-key the first one (a turn whose prompt it dropped).
+	const captureHistoryAnchor = useCallback((): HistoryAnchor | undefined => {
+		const node = scroller.current;
+		const content = virtualContent.current;
+		if (!node || !content || !initialLayoutDone.current || pendingReading.current) return undefined;
+		const top = node.getBoundingClientRect().top;
+		const rows: HistoryAnchor = [];
+		for (const child of Array.from(content.children) as HTMLElement[]) {
+			const key = child.dataset.chatTurn;
+			if (!key) continue;
+			const rect = child.getBoundingClientRect();
+			// Above the view. A hidden chat measures zero everywhere and notes nothing.
+			if (rect.top + rect.height <= top) continue;
+			rows.push({ key, offset: rect.top - top });
+			if (rows.length === HISTORY_ANCHOR_ROWS) break;
+		}
+		return rows.length > 0 ? rows : undefined;
+	}, []);
+	const restoreHistoryAnchor = useCallback((rows: HistoryAnchor) => {
+		const node = scroller.current;
+		const content = virtualContent.current;
+		if (!node || !content) return;
+		const elements = new Map((Array.from(content.children) as HTMLElement[]).map((child) => [child.dataset.chatTurn, child]));
+		const row = rows.find((candidate) => elements.has(candidate.key));
+		if (!row) return;
+		const delta = elements.get(row.key)!.getBoundingClientRect().top - node.getBoundingClientRect().top - row.offset;
+		if (Math.abs(delta) < 0.5) return;
+		const before = node.scrollTop;
+		// Moves a glide in flight (a send) along with the view, so it carries on from here.
+		shiftScroll(delta);
+		historyShift.current = node.scrollTop - before;
+		queueMicrotask(() => { historyShift.current = 0; });
+		lastScrollTop.current = node.scrollTop;
+		updateScrollbar();
+	}, [shiftScroll, updateScrollbar]);
 
 	// A disclosure animation changes the content box but is not new conversation
 	// content. Re-measure it without re-pinning the viewport to the bottom; doing
@@ -5429,7 +5484,9 @@ export function Timeline({
 		// before they reach it. A history too short to scroll loads on its own
 		// (loadOlderToFill); the button above the first turn shows the loading state
 		// and retries a page that failed.
-		if (movedUp && !isOwnScroll(top) && top < node.clientHeight && hasOlder && !loadingOlder) onLoadOlder?.();
+		// A scroll that only clamps to the end after content shrank (a reload dropping
+		// the oldest rows) is not the reader moving up, and must not load a page above them.
+		if (movedUp && distance > 2 && !isOwnScroll(top) && top < node.clientHeight && hasOlder && !loadingOlder) onLoadOlder?.();
 		if (initialLayoutDone.current && !pendingReading.current) {
 			const row = pinnedRef.current ? undefined : virtualizer.getVirtualItemForOffset(top);
 			rememberReadingPosition(uiSessionId, row ? { key: row.key, offset: row.start - top } : undefined);
@@ -5657,6 +5714,8 @@ export function Timeline({
 				aria-label="Conversation"
 				style={virtualized ? { overflowAnchor: "none" } : undefined}
 			>
+				{/* Before the settle snapshot: its restore reads how far this one moved the view. */}
+				<HistoryAnchorSnapshot historyKey={`${oldestRow}:${hasOlder ? 1 : 0}`} capture={captureHistoryAnchor} restore={restoreHistoryAnchor} />
 				<TurnSettleSnapshot liveKey={groups.find((group) => group.live)?.key} capture={captureSettle} restore={restoreSettle} />
 				<div ref={scrollContent} className={cn("mx-auto flex w-full min-w-0 max-w-3xl flex-col gap-4.5", revealTranscript && "chat-transcript-reveal")}>
 					{annotationNavigationError ? <p role="status" className="text-xs text-muted-foreground">{annotationNavigationError}</p> : null}
@@ -6882,6 +6941,10 @@ function forkableGroup(group: TimelineGroup): boolean {
 	const state = group.outcome?.state;
 	return state === "completed" || state === "recovered";
 }
+
+/** The first rows the reader could see, top down, each with its distance from the view's top. */
+type HistoryAnchor = Array<{ key: string; offset: number }>;
+const HISTORY_ANCHOR_ROWS = 4;
 
 type SettleAnchor = {
 	turn: HTMLElement;
