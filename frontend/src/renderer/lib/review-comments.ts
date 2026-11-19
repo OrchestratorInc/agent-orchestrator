@@ -158,22 +158,35 @@ function prIdentities(ref: PRRef): Set<string> {
 	return ref.repo ? new Set([`${ref.repo.toLowerCase()}#${ref.number}`]) : new Set();
 }
 
-/**
- * The item that is the same PR as the target: an exact URL first, then the same
- * repository and number. A number alone pairs only when exactly one item has it
- * and one side names no repository (a forge the parser does not know).
- */
-function findPR<T>(target: PRRef, items: T[], ref: (item: T) => PRRef): T | undefined {
+/** The item with one of the target's URLs, or else its repository and number. */
+function findSamePR<T>(target: PRRef, items: T[], ref: (item: T) => PRRef): T | undefined {
 	const urls = new Set(target.urls.filter(Boolean));
 	const exact = items.find((item) => ref(item).urls.some((url) => url && urls.has(url)));
 	if (exact) return exact;
 	const ids = prIdentities(target);
-	const sameNumber = items.filter((item) => ref(item).number === target.number);
-	const sameRepo = sameNumber.find((item) => [...prIdentities(ref(item))].some((id) => ids.has(id)));
-	if (sameRepo) return sameRepo;
-	if (sameNumber.length !== 1) return undefined;
-	const [only] = sameNumber;
-	return ids.size === 0 || prIdentities(ref(only)).size === 0 ? only : undefined;
+	return items.find((item) => ref(item).number === target.number && [...prIdentities(ref(item))].some((id) => ids.has(id)));
+}
+
+/**
+ * Each target's item: exact URLs and same repository first, across every
+ * target, so a guess cannot take an item another PR names. A number alone then
+ * pairs what is left, only when one target and one item have it and one of the
+ * two names no repository (a forge the parser does not know).
+ */
+function pairPRs<T>(targets: PRRef[], items: T[], ref: (item: T) => PRRef): Array<T | undefined> {
+	const pairs = targets.map((target) => findSamePR(target, items, ref));
+	const taken = new Set(pairs.filter((item): item is T => item !== undefined));
+	targets.forEach((target, index) => {
+		if (pairs[index] !== undefined) return;
+		const rivals = targets.filter((other, at) => pairs[at] === undefined && other.number === target.number);
+		const candidates = items.filter((item) => !taken.has(item) && ref(item).number === target.number);
+		if (rivals.length !== 1 || candidates.length !== 1) return;
+		const only = candidates[0]!;
+		if (prIdentities(target).size > 0 && prIdentities(ref(only)).size > 0) return;
+		pairs[index] = only;
+		taken.add(only);
+	});
+	return pairs;
 }
 
 /** Completed Orchestrator passes with something to read, newest first. Falls back to the state's own runs against a daemon predating the runs list. */
@@ -201,10 +214,9 @@ export function buildReviewBlocks({
 	runs: ReviewRunFacts[];
 }): ReviewPRBlock[] {
 	const summaryRef = (summary: SessionPRSummary): PRRef => ({ urls: [summary.url, summary.htmlUrl], number: summary.number, repo: summary.repo });
-	const paired = openPRs.map((pr) => {
-		const target: PRRef = { urls: [pr.url], number: pr.number, repo: pr.repo };
-		return { pr, target, provider: findPR(target, providerPRs, summaryRef) };
-	});
+	const sessionTargets = openPRs.map((pr): PRRef => ({ urls: [pr.url], number: pr.number, repo: pr.repo }));
+	const summaries = pairPRs(sessionTargets, providerPRs, summaryRef);
+	const paired = openPRs.map((pr, index) => ({ pr, target: sessionTargets[index]!, provider: summaries[index] }));
 	// The SCM summary can report an open PR before the session's list does; it gets a card too.
 	const claimed = new Set(paired.map(({ provider }) => provider));
 	const unclaimed = providerPRs
@@ -217,8 +229,9 @@ export function buildReviewBlocks({
 	const repositoryOf = (pr: ReviewOpenPR) => pr.repo || prRepositoryFromUrl(pr.url) || prRepositoryPath(pr.url);
 	const repositories = new Set(all.map(({ pr }) => (repositoryOf(pr) || "").toLowerCase()).filter(Boolean));
 	const severalRepositories = repositories.size > 1;
-	return all.map(({ pr, target, provider }) => {
-		const aoState = findPR(target, reviewStates, (state) => ({ urls: [state.prUrl], number: state.prNumber }));
+	const states = pairPRs(all.map(({ target }) => target), reviewStates, (state) => ({ urls: [state.prUrl], number: state.prNumber }));
+	return all.map(({ pr, target, provider }, index) => {
+		const aoState = states[index];
 		const aoRuns = aoRunsFor(aoState, pr.url, runs);
 		const comments = buildComments(provider, aoRuns);
 		const reviewers = buildReviewers(provider, aoState, aoRuns);

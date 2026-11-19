@@ -368,6 +368,18 @@ describe("buildReviewBlocks", () => {
 		expect(block!.provider).toBeUndefined();
 	});
 
+	it("does not give a summary one PR names to another PR by its number", () => {
+		const opaque = "https://other-forge.example/pr/3";
+		const blocks = buildReviewBlocks({
+			openPRs: [{ url: PR_URL, number: 3 }, { url: opaque, number: 3 }],
+			providerPRs: [summary()],
+			reviewStates: [],
+			runs: [],
+		});
+		expect(blocks.map((block) => block.provider?.htmlUrl)).toEqual([PR_URL, undefined]);
+		expect(blocks[1]!.webUrl).toBe(opaque);
+	});
+
 	it("lists a state's own completed pass when the runs list holds only other PRs' runs", () => {
 		const block = blockFor({
 			states: [state({ latestRun: run({ id: "embedded", body: "From the state." }) })],
