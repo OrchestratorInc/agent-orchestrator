@@ -216,6 +216,7 @@ func TestCodexLoginChecksAnAPIKeyWithOpenAIFirst(t *testing.T) {
 		name       string
 		status     int // what OpenAI answers; 0 means unreachable
 		provider   string
+		config     string // a raw config.toml
 		wantErr    string
 		wantSaved  bool
 		wantAsked  bool
@@ -224,14 +225,22 @@ func TestCodexLoginChecksAnAPIKeyWithOpenAIFirst(t *testing.T) {
 		{name: "refused", status: http.StatusUnauthorized, wantErr: "OpenAI refused this API key (HTTP 401), so it was not saved", wantAsked: true},
 		{name: "accepted", status: http.StatusOK, wantSaved: true, wantAsked: true, wantOutput: "OpenAI accepted the key."},
 		{name: "another provider", status: http.StatusUnauthorized, provider: "azure", wantSaved: true, wantOutput: "Saved without checking"},
+		// A restricted key without Models: Read, or another org or region.
+		{name: "forbidden", status: http.StatusForbidden, wantSaved: true, wantAsked: true, wantOutput: "OpenAI answered HTTP 403, so Codex saves the key unchecked."},
+		{name: "openai_base_url", status: http.StatusUnauthorized, config: "openai_base_url = \"https://proxy.example.invalid/v1\"\n", wantSaved: true, wantOutput: "Saved without checking"},
+		{name: "profile", status: http.StatusUnauthorized, config: "profile = \"work\"\n\n[profiles.work]\nmodel_provider = \"azure\"\n", wantSaved: true, wantOutput: "Saved without checking"},
+		{name: "openai provider named", status: http.StatusUnauthorized, config: "model_provider = \"openai\"\n", wantErr: "OpenAI refused this API key (HTTP 401)", wantAsked: true},
 		{name: "unreachable", wantSaved: true, wantOutput: "Couldn't reach OpenAI to check the key"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			home := t.TempDir()
 			t.Setenv("CODEX_HOME", home)
 			t.Setenv("OPENAI_BASE_URL", "")
+			config := tc.config
 			if tc.provider != "" {
-				config := "model_provider = \"" + tc.provider + "\"\n\n[model_providers." + tc.provider + "]\nbase_url = \"https://example.invalid/openai/v1\"\n"
+				config = "model_provider = \"" + tc.provider + "\"\n\n[model_providers." + tc.provider + "]\nbase_url = \"https://example.invalid/openai/v1\"\n"
+			}
+			if config != "" {
 				if err := os.WriteFile(filepath.Join(home, "config.toml"), []byte(config), 0o600); err != nil {
 					t.Fatal(err)
 				}
