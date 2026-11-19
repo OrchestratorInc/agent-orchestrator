@@ -67,6 +67,12 @@ func TestMemcodeSolWorkspacePreparationAndConfirmedEffort(t *testing.T) {
 		{solTerminal, false},
 		{confirmation + "\n" + solTerminal, true},
 		{confirmation + "\n" + readyTerminal, false},
+		{confirmation + "\n" + readyTerminal + "\nmemcode · v0.50.0 · sol · clean · opus · allow-all", false},
+		{confirmation + "\n" + readyTerminal + "\nmemcode · v0.50.0 · sol · clean · opus · byok · ask", false},
+		{confirmation + "\n" + readyTerminal + "\nmemcode · v0.50.0 · topic · clean · sol · allow-all", true},
+		{confirmation + "\n" + readyTerminal + "\nmemcode · v0.50.0 · topic · clean · ↑10k ↓20 · ctx 1% · api.openai.com · sol · byok · ask", true},
+		{confirmation + "\n" + solTerminal + "\nmemcode · v0.50.0 · sol · clean · opus · auto", false},
+		{confirmation + "\n" + solTerminal + "\nmemcode · v0.50.0 · topic · clean · sol · 1 agent · ask", false},
 		{confirmation + "\nthinking effort → off\n" + solTerminal, false},
 		{confirmation + "\n" + strings.Replace(solTerminal, "Ask memcode…", "draft", 1), false},
 	} {

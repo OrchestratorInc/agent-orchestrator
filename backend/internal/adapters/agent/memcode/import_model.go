@@ -139,10 +139,27 @@ func memcodeSolEffortApplied(workspace, output string) bool {
 		}
 		if strings.HasPrefix(line, "memcode · ") {
 			model = ""
-			for _, field := range strings.Split(line, "·") {
-				if strings.TrimSpace(field) == "sol" {
-					model = "sol"
-				}
+			fields := strings.Split(line, "·")
+			for i := range fields {
+				fields[i] = strings.TrimSpace(fields[i])
+			}
+			// Native chrome.go appends model, optional BYOK badge, then mode.
+			// Branch/provider/metric fields before the model are not evidence.
+			// Active background-work badges are deliberately not guessed through.
+			if len(fields) < 3 {
+				continue
+			}
+			switch fields[len(fields)-1] {
+			case "ask", "auto", "allow-all":
+			default:
+				continue
+			}
+			index := len(fields) - 2
+			if fields[index] == "byok" {
+				index--
+			}
+			if index > 0 {
+				model = fields[index]
 			}
 		}
 	}
