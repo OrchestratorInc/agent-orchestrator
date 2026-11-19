@@ -2108,6 +2108,39 @@ func TestMarkTerminatedWaitsForEveryPendingSpawnReactivation(t *testing.T) {
 	}
 }
 
+func TestMarkTerminatedStopsWaitingForAStuckUsageReactivation(t *testing.T) {
+	defer func(wait time.Duration) { usageReactivationWait = wait }(usageReactivationWait)
+	usageReactivationWait = 50 * time.Millisecond
+	m, st, _ := newManager()
+	st.sessions["mer-1"] = domain.SessionRecord{
+		ID:           "mer-1",
+		ProjectID:    "mer",
+		IsTerminated: true,
+		Activity:     domain.Activity{State: domain.ActivityExited},
+		Metadata:     domain.SessionMetadata{RuntimeLaunchID: "launch-old"},
+	}
+	stuck := make(chan struct{})
+	usage := &fakeUsageLifecycle{fakeUsageFinalizer: fakeUsageFinalizer{store: st}, release: stuck}
+	m.SetUsageFinalizer(usage)
+	if err := m.MarkSpawned(ctx, "mer-1", domain.SessionMetadata{RuntimeLaunchID: "launch-new"}); err != nil {
+		t.Fatal(err)
+	}
+	terminated := make(chan error, 1)
+	go func() { terminated <- m.MarkTerminated(ctx, "mer-1") }()
+	select {
+	case err := <-terminated:
+		if err != nil {
+			t.Fatal(err)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("termination waited for a usage reactivation that never ended")
+	}
+	if usage.calls != 1 || !st.sessions["mer-1"].IsTerminated {
+		t.Fatalf("finalize calls=%d terminated=%v", usage.calls, st.sessions["mer-1"].IsTerminated)
+	}
+	close(stuck)
+}
+
 func TestApplyActivitySignalNativeSessionIDReactivatesUsageDiscovery(t *testing.T) {
 	m, st, _ := newManager()
 	rec := working("mer-1")

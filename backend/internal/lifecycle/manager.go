@@ -1673,6 +1673,10 @@ func (m *Manager) markSpawned(
 	return nil
 }
 
+// usageReactivationWait bounds how long termination waits for a spawn's usage
+// reactivation, so a stuck usage lookup cannot keep a session from stopping.
+var usageReactivationWait = 5 * time.Second
+
 // awaitUsageReactivation waits for a spawn's background usage reactivation, so
 // it cannot reopen a binding that termination has started to finalize.
 func (m *Manager) awaitUsageReactivation(ctx context.Context, id domain.SessionID) {
@@ -1682,9 +1686,13 @@ func (m *Manager) awaitUsageReactivation(ctx context.Context, id domain.SessionI
 	if done == nil {
 		return
 	}
+	timer := time.NewTimer(usageReactivationWait)
+	defer timer.Stop()
 	select {
 	case <-done:
 	case <-ctx.Done():
+	case <-timer.C:
+		slog.Default().Warn("lifecycle: finalizing usage before the spawn's usage reactivation ended", "session", id, "waited", usageReactivationWait)
 	}
 }
 
