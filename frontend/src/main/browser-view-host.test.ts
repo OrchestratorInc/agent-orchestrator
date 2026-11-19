@@ -7388,34 +7388,31 @@ describe("agent and person tabs", () => {
 		expect((await agentTabs()).tabs.map((tab) => tab.id)).toEqual(["t2"]);
 	});
 
-	it("clears the tab the preview loaded in, not the tab the agent moved on to", async () => {
+	it("clears nothing once the agent has moved on from the preview to other work", async () => {
 		const { host, invoke, views, viewId } = await open();
 		await invoke("browser:navigate", { viewId, url: "https://mine.example.test/" });
 		await invoke("browser:navigate", { viewId, url: "http://localhost:3000/", preview: true });
 		await host.execute("sess-1", "tab-new", { url: "https://agent.example.test/work" });
-		expect(views[2]!.webContents.getURL()).toBe("https://agent.example.test/work");
-
-		await invoke("browser:clear", viewId);
-		expect(views[1]!.webContents.getURL()).toBe("about:blank");
-		expect(views[2]!.webContents.getURL()).toBe("https://agent.example.test/work");
-		expect(views[0]!.webContents.getURL()).toBe("https://mine.example.test/");
-
-		// Nothing is left to clear: the agent's work stays.
+		views[1]!.webContents.loadURL.mockClear();
 		views[2]!.webContents.loadURL.mockClear();
+
+		// The agent's tab shows another site: it is not the preview, and its work stays.
 		await invoke("browser:clear", viewId);
+		expect(views[2]!.webContents.getURL()).toBe("https://agent.example.test/work");
 		expect(views[2]!.webContents.loadURL).not.toHaveBeenCalled();
+		expect(views[1]!.webContents.loadURL).not.toHaveBeenCalled();
+		expect(views[0]!.webContents.getURL()).toBe("https://mine.example.test/");
 	});
 
-	it("keeps the last preview's tab to clear when a preview address is rejected", async () => {
-		const { host, invoke, views, viewId } = await open();
+	it("still clears the last preview after a preview address is rejected", async () => {
+		const { invoke, views, viewId } = await open();
 		await invoke("browser:navigate", { viewId, url: "https://mine.example.test/" });
 		await invoke("browser:navigate", { viewId, url: "http://localhost:3000/", preview: true });
-		await host.execute("sess-1", "tab-new", { url: "https://agent.example.test/work" });
 		await expect(invoke("browser:navigate", { viewId, url: "file:///etc/hosts", preview: true })).rejects.toThrow();
 
 		await invoke("browser:clear", viewId);
 		expect(views[1]!.webContents.getURL()).toBe("about:blank");
-		expect(views[2]!.webContents.getURL()).toBe("https://agent.example.test/work");
+		expect(views[0]!.webContents.getURL()).toBe("https://mine.example.test/");
 	});
 
 	it("can clear the preview again after a clear that failed", async () => {
@@ -7511,6 +7508,44 @@ describe("agent and person tabs", () => {
 		expect(runAction.mock.calls.filter(([, action]) => action === "wait").length).toBeLessThanOrEqual(1);
 	});
 
+	it("reports a postcondition as unobservable when the click's tab closes a moment after the click", async () => {
+		const { host, invoke, runtime, views, viewId } = await open();
+		await host.execute("sess-1", "open", { url: "https://agent.example.test/" });
+		await invoke("browser:openTab", { viewId, url: "https://mine.example.test/" });
+		const runAction = vi.mocked(runtime.runAction);
+		const original = runAction.getMockImplementation()!;
+		let clicked = false;
+		runAction.mockImplementation(async (sessionId, action, args, provider, signal) => {
+			if (action === "snapshot")
+				return { snapshot: '- button "Done" [ref=e2]', refs: { e2: { role: "button", name: "Done" } } };
+			if (action === "click") {
+				clicked = true;
+				return {};
+			}
+			if (action === "wait" && clicked) {
+				// The page's window.close() lands while the watch runs.
+				const page = views[0] as unknown as { webContents?: unknown; listeners: Map<string, () => void> };
+				const destroyed = page.listeners.get("destroyed")!;
+				page.webContents = undefined;
+				destroyed();
+				throw { code: "TARGET_CLOSED", message: "Target closed" };
+			}
+			if (action === "wait") throw { code: "TIMEOUT", message: "not yet" };
+			return original(sessionId, action, args, provider, signal);
+		});
+
+		const result = await host.execute("sess-1", "act", {
+			instruction: "click Done",
+			postcondition: { kind: "url", value: "https://agent.example.test/done", timeoutMs: 500 },
+		});
+		expect(result).toMatchObject({
+			outcome: "matched",
+			inputDispatched: true,
+			tabClosed: true,
+			postcondition: { status: "unobservable", kind: "url", reason: "tab-closed" },
+		});
+	});
+
 	it("counts the person's click in one of the agent's tabs while the agent's input goes to another", async () => {
 		const { host, runtime, views, tabs, personClicks } = await open();
 		await host.execute("sess-1", "open", { url: "https://agent.example.test/" });
@@ -7586,7 +7621,6 @@ describe("agent and person tabs", () => {
 		await tabHost.invoke("browser:openTab", { viewId, url: "https://mine.example.test/" });
 		const bridge = new AgentBrowserCDPBridge(providerOf(tabHost.runtime));
 		const socket = new WebSocket(await bridge.start());
-		await new Promise<void>((resolve, reject) => { socket.once("open", () => resolve()); socket.once("error", reject); });
 		let id = 0;
 		const rpc = (method: string, params?: Record<string, unknown>) =>
 			new Promise<{ result?: Record<string, unknown>; error?: { message: string } }>((resolve) => {
@@ -7601,6 +7635,8 @@ describe("agent and person tabs", () => {
 				socket.send(JSON.stringify({ id: requestId, method, params }));
 			});
 		try {
+			// Inside the try: a failed handshake still closes the socket and the bridge.
+			await new Promise<void>((resolve, reject) => { socket.once("open", () => resolve()); socket.once("error", reject); });
 			const listed = await rpc("Target.getTargets");
 			expect((listed.result!.targetInfos as Array<{ targetId: string }>).map((info) => info.targetId)).toEqual(["t1"]);
 			for (const targetId of ["t2"]) {
