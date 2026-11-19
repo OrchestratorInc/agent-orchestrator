@@ -1,6 +1,7 @@
 package daemon
 
 import (
+	"context"
 	"encoding/json"
 	"testing"
 
@@ -16,6 +17,27 @@ type reportActivityRecorder struct {
 func (r *reportActivityRecorder) SessionActivityChanged(state domain.ActivityState, terminated bool) {
 	r.states = append(r.states, state)
 	r.terminated = append(r.terminated, terminated)
+}
+
+type startupReportCoordinator struct {
+	reportActivityRecorder
+	broadcaster *cdc.Broadcaster
+}
+
+func (c *startupReportCoordinator) Start(context.Context) <-chan struct{} {
+	// Model a worker stopping after the first scan while Start is returning.
+	c.broadcaster.Publish(cdc.Event{Type: cdc.EventSessionUpdated, Payload: json.RawMessage(`{"id":"w","activity":"idle"}`)})
+	return nil
+}
+
+func TestStartReportCoordinatorForwardsActivityDuringStartup(t *testing.T) {
+	broadcaster := cdc.NewBroadcaster()
+	coordinator := &startupReportCoordinator{broadcaster: broadcaster}
+	_, unsubscribe := startReportCoordinator(t.Context(), broadcaster, coordinator)
+	defer unsubscribe()
+	if len(coordinator.states) != 1 || coordinator.states[0] != domain.ActivityIdle {
+		t.Fatalf("relayed startup activity = %v, want [idle]", coordinator.states)
+	}
 }
 
 func TestForwardReportActivityRelaysSessionUpdates(t *testing.T) {

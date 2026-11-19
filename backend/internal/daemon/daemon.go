@@ -846,8 +846,7 @@ func Run(buildVersion string) (retErr error) {
 		Delivery: reportSemanticDelivery{chat: chatSvc, sessions: reportSessions, store: store},
 	})
 	chatSvc.SetReportCoordinator(reportCoordinator)
-	reportDeliveryDone := reportCoordinator.Start(ctx)
-	unsubscribeReportActivity := cdcPipe.Broadcaster.Subscribe(forwardReportActivity(reportCoordinator))
+	reportDeliveryDone, unsubscribeReportActivity := startReportCoordinator(ctx, cdcPipe.Broadcaster, reportCoordinator)
 	defer func() {
 		unsubscribeReportActivity()
 		stop()
