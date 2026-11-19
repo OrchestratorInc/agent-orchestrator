@@ -87,18 +87,24 @@ it.each(["ios", "android"])("offers one continuous selection across all response
 	}
 });
 
-it.each(["ios", "android"])("renders the agent reply as one in-place selection across headings, bullets, and code on %s", (os) => {
+it.each(["ios", "android"])("renders the agent reply's prose as one in-place selection, with code in its own card, on %s", (os) => {
 	platform.OS = os;
+	const onAddToChat = vi.fn();
 	let renderer!: ReactTestRenderer;
 	try {
-		act(() => { renderer = create(<ChatMarkdown continuousSelection text={[
+		act(() => { renderer = create(<ChatLinkProvider onLinkOpen={vi.fn()} onAddToChat={onAddToChat}><ChatMarkdown continuousSelection selectionSource={{ conversationId: "c", messageId: "m", revision: 1 }} text={[
 			"# Release steps", "", "Build the app.", "", "- Check iOS", "- Check Android", "",
 			"```sh", "npm test", "```",
-		].join("\n")} />); });
-		const selectable = renderer.root.findAll((node) => node.props.selectable === true);
-		expect(selectable).toHaveLength(1);
-		expect(selectable[0].props.uiTextView).toBe(true);
-		expect(textOf(selectable[0])).toBe("Release steps\n\nBuild the app.\n\n• Check iOS\n• Check Android\n\nsh\nnpm test");
+		].join("\n")} /></ChatLinkProvider>); });
+		const selectable = renderer.root.findAll((node) => node.props.selectable === true && node.props.uiTextView === true);
+		expect(selectable.map(textOf)).toEqual(["Release steps\n\nBuild the app.\n\n• Check iOS\n• Check Android", "npm test"]);
+		// The fence is a card with the desktop's controls, not monospace prose.
+		expect(renderer.root.findAll((node) => node.props.accessibilityLabel === "Copy code")).toHaveLength(1);
+		// Its text can still be quoted into the chat, with the message as its source.
+		const code = selectable[1];
+		expect(code.props.addToChatEnabled).toBe(true);
+		act(() => code.props.onAddToChat({ nativeEvent: { text: "npm test" } }));
+		expect(onAddToChat).toHaveBeenCalledWith("npm test", { conversationId: "c", messageId: "m", revision: 1 });
 		act(() => renderer.unmount());
 	} finally {
 		platform.OS = "ios";
@@ -461,4 +467,53 @@ describe("inline Markdown nested in emphasis", () => {
 		expect(links(renderer).map(textOf)).toEqual(["new"]);
 		act(() => renderer.unmount());
 	});
+});
+
+it("draws nested and numbered list items in a reply with their markers and the source's numbers", () => {
+	let renderer!: ReactTestRenderer;
+	act(() => { renderer = create(<ChatMarkdown continuousSelection text={"6. Sixth\n7. Seventh\n   - detail\n     - finer"} />); });
+	const [text] = renderer.root.findAll((node) => node.props.selectable === true).map(textOf);
+	expect(text).toBe("6. Sixth\n7. Seventh\n ◦ detail\n  ▪ finer");
+	act(() => renderer.unmount());
+});
+
+it("gives a quote and a rule in a reply surfaces of their own between the prose", () => {
+	let renderer!: ReactTestRenderer;
+	act(() => { renderer = create(<ChatMarkdown continuousSelection text={"Before.\n\n> Quoted **words**\n\n---\n\nAfter."} />); });
+	expect(renderer.root.findAll((node) => node.props.selectable === true).map(textOf)).toEqual(["Before.", "Quoted words", "After."]);
+	const quote = renderer.root.find((node) => (node.type as string) === "View" && [node.props.style].flat().some((style) => style?.borderLeftWidth));
+	expect(textOf(quote as never)).toBe("Quoted words");
+	act(() => renderer.unmount());
+});
+
+it("reads backslash escapes, bold italics, and ends a bare address before its sentence's punctuation", () => {
+	const onLinkOpen = vi.fn();
+	let renderer!: ReactTestRenderer;
+	act(() => { renderer = create(<ChatLinkProvider onLinkOpen={onLinkOpen}><ChatMarkdown text={"Use \\*args and ***both***. See https://example.com/a_(b)."} /></ChatLinkProvider>); });
+	const selectable = renderer.root.find((node) => node.props.selectable === true);
+	expect(textOf(selectable)).toBe("Use *args and both. See https://example.com/a_(b).");
+	const link = renderer.root.find((node) => node.props.accessibilityRole === "link");
+	act(() => link.props.onPress());
+	expect(onLinkOpen).toHaveBeenCalledWith("https://example.com/a_(b)");
+	const both = renderer.root.find((node) => (node.type as string) === "UITextView" && node.children.includes("both"));
+	expect(both.props.style).toEqual([expect.objectContaining({ fontWeight: "600" }), expect.objectContaining({ fontStyle: "italic" })]);
+	act(() => renderer.unmount());
+});
+
+it("steps headings down by level, keeping ## and ### semibold at prose size", () => {
+	let renderer!: ReactTestRenderer;
+	act(() => { renderer = create(<ChatMarkdown continuousSelection text={"# One\n\n## Two\n\n### Three\n\n#### Four"} />); });
+	const flat = (style: unknown) => Object.assign({}, ...[style].flat(Infinity).filter(Boolean));
+	const headings = ["One", "Two", "Three", "Four"].map((label) => flat(renderer.root.find((node) => (node.type as string) === "UITextView" && node.children.includes(label)).props.style));
+	expect(headings.map((style) => [style.fontSize, style.fontFamily])).toEqual([
+		[18, "DMSans_600SemiBold"], [16, "DMSans_600SemiBold"], [16, "DMSans_600SemiBold"], [14, "DMSans_600SemiBold"],
+	]);
+	act(() => renderer.unmount());
+});
+
+it("shows a streaming reply's unfinished bold as bold", () => {
+	let renderer!: ReactTestRenderer;
+	act(() => { renderer = create(<ChatMarkdown continuousSelection streaming text={"Working on **the fix"} />); });
+	expect(textOf(renderer.root.find((node) => node.props.selectable === true))).toBe("Working on the fix");
+	act(() => renderer.unmount());
 });
