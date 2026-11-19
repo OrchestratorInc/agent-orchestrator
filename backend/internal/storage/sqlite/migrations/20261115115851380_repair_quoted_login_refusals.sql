@@ -8,33 +8,54 @@
 -- left on the conversation if nothing has replaced it since.
 --
 -- A turn is one of these when its error contains the login advice and ends the
--- last answer the agent gave in that turn, ignoring spacing as the chat driver
--- does. A real refusal never shows its text as an answer: the adapter sends it
--- only as the turn's failure. An earlier answer that ended on the refusal text
--- doesn't count, since the refusal can follow it. The raw provider event archive
--- keeps what the adapter reported.
+-- last answer the agent gave in that turn, with no tool call after it, ignoring
+-- spacing as the chat driver does. A real refusal never shows its text as an
+-- answer: the adapter sends it only as the turn's failure. An earlier answer that
+-- ended on the refusal text doesn't count, since the refusal can follow it. The
+-- raw provider event archive keeps what the adapter reported.
 CREATE TEMP TABLE quoted_login_refusals AS
-SELECT t.id, t.conversation_id, t.error_message
-FROM conversation_turns t
-WHERE t.state = 'failed'
-  AND t.failure_code IN ('', 'auth_required')
-  AND instr(t.error_message, 'Please run /login') > 0
-  AND EXISTS (
-    SELECT 1
-    FROM conversation_messages m
-    WHERE m.turn_id = t.id
-      AND m.role = 'assistant'
+WITH RECURSIVE
+  -- What strings.Fields treats as space. The chat driver drops these from both
+  -- texts before it compares them.
+  spaces(step, ch) AS (VALUES
+    (1, char(0x09)), (2, char(0x0A)), (3, char(0x0B)), (4, char(0x0C)), (5, char(0x0D)),
+    (6, char(0x20)), (7, char(0x85)), (8, char(0xA0)), (9, char(0x1680)),
+    (10, char(0x2000)), (11, char(0x2001)), (12, char(0x2002)), (13, char(0x2003)),
+    (14, char(0x2004)), (15, char(0x2005)), (16, char(0x2006)), (17, char(0x2007)),
+    (18, char(0x2008)), (19, char(0x2009)), (20, char(0x200A)), (21, char(0x2028)),
+    (22, char(0x2029)), (23, char(0x202F)), (24, char(0x205F)), (25, char(0x3000))
+  ),
+  last_answers(id, conversation_id, error_message, answer, tail, step) AS (
+    SELECT t.id, t.conversation_id, t.error_message, m.text, t.error_message, 0
+    FROM conversation_turns t
+    JOIN conversation_messages m ON m.turn_id = t.id AND m.role = 'assistant'
+    WHERE t.state = 'failed'
+      AND t.failure_code IN ('', 'auth_required')
+      AND instr(t.error_message, 'Please run /login') > 0
       AND m.sequence = (
         SELECT max(last.sequence)
         FROM conversation_messages last
         WHERE last.turn_id = t.id
           AND last.role = 'assistant'
       )
-      AND substr(
-        replace(replace(replace(replace(m.text, ' ', ''), char(9), ''), char(10), ''), char(13), ''),
-        -length(replace(replace(replace(replace(t.error_message, ' ', ''), char(9), ''), char(10), ''), char(13), ''))
-      ) = replace(replace(replace(replace(t.error_message, ' ', ''), char(9), ''), char(10), ''), char(13), '')
-  );
+      -- Messages and activities share the conversation's sequence. The driver
+      -- stops reading the answer as the result once a tool call starts after it.
+      AND NOT EXISTS (
+        SELECT 1
+        FROM conversation_activities a
+        WHERE a.turn_id = t.id
+          AND a.kind IN ('command', 'file_change', 'mcp_tool')
+          AND a.sequence > m.sequence
+      )
+    UNION ALL
+    SELECT l.id, l.conversation_id, l.error_message, replace(l.answer, s.ch, ''), replace(l.tail, s.ch, ''), s.step
+    FROM last_answers l
+    JOIN spaces s ON s.step = l.step + 1
+  )
+SELECT id, conversation_id, error_message
+FROM last_answers
+WHERE step = (SELECT max(step) FROM spaces)
+  AND substr(answer, -length(tail)) = tail;
 
 -- The demand's reason is the error it was recorded from, and every refused turn
 -- records the demand again, so the demand belongs to the conversation's latest
