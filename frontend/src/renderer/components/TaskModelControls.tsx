@@ -1,26 +1,19 @@
 import type { ReactNode } from "react";
 import { useTranslation } from "react-i18next";
 import type { TaskComposerEffortControl, TaskComposerModelControl } from "@aoagents/product-ui";
-import { agentModelDisplayLabel, isConcreteModelID } from "../lib/agent-model-choices";
+import { agentModelDisplayLabel, isConcreteModelID, modelChoiceLabel } from "../lib/agent-model-choices";
+import { agentLabel } from "../lib/agent-options";
 import { fallbackEffort } from "../lib/effort";
-import { collapseModelVariants, findModelVariant, listsModelVariants, pickModelVariant } from "../lib/model-variants";
-import { ToggleRow } from "./chat/AgentSwitchPicker";
+import { listsModelVariants } from "../lib/model-variants";
+import { AgentModelPicker, type AgentSwitchProps, type PickerSource } from "./chat/AgentSwitchPicker";
 import { NativeModePicker } from "./NativeModePicker";
 import { AgentModelCombobox } from "./settings/AgentModelCombobox";
-import { EffortPicker, type EffortAvailability } from "./settings/EffortPicker";
+import { EffortPicker, formatEffortLabel, type EffortAvailability } from "./settings/EffortPicker";
 import { useModelTuning } from "./settings/ModelTuningControls";
-import { Gauge, Microchip, type AppIcon } from "@/components/app-icons";
-import { cn } from "../lib/utils";
-import { MENU_TRIGGER_CHROME, MenuTriggerLabel } from "./ui/option-menu";
+import { MENU_TRIGGER_CHROME } from "./ui/option-menu";
 
 // The agent, model and effort menus share one compact width.
 export const COMPOSER_MENU_WIDTH = "w-[min(14rem,calc(100vw-2rem))]! min-w-0! max-w-[calc(100vw-2rem)]!";
-const COMPOSER_CHIP = "composer-chip composer-toolbar-option w-fit";
-// In a form the pickers fill their column and match its selects.
-const FORM_FIELD_TRIGGER = cn(MENU_TRIGGER_CHROME, "h-control-form w-full justify-between rounded-md px-3 text-control");
-
-/** How a picker trigger looks outside the composer's chip row. */
-type TriggerAppearance = { triggerClassName?: string; icon?: AppIcon };
 
 export function TaskEffortPicker({
 	disabled,
@@ -31,9 +24,7 @@ export function TaskEffortPicker({
 	defaultEffort,
 	availability,
 	footer,
-	triggerClassName = COMPOSER_CHIP,
-	icon,
-}: TaskComposerEffortControl & TriggerAppearance & { defaultEffort?: string; availability: EffortAvailability; footer?: ReactNode }) {
+}: TaskComposerEffortControl & { defaultEffort?: string; availability: EffortAvailability; footer?: ReactNode }) {
 	return (
 		<EffortPicker
 			label={label}
@@ -43,8 +34,7 @@ export function TaskEffortPicker({
 			defaultEffort={defaultEffort}
 			availability={availability}
 			onChange={onChange}
-			icon={icon}
-			triggerClassName={triggerClassName}
+			triggerClassName="composer-chip composer-toolbar-option w-fit"
 			menuClassName={COMPOSER_MENU_WIDTH}
 			footer={footer}
 		/>
@@ -66,9 +56,7 @@ export function TaskModelPicker({
 	allowNativeSelection = false,
 	footer,
 	modelHint,
-	triggerClassName = COMPOSER_CHIP,
-	icon,
-}: TaskComposerModelControl & TriggerAppearance & {
+}: TaskComposerModelControl & {
 	onRefresh?: () => Promise<void>;
 	showFollowAgentAction: boolean;
 	hostId?: string;
@@ -85,11 +73,11 @@ export function TaskModelPicker({
 	if (agentId === "") {
 		return (
 			<span
-				className={cn(MENU_TRIGGER_CHROME, triggerClassName, "pointer-events-none cursor-not-allowed justify-start opacity-50")}
+				className={`${MENU_TRIGGER_CHROME} composer-chip composer-toolbar-option pointer-events-none w-fit cursor-not-allowed justify-start opacity-50`}
 				aria-disabled="true"
 				aria-label={t("newTask.model")}
 			>
-				<MenuTriggerLabel icon={icon}><span className="truncate text-settings-muted">{t("newTask.selectAgent")}</span></MenuTriggerLabel>
+				<span className="truncate text-settings-muted">{t("newTask.selectAgent")}</span>
 			</span>
 		);
 	}
@@ -102,7 +90,7 @@ export function TaskModelPicker({
 				onModeChange={onModeChange}
 				disabled={disabled}
 				showFollowAgentAction={showFollowAgentAction}
-				triggerClassName={triggerClassName}
+				triggerClassName="composer-chip composer-toolbar-option w-fit"
 				menuClassName={COMPOSER_MENU_WIDTH}
 			/>
 		);
@@ -145,62 +133,65 @@ export function TaskModelPicker({
 			onChange={selectCatalogModel}
 			compact
 			recentScope={agentId}
-			triggerClassName={triggerClassName}
+			triggerClassName="composer-chip composer-toolbar-option w-fit"
 			menuAlign="start"
 			menuClassName={COMPOSER_MENU_WIDTH}
-			renderTrigger={(label) => <MenuTriggerLabel icon={icon}><span className="min-w-0 truncate text-control text-foreground" title={label}>{label}</span></MenuTriggerLabel>}
+			renderTrigger={(label) => <span className="min-w-0 truncate text-control text-foreground" title={label}>{label}</span>}
 		/>
 	);
 }
 
-/** The automation form's model and effort pickers, with selection state owned by the caller. */
+/**
+ * The automation form's agent, model and effort as the chat composer's one picker,
+ * with selection state owned by the caller.
+ */
 export function TaskModelSelection(props: TaskComposerModelControl & {
 	effort: string;
 	onEffortChange: (value: string) => void;
 	onValidityChange: (valid: boolean) => void;
-	onRefresh: () => Promise<void>;
+	agentSwitch: AgentSwitchProps;
 }) {
 	const { t } = useTranslation();
-	const { catalog, value, effort, onEffortChange } = props;
+	const { agentId, catalog, value, mode, effort, onEffortChange } = props;
 	const models = catalog?.models;
 	const selectedModel = value || models?.find((item) => item.isDefault)?.id || "";
 	const { selected, invalidEffort } = useModelTuning({ models, model: selectedModel, effort, onEffortChange, onValidityChange: props.onValidityChange });
 	const options = selected?.efforts?.filter((level) => level && level.toLowerCase() !== "default") ?? [];
-	const families = listsModelVariants(props.agentId) ? collapseModelVariants((models ?? []).filter((item) => isConcreteModelID(item.id))) : undefined;
-	const cursorChoice = families ? findModelVariant(families, selectedModel) : undefined;
-	const pickVariant = (want: { effort?: string; thinking?: boolean }) => {
-		if (cursorChoice) {
-			props.onModelChange(pickModelVariant(cursorChoice.family, { ...cursorChoice.variant, ...want }).id);
-			onEffortChange("");
-		}
+	// An agent that picks its own model for each mode lists its modes as the models.
+	const modes = catalog?.selectionMode === "mode";
+	const defaultMode = modes ? models?.find((item) => item.isDefault && isConcreteModelID(item.id))?.id : undefined;
+	// Cursor folds effort and thinking into its model ids; the picker splits them back out.
+	const variants = listsModelVariants(agentId);
+	const listed = (models ?? []).filter((item) => isConcreteModelID(item.id)).map((item) => ({
+		id: item.id,
+		label: item.id === "auto" ? t("settings.models.autoRouteLabel") : agentModelDisplayLabel(agentId, modes ? modelChoiceLabel(item) : item.label),
+	}));
+	const shownId = modes ? mode || defaultMode : selectedModel;
+	const current: PickerSource = {
+		models: listed,
+		modelId: shownId,
+		modelLabel: agentId === "" ? t("newTask.selectAgent") : listed.find((item) => item.id === shownId)?.label ?? agentLabel(agentId),
+		onPickModel: modes
+			? (next) => { props.onModeChange(next === defaultMode ? "" : next); props.onModelChange(""); onEffortChange(""); }
+			: (next) => {
+				const picked = models?.find((item) => next ? item.id === next : item.isDefault);
+				props.onModelChange(next || picked?.id || "");
+				props.onModeChange("");
+				const levels = picked?.efforts ?? [];
+				onEffortChange(effort && levels.includes(effort) ? effort : picked?.defaultEffort || fallbackEffort(levels) || "");
+			},
+		efforts: modes || variants ? [] : options.map((level) => ({ value: level, label: formatEffortLabel(level, t) })),
+		// Unset follows the model's own default, which the picker names.
+		effort: effort || fallbackEffort(options, selected?.defaultEffort) || selected?.defaultEffort || undefined,
+		onPickEffort: (next) => {
+			// An effort edit must stay attached to the model whose levels were offered.
+			props.onModelChange(selectedModel);
+			props.onModeChange("");
+			onEffortChange(next || selected?.defaultEffort || "");
+		},
 	};
-	const availability: EffortAvailability = !selected || selected.efforts === undefined ? "unknown" : options.length ? "supported" : "unsupported";
 	return <>
-		<div className="grid min-w-0 auto-cols-fr grid-flow-col gap-2">
-			<TaskModelPicker {...props} value={selectedModel} showFollowAgentAction={true} triggerClassName={FORM_FIELD_TRIGGER} icon={Microchip}
-				onModelChange={(next) => {
-					const picked = models?.find((item) => next ? item.id === next : item.isDefault);
-					props.onModelChange(next || picked?.id || "");
-					props.onModeChange("");
-					const levels = picked?.efforts ?? [];
-					onEffortChange(effort && levels.includes(effort) ? effort : picked?.defaultEffort || fallbackEffort(levels) || "");
-				}}
-				onModeChange={(next) => { props.onModeChange(next); props.onModelChange(""); onEffortChange(""); }}
-			/>
-			<TaskEffortPicker id={`${props.id}-effort`} label={t("settings.models.effort")} disabled={props.disabled} triggerClassName={FORM_FIELD_TRIGGER} icon={Gauge}
-				options={cursorChoice ? cursorChoice.family.efforts : options}
-				value={cursorChoice ? cursorChoice.variant.effort ?? "" : effort || fallbackEffort(options, selected?.defaultEffort) || ""}
-				defaultEffort={cursorChoice ? undefined : selected?.defaultEffort}
-				availability={cursorChoice ? "supported" : availability}
-				onChange={cursorChoice ? (next) => pickVariant({ effort: next }) : (next) => {
-					// An effort edit must stay attached to the model whose levels were offered.
-					props.onModelChange(selectedModel);
-					props.onModeChange("");
-					onEffortChange(next || selected?.defaultEffort || "");
-				}}
-				footer={cursorChoice?.family.hasThinkingChoice ? <ToggleRow label={t("agentSwitch.thinking")} checked={cursorChoice.variant.thinking} onChange={(thinking) => pickVariant({ thinking })} /> : undefined}
-			/>
-		</div>
+		<AgentModelPicker currentHarness={agentId} current={current} agentSwitch={props.agentSwitch} disabled={props.disabled} loadingModels={props.fetching && !catalog} />
 		{invalidEffort ? <p role="alert" className="text-xs text-warning">{t("settings.models.unsupportedTuning", { role: "" })}</p> : null}
 	</>;
 }

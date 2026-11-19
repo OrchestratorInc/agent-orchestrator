@@ -83,6 +83,22 @@ async function openDetails(user: Pick<typeof userEvent, "click">, name: string) 
 	await user.click(screen.getByRole("button", { name: `Show details for ${name}` }));
 }
 
+// The automation form's one agent, model and effort picker, as in the composer.
+const PICKER = /Agent, model and reasoning effort/;
+type Clicker = Pick<typeof userEvent, "click">;
+
+/** The picker's Agent, Model or Effort row, with its menu open. */
+async function pickerRow(user: Clicker, dialog: HTMLElement, row: "Agent" | "Model" | "Effort") {
+	if (!screen.queryByRole("menuitem", { name: /^Agent/ })) await user.click(await within(dialog).findByRole("button", { name: PICKER }));
+	return screen.findByRole("menuitem", { name: new RegExp(`^${row}`) });
+}
+
+/** Picks one choice from the picker's Agent, Model or Effort row. */
+async function choose(user: Clicker, dialog: HTMLElement, row: "Agent" | "Model" | "Effort", choice: string | RegExp) {
+	await user.click(await pickerRow(user, dialog, row));
+	fireEvent.click(await screen.findByRole("menuitemradio", { name: choice }));
+}
+
 describe("AutomationsView", () => {
 	beforeEach(() => { mocks.workspaces = [{ id: "demo", name: "Demo" }]; mocks.defaultWorker = "codex"; mocks.defaultsLoaded = true; mocks.fallbackAmp = false; mocks.workerTuning = {}; mocks.baseTuning = {}; mocks.automations = []; mocks.runsError = null; mocks.runs = []; mocks.create.mockReset(); mocks.update.mockReset(); mocks.capture.mockReset(); });
 
@@ -151,8 +167,8 @@ describe("AutomationsView", () => {
 		await openBlankCreate(userEvent);
 
 		const dialog = screen.getByRole("dialog", { name: "New automation" });
-		expect(within(dialog).getByRole("combobox", { name: "Agent" })).toHaveTextContent("Codex");
-		expect(await within(dialog).findByRole("button", { name: "Model" })).toHaveTextContent("GPT-5");
+		expect(await pickerRow(userEvent, dialog, "Agent")).toHaveTextContent("Codex");
+		expect(await within(dialog).findByRole("button", { name: PICKER })).toHaveTextContent("GPT-5");
 		expect(screen.queryByRole("option", { name: "Project default" })).not.toBeInTheDocument();
 		expect(screen.queryByRole("combobox", { name: "Session kind" })).not.toBeInTheDocument();
 	});
@@ -168,10 +184,10 @@ describe("AutomationsView", () => {
 		renderView();
 		await openBlankCreate(user);
 		const dialog = screen.getByRole("dialog", { name: "New automation" });
-		await user.click(within(dialog).getByRole("combobox", { name: "Project" }));
-		expect(await screen.findByRole("option", { name: "Demo" })).toBeInTheDocument();
-		expect(screen.queryByRole("option", { name: "Fix the flaky test" })).not.toBeInTheDocument();
-		expect(screen.queryByRole("option", { name: "Cloud app" })).not.toBeInTheDocument();
+		await user.click(within(dialog).getByRole("button", { name: /^Project:/ }));
+		expect(await screen.findByRole("menuitem", { name: "Demo" })).toBeInTheDocument();
+		expect(screen.queryByRole("menuitem", { name: "Fix the flaky test" })).not.toBeInTheDocument();
+		expect(screen.queryByRole("menuitem", { name: "Cloud app" })).not.toBeInTheDocument();
 	});
 
 	it("edits an automation from its card action", async () => {
@@ -184,8 +200,8 @@ describe("AutomationsView", () => {
 		const dialog = screen.getByRole("dialog", { name: "Edit automation" });
 		expect(within(dialog).getByRole("textbox", { name: "Name" })).toHaveValue("Morning triage");
 		expect(within(dialog).getByRole("textbox", { name: "Prompt" })).toHaveValue("Review");
-		expect(within(dialog).getByRole("combobox", { name: "Project" })).toBeDisabled();
-		expect(within(dialog).getByRole("combobox", { name: "Agent" })).toHaveTextContent("Codex");
+		expect(within(dialog).getByRole("button", { name: /^Project:/ })).toBeDisabled();
+		expect(await pickerRow(userEvent, dialog, "Agent")).toHaveTextContent("Codex");
 		expect(within(dialog).getByLabelText("Time")).toHaveValue("09:30");
 
 		const name = within(dialog).getByRole("textbox", { name: "Name" });
@@ -215,18 +231,12 @@ describe("AutomationsView", () => {
 		renderView();
 		await openBlankCreate(user);
 		const dialog = screen.getByRole("dialog", { name: "New automation" });
-		await user.click(within(dialog).getByRole("combobox", { name: "Project" }));
-		await user.click(screen.getByRole("option", { name: "Demo" }));
+		await user.click(within(dialog).getByRole("button", { name: /^Project:/ }));
+		await user.click(screen.getByRole("menuitem", { name: "Demo" }));
 		await user.type(within(dialog).getByRole("textbox", { name: "Name" }), "Review");
 		await user.type(within(dialog).getByRole("textbox", { name: "Prompt" }), "Review the board");
-		await user.click(await within(dialog).findByRole("button", { name: "Model" }));
-		await user.click(screen.getByRole("menuitem", { name: "Capable" }));
-		// Model and effort fill the form's column like its selects, not the composer's chips.
-		expect(within(dialog).getByRole("button", { name: "Model" })).toHaveClass("w-full");
-		expect(within(dialog).getByRole("button", { name: "Effort" })).toHaveClass("w-full");
-		expect(within(dialog).getByRole("button", { name: "Model" })).not.toHaveClass("composer-chip");
-		await user.click(within(dialog).getByRole("button", { name: "Effort" }));
-		await user.click(await screen.findByRole("menuitemradio", { name: "Low" }));
+		await choose(user, dialog, "Model", /^Capable/);
+		await choose(user, dialog, "Effort", "Low");
 		await user.click(within(dialog).getByRole("button", { name: "Create automation" }));
 		expect(mocks.create).toHaveBeenCalledWith(expect.objectContaining({ model: "capable", effort: "low" }));
 	});
@@ -238,13 +248,11 @@ describe("AutomationsView", () => {
 		await openDetails(user, "Review");
 		await user.click(screen.getByRole("button", { name: "Edit Review" }));
 		const dialog = screen.getByRole("dialog", { name: "Edit automation" });
-		const picker = await within(dialog).findByRole("button", { name: "Model" });
+		const picker = await within(dialog).findByRole("button", { name: PICKER });
 		expect(picker).toHaveTextContent("Capable");
-		expect(within(dialog).getByRole("button", { name: "Effort" })).toHaveTextContent("High");
-		await user.click(picker);
-		await user.click(screen.getByRole("menuitem", { name: "Plain" }));
-		expect(picker).toHaveTextContent("Plain");
-		expect(within(dialog).queryByRole("button", { name: "Effort" })).not.toBeInTheDocument();
+		expect(picker).toHaveTextContent("High");
+		await choose(user, dialog, "Model", /^Plain/);
+		expect(picker).toHaveTextContent(/^Plain$/);
 		await user.click(within(dialog).getByRole("button", { name: "Save changes" }));
 		expect(mocks.update).toHaveBeenCalledWith({ id: "automation-1", body: expect.objectContaining({ model: "plain", effort: "" }) });
 	});
@@ -257,10 +265,8 @@ describe("AutomationsView", () => {
 		await user.click(screen.getByRole("button", { name: "Edit Review" }));
 		const dialog = screen.getByRole("dialog", { name: "Edit automation" });
 		await waitFor(() => expect(within(dialog).getByRole("button", { name: "Save changes" })).toBeDisabled());
-		await user.click(within(dialog).getByRole("combobox", { name: "Agent" }));
-		await user.click(screen.getByRole("option", { name: /Amp/ }));
-		await waitFor(() => expect(within(dialog).getByRole("button", { name: "Model" })).toHaveTextContent("Smart"));
-		expect(within(dialog).queryByRole("button", { name: "Effort" })).not.toBeInTheDocument();
+		await choose(user, dialog, "Agent", /Amp/);
+		await waitFor(() => expect(within(dialog).getByRole("button", { name: PICKER })).toHaveTextContent(/^Smart$/));
 		expect(within(dialog).getByRole("button", { name: "Save changes" })).toBeEnabled();
 		await user.click(within(dialog).getByRole("button", { name: "Save changes" }));
 		expect(mocks.update).toHaveBeenCalledWith({ id: "automation-1", body: expect.objectContaining({ harness: "amp", model: "", effort: "" }) });
@@ -273,8 +279,7 @@ describe("AutomationsView", () => {
 		await openDetails(user, "Review");
 		await user.click(screen.getByRole("button", { name: "Edit Review" }));
 		const dialog = screen.getByRole("dialog", { name: "Edit automation" });
-		await user.click(await within(dialog).findByRole("button", { name: "Model" }));
-		await user.click(screen.getByRole("menuitem", { name: "Capable" }));
+		await choose(user, dialog, "Model", /^Capable/);
 		await user.click(within(dialog).getByRole("button", { name: "Save changes" }));
 		expect(mocks.update).toHaveBeenCalledWith({ id: "automation-1", body: expect.objectContaining({ harness: "codex", model: "capable" }) });
 	});
@@ -288,11 +293,9 @@ describe("AutomationsView", () => {
 		await user.click(screen.getByRole("button", { name: "Edit Review" }));
 		const dialog = screen.getByRole("dialog", { name: "Edit automation" });
 		if (field === "effort") {
-			await user.click(await within(dialog).findByRole("button", { name: "Effort" }));
-			await user.click(screen.getByRole("menuitemradio", { name: "Low" }));
+			await choose(user, dialog, "Effort", "Low");
 		} else {
-			await user.click(await within(dialog).findByRole("button", { name: "Model" }));
-			await user.click(screen.getByRole("menuitem", { name: "Rush" }));
+			await choose(user, dialog, "Model", /^Rush/);
 		}
 		await user.click(within(dialog).getByRole("button", { name: "Save changes" }));
 		expect(mocks.update).toHaveBeenCalledWith({ id: "automation-1", body: expect.objectContaining({ harness: mocks.defaultWorker, [field]: field === "effort" ? "low" : "rush" }) });
@@ -305,18 +308,15 @@ describe("AutomationsView", () => {
 		const view = renderView();
 		await openBlankCreate(user);
 		const dialog = screen.getByRole("dialog", { name: "New automation" });
-		await user.click(within(dialog).getByRole("combobox", { name: "Project" }));
-		await user.click(screen.getByRole("option", { name: "Demo" }));
+		await user.click(within(dialog).getByRole("button", { name: /^Project:/ }));
+		await user.click(screen.getByRole("menuitem", { name: "Demo" }));
 		await user.type(within(dialog).getByRole("textbox", { name: "Name" }), "Review");
 		await user.type(within(dialog).getByRole("textbox", { name: "Prompt" }), "Review the board");
-		await user.click(await within(dialog).findByRole("button", { name: "Model" }));
-		await user.click(screen.getByRole("menuitem", { name: "Capable" }));
-		await user.click(within(dialog).getByRole("button", { name: "Effort" }));
-		await user.click(screen.getByRole("menuitemradio", { name: "Low" }));
+		await choose(user, dialog, "Model", /^Capable/);
+		await choose(user, dialog, "Effort", "Low");
 		mocks.defaultWorker = "amp";
 		view.rerender(<AutomationsView />);
-		await waitFor(() => expect(within(dialog).getByRole("button", { name: "Model" })).toHaveTextContent("Smart"));
-		expect(within(dialog).queryByRole("button", { name: "Effort" })).not.toBeInTheDocument();
+		await waitFor(() => expect(within(dialog).getByRole("button", { name: PICKER })).toHaveTextContent(/^Smart$/));
 		await user.click(within(dialog).getByRole("button", { name: "Create automation" }));
 		expect(mocks.create).toHaveBeenCalledWith(expect.objectContaining({ harness: "amp", model: "", mode: "", effort: "" }));
 	});
@@ -330,10 +330,9 @@ describe("AutomationsView", () => {
 		await openDetails(user, "Review");
 		await user.click(screen.getByRole("button", { name: "Edit Review" }));
 		const dialog = screen.getByRole("dialog", { name: "Edit automation" });
-		await waitFor(() => expect(within(dialog).getByRole("button", { name: "Model" })).toHaveTextContent("Capable"));
-		expect(within(dialog).getByRole("button", { name: "Effort" })).toHaveTextContent("Low");
-		await user.click(within(dialog).getByRole("button", { name: "Effort" }));
-		await user.click(screen.getByRole("menuitemradio", { name: "High" }));
+		await waitFor(() => expect(within(dialog).getByRole("button", { name: PICKER })).toHaveTextContent("Capable"));
+		expect(within(dialog).getByRole("button", { name: PICKER })).toHaveTextContent("Low");
+		await choose(user, dialog, "Effort", "High");
 		await user.click(within(dialog).getByRole("button", { name: "Save changes" }));
 		expect(mocks.update).toHaveBeenCalledWith({ id: "automation-1", body: expect.objectContaining({ harness: "codex", model: "capable", effort: "high" }) });
 	});
@@ -346,11 +345,11 @@ describe("AutomationsView", () => {
 		await openDetails(user, "Review");
 		await user.click(screen.getByRole("button", { name: "Edit Review" }));
 		const dialog = screen.getByRole("dialog", { name: "Edit automation" });
-		await waitFor(() => expect(within(dialog).getByRole("button", { name: "Model" })).toHaveTextContent("Project model"));
-		expect(within(dialog).getByRole("button", { name: "Effort" })).toHaveTextContent("Minimal");
-		await user.click(within(dialog).getByRole("button", { name: "Effort" }));
+		await waitFor(() => expect(within(dialog).getByRole("button", { name: PICKER })).toHaveTextContent("Project model"));
+		expect(within(dialog).getByRole("button", { name: PICKER })).toHaveTextContent("Minimal");
+		await user.click(await pickerRow(user, dialog, "Effort"));
 		expect(screen.queryByRole("menuitemradio", { name: "High" })).not.toBeInTheDocument();
-		await user.click(screen.getByRole("menuitemradio", { name: "Low" }));
+		fireEvent.click(screen.getByRole("menuitemradio", { name: "Low" }));
 		await user.click(within(dialog).getByRole("button", { name: "Save changes" }));
 		expect(mocks.update).toHaveBeenCalledWith({ id: "automation-1", body: expect.objectContaining({ harness: "codex", model: "project-model", effort: "low" }) });
 	});
@@ -363,7 +362,7 @@ describe("AutomationsView", () => {
 		await openDetails(user, "Review");
 		await user.click(screen.getByRole("button", { name: "Edit Review" }));
 		const dialog = screen.getByRole("dialog", { name: "Edit automation" });
-		await waitFor(() => expect(within(dialog).getByRole("button", { name: "Model" })).toHaveTextContent("Capable"));
+		await waitFor(() => expect(within(dialog).getByRole("button", { name: PICKER })).toHaveTextContent("Capable"));
 		await user.type(within(dialog).getByRole("textbox", { name: "Name" }), " renamed");
 		await user.click(within(dialog).getByRole("button", { name: "Save changes" }));
 		expect(mocks.update.mock.calls[0][0].body).not.toHaveProperty("model");
@@ -385,8 +384,8 @@ describe("AutomationsView", () => {
 		mocks.defaultWorker = "codex";
 		mocks.defaultsLoaded = true;
 		view.rerender(<AutomationsView />);
-		await waitFor(() => expect(within(dialog).getByRole("button", { name: "Model" })).toHaveTextContent("Capable"));
-		expect(within(dialog).getByRole("button", { name: "Effort" })).toHaveTextContent("Low");
+		await waitFor(() => expect(within(dialog).getByRole("button", { name: PICKER })).toHaveTextContent("Capable"));
+		expect(within(dialog).getByRole("button", { name: PICKER })).toHaveTextContent("Low");
 		expect(within(dialog).getByRole("button", { name: "Save changes" })).toBeEnabled();
 		await user.click(within(dialog).getByRole("button", { name: "Save changes" }));
 		expect(mocks.update).toHaveBeenCalledWith({ id: "automation-1", body: { displayName: "Review renamed", prompt: "Review" } });
@@ -401,15 +400,15 @@ describe("AutomationsView", () => {
 		await openDetails(user, "Review");
 		await user.click(screen.getByRole("button", { name: "Edit Review" }));
 		const dialog = screen.getByRole("dialog", { name: "Edit automation" });
-		expect(within(dialog).getByRole("combobox", { name: "Project" })).toHaveTextContent("missing");
+		expect(within(dialog).getByRole("button", { name: /^Project:/ })).toHaveTextContent("missing");
 		expect(within(dialog).getByRole("button", { name: "Save changes" })).toBeDisabled();
 		await user.type(within(dialog).getByRole("textbox", { name: "Name" }), " renamed");
 		// A settled error provides no defaults; the fallback and saved tuning remain.
 		mocks.defaultsLoaded = true;
 		view.rerender(<AutomationsView />);
 		await waitFor(() => expect(within(dialog).getByRole("button", { name: "Save changes" })).toBeEnabled());
-		expect(within(dialog).getByRole("button", { name: "Model" })).toHaveTextContent("Capable");
-		expect(within(dialog).getByRole("button", { name: "Effort" })).toHaveTextContent("Low");
+		expect(within(dialog).getByRole("button", { name: PICKER })).toHaveTextContent("Capable");
+		expect(within(dialog).getByRole("button", { name: PICKER })).toHaveTextContent("Low");
 		await user.click(within(dialog).getByRole("button", { name: "Save changes" }));
 		expect(mocks.update).toHaveBeenCalledWith({ id: "automation-1", body: { displayName: "Review renamed", prompt: "Review" } });
 	});
@@ -420,8 +419,8 @@ describe("AutomationsView", () => {
 		await openBlankCreate(user);
 
 		const dialog = screen.getByRole("dialog", { name: "New automation" });
-		await user.click(within(dialog).getByRole("combobox", { name: "Project" }));
-		await user.click(screen.getByRole("option", { name: "Demo" }));
+		await user.click(within(dialog).getByRole("button", { name: /^Project:/ }));
+		await user.click(screen.getByRole("menuitem", { name: "Demo" }));
 		await user.type(within(dialog).getByRole("textbox", { name: "Name" }), "Friday review");
 		await user.type(within(dialog).getByRole("textbox", { name: "Prompt" }), "Review the board");
 		await user.click(within(dialog).getByRole("combobox", { name: "Schedule" }));
@@ -450,8 +449,8 @@ describe("AutomationsView", () => {
 		expect(mocks.capture).toHaveBeenCalledWith("ao.automations.create_opened");
 
 		const dialog = screen.getByRole("dialog", { name: "New automation" });
-		await user.click(within(dialog).getByRole("combobox", { name: "Project" }));
-		await user.click(screen.getByRole("option", { name: "Demo" }));
+		await user.click(within(dialog).getByRole("button", { name: /^Project:/ }));
+		await user.click(screen.getByRole("menuitem", { name: "Demo" }));
 		await user.type(within(dialog).getByRole("textbox", { name: "Name" }), "Friday review");
 		await user.type(within(dialog).getByRole("textbox", { name: "Prompt" }), "Review the board");
 		await user.click(within(dialog).getByRole("button", { name: "Create automation" }));
@@ -469,8 +468,8 @@ describe("AutomationsView", () => {
 		await openBlankCreate(user);
 
 		const dialog = screen.getByRole("dialog", { name: "New automation" });
-		await user.click(within(dialog).getByRole("combobox", { name: "Project" }));
-		await user.click(screen.getByRole("option", { name: "Demo" }));
+		await user.click(within(dialog).getByRole("button", { name: /^Project:/ }));
+		await user.click(screen.getByRole("menuitem", { name: "Demo" }));
 		await user.type(within(dialog).getByRole("textbox", { name: "Name" }), "Friday review");
 		await user.type(within(dialog).getByRole("textbox", { name: "Prompt" }), "Review the board");
 		await user.click(within(dialog).getByRole("button", { name: "Create automation" }));
@@ -497,8 +496,8 @@ describe("AutomationsView", () => {
 		await openBlankCreate(user);
 
 		const dialog = screen.getByRole("dialog", { name: "New automation" });
-		await user.click(within(dialog).getByRole("combobox", { name: "Project" }));
-		await user.click(screen.getByRole("option", { name: "Demo" }));
+		await user.click(within(dialog).getByRole("button", { name: /^Project:/ }));
+		await user.click(screen.getByRole("menuitem", { name: "Demo" }));
 		await user.type(within(dialog).getByRole("textbox", { name: "Name" }), "Wednesday review");
 		await user.type(within(dialog).getByRole("textbox", { name: "Prompt" }), "Review the board");
 		await user.click(within(dialog).getByRole("combobox", { name: "Schedule" }));
@@ -602,7 +601,7 @@ describe("AutomationsView", () => {
 		await user.click(screen.getByRole("button", { name: "Edit Inherited worker" }));
 
 		const dialog = screen.getByRole("dialog", { name: "Edit automation" });
-		expect(within(dialog).getByRole("combobox", { name: "Agent" })).toHaveTextContent("Codex");
+		expect(await pickerRow(userEvent, dialog, "Agent")).toHaveTextContent("Codex");
 		const name = within(dialog).getByRole("textbox", { name: "Name" });
 		await user.clear(name);
 		await user.type(name, "Renamed inherited worker");
@@ -623,10 +622,9 @@ describe("AutomationsView", () => {
 
 		const dialog = screen.getByRole("dialog", { name: "New automation" });
 		expect(dialog.querySelector('select:not([aria-hidden="true"])')).toBeNull();
-		expect(within(dialog).getByRole("combobox", { name: "Project" })).toBeInTheDocument();
+		expect(within(dialog).getByRole("button", { name: /^Project:/ })).toBeInTheDocument();
 		expect(within(dialog).getByRole("combobox", { name: "Schedule" })).toBeInTheDocument();
-		expect(within(dialog).getByRole("combobox", { name: "Agent" })).toBeInTheDocument();
-		expect(await within(dialog).findByRole("button", { name: "Model" })).toHaveTextContent("GPT-5");
+		expect(await within(dialog).findByRole("button", { name: PICKER })).toHaveTextContent("GPT-5");
 		expect(view.container.querySelector('[data-slot="select-content"]')).toBeNull();
 	});
 
@@ -698,8 +696,8 @@ describe("AutomationsView", () => {
 		expect(within(dialog).getByLabelText("Time")).toHaveValue("09:00");
 		expect(within(dialog).queryByRole("combobox", { name: "Frequency" })).not.toBeInTheDocument();
 
-		await user.click(within(dialog).getByRole("combobox", { name: "Project" }));
-		await user.click(screen.getByRole("option", { name: "Demo" }));
+		await user.click(within(dialog).getByRole("button", { name: /^Project:/ }));
+		await user.click(screen.getByRole("menuitem", { name: "Demo" }));
 		const time = within(dialog).getByLabelText("Time");
 		await user.clear(time);
 		await user.type(time, "0815");
@@ -751,7 +749,7 @@ describe("AutomationsView", () => {
 		await user.click(screen.getByRole("button", { name: "Create automation" }));
 
 		const dialog = screen.getByRole("dialog", { name: "New automation" });
-		const project = within(dialog).getByRole("combobox", { name: "Project" });
+		const project = within(dialog).getByRole("button", { name: /^Project:/ });
 		expect(within(dialog).getByRole("alert")).toHaveTextContent("Complete the highlighted fields.");
 		expect(project).toHaveAttribute("aria-invalid", "true");
 		expect(project).toHaveAccessibleDescription("Select a project.");
@@ -766,10 +764,10 @@ describe("AutomationsView", () => {
 		await openBlankCreate(user);
 		await user.click(screen.getByRole("button", { name: "Create automation" }));
 
-		const project = screen.getByRole("combobox", { name: "Project" });
+		const project = screen.getByRole("button", { name: /^Project:/ });
 		expect(project).toHaveAttribute("aria-invalid", "true");
 		await user.click(project);
-		await user.click(screen.getByRole("option", { name: "Demo" }));
+		await user.click(screen.getByRole("menuitem", { name: "Demo" }));
 
 		expect(project).not.toHaveAttribute("aria-invalid");
 		expect(screen.queryByText("Select a project.")).not.toBeInTheDocument();
@@ -920,12 +918,10 @@ describe("automation starters", () => {
 		expect(mocks.create).not.toHaveBeenCalled();
 		expect(within(dialog).getByRole("textbox", { name: "Name" })).toHaveValue(label);
 		expect(within(dialog).getByRole("textbox", { name: "Prompt" })).toHaveValue(AUTOMATION_TEMPLATES[index].prompt);
-		await user.click(within(dialog).getByRole("combobox", { name: "Project" }));
-		await user.click(screen.getByRole("option", { name: "Demo" }));
-		await user.click(await within(dialog).findByRole("button", { name: "Model" }));
-		await user.click(screen.getByRole("menuitem", { name: "Capable" }));
-		await user.click(within(dialog).getByRole("button", { name: "Effort" }));
-		await user.click(screen.getByRole("menuitemradio", { name: "Low" }));
+		await user.click(within(dialog).getByRole("button", { name: /^Project:/ }));
+		await user.click(screen.getByRole("menuitem", { name: "Demo" }));
+		await choose(user, dialog, "Model", /^Capable/);
+		await choose(user, dialog, "Effort", "Low");
 		fireEvent.change(within(dialog).getByRole("textbox", { name: "Prompt" }), { target: { value: "My revised instructions" } });
 		await user.click(within(dialog).getByRole("button", { name: "Create automation" }));
 		expect(mocks.create).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({
@@ -942,8 +938,8 @@ describe("automation starters", () => {
 		const dialog = screen.getByRole("dialog");
 		expect(within(dialog).queryByRole("combobox", { name: "Start from" })).not.toBeInTheDocument();
 		expect(within(dialog).getByRole("textbox", { name: "Prompt" })).toHaveValue("");
-		await user.click(within(dialog).getByRole("combobox", { name: "Project" }));
-		await user.click(screen.getByRole("option", { name: "Demo" }));
+		await user.click(within(dialog).getByRole("button", { name: /^Project:/ }));
+		await user.click(screen.getByRole("menuitem", { name: "Demo" }));
 		fireEvent.change(within(dialog).getByRole("textbox", { name: "Name" }), { target: { value: "Custom" } });
 		fireEvent.change(within(dialog).getByRole("textbox", { name: "Prompt" }), { target: { value: "My task" } });
 		expect(within(dialog).queryByText(/purpose|more options/i)).not.toBeInTheDocument();
@@ -1002,8 +998,8 @@ describe("automation starters", () => {
 		renderView();
 		await user.click(screen.getByRole("button", { name: "PR review inbox" }));
 		const dialog = screen.getByRole("dialog");
-		await user.click(within(dialog).getByRole("combobox", { name: "Project" }));
-		await user.click(screen.getByRole("option", { name: "Demo" }));
+		await user.click(within(dialog).getByRole("button", { name: /^Project:/ }));
+		await user.click(screen.getByRole("menuitem", { name: "Demo" }));
 		fireEvent.change(within(dialog).getByRole("textbox", { name: "Prompt" }), { target: { value: "界".repeat(1366) } });
 		await user.click(within(dialog).getByRole("button", { name: "Create automation" }));
 		expect(mocks.create).not.toHaveBeenCalled();

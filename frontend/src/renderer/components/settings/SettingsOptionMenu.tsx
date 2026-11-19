@@ -41,6 +41,8 @@ export function SettingsOptionMenu<T extends string>({
 	triggerRef,
 	onCloseAutoFocus: onMenuCloseAutoFocus,
 	"aria-label": ariaLabel,
+	"aria-invalid": ariaInvalid,
+	"aria-describedby": ariaDescribedBy,
 }: {
 	value: T;
 	options: SettingsOption<T>[];
@@ -65,6 +67,9 @@ export function SettingsOptionMenu<T extends string>({
 	triggerRef?: Ref<HTMLButtonElement>;
 	onCloseAutoFocus?: (event: Event) => void;
 	"aria-label": string;
+	/** For a required form field: marks the trigger invalid and links its error. */
+	"aria-invalid"?: boolean;
+	"aria-describedby"?: string;
 }) {
 	const { t } = useTranslation();
 	const [search, setSearch] = useState("");
@@ -96,7 +101,7 @@ export function SettingsOptionMenu<T extends string>({
 			}}
 		>
 			<DropdownMenuTrigger asChild disabled={disabled}>
-				<SettingsMenuTrigger variant={triggerVariant} ref={triggerRef} className={triggerClassName} showCaret={showCaret} aria-label={ariaLabel}>
+				<SettingsMenuTrigger variant={triggerVariant} ref={triggerRef} className={triggerClassName} showCaret={showCaret} aria-label={ariaLabel} aria-invalid={ariaInvalid || undefined} aria-describedby={ariaDescribedBy}>
 					{renderTrigger ? (
 						renderTrigger(selected, placeholder)
 					) : (

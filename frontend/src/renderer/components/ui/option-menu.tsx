@@ -1,5 +1,5 @@
-import { createContext, forwardRef, useCallback, useContext, useRef, useState, type ButtonHTMLAttributes, type ReactNode } from "react";
-import { ChevronDown, ChevronRight, type AppIcon } from "@/components/app-icons";
+import { createContext, forwardRef, useCallback, useContext, useRef, useState, type ButtonHTMLAttributes } from "react";
+import { ChevronDown, ChevronRight } from "@/components/app-icons";
 import { DropdownMenu as DropdownMenuPrimitive } from "radix-ui";
 import { cn } from "../../lib/utils";
 import { GHOST_PILL_CLASS } from "./button";
@@ -69,17 +69,6 @@ export const OptionMenuTrigger = forwardRef<
 		</DropdownMenuPrimitive.Trigger>
 	);
 });
-
-/** A picker trigger's label, led by an icon when the picker sits in a form. */
-export function MenuTriggerLabel({ icon: Icon, children }: { icon?: AppIcon; children: ReactNode }) {
-	if (!Icon) return <>{children}</>;
-	return (
-		<span className="flex min-w-0 items-center gap-2">
-			<Icon aria-hidden="true" className="size-icon-sm shrink-0 text-muted-foreground" />
-			{children}
-		</span>
-	);
-}
 
 // ---------------------------------------------------------------------------
 // Content (the panel)

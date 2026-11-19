@@ -1,4 +1,5 @@
 import { useEffect, useLayoutEffect, useMemo, useRef, useState, type FormEvent } from "react";
+import { useQueryClient } from "@tanstack/react-query";
 import { useNavigate } from "@tanstack/react-router";
 import { ScrollArea } from "radix-ui";
 import { useTranslation } from "react-i18next";
@@ -26,7 +27,6 @@ import {
 	DropdownMenuTrigger,
 } from "./ui/dropdown-menu";
 import { Input } from "./ui/input";
-import { MenuTriggerLabel } from "./ui/option-menu";
 import { Pressable } from "./ui/pressable";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "./ui/select";
 import { Switch } from "./ui/switch";
@@ -34,7 +34,10 @@ import { Tooltip, TooltipContent, TooltipTrigger } from "./ui/tooltip";
 import { ConfirmDialog } from "./ConfirmDialog";
 import { formatDuration } from "./SessionMemoryPanel";
 import { AgentModelField } from "./settings/ProjectAgentRoleControls";
-import { RequiredAgentField } from "./CreateProjectAgentSheet";
+import { SettingsOptionMenu } from "./settings/SettingsOptionMenu";
+import { switchEffort, type PendingAgentSwitch } from "./chat/AgentSwitchPicker";
+import { TRIGGER_CLASS } from "./chat/TurnSettingsBar";
+import { agentModelsQueryOptions } from "../hooks/useAgentModelsQuery";
 import { useAgentReadinessQuery, type AgentReadinessSnapshot } from "../hooks/useAgentReadinessQuery";
 import { useProjectWorkerDefaults } from "../hooks/useProjectDefaultWorker";
 import { useWorkspaceQuery } from "../hooks/useWorkspaceQuery";
@@ -590,6 +593,7 @@ function AutomationFormDialog({
 	const projectDefaultWorker = projectDefaults.harness;
 	const [name, setName] = useState("");
 	const nameRef = useRef<HTMLInputElement>(null);
+	const projectRef = useRef<HTMLButtonElement>(null);
 	const [prompt, setPrompt] = useState("");
 	const [draftTemplateId, setDraftTemplateId] = useState<AutomationTemplateID>(initialTemplateId);
 	const templateId = automation?.templateId ?? draftTemplateId;
@@ -690,16 +694,31 @@ function AutomationFormDialog({
 	if (automation && !projectOptions.some((option) => option.value === automation.projectId)) {
 		projectOptions.unshift({ value: automation.projectId, label: automation.projectId });
 	}
+	// The ready agents, ranked as the composer offers them.
+	const agentChoices = buildRankedAgentOptions({
+		agents: harnesses,
+		priorityRank: DEFAULT_AGENT_PRIORITY_RANK,
+		fallbackAgents: [],
+	}).filter(isReadyAgent).map(({ id, label }) => ({ id, label }));
 	// Prefer an explicit choice, then the project's resolved worker, then the
 	// first ready harness so Model isn't stuck on "Select agent" before a
 	// project is picked.
-	const fallbackHarness =
-		buildRankedAgentOptions({
-			agents: harnesses,
-			priorityRank: DEFAULT_AGENT_PRIORITY_RANK,
-			fallbackAgents: [],
-		}).find(isReadyAgent)?.id ?? "";
-	const selectedHarness = harness || projectDefaultWorker || fallbackHarness;
+	const selectedHarness = harness || projectDefaultWorker || agentChoices[0]?.id || "";
+	const queryClient = useQueryClient();
+	// Another agent, alone or with one of its models, is taken at once, as on the new chat page.
+	const switchAgent = (next: PendingAgentSwitch | undefined) => {
+		if (!next) return;
+		setHarness(next.harness);
+		setModel(""); setMode(""); setEffort(""); setModelValid(true);
+		if (next.model) {
+			// Some agents list launch modes in place of models.
+			const catalog = queryClient.getQueryData(agentModelsQueryOptions(next.harness, projectId).queryKey);
+			if (catalog?.selectionMode === "mode") setMode(next.model);
+			else setModel(next.model);
+		}
+		const nextEffort = switchEffort(next);
+		if (nextEffort) setEffort(nextEffort);
+	};
 	const awaitingInheritedHarness = Boolean(automation && !automation.harness && !harness && !projectDefaults.loaded);
 	// Match the daemon's base config plus overrides for a matching worker harness.
 	const inheritedWorker = !projectDefaults.worker?.agent || projectDefaults.worker.agent === selectedHarness ? projectDefaults.worker?.agentConfig : undefined;
@@ -754,7 +773,8 @@ function AutomationFormDialog({
 		setValidationErrors(nextErrors);
 		const firstInvalid = (["projectId", "name", "prompt", "time", "hour", "minute", "monthDay"] as const).find((field) => nextErrors[field]);
 		if (firstInvalid) {
-			document.getElementById(AUTOMATION_FIELD_IDS[firstInvalid])?.focus();
+			if (firstInvalid === "projectId") projectRef.current?.focus();
+			else document.getElementById(AUTOMATION_FIELD_IDS[firstInvalid])?.focus();
 			return;
 		}
 		const nextRRule = buildRRuleFromSchedule(schedule);
@@ -853,37 +873,39 @@ function AutomationFormDialog({
 					<div className="flex min-h-0 flex-col gap-6 border-t border-border p-4 md:overflow-y-auto md:border-t-0 md:border-s">
 						<section className="flex flex-col gap-2" aria-labelledby="automation-run-in">
 						<h3 id="automation-run-in" className={FORM_CAPTION_CLASS}>{t("automations.section.runIn")}</h3>
-						<Field label={t("automations.field.project")} id={AUTOMATION_FIELD_IDS.projectId} error={validationErrors.projectId} hideLabel>
-							<AutomationSelect
-								id={AUTOMATION_FIELD_IDS.projectId}
-								icon={Folder}
-								label={t("automations.field.project")}
-								placeholder={t("automations.projectPlaceholder")}
-								required
-								disabled={editing}
-								invalid={Boolean(validationErrors.projectId)}
-								describedBy={validationErrors.projectId ? `${AUTOMATION_FIELD_IDS.projectId}-error` : undefined}
+						{/* The composer's project picker, then its one agent, model and effort picker. */}
+						<div className="-ms-3 flex min-w-0 flex-wrap items-start gap-1">
+							<SettingsOptionMenu
+								triggerRef={projectRef}
+								aria-invalid={Boolean(validationErrors.projectId)}
+								aria-describedby={validationErrors.projectId ? `${AUTOMATION_FIELD_IDS.projectId}-error` : undefined}
+								aria-label={`${t("automations.field.project")}: ${projectOptions.find((option) => option.value === projectId)?.label ?? t("automations.projectPlaceholder")}`}
 								value={projectId}
-								onValueChange={(value) => { setProjectId(value); setModel(""); setMode(""); setEffort(""); setModelValid(true); clearValidationError("projectId"); }}
 								options={projectOptions}
-							/>
-						</Field>
-
-							<RequiredAgentField
-								id="automation-agent"
-								label={t("automations.agent")}
-								labelClassName="sr-only"
-								placeholder={t("automations.agentPlaceholder")}
-								value={selectedHarness}
-								agents={harnesses}
-								disabled={busy}
-								onChange={(value) => {
-									setHarness(value);
-									setModel(""); setMode(""); setEffort(""); setModelValid(true);
-								}}
+								placeholder={t("automations.projectPlaceholder")}
+								disabled={editing}
+								onChange={(value) => { setProjectId(value); setModel(""); setMode(""); setEffort(""); setModelValid(true); clearValidationError("projectId"); }}
+								menuAlign="start"
+								menuClassName="w-48 max-h-72"
+								menuItemClassName="gap-2! [&_svg]:text-current!"
+								triggerVariant="ghost"
+								triggerClassName={cn(TRIGGER_CLASS, "w-fit shrink-0")}
+								showCaret={false}
+								renderTrigger={(selected, placeholder) => (
+									<span className="inline-flex min-w-0 items-center gap-1.5">
+										<Folder aria-hidden="true" className="size-3.5 shrink-0 text-muted-foreground" />
+										<span className="min-w-0 truncate">{selected?.label ?? placeholder}</span>
+									</span>
+								)}
+								renderMenuItem={(option) => (
+									<>
+										<Folder aria-hidden="true" className="size-icon-sm shrink-0" />
+										<span className="min-w-0 truncate">{option.label}</span>
+									</>
+								)}
 							/>
 							{open ? (
-								<div className="flex min-w-0 flex-col gap-2" inert={busy || awaitingInheritedHarness} aria-busy={awaitingInheritedHarness}>
+								<div className="flex min-w-0 flex-col gap-1" inert={busy || awaitingInheritedHarness} aria-busy={awaitingInheritedHarness}>
 									<AgentModelField
 										key={selectedHarness + ":" + projectId}
 										role="worker"
@@ -897,9 +919,12 @@ function AutomationFormDialog({
 										onModeChange={setMode}
 										onEffortChange={setEffort}
 										onValidityChange={setModelValid}
+										agentSwitch={{ projectId, agents: agentChoices, disabled: busy, onPendingChange: switchAgent }}
 									/>
 								</div>
 							) : null}
+						</div>
+						{validationErrors.projectId ? <p id={`${AUTOMATION_FIELD_IDS.projectId}-error`} className={onboardingFieldErrorClass}>{validationErrors.projectId}</p> : null}
 						</section>
 						<section className="flex flex-col gap-2" aria-labelledby="automation-schedule">
 							<h3 id="automation-schedule" className={FORM_CAPTION_CLASS}>{t("automations.field.schedule")}</h3>
@@ -1080,40 +1105,29 @@ function AutomationFormDialog({
 }
 
 function AutomationSelect({
-	id,
 	label,
 	value,
 	onValueChange,
 	options,
-	placeholder,
-	required,
-	disabled,
-	invalid,
-	describedBy,
-	icon,
+	icon: Icon,
 }: {
-	id?: string;
 	icon?: AppIcon;
 	label: string;
 	value: string;
 	onValueChange: (value: string) => void;
-	options: Array<{ value: string; label: string; disabled?: boolean }>;
-	placeholder?: string;
-	required?: boolean;
-	disabled?: boolean;
-	invalid?: boolean;
-	describedBy?: string;
+	options: Array<{ value: string; label: string }>;
 }) {
 	return (
-		<Select value={value} onValueChange={onValueChange} required={required} disabled={disabled}>
-			<SelectTrigger id={id} size="sm" className="w-full text-control" aria-label={label} aria-invalid={invalid || undefined} aria-describedby={describedBy}>
-				<MenuTriggerLabel icon={icon}>
-					<SelectValue placeholder={placeholder} />
-				</MenuTriggerLabel>
+		<Select value={value} onValueChange={onValueChange}>
+			<SelectTrigger size="sm" className="w-full text-control" aria-label={label}>
+				<span className="flex min-w-0 items-center gap-2">
+					{Icon ? <Icon aria-hidden="true" className="size-icon-sm shrink-0 text-muted-foreground" /> : null}
+					<SelectValue />
+				</span>
 			</SelectTrigger>
 			<SelectContent position="popper" side="bottom" align="start" sideOffset={4} className="max-h-64">
 				{options.map((option) => (
-					<SelectItem key={option.value} value={option.value} disabled={option.disabled}>
+					<SelectItem key={option.value} value={option.value}>
 						{option.label}
 					</SelectItem>
 				))}
