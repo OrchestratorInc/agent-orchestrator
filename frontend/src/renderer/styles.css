@@ -6379,17 +6379,17 @@ html:root[data-theme="light"][data-window-translucent="true"] {
 	--ao-shell-tint: color-mix(in srgb, color-mix(in srgb, var(--sidebar), white 75%) 72%, transparent);
 }
 
-/* A named color theme is recognized by its canvas color, which a 70% sidebar
+/* A named color theme is recognized by its canvas color, which the sidebar
  * tint washes out. Named themes tint the shell with the canvas color instead,
- * a little stronger, so the theme reads at a glance and the blurred desktop
+ * at the same 70%, so the theme reads at a glance and the blurred desktop
  * still shows through. Light named themes skip the push toward white above,
  * which would bleach their sidebar. The default theme keeps the looks above. */
 html:root[data-style-theme][data-window-translucent="true"] {
-	--ao-shell-tint: color-mix(in srgb, var(--background) 80%, transparent);
+	--ao-shell-tint: color-mix(in srgb, var(--background) 70%, transparent);
 }
 
 html:root[data-style-theme][data-theme="light"][data-window-translucent="true"] {
-	--ao-shell-tint: color-mix(in srgb, var(--sidebar) 80%, transparent);
+	--ao-shell-tint: color-mix(in srgb, var(--sidebar) 70%, transparent);
 }
 
 /* Chrome: clear canvases, overlay fills. Declared on body so the theme's
