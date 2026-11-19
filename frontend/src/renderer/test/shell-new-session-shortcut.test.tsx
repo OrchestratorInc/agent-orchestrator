@@ -599,15 +599,21 @@ describe("shell workspace startup", () => {
 	});
 
 	it("resyncs Developer Mode when an attached daemon restarts on the same port", async () => {
-		useUiStore.setState({ developerMode: true });
+		useUiStore.setState({ developerMode: true, cardSummaries: false });
+		const hibernationSyncs = () =>
+			vi.mocked(apiClient.PATCH).mock.calls.filter(([path]) => path === "/api/v1/settings/chat-hibernation").length;
 		shellMocks.state.daemonStatus = { state: "ready", port: 4777, pid: 101 };
 		const view = await renderShell();
-		await waitFor(() => expect(apiClient.PATCH).toHaveBeenCalledTimes(1));
+		await waitFor(() => expect(hibernationSyncs()).toBe(1));
 		expect(apiClient.PATCH).toHaveBeenCalledWith("/api/v1/settings/chat-hibernation", {
 			body: { enabled: true },
 		});
 		await waitFor(() => expect(apiClient.PUT).toHaveBeenCalledWith("/api/v1/usage/limit-history", {
 			body: { enabled: true },
+		}));
+		// Card summaries stay off in Developer Mode until their own toggle is on.
+		await waitFor(() => expect(apiClient.PATCH).toHaveBeenCalledWith("/api/v1/settings/card-summaries", {
+			body: { enabled: false },
 		}));
 
 		shellMocks.state.daemonStatus = { state: "ready", port: 4777, pid: 202 };
@@ -617,7 +623,7 @@ describe("shell workspace startup", () => {
 			</Suspense>,
 		);
 
-		await waitFor(() => expect(apiClient.PATCH).toHaveBeenCalledTimes(2));
+		await waitFor(() => expect(hibernationSyncs()).toBe(2));
 	});
 
 	it("keeps chat hibernation disabled when Developer Mode is off", async () => {

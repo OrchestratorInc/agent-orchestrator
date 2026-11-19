@@ -119,7 +119,9 @@ func TestTimestampRepairTriggerInventory(t *testing.T) {
 	}
 	// review_run_worker_notice_pending only fires on status updates. Timestamp
 	// repair preserves notice state (TestTimestampRepairPreservesReviewDoneNotices).
-	const reviewed = "2950d2c69446158666dea383760aca5175ce76f90753523751da938910061ba6"
+	// sessions_card_summary_cdc only fires when card_summary itself changes, which
+	// a repair (timestamps and revision only) never writes.
+	const reviewed = "d3c90b9e69dd580484ca2a88e8423f4994894c63853f60a7455d6f84b17c1283"
 	if got := fmt.Sprintf("%x", hash.Sum(nil)); got != reviewed {
 		t.Fatalf("timestamp trigger inventory changed; review preservation logic before updating fingerprint: %s", got)
 	}
