@@ -2770,6 +2770,7 @@
 	"shortcut.model-picker": "Model seçin",
 	"shortcut.dictate": "Dikte edin",
 	"shortcut.find-in-chat": "Sohbette bulun",
+	"shortcut.find-in-chat-or-board": "Sohbette veya panoda bul",
 	"shortcut.add-selection-to-chat": "Seçimi sohbete ekleyin",
 	"shortcut.modified": "Değiştirildi",
 	"shortcut.moreBindings_one": "{{count}} alternatif kısayol. Tüm tuş atamalarını görmek için Özelleştir'i seçin.",
