@@ -1,4 +1,4 @@
-import { mkdtemp, readdir, readFile, rm } from "node:fs/promises";
+import { mkdtemp, readdir, readFile, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi, type MockInstance } from "vitest";
@@ -23,7 +23,25 @@ const mocks = vi.hoisted(() => ({
   openExternal: vi.fn(),
   showMessageBox: vi.fn(),
   providerAuthenticate: vi.fn(),
+  // Error codes the next reads of the login file fail with, one per read.
+  storeReadFailures: [] as string[],
+  storeReads: 0,
 }));
+
+// Reads of the login file can be made to fail with a chosen code; every other
+// file operation is the real one.
+vi.mock("node:fs/promises", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("node:fs/promises")>();
+  const readFile = ((...args: Parameters<typeof actual.readFile>) => {
+    if (String(args[0]).endsWith("cloud-auth.bin")) {
+      mocks.storeReads += 1;
+      const code = mocks.storeReadFailures.shift();
+      if (code) return Promise.reject(Object.assign(new Error(`${code}: synthetic read failure`), { code }));
+    }
+    return actual.readFile(...args);
+  }) as typeof actual.readFile;
+  return { ...actual, readFile, default: { ...actual, readFile } };
+});
 
 // The browser login itself is exercised in provider-auth-flow tests; here it
 // just returns a captured credential.
@@ -63,6 +81,7 @@ vi.mock("electron", () => ({
 }));
 
 import {
+  AuthStoreUnreadableError,
   beginCloudSignIn,
   getCloudAccessToken,
   getCloudSession,
@@ -81,6 +100,8 @@ describe("native WorkOS authentication", () => {
 
   beforeEach(async () => {
     vi.clearAllMocks();
+    mocks.storeReadFailures = [];
+    mocks.storeReads = 0;
     mocks.encryptionAvailable = true;
     mocks.selectedStorageBackend = "gnome_libsecret";
     dataDir = await mkdtemp(path.join(os.tmpdir(), "ao-cloud-auth-"));
@@ -932,6 +953,144 @@ describe("native WorkOS authentication", () => {
 
     expect(mocks.openExternal).not.toHaveBeenCalled();
     await expect(getCloudSession(dataDir)).resolves.toBeNull();
+  });
+
+  describe("a saved login the app cannot read just now", () => {
+    const storeFile = () => path.join(dataDir, "cloud-auth.bin");
+
+    beforeEach(async () => {
+      await beginCloudSignIn(dataDir);
+      await handleCloudDeepLink(
+        "ao-app://callback?code=code_123&state=state_123",
+        dataDir,
+      );
+      mocks.openExternal.mockClear();
+      mocks.notifyRenderers.mockClear();
+      mocks.storeReads = 0;
+    });
+
+    it("reads the login once the file handles free up", async () => {
+      mocks.storeReadFailures = ["EMFILE", "EMFILE"];
+
+      await expect(getCloudSession(dataDir)).resolves.toMatchObject({
+        user: { email: "person@example.com" },
+      });
+      expect(mocks.storeReads).toBe(3);
+    });
+
+    it("keeps the login file when reads keep failing, and finds the login on the next read", async () => {
+      const saved = await readFile(storeFile());
+      mocks.storeReadFailures = ["EMFILE", "EMFILE", "EMFILE", "EMFILE"];
+
+      const failed = await getCloudSession(dataDir).catch((error: unknown) => error);
+      expect(failed).toBeInstanceOf(AuthStoreUnreadableError);
+      expect(failed).toMatchObject({ code: "EMFILE" });
+      // Only the code, never where the login is kept.
+      expect((failed as Error).message).not.toContain(dataDir);
+      expect(mocks.storeReadFailures).toEqual([]);
+      await expect(readFile(storeFile())).resolves.toEqual(saved);
+      expect(mocks.notifyRenderers).not.toHaveBeenCalled();
+
+      await expect(getCloudSession(dataDir)).resolves.toMatchObject({
+        user: { email: "person@example.com" },
+      });
+      await expect(readFile(storeFile())).resolves.toEqual(saved);
+    });
+
+    it("does not tell the proxies or renderers the account signed out", async () => {
+      const saved = await readFile(storeFile());
+      mocks.storeReadFailures = ["EMFILE", "EMFILE", "EMFILE", "EMFILE"];
+
+      await expect(getCloudAccessToken(dataDir)).rejects.toBeInstanceOf(
+        AuthStoreUnreadableError,
+      );
+      expect(mocks.notifyRenderers).not.toHaveBeenCalled();
+      await expect(readFile(storeFile())).resolves.toEqual(saved);
+
+      await expect(getCloudAccessToken(dataDir)).resolves.toBe(ACCESS_TOKEN);
+    });
+
+    it("keeps the login file without retrying a read it has no permission for", async () => {
+      const saved = await readFile(storeFile());
+      mocks.storeReads = 0;
+      mocks.storeReadFailures = ["EACCES"];
+
+      await expect(getCloudSession(dataDir)).rejects.toMatchObject({
+        code: "EACCES",
+      });
+      expect(mocks.storeReads).toBe(1);
+      await expect(readFile(storeFile())).resolves.toEqual(saved);
+      await expect(getCloudSession(dataDir)).resolves.toMatchObject({
+        user: { email: "person@example.com" },
+      });
+    });
+
+    it("does not write a new sign-in over the login it could not read", async () => {
+      const saved = await readFile(storeFile());
+      mocks.storeReadFailures = ["EIO"];
+
+      await expect(beginCloudSignIn(dataDir)).rejects.toBeInstanceOf(
+        AuthStoreUnreadableError,
+      );
+      expect(mocks.openExternal).not.toHaveBeenCalled();
+      await expect(readFile(storeFile())).resolves.toEqual(saved);
+      await expect(getCloudSession(dataDir)).resolves.toMatchObject({
+        user: { email: "person@example.com" },
+      });
+    });
+
+    it("does not clear the login after a refresh the server refused while the file is unreadable", async () => {
+      mocks.authenticateWithCode.mockResolvedValueOnce({
+        accessToken: EXPIRED_ACCESS_TOKEN,
+        refreshToken: "refresh_123",
+        user: { id: "user_123", email: "person@example.com", name: "Person Example" },
+      });
+      await beginCloudSignIn(dataDir);
+      await handleCloudDeepLink(
+        "ao-app://callback?code=code_456&state=state_123",
+        dataDir,
+      );
+      const saved = await readFile(storeFile());
+      // The first read finds the expiring login; the one that would confirm
+      // nothing replaced it before clearing it fails.
+      mocks.authenticateWithRefreshToken.mockImplementationOnce(() => {
+        mocks.storeReadFailures = ["EACCES"];
+        return Promise.reject(new Error("refresh token already consumed"));
+      });
+
+      await expect(getCloudSession(dataDir)).rejects.toBeInstanceOf(
+        AuthStoreUnreadableError,
+      );
+      await expect(readFile(storeFile())).resolves.toEqual(saved);
+      expect(mocks.notifyRenderers).not.toHaveBeenCalledWith(null);
+    });
+
+    it("still signs out from the app menu when the login cannot be read", async () => {
+      const signOut = mocks.ipcHandle.mock.calls.find(
+        ([channel]) => channel === "cloud:signOut",
+      )?.[1] as () => Promise<void>;
+      mocks.storeReadFailures = ["EACCES"];
+
+      await signOut();
+
+      await expect(readFile(storeFile())).rejects.toMatchObject({ code: "ENOENT" });
+      expect(mocks.notifyRenderers).toHaveBeenCalledWith(null);
+      await expect(getCloudSession(dataDir)).resolves.toBeNull();
+    });
+
+    it("treats a missing login file as signed out without creating one", async () => {
+      await rm(storeFile());
+
+      await expect(getCloudSession(dataDir)).resolves.toBeNull();
+      await expect(readFile(storeFile())).rejects.toMatchObject({ code: "ENOENT" });
+    });
+
+    it("removes a login file that reads but cannot be decoded", async () => {
+      await writeFile(storeFile(), "not an encrypted store");
+
+      await expect(getCloudSession(dataDir)).resolves.toBeNull();
+      await expect(readFile(storeFile())).rejects.toMatchObject({ code: "ENOENT" });
+    });
   });
 });
 

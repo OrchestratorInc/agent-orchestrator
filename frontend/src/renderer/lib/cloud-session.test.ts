@@ -108,4 +108,43 @@ describe("useCloudSession", () => {
     card.unmount();
     vi.doUnmock("./bridge");
   });
+
+  it("does not show signed out when main cannot read the saved login, and reads it again", async () => {
+    vi.resetModules();
+    vi.useFakeTimers();
+    try {
+      const account = { authProvider: "workos", user: { id: "user-1" } };
+      const getSession = vi.fn()
+        .mockRejectedValueOnce(new Error("The saved Orchestrator Cloud login could not be read (EMFILE)."))
+        .mockResolvedValueOnce(account)
+        .mockRejectedValueOnce(new Error("The saved Orchestrator Cloud login could not be read (EMFILE)."));
+      vi.doMock("./bridge", () => ({
+        aoBridge: {
+          cloud: { getSession, onSessionChanged: () => () => undefined, signIn: () => undefined, signOut: () => Promise.resolve() },
+        },
+      }));
+      const { useCloudSession } = await import("./cloud-session");
+      const first = renderHook(() => useCloudSession());
+      await act(() => vi.advanceTimersByTimeAsync(0));
+      expect(first.result.current.status).toBe("loading");
+      expect(getSession).toHaveBeenCalledTimes(1);
+
+      await act(() => vi.advanceTimersByTimeAsync(1_000));
+      expect(getSession).toHaveBeenCalledTimes(2);
+      expect(first.result.current.status).toBe("authenticated");
+
+      // A later view's read fails too: the account stays shown.
+      await act(() => vi.advanceTimersByTimeAsync(6_000));
+      const second = renderHook(() => useCloudSession());
+      await act(() => vi.advanceTimersByTimeAsync(0));
+      expect(getSession).toHaveBeenCalledTimes(3);
+      expect(second.result.current.status).toBe("authenticated");
+      expect(first.result.current.session).toEqual(account);
+      first.unmount();
+      second.unmount();
+    } finally {
+      vi.useRealTimers();
+      vi.doUnmock("./bridge");
+    }
+  });
 });

@@ -37,6 +37,9 @@ type CloudSessionSnapshot = { session: CloudAccount | null; status: CloudSession
 
 /** A mount within this long of the last read reuses it; later mounts read again. */
 const SESSION_REUSE_MS = 5_000;
+/** The first read again after a failed one, doubling each time it fails again, up to the max. */
+const FAILED_READ_RETRY_MS = 1_000;
+const FAILED_READ_RETRY_MAX_MS = 30_000;
 
 let snapshot: CloudSessionSnapshot = { session: null, status: "loading" };
 let snapshotKey: string | undefined;
@@ -46,6 +49,8 @@ let reading: Promise<void> | undefined;
 // started: one that finishes after a newer change (a sign-out, say) would bring the old account
 // back, so it is dropped.
 let changes = 0;
+let failedReads = 0;
+let retryTimer: ReturnType<typeof setTimeout> | undefined;
 let unsubscribeBridge: (() => void) | undefined;
 const listeners = new Set<() => void>();
 
@@ -81,15 +86,29 @@ function readSession(): void {
   if (reading || (snapshot.status !== "loading" && Date.now() - readAt < SESSION_REUSE_MS)) return;
   const startedAt = changes;
   reading = cloud.getSession().then((s) => {
+    failedReads = 0;
     if (startedAt !== changes) return;
     noteCloudSession(s, true);
     publish(s);
   }, () => {
-    if (startedAt === changes) publish(null);
+    // Main could not read the saved login just then (it answers a missing one
+    // with null, not an error). That is not a sign-out: keep what is shown,
+    // and if nothing is known yet, read again shortly.
+    failedReads += 1;
+    if (startedAt === changes && snapshot.status === "loading") retryFailedRead();
   }).finally(() => {
     readAt = Date.now();
     reading = undefined;
   });
+}
+
+function retryFailedRead(): void {
+  if (retryTimer) return;
+  const delay = Math.min(FAILED_READ_RETRY_MS * 2 ** (failedReads - 1), FAILED_READ_RETRY_MAX_MS);
+  retryTimer = setTimeout(() => {
+    retryTimer = undefined;
+    if (listeners.size > 0 && snapshot.status === "loading") readSession();
+  }, delay);
 }
 
 function subscribe(listener: () => void): () => void {

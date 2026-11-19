@@ -4815,13 +4815,13 @@ app.whenReady().then(async () => {
 	registerArtifactSnapshotProtocol({ protocol, store: artifactSnapshotStore });
 	// Which account owns the cached Cloud previews from the last run, so a different or lost one clears them
 	// even if the app quit before it could.
-	// A sign-in hidden by a secure storage outage is not a lost one: leave the
-	// previews, and let the session notice that shows it again bind them.
+	// A sign-in hidden by a secure storage outage, or a login file that could not be read, is not a lost
+	// one: leave the previews, and let the session notice that shows it again bind them.
 	void getCloudSessionCached(cloudDataDir()).then(
 		(account) => {
 			if (account || !isSavedSignInHidden(cloudDataDir())) bindArtifactSnapshotsToCloudAccount(account?.user.id ?? null);
 		},
-		() => bindArtifactSnapshotsToCloudAccount(null),
+		() => undefined,
 	);
 	applyRuntimeAppIcon();
 	const initialUiSettings = keybindingRunFile
