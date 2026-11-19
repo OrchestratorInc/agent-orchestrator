@@ -76,36 +76,6 @@ type WorkspaceRepoRecord struct {
 	GitStatus     GitStatus
 }
 
-// workspaceDependencyDirs names dependency, build and cache folders. A
-// workspace project never copies them into session workspaces: they are large,
-// machine-specific, and the project's own tooling recreates them.
-var workspaceDependencyDirs = map[string]bool{
-	"node_modules":     true,
-	"bower_components": true,
-	"dist":             true,
-	"build":            true,
-	"target":           true,
-	"coverage":         true,
-	"tmp":              true,
-	"temp":             true,
-	"venv":             true,
-	"__pycache__":      true,
-	"Pods":             true,
-	"DerivedData":      true,
-	".venv":            true,
-	".next":            true,
-	".nuxt":            true,
-	".svelte-kit":      true,
-	".turbo":           true,
-	".cache":           true,
-	".parcel-cache":    true,
-	".pytest_cache":    true,
-	".mypy_cache":      true,
-	".ruff_cache":      true,
-	".tox":             true,
-	".gradle":          true,
-}
-
 // WorkspaceIgnorePattern returns the root-anchored gitignore pattern that
 // matches exactly the folder at rel. Glob characters, backslashes and spaces
 // are escaped, so a folder named "notes[1]" never matches "notes1".
@@ -121,12 +91,6 @@ func WorkspaceIgnorePattern(rel string) string {
 	}
 	b.WriteByte('/')
 	return b.String()
-}
-
-// IsWorkspaceDependencyDir reports whether name is a known dependency, build
-// or cache folder that session workspaces never receive a copy of.
-func IsWorkspaceDependencyDir(name string) bool {
-	return workspaceDependencyDirs[name]
 }
 
 // SessionWorktreeRecord tracks one repo worktree in a session. Workspace

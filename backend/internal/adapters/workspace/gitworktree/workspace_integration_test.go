@@ -1315,7 +1315,7 @@ func TestWorkspaceIntegrationDestroyWorkspaceProjectPreservesDirtyChild(t *testi
 	}
 }
 
-func TestWorkspaceIntegrationWorkspaceProjectCopiesAssetsAndCleansSessionCopy(t *testing.T) {
+func TestWorkspaceIntegrationWorkspaceProjectChecksOutTrackedFolders(t *testing.T) {
 	git := requireGit(t)
 	tmp := t.TempDir()
 	rootRepo := setupOriginClone(t, git, filepath.Join(tmp, "root"))
@@ -1331,15 +1331,6 @@ func TestWorkspaceIntegrationWorkspaceProjectCopiesAssetsAndCleansSessionCopy(t 
 	runGit(t, git, rootRepo, "add", "notes/nested/context.txt")
 	runGit(t, git, rootRepo, "commit", "-m", "track workspace notes")
 	runGit(t, git, rootRepo, "push", "origin", "main")
-	if err := os.Mkdir(filepath.Join(asset, ".git"), 0o755); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.WriteFile(filepath.Join(asset, ".git", "secret"), []byte("never copy"), 0o600); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.Symlink("nested/context.txt", filepath.Join(asset, "latest")); err != nil {
-		t.Fatal(err)
-	}
 
 	ws, err := New(Options{Binary: git, ManagedRoot: filepath.Join(tmp, "managed"), RepoResolver: StaticRepoResolver{"proj": rootRepo}})
 	if err != nil {
@@ -1349,34 +1340,19 @@ func TestWorkspaceIntegrationWorkspaceProjectCopiesAssetsAndCleansSessionCopy(t 
 		ProjectID: "proj", SessionID: "sess", Kind: "worker", Branch: "ao/assets",
 		RootRepoPath: rootRepo,
 		Repos:        []ports.WorkspaceProjectRepoConfig{{Name: "api", RelativePath: "api", RepoPath: childRepo}},
-		Assets:       []ports.WorkspaceProjectAssetConfig{{RelativePath: "notes", SourcePath: asset}},
 	})
 	if err != nil {
 		t.Fatalf("create workspace project: %v", err)
 	}
 	copied, err := os.ReadFile(filepath.Join(info.Root.Path, "notes", "nested", "context.txt"))
 	if err != nil || string(copied) != "source context" {
-		t.Fatalf("copied asset = %q, %v", copied, err)
-	}
-	if target, err := os.Readlink(filepath.Join(info.Root.Path, "notes", "latest")); err != nil || target != "nested/context.txt" {
-		t.Fatalf("copied symlink = %q, %v", target, err)
-	}
-	if _, err := os.Stat(filepath.Join(info.Root.Path, "notes", ".git")); !errors.Is(err, os.ErrNotExist) {
-		t.Fatalf("asset .git metadata was copied: %v", err)
+		t.Fatalf("tracked file = %q, %v", copied, err)
 	}
 	if len(info.Worktrees) != 2 || info.Worktrees[1].RepoName != "api" {
 		t.Fatalf("worktrees = %#v, want root and independent api child", info.Worktrees)
 	}
 	if _, err := os.Stat(filepath.Join(info.Root.Path, "api", "README.md")); err != nil {
 		t.Fatalf("child worktree missing: %v", err)
-	}
-	// The copy is excluded in the session only: its untracked files never make
-	// the root dirty, and the canonical checkout's own excludes are untouched.
-	if status := gitOutput(t, git, info.Root.Path, "status", "--porcelain", "--untracked-files=all"); strings.Contains(status, "notes/") {
-		t.Fatalf("copied asset shows in the session's git status:\n%s", status)
-	}
-	if status := gitOutput(t, git, rootRepo, "status", "--porcelain", "--untracked-files=all"); !strings.Contains(status, "notes/") {
-		t.Fatalf("canonical checkout no longer reports its untracked asset file:\n%s", status)
 	}
 	if err := ws.DestroyWorkspaceProject(context.Background(), info); err != nil {
 		t.Fatalf("destroy clean workspace project: %v", err)
@@ -1428,39 +1404,6 @@ func TestWorkspaceIntegrationWorkspaceProjectRepairsRemotelessRootDefault(t *tes
 				t.Fatalf("worktrees = %#v, want repaired root and api child", info.Worktrees)
 			}
 		})
-	}
-}
-
-func TestWorkspaceIntegrationWorkspaceProjectAssetCopyFailureRollsBackRoot(t *testing.T) {
-	git := requireGit(t)
-	tmp := t.TempDir()
-	rootRepo := setupOriginClone(t, git, filepath.Join(tmp, "root"))
-	asset := filepath.Join(rootRepo, "notes")
-	if err := os.Mkdir(asset, 0o755); err != nil {
-		t.Fatal(err)
-	}
-	conflictingFile := filepath.Join(rootRepo, "conflict.txt")
-	if err := os.WriteFile(conflictingFile, []byte("conflict"), 0o644); err != nil {
-		t.Fatal(err)
-	}
-	ws, err := New(Options{Binary: git, ManagedRoot: filepath.Join(tmp, "managed"), RepoResolver: StaticRepoResolver{"proj": rootRepo}})
-	if err != nil {
-		t.Fatal(err)
-	}
-	_, err = ws.CreateWorkspaceProject(context.Background(), ports.WorkspaceProjectConfig{
-		ProjectID: "proj", SessionID: "sess", Kind: "worker", Branch: "ao/assets-fail",
-		RootRepoPath: rootRepo,
-		Assets: []ports.WorkspaceProjectAssetConfig{
-			{RelativePath: "notes", SourcePath: asset},
-			{RelativePath: "notes", SourcePath: conflictingFile},
-		},
-	})
-	if err == nil {
-		t.Fatal("expected conflicting asset destination to fail")
-	}
-	rootPath := filepath.Join(tmp, "managed", "proj", "worker", "sess")
-	if _, statErr := os.Stat(rootPath); !errors.Is(statErr, os.ErrNotExist) {
-		t.Fatalf("root worktree was not rolled back: %v", statErr)
 	}
 }
 

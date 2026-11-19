@@ -6008,12 +6008,6 @@ func TestSpawn_SkipsNeedsInitWorkspaceChildrenDuringRefreshAndCreate(t *testing.
 	if got, want := ws.lastProjectCfg.Repos[0].Name, "api"; got != want {
 		t.Fatalf("materialized child = %q, want %q", got, want)
 	}
-	if got, want := len(ws.lastProjectCfg.Assets), 1; got != want {
-		t.Fatalf("materialized asset configs = %d, want %d", got, want)
-	}
-	if got, want := ws.lastProjectCfg.Assets[0].RelativePath, "assets"; got != want {
-		t.Fatalf("materialized asset = %q, want %q", got, want)
-	}
 }
 
 func TestRefreshDefaultBranchesUsesOneOverallFetchBudget(t *testing.T) {

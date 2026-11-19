@@ -550,7 +550,7 @@ func (w *Workspace) CreateWorkspaceProject(ctx context.Context, cfg ports.Worksp
 			return w.rollbackWorkspaceProjectPreparation(ctx, out, touched, cause)
 		}
 		// A cancelled or expired start must still remove what it created, or a
-		// retry would treat the half-built root as existing and skip its assets.
+		// retry would treat the half-built root as existing on the next attempt.
 		cleanupCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 30*time.Second)
 		defer cancel()
 		for i := len(created) - 1; i >= 0; i-- {
@@ -605,14 +605,6 @@ func (w *Workspace) CreateWorkspaceProject(ctx context.Context, cfg ports.Worksp
 				rootSHA = creationSHA
 			}
 			out.Root = ports.WorkspaceInfo{Path: repo.outputPath, Branch: branch, BaseSHA: rootSHA, BaseRef: repo.baseRef, SessionID: cfg.SessionID, ProjectID: cfg.ProjectID}
-		}
-		if repoIndex == 0 {
-			_, rootAlreadyExisted := existing[repoIndex]
-			if !rootAlreadyExisted {
-				if err := w.copyWorkspaceAssets(ctx, rootRepo, rootPath, cfg.Assets); err != nil {
-					return fail(err)
-				}
-			}
 		}
 	}
 	return out, nil
@@ -686,25 +678,6 @@ func (w *Workspace) repairWorkspaceRootDefault(ctx context.Context, repo string)
 		return worktreeRefs{}, err
 	}
 	return worktreeRefs{seedRef: ref, baseRef: ref}, nil
-}
-
-func assetPathWithin(root, path string) bool {
-	rel, err := filepath.Rel(filepath.Clean(root), filepath.Clean(path))
-	return err == nil && rel != ".." && !strings.HasPrefix(rel, ".."+string(filepath.Separator))
-}
-
-func relativeOrEmpty(root, path string) string {
-	rel, _ := filepath.Rel(root, path)
-	return rel
-}
-
-func hasWorkspaceManagedComponent(path string) bool {
-	for _, component := range strings.Split(filepath.ToSlash(path), "/") {
-		if component == ".git" || component == ".ao" {
-			return true
-		}
-	}
-	return false
 }
 
 // DestroyWorkspaceProject removes worktrees children first, preserving any

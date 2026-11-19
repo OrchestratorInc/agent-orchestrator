@@ -8,7 +8,6 @@ import (
 	"reflect"
 	"strings"
 	"testing"
-	"time"
 
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
 	"github.com/aoagents/agent-orchestrator/backend/internal/service/project"
@@ -50,8 +49,8 @@ func workspaceRepoNames(t *testing.T, store interface {
 }
 
 // A plain parent becomes a repository Orchestrator owns: every non-repository
-// folder stays out of it, and only ordinary folders are copied into sessions.
-func TestManager_AddWorkspaceCopiesOnlyOrdinaryFoldersFromPlainParent(t *testing.T) {
+// folder stays out of it, including ordinary untracked folders.
+func TestManager_AddWorkspaceRegistersOnlyReposFromPlainParent(t *testing.T) {
 	configureCommitter(t)
 	t.Setenv("GIT_CEILING_DIRECTORIES", os.TempDir())
 	ctx := context.Background()
@@ -70,7 +69,7 @@ func TestManager_AddWorkspaceCopiesOnlyOrdinaryFoldersFromPlainParent(t *testing
 	if _, err := m.Add(ctx, project.AddInput{Path: parent, ProjectID: ptr("ws"), AsWorkspace: true}); err != nil {
 		t.Fatalf("Add workspace: %v", err)
 	}
-	if got, want := workspaceRepoNames(t, store, "ws"), []string{"app", "notes"}; !reflect.DeepEqual(got, want) {
+	if got, want := workspaceRepoNames(t, store, "ws"), []string{"app"}; !reflect.DeepEqual(got, want) {
 		t.Fatalf("registered children = %v, want %v", got, want)
 	}
 	ignored, err := os.ReadFile(filepath.Join(parent, ".gitignore"))
@@ -115,7 +114,7 @@ func TestManager_AddWorkspaceAdoptedParentIgnoresOnlyChildRepos(t *testing.T) {
 	if _, err := m.Add(ctx, project.AddInput{Path: parent, ProjectID: ptr("ws"), AsWorkspace: true}); err != nil {
 		t.Fatalf("Add workspace: %v", err)
 	}
-	if got, want := workspaceRepoNames(t, store, "ws"), []string{"api", "notes"}; !reflect.DeepEqual(got, want) {
+	if got, want := workspaceRepoNames(t, store, "ws"), []string{"api"}; !reflect.DeepEqual(got, want) {
 		t.Fatalf("registered children = %v, want %v", got, want)
 	}
 	ignored, err := os.ReadFile(filepath.Join(parent, ".gitignore"))
@@ -127,106 +126,5 @@ func TestManager_AddWorkspaceAdoptedParentIgnoresOnlyChildRepos(t *testing.T) {
 	}
 	if files := strings.TrimSpace(gitIn(t, parent, "show", "--name-only", "--format=", "HEAD")); files != ".gitignore" {
 		t.Fatalf("Orchestrator commit touched %q, want only .gitignore", files)
-	}
-}
-
-// Rows written by earlier releases are repaired once: folders sessions should
-// never receive are dropped, while repositories and the folders Orchestrator
-// itself ignored for copying are kept.
-func TestService_RepairWorkspaceAssetsDropsFoldersSessionsNeverReceive(t *testing.T) {
-	configureCommitter(t)
-	t.Setenv("GIT_CEILING_DIRECTORIES", os.TempDir())
-	ctx := context.Background()
-	store, err := sqlitetest.Open(t.TempDir())
-	if err != nil {
-		t.Fatalf("open store: %v", err)
-	}
-	t.Cleanup(func() { _ = store.Close() })
-	parent := t.TempDir()
-	gitRepoWithCommit(t, parent)
-	mkdirWithFile(t, filepath.Join(parent, "src"))
-	if err := os.WriteFile(filepath.Join(parent, ".gitignore"), []byte("/data/\n"), 0o644); err != nil {
-		t.Fatal(err)
-	}
-	gitIn(t, parent, "add", "src", ".gitignore")
-	gitIn(t, parent, "commit", "-m", "add src and ignore data")
-	// The commit an earlier release made, ignoring every child it registered.
-	if err := os.WriteFile(filepath.Join(parent, ".gitignore"), []byte("/data/\n/api/\n/local/\n/notes/\n/src/\n/.venv/\n/node_modules/\nnode_modules/\n"), 0o644); err != nil {
-		t.Fatal(err)
-	}
-	gitIn(t, parent, "commit", "-m", "chore: configure AO workspace ignores", "--", ".gitignore")
-	for _, dir := range []string{"data", "notes", "node_modules", ".venv"} {
-		mkdirWithFile(t, filepath.Join(parent, dir))
-	}
-	gitRepoWithCommit(t, filepath.Join(parent, "api"))
-	gitRepoWithCommitNoOrigin(t, filepath.Join(parent, "local"))
-
-	now := time.Now()
-	row := domain.ProjectRecord{ID: "ws", Path: parent, DisplayName: "ws", RegisteredAt: now, Kind: domain.ProjectKindWorkspace}
-	var repos []domain.WorkspaceRepoRecord
-	for _, name := range []string{".venv", "api", "data", "local", "node_modules", "notes", "src"} {
-		status := domain.GitStatusNeedsInit
-		if name == "api" {
-			status = domain.GitStatusReady
-		}
-		repos = append(repos, domain.WorkspaceRepoRecord{ProjectID: "ws", Name: name, RelativePath: name, RegisteredAt: now, GitStatus: status})
-	}
-	if err := store.UpsertWorkspaceProject(ctx, row, repos); err != nil {
-		t.Fatalf("seed workspace project: %v", err)
-	}
-
-	svc := project.New(store)
-	want := []string{"api", "local", "notes"}
-	for pass := 1; pass <= 2; pass++ {
-		svc.RepairWorkspaceAssets(ctx)
-		if got := workspaceRepoNames(t, store, "ws"); !reflect.DeepEqual(got, want) {
-			t.Fatalf("pass %d: children = %v, want %v", pass, got, want)
-		}
-	}
-}
-
-// A /<name>/ line the user removed and added back is the user's rule, even
-// though Orchestrator first wrote that same line.
-func TestService_RepairWorkspaceAssetsHonorsAUserReaddedIgnoreLine(t *testing.T) {
-	configureCommitter(t)
-	t.Setenv("GIT_CEILING_DIRECTORIES", os.TempDir())
-	ctx := context.Background()
-	store, err := sqlitetest.Open(t.TempDir())
-	if err != nil {
-		t.Fatalf("open store: %v", err)
-	}
-	t.Cleanup(func() { _ = store.Close() })
-	parent := t.TempDir()
-	gitRepoWithCommit(t, parent)
-	gitignore := filepath.Join(parent, ".gitignore")
-	for _, step := range []struct{ content, subject string }{
-		{"/api/\n/notes/\n/drafts/\n", "chore: configure AO workspace ignores"},
-		{"/api/\n/drafts/\n", "stop ignoring notes"},
-		{"/api/\n/drafts/\n/notes/\n", "ignore notes again"},
-	} {
-		if err := os.WriteFile(gitignore, []byte(step.content), 0o644); err != nil {
-			t.Fatal(err)
-		}
-		gitIn(t, parent, "add", ".gitignore")
-		gitIn(t, parent, "commit", "-m", step.subject)
-	}
-	mkdirWithFile(t, filepath.Join(parent, "notes"))
-	mkdirWithFile(t, filepath.Join(parent, "drafts"))
-	gitRepoWithCommit(t, filepath.Join(parent, "api"))
-
-	now := time.Now()
-	row := domain.ProjectRecord{ID: "ws", Path: parent, DisplayName: "ws", RegisteredAt: now, Kind: domain.ProjectKindWorkspace}
-	repos := []domain.WorkspaceRepoRecord{
-		{ProjectID: "ws", Name: "api", RelativePath: "api", RegisteredAt: now, GitStatus: domain.GitStatusReady},
-		{ProjectID: "ws", Name: "drafts", RelativePath: "drafts", RegisteredAt: now, GitStatus: domain.GitStatusNeedsInit},
-		{ProjectID: "ws", Name: "notes", RelativePath: "notes", RegisteredAt: now, GitStatus: domain.GitStatusNeedsInit},
-	}
-	if err := store.UpsertWorkspaceProject(ctx, row, repos); err != nil {
-		t.Fatalf("seed workspace project: %v", err)
-	}
-
-	project.New(store).RepairWorkspaceAssets(ctx)
-	if got, want := workspaceRepoNames(t, store, "ws"), []string{"api", "drafts"}; !reflect.DeepEqual(got, want) {
-		t.Fatalf("children = %v, want %v", got, want)
 	}
 }

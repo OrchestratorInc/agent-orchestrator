@@ -5,11 +5,9 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"log/slog"
 	"os"
 	"path/filepath"
 	"sort"
-	"strconv"
 	"strings"
 	"time"
 
@@ -36,29 +34,20 @@ var workspaceRootIgnoreDenylist = []string{
 // workspaceChildren is what registration found directly under a workspace
 // parent.
 type workspaceChildren struct {
-	// records are the rows to store: every child repository, plus each plain
-	// folder that session workspaces receive a copy of.
 	records []domain.WorkspaceRepoRecord
 	// repoDirs name the child folders holding a Git repository, ready or not.
 	// The parent must ignore them so it never records a gitlink.
 	repoDirs []string
-	// plainDirs name every other top-level folder, copied or not.
+	// plainDirs name every other top-level folder.
 	plainDirs []string
-	// skipped lists the plain folders sessions do not receive, with why.
-	skipped []skippedWorkspaceFolder
 }
 
-type skippedWorkspaceFolder struct {
-	name   string
-	reason string
-}
-
-func prepareWorkspaceProject(ctx context.Context, logger *slog.Logger, parent string, projectID domain.ProjectID, registeredAt time.Time) ([]domain.WorkspaceRepoRecord, error) {
+func prepareWorkspaceProject(ctx context.Context, parent string, projectID domain.ProjectID, registeredAt time.Time) ([]domain.WorkspaceRepoRecord, error) {
 	if err := validateWorkspaceParent(ctx, parent); err != nil {
 		return nil, err
 	}
 	parentIsGit := isGitRepo(parent)
-	children, err := detectWorkspaceChildren(ctx, parent, projectID, registeredAt, parentIsGit)
+	children, err := detectWorkspaceChildren(ctx, parent, projectID, registeredAt)
 	if err != nil {
 		return nil, err
 	}
@@ -97,10 +86,6 @@ func prepareWorkspaceProject(ctx context.Context, logger *slog.Logger, parent st
 	}
 	if err := guardNoGitlinks(ctx, parent); err != nil {
 		return nil, err
-	}
-	for _, folder := range children.skipped {
-		logger.InfoContext(ctx, "workspace project: folder is not copied into sessions",
-			"projectID", projectID, "folder", folder.name, "reason", folder.reason)
 	}
 	return children.records, nil
 }
@@ -195,15 +180,11 @@ func validateWorkspaceParent(ctx context.Context, parent string) error {
 	return nil
 }
 
-func detectWorkspaceChildren(ctx context.Context, parent string, projectID domain.ProjectID, registeredAt time.Time, parentIsGit bool) (workspaceChildren, error) {
+func detectWorkspaceChildren(ctx context.Context, parent string, projectID domain.ProjectID, registeredAt time.Time) (workspaceChildren, error) {
 	var out workspaceChildren
 	entries, err := os.ReadDir(parent)
 	if err != nil {
 		return out, apierr.Invalid("INVALID_PATH", "Workspace path could not be read", nil)
-	}
-	var tracked map[string]bool
-	if parentIsGit {
-		tracked = workspaceParentTrackedDirs(ctx, parent)
 	}
 	for _, entry := range entries {
 		if !entry.IsDir() {
@@ -222,6 +203,11 @@ func detectWorkspaceChildren(ctx context.Context, parent string, projectID domai
 					"suggestedFix": fmt.Sprintf("Rename the directory %q — the name %q is reserved by Orchestrator for the workspace root.", child, domain.RootWorkspaceRepoName),
 				})
 		}
+		if !hasGitMetadata(child) {
+			out.plainDirs = append(out.plainDirs, name)
+			continue
+		}
+		out.repoDirs = append(out.repoDirs, name)
 		needsInit := domain.WorkspaceRepoRecord{
 			ProjectID:    projectID,
 			Name:         name,
@@ -230,22 +216,9 @@ func detectWorkspaceChildren(ctx context.Context, parent string, projectID domai
 			GitStatus:    domain.GitStatusNeedsInit,
 		}
 		if !isGitRepo(child) {
-			if hasGitMetadata(child) {
-				// A repository git cannot open yet; it is not copied, and the
-				// parent still has to ignore it.
-				out.records = append(out.records, needsInit)
-				out.repoDirs = append(out.repoDirs, name)
-				continue
-			}
-			out.plainDirs = append(out.plainDirs, name)
-			if reason := workspaceFolderSkipReason(ctx, parent, name, tracked); reason != "" {
-				out.skipped = append(out.skipped, skippedWorkspaceFolder{name: name, reason: reason})
-				continue
-			}
 			out.records = append(out.records, needsInit)
 			continue
 		}
-		out.repoDirs = append(out.repoDirs, name)
 		if err := validateWorkspaceChild(ctx, child); err != nil {
 			var apiErr *apierr.Error
 			if errors.As(err, &apiErr) && (apiErr.Code == "WORKSPACE_CHILD_ORIGIN_REQUIRED" || apiErr.Code == "WORKSPACE_CHILD_UNBORN" || apiErr.Code == "WORKSPACE_CHILD_IS_WORKTREE") {
@@ -269,95 +242,6 @@ func detectWorkspaceChildren(ctx context.Context, parent string, projectID domai
 	}
 	sort.Slice(out.records, func(i, j int) bool { return out.records[i].Name < out.records[j].Name })
 	return out, nil
-}
-
-// workspaceFolderSkipReason says why sessions do not receive a copy of the
-// plain top-level folder name, or returns "" when they do. tracked is nil for
-// a parent that is not a Git repository yet.
-func workspaceFolderSkipReason(ctx context.Context, parent, name string, tracked map[string]bool) string {
-	switch {
-	case strings.HasPrefix(name, "."):
-		return "dot-folder"
-	case domain.IsWorkspaceDependencyDir(name):
-		return "dependency or build folder"
-	case tracked == nil:
-		return ""
-	case tracked[name]:
-		// The root worktree checks it out already.
-		return "tracked by the parent repository"
-	case workspaceParentIgnores(ctx, parent, name):
-		return "ignored by the parent repository"
-	}
-	return ""
-}
-
-// workspaceParentTrackedDirs returns the top-level folders the parent's HEAD
-// commit holds, which every root worktree checks out. An unborn HEAD tracks
-// nothing.
-func workspaceParentTrackedDirs(ctx context.Context, parent string) map[string]bool {
-	tracked := map[string]bool{}
-	out, err := gitOutput(ctx, parent, "ls-tree", "-d", "-z", "--name-only", "HEAD")
-	if err != nil {
-		return tracked
-	}
-	for _, name := range strings.Split(out, "\x00") {
-		if name != "" {
-			tracked[name] = true
-		}
-	}
-	return tracked
-}
-
-// orchestratorGitignoreCommits are the subjects of the commits Orchestrator
-// makes when it writes a workspace parent's .gitignore.
-var orchestratorGitignoreCommits = map[string]bool{
-	"chore: initialize AO workspace root":             true,
-	"chore: configure AO workspace ignores":           true,
-	"chore: configure Orchestrator workspace ignores": true,
-}
-
-// workspaceParentIgnores reports whether the parent repository ignores the
-// top-level folder name. Earlier releases ignored every plain folder they
-// copied with a `/<name>/` line; such a line does not count, so a project
-// registered then keeps receiving the folders it always received.
-func workspaceParentIgnores(ctx context.Context, parent, name string) bool {
-	// git accepts -z only with --stdin.
-	cmd := aoprocess.CommandContext(ctx, "git", "-C", parent, "check-ignore", "-v", "-z", "--stdin")
-	cmd.Stdin = strings.NewReader(name + "\x00")
-	out, err := cmd.Output()
-	if err != nil {
-		// Exit 1 means not ignored; anything else leaves the folder as it was.
-		return false
-	}
-	// -v -z prints source, line number, pattern and path, each NUL-terminated.
-	fields := strings.Split(string(out), "\x00")
-	if len(fields) < 3 {
-		return true
-	}
-	source, line, pattern := fields[0], fields[1], fields[2]
-	if strings.HasPrefix(pattern, "!") {
-		return false
-	}
-	return source != ".gitignore" || pattern != domain.WorkspaceIgnorePattern(name) || !addedByOrchestrator(ctx, parent, line)
-}
-
-// addedByOrchestrator reports whether the commit that introduced the current
-// line of the parent's .gitignore is one Orchestrator made. A line the user
-// removed and added back, or has not committed, belongs to the user.
-func addedByOrchestrator(ctx context.Context, parent, line string) bool {
-	if n, err := strconv.Atoi(line); err != nil || n < 1 {
-		return false
-	}
-	out, err := gitOutput(ctx, parent, "blame", "--porcelain", "-L", line+","+line, "--", ".gitignore")
-	if err != nil {
-		return false
-	}
-	for _, field := range strings.Split(out, "\n") {
-		if subject, ok := strings.CutPrefix(field, "summary "); ok {
-			return orchestratorGitignoreCommits[subject]
-		}
-	}
-	return false
 }
 
 func validateWorkspaceChild(ctx context.Context, child string) error {
@@ -563,9 +447,7 @@ func guardNoGitlinks(ctx context.Context, repo string) error {
 func workspaceReposFromRecords(parent string, records []domain.WorkspaceRepoRecord) []WorkspaceRepo {
 	out := make([]WorkspaceRepo, 0, len(records))
 	for _, rec := range records {
-		// Plain directories share the durable child registry so the session
-		// manager can materialize them as assets, but they are not repositories
-		// and must not appear in Project Settings' repository list.
+		// Older workspace registrations also stored plain directories.
 		if rec.GitStatus == domain.GitStatusNeedsInit {
 			gitPath := filepath.Join(parent, filepath.FromSlash(rec.RelativePath), ".git")
 			if _, err := os.Lstat(gitPath); errors.Is(err, os.ErrNotExist) {
