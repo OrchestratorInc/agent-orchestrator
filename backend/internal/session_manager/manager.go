@@ -536,6 +536,8 @@ type Manager struct {
 	startupChatRetryDelays      []time.Duration
 	agentOpMu                   sync.Mutex
 	agentOperations             map[domain.SessionID]agentOperationKind
+	wakeFailedMu                sync.Mutex
+	wakeFailedAt                map[domain.SessionID]time.Time
 	// launchStartWait bounds the wait to see a new supervised launch alive.
 	launchStartWait           time.Duration
 	interfaceRecoveryMu       sync.Mutex
@@ -5438,6 +5440,11 @@ func (m *Manager) SendWithOptions(ctx context.Context, id domain.SessionID, mess
 		}
 		message = appendAttachmentReferences(message, refs)
 	}
+	if options.WakeExitedAgent {
+		if err := m.wakeExitedAgent(ctx, id); err != nil {
+			return fmt.Errorf("send %s: %w", id, err)
+		}
+	}
 	options.InteractionAt = m.clock()
 	return m.send(ctx, id, message, "", options)
 }
@@ -5455,6 +5462,17 @@ var ErrPromptSubmissionUnobserved = errors.New("prompt submission was not observ
 // boundary. Supported TUIs correlate the durable id through UserPromptSubmit;
 // a successful pane write alone never satisfies this method.
 func (m *Manager) SendSemantic(ctx context.Context, id domain.SessionID, message, clientMessageID string) error {
+	// Worker reports restart an orchestrator whose agent exited. A terminal
+	// agent that accepted this report just before exiting is not restarted to
+	// receive it again.
+	prior, found, readErr := m.store.GetSession(ctx, id)
+	acceptedBeforeExit := readErr == nil && found &&
+		domain.NormalizeSessionMode(prior.Mode) != domain.SessionModeChat && semanticMessageAccepted(prior, clientMessageID)
+	if !acceptedBeforeExit {
+		if err := m.wakeExitedAgent(ctx, id); err != nil {
+			return err
+		}
+	}
 	rec, ok, err := m.store.GetSession(ctx, id)
 	if err != nil {
 		return err
