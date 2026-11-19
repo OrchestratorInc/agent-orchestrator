@@ -4646,6 +4646,40 @@ describe("useTaskLaunch on the new chat page", () => {
 		}
 	});
 
+	it("counts a kept worktree's reuse window from the page's last use of it", async () => {
+		const now = vi.spyOn(Date, "now");
+		try {
+			now.mockReturnValue(1_000_000);
+			h.get.mockResolvedValue({ data: { status: "ok", project: { id: "proj-1", config: {} } } });
+			h.delete.mockResolvedValue({});
+			h.post.mockImplementation(async (path: string) => path === "/api/v1/projects/{id}/tasks/prepare"
+				? { data: { taskPreparation: "proj-1-7" } }
+				: { data: {} });
+			let used: ((token: string, at: number) => void) | undefined;
+			function Launcher() {
+				const task = useTaskLaunch({ projectId: "proj-1" });
+				used = task.notePreparationUsed;
+				return <p>{task.preparedSessionId || "unprepared"}</p>;
+			}
+			const first = render(<Wrap><Launcher /></Wrap>);
+			await screen.findByText("proj-1-7");
+			// The page read the worktree's files three minutes in, which restarted
+			// the host's expiry, then left.
+			used?.("proj-1-7", 1_000_000 + 3 * 60_000);
+			first.unmount();
+
+			// Six minutes after it was made, but three after its last use.
+			now.mockReturnValue(1_000_000 + 6 * 60_000);
+			render(<Wrap><Launcher /></Wrap>);
+			await screen.findByText("proj-1-7");
+			const prepares = h.post.mock.calls.filter(([path]) => path === "/api/v1/projects/{id}/tasks/prepare");
+			expect(prepares).toHaveLength(1);
+			expect(h.delete).not.toHaveBeenCalled();
+		} finally {
+			now.mockRestore();
+		}
+	});
+
 	it("releases a left worktree too old to offer and prepares a new one", async () => {
 		const now = vi.spyOn(Date, "now");
 		try {

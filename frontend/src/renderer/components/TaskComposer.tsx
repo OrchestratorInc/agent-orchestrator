@@ -127,13 +127,15 @@ function cancelTaskPreparation(token: string, hostId?: string): void {
 	}
 }
 
-// A host deletes a preparation five minutes after making it (the daemon's
-// defaultTaskPreparationTTL). A kept one is offered again for a minute less, so
-// a send does not race its expiry; a send that does only falls back to making
-// its own worktree.
+// A host deletes a preparation five minutes after it was made or last used
+// (the daemon's defaultTaskPreparationTTL; reading or staging its files counts
+// as use). A kept one is offered again for a minute less, so a send does not
+// race its expiry; a send that does only falls back to making its own worktree.
 const KEPT_PREPARATION_REUSE_MS = 4 * 60_000;
 
-type KeptPreparation = { token: string; createdAt: number };
+// aliveAt: when the host last restarted this preparation's expiry, as far as
+// the page knows: its request, or the page's last successful read of its files.
+type KeptPreparation = { token: string; aliveAt: number };
 
 // The preparation a page left behind, per host and project, so the next visit
 // to that project starts from a worktree that already exists.
@@ -148,7 +150,7 @@ function keepPreparation(key: string, preparation: KeptPreparation, hostId?: str
 	if (previous && previous.token !== preparation.token) {
 		// A late answer to an older request must not replace a newer kept one,
 		// which has longer left before the host deletes it.
-		if (previous.createdAt > preparation.createdAt) {
+		if (previous.aliveAt > preparation.aliveAt) {
 			cancelTaskPreparation(preparation.token, hostId);
 			return;
 		}
@@ -162,7 +164,7 @@ function takeKeptPreparation(key: string, hostId?: string): KeptPreparation | un
 	const kept = keptPreparations.get(key);
 	if (!kept) return undefined;
 	keptPreparations.delete(key);
-	if (Date.now() - kept.createdAt < KEPT_PREPARATION_REUSE_MS) return kept;
+	if (Date.now() - kept.aliveAt < KEPT_PREPARATION_REUSE_MS) return kept;
 	cancelTaskPreparation(kept.token, hostId);
 	return undefined;
 }
@@ -267,8 +269,14 @@ export function useTaskLaunch({ projectId, hostId }: {
 	}, [projectId, hostId]);
 	const [fallbackAction, setFallbackAction] = useState<FallbackAction>();
 	const taskPreparationRef = useRef("");
-	// When the held preparation was requested, so a kept one is not reused past its expiry.
-	const taskPreparationCreatedAtRef = useRef(0);
+	// When the host last restarted the held preparation's expiry, so a kept one
+	// is not reused past it: its request, then each use the page reports.
+	const taskPreparationAliveAtRef = useRef(0);
+	/** Reports that the host just restarted this preparation's expiry (its files were read). */
+	const notePreparationUsed = useCallback((token: string, at: number) => {
+		if (!token || token !== taskPreparationRef.current) return;
+		taskPreparationAliveAtRef.current = Math.max(taskPreparationAliveAtRef.current, at);
+	}, []);
 	// The preparation a send in flight will claim. Leaving the page or project does not
 	// cancel it; the send does, once answered.
 	const launchingPreparationRef = useRef("");
@@ -544,14 +552,14 @@ export function useTaskLaunch({ projectId, hostId }: {
 		}
 		let disposed = false;
 		const key = keptPreparationKey(id, hostId);
-		const hold = (token: string, createdAt: number) => {
+		const hold = (token: string, aliveAt: number) => {
 			taskPreparationRef.current = token;
-			taskPreparationCreatedAtRef.current = createdAt;
+			taskPreparationAliveAtRef.current = aliveAt;
 			setPreparedSessionId(token);
 		};
 		const kept = takeKeptPreparation(key, hostId);
 		if (kept) {
-			hold(kept.token, kept.createdAt);
+			hold(kept.token, kept.aliveAt);
 		} else {
 			taskPreparationRef.current = "";
 			setPreparedSessionId("");
@@ -564,7 +572,7 @@ export function useTaskLaunch({ projectId, hostId }: {
 					if (!token) return;
 					// A page that has gone keeps it for the next visit to this project.
 					if (disposed) {
-						keepPreparation(key, { token, createdAt: requestedAt }, hostId);
+						keepPreparation(key, { token, aliveAt: requestedAt }, hostId);
 						return;
 					}
 					hold(token, requestedAt);
@@ -580,7 +588,7 @@ export function useTaskLaunch({ projectId, hostId }: {
 			// A send in flight claims its preparation; any other is kept for the
 			// next visit to this project rather than thrown away.
 			if (token && token !== launchingPreparationRef.current) {
-				keepPreparation(key, { token, createdAt: taskPreparationCreatedAtRef.current }, hostId);
+				keepPreparation(key, { token, aliveAt: taskPreparationAliveAtRef.current }, hostId);
 			}
 		};
 	}, [hostId, prepareProjectId]);
@@ -1493,6 +1501,7 @@ export function useTaskLaunch({ projectId, hostId }: {
 		effectiveInterface: (submitMode ?? settings?.defaultSessionMode ?? "tui") as "chat" | "tui",
 		refreshModels: refreshSelectedModels,
 		preparedSessionId,
+		notePreparationUsed,
 		submitMode,
 		isCloudProject,
 		isCoderCloudProject,

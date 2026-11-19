@@ -1008,12 +1008,12 @@ export function useCachedProjectListed(projectId?: string, hostId?: string): boo
 		(projects: { id: string }[]) => projects.some((project) => project.id === projectId),
 		[projectId],
 	);
-	const listed = useQuery({
-		queryKey: hostId ? remoteProjectsQueryKey(hostId) : workspaceQueryKey,
-		queryFn: (): Promise<{ id: string }[]> => hostId ? fetchRemoteProjects(hostId) : fetchWorkspaces(),
-		select,
-		enabled: false,
-	});
+	// Same options as the queries that own these lists: TanStack copies the
+	// options of whichever observer rendered last onto the shared query, so a
+	// bare observer here would drop their retry rules for the next refetch.
+	const listed = useQuery<{ id: string }[], Error, boolean>(hostId
+		? { queryKey: remoteProjectsQueryKey(hostId), queryFn: () => fetchRemoteProjects(hostId), retry: 1, select, enabled: false }
+		: { ...workspaceQueryOptions, select, enabled: false });
 	return Boolean(projectId) && listed.data === true;
 }
 
