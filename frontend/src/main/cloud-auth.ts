@@ -5,6 +5,7 @@ import {
   chmod,
   mkdir,
   readFile,
+  rename,
   rm,
   writeFile,
 } from "node:fs/promises";
@@ -244,11 +245,20 @@ async function readStoreFile(dataDir: string): Promise<AuthStore> {
   }
 }
 
+// Writes a temporary file and renames it over the store, so a write that fails
+// partway leaves the saved sign-in as it was.
 async function writeStoreFile(dataDir: string, store: AuthStore): Promise<void> {
   await mkdir(dataDir, { recursive: true });
   const target = storePath(dataDir);
-  await writeFile(target, encodeStore(store), { mode: 0o600 });
-  await chmod(target, 0o600);
+  const staging = `${target}.${process.pid}.tmp`;
+  try {
+    await writeFile(staging, encodeStore(store), { mode: 0o600 });
+    await chmod(staging, 0o600);
+    await rename(staging, target);
+  } catch (error) {
+    await rm(staging, { force: true });
+    throw error;
+  }
 }
 
 // A pending sign-in written during an outage goes onto the session the file
