@@ -4,12 +4,18 @@
  * Agents cite code as Markdown links whose destination is a path, optionally
  * with an editor location (`:12`, `:12:4`, `#L12`, `#L12-L20`). These rules
  * mirror the desktop's (`frontend/src/renderer/lib/workspace-file-path.ts` and
- * `external-link-policy.ts`) so a link opens on the phone exactly when it
- * opens in the desktop's Files panel. Recognizing a link grants nothing: the
- * daemon resolves the path and refuses anything outside the session.
+ * `external-link-policy.ts`) so a link opens on the phone when it opens in the
+ * desktop's Files panel; the phone also takes a known extensionless file cited
+ * at a line (`Dockerfile:12`). Recognizing a link grants nothing: the daemon
+ * resolves the path and refuses anything outside the session.
  */
 
 export type ChatFileReference = { path: string; line?: number };
+
+const EXTENSIONLESS_FILES = new Set([
+	"Brewfile", "BUILD", "Caddyfile", "CODEOWNERS", "Containerfile", "Dockerfile", "Gemfile", "Jenkinsfile",
+	"Justfile", "justfile", "LICENSE", "Makefile", "makefile", "GNUmakefile", "Procfile", "Rakefile", "Vagrantfile", "WORKSPACE",
+]);
 
 const LOCATION_SUFFIX = /(?:#L\d+(?:C\d+)?(?:-L?\d+(?:C\d+)?)?|:\d+(?::\d+)?)$/i;
 
@@ -38,6 +44,8 @@ export function fileReferenceLine(reference: string): number | undefined {
 export function chatFileReference(href: string): ChatFileReference | undefined {
 	const trimmed = href.trim();
 	if (!trimmed || trimmed.startsWith("#") || trimmed.startsWith("//")) return undefined;
+	// Before any URL parsing: `file:///a/b/../c` would come back as `/a/c`.
+	if (decode(trimmed).split(/[\\/]/).includes("..")) return undefined;
 	let path = trimmed;
 	if (/^file:\/\//i.test(path)) {
 		try {
@@ -54,9 +62,11 @@ export function chatFileReference(href: string): ChatFileReference | undefined {
 	}
 	path = decode(path).replace(LOCATION_SUFFIX, "").replace(/\\/g, "/").replace(/^\.\//, "").trim();
 	if (!path || path.startsWith("//") || path.split("/").includes("..")) return undefined;
-	const looksLikeFile = path.includes("/") || /^\.[^/]+$/.test(path) || /\.[a-z\d][a-z\d._-]*$/i.test(path);
-	if (!looksLikeFile) return undefined;
 	const line = fileReferenceLine(trimmed);
+	// A bare name with a location (`Dockerfile:12`) only for files that are known
+	// to have no extension: `localhost:3000` has the same shape and is a server.
+	const looksLikeFile = path.includes("/") || /^\.[^/]+$/.test(path) || /\.[a-z\d][a-z\d._-]*$/i.test(path) || (line != null && EXTENSIONLESS_FILES.has(path));
+	if (!looksLikeFile) return undefined;
 	return line == null ? { path } : { path, line };
 }
 

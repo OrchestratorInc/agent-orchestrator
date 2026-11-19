@@ -24,6 +24,16 @@ describe("chat file links", () => {
 		expect(chatFileReference("//cdn.example.com/x.js")).toBeUndefined();
 		expect(chatFileReference("../outside/secret.txt")).toBeUndefined();
 		expect(chatFileReference("notes")).toBeUndefined();
+		// URL parsing would fold the `..` away before it could be seen.
+		expect(chatFileReference("file:///worktree/src/../README.md:12")).toBeUndefined();
+	});
+
+	it("takes a known extensionless file at a line, but not a host and port", () => {
+		expect(chatFileReference("Dockerfile:12")).toEqual({ path: "Dockerfile", line: 12 });
+		expect(chatFileReference("Makefile:8")).toEqual({ path: "Makefile", line: 8 });
+		expect(chatFileReference("Dockerfile")).toBeUndefined();
+		expect(chatFileReference("localhost:3000")).toBeUndefined();
+		expect(chatFileReference("server:8080")).toBeUndefined();
 	});
 
 	it("tells the paths the daemon must place from workspace-relative ones", () => {

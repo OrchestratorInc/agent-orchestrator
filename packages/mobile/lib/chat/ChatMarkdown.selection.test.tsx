@@ -348,6 +348,22 @@ it.each([false, true])("opens a file link at the line it cites (continuous: %s)"
 	act(() => renderer.unmount());
 });
 
+it("keeps a route group's parentheses in a file link", () => {
+	const openFile = vi.fn();
+	let renderer!: ReactTestRenderer;
+	act(() => {
+		renderer = create(<FilesNavigationContext.Provider value={{ openChanges: vi.fn(), openFile }}>
+			<ChatMarkdown text={"See [index.tsx:12](app/(tabs)/index.tsx:12) here."} />
+		</FilesNavigationContext.Provider>);
+	});
+	const links = renderer.root.findAll((node) => typeof node.type === "string" && node.props.accessibilityRole === "link");
+	expect(links.map(textOf)).toEqual(["index.tsx:12"]);
+	expect(textOf(renderer.root)).toContain("See index.tsx:12 here.");
+	act(() => links[0]!.props.onPress());
+	expect(openFile).toHaveBeenCalledWith("app/(tabs)/index.tsx", undefined, 12);
+	act(() => renderer.unmount());
+});
+
 it("shows a file link's label as words where no session can open it", () => {
 	let renderer!: ReactTestRenderer;
 	act(() => { renderer = create(<ChatMarkdown text="See [api.ts:12](lib/api.ts:12) now" />); });

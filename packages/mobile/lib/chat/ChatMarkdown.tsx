@@ -374,8 +374,9 @@ const WEB_OR_AO_LINK = /^(?:https?|ao):\/\//i;
 
 function inline(text: string, styles: ReturnType<typeof makeStyles>, linksPressable = true, codeStyle?: StyleProp<TextStyle>): ReactNode[] {
 	// Web links, AO's own `ao://` links, and file links (`[a.ts:12](src/a.ts:12)`); a bare session link stops before prose punctuation.
+	// A destination may hold balanced parentheses, as a route group does: `app/(tabs)/index.tsx`.
 	// Bold runs may hold a single `*` or `_` (italic, say) but not a closing pair.
-	const pattern = /(\[([^\]]+)\]\(([^\s)]+)\)|<((?:https?|ao):\/\/[^\s>]+)>|`([^`]+)`|\*\*((?:[^*]|\*(?!\*))+)\*\*|__((?:[^_]|_(?!_))+)__|~~([^~]+)~~|\*([^*\n]+)\*|_([^_\n]+)_|(https?:\/\/[^\s<]+)|(ao:\/\/sessions\/[^\s<>()]*[^\s<>().,;:!?'"]))/g;
+	const pattern = /(\[([^\]]+)\]\(((?:[^\s()]|\([^\s()]*\))+)\)|<((?:https?|ao):\/\/[^\s>]+)>|`([^`]+)`|\*\*((?:[^*]|\*(?!\*))+)\*\*|__((?:[^_]|_(?!_))+)__|~~([^~]+)~~|\*([^*\n]+)\*|_([^_\n]+)_|(https?:\/\/[^\s<]+)|(ao:\/\/sessions\/[^\s<>()]*[^\s<>().,;:!?'"]))/g;
 	const nodes: ReactNode[] = [];
 	let at = 0;
 	let match: RegExpExecArray | null;

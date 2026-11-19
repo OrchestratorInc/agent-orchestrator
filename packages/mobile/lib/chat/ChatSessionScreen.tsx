@@ -314,22 +314,35 @@ export function ChatSessionScreen({ session: boardSession }: { session: MobileCh
 
 	const sessionName = sessionTitle(session);
 	// Codex-style: every surface that shows the agent changed files can open them.
+	// A file action placed by the daemon lands only if it is still the latest one
+	// and the reader is still on this chat: a newer tap, or leaving, drops it.
+	const fileOpenRequest = useRef(0);
+	const fileOpenStillHere = useStillHere(`${currentHostId ?? ""}|${session.id}`, () => navigation.isFocused?.() !== false);
 	const filesNavigation = useMemo<FilesNavigation>(() => ({
-		openChanges: () => router.push(filesRoute(session.id, currentHostId, sessionName)),
+		openChanges: () => {
+			fileOpenRequest.current++;
+			router.push(filesRoute(session.id, currentHostId, sessionName));
+		},
 		openFile: (path, previousPath, line) => {
+			const request = ++fileOpenRequest.current;
 			// Agents also cite absolute paths (`/…/worktree/src/a.ts:12`): the
 			// daemon places those, in the worktree or among the session's artifacts.
 			if (!config || !isAbsoluteFileReference(path)) {
 				router.push(fileRoute(session.id, path, currentHostId, previousPath, line));
 				return;
 			}
+			const here = fileOpenStillHere();
+			const current = () => request === fileOpenRequest.current && here();
 			void resolveWorkspacePath(config, session.id, path).then((resolved) => {
+				if (!current()) return;
 				if (resolved.kind === "workspace" && resolved.path) router.push(fileRoute(session.id, resolved.path, currentHostId, previousPath, line));
 				else if (resolved.kind === "artifact" && resolved.path) router.push({ pathname: "/artifact/[sessionId]", params: { sessionId: session.id, path: resolved.path, hostId: currentHostId } });
 				else Alert.alert("Outside this session", `${path} isn't in this session's worktree.`);
-			}, () => router.push(fileRoute(session.id, path, currentHostId, previousPath, line)));
+			}, () => {
+				if (current()) router.push(fileRoute(session.id, path, currentHostId, previousPath, line));
+			});
 		},
-	}), [config, currentHostId, router, session.id, sessionName]);
+	}), [config, currentHostId, fileOpenStillHere, router, session.id, sessionName]);
 	// The artifacts a turn made, drawn as cards under its reply.
 	const turnArtifacts = useTurnArtifactSourceFor(session.id, conversation.snapshot?.turns, currentHostId);
 	// Re-read git's totals when a turn reports edits, not on a timer.
