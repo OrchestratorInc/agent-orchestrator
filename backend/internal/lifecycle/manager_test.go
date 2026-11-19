@@ -5315,3 +5315,56 @@ func TestScopedPostAgentRefreshesIdleProofWithoutStateTransition(t *testing.T) {
 		})
 	}
 }
+
+// Hooks post from their own processes, so a turn's user-prompt-submit can reach
+// AO after the Stop that ended it, as when AO delivers a message just as the
+// previous turn stops (#6686). The session must stay idle at its last turn end
+// instead of reading as working for good; a prompt that fired after that Stop
+// still starts a turn.
+func TestActivity_LatePromptDoesNotUndoALaterStop(t *testing.T) {
+	for _, tc := range []struct {
+		name      string
+		promptAt  time.Duration
+		wantState domain.ActivityState
+	}{
+		{name: "prompt fired before the last Stop, arrives after it", promptAt: 35500 * time.Millisecond, wantState: domain.ActivityIdle},
+		{name: "prompt fired after the last Stop", promptAt: 40 * time.Second, wantState: domain.ActivityActive},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			m, st, _ := newManager()
+			rec := working("mer-1")
+			rec.Metadata.RuntimeLaunchID = "launch-current"
+			rec.Metadata.AgentSessionID = "native-current"
+			rec.Metadata.AgentSessionIDLaunchID = "launch-current"
+			base := time.Now().UTC().Truncate(time.Second)
+			rec.Activity.LastActivityAt = base
+			st.sessions[rec.ID] = rec
+			signal := func(state domain.ActivityState, event string, at time.Duration) ports.ActivitySignal {
+				return ports.ActivitySignal{Valid: true, State: state, Event: event,
+					LaunchID: "launch-current", AgentSessionID: "native-current", Timestamp: base.Add(at)}
+			}
+			for _, s := range []ports.ActivitySignal{
+				signal(domain.ActivityActive, "user-prompt-submit", 30*time.Second),
+				signal(domain.ActivityIdle, "stop", 35*time.Second),
+				// AO's delivery is answered and that turn ends too.
+				signal(domain.ActivityIdle, "stop", 38*time.Second),
+				// The delivered turn's prompt hook, arriving last.
+				signal(domain.ActivityActive, "user-prompt-submit", tc.promptAt),
+			} {
+				if err := m.ApplyActivitySignal(ctx, rec.ID, s); err != nil {
+					t.Fatal(err)
+				}
+			}
+			got, _, err := st.GetSession(ctx, rec.ID)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if got.Activity.State != tc.wantState {
+				t.Fatalf("activity = %s at %s, want %s", got.Activity.State, got.Activity.LastActivityAt.Sub(base), tc.wantState)
+			}
+			if tc.wantState == domain.ActivityIdle && !got.Activity.LastActivityAt.Equal(base.Add(38*time.Second)) {
+				t.Fatalf("idle since %s, want the last Stop at 38s", got.Activity.LastActivityAt.Sub(base))
+			}
+		})
+	}
+}
