@@ -2386,17 +2386,20 @@ paths:
       operationId: listSessionAsides
       tags: [Sessions]
       description: >-
-        The session's asides, as the caller sees them, in the order their
-        messages were sent: at most the newest 1000. A message or steer that
-        mentions people or teams starts an aside: a thread between people
-        about that message, which its event names by asideId (its
+        The session's asides (comment threads), open and resolved, as the
+        caller sees them, in the order their messages were sent: at most the
+        newest 1000. An aside is a thread between people about one message.
+        Two things start one: a message or steer that mentions people or
+        teams (origin `tag`; its event names it by asideId: its
         chat.user_message event, or for a steer the event the steer request
-        returned, chat.turn_steer_requested). Only mentions start one. The
+        returned, chat.turn_steer_requested), and createSessionAside on any
+        message, steer or agent answer (origin `comment`). The
         message still goes to the agent like any other, but the agent never
         reads the aside: its replies never reach a worker, a prompt, a prompt
         suggestion or the agent's context. Anyone
         who can open the session (read or write) may list them; a client draws
-        each message's aside icon, and its unread dot, from this list.
+        each message's comment marker, and its unread state, from the open
+        ones in this list.
       responses:
         "200":
           description: The session's asides.
@@ -2414,6 +2417,63 @@ paths:
         "404":
           description: The caller can't open the session.
           $ref: "#/components/responses/Error"
+        default:
+          $ref: "#/components/responses/Error"
+    post:
+      operationId: createSessionAside
+      tags: [Sessions]
+      description: >-
+        Starts a comment thread (an aside whose origin is `comment`) on one
+        message of the session, with its first comment. Anyone who can open
+        the session may, a viewer too, and it needs no composer lease. The
+        anchor is a person's message (chat.user_message), a steer
+        (chat.turn_steered), or an agent's answer (the first
+        chat.assistant_delta event of the answer the client shows: one per
+        turn and itemId). quote, when set, is the exact passage of that
+        message the thread is about; it is stored sealed like other content
+        and copied into the thread, so the thread keeps it even if the
+        message is no longer shown. Nothing reaches the agent: everyone
+        watching the session receives chat.aside_created, and each person or
+        team member the comment mentions joins the thread and gets a
+        mentioned notification (mentions are checked as on sendMessage). A
+        retry with the same clientMessageId returns the thread the first try
+        created.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/AsideCreateInput"
+      responses:
+        "201":
+          description: The new thread and its first comment, or the ones an earlier try with the same clientMessageId created.
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: false
+                required: [aside, reply]
+                properties:
+                  aside:
+                    $ref: "#/components/schemas/Aside"
+                  reply:
+                    $ref: "#/components/schemas/AsideReply"
+        "404":
+          description: The caller can't open the session.
+          $ref: "#/components/responses/Error"
+        "409":
+          description: "`SESSION_TERMINATED`: the session ended or was deleted. Nothing is stored."
+          $ref: "#/components/responses/Error"
+        "422":
+          description: >-
+            `validation_error`: details.field `anchor` with details.reason
+            `invalid_anchor` when anchor.sequence is not a message, steer or
+            agent answer of this session; details.field `quote` with
+            details.reason `quote_too_long` past 2000 characters, or `blank`;
+            details.field `text` when the comment is blank or longer than
+            65536 characters; details.field `mentions` as on sendMessage.
+            Nothing is stored.
+          $ref: "#/components/responses/ValidationError"
         default:
           $ref: "#/components/responses/Error"
   /api/cloud/v1/orgs/{orgId}/sessions/{sessionId}/asides/{asideId}:
@@ -2472,8 +2532,17 @@ paths:
         team member the reply mentions joins the aside and gets a mentioned
         notification instead (mentions are checked as on sendMessage).
         Replying marks the aside read for the author, and resolves the
-        author's aside_reply and mentioned notifications for it. A retry with
-        the same clientMessageId returns the reply the first try created.
+        author's aside_reply and mentioned notifications for it. A reply to a
+        resolved aside reopens it. With sendToAgent (only for someone who can
+        prompt the agent), in one transaction the reply is stored (unless its
+        text is empty), the aside is resolved, and the agent gets ONE user
+        message from the caller holding the whole thread: the quoted passage
+        (or the anchor message's first line) and every comment in order, as
+        `Name: text`. That message goes through sendMessage's path (it queues
+        behind a running turn like any message) and its chat.user_message
+        event carries fromAside. Everyone watching gets chat.aside_resolved
+        with sentToAgent. A retry with the same clientMessageId returns the
+        reply the first try created and sends nothing again.
       requestBody:
         required: true
         content:
@@ -2488,10 +2557,19 @@ paths:
               schema:
                 type: object
                 additionalProperties: false
-                required: [reply]
+                required: [aside]
                 properties:
                   reply:
                     $ref: "#/components/schemas/AsideReply"
+                    description: The reply. Absent when sendToAgent sent the thread with no new text.
+                  aside:
+                    $ref: "#/components/schemas/Aside"
+                    description: The aside after the reply (reopened, or resolved by sendToAgent).
+                  sentMessage:
+                    $ref: "#/components/schemas/AsideSentMessage"
+        "403":
+          description: "`prompt_forbidden`: sendToAgent from someone who can't prompt the agent (a viewer). Nothing is stored."
+          $ref: "#/components/responses/Error"
         "404":
           description: The caller can't open the session, or the session has no such aside.
           $ref: "#/components/responses/Error"
@@ -2500,8 +2578,9 @@ paths:
           $ref: "#/components/responses/Error"
         "422":
           description: >-
-            `validation_error`: details.field `text` when the text is blank or
-            longer than 65536 characters; details.field `mentions` with a
+            `validation_error`: details.field `text` when the text is blank
+            (allowed only with sendToAgent) or longer than 65536 characters;
+            details.field `mentions` with a
             details.reason as on sendMessage (`unknown`, `no_access`,
             `outside_session`, `too_many`). Nothing is stored.
           $ref: "#/components/responses/ValidationError"
@@ -2565,6 +2644,61 @@ paths:
                 $ref: "#/components/schemas/Aside"
         "404":
           description: The caller can't open the session, or the session has no such aside.
+          $ref: "#/components/responses/Error"
+        default:
+          $ref: "#/components/responses/Error"
+  /api/cloud/v1/orgs/{orgId}/sessions/{sessionId}/asides/{asideId}/resolve:
+    parameters:
+      - $ref: "#/components/parameters/OrgId"
+      - $ref: "#/components/parameters/SessionId"
+      - $ref: "#/components/parameters/AsideId"
+    post:
+      operationId: resolveSessionAside
+      tags: [Sessions]
+      description: >-
+        Resolves the aside without telling the agent. Anyone who can open the
+        session may, a viewer too. Nobody is notified; everyone watching gets
+        chat.aside_resolved. Resolving one already resolved changes nothing.
+        A new reply, or reopenSessionAside, reopens it.
+      responses:
+        "200":
+          description: The aside after the change.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Aside"
+        "404":
+          description: The caller can't open the session, or the session has no such aside.
+          $ref: "#/components/responses/Error"
+        "409":
+          description: "`SESSION_TERMINATED`: the session ended or was deleted."
+          $ref: "#/components/responses/Error"
+        default:
+          $ref: "#/components/responses/Error"
+  /api/cloud/v1/orgs/{orgId}/sessions/{sessionId}/asides/{asideId}/reopen:
+    parameters:
+      - $ref: "#/components/parameters/OrgId"
+      - $ref: "#/components/parameters/SessionId"
+      - $ref: "#/components/parameters/AsideId"
+    post:
+      operationId: reopenSessionAside
+      tags: [Sessions]
+      description: >-
+        Reopens a resolved aside. Anyone who can open the session may. Nobody
+        is notified; everyone watching gets chat.aside_reopened. Reopening
+        one that is open changes nothing.
+      responses:
+        "200":
+          description: The aside after the change.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Aside"
+        "404":
+          description: The caller can't open the session, or the session has no such aside.
+          $ref: "#/components/responses/Error"
+        "409":
+          description: "`SESSION_TERMINATED`: the session ended or was deleted."
           $ref: "#/components/responses/Error"
         default:
           $ref: "#/components/responses/Error"
@@ -5344,7 +5478,8 @@ components:
       description: >-
         The asideId on the event of the message that started the aside: its
         chat.user_message event, or for a steer the event the steer request
-        returned (chat.turn_steer_requested).
+        returned (chat.turn_steer_requested); or the asideId
+        createSessionAside returned.
       schema:
         type: string
         format: uuid
@@ -5881,9 +6016,11 @@ components:
         one. Their own message or steer in the session resolves every one of
         theirs there, and their reply in an aside resolves that aside's.
         title is "{author} mentioned you", or "{author} mentioned {team}"
-        when only the team named them; body is the message's (or the
-        reply's) first line, about 200 characters, with each mention as
-        @Name.
+        when only the team named them; a mention in a comment (a reply in an
+        aside, or createSessionAside's first comment) reads "{author}
+        commented and mentioned you" (or "... mentioned {team}"). body is the
+        message's (or the comment's) first line, about 200 characters, with
+        each mention as @Name.
       properties:
         authorUserId:
           type: string
@@ -5936,9 +6073,10 @@ components:
         id, new title, body and metadata, unread again, and a
         notification_created event so it alerts again). Opening the aside
         (markSessionAsideRead) marks it read; replying in it resolves it, and
-        the next reply starts a new one. title is "{author} replied in an
-        aside"; body is the reply's first line, about 200 characters, with
-        each mention as @Name.
+        the next reply starts a new one. title is "{author} replied to a
+        comment"; body is the reply's first line, about 200 characters, with
+        each mention as @Name. Resolving, reopening and sending a thread to
+        the agent notify nobody.
       properties:
         asideId:
           type: string
@@ -6014,7 +6152,7 @@ components:
           description: Someone mentions a team I'm in. On by default.
         asideReplies:
           type: boolean
-          description: New replies in asides I'm in (aside_reply). On by default.
+          description: New replies to comments I'm in (aside_reply). On by default.
     NotificationPreferencesInput:
       type: object
       additionalProperties: false
@@ -8855,21 +8993,122 @@ components:
         muted:
           type: boolean
           description: The caller muted it (muteSessionAside).
-    AsideAnchor:
+        origin:
+          type: string
+          enum: [tag, comment]
+          description: >-
+            `tag`: a message that mentioned people started it. `comment`:
+            createSessionAside started it. Absent from a control plane that
+            predates comments, which means `tag`.
+        quote:
+          type: string
+          maxLength: 2000
+          description: The exact passage of the anchor message the thread is about. Absent for a thread on the whole message.
+        startedBy:
+          $ref: "#/components/schemas/AsidePerson"
+        resolvedAt:
+          type: string
+          format: date-time
+          description: When it was resolved. Absent while it is open.
+        resolvedBy:
+          $ref: "#/components/schemas/AsidePerson"
+        sentToAgentAt:
+          type: string
+          format: date-time
+          description: When someone last sent the whole thread to the agent (replyToSessionAside with sendToAgent).
+        sentToAgentBy:
+          $ref: "#/components/schemas/AsidePerson"
+    AsidePerson:
+      type: object
+      additionalProperties: false
+      required: [userId, name]
+      properties:
+        userId:
+          type: string
+          format: uuid
+        name:
+          type: string
+          description: Their display name at the time. Never an email address.
+    AsideSentMessage:
       type: object
       additionalProperties: false
       required: [sequence]
-      description: The message that started the aside.
+      description: The message replyToSessionAside's sendToAgent sent to the agent.
       properties:
         sequence:
           type: integer
           format: int64
           minimum: 0
           maximum: 9007199254740991
+          description: Its chat.user_message event.
+        turnId:
+          type: string
+          format: uuid
+        clientMessageId:
+          type: string
+    AsideCreateInput:
+      type: object
+      additionalProperties: false
+      required: [anchor, text, clientMessageId]
+      properties:
+        anchor:
+          type: object
+          additionalProperties: false
+          required: [sequence]
+          properties:
+            sequence:
+              type: integer
+              format: int64
+              minimum: 0
+              maximum: 9007199254740991
+              description: >-
+                The message's event: chat.user_message, chat.turn_steered, or
+                the first chat.assistant_delta of an agent's answer.
+        quote:
+          type: string
+          minLength: 1
+          maxLength: 2000
+          description: The exact passage of that message, as the client shows it. Absent for a thread on the whole message.
+        text:
+          type: string
+          minLength: 1
+          maxLength: 65536
+          description: The first comment. Each mention is written as @Name, as in a message.
+        mentions:
+          type: array
+          maxItems: 20
+          description: People and teams the comment names, checked as on sendMessage. Each joins the thread and gets a mentioned notification.
+          items:
+            $ref: "#/components/schemas/MentionToken"
+        clientMessageId:
+          type: string
+          minLength: 1
+          maxLength: 200
+          description: The client's id for the comment. A retry with the same one returns the first thread and stores nothing new.
+    AsideAnchor:
+      type: object
+      additionalProperties: false
+      required: [sequence]
+      description: The message the aside is about.
+      properties:
+        kind:
+          type: string
+          enum: [user_message, steer, agent_message]
+          description: Absent from a control plane that predates comments, which means user_message or steer.
+        sequence:
+          type: integer
+          format: int64
+          minimum: 0
+          maximum: 9007199254740991
           description: >-
-            Its chat.user_message event, or for a steer the event the steer
-            request returned (chat.turn_steer_requested). A client finds a
+            Its chat.user_message event; for a steer the event the steer
+            request returned (chat.turn_steer_requested), or chat.turn_steered
+            for a comment on a steer; for an agent's answer, the first
+            chat.assistant_delta event of that answer. A client finds a
             steer's chat.turn_steered by clientMessageId.
+        itemId:
+          type: string
+          description: An agent answer's itemId (with turnId, the answer the client shows). Absent for other kinds.
         turnId:
           type: string
           format: uuid
@@ -8880,8 +9119,11 @@ components:
       type: object
       additionalProperties: false
       required: [sequence, text, mentions, createdAt]
-      description: The message that started an aside, as the transcript shows it.
+      description: The message the aside is about, as the transcript shows it.
       properties:
+        kind:
+          type: string
+          enum: [user_message, steer, agent_message]
         sequence:
           type: integer
           format: int64
@@ -8903,7 +9145,7 @@ components:
           format: uuid
         authorName:
           type: string
-          description: Never an email address.
+          description: Never an email address. Absent for an agent's answer.
         createdAt:
           type: string
           format: date-time
@@ -8961,9 +9203,11 @@ components:
       properties:
         text:
           type: string
-          minLength: 1
           maxLength: 65536
-          description: The reply. Blank text is refused with 422. Each mention is written as @Name, as in a message.
+          description: >-
+            The reply. Blank text is refused with 422, except with sendToAgent,
+            which then sends and resolves the thread as it is. Each mention is
+            written as @Name, as in a message.
         mentions:
           type: array
           maxItems: 20
@@ -8978,6 +9222,12 @@ components:
           minLength: 1
           maxLength: 200
           description: The client's id for the reply. A retry with the same one returns the first reply and stores nothing new.
+        sendToAgent:
+          type: boolean
+          description: >-
+            Also send the whole thread to the agent as one message from the
+            caller, and resolve it ("Also send to agent"). Only someone who
+            can prompt the agent may (403 prompt_forbidden otherwise).
     EditQueuedMessageInput:
       type: object
       additionalProperties: false
@@ -11597,6 +11847,8 @@ components:
                 exactly when it carries mentions, in the transaction that
                 appends it, so the event the send returns has it too. Absent
                 from a control plane that predates asides.
+            fromAside:
+              $ref: "#/components/schemas/FromAside"
         createdAt:
           type: string
           format: date-time
@@ -12122,6 +12374,147 @@ components:
         createdAt:
           type: string
           format: date-time
+    FromAside:
+      type: object
+      additionalProperties: false
+      required: [asideId, comments]
+      description: >-
+        Set on a user message that "Also send to agent" sent: the thread as
+        it was sent. text is the plain-text rendering the agent got; a client
+        shows this instead, as a "From a comment thread" card.
+      properties:
+        asideId:
+          type: string
+          format: uuid
+        quote:
+          type: string
+          description: The quoted passage. Absent for a thread on the whole message.
+        anchorKind:
+          type: string
+          enum: [user_message, steer, agent_message]
+        anchorExcerpt:
+          type: string
+          description: The anchor message's first line, about 200 characters, when the thread has no quote.
+        comments:
+          type: array
+          description: Every comment in order, as sent.
+          items:
+            type: object
+            additionalProperties: false
+            required: [authorName, text]
+            properties:
+              authorUserId:
+                type: string
+                format: uuid
+              authorName:
+                type: string
+                description: Never an email address.
+              text:
+                type: string
+    AsideCreatedEvent:
+      type: object
+      additionalProperties: false
+      required: [sessionId, sequence, type, payload, createdAt]
+      description: >-
+        A comment thread started (createSessionAside). Hidden from the agent
+        like chat.aside_reply. Its first comment arrives as chat.aside_reply.
+      properties:
+        sessionId:
+          type: string
+        sequence:
+          type: integer
+          format: int64
+          maximum: 9007199254740991
+        type:
+          const: chat.aside_created
+        payload:
+          type: object
+          additionalProperties: false
+          required: [asideId, anchor, origin, startedBy, createdAt]
+          properties:
+            asideId:
+              type: string
+              format: uuid
+            anchor:
+              $ref: "#/components/schemas/AsideAnchor"
+            quote:
+              type: string
+            origin:
+              type: string
+              enum: [tag, comment]
+            startedBy:
+              $ref: "#/components/schemas/AsidePerson"
+            createdAt:
+              type: string
+              format: date-time
+        createdAt:
+          type: string
+          format: date-time
+    AsideResolvedEvent:
+      type: object
+      additionalProperties: false
+      required: [sessionId, sequence, type, payload, createdAt]
+      description: An aside was resolved (resolveSessionAside, or a reply with sendToAgent). Hidden from the agent.
+      properties:
+        sessionId:
+          type: string
+        sequence:
+          type: integer
+          format: int64
+          maximum: 9007199254740991
+        type:
+          const: chat.aside_resolved
+        payload:
+          type: object
+          additionalProperties: false
+          required: [asideId, resolvedBy, resolvedAt, sentToAgent]
+          properties:
+            asideId:
+              type: string
+              format: uuid
+            resolvedBy:
+              $ref: "#/components/schemas/AsidePerson"
+            resolvedAt:
+              type: string
+              format: date-time
+            sentToAgent:
+              type: boolean
+              description: The thread was sent to the agent as it was resolved.
+            sentMessage:
+              $ref: "#/components/schemas/AsideSentMessage"
+        createdAt:
+          type: string
+          format: date-time
+    AsideReopenedEvent:
+      type: object
+      additionalProperties: false
+      required: [sessionId, sequence, type, payload, createdAt]
+      description: A resolved aside was reopened (reopenSessionAside, or a reply). Hidden from the agent.
+      properties:
+        sessionId:
+          type: string
+        sequence:
+          type: integer
+          format: int64
+          maximum: 9007199254740991
+        type:
+          const: chat.aside_reopened
+        payload:
+          type: object
+          additionalProperties: false
+          required: [asideId, reopenedBy, reopenedAt]
+          properties:
+            asideId:
+              type: string
+              format: uuid
+            reopenedBy:
+              $ref: "#/components/schemas/AsidePerson"
+            reopenedAt:
+              type: string
+              format: date-time
+        createdAt:
+          type: string
+          format: date-time
     ClientEvent:
       oneOf:
         - $ref: "#/components/schemas/UserMessageEvent"
@@ -12138,6 +12531,9 @@ components:
         - $ref: "#/components/schemas/ScriptStepEvent"
         - $ref: "#/components/schemas/AgentSwitchedEvent"
         - $ref: "#/components/schemas/AsideReplyEvent"
+        - $ref: "#/components/schemas/AsideCreatedEvent"
+        - $ref: "#/components/schemas/AsideResolvedEvent"
+        - $ref: "#/components/schemas/AsideReopenedEvent"
     ClientEventPage:
       type: object
       additionalProperties: false
