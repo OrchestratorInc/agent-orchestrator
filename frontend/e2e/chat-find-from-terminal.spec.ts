@@ -5,8 +5,8 @@ import { installFakeTerminalMux } from "./support/fake-terminal-mux";
 
 // Issue #8420: on Windows/Linux a focused terminal owned Ctrl+F, and the renderer
 // dropped the chord for Find in chat without looking at the binding, so even a
-// user-rebound chord never opened the bar. Ctrl+Shift+F is never terminal input;
-// plain Ctrl+F must still reach the shell.
+// user-rebound chord never opened the bar. Ctrl+Shift+F opens chat search
+// while plain Ctrl+F (Cmd+F on macOS) keeps opening terminal search.
 
 const projectId = "find-from-terminal";
 const sessionId = "find-from-terminal-chat";
@@ -125,7 +125,7 @@ async function openChatWithFocusedTerminal(page: Page) {
 
 const findBar = (page: Page) => page.locator('input[aria-label="Find in chat"]');
 
-test("focused terminal keeps Ctrl+F and Find in chat opens on Ctrl+Shift+F @T0 @TRM", async ({ page }) => {
+async function focusSplitShell(page: Page) {
 	await openChatWithFocusedTerminal(page);
 	await page.getByRole("button", { name: "New terminal" }).click();
 	await expect(page.getByTestId("chat-shell-terminal")).toBeVisible({ timeout: 15_000 });
@@ -143,11 +143,19 @@ test("focused terminal keeps Ctrl+F and Find in chat opens on Ctrl+Shift+F @T0 @
 	await shell.click();
 	await expect.poll(() => page.evaluate(() => Boolean(document.activeElement?.closest(".xterm")))).toBe(true);
 
-	// The shell keeps its own find, which is why the chat's is on another chord.
-	await page.keyboard.press("Control+f");
+	return shell;
+}
+
+test("focused terminal keeps its platform find key; Ctrl+Shift+F opens chat Find on Windows/Linux @T0 @TRM", async ({ page }, testInfo) => {
+	const shell = await focusSplitShell(page);
+	// macOS uses Cmd+F for terminal search; it has no Ctrl+Shift+F default.
+	await page.keyboard.press(process.platform === "darwin" ? "Meta+f" : "Control+f");
 	await expect(page.getByRole("searchbox", { name: "Search terminal" })).toBeVisible();
 	await expect(findBar(page)).toHaveCount(0);
+	await testInfo.attach("terminal-search", { body: await page.screenshot(), contentType: "image/png" });
 	await page.keyboard.press("Escape");
+	if (process.platform === "darwin") return;
+
 	await shell.click();
 	await expect.poll(() => page.evaluate(() => Boolean(document.activeElement?.closest(".xterm")))).toBe(true);
 
@@ -155,8 +163,42 @@ test("focused terminal keeps Ctrl+F and Find in chat opens on Ctrl+Shift+F @T0 @
 	await page.keyboard.press("Control+Shift+F");
 	await expect(findBar(page)).toBeVisible();
 	await expect(findBar(page)).toBeFocused();
+	await testInfo.attach("chat-find-default", { body: await page.screenshot(), contentType: "image/png" });
+	await page.keyboard.press("Escape");
+	await expect(findBar(page)).toHaveCount(0);
+	await expect.poll(() => page.evaluate(() => Boolean(document.activeElement?.closest(".xterm")))).toBe(true);
 });
 
-
-
-
+test("custom Ctrl+J opens chat Find before xterm can receive the key @T0 @TRM", async ({ page }, testInfo) => {
+	const shell = await focusSplitShell(page);
+	await page.evaluate(async () => {
+		const modulePath = "/src/renderer/stores/keybindings-store.ts";
+		const { useKeybindingsStore } = await import(/* @vite-ignore */ modulePath);
+		await useKeybindingsStore.getState().setBindings("find-in-chat", [
+			{ key: "j", ctrl: true, meta: false, shift: false, alt: false },
+		]);
+	});
+	const input = shell.getByRole("textbox", { name: "Terminal input" });
+	await input.evaluate((node) => {
+		node.setAttribute("data-test-received-keys", "");
+		node.addEventListener("keydown", (event) => {
+			const key = (event as KeyboardEvent).key.toLowerCase();
+			if (key === "a" || key === "j") {
+				node.setAttribute("data-test-received-keys", (node.getAttribute("data-test-received-keys") ?? "") + key);
+			}
+		}, { capture: true });
+	});
+	// This listener is on xterm's actual keyboard target. Ordinary keys reach
+	// the target, but the Find key is captured before xterm can emit a line feed.
+	await page.keyboard.press("a");
+	await expect(input).toHaveAttribute("data-test-received-keys", "a");
+	await page.keyboard.press("Control+j");
+	await expect(findBar(page)).toBeFocused();
+	await expect(input).toHaveAttribute("data-test-received-keys", "a");
+	await testInfo.attach("chat-find-custom-ctrl-j", { body: await page.screenshot(), contentType: "image/png" });
+	await page.keyboard.press("Escape");
+	await expect(findBar(page)).toHaveCount(0);
+	await expect(input).toBeFocused();
+	await page.keyboard.press("a");
+	await expect(input).toHaveAttribute("data-test-received-keys", "aa");
+});

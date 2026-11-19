@@ -1,5 +1,5 @@
 import { useRef } from "react";
-import { act, cleanup, fireEvent, render, screen } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen, within } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { useChatFind } from "./useChatFind";
 import type { ConversationMessage, ConversationSnapshot } from "../types/conversation";
@@ -55,6 +55,22 @@ describe("find in chat interactions", () => {
 		useKeybindingsStore.setState({ overrides: {} });
 	});
 	afterEach(() => { cleanup(); vi.clearAllTimers(); vi.useRealTimers(); vi.restoreAllMocks(); });
+
+	it("opens on the transcript paired with a focused split terminal, not an earlier visible chat", async () => {
+		render(<>
+			<div data-testid="other-chat"><Harness /></div>
+			<div data-testid="center-split-area">
+				<Harness />
+				<div className="xterm"><textarea aria-label="Terminal input" /></div>
+			</div>
+		</>);
+		const terminal = screen.getByRole("textbox", { name: "Terminal input" });
+		terminal.focus();
+		fireEvent.keyDown(terminal, { key: "F", ctrlKey: true, shiftKey: true });
+		await tick(20);
+		expect(within(screen.getByTestId("center-split-area")).getByRole("searchbox")).toHaveFocus();
+		expect(within(screen.getByTestId("other-chat")).queryByRole("searchbox")).not.toBeInTheDocument();
+	});
 
 	it("opens searching for a session search result's word, from the result's message", async () => {
 		get.mockResolvedValue({ data: { conversationId: "c", transcriptRevision: "r", occurrences: hits, total: 2, offset: 0, initialIndex: 1 }, response: { status: 200 } });

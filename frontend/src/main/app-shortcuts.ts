@@ -167,7 +167,8 @@ export function attachAppShortcuts(
 			onShortcut("toggle-browser-devtools");
 			return;
 		}
-		const match = appShortcutMatch(chord, isMac, getOverrides());
+		const overrides = getOverrides();
+		const match = appShortcutMatch(chord, isMac, overrides);
 		if (!match) return;
 		const { id, channel, payload } = match;
 		// Contextual actions are owned by the focused surface. Let the renderer
@@ -175,7 +176,7 @@ export function attachAppShortcuts(
 		if (id === "find-in-chat" || id === "add-selection-to-chat") return;
 		if (
 			!isMac &&
-			shortcutYieldsToTerminal(id, chord, matchedByUserOverride(id, chord, getOverrides())) &&
+			shortcutYieldsToTerminal(id, chord, matchedByUserOverride(id, chord, isMac, overrides)) &&
 			isTerminalFocused()
 		) {
 			return;

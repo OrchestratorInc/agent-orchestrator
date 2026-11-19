@@ -97,7 +97,7 @@ export function useAppShortcut(
 	useEffect(() => {
 		if (!enabled) return;
 		const isMac = isMacPlatform();
-		const onKeyDown = (event: KeyboardEvent) => {
+		const onKeyDown = (event: KeyboardEvent, beforeTerminal = false) => {
 			if ((event.defaultPrevented && !claimedEvents.has(event)) || event.isComposing || event.repeat) return;
 			const chord = {
 				key: event.key,
@@ -111,19 +111,31 @@ export function useAppShortcut(
 			if (!matchesAppShortcut(id, chord, isMac, overrides)) return;
 			if (!shouldHandleRef.current()) return;
 			const target = event.target instanceof Element ? event.target : null;
+			const userOverrode = matchedByUserOverride(id, chord, isMac, overrides);
+			// xterm consumes Ctrl+letter keydowns before they can bubble to the
+			// window. Claim a custom contextual Find here only when a chat can
+			// handle it. Defaults, IME and ineligible contexts still reach xterm.
+			if (beforeTerminal && (!userOverrode || !target?.closest(".xterm"))) return;
 			if (
 				!isMac &&
-				shortcutYieldsToTerminal(id, chord, matchedByUserOverride(id, chord, overrides)) &&
+				shortcutYieldsToTerminal(id, chord, userOverrode) &&
 				target?.closest(TERMINAL_SELECTOR)
 			) {
 				return;
 			}
 			claimedEvents.add(event);
 			event.preventDefault();
+			if (beforeTerminal) event.stopPropagation();
 			handlerRef.current(id === "jump-to-session" ? { id, index: Number(event.key) - 1 } : { id });
 		};
-		window.addEventListener("keydown", onKeyDown);
-		return () => window.removeEventListener("keydown", onKeyDown);
+		const bubble = (event: KeyboardEvent) => onKeyDown(event);
+		const capture = (event: KeyboardEvent) => onKeyDown(event, true);
+		window.addEventListener("keydown", bubble);
+		if (id === "find-in-chat") window.addEventListener("keydown", capture, true);
+		return () => {
+			window.removeEventListener("keydown", bubble);
+			if (id === "find-in-chat") window.removeEventListener("keydown", capture, true);
+		};
 	}, [id, enabled]);
 }
 

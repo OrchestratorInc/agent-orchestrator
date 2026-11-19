@@ -162,8 +162,8 @@ const binding = (
 export function defaultShortcutBindings(id: AppShortcutId, isMac: boolean): readonly ShortcutBinding[] {
 	const primary = isMac ? { meta: true } : { ctrl: true };
 	switch (id) {
-		// Ctrl+F is readline forward-char, so a focused terminal keeps the plain
-		// chord (see shortcutYieldsToTerminal). Ctrl+Shift+F is never terminal input,
+		// A focused terminal keeps Ctrl+F for its own find bar
+		// (see shortcutYieldsToTerminal). Ctrl+Shift+F is not a terminal shortcut,
 		// so it runs the command from anywhere, like the Shift variants of the other
 		// terminal-colliding keys.
 		case "find-in-chat":
@@ -367,7 +367,7 @@ const YIELDS_TO_FOCUSED_TERMINAL: ReadonlySet<AppShortcutId> = new Set<AppShortc
 	"close-shell-terminal", // Ctrl+W unix-word-rubout
 	"toggle-sidebar", // Ctrl+B backward-char / tmux prefix
 	"keyboard-shortcuts", // Ctrl+/ readline undo
-	"find-in-chat", // Ctrl+F forward-char
+	"find-in-chat", // Ctrl+F opens terminal search
 	// Ctrl+L clear-screen. No listener claims this id generically today — the chat
 	// and diff selection actions own their chord — but the entry keeps the plain
 	// chord terminal-owned for any shared listener that does.
@@ -384,13 +384,15 @@ export function shortcutYieldsToTerminal(id: AppShortcutId, chord: ShortcutChord
 	return YIELDS_TO_FOCUSED_TERMINAL.has(id) && !chord.shift && !chord.meta && chord.ctrl !== chord.alt;
 }
 
-/** True when `chord` matched a binding the user set, rather than the default. */
+/** Saved overrides hold the whole list, including defaults retained after editing. */
 export function matchedByUserOverride(
 	id: AppShortcutId,
 	chord: ShortcutChord,
+	isMac: boolean,
 	overrides: KeybindingOverrides = {},
 ): boolean {
-	return (overrides[id] ?? []).some((candidate) => matchesShortcutBinding(chord, candidate));
+	return (overrides[id] ?? []).some((candidate) => matchesShortcutBinding(chord, candidate)) &&
+		!defaultShortcutBindings(id, isMac).some((candidate) => matchesShortcutBinding(chord, candidate));
 }
 
 export function matchesAppShortcut(

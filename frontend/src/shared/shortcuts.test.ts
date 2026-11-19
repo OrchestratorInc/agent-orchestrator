@@ -404,12 +404,12 @@ describe("shortcut binding matching and validation", () => {
 		expect(shortcutYieldsToTerminal("command-palette", chord({ key: "k", ctrl: true }))).toBe(true);
 	});
 
-	it("reports a chord as user-bound only when it matches an override", () => {
-		const overrides = { "find-in-chat": [chord({ key: "j", ctrl: true }) as ShortcutBinding] };
-		expect(matchedByUserOverride("find-in-chat", chord({ key: "j", ctrl: true }), overrides)).toBe(true);
-		expect(matchedByUserOverride("find-in-chat", chord({ key: "f", ctrl: true }), overrides)).toBe(false);
-		expect(matchedByUserOverride("add-selection-to-chat", chord({ key: "j", ctrl: true }), overrides)).toBe(false);
-		expect(matchedByUserOverride("find-in-chat", chord({ key: "j", ctrl: true }))).toBe(false);
+	it("reports only non-default chords from a saved override as user-bound", () => {
+		const overrides = { "find-in-chat": [...defaultShortcutBindings("find-in-chat", false), chord({ key: "j", ctrl: true }) as ShortcutBinding] };
+		expect(matchedByUserOverride("find-in-chat", chord({ key: "j", ctrl: true }), false, overrides)).toBe(true);
+		expect(matchedByUserOverride("find-in-chat", chord({ key: "f", ctrl: true }), false, overrides)).toBe(false);
+		expect(matchedByUserOverride("add-selection-to-chat", chord({ key: "j", ctrl: true }), false, overrides)).toBe(false);
+		expect(matchedByUserOverride("find-in-chat", chord({ key: "j", ctrl: true }), false)).toBe(false);
 	});
 
 	it("reserves common platform window and editing chords", () => {

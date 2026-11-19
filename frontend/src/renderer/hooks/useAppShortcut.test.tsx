@@ -11,8 +11,8 @@ vi.mock("../lib/platform", () => ({ isMacPlatform: () => false }));
 const ID = "command-palette" as AppShortcutId;
 const OTHER = "quick-open-file" as AppShortcutId;
 
-function FindShortcut({ handler }: { handler: () => void }) {
-	useAppShortcut("find-in-chat", handler);
+function FindShortcut({ handler, shouldHandle }: { handler: () => void; shouldHandle?: () => boolean }) {
+	useAppShortcut("find-in-chat", handler, true, shouldHandle);
 	return null;
 }
 
@@ -111,10 +111,28 @@ describe("useAppShortcut terminal yield (Windows/Linux)", () => {
 		const handler = vi.fn();
 		render(<FindShortcut handler={handler} />);
 		const term = terminal();
+		const xtermKeyDown = vi.fn((event: KeyboardEvent) => event.stopPropagation());
+		term.addEventListener("keydown", xtermKeyDown);
 		press(term, { key: "f", code: "KeyF", ctrlKey: true });
 		expect(handler).not.toHaveBeenCalled();
+		expect(xtermKeyDown).toHaveBeenCalledTimes(1);
 		press(term, { key: "j", code: "KeyJ", ctrlKey: true });
 		expect(handler).toHaveBeenCalledTimes(1);
+		expect(xtermKeyDown).toHaveBeenCalledTimes(1);
+	});
+
+	it("leaves custom Find input to xterm when no transcript can handle it", () => {
+		useKeybindingsStore.setState({
+			overrides: { "find-in-chat": [{ key: "j", ctrl: true, meta: false, shift: false, alt: false }] },
+		});
+		const handler = vi.fn();
+		render(<FindShortcut handler={handler} shouldHandle={() => false} />);
+		const term = terminal();
+		const xtermKeyDown = vi.fn();
+		term.addEventListener("keydown", xtermKeyDown);
+		press(term, { key: "j", code: "KeyJ", ctrlKey: true });
+		expect(handler).not.toHaveBeenCalled();
+		expect(xtermKeyDown).toHaveBeenCalledTimes(1);
 	});
 });
 

@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
-import { CLOSE_SHELL_TERMINAL_SHORTCUT_CHANNEL, APP_SHORTCUT_CHANNEL, KEYBOARD_SHORTCUTS_HELP_CHANNEL, NEXT_SESSION_SHORTCUT_CHANNEL, NEXT_TAB_SHORTCUT_CHANNEL, NEW_SESSION_SHORTCUT_CHANNEL, NEW_SHELL_TERMINAL_SHORTCUT_CHANNEL, OPEN_SETTINGS_SHORTCUT_CHANNEL, PREVIOUS_SESSION_SHORTCUT_CHANNEL, PREVIOUS_TAB_SHORTCUT_CHANNEL, TERMINAL_FONT_SIZE_SHORTCUT_CHANNEL, ARTIFACT_ZOOM_SHORTCUT_CHANNEL } from "../shared/shortcuts";
+import { CLOSE_SHELL_TERMINAL_SHORTCUT_CHANNEL, APP_SHORTCUT_CHANNEL, KEYBOARD_SHORTCUTS_HELP_CHANNEL, NEXT_SESSION_SHORTCUT_CHANNEL, NEXT_TAB_SHORTCUT_CHANNEL, NEW_SESSION_SHORTCUT_CHANNEL, NEW_SHELL_TERMINAL_SHORTCUT_CHANNEL, OPEN_SETTINGS_SHORTCUT_CHANNEL, PREVIOUS_SESSION_SHORTCUT_CHANNEL, PREVIOUS_TAB_SHORTCUT_CHANNEL, TERMINAL_FONT_SIZE_SHORTCUT_CHANNEL, ARTIFACT_ZOOM_SHORTCUT_CHANNEL, defaultShortcutBindings, type AppShortcutId } from "../shared/shortcuts";
 import { attachAppShortcuts, attachShellReloadGuard } from "./app-shortcuts";
 import { toggleAppDevTools } from "./app-devtools";
 
@@ -370,30 +370,40 @@ describe("attachAppShortcuts", () => {
 		}
 	});
 
-	it("honors a user's own binding while a terminal is focused (issue #8420)", () => {
+	it("honors a genuinely new chord for a terminal-yielding command (issue #8420)", () => {
 		const source = fakeSource();
 		const target = fakeTarget();
 		attachAppShortcuts(
-			source,
-			false,
-			target,
-			false,
-			() => ({ "toggle-terminal": [{ key: "j", ctrl: true, meta: false, shift: false, alt: false }] }),
-			() => false,
-			() => true,
-			undefined,
-			() => true,
+			source, false, target, false,
+			() => ({ "command-palette": [{ key: "j", ctrl: true, meta: false, shift: false, alt: false }] }),
+			() => false, () => true, undefined, () => true,
 		);
 
-		// The default Ctrl+` still belongs to the terminal; the chord the user chose
-		// themselves is theirs, or rebinding could never escape the yield.
-		const kept = source.emit({ key: "`", code: "Backquote", control: true });
-		expect(kept.preventDefault).not.toHaveBeenCalled();
-
 		const bound = source.emit({ key: "j", control: true });
-		expect(target.send).toHaveBeenCalledWith(APP_SHORTCUT_CHANNEL, { id: "toggle-terminal" });
+		expect(target.send).toHaveBeenCalledExactlyOnceWith(APP_SHORTCUT_CHANNEL, { id: "command-palette" });
 		expect(bound.preventDefault).toHaveBeenCalledOnce();
 	});
+
+	it.each([
+		["add a binding to Quick open", "quick-open-file", { key: "p", control: true }, "add"],
+		["remove a binding from Command palette", "command-palette", { key: "k", control: true }, "remove"],
+		["add a binding to Back", "history-back", { key: "ArrowLeft", alt: true }, "add"],
+		["move Ctrl+Shift+P to another command", "command-palette", { key: "k", control: true }, "conflict"],
+	] satisfies [string, AppShortcutId, Partial<InputEvent> & { key: string }, string][])(
+		"keeps the retained shell binding when Settings would %s",
+		(_label, id, input, edit) => {
+			const source = fakeSource(), target = fakeTarget();
+			const defaults = defaultShortcutBindings(id, false);
+			const custom = { key: "o", ctrl: true, meta: false, shift: true, alt: true };
+			const overrides = {
+				[id]: edit === "add" ? [...defaults, custom] : defaults.filter((binding) => !binding.shift),
+				...(edit === "conflict" ? { "toggle-terminal": [{ key: "p", ctrl: true, meta: false, shift: true, alt: false }] } : {}),
+			};
+			attachAppShortcuts(source, false, target, false, () => overrides, () => false, () => true, undefined, () => true);
+			expect(source.emit(input).preventDefault).not.toHaveBeenCalled();
+			expect(target.send).not.toHaveBeenCalled();
+		},
+	);
 
 	it("still opens the palette from a focused terminal on macOS", () => {
 		const source = fakeSource();
