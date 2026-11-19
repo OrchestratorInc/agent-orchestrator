@@ -144,13 +144,29 @@ func (m *Manager) verifyNativeRestore(ctx context.Context, verifier ports.Native
 	if !ok {
 		return errors.New("native restore requires a current rendered terminal")
 	}
-	proofCtx, cancel := context.WithTimeout(ctx, 60*time.Second)
+	wait := m.nativeRestoreProofWait
+	if wait <= 0 {
+		wait = 60 * time.Second
+	}
+	proofCtx, cancel := context.WithTimeout(ctx, wait)
 	defer cancel()
+	var readErr error
 	for {
 		output, err := reader.GetStyledOutput(proofCtx, handle, 32)
 		if err != nil {
-			return err
+			// A failed read of the replacement's screen is not evidence against
+			// it: retry like an unready composer until the proof deadline, and
+			// report the last read failure if the deadline ends the proof.
+			if proofCtx.Err() != nil {
+				return errors.Join(proofCtx.Err(), err)
+			}
+			readErr = err
+			if err := sleepContext(proofCtx, 250*time.Millisecond); err != nil {
+				return errors.Join(err, readErr)
+			}
+			continue
 		}
+		readErr = nil
 		ready, err := verifier.VerifyNativeRestore(proofCtx, cfg, generation, output)
 		if err != nil {
 			return err

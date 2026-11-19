@@ -40,6 +40,9 @@ DROP TABLE mastra_code_schema_guard;
 -- Refuse a rollback if Mastra Code rows would violate the restored CHECK or the
 -- constraint no longer has the shape this migration knows how to reverse.
 -- Mastra Code need not precede fake immediately: later harnesses may follow it.
+-- NO TRANSACTION means a stop after the rewrite leaves this version applied
+-- with Mastra Code already removed, so that restored shape is accepted too and
+-- a retried Down finishes instead of needing a manual repair.
 -- +goose StatementBegin
 CREATE TEMP TABLE IF NOT EXISTS mastra_code_schema_guard (valid INTEGER NOT NULL CHECK (valid = 1));
 -- +goose StatementEnd
@@ -48,7 +51,7 @@ INSERT INTO mastra_code_schema_guard (valid)
 SELECT CASE WHEN EXISTS (SELECT 1 FROM sessions WHERE harness = 'mastra-code')
     OR NOT EXISTS (SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'sessions'
         AND sql LIKE '%CHECK (harness IN (%' AND sql LIKE '%''fake''))%'
-        AND instr(sql, '''mastra-code'', ') > 0)
+        AND (instr(sql, '''mastra-code'', ') > 0 OR instr(sql, '''mastra-code''') = 0))
     THEN 0 ELSE 1 END;
 -- +goose StatementEnd
 -- +goose StatementBegin

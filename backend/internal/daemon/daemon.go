@@ -1322,6 +1322,7 @@ func Run(buildVersion string) (retErr error) {
 		Activity:           hookActivity,
 		PRRefresh:          reviewRefresher,
 		NativeSessions:     nativeSessions,
+		TerminalReplies:    agents,
 		UsageHooks:         usageHooks,
 		UsageSummary:       freshUsageSummary{usagesvc.NewSummaryReader(store), usagePipeline},
 		UsageReport:        freshUsageReport{usageReportReader(store, usagePricing), usagePipeline},

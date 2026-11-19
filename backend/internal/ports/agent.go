@@ -299,6 +299,22 @@ type AgentNativeSessionResolver interface {
 	ResolveNativeSessionID(ctx context.Context, cfg NativeSessionResolveConfig) (sessionID string, ok bool, err error)
 }
 
+// AgentTerminalReplyReader is an optional capability for a Terminal UI harness
+// whose Stop hook omits the turn's reply. The daemon reads the reply from the
+// adapter's native history when a stop arrives without one, so the hook CLI
+// never opens agent storage itself. It returns "" when no reply is available.
+type AgentTerminalReplyReader interface {
+	TerminalTurnReply(ctx context.Context, cfg TerminalReplyConfig) string
+}
+
+// TerminalReplyConfig locates one AO session's adapter-owned native history.
+// NativeSessionID is the hook's native thread, or "" when it reported none.
+type TerminalReplyConfig struct {
+	DataDir         string
+	SessionID       domain.SessionID
+	NativeSessionID string
+}
+
 // NativeSessionResolveConfig identifies one supervised agent launch. DataDir
 // and the two AO ids locate adapter-owned launch metadata without trusting a
 // provider-supplied path.

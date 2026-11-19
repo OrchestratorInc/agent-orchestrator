@@ -537,7 +537,9 @@ type Manager struct {
 	agentOpMu                   sync.Mutex
 	agentOperations             map[domain.SessionID]agentOperationKind
 	// launchStartWait bounds the wait to see a new supervised launch alive.
-	launchStartWait           time.Duration
+	launchStartWait time.Duration
+	// nativeRestoreProofWait bounds a native restore's identity proof.
+	nativeRestoreProofWait    time.Duration
 	interfaceRecoveryMu       sync.Mutex
 	deferredInterfaceRecovery map[domain.SessionID]string
 	inputLeases               map[domain.SessionID]int
@@ -1043,6 +1045,7 @@ func New(d Deps) *Manager {
 		startupBackgroundReconcileDone: make(chan struct{}),
 		agentOperations:                make(map[domain.SessionID]agentOperationKind),
 		launchStartWait:                3 * time.Second,
+		nativeRestoreProofWait:         60 * time.Second,
 		inputLeases:                    make(map[domain.SessionID]int),
 		inputDrained:                   make(map[domain.SessionID]chan struct{}),
 		transitions:                    make(map[domain.SessionID]*interfaceTransitionRun),
@@ -4202,6 +4205,17 @@ func (m *Manager) relaunchSessionWithPolicyAndGeneration(ctx context.Context, op
 			ID: string(rec.ID), WorkspacePath: launchPath, Metadata: nativeRestoreMetadata(rec),
 		}}
 		if err := m.verifyNativeRestore(ctx, verifier, proofCfg, launchID, handle); err != nil {
+			// Same as the start check below: a stale TUI replacement that died
+			// during the proof is fenced from the old row, so reconcile it here
+			// or Resume and its automatic retry cannot recover the session.
+			// Probe before destroying, which would make any child read dead.
+			if requireNativeHistory && !forceFresh && rec.StaleBinary != nil && domain.NormalizeSessionMode(rec.Mode) == domain.SessionModeTUI {
+				probe := m.runtime.ProbeFencedRuntime(ctx, ports.FencedRuntimeRef{Handle: handle, SessionID: rec.ID, Generation: launchID})
+				if probe.Liveness == ports.FencedDead {
+					_, preserveErr := m.preserveFailedReconcileRelaunch(ctx, rec)
+					err = errors.Join(err, preserveErr)
+				}
+			}
 			m.destroySpawnRuntimeAfterFailure(ctx, handle)
 			m.cleanupSystemPromptDir(rec.ID)
 			return RestoreResult{}, relaunchFailed("native identity", fmt.Errorf("%s %s: native identity: %w", operation, rec.ID, err))

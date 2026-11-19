@@ -337,4 +337,13 @@ func TestTerminalMessageObservedNeedsANewCompleteEcho(t *testing.T) {
 	if p.TerminalMessageObserved(message, strings.Replace(emptyComposer, "› ", "› draft", 1), echo+emptyComposer) {
 		t.Fatal("a send from a non-empty composer was acknowledged")
 	}
+	// A message with no letters or digits is still confirmable by its echo,
+	// and still only by a new one.
+	thumbs := "╭──────╮\n│ » 👍 │\n╰──────╯\n"
+	if !p.TerminalMessageObserved("👍", emptyComposer, thumbs+emptyComposer) {
+		t.Fatal("a symbol-only message's native echo was not observed")
+	}
+	if p.TerminalMessageObserved("👍", thumbs+emptyComposer, thumbs+emptyComposer+"\n") {
+		t.Fatal("an earlier symbol-only echo acknowledged a new send")
+	}
 }

@@ -2192,8 +2192,19 @@ BEGIN
 	{version: 213, table: "sessions", column: "stale_binary_launch",
 		addDDL: `ALTER TABLE sessions ADD COLUMN stale_binary_launch TEXT NOT NULL DEFAULT ''`},
 	{version: 213, table: "sessions", column: "stale_binary_switch_failed_at",
-		addDDL: `ALTER TABLE sessions ADD COLUMN stale_binary_switch_failed_at TIMESTAMP`,
-		postAdd: []string{`CREATE TRIGGER IF NOT EXISTS sessions_stale_binary_cdc_update
+		addDDL:  `ALTER TABLE sessions ADD COLUMN stale_binary_switch_failed_at TIMESTAMP`,
+		postAdd: []string{staleBinaryCDCTrigger}},
+	// 0199_conversation_message_continuation.sql. Fork builds recorded 199 for
+	// another migration first, and generated message reads select this column.
+	{version: 199, table: "conversation_messages", column: "continuation",
+		addDDL: `ALTER TABLE conversation_messages ADD COLUMN continuation INTEGER NOT NULL DEFAULT 0 CHECK (continuation IN (0, 1))`},
+}
+
+// staleBinaryCDCTrigger is 0213's change_log trigger. Its columns are each
+// added by their own statement, so a stop between the last ALTER and this
+// trigger leaves every column present and the trigger missing; reconcileSchema
+// therefore recreates it whenever all four columns exist.
+const staleBinaryCDCTrigger = `CREATE TRIGGER IF NOT EXISTS sessions_stale_binary_cdc_update
 AFTER UPDATE OF stale_binary_since, stale_binary_launch, stale_binary_switch_failed_at ON sessions
 WHEN OLD.stale_binary_since IS NOT NEW.stale_binary_since
     OR OLD.stale_binary_launch IS NOT NEW.stale_binary_launch
@@ -2204,12 +2215,7 @@ BEGIN
         json_object('id', NEW.id, 'conversationId',
             (SELECT id FROM conversations WHERE current_session_id = NEW.id LIMIT 1)),
         CURRENT_TIMESTAMP);
-END`}},
-	// 0199_conversation_message_continuation.sql. Fork builds recorded 199 for
-	// another migration first, and generated message reads select this column.
-	{version: 199, table: "conversation_messages", column: "continuation",
-		addDDL: `ALTER TABLE conversation_messages ADD COLUMN continuation INTEGER NOT NULL DEFAULT 0 CHECK (continuation IN (0, 1))`},
-}
+END`
 
 // reconcileSchema verifies that the columns in schemaRepairs physically exist
 // and replays the skipped migration's effects for any that are missing. It is
@@ -2238,6 +2244,16 @@ func reconcileSchema(db *sql.DB) error {
 			if _, err := db.Exec(stmt); err != nil {
 				return fmt.Errorf("schema repair: replay skipped migration effects for %s.%s: %w", rc.table, rc.column, err)
 			}
+		}
+	}
+	var staleBinaryColumns int
+	if err := db.QueryRow(`SELECT COUNT(*) FROM pragma_table_info('sessions') WHERE name IN
+		('stale_binary_since', 'stale_binary_version', 'stale_binary_launch', 'stale_binary_switch_failed_at')`).Scan(&staleBinaryColumns); err != nil {
+		return fmt.Errorf("schema verification: inspect stale-binary columns: %w", err)
+	}
+	if staleBinaryColumns == 4 {
+		if _, err := db.Exec(staleBinaryCDCTrigger); err != nil {
+			return fmt.Errorf("schema repair: restore sessions_stale_binary_cdc_update: %w", err)
 		}
 	}
 	if err := reconcileHarnessConstraint(db); err != nil {

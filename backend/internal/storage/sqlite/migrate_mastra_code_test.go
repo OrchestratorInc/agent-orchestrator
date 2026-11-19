@@ -95,3 +95,24 @@ func TestMastraMigrationRoundTripFromCurrentMain(t *testing.T) {
 		t.Fatalf("integrity = %s, %v", integrity, err)
 	}
 }
+
+// Down runs without a transaction. If it stops after the schema rewrite, the
+// version stays applied with Mastra Code already gone; a retried Down must
+// finish instead of rejecting that restored constraint.
+func TestMastraMigrationDownResumesAfterInterruptedRewrite(t *testing.T) {
+	const baseline int64 = 20261119061500000
+	db := openMigratedDatabaseCopy(t, baseline)
+	var before string
+	if err := db.QueryRow(`SELECT sql FROM sqlite_master WHERE name='sessions'`).Scan(&before); err != nil {
+		t.Fatal(err)
+	}
+	upTo(t, db, 20261119090000000)
+	mustExec(t, db, `PRAGMA writable_schema = ON`)
+	mustExec(t, db, `UPDATE sqlite_master SET sql = replace(sql, '''mastra-code'', ', '') WHERE type = 'table' AND name = 'sessions'`)
+	mustExec(t, db, `PRAGMA writable_schema = RESET`)
+	downTo(t, db, baseline)
+	var after string
+	if err := db.QueryRow(`SELECT sql FROM sqlite_master WHERE name='sessions'`).Scan(&after); err != nil || after != before {
+		t.Fatalf("resumed down left schema %q, %v; want the prior schema", after, err)
+	}
+}

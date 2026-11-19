@@ -118,7 +118,8 @@ export function TaskModelPicker({
 			customModelEntry={allowNativeSelection ? catalog?.customModelEntry : directEntry ? "direct" : catalog?.customModelEntry === "configured" ? "configured" : "none"}
 			onCustom={acceptsCustom ? onModelChange : undefined}
 			// Default sends no model, so the project's or the agent's own applies.
-			onUseDefault={allowNativeSelection ? () => onModelChange("") : undefined}
+			// A local direct-entry task needs it too, to undo a typed model ID.
+			onUseDefault={allowNativeSelection || directEntry ? () => onModelChange("") : undefined}
 			emptyLabel={allowNativeSelection ? t("newTask.cloudConfiguredDefault") : undefined}
 			footer={footer}
 			modelHint={modelHint}

@@ -9,45 +9,46 @@ import (
 	"path/filepath"
 	"strings"
 	"time"
+
+	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
 )
 
 // finalMessageWait bounds how long a Stop hook waits for the native history to
 // persist the turn's reply.
 const finalMessageWait = 2 * time.Second
 
-// FinalAssistantMessage returns the reply that closed the turn a Stop hook
-// reports. The released TUI calls its Stop hook without assistant_message, so
-// the answer is read from native history (MASTRA_DB_PATH, which AO sets for
-// every launch): the newest message, once it is the assistant's. A resumed TUI
-// reports the placeholder "session-init" instead of its thread, and AO's hook
-// script drops it; the database is AO's per-session store, so without a thread
-// its newest message is read. A turn whose reply is not yet persisted yields "".
-func FinalAssistantMessage(payload []byte) string {
-	var input struct {
-		SessionID        string `json:"session_id"`
-		AssistantMessage string `json:"assistant_message"`
-	}
-	if json.Unmarshal(payload, &input) != nil {
+// TerminalTurnReply returns the reply that closed the turn a Stop hook
+// reports (ports.AgentTerminalReplyReader). The released TUI calls its Stop
+// hook without assistant_message, so the daemon reads the answer from native
+// history: the database AO recorded in this session's own native state, never
+// a hook-supplied path. It takes the newest message, once it is the
+// assistant's. A resumed TUI reports the placeholder "session-init" instead of
+// its thread, and AO's hook script drops it; the database is AO's per-session
+// store, so without a thread its newest message is read. A turn whose reply is
+// not yet persisted yields "".
+func (*Plugin) TerminalTurnReply(ctx context.Context, cfg ports.TerminalReplyConfig) string {
+	session := string(cfg.SessionID)
+	if !filepath.IsAbs(cfg.DataDir) || session == "" || filepath.Base(session) != session || session == "." || session == ".." {
 		return ""
 	}
-	if text := strings.TrimSpace(input.AssistantMessage); text != "" {
-		return text
-	}
-	thread := strings.TrimSpace(input.SessionID)
-	database := strings.TrimSpace(os.Getenv("MASTRA_DB_PATH"))
-	if (thread != "" && !nativeIDPattern.MatchString(thread)) || !filepath.IsAbs(database) {
+	thread := strings.TrimSpace(cfg.NativeSessionID)
+	if thread != "" && !nativeIDPattern.MatchString(thread) {
 		return ""
 	}
-	if _, err := os.Stat(database); err != nil {
+	state, err := readNativeState(nativeStatePath(cfg.DataDir, session))
+	if err != nil {
 		return ""
 	}
-	u := url.URL{Path: database}
+	if _, err := os.Stat(state.Database); err != nil {
+		return ""
+	}
+	u := url.URL{Path: state.Database}
 	db, err := sql.Open("sqlite", "file:"+u.EscapedPath()+"?mode=ro&_pragma=busy_timeout(500)")
 	if err != nil {
 		return ""
 	}
 	defer func() { _ = db.Close() }()
-	ctx, cancel := context.WithTimeout(context.Background(), finalMessageWait)
+	ctx, cancel := context.WithTimeout(ctx, finalMessageWait)
 	defer cancel()
 	for {
 		if text, done := newestAssistantText(ctx, db, thread); done {

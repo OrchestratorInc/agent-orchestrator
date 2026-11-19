@@ -2355,6 +2355,32 @@ describe("TaskComposer", () => {
 		));
 	});
 
+	it("returns a directly entered Mastra Code model to the native default", async () => {
+		const agent = "mastra-code";
+		clearCachedAgentModels(agent);
+		h.agentCatalog = { agents: [agentReadiness(agent, "Mastra Code")] };
+		h.get.mockImplementation(async (path: string) => path.includes("/models")
+			? { data: { agentId: agent, selectionMode: "text", models: [], allowCustom: true, customModelEntry: "direct" } }
+			: { data: { status: "ok", project: { config: {} } } });
+		h.post.mockResolvedValueOnce({ data: { session: { id: "default-model-session" } } });
+
+		render(<Wrap><TaskComposer projectId="__standalone__" onCreated={vi.fn()} /></Wrap>);
+		await waitFor(() => expect(screen.getByTestId("agent-field")).toHaveAttribute("data-value", agent));
+		const picker = await screen.findByRole("button", { name: "Model" });
+		await userEvent.click(picker);
+		await userEvent.type(await screen.findByRole("searchbox", { name: "Search model" }), "private/model-id");
+		await userEvent.click(screen.getByRole("menuitem", { name: "Use “private/model-id” as a custom model" }));
+		expect(picker).toHaveTextContent("private/model-id");
+
+		await userEvent.click(picker);
+		await userEvent.click(await screen.findByRole("menuitem", { name: "Use project or agent default" }));
+		expect(picker).not.toHaveTextContent("private/model-id");
+		fireEvent.change(task(), { target: { value: "Use the native default model" } });
+		fireEvent.click(startTask());
+		await waitFor(() => expect(h.post).toHaveBeenCalledWith("/api/v1/sessions", expect.anything()));
+		expect(h.post.mock.calls.at(-1)?.[1]?.body?.model ?? "").toBe("");
+	});
+
 	// Other direct-entry harnesses keep the local catalog-only picker.
 	it.each([
 		["codex", "Codex"],
@@ -2368,6 +2394,10 @@ describe("TaskComposer", () => {
 		render(<Wrap><TaskComposer projectId="__standalone__" onCreated={vi.fn()} /></Wrap>);
 		await waitFor(() => expect(screen.getByTestId("agent-field")).toHaveAttribute("data-value", agent));
 		await userEvent.click(await screen.findByRole("button", { name: "Model" }));
+		// An empty catalog may offer no search at all; where search is offered,
+		// a typed model ID must still not become a custom choice.
+		const search = screen.queryByRole("searchbox", { name: "Search model" });
+		if (search) await userEvent.type(search, "private/model-id");
 		expect(screen.queryByRole("menuitem", { name: /as a custom model/ })).not.toBeInTheDocument();
 	});
 

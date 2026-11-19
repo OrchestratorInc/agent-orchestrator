@@ -35,11 +35,22 @@ func (p *Plugin) TerminalMessageObserved(message, baseline, screen string) bool 
 	return committedEchoes(message, screen) > committedEchoes(message, baseline)
 }
 
+// echoKey normalizes text for echo comparison. A message with no letters or
+// digits (such as an emoji) keeps every non-space rune instead, so it can
+// still be confirmed by its committed echo.
 func echoKey(text string) string {
 	var b strings.Builder
 	for _, r := range text {
 		if unicode.IsLetter(r) || unicode.IsDigit(r) {
 			b.WriteRune(unicode.ToLower(r))
+		}
+	}
+	if b.Len() > 0 {
+		return b.String()
+	}
+	for _, r := range text {
+		if !unicode.IsSpace(r) {
+			b.WriteRune(r)
 		}
 	}
 	return b.String()
