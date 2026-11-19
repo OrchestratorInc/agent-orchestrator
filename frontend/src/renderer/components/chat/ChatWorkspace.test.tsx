@@ -261,6 +261,17 @@ beforeEach(() => {
 	useUiStore.setState({ isSidebarOpen: true, inspectorSessions: {} });
 });
 
+describe("ChatWorkspace quota fallback", () => {
+	it("retains quota and reset information without agent switching, including exhaustion", async () => {
+		const snapshot = { ...chatFixtureSettled, rateLimits: { primaryUsedPercent: 85, secondaryUsedPercent: -1, primaryResetsInSeconds: 8100 } };
+		const { container, rerender } = render(<ChatWorkspace snapshot={snapshot} />);
+		expect(container.querySelector("[data-quota-sign]")).toHaveAttribute("data-severity", "warn");
+		rerender(<ChatWorkspace snapshot={{ ...snapshot, rateLimits: { ...snapshot.rateLimits, primaryUsedPercent: 100 } }} />);
+		expect(container.querySelector("[data-quota-sign]")).toHaveAttribute("data-severity", "full");
+		expect(screen.getAllByRole("status").some((node) => node.textContent?.includes("Usage limit reached. Resets in 2h 15m"))).toBe(true);
+	});
+});
+
 describe("ChatWorkspace prompt suggestions", () => {
 	it("forwards the Cloud message budget to its composer", async () => {
 		const snapshot = { ...chatFixtureSettled, sessionId: "cloud-budget-workspace" };
@@ -1187,14 +1198,20 @@ describe("ChatWorkspace timeline", () => {
 	});
 
 	// The meter can warn about the account's quota, but only if it is handed it.
-	it("warns beside the composer once the account's quota passes 75%", () => {
-		const reported = { ...idleSnapshot(chatFixture), rateLimits: { primaryUsedPercent: 40, secondaryUsedPercent: -1 } };
-		const view = render(<ChatWorkspace snapshot={reported} />);
-		const composer = screen.getByLabelText("Message the agent").closest("form") as HTMLElement;
-		expect(within(composer).queryByText(/% used/)).not.toBeInTheDocument();
+	// The sign and its announcement describe the running agent; a pending switch names another one.
+	it.each([undefined, { harness: "codex" as const, model: "gpt-x", modelLabel: "GPT X" }])("only announces the running agent's limit without a pending switch (%j)", (pending) => {
+		const snapshot = { ...idleSnapshot(chatFixture), rateLimits: { primaryUsedPercent: 100, secondaryUsedPercent: -1, primaryResetsInSeconds: 8100 } };
+		const { container } = render(<ChatWorkspace snapshot={snapshot} agentSwitch={{ projectId: "p", pending, onPendingChange: () => undefined }} />);
+		const announced = screen.queryAllByRole("status").some((node) => node.textContent?.includes("Usage limit reached"));
+		expect(announced).toBe(!pending);
+		if (pending) expect(container.querySelector("[data-quota-sign]")).toBeNull();
+	});
 
-		view.rerender(<ChatWorkspace snapshot={{ ...reported, rateLimits: { primaryUsedPercent: 40, secondaryUsedPercent: 82 } }} />);
-		expect(within(composer).getByText("Weekly 82% used")).toBeInTheDocument();
+	it("keeps a warning sign beside the composer's own model controls, leaving the model in place", () => {
+		render(<ChatWorkspace snapshot={{ ...idleSnapshot(chatFixture), rateLimits: { primaryUsedPercent: 85, secondaryUsedPercent: -1 } }} />);
+		const composer = screen.getByLabelText("Message the agent").closest("form") as HTMLElement;
+		expect(within(composer).getByRole("button", { name: /Approaching limit/ })).toBeInTheDocument();
+		expect(within(composer).getAllByRole("status").some((node) => node.textContent?.includes("Approaching limit"))).toBe(true);
 	});
 
 	it("refreshes the owning workspace after renaming the primary chat tab", async () => {
