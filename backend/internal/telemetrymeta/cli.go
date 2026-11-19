@@ -187,6 +187,7 @@ var legacyActorlessUserCLICommands = map[string]struct{}{
 	"ao review":                                 {},
 	"ao review cancel":                          {},
 	"ao review ls":                              {},
+	"ao review post-github":                     {},
 	"ao review submit":                          {},
 	"ao review trigger":                         {},
 	// ao search is a person searching their own history, or an agent searching

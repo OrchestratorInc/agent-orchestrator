@@ -173,8 +173,8 @@ export async function installFakeBridge(page: Page, opts: FakeBridgeOptions = {}
 					setAccess: async () => {
 						throw new Error("Sharing is not faked.");
 					},
-					grants: async () => [],
-					invite: async () => [],
+					grants: async () => ({ people: [], teams: [], workspaces: [] }),
+					invite: async () => ({ people: [], teams: [], workspaces: [] }),
 					removeGrant: async () => undefined,
 					onProgress: () => () => undefined,
 				},
@@ -485,6 +485,9 @@ export async function installFakeBridge(page: Page, opts: FakeBridgeOptions = {}
 					localAuthAvailable: async () => false,
 					onOpenShareLink: () => () => undefined,
 					takePendingShareLink: async () => null,
+					onOpenSharedArtifact: () => () => undefined,
+					takePendingSharedArtifact: async () => null,
+					openSharedArtifactWindow: async () => undefined,
 					pushFolderToRepository: async () => ({ status: "error" as const, code: "invalid_request" as const, message: "not available in e2e" }),
 					previewFolderUpload: async () => ({ status: "error" as const, code: "invalid_request" as const, message: "not available in e2e" }),
 					takePendingSignIn: async () => null,
@@ -1180,8 +1183,8 @@ export async function installFakeAgent(page: Page, opts: FakeAgentOptions = {}):
 					setAccess: async () => {
 						throw new Error("Sharing is not faked.");
 					},
-					grants: async () => [],
-					invite: async () => [],
+					grants: async () => ({ people: [], teams: [], workspaces: [] }),
+					invite: async () => ({ people: [], teams: [], workspaces: [] }),
 					removeGrant: async () => undefined,
 					onProgress: () => () => undefined,
 				},
@@ -1480,6 +1483,9 @@ export async function installFakeAgent(page: Page, opts: FakeAgentOptions = {}):
 					localAuthAvailable: async () => false,
 					onOpenShareLink: () => () => undefined,
 					takePendingShareLink: async () => null,
+					onOpenSharedArtifact: () => () => undefined,
+					takePendingSharedArtifact: async () => null,
+					openSharedArtifactWindow: async () => undefined,
 					pushFolderToRepository: async () => ({ status: "error" as const, code: "invalid_request" as const, message: "not available in e2e" }),
 					previewFolderUpload: async () => ({ status: "error" as const, code: "invalid_request" as const, message: "not available in e2e" }),
 					takePendingSignIn: async () => null,
