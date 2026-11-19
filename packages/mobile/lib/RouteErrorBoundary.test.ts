@@ -52,7 +52,6 @@ const sheetRoutes = [
 	"sheets/agent.tsx",
 	"sheets/artifact-history.tsx",
 	"sheets/cloud-plan.tsx",
-	"sheets/composer-picker.tsx",
 	"sheets/conversation-usage.tsx",
 	"sheets/files-branch.tsx",
 	"sheets/files-changes.tsx",

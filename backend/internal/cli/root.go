@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"os"
 	"os/exec"
+	"runtime"
 	"strings"
 	"time"
 
@@ -103,6 +104,13 @@ type Deps struct {
 	DoctorGitLabRESTBase string
 	Now                  func() time.Time
 	Sleep                func(time.Duration)
+	// PIDMayBeHidden reports whether a failed ProcessAlive check may only mean
+	// the daemon's PID is hidden from this process, as in a separate Linux PID
+	// namespace, rather than dead. Only then is the run-file's loopback port
+	// trusted to vouch for the daemon (probeOwnedDaemon). Left nil, the root
+	// command uses the platform default (Linux only); to disable the fallback,
+	// supply a func that returns false.
+	PIDMayBeHidden func() bool
 }
 
 // DefaultDeps returns production dependencies.
@@ -115,6 +123,7 @@ func DefaultDeps() Deps {
 		Executable:            os.Executable,
 		StartProcess:          startProcess,
 		ProcessAlive:          processalive.Alive,
+		PIDMayBeHidden:        pidMayBeHidden,
 		LookPath:              exec.LookPath,
 		CommandOutput:         commandOutput,
 		CommandOutputInDir:    commandOutputInDir,
@@ -133,6 +142,11 @@ func DefaultDeps() Deps {
 		},
 	}
 }
+
+// pidMayBeHidden is true only where a PID namespace can hide a live daemon
+// from the CLI. On macOS and Windows a PID that fails the liveness check is
+// dead, so a loopback claim must not override it.
+func pidMayBeHidden() bool { return runtime.GOOS == "linux" }
 
 func commandOutput(ctx context.Context, name string, args ...string) ([]byte, error) {
 	return aoprocess.CommandContext(ctx, name, args...).CombinedOutput()
@@ -166,6 +180,9 @@ func (d Deps) withDefaults() Deps {
 	}
 	if d.ProcessAlive == nil {
 		d.ProcessAlive = def.ProcessAlive
+	}
+	if d.PIDMayBeHidden == nil {
+		d.PIDMayBeHidden = def.PIDMayBeHidden
 	}
 	if d.LookPath == nil {
 		if d.ResolveAgentBinary == nil {

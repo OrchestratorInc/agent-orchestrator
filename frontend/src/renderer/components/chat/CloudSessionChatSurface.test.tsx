@@ -1,21 +1,23 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { captureFileReference, formatCapturedFileReferences } from "../../../shared/chat-file-reference";
 import { cloudAttachmentReference } from "../../lib/cloud-attachments";
-import { act, render, screen, waitFor } from "@testing-library/react";
+import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import type { ReactNode } from "react";
 import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { agentModelsQueryKey } from "../../hooks/useAgentModelsQuery";
 import { settingsQueryKey } from "../../hooks/useSettings";
 import type { CloudCpClientEvent } from "../../lib/cloud-cp";
 import { CloudCpError } from "../../lib/cloud-cp/errors";
+import { reportPlanRefusal, reportUpgradeViewed } from "../../lib/cloud-telemetry";
+import { useUiStore } from "../../stores/ui-store";
 import type { WorkspaceSession } from "../../types/workspace";
 import type { ChatDraftExcerptReference } from "../../lib/chat-drafts";
 import { sessionUiKey } from "../../lib/hosts";
-import { useUiStore } from "../../stores/ui-store";
 import type { ChatConfigOption, ChatModel, TurnSettings } from "../../types/conversation";
 import type { AgentSwitchProps, PickerSource } from "./AgentSwitchPicker";
 import { cloudSessionsQueryKey, sharedCloudWorkspacesQueryKey } from "../../hooks/useWorkspaceQuery";
-import { QUEUED_STEER_STALE_MS, cloudSteeringQueuedTurns, nextQueuedSteerDeadline, appendCloudEvents, CHAT_EVENTS_CACHE_MS, cloudExcerptText, cloudAnnotationContent, cloudMessageBody, cloudQueuedSteerErrors, CloudSessionChatSurface, cloudStartupChecklist, cloudWorkspaceFilePath, ownMessageTurns, toSnapshot } from "./CloudSessionChatSurface";
+import { QUEUED_STEER_STALE_MS, cloudSteeringQueuedTurns, nextQueuedSteerDeadline, appendCloudEvents, CHAT_EVENTS_CACHE_MS, cloudExcerptText, cloudAnnotationContent, cloudMessageBody, cloudQueuedSteerErrors, CloudSessionChatSurface, cloudStartupChecklist, cloudWorkspaceFilePath, ownMessageTurns, planRefusalCode, toSnapshot } from "./CloudSessionChatSurface";
 import { CLOUD_CHAT_NEWEST, cloudChatHistoryKey, mergeCloudEvents } from "../../lib/cloud-chat-history";
 import { clearPreviousAccountState } from "../../hooks/useCloudAccountSwitchReset";
 import { TurnSettingsBar } from "./TurnSettingsBar";
@@ -39,6 +41,15 @@ const cloudMocks = vi.hoisted(() => ({
 	startInterfaceTransition: vi.fn(),
 	chatProps: vi.fn(),
 }));
+const billing = vi.hoisted(() => ({ offering: { selfServeBilling: true, canManageBilling: true }, plan: "starter", limit: 15 as number | undefined }));
+vi.mock("../../lib/cloud-telemetry", async (original) => ({
+	...await original<typeof import("../../lib/cloud-telemetry")>(),
+	reportPlanRefusal: vi.fn(),
+	reportUpgradeViewed: vi.fn(),
+}));
+vi.mock("../../hooks/useCloudBilling", () => ({
+	useCloudBilling: () => ({ data: { plan: billing.plan, limits: { maxRunningSandboxes: billing.limit } }, offering: billing.offering }),
+}));
 // The control plane's base URL and attachment limit, for the tests that attach files.
 const cloudSetup = vi.hoisted(() => ({ baseUrl: "", maxAttachmentBytes: undefined as number | undefined, features: [] as string[], agentSwitchHarnesses: [] as string[], meUserId: "user-1" }));
 vi.mock("../../hooks/useCloudCp", () => ({
@@ -56,7 +67,7 @@ vi.mock("../../hooks/useCloudOffering", () => ({
 vi.mock("./ChatWorkspace", () => ({
 	ChatWorkspace: (props: unknown) => {
 		cloudMocks.chatProps(props);
-		return <div data-testid="cloud-chat" />;
+		return <div data-testid="cloud-chat">{(props as { composerNotice?: ReactNode }).composerNotice}</div>;
 	},
 }));
 // What the composer's agent and model picker is given, for the settings bar drawn from the chat's props.
@@ -105,6 +116,11 @@ function capturedCloudExcerpt(): ChatDraftExcerptReference {
 describe("CloudSessionChatSurface", () => {
 	beforeEach(() => {
 		localStorage.clear();
+		vi.mocked(reportPlanRefusal).mockClear();
+		vi.mocked(reportUpgradeViewed).mockClear();
+		billing.offering = { selfServeBilling: true, canManageBilling: true };
+		billing.plan = "starter";
+		billing.limit = 15;
 		cloudMocks.listUserAgentModels.mockReset().mockResolvedValue({ models: [] });
 		cloudSetup.baseUrl = "";
 		cloudSetup.maxAttachmentBytes = undefined;
@@ -2562,6 +2578,321 @@ describe("CloudSessionChatSurface", () => {
 		const merged = appendCloudEvents(existing, [event(500), event(501)]);
 		expect(merged.map((item) => item.sequence)).toEqual([1, 500, 501]);
 		expect(merged.at(-1)?.sequence).toBe(501);
+	});
+
+	it("explains a plan refusal in the chat only for a tool that fails with one while the chat is open", async () => {
+		const activity = (sequence: number, id: string, status: string, detail: Record<string, unknown>): CloudCpClientEvent => ({
+			sessionId: session.id, sequence, type: "chat.activity", createdAt: session.updatedAt,
+			payload: { turnId: "turn-1", activity: { id, kind: "command", status, detail } },
+		});
+		const refusal = "ao: WORKER_SLOTS_FULL: All your plan's running sessions are in use.";
+		const page = (...events: CloudCpClientEvent[]) => ({ events, hasMore: false, hasOlder: false, nextAfter: events.at(-1)?.sequence ?? 0 });
+		cloudMocks.listChatModels.mockResolvedValue({ models: [] });
+		cloudMocks.listChatEvents.mockReset()
+			// History: an old refusal must not prompt.
+			.mockResolvedValueOnce(page(activity(1, "old", "failed", { output: refusal })))
+			// A successful grep that prints the code is not a refusal.
+			.mockResolvedValueOnce(page(activity(2, "grep", "completed", { output: "WORKER_SLOTS_FULL" })))
+			// A refusal streamed in two chunks across polls, then failed.
+			.mockResolvedValueOnce(page(activity(3, "spawn", "running", { outputDelta: "ao: WORKER_" })))
+			.mockResolvedValueOnce(page(activity(4, "spawn", "failed", { outputDelta: "SLOTS_FULL: All your plan's running sessions are in use." })))
+			.mockResolvedValue(page());
+		const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+		const key = ["cloud-chat-events", "org-1", session.id];
+		const view = (id: string) => <QueryClientProvider client={queryClient}><CloudSessionChatSurface session={{ ...session, id, cloud: { orgId: "org-1" } }} /></QueryClientProvider>;
+		const { rerender } = render(view(session.id));
+		// Each poll's events have reached the rendered chat before the next one.
+		const shown = (count: number) => waitFor(() => expect(cloudMocks.chatProps.mock.lastCall?.[0].snapshot.items).toHaveLength(count));
+		await shown(1);
+		await act(() => queryClient.refetchQueries({ queryKey: key }));
+		await shown(2);
+		await act(() => queryClient.refetchQueries({ queryKey: key }));
+		await shown(3);
+		expect(screen.queryByRole("alert")).toBeNull();
+		await act(() => queryClient.refetchQueries({ queryKey: key }));
+		const notice = await screen.findByRole("alert");
+		expect(notice.textContent).toContain("Some sessions didn't start because your Starter plan allows 15 running at once and all are in use.");
+		expect(notice.textContent).toContain("Stop a session or upgrade to run more.");
+		expect(reportPlanRefusal).toHaveBeenCalledExactlyOnceWith("WORKER_SLOTS_FULL", false, "chat");
+		const originalOpenGlobalSettings = useUiStore.getState().openGlobalSettings;
+		const openGlobalSettings = vi.fn();
+		useUiStore.setState({ openGlobalSettings });
+		fireEvent.click(screen.getByRole("button", { name: "Upgrade plan" }));
+		expect(openGlobalSettings).toHaveBeenCalledWith("billing");
+		expect(reportPlanRefusal).toHaveBeenCalledTimes(1);
+		// BillingSection records the visit when Settings mounts.
+		expect(reportUpgradeViewed).not.toHaveBeenCalled();
+		useUiStore.setState({ openGlobalSettings: originalOpenGlobalSettings });
+		// A member cannot buy a plan, so the notice sends them to an admin instead.
+		billing.offering = { selfServeBilling: true, canManageBilling: false };
+		rerender(view(session.id));
+		expect(screen.queryByRole("button", { name: "Upgrade plan" })).toBeNull();
+		expect(screen.getByRole("alert").textContent).toContain("Stop a session or ask your organization's admin to upgrade.");
+		// A guest's shared session runs on its owner's plan: not the guest org's plan, and no link to its billing.
+		billing.offering = { selfServeBilling: true, canManageBilling: true };
+		rerender(<QueryClientProvider client={queryClient}><CloudSessionChatSurface session={{ ...session, cloud: { orgId: "org-1", shared: true } }} /></QueryClientProvider>);
+		expect(screen.queryByRole("button", { name: "Upgrade plan" })).toBeNull();
+		expect(screen.getByRole("alert").textContent).not.toContain("Starter");
+		expect(screen.getByRole("alert").textContent).toContain("Some sessions didn't start because the project owner's plan has no free running sessions.");
+		expect(screen.getByRole("alert").textContent).not.toContain("your plan");
+		rerender(view(session.id));
+		// The same surface shows another chat and comes back: the old notice stays gone.
+		rerender(view("session-2"));
+		await waitFor(() => expect(screen.queryByRole("alert")).toBeNull());
+		rerender(view(session.id));
+		await waitFor(() => expect(cloudMocks.chatProps.mock.lastCall?.[0].snapshot.items).toHaveLength(3));
+		expect(screen.queryByRole("alert")).toBeNull();
+	});
+
+	it.each([
+		{ plan: "starter", limit: 15, expected: "your Starter plan allows 15 running at once" },
+		{ plan: "pro", limit: 40, expected: "your Pro plan allows 40 running at once" },
+		{ plan: "pro", limit: 0, expected: "all running sessions on your Pro plan are in use" },
+		{ plan: "pro", limit: undefined, expected: "all running sessions on your Pro plan are in use" },
+	])("uses the billing limit for $plan ($limit), with a no-number fallback", async ({ plan, limit, expected }) => {
+		billing.plan = plan;
+		billing.limit = limit;
+		cloudMocks.listChatModels.mockResolvedValue({ models: [] });
+		cloudMocks.listChatEvents.mockReset()
+			.mockResolvedValueOnce({ events: [], hasMore: false, hasOlder: false, nextAfter: 0 })
+			.mockResolvedValue({ events: [{
+				sessionId: session.id, sequence: 1, type: "chat.activity", createdAt: session.updatedAt,
+				payload: { turnId: "turn-1", activity: { id: "spawn", kind: "command", status: "failed", detail: { output: "ao: WORKER_SLOTS_FULL: Limit reached" } } },
+			}], hasMore: false, hasOlder: false, nextAfter: 1 });
+		const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+		const key = ["cloud-chat-events", "org-1", session.id];
+		render(<QueryClientProvider client={queryClient}><CloudSessionChatSurface session={{ ...session, cloud: { orgId: "org-1" } }} /></QueryClientProvider>);
+		await waitFor(() => expect(queryClient.getQueryState(key)?.status).toBe("success"));
+		await act(() => queryClient.refetchQueries({ queryKey: key }));
+		const notice = await screen.findByRole("alert");
+		expect(notice.textContent).toContain(expected);
+		if (limit === 40) expect(notice.textContent).not.toContain("15");
+		if (limit === undefined) expect(notice.textContent).not.toContain("allows");
+	});
+
+
+	it("reports each refused activity in a batch once, including repeated updates", async () => {
+		const failed = (sequence: number, id = `spawn-${sequence}`): CloudCpClientEvent => ({
+			sessionId: session.id, sequence, type: "chat.activity", createdAt: session.updatedAt,
+			payload: { turnId: "turn-1", activity: { id, kind: "command", status: "failed", detail: { output: "ao: WORKER_SLOTS_FULL: Limit reached" } } },
+		});
+		const page = (...events: CloudCpClientEvent[]) => ({ events, hasMore: false, hasOlder: false, nextAfter: events.at(-1)?.sequence ?? 0 });
+		cloudMocks.listChatModels.mockResolvedValue({ models: [] });
+		cloudMocks.listChatEvents.mockReset()
+			.mockResolvedValueOnce(page())
+			.mockResolvedValueOnce(page(failed(1), failed(2), failed(3)))
+			.mockResolvedValue(page(failed(4, "spawn-1")));
+		const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+		const key = ["cloud-chat-events", "org-1", session.id];
+		render(<QueryClientProvider client={queryClient}><CloudSessionChatSurface session={{ ...session, cloud: { orgId: "org-1" } }} /></QueryClientProvider>);
+		await waitFor(() => expect(queryClient.getQueryState(key)?.fetchStatus).toBe("idle"));
+		await act(() => queryClient.refetchQueries({ queryKey: key }));
+		await screen.findByRole("alert");
+		expect(reportPlanRefusal).toHaveBeenCalledTimes(3);
+		await act(() => queryClient.refetchQueries({ queryKey: key }));
+		expect(reportPlanRefusal).toHaveBeenCalledTimes(3);
+	});
+
+	it.each(["completed", "failed"])("shows CLI plan refusals from a %s command once per activity", async (status) => {
+		const refusal = "ao: WORKER_SLOTS_FULL: All your plan's running sessions are in use. Pause or archive one, or upgrade your plan.";
+		// The real 20-spawn shell loop exited 0 after seven starts and thirteen refusals.
+		const output = status === "completed" ? [
+			...Array.from({ length: 7 }, (_, i) => `task-${i} => spawned worker-${i} (working)`),
+			`browserruntime => ${refusal}`,
+			...Array.from({ length: 12 }, (_, i) => `task-${i + 7} => ${refusal}`),
+		].join("\n") : refusal;
+		const event = (sequence: number, id = "spawn"): CloudCpClientEvent => ({
+			sessionId: session.id, sequence, type: "chat.activity", createdAt: session.updatedAt,
+			payload: { turnId: "turn-1", activity: { id, kind: "command", status, detail: {
+				command: "ao spawn --name worker --prompt task", output, exitCode: status === "completed" ? 0 : 1,
+				protocol: "acp", toolKind: "execute", toolName: "Bash", outputSource: "aggregate",
+			} } },
+		});
+		const page = (...events: CloudCpClientEvent[]) => ({ events, hasMore: false, hasOlder: false, nextAfter: events.at(-1)?.sequence ?? 0 });
+		cloudMocks.listChatModels.mockResolvedValue({ models: [] });
+		cloudMocks.listChatEvents.mockReset()
+			.mockResolvedValueOnce(page(event(1, "old-spawn")))
+			.mockResolvedValueOnce(page(event(2)))
+			.mockResolvedValue(page(event(3)));
+		const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+		const key = ["cloud-chat-events", "org-1", session.id];
+		render(<QueryClientProvider client={queryClient}><CloudSessionChatSurface session={{ ...session, cloud: { orgId: "org-1" } }} /></QueryClientProvider>);
+		await waitFor(() => expect(queryClient.getQueryState(key)?.status).toBe("success"));
+		expect(screen.queryByRole("alert")).toBeNull();
+		await act(() => queryClient.refetchQueries({ queryKey: key }));
+		expect((await screen.findByRole("alert")).textContent).toContain("Plan limit reached");
+		expect(reportPlanRefusal).toHaveBeenCalledExactlyOnceWith("WORKER_SLOTS_FULL", false, "chat");
+		await act(() => queryClient.refetchQueries({ queryKey: key }));
+		expect(reportPlanRefusal).toHaveBeenCalledTimes(1);
+	});
+
+	it.each(["running", "completed", "failed"] as const)("reads CLI plan refusals in %s command output", (status) => {
+		const output = "  backend/internal/service => ao: WORKER_SLOTS_FULL: All your plan's running sessions are in use.";
+		expect(planRefusalCode({ kind: "activity", id: "spawn", sequence: 1, revision: 1, createdAt: session.updatedAt, summary: "Start worker", activityKind: "command", status, detail: { output } })).toBe("WORKER_SLOTS_FULL");
+	});
+
+	it.each([
+		"src/x.ts:12: ao: WORKER_SLOTS_FULL: All sessions are in use.",
+		"src/x.ts:12- ao: WORKER_SLOTS_FULL: All sessions are in use.",
+		"src/x.ts:ao: WORKER_SLOTS_FULL: All sessions are in use.",
+		"FAIL worker.test.ts > ao: WORKER_SLOTS_FULL: All sessions are in use.",
+		"× worker.test.ts > ao: WORKER_SLOTS_FULL: All sessions are in use.",
+		"● worker > ao: WORKER_SLOTS_FULL: All sessions are in use.",
+		'const output = "[3/20] ao: WORKER_SLOTS_FULL: All sessions are in use.";',
+		'"browserruntime => ao: WORKER_SLOTS_FULL: All sessions are in use."',
+		"`browserruntime => ao: WORKER_SLOTS_FULL: All sessions are in use.`",
+		"+ ao: WORKER_SLOTS_FULL: All sessions are in use.",
+		"- browserruntime => ao: WORKER_SLOTS_FULL: All sessions are in use.",
+		"E  - ao: WORKER_SLOTS_FULL: All sessions are in use.",
+		"WORKER_SLOTS_FULL: All sessions are in use.",
+		"ao: WORKER_SLOTS_FULL:",
+	])("ignores search hits, test output and incomplete CLI refusals: %s", (output) => {
+		expect(planRefusalCode({ kind: "activity", id: "grep", sequence: 1, revision: 1, createdAt: session.updatedAt, summary: "Search output", activityKind: "command", status: "failed", detail: { output } })).toBeUndefined();
+	});
+
+
+	it("ignores a failed command's Vitest assertion diff", () => {
+		const output = `FAIL src/renderer/lib/cloud-telemetry.test.ts > reports a refusal
+AssertionError: expected refusal telemetry to match
+  {
+    "code": "WORKER_SLOTS_FULL",
+-   "shown": false,
++   "shown": true,
+  }`;
+		expect(planRefusalCode({ kind: "activity", id: "vitest", sequence: 1, revision: 1, createdAt: session.updatedAt, summary: "Run tests", activityKind: "command", status: "failed", detail: { command: "npx vitest run src/renderer/lib/cloud-telemetry.test.ts", output, exitCode: 1 } })).toBeUndefined();
+	});
+
+	it("does not attribute a shared owner's refusal to the viewer's organization", async () => {
+		cloudMocks.listChatModels.mockResolvedValue({ models: [] });
+		cloudMocks.listChatEvents.mockReset()
+			.mockResolvedValueOnce({ events: [], hasMore: false, hasOlder: false, nextAfter: 0 })
+			.mockResolvedValue({ events: [{
+				sessionId: session.id, sequence: 1, type: "chat.activity", createdAt: session.updatedAt,
+				payload: { turnId: "turn-1", activity: { id: "spawn", kind: "command", status: "failed", detail: { output: "ao: WORKER_SLOTS_FULL: Limit reached" } } },
+			}], hasMore: false, hasOlder: false, nextAfter: 1 });
+		const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+		const key = ["cloud-chat-events", "owner-org", session.id];
+		render(<QueryClientProvider client={queryClient}><CloudSessionChatSurface session={{ ...session, cloud: { orgId: "owner-org", shared: true } }} /></QueryClientProvider>);
+		await waitFor(() => expect(queryClient.getQueryState(key)?.fetchStatus).toBe("idle"));
+		await act(() => queryClient.refetchQueries({ queryKey: key }));
+		expect((await screen.findByRole("alert")).textContent).toContain("project owner's plan");
+		expect(reportPlanRefusal).not.toHaveBeenCalled();
+		expect(reportUpgradeViewed).not.toHaveBeenCalled();
+	});
+
+	it("does not report Upgrade opening when a plan notice is dismissed", async () => {
+		cloudMocks.listChatModels.mockResolvedValue({ models: [] });
+		cloudMocks.listChatEvents.mockReset()
+			.mockResolvedValueOnce({ events: [], hasMore: false, hasOlder: false, nextAfter: 0 })
+			.mockResolvedValue({ events: [{
+				sessionId: session.id, sequence: 1, type: "chat.activity", createdAt: session.updatedAt,
+				payload: { turnId: "turn-1", activity: { id: "spawn", kind: "command", status: "failed", detail: { output: "ao: WORKER_SLOTS_FULL: Limit reached" } } },
+			}], hasMore: false, hasOlder: false, nextAfter: 1 });
+		const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+		const key = ["cloud-chat-events", "org-1", session.id];
+		render(<QueryClientProvider client={queryClient}><CloudSessionChatSurface session={{ ...session, cloud: { orgId: "org-1" } }} /></QueryClientProvider>);
+		await waitFor(() => expect(queryClient.getQueryState(key)?.fetchStatus).toBe("idle"));
+		await act(() => queryClient.refetchQueries({ queryKey: key }));
+		await screen.findByRole("alert");
+		fireEvent.click(screen.getByRole("button", { name: "Dismiss" }));
+		expect(screen.queryByRole("alert")).toBeNull();
+		expect(reportPlanRefusal).toHaveBeenCalledExactlyOnceWith("WORKER_SLOTS_FULL", false, "chat");
+		expect(reportUpgradeViewed).not.toHaveBeenCalled();
+	});
+
+	it("reads a plan refusal only in the shape the control plane reports it", () => {
+		const tool = (activityKind: string, status: string, detail: Record<string, unknown>) =>
+			({ kind: "activity", id: "a", activityKind, status, detail }) as unknown as Parameters<typeof planRefusalCode>[0];
+		const refused = "All your plan's running sessions are in use. (WORKER_SLOTS_FULL)";
+		expect(planRefusalCode(tool("command", "failed", { output: "ao: WORKER_SLOTS_FULL: Limit reached" }))).toBe("WORKER_SLOTS_FULL");
+		expect(planRefusalCode(tool("mcp_tool", "failed", { error: `{"code": "WORKER_SLOTS_FULL"}` }))).toBe("WORKER_SLOTS_FULL");
+		// A failing test or grep that only mentions the code is not a refusal.
+		expect(planRefusalCode(tool("command", "failed", { output: "FAIL plan-refusal.test.ts: expected WORKER_SLOTS_FULL" }))).toBeUndefined();
+		expect(planRefusalCode(tool("command", "failed", { output: refused }))).toBeUndefined();
+		expect(planRefusalCode(tool("command", "completed", { output: refused }))).toBeUndefined();
+		// An MCP tool reports its failure in `error`, even when its status is not "failed".
+		expect(planRefusalCode(tool("mcp_tool", "completed", { success: false, error: refused }))).toBe("WORKER_SLOTS_FULL");
+		expect(planRefusalCode(tool("mcp_tool", "failed", { error: refused }))).toBe("WORKER_SLOTS_FULL");
+		expect(planRefusalCode(tool("mcp_tool", "completed", { success: true, result: refused }))).toBeUndefined();
+		expect(planRefusalCode(tool("mcp_tool", "failed", { error: "WORKER_SLOTS_FULL" }))).toBeUndefined();
+	});
+
+	it("treats a refusal from while the chat was closed as history on reopen", async () => {
+		const failed = (sequence: number): CloudCpClientEvent => ({
+			sessionId: session.id, sequence, type: "chat.activity", createdAt: session.updatedAt,
+			payload: { turnId: "turn-1", activity: { id: `spawn-${sequence}`, kind: "mcp_tool", status: "completed", detail: { success: false, error: "All your plan's running sessions are in use. (WORKER_SLOTS_FULL)" } } },
+		});
+		cloudMocks.listChatModels.mockResolvedValue({ models: [] });
+		cloudMocks.listChatEvents.mockReset().mockResolvedValue({ events: [failed(2)], hasMore: false, hasOlder: false, nextAfter: 2 });
+		const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+		const key = ["cloud-chat-events", "org-1", session.id];
+		queryClient.setQueryData(key, [failed(1)], { updatedAt: Date.now() - 60_000 });
+		render(<QueryClientProvider client={queryClient}><CloudSessionChatSurface session={{ ...session, cloud: { orgId: "org-1" } }} /></QueryClientProvider>);
+		await waitFor(() => expect(cloudMocks.chatProps.mock.lastCall?.[0].snapshot.items).toHaveLength(2));
+		await act(() => queryClient.refetchQueries({ queryKey: key }));
+		expect(screen.queryByRole("alert")).toBeNull();
+	});
+
+
+	it("ignores refusals prepended by recent history and scroll-up pages", async () => {
+		const failed = (sequence: number): CloudCpClientEvent => ({
+			sessionId: session.id, sequence, type: "chat.activity", createdAt: session.updatedAt,
+			payload: { turnId: "turn-1", activity: { id: `spawn-${sequence}`, kind: "command", status: "failed", detail: { output: "ao: WORKER_SLOTS_FULL: Limit reached" } } },
+		});
+		const page = (sequence: number, hasOlder: boolean) => ({ events: [failed(sequence)], hasMore: false, hasOlder, nextBefore: sequence, nextAfter: sequence });
+		cloudMocks.listChatModels.mockResolvedValue({ models: [] });
+		cloudMocks.listChatEvents.mockReset()
+			.mockResolvedValueOnce(page(10, true))
+			.mockResolvedValueOnce(page(5, true))
+			.mockResolvedValueOnce(page(1, false))
+			.mockResolvedValue(page(11, false));
+		const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+		const key = ["cloud-chat-events", "org-1", session.id];
+		render(<QueryClientProvider client={queryClient}><CloudSessionChatSurface session={{ ...session, cloud: { orgId: "org-1" } }} /></QueryClientProvider>);
+		await waitFor(() => expect(cloudMocks.chatProps.mock.lastCall?.[0].snapshot.items).toHaveLength(2));
+		expect(screen.queryByRole("alert")).toBeNull();
+		await act(async () => cloudMocks.chatProps.mock.lastCall?.[0].onLoadOlder());
+		await waitFor(() => expect(cloudMocks.chatProps.mock.lastCall?.[0].snapshot.items).toHaveLength(3));
+		expect(screen.queryByRole("alert")).toBeNull();
+		expect(reportPlanRefusal).not.toHaveBeenCalled();
+		await act(() => queryClient.refetchQueries({ queryKey: key }));
+		await screen.findByRole("alert");
+		expect(reportPlanRefusal).toHaveBeenCalledExactlyOnceWith("WORKER_SLOTS_FULL", false, "chat");
+	});
+
+	it.each([0, 10_000])("waits for opening history while streamed replay arrives in separate batches (staleTime %i)", async (staleTime) => {
+		const failed = (sequence: number): CloudCpClientEvent => ({
+			sessionId: session.id, sequence, type: "chat.activity", createdAt: session.updatedAt,
+			payload: { turnId: "turn-1", activity: { id: `spawn-${sequence}`, kind: "command", status: "failed", detail: { output: "ao: WORKER_SLOTS_FULL: Limit reached" } } },
+		});
+		const replay = [failed(2), failed(3)];
+		let finishHistory!: (page: { events: CloudCpClientEvent[]; hasMore: boolean; hasOlder: boolean; nextAfter: number }) => void;
+		cloudMocks.listChatModels.mockResolvedValue({ models: [] });
+		cloudMocks.listChatEvents.mockReset().mockReturnValueOnce(new Promise((resolve) => { finishHistory = resolve; }))
+			.mockResolvedValue({ events: [], hasMore: false, hasOlder: false, nextAfter: 3 });
+		const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false, staleTime } } });
+		const key = ["cloud-chat-events", "org-1", session.id];
+		queryClient.setQueryData(key, [failed(1)], { updatedAt: Date.now() - (staleTime ? 1_000 : 60_000) });
+		render(<QueryClientProvider client={queryClient}><CloudSessionChatSurface session={{ ...session, cloud: { orgId: "org-1" } }} /></QueryClientProvider>);
+		await waitFor(() => expect(cloudMocks.listChatEvents).toHaveBeenCalled());
+		for (const event of replay) {
+			await act(async () => {
+				queryClient.setQueryData<CloudCpClientEvent[]>(key, (current) => mergeCloudEvents(current ?? [], [event]));
+			});
+			await waitFor(() => expect(cloudMocks.chatProps.mock.lastCall?.[0].snapshot.items).toHaveLength(event.sequence));
+		}
+		expect(queryClient.getQueryState(key)?.fetchStatus).toBe("fetching");
+		expect(screen.queryByRole("alert")).toBeNull();
+		expect(reportPlanRefusal).not.toHaveBeenCalled();
+		await act(async () => finishHistory({ events: replay, hasMore: false, hasOlder: false, nextAfter: 3 }));
+		await waitFor(() => expect(queryClient.getQueryState(key)?.fetchStatus).toBe("idle"));
+		expect(screen.queryByRole("alert")).toBeNull();
+		// A refusal arriving after the opening history completed is still new.
+		await act(async () => {
+			queryClient.setQueryData<CloudCpClientEvent[]>(key, (current) => mergeCloudEvents(current ?? [], [failed(4)]));
+		});
+		await screen.findByRole("alert");
+		expect(reportPlanRefusal).toHaveBeenCalledExactlyOnceWith("WORKER_SLOTS_FULL", false, "chat");
 	});
 
 	it("opens a file the agent linked by its sandbox path as the workspace file", async () => {

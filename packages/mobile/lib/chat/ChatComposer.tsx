@@ -2,12 +2,12 @@ import AsyncStorage from "@react-native-async-storage/async-storage";
 import type { ServerConfig } from "../config";
 import * as DocumentPicker from "expo-document-picker";
 import * as ImagePicker from "expo-image-picker";
-import { useRouter } from "expo-router";
-import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
-import { ActivityIndicator, Keyboard, Pressable, ScrollView, StyleSheet, Text, TextInput, View } from "react-native";
+import { useCallback, useEffect, useMemo, useRef, useState, type ComponentProps, type ReactNode } from "react";
+import { ActivityIndicator, Keyboard, Platform, Pressable, ScrollView, StyleSheet, Text, TextInput, View } from "react-native";
 import Svg, { Defs, LinearGradient, Rect, Stop } from "react-native-svg";
-import Animated, { FadeIn, FadeOut, interpolate, useAnimatedStyle, useSharedValue, withSpring, withTiming } from "react-native-reanimated";
-import { useReanimatedKeyboardAnimation } from "react-native-keyboard-controller";
+import Animated, { FadeIn, FadeOut, interpolate, measure, useAnimatedReaction, useAnimatedRef, useAnimatedStyle, useFrameCallback, useSharedValue, withSpring, withTiming, type SharedValue } from "react-native-reanimated";
+import { useReanimatedFocusedInput, useReanimatedKeyboardAnimation } from "react-native-keyboard-controller";
+import { KeyboardMotionScope, useKeyboardMotion } from "./keyboardMotion";
 import { AppSymbol } from "../AppSymbol";
 import { rowDividerWidth } from "../divider";
 import { haptics } from "../haptics";
@@ -23,16 +23,17 @@ import { DictationField } from "../voice/DictationField";
 import { useVoiceInput } from "../voice/useVoiceInput";
 import { activeTurn, type ChatConfigOption, type ChatExcerpt, type ChatImage, type ChatModel, type ChatResource, type ChatSkill, type ConversationSnapshot, type TurnSettings } from "./types";
 import {
-	composerSuggestionKey,
 	findComposerSuggestion,
+	rankComposerCatalog,
 	replaceComposerSuggestion,
+	type ComposerPickerCatalog,
 	type ComposerSuggestion,
 } from "./composerSuggestions";
-import { chatSheetRoute } from "./chatSheetRegistry";
+import { ComposerSuggestionPanel } from "./ComposerSuggestionPanel";
 import { ChatAttachmentMenu } from "./ChatAttachmentMenu";
 import { ComposerAttachmentTray } from "./ComposerAttachmentTray";
 import { ComposerGlass, composerGlassSupported } from "./composer-glass";
-import { COMPOSER_DISC, COMPOSER_FIELD_HEIGHT, COMPOSER_FONT_SCALE_CAP, COMPOSER_RADIUS, composerStyleRules, useComposerFieldSize } from "./composerStyles";
+import { COMPOSER_DISC, COMPOSER_FIELD_HEIGHT, COMPOSER_FONT_SCALE_CAP, COMPOSER_HEIGHT, COMPOSER_RADIUS, composerStyleRules, useComposerFieldSize } from "./composerStyles";
 import { ChatTurnSettingsControl } from "./ChatTurnSettingsControl";
 import type { ChatTurnSettingsControlProps } from "./ChatTurnSettingsControl.types";
 import { EffortSliderOverlay } from "../effort-slider";
@@ -68,6 +69,8 @@ const CORNER_CONTROL = touchTarget + space.xxs;
  * with a little life, like the system's own sheet detents.
  */
 const COMPOSER_SPRING = { damping: 22, stiffness: 260, mass: 0.9 } as const;
+/** How long the field row is watched after it changes: past the pill's spring and a line's layout. */
+const FIELD_WATCH_MS = 500;
 /** The collapsed composer's chips are this tall; their slop makes up the rest of a touch target. */
 const CHIP_HEIGHT = space.xxxl;
 const CHIP_SLOP = (touchTarget - CHIP_HEIGHT) / 2;
@@ -94,7 +97,12 @@ const OPEN_FIELD_INSET = space.xs;
 // The waveform's inset from the pill's leading edge while the mic is open.
 const DICTATION_INSET = space.md;
 
-export function ChatComposer({
+/** The chat's composer, sharing the screen's keyboard handler when there is one (see KeyboardMotionScope). */
+export function ChatComposer(props: ComponentProps<typeof Composer>) {
+	return <KeyboardMotionScope><Composer {...props} /></KeyboardMotionScope>;
+}
+
+function Composer({
 	quoteRequest,
 	onQuoteHandled,
 	reviewPR,
@@ -129,6 +137,8 @@ export function ChatComposer({
 	otherAgents,
 	restingInset,
 	dockRiseOverride,
+	openDeficit,
+	fieldGrowth,
 	onOpenUsage,
 	request,
 	requestDismissed,
@@ -193,6 +203,10 @@ export function ChatComposer({
 	 * unset to ride the progress. See `chatDockRiseOverride`.
 	 */
 	dockRiseOverride?: number;
+	/** How much shorter the pill is than open, so a screen can always pad for it open. */
+	openDeficit?: SharedValue<number>;
+	/** How much taller the field row is than one empty line, on the UI thread. */
+	fieldGrowth?: SharedValue<number>;
 	/** Opens the context & usage sheet, from the quota chip. */
 	onOpenUsage?(): void;
 	/** A pending request, which takes the composer's place until it is answered. */
@@ -219,7 +233,6 @@ export function ChatComposer({
 	attachmentsUnavailable?: boolean;
 }) {
 	const t = useTheme();
-	const router = useRouter();
 	const styles = useThemedStyles(makeStyles);
 	const fieldSize = useComposerFieldSize();
 	const iconFeedback = usePressFeedback("icon");
@@ -229,15 +242,24 @@ export function ChatComposer({
 	// keyboard is animating with, so the dock moves in lockstep with it.
 	const keyboard = useReanimatedKeyboardAnimation();
 	const reviewPromptAvailable = Boolean(reviewPR && onOpenReview);
-	const dockRise = useAnimatedStyle(() => ({
-		transform: [{ translateY: (restingInset - KEYBOARD_DOCK_GAP) * (dockRiseOverride ?? keyboard.progress.value) }],
-	}));
+	// The dock gives back its resting inset as the keyboard goes. Android's
+	// keyboard height spans the navigation bar, so there it gives the inset back
+	// over that hidden last stretch alone and rests as soon as the keys are gone.
+	const dockRise = useAnimatedStyle(() => {
+		const inset = restingInset - KEYBOARD_DOCK_GAP;
+		if (dockRiseOverride !== undefined) return { transform: [{ translateY: inset * dockRiseOverride }] };
+		if (Platform.OS === "android") return { transform: [{ translateY: Math.min(-keyboard.height.value, inset) }] };
+		return { transform: [{ translateY: inset * keyboard.progress.value }] };
+	});
 	const [text, setText] = useState("");
 	const [quotes, setQuotes] = useState<ResponseQuote[]>([]);
 	const inputRef = useRef<TextInput>(null);
 	const consumedQuote = useRef<string | undefined>(undefined);
 	const [draftLoaded, setDraftLoaded] = useState(false);
-	const [cursor, setCursor] = useState(0);
+	// Undefined until the field reports a selection: text set from outside (a
+	// restored draft, a transcript) leaves the native caret at its end without
+	// a selection event, so an unknown caret reads as the end of the text.
+	const [cursor, setCursor] = useState<number>();
 	// Not component state: an Android pick can resolve after this composer has
 	// unmounted (see composerAttachments.ts).
 	const attachmentKey = machine ? `${machine}.${sessionId}` : sessionId;
@@ -251,7 +273,10 @@ export function ChatComposer({
 	// The pill's height, for the effort slider floating over it. A percentage
 	// `bottom` resolves against the pill's content box, which leaves out its
 	// padding, and sat the slider that far down over the pill's top edge.
+	// State only while the slider is open: the height changes every frame the
+	// pill animates, and each change re-rendered the composer.
 	const [pillHeight, setPillHeight] = useState(0);
+	const latestPillHeight = useRef(0);
 	// Return on a hardware keyboard: typing carries on in the field after the send.
 	const keyboardSend = useKeyboardSendRefocus(inputRef, submitting);
 	const [promotingQueuedTurnId, setPromotingQueuedTurnId] = useState<string>();
@@ -277,7 +302,7 @@ export function ChatComposer({
 	) : null;
 	const canSteer = snapshot.capabilities?.includes("steer") && !steerUnavailable && active;
 	const canEmbedFiles = snapshot.capabilities?.includes("embedded_context");
-	const voice = useVoiceInput({ onTranscript: useCallback((spoken: string) => setText((old) => old ? `${old} ${spoken}` : spoken), []) });
+	const voice = useVoiceInput({ onTranscript: useCallback((spoken: string) => { setText((old) => old ? `${old} ${spoken}` : spoken); setCursor(undefined); }, []) });
 	const hasDraft = Boolean(text.trim() || quotes.length);
 	const listening = voice.state === "starting" || voice.state === "recording";
 	const transcribing = voice.state === "transcribing";
@@ -303,13 +328,31 @@ export function ChatComposer({
 	useEffect(() => {
 		openness.value = reduceMotion ? withTiming(expanded ? 1 : 0, { duration: 0 }) : withSpring(expanded ? 1 : 0, COMPOSER_SPRING);
 	}, [expanded, openness, reduceMotion]);
+	// How open the pill is drawn: its spring, or the keyboard's progress when
+	// further along, so it opens with the keys rather than once JS hears of the
+	// focus. Each worklet reads the shared values itself: Reanimated tracks only
+	// the values a worklet reads directly.
+	const rideKeyboard = !dictating;
+	const shownOpenness = (open: number, keyboardProgress: number, closingWithKeyboard: boolean) => {
+		"worklet";
+		if (!rideKeyboard) return open;
+		const ride = dockRiseOverride ?? keyboardProgress;
+		return closingWithKeyboard ? ride : Math.max(open, ride);
+	};
+	// A tap on the conversation blurs the field and closes the keyboard; the
+	// pill, open only for that focus, closes with the keys rather than on a
+	// spring that waits for the blur to reach JS. Nothing else may hold it open.
+	const { closedByBlur } = useKeyboardMotion();
+	const { input: focusedInput } = useReanimatedFocusedInput();
+	const held = !dictating && (keyboardSend.holding || hasDraft || attachments.length > 0);
+	const heldOpen = useSharedValue(held);
+	useEffect(() => { heldOpen.value = held; }, [held, heldOpen]);
 	const primaryAction = composerPrimaryAction({ active, hasDraft, hasAttachments: attachments.length > 0 });
 	const steerEligible = Boolean(canSteer && hasDraft && attachments.length === 0 && quotes.length === 0);
 	const deliveryPresentation = composerDeliveryPresentation({ active, canSteer: Boolean(canSteer && quotes.length === 0), hasDraft, hasAttachments: attachments.length > 0, hasQueued: visibleQueuedMessages.length > 0 });
 	const stopped = snapshot.controller.state === "stopped";
 	const draftKey = machine ? `ao.chat.draft.${machine}.${sessionId}` : null;
 	const draftTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
-	const openingSuggestion = useRef<string | undefined>(undefined);
 	const pickerGate = useRef(createRequestGate()).current;
 	const latestQuotes = useRef(quotes);
 	latestQuotes.current = quotes;
@@ -343,6 +386,8 @@ export function ChatComposer({
 			.then((value) => {
 				if (!mounted) return;
 				const draft = decodeResponseDraft(value);
+				// Text typed before the read finished wins, and so does its caret.
+				if (!latestText.current) setCursor(undefined);
 				setText((current) => current || draft.text);
 				setQuotes((current) => [...draft.quotes.filter((quote) => !current.some((item) => item.id === quote.id)), ...current]);
 			})
@@ -505,40 +550,70 @@ export function ChatComposer({
 		}
 	};
 
-	const openPicker = useCallback(async (kind: "skills" | "files", activeTrigger?: ComposerSuggestion) => {
-		const request = pickerGate.begin();
-		const loadedSkills = kind === "skills" ? await onLoadSkills() : skills;
-		const loadedFiles = kind === "files" ? await onLoadFiles() : { paths: filePaths, truncated: Boolean(filePathsTruncated) };
-		if (!pickerGate.isCurrent(request)) return;
-		if (activeTrigger) {
-			const currentTrigger = findComposerSuggestion(latestText.current, latestCursor.current);
-			if (!currentTrigger || composerSuggestionKey(currentTrigger) !== composerSuggestionKey(activeTrigger)) return;
-		}
-		const pickerCatalog = kind === "skills"
-			? { kind, skills: loadedSkills } as const
-			: { kind, paths: loadedFiles.paths } as const;
-		router.push(chatSheetRoute({ kind: "composer-picker", catalog: pickerCatalog, initialQuery: activeTrigger?.query, truncated: kind === "files" ? loadedFiles.truncated : undefined, onSelect: (value) => {
-			setText((old) => {
-				const next = activeTrigger ? replaceComposerSuggestion(old, activeTrigger, value) : `${old}${old && !/\s$/.test(old) ? " " : ""}${kind === "skills" ? `/${value}` : (/\s/.test(value) ? `"${value}"` : value)} `;
-				setCursor(next.length);
-				return next;
-			});
-		} }));
-	}, [filePaths, filePathsTruncated, onLoadFiles, onLoadSkills, pickerGate, router, skills]);
+	// `/` at the start of the message or `@` after a space lists skills or
+	// worktree files over the composer. The field keeps focus, so what follows
+	// the sigil is the filter; a choice replaces the token, and the caret leaving
+	// it (a space, a deleted sigil) closes the list.
+	// Only while the field has focus: with the keyboard down a list over the
+	// composer would answer a question nobody is asking.
+	const suggestion = useMemo(() => focused ? findComposerSuggestion(text, cursor) : undefined, [cursor, focused, text]);
+	const suggestionKind = suggestion?.kind;
+	const [loadedSkills, setLoadedSkills] = useState<ChatSkill[]>();
+	const [loadedFiles, setLoadedFiles] = useState<{ paths: string[]; truncated: boolean }>();
+	const [loadingSuggestions, setLoadingSuggestions] = useState<ComposerSuggestion["kind"]>();
+	// The loaders change identity whenever their results land; the list should
+	// reload when it opens, not every time a load settles.
+	const loaders = useRef({ onLoadSkills, onLoadFiles });
+	loaders.current = { onLoadSkills, onLoadFiles };
 	useEffect(() => {
-		const suggestion = findComposerSuggestion(text, cursor);
-		if (!suggestion) {
+		if (!suggestionKind) {
 			pickerGate.invalidate();
-			openingSuggestion.current = undefined;
+			setLoadingSuggestions(undefined);
 			return;
 		}
-		const key = composerSuggestionKey(suggestion);
-		if (openingSuggestion.current === key) return;
-		openingSuggestion.current = key;
-		void openPicker(suggestion.kind, suggestion);
-	}, [cursor, openPicker, pickerGate, text]);
+		const request = pickerGate.begin();
+		setLoadingSuggestions(suggestionKind);
+		const load = suggestionKind === "skills"
+			? loaders.current.onLoadSkills().then((next) => { if (pickerGate.isCurrent(request)) setLoadedSkills(next); })
+			: loaders.current.onLoadFiles().then((next) => { if (pickerGate.isCurrent(request)) setLoadedFiles(next); });
+		// A failed reload drops the earlier result rather than keep it over the
+		// current `skills`/`filePaths`, which may be newer.
+		void load
+			.catch(() => {
+				if (!pickerGate.isCurrent(request)) return;
+				if (suggestionKind === "skills") setLoadedSkills(undefined);
+				else setLoadedFiles(undefined);
+			})
+			.finally(() => { if (pickerGate.isCurrent(request)) setLoadingSuggestions(undefined); });
+	}, [pickerGate, suggestionKind]);
+	const suggestionItems = useMemo(() => {
+		if (!suggestion) return undefined;
+		const catalog: ComposerPickerCatalog = suggestion.kind === "skills"
+			? { kind: "skills", skills: loadedSkills ?? skills }
+			: { kind: "files", paths: loadedFiles?.paths ?? filePaths };
+		const empty = catalog.kind === "skills" ? !catalog.skills.length : !catalog.paths.length;
+		if (empty && loadingSuggestions === suggestion.kind) return undefined;
+		return rankComposerCatalog(catalog, suggestion.query);
+	}, [filePaths, loadedFiles, loadedSkills, loadingSuggestions, skills, suggestion]);
+	// Text that only looks like a trigger (`/usr/bin`, an unknown command) gets
+	// no list rather than an empty one in the way.
+	const showSuggestions = Boolean(suggestion && !(suggestionItems?.length === 0 && suggestion.query.trim()));
+	const selectSuggestion = useCallback((value: string) => {
+		const trigger = findComposerSuggestion(latestText.current, latestCursor.current);
+		if (!trigger) return;
+		const next = replaceComposerSuggestion(latestText.current, trigger, value);
+		// After the separator, whether inserted or already there: a caret left
+		// against the token would still read as the trigger and keep the list open.
+		const tokenEnd = next.length - (latestText.current.length - trigger.end);
+		const caret = /\s/.test(next[tokenEnd] ?? "") ? tokenEnd + 1 : tokenEnd;
+		latestText.current = next;
+		latestCursor.current = caret;
+		setText(next);
+		setCursor(caret);
+	}, []);
 	const settingsProps = { snapshot, models, options: configOptions ?? NO_OPTIONS, disabled: disabled || stopped || pending || submitting, onSettings, onOption: onConfigOption };
 	const effort = useChatEffort(settingsProps);
+	useEffect(() => { if (effort.open) setPillHeight(latestPillHeight.current); }, [effort.open]);
 	// Typing is a tap outside the slider that the keyboard, not the app, hears.
 	const closeEffort = effort.close;
 	useEffect(() => { closeEffort(); }, [text, closeEffort]);
@@ -560,7 +635,10 @@ export function ChatComposer({
 		<View style={styles.steerDisc}><AppSymbol name={steer} size={iconSize.sm} color={t.accent} /></View>
 	</Pressable> : null;
 	const attachMenu = <ChatAttachmentMenu disabled={stopped || submitting || Boolean(attachmentsUnavailable)} canAttachFile={Boolean(canEmbedFiles || fileUploads)} onChoosePhoto={() => void addImage()} onChooseFile={() => void addFile()} />;
-	const canDictate = voice.state !== "unavailable" && voice.state !== "denied";
+	// A denied mic still dictates from here: its tap opens Settings, where the
+	// microphone can be turned back on.
+	const canDictate = voice.state !== "unavailable";
+	const micDenied = voice.state === "denied";
 	// One round button that follows the prompt, as on the new-task sheet: it
 	// stops the mic while it is open, stops the turn while one runs and nothing
 	// is drafted, sends once there is something to send, and otherwise dictates.
@@ -573,7 +651,7 @@ export function ChatComposer({
 			? <Pressable accessibilityRole="button" accessibilityLabel={active ? "Queue message" : "Send message"} accessibilityState={{ disabled: sendBlocked }} disabled={sendBlocked || nothingToSend} android_ripple={sendFeedback.android_ripple} onPress={() => void submit("send")} style={({ pressed }) => [styles.roundTarget, pressed && sendFeedback.pressed, (sendBlocked || nothingToSend) && styles.inactive]}><View style={[styles.roundDisc, styles.roundAccent]}>{pending || submitting ? <ActivityIndicator size="small" color={t.onAccent} /> : <AppSymbol name="send" size={iconSize.sm} weight="bold" color={t.onAccent} />}</View></Pressable>
 			: <Pressable
 				accessibilityRole="button"
-				accessibilityLabel={primary === "stopDictation" ? "Stop dictating" : primary === "transcribing" ? "Transcribing" : "Dictate a message"}
+				accessibilityLabel={primary === "stopDictation" ? "Stop dictating" : primary === "transcribing" ? "Transcribing" : micDenied ? "Turn on microphone access in Settings" : "Dictate a message"}
 				accessibilityState={{ disabled: stopped || submitting || transcribing, busy: transcribing }}
 				disabled={stopped || submitting || transcribing}
 				android_ripple={sendFeedback.android_ripple}
@@ -581,21 +659,86 @@ export function ChatComposer({
 				style={({ pressed }) => [styles.roundTarget, pressed && sendFeedback.pressed, (stopped || submitting) && styles.inactive]}
 			>
 				<View style={[styles.roundDisc, primary === "stopDictation" ? styles.dictating : styles.roundAccent]}>
-					{transcribing ? <ActivityIndicator size="small" color={t.onAccent} /> : <AppSymbol name={primary === "stopDictation" ? "stop" : dictateGlyph} size={iconSize.sm} weight="bold" color={primary === "stopDictation" ? t.onDestructive : t.onAccent} />}
+					{transcribing ? <ActivityIndicator size="small" color={t.onAccent} /> : <AppSymbol name={primary === "stopDictation" ? "stop" : micDenied ? "micOff" : dictateGlyph} size={iconSize.sm} weight="bold" color={primary === "stopDictation" ? t.onDestructive : t.onAccent} />}
 				</View>
 			</Pressable>;
 	// The corner controls stay where they are; the pill grows up around them. The
 	// field starts between them and is let out to the pill's full width, and the
 	// controls row opens under it, its settings rising into place.
-	const fieldInsets = useAnimatedStyle(() => ({
-		paddingLeft: interpolate(micOpen.value, [0, 1], [interpolate(openness.value, [0, 1], [CORNER_CONTROL, OPEN_FIELD_INSET]), DICTATION_INSET]),
-		paddingRight: interpolate(openness.value, [0, 1], [CORNER_CONTROL, OPEN_FIELD_INSET]),
-	}));
-	const controlsOpening = useAnimatedStyle(() => ({
-		height: interpolate(openness.value, [0, 1], [0, touchTarget], "clamp"),
-		opacity: interpolate(openness.value, [0.35, 1], [0, 1], "clamp"),
-		transform: [{ translateY: interpolate(openness.value, [0, 1], [space.sm, 0], "clamp") }],
-	}));
+	const fieldInsets = useAnimatedStyle(() => {
+		const open = shownOpenness(openness.value, keyboard.progress.value, closedByBlur.value && focusedInput.value === null && !heldOpen.value);
+		return {
+			paddingLeft: interpolate(micOpen.value, [0, 1], [interpolate(open, [0, 1], [CORNER_CONTROL, OPEN_FIELD_INSET]), DICTATION_INSET]),
+			paddingRight: interpolate(open, [0, 1], [CORNER_CONTROL, OPEN_FIELD_INSET]),
+		};
+	});
+	const controlsHeight = (open: number) => {
+		"worklet";
+		return interpolate(open, [0, 1], [0, touchTarget], "clamp");
+	};
+	// The pill's height without its controls row: down to the field row's foot
+	// and the pill's own bottom padding, from the field row's layout.
+	const pillBase = useSharedValue(0);
+	// The field row's layout, read where both go: `pillBase` here, and
+	// `fieldGrowth` for the conversation over the composer.
+	const fieldRow = useAnimatedRef<Animated.View>();
+	const fieldMinHeight = fieldSize.field.minHeight;
+	const takeFieldRow = (y: number, height: number) => {
+		"worklet";
+		const base = y + height + space.xs;
+		if (base !== pillBase.value) pillBase.value = base;
+		// One empty line sits at the pill's top padding, the field's minimum tall.
+		const growth = Math.max(0, y + height - space.xs - fieldMinHeight);
+		if (fieldGrowth && growth !== fieldGrowth.value) fieldGrowth.value = growth;
+	};
+	// For a moment after the field changes, its row is read on the UI thread
+	// each frame, so the conversation moves with a new line rather than a line
+	// late. Only briefly: a callback left running kept the app drawing idle.
+	const watchFieldRow = useFrameCallback(() => {
+		"worklet";
+		// Not while the keyboard moves: nothing is typed then.
+		const progress = keyboard.progress.value;
+		if (progress > 0 && progress < 1) return;
+		const layout = measure(fieldRow);
+		if (layout) takeFieldRow(layout.y, layout.height);
+	}, false);
+	const fieldWatchEnd = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
+	const watchFieldBriefly = useCallback(() => {
+		if (!fieldGrowth) return;
+		watchFieldRow.setActive(true);
+		clearTimeout(fieldWatchEnd.current);
+		fieldWatchEnd.current = setTimeout(() => watchFieldRow.setActive(false), FIELD_WATCH_MS);
+	}, [fieldGrowth, watchFieldRow]);
+	useEffect(() => () => {
+		clearTimeout(fieldWatchEnd.current);
+		watchFieldRow.setActive(false);
+	}, [watchFieldRow]);
+	// Field changes other than a keystroke.
+	useEffect(() => { watchFieldBriefly(); }, [text, quotes.length, trayItems.length, expanded, dictating, watchFieldBriefly]);
+	// How much shorter the pill is than open. The closed pill stands on a floor
+	// (COMPOSER_HEIGHT) the controls row fills first.
+	const pillShown = !requestCard;
+	// A request card unmounts the field row, which then no longer reports its
+	// growth; the row's layout restores it when the card goes.
+	useEffect(() => { if (!pillShown && fieldGrowth && fieldGrowth.value !== 0) fieldGrowth.value = 0; }, [pillShown, fieldGrowth]);
+	useAnimatedReaction(() => {
+		const base = pillBase.value;
+		const floor = Math.max(COMPOSER_HEIGHT, base);
+		const drawn = Math.max(COMPOSER_HEIGHT, base + controlsHeight(shownOpenness(openness.value, keyboard.progress.value, closedByBlur.value && focusedInput.value === null && !heldOpen.value))) - floor;
+		const open = Math.max(COMPOSER_HEIGHT, base + touchTarget) - floor;
+		return open - drawn;
+	}, (deficit) => {
+		const next = pillShown ? deficit : 0;
+		if (openDeficit && openDeficit.value !== next) openDeficit.value = next;
+	}, [openDeficit, pillShown, rideKeyboard, dockRiseOverride]);
+	const controlsOpening = useAnimatedStyle(() => {
+		const open = shownOpenness(openness.value, keyboard.progress.value, closedByBlur.value && focusedInput.value === null && !heldOpen.value);
+		return {
+			height: controlsHeight(open),
+			opacity: interpolate(open, [0.35, 1], [0, 1], "clamp"),
+			transform: [{ translateY: interpolate(open, [0, 1], [space.sm, 0], "clamp") }],
+		};
+	});
 	// The session's state as chips over the composer, open or not: the account's
 	// quota once that matters, its PR, what it changed, and how full the context
 	// is once that matters.
@@ -710,9 +853,18 @@ export function ChatComposer({
 					<Button title="Answer" variant="secondary" onPress={onRestoreRequest} />
 				</View>
 			</View> : null}
+			{!requestCard && suggestion && showSuggestions ? <ComposerSuggestionPanel
+				kind={suggestion.kind}
+				items={suggestionItems}
+				truncated={suggestion.kind === "files" ? (loadedFiles?.truncated ?? filePathsTruncated) : undefined}
+				onSelect={selectSuggestion}
+			/> : null}
 			{/* The field spans the pill between its two controls, so a touch on the
 			    pill focuses it and the pill opens. */}
-			{requestCard ?? <View style={[styles.composer, stopped && styles.inactive]} onLayout={(event) => setPillHeight(event.nativeEvent.layout.height)}>
+			{requestCard ?? <View style={[styles.composer, stopped && styles.inactive]} onLayout={(event) => {
+				latestPillHeight.current = event.nativeEvent.layout.height;
+				if (effort.open) setPillHeight(latestPillHeight.current);
+			}}>
 				<ComposerGlass radius={COMPOSER_RADIUS} />
 				{quotes.length ? <ScrollView style={styles.quotes} keyboardShouldPersistTaps="handled">
 					{quotes.map((quote) => <View key={quote.id} style={styles.quote}>
@@ -730,7 +882,10 @@ export function ChatComposer({
 				    keeps its focus as the pill opens around it. While the mic is open
 				    the dictation takes its place, and the field waits hidden with the
 				    draft the transcript will be added to. */}
-				<Animated.View style={[styles.composerRow, fieldSize.row, fieldInsets]}>
+				<Animated.View ref={fieldRow} style={[styles.composerRow, fieldSize.row, fieldInsets]} onLayout={openDeficit || fieldGrowth ? (event) => {
+					const { y, height } = event.nativeEvent.layout;
+					takeFieldRow(y, height);
+				} : undefined}>
 					{dictating ? <DictationField state={voice.state} partial={voice.partial} subscribeLevel={voice.subscribeLevel} style={styles.dictation} waveformOnly /> : null}
 					{/* Return on a hardware keyboard (iPad); the wrapper holds the field's
 					    place in the row, so it hides with the field while dictating. */}
@@ -741,7 +896,7 @@ export function ChatComposer({
 							accessibilityLabel="Message the agent"
 							editable={!stopped && !submitting}
 							value={text}
-							onChangeText={(value) => { latestText.current = value; setText(value); }}
+							onChangeText={(value) => { watchFieldBriefly(); latestText.current = value; setText(value); }}
 							onSelectionChange={(event) => setCursor(event.nativeEvent.selection.start)}
 							onFocus={() => { setFocused(true); keyboardSend.focused(); }}
 							onBlur={() => setFocused(false)}

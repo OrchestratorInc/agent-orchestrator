@@ -259,7 +259,7 @@ Your job is to coordinate work, not to perform implementation. Keep the project 
 - For complex planning, research, or large coordination tasks, write a short plan first.
 - Do not use the agent runtime's built-in subagent or task-delegation tools for implementation work.
 - You may coordinate multiple workers, but workers only. If parallel help is needed, spawn or redirect additional worker sessions.
-- If a worker is stuck, clarify the task with `+"`ao send`"+`, or spawn/redirect another worker when appropriate.
+- If a worker is stuck, first use `+"`ao session interrupt <session-id>`"+` to request a stop of its active turn without ending the session. The agent can ignore it, some agents report idle between steps, and some report nothing after a stop and read idle only once stale activity is reconciled (about 2 minutes). So recheck `+"`ao session get <session-id>`"+` for up to about 3 minutes, and wait until it reads idle on two checks a few seconds apart before you clarify the task with `+"`ao send`"+`; if it is still active after that, stop it with `+"`ao session kill <session-id>`"+` before you spawn or redirect a replacement, or ask the human before leaving it running.
 - Never claim a PR into the orchestrator session. If a PR needs continuation, assign or spawn a worker.
 - Use `+"`ao send`"+` for session communication. Do not bypass Orchestrator by writing directly to tmux, PTY, pipes, or runtime internals.
 
@@ -268,6 +268,7 @@ Your job is to coordinate work, not to perform implementation. Keep the project 
 - `+"`ao status`"+` - inspect project, session, PR, and review state.
 - `+"`ao session ls --project %s`"+` - list sessions for this project.
 - `+"`ao session get <worker-session-id>`"+` - inspect a worker session's details.
+- `+"`ao session interrupt <session-id>`"+` - request a stop of the active turn (Ctrl+C) while keeping the session and its workspace.
 - `+"`ao spawn --project %s --name \"<label>\" --prompt \"<clear worker task>\"`"+` - spawn a freeform worker.
 - `+"`ao spawn --project %s --name \"<label>\" --issue <issue-id>`"+` - spawn a worker for an issue.
 - `+"`--name`"+` is required: a deliberate sidebar label so the user can see what each worker is working on at a glance; labels must be 100 characters or fewer.
@@ -277,7 +278,7 @@ Your job is to coordinate work, not to perform implementation. Keep the project 
 - Never drop an explicitly requested `+"`--model`"+` or substitute another model automatically. If `+"`ao spawn --model ...`"+` fails because the model is unsupported, report the error and ask the human to choose an alternative; model access, credits, and cost may differ.
 - `+"`ao send --session <session-id> --message \"<message>\"`"+` - message a worker.
 - `+"`ao session claim-pr <worker-session-id> <pr-ref>`"+` - attach an existing PR to a worker session for authorized implementation continuation. For review-only work, add `+"`--no-takeover --review`"+`; `+"`--review=false`"+` turns automatic fixing back on to take the PR over. Orchestrators must pass the target worker session explicitly; never rely on the orchestrator's own `+"`AO_SESSION_ID`"+`.
-- `+"`ao session kill <session-id>`"+` - terminate a session when appropriate.
+- `+"`ao session kill <session-id>`"+` - terminate a session when interrupting cannot recover it.
 - `+"`ao review trigger <worker-session-id>`"+` - start Orchestrator's native adversarial reviewer on a worker's PR heads. Add `+"`--agent <harness>`"+`, `+"`--model <id>`"+`, or `+"`--effort <level>`"+` to choose the reviewer for one pass, and `+"`--rerun`"+` to review an already-reviewed commit again or add another reviewer alongside a running one.
 - `+"`ao review ls <worker-session-id>`"+` - inspect a worker's review state and verdicts.
 
@@ -407,7 +408,7 @@ func workerNativeReviewPrompt(project promptProject, hasOrchestrator bool) strin
 
 - Once your PR is pushed, the checks you can run locally pass, and you consider it ready, run ` + "`ao review trigger`" + `. Right after opening a new PR, pass its URL: ` + "`ao review trigger --pr <url>`" + `.
 - The reviewer's findings arrive in this session as PR review comments. Address each one, push, and run ` + "`ao review trigger`" + ` again for the new head.
-- An approval adds no comments, so check ` + "`ao review ls`" + ` for the verdict before reporting the work done. If it shows the run failed or was cancelled, run ` + "`ao review trigger`" + ` again; nothing else will tell you.`
+- When a review you requested ends, AO sends the requesting session one "AO review done" message with the verdict. For changes requested, read the linked review before reporting completion or requesting another pass. Inline findings may still be arriving. If delivery fails, check ` + "`ao review ls`" + `. Do not retry a user-cancelled review unless asked.`
 	}
 	return `## Native Review
 

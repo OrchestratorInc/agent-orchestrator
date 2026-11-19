@@ -1,5 +1,6 @@
 import { StrictMode, useEffect, type ReactNode } from "react";
 import { noPRDetails } from "../lib/pr-display";
+import { queryShown } from "../lib/dom-selectors";
 import type { SessionPRSummary } from "../hooks/useSessionScmSummary";
 import { sessionUiKey } from "../lib/hosts";
 import { createPortal } from "react-dom";
@@ -1370,7 +1371,7 @@ describe("SessionView", () => {
 		expect(resumeAgentPostMock).not.toHaveBeenCalled();
 	});
 
-	it.each([false, true])("leaves a failed automatic resume stopped for manual retry (imported=%s)", async (imported) => {
+	it.each([false, true])("retries a failed automatic resume once, then leaves it stopped for manual retry (imported=%s)", async (imported) => {
 		const session = workerSession("sess-1");
 		session.mode = "chat";
 		session.status = "exited";
@@ -1378,14 +1379,40 @@ describe("SessionView", () => {
 		session.needsResume = imported;
 		resumeAgentPostMock.mockRejectedValue(new Error("provider unavailable"));
 		const priorToast = useUiStore.getState().globalToast;
+		vi.useFakeTimers({ shouldAdvanceTime: true });
 		const view = render(<SessionView sessionId="sess-1" />);
-		await waitFor(() => expect(resumeAgentPostMock).toHaveBeenCalledTimes(1));
+		try {
+			await waitFor(() => expect(resumeAgentPostMock).toHaveBeenCalledTimes(1));
+			await act(async () => { await vi.advanceTimersByTimeAsync(3_000); });
+		} finally {
+			vi.useRealTimers();
+		}
+		await waitFor(() => expect(resumeAgentPostMock).toHaveBeenCalledTimes(2));
 		await waitFor(() => expect(view.client.isMutating()).toBe(0));
 		expect(useUiStore.getState().globalToast).toBe(priorToast);
 		expect(chatSurfaceTransitionRenders[0]).toBe(true);
 		expect(screen.getByTestId("chat-surface")).toHaveAttribute("data-transitioning", "false");
 		view.rerender(<SessionView sessionId="sess-1" />);
 		await act(async () => {});
+		expect(resumeAgentPostMock).toHaveBeenCalledTimes(2);
+	});
+
+	it("drops the automatic retry when the user moves to another session during the wait", async () => {
+		const session = workerSession("sess-1");
+		session.mode = "chat";
+		session.status = "exited";
+		session.activity = { state: "exited", lastActivityAt: "" };
+		resumeAgentPostMock.mockRejectedValue(new Error("provider unavailable"));
+		vi.useFakeTimers({ shouldAdvanceTime: true });
+		const view = render(<SessionView sessionId="sess-1" />);
+		try {
+			await waitFor(() => expect(resumeAgentPostMock).toHaveBeenCalledTimes(1));
+			view.rerender(<SessionView sessionId="sess-2" />);
+			await act(async () => { await vi.advanceTimersByTimeAsync(3_000); });
+		} finally {
+			vi.useRealTimers();
+		}
+		await waitFor(() => expect(view.client.isMutating()).toBe(0));
 		expect(resumeAgentPostMock).toHaveBeenCalledTimes(1);
 	});
 
@@ -1950,15 +1977,21 @@ describe("SessionView", () => {
 		));
 	});
 
-	it("remounts the session-owned Chat surface when navigation selects another Chat session", () => {
+	it("gives each Chat session its own surface and keeps the last one hidden for switching back", () => {
 		workerSession("sess-1").mode = "chat";
 		workerSession("sess-2").mode = "chat";
 		const view = render(<SessionView sessionId="sess-1" />);
 		const firstSurface = screen.getByTestId("chat-surface");
 
 		view.rerender(<SessionView sessionId="sess-2" />);
+		const secondSurface = queryShown('[data-testid="chat-surface"]');
+		expect(secondSurface).not.toBeNull();
+		expect(secondSurface).not.toBe(firstSurface);
+		expect(firstSurface).toBeInTheDocument();
+		expect(firstSurface).toHaveStyle({ display: "none" });
 
-		expect(screen.getByTestId("chat-surface")).not.toBe(firstSurface);
+		view.rerender(<SessionView sessionId="sess-1" />);
+		expect(queryShown('[data-testid="chat-surface"]')).toBe(firstSurface);
 	});
 
 	// The strip only ever shows the session on screen — pinning another session's
@@ -5298,6 +5331,9 @@ describe("SessionView", () => {
 		});
 		expect(screen.getByTestId("panel-inspector")).toHaveAttribute("data-state", "expanded");
 		expect(screen.getByTestId("inspector-resize-handle")).toBeInTheDocument();
+		// Last in the rail, so its no-drag punches through the inspector header's
+		// macOS drag region (Electron applies regions in document order).
+		expect(screen.getByTestId("panel-inspector").lastElementChild).toBe(screen.getByTestId("inspector-resize-handle"));
 	});
 
 	it("keeps the inspector closed when a session opens, then opens it on Summary", () => {

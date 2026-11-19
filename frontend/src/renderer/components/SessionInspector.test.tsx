@@ -230,7 +230,7 @@ function commonGetsResponder(
 ) {
   return async (path: string) => {
     if (path === "/api/v1/agents/readiness") {
-      const agents = ["claude-code", "codex", "opencode"].map((id) => agentReadiness(id));
+      const agents = ["claude-code", "codex", "opencode"].map((id) => agentReadiness(id, id, { canStopTurn: id !== "opencode" }));
       return { data: { agents } };
     }
     if (path === "/api/v1/agents/{agent}/models") {
@@ -1957,6 +1957,77 @@ describe("SessionInspector PR section", () => {
     ).not.toBeInTheDocument();
     expect(screen.getByRole("switch", { name: "Auto-review" })).toBeInTheDocument();
 
+  });
+
+  it("stops an active TUI turn without archiving its session", async () => {
+    renderWithQuery(
+      <SessionInspector session={session([], {
+        mode: "tui",
+        status: "working",
+        activity: { state: "active", lastActivityAt: "2026-06-15T10:00:00Z" },
+      })} />,
+    );
+
+    await userEvent.click(await screen.findByRole("button", { name: "Stop turn" }));
+    await waitFor(() => expect(postMock).toHaveBeenCalledWith(
+      "/api/v1/sessions/{sessionId}/stop-turn",
+      { params: { path: { sessionId: "sess-1" } } },
+    ));
+    expect(postCallsFor("/api/v1/sessions/{sessionId}/kill")).toHaveLength(0);
+    const requested = await screen.findByRole("button", { name: "Stop requested" });
+    expect(requested).toBeDisabled();
+    await userEvent.click(requested);
+    expect(postCallsFor("/api/v1/sessions/{sessionId}/stop-turn")).toHaveLength(1);
+  });
+
+  it("shows Stop requested when another client already stopped the turn", async () => {
+    postMock.mockResolvedValue({
+      error: { error: "conflict", code: "SESSION_TURN_STOP_PENDING", message: "a stop was already sent for this turn" },
+      response: { status: 409 },
+    });
+    renderWithQuery(<SessionInspector session={session([], { mode: "tui", activity: { state: "active", lastActivityAt: "2026-06-15T10:00:00Z" } })} />);
+    await userEvent.click(await screen.findByRole("button", { name: "Stop turn" }));
+    expect(await screen.findByRole("button", { name: "Stop requested" })).toBeDisabled();
+    expect(screen.queryByRole("alert")).not.toBeInTheDocument();
+  });
+
+  it("shows a stop failure and allows a retry", async () => {
+    postMock.mockResolvedValue({
+      error: { error: "conflict", code: "SESSION_COMPOSER_BUSY", message: "Clear the draft first" },
+      response: { status: 409 },
+    });
+    renderWithQuery(<SessionInspector session={session([], { mode: "tui", activity: { state: "active", lastActivityAt: "2026-06-15T10:00:00Z" } })} />);
+    await userEvent.click(await screen.findByRole("button", { name: "Stop turn" }));
+    expect(await screen.findByRole("alert")).toHaveTextContent("Clear the draft first");
+    expect(screen.getByRole("button", { name: "Stop turn" })).toBeEnabled();
+  });
+
+  it.each([
+    { activity: { state: "idle", lastActivityAt: "2026-06-15T10:00:00Z" } },
+    { mode: "chat" },
+    { cloud: { orgId: "org-1" } },
+    { provider: "opencode" },
+    { isTerminated: true },
+  ] satisfies Partial<WorkspaceSession>[])("hides Stop turn for an ineligible session %j", (overrides) => {
+    renderWithQuery(<SessionInspector session={session([pr(7, "open")], {
+      mode: "tui", activity: { state: "active", lastActivityAt: "2026-06-15T10:00:00Z" }, ...overrides,
+    })} />, undefined, (client) => client.setQueryData(["agent-readiness"], {
+      agents: ["claude-code", "opencode"].map((id) => agentReadiness(id, id, { canStopTurn: id === "claude-code" })),
+    }));
+    expect(screen.queryByRole("button", { name: "Stop turn" })).not.toBeInTheDocument();
+  });
+
+  it("allows Stop turn again when a new prompt starts a turn", async () => {
+    const active = session([], { mode: "tui", activity: { state: "active", lastActivityAt: "2026-06-15T10:00:00Z" } });
+    const { rerender, queryClient } = renderWithQuery(<SessionInspector session={active} />);
+    await userEvent.click(await screen.findByRole("button", { name: "Stop turn" }));
+    expect(await screen.findByRole("button", { name: "Stop requested" })).toBeDisabled();
+    rerender(
+      <QueryClientProvider client={queryClient}>
+        <TooltipProvider><SessionInspector session={{ ...active, lastUserMessageAt: "2026-06-15T10:01:00Z" }} /></TooltipProvider>
+      </QueryClientProvider>,
+    );
+    expect(screen.getByRole("button", { name: "Stop turn" })).toBeEnabled();
   });
 
   it("persists the CI injection policy", async () => {

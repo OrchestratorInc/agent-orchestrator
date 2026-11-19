@@ -480,7 +480,11 @@ const SummaryView = memo(function SummaryView({
 	// CI, review, and merge policies act on a PR. Standalone sessions, local or
 	// a Cloud standalone agent, keep the row for Archive.
 	const scratchpadSession = session.workspaceId === STANDALONE_WORKSPACE_ID || standaloneAgent;
-	const showSessionControls = hasPRs || scratchpadSession;
+	const stopEligible = canStopTurn(session);
+	const agentsQuery = useAgentReadinessQuery(stopEligible, hostId);
+	const stopTurn = stopEligible && agentsQuery.data?.agents.some((agent) => agent.id === session.provider && agent.canStopTurn) === true;
+	// Stop turn needs no PR, so a busy worker without one still gets the section.
+	const showSessionControls = hasPRs || scratchpadSession || stopTurn;
 	// Cloud orchestrators list the workers they spawned; local orchestrators
 	// have no parent/child model and every other session has no children.
 	const showWorkers =
@@ -588,7 +592,7 @@ const SummaryView = memo(function SummaryView({
 					title={prSectionTitle}
 				/>
 			)}
-			completion={showSessionControls && !guest ? <SessionControls hostId={hostId} scratchpad={scratchpadSession} session={session} /> : undefined}
+			completion={showSessionControls && !guest ? <SessionControls hostId={hostId} policies={hasPRs} scratchpad={scratchpadSession} session={session} stopTurn={stopTurn} /> : undefined}
 			scripts={session.cloud ? <CloudScriptRunSections cloud={session.cloud} sessionId={session.id} /> : undefined}
 			workers={showWorkers ? <OrchestratorChildrenSection session={session} /> : <SessionForksSection session={session} />}
 		/>
@@ -873,12 +877,18 @@ function updateSessionAutoInjectCI(
 	}));
 }
 
-function SessionControls({ session, hostId, scratchpad }: { session: WorkspaceSession; hostId?: string; scratchpad: boolean }) {
+function canStopTurn(session: WorkspaceSession): boolean {
+	return !session.isTerminated && !session.cloud && session.mode !== "chat" && session.activity?.state === "active";
+}
+
+function SessionControls({ session, hostId, policies, scratchpad, stopTurn }: { session: WorkspaceSession; hostId?: string; policies: boolean; scratchpad: boolean; stopTurn: boolean }) {
 	const { t } = useTranslation();
 	const navigate = useNavigate();
 	const queryClient = useQueryClient();
 	const workspaceKey = workspaceQueryKeyForHost(hostId);
 	const [confirmOpen, setConfirmOpen] = useState(false);
+	const [stoppedTurn, setStoppedTurn] = useState<string>();
+	const turnKey = JSON.stringify([hostId, session.id, session.activity?.state, session.activity?.lastActivityAt, session.lastUserMessageAt, session.lastInteractionAt]);
 	const terminate = useTerminateSession();
 	const { client: cloudClient } = useCloudCp();
 	const policy = useMutation({
@@ -905,6 +915,21 @@ function SessionControls({ session, hostId, scratchpad }: { session: WorkspaceSe
 		onError: (_error, _next, context) => {
 			if (context?.previous) queryClient.setQueryData(workspaceKey, context.previous);
 		},
+		onSettled: () => {
+			void queryClient.invalidateQueries({ queryKey: workspaceKey });
+		},
+	});
+	const interrupt = useMutation({
+		mutationFn: async (_turn: string) => {
+			if (usePreviewData) return;
+			const { error, response } = await clientForSessionHost(hostId).POST(
+				"/api/v1/sessions/{sessionId}/stop-turn",
+				{ params: { path: { sessionId: session.id } } },
+			);
+			if (error?.code === "SESSION_TURN_STOP_PENDING") return;
+			if (error) throw apiErrorException(error, `Unable to stop turn (${response.status})`);
+		},
+		onSuccess: (_data, turn) => setStoppedTurn(turn),
 		onSettled: () => {
 			void queryClient.invalidateQueries({ queryKey: workspaceKey });
 		},
@@ -963,17 +988,34 @@ function SessionControls({ session, hostId, scratchpad }: { session: WorkspaceSe
 			</span>
 		</div>
 	);
+	const interruptAction = stopTurn ? (
+		<div className="py-1">
+			<div className="flex items-center justify-between gap-3">
+				<span className="text-xs font-medium text-settings-label">{t("inspector.currentTurn")}</span>
+				<Button disabled={interrupt.isPending || stoppedTurn === turnKey} onClick={() => interrupt.mutate(turnKey)} size="sm" type="button" variant="outline">
+					{stoppedTurn === turnKey ? t("inspector.stopRequested") : interrupt.isPending ? t("inspector.stoppingTurn") : t("inspector.stopTurn")}
+				</Button>
+			</div>
+			{interrupt.error ? <p className="mt-1 text-2xs text-error" role="alert">{interrupt.error.message}</p> : null}
+		</div>
+	) : null;
 
 	if (isStandaloneSession) {
 		return (
 			<Section title={t("inspector.sessionControls")}>
+				{interruptAction}
 				{terminateAction}
 			</Section>
 		);
 	}
 
+	if (!policies) {
+		return <Section title={t("inspector.sessionControls")}>{interruptAction}</Section>;
+	}
+
 	return (
 		<Section title={t("inspector.sessionControls")}>
+			{interruptAction}
 			<AutoInjectCIPolicyControl hostId={hostId} session={session} />
 			<AutoInjectReviewPolicyControl hostId={hostId} session={session} />
 			{session.kind === "orchestrator" ? null : canTerminateNow ? (
