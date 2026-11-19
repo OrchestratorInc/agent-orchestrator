@@ -28,6 +28,7 @@ import { ArchiveModalHost } from "../components/ArchiveModalHost";
 import { GlobalToast } from "../components/GlobalToast";
 import { SettingsPane, SettingsProvider, useSettingsPage } from "../components/SettingsDialog";
 import { ShareLinkHost } from "../components/OpenShareLinkDialog";
+import { SharedArtifactLinkHost } from "../components/SharedArtifactLinkHost";
 import { KeyboardShortcutsDialog } from "../components/KeyboardShortcutsDialog";
 import { QuitConfirmDialog } from "../components/QuitConfirmDialog";
 import { PageTopbar } from "../components/PageTopbar";
@@ -168,6 +169,9 @@ function ShellLayoutWithSettings() {
 	return (
 		<SettingsProvider>
 			<ShellLayout />
+			{/* Outside ShellLayout, so links it holds survive every route and the
+			    startup loader that replaces the shell while the daemon restarts. */}
+			<SharedArtifactLinkHost />
 		</SettingsProvider>
 	);
 }
