@@ -846,10 +846,26 @@ func failedPRChecks(checks []ports.PRCheckObservation) []ports.PRCheckObservatio
 }
 
 func ciFailureSignature(checks []ports.PRCheckObservation) string {
+	// The signature keys the CI-failure nudge dedup in sendOnce, so it must stay
+	// stable while the same checks keep failing. It deliberately excludes the
+	// check URL: GitHub mints a new check-run URL for every re-run attempt, so
+	// including it made a re-run of an unchanged failure look new and re-nudged
+	// the worker. The URL still reaches the agent through formatCIFailureMessage.
+	// Parts are de-duplicated and sorted so provider re-ordering and a check
+	// reported under more than one event (e.g. push and pull_request) do not
+	// change the signature either. Name, commit, status and log tail identify the
+	// failure itself; a genuinely new failure differs in one of those.
+	seen := make(map[string]struct{}, len(checks))
 	parts := make([]string, 0, len(checks))
 	for _, ch := range checks {
-		parts = append(parts, strings.Join([]string{ch.Name, ch.CommitHash, string(ch.Status), ch.URL, ch.LogTail}, "\x00"))
+		part := strings.Join([]string{ch.Name, ch.CommitHash, string(ch.Status), ch.LogTail}, "\x00")
+		if _, dup := seen[part]; dup {
+			continue
+		}
+		seen[part] = struct{}{}
+		parts = append(parts, part)
 	}
+	sort.Strings(parts)
 	return strings.Join(parts, "\x01")
 }
 
