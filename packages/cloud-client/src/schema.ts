@@ -994,6 +994,87 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/cloud/v1/orgs/{orgId}/sessions/{sessionId}/move/preview": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                orgId: components["parameters"]["OrgId"];
+                sessionId: components["parameters"]["SessionId"];
+            };
+            cookie?: never;
+        };
+        /** @description What move/export would push now: the branch, the uncommitted paths it would commit and the conversation it would carry. Changes nothing. */
+        get: operations["previewSessionMove"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/cloud/v1/orgs/{orgId}/sessions/{sessionId}/move/export": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                orgId: components["parameters"]["OrgId"];
+                sessionId: components["parameters"]["SessionId"];
+            };
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** @description Stops the session's agent, then commits the session's uncommitted work, ignored files aside, as one commit on its branch and pushes the branch, so an AO daemon's move/import can continue the session from it. Delete the session once the import succeeds; if the move fails, agent/restart starts its terminal agent again. Viewers get 403. A branch the remote has commits for that the session lacks fails the push. */
+        post: operations["exportSessionMove"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/cloud/v1/orgs/{orgId}/transcript-imports/{importId}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                orgId: components["parameters"]["OrgId"];
+                /** @description Chosen by the caller; createSession names it as transcriptImportId. */
+                importId: string;
+            };
+            cookie?: never;
+        };
+        get?: never;
+        /** @description Uploads a coding agent's conversation, gzipped, for a session moving here from another machine, before createSession starts it. The transcript names the source's working directory as /ao-moved/cwd and, for Claude Code, its project folder as /ao-moved/claude-project; the worker replaces them with its own. Uploading again under the same id replaces it; another user's id is 409. An upload no create uses is dropped after a day. */
+        put: operations["putSessionTranscriptImport"];
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/cloud/v1/orgs/{orgId}/transcript-imports/{importId}/sidecar": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                orgId: components["parameters"]["OrgId"];
+                importId: string;
+            };
+            cookie?: never;
+        };
+        get?: never;
+        /** @description Adds the uploaded conversation's sidecar folder (subagent transcripts, saved tool output) to its upload, which must exist and be the caller's. The worker places it beside the transcript, filling in the same placeholders. Uploading the transcript again clears it. */
+        put: operations["putSessionTranscriptImportSidecar"];
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/cloud/v1/orgs/{orgId}/sessions/{sessionId}/children": {
         parameters: {
             query?: never;
@@ -3297,7 +3378,7 @@ export interface components {
              * @enum {string}
              */
             kind: "b2b" | "b2c" | "both" | "none";
-            /** @description The organization's product features (share lets it share sessions) and the deployment's own: attachments when the session attachment routes are on, queued-edit when a queued message can be edited (editQueuedMessage), queued-delete when a queued message can be deleted without stopping a started turn (deleteQueuedMessage), queued-steer when a queued message can be steered into the running turn (steerQueuedMessage). Empty when none apply. */
+            /** @description The organization's product features (share lets it share sessions) and the deployment's own: attachments when the session attachment routes are on, queued-edit when a queued message can be edited (editQueuedMessage), queued-delete when a queued message can be deleted without stopping a started turn (deleteQueuedMessage), queued-steer when a queued message can be steered into the running turn (steerQueuedMessage), session.branch and session.transcriptImport for sessions moving here from another machine. Empty when none apply. */
             features: string[];
             /**
              * Format: int64
@@ -5196,6 +5277,13 @@ export interface components {
             interfaceMode?: components["schemas"]["SessionInterfaceMode"];
             /** @description The user's default session interface, for a create without interfaceMode. The control plane resolves the session's interface from it as the local daemon resolves a spawn: an orchestrator starts in chat, a worker in this default, and chat only for a harness listed in chatHarnesses (any other starts in tui without an error). A create with neither field (from a desktop that predates them) starts in tui, an orchestrator too. An orchestrator keeps it for the workers it spawns, which resolve from the default stored when the orchestrator was created, unlike local spawns, which read the user's default at spawn time; a changed default reaches them once a new orchestrator is created. */
             defaultInterfaceMode?: components["schemas"]["SessionInterfaceMode"];
+            /** @description Git branch to continue. A branch that exists on the repository is checked out from its commits; any other name starts a new branch from the default branch. The default branch, the session prefix and a name git refuses get 422 invalid_branch; a branch a live session of the project holds gets 409 branch_in_use. Send it only when /me offering.features lists session.branch: an older control plane rejects the whole create. */
+            branch?: string;
+            /**
+             * Format: uuid
+             * @description A conversation uploaded to transcript-imports/{importId}. The session resumes it instead of starting from prompt, which it uses only if the conversation cannot be placed. The upload must be the caller's and for this harness, else 422 transcript_import_not_found; a create uses it up. Send it only when /me offering.features lists session.transcriptImport.
+             */
+            transcriptImportId?: string;
         };
         /** @description A session create's body without projectId and kind (POST /standalone-agents). */
         CreateStandaloneAgentInput: {
@@ -8139,6 +8227,157 @@ export interface operations {
                         session: components["schemas"]["Session"];
                     };
                 };
+            };
+            default: components["responses"]["Error"];
+        };
+    };
+    previewSessionMove: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                orgId: components["parameters"]["OrgId"];
+                sessionId: components["parameters"]["SessionId"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The move as it stands. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        branch: string;
+                        changes: {
+                            path: string;
+                            /** @enum {string} */
+                            status: "added" | "modified" | "deleted";
+                        }[];
+                        /** @description The Claude Code conversation the move would carry. Absent when there is none. */
+                        transcript?: {
+                            /**
+                             * Format: int64
+                             * @description The transcript and its sidecar folder.
+                             */
+                            bytes: number;
+                            subagents?: number;
+                        };
+                    };
+                };
+            };
+            default: components["responses"]["Error"];
+        };
+    };
+    exportSessionMove: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                orgId: components["parameters"]["OrgId"];
+                sessionId: components["parameters"]["SessionId"];
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description The pushed branch, in the shape an AO daemon's move/import takes. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        manifest: {
+                            /** Format: uuid */
+                            sourceSessionId: string;
+                            sourceLabel: string;
+                            /** @description Lower-case github.com/<owner>/<name>. */
+                            repoKey: string;
+                            branch: string;
+                            /** @description The pushed commit. */
+                            tip: string;
+                            /** @description The tip is the commit of the uncommitted work. */
+                            wip: boolean;
+                            harness: string;
+                            model?: string;
+                            displayName?: string;
+                        };
+                        handoffNote: string;
+                        /** @description The Claude Code conversation, checkpointed after the push, for the daemon to resume. Absent for another agent or when none was captured. */
+                        transcript?: {
+                            agentSessionId: string;
+                            /** @description The sandbox's Claude project folder the conversation was in. */
+                            projectDir: string;
+                            /** Format: byte */
+                            transcriptGzip: string;
+                            /**
+                             * Format: byte
+                             * @description The sidecar folder (subagent transcripts, saved tool output) as a gzipped tar, when there is one.
+                             */
+                            sidecarGzip?: string;
+                        };
+                    };
+                };
+            };
+            default: components["responses"]["Error"];
+        };
+    };
+    putSessionTranscriptImport: {
+        parameters: {
+            query: {
+                harness: "claude-code" | "codex" | "cursor" | "opencode";
+                /** @description The conversation's id, which the agent resumes: a UUID, or for OpenCode a session id such as ses_e34d0cd52ffeMzGW05mHN4RIm7. */
+                agentSessionId: string;
+            };
+            header?: never;
+            path: {
+                orgId: components["parameters"]["OrgId"];
+                /** @description Chosen by the caller; createSession names it as transcriptImportId. */
+                importId: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/gzip": string;
+            };
+        };
+        responses: {
+            /** @description Stored. */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            default: components["responses"]["Error"];
+        };
+    };
+    putSessionTranscriptImportSidecar: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                orgId: components["parameters"]["OrgId"];
+                importId: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/gzip": string;
+            };
+        };
+        responses: {
+            /** @description Stored. */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
             };
             default: components["responses"]["Error"];
         };

@@ -199,7 +199,7 @@ func TestHandoffNoteKeepsArtifactsWithinTheByteCap(t *testing.T) {
 }
 
 func TestClipHandoffNoteEnforcesTheByteCap(t *testing.T) {
-	note := clipNote(strings.Repeat("📄", DefaultMaxChars*2), DefaultMaxChars)
+	note := clipNote(strings.Repeat("📄", DefaultMaxChars*2), DefaultMaxChars, MaxBytes)
 	if len(note) > MaxBytes || utf8.RuneCountInString(note) > DefaultMaxChars {
 		t.Fatalf("clipped note is %d bytes / %d characters, want at most %d / %d",
 			len(note), utf8.RuneCountInString(note), MaxBytes, DefaultMaxChars)

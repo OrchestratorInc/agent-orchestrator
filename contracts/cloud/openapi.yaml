@@ -1749,6 +1749,181 @@ paths:
                     $ref: "#/components/schemas/Session"
         default:
           $ref: "#/components/responses/Error"
+  /api/cloud/v1/orgs/{orgId}/sessions/{sessionId}/move/preview:
+    parameters:
+      - $ref: "#/components/parameters/OrgId"
+      - $ref: "#/components/parameters/SessionId"
+    get:
+      operationId: previewSessionMove
+      tags: [Sessions]
+      description: >-
+        What move/export would push now: the branch, the uncommitted paths it
+        would commit and the conversation it would carry. Changes nothing.
+      responses:
+        "200":
+          description: The move as it stands.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [branch, changes]
+                properties:
+                  branch: { type: string }
+                  changes:
+                    type: array
+                    items:
+                      type: object
+                      required: [path, status]
+                      properties:
+                        path: { type: string }
+                        status: { type: string, enum: [added, modified, deleted] }
+                  transcript:
+                    type: object
+                    description: The Claude Code conversation the move would carry. Absent when there is none.
+                    required: [bytes]
+                    properties:
+                      bytes:
+                        type: integer
+                        format: int64
+                        description: The transcript and its sidecar folder.
+                      subagents: { type: integer }
+        default:
+          $ref: "#/components/responses/Error"
+  /api/cloud/v1/orgs/{orgId}/sessions/{sessionId}/move/export:
+    parameters:
+      - $ref: "#/components/parameters/OrgId"
+      - $ref: "#/components/parameters/SessionId"
+    post:
+      operationId: exportSessionMove
+      tags: [Sessions]
+      description: >-
+        Stops the session's agent, then commits the session's uncommitted
+        work, ignored files aside, as one commit on its branch and pushes the
+        branch, so an AO daemon's move/import can continue the session from
+        it. Delete the session once the import succeeds; if the move fails,
+        agent/restart starts its terminal agent again. Viewers get 403. A
+        branch the remote has commits for that the session lacks fails the
+        push.
+      responses:
+        "200":
+          description: The pushed branch, in the shape an AO daemon's move/import takes.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [manifest, handoffNote]
+                properties:
+                  manifest:
+                    type: object
+                    required: [sourceSessionId, sourceLabel, repoKey, branch, tip, wip, harness]
+                    properties:
+                      sourceSessionId: { type: string, format: uuid }
+                      sourceLabel: { type: string }
+                      repoKey:
+                        type: string
+                        description: Lower-case github.com/<owner>/<name>.
+                      branch: { type: string }
+                      tip: { type: string, description: The pushed commit. }
+                      wip:
+                        type: boolean
+                        description: The tip is the commit of the uncommitted work.
+                      harness: { type: string }
+                      model: { type: string }
+                      displayName: { type: string }
+                  handoffNote: { type: string }
+                  transcript:
+                    type: object
+                    description: >-
+                      The Claude Code conversation, checkpointed after the
+                      push, for the daemon to resume. Absent for another
+                      agent or when none was captured.
+                    required: [agentSessionId, projectDir, transcriptGzip]
+                    properties:
+                      agentSessionId: { type: string }
+                      projectDir:
+                        type: string
+                        description: The sandbox's Claude project folder the conversation was in.
+                      transcriptGzip: { type: string, format: byte }
+                      sidecarGzip:
+                        type: string
+                        format: byte
+                        description: The sidecar folder (subagent transcripts, saved tool output) as a gzipped tar, when there is one.
+        default:
+          $ref: "#/components/responses/Error"
+  /api/cloud/v1/orgs/{orgId}/transcript-imports/{importId}:
+    parameters:
+      - $ref: "#/components/parameters/OrgId"
+      - name: importId
+        in: path
+        required: true
+        schema: { type: string, format: uuid }
+        description: Chosen by the caller; createSession names it as transcriptImportId.
+    put:
+      operationId: putSessionTranscriptImport
+      tags: [Sessions]
+      description: >-
+        Uploads a coding agent's conversation, gzipped, for a session moving
+        here from another machine, before createSession starts it. The
+        transcript names the source's working directory as /ao-moved/cwd and,
+        for Claude Code, its project folder as /ao-moved/claude-project; the
+        worker replaces them with its own. Uploading again under the same id
+        replaces it; another user's id is 409. An upload no create uses is
+        dropped after a day.
+      parameters:
+        - name: harness
+          in: query
+          required: true
+          schema: { type: string, enum: [claude-code, codex, cursor, opencode] }
+        - name: agentSessionId
+          in: query
+          required: true
+          schema: { type: string, maxLength: 80 }
+          description: >-
+            The conversation's id, which the agent resumes: a UUID, or for
+            OpenCode a session id such as ses_e34d0cd52ffeMzGW05mHN4RIm7.
+      requestBody:
+        required: true
+        content:
+          application/gzip:
+            schema:
+              type: string
+              format: binary
+              description: At most 32 MiB gzipped and 64 MiB unzipped.
+      responses:
+        "204":
+          description: Stored.
+        default:
+          $ref: "#/components/responses/Error"
+  /api/cloud/v1/orgs/{orgId}/transcript-imports/{importId}/sidecar:
+    parameters:
+      - $ref: "#/components/parameters/OrgId"
+      - name: importId
+        in: path
+        required: true
+        schema: { type: string, format: uuid }
+    put:
+      operationId: putSessionTranscriptImportSidecar
+      tags: [Sessions]
+      description: >-
+        Adds the uploaded conversation's sidecar folder (subagent transcripts,
+        saved tool output) to its upload, which must exist and be the
+        caller's. The worker places it beside the transcript, filling in the
+        same placeholders. Uploading the transcript again clears it.
+      requestBody:
+        required: true
+        content:
+          application/gzip:
+            schema:
+              type: string
+              format: binary
+              description: >-
+                A gzipped tar of regular files at paths relative to the
+                folder, at most 32 MiB gzipped and 64 MiB unzipped.
+      responses:
+        "204":
+          description: Stored.
+        default:
+          $ref: "#/components/responses/Error"
   /api/cloud/v1/orgs/{orgId}/sessions/{sessionId}/children:
     parameters:
       - $ref: "#/components/parameters/OrgId"
@@ -5740,7 +5915,9 @@ components:
             edited (editQueuedMessage), queued-delete when a queued message can
             be deleted without stopping a started turn (deleteQueuedMessage),
             queued-steer when a queued message can be steered into the running
-            turn (steerQueuedMessage). Empty when none apply.
+            turn (steerQueuedMessage), session.branch and
+            session.transcriptImport for sessions moving here from another
+            machine. Empty when none apply.
           items:
             type: string
         maxAttachmentBytes:
@@ -9789,6 +9966,28 @@ components:
             from the default stored when the orchestrator was created, unlike
             local spawns, which read the user's default at spawn time; a
             changed default reaches them once a new orchestrator is created.
+        branch:
+          type: string
+          minLength: 1
+          maxLength: 255
+          description: >-
+            Git branch to continue. A branch that exists on the repository is
+            checked out from its commits; any other name starts a new branch
+            from the default branch. The default branch, the session prefix
+            and a name git refuses get 422 invalid_branch; a branch a live
+            session of the project holds gets 409 branch_in_use. Send it only
+            when /me offering.features lists session.branch: an older control
+            plane rejects the whole create.
+        transcriptImportId:
+          type: string
+          format: uuid
+          description: >-
+            A conversation uploaded to transcript-imports/{importId}. The
+            session resumes it instead of starting from prompt, which it uses
+            only if the conversation cannot be placed. The upload must be the
+            caller's and for this harness, else 422
+            transcript_import_not_found; a create uses it up. Send it only
+            when /me offering.features lists session.transcriptImport.
     CreateStandaloneAgentInput:
       type: object
       additionalProperties: false

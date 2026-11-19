@@ -78,6 +78,21 @@ func ParseRepositoryIdentity(raw string) (RepositoryIdentity, error) {
 	return RepositoryIdentity{Provider: provider, Host: strings.ToLower(u.Host), Namespace: strings.Join(parts[:len(parts)-1], "/"), Name: parts[len(parts)-1]}, nil
 }
 
+// RepositoryKey names a repository the same way however its remote is
+// written (https or SSH, with or without .git): host/namespace/name, lower-cased
+// on GitHub, whose names ignore case. It is "" when raw is not a repository URL.
+func RepositoryKey(raw string) string {
+	id, err := ParseRepositoryIdentity(strings.TrimSpace(raw))
+	if err != nil {
+		return ""
+	}
+	key := id.Host + "/" + id.Namespace + "/" + id.Name
+	if id.Provider == "github" {
+		key = strings.ToLower(key)
+	}
+	return key
+}
+
 // ValidateCanonicalRepository keeps an explicitly selected upstream on the
 // checkout's provider and host. Empty canonical identity preserves origin-only claims.
 func (c ProjectConfig) ValidateCanonicalRepository(origin string) error {

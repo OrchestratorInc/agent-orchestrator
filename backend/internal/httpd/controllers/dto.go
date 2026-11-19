@@ -4778,3 +4778,119 @@ type ForkSessionResponse struct {
 	SessionID   domain.SessionID `json:"sessionId"`
 	DisplayName string           `json:"displayName"`
 }
+
+// MovePreviewResponse is what a move to AO Cloud would push now: the branch
+// and the uncommitted paths its WIP commit would carry.
+type MovePreviewResponse struct {
+	Branch     string             `json:"branch"`
+	Changes    []MoveChange       `json:"changes"`
+	Transcript MoveTranscriptInfo `json:"transcript"`
+}
+
+// MoveTranscriptInfo says whether a move would carry the agent's conversation
+// to AO Cloud, which resumes it, or only the handoff note.
+type MoveTranscriptInfo struct {
+	Bytes       int64  `json:"bytes" description:"The transcript and the subagent transcripts and saved tool output that move with it."`
+	Subagents   int    `json:"subagents,omitempty" description:"Subagent transcripts that move with the conversation."`
+	Unavailable string `json:"unavailable,omitempty" enum:"unsupported,not_found,too_large" description:"Why the conversation would not move: an agent AO Cloud cannot resume, no saved conversation, or over 64 MiB."`
+}
+
+// MoveTranscriptResponse is a stopped session's agent conversation for AO Cloud.
+type MoveTranscriptResponse struct {
+	AgentSessionID string `json:"agentSessionId"`
+	TranscriptGzip []byte `json:"transcriptGzip" description:"The transcript, gzipped and base64-encoded, with this machine's working directory (and Claude Code's project folder) replaced by placeholders AO Cloud's worker fills in."`
+	SidecarGzip    []byte `json:"sidecarGzip,omitempty" description:"The transcript's sidecar folder (subagent transcripts, saved tool output) as a gzipped tar, base64-encoded, paths replaced the same way. Absent when there is none or it is over 64 MiB."`
+}
+
+// MoveChange is one uncommitted path a move would push.
+type MoveChange struct {
+	Path   string `json:"path"`
+	Status string `json:"status" enum:"added,modified,deleted"`
+}
+
+// MoveExportRequest asks this machine to push a stopped session for a move to
+// AO Cloud.
+type MoveExportRequest struct {
+	// MoveID identifies one move across every call; the app reuses it on retry.
+	MoveID string `json:"moveId" minLength:"1" maxLength:"64" pattern:"^[A-Za-z0-9._-]+$"`
+	// SourceLabel is this machine's name as the user knows it, for the note
+	// and the WIP commit.
+	SourceLabel string `json:"sourceLabel,omitempty" maxLength:"100"`
+}
+
+// MoveExportResponse is the pushed session: the manifest and handoff note
+// AO Cloud starts it from.
+type MoveExportResponse struct {
+	Manifest    sessionsvc.MoveManifest `json:"manifest"`
+	HandoffNote string                  `json:"handoffNote"`
+	Changes     int                     `json:"changes"`
+	Submodules  []string                `json:"submodules,omitempty"`
+}
+
+// MoveImportRequest starts a session AO Cloud pushed in one of this machine's
+// projects. Its body is the control plane's move/export response plus the
+// project and move id.
+type MoveImportRequest struct {
+	ProjectID   string                  `json:"projectId" minLength:"1"`
+	MoveID      string                  `json:"moveId" minLength:"1" maxLength:"64" pattern:"^[A-Za-z0-9._-]+$"`
+	Manifest    sessionsvc.MoveManifest `json:"manifest"`
+	HandoffNote string                  `json:"handoffNote,omitempty"`
+	// Transcript is the agent's conversation from Orchestrator Cloud's
+	// move/export; the session resumes it instead of the note.
+	Transcript *MoveImportTranscript `json:"transcript,omitempty"`
+}
+
+// MoveImportTranscript is an agent conversation an Orchestrator Cloud sandbox kept.
+type MoveImportTranscript struct {
+	AgentSessionID string `json:"agentSessionId" minLength:"1" maxLength:"80" pattern:"^[A-Za-z0-9_-]+$"`
+	ProjectDir     string `json:"projectDir" minLength:"1" description:"The folder the transcript was in on Orchestrator Cloud. For Claude Code its paths, and the sandbox's working directory, become this machine's."`
+	TranscriptGzip []byte `json:"transcriptGzip" description:"The transcript, gzipped and base64-encoded."`
+	SidecarGzip    []byte `json:"sidecarGzip,omitempty" description:"The transcript's sidecar folder as a gzipped tar, base64-encoded."`
+}
+
+// MoveTargetsQuery names the repository and branch a session from
+// Orchestrator Cloud would move into.
+type MoveTargetsQuery struct {
+	RepoKey string `query:"repoKey" required:"true" description:"The repository's key, lower-case github.com/<owner>/<name>."`
+	Branch  string `query:"branch" required:"true" description:"The branch the session continues on."`
+}
+
+// MoveTargetsResponse lists the projects here a session from Orchestrator
+// Cloud could move into.
+type MoveTargetsResponse struct {
+	Targets []MoveTargetView `json:"targets"`
+}
+
+// MoveTargetView is one project; refusal says why the session cannot move into it.
+type MoveTargetView struct {
+	ProjectID string       `json:"projectId"`
+	Name      string       `json:"name"`
+	Path      string       `json:"path"`
+	Refusal   *MoveRefusal `json:"refusal,omitempty"`
+}
+
+// MoveRefusal is why a move cannot happen, as the dialog shows it.
+type MoveRefusal struct {
+	Code    string `json:"code"`
+	Message string `json:"message"`
+}
+
+// MoveImportResponse is the new session. Warnings list what did not carry
+// over, such as a pull request this machine could not claim.
+type MoveImportResponse struct {
+	Session                SessionView `json:"session"`
+	Warnings               []string    `json:"warnings,omitempty"`
+	ConversationIncomplete bool        `json:"conversationIncomplete,omitempty" description:"The conversation, or its subagent transcripts and saved tool output, came with the move but was not placed here. The source holds the only full copy, so keep it."`
+}
+
+// MoveCompleteRequest records the AO Cloud session the session moved to.
+type MoveCompleteRequest struct {
+	MoveID    string `json:"moveId" minLength:"1" maxLength:"64"`
+	OrgID     string `json:"orgId" minLength:"1"`
+	SessionID string `json:"sessionId" minLength:"1"`
+}
+
+// MoveCompleteResponse is the archived source session with its movedTo set.
+type MoveCompleteResponse struct {
+	Session SessionView `json:"session"`
+}

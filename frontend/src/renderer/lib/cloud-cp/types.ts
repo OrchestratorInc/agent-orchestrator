@@ -479,6 +479,18 @@ export interface CloudCpCreateSessionRequest {
 	 * field (see createCloudSession).
 	 */
 	defaultInterfaceMode?: CloudCpInterfaceMode;
+	/**
+	 * Branch to continue: one already on the repository is checked out from its
+	 * commits. Only sent when offering.features lists session.branch; an older
+	 * control plane rejects the whole create.
+	 */
+	branch?: string;
+	/**
+	 * A conversation uploaded to transcript-imports/{id}, which the session
+	 * resumes instead of starting from prompt. Only sent when
+	 * offering.features lists session.transcriptImport.
+	 */
+	transcriptImportId?: string;
 }
 
 export interface CloudCpSessionRepo {
@@ -1408,6 +1420,32 @@ export interface CloudCpHarnessVersionsResponse {
 export interface CloudCpListSessionsQuery extends CloudCpListQuery {
 	/** Restrict the listing to one project. */
 	projectId?: string;
+}
+
+/** GET /orgs/{orgId}/sessions/{sessionId}/move/preview: what move/export would push now. */
+export interface CloudCpMovePreviewResponse {
+	branch: string;
+	changes: { path: string; status: "added" | "modified" | "deleted" }[];
+	/** The Claude Code conversation the move would carry; bytes count its sidecar folder too. */
+	transcript?: { bytes: number; subagents?: number };
+}
+
+/** POST /orgs/{orgId}/sessions/{sessionId}/move/export: the pushed branch, in the shape an AO daemon's move/import takes. */
+export interface CloudCpMoveExportResponse {
+	manifest: {
+		sourceSessionId: string;
+		sourceLabel: string;
+		repoKey: string;
+		branch: string;
+		tip: string;
+		wip: boolean;
+		harness: string;
+		model?: string;
+		displayName?: string;
+	};
+	handoffNote: string;
+	/** Base64 gzip, as move/import takes it. Absent for another agent or when none was captured. */
+	transcript?: { agentSessionId: string; projectDir: string; transcriptGzip: string; sidecarGzip?: string };
 }
 
 /** DELETE /orgs/{orgId}/sessions/{sessionId} responds 202: teardown is reconciler-owned. */
