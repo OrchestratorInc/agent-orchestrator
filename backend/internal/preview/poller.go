@@ -170,6 +170,9 @@ func (p *Poller) Poll(ctx context.Context) error {
 			// the selected file temporarily disappeared. A blank fresh session
 			// or an explicit user clear must remain blank.
 			if !seenBefore || !previous.cleared || previous.path == "" {
+				// Nothing to restore: forget the session, so a poller left with
+				// nothing to watch can rest.
+				delete(p.seen, sess.ID)
 				continue
 			}
 			storedEntry = previous.path

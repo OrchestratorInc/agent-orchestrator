@@ -48,19 +48,15 @@ func TestPollerIdlesWhileWatchingNoPreview(t *testing.T) {
 	})
 	ctx, cancel := context.WithCancel(context.Background())
 	done := p.Start(ctx)
-	time.Sleep(100 * time.Millisecond)
+	defer func() { cancel(); <-done }()
+	waitForListings(t, src, 1)
+	time.Sleep(100 * time.Millisecond) // 20 intervals: only extra polls could change the count
 	if n := src.listed(); n != 1 {
 		t.Fatalf("listed sessions %d times with no preview to watch, want only the first poll", n)
 	}
 
 	wake <- struct{}{}
-	for deadline := time.Now().Add(2 * time.Second); src.listed() < 2; time.Sleep(time.Millisecond) {
-		if time.Now().After(deadline) {
-			t.Fatal("a session change did not bring a poll")
-		}
-	}
-	cancel()
-	<-done
+	waitForListings(t, src, 2)
 }
 
 // A preview is chosen through a session write, so a session change while
@@ -76,11 +72,7 @@ func TestPollerPollsAtOnceOnSessionChangeWhileIdle(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	done := p.Start(ctx)
 	defer func() { cancel(); <-done }()
-	for deadline := time.Now().Add(2 * time.Second); src.listed() < 1; time.Sleep(time.Millisecond) {
-		if time.Now().After(deadline) {
-			t.Fatal("the first poll did not run")
-		}
-	}
+	waitForListings(t, src, 1)
 	time.Sleep(400 * time.Millisecond) // past one interval since the first poll
 
 	woke := time.Now()
@@ -105,10 +97,34 @@ func TestPollerStaysFastWhileWatchingAPreview(t *testing.T) {
 	})
 	ctx, cancel := context.WithCancel(context.Background())
 	done := p.Start(ctx)
-	time.Sleep(100 * time.Millisecond)
-	cancel()
-	<-done
-	if n := src.listed(); n < 5 {
-		t.Fatalf("listed sessions %d times while watching a preview, want the fast interval", n)
+	defer func() { cancel(); <-done }()
+	// Five listings at a 5 ms interval; the idle interval is an hour.
+	waitForListings(t, src, 5)
+}
+
+// After the user clears a watched preview there is nothing left to watch or
+// restore, so the poller forgets the session and can rest again.
+func TestPollerForgetsAPreviewTheUserCleared(t *testing.T) {
+	workspace := t.TempDir()
+	writeFile(t, filepath.Join(workspace, "index.html"), "<main>v1</main>")
+	src := &fakePreviewSessions{sessions: []domain.SessionRecord{workerSession("ao-1", workspace, "index.html")}}
+	p := NewPoller(src, src, "http://127.0.0.1:3001", PollerConfig{Logger: discardLogger()})
+	if !p.pollAndLog(context.Background()) {
+		t.Fatal("a chosen preview should be watched")
+	}
+	src.sessions[0].Metadata.PreviewURL = ""
+	if p.pollAndLog(context.Background()) {
+		t.Fatal("still watching after the user cleared the preview")
+	}
+}
+
+// waitForListings waits, up to 2 s, until the poller has listed sessions at
+// least n times.
+func waitForListings(t *testing.T, src *countingPreviewSessions, n int) {
+	t.Helper()
+	for deadline := time.Now().Add(2 * time.Second); src.listed() < n; time.Sleep(time.Millisecond) {
+		if time.Now().After(deadline) {
+			t.Fatalf("listed sessions %d times, want at least %d", src.listed(), n)
+		}
 	}
 }
