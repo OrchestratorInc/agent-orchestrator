@@ -27,6 +27,7 @@ import (
 	"time"
 
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
+	"github.com/aoagents/agent-orchestrator/backend/internal/filesnapshot"
 	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
 )
 
@@ -100,9 +101,10 @@ type Store interface {
 	NextQueuedTurn(ctx context.Context, conversationID string) (domain.QueuedTurn, error)
 	ListQueuedBatch(ctx context.Context, conversationID string, limit int) ([]domain.QueuedTurn, error)
 	ClaimQueuedBatch(ctx context.Context, conversationID string, dispatch bool, limit int, now time.Time) ([]domain.QueuedTurn, error)
+	MarkQueuedBatchStarted(ctx context.Context, conversationID string, turnIDs []string, now time.Time) error
 	CompleteQueuedBatch(ctx context.Context, conversationID string, turnIDs []string, providerTurnID, steerActivityID string, now time.Time) error
 	ReleaseQueuedBatch(ctx context.Context, conversationID string, turnIDs []string) error
-	FailQueuedBatch(ctx context.Context, conversationID string, turnIDs []string, reason string, now time.Time) error
+	FailQueuedBatch(ctx context.Context, conversationID string, turnIDs []string, reason string, now time.Time, accepted bool) error
 	FailReservedQueuedBatch(ctx context.Context, conversationID string, now time.Time) error
 	ReserveQueuedTurnForPromotion(ctx context.Context, conversationID, turnID string, now time.Time) (domain.QueuedTurn, error)
 	ReleaseQueuedTurnPromotion(ctx context.Context, conversationID, turnID string) error
@@ -119,7 +121,7 @@ type Store interface {
 	CompleteEditDelivery(ctx context.Context, conversationID, clientMessageID, sourceBranchID, activeBranchID string, turn domain.ConversationTurn, now time.Time) error
 	RejectEditDelivery(ctx context.Context, conversationID, clientMessageID string, kind domain.ConversationEditRejectionKind, message string, now time.Time) error
 	CancelQueuedTurns(ctx context.Context, conversationID string, cutoff, now time.Time) error
-	CancelAllQueuedTurns(ctx context.Context, conversationID string, now time.Time) error
+	CancelAllQueuedTurns(ctx context.Context, conversationID string, now time.Time) (int, error)
 	CancelQueuedTurnByID(ctx context.Context, conversationID, turnID string, now time.Time) error
 	QueuedTurnMessage(ctx context.Context, conversationID, turnID string) (domain.ConversationMessage, error)
 	QueuedEditDelivery(ctx context.Context, conversationID, clientMessageID string) (string, bool, error)
@@ -216,6 +218,10 @@ type Controller struct {
 	conversation domain.ConversationRecord
 	generation   string
 	harness      domain.AgentHarness
+	// workspacePath is the worktree whose files are snapshotted before each turn
+	// and restored by a rollback.
+	workspacePath string
+	started       time.Time
 
 	conv                   ports.ChatConversation
 	store                  Store
@@ -363,6 +369,9 @@ var ErrNoActiveTurn = errors.New("no active turn")
 // session_updated event announces the target mode.
 var ErrControllerHandoff = errors.New("chat controller is switching interfaces")
 
+// ErrForcedHandoffStoppedSource means a failed forced handoff stopped the source and kept its handoff latch; the caller restores the source, then calls AbortHandoff.
+var ErrForcedHandoffStoppedSource = errors.New("the forced handoff stopped the source")
+
 // ErrTurnNotRetryable reports a turn that cannot be retried: it is not part of
 // this conversation, not failed, was rolled back, or carries no durable prompt
 // the user authored. A retry is only ever offered for an eligible failed human
@@ -397,6 +406,7 @@ func newController(
 	conversation domain.ConversationRecord,
 	generation string,
 	harness domain.AgentHarness,
+	workspacePath string,
 	conv ports.ChatConversation,
 	store Store,
 	activity ActivityRecorder,
@@ -415,6 +425,7 @@ func newController(
 		conversation:           conversation,
 		generation:             generation,
 		harness:                harness,
+		workspacePath:          workspacePath,
 		conv:                   conv,
 		store:                  store,
 		continuationReader:     reader,
@@ -2039,7 +2050,7 @@ func (c *Controller) dispatch(
 		if len(followers) > 0 {
 			ids := append([]string{turnID}, followers...)
 			if failErr := c.store.FailQueuedBatch(context.WithoutCancel(ctx), c.conversation.ID, ids,
-				"batch provider input could not be recorded: "+err.Error(), c.now()); failErr != nil {
+				"batch provider input could not be recorded: "+err.Error(), c.now(), false); failErr != nil {
 				c.log.Error("failed to settle unrecorded queued batch", "error", failErr)
 			}
 		} else if settleErr := c.store.SettleTurnByID(context.WithoutCancel(ctx), turnID,
@@ -2048,11 +2059,12 @@ func (c *Controller) dispatch(
 		}
 		return domain.ConversationTurn{}, fmt.Errorf("record provider input: %w", err)
 	}
+	providerAccepted := false
 	failFollowers := func(reason string) {
 		if len(followers) == 0 {
 			return
 		}
-		if err := c.store.FailQueuedBatch(context.WithoutCancel(ctx), c.conversation.ID, followers, reason, c.now()); err != nil {
+		if err := c.store.FailQueuedBatch(context.WithoutCancel(ctx), c.conversation.ID, followers, reason, c.now(), providerAccepted); err != nil {
 			c.log.Error("failed to settle queued batch", "error", err)
 		}
 	}
@@ -2066,6 +2078,7 @@ func (c *Controller) dispatch(
 		}
 	}
 
+	c.snapshotFiles(ctx, append([]string{turnID}, followers...))
 	// Before the provider has the prompt, so nothing the turn writes predates it.
 	c.captureArtifactBaseline(ctx, true)
 	c.mu.Lock()
@@ -2103,6 +2116,12 @@ func (c *Controller) dispatch(
 		}, fmt.Errorf("send turn: %w", err)
 	}
 
+	if !hasDeferredStart {
+		providerAccepted = true
+		if err := c.store.MarkQueuedBatchStarted(context.WithoutCancel(ctx), c.conversation.ID, followers, c.now()); err != nil {
+			c.log.Error("failed to record queued batch acceptance", "error", err)
+		}
+	}
 	if err := c.store.BindTurnToProvider(ctx, turnID, ref.ProviderTurnID, c.now()); err != nil {
 		failFollowers("batch provider binding is uncertain: " + err.Error())
 		c.mu.Lock()
@@ -2129,7 +2148,7 @@ func (c *Controller) dispatch(
 	// ACP's session/prompt request stays open until the turn finishes, so an ACP
 	// driver prepares the request in SendTurn and starts it here. The durable
 	// provider-id binding above must exist before the first streamed update can be
-	// projected. Eager drivers do not implement this optional interface.
+	// projected. A successful local start does not confirm provider acceptance.
 	if hasDeferredStart {
 		if err := deferred.StartDeferredTurn(ref.ProviderTurnID); err != nil {
 			failFollowers("batch provider start is uncertain: " + err.Error())
@@ -2275,6 +2294,13 @@ func excerptDeliveryMessage(msg ports.ChatUserMessage) ports.ChatUserMessage {
 			fallback.WriteString(ctx.AssistantMessage)
 		}
 		fallback.WriteString("\n---")
+		if comment := strings.TrimSpace(ctx.Reference.Comment); comment != "" {
+			if numbered {
+				fmt.Fprintf(&fallback, "\nUser's comment on annotation %d:\n%s", annotationIndex, comment)
+			} else {
+				fallback.WriteString("\nUser's comment on the selected text:\n" + comment)
+			}
+		}
 	}
 	msg.Content = content
 	msg.Text += fallback.String()
@@ -2284,8 +2310,9 @@ func excerptDeliveryMessage(msg ports.ChatUserMessage) ports.ChatUserMessage {
 // drain sends the next queued message now that the agent is free.
 //
 // Runs on the projection goroutine, so it observes turn completion in order with
-// everything else the provider said. One message per call: the turn it starts
-// makes the controller busy again, and the next completion drains the next.
+// everything else the provider said. One turn per call (see drainRun for what it
+// takes): the turn it starts makes the controller busy again, and the next
+// completion drains the next.
 func (c *Controller) drain(ctx context.Context) error {
 	c.sendMu.Lock()
 	defer c.sendMu.Unlock()
@@ -2337,6 +2364,7 @@ func (c *Controller) drainLockedWithLimit(ctx context.Context, allowDispatch boo
 		return nil
 	}
 
+	take := limit
 	for {
 		preview, err := c.store.ListQueuedBatch(ctx, c.conversation.ID, limit)
 		if errors.Is(err, domain.ErrNoQueuedTurn) {
@@ -2344,6 +2372,10 @@ func (c *Controller) drainLockedWithLimit(ctx context.Context, allowDispatch boo
 		}
 		if err != nil {
 			return err
+		}
+		if limit == 0 {
+			preview = preview[:drainRun(preview)]
+			take = len(preview)
 		}
 		if _, err := c.queuedBatchInput(ctx, preview, nil); err != nil {
 			if id, ok := invalidBatchTurn(err); ok {
@@ -2356,7 +2388,7 @@ func (c *Controller) drainLockedWithLimit(ctx context.Context, allowDispatch boo
 		}
 		break
 	}
-	batch, err := c.store.ClaimQueuedBatch(ctx, c.conversation.ID, true, limit, c.now())
+	batch, err := c.store.ClaimQueuedBatch(ctx, c.conversation.ID, true, take, c.now())
 	if errors.Is(err, domain.ErrNoQueuedTurn) {
 		return nil
 	}
@@ -2366,7 +2398,7 @@ func (c *Controller) drainLockedWithLimit(ctx context.Context, allowDispatch boo
 	msg, err := c.queuedBatchInput(ctx, batch, nil)
 	if err != nil {
 		if failErr := c.store.FailQueuedBatch(context.WithoutCancel(ctx), c.conversation.ID,
-			queuedBatchIDs(batch), err.Error(), c.now()); failErr != nil {
+			queuedBatchIDs(batch), err.Error(), c.now(), false); failErr != nil {
 			return errors.Join(err, failErr)
 		}
 		return err
@@ -2437,7 +2469,7 @@ func (c *Controller) BeginHandoff(
 		c.mu.Lock()
 		active := c.pendingTurnID != ""
 		c.mu.Unlock()
-		err := c.store.CancelAllQueuedTurns(ctx, c.conversation.ID, c.now())
+		_, err := c.store.CancelAllQueuedTurns(ctx, c.conversation.ID, c.now())
 		c.sendMu.Unlock()
 		if err != nil {
 			c.AbortHandoff()
@@ -2533,6 +2565,85 @@ func (c *Controller) BeginIdleBranchHandoff(ctx context.Context) error {
 	c.handoff = controllerHandoffIdleBranch
 	c.branchHandoffDone = make(chan struct{})
 	return nil
+}
+
+// BeginForcedBranchHandoff fences intake even mid-turn, cancelling the queue and interrupting the turn.
+func (c *Controller) BeginForcedBranchHandoff(ctx context.Context) (domain.ProviderSwitchResult, error) {
+	restoreSteers := func() {}
+	if withdrawer, ok := c.conv.(ports.ChatSteerWithdrawer); ok {
+		if restore := withdrawer.WithdrawPendingSteers(); restore != nil {
+			restoreSteers = restore
+		}
+	}
+	c.mu.Lock()
+	if c.handoff != controllerHandoffNone {
+		c.mu.Unlock()
+		restoreSteers()
+		return domain.ProviderSwitchResult{}, ErrControllerHandoff
+	}
+	c.handoff = controllerHandoffIdleBranch
+	c.branchHandoffDone = make(chan struct{})
+	c.mu.Unlock()
+	terminated := false
+	fail := func(err error) (domain.ProviderSwitchResult, error) {
+		restoreSteers()
+		if terminated {
+			return domain.ProviderSwitchResult{}, errors.Join(ErrForcedHandoffStoppedSource, err)
+		}
+		c.AbortHandoff()
+		return domain.ProviderSwitchResult{}, err
+	}
+	if !lockWithin(ctx, &c.sendMu, forcedHandoffInterruptLimit) {
+		c.prepareBranchHandoffStop()
+		stopCtx, cancel := context.WithTimeout(ctx, forcedHandoffInterruptLimit)
+		stopErr := c.Terminate(stopCtx)
+		cancel()
+		terminated = true
+		if !lockWithin(ctx, &c.sendMu, forcedHandoffInterruptLimit) {
+			return fail(errors.Join(errors.New("the provider did not release its pending send after it was stopped"), stopErr))
+		}
+	}
+	c.mu.Lock()
+	active := c.pendingTurnID != ""
+	c.mu.Unlock()
+	var result domain.ProviderSwitchResult
+	running, err := c.store.ListVisibleRunningTurnProviderIDs(ctx, c.conversation.ID)
+	if err == nil {
+		result.CancelledQueued, err = c.store.CancelAllQueuedTurns(ctx, c.conversation.ID, c.now())
+	}
+	for _, providerTurnID := range running {
+		if err != nil {
+			break
+		}
+		err = c.store.SettleTurn(ctx, c.conversation.ID, providerTurnID, domain.TurnStateInterrupted, "", c.now())
+		result.StoppedTurn = true
+	}
+	c.sendMu.Unlock()
+	if err != nil {
+		return fail(fmt.Errorf("stop turns before forced handoff: %w", err))
+	}
+	if active {
+		result.StoppedTurn = true
+		interruptCtx, cancel := context.WithTimeout(ctx, forcedHandoffInterruptLimit)
+		defer cancel()
+		if err := c.interruptForHandoff(interruptCtx); err != nil {
+			c.log.Warn("interrupt before forced handoff failed", "session", c.sessionID, "error", err)
+		}
+	}
+	return result, nil
+}
+
+var forcedHandoffInterruptLimit = 5 * time.Second
+
+func lockWithin(ctx context.Context, mu *sync.Mutex, limit time.Duration) bool {
+	deadline := time.Now().Add(limit)
+	for !mu.TryLock() {
+		if ctx.Err() != nil || !time.Now().Before(deadline) {
+			return false
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	return true
 }
 
 // AbortHandoff reopens source intake when a drain is cancelled before the source
@@ -2746,6 +2857,18 @@ func (c *Controller) Interrupt(ctx context.Context) error {
 	}
 	c.mu.Unlock()
 	defer func() { c.mu.Lock(); c.interrupts--; c.mu.Unlock() }()
+	// A steer waiting for the agent to collect guidance holds sendMu. Withdraw
+	// it so Stop does not wait for that steer to time out. Withdrawing also
+	// refuses later steers for the turn; a Stop that fails gives them back.
+	var restore func()
+	if withdrawer, ok := c.conv.(ports.ChatSteerWithdrawer); ok {
+		restore = withdrawer.WithdrawPendingSteers()
+	}
+	restoreSteering := func() {
+		if restore != nil {
+			restore()
+		}
+	}
 	// Commit the current batch before Stop settles the turn. The store keeps any
 	// later deltas settled while retaining text that arrives during cancellation.
 	c.flushDeltas(ctx)
@@ -2768,6 +2891,7 @@ func (c *Controller) Interrupt(ctx context.Context) error {
 		providerTurnIDs, err := c.store.ListVisibleRunningTurnProviderIDs(ctx, c.conversation.ID)
 		if err != nil {
 			c.sendMu.Unlock()
+			restoreSteering()
 			return fmt.Errorf("check running turns: %w", err)
 		}
 		if len(providerTurnIDs) == 0 {
@@ -2818,10 +2942,11 @@ func (c *Controller) Interrupt(ctx context.Context) error {
 			return c.reconcileDurableTurnsLocked(ctx, turn, providerTurnIDs, cutoff)
 		}
 		// The interrupt did not happen, so the queue it was going to cancel is
-		// still the user's to send.
+		// still the user's to send, and the turn can still be steered.
 		c.mu.Lock()
 		c.cancelQueuedAt = time.Time{}
 		c.mu.Unlock()
+		restoreSteering()
 		return fmt.Errorf("interrupt turn %s: %w", turn, err)
 	}
 	return nil
@@ -2922,18 +3047,22 @@ func (c *Controller) awaitTurnAcknowledged(ctx context.Context, turn string) boo
 }
 
 // Rollback discards a turn and everything after it, and reports how many turns went.
+// With filePlanID, the PlanID of the RollbackPreview the user confirmed, it also puts
+// the worktree back to how it was before the turn.
 //
-// Order is deliberate: the provider first, AO's rows second. If the provider
-// refuses, AO must not already have hidden anything — a timeline missing turns the
-// agent still remembers is the same lie in the other direction. If AO's write then
-// fails, the error is returned and logged loudly: the provider call cannot be undone,
-// and the raw provider-event archive plus the surviving turn rows are what make the
-// disagreement repairable rather than invisible.
+// Order is deliberate: files first, the provider second, AO's rows last. Files are
+// the only step that can be reversed, so they go before the provider call and are
+// put back if the provider refuses. If the provider refuses, AO must not already
+// have hidden anything — a timeline missing turns the agent still remembers is the
+// same lie in the other direction. If AO's write then fails, the error is returned
+// and logged loudly: the provider call cannot be undone, and the raw provider-event
+// archive plus the surviving turn rows are what make the disagreement repairable
+// rather than invisible.
 //
 // The busy check is inside sendMu, which is also what dispatch holds, so a turn
 // cannot start between the check and the provider call. That is the difference
 // between refusing a rollback and racing one.
-func (c *Controller) Rollback(ctx context.Context, turnID string) (int, error) {
+func (c *Controller) Rollback(ctx context.Context, turnID, filePlanID string) (int, error) {
 	rollbacker, ok := c.conv.(ports.ChatRollbacker)
 	if !ok {
 		return 0, ErrRollbackUnsupported
@@ -2981,8 +3110,15 @@ func (c *Controller) Rollback(ctx context.Context, turnID string) (int, error) {
 		return 0, fmt.Errorf("%w: %s", ErrTurnNotRollbackable, turnID)
 	}
 
+	var restore filesnapshot.Restore
+	if filePlanID != "" {
+		if restore, err = c.restoreFiles(ctx, turnID, filePlanID); err != nil {
+			return 0, err
+		}
+	}
+
 	if err := rollbacker.Rollback(ctx, turn.ProviderTurnID); err != nil {
-		return 0, classify(fmt.Errorf("roll back turn %s: %w", turnID, err))
+		return 0, c.undoFileRestore(ctx, restore, classify(fmt.Errorf("roll back turn %s: %w", turnID, err)))
 	}
 
 	discarded, err := c.store.RollbackTurns(ctx, c.conversation.ID, turnID, c.now())
@@ -3414,8 +3550,14 @@ func (c *Controller) apply(ctx context.Context, event ports.ChatEvent) error {
 			message = event.Err.Error()
 		}
 		state := settledTurnState(event)
+		failureCode := event.FailureCode
+		// Every driver reports a refused login as ErrChatAuthRequired, so the turn
+		// carries one code the chat can offer a sign-in for, whatever the agent.
+		if failureCode == "" && state == domain.TurnStateFailed && errors.Is(event.Err, ports.ErrChatAuthRequired) {
+			failureCode = domain.ConversationFailureAuthRequired
+		}
 		if err := c.store.SettleTurnWithFailureCode(
-			ctx, c.conversation.ID, event.ProviderTurnID, state, message, event.FailureCode, event.UsageLimitResetsAt, now); err != nil {
+			ctx, c.conversation.ID, event.ProviderTurnID, state, message, failureCode, event.UsageLimitResetsAt, now); err != nil {
 			return err
 		}
 		if event.ProviderConversationID == "" || event.ProviderConversationID == c.conv.ProviderConversationID() {
@@ -3820,8 +3962,12 @@ func (c *Controller) afterProject(ctx context.Context, event ports.ChatEvent, pr
 		}
 		c.reportActivity(ctx, activityState, activityEvent, now)
 		// Only a completed turn releases queued work; a failed or recovered one holds
-		// the queue so it cannot cascade through the same outage (issue #4861).
-		_ = c.drainLocked(ctx, settledTurnState(event) == domain.TurnStateCompleted) // drain logs failures.
+		// the queue so it cannot cascade through the same outage (issue #4861). A
+		// prompt the host's watchdog failed for silence is not an outage: the
+		// provider never answered, so the queued messages get their own turns.
+		releaseQueue := settledTurnState(event) == domain.TurnStateCompleted ||
+			errors.Is(event.Err, ports.ErrChatPromptStalled)
+		_ = c.drainLocked(ctx, releaseQueue) // drain logs failures.
 	case ports.ChatEventProviderState:
 		c.reportProviderState(ctx, event.ThreadState, now)
 	case ports.ChatEventApprovalRequested:

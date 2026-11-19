@@ -66,9 +66,9 @@ describe("ArtifactSnapshotThumbnail", () => {
 		miss(container);
 		expect(screen.getByTestId("live-thumbnail")).toBeTruthy();
 		scrollIntoView();
-		await act(() => vi.advanceTimersByTimeAsync(1_000));
+		await act(() => vi.advanceTimersByTimeAsync(300));
 		expect(mocks.request).not.toHaveBeenCalled();
-		await act(() => vi.advanceTimersByTimeAsync(1_000));
+		await act(() => vi.advanceTimersByTimeAsync(300));
 		expect(mocks.request).toHaveBeenCalledTimes(1);
 		expect(mocks.request.mock.calls[0]?.[0]).toMatchObject({ path: "new.md", theme: "dark" });
 		unmount();
@@ -81,7 +81,7 @@ describe("ArtifactSnapshotThumbnail", () => {
 		const { container } = render(<ArtifactSnapshotThumbnail row={row({ path: "passed.md" })} />);
 		miss(container);
 		scrollIntoView();
-		await act(() => vi.advanceTimersByTimeAsync(500));
+		await act(() => vi.advanceTimersByTimeAsync(300));
 		scrollIntoView(false);
 		await act(() => vi.advanceTimersByTimeAsync(5_000));
 		expect(mocks.request).not.toHaveBeenCalled();
@@ -113,12 +113,15 @@ describe("ArtifactSnapshotThumbnail", () => {
 		expect(mocks.request).toHaveBeenCalledTimes(1);
 	});
 
-	it("renders another host's artifact live, even with the *.localhost URL the remote proxy gives it", async () => {
-		const { container } = render(<ArtifactSnapshotThumbnail row={row({ path: "remote.md", hostId: "host-2", rawUrl: "http://ao-preview-abc123.localhost:4100/api/v1/sessions/s1/preview/files/remote.md" })} />);
+	it("caches another host's artifact like this computer's, named by its host and read through the proxy URL", async () => {
+		const rawUrl = "http://ao-preview-abc123.localhost:4100/remote.html?raw=true";
+		const { container } = render(<ArtifactSnapshotThumbnail row={row({ path: "remote.html", kind: "html", hostId: "host-2", rawUrl })} />);
+		expect(new URL(container.querySelector("img")?.getAttribute("src") ?? "").searchParams.get("h")).toBe("host-2");
+		miss(container);
 		expect(screen.getByTestId("live-thumbnail")).toBeTruthy();
-		expect(container.querySelector("img")).toBeNull();
 		scrollIntoView();
-		await act(() => vi.advanceTimersByTimeAsync(4_000));
-		expect(mocks.request).not.toHaveBeenCalled();
+		await act(() => vi.advanceTimersByTimeAsync(2_000));
+		expect(mocks.request).toHaveBeenCalledTimes(1);
+		expect(mocks.request.mock.calls[0]?.[0]).toMatchObject({ path: "remote.html", hostId: "host-2", rawUrl });
 	});
 });

@@ -8,7 +8,6 @@ import (
 	"strings"
 	"sync/atomic"
 	"testing"
-	"time"
 
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
 	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
@@ -157,7 +156,7 @@ func TestQueuedExcerptValidationFailureContinuesDrain(t *testing.T) {
 				t.Fatalf("excerpt state = %s, want queued", stale.State)
 			}
 			send("next valid")
-			last := send("last valid")
+			send("last valid")
 			changed.changed.Store(true)
 			h.conv.emit(ports.ChatEvent{Kind: ports.ChatEventTurnCompleted,
 				ProviderTurnID: active.ProviderTurnID, TurnState: domain.TurnStateCompleted})
@@ -165,15 +164,9 @@ func TestQueuedExcerptValidationFailureContinuesDrain(t *testing.T) {
 				states := turnStateByText(t, s)
 				return states["stale excerpt"] == domain.TurnStateFailed && states["next valid"] == domain.TurnStateRunning
 			})
-			// The joined message settles in its own write after the snapshot
-			// above; re-read it briefly instead of racing that write under load.
-			lastTurn, err := h.st.TurnByID(ctx, last.ID)
-			for deadline := time.Now().Add(5 * time.Second); (err != nil || lastTurn.State != domain.TurnStateCompleted) && time.Now().Before(deadline); {
-				time.Sleep(10 * time.Millisecond)
-				lastTurn, err = h.st.TurnByID(ctx, last.ID)
-			}
-			if err != nil || lastTurn.State != domain.TurnStateCompleted {
-				t.Fatalf("last queued message did not join the batch: turn=%+v err=%v", lastTurn, err)
+			// Typed messages take one turn each, so the last one waits its turn.
+			if state := turnStateByText(t, snapshot)["last valid"]; state != domain.TurnStateQueued {
+				t.Fatalf("last valid = %s, want queued behind next valid", state)
 			}
 			for _, turn := range snapshot.Turns {
 				if turn.ID == stale.ID && !strings.Contains(turn.ErrorMessage, "chat excerpt") {
@@ -183,13 +176,13 @@ func TestQueuedExcerptValidationFailureContinuesDrain(t *testing.T) {
 			h.conv.emit(ports.ChatEvent{Kind: ports.ChatEventTurnCompleted,
 				ProviderTurnID: "provider-turn-3", TurnState: domain.TurnStateCompleted})
 			snapshot = h.awaitSnapshot(t, func(s store.ConversationSnapshot) bool {
-				return turnStateByText(t, s)["next valid"] == domain.TurnStateCompleted
+				states := turnStateByText(t, s)
+				return states["next valid"] == domain.TurnStateCompleted && states["last valid"] == domain.TurnStateRunning
 			})
 			if turnStateByText(t, snapshot)["stale excerpt"] != domain.TurnStateFailed {
 				t.Fatal("later drains retried the stale turn")
 			}
-			if got := h.conv.sentTexts(); len(got) != 3 ||
-				!reflect.DeepEqual([]string{parseDeliveredBatch(t, got[2])[0].Text, parseDeliveredBatch(t, got[2])[1].Text}, []string{"next valid", "last valid"}) {
+			if got := h.conv.sentTexts(); len(got) != 4 || !reflect.DeepEqual(got[2:], []string{"next valid", "last valid"}) {
 				t.Fatalf("provider sends = %v", got)
 			}
 		})
@@ -199,9 +192,13 @@ func TestQueuedExcerptValidationFailureContinuesDrain(t *testing.T) {
 func TestQueuedProviderDispatchFailureFailsClaimedBatchOnce(t *testing.T) {
 	h := newHarness(t)
 	ctx := context.Background()
-	for _, text := range []string{"active", "provider failure", "still queued"} {
+	for i, text := range []string{"active", "provider failure", "still queued"} {
+		origin := domain.MessageOriginAutomation
+		if i == 0 {
+			origin = domain.MessageOriginHuman
+		}
 		if _, err := h.svc.Send(ctx, testSession, ports.ChatUserMessage{
-			Text: text, ClientMessageID: text, Origin: domain.MessageOriginHuman,
+			Text: text, ClientMessageID: text, Origin: origin,
 		}); err != nil {
 			t.Fatal(err)
 		}

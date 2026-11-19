@@ -35,7 +35,7 @@ func TestListCurrentHeadReviewRunsForSessionDropsStaleSHAs(t *testing.T) {
 			t.Fatalf("insert %s: %v", id, err)
 		}
 	}
-	insert("stale", "head1", domain.ReviewRunComplete, domain.VerdictChangesRequested)
+	insert("stale", "head1", domain.ReviewRunCompleted, domain.VerdictChangesRequested)
 	insert("current", "head2", domain.ReviewRunRunning, domain.VerdictNone)
 
 	runs, err := s.ListCurrentHeadReviewRunsForSession(ctx, r.ID)
@@ -73,7 +73,7 @@ func TestListCurrentHeadReviewRunsForSessionKeepsLatestRunPerHarness(t *testing.
 		t.Helper()
 		if err := s.InsertReviewRun(ctx, domain.ReviewRun{
 			ID: id, ReviewID: "rev", SessionID: r.ID, Harness: harness,
-			PRURL: "pr/1", TargetSHA: "head1", Status: domain.ReviewRunComplete,
+			PRURL: "pr/1", TargetSHA: "head1", Status: domain.ReviewRunCompleted,
 			Verdict: verdict, CreatedAt: createdAt,
 		}); err != nil {
 			t.Fatalf("insert %s: %v", id, err)
@@ -131,7 +131,7 @@ func TestListPRFactsForSessionSplitsExternalReviewVerdicts(t *testing.T) {
 	}
 	if err := s.InsertReviewRun(ctx, domain.ReviewRun{
 		ID: "run", ReviewID: "rev", SessionID: r.ID, Harness: "claude-code", PRURL: "pr/ao-only",
-		TargetSHA: "head1", Status: domain.ReviewRunComplete, Verdict: domain.VerdictApproved,
+		TargetSHA: "head1", Status: domain.ReviewRunCompleted, Verdict: domain.VerdictApproved,
 		GithubReviewID: "gh-ao", CreatedAt: now,
 	}); err != nil {
 		t.Fatal(err)
@@ -232,7 +232,7 @@ func TestListPRFactsForSessionKeepsHumanVerdictOverLaterAOReview(t *testing.T) {
 	}
 	if err := s.InsertReviewRun(ctx, domain.ReviewRun{
 		ID: "run", ReviewID: "rev", SessionID: r.ID, Harness: "claude-code", PRURL: "pr/1",
-		TargetSHA: "head1", Status: domain.ReviewRunComplete, Verdict: domain.VerdictApproved,
+		TargetSHA: "head1", Status: domain.ReviewRunCompleted, Verdict: domain.VerdictApproved,
 		GithubReviewID: "gh-ao", CreatedAt: now,
 	}); err != nil {
 		t.Fatal(err)
@@ -265,7 +265,7 @@ func TestListPRFactsForSessionSplitsExternalCommentsFromAOInjectedComments(t *te
 	}
 	if err := s.InsertReviewRun(ctx, domain.ReviewRun{
 		ID: "run-ao", ReviewID: "rev-ao", SessionID: r.ID, Harness: "claude-code",
-		PRURL: "pr/ao", TargetSHA: "head1", Status: domain.ReviewRunComplete,
+		PRURL: "pr/ao", TargetSHA: "head1", Status: domain.ReviewRunCompleted,
 		Verdict: domain.VerdictChangesRequested, GithubReviewID: "gh-ao", CreatedAt: now,
 	}); err != nil {
 		t.Fatal(err)
@@ -392,7 +392,7 @@ func TestListCurrentHeadReviewRunsForSessionsKeepsLatestRunPerHarness(t *testing
 		t.Helper()
 		if err := s.InsertReviewRun(ctx, domain.ReviewRun{
 			ID: id, ReviewID: reviewID, SessionID: sessionID, Harness: harness,
-			PRURL: "pr/" + string(sessionID), TargetSHA: "head1", Status: domain.ReviewRunComplete,
+			PRURL: "pr/" + string(sessionID), TargetSHA: "head1", Status: domain.ReviewRunCompleted,
 			Verdict: verdict, CreatedAt: createdAt,
 		}); err != nil {
 			t.Fatalf("insert %s: %v", id, err)
@@ -502,7 +502,7 @@ func TestListPRFactsForSessionsSplitExternalCommentsFromAOInjectedComments(t *te
 	}
 	if err := s.InsertReviewRun(ctx, domain.ReviewRun{
 		ID: "run-ao", ReviewID: "rev-ao", SessionID: third.ID, Harness: "claude-code",
-		PRURL: "pr/ao", TargetSHA: "head1", Status: domain.ReviewRunComplete,
+		PRURL: "pr/ao", TargetSHA: "head1", Status: domain.ReviewRunCompleted,
 		Verdict: domain.VerdictChangesRequested, GithubReviewID: "gh-ao", CreatedAt: now,
 	}); err != nil {
 		t.Fatal(err)

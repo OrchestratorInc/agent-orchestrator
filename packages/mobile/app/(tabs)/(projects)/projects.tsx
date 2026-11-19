@@ -1,5 +1,5 @@
 import { useFocusEffect, useRouter } from "expo-router";
-import { useCallback, useMemo, useRef, useState } from "react";
+import { useCallback, useMemo, useRef } from "react";
 import { FlatList, Platform, RefreshControl, StyleSheet, View } from "react-native";
 import { BoardHeaderItems } from "../../../lib/BoardHeaderItems";
 import { useCloud } from "../../../lib/cloud/CloudProvider";
@@ -8,18 +8,21 @@ import { useCloudPlan } from "../../../lib/cloud/planStore";
 import { boardTitle } from "../../../lib/board-tabs";
 import { useScrollToTopOnReselect } from "../../../lib/boardTabReselect";
 import { hostedProjectKey, hostedProjectSections, type HostedProjectRow } from "../../../lib/hostedRows";
+import { connectedSpawnHosts } from "../../../lib/hostRoute";
 import { TitleActionButton, useInlineLargeTitle } from "../../../lib/inlineLargeTitle";
 import { useTabBarFrost } from "../../../lib/frost";
 import type { OrchestratorProjectRow } from "../../../lib/orchestratorView";
 import { ProjectCard } from "../../../lib/project-card";
 import { refreshControlColors } from "../../../lib/refreshControlColors";
 import { Spinner } from "../../../lib/Spinner";
-import { StaleBanner } from "../../../lib/StaleBanner";
+import { FreshnessLine } from "../../../lib/FreshnessLine";
+import { useMachineFreshness } from "../../../lib/useMachineFreshness";
 import { useApp } from "../../../lib/store";
 import { UnpairedState } from "../../../lib/UnpairedState";
 import type { Theme } from "../../../lib/theme";
 import { useTheme, useThemedStyles } from "../../../lib/ThemeProvider";
 import { useOrchestratorLauncher } from "../../../lib/useOrchestratorLauncher";
+import { useRefreshActions } from "../../../lib/useRefreshActions";
 import { useBoardFailure } from "../../../lib/useBoardFailure";
 import { TabPageScroll } from "../../../lib/TabPageScroll";
 import { space } from "../../../lib/tokens";
@@ -41,6 +44,8 @@ export default function ProjectsScreen() {
 		notificationsUnread,
 		refreshAll,
 	} = useApp();
+	// Each card's machine dot. Changes only when some machine's state does.
+	const freshness = useMachineFreshness();
 	const { status: cloudStatus, notificationsUnread: cloudUnread, watch: watchCloud, projectsLoaded: cloudProjectsLoaded, projectsError: cloudProjectsError, refreshProjects: refreshCloudProjects, client: cloudClient, org: cloudOrg } = useCloud();
 	// A Free organization runs no cloud agents, so a new cloud project could never run anything.
 	const cloudPlan = useCloudPlan(cloudClient, cloud ? cloudOrg?.id : undefined);
@@ -53,13 +58,28 @@ export default function ProjectsScreen() {
 	const cloudLoading = Boolean(cloud) && !cloudProjectsLoaded && !cloudProjectsError;
 	const cloudFailed = Boolean(cloud) && !cloudProjectsLoaded && Boolean(cloudProjectsError);
 	useFocusEffect(useCallback(() => watchCloud(), [watchCloud]));
-	// A cloud project starts from a GitHub repository, here or from New task.
-	const newCloudProject = useCallback(() => router.push("/cloud/new-project"), [router]);
-	// On iOS, New cloud project sits at the end of the page's own title line, so
+	// A project goes on a connected machine, from one of its folders or a
+	// clone, or in Orchestrator Cloud; the sheet offers whichever can be made.
+	const canCreateLocalProject = useMemo(() => connectedSpawnHosts(hostStates).length > 0, [hostStates]);
+	const newProject = useCallback(() => router.push("/cloud/new-project"), [router]);
+	// With no machine connected the sheet can only make a cloud project, so it says so.
+	const newProjectLabel = canCreateLocalProject ? "New project" : "New cloud project";
+	// No haptic of its own: each platform's refresh control gives the feedback
+	// it gives everywhere, and the Retry buttons that run it too buzz once.
+	// Retry never drives the pull spinner: see useRefreshActions.
+	const { refreshing, onRefresh, retrying, retry } = useRefreshActions(refreshAll);
+	const unpaired = !configured && hostStates.length === 0 && !cloud && !cloudPending;
+	// The title's accessory: under the large title on iOS, pinned under the bar
+	// on Android, where the bar's frost washed out a line placed in the page.
+	// It speaks for the one machine when every project is on it; with several
+	// machines, each card's machine wears its own dot.
+	const freshnessLine = unpaired ? null : <FreshnessLine hostId={!cloud && hostStates.length === 1 ? hostStates[0].hostId : undefined} onRetry={retry} />;
+	// On iOS, New project sits at the end of the page's own title line, so
 	// the bar keeps the board's items as they are. Android's large title is the
 	// bar's own, on the row its actions sit on, so there it is the bar's "+".
 	const largeTitle = useInlineLargeTitle(boardTitle("(projects)"), {
-		action: canCreateCloudProject ? <TitleActionButton icon="add" accessibilityLabel="New cloud project" onPress={newCloudProject} testID="new-cloud-project-title" /> : undefined,
+		action: canCreateCloudProject || canCreateLocalProject ? <TitleActionButton icon="add" accessibilityLabel={newProjectLabel} onPress={newProject} testID="new-project-title" /> : undefined,
+		accessory: freshnessLine,
 	});
 	const tabBar = useTabBarFrost();
 	const listRef = useRef<FlatList<HostedProjectRow>>(null);
@@ -71,7 +91,6 @@ export default function ProjectsScreen() {
 	const unreadCount = (hostStates.length > 1
 		? hostStates.reduce((count, host) => count + host.notificationsUnread, 0)
 		: notificationsUnread) + (cloud ? cloudUnread : 0);
-	const [refreshing, setRefreshing] = useState(false);
 	const { busyProjects, openOrchestrator } = useOrchestratorLauncher();
 	// One list of rows, no status headers: each row already says how its
 	// orchestrator is doing. The sections' order is kept, so projects that need
@@ -83,24 +102,13 @@ export default function ProjectsScreen() {
 	);
 	const failure = useBoardFailure();
 
-	// No haptic of its own: each platform's refresh control gives the feedback
-	// it gives everywhere, and the Retry buttons that also call this buzz once.
-	const onRefresh = async () => {
-		setRefreshing(true);
-		try {
-			await refreshAll();
-		} finally {
-			setRefreshing(false);
-		}
-	};
-
 	const openProject = (row: OrchestratorProjectRow) => {
 		const hostId = "hostId" in row.project && typeof row.project.hostId === "string" ? row.project.hostId : undefined;
 		if (!hostId) return;
 		router.push({ pathname: "/project/[id]", params: { id: row.project.id, hostId } });
 	};
 
-	if (!configured && hostStates.length === 0 && !cloud && !cloudPending) {
+	if (unpaired) {
 		return (
 			<View style={styles.screen}>
 				<TabPageScroll>
@@ -114,16 +122,14 @@ export default function ProjectsScreen() {
 		);
 	}
 
-	// In the list, not above it: the list has to be the page's first view under
-	// the translucent header.
-	const staleBanner = hostStates.length <= 1 ? <StaleBanner error={!!error} onRetry={onRefresh} /> : <StaleBanner networkOnly />;
+	const showMachine = hostStates.length + (cloud ? 1 : 0) > 1;
 
 	return (
 		<View style={styles.screen}>
 			{(fleetLoading || cloudPending || cloudLoading) && allProjects.length === 0 && !cloudReady ? (
 				<TabPageScroll>
 					{largeTitle.header}
-					{staleBanner}
+					{largeTitle.accessory}
 					<View style={styles.center}>
 						<Spinner color={t.accent} accessibilityLabel="Loading projects" />
 					</View>
@@ -137,14 +143,15 @@ export default function ProjectsScreen() {
 					// Android's tab bar is clear and the list runs on under it.
 					contentContainerStyle={{ flexGrow: 1, paddingBottom: space.xxl + tabBar.inset }}
 					refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} progressViewOffset={largeTitle.topInset} {...refreshControlColors(t)} />}
-					ListHeaderComponent={<>{largeTitle.header}{staleBanner}</>}
+					ListHeaderComponent={<>{largeTitle.header}{largeTitle.accessory}</>}
 					onScroll={largeTitle.onScroll}
 					scrollEventThrottle={largeTitle.onScroll ? 16 : undefined}
 					renderItem={({ item }) => (
 						<ProjectCard
 							row={item}
 							busy={busyProjects.has(hostedProjectKey(item.project))}
-							showMachine={hostStates.length + (cloud ? 1 : 0) > 1}
+							showMachine={showMachine}
+							freshness={showMachine ? freshness.get(item.project.hostId) : undefined}
 							onOpenProject={openProject}
 							onOrchestrator={openOrchestrator}
 						/>
@@ -162,20 +169,20 @@ export default function ProjectsScreen() {
 								icon={hostStates.length > 1 ? "unplug" : failure.icon}
 								title={hostStates.length > 1 ? "No machines connected" : failure.title}
 								message={hostStates.length > 1 ? undefined : failure.hint}
-								action={<Button title="Retry" icon="refresh-cw" variant="secondary" onPress={onRefresh} />}
+								action={<Button title="Retry" icon="refresh-cw" variant="secondary" loading={retrying} onPress={retry} />}
 							/>
 						) : (
 							<EmptyState
 								icon="folder"
 								title="No projects"
-								message={canCreateCloudProject ? "Create a cloud project from a GitHub repository, or add one in Orchestrator on your computer." : "Add a project in Orchestrator to get started."}
-								action={canCreateCloudProject ? <Button title="New cloud project" icon="cloud" onPress={newCloudProject} /> : undefined}
+								message={canCreateLocalProject ? (canCreateCloudProject ? "Add a folder from your computer, clone a repository, or start a cloud project." : "Add a folder from your computer or clone a repository.") : canCreateCloudProject ? "Create a cloud project from a GitHub repository, or add one in Orchestrator on your computer." : "Add a project in Orchestrator to get started."}
+								action={canCreateLocalProject || canCreateCloudProject ? <Button title={newProjectLabel} icon={canCreateLocalProject ? "plus" : "cloud"} onPress={newProject} /> : undefined}
 							/>
 						)
 					}
 				/>
 			)}
-			<BoardHeaderItems unread={unreadCount} onAdd={Platform.OS === "android" && canCreateCloudProject ? newCloudProject : undefined} addLabel="New cloud project" />
+			<BoardHeaderItems unread={unreadCount} onAdd={Platform.OS === "android" && (canCreateCloudProject || canCreateLocalProject) ? newProject : undefined} addLabel={newProjectLabel} />
 			{largeTitle.edge}
 			{tabBar.frost}
 		</View>

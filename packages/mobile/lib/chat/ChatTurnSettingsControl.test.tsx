@@ -13,6 +13,7 @@ vi.mock("@expo/ui/jetpack-compose", async () => {
 	return {
 		Button: host("Button"),
 		DropdownMenu: Object.assign(host("DropdownMenu"), { Trigger: host("DropdownMenuTrigger"), Items: host("DropdownMenuItems") }),
+		DropdownMenuItem: Object.assign(host("DropdownMenuItem"), { Text: host("DropdownMenuItemText"), LeadingIcon: host("DropdownMenuItemLeading"), TrailingIcon: host("DropdownMenuItemTrailing") }),
 		Host: host("ComposeHost"),
 		HorizontalDivider: host("HorizontalDivider"),
 		Icon: host("Icon"),
@@ -25,12 +26,13 @@ vi.mock("@expo/ui/jetpack-compose", async () => {
 });
 vi.mock("@expo/ui/jetpack-compose/modifiers", () => {
 	const record = (name: string) => (...args: unknown[]) => ({ modifier: name, args });
-	return { fillMaxWidth: record("fillMaxWidth"), height: record("height"), padding: record("padding"), semantics: record("semantics"), testID: record("testID"), weight: record("weight") };
+	return { fillMaxWidth: record("fillMaxWidth"), height: record("height"), padding: record("padding"), semantics: record("semantics"), testID: record("testID"), weight: record("weight"), width: record("width") };
 });
 vi.mock("../composeMenu.android", async () => {
 	const React = await import("react");
 	return {
 		KEEP_KEYBOARD: { focusable: false },
+		SUBMENU: { focusable: false, dismissOnClickOutside: false },
 		HarnessMark: (props: object) => React.createElement("HarnessMark", props),
 		MenuRow: (props: object) => React.createElement("MenuRow", props),
 		useCloseMenuOnBack: (open: boolean, close: () => void) => {
@@ -98,7 +100,9 @@ afterEach(() => {
 
 const levels = [{ value: "low", label: "Low", selected: true }, { value: "high", label: "High", selected: false }];
 
-function render(over: { snapshot?: ConversationSnapshot; models?: ChatModel[]; options?: ChatConfigOption[]; disabled?: boolean; effort?: { choices: typeof levels; open: boolean; onToggle(): void } | null } = {}) {
+type OtherAgents = NonNullable<Parameters<typeof ChatTurnSettingsControl>[0]["otherAgents"]>;
+
+function render(over: { snapshot?: ConversationSnapshot; models?: ChatModel[]; options?: ChatConfigOption[]; disabled?: boolean; effort?: { choices: typeof levels; open: boolean; onToggle(): void } | null; otherAgents?: OtherAgents } = {}) {
 	const handlers = {
 		onSettings: vi.fn(() => Promise.resolve()),
 		onOption: vi.fn(() => Promise.resolve([] as ChatConfigOption[])),
@@ -106,7 +110,7 @@ function render(over: { snapshot?: ConversationSnapshot; models?: ChatModel[]; o
 	};
 	const effort = over.effort === null ? undefined : over.effort ?? { choices: levels, open: false, onToggle: handlers.onToggleEffort };
 	act(() => {
-		renderer = create(<ChatTurnSettingsControl snapshot={over.snapshot ?? snapshot()} models={over.models ?? models} options={over.options ?? [fast]} disabled={over.disabled} onSettings={handlers.onSettings} onOption={handlers.onOption} effort={effort} />);
+		renderer = create(<ChatTurnSettingsControl snapshot={over.snapshot ?? snapshot()} models={over.models ?? models} options={over.options ?? [fast]} disabled={over.disabled} onSettings={handlers.onSettings} onOption={handlers.onOption} effort={effort} otherAgents={over.otherAgents} />);
 	});
 	return handlers;
 }
@@ -211,6 +215,45 @@ describe("Android chat controls row", () => {
 		act(() => olderRows()[2].props.onClick());
 		expect(onSettings).toHaveBeenLastCalledWith({ model: "m6", approvalMode: "auto", reasoningEffort: undefined });
 		expect(menu("chat-model").props.expanded).toBe(false);
+	});
+
+	// The new task's "Other agents": each agent opens onto its models. A model
+	// chosen there only records the pick; the switch runs with the next message.
+	const codex = { models: [{ id: "gpt-5.5", label: "GPT-5.5" }], older: [{ id: "gpt-5", label: "GPT-5" }], total: 2, defaultLabel: "GPT-5.5" };
+	const agentMenu = () => renderer!.root.findAll((node) => node.type === ("DropdownMenu" as never) && node.findAll((child) => child.type === ("DropdownMenuItem" as never) && hasTestID(child, "chat-agent-codex")).length > 0).at(-1)!;
+	const agentItem = () => agentMenu().findByType("DropdownMenuItem" as never);
+	const agentRows = () => agentMenu().findByType("DropdownMenuItems" as never).findAll((node) => node.type === ("MenuRow" as never));
+
+	it("lists the other agents under the models and records the model picked there", () => {
+		const onPick = vi.fn();
+		const { onSettings } = render({ otherAgents: { agents: [{ id: "codex", label: "Codex" }], models: { codex }, onPick } });
+		expect(agentItem().findByType("DropdownMenuItemText" as never).findByType("ComposeText" as never).props.children).toBe("Codex");
+		expect(agentRows().map((row) => row.props.label)).toEqual(["GPT-5.5 · Default", "GPT-5.5", "Older models", "GPT-5"]);
+		open("chat-model");
+		act(() => agentItem().props.onClick());
+		expect(agentMenu().props.expanded).toBe(true);
+		expect(menu("chat-model").props.expanded).toBe(true);
+		act(() => agentRows()[0].props.onClick());
+		expect(onPick).toHaveBeenCalledWith({ harness: "codex", model: undefined, modelLabel: "GPT-5.5" });
+		expect(onSettings).not.toHaveBeenCalled();
+		expect(menu("chat-model").props.expanded).toBe(false);
+	});
+
+	it("shows a pending pick on the capsule, and the running agent's model chosen again drops it", () => {
+		const onPick = vi.fn();
+		const { onSettings } = render({ otherAgents: { agents: [{ id: "codex", label: "Codex" }], models: { codex }, pending: { harness: "codex", model: "gpt-5.5", modelLabel: "GPT-5.5" }, onPick } });
+		expect(trigger("chat-model").findByType("HarnessMark" as never).props.harness).toBe("codex");
+		expect(trigger("chat-model").findByType("ComposeText" as never).props.children).toBe("GPT-5.5");
+		expect(agentRows().find((row) => row.props.label === "GPT-5.5")?.props.selected).toBe(true);
+		expect(titles("chat-model")[0]).toEqual(["Opus", "off"]);
+		pick("chat-model", 0);
+		expect(onPick).toHaveBeenCalledWith(undefined);
+		expect(onSettings).not.toHaveBeenCalled();
+	});
+
+	it("holds the other agents while the agent is working", () => {
+		render({ otherAgents: { agents: [{ id: "codex", label: "Codex" }], models: { codex }, disabled: true, onPick: vi.fn() } });
+		expect(agentItem().props.enabled).toBe(false);
 	});
 
 	it("writes nothing when the current choice is picked again", () => {

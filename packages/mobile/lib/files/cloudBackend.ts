@@ -88,7 +88,9 @@ export function cloudFilesBackend(client: CloudClient, orgId: string): FilesBack
 				degraded: false,
 			};
 		}),
-		file: (sessionId, path, section) => inCloudWords(async () => {
+		// The control plane reads no commit and has no one Uncommitted scope.
+		file: (sessionId, path, read) => inCloudWords(async () => {
+			const section = read?.section === "uncommitted" ? undefined : read?.section;
 			const file = await client.getWorkspaceReviewFile(orgId, sessionId, { path, scope: section });
 			const status = workspaceStatus(file.status);
 			const content = file.content ?? "";

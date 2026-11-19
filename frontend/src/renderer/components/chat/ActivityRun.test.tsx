@@ -4,6 +4,7 @@ import { describe, expect, it } from "vitest";
 import type { ConversationActivity } from "../../types/conversation";
 import { TooltipProvider } from "../ui/tooltip";
 import { ActivityRun } from "./ActivityRun";
+import { RevealedChatActivity } from "./ChatTimelineItems";
 
 function tool(
 	id: string,
@@ -46,6 +47,47 @@ describe("ActivityRun nested agents", () => {
 
 		await user.click(screen.getByRole("button", { name: /Subagent 1 step/i }));
 		expect(await screen.findByText("Search source files")).toBeInTheDocument();
+	});
+
+	// A search match in a subagent's call: every fold above it opens, the
+	// subagent's included, so the matched row mounts and can be marked.
+	it("opens every fold above a search match inside a subagent", async () => {
+		render(
+			<RevealedChatActivity.Provider value="activity-2">
+				<ActivityRun
+					activities={[
+						tool("activity-1", "agent-tool", "Delegate repository scan"),
+						tool("activity-2", "child-tool", "Search source files", "agent-tool"),
+					]}
+				/>
+			</RevealedChatActivity.Provider>,
+		);
+
+		expect(await screen.findByText("Search source files")).toBeInTheDocument();
+		expect(screen.getByRole("button", { name: /Subagent 1 step/i })).toHaveAttribute("aria-expanded", "true");
+		expect(document.querySelector('[data-chat-activity-id="activity-2"]')).not.toBeNull();
+	});
+
+	// The reader closed the subagent after one match, then picked another in it:
+	// the fold must open again for the new row.
+	it("reopens a subagent the reader closed when another match in it is revealed", async () => {
+		const user = userEvent.setup();
+		const activities = [
+			tool("activity-1", "agent-tool", "Delegate repository scan"),
+			tool("activity-2", "child-tool", "Search source files", "agent-tool"),
+			tool("activity-3", "child-tool-2", "Read the config file", "agent-tool"),
+		];
+		const { rerender } = render(
+			<RevealedChatActivity.Provider value="activity-2"><ActivityRun activities={activities} /></RevealedChatActivity.Provider>,
+		);
+		const subagent = await screen.findByRole("button", { name: /Subagent 2 steps/i });
+		expect(subagent).toHaveAttribute("aria-expanded", "true");
+		await user.click(subagent);
+		expect(subagent).toHaveAttribute("aria-expanded", "false");
+
+		rerender(<RevealedChatActivity.Provider value="activity-3"><ActivityRun activities={activities} /></RevealedChatActivity.Provider>);
+		await waitFor(() => expect(screen.getByRole("button", { name: /Subagent 2 steps/i })).toHaveAttribute("aria-expanded", "true"));
+		expect(await screen.findByText("Read the config file")).toBeInTheDocument();
 	});
 
 	it("keeps malformed provider cycles visible at the top level", async () => {

@@ -83,10 +83,10 @@ func agentAccountResponse(view agentaccounts.AccountView) AgentAccountResponse {
 	out := AgentAccountResponse{
 		ID: view.Account.ID, Provider: view.Account.Provider, Device: view.Account.Device(),
 		Email: view.Account.Email, Plan: view.Account.Plan, Default: view.Default, SignedIn: view.SignedIn, LoggedIn: view.LoggedIn,
-		Problem: view.IdentityErr, Limits: view.Limits,
+		Problem: view.IdentityErr, ProblemKind: view.IdentityProblem, Limits: view.Limits, SameLoginAs: view.SameLoginAs, OrgID: view.OrgID, OrgName: view.OrgName,
 	}
 	if out.Problem == "" && view.SignedIn {
-		out.Problem = view.LimitsErr
+		out.Problem, out.ProblemKind = view.LimitsErr, view.LimitsProblem
 	}
 	if !view.Account.CreatedAt.IsZero() {
 		created := view.Account.CreatedAt
@@ -285,6 +285,8 @@ func writeAgentAccountError(w http.ResponseWriter, r *http.Request, err error) {
 		envelope.WriteAPIError(w, r, http.StatusConflict, "conflict", "AGENT_ACCOUNT_UNSHARED", agentAccountUnsharedMessage, nil)
 	case errors.Is(err, ports.ErrAgentAccountInUse):
 		envelope.WriteAPIError(w, r, http.StatusConflict, "conflict", "AGENT_ACCOUNT_IN_USE", "Orchestrator could not stop an agent that uses this account, so it kept the account. Stop that agent, then remove the account again.", nil)
+	case errors.Is(err, ports.ErrSessionNotFound):
+		envelope.WriteAPIError(w, r, http.StatusNotFound, "not_found", "SESSION_NOT_FOUND", "session not found", nil)
 	case errors.Is(err, ports.ErrAgentAccountDeviceFixed):
 		envelope.WriteAPIError(w, r, http.StatusConflict, "conflict", "AGENT_ACCOUNT_DEVICE_FIXED", "This computer's own login is managed by its CLI, not Orchestrator", nil)
 	default:

@@ -30,8 +30,20 @@ type ShellTerminal struct {
 	WorkingDir string           `json:"workingDir"`
 	Title      string           `json:"title"`
 	// TerminalTitle is present only when the program's title should label the tab.
-	TerminalTitle string    `json:"terminalTitle,omitempty"`
-	CreatedAt     time.Time `json:"createdAt"`
+	TerminalTitle string              `json:"terminalTitle,omitempty"`
+	CreatedAt     time.Time           `json:"createdAt"`
+	EndedAt       *time.Time          `json:"endedAt,omitempty"`
+	ResumeHarness domain.AgentHarness `json:"resumeHarness,omitempty"`
+}
+
+// ReopenShellTerminalInput asks to replace an ended shell with a fresh one in
+// the same place. ResumeAgent also resumes the agent that was running there;
+// nothing the old shell ran is ever replayed.
+type ReopenShellTerminalInput struct {
+	HandleID    string
+	Shell       string
+	ResumeAgent bool
+	Cols, Rows  int
 }
 
 // OpenShellTerminalInput is the request to open a new shell pane. An empty
@@ -81,8 +93,11 @@ type InitialInputReadyState struct {
 type OpenCommandTerminalInput struct {
 	// Owner is a trusted workflow identity, independent of the editable title.
 	// It is persisted so the workflow can reconcile commands after a restart.
-	Owner                   string
-	Argv                    []string
+	Owner string
+	Argv  []string
+	// HideFromList keeps a daemon-owned guided login PTY out of the user's
+	// terminal drawer. The auth service still owns and closes its handle.
+	HideFromList            bool
 	Env                     map[string]string
 	WorkingDir              string
 	Title                   string

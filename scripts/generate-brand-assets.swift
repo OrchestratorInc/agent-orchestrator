@@ -527,7 +527,19 @@ do {
     writePNG(context.makeImage()!, "frontend/assets/icon-dev.png")
 }
 
-for size in [16, 32, 48, 128] {
+// Browser Bridge extension. Chrome draws the toolbar icon (16 px, 32 px on
+// Retina) in a 16 dp slot beside other extensions' glyphs, where the tile's
+// margin and dark plate left Ruto a few pixels wide: those sizes are the flat
+// mark filling the square. The extensions page (48) and store (128) keep the tile.
+do {
+    let context = canvas(1024, 1024)
+    draw(svg: source, in: context, rect: CGRect(x: 0, y: 0, width: 1024, height: 1024))
+    let mark = context.makeImage()!
+    for size in [16, 32] {
+        writePNG(fitted(mark, width: size, height: size, box: CGSize(width: size, height: size)), "frontend/src/browser-extension/icons/icon-\(size).png")
+    }
+}
+for size in [48, 128] {
     writePNG(resized(desktop, size, size), "frontend/src/browser-extension/icons/icon-\(size).png")
 }
 

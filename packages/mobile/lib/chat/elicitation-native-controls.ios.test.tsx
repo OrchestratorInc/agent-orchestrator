@@ -182,3 +182,12 @@ it("taps on press unless the caller buzzes for the outcome", () => {
 	expect(haptics.tap).toHaveBeenCalledOnce();
 	expect(onPress).toHaveBeenCalledTimes(2);
 });
+
+// The timeline reveals a request field when it takes focus; losing it asks nothing.
+it("reports the field taking focus", () => {
+	const onFocus = vi.fn();
+	act(() => { renderer = create(<ElicitationTextField value="" label="Title" onChange={vi.fn()} onFocus={onFocus} />); });
+	act(() => renderer!.root.findByType(TextField).props.onFocusChange(true));
+	act(() => renderer!.root.findByType(TextField).props.onFocusChange(false));
+	expect(onFocus).toHaveBeenCalledOnce();
+});

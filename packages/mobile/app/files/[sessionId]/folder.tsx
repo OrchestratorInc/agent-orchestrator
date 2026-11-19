@@ -21,6 +21,8 @@ import { reviewKey } from "../../../lib/files/reviewStore";
 import { useFileActions } from "../../../lib/files/useFileActions";
 import { useReviewSender } from "../../../lib/files/useReviewSender";
 import { useFilesBackend } from "../../../lib/files/useFilesBackend";
+import { useBranchBackend, useRouteSelection } from "../../../lib/files/useChangeList";
+import type { SelectionParams } from "../../../lib/files/selection";
 
 export { RouteErrorBoundary as ErrorBoundary } from "../../../lib/RouteErrorBoundary";
 
@@ -35,7 +37,10 @@ export default function SessionFolderScreen() {
 }
 
 function SessionFolderContent() {
-	const { sessionId, hostId: routeHostId, dir: dirParam } = useLocalSearchParams<{ sessionId: string; hostId?: string; dir?: string }>();
+	const params = useLocalSearchParams<{ sessionId: string; hostId?: string; dir?: string } & SelectionParams>();
+	const { sessionId, hostId: routeHostId, dir: dirParam } = params;
+	// The branch the Files screen was comparing, whose tip this folder lists.
+	const selection = useRouteSelection(params);
 	const id = String(sessionId ?? "");
 	// A trailing slash would name no folder.
 	const dir = String(dirParam ?? "").replace(/\/+$/, "");
@@ -47,8 +52,9 @@ function SessionFolderContent() {
 	const styles = useThemedStyles(makeStyles);
 	const review = useReviewSender(backend, reviewKey(currentHostId, id), id);
 	const toast = useToast();
-	const { openFile, openFolder, openReview, act } = useFileActions({ sessionId: id, hostId: routeHostId, toast });
-	const search = useFileSearch(hostMatches ? backend : null, id);
+	const { openFile, openFolder, openReview, act } = useFileActions({ sessionId: id, hostId: routeHostId, toast, selection });
+	const branchBackend = useBranchBackend(hostMatches ? backend : null, selection.branch);
+	const search = useFileSearch(hostMatches ? branchBackend : null, id);
 	const insets = useSafeAreaInsets();
 	const name = splitPath(dir).name || "Worktree";
 
@@ -75,7 +81,7 @@ function SessionFolderContent() {
 				<SearchResults query={search.query} results={search.results} searching={search.searching} bottomInset={bottomInset} onOpenFile={openPath} onAction={pathAction} />
 			) : (
 				<FolderList
-					backend={backend}
+					backend={branchBackend}
 					sessionId={id}
 					dir={dir}
 					bottomInset={bottomInset}
