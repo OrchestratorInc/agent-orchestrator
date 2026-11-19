@@ -664,12 +664,12 @@ func (s *Service) setNamedPRReviewOnly(ctx context.Context, workerID domain.Sess
 	return nil
 }
 
-// hasOpenPR reports whether any tracked PR is still open. A session whose
-// only tracked PRs are closed or merged may have opened a new one on the same
-// branch.
+// hasOpenPR reports whether the session has an open PR of its own. A session
+// whose only tracked PRs are closed, merged, or review-only (someone else's
+// PR it only reviewed, #6810) may have opened a new one on its branch.
 func hasOpenPR(prs []domain.PullRequest) bool {
 	for _, pr := range prs {
-		if !pr.Merged && !pr.Closed {
+		if !pr.Merged && !pr.Closed && !pr.ReviewOnly {
 			return true
 		}
 	}

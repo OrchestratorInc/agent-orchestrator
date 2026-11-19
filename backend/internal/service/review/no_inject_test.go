@@ -3,6 +3,7 @@ package review
 import (
 	"context"
 	"errors"
+	"strings"
 	"testing"
 
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
@@ -179,5 +180,29 @@ func TestSubmitUsesNoInjectMarkedDuringSubmit(t *testing.T) {
 	}
 	if len(st.suppressedReviews) != 1 || st.suppressedReviews[0] != "pr1#987" {
 		t.Fatalf("suppressed = %v, want the posted review suppressed", st.suppressedReviews)
+	}
+}
+
+// #6810: a PR the session only reviewed is not its own, so a worker that just
+// opened its own PR and triggers a review before the next poll still has its
+// branch looked up and the new PR attached.
+func TestTriggerRequestedAttachesTheBranchPRBesideAReviewOnlyPR(t *testing.T) {
+	var order []string
+	url := "https://github.com/o/r/pull/9"
+	st := &fakeStore{prs: []domain.PullRequest{{URL: "https://github.com/x/y/pull/3", SessionID: "mer-1", ReviewOnly: true}}}
+	refresher := &fakePRRefresher{order: &order, branchPRs: []string{url}}
+	svc := New(nil, st, WithPRRefresher(refresher))
+	svc.engineTrigger = func(_ context.Context, _ domain.SessionID, _ reviewcore.TriggerOptions) (reviewcore.TriggerResult, error) {
+		order = append(order, "trigger")
+		return reviewcore.TriggerResult{Created: true}, nil
+	}
+	if _, err := svc.TriggerRequested(context.Background(), "mer-1", TriggerRequest{Source: domain.ReviewTriggerAgent}); err != nil {
+		t.Fatalf("TriggerRequested: %v", err)
+	}
+	if refresher.finds != 1 {
+		t.Fatalf("branch lookups = %d, want 1 despite the review-only PR", refresher.finds)
+	}
+	if got := strings.Join(order, ","); got != "refresh "+url+",trigger" {
+		t.Fatalf("order = %v, want the worker's own branch PR attached before planning", order)
 	}
 }
