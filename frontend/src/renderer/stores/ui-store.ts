@@ -551,6 +551,14 @@ export async function readSystemTheme(): Promise<Theme> {
 // The latest setThemePreference call; an older System lookup that resolves
 // after a newer choice is dropped.
 let themePreferenceRequest = 0;
+// A System lookup ran since main last got theme:set. On Windows and Linux the
+// lookup drops the forced mode, so main must hear the preference again.
+let systemLookupSinceThemeSet = false;
+
+function sendThemePreference(themePreference: ThemePreference): void {
+	systemLookupSinceThemeSet = false;
+	void aoBridge.theme?.set(themePreference)?.catch(() => undefined);
+}
 
 const initialThemePreference = readStoredThemePreference();
 const initialThemeStyle = readStoredThemeStyle();
@@ -607,7 +615,12 @@ export const useUiStore = create<UiState>((set, get) => ({
 	setWorkbenchTab: (workbenchTab) => set({ workbenchTab }),
 	setThemePreference: (themePreference) => {
 		const request = ++themePreferenceRequest;
-		if (get().themePreference === themePreference) return;
+		if (get().themePreference === themePreference) {
+			// Picking the current mode while a System lookup was pending: put
+			// main's forced mode back.
+			if (systemLookupSinceThemeSet) sendThemePreference(themePreference);
+			return;
+		}
 		const apply = (resolvedTheme: Theme) => {
 			if (request !== themePreferenceRequest) return;
 			runThemeTransition(
@@ -618,13 +631,17 @@ export const useUiStore = create<UiState>((set, get) => ({
 				},
 				// The window's vibrancy material follows nativeTheme; flip it as the
 				// new frame is revealed so the tint and the material change together.
-				() => void aoBridge.theme?.set(themePreference)?.catch(() => undefined),
+				() => sendThemePreference(themePreference),
 			);
 		};
 		// System comes from main: the media query still reports the forced mode
 		// until theme:set("system") lands, which happens only on reveal.
-		if (themePreference === "system") void readSystemTheme().then(apply);
-		else apply(themePreference);
+		if (themePreference === "system") {
+			systemLookupSinceThemeSet = true;
+			void readSystemTheme().then(apply);
+		} else {
+			apply(themePreference);
+		}
 	},
 	setThemeStyle: (themeStyle) => {
 		if (get().themeStyle === themeStyle) return;

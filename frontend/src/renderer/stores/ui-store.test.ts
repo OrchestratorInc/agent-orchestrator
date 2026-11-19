@@ -86,6 +86,16 @@ describe("theme preference", () => {
 		expect(useUiStore.getState().themePreference).toBe("light");
 		expect(useUiStore.getState().resolvedTheme).toBe("light");
 	});
+
+	it("re-sends the current mode to main when it overtakes a System lookup", () => {
+		vi.spyOn(aoBridge.theme, "systemAppearance").mockReturnValue(new Promise(() => undefined));
+		const set = vi.spyOn(aoBridge.theme, "set");
+		useUiStore.getState().setThemePreference("system");
+		useUiStore.getState().setThemePreference("dark");
+
+		expect(set).toHaveBeenCalledWith("dark");
+		expect(useUiStore.getState().themePreference).toBe("dark");
+	});
 });
 
 describe("color theme selection", () => {
