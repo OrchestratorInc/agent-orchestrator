@@ -1370,14 +1370,13 @@ func TestWorkspaceIntegrationWorkspaceProjectCopiesAssetsAndCleansSessionCopy(t 
 	if _, err := os.Stat(filepath.Join(info.Root.Path, "api", "README.md")); err != nil {
 		t.Fatalf("child worktree missing: %v", err)
 	}
-	if err := ws.DestroyWorkspaceProject(context.Background(), info); !errors.Is(err, ports.ErrWorkspaceDirty) {
-		t.Fatalf("destroy workspace project with untracked asset = %v, want ErrWorkspaceDirty", err)
+	// The copy is excluded in the session only: its untracked files never make
+	// the root dirty, and the canonical checkout's own excludes are untouched.
+	if status := gitOutput(t, git, info.Root.Path, "status", "--porcelain", "--untracked-files=all"); strings.Contains(status, "notes/") {
+		t.Fatalf("copied asset shows in the session's git status:\n%s", status)
 	}
-	if _, err := os.Lstat(filepath.Join(info.Root.Path, "notes", "latest")); err != nil {
-		t.Fatalf("untracked asset was deleted: %v", err)
-	}
-	if err := os.Remove(filepath.Join(info.Root.Path, "notes", "latest")); err != nil {
-		t.Fatal(err)
+	if status := gitOutput(t, git, rootRepo, "status", "--porcelain", "--untracked-files=all"); !strings.Contains(status, "notes/") {
+		t.Fatalf("canonical checkout no longer reports its untracked asset file:\n%s", status)
 	}
 	if err := ws.DestroyWorkspaceProject(context.Background(), info); err != nil {
 		t.Fatalf("destroy clean workspace project: %v", err)

@@ -549,8 +549,12 @@ func (w *Workspace) CreateWorkspaceProject(ctx context.Context, cfg ports.Worksp
 		if cfg.FreshBranch {
 			return w.rollbackWorkspaceProjectPreparation(ctx, out, touched, cause)
 		}
+		// A cancelled or expired start must still remove what it created, or a
+		// retry would treat the half-built root as existing and skip its assets.
+		cleanupCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 30*time.Second)
+		defer cancel()
 		for i := len(created) - 1; i >= 0; i-- {
-			_ = w.forceDestroyPath(ctx, created[i].repoPath, created[i].outputPath)
+			_ = w.forceDestroyPath(cleanupCtx, created[i].repoPath, created[i].outputPath)
 		}
 		return ports.WorkspaceProjectInfo{}, cause
 	}

@@ -53,7 +53,7 @@ func TestCopyWorkspaceAssetsSkipsEntriesItCannotCopySafely(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	ws := &Workspace{}
+	ws := &Workspace{binary: "git", run: runCommand}
 	err := ws.copyWorkspaceAssets(context.Background(), root, dest, []ports.WorkspaceProjectAssetConfig{{RelativePath: "notes", SourcePath: notes}})
 	if err != nil {
 		t.Fatalf("copy assets: %v", err)
@@ -80,7 +80,7 @@ func TestCopyWorkspaceAssetsFailsNamingAFolderOverTheSizeLimit(t *testing.T) {
 	data := filepath.Join(root, "data")
 	writeAssetFile(t, filepath.Join(data, "big.bin"), "sixteen bytes!!!")
 
-	ws := &Workspace{}
+	ws := &Workspace{binary: "git", run: runCommand}
 	err := ws.copyWorkspaceAssets(context.Background(), root, dest, []ports.WorkspaceProjectAssetConfig{{RelativePath: "data", SourcePath: data}})
 	if !errors.Is(err, errWorkspaceAssetTooLarge) || !strings.Contains(err.Error(), `"data"`) {
 		t.Fatalf("copy over the limit = %v, want a too-large error naming data", err)
@@ -98,7 +98,7 @@ func TestCopyWorkspaceAssetsStopsWhenCancelled(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
 
-	ws := &Workspace{}
+	ws := &Workspace{binary: "git", run: runCommand}
 	err := ws.copyWorkspaceAssets(ctx, root, dest, []ports.WorkspaceProjectAssetConfig{{RelativePath: "notes", SourcePath: notes}})
 	if !errors.Is(err, context.Canceled) {
 		t.Fatalf("cancelled copy = %v, want context.Canceled", err)
@@ -113,7 +113,7 @@ func TestCopyWorkspaceAssetsSkipsDependencyDotAndMissingFolders(t *testing.T) {
 	writeAssetFile(t, filepath.Join(venv, "pyvenv.cfg"), "home = /usr/bin")
 	writeAssetFile(t, filepath.Join(modules, "pkg", "index.js"), "dependency")
 
-	ws := &Workspace{}
+	ws := &Workspace{binary: "git", run: runCommand}
 	err := ws.copyWorkspaceAssets(context.Background(), root, dest, []ports.WorkspaceProjectAssetConfig{
 		{RelativePath: ".venv", SourcePath: venv},
 		{RelativePath: "node_modules", SourcePath: modules},
@@ -142,7 +142,7 @@ func TestCopyWorkspaceAssetsFillsReadOnlySourceDirectories(t *testing.T) {
 	}
 	t.Cleanup(func() { _ = os.Chmod(cache, 0o755) })
 
-	ws := &Workspace{}
+	ws := &Workspace{binary: "git", run: runCommand}
 	err := ws.copyWorkspaceAssets(context.Background(), root, dest, []ports.WorkspaceProjectAssetConfig{{RelativePath: "notes", SourcePath: notes}})
 	if err != nil {
 		t.Fatalf("copy read-only directory: %v", err)

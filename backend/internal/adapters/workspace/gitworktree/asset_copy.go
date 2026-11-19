@@ -55,6 +55,7 @@ type assetPlan struct {
 // symlinks, sockets, FIFOs, devices) and nested dependency folders are skipped
 // and logged rather than failing the start.
 func (w *Workspace) copyWorkspaceAssets(ctx context.Context, sourceRoot, destinationRoot string, assets []ports.WorkspaceProjectAssetConfig) error {
+	var copied []string
 	for _, asset := range assets {
 		rel, err := cleanRelativePath(asset.RelativePath)
 		if err != nil || hasWorkspaceManagedComponent(rel) {
@@ -96,8 +97,73 @@ func (w *Workspace) copyWorkspaceAssets(ctx context.Context, sourceRoot, destina
 		if err := plan.apply(ctx, destination); err != nil {
 			return fmt.Errorf("gitworktree: copy workspace asset %q: %w", asset.RelativePath, err)
 		}
+		copied = append(copied, rel)
+	}
+	if err := w.excludeCopiedAssets(ctx, destinationRoot, copied); err != nil {
+		// Without the exclude the session only reports the copies as untracked.
+		w.assetLogger().WarnContext(ctx, "gitworktree: could not exclude copied workspace folders from git status", "error", err)
 	}
 	return nil
+}
+
+// assetExcludesFile names the per-worktree excludes file, inside the root
+// worktree's own git directory so it goes away with the worktree.
+const assetExcludesFile = "ao-asset-excludes"
+
+// excludeCopiedAssets keeps copied folders out of the root worktree's status,
+// so they never make a session look dirty or get stashed into preserve refs,
+// as a root Orchestrator created already does through its .gitignore. The
+// patterns go to a per-worktree core.excludesFile, never the repository's
+// shared info/exclude, which also applies to the user's own checkout. A
+// per-worktree core.excludesFile replaces the user's global one, so the file
+// starts with that file's patterns.
+func (w *Workspace) excludeCopiedAssets(ctx context.Context, rootPath string, rels []string) error {
+	if len(rels) == 0 {
+		return nil
+	}
+	out, err := w.run(ctx, w.binary, "-C", rootPath, "rev-parse", "--absolute-git-dir")
+	if err != nil {
+		return fmt.Errorf("resolve worktree git dir: %w", err)
+	}
+	var content strings.Builder
+	if inherited := w.effectiveExcludesFile(ctx, rootPath); inherited != "" {
+		if data, err := os.ReadFile(inherited); err == nil && len(data) > 0 {
+			content.Write(data)
+			if data[len(data)-1] != '\n' {
+				content.WriteByte('\n')
+			}
+		}
+	}
+	content.WriteString("# Workspace folders Orchestrator copied into this session\n")
+	for _, rel := range rels {
+		content.WriteString("/" + filepath.ToSlash(rel) + "/\n")
+	}
+	path := filepath.Join(strings.TrimSpace(string(out)), assetExcludesFile)
+	if err := os.WriteFile(path, []byte(content.String()), 0o600); err != nil {
+		return err
+	}
+	if _, err := w.run(ctx, w.binary, "-C", rootPath, "config", "--worktree", "core.excludesFile", path); err != nil {
+		return fmt.Errorf("set worktree excludes file: %w", err)
+	}
+	return nil
+}
+
+// effectiveExcludesFile returns the excludes file git would read for the
+// worktree: core.excludesFile when set, else git's XDG default.
+func (w *Workspace) effectiveExcludesFile(ctx context.Context, rootPath string) string {
+	if out, err := w.run(ctx, w.binary, "-C", rootPath, "config", "--type=path", "--get", "core.excludesFile"); err == nil {
+		if path := strings.TrimSpace(string(out)); path != "" {
+			return path
+		}
+	}
+	if xdg := os.Getenv("XDG_CONFIG_HOME"); xdg != "" {
+		return filepath.Join(xdg, "git", "ignore")
+	}
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return ""
+	}
+	return filepath.Join(home, ".config", "git", "ignore")
 }
 
 func (w *Workspace) assetLogger() *slog.Logger {
