@@ -1226,13 +1226,24 @@ describe("ActivityTitle", () => {
 describe("ChatMarkdown math", () => {
 	afterEach(() => useUiStore.setState({ renderMath: false }));
 
-	it("renders a paused stream's formula once math turns on, and typesets it when settled", async () => {
-		const { container, rerender } = render(<ChatMarkdown text="Paused at $a~b$" streaming />);
+	it("stops repairing a paused stream's prose once math turns it into a formula", async () => {
+		const { container } = render(<ChatMarkdown text="Paused at $a~b$" streaming />);
 		act(() => useUiStore.setState({ renderMath: true }));
-		expect(container.querySelector('[data-markdown="math"]')).not.toBeNull();
-		rerender(<ChatMarkdown text="Paused at $a~b$" />);
 		await waitFor(() => expect(container.querySelector('[data-math="inline"] .katex')).not.toBeNull());
 		expect(container.querySelector("[data-tex]")).toHaveAttribute("data-tex", "a~b");
+	});
+
+	it("typesets the same formulas while streaming as once settled", async () => {
+		useUiStore.setState({ renderMath: true });
+		const text = "Euler $e^{i\\pi}+1=0$, \\(x^2\\), \\[y\\] and $$z$$.\n\n\\[\n\\int_0^1 x\\,dx\n\\]\n\n$$\nE=mc^2\n$$\n\n```math\na^2\n```\n\nCode `\\(no\\)` stays.\n\n```ts\nconst s = \"\\\\(no\\\\)\";\n```";
+		const formulas = (container: HTMLElement) => [...container.querySelectorAll<HTMLElement>("[data-math]")].map((node) => `${node.dataset.math} ${node.dataset.tex} ${node.querySelector(".katex") ? "typeset" : "source"}`);
+		const streamed = render(<ChatMarkdown text={text} streaming />).container;
+		await waitFor(() => expect(streamed.querySelector(".katex")).not.toBeNull());
+		const settled = render(<ChatMarkdown text={text} />).container;
+		expect(formulas(streamed)).toEqual(formulas(settled));
+		expect(formulas(streamed)).toHaveLength(7);
+		expect(streamed.querySelector("code")).toHaveTextContent("\\(no\\)");
+		expect(streamed.querySelector("pre")).toHaveTextContent('const s = "\\\\(no\\\\)";');
 	});
 
 	it("leaves dollar signs as text while the setting is off", () => {

@@ -50,7 +50,7 @@ import { Pressable } from "../ui/pressable";
 import { isHostLocalWebLink } from "../../lib/loopback";
 import { canonicalLanguage, streamingCodeHighlighter } from "../../lib/code-highlight";
 import { fenceOf, textOf } from "../../lib/markdown-fence";
-import { isInlineMath, remarkMath } from "../../lib/remark-math";
+import { dollarDelimiters, isInlineMath, remarkMath } from "../../lib/remark-math";
 import { useUiStore } from "../../stores/ui-store";
 import { artifactLinkForPath, artifactLinkForTarget, findSessionLinks, hasArtifactDirectorySegment, isAoLink, isSessionLink, remarkSessionLinks, sessionArtifactPath } from "../../lib/session-links";
 import { useSessionLinkSource } from "../../lib/use-session-link-navigation";
@@ -77,7 +77,7 @@ import {
 } from "../../lib/workspace-file-path";
 import { HighlightedCode } from "./HighlightedCode";
 import { MermaidBlock } from "./MermaidBlock";
-import { loadKatex, MathFormula } from "./MathFormula";
+import { formulaHtml, MathFormula, useKatex } from "./MathFormula";
 import { CopyButton } from "./CopyButton";
 import { ChatImage, ChatImageGallery, ChatImageLinkScope, isImageOnlyParagraph } from "./ChatImage";
 import "./code-theme.css";
@@ -102,7 +102,9 @@ const PLUGINS = [remarkGfm, remarkSessionLinks];
 const MATH_PLUGINS = [...PLUGINS, remarkMath];
 const EMOJI_GRAPHEME = /\p{Extended_Pictographic}|\p{Regional_Indicator}|[#*0-9]\uFE0F?\u20E3/u;
 const STREAM_FADE = { animation: "fadeIn", duration: 300 } as const;
-const STREAM_PLUGINS = { code: streamingCodeHighlighter };
+const MATH_FENCE = /(`{3,}|~{3,})[ \t]*math\b/i;
+const MATH_SVG = /^<svg[^>]*data-markdown="math(-display)?"[^>]*aria-label="([^"]*)"/;
+const ENTITIES: Record<string, string> = { "&lt;": "<", "&gt;": ">", "&quot;": '"', "&#39;": "'", "&amp;": "&" };
 
 const InsideMarkdownLink = createContext(false);
 /** Inside a link to an artifact: its name reads in the UI font, as everywhere else artifacts are named. */
@@ -333,22 +335,33 @@ function CodeBlock({ code, language, sourceNode }: { code: string; language?: st
 function StreamingMarkdown({ text, math }: { text: string; math: boolean }) {
 	const [mounted, setMounted] = useState(false);
 	useEffect(() => setMounted(true), []);
-	useEffect(() => {
-		if (math) void loadKatex();
-	}, [math]);
+	const katex = useKatex(math || MATH_FENCE.test(text));
+	const components = useMemo(() => ({
+		svg: (html: string) => {
+			const formula = MATH_SVG.exec(html);
+			if (!formula) return html;
+			const tex = formula[2].replace(/&(?:lt|gt|quot|#39|amp);/g, (entity) => ENTITIES[entity]);
+			return formulaHtml(katex, tex, Boolean(formula[1]) && tex.endsWith("\n"));
+		},
+	}), [katex]);
+	const plugins = useMemo(() => ({
+		code: streamingCodeHighlighter,
+		renderers: [{ language: ["math", "Math", "MATH"], render: ({ code }: { code: string }) => formulaHtml(katex, code, true) }],
+	}), [katex]);
 	return (
 		<WordsMarkdown
 			isAnimating
 			animated={mounted && STREAM_FADE}
 			math={math}
-			plugins={STREAM_PLUGINS}
+			components={components}
+			plugins={plugins}
 			controls={false}
 			lineNumbers={false}
 			urlTransform={streamUrlTransform}
 			onClickCapture={inertLinks}
 			onAuxClickCapture={inertLinks}
 		>
-			{text}
+			{math ? dollarDelimiters(text) : text}
 		</WordsMarkdown>
 	);
 }

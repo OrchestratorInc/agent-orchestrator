@@ -31,3 +31,12 @@ export function remarkMath(this: Processor) {
 export function isInlineMath(className: string | undefined): boolean {
 	return className?.includes("math-inline") ?? false;
 }
+
+const TEX_DELIMITED = /(^|\n) {0,3}(`{3,}|~{3,})[^\n]*(?:\n[\s\S]*?(?:\n {0,3}\2[`~]*[ \t]*(?=\n|$)|$)|$)|(`+)(?:[\s\S]*?[^`])?\3(?!`)|(?<!\\)\\\(((?:(?!\n[ \t]*\n)[\s\S])+?)\\\)|(?<!\\)\\\[((?:(?!\n[ \t]*\n)[\s\S])+?)\\\]/g;
+
+export function dollarDelimiters(text: string): string {
+	if (!text.includes("\\(") && !text.includes("\\[")) return text;
+	return text.replace(TEX_DELIMITED, (match, _line, _fence, _ticks, inline?: string, display?: string) =>
+		inline !== undefined ? `$${inline.trim()}$` : display !== undefined ? `$$${display}$$` : match,
+	);
+}

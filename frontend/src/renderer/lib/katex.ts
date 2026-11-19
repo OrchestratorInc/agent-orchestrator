@@ -8,10 +8,8 @@ import "katex/dist/katex.min.css";
 
 export { default } from "katex";
 
-const FORMULA = '[data-tex], [data-markdown="math"], [data-markdown="math-display"]';
-
-function formulaAround(node: Node): Element | null {
-	return (node instanceof Element ? node : node.parentElement)?.closest(FORMULA) ?? null;
+function formulaAround(node: Node): HTMLElement | null {
+	return (node instanceof Element ? node : node.parentElement)?.closest<HTMLElement>("[data-tex]") ?? null;
 }
 
 /**
@@ -35,11 +33,11 @@ document.addEventListener("copy", (event) => {
 	if (last) range.setEndAfter(last);
 	const copy = document.createElement("div");
 	copy.append(range.cloneContents());
-	const formulas = copy.querySelectorAll(FORMULA);
+	const formulas = copy.querySelectorAll<HTMLElement>("[data-tex]");
 	if (formulas.length === 0) return;
 	for (const formula of formulas) {
-		const tex = formula.getAttribute("data-tex") ?? formula.getAttribute("aria-label")?.trim() ?? "";
-		const display = formula.getAttribute("data-math") === "display" || formula.getAttribute("data-markdown") === "math-display";
+		const tex = formula.dataset.tex ?? "";
+		const display = formula.dataset.math === "display";
 		// A display formula is its own paragraph, with a blank line either side.
 		const source = document.createElement(display ? "p" : "span");
 		// pre-wrap keeps the TeX's own line breaks, which end its `%` comments.
