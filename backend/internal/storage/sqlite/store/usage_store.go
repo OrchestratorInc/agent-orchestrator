@@ -56,8 +56,8 @@ func (s *Store) GetUsageBinding(ctx context.Context, sessionID domain.SessionID,
 
 // PromptCacheLifetime reports how long the session's Claude prompt cache lives
 // after its last use: one hour or five minutes, read from the newest cache
-// write in its transcript. Zero means unknown, such as before AO has ingested a
-// cache write or for a provider that does not report the tier. A write that
+// write in its transcript. Zero means unknown: no cache write ingested yet, or a
+// newest write that does not report its tier. A write that
 // used both tiers reports five minutes, because part of the prefix expires then.
 func (s *Store) PromptCacheLifetime(ctx context.Context, sessionID domain.SessionID) (time.Duration, error) {
 	row, err := s.qr.LatestSessionCacheWrite(ctx, sessionID)
@@ -69,6 +69,9 @@ func (s *Store) PromptCacheLifetime(ctx context.Context, sessionID domain.Sessio
 	}
 	if row.FiveMinuteTokens > 0 {
 		return 5 * time.Minute, nil
+	}
+	if row.OneHourTokens == 0 {
+		return 0, nil
 	}
 	return time.Hour, nil
 }

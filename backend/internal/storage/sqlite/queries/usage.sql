@@ -821,11 +821,17 @@ ORDER BY model_usage_events.id;
 -- name: LatestSessionCacheWrite :one
 -- The cache lifetime tier of the newest prompt-cache write in a session's main
 -- Claude transcript. A read refreshes the cache at the tier it was written in,
--- so turns served fully from cache do not change the answer.
+-- so turns served fully from cache do not change the answer. A newest write
+-- that reports only its total, with no tier split, returns zero for both tiers:
+-- its lifetime is unknown, and an older write's tier must not stand in for it.
 WITH tiers AS (
     SELECT
         model_usage_events.id,
         model_usage_events.created_at,
+        CAST(COALESCE(
+            json_extract(model_usage_events.provider_usage_json, '$.cache_creation_input_tokens'),
+            json_extract(model_usage_events.provider_usage_json, '$.ao_derived_cache_write_input_tokens'),
+            0) AS INTEGER) AS cache_write_tokens,
         CAST(COALESCE(
             json_extract(model_usage_events.provider_usage_json, '$.cache_creation.ephemeral_1h_input_tokens'),
             json_extract(model_usage_events.provider_usage_json, '$.ao_derived_cache_write_1h_input_tokens'),
@@ -844,6 +850,6 @@ WITH tiers AS (
 )
 SELECT one_hour_tokens, five_minute_tokens
 FROM tiers
-WHERE one_hour_tokens > 0 OR five_minute_tokens > 0
+WHERE one_hour_tokens > 0 OR five_minute_tokens > 0 OR cache_write_tokens > 0
 ORDER BY substr(created_at, 1, 23) DESC, id DESC
 LIMIT 1;

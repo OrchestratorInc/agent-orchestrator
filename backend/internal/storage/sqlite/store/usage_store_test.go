@@ -888,6 +888,7 @@ func TestPromptCacheLifetimeReadsNewestCacheWrite(t *testing.T) {
 		fiveMin  = `{"cache_creation":{"ephemeral_1h_input_tokens":0,"ephemeral_5m_input_tokens":40}}`
 		bothTier = `{"cache_creation":{"ephemeral_1h_input_tokens":40,"ephemeral_5m_input_tokens":5}}`
 		readOnly = `{"cache_read_input_tokens":900,"cache_creation":{"ephemeral_1h_input_tokens":0,"ephemeral_5m_input_tokens":0}}`
+		untiered = `{"cache_creation_input_tokens":40}`
 	)
 	tests := []struct {
 		name   string
@@ -901,6 +902,8 @@ func TestPromptCacheLifetimeReadsNewestCacheWrite(t *testing.T) {
 		{name: "a write using both tiers", usages: []string{bothTier}, want: 5 * time.Minute},
 		{name: "newest write wins", usages: []string{fiveMin, oneHour}, want: time.Hour},
 		{name: "later reads keep the tier", usages: []string{oneHour, readOnly, readOnly}, want: time.Hour},
+		// An older tier must not stand in for a newer write of unknown tier.
+		{name: "newest write reports no tier", usages: []string{oneHour, untiered}, want: 0},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
