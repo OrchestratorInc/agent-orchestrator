@@ -209,21 +209,27 @@ func (s *Service) SteerOrSend(
 	if msg.SenderSessionID != "" {
 		msg.Origin = domain.MessageOriginAutomation
 	}
-	if !recoverOnly {
-		record, err := s.requireChatSession(ctx, id)
+	if recoverOnly {
+		conversation, err := s.store.ConversationForSession(ctx, id)
 		if err != nil {
-			return SteerOrSendResult{}, err
+			return SteerOrSendResult{}, fmt.Errorf("%w: load conversation: %w", ErrSteerDeliveryUncertain, err)
 		}
-		if _, writerErr := s.checkOtherWriter(ctx, record); writerErr != nil {
-			conversation, err := s.store.ConversationForSession(ctx, id)
-			if err != nil {
-				return SteerOrSendResult{}, fmt.Errorf("%w: load conversation: %w", ErrSteerDeliveryUncertain, err)
-			}
-			if result, done, err := steerOrSendReceipt(ctx, s.store, conversation.ID, msg, false); done {
-				return result, err
-			}
-			return SteerOrSendResult{}, writerErr
+		result, _, err := steerOrSendReceipt(ctx, s.store, conversation.ID, msg, true)
+		return result, err
+	}
+	record, err := s.requireChatSession(ctx, id)
+	if err != nil {
+		return SteerOrSendResult{}, err
+	}
+	if _, writerErr := s.checkOtherWriter(ctx, record); writerErr != nil {
+		conversation, err := s.store.ConversationForSession(ctx, id)
+		if err != nil {
+			return SteerOrSendResult{}, fmt.Errorf("%w: load conversation: %w", ErrSteerDeliveryUncertain, err)
 		}
+		if result, done, err := steerOrSendReceipt(ctx, s.store, conversation.ID, msg, false); done {
+			return result, err
+		}
+		return SteerOrSendResult{}, writerErr
 	}
 	controller, release, err := s.workingController(ctx, id)
 	if err != nil {
