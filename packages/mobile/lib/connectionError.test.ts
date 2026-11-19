@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import { CloudAuthError, CloudError } from "./cloud/errors";
 import {
 	classifyConnectionFailure,
 	daemonDetail,
@@ -122,9 +123,10 @@ describe("describeConnectionFailure", () => {
 		expect(d.showLocalNetworkHint).toBe(false);
 	});
 
-	it("blames the password, not the network, on a 401", () => {
+	it("blames the credential, not the network, on a 401", () => {
 		const d = describeConnectionFailure("auth", target());
-		expect(d.message).toContain("rotated");
+		// A removed phone and a changed password have the same fix.
+		expect(d.message).toContain("Scan a new code");
 		expect(d.message).not.toContain("Wi-Fi");
 		expect(d.showLocalNetworkHint).toBe(false);
 	});
@@ -141,10 +143,22 @@ describe("describeConnectionFailure", () => {
 		expect(describeConnectionFailure("unreachable", target()).title).toContain("offline");
 	});
 
-	it("explains the lockout on a 429, and that it clears itself", () => {
-		const d = describeConnectionFailure("rate-limited", target());
-		expect(d.message).toContain("locked this device out");
+	// On the LAN listener and over Tailscale the lockout is keyed on the phone's
+	// own address, so only this phone's wrong passwords can cause it.
+	it.each(["192.168.1.5", "100.101.102.103"])("blames this phone's password on a 429 from %s", (host) => {
+		const d = describeConnectionFailure("rate-limited", target({ host }));
 		expect(d.message).toContain("about a minute");
+		expect(d.message).toMatch(/check the password/i);
+		expect(d.message).not.toMatch(/another device|same network/i);
+	});
+
+	// Through a tunnel every device behind the visitor's public IP shares one
+	// lockout, so this phone's password may be right (#7980).
+	it("points at other devices on the network on a 429 through a tunnel", () => {
+		const d = describeConnectionFailure("rate-limited", target({ host: "build-box.trycloudflare.com", port: "443" }));
+		expect(d.message).toContain("about a minute");
+		expect(d.message).toContain("same network");
+		expect(d.message).not.toMatch(/check the password/i);
 	});
 
 	it("points at the machine logs on a server error", () => {
@@ -163,6 +177,41 @@ describe("describeConnectionFailure", () => {
 		// With empty host/port, the message should still be valid but not show ":"
 		expect(d.message).not.toContain("at :");
 		expect(d.message).not.toContain("at ::");
+	});
+
+	// A Tailscale name on the Connect Mobile port is plain HTTP, which the
+	// phone no longer assumes for a qualified name, so the failure says how.
+	describe("a Tailscale name tried over HTTPS on another port", () => {
+		const tried = (platform: string, over: Partial<{ host: string; port: string; secure: boolean | undefined }> = {}) =>
+			describeConnectionFailure("unreachable", { host: "my-pc.tail1234.ts.net", port: "3011", platform, secure: true, ...over });
+
+		// With the port, so the suggested Host retries the port that was tried
+		// and agrees with whatever Port holds.
+		it("tells Android to type http:// with the port that was tried", () => {
+			expect(tried("android").message).toBe(
+				"Nothing answered over HTTPS at my-pc.tail1234.ts.net:3011. A Tailscale name on the Connect Mobile port uses plain HTTP: enter http://my-pc.tail1234.ts.net:3011.",
+			);
+			expect(tried("android", { port: "8443" }).message).toContain("enter http://my-pc.tail1234.ts.net:8443.");
+		});
+
+		// Clearing Port alone is not enough: a port written into Host stays, and an
+		// editor falls back to the saved port. A typed https:// with no port is 443.
+		it("tells iOS, which blocks plain HTTP to that name, to enter its HTTPS address instead", () => {
+			expect(tried("ios").message).toBe(
+				"Nothing answered over HTTPS at my-pc.tail1234.ts.net:3011. To use the machine's Tailscale HTTPS address, enter https://my-pc.tail1234.ts.net in Host and leave Port empty.",
+			);
+		});
+
+		it.each([
+			["port 443", { port: "443" }],
+			["plain HTTP", { secure: false }],
+			["a caller that does not say", { secure: undefined }],
+			["another name", { host: "ao.example.com" }],
+		])("keeps the usual copy for %s", (_name, over) => {
+			const message = tried("android", over).message;
+			expect(message).toMatch(/^Reached nothing at /);
+			expect(message).not.toContain("leave Port empty");
+		});
 	});
 
 	describe("the iOS Local Network hint", () => {
@@ -311,6 +360,26 @@ describe("userFacingError", () => {
 		expect(copy).not.toContain("500");
 		expect(copy).toContain("Reference: req-42");
 		expect(userFacingError(answered(503))).toMatch(/still starting up/);
+	});
+
+	// A Cloud host's actions (New task on AO Cloud, say) reach the shared screens
+	// through this too. Cloud is not a paired machine: its 429 is a plan's usage
+	// limit, not a password lockout, and its 401 is an expired sign-in.
+	it("speaks for Orchestrator Cloud, not a paired machine, when Cloud refused", () => {
+		const windowLimit = new CloudError("You've reached your plan's usage limit for now.", {
+			status: 429,
+			code: "WINDOW_LIMIT_REACHED",
+			resetsAt: new Date(Date.now() + 2 * 3_600_000).toISOString(),
+		});
+		const copy = userFacingError(windowLimit, "Couldn't start the worker. Try again.");
+		expect(copy).toMatch(/^You've reached your plan's usage limit for now\. Resets /);
+		expect(copy).not.toMatch(/password|your machine/i);
+		expect(userFacingError(new CloudError("You've reached your plan's weekly usage limit.", { status: 429, code: "WEEKLY_LIMIT_REACHED" })))
+			.toBe("You've reached your plan's weekly usage limit.");
+		expect(userFacingError(new CloudError("Choose a plan to use AO Cloud.", { status: 402, code: "PLAN_REQUIRED" })))
+			.toBe("Choose a plan to use AO Cloud.");
+		expect(userFacingError(new CloudAuthError("expired", { status: 401 }))).toMatch(/Orchestrator Cloud sign-in expired/);
+		expect(userFacingError(new CloudError("Session not found.", { status: 404 }))).toBe("Session not found.");
 	});
 
 	it("does not mistake a code defect for a lost connection, or show its text", () => {

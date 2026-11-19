@@ -39,11 +39,15 @@ func (c *SessionImportController) scan(w http.ResponseWriter, r *http.Request) {
 	envelope.WriteJSON(w, http.StatusOK, preview)
 }
 
+const maxSessionImportBodyBytes = 4 << 20
+
 func (c *SessionImportController) importSelected(w http.ResponseWriter, r *http.Request) {
 	if c.Svc == nil {
 		apispec.NotImplemented(w, r, "POST", "/api/v1/session-import")
 		return
 	}
+	// The body is only a list of candidate ids; thousands fit well within this.
+	r.Body = http.MaxBytesReader(w, r.Body, maxSessionImportBodyBytes)
 	var in SessionImportRequest
 	if err := decodeJSONStrict(r, &in); err != nil {
 		envelope.WriteAPIError(w, r, http.StatusBadRequest, "bad_request", "INVALID_JSON", "Invalid JSON body", nil)

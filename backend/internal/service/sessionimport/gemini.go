@@ -121,10 +121,6 @@ func geminiCWD(ctx context.Context, root *os.Root, path, hash string, projects [
 	return ""
 }
 
-func readGeminiTranscript(ctx context.Context, root string, paths ...string) (transcript, error) {
-	return readGeminiTranscriptWithProjects(ctx, root, nil, paths...)
-}
-
 func readGeminiTranscriptWithProjects(ctx context.Context, root string, projects []string, paths ...string) (transcript, error) {
 	t := transcript{harness: domain.HarnessGemini, root: canonical(root)}
 	if len(paths) != 1 {
@@ -143,6 +139,7 @@ func readGeminiTranscriptWithProjects(ctx context.Context, root string, projects
 	var metadata geminiRecord
 	var order []string
 	messages := map[string]geminiMessage{}
+	evicted := map[string]bool{}
 	held := 0
 	add := func(msg geminiMessage) {
 		if msg.ID == "" {
@@ -162,11 +159,12 @@ func readGeminiTranscriptWithProjects(ctx context.Context, root string, projects
 		msg.Content, _ = json.Marshal(text)
 		held += len(msg.Content)
 		messages[msg.ID] = msg
-		for held > maxClaudeHeld && len(order) > 1 {
+		for held > maxHeldText && len(order) > 1 {
 			id := order[1]
 			held -= len(messages[id].Content)
 			delete(messages, id)
 			order = append(order[:1], order[2:]...)
+			evicted[id] = true
 			t.shortened = true
 		}
 	}
@@ -186,7 +184,7 @@ func readGeminiTranscriptWithProjects(ctx context.Context, root string, projects
 			t.last = rec.LastUpdated
 		}
 		if rec.Messages != nil {
-			order, messages, held = nil, map[string]geminiMessage{}, 0
+			order, messages, evicted, held = nil, map[string]geminiMessage{}, map[string]bool{}, 0
 			for _, msg := range *rec.Messages {
 				add(msg)
 			}
@@ -195,7 +193,13 @@ func readGeminiTranscriptWithProjects(ctx context.Context, root string, projects
 			apply(*rec.Set)
 		}
 		if rec.Rewind != nil {
-			keep := 0
+			// A rewind to a message evicted by the bound above drops everything
+			// after the opening message, which stays. An id never seen changes
+			// nothing.
+			keep := len(order)
+			if evicted[*rec.Rewind] {
+				keep = min(1, len(order))
+			}
 			for i, id := range order {
 				if id == *rec.Rewind {
 					keep = i
@@ -308,16 +312,12 @@ func readGeminiTranscriptWithProjects(ctx context.Context, root string, projects
 	if len(t.messages) == 0 {
 		return t, errors.New("no readable gemini conversation")
 	}
-	return t, nil
+	finishErr := finishTranscript(&t)
+	return t, finishErr
 }
 
 func discoverGemini(ctx context.Context, root string) ([]sourceFiles, error) {
-	return discoverGeminiWithProjects(ctx, root, nil)
-}
-
-func discoverGeminiWithProjects(ctx context.Context, root string, projects []string) ([]sourceFiles, error) {
-	byID := map[string]sourceFiles{}
-	activity := map[string]time.Time{}
+	var files []sourceFiles
 	err := filepath.WalkDir(filepath.Join(root, "tmp"), func(path string, entry fs.DirEntry, walkErr error) error {
 		if err := ctx.Err(); err != nil {
 			return err
@@ -325,24 +325,12 @@ func discoverGeminiWithProjects(ctx context.Context, root string, projects []str
 		if walkErr != nil || !entry.Type().IsRegular() || filepath.Base(filepath.Dir(path)) != "chats" || !strings.HasPrefix(entry.Name(), "session-") || (!strings.HasSuffix(path, ".json") && !strings.HasSuffix(path, ".jsonl")) {
 			return nil //nolint:nilerr // Unreadable provider files are deliberately hidden.
 		}
-		t, err := readGeminiTranscriptWithProjects(ctx, root, projects, path)
-		if err != nil {
-			return nil //nolint:nilerr // One malformed or unreadable conversation does not hide its neighbors.
-		}
 		info, err := entry.Info()
 		if err != nil {
 			return nil //nolint:nilerr // Files removed or made unreadable during discovery are ineligible.
 		}
-		file := sourceFiles{harness: domain.HarnessGemini, root: root, key: t.nativeID, paths: []string{path}, modTime: info.ModTime(), size: info.Size()}
-		if _, ok := byID[t.nativeID]; !ok || t.last.After(activity[t.nativeID]) {
-			byID[t.nativeID] = file
-			activity[t.nativeID] = t.last
-		}
+		files = append(files, sourceFiles{harness: domain.HarnessGemini, root: root, key: path, paths: []string{path}, modTime: info.ModTime(), size: info.Size()})
 		return nil
 	})
-	files := make([]sourceFiles, 0, len(byID))
-	for _, file := range byID {
-		files = append(files, file)
-	}
 	return files, err
 }

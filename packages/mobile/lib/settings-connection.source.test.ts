@@ -13,11 +13,13 @@ describe("settings desktop section", () => {
 	it("reports live connection state rather than a saved-address flag", () => {
 		expect(source).not.toMatch(/"Paired"/);
 		expect(source).not.toMatch(/label="Selected machine"/);
-		expect(source).toMatch(/<MachineSelector/);
-		expect(source).toMatch(/statusLabel=\{machineStatus\.label\}/);
+		// One row per machine says its connection once; the default machine's
+		// is the board poll's live status.
+		expect(source).toMatch(/<MachineRow/);
+		expect(source).toContain("if (hostId === selectedHostId) return { label: machineStatus.label, tone: machineStatusTone(machineStatus.tone) };");
 	});
 
-	it("leaves destructive management in Environments", () => {
+	it("leaves destructive management on each machine's page", () => {
 		expect(source).not.toMatch(/DisconnectRow|forgetServer|forgetPairedHost/);
 	});
 });

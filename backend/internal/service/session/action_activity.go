@@ -12,6 +12,7 @@ import (
 
 	"github.com/google/uuid"
 
+	"github.com/aoagents/agent-orchestrator/backend/internal/caller"
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
 	"github.com/aoagents/agent-orchestrator/backend/internal/httpd/apierr"
 	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
@@ -94,9 +95,32 @@ func (s *Service) recordAction(ctx context.Context, audience domain.SessionID, d
 		Detail:         encoded,
 		ProviderItemID: providerItemID,
 	}
-	if err := writer.UpsertActivity(ctx, conversation.ID, "", activity, s.now()); err != nil && s.logger != nil {
+	if err := writer.UpsertActivity(ctx, conversation.ID, s.callerTurn(ctx, audience, conversation.ID), activity, s.now()); err != nil && s.logger != nil {
 		s.logger.Warn("action activity: write failed", "session", audience, "action", detail.Action, "err", err)
 	}
+}
+
+type runningTurnLister interface {
+	ListVisibleRunningTurnProviderIDs(ctx context.Context, conversationID string) ([]string, error)
+}
+
+// callerTurn names the turn an action belongs to: the audience's one running
+// turn, when the audience itself ran the command (its shell sent the caller
+// header). A click in the desktop, another session's command, or an ambiguous
+// set of running turns leaves the action turn-less, shown on its own.
+func (s *Service) callerTurn(ctx context.Context, audience domain.SessionID, conversationID string) string {
+	if caller.From(ctx) != string(audience) {
+		return ""
+	}
+	lister, ok := s.store.(runningTurnLister)
+	if !ok {
+		return ""
+	}
+	turns, err := lister.ListVisibleRunningTurnProviderIDs(ctx, conversationID)
+	if err != nil || len(turns) != 1 {
+		return ""
+	}
+	return turns[0]
 }
 
 func actionSummary(action string) string {
@@ -116,7 +140,7 @@ func actionSummary(action string) string {
 	case actionPullRequestCreated:
 		return "Created a pull request"
 	default:
-		return "AO action"
+		return "Orchestrator action"
 	}
 }
 
@@ -177,8 +201,11 @@ func (s *Service) recordTerminated(ctx context.Context, id domain.SessionID, sta
 		}
 		operationID = failed
 	}
+	// The spawn parent's chat shows only terminations it asked for. A child the
+	// user or another session archived is not the parent's action, and would
+	// otherwise land beside whatever the parent is running at that moment.
 	audience := id
-	if parent, ok := s.spawnParent(ctx, id); ok {
+	if parent, ok := s.spawnParent(ctx, id); ok && actionCaller(ctx) == parent {
 		audience = parent
 	}
 	s.recordAction(ctx, audience, actionDetail{
@@ -281,6 +308,23 @@ func (s *Service) spawnParent(ctx context.Context, id domain.SessionID) (domain.
 		return "", false
 	}
 	return parent, true
+}
+
+type actionCallerKey struct{}
+
+// WithActionCaller records which AO session issued the request, so an action
+// is shown in the chat of the session that asked for it.
+func WithActionCaller(ctx context.Context, session domain.SessionID) context.Context {
+	session = domain.SessionID(strings.TrimSpace(string(session)))
+	if session == "" {
+		return ctx
+	}
+	return context.WithValue(ctx, actionCallerKey{}, session)
+}
+
+func actionCaller(ctx context.Context) domain.SessionID {
+	session, _ := ctx.Value(actionCallerKey{}).(domain.SessionID)
+	return session
 }
 
 func (s *Service) lookupActionSession(ctx context.Context, id domain.SessionID) domain.SessionRecord {

@@ -73,7 +73,7 @@ func installReviewerConfig(ctx context.Context, inv ports.ReviewInvocation) erro
 	}
 	profileDir := reviewerProfileDir(inv)
 	if profileDir == "" {
-		return errors.New("cursor reviewer: AO data directory is required")
+		return errors.New("cursor reviewer: Orchestrator data directory is required")
 	}
 	if err := os.MkdirAll(profileDir, 0o700); err != nil {
 		return fmt.Errorf("cursor reviewer: create profile: %w", err)
@@ -214,7 +214,7 @@ func execMCPServerDisable(ctx context.Context, inv ports.ReviewInvocation, ids [
 	}
 	profileDir := reviewerProfileDir(inv)
 	if profileDir == "" {
-		return errors.New("cursor reviewer: AO data directory is required")
+		return errors.New("cursor reviewer: Orchestrator data directory is required")
 	}
 	if strings.TrimSpace(inv.WorkspacePath) == "" {
 		return errors.New("cursor reviewer: workspace path is required to disable MCP servers")

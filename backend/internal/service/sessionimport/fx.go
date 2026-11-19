@@ -77,7 +77,7 @@ func discoverFX(ctx context.Context, root string) ([]sourceFiles, error) {
 			}
 		}
 	}
-	var out []sourceFiles
+	out := make([]sourceFiles, 0, len(byID))
 	for _, f := range byID {
 		out = append(out, f)
 	}

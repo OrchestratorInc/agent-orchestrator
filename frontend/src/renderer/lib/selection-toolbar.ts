@@ -1,7 +1,5 @@
 export const selectionToolbarClass =
 	"z-overlay flex w-max flex-wrap gap-0.5 rounded-lg border border-(--color-border-overlay) bg-overlay p-0.5 font-sans shadow-(--shadow-popover)";
-export const selectionActionClass =
-	"min-h-7 min-w-0 rounded-md px-2 py-1 text-xs text-muted-foreground hover:bg-interactive-hover hover:text-foreground focus-visible:outline-2 focus-visible:outline-ring disabled:pointer-events-none disabled:opacity-50";
 
 type Rect = Pick<DOMRect, "left" | "right" | "top" | "bottom">;
 

@@ -50,7 +50,8 @@ var ErrRenderNotFound = errors.New("render not found")
 
 var (
 	// renderMeasureWidths are the reader widths a published page is measured
-	// at, T3 Code's set; each frame opens at the height for its own width.
+	// at, from a small phone to a wide window; each frame opens at the height
+	// for its own width.
 	renderMeasureWidths = []int{320, 375, 430, 520, 640, 728, 860, 1000, 1144}
 	// renderMeasureTimeout is how long publishing waits for heights before it
 	// publishes without them. A variable so tests can shorten it.
@@ -388,7 +389,7 @@ func (c *Controller) upsertRender(ctx context.Context, providerTurnID, activityI
 }
 
 // ErrRenderCheckUnavailable reports that no desktop app is connected to load the page.
-var ErrRenderCheckUnavailable = errors.New("render check needs the AO desktop app")
+var ErrRenderCheckUnavailable = errors.New("render check needs the Orchestrator desktop app")
 
 // RenderCheck asks the desktop app to load a render URL in a hidden view. The
 // daemon wires it to the browser-runtime broker.

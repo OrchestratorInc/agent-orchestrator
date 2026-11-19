@@ -25,6 +25,10 @@ vi.mock("./orchestrator-icon", async () => {
 	const React = await import("react");
 	return { OrchestratorIcon: (props: object) => React.createElement("OrchestratorIcon", props) };
 });
+vi.mock("./AppSymbol", async () => {
+	const React = await import("react");
+	return { AppSymbol: (props: object) => React.createElement("AppSymbol", props) };
+});
 vi.mock("./ui", async () => {
 	const React = await import("react");
 	return { Dot: (props: object) => React.createElement("Dot", props) };
@@ -37,33 +41,58 @@ vi.mock("./ThemeProvider", () => {
 import { MachineIdentity } from "./MachineIdentity";
 import { ProjectCard } from "./project-card";
 
+function projectRow(): HostedProjectRow {
+	return {
+		project: {
+			id: "project-1",
+			name: "AO Mobile",
+			hostId: "host-1",
+			hostName: "Build Laptop",
+			hostAppearance: { symbol: "laptop" },
+		},
+		link: null,
+		workers: [],
+		section: "not-running",
+		action: "start",
+		detail: "Start one to coordinate work for this project",
+		activityAt: null,
+		urgency: 0,
+	} as unknown as HostedProjectRow;
+}
+
 describe("ProjectCard", () => {
 	it("shows the owning machine name and selected symbol", () => {
-		const row = {
-			project: {
-				id: "project-1",
-				name: "AO Mobile",
-				hostId: "host-1",
-				hostName: "Build Laptop",
-				hostAppearance: { symbol: "laptop" },
-			},
-			link: null,
-			workers: [],
-			section: "not-running",
-			action: "start",
-			detail: "Start one to coordinate work for this project",
-			activityAt: null,
-			urgency: 0,
-		} as unknown as HostedProjectRow;
 		let renderer!: ReactTestRenderer;
 
 		act(() => {
-			renderer = create(<ProjectCard row={row} busy={false} onOpenProject={() => {}} onOrchestrator={() => {}} />);
+			renderer = create(<ProjectCard row={projectRow()} busy={false} onOpenProject={() => {}} onOrchestrator={() => {}} />);
 		});
 
 		const identity = renderer.root.findByType(MachineIdentity);
 		expect(identity.props.name).toBe("Build Laptop");
 		expect(identity.props.appearance).toEqual({ symbol: "laptop" });
+	});
+
+	// Only the text block pressed before: a tap beside it did nothing. The whole
+	// card opens the project; its round button starts or opens the orchestrator.
+	it("opens the project from the card, and the orchestrator from its button", () => {
+		const onOpenProject = vi.fn();
+		const onOrchestrator = vi.fn();
+		let renderer!: ReactTestRenderer;
+		act(() => {
+			renderer = create(<ProjectCard row={projectRow()} busy={false} onOpenProject={onOpenProject} onOrchestrator={onOrchestrator} />);
+		});
+		const pressables = renderer.root.findAllByType("Pressable" as never);
+		const card = pressables.find((node) => node.props.accessibilityHint === "Opens the project")!;
+		const start = pressables.find((node) => node.props.accessibilityLabel === "Start orchestrator, AO Mobile")!;
+		expect(pressables.some((node) => node.props.accessibilityLabel === "Expand AO Mobile")).toBe(false);
+		act(() => card.props.onPress());
+		act(() => start.props.onPress());
+		expect(onOpenProject).toHaveBeenCalledTimes(1);
+		expect(onOrchestrator).toHaveBeenCalledTimes(1);
+		// A screen reader hears the card as one element and reaches the orchestrator as its action.
+		act(() => card.props.onAccessibilityAction({ nativeEvent: { actionName: "trailing" } }));
+		expect(onOrchestrator).toHaveBeenCalledTimes(2);
 	});
 
 	it("shows the routed machine rather than the default machine in a project header", async () => {

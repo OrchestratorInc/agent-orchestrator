@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { buildAgentInventory } from "./agent-inventory-telemetry";
+import { buildAgentInventory, buildSetupCheck } from "./agent-inventory-telemetry";
 import type { AgentReadiness } from "../hooks/useAgentReadinessQuery";
 import { agentReadiness } from "../test/agent-readiness-fixtures";
 
@@ -54,5 +54,42 @@ describe("agent inventory", () => {
 		const inventory = buildAgentInventory(catalog([agentReadiness(""), agentReadiness("codex")]));
 		expect(inventory.authorized_agents).toBe("codex");
 		expect(inventory.authorized_count).toBe(1);
+	});
+});
+
+describe("setup check", () => {
+	const requirements = [
+		{ id: "git", label: "git", required: true, satisfied: true, detail: "/Users/someone/bin/git" },
+		{ id: "tmux", label: "tmux", required: true, satisfied: false, detail: "tmux was not found on PATH." },
+		{ id: "gh", label: "gh", required: false, satisfied: true, detail: "/opt/homebrew/bin/gh" },
+	];
+
+	it("folds the startup check into booleans, counts and registry ids, never details", () => {
+		const check = buildSetupCheck(
+			requirements,
+			catalog([
+				agentReadiness("codex", "Codex", { installation: "installed", authentication: "unknown" }),
+				agentReadiness("claude-code", "Claude", { installation: "installed", authentication: "authorized" }),
+				agentReadiness("cursor", "Cursor", { installation: "not_installed", authentication: "unknown" }),
+			]),
+			true,
+		);
+		expect(check).toEqual({
+			git: true,
+			tmux: false,
+			gh: true,
+			gh_signed_in: true,
+			agents_installed: 2,
+			agents_signed_in: 1,
+			agents_installed_ids: "claude-code,codex",
+			agents_signed_in_ids: "claude-code",
+		});
+		expect(JSON.stringify(check)).not.toMatch(/Users|homebrew|PATH/);
+	});
+
+	it("omits what the startup check did not answer", () => {
+		expect(buildSetupCheck([], catalog(), undefined)).toEqual({
+			agents_installed: 0, agents_signed_in: 0, agents_installed_ids: "", agents_signed_in_ids: "",
+		});
 	});
 });

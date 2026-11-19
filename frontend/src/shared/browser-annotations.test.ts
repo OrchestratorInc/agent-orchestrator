@@ -82,7 +82,7 @@ describe("formatBrowserAnnotationMessage", () => {
 		expect(message).toContain('Comment: Try this treatment.');
 		expect(message).toContain('- Text color: "rgb(0, 0, 0)" → "#e34b63"');
 		expect(message).toContain('- Width: "140px" → "89px"');
-		expect(message).toContain("Visual adjustments are already previewed in AO's shared browser");
+		expect(message).toContain("Visual adjustments are already previewed in Orchestrator's shared browser");
 		expect(message).toMatch(/\n<\/browser_annotations>$/);
 		expect(message).not.toContain("Browser handoff:");
 		expect(message).not.toContain("Do not");

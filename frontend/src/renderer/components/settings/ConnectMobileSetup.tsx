@@ -102,10 +102,8 @@ export function ConnectMobileSetup({ mode, onModeChange, enabled, busy = false, 
 							aria-label={t("mobile.securePairing")}
 							tabIndex={enabled ? 0 : -1}
 							className={cn(
-								"h-(--size-settings-mobile-switch-h) w-(--size-settings-mobile-switch-w) shrink-0 transition-colors duration-300 ease-out",
-								"data-[state=checked]:bg-settings-switch-on data-[state=unchecked]:bg-[var(--color-border-settings-input)]",
-								"focus-visible:ring-0 focus-visible:ring-offset-0",
-								"**:data-[slot=switch-thumb]:size-5 **:data-[slot=switch-thumb]:bg-white **:data-[slot=switch-thumb]:transition-transform **:data-[slot=switch-thumb]:duration-300 **:data-[slot=switch-thumb]:ease-out",
+								"h-(--size-settings-mobile-switch-h) w-(--size-settings-mobile-switch-w) shrink-0",
+								"**:data-[slot=switch-thumb]:size-5",
 								"data-[state=checked]:**:data-[slot=switch-thumb]:translate-x-(--size-settings-mobile-switch-travel)",
 								"data-[state=unchecked]:**:data-[slot=switch-thumb]:translate-x-0.5",
 							)}

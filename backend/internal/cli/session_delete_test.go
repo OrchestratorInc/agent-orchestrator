@@ -61,7 +61,7 @@ func TestSessionDelete_ConfirmsThenDeletes(t *testing.T) {
 	if !strings.Contains(out, "Permanently delete session demo-old") || !strings.Contains(out, "session demo-old deleted") {
 		t.Fatalf("unexpected output:\n%s", out)
 	}
-	want := []string{"GET /api/v1/sessions/demo-old", "DELETE /api/v1/sessions/demo-old"}
+	want := []string{"GET /api/v1/sessions/demo-old", "DELETE /api/v1/sessions/demo-old?keepArtifacts=true"}
 	if got := requests(); !reflect.DeepEqual(got, want) {
 		t.Fatalf("requests = %#v, want %#v", got, want)
 	}
@@ -122,7 +122,7 @@ func TestSessionDelete_YesSkipsPrompt(t *testing.T) {
 	if strings.Contains(out, "Type yes to confirm") {
 		t.Fatalf("--yes should skip the prompt:\n%s", out)
 	}
-	if got := requests(); !reflect.DeepEqual(got, []string{"DELETE /api/v1/sessions/demo-old"}) {
+	if got := requests(); !reflect.DeepEqual(got, []string{"DELETE /api/v1/sessions/demo-old?keepArtifacts=true"}) {
 		t.Fatalf("requests = %#v", got)
 	}
 }
@@ -135,8 +135,63 @@ func TestSessionDelete_CleanupAsksDaemonToCleanUpFirst(t *testing.T) {
 	if _, errOut, err := executeCLI(t, Deps{ProcessAlive: func(int) bool { return true }}, "session", "delete", "demo-old", "-y", "--cleanup"); err != nil {
 		t.Fatalf("session delete failed: %v\nstderr=%s", err, errOut)
 	}
-	if got := requests(); !reflect.DeepEqual(got, []string{"DELETE /api/v1/sessions/demo-old?cleanup=true"}) {
+	if got := requests(); !reflect.DeepEqual(got, []string{"DELETE /api/v1/sessions/demo-old?cleanup=true&keepArtifacts=true"}) {
 		t.Fatalf("requests = %#v", got)
+	}
+}
+
+// An agent deleting a session it spawned, like the orchestrator deleting a
+// worker, must not throw away that worker's deliverables, so keeping is the
+// default and the old --keep-artifacts opt-in changes nothing.
+func TestSessionDelete_KeepsArtifactsByDefault(t *testing.T) {
+	for _, args := range [][]string{
+		{"session", "delete", "demo-old", "-y"},
+		{"session", "delete", "demo-old", "-y", "--keep-artifacts"},
+	} {
+		cfg := setConfigEnv(t)
+		srv, requests := deleteCommandServer(t)
+		writeRunFileFor(t, cfg, srv)
+
+		if _, errOut, err := executeCLI(t, Deps{ProcessAlive: func(int) bool { return true }}, args...); err != nil {
+			t.Fatalf("%v failed: %v\nstderr=%s", args, err, errOut)
+		}
+		if got := requests(); !reflect.DeepEqual(got, []string{"DELETE /api/v1/sessions/demo-old?keepArtifacts=true"}) {
+			t.Fatalf("%v: requests = %#v", args, got)
+		}
+	}
+}
+
+func TestSessionDelete_DeleteArtifactsOptsInToDeletingThem(t *testing.T) {
+	cfg := setConfigEnv(t)
+	srv, requests := deleteCommandServer(t)
+	writeRunFileFor(t, cfg, srv)
+
+	out, errOut, err := executeCLI(t, Deps{
+		In:           strings.NewReader("yes\n"),
+		ProcessAlive: func(int) bool { return true },
+	}, "session", "delete", "demo-old", "--delete-artifacts")
+	if err != nil {
+		t.Fatalf("session delete failed: %v\nstderr=%s", err, errOut)
+	}
+	if !strings.Contains(out, "Permanently delete session demo-old, its history and its artifact files?") {
+		t.Fatalf("prompt does not warn the artifacts go too:\n%s", out)
+	}
+	want := []string{"GET /api/v1/sessions/demo-old", "DELETE /api/v1/sessions/demo-old"}
+	if got := requests(); !reflect.DeepEqual(got, want) {
+		t.Fatalf("requests = %#v, want %#v", got, want)
+	}
+}
+
+func TestSessionDelete_KeepAndDeleteArtifactsConflict(t *testing.T) {
+	cfg := setConfigEnv(t)
+	srv, requests := deleteCommandServer(t)
+	writeRunFileFor(t, cfg, srv)
+
+	if _, _, err := executeCLI(t, Deps{ProcessAlive: func(int) bool { return true }}, "session", "delete", "demo-old", "-y", "--keep-artifacts", "--delete-artifacts"); err == nil {
+		t.Fatal("--keep-artifacts with --delete-artifacts must fail")
+	}
+	if got := requests(); len(got) != 0 {
+		t.Fatalf("requests = %#v, want none", got)
 	}
 }
 

@@ -43,7 +43,32 @@ it("sends only safe renderer stack frames and a standard exception type through 
 	captureExceptionToSentry(error, { category: "render_crash" });
 	expect(capture).toHaveBeenCalledWith(expect.objectContaining({
 		kind: "exception",
-		exception: { type: "TypeError", frames: [{ function: "renderer_frame", filename: "assets/_shell-A1B2C3D4.js", lineno: 26, colno: 3 }, { function: "SessionView", lineno: 13, colno: 4 }, { function: "ChatWorkspace", filename: "assets/app-A1B2C3D4.js", lineno: 42, colno: 7 }] },
+		exception: { type: "TypeError", frames: [{ function: "renderer_frame", filename: "assets/_shell-A1B2C3D4.js", lineno: 26, colno: 3 }, { function: "renderer_frame", filename: "assets/app-A1B2C3D4.js", lineno: 25, colno: 3 }, { function: "SessionView", lineno: 13, colno: 4 }, { function: "ChatWorkspace", filename: "assets/app-A1B2C3D4.js", lineno: 42, colno: 7 }] },
 	}));
 	expect(JSON.stringify(capture.mock.calls[0]?.[0].exception)).not.toMatch(/private-repo|\/Users\/alice|app:\/\/|localhost/);
+});
+
+it("keeps anonymous minified frames and their chunk debug IDs", () => {
+	const debugId = "8a1f4c2e-1b3d-4e5f-9a6b-7c8d9e0f1a2b";
+	(globalThis as { _sentryDebugIds?: Record<string, string> })._sentryDebugIds = {
+		"Error\n    at app://renderer/assets/useSessionWorkspaceFiles-BjAotn5p.js:1:12": debugId,
+		"Error\n    at file:///Users/alice/private.js:1:1": "11111111-1111-4111-8111-111111111111",
+	};
+	try {
+		const error = new TypeError("private");
+		error.stack = [
+			"TypeError: private",
+			"    at app://renderer/assets/useSessionWorkspaceFiles-BjAotn5p.js:123:45",
+			"    at async privateUserText (app://renderer/assets/index-RzpjvxTk.js:7:8)",
+			"    at file:///Users/alice/private.js:1:1",
+		].join("\n");
+		captureExceptionToSentry(error);
+		expect(capture.mock.calls[0]?.[0].exception.frames).toEqual([
+			{ function: "renderer_frame", filename: "assets/index-RzpjvxTk.js", lineno: 7, colno: 8 },
+			{ function: "renderer_frame", filename: "assets/useSessionWorkspaceFiles-BjAotn5p.js", lineno: 123, colno: 45, debug_id: debugId },
+		]);
+		expect(JSON.stringify(capture.mock.calls[0]?.[0])).not.toMatch(/privateUserText|alice|11111111/);
+	} finally {
+		delete (globalThis as { _sentryDebugIds?: Record<string, string> })._sentryDebugIds;
+	}
 });

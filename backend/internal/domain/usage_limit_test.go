@@ -12,6 +12,13 @@ func TestParseConversationUsageLimit(t *testing.T) {
 		limited              bool
 	}{
 		{"reference", "You've hit your session limit · resets 10:20pm (Asia/Calcutta)", "2026-10-14T16:50:00Z", true},
+		{"Claude 5-hour", "You've hit your 5-hour limit · resets 10:20pm (Asia/Calcutta)", "2026-10-14T16:50:00Z", true},
+		{"Claude Opus", "You've hit your Opus limit · resets 10:20pm (Asia/Calcutta)", "2026-10-14T16:50:00Z", true},
+		{"Claude weekly with date", "You've hit your weekly limit · resets Oct 20, 5am (Asia/Calcutta)", "", true},
+		{"Claude Fable", "You've reached your Fable limit. Switch to another model to continue.", "", true},
+		{"Claude credits", "You're out of usage credits. /model to switch models.", "", true},
+		{"Claude org", "Your org is out of usage · contact your admin", "", true},
+		{"Claude token refresh", "Your access token could not be refreshed because you have signed out.", "", false},
 		{"curly apostrophe", "You’ve hit your limit · resets 10:20pm (Asia/Kolkata)", "2026-10-14T16:50:00Z", true},
 		{"date rollover", "You've hit your weekly limit · resets 9pm (Asia/Kolkata)", "2026-10-15T15:30:00Z", true},
 		{"midnight", "You've hit your usage limit · resets 12am (Asia/Kolkata)", "2026-10-14T18:30:00Z", true},

@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
@@ -307,26 +308,27 @@ func (s *Store) PromoteTaskPreparation(ctx context.Context, id domain.SessionID,
 	defer s.writeMu.Unlock()
 	activity := normalActivity(rec.Activity, rec.UpdatedAt)
 	rows, err := s.qw.PromoteTaskPreparation(ctx, gen.PromoteTaskPreparationParams{
-		IssueID:            rec.IssueID,
-		Kind:               rec.Kind,
-		Harness:            rec.Harness,
-		AutoReviewEnabled:  rec.AutoReviewEnabled,
-		DisplayName:        rec.DisplayName,
-		ActivityState:      activity.State,
-		ActivityLastAt:     activity.LastActivityAt,
-		SessionMode:        domain.NormalizeSessionMode(rec.Mode),
-		Model:              rec.Metadata.Model,
-		Effort:             rec.Metadata.Effort,
-		SessionPermissions: string(rec.Metadata.Permissions),
-		RequestedOutput:    string(rec.RequestedOutput),
-		CreatedAt:          rec.CreatedAt,
-		UpdatedAt:          rec.UpdatedAt,
-		AutoInjectReview:   rec.AutoInjectReview,
-		AutoInjectCI:       rec.AutoInjectCI,
-		ProvisionState:     rec.ProvisionState.WithDefault(),
-		ClientRequestID:    rec.ClientRequestID,
-		ClientRequestHash:  rec.ClientRequestHash,
-		ID:                 id,
+		IssueID:             rec.IssueID,
+		Kind:                rec.Kind,
+		Harness:             rec.Harness,
+		AutoReviewEnabled:   rec.AutoReviewEnabled,
+		DisplayName:         rec.DisplayName,
+		DisplayNameExplicit: rec.DisplayNameExplicit,
+		ActivityState:       activity.State,
+		ActivityLastAt:      activity.LastActivityAt,
+		SessionMode:         domain.NormalizeSessionMode(rec.Mode),
+		Model:               rec.Metadata.Model,
+		Effort:              rec.Metadata.Effort,
+		SessionPermissions:  string(rec.Metadata.Permissions),
+		RequestedOutput:     string(rec.RequestedOutput),
+		CreatedAt:           rec.CreatedAt,
+		UpdatedAt:           rec.UpdatedAt,
+		AutoInjectReview:    rec.AutoInjectReview,
+		AutoInjectCI:        rec.AutoInjectCI,
+		ProvisionState:      rec.ProvisionState.WithDefault(),
+		ClientRequestID:     rec.ClientRequestID,
+		ClientRequestHash:   rec.ClientRequestHash,
+		ID:                  id,
 	})
 	if err != nil {
 		return false, fmt.Errorf("promote task preparation %s: %w", id, err)
@@ -548,10 +550,56 @@ func (s *Store) UpdateSessionFromActivitySignal(
 	rec domain.SessionRecord,
 	expectedRevision int64,
 ) (bool, error) {
-	activity := normalActivity(rec.Activity, rec.UpdatedAt)
+	return s.updateSessionFromActivitySignal(ctx, rec.ID, activitySignalProjectionParams(rec, expectedRevision))
+}
+
+// UpdateSessionFromActivitySignalAndAcceptSemanticDelivery is
+// UpdateSessionFromActivitySignal that also records deliveryID as accepted by
+// the session's runtime launch. It is one fenced write, so acceptance lands
+// only with a projection that still owns that launch.
+func (s *Store) UpdateSessionFromActivitySignalAndAcceptSemanticDelivery(
+	ctx context.Context,
+	rec domain.SessionRecord,
+	expectedRevision int64,
+	deliveryID string,
+) (bool, error) {
+	if deliveryID == "" || strings.ContainsRune(deliveryID, ' ') {
+		return false, fmt.Errorf("semantic delivery id %q is invalid", deliveryID)
+	}
+	params := activitySignalProjectionParams(rec, expectedRevision)
+	params.AcceptedDeliveryID = deliveryID
+	return s.updateSessionFromActivitySignal(ctx, rec.ID, params)
+}
+
+func (s *Store) updateSessionFromActivitySignal(ctx context.Context, id domain.SessionID, params gen.UpdateSessionFromActivitySignalParams) (bool, error) {
 	s.writeMu.Lock()
 	defer s.writeMu.Unlock()
-	rows, err := s.qw.UpdateSessionFromActivitySignal(ctx, gen.UpdateSessionFromActivitySignalParams{
+	rows, err := s.qw.UpdateSessionFromActivitySignal(ctx, params)
+	if err != nil {
+		return false, fmt.Errorf("update session %s from activity signal: %w", id, err)
+	}
+	return rows > 0, nil
+}
+
+// SemanticDeliveryAccepted reports whether runtimeLaunchID of session id
+// accepted deliveryID, even if later prompts replaced the conversation
+// checkpoint.
+func (s *Store) SemanticDeliveryAccepted(ctx context.Context, id domain.SessionID, runtimeLaunchID, deliveryID string) (bool, error) {
+	if runtimeLaunchID == "" || deliveryID == "" || strings.ContainsRune(deliveryID, ' ') {
+		return false, nil
+	}
+	accepted, err := s.qr.SessionAcceptedDelivery(ctx, gen.SessionAcceptedDeliveryParams{
+		ID: id, DeliveryID: deliveryID, RuntimeLaunchID: runtimeLaunchID,
+	})
+	if err != nil {
+		return false, fmt.Errorf("read accepted delivery %s for session %s: %w", deliveryID, id, err)
+	}
+	return accepted, nil
+}
+
+func activitySignalProjectionParams(rec domain.SessionRecord, expectedRevision int64) gen.UpdateSessionFromActivitySignalParams {
+	activity := normalActivity(rec.Activity, rec.UpdatedAt)
+	return gen.UpdateSessionFromActivitySignalParams{
 		ActivityState:                    activity.State,
 		ActivityLastAt:                   activity.LastActivityAt,
 		FirstSignalAt:                    timeToNullTime(rec.FirstSignalAt),
@@ -578,11 +626,7 @@ func (s *Store) UpdateSessionFromActivitySignal(
 		ExpectedSessionMode:              domain.NormalizeSessionMode(rec.Mode),
 		ExpectedRuntimeLaunchID:          rec.Metadata.RuntimeLaunchID,
 		ExpectedControllerGeneration:     rec.Metadata.ControllerGeneration,
-	})
-	if err != nil {
-		return false, fmt.Errorf("update session %s from activity signal: %w", rec.ID, err)
 	}
-	return rows > 0, nil
 }
 
 // RecordSessionLatestUserPrompt persists pane-delivered user direction without
@@ -593,10 +637,14 @@ func (s *Store) UpdateSessionFromActivitySignal(
 func (s *Store) RecordSessionLatestUserPrompt(ctx context.Context, id domain.SessionID, prompt string, updatedAt time.Time) (bool, error) {
 	s.writeMu.Lock()
 	defer s.writeMu.Unlock()
-	rows, err := s.qw.RecordSessionLatestUserPrompt(ctx, gen.RecordSessionLatestUserPromptParams{
-		LatestUserPrompt: prompt,
-		UpdatedAt:        timeToNullTime(updatedAt),
-		ID:               id,
+	var rows int64
+	err := s.inTxDB(ctx, "record latest user prompt", func(q *gen.Queries, db gen.DBTX) error {
+		if err := normalizeSessionGuardTimes(ctx, db, id); err != nil {
+			return err
+		}
+		var err error
+		rows, err = q.RecordSessionLatestUserPrompt(ctx, gen.RecordSessionLatestUserPromptParams{LatestUserPrompt: prompt, UpdatedAt: timeToNullTime(updatedAt), ID: id})
+		return err
 	})
 	if err != nil {
 		return false, fmt.Errorf("record latest user prompt for session %s: %w", id, err)
@@ -834,7 +882,7 @@ func (s *Store) DeleteSession(ctx context.Context, id domain.SessionID) (bool, e
 		return false, fmt.Errorf("begin delete seed session: %w", err)
 	}
 	defer func() { _ = tx.Rollback() }()
-	q := s.qw.WithTx(tx)
+	q := s.txQueries(tx)
 
 	isSeed, err := q.SessionIsSeed(ctx, id)
 	if err != nil {
@@ -888,12 +936,32 @@ WHERE id = ?
 // standaloneSessionIDPrefix is the id prefix of sessions with no project.
 const standaloneSessionIDPrefix = "standalone"
 
+const sessionDeleteBatch = 1000
+
+// sessionCascadedConversations selects the conversations that cascade away
+// with session ?1: its own and its reviewers'. A reviewer's turns name the
+// worker session, though its conversation has no session_id, so only turns and
+// heads in any other conversation are shared history.
+const sessionCascadedConversations = `SELECT id FROM conversations WHERE session_id = ?1
+UNION SELECT c.id FROM conversations c JOIN review r ON r.id = c.review_id WHERE r.session_id = ?1`
+
+var sessionDeleteDrains = []string{
+	`DELETE FROM conversation_provider_events WHERE id IN (
+    SELECT id FROM conversation_provider_events WHERE session_id = ?1 LIMIT ?2
+) AND EXISTS (SELECT 1 FROM sessions WHERE id = ?1 AND is_terminated = 1)`,
+	`DELETE FROM conversation_activities WHERE id IN (
+    SELECT a.id FROM conversation_activities a
+    JOIN conversations c ON c.id = a.conversation_id
+    WHERE c.session_id = ?1 LIMIT ?2
+) AND EXISTS (SELECT 1 FROM sessions WHERE id = ?1 AND is_terminated = 1)`,
+}
+
 // DeleteTerminatedSession removes a terminated session's row; its own
 // conversations, cleanup facts, PR facts and the other per-session rows go with
 // it through ON DELETE CASCADE. Callers decide whether the session's workspace
 // is released first; this only refuses live sessions and, with
-// domain.ErrSessionHistoryShared, shared conversation history, all in one
-// transaction so a concurrent restore cannot slip between
+// domain.ErrSessionHistoryShared, shared conversation history. The final
+// transaction checks both again, so a concurrent restore cannot slip between
 // the checks and the delete.
 //
 // The session's number is recorded in session_num_floors so the next spawn
@@ -907,6 +975,15 @@ const standaloneSessionIDPrefix = "standalone"
 //
 // Returns deleted=false when id does not name a terminated session.
 func (s *Store) DeleteTerminatedSession(ctx context.Context, id domain.SessionID) (bool, error) {
+	if _, _, ok, err := deletableTerminatedSession(ctx, s.readDB, id); err != nil || !ok {
+		return false, err
+	}
+	for _, query := range sessionDeleteDrains {
+		if err := s.drainSessionRows(ctx, query, id); err != nil {
+			return false, fmt.Errorf("delete session %s: clear history: %w", id, err)
+		}
+	}
+
 	s.writeMu.Lock()
 	defer s.writeMu.Unlock()
 	tx, err := s.writeDB.BeginTx(ctx, nil)
@@ -915,31 +992,9 @@ func (s *Store) DeleteTerminatedSession(ctx context.Context, id domain.SessionID
 	}
 	defer func() { _ = tx.Rollback() }()
 
-	var projectID sql.NullString
-	var num int64
-	err = tx.QueryRowContext(ctx, `SELECT project_id, num FROM sessions WHERE id = ? AND is_terminated = 1`, id).Scan(&projectID, &num)
-	if errors.Is(err, sql.ErrNoRows) {
-		return false, nil
-	}
-	if err != nil {
-		return false, fmt.Errorf("delete session %s: read: %w", id, err)
-	}
-	var shared bool
-	if err := tx.QueryRowContext(ctx, `
-SELECT EXISTS (
-    SELECT 1 FROM conversation_turns t
-    JOIN conversations c ON c.id = t.conversation_id
-    WHERE t.handled_by_session_id = ?1
-      AND (c.session_id IS NULL OR c.session_id <> ?1)
-) OR EXISTS (
-    SELECT 1 FROM conversations
-    WHERE current_session_id = ?1
-      AND (session_id IS NULL OR session_id <> ?1)
-)`, id).Scan(&shared); err != nil {
-		return false, fmt.Errorf("delete session %s: check shared history: %w", id, err)
-	}
-	if shared {
-		return false, fmt.Errorf("delete session %s: %w", id, domain.ErrSessionHistoryShared)
+	projectID, num, ok, err := deletableTerminatedSession(ctx, tx, id)
+	if err != nil || !ok {
+		return false, err
 	}
 	prefix := standaloneSessionIDPrefix
 	if projectID.Valid && projectID.String != "" {
@@ -950,8 +1005,26 @@ INSERT INTO session_num_floors (id_prefix, max_num) VALUES (?, ?)
 ON CONFLICT (id_prefix) DO UPDATE SET max_num = MAX(max_num, excluded.max_num)`, prefix, num); err != nil {
 		return false, fmt.Errorf("delete session %s: record number floor: %w", id, err)
 	}
-	if err := foldDeletedSessionAccountUsage(ctx, s.qw.WithTx(tx), id); err != nil {
+	if err := foldDeletedSessionAccountUsage(ctx, s.txQueries(tx), id); err != nil {
 		return false, fmt.Errorf("delete session %s: keep account usage: %w", id, err)
+	}
+	// Retries and branches point at earlier turns and branches with ON DELETE
+	// RESTRICT, which SQLite enforces even when the cascade below removes the
+	// pointing row too. Those links stay inside one conversation, and the
+	// session's own conversations and its reviewers' all go with it, so unlink
+	// them first.
+	if _, err := tx.ExecContext(ctx, `
+UPDATE conversation_branches
+SET parent_branch_id = NULL, fork_after_turn_id = NULL, replaced_turn_id = NULL
+WHERE conversation_id IN (`+sessionCascadedConversations+`)
+  AND (parent_branch_id IS NOT NULL OR fork_after_turn_id IS NOT NULL OR replaced_turn_id IS NOT NULL)`, id); err != nil {
+		return false, fmt.Errorf("delete session %s: unlink branches: %w", id, err)
+	}
+	if _, err := tx.ExecContext(ctx, `
+UPDATE conversation_turns SET retry_of_turn_id = NULL
+WHERE conversation_id IN (`+sessionCascadedConversations+`)
+  AND retry_of_turn_id IS NOT NULL`, id); err != nil {
+		return false, fmt.Errorf("delete session %s: unlink retries: %w", id, err)
 	}
 	// Raw ExecContext for the same sqlc DELETE-parsing reason as DeleteSession.
 	if _, err := tx.ExecContext(ctx, `DELETE FROM change_log WHERE session_id = ?`, id); err != nil {
@@ -970,6 +1043,54 @@ ON CONFLICT (id_prefix) DO UPDATE SET max_num = MAX(max_num, excluded.max_num)`,
 		return false, fmt.Errorf("delete session %s: commit: %w", id, err)
 	}
 	return true, nil
+}
+
+type rowQueryer interface {
+	QueryRowContext(ctx context.Context, query string, args ...any) *sql.Row
+}
+
+func deletableTerminatedSession(ctx context.Context, q rowQueryer, id domain.SessionID) (sql.NullString, int64, bool, error) {
+	var projectID sql.NullString
+	var num int64
+	err := q.QueryRowContext(ctx, `SELECT project_id, num FROM sessions WHERE id = ? AND is_terminated = 1`, id).Scan(&projectID, &num)
+	if errors.Is(err, sql.ErrNoRows) {
+		return projectID, 0, false, nil
+	}
+	if err != nil {
+		return projectID, 0, false, fmt.Errorf("delete session %s: read: %w", id, err)
+	}
+	var shared bool
+	if err := q.QueryRowContext(ctx, `
+SELECT EXISTS (
+    SELECT 1 FROM conversation_turns
+    WHERE handled_by_session_id = ?1 AND conversation_id NOT IN (`+sessionCascadedConversations+`)
+) OR EXISTS (
+    SELECT 1 FROM conversations
+    WHERE current_session_id = ?1 AND id NOT IN (`+sessionCascadedConversations+`)
+)`, id).Scan(&shared); err != nil {
+		return projectID, 0, false, fmt.Errorf("delete session %s: check shared history: %w", id, err)
+	}
+	if shared {
+		return projectID, 0, false, fmt.Errorf("delete session %s: %w", id, domain.ErrSessionHistoryShared)
+	}
+	return projectID, num, true, nil
+}
+
+func (s *Store) drainSessionRows(ctx context.Context, query string, id domain.SessionID) error {
+	for {
+		if err := s.writeMu.LockContext(ctx); err != nil {
+			return err
+		}
+		res, err := s.writeDB.ExecContext(ctx, query, id, sessionDeleteBatch)
+		s.writeMu.Unlock()
+		if err != nil {
+			return err
+		}
+		n, err := res.RowsAffected()
+		if err != nil || n < sessionDeleteBatch {
+			return err
+		}
+	}
 }
 
 // GetSession returns the full record for a session, or ok=false if absent.
@@ -1013,6 +1134,25 @@ func (s *Store) ListAllSessions(ctx context.Context) ([]domain.SessionRecord, er
 		return nil, fmt.Errorf("list all sessions: %w", err)
 	}
 	return mapListAllSessionsRows(rows), nil
+}
+
+// ListPreviewSessions returns live workers with only ID, Kind, WorkspacePath,
+// PreviewURL and PreviewRevision set. The preview poller calls it 4 times a
+// second, so it skips the columns ListAllSessions decodes.
+func (s *Store) ListPreviewSessions(ctx context.Context) ([]domain.SessionRecord, error) {
+	rows, err := s.qr.ListPreviewSessions(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("list preview sessions: %w", err)
+	}
+	out := make([]domain.SessionRecord, 0, len(rows))
+	for _, r := range rows {
+		rec := domain.SessionRecord{ID: r.ID, Kind: domain.KindWorker}
+		rec.Metadata.WorkspacePath = r.WorkspacePath
+		rec.Metadata.PreviewURL = r.PreviewURL
+		rec.Metadata.PreviewRevision = r.PreviewRevision
+		out = append(out, rec)
+	}
+	return out, nil
 }
 
 // ListChatHibernationCandidates avoids decoding inactive sessions and activity JSON.
@@ -1098,6 +1238,7 @@ func rowToRecord(row gen.GetSessionRow) domain.SessionRecord {
 		ReviewerConfig:            unmarshalAgentConfig(row.ReviewerAgentConfig),
 		AutoReviewEnabled:         row.AutoReviewEnabled,
 		DisplayName:               row.DisplayName,
+		DisplayNameExplicit:       row.DisplayNameExplicit,
 		Mode:                      domain.NormalizeSessionMode(row.SessionMode),
 		Activity: domain.Activity{
 			State:          row.ActivityState,
@@ -1238,6 +1379,7 @@ func recordToInsert(rec domain.SessionRecord, num int64) gen.InsertSessionParams
 		ReviewerAgentConfig:              mustMarshalAgentConfig(rec.ReviewerConfig),
 		AutoReviewEnabled:                rec.AutoReviewEnabled,
 		DisplayName:                      rec.DisplayName,
+		DisplayNameExplicit:              rec.DisplayNameExplicit,
 		ActivityState:                    activity.State,
 		ActivityLastAt:                   activity.LastActivityAt,
 		FirstSignalAt:                    timeToNullTime(rec.FirstSignalAt),
@@ -1411,7 +1553,8 @@ func timeToNullTime(t time.Time) sql.NullTime {
 	if t.IsZero() {
 		return sql.NullTime{}
 	}
-	return sql.NullTime{Time: t, Valid: true}
+	// Also used by handwritten SQL that does not go through utcTimes.
+	return sql.NullTime{Time: t.UTC(), Valid: true}
 }
 
 func nullTimeToTimePtr(t sql.NullTime) *time.Time {
