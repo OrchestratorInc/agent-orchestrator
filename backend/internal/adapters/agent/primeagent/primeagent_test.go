@@ -131,7 +131,7 @@ func TestGetLaunchCommandOmitsWhitespaceSystemPromptFile(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(cmd) != 5 {
+	if len(cmd) != 7 {
 		t.Fatalf("command = %#v, want only required arguments", cmd)
 	}
 }
@@ -163,7 +163,7 @@ func TestGetLaunchCommandIgnoresEveryPermissionMode(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			if len(cmd) != 5 {
+			if len(cmd) != 7 {
 				t.Fatalf("command = %#v, want no permission argument", cmd)
 			}
 		})
