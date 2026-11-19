@@ -54,6 +54,25 @@ func (s *Store) GetUsageBinding(ctx context.Context, sessionID domain.SessionID,
 	return usageBindingFromGen(row), true, nil
 }
 
+// PromptCacheLifetime reports how long the session's Claude prompt cache lives
+// after its last use: one hour or five minutes, read from the newest cache
+// write in its transcript. Zero means unknown, such as before AO has ingested a
+// cache write or for a provider that does not report the tier. A write that
+// used both tiers reports five minutes, because part of the prefix expires then.
+func (s *Store) PromptCacheLifetime(ctx context.Context, sessionID domain.SessionID) (time.Duration, error) {
+	row, err := s.qr.LatestSessionCacheWrite(ctx, sessionID)
+	if errors.Is(err, sql.ErrNoRows) {
+		return 0, nil
+	}
+	if err != nil {
+		return 0, fmt.Errorf("read prompt cache tier for session %s: %w", sessionID, err)
+	}
+	if row.FiveMinuteTokens > 0 {
+		return 5 * time.Minute, nil
+	}
+	return time.Hour, nil
+}
+
 // ListUsageBindingsForSession returns every native usage binding for a session.
 func (s *Store) ListUsageBindingsForSession(ctx context.Context, sessionID domain.SessionID) ([]domain.UsageBindingRecord, error) {
 	rows, err := s.qr.ListUsageBindingsForSession(ctx, sessionID)

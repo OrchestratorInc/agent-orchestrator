@@ -267,6 +267,11 @@ export function ProjectWorkersRequestReviewToggle({ checked, onCheckedChange }: 
 	return <ProjectToggleRow id="project-workers-request-review" label={t("settings.project.workersRequestReviewToggle")} description={t("settings.project.workersRequestReviewDescription")} checked={checked} onCheckedChange={onCheckedChange} />;
 }
 
+export function ProjectIdleOrchestratorCompactionToggle({ checked, onCheckedChange }: { checked: boolean; onCheckedChange: (checked: boolean) => void }) {
+	const { t } = useTranslation();
+	return <ProjectToggleRow id="project-idle-orchestrator-compaction" label={t("settings.project.idleOrchestratorCompactionToggle")} description={t("settings.project.idleOrchestratorCompactionDescription")} checked={checked} onCheckedChange={onCheckedChange} />;
+}
+
 export function ProjectCoAuthorCommitsToggle({ checked, onCheckedChange }: { checked: boolean; onCheckedChange: (checked: boolean) => void }) {
 	const { t } = useTranslation();
 	return <ProjectToggleRow id="project-co-author-commits" label={t("settings.project.coAuthorCommitsToggle")} description={t("settings.project.coAuthorCommitsDescription")} checked={checked} onCheckedChange={onCheckedChange} />;

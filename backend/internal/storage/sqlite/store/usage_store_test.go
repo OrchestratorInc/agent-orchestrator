@@ -880,6 +880,58 @@ func TestListUsageReportEventsReadsWindowCacheWritesAndTitle(t *testing.T) {
 	}
 }
 
+// The cache lifetime comes from the newest write in the transcript. Turns that
+// only read the cache carry no tier, so they leave the answer unchanged.
+func TestPromptCacheLifetimeReadsNewestCacheWrite(t *testing.T) {
+	const (
+		oneHour  = `{"cache_creation":{"ephemeral_1h_input_tokens":40,"ephemeral_5m_input_tokens":0}}`
+		fiveMin  = `{"cache_creation":{"ephemeral_1h_input_tokens":0,"ephemeral_5m_input_tokens":40}}`
+		bothTier = `{"cache_creation":{"ephemeral_1h_input_tokens":40,"ephemeral_5m_input_tokens":5}}`
+		readOnly = `{"cache_read_input_tokens":900,"cache_creation":{"ephemeral_1h_input_tokens":0,"ephemeral_5m_input_tokens":0}}`
+	)
+	tests := []struct {
+		name   string
+		usages []string // oldest first
+		want   time.Duration
+	}{
+		{name: "no usage recorded", want: 0},
+		{name: "only cache reads", usages: []string{readOnly}, want: 0},
+		{name: "one hour", usages: []string{oneHour}, want: time.Hour},
+		{name: "five minutes", usages: []string{fiveMin}, want: 5 * time.Minute},
+		{name: "a write using both tiers", usages: []string{bothTier}, want: 5 * time.Minute},
+		{name: "newest write wins", usages: []string{fiveMin, oneHour}, want: time.Hour},
+		{name: "later reads keep the tier", usages: []string{oneHour, readOnly, readOnly}, want: time.Hour},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			s := sqlitetest.MustOpen(t)
+			ctx := context.Background()
+			sess := seedUsageSession(t, s, domain.HarnessClaudeCode)
+			now := time.Unix(1700000000, 0).UTC()
+			source := seedUsageSource(t, s, sess, now)
+			events := make([]domain.ModelUsageEvent, 0, len(tt.usages))
+			for i, usage := range tt.usages {
+				events = append(events, domain.ModelUsageEvent{
+					ProviderID: domain.UsageProviderAnthropic, BillingProviderID: "anthropic", BillingProviderSource: domain.UsageBillingProviderObserved,
+					ModelID: "claude-x", MeasurementKind: domain.UsageMeasurementNativeReported,
+					Tokens:            canonicalUsageTokens(30, 10, 20, 5),
+					ProviderUsageJSON: usage, CreatedAt: now.Add(time.Duration(i) * time.Minute), SourceEventKey: fmt.Sprintf("event-%d", i),
+				})
+			}
+			if len(events) > 0 {
+				mustNoError(t, s.ApplyUsageChunk(ctx, source.ID, 0, source.UpdatedAt, domain.SourceCursorState{
+					ByteOffset: 10, State: domain.UsageSourceActive, UpdatedAt: now,
+				}, events))
+			}
+			got, err := s.PromptCacheLifetime(ctx, sess.ID)
+			mustNoError(t, err)
+			if got != tt.want {
+				t.Fatalf("PromptCacheLifetime = %v, want %v", got, tt.want)
+			}
+		})
+	}
+}
+
 func tokenOrNil(value *int64) int64 {
 	if value == nil {
 		return -1

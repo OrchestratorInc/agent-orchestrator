@@ -757,6 +757,49 @@ func (q *Queries) InsertUsageSource(ctx context.Context, arg InsertUsageSourcePa
 	return i, err
 }
 
+const latestSessionCacheWrite = `-- name: LatestSessionCacheWrite :one
+WITH tiers AS (
+    SELECT
+        model_usage_events.id,
+        model_usage_events.created_at,
+        CAST(COALESCE(
+            json_extract(model_usage_events.provider_usage_json, '$.cache_creation.ephemeral_1h_input_tokens'),
+            json_extract(model_usage_events.provider_usage_json, '$.ao_derived_cache_write_1h_input_tokens'),
+            0) AS INTEGER) AS one_hour_tokens,
+        CAST(COALESCE(
+            json_extract(model_usage_events.provider_usage_json, '$.cache_creation.ephemeral_5m_input_tokens'),
+            0) AS INTEGER) AS five_minute_tokens
+    FROM model_usage_events
+    JOIN usage_bindings ON usage_bindings.id = model_usage_events.binding_id
+    JOIN usage_sources ON usage_sources.id = model_usage_events.usage_source_id
+    WHERE usage_bindings.session_id = ?1
+      AND usage_sources.kind = 'claude_main'
+      AND model_usage_events.provider_id = 'anthropic'
+      AND model_usage_events.created_at IS NOT NULL
+      AND json_valid(model_usage_events.provider_usage_json)
+)
+SELECT one_hour_tokens, five_minute_tokens
+FROM tiers
+WHERE one_hour_tokens > 0 OR five_minute_tokens > 0
+ORDER BY substr(created_at, 1, 23) DESC, id DESC
+LIMIT 1
+`
+
+type LatestSessionCacheWriteRow struct {
+	OneHourTokens    int64
+	FiveMinuteTokens int64
+}
+
+// The cache lifetime tier of the newest prompt-cache write in a session's main
+// Claude transcript. A read refreshes the cache at the tier it was written in,
+// so turns served fully from cache do not change the answer.
+func (q *Queries) LatestSessionCacheWrite(ctx context.Context, sessionID domain.SessionID) (LatestSessionCacheWriteRow, error) {
+	row := q.db.QueryRowContext(ctx, latestSessionCacheWrite, sessionID)
+	var i LatestSessionCacheWriteRow
+	err := row.Scan(&i.OneHourTokens, &i.FiveMinuteTokens)
+	return i, err
+}
+
 const listCompactSessionUsage = `-- name: ListCompactSessionUsage :many
 SELECT
     ub.session_id,

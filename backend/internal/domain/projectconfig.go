@@ -89,6 +89,13 @@ type ProjectConfig struct {
 	// the feature but check with the user or orchestrator before using it.
 	// Read at spawn, when the worker prompt is built.
 	WorkersRequestReview bool `json:"workersRequestReview,omitempty"`
+
+	// IdleOrchestratorCompaction lets AO compact this project's orchestrator
+	// after it has been quiet for most of its prompt cache's lifetime, so its
+	// next wake-up re-reads a short summary instead of the whole history. Off
+	// by default: a compaction the orchestrator never wakes up to use is spent,
+	// and the summary keeps less detail than the history it replaces.
+	IdleOrchestratorCompaction bool `json:"idleOrchestratorCompaction,omitempty"`
 }
 
 // ContainerReapConfig is the project-level opt-out for #2652's Docker

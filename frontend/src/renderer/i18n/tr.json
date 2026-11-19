@@ -2110,6 +2110,8 @@
 	"settings.project.coAuthorCommitsToggle": "Orchestrator'ı commit ortak yazarı olarak ekle",
 	"settings.cloudProject.coAuthorCommitsUnsupported": "Bu Cloud denetim düzlemi henüz ortak yazar ayarını desteklemiyor. Bu nedenle ayar açık kalır.",
 	"settings.project.details": "Proje ayrıntıları",
+	"settings.project.idleOrchestratorCompactionDescription": "Orkestratörün istem önbelleğinin süresi dolmadan geçmişini özetler, böylece bir sonraki mesaj küçük bir bağlamla başlar. Yalnızca bir saatlik önbellekte ve en az 150 bin token bağlamda çalışır. Özet, tam geçmişten daha az ayrıntı içerir.",
+	"settings.project.idleOrchestratorCompactionToggle": "Boştayken sıkıştır",
 	"settings.project.issues": "Sorunlar",
 	"settings.project.pullRequests": "Çekme istekleri",
 	"settings.project.general": "Genel",

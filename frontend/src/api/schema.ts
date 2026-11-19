@@ -7841,6 +7841,7 @@ export interface components {
             env?: {
                 [key: string]: string;
             };
+            idleOrchestratorCompaction?: boolean;
             orchestrator?: components["schemas"]["RoleOverride"];
             orchestratorRules?: string;
             orchestratorRulesFile?: string;

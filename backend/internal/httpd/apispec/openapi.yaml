@@ -22573,6 +22573,8 @@ components:
           additionalProperties:
             type: string
           type: object
+        idleOrchestratorCompaction:
+          type: boolean
         orchestrator:
           $ref: '#/components/schemas/RoleOverride'
         orchestratorRules:

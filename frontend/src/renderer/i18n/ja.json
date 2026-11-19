@@ -1739,6 +1739,8 @@
 	"settings.project.coAuthorCommitsToggle": "Add Orchestrator as a commit co-author",
 	"settings.cloudProject.coAuthorCommitsUnsupported": "This Cloud control plane does not support the co-author setting yet, so it stays on.",
 	"settings.project.details": "プロジェクトの詳細",
+	"settings.project.idleOrchestratorCompactionDescription": "オーケストレーターのプロンプトキャッシュが切れる前に履歴を要約し、次のメッセージを小さなコンテキストで始めます。1時間キャッシュでコンテキストが15万トークン以上の場合のみ実行されます。要約は完全な履歴より詳細が少なくなります。",
+	"settings.project.idleOrchestratorCompactionToggle": "アイドル時に圧縮",
 	"settings.project.issues": "Issue",
 	"settings.project.pullRequests": "プルリクエスト",
 	"settings.project.general": "一般",

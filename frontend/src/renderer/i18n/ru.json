@@ -2182,6 +2182,8 @@
 	"settings.project.coAuthorCommitsToggle": "Добавлять Orchestrator соавтором коммитов",
 	"settings.cloudProject.coAuthorCommitsUnsupported": "Этот control plane Cloud пока не поддерживает настройку соавтора, поэтому она остаётся включённой.",
 	"settings.project.details": "Сведения о проекте",
+	"settings.project.idleOrchestratorCompactionDescription": "Перед истечением кэша промптов оркестратора сжимает его историю в сводку, чтобы следующее сообщение начиналось с небольшого контекста. Работает только с часовым кэшем и контекстом от 150 тыс. токенов. В сводке меньше деталей, чем в полной истории.",
+	"settings.project.idleOrchestratorCompactionToggle": "Сжимать при простое",
 	"settings.project.issues": "Задачи",
 	"settings.project.pullRequests": "Pull request",
 	"settings.project.general": "Общие",

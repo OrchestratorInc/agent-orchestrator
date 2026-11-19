@@ -130,8 +130,10 @@ type projectConfig struct {
 	AutoReview            bool                 `json:"autoReview,omitempty"`
 	// WorkersRequestReview must round-trip through set-config so a CLI edit
 	// of another field never silently turns it off.
-	WorkersRequestReview bool             `json:"workersRequestReview,omitempty"`
-	Reviewers            []reviewerConfig `json:"reviewers,omitempty"`
+	WorkersRequestReview bool `json:"workersRequestReview,omitempty"`
+	// IdleOrchestratorCompaction round-trips for the same reason.
+	IdleOrchestratorCompaction bool             `json:"idleOrchestratorCompaction,omitempty"`
+	Reviewers                  []reviewerConfig `json:"reviewers,omitempty"`
 }
 
 // setConfigRequest mirrors the daemon's SetConfigInput body for

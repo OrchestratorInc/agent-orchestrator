@@ -1519,7 +1519,8 @@ func Run(buildVersion string) (retErr error) {
 		go func() {
 			defer sentryobs.RecoverBackground()
 			// Orchestrators are never idle-hibernated, so they stay live and
-			// can be compacted while their prompt cache is still warm.
+			// can be compacted while their prompt cache is still warm. Each
+			// project opts in; the pass skips the rest.
 			ticker := time.NewTicker(idleCompactionSweepTick)
 			defer ticker.Stop()
 			for {

@@ -1739,6 +1739,8 @@
 	"settings.project.coAuthorCommitsToggle": "Add Orchestrator as a commit co-author",
 	"settings.cloudProject.coAuthorCommitsUnsupported": "This Cloud control plane does not support the co-author setting yet, so it stays on.",
 	"settings.project.details": "Projektdetails",
+	"settings.project.idleOrchestratorCompactionDescription": "Fasst den Verlauf des Orchestrators zusammen, bevor sein Prompt-Cache abläuft, damit die nächste Nachricht klein beginnt. Läuft nur bei einem einstündigen Cache mit mindestens 150k Tokens Kontext. Die Zusammenfassung enthält weniger Details als der vollständige Verlauf.",
+	"settings.project.idleOrchestratorCompactionToggle": "Im Leerlauf komprimieren",
 	"settings.project.issues": "Issues",
 	"settings.project.pullRequests": "Pull Requests",
 	"settings.project.general": "Allgemein",

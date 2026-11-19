@@ -817,3 +817,33 @@ WHERE model_usage_events.created_at IS NOT NULL
   AND substr(model_usage_events.created_at, 1, 19) >= CAST(sqlc.arg(since_utc) AS TEXT)
   AND substr(model_usage_events.created_at, 1, 19) < CAST(sqlc.arg(until_utc) AS TEXT)
 ORDER BY model_usage_events.id;
+
+-- name: LatestSessionCacheWrite :one
+-- The cache lifetime tier of the newest prompt-cache write in a session's main
+-- Claude transcript. A read refreshes the cache at the tier it was written in,
+-- so turns served fully from cache do not change the answer.
+WITH tiers AS (
+    SELECT
+        model_usage_events.id,
+        model_usage_events.created_at,
+        CAST(COALESCE(
+            json_extract(model_usage_events.provider_usage_json, '$.cache_creation.ephemeral_1h_input_tokens'),
+            json_extract(model_usage_events.provider_usage_json, '$.ao_derived_cache_write_1h_input_tokens'),
+            0) AS INTEGER) AS one_hour_tokens,
+        CAST(COALESCE(
+            json_extract(model_usage_events.provider_usage_json, '$.cache_creation.ephemeral_5m_input_tokens'),
+            0) AS INTEGER) AS five_minute_tokens
+    FROM model_usage_events
+    JOIN usage_bindings ON usage_bindings.id = model_usage_events.binding_id
+    JOIN usage_sources ON usage_sources.id = model_usage_events.usage_source_id
+    WHERE usage_bindings.session_id = sqlc.arg(session_id)
+      AND usage_sources.kind = 'claude_main'
+      AND model_usage_events.provider_id = 'anthropic'
+      AND model_usage_events.created_at IS NOT NULL
+      AND json_valid(model_usage_events.provider_usage_json)
+)
+SELECT one_hour_tokens, five_minute_tokens
+FROM tiers
+WHERE one_hour_tokens > 0 OR five_minute_tokens > 0
+ORDER BY substr(created_at, 1, 23) DESC, id DESC
+LIMIT 1;
