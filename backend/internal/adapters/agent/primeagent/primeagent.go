@@ -102,7 +102,8 @@ func (p *Plugin) GetLaunchCommand(ctx context.Context, cfg ports.LaunchConfig) (
 	if cfg.Prompt != "" {
 		cmd = append(cmd, "--", cfg.Prompt)
 	}
-	return cmd, nil
+	provider, _, _ := strings.Cut(cfg.Config.Model, "/")
+	return primeEndpointCommand(cmd, provider), nil
 }
 
 func (p *Plugin) baseCommand(ctx context.Context, dataDir, systemPrompt, systemPromptFile string, cfg ports.AgentConfig) ([]string, error) {
@@ -180,7 +181,8 @@ func (p *Plugin) GetRestoreCommand(ctx context.Context, cfg ports.RestoreConfig)
 	if err != nil {
 		return nil, false, err
 	}
-	return append(cmd, "--resume", agentSessionID), true, nil
+	provider, _, _ := strings.Cut(cfg.Config.Model, "/")
+	return primeEndpointCommand(append(cmd, "--resume", agentSessionID), provider), true, nil
 }
 
 // SteersActiveTurn reports that Prime queues input submitted during a turn as

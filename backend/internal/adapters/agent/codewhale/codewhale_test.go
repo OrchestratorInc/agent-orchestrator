@@ -19,7 +19,7 @@ func TestLaunchCommand(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	want := []string{"/opt/codewhale", "--workspace", "/work/tree", "--skip-onboarding", "--model", "openai/gpt-5", "--approval-policy", "auto", "--fresh"}
+	want := []string{"env", "OPENAI_BASE_URL=https://api.openai.com/v1", "/opt/codewhale", "--workspace", "/work/tree", "--skip-onboarding", "--model", "openai/gpt-5", "--approval-policy", "auto", "--fresh"}
 	if !reflect.DeepEqual(cmd, want) {
 		t.Fatalf("command = %#v, want %#v", cmd, want)
 	}
@@ -96,5 +96,23 @@ func TestManifestAndConfig(t *testing.T) {
 	spec, err := p.GetConfigSpec(context.Background())
 	if err != nil || len(spec.Fields) != 1 || spec.Fields[0].Key != "model" {
 		t.Fatalf("config spec = %+v, err=%v", spec, err)
+	}
+}
+
+func TestOpenAICodewhaleLaunchPinsEndpointAfterLoginShell(t *testing.T) {
+	t.Setenv("CODEWHALE_PROVIDER", "openai")
+	t.Setenv("OPENAI_BASE_URL", "https://stray.invalid/v1")
+	p := &Plugin{resolvedBinary: "/opt/codewhale"}
+	argv, err := p.GetLaunchCommand(context.Background(), ports.LaunchConfig{WorkspacePath: "/work/tree"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(argv) < 3 || !reflect.DeepEqual(argv[:3], []string{"env", "OPENAI_BASE_URL=https://api.openai.com/v1", "/opt/codewhale"}) {
+		t.Fatalf("OpenAI launch inherits login-shell endpoint: %v", argv)
+	}
+	t.Setenv("CODEWHALE_PROVIDER", "anthropic")
+	argv, err = p.GetLaunchCommand(context.Background(), ports.LaunchConfig{WorkspacePath: "/work/tree"})
+	if err != nil || argv[0] != "/opt/codewhale" {
+		t.Fatalf("other provider launch changed: %v, %v", argv, err)
 	}
 }

@@ -32,6 +32,7 @@ type Archive struct {
 	CWD      string
 	Title    string
 	Model    string
+	Provider string
 	Updated  time.Time
 	Messages []Message
 	// Runtime authority is distinct from the native conversation identity.
@@ -72,6 +73,8 @@ type document struct {
 		Workspace    string    `json:"workspace"`
 		Title        string    `json:"title"`
 		Model        string    `json:"model"`
+		Provider     string    `json:"model_provider"`
+		ProviderID   string    `json:"model_provider_id"`
 		Updated      time.Time `json:"updated_at"`
 		SpawnDepth   int       `json:"spawn_depth"`
 		RuntimeStore *struct {
@@ -143,6 +146,10 @@ func read(ctx context.Context, root, path string, importing bool) (Archive, map[
 		}
 	}
 	out := Archive{ID: doc.Metadata.ID, CWD: doc.Metadata.Workspace, Title: doc.Metadata.Title, Model: doc.Metadata.Model, Updated: doc.Metadata.Updated}
+	out.Provider = doc.Metadata.ProviderID
+	if out.Provider == "" {
+		out.Provider = doc.Metadata.Provider
+	}
 	if binding := doc.Metadata.RuntimeStore; binding != nil {
 		out.RuntimeBound, out.RuntimeDir, out.RuntimeScope = true, binding.DataDir, binding.Scope
 	}

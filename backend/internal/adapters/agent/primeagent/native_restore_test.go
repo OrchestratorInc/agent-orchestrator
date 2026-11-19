@@ -319,3 +319,17 @@ func TestPrimePreparationMatchesProviderDecimalRoundTrip(t *testing.T) {
 		})
 	}
 }
+
+func TestOpenAIImportedPrimeRestorePinsEndpointAfterLoginShell(t *testing.T) {
+	t.Setenv("OPENAI_BASE_URL", "https://stray.invalid/v1")
+	root, workspace := t.TempDir(), t.TempDir()
+	path := writePrimeNativeFixture(t, root, primeForkID, workspace, "", `{"type":"model_change","id":"model","parentId":null,"provider":"openai","modelId":"gpt-4.1-mini"}`, primeForkFixtureRows()[0])
+	cfg := primeTestRestoreConfig(t, root, workspace, primeForkID)
+	argv, ok, err := primeTestPlugin().GetRestoreCommand(context.Background(), cfg)
+	if err != nil || !ok {
+		t.Fatalf("restore: %v, %v", ok, err)
+	}
+	if !slices.Equal(argv[:3], []string{"env", "OPENAI_BASE_URL=https://api.openai.com/v1", "/synthetic/prime-agent"}) || !slices.Contains(argv, path) {
+		t.Fatalf("OpenAI native restore inherits a login-shell endpoint: %v", argv)
+	}
+}

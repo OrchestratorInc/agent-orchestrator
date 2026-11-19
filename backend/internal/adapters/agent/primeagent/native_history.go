@@ -20,12 +20,13 @@ import (
 const maxPrimeHistoryBytes = 128 << 20
 
 type primeNativeHistory struct {
-	id     string
-	cwd    string
-	parent string
-	digest [sha256.Size]byte
-	count  int
-	opened bool
+	id       string
+	cwd      string
+	parent   string
+	provider string
+	digest   [sha256.Size]byte
+	count    int
+	opened   bool
 }
 
 func validPrimeNativeID(id string) bool {
@@ -118,6 +119,9 @@ func readPrimeNativeHistory(ctx context.Context, root, path string, prefix int) 
 		}
 		if typ == "session" {
 			return history, errors.New("prime native history repeats its header")
+		}
+		if typ == "model_change" {
+			history.provider, _ = row["provider"].(string)
 		}
 		if typ == "message" {
 			message, _ := row["message"].(map[string]any)

@@ -87,6 +87,9 @@ func (p *Plugin) PrepareImportedSession(ctx context.Context, r ports.ImportedSes
 		return empty, err
 	}
 	env[primeAgentCodingAgentDirEnv] = profile
+	if expected.provider == "openai" {
+		env["OPENAI_BASE_URL"] = "https://api.openai.com/v1"
+	}
 	runner := p.runCommand
 	if runner == nil {
 		runner = runPrimeNativeFork

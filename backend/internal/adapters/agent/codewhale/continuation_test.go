@@ -292,3 +292,31 @@ func TestNativeRestoreLocatorSelectsExactConversationInSharedRuntime(t *testing.
 		t.Fatalf("restore = %#v, %v, %v", cmd, ok, err)
 	}
 }
+
+func TestOpenAIImportedRestoreUsesSavedProviderForEndpoint(t *testing.T) {
+	t.Setenv("CODEWHALE_PROVIDER", "anthropic")
+	t.Setenv("OPENAI_BASE_URL", "https://stray.invalid/v1")
+	root, workspace := t.TempDir(), t.TempDir()
+	path := writeRestoreSnapshot(t, root, workspace, restoreTestID, "")
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var doc map[string]any
+	if err := json.Unmarshal(data, &doc); err != nil {
+		t.Fatal(err)
+	}
+	doc["metadata"].(map[string]any)["model_provider_id"] = "openai"
+	data, err = json.Marshal(doc)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(path, data, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	p := &Plugin{resolvedBinary: "/opt/codewhale"}
+	argv, ok, err := p.GetRestoreCommand(context.Background(), ports.RestoreConfig{Session: ports.SessionRef{WorkspacePath: workspace, Metadata: map[string]string{ports.MetadataKeyAgentSessionID: restoreTestID, ports.MetadataKeyImportConfigDir: root}}})
+	if err != nil || !ok || len(argv) < 3 || argv[0] != "env" || argv[1] != "OPENAI_BASE_URL=https://api.openai.com/v1" {
+		t.Fatalf("saved OpenAI provider inherits shell endpoint: %v, %v, %v", argv, ok, err)
+	}
+}

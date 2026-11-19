@@ -42,5 +42,14 @@ func (p *Plugin) importedRestoreCommand(ctx context.Context, cfg ports.RestoreCo
 	}
 	// baseCommand puts the session directory immediately after its first flag.
 	argv[2] = root
-	return append(argv, "--cwd", workspace, "--resume", path), true, nil
+	return primeEndpointCommand(append(argv, "--cwd", workspace, "--resume", path), history.provider), true, nil
+}
+
+// Apply after the login shell has run, so an unrelated shell export cannot
+// redirect the official OpenAI provider or its credential to another endpoint.
+func primeEndpointCommand(argv []string, provider string) []string {
+	if strings.EqualFold(provider, "openai") {
+		return append([]string{"env", "OPENAI_BASE_URL=https://api.openai.com/v1"}, argv...)
+	}
+	return argv
 }
