@@ -343,43 +343,60 @@ function SessionFileContent() {
 	// A jump belongs to the list it was made for: switching the view, the wrap or
 	// the file swaps the list under it, where the cited index may not exist, so
 	// that cancels a pending retry, and a retry never scrolls past the rows now
-	// shown (a quiet reload can shorten them). The jump runs once per file,
-	// cited line, view and wrap, the changes that lay the list out again: a
-	// comment added above the line, or a reload, only moves the tint, and the
-	// reader keeps their place.
+	// shown (a quiet reload can shorten them). A jump lands once per file, cited
+	// line, view and wrap, the changes that lay the list out again: once it has
+	// landed, a comment added above the line, or a reload, only moves the tint,
+	// and the reader keeps their place. One still under way follows the line to
+	// its new index.
 	const jumpTo = useRef(-1);
 	const jumpTries = useRef(0);
 	const jumpRetry = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
+	const jumpFailed = useRef(false);
+	const jumpPending = useRef("");
 	const jumpedFor = useRef("");
 	const jumpKey = `${path}|${citedLine ?? ""}|${effectiveMode}|${wrap}`;
 	const rowCount = useRef(0);
 	rowCount.current = rows.length;
+	// The list reports a row it cannot reach yet synchronously, from inside
+	// scrollToIndex; a call that returns without that report has landed.
+	const attemptJump = useCallback((index: number) => {
+		if (index !== jumpTo.current || index >= rowCount.current) return;
+		jumpFailed.current = false;
+		list.current?.scrollToIndex({ index, viewPosition: 0.3, animated: false });
+		if (!jumpFailed.current) {
+			jumpedFor.current = jumpPending.current;
+			jumpTo.current = -1;
+		}
+	}, []);
 	useEffect(() => {
 		if (citedIndex < 0 || jumpedFor.current === jumpKey) return;
-		jumpedFor.current = jumpKey;
+		if (jumpPending.current !== jumpKey) jumpTries.current = 0;
+		jumpPending.current = jumpKey;
 		jumpTo.current = citedIndex;
-		jumpTries.current = 0;
-		const timer = setTimeout(() => list.current?.scrollToIndex({ index: citedIndex, viewPosition: 0.3, animated: false }), 0);
+		const timer = setTimeout(() => attemptJump(citedIndex), 0);
 		return () => {
 			clearTimeout(timer);
 			clearTimeout(jumpRetry.current);
 			jumpTo.current = -1;
 		};
-	}, [citedIndex, jumpKey]);
+	}, [attemptJump, citedIndex, jumpKey]);
 	const onScrollToIndexFailed = useCallback(({ index, highestMeasuredFrameIndex }: { index: number; highestMeasuredFrameIndex: number }) => {
-		if (index === jumpTo.current && jumpTries.current++ < 40) {
-			// The furthest drawn row can always be scrolled to, and reaching it
-			// draws the rows past it: step there, then try the cited line again.
-			list.current?.scrollToIndex({ index: highestMeasuredFrameIndex, viewPosition: 0, animated: false });
-			clearTimeout(jumpRetry.current);
-			jumpRetry.current = setTimeout(() => {
-				if (index !== jumpTo.current || index >= rowCount.current) return;
-				list.current?.scrollToIndex({ index, viewPosition: 0.3, animated: false });
-			}, 60);
-			return;
+		jumpFailed.current = true;
+		if (index === jumpTo.current) {
+			if (jumpTries.current++ < 40) {
+				// The furthest drawn row can always be scrolled to, and reaching it
+				// draws the rows past it: step there, then try the cited line again.
+				list.current?.scrollToIndex({ index: highestMeasuredFrameIndex, viewPosition: 0, animated: false });
+				clearTimeout(jumpRetry.current);
+				jumpRetry.current = setTimeout(() => attemptJump(index), 60);
+				return;
+			}
+			// Out of tries: stop here rather than chase the line forever.
+			jumpedFor.current = jumpPending.current;
+			jumpTo.current = -1;
 		}
 		list.current?.scrollToOffset({ offset: index * CODE_LINE_HEIGHT * codeScale, animated: true });
-	}, [codeScale]);
+	}, [attemptJump, codeScale]);
 	const label = chosen.length ? selectionLabel(chosen) : "";
 
 	const act = useCallback(async (action: ComposerAction, text: string) => {
