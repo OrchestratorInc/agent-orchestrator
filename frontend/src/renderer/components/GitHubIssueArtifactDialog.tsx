@@ -7,7 +7,10 @@ import { gitHubFullName } from "../lib/cloud-project-repos";
 import { GitHubRepoPicker } from "./GitHubRepoPicker";
 import { Button } from "./ui/button";
 import { Dialog, DialogContent, DialogDescription, DialogTitle } from "./ui/dialog";
-import { Input } from "./ui/input";
+import { Check, ChevronsUpDown, CircleDot, ExternalLink } from "@/components/app-icons";
+import { Command, CommandInput, CommandItem, CommandList } from "./ui/command";
+import { Popover, PopoverContent, PopoverTrigger } from "./ui/popover";
+import { Pressable } from "./ui/pressable";
 
 function parseIssueLink(value: string) {
 	const match = /^https:\/\/(?:www\.)?github\.com\/([a-z\d-]+\/[\w.-]+)\/issues\/([1-9]\d*)\/?(?:[?#]\S*)?$/i.exec(value.trim());
@@ -23,6 +26,7 @@ export function GitHubIssueArtifactDialog({ name, readContent, onClose }: {
 	const [remote, setRemote] = useState("");
 	const [query, setQuery] = useState("");
 	const [term, setTerm] = useState("");
+	const [pickerOpen, setPickerOpen] = useState(false);
 	const [picked, setSelected] = useState<GitHubIssueChoice>();
 	const repo = gitHubFullName(remote);
 	const link = parseIssueLink(query);
@@ -35,7 +39,7 @@ export function GitHubIssueArtifactDialog({ name, readContent, onClose }: {
 	const issues = useQuery({
 		queryKey: ["github-artifact-issues", repo, search],
 		queryFn: () => aoBridge.app.findArtifactIssues(repo!, search),
-		enabled: Boolean(repo) && !picked && !invalidLink && (Boolean(link) || term === query.trim()),
+		enabled: Boolean(repo) && (pickerOpen || Boolean(link)) && !invalidLink && (Boolean(link) || term === query.trim()),
 		retry: false,
 	});
 	const selected = link ? issues.data?.find(issue => String(issue.number) === link.number) : picked;
@@ -56,6 +60,7 @@ export function GitHubIssueArtifactDialog({ name, readContent, onClose }: {
 	const chooseRepo = (value: string) => {
 		if (parseIssueLink(value)) {
 			editIssue(value);
+			setPickerOpen(false);
 			return;
 		}
 		setRemote(value);
@@ -65,6 +70,19 @@ export function GitHubIssueArtifactDialog({ name, readContent, onClose }: {
 		add.reset();
 	};
 	const loading = issues.isFetching || (!link && term !== query.trim());
+	const status = invalidLink ? t("issueArtifact.linkHint")
+		: !repo ? t("issueArtifact.pickRepo")
+		: loading ? t("common.loading")
+		: issues.error ? (/HTTP 404/i.test(issues.error.message) ? t("issueArtifact.unavailable") : issues.error.message)
+		: !issues.data?.length ? t(link ? "issueArtifact.linkHint" : "issueArtifact.empty")
+		: null;
+	const pasteLink = (event: React.ClipboardEvent) => {
+		const value = event.clipboardData.getData("text/plain");
+		if (!parseIssueLink(value)) return;
+		event.preventDefault();
+		editIssue(value);
+		setPickerOpen(false);
+	};
 	return (
 		<Dialog open onOpenChange={(open) => { if (!open && !add.isPending) onClose(); }}>
 			<DialogContent data-browser-native-overlay="true" showCloseButton={!add.isPending}>
@@ -80,24 +98,47 @@ export function GitHubIssueArtifactDialog({ name, readContent, onClose }: {
 					</div>
 					<div className="space-y-1">
 						<label htmlFor="issue-artifact-number">{t("issueArtifact.issue")}</label>
-						<Input id="issue-artifact-number" disabled={add.isPending} placeholder={t("issueArtifact.search")} value={picked ? `#${picked.number} · ${picked.title}` : query}
-							onChange={(event) => editIssue(event.target.value)}
-							onFocus={(event) => { if (selected) event.target.select(); }} />
-						{link && selected && <a className="inline-flex max-w-full items-center gap-1.5 rounded px-2 py-1 text-sm text-link hover:underline"
+						<Popover open={pickerOpen} onOpenChange={setPickerOpen}>
+							<PopoverTrigger asChild>
+								<Pressable id="issue-artifact-number" role="combobox" aria-haspopup="listbox" aria-expanded={pickerOpen}
+									disabled={add.isPending} onPaste={pasteLink}
+									className="flex h-control-form w-full cursor-pointer items-center gap-2 rounded-md border border-border bg-[var(--color-bg-import-card)] px-3 text-sm hover:border-foreground/40 hover:bg-accent focus-visible:ring-2 focus-visible:ring-ring data-[state=open]:border-foreground/40 disabled:cursor-default">
+									<CircleDot className="size-4 shrink-0 text-muted-foreground" aria-hidden="true" />
+									<span className="min-w-0 flex-1 truncate">{picked ? `#${picked.number} · ${picked.title}` : query || t("issueArtifact.search")}</span>
+									<ChevronsUpDown className="size-4 shrink-0 text-muted-foreground" aria-hidden="true" />
+								</Pressable>
+							</PopoverTrigger>
+							<PopoverContent align="start" className="z-overlay w-(--radix-popover-trigger-width) overflow-hidden p-0">
+								<Command shouldFilter={false} loop>
+									<CommandInput autoFocus aria-label={t("issueArtifact.search")} placeholder={t("issueArtifact.search")} value={query}
+										onValueChange={editIssue} onPaste={pasteLink} onFocus={event => event.target.select()} />
+									<CommandList className="max-h-44 p-1">
+										{status ? <p role={issues.error ? "alert" : "status"} className="px-2 py-2 text-xs text-muted-foreground">{status}</p> : issues.data?.map(issue =>
+											<CommandItem key={issue.number} value={String(issue.number)} className="cursor-pointer gap-2 rounded-sm px-2 py-2 hover:bg-accent data-[selected=true]:bg-accent" onSelect={() => {
+												if (!link) {
+													setSelected(issue);
+													setQuery("");
+													setTerm("");
+												}
+												setPickerOpen(false);
+											}}>
+												<span className="shrink-0 text-muted-foreground">#{issue.number}</span>
+												<span className="min-w-0 flex-1 truncate">{issue.title}</span>
+												{issue.number === selected?.number && <Check className="size-4" aria-hidden="true" />}
+											</CommandItem>)}
+									</CommandList>
+								</Command>
+							</PopoverContent>
+						</Popover>
+						{!pickerOpen && link && !selected && status && <p role="status" className="px-2 py-1 text-xs text-muted-foreground">{status}</p>}
+						{selected && <a className="inline-flex max-w-full cursor-pointer items-center gap-1.5 rounded px-1 py-1 text-sm underline underline-offset-2 hover:text-foreground/70 focus-visible:ring-2 focus-visible:ring-ring"
 							href={`https://github.com/${repo}/issues/${selected.number}`} onClick={event => {
 								event.preventDefault();
 								void aoBridge.app.openExternal(event.currentTarget.href);
 							}}>
-							<span>#{selected.number}</span><span className="truncate">{selected.title}</span>
+							<span className="shrink-0">#{selected.number}</span><span className="truncate">{selected.title}</span>
+							<ExternalLink className="size-3.5 shrink-0" aria-hidden="true" />
 						</a>}
-						{invalidLink && <p className="px-2 py-1 text-xs text-muted-foreground" role="status">{t("issueArtifact.linkHint")}</p>}
-						{!repo && !invalidLink && query.trim() && <p role="status" className="text-xs text-muted-foreground">{t("issueArtifact.pickRepo")}</p>}
-						{repo && !selected && !invalidLink && <div className="max-h-44 overflow-y-auto">
-							{loading ? <p role="status" className="px-2 py-2 text-xs text-muted-foreground">{t("common.loading")}</p> : issues.error ? <p role="alert" className="px-2 py-2 text-xs text-destructive">{/HTTP 404/i.test(issues.error.message) ? t("issueArtifact.unavailable") : issues.error.message}</p> : issues.data?.length ? issues.data.map((issue) =>
-								<Button key={issue.number} className="w-full justify-start" variant="ghost" size="sm" onClick={() => setSelected(issue)}>
-									<span className="text-muted-foreground">#{issue.number}</span><span className="truncate">{issue.title}</span>
-								</Button>) : <p role="status" className="rounded-md bg-muted/40 px-3 py-2 text-xs text-muted-foreground">{t(link ? "issueArtifact.linkHint" : "issueArtifact.empty")}</p>}
-						</div>}
 					</div>
 					{add.error && <p role="alert" className="text-destructive">{add.error.message}</p>}
 					<Button className="self-end" disabled={!selected || add.isPending} onClick={() => add.mutate()}>
