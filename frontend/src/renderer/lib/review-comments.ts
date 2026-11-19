@@ -199,12 +199,24 @@ export function buildReviewBlocks({
 	reviewStates: PRReviewState[];
 	runs: ReviewRunFacts[];
 }): ReviewPRBlock[] {
-	const repositoryOf = (pr: ReviewOpenPR) => pr.repo || prRepositoryFromUrl(pr.url) || prRepositoryPath(pr.url);
-	const repositories = new Set(openPRs.map((pr) => (repositoryOf(pr) || "").toLowerCase()).filter(Boolean));
-	const severalRepositories = repositories.size > 1;
-	return openPRs.map((pr) => {
+	const summaryRef = (summary: SessionPRSummary): PRRef => ({ urls: [summary.url, summary.htmlUrl], number: summary.number, repo: summary.repo });
+	const paired = openPRs.map((pr) => {
 		const target: PRRef = { urls: [pr.url], number: pr.number, repo: pr.repo };
-		const provider = findPR(target, providerPRs, (summary) => ({ urls: [summary.url, summary.htmlUrl], number: summary.number, repo: summary.repo }));
+		return { pr, target, provider: findPR(target, providerPRs, summaryRef) };
+	});
+	// The SCM summary can report an open PR before the session's list does; it gets a card too.
+	const claimed = new Set(paired.map(({ provider }) => provider));
+	const unclaimed = providerPRs
+		.filter((summary) => !claimed.has(summary) && (summary.state === "open" || summary.state === "draft"))
+		.map((summary) => {
+			const pr: ReviewOpenPR = { url: summary.htmlUrl || summary.url, number: summary.number, title: summary.title, repo: summary.repo };
+			return { pr, target: { urls: [pr.url, summary.url], number: pr.number, repo: pr.repo } as PRRef, provider: summary as SessionPRSummary | undefined };
+		});
+	const all = [...paired, ...unclaimed];
+	const repositoryOf = (pr: ReviewOpenPR) => pr.repo || prRepositoryFromUrl(pr.url) || prRepositoryPath(pr.url);
+	const repositories = new Set(all.map(({ pr }) => (repositoryOf(pr) || "").toLowerCase()).filter(Boolean));
+	const severalRepositories = repositories.size > 1;
+	return all.map(({ pr, target, provider }) => {
 		const aoState = findPR(target, reviewStates, (state) => ({ urls: [state.prUrl], number: state.prNumber }));
 		const aoRuns = aoRunsFor(aoState, pr.url, runs);
 		const comments = buildComments(provider, aoRuns);

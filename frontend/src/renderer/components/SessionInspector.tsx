@@ -2446,17 +2446,9 @@ function MergedReviewsSection({
 	const openInAOBrowser = useSessionBrowserLink(session);
 	const workspaceKey = workspaceQueryKeyForHost(hostId);
 	const sendMessageToWorker = useSendToSessionWorker(session, hostId);
-	const sessionOpenPRs = sortedPRs(session).filter((pr) => pr.state === "open" || pr.state === "draft");
-	// The SCM summary can report an open PR before the session's projection does.
-	const openPRs = [
-		...sessionOpenPRs.map((pr) => ({ url: pr.url, number: pr.number })),
-		...githubPRs
-			.filter((summary) => summary.state === "open" || summary.state === "draft")
-			.filter((summary) => !sessionOpenPRs.some((pr) => pr.url === summary.htmlUrl || pr.url === summary.url))
-			.map((summary) => ({ url: summary.htmlUrl || summary.url, number: summary.number, title: summary.title, repo: summary.repo })),
-	];
+	const openPRs = sortedPRs(session).filter((pr) => pr.state === "open" || pr.state === "draft");
 	const blocks = buildReviewBlocks({
-		openPRs,
+		openPRs: openPRs.map((pr) => ({ url: pr.url, number: pr.number })),
 		providerPRs: githubPRs,
 		reviewStates: openReviewStatesFor(session, reviewStates),
 		runs,
@@ -2523,7 +2515,7 @@ function MergedReviewsSection({
 			blocks={blocks}
 			hostId={hostId}
 			loading={isLoading}
-			noPR={prsLoaded && openPRs.length === 0}
+			noPR={prsLoaded && blocks.length === 0}
 			readOnly={readOnly}
 			sessionId={session.id}
 		/>
