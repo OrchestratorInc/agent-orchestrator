@@ -244,6 +244,8 @@ export function usePendingApprovals({ live = false }: { live?: boolean } = {}) {
 		enabled: live,
 		// The stream drives updates; poll only while it is down.
 		refetchInterval: live && !streamLive ? 15_000 : false,
+		// The fallback must keep reading while the window is hidden.
+		refetchIntervalInBackground: true,
 	});
 }
 
@@ -365,6 +367,7 @@ export function useRemotePendingApprovals({ live = false }: { live?: boolean } =
 			queryFn: () => fetchRemotePendingApprovals(hostId),
 			enabled: live && !usesPreviewWorkspaceData,
 			refetchInterval: live && !streaming.includes(hostId) ? REMOTE_FALLBACK_POLL_MS : (false as const),
+			refetchIntervalInBackground: true,
 		})),
 	});
 	return results.flatMap((result) => result.data ?? []);

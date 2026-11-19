@@ -20,7 +20,7 @@ vi.mock("../hooks/useCloudCp", () => ({
 }));
 vi.mock("../hooks/useWorkspaceQuery", () => ({ useWorkspaceQuery: () => ({ data: [{ id: "p", sessions: hooks.sessions }] }) }));
 
-import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
+import { QueryClient, QueryClientProvider, focusManager } from "@tanstack/react-query";
 import { renderHook, waitFor } from "@testing-library/react";
 import { act, type ReactNode } from "react";
 import {
@@ -166,5 +166,27 @@ describe("cloud approvals", () => {
 			shell.unmount();
 			client.clear();
 		});
+	});
+
+	it("keeps reading while the window is hidden, so a request made then still shows", async () => {
+		vi.useFakeTimers({ shouldAdvanceTime: true });
+		hooks.sessions = [{ id: "s-hidden", cloud: { orgId: "org-1", desiredState: "running", observedState: "running" } }];
+		let pending: CloudCpBrowserApproval[] = [];
+		hooks.listBrowserApprovals.mockReset().mockImplementation(async (_org: string, sessionId: string) => ({ pending: sessionId === "s-hidden" ? pending : [] }));
+		const client = new QueryClient();
+		const wrapper = ({ children }: { children: ReactNode }) => <QueryClientProvider client={client}>{children}</QueryClientProvider>;
+		const shell = renderHook(() => useLiveCloudPendingApprovals(), { wrapper });
+		await act(async () => { await vi.advanceTimersByTimeAsync(1_000); });
+		focusManager.setFocused(false);
+		try {
+			pending = [cloudRequest({ id: "while-hidden", sessionId: "s-hidden", expiresAt: new Date(Date.now() + 300_000).toISOString() })];
+			await act(async () => { await vi.advanceTimersByTimeAsync(20_000); });
+			expect(shell.result.current.map((request) => request.id)).toEqual(["while-hidden"]);
+		} finally {
+			focusManager.setFocused(undefined);
+			shell.unmount();
+			client.clear();
+			vi.useRealTimers();
+		}
 	});
 });
