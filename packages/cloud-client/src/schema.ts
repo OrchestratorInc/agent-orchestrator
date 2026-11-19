@@ -1559,6 +1559,30 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/cloud/v1/orgs/{orgId}/sessions/{sessionId}/asides/{asideId}/replies/{replyId}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                orgId: components["parameters"]["OrgId"];
+                sessionId: components["parameters"]["SessionId"];
+                /** @description The asideId on the event of the message that started the aside: its chat.user_message event, or for a steer the event the steer request returned (chat.turn_steer_requested); or the asideId createSessionAside returned. */
+                asideId: components["parameters"]["AsideId"];
+                replyId: string;
+            };
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post?: never;
+        /** @description Deletes one of the caller's own comments. Only its author may. Everyone watching gets chat.aside_reply_deleted. Deleting the first comment of a comment thread (origin `comment`) deletes the whole thread, as in a shared document: everyone watching gets chat.aside_deleted, and it is no longer listed. */
+        delete: operations["deleteSessionAsideReply"];
+        options?: never;
+        head?: never;
+        /** @description Edits one of the caller's own comments. Only its author may. Everyone watching gets chat.aside_reply_edited. A person or team member the edit newly mentions joins the thread and gets a mentioned notification; nobody else is notified. */
+        patch: operations["editSessionAsideReply"];
+        trace?: never;
+    };
     "/api/cloud/v1/orgs/{orgId}/sessions/{sessionId}/asides/{asideId}/read": {
         parameters: {
             query?: never;
@@ -5007,6 +5031,11 @@ export interface components {
             authorName: string;
             /** Format: date-time */
             createdAt: string;
+            /**
+             * Format: date-time
+             * @description When its author last edited it (editSessionAsideReply). Absent if never edited.
+             */
+            editedAt?: string;
         };
         AsideThread: {
             aside: components["schemas"]["Aside"];
@@ -6608,7 +6637,57 @@ export interface components {
             /** Format: date-time */
             createdAt: string;
         };
-        ClientEvent: components["schemas"]["UserMessageEvent"] | components["schemas"]["UserMessageEditedEvent"] | components["schemas"]["AssistantDeltaEvent"] | components["schemas"]["TurnStartedEvent"] | components["schemas"]["TurnCompletedEvent"] | components["schemas"]["TurnInterruptedEvent"] | components["schemas"]["TurnAbortedEvent"] | components["schemas"]["InterruptRequestedEvent"] | components["schemas"]["TurnSteeredEvent"] | components["schemas"]["TurnSteerRequestedEvent"] | components["schemas"]["TurnSteerFailedEvent"] | components["schemas"]["ScriptStepEvent"] | components["schemas"]["AgentSwitchedEvent"] | components["schemas"]["AsideReplyEvent"] | components["schemas"]["AsideCreatedEvent"] | components["schemas"]["AsideResolvedEvent"] | components["schemas"]["AsideReopenedEvent"];
+        /** @description A comment was edited (editSessionAsideReply). Hidden from the agent. */
+        AsideReplyEditedEvent: {
+            sessionId: string;
+            /** Format: int64 */
+            sequence: number;
+            /** @constant */
+            type: "chat.aside_reply_edited";
+            payload: {
+                /** Format: uuid */
+                asideId: string;
+                /** Format: uuid */
+                replyId: string;
+                text: string;
+                mentions: components["schemas"]["EventMention"][];
+                /** Format: date-time */
+                editedAt: string;
+            };
+            /** Format: date-time */
+            createdAt: string;
+        };
+        /** @description A comment was deleted (deleteSessionAsideReply). Hidden from the agent. */
+        AsideReplyDeletedEvent: {
+            sessionId: string;
+            /** Format: int64 */
+            sequence: number;
+            /** @constant */
+            type: "chat.aside_reply_deleted";
+            payload: {
+                /** Format: uuid */
+                asideId: string;
+                /** Format: uuid */
+                replyId: string;
+            };
+            /** Format: date-time */
+            createdAt: string;
+        };
+        /** @description A comment thread was deleted with its first comment. Hidden from the agent. */
+        AsideDeletedEvent: {
+            sessionId: string;
+            /** Format: int64 */
+            sequence: number;
+            /** @constant */
+            type: "chat.aside_deleted";
+            payload: {
+                /** Format: uuid */
+                asideId: string;
+            };
+            /** Format: date-time */
+            createdAt: string;
+        };
+        ClientEvent: components["schemas"]["UserMessageEvent"] | components["schemas"]["UserMessageEditedEvent"] | components["schemas"]["AssistantDeltaEvent"] | components["schemas"]["TurnStartedEvent"] | components["schemas"]["TurnCompletedEvent"] | components["schemas"]["TurnInterruptedEvent"] | components["schemas"]["TurnAbortedEvent"] | components["schemas"]["InterruptRequestedEvent"] | components["schemas"]["TurnSteeredEvent"] | components["schemas"]["TurnSteerRequestedEvent"] | components["schemas"]["TurnSteerFailedEvent"] | components["schemas"]["ScriptStepEvent"] | components["schemas"]["AgentSwitchedEvent"] | components["schemas"]["AsideReplyEvent"] | components["schemas"]["AsideCreatedEvent"] | components["schemas"]["AsideResolvedEvent"] | components["schemas"]["AsideReopenedEvent"] | components["schemas"]["AsideReplyEditedEvent"] | components["schemas"]["AsideReplyDeletedEvent"] | components["schemas"]["AsideDeletedEvent"];
         ClientEventPage: {
             events: components["schemas"]["ClientEvent"][];
             hasMore: boolean;
@@ -9798,6 +9877,81 @@ export interface operations {
             /** @description `SESSION_TERMINATED`: the session ended or was deleted. Nothing is stored. */
             409: components["responses"]["Error"];
             /** @description `validation_error`: details.field `text` when the text is blank (allowed only with sendToAgent) or longer than 65536 characters; details.field `mentions` with a details.reason as on sendMessage (`unknown`, `no_access`, `outside_session`, `too_many`). Nothing is stored. */
+            422: components["responses"]["ValidationError"];
+            default: components["responses"]["Error"];
+        };
+    };
+    deleteSessionAsideReply: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                orgId: components["parameters"]["OrgId"];
+                sessionId: components["parameters"]["SessionId"];
+                /** @description The asideId on the event of the message that started the aside: its chat.user_message event, or for a steer the event the steer request returned (chat.turn_steer_requested); or the asideId createSessionAside returned. */
+                asideId: components["parameters"]["AsideId"];
+                replyId: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Deleted. */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description `not_author`: the caller didn't write it. */
+            403: components["responses"]["Error"];
+            /** @description The caller can't open the session, or there is no such comment. */
+            404: components["responses"]["Error"];
+            /** @description `SESSION_TERMINATED`: the session ended or was deleted. */
+            409: components["responses"]["Error"];
+            default: components["responses"]["Error"];
+        };
+    };
+    editSessionAsideReply: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                orgId: components["parameters"]["OrgId"];
+                sessionId: components["parameters"]["SessionId"];
+                /** @description The asideId on the event of the message that started the aside: its chat.user_message event, or for a steer the event the steer request returned (chat.turn_steer_requested); or the asideId createSessionAside returned. */
+                asideId: components["parameters"]["AsideId"];
+                replyId: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": {
+                    text: string;
+                    mentions?: components["schemas"]["MentionToken"][];
+                };
+            };
+        };
+        responses: {
+            /** @description The comment after the edit. */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        reply: components["schemas"]["AsideReply"];
+                    };
+                };
+            };
+            /** @description `not_author`: the caller didn't write it. */
+            403: components["responses"]["Error"];
+            /** @description The caller can't open the session, or there is no such comment. */
+            404: components["responses"]["Error"];
+            /** @description `SESSION_TERMINATED`: the session ended or was deleted. */
+            409: components["responses"]["Error"];
+            /** @description `validation_error` on `text` or `mentions`, as on replyToSessionAside. */
             422: components["responses"]["ValidationError"];
             default: components["responses"]["Error"];
         };
