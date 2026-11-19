@@ -22,6 +22,13 @@ import (
 const (
 	defaultGitBinary              = "git"
 	defaultBranchResolutionBudget = 5 * time.Second
+	// automaticDefaultRecheck is how long one live lookup of a repository's
+	// remote HEAD stays current. Within it, an automatic default branch is read
+	// from the HEAD Git cached from that lookup; the branch's commits are still
+	// refreshed by the caller's fetch. After it, the cached HEAD is still used
+	// at once and the lookup runs again in the background, so a remote that
+	// renames its default branch is picked up by the start after that.
+	automaticDefaultRecheck = 10 * time.Minute
 )
 
 // ErrUnsafePath is returned when a resolved worktree path escapes the managed
@@ -123,6 +130,15 @@ type Workspace struct {
 	// discards tracks background worktree removals so tests can wait for them.
 	// Production never waits: that deferral is the point (see discard.go).
 	discards sync.WaitGroup
+	// now is the clock for automaticDefaultRecheck; tests replace it.
+	now func() time.Time
+	// liveDefaultAt records, per repository, when automatic default-branch
+	// resolution last asked the remote for its HEAD.
+	liveDefaultMu sync.Mutex
+	liveDefaultAt map[string]time.Time
+	// headRefreshes tracks background remote HEAD lookups so tests can wait
+	// for them. Production never waits.
+	headRefreshes sync.WaitGroup
 }
 
 type commandRunner func(ctx context.Context, binary string, args ...string) ([]byte, error)
@@ -157,6 +173,7 @@ func New(opts Options) (*Workspace, error) {
 		repos:       opts.RepoResolver,
 		run:         runCommand,
 		logger:      opts.Logger,
+		now:         time.Now,
 	}
 	// A daemon that died mid-removal leaves directories under the discard root
 	// that nothing else will ever look at again. Sweeping at construction is
@@ -165,10 +182,12 @@ func New(opts Options) (*Workspace, error) {
 	return w, nil
 }
 
-// ResolveDefaultBranch selects a canonical remote-tracking ref using only local
-// repository state. A slash is treated as a remote qualifier only when its
-// prefix exactly matches a configured remote; otherwise it remains part of an
-// origin branch name such as release/2026.
+// ResolveDefaultBranch selects a canonical remote-tracking ref. A configured
+// branch is resolved from local repository state only. A slash is treated as
+// a remote qualifier only when its prefix exactly matches a configured remote;
+// otherwise it remains part of an origin branch name such as release/2026. An
+// automatic default goes through resolveAutomaticDefault, whose network work is
+// bounded by defaultBranchResolutionBudget.
 func (w *Workspace) ResolveDefaultBranch(ctx context.Context, repoPath, configuredBranch string) (ports.WorkspaceDefaultBranch, error) {
 	repo, err := physicalAbs(repoPath)
 	if err != nil {
@@ -176,8 +195,9 @@ func (w *Workspace) ResolveDefaultBranch(ctx context.Context, repoPath, configur
 	}
 	branch := strings.TrimSpace(configuredBranch)
 	if branch == "" {
-		resolver := gitdefault.New(w.binary, gitdefault.Runner(w.run))
-		resolution, err := resolver.Resolve(ctx, ctx, repo)
+		remoteCtx, cancelRemote := context.WithTimeout(ctx, defaultBranchResolutionBudget)
+		defer cancelRemote()
+		resolution, fetched, err := w.resolveAutomaticDefault(ctx, remoteCtx, repo, true)
 		if err != nil {
 			return ports.WorkspaceDefaultBranch{}, fmt.Errorf("gitworktree: resolve repository default for %q: %w", repo, err)
 		}
@@ -185,6 +205,7 @@ func (w *Workspace) ResolveDefaultBranch(ctx context.Context, repoPath, configur
 			Remote:  resolution.Remote,
 			Branch:  resolution.Branch,
 			BaseRef: resolution.Ref,
+			Fetched: fetched,
 		}, nil
 	}
 	remote := "origin"
@@ -1974,7 +1995,7 @@ func (w *Workspace) resolveWorktreeRefs(ctx, remoteCtx context.Context, repo, br
 	if requestedErr != nil && !errors.Is(requestedErr, gitdefault.ErrUnresolved) {
 		return worktreeRefs{}, fmt.Errorf("gitworktree: inspect requested branch for %q: %w", repo, requestedErr)
 	}
-	resolution, err := resolver.Resolve(ctx, remoteCtx, repo)
+	resolution, _, err := w.resolveAutomaticDefault(ctx, remoteCtx, repo, false)
 	if err != nil {
 		if errors.Is(err, gitdefault.ErrUnresolved) {
 			// A fetched requested branch remains a valid seed when the remote
@@ -2013,6 +2034,84 @@ func (w *Workspace) resolveWorktreeRefs(ctx, remoteCtx context.Context, repo, br
 		return worktreeRefs{seedRef: seedRef, baseRef: resolution.Ref}, nil
 	}
 	return worktreeRefs{}, fmt.Errorf("%w: resolved default branch %q from %q, but ref %q is unavailable", errNoBaseRef, resolution.Branch, resolution.Source, resolution.Ref)
+}
+
+// resolveAutomaticDefault resolves a repository's automatic default branch.
+// Within automaticDefaultRecheck of the last live lookup it answers from the
+// remote HEAD Git cached, with no network. Past it, background (the refresh a
+// spawn runs first) still answers from the cache at once and repeats the
+// lookup in the background for later starts; otherwise (worktree creation
+// with no refresh before it) the caller waits for the lookup as before. A
+// repository with no usable cached HEAD always waits; that lookup also
+// fetches the branch, and fetched reports it.
+//
+// A spawn resolves the same repository twice, once to refresh the base and
+// again while creating the worktree; without this every start asked the remote
+// and fetched more than once before the agent could begin.
+func (w *Workspace) resolveAutomaticDefault(ctx, remoteCtx context.Context, repo string, background bool) (resolution gitdefault.Resolution, fetched bool, err error) {
+	resolver := gitdefault.New(w.binary, gitdefault.Runner(w.run))
+	current := w.liveDefaultCurrent(repo)
+	if current || background {
+		if cached, inspectErr := resolver.Inspect(ctx, repo); inspectErr == nil {
+			if !current {
+				w.refreshRemoteHeadInBackground(repo)
+			}
+			return cached, false, nil
+		}
+	}
+	resolution, err = resolver.Resolve(ctx, remoteCtx, repo)
+	// Record the attempt even when the remote was unreachable, so an offline
+	// machine does not start another lookup for every start in the window.
+	w.recordLiveDefault(repo)
+	if err != nil {
+		return gitdefault.Resolution{}, false, err
+	}
+	return resolution, resolution.Source == gitdefault.SourceLiveRemoteHead, nil
+}
+
+// refreshRemoteHeadInBackground asks the remote for its HEAD off the caller's
+// path. The attempt is recorded first, so concurrent starts launch one lookup.
+func (w *Workspace) refreshRemoteHeadInBackground(repo string) {
+	w.recordLiveDefault(repo)
+	w.headRefreshes.Add(1)
+	go func() {
+		defer w.headRefreshes.Done()
+		ctx, cancel := context.WithTimeout(context.Background(), defaultBranchResolutionBudget)
+		defer cancel()
+		resolver := gitdefault.New(w.binary, gitdefault.Runner(w.run))
+		if err := resolver.RefreshRemoteHead(ctx, ctx, repo); err != nil {
+			w.logf("gitworktree: background remote HEAD lookup for %q failed; keeping the cached default: %v", repo, err)
+		}
+	}()
+}
+
+// waitForHeadRefreshes blocks until every background remote HEAD lookup has
+// finished. Test-only: production callers deliberately do not wait.
+func (w *Workspace) waitForHeadRefreshes() {
+	w.headRefreshes.Wait()
+}
+
+func (w *Workspace) clock() time.Time {
+	if w.now != nil {
+		return w.now()
+	}
+	return time.Now()
+}
+
+func (w *Workspace) liveDefaultCurrent(repo string) bool {
+	w.liveDefaultMu.Lock()
+	defer w.liveDefaultMu.Unlock()
+	at, ok := w.liveDefaultAt[filepath.Clean(repo)]
+	return ok && w.clock().Sub(at) < automaticDefaultRecheck
+}
+
+func (w *Workspace) recordLiveDefault(repo string) {
+	w.liveDefaultMu.Lock()
+	defer w.liveDefaultMu.Unlock()
+	if w.liveDefaultAt == nil {
+		w.liveDefaultAt = make(map[string]time.Time)
+	}
+	w.liveDefaultAt[filepath.Clean(repo)] = w.clock()
 }
 
 func (w *Workspace) resolveWorktreeRefsWithBudget(ctx context.Context, repo, branch, baseBranch string) (worktreeRefs, error) {

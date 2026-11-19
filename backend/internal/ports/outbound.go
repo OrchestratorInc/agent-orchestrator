@@ -436,8 +436,10 @@ type Workspace interface {
 }
 
 // WorkspaceDefaultBranchRefresher is an optional capability for Git-backed
-// workspaces. Resolution is local-only so callers can retain the canonical ref
-// even when the subsequent best-effort network refresh fails.
+// workspaces. Resolution names the canonical ref even when the subsequent
+// best-effort network refresh fails. An automatic default asks the remote for
+// its HEAD at most once per recheck window, within a bounded time, and
+// otherwise reads the HEAD Git cached locally.
 type WorkspaceDefaultBranchRefresher interface {
 	ResolveDefaultBranch(ctx context.Context, repoPath, configuredBranch string) (WorkspaceDefaultBranch, error)
 	FetchDefaultBranch(ctx context.Context, repoPath string, target WorkspaceDefaultBranch) error
@@ -450,6 +452,9 @@ type WorkspaceDefaultBranch struct {
 	Remote  string
 	Branch  string
 	BaseRef string
+	// Fetched reports that resolving the target already fetched BaseRef from
+	// the remote, so the caller's own refresh would fetch it a second time.
+	Fetched bool
 }
 
 // WorkspaceObserver is an optional read-only capability implemented by

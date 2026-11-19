@@ -15,6 +15,7 @@ import (
 	"slices"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"syscall"
 	"testing"
 	"time"
@@ -6059,6 +6060,89 @@ func TestSpawn_FetchesQualifiedDefaultBranchRemote(t *testing.T) {
 	}
 	if got, want := ws.lastCfg.BaseRef, "refs/remotes/upstream/main"; got != want {
 		t.Fatalf("create base ref = %q, want %q", got, want)
+	}
+}
+
+func TestSpawn_SkipsFetchWhenResolutionAlreadyFetched(t *testing.T) {
+	m, st, _, ws := newManager()
+	st.projects["mer"] = domain.ProjectRecord{ID: "mer", Path: "/repo/mer", Config: testRoleAgents()}
+	ws.resolved = map[string]ports.WorkspaceDefaultBranch{
+		"/repo/mer": {Remote: "origin", Branch: "main", BaseRef: "refs/remotes/origin/main", Fetched: true},
+	}
+
+	if _, _, _, err := m.Spawn(ctx, ports.SpawnConfig{ProjectID: "mer", Kind: domain.KindWorker}); err != nil {
+		t.Fatal(err)
+	}
+	if len(ws.fetches) != 0 {
+		t.Fatalf("fetches = %#v, want none after a resolution that fetched", ws.fetches)
+	}
+
+	// The resolution's fetch also counts for the next start in the window.
+	ws.resolved["/repo/mer"] = ports.WorkspaceDefaultBranch{Remote: "origin", Branch: "main", BaseRef: "refs/remotes/origin/main"}
+	if _, _, _, err := m.Spawn(ctx, ports.SpawnConfig{ProjectID: "mer", Kind: domain.KindWorker}); err != nil {
+		t.Fatal(err)
+	}
+	if len(ws.fetches) != 0 {
+		t.Fatalf("fetches = %#v, want none within the fetch window", ws.fetches)
+	}
+	if got, want := ws.lastCfg.BaseRef, "refs/remotes/origin/main"; got != want {
+		t.Fatalf("create base ref = %q, want %q", got, want)
+	}
+}
+
+func TestSpawn_FreshBaseIsRefreshedInBackground(t *testing.T) {
+	m, st, _, ws := newManager()
+	st.projects["mer"] = domain.ProjectRecord{ID: "mer", Path: "/repo/mer", Config: testRoleAgents()}
+	now := time.Date(2026, 11, 19, 12, 0, 0, 0, time.UTC)
+	m.clock = func() time.Time { return now }
+
+	// No fetch has succeeded yet, so the first start waits for one.
+	if _, _, _, err := m.Spawn(ctx, ports.SpawnConfig{ProjectID: "mer", Kind: domain.KindWorker}); err != nil {
+		t.Fatal(err)
+	}
+	if len(ws.fetches) != 1 {
+		t.Fatalf("fetches = %d, want the first start to fetch", len(ws.fetches))
+	}
+
+	// Past the skip window but inside the fresh window: the start goes ahead
+	// with the local base while the fetch is still running.
+	now = now.Add(time.Minute)
+	release := make(chan struct{})
+	var finished atomic.Bool
+	ws.fetchFunc = func(fetchCtx context.Context, _ string, _ ports.WorkspaceDefaultBranch) error {
+		defer finished.Store(true)
+		select {
+		case <-release:
+			return nil
+		case <-fetchCtx.Done():
+			return fetchCtx.Err()
+		}
+	}
+	if _, _, _, err := m.Spawn(ctx, ports.SpawnConfig{ProjectID: "mer", Kind: domain.KindWorker}); err != nil {
+		t.Fatal(err)
+	}
+	if finished.Load() {
+		t.Fatal("the start waited for a fetch of a base fetched a minute ago")
+	}
+	if got, want := ws.lastCfg.BaseRef, "refs/remotes/origin/main"; got != want {
+		t.Fatalf("create base ref = %q, want %q", got, want)
+	}
+	close(release)
+	if err := m.WaitBackgroundWorkers(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if len(ws.fetches) != 2 {
+		t.Fatalf("fetches = %d, want the background refresh too", len(ws.fetches))
+	}
+
+	// A base last fetched longer ago than the fresh window is waited for again.
+	ws.fetchFunc = nil
+	now = now.Add(defaultBranchFreshWindow + time.Second)
+	if _, _, _, err := m.Spawn(ctx, ports.SpawnConfig{ProjectID: "mer", Kind: domain.KindWorker}); err != nil {
+		t.Fatal(err)
+	}
+	if len(ws.fetches) != 3 {
+		t.Fatalf("fetches = %d, want a start after the fresh window to fetch", len(ws.fetches))
 	}
 }
 
