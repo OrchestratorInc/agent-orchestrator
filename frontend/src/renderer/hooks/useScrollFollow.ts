@@ -20,9 +20,10 @@ const FLIGHT_MAX_MS = 1500;
 /**
  * Tests snap, as under reduced motion, because they assert scroll positions
  * synchronously and jsdom has no layout to animate. The test-mode branch is
- * compiled out of production builds.
+ * compiled out of production builds. Read on each render, so a test of the
+ * animated paths can stub the mode.
  */
-const CANNOT_ANIMATE = import.meta.env.MODE === "test";
+const cannotAnimate = () => import.meta.env.MODE === "test";
 
 /** `deliberate`: the reader asked for it (glideToEnd: a send, Jump to latest), not automatic follow. */
 type Flight = { from: number; to: number; aimedAt: number; deliberate: boolean };
@@ -44,7 +45,7 @@ type Flight = { from: number; to: number; aimedAt: number; deliberate: boolean }
 export function useScrollFollow(getNode: () => HTMLElement | null) {
 	const reducedMotion = useReducedMotion();
 	const snap = useRef(false);
-	snap.current = CANNOT_ANIMATE || Boolean(reducedMotion);
+	snap.current = cannotAnimate() || Boolean(reducedMotion);
 	// Where our last write left (or will leave) the viewport. Scroll events are
 	// classified by position rather than by time: an event that lands here is ours
 	// however late it arrives, and anything else is the reader's.
@@ -210,8 +211,16 @@ export function useScrollFollow(getNode: () => HTMLElement | null) {
 		node.scrollTop += delta;
 		lastWritten.current = node.scrollTop;
 		if (!current) return;
+		const end = endOf(node);
+		// The shift put the view where the glide was going: it has landed. A smooth
+		// scroll aimed at where the view already is fires no scrollend, so re-issuing
+		// one would leave the flight open and every later shift would renew it.
+		if (Math.abs(end - node.scrollTop) <= OWN_SCROLL_PX) {
+			flight.current = null;
+			return;
+		}
 		flight.current = { ...current, from: current.from + delta, to: current.to + delta };
-		smoothTo(node, endOf(node));
+		smoothTo(node, end);
 	}, [getNode]);
 
 	/**
