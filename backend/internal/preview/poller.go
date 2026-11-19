@@ -101,7 +101,11 @@ func (p *Poller) Poll(ctx context.Context) error {
 	if p.source == nil || p.setter == nil {
 		return nil
 	}
-	sessions, err := p.source.ListPreviewSessions(ctx)
+	// Not cancellable: a cancellable context makes the SQLite driver and
+	// database/sql each start a watcher goroutine for every query, and this runs
+	// four times a second. The loop still stops on ctx; one in-flight query simply
+	// finishes.
+	sessions, err := p.source.ListPreviewSessions(context.WithoutCancel(ctx))
 	if err != nil {
 		return fmt.Errorf("preview poller list sessions: %w", err)
 	}

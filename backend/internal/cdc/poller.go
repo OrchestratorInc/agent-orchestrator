@@ -139,7 +139,10 @@ func (p *Poller) Poll(ctx context.Context) error {
 
 // poll returns how many events it read.
 func (p *Poller) poll(ctx context.Context) (int, error) {
-	evs, err := p.src.EventsAfter(ctx, p.lastSeq, p.batch)
+	// Not cancellable: a cancellable context makes the SQLite driver and
+	// database/sql each start a watcher goroutine for every query, two wakeups
+	// per poll. Start still stops on ctx; one in-flight read simply finishes.
+	evs, err := p.src.EventsAfter(context.WithoutCancel(ctx), p.lastSeq, p.batch)
 	if err != nil {
 		return 0, fmt.Errorf("cdc poller: read after %d: %w", p.lastSeq, err)
 	}

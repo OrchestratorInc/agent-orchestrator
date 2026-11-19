@@ -122,7 +122,10 @@ func (c *Capturer) CaptureSession(ctx context.Context, sess domain.SessionRecord
 	dir := cmp.Or(sess.Metadata.ArtifactDir, sessionartifacts.Dir(c.dataDir, sess.ID))
 	// Track first, so a renamed file's history is at its new path before its
 	// content is compared with its latest version.
-	rows, err := c.store.ListSessionArtifacts(ctx, sess.ID)
+	// Not cancellable: the artifacts observer runs this for every session each
+	// poll, and a cancellable context makes the SQLite driver and database/sql
+	// each start a watcher goroutine for every query.
+	rows, err := c.store.ListSessionArtifacts(context.WithoutCancel(ctx), sess.ID)
 	if err != nil {
 		return err
 	}
@@ -138,7 +141,7 @@ func (c *Capturer) CaptureSession(ctx context.Context, sess domain.SessionRecord
 		delete(c.observed, sess.ID)
 		return nil
 	}
-	latestRows, err := c.store.ListLatestSessionArtifactVersions(ctx, sess.ID)
+	latestRows, err := c.store.ListLatestSessionArtifactVersions(context.WithoutCancel(ctx), sess.ID)
 	if err != nil {
 		return err
 	}

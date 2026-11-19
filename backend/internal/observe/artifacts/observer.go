@@ -76,7 +76,10 @@ func (o *Observer) Start(ctx context.Context) <-chan struct{} {
 // poll is what notices artifact additions and removals. Version capture runs
 // after the reconcile, outside the lifecycle reconcile lock.
 func (o *Observer) Poll(ctx context.Context) error {
-	sessions, err := o.sessions.ListAllSessions(ctx)
+	// Not cancellable: a cancellable context makes the SQLite driver and
+	// database/sql each start a watcher goroutine for every query, and this runs
+	// every tick. The loop still stops on ctx; one in-flight read simply finishes.
+	sessions, err := o.sessions.ListAllSessions(context.WithoutCancel(ctx))
 	if err != nil {
 		return err
 	}
