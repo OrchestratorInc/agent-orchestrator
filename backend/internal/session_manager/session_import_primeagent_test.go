@@ -88,8 +88,11 @@ func TestPrimeImportPrelaunchAdoptionAndReopenMakeNoMessengerWrites(t *testing.T
 	// prober and restore argv run through the actual manager lifecycle.
 	script := "#!/bin/sh\n" +
 		"if [ \"$1\" = --help ]; then printf 'prime-agent fixture\\n'; exit 0; fi\n" +
-		"[ \"$1\" = --mode ] && [ \"$2\" = rpc ] && [ \"$4\" = --session-dir ] || exit 21\n" +
-		"[ \"$5\" = " + quote(targetRoot) + " ] && [ \"$7\" = " + quote(workspace) + " ] && [ \"$9\" = " + quote(source) + " ] || exit 22\n" +
+		"[ \"$1\" = --mode ] && [ \"$2\" = rpc ] && [ \"$3\" = --offline ] || exit 21\n" +
+		"shift 3; socket=; root=; workspace=; source=\n" +
+		"while [ \"$#\" -gt 0 ]; do case \"$1\" in --daemon-socket) socket=$2;; --session-dir) root=$2;; --cwd) workspace=$2;; --fork) source=$2;; *) exit 21;; esac; shift 2; done\n" +
+		"[ \"$socket\" = \"$PRIME_AGENT_DAEMON_SOCKET\" ] && [ \"$socket\" = " + quote(filepath.Join(filepath.Dir(targetRoot), "daemon.sock")) + " ] || exit 21\n" +
+		"[ \"$root\" = " + quote(targetRoot) + " ] && [ \"$workspace\" = " + quote(workspace) + " ] && [ \"$source\" = " + quote(source) + " ] || exit 22\n" +
 		"cat > " + quote(target) + " <<'PRIME_SYNTHETIC_NATIVE'\n" +
 		header(forkID, workspace, source) + rows + "PRIME_SYNTHETIC_NATIVE\n" +
 		"printf 'fork\\n' >> " + quote(trace) + "\n"
