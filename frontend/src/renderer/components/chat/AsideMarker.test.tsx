@@ -158,7 +158,7 @@ describe("the margin icon", () => {
 		const { container, rerender } = renderFor(target(answer, <AssistantMessage message={answer} />), markers({}, () => comments("unread")));
 		let icon = container.querySelector<HTMLElement>("[data-comment-marker]")!;
 		expect(icon).toHaveAttribute("data-comment-marker", "unread");
-		expect(icon).toHaveClass("text-accent");
+		expect(icon).toHaveClass("text-status-working");
 		expect(icon).toHaveAccessibleName("Open comments, new replies");
 		rerender(<TooltipProvider><CommentMarkersContext.Provider value={markers({}, () => comments("active"))}>{target(answer, <AssistantMessage message={answer} />)}</CommentMarkersContext.Provider></TooltipProvider>);
 		icon = container.querySelector<HTMLElement>("[data-comment-marker]")!;

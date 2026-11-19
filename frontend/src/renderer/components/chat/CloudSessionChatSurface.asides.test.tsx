@@ -569,3 +569,37 @@ describe("comment threads", () => {
 		expect(within(pane).queryByRole("button", { name: "Comment actions" })).toBeNull();
 	});
 });
+
+describe("comment threads, from the Docker run", () => {
+	it("puts the caret back in the reply box after ticking Also send to agent, so Enter sends", async () => {
+		const user = userEvent.setup();
+		withCommentThread();
+		openAside(session.id, "c-1");
+		renderSurface();
+		const pane = await screen.findByTestId("aside-pane");
+		await user.click(await within(pane).findByRole("checkbox", { name: "Also send to agent" }));
+		await waitFor(() => expect(document.activeElement).toBe(within(pane).getByRole("combobox", { name: "Reply to the comment" })));
+	});
+
+	it("says the message is no longer shown when its sequence is loaded but nothing draws it", async () => {
+		// Anchored to event 43, inside the loaded history, which is a comment and draws no message.
+		cloudMocks.listSessionAsides.mockResolvedValue({ items: [{ ...commentAside, anchor: { sequence: 43, kind: "user_message" as const } }] });
+		cloudMocks.getSessionAside.mockResolvedValue({ ...commentThread, aside: { ...commentAside, anchor: { sequence: 43, kind: "user_message" as const } } });
+		openAside(session.id, "c-1");
+		renderSurface();
+		const pane = await screen.findByTestId("aside-pane");
+		await waitFor(() => expect(pane.querySelector("[data-comment-anchor-block]")).toHaveTextContent("Original message not shown"));
+		expect(pane.querySelector("[data-comment-anchor-block]")).toHaveTextContent("“real backoff”");
+		expect(within(pane).queryByRole("button", { name: "Jump to message" })).toBeNull();
+	});
+
+	it("keeps Jump to message for a message older than what is loaded", async () => {
+		cloudMocks.listSessionAsides.mockResolvedValue({ items: [{ ...commentAside, anchor: { sequence: 3, kind: "agent_message" as const } }] });
+		cloudMocks.getSessionAside.mockResolvedValue({ ...commentThread, aside: { ...commentAside, anchor: { sequence: 3, kind: "agent_message" as const } } });
+		openAside(session.id, "c-1");
+		renderSurface();
+		const pane = await screen.findByTestId("aside-pane");
+		await waitFor(() => expect(within(pane).getByRole("button", { name: "Jump to message" })).toBeInTheDocument());
+		expect(pane).not.toHaveTextContent("Original message not shown");
+	});
+});

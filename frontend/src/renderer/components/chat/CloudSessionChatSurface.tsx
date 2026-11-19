@@ -59,7 +59,7 @@ import { clearMentionFocus, mentionFallbackEvents, mentionMessageId, useMentionF
 import { useCloudInboxSupport } from "../../hooks/useCloudNotifications";
 import { useCloudOrg } from "../../hooks/useCloudOrg";
 import { useWindowAttention } from "../../hooks/useWindowAttention";
-import type { CloudCpAsideListResponse, CloudCpMentionCandidates, CloudCpNotificationListResponse } from "../../lib/cloud-cp/types";
+import type { CloudCpAside, CloudCpAsideListResponse, CloudCpMentionCandidates, CloudCpNotificationListResponse } from "../../lib/cloud-cp/types";
 import {
 	ASIDE_REPLY_EVENT,
 	ASIDE_STATE_EVENTS,
@@ -2580,6 +2580,27 @@ export function CloudSessionChatSurface({
 		? { kind: mentionFocus.kind, body: mentionFocus.body, authorName: mentionFocus.authorName, createdAt: mentionFocus.createdAt }
 		: undefined, [mentionFocus, shownAside?.asideId]);
 	const paneWorkspace = cloud && activeOrg?.id === cloud.orgId ? activeOrg?.displayName : undefined;
+	// Whether a thread's message is on screen: shown, gone (its sequence is
+	// within the loaded history but nothing draws it: a withdrawn or rolled back
+	// message), or unknown (older than what is loaded).
+	const anchorShown = useMemo(() => {
+		const sequences = new Set<number>();
+		const tagged = new Set<string>();
+		for (const item of snapshot.items) {
+			if (item.kind === "message") {
+				if (item.sequence !== undefined) sequences.add(item.sequence);
+				if (item.asideId) tagged.add(item.asideId);
+			} else if (item.detail?.event === "steer") {
+				if (item.sequence !== undefined) sequences.add(item.sequence);
+				if (item.detail.asideId) tagged.add(item.detail.asideId);
+			}
+		}
+		const oldest = chatEvents?.[0]?.sequence;
+		return (aside: Pick<CloudCpAside, "asideId" | "anchor">): boolean | undefined => {
+			if (tagged.has(aside.asideId) || sequences.has(aside.anchor.sequence)) return true;
+			return oldest === undefined || aside.anchor.sequence < oldest ? undefined : false;
+		};
+	}, [chatEvents, snapshot.items]);
 	const listedThreads = shownAside?.messageSequence !== undefined
 		? (asides.data?.items ?? []).filter((aside) => asideIsOpen(aside) && aside.anchor.sequence === shownAside.messageSequence)
 		: [];
@@ -2604,6 +2625,7 @@ export function CloudSessionChatSurface({
 			fallback={asideFallback}
 			focusKey={shownAside.focusKey}
 			key={shownAside.asideId}
+			anchorShown={anchorShown}
 			onClose={() => closeAside(session.id)}
 			orgId={cloud.orgId}
 			sessionId={session.id}

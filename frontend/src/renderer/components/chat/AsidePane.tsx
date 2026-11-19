@@ -234,7 +234,7 @@ function CommentAnchorBlock({ anchor }: { anchor: CommentAnchorView }) {
 				</>
 			)}
 			{anchor.onJump && !anchor.gone ? (
-				<button className="w-fit text-caption text-link hover:underline" onClick={anchor.onJump} type="button">{t("comment.jump")}</button>
+				<button className="w-fit text-caption text-status-working hover:underline" onClick={anchor.onJump} type="button">{t("comment.jump")}</button>
 			) : null}
 		</div>
 	);
@@ -464,7 +464,15 @@ function AsideReplyBox({
 				/>
 				{canSendToAgent && !disabled && !firstComment ? (
 					<label className="flex w-fit cursor-pointer items-center gap-2 px-1.5 pt-1 pb-1 text-xs text-foreground/85" htmlFor={checkboxId} data-comment-send-to-agent="">
-						<Checkbox checked={sendToAgent} id={checkboxId} onCheckedChange={(value) => setSendToAgent(value === true)} />
+						<Checkbox
+							checked={sendToAgent}
+							id={checkboxId}
+							onCheckedChange={(value) => {
+								setSendToAgent(value === true);
+								// Back to the text, so Enter sends as it did before the tick.
+								editor.current?.focus();
+							}}
+						/>
 						{t("comment.alsoSendToAgent")}
 					</label>
 				) : null}
@@ -542,7 +550,7 @@ export function CommentThreadListView({
 						)}
 						<span className="flex items-center gap-1.5 text-caption text-muted-foreground">
 							{thread.startedBy ? <span className="truncate">{thread.startedBy}</span> : null}
-							<span className={cn("tabular-nums", thread.unread && "text-accent")}>{t("comment.count", { count: thread.replyCount })}</span>
+							<span className={cn("tabular-nums", thread.unread && "text-status-working")}>{t("comment.count", { count: thread.replyCount })}</span>
 							{thread.lastAt ? <span className="tabular-nums">· {formatTimeCompact(thread.lastAt)}</span> : null}
 						</span>
 					</button>
@@ -624,6 +632,7 @@ export function CloudAsidePane({
 	workspaceName,
 	fallback,
 	canPrompt = false,
+	anchorShown,
 	onClose,
 }: {
 	orgId: string;
@@ -641,6 +650,8 @@ export function CloudAsidePane({
 	fallback?: AsideFallback;
 	/** The reader can prompt the agent (not a viewer): "Also send to agent" shows. */
 	canPrompt?: boolean;
+	/** Whether the thread's message is on screen; false when it is gone (withdrawn, rolled back). */
+	anchorShown?: (aside: Pick<CloudCpAside, "asideId" | "anchor">) => boolean | undefined;
 	onClose: () => void;
 }) {
 	const { t } = useTranslation();
@@ -701,12 +712,12 @@ export function CloudAsidePane({
 	const anchor = useMemo<CommentAnchorView | undefined>(() => {
 		if (!comment || !aside) return undefined;
 		const shown = anchorEventText(events, aside.anchor.sequence);
-		const gone = Boolean(eventsLoaded && !shown && !thread.data?.message && aside.anchor.kind !== "agent_message");
+		const gone = anchorShown?.(aside) === false;
 		const onJump = () => jumpToCommentAnchor(aside.anchor.sequence);
 		if (aside.quote) return { quote: aside.quote, gone, onJump };
 		const text = thread.data?.message.text ?? shown?.text ?? "";
 		return { label: anchorLabel(t as unknown as AnchorLabelT, aside.anchor.kind, thread.data?.message.authorName ?? shown?.authorName), excerpt: messageExcerpt(text), gone, onJump };
-	}, [aside, comment, events, eventsLoaded, t, thread.data?.message]);
+	}, [anchorShown, aside, comment, events, t, thread.data?.message]);
 
 	const [sent, setSent] = useState<CloudCpAsideReply[]>([]);
 	const [pending, setPending] = useState<AsideEntry[]>([]);

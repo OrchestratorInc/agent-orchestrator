@@ -264,8 +264,14 @@ function CommentTargetWith({
 		<div className="group/comment relative" data-comment-anchor={sequence} data-comment-author={authorName} data-comment-kind={kind} onClick={onClick} ref={root}>
 			{children}
 			{finished && markers.canComment ? (
+				// In the right margin, as a document's add-comment button: it never
+				// covers the message's text, and sits under the comment icon when the
+				// message has one.
 				<div
-					className="absolute -top-3.5 right-0 z-20 flex rounded-[9px] border border-border bg-popover p-0.5 opacity-0 shadow-sm transition-opacity duration-150 ease-out focus-within:opacity-100 group-hover/comment:opacity-100 motion-reduce:transition-none"
+					className={cn(
+						"absolute -right-9 z-20 flex rounded-[9px] border border-border bg-popover opacity-0 shadow-sm transition-opacity duration-150 ease-out focus-within:opacity-100 group-hover/comment:opacity-100 motion-reduce:transition-none",
+						comments ? "top-8" : "top-0",
+					)}
 					data-comment-toolbar=""
 				>
 					<Tooltip>
@@ -294,7 +300,7 @@ function CommentTargetWith({
 					className={cn(
 						"absolute top-0 -right-9 size-7",
 						comments.state === "idle" && "text-muted-foreground",
-						comments.state === "unread" && "text-accent",
+						comments.state === "unread" && "text-status-working",
 						comments.state === "active" && "bg-raised text-foreground",
 					)}
 					data-comment-marker={comments.state}
