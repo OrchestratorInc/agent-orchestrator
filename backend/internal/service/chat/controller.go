@@ -101,9 +101,10 @@ type Store interface {
 	NextQueuedTurn(ctx context.Context, conversationID string) (domain.QueuedTurn, error)
 	ListQueuedBatch(ctx context.Context, conversationID string, limit int) ([]domain.QueuedTurn, error)
 	ClaimQueuedBatch(ctx context.Context, conversationID string, dispatch bool, limit int, now time.Time) ([]domain.QueuedTurn, error)
+	MarkQueuedBatchStarted(ctx context.Context, conversationID string, turnIDs []string, now time.Time) error
 	CompleteQueuedBatch(ctx context.Context, conversationID string, turnIDs []string, providerTurnID, steerActivityID string, now time.Time) error
 	ReleaseQueuedBatch(ctx context.Context, conversationID string, turnIDs []string) error
-	FailQueuedBatch(ctx context.Context, conversationID string, turnIDs []string, reason string, now time.Time) error
+	FailQueuedBatch(ctx context.Context, conversationID string, turnIDs []string, reason string, now time.Time, accepted bool) error
 	FailReservedQueuedBatch(ctx context.Context, conversationID string, now time.Time) error
 	ReserveQueuedTurnForPromotion(ctx context.Context, conversationID, turnID string, now time.Time) (domain.QueuedTurn, error)
 	ReleaseQueuedTurnPromotion(ctx context.Context, conversationID, turnID string) error
@@ -120,7 +121,7 @@ type Store interface {
 	CompleteEditDelivery(ctx context.Context, conversationID, clientMessageID, sourceBranchID, activeBranchID string, turn domain.ConversationTurn, now time.Time) error
 	RejectEditDelivery(ctx context.Context, conversationID, clientMessageID string, kind domain.ConversationEditRejectionKind, message string, now time.Time) error
 	CancelQueuedTurns(ctx context.Context, conversationID string, cutoff, now time.Time) error
-	CancelAllQueuedTurns(ctx context.Context, conversationID string, now time.Time) error
+	CancelAllQueuedTurns(ctx context.Context, conversationID string, now time.Time) (int, error)
 	CancelQueuedTurnByID(ctx context.Context, conversationID, turnID string, now time.Time) error
 	QueuedTurnMessage(ctx context.Context, conversationID, turnID string) (domain.ConversationMessage, error)
 	QueuedEditDelivery(ctx context.Context, conversationID, clientMessageID string) (string, bool, error)
@@ -367,6 +368,9 @@ var ErrNoActiveTurn = errors.New("no active turn")
 // closed source intake. The client should retain the draft and retry after the
 // session_updated event announces the target mode.
 var ErrControllerHandoff = errors.New("chat controller is switching interfaces")
+
+// ErrForcedHandoffStoppedSource means a failed forced handoff stopped the source and kept its handoff latch; the caller restores the source, then calls AbortHandoff.
+var ErrForcedHandoffStoppedSource = errors.New("the forced handoff stopped the source")
 
 // ErrTurnNotRetryable reports a turn that cannot be retried: it is not part of
 // this conversation, not failed, was rolled back, or carries no durable prompt
@@ -2046,7 +2050,7 @@ func (c *Controller) dispatch(
 		if len(followers) > 0 {
 			ids := append([]string{turnID}, followers...)
 			if failErr := c.store.FailQueuedBatch(context.WithoutCancel(ctx), c.conversation.ID, ids,
-				"batch provider input could not be recorded: "+err.Error(), c.now()); failErr != nil {
+				"batch provider input could not be recorded: "+err.Error(), c.now(), false); failErr != nil {
 				c.log.Error("failed to settle unrecorded queued batch", "error", failErr)
 			}
 		} else if settleErr := c.store.SettleTurnByID(context.WithoutCancel(ctx), turnID,
@@ -2055,11 +2059,12 @@ func (c *Controller) dispatch(
 		}
 		return domain.ConversationTurn{}, fmt.Errorf("record provider input: %w", err)
 	}
+	providerAccepted := false
 	failFollowers := func(reason string) {
 		if len(followers) == 0 {
 			return
 		}
-		if err := c.store.FailQueuedBatch(context.WithoutCancel(ctx), c.conversation.ID, followers, reason, c.now()); err != nil {
+		if err := c.store.FailQueuedBatch(context.WithoutCancel(ctx), c.conversation.ID, followers, reason, c.now(), providerAccepted); err != nil {
 			c.log.Error("failed to settle queued batch", "error", err)
 		}
 	}
@@ -2111,6 +2116,12 @@ func (c *Controller) dispatch(
 		}, fmt.Errorf("send turn: %w", err)
 	}
 
+	if !hasDeferredStart {
+		providerAccepted = true
+		if err := c.store.MarkQueuedBatchStarted(context.WithoutCancel(ctx), c.conversation.ID, followers, c.now()); err != nil {
+			c.log.Error("failed to record queued batch acceptance", "error", err)
+		}
+	}
 	if err := c.store.BindTurnToProvider(ctx, turnID, ref.ProviderTurnID, c.now()); err != nil {
 		failFollowers("batch provider binding is uncertain: " + err.Error())
 		c.mu.Lock()
@@ -2137,7 +2148,7 @@ func (c *Controller) dispatch(
 	// ACP's session/prompt request stays open until the turn finishes, so an ACP
 	// driver prepares the request in SendTurn and starts it here. The durable
 	// provider-id binding above must exist before the first streamed update can be
-	// projected. Eager drivers do not implement this optional interface.
+	// projected. A successful local start does not confirm provider acceptance.
 	if hasDeferredStart {
 		if err := deferred.StartDeferredTurn(ref.ProviderTurnID); err != nil {
 			failFollowers("batch provider start is uncertain: " + err.Error())
@@ -2387,7 +2398,7 @@ func (c *Controller) drainLockedWithLimit(ctx context.Context, allowDispatch boo
 	msg, err := c.queuedBatchInput(ctx, batch, nil)
 	if err != nil {
 		if failErr := c.store.FailQueuedBatch(context.WithoutCancel(ctx), c.conversation.ID,
-			queuedBatchIDs(batch), err.Error(), c.now()); failErr != nil {
+			queuedBatchIDs(batch), err.Error(), c.now(), false); failErr != nil {
 			return errors.Join(err, failErr)
 		}
 		return err
@@ -2458,7 +2469,7 @@ func (c *Controller) BeginHandoff(
 		c.mu.Lock()
 		active := c.pendingTurnID != ""
 		c.mu.Unlock()
-		err := c.store.CancelAllQueuedTurns(ctx, c.conversation.ID, c.now())
+		_, err := c.store.CancelAllQueuedTurns(ctx, c.conversation.ID, c.now())
 		c.sendMu.Unlock()
 		if err != nil {
 			c.AbortHandoff()
@@ -2554,6 +2565,85 @@ func (c *Controller) BeginIdleBranchHandoff(ctx context.Context) error {
 	c.handoff = controllerHandoffIdleBranch
 	c.branchHandoffDone = make(chan struct{})
 	return nil
+}
+
+// BeginForcedBranchHandoff fences intake even mid-turn, cancelling the queue and interrupting the turn.
+func (c *Controller) BeginForcedBranchHandoff(ctx context.Context) (domain.ProviderSwitchResult, error) {
+	restoreSteers := func() {}
+	if withdrawer, ok := c.conv.(ports.ChatSteerWithdrawer); ok {
+		if restore := withdrawer.WithdrawPendingSteers(); restore != nil {
+			restoreSteers = restore
+		}
+	}
+	c.mu.Lock()
+	if c.handoff != controllerHandoffNone {
+		c.mu.Unlock()
+		restoreSteers()
+		return domain.ProviderSwitchResult{}, ErrControllerHandoff
+	}
+	c.handoff = controllerHandoffIdleBranch
+	c.branchHandoffDone = make(chan struct{})
+	c.mu.Unlock()
+	terminated := false
+	fail := func(err error) (domain.ProviderSwitchResult, error) {
+		restoreSteers()
+		if terminated {
+			return domain.ProviderSwitchResult{}, errors.Join(ErrForcedHandoffStoppedSource, err)
+		}
+		c.AbortHandoff()
+		return domain.ProviderSwitchResult{}, err
+	}
+	if !lockWithin(ctx, &c.sendMu, forcedHandoffInterruptLimit) {
+		c.prepareBranchHandoffStop()
+		stopCtx, cancel := context.WithTimeout(ctx, forcedHandoffInterruptLimit)
+		stopErr := c.Terminate(stopCtx)
+		cancel()
+		terminated = true
+		if !lockWithin(ctx, &c.sendMu, forcedHandoffInterruptLimit) {
+			return fail(errors.Join(errors.New("the provider did not release its pending send after it was stopped"), stopErr))
+		}
+	}
+	c.mu.Lock()
+	active := c.pendingTurnID != ""
+	c.mu.Unlock()
+	var result domain.ProviderSwitchResult
+	running, err := c.store.ListVisibleRunningTurnProviderIDs(ctx, c.conversation.ID)
+	if err == nil {
+		result.CancelledQueued, err = c.store.CancelAllQueuedTurns(ctx, c.conversation.ID, c.now())
+	}
+	for _, providerTurnID := range running {
+		if err != nil {
+			break
+		}
+		err = c.store.SettleTurn(ctx, c.conversation.ID, providerTurnID, domain.TurnStateInterrupted, "", c.now())
+		result.StoppedTurn = true
+	}
+	c.sendMu.Unlock()
+	if err != nil {
+		return fail(fmt.Errorf("stop turns before forced handoff: %w", err))
+	}
+	if active {
+		result.StoppedTurn = true
+		interruptCtx, cancel := context.WithTimeout(ctx, forcedHandoffInterruptLimit)
+		defer cancel()
+		if err := c.interruptForHandoff(interruptCtx); err != nil {
+			c.log.Warn("interrupt before forced handoff failed", "session", c.sessionID, "error", err)
+		}
+	}
+	return result, nil
+}
+
+var forcedHandoffInterruptLimit = 5 * time.Second
+
+func lockWithin(ctx context.Context, mu *sync.Mutex, limit time.Duration) bool {
+	deadline := time.Now().Add(limit)
+	for !mu.TryLock() {
+		if ctx.Err() != nil || !time.Now().Before(deadline) {
+			return false
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	return true
 }
 
 // AbortHandoff reopens source intake when a drain is cancelled before the source

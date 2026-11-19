@@ -237,7 +237,11 @@ scored AS (
     -- Ungrouped rows score, and tier, as themselves.
     SELECT r.*,
            CASE WHEN ? = 1 THEN r.session_best_rank + ? * r.session_tail ELSE r.rank END AS score,
-           CASE WHEN ? = 1 THEN r.session_exact_tier ELSE r.exact_tier END AS order_exact_tier
+           CASE WHEN ? = 1 THEN r.session_exact_tier ELSE r.exact_tier END AS order_exact_tier,
+           -- The name tier ranks sessions by relevance; single messages and a
+           -- recency sort keep their own order, though each row still says
+           -- whether its session is named for the query.
+           CASE WHEN ? = 1 AND ? = 0 THEN r.name_tier ELSE 1 END AS order_name_tier
     FROM tailed r
     WHERE r.position_in_session = 1
 ),
@@ -248,7 +252,7 @@ page AS (
     SELECT r.*, COUNT(*) OVER () AS match_total,
            CASE WHEN ? = 1 THEN r.created_at END AS recency
     FROM scored r
-    ORDER BY recency DESC, r.name_tier ASC, r.order_exact_tier ASC, r.score ASC, r.created_at DESC, r.id
+    ORDER BY recency DESC, r.order_name_tier ASC, r.order_exact_tier ASC, r.score ASC, r.created_at DESC, r.id
     LIMIT ? OFFSET ?
 )
 -- A reviewer chat stays searchable after its review is archived (which is
@@ -263,12 +267,12 @@ SELECT p.id, d.session_id, d.project_id, d.harness, d.kind,
        COALESCE(t.title, ''), d.created_at, p.score, p.session_matches,
        CASE WHEN ? = 1 THEN NULL ELSE t.body END,
        p.match_total, p.candidate_count,
-       COALESCE(rv.id, '')
+       COALESCE(rv.id, ''), p.name_tier = 0
 FROM page p
 JOIN session_search_docs d ON d.id = p.id
 LEFT JOIN session_search_text t ON t.id = p.id
 LEFT JOIN review rv ON d.source_key = 'review:' || rv.id AND rv.is_archived = 0 AND rv.interface_mode = 'chat'
-ORDER BY p.recency DESC, p.name_tier ASC, p.order_exact_tier ASC, p.score ASC, p.created_at DESC, p.id;`
+ORDER BY p.recency DESC, p.order_name_tier ASC, p.order_exact_tier ASC, p.score ASC, p.created_at DESC, p.id;`
 
 // browseSessionSearchDocsSQL lists one row per session for the recency view.
 //
@@ -415,14 +419,12 @@ func (s *Store) searchSessionSearchDocs(ctx context.Context, params domain.Sessi
 	if recent == 0 {
 		exact = params.ExactQuery
 	}
-	// The name tier orders sessions by relevance; a recency sort or a list of
-	// single messages has no use for it.
-	named := ""
-	if grouped == 1 && recent == 0 {
-		var err error
-		if named, err = s.sessionsNamedFor(ctx, params.HighlightTerms); err != nil {
-			return nil, false, err
-		}
+	// Sessions named for the query. They lead a relevance-ranked session list
+	// (order_name_tier), and every row says whether its session is one of them,
+	// whatever the sort or grouping.
+	named, err := s.sessionsNamedFor(ctx, params.HighlightTerms)
+	if err != nil {
+		return nil, false, err
 	}
 	weights := domain.SessionSearchKindWeights
 	args := make([]any, 0, 40)
@@ -442,7 +444,7 @@ func (s *Store) searchSessionSearchDocs(ctx context.Context, params domain.Sessi
 	if params.SkipSnippets {
 		skipSnippets = 1
 	}
-	args = append(args, grouped, recent, domain.SessionSearchTailDepth, grouped, domain.SessionSearchTailWeight, grouped, recent, limit, offset, skipSnippets)
+	args = append(args, grouped, recent, domain.SessionSearchTailDepth, grouped, domain.SessionSearchTailWeight, grouped, grouped, recent, recent, limit, offset, skipSnippets)
 	rows, err := s.searchReader().QueryContext(ctx, searchSessionSearchDocsSQL, args...)
 	if err != nil {
 		return nil, false, fmt.Errorf("search session index: %w", err)
@@ -458,7 +460,7 @@ func (s *Store) searchSessionSearchDocs(ctx context.Context, params domain.Sessi
 		if err := rows.Scan(
 			&docID, &hit.SessionID, &hit.ProjectID, &hit.Harness, &kind, &hit.MessageID, &hit.Seq,
 			&hit.Title, &createdAt, &hit.Rank, &hit.SessionMatches, &body, &hit.MatchTotal, &candidates,
-			&hit.ReviewID,
+			&hit.ReviewID, &hit.NamedForQuery,
 		); err != nil {
 			return nil, false, fmt.Errorf("scan session search hit: %w", err)
 		}

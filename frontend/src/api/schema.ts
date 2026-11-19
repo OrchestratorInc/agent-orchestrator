@@ -7506,7 +7506,11 @@ export interface components {
         ListSessionsResponse: {
             archived?: components["schemas"]["SessionArchiveSummary"];
             nextCursor?: string;
+            /** @enum {string} */
+            prState?: "open" | "draft" | "merged" | "closed";
             sessions: components["schemas"]["ControllersSessionView"][];
+            total?: null | number;
+            version?: string;
         };
         ListShellTerminalsResponse: {
             shellTerminals: components["schemas"]["ShellTerminalResponse"][];
@@ -7896,6 +7900,7 @@ export interface components {
             autoCompactWindow?: "200k" | "1m";
             effort?: string;
             fastMode?: boolean;
+            force?: boolean;
             idempotencyKey?: string;
             message?: components["schemas"]["SendConversationMessageRequest"];
             model?: string;
@@ -7905,8 +7910,13 @@ export interface components {
             ultracode?: boolean;
         };
         ProviderSwitchResponse: {
+            cancelledQueuedMessages?: number;
+            failedPendingApprovals?: boolean;
             message?: components["schemas"]["SendConversationMessageResponse"];
+            settingsUpdated?: boolean;
             status: string;
+            stoppedTurn?: boolean;
+            warnings?: string[];
         };
         PublishRenderRequest: {
             /** @description Also keep the page as a session artifact, a deliverable the user keeps. */
@@ -8167,6 +8177,12 @@ export interface components {
             /** @enum {string} */
             triggerSource: "manual" | "agent" | "auto";
             verdict: string;
+            /** @enum {string} */
+            workerNotice?: "" | "pending" | "sent" | "failed";
+            /** Format: date-time */
+            workerNoticeAttemptedAt?: null | string;
+            workerNoticeAttempts?: number;
+            workerNoticeError?: string;
         };
         ReviewRunResponse: {
             review: components["schemas"]["ReviewRun"];
@@ -8628,6 +8644,7 @@ export interface components {
             /** @enum {string} */
             kind: "title" | "user" | "assistant" | "tool" | "command" | "path";
             messageId?: string;
+            namedForQuery?: boolean;
             projectId: string;
             projectName?: string;
             /** Format: double */
@@ -9299,6 +9316,8 @@ export interface components {
             prUrl?: string;
             /** @description Return 409 instead of reusing when every open PR head is already being reviewed or already has a review. */
             rejectReviewedHead?: boolean;
+            /** @description Agent session that requested the pass and should receive its final outcome. */
+            requesterSessionId?: string;
             /** @description Start a fresh pass for already-reviewed current heads; a different reviewer may run alongside one that is still running. A person's rerun reuses an active pass from the same reviewer; an agent's rerun returns 409 REVIEW_ALREADY_RUNNING instead. */
             rerun?: boolean;
             /**
@@ -19132,6 +19151,8 @@ export interface operations {
                 limit?: number;
                 /** @description Opaque cursor returned by the previous page. Requires limit. */
                 cursor?: string;
+                /** @description Keep sessions owning a pull request in this state. The list is then ordered by when each session's newest such PR reached the state, and the response echoes prState and carries total. */
+                prState?: "open" | "draft" | "merged" | "closed";
             };
             header?: never;
             path?: never;

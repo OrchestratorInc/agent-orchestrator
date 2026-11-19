@@ -628,5 +628,13 @@ WHERE pr_key IN (
 AND EXISTS (SELECT 1 FROM pr WHERE pr.url = sqlc.arg(pr_url)
     AND pr.provider <> '' AND pr.provider_id <> '');
 
+-- name: ListPRStateTimes :many
+-- Which sessions own a PR in one state, and when each PR reached it, for the
+-- session list's PR-state filter. Narrow on purpose: the filter runs over the
+-- whole archive on every page, so it must not load the card facts.
+SELECT session_id, state_changed_at, updated_at
+FROM pr
+WHERE pr_state = ?;
+
 -- name: SetPRReviewOnly :execrows
 UPDATE pr SET review_only = ? WHERE url = ? AND session_id = ?;

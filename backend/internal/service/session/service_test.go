@@ -588,6 +588,48 @@ func (f *fakeStore) ListPRFactsForSession(_ context.Context, id domain.SessionID
 	return []domain.PRFacts{pr}, nil
 }
 
+// ListPRStateTimes answers from the same PR facts the fake serves to
+// ListPRFactsForSessions, so a test seeds one place.
+func (f *fakeStore) ListPRStateTimes(_ context.Context, state domain.PRState) (map[domain.SessionID]time.Time, error) {
+	out := map[domain.SessionID]time.Time{}
+	add := func(id domain.SessionID, pr domain.PRFacts) {
+		if fakePRFactsState(pr) != state {
+			return
+		}
+		at := pr.StateChangedAt
+		if at.IsZero() {
+			at = pr.UpdatedAt
+		}
+		if prev, seen := out[id]; !seen || at.After(prev) {
+			out[id] = at
+		}
+	}
+	for id, prs := range f.prFacts {
+		for _, pr := range prs {
+			add(id, pr)
+		}
+	}
+	for id, pr := range f.pr {
+		if _, listed := f.prFacts[id]; !listed {
+			add(id, pr)
+		}
+	}
+	return out, nil
+}
+
+func fakePRFactsState(pr domain.PRFacts) domain.PRState {
+	switch {
+	case pr.Merged:
+		return domain.PRStateMerged
+	case pr.Closed:
+		return domain.PRStateClosed
+	case pr.Draft:
+		return domain.PRStateDraft
+	default:
+		return domain.PRStateOpen
+	}
+}
+
 func (f *fakeStore) ListPRFactsForSessions(_ context.Context, ids []domain.SessionID) (map[domain.SessionID][]domain.PRFacts, error) {
 	f.listPRFactsCalls++
 	out := make(map[domain.SessionID][]domain.PRFacts, len(ids))

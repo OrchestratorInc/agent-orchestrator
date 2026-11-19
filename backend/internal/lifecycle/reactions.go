@@ -311,6 +311,12 @@ func (m *Manager) ApplyPRObservation(ctx context.Context, id domain.SessionID, o
 			return err
 		}
 	}
+	// After the review-feedback nudges above, so a "review done" notice
+	// follows the inline comments of the review it reports. A failure is left
+	// to the notice sweep rather than replaying this observation.
+	if err := m.DeliverReviewDoneNotices(ctx, id); err != nil {
+		slog.Default().WarnContext(ctx, "lifecycle: deliver review done notices", "session", id, "err", err)
+	}
 	// Surface deferred policy/parent-stack read errors only after independent
 	// nudges have been sent, so one failed lookup cannot hide another reaction.
 	if ciPolicyErr != nil {
@@ -1057,6 +1063,15 @@ func (m *Manager) sendOnce(ctx context.Context, id domain.SessionID, prURL, key,
 			return sendOnceAccounted, err
 		}
 		m.react.loaded[prURL] = true
+	}
+	if chat, ok := m.store.(reviewNoticeChatStore); ok && strings.HasPrefix(key, "comment:") {
+		rec, found, err := m.store.GetSession(ctx, id)
+		if err != nil {
+			return sendOnceSuppressed, err
+		}
+		if found && domain.NormalizeSessionMode(rec.Mode) == domain.SessionModeChat {
+			return m.sendChatReviewFeedbackLocked(ctx, chat, id, prURL, key, sig, msg, maxAttempts)
+		}
 	}
 
 	if m.react.seen[key] == sig {

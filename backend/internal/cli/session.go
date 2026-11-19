@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"net/url"
 	"os"
+	"slices"
 	"sort"
 	"strings"
 	"sync"
@@ -31,6 +32,8 @@ type sessionListOptions struct {
 	sessionOptions
 	all               bool
 	includeTerminated bool
+	agent             string
+	quiet             bool
 }
 
 type sessionCleanupOptions struct {
@@ -258,6 +261,7 @@ func newSessionCommand(ctx *commandContext) *cobra.Command {
 	cmd.AddCommand(newSessionClaimPRCommand(ctx))
 	cmd.AddCommand(newSessionHistoryCommand(ctx))
 	cmd.AddCommand(newSessionForkCommand(ctx))
+	cmd.AddCommand(newSessionSwitchCommand(ctx))
 	return cmd
 }
 
@@ -276,6 +280,8 @@ func newSessionListCommand(ctx *commandContext) *cobra.Command {
 	f.BoolVarP(&opts.all, "all", "a", false, "Include orchestrator sessions")
 	f.BoolVar(&opts.includeTerminated, "include-terminated", false, "Include terminated sessions")
 	f.BoolVar(&opts.json, "json", false, "Output as JSON")
+	f.StringVar(&opts.agent, "agent", "", "Only sessions running this agent, for example claude-code")
+	f.BoolVarP(&opts.quiet, "quiet", "q", false, "Print only session ids, one per line")
 	return cmd
 }
 
@@ -718,6 +724,10 @@ func writeClaimPRResult(cmd *cobra.Command, res claimPRResponse, review *bool) e
 }
 
 func (c *commandContext) listSessions(ctx context.Context, cmd *cobra.Command, opts sessionListOptions) error {
+	agent, err := knownAgentFlag(opts.agent)
+	if err != nil {
+		return err
+	}
 	params := url.Values{}
 	if opts.project != "" {
 		params.Set("project", opts.project)
@@ -738,6 +748,17 @@ func (c *commandContext) listSessions(ctx context.Context, cmd *cobra.Command, o
 		}
 	}
 	sessions := filterAndSortSessions(res.Sessions, opts.all)
+	if agent != "" {
+		sessions = slices.DeleteFunc(sessions, func(sess sessionDTO) bool { return sess.Harness != agent })
+	}
+	if opts.quiet {
+		for _, sess := range sessions {
+			if _, err := fmt.Fprintln(cmd.OutOrStdout(), sess.ID); err != nil {
+				return err
+			}
+		}
+		return nil
+	}
 	hiddenTerminatedCount := 0
 	if !opts.includeTerminated {
 		terminatedCount, terminatedOrchestratorCount, err := c.countHiddenTerminated(ctx, opts.project, opts.all)

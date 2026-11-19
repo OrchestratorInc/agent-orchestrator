@@ -408,7 +408,7 @@ func workerNativeReviewPrompt(project promptProject, hasOrchestrator bool) strin
 
 - Once your PR is pushed, the checks you can run locally pass, and you consider it ready, run ` + "`ao review trigger`" + `. Right after opening a new PR, pass its URL: ` + "`ao review trigger --pr <url>`" + `.
 - The reviewer's findings arrive in this session as PR review comments. Address each one, push, and run ` + "`ao review trigger`" + ` again for the new head.
-- An approval adds no comments, so check ` + "`ao review ls`" + ` for the verdict before reporting the work done. If it shows the run failed or was cancelled, run ` + "`ao review trigger`" + ` again; nothing else will tell you.`
+- When a review you requested ends, AO sends the requesting session one "AO review done" message with the verdict. For changes requested, read the linked review before reporting completion or requesting another pass. Inline findings may still be arriving. If delivery fails, check ` + "`ao review ls`" + `. Do not retry a user-cancelled review unless asked.`
 	}
 	return `## Native Review
 

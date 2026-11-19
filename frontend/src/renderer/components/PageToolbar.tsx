@@ -49,7 +49,7 @@ export function ToolbarSearch({ label, query, onQueryChange }: { label: string; 
 }
 
 /** One active filter from a page's Filter menu, removable in place. */
-export function FilterChip({ label, value, removeLabel, onRemove }: { label: string; value: string; removeLabel: string; onRemove: () => void }) {
+export function FilterChip({ label, value, removeLabel, onRemove }: { label: string; value?: string; removeLabel: string; onRemove: () => void }) {
 	return (
 		<Button
 			type="button"
@@ -60,8 +60,12 @@ export function FilterChip({ label, value, removeLabel, onRemove }: { label: str
 			aria-label={removeLabel}
 			onClick={onRemove}
 		>
-			<span className="text-muted-foreground">{label}:</span>
-			<span className="truncate">{value}</span>
+			{value === undefined ? <span className="truncate">{label}</span> : (
+				<>
+					<span className="text-muted-foreground">{label}:</span>
+					<span className="truncate">{value}</span>
+				</>
+			)}
 			<X aria-hidden="true" className="size-icon-xs text-muted-foreground" />
 		</Button>
 	);

@@ -943,6 +943,44 @@ func (q *Queries) ListPRFactsBySessions(ctx context.Context, jsonEach interface{
 	return items, nil
 }
 
+const listPRStateTimes = `-- name: ListPRStateTimes :many
+SELECT session_id, state_changed_at, updated_at
+FROM pr
+WHERE pr_state = ?
+`
+
+type ListPRStateTimesRow struct {
+	SessionID      domain.SessionID
+	StateChangedAt sql.NullTime
+	UpdatedAt      time.Time
+}
+
+// Which sessions own a PR in one state, and when each PR reached it, for the
+// session list's PR-state filter. Narrow on purpose: the filter runs over the
+// whole archive on every page, so it must not load the card facts.
+func (q *Queries) ListPRStateTimes(ctx context.Context, prState domain.PRState) ([]ListPRStateTimesRow, error) {
+	rows, err := q.db.QueryContext(ctx, listPRStateTimes, prState)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []ListPRStateTimesRow{}
+	for rows.Next() {
+		var i ListPRStateTimesRow
+		if err := rows.Scan(&i.SessionID, &i.StateChangedAt, &i.UpdatedAt); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const listPRsBySession = `-- name: ListPRsBySession :many
 SELECT url, session_id, number, pr_state, review_decision, ci_state, mergeability, updated_at, provider, host, repo, source_branch, target_branch, head_sha, title, additions, deletions, changed_files, author, base_sha, merge_commit_sha, is_draft, is_merged, is_closed, provider_state, provider_mergeable, provider_merge_state_status, html_url, created_at_provider, updated_at_provider, merged_at_provider, closed_at_provider, metadata_hash, ci_hash, review_hash, observed_at, ci_observed_at, review_observed_at, last_nudge_signature, state_changed_at, auto_inject_ci, provider_id, author_avatar_url, review_partial, review_only, head_from_fork, head_is_default_branch FROM pr
 WHERE pr.session_id = ?
