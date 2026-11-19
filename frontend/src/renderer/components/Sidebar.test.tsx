@@ -3438,7 +3438,7 @@ describe("Sidebar", () => {
 		expect(document.querySelector("[data-project-folder-icon] .icon-folder")).not.toBeInTheDocument();
 	});
 
-	it("fills the dot green for a finished turn the user has not opened, and leaves a hollow ring once read", () => {
+	it("fills the dot for a session the user has not opened since it changed, and leaves a hollow ring once read", () => {
 		useSessionReadStore.setState({ baseline: 0, readAt: { [sessionReadKey({ id: "proj-1-read" })]: Date.parse("2026-07-01T00:00:00Z") } });
 		const idle = { state: "idle", lastActivityAt: "2026-06-30T00:00:00Z" } as const;
 		renderSidebar({
@@ -3453,10 +3453,10 @@ describe("Sidebar", () => {
 		const dot = (title: string) => screen.getByLabelText(`Open ${title}`).querySelector("[data-session-idle] > span");
 
 		expect(dot("unread task")).toHaveAttribute("data-session-unread");
-		expect(dot("unread task")).toHaveClass("bg-status-ready");
+		expect(dot("unread task")).toHaveClass("bg-muted-foreground/60");
 		expect(dot("read task")).not.toHaveAttribute("data-session-unread");
 		expect(dot("read task")).toHaveClass("border");
-		expect(dot("read task")).not.toHaveClass("bg-status-ready");
+		expect(dot("read task")).not.toHaveClass("bg-muted-foreground/60");
 	});
 
 	it("badges a collapsed project's icon like the orchestrator button: attention, then working, then an unread finished turn", () => {

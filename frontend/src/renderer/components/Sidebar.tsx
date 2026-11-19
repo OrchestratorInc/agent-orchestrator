@@ -608,8 +608,8 @@ function floatAttention(sessions: WorkspaceSession[], hasManualOrder: boolean): 
 // spinner. 12px with a -2px side margin, so the slot is the 8px the old dot used.
 // Each state has its own glyph, so colour is never the only difference: a red
 // alert needs you now, an orange alert is a person's review next, a green pull
-// request is ready to merge. A row's blue spinner (working) and green dot (a
-// finished turn you have not opened) are drawn by SessionActivityGlyph.
+// request is ready to merge. A row's blue spinner (working) and its dot are
+// drawn by SessionActivityGlyph.
 const SESSION_MARKER_ICONS = {
 	attention: { Icon: CircleAlert, tone: "text-destructive" },
 	ready: { Icon: GitPullRequest, tone: "text-status-ready" },
@@ -634,9 +634,9 @@ function SessionMarkerIcon({ marker, popped, onPopEnd, ...rest }: {
 	);
 }
 
-// The spinner and the dot: a blue spinner while the agent works, a filled green
-// dot for a finished turn the user has not opened, a hollow grey ring otherwise.
-// Spinner, filled dot and ring differ in shape as well as colour.
+// The spinner and the dot: a blue spinner while the agent works, a filled grey
+// dot for a session that changed since the user last opened it, a hollow grey
+// ring otherwise.
 function SessionActivityGlyph({ state, ...rest }: {
 	state: "working" | "unread" | "read";
 } & Record<`data-${string}`, string | undefined>) {
@@ -653,7 +653,7 @@ function SessionActivityGlyph({ state, ...rest }: {
 			<span
 				className={cn(
 					"size-2 rounded-full",
-					state === "unread" ? "bg-status-ready" : "border border-muted-foreground/60",
+					state === "unread" ? "bg-muted-foreground/60" : "border border-muted-foreground/60",
 				)}
 				data-session-unread={state === "unread" ? "" : undefined}
 			/>
@@ -681,9 +681,8 @@ export function SessionStatusDot({ session, indicator }: {
 		if (previous.current !== marker && marker) setPopped(true);
 		previous.current = marker;
 	}, [marker]);
-	// Rows with nothing to flag still get a dot, so every title starts on the
-	// same column: filled green while a finished turn is unread, a hollow grey
-	// ring once the user has read it.
+	// Rows with nothing to flag still get a quiet dot, so every title starts on
+	// the same column: filled while unread, hollow once the user has read it.
 	const stopped =
 		session.activity?.state === "exited" || session.status === "exited" || session.status === "no_signal";
 	return (
