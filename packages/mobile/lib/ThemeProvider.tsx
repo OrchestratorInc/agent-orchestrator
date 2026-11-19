@@ -1,14 +1,26 @@
-import { createContext, useCallback, useContext, useEffect, useMemo, useState, type ReactNode } from "react";
-import { Appearance, useColorScheme } from "react-native";
+import { requireOptionalNativeModule } from "expo-modules-core";
+import { createContext, useCallback, useContext, useEffect, useLayoutEffect, useMemo, useState, type ReactNode } from "react";
+import { Appearance, AppState, Platform, processColor, StatusBar, useColorScheme } from "react-native";
+import { composeThemeFor } from "./composeTheme";
 import { themeFor, type ColorScheme, type Theme } from "./theme";
-import { DEFAULT_PREFERENCE, nativeColorSchemeOverride, resolveScheme, type ThemePreference } from "./themePreference";
-import { loadThemePreference, saveThemePreference } from "./themeStore";
+import {
+	DEFAULT_PREFERENCE,
+	DEFAULT_THEME_STYLE,
+	nativeColorSchemeOverride,
+	resolveScheme,
+	type ThemePreference,
+	type ThemeStyle,
+} from "./themePreference";
+import { saveThemePreference, saveThemeStyle, type ThemeSettings } from "./themeStore";
 
 type ThemeState = {
 	theme: Theme;
 	scheme: ColorScheme;
 	preference: ThemePreference;
 	setPreference: (p: ThemePreference) => void;
+	/** The named colour theme; Orchestrate unless the user picked another. */
+	style: ThemeStyle;
+	setStyle: (style: ThemeStyle) => void;
 };
 
 const ThemeContext = createContext<ThemeState | null>(null);
@@ -40,27 +52,26 @@ export function useThemedStyles<T>(factory: (t: Theme) => T): T {
 	return useMemo(() => factory(theme), [factory, theme]);
 }
 
-export function ThemeProvider({ children }: { children: ReactNode }) {
+/**
+ * `initial` is the stored choice, read by the root layout while the splash is
+ * still up (loadThemeSettings), so the first frame already draws the user's
+ * theme. Reading it here after mount painted one frame of the default palette
+ * first: a visible flash for anyone on a named theme or an explicit light/dark.
+ */
+export function ThemeProvider({ children, initial }: { children: ReactNode; initial?: ThemeSettings }) {
 	const systemScheme = useColorScheme();
-	const [preference, setPreferenceState] = useState<ThemePreference>(DEFAULT_PREFERENCE);
-
-	// The stored preference arrives a tick after mount. Until then we render the
-	// default ("system"), which already tracks the OS — so the common case shows
-	// the right theme immediately and only an explicit override can flash.
-	useEffect(() => {
-		let active = true;
-		loadThemePreference().then((p) => {
-			if (active) setPreferenceState(p);
-		});
-		return () => {
-			active = false;
-		};
-	}, []);
+	const [preference, setPreferenceState] = useState<ThemePreference>(initial?.preference ?? DEFAULT_PREFERENCE);
+	const [style, setStyleState] = useState<ThemeStyle>(initial?.style ?? DEFAULT_THEME_STYLE);
 
 	const setPreference = useCallback((next: ThemePreference) => {
 		// Optimistic: the switch should move under the finger, not after a write.
 		setPreferenceState(next);
 		void saveThemePreference(next);
+	}, []);
+
+	const setStyle = useCallback((next: ThemeStyle) => {
+		setStyleState(next);
+		void saveThemeStyle(next);
 	}, []);
 
 	useEffect(() => {
@@ -71,9 +82,72 @@ export function ThemeProvider({ children }: { children: ReactNode }) {
 	// live instead of only at next launch.
 	const scheme = resolveScheme(preference, systemScheme);
 
+	// The window sits below the React tree, so a page transition that opens a gap
+	// shows its colour — the platform default, white — and nothing inside the tree
+	// can cover it. Keeping the window on the palette is what stops the white edge
+	// around a screen as it moves.
+	const theme = themeFor(scheme, style);
+	const backgroundColor = theme.bgBase;
+	useEffect(() => {
+		// Optional, not required: this is a native module, and a build made before it
+		// was added has no ExpoSystemUI to bind to. `expo-system-ui`'s own JS calls
+		// requireNativeModule at import time and throws there — so importing the
+		// package is exactly what broke the app on such a build. Asking the runtime
+		// for the module directly returns null instead, and the only thing at stake
+		// is whether the window is tinted.
+		const systemUI = requireOptionalNativeModule<{ setBackgroundColorAsync(color: string): Promise<void> }>("ExpoSystemUI");
+		if (systemUI) void systemUI.setBackgroundColorAsync(backgroundColor).catch(() => {});
+	}, [backgroundColor]);
+
+	// Android's navigation bar is system chrome, and it follows the *activity's*
+	// theme rather than anything React Native draws. A phone in light mode with the
+	// app in dark mode therefore got Android's light contrast scrim under the
+	// gesture pill: a solid #e7e7e7 strip across the bottom of a dark screen. The
+	// bar's content and scrim follow this call instead of the device setting.
+	//
+	// Guarded like the window colour above, because the module is native and a
+	// build made before it would have nothing to bind to.
+	//
+	// The status bar's icons are set here too, not only by the root <StatusBar>:
+	// React Native drops a style change that arrives while no activity is
+	// attached, and <StatusBar> only sends again when the style changes, so a
+	// scheme flip that lands then would leave black icons on a dark screen (or
+	// the reverse) until the next flip. Both bars are re-applied each time the
+	// app comes forward as well as on every scheme change.
+	useEffect(() => {
+		if (Platform.OS !== "android") return;
+		const applySystemBars = () => {
+			StatusBar.setBarStyle(scheme === "dark" ? "light-content" : "dark-content");
+			const navigationBar = requireOptionalNativeModule<{ setStyle(style: "light" | "dark"): Promise<void> }>("ExpoNavigationBar");
+			void navigationBar?.setStyle(scheme === "dark" ? "light" : "dark").catch(() => {});
+		};
+		applySystemBars();
+		const subscription = AppState.addEventListener("change", (state) => {
+			if (state === "active") applySystemBars();
+		});
+		return () => subscription.remove();
+	}, [scheme]);
+
+	// Compose controls draw in this palette and family rather than the
+	// wallpaper's colours and Roboto. Optional for the same reason as above: a
+	// build without the `@expo/ui` patch has no `setAppTheme`. A layout effect,
+	// so the Hosts in the first frame after a theme change already have it.
+	useLayoutEffect(() => {
+		if (Platform.OS !== "android") return;
+		const expoUI = requireOptionalNativeModule<{ setAppTheme?(options: object): void }>("ExpoUI");
+		if (!expoUI?.setAppTheme) return;
+		const compose = composeThemeFor(theme, scheme === "dark");
+		const colors: Record<string, number> = {};
+		for (const [role, color] of Object.entries(compose.colors)) {
+			const argb = processColor(color);
+			if (typeof argb === "number") colors[role] = argb;
+		}
+		expoUI.setAppTheme({ ...compose, colors });
+	}, [theme, scheme]);
+
 	const value = useMemo<ThemeState>(
-		() => ({ theme: themeFor(scheme), scheme, preference, setPreference }),
-		[scheme, preference, setPreference],
+		() => ({ theme, scheme, preference, setPreference, style, setStyle }),
+		[theme, scheme, preference, setPreference, style, setStyle],
 	);
 
 	return <ThemeContext.Provider value={value}>{children}</ThemeContext.Provider>;

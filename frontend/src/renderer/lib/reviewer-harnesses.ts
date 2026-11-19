@@ -31,6 +31,7 @@ const REVIEWER_HARNESS_IDS = [
 	"kimchi",
 	"muse",
 	"opencode",
+	"opencode-v2",
 	"pi",
 ] as const satisfies readonly ReviewerHarnessId[];
 
@@ -40,6 +41,25 @@ void _everyReviewerHarnessIsListed;
 
 export const KNOWN_REVIEWER_HARNESS_IDS: ReadonlySet<string> = new Set(REVIEWER_HARNESS_IDS);
 
+export const WORKER_DEFAULT_REVIEWERS: Readonly<Partial<Record<string, ReviewerHarnessId>>> = {
+	"claude-code": "claude-code",
+	codex: "codex",
+	opencode: "opencode",
+	muse: "muse",
+	kimchi: "kimchi",
+};
+
 export function toReviewerHarnessId(value?: string): ReviewerHarnessId | undefined {
 	return value && KNOWN_REVIEWER_HARNESS_IDS.has(value) ? (value as ReviewerHarnessId) : undefined;
+}
+
+// Cloud runs only these reviewers (the control plane's
+// supportedCloudReviewerHarnesses), so a worker's mapped default outside them
+// falls back to Claude Code there, as the control plane's does.
+const CLOUD_REVIEWER_HARNESS_IDS: ReadonlySet<string> = new Set(["claude-code", "codex", "cursor"]);
+
+/** The reviewer a worker agent gets when none is chosen: the local mapping, kept to the reviewers the place it runs supports. */
+export function defaultReviewerHarness(workerHarness: string, cloud = false): ReviewerHarnessId {
+	const mapped = WORKER_DEFAULT_REVIEWERS[workerHarness] ?? "claude-code";
+	return cloud && !CLOUD_REVIEWER_HARNESS_IDS.has(mapped) ? "claude-code" : mapped;
 }

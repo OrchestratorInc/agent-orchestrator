@@ -1,14 +1,78 @@
-import { readFileSync } from "node:fs";
+import { existsSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { createRequire } from "node:module";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
 
 const source = readFileSync(fileURLToPath(new URL("./ChatTurnSettingsControl.ios.tsx", import.meta.url)), "utf8");
 
-describe("iOS turn settings menu anchor", () => {
-	it("sizes the native host to its label so the popup stays pinned left", () => {
-		expect(source).toContain("matchContents={{ horizontal: true, vertical: true }}");
-		expect(source).toContain('ignoreSafeArea="all"');
-		expect(source).not.toContain("<Spacer");
-		expect(source).not.toContain("maxWidth: 1000");
+describe("iOS chat controls row", () => {
+	// The turn has no settings sheet: everything is in the row's own menus.
+	it("lists the agent's models as checkable items, older versions one level down, then any other setting", () => {
+		expect(source).toContain("{modelChoices.latest.map((choice) => <Choice");
+		expect(source).toContain('<Menu label="Older models"');
+		expect(source).toContain("{modelChoices.older.map((choice) => <Choice");
+		expect(source).toContain("{otherRows.map((row) => <SettingPicker");
+		expect(source).not.toContain("Turn settings");
+	});
+
+	// As the new task's menu: each other agent opens onto its models, default
+	// first. A model chosen there only records the pick (the switch runs with
+	// the next message), and the running agent's model chosen again drops it.
+	it("lists the other agents after the models, each opening onto its models", () => {
+		expect(source).toContain('<Section title="Other agents">');
+		expect(source).toContain('label={<Label title={agent.label} icon={<HarnessImage harness={agent.id} />} />}');
+		expect(source).toContain("[{ id: AUTOMATIC_MODEL, label: defaultModelChoice(list?.defaultLabel) }, ...(list?.models ?? [])].map(choice)");
+		expect(source).toContain("onChoose={() => otherAgents.onPick({");
+		expect(source).toContain("if (pending) otherAgents?.onPick(undefined);");
+		expect(source).toContain("<ModelCapsuleLabel mark={<HarnessImage harness={pending.harness} />} title={pending.modelLabel} />");
+		expect(source.indexOf('<Section title="Other agents">')).toBeLessThan(source.indexOf("{otherRows.map((row) => <SettingPicker"));
+	});
+});
+
+describe("iOS other settings", () => {
+	// A checkmark image on a button is not announced; a picker's choice is.
+	it("offers each as a picker, or a toggle when it is on/off", () => {
+		expect(source).toContain("<Text key={choice.value} modifiers={[tag(choice.value)]}>{choice.label}</Text>");
+		expect(source).toContain("<Toggle label={row.label}");
+		expect(source).not.toContain('systemImage={choice.selected ? "checkmark" : undefined}');
+	});
+});
+
+describe("native approvals icon asset", () => {
+	it("provides sharp 1x, 2x, and 3x variants for both appearances", () => {
+		const root = new URL("../../assets/icons/CircleDashedCheck.imageset/", import.meta.url);
+		expect(existsSync(new URL("Contents.json", root))).toBe(true);
+		const catalog = JSON.parse(readFileSync(new URL("Contents.json", root), "utf8")) as {
+			images: Array<{ filename: string; scale: string; appearances?: Array<{ appearance: string; value: string }> }>;
+		};
+		for (const appearance of ["light", "dark"]) {
+			for (const scale of [1, 2, 3]) {
+				const entry = catalog.images.find((image) => image.scale === `${scale}x` && (appearance === "light"
+					? !image.appearances?.length
+					: image.appearances?.some((item) => item.appearance === "luminosity" && item.value === "dark")));
+				expect(entry).toBeDefined();
+				const png = readFileSync(new URL(entry!.filename, root));
+				expect(png.readUInt32BE(16)).toBe(18 * scale);
+				expect(png.readUInt32BE(20)).toBe(18 * scale);
+			}
+		}
+	});
+
+	it("copies the asset into a clean generated iOS project", () => {
+		const pluginUrl = new URL("../../plugins/withCircleDashedCheck.js", import.meta.url);
+		expect(existsSync(pluginUrl)).toBe(true);
+		const require = createRequire(import.meta.url);
+		const { copyCircleDashedCheckAssets } = require(fileURLToPath(pluginUrl)) as { copyCircleDashedCheckAssets(root: string, projectName: string): void };
+		const projectRoot = mkdtempSync(join(tmpdir(), "ao-icon-plugin-"));
+		try {
+			copyCircleDashedCheckAssets(projectRoot, "AO");
+			const target = join(projectRoot, "AO", "Images.xcassets", "CircleDashedCheck.imageset");
+			expect(readFileSync(join(target, "Contents.json"))).toEqual(readFileSync(new URL("../../assets/icons/CircleDashedCheck.imageset/Contents.json", import.meta.url)));
+			expect(readFileSync(join(target, "circle-dashed-check-dark@3x.png"))).toEqual(readFileSync(new URL("../../assets/icons/CircleDashedCheck.imageset/circle-dashed-check-dark@3x.png", import.meta.url)));
+		} finally {
+			rmSync(projectRoot, { recursive: true, force: true });
+		}
 	});
 });

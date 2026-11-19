@@ -1,0 +1,339 @@
+import { act, renderHook, waitFor } from "@testing-library/react";
+import type { ReactElement } from "react";
+import { beforeEach, describe, expect, it, vi } from "vitest";
+import type { WorkspaceSession } from "../types/workspace";
+import type { SessionInterfaceTransition, SessionInterfaceTransitionStatus } from "./useSessionInterfaceTransition";
+import { useSessionInterfaceSwitch } from "./useSessionInterfaceSwitch";
+
+type SwitchDialogElement = ReactElement<{ open: boolean; requireExplicitTerminalStop: boolean }>;
+
+const mocks = vi.hoisted(() => ({
+	getSession: vi.fn(),
+	start: vi.fn(),
+	resetStartError: vi.fn(),
+	context: vi.fn(),
+	status: undefined as SessionInterfaceTransitionStatus | undefined,
+	settling: false,
+	meUserId: "user-1" as string | undefined,
+}));
+
+vi.mock("./useCloudCp", () => ({ useCloudCp: () => ({ client: { getSession: mocks.getSession } }) }));
+vi.mock("./useCloudGate", () => ({ useCloudGate: () => ({ cloudEnabled: true }) }));
+vi.mock("./useCloudMeUserId", () => ({ useCloudMeUserId: () => mocks.meUserId }));
+vi.mock("./useSettings", () => ({ useSettings: () => ({ settings: { chatHarnesses: ["claude-code", "codex", "gemini", "cursor", "hermes"] } }) }));
+vi.mock("./useSessionInterfaceTransition", async (importOriginal) => ({
+	...await importOriginal<typeof import("./useSessionInterfaceTransition")>(),
+	useSessionInterfaceTransition: (sessionId: string, context: unknown) => {
+		mocks.context(sessionId, context);
+		return {
+			status: mocks.status,
+			transition: mocks.status?.transition,
+			isLoading: false,
+			statusError: undefined,
+			start: mocks.start,
+			starting: false,
+			startingPolicy: undefined,
+			settling: mocks.settling,
+			startError: undefined,
+			resetStartError: mocks.resetStartError,
+			cancel: vi.fn(),
+			cancelling: false,
+			cancelError: undefined,
+			acknowledgeNotice: vi.fn(),
+			acknowledgingNotice: false,
+			acknowledgeNoticeError: undefined,
+			refreshStatus: vi.fn(),
+		};
+	},
+}));
+
+const cloudSession: WorkspaceSession = {
+	id: "session-1",
+	workspaceId: "project-1",
+	workspaceName: "Project",
+	title: "Agent",
+	provider: "claude-code",
+	kind: "worker",
+	mode: "tui",
+	status: "idle",
+	updatedAt: "2026-10-01T00:00:00Z",
+	prs: [],
+	cloud: { orgId: "org-1", createdByUserId: "user-1" },
+};
+
+type SwitchControl = ReactElement<{ children: ReactElement<{ onClick: () => void; transition?: unknown; onCancel?: () => void }> }> | null;
+
+// The control is the switch button inside a hover wrapper.
+function requestSwitch(control: SwitchControl) {
+	if (!control) throw new Error("Switch action missing");
+	act(() => control.props.children.props.onClick());
+}
+
+describe("useSessionInterfaceSwitch Cloud handoff", () => {
+	beforeEach(() => {
+		localStorage.clear();
+		mocks.getSession.mockReset();
+		mocks.start.mockReset();
+		mocks.start.mockResolvedValue({});
+		mocks.resetStartError.mockReset();
+		mocks.context.mockReset();
+		mocks.status = { supported: true, targetMode: "chat" };
+		mocks.settling = false;
+		mocks.meUserId = "user-1";
+	});
+
+	it.each(["chat", "tui"] as const)("asks before an idle Hermes %s switch can reset context", (mode) => {
+		mocks.status = { supported: true, targetMode: mode === "chat" ? "tui" : "chat" };
+		const { cloud: _cloud, ...localSession } = cloudSession;
+		const { result } = renderHook(() => useSessionInterfaceSwitch("session-1", { ...localSession, provider: "hermes", mode }));
+		requestSwitch(result.current.switchControl as SwitchControl);
+		expect(mocks.start).not.toHaveBeenCalled();
+		const dialogs = result.current.dialogs as ReactElement<{ children: SwitchDialogElement[] }>;
+		expect(dialogs.props.children[0].props.open).toBe(true);
+	});
+
+	it.each(["codex", "claude-code", "cursor"] as const)("preserves %s model and effort when leaving Cloud Chat", async (provider) => {
+		mocks.status = { supported: true, targetMode: "tui" };
+		localStorage.setItem(`cloud-chat-settings:org-1:session-1:${provider}`, JSON.stringify({
+			model: "selected-model", reasoningEffort: "high",
+		}));
+		const { result } = renderHook(() => useSessionInterfaceSwitch("session-1", {
+			...cloudSession, provider, mode: "chat",
+		}, { orgId: "org-1" }));
+		act(() => result.current.onConversationWorkChange({
+			controllerBusy: false, hasRunningTurn: false, queuedTurnCount: 0,
+		}));
+		requestSwitch(result.current.switchControl as SwitchControl);
+		await waitFor(() => expect(mocks.start).toHaveBeenCalledWith({
+			targetMode: "tui", policy: "drain", historyPolicy: "strict",
+			model: "selected-model", reasoningEffort: "high",
+		}));
+	});
+
+	it("does not treat a handoff that finished before the view opened as a switch in progress", () => {
+		mocks.settling = true;
+		mocks.status = {
+			supported: true,
+			targetMode: "tui",
+			transition: {
+				id: "finished-earlier",
+				sessionId: "session-1",
+				sourceMode: "tui",
+				targetMode: "chat",
+				policy: "drain",
+				historyPolicy: "strict",
+				phase: "completed",
+				createdAt: "2026-10-01T00:00:00Z",
+				updatedAt: "2026-10-01T00:00:01Z",
+			},
+		};
+		const { cloud: _cloud, ...localSession } = cloudSession;
+		const { result } = renderHook(() => useSessionInterfaceSwitch("session-1", { ...localSession, mode: "chat" }));
+		expect(result.current.optimisticTarget).toBeUndefined();
+		expect(result.current.controllerTransitioning).toBe(false);
+	});
+
+	it.each(["claude-code", "codex", "gemini", "cursor"] as const)("shows the terminal again when the daemon refuses a %s switch to Chat", async (provider) => {
+		mocks.status = { supported: true, targetMode: "chat" };
+		mocks.start.mockRejectedValueOnce(new Error("handoff refused"));
+		const { cloud: _cloud, ...localSession } = cloudSession;
+		const { result } = renderHook(() => useSessionInterfaceSwitch("session-1", { ...localSession, provider, mode: "tui", status: "idle" }));
+		requestSwitch(result.current.switchControl as SwitchControl);
+		await waitFor(() => expect(mocks.start).toHaveBeenCalled());
+		await waitFor(() => expect(result.current.optimisticTarget).toBeUndefined());
+		expect(result.current.renderedMode).toBe("tui");
+	});
+
+	const accountMove = (mode: "chat" | "tui", phase: SessionInterfaceTransition["phase"]): SessionInterfaceTransitionStatus => ({
+		supported: true,
+		targetMode: mode === "chat" ? "tui" : "chat",
+		transition: {
+			id: "account-move",
+			sessionId: "session-1",
+			sourceMode: mode,
+			targetMode: mode,
+			policy: "drain",
+			historyPolicy: "strict",
+			phase,
+			sourceAccountId: "device-claude",
+			targetAccountId: "acct-b",
+			createdAt: "2026-10-01T00:00:00Z",
+			updatedAt: "2026-10-01T00:00:01Z",
+		},
+	});
+
+	it.each([
+		["draining", false],
+		["source_stopping", false],
+		["source_stopped", true],
+		["target_starting", true],
+	] as const)("queues chat sends during an account move in %s: %s", (phase, queues) => {
+		mocks.status = accountMove("chat", phase);
+		const { cloud: _cloud, ...localSession } = cloudSession;
+		const { result } = renderHook(() => useSessionInterfaceSwitch("session-1", { ...localSession, mode: "chat" }));
+		expect(result.current.accountMoveQueues).toBe(queues);
+	});
+
+	it.each(["chat", "tui"] as const)("keeps the %s surface and its content during an account move", (mode) => {
+		mocks.status = accountMove(mode, "target_starting");
+		const { cloud: _cloud, ...localSession } = cloudSession;
+		const { result } = renderHook(() => useSessionInterfaceSwitch("session-1", { ...localSession, mode }));
+		// Not an arrival: the conversation or terminal on screen stays.
+		expect(result.current.optimisticTarget).toBeUndefined();
+		expect(result.current.renderedMode).toBe(mode);
+		expect(result.current.accountMoveTarget).toBe("acct-b");
+		// The stop between the two agents is still not a crash.
+		expect(result.current.controllerTransitioning).toBe(mode === "chat");
+	});
+
+	it("falls back to the source interface when a switch fails after it was shown", () => {
+		mocks.status = {
+			supported: true,
+			targetMode: "chat",
+			transition: {
+				id: "failed-handoff",
+				sessionId: "session-1",
+				sourceMode: "tui",
+				targetMode: "chat",
+				policy: "drain",
+				historyPolicy: "strict",
+				phase: "failed",
+				errorCode: "TARGET_RESUME_FAILED",
+				createdAt: "2026-10-01T00:00:00Z",
+				updatedAt: "2026-10-01T00:00:01Z",
+			},
+		};
+		const { cloud: _cloud, ...localSession } = cloudSession;
+		const { result } = renderHook(() => useSessionInterfaceSwitch("session-1", { ...localSession, mode: "tui" }));
+		expect(result.current.optimisticTarget).toBeUndefined();
+		expect(result.current.renderedMode).toBe("tui");
+	});
+
+	it.each(["tui", "chat"] as const)("offers a guest of a shared session no switch from %s", (mode) => {
+		mocks.status = { supported: true, targetMode: mode === "chat" ? "tui" : "chat" };
+		const { result } = renderHook(() => useSessionInterfaceSwitch("session-1", {
+			...cloudSession, mode, cloud: { orgId: "org-1", shared: true },
+		}, { orgId: "org-1" }));
+		expect(result.current.switchControl).toBeNull();
+		expect(result.current.switchAction).toBeFalsy();
+	});
+
+	// An agent switch keeps the interface: Chat stays on screen with its
+	// "Switching" line, and the terminal is covered while the worker restarts.
+	it.each([["chat", false], ["tui", true]] as const)("covers a %s session during an agent switch: %s", (mode, covered) => {
+		mocks.status = {
+			supported: true,
+			targetMode: mode === "chat" ? "tui" : "chat",
+			transition: {
+				id: "agent-switch", sessionId: "session-1", sourceMode: mode, targetMode: mode, policy: "drain",
+				historyPolicy: "strict", phase: "target_starting",
+				createdAt: "2026-10-01T00:00:00Z", updatedAt: "2026-10-01T00:00:01Z",
+				...{ sourceHarness: "codex", targetHarness: "claude-code" },
+			} as SessionInterfaceTransition,
+		};
+		const { result } = renderHook(() => useSessionInterfaceSwitch("session-1", { ...cloudSession, mode }, { orgId: "org-1" }));
+		expect(result.current.agentSwitchTo).toBe("claude-code");
+		expect(result.current.cloudLoader).toBe(covered);
+		expect(result.current.renderedMode).toBe(mode);
+	});
+
+	it("keeps source Chat visible while a Cloud drain waits and scopes transition to its org", () => {
+		mocks.status = {
+			supported: true,
+			targetMode: "tui",
+			transition: {
+				id: "transition-1",
+				sessionId: "session-1",
+				sourceMode: "chat",
+				targetMode: "tui",
+				policy: "drain",
+				historyPolicy: "strict",
+				phase: "draining",
+				createdAt: "2026-10-01T00:00:00Z",
+				updatedAt: "2026-10-01T00:00:01Z",
+			},
+		};
+		const { result } = renderHook(() => useSessionInterfaceSwitch("session-1", { ...cloudSession, mode: "chat", status: "working" }, { orgId: "org-1" }));
+		expect(mocks.context).toHaveBeenCalledWith("session-1", { orgId: "org-1" });
+		expect(result.current.cloudLoader).toBe(false);
+		expect(result.current.controllerTransitioning).toBe(false);
+		expect(result.current.newWorkDisabled).toBe(true);
+		// While it waits, the control shows the running switch instead of the button.
+		expect((result.current.switchControl as SwitchControl)?.props.children.props.transition).toBeDefined();
+	});
+
+	// The control plane lets only the session's creator cancel its agent switch
+	// (403 for anyone else, an org admin included); an interface-only switch
+	// stays any member's to cancel.
+	it("offers the cancel of an agent switch only to the session's creator", () => {
+		const draining = (agentSwitch: boolean): SessionInterfaceTransitionStatus => ({
+			supported: true,
+			targetMode: "tui",
+			transition: {
+				id: "transition-1", sessionId: "session-1", sourceMode: "chat", targetMode: agentSwitch ? "chat" : "tui",
+				policy: "drain", historyPolicy: "strict", phase: "draining",
+				createdAt: "2026-10-01T00:00:00Z", updatedAt: "2026-10-01T00:00:01Z",
+				...(agentSwitch ? { sourceHarness: "codex", targetHarness: "claude-code" } : {}),
+			} as SessionInterfaceTransition,
+		});
+		const control = () => renderHook(() => useSessionInterfaceSwitch("session-1", { ...cloudSession, mode: "chat", status: "working" }, { orgId: "org-1" }))
+			.result.current.switchControl as SwitchControl;
+
+		mocks.status = draining(true);
+		expect(control()?.props.children.props.onCancel).toBeTypeOf("function");
+		mocks.meUserId = "user-2";
+		const member = control()?.props.children.props;
+		expect(member?.transition).toBeDefined();
+		expect(member?.onCancel).toBeUndefined();
+
+		mocks.status = draining(false);
+		expect(control()?.props.children.props.onCancel).toBeTypeOf("function");
+	});
+
+	// A move to another account runs on the creator's accounts too: the
+	// control plane lets only the creator cancel it (403 for anyone else).
+	it("offers the cancel of an account move only to the session's creator", () => {
+		mocks.status = {
+			supported: true,
+			targetMode: "tui",
+			transition: {
+				id: "move-1", sessionId: "session-1", sourceMode: "chat", targetMode: "chat",
+				policy: "drain", historyPolicy: "strict", phase: "draining",
+				createdAt: "2026-10-01T00:00:00Z", updatedAt: "2026-10-01T00:00:01Z",
+				sourceAccountId: "account-1", targetAccountId: "account-2",
+			} as SessionInterfaceTransition,
+		};
+		const control = () => renderHook(() => useSessionInterfaceSwitch("session-1", { ...cloudSession, mode: "chat", status: "working" }, { orgId: "org-1" }))
+			.result.current.switchControl as SwitchControl;
+
+		expect(control()?.props.children.props.onCancel).toBeTypeOf("function");
+		mocks.meUserId = "user-2";
+		const member = control()?.props.children.props;
+		expect(member?.transition).toBeDefined();
+		expect(member?.onCancel).toBeUndefined();
+	});
+
+	it("checks fresh Cloud activity before automatically interrupting an idle terminal", async () => {
+		mocks.getSession.mockResolvedValue({ session: { activityState: "idle", status: "idle" } });
+		const { result } = renderHook(() => useSessionInterfaceSwitch("session-1", cloudSession, { orgId: "org-1" }));
+		requestSwitch(result.current.switchControl as SwitchControl);
+		await waitFor(() => expect(mocks.start).toHaveBeenCalledWith({ targetMode: "chat", policy: "interrupt", historyPolicy: "strict" }));
+		expect(mocks.getSession).toHaveBeenCalledWith("org-1", "session-1");
+	});
+
+	it("asks before stopping when the fresh Cloud row reports work", async () => {
+		mocks.getSession.mockResolvedValue({ session: { activityState: "active", status: "working" } });
+		const { result } = renderHook(() => useSessionInterfaceSwitch("session-1", cloudSession, { orgId: "org-1" }));
+		requestSwitch(result.current.switchControl as SwitchControl);
+		await waitFor(() => expect((result.current.dialogs as ReactElement<{ children: SwitchDialogElement[] }>).props.children[0].props.open).toBe(true));
+		expect(mocks.start).not.toHaveBeenCalled();
+	});
+
+	it("requires an explicit stop when Cloud activity cannot be checked", async () => {
+		mocks.getSession.mockRejectedValue(new Error("offline"));
+		const { result } = renderHook(() => useSessionInterfaceSwitch("session-1", cloudSession, { orgId: "org-1" }));
+		requestSwitch(result.current.switchControl as SwitchControl);
+		await waitFor(() => expect((result.current.dialogs as ReactElement<{ children: SwitchDialogElement[] }>).props.children[0].props.requireExplicitTerminalStop).toBe(true));
+		expect(mocks.start).not.toHaveBeenCalled();
+	});
+});

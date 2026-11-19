@@ -23,14 +23,14 @@ Use these files to inspect the approved references. They show current behavior a
 
 | Surface | Primary reference files |
 | --- | --- |
-| App shell, page layout, topbar | [center-panel shell](frontend/src/renderer/components/CenterPanelShell.tsx), [topbar](frontend/src/renderer/components/ShellTopbar.tsx), [shell styles](frontend/src/renderer/styles.css) |
+| App shell, page layout, topbar | [center-panel shell](frontend/src/renderer/components/CenterPanelShell.tsx), [page topbar](frontend/src/renderer/components/PageTopbar.tsx), [shell styles](frontend/src/renderer/styles.css) |
 | Home landing | [HomePage](frontend/src/renderer/components/HomePage.tsx), [NavRowHighlight](frontend/src/renderer/components/NavRowHighlight.tsx) |
-| Sidebar, sidebar buttons, project rows | [Sidebar](frontend/src/renderer/components/Sidebar.tsx), [sidebar primitive](frontend/src/renderer/components/ui/sidebar.tsx), [topbar button](frontend/src/renderer/components/TopbarButton.tsx), [NavRowHighlight](frontend/src/renderer/components/NavRowHighlight.tsx) |
+| Sidebar, sidebar buttons, project rows | [Sidebar](frontend/src/renderer/components/Sidebar.tsx), [sidebar primitive](frontend/src/renderer/components/ui/sidebar.tsx), [Button](frontend/src/renderer/components/ui/button.tsx), [NavRowHighlight](frontend/src/renderer/components/NavRowHighlight.tsx) |
 | Shell resize grips | [ResizeHandle](frontend/src/renderer/components/ResizeHandle.tsx), [useResizable](frontend/src/renderer/hooks/useResizable.ts) |
-| Tokens, themes, typography | [tokens](frontend/src/styles/tokens.css), [renderer semantic styles](frontend/src/renderer/styles.css), [site-theme tokens](frontend/src/site-theme/tokens.css) |
+| Tokens, themes, typography | [tokens](frontend/src/styles/tokens.css), [renderer semantic styles](frontend/src/renderer/styles.css), [docs tokens](frontend/src/docs/src/styles/tokens.css) |
 | Tooltips, icons, buttons | [Tooltip](frontend/src/renderer/components/ui/tooltip.tsx), [Button](frontend/src/renderer/components/ui/button.tsx), [icon usage](frontend/src/renderer/components/icons.tsx) |
 | Shared dialog and field primitives | [Dialog](frontend/src/renderer/components/ui/dialog.tsx), [Input](frontend/src/renderer/components/ui/input.tsx), [Label](frontend/src/renderer/components/ui/label.tsx) |
-| New Task and its selectors | [New Task dialog](frontend/src/renderer/components/NewTaskDialog.tsx), [Task composer](frontend/src/renderer/components/TaskComposer.tsx), [settings option menu](frontend/src/renderer/components/settings/SettingsOptionMenu.tsx) |
+| New Task and its selectors | [New chat page](frontend/src/renderer/components/NewChatPage.tsx), [New Task dialog, cloud projects only for now](frontend/src/renderer/components/NewTaskDialog.tsx), [turn settings bar](frontend/src/renderer/components/chat/TurnSettingsBar.tsx), [task launch hook](frontend/src/renderer/components/TaskComposer.tsx), [settings option menu](frontend/src/renderer/components/settings/SettingsOptionMenu.tsx) |
 | Clone Repository and Add Project | [Clone Repository](frontend/src/renderer/components/CloneRepositoryDialog.tsx), [Add Project flow](frontend/src/renderer/components/CreateProjectFlow.tsx), [agent sheet](frontend/src/renderer/components/CreateProjectAgentSheet.tsx) |
 | Settings and settings selectors | [Settings dialog](frontend/src/renderer/components/SettingsDialog.tsx), [global settings](frontend/src/renderer/components/GlobalSettingsForm.tsx), [project settings](frontend/src/renderer/components/ProjectSettingsForm.tsx), [Select](frontend/src/renderer/components/ui/select.tsx), [Dropdown menu](frontend/src/renderer/components/ui/dropdown-menu.tsx) |
 | Kanban board and cards | [Board route](frontend/src/renderer/components/SessionsBoard.tsx), [renderer adapter](frontend/src/renderer/components/SessionsBoardAdapters.tsx), [shared board/card view](packages/product-ui/src/SessionsBoardView.tsx), [board state presentation](frontend/src/renderer/lib/session-presentation.ts) |
@@ -75,7 +75,7 @@ Never use visual polish to obscure a state transition, destructive action, conne
 - **Color:** rare, semantic, and stateful. A colored element must answer “what does this mean?”
 - **Shape:** modest radius, not a field of pills. A rounded control should read as a control; a panel should read as one composed container; ordinary metadata should remain text.
 - **Density:** compact by default. AO is used all day and needs high information capacity without cramped target sizes.
-- **Personality:** quiet competence. No gradients, glass, glow, stock imagery, decorative textures, emoji, or novelty visual language in the working UI.
+- **Personality:** quiet competence. No gradients, glass, glow, stock imagery, decorative textures, emoji, or novelty visual language in the working UI, except the transient glass surfaces defined below.
 
 ## 3. App architecture expressed visually
 
@@ -94,9 +94,9 @@ The layout is desktop-first. On constrained widths, preserve task content first,
 
 - **Home:** intentionally minimal. It introduces the next meaningful action, not a fake dashboard.
   - One centered column (`max-w-[640px]`); no decorative upward translate.
-  - "Star us" is a quiet text link with dashed underline on hover — never a TopbarButton, accent pill, or bordered card.
-  - Primary actions are a 2×2 grid; standalone agent is a grid cell, not a full-width hero CTA above. Connect Mobile stays in settings — not on home.
-  - Recent project rows use shared `NavRowHighlight` (same growing pill as sidebar), not a flat `hover:bg-interactive-hover` wash.
+  - "Star us" is a quiet text link with dashed underline on hover — never a filled button, accent pill, or bordered card.
+  - Primary actions are a 2×2 grid; standalone agent is a grid cell (Clone to the cloud takes that cell when Developer Mode and Cloud are on), never a full-width extra row. Card labels follow verb + source: Clone a repo, Open a local folder, Open a workspace, Clone to the cloud, Start a standalone agent. Connect Mobile stays in settings — not on home.
+  - Recent project rows use shared `NavRowHighlight` (same growing pill as sidebar), not a flat `hover:bg-interactive-hover` wash. On home the pill fills with `bg-card` so a hovered row matches the action cards.
 - **Board:** the operational overview. Each lane has a semantic reason to exist and derived status determines placement.
 - **Session:** the working room. The conversation or terminal is primary; tabs, files, PRs, and inspector are supporting context.
 - **Terminals:** a dedicated surface for standalone shells; do not accidentally route users here from unrelated project-board shortcuts.
@@ -106,10 +106,10 @@ The layout is desktop-first. On constrained widths, preserve task content first,
 
 Sidebar and inspector share `ResizeHandle`. Do not regress:
 
-- Grip is a fixed, hover/active-only pill on the **center-pane border** (sidebar: `.center-panel-surface` left; inspector: panel `border-l`) — not inset into the panel, not a CSS `::after` on the hit strip, not always-visible.
-- Height is **80vh**, vertically centered — not full inset-y / not titlebar-tall.
-- While dragging, the grip moves 1:1 with width delta and **must stop at the same min/max as the panel**. Never follow raw `clientX` past limits. Inspector also clamps against computed CSS `max-width` (`--session-inspector-max-width`); prop/`rangeRef` max alone is insufficient.
-- Call sites must pass the same `minWidth`/`maxWidth` as `useResizable`. No unclamped grip fallback.
+- On hover only, a 2px line is drawn over the **center-pane border** (sidebar: `.center-panel-surface` left; inspector: panel `border-l`), fading out at the top and bottom, with a short opacity fade in/out. No pill, nothing painted on click/drag, not always-visible.
+- The line is pure CSS inside the hit strip (no JS positioning); `useResizable` stays the only width integrator.
+- While dragging, width **must stop at the same min/max as the panel**. Never follow raw `clientX` past limits. Inspector also clamps against computed CSS `max-width` (`--session-inspector-max-width`); prop/`rangeRef` max alone is insufficient.
+- Call sites must pass the same `minWidth`/`maxWidth` as `useResizable`.
 
 ### Brand → home
 
@@ -140,7 +140,7 @@ Status is derived from durable runtime, PR, CI, and review facts. The renderer c
 | --- | --- | --- |
 | Working | `--color-status-working` / #60a5fa | active spinner, live activity, progress that is currently observed |
 | Needs human input | `--color-status-needs-you` / #f06445 | blocked, question, actionable interruption |
-| Validating | `--color-status-validating` / #facc15 | checks or verification in progress |
+| Validating | `--color-status-validating` / #e58bb5 | AO is turning the PR: checks, review pass, or fixing feedback |
 | Review / caution | `--color-status-in-review` / #f59e0b | review pending, changes requested |
 | Ready / success | `--color-status-ready` / #4ade80 | mergeable, approved, completed actionable success |
 | Merged | `--color-status-merged` / #c084fc | historical terminal completion state |
@@ -151,9 +151,17 @@ Status is derived from durable runtime, PR, CI, and review facts. The renderer c
 
 Use one fixed status slot where status belongs. Prefer an icon/glyph over a prose badge.
 
-1. If the session is actively working, show the working spinner.
+1. If the session is actively working, show the working spinner in `--color-status-working`.
 2. Otherwise, if a PR is relevant, show the PR glyph tinted by its actionable state.
 3. Otherwise, show a dot: amber/red for attention, muted for idle/complete.
+
+Sidebar session rows apply these rules with distinct shapes, so colour is never the only signal:
+
+- Working: blue spinner (`--color-status-working`). The title sweep is tinted toward the same blue at low strength (40% mixed into the foreground). The open row keeps the spinner without the sweep, and reduced motion stops both.
+- Waiting on the user, CI failing, merge conflicts, changes requested: red alert icon. A person's review next: orange alert icon.
+- Ready to merge: green pull-request icon. Merged: dimmed purple merge icon.
+- A session that changed since the user last opened it: filled muted dot. Once opened: hollow muted ring. The dots stay grey so the sidebar's colour goes to working and to what needs the user.
+- A collapsed project shows its strongest state, in this order: a red alert in place of its icon when any session waits on the user; otherwise its icon keeps the orchestrator button's corner dot, breathing muted while any agent works and solid accent for an unopened finished turn.
 
 Do not show multiple competing status chips on a session card or sidebar row. Text labels are allowed when needed for accessibility, an empty state, an inspector summary, or a decision the user must make.
 
@@ -187,10 +195,10 @@ Do not introduce one-off hex values, arbitrary radius, or unreviewed spacing. Us
 
 ## 7. Typography
 
-Use the loaded Geist families. Do not add a new web font or substitute a generic font for visual novelty.
+Use the font tokens. On macOS they resolve to the system faces (SF Pro / SF Mono); elsewhere to the bundled Geist families. Do not add a new web font or substitute a generic font for visual novelty.
 
-- **UI and body:** `--font-family-base` (`Geist Variable` first).
-- **Code, terminal, compact labels:** `--font-family-mono` (`Geist Mono Variable` first).
+- **UI and body:** `--font-family-base` (`-apple-system` on macOS, `Geist Variable` elsewhere).
+- **Code, terminal, compact labels:** `--font-family-mono` (`SF Mono` on macOS, `Geist Mono Variable` elsewhere).
 - **Weights:** 500 medium for controls and small hierarchy; 600 only for headings, selected values, and genuinely primary emphasis.
 - **Numbers:** use tabular figures for metrics, timestamps, diffs, and columns where alignment matters.
 
@@ -229,7 +237,7 @@ The base unit is 4px. Use the token scale, with 4/6/8/10/12/14/16/18px as the no
 - Board action: 30–36px.
 - Minimum pointer target for an ordinary row: 32px; use 36px when the interaction is high-frequency or imprecise.
 - Default sidebar: 240px; icon rail: 48px; mobile overlay: 288px.
-- Standard topbar row: 36px; Windows shell topbar: 56px.
+- Page and session topbar row: 36px on every platform. Windows adds its own 36px window titlebar above the panel.
 
 ### Radius and borders
 
@@ -239,7 +247,7 @@ The base unit is 4px. Use the token scale, with 4/6/8/10/12/14/16/18px as the no
 - `--radius-xs` and `--radius-sm` suit tiny controls; `--radius-md` suits buttons and inputs; `--radius-lg` is the maximum routine component radius.
 - `--radius-panel` is reserved for route-level framed surfaces and larger dialogs.
 - `--radius-full` is only for avatars, dots, and intentional pills.
-- Shadows are elevation cues for transient layers only: dialogs, menus, and tooltips. They are subtle, short-range, and neutral. No permanent card shadows, glow, or decorative drop shadow.
+- Shadows are elevation cues for transient layers only: dialogs, menus, and tooltips. Filled buttons use inset shading only. No permanent card shadows, glow, or decorative drop shadow.
 - Focus is not decoration: use the semantic focus ring/outline with sufficient contrast. Never remove it or replace it with a barely visible background shift.
 - Avoid cards inside cards. If hierarchy is weak, fix spacing, typography, or surface contrast before adding another border.
 
@@ -248,10 +256,17 @@ The base unit is 4px. Use the token scale, with 4/6/8/10/12/14/16/18px as the no
 ### Buttons
 
 - One clear primary action per focused region. It uses accent fill or strong foreground contrast.
+- Primary and accent labels use medium (500). Filled buttons choose black or white text with the selected 22% lighter bias against their resting fill and keep that text color on hover and press; primary/accent theme tokens provide the same selection for older browsers. This is a visual preference, not a guarantee of minimum WCAG contrast.
 - Secondary actions use a quiet surface; tertiary actions are text/icon controls. An outline is a contrast fallback, not the default secondary-button style.
 - Icon-only buttons require an accessible label and tooltip when their meaning is not universally obvious.
 - Destructive actions require destructive color and confirmation when the operation is difficult to reverse.
+- Destructive color is shared across palettes: Gruvbox red, `#fb4934` in dark mode and `#9d0006` in light mode.
 - Disabled states explain why when the missing prerequisite is not obvious.
+- Every action is a `Button` (`components/ui/button.tsx`); never a raw `<button>` outside `components/ui/`. Rows, cards, tabs and disclosure toggles use `Pressable` (`components/ui/pressable.tsx`); a dialog ✕ uses `CloseButton`.
+- Pick the variant for what the action means, not for a look: `primary` (the one main action), `accent` (brand-blue decision the turn waits on: approve, open link), `secondary` (quiet surface), `ghost`, `quiet` (muted toolbar/row actions), `destructive` (danger fill), `destructive-ghost` (remove/delete/kill), `link` (inline text), `outline` (contrast fallback only). Sizes: `xs` 24, `sm` 28, `default` 32, plus `icon-xs`/`icon-sm`/`icon`; `shape="pill"` only for chips. A `className` adjusts layout, never the variant's color, height or hover.
+- Ghost-family buttons (`ghost`, `quiet`, `destructive-ghost`) hover with the sidebar's growing pill. On-states come from `aria-pressed`, `data-state="open"` or `data-active="true"`, not from swapping variants. Tabs keep `role="tab"` + `aria-selected` and add `data-active` for the look.
+- Topbars, settings, and modal footers use the same `Button` variants as the rest of the app. Topbar icons use `quiet` with `size="icon-sm"`; there is no separate topbar button family.
+- Filled buttons adapt daisyUI's inset highlight and shaded edge, with no outer shadow or glow. Pressing deepens the background without moving the button. Toggle/open states keep that pressed surface. Buttons, rows, and other controls never scale or shift on press.
 
 ### Tooltips and iconography
 
@@ -265,6 +280,7 @@ The base unit is 4px. Use the token scale, with 4/6/8/10/12/14/16/18px as the no
 
 - Labels precede inputs. Placeholder text is an example, never the sole label.
 - Validation appears close to the field and uses both wording and semantic color.
+- Select/dropdown triggers use the secondary button inset surface; chat composer selectors use the ghost hover pill. Switches use inset track/thumb shading, background-only press feedback, and a sliding thumb with reduced-motion support.
 - A select/dropdown trigger is one compact control: selected value first, chevron second; it should not add a second visible label when the surrounding field label already establishes meaning.
 - Dropdown content is a single elevated surface with a quiet edge, consistent item height, clear selected/focus state, and dividers only between meaningful groups. Never make each option a separately bordered mini-card.
 - Settings and New Task selectors use the same shared menu/select primitive and option rhythm. Model, agent, mode, and settings choices must not invent bespoke pills or popovers.
@@ -276,10 +292,11 @@ The base unit is 4px. Use the token scale, with 4/6/8/10/12/14/16/18px as the no
 
 Every modal is one composed, elevated surface: a restrained overlay, one clear title, a close control, the decision/form body, and a concise action area when needed. Modal content has no ornamental header band, no nested card stack, no gradient, and no explanatory prose unless it changes the user's decision.
 
-- **New Task:** a single title line and the composer. The task input is the visual center; agent/model/mode controls are compact supporting choices. Do not repeat instructions the composer itself makes obvious. Submission feedback must stay in place and not rearrange the composer.
+Cmd+K, the board's archive, and the cloud New task dialog may use the shared `overlay-glass` surface to keep the underlying task visible. This exception is limited to those transient surfaces: use the shared background and blur tokens, preserve text contrast, and fall back to a solid surface in translucent windows or when reduced transparency is requested.
+
 - **Clone Repository:** compact back, title, and close controls establish its place in the Add Project sequence. Repository URL is code-like and uses mono; owner/provider identity may be an unobtrusive visual cue. Destination is one full-width chooser row with its action embedded at the trailing edge. Validate after intent to continue and place field errors directly below the field; do not turn errors into a large alarm card.
-- **Add Project:** present one decision at a time. The source picker is a shared container of adjacent choices with dividers—not three floating cards. Each row has a modest icon, a concise source name, and only the one line of detail needed to distinguish Clone, Local, and Workspace. Local/Cloud is a compact segmented choice; show the one decision-relevant hint below it only while the choice is ambiguous. Cloud sign-in and project creation remain part of this same flow rather than a competing dashboard.
-- **Settings:** use one modal split into a quiet navigation rail and a content pane. The rail is a list of compact icon-and-text rows with a restrained selected surface; it is not a collection of pills. The content pane gives the active section one sentence-case title, fields in logical groups, and no redundant introduction. For project settings, keep the persistent save action anchored in the rail/footer position so it is predictable and does not float beside every field.
+- **Add Project:** present one decision at a time. With Cloud on, the first step is two tiles, On this computer and Cloud, with one line each saying where agents run; the local sources come only after On this computer. The sources (Clone a repo, Open a local folder, Open a workspace, Start a standalone agent) are a 2×2 grid of the same tiles, matching the Home grid. A tile is borderless: a faint `interactive-hover` fill at rest, `interactive-active` on hover with no transition, a bare muted icon aligned with the title, and one short line saying why you would pick it, not restating the label. Steps cross-fade in place while the panel springs to the new height; nothing slides sideways. Cloud sign-in and project creation remain part of this same flow rather than a competing dashboard.
+- **Settings:** use one modal split into a quiet navigation rail and a content pane. The rail is a list of compact icon-and-text rows with a restrained selected surface; it is not a collection of pills. The content pane gives the active section one sentence-case title, fields in logical groups, and no redundant introduction. Each group is one card with no outline: a filled background groups it and hairline dividers separate its items (rows fit their content with 10px vertical padding); the page title and section headings share the rows' 16px text inset. For project settings, keep the persistent save action anchored in the rail/footer position so it is predictable and does not float beside every field.
 - **Errors and status:** show error text close to the failed action or field. Reserve a full-width alert region for a blocking, form-level failure; it is a state treatment, not a permanently outlined component.
 
 #### Settings language and agent-management rules
@@ -287,7 +304,7 @@ Every modal is one composed, elevated surface: a restrained overlay, one clear t
 - Settings names describe the user's job, not internal vocabulary. Use **Agents** for installing and configuring agent tools, and **Accounts** for signing in and managing Codex accounts. Do not use “Harness” or “Subscriptions” as navigation labels for these surfaces.
 - Remove introductory copy when the title, control, or nearby status already explains the task. Keep only text that changes a decision, explains a failure, or provides a required next step.
 - Use concise, sentence-case labels and ordinary search placeholders such as “Search agents”. Avoid trailing ellipses in simple search fields and avoid repeating the same context in a label, placeholder, and subtext.
-- Agent installation rows use one shared install control. The installed state is terminal: show a disabled **Installed** button, hide installation details, and do not show a separate check icon or retry/details affordance.
+- Agent installation rows use one shared install control: a ghost **Install · <method>** button with a borderless chevron menu for other methods. The installed state is terminal: show muted **Installed** text (not a button), hide installation details, and do not show a separate check icon or retry/details affordance.
 - When a completed install method is trustworthy, the secondary line may say “Installed via Homebrew”, “Installed via npm”, or “Installed via Official”. Never display internal cache fingerprints, hashes, or other implementation identifiers as user-facing versions.
 - Installation details are an expandable disclosure below the row's primary controls. Animate the details region between collapsed and expanded states, keep the disclosure control below the details, and align the content with the agent icon/list edge.
 - Icon-only actions must have an accessible name and a tooltip when their meaning is not obvious. If a text action already fits naturally, prefer the text action over an icon-only control.
@@ -295,6 +312,7 @@ Every modal is one composed, elevated surface: a restrained overlay, one clear t
 ### Kanban board and cards
 
 - The board is the project’s operational overview, not a KPI dashboard. The canonical delivery lanes are Working, Needs you, In review, and Ready to merge; archive is a separate history state.
+- The archive is not part of the board surface. A quiet Archived sessions button with its count sits under the lanes (30px, with an even 4px gap to the row's divider and the panel's bottom and left edges, so its label sits on the sidebar account row's line) and opens the archive in the Cmd+K surface: a full-height modal (it keeps its size however few cards match) with a focused search field over a grid of the archived sessions as compact board cards (same menu and actions; no Terminated status, PR progress line or footer strip: the title, then the branch with the time at its end, then the PRs on their own line), at least three to a row, every card in a row as tall as the tallest, newest first. One selection lights one card (the hover fill and a `border-strong` edge, switched instantly with no fade): the arrow keys move it through the grid as laid out (Left/Right one card within the row, stopping at its ends, Up/Down one row in the same column, Home/End, PageUp/PageDown), and the pointer takes it only when it actually moves. The search field keeps focus and points at the selected card (a combobox over a grid, since each card holds its own buttons and links). Enter or a click opens the session; ⌘↵ restores the selected card; ⌘⌫ asks to delete it through the same confirm as its trash button (from the search only when there is no text before the caret, so it never takes over text editing). Tab walks the selected card's own controls, then the close ✕, then back to the search. The search bar ends in the dialog's close ✕, and Cmd+K's Archived sessions (current project) and Archived sessions in a sidebar project's ⋮ and right-click menu (one shared list, with the count trailing, hidden while the archive is empty) open the same modal. Every entry point to it is named Archived sessions, a place, never a bare Archive, which reads as archiving the project; Archive stays the verb for archiving one session. It opens over whatever page is showing, never navigating there (only opening or restoring a session from it moves the user), and closing it leaves the page as it was.
 - Lanes are one continuous grid separated by shared vertical dividers, with a compact header: semantic dot, sentence-case name, and count. Do not turn every lane into a rounded panel.
 - A board card represents one session—the legitimate exception to “no individual borders.” It is an actionable object with a bounded, draggable/clickable area. Keep its edge quiet; attention is expressed by the single semantic status treatment, not extra colored strips, badges, or shadows.
 - Card information order: agent avatar + task title; branch only when it adds identity; PR/review evidence only when present; one derived status line; then compact time/usage metadata. Avoid duplicate status words, repeated provider names, and metric clutter.
@@ -304,7 +322,7 @@ Every modal is one composed, elevated surface: a restrained overlay, one clear t
 
 ### Shared-list rule
 
-When several peer objects are primarily chosen or scanned—projects, settings sections, source choices, dropdown options—use a shared surface with adjacent rows and subtle dividers where necessary. Use individual cards only when each object carries a distinct, actionable operational payload, as board sessions do.
+When several peer objects are primarily chosen or scanned—projects, settings sections, source choices, dropdown options—use a shared surface with adjacent rows and subtle dividers where necessary. Use individual cards only when each object carries a distinct, actionable operational payload, as board sessions do. Settings cards follow this with no outline: the filled background groups them and hairline dividers separate the items (rows fit their content with 10px vertical padding).
 
 ### Terminal and conversation
 
@@ -321,12 +339,15 @@ Motion is functional and modest.
 - Sidebar and route shell may use the established ~280ms settle transition where layout must remain spatially legible.
 - Use ease-out for entry, ease-in for exit, and ease-in-out for positional movement.
 - The working spinner/pulse may animate to show liveness. Do not animate text, metrics, or layout merely to make the interface feel busy.
+- Animations that loop or run while the user types animate only `transform` or `opacity`. Chromium runs those on the compositor; any other property (`background-position`, `mask-position`, `width`, `top`, `box-shadow`, color) restyles and repaints the element on the main thread every frame and delays input. `will-change` does not change that.
+- For a light sweep across text, copy `.sidebar-working-shimmer` in `styles.css`: a masked copy of the text moved with `transform`. Do not add new uses of `.chat-working-shimmer`, which animates `background-position`.
+- Check a new looping animation in a DevTools performance trace: while the page is otherwise idle it should show no Recalculate Style or Paint on every frame.
 - Respect reduced-motion preferences: remove nonessential transforms and reduce transitions to immediate state changes.
 
 ## 11. Platform and responsive behavior
 
-- **macOS:** maintain traffic-light clearance and the fixed titlebar navigation cluster. The shell topbar may be hidden when session-local chrome owns orientation.
-- **Windows/Linux:** shell topbar spans above the sidebar; preserve native/window-titlebar accommodations.
+- **macOS:** maintain traffic-light clearance and the fixed titlebar navigation cluster. Page and session headers are the drag region; controls inside them opt out.
+- **Windows/Linux:** each page renders its own header inside the center panel; preserve the Windows titlebar and Linux native frame and collapsed-sidebar inset.
 - **Narrow center panels:** compact secondary actions, then inspector content, before hiding the task itself.
 - **Sidebar:** may collapse to its icon rail or an overlay; every icon must remain labeled through tooltip and accessible name.
 - **Inspector:** collapses to zero without reflowing the active terminal/chat into an unusable transient width.
@@ -361,7 +382,7 @@ Test meaningful variants: dark/light theme, expanded/collapsed sidebar, long pro
 Reject these patterns in renderer work unless a specific exception is approved:
 
 - Generic SaaS hero/feature-grid language inside the application shell.
-- Decorative gradients, glows, glass, blobs, textures, or ornamental shadows.
+- Decorative gradients, glows, glass (except the Cmd+K, archive, and cloud New task surfaces defined above), blobs, textures, or ornamental shadows.
 - ALL CAPS labels, uppercase tracking used as decoration, or mono used to make ordinary prose look technical.
 - A rainbow of status colors, decorative accent borders, or color-only meaning.
 - Oversized avatars or icons that compete with task names and state.
@@ -412,6 +433,7 @@ Approve only when the answer to every applicable check is yes. Otherwise classif
 | --- | --- | --- |
 | 2026-09-03 | Dark-first, token-led, compact operational UI | Matches AO's long-running desktop workflow and renderer source of truth. |
 | 2026-09-03 | Geist/Geist Mono remain the typographic system | They are bundled, legible at dense sizes, and already define renderer hierarchy. |
+| 2026-10-09 | macOS uses SF Pro / SF Mono; Geist stays the bundled default elsewhere | System faces match native macOS chrome and get optical sizing for free. |
 | 2026-09-03 | Color is reserved for semantics and active focus | Parallel-agent supervision depends on fast, trustworthy scanning. |
 | 2026-09-03 | Shared list containers with dividers are preferred over spaced sibling cards | Better density and clearer grouping for projects and sessions. |
 | 2026-09-03 | Existing platform shell behavior is part of the design system | macOS traffic lights, Windows titlebar, and collapsible inspector are product behavior, not incidental CSS. |
@@ -424,3 +446,16 @@ Approve only when the answer to every applicable check is yes. Otherwise classif
 | 2026-09-16 | Home: quiet Star-us link; 2×2 action grid with standalone in-grid; recent rows use NavRowHighlight | Rejected accent CTAs, Connect Mobile on home, and flat hover washes — keep home minimal and aligned with sidebar row chrome. |
 | 2026-09-16 | Brand mark clicks to home with no hover/focus fill | Separate home affordance and sidebar focus wash on the brand were rejected. |
 | 2026-09-16 | Resize grips: fixed 80vh hover pill on center-pane border; clamp to panel min/max ∩ CSS max-width | Rejected always-on/`::after`/inset grips and unclamped pointer-following (inspector flew past both limits). |
+| 2026-10-08 | Resize grips: replaced the 80vh pill with a hover-only 2px line on the edge that fades out at both ends | The pill (including active/click state and cursor-following variants) looked bad; JS border tracking removed. |
+| 2026-10-09 | Home: with Developer Mode and Cloud on, Clone to the cloud replaces the standalone cell; card labels use verb + source; cards rest on `bg-card` and hover to `bg-accent`; recent rows sit under the grid with no heading of their own, one 40px line each (no path), hover pill on `bg-card` | A fifth full-width row broke the 2×2 grid; the old translucent hover made cards darker instead of lifting them; the separate recent-projects title and two-line rows made home taller than it needs to be. |
+| 2026-10-14 | Installed agent rows show muted "Installed" text; install is one ghost "Install · <method>" with a borderless chevron menu | A disabled filled button read as a control, and the bordered split pill broke the settings rule that only inputs, selects and switches carry an edge or fill. Supersedes the 2026-09-04 disabled-button row. |
+| 2026-10-14 | Settings cards: no outline, filled background groups them, hairline dividers between items, rows fit their content with 10px vertical padding | The person asked for borders only between items, not around containers. Rows sit 16px in from the card edge and the page title and section headings follow that inset. |
+| 2026-10-15 | New Task is a page, not a modal (cloud projects keep the dialog for now): the session's own chat with no session yet. An empty header-height strip (window drag on macOS) holds the session header's place, the empty chat centers in the window, the agent sits at the top of the model menu, and the project is the only control in a tray hung under the composer. Sending keeps everything in place with no composer shimmer; the composer stays usable for queued follow-ups while the session sets up, and the session header slides into the strip. Welcome sample prompts are a centered row of bordered pill chips with short labels | The modal hid the chat the task becomes, and every handoff moved the composer; the chips are an intentional pill exception, read as suggestions rather than list rows. |
+| 2026-11-01 | Add Project: Local/Cloud is a first step of two tiles, and the sources are a 2×2 grid of the same borderless tiles | Cloud sat in the same list as local sources, mixing "where agents run" with "where the code comes from"; tiles in both steps keep the flow consistent with Home. |
+| 2026-11-04 | One `Button` for every action, `Pressable` for rows/cards/tabs; ghost buttons use the growing hover pill; no press scale anywhere | The person disliked the tap-scale and found ~280 raw buttons and ~200 variant-restyling overrides; the sidebar's hover pill is the ghost interaction they want everywhere. |
+| 2026-11-05 | Every settled chat turn opens with "Worked for <time>": the fold, with a chevron, when the turn has steps; plain text when it went straight to its answer. The time never repeats on the action row. As a turn settles nothing in view jumps: "Worked for" fades into the row reserved under the prompt, the reply slides up into the room its steps left, and the live row fades where it was | The person wanted the time on every reply, and the time moved between the top of some turns and the action row of others; the settle handover dipped the whole chat and glided it back. |
+| 2026-11-08 | Sidebar updates are one 36px filled row above the footer (no outline or shadow): what is happening ("Update available", "Downloading update", "Ready to install", "Update failed") ending in the update icon, an arrow in a brand-blue circle. The whole row is the button that does the next thing (download, restart, retry), and hovering it steps the fill up a shade instantly (no fade, no growing pill inside an already filled strip); a download in progress is not pressable. Once a download starts the same circle fills with its progress, and when ready it is a solid brand-blue disc with the restart arrow cut out (never a circular icon inside a ring); a failed update is the same disc in the destructive red. No dismiss control and no separate button. "Update available" is plain text with the version (one "v", nightlies cut to their base) beside it in small dimmed text, and no hover card; and release notes live in Settings → Updates and the restart dialog. A failure's reason is in the row's tooltip. Downloads never show a percentage. Failing update checks never reach the sidebar; only a failed download or install does | The team found the orange "Update check failed" card loud for something nobody can act on, the grey "Restart to update" slab read as disabled, the percentage was noise, and the footer stacked up to five rows. An icon whose circle becomes the progress keeps one shape from Update to Restart. |
+| 2026-11-10 | The board's archive is a searchable modal of session cards in the Cmd+K surface, opened from a quiet Archive button under the lanes | The inline archive could not be searched and crowded the board. Compact palette-style rows were tried and rejected: the person wants the archived cards themselves, only inside the modal. |
+| 2026-11-13 | The archive's entry points (board button, sidebar project menu, Cmd+K) are labelled Archived sessions, not Archive | A bare Archive beside a project's other actions read as the verb, archiving the whole project. A noun names the place; Archive stays the verb for one session. |
+| 2026-11-18 | Looping animations animate only `transform` or `opacity`; working sidebar titles sweep a masked copy of the title with `transform` | The old `background-position` sweep repainted every working row each frame and delayed typing while replies streamed (ADEMark A8 median 50.1 to 35.4 ms). |
+| 2026-11-19 | Sidebar activity carries colour: the working spinner is blue, the working title sweep is tinted blue at low strength, the unread dot stays filled grey, and a collapsed project keeps its icon with the orchestrator button's corner dot for working and unopened finished turns (the red attention alert still replaces it) | Working and finished turns were both grey, so a long list had to be read row by row; the board already used the working blue. A green unread dot was tried and dropped: it competed with ready-to-merge green and made every changed row loud. Swapping a project's avatar for a spinner or dot hid which project it was; the corner dot already means "new reply" on the orchestrator button. |

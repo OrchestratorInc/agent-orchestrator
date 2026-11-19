@@ -1,0 +1,14 @@
+apply plugin: 'com.android.library'
+
+android {
+    namespace 'ao.mobile.selection'
+    compileSdk rootProject.ext.compileSdkVersion
+    defaultConfig {
+        minSdk rootProject.ext.minSdkVersion
+        targetSdk rootProject.ext.targetSdkVersion
+    }
+}
+
+dependencies {
+    implementation 'com.facebook.react:react-android'
+}

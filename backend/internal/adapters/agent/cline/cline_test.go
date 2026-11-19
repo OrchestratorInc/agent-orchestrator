@@ -3,6 +3,8 @@ package cline
 import (
 	"bytes"
 	"context"
+	"encoding/json"
+	"errors"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -221,6 +223,55 @@ func TestManifestIDMatchesHarness(t *testing.T) {
 	}
 }
 
+func TestSessionIDFromHook(t *testing.T) {
+	tests := []struct {
+		name    string
+		payload string
+		want    string
+		ok      bool
+	}{
+		{name: "current root session id", payload: `{"taskId":"conv_123","sessionContext":{"rootSessionId":"1788421369083_s110d"}}`, want: "1788421369083_s110d", ok: true},
+		{name: "root session id wins over legacy ulid", payload: `{"sessionContext":{"rootSessionId":"current-123"},"taskStart":{"taskMetadata":{"ulid":"legacy-123"}}}`, want: "current-123", ok: true},
+		{name: "legacy task start ulid", payload: `{"taskStart":{"taskMetadata":{"ulid":"legacy-start"}}}`, want: "legacy-start", ok: true},
+		{name: "legacy task resume ulid", payload: `{"taskResume":{"taskMetadata":{"ulid":"legacy-resume"}}}`, want: "legacy-resume", ok: true},
+		{name: "legacy task cancel ulid", payload: `{"taskCancel":{"taskMetadata":{"ulid":"legacy-cancel"}}}`, want: "legacy-cancel", ok: true},
+		{name: "legacy task complete ulid", payload: `{"taskComplete":{"taskMetadata":{"ulid":"legacy-complete"}}}`, want: "legacy-complete", ok: true},
+		{name: "trimmed", payload: `{"sessionContext":{"rootSessionId":"  session-456  "}}`, want: "session-456", ok: true},
+		{name: "task id is not resumable", payload: `{"taskId":"conv_123"}`, ok: false},
+		{name: "missing", payload: `{}`, ok: false},
+		{name: "blank", payload: `{"sessionContext":{"rootSessionId":"   "}}`, ok: false},
+		{name: "malformed", payload: `{`, ok: false},
+		{name: "oversized", payload: `{"sessionContext":{"rootSessionId":"` + strings.Repeat("x", maxHookSessionIDLen+1) + `"}}`, ok: false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got, ok := SessionIDFromHook([]byte(tt.payload))
+			if got != tt.want || ok != tt.ok {
+				t.Fatalf("SessionIDFromHook() = (%q, %v), want (%q, %v)", got, ok, tt.want, tt.ok)
+			}
+		})
+	}
+}
+
+func TestManagedHooksCoverClineTaskLifecycle(t *testing.T) {
+	want := map[clineHookSpec]bool{
+		{Event: "TaskStart", Subcommand: "session-start"}:  false,
+		{Event: "TaskResume", Subcommand: "session-start"}: false,
+		{Event: "TaskComplete", Subcommand: "stop"}:        false,
+		{Event: "TaskCancel", Subcommand: "stop"}:          false,
+	}
+	for _, got := range clineManagedHooks {
+		if _, ok := want[got]; ok {
+			want[got] = true
+		}
+	}
+	for spec, found := range want {
+		if !found {
+			t.Errorf("managed hook missing: %+v", spec)
+		}
+	}
+}
+
 func TestGetAgentHooksInstallsClineHooks(t *testing.T) {
 	plugin := &Plugin{resolvedBinary: "cline"}
 	workspace := t.TempDir()
@@ -249,7 +300,7 @@ func TestGetAgentHooksInstallsClineHooks(t *testing.T) {
 	}
 
 	for _, spec := range clineManagedHooks {
-		scriptPath := filepath.Join(hooksDir, spec.Event)
+		scriptPath := filepath.Join(hooksDir, clineHookScriptName(spec.Event))
 		data, err := os.ReadFile(scriptPath)
 		if err != nil {
 			t.Fatalf("read %s: %v", spec.Event, err)
@@ -258,7 +309,11 @@ func TestGetAgentHooksInstallsClineHooks(t *testing.T) {
 		if !strings.Contains(content, clineHookMarker) {
 			t.Fatalf("%s missing AO marker:\n%s", spec.Event, content)
 		}
-		if !strings.Contains(content, clineHookCommandPrefix+spec.Subcommand) {
+		if runtime.GOOS == "windows" {
+			if !strings.Contains(content, "hooks cline "+spec.Subcommand) {
+				t.Fatalf("%s missing ps1 forward arguments %q:\n%s", spec.Event, "hooks cline "+spec.Subcommand, content)
+			}
+		} else if !strings.Contains(content, clineHookCommandPrefix+spec.Subcommand) {
 			t.Fatalf("%s missing forward command %q:\n%s", spec.Event, clineHookCommandPrefix+spec.Subcommand, content)
 		}
 		info, err := os.Stat(scriptPath)
@@ -344,7 +399,7 @@ func TestUninstallHooksRemovesClineHooks(t *testing.T) {
 	}
 
 	for _, spec := range clineManagedHooks {
-		if hookutil.FileExists(filepath.Join(hooksDir, spec.Event)) {
+		if hookutil.FileExists(filepath.Join(hooksDir, clineHookScriptName(spec.Event))) {
 			t.Fatalf("%s still present after uninstall", spec.Event)
 		}
 	}
@@ -397,7 +452,6 @@ func TestGetRestoreCommandFalseWithoutAgentSessionID(t *testing.T) {
 		{"empty session ref", ports.SessionRef{}},
 		{"empty metadata", ports.SessionRef{Metadata: map[string]string{}}},
 		{"blank agent session metadata", ports.SessionRef{Metadata: map[string]string{ports.MetadataKeyAgentSessionID: "   "}}},
-		{"workspace path only", ports.SessionRef{WorkspacePath: "/some/path"}},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -415,6 +469,143 @@ func TestGetRestoreCommandFalseWithoutAgentSessionID(t *testing.T) {
 				t.Fatalf("cmd = %#v, want nil", cmd)
 			}
 		})
+	}
+}
+
+func TestGetRestoreCommandFindsInteractiveSessionInClineHistory(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("test helper is a shell script")
+	}
+	workspace := t.TempDir()
+	history, err := json.Marshal([]map[string]string{
+		{"sessionId": "other-session", "cwd": filepath.Join(workspace, "other")},
+		{"sessionId": "cline-session-123", "cwd": workspace},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	binary := filepath.Join(t.TempDir(), "cline")
+	script := "#!/bin/sh\nprintf '%s\\n' '" + string(history) + "'\n"
+	if err := os.WriteFile(binary, []byte(script), 0o700); err != nil {
+		t.Fatal(err)
+	}
+
+	plugin := &Plugin{resolvedBinary: binary}
+	cmd, ok, err := plugin.GetRestoreCommand(context.Background(), ports.RestoreConfig{
+		Session: ports.SessionRef{WorkspacePath: workspace, Metadata: map[string]string{}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !ok {
+		t.Fatal("ok = false, want true")
+	}
+	want := []string{binary, "--id", "cline-session-123"}
+	if !reflect.DeepEqual(cmd, want) {
+		t.Fatalf("restore cmd\nwant: %#v\n got: %#v", want, cmd)
+	}
+}
+
+func TestGetRestoreCommandRecoversStaleAgentSessionID(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("test helper is a shell script")
+	}
+	for _, tc := range []struct {
+		name, stored, history, want string
+		wantErr                     bool
+	}{
+		{"conversation ID", "conv_stale", "matching", "newest-session", false},
+		{"missing native ID", "deleted-session", "matching", "newest-session", false},
+		{"preserve valid ID", "older-session", "matching", "older-session", false},
+		{"no matching workspace", "deleted-session", "other", "", false},
+		{"history failure keeps stored ID", "stored-session", "failure", "stored-session", false},
+		{"malformed history keeps stored ID", "stored-session", "malformed", "stored-session", false},
+		{"history failure without stored ID", "", "failure", "", false},
+		{"malformed history without stored ID", "", "malformed", "", false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			workspace := t.TempDir()
+			home := t.TempDir()
+			t.Setenv("HOME", home)
+			t.Setenv("USERPROFILE", home)
+			entries := []map[string]string{{"sessionId": "other-session", "cwd": filepath.Join(workspace, "other")}}
+			if tc.history == "matching" {
+				entries = append(entries, map[string]string{"sessionId": "newest-session", "cwd": workspace}, map[string]string{"sessionId": "older-session", "cwd": workspace})
+			}
+			history, err := json.Marshal(entries)
+			if err != nil {
+				t.Fatal(err)
+			}
+			script := "#!/bin/sh\n[ \"$*\" = \"history --json --limit 100\" ] || exit 2\nprintf '%s\\n' '" + string(history) + "'\n"
+			if tc.history == "failure" {
+				script = "#!/bin/sh\nexit 1\n"
+			}
+			if tc.history == "malformed" {
+				script = "#!/bin/sh\nprintf '{'\n"
+			}
+			binary := filepath.Join(t.TempDir(), "cline")
+			if err := os.WriteFile(binary, []byte(script), 0o700); err != nil {
+				t.Fatal(err)
+			}
+			cmd, ok, err := (&Plugin{resolvedBinary: binary}).GetRestoreCommand(context.Background(), ports.RestoreConfig{
+				Session: ports.SessionRef{WorkspacePath: workspace, Metadata: map[string]string{ports.MetadataKeyAgentSessionID: tc.stored}},
+			})
+			if (err != nil) != tc.wantErr {
+				t.Fatalf("err = %v, wantErr %v", err, tc.wantErr)
+			}
+			if tc.want == "" {
+				if ok || cmd != nil {
+					t.Fatalf("restore = %v, %v; want no restore", cmd, ok)
+				}
+			} else if !ok || !reflect.DeepEqual(cmd, []string{binary, "--id", tc.want}) {
+				t.Fatalf("restore = %v, %v; want ID %s", cmd, ok, tc.want)
+			}
+		})
+	}
+}
+
+func TestGetRestoreCommandPreservesCancellation(t *testing.T) {
+	for _, storedID := range []string{"", "stored-session"} {
+		ctx, cancel := context.WithCancel(context.Background())
+		cancel()
+		cmd, selectedID, ok, err := (&Plugin{resolvedBinary: "cline"}).GetRestoreCommandWithSessionID(ctx, ports.RestoreConfig{
+			Session: ports.SessionRef{Metadata: map[string]string{ports.MetadataKeyAgentSessionID: storedID}},
+		})
+		if !errors.Is(err, context.Canceled) || ok || cmd != nil || selectedID != "" {
+			t.Fatalf("cancelled restore with stored ID %q = %q, %q, %v, %v", storedID, cmd, selectedID, ok, err)
+		}
+	}
+}
+
+func TestGetRestoreCommandUsesSavedHistoryWithoutGlobalScan(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("test helper is a shell script")
+	}
+	home, workspace := t.TempDir(), t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("USERPROFILE", home)
+	const nativeID = "1793289478728_shqn8"
+	dir := filepath.Join(home, ".cline", "data", "sessions", nativeID)
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	writeClineHistoryFixture(t, filepath.Join(dir, nativeID+".json"), `{"session_id":"1793289478728_shqn8","cwd":"WORKSPACE"}`, workspace)
+	writeClineHistoryFixture(t, filepath.Join(dir, nativeID+".messages.json"), `{"sessionId":"1793289478728_shqn8","messages":[{"role":"user","content":"keep this older conversation"}]}`, workspace)
+	marker := filepath.Join(t.TempDir(), "history-called")
+	t.Setenv("CLINE_HISTORY_MARKER", marker)
+	binary := filepath.Join(t.TempDir(), "cline")
+	script := "#!/bin/sh\nprintf called > \"$CLINE_HISTORY_MARKER\"\nexit 1\n"
+	if err := os.WriteFile(binary, []byte(script), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	cmd, selectedID, ok, err := (&Plugin{resolvedBinary: binary}).GetRestoreCommandWithSessionID(context.Background(), ports.RestoreConfig{
+		Session: ports.SessionRef{WorkspacePath: workspace, Metadata: map[string]string{ports.MetadataKeyAgentSessionID: nativeID}},
+	})
+	if err != nil || !ok || selectedID != nativeID || !reflect.DeepEqual(cmd, []string{binary, "--id", nativeID}) {
+		t.Fatalf("restore = %q, %q, %v, %v", cmd, selectedID, ok, err)
+	}
+	if _, err := os.Stat(marker); !os.IsNotExist(err) {
+		t.Fatalf("valid stored history triggered a global history scan: %v", err)
 	}
 }
 
@@ -496,6 +687,178 @@ func TestContextCancellationIsHonored(t *testing.T) {
 	}
 	if _, err := ResolveClineBinary(ctx); err == nil {
 		t.Fatal("ResolveClineBinary: expected context error")
+	}
+}
+
+func TestClineHookScriptNameIsPlatformAware(t *testing.T) {
+	for _, spec := range clineManagedHooks {
+		got := clineHookScriptName(spec.Event)
+		if runtime.GOOS == "windows" {
+			if got != spec.Event+".ps1" {
+				t.Fatalf("windows name = %q, want %q", got, spec.Event+".ps1")
+			}
+			continue
+		}
+		if got != spec.Event {
+			t.Fatalf("unix name = %q, want extensionless %q", got, spec.Event)
+		}
+	}
+}
+
+func TestRenderBashClineHookScript(t *testing.T) {
+	got := renderBashClineHookScript("session-start")
+	want := "#!/usr/bin/env bash\n" +
+		clineHookMarker + "\n" +
+		clineHookCommandPrefix + "session-start || true\n" +
+		`echo '{"cancel": false}'` + "\n"
+	if got != want {
+		t.Fatalf("bash hook script\nwant: %q\n got: %q", want, got)
+	}
+}
+
+func TestRenderPowerShellClineHookScript(t *testing.T) {
+	got := renderPowerShellClineHookScript("session-start")
+	if !strings.HasPrefix(got, clineHookMarker+"\n") {
+		t.Fatalf("ps1 hook script must start with marker comment:\n%s", got)
+	}
+	if strings.Contains(got, "#!/usr/bin/env bash") {
+		t.Fatalf("ps1 hook script must not carry a bash shebang:\n%s", got)
+	}
+	if !strings.Contains(got, "[Console]::OpenStandardInput().CopyTo($p.StandardInput.BaseStream)") {
+		t.Fatalf("ps1 hook script must forward raw stdin bytes to the dispatcher:\n%s", got)
+	}
+	if strings.Contains(got, "$input") || strings.Contains(got, "ReadToEnd()") {
+		t.Fatalf("ps1 hook script must not decode+re-encode stdin through the pipeline:\n%s", got)
+	}
+	if !strings.Contains(got, `Write-Output '{"cancel": false}'`) {
+		t.Fatalf("ps1 hook script must emit the continuation result:\n%s", got)
+	}
+}
+
+func TestRenderClineHookScriptFollowsPlatform(t *testing.T) {
+	got := renderClineHookScript("stop")
+	if runtime.GOOS == "windows" {
+		want := renderPowerShellClineHookScript("stop")
+		if got != want {
+			t.Fatalf("windows render diverged from ps1 renderer")
+		}
+		return
+	}
+	want := renderBashClineHookScript("stop")
+	if got != want {
+		t.Fatalf("unix render diverged from bash renderer")
+	}
+}
+
+func TestGetAgentHooksWritesPlatformScriptNames(t *testing.T) {
+	plugin := &Plugin{resolvedBinary: "cline"}
+	workspace := t.TempDir()
+	hooksDir := filepath.Join(workspace, clineHooksDirName, clineHooksSubDir)
+
+	cfg := ports.WorkspaceHookConfig{DataDir: t.TempDir(), SessionID: "sess-1", WorkspacePath: workspace}
+	if err := plugin.GetAgentHooks(context.Background(), cfg); err != nil {
+		t.Fatal(err)
+	}
+
+	for _, spec := range clineManagedHooks {
+		scriptPath := filepath.Join(hooksDir, clineHookScriptName(spec.Event))
+		if !hookutil.FileExists(scriptPath) {
+			t.Fatalf("expected AO hook script at %s", scriptPath)
+		}
+		// The other platform's naming must never be written alongside.
+		other := spec.Event + ".ps1"
+		if runtime.GOOS == "windows" {
+			other = spec.Event
+		}
+		if hookutil.FileExists(filepath.Join(hooksDir, other)) {
+			t.Fatalf("unexpected cross-platform script %s for %s", other, spec.Event)
+		}
+	}
+
+	// The generated .gitignore must cover the exact filenames written above,
+	// otherwise (notably the Windows `<Event>.ps1` form) the hooks stay
+	// untracked and keep session worktrees dirty.
+	gitignore, err := os.ReadFile(filepath.Join(hooksDir, ".gitignore"))
+	if err != nil {
+		t.Fatalf("read hooks .gitignore: %v", err)
+	}
+	for _, spec := range clineManagedHooks {
+		want := "/" + clineHookScriptName(spec.Event)
+		if !strings.Contains(string(gitignore), want+"\n") {
+			t.Fatalf(".gitignore missing entry %q:\n%s", want, gitignore)
+		}
+	}
+}
+
+func TestGetAgentHooksMigratesLegacyScripts(t *testing.T) {
+	plugin := &Plugin{resolvedBinary: "cline"}
+	workspace := t.TempDir()
+	hooksDir := filepath.Join(workspace, clineHooksDirName, clineHooksSubDir)
+	if err := os.MkdirAll(hooksDir, 0o750); err != nil {
+		t.Fatal(err)
+	}
+
+	// Seed an upgrade workspace: pre-fix marker-owned scripts under the other
+	// platform's name plus an AO-managed .gitignore covering only those names.
+	var gitignore strings.Builder
+	gitignore.WriteString(hookutil.GitignoreSentinel + "\n/.gitignore\n")
+	userLegacy := clineLegacyScriptName(clineManagedHooks[0].Event)
+	for _, spec := range clineManagedHooks {
+		legacy := clineLegacyScriptName(spec.Event)
+		if legacy == clineHookScriptName(spec.Event) {
+			t.Fatalf("legacy and current names coincide for %s on %s", spec.Event, runtime.GOOS)
+		}
+		if legacy == userLegacy {
+			// A user-authored file at a legacy path (no marker) must survive.
+			if err := os.WriteFile(filepath.Join(hooksDir, legacy), []byte("#!/usr/bin/env bash\necho user\n"), 0o700); err != nil {
+				t.Fatal(err)
+			}
+			continue
+		}
+		if err := os.WriteFile(filepath.Join(hooksDir, legacy), []byte(clineHookMarker+"\nlegacy\n"), 0o700); err != nil {
+			t.Fatal(err)
+		}
+		gitignore.WriteString("/" + legacy + "\n")
+	}
+	if err := os.WriteFile(filepath.Join(hooksDir, ".gitignore"), []byte(gitignore.String()), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	cfg := ports.WorkspaceHookConfig{DataDir: t.TempDir(), SessionID: "sess-1", WorkspacePath: workspace}
+	if err := plugin.GetAgentHooks(context.Background(), cfg); err != nil {
+		t.Fatal(err)
+	}
+
+	for _, spec := range clineManagedHooks {
+		current := clineHookScriptName(spec.Event)
+		if !hookutil.FileExists(filepath.Join(hooksDir, current)) {
+			t.Fatalf("expected migrated hook script at %s", current)
+		}
+		legacyPath := filepath.Join(hooksDir, clineLegacyScriptName(spec.Event))
+		if clineLegacyScriptName(spec.Event) == userLegacy {
+			data, err := os.ReadFile(legacyPath)
+			if err != nil {
+				t.Fatalf("user-authored legacy file was removed: %v", err)
+			}
+			if strings.Contains(string(data), clineHookMarker) {
+				t.Fatalf("user-authored legacy file was overwritten: %s", data)
+			}
+			continue
+		}
+		if hookutil.FileExists(legacyPath) {
+			t.Fatalf("legacy marker-owned script %s not removed for %s", clineLegacyScriptName(spec.Event), spec.Event)
+		}
+	}
+
+	content, err := os.ReadFile(filepath.Join(hooksDir, ".gitignore"))
+	if err != nil {
+		t.Fatalf("read hooks .gitignore: %v", err)
+	}
+	for _, spec := range clineManagedHooks {
+		want := "/" + clineHookScriptName(spec.Event)
+		if !strings.Contains(string(content), want+"\n") {
+			t.Fatalf(".gitignore missing migrated entry %q:\n%s", want, content)
+		}
 	}
 }
 

@@ -10,6 +10,7 @@ import (
 
 	"github.com/aoagents/agent-orchestrator/backend/internal/httpd/apispec"
 	"github.com/aoagents/agent-orchestrator/backend/internal/httpd/envelope"
+	"github.com/aoagents/agent-orchestrator/backend/internal/httpd/requestscope"
 	"github.com/aoagents/agent-orchestrator/backend/internal/mobilebridge"
 )
 
@@ -27,6 +28,8 @@ type PushRegistry interface {
 // holding the connection password can register.
 type PushController struct {
 	Registry PushRegistry
+	// Devices links a push registration to the device token that made it.
+	Devices *mobilebridge.AccessDevices
 	// Now stamps CreatedAt/LastSeenAt; overridable in tests. Defaults to time.Now.
 	Now func() time.Time
 }
@@ -89,12 +92,17 @@ func (c *PushController) register(w http.ResponseWriter, r *http.Request) {
 		Token:      req.Token,
 		Platform:   req.Platform,
 		DeviceName: req.DeviceName,
+		HostName:   req.HostName,
 		CreatedAt:  now,
 		LastSeenAt: now,
 	}
 	if err := c.Registry.Upsert(dev); err != nil {
 		envelope.WriteAPIError(w, r, http.StatusInternalServerError, "internal", "PUSH_REGISTER", err.Error(), nil)
 		return
+	}
+	if credential := requestscope.CredentialFrom(r.Context()); c.Devices != nil && credential.Kind == requestscope.CredentialDevice && req.InstallID != "" {
+		// Best effort: the registration stands, and the next one links it.
+		_ = c.Devices.LinkInstall(credential.DeviceID, req.InstallID)
 	}
 	envelope.WriteJSON(w, http.StatusOK, PushDeviceEnvelope{Device: PushDeviceResponse{
 		Token:      dev.Token,
@@ -137,6 +145,11 @@ func (c *PushController) unpair(w http.ResponseWriter, r *http.Request) {
 		envelope.WriteAPIError(w, r, http.StatusInternalServerError, "internal", "DEVICE_UNPAIR_FAILED",
 			"Could not unpair the device", nil)
 		return
+	}
+	// A phone that forgets the host gives up its token. Its connections stay open:
+	// one carries this response.
+	if credential := requestscope.CredentialFrom(r.Context()); c.Devices != nil && credential.Kind == requestscope.CredentialDevice {
+		_, _, _ = c.Devices.Revoke(credential.DeviceID)
 	}
 	w.WriteHeader(http.StatusNoContent)
 }

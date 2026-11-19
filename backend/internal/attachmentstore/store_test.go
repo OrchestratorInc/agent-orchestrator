@@ -7,7 +7,9 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
+	"time"
 
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
 )
@@ -34,7 +36,7 @@ func TestStoreImportsBeforeWorkspaceRemovalAndMaterializesAfterRestore(t *testin
 	if err := os.MkdirAll(workspace, 0o750); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := store.MaterializeWorkspace(context.Background(), "ao-1", workspace); err != nil {
+	if _, err := store.MaterializeWorkspace(context.Background(), "ao-1", workspace, nil); err != nil {
 		t.Fatalf("MaterializeWorkspace: %v", err)
 	}
 
@@ -44,6 +46,36 @@ func TestStoreImportsBeforeWorkspaceRemovalAndMaterializesAfterRestore(t *testin
 	}
 	if string(got) != string(want) {
 		t.Fatalf("restored attachment = %q, want %q", got, want)
+	}
+}
+
+func TestMaterializeWorkspacePreparesOnceBeforeWriting(t *testing.T) {
+	store := New(t.TempDir())
+	workspace := t.TempDir()
+	for _, name := range []string{"attachment-first.png", "attachment-second.png"} {
+		if err := store.PutCanonical(context.Background(), "ao-1", name, []byte(name)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	guardCalls := 0
+	guard := func() error {
+		guardCalls++
+		if _, err := os.Stat(filepath.Join(workspace, filepath.FromSlash(WorkspaceDir), "attachment-first.png")); !errors.Is(err, os.ErrNotExist) {
+			t.Fatalf("guard ran after workspace write: %v", err)
+		}
+		return nil
+	}
+	if materialized, err := store.MaterializeWorkspace(context.Background(), "ao-1", workspace, guard); err != nil || !materialized {
+		t.Fatalf("materialize = (%v, %v), want success", materialized, err)
+	}
+	if guardCalls != 1 {
+		t.Fatalf("guard calls = %d, want 1", guardCalls)
+	}
+	if materialized, err := store.MaterializeWorkspace(context.Background(), "ao-2", workspace, guard); err != nil || materialized {
+		t.Fatalf("empty materialize = (%v, %v), want no files", materialized, err)
+	}
+	if guardCalls != 1 {
+		t.Fatalf("empty materialization called guard: %d", guardCalls)
 	}
 }
 
@@ -71,6 +103,31 @@ func TestStorePutWritesCanonicalAndWorkspaceCopies(t *testing.T) {
 	defer func() { _ = file.Close() }()
 	if !info.Mode().IsRegular() || info.Size() != int64(len(want)) {
 		t.Fatalf("canonical info = %#v", info)
+	}
+}
+
+func TestStorePutAcceptsFileAbovePreviousLimit(t *testing.T) {
+	const size = 11 << 20
+	store := New(t.TempDir())
+	workspace := t.TempDir()
+	name := "attachment-video.mov"
+	if err := store.Put(context.Background(), "ao-1", workspace, name, make([]byte, size)); err != nil {
+		t.Fatalf("Put 11 MiB video: %v", err)
+	}
+	file, info, err := store.Open(context.Background(), "ao-1", name)
+	if err != nil {
+		t.Fatalf("Open canonical video: %v", err)
+	}
+	defer func() { _ = file.Close() }()
+	if info.Size() != size {
+		t.Fatalf("canonical video size = %d, want %d", info.Size(), size)
+	}
+	projection, err := os.Stat(filepath.Join(workspace, filepath.FromSlash(WorkspaceDir), name))
+	if err != nil {
+		t.Fatalf("stat workspace video: %v", err)
+	}
+	if projection.Size() != size {
+		t.Fatalf("workspace video size = %d, want %d", projection.Size(), size)
 	}
 }
 
@@ -247,7 +304,7 @@ func TestStoreMaterializeRejectsUnsafeWorkspaceDestination(t *testing.T) {
 			t.Skipf("symlinks unavailable: %v", err)
 		}
 
-		if _, err := store.MaterializeWorkspace(context.Background(), "ao-1", workspace); err == nil {
+		if _, err := store.MaterializeWorkspace(context.Background(), "ao-1", workspace, nil); err == nil {
 			t.Fatal("MaterializeWorkspace accepted a symlinked attachment directory")
 		}
 		if _, err := os.Stat(filepath.Join(outside, name)); !errors.Is(err, fs.ErrNotExist) {
@@ -257,7 +314,7 @@ func TestStoreMaterializeRejectsUnsafeWorkspaceDestination(t *testing.T) {
 
 	t.Run("empty workspace path", func(t *testing.T) {
 		t.Chdir(t.TempDir())
-		if _, err := store.MaterializeWorkspace(context.Background(), "ao-1", ""); err == nil {
+		if _, err := store.MaterializeWorkspace(context.Background(), "ao-1", "", nil); err == nil {
 			t.Fatal("MaterializeWorkspace accepted an empty workspace path")
 		}
 	})
@@ -274,7 +331,7 @@ func TestStoreMaterializeRestoresCanonicalBytesOverExistingProjection(t *testing
 	if err := os.WriteFile(projection, []byte("tampered"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := store.MaterializeWorkspace(context.Background(), "ao-1", workspace); err != nil {
+	if _, err := store.MaterializeWorkspace(context.Background(), "ao-1", workspace, nil); err != nil {
 		t.Fatal(err)
 	}
 	got, err := os.ReadFile(projection)
@@ -307,35 +364,123 @@ func TestStorePutPreservesExistingAttachmentOnNameCollision(t *testing.T) {
 	}
 }
 
-func TestStorePutRetainsAttachmentSizeLimit(t *testing.T) {
+func TestStorePutRefusesEmptyAttachment(t *testing.T) {
 	store := New(t.TempDir())
 	workspace := t.TempDir()
-	if err := store.Put(context.Background(), "ao-1", workspace, "attachment-empty.bin", nil); err == nil {
-		t.Fatal("Put accepted an empty attachment")
-	}
-	const maxAttachmentBytes = 10 << 20
-	if err := store.Put(context.Background(), "ao-1", workspace, "attachment-large.bin", make([]byte, maxAttachmentBytes+1)); err == nil {
-		t.Fatal("Put accepted an attachment larger than 10 MiB")
+	if err := store.Put(context.Background(), "ao-1", workspace, "attachment-empty.bin", nil); !errors.Is(err, ErrEmpty) {
+		t.Fatalf("Put empty attachment error = %v, want ErrEmpty", err)
 	}
 }
 
-func TestStoreOpenDoesNotServeOversizedCanonicalFile(t *testing.T) {
+func TestStoreUploadLinksLargeFileWithoutACap(t *testing.T) {
+	dataDir := t.TempDir()
+	workspace := t.TempDir()
+	store := New(dataDir)
+	ctx := context.Background()
+	size := int64(MaxFileBytes + 1)
+	id, got, err := store.Upload(ctx, io.LimitReader(zeroReader{}, size))
+	if err != nil {
+		t.Fatalf("Upload: %v", err)
+	}
+	if got != size || ValidateUploadID(id) != nil {
+		t.Fatalf("Upload = %q, %d; want a valid id and %d bytes", id, got, size)
+	}
+	name := "attachment-large.bin"
+	if err := store.PutSource(ctx, "ao-1", workspace, name, Source{Upload: id}); err != nil {
+		t.Fatalf("PutSource from upload: %v", err)
+	}
+	uploadInfo, err := os.Stat(filepath.Join(dataDir, uploadsDir, id))
+	if err != nil {
+		t.Fatal(err)
+	}
+	canonicalInfo, err := os.Stat(filepath.Join(dataDir, durableDir, "ao-1", name))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !os.SameFile(uploadInfo, canonicalInfo) {
+		t.Fatal("canonical attachment is a copy, want a hard link to the upload")
+	}
+	workspaceInfo, err := os.Stat(filepath.Join(workspace, filepath.FromSlash(WorkspaceDir), name))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if workspaceInfo.Size() != size || os.SameFile(workspaceInfo, canonicalInfo) {
+		t.Fatal("worktree attachment must be its own full copy")
+	}
+	file, info, err := store.Open(ctx, "ao-1", name)
+	if err != nil {
+		t.Fatalf("Open large attachment: %v", err)
+	}
+	_ = file.Close()
+	if info.Size() != size {
+		t.Fatalf("Open size = %d, want %d", info.Size(), size)
+	}
+}
+
+func TestStoreUploadRefusesUnknownAndMalformedIDs(t *testing.T) {
+	store := New(t.TempDir())
+	ctx := context.Background()
+	for _, upload := range []string{"upload-00000000000000000000000000000000", "../attachments/x", "upload-XYZ"} {
+		err := store.PutCanonicalSource(ctx, "ao-1", "attachment-x.bin", Source{Upload: upload})
+		if !errors.Is(err, ErrUploadNotFound) {
+			t.Fatalf("PutCanonicalSource(%q) error = %v, want ErrUploadNotFound", upload, err)
+		}
+	}
+	if _, _, err := store.Upload(ctx, strings.NewReader("")); !errors.Is(err, ErrEmpty) {
+		t.Fatalf("empty Upload error = %v, want ErrEmpty", err)
+	}
+}
+
+func TestStoreUploadSweepsExpiredUploads(t *testing.T) {
+	dataDir := t.TempDir()
+	store := New(dataDir)
+	ctx := context.Background()
+	old, _, err := store.Upload(ctx, strings.NewReader("old"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	stale := time.Now().Add(-UploadTTL - time.Minute)
+	if err := os.Chtimes(filepath.Join(dataDir, uploadsDir, old), stale, stale); err != nil {
+		t.Fatal(err)
+	}
+	fresh, _, err := store.Upload(ctx, strings.NewReader("fresh"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(filepath.Join(dataDir, uploadsDir, old)); !errors.Is(err, fs.ErrNotExist) {
+		t.Fatalf("expired upload still present: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(dataDir, uploadsDir, fresh)); err != nil {
+		t.Fatalf("fresh upload removed: %v", err)
+	}
+}
+
+func TestStoreOpenServesLargeCanonicalFile(t *testing.T) {
 	dataDir := t.TempDir()
 	dir := filepath.Join(dataDir, durableDir, "ao-1")
 	if err := os.MkdirAll(dir, 0o700); err != nil {
 		t.Fatal(err)
 	}
-	name := "attachment-oversized.bin"
-	if err := os.WriteFile(filepath.Join(dir, name), make([]byte, MaxFileBytes+1), 0o600); err != nil {
+	name := "attachment-large.bin"
+	// Sparse, so cheap.
+	if err := os.WriteFile(filepath.Join(dir, name), []byte("x"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Truncate(filepath.Join(dir, name), MaxFileBytes+1); err != nil {
 		t.Fatal(err)
 	}
 	file, _, err := New(dataDir).Open(context.Background(), "ao-1", name)
-	if file != nil {
-		_ = file.Close()
+	if err != nil {
+		t.Fatalf("Open large canonical attachment: %v", err)
 	}
-	if !errors.Is(err, fs.ErrNotExist) {
-		t.Fatalf("Open oversized canonical attachment error = %v, want not exist", err)
-	}
+	_ = file.Close()
+}
+
+type zeroReader struct{}
+
+func (zeroReader) Read(p []byte) (int, error) {
+	clear(p)
+	return len(p), nil
 }
 
 func TestStoreImportWorkspaceRetainsNameTypeAndSizeLimits(t *testing.T) {

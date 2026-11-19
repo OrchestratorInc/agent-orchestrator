@@ -28,9 +28,21 @@ func (r *Reviewer) Harness() domain.ReviewerHarness {
 	return domain.ReviewerCodex
 }
 
+// InvalidateBinaryResolution forgets the worker plugin's cached executable, so
+// the next review runs the release an install just switched to.
+func (r *Reviewer) InvalidateBinaryResolution() {
+	if invalidator, ok := r.agent.(ports.AgentBinaryResolutionInvalidator); ok {
+		invalidator.InvalidateBinaryResolution()
+	}
+}
+
 var _ ports.Reviewer = (*Reviewer)(nil)
 var _ ports.ReviewerCanceller = (*Reviewer)(nil)
 var _ ports.ReviewerRestorer = (*Reviewer)(nil)
+var _ ports.ReviewerChatProfile = (*Reviewer)(nil)
+
+// ReviewChatHarness selects Codex's typed app-server driver for review runs.
+func (r *Reviewer) ReviewChatHarness() domain.AgentHarness { return domain.HarnessCodex }
 
 // ReviewCommand launches the reviewer with an enforced read-only filesystem
 // sandbox. Auto approval lets the headless session request the narrowly needed

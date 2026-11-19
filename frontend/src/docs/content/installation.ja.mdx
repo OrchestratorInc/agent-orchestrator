@@ -1,0 +1,163 @@
+---
+title: インストール
+description: Orchestrator のデスクトップアプリをダウンロードし、使っているコーディングツールと接続します。
+translatedFrom: 7460247266d0
+---
+
+最新の安定版デスクトップビルドは、[Orchestrator の公式ダウンロードページ](https://orchestrator.inc/download/)から入手してください。ナイトリービルドとモバイルアプリもこのページにあります。デスクトップのパッケージを直接入手したい場合は、以下から選んでください。
+
+<InstallDownloads />
+
+スマートフォンには、[iPhone・iPad 用の Orchestrator Mobile](https://apps.apple.com/app/ao-mobile/id6792552173) または [Android 用の Orchestrator Mobile](https://play.google.com/store/apps/details?id=aoagents.dev) をインストールします。その後、デスクトップアプリの [Connect Mobile](/configuration/remote-access) でペアリングします。
+
+正式なインストール方法はデスクトップアプリです。デスクトップアプリはローカルのデーモンを管理し、グローバルな `ao` コマンドを必要とせず、起動後と実行中に更新を確認します。
+
+<span id="optional-macos-install-with-homebrew" />
+## macOS で Homebrew を使ってインストールする（任意）
+
+推奨するインストール方法は、上のデスクトップ版のダウンロードです。macOS では、既存の Homebrew cask からインストールすることもできます。
+
+```bash
+brew install --cask agentwrapper/tap/agent-orchestrator
+```
+
+デスクトップアプリは通常、自動で更新されます。Homebrew で管理しているインストールを更新するには、Homebrew を更新してから cask をアップグレードします。
+
+```bash
+brew update
+brew upgrade --cask agentwrapper/tap/agent-orchestrator
+```
+
+<span id="prerequisites" />
+## 前提条件
+
+| ツール | 必要になる場面 | 理由 |
+| --- | --- | --- |
+| Git | リポジトリのプロジェクト | 分離されたワークツリーとブランチを作成・管理します。 |
+| GitHub CLI `gh` | GitHub のプロジェクト | 既存の認証を使って、リポジトリとプルリクエストを操作します。 |
+| 外部のコーディングエージェント（Orchestrator ではハーネスと呼びます） | インストール済みの CLI を使うエージェントセッション | Claude Code、Codex、Cursor、Aider、OpenCode など、対応しているツールをインストールします。最新の一覧とインターフェースの対応状況は[エージェント一覧](/plugins/agents)を参照してください。Unreal Agent は、macOS と Linux の Chat 用に Orchestrator に組み込まれています。 |
+| tmux | macOS の事前チェックと、旧来またはフォールバックのターミナルセッション | macOS・Linux のデスクトップパッケージに同梱されています。ソースから起動する場合は、システムの tmux が必要になることがあります。[Runtime](/plugins/runtimes) を参照してください。 |
+
+Orchestrator は、コンピューターにすでにインストールされ、サインイン済みのコーディングエージェントを使います。**Settings → Harness** では、対応エージェントのセットアップと準備状況のチェックができます。エージェントによっては、Orchestrator の外でインストールやサインインが必要です。Unreal Agent は例外で、Chat 専用の組み込みエージェントです。対応プラットフォームと権限には独自の制限があります。[エージェント一覧](/plugins/agents)を参照してください。
+
+<span id="set-up-ao" />
+<span id="set-up-orchestrator" />
+## Orchestrator をセットアップする
+
+<Steps>
+<Step>
+
+<span id="install-and-open-the-desktop-app" />
+### デスクトップアプリをインストールして開く
+
+上からお使いのプラットフォーム用のダウンロードを選んでインストールし、**Orchestrator** を開きます。アプリはローカルの Go デーモンを自動で起動し、監視します。
+
+</Step>
+<Step>
+
+<span id="authenticate-github" />
+### GitHub で認証する
+
+GitHub のリポジトリを使う場合は、必要に応じて [GitHub CLI をインストール](https://cli.github.com/)し、サインインします。
+
+```bash
+gh auth login
+gh auth status
+```
+
+リポジトリを読み取れ、エージェントに任せるつもりのブランチ操作とプルリクエスト操作ができるアカウントを使ってください。
+
+GitLab の場合は、GitLab のトークンまたは `glab` でサインインします。[ソース管理のセットアップ](/plugins/scm)を参照してください。
+
+</Step>
+<Step>
+
+<span id="install-and-sign-in-to-an-agent" />
+
+<span id="install-and-sign-in-to-an-external-agent" />
+### 外部エージェントをインストールしてサインインする
+
+外部からインストールするハーネスは、インストール後に Orchestrator の外で一度実行し、サインインを済ませてください。Orchestrator は、セッションを作成するときに使えるハーネスを検出します。組み込みの Unreal Agent を使う場合は、この手順を飛ばし、対応する macOS または Linux で Chat セッションを作るときに選んでください。
+
+Chat に対応しているかどうかは、ハーネスとそのインストール済みバージョンによって異なります。[エージェントの機能一覧](/plugins/agents#chat-versus-terminal-ui)を参照してください。
+
+</Step>
+<Step>
+
+<span id="add-a-project" />
+### プロジェクトを追加する
+
+デスクトップアプリで **Add project** を選び、既存のローカル Git リポジトリを選択します。Orchestrator は、元のチェックアウトを移動せずにリポジトリを登録します。ワーカーセッションごとに、分離されたワークツリーが作られます。
+
+</Step>
+</Steps>
+
+リポジトリが不要な作業には、プロジェクトに属さないスタンドアロンのタスクを始めることもできます。任意の CLI では `ao spawn --standalone --agent codex --name notes --prompt "Draft release notes"` のように実行します。スタンドアロンのワーカーは PR を担当できず、Git やプロジェクトのフラグも使えません。
+
+<span id="legacy-npm-cli" />
+## 旧来の npm CLI
+
+<details className="ao-legacy-cli-details">
+<summary>
+	<span className="ao-legacy-cli-summary-copy">
+		<span className="ao-legacy-cli-summary-title">npm の CLI をすでにお使いですか？</span>
+		<span className="ao-legacy-cli-summary-note"><code>@aoagents/ao</code> は <code>0.10.0</code> で更新を終了しており、現在は推奨していません。</span>
+	</span>
+	<span className="ao-legacy-cli-summary-icon" aria-hidden="true" />
+</summary>
+
+<div className="ao-legacy-cli-details__content">
+
+`0.10.0` が npm の最後のリリースです。このパッケージは既存ユーザー向けの移行用として残っており、新しい機能は追加されません。このインストールから `ao start` を実行すると、デスクトップビルドを取得して開きます。
+
+```bash
+npm install -g @aoagents/ao
+ao start
+```
+
+新しく使い始める場合は、デスクトップアプリを直接インストールしてください。
+
+</div>
+</details>
+
+<span id="where-ao-stores-data" />
+<span id="where-orchestrator-stores-data" />
+## Orchestrator のデータの保存場所
+
+Orchestrator のアプリケーションの状態は、既定ですべて `~/.ao` に保存されます。デーモンのデータベース、実行ファイル（run file）、管理対象のワークツリー、Electron のブラウザデータ、モバイルのペアリング設定も含まれます。高度な構成では、`AO_DATA_DIR` と `AO_RUN_FILE` でデーモンのパスを変更できます。
+
+<span id="common-installation-problems" />
+## インストール時によくある問題
+
+<Accordions>
+	<Accordion title="使えるエージェントがない">
+		外部のハーネスの場合は、インストールして一度実行し、認証を済ませてから Orchestrator を再起動してください。デスクトップから起動したデーモンが、更新されたログインシェルの環境を受け取ります。Unreal Agent は、対応する macOS と Linux の Chat 用に Orchestrator に組み込まれています。CLI をインストールせずに、そのまま選んでください。
+	</Accordion>
+	<Accordion title="GitHub のデータが表示されない">
+		`gh auth status` を実行してください。有効なアカウントが、リポジトリとそのプルリクエストにアクセスできることを確認します。
+	</Accordion>
+	<Accordion title="macOS や Linux で Terminal UI が起動しない">
+		パッケージ版のビルドには tmux が同梱されています。新しいセッションは通常ネイティブの PTY ホストを使いますが、macOS では tmux が使えるかどうかを引き続き確認し、古いセッションでは tmux が必要になることがあります。ソースからのインストールとフォールバックの動作については、[ランタイムの診断](/plugins/runtimes/tmux)を参照してください。
+	</Accordion>
+	<Accordion title="旧来の `ao` コマンドが見つからない">
+		デスクトップアプリにこのコマンドは必要ありません。更新を終了した旧来の CLI を意図して使う場合にだけ、パッケージマネージャーのグローバルな bin パスを調べてください。
+	</Accordion>
+	<Accordion title="macOS で「開発元を検証できません」と表示される">
+		Finder で Orchestrator を右クリックして「開く」を選び、確認ダイアログでもう一度「開く」を選びます。それでも macOS がアプリをブロックする場合は、次の診断コマンドを実行し、Issue を作成するときに出力を添えてください。
+		```bash
+		sw_vers
+		codesign -dvvv "/Applications/Agent Orchestrator.app"
+		spctl -a -t exec -vvv --ignore-cache --no-cache "/Applications/Agent Orchestrator.app"
+		log show --last 10m --predicate 'subsystem == "com.apple.syspolicy"'
+		```
+	</Accordion>
+</Accordions>
+
+<span id="next" />
+## 次のステップ
+
+<Cards>
+	<Card title="クイックスタート" description="プロジェクトを作成し、最初のワーカーを実行します。" href="/quickstart" />
+	<Card title="プラットフォーム" description="プラットフォームごとのダウンロードとターミナルの動作を確認します。" href="/platforms" />
+	<Card title="トラブルシューティング" description="デスクトップ、デーモン、エージェントの問題を診断します。" href="/troubleshooting" />
+</Cards>

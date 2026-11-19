@@ -1,0 +1,192 @@
+---
+title: Troubleshooting
+description: Diagnose desktop, daemon, agent, session, GitHub, preview, and mobile problems, including the app disappearing on Linux.
+---
+
+## Start with the desktop app
+
+The desktop app owns the local daemon. First quit completely and reopen Orchestrator, then confirm the project and selected session still appear. On macOS, use the menu-bar tray's **Quit AO Completely** action for this restart. The app discovers or restarts its daemon and reconnects live event and terminal streams.
+
+On macOS, closing the window or using **Quit / Cmd+Q** destroys the desktop window but leaves Orchestrator in the Dock and menu-bar tray. Its daemon and enabled mobile/remote access keep running while the Mac stays awake and reachable. Click the Dock icon or **Show Orchestrator** in the tray to reopen the window. Existing unsaved-draft warnings still apply; desktop browser previews and browser automation stop until the window reopens. Windows and Linux quit behavior is unchanged.
+
+If you use the optional CLI, `ao status` and `ao doctor` provide additional local diagnostics:
+
+```bash
+ao status
+ao doctor
+ao doctor --json
+```
+
+`ao doctor` checks daemon/config state, the data directory and database, Git, and tmux on macOS/Linux. It is not required for a normal desktop-only install.
+
+## Desktop and daemon
+
+<Accordions>
+	<Accordion title="The app opens but no projects appear">
+		Confirm you opened the expected Orchestrator data home. All state defaults under `~/.ao`; an `AO_DATA_DIR` or `AO_RUN_FILE` override can point a development launch at a different daemon instance.
+	</Accordion>
+	<Accordion title="The CLI says the daemon is not running">
+		Open the desktop app first. Product CLI commands are thin clients and need the app-owned daemon. A stale `~/.ao/running.json` is not enough; Orchestrator also verifies the recorded process.
+	</Accordion>
+	<Accordion title="The daemon port is occupied">
+		The primary daemon uses loopback port `3001` by default and fails fast if it cannot bind. Stop the conflicting local process or use a deliberate development `AO_PORT` override. Never change the bind host to expose the daemon.
+	</Accordion>
+	<Accordion title="The UI looks stale after a daemon restart">
+		Leave the app open briefly so its SSE connection can reconnect and invalidate current queries. If it does not recover, restart the desktop app. The event stream supports replay, but a full app restart is the safest user-level recovery.
+	</Accordion>
+	<Accordion title="An automatic update check failed">
+		Orchestrator retries failed automatic checks with increasing delays, up to four hours. A manual check remains available from the update menu. A failed check does not turn off update checks.
+	</Accordion>
+</Accordions>
+
+## Orchestrator disappears on Linux without an error
+
+If the Orchestrator window closes by itself, with no error dialog and nothing in the logs, and your agents stop shortly after, check the app's realtime CPU limit:
+
+```bash
+for p in $(pgrep -x agent-orchestra); do grep "realtime timeout" /proc/$p/limits; done | sort | uniq -c
+```
+
+If both values are `0` and the symptoms match, this is the likely cause. With a limit of 0, the Linux kernel kills a process as soon as one of its threads uses realtime scheduling or a CPU-time timer, and logs nothing unless fatal-signal logging is turned on. Orchestrator does not set this limit; it inherits it from the program that launched it, so other apps started the same way can disappear too.
+
+The usual source is a desktop without rtkit. The desktop portal then reports a realtime budget of 0, PipeWire applies that budget to your session's shell, and every app you launch inherits it. Omarchy 4.5.0 and earlier ship without rtkit on x86; Omarchy's own fix is [omacom/omarchy#16824](https://github.com/omacom/omarchy/pull/16824). To confirm on Arch-based systems, including Omarchy:
+
+```bash
+pacman -Q rtkit
+busctl --user get-property org.freedesktop.portal.Desktop /org/freedesktop/portal/desktop org.freedesktop.portal.Realtime RTTimeUSecMax
+```
+
+`package 'rtkit' was not found` and `x 0` confirm it.
+
+Fix it in this order. Installing rtkit before raising the limits makes the kills more frequent, because rtkit can then give realtime priority to processes that still hold a limit of 0. These steps repair only your own processes, so if other users are logged in to this machine, have them log out first.
+
+1. Raise the limit of every process of yours that holds a 0. This takes effect immediately, without restarting anything, but only lasts until you log out:
+
+   ```bash
+   u=$(id -u); for d in /proc/[0-9]*; do [ "$(awk '/^Uid:/{print $2}' $d/status 2>/dev/null)" = "$u" ] && [ "$(awk '/realtime timeout/{print $5}' $d/limits 2>/dev/null)" = 0 ] && sudo prlimit --pid ${d#/proc/} --rttime=200000:200000; done
+   ```
+
+2. Hold rtkit back so it cannot start halfway through the install, then install it. The install runs only if the hold succeeds:
+
+   ```bash
+   sudo systemctl mask --runtime rtkit-daemon.service && sudo pacman -S --needed rtkit
+   ```
+
+   If the install fails or you cancel it, run this step again. To stop the repair here instead, reboot rather than releasing rtkit by hand. Until step 3 or a reboot releases rtkit, it stays held back, which grants nothing and kills nothing.
+
+3. Run the command from step 1 again to raise processes that started during the install, then release rtkit:
+
+   ```bash
+   sudo systemctl unmask --runtime rtkit-daemon.service
+   ```
+
+4. Confirm rtkit answers with a budget above 0, such as `x 200000`. If it shows `x 0` or an error, fix the rtkit service and repeat this check before continuing:
+
+   ```bash
+   busctl get-property org.freedesktop.RealtimeKit1 /org/freedesktop/RealtimeKit1 org.freedesktop.RealtimeKit1 RTTimeUSecMax
+   ```
+
+   Only after that check passes, restart the desktop portal so it reads rtkit's budget, and confirm the portal reports the same value. If the restart fails, or the portal shows `x 0`, an error, or a different value, fix the portal service and repeat this step. Continue only once the portal matches rtkit:
+
+   ```bash
+   systemctl --user restart xdg-desktop-portal.service && busctl --user get-property org.freedesktop.portal.Desktop /org/freedesktop/portal/desktop org.freedesktop.portal.Realtime RTTimeUSecMax
+   ```
+
+5. Run the command from step 1 again to raise any process that started in the meantime.
+6. Optional: restart audio so PipeWire also runs with realtime priority. This briefly interrupts sound:
+
+   ```bash
+   systemctl --user restart pipewire pipewire-pulse wireplumber
+   ```
+
+To verify, relaunch Orchestrator from your usual launcher and run the first check again. It should print at least one row, and no row should show `0`. An empty result means no Orchestrator process was found, so it does not confirm the fix. New sessions start with the correct limit once rtkit is installed. On Omarchy, updating to a release that includes its fix does all of this for you.
+
+## Agents and sessions
+
+<Accordions>
+	<Accordion title="No agent harness is offered">
+		Install the harness, run it once to authenticate, and restart Orchestrator. The desktop daemon inherits a login-shell environment and reuses each provider's installed binary and authentication.
+	</Accordion>
+	<Accordion title="Chat preflight fails">
+		Confirm the selected harness supports native Chat and its binary is authenticated. Chat support depends on the harness and installed version; see the [agent capability catalog](/plugins/agents#chat-versus-terminal-ui). Check **Settings → Harness** and provider version/permission requirements. Choose Terminal UI when the harness lacks Chat support or preflight cannot connect.
+	</Accordion>
+	<Accordion title="A TUI session will not start on macOS or Linux">
+		New macOS/Linux sessions use detached native PTY hosts. Packaged builds bundle tmux for old sessions/fallback; macOS still validates it. For source runs check configured/system tmux and the native-host launch error. Windows uses ConPTY. See [Runtime](/plugins/runtimes).
+	</Accordion>
+	<Accordion title="The session is blocked">
+		Open the session and answer the pending approval or permission prompt. Orchestrator deliberately does not inject lifecycle messages while a controller is blocked.
+	</Accordion>
+	<Accordion title="The status appears wrong">
+		Status is derived from activity, termination, controller, and pull-request facts. A failed runtime probe is not treated as death. Reopen the session and inspect its Chat or terminal before killing it.
+	</Accordion>
+	<Accordion title="A session will not restore">
+		Use the desktop restore action or `ao session restore <session-id>`. Restore reuses the same session and worktree when the selected adapter supports recovery. Check that the harness remains installed and authenticated. For a stopped controller on a non-terminated session use `ao session resume-agent <id>` instead. A disabled interface switch can indicate unavailable native history, an unsupported direction, or pending recovery; inspect its reason before retrying.
+	</Accordion>
+	<Accordion title="A session says its workspace no longer exists">
+		The Files pane stops refreshing that session after the daemon confirms its project folder is missing. Restore the folder, then use Retry in Files. Other sessions and hosts continue refreshing normally.
+	</Accordion>
+	<Accordion title="A suggested next message disappears">
+		Prompt suggestions wait until the Chat controller is ready and the previous turn is complete. A suggestion can disappear while the agent reconnects or resumes, then return when the conversation is ready again.
+	</Accordion>
+	<Accordion title="A new task cannot start">
+		Choose an installed, signed-in agent in Harness Settings. If a saved model or effort is no longer supported, review the selected agent default and press Start again. If a branch is checked out elsewhere, enter a new branch name and press Start to confirm it. If the base branch cannot be resolved, set it in Project Settings.
+	</Accordion>
+</Accordions>
+
+## GitHub and pull requests
+
+<Accordions>
+	<Accordion title="Repository or pull-request data is missing">
+		Run `gh auth status` and confirm the active account can access the repository. GitHub authentication is lazy so an auth failure does not need to block unrelated local session work. For GitLab check token/`glab` authentication and self-managed-host configuration in [SCM setup](/plugins/scm).
+	</Accordion>
+	<Accordion title="The agent opened a PR but Orchestrator did not link it">
+		Claim it from the session UI or, inside the worker, run `ao session claim-pr <pr-number-or-url>`; Orchestrator reads the worker from `AO_SESSION_ID`. From another shell, use `ao session claim-pr <session-id> <pr-number-or-url>`.
+	</Accordion>
+	<Accordion title="CI or review data is delayed">
+		The SCM observer polls GitHub and respects rate limits and ETags. Check `gh auth status`, wait for another observation cycle, and open the pull request directly for full raw logs or comment bodies.
+	</Accordion>
+	<Accordion title="Review findings were not sent to the worker">
+		Open the review run and use its send action. Reviewer execution and delivery are separate operations so you can inspect findings before changing the worker conversation.
+	</Accordion>
+</Accordions>
+
+## Browser preview
+
+A failed external link preview shows the plain link. Orchestrator waits briefly before trying that same URL again; previews for other URLs still load.
+
+<Accordions>
+	<Accordion title="The Browser tab is blank">
+		Select a target explicitly with `ao preview <url>`, or use `ao preview start` when the worktree contains a valid `.ao/launch.json`. Orchestrator does not auto-discover a preview for every new worker.
+	</Accordion>
+	<Accordion title="A configured preview server will not start">
+		Run `ao preview start <configuration>` and inspect the returned error. Verify the command and working directory in the session's `.ao/launch.json`, then run the same command in its worktree shell.
+	</Accordion>
+	<Accordion title="Browser automation targets the wrong page">
+		Select the correct session and browser tab. Commands are authorized for the selected session. Temporary profiles are isolated; named profiles deliberately reuse saved browser state. Check the selected profile, and refresh snapshots after navigation. Keep the panel visible for screenshots/human pointer actions. Profile imports have platform-dependent cookie support; a missing login may require signing in again.
+	</Accordion>
+</Accordions>
+
+## Connect Mobile
+
+<Accordions>
+	<Accordion title="The phone cannot connect">
+		Confirm Connect Mobile is enabled and the QR is ready, then use the latest offer/password. Direct LAN needs the same trusted network; remote access needs an advertised, ready secure endpoint. Inspect connector/Tailscale setup failures, and update both apps for identity/contract mismatches. Rotating the password invalidates old credentials.
+	</Accordion>
+	<Accordion title="The QR code was shared">
+		The current QR carries the host identity, available endpoints, and connection password in a v2 pairing link. Treat it as a bearer credential: do not share the QR or screenshots of it. Rotate the connection password in desktop settings if it may have been exposed.
+	</Accordion>
+	<Accordion title="Can I use Connect Mobile on public Wi-Fi?">
+		Do not use a plaintext LAN endpoint on an untrusted network. Use an available secure endpoint from [Connect Mobile](/configuration/remote-access). Keep the primary daemon private. If mobile push is missing, check phone notification permission, that the phone is still listed under Connected devices, and daemon connectivity.
+	</Accordion>
+</Accordions>
+
+## Still stuck
+
+| Symptom | Where to go |
+| --- | --- |
+| macOS Gatekeeper says the developer cannot be verified | Follow the Gatekeeper steps in [Common Installation Problems](/installation#common-installation-problems). |
+
+Open an issue in the [Orchestrator repository](https://github.com/Untrivial-ai/agent-orchestrator/issues). Include the desktop version, operating system, agent harness and interface mode, reproduction steps, and sanitized `ao doctor --json` output when the CLI is available. Never attach credentials, provider transcripts, or the entire `~/.ao` directory.
+
+Unreleased: **Settings → Report a problem** opens an agent to gather diagnostics and draft a report for your approval.
+If the daemon is down, the same action opens a terminal; you can also run `ao triage` directly.

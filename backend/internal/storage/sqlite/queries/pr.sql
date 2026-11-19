@@ -6,13 +6,17 @@ INSERT INTO pr (
     is_draft, is_merged, is_closed,
     provider_state, provider_mergeable, provider_merge_state_status, html_url,
     created_at_provider, updated_at_provider, merged_at_provider, closed_at_provider,
-    metadata_hash, ci_hash, review_hash, observed_at, ci_observed_at, review_observed_at, review_partial, auto_inject_ci
+    metadata_hash, ci_hash, review_hash, observed_at, ci_observed_at, review_observed_at, review_partial,
+    head_from_fork, head_is_default_branch, auto_inject_ci
 )
-VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
+VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
     COALESCE((SELECT auto_inject_ci FROM sessions WHERE id = ?), TRUE))
 ON CONFLICT (url) DO UPDATE SET
     number = excluded.number,
+    -- A successful merge is authoritative and irreversible. A poll that
+    -- fetched the old open state before that merge must not roll it back.
     state_changed_at = CASE
+        WHEN pr.pr_state = 'merged' AND excluded.pr_state != 'merged' THEN pr.state_changed_at
         WHEN pr.pr_state != excluded.pr_state THEN
             CASE
                 WHEN excluded.pr_state = 'merged' THEN COALESCE(excluded.merged_at_provider, excluded.updated_at_provider, excluded.observed_at, excluded.updated_at)
@@ -22,17 +26,19 @@ ON CONFLICT (url) DO UPDATE SET
         WHEN pr.state_changed_at IS NULL THEN excluded.state_changed_at
         ELSE pr.state_changed_at
     END,
-    pr_state = excluded.pr_state,
+    pr_state = CASE WHEN pr.pr_state = 'merged' THEN 'merged' ELSE excluded.pr_state END,
     review_decision = excluded.review_decision,
     ci_state = excluded.ci_state,
     mergeability = excluded.mergeability,
-    updated_at = excluded.updated_at,
+    updated_at = CASE WHEN pr.pr_state = 'merged' AND excluded.pr_state != 'merged' THEN pr.updated_at ELSE excluded.updated_at END,
     provider = excluded.provider,
     host = excluded.host,
     repo = excluded.repo,
     provider_id = CASE WHEN excluded.provider_id != '' THEN excluded.provider_id ELSE pr.provider_id END,
     source_branch = excluded.source_branch,
     target_branch = excluded.target_branch,
+    head_from_fork = excluded.head_from_fork,
+    head_is_default_branch = excluded.head_is_default_branch,
     head_sha = excluded.head_sha,
     title = excluded.title,
     additions = excluded.additions,
@@ -41,10 +47,13 @@ ON CONFLICT (url) DO UPDATE SET
     author = excluded.author,
     author_avatar_url = excluded.author_avatar_url,
     base_sha = excluded.base_sha,
-    merge_commit_sha = excluded.merge_commit_sha,
-    is_draft = excluded.is_draft,
-    is_merged = excluded.is_merged,
-    is_closed = excluded.is_closed,
+    merge_commit_sha = CASE
+        WHEN pr.pr_state = 'merged' AND excluded.merge_commit_sha = '' THEN pr.merge_commit_sha
+        ELSE excluded.merge_commit_sha
+    END,
+    is_draft = CASE WHEN pr.pr_state = 'merged' THEN FALSE ELSE excluded.is_draft END,
+    is_merged = CASE WHEN pr.pr_state = 'merged' THEN TRUE ELSE excluded.is_merged END,
+    is_closed = CASE WHEN pr.pr_state = 'merged' THEN FALSE ELSE excluded.is_closed END,
     provider_state = excluded.provider_state,
     provider_mergeable = excluded.provider_mergeable,
     provider_merge_state_status = excluded.provider_merge_state_status,
@@ -56,7 +65,7 @@ ON CONFLICT (url) DO UPDATE SET
     metadata_hash = excluded.metadata_hash,
     ci_hash = excluded.ci_hash,
     review_hash = excluded.review_hash,
-    observed_at = excluded.observed_at,
+    observed_at = CASE WHEN pr.pr_state = 'merged' AND excluded.pr_state != 'merged' THEN pr.observed_at ELSE excluded.observed_at END,
     ci_observed_at = excluded.ci_observed_at,
     -- The review completeness pair travels together: a writer that did not
     -- fetch review threads passes a NULL review_observed_at, and must keep the
@@ -77,19 +86,21 @@ VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
     COALESCE((SELECT auto_inject_ci FROM sessions WHERE id = ?), TRUE))
 ON CONFLICT (url) DO UPDATE SET
     number = excluded.number,
+    -- Keep legacy writers from regressing the same irreversible transition.
     state_changed_at = CASE
+        WHEN pr.pr_state = 'merged' AND excluded.pr_state != 'merged' THEN pr.state_changed_at
         WHEN pr.pr_state != excluded.pr_state THEN excluded.updated_at
         WHEN pr.state_changed_at IS NULL THEN excluded.state_changed_at
         ELSE pr.state_changed_at
     END,
-    pr_state = excluded.pr_state,
+    pr_state = CASE WHEN pr.pr_state = 'merged' THEN 'merged' ELSE excluded.pr_state END,
     review_decision = excluded.review_decision,
     ci_state = excluded.ci_state,
     mergeability = excluded.mergeability,
-    updated_at = excluded.updated_at,
-    is_draft = excluded.is_draft,
-    is_merged = excluded.is_merged,
-    is_closed = excluded.is_closed,
+    updated_at = CASE WHEN pr.pr_state = 'merged' AND excluded.pr_state != 'merged' THEN pr.updated_at ELSE excluded.updated_at END,
+    is_draft = CASE WHEN pr.pr_state = 'merged' THEN FALSE ELSE excluded.is_draft END,
+    is_merged = CASE WHEN pr.pr_state = 'merged' THEN TRUE ELSE excluded.is_merged END,
+    is_closed = CASE WHEN pr.pr_state = 'merged' THEN FALSE ELSE excluded.is_closed END,
     -- Same completeness-pair contract as UpsertPR: a writer without a review
     -- observation (NULL timestamp) keeps the stored pair.
     review_observed_at = COALESCE(excluded.review_observed_at, pr.review_observed_at),
@@ -151,6 +162,14 @@ WHERE canonical_url = sqlc.arg(previous_url);
 INSERT INTO pr_url_alias(alias_url, canonical_url)
 VALUES (sqlc.arg(alias_url), sqlc.arg(canonical_url))
 ON CONFLICT(alias_url) DO UPDATE SET canonical_url = excluded.canonical_url;
+
+-- name: UpsertRepositoryRename :exec
+INSERT INTO repository_renames(host, old_name, name)
+VALUES (sqlc.arg(host), sqlc.arg(old_name), sqlc.arg(name))
+ON CONFLICT(host, old_name) DO UPDATE SET name = excluded.name;
+
+-- name: ListRepositoryRenames :many
+SELECT host, old_name, name FROM repository_renames;
 
 -- name: MovePRAliasChecks :exec
 UPDATE OR IGNORE pr_checks SET pr_url = sqlc.arg(canonical_url) WHERE pr_url = sqlc.arg(previous_url);
@@ -306,6 +325,7 @@ external_review AS (
     )
 )
 SELECT
+    pr.session_id,
     pr.url,
     pr.number,
     pr.pr_state,
@@ -314,8 +334,13 @@ SELECT
     pr.mergeability,
     pr.source_branch,
     pr.target_branch,
+    pr.host,
+    pr.repo,
     pr.head_sha,
     pr.updated_at,
+    pr.state_changed_at,
+    pr.ci_observed_at,
+    last_review.submitted_at AS last_review_at,
     EXISTS (
         SELECT 1
         FROM pr_comment
@@ -348,8 +373,49 @@ SELECT
         FROM external_review
         WHERE external_review.pr_url = pr.url
           AND external_review.state = 'changes_requested'
-    ) AS external_changes_requested
+    ) AS external_changes_requested,
+    -- The open PR whose source branch this PR targets, in any session, so a
+    -- PR stacked on it is not read as ready to merge. A PR whose source and
+    -- target branch are the same (a fork PR opened from its own main) can
+    -- never be a parent, and neither can one whose head is a fork's branch
+    -- (its name says nothing about this repository's branches) or the
+    -- repository's default branch (a main -> release sync PR would otherwise
+    -- parent every PR into main). Only a parent the SCM observer still polls
+    -- counts: an archived session's or project's PR keeps whatever state it
+    -- had when polling stopped, so its "open" may be long stale.
+    CAST(COALESCE((
+        SELECT parent.number
+        FROM pr parent
+        JOIN sessions parent_session ON parent_session.id = parent.session_id
+        JOIN projects parent_project ON parent_project.id = parent_session.project_id
+        WHERE parent.source_branch = pr.target_branch
+          AND parent.repo = pr.repo COLLATE NOCASE
+          AND parent.host = pr.host
+          AND pr.target_branch != ''
+          AND pr.repo != ''
+          AND parent.source_branch != parent.target_branch
+          AND parent.head_from_fork = FALSE
+          AND parent.head_is_default_branch = FALSE
+          AND parent.url != pr.url
+          AND parent.pr_state IN ('open', 'draft')
+          AND parent_session.is_terminated = 0
+          AND parent_project.archived_at IS NULL
+        ORDER BY parent.updated_at DESC
+        LIMIT 1
+    ), 0) AS INTEGER) AS stack_parent_number
 FROM pr
+LEFT JOIN pr_reviews last_review ON last_review.pr_url = pr.url
+    -- The newest review by provider submission time, so re-fetching a review
+    -- does not move it.
+    AND NOT EXISTS (
+        SELECT 1
+        FROM pr_reviews newer_review
+        WHERE newer_review.pr_url = last_review.pr_url
+          AND (
+              newer_review.submitted_at > last_review.submitted_at
+              OR (newer_review.submitted_at = last_review.submitted_at AND newer_review.review_id > last_review.review_id)
+          )
+    )
 WHERE pr.session_id = sqlc.arg(session_id)
 ORDER BY pr.updated_at DESC;
 
@@ -415,8 +481,13 @@ SELECT
     pr.mergeability,
     pr.source_branch,
     pr.target_branch,
+    pr.host,
+    pr.repo,
     pr.head_sha,
     pr.updated_at,
+    pr.state_changed_at,
+    pr.ci_observed_at,
+    last_review.submitted_at AS last_review_at,
     EXISTS (
         SELECT 1
         FROM pr_comment
@@ -451,9 +522,50 @@ SELECT
         WHERE external_review.pr_url = pr.url
           AND external_review.session_id = pr.session_id
           AND external_review.state = 'changes_requested'
-    ) AS external_changes_requested
+    ) AS external_changes_requested,
+    -- The open PR whose source branch this PR targets, in any session, so a
+    -- PR stacked on it is not read as ready to merge. A PR whose source and
+    -- target branch are the same (a fork PR opened from its own main) can
+    -- never be a parent, and neither can one whose head is a fork's branch
+    -- (its name says nothing about this repository's branches) or the
+    -- repository's default branch (a main -> release sync PR would otherwise
+    -- parent every PR into main). Only a parent the SCM observer still polls
+    -- counts: an archived session's or project's PR keeps whatever state it
+    -- had when polling stopped, so its "open" may be long stale.
+    CAST(COALESCE((
+        SELECT parent.number
+        FROM pr parent
+        JOIN sessions parent_session ON parent_session.id = parent.session_id
+        JOIN projects parent_project ON parent_project.id = parent_session.project_id
+        WHERE parent.source_branch = pr.target_branch
+          AND parent.repo = pr.repo COLLATE NOCASE
+          AND parent.host = pr.host
+          AND pr.target_branch != ''
+          AND pr.repo != ''
+          AND parent.source_branch != parent.target_branch
+          AND parent.head_from_fork = FALSE
+          AND parent.head_is_default_branch = FALSE
+          AND parent.url != pr.url
+          AND parent.pr_state IN ('open', 'draft')
+          AND parent_session.is_terminated = 0
+          AND parent_project.archived_at IS NULL
+        ORDER BY parent.updated_at DESC
+        LIMIT 1
+    ), 0) AS INTEGER) AS stack_parent_number
 FROM pr
 JOIN wanted_session ON wanted_session.session_id = pr.session_id
+LEFT JOIN pr_reviews last_review ON last_review.pr_url = pr.url
+    -- The newest review by provider submission time, so re-fetching a review
+    -- does not move it.
+    AND NOT EXISTS (
+        SELECT 1
+        FROM pr_reviews newer_review
+        WHERE newer_review.pr_url = last_review.pr_url
+          AND (
+              newer_review.submitted_at > last_review.submitted_at
+              OR (newer_review.submitted_at = last_review.submitted_at AND newer_review.review_id > last_review.review_id)
+          )
+    )
 ORDER BY pr.session_id, pr.updated_at DESC;
 
 -- name: ClaimPRForSession :exec
@@ -462,6 +574,9 @@ VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?,
     COALESCE((SELECT auto_inject_ci FROM sessions WHERE id = ?), TRUE))
 ON CONFLICT (url) DO UPDATE SET
     session_id = excluded.session_id,
+    -- The PR follows its new owner's "Automatically fix CI failures" switch,
+    -- not the previous owner's.
+    auto_inject_ci = excluded.auto_inject_ci,
     state_changed_at = CASE
         WHEN pr.pr_state != excluded.pr_state THEN excluded.updated_at
         WHEN pr.state_changed_at IS NULL THEN excluded.state_changed_at
@@ -477,3 +592,42 @@ SELECT pr.session_id, sessions.is_terminated
 FROM pr
 JOIN sessions ON sessions.id = pr.session_id
 WHERE pr.url = ?;
+-- name: RecordWorkerPRUsage :exec
+-- While export is not allowed, every outcome observed (association, merge,
+-- close) is consumed here, so a later opt-in never exports the off interval.
+INSERT INTO usage_pr_measurement (pr_key, project_id, associated_reported, merged_reported, closed_reported)
+SELECT CASE WHEN pr.provider_id <> '' AND pr.provider <> ''
+        THEN pr.provider || ':' || pr.host || ':' || pr.provider_id
+        ELSE pr.url END,
+    sessions.project_id,
+    CASE WHEN sqlc.arg(export_allowed) = 0 THEN 1 ELSE 0 END,
+    CASE WHEN sqlc.arg(export_allowed) = 0 AND pr.pr_state = 'merged' THEN 1 ELSE 0 END,
+    CASE WHEN sqlc.arg(export_allowed) = 0 AND pr.pr_state = 'closed' THEN 1 ELSE 0 END
+FROM pr JOIN sessions ON sessions.id = pr.session_id
+WHERE pr.url = sqlc.arg(pr_url) AND sessions.kind = 'worker' AND sessions.project_id IS NOT NULL
+ON CONFLICT(pr_key) DO UPDATE SET
+    associated_reported = CASE WHEN ?1 = 0 THEN 1 ELSE usage_pr_measurement.associated_reported END,
+    merged_reported = CASE WHEN ?1 = 0 AND
+        (SELECT pr_state FROM pr WHERE url = ?2) = 'merged'
+        THEN 1 ELSE usage_pr_measurement.merged_reported END,
+    closed_reported = CASE WHEN ?1 = 0 AND
+        (SELECT pr_state FROM pr WHERE url = ?2) = 'closed'
+        THEN 1 ELSE usage_pr_measurement.closed_reported END;
+
+-- name: UpgradeWorkerPRUsageIdentity :exec
+UPDATE OR IGNORE usage_pr_measurement
+SET pr_key = (SELECT pr.provider || ':' || pr.host || ':' || pr.provider_id FROM pr WHERE pr.url = sqlc.arg(pr_url))
+WHERE pr_key IN (
+    SELECT alias_url FROM pr_url_alias WHERE canonical_url = sqlc.arg(pr_url)
+    UNION SELECT sqlc.arg(pr_url)
+)
+AND EXISTS (SELECT 1 FROM pr WHERE pr.url = sqlc.arg(pr_url)
+    AND pr.provider <> '' AND pr.provider_id <> '');
+
+-- name: ListPRStateTimes :many
+-- Which sessions own a PR in one state, and when each PR reached it, for the
+-- session list's PR-state filter. Narrow on purpose: the filter runs over the
+-- whole archive on every page, so it must not load the card facts.
+SELECT session_id, state_changed_at, updated_at
+FROM pr
+WHERE pr_state = ?;

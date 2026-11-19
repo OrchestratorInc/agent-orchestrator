@@ -1,17 +1,17 @@
-import { Feather } from "@expo/vector-icons";
+import { deliverableArtifacts } from "../../../shared/artifacts/deliverables";
 import { XtermJsWebView, type XtermWebViewHandle } from "@fressh/react-native-xtermjs-webview";
-import { useLocalSearchParams, useNavigation, useRouter } from "expo-router";
+import { Stack, useLocalSearchParams, useNavigation, useRouter } from "expo-router";
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
-import { ActivityIndicator, Alert, Keyboard, LayoutAnimation, Platform, Pressable, StyleSheet, Text, View } from "react-native";
+import { Alert, Keyboard, LayoutAnimation, Platform, StyleSheet, Text, View } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
-import { WebView } from "react-native-webview";
-import { ApiError, getPreview, isTerminalStatus, killSession, sendMessage } from "../api";
-import { authHeaders, isConfigured, loadConfig, type ServerConfig } from "../config";
+import { ApiError, killSession, killSessionReviewer, sendMessage } from "../api";
+import { isConfigured } from "../config";
 import { terminalTheme, type Theme } from "../theme";
 import { haptics } from "../haptics";
 import { resetHeaderRightForSwap } from "../headerRightSwap";
-import { MinimalBackButton } from "../MinimalBackButton";
-import { MuxClient, type MuxStatus } from "../mux";
+import type { MuxStatus } from "../mux";
+import { filesRoute } from "../files/navigation";
+import { glassHeaderControl } from "../native-header-items";
 import { Composer } from "./Composer";
 import { dockInset, rootKeyboardPad } from "./keyboardInset";
 import { KeyRow } from "./KeyRow";
@@ -19,7 +19,6 @@ import {
 	REROUTED_NOTICE,
 	routeForSend,
 	terminalPayload,
-	TERMINAL_MODE_NOTICE,
 	TERMINAL_UNAVAILABLE_NOTICE,
 	type SendTarget,
 } from "./sendRoute";
@@ -36,509 +35,40 @@ import {
 	useInterfaceTransition,
 } from "./useInterfaceTransition";
 import { terminalInterfaceFailureRecovery } from "./terminalInterfaceRecovery";
-import { adjustTerminalViewport } from "./terminalViewport";
-import type { RouteSession } from "./sessionRoute";
+import { adjustTerminalViewport, fitTerminalViewport, scrollTerminalToTop, scrollTopReport } from "./terminalViewport";
+import { TERMINAL_ENHANCE_JS } from "./terminalEnhance";
+import { ScrollTopButton } from "./ScrollTopButton";
+import { terminalMenuSections, type TerminalMenuAction } from "./terminalMenuModel";
+import { useSessionPreview } from "./useSessionPreview";
+import { isRuntimeGone, type RouteSession } from "./sessionRoute";
+import { font, fontScaleCap, iconSize, radius, space, touchTarget, type } from "../tokens";
+import { toolbarIcon } from "../toolbarIcon";
+import { Spinner } from "../Spinner";
+import { AppSymbol } from "../AppSymbol";
+import { rowDividerWidth } from "../divider";
+import { Button, EmptyState } from "../ui";
+import type { PlatformSymbol } from "../symbols";
+import { TerminalNotice, TerminalNoticeHost, type TerminalNoticeMessage, type TerminalNoticeTone } from "./TerminalNotice";
+import { InterfaceSwitchConfirm, type InterfaceSwitchPolicy } from "./InterfaceSwitchConfirm";
+import { NoticeDismissButton } from "./NoticeDismissButton";
+import { backOr } from "../backNavigation";
+import { userFacingError } from "../connectionError";
+import { ARCHIVE_SESSION_CONFIRM } from "../worker-action-model";
+import { isTerminalGoneError, TERMINAL_STATUS_LABEL, terminalErrorCopy, terminalExitedCopy } from "./terminalCopy";
+import { useTerminalMux } from "./useTerminalMux";
+import { InterfaceSwitchCard } from "./InterfaceSwitchCard";
+import { createPaintDetector, TERMINAL_PAINT_WAIT_MS } from "./terminalPaint";
+import { useInterfaceHandoff } from "./useInterfaceHandoff";
 
 const FONT_SIZE = 12;
 
-// Injected into the xterm WebView after load. xterm has its own touch handlers
-// that scroll by discrete lines (the janky "1 line per swipe"). We intercept in
-// the CAPTURE phase and stopPropagation so those handlers never fire, then drive
-// the viewport's scrollTop in proportion to finger movement (+ momentum). Taps
-// (no significant movement) are left alone so tap-to-focus / keyboard still work.
-const TERMINAL_ENHANCE_JS = `
-(function () {
-  // The text layer (xterm-screen canvas) captures touches for selection, which
-  // blocks the smooth native scroll. Make it (and the hidden input) transparent
-  // to touch so drags fall through to the viewport's native scroll, and so a tap
-  // can't focus the input (no surprise keyboard).
-  var s = document.createElement('style');
-  s.textContent =
-    '.xterm-screen{pointer-events:none !important;}' +
-    '.xterm-helper-textarea{pointer-events:none !important;}' +
-    '.xterm-viewport{pointer-events:auto !important;-webkit-overflow-scrolling:touch !important;}' +
-    // We drive scrolling ourselves, so the WebView scrollbar is pure wasted width
-    // on the right. Hide it (and give the viewport a thin overlay one) so the fit
-    // reclaims those pixels as extra columns instead of a gap.
-    '.xterm-viewport{scrollbar-width:none !important;}' +
-    '.xterm-viewport::-webkit-scrollbar{width:0 !important;height:0 !important;display:none !important;}';
-  document.head.appendChild(s);
-
-  // Report xterm's REAL grid size (measured by the FitAddon from the actual
-  // rendered cell) back to RN through fressh's own debug channel, so RN can tell
-  // the PTY the exact cols/rows xterm is using — no font/DPR guessing.
-  // Report the phone's NATURAL fit (what would fill the screen at the current
-  // font) WITHOUT resizing the terminal. The render grid is driven by the daemon
-  // (the shared PTY's authoritative size), which we scale to fit below; we report
-  // this fit only so the daemon can size the PTY to the phone when it is the sole
-  // viewer. proposeDimensions measures without applying, unlike fit().
-  function reportFit() {
-    try {
-      var F = window.fitAddon; if (!F || !F.proposeDimensions) return;
-      // xterm can't measure a real scrollbar on mobile (overlay scrollbars are
-      // 0px, so its "offsetWidth - offsetWidth || 15" falls back to assuming a
-      // 15px one). proposeDimensions subtracts that phantom width and under-reports
-      // cols, leaving a dead strip on the right. We drive our own scroll and hide
-      // the bar (see injected CSS above), so zero it before measuring to reclaim
-      // those columns for the fit.
-      try {
-        var vp = window.terminal && window.terminal._core && window.terminal._core.viewport;
-        if (vp) vp.scrollBarWidth = 0;
-      } catch (_) {}
-      var d = F.proposeDimensions();
-      if (d && d.cols > 0 && d.rows > 0 && window.ReactNativeWebView) {
-        window.ReactNativeWebView.postMessage(
-          JSON.stringify({ type: 'debug', message: 'FRESSH_DIMS ' + d.cols + ' ' + d.rows }));
-      }
-    } catch (_) {}
-  }
-
-  // ---- Zoom & pan -----------------------------------------------------------
-  // The daemon may hold the grid wider than the phone (a co-viewing desktop
-  // drives the size). Start at 1:1 so a desktop-sized grid remains readable on
-  // the phone and is locally cropped instead of becoming a tiny overview. Pinch
-  // and the native +/- controls zoom between fit-to-width and 2x; while zoomed,
-  // one finger pans the viewport (vertical overshoot spills into scrollback) and
-  // double-tap toggles overview <-> 1:1.
-  // While zoomed we auto-pan to keep the cursor framed, so the prompt/output
-  // stays in view without chasing it by hand.
-  function term() { return window.terminal; }
-  var Z = { s: 1, min: 1, max: 2, tx: 0, ty: 0,
-            zoomed: false, followFit: false, lastPan: 0 };
-  function box() {
-    var root = document.querySelector('.xterm');
-    var screen = document.querySelector('.xterm-screen');
-    var host = document.getElementById('terminal') || document.body;
-    if (!root || !screen || !host) return null;
-    return { root: root, natW: screen.offsetWidth, natH: screen.offsetHeight,
-             contW: host.clientWidth || window.innerWidth,
-             contH: host.clientHeight || window.innerHeight };
-  }
-  function clampT(b) {
-    var minTx = Math.min(0, b.contW - b.natW * Z.s);
-    var minTy = Math.min(0, b.contH - b.natH * Z.s);
-    if (Z.tx < minTx) Z.tx = minTx; if (Z.tx > 0) Z.tx = 0;
-    if (Z.ty < minTy) Z.ty = minTy; if (Z.ty > 0) Z.ty = 0;
-  }
-  function applyTransform(b) {
-    b.root.style.transformOrigin = 'top left';
-    b.root.style.transform = 'translate(' + Z.tx + 'px,' + Z.ty + 'px) scale(' + Z.s + ')';
-  }
-  // Fit-to-width baseline, re-run on grid/container changes. followFit records
-  // an explicit overview choice; otherwise authoritative grid resizes preserve
-  // the default/user-selected actual-size crop and only re-clamp its pan.
-  function applyScale() {
-    try {
-      var b = box(); if (!b || !b.natW || !b.contW) return;
-      Z.min = Math.min(1, b.contW / b.natW);
-      if (Z.followFit) { Z.s = Z.min; Z.tx = 0; Z.ty = 0; }
-      else {
-        if (Z.s < Z.min) Z.s = Z.min;
-        if (Z.s > Z.max) Z.s = Z.max;
-        clampT(b);
-      }
-      Z.zoomed = Z.s > Z.min + 0.001;
-      applyTransform(b);
-    } catch (_) {}
-  }
-  // Zoom to scale s keeping the content under screen point (ax, ay) fixed.
-  function setZoom(s, ax, ay) {
-    var b = box(); if (!b) return;
-    if (s < Z.min) s = Z.min; if (s > Z.max) s = Z.max;
-    var px = (ax - Z.tx) / Z.s, py = (ay - Z.ty) / Z.s;
-    Z.s = s; Z.tx = ax - px * s; Z.ty = ay - py * s;
-    Z.zoomed = s > Z.min + 0.001;
-    Z.followFit = !Z.zoomed;
-    if (!Z.zoomed) { Z.s = Z.min; Z.tx = 0; Z.ty = 0; }
-    clampT(b); applyTransform(b);
-  }
-  // RN's +/- buttons call this through the WebView's imperative injection hook.
-  // This changes only the phone's CSS viewport: xterm stays mounted and the
-  // daemon-owned PTY grid is never resized, so a co-viewing desktop is unaffected.
-  window.__aoAdjustTerminalZoom = function (direction) {
-    var b = box(); if (!b || (direction !== 1 && direction !== -1)) return;
-    setZoom(Z.s + direction * 0.2, b.contW / 2, b.contH / 2);
-    Z.lastPan = Date.now();
-  };
-  // Auto-pan so the cursor stays framed while zoomed in. Backs off for a few
-  // seconds after a manual pan/pinch (never fight the finger) and only follows
-  // the live screen — not while the user is reading scrollback.
-  function followCursor() {
-    try {
-      if (!Z.zoomed || Date.now() - Z.lastPan < 4000) return;
-      var T = term(); var b = box(); if (!T || !b || !T.cols || !T.rows) return;
-      var buf = T.buffer && T.buffer.active; if (!buf) return;
-      if (buf.viewportY !== buf.baseY) return;
-      var cx = (buf.cursorX + 0.5) * (b.natW / T.cols) * Z.s;
-      var cy = (buf.cursorY + 0.5) * (b.natH / T.rows) * Z.s;
-      var mX = Math.min(48, b.contW / 4), mY = Math.min(48, b.contH / 4);
-      if (Z.tx + cx < mX) Z.tx = mX - cx;
-      else if (Z.tx + cx > b.contW - mX) Z.tx = b.contW - mX - cx;
-      if (Z.ty + cy < mY) Z.ty = mY - cy;
-      else if (Z.ty + cy > b.contH - mY) Z.ty = b.contH - mY - cy;
-      clampT(b); applyTransform(b);
-    } catch (_) {}
-  }
-
-  // When the grid changes, keep it pinned to the bottom (latest output).
-  function pinBottom() { try { window.terminal.scrollToBottom(); } catch (_) {} }
-  var cfTimer = 0;
-  (function wire() {
-    if (window.terminal && window.terminal.onResize && window.fitAddon) {
-      // The grid changes only when the daemon tells RN the authoritative size and
-      // RN calls resize(); re-fit-to-width and pin on every such change.
-      window.terminal.onResize(function () { setTimeout(function () { applyScale(); pinBottom(); }, 0); });
-      // Throttled cursor-follow: cursor moves fire in bursts while output streams.
-      if (window.terminal.onCursorMove) {
-        window.terminal.onCursorMove(function () {
-          if (cfTimer) return;
-          cfTimer = setTimeout(function () { cfTimer = 0; followCursor(); }, 120);
-        });
-      }
-      // On box changes (keyboard/rotation) re-report the fit and re-scale, but do
-      // NOT fit() — the daemon owns the grid; fitting would fight it.
-      try {
-        var host = document.getElementById('terminal') || document.body;
-        var ro = new ResizeObserver(function () { reportFit(); applyScale(); });
-        ro.observe(host);
-      } catch (_) {}
-      reportFit(); applyScale();
-      // Android's first measure often runs before layout/fonts settle, so the grid
-      // comes out narrower than the WebView until some later resize nudges it. Since
-      // nothing changes the host box in between (the ResizeObserver never fires until
-      // e.g. the keyboard opens), re-measure a few times as things settle so the fit
-      // reaches full width on its own.
-      [60, 200, 500, 1000].forEach(function (t) {
-        setTimeout(function () { reportFit(); applyScale(); }, t);
-      });
-    } else {
-      setTimeout(wire, 200);
-    }
-  })();
-
-  // Keyboard is handled by a React-Native TextInput, NOT the WebView. We disable
-  // the WebView's hidden textarea (see harden) so it can never raise a keyboard
-  // or steal first-responder. The keyboard button shows/hides the keyboard.
-
-  // Gesture routing (canvas is pointer-events:none, so we read touches here):
-  //  • quick drag -> scrollback scroll (overview) / viewport pan (zoomed)
-  //  • pinch -> zoom between fit-to-width and 1:1
-  //  • long-press -> select the line; drag extends by lines; release copies
-  //  • single tap -> nothing   • double-tap -> toggle overview <-> 1:1
-  function lineAt(clientY) {
-    var T = term(), screen = document.querySelector('.xterm-screen');
-    if (!T || !screen) return 0;
-    var r = screen.getBoundingClientRect();
-    var ch = r.height / T.rows;
-    var vis = Math.floor((clientY - r.top) / ch);
-    if (vis < 0) vis = 0; if (vis > T.rows - 1) vis = T.rows - 1;
-    var top = (T.buffer && T.buffer.active) ? T.buffer.active.viewportY : 0;
-    return top + vis;
-  }
-  function copySel() {
-    var T = term(); if (!T) return; var txt = '';
-    try { txt = T.getSelection(); } catch (_) {}
-    if (!txt) return;
-    try { if (navigator.clipboard && navigator.clipboard.writeText) navigator.clipboard.writeText(txt); } catch (_) {}
-  }
-
-  // ---- App-driven scrolling (harness-agnostic) ------------------------------
-  // Full-screen TUIs (Claude Code, Codex, Gemini, aider, vim, less, ...) run in
-  // the terminal's ALTERNATE screen buffer, which by design keeps NO xterm
-  // scrollback — so .xterm-viewport has nothing to scroll and a drag "does
-  // nothing". Rather than hand-encode scroll bytes per harness, we synthesize the
-  // same 'wheel' event a desktop mouse produces and let xterm's own handler
-  // translate it for WHATEVER the app negotiated: proper mouse-wheel bytes when
-  // the app tracks the mouse (X10/UTF-8/SGR — xterm picks the right encoding),
-  // else cursor-key presses (honoring application-cursor mode) in the alt buffer.
-  // This means it works for every harness, not just one. The normal buffer (plain
-  // shell scrollback) keeps its local viewport scroll below.
-  function isAltScreen() {
-    try { var b = term().buffer.active; return !!(b && b.type === 'alternate'); }
-    catch (_) { return false; }
-  }
-  function mouseActive() {
-    try { var m = term().modes; return !!(m && m.mouseTrackingMode && m.mouseTrackingMode !== 'none'); }
-    catch (_) { return false; }
-  }
-  // Let xterm own the scroll only where a local viewport scroll wouldn't reach the
-  // app: the alt buffer (no scrollback) or any buffer where the app tracks mouse.
-  function appDrivesScroll() { return isAltScreen() || mouseActive(); }
-  // Dispatch one wheel notch to xterm (up = toward older output). Coordinates are
-  // the finger position so mouse-reporting apps get an accurate cell.
-  function wheelTick(up, cx, cy) {
-    var el = document.querySelector('.xterm'); if (!el) return;
-    var ev;
-    try {
-      ev = new WheelEvent('wheel', { bubbles: true, cancelable: true,
-        deltaX: 0, deltaY: up ? -1 : 1, deltaZ: 0,
-        deltaMode: 1 /* DOM_DELTA_LINE */, clientX: cx, clientY: cy });
-    } catch (_) {
-      ev = document.createEvent('Event'); ev.initEvent('wheel', true, true);
-      ev.deltaY = up ? -1 : 1; ev.deltaMode = 1; ev.clientX = cx; ev.clientY = cy;
-    }
-    el.dispatchEvent(ev);
-  }
-
-  var sX = 0, sY = 0, mode = 'idle', anchor = 0, lpTimer = 0;
-  var MOVE = 10, LONGPRESS = 350, DBLTAP = 300;
-  var altLines = 0;                        // wheel notches emitted to the app this gesture
-  var SCROLL_STEP_PX = 24;                 // finger px per wheel notch (scale-independent)
-  // Android: we drive the viewport's scrollTop directly off finger movement —
-  // its native overflow-scroll doesn't respond to touch reliably in the WebView,
-  // which is why the terminal felt unscrollable there. iOS keeps native momentum.
-  var _vp = null, startScroll = 0;
-  var lX = 0, lY = 0;                       // last touch point (zoomed pan deltas)
-  var pinch0 = null;                        // pinch anchor {d, s, mx, my}
-  var lastTap = 0, ltX = 0, ltY = 0;        // double-tap detection
-  function clearLP() { if (lpTimer) { clearTimeout(lpTimer); lpTimer = 0; } }
-  function touchDist(e) {
-    var a = e.touches[0], b = e.touches[1];
-    var dx = a.clientX - b.clientX, dy = a.clientY - b.clientY;
-    return Math.sqrt(dx * dx + dy * dy);
-  }
-
-  document.addEventListener('touchstart', function (e) {
-    // Taps on the scroll-to-top button are handled by the button itself; don't
-    // let this capture-phase listener consume them as a terminal tap/long-press.
-    var _tt = e.target;
-    if (_tt && _tt.closest && _tt.closest('#ao-scrolltop')) return;
-    if (e.touches && e.touches.length >= 2) {
-      // Second finger down -> pinch. Cancel any pending tap/long-press/scroll.
-      clearLP(); mode = 'pinch';
-      pinch0 = { d: touchDist(e) || 1, s: Z.s,
-                 mx: (e.touches[0].clientX + e.touches[1].clientX) / 2,
-                 my: (e.touches[0].clientY + e.touches[1].clientY) / 2 };
-      try { term() && term().clearSelection(); } catch (_) {}
-      return;
-    }
-    var t = e.touches ? e.touches[0] : e;
-    sX = t.clientX; sY = t.clientY; lX = sX; lY = sY; mode = 'pending';
-    altLines = 0;
-    _vp = document.querySelector('.xterm-viewport');
-    startScroll = _vp ? _vp.scrollTop : 0;
-    try { term() && term().clearSelection(); } catch (_) {}
-    clearLP();
-    lpTimer = setTimeout(function () {
-      if (mode !== 'pending') return;
-      mode = 'select'; anchor = lineAt(sY);
-      try { term().selectLines(anchor, anchor); } catch (_) {}
-    }, LONGPRESS);
-  }, { capture: true, passive: true });
-
-  document.addEventListener('touchmove', function (e) {
-    if (mode === 'pinch') {
-      if (!e.touches || e.touches.length < 2 || !pinch0) return;
-      if (e.cancelable) e.preventDefault();  // keep the page/viewport from moving
-      var mx = (e.touches[0].clientX + e.touches[1].clientX) / 2;
-      var my = (e.touches[0].clientY + e.touches[1].clientY) / 2;
-      // Two-finger drag pans while pinching; the scale keeps the content under
-      // the midpoint anchored so the zoom feels centered on the fingers.
-      Z.tx += mx - pinch0.mx; Z.ty += my - pinch0.my;
-      setZoom(pinch0.s * (touchDist(e) / pinch0.d), mx, my);
-      pinch0.mx = mx; pinch0.my = my;
-      Z.lastPan = Date.now();
-      return;
-    }
-    var t = e.touches ? e.touches[0] : e;
-    if (mode === 'pending') {
-      if (Math.abs(t.clientX - sX) > MOVE || Math.abs(t.clientY - sY) > MOVE) {
-        mode = 'scroll'; clearLP(); lX = t.clientX; lY = t.clientY;
-      }
-      return;
-    }
-    if (mode === 'scroll') {
-      if (appDrivesScroll()) {
-        // The app owns scrolling here (alt buffer / mouse tracking): feed it wheel
-        // notches instead of moving the (empty) xterm viewport. Content follows the
-        // finger (drag down -> older), matching the normal buffer's direction below.
-        // One notch per SCROLL_STEP_PX of travel; emit only on each boundary cross.
-        if (e.cancelable) e.preventDefault();
-        var moved = (t.clientY - sY) / SCROLL_STEP_PX;   // + = finger down = older
-        var want = moved > 0 ? Math.floor(moved) : Math.ceil(moved);
-        var diff = want - altLines;
-        if (diff !== 0) {
-          var up = diff > 0;                             // more "older" notches -> wheel up
-          for (var i = 0; i < Math.abs(diff); i++) wheelTick(up, t.clientX, t.clientY);
-          altLines = want;
-        }
-        // While zoomed, the horizontal component still pans the magnified grid.
-        if (Z.zoomed) {
-          var bz = box();
-          if (bz) { Z.tx += t.clientX - lX; clampT(bz); applyTransform(bz); Z.lastPan = Date.now(); }
-        }
-        lX = t.clientX; lY = t.clientY;
-        return;
-      }
-      if (Z.zoomed) {
-        // Zoomed in: one finger pans the viewport over the big grid. Vertical
-        // overshoot past the grid edge spills into scrollback scrolling (divide
-        // by scale: scrollTop is in unscaled content px, the finger in screen px).
-        if (e.cancelable) e.preventDefault();
-        var b = box();
-        if (b) {
-          Z.tx += t.clientX - lX;
-          var wantTy = Z.ty + (t.clientY - lY);
-          Z.ty = wantTy;
-          clampT(b);
-          var spill = wantTy - Z.ty;
-          if (spill !== 0 && _vp) _vp.scrollTop -= spill / Z.s;
-          applyTransform(b);
-        }
-        Z.lastPan = Date.now();
-        lX = t.clientX; lY = t.clientY;
-        return;
-      }
-      // Overview: scrollback scroll. Android: move the viewport ourselves, 1:1
-      // with the finger. iOS: leave it to native momentum (don't preventDefault).
-      if (IS_ANDROID && _vp) {
-        _vp.scrollTop = startScroll - (t.clientY - sY);
-        if (e.cancelable) e.preventDefault();
-      }
-      return;
-    }
-    if (mode === 'select') {
-      if (e.cancelable) e.preventDefault();  // stop native scroll while selecting
-      var cur = lineAt(t.clientY);
-      try { term().selectLines(Math.min(anchor, cur), Math.max(anchor, cur)); } catch (_) {}
-    }
-  }, { capture: true, passive: false });
-
-  document.addEventListener('touchend', function (e) {
-    clearLP();
-    if (mode === 'pinch') {
-      // Stay in pinch while two fingers remain; otherwise done (the leftover
-      // finger must lift and re-touch to start a new gesture).
-      if (!e.touches || e.touches.length < 2) { mode = 'idle'; pinch0 = null; }
-      return;
-    }
-    if (mode === 'select') copySel();
-    if (mode === 'pending') {
-      // A tap. Two taps close together toggle overview <-> 1:1 at the tap point.
-      var now = Date.now();
-      if (now - lastTap < DBLTAP && Math.abs(sX - ltX) < 40 && Math.abs(sY - ltY) < 40) {
-        lastTap = 0;
-        if (Z.zoomed) setZoom(Z.min, 0, 0);
-        else { setZoom(1, sX, sY); Z.lastPan = Date.now(); }
-      } else { lastTap = now; ltX = sX; ltY = sY; }
-    }
-    mode = 'idle';
-  }, { capture: true, passive: true });
-
-  // ---- Scroll-to-top button ------------------------------------------------
-  // A floating button that scrolls back to the oldest output. It lives in the
-  // terminal DOM (not RN) because the WebView package exposes no inject hook.
-  // Two regimes, mirroring the drag handler above:
-  //  • normal buffer  -> xterm owns the scrollback; scrollToTop() is a true jump,
-  //    and viewportY tells us whether there's anything above (hide at the top).
-  //  • alt buffer / mouse-tracking (Claude Code, Codex, aider, vim, less, ...) ->
-  //    the APP owns its scrollback, so scrollToTop() can't reach it. Send the same
-  //    wheel notches a drag produces. We can't query the app's scroll position, so
-  //    the button always shows there and the jump is a generous burst.
-  (function scrollTopBtn() {
-    var btn = document.createElement('div');
-    btn.id = 'ao-scrolltop';
-    btn.setAttribute('aria-label', 'Scroll to top');
-    btn.innerHTML = '↑'; // up arrow
-    var s = btn.style;
-    s.position = 'fixed'; s.right = '12px'; s.bottom = '12px';
-    s.width = '36px'; s.height = '36px'; s.lineHeight = '36px';
-    s.textAlign = 'center'; s.borderRadius = '18px';
-    s.background = 'rgba(20,28,40,0.72)'; s.color = '#dbe4f0';
-    s.fontSize = '18px'; s.fontWeight = '600';
-    s.border = '1px solid rgba(120,140,170,0.35)';
-    s.boxShadow = '0 2px 8px rgba(0,0,0,0.4)';
-    s.webkitBackdropFilter = 'blur(6px)'; s.backdropFilter = 'blur(6px)';
-    s.zIndex = '2147483647'; s.display = 'none'; s.cursor = 'pointer';
-    s.pointerEvents = 'auto'; s.userSelect = 'none'; s.webkitUserSelect = 'none';
-    (document.getElementById('terminal') || document.body).appendChild(btn);
-
-    function atTop() {
-      try { var b = term().buffer.active; return !b || b.viewportY <= 0; }
-      catch (_) { return true; }
-    }
-    function update() {
-      // When the app drives scrolling we can't read its position, so always offer
-      // the button; otherwise hide it once xterm's viewport is at the top.
-      var show = appDrivesScroll() ? true : !atTop();
-      btn.style.display = show ? 'block' : 'none';
-    }
-    // Walk the app's scrollback up with the same wheel notches a drag produces,
-    // chunked across frames so a few hundred events don't block the renderer.
-    var TOP_BURST = 400, BURST_CHUNK = 25;
-    function burstUp() {
-      var el = document.querySelector('.xterm');
-      var r = el ? el.getBoundingClientRect() : null;
-      var cx = r ? r.left + r.width / 2 : 0;
-      var cy = r ? r.top + r.height / 2 : 0;
-      var left = TOP_BURST;
-      (function step() {
-        for (var i = 0; i < BURST_CHUNK && left > 0; i++, left--) wheelTick(true, cx, cy);
-        if (left > 0) requestAnimationFrame(step);
-      })();
-    }
-    // Tap -> back to the oldest output. Swallow the event so nothing else reacts.
-    function go(e) {
-      if (e.stopPropagation) e.stopPropagation();
-      if (e.cancelable && e.preventDefault) e.preventDefault();
-      if (appDrivesScroll()) burstUp();
-      else { try { term().scrollToTop(); } catch (_) {} }
-      update();
-    }
-    btn.addEventListener('touchstart', go, { capture: true });
-    btn.addEventListener('click', go, { capture: true });
-
-    // Re-evaluate on xterm scroll and buffer switches; poll as a cheap fallback
-    // for transitions those miss (our drag handler moves the viewport directly).
-    (function wire() {
-      var T = term();
-      if (T && T.onScroll) {
-        T.onScroll(update);
-        try { if (T.buffer && T.buffer.onBufferChange) T.buffer.onBufferChange(update); } catch (_) {}
-        update();
-      } else { setTimeout(wire, 200); }
-    })();
-    setInterval(update, 500);
-  })();
-
-  // Disable the WebView's hidden textarea so it can NEVER show a keyboard or
-  // steal first-responder from the RN input. RN handles all keyboard I/O.
-  function harden() {
-    var t = document.querySelector('.xterm-helper-textarea');
-    if (t) {
-      t.disabled = true;
-      t.setAttribute('inputmode', 'none');
-      t.setAttribute('readonly', 'readonly');
-      t.setAttribute('autocorrect', 'off');
-      t.setAttribute('autocapitalize', 'off');
-      t.setAttribute('autocomplete', 'off');
-      t.setAttribute('spellcheck', 'false');
-    }
-  }
-  harden(); setTimeout(harden, 400); setTimeout(harden, 1500);
-  setInterval(harden, 3000); // keep it disabled if xterm recreates it
-  true;
-})();
-true;
-`;
-
-const statusLabel: Record<MuxStatus, string> = {
-	connecting: "connecting...",
-	open: "live",
-	closed: "disconnected",
-	error: "error",
-};
-const statusColorFor = (t: Theme): Record<MuxStatus, string> => ({
-	connecting: t.attention,
-	open: t.green,
-	closed: t.textTertiary,
-	error: t.red,
-});
+/** A terminal with nothing running behind it: power, switched off. */
+const TERMINATED_GLYPH: PlatformSymbol = { ios: "power", android: "power_settings_new" };
 
 function terminalInterfacePhaseLabel(phase?: string): string {
 	switch (phase) {
 		case "draining":
-			return "Waiting for the current terminal turn to finish. New AO messages are queued safely.";
+			return "Waiting for the current terminal turn to finish. New messages are queued safely.";
 		case "source_stopping":
 			return "Stopping the terminal controller before Chat starts.";
 		case "source_stopped":
@@ -547,6 +77,8 @@ function terminalInterfacePhaseLabel(phase?: string): string {
 			return "Resuming the same native conversation in Chat.";
 		case "activating":
 			return "Opening the Chat interface.";
+		case "completed":
+			return "Chat is ready. Opening it now.";
 		default:
 			return "Checking that Chat can resume this agent's native conversation.";
 	}
@@ -560,10 +92,13 @@ function terminalInterfacePhaseLabel(phase?: string): string {
  */
 export default function TerminalScreen({ session: resolved }: { session?: RouteSession }) {
 	const t = useTheme();
-	const { scheme } = useThemeState();
+	const { scheme, style } = useThemeState();
 	const styles = useThemedStyles(makeStyles);
-	const params = useLocalSearchParams<{ id?: string; handleId?: string; projectId?: string; sessionId?: string; title?: string }>();
+	const params = useLocalSearchParams<{ id?: string; handleId?: string; projectId?: string; sessionId?: string; title?: string; kind?: string; hostId?: string }>();
 	const shellOnly = Boolean(params.handleId);
+	// A reviewer pane is attached by handle like a shell, but the daemon does not
+	// own it as a shell terminal: closing it means stopping the worker's reviewer.
+	const reviewerPane = params.kind === "reviewer" && Boolean(params.sessionId);
 	const id = String(params.handleId ?? params.id ?? "");
 	const sessionId = shellOnly ? String(params.sessionId ?? "") : id;
 	const projectId = params.projectId ? String(params.projectId) : undefined;
@@ -572,60 +107,67 @@ export default function TerminalScreen({ session: resolved }: { session?: RouteS
 	const [headerRightReady, setHeaderRightReady] = useState(false);
 	useLayoutEffect(
 		() => resetHeaderRightForSwap(
-			() => navigation.setOptions({ headerRight: undefined }),
+			() => navigation.setOptions(glassHeaderControl("right")),
 			() => setHeaderRightReady(true),
 		),
 		[navigation],
 	);
 	const insets = useSafeAreaInsets();
 
-	// Leaving the screen: pop when there's history, otherwise go to the board.
-	// Guards against a missing/broken back button when this route was cold-started
-	// with no back-stack - e.g. a reload while on the terminal, or a deep link.
-	const leave = useCallback(() => {
-		if (router.canGoBack()) router.back();
-		else router.replace("/");
-	}, [router]);
+	// Leaving the screen. This route is cold-started with no back stack often
+	// enough — a reload while on the terminal, or a deep link — that the rule lives
+	// in one place; see `backOr`.
+	const leave = useCallback(() => backOr(router), [router]);
 
 	const xtermRef = useRef<XtermWebViewHandle | null>(null);
-	// Theme changes still replace xterm. Retain bytes arriving between the old
-	// WebView unmount and the replacement's onInitialized callback in wire order.
-	const xtermReadyRef = useRef(false);
-	const pendingOutputRef = useRef<Uint8Array[]>([]);
-	const muxRef = useRef<MuxClient | null>(null);
-	const openedRef = useRef(false);
-	// Last grid size reported by the WebView's FitAddon, so we can send it to the
-	// PTY the moment the terminal opens (dims may arrive before or after open).
-	const lastDimsRef = useRef<{ cols: number; rows: number } | null>(null);
 	// The authoritative grid the daemon told us the shared PTY is actually using
 	// (driven by the largest/primary client — e.g. a co-viewing desktop). We render
 	// THIS grid, not the phone's own fit, so the display matches the PTY and a
 	// full-screen TUI doesn't mis-render. The WebView crops/scales it locally.
 	const authRef = useRef<{ cols: number; rows: number } | null>(null);
 
-	const [cfg, setCfg] = useState<ServerConfig | null>(null);
 	const [status, setStatus] = useState<MuxStatus>("connecting");
-	const [size, setSize] = useState<{ cols: number; rows: number } | null>(null);
-	const [banner, setBanner] = useState<string | null>(null);
+	// One notice at a time, the newest winning: an inline row on iOS, a snackbar
+	// on Android (see TerminalNotice).
+	const [notice, setNotice] = useState<TerminalNoticeMessage | null>(null);
+	const noticeId = useRef(0);
+	const showNotice = useCallback((text: string, tone: TerminalNoticeTone = "error") => {
+		noticeId.current += 1;
+		setNotice({ id: noticeId.current, text, tone });
+	}, []);
+	const clearNotice = useCallback(() => setNotice(null), []);
+	const [dockHeight, setDockHeight] = useState(0);
 	const [kbHeight, setKbHeight] = useState(0); // iOS: space to reserve for keyboard
 	const [kbVisible, setKbVisible] = useState(false); // both platforms
 	const [msg, setMsg] = useState("");
 	const [sending, setSending] = useState(false);
+	// A plain shell has no agent to message. Otherwise each send goes to the agent
+	// unless the composer's toggle routes it to the terminal, and falls back to the
+	// terminal while the agent waits on a prompt (routeForSend).
 	const [sendTarget, setSendTarget] = useState<SendTarget>(shellOnly ? "terminal" : "agent");
 	// A terminated session has no live PTY (the mux answers "Session not found").
 	// Track that + the known status so we can offer Restore instead of a dead term.
 	const [notFound, setNotFound] = useState(false);
 	const [restoring, setRestoring] = useState(false);
-	// In-app browser: shows the static preview file the agent generated (an
-	// index.html). We poll the daemon's on-demand detector while the terminal is
-	// open, but we deliberately DO NOT auto-open the overlay: the detector falls back
-	// to any previewable file (e.g. a repo's README.md), so auto-popping would steal
-	// the screen with an unbuilt/blank page. Instead the globe button lights up with a
-	// green dot when the agent has produced something to view (any previewable file
-	// except the repo README); the user taps it to open.
-	const [browserOpen, setBrowserOpen] = useState(false);
-	const [preview, setPreview] = useState<{ entry: string; url: string } | null>(null);
-	const previewWebRef = useRef<WebView>(null);
+	// Set while the session is switching to Chat. The switch stops this
+	// terminal's PTY on purpose, so its exit is part of the handoff, not news.
+	const switchingRef = useRef(false);
+	// Whether the terminal has drawn anything yet. A fresh attach is empty until
+	// the agent's TUI paints, which after a switch from Chat takes a few seconds.
+	const [painted, setPainted] = useState(false);
+	const [paintWaitOver, setPaintWaitOver] = useState(false);
+	const paintedRef = useRef(false);
+	const detectPaintRef = useRef(createPaintDetector());
+	// Bumped whenever a fresh PTY is about to attach (Restore, another handle),
+	// which restarts the wait below: the new agent boots onto an empty grid too.
+	const [paintEpoch, setPaintEpoch] = useState(0);
+	const restartPaintWait = useCallback(() => {
+		paintedRef.current = false;
+		detectPaintRef.current = createPaintDetector();
+		setPainted(false);
+		setPaintWaitOver(false);
+		setPaintEpoch((epoch) => epoch + 1);
+	}, []);
 
 	const { sessions, orchestrators, restore, refresh, config: activeConfig } = useApp();
 	const known =
@@ -637,7 +179,40 @@ export default function TerminalScreen({ session: resolved }: { session?: RouteS
 	// tmux. Older daemons omit terminalHandleId and retain the historical
 	// session-id handle, which keeps the fallback backward-compatible.
 	const terminalHandleId = shellOnly ? id : known?.terminalHandleId || id;
-	const interfaceSwitch = useInterfaceTransition(cfg, shellOnly ? "" : sessionId, refresh);
+	// The mux socket and the PTY attached on it. Theme changes still replace the
+	// xterm; output arriving between the old WebView and the replacement's
+	// onInitialized is held in wire order (see useTerminalMux).
+	const { muxRef, openedRef, lastDimsRef, xtermReadyRef, markXtermReady, openTerminal } = useTerminalMux({
+		config: activeConfig,
+		terminalHandleId,
+		projectId,
+		xtermRef,
+		events: {
+			onStatus: setStatus,
+			onExited: (code) => {
+				if (!switchingRef.current) showNotice(terminalExitedCopy(code), code === 0 ? "info" : "error");
+				setNotFound(true);
+			},
+			onOutput: (bytes) => {
+				if (paintedRef.current || !detectPaintRef.current(bytes)) return;
+				paintedRef.current = true;
+				setPainted(true);
+			},
+			// A missing PTY means the session is terminated - offer Restore
+			// instead of surfacing it as a raw error notice.
+			onError: (message) => {
+				if (isTerminalGoneError(message)) setNotFound(true);
+				else showNotice(terminalErrorCopy(message));
+			},
+			// Render the daemon's authoritative grid exactly. The WebView applies
+			// only local crop/zoom, so the phone cannot disturb a desktop owner.
+			onResize: (cols, rows) => {
+				authRef.current = { cols, rows };
+				xtermRef.current?.resize({ cols, rows });
+			},
+		},
+	});
+	const interfaceSwitch = useInterfaceTransition(activeConfig, shellOnly ? "" : sessionId, refresh);
 	// Owned by the screen rather than the hook: the background poll calls the same
 	// `refresh()`, so a hook-wide busy flag would let a poll tick disable the
 	// user's own button and swallow the very tap the recheck exists to serve.
@@ -659,6 +234,11 @@ export default function TerminalScreen({ session: resolved }: { session?: RouteS
 	const interfaceStatusRef = useRef(interfaceSwitch.status);
 	interfaceStatusRef.current = interfaceSwitch.status;
 	const interfaceTransitionActive = mobileInterfaceTransitionIsActive(interfaceSwitch.transition);
+	// The switch has finished but the route still shows this screen until the
+	// board's next poll; the card stays up through that gap.
+	const handoff = useInterfaceHandoff(interfaceSwitch.transition, "tui");
+	const switchCardShown = interfaceTransitionActive || handoff.pending;
+	switchingRef.current = switchCardShown || interfaceSwitch.starting;
 	const interfaceRecoveryMessage = mobileInterfaceTransitionRecoveryMessage(interfaceSwitch.transition);
 	const interfaceTransitionNotice =
 		!interfaceTransitionActive &&
@@ -673,7 +253,7 @@ export default function TerminalScreen({ session: resolved }: { session?: RouteS
 	const interfaceTransitionNoticeText =
 		interfaceTransitionNotice?.errorDetail ||
 		(interfaceTransitionRecovered
-			? "AO restored the session in its last committed interface."
+			? "Orchestrator restored the session in its last committed interface."
 			: interfaceTransitionNotice?.phase === "recovery_required"
 				? "The interface switch needs recovery before more work is sent."
 				: "The interface switch failed; Terminal UI remains available.");
@@ -689,15 +269,14 @@ export default function TerminalScreen({ session: resolved }: { session?: RouteS
 			known.activity === "waiting_input" ||
 			known.activity === "blocked"),
 	);
-	const dead = notFound || (!shellOnly && known ? isTerminalStatus(known.status) : false);
-	// What counts as a live preview: any file the daemon surfaces (an .html build, or
-	// a generated doc like plan.md / a report) EXCEPT a repo's README, which the
-	// detector's markdown fallback always matches on a fresh checkout. Filtering the
-	// README out keeps the globe's green dot meaningful — it means "there's something
-	// the agent produced to view", not just "this repo has a README".
-	const previewBase = (preview?.entry ?? "").split("/").pop() ?? "";
-	const isReadme = /^readme\.(md|markdown)$/i.test(previewBase);
-	const hasPreview = !!preview && !isReadme;
+	const dead = notFound || (!shellOnly && known ? isRuntimeGone(known) : false);
+	// Polled so the globe can advertise the optional App preview tab.
+	const hasPreview = useSessionPreview(activeConfig, id, !shellOnly);
+	// The terminal's artifacts, in its "⋯" once the agent has written something.
+	const artifactCount = !shellOnly && known && "artifacts" in known ? deliverableArtifacts(known.artifacts ?? []).length : 0;
+	const openArtifacts = useCallback(() => {
+		router.push({ pathname: "/artifacts/[sessionId]", params: { sessionId, title: params.title, hostId: params.hostId } });
+	}, [params.hostId, params.title, router, sessionId]);
 
 	// Neither platform shrinks the layout for the keyboard: iOS never has, and on
 	// Android edge-to-edge (edgeToEdgeEnabled) defeats windowSoftInputMode=adjustResize
@@ -774,116 +353,44 @@ export default function TerminalScreen({ session: resolved }: { session?: RouteS
 		};
 	}, []);
 
-	// Header shows just the short id; Kill lives in our own status bar below so we
-	// fully control its shape/alignment (iOS draws its own box behind header
-	// buttons, which fights any custom background).
+	// The session's name, as the chat and the board call it; the short id only
+	// when it has none. Everything else the bar holds is a toolbar item.
+	const named = sessions.find((session) => session.id === id);
+	const sessionName = named?.displayName || named?.issueTitle || params.title;
 	useLayoutEffect(() => {
 		navigation.setOptions({
-			title: shellOnly ? (params.title || "Worktree shell") : id.length > 22 ? `${id.slice(0, 20)}...` : id,
-			// Always render our own Back control so it works even when the app was
-			// cold-started directly on this route (reload/deep link) and the stack
-			// has no history for the default back button to use.
-			headerLeft: () => <MinimalBackButton onPress={leave} />,
+			title: shellOnly ? (params.title || "Worktree shell") : sessionName || (id.length > 22 ? `${id.slice(0, 20)}...` : id),
 		});
-	}, [navigation, id, leave, params.title, shellOnly]);
+	}, [navigation, id, params.title, sessionName, shellOnly]);
 
-	// Load config, then connect the mux socket.
-	// Rebuilt whenever the active endpoint changes, not only when the session
-	// does. The app re-races its endpoints when the network moves — losing
-	// Wi-Fi hands the session to Tailscale or the tunnel — and a mux still
-	// pointed at the previous address stays disconnected on a blank screen
-	// until the screen is closed and reopened.
-	const activeBaseUrl = activeConfig
-		? `${activeConfig.secure ? "https" : "http"}://${activeConfig.host}:${activeConfig.httpPort}`
-		: "";
-
+	// Whether there is older output to jump to, as the WebView last reported it.
+	const [canScrollTop, setCanScrollTop] = useState(false);
+	// Android killed the WebView's renderer: the grid is black for good. Held as
+	// state, not a notice, because a snackbar would leave before the problem does.
+	const [viewGone, setViewGone] = useState(false);
+	// A terminal that really is blank (a cleared shell, an empty alt screen)
+	// must not hide behind the loader for good, so it gives up after a while.
 	useEffect(() => {
-		let disposed = false;
-		(async () => {
-			// Prefer the endpoint the race settled on; fall back to storage on the
-			// first render, before the store has resolved one.
-			const config = activeConfig ?? (await loadConfig());
-			if (disposed) return;
-			setCfg(config);
-			if (!isConfigured(config)) return;
-
-			const mux = new MuxClient(config, {
-				onStatus: (s) => setStatus(s),
-				onTerminalData: (tid, bytes) => {
-					if (tid !== terminalHandleId) return;
-					if (!xtermReadyRef.current || !xtermRef.current) {
-						pendingOutputRef.current.push(bytes.slice());
-						return;
-					}
-					xtermRef.current.write(bytes);
-				},
-				onTerminalExited: (tid, code) => {
-					if (tid === terminalHandleId) {
-						setBanner(`Session exited (code ${code})`);
-						setNotFound(true);
-					}
-				},
-				onTerminalError: (tid, msg) => {
-					if (tid !== terminalHandleId) return;
-					// A missing PTY means the session is terminated - offer Restore
-					// instead of surfacing it as a raw error banner.
-					if (/not found/i.test(msg)) setNotFound(true);
-					else setBanner(msg);
-				},
-				onTerminalResize: (tid, cols, rows) => {
-					if (tid !== terminalHandleId) return;
-					// Render the daemon's authoritative grid exactly. The WebView applies
-					// only local crop/zoom, so the phone cannot disturb a desktop owner.
-					authRef.current = { cols, rows };
-					setSize({ cols, rows });
-					xtermRef.current?.resize({ cols, rows });
-				},
-			});
-			muxRef.current = mux;
-			mux.connect();
-		})();
-		return () => {
-			disposed = true;
-			muxRef.current?.disconnect();
-			muxRef.current = null;
-			xtermReadyRef.current = false;
-			pendingOutputRef.current = [];
-		};
-		// activeBaseUrl, not activeConfig: the object identity changes on every
-		// resolve, and rebuilding the mux on each one would tear down a healthy
-		// terminal for no reason.
-		// eslint-disable-next-line react-hooks/exhaustive-deps
-	}, [terminalHandleId, activeBaseUrl]);
+		const timer = setTimeout(() => setPaintWaitOver(true), TERMINAL_PAINT_WAIT_MS);
+		return () => clearTimeout(timer);
+	}, [paintEpoch]);
+	// A different PTY (the board reported a new handle) attaches empty as well.
+	const paintHandleRef = useRef(terminalHandleId);
+	useEffect(() => {
+		if (paintHandleRef.current === terminalHandleId) return;
+		paintHandleRef.current = terminalHandleId;
+		restartPaintWait();
+	}, [restartPaintWait, terminalHandleId]);
+	const startLoaderShown = !painted && !paintWaitOver && !dead && !viewGone && !switchCardShown && status !== "error";
 
 	useLayoutEffect(() => {
 		xtermReadyRef.current = false;
-	}, [scheme]);
+		// The replacement WebView reports its own answer once it is up, and
+		// starts with a renderer of its own.
+		setCanScrollTop(false);
+		setViewGone(false);
+	}, [scheme, style]);
 
-	// Poll the daemon's on-demand preview detector while the terminal is open, just
-	// to keep `preview` current for the globe button. We never auto-open the overlay
-	// (see the note by the state above): the detector's markdown fallback matches a
-	// repo README, so auto-popping would surface a blank/unbuilt page.
-	useEffect(() => {
-		if (shellOnly) return;
-		if (!cfg || !isConfigured(cfg)) return;
-		let cancelled = false;
-		let timer: ReturnType<typeof setTimeout> | null = null;
-		const tick = async () => {
-			try {
-				const p = await getPreview(cfg, id);
-				if (cancelled) return;
-				setPreview(p);
-			} catch {
-				/* transient - keep polling */
-			}
-			if (!cancelled) timer = setTimeout(tick, 5000);
-		};
-		tick();
-		return () => {
-			cancelled = true;
-			if (timer) clearTimeout(timer);
-		};
-	}, [cfg, id, shellOnly]);
 
 	// The WebView reports the phone's NATURAL fit (proposeDimensions, measure-only).
 	// We forward it to the daemon as this client's requested size — used only when
@@ -894,17 +401,14 @@ export default function TerminalScreen({ session: resolved }: { session?: RouteS
 		(cols: number, rows: number) => {
 			lastDimsRef.current = { cols, rows };
 			if (openedRef.current) muxRef.current?.resize(terminalHandleId, cols, rows, projectId);
-			if (!authRef.current) {
-				setSize({ cols, rows });
-				xtermRef.current?.resize({ cols, rows });
-			}
+			if (!authRef.current) xtermRef.current?.resize({ cols, rows });
 		},
 		[terminalHandleId, projectId],
 	);
 
 	// fressh routes WebView {type:'debug'} messages to logger.log(prefix, message).
-	// We piggyback on it for the FRESSH_DIMS report (using a custom onMessage would
-	// clobber fressh's own bridge).
+	// We piggyback on it for the FRESSH_DIMS and AO_SCROLLTOP reports (using a
+	// custom onMessage would clobber fressh's own bridge).
 	const logger = useMemo(
 		() => ({
 			log: (...args: unknown[]) => {
@@ -914,30 +418,26 @@ export default function TerminalScreen({ session: resolved }: { session?: RouteS
 					const cols = parseInt(parts[1], 10);
 					const rows = parseInt(parts[2], 10);
 					if (cols > 0 && rows > 0) applyDims(cols, rows);
+					return;
 				}
+				const scrollTop = scrollTopReport(m);
+				if (scrollTop !== undefined) setCanScrollTop(scrollTop);
 			},
 		}),
 		[applyDims],
 	);
 
 	const onInitialized = useCallback(() => {
-		xtermReadyRef.current = true;
-		const pending = pendingOutputRef.current;
-		pendingOutputRef.current = [];
-		for (const bytes of pending) xtermRef.current?.write(bytes);
+		markXtermReady();
 		// A fresh xterm (first mount, or a remount after a font-zoom) starts at its
 		// default grid — restore the daemon's authoritative grid onto it so it keeps
 		// mirroring the shared PTY rather than snapping to the default.
 		if (authRef.current) xtermRef.current?.resize(authRef.current);
-		// Guard against a second open if the WebView re-fires onInitialized (e.g.
-		// remount on orientation change) - that would attach the PTY twice.
-		if (openedRef.current) return;
-		openedRef.current = true;
-		muxRef.current?.openTerminal(terminalHandleId, projectId);
-		// If the FitAddon already reported dims before open, send them to the PTY now.
-		const d = lastDimsRef.current;
-		if (d) muxRef.current?.resize(terminalHandleId, d.cols, d.rows, projectId);
-	}, [terminalHandleId, projectId]);
+		// Opens at most once per socket, so a WebView re-firing onInitialized (e.g.
+		// remount on orientation change) does not attach the PTY twice. With no
+		// socket yet, the socket opens it when it connects.
+		openTerminal();
+	}, [markXtermReady, openTerminal]);
 
 	const onData = useCallback(
 		(data: string) => {
@@ -965,7 +465,7 @@ export default function TerminalScreen({ session: resolved }: { session?: RouteS
 	// terminated or exited session has no PTY, and rerouting there would swallow
 	// the user's text and report success.
 	//
-	// The reroute is announced in the banner rather than done silently, and the
+	// The reroute is announced in a notice rather than done silently, and the
 	// text stays in the field on any failure we did NOT handle, so nothing typed
 	// is ever lost.
 	const sendPrompt = useCallback(async () => {
@@ -975,18 +475,18 @@ export default function TerminalScreen({ session: resolved }: { session?: RouteS
 			if (muxRef.current && status === "open") {
 				muxRef.current.sendInput(terminalHandleId, terminalPayload(text), projectId);
 				haptics.success();
+				// No notice: the composer's toggle already shows the route.
 				setMsg("");
-				setBanner(TERMINAL_MODE_NOTICE);
 			} else {
 				haptics.error();
-				setBanner(TERMINAL_UNAVAILABLE_NOTICE);
+				showNotice(TERMINAL_UNAVAILABLE_NOTICE);
 			}
 			return;
 		}
 		setSending(true);
 		try {
-			const config = cfg ?? (await loadConfig());
-			await sendMessage(config, id, text);
+			if (!activeConfig) throw new Error("No active machine connection");
+			await sendMessage(activeConfig, id, text, { userAuthored: true });
 			haptics.success();
 			setMsg("");
 		} catch (e) {
@@ -997,16 +497,17 @@ export default function TerminalScreen({ session: resolved }: { session?: RouteS
 				muxRef.current.sendInput(terminalHandleId, terminalPayload(text), projectId);
 				haptics.success();
 				setMsg("");
-				setSendTarget("terminal");
-				setBanner(REROUTED_NOTICE);
+				// Reroute this one send only. Leaving the toggle alone keeps later
+				// messages on the agent's delivery path once the prompt is answered.
+				showNotice(REROUTED_NOTICE, "info");
 			} else {
 				haptics.error();
-				setBanner(`Send failed: ${e instanceof Error ? e.message : String(e)}`);
+				showNotice(`Message not sent. ${userFacingError(e)}`);
 			}
 		} finally {
 			setSending(false);
 		}
-	}, [msg, sendTarget, cfg, id, terminalHandleId, projectId, status]);
+	}, [msg, sendTarget, activeConfig, id, terminalHandleId, projectId, status, showNotice]);
 
 	// Push-to-talk dictation, captured on the PHONE rather than by the harness.
 	//
@@ -1034,39 +535,38 @@ export default function TerminalScreen({ session: resolved }: { session?: RouteS
 		}, []),
 	});
 
-	// Recognition failures surface in the existing banner rather than new UI.
+	// Recognition failures surface as a notice rather than new UI.
 	useEffect(() => {
-		if (voice.error) setBanner(voice.error);
-	}, [voice.error]);
+		if (voice.error) showNotice(voice.error);
+	}, [voice.error, showNotice]);
 
-	// Toggle the in-app browser. The poll above keeps `preview` current, so a tap
-	// just shows/hides the overlay. A bare README (the detector's markdown fallback)
-	// reports "no preview yet" instead of surfacing an unbuilt repo doc.
+	// Preview is one session-level destination: the live desktop browser first,
+	// with the generated app/document preview available as a second tab.
 	const toggleBrowser = useCallback(() => {
-		haptics.tap();
-		if (browserOpen) {
-			setBrowserOpen(false);
-			return;
-		}
-		if (!hasPreview) {
-			setBanner("No preview yet - waiting for the agent to generate a page or document...");
-			return;
-		}
-		setBrowserOpen(true);
-	}, [browserOpen, hasPreview]);
+		router.push({
+			pathname: "/preview/[id]",
+			params: {
+				id: sessionId,
+				hostId: params.hostId,
+				previewUrl: known && "previewUrl" in known ? known.previewUrl ?? undefined : undefined,
+			},
+		});
+	}, [known, params.hostId, router, sessionId]);
 
 	const startInterfaceSwitch = useCallback(
 		async (policy: "drain" | "interrupt") => {
 			try {
 				await interfaceSwitch.start("chat", policy);
-				setBanner(null);
+				clearNotice();
 			} catch (cause) {
-				setBanner(`Switch failed: ${cause instanceof Error ? cause.message : String(cause)}`);
+				showNotice(`Couldn't switch interface. ${userFacingError(cause)}`);
 			}
 		},
-		[interfaceSwitch],
+		[clearNotice, interfaceSwitch, showNotice],
 	);
 
+	// The detail of the "Switch to Chat?" question while it is being asked.
+	const [switchQuestion, setSwitchQuestion] = useState<string | null>(null);
 	const requestInterfaceSwitch = useCallback(async () => {
 		// A second tap would start a second recheck against a link already slow
 		// enough for the first one to be visible. `starting` and an active
@@ -1088,7 +588,7 @@ export default function TerminalScreen({ session: resolved }: { session?: RouteS
 				if (!result) recheck = { outcome: "not-attempted" };
 				// A superseded answer is not a verdict, same rule as the hook's own
 				// loop: the readiness tick can overtake a slow tap request, and acting
-				// on the tap's payload would alert "Could not reach AO" (or "Not ready
+				// on the tap's payload would alert "Couldn't reach AO" (or "Not ready
 				// yet" off an older body) while the button had just enabled itself.
 				// The newer request owns the answer; use whatever the hook adopted.
 				else if (result.stale) status = interfaceStatusRef.current;
@@ -1119,18 +619,19 @@ export default function TerminalScreen({ session: resolved }: { session?: RouteS
 			void startInterfaceSwitch("drain");
 			return;
 		}
-		Alert.alert(
-			"Switch to Chat?",
+		// Asked by InterfaceSwitchConfirm: an action sheet on iOS, the system
+		// dialog on Android.
+		setSwitchQuestion(
 			known?.activity === "waiting_input" || known?.activity === "blocked"
 				? "This turn is waiting for your input. Finish waits for your answer; stop cancels it and switches now."
-				: "Keep the same AO session, worktree, and native agent conversation.",
-			[
-				{ text: "Keep Terminal UI", style: "cancel" },
-				{ text: "Finish, then switch", onPress: () => void startInterfaceSwitch("drain") },
-				{ text: "Stop and switch", style: "destructive", onPress: () => void startInterfaceSwitch("interrupt") },
-			],
+				: "Keep the same Orchestrator session, worktree, and native agent conversation.",
 		);
 	}, [interfaceBusy, interfaceSwitch, interfaceTransitionActive, known?.activity, startInterfaceSwitch]);
+	const closeSwitchQuestion = useCallback(() => setSwitchQuestion(null), []);
+	const answerSwitchQuestion = useCallback((policy: InterfaceSwitchPolicy) => {
+		setSwitchQuestion(null);
+		void startInterfaceSwitch(policy);
+	}, [startInterfaceSwitch]);
 
 	// The poll keeps retrying on its own at up to 8s; this is for the user who can
 	// see the network is back and does not want to wait for the tick. The header
@@ -1139,7 +640,6 @@ export default function TerminalScreen({ session: resolved }: { session?: RouteS
 	// request, and two of them against a slow link is what the guard prevents.
 	const retryInterfaceCheck = useCallback(async () => {
 		if (recheckingRef.current) return;
-		haptics.tap();
 		recheckingRef.current = true;
 		setRechecking(true);
 		try {
@@ -1150,90 +650,61 @@ export default function TerminalScreen({ session: resolved }: { session?: RouteS
 		}
 	}, [interfaceSwitch]);
 
+	// A finished switch the route has not caught up with: ask the board again,
+	// which is what moves the route on to Chat.
+	const [refreshingBoard, setRefreshingBoard] = useState(false);
+	const retryHandoff = useCallback(async () => {
+		setRefreshingBoard(true);
+		try {
+			await refresh();
+		} catch {
+			// The card stays up with Retry; the board's own poll reports the link.
+		} finally {
+			if (mountedRef.current) setRefreshingBoard(false);
+		}
+	}, [refresh]);
+
 	const requestInterfaceFailureRecovery = useCallback(() => {
 		if (!interfaceFailureRecovery) return;
 		interfaceFailureRecovery.confirm((policy) => void startInterfaceSwitch(policy));
 	}, [interfaceFailureRecovery, startInterfaceSwitch]);
 
-	// The browser toggle lives in the nav bar, beside the session name, to keep the
-	// status row uncluttered. Separate from the headerLeft effect above because
-	// `toggleBrowser` is declared here — referencing it in that effect's dep array
-	// would read it before initialisation.
-	useLayoutEffect(() => {
-		if (shellOnly || !headerRightReady) {
-			navigation.setOptions({ headerRight: undefined });
-			return;
-		}
-		navigation.setOptions({
-			headerRight: () => (
-				<View style={styles.headerActions}>
-					<Pressable
-						hitSlop={10}
-						accessibilityLabel="Open Chat interface"
-						accessibilityState={{
-							busy: interfaceTransitionActive || interfaceSwitch.starting || rechecking,
-						}}
-						disabled={rechecking || interfaceSwitch.starting || interfaceTransitionActive}
-						onPress={() => void requestInterfaceSwitch()}
-						style={({ pressed }) => [styles.headerBrowserBtn, pressed && { opacity: 0.6 }]}
-					>
-						{/* A spinner rather than a dimmed glyph: the recheck only runs while
-						    the icon is already faint, so fading it further reads as broken.
-						    `starting` shows it too — that POST is disabled-but-silent for up
-						    to REQUEST_TIMEOUT_MS otherwise, the same dead-button shape the
-						    recheck spinner exists to remove. */}
-						{rechecking || interfaceSwitch.starting ? (
-							<ActivityIndicator size="small" color={t.blue} />
-						) : (
-							<Feather
-								name={interfaceTransitionActive ? "repeat" : "message-square"}
-								size={18}
-								color={interfaceSwitch.status?.supported ? t.blue : t.textFaint}
-							/>
-						)}
-					</Pressable>
-					<Pressable
-						hitSlop={12}
-						accessibilityLabel={browserOpen ? "Close preview" : "Open preview"}
-						onPress={toggleBrowser}
-						style={({ pressed }) => [styles.headerBrowserBtn, pressed && { opacity: 0.6 }]}
-					>
-						<Feather
-							name="globe"
-							size={19}
-							color={browserOpen ? t.blue : hasPreview ? t.green : t.textSecondary}
-						/>
-						{hasPreview && !browserOpen && <View style={styles.browserReadyDot} />}
-					</Pressable>
-				</View>
-			),
-		});
-	}, [headerRightReady, navigation, browserOpen, hasPreview, toggleBrowser, styles, t, shellOnly, interfaceTransitionActive, interfaceSwitch.starting, rechecking, interfaceSwitch.status?.supported, requestInterfaceSwitch]);
+	const openFiles = useCallback(() => {
+		router.push(filesRoute(sessionId, params.hostId, params.title));
+	}, [params.hostId, params.title, router, sessionId]);
 
 	const confirmKill = useCallback(() => {
 		const doKill = async () => {
 			try {
-				const config = cfg ?? (await loadConfig());
-				if (shellOnly) await closeShellTerminal(config, id);
-				else await killSession(config, id);
+				if (!activeConfig) throw new Error("No active machine connection");
+				if (reviewerPane) await killSessionReviewer(activeConfig, String(params.sessionId));
+				else if (shellOnly) await closeShellTerminal(activeConfig, id);
+				else await killSession(activeConfig, id);
 				haptics.success();
 				leave();
 			} catch (e) {
 				haptics.error();
-				setBanner(`Kill failed: ${e instanceof Error ? e.message : String(e)}`);
+				showNotice(`${reviewerPane ? "Couldn't stop the reviewer" : shellOnly ? "Couldn't close the shell" : "Couldn't archive the session"}. ${userFacingError(e)}`);
 			}
 		};
 		if (Platform.OS === "web") {
 			doKill();
 			return;
 		}
-		// Cautionary buzz as the destructive confirmation dialog is raised.
+		if (reviewerPane) {
+			haptics.warning();
+			Alert.alert("Stop reviewer session?", "This closes the persistent reviewer and cancels any review it is currently running. Review history is preserved.", [
+				{ text: "Keep reviewer", style: "cancel" },
+				{ text: "Stop reviewer", style: "destructive", onPress: doKill },
+			]);
+			return;
+		}
 		haptics.warning();
-		Alert.alert(shellOnly ? "Close shell?" : "Kill session?", shellOnly ? "This stops the worktree shell." : `This stops ${id}.`, [
-			{ text: "Cancel", style: "cancel" },
-			{ text: shellOnly ? "Close" : "Kill", style: "destructive", onPress: doKill },
+		Alert.alert(shellOnly ? "Close shell?" : ARCHIVE_SESSION_CONFIRM.title, shellOnly ? "This stops the worktree shell." : ARCHIVE_SESSION_CONFIRM.message, [
+			{ text: shellOnly ? "Cancel" : ARCHIVE_SESSION_CONFIRM.cancel, style: "cancel" },
+			{ text: shellOnly ? "Close" : ARCHIVE_SESSION_CONFIRM.confirm, style: "destructive", onPress: doKill },
 		]);
-	}, [cfg, id, leave, shellOnly]);
+	}, [activeConfig, id, leave, params.sessionId, reviewerPane, shellOnly, showNotice]);
 
 	// Restore a terminated session: the daemon re-attaches its worktree agent and
 	// its PTY comes back, so we re-open the terminal once restore succeeds.
@@ -1241,23 +712,18 @@ export default function TerminalScreen({ session: resolved }: { session?: RouteS
 		setRestoring(true);
 		try {
 			await restore(id);
-			setBanner(null);
+			clearNotice();
 			setNotFound(false);
+			restartPaintWait();
 			openedRef.current = false;
 			// Give the daemon a moment to bring the PTY up, then re-attach.
-			setTimeout(() => {
-				if (openedRef.current) return;
-				openedRef.current = true;
-				muxRef.current?.openTerminal(terminalHandleId, projectId);
-				const d = lastDimsRef.current;
-				if (d) muxRef.current?.resize(terminalHandleId, d.cols, d.rows, projectId);
-			}, 1200);
+			setTimeout(openTerminal, 1200);
 		} catch (e) {
-			setBanner(`Restore failed: ${e instanceof Error ? e.message : String(e)}`);
+			showNotice(`Couldn't restore the session. ${userFacingError(e)}`);
 		} finally {
 			setRestoring(false);
 		}
-	}, [restore, id, terminalHandleId, projectId]);
+	}, [restore, id, openTerminal, clearNotice, showNotice, restartPaintWait]);
 
 	const xtermOptions = useMemo(
 		() => ({
@@ -1269,7 +735,7 @@ export default function TerminalScreen({ session: resolved }: { session?: RouteS
 			fastScrollSensitivity: 8,
 			// The terminal's own palette, not the product one: agent TUIs own the
 			// meaning of the ANSI slots.
-			theme: terminalTheme(scheme),
+			theme: terminalTheme(scheme, style),
 			// Agent TUIs pick their colours assuming a dark canvas, so on the light
 			// theme they can land white-on-white — the prompt row is exactly that
 			// once its background band is collapsed away. xterm nudges any pair that
@@ -1277,9 +743,9 @@ export default function TerminalScreen({ session: resolved }: { session?: RouteS
 			// more reliable than trying to anticipate every colour a TUI might emit.
 			minimumContrastRatio: 4.5,
 		}),
-		// `scheme` matters: without it the terminal keeps the palette it was built
-		// with and stays dark after a theme switch.
-		[scheme],
+		// `scheme` and `style` matter: without them the terminal keeps the palette
+		// it was built with and stays dark after a theme switch.
+		[scheme, style],
 	);
 
 	// Adjust only the phone's CSS viewport. The xterm renderer, mux attachment,
@@ -1287,6 +753,95 @@ export default function TerminalScreen({ session: resolved }: { session?: RouteS
 	const zoom = useCallback((delta: number) => {
 		adjustTerminalViewport(xtermRef.current, delta > 0 ? 1 : -1);
 	}, []);
+	const fitWidth = useCallback(() => {
+		fitTerminalViewport(xtermRef.current);
+	}, []);
+	const scrollToTop = useCallback(() => {
+		scrollTerminalToTop(xtermRef.current);
+	}, []);
+
+	// The menu's rows reach their handlers through a ref. The transition hook
+	// returns a new object every render, so `requestInterfaceSwitch` is new every
+	// render too, and a new toolbar element registers the header's options again:
+	// keyed on it, the header would rebuild on every keystroke.
+	const menuActions: Record<TerminalMenuAction, () => void> = {
+		switch_chat: () => void requestInterfaceSwitch(),
+		preview: toggleBrowser,
+		files: openFiles,
+		artifacts: openArtifacts,
+		zoom_out: () => zoom(-1),
+		zoom_in: () => zoom(1),
+		fit_width: fitWidth,
+		archive: confirmKill,
+		close_shell: confirmKill,
+		stop_reviewer: confirmKill,
+	};
+	const menuActionsRef = useRef(menuActions);
+	menuActionsRef.current = menuActions;
+	// A machine picked but never paired: no terminal, and no notice row to say
+	// why an archive failed, so the menu stays out (see the early return below).
+	const unpaired = Boolean(activeConfig && !isConfigured(activeConfig));
+	const menuSections = useMemo(() => unpaired ? [] : terminalMenuSections({
+		agentSession: !shellOnly,
+		chatReady: Boolean(interfaceSwitch.status?.supported),
+		checkingChat: rechecking,
+		switchingToChat: interfaceSwitch.starting || switchCardShown,
+		previewReady: hasPreview,
+		artifactCount,
+		// Zoom only the mobile viewport; the shared PTY grid stays unchanged.
+		// Pinch and double-tap zoom too.
+		canZoom: !dead,
+		// A dead session's way back is Restore, in the overlay; a dead shell can
+		// still be closed.
+		close: reviewerPane ? "reviewer" : shellOnly ? "shell" : dead ? undefined : "archive",
+	}), [artifactCount, dead, hasPreview, interfaceSwitch.starting, interfaceSwitch.status?.supported, rechecking, reviewerPane, shellOnly, switchCardShown, unpaired]);
+	// The bar holds only "⋯", as Chat's does: switch, preview and files buttons
+	// beside it cut the iOS title to about nine characters. Chat opens its
+	// actions as a sheet; the terminal keeps the platform's menu.
+	const headerItems = useMemo(() => {
+		// Held back for the frame `resetHeaderRightForSwap` keeps the slot empty,
+		// so the bar never draws these over what the Chat renderer left there.
+		if (!headerRightReady || !menuSections.length) return null;
+		const ios = Platform.OS === "ios";
+		const sections = menuSections.map((section) => ({ ...section, actions: section.items.map((item) => (
+			<Stack.Toolbar.MenuAction
+				key={item.action}
+				icon={ios ? item.icon : undefined}
+				subtitle={item.subtitle}
+				destructive={item.destructive}
+				disabled={item.disabled}
+				onPress={() => menuActionsRef.current[item.action]()}
+			>
+				{item.label}
+			</Stack.Toolbar.MenuAction>
+		)) }));
+		// The first section sits at the top, each later one in an inline section
+		// (a divider on Android), so no menu opens on a divider. On iOS Smaller,
+		// Larger and Fit width share one row as a palette of glyphs, their labels
+		// read by VoiceOver; an M3 menu has no such row, so Android lists them.
+		// UIKit draws no separator around a palette of its own, so the row sits
+		// inside a plain inline section, which has one above and below.
+		const menuItems = sections.flatMap((section, index) => {
+			if (ios && section.kind === "view") {
+				return [
+					<Stack.Toolbar.Menu key={section.kind} inline>
+						<Stack.Toolbar.Menu inline palette>{section.actions}</Stack.Toolbar.Menu>
+					</Stack.Toolbar.Menu>,
+				];
+			}
+			return index === 0 ? section.actions : [<Stack.Toolbar.Menu key={section.kind} inline>{section.actions}</Stack.Toolbar.Menu>];
+		});
+		return (
+			<Stack.Toolbar placement="right">
+				<Stack.Toolbar.Menu icon={toolbarIcon("more")} accessibilityLabel="Terminal actions">
+					{/* The bar button's own title, which UIKit shows in the Large
+					    Content Viewer and an overflowing bar. */}
+					{ios ? <Stack.Toolbar.Label>Terminal actions</Stack.Toolbar.Label> : null}
+					{menuItems}
+				</Stack.Toolbar.Menu>
+			</Stack.Toolbar>
+		);
+	}, [headerRightReady, menuSections]);
 
 	const webViewOptions = useMemo(
 		() => ({
@@ -1302,15 +857,16 @@ export default function TerminalScreen({ session: resolved }: { session?: RouteS
 			nestedScrollEnabled: true,
 			// Surface an Android WebView render-process crash instead of a silent black
 			// screen, so the user can tell the terminal died vs. never loaded.
-			onRenderProcessGone: () => setBanner("Terminal renderer crashed - reopen the session (Back, then tap it again)."),
+			onRenderProcessGone: () => setViewGone(true),
 		}),
 		[],
 	);
 
-	if (cfg && !isConfigured(cfg)) {
+	if (unpaired) {
 		return (
 			<View style={styles.center}>
-				<Text style={styles.bannerText}>No server configured.</Text>
+				{headerItems}
+				<EmptyState icon="devices" title="No machine paired" />
 			</View>
 		);
 	}
@@ -1324,101 +880,39 @@ export default function TerminalScreen({ session: resolved }: { session?: RouteS
 
 	return (
 		<View style={[styles.screen, rootPad > 0 && { paddingBottom: rootPad }]}>
-			<View style={styles.statusBar}>
-				<View style={[styles.statusDot, { backgroundColor: statusColorFor(t)[status] }]} />
-				<Text style={styles.statusText}>{statusLabel[status]}</Text>
-				{size && !dead && (
-					<Text style={styles.dims}>
-						{size.cols}x{size.rows}
-					</Text>
-				)}
-				{/* Zoom only the mobile viewport; the shared PTY grid stays unchanged. */}
-				{!dead && (
-					<View style={styles.zoomGroup}>
-						<Pressable
-							hitSlop={6}
-							accessibilityLabel="Smaller text"
-							onPress={() => { haptics.tap(); zoom(-1); }}
-							style={({ pressed }) => [styles.zoomBtn, pressed && { opacity: 0.6 }]}
-						>
-							<Feather name="minus" size={13} color={t.textSecondary} />
-						</Pressable>
-						<View style={styles.zoomDivider} />
-						<Pressable
-							hitSlop={6}
-							accessibilityLabel="Larger text"
-							onPress={() => { haptics.tap(); zoom(1); }}
-							style={({ pressed }) => [styles.zoomBtn, pressed && { opacity: 0.6 }]}
-						>
-							<Feather name="plus" size={13} color={t.textSecondary} />
-						</Pressable>
-					</View>
-				)}
-				{dead && !shellOnly ? (
-					<Pressable
-						hitSlop={8}
-						onPress={() => { haptics.tap(); void onRestore(); }}
-						disabled={restoring}
-						style={({ pressed }) => [styles.restoreBtn, (pressed || restoring) && { opacity: 0.7 }]}
-					>
-						<Feather name="rotate-ccw" size={12} color={t.blue} />
-						<Text style={styles.restoreText}>{restoring ? "Restoring..." : "Restore"}</Text>
-					</Pressable>
-				) : (
-					// Icon-only: the trash glyph reads as "destroy this session" on its
-					// own, so the label would only cost width. Hence accessibilityLabel.
-					<Pressable
-						hitSlop={8}
-						accessibilityLabel={shellOnly ? "Close shell" : "Kill session"}
-						onPress={confirmKill}
-						style={({ pressed }) => [styles.killBtn, pressed && { opacity: 0.7 }]}
-					>
-						<Feather name={shellOnly ? "x" : "trash-2"} size={14} color={t.red} />
-					</Pressable>
-				)}
-			</View>
-
-			{banner && (
-				<Pressable onPress={() => { haptics.tap(); setBanner(null); }} style={styles.banner}>
-					<Text style={styles.bannerText}>{banner} (tap to dismiss)</Text>
-				</Pressable>
-			)}
+			{headerItems}
+			<TerminalNotice notice={notice} onDismiss={clearNotice} />
 			{interfaceTransitionNotice ? (
-				<View style={styles.banner}>
-					<Text style={styles.bannerText}>
-						{interfaceTransitionNoticeText}
-						{interfaceSwitch.acknowledgeNoticeError
-							? ` Could not dismiss: ${interfaceSwitch.acknowledgeNoticeError}`
-							: ""}
-					</Text>
-					<View style={styles.interfaceFailureActions}>
-						{interfaceFailureRecovery ? (
-							<Pressable
-								accessibilityRole="button"
-								onPress={() => {
-									haptics.tap();
-									requestInterfaceFailureRecovery();
-								}}
-							>
-								<Text style={styles.interfaceFailureActionText}>{interfaceFailureRecovery.actionLabel}</Text>
-							</Pressable>
-						) : null}
-						<Pressable
-							accessibilityRole="button"
+				// Not a transient notice: it waits for the user to acknowledge it, and
+				// it can carry a recovery action, so it is a row on both platforms.
+				<View style={[styles.transitionNotice, !interfaceTransitionRecovered && styles.transitionNoticeFailed]} accessibilityRole="alert">
+					<View style={styles.transitionNoticeRow}>
+						<AppSymbol
+							name={interfaceTransitionRecovered ? "info" : "error"}
+							size={iconSize.md}
+							color={interfaceTransitionRecovered ? t.textSecondary : t.red}
+						/>
+						<Text maxFontSizeMultiplier={fontScaleCap.body} style={[styles.transitionNoticeText, !interfaceTransitionRecovered && styles.transitionNoticeTextFailed]}>
+							{interfaceTransitionNoticeText}
+							{interfaceSwitch.acknowledgeNoticeError
+								? ` Couldn't dismiss: ${interfaceSwitch.acknowledgeNoticeError}`
+								: ""}
+						</Text>
+						<NoticeDismissButton
 							accessibilityLabel="Dismiss interface switch error"
-							disabled={interfaceSwitch.acknowledgingNotice}
+							busy={interfaceSwitch.acknowledgingNotice}
 							onPress={() => {
-								haptics.tap();
 								void interfaceSwitch
 									.acknowledgeNotice(interfaceTransitionNotice.id)
 									.catch(() => {});
 							}}
-						>
-							<Text style={styles.interfaceFailureDismissText}>
-								{interfaceSwitch.acknowledgingNotice ? "Dismissing…" : "Dismiss"}
-							</Text>
-						</Pressable>
+						/>
 					</View>
+					{interfaceFailureRecovery ? (
+						<View style={styles.transitionNoticeActions}>
+							<Button variant="danger" title={interfaceFailureRecovery.actionLabel} onPress={requestInterfaceFailureRecovery} />
+						</View>
+					) : null}
 				</View>
 			) : null}
 
@@ -1426,7 +920,7 @@ export default function TerminalScreen({ session: resolved }: { session?: RouteS
 				<XtermJsWebView
 					// Remount only on theme changes: xterm applies its palette at
 					// construction, so already-painted rows otherwise keep old colours.
-					key={`term-${scheme}`}
+					key={`term-${style}-${scheme}`}
 					ref={xtermRef}
 					autoFit={false}
 					xtermOptions={xtermOptions}
@@ -1436,78 +930,72 @@ export default function TerminalScreen({ session: resolved }: { session?: RouteS
 					onData={onData}
 					style={{ flex: 1, backgroundColor: t.bgBase }}
 				/>
-				{interfaceTransitionActive ? (
-					<View style={styles.interfaceOverlay}>
-						<View style={styles.interfaceCard}>
-							<Feather name={interfaceRecoveryMessage ? "alert-triangle" : "repeat"} size={22} color={t.blue} />
-							<Text style={styles.interfaceTitle}>{interfaceRecoveryMessage ? "Interface recovery blocked" : "Switching to Chat"}</Text>
-							<Text style={styles.interfaceCopy}>{interfaceRecoveryMessage || terminalInterfacePhaseLabel(interfaceSwitch.transition?.phase)}</Text>
-							{mobileInterfaceTransitionIsCancellable(interfaceSwitch.transition) ? (
-								<Pressable
-									disabled={interfaceSwitch.cancelling}
-									onPress={() => { haptics.tap(); void interfaceSwitch.cancel().catch(() => {}); }}
-									style={styles.interfaceCancel}
-								>
-									<Text style={styles.interfaceCancelText}>{interfaceSwitch.cancelling ? "Cancelling…" : "Cancel switch"}</Text>
-								</Pressable>
-							) : null}
-							{interfaceSwitch.error ? <Text style={styles.interfaceError}>{interfaceSwitch.error}</Text> : null}
-							{interfaceSwitch.fetchFailed || interfaceRecoveryMessage ? (
-								<Pressable
-									disabled={rechecking}
-									onPress={() => void retryInterfaceCheck()}
-									style={styles.interfaceCancel}
-								>
-									<Text style={styles.interfaceCancelText}>{rechecking ? "Retrying…" : "Retry"}</Text>
-								</Pressable>
-							) : null}
+				{/* The connection says something only while it is not live. It floats
+				    over the grid rather than taking a row, so the grid keeps its
+				    rows when the link comes and goes. */}
+				{status !== "open" && !dead && !switchCardShown && !startLoaderShown ? (
+					<View pointerEvents="none" style={styles.statusSlot}>
+						<View style={styles.statusPill} accessibilityLiveRegion="polite">
+							{status === "error" ? <AppSymbol name="offline" size={iconSize.sm} color={t.red} /> : <Spinner size={iconSize.sm} />}
+							<Text style={styles.statusText} numberOfLines={1} maxFontSizeMultiplier={fontScaleCap.chrome}>
+								{TERMINAL_STATUS_LABEL[status]}
+							</Text>
 						</View>
 					</View>
 				) : null}
-				{dead && (
-					<View style={styles.deadOverlay}>
-						<View style={styles.deadIcon}>
-							<Feather name="power" size={24} color={t.textTertiary} />
-						</View>
-						<Text style={styles.deadTitle}>{shellOnly ? "Shell closed" : "Session terminated"}</Text>
-						<Text style={styles.deadMsg}>{shellOnly ? "This worktree shell is no longer running." : "This session has no live terminal. Restore it to bring the agent back."}</Text>
-						{!shellOnly ? <Pressable
-								onPress={() => { haptics.tap(); void onRestore(); }}
-							disabled={restoring}
-							style={({ pressed }) => [styles.restoreCta, (pressed || restoring) && { opacity: 0.8 }]}
-						>
-							<Feather name="rotate-ccw" size={16} color={t.onAccent} />
-							<Text style={styles.restoreCtaText}>{restoring ? "Restoring..." : "Restore session"}</Text>
-						</Pressable> : null}
+				{canScrollTop && !dead && !viewGone ? <ScrollTopButton onPress={scrollToTop} /> : null}
+				{startLoaderShown ? (
+					<View pointerEvents="none" style={styles.startLoader} accessibilityLiveRegion="polite">
+						<Spinner size="large" />
+						<Text maxFontSizeMultiplier={fontScaleCap.body} style={styles.startLoaderText}>
+							{status === "open" ? "Starting terminal…" : TERMINAL_STATUS_LABEL[status]}
+						</Text>
 					</View>
-				)}
-
-				{/* In-app browser overlay: the agent's generated preview file. Sits over
-				    the terminal (which keeps running underneath) with its own bar. */}
-				{browserOpen && preview && (
-					<View style={styles.browserOverlay}>
-						<View style={styles.browserBar}>
-							<Feather name="globe" size={13} color={t.textTertiary} />
-							<Text style={styles.browserPath} numberOfLines={1}>
-								{preview.entry}
-							</Text>
-							<Pressable hitSlop={8} onPress={() => { haptics.tap(); previewWebRef.current?.reload(); }} style={styles.browserAction}>
-								<Feather name="rotate-cw" size={15} color={t.blue} />
-							</Pressable>
-							<Pressable hitSlop={8} onPress={() => { haptics.tap(); setBrowserOpen(false); }} style={styles.browserAction}>
-								<Feather name="x" size={17} color={t.textSecondary} />
-							</Pressable>
-						</View>
-						<WebView
-							ref={previewWebRef}
-							// The preview route lives behind the daemon's connection-password
-							// auth (Bearer). Without this header the WebView's request 401s and
-							// renders the JSON error body instead of the page. cfg carries the
-							// password we paired with; authHeaders() turns it into the Bearer.
-							source={{ uri: preview.url, headers: cfg ? authHeaders(cfg) : undefined }}
-							originWhitelist={["*"]}
-							style={styles.browserWeb}
-							onError={() => setBanner("Preview failed to load.")}
+				) : null}
+				{switchCardShown && handoff.stalled ? (
+					<InterfaceSwitchCard
+						title="Chat is ready"
+						message="This screen hasn't switched over yet. Retry, or go back and open the session again."
+						ready
+						retryable
+						retrying={refreshingBoard}
+						onRetry={() => void retryHandoff()}
+					/>
+				) : switchCardShown ? (
+					<InterfaceSwitchCard
+						title={interfaceRecoveryMessage ? "Interface recovery blocked" : "Switching to Chat"}
+						message={interfaceRecoveryMessage || terminalInterfacePhaseLabel(interfaceSwitch.transition?.phase)}
+						blocked={Boolean(interfaceRecoveryMessage)}
+						cancellable={mobileInterfaceTransitionIsCancellable(interfaceSwitch.transition)}
+						cancelling={interfaceSwitch.cancelling}
+						onCancel={() => void interfaceSwitch.cancel().catch(() => {})}
+						error={interfaceSwitch.error}
+						retryable={interfaceSwitch.fetchFailed || Boolean(interfaceRecoveryMessage)}
+						retrying={rechecking}
+						onRetry={() => void retryInterfaceCheck()}
+					/>
+				) : null}
+				{viewGone ? (
+					// Ahead of a dead session's overlay: Restore would reattach to a
+					// renderer that is no longer there.
+					<View style={styles.deadOverlay} accessibilityRole="alert">
+						<EmptyState
+							icon="warning"
+							iconColor={t.red}
+							title="The terminal view stopped working"
+							message={shellOnly ? "Go back and open the shell again." : "Go back and open the session again."}
+							action={<Button title="Go back" onPress={leave} />}
+						/>
+					</View>
+				) : dead && !switchCardShown && (
+					<View style={styles.deadOverlay}>
+						<EmptyState
+							icon={TERMINATED_GLYPH}
+							title={shellOnly ? "Shell closed" : "Session terminated"}
+							message={shellOnly ? "This worktree shell is no longer running." : "This session has no live terminal. Restore it to bring the agent back."}
+							action={shellOnly ? undefined : (
+								<Button title="Restore session" icon="refresh" loading={restoring} onPress={() => void onRestore()} />
+							)}
 						/>
 					</View>
 				)}
@@ -1515,43 +1003,26 @@ export default function TerminalScreen({ session: resolved }: { session?: RouteS
 
 			{/* The input dock. One container, one bottom inset, fixed slots — every
 			    control sits in the same place in every state the screen can reach. */}
-			<View style={[styles.dock, { paddingBottom: bottomPad }]}>
-				{/* Live dictation readout. Deliberately not inside the field: the
-				    partial transcript changes on every syllable, and rewriting the
-				    input under the user's caret is hostile. */}
-				{(voice.state === "starting" || voice.state === "recording" || voice.state === "transcribing") && (
-					<View style={[styles.voiceStrip, voice.state === "starting" && styles.voiceStripWarmup]}>
-						<Feather name="mic" size={13} color={voice.state === "starting" ? t.textTertiary : t.blue} />
-						<Text style={styles.voiceText} numberOfLines={2}>
-							{voice.partial ||
-								(voice.state === "starting"
-									? // The mic is not capturing yet. Saying "Listening" here would
-										// invite speech that gets dropped during warm-up.
-										"Keep holding..."
-									: voice.state === "transcribing"
-										? "Transcribing..."
-										: voice.mode === "latched"
-											? "Recording hands-free - tap the mic to finish"
-											: "Speak now - release to insert")}
-						</Text>
-					</View>
-				)}
-
+			<View style={[styles.dock, { paddingBottom: bottomPad }]} onLayout={(e) => setDockHeight(Math.round(e.nativeEvent.layout.height))}>
 				<KeyRow onKey={sendKey} />
 
 				<Composer
 					value={msg}
 					onChangeText={setMsg}
 					onSend={sendPrompt}
-					sending={sending || interfaceTransitionActive}
+					sending={sending || switchCardShown}
 					target={sendTarget}
 					onTargetChange={setSendTarget}
+					targetLocked={shellOnly}
 					voice={voice}
 					keyboardVisible={kbVisible}
 					onDismissKeyboard={Keyboard.dismiss}
-					targetLocked={shellOnly}
 				/>
 			</View>
+			{/* Absolutely placed, so it comes last and draws over the dock's
+			    neighbours; the offset clears the keyboard pad and the dock. */}
+			<TerminalNoticeHost notice={notice} onDismiss={clearNotice} bottomOffset={rootPad + dockHeight + space.sm} />
+			<InterfaceSwitchConfirm message={switchQuestion} onChoose={answerSwitchQuestion} onCancel={closeSwitchQuestion} />
 		</View>
 	);
 }
@@ -1565,190 +1036,51 @@ const makeStyles = (t: Theme) =>
 		justifyContent: "center",
 		backgroundColor: t.bgBase,
 	},
-	statusBar: {
+	statusSlot: { position: "absolute", top: space.sm, left: space.lg, right: space.lg, alignItems: "center" },
+	statusPill: {
 		flexDirection: "row",
 		alignItems: "center",
-		paddingHorizontal: 14,
-		paddingVertical: 6,
-		borderBottomWidth: 1,
+		gap: space.xs,
+		maxWidth: "100%",
+		paddingHorizontal: space.md,
+		paddingVertical: space.xs,
+		borderRadius: radius.pill,
+		backgroundColor: t.bgElevated,
+		borderWidth: rowDividerWidth,
+		borderColor: t.borderDefault,
+	},
+	statusText: { flexShrink: 1, fontFamily: font.medium, color: t.textSecondary, fontSize: type.footnote.fontSize, lineHeight: type.footnote.lineHeight },
+	// Laid out like TerminalNotice's row, closed by the same button, with the
+	// recovery action on a line of its own when there is one.
+	transitionNotice: {
+		backgroundColor: t.bgElevated,
+		borderBottomWidth: rowDividerWidth,
 		borderBottomColor: t.borderSubtle,
 	},
-	statusDot: { width: 8, height: 8, borderRadius: 4, marginRight: 8 },
-	statusText: { color: t.textSecondary, fontSize: 12, flex: 1 },
-	dims: { color: t.textTertiary, fontSize: 11, fontFamily: t.fontMono },
-	zoomGroup: {
-		flexDirection: "row",
-		alignItems: "center",
-		marginLeft: 10,
-		borderWidth: 1,
-		borderColor: t.borderDefault,
-		borderRadius: 7,
-		backgroundColor: t.bgElevated,
-		overflow: "hidden",
-	},
-	zoomBtn: { width: 28, height: 24, alignItems: "center", justifyContent: "center" },
-	zoomDivider: { width: 1, height: 24, backgroundColor: t.borderDefault },
-	banner: {
-		backgroundColor: t.bgElevated,
-		paddingHorizontal: 14,
-		paddingVertical: 8,
-		borderBottomWidth: 1,
-		borderBottomColor: t.borderDefault,
-	},
-	bannerText: { color: t.attention, fontSize: 12 },
-	interfaceFailureActions: {
-		marginTop: 8,
-		flexDirection: "row",
-		alignItems: "center",
-		justifyContent: "flex-end",
-		gap: 16,
-	},
-	interfaceFailureActionText: { color: t.red, fontSize: 12, fontWeight: "700" },
-	interfaceFailureDismissText: { color: t.textSecondary, fontSize: 12, fontWeight: "600" },
-	termWrap: { flex: 1, backgroundColor: t.bgBase },
+	transitionNoticeFailed: { backgroundColor: t.tintRed },
+	transitionNoticeRow: { flexDirection: "row", alignItems: "center", gap: space.sm, minHeight: touchTarget, paddingLeft: space.lg },
+	transitionNoticeText: { flex: 1, paddingVertical: space.sm, fontFamily: font.regular, color: t.textPrimary, fontSize: type.footnote.fontSize, lineHeight: type.footnote.lineHeight },
+	transitionNoticeTextFailed: { color: t.red },
+	transitionNoticeActions: { flexDirection: "row", justifyContent: "flex-end", paddingHorizontal: space.lg, paddingBottom: space.sm },
+	// iOS draws the grid's first column against the screen's rounded edge,
+	// which cut it off; a few points in keeps every cell whole.
+	termWrap: { flex: 1, backgroundColor: t.bgBase, paddingHorizontal: Platform.OS === "ios" ? space.xs : 0 },
+	// The page's own surface, as under the chat composer: the composer's
+	// elevated fill and the keys' tonal fill both need it to stand apart from.
 	dock: {
-		borderTopWidth: 1,
+		borderTopWidth: rowDividerWidth,
 		borderTopColor: t.borderSubtle,
-		backgroundColor: t.bgSurface,
-	},
-	// Square-ish now that it holds a glyph and no label.
-	killBtn: {
-		alignItems: "center",
-		justifyContent: "center",
-		backgroundColor: t.tintRed,
-		borderRadius: 12,
-		paddingHorizontal: 8,
-		paddingVertical: 5,
-		marginLeft: 12,
-	},
-	// Bare glyph in the nav bar: iOS draws its own round box behind header buttons,
-	// so a tinted pill here would fight it. Colour carries the state instead.
-	// A fixed square with centred content, not padding — asymmetric padding leaves
-	// the glyph visibly off-centre inside the circle iOS draws around it.
-	headerBrowserBtn: {
-		width: 35,
-		height: 30,
-		alignItems: "center",
-		justifyContent: "center",
-	},
-	headerActions: { flexDirection: "row", alignItems: "center" },
-	interfaceOverlay: {
-		...StyleSheet.absoluteFill,
-		alignItems: "center",
-		justifyContent: "center",
-		paddingHorizontal: 24,
-		backgroundColor: t.scrim,
-	},
-	interfaceCard: {
-		width: "100%",
-		maxWidth: 340,
-		alignItems: "center",
-		gap: 10,
-		paddingHorizontal: 22,
-		paddingVertical: 24,
-		borderRadius: 16,
-		borderWidth: 1,
-		borderColor: t.borderDefault,
-		backgroundColor: t.bgSurface,
-	},
-	interfaceTitle: { color: t.textPrimary, fontSize: 16, fontWeight: "700" },
-	interfaceCopy: { color: t.textSecondary, fontSize: 12, lineHeight: 18, textAlign: "center" },
-	interfaceCancel: {
-		marginTop: 4,
-		borderRadius: 9,
-		borderWidth: 1,
-		borderColor: t.borderDefault,
-		paddingHorizontal: 13,
-		paddingVertical: 8,
-	},
-	interfaceCancelText: { color: t.textPrimary, fontSize: 12, fontWeight: "600" },
-	interfaceError: { color: t.red, fontSize: 11, lineHeight: 16, textAlign: "center" },
-	// Small green badge on the globe when a real preview is available. Offsets are
-	// from the square's centre, so it rides the glyph rather than the button frame.
-	browserReadyDot: {
-		position: "absolute",
-		top: 4,
-		right: 3,
-		width: 8,
-		height: 8,
-		borderRadius: 4,
-		backgroundColor: t.green,
-		borderWidth: 1,
-		borderColor: t.bgSurface,
-	},
-	browserOverlay: { ...StyleSheet.absoluteFill, backgroundColor: t.bgBase },
-	browserBar: {
-		flexDirection: "row",
-		alignItems: "center",
-		gap: 10,
-		paddingHorizontal: 12,
-		paddingVertical: 8,
-		backgroundColor: t.bgSurface,
-		borderBottomWidth: 1,
-		borderBottomColor: t.borderSubtle,
-	},
-	browserPath: { flex: 1, color: t.textSecondary, fontFamily: t.fontMono, fontSize: 12 },
-	browserAction: { paddingHorizontal: 4, paddingVertical: 2 },
-	browserWeb: { flex: 1, backgroundColor: "#ffffff" },
-	restoreBtn: {
-		flexDirection: "row",
-		alignItems: "center",
-		gap: 4,
-		backgroundColor: t.tintBlue,
-		borderRadius: 12,
-		paddingHorizontal: 11,
-		paddingVertical: 4,
-		marginLeft: 12,
-	},
-	restoreText: { color: t.blue, fontWeight: "700", fontSize: 12 },
-	deadOverlay: {
-		...StyleSheet.absoluteFill,
-		alignItems: "center",
-		justifyContent: "center",
-		padding: 32,
-		gap: 10,
 		backgroundColor: t.bgBase,
 	},
-	deadIcon: {
-		width: 64,
-		height: 64,
-		borderRadius: 18,
-		backgroundColor: t.bgElevated,
-		borderWidth: 1,
-		borderColor: t.borderSubtle,
+	// Over the empty grid until the terminal first draws; the page's own
+	// surface, so the blank grid behind it never shows.
+	startLoader: {
+		...StyleSheet.absoluteFill,
 		alignItems: "center",
 		justifyContent: "center",
-		marginBottom: 6,
+		gap: space.sm,
+		backgroundColor: t.bgBase,
 	},
-	deadTitle: { color: t.textPrimary, fontSize: 17, fontWeight: "700", textAlign: "center" },
-	deadMsg: { color: t.textSecondary, fontSize: 13, lineHeight: 20, textAlign: "center", maxWidth: 300 },
-	restoreCta: {
-		flexDirection: "row",
-		alignItems: "center",
-		gap: 8,
-		backgroundColor: t.blue,
-		borderRadius: 10,
-		paddingVertical: 12,
-		paddingHorizontal: 20,
-		marginTop: 10,
-	},
-	restoreCtaText: { color: t.onAccent, fontSize: 15, fontWeight: "700" },
-	// Accent-blue like the rest of the chrome. Red is reserved for the mic button
-	// alone: one small saturated element reads as "recording", a whole red panel
-	// reads as an error. It sits at the top of the dock, so it divides itself from
-	// the keys below rather than redrawing the dock's own top border.
-	voiceStrip: {
-		flexDirection: "row",
-		alignItems: "center",
-		gap: 8,
-		paddingHorizontal: 12,
-		paddingVertical: 7,
-		backgroundColor: t.tintBlue,
-		borderBottomWidth: 1,
-		borderBottomColor: t.blue,
-	},
-	// Muted while the mic warms up, so "ready to speak" is a visible state change
-	// and not just a wording difference.
-	voiceStripWarmup: { backgroundColor: t.bgElevated, borderBottomColor: t.borderDefault },
-	voiceText: { flex: 1, color: t.textPrimary, fontSize: 13 },
+	startLoaderText: { ...type.footnote, color: t.textSecondary, textAlign: "center" },
+	deadOverlay: { ...StyleSheet.absoluteFill, backgroundColor: t.bgBase },
 });

@@ -4,6 +4,8 @@ import { StyleSheet, View } from "react-native";
 import { haptics } from "./haptics";
 import { captureMobileException } from "./sentry";
 import { Button, EmptyState } from "./ui";
+import { space } from "./tokens";
+import { backOr } from "./backNavigation";
 
 /**
  * What a route shows when it throws while rendering, instead of the app
@@ -35,7 +37,7 @@ export function RouteErrorBoundary({ error, retry }: ErrorBoundaryProps) {
 		navigation.setOptions({ headerRight: undefined });
 	}, [navigation]);
 	// Onboarding is entered with `router.replace` and has no header, so there is
-	// nothing to go back to; the same rule as MinimalBackButton.
+	// nothing to go back to; the same rule as `backOr`.
 	const canGoBack = router.canGoBack();
 
 	return (
@@ -46,8 +48,8 @@ export function RouteErrorBoundary({ error, retry }: ErrorBoundaryProps) {
 				message={canGoBack ? "Try again, or go back and open it again." : "Try again, or go to the board."}
 				action={
 					<View style={styles.actions}>
-						<Button title="Try again" icon="refresh-cw" variant="ghost" onPress={() => void retry()} />
-						{canGoBack ? null : <Button title="Go to board" icon="activity" onPress={() => router.replace("/")} />}
+						<Button title="Try again" icon="refresh-cw" variant="secondary" onPress={() => void retry()} />
+						{canGoBack ? null : <Button title="Go to board" icon="workers" variant="primary" onPress={() => router.replace("/")} />}
 					</View>
 				}
 			/>
@@ -72,7 +74,7 @@ export function SheetErrorBoundary({ error }: ErrorBoundaryProps) {
 				icon="alert-triangle"
 				title="This sheet hit an unexpected error"
 				message="Close it and open it again."
-				action={<Button title="Close" icon="x" variant="ghost" onPress={() => router.back()} />}
+				action={<Button title="Close" icon="x" variant="secondary" onPress={() => backOr(router)} />}
 			/>
 		</View>
 	);
@@ -92,5 +94,5 @@ function useReportOnShow(error: Error) {
 // surface colour and a pushed screen keeps the base one.
 const styles = StyleSheet.create({
 	center: { flex: 1, alignItems: "center", justifyContent: "center" },
-	actions: { flexDirection: "row", gap: 10, alignItems: "center" },
+	actions: { flexDirection: "row", gap: space.sm, alignItems: "center" },
 });

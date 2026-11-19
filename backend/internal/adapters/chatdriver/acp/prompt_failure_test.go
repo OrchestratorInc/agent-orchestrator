@@ -6,7 +6,9 @@ import (
 	"errors"
 	"io"
 	"log/slog"
+	"runtime"
 	"testing"
+	"time"
 
 	acpsdk "github.com/coder/acp-go-sdk"
 
@@ -14,6 +16,71 @@ import (
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
 	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
 )
+
+func TestControllerReadyReleasesActiveTurn(t *testing.T) {
+	conv := &conversation{
+		sessionID:  "session-1",
+		activeTurn: "turn-1",
+		events:     make(chan ports.ChatEvent),
+		log:        slog.New(slog.DiscardHandler),
+	}
+	done := make(chan struct{})
+	go func() {
+		conv.finishPrompt("turn-1", acpsdk.PromptResponse{
+			StopReason: acpsdk.StopReasonEndTurn,
+			Meta:       map[string]any{persistenthost.ACPEventIDMetaKey: "terminal-event-1"},
+		}, nil)
+		close(done)
+	}()
+
+	account := nextEvent(t, conv.Events())
+	if account.Kind != ports.ChatEventAccountChanged {
+		t.Fatalf("first event = %#v, want account recovery", account)
+	}
+	deadline := time.Now().Add(time.Second)
+	for {
+		conv.mu.Lock()
+		if conv.terminalEventID == "terminal-event-1" {
+			break
+		}
+		conv.mu.Unlock()
+		if time.Now().After(deadline) {
+			t.Fatal("timed out waiting for terminal event correlation")
+		}
+		runtime.Gosched()
+	}
+	completed := nextEvent(t, conv.Events())
+	if completed.Kind != ports.ChatEventTurnCompleted {
+		conv.mu.Unlock()
+		t.Fatalf("second event = %#v, want turn completion", completed)
+	}
+	readyEvents := make(chan ports.ChatEvent, 1)
+	go func() { readyEvents <- <-conv.Events() }()
+	select {
+	case ready := <-readyEvents:
+		active := conv.activeTurn
+		conv.mu.Unlock()
+		if ready.Kind == ports.ChatEventControllerState && ready.ControllerState == ports.ChatControllerReady && active != "" {
+			t.Fatalf("ControllerReady emitted while activeTurn = %q", active)
+		}
+	case <-time.After(20 * time.Millisecond):
+		// The turn-state transition is correctly waiting for the mutex, so Ready
+		// cannot be observable until activeTurn has been released.
+		conv.mu.Unlock()
+		select {
+		case ready := <-readyEvents:
+			if ready.Kind != ports.ChatEventControllerState || ready.ControllerState != ports.ChatControllerReady {
+				t.Fatalf("third event = %#v, want controller ready", ready)
+			}
+		case <-time.After(time.Second):
+			t.Fatal("timed out waiting for ControllerReady")
+		}
+	}
+	if _, err := conv.SendTurn(context.Background(), ports.ChatUserMessage{Text: "next"}); err != nil {
+		t.Fatalf("SendTurn after ControllerReady: %v", err)
+	}
+	<-done
+}
 
 func TestACPDriverPromptResponseFailure(t *testing.T) {
 	for _, tc := range []struct {
@@ -33,6 +100,8 @@ func TestACPDriverPromptResponseFailure(t *testing.T) {
 		{"duplicate detail", "service", "Provider unavailable", "Provider unavailable", nil, false},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
+			authRejected := 0
+			authRecovered := 0
 			meta := testPromptFailureMeta(map[string]any{
 				"id": "incident-1", "revision": 1, "category": tc.category,
 				"severity": "error", "title": tc.title, "details": tc.details, "actions": tc.actions,
@@ -46,6 +115,12 @@ func TestACPDriverPromptResponseFailure(t *testing.T) {
 				Harness:      domain.HarnessClaudeCode,
 				Capabilities: ports.ChatCapabilities{ports.ChatCapabilityStreaming: true},
 				Launch:       func(context.Context, LaunchConfig) (Launch, error) { return Launch{Command: "fake"}, nil },
+				PromptResponseFailure: func(response acpsdk.PromptResponse, _ string) error {
+					return promptResponseFailure(response.Meta)
+				},
+				OnAuthRejected: func() {
+					authRejected++
+				},
 			}, slog.New(slog.NewTextHandler(io.Discard, nil)))
 			driver.useTestProcess(fakeSpawn(agent))
 			opened, err := driver.Start(context.Background(), ports.ChatStartConfig{WorkspacePath: t.TempDir()})
@@ -69,7 +144,10 @@ func TestACPDriverPromptResponseFailure(t *testing.T) {
 					case ports.ChatEventError:
 						t.Fatalf("terminal failure emitted a second timeline event: %#v", event)
 					case ports.ChatEventAccountChanged:
-						t.Fatalf("terminal failure emitted a second account event: %#v", event)
+						if event.Account == nil || !event.Account.ReauthRecovered || attempt != 1 {
+							t.Fatalf("unexpected account event: %#v", event)
+						}
+						authRecovered++
 					case ports.ChatEventUsage:
 						usagesSeen++
 						if event.Usage == nil || event.Usage.TotalTokens != 15 {
@@ -115,6 +193,16 @@ func TestACPDriverPromptResponseFailure(t *testing.T) {
 				agent.promptResponse = &acpsdk.PromptResponse{StopReason: acpsdk.StopReasonEndTurn}
 				agent.mu.Unlock()
 			}
+			wantAuthRejected := 0
+			if tc.reauth {
+				wantAuthRejected = 1
+			}
+			if authRejected != wantAuthRejected {
+				t.Fatalf("auth cache invalidations = %d, want %d", authRejected, wantAuthRejected)
+			}
+			if authRecovered != 1 {
+				t.Fatalf("auth recovery signals = %d, want 1", authRecovered)
+			}
 		})
 	}
 }
@@ -138,7 +226,10 @@ func TestPromptFailureLetsTurnSettlementCloseActiveRetry(t *testing.T) {
 		{"cancelled RPC", "failure-1", false, context.Canceled},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			conv := &conversation{activeTurn: "turn-1", events: make(chan ports.ChatEvent, 16), log: slog.New(slog.DiscardHandler)}
+			conv := &conversation{
+				activeTurn: "turn-1", events: make(chan ports.ChatEvent, 16), log: slog.New(slog.DiscardHandler),
+				promptResponseFailure: func(response acpsdk.PromptResponse, _ string) error { return promptResponseFailure(response.Meta) },
+			}
 			_, ok := conv.sessionFailureEvent("turn-1", "", testPromptFailureMeta(map[string]any{
 				"id": tc.incident, "severity": "warning", "title": "Retrying",
 			}))
@@ -195,7 +286,10 @@ func TestPromptResponseFailureIgnoresNonErrors(t *testing.T) {
 
 func TestRetryEpisodesKeepRecoveredDiagnosticsAndReplayIdentity(t *testing.T) {
 	for range 2 { // Replaying the same host events reconstructs the same row IDs.
-		conv := &conversation{activeTurn: "turn-1", events: make(chan ports.ChatEvent, 16), log: slog.New(slog.DiscardHandler)}
+		conv := &conversation{
+			activeTurn: "turn-1", events: make(chan ports.ChatEvent, 16), log: slog.New(slog.DiscardHandler),
+			promptResponseFailure: func(response acpsdk.PromptResponse, _ string) error { return promptResponseFailure(response.Meta) },
+		}
 		meta := testPromptFailureMeta(map[string]any{"id": "reused-incident", "severity": "warning", "title": "Retrying"})
 		first, _ := conv.sessionFailureEvent("turn-1", "host:1", meta)
 		attempt, _ := conv.sessionFailureEvent("turn-1", "host:2", meta)
@@ -221,6 +315,90 @@ func TestRetryEpisodesKeepRecoveredDiagnosticsAndReplayIdentity(t *testing.T) {
 	}
 }
 
+func TestTurnHooksSeeTheModelTheTurnStartedWith(t *testing.T) {
+	for _, tc := range []struct {
+		name      string
+		turnModel string
+		want      string
+	}{
+		{name: "model changed mid-turn", turnModel: "model-A", want: "model-A"},
+		// A turn reattached after a restart has no recorded model; the current
+		// selection is not evidence of what it ran on.
+		{name: "reattached turn", want: ""},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			var failureModel, servedSelected string
+			servedCalled := false
+			conv := &conversation{
+				sessionID: "session-1", activeTurn: "turn-1",
+				events: make(chan ports.ChatEvent, 16), log: slog.New(slog.DiscardHandler),
+				configOptions: []ports.ChatConfigOption{{
+					ID: "model", Type: ports.ChatConfigOptionSelect,
+					// The user switched to B while the turn was still running on A.
+					Current: ports.ChatConfigOptionValue{Select: "model-B"},
+				}},
+				promptResponseFailure: func(_ acpsdk.PromptResponse, model string) error {
+					failureModel = model
+					return nil
+				},
+				servedModel: func(_ context.Context, _, selected string) (string, string) {
+					servedCalled = true
+					servedSelected = selected
+					return "", ""
+				},
+			}
+			if tc.turnModel != "" {
+				conv.turnModelID, conv.turnModel = "turn-1", tc.turnModel
+			}
+			conv.finishPrompt("turn-1", acpsdk.PromptResponse{StopReason: acpsdk.StopReasonEndTurn}, nil)
+			if failureModel != tc.want {
+				t.Fatalf("promptResponseFailure model = %q, want %q", failureModel, tc.want)
+			}
+			if tc.want == "" && servedCalled {
+				t.Fatalf("servedModel called for a turn with no recorded model (selected %q)", servedSelected)
+			}
+			if tc.want != "" && servedSelected != tc.want {
+				t.Fatalf("servedModel selected = %q, want %q", servedSelected, tc.want)
+			}
+		})
+	}
+}
+
+func TestModelSwitchRefusesWhatTheBindingRejects(t *testing.T) {
+	rejected := errors.New("requires a newer CLI")
+	var checked []string
+	conv := &conversation{
+		sessionID: "session-1", events: make(chan ports.ChatEvent, 16), log: slog.New(slog.DiscardHandler),
+		configOptions: []ports.ChatConfigOption{{
+			ID: "model", Type: ports.ChatConfigOptionSelect,
+			Current: ports.ChatConfigOptionValue{Select: "model-old"},
+			Choices: []ports.ChatConfigOptionChoice{{Value: "model-old"}, {Value: "model-new"}},
+		}},
+		validateModel: func(_ context.Context, model string) error {
+			checked = append(checked, model)
+			if model == "model-new" {
+				return rejected
+			}
+			return nil
+		},
+	}
+	ctx := context.Background()
+	_, err := conv.SetConfigOption(ctx, "model", ports.ChatConfigOptionValue{Select: "model-new"})
+	if !errors.Is(err, ports.ErrChatConfigOptionInvalid) || !errors.Is(err, rejected) {
+		t.Fatalf("SetConfigOption error = %v, want the binding's rejection as an invalid option", err)
+	}
+	if _, err := conv.SendTurn(ctx, ports.ChatUserMessage{Text: "hi", Settings: ports.ChatTurnSettings{Model: "model-new"}}); !errors.Is(err, rejected) {
+		t.Fatalf("SendTurn error = %v, want the binding's rejection", err)
+	}
+	// A session already on the model is not re-checked, so it still opens.
+	if err := conv.checkModelSwitch(ctx, "model-old"); err != nil {
+		t.Fatalf("current model refused: %v", err)
+	}
+	if len(checked) != 2 {
+		t.Fatalf("validated %v, want only the two switches to model-new", checked)
+	}
+}
+
 func TestACPReplayedPromptFailure(t *testing.T) {
 	meta := testPromptFailureMeta(map[string]any{
 		"id": "failure-1", "severity": "error", "title": "Provider rejected this request", "details": "Original provider details",
@@ -233,7 +411,8 @@ func TestACPReplayedPromptFailure(t *testing.T) {
 			}
 			conv := &conversation{
 				activeTurn: "durable-turn", events: make(chan ports.ChatEvent, 16),
-				log: slog.New(slog.NewTextHandler(io.Discard, nil)),
+				log:                   slog.New(slog.NewTextHandler(io.Discard, nil)),
+				promptResponseFailure: func(response acpsdk.PromptResponse, _ string) error { return promptResponseFailure(response.Meta) },
 			}
 			if replay {
 				payload, err := json.Marshal(map[string]any{"eventId": "host:1", "result": response})
@@ -279,5 +458,69 @@ func TestACPReplayedPromptFailure(t *testing.T) {
 				t.Fatalf("cancelled=%v replay=%v: completions=%d", cancelled, replay, completions)
 			}
 		}
+	}
+}
+
+// promptResponseFailure is a test binding used to exercise the generic
+// provider callback without placing Claude's vendor contract in production ACP
+// code.
+func promptResponseFailure(meta map[string]any) error {
+	failure := sessionFailure(meta)
+	if failure["severity"] != "error" {
+		return nil
+	}
+	title, _ := failure["title"].(string)
+	details, _ := failure["details"].(string)
+	var cause error
+	if actions, ok := failure["actions"].([]any); ok {
+		for _, action := range actions {
+			if action == "login" {
+				cause = ports.ErrChatAuthRequired
+			}
+		}
+	}
+	return ports.NewChatProviderFailure(title, details, cause)
+}
+
+func TestClaudeUsageLimitResetFromRateLimitEvents(t *testing.T) {
+	now := time.Date(2026, 11, 8, 12, 10, 0, 0, time.UTC)
+	fiveHour := now.Add(40 * time.Minute)
+	weekly := now.Add(72 * time.Hour)
+	info := func(status, kind string, reset time.Time, extra map[string]any) map[string]any {
+		value := map[string]any{"status": status, "rateLimitType": kind}
+		if !reset.IsZero() {
+			value["resetsAt"] = float64(reset.Unix())
+		}
+		for key, item := range extra {
+			value[key] = item
+		}
+		return map[string]any{"_claude/rateLimit": value}
+	}
+	for _, tc := range []struct {
+		name   string
+		events []map[string]any
+		want   time.Time
+	}{
+		{"none", nil, time.Time{}},
+		{"allowed only", []map[string]any{info("allowed_warning", "five_hour", fiveHour, nil)}, time.Time{}},
+		{"rejected", []map[string]any{info("rejected", "five_hour", fiveHour, nil)}, fiveHour},
+		{"rejected then allowed", []map[string]any{info("rejected", "five_hour", fiveHour, nil), info("allowed", "five_hour", fiveHour, nil)}, time.Time{}},
+		{"overage allowed", []map[string]any{info("rejected", "five_hour", fiveHour, map[string]any{"overageStatus": "allowed"})}, time.Time{}},
+		{"using overage", []map[string]any{info("rejected", "five_hour", fiveHour, map[string]any{"isUsingOverage": true})}, time.Time{}},
+		{"latest of two windows", []map[string]any{info("rejected", "five_hour", fiveHour, nil), info("rejected", "seven_day", weekly, nil)}, weekly},
+		{"one window without reset", []map[string]any{info("rejected", "five_hour", fiveHour, nil), info("rejected", "seven_day", time.Time{}, nil)}, time.Time{}},
+		{"expired window dropped", []map[string]any{info("rejected", "five_hour", now.Add(-time.Minute), nil), info("rejected", "seven_day", weekly, nil)}, weekly},
+		{"beyond a month", []map[string]any{info("rejected", "seven_day", now.Add(32*24*time.Hour), nil)}, time.Time{}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			c := &conversation{}
+			for _, meta := range tc.events {
+				c.trackClaudeRateLimit(meta, now)
+			}
+			got, ok := c.claudeUsageLimitReset(now)
+			if ok != !tc.want.IsZero() || !got.Equal(tc.want) {
+				t.Fatalf("reset = %v, %v; want %v", got, ok, tc.want)
+			}
+		})
 	}
 }

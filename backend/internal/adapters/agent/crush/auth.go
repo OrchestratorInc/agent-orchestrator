@@ -6,6 +6,7 @@ import (
 	"path/filepath"
 	"strings"
 
+	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
 	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
 )
 
@@ -38,19 +39,27 @@ func crushLocalAuthStatus(ctx context.Context) (ports.AgentAuthStatus, bool, err
 		"AWS_BEARER_TOKEN_BEDROCK",
 	} {
 		if strings.TrimSpace(os.Getenv(name)) != "" {
+			method := domain.AgentAccountMethodAPIKey
+			if strings.HasSuffix(name, "_TOKEN") || strings.HasPrefix(name, "AWS_BEARER_TOKEN") {
+				method = domain.AgentAccountMethodToken
+			}
+			ports.RecordAuthEvidence(ctx, domain.EnvironmentSource(name).WithMethod(method))
 			return ports.AgentAuthStatusAuthorized, true, nil
 		}
 	}
 	if strings.TrimSpace(os.Getenv("AWS_ACCESS_KEY_ID")) != "" &&
 		strings.TrimSpace(os.Getenv("AWS_SECRET_ACCESS_KEY")) != "" {
+		ports.RecordAuthEvidence(ctx, domain.EnvironmentSource("AWS_ACCESS_KEY_ID").WithMethod(domain.AgentAccountMethodAPIKey))
 		return ports.AgentAuthStatusAuthorized, true, nil
 	}
 	if strings.TrimSpace(os.Getenv("AWS_PROFILE")) != "" {
+		ports.RecordAuthEvidence(ctx, domain.EnvironmentSource("AWS_PROFILE").WithMethod(domain.AgentAccountMethodAccount))
 		return ports.AgentAuthStatusAuthorized, true, nil
 	}
 	if strings.TrimSpace(os.Getenv("VERTEXAI_PROJECT")) != "" &&
 		strings.TrimSpace(os.Getenv("VERTEXAI_LOCATION")) != "" &&
 		crushGoogleCredentialConfigured() {
+		ports.RecordAuthEvidence(ctx, domain.EnvironmentSource("VERTEXAI_PROJECT").WithMethod(domain.AgentAccountMethodAccount))
 		return ports.AgentAuthStatusAuthorized, true, nil
 	}
 	// providers.json is Crush's downloaded model/provider catalog, not a

@@ -2,17 +2,332 @@ package claudeacp
 
 import (
 	"context"
+	"encoding/json"
+	"errors"
 	"os"
+	"path/filepath"
 	"reflect"
 	"strings"
 	"testing"
 
+	acpsdk "github.com/coder/acp-go-sdk"
+
+	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/agent/claudecode"
 	acpdriver "github.com/aoagents/agent-orchestrator/backend/internal/adapters/chatdriver/acp"
 	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
 )
 
+func TestClaudeACPLaunchEnvAdvertisesProviderModels(t *testing.T) {
+	t.Setenv("CLAUDE_MODEL_CONFIG", "")
+	models := []ports.AgentModelInfo{
+		{ID: "claude-opus-4-7"},
+		{ID: "claude-sonnet-4-6"},
+	}
+	env := claudeACPLaunchEnv(map[string]string{"PROJECT_ENV": "kept"}, "/opt/claude", "", models)
+
+	if env["CLAUDE_CODE_EXECUTABLE"] != "/opt/claude" || env["PROJECT_ENV"] != "kept" {
+		t.Fatalf("launch env = %#v, want executable and project env preserved", env)
+	}
+	var config struct {
+		AvailableModels []string `json:"availableModels"`
+	}
+	if err := json.Unmarshal([]byte(env["CLAUDE_MODEL_CONFIG"]), &config); err != nil {
+		t.Fatalf("CLAUDE_MODEL_CONFIG = %q: %v", env["CLAUDE_MODEL_CONFIG"], err)
+	}
+	want := []string{"claude-opus-4-7", "claude-sonnet-4-6"}
+	if !reflect.DeepEqual(config.AvailableModels, want) {
+		t.Fatalf("availableModels = %v, want %v", config.AvailableModels, want)
+	}
+}
+
+func TestClaudeACPLaunchEnvPreservesExplicitModelConfiguration(t *testing.T) {
+	existing := `{"availableModels":["team-opus"],"modelOverrides":{"team-opus":"arn:team:opus"}}`
+	env := claudeACPLaunchEnv(
+		map[string]string{"CLAUDE_MODEL_CONFIG": existing},
+		"/opt/claude",
+		"",
+		[]ports.AgentModelInfo{{ID: "claude-opus-4-7"}},
+	)
+	if env["CLAUDE_MODEL_CONFIG"] != existing {
+		t.Fatalf("CLAUDE_MODEL_CONFIG = %q, want explicit user configuration preserved", env["CLAUDE_MODEL_CONFIG"])
+	}
+}
+
+func TestClaudeACPLaunchEnvAddsModelsBesideExistingOverrides(t *testing.T) {
+	t.Setenv("CLAUDE_MODEL_CONFIG", "")
+	existing := `{"modelOverrides":{"claude-opus-4-7":"arn:team:opus"}}`
+	env := claudeACPLaunchEnv(
+		map[string]string{"CLAUDE_MODEL_CONFIG": existing},
+		"/opt/claude",
+		"",
+		[]ports.AgentModelInfo{{ID: "claude-opus-4-7"}},
+	)
+	var config struct {
+		AvailableModels []string          `json:"availableModels"`
+		ModelOverrides  map[string]string `json:"modelOverrides"`
+	}
+	if err := json.Unmarshal([]byte(env["CLAUDE_MODEL_CONFIG"]), &config); err != nil {
+		t.Fatal(err)
+	}
+	if !reflect.DeepEqual(config.AvailableModels, []string{"claude-opus-4-7"}) {
+		t.Fatalf("availableModels = %v, want provider model", config.AvailableModels)
+	}
+	if config.ModelOverrides["claude-opus-4-7"] != "arn:team:opus" {
+		t.Fatalf("modelOverrides = %v, want existing override preserved", config.ModelOverrides)
+	}
+}
+
+func TestClaudeACPLaunchEnvPreservesInvalidModelConfiguration(t *testing.T) {
+	for _, value := range []string{"null", "{"} {
+		t.Run(value, func(t *testing.T) {
+			env := claudeACPLaunchEnv(
+				map[string]string{"CLAUDE_MODEL_CONFIG": value},
+				"/opt/claude",
+				"",
+				[]ports.AgentModelInfo{{ID: "claude-opus-4-7"}},
+			)
+			if env["CLAUDE_MODEL_CONFIG"] != value {
+				t.Fatalf("CLAUDE_MODEL_CONFIG = %q, want invalid user value %q preserved for ACP to report", env["CLAUDE_MODEL_CONFIG"], value)
+			}
+		})
+	}
+}
+
+func TestClaudeACPLaunchEnvEnablesTodoToolsByDefault(t *testing.T) {
+	t.Setenv("CLAUDE_CODE_ENABLE_TODO_TOOLS", "")
+	env := claudeACPLaunchEnv(nil, "/opt/claude", "", nil)
+	if got := env["CLAUDE_CODE_ENABLE_TODO_TOOLS"]; got != "1" {
+		t.Fatalf("CLAUDE_CODE_ENABLE_TODO_TOOLS = %q, want 1 so Claude has a to-do tool", got)
+	}
+}
+
+func TestClaudeACPLaunchEnvTreatsBlankTodoToolsValueAsNoChoice(t *testing.T) {
+	t.Run("project env", func(t *testing.T) {
+		t.Setenv("CLAUDE_CODE_ENABLE_TODO_TOOLS", "")
+		env := claudeACPLaunchEnv(
+			map[string]string{"CLAUDE_CODE_ENABLE_TODO_TOOLS": "  "}, "/opt/claude", "", nil)
+		if got := env["CLAUDE_CODE_ENABLE_TODO_TOOLS"]; got != "1" {
+			t.Fatalf("CLAUDE_CODE_ENABLE_TODO_TOOLS = %q, want the default 1 for a blank value", got)
+		}
+	})
+	t.Run("daemon env", func(t *testing.T) {
+		t.Setenv("CLAUDE_CODE_ENABLE_TODO_TOOLS", "  ")
+		env := claudeACPLaunchEnv(nil, "/opt/claude", "", nil)
+		if got := env["CLAUDE_CODE_ENABLE_TODO_TOOLS"]; got != "1" {
+			t.Fatalf("CLAUDE_CODE_ENABLE_TODO_TOOLS = %q, want the default 1 for a blank value", got)
+		}
+	})
+}
+
+func TestClaudeACPLaunchEnvKeepsConfiguredTodoToolsChoice(t *testing.T) {
+	t.Run("project env", func(t *testing.T) {
+		t.Setenv("CLAUDE_CODE_ENABLE_TODO_TOOLS", "")
+		env := claudeACPLaunchEnv(
+			map[string]string{"CLAUDE_CODE_ENABLE_TODO_TOOLS": "0"}, "/opt/claude", "", nil)
+		if got := env["CLAUDE_CODE_ENABLE_TODO_TOOLS"]; got != "0" {
+			t.Fatalf("CLAUDE_CODE_ENABLE_TODO_TOOLS = %q, want the project's value kept", got)
+		}
+	})
+	t.Run("daemon env", func(t *testing.T) {
+		t.Setenv("CLAUDE_CODE_ENABLE_TODO_TOOLS", "0")
+		env := claudeACPLaunchEnv(nil, "/opt/claude", "", nil)
+		if got, set := env["CLAUDE_CODE_ENABLE_TODO_TOOLS"]; set {
+			t.Fatalf("CLAUDE_CODE_ENABLE_TODO_TOOLS = %q, want the inherited value left alone", got)
+		}
+	})
+}
+
+func TestClaudeACPLaunchEnvNamesOrchestratorEntrypoint(t *testing.T) {
+	t.Run("replaces an inherited value", func(t *testing.T) {
+		t.Setenv("CLAUDE_CODE_ENTRYPOINT", "sdk-ts")
+		env := claudeACPLaunchEnv(nil, "/opt/claude", "", nil)
+		if got := env["CLAUDE_CODE_ENTRYPOINT"]; got != "agent-orchestrator" {
+			t.Fatalf("CLAUDE_CODE_ENTRYPOINT = %q, want agent-orchestrator", got)
+		}
+	})
+	t.Run("blank project value", func(t *testing.T) {
+		t.Setenv("CLAUDE_CODE_ENTRYPOINT", "")
+		env := claudeACPLaunchEnv(map[string]string{"CLAUDE_CODE_ENTRYPOINT": " "}, "/opt/claude", "", nil)
+		if got := env["CLAUDE_CODE_ENTRYPOINT"]; got != "agent-orchestrator" {
+			t.Fatalf("CLAUDE_CODE_ENTRYPOINT = %q, want agent-orchestrator for a blank value", got)
+		}
+	})
+	t.Run("project env wins", func(t *testing.T) {
+		t.Setenv("CLAUDE_CODE_ENTRYPOINT", "sdk-ts")
+		env := claudeACPLaunchEnv(map[string]string{"CLAUDE_CODE_ENTRYPOINT": "custom"}, "/opt/claude", "", nil)
+		if got := env["CLAUDE_CODE_ENTRYPOINT"]; got != "custom" {
+			t.Fatalf("CLAUDE_CODE_ENTRYPOINT = %q, want the project's value kept", got)
+		}
+	})
+}
+
+func TestClaudeACPLaunchEnvTurnsArtifactsOffByDefault(t *testing.T) {
+	t.Run("default", func(t *testing.T) {
+		t.Setenv("CLAUDE_CODE_ARTIFACT", "")
+		env := claudeACPLaunchEnv(nil, "/opt/claude", "", nil)
+		if got := env["CLAUDE_CODE_ARTIFACT"]; got != "0" {
+			t.Fatalf("CLAUDE_CODE_ARTIFACT = %q, want 0", got)
+		}
+	})
+	t.Run("project env", func(t *testing.T) {
+		t.Setenv("CLAUDE_CODE_ARTIFACT", "")
+		env := claudeACPLaunchEnv(map[string]string{"CLAUDE_CODE_ARTIFACT": "1"}, "/opt/claude", "", nil)
+		if got := env["CLAUDE_CODE_ARTIFACT"]; got != "1" {
+			t.Fatalf("CLAUDE_CODE_ARTIFACT = %q, want the project's value kept", got)
+		}
+	})
+	t.Run("daemon env", func(t *testing.T) {
+		t.Setenv("CLAUDE_CODE_ARTIFACT", "1")
+		env := claudeACPLaunchEnv(nil, "/opt/claude", "", nil)
+		if got, set := env["CLAUDE_CODE_ARTIFACT"]; set {
+			t.Fatalf("CLAUDE_CODE_ARTIFACT = %q, want the inherited value left alone", got)
+		}
+	})
+	t.Run("blank project value keeps the daemon's choice", func(t *testing.T) {
+		t.Setenv("CLAUDE_CODE_ARTIFACT", "1")
+		env := claudeACPLaunchEnv(map[string]string{"CLAUDE_CODE_ARTIFACT": " "}, "/opt/claude", "", nil)
+		if got, set := env["CLAUDE_CODE_ARTIFACT"]; set {
+			t.Fatalf("CLAUDE_CODE_ARTIFACT = %q, want no overlay so the daemon's value reaches Claude", got)
+		}
+	})
+}
+
+func TestClaudeACPLaunchEnvAdvertisesSelectedModelWithoutProviderCatalog(t *testing.T) {
+	t.Setenv("CLAUDE_MODEL_CONFIG", "")
+	env := claudeACPLaunchEnv(nil, "/opt/claude", "claude-opus-4-7", nil)
+	var config struct {
+		AvailableModels []string `json:"availableModels"`
+	}
+	if err := json.Unmarshal([]byte(env["CLAUDE_MODEL_CONFIG"]), &config); err != nil {
+		t.Fatal(err)
+	}
+	if !reflect.DeepEqual(config.AvailableModels, []string{"claude-opus-4-7"}) {
+		t.Fatalf("availableModels = %v, want the selected model even without provider discovery", config.AvailableModels)
+	}
+}
+
+func TestClaudeACPLaunchEnvPreservesNativePickerWithoutProviderCatalog(t *testing.T) {
+	t.Setenv("CLAUDE_MODEL_CONFIG", "")
+	env := claudeACPLaunchEnv(nil, "/opt/claude", "sonnet", nil)
+	if got := env["CLAUDE_MODEL_CONFIG"]; got != "" {
+		t.Fatalf("CLAUDE_MODEL_CONFIG = %q, want native ACP picker preserved", got)
+	}
+}
+
+func TestClaudeACPLaunchEnvAddsSelectedProviderModelAsCustomOption(t *testing.T) {
+	t.Setenv("CLAUDE_MODEL_CONFIG", "")
+	t.Setenv("ANTHROPIC_CUSTOM_MODEL_OPTION", "")
+	env := claudeACPLaunchEnv(
+		nil,
+		"/opt/claude",
+		"claude-fable-5",
+		[]ports.AgentModelInfo{{ID: "claude-fable-5"}},
+	)
+	if got := env["ANTHROPIC_CUSTOM_MODEL_OPTION"]; got != "claude-fable-5" {
+		t.Fatalf("ANTHROPIC_CUSTOM_MODEL_OPTION = %q, want selected provider model", got)
+	}
+}
+
+func TestClaudeACPLaunchEnvDoesNotAddNativeAliasesAsCustomOptions(t *testing.T) {
+	t.Setenv("CLAUDE_MODEL_CONFIG", "")
+	t.Setenv("ANTHROPIC_CUSTOM_MODEL_OPTION", "")
+	for _, alias := range []string{"default", "sonnet", "opus", "haiku", "fable", "opus[1m]"} {
+		t.Run(alias, func(t *testing.T) {
+			env := claudeACPLaunchEnv(nil, "/opt/claude", alias, []ports.AgentModelInfo{{ID: alias}})
+			if got := env["ANTHROPIC_CUSTOM_MODEL_OPTION"]; got != "" {
+				t.Fatalf("ANTHROPIC_CUSTOM_MODEL_OPTION = %q, want native alias omitted", got)
+			}
+		})
+	}
+}
+
+func TestClaudeACPLaunchEnvPreservesExplicitCustomModelOption(t *testing.T) {
+	t.Setenv("ANTHROPIC_CUSTOM_MODEL_OPTION", "")
+	env := claudeACPLaunchEnv(
+		map[string]string{"ANTHROPIC_CUSTOM_MODEL_OPTION": "team-model"},
+		"/opt/claude",
+		"claude-fable-5",
+		[]ports.AgentModelInfo{{ID: "claude-fable-5"}},
+	)
+	if got := env["ANTHROPIC_CUSTOM_MODEL_OPTION"]; got != "team-model" {
+		t.Fatalf("ANTHROPIC_CUSTOM_MODEL_OPTION = %q, want explicit user value preserved", got)
+	}
+}
+
+func TestClaudeACPModelConfigSkipsDiscoveryWhenUserConfigurationMustBePreserved(t *testing.T) {
+	t.Setenv("CLAUDE_MODEL_CONFIG", "")
+	tests := []struct {
+		name     string
+		input    map[string]string
+		preserve bool
+	}{
+		{name: "unset"},
+		{name: "overrides can be merged", input: map[string]string{
+			"CLAUDE_MODEL_CONFIG": `{"modelOverrides":{"team-opus":"arn:team:opus"}}`,
+		}},
+		{name: "explicit available models", input: map[string]string{
+			"CLAUDE_MODEL_CONFIG": `{"availableModels":["team-opus"]}`,
+		}, preserve: true},
+		{name: "malformed", input: map[string]string{
+			"CLAUDE_MODEL_CONFIG": `{`,
+		}, preserve: true},
+		{name: "null", input: map[string]string{
+			"CLAUDE_MODEL_CONFIG": `null`,
+		}, preserve: true},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			_, preserve := claudeACPModelConfig(tc.input)
+			if preserve != tc.preserve {
+				t.Fatalf("preserve = %v, want %v", preserve, tc.preserve)
+			}
+		})
+	}
+}
+
+func TestClaudeSessionMetaAddsPlanGuidanceWhenTodoToolsAreEnabled(t *testing.T) {
+	t.Setenv("CLAUDE_CODE_ENABLE_TODO_TOOLS", "")
+	appended := func(cfg acpdriver.LaunchConfig) string {
+		t.Helper()
+		prompt, ok := claudeSessionMeta(cfg)["systemPrompt"].(map[string]any)
+		if !ok {
+			t.Fatalf("no systemPrompt for %+v", cfg)
+		}
+		return prompt["append"].(string)
+	}
+	if got := appended(acpdriver.LaunchConfig{}); got != claudePlanGuidance {
+		t.Fatalf("append = %q, want just the plan guidance", got)
+	}
+	if got := appended(acpdriver.LaunchConfig{SystemPrompt: "AO standing instructions"}); got != "AO standing instructions\n\n"+claudePlanGuidance {
+		t.Fatalf("append = %q, want the standing instructions then the plan guidance", got)
+	}
+}
+
+func TestClaudeSessionMetaOmitsPlanGuidanceWhenTodoToolsAreOff(t *testing.T) {
+	for _, off := range []string{"0", "false", "No", "OFF"} {
+		t.Run("project env "+off, func(t *testing.T) {
+			t.Setenv("CLAUDE_CODE_ENABLE_TODO_TOOLS", "")
+			env := map[string]string{"CLAUDE_CODE_ENABLE_TODO_TOOLS": off}
+			if got := claudeSessionMeta(acpdriver.LaunchConfig{Env: env}); got["systemPrompt"] != nil {
+				t.Fatalf("meta = %#v, want no system prompt: the to-do tools are off", got)
+			}
+			prompt := claudeSessionMeta(acpdriver.LaunchConfig{Env: env, SystemPrompt: "AO standing instructions"})["systemPrompt"].(map[string]any)
+			if prompt["append"] != "AO standing instructions" {
+				t.Fatalf("append = %q, want only the standing instructions", prompt["append"])
+			}
+		})
+	}
+	t.Run("daemon env", func(t *testing.T) {
+		t.Setenv("CLAUDE_CODE_ENABLE_TODO_TOOLS", "0")
+		if got := claudeSessionMeta(acpdriver.LaunchConfig{}); got["systemPrompt"] != nil {
+			t.Fatalf("meta = %#v, want no system prompt: the to-do tools are off", got)
+		}
+	})
+}
+
 func TestClaudeSessionMetaAppendsWithoutReplacingPreset(t *testing.T) {
-	if got := claudeSessionMeta(acpdriver.LaunchConfig{}); got != nil {
+	t.Setenv("CLAUDE_CODE_ENABLE_TODO_TOOLS", "0")
+	if got := claudeSessionMeta(acpdriver.LaunchConfig{}); got["systemPrompt"] != nil {
 		t.Fatalf("empty prompt metadata = %#v", got)
 	}
 	meta := claudeSessionMeta(acpdriver.LaunchConfig{SystemPrompt: "AO standing instructions"})
@@ -23,9 +338,138 @@ func TestClaudeSessionMetaAppendsWithoutReplacingPreset(t *testing.T) {
 	if prompt["type"] != "preset" || prompt["preset"] != "claude_code" || prompt["append"] != "AO standing instructions" {
 		t.Fatalf("systemPrompt = %#v", prompt)
 	}
+	if options := claudeNestedMap(claudeNestedMap(meta, "claudeCode"), "options"); options["tools"] != nil {
+		t.Fatalf("ordinary session received a tool restriction: %#v", options)
+	}
+}
+
+func TestClaudeSessionMetaDisablesBackgroundTools(t *testing.T) {
+	t.Setenv("CLAUDE_CODE_ENABLE_TODO_TOOLS", "1")
+	for _, window := range []string{"", "50000"} {
+		t.Run("compact window "+window, func(t *testing.T) {
+			meta := claudeSessionMeta(acpdriver.LaunchConfig{
+				SystemPrompt: "Return only task title and slug JSON.", DisableTools: true,
+				Env: map[string]string{claudeAutoCompactWindowEnv: window},
+			})
+			prompt := meta["systemPrompt"].(map[string]any)
+			if prompt["append"] != "Return only task title and slug JSON." {
+				t.Fatalf("text-only task received tool-use guidance: %#v", prompt)
+			}
+			options := claudeNestedMap(claudeNestedMap(meta, "claudeCode"), "options")
+			tools, ok := options["tools"].([]string)
+			if !ok || tools == nil || len(tools) != 0 {
+				t.Fatalf("background tools = %#v, want an explicit empty list", options["tools"])
+			}
+			if options["strictMcpConfig"] != true || !reflect.DeepEqual(options["disallowedTools"], []string{"mcp__*"}) {
+				t.Fatalf("background task can inherit MCP tools: %#v", options)
+			}
+			if window != "" {
+				env, ok := options["env"].(map[string]string)
+				if !ok || env[claudeAutoCompactWindowEnv] != window {
+					t.Fatalf("lost compaction environment: %#v", options)
+				}
+			}
+		})
+	}
+}
+
+func TestClaudeSessionMetaAsksForSDKSessionState(t *testing.T) {
+	for _, cfg := range []acpdriver.LaunchConfig{{}, {DisableTools: true}} {
+		got := claudeNestedMap(claudeSessionMeta(cfg), "claudeCode")["emitRawSDKMessages"]
+		want := []map[string]string{{"type": "system", "subtype": "session_state_changed"}}
+		if !reflect.DeepEqual(got, want) {
+			t.Fatalf("emitRawSDKMessages = %#v, want only session state changes", got)
+		}
+	}
+}
+
+func TestClaudeSessionMetaSendsReviewerToolListsWhenReadOnly(t *testing.T) {
+	meta := claudeSessionMeta(acpdriver.LaunchConfig{SystemPrompt: "Review the PR.", ReadOnly: true})
+	options := claudeNestedMap(claudeNestedMap(meta, "claudeCode"), "options")
+	if !reflect.DeepEqual(options["allowedTools"], claudecode.ReviewerAllowedTools) ||
+		!reflect.DeepEqual(options["disallowedTools"], claudecode.ReviewerDisallowedTools) {
+		t.Fatalf("read-only options = %#v, want the reviewer tool lists", options)
+	}
+	if _, restricted := options["tools"]; restricted {
+		t.Fatalf("read-only reviewer lost its read tools: %#v", options)
+	}
+}
+
+func TestClaudeSessionMetaKeepsBackgroundTasksToolless(t *testing.T) {
+	meta := claudeSessionMeta(acpdriver.LaunchConfig{ReadOnly: true, DisableTools: true})
+	options := claudeNestedMap(claudeNestedMap(meta, "claudeCode"), "options")
+	if tools, _ := options["tools"].([]string); tools == nil || len(tools) != 0 {
+		t.Fatalf("background tools = %#v, want an explicit empty list", options["tools"])
+	}
+	if !reflect.DeepEqual(options["disallowedTools"], []string{"mcp__*"}) {
+		t.Fatalf("background disallowedTools = %#v", options["disallowedTools"])
+	}
+}
+
+func TestClaudeReadOnlySessionPinsDefaultMode(t *testing.T) {
+	session := claudeReadOnlySession(acpdriver.LaunchConfig{ReadOnly: true})
+	if session.Mode != "default" || session.PermissionPolicy == nil {
+		t.Fatalf("read-only session = %#v, want default mode with a policy", session)
+	}
+}
+
+func TestReviewerPermissionPolicyAllowsOnlyTheSubmitCommands(t *testing.T) {
+	const worker = "proj-7"
+	// The options claude-agent-acp offers on an ordinary tool permission.
+	options := []acpsdk.PermissionOption{
+		{OptionId: "reject", Name: "Deny", Kind: acpsdk.PermissionOptionKindRejectOnce},
+		{OptionId: "allow", Name: "Allow Once", Kind: acpsdk.PermissionOptionKindAllowOnce},
+		{OptionId: "allow_always", Name: "Always Allow", Kind: acpsdk.PermissionOptionKindAllowAlways},
+	}
+	request := func(kind acpsdk.ToolKind, command string) acpsdk.RequestPermissionRequest {
+		return acpsdk.RequestPermissionRequest{Options: options, ToolCall: acpsdk.ToolCallUpdate{
+			ToolCallId: "call-1", Kind: acpsdk.Ptr(kind), RawInput: map[string]any{"command": command},
+		}}
+	}
+	post := `printf '%s' '{"event":"COMMENT"}' | gh api --method POST repos/acme/app/pulls/12/reviews --input - --jq '.id'`
+	submit := `printf '%s' 'ok' | ao review submit --session ` + worker + ` --run run-1 --verdict approved --body -`
+	tests := []struct {
+		name   string
+		worker string
+		req    acpsdk.RequestPermissionRequest
+		want   acpsdk.PermissionOptionId
+	}{
+		{"review POST", worker, request(acpsdk.ToolKindExecute, post), "allow"},
+		{"ao review submit for the worker", worker, request(acpsdk.ToolKindExecute, submit), "allow"},
+		{"ao review submit for another worker", "proj-8", request(acpsdk.ToolKindExecute, submit), "reject"},
+		{"launch without a worker", "", request(acpsdk.ToolKindExecute, post), "reject"},
+		{"shell write", worker, request(acpsdk.ToolKindExecute, "touch pwned"), "reject"},
+		{"submit with a chained command", worker, request(acpsdk.ToolKindExecute, post+"; rm -rf ."), "reject"},
+		{"file edit", worker, request(acpsdk.ToolKindEdit, post), "reject"},
+		{"no input", worker, acpsdk.RequestPermissionRequest{Options: options, ToolCall: acpsdk.ToolCallUpdate{
+			ToolCallId: "call-1", Kind: acpsdk.Ptr(acpsdk.ToolKindExecute),
+		}}, "reject"},
+		{"only reject always offered", worker, acpsdk.RequestPermissionRequest{Options: []acpsdk.PermissionOption{
+			{OptionId: "never", Kind: acpsdk.PermissionOptionKindRejectAlways},
+			{OptionId: "allow", Kind: acpsdk.PermissionOptionKindAllowOnce},
+		}, ToolCall: acpsdk.ToolCallUpdate{ToolCallId: "call-1", Kind: acpsdk.Ptr(acpsdk.ToolKindEdit)}}, "never"},
+		// Nothing selectable must still be answered, never parked for a human.
+		{"no reject option", worker, acpsdk.RequestPermissionRequest{Options: []acpsdk.PermissionOption{
+			{OptionId: "allow_always", Kind: acpsdk.PermissionOptionKindAllowAlways},
+		}, ToolCall: acpsdk.ToolCallUpdate{ToolCallId: "call-1", Kind: acpsdk.Ptr(acpsdk.ToolKindEdit)}}, acpdriver.CancelPermission},
+		{"submit without allow once", worker, acpsdk.RequestPermissionRequest{Options: []acpsdk.PermissionOption{
+			{OptionId: "allow_always", Kind: acpsdk.PermissionOptionKindAllowAlways},
+			{OptionId: "reject", Kind: acpsdk.PermissionOptionKindRejectOnce},
+		}, ToolCall: acpsdk.ToolCallUpdate{ToolCallId: "call-1", Kind: acpsdk.Ptr(acpsdk.ToolKindExecute),
+			RawInput: map[string]any{"command": post}}}, "reject"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got, handled := reviewerPermissionPolicy(tt.worker)(ports.PermissionModeAuto, tt.req)
+			if !handled || got != tt.want {
+				t.Fatalf("policy = (%q, %v), want (%q, true)", got, handled, tt.want)
+			}
+		})
+	}
 }
 
 func TestClaudeSessionMetaNeverIncludesReplayContext(t *testing.T) {
+	t.Setenv("CLAUDE_CODE_ENABLE_TODO_TOOLS", "0")
 	meta := claudeSessionMeta(acpdriver.LaunchConfig{SystemPrompt: "AO standing instructions"})
 	prompt := meta["systemPrompt"].(map[string]any)
 	if strings.Contains(prompt["append"].(string), "replayed-conversation") {
@@ -52,6 +496,22 @@ func TestClaudeSessionOptionsUseACPConfigIDs(t *testing.T) {
 	want := []acpdriver.SessionOption{{ID: "model", Value: "sonnet"}, {ID: "effort", Value: "high"}}
 	if !reflect.DeepEqual(got, want) {
 		t.Fatalf("options = %#v, want %#v", got, want)
+	}
+}
+
+func TestClaudeSessionOptionsNeverSwapAFullIDForAnAlias(t *testing.T) {
+	got := claudeSessionOptions(ports.ChatTurnSettings{Model: "claude-haiku-5-5"})
+	want := []acpdriver.SessionOption{{ID: "model", Value: "claude-haiku-5-5", Optional: true, Name: "Haiku 5.5"}}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("options = %#v, want %#v", got, want)
+	}
+}
+
+func TestClaudeModelNameReadsTheVersion(t *testing.T) {
+	for id, want := range map[string]string{"claude-opus-5-5": "Opus 5.5", "claude-sonnet-5": "Sonnet 5", "claude-opus-4-5-20251101": "Opus 4.5", "opus": ""} {
+		if got := claudeModelName(id); got != want {
+			t.Errorf("claudeModelName(%q) = %q, want %q", id, got, want)
+		}
 	}
 }
 
@@ -95,26 +555,135 @@ func TestRuntimeCommandOverride(t *testing.T) {
 	}
 }
 
-type fakePlugin struct{}
-
-func (fakePlugin) ResolveBinary(context.Context) (string, error) { return "/bin/echo", nil }
-func (fakePlugin) AuthStatus(context.Context) (ports.AgentAuthStatus, error) {
-	return ports.AgentAuthStatusAuthorized, nil
+type rejectedClaudePlugin struct {
+	binary     string
+	workingDir string
+	env        map[string]string
 }
 
-func TestClaudeAdvertisesCompactionCapability(t *testing.T) {
+func (p rejectedClaudePlugin) ResolveBinary(context.Context) (string, error) { return p.binary, nil }
+func (p *rejectedClaudePlugin) ValidateLaunchAuth(_ context.Context, workingDir string, env map[string]string) (ports.AgentAuthStatus, error) {
+	p.workingDir = workingDir
+	p.env = env
+	return ports.AgentAuthStatusUnauthorized, nil
+}
+
+func TestCapabilityProbeDoesNotUseDaemonGlobalClaudeAuth(t *testing.T) {
 	executable, err := os.Executable()
 	if err != nil {
 		t.Fatal(err)
 	}
 	t.Setenv("AO_CLAUDE_ACP_COMMAND", executable)
-
-	d := New(fakePlugin{}, nil)
-	caps, err := d.Probe(context.Background())
+	_, err = New(&rejectedClaudePlugin{binary: executable}, nil, nil).Probe(context.Background())
 	if err != nil {
-		t.Fatalf("Probe: %v", err)
+		t.Fatalf("Probe error = %v, want capability probe independent of global auth", err)
 	}
-	if !caps.Has(ports.ChatCapabilityCompaction) {
-		t.Fatal("Claude ACP driver should advertise compaction capability")
+}
+
+func TestLaunchAuthBlocksAConfirmedProjectCredentialRejection(t *testing.T) {
+	plugin := &rejectedClaudePlugin{binary: "/tmp/claude"}
+	env := map[string]string{"CLAUDE_CODE_USE_BEDROCK": "1", "AWS_PROFILE": "project-profile"}
+	err := validateClaudeLaunchAuth(
+		context.Background(), plugin, "/work/project", env, nil,
+	)
+	if !errors.Is(err, ports.ErrAgentAuthRequired) {
+		t.Fatalf("launch auth error = %v, want ErrAgentAuthRequired", err)
+	}
+	if plugin.workingDir != "/work/project" || !reflect.DeepEqual(plugin.env, env) {
+		t.Fatalf("launch auth context = dir %q env %#v, want project cwd and merged launch env", plugin.workingDir, plugin.env)
+	}
+}
+
+func TestClaudePromptResponseFailureRequiresStructuredLoginAction(t *testing.T) {
+	response := acpsdk.PromptResponse{
+		StopReason: acpsdk.StopReasonEndTurn,
+		Meta: map[string]any{"jetbrains": map[string]any{"air": map[string]any{
+			"version": float64(1),
+			"sessionFailure": map[string]any{
+				"id": "auth-expired", "severity": "error",
+				"title":   "Your login has expired.",
+				"details": "Run /login to sign in again.",
+				"actions": []any{"login"},
+			},
+		}}},
+	}
+
+	err := claudePromptResponseFailure(response, "")
+	if !errors.Is(err, ports.ErrChatAuthRequired) {
+		t.Fatalf("error = %v, want ErrChatAuthRequired", err)
+	}
+}
+
+func TestClaudePromptResponseFailureIgnoresAssistantAuthProse(t *testing.T) {
+	response := acpsdk.PromptResponse{
+		StopReason: acpsdk.StopReasonEndTurn,
+		Meta:       map[string]any{"assistantMessage": "Your OAuth token has expired; please run /login."},
+	}
+	if err := claudePromptResponseFailure(response, ""); err != nil {
+		t.Fatalf("assistant prose classified as terminal auth failure: %v", err)
+	}
+}
+
+func TestClaudeAuthRejectionNotifiesDaemon(t *testing.T) {
+	called := 0
+	callback := claudeAuthRejected(func() { called++ })
+	callback()
+	if called != 1 {
+		t.Fatalf("daemon callback calls = %d, want 1", called)
+	}
+}
+
+func TestClaudePromptResponseFailureRecordsVersionTooOld(t *testing.T) {
+	claudecode.ConfigureModelVersionRequirements("")
+	t.Cleanup(func() { claudecode.ConfigureModelVersionRequirements("") })
+	response := acpsdk.PromptResponse{
+		StopReason: acpsdk.StopReasonEndTurn,
+		Meta: map[string]any{"jetbrains": map[string]any{"air": map[string]any{
+			"version": float64(1),
+			"sessionFailure": map[string]any{
+				"id": "bad-request", "severity": "error", "category": "bad_request",
+				"title": `API Error: 400 {"type":"error","error":{"type":"invalid_request_error","message":"Claude Code 2.1.239 does not support this model; version 2.1.280 or newer is required. Run 'claude update', or update the Claude desktop app, then try again.","details":{"error_code":"claude_code_version_too_old"}}}`,
+			},
+		}}},
+	}
+
+	err := claudePromptResponseFailure(response, "us.anthropic.claude-opus-5-5-v1:0")
+	if !errors.Is(err, ports.ErrAgentVersionTooOld) {
+		t.Fatalf("error = %v, want ErrAgentVersionTooOld", err)
+	}
+	if !strings.Contains(err.Error(), "2.1.280") || !strings.Contains(err.Error(), "claude update") || strings.Contains(err.Error(), "API Error") {
+		t.Fatalf("error text = %q, want the remedy instead of the raw API error", err.Error())
+	}
+	if got, ok := claudecode.DefaultModelVersionRequirements().Required("us.anthropic.claude-opus-5-5-v1:0"); !ok || got != "2.1.280" {
+		t.Fatalf("recorded requirement = %q, %v", got, ok)
+	}
+
+	if err := claudePromptResponseFailure(response, "opus"); !errors.Is(err, ports.ErrAgentVersionTooOld) {
+		t.Fatalf("alias error = %v, want ErrAgentVersionTooOld", err)
+	}
+	if _, ok := claudecode.DefaultModelVersionRequirements().Required("opus"); ok {
+		t.Fatal("recorded a version requirement for an alias")
+	}
+}
+
+func TestClaudeServedModelOnlyReportsAliases(t *testing.T) {
+	configDir := t.TempDir()
+	sessionID := "8320947f-5806-4579-943f-b23a943bac1f"
+	projectDir := filepath.Join(configDir, "projects", "-work")
+	if err := os.MkdirAll(projectDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	transcript := `{"type":"assistant","message":{"model":"claude-opus-4-8"}}` + "\n"
+	if err := os.WriteFile(filepath.Join(projectDir, sessionID+".jsonl"), []byte(transcript), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	cfg := acpdriver.LaunchConfig{Env: map[string]string{"CLAUDE_CONFIG_DIR": configDir}}
+
+	served, reason := claudeServedModel(context.Background(), cfg, sessionID, "opus")
+	if served != "claude-opus-4-8" || !strings.Contains(reason, "opus") {
+		t.Fatalf("served = %q, reason = %q", served, reason)
+	}
+	if served, _ := claudeServedModel(context.Background(), cfg, sessionID, "claude-opus-4-8"); served != "" {
+		t.Fatalf("concrete model reported as rerouted to %q", served)
 	}
 }

@@ -1,48 +1,116 @@
-import { Feather } from "@expo/vector-icons";
 import { CameraView, useCameraPermissions } from "expo-camera";
-import { useFocusEffect, useLocalSearchParams, useRouter } from "expo-router";
-import { useCallback, useRef, useState } from "react";
-import { Linking, Platform, Pressable, StyleSheet, Text, View } from "react-native";
+import { useFocusEffect, useLocalSearchParams, useNavigation, useRouter } from "expo-router";
+import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
+import { AccessibilityInfo, AppState, Linking, Platform, StyleSheet, Text, View } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { pingServer } from "../lib/api";
+import { AppSymbol } from "../lib/AppSymbol";
 import { pickNormalLens } from "../lib/cameraLens";
 import { saveConfig } from "../lib/config";
 import {
 	classifyConnectionFailure,
 	describeConnectionFailure,
+	describeUnreachableCode,
+	isLocalNetworkHost,
 	LOCAL_NETWORK_HINT,
 	type ConnectionErrorCopy,
 } from "../lib/connectionError";
 import type { Theme } from "../lib/theme";
 import { haptics } from "../lib/haptics";
 import { clearOnboardingSkipped } from "../lib/onboardingStore";
-import { pairFromCode } from "../lib/pairFlow";
+import { completeOnboarding } from "../lib/onboardingNavigation";
+import { pairThisDevice, releaseThisDevice } from "../lib/deviceTokenRuntime";
+import { pairedNotice, pairFromCode, type MachineNameChoice, type PairedNotice } from "../lib/pairFlow";
+import { registerForPush } from "../lib/push";
 import { isLegacyPairingCode, parsePairingCode } from "../lib/pairingCode";
-import { saveHost, setActiveHost } from "../lib/hosts";
+import { findHost, saveHost, setActiveHost, type Host } from "../lib/hosts";
+import { loadAccount } from "../lib/account";
+import { syncAccountHosts, unignoreAccountHost } from "../lib/accountHosts";
 import { probeEndpoint } from "../lib/connectRuntime";
 import { raceEndpoints } from "../lib/race";
-import { connectSheetRoute } from "../lib/sheetResult";
+import { createScanGate } from "../lib/scanGate";
+import { mayAwaitLocalNetwork, raceAwaitingLocalNetwork } from "../lib/localNetworkWait";
+import { loadLocalNetworkConfirmed, setLocalNetworkConfirmed } from "../lib/localNetworkStore";
+import { connectRoute, machineNameSheetRoute } from "../lib/sheetResult";
 import { useApp } from "../lib/store";
-import { Button, NumberedStep } from "../lib/ui";
+import { Button, EmptyState, NumberedStep } from "../lib/ui";
+import { Spinner } from "../lib/Spinner";
 import { useTheme, useThemedStyles } from "../lib/ThemeProvider";
-import { MinimalBackButton } from "../lib/MinimalBackButton";
 import { MOBILE_EVENTS } from "../lib/telemetry/events";
 import { mobileTelemetry } from "../lib/telemetry/runtime";
+import { iconSize, onCamera, radius, space, type } from "../lib/tokens";
+import { backOr } from "../lib/backNavigation";
 
 export default function PairScreen() {
 	const t = useTheme();
 	const styles = useThemedStyles(makeStyles);
 	const router = useRouter();
+	const navigation = useNavigation();
 	const insets = useSafeAreaInsets();
-	const { from } = useLocalSearchParams<{ from?: string }>();
+	const { from, repairHostId } = useLocalSearchParams<{ from?: string; repairHostId?: string }>();
 	const fromOnboarding = from === "onboarding";
 	const { reloadConfig } = useApp();
 	const [permission, requestPermission] = useCameraPermissions();
 	const [failure, setFailure] = useState<ConnectionErrorCopy | null>(null);
 	const [busy, setBusy] = useState(false);
-	// The camera keeps running under the manual-connect sheet, so a QR code in
-	// frame would otherwise pair behind it. This replaces the old `manualOpen`
-	// flag now that the sheet is a route pushed on top rather than local state.
+	// Shown in place of "Connecting…" between a successful pair and the screen
+	// closing, when what happened would not otherwise be obvious.
+	const [paired, setPaired] = useState<PairedNotice | null>(null);
+	// Set while a scan keeps trying a LAN address that iOS may be holding behind
+	// its Local Network prompt; shown as progress rather than as an error.
+	const [awaitingLocalNetwork, setAwaitingLocalNetwork] = useState(false);
+	const [gate] = useState(createScanGate);
+	// Answering that prompt sends the app inactive and straight back to active —
+	// the only sign iOS gives that the user has decided. It is approximate: Control
+	// Center, a notification or Face ID cycle the same way, which at worst ends a
+	// wait early or retries a failed code once.
+	const promptAnsweredAt = useRef<number | null>(null);
+	// Read from the AppState listener, which outlives any one render.
+	const latestPair = useRef<(code: string) => void>(() => {});
+	useEffect(() => {
+		let wasInactive = false;
+		const sub = AppState.addEventListener("change", (state) => {
+			if (state === "inactive") wasInactive = true;
+			else if (state === "active" && wasInactive) {
+				wasInactive = false;
+				promptAnsweredAt.current = Date.now();
+				// Answered after the wait gave up: connect now rather than
+				// leaving the error up until the user finds Try again. Only while
+				// this screen is in front — the manual-connect and name sheets sit
+				// on top of it, and a pair behind them could push a second sheet or
+				// go back mid-typing. Checked before promptAnswered() so
+				// the one retry is not spent while hidden.
+				if (!focused.current) return;
+				const code = gate.promptAnswered();
+				if (code) latestPair.current(code);
+			}
+		});
+		return () => sub.remove();
+	}, [gate]);
+	const mounted = useRef(true);
+	useEffect(() => {
+		mounted.current = true;
+		return () => { mounted.current = false; };
+	}, []);
+	const [repairHost, setRepairHost] = useState<Host | null | undefined>(() => repairHostId ? undefined : null);
+	useEffect(() => {
+		if (!repairHostId) {
+			setRepairHost(null);
+			return;
+		}
+		let current = true;
+		// An unreadable host list must not leave the screen on a spinner; it reads
+		// as "no longer saved", which offers the way back.
+		void findHost(repairHostId).catch(() => null).then((host) => {
+			if (current) setRepairHost(host);
+		});
+		return () => { current = false; };
+	}, [repairHostId]);
+	// The bar names the task, so a reconnect must not read as a new pairing.
+	const title = repairHostId ? (repairHost ? `Reconnect ${repairHost.name}` : "Reconnect machine") : "Pair a machine";
+	useLayoutEffect(() => navigation.setOptions({ title }), [navigation, title]);
+	// The camera keeps running under the manual-connect page, so a QR code in
+	// frame would otherwise pair behind it.
 	const focused = useRef(true);
 	useFocusEffect(
 		useCallback(() => {
@@ -52,7 +120,6 @@ export default function PairScreen() {
 			};
 		}, []),
 	);
-	const scanned = useRef(false);
 	const rejected = useRef<string | null>(null);
 	const pendingCode = useRef<string | null>(null);
 
@@ -63,25 +130,39 @@ export default function PairScreen() {
 		if (Platform.OS !== "ios" || lens) return;
 		try {
 			const lenses = (await camera.current?.getAvailableLensesAsync()) ?? [];
-			if (__DEV__) console.log("[pair] available lenses", lenses);
+			if (typeof __DEV__ !== "undefined" && __DEV__) console.log("[pair] available lenses", lenses);
 			setLens(pickNormalLens(lenses));
 		} catch {
 			/* keep the native default */
 		}
 	}
 
-	async function finish() {
-		await clearOnboardingSkipped();
-		await reloadConfig(); // reconnect with the new credentials
-		if (fromOnboarding) router.replace("/");
-		else router.back();
+	async function finish(notice?: PairedNotice | null) {
+		if (notice) {
+			setPaired(notice);
+			// The notice closes with the screen, before VoiceOver would reach it.
+			// Android already reads it through accessibilityLiveRegion.
+			if (Platform.OS === "ios") AccessibilityInfo.announceForAccessibility([notice.title, notice.message].filter(Boolean).join(". "));
+		}
+		await Promise.all([
+			clearOnboardingSkipped().then(() => reloadConfig()), // reconnect with the new credentials
+			// Held long enough to read; the reconnect runs meanwhile.
+			notice ? new Promise((resolve) => setTimeout(resolve, PAIRED_NOTICE_MS)) : null,
+		]);
+		// The machine is saved either way, so onboarding still completes. Going
+		// back is only for this screen: after leaving early it would pop
+		// whatever screen is now in front.
+		if (!fromOnboarding && !mounted.current) return;
+		if (fromOnboarding) completeOnboarding(navigation);
+		else backOr(router);
 	}
 
 	async function onScan({ data }: { data: string }) {
-		if (scanned.current || busy || !focused.current) return;
+		if (busy || !focused.current) return;
 		// Cheap reject first: the camera sees every barcode in frame, and only a
 		// code we can actually parse should stop the scanner.
-		if (!parsePairingCode(data)) {
+		const offer = parsePairingCode(data);
+		if (!offer) {
 			if (rejected.current !== data) {
 				rejected.current = data;
 				// A v1 code is a recognisable thing, not noise: say what to do
@@ -92,70 +173,184 @@ export default function PairScreen() {
 			return;
 		}
 		rejected.current = null;
-		scanned.current = true;
-		await pair(data);
+		if (!gate.sighting(data, Date.now())) return;
+		// Felt the moment the code is read, so nobody has to watch the screen to
+		// know the scan took; success or warning follows when the attempt ends.
+		haptics.tap();
+		await pair(data, offer);
 	}
 
 	// Races the code's endpoints, verifies the winner, then stores the machine.
 	// The scanned code is kept so "Try again" can re-run the whole thing rather
 	// than making the user re-scan.
-	async function pair(code: string) {
+	async function pair(code: string, offer?: ReturnType<typeof parsePairingCode>) {
+		if (!gate.start()) return;
+		try {
+			await attemptPair(code, offer);
+		} catch (e) {
+			// An attempt that threw (storage, navigation) never reported how it
+			// ended. Without this the scanner would stay claimed and ignore scans,
+			// and the spinner would just stop with nothing to act on.
+			console.warn("[pair] attempt failed", e);
+			// A throw after pairing (the reconnect, navigation) must not leave the
+			// success notice claiming a finished pair on a screen that stays open.
+			setPaired(null);
+			setAwaitingLocalNetwork(false);
+			setBusy(false);
+			if (gate.release()) {
+				// Recorded as a failure so a code still in view waits to be pointed
+				// at again instead of retrying every frame.
+				gate.failed(code, Date.now());
+				haptics.warning();
+				setFailure({
+					title: "Couldn't pair",
+					icon: "alert-circle",
+					message: "Something went wrong on this phone. Try again.",
+					showLocalNetworkHint: false,
+				});
+			}
+		}
+	}
+
+	async function attemptPair(code: string, offer?: ReturnType<typeof parsePairingCode>) {
 		pendingCode.current = code;
 		setBusy(true);
 		setFailure(null);
 
+		const localNetworkConfirmed = await loadLocalNetworkConfirmed();
+		promptAnsweredAt.current = null;
+		let awaitedLocalNetwork = false;
 		const result = await pairFromCode(code, {
-			race: (endpoints, expectedHostId) => raceEndpoints(endpoints, expectedHostId, probeEndpoint),
+			race: (endpoints, expectedHostId) => {
+				const once = () => raceEndpoints(endpoints, expectedHostId, probeEndpoint);
+				if (!mayAwaitLocalNetwork(endpoints, Platform.OS, localNetworkConfirmed)) return once();
+				awaitedLocalNetwork = true;
+				return raceAwaitingLocalNetwork(once, {
+					now: Date.now,
+					sleep: (ms) => new Promise((resolve) => setTimeout(resolve, ms)),
+					stopped: () => !mounted.current,
+					answeredAt: () => promptAnsweredAt.current,
+					onWaiting: () => setAwaitingLocalNetwork(true),
+				});
+			},
 			verify: async (config) => void (await pingServer(config)),
+			pair: (config) => pairThisDevice(config, { fresh: true }),
+			release: releaseThisDevice,
+			chooseName: (suggested, appearance, hostId) => new Promise<MachineNameChoice | null>((resolve) => {
+				router.push(machineNameSheetRoute({ suggested, appearance, hostId, onSelect: resolve }));
+			}),
+			// A scan of a machine already in the list is an in-place refresh that
+			// keeps its name, whichever screen it started from.
+			findHost,
 			saveHost,
 			setActiveHost,
-		});
+		}, { repairHost: repairHost ?? undefined });
 
+		setAwaitingLocalNetwork(false);
 		if (!result.ok) {
+			if (result.reason === "cancelled") {
+				pendingCode.current = null;
+				gate.cancelled();
+				setBusy(false);
+				return;
+			}
+			gate.failed(code, Date.now(), {
+				awaitedLocalNetwork: awaitedLocalNetwork && result.reason === "none-reachable",
+			});
 			haptics.warning();
-			setFailure(
-				describeConnectionFailure(
-					result.reason === "not-ao-qr" ? "not-ao-qr" : classifyConnectionFailure(undefined),
-					{ host: "", port: "", platform: Platform.OS },
-				),
-			);
+			if (result.reason === "name-required") {
+				setFailure({
+					title: "Machine name required",
+					icon: "alert-circle",
+					message: "Enter a machine name before saving this connection.",
+					showLocalNetworkHint: false,
+				});
+			} else if (result.reason === "verify-failed") {
+				// The race reached this endpoint, so whatever went wrong happened
+				// there — name it, and let a 401 read as a rejected password.
+				setFailure(
+					describeConnectionFailure(classifyConnectionFailure(result.status), {
+						host: result.endpoint.host,
+						port: String(result.endpoint.port),
+						platform: Platform.OS,
+					}),
+				);
+			} else if (result.reason === "none-reachable" || result.reason === "no-candidates") {
+				setFailure(describeUnreachableCode(offer?.endpoints ?? [], Platform.OS));
+			} else {
+				setFailure(
+					describeConnectionFailure(
+						result.reason === "not-ao-qr"
+							? "not-ao-qr"
+							: result.reason === "outdated-desktop"
+								? "outdated-desktop"
+								: result.reason === "incompatible"
+									? "incompatible-host"
+									: classifyConnectionFailure(undefined),
+						{ host: "", port: "", platform: Platform.OS },
+					),
+				);
+			}
 			setBusy(false);
 			return;
 		}
 
+		gate.succeeded();
+		if (isLocalNetworkHost(result.config.host)) void setLocalNetworkConfirmed();
 		// The rest of the app still runs off ServerConfig, so the winning
 		// endpoint is written there as well as into the host list.
 		await saveConfig(result.config);
+		void loadAccount().then(async (account) => {
+			if (account) {
+				await unignoreAccountHost(account.id, result.host.id);
+				await syncAccountHosts(account);
+			}
+		}).catch(() => {});
 		mobileTelemetry()?.capture(MOBILE_EVENTS.paired, { method: "qr", from_onboarding: fromOnboarding });
 		if (fromOnboarding) mobileTelemetry()?.capture(MOBILE_EVENTS.onboardingCompleted);
 		haptics.success();
-		await finish();
+		await finish(pairedNotice(result));
+		// A successful scan counts as a deliberate trigger for the one-shot OS
+		// prompt (see `ask` on registerForPushNow in lib/push.ts): a granted device
+		// registers with this machine now instead of waiting on the Settings switch.
+		void registerForPush(result.config, { ask: true }).catch((e) => console.warn("[push] registration failed", e));
 	}
+
+	latestPair.current = (code) => void pair(code, parsePairingCode(code));
 
 	function retry() {
 		setFailure(null);
 		rejected.current = null;
 		if (pendingCode.current) {
-			void pair(pendingCode.current);
-			return;
+			const offer = parsePairingCode(pendingCode.current);
+			void pair(pendingCode.current, offer);
 		}
-		scanned.current = false;
 	}
 
-	const back = () => (router.canGoBack() ? router.back() : router.replace("/"));
-
-	return (
-		<View style={[styles.screen, { paddingTop: insets.top }]}>
-			<View style={styles.topBar}><MinimalBackButton onPress={back} /></View>
-
-			<View style={styles.steps}>
-				<NumberedStep n={1} title="Open AO on your computer" compact />
-				<NumberedStep n={2} title="Go to Settings → Connect Mobile" compact />
-				<NumberedStep n={3} title="Scan the QR code" compact />
+	const back = () => backOr(router);
+	if (repairHost === undefined) {
+		return <View style={styles.center}><Spinner /></View>;
+	}
+	if (repairHostId && !repairHost) {
+		return (
+			<View style={styles.screen}>
+				<EmptyState
+					icon="monitor-off"
+					title="Machine no longer saved"
+					message="Return to Settings and choose another machine."
+					action={<Button title="Back to Settings" onPress={back} />}
+				/>
 			</View>
+		);
+	}
 
-			<View style={styles.viewfinder}>
-				{permission?.granted ? (
+	const live = permission?.granted === true;
+	return (
+		<View style={styles.screen}>
+			<View style={styles.introGap} />
+
+			<View style={[styles.viewfinder, live && styles.viewfinderLive]}>
+				{live ? (
 					<>
 						<CameraView
 							ref={camera}
@@ -166,10 +361,10 @@ export default function PairScreen() {
 							barcodeScannerSettings={{ barcodeTypes: ["qr"] }}
 							onBarcodeScanned={onScan}
 						/>
-						<Corner style={styles.cTL} />
-						<Corner style={styles.cTR} />
-						<Corner style={styles.cBL} />
-						<Corner style={styles.cBR} />
+						{/* Where to hold the code. Decoration: the steps below say it. */}
+						<View pointerEvents="none" style={styles.reticleLayer} accessibilityElementsHidden importantForAccessibility="no-hide-descendants">
+							<View style={styles.reticle} />
+						</View>
 					</>
 				) : (
 					<CameraGate
@@ -183,25 +378,48 @@ export default function PairScreen() {
 				)}
 			</View>
 
-			{failure ? (
-				<View style={styles.errorBox}>
-					<Feather name="alert-circle" size={15} color={t.red} />
-					<View style={{ flex: 1 }}>
-						<Text style={styles.errorText}>{failure.message}</Text>
-						{failure.showLocalNetworkHint ? (
-							<Text style={[styles.errorText, { marginTop: 6 }]}>{LOCAL_NETWORK_HINT}</Text>
+			{/* How to get the code, under the scanner that reads it. */}
+			<View style={styles.steps}>
+				<NumberedStep n={1} total={3} title={repairHost ? `Open Orchestrator on ${repairHost.name}` : "Open Orchestrator on your computer or cloud"} compact />
+				<NumberedStep n={2} total={3} title="Go to Settings → Connect Mobile" compact />
+				<NumberedStep n={3} total={3} title="Scan the code with this phone" compact />
+			</View>
+
+			{/* From the moment a scan starts: the first race alone can take ~20 s
+			    when a code's tunnel is down, and a frozen-looking scanner after the
+			    haptic reads as broken. The Local Network line only while waiting on it. */}
+			{paired ? (
+				<View style={styles.notice} accessibilityLiveRegion="polite">
+					<View style={styles.noticeLead}><AppSymbol name="checkCircle" size={iconSize.sm} color={t.green} /></View>
+					<View style={styles.noticeBody}>
+						<Text style={styles.noticeTitle}>{paired.title}</Text>
+						{paired.message ? <Text style={styles.noticeText}>{paired.message}</Text> : null}
+					</View>
+				</View>
+			) : (busy || awaitingLocalNetwork) && !failure ? (
+				<View style={styles.notice} accessibilityLiveRegion="polite">
+					<View style={styles.noticeLead}><Spinner size={iconSize.sm} /></View>
+					<View style={styles.noticeBody}>
+						<Text style={styles.noticeTitle}>Connecting…</Text>
+						{awaitingLocalNetwork ? (
+							<Text style={styles.noticeText}>If asked, allow access to your local network.</Text>
 						) : null}
-						<View style={styles.errorActions}>
-							{/* Re-arms the scanner; without it a failed scan is a dead end,
-							    since the camera intentionally stops after one attempt. */}
-							<Button title="Try again" variant="ghost" icon="refresh-cw" onPress={retry} />
+					</View>
+				</View>
+			) : null}
+
+			{failure ? (
+				<View style={styles.notice} accessibilityLiveRegion="polite">
+					<View style={styles.noticeLead}><AppSymbol name="error" size={iconSize.sm} color={t.red} /></View>
+					<View style={styles.noticeBody}>
+						<Text style={styles.noticeTitle}>{failure.title}</Text>
+						<Text style={styles.noticeText}>{failure.message}</Text>
+						{failure.showLocalNetworkHint ? <Text style={styles.noticeText}>{LOCAL_NETWORK_HINT}</Text> : null}
+						<View style={styles.noticeActions}>
+							{/* Re-runs the scanned code without pointing the camera at it again. */}
+							<Button variant="ghost" icon="refresh" title="Try again" onPress={retry} />
 							{failure.showLocalNetworkHint ? (
-								<Button
-									title="Open settings"
-									variant="ghost"
-									icon="settings"
-									onPress={() => Linking.openSettings()}
-								/>
+								<Button variant="ghost" icon="settings" title="Open settings" onPress={() => void Linking.openSettings()} />
 							) : null}
 						</View>
 					</View>
@@ -210,21 +428,16 @@ export default function PairScreen() {
 
 			{/* Always reachable — including when the camera is permanently denied,
 			    which would otherwise leave the user with no way forward at all. */}
-			<Pressable
-				onPress={() => { haptics.tap(); router.push(connectSheetRoute(() => void finish())); }}
-				style={[styles.manual, { paddingBottom: insets.bottom + 14 }]}
-				accessibilityRole="button"
-			>
-				<Feather name="edit-3" size={15} color={t.textSecondary} />
-				<Text style={styles.manualText}>Enter details manually</Text>
-			</Pressable>
+			<View style={[styles.manual, { paddingBottom: insets.bottom + space.md }]}>
+				<Button
+					variant="secondary"
+					icon={{ ios: "keyboard", android: "keyboard" }}
+					title="Enter details manually"
+					onPress={() => router.push(connectRoute(() => void finish(), repairHost?.id))}
+				/>
+			</View>
 		</View>
 	);
-}
-
-function Corner({ style }: { style: object }) {
-	const styles = useThemedStyles(makeStyles);
-	return <View style={[styles.corner, style]} />;
 }
 
 function CameraGate({
@@ -247,92 +460,96 @@ function CameraGate({
 	}
 	return (
 		<View style={styles.gate}>
-			<Feather name="camera-off" size={24} color={t.textTertiary} />
-			<Text style={styles.gateTitle}>Camera access needed</Text>
+			<AppSymbol name={{ ios: "camera", android: "photo_camera" }} size={iconSize.xl} color={t.textTertiary} />
+			<Text accessibilityRole="header" style={styles.gateTitle}>{canAskAgain ? "Scan with your camera" : "Camera is off"}</Text>
 			<Text style={styles.gateHint}>
-				{canAskAgain
-					? "AO uses the camera only to read the pairing QR code on your desktop."
-					: "Camera access is turned off for AO. Enable it in system settings, or enter your details manually below."}
+				{canAskAgain ? "Used only to read the pairing code." : "Turn it on in Settings, or enter details manually."}
 			</Text>
 			{canAskAgain ? (
 				// App Review 5.1.1(iv): the button ahead of the system permission
 				// prompt must read "Continue"/"Next", never "Allow ...", so the grant
 				// decision is only ever made in the system dialog itself.
-				<Button title="Continue" onPress={onRequest} style={{ marginTop: 18 }} />
+				<Button title="Continue" onPress={onRequest} style={{ marginTop: space.lg }} />
 			) : (
 				<Button
 					title="Open settings"
-					variant="ghost"
+					variant="secondary"
 					icon="settings"
 					onPress={() => Linking.openSettings()}
-					style={{ marginTop: 18 }}
+					style={{ marginTop: space.lg }}
 				/>
 			)}
 		</View>
 	);
 }
 
-const CORNER = 26;
-const CORNER_W = 3;
+// Two short sentences at most; long enough to read without asking for a tap.
+const PAIRED_NOTICE_MS = 2000;
 
 const makeStyles = (t: Theme) =>
 	StyleSheet.create({
 	screen: { flex: 1, backgroundColor: t.bgBase },
-	topBar: { paddingHorizontal: 16, paddingTop: 4, paddingBottom: 8 },
+	center: { flex: 1, alignItems: "center", justifyContent: "center", backgroundColor: t.bgBase },
+	steps: { paddingHorizontal: space.xl, paddingTop: space.lg },
+	introGap: { height: space.md },
 
-	steps: { paddingHorizontal: 20, paddingBottom: 16 },
-
+	// A card in the theme until the camera runs: the permission prompt inside it
+	// is themed text, which the dark preview backdrop would swallow in light mode.
+	// A 3:4 portrait frame as wide as the page, not one stretched to fill it:
+	// tall enough to aim with, short enough to keep everything under it close.
+	// Shrinks before the manual button is pushed off a short screen.
 	viewfinder: {
-		flex: 1,
-		marginHorizontal: 16,
-		borderRadius: 18,
+		aspectRatio: 3 / 4,
+		flexShrink: 1,
+		marginHorizontal: space.lg,
+		borderRadius: radius.lg, borderCurve: "continuous",
 		overflow: "hidden",
-		// The viewfinder is a camera preview, so it stays dark in both themes.
-		backgroundColor: "#0c0d10",
+		backgroundColor: t.bgElevated,
 	},
-	corner: {
-		position: "absolute",
-		width: CORNER,
-		height: CORNER,
-		borderColor: "rgba(255,255,255,0.92)",
+	viewfinderLive: { backgroundColor: onCamera.backdrop },
+	reticleLayer: { position: "absolute", top: 0, right: 0, bottom: 0, left: 0, alignItems: "center", justifyContent: "center" },
+	// One rounded square, as the system code scanners frame a code. Square from
+	// the width; the height cap only bites in a viewfinder squeezed by large text.
+	reticle: {
+		width: "62%",
+		aspectRatio: 1,
+		maxHeight: "80%",
+		borderRadius: radius.xl,
+		borderCurve: "continuous",
+		borderWidth: 3,
+		borderColor: onCamera.reticle,
 	},
-	cTL: { top: 14, left: 14, borderTopWidth: CORNER_W, borderLeftWidth: CORNER_W, borderTopLeftRadius: 6 },
-	cTR: { top: 14, right: 14, borderTopWidth: CORNER_W, borderRightWidth: CORNER_W, borderTopRightRadius: 6 },
-	cBL: { bottom: 14, left: 14, borderBottomWidth: CORNER_W, borderLeftWidth: CORNER_W, borderBottomLeftRadius: 6 },
-	cBR: { bottom: 14, right: 14, borderBottomWidth: CORNER_W, borderRightWidth: CORNER_W, borderBottomRightRadius: 6 },
 
-	gate: { flex: 1, alignItems: "center", justifyContent: "center", padding: 28 },
-	gateTitle: { color: t.textPrimary, fontSize: 16, fontWeight: "700", marginTop: 12 },
-	gateHint: {
+	gate: { flex: 1, alignItems: "center", justifyContent: "center", padding: space.xxl },
+	gateTitle: { fontFamily: "DMSans_600SemiBold", color: t.textPrimary, fontSize: type.callout.fontSize, fontWeight: "600", marginTop: space.md },
+	gateHint: { fontFamily: "DMSans_400Regular",
 		color: t.textSecondary,
-		fontSize: 13,
-		lineHeight: 19,
+		fontSize: type.footnote.fontSize,
+		lineHeight: type.footnote.lineHeight,
 		textAlign: "center",
-		marginTop: 8,
+		marginTop: space.sm,
 		maxWidth: 300,
 	},
 
-	errorBox: {
+	// Connecting and failure share one quiet slot under the viewfinder: no fill
+	// or border, aligned with the steps.
+	notice: {
 		flexDirection: "row",
-		gap: 9,
+		gap: space.sm,
 		alignItems: "flex-start",
-		backgroundColor: t.tintRed,
-		borderRadius: 10,
-		padding: 12,
-		marginHorizontal: 16,
-		marginTop: 14,
+		paddingHorizontal: space.xl,
+		marginTop: space.lg,
 	},
-	errorText: { color: t.red, fontSize: 13, lineHeight: 19 },
-	errorActions: { flexDirection: "row", flexWrap: "wrap", gap: 8, marginTop: 10 },
+	noticeLead: { width: iconSize.sm, height: type.subheadline.lineHeight, alignItems: "center", justifyContent: "center" },
+	noticeBody: { flex: 1, gap: space.xxs },
+	noticeTitle: { fontFamily: "DMSans_600SemiBold", color: t.textPrimary, fontSize: type.subheadline.fontSize, lineHeight: type.subheadline.lineHeight, fontWeight: "600" },
+	noticeText: { fontFamily: "DMSans_400Regular", color: t.textSecondary, fontSize: type.footnote.fontSize, lineHeight: type.footnote.lineHeight },
+	// Text buttons pad their label for the press state; pulled back by that
+	// padding so the first label lines up with the message above it.
+	noticeActions: { flexDirection: "row", flexWrap: "wrap", columnGap: space.xs, marginLeft: -space.md },
 
-	manual: {
-		flexDirection: "row",
-		alignItems: "center",
-		justifyContent: "center",
-		gap: 8,
-		paddingTop: 18,
-	},
-	manualText: { color: t.textSecondary, fontSize: 15, fontWeight: "600" },
+	// Pinned to the bottom, full width, however much room the page has.
+	manual: { marginTop: "auto", paddingHorizontal: space.lg, paddingTop: space.lg },
 });
 
 export { RouteErrorBoundary as ErrorBoundary } from "../lib/RouteErrorBoundary";

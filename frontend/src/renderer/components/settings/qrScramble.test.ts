@@ -18,27 +18,36 @@ describe("scramble payloads for the pairing placeholder", () => {
 	});
 
 	// The whole point: the placeholder has to encode a payload of the same
-	// shape and length as a real offer, so qr-code-styling picks the same QR
+	// shape and length as a real offer, so the encoder picks the same QR
 	// version. A different version means a different module count, and the
-	// resolve would visibly jump from a coarse grid to a fine one.
-	it("matches the length of a real pairing code closely enough to share a QR version", () => {
+	// resolve would visibly jump from a coarse grid to a fine one. Lengths
+	// are compared at the real offer's field sizes, so one byte of base64
+	// drift is the most the decoy can be off by.
+	it("matches the length of a real pairing code, field for field", () => {
+		const host = "192.168.1.12";
 		const real = pairingCodeUrl(
 			buildPairingOffer({
 				endpoints: [
-					{ kind: "lan", host: "192.168.29.189", port: 3011, secure: false },
-					{ kind: "tailscale", host: "100.72.46.7", port: 3011, secure: false },
+					{ kind: "lan", host, port: 3011, secure: false },
 					{ kind: "tunnel", host: "stem-til-house-doing.trycloudflare.com", port: 443, secure: true },
 				],
-				password: "3f9a2b7c1d4e5f60",
+				password: "ai0OGmFX",
 				hostId: "h_70884810-088d-4b10-b3ab-0b19c47bb17c",
-				name: "Prasads-MacBook-Pro",
-				platform: "darwin",
+				name: host,
+				platform: "",
 			}),
 			PAIRING_LINK_BASE_FOR_SCRAMBLE,
 		);
-		for (const code of scramblePairingCodes(6)) {
-			expect(Math.abs(code.length - real.length) / real.length).toBeLessThan(0.12);
+		const shape = { hostIdLength: 38, nameLength: host.length, tokenLength: 8 };
+		for (const code of scramblePairingCodes(6, shape)) {
+			expect(Math.abs(code.length - real.length)).toBeLessThanOrEqual(8);
 		}
+	});
+
+	it("grows with the real hostId so a long id cannot leave the decoy a version short", () => {
+		const short = scramblePairingCodes(1, { hostIdLength: 6 })[0];
+		const long = scramblePairingCodes(1, { hostIdLength: 38 })[0];
+		expect(long.length).toBeGreaterThan(short.length);
 	});
 
 	it("carries no real credential material", () => {

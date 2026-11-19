@@ -43,7 +43,7 @@ func (p *Plugin) GetAgentHooks(ctx context.Context, cfg ports.WorkspaceHookConfi
 	path := piExtensionPath(cfg.WorkspacePath)
 	if data, err := os.ReadFile(path); err == nil { //nolint:gosec // caller-owned workspace path
 		if !strings.Contains(string(data), piExtensionSentinel) {
-			return fmt.Errorf("pi.GetAgentHooks: refusing to overwrite non-AO file at %s", path)
+			return fmt.Errorf("pi.GetAgentHooks: refusing to overwrite non-Orchestrator file at %s", path)
 		}
 	} else if !errors.Is(err, os.ErrNotExist) {
 		return fmt.Errorf("pi.GetAgentHooks: read managed extension: %w", err)
@@ -70,6 +70,24 @@ func appendPiExtensionFlag(cmd *[]string, workspacePath string) {
 		return
 	}
 	*cmd = append(*cmd, "--extension", piExtensionPath(workspacePath))
+}
+
+func appendPiSessionDirFlag(cmd *[]string, dataDir string) {
+	if strings.TrimSpace(dataDir) == "" {
+		return
+	}
+	*cmd = append(*cmd, "--session-dir", filepath.Join(dataDir, "pi", "sessions"))
+}
+
+func piTranscriptInManagedDir(transcriptPath, dataDir string) bool {
+	transcriptPath = strings.TrimSpace(transcriptPath)
+	dataDir = strings.TrimSpace(dataDir)
+	if transcriptPath == "" || dataDir == "" {
+		return false
+	}
+	root := filepath.Join(dataDir, "pi", "sessions")
+	rel, err := filepath.Rel(root, filepath.Clean(transcriptPath))
+	return err == nil && rel != ".." && !strings.HasPrefix(rel, ".."+string(filepath.Separator))
 }
 
 func (p *Plugin) piAgentSettledSupported(ctx context.Context) (bool, error) {
@@ -150,25 +168,40 @@ function sessionID(ctx: any): string {
   return ctx.sessionManager.getSessionId() ?? "";
 }
 
+` + hookutil.FinalAssistantTextJS + `
+
+function usagePayload(ctx: any, payload: Record<string, unknown> = {}): Record<string, unknown> {
+  return {
+    session_id: sessionID(ctx),
+    transcript_path: ctx.sessionManager.getSessionFile?.() ?? "",
+    ...payload,
+  };
+}
+
 export default function (pi: ExtensionAPI) {
+  // The final message of the current run. Stop may fire from a later event
+  // than the one that carries the messages, so it is kept until then.
+  let lastAssistantText = "";
   pi.on("session_start", async (_event, ctx) => {
-    callHookSync("session-start", { session_id: sessionID(ctx) });
+    callHookSync("session-start", usagePayload(ctx));
   });
   pi.on("before_agent_start", async (event, ctx) => {
-    callHookSync("user-prompt-submit", { session_id: sessionID(ctx), prompt: event.prompt });
+    lastAssistantText = "";
+    callHookSync("user-prompt-submit", usagePayload(ctx, { prompt: event.prompt }));
   });
   // agent_end is the completion event in Pi 0.80.x. Newer releases may retry,
   // compact, or queue follow-up work after it; a subsequent start immediately
   // reactivates AO, while agent_settled below confirms the final idle state.
-  pi.on("agent_end", async (_event, ctx) => {
-	    if (!AGENT_SETTLED_SUPPORTED) callHookSync("stop", { session_id: sessionID(ctx) });
+  pi.on("agent_end", async (event, ctx) => {
+	    lastAssistantText = finalAssistantText(event) || lastAssistantText;
+	    if (!AGENT_SETTLED_SUPPORTED) callHookSync("stop", usagePayload(ctx, { last_assistant_message: lastAssistantText }));
   });
   pi.on("agent_settled", async (_event, ctx) => {
-	    if (AGENT_SETTLED_SUPPORTED) callHookSync("stop", { session_id: sessionID(ctx) });
+	    if (AGENT_SETTLED_SUPPORTED) callHookSync("stop", usagePayload(ctx, { last_assistant_message: lastAssistantText }));
   });
   pi.on("session_shutdown", async (event, ctx) => {
 	    if (event.reason === "quit") {
-	      callHookSync("session-end", { session_id: sessionID(ctx), reason: event.reason });
+	      callHookSync("session-end", usagePayload(ctx, { reason: event.reason }));
 	    }
   });
 }

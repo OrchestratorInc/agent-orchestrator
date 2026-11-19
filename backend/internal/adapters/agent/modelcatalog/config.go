@@ -8,12 +8,16 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"runtime"
+	"slices"
 	"sort"
 	"strings"
 
 	"github.com/pelletier/go-toml/v2"
 	"gopkg.in/yaml.v3"
 
+	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/agent/hermes"
+	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/agent/openinterpreter"
 	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
 )
 
@@ -23,7 +27,7 @@ type configParser func([]byte) ([]ports.AgentModelInfo, error)
 
 func hasConfigDiscoverySource(agentID string) bool {
 	switch agentID {
-	case "qwen", "continue", "goose", "vibe", "cline", "autohand":
+	case "qwen", "continue", "goose", "vibe", "cline", "autohand", "hermes", "stakpak":
 		return true
 	default:
 		return false
@@ -32,7 +36,10 @@ func hasConfigDiscoverySource(agentID string) bool {
 
 func discoverConfigCatalog(agentID, workingDir string, env map[string]string) (ports.AgentModelCatalog, error) {
 	base := Base(agentID)
-	parser := configModelParser(agentID)
+	if agentID == "hermes" {
+		return discoverHermesCatalog(base, modelConfigPaths(agentID, workingDir, env))
+	}
+	parser := configModelParser(agentID, env)
 	if parser == nil {
 		return base, fmt.Errorf("%s has no configuration model parser", agentID)
 	}
@@ -66,7 +73,7 @@ func discoverConfigCatalog(agentID, workingDir string, env map[string]string) (p
 	return base, nil
 }
 
-func configModelParser(agentID string) configParser {
+func configModelParser(agentID string, env map[string]string) configParser {
 	switch agentID {
 	case "qwen":
 		return parseQwenModels
@@ -80,6 +87,11 @@ func configModelParser(agentID string) configParser {
 		return parseClineModels
 	case "autohand":
 		return parseAutoHandModels
+	case "hermes":
+		return parseHermesModels
+	case "stakpak":
+		profile := stakpakProfile(env)
+		return func(raw []byte) ([]ports.AgentModelInfo, error) { return parseStakpakModels(raw, profile) }
 	default:
 		return nil
 	}
@@ -97,14 +109,41 @@ func modelConfigPaths(agentID, workingDir string, env map[string]string) []strin
 			paths = append(paths, filepath.Join(workingDir, ".qwen", "settings.json"))
 		}
 	case "continue":
+		if root := continueHomeDir(func(name string) string { return envValue(env, name) }); root != "" {
+			paths = append(paths, filepath.Join(root, "config.yaml"))
+		}
+	case "hermes":
+		if root := hermesConfigHome(home, env); root != "" {
+			paths = append(paths, filepath.Join(root, "config.yaml"), filepath.Join(root, "provider_models_cache.json"))
+		}
+	case "stakpak":
+		// Stakpak has no config-dir override; its config is always here.
 		if home != "" {
-			paths = append(paths, filepath.Join(home, ".continue", "config.yaml"))
+			paths = append(paths, filepath.Join(home, ".stakpak", "config.toml"))
 		}
 	case "goose":
 		if root := strings.TrimSpace(env["GOOSE_PATH_ROOT"]); root != "" {
 			paths = append(paths, filepath.Join(root, "config", "config.yaml"))
 		} else if home != "" {
 			paths = append(paths, filepath.Join(home, ".config", "goose", "config.yaml"))
+		}
+	case "deepseek-harness":
+		// DeepSeek Harness's catalog comes from a live `dsh --profile acp`
+		// session, and the profile decides the model route, so the profile's own
+		// files are the configuration discovery consults. Without them the
+		// fingerprint would be the dsh binary alone, and a route changed in the
+		// web setup flow would leave the day's cached choices in place —
+		// including choices the new session rejects.
+		if root := deepseekProfileDir(home, env); root != "" {
+			for _, name := range [...]string{"cordis.yml", "cordis.patch.yml", "package.json"} {
+				paths = append(paths, filepath.Join(root, name))
+			}
+		}
+	case "minimax-code":
+		// `mcode provider list` reads the profile's providers and models from
+		// config.yaml, and the region preference picks the account namespace.
+		if root := miniMaxProfileDir(home, env); root != "" {
+			paths = append(paths, filepath.Join(root, "config.yaml"), filepath.Join(root, "preferences", "mcode-region.json"))
 		}
 	case "vibe":
 		if root := strings.TrimSpace(env["VIBE_HOME"]); root != "" {
@@ -127,6 +166,147 @@ func modelConfigPaths(agentID, workingDir string, env map[string]string) []strin
 	return paths
 }
 
+// hermesConfigHome resolves HERMES_HOME exactly as the adapter and Hermes do.
+func hermesConfigHome(_ string, env map[string]string) string {
+	root, err := hermes.ResolveHome(env)
+	if err != nil {
+		return ""
+	}
+	return root
+}
+
+// hermesReasoningLevels are the native --reasoning values Hermes accepts.
+var hermesReasoningLevels = []string{"none", "minimal", "low", "medium", "high", "xhigh", "max", "ultra"}
+
+// discoverHermesCatalog lists the models Hermes cached for its configured
+// provider, with the config.yaml default marked. Hermes keeps the provider in
+// its own configuration and AO passes only --model, so models from any other
+// provider would launch against the wrong endpoint and are left out.
+func discoverHermesCatalog(base ports.AgentModelCatalog, paths []string) (ports.AgentModelCatalog, error) {
+	if len(paths) != 2 {
+		return base, fmt.Errorf("hermes model configuration was not found")
+	}
+	raw, err := readModelConfig(paths[0])
+	if err != nil {
+		if os.IsNotExist(err) {
+			return base, fmt.Errorf("hermes model configuration was not found")
+		}
+		return base, fmt.Errorf("hermes model discovery read %s: %w", paths[0], err)
+	}
+	configured, err := parseHermesModels(raw)
+	if err != nil {
+		return base, fmt.Errorf("hermes model discovery parse %s: %w", paths[0], err)
+	}
+	models := configured
+	if provider := hermesConfiguredProvider(raw); provider != "" {
+		if cache, err := readModelConfig(paths[1]); err == nil {
+			cached, err := parseHermesProviderCache(cache, provider)
+			if err != nil {
+				return base, fmt.Errorf("hermes model discovery parse %s: %w", paths[1], err)
+			}
+			models = append(models, cached...)
+		} else if !os.IsNotExist(err) {
+			return base, fmt.Errorf("hermes model discovery read %s: %w", paths[1], err)
+		}
+	}
+	models = normalize(models)
+	if len(models) == 0 {
+		return base, fmt.Errorf("hermes model configuration returned no models")
+	}
+	base.Models = models
+	base.SelectionMode = ports.ModelSelectionCatalog
+	base.Source = "config"
+	return base, nil
+}
+
+// hermesConfiguredProvider returns config.yaml's explicit model.provider.
+// "auto" picks a provider from credentials at run time, so no cache applies.
+func hermesConfiguredProvider(raw []byte) string {
+	var config struct {
+		Model yaml.Node `yaml:"model"`
+	}
+	if yaml.Unmarshal(raw, &config) != nil || config.Model.Kind != yaml.MappingNode {
+		return ""
+	}
+	var model struct {
+		Provider string `yaml:"provider"`
+	}
+	if config.Model.Decode(&model) != nil {
+		return ""
+	}
+	if provider := strings.TrimSpace(model.Provider); provider != "auto" {
+		return provider
+	}
+	return ""
+}
+
+// parseHermesProviderCache reads one provider's models from Hermes's
+// provider_models_cache.json ({provider: {"models": [ids...]}}).
+func parseHermesProviderCache(raw []byte, provider string) ([]ports.AgentModelInfo, error) {
+	var cache map[string]struct {
+		Models []string `json:"models"`
+	}
+	if err := json.Unmarshal(raw, &cache); err != nil {
+		return nil, err
+	}
+	entry := cache[provider]
+	models := make([]ports.AgentModelInfo, 0, len(entry.Models))
+	for _, id := range entry.Models {
+		if id = strings.TrimSpace(id); id != "" {
+			models = append(models, ports.AgentModelInfo{ID: id, Label: id, Provider: provider, Efforts: append([]string(nil), hermesReasoningLevels...)})
+		}
+	}
+	return models, nil
+}
+
+// parseHermesModels reports the model Hermes's own configuration selects. The
+// provider stays native configuration, so only that provider's default is a
+// reproducible catalog entry; other model IDs can still be typed directly.
+func parseHermesModels(raw []byte) ([]ports.AgentModelInfo, error) {
+	var config struct {
+		Model yaml.Node `yaml:"model"`
+		Agent struct {
+			ReasoningEffort string `yaml:"reasoning_effort"`
+		} `yaml:"agent"`
+	}
+	if err := yaml.Unmarshal(raw, &config); err != nil {
+		return nil, err
+	}
+	var id, provider string
+	switch config.Model.Kind {
+	case yaml.ScalarNode:
+		id = config.Model.Value
+	case yaml.MappingNode:
+		var model struct {
+			Default  string `yaml:"default"`
+			Model    string `yaml:"model"`
+			Provider string `yaml:"provider"`
+		}
+		if err := config.Model.Decode(&model); err != nil {
+			return nil, err
+		}
+		id, provider = model.Default, model.Provider
+		if strings.TrimSpace(id) == "" {
+			id = model.Model
+		}
+	}
+	id = strings.TrimSpace(id)
+	if id == "" {
+		return nil, nil
+	}
+	if provider = strings.TrimSpace(provider); provider == "auto" {
+		provider = ""
+	}
+	effort := strings.TrimSpace(config.Agent.ReasoningEffort)
+	if !slices.Contains(hermesReasoningLevels, effort) {
+		effort = ""
+	}
+	return []ports.AgentModelInfo{{
+		ID: id, Label: id, Provider: provider, IsDefault: true,
+		Efforts: append([]string(nil), hermesReasoningLevels...), DefaultEffort: effort,
+	}}, nil
+}
+
 func qwenConfigHome(home string, env map[string]string) string {
 	root := strings.TrimSpace(env["QWEN_HOME"])
 	if root == "" {
@@ -147,6 +327,41 @@ func qwenConfigHome(home string, env map[string]string) string {
 	return root
 }
 
+// deepseekProfileDir resolves the ACP profile directory, honouring DSH_HOME the
+// way DeepSeek Harness itself does (its home-paths package falls back to ~/.dsh).
+func deepseekProfileDir(home string, env map[string]string) string {
+	root := strings.TrimSpace(env["DSH_HOME"])
+	if root == "" {
+		if home == "" {
+			return ""
+		}
+		root = filepath.Join(home, ".dsh")
+	}
+	return filepath.Join(root, "profiles", "acp")
+}
+
+// miniMaxProfileDir resolves the profile MiniMax Code reads, in the CLI's
+// own precedence order. Its default lives under Node's os.homedir(), which
+// follows the launch environment's HOME (USERPROFILE on Windows).
+func miniMaxProfileDir(home string, env map[string]string) string {
+	for _, key := range []string{"MINIMAX_DATA_DIR", "MAVIS_DATA_DIR"} {
+		if root := envValue(env, key); root != "" {
+			return root
+		}
+	}
+	homeKey := "HOME"
+	if runtime.GOOS == "windows" {
+		homeKey = "USERPROFILE"
+	}
+	if requested := strings.TrimSpace(env[homeKey]); requested != "" {
+		home = requested
+	}
+	if home == "" {
+		return ""
+	}
+	return filepath.Join(home, ".minimax")
+}
+
 func readModelConfig(path string) ([]byte, error) {
 	file, err := os.Open(path) //nolint:gosec // paths are fixed agent configuration locations
 	if err != nil {
@@ -163,12 +378,157 @@ func readModelConfig(path string) ([]byte, error) {
 	return raw, nil
 }
 
+// openInterpreterModelCatalogFiles returns the model_catalog_json files named by
+// Open Interpreter config layers. Native resolves a relative path against the
+// directory of the config file that sets it.
+func openInterpreterModelCatalogFiles(configs []string, env map[string]string) []string {
+	var files []string
+	for _, path := range configs {
+		raw, err := readModelConfig(path)
+		if err != nil {
+			continue
+		}
+		var config struct {
+			ModelCatalogJSON string `toml:"model_catalog_json"`
+		}
+		if toml.Unmarshal(raw, &config) != nil {
+			continue
+		}
+		file := strings.TrimSpace(config.ModelCatalogJSON)
+		if file == "" {
+			continue
+		}
+		// Native AbsolutePathBuf expands "~/" against the home directory before
+		// resolving other relative paths against the config file's directory.
+		if rest, ok := strings.CutPrefix(file, "~/"); ok {
+			home := openInterpreterUserHome(env)
+			if home == "" {
+				continue
+			}
+			file = filepath.Join(home, rest)
+		} else if !filepath.IsAbs(file) {
+			file = filepath.Join(filepath.Dir(path), file)
+		}
+		files = append(files, filepath.Clean(file))
+	}
+	return files
+}
+
+// openInterpreterSystemConfig is the native system configuration layer; tests
+// point it at a fixture.
+var openInterpreterSystemConfig = openinterpreter.SystemConfigPath
+
+// openInterpreterUserHome is the home directory a session's native process
+// sees: the session environment's override first, then the daemon's.
+func openInterpreterUserHome(env map[string]string) string {
+	key := "HOME"
+	if runtime.GOOS == "windows" {
+		key = "USERPROFILE"
+	}
+	if home := strings.TrimSpace(env[key]); home != "" {
+		return home
+	}
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return ""
+	}
+	return home
+}
+
+// openInterpreterRootMarkers returns the project_root_markers native discovery
+// uses, read from the layers it merges before project layers (later layers
+// win). Absent or unreadable settings keep the native default, ".git".
+func openInterpreterRootMarkers(layers []string) []string {
+	markers := []string{".git"}
+	for _, path := range layers {
+		raw, err := readModelConfig(path)
+		if err != nil {
+			continue
+		}
+		var config struct {
+			Markers *[]string `toml:"project_root_markers"`
+		}
+		if toml.Unmarshal(raw, &config) != nil || config.Markers == nil {
+			continue
+		}
+		markers = *config.Markers
+	}
+	return markers
+}
+
+// openInterpreterIsProjectRoot reports whether dir holds a root marker. As in
+// native discovery, a .git directory counts only when it contains HEAD.
+func openInterpreterIsProjectRoot(dir string, markers []string) bool {
+	for _, marker := range markers {
+		path := filepath.Join(dir, marker)
+		info, err := os.Stat(path)
+		if err != nil {
+			continue
+		}
+		if marker == ".git" && info.IsDir() {
+			if _, err := os.Stat(filepath.Join(path, "HEAD")); err != nil {
+				continue
+			}
+		}
+		return true
+	}
+	return false
+}
+
+// openInterpreterProjectConfigs lists the project configuration layers native
+// discovery reads: .openinterpreter/config.toml in each directory from
+// workingDir up to the project root, the nearest ancestor holding one of
+// markers. With no markers, or none found, only workingDir's own layer applies.
+func openInterpreterProjectConfigs(workingDir string, markers []string) []string {
+	if workingDir == "" {
+		return nil
+	}
+	dir := filepath.Clean(workingDir)
+	dirs := []string{dir}
+	for len(markers) > 0 && !openInterpreterIsProjectRoot(dir, markers) {
+		parent := filepath.Dir(dir)
+		if parent == dir {
+			dirs = dirs[:1]
+			break
+		}
+		dir = parent
+		dirs = append(dirs, dir)
+	}
+	configs := make([]string, 0, len(dirs))
+	for _, dir := range dirs {
+		configs = append(configs, filepath.Join(dir, ".openinterpreter", "config.toml"))
+	}
+	return configs
+}
+
+// fileStatSignature records size and modification time, so a change to a file
+// fingerprintConfigPaths skips for exceeding the read limit still invalidates.
+func fileStatSignature(paths []string) string {
+	var signature strings.Builder
+	for _, path := range paths {
+		if info, err := os.Stat(path); err == nil {
+			fmt.Fprintf(&signature, ":%d-%d", info.Size(), info.ModTime().UnixNano())
+		} else {
+			signature.WriteString(":missing")
+		}
+	}
+	return signature.String()
+}
+
 func configDiscoveryFingerprint(agentID, workingDir string, env map[string]string) string {
 	if !hasConfigDiscoverySource(agentID) {
 		return ""
 	}
+	return fingerprintConfigPaths(modelConfigPaths(agentID, workingDir, env))
+}
+
+// fingerprintConfigPaths hashes the contents of the configuration a discovery
+// consults, so an edit to any of it invalidates the cached catalog. A path that
+// does not exist contributes nothing, keeping the fingerprint stable until one
+// appears.
+func fingerprintConfigPaths(paths []string) string {
 	hash := sha256.New()
-	for _, path := range modelConfigPaths(agentID, workingDir, env) {
+	for _, path := range paths {
 		raw, err := readModelConfig(path)
 		if err != nil {
 			continue
@@ -318,6 +678,42 @@ func parseGooseModels(raw []byte) ([]ports.AgentModelInfo, error) {
 		})
 	}
 	return normalize(models), nil
+}
+
+// stakpakProfile is the profile Stakpak sessions run with: STAKPAK_PROFILE from
+// the launch environment, else the daemon's, else "default". An empty value in
+// the launch environment means unset there.
+func stakpakProfile(env map[string]string) string {
+	if profile := envValue(env, "STAKPAK_PROFILE"); profile != "" {
+		return profile
+	}
+	return "default"
+}
+
+// parseStakpakModels offers the model of Stakpak's active profile, over the
+// shared "all" profile. Stakpak lists no other models: custom providers take
+// any name, so the picker keeps free-form entry for the rest.
+func parseStakpakModels(raw []byte, profile string) ([]ports.AgentModelInfo, error) {
+	var config struct {
+		Profiles map[string]struct {
+			Model string `toml:"model"`
+		} `toml:"profiles"`
+	}
+	if err := toml.Unmarshal(raw, &config); err != nil {
+		return nil, err
+	}
+	model := strings.TrimSpace(config.Profiles[profile].Model)
+	if model == "" {
+		model = strings.TrimSpace(config.Profiles["all"].Model)
+	}
+	if model == "" {
+		return nil, nil
+	}
+	provider := ""
+	if prefix, _, ok := strings.Cut(model, "/"); ok {
+		provider = prefix
+	}
+	return []ports.AgentModelInfo{{ID: model, Label: model, Provider: provider, IsDefault: true}}, nil
 }
 
 func parseVibeModels(raw []byte) ([]ports.AgentModelInfo, error) {

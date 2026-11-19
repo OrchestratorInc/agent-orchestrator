@@ -2,12 +2,10 @@ package catalogsync
 
 import (
 	"context"
-	"crypto/sha256"
 	"encoding/json"
 	"fmt"
 	"os"
 	"os/exec"
-	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -15,8 +13,7 @@ import (
 
 // Break caught: emitting raw upstream names, floating-point spellings, or a
 // provider blob whose address is not its exact canonical JSON bytes.
-func TestSyncWritesCanonicalContentAddressedCatalog(t *testing.T) {
-	root := t.TempDir()
+func TestBuildEmitsCanonicalContentAddressedCatalog(t *testing.T) {
 	upstream := []byte(`{
   "OpenAI/GPT-4o": {
     "litellm_provider": " OpenAI ",
@@ -41,32 +38,22 @@ func TestSyncWritesCanonicalContentAddressedCatalog(t *testing.T) {
   }
 }`)
 
-	result, err := Sync(root, upstream, Source{
-		Repository: "BerriAI/litellm",
-		Revision:   "0123456789abcdef0123456789abcdef01234567",
-		Path:       "model_prices_and_context_window.json",
-	})
+	generated, err := build(upstream)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !result.Changed {
-		t.Fatal("Sync changed = false, want true")
-	}
-
-	manifest, err := os.ReadFile(filepath.Join(root, "pricing/catalog/v1/manifest.json"))
+	manifest, err := canonicalJSON(generated.manifest)
 	if err != nil {
 		t.Fatal(err)
 	}
-	wantManifest := `{"schemaVersion":1,"source":{"repository":"BerriAI/litellm","revision":"0123456789abcdef0123456789abcdef01234567","path":"model_prices_and_context_window.json"},"providers":[{"providerId":"anthropic","version":"ao-catalog:anthropic:sha256:030ece6928c2c0e57313e57395c506889aecfa047fb295f38832f0424c16dd2a","sha256":"030ece6928c2c0e57313e57395c506889aecfa047fb295f38832f0424c16dd2a","path":"providers/anthropic/030ece6928c2c0e57313e57395c506889aecfa047fb295f38832f0424c16dd2a.json","modelCount":1},{"providerId":"openai","version":"ao-catalog:openai:sha256:893e629ba2ea7af7f13466a95a07d60ba2506a9bdef72aa6380c6daa7332769d","sha256":"893e629ba2ea7af7f13466a95a07d60ba2506a9bdef72aa6380c6daa7332769d","path":"providers/openai/893e629ba2ea7af7f13466a95a07d60ba2506a9bdef72aa6380c6daa7332769d.json","modelCount":1},{"providerId":"zai","version":"ao-catalog:zai:sha256:6945a8b33e7133ba6c9ce96378ef834ecab1f9c9872b5f5d772a2e1b3fb8805a","sha256":"6945a8b33e7133ba6c9ce96378ef834ecab1f9c9872b5f5d772a2e1b3fb8805a","path":"providers/zai/6945a8b33e7133ba6c9ce96378ef834ecab1f9c9872b5f5d772a2e1b3fb8805a.json","modelCount":1}]}
+	wantManifest := `{"schemaVersion":1,"source":{"repository":"BerriAI/litellm","revision":"%s","path":"model_prices_and_context_window.json"},"providers":[{"providerId":"anthropic","version":"ao-catalog:anthropic:sha256:030ece6928c2c0e57313e57395c506889aecfa047fb295f38832f0424c16dd2a","sha256":"030ece6928c2c0e57313e57395c506889aecfa047fb295f38832f0424c16dd2a","path":"providers/anthropic/030ece6928c2c0e57313e57395c506889aecfa047fb295f38832f0424c16dd2a.json","modelCount":1},{"providerId":"openai","version":"ao-catalog:openai:sha256:893e629ba2ea7af7f13466a95a07d60ba2506a9bdef72aa6380c6daa7332769d","sha256":"893e629ba2ea7af7f13466a95a07d60ba2506a9bdef72aa6380c6daa7332769d","path":"providers/openai/893e629ba2ea7af7f13466a95a07d60ba2506a9bdef72aa6380c6daa7332769d.json","modelCount":1},{"providerId":"zai","version":"ao-catalog:zai:sha256:6945a8b33e7133ba6c9ce96378ef834ecab1f9c9872b5f5d772a2e1b3fb8805a","sha256":"6945a8b33e7133ba6c9ce96378ef834ecab1f9c9872b5f5d772a2e1b3fb8805a","path":"providers/zai/6945a8b33e7133ba6c9ce96378ef834ecab1f9c9872b5f5d772a2e1b3fb8805a.json","modelCount":1}]}
 `
+	wantManifest = fmt.Sprintf(wantManifest, gitBlobID(upstream))
 	if string(manifest) != wantManifest {
 		t.Fatalf("manifest = %s, want %s", manifest, wantManifest)
 	}
 
-	openAI, err := os.ReadFile(filepath.Join(root, "pricing/catalog/v1/providers/openai/893e629ba2ea7af7f13466a95a07d60ba2506a9bdef72aa6380c6daa7332769d.json"))
-	if err != nil {
-		t.Fatal(err)
-	}
+	openAI := generated.blobs["openai"]
 	wantOpenAI := `{"schemaVersion":1,"providerId":"openai","models":[{"modelId":"gpt-4o","rates":{"uncachedInputUsdPerToken":"0.000001","cacheReadUsdPerToken":"0","outputUsdPerToken":"0"}}]}
 `
 	if string(openAI) != wantOpenAI {
@@ -76,81 +63,63 @@ func TestSyncWritesCanonicalContentAddressedCatalog(t *testing.T) {
 
 // Break caught: treating conflicting provider/model records as independent
 // models would silently select an arbitrary price.
-func TestSyncRejectsConflictingCanonicalDuplicates(t *testing.T) {
+func TestBuildDropsConflictingDuplicatesAndUnreadableEntries(t *testing.T) {
 	upstream := `{
 "openai/gpt-test":{"litellm_provider":"openai","mode":"chat","input_cost_per_token":1,"output_cost_per_token":2},
 "OPENAI/GPT-TEST":{"litellm_provider":" OPENAI ","mode":"responses","input_cost_per_token":3,"output_cost_per_token":2},
+"openai/unreadable":{"litellm_provider":"openai","mode":"chat","input_cost_per_token":"cheap","output_cost_per_token":2},
+"other/unreadable":{"litellm_provider":7},
+"openai/ok":{"litellm_provider":"openai","mode":"chat","input_cost_per_token":1,"output_cost_per_token":2},
 "anthropic/a":{"litellm_provider":"anthropic","mode":"chat","input_cost_per_token":1,"output_cost_per_token":1},
 "zai/z":{"litellm_provider":"zai","mode":"chat","input_cost_per_token":1,"output_cost_per_token":1}
 }`
-	_, err := Sync(t.TempDir(), []byte(upstream), testSource("1"))
-	if err == nil || !strings.Contains(err.Error(), "conflicting duplicate rates") {
-		t.Fatalf("Sync error = %v, want conflicting duplicate rates", err)
+	var ids []string
+	for _, model := range buildBlobs(t, []byte(upstream))["openai"].Models {
+		ids = append(ids, model.ModelID)
+	}
+	if strings.Join(ids, ",") != "ok" {
+		t.Fatalf("openai models = %v, want only ok", ids)
 	}
 }
 
 // Break caught: accepting unsupported LiteLLM variants as base prices, or
 // allowing a reviewed provider to disappear without failing the catalog build.
-func TestSyncFiltersUnsupportedRecordsAndRequiresEveryProvider(t *testing.T) {
+func TestBuildFiltersUnsupportedRecordsAndRequiresEveryProvider(t *testing.T) {
 	upstream := `{
 "anthropic/a":{"litellm_provider":"anthropic","mode":"chat","input_cost_per_token":1,"output_cost_per_token":1},
 "openai/o":{"litellm_provider":"openai","mode":"embedding","input_cost_per_token":1,"output_cost_per_token":1},
 "zai/z":{"litellm_provider":"zai","mode":"chat","input_cost_per_token":1,"output_cost_per_token":1},
 "other/x":{"litellm_provider":"other","mode":"chat","input_cost_per_token":1,"output_cost_per_token":1}
 }`
-	_, err := Sync(t.TempDir(), []byte(upstream), testSource("2"))
+	_, err := build([]byte(upstream))
 	if err == nil || !strings.Contains(err.Error(), `provider "openai" produced zero supported models`) {
-		t.Fatalf("Sync error = %v, want missing openai provider error", err)
+		t.Fatalf("build error = %v, want missing openai provider error", err)
 	}
 }
 
 // Break caught: a metadata-only LiteLLM entry preventing the catalog from
 // including another, fully priced model from the same reviewed provider.
-func TestSyncIgnoresSupportedModeRecordsWithoutBaseRates(t *testing.T) {
+func TestBuildIgnoresSupportedModeRecordsWithoutBaseRates(t *testing.T) {
 	upstream := []byte(`{
 "anthropic/a":{"litellm_provider":"anthropic","mode":"chat","input_cost_per_token":1,"output_cost_per_token":1},
 "openai/metadata-only":{"litellm_provider":"openai","mode":"chat"},
 "openai/o":{"litellm_provider":"openai","mode":"chat","input_cost_per_token":1,"output_cost_per_token":1},
 "zai/z":{"litellm_provider":"zai","mode":"chat","input_cost_per_token":1,"output_cost_per_token":1}
 }`)
-	if _, err := Sync(t.TempDir(), upstream, testSource("metadata-only")); err != nil {
-		t.Fatalf("Sync returned %v for an unpriced metadata entry", err)
+	if _, err := build(upstream); err != nil {
+		t.Fatalf("build returned %v for an unpriced metadata entry", err)
 	}
 }
 
 // Break caught: decimal and scientific whole-number rates emitting a trailing
 // decimal point, then making the generated catalog fail its own validator.
-func TestSyncCanonicalizesWholeDecimalAndScientificRates(t *testing.T) {
-	root := t.TempDir()
+func TestBuildCanonicalizesWholeDecimalAndScientificRates(t *testing.T) {
 	upstream := []byte(`{
 "anthropic/a":{"litellm_provider":"anthropic","mode":"chat","input_cost_per_token":1,"output_cost_per_token":1},
 "openai/o":{"litellm_provider":"openai","mode":"chat","input_cost_per_token":1.0,"output_cost_per_token":2e0},
 "zai/z":{"litellm_provider":"zai","mode":"chat","input_cost_per_token":1,"output_cost_per_token":1}
 }`)
-	if _, err := Sync(root, upstream, testSource("whole-rates")); err != nil {
-		t.Fatal(err)
-	}
-	if err := Validate(root); err != nil {
-		t.Fatalf("Validate generated catalog: %v", err)
-	}
-
-	manifestContents, err := os.ReadFile(filepath.Join(root, "pricing/catalog/v1/manifest.json"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	var decoded manifest
-	if err := json.Unmarshal(manifestContents, &decoded); err != nil {
-		t.Fatal(err)
-	}
-	openAIPath := filepath.Join(root, "pricing/catalog/v1", findProvider(decoded.Providers, "openai").Path)
-	contents, err := os.ReadFile(openAIPath)
-	if err != nil {
-		t.Fatal(err)
-	}
-	var blob providerBlob
-	if err := json.Unmarshal(contents, &blob); err != nil {
-		t.Fatal(err)
-	}
+	blob := buildBlobs(t, upstream)["openai"]
 	if got := blob.Models[0].Rates.UncachedInputUSDPerToken; got != "1" {
 		t.Fatalf("input rate = %q, want %q", got, "1")
 	}
@@ -161,18 +130,13 @@ func TestSyncCanonicalizesWholeDecimalAndScientificRates(t *testing.T) {
 
 // Break caught: LiteLLM names Anthropic's one-hour cache-creation price with
 // the above_1hr suffix. Reading a made-up key silently drops the rate.
-func TestSyncMapsLiteLLMAnthropicOneHourCacheCreationRate(t *testing.T) {
-	root := t.TempDir()
+func TestBuildMapsLiteLLMAnthropicOneHourCacheCreationRate(t *testing.T) {
 	upstream := []byte(`{
 "anthropic/a":{"litellm_provider":"anthropic","mode":"chat","input_cost_per_token":1,"output_cost_per_token":1,"cache_creation_input_token_cost_above_1hr":0.000006},
 "openai/o":{"litellm_provider":"openai","mode":"chat","input_cost_per_token":1,"output_cost_per_token":1},
 "zai/z":{"litellm_provider":"zai","mode":"chat","input_cost_per_token":1,"output_cost_per_token":1}
 }`)
-	if _, err := Sync(root, upstream, testSource("anthropic-one-hour")); err != nil {
-		t.Fatal(err)
-	}
-
-	blob := readProviderBlob(t, root, "anthropic")
+	blob := buildBlobs(t, upstream)["anthropic"]
 	if got := blob.Models[0].Rates.CacheWrite1HUSDPerToken; got == nil || *got != "0.000006" {
 		t.Fatalf("one-hour cache write rate = %v, want 0.000006", got)
 	}
@@ -198,19 +162,14 @@ func TestNormalizeDecimalRemovesFractionalTrailingZeroes(t *testing.T) {
 
 // Break caught: identical optional cache prices used distinct string pointers,
 // so canonical duplicate records were incorrectly reported as conflicting.
-func TestSyncDeduplicatesIdenticalOptionalRates(t *testing.T) {
-	root := t.TempDir()
+func TestBuildDeduplicatesIdenticalOptionalRates(t *testing.T) {
 	upstream := []byte(`{
 "anthropic/a":{"litellm_provider":"anthropic","mode":"chat","input_cost_per_token":1,"output_cost_per_token":1},
 "openai/gpt-test":{"litellm_provider":"openai","mode":"chat","input_cost_per_token":1,"output_cost_per_token":2,"cache_read_input_token_cost":0.5,"cache_creation_input_token_cost":1.25},
 "OPENAI/GPT-TEST":{"litellm_provider":" OPENAI ","mode":"responses","input_cost_per_token":1,"output_cost_per_token":2,"cache_read_input_token_cost":0.5,"cache_creation_input_token_cost":1.25},
 "zai/z":{"litellm_provider":"zai","mode":"chat","input_cost_per_token":1,"output_cost_per_token":1}
 }`)
-	if _, err := Sync(root, upstream, testSource("identical-optional-rates")); err != nil {
-		t.Fatalf("Sync identical canonical records: %v", err)
-	}
-
-	blob := readProviderBlob(t, root, "openai")
+	blob := buildBlobs(t, upstream)["openai"]
 	if got := len(blob.Models); got != 1 {
 		t.Fatalf("OpenAI model count = %d, want 1", got)
 	}
@@ -240,136 +199,24 @@ func TestNormalizeDecimalRejectsUnboundedScientificExponent(t *testing.T) {
 	}
 }
 
-// Break caught: treating an alternate rate spelling in a reviewed provider
-// blob as canonical even though it changes the content-addressed contract.
-func TestValidateBlobRejectsNoncanonicalRateSpelling(t *testing.T) {
-	blob := providerBlob{
-		SchemaVersion: schemaVersion,
-		ProviderID:    "openai",
-		Models: []pricedModel{{
-			ModelID: "o",
-			Rates: rates{
-				UncachedInputUSDPerToken: "1.0",
-				OutputUSDPerToken:        "2e0",
-			},
-		}},
-	}
-	err := validateBlob(blob, providerRef{ProviderID: "openai", ModelCount: 1})
-	if err == nil || !strings.Contains(err.Error(), "noncanonical") {
-		t.Fatalf("validateBlob error = %v, want noncanonical rate error", err)
-	}
-}
-
-// Break caught: rewriting a reviewed manifest merely because unrelated
-// upstream content changed, or rejecting append-only historical blobs.
-func TestSyncIsSemanticNoOpForUnchangedProviderPayloads(t *testing.T) {
-	root := t.TempDir()
-	upstream := []byte(`{
-"anthropic/a":{"litellm_provider":"anthropic","mode":"chat","input_cost_per_token":1,"output_cost_per_token":1},
-"openai/o":{"litellm_provider":"openai","mode":"chat","input_cost_per_token":1,"output_cost_per_token":1},
-"zai/z":{"litellm_provider":"zai","mode":"chat","input_cost_per_token":1,"output_cost_per_token":1}
-}`)
-	if _, err := Sync(root, upstream, testSource("3")); err != nil {
-		t.Fatal(err)
-	}
-	manifestPath := filepath.Join(root, "pricing/catalog/v1/manifest.json")
-	before, err := os.ReadFile(manifestPath)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := os.MkdirAll(filepath.Join(root, "pricing/catalog/v1/providers/openai"), 0o750); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.WriteFile(filepath.Join(root, "pricing/catalog/v1/providers/openai/historical.json"), []byte("not a catalog blob"), 0o600); err != nil {
-		t.Fatal(err)
-	}
-
-	semanticNoopUpstream := []byte(`{
-"anthropic/a":{"litellm_provider":"anthropic","mode":"chat","input_cost_per_token":1,"output_cost_per_token":1},
-"openai/o":{"litellm_provider":"openai","mode":"chat","input_cost_per_token":1,"output_cost_per_token":1},
-"zai/z":{"litellm_provider":"zai","mode":"chat","input_cost_per_token":1,"output_cost_per_token":1},
-"openai/batch":{"litellm_provider":"openai","mode":"batch","input_cost_per_token":99,"output_cost_per_token":99}
-}`)
-	changed, err := Sync(root, semanticNoopUpstream, testSource("4"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	if changed.Changed {
-		t.Fatal("Sync changed = true, want semantic no-op")
-	}
-	after, err := os.ReadFile(manifestPath)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if string(after) != string(before) {
-		t.Fatalf("manifest changed on semantic no-op\nbefore: %s\nafter: %s", before, after)
-	}
-	if err := Validate(root); err != nil {
-		t.Fatalf("Validate rejected unreferenced historical blob: %v", err)
-	}
-}
-
-// Break caught: accepting an editable referenced blob after its manifest hash
-// has been reviewed.
-func TestValidateRejectsChangedReferencedBlob(t *testing.T) {
-	root := t.TempDir()
-	upstream := []byte(`{
-"anthropic/a":{"litellm_provider":"anthropic","mode":"chat","input_cost_per_token":1,"output_cost_per_token":1},
-"openai/o":{"litellm_provider":"openai","mode":"chat","input_cost_per_token":1,"output_cost_per_token":1},
-"zai/z":{"litellm_provider":"zai","mode":"chat","input_cost_per_token":1,"output_cost_per_token":1}
-}`)
-	if _, err := Sync(root, upstream, testSource("5")); err != nil {
-		t.Fatal(err)
-	}
-	manifest, err := os.ReadFile(filepath.Join(root, "pricing/catalog/v1/manifest.json"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	var decoded struct {
-		Providers []struct {
-			Path string `json:"path"`
-		}
-	}
-	if err := json.Unmarshal(manifest, &decoded); err != nil {
-		t.Fatal(err)
-	}
-	path := filepath.Join(root, "pricing/catalog/v1", decoded.Providers[0].Path)
-	if err := os.WriteFile(path, []byte("{}\n"), 0o600); err != nil {
-		t.Fatal(err)
-	}
-	if err := Validate(root); err == nil || !strings.Contains(err.Error(), "hash mismatch") {
-		t.Fatalf("Validate error = %v, want hash mismatch", err)
-	}
-}
-
-func testSource(seed string) Source {
-	sum := sha256.Sum256([]byte(seed))
-	return Source{
-		Repository: "BerriAI/litellm",
-		Revision:   fmt.Sprintf("%040x", sum)[:40],
-		Path:       "model_prices_and_context_window.json",
-	}
-}
-
-func readProviderBlob(t *testing.T, root, providerID string) providerBlob {
+func buildBlobs(t *testing.T, upstream []byte) map[string]providerBlob {
 	t.Helper()
-	manifestContents, err := os.ReadFile(filepath.Join(root, "pricing/catalog/v1/manifest.json"))
+	generated, err := build(upstream)
 	if err != nil {
 		t.Fatal(err)
 	}
-	var decoded manifest
-	if err := json.Unmarshal(manifestContents, &decoded); err != nil {
-		t.Fatal(err)
+	if _, err := Catalog(upstream); err != nil {
+		t.Fatalf("runtime rejected the built catalog: %v", err)
 	}
-	contents, err := os.ReadFile(filepath.Join(root, "pricing/catalog/v1", findProvider(decoded.Providers, providerID).Path))
-	if err != nil {
-		t.Fatal(err)
+	blobs := make(map[string]providerBlob, len(generated.blobs))
+	for providerID, contents := range generated.blobs {
+		var blob providerBlob
+		if err := json.Unmarshal(contents, &blob); err != nil {
+			t.Fatal(err)
+		}
+		blobs[providerID] = blob
 	}
-	var blob providerBlob
-	if err := json.Unmarshal(contents, &blob); err != nil {
-		t.Fatal(err)
-	}
-	return blob
+	return blobs
 }
 
 // Break caught: the feed carried an Anthropic 1-hour cache-write rate belonging
@@ -377,8 +224,7 @@ func readProviderBlob(t *testing.T, root, providerID string) providerBlob {
 // for claude-3-haiku-20240307. Canonical-decimal validation accepted both, so
 // the daily sync shipped them and every 1-hour cache write on those models was
 // billed against a number Anthropic never charged.
-func TestSyncDropsImplausibleAnthropicCacheTiers(t *testing.T) {
-	root := t.TempDir()
+func TestBuildDropsImplausibleAnthropicCacheTiers(t *testing.T) {
 	upstream := []byte(`{
   "anthropic/one-hour-below-five-minute": {"litellm_provider":"anthropic","mode":"chat",
     "input_cost_per_token":0.000015,"output_cost_per_token":0.000075,
@@ -399,15 +245,8 @@ func TestSyncDropsImplausibleAnthropicCacheTiers(t *testing.T) {
     "input_cost_per_token":0.00000375,"output_cost_per_token":0.000015,
     "cache_creation_input_token_cost":0.000001875}
 }`)
-	if _, err := Sync(root, upstream, Source{
-		Repository: "BerriAI/litellm",
-		Revision:   "0123456789abcdef0123456789abcdef01234567",
-		Path:       "model_prices_and_context_window.json",
-	}); err != nil {
-		t.Fatalf("sync: %v", err)
-	}
-
-	anthropic := readProviderBlob(t, root, "anthropic")
+	blobs := buildBlobs(t, upstream)
+	anthropic := blobs["anthropic"]
 	for _, test := range []struct {
 		modelID      string
 		wantWrite    string
@@ -432,11 +271,11 @@ func TestSyncDropsImplausibleAnthropicCacheTiers(t *testing.T) {
 	// The relation is Anthropic's, not a universal law. z.ai writes to cache for
 	// free and an OpenAI fine-tune writes at half its input rate; deleting those
 	// would be the same class of error in the other direction.
-	zai := blobRates(t, readProviderBlob(t, root, "zai"), "free-cache-write")
+	zai := blobRates(t, blobs["zai"], "free-cache-write")
 	if got := optionalRateString(zai.CacheWriteUSDPerToken); got != "0" {
 		t.Errorf("zai free cache write = %q, want it kept", got)
 	}
-	openai := blobRates(t, readProviderBlob(t, root, "openai"), "discounted-cache-write")
+	openai := blobRates(t, blobs["openai"], "discounted-cache-write")
 	if got := optionalRateString(openai.CacheWriteUSDPerToken); got != "0.000001875" {
 		t.Errorf("openai discounted cache write = %q, want it kept", got)
 	}
@@ -458,4 +297,114 @@ func optionalRateString(value *string) string {
 		return ""
 	}
 	return *value
+}
+
+func TestBuildEmitsCompleteLongContextRows(t *testing.T) {
+	upstream := []byte(`{
+  "gpt-test": {
+    "litellm_provider": "openai",
+    "mode": "responses",
+    "input_cost_per_token": 2e-6,
+    "output_cost_per_token": 1e-5,
+    "cache_read_input_token_cost": 2e-7,
+    "input_cost_per_token_priority": 4e-6,
+    "output_cost_per_token_priority": 2e-5,
+    "cache_read_input_token_cost_priority": 4e-7,
+    "input_cost_per_token_above_272k_tokens": 4e-6,
+    "output_cost_per_token_above_272k_tokens": 1.5e-5,
+    "cache_read_input_token_cost_above_272k_tokens": 4e-7,
+    "input_cost_per_token_above_272k_tokens_priority": 8e-6,
+    "output_cost_per_token_above_272k_tokens_priority": 3e-5,
+    "cache_read_input_token_cost_above_272k_tokens_priority": 8e-7
+  },
+  "gpt-gap": {
+    "litellm_provider": "openai",
+    "mode": "responses",
+    "input_cost_per_token": 2e-6,
+    "output_cost_per_token": 1e-5,
+    "cache_read_input_token_cost": 2e-7,
+    "input_cost_per_token_above_272k_tokens": 4e-6,
+    "output_cost_per_token_above_272k_tokens": 1.5e-5
+  },
+  "glm-test": {"litellm_provider": "zai", "mode": "chat", "input_cost_per_token": 1e-6, "output_cost_per_token": 2e-6},
+  "claude-test": {"litellm_provider": "anthropic", "mode": "chat", "input_cost_per_token": 3e-6, "output_cost_per_token": 1.5e-5}
+}`)
+	openai := buildBlobs(t, upstream)["openai"]
+	var ids []string
+	for _, model := range openai.Models {
+		ids = append(ids, model.ModelID)
+	}
+	want := "gpt-gap,gpt-test,gpt-test#above272k,gpt-test#priority,gpt-test#priority#above272k"
+	if got := strings.Join(ids, ","); got != want {
+		t.Fatalf("openai models = %s, want %s", got, want)
+	}
+	long := blobRates(t, openai, "gpt-test#above272k")
+	if long.UncachedInputUSDPerToken != "0.000004" || long.OutputUSDPerToken != "0.000015" ||
+		optionalRateString(long.CacheReadUSDPerToken) != "0.0000004" {
+		t.Fatalf("long-context rates = %+v", long)
+	}
+	priority := blobRates(t, openai, "gpt-test#priority#above272k")
+	if priority.UncachedInputUSDPerToken != "0.000008" || priority.OutputUSDPerToken != "0.00003" ||
+		optionalRateString(priority.CacheReadUSDPerToken) != "0.0000008" {
+		t.Fatalf("priority long-context rates = %+v", priority)
+	}
+}
+
+func TestBuildEmitsCompleteServiceTierRows(t *testing.T) {
+	upstream := []byte(`{
+  "gpt-test": {
+    "litellm_provider": "openai",
+    "mode": "responses",
+    "input_cost_per_token": 2e-6,
+    "output_cost_per_token": 1e-5,
+    "cache_read_input_token_cost": 2e-7,
+    "input_cost_per_token_priority": 4e-6,
+    "output_cost_per_token_priority": 2e-5,
+    "cache_read_input_token_cost_priority": 4e-7,
+    "input_cost_per_token_flex": 1e-6,
+    "output_cost_per_token_flex": 5e-6
+  },
+  "glm-test": {
+    "litellm_provider": "zai",
+    "mode": "chat",
+    "input_cost_per_token": 0.000001,
+    "output_cost_per_token": 0.000002
+  },
+  "claude-test": {
+    "litellm_provider": "anthropic",
+    "mode": "chat",
+    "input_cost_per_token": 0.000003,
+    "output_cost_per_token": 0.000015,
+    "cache_read_input_token_cost": 3e-7,
+    "cache_creation_input_token_cost": 0.00000375,
+    "cache_creation_input_token_cost_above_1hr": 0.000006,
+    "provider_specific_entry": {"us": 1.1, "fast": 2}
+  }
+}`)
+	blobs := buildBlobs(t, upstream)
+	openai := blobs["openai"]
+	var openaiIDs []string
+	for _, model := range openai.Models {
+		openaiIDs = append(openaiIDs, model.ModelID)
+	}
+	if got, want := strings.Join(openaiIDs, ","), "gpt-test,gpt-test#priority"; got != want {
+		t.Fatalf("openai models = %s, want %s", got, want)
+	}
+	priority := blobRates(t, openai, "gpt-test#priority")
+	if priority.UncachedInputUSDPerToken != "0.000004" || priority.OutputUSDPerToken != "0.00002" ||
+		optionalRateString(priority.CacheReadUSDPerToken) != "0.0000004" {
+		t.Fatalf("priority rates = %+v", priority)
+	}
+
+	fast := blobRates(t, blobs["anthropic"], "claude-test#fast")
+	got := []string{
+		fast.UncachedInputUSDPerToken, fast.OutputUSDPerToken,
+		optionalRateString(fast.CacheReadUSDPerToken),
+		optionalRateString(fast.CacheWriteUSDPerToken),
+		optionalRateString(fast.CacheWrite1HUSDPerToken),
+	}
+	want := []string{"0.000006", "0.00003", "0.0000006", "0.0000075", "0.000012"}
+	if strings.Join(got, ",") != strings.Join(want, ",") {
+		t.Fatalf("fast rates = %v, want %v", got, want)
+	}
 }

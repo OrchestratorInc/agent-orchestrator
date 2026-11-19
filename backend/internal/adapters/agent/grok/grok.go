@@ -93,8 +93,13 @@ func New() *Plugin {
 	return &Plugin{}
 }
 
+// EmitsSemanticMessageAcceptance reports that Grok's Claude-compatible
+// UserPromptSubmit hook includes the accepted prompt text.
+func (p *Plugin) EmitsSemanticMessageAcceptance() bool { return true }
+
 var _ adapters.Adapter = (*Plugin)(nil)
 var _ ports.Agent = (*Plugin)(nil)
+var _ ports.SemanticMessageAcceptanceSignaler = (*Plugin)(nil)
 
 // Manifest returns the adapter's static self-description.
 func (p *Plugin) Manifest() adapters.Manifest {
@@ -151,19 +156,27 @@ func (p *Plugin) GetPromptDeliveryStrategy(ctx context.Context, _ ports.LaunchCo
 	return ports.PromptDeliveryAfterStart, nil
 }
 
+// grokTrustDialogMarker is the heading of Grok's folder-trust dialog, where
+// "n" means "No, quit". Its screen also shows the "Grok Build" footer.
+const grokTrustDialogMarker = "Do you trust the contents of this directory?"
+
 // PromptReadinessHints waits for Grok's interactive UI before AO injects the
-// worker's first task. Timeout falls back to delivery so a changed startup
-// banner cannot permanently block spawning.
+// worker's first task. Grok draws on the alternate screen, so the "Grok Build"
+// footer is only visible in the rendered viewport. Timeout falls back to
+// delivery so a changed startup banner cannot permanently block spawning, but
+// never while the trust dialog is still waiting for an answer.
 func (p *Plugin) PromptReadinessHints(ctx context.Context, _ ports.LaunchConfig) (ports.PromptReadinessHints, error) {
 	if err := ctx.Err(); err != nil {
 		return ports.PromptReadinessHints{}, err
 	}
 	return ports.PromptReadinessHints{
-		InitialDelay: 750 * time.Millisecond,
-		Patterns:     []string{"Grok Build"},
-		PollInterval: 200 * time.Millisecond,
-		Timeout:      8 * time.Second,
-		Lines:        80,
+		InitialDelay:     750 * time.Millisecond,
+		Patterns:         []string{"Grok Build"},
+		PollInterval:     200 * time.Millisecond,
+		Timeout:          8 * time.Second,
+		Lines:            80,
+		RenderedScreen:   true,
+		BlockingPatterns: []string{grokTrustDialogMarker},
 	}, nil
 }
 
@@ -299,3 +312,18 @@ func systemPromptTextFrom(inline, file string) (string, error) {
 	}
 	return strings.TrimRight(string(data), "\n"), nil
 }
+
+// InvalidateBinaryResolution forgets the cached executable path, so the next
+// launch resolves it again: after AO installs a managed copy, for example.
+func (p *Plugin) InvalidateBinaryResolution() {
+	p.binaryMu.Lock()
+	p.resolvedBinary = ""
+	p.binaryMu.Unlock()
+}
+
+// SupportsTerminalVersionRefresh opts into exact-conversation idle restarts.
+// The restore command re-applies session options and explicitly selects the
+// captured native conversation rather than selecting the latest session.
+func (*Plugin) SupportsTerminalVersionRefresh() bool { return true }
+
+var _ ports.AgentTerminalVersionRefresher = (*Plugin)(nil)

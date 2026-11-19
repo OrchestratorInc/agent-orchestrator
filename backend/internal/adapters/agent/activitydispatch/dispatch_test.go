@@ -22,7 +22,7 @@ func TestDeriverTokensAreKnownHarnesses(t *testing.T) {
 }
 
 func TestSupportsHarness(t *testing.T) {
-	for _, h := range []domain.AgentHarness{domain.HarnessCodex, domain.HarnessClaudeCode, domain.HarnessGrok, domain.HarnessMuse, domain.HarnessOpenCode, domain.HarnessKimi, domain.HarnessVibe, domain.HarnessPrimeAgent, domain.HarnessAmp, domain.HarnessPi, domain.HarnessAuggie, domain.HarnessContinue, domain.HarnessAider, domain.HarnessOMP} {
+	for _, h := range []domain.AgentHarness{domain.HarnessCodex, domain.HarnessClaudeCode, domain.HarnessGrok, domain.HarnessMuse, domain.HarnessOpenCode, domain.HarnessOpenCodeV2, domain.HarnessKimi, domain.HarnessVibe, domain.HarnessPrimeAgent, domain.HarnessAmp, domain.HarnessPi, domain.HarnessAuggie, domain.HarnessContinue, domain.HarnessAider, domain.HarnessOMP, domain.HarnessCommandCode} {
 		if !SupportsHarness(h) {
 			t.Errorf("SupportsHarness(%q) = false, want true", h)
 		}
@@ -32,6 +32,13 @@ func TestSupportsHarness(t *testing.T) {
 		if SupportsHarness(h) {
 			t.Errorf("SupportsHarness(%q) = true, want false", h)
 		}
+	}
+}
+
+func TestOpenCodeV2DispatchesManagedPluginActivity(t *testing.T) {
+	got, ok := Derive("opencode-v2", "permission-blocked", []byte(`{"session_id":"ses_v2"}`))
+	if !ok || got != domain.ActivityBlocked {
+		t.Fatalf("Derive(opencode-v2, permission-blocked) = (%q, %v), want (%q, true)", got, ok, domain.ActivityBlocked)
 	}
 }
 
@@ -72,6 +79,8 @@ func TestSignalCoverageForHarness(t *testing.T) {
 		{domain.HarnessClaudeCode, SignalCoverageComplete},
 		{domain.HarnessContinue, SignalCoveragePartial},
 		{domain.HarnessAider, SignalCoveragePartial},
+		{domain.HarnessCommandCode, SignalCoveragePartial},
+		{domain.HarnessMemcode, SignalCoveragePartial},
 		{domain.HarnessCrush, SignalCoverageNone},
 	}
 
@@ -81,6 +90,58 @@ func TestSignalCoverageForHarness(t *testing.T) {
 				t.Fatalf("CoverageForHarness(%q) = %v, want %v", tt.harness, got, tt.want)
 			}
 		})
+	}
+}
+
+func TestCommandCodeDispatchesAvailableLifecycleSignals(t *testing.T) {
+	for _, tc := range []struct {
+		event string
+		want  domain.ActivityState
+	}{
+		{event: "pre-tool-use", want: domain.ActivityActive},
+		{event: "post-tool-use", want: domain.ActivityActive},
+		{event: "stop", want: domain.ActivityIdle},
+	} {
+		t.Run(tc.event, func(t *testing.T) {
+			got, ok := Derive("command-code", tc.event, []byte(`{"session_id":"native-1"}`))
+			if !ok || got != tc.want {
+				t.Fatalf("Derive(command-code, %q) = (%q, %v), want (%q, true)", tc.event, got, ok, tc.want)
+			}
+		})
+	}
+}
+
+// Kimi's managed config installs the tool-use trio plus PermissionResult as
+// AO's canonical permission-resolved event; every sub-command it writes must
+// derive through the shared standard deriver (#2814).
+func TestKimiDerivesMidTurnToolActivity(t *testing.T) {
+	for _, tc := range []struct {
+		event string
+		want  domain.ActivityState
+	}{
+		{event: "pre-tool-use", want: domain.ActivityActive},
+		{event: "post-tool-use", want: domain.ActivityActive},
+		{event: "post-tool-use-failure", want: domain.ActivityActive},
+		{event: "permission-resolved", want: domain.ActivityActive},
+		{event: "permission-request", want: domain.ActivityWaitingInput},
+		{event: "stop", want: domain.ActivityIdle},
+	} {
+		t.Run(tc.event, func(t *testing.T) {
+			got, ok := Derive("kimi", tc.event, []byte(`{"session_id":"kimi-native-1"}`))
+			if !ok || got != tc.want {
+				t.Fatalf("Derive(kimi, %q) = (%q, %v), want (%q, true)", tc.event, got, ok, tc.want)
+			}
+		})
+	}
+}
+
+// SessionStart fires on resume and clear as well as startup, and a native
+// restore delivers no prompt, so it must report no activity. A restored session
+// at an empty prompt would otherwise read as working until the user's next turn.
+func TestCommandCodeSessionStartCarriesMetadataOnly(t *testing.T) {
+	got, ok := Derive("command-code", "session-start", []byte(`{"session_id":"native-1"}`))
+	if ok {
+		t.Fatalf("Derive(command-code, session-start) = (%q, true), want no activity signal", got)
 	}
 }
 

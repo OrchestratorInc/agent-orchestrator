@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 
-import { fontScaleCap, radius, space, type } from "./tokens";
+import { touchTarget as androidTouchTarget } from "./platformTokens.android";
+import { fontScaleCap, radius, space, touchTarget, type } from "./tokens";
 
 // These tests are a regression fence, not a description of taste. A scale that
 // stops ascending has been edited carelessly, and the anchors below are the
@@ -14,7 +15,7 @@ describe("spacing scale", () => {
 		expect(new Set(steps).size).toBe(steps.length);
 	});
 
-	it("keeps the card gutter at the value cardShell already uses", () => {
+	it("keeps the card gutter at 12", () => {
 		expect(space.md).toBe(12);
 	});
 });
@@ -26,8 +27,17 @@ describe("radius scale", () => {
 		expect(new Set(steps).size).toBe(steps.length);
 	});
 
-	it("keeps the card radius at the value cardShell already uses", () => {
+	it("keeps the card radius at 12", () => {
 		expect(radius.md).toBe(12);
+	});
+});
+
+describe("touch target", () => {
+	// vitest resolves the base file, which is what iOS gets; Metro swaps in the
+	// .android file on Android, so that one is read directly.
+	it("meets the HIG on iOS and Material 3 on Android", () => {
+		expect(touchTarget).toBe(44);
+		expect(androidTouchTarget).toBe(48);
 	});
 });
 
@@ -47,36 +57,36 @@ describe("font scale caps", () => {
 });
 
 describe("type scale", () => {
-	// Lifted verbatim from worker-list-row.tsx `title`, so a rewritten row that
-	// adopts the token is a no-op rather than a silent restyle.
-	it("matches the existing list-row title exactly", () => {
-		expect(type.rowTitle).toEqual({
-			fontSize: 16,
-			lineHeight: 21,
-			fontWeight: "600",
-			letterSpacing: -0.15,
-		});
+	// The ramp is a compact scale, each step named for the Dynamic Type
+	// style it grows with, rather than a vocabulary of per-screen sizes, so the
+	// fence is its shape: sizes never decrease as the
+	// roles get larger, and the anchors below are the steps the app reads at.
+	const steps = [
+		type.caption2,
+		type.caption1,
+		type.footnote,
+		type.subheadline,
+		type.callout,
+		type.body,
+		type.headline,
+		type.title3,
+		type.title2,
+		type.title1,
+		type.largeTitle,
+	];
+
+	it("never decreases as the roles get larger", () => {
+		const sizes = steps.map((step) => step.fontSize);
+		expect(sizes).toEqual([...sizes].sort((a, b) => a - b));
 	});
 
-	it("matches the existing screen title exactly", () => {
-		expect(type.title).toEqual({ fontSize: 26, fontWeight: "800", letterSpacing: -0.5 });
+	it("keeps the scale's ends", () => {
+		expect(type.caption2.fontSize).toBe(11);
+		expect(type.largeTitle.fontSize).toBe(30);
 	});
 
-	it("descends from title to micro", () => {
-		const sizes = [
-			type.title.fontSize,
-			type.sheetTitle.fontSize,
-			type.emptyTitle.fontSize,
-			type.rowTitle.fontSize,
-			type.body.fontSize,
-			type.meta.fontSize,
-			type.micro.fontSize,
-		];
-		expect(sizes).toEqual([...sizes].sort((a, b) => b - a));
-	});
-
-	it("gives the eyebrow its tracking, which is what separates it from micro", () => {
-		expect(type.eyebrow.fontSize).toBe(type.micro.fontSize);
-		expect(type.eyebrow.letterSpacing).toBe(1.2);
+	it("keeps the reading sizes where the app reads at them", () => {
+		expect(type.body.fontSize).toBe(16);
+		expect(type.footnote.fontSize).toBe(13);
 	});
 });

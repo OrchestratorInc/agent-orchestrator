@@ -1,8 +1,10 @@
+import { apiErrorException } from "../lib/api-error-exception";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { useCallback } from "react";
+import { useCallback, useSyncExternalStore } from "react";
 import { markTerminalHandleFresh } from "../lib/fresh-terminal-handles";
 import type { components } from "../../api/schema";
-import { apiClient, apiErrorMessage } from "../lib/api-client";
+import { apiClient, getApiBaseUrl, subscribeApiBaseUrl } from "../lib/api-client";
+import { freshMachineSimActive } from "../lib/fresh-machine-sim";
 import { usesPreviewWorkspaceData } from "../lib/preview-mode";
 import { shellTerminalsQueryKey, shellTerminalsQueryOptions, type ShellTerminal } from "./useShellTerminals";
 
@@ -31,15 +33,16 @@ export const systemRequirementsQueryOptions = {
 	refetchOnWindowFocus: false,
 	// The preview build (VITE_NO_ELECTRON) has no real daemon behind it, so
 	// there is nothing to probe — mirrors isDaemonReady's short-circuit for
-	// the same flag in SessionsBoard.
-	enabled: !usesPreviewWorkspaceData,
+	// the same flag in SessionsBoard — unless a dev build's simulated new
+	// machine (fresh-machine-sim) is answering instead.
+	enabled: () => !usesPreviewWorkspaceData || freshMachineSimActive(),
 };
 
 export const githubAuthRequirementQueryOptions = {
 	queryKey: ["github-auth-requirement"] as const,
 	queryFn: fetchGitHubAuthRequirement,
 	refetchOnWindowFocus: false,
-	enabled: !usesPreviewWorkspaceData,
+	enabled: () => !usesPreviewWorkspaceData || freshMachineSimActive(),
 };
 
 /** Advisory authentication probe. Kept separate from the startup gate because
@@ -64,7 +67,7 @@ export function useStartGitHubAuthTerminal() {
 			const existing = terminals.find((terminal) => terminal.title === "Connect GitHub" && !terminal.sessionId && !terminal.projectId);
 			if (existing) return existing;
 			const { data, error } = await apiClient.POST("/api/v1/system/github-auth/terminal");
-			if (error || !data) throw new Error(apiErrorMessage(error, "Could not start GitHub sign-in."));
+			if (error || !data) throw apiErrorException(error, "Could not start GitHub sign-in.");
 			markTerminalHandleFresh(data.shellTerminal.handleId);
 			return data.shellTerminal;
 		},
@@ -124,7 +127,15 @@ export function useGitHubAuthAutoLoginOffered() {
  *  mounted while blocked) and DaemonStartupLoader (which renders the gate) so
  *  both read the same react-query cache entry and never disagree. */
 export function useSystemRequirementsGate() {
-	const query = useQuery(systemRequirementsQueryOptions);
+	const baseUrl = useSyncExternalStore(subscribeApiBaseUrl, getApiBaseUrl, getApiBaseUrl);
+	const query = useQuery({
+		...systemRequirementsQueryOptions,
+		queryKey: [...systemRequirementsQueryKey, baseUrl],
+		// The preview build has no daemon (a dev build's simulated new machine
+		// answers there instead), and the desktop must wait for its trusted URL
+		// before making the first requirements request.
+		enabled: usesPreviewWorkspaceData ? freshMachineSimActive() : Boolean(baseUrl),
+	});
 	const requirements = query.data?.requirements ?? [];
 	const requirementsBlocked =
 		!usesPreviewWorkspaceData && query.isSuccess && requirements.some((r) => r.required && !r.satisfied);
@@ -134,9 +145,8 @@ export function useSystemRequirementsGate() {
 	// controls the dependency dialog once there is real missing-item data.
 	const blocked = checking || requirementsBlocked;
 	const ready = usesPreviewWorkspaceData || (query.isSuccess && !requirementsBlocked);
-	// The daemon is already confirmed reachable by the time either consumer
-	// mounts — if the readiness probe itself errors out, fail open rather than
-	// wedging the user on the checking state forever.
+	// Once the daemon URL is trusted, fail open if its requirements probe errors
+	// rather than wedging the user on the checking state forever.
 	const probeFailed = query.isError;
 	return { query, requirements, blocked, requirementsBlocked, checking, ready, probeFailed };
 }

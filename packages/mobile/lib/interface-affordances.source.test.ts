@@ -1,0 +1,100 @@
+import { readFileSync } from "node:fs";
+import { fileURLToPath } from "node:url";
+import { describe, expect, it } from "vitest";
+
+function source(relativePath: string): string {
+	return readFileSync(fileURLToPath(new URL(relativePath, import.meta.url)), "utf8");
+}
+
+/**
+ * The controls that carry a role or a state, pinned at the source.
+ *
+ * These are the affordances a screen reader reads and a finger aims at. None of
+ * them shows up in a screenshot, so nothing else in the suite would notice them
+ * being dropped.
+ */
+describe("Interface affordances", () => {
+	describe("shared controls announce what they are", () => {
+		const ui = source("./ui.tsx");
+
+		it("gives each pressable primitive a button role", () => {
+			// The app's primary controls live here, so a missing role is missing on
+			// every screen at once. Each one is checked inside its own body, so a role
+			// on one primitive cannot stand in for another's.
+			for (const name of ["ListSectionHeader", "Button"]) {
+				const start = ui.indexOf(`export function ${name}(`);
+				expect(start, `${name} should exist`).toBeGreaterThan(-1);
+				const end = ui.indexOf("\nexport ", start + 1);
+				const body = ui.slice(start, end === -1 ? undefined : end);
+				expect(body, `${name} should announce as a button`).toContain('accessibilityRole="button"');
+			}
+		});
+
+		it("pins the Button's name to its title so a spinner does not erase it", () => {
+			expect(ui).toContain("accessibilityLabel={title}");
+			expect(ui).toContain("accessibilityState={{ disabled: disabled || loading, busy: loading }}");
+		});
+	});
+
+	describe("selection and disclosure carry state", () => {
+		// The system menu checks the chosen project, and the trigger names it.
+		it("marks the active project in the project picker", () => {
+			const switcher = source("./ProjectSwitcher.tsx");
+			expect(switcher).toContain('state: action.id === applied ? "on" : "off"');
+			expect(switcher).toContain("accessibilityLabel: `Project, ${label}`");
+		});
+
+		it("marks every collapsible row in the timeline as expandable", () => {
+			const timeline = source("./chat/ChatTimeline.tsx");
+			// A header that toggles without saying so leaves the control sounding like
+			// static text. The activity rows had this from the start; the plan and
+			// changed-file rows did not.
+			expect(timeline).not.toMatch(/<Pressable style=\{styles\.planHeader\}/);
+			expect(timeline).not.toMatch(/<Pressable disabled=\{!hasPatch\} onPress=/);
+			const expanded = timeline.match(/accessibilityState=\{\{ expanded: open \}\}/g)?.length ?? 0;
+			// The step-less plan activity header, the changed-file header and the per-file rows.
+			expect(expanded).toBeGreaterThanOrEqual(4);
+			expect(timeline).toContain('accessibilityState={hasPatch ? { expanded: open } : undefined}');
+			// The plan panel lives in its own file and its header says so too.
+			const plan = source("./chat/TurnPlan.tsx");
+			expect(plan).toContain('accessibilityRole="button"');
+			expect(plan).toContain("accessibilityState={{ expanded, ");
+		});
+	});
+
+	describe("the unified preview controls", () => {
+		const preview = source("../app/preview/[id].tsx");
+		const browser = source("./preview/BrowserLivePane.tsx");
+		const terminal = source("./session/TerminalSessionScreen.tsx");
+
+		it("labels the app reload and asks for a URL through the native prompt, not a field in the pane", () => {
+			expect(preview).toContain('accessibilityLabel="Reload app preview"');
+			expect(browser).not.toContain("TextInput");
+			expect(browser).not.toContain('placeholder="Enter a URL"');
+		});
+
+		it("covers the common causes when the browser handshake fails", () => {
+			expect(source("./browserLive.ts")).toContain('this.handlers.onStatus("error");');
+			expect(browser).toContain('error || "Couldn\'t reach the desktop browser. Make sure browser sharing is on in Connect Mobile, the session is still running, and another phone isn\'t already controlling it."');
+		});
+
+		it("uses a navigation route instead of a second terminal overlay", () => {
+			expect(terminal).toContain('pathname: "/preview/[id]"');
+			expect(terminal).not.toContain("browserOpen");
+			expect(terminal).not.toContain("browserOverlay");
+		});
+	});
+
+	it("keeps a list that holds an input tappable while the keyboard is up", () => {
+		// Android's default `never` spends the first tap on the keyboard, so a row
+		// under a focused field takes two taps to choose.
+		for (const file of ["./NativePickerList.tsx", "./chat/ComposerSuggestionPanel.tsx"]) {
+			expect(source(file), `${file} should keep taps while the keyboard is up`).toContain(
+				'keyboardShouldPersistTaps="handled"',
+			);
+		}
+		// The board's search field sits outside its list, but the row that opens it
+		// still has to survive a tap from behind the keyboard.
+		expect(source("./worker-board-list.tsx")).toContain('keyboardShouldPersistTaps="handled"');
+	});
+});

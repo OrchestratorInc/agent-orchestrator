@@ -20,7 +20,7 @@ func TestListenUnixUsesShortAliasForLongDataPath(t *testing.T) {
 	}
 	t.Cleanup(func() { _ = os.RemoveAll(aliasRoot) })
 
-	ln, address, err := listenUnix(runFilePath, aliasRoot)
+	ln, address, err := listenUnix(runFilePath, aliasRoot, "browser.sock")
 	if err != nil {
 		t.Fatalf("listenUnix: %v", err)
 	}

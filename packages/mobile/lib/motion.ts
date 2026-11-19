@@ -1,39 +1,44 @@
-// Motion constants and the reduce-motion decision, in one place.
-//
-// Today the only animations are `Dot`'s breathing loop, the sidebar drawer
-// spring, and the keyboard LayoutAnimation — each carrying its own numbers. As
-// rows start animating between sections and banners start sliding in, those
-// numbers need to agree, and every one of them needs a reduce-motion answer.
-//
-// Free of React Native imports so the rules are unit-testable; the hook that
-// reads the OS setting lives separately (useReducedMotion), the same split as
-// pushStatus.ts vs the screens that consume it.
-
-/** `Dot`'s pulse half-period. Lifted from ui.tsx — the existing 1200ms timing. */
-export const BREATHE_MS = 1200;
+import { duration, press, spring } from "./tokens";
 
 /**
- * The sidebar drawer's spring. Lifted verbatim from sidebar-navigation-shell.
+ * The app's motion language, in one place.
  *
- * Note for a future Reanimated port: these are `Animated.spring` parameters. The
- * companion flick threshold in sidebar-gesture.ts is expressed in PanResponder's
- * px/ms, while Reanimated reports px/s — that constant must be converted, not
- * copied.
+ * Two halves, deliberately:
+ *
+ *   - **Named durations** for the transitions specific to this app — a board row
+ *     moving between sections, a banner arriving above a list, a paged question
+ *     sliding out. Each is a number lifted from the screen that first needed it,
+ *     so a change here is a visible decision rather than a drive-by edit.
+ *   - **The ladders and hooks** — the duration/easing/press steps in `tokens.ts`
+ *     plus the entrance hook the shared controls use.
+ *
+ * Two rules decide everything here:
+ *
+ *   - **Fast for the frequent.** Anything the finger triggers repeatedly gets a
+ *     ≤150ms transition on transform or opacity only, so it composites on the
+ *     GPU and never delays the next tap.
+ *   - **Motion is never the only signal.** Every animated state change in this
+ *     app also changes color, an icon or a label, so the interface still reads
+ *     with motion switched off — which is exactly what happens when the user has
+ *     Reduce Motion on, where these helpers become no-ops.
+ *
+ * Free of React Native imports so the rules stay unit-testable under Node; the
+ * hooks that need `Animated` live in motionHooks.ts, and the hook that reads the
+ * OS setting lives in useReducedMotion.ts.
  */
-export const DRAWER_SPRING = { damping: 24, stiffness: 240, mass: 0.8 } as const;
 
-/** Fallback used when the keyboard event carries no duration. Lifted from the board. */
+/** `Dot`'s pulse half-period. */
+export const BREATHE_MS = 1200;
+
+/** Fallback used when the keyboard event carries no duration. */
 export const KEYBOARD_FALLBACK_MS = 250;
 
-// New values, introduced with the motion work rather than lifted. Kept short:
-// these run while the user is waiting to read something.
 /** A row moving between sections, or a list re-laying out. */
-export const LAYOUT_MS = 220;
+export const LAYOUT_MS = 160;
 /** A banner entering or leaving above a list. */
 export const BANNER_MS = 180;
 /** Swapping content in place — filter changes, destination changes. */
 export const CROSSFADE_MS = 140;
-
 /**
  * One paged question leaving while the next arrives, in the direction of the
  * swipe. Longer than a crossfade because the eye is following a direction here,
@@ -42,16 +47,8 @@ export const CROSSFADE_MS = 140;
 export const PAGE_SLIDE_MS = 200;
 /** A status colour changing on a rail or dot. */
 export const TINT_MS = 200;
-/**
- * A board row moving between sections — pinned, or promoted by a delivery event.
- *
- * Longer than LAYOUT_MS because this one is meant to be *followed*: the point is
- * to see which row moved and where it went. Too fast and it is the teleport it
- * replaces.
- */
-export const ROW_MOVE_MS = 260;
-/** A row arriving in or leaving a section. Shorter, so it never outlasts the move. */
-export const ROW_ENTER_MS = 180;
+/** A row arriving or leaving. Shorter than `LAYOUT_MS`, so it never outlasts the move beside it. */
+export const ROW_ENTER_MS = 120;
 
 export type MotionDurations = {
 	breathe: number;
@@ -95,3 +92,5 @@ export function shouldAnimateLayout(reduced: boolean): boolean {
 export function shouldBreathe(reduced: boolean, breathing: boolean): boolean {
 	return breathing && !reduced;
 }
+
+export { duration, press, spring };

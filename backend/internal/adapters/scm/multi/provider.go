@@ -77,6 +77,20 @@ func (m *Provider) ListPRsByRepo(ctx context.Context, repo ports.SCMRepo, update
 	return p.ListPRsByRepo(ctx, repo, updatedAfter)
 }
 
+// ListOpenPRsByBranch delegates to the sub-provider matching repo.Provider
+// when it supports a branch-filtered listing.
+func (m *Provider) ListOpenPRsByBranch(ctx context.Context, repo ports.SCMRepo, branch string) ([]ports.SCMPRObservation, error) {
+	p, err := m.resolve(repo.Provider)
+	if err != nil {
+		return nil, err
+	}
+	lister, ok := p.(branchPRLister)
+	if !ok {
+		return nil, fmt.Errorf("%w: branch PR listing for provider %q", ports.ErrSCMUnsupported, repo.Provider)
+	}
+	return lister.ListOpenPRsByBranch(ctx, repo, branch)
+}
+
 // CommitChecksGuard delegates to the sub-provider matching repo.Provider.
 func (m *Provider) CommitChecksGuard(ctx context.Context, repo ports.SCMRepo, headSHA, etag string) (ports.SCMGuardResult, error) {
 	p, err := m.resolve(repo.Provider)
@@ -225,6 +239,157 @@ func (m *Provider) ResolveReviewThread(ctx context.Context, request ports.SCMRev
 		return fmt.Errorf("%w: review thread resolve for provider %q", ports.ErrSCMUnsupported, request.PR.Repo.Provider)
 	}
 	return resolver.ResolveReviewThread(ctx, request)
+}
+
+// ChangePullRequestState delegates to the sub-provider matching
+// request.PR.Repo.Provider when that provider supports PR state mutations.
+func (m *Provider) ChangePullRequestState(ctx context.Context, request ports.SCMPRStateRequest) error {
+	if m == nil {
+		return fmt.Errorf("%w: pull request state provider is unavailable", ports.ErrSCMUnsupported)
+	}
+	p, err := m.resolve(request.PR.Repo.Provider)
+	if err != nil {
+		return err
+	}
+	changer, ok := p.(ports.SCMPRStateChanger)
+	if !ok {
+		return fmt.Errorf("%w: pull request state changes for provider %q", ports.ErrSCMUnsupported, request.PR.Repo.Provider)
+	}
+	return changer.ChangePullRequestState(ctx, request)
+}
+
+// stacker returns the sub-provider for name when it supports stacks.
+func (m *Provider) stacker(name string) (ports.SCMStacker, error) {
+	if m == nil {
+		return nil, fmt.Errorf("%w: stack provider is unavailable", ports.ErrSCMUnsupported)
+	}
+	p, err := m.resolve(name)
+	if err != nil {
+		return nil, err
+	}
+	stacker, ok := p.(ports.SCMStacker)
+	if !ok {
+		return nil, fmt.Errorf("%w: stacks for provider %q", ports.ErrSCMUnsupported, name)
+	}
+	return stacker, nil
+}
+
+// PullRequestStack delegates to the sub-provider matching ref.Repo.Provider.
+func (m *Provider) PullRequestStack(ctx context.Context, ref ports.SCMPRRef) (ports.SCMStack, bool, error) {
+	stacker, err := m.stacker(ref.Repo.Provider)
+	if err != nil {
+		return ports.SCMStack{}, false, err
+	}
+	return stacker.PullRequestStack(ctx, ref)
+}
+
+// FindOpenPullRequest delegates to the sub-provider matching repo.Provider.
+func (m *Provider) FindOpenPullRequest(ctx context.Context, repo ports.SCMRepo, branch string) (ports.SCMPRRef, bool, error) {
+	stacker, err := m.stacker(repo.Provider)
+	if err != nil {
+		return ports.SCMPRRef{}, false, err
+	}
+	return stacker.FindOpenPullRequest(ctx, repo, branch)
+}
+
+// RegisterStacked delegates to the sub-provider matching request.Repo.Provider.
+func (m *Provider) RegisterStacked(ctx context.Context, request ports.SCMStackRegisterRequest) (ports.SCMStack, error) {
+	stacker, err := m.stacker(request.Repo.Provider)
+	if err != nil {
+		return ports.SCMStack{}, err
+	}
+	return stacker.RegisterStacked(ctx, request)
+}
+
+// MergeStack delegates to the sub-provider matching request.PR.Repo.Provider.
+func (m *Provider) MergeStack(ctx context.Context, request ports.SCMStackMergeRequest) (ports.SCMStackMergeStatus, error) {
+	stacker, err := m.stacker(request.PR.Repo.Provider)
+	if err != nil {
+		return "", err
+	}
+	return stacker.MergeStack(ctx, request)
+}
+
+// HeadChecks delegates to the sub-provider matching repo.Provider when that
+// provider can read a commit's checks.
+func (m *Provider) HeadChecks(ctx context.Context, repo ports.SCMRepo, sha string) (ports.SCMHeadChecks, error) {
+	if m == nil {
+		return ports.SCMHeadChecks{}, fmt.Errorf("%w: head checks provider is unavailable", ports.ErrSCMUnsupported)
+	}
+	p, err := m.resolve(repo.Provider)
+	if err != nil {
+		return ports.SCMHeadChecks{}, err
+	}
+	reader, ok := p.(ports.SCMHeadChecksReader)
+	if !ok {
+		return ports.SCMHeadChecks{}, fmt.Errorf("%w: head checks for provider %q", ports.ErrSCMUnsupported, repo.Provider)
+	}
+	return reader.HeadChecks(ctx, repo, sha)
+}
+
+// PostComment delegates to the sub-provider matching request.PR.Repo.Provider
+// when that provider supports posting comments.
+func (m *Provider) PostComment(ctx context.Context, request ports.SCMCommentRequest) (ports.SCMCommentResult, error) {
+	if m == nil {
+		return ports.SCMCommentResult{}, fmt.Errorf("%w: comment provider is unavailable", ports.ErrSCMUnsupported)
+	}
+	p, err := m.resolve(request.PR.Repo.Provider)
+	if err != nil {
+		return ports.SCMCommentResult{}, err
+	}
+	commenter, ok := p.(ports.SCMCommenter)
+	if !ok {
+		return ports.SCMCommentResult{}, fmt.Errorf("%w: comments for provider %q", ports.ErrSCMUnsupported, request.PR.Repo.Provider)
+	}
+	return commenter.PostComment(ctx, request)
+}
+
+// attachmentStore returns the sub-provider for name when it stores comment
+// attachments.
+func (m *Provider) attachmentStore(name string) (ports.SCMAttachmentStore, error) {
+	if m == nil {
+		return nil, fmt.Errorf("%w: attachment provider is unavailable", ports.ErrSCMUnsupported)
+	}
+	p, err := m.resolve(name)
+	if err != nil {
+		return nil, err
+	}
+	store, ok := p.(ports.SCMAttachmentStore)
+	if !ok {
+		return nil, fmt.Errorf("%w: attachments for provider %q", ports.ErrSCMUnsupported, name)
+	}
+	return store, nil
+}
+
+// AttachmentAccess delegates to the sub-provider matching pr.Repo.Provider.
+func (m *Provider) AttachmentAccess(ctx context.Context, pr ports.SCMPRRef) (ports.SCMAttachmentAccess, error) {
+	store, err := m.attachmentStore(pr.Repo.Provider)
+	if err != nil {
+		return ports.SCMAttachmentAccess{}, err
+	}
+	return store.AttachmentAccess(ctx, pr)
+}
+
+// StoreAttachments delegates to the sub-provider matching batch.PR.Repo.Provider.
+func (m *Provider) StoreAttachments(ctx context.Context, batch ports.SCMAttachmentBatch) (ports.SCMStoredAttachments, error) {
+	store, err := m.attachmentStore(batch.PR.Repo.Provider)
+	if err != nil {
+		return ports.SCMStoredAttachments{}, err
+	}
+	return store.StoreAttachments(ctx, batch)
+}
+
+// DiscardAttachments delegates to the sub-provider matching pr.Repo.Provider.
+func (m *Provider) DiscardAttachments(ctx context.Context, pr ports.SCMPRRef, handle string) error {
+	store, err := m.attachmentStore(pr.Repo.Provider)
+	if err != nil {
+		return err
+	}
+	return store.DiscardAttachments(ctx, pr, handle)
+}
+
+type branchPRLister interface {
+	ListOpenPRsByBranch(ctx context.Context, repo ports.SCMRepo, branch string) ([]ports.SCMPRObservation, error)
 }
 
 type credentialChecker interface {

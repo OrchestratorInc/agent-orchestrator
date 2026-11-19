@@ -2,7 +2,7 @@ import { expect, test, type Page } from "@playwright/test";
 import { installFakeAgent } from "./support/fake-bridge";
 import { installFakeTerminalMux } from "./support/fake-terminal-mux";
 
-// A worker terminal used to be auto-focused only mid agent-switch, so opening a
+// A worker terminal used to be auto-focused only during a handoff, so opening a
 // TUI session or switching between two of them left focus on the sidebar button
 // that was clicked. Keystrokes went nowhere until the user clicked the terminal.
 

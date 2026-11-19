@@ -3,15 +3,29 @@
 @import "../styles/tokens.css";
 @import "@fontsource-variable/geist";
 @import "@fontsource-variable/geist-mono";
+@import "./components/artifact-document.css";
+@import "./components/ui/button.css";
+@import "./components/ui/switch.css";
 @source "../../../packages/product-ui/src";
 
 @custom-variant dark (&:is(.dark *, :root:not([data-theme="light"]) *));
 
+/*
+ * "A control inside the group has keyboard focus". Use these, never
+ * group-has-*: Tailwind compiles that to `:is(:where(.group):has(...) *)`, and a
+ * :has() inside :is() makes Chromium restyle the whole app on every DOM change
+ * anywhere (about 30 ms per streamed chat line, tooltip or session switch).
+ * Same elements, same specificity, written as a plain descendant selector.
+ */
+@custom-variant focus-visible-in-group (:where(.group):has(:focus-visible) &);
+@custom-variant focus-visible-in-session-row (:where(.group\/session-row):has(:focus-visible) &);
+@custom-variant focus-visible-in-scratchpad (:where(.group\/scratchpad):has(:focus-visible) &);
+
 @custom-media --layout-narrow (width <= 680px); /* --breakpoint-layout-narrow */
 
 /*
- * Design system — see DESIGN_TOKENS.md. Flat near-black neutral ramp, hairline
- * borders, system font, refined-blue accent. Dark is primary (:root); light is the supported override
+ * Design system — see DESIGN_TOKENS.md. Flat neutral graphite ramp, hairline
+ * borders, and system font. Dark is primary (:root); light is the supported override
  * (:root[data-theme="light"]). apply-initial-theme runs before CSS load; the
  * Zustand theme toggle updates data-theme on <html>.
  */
@@ -25,6 +39,16 @@
 ::view-transition-new(root) {
 	animation: none;
 	mix-blend-mode: normal;
+}
+
+/* Translucent window: no animation at all. The group's own 250 ms animation
+ * keeps the transition (and its frozen snapshot) alive, and the old snapshot
+ * would show its tint through the new one, so it is hidden. */
+html[data-window-translucent="true"]::view-transition-group(root) {
+	animation: none;
+}
+html[data-window-translucent="true"]::view-transition-old(root) {
+	display: none;
 }
 
 /* While data-theme flips, kill per-element color tweens (composer, search,
@@ -113,6 +137,8 @@
 	/* Surfaces */
 	--color-background: var(--color-bg-primary);
 	--color-foreground: var(--color-text-primary);
+	/* Ink on foreground fills must stay opaque when window surfaces become clear. */
+	--color-on-foreground: var(--background);
 	--color-surface: var(--color-bg-secondary);
 	--color-card: var(--color-bg-secondary);
 	--color-card-foreground: var(--color-text-primary);
@@ -131,6 +157,7 @@
 	--color-sidebar-ring: var(--sidebar-ring);
 	--color-terminal: var(--color-bg-terminal);
 	--color-terminal-opaque: var(--color-bg-terminal-opaque);
+	--color-terminal-foreground: var(--color-text-terminal);
 	--color-terminal-dim: var(--color-text-terminal-dim);
 	--color-scrim: var(--bridge-scrim);
 
@@ -168,7 +195,6 @@
 	--size-icon-sm: var(--size-icon-sm);
 	--size-icon-md: var(--size-icon-md);
 	--size-icon-base: var(--size-icon-base);
-	--size-terminal-agent-icon: var(--size-terminal-agent-icon);
 	--size-icon-lg: var(--size-icon-lg);
 	--size-icon-xl: var(--size-icon-xl);
 
@@ -203,6 +229,7 @@
 	--spacing-toolbar: var(--size-toolbar);
 	--spacing-window-titlebar: var(--size-window-titlebar);
 	--spacing-titlebar-content-offset: var(--size-titlebar-content-offset);
+	--spacing-mac-panel-header-bottom: var(--size-mac-panel-header-bottom);
 	--spacing-titlebar-cluster-left: var(--size-titlebar-cluster-left);
 	/* Linux has no traffic lights — the cluster sits at the sidebar's own inset,
 	 * and clears the framed panel border when the sidebar is off-canvas. */
@@ -230,8 +257,9 @@
 	--spacing-content-max: var(--size-content-max);
 	--spacing-flex-min: var(--size-flex-min);
 	--spacing-shell-tab-min: var(--size-shell-tab-min);
-	--spacing-shell-tab-connected: var(--size-shell-tab-connected);
 	--spacing-shell-tab-max: var(--size-shell-tab-max);
+	--spacing-agent-shell-tab-max: var(--size-agent-shell-tab-max);
+	--spacing-session-tab-max: var(--size-session-tab-max);
 	--spacing-board-empty: var(--size-board-empty);
 	--spacing-preview-content: var(--size-preview-content);
 	--spacing-preview-max: var(--size-preview-max);
@@ -247,6 +275,7 @@
 	--spacing-inspector-min: var(--size-inspector-min);
 	--spacing-textarea-min: var(--size-textarea-min);
 	--spacing-sidebar-project-actions: var(--size-sidebar-project-actions);
+	--spacing-sidebar-project-actions-pinned: var(--size-sidebar-project-actions-pinned);
 	--spacing-row-md: var(--size-row-md);
 	--spacing-empty-offset-y: var(--size-empty-offset-y);
 	--spacing-kv-label: var(--size-kv-label);
@@ -256,6 +285,7 @@
 	--color-muted-foreground: var(--muted-foreground);
 	--color-passive: var(--color-text-passive);
 	--color-logo-accent: var(--color-brand-logo);
+	--color-logo-accent-bright: var(--color-brand-logo-bright);
 	--color-logo-accent-foreground: var(--color-brand-logo-foreground);
 	--color-markdown-code: var(--color-text-markdown-code);
 	--color-markdown-link: var(--color-text-markdown-link);
@@ -339,6 +369,47 @@
 	backdrop-filter: blur(var(--blur-overlay));
 }
 
+/* Diagnostics updates both its graphs and the board behind it. Blur the app
+ * surface rather than sampling it through a backdrop filter, which flickers
+ * in the translucent Electron shell. The portalled dialog stays sharp. */
+.diagnostics-dialog-overlay {
+	-webkit-backdrop-filter: none;
+	backdrop-filter: none;
+}
+
+body:has(.diagnostics-dialog-overlay) #root {
+	filter: blur(var(--blur-overlay));
+}
+
+/* In a translucent window, Chromium's backdrop blur cannot see content drawn
+ * over the transparent window base, so text behind would show through sharp.
+ * There the surface turns nearly solid instead. */
+html[data-window-translucent="true"] .overlay-glass {
+	background-color: color-mix(in oklch, var(--popover) 96%, transparent);
+	-webkit-backdrop-filter: none;
+	backdrop-filter: none;
+}
+
+/* See-through modal surface: the app shows through, blurred and slightly
+ * saturated so colour behind it reads as depth rather than noise. */
+@utility overlay-glass {
+	background-color: var(--color-bg-overlay-glass);
+	-webkit-backdrop-filter: blur(var(--blur-overlay-glass)) saturate(1.6);
+	backdrop-filter: blur(var(--blur-overlay-glass)) saturate(1.6);
+	@media (prefers-reduced-transparency: reduce) {
+		background-color: var(--popover);
+		-webkit-backdrop-filter: none;
+		backdrop-filter: none;
+	}
+}
+
+/* While one modal hands the screen to the next (lib/modal-handoff.ts), the
+ * backdrops appear and leave at full strength so the dim never dips. */
+html[data-modal-handoff] .dialog-overlay,
+.dialog-overlay[data-modal-handoff]:not([data-state="closed"]) {
+	animation: none !important;
+}
+
 @utility modal-shake {
 	animation: project-import-shake 280ms ease-in-out;
 }
@@ -349,12 +420,6 @@
 
 @utility toast-exit {
 	animation: toast-exit 180ms ease-in forwards;
-}
-
-@utility agent-switch-terminal-scrim {
-	background-color: color-mix(in srgb, var(--color-terminal) 95%, transparent);
-	-webkit-backdrop-filter: blur(3px);
-	backdrop-filter: blur(3px);
 }
 
 @utility w-daemon-failure-toast {
@@ -476,7 +541,7 @@
 	min-height: 0;
 	width: 100%;
 	background-color: var(--color-bg-sidebar);
-	padding-top: var(--size-center-panel-inset);
+	padding-top: var(--size-center-panel-bottom-inset);
 	padding-right: var(--size-center-panel-inline-inset);
 	padding-bottom: var(--size-center-panel-bottom-inset);
 	padding-left: 0;
@@ -506,39 +571,352 @@
 	padding-left: var(--size-center-panel-inline-inset);
 }
 
-/* macOS + Linux: inset on all sides except left (flush with sidebar). */
+/* macOS: use the same block inset above and below the surface. */
 .center-panel-shell.center-panel-shell--mac {
 	padding-top: var(--size-center-panel-inset-mac);
 	padding-right: var(--size-center-panel-inset-mac);
 	padding-bottom: var(--size-center-panel-inset-mac);
-	padding-left: 0;
+	/* Same inset on the left whether or not the sidebar is open, so the frame
+	 * never resizes or jumps with the sidebar; only the sidebar slides. */
+	padding-left: var(--size-center-panel-inset-mac);
+	transition: none;
+}
+
+/* The open sidebar covers that left inset, so its edge, footer divider and
+ * resize line sit on the panel border. Fullscreen drops the inset. */
+html[data-ao-platform="darwin"] .app-shell-root:not(.native-fullscreen) [data-slot="sidebar"] {
+	/* Match the sidebar spring settle time (~280ms). */
+	transition: margin-right 280ms cubic-bezier(0.25, 0.46, 0.45, 0.94);
+}
+html[data-ao-platform="darwin"] .app-shell-root:not(.native-fullscreen) [data-slot="sidebar"][data-state="expanded"] {
+	margin-right: calc(-1 * var(--size-center-panel-inset-mac));
+}
+@media (prefers-reduced-motion: reduce) {
+	html[data-ao-platform="darwin"] .app-shell-root:not(.native-fullscreen) [data-slot="sidebar"] {
+		transition: none;
+	}
+}
+
+/* Keep the center surface closed on all four edges, including macOS where the
+ * native titlebar sits above the panel rather than replacing its border. */
+.center-panel-shell--mac > .center-panel-surface {
+	border-top-width: 1px;
+}
+
+/* macOS drags from the shared headers without an extra strip: the session tab
+ * bar and the inspector's tab row both sit in the title-bar band. Linux keeps
+ * the native frame, so it needs no drag region. Only the controls punch
+ * through, never their containers, so every empty pixel around and between
+ * them still drags the window and double-clicks to zoom (macOS applies the
+ * system double-click setting to drag regions only). The same punch-out
+ * covers page top bars, which set drag inline on the header (PageTopbar.tsx).
+ * A control's own no-drag must come after the header in the DOM: Electron
+ * builds the region in document order. */
+html[data-ao-platform="darwin"] :is([data-testid="session-topbar-host"], [data-slot="inspector-container"] .session-inspector__topbar) {
+	-webkit-app-region: drag;
+}
+html[data-ao-platform="darwin"] :is([data-testid="session-topbar-host"], [data-slot="inspector-container"] .session-inspector__topbar, .workspace-topbar-actions) :is(button, a, input, select, textarea, label, form, [role="button"], [role="link"], [role="tab"], [role="menuitem"], [role="combobox"], [role="switch"], [role="checkbox"], [role="radio"], [title]) {
+	-webkit-app-region: no-drag;
+}
+
+/* Settings content scrolls up under the page's transparent drag strip. Controls
+ * that pass beneath it punch through the drag region so a click still lands. */
+html[data-ao-platform="darwin"] .settings-dialog-body :is(button, a, input, select, textarea, label, [role="switch"], [role="combobox"], [role="tab"], [role="menuitem"]) {
+	-webkit-app-region: no-drag;
 }
 
 .center-panel-shell.center-panel-shell--mac.center-panel-shell--fullscreen {
 	padding: 0;
 }
 
-/* Keep the session card intact: this strip belongs to its slate outer frame,
- * above the complete card (tabs and inspector alike), so it is a native macOS
- * or Linux drag target without introducing a seam inside session content. */
-.center-panel-shell--draggable-session-frame {
-	flex-direction: column;
+/* Sidebar closed on mac: the panel keeps its frame, which recedes to half
+ * strength without a sidebar beside it. Native fullscreen stays flush. */
+.sidebar-hidden .center-panel-shell--mac:not(.center-panel-shell--fullscreen) > .center-panel-surface {
+	border-color: color-mix(in srgb, var(--color-border-strong) 50%, transparent);
 }
 
-.center-panel-session-drag-strip {
-	flex: 0 0 var(--space-2);
-	-webkit-app-region: drag;
+/* Floating top bar (macOS, windowed). The top bar keeps its place in the
+ * surface's layout but sits on the window chrome; the panel's fill and frame
+ * start below it. ::before paints the fill under the content, ::after paints
+ * the frame over it so content never covers the edge, and the mask clips the
+ * content to the frame's rounded corners while leaving the bar's band open. */
+/* The bar takes over the panel's old top inset: it runs from the window's top
+ * edge to the panel's frame, with equal space above and below its controls.
+ * It is the traffic-light row (MAC_TRAFFIC_LIGHT_ROW_HEIGHT, 50px), so its
+ * center stays on the native buttons', sidebar brand's and titlebar controls'
+ * line (y = 25). The frame's top line is the row's last pixel (y = 49), and
+ * macOS draws the window's 1px top highlight over its first, so the visible
+ * gaps above and below a 31px control are both 8.5px. */
+.center-panel-shell.center-panel-shell--floating-topbar {
+	--floating-topbar-height: calc(var(--size-topbar-primary) + 2 * (var(--size-center-panel-inset-mac) + 1px));
+	--size-toolbar: var(--floating-topbar-height);
+	--spacing-toolbar: var(--floating-topbar-height);
+	/* The bars drop their bottom border here, so action rows fill the band. */
+	--size-topbar-content: var(--floating-topbar-height);
+	--size-inspector-tabs: var(--floating-topbar-height);
+	--spacing-inspector-tabs: var(--floating-topbar-height);
+	--floating-topbar-gap: calc(var(--space-2) + 1px);
+	--size-topbar-control: calc(var(--floating-topbar-height) - 1px - 2 * var(--floating-topbar-gap));
+	padding-top: 0;
 }
 
-/* Sidebar closed on mac: content panel expands to fill the full window.
- * Remove all padding and strip the surface border + radius so it's flush. */
-.sidebar-hidden .center-panel-shell.center-panel-shell--mac {
-	padding: 0;
+/* The last tab's trailing gap already spaces New terminal from it; the action
+ * region starts one gap after it; and the reserve for the panel's trailing
+ * controls drops the surface's 1px edge padding. */
+.center-panel-shell--floating-topbar [data-testid="session-tab-strip-action"] {
+	padding-inline-start: 0;
 }
 
-.sidebar-hidden .center-panel-shell--mac .center-panel-surface {
-	border-color: transparent;
+.center-panel-shell--floating-topbar .session-topbar-actions {
+	padding-inline-start: var(--gap-topbar-control);
+}
+
+.center-panel-shell--floating-topbar.center-panel-shell .has-topbar-controls .center-panel-titlebar,
+.center-panel-shell--floating-topbar.center-panel-shell .has-topbar-controls .session-inspector__trailing,
+.center-panel-shell--floating-topbar.center-panel-shell .has-topbar-controls .session-topbar-actions:not([data-fullscreen]) {
+	padding-right: calc(var(--topbar-trailing-width, 0px) + var(--gap-topbar-control) + var(--gap-topbar-control) - 1px);
+}
+
+.center-panel-shell--floating-topbar .session-inspector__tab-button {
+	width: var(--size-topbar-control);
+	height: var(--size-topbar-control);
+}
+
+.center-panel-shell--floating-topbar > .center-panel-surface {
+	--floating-panel-top: calc(var(--size-toolbar) - 1px);
+	--floating-panel-radius: var(--radius-center-panel);
+	position: relative;
+	isolation: isolate;
+	/* Width only: the `border` shorthand would reset the color to currentcolor,
+	 * and the next page's border would fade in from bright text color. */
+	border-width: 0;
 	border-radius: 0;
+	/* No top padding: the bar starts at the window's top edge, so its center is
+	 * the traffic-light row's. */
+	padding: 0 1px 1px;
+	background: transparent;
+	-webkit-mask:
+		linear-gradient(#000 0 0) 0 0 / 100% var(--floating-panel-top) no-repeat,
+		linear-gradient(#000 0 0) 0 calc(var(--floating-panel-top) + var(--floating-panel-radius)) / 100% calc(100% - var(--floating-panel-top) - 2 * var(--floating-panel-radius)) no-repeat,
+		linear-gradient(#000 0 0) var(--floating-panel-radius) var(--floating-panel-top) / calc(100% - 2 * var(--floating-panel-radius)) calc(100% - var(--floating-panel-top)) no-repeat,
+		radial-gradient(circle, #000 70%, transparent 71%) 0 var(--floating-panel-top) / calc(2 * var(--floating-panel-radius)) calc(2 * var(--floating-panel-radius)) no-repeat,
+		radial-gradient(circle, #000 70%, transparent 71%) 100% var(--floating-panel-top) / calc(2 * var(--floating-panel-radius)) calc(2 * var(--floating-panel-radius)) no-repeat,
+		radial-gradient(circle, #000 70%, transparent 71%) 0 100% / calc(2 * var(--floating-panel-radius)) calc(2 * var(--floating-panel-radius)) no-repeat,
+		radial-gradient(circle, #000 70%, transparent 71%) 100% 100% / calc(2 * var(--floating-panel-radius)) calc(2 * var(--floating-panel-radius)) no-repeat;
+}
+
+.center-panel-shell--floating-topbar > .center-panel-surface::before,
+.center-panel-shell--floating-topbar > .center-panel-surface::after {
+	content: "";
+	position: absolute;
+	inset: var(--floating-panel-top) 0 0;
+	border-radius: var(--floating-panel-radius);
+	pointer-events: none;
+}
+
+.center-panel-shell--floating-topbar > .center-panel-surface::before {
+	z-index: -1;
+	background-color: var(--color-bg-primary);
+}
+
+.center-panel-shell--floating-topbar > .center-panel-surface::after {
+	z-index: var(--z-index-chrome);
+	border: 1px solid var(--color-border-strong);
+}
+
+.sidebar-hidden .center-panel-shell--floating-topbar > .center-panel-surface::after {
+	border-color: color-mix(in srgb, var(--color-border-strong) 50%, transparent);
+}
+
+
+/* The inspector rail spans the bar's band too: its fill starts at the panel's
+ * top edge, so the band above stays window chrome. Its divider line is drawn
+ * by the session column (below). */
+.center-panel-shell--floating-topbar [data-slot="inspector-container"] {
+	border-left-color: transparent;
+	background: linear-gradient(var(--color-bg-primary), var(--color-bg-primary)) 0 var(--floating-panel-top) / 100% 100% no-repeat border-box;
+}
+
+.center-panel-shell--floating-topbar [data-slot="inspector-container"] .session-inspector {
+	background: transparent;
+}
+
+/* The rail's line is drawn by the session column, one pixel left of the rail,
+ * so the rail's own edge pixel is empty. The resize handle's hover line (which
+ * the rail clips to its own box) steps onto that pixel, so it continues the
+ * divider instead of floating 1px off it. */
+.center-panel-shell--floating-topbar [data-slot="inspector-container"] [data-resize-line] {
+	transform: translateX(-1px);
+}
+
+/* Page roots (board, session, automations, …) fill the whole surface, band
+ * included; the panel fill comes from the surface's ::before instead. */
+.center-panel-shell--floating-topbar > .center-panel-surface > .bg-background,
+.center-panel-shell--floating-topbar > .center-panel-surface > * > .bg-background,
+.center-panel-shell--floating-topbar > .center-panel-surface > * > * > .bg-background {
+	background: transparent;
+}
+
+/* Floating session tabs use the secondary control surface when selected and
+ * an instant ghost hover fill when inactive. Tabs have no press effect. Every
+ * strip built on the tab frame (the session's, the Browser panel's pages, side
+ * chats) wears this look, the Browser's also while it is popped out. */
+:is(.center-panel-shell--floating-topbar, .browser-popout-overlay--mac-windowed) [data-terminal-tab-frame] {
+	--floating-tab-gap: var(--space-1);
+	--floating-tab-separator: color-mix(in oklch, var(--color-foreground) 16%, transparent);
+	font-size: var(--font-size-md);
+	/* A stacking context so the pill can sit behind the label. */
+	z-index: 0;
+	height: var(--size-topbar-control);
+	align-self: center;
+	margin-inline-end: calc(2 * var(--floating-tab-gap) + 1px);
+	padding-inline: 0;
+	border-right: 0;
+	border-radius: 0;
+	/* The pill below replaces the frame's own hover and selected fills. */
+	background: none;
+}
+
+/* The pill. */
+:is(.center-panel-shell--floating-topbar, .browser-popout-overlay--mac-windowed) [data-terminal-tab-frame]::before {
+	content: "";
+	position: absolute;
+	z-index: -1;
+	inset: 0;
+	border: 1px solid transparent;
+	border-radius: var(--radius-md);
+	pointer-events: none;
+	transition: none;
+}
+
+/* The separator, centered in the trailing gap. */
+:is(.center-panel-shell--floating-topbar, .browser-popout-overlay--mac-windowed) [data-terminal-tab-frame]::after {
+	content: "";
+	position: absolute;
+	top: 50%;
+	right: calc(-1 * var(--floating-tab-gap) - 1px);
+	width: 1px;
+	height: var(--space-4);
+	translate: 0 -50%;
+	background-color: var(--floating-tab-separator);
+	pointer-events: none;
+}
+
+/* Leave both sides of the selected pill clear, including the fixed session
+ * tab before the first tab in the reorder group. */
+:is(.center-panel-shell--floating-topbar, .browser-popout-overlay--mac-windowed) [data-terminal-tab-frame][data-active]::after,
+.center-panel-shell--floating-topbar [data-terminal-tab-key]:has(+ [data-terminal-tab-key] [data-terminal-tab-frame][data-active]) [data-terminal-tab-frame]::after,
+.center-panel-shell--floating-topbar [data-terminal-tab-key]:has(+ div > [data-terminal-tab-key]:first-child [data-terminal-tab-frame][data-active]) [data-terminal-tab-frame]::after {
+	content: none;
+}
+
+/* Separators only sit between tabs: the last tab drops its separator and
+ * ends one gap before New terminal, the same space a tab leaves before a
+ * separator. It is the reorder group's last tab, or the session tab when that
+ * group is empty; its frame sits inside the tab's context-menu trigger. */
+.center-panel-shell--floating-topbar :is([data-tab-scroll-region] > div > div:last-child > [data-terminal-tab-key]:last-child, [data-tab-scroll-region] > div > [data-terminal-tab-key]:has(+ div:empty:last-child)) [data-terminal-tab-frame] {
+	margin-inline-end: var(--floating-tab-gap);
+}
+
+.center-panel-shell--floating-topbar :is([data-tab-scroll-region] > div > div:last-child > [data-terminal-tab-key]:last-child, [data-tab-scroll-region] > div > [data-terminal-tab-key]:has(+ div:empty:last-child)) [data-terminal-tab-frame]::after {
+	content: none;
+}
+
+/* With nothing after the strip (orchestrators have no New terminal), the last
+ * tab ends at its pill. */
+.center-panel-shell--floating-topbar [data-testid="session-terminal-region"]:not(:has(> [data-testid="session-tab-strip-action"])) :is([data-tab-scroll-region] > div > div:last-child > [data-terminal-tab-key]:last-child, [data-tab-scroll-region] > div > [data-terminal-tab-key]:has(+ div:empty:last-child)) [data-terminal-tab-frame] {
+	margin-inline-end: 0;
+}
+
+:is(.center-panel-shell--floating-topbar, .browser-popout-overlay--mac-windowed) [data-terminal-tab-frame]:hover::before,
+:is(.center-panel-shell--floating-topbar, .browser-popout-overlay--mac-windowed) [data-terminal-tab-frame]:has(:focus-visible)::before {
+	inset: 0;
+	background-color: var(--color-interactive-hover);
+}
+
+.session-inspector__tab-button[aria-selected="true"],
+:is(.center-panel-shell--floating-topbar, .browser-popout-overlay--mac-windowed) [data-terminal-tab-frame][data-active] {
+	color: var(--secondary-foreground);
+}
+
+@supports (color: contrast-color(red)) {
+	.session-inspector__tab-button[aria-selected="true"],
+	:is(.center-panel-shell--floating-topbar, .browser-popout-overlay--mac-windowed) [data-terminal-tab-frame][data-active] {
+		color: contrast-color(color-mix(in srgb-linear, var(--secondary) 49.796664%, black));
+	}
+}
+
+.session-inspector__tab-button[aria-selected="true"],
+:is(.center-panel-shell--floating-topbar, .browser-popout-overlay--mac-windowed) [data-terminal-tab-frame][data-active]::before {
+	inset: 0;
+	border-color: color-mix(in oklab, var(--secondary), #000 5%);
+	background-color: var(--secondary);
+	box-shadow: var(--shadow-control-inset);
+}
+
+.session-inspector__tab-button[aria-selected="true"]:hover,
+:is(.center-panel-shell--floating-topbar, .browser-popout-overlay--mac-windowed) [data-terminal-tab-frame][data-active]:hover::before {
+	background-color: color-mix(in oklab, var(--secondary), #000 7%);
+}
+
+/* Light: the selected tab's fill leans toward the panel's surface, keeps the
+ * control edge, and does not darken on hover. */
+html[data-theme="light"] :is(.center-panel-shell--floating-topbar, .browser-popout-overlay--mac-windowed) [data-terminal-tab-frame][data-active]::before {
+	background-color: color-mix(in oklab, var(--color-bg-primary), var(--secondary));
+}
+
+:is(.center-panel-shell--floating-topbar, .browser-popout-overlay--mac-windowed) [data-terminal-tab-frame]:has(> button:focus-visible)::before {
+	outline: 2px solid var(--ring);
+	outline-offset: 2px;
+}
+
+/* Muted gray icons wash out on the light chrome; bar icons use the full
+ * foreground there. Disabled controls keep their own reduced opacity. */
+html[data-theme="light"] .center-panel-shell--floating-topbar .session-inspector__tab-button:not([aria-selected="true"]),
+html[data-theme="light"] .center-panel-shell--floating-topbar .workspace-topbar-actions .group\/button:not(.button-raised):not(:disabled),
+html[data-theme="light"] .browser-popout-overlay--mac-windowed .workspace-topbar-actions .group\/button:not(.button-raised):not(:disabled) {
+	color: var(--color-foreground);
+}
+
+:is(.center-panel-shell--floating-topbar, .browser-popout-overlay--mac-windowed) [data-testid="active-terminal-tab-indicator"] {
+	display: none;
+}
+
+/* A strip other than the session's (the Browser panel's pages, side chats)
+ * lists its tabs flat: each child of [data-tab-strip] holds one frame. The
+ * same divider rules as the session strip's above: none beside the selected
+ * pill, none after the last tab, which ends one gap before New tab. */
+:is(.center-panel-shell--floating-topbar, .browser-popout-overlay--mac-windowed) [data-tab-strip] > :has(+ * [data-terminal-tab-frame][data-active]) [data-terminal-tab-frame]::after,
+:is(.center-panel-shell--floating-topbar, .browser-popout-overlay--mac-windowed) [data-tab-strip] > :last-child [data-terminal-tab-frame]::after {
+	content: none;
+}
+
+:is(.center-panel-shell--floating-topbar, .browser-popout-overlay--mac-windowed) [data-tab-strip] > :last-child [data-terminal-tab-frame] {
+	margin-inline-end: var(--floating-tab-gap);
+}
+
+:is(.center-panel-shell--floating-topbar, .browser-popout-overlay--mac-windowed) [data-tab-strip-action] {
+	padding-inline-start: 0;
+}
+
+/* Draggable tab wrappers are opaque so a dragged tab hides the tabs it
+ * crosses; on the floating bar that fill is the chrome, and only while dragging. */
+.center-panel-shell--floating-topbar [data-terminal-tab-key] {
+	background: transparent;
+}
+
+.center-panel-shell--floating-topbar [data-terminal-tab-key][data-dragging] {
+	background: var(--color-bg-sidebar);
+}
+
+/* The bars themselves carry no fill or divider: the frame's top edge is the
+ * divider. No border width either, or it would take the band's last row and
+ * pull every control 0.5px above the bar's center. */
+.center-panel-shell--floating-topbar .center-panel-titlebar,
+.center-panel-shell--floating-topbar .session-topbar-surface,
+.center-panel-shell--floating-topbar .session-inspector__topbar {
+	border-bottom-width: 0;
+	background: transparent;
 }
 
 /* Session topbar now lives inside .center-panel-surface. When it's rendered
@@ -559,21 +937,53 @@
 	border-radius: 0;
 }
 
-/* A persistent edge fade signals that the tab strip can scroll horizontally. */
-.session-tab-scroll-fade {
-	pointer-events: none;
-	position: absolute;
-	inset-block: 0;
-	right: 0;
-	z-index: 2;
-	width: var(--space-8);
-	background: linear-gradient(90deg, transparent 0%, var(--color-bg-primary) 82%);
+/* The new chat page has no tabs yet, so its bar stays bare: just the bell. */
+.center-panel-surface .new-chat-topbar .session-topbar-surface {
+	border-bottom: none;
 }
 
-.session-tab-scroll-fade--left {
-	left: 0;
-	right: auto;
-	background: linear-gradient(270deg, transparent 0%, var(--color-bg-primary) 82%);
+/* A page with no top bar on macOS: the panel claims the band above it. The
+ * new chat page's placeholder bar goes, and its empty composer needs no
+ * offset to look centered in the window. */
+.center-panel-shell--bare {
+	--size-inspector-tabs: 0px;
+	--spacing-inspector-tabs: 0px;
+}
+
+.center-panel-shell--bare .new-chat-topbar {
+	display: none;
+}
+
+/* Its drag region went with it, so the page's invisible drag strip takes over. */
+.bare-topbar-drag-strip {
+	display: none;
+}
+
+.center-panel-shell--bare .bare-topbar-drag-strip {
+	display: block;
+}
+
+/* Arriving from a floating page the surface is square; the corners snap to
+ * the frame instead of morphing while its edge is visible. */
+.center-panel-shell--bare > .center-panel-surface {
+	transition: border-color 280ms cubic-bezier(0.25, 0.46, 0.45, 0.94);
+}
+
+/* The tab bar's header is 1px taller than the band; unfilled, it leaves the
+ * panel's top row to the panel. */
+.center-panel-shell--floating-topbar .workspace-topbar-container > header,
+.center-panel-shell--floating-topbar .workspace-topbar-container > [data-session-topbar-scope] > header {
+	background: transparent;
+}
+
+/* The floating bar has no divider: the panel's own edge separates it. */
+.center-panel-shell--floating-topbar .center-panel-surface .session-topbar-surface {
+	border-bottom-width: 0;
+}
+
+/* Vertical section caps resolve against the actual sidebar space between chrome. */
+.sidebar-sections-container {
+	container-type: size;
 }
 
 /* Session actions are portaled into the center pane. Make their responsive
@@ -586,15 +996,20 @@
 /* When the sidebar is off-canvas, clear only the fixed navigation cluster.
  * Native macOS fullscreen removes the traffic lights, so the cluster moves to
  * the compact panel inset instead of retaining the windowed 79px reserve. */
-.session-topbar-titlebar-clearance-mac {
-	padding-left: var(--size-titlebar-content-offset);
+.app-shell-root {
+	--ao-titlebar-content-left: var(--size-titlebar-content-offset-mac-panel);
 }
-
-/* Browser pressure keeps a 48px navigation rail in layout. Native macOS
- * traffic lights extend to the 72px titlebar boundary, so reserve only the
- * missing slice instead of applying the full off-canvas navigation clearance. */
-.session-topbar-terminal-region {
-	transition: padding-left 280ms cubic-bezier(0.25, 0.46, 0.45, 0.94);
+.native-fullscreen {
+	--ao-titlebar-content-left: calc(var(--space-2) + var(--size-titlebar-cluster-width) + var(--size-titlebar-content-gap));
+}
+.session-topbar-titlebar-clearance-mac {
+	/* Follow the actual sidebar animation, never snap to the collapsed inset.
+	 * The width floor also keeps controls clear at small renderer zoom factors. */
+	padding-left: max(
+		0px,
+		calc(var(--ao-titlebar-content-left) - var(--ao-sidebar-layout-width, 0px)),
+		calc(var(--ao-titlebar-content-left) * var(--ao-sidebar-collapse-progress, 0))
+	);
 }
 
 /* Preserve the established tab chrome while preventing flex pressure from
@@ -615,22 +1030,6 @@
 	min-width: var(--size-shell-tab-connected);
 }
 
-.session-topbar-traffic-light-clearance-mac {
-	padding-left: calc(var(--size-titlebar-cluster-left) - var(--size-sidebar-icon));
-}
-
-@media (prefers-reduced-motion: reduce) {
-	.session-topbar-terminal-region {
-		transition-duration: 0ms;
-	}
-}
-
-.native-fullscreen .session-topbar-titlebar-clearance-mac {
-	padding-left: calc(
-		var(--space-2) + var(--size-titlebar-cluster-width) + var(--size-titlebar-content-gap)
-	);
-}
-
 .session-topbar-titlebar-clearance-linux {
 	/* Subtract the framed-panel inset: unlike macOS, Linux keeps
 	 * --size-center-panel-inline-inset when the sidebar is off-canvas. */
@@ -649,12 +1048,23 @@
 }
 
 .center-panel-titlebar {
-	padding-left: 1.125rem; /* matches former px-4.5 */
+	padding-left: var(--space-4_5);
 }
 
 .center-panel-shell--mac .center-panel-titlebar {
 	height: var(--size-toolbar);
 	min-height: var(--size-toolbar);
+}
+
+/* Four columns in a wide center pane, then three, two, or one as it narrows. */
+.standalone-archive-grid {
+	display: grid;
+	align-content: start;
+	gap: var(--space-2);
+	grid-template-columns: repeat(
+		auto-fill,
+		minmax(max(12.5rem, calc((100% - 3 * var(--space-2)) / 4)), 1fr)
+	);
 }
 
 /* Sidebar chrome clearance: size tokens only — set by data-topbar-offset on the
@@ -682,7 +1092,7 @@
  * Pad the title past that cluster so it sits next to the buttons. Fullscreen
  * drops the traffic-light reserve so title sits next to the left-edge buttons. */
 .center-panel-shell--titlebar-clearance .center-panel-titlebar {
-	padding-left: calc(var(--size-titlebar-content-offset) - var(--size-center-panel-inset-mac));
+	padding-left: var(--size-titlebar-content-offset-mac-panel);
 }
 
 /* Linux: same cluster clearance without the traffic-light reserve. Keep the
@@ -698,20 +1108,12 @@
 	);
 }
 
-/* Windows / Linux: a ShellTopbar already supplies the top chrome, so the
- * framed panel needs no additional top inset. Windows uses its custom
- * frameless titlebar; Linux uses the standard ShellTopbar. The right/bottom
- * insets and the shared --radius-center-panel rounding are kept so the panel
- * matches the macOS framed look. */
+/* Platform chrome may change the inset size, but never breaks the equal
+ * block spacing contract. */
 .platform-windows {
 	--size-center-panel-inset: 8px;
 	--size-center-panel-inline-inset: 8px;
 	--size-center-panel-bottom-inset: 8px;
-}
-
-.platform-windows .center-panel-shell,
-.platform-linux .center-panel-shell {
-	padding-top: 0;
 }
 
 @utility settings-row-bar {
@@ -727,10 +1129,24 @@
 	padding-block: var(--size-settings-row-padding);
 }
 
-/* Helper copy belongs to the preceding settings row, not a separate divided row. */
-[data-section="updates"] .nightly-warning {
-	border-top: 0 !important;
-	border-block-start: 0 !important;
+/* Horizontal inset of settings row text inside a card. Page titles, section
+ * headings and helper text outside the card use it too so every text edge on
+ * a settings page lines up. */
+:root {
+	--settings-row-inset: var(--space-4);
+}
+
+/* One card per settings section: no outline, the raised card surface one
+ * step off the page groups it. Hairline dividers separate the items. */
+.settings-grouped-rows {
+	overflow: hidden;
+	border-radius: var(--radius-md);
+	background-color: var(--color-bg-secondary);
+	padding-block: var(--space-1);
+}
+
+.settings-grouped-rows > * + * {
+	border-top: 1px solid var(--color-border);
 }
 
 /* Tailwind preflight clears button backgrounds; keep settings rows filled. */
@@ -738,38 +1154,35 @@ button.settings-row-bar {
 	background-color: var(--color-bg-settings-row);
 }
 
-/* Grouped rows size around the shared action control, keeping its top/bottom
- * inset equal to the row's right and left inset. */
+/* Grouped rows fit their content (10px vertical padding), the control
+ * vertically centered. */
 .settings-grouped-rows .settings-row-bar {
 	height: auto;
-	min-height: calc(var(--size-settings-action-height) + (var(--space-2) * 2));
-	padding-block: var(--space-2);
-	padding-inline: var(--space-3);
+	min-height: 0;
+	padding-block: var(--space-2_5);
+	padding-inline: var(--settings-row-inset);
 	border-radius: 0;
 }
 
-/* The dialog body owns the page inset. Rows must not add a second left/right
- * gutter or their labels drift from the dialog title and section headings. */
-.settings-dialog-body .settings-row-bar {
-	padding-inline: 0;
-}
-
-/* The update summary is a content row, not a compact control row. */
-.settings-grouped-rows .update-status-row {
-	padding-block: var(--space-4);
+/* Non-row content in a settings card (forms, release notes, terminals, QR,
+ * charts): a direct card child inset to the rows' text edge. Block by default;
+ * add flex/gap utilities for its own layout. */
+@utility settings-content-row {
+	padding-inline: var(--settings-row-inset);
+	padding-block: var(--space-3);
 }
 
 @utility settings-menu-item {
 	display: flex;
 	align-items: center;
 	gap: calc(var(--spacing) * 2);
-	border-radius: var(--radius-settings-row);
+	/* Same row as the action menus (menu-styles.ts): one menu rhythm app-wide. */
+	border-radius: var(--radius-md);
 	border: 1px solid transparent;
-	padding-inline: var(--space-3);
-	padding-block: var(--space-2_5);
-	font-size: var(--font-size-md);
-	line-height: var(--line-height-row);
-	color: var(--color-text-settings-row);
+	padding-inline: var(--space-2);
+	padding-block: var(--space-1_5);
+	font-size: var(--font-size-base);
+	color: var(--muted-foreground);
 }
 
 @utility settings-option-trigger {
@@ -780,11 +1193,8 @@ button.settings-row-bar {
 	padding-inline: var(--space-2);
 	padding-block: var(--space-1);
 	font-size: var(--font-size-base);
-	color: var(--color-text-settings-muted);
-	outline: none;
-	box-shadow: none;
-	transition-property: color, background-color;
-	transition-duration: var(--duration-fast);
+	transition-property: background-color, border-color, box-shadow;
+	transition-duration: 200ms;
 }
 
 .review-run-controls-container {
@@ -816,21 +1226,21 @@ button.settings-row-bar {
 	border-radius: var(--radius-settings-panel);
 	border: 1px solid var(--color-border-settings-menu);
 	background-color: var(--color-bg-settings-menu);
-	padding: var(--space-2);
-	gap: var(--space-1_5);
-	box-shadow: none;
+	padding: var(--space-1);
+	gap: 1px;
+	box-shadow: var(--shadow-popover);
 }
 
 @utility settings-agent-menu-surface {
 	width: var(--size-settings-agent-menu-min-width);
 	min-width: var(--size-settings-agent-menu-min-width);
-	padding: var(--space-3);
-	gap: var(--space-2);
+	padding: var(--space-1);
+	gap: 1px;
 }
 
 @utility settings-agent-menu-item {
-	padding-inline: var(--space-4);
-	padding-block: var(--space-3);
+	padding-inline: var(--space-2);
+	padding-block: var(--space-1_5);
 }
 
 @utility settings-field-label {
@@ -1000,9 +1410,8 @@ button.settings-row-bar {
 	opacity: 0.75;
 }
 
-/* The composer is one continuous surface. Agent and model sit as separate
-   equal-width dropdowns in a horizontal row so changing provider names never
-   moves the model or the primary action. */
+/* The composer keeps provider controls in stable tracks so changing labels
+   never moves the model or primary action. */
 .composer-toolbar {
 	display: grid;
 	grid-template-columns: minmax(0, 1fr) auto auto;
@@ -1021,10 +1430,10 @@ button.settings-row-bar {
 }
 
 .composer-run-controls {
-	display: grid;
+	display: flex;
 	min-width: 0;
-	grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
 	align-items: center;
+	justify-content: flex-start;
 	column-gap: var(--space-2);
 }
 
@@ -1033,24 +1442,10 @@ button.settings-row-bar {
 }
 
 .composer-toolbar .composer-toolbar-option {
-	height: var(--size-settings-action-height);
-	/* Same mix formula as the settings-modal dropdown trigger, but anchored to
-	   --card (an opaque color) instead of --color-bg-settings-row. */
-	border-radius: var(--radius-md) !important;
-	background-color: color-mix(in oklch, var(--card) 97%, var(--foreground)) !important;
+	height: var(--size-composer-toolbar-height);
 }
 
-.composer-toolbar .composer-toolbar-option:hover:not(:disabled),
-.composer-toolbar .composer-toolbar-option[data-state="open"] {
-	background-color: color-mix(in oklch, var(--card) 88%, var(--foreground)) !important;
-}
-
-.composer-toolbar .composer-toolbar-option:focus-visible {
-	box-shadow: none;
-}
-
-/* Inline value control inside the task composer's bottom toolbar. Each chip is
-   its own dropdown trigger with the quiet filled chrome settings uses. */
+/* Task selector sizing; shared menu triggers own their colors and states. */
 @utility composer-chip {
 	display: inline-flex;
 	width: auto;
@@ -1059,39 +1454,8 @@ button.settings-row-bar {
 	height: var(--size-settings-action-height);
 	align-items: center;
 	gap: calc(var(--spacing) * 2);
-	border: 1px solid transparent;
-	border-radius: var(--radius-md);
-	background-color: color-mix(in oklch, var(--card) 97%, var(--foreground));
 	padding-inline: var(--space-2);
 	font-size: var(--font-size-base);
-	color: var(--color-foreground);
-	transition-property: background-color, border-color, box-shadow, color;
-	transition-duration: var(--duration-fast);
-
-	&:hover:not(:disabled) {
-		background-color: color-mix(in oklch, var(--card) 88%, var(--foreground));
-	}
-
-	&:focus-visible {
-		border-color: transparent;
-		box-shadow: none;
-		outline: none;
-	}
-
-	&[data-state="open"] {
-		background-color: color-mix(in oklch, var(--card) 88%, var(--foreground));
-		border-color: transparent;
-	}
-
-	/* The agent chip's SelectTrigger chevron has no rotation of its own — give
-	   it the same open-state flip as the settings dropdowns. */
-	& svg {
-		transition: transform var(--duration-normal) ease-out;
-	}
-
-	&[data-state="open"] svg {
-		transform: rotate(180deg);
-	}
 }
 
 /* Model menus can contain hundreds of entries. Keep scrolling available without
@@ -1104,23 +1468,13 @@ button.settings-row-bar {
 	}
 }
 
-.model-menu-overflow-cue {
-	position: absolute;
-	right: 0;
-	bottom: 0;
-	left: 0;
-	height: var(--space-8);
-	pointer-events: none;
-	background: linear-gradient(to bottom, transparent, var(--color-bg-settings-menu));
-	transition: opacity var(--duration-fast) ease-out;
-}
-
 /* Search field inside a dropdown menu. settings-inline-input cannot be reused
    here: it is a settings-ROW control, so it caps at 42% width and right-aligns
    its text, which reads as a stray half-width box once it sits in a menu. */
 @utility menu-search-input {
 	width: 100%;
-	height: var(--size-settings-action-height);
+	/* Match DropdownMenuItem's text-control line height, py-1.5, and border. */
+	height: calc(var(--line-height-row) + (var(--space-1_5) * 2) + 2px);
 	border: 1px solid var(--color-border-settings-input);
 	border-radius: var(--radius-md);
 	background-color: var(--color-bg-settings-input);
@@ -1172,51 +1526,6 @@ button.settings-row-bar {
 	color: var(--color-text-settings-muted);
 }
 
-@utility settings-footer-button {
-	display: inline-flex;
-	height: var(--size-settings-action-height);
-	flex-shrink: 0;
-	align-items: center;
-	justify-content: center;
-	gap: calc(var(--spacing) * 2);
-	white-space: nowrap;
-	border-radius: var(--radius-settings-action);
-	border: 1px solid var(--color-border-settings-input);
-	background-color: var(--color-bg-settings-input);
-	padding-inline: var(--space-3);
-	font-size: var(--font-size-md);
-	line-height: 1.25rem;
-	color: var(--color-text-settings-row);
-	outline: none;
-	transition-property: color, background-color, border-color, opacity, box-shadow;
-	transition-duration: var(--duration-normal);
-
-	&:hover {
-		opacity: 0.9;
-	}
-
-	&:focus-visible {
-		box-shadow: none;
-	}
-}
-
-@utility settings-footer-button-primary {
-	border-color: transparent;
-	background-color: var(--color-settings-accent);
-	padding-inline: var(--size-settings-footer-button-padding-x);
-	color: var(--color-settings-footer-button-primary-fg);
-	transition-property: opacity;
-	transition-duration: var(--duration-normal);
-
-	&:hover:not(:disabled) {
-		opacity: 0.9;
-	}
-
-	&:disabled {
-		cursor: not-allowed;
-	}
-}
-
 /* Segmented control — ReportProblem destination picker, ConnectMobile LAN/Tailscale. */
 @utility settings-segment {
 	display: inline-flex;
@@ -1247,8 +1556,10 @@ button.settings-row-bar {
 		color: var(--color-text-settings-title);
 	}
 
+	/* Radix radio items take focus with the arrow keys; the checked fill alone
+	   does not show where focus is, so keyboard focus gets the shared ring. */
 	&:focus-visible {
-		box-shadow: none;
+		box-shadow: 0 0 0 2px color-mix(in oklab, var(--color-ring) 55%, transparent);
 	}
 
 	&[data-state="checked"] {
@@ -1274,35 +1585,6 @@ button.settings-row-bar {
 	font-weight: var(--font-weight-semibold);
 	line-height: 1.5rem;
 	color: var(--color-text-settings-title);
-}
-
-@utility settings-close-button {
-	display: grid;
-	width: calc(var(--spacing) * 8);
-	height: calc(var(--spacing) * 8);
-	place-items: center;
-	border-radius: var(--radius-md);
-	color: var(--color-text-settings-muted);
-	transition-property: color, background-color;
-	transition-duration: var(--duration-normal);
-
-	&:hover {
-		background-color: var(--color-bg-settings-row-hover);
-		color: var(--color-text-settings-title);
-	}
-
-	&:focus-visible {
-		outline: none;
-		box-shadow: none;
-	}
-}
-
-/* Positioning only — compose with `settings-close-button` at the call site. */
-@utility settings-dialog-close-button {
-	position: absolute;
-	top: var(--space-3);
-	right: var(--space-3);
-	z-index: var(--z-chrome);
 }
 
 @utility import-title {
@@ -1386,16 +1668,16 @@ body {
 	user-select: none;
 }
 
-button,
-input,
-textarea,
-select {
-	font: inherit;
-}
+/* Form controls inherit their font from Tailwind's preflight, inside
+ * `@layer base`. Do not repeat that rule here: unlayered CSS beats every
+ * layered utility, so `text-*` and `font-*` on buttons and inputs would be
+ * ignored. */
 
+/* Error copy stays copyable under the app-wide `user-select: none` (#4268). */
 input,
 textarea,
-[contenteditable="true"] {
+[contenteditable="true"],
+[role="alert"] {
 	-webkit-user-select: text;
 	user-select: text;
 }
@@ -1543,6 +1825,47 @@ textarea,
 	background: transparent;
 }
 
+/* The harness list and the open harness own their scroll areas, so the page
+   itself does not scroll; the name and tabs stay in view. Other settings
+   pages, and a narrow harness list on its own, keep the normal page scroll. */
+.settings-thin-scrollbar:has([data-harness-detail]) {
+	display: flex;
+	flex-direction: column;
+	overflow: hidden;
+}
+
+/* Every wrapper between the section and the layout (the toolbar wrapper, then
+   the section body) is held to the page height, however deep it nests. */
+.settings-dialog-body:has([data-harness-detail]),
+.settings-dialog-body > div:has([data-harness-detail]),
+[data-section="harness"]:has([data-harness-detail]),
+[data-section="harness"] div:has([data-harness-detail]) {
+	min-width: 0;
+	min-height: 0;
+	flex: 1;
+}
+
+/* The page body keeps its column cap (max-w on .settings-dialog-body); only
+   the inner wrappers are held to their parent. */
+.settings-dialog-body > div:has([data-harness-detail]),
+[data-section="harness"]:has([data-harness-detail]),
+[data-section="harness"] div:has([data-harness-detail]) {
+	max-width: 100%;
+}
+
+.settings-dialog-body:has([data-harness-detail]) {
+	padding-bottom: 18px;
+}
+
+/* The layout's siblings (errors, host menu, remote note) keep their height.
+   Matched as siblings rather than div:has(> [data-harness-detail]) > *: that
+   form made Chromium restyle the whole document on every DOM change anywhere
+   in the app (each terminal frame paid a full style recalc). */
+[data-section="harness"] :not([data-harness-detail]):has(~ [data-harness-detail]),
+[data-section="harness"] [data-harness-detail] ~ * {
+	flex-shrink: 0;
+}
+
 .settings-thin-scrollbar {
 	scrollbar-width: thin;
 	scrollbar-color: color-mix(in srgb, var(--color-scrollbar) 16%, transparent) transparent;
@@ -1563,6 +1886,63 @@ textarea,
 
 .settings-thin-scrollbar:hover::-webkit-scrollbar-thumb {
 	background-color: color-mix(in srgb, var(--color-scrollbar) 28%, transparent);
+}
+
+/* The harness list scrolls on its own edge: no track, just a thin thumb
+   over the rows. scrollbar-width must stay auto, or the webkit rules below
+   are ignored and the native bar reserves a gutter. */
+.harness-list-scrollbar {
+	scrollbar-width: auto;
+	scrollbar-color: auto;
+}
+
+.harness-list-scrollbar::-webkit-scrollbar {
+	width: 6px;
+}
+
+.harness-list-scrollbar::-webkit-scrollbar-track {
+	background: transparent;
+}
+
+.harness-list-scrollbar::-webkit-scrollbar-thumb {
+	border-radius: 999px;
+	background-color: color-mix(in srgb, var(--color-scrollbar) 24%, transparent);
+}
+
+.harness-list-scrollbar:hover::-webkit-scrollbar-thumb {
+	background-color: color-mix(in srgb, var(--color-scrollbar) 40%, transparent);
+}
+
+/* Repository pickers keep a visible scroll track so a long grant list is
+   discoverable even before the user starts scrolling. */
+.repository-picker-scrollbar {
+	scrollbar-width: auto;
+	scrollbar-color: var(--color-scrollbar) color-mix(in srgb, var(--color-scrollbar) 16%, transparent);
+	scrollbar-gutter: stable;
+}
+
+.repository-picker-scrollbar::-webkit-scrollbar {
+	width: 10px;
+}
+
+.repository-picker-scrollbar::-webkit-scrollbar-track {
+	background: color-mix(in srgb, var(--color-scrollbar) 16%, transparent);
+	border-radius: 999px;
+}
+
+.repository-picker-scrollbar::-webkit-scrollbar-thumb {
+	border-radius: 999px;
+	background: var(--color-scrollbar);
+	/* Keep the thumb grabbable and clearly visible even for a long list, so it
+	   is obvious there are more rows below the fold. */
+	min-height: 28px;
+	border: 2px solid transparent;
+	background-clip: padding-box;
+}
+
+.repository-picker-scrollbar::-webkit-scrollbar-thumb:hover {
+	background: color-mix(in srgb, var(--color-scrollbar) 80%, var(--color-foreground));
+	background-clip: padding-box;
 }
 
 /* Chromium uses the desktop theme's chunky native horizontal scrollbar on
@@ -1704,6 +2084,296 @@ textarea,
 	background-color: var(--color-bg-terminal-opaque) !important;
 }
 
+.multi-step-loader__step {
+	animation: multi-step-loader-step var(--multi-step-loader-duration, 380ms) ease-out both;
+}
+
+.multi-step-loader__dot {
+	animation: status-pulse 1.8s ease-in-out infinite;
+}
+
+.cloud-session-loader--complete {
+	animation: cloud-session-loader-complete 360ms ease-out both;
+}
+
+@keyframes cloud-session-loader-complete {
+	to { opacity: 0; }
+}
+
+.multi-step-loader__shimmer {
+	background-image: linear-gradient(90deg, var(--color-text-muted) 0%, var(--color-text-muted) 34%, #93c5fd 50%, var(--color-text-muted) 66%, var(--color-text-muted) 100%);
+	background-size: 400px 100%;
+	background-repeat: repeat-x;
+	background-clip: text;
+	color: transparent;
+	animation: multi-step-loader-step var(--multi-step-loader-duration, 380ms) ease-out both,
+		multi-step-loader-shimmer 3.2s linear infinite;
+}
+
+@keyframes multi-step-loader-shimmer {
+	to { background-position: -400px center; }
+}
+
+/* Live status label (the chat's current step, a board card's working state): solid
+   muted text with a soft brighter band sweeping across it. The muted layer keeps every
+   glyph painted; the band fades in and out so it has no hard edge. */
+@property --working-shimmer {
+	syntax: "<number>";
+	inherits: false;
+	initial-value: 1;
+}
+
+.chat-working-shimmer {
+	background-image:
+		linear-gradient(100deg, transparent 35%, color-mix(in srgb, var(--color-foreground) calc(var(--working-shimmer) * 100%), transparent) 50%, transparent 65%),
+		linear-gradient(var(--color-muted-foreground), var(--color-muted-foreground));
+	background-size: 250% 100%, 100% 100%;
+	background-repeat: no-repeat, no-repeat;
+	background-position: -10% center, 0 0;
+	background-clip: text;
+	-webkit-background-clip: text;
+	color: transparent;
+	animation: chat-working-shimmer 2.4s ease-in-out infinite;
+	will-change: transform;
+}
+
+/* The same sweep for sidebar rows, where several run at once while a chat is typed in.
+   A masked copy of the title moves with transforms (the inner span cancels the move), so
+   the sweep runs on the compositor instead of repainting each title every frame. The band
+   is 0.75 title widths and its center travels from 1.4 to -0.4 widths, like the gradient. */
+.sidebar-working-shimmer {
+	position: absolute;
+	inset-block: 0;
+	left: -77.5%;
+	width: 180%;
+	pointer-events: none;
+	user-select: none;
+	mask-image: linear-gradient(100deg, transparent 0, black 20.8%, transparent 41.7%);
+	mask-repeat: no-repeat;
+	animation: sidebar-working-shimmer 2.4s ease-in-out infinite;
+}
+
+.sidebar-working-shimmer > span {
+	display: block;
+	animation: sidebar-working-shimmer-counter 2.4s ease-in-out infinite;
+}
+
+.sidebar-working-shimmer > span > span {
+	display: block;
+	width: calc(100% / 1.8);
+	margin-left: calc(100% * 0.775 / 1.8);
+	overflow: hidden;
+	text-overflow: ellipsis;
+	white-space: nowrap;
+	/* Tinted toward the working blue at low strength, like the row's spinner, so a
+	   working title reads apart from an idle one without a row fill. */
+	color: color-mix(in oklab, var(--color-status-working) 40%, var(--color-foreground));
+}
+
+@keyframes sidebar-working-shimmer {
+	from { transform: translateX(100%); }
+	to { transform: translateX(0); }
+}
+
+@keyframes sidebar-working-shimmer-counter {
+	from { transform: translateX(-100%); }
+	to { transform: translateX(0); }
+}
+
+@media (prefers-reduced-motion: reduce) {
+	.sidebar-working-shimmer {
+		display: none;
+	}
+}
+
+/* The live row's label (current step, retry chip, setup label) fades in once when the
+   row changes what it is showing; the text inside then updates in place. */
+.chat-live-label {
+	animation: chat-live-label-in 180ms cubic-bezier(0.22, 1, 0.36, 1) both;
+}
+
+@keyframes chat-live-label-in {
+	from { opacity: 0; transform: translateY(2px); }
+}
+
+@media (prefers-reduced-motion: reduce) {
+	.chat-live-label {
+		animation: none;
+	}
+}
+
+/* The live row's working mark (components/chat/LatticeLoader.tsx): sixteen 2.5px
+   dots on a 3.5px pitch, 13px across. It starts at the left edge of the step
+   icons' 12px slot (STEP_MARK_SLOT_CLASS in ChatTimelineItems.tsx), so every dot
+   lands on whole device pixels on a 2x display. The outer twelve share one beat,
+   staggered inline. */
+.chat-lattice {
+	display: grid;
+	grid-template-columns: repeat(4, 2.5px);
+	grid-auto-rows: 2.5px;
+	gap: 1px;
+}
+
+.chat-lattice-dot {
+	border-radius: 9999px;
+	background: currentColor;
+	opacity: 0.1;
+}
+
+.chat-lattice-dot[data-trail-step] {
+	opacity: 0.2;
+	animation: chat-lattice-trail 1200ms cubic-bezier(0.65, 0, 0.35, 1) infinite;
+}
+
+@keyframes chat-lattice-trail {
+	0%, 100% { opacity: 0.2; }
+	12%, 22% { opacity: 1; }
+	40% { opacity: 0.2; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+	.chat-lattice-dot[data-trail-step] {
+		animation: none;
+		opacity: 0.45;
+	}
+}
+
+/* Streamed prose: each newly revealed character fades in once, on mount (see
+   lib/rehype-stream-fade.ts). No fill mode: with no delay it looks the same,
+   and a filling animation never ends, so a long reply kept a thousand finished
+   animations alive and re-layerized them on every frame. */
+.stream-char {
+	animation: stream-char-in 300ms ease;
+}
+
+@keyframes stream-char-in {
+	from { opacity: 0; }
+}
+
+@keyframes chat-working-shimmer {
+	from { background-position: -10% center, 0 0; }
+	to { background-position: 110% center, 0 0; }
+}
+
+/* A link's globe while its site icon loads: a brighter band sweeps across the
+   dimmed glyph, as the working shimmer does across text. Masked, since a
+   stroked SVG has no text to clip a gradient to. */
+.link-favicon-shimmer {
+	mask-image: linear-gradient(100deg, rgb(0 0 0 / 0.5) 35%, #000 50%, rgb(0 0 0 / 0.5) 65%);
+	mask-size: 250% 100%;
+	mask-repeat: no-repeat;
+	animation: link-favicon-shimmer 1.6s ease-in-out infinite;
+}
+
+@keyframes link-favicon-shimmer {
+	from { mask-position: 100% 0; }
+	to { mask-position: 0% 0; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+	.link-favicon-shimmer {
+		animation: none;
+		mask-image: none;
+	}
+}
+
+@media (prefers-reduced-motion: reduce) {
+	.chat-working-shimmer {
+		animation: none;
+		background: none;
+		color: var(--color-muted-foreground);
+	}
+}
+
+/* Scroll edge fades (hooks/useEdgeFade.ts): content fades out at whichever
+   edge still has more to scroll to, so a list reads as continuing rather than
+   cut off. The fade is a mask on the scroller itself, never a gradient painted
+   in a surface color, so it holds over the translucent window tint and in every
+   theme. The hook sets the data attributes from the scroll position; the lengths
+   are registered so a fade eases in and out instead of snapping. Masks do not
+   affect hit testing, so faded content stays clickable. */
+@property --edge-fade-start {
+	syntax: "<length>";
+	inherits: false;
+	initial-value: 0px;
+}
+
+@property --edge-fade-end {
+	syntax: "<length>";
+	inherits: false;
+	initial-value: 0px;
+}
+
+/* Sizes are read with fallbacks rather than declared here: this rule is
+   unlayered, so a declaration would beat a per-site Tailwind override
+   (`[--edge-fade-size:...]` lives in the utilities layer). */
+.edge-fade {
+	--edge-fade-direction: to bottom;
+	mask-image: linear-gradient(
+		var(--edge-fade-direction),
+		transparent,
+		#000 var(--edge-fade-start),
+		#000 calc(100% - var(--edge-fade-end)),
+		transparent
+	);
+	transition:
+		--edge-fade-start 150ms ease-out,
+		--edge-fade-end 150ms ease-out;
+}
+
+.edge-fade-x {
+	--edge-fade-direction: to right;
+}
+
+.edge-fade[data-fade-start] {
+	--edge-fade-start: var(--edge-fade-start-size, var(--edge-fade-size, 24px));
+}
+
+.edge-fade[data-fade-end] {
+	--edge-fade-end: var(--edge-fade-end-size, var(--edge-fade-size, 24px));
+}
+
+/* Where a scroller sits as it mounts is not a change: no fade-in on open. */
+.edge-fade[data-fade-instant] {
+	transition: none;
+}
+
+@media (prefers-reduced-motion: reduce) {
+	.edge-fade {
+		transition: none;
+	}
+}
+
+@keyframes multi-step-loader-step {
+	from {
+		filter: blur(2px);
+		opacity: 0;
+		transform: translateY(3px);
+	}
+	to {
+		filter: blur(0);
+		opacity: 1;
+		transform: translateY(0);
+	}
+}
+
+@media (prefers-reduced-motion: reduce) {
+	.multi-step-loader__dot {
+		animation: none;
+	}
+	.cloud-session-loader--complete {
+		animation: none;
+		opacity: 0;
+	}
+	.multi-step-loader__step {
+		animation: none;
+	}
+	.multi-step-loader__shimmer {
+		background: none;
+		color: var(--color-text-muted);
+	}
+}
+
 @keyframes status-pulse {
 	0%,
 	100% {
@@ -1711,6 +2381,29 @@ textarea,
 	}
 	50% {
 		opacity: 0.35;
+	}
+}
+
+/* A sidebar marker (needs you / ready) appearing on a row that was already on
+   screen: one short pop, then still. Transform and opacity only. */
+@keyframes session-marker-pop {
+	from {
+		opacity: 0;
+		transform: scale(0.6);
+	}
+	to {
+		opacity: 1;
+		transform: scale(1);
+	}
+}
+
+.session-marker-pop {
+	animation: session-marker-pop 200ms var(--ease-out) both;
+}
+
+@media (prefers-reduced-motion: reduce) {
+	.session-marker-pop {
+		animation: none;
 	}
 }
 
@@ -1741,88 +2434,14 @@ textarea,
 	}
 }
 
-.agent-switch-transfer-pulse {
-	animation: agent-switch-transfer 1.35s cubic-bezier(0.4, 0, 0.2, 1) infinite;
+[data-host-offline] *,
+[data-host-offline] *::before,
+[data-host-offline] *::after {
+	animation: none;
 }
 
-.agent-switch-progress-step:not(:last-child)::before {
-	position: absolute;
-	top: 0.21875rem;
-	left: calc(50% + 0.25rem);
-	width: calc(100% - 0.5rem);
-	height: 1px;
-	background: var(--color-border-strong);
-	content: "";
-	transition: background-color 320ms var(--ease-out);
-}
-
-.agent-switch-progress-dot {
-	transition:
-		border-color 280ms var(--ease-out),
-		background-color 280ms var(--ease-out),
-		box-shadow 280ms var(--ease-out);
-}
-
-.agent-switch-progress-step.is-complete::before,
-.agent-switch-progress-step.is-complete .agent-switch-progress-dot,
-.agent-switch-progress-step.is-current .agent-switch-progress-dot {
-	border-color: var(--color-accent);
-	background: var(--color-accent);
-}
-
-.agent-switch-progress-step.is-current .agent-switch-progress-dot {
-	animation: agent-switch-step-pulse 1.4s ease-in-out infinite;
-	box-shadow: 0 0 0 3px color-mix(in srgb, var(--color-accent) 20%, transparent);
-}
-
-@keyframes agent-switch-step-pulse {
-	0%,
-	100% {
-		opacity: 1;
-		transform: scale(1);
-	}
-	50% {
-		opacity: 0.55;
-		transform: scale(0.72);
-	}
-}
-
-@keyframes agent-switch-transfer {
-	0% {
-		left: -2.5rem;
-		opacity: 0;
-	}
-	18% {
-		opacity: 1;
-	}
-	82% {
-		opacity: 1;
-	}
-	100% {
-		left: 100%;
-		opacity: 0;
-	}
-}
-
-@media (prefers-reduced-motion: reduce) {
-	.agent-switch-transfer-pulse {
-		left: calc(50% - 1.25rem);
-		opacity: 0.85;
-		animation: none;
-	}
-
-	.agent-switch-progress-step.is-current .agent-switch-progress-dot {
-		animation: none;
-	}
-
-	.agent-switch-toolbar-spinner {
-		animation: none;
-	}
-
-	.agent-switch-progress-dot,
-	.agent-switch-progress-step::before {
-		transition: none;
-	}
+[data-host-offline] .animate-attention-card-pulse::before {
+	opacity: 0.5;
 }
 
 @keyframes ao-startup-logo-breathe {
@@ -1850,19 +2469,6 @@ textarea,
 	}
 }
 
-@keyframes ao-startup-dot-pulse {
-	0%,
-	70%,
-	100% {
-		opacity: 0.25;
-		transform: translateY(0);
-	}
-	35% {
-		opacity: 1;
-		transform: translateY(-3px);
-	}
-}
-
 .ao-startup-screen {
 	/* Startup precedes all app chrome, so it must not inherit the inset center
 	 * panel's asymmetric frame. Cover the renderer viewport until the board is
@@ -1877,34 +2483,42 @@ textarea,
 	filter: drop-shadow(0 7px 20px rgb(0 0 0 / 0.28));
 }
 
-.ao-startup-status {
-	display: inline-block;
-	animation: ao-startup-status-in 240ms ease-out;
-}
-
-.ao-startup-dots span {
-	width: 4px;
-	height: 4px;
-	animation: ao-startup-dot-pulse 1.4s ease-in-out infinite;
-	border-radius: var(--radius-full);
-	background: var(--color-accent);
-	opacity: 0.25;
-}
-
-.ao-startup-dots span:nth-child(2) {
-	animation-delay: 160ms;
-}
-
-.ao-startup-dots span:nth-child(3) {
-	animation-delay: 320ms;
-}
-
 /* Startup requirements checklist — each row fades/slides in on its own
- * staggered delay (set inline per-row via animation-delay), reusing the same
- * entrance timing as .ao-startup-status. `both` holds the "from" state
+ * staggered delay (set inline per-row via animation-delay). `both` holds the "from" state
  * (invisible) for the duration of that delay instead of flashing in early. */
 .ao-startup-checklist__row {
 	animation: ao-startup-status-in 220ms ease-out both;
+}
+
+/* Mobile device "Removed · Undo" row: a hairline at the row's bottom edge that
+ * drains over the undo window (duration set inline from REMOVE_UNDO_MS). */
+@keyframes mobile-device-undo-countdown {
+	from {
+		transform: scaleX(1);
+	}
+	to {
+		transform: scaleX(0);
+	}
+}
+
+.mobile-device-undo-countdown {
+	position: absolute;
+	left: 0;
+	right: 0;
+	bottom: -1px;
+	height: 2px;
+	transform-origin: left;
+	background: var(--color-accent);
+	animation-name: mobile-device-undo-countdown;
+	animation-timing-function: linear;
+	animation-fill-mode: forwards;
+}
+
+@media (prefers-reduced-motion: reduce) {
+	.mobile-device-undo-countdown {
+		animation: none;
+		opacity: 0.4;
+	}
 }
 
 @keyframes ao-install-progress-sweep {
@@ -1932,6 +2546,13 @@ textarea,
 	border-radius: var(--radius-full);
 	background: var(--color-accent);
 	animation: ao-install-progress-sweep 1.1s ease-in-out infinite;
+}
+
+/* The installer reported how far it is: fill from the left instead of sweeping. */
+.ao-install-progress__bar--determinate {
+	left: 0;
+	animation: none;
+	transition: width 300ms ease-out;
 }
 
 @keyframes overlay-in {
@@ -2013,7 +2634,7 @@ textarea,
 }
 
 /* ── Global resize state (sidebar / inspector drag) ─────────────────────── */
-/* Grip paint lives on ResizeHandle's fixed span — DO NOT restore
+/* No grip is painted on resize handles — DO NOT restore
    `body.is-resizing-x [data-slot="resize-handle"]::after` (rejected chrome). */
 body.is-resizing-x {
 	cursor: col-resize;
@@ -2027,6 +2648,36 @@ body.is-resizing-x [data-slot="inspector-container"] {
 	transition: none;
 }
 
+/* Inspector rail geometry is plain CSS so a session switch paints the
+ * destination's open state and width in its first frame. Only an open/close
+ * inside the current session (data-motion="animated") slides. */
+[data-slot="inspector-container"][data-state="collapsed"] {
+	transform: translateX(100%);
+}
+
+[data-slot="inspector-gap"][data-motion="animated"],
+[data-slot="inspector-container"][data-motion="animated"] {
+	transition:
+		width var(--session-inspector-motion-duration, 300ms)
+			var(--session-inspector-motion-easing, ease-out),
+		transform var(--session-inspector-motion-duration, 300ms)
+			var(--session-inspector-motion-easing, ease-out);
+}
+
+/* Opening a settled (display: none) rail has no before-change style. */
+@starting-style {
+	[data-slot="inspector-container"][data-motion="animated"][data-state="expanded"] {
+		transform: translateX(100%);
+	}
+}
+
+@media (prefers-reduced-motion: reduce) {
+	[data-slot="inspector-gap"][data-motion="animated"],
+	[data-slot="inspector-container"][data-motion="animated"] {
+		transition: none;
+	}
+}
+
 /* Browser is an automatic co-work canvas, while Summary/Reviews/Files retain
  * the utility rail width. Interpolate the shared gap + panel boxes together;
  * direct pointer resizing remains immediate. */
@@ -2036,6 +2687,8 @@ body.is-resizing-x [data-slot="inspector-container"] {
 		width var(--session-inspector-motion-duration, 300ms)
 			var(--session-inspector-motion-easing, ease-out),
 		max-width var(--session-inspector-motion-duration, 300ms)
+			var(--session-inspector-motion-easing, ease-out),
+		transform var(--session-inspector-motion-duration, 300ms)
 			var(--session-inspector-motion-easing, ease-out);
 }
 
@@ -2054,16 +2707,10 @@ body.is-resizing-x .session-split[data-workspace-resizing="true"] [data-slot="in
 /* Keep keyboard focus visible without adding a ring to the sidebar chrome.
    Opt out elements that own their own fill (icon actions, brand, folder toggle,
    NavRowHighlight hosts) so each new control does not need another !important. */
-.sidebar-focusless :focus-visible:not(.sidebar-icon-action):not([data-sidebar-brand]):not([data-project-folder]) {
+.sidebar-focusless :focus-visible:not(.sidebar-icon-action):not(.group\/button):not([data-sidebar-brand]):not([data-project-folder]) {
 	background-color: var(--color-interactive-hover) !important;
 	outline: none !important;
 	box-shadow: none !important;
-}
-
-/* Icon-only trailing controls (project kebab/orchestrator, session pin/kill,
-   Projects "+") tint the glyph only — never pick up the focus fill above. */
-.sidebar-focusless .sidebar-icon-action:focus-visible {
-	background-color: transparent !important;
 }
 
 /* Growing NavRowHighlight owns the fill — don't paint a second focus slab on
@@ -2088,19 +2735,23 @@ body.is-resizing-x .session-split[data-workspace-resizing="true"] [data-slot="in
 	box-shadow: none !important;
 }
 
-/* Keyboard focus for the growing pill: focus-visible only (not focus-within),
+/* Keyboard focus for the row highlight: focus-visible only (not focus-within),
    so a mouse click on Pinned / footer rows does not leave the pill stuck on.
    Project folder toggle + trailing actions live outside the nav-row host but
    inside data-project-drag-row — light that project's pill from there too. */
 .group\/nav-row:focus-visible [data-nav-row-highlight-idle],
 .group\/nav-row:has(:focus-visible) [data-nav-row-highlight-idle],
 [data-project-drag-row]:has(:focus-visible) [data-nav-row-highlight-idle] {
-	width: 100%;
-	height: 100%;
 	opacity: 1;
 }
 
-/* Fine-pointer hover only: row highlight grow, folder↔chevron swap, session
+/* Project label/icon go foreground whenever the project's pill is lit, including
+   when the pointer or keyboard focus is on a trailing action outside the nav button. */
+[data-project-drag-row]:has(:focus-visible) :is([data-project-label], [data-project-folder-visual]) {
+	color: var(--color-foreground);
+}
+
+/* Fine-pointer hover only: row highlight, folder↔chevron swap, session
    action reveal. Touch must not sticky-hover; keyboard uses focus-visible above.
    Folder/chevron/actions use `scale`/`rotate` (not `transform`) so Tailwind v4
    utilities are actually overridden on hover. */
@@ -2110,8 +2761,6 @@ body.is-resizing-x .session-split[data-workspace-resizing="true"] [data-slot="in
 	   so expanded sessions under the same menu-item are not all lit at once. */
 	.group\/nav-row:hover [data-nav-row-highlight-idle],
 	.group\/menu-item:not([data-dragging="true"]) [data-project-drag-row]:hover [data-nav-row-highlight-idle] {
-		width: 100%;
-		height: 100%;
 		opacity: 1;
 	}
 
@@ -2130,7 +2779,12 @@ body.is-resizing-x .session-split[data-workspace-resizing="true"] [data-slot="in
 		rotate: 90deg;
 	}
 
-	.group\/session-row:hover [data-session-action-buttons] {
+	.group\/menu-item:not([data-dragging="true"]) [data-project-drag-row]:hover :is([data-project-label], [data-project-folder-visual]) {
+		color: var(--color-foreground);
+	}
+
+	.group\/session-row:hover [data-session-action-buttons],
+	.group\/scratchpad:hover [data-scratchpad-archive-action] {
 		scale: 1;
 		opacity: 1;
 		pointer-events: auto;
@@ -2138,13 +2792,6 @@ body.is-resizing-x .session-split[data-workspace-resizing="true"] [data-slot="in
 
 	.group\/session-row:hover [data-session-message-age] {
 		opacity: 0;
-	}
-}
-
-@media (prefers-reduced-motion: reduce) {
-	[data-nav-row-highlight] {
-		width: 100% !important;
-		height: 100% !important;
 	}
 }
 
@@ -2183,15 +2830,17 @@ html.sidebar-reordering * {
 
 @media (prefers-reduced-motion: reduce) {
 	.ao-startup-logo,
-	.ao-startup-status,
-	.ao-startup-dots span,
 	.ao-startup-checklist__row {
 		animation: none;
 	}
 
-	.ao-install-progress__bar {
+	.ao-install-progress__bar:not(.ao-install-progress__bar--determinate) {
 		animation: none;
 		width: 60%;
+	}
+
+	.ao-install-progress__bar--determinate {
+		transition: none;
 	}
 
 	[data-slot="command-dialog-overlay"],
@@ -2224,28 +2873,7 @@ html.sidebar-reordering * {
 	border-color: var(--color-border) !important;
 }
 
-/* Keep every chat control tactile, including the small native buttons embedded
-   in message rows and activity summaries. The shared Button primitive owns its
-   own transition, but this makes the same interaction contract hold at the
-   thinner timeline boundaries too. */
-.cursor-chat-surface button:not(:disabled) {
-	transition-property: background-color, border-color, color, box-shadow, transform, opacity;
-	transition-duration: 100ms;
-	transition-timing-function: ease-out;
-}
-
-.cursor-chat-surface button:not(:disabled):active {
-	transform: scale(0.96);
-}
-
-/* Timeline summaries are disclosure controls, not raised buttons. Keeping their
-   footprint fixed prevents the label from shifting when the pointer lands. */
-.cursor-chat-surface .activity-summary-button:not(:disabled):active {
-	transform: none;
-}
-
 .activity-run-toggle {
-	border-bottom: 1px solid color-mix(in oklch, var(--color-border) 48%, transparent);
 	color: var(--color-text-muted);
 }
 
@@ -2271,13 +2899,42 @@ html.sidebar-reordering * {
 	min-width: 0;
 }
 
-@media (prefers-reduced-motion: reduce) {
-	.cursor-chat-surface button:not(:disabled) {
-		transition: none;
+/* Keep Worked disclosure motion in lockstep with tool-call accordions. Radix
+   exposes the measured content height through this variable. */
+@keyframes chat-worked-accordion-down {
+	from {
+		height: 0;
+		opacity: 0;
 	}
+	to {
+		height: var(--radix-accordion-content-height);
+		opacity: 1;
+	}
+}
 
-	.cursor-chat-surface button:not(:disabled):active {
-		transform: none;
+@keyframes chat-worked-accordion-up {
+	from {
+		height: var(--radix-accordion-content-height);
+		opacity: 1;
+	}
+	to {
+		height: 0;
+		opacity: 0;
+	}
+}
+
+.chat-worked-accordion-content[data-state="open"] {
+	animation: chat-worked-accordion-down 200ms cubic-bezier(0.22, 1, 0.36, 1);
+}
+
+.chat-worked-accordion-content[data-state="closed"] {
+	animation: chat-worked-accordion-up 200ms cubic-bezier(0.22, 1, 0.36, 1);
+}
+
+@media (prefers-reduced-motion: reduce) {
+	.chat-worked-accordion-content[data-state="open"],
+	.chat-worked-accordion-content[data-state="closed"] {
+		animation: none;
 	}
 }
 
@@ -2303,7 +2960,7 @@ html.sidebar-reordering * {
 
 .cursor-chat-timeline {
 	--chat-readable-font-size: var(--chat-font-size, var(--font-size-md));
-	--chat-readable-code-font-size: max(10px, calc(var(--chat-readable-font-size) - 1.5px));
+	--chat-readable-code-font-size: max(10px, calc(var(--chat-readable-font-size) - 2px));
 	background: transparent;
 }
 
@@ -2325,10 +2982,13 @@ html.sidebar-reordering * {
 	font-size: var(--chat-readable-font-size);
 }
 
-.cursor-chat-timeline .chat-md h5,
+.cursor-chat-timeline .chat-md h5 {
+	font-size: var(--chat-readable-font-size);
+}
+
 .cursor-chat-timeline .chat-md h6,
 .cursor-chat-timeline .chat-md table {
-	font-size: max(10px, calc(var(--chat-readable-font-size) - 0.5px));
+	font-size: max(10px, calc(var(--chat-readable-font-size) - 2px));
 }
 
 .cursor-chat-timeline .chat-md code,
@@ -2349,16 +3009,6 @@ html.sidebar-reordering * {
 	background: transparent;
 }
 
-.chat-composer-fade {
-	position: absolute;
-	right: 0;
-	bottom: 100%;
-	left: 0;
-	height: 10px;
-	background: linear-gradient(to top, var(--color-bg-primary), transparent);
-	pointer-events: none;
-}
-
 .cursor-chat-composer textarea {
 	font-size: 16px !important;
 }
@@ -2376,29 +3026,135 @@ html.sidebar-reordering * {
 	}
 }
 
-/* Every state is a custom property read by the rules below, so a theme only
-   restates the four colors instead of repeating the state selectors — and the
-   drag highlight cannot be outranked by a theme's plain border-color. */
+/* The composer has no border; it is told apart from the canvas by its fill alone.
+   Focus remains visible on the keyboard-focusable controls inside it. */
 .cursor-chat-composer {
 	/* Same fill as a kanban session card (`bg-surface` → `--color-bg-secondary`). */
 	--composer-bg: var(--color-bg-secondary);
-	--composer-bg-active: var(--color-bg-secondary);
-	--composer-border: color-mix(in oklch, var(--color-border-strong) 36%, transparent);
-	--composer-border-hover: color-mix(in oklch, var(--color-border-strong) 100%, var(--color-text-muted) 15%);
-	--composer-border-focus: color-mix(in oklch, var(--color-border-strong) 100%, var(--color-text-muted) 15%);
 
 	border-radius: var(--radius-chat-composer);
-	border-color: var(--composer-border);
 	background: var(--composer-bg);
 	box-shadow: none;
-	/* Border only — background must snap with the view-transition theme cut. */
-	transition: border-color 150ms ease-out;
+	transition: box-shadow 300ms ease-out;
 }
 
-.cursor-chat-composer[data-attached-top] {
-	border-top: none;
+/* With a tray tucked under it, a hairline edge keeps the composer the layer on top. */
+[data-composer-tray] .cursor-chat-composer {
+	box-shadow: 0 0 0 1px color-mix(in srgb, var(--color-text-primary) 7%, transparent);
+}
+
+/* Narrower than the composer and hung from its bottom edge, cancelling the dock's
+   gap-2. It starts at the edge rather than under it: in transparency mode the
+   composer is see-through, and anything behind it would show. 1rem in, the
+   composer's corner has already curved back to the edge. The inset inside is
+   the same on every side. */
+.chat-composer-tray {
+	--tray-inset: 0.375rem;
+
+	margin: -0.5rem 1rem 0;
+	padding: var(--tray-inset);
+	/* Concentric with the rounded-lg control inside it. */
+	border-radius: 0 0 calc(var(--radius-lg) + var(--tray-inset)) calc(var(--radius-lg) + var(--tray-inset));
+	background: color-mix(in srgb, var(--color-text-primary) 3%, transparent);
+}
+
+/* A band hung on top of the composer, the New Chat tray's mirror: narrower,
+   and stopping at the composer's edge instead of going under it, so the
+   composer keeps its place and its own fill (a see-through composer would show
+   anything behind it). In dark the composer is itself only a little lighter
+   than the canvas, so the band takes a stronger wash to stand apart from it. */
+.chat-composer-band-tray {
+	--tray-inset: 0.25rem;
+
+	margin: 0 1.25rem;
+	padding: var(--tray-inset) var(--tray-inset) 0;
+	border-radius: calc(var(--radius-lg) + var(--tray-inset)) calc(var(--radius-lg) + var(--tray-inset)) 0 0;
+	background: color-mix(in srgb, var(--color-text-primary) 9%, transparent);
+}
+
+/* Light's composer is lighter than the canvas and the wash darkens, so a light
+   one already sets the band apart. */
+:root[data-theme="light"] .chat-composer-band-tray {
+	background: color-mix(in srgb, var(--color-text-primary) 5%, transparent);
+}
+
+.chat-composer-startup-shimmer {
+	position: absolute;
+	inset: 0;
+	z-index: 20;
+	border-radius: inherit;
+	pointer-events: none;
+	opacity: 0;
+	transition: opacity 300ms ease-out;
+	background: linear-gradient(90deg, color-mix(in srgb, var(--color-text-primary) 2%, transparent) 25%, color-mix(in srgb, var(--color-text-primary) 6%, transparent) 50%, color-mix(in srgb, var(--color-text-primary) 2%, transparent) 75%);
+	background-size: 200% 100%;
+	animation: chat-composer-starting 1.5s ease-in-out infinite paused;
+}
+
+.cursor-chat-composer[data-starting] > .chat-composer-startup-shimmer {
+	opacity: 1;
+	animation-play-state: running;
+}
+
+@keyframes chat-composer-starting {
+	from { background-position: -200% 0; }
+	to { background-position: 200% 0; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+	.chat-composer-startup-shimmer { animation: none; transition: none; }
+}
+
+/* Join only a notice that actually rendered, after the floating queue. */
+[data-composer-notice] + [data-composer-notice],
+[data-composer-notice] + .cursor-chat-composer {
 	border-top-left-radius: 0;
 	border-top-right-radius: 0;
+}
+
+/* Dragging remains visible without changing the composer's structural edge. */
+.cursor-chat-composer[data-dragging] {
+	background: color-mix(in oklch, var(--composer-bg) 94%, var(--color-logo-accent));
+}
+
+/* The session header arriving in the new chat page's empty strip. */
+@keyframes chat-header-slide-in {
+	from {
+		opacity: 0;
+		transform: translateY(-10px);
+	}
+	to {
+		opacity: 1;
+		transform: translateY(0);
+	}
+}
+
+.chat-header-slide-in {
+	animation: chat-header-slide-in 320ms cubic-bezier(0.22, 1, 0.36, 1) both;
+}
+
+@media (prefers-reduced-motion: reduce) {
+	.chat-header-slide-in { animation: none; }
+}
+
+/* Setup steps arrive one after another on a fresh start. */
+@keyframes session-startup-step-in {
+	from {
+		opacity: 0;
+		transform: translateY(4px);
+	}
+	to {
+		opacity: 1;
+		transform: translateY(0);
+	}
+}
+
+.session-startup-step-in {
+	animation: session-startup-step-in 260ms cubic-bezier(0.22, 1, 0.36, 1) both;
+}
+
+@media (prefers-reduced-motion: reduce) {
+	.session-startup-step-in { animation: none; }
 }
 
 @keyframes queue-dock-in {
@@ -2414,6 +3170,11 @@ html.sidebar-reordering * {
 
 .queue-dock-enter {
 	animation: queue-dock-in 200ms cubic-bezier(0.16, 1, 0.3, 1) both;
+}
+
+/* A question already waiting when its chat opens is drawn in place (ChatComposer's useDockEntrance). */
+[data-dock-quiet] .elicitation-dock {
+	animation: none;
 }
 
 /* The parent reserves one compact footprint; the expanded dock floats above it. */
@@ -2434,6 +3195,12 @@ html.sidebar-reordering * {
 	left: 0;
 }
 
+/* On a translucent window bg-surface is a 5% tint, so the transcript under the
+   open dock showed through it. The queue box keeps its solid fill there. */
+html[data-window-translucent="true"] :is(.queue-dock, .queue-dock-toggle, .queue-dock-body) {
+	background-color: var(--solid-bg-secondary);
+}
+
 /* Clip-height collapse: one row stays visible when folded; up to five when open. */
 .queue-dock-body {
 	--queue-dock-row-height: 2.5rem;
@@ -2444,8 +3211,6 @@ html.sidebar-reordering * {
 	overflow: hidden;
 	min-width: 0;
 	height: var(--queue-dock-row-height);
-	transition: height 420ms cubic-bezier(0.16, 1, 0.3, 1);
-	will-change: height;
 }
 
 .queue-dock[data-reordering="true"] .queue-dock-body,
@@ -2457,8 +3222,8 @@ html.sidebar-reordering * {
 	height: var(--queue-dock-collapsed-height, 4.5rem);
 	min-width: 0;
 	max-width: 100%;
-	transition: height 420ms cubic-bezier(0.16, 1, 0.3, 1);
-	will-change: height;
+	/* No height animation: rows arrive and leave with every send, and the dock
+	   follows at once. */
 }
 
 .queue-dock[data-collapsible="true"][data-expanded="true"] {
@@ -2487,10 +3252,6 @@ html.sidebar-reordering * {
 .queue-dock-actions svg {
 	display: block;
 	flex: none;
-}
-
-.cursor-chat-surface .queue-dock-toggle:not(:disabled):active {
-	transform: none;
 }
 
 .cursor-chat-surface .queue-dock-toggle:hover .queue-dock-label {
@@ -2586,23 +3347,6 @@ html.sidebar-reordering * {
 	}
 }
 
-.cursor-chat-composer:hover:not(:focus-within) {
-	border-color: var(--composer-border-hover);
-	background: var(--composer-bg-active);
-}
-
-.cursor-chat-composer:focus-within,
-.cursor-chat-composer:has([data-state="open"]) {
-	border-color: var(--composer-border-focus);
-	background: var(--composer-bg-active);
-	box-shadow: none;
-}
-
-.cursor-chat-composer[data-dragging] {
-	border-color: var(--color-logo-accent);
-	background: var(--composer-bg-active);
-}
-
 /* The draft grows to seven lines before it becomes its own scroll surface. A
    narrow inset thumb keeps long prompts legible without the platform scrollbar
    competing with the composer controls. */
@@ -2643,6 +3387,42 @@ html.sidebar-reordering * {
 	border-color: color-mix(in srgb, var(--color-border-strong) 85%, transparent);
 }
 
+/* Editing a sent message keeps its bubble. A hidden copy of the draft shares the
+   textarea's grid cell and sizes it, so the box fits its text the way the bubble
+   did and grows only as the text does. A long message folds as its bubble does
+   (see .chat-human-fold[data-scroll-folded]). */
+.chat-human-edit-field {
+	display: grid;
+}
+
+.chat-human-edit-field::after {
+	/* The zero-width space gives a trailing newline its line without widening the box. */
+	content: attr(data-value) "\200b";
+	visibility: hidden;
+	white-space: pre-wrap;
+	overflow-wrap: break-word;
+	text-wrap: pretty;
+}
+
+.chat-human-edit-field::after,
+.chat-human-edit-field > textarea {
+	grid-area: 1 / 1;
+}
+
+/* Opacity only, so the fade stays on the compositor. */
+.chat-welcome-leaving {
+	animation: chat-welcome-out 150ms ease-out both;
+}
+
+@keyframes chat-welcome-out {
+	from {
+		opacity: 1;
+	}
+	to {
+		opacity: 0;
+	}
+}
+
 .chat-human-message-enter {
 	animation: chat-human-message-in 180ms cubic-bezier(0.16, 1, 0.3, 1) both;
 }
@@ -2650,14 +3430,56 @@ html.sidebar-reordering * {
 @keyframes chat-human-message-in {
 	from {
 		opacity: 0;
-		transform: scale(0.9);
-		transform-origin: 100% 100%;
+		transform: translateY(16px);
 	}
 	to {
 		opacity: 1;
-		transform: scale(1);
-		transform-origin: 100% 100%;
+		transform: translateY(0);
 	}
+}
+
+/* A long user message folded to about ten lines (CollapsibleHumanBody). The text
+   fades out at the fold so it reads as continuing; the fade length is registered
+   so it eases with the height instead of snapping. A mask, not an overlay, so the
+   fade works on every bubble fill, including a queued one's transparent body. */
+@property --chat-human-fade {
+	syntax: "<length>";
+	inherits: false;
+	initial-value: 0px;
+}
+
+.chat-human-fold[data-folded] {
+	--chat-human-fade: 40px;
+}
+
+/* Open and settled, the message carries no mask or clip at all. Clip, not hidden:
+   a hidden box still scrolls when focus or find-in-page reaches the folded text,
+   which would leave the fold showing a slice from the middle. */
+.chat-human-fold[data-folded],
+.chat-human-fold[data-animating] {
+	overflow: clip;
+	mask-image: linear-gradient(to bottom, #000 calc(100% - var(--chat-human-fade)), transparent);
+}
+
+.chat-human-fold[data-animating] {
+	transition:
+		height 220ms cubic-bezier(0.4, 0, 0.2, 1),
+		--chat-human-fade 220ms cubic-bezier(0.4, 0, 0.2, 1);
+}
+
+/* The message editor keeps the fold's height and scrolls inside it, so the
+   person can reach and type in every line. No fade: once scrolled to the end it
+   would hide the line being typed. */
+.chat-human-fold[data-folded][data-scroll-folded]:not([data-animating]) {
+	overflow-y: auto;
+	overscroll-behavior: contain;
+	mask-image: none;
+}
+
+/* Keep the text out of scroll anchoring while it shrinks, so the browser anchors
+   on the toggle below it and a reader scrolled into the message keeps their place. */
+.chat-human-fold[data-collapsing] {
+	overflow-anchor: none;
 }
 
 .cursor-chat-origin-message,
@@ -2722,23 +3544,33 @@ html.sidebar-reordering * {
 }
 
 :root[data-theme="light"] .cursor-chat-composer {
-	--composer-bg: var(--color-bg-secondary);
-	--composer-bg-active: var(--color-bg-secondary);
-	--composer-border: color-mix(in oklch, var(--color-text-primary) 10%, transparent);
-	--composer-border-hover: color-mix(in oklch, var(--color-text-primary) 20%, transparent);
-	--composer-border-focus: color-mix(in oklch, var(--color-text-primary) 32%, transparent);
-
-	box-shadow: none;
+	/* Light composer is the popover surface (white) held up by a hairline and a
+	   soft shadow, not a gray fill: the canvas is near-white, so a darker well
+	   reads as disabled. Sent messages still use the tertiary fill below. */
+	--composer-bg: var(--color-bg-elevated);
+	box-shadow:
+		0 0 0 1px color-mix(in oklch, var(--foreground) 8%, transparent),
+		0 1px 2px color-mix(in oklch, var(--foreground) 4%, transparent),
+		0 8px 24px -10px color-mix(in oklch, var(--foreground) 10%, transparent);
 }
 
-/* Light theme collapses the surface stack the dark bubble relies on: `--card`
-   and `--background` are the same near-white, so `--color-bg-secondary` cannot
-   sit above the canvas. Take the unwashed tertiary step and paint the hairline
-   this rule has always declared, so the message still reads as enclosed. */
+/* The tray hung under the composer is a near-white surface with a hairline, not
+   a gray well: the composer's shadow falls on it, and a gray tint turns dirty. */
+:root[data-theme="light"] .chat-composer-tray {
+	background: var(--color-bg-elevated);
+	box-shadow: 0 0 0 1px color-mix(in oklch, var(--foreground) 6%, transparent);
+}
+
+/* With a tray under it, keep only the hairline so the drop shadow does not
+   gray the tray's top edge. */
+:root[data-theme="light"] [data-composer-tray] .cursor-chat-composer {
+	box-shadow: 0 0 0 1px color-mix(in oklch, var(--foreground) 8%, transparent);
+}
+
+/* Light needs the tertiary fill to lift a sent message off the canvas; like
+   dark, it carries no border. */
 :root[data-theme="light"] .cursor-chat-human-message:not([data-queued]) {
-	border-width: 1px;
 	background: var(--color-bg-tertiary);
-	border-color: color-mix(in oklch, var(--color-text-primary) 14%, transparent);
 }
 
 /* Queued keeps its dashed, unfilled outline: the agent has not seen it yet, and
@@ -2776,6 +3608,22 @@ html.sidebar-reordering * {
 	vertical-align: -0.06em;
 }
 
+.chat-transcript-reveal {
+	animation: chat-transcript-reveal 360ms ease-out both;
+}
+
+@keyframes chat-transcript-reveal {
+	from {
+		opacity: 0;
+	}
+}
+
+@media (prefers-reduced-motion: reduce) {
+	.chat-transcript-reveal {
+		animation: none;
+	}
+}
+
 .chat-scroll-viewport {
 	scrollbar-width: none;
 	/* Spacer-driven prompt pinning fights the browser's own scroll anchoring. */
@@ -2793,14 +3641,14 @@ html.sidebar-reordering * {
 
 .chat-scroll-marker {
 	position: absolute;
-	right: 0;
+	right: 3px;
 	top: 50%;
 	width: 7px;
 	height: 2px;
 	transform: translateY(-50%);
 	border-radius: 999px;
-	background: color-mix(in srgb, var(--color-text-muted) 54%, transparent);
-	opacity: 0.76;
+	background: color-mix(in srgb, var(--color-text-muted) 40%, transparent);
+	opacity: 0.28;
 	transition:
 		width 180ms cubic-bezier(0.16, 1, 0.3, 1),
 		background-color 140ms ease,
@@ -2815,8 +3663,9 @@ html.sidebar-reordering * {
 	transform: translateY(-50%);
 }
 
-.chat-scroll-marker-visible {
-	background: color-mix(in srgb, var(--color-text-muted) 82%, transparent);
+.chat-scroll-marker-current {
+	width: 13px;
+	background: color-mix(in srgb, var(--color-text-primary) 82%, transparent);
 	opacity: 1;
 }
 
@@ -2827,8 +3676,8 @@ html.sidebar-reordering * {
 	opacity: 0.96;
 }
 
-.group\/scroll:hover .chat-scroll-marker-visible,
-.group\/scroll:focus-visible .chat-scroll-marker-visible {
+.group\/scroll:hover .chat-scroll-marker-current,
+.group\/scroll:focus-visible .chat-scroll-marker-current {
 	width: 11px;
 	background: var(--color-text-muted);
 }
@@ -2865,6 +3714,14 @@ html.sidebar-reordering * {
 	.chat-human-message-enter {
 		animation: none;
 	}
+
+	.chat-human-fold[data-animating] {
+		transition: none;
+	}
+
+	.chat-welcome-leaving {
+		animation: none;
+	}
 }
 
 /* One compact, responsive action contract for Board, Orchestrator, and
@@ -2872,70 +3729,126 @@ html.sidebar-reordering * {
  * accessible names remain available. */
 .workspace-topbar-actions {
 	display: flex;
+	height: var(--size-topbar-content);
 	min-width: 0;
 	flex: 0 0 auto;
 	align-items: center;
-	gap: var(--space-1);
+	gap: var(--gap-topbar-control);
 }
 
-.workspace-topbar__identity-separator {
-	width: 1px;
-	flex: 0 0 1px;
-	background: color-mix(in srgb, var(--color-text-topbar) 28%, transparent);
+.session-topbar-actions {
+	gap: var(--gap-topbar-control);
+	padding-inline: var(--space-2) var(--gap-topbar-control);
 }
 
-.workspace-topbar__identity-separator {
-	height: var(--space-4);
+/* One panel-owned trailing group stays fixed as the inspector slides. All
+ * headers clear its measured width, including any session-specific controls. */
+.panel-topbar-controls {
+	position: absolute;
+	top: 0;
+	right: var(--gap-topbar-control);
+	z-index: var(--z-index-chrome);
 }
 
-.workspace-topbar-actions .topbar-control {
+.has-topbar-controls .center-panel-titlebar,
+.has-topbar-controls .session-inspector__trailing,
+.has-topbar-controls .session-topbar-actions:not([data-fullscreen]) {
+	padding-right: calc(var(--topbar-trailing-width, 0px) + var(--gap-topbar-control) + var(--gap-topbar-control));
+}
+
+/* data-inspector-expanded is set by SessionInspectorRail (see useElementFlag). */
+.has-topbar-controls .session-split[data-inspector-expanded] .session-topbar-actions:not([data-fullscreen]) {
+	padding-right: var(--gap-topbar-control);
+}
+
+/* Opening or closing the rail swaps that end padding (and the divider below).
+ * Instant, the action buttons would jump by the trailing controls' width before
+ * the column even starts to resize, so both ride the rail's own spring. Only a
+ * toggle inside the current session animates (data-motion="animated" on the
+ * rail's gap), so switching sessions and drag-resizing stay immediate. Only the
+ * simplified bar renders the divider, so the previous bar is left as it was. */
+.session-split:has(> [data-slot="inspector-gap"][data-motion="animated"]) .session-topbar-actions:has(.topbar-divider):not([data-fullscreen]) {
+	transition: padding-right var(--session-inspector-motion-duration, 300ms)
+		var(--session-inspector-motion-easing, ease-out);
+}
+
+.workspace-topbar-actions .group\/button {
 	-webkit-app-region: no-drag;
 	height: var(--size-topbar-control);
 	min-width: var(--size-topbar-control);
-	flex: 0 0 auto;
-	justify-content: center;
-	border-radius: var(--radius-topbar-control);
 	font-size: var(--font-size-sm-md);
-	transition:
-		transform var(--duration-fast) ease-out,
-		background-color var(--duration-fast) ease,
-		border-color var(--duration-fast) ease,
-		color var(--duration-fast) ease,
-		filter var(--duration-fast) ease,
-		gap var(--duration-normal) ease,
-		padding-inline var(--duration-normal) ease;
+	transition-property: background-color, border-color, color, box-shadow, opacity, gap, padding-inline;
 }
 
-.workspace-topbar-actions .topbar-control:active:not(:disabled) {
-	transform: scale(0.96);
-}
-
-.workspace-topbar-actions .topbar-control--labeled,
-.workspace-topbar-actions .topbar-control--feature {
-	padding-inline: var(--space-2_5);
-}
-
-.topbar-control--disabled-affordance:disabled {
+.workspace-topbar-actions .group\/button:disabled {
+	pointer-events: auto;
 	cursor: not-allowed;
 	opacity: var(--opacity-control-disabled);
 }
 
-/* The editor handoff stays one joined split control. All measurements use the
-   shared spacing/control tokens; only gaps between separate controls use the
-   workspace toolbar gap. */
-.workspace-topbar-actions .topbar-control--split-main {
-	padding-inline: var(--space-2_5);
-	gap: var(--space-1_5);
-	border-start-end-radius: 0;
-	border-end-end-radius: 0;
+.workspace-topbar-actions .group\/button:disabled::before {
+	display: none;
 }
 
-.workspace-topbar-actions .topbar-control--split-trigger {
-	min-width: var(--space-5_5);
-	width: var(--space-5_5);
-	padding-inline: 0;
-	border-start-start-radius: 0;
-	border-end-start-radius: 0;
+.center-panel-shell--floating-topbar .workspace-topbar-actions .group\/button {
+	font-size: var(--font-size-md);
+}
+
+/* Ends the session's own actions where the inspector rail begins; shown only
+ * while the rail is open. Collapsed it takes no room: the negative start margin
+ * cancels the row's flex gap, so it can grow in instead of popping in. */
+.workspace-topbar-actions .topbar-divider {
+	width: 0;
+	height: var(--space-5);
+	flex: 0 0 auto;
+	margin-inline: calc(-1 * var(--gap-topbar-control)) 0;
+	opacity: 0;
+	/* Spacer only: the line itself is not drawn. */
+	background: transparent;
+}
+
+.session-split:has(> [data-slot="inspector-gap"][data-motion="animated"]) .topbar-divider {
+	transition:
+		width var(--session-inspector-motion-duration, 300ms) var(--session-inspector-motion-easing, ease-out),
+		margin-inline var(--session-inspector-motion-duration, 300ms) var(--session-inspector-motion-easing, ease-out),
+		opacity var(--session-inspector-motion-duration, 300ms) var(--session-inspector-motion-easing, ease-out);
+}
+
+/* With the inspector open, the session column draws the line between it and
+ * the rail along its own last pixel column, and the top bar's divider steps
+ * past the region's end padding onto that same column, so the two read as one
+ * line. (The rail can't draw it: the column clips the bar's divider at its
+ * edge, one pixel short of the rail.) */
+.center-panel-shell--floating-topbar .session-split:has(> [data-slot="inspector-container"][data-state="expanded"]) > [data-panel]:first-child::after {
+	content: "";
+	position: absolute;
+	top: var(--floating-panel-top);
+	right: 0;
+	bottom: 0;
+	z-index: var(--z-index-chrome);
+	width: 1px;
+	background: var(--color-border-strong);
+	pointer-events: none;
+}
+
+.center-panel-shell--floating-topbar .session-split:has(> [data-slot="inspector-container"][data-state="expanded"]) .session-topbar-actions .topbar-divider {
+	margin-inline: 0 calc(-1 * var(--gap-topbar-control));
+}
+
+/* The rail's (transparent) 1px left border sits between the divider and the
+ * inspector tabs, so their start padding gives that pixel back. */
+.center-panel-shell--floating-topbar [data-slot="inspector-container"] .session-inspector__topbar {
+	padding-left: calc(var(--gap-topbar-control) - 1px);
+}
+
+.center-panel-shell--floating-topbar [data-slot="inspector-container"] .session-inspector__topbar > .session-inspector__tablist {
+	padding-left: 0;
+}
+
+.session-split:has(> [data-slot="inspector-container"][data-state="expanded"]) .workspace-topbar-actions .topbar-divider {
+	width: 1px;
+	margin-inline: var(--space-1);
+	opacity: 1;
 }
 
 .workspace-topbar-actions [data-compact-label] {
@@ -2953,55 +3866,11 @@ html.sidebar-reordering * {
 		transform var(--duration-normal) ease;
 }
 
-.workspace-topbar-actions .topbar-control--feature {
-	border-color: color-mix(in srgb, var(--color-accent) 24%, var(--color-border-topbar));
-	background: color-mix(in srgb, var(--color-accent) 10%, var(--color-bg-topbar-raised));
-	color: color-mix(in srgb, var(--color-accent) 58%, var(--color-text-topbar));
-}
-
-.workspace-topbar-actions .topbar-control--feature:hover:not(:disabled) {
-	border-color: color-mix(in srgb, var(--color-accent) 42%, var(--color-border-topbar-strong));
-	background: color-mix(in srgb, var(--color-accent) 18%, var(--color-bg-topbar-raised));
-	color: var(--color-text-topbar);
-}
-
-.session-pinned-actions-reserve {
-	display: flex;
-	width: 0;
-	min-width: 0;
-	flex: 0 0 auto;
-	align-items: center;
-	justify-content: flex-end;
-	margin-left: calc(-1 * var(--space-2));
-	transition:
-		width var(--session-inspector-motion-duration, 400ms)
-			var(--session-inspector-motion-easing, linear(0, 0.333 12.5%, 0.642 25%, 0.813 37.5%, 0.902 50%, 0.949 62.5%, 0.974 75%, 0.986 87.5%, 1)),
-		margin-left var(--session-inspector-motion-duration, 400ms)
-			var(--session-inspector-motion-easing, linear(0, 0.333 12.5%, 0.642 25%, 0.813 37.5%, 0.902 50%, 0.949 62.5%, 0.974 75%, 0.986 87.5%, 1));
-}
-
-.session-pinned-actions-reserve[data-state="expanded"] {
-	width: calc(var(--size-topbar-control) + var(--size-topbar-control) + var(--space-2));
-	margin-left: 0;
-}
-
-.session-pinned-actions {
-	-webkit-app-region: no-drag;
-	position: absolute;
-	top: 0;
-	right: var(--space-1);
-	z-index: var(--z-index-chrome);
-	display: flex;
-	height: var(--size-inspector-tabs);
-	align-items: center;
-	gap: var(--space-1);
-}
-
-.session-inspector-actions-spacer {
-	width: calc(
-		var(--size-topbar-control) + var(--size-topbar-control) + var(--space-2) + var(--space-3)
-	);
-	flex: 0 0 auto;
+/* Session switches restore the destination's topbar in its first frame; these
+ * transitions are only for changes inside a session (useSessionSwitchSnap). */
+:root[data-session-switching] .workspace-topbar-actions .group\/button,
+:root[data-session-switching] .workspace-topbar-actions [data-compact-label] {
+	transition: none !important;
 }
 
 @container workspace-topbar (max-width: 759px) {
@@ -3011,7 +3880,7 @@ html.sidebar-reordering * {
 		transform: translateX(-2px);
 	}
 
-	.workspace-topbar-actions [data-priority="secondary"].topbar-control {
+	.workspace-topbar-actions [data-priority="secondary"].group\/button {
 		gap: 0;
 		padding-inline: 0;
 	}
@@ -3024,7 +3893,7 @@ html.sidebar-reordering * {
 		transform: translateX(-2px);
 	}
 
-	.workspace-topbar-actions [data-priority].topbar-control {
+	.workspace-topbar-actions [data-priority].group\/button {
 		gap: 0;
 		padding-inline: 0;
 	}
@@ -3039,7 +3908,7 @@ html.sidebar-reordering * {
 	[data-compact-label],
 .session-split[data-terminal-live-resize="true"]
 	.workspace-topbar-actions
-	[data-priority="secondary"].topbar-control {
+	[data-priority="secondary"].group\/button {
 	transition-duration: var(--session-inspector-motion-duration);
 	transition-timing-function: var(
 		--session-inspector-motion-easing,
@@ -3058,7 +3927,7 @@ html.sidebar-reordering * {
 
 .session-split[data-terminal-live-resize="true"][data-topbar-secondary-label-mode="expanded"]
 	.workspace-topbar-actions
-	[data-priority="secondary"].topbar-control {
+	[data-priority="secondary"].group\/button {
 	gap: var(--space-1_5);
 	padding-inline: var(--space-2_5);
 }
@@ -3074,215 +3943,23 @@ html.sidebar-reordering * {
 
 .session-split[data-terminal-live-resize="true"][data-topbar-secondary-label-mode="compact"]
 	.workspace-topbar-actions
-	[data-priority="secondary"].topbar-control {
+	[data-priority="secondary"].group\/button {
 	gap: 0;
 	padding-inline: 0;
 }
 
 @media (prefers-reduced-motion: reduce) {
-	.workspace-topbar-actions .topbar-control,
+	.workspace-topbar-actions .group\/button,
 	.workspace-topbar-actions [data-compact-label],
-	.session-pinned-actions-reserve,
 	.session-split[data-terminal-live-resize="true"]
 		.workspace-topbar-actions
-		[data-priority="secondary"].topbar-control,
+		[data-priority="secondary"].group\/button,
 	.session-split[data-terminal-live-resize="true"]
 		.workspace-topbar-actions
 		[data-priority="secondary"]
 		[data-compact-label] {
 		transition: none;
 	}
-}
-
-/* ── Shell topbar (agent-orchestrator .dashboard-app-header) ──────────────
- * One header for every screen (rendered by the shell layout), so one padding:
- * AO's session-topbar values. Upstream splits this into a 14px dashboard
- * header and a 16/14px session override; with the bar hoisted there is a
- * single frame and the crumb never shifts between views. The bar spans the
- * full window width with the sidebar pinned below it (approved divergence
- * 2026-06-12), so its bottom border runs edge-to-edge and the sidebar border
- * stops at the header instead of crossing the traffic-light strip. */
-.dashboard-app-header {
-	display: flex;
-	height: var(--size-shell-topbar);
-	flex-shrink: 0;
-	align-items: center;
-	gap: 13px;
-	padding: 0 16px 0 14px;
-	border-bottom: 1px solid var(--color-border-strong);
-	background: var(--bg);
-	z-index: 10;
-}
-
-.dashboard-app-header__project {
-	font-size: 14.5px;
-	font-weight: 600;
-	letter-spacing: -0.01em;
-	line-height: 1;
-	color: var(--fg);
-	white-space: nowrap;
-}
-
-.topbar-project-line {
-	display: inline-flex;
-	min-width: 0;
-	align-items: center;
-	gap: 6px;
-}
-
-.dashboard-app-header__spacer {
-	flex: 1;
-	min-width: 0;
-}
-
-.dashboard-app-header__actions {
-	display: flex;
-	flex-shrink: 0;
-	align-items: center;
-	gap: 6px;
-}
-
-.dashboard-app-header__icon-btn {
-	display: grid;
-	width: 34px;
-	height: 34px;
-	place-items: center;
-	border-radius: 7px;
-	color: var(--fg-muted);
-	transition:
-		background 0.12s ease,
-		color 0.12s ease;
-}
-
-.dashboard-app-header__icon-btn:hover {
-	background: var(--interactive-hover);
-	color: var(--fg);
-}
-
-.dashboard-app-header__kill-btn {
-	display: inline-flex;
-	height: 30px;
-	align-items: center;
-	gap: 5px;
-	border-radius: 6px;
-	border: 1px solid color-mix(in srgb, var(--red) 58%, transparent);
-	background: color-mix(in srgb, var(--red) 5%, transparent);
-	padding: 0 10px;
-	font-size: 12px;
-	font-weight: 650;
-	line-height: 1;
-	color: var(--red);
-	transition:
-		background 0.12s ease,
-		color 0.12s ease;
-}
-
-.dashboard-app-header__kill-btn:hover {
-	background: color-mix(in srgb, var(--red) 12%, transparent);
-	border-color: color-mix(in srgb, var(--red) 75%, transparent);
-}
-
-.dashboard-app-header__kill-confirm {
-	display: inline-flex;
-	align-items: center;
-	gap: 6px;
-}
-
-.dashboard-app-header__kill-confirm-btn {
-	display: inline-flex;
-	height: 34px;
-	align-items: center;
-	gap: 6px;
-	border-radius: 7px;
-	border: 1px solid color-mix(in srgb, var(--red) 40%, transparent);
-	padding: 0 12px;
-	font-size: 13px;
-	font-weight: 600;
-	line-height: 1;
-	color: var(--red);
-	background: color-mix(in srgb, var(--red) 10%, transparent);
-	transition: background 0.12s ease;
-}
-
-.dashboard-app-header__kill-confirm-btn:hover {
-	background: color-mix(in srgb, var(--red) 16%, transparent);
-}
-
-.dashboard-app-header__kill-confirm-btn:disabled {
-	opacity: 0.6;
-}
-
-.dashboard-app-header__kill-cancel-btn {
-	display: inline-flex;
-	height: 34px;
-	align-items: center;
-	border-radius: 7px;
-	padding: 0 10px;
-	font-size: 13px;
-	font-weight: 600;
-	line-height: 1;
-	color: var(--fg-muted);
-	transition: color 0.12s ease;
-}
-
-.dashboard-app-header__kill-cancel-btn:hover {
-	color: var(--fg);
-}
-
-.dashboard-app-header__kill-error {
-	font-size: 11px;
-	color: var(--red);
-}
-
-.dashboard-app-header__primary-btn {
-	display: inline-flex;
-	height: 34px;
-	align-items: center;
-	gap: 6px;
-	border-radius: 7px;
-	padding: 0 15px;
-	font-size: 13px;
-	font-weight: 600;
-	line-height: 1;
-	background: var(--accent);
-	color: var(--accent-fg);
-	transition: filter 0.12s ease;
-}
-
-.dashboard-app-header__primary-btn:hover {
-	filter: brightness(1.08);
-}
-
-.dashboard-app-header__primary-btn:disabled {
-	opacity: 0.6;
-}
-
-.dashboard-app-header__primary-btn--compact {
-	height: 32px;
-	border-radius: 7px;
-	padding: 0 14px;
-	font-size: 13px;
-}
-
-.dashboard-app-header__accent-btn {
-	display: inline-flex;
-	height: 34px;
-	align-items: center;
-	gap: 6px;
-	border-radius: 7px;
-	border: 1px solid var(--border);
-	padding: 0 15px;
-	font-size: 13px;
-	font-weight: 600;
-	line-height: 1;
-	background: var(--raised);
-	color: var(--fg-muted);
-	transition: background 0.12s ease;
-}
-
-.dashboard-app-header__accent-btn:hover {
-	background: var(--surface);
-	color: var(--fg);
 }
 
 .session-topbar__lead {
@@ -3673,18 +4350,14 @@ html.sidebar-reordering * {
 	user-select: none;
 }
 
-/* In browser mode, use equal side tracks so the address field is centered in
-   the inspector itself. Flex centering only centers it in the leftover space,
-   which shifts it right because the tab controls are wider than the actions. */
+/* In browser mode, center the address field in the space between the tabs and
+   the pinned actions. Intrinsic side tracks follow the tab count, so the field
+   stays centered in that gap as Files or Artifacts tabs appear. */
 .session-inspector__topbar--browser {
 	display: grid;
-	grid-template-columns: minmax(0, 1fr) minmax(0, 240px) minmax(0, 1fr);
+	grid-template-columns: max-content minmax(0, 1fr) max-content;
+	column-gap: var(--space-1);
 	padding-left: 0;
-	transition: grid-template-columns var(--duration-fast) ease;
-}
-
-.session-inspector__topbar--browser:has(.browser-panel__address-bar--editing) {
-	grid-template-columns: minmax(0, 1fr) clamp(240px, 52cqw, 560px) minmax(0, 1fr);
 }
 
 .session-inspector__topbar--browser > .session-inspector__tablist {
@@ -3694,14 +4367,16 @@ html.sidebar-reordering * {
 
 .session-inspector__topbar > .browser-panel__topbar-host {
 	grid-column: 2;
-	width: 100%;
+	width: min(100%, 240px);
+	justify-self: center;
+	transition: width var(--duration-fast) ease;
 }
 
-.session-inspector__topbar > .browser-panel__topbar-host > .browser-panel__address-bar {
-	transform: translateX(clamp(32px, 6cqw, 48px));
+.session-inspector__topbar--browser:has(.browser-panel__address-bar--editing) > .browser-panel__topbar-host {
+	width: min(100%, 52cqw, 560px);
 }
 
-.session-inspector__topbar--browser > .session-inspector-actions-spacer {
+.session-inspector__topbar--browser > .session-inspector__trailing {
 	grid-column: 3;
 	justify-self: end;
 }
@@ -3721,7 +4396,7 @@ html.sidebar-reordering * {
 		grid-row: 1;
 	}
 
-	.session-inspector__topbar--browser > .session-inspector-actions-spacer {
+	.session-inspector__topbar--browser > .session-inspector__trailing {
 		grid-column: 2;
 		grid-row: 1;
 	}
@@ -3734,14 +4409,101 @@ html.sidebar-reordering * {
 		transition: width var(--duration-fast) ease;
 	}
 
-	.session-inspector__topbar--browser
-		> .browser-panel__topbar-host
-		> .browser-panel__address-bar {
-		transform: none;
-	}
-
 	.session-inspector__topbar--browser:has(.browser-panel__address-bar--editing)
 		> .browser-panel__topbar-host {
+		width: min(400px, calc(100cqw - 16px));
+	}
+}
+
+/* Files filter field. Visually matches the browser address field, but is its
+   own rule set so browser styles never change because of the Files panel. */
+.inspector-field-input {
+	width: 100%;
+	box-sizing: border-box;
+	height: var(--size-control-md);
+	border-color: transparent;
+	border-radius: var(--radius-md);
+	background: var(--color-interactive-active);
+	font-family: var(--font-family-base);
+	font-size: 12px;
+	transition:
+		border-color var(--duration-fast) ease,
+		box-shadow var(--duration-fast) ease;
+}
+
+.inspector-field-input:focus,
+.inspector-field-input:focus-visible {
+	border-color: color-mix(in oklab, var(--ring) 60%, var(--color-border));
+	box-shadow: 0 0 0 2px color-mix(in oklab, var(--ring) 45%, transparent);
+	outline: none;
+}
+
+@media (prefers-reduced-motion: reduce) {
+	.inspector-field-input {
+		transition: none;
+	}
+}
+
+/* Files tab: center the filter in the space between the tabs and the pinned
+   actions. Intrinsic side tracks let it adjust when the review tab appears.
+   It still widens on focus and takes its own row in narrow panels (below). */
+.session-inspector__topbar:has(> .files-panel__topbar-host) {
+	display: grid;
+	grid-template-columns: max-content minmax(0, 1fr) max-content;
+	column-gap: var(--space-1);
+	padding-left: 0;
+}
+
+.session-inspector__topbar > .files-panel__topbar-host:focus-within {
+	width: min(100%, 52cqw, 560px);
+}
+
+.session-inspector__topbar:has(> .files-panel__topbar-host) > .session-inspector__tablist {
+	grid-column: 1;
+	padding-left: var(--space-1);
+}
+
+.session-inspector__topbar > .files-panel__topbar-host {
+	grid-column: 2;
+	width: min(100%, 240px);
+	justify-self: center;
+	transition: width var(--duration-fast) ease;
+}
+
+.session-inspector__topbar:has(> .files-panel__topbar-host) > .session-inspector__trailing {
+	grid-column: 3;
+	justify-self: end;
+}
+
+/* Like the browser's URL field: once zoom or a narrow window leaves too little
+   room, the filter takes its own row so it cannot slide under the tabs. */
+@container inspector (max-width: 440px) {
+	.session-inspector__topbar:has(> .files-panel__topbar-host),
+	.session-inspector__topbar:has(> .files-panel__topbar-host :focus) {
+		height: calc(var(--size-inspector-tabs) + var(--size-inspector-tabs));
+		grid-template-columns: minmax(0, 1fr) auto;
+		grid-template-rows: var(--size-inspector-tabs) var(--size-inspector-tabs);
+	}
+
+	.session-inspector__topbar:has(> .files-panel__topbar-host) > .session-inspector__tablist {
+		grid-column: 1;
+		grid-row: 1;
+	}
+
+	.session-inspector__topbar:has(> .files-panel__topbar-host) > .session-inspector__trailing {
+		grid-column: 2;
+		grid-row: 1;
+	}
+
+	.session-inspector__topbar > .files-panel__topbar-host {
+		grid-column: 1 / -1;
+		grid-row: 2;
+		width: 180px;
+		justify-self: center;
+		transition: width var(--duration-fast) ease;
+	}
+
+	.session-inspector__topbar > .files-panel__topbar-host:focus-within {
 		width: min(400px, calc(100cqw - 16px));
 	}
 }
@@ -4374,29 +5136,24 @@ html.sidebar-reordering * {
    hides the shell topbar; windowed mode reserves the native traffic-light band,
    while native fullscreen keeps a 0px top inset. Linux keeps its ShellTopbar
    offset below. */
-.files-popout-overlay {
-	position: fixed;
-	inset: env(titlebar-area-height, 0px) 0 0;
-	z-index: 40;
-	background: color-mix(in srgb, var(--bg) 94%, black);
-	/* The macOS shell has a separate traffic-light drag strip. Keep the
-	   maximized browser surface interactive even if those regions overlap while
-	   the window is transitioning between layouts. */
-	-webkit-app-region: no-drag;
-}
-
-/* Browser maximize switches geometry atomically. A live WebContentsView cannot
+/* Maximized files share the maximized browser's overlay geometry (backdrop,
+   titlebar band, full-width frame) but keep their own frame and composition
+   rules, so the native-view overrides for the browser never reach files.
+   Browser maximize switches geometry atomically. A live WebContentsView cannot
    share a compositor timeline with DOM layout; animating its box would resize
    Chromium over IPC every frame and make the controls visibly trail the page. */
-.browser-popout-overlay {
+.browser-popout-overlay,
+.files-popout-overlay {
 	--browser-popout-top: env(titlebar-area-height, 0px);
-	--browser-popout-inline-inset: var(--size-center-panel-inline-inset);
 	box-sizing: border-box;
 	position: fixed;
 	inset: var(--browser-popout-top) 0 0;
 	z-index: 40;
 	overflow: hidden;
 	background: transparent;
+	/* The macOS shell has a separate traffic-light drag strip. Keep the
+	   maximized surface interactive even if those regions overlap while the
+	   window is transitioning between layouts. */
 	-webkit-app-region: no-drag;
 }
 
@@ -4412,8 +5169,8 @@ html.sidebar-reordering * {
 .browser-popout-frame {
 	position: absolute;
 	top: 0;
-	right: var(--browser-popout-inline-inset);
-	left: var(--browser-popout-inline-inset);
+	right: 0;
+	left: 0;
 	display: flex;
 	height: 100%;
 	flex-direction: column;
@@ -4421,6 +5178,29 @@ html.sidebar-reordering * {
 	border-radius: 0;
 	background: var(--bg);
 	box-shadow: none;
+}
+
+.files-popout-backdrop {
+	position: absolute;
+	inset: 0;
+	background: color-mix(in srgb, var(--bg) 94%, black);
+}
+
+.files-popout-frame {
+	position: absolute;
+	top: 0;
+	right: 0;
+	left: 0;
+	display: flex;
+	height: 100%;
+	flex-direction: column;
+	overflow: hidden;
+	background: var(--bg);
+}
+
+.files-popout-frame > * {
+	min-height: 0;
+	flex: 1 1 auto;
 }
 
 /* Keep native browser/files surfaces below the custom Windows titlebar. The
@@ -4433,10 +5213,9 @@ html[data-native-browser-composition="true"][data-ao-platform="win32"] .files-po
 }
 
 /* Web preview has no preload platform attribute. The popouts are direct body
-   portals, so detect the Windows shell in #root instead of using a descendant
-   selector that cannot reach them. */
-body:has(#root .platform-windows) > .browser-popout-overlay,
-body:has(#root .platform-windows) > .files-popout-overlay {
+   portals outside #root, so the shell publishes its platform on <html>. */
+html[data-shell-windows] body > .browser-popout-overlay,
+html[data-shell-windows] body > .files-popout-overlay {
 	top: var(--size-window-titlebar);
 	--browser-popout-top: var(--size-window-titlebar);
 }
@@ -4449,8 +5228,21 @@ body:has(#root .platform-windows) > .files-popout-overlay {
 	--browser-popout-top: var(--size-traffic-light-clearance);
 }
 
-.browser-popout-overlay--mac-windowed {
-	--browser-popout-inline-inset: var(--size-center-panel-inset-mac);
+/* The files popout has no titlebar row of its own. Its content starts below
+   the native traffic-light band, so without a mask the session topbar from
+   underneath the portal remains visible through that band (half of the row
+   is visible on macOS windowed maximization). Keep the reserved band opaque,
+   matching the browser popout's titlebar surface. */
+.files-popout-overlay--mac-windowed::before {
+	position: absolute;
+	top: calc(-1 * var(--size-traffic-light-clearance));
+	right: 0;
+	left: 0;
+	height: var(--size-traffic-light-clearance);
+	content: "";
+	background: var(--bg);
+	border-bottom: 1px solid var(--border);
+	pointer-events: none;
 }
 
 .browser-popout-overlay .browser-panel__toolbar,
@@ -4466,7 +5258,12 @@ body:has(#root .platform-windows) > .files-popout-overlay {
 	--browser-popout-top: var(--size-shell-topbar);
 }
 
-body:has(#root .platform-linux) > .browser-popout-overlay {
+html[data-shell-linux] body > .browser-popout-overlay {
+	top: var(--size-shell-topbar);
+	--browser-popout-top: var(--size-shell-topbar);
+}
+
+html[data-shell-linux] body > .files-popout-overlay {
 	top: var(--size-shell-topbar);
 	--browser-popout-top: var(--size-shell-topbar);
 }
@@ -4540,6 +5337,111 @@ body:has(#root .platform-linux) > .browser-popout-overlay {
 	flex: 1 1 auto;
 }
 
+/* The Files filter takes the browser address bar's slot: centred in the
+   titlebar band and widening the same way while focused. */
+.files-popout-titlebar {
+	position: fixed;
+	top: 0;
+	right: 0;
+	left: 0;
+	z-index: 41;
+	display: flex;
+	height: var(--browser-popout-top);
+	min-width: 0;
+	align-items: center;
+	border-bottom: 1px solid var(--border);
+	background: var(--bg);
+	-webkit-app-region: no-drag;
+}
+
+.files-popout-titlebar--mac-windowed {
+	padding-right: var(--space-3);
+	padding-left: var(--size-titlebar-content-offset);
+}
+
+.files-popout-titlebar > label {
+	position: absolute;
+	left: 50%;
+	width: min(480px, calc(100vw - 32px));
+	transform: translateX(-50%);
+	transition: width var(--duration-fast) ease;
+}
+
+.files-popout-titlebar > label:focus-within {
+	width: min(760px, calc(100vw - 32px));
+}
+
+.files-popout-titlebar--mac-windowed > label {
+	max-width: calc(100vw - (2 * var(--size-titlebar-content-offset)));
+}
+
+/* Without the traffic-light reserve (native macOS fullscreen) the band is at
+   least a tab row tall; the frame starts right below it. Subtracting the
+   overlay's own top keeps that exact where the overlay already sits below a
+   Windows or Linux titlebar. */
+.files-popout-overlay:not(.files-popout-overlay--mac-windowed) .files-popout-titlebar {
+	height: max(var(--browser-popout-top), var(--size-inspector-tabs));
+}
+
+.files-popout-overlay:not(.files-popout-overlay--mac-windowed) .files-popout-frame {
+	top: calc(max(var(--browser-popout-top), var(--size-inspector-tabs)) - var(--browser-popout-top));
+	height: calc(100% - (max(var(--browser-popout-top), var(--size-inspector-tabs)) - var(--browser-popout-top)));
+}
+
+@media (prefers-reduced-motion: reduce) {
+	.files-popout-titlebar > label {
+		transition: none;
+	}
+}
+
+/* Maximized Files moves its header into the band: the pickers, the filter,
+   then the view controls and minimize, in one row. The filter's auto margins
+   split the free space evenly, so it sits the same distance from the pickers
+   as from the controls; when the row is tight the pickers truncate first. */
+.files-popout-titlebar:has(> .files-popout-titlebar__start) {
+	gap: var(--space-3);
+	padding-inline: 0;
+}
+
+/* In flow, but still the positioning box for the filter's search icon. It
+   keeps its width while focused: widening would push the pickers aside. */
+.files-popout-titlebar:has(> .files-popout-titlebar__start) > label,
+.files-popout-titlebar:has(> .files-popout-titlebar__start) > label:focus-within {
+	position: relative;
+	left: auto;
+	order: 1;
+	width: auto;
+	flex: 0 1 min(480px, calc(100vw - 32px));
+	margin-inline: auto;
+	transform: none;
+}
+
+.files-popout-titlebar__start {
+	display: flex;
+	min-width: 0;
+	flex: 0 1 auto;
+	order: 0;
+	overflow: hidden;
+	align-items: center;
+	/* The 12px gutter the frame's rows start on. */
+	padding-left: var(--space-3);
+}
+
+/* Only the native traffic lights share the band: the titlebar's own
+   navigation cluster sits below this overlay. */
+.files-popout-titlebar--mac-windowed > .files-popout-titlebar__start {
+	padding-left: var(--size-titlebar-cluster-left);
+}
+
+.files-popout-titlebar__end {
+	flex: none;
+	order: 2;
+}
+
+.files-popout-titlebar--mac-windowed > .files-popout-titlebar__end {
+	padding-right: calc(var(--space-3) + var(--space-2));
+}
+
 .browser-panel__topbar-host,
 .browser-panel__address-bar {
 	display: flex;
@@ -4562,11 +5464,12 @@ body:has(#root .platform-linux) > .browser-popout-overlay {
 	padding: 0 4px;
 }
 
+/* The tabs' height plus the row's insets: 40px under a 28px tab. */
 .browser-panel__tab-row {
 	container-name: browser-toolbar;
 	container-type: inline-size;
 	display: flex;
-	height: 40px;
+	height: calc(var(--size-topbar-control) + 3 * var(--space-1));
 	align-items: center;
 	gap: 2px;
 	flex-shrink: 0;
@@ -4576,9 +5479,23 @@ body:has(#root .platform-linux) > .browser-popout-overlay {
 	background: var(--bg);
 }
 
-.browser-panel__toolbar,
-.browser-panel__tab-bar {
+.browser-panel__toolbar {
 	display: contents;
+}
+
+/* The tabs and New tab, sized to the tabs so New tab follows the last one;
+ * the toolbar after it keeps to the row's end. */
+.browser-panel__tab-bar {
+	display: flex;
+	min-width: 0;
+	flex: 0 1 auto;
+	align-self: stretch;
+	align-items: center;
+	margin-inline-end: auto;
+}
+
+.browser-panel__tab-bar > .workspace-topbar-actions {
+	height: auto;
 }
 
 .browser-panel__toolbar > .browser-panel__navigation-control,
@@ -4599,6 +5516,84 @@ body:has(#root .platform-linux) > .browser-popout-overlay {
 	overflow: hidden;
 	padding: 0 var(--space-1);
 	background: var(--bg);
+}
+
+.browser-panel__find-row {
+	display: flex;
+	height: 36px;
+	flex-shrink: 0;
+	align-items: center;
+	gap: var(--space-1);
+	padding: 3px 6px;
+	border-top: 1px solid var(--border);
+	border-bottom: 1px solid var(--border);
+	background: var(--bg);
+}
+
+/* A site refused this browser: one flat row under the chrome, like the find
+   row, offering to continue in the person's own browser. */
+.browser-panel__notice-row {
+	display: flex;
+	min-height: 36px;
+	flex-shrink: 0;
+	align-items: center;
+	gap: var(--space-2);
+	overflow: hidden;
+	padding: 3px 6px 3px var(--space-2);
+	border-top: 1px solid var(--border);
+	border-bottom: 1px solid var(--border);
+	background: var(--bg);
+	color: var(--fg);
+	font-size: var(--font-size-sm);
+}
+
+.browser-panel__find-input {
+	min-width: 0;
+	flex: 1;
+	height: 28px;
+	border: 0;
+	outline: 0;
+	background: transparent;
+	color: var(--fg);
+	font-size: var(--font-size-sm);
+}
+
+.browser-panel__find-input::placeholder {
+	color: var(--muted-foreground);
+}
+
+.browser-panel__find-status {
+	min-width: 52px;
+	color: var(--muted-foreground);
+	font-size: var(--font-size-xs);
+	font-variant-numeric: tabular-nums;
+	text-align: right;
+	white-space: nowrap;
+}
+
+.browser-panel__find-button {
+	display: inline-flex;
+	width: 26px;
+	height: 26px;
+	align-items: center;
+	justify-content: center;
+	border-radius: var(--radius-sm);
+	color: var(--muted-foreground);
+}
+
+.browser-panel__find-button:hover:not(:disabled),
+.browser-panel__find-button:focus-visible {
+	background: var(--surface-hover);
+	color: var(--fg);
+}
+
+.browser-panel__find-button:disabled {
+	opacity: 0.4;
+}
+
+.browser-panel__find-button > svg {
+	width: 14px;
+	height: 14px;
 }
 
 .browser-panel__toolbar--annotation {
@@ -4662,6 +5657,19 @@ body:has(#root .platform-linux) > .browser-popout-overlay {
 	white-space: nowrap;
 }
 
+.browser-panel__annotation-context:has(.browser-panel__annotation-hint) {
+	max-width: min(70%, 420px);
+}
+
+.browser-panel__annotation-hint {
+	min-width: 0;
+	overflow: hidden;
+	color: var(--muted-foreground);
+	font-weight: var(--font-weight-medium);
+	text-overflow: ellipsis;
+	white-space: nowrap;
+}
+
 .browser-panel__annotation-separator {
 	width: 1px;
 	height: 16px;
@@ -4714,9 +5722,12 @@ body:has(#root .platform-linux) > .browser-popout-overlay {
 	height: var(--size-control-md);
 	gap: var(--space-1_5);
 	padding-inline: var(--space-2_5);
-	color: var(--primary-foreground);
 	font-size: var(--font-size-sm);
 	font-weight: var(--font-weight-medium);
+}
+
+.browser-panel__toolbar--annotation .browser-panel__annotation-send:not(:disabled) {
+	color: var(--primary-foreground);
 }
 
 /* The shared primary hover is a translucent wash (bg-primary/80). Over the
@@ -4778,9 +5789,7 @@ body:has(#root .platform-linux) > .browser-popout-overlay {
 
 .browser-panel__tab-actions button,
 .browser-panel__toolbar button,
-.browser-panel__address-bar button,
-.browser-panel__tab-new,
-.browser-panel__tab-close {
+.browser-panel__address-bar button {
 	color: var(--fg-muted);
 	transform-origin: center;
 	transition:
@@ -4797,26 +5806,18 @@ body:has(#root .platform-linux) > .browser-popout-overlay {
 	color: var(--fg);
 }
 
-.browser-panel__tab-actions button:not(:disabled):active,
-.browser-panel__toolbar button:not(:disabled):active,
-.browser-panel__address-bar button:not(:disabled):active {
-	transform: scale(0.98);
-	transform-origin: center;
-}
-
 .browser-panel__tab-region {
 	position: relative;
 	display: flex;
 	min-width: 0;
-	flex: 1 1 0;
+	flex: 0 1 auto;
+	align-self: stretch;
 	overflow: hidden;
 }
 
 .browser-panel__tab-strip {
 	display: flex;
 	min-width: 0;
-	align-items: center;
-	gap: 2px;
 	flex: 1 1 auto;
 	overflow-x: auto;
 	overflow-y: hidden;
@@ -4827,33 +5828,31 @@ body:has(#root .platform-linux) > .browser-popout-overlay {
 	display: none;
 }
 
-.browser-panel__tab-fade {
-	pointer-events: none;
-	position: absolute;
-	inset-block: 0;
-	right: 0;
-	z-index: 2;
-	width: 24px;
-	background: linear-gradient(90deg, transparent 0%, var(--bg) 82%);
-}
-
-.browser-panel__tab-fade--left {
-	left: 0;
-	right: auto;
-	background: linear-gradient(270deg, transparent 0%, var(--bg) 82%);
-}
-
+/* A tab's slot in the strip; its look is the shared tab frame's. Unlike the
+ * session strip's content-sized tabs, these keep a 200px width and shrink to
+ * 150px before the strip scrolls. */
 .browser-panel__tab {
-	position: relative;
 	display: flex;
 	width: 200px;
 	min-width: 150px;
-	max-width: 200px;
-	height: 28px;
 	flex: 0 1 200px;
-	border-radius: var(--radius-md);
-	color: var(--fg-muted);
-	background: transparent;
+}
+
+.browser-panel__tab > [data-terminal-tab-frame] {
+	min-width: 0;
+	max-width: none;
+	flex: 1 1 auto;
+}
+
+/* Past seven tabs only the selected tab keeps its close button, so titles keep
+ * their room. */
+.browser-panel__tab-strip:has(> .browser-panel__tab:nth-child(8)) > .browser-panel__tab:not(:has([data-active])) [data-terminal-tab-action] {
+	display: none;
+}
+
+/* With its close gone, the title does not fade out under it. */
+.browser-panel__tab-strip:has(> .browser-panel__tab:nth-child(8)) > .browser-panel__tab:not(:has([data-active])) [data-terminal-tab-frame] > button {
+	mask-image: none;
 }
 
 .browser-panel__tab--drag-placeholder {
@@ -4861,141 +5860,33 @@ body:has(#root .platform-linux) > .browser-popout-overlay {
 	pointer-events: none;
 }
 
+/* The dragged tab: its hover pill on the panel's fill, so it hides the tabs
+ * it crosses, as a dragged session tab does. */
 .browser-panel__tab--drag-overlay {
 	width: 100%;
 	min-width: 0;
-	max-width: none;
 	flex: none;
-	color: var(--fg);
-	background: var(--surface);
-	box-shadow: var(--shadow-popover);
+	height: 100%;
+	background: var(--bg);
 	cursor: grabbing;
 	pointer-events: none;
 }
 
-.browser-panel__tab:hover {
-	color: var(--fg);
-	background: var(--interactive-hover);
+.browser-panel__tab--drag-overlay [data-terminal-tab-frame] {
+	margin-inline-end: 0;
 }
 
-.browser-panel__tab--active {
-	color: var(--fg);
-	background: var(--interactive-active);
+.browser-panel__tab--drag-overlay [data-terminal-tab-frame]::after {
+	content: none;
 }
 
-.browser-panel__tab-select {
-	display: flex;
-	min-width: 0;
-	height: 100%;
-	align-items: center;
-	gap: 7px;
-	flex: 1;
-	padding: 0 4px 0 10px;
-	border: 0;
-	color: inherit;
-	background: transparent;
-	font-size: 12px;
-	text-align: left;
-}
-
-.browser-panel__tab-select:focus-visible,
-.browser-panel__tab-close:focus-visible {
-	outline: 2px solid var(--color-accent);
-	outline-offset: -2px;
-}
-
-.browser-panel__tab-icon {
-	width: 16px;
-	height: 16px;
-	flex: none;
-	color: var(--fg-passive);
-}
-
-.browser-panel__tab-title {
-	min-width: 0;
-	overflow: hidden;
-	font-weight: 550;
-	text-overflow: ellipsis;
-	white-space: nowrap;
-}
-
-.browser-panel__tab-close {
-	position: relative;
-	top: 1px;
-	display: grid;
-	width: 26px;
-	height: 26px;
-	place-items: center;
-	flex: none;
-	margin-right: 3px;
-	border: 0;
-	border-radius: 5px;
-	color: var(--fg-muted);
-	background: transparent;
-	transition:
-		background var(--duration-fast) ease,
-		color var(--duration-fast) ease,
-		transform var(--duration-fast) ease;
-}
-
-.browser-panel__tab-close:not(:disabled):hover {
-	color: var(--fg);
-	background: var(--surface-hover);
-}
-
-.browser-panel__tab-close:not(:disabled):active {
-	transform: scale(0.98);
-	transform-origin: center;
-}
-
-.browser-panel__tab-close:disabled {
-	display: none;
-}
-
-.browser-panel__tab-strip:has(.browser-panel__tab:nth-child(8)) .browser-panel__tab-close {
-	display: none;
-}
-
-.browser-panel__tab-strip:has(.browser-panel__tab:nth-child(8)) .browser-panel__tab--active .browser-panel__tab-close {
-	display: grid;
-}
-
-.browser-panel__tab-new {
-	display: grid;
-	width: var(--size-control-md);
-	height: var(--size-control-md);
-	place-items: center;
-	flex: none;
-	margin-left: 0;
-	border: 0;
-	border-radius: var(--radius-md);
-	color: var(--fg-muted);
-	background: transparent;
-	transform-origin: center;
-	transition:
-		background var(--duration-fast) ease,
-		color var(--duration-fast) ease,
-		transform var(--duration-fast) ease;
+.browser-panel__tab--drag-overlay [data-terminal-tab-frame]::before {
+	background-color: var(--color-interactive-hover);
 }
 
 .browser-panel__tab-new--dragging {
 	visibility: hidden;
 	pointer-events: none;
-}
-
-.browser-panel__tab-new:not(:disabled):hover {
-	color: var(--fg);
-	background: var(--interactive-hover);
-}
-
-.browser-panel__tab-new:focus-visible {
-	outline: 2px solid var(--color-accent);
-	outline-offset: -2px;
-}
-
-.browser-panel__tab-new:active {
-	transform: scale(0.98);
-	transform-origin: center;
 }
 
 .browser-panel__url-wrap {
@@ -5041,9 +5932,9 @@ body:has(#root .platform-linux) > .browser-popout-overlay {
 	width: 100%;
 	box-sizing: border-box;
 	height: var(--size-control-md);
-	border-color: var(--color-border);
+	border-color: transparent;
 	border-radius: var(--radius-md);
-	background: var(--bg);
+	background: var(--color-interactive-active);
 	font-family: var(--font-family-base);
 	font-size: 12px;
 	text-align: center;
@@ -5165,9 +6056,12 @@ body:has(#root .platform-linux) > .browser-popout-overlay {
  * path remains available for web-only development; these rules remove the
  * opaque paint layers that would otherwise hide the native page behind the
  * shell. Toolbar and controls stay opaque so the app chrome remains readable. */
-html[data-native-browser-composition="true"] body:has(.browser-panel[data-browser-native-page="live"]),
-html[data-native-browser-composition="true"] body:has(.browser-popout-overlay),
-html[data-native-browser-composition="true"] #root:has(.browser-panel[data-browser-native-page="live"]) {
+/* data-browser-native-live and data-browser-popout-open are published on
+ * <html> by BrowserPanel and SessionBrowserPopOut (see useElementFlag); a
+ * container-level :has() here restyled the whole app on every DOM change. */
+html[data-native-browser-composition="true"][data-browser-native-live] body,
+html[data-native-browser-composition="true"][data-browser-popout-open] body,
+html[data-native-browser-composition="true"][data-browser-native-live] #root {
 	background: transparent;
 }
 
@@ -5176,9 +6070,9 @@ html[data-native-browser-composition="true"] #root:has(.browser-panel[data-brows
  * and this opaque `bg-sidebar` wrapper painted over the live native page
  * whenever an overlay raised the shell. Match it by its own class so every
  * platform is covered. */
-html[data-native-browser-composition="true"] .app-shell-root:has(.browser-panel[data-browser-native-page="live"]),
-html[data-native-browser-composition="true"] .platform-windows:has(.browser-panel[data-browser-native-page="live"]),
-html[data-native-browser-composition="true"] .platform-linux:has(.browser-panel[data-browser-native-page="live"]) {
+html[data-native-browser-composition="true"][data-browser-native-live] .app-shell-root,
+html[data-native-browser-composition="true"][data-browser-native-live] .platform-windows,
+html[data-native-browser-composition="true"][data-browser-native-live] .platform-linux {
 	background: transparent;
 }
 
@@ -5194,20 +6088,19 @@ html[data-native-browser-composition="true"] .platform-linux:has(.browser-panel[
  * and once the panel is portaled to <body> the panel is no longer a descendant,
  * so `:has()` never matches. Symptom without this line: opening any overlay over
  * a maximized browser panel on macOS blanks the live page to black. */
-html[data-native-browser-composition="true"] body:has(.browser-popout-overlay) #root,
-html[data-native-browser-composition="true"] body:has(.browser-popout-overlay) #root .app-shell-root,
-html[data-native-browser-composition="true"] body:has(.browser-popout-overlay) #root .platform-windows,
-html[data-native-browser-composition="true"] body:has(.browser-popout-overlay) #root .platform-linux,
-html[data-native-browser-composition="true"] body:has(.browser-popout-overlay) #root .center-panel-shell,
-html[data-native-browser-composition="true"] body:has(.browser-popout-overlay) #root .center-panel-surface,
-html[data-native-browser-composition="true"] body:has(.browser-popout-overlay) #root [data-testid="session-detail"],
-html[data-native-browser-composition="true"] body:has(.browser-popout-overlay) #root .session-split,
-html[data-native-browser-composition="true"] body:has(.browser-popout-overlay) #root .session-inspector,
-html[data-native-browser-composition="true"] body:has(.browser-popout-overlay) #root .session-inspector__body,
-html[data-native-browser-composition="true"] body:has(.browser-popout-overlay) #root [data-slot="sidebar-container"],
-html[data-native-browser-composition="true"] body:has(.browser-popout-overlay) #root [data-slot="sidebar-inner"],
-html[data-native-browser-composition="true"] body:has(.browser-popout-overlay) #root .dashboard-app-header,
-html[data-native-browser-composition="true"] body:has(.browser-popout-overlay) #root .session-topbar-surface {
+html[data-native-browser-composition="true"][data-browser-popout-open] #root,
+html[data-native-browser-composition="true"][data-browser-popout-open] #root .app-shell-root,
+html[data-native-browser-composition="true"][data-browser-popout-open] #root .platform-windows,
+html[data-native-browser-composition="true"][data-browser-popout-open] #root .platform-linux,
+html[data-native-browser-composition="true"][data-browser-popout-open] #root .center-panel-shell,
+html[data-native-browser-composition="true"][data-browser-popout-open] #root .center-panel-surface,
+html[data-native-browser-composition="true"][data-browser-popout-open] #root [data-testid="session-detail"],
+html[data-native-browser-composition="true"][data-browser-popout-open] #root .session-split,
+html[data-native-browser-composition="true"][data-browser-popout-open] #root .session-inspector,
+html[data-native-browser-composition="true"][data-browser-popout-open] #root .session-inspector__body,
+html[data-native-browser-composition="true"][data-browser-popout-open] #root [data-slot="sidebar-container"],
+html[data-native-browser-composition="true"][data-browser-popout-open] #root [data-slot="sidebar-inner"],
+html[data-native-browser-composition="true"][data-browser-popout-open] #root .session-topbar-surface {
 	background: transparent !important;
 }
 
@@ -5216,14 +6109,15 @@ html[data-native-browser-composition="true"] body:has(.browser-popout-overlay) #
  * the transparent compositor when the shell is raised for a menu portal. The
  * BrowserPanel portal and the Windows titlebar remain outside this wrapper and
  * stay interactive. */
-html[data-native-browser-composition="true"] body:has(.browser-popout-overlay) #root [data-slot="sidebar-wrapper"] {
+html[data-native-browser-composition="true"][data-browser-popout-open] #root [data-slot="sidebar-wrapper"] {
 	visibility: hidden;
 }
 
-html[data-native-browser-composition="true"] .center-panel-shell--session:has(.browser-panel[data-browser-native-page="live"]),
-html[data-native-browser-composition="true"] .center-panel-shell--session:has(.browser-panel[data-browser-native-page="live"]) > .center-panel-surface,
-html[data-native-browser-composition="true"] [data-testid="session-detail"]:has(.browser-panel[data-browser-native-page="live"]),
-html[data-native-browser-composition="true"] .session-split:has(.browser-panel[data-browser-native-page="live"]) {
+html[data-native-browser-composition="true"][data-browser-native-live] .center-panel-shell--session,
+html[data-native-browser-composition="true"][data-browser-native-live] .center-panel-shell--session > .center-panel-surface,
+html[data-native-browser-composition="true"][data-browser-native-live] .center-panel-shell--session > .center-panel-surface::before,
+html[data-native-browser-composition="true"][data-browser-native-live] [data-testid="session-detail"],
+html[data-native-browser-composition="true"][data-browser-native-live] .session-split {
 	background: transparent;
 }
 
@@ -5278,17 +6172,8 @@ html[data-native-browser-composition="true"] .browser-popout-frame {
 	.browser-panel,
 	.browser-panel__toolbar button,
 	.browser-panel__toolbar > :not(.browser-panel__url-wrap),
-	.browser-panel__url-input,
-	.browser-panel__tab-new,
-	.browser-panel__tab-close {
+	.browser-panel__url-input {
 		transition: none;
-	}
-
-	.browser-panel__toolbar button:not(:disabled):hover,
-	.browser-panel__toolbar button:not(:disabled):active,
-	.browser-panel__tab-new:active,
-	.browser-panel__tab-close:not(:disabled):active {
-		transform: none;
 	}
 }
 
@@ -5333,99 +6218,911 @@ html[data-native-browser-composition="true"] .browser-popout-frame {
 	padding-block: var(--space-2);
 }
 
-/* Connect Mobile: the pairing QR and the wait before it. The placeholder is a
-   real QR carrying decoy data, so it can dissolve into the finished code
-   instead of being swapped for it. See PairingQr.tsx. */
-/* The library's SVG includes a generous quiet zone. Enlarge the artwork
-   inside the fixed card so the preview and the finished code share the same
-   visible bounds while the card still supplies the clipping edge. */
-.ao-qr-visual > svg {
-	transform: scale(0.885);
-	transform-origin: center;
+/*
+ * Every ::highlight() rule applies only inside the element its ranges are in.
+ * A global one is resolved for every element on each style recalc, even with
+ * no highlight registered, which made the session page slower to scroll. The
+ * minifier does not parse ::highlight, so each selector in a list stays a
+ * separate rule: keep one selector per rule.
+ */
+[data-chat-find-surface] ::highlight(chat-annotation) {
+	background-color: #6b728040;
+	color: inherit;
 }
 
-/* A triangular ramp occupying half the cycle. With four layers offset by a
-   quarter cycle, two are always mid-ramp in opposite directions, so the
-   composite dissolves continuously instead of swapping one code for the next. */
-@keyframes ao-qr-decoy-cycle {
-	0% {
-		opacity: 0;
-	}
-	25% {
-		opacity: 0.5;
-	}
-	50% {
-		opacity: 0;
-	}
-	100% {
-		opacity: 0;
-	}
+[data-chat-find-surface] ::highlight(chat-annotations) {
+	background-color: color-mix(in srgb, var(--primary) 14%, transparent);
+	color: inherit;
 }
 
-/* A slow wander, so the panel reads as working rather than frozen. Small
-   enough that it never looks like a layout bug. */
-@keyframes ao-qr-drift {
-	0%,
-	100% {
-		transform: translate3d(0, 0, 0);
-	}
-	25% {
-		transform: translate3d(-3px, 2px, 0);
-	}
-	50% {
-		transform: translate3d(2px, -3px, 0);
-	}
-	75% {
-		transform: translate3d(3px, 2px, 0);
-	}
+[data-chat-find-surface] ::highlight(chat-annotation-draft) {
+	background-color: var(--color-term-selection-light);
+	color: inherit;
 }
 
-@keyframes ao-qr-resolve-in {
-	from {
-		opacity: 0;
-		filter: blur(4px);
-	}
-	to {
-		opacity: 1;
-		filter: blur(0);
-	}
+/* Text selected in an artifact preview while its ask bar has focus. */
+[data-artifact-selection-scope] ::highlight(artifact-selection) {
+	background-color: var(--color-term-selection-light);
+	color: inherit;
 }
 
-@keyframes ao-qr-decoy-settle {
-	to {
-		opacity: 0;
-		filter: blur(4px);
-	}
+/* pdf.js text layer over a PDF page canvas: invisible text sized to the page's glyphs, so it can be selected. */
+.pdf-text-layer {
+	position: absolute;
+	inset: 0;
+	overflow: clip;
+	line-height: 1;
+	text-align: initial;
+	letter-spacing: normal;
+	word-spacing: normal;
+	text-size-adjust: none;
+	forced-color-adjust: none;
+	transform-origin: 0 0;
+	z-index: 0;
+	--min-font-size: 1;
+	--text-scale-factor: calc(var(--total-scale-factor) * var(--min-font-size));
+	--min-font-size-inv: calc(1 / var(--min-font-size));
 }
 
-.ao-qr-decoy {
-	opacity: 0;
-	animation: ao-qr-decoy-cycle 4800ms linear infinite;
+.pdf-text-layer :is(span, br) {
+	position: absolute;
+	color: transparent;
+	white-space: pre;
+	cursor: text;
+	transform-origin: 0% 0%;
+	user-select: text;
 }
 
-.ao-qr-drift {
-	animation: ao-qr-drift 9s ease-in-out infinite;
+.pdf-text-layer > :not(.markedContent),
+.pdf-text-layer .markedContent span:not(.markedContent) {
+	z-index: 1;
+	--font-height: 0;
+	font-size: calc(var(--text-scale-factor) * var(--font-height));
+	--scale-x: 1;
+	--rotate: 0deg;
+	transform: rotate(var(--rotate)) scaleX(var(--scale-x)) scale(var(--min-font-size-inv));
 }
 
-/* The real code has arrived: stop cycling and clear away together. */
-.ao-qr-decoy--settling {
-	animation: ao-qr-decoy-settle 260ms ease-out forwards;
+.pdf-text-layer .markedContent {
+	display: contents;
 }
 
-.ao-qr-resolved {
-	animation: ao-qr-resolve-in ease-out both;
+.pdf-text-layer ::selection {
+	background: var(--color-term-selection-light);
+	color: transparent;
+}
+
+.pdf-text-layer br::selection {
+	background: transparent;
+}
+
+.pdf-text-layer .endOfContent {
+	position: absolute;
+	inset: 100% 0 0;
+	display: block;
+	z-index: 0;
+	cursor: default;
+	user-select: none;
+}
+
+.pdf-text-layer.selecting .endOfContent {
+	top: 0;
+}
+
+.chat-annotation-target {
+	background-color: #6b72801f;
+	outline: 2px solid #6b7280;
+	outline-offset: 4px;
+	border-radius: 10px;
+}
+
+/* A setting a deep link opened (lib/settings-focus.ts), marked like the
+ * Harness page's focused agent. */
+.settings-focus-target {
+	background-color: var(--color-accent-weak);
+	box-shadow: inset 0 0 0 2px var(--color-accent);
+	transition: background-color 200ms, box-shadow 200ms;
+}
+
+/* The top effort level ("Ultra", "Ultracode"): a slow colour sweep on its label. */
+@keyframes ultra-sweep {
+	from { background-position: 0% 50%; }
+	to { background-position: 200% 50%; }
+}
+
+.ultra-text {
+	background-image: linear-gradient(90deg, #5aa2ff, #9b6dff, #ed6ac4, #9b6dff, #5aa2ff);
+	background-size: 200% 100%;
+	animation: ultra-sweep 3.2s linear infinite;
+	-webkit-background-clip: text;
+	background-clip: text;
+	color: transparent;
+	-webkit-text-fill-color: transparent;
 }
 
 @media (prefers-reduced-motion: reduce) {
-	.ao-qr-decoy {
-		animation-duration: 9000ms;
-	}
+	.ultra-text { animation: none; }
+}
 
-	.ao-qr-drift {
-		animation: none;
-	}
+/* macOS window transparency.
+ *
+ * Native vibrancy blurs the desktop below the window. To keep translucent
+ * layers from compounding (a tinted panel over a tinted shell reads as a
+ * darker patch), the window follows the material model native apps use:
+ *   1. One tint: only the shell plate paints the theme colour, at 70%. Every
+ *      other chrome surface is clear.
+ *   2. Nested fills are additive overlays (foreground at a few percent), so a
+ *      card or button reads one step up from whatever sits behind it.
+ *   3. Floating surfaces (menus, popovers, tooltips, dialogs) restore the
+ *      solid theme values so they stay legible above the material.
+ * Terminal canvases are clear too, showing the same shell tint. */
 
-	.ao-qr-resolved {
-		animation: none;
+/* Solid copies, resolved on :root where the theme declares them. :root raises
+ * specificity past the theme catalog's :root[data-style-theme] blocks. */
+html:root[data-window-translucent="true"] {
+	/* The one shell tint over the vibrancy; the shell plate and the startup
+	 * screen both paint it so the loader hands off to the app without a shift. */
+	--ao-shell-tint: color-mix(in srgb, var(--sidebar) 70%, transparent);
+	--solid-bg-primary: var(--color-bg-primary);
+	--solid-bg-secondary: var(--color-bg-secondary);
+	--solid-bg-tertiary: var(--color-bg-tertiary);
+	--solid-bg-sidebar: var(--color-bg-sidebar);
+	--solid-muted: var(--muted);
+	--solid-secondary: var(--secondary);
+	--solid-accent: var(--accent);
+	--solid-sidebar-accent: var(--sidebar-accent);
+}
+
+/* Light follows native light apps: a frosted sidebar over a solid content
+ * panel (below). The light material itself is a mid gray, so the sidebar
+ * tint is pushed toward white to keep the chrome bright, at 72% so the
+ * material still shows through. */
+html:root[data-theme="light"][data-window-translucent="true"] {
+	--ao-shell-tint: color-mix(in srgb, color-mix(in srgb, var(--sidebar), white 75%) 72%, transparent);
+}
+
+/* Chrome: clear canvases, overlay fills. Declared on body so the theme's
+ * :root values stay intact for the solid copies above. */
+html[data-window-translucent="true"] body {
+	--color-bg-primary: transparent;
+	--color-bg-sidebar: transparent;
+	--color-bg-terminal: transparent;
+	--color-bg-terminal-opaque: transparent;
+	--term-bg: transparent;
+	--color-bg-secondary: color-mix(in oklch, var(--foreground) 5%, transparent);
+	--color-bg-tertiary: color-mix(in oklch, var(--foreground) 8%, transparent);
+	--muted: color-mix(in oklch, var(--foreground) 8%, transparent);
+	--secondary: color-mix(in oklch, var(--foreground) 6%, transparent);
+	--accent: color-mix(in oklch, var(--foreground) 8%, transparent);
+	--sidebar-accent: color-mix(in oklch, var(--foreground) 7%, transparent);
+	background: transparent;
+}
+
+/* Floating surfaces sit above the material: back to solid theme values.
+ * `.z-overlay` covers custom floating menus; update notices also need solid
+ * fills so the decorative stack stays behind the front card. */
+html[data-window-translucent="true"] :is(
+	.z-overlay,
+	.harness-update-notice,
+	[data-radix-popper-content-wrapper],
+	[role="dialog"],
+	[role="alertdialog"],
+	[role="tooltip"]
+) {
+	--color-bg-primary: var(--solid-bg-primary);
+	--color-bg-secondary: var(--solid-bg-secondary);
+	--color-bg-tertiary: var(--solid-bg-tertiary);
+	--color-bg-sidebar: var(--solid-bg-sidebar);
+	--color-bg-terminal: var(--background);
+	--color-bg-terminal-opaque: var(--background);
+	--term-bg: var(--background);
+	--muted: var(--solid-muted);
+	--secondary: var(--solid-secondary);
+	--accent: var(--solid-accent);
+	--sidebar-accent: var(--solid-sidebar-accent);
+}
+
+/* Light: the center panel keeps the solid surfaces, so content reads as it does
+ * in an opaque window. It clears over a live browser page exactly as the
+ * opaque panel does (the native browser rules above). Dark keeps the clear
+ * single-tint panel. */
+html[data-theme="light"][data-window-translucent="true"] .center-panel-surface {
+	--color-bg-primary: var(--solid-bg-primary);
+	--color-bg-secondary: var(--solid-bg-secondary);
+	--color-bg-tertiary: var(--solid-bg-tertiary);
+	--color-bg-terminal: var(--background);
+	--color-bg-terminal-opaque: var(--background);
+	--term-bg: var(--background);
+	--muted: var(--solid-muted);
+	--secondary: var(--solid-secondary);
+	--accent: var(--solid-accent);
+	--bg: var(--color-bg-primary);
+	--bg-0: var(--color-bg-primary);
+	--bg-1: var(--color-bg-secondary);
+	--bg-2: var(--color-bg-tertiary);
+	--surface: var(--color-bg-secondary);
+}
+
+/* A Cloud session's startup and interface-switch screens cover the session
+ * beneath them; on a clear canvas that session would show through the steps,
+ * so they keep the solid one. */
+html[data-window-translucent="true"] [data-startup-cover] {
+	background-color: var(--solid-bg-primary);
+}
+
+/* Text drawn in the canvas colour sits on a solid foreground fill (the send
+ * button's arrow), so it must keep the solid colour or it vanishes. */
+html[data-window-translucent="true"] :is(.text-background, .hover\:text-background:hover) {
+	color: var(--solid-bg-primary);
+}
+
+/* tokens.css resolves the legacy aliases on :root, before the swaps above.
+ * Re-resolve them wherever the surface tokens change. */
+html[data-window-translucent="true"] :is(
+	body,
+	.z-overlay,
+	.harness-update-notice,
+	[data-radix-popper-content-wrapper],
+	[role="dialog"],
+	[role="alertdialog"],
+	[role="tooltip"]
+) {
+	--bg: var(--color-bg-primary);
+	--bg-0: var(--color-bg-primary);
+	--bg-1: var(--color-bg-secondary);
+	--bg-2: var(--color-bg-tertiary);
+	--surface: var(--color-bg-secondary);
+}
+
+/* The single tint, on its own layer under the shell's content. The native
+ * browser rules clear .app-shell-root's own background while a page is live,
+ * which would drop the tint; this pseudo-element is untouched by them. */
+html[data-window-translucent="true"] .app-shell-root {
+	position: relative;
+	isolation: isolate;
+}
+
+html[data-window-translucent="true"] .app-shell-root::before {
+	content: "";
+	position: absolute;
+	inset: 0;
+	z-index: -1;
+	pointer-events: none;
+	background-color: var(--ao-shell-tint);
+}
+
+/* The startup screen covers the window above (or before) the shell. It paints
+ * the same tint as the shell plate, so the loader matches the loaded app. */
+html[data-window-translucent="true"] .ao-startup-screen {
+	background-color: var(--ao-shell-tint);
+}
+
+/* A loader inside the running shell (remote host loading, missing
+ * dependency) would let the shell show through it. Hide the shell, tint
+ * included, and keep only the loader visible. */
+html[data-window-translucent="true"] .app-shell-root[data-startup-screen] {
+	visibility: hidden;
+}
+
+html[data-window-translucent="true"] .app-shell-root .ao-startup-screen {
+	visibility: visible;
+}
+
+/* The live page is a native view below the shell. Cut the tint out over its
+ * rect (published by useBrowserView on .app-shell-root) so the page is not
+ * tinted. The rect changes every frame while the inspector slides, so the
+ * properties do not inherit: only this pseudo-element restyles, not the app. */
+@property --browser-hole-x { syntax: "<length>"; inherits: false; initial-value: 0px; }
+@property --browser-hole-y { syntax: "<length>"; inherits: false; initial-value: 0px; }
+@property --browser-hole-w { syntax: "<length>"; inherits: false; initial-value: 0px; }
+@property --browser-hole-h { syntax: "<length>"; inherits: false; initial-value: 0px; }
+
+html[data-window-translucent="true"][data-browser-hole="true"]:has(.browser-panel[data-browser-native-page="live"]) .app-shell-root::before {
+	--browser-hole-x: inherit;
+	--browser-hole-y: inherit;
+	--browser-hole-w: inherit;
+	--browser-hole-h: inherit;
+	mask-image: linear-gradient(#000 0 0), linear-gradient(#000 0 0);
+	mask-size: 100% 100%, var(--browser-hole-w) var(--browser-hole-h);
+	mask-position: 0 0, var(--browser-hole-x) var(--browser-hole-y);
+	mask-repeat: no-repeat;
+	mask-composite: exclude;
+}
+
+/* The first-run onboarding covers the whole window. It is a dialog for
+ * assistive tech, but visually it is the window's chrome, so in a translucent
+ * window it takes the chrome treatment (clear canvases, the one 70% tint) back
+ * from the floating-surface rule above, and the shell under it is hidden so
+ * the desktop blur shows through instead of the app. */
+html[data-window-translucent="true"]:has(.first-run-onboarding:not([data-aside])) .app-shell-root {
+	visibility: hidden;
+}
+
+html[data-window-translucent="true"] .first-run-onboarding {
+	--color-bg-primary: transparent;
+	--color-bg-sidebar: transparent;
+	--color-bg-secondary: color-mix(in oklch, var(--foreground) 5%, transparent);
+	--color-bg-tertiary: color-mix(in oklch, var(--foreground) 8%, transparent);
+	--muted: color-mix(in oklch, var(--foreground) 8%, transparent);
+	--secondary: color-mix(in oklch, var(--foreground) 6%, transparent);
+	--accent: color-mix(in oklch, var(--foreground) 8%, transparent);
+	--sidebar-accent: color-mix(in oklch, var(--foreground) 7%, transparent);
+	--bg: var(--color-bg-primary);
+	--bg-0: var(--color-bg-primary);
+	--bg-1: var(--color-bg-secondary);
+	--bg-2: var(--color-bg-tertiary);
+	--surface: var(--color-bg-secondary);
+	background-color: color-mix(in srgb, var(--sidebar) 70%, transparent);
+}
+
+/* First-run onboarding previews draw the app window translucent over the
+ * onboarding page itself (the stage paints no background of its own, so copy
+ * and preview share one surface), with the same material model as above: the stage keeps solid copies
+ * of the theme, the window clears its canvases, blurs what is behind it
+ * (standing in for native vibrancy) and paints the tint, a little more
+ * opaque than the app's 70% so the preview reads clearly. */
+/* A translucent app window already holds these solid copies on :root (above),
+ * and its body has cleared the originals, so only an opaque one copies here. */
+html:not([data-window-translucent="true"]) .onboarding-preview-stage {
+	--solid-bg-primary: var(--color-bg-primary);
+	--solid-bg-secondary: var(--color-bg-secondary);
+	--solid-bg-tertiary: var(--color-bg-tertiary);
+	--solid-bg-sidebar: var(--color-bg-sidebar);
+	--solid-muted: var(--muted);
+	--solid-secondary: var(--secondary);
+	--solid-accent: var(--accent);
+	--solid-sidebar-accent: var(--sidebar-accent);
+}
+
+.onboarding-preview-window {
+	--color-bg-primary: transparent;
+	--color-bg-sidebar: transparent;
+	--color-bg-terminal: transparent;
+	--color-bg-terminal-opaque: transparent;
+	--term-bg: transparent;
+	--color-bg-secondary: color-mix(in oklch, var(--foreground) 5%, transparent);
+	--color-bg-tertiary: color-mix(in oklch, var(--foreground) 8%, transparent);
+	--muted: color-mix(in oklch, var(--foreground) 8%, transparent);
+	--secondary: color-mix(in oklch, var(--foreground) 6%, transparent);
+	--accent: color-mix(in oklch, var(--foreground) 8%, transparent);
+	--sidebar-accent: color-mix(in oklch, var(--foreground) 7%, transparent);
+	--bg: var(--color-bg-primary);
+	--bg-0: var(--color-bg-primary);
+	--bg-1: var(--color-bg-secondary);
+	--bg-2: var(--color-bg-tertiary);
+	--surface: var(--color-bg-secondary);
+	isolation: isolate;
+}
+
+/* The window's glass lives on its own plate that never fades: steps cross-fade
+ * only the window's contents above it. Fading the blurred layer itself would
+ * drop its backdrop and stack two tints mid-transition. */
+.onboarding-preview-plate {
+	background-color: color-mix(in srgb, var(--sidebar) 88%, transparent);
+	-webkit-backdrop-filter: blur(48px) saturate(1.6);
+	backdrop-filter: blur(48px) saturate(1.6);
+	/* An opaque stage (data-opaque) ramps the tint to solid and fills the
+	 * center panel with its own colour, as the app looks with transparency off.
+	 * Only these colours change, so the switch is one smooth ramp; the window's
+	 * contents keep the clear canvases throughout. */
+	transition: background-color 400ms cubic-bezier(0.23, 1, 0.32, 1);
+}
+
+.onboarding-preview-panel-backing {
+	border-radius: var(--radius-center-panel);
+	background-color: color-mix(in srgb, var(--background) 0%, transparent);
+	transition: background-color 400ms cubic-bezier(0.23, 1, 0.32, 1);
+}
+
+.onboarding-preview-stage[data-opaque="true"] .onboarding-preview-plate {
+	background-color: color-mix(in srgb, var(--sidebar) 100%, transparent);
+}
+
+.onboarding-preview-stage[data-opaque="true"] .onboarding-preview-panel-backing {
+	background-color: color-mix(in srgb, var(--background) 100%, transparent);
+}
+
+/* The onboarding's wallpaper covers the whole window, under the drawing and
+ * the copy, as a halftone: seen only through a grid of dots, edge to edge,
+ * that grows from small light dots on the right to heavy, nearly touching
+ * ones on the left. ::before is light + (bold x ramp); ::after adds the heavy
+ * dots on the left (heavy x ramp). Every grid shares one 7px pitch. Both are
+ * multiplied by a soft quiet zone where the copy sits, so its text reads over
+ * a few faint dots instead of the full pattern. */
+.onboarding-backdrop {
+	isolation: isolate;
+}
+
+.onboarding-backdrop::before,
+.onboarding-backdrop::after {
+	content: "";
+	position: absolute;
+	inset: 0;
+	z-index: -1;
+	pointer-events: none;
+	/* Blue duotone over the wallpaper: multiply #7fb4f5, then screen #0a1428. */
+	background:
+		linear-gradient(#0a1428, #0a1428),
+		linear-gradient(#7fb4f5, #7fb4f5),
+		#0d0d0d url("./assets/onboarding-wallpaper.webp") center / cover no-repeat;
+	background-blend-mode: screen, multiply, normal;
+	/* A backdrop, not the subject: kept well under the drawing and the copy. */
+	opacity: 0.5;
+}
+
+/* Light theme inverts the wallpaper: its lightness flips and its blue stays,
+ * so the dots are pale on the light page instead of near-black. */
+:root[data-theme="light"] .onboarding-backdrop::before,
+:root[data-theme="light"] .onboarding-backdrop::after {
+	filter: invert(1) hue-rotate(180deg);
+}
+
+.onboarding-backdrop::before {
+	-webkit-mask-image: radial-gradient(ellipse 30% 44% at 77% 42%, rgb(0 0 0 / 0.150) 0%, rgb(0 0 0 / 0.164) 12%, rgb(0 0 0 / 0.238) 25%, rgb(0 0 0 / 0.384) 38%, rgb(0 0 0 / 0.575) 50%, rgb(0 0 0 / 0.766) 62%, rgb(0 0 0 / 0.912) 75%, rgb(0 0 0 / 0.986) 88%, rgb(0 0 0 / 1.000) 100%), radial-gradient(circle, rgb(0 0 0 / 0.6) 1.1px, transparent 1.7px), radial-gradient(circle, black 1.7px, transparent 2.3px), linear-gradient(to right, rgb(0 0 0 / 1.000) 10.0%, rgb(0 0 0 / 0.995) 15.8%, rgb(0 0 0 / 0.965) 21.7%, rgb(0 0 0 / 0.896) 27.5%, rgb(0 0 0 / 0.790) 33.3%, rgb(0 0 0 / 0.653) 39.2%, rgb(0 0 0 / 0.500) 45.0%, rgb(0 0 0 / 0.347) 50.8%, rgb(0 0 0 / 0.210) 56.7%, rgb(0 0 0 / 0.104) 62.5%, rgb(0 0 0 / 0.035) 68.3%, rgb(0 0 0 / 0.005) 74.2%, rgb(0 0 0 / 0.000) 80.0%);
+	mask-image: radial-gradient(ellipse 30% 44% at 77% 42%, rgb(0 0 0 / 0.150) 0%, rgb(0 0 0 / 0.164) 12%, rgb(0 0 0 / 0.238) 25%, rgb(0 0 0 / 0.384) 38%, rgb(0 0 0 / 0.575) 50%, rgb(0 0 0 / 0.766) 62%, rgb(0 0 0 / 0.912) 75%, rgb(0 0 0 / 0.986) 88%, rgb(0 0 0 / 1.000) 100%), radial-gradient(circle, rgb(0 0 0 / 0.6) 1.1px, transparent 1.7px), radial-gradient(circle, black 1.7px, transparent 2.3px), linear-gradient(to right, rgb(0 0 0 / 1.000) 10.0%, rgb(0 0 0 / 0.995) 15.8%, rgb(0 0 0 / 0.965) 21.7%, rgb(0 0 0 / 0.896) 27.5%, rgb(0 0 0 / 0.790) 33.3%, rgb(0 0 0 / 0.653) 39.2%, rgb(0 0 0 / 0.500) 45.0%, rgb(0 0 0 / 0.347) 50.8%, rgb(0 0 0 / 0.210) 56.7%, rgb(0 0 0 / 0.104) 62.5%, rgb(0 0 0 / 0.035) 68.3%, rgb(0 0 0 / 0.005) 74.2%, rgb(0 0 0 / 0.000) 80.0%);
+	-webkit-mask-size: 100% 100%, 7px 7px, 7px 7px, 100% 100%;
+	mask-size: 100% 100%, 7px 7px, 7px 7px, 100% 100%;
+	-webkit-mask-repeat: no-repeat, repeat, repeat, no-repeat;
+	mask-repeat: no-repeat, repeat, repeat, no-repeat;
+	-webkit-mask-composite: source-in, source-over, source-in, source-over;
+	mask-composite: intersect, add, intersect, add;
+}
+
+.onboarding-backdrop::after {
+	-webkit-mask-image: radial-gradient(circle, black 2px, transparent 2.6px), linear-gradient(to right, rgb(0 0 0 / 1.000) 0.0%, rgb(0 0 0 / 0.995) 3.5%, rgb(0 0 0 / 0.965) 7.0%, rgb(0 0 0 / 0.896) 10.5%, rgb(0 0 0 / 0.790) 14.0%, rgb(0 0 0 / 0.653) 17.5%, rgb(0 0 0 / 0.500) 21.0%, rgb(0 0 0 / 0.347) 24.5%, rgb(0 0 0 / 0.210) 28.0%, rgb(0 0 0 / 0.104) 31.5%, rgb(0 0 0 / 0.035) 35.0%, rgb(0 0 0 / 0.005) 38.5%, rgb(0 0 0 / 0.000) 42.0%);
+	mask-image: radial-gradient(circle, black 2px, transparent 2.6px), linear-gradient(to right, rgb(0 0 0 / 1.000) 0.0%, rgb(0 0 0 / 0.995) 3.5%, rgb(0 0 0 / 0.965) 7.0%, rgb(0 0 0 / 0.896) 10.5%, rgb(0 0 0 / 0.790) 14.0%, rgb(0 0 0 / 0.653) 17.5%, rgb(0 0 0 / 0.500) 21.0%, rgb(0 0 0 / 0.347) 24.5%, rgb(0 0 0 / 0.210) 28.0%, rgb(0 0 0 / 0.104) 31.5%, rgb(0 0 0 / 0.035) 35.0%, rgb(0 0 0 / 0.005) 38.5%, rgb(0 0 0 / 0.000) 42.0%);
+	-webkit-mask-size: 7px 7px, 100% 100%;
+	mask-size: 7px 7px, 100% 100%;
+	-webkit-mask-repeat: repeat, no-repeat;
+	mask-repeat: repeat, no-repeat;
+	-webkit-mask-composite: source-in, source-over;
+	mask-composite: intersect, add;
+}
+
+/* Guided tour (GuidedTour): the rest of the window fades back toward the page
+ * rather than greying out, and a thin focus-coloured ring marks what's lit. */
+:root {
+	--tour-scrim: color-mix(in oklch, var(--background) 68%, transparent);
+	--tour-ring: color-mix(in oklch, var(--ring) 80%, transparent);
+}
+
+/* Onboarding illustration style: a black-and-white line drawing. Strokes
+ * only: every fill is clear, so the drawing sits on the onboarding page, and
+ * one thin line weight in the page's own foreground draws every edge (white
+ * on black in dark theme, black on white in light). No glow or
+ * shadow; labels are monospace. Scoped to the stage, so the real app is
+ * untouched. Utilities read the leaf tokens directly (@theme inline), so the
+ * leaves are set here. */
+.first-run-onboarding {
+	/* Resolved here, outside the stage's overrides: the page's real colours.
+	 * --schematic-solid stays opaque in a translucent window too (its canvas
+	 * colour is cleared there), for parts that must hide what is behind them. */
+	--schematic-page: var(--color-bg-primary);
+	--schematic-solid: var(--solid-bg-primary, var(--color-bg-primary));
+	--schematic-fg: var(--foreground);
+	/* The drawing's only colour, on AO Cloud's sessions: a diff's added and
+	 * removed lines, and the agent's live activity. */
+	--schematic-add: var(--color-success);
+	--schematic-del: var(--color-error);
+	--schematic-live: var(--color-status-working);
+	--schematic-add-tint: color-mix(in srgb, var(--color-success) 14%, transparent);
+	--schematic-del-tint: color-mix(in srgb, var(--color-error) 14%, transparent);
+	/* The cloud cut into AO Cloud's platform: its lit far wall and its floor. */
+	--schematic-wall: color-mix(in srgb, var(--foreground) 14%, var(--schematic-solid));
+	--schematic-floor: color-mix(in srgb, var(--schematic-solid) 60%, black);
+}
+
+.onboarding-preview-stage {
+	--schematic-line: color-mix(in srgb, var(--schematic-fg) 28%, transparent);
+	--schematic-line-strong: color-mix(in srgb, var(--schematic-fg) 40%, transparent);
+	--schematic-text: var(--schematic-fg);
+	--schematic-text-muted: color-mix(in srgb, var(--schematic-fg) 60%, transparent);
+	--schematic-text-passive: color-mix(in srgb, var(--schematic-fg) 42%, transparent);
+
+	--background: transparent;
+	--foreground: var(--schematic-text);
+	--card: transparent;
+	--popover: var(--schematic-page);
+	--sidebar: transparent;
+	--primary: transparent;
+	--primary-foreground: var(--schematic-text);
+	--muted: transparent;
+	--secondary: transparent;
+	--accent: transparent;
+	--sidebar-accent: transparent;
+	--muted-foreground: var(--schematic-text-muted);
+	--border: var(--schematic-line);
+	--input: var(--schematic-line-strong);
+	--sidebar-border: var(--schematic-line);
+	--color-bg-primary: transparent;
+	--color-bg-secondary: transparent;
+	--color-bg-tertiary: transparent;
+	--color-bg-sidebar: transparent;
+	--color-bg-elevated: var(--schematic-page);
+	--color-text-primary: var(--schematic-text);
+	--color-text-muted: var(--schematic-text-muted);
+	--color-text-passive: var(--schematic-text-passive);
+	--color-border: var(--schematic-line);
+	--color-border-strong: var(--schematic-line-strong);
+	--color-status-working: var(--schematic-text);
+	--color-status-needs-you: var(--schematic-text);
+	--color-status-validating: var(--schematic-text);
+	--color-status-in-review: var(--schematic-text);
+	--color-status-ready: var(--schematic-text);
+	--color-status-merged: var(--schematic-text);
+	--color-status-idle: var(--schematic-text-passive);
+	--font-family-base: var(--font-family-mono);
+	--font-sans: var(--font-family-mono);
+	font-family: var(--font-family-mono);
+}
+
+.onboarding-preview-stage * {
+	font-family: var(--font-family-mono);
+}
+
+.onboarding-preview-stage .onboarding-preview-window {
+	--color-bg-secondary: transparent;
+	--color-bg-tertiary: transparent;
+	--muted: transparent;
+	--secondary: transparent;
+	--accent: transparent;
+	--sidebar-accent: transparent;
+}
+
+/* No glass, tint or shadow: the window is only its outline. */
+.onboarding-preview-stage .onboarding-preview-plate,
+.onboarding-preview-stage[data-opaque="true"] .onboarding-preview-plate {
+	background-color: transparent;
+	-webkit-backdrop-filter: none;
+	backdrop-filter: none;
+}
+
+.onboarding-preview-stage .onboarding-preview-panel-backing,
+.onboarding-preview-stage[data-opaque="true"] .onboarding-preview-panel-backing {
+	background-color: transparent;
+	box-shadow: 0 0 0 1px var(--schematic-line);
+}
+
+/* Status dots: plain foreground dots, no colour or glow. */
+.onboarding-preview-stage [class*="bg-status-"] {
+	background-color: var(--schematic-text);
+}
+
+.onboarding-preview-stage .bg-status-idle {
+	background-color: var(--schematic-text-passive);
+}
+
+/* The preview board never scrolls; letting its lanes overflow means a card
+ * moving between lanes stays visible for the whole trip instead of being
+ * clipped at its lane's edge. */
+.onboarding-preview-board :is(.board-horizontal-scrollbar, .board-horizontal-scrollbar > .grid > *, .board-scrollbar) {
+	overflow: visible;
+}
+
+.onboarding-preview-window :is(.z-overlay, [role="dialog"], [role="tooltip"]) {
+	--color-bg-primary: var(--solid-bg-primary);
+	--color-bg-secondary: var(--solid-bg-secondary);
+	--color-bg-tertiary: var(--solid-bg-tertiary);
+	--color-bg-sidebar: var(--solid-bg-sidebar);
+	--muted: var(--solid-muted);
+	--secondary: var(--solid-secondary);
+	--accent: var(--solid-accent);
+	--sidebar-accent: var(--solid-sidebar-accent);
+	--bg: var(--color-bg-primary);
+	--bg-0: var(--color-bg-primary);
+	--bg-1: var(--color-bg-secondary);
+	--bg-2: var(--color-bg-tertiary);
+	--surface: var(--color-bg-secondary);
+}
+
+.onboarding-preview-window :is(.text-background, .hover\:text-background:hover) {
+	color: var(--solid-bg-primary);
+}
+
+/* Nightly build-info tooltip: a fixed deep-indigo card (theme independent) with a
+   purple-blue mist and a few stars, so the nightly channel reads as its own place. */
+.build-info-nightly {
+	background-color: oklch(0.2 0.05 285);
+	background-image:
+		radial-gradient(1px 1px at 14% 26%, oklch(0.98 0.02 280 / 0.95), transparent),
+		radial-gradient(1px 1px at 38% 72%, oklch(0.98 0.02 280 / 0.7), transparent),
+		radial-gradient(1.5px 1.5px at 62% 20%, oklch(0.98 0.02 280 / 0.9), transparent),
+		radial-gradient(1px 1px at 84% 58%, oklch(0.98 0.02 280 / 0.8), transparent),
+		radial-gradient(1px 1px at 92% 18%, oklch(0.98 0.02 280 / 0.6), transparent),
+		radial-gradient(1px 1px at 52% 88%, oklch(0.98 0.02 280 / 0.55), transparent),
+		radial-gradient(90% 120% at 8% 0%, oklch(0.5 0.2 305 / 0.55), transparent 70%),
+		radial-gradient(90% 120% at 100% 100%, oklch(0.55 0.17 250 / 0.5), transparent 70%);
+	color: oklch(0.96 0.01 285);
+	box-shadow: 0 0 0 1px oklch(0.6 0.15 285 / 0.28), 0 6px 18px oklch(0.15 0.08 285 / 0.45);
+}
+
+@media (prefers-reduced-motion: no-preference) {
+	.build-info-nightly::after {
+		animation: build-info-twinkle 3.6s ease-in-out infinite;
+		background-image:
+			radial-gradient(1px 1px at 28% 40%, oklch(0.98 0.02 280), transparent),
+			radial-gradient(1.5px 1.5px at 74% 78%, oklch(0.98 0.02 280), transparent),
+			radial-gradient(1px 1px at 46% 12%, oklch(0.98 0.02 280), transparent);
+		border-radius: inherit;
+		content: "";
+		inset: 0;
+		pointer-events: none;
+		position: absolute;
+	}
+}
+
+@keyframes build-info-twinkle {
+	0%, 100% { opacity: 0.15; }
+	50% { opacity: 1; }
+}
+
+/* Sidebar hover preview: lift the card off the sidebar. In dark it resolves to
+ * the same surface as the sidebar, so mix in some foreground and add a hairline
+ * + shadow. */
+:root:not([data-theme="light"]) [data-session-preview-card] [data-testid="board-session-card"] {
+	background-color: color-mix(in oklch, var(--solid-bg-secondary, var(--color-bg-secondary)) 86%, var(--foreground)) !important;
+	box-shadow:
+		0 0 0 1px color-mix(in oklch, var(--foreground) 14%, transparent),
+		0 8px 24px -6px oklch(0 0 0 / 35%);
+}
+
+/* In light, darkening reads as dirty gray. Use the menu surface and its faint
+ * edge instead; the hover card wrapper already adds the popover shadow. */
+:root[data-theme="light"] [data-session-preview-card] [data-testid="board-session-card"] {
+	background-color: var(--color-bg-elevated) !important;
+	box-shadow: 0 0 0 1px var(--color-border-overlay);
+}
+
+/* Keep the session row lit while its hover preview card is open (pointer on the card). */
+.group\/nav-row[data-preview-open] [data-nav-row-highlight-idle] {
+	opacity: 1;
+}
+.group\/nav-row[data-preview-open] {
+	color: var(--color-foreground);
+}
+
+/* Keep a nav-row menu trigger (sidebar footer account and Mobile) lit while its
+   menu is open. Keyed on aria-expanded, not data-state: a Tooltip wrapped around
+   the trigger overwrites data-state with its own value. aria-haspopup keeps
+   collapsible rows, which also set aria-expanded, out of it. */
+.group\/nav-row[aria-haspopup="menu"][aria-expanded="true"] [data-nav-row-highlight-idle] {
+	opacity: 1;
+}
+.group\/nav-row[aria-haspopup="menu"][aria-expanded="true"] {
+	color: var(--color-foreground);
+}
+
+/* ── Split panes: tab drag ghost, drop preview, divider ──────────────────── */
+/* Positioned by lib/pane-drag.ts: the ghost moves by transform only, the
+ * preview box moves only when the zone under the pointer changes. */
+body.is-pane-dragging {
+	cursor: grabbing;
+	user-select: none;
+	-webkit-user-select: none;
+}
+
+/* Embedded documents would swallow the pointer stream mid-drag. */
+body.is-pane-dragging iframe,
+body.is-pane-dragging webview {
+	pointer-events: none;
+}
+
+[data-pane-drag-source] [data-terminal-tab-frame],
+[data-pane-drag-source] [data-pane-drag-chip],
+[data-pane-drag-source][data-terminal-tab-frame] {
+	opacity: 0.4;
+	transition: opacity var(--duration-fast) ease-out;
+}
+
+.pane-drag-ghost {
+	position: fixed;
+	top: 0;
+	left: 0;
+	z-index: calc(var(--z-overlay) + 2);
+	display: flex;
+	overflow: hidden;
+	pointer-events: none;
+	/* Exactly the tab's box: square like the tab, no ring or scale that would
+	   read larger. Only a soft shadow lifts it off the page. */
+	background: var(--color-bg-elevated);
+	box-shadow: var(--shadow-popover);
+	opacity: 0;
+	will-change: transform;
+	transition: opacity var(--duration-fast) ease-out;
+}
+
+.pane-drag-ghost > [data-terminal-tab-frame],
+.pane-drag-ghost > [data-pane-drag-chip] {
+	flex: 1;
+	min-width: 0;
+	max-width: none;
+}
+
+/* On the floating top bar a tab is a pill: round the ghost to match and
+   drop the trailing gap and separator, which sit outside the measured box. */
+.pane-drag-ghost.center-panel-shell--floating-topbar {
+	border-radius: var(--radius-topbar-control);
+}
+
+.pane-drag-ghost.center-panel-shell--floating-topbar > [data-terminal-tab-frame] {
+	margin-inline-end: 0;
+}
+
+.pane-drag-ghost.center-panel-shell--floating-topbar > [data-terminal-tab-frame]::after {
+	content: none;
+}
+
+.pane-drag-ghost[data-lifted] {
+	opacity: 0.96;
+}
+
+.pane-drag-ghost[data-leaving] {
+	opacity: 0;
+	transition-timing-function: ease-in;
+}
+
+.pane-drop-preview {
+	position: fixed;
+	z-index: calc(var(--z-overlay) + 1);
+	pointer-events: none;
+	border-radius: var(--radius-lg);
+	background: color-mix(in oklch, var(--primary) 7%, transparent);
+	box-shadow: inset 0 0 0 1px color-mix(in oklch, var(--primary) 32%, transparent);
+	opacity: 0;
+	contain: strict;
+	transition:
+		opacity var(--duration-fast) ease-out,
+		left 180ms cubic-bezier(0.2, 0.8, 0.2, 1),
+		top 180ms cubic-bezier(0.2, 0.8, 0.2, 1),
+		width 180ms cubic-bezier(0.2, 0.8, 0.2, 1),
+		height 180ms cubic-bezier(0.2, 0.8, 0.2, 1);
+}
+
+.pane-drop-preview[data-visible] {
+	opacity: 1;
+}
+
+.pane-drop-preview[data-instant] {
+	transition: none;
+}
+
+/* What releasing a dragged tab here does, named inside the preview. */
+.pane-drop-preview[data-label]::after {
+	content: attr(data-label);
+	position: absolute;
+	left: 50%;
+	top: 50%;
+	max-width: calc(100% - 16px);
+	padding: 4px 10px;
+	overflow: hidden;
+	transform: translate(-50%, -50%);
+	border-radius: var(--radius-md);
+	background: color-mix(in oklch, var(--background) 90%, transparent);
+	box-shadow: 0 0 0 1px color-mix(in oklch, var(--primary) 32%, transparent);
+	color: var(--foreground);
+	font-size: 12px;
+	line-height: 16px;
+	text-overflow: ellipsis;
+	white-space: nowrap;
+}
+
+/* The title bar of one pane in a split: the pane's handle, name and exits. */
+.pane-split-header {
+	z-index: 5;
+	cursor: grab;
+	touch-action: none;
+}
+
+.pane-split-header:active {
+	cursor: grabbing;
+}
+
+/* Divider between the panes: a hairline, with the shared hover-only grip line. */
+.pane-split-divider {
+	position: absolute;
+	z-index: 6;
+	touch-action: none;
+}
+
+.pane-split-divider[data-orientation="vertical"] {
+	top: 0;
+	bottom: 0;
+	width: 9px;
+	margin-left: -4px;
+	cursor: col-resize;
+}
+
+.pane-split-divider[data-orientation="horizontal"] {
+	left: 0;
+	right: 0;
+	height: 9px;
+	margin-top: -4px;
+	cursor: row-resize;
+}
+
+.pane-split-divider::before,
+.pane-split-divider::after {
+	content: "";
+	position: absolute;
+	pointer-events: none;
+}
+
+/* The resting hairline. */
+.pane-split-divider[data-orientation="vertical"]::before {
+	top: 0;
+	bottom: 0;
+	left: 4px;
+	width: 1px;
+	background: var(--color-border);
+}
+
+.pane-split-divider[data-orientation="horizontal"]::before {
+	left: 0;
+	right: 0;
+	top: 4px;
+	height: 1px;
+	background: var(--color-border);
+}
+
+/* Where two dividers meet: a wider hit area that moves both at once, with a
+ * soft dot on hover. Above the dividers so it wins the overlap. */
+.pane-split-junction {
+	position: absolute;
+	z-index: 7;
+	width: 15px;
+	height: 15px;
+	margin: -7px 0 0 -7px;
+	border-radius: 9999px;
+	cursor: move;
+	touch-action: none;
+}
+
+.pane-split-junction::after {
+	content: "";
+	position: absolute;
+	inset: 4px;
+	border-radius: 9999px;
+	background: color-mix(in oklch, var(--foreground) 30%, transparent);
+	opacity: 0;
+	transition: opacity var(--duration-fast) ease-out;
+}
+
+.pane-split-junction:hover::after {
+	opacity: 1;
+}
+
+/* The hover grip, matching ResizeHandle: 2px, fading at both ends. */
+.pane-split-divider::after {
+	opacity: 0;
+	transition: opacity var(--duration-fast) ease-out;
+}
+
+.pane-split-divider[data-orientation="vertical"]::after {
+	top: 0;
+	bottom: 0;
+	left: 3.5px;
+	width: 2px;
+	background: linear-gradient(to bottom, transparent, color-mix(in oklch, var(--foreground) 30%, transparent), transparent);
+}
+
+.pane-split-divider[data-orientation="horizontal"]::after {
+	left: 0;
+	right: 0;
+	top: 3.5px;
+	height: 2px;
+	background: linear-gradient(to right, transparent, color-mix(in oklch, var(--foreground) 30%, transparent), transparent);
+}
+
+.pane-split-divider:hover::after,
+.pane-split-divider:focus-visible::after {
+	opacity: 1;
+}
+
+@media (prefers-reduced-motion: reduce) {
+	.pane-drag-ghost,
+	.pane-drop-preview,
+	.pane-split-divider::after,
+	.pane-split-junction::after {
+		transition: none;
 	}
 }

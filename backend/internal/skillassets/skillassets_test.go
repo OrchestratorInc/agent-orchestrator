@@ -51,9 +51,9 @@ func TestEmbeddedPreviewGuidanceDoesNotScaffoldStaticSites(t *testing.T) {
 		"Never create or modify `package.json`",
 		"Do not create `.ao/launch.json` unless the user asks",
 		"reuse the repository's existing dev command",
-		"without waiting for a separate \"open it\" request",
+		"Do not run `ao preview` on a deliverable in this session's artifact directory, whatever its file type",
+		"renders it in the session's Artifacts tab",
 		"Do not steal the browser from an active application",
-		"open the primary requested artifact",
 		"relative to the session workspace root, not the shell's current directory",
 		"Do not compensate for the current directory with `../README.md`",
 		"existing confined loopback preview origin",
@@ -72,7 +72,7 @@ func TestEmbeddedPreviewGuidanceDoesNotScaffoldStaticSites(t *testing.T) {
 	skillText := string(skillBody)
 	normalizedSkillText := strings.Join(strings.Fields(skillText), " ")
 	if !strings.Contains(normalizedSkillText, "[commands/preview.md](commands/preview.md) before acting") ||
-		!strings.Contains(normalizedSkillText, "automatic-handoff rules are load-bearing") ||
+		!strings.Contains(normalizedSkillText, "artifacts render in the Artifacts tab after `ao artifact add`, never through `ao preview`") ||
 		!strings.Contains(normalizedSkillText, "[commands/browser.md](commands/browser.md)") ||
 		!strings.Contains(normalizedSkillText, "opt-in network policy") {
 		t.Fatalf("skill catalog is missing focused preview/browser routing:\n%s", skillText)
@@ -98,6 +98,63 @@ func TestEmbeddedBrowserGuidanceKeepsNetworkCaptureOptional(t *testing.T) {
 	}
 }
 
+func TestEmbeddedSessionGuidanceDocumentsCanonicalInAppLinks(t *testing.T) {
+	body, err := files.ReadFile("using-ao/commands/session.md")
+	if err != nil {
+		t.Fatalf("read embedded session guidance: %v", err)
+	}
+	text := strings.Join(strings.Fields(string(body)), " ")
+	for _, required := range []string{
+		"ao://sessions/{project-id}/{session-id}",
+		"Never use display names as identity",
+		"Encode either ID with URL percent encoding",
+		"Do not append query strings, fragments, action names, credentials, authorities, or extra path segments",
+		"only inside a currently running Orchestrator desktop app",
+		"never sends a message, executes a command, or performs another action",
+	} {
+		if !strings.Contains(text, required) {
+			t.Fatalf("session-link guidance missing %q:\n%s", required, body)
+		}
+	}
+}
+
+func TestEmbeddedSpawnGuidanceListsOpenCodeV2(t *testing.T) {
+	body, err := files.ReadFile("using-ao/commands/spawn.md")
+	if err != nil {
+		t.Fatalf("read embedded spawn guidance: %v", err)
+	}
+	text := string(body)
+	if !strings.Contains(text, "`opencode`, `opencode-v2`") {
+		t.Fatalf("spawn guidance does not distinguish OpenCode 1 and 2:\n%s", text)
+	}
+}
+
+func TestEmbeddedReviewGuidanceUsesReviewClaims(t *testing.T) {
+	for _, tc := range []struct {
+		path string
+		want string
+	}{
+		{"using-ao/commands/review.md", "ao spawn --claim-pr <pr-ref> --no-takeover --review"},
+		{"using-ao/commands/review.md", "ao session claim-pr <pr-ref> --review=false"},
+		{"using-ao/commands/spawn.md", `--name "review-pr-88" --claim-pr 88 --no-takeover --review`},
+		{"using-ao/commands/session.md", "ao session claim-pr 88 --no-takeover --review"},
+		{"using-ao/commands/session.md", "ao session claim-pr 88 --review=false"},
+		{"using-ao/commands/session.md", "do not commit, push, rebase, or otherwise change it unless the user explicitly asks"},
+	} {
+		body, err := files.ReadFile(tc.path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !strings.Contains(strings.Join(strings.Fields(string(body)), " "), tc.want) {
+			t.Fatalf("%s missing %q", tc.path, tc.want)
+		}
+	}
+	spawn, _ := files.ReadFile("using-ao/commands/spawn.md")
+	if strings.Contains(string(spawn), "Do not claim or attach the PR") {
+		t.Fatal("spawn guidance still tells reviewers not to claim the PR")
+	}
+}
+
 // TestInstall_WritesSkillAndIsIdempotent: Install must lay down the embedded
 // skill (SKILL.md plus a commands file) under <dataDir>/skills/using-ao, and a
 // second run must clobber cleanly, leaving no stale files. This is the whole
@@ -118,6 +175,9 @@ func TestInstall_WritesSkillAndIsIdempotent(t *testing.T) {
 	if _, err := os.Stat(filepath.Join(Dir(dataDir), "commands", "spawn.md")); err != nil {
 		t.Fatalf("commands/spawn.md missing: %v", err)
 	}
+	if _, err := os.Stat(filepath.Join(Dir(dataDir), "commands", "cue.md")); err != nil {
+		t.Fatalf("commands/cue.md missing: %v", err)
+	}
 	if _, err := os.Stat(filepath.Join(Dir(dataDir), "commands", "browser.md")); err != nil {
 		t.Fatalf("commands/browser.md missing: %v", err)
 	}
@@ -135,6 +195,27 @@ func TestInstall_WritesSkillAndIsIdempotent(t *testing.T) {
 	}
 }
 
+func TestEmbeddedRemoteBrowserGuidanceMatchesRemoteInterface(t *testing.T) {
+	body, err := files.ReadFile("using-ao/commands/browser-remote.md")
+	if err != nil {
+		t.Fatalf("read embedded remote browser guidance: %v", err)
+	}
+	guidance := strings.Join(strings.Fields(string(body)), " ")
+	for _, want := range []string{
+		"sessions share tabs, cookies, and logins",
+		"ao browser --help",
+		"ao browser get url",
+		"ao browser snapshot --interactive",
+		"agent-browser",
+		"Desktop-only `status`, `act`, and snapshot `--delta` are not available here",
+		"untrusted external content",
+	} {
+		if !strings.Contains(guidance, want) {
+			t.Fatalf("remote browser guidance missing %q:\n%s", want, body)
+		}
+	}
+}
+
 // TestMaterialize_WritesIntoArbitraryDest covers the opencode adapter path:
 // materialize the skill into .opencode/skills/using-ao (not the data-dir layout).
 func TestMaterialize_WritesIntoArbitraryDest(t *testing.T) {
@@ -149,5 +230,64 @@ func TestMaterialize_WritesIntoArbitraryDest(t *testing.T) {
 	}
 	if _, err := os.Stat(filepath.Join(dest, "commands", "spawn.md")); err != nil {
 		t.Fatalf("commands/spawn.md missing: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(dest, "commands", "browser-remote.md")); err != nil {
+		t.Fatalf("commands/browser-remote.md missing: %v", err)
+	}
+}
+
+func TestEmbeddedReportGuidanceDistinguishesDeliverablesFromDiagnostics(t *testing.T) {
+	body, err := files.ReadFile("using-ao/commands/report.md")
+	if err != nil {
+		t.Fatal(err)
+	}
+	guidance := strings.Join(strings.Fields(string(body)), " ")
+	for _, want := range []string{
+		"working material, not deliverables",
+		"Do not attach them unless requested or needed to explain an actionable failure",
+		"Summarize validation in the report note",
+		"not external publishing authorization",
+		"In a chat session, an HTML file from the artifact directory that you attach with `--artifact` also shows in the thread.",
+	} {
+		if !strings.Contains(guidance, want) {
+			t.Fatalf("report guidance missing %q", want)
+		}
+	}
+}
+
+func TestEmbeddedRenderGuidanceSeparatesRendersFromArtifacts(t *testing.T) {
+	body, err := files.ReadFile("using-ao/commands/render.md")
+	if err != nil {
+		t.Fatal(err)
+	}
+	guidance := strings.Join(strings.Fields(string(body)), " ")
+	for _, want := range []string{
+		"## ao render or a session artifact",
+		"when the page answers a question in the thread",
+		"attach it with `ao report --artifact <path>`",
+		"In a chat session, an HTML file from the artifact directory that you attach with `--artifact` also shows in the thread.",
+		"add `--artifact` to `ao render` (or set `artifact: true` in `html_render`). Do this only when the user asks to keep the page.",
+	} {
+		if !strings.Contains(guidance, want) {
+			t.Fatalf("render guidance missing %q", want)
+		}
+	}
+}
+
+// AO_SESSION_ARTIFACTS_DIR is set only in cloud sandboxes, and these docs run on
+// local sessions too, where it would expand to nothing.
+func TestArtifactGuidanceUsesPathsThatWorkInLocalSessions(t *testing.T) {
+	body, err := files.ReadFile("using-ao/commands/artifact.md")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(body), "AO_SESSION_ARTIFACTS_DIR") {
+		t.Fatal("artifact guidance names a variable local sessions do not set")
+	}
+	guidance := strings.Join(strings.Fields(string(body)), " ")
+	for _, want := range []string{"ao artifact add report.html", "`artifact: true` in `html_render`"} {
+		if !strings.Contains(guidance, want) {
+			t.Fatalf("artifact guidance missing %q", want)
+		}
 	}
 }

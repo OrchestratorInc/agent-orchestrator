@@ -1,22 +1,44 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { act, renderHook, waitFor } from "@testing-library/react";
 import type { ReactNode } from "react";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-const { deleteMock, getMock, postMock, putMock } = vi.hoisted(() => ({
+const { cloudCpMock, deleteMock, getMock, postMock, putMock } = vi.hoisted(() => ({
+	cloudCpMock: { client: {}, ready: false, baseUrl: "" },
 	deleteMock: vi.fn(),
 	getMock: vi.fn(),
 	postMock: vi.fn(),
 	putMock: vi.fn(),
 }));
+const { remoteGetMock, remotePostMock, remoteDeleteMock, remotePutMock, clientForSessionHostMock } = vi.hoisted(() => ({
+	remoteGetMock: vi.fn(),
+	remotePostMock: vi.fn(),
+	remoteDeleteMock: vi.fn(),
+	remotePutMock: vi.fn(),
+	clientForSessionHostMock: vi.fn(),
+}));
 
 vi.mock("../lib/api-client", () => ({
 	apiClient: { GET: getMock, POST: postMock, PUT: putMock, DELETE: deleteMock },
+	apiErrorCode: (error: unknown) => (error as { code?: string } | undefined)?.code,
 	apiErrorMessage: () => "request failed",
 	hasTrustedApiBaseUrl: () => true,
 }));
+vi.mock("../lib/host-clients", () => ({ clientForSessionHost: clientForSessionHostMock }));
 
-import { useSessionInterfaceTransition } from "./useSessionInterfaceTransition";
+// Keep these hook tests focused on the local daemon path. The real Cloud
+// readiness hooks subscribe to settings/auth queries and can trigger an
+// unrelated refetch while the test is asserting the first response.
+vi.mock("./useCloudCp", () => ({
+	useCloudCp: () => cloudCpMock,
+}));
+
+import { CloudCpAuthError, CloudCpError } from "../lib/cloud-cp";
+
+import {
+	interfaceTransitionRefetchInterval,
+	useSessionInterfaceTransition,
+} from "./useSessionInterfaceTransition";
 
 function wrapper({ children }: { children: ReactNode }) {
 	const queryClient = new QueryClient({
@@ -38,9 +60,249 @@ beforeEach(() => {
 	getMock.mockReset();
 	postMock.mockReset();
 	putMock.mockReset();
+	remoteGetMock.mockReset();
+	remotePostMock.mockReset();
+	remoteDeleteMock.mockReset();
+	remotePutMock.mockReset();
+	clientForSessionHostMock.mockReset().mockImplementation((hostId?: string) => hostId
+		? { GET: remoteGetMock, POST: remotePostMock, DELETE: remoteDeleteMock, PUT: remotePutMock }
+		: { GET: getMock, POST: postMock, DELETE: deleteMock, PUT: putMock });
+	cloudCpMock.client = {};
+	cloudCpMock.ready = false;
+	cloudCpMock.baseUrl = "";
 });
 
 describe("session-scoped interface transition mutations", () => {
+	it("keeps same-ID transitions on their owning host", async () => {
+		const pendingA = deferred<{ data: { ok: boolean }; error: undefined }>();
+		const postA = vi.fn().mockReturnValue(pendingA.promise);
+		const postB = vi.fn().mockResolvedValue({ data: { ok: true }, error: undefined });
+		const status = vi.fn().mockResolvedValue({ data: { supported: true, targetMode: "tui" }, error: undefined });
+		clientForSessionHostMock.mockImplementation((hostId?: string) => hostId === "box-a"
+			? { GET: status, POST: postA }
+			: hostId === "box-b"
+				? { GET: status, POST: postB }
+				: { GET: getMock, POST: postMock });
+		getMock.mockResolvedValue({ data: { supported: true, targetMode: "tui" }, error: undefined });
+		postMock.mockResolvedValue({ data: { ok: true }, error: undefined });
+		const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false }, mutations: { retry: false } } });
+		const HookWrapper = ({ children }: { children: ReactNode }) => <QueryClientProvider client={queryClient}>{children}</QueryClientProvider>;
+		const { result, rerender } = renderHook(
+			({ hostId }) => useSessionInterfaceTransition("same", hostId),
+			{ initialProps: { hostId: "box-a" as string | undefined }, wrapper: HookWrapper },
+		);
+		let startA!: Promise<unknown>;
+		act(() => { startA = result.current.start({ targetMode: "tui", policy: "drain" }); });
+		await waitFor(() => expect(result.current.starting).toBe(true));
+		rerender({ hostId: "box-b" });
+		expect(result.current.starting).toBe(false);
+		await act(async () => { await result.current.start({ targetMode: "tui", policy: "drain" }); });
+		expect(postB).toHaveBeenCalledWith("/api/v1/sessions/{sessionId}/interface-transition", {
+			params: { path: { sessionId: "same" } }, body: { targetMode: "tui", policy: "drain" },
+		});
+		rerender({ hostId: undefined });
+		expect(result.current.starting).toBe(false);
+		await act(async () => { await result.current.start({ targetMode: "tui", policy: "drain" }); });
+		expect(postMock).toHaveBeenCalledOnce();
+		pendingA.resolve({ data: { ok: true }, error: undefined });
+		await act(async () => { await startA; });
+		expect(postA).toHaveBeenCalledOnce();
+		expect(queryClient.getQueryData(["session-interface-transition", "box-a", "same"])).toBeDefined();
+		expect(queryClient.getQueryData(["session-interface-transition", "box-b", "same"])).toBeDefined();
+	});
+	it.each([
+		["tui", "chat"],
+		["chat", "tui"],
+	] as const)("retains a completed Cloud %s to %s handoff until the session list catches up", async (sourceMode, targetMode) => {
+		const transition = {
+			id: "transition-1", sessionId: "session-a", sourceMode, targetMode,
+			policy: "interrupt" as const, phase: "target_starting" as const,
+			createdAt: "2026-09-01T00:00:00Z", updatedAt: "2026-09-01T00:00:01Z",
+		};
+		const getSession = vi.fn()
+			.mockResolvedValueOnce({ session: { interfaceMode: sourceMode } })
+			.mockResolvedValue({ session: { interfaceMode: targetMode } });
+		const getInterfaceTransition = vi.fn()
+			.mockResolvedValueOnce({ supported: true, targetMode, transition })
+			.mockResolvedValue({ supported: true, targetMode: sourceMode });
+		cloudCpMock.client = { getSession, getInterfaceTransition };
+		cloudCpMock.ready = true;
+
+		const { result } = renderHook(
+			() => useSessionInterfaceTransition("session-a", { orgId: "org-a" }),
+			{ wrapper },
+		);
+		await waitFor(() => expect(result.current.transition?.phase).toBe("target_starting"));
+		await act(async () => { await result.current.refreshStatus(); });
+		await waitFor(() => expect(result.current.transition?.phase).toBe("completed"));
+		expect(result.current.transition?.targetMode).toBe(targetMode);
+		await act(async () => { await result.current.refreshStatus(); });
+		await waitFor(() => expect(result.current.transition?.phase).toBe("completed"));
+	});
+
+	it("clears a cancelled Cloud handoff when the source mode remains selected", async () => {
+		const transition = {
+			id: "transition-1", sessionId: "session-a", sourceMode: "tui" as const,
+			targetMode: "chat" as const, policy: "drain" as const,
+			phase: "draining" as const, createdAt: "2026-09-01T00:00:00Z",
+			updatedAt: "2026-09-01T00:00:01Z",
+		};
+		const getSession = vi.fn().mockResolvedValue({ session: { interfaceMode: "tui" } });
+		const getInterfaceTransition = vi.fn()
+			.mockResolvedValueOnce({ supported: true, targetMode: "chat", transition })
+			.mockResolvedValue({ supported: true, targetMode: "chat" });
+		cloudCpMock.client = { getSession, getInterfaceTransition };
+		cloudCpMock.ready = true;
+
+		const { result } = renderHook(
+			() => useSessionInterfaceTransition("session-a", { orgId: "org-a" }),
+			{ wrapper },
+		);
+		await waitFor(() => expect(result.current.transition?.phase).toBe("draining"));
+		await act(async () => { await result.current.refreshStatus(); });
+		await waitFor(() => expect(result.current.transition).toBeUndefined());
+	});
+
+	it("keeps a Cloud handoff active across its status refetch", async () => {
+		const transition = {
+			id: "transition-1",
+			sessionId: "session-a",
+			sourceMode: "tui" as const,
+			targetMode: "chat" as const,
+			policy: "drain" as const,
+			phase: "source_stopping" as const,
+			createdAt: "2026-09-01T00:00:00Z",
+			updatedAt: "2026-09-01T00:00:01Z",
+		};
+		const getSession = vi.fn().mockResolvedValue({
+			session: { interfaceMode: "tui" },
+		});
+		const getInterfaceTransition = vi.fn().mockResolvedValue({
+			supported: true,
+			targetMode: "chat",
+			transition,
+		});
+		cloudCpMock.client = { getSession, getInterfaceTransition };
+		cloudCpMock.ready = true;
+
+		const { result } = renderHook(
+			() => useSessionInterfaceTransition("session-a", { orgId: "org-a" }),
+			{ wrapper },
+		);
+
+		await waitFor(() => expect(result.current.transition?.id).toBe("transition-1"));
+		expect(result.current.transition?.phase).toBe("source_stopping");
+		expect(getMock).not.toHaveBeenCalled();
+	});
+
+	it("cancels a Cloud handoff through the control-plane client", async () => {
+		const cancelInterfaceTransition = vi.fn().mockResolvedValue({ ok: true });
+		cloudCpMock.client = {
+			getSession: vi.fn().mockResolvedValue({ session: { interfaceMode: "tui" } }),
+			getInterfaceTransition: vi.fn().mockResolvedValue({
+				supported: true,
+				targetMode: "chat",
+				transition: {
+					id: "transition-1",
+					sessionId: "session-a",
+					sourceMode: "tui",
+					targetMode: "chat",
+					policy: "drain",
+					phase: "draining",
+					createdAt: "2026-09-01T00:00:00Z",
+					updatedAt: "2026-09-01T00:00:01Z",
+				},
+			}),
+			cancelInterfaceTransition,
+		};
+		cloudCpMock.ready = true;
+
+		const { result } = renderHook(
+			() => useSessionInterfaceTransition("session-a", { orgId: "org-a" }),
+			{ wrapper },
+		);
+		await waitFor(() => expect(result.current.transition?.id).toBe("transition-1"));
+
+		await act(async () => {
+			await result.current.cancel();
+		});
+		expect(cancelInterfaceTransition).toHaveBeenCalledWith("org-a", "session-a");
+		expect(result.current.cancelError).toBeUndefined();
+	});
+
+	it("surfaces a Cloud cancellation failure instead of silently succeeding", async () => {
+		const cancelInterfaceTransition = vi.fn().mockRejectedValue(new Error("cancellation denied"));
+		cloudCpMock.client = {
+			getSession: vi.fn().mockResolvedValue({ session: { interfaceMode: "tui" } }),
+			getInterfaceTransition: vi.fn().mockResolvedValue({
+				supported: true,
+				targetMode: "chat",
+				transition: {
+					id: "transition-1",
+					sessionId: "session-a",
+					sourceMode: "tui",
+					targetMode: "chat",
+					policy: "drain",
+					phase: "draining",
+					createdAt: "2026-09-01T00:00:00Z",
+					updatedAt: "2026-09-01T00:00:01Z",
+				},
+			}),
+			cancelInterfaceTransition,
+		};
+		cloudCpMock.ready = true;
+
+		const { result } = renderHook(
+			() => useSessionInterfaceTransition("session-a", { orgId: "org-a" }),
+			{ wrapper },
+		);
+		await waitFor(() => expect(result.current.transition?.id).toBe("transition-1"));
+		await act(async () => {
+			await expect(result.current.cancel()).rejects.toThrow("cancellation denied");
+		});
+		await waitFor(() => expect(result.current.cancelError).toBe("request failed"));
+		expect(cancelInterfaceTransition).toHaveBeenCalledWith("org-a", "session-a");
+	});
+
+	it("acknowledges a Cloud failure notice through the control-plane client", async () => {
+		const acknowledgeInterfaceTransitionNotice = vi.fn().mockResolvedValue({ ok: true });
+		cloudCpMock.client = {
+			getSession: vi.fn().mockResolvedValue({ session: { interfaceMode: "chat" } }),
+			getInterfaceTransition: vi.fn().mockResolvedValue({
+				supported: true,
+				targetMode: "tui",
+				transition: {
+					id: "transition-1",
+					sessionId: "session-a",
+					sourceMode: "tui",
+					targetMode: "chat",
+					policy: "drain",
+					phase: "failed",
+					createdAt: "2026-09-01T00:00:00Z",
+					updatedAt: "2026-09-01T00:00:01Z",
+				},
+			}),
+			acknowledgeInterfaceTransitionNotice,
+		};
+		cloudCpMock.ready = true;
+
+		const { result } = renderHook(
+			() => useSessionInterfaceTransition("session-a", { orgId: "org-a" }),
+			{ wrapper },
+		);
+		await waitFor(() => expect(result.current.transition?.id).toBe("transition-1"));
+
+		await act(async () => {
+			await result.current.acknowledgeNotice("transition-1");
+		});
+		expect(acknowledgeInterfaceTransitionNotice).toHaveBeenCalledWith(
+			"org-a",
+			"session-a",
+			"transition-1",
+		);
+		expect(result.current.acknowledgeNoticeError).toBeUndefined();
+	});
+
 	it("keeps a deferred start attached to its initiating session after navigation", async () => {
 		const response = deferred<{
 			data: { ok: boolean };
@@ -625,8 +887,8 @@ describe("interface switch readiness", () => {
 		bRefresh.resolve();
 	});
 
-	it.each(["NATIVE_SESSION_MISSING", "NATIVE_SESSION_UNVERIFIED"])(
-		"rechecks transient native-session readiness (%s) until the switch becomes supported",
+	it.each(["NATIVE_SESSION_MISSING", "NATIVE_SESSION_UNVERIFIED", "WORKSPACE_UNAVAILABLE"])(
+		"rechecks transient switch readiness (%s) until the switch becomes supported",
 		async (reasonCode) => {
 			getMock
 				.mockResolvedValueOnce({
@@ -773,5 +1035,185 @@ describe("interface switch readiness", () => {
 		await waitFor(() =>
 			expect(result.current.transition?.noticeAcknowledgedAt).toBe("2026-08-13T08:00:00Z"),
 		);
+	});
+});
+
+describe("interface transition poll budget", () => {
+	const draining = { supported: true, transition: { id: "t1", phase: "draining" } };
+	const waiting = { supported: false, reasonCode: "NATIVE_SESSION_UNVERIFIED" };
+
+	// A stand-in for react-query's Query: the scheduler only reads its state.
+	function fakeQuery(data?: object) {
+		const query = {
+			state: {
+				data: data as never,
+				dataUpdateCount: data ? 1 : 0,
+				dataUpdatedAt: data ? 1 : 0,
+				error: null as unknown,
+				errorUpdateCount: 0,
+			},
+		};
+		const next = () => interfaceTransitionRefetchInterval(query);
+		next();
+		return {
+			query,
+			next,
+			answer(nextData = query.state.data as object) {
+				query.state = {
+					...query.state,
+					data: nextData as never,
+					dataUpdateCount: query.state.dataUpdateCount + 1,
+					dataUpdatedAt: query.state.dataUpdatedAt + 1,
+					error: null,
+				};
+				return next();
+			},
+			fail(error: unknown = new Error("offline")) {
+				query.state = { ...query.state, error, errorUpdateCount: query.state.errorUpdateCount + 1 };
+				return next();
+			},
+		};
+	}
+
+	it("stops a readiness recheck after ten answers", () => {
+		const poll = fakeQuery(waiting);
+		const delays = [poll.next()];
+		while (delays.at(-1) !== false && delays.length < 50) delays.push(poll.answer());
+		expect(delays).toEqual([...Array(10).fill(1_000), false]);
+	});
+
+	it("backs off 1/2/4/8s on failures and stops after five when nothing is live", () => {
+		const idle = fakeQuery(waiting);
+		expect([1, 2, 3, 4, 5].map(() => idle.fail())).toEqual([1_000, 2_000, 4_000, 8_000, false]);
+	});
+
+	it("keeps retrying a live handoff on the capped backoff", () => {
+		const live = fakeQuery(draining);
+		expect(live.next()).toBe(250);
+		const delays = Array.from({ length: 20 }, () => live.fail());
+		expect(delays.slice(0, 5)).toEqual([1_000, 2_000, 4_000, 8_000, 8_000]);
+		expect(delays.at(-1)).toBe(8_000);
+	});
+
+	it.each([draining, waiting])("stops on Cloud authentication refusal and recovers after a successful read (%#)", (status) => {
+		const poll = fakeQuery(status);
+		expect(poll.fail(new CloudCpAuthError("Sign in again", { status: 401 }))).toBe(false);
+		expect(poll.next()).toBe(false);
+		expect(poll.answer()).toBe(status === draining ? 250 : 1_000);
+	});
+
+	it("stops when the first scheduler check sees a cached authentication error", () => {
+		expect(interfaceTransitionRefetchInterval({ state: {
+			data: draining as never, dataUpdateCount: 1, dataUpdatedAt: 1,
+			error: new CloudCpAuthError("Sign in again", { status: 401 }), errorUpdateCount: 1,
+		} })).toBe(false);
+	});
+
+	it("keeps retrying ordinary Cloud failures during a live handoff", () => {
+		const poll = fakeQuery(draining);
+		const error = new CloudCpError("Unavailable", { status: 503 });
+		expect(Array.from({ length: 6 }, () => poll.fail(error))).toEqual([1_000, 2_000, 4_000, 8_000, 8_000, 8_000]);
+	});
+
+	it("stops polling once the daemon says the session is gone", () => {
+		const live = fakeQuery(draining);
+		expect(live.fail({ code: "SESSION_NOT_FOUND" })).toBe(false);
+	});
+
+	it("stops when the handoff succeeds on try N", () => {
+		const live = fakeQuery(draining);
+		live.fail();
+		live.fail();
+		expect(live.answer()).toBe(250);
+		expect(live.answer({ supported: true, transition: { id: "t1", phase: "completed" } })).toBe(false);
+	});
+
+	it("resets both budgets when a new transition starts", () => {
+		const poll = fakeQuery(waiting);
+		for (let i = 0; i < 10; i += 1) poll.answer();
+		expect(poll.next()).toBe(false);
+		for (let i = 0; i < 4; i += 1) poll.fail();
+		// An accepted start lands new data: the failure count clears and the
+		// live phase polls at full speed.
+		expect(poll.answer(draining)).toBe(250);
+		expect(poll.fail()).toBe(1_000);
+		// The handoff falls back to a readiness wait: a fresh ten answers.
+		const delays = [poll.answer(waiting)];
+		while (delays.at(-1) !== false && delays.length < 50) delays.push(poll.answer());
+		expect(delays).toEqual([...Array(10).fill(1_000), false]);
+	});
+});
+
+describe("interface transition polling through react-query", () => {
+	beforeEach(() => vi.useFakeTimers());
+	afterEach(() => vi.useRealTimers());
+
+	async function elapse(ms: number) {
+		await act(async () => { await vi.advanceTimersByTimeAsync(ms); });
+	}
+
+	it("issues the mount read plus ten readiness rechecks, then stops", async () => {
+		getMock.mockResolvedValue({
+			data: { supported: false, targetMode: "chat", reasonCode: "NATIVE_SESSION_MISSING" },
+			error: undefined,
+		});
+		renderHook(() => useSessionInterfaceTransition("session-1"), { wrapper });
+		await elapse(30_000);
+		expect(getMock).toHaveBeenCalledTimes(11);
+	});
+
+	it.each(["getSession", "getInterfaceTransition"] as const)("stops a cached live Cloud handoff when %s refuses authentication", async (refusingRead) => {
+		const transition = {
+			id: "cloud-transition", sessionId: "session-1", sourceMode: "tui", targetMode: "chat",
+			policy: "drain", phase: "draining", createdAt: "2026-11-11T00:00:00Z", updatedAt: "2026-11-11T00:00:00Z",
+		};
+		const getSession = vi.fn().mockResolvedValue({ session: { interfaceMode: "tui" } });
+		const getInterfaceTransition = vi.fn().mockResolvedValue({ supported: true, targetMode: "chat", transition });
+		const reads = { getSession, getInterfaceTransition };
+		cloudCpMock.ready = true;
+		cloudCpMock.client = reads;
+		const { result } = renderHook(() => useSessionInterfaceTransition("session-1", { orgId: "org-1" }), { wrapper });
+		await elapse(0);
+		expect(result.current.transition?.phase).toBe("draining");
+		reads[refusingRead].mockRejectedValue(new CloudCpAuthError("Sign in again", { status: 401 }));
+		await elapse(251);
+		expect(result.current.statusError).toBe("request failed");
+		expect(result.current.transition?.phase).toBe("draining");
+		expect(getSession).toHaveBeenCalledTimes(2);
+		expect(getInterfaceTransition).toHaveBeenCalledTimes(2);
+		await elapse(60_000);
+		expect(getSession).toHaveBeenCalledTimes(2);
+		expect(getInterfaceTransition).toHaveBeenCalledTimes(2);
+
+		// A successful explicit refresh after sign-in can settle the handoff.
+		getSession.mockResolvedValue({ session: { interfaceMode: "chat" } });
+		getInterfaceTransition.mockResolvedValue({ supported: true, targetMode: "chat", transition: { ...transition, phase: "completed" } });
+		await act(async () => { await result.current.refreshStatus(); });
+		await elapse(1);
+		expect(result.current.transition?.phase).toBe("completed");
+		expect(result.current.statusError).toBeUndefined();
+		await elapse(30_000);
+		expect(getSession).toHaveBeenCalledTimes(3);
+		expect(getInterfaceTransition).toHaveBeenCalledTimes(3);
+	});
+
+	it("backs off a failing poll and gives up after five failures", async () => {
+		getMock.mockResolvedValue({ data: undefined, error: { code: "DAEMON_UNAVAILABLE" } });
+		const { result } = renderHook(() => useSessionInterfaceTransition("session-1"), { wrapper });
+		await elapse(0);
+		expect(getMock).toHaveBeenCalledTimes(1);
+		await elapse(1_000);
+		expect(getMock).toHaveBeenCalledTimes(2);
+		await elapse(1_999);
+		expect(getMock).toHaveBeenCalledTimes(2);
+		await elapse(1);
+		expect(getMock).toHaveBeenCalledTimes(3);
+		await elapse(4_000 + 8_000);
+		expect(getMock).toHaveBeenCalledTimes(5);
+		await elapse(60_000);
+		expect(getMock).toHaveBeenCalledTimes(5);
+		// Same end state as mobile: no spinner, the error is the switch's reason.
+		expect(result.current.isLoading).toBe(false);
+		expect(result.current.statusError).toBe("request failed");
 	});
 });

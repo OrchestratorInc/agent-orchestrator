@@ -8,6 +8,7 @@ package gen
 import (
 	"context"
 	"database/sql"
+	"strings"
 	"time"
 
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
@@ -154,6 +155,54 @@ func (q *Queries) AdoptProviderConversationTurn(ctx context.Context, arg AdoptPr
 	return err
 }
 
+const adoptReviewProviderConversationTurn = `-- name: AdoptReviewProviderConversationTurn :exec
+INSERT OR IGNORE INTO conversation_turns (
+    id, conversation_id, handled_by_session_id, handled_by_review_id,
+    provider_turn_id, controller_generation, state, requested_at, started_at
+) VALUES (?, ?, ?, ?, ?, ?, 'running', ?, ?)
+`
+
+type AdoptReviewProviderConversationTurnParams struct {
+	ID                   string
+	ConversationID       string
+	HandledBySessionID   domain.SessionID
+	HandledByReviewID    sql.NullString
+	ProviderTurnID       string
+	ControllerGeneration string
+	RequestedAt          time.Time
+	StartedAt            sql.NullTime
+}
+
+func (q *Queries) AdoptReviewProviderConversationTurn(ctx context.Context, arg AdoptReviewProviderConversationTurnParams) error {
+	_, err := q.db.ExecContext(ctx, adoptReviewProviderConversationTurn,
+		arg.ID,
+		arg.ConversationID,
+		arg.HandledBySessionID,
+		arg.HandledByReviewID,
+		arg.ProviderTurnID,
+		arg.ControllerGeneration,
+		arg.RequestedAt,
+		arg.StartedAt,
+	)
+	return err
+}
+
+const advanceConversationSequence = `-- name: AdvanceConversationSequence :exec
+UPDATE conversations SET latest_sequence = latest_sequence + ?, updated_at = ?
+WHERE id = ?
+`
+
+type AdvanceConversationSequenceParams struct {
+	LatestSequence int64
+	UpdatedAt      time.Time
+	ID             string
+}
+
+func (q *Queries) AdvanceConversationSequence(ctx context.Context, arg AdvanceConversationSequenceParams) error {
+	_, err := q.db.ExecContext(ctx, advanceConversationSequence, arg.LatestSequence, arg.UpdatedAt, arg.ID)
+	return err
+}
+
 const appendConversationActivityOutput = `-- name: AppendConversationActivityOutput :execrows
 UPDATE conversation_activities
 SET command_output = substr(command_output || ?1, 1, ?2),
@@ -165,6 +214,7 @@ SET command_output = substr(command_output || ?1, 1, ?2),
     updated_at = ?3
 WHERE conversation_id = ?4
   AND provider_item_id = ?5
+  AND provider_item_id <> ''
   AND status <> 'cancelled'
   AND command_output_truncated = 0
 `
@@ -222,6 +272,7 @@ SET streamed_text = substr(streamed_text || ?1, 1, ?2),
     updated_at = ?3
 WHERE conversation_id = ?4
   AND provider_item_id = ?5
+  AND provider_item_id <> ''
   AND status <> 'cancelled'
   AND streamed_text_truncated = 0
 `
@@ -265,8 +316,13 @@ func (q *Queries) AppendConversationActivityStreamedText(ctx context.Context, ar
 
 const appendConversationMessageDelta = `-- name: AppendConversationMessageDelta :exec
 UPDATE conversation_messages
-SET text = text || ?, revision = revision + 1, streaming = 1, updated_at = ?
-WHERE conversation_id = ? AND provider_item_id = ?
+SET text = text || ?, revision = revision + 1,
+    streaming = NOT EXISTS (
+        SELECT 1 FROM conversation_turns
+        WHERE conversation_turns.id = conversation_messages.turn_id
+          AND conversation_turns.state IN ('completed', 'recovered', 'interrupted', 'failed', 'cancelled')
+    ), updated_at = ?
+WHERE conversation_messages.conversation_id = ? AND conversation_messages.provider_item_id = ? AND conversation_messages.provider_item_id <> ''
 `
 
 type AppendConversationMessageDeltaParams struct {
@@ -387,10 +443,10 @@ func (q *Queries) BeginConversationEditProviderWork(ctx context.Context, arg Beg
 	return result.RowsAffected()
 }
 
-const bindConversationTurnProviderID = `-- name: BindConversationTurnProviderID :exec
+const bindConversationTurnProviderID = `-- name: BindConversationTurnProviderID :execrows
 UPDATE conversation_turns
 SET provider_turn_id = ?, started_at = COALESCE(started_at, ?)
-WHERE id = ?
+WHERE id = ? AND state IN ('queued', 'running')
 `
 
 type BindConversationTurnProviderIDParams struct {
@@ -399,9 +455,12 @@ type BindConversationTurnProviderIDParams struct {
 	ID             string
 }
 
-func (q *Queries) BindConversationTurnProviderID(ctx context.Context, arg BindConversationTurnProviderIDParams) error {
-	_, err := q.db.ExecContext(ctx, bindConversationTurnProviderID, arg.ProviderTurnID, arg.StartedAt, arg.ID)
-	return err
+func (q *Queries) BindConversationTurnProviderID(ctx context.Context, arg BindConversationTurnProviderIDParams) (int64, error) {
+	result, err := q.db.ExecContext(ctx, bindConversationTurnProviderID, arg.ProviderTurnID, arg.StartedAt, arg.ID)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected()
 }
 
 const bindProjectConversationSession = `-- name: BindProjectConversationSession :exec
@@ -420,7 +479,7 @@ func (q *Queries) BindProjectConversationSession(ctx context.Context, arg BindPr
 	return err
 }
 
-const cancelAllQueuedConversationTurns = `-- name: CancelAllQueuedConversationTurns :exec
+const cancelAllQueuedConversationTurns = `-- name: CancelAllQueuedConversationTurns :execrows
 UPDATE conversation_turns
 SET state = 'interrupted', completed_at = ?
 WHERE conversation_id = ? AND state = 'queued'
@@ -435,9 +494,12 @@ type CancelAllQueuedConversationTurnsParams struct {
 // lock before this runs. There can be no later accepted row to preserve, so the
 // correct operation is independent of wall-clock ordering and cancels the whole
 // durable queue.
-func (q *Queries) CancelAllQueuedConversationTurns(ctx context.Context, arg CancelAllQueuedConversationTurnsParams) error {
-	_, err := q.db.ExecContext(ctx, cancelAllQueuedConversationTurns, arg.CompletedAt, arg.ConversationID)
-	return err
+func (q *Queries) CancelAllQueuedConversationTurns(ctx context.Context, arg CancelAllQueuedConversationTurnsParams) (int64, error) {
+	result, err := q.db.ExecContext(ctx, cancelAllQueuedConversationTurns, arg.CompletedAt, arg.ConversationID)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected()
 }
 
 const cancelQueuedConversationTurnByID = `-- name: CancelQueuedConversationTurnByID :execrows
@@ -485,6 +547,46 @@ func (q *Queries) CancelQueuedConversationTurns(ctx context.Context, arg CancelQ
 	return err
 }
 
+const completeQueuedConversationBatchMember = `-- name: CompleteQueuedConversationBatchMember :execrows
+UPDATE conversation_turns
+SET state = 'completed',
+    completed_at = ?1,
+    promotion_started_at = NULL,
+    promoted_to_turn_id = ?2,
+    batched_input = 1,
+    batch_delivery_kind = ?3,
+    batch_delivery_steer_id = ?4
+WHERE id = ?5
+  AND conversation_id = ?6
+  AND state = 'queued'
+  AND promotion_started_at IS NOT NULL
+`
+
+type CompleteQueuedConversationBatchMemberParams struct {
+	CompletedAt          sql.NullTime
+	PromotedToTurnID     sql.NullString
+	BatchDeliveryKind    string
+	BatchDeliverySteerID string
+	ID                   string
+	ConversationID       string
+}
+
+// A batched source joins one provider input but remains its own visible message.
+func (q *Queries) CompleteQueuedConversationBatchMember(ctx context.Context, arg CompleteQueuedConversationBatchMemberParams) (int64, error) {
+	result, err := q.db.ExecContext(ctx, completeQueuedConversationBatchMember,
+		arg.CompletedAt,
+		arg.PromotedToTurnID,
+		arg.BatchDeliveryKind,
+		arg.BatchDeliverySteerID,
+		arg.ID,
+		arg.ConversationID,
+	)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected()
+}
+
 const completeQueuedConversationTurnPromotion = `-- name: CompleteQueuedConversationTurnPromotion :execrows
 UPDATE conversation_turns
 SET state = 'completed',
@@ -520,12 +622,43 @@ func (q *Queries) CompleteQueuedConversationTurnPromotion(ctx context.Context, a
 	return result.RowsAffected()
 }
 
+const consumeConversationTurnAutoResume = `-- name: ConsumeConversationTurnAutoResume :execrows
+UPDATE conversation_turns
+SET usage_limit_auto_resume = 0, usage_limit_resume_error = ''
+WHERE id = ?1 AND conversation_id = ?2
+  AND handled_by_session_id = ?3
+  AND state = 'failed' AND rolled_back_at IS NULL
+  AND usage_limit_auto_resume = 1 AND usage_limit_resets_at <= ?4
+`
+
+type ConsumeConversationTurnAutoResumeParams struct {
+	ID             string
+	ConversationID string
+	SessionID      domain.SessionID
+	Now            sql.NullTime
+}
+
+// Consent and its due deadline are checked in the transaction creating a retry.
+func (q *Queries) ConsumeConversationTurnAutoResume(ctx context.Context, arg ConsumeConversationTurnAutoResumeParams) (int64, error) {
+	result, err := q.db.ExecContext(ctx, consumeConversationTurnAutoResume,
+		arg.ID,
+		arg.ConversationID,
+		arg.SessionID,
+		arg.Now,
+	)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected()
+}
+
 const conversationActivityExistsForProviderItem = `-- name: ConversationActivityExistsForProviderItem :one
 SELECT EXISTS(
     SELECT 1
     FROM conversation_activities
     WHERE conversation_id = ?1
       AND provider_item_id = ?2
+      AND provider_item_id <> ''
       AND status <> 'cancelled'
 )
 `
@@ -543,6 +676,22 @@ func (q *Queries) ConversationActivityExistsForProviderItem(ctx context.Context,
 	var exists bool
 	err := row.Scan(&exists)
 	return exists, err
+}
+
+const detachSessionConversation = `-- name: DetachSessionConversation :exec
+UPDATE conversations SET current_session_id = NULL, updated_at = ?
+WHERE id = ? AND scope = 'session' AND current_session_id = ?
+`
+
+type DetachSessionConversationParams struct {
+	UpdatedAt        time.Time
+	ID               string
+	CurrentSessionID *domain.SessionID
+}
+
+func (q *Queries) DetachSessionConversation(ctx context.Context, arg DetachSessionConversationParams) error {
+	_, err := q.db.ExecContext(ctx, detachSessionConversation, arg.UpdatedAt, arg.ID, arg.CurrentSessionID)
+	return err
 }
 
 const failOrphanedConversationActivities = `-- name: FailOrphanedConversationActivities :exec
@@ -566,6 +715,32 @@ type FailOrphanedConversationActivitiesParams struct {
 // states still identify the affected rows.
 func (q *Queries) FailOrphanedConversationActivities(ctx context.Context, arg FailOrphanedConversationActivitiesParams) error {
 	_, err := q.db.ExecContext(ctx, failOrphanedConversationActivities, arg.UpdatedAt, arg.HandledBySessionID)
+	return err
+}
+
+const failOrphanedReviewActivities = `-- name: FailOrphanedReviewActivities :exec
+UPDATE conversation_activities
+SET status = 'failed', revision = revision + 1, updated_at = ?1
+WHERE conversation_activities.conversation_id = ?2
+  AND status = 'running'
+  AND conversation_activities.turn_id IN (
+      SELECT conversation_turns.id FROM conversation_turns
+      WHERE conversation_turns.conversation_id = ?2
+        AND conversation_turns.handled_by_review_id = ?3
+        AND conversation_turns.state IN ('queued', 'running')
+  )
+`
+
+type FailOrphanedReviewActivitiesParams struct {
+	UpdatedAt      time.Time
+	ConversationID string
+	ReviewID       sql.NullString
+}
+
+// Reviewer Chat has its own controller generation on review, separate from
+// the worker session. Settle only turns owned by that review conversation.
+func (q *Queries) FailOrphanedReviewActivities(ctx context.Context, arg FailOrphanedReviewActivitiesParams) error {
+	_, err := q.db.ExecContext(ctx, failOrphanedReviewActivities, arg.UpdatedAt, arg.ConversationID, arg.ReviewID)
 	return err
 }
 
@@ -631,6 +806,52 @@ type FailPendingConversationRequestsForSessionParams struct {
 // session; conversation-wide cleanup would also fail the replacement's requests.
 func (q *Queries) FailPendingConversationRequestsForSession(ctx context.Context, arg FailPendingConversationRequestsForSessionParams) error {
 	_, err := q.db.ExecContext(ctx, failPendingConversationRequestsForSession, arg.UpdatedAt, arg.TargetConversationID, arg.HandledBySessionID)
+	return err
+}
+
+const failPendingReviewRequests = `-- name: FailPendingReviewRequests :exec
+UPDATE conversation_activities
+SET status = 'failed', revision = revision + 1, updated_at = ?1
+WHERE conversation_activities.conversation_id = ?2
+  AND kind IN ('approval', 'user_input')
+  AND status = 'pending'
+  AND conversation_activities.turn_id IN (
+    SELECT conversation_turns.id FROM conversation_turns
+    WHERE conversation_turns.conversation_id = ?2
+      AND conversation_turns.handled_by_review_id = ?3
+  )
+`
+
+type FailPendingReviewRequestsParams struct {
+	UpdatedAt      time.Time
+	ConversationID string
+	ReviewID       sql.NullString
+}
+
+func (q *Queries) FailPendingReviewRequests(ctx context.Context, arg FailPendingReviewRequestsParams) error {
+	_, err := q.db.ExecContext(ctx, failPendingReviewRequests, arg.UpdatedAt, arg.ConversationID, arg.ReviewID)
+	return err
+}
+
+const failReservedQueuedConversationTurns = `-- name: FailReservedQueuedConversationTurns :exec
+UPDATE conversation_turns
+SET state = 'failed',
+    error_message = 'queued delivery outcome is uncertain after controller reconnect',
+    completed_at = ?
+WHERE conversation_id = ?
+  AND state = 'queued'
+  AND promotion_started_at IS NOT NULL
+`
+
+type FailReservedQueuedConversationTurnsParams struct {
+	CompletedAt    sql.NullTime
+	ConversationID string
+}
+
+// A detached controller may have crossed the provider boundary before its
+// batch receipt was recorded. Keep the source visible and fail closed on resume.
+func (q *Queries) FailReservedQueuedConversationTurns(ctx context.Context, arg FailReservedQueuedConversationTurnsParams) error {
+	_, err := q.db.ExecContext(ctx, failReservedQueuedConversationTurns, arg.CompletedAt, arg.ConversationID)
 	return err
 }
 
@@ -723,6 +944,53 @@ func (q *Queries) HasPendingConversationInteractions(ctx context.Context, conver
 	return exists, err
 }
 
+const incrementUsageMessageSummary = `-- name: IncrementUsageMessageSummary :exec
+INSERT INTO usage_message_summary (session_id, pending_count, steer_count, send_count,
+    desktop_count, mobile_count, cli_count, first_at, last_at)
+SELECT ?1, ?2, ?3, ?4,
+    ?5, ?6, ?7, ?8, ?9 WHERE EXISTS (
+    SELECT 1 FROM sessions WHERE id = ?1 AND project_id IS NOT NULL
+)
+ON CONFLICT(session_id) DO UPDATE SET
+    pending_count = MIN(usage_message_summary.pending_count + excluded.pending_count, 1000000000),
+    steer_count = MIN(usage_message_summary.steer_count + excluded.steer_count, 1000000000),
+    send_count = MIN(usage_message_summary.send_count + excluded.send_count, 1000000000),
+    desktop_count = MIN(usage_message_summary.desktop_count + excluded.desktop_count, 1000000000),
+    mobile_count = MIN(usage_message_summary.mobile_count + excluded.mobile_count, 1000000000),
+    cli_count = MIN(usage_message_summary.cli_count + excluded.cli_count, 1000000000),
+    first_at = COALESCE(usage_message_summary.first_at, excluded.first_at),
+    last_at = excluded.last_at
+`
+
+type IncrementUsageMessageSummaryParams struct {
+	SessionID string
+	Chat      int64
+	Steer     int64
+	Send      int64
+	Desktop   int64
+	Mobile    int64
+	Cli       int64
+	FirstAt   sql.NullTime
+	LastAt    sql.NullTime
+}
+
+// Adds one human message: a direct Chat message (pending_count), a steer, or
+// a `/send`, plus at most one of the surface counters. Each counter is 0 or 1.
+func (q *Queries) IncrementUsageMessageSummary(ctx context.Context, arg IncrementUsageMessageSummaryParams) error {
+	_, err := q.db.ExecContext(ctx, incrementUsageMessageSummary,
+		arg.SessionID,
+		arg.Chat,
+		arg.Steer,
+		arg.Send,
+		arg.Desktop,
+		arg.Mobile,
+		arg.Cli,
+		arg.FirstAt,
+		arg.LastAt,
+	)
+	return err
+}
+
 const insertConversation = `-- name: InsertConversation :exec
 
 INSERT INTO conversations (
@@ -810,13 +1078,13 @@ INSERT INTO conversation_branches (
     id, conversation_id, session_id, provider_conversation_id,
     parent_branch_id, fork_after_turn_id, replaced_turn_id,
     replacement_turn_id, fork_after_sequence, strategy, replay_cutoff_sequence,
-    replay_truncated, provider_scope_id, provider_ids_scoped, created_at
+    replay_truncated, provider_scope_id, provider_ids_scoped, created_at, handoff_note
 ) VALUES (
     ?1, ?2, ?3,
     ?4, ?5,
     ?6, ?7,
     ?8, ?9, ?10,
-    ?11, ?12, ?13, ?14, ?15
+    ?11, ?12, ?13, ?14, ?15, ?16
 )
 `
 
@@ -836,6 +1104,7 @@ type InsertConversationBranchParams struct {
 	ProviderScopeID        string
 	ProviderIdsScoped      int64
 	CreatedAt              time.Time
+	HandoffNote            string
 }
 
 func (q *Queries) InsertConversationBranch(ctx context.Context, arg InsertConversationBranchParams) error {
@@ -855,6 +1124,7 @@ func (q *Queries) InsertConversationBranch(ctx context.Context, arg InsertConver
 		arg.ProviderScopeID,
 		arg.ProviderIdsScoped,
 		arg.CreatedAt,
+		arg.HandoffNote,
 	)
 	return err
 }
@@ -888,9 +1158,10 @@ func (q *Queries) InsertConversationEditDeliveryReservation(ctx context.Context,
 const insertConversationMessage = `-- name: InsertConversationMessage :exec
 INSERT INTO conversation_messages (
     id, conversation_id, turn_id, sequence, revision, role, origin,
-    text, streaming, provider_item_id, client_message_id, delivery_content_json,
+    text, streaming, provider_item_id, client_message_id, client_payload_hash,
+    delivery_content_json, continuation, authored_by_user, sender_session_id, sender_project_id, sender_display_name,
     created_at, updated_at
-) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 `
 
 type InsertConversationMessageParams struct {
@@ -905,7 +1176,13 @@ type InsertConversationMessageParams struct {
 	Streaming           int64
 	ProviderItemID      string
 	ClientMessageID     string
+	ClientPayloadHash   sql.NullString
 	DeliveryContentJson string
+	Continuation        int64
+	AuthoredByUser      int64
+	SenderSessionID     string
+	SenderProjectID     string
+	SenderDisplayName   string
 	CreatedAt           time.Time
 	UpdatedAt           time.Time
 }
@@ -923,7 +1200,13 @@ func (q *Queries) InsertConversationMessage(ctx context.Context, arg InsertConve
 		arg.Streaming,
 		arg.ProviderItemID,
 		arg.ClientMessageID,
+		arg.ClientPayloadHash,
 		arg.DeliveryContentJson,
+		arg.Continuation,
+		arg.AuthoredByUser,
+		arg.SenderSessionID,
+		arg.SenderProjectID,
+		arg.SenderDisplayName,
 		arg.CreatedAt,
 		arg.UpdatedAt,
 	)
@@ -932,8 +1215,12 @@ func (q *Queries) InsertConversationMessage(ctx context.Context, arg InsertConve
 
 const insertConversationProviderEvent = `-- name: InsertConversationProviderEvent :execrows
 INSERT OR IGNORE INTO conversation_provider_events (
-    conversation_id, session_id, provider_event_id, method, payload_json, received_at
-) VALUES (?, ?, ?, ?, ?, ?)
+    conversation_id, session_id, provider_event_id, method, payload_json, received_at, branch_id
+) VALUES (
+    ?1, ?2, ?3, ?4,
+    ?5, ?6,
+    COALESCE((SELECT active_branch_id FROM conversations WHERE id = ?1), '')
+)
 `
 
 type InsertConversationProviderEventParams struct {
@@ -947,6 +1234,13 @@ type InsertConversationProviderEventParams struct {
 
 // The raw provider event archive. Append-only, and the only way to answer "what
 // did the provider actually say" once a projection turns out to be wrong.
+//
+// branch_id is the conversation's active branch, written by the INSERT itself:
+// conversation_provider_events_branch_insert only acts on a row that arrives with
+// an empty branch_id, and would otherwise UPDATE every row it has just written.
+// The COALESCE keeps a conversation that does not exist failing on its foreign key,
+// as before; a NULL here would be a NOT NULL violation, which INSERT OR IGNORE skips
+// without an error.
 func (q *Queries) InsertConversationProviderEvent(ctx context.Context, arg InsertConversationProviderEventParams) (int64, error) {
 	result, err := q.db.ExecContext(ctx, insertConversationProviderEvent,
 		arg.ConversationID,
@@ -1043,6 +1337,94 @@ func (q *Queries) InsertConversationTurn(ctx context.Context, arg InsertConversa
 	return err
 }
 
+const insertReviewConversation = `-- name: InsertReviewConversation :exec
+INSERT INTO conversations (id, scope, project_id, review_id, current_review_id, latest_sequence, active_branch_id, created_at, updated_at)
+VALUES (?, 'review', ?, ?, ?, 0, ?, ?, ?)
+`
+
+type InsertReviewConversationParams struct {
+	ID              string
+	ProjectID       *domain.ProjectID
+	ReviewID        sql.NullString
+	CurrentReviewID sql.NullString
+	ActiveBranchID  string
+	CreatedAt       time.Time
+	UpdatedAt       time.Time
+}
+
+func (q *Queries) InsertReviewConversation(ctx context.Context, arg InsertReviewConversationParams) error {
+	_, err := q.db.ExecContext(ctx, insertReviewConversation,
+		arg.ID,
+		arg.ProjectID,
+		arg.ReviewID,
+		arg.CurrentReviewID,
+		arg.ActiveBranchID,
+		arg.CreatedAt,
+		arg.UpdatedAt,
+	)
+	return err
+}
+
+const insertReviewConversationBranch = `-- name: InsertReviewConversationBranch :exec
+INSERT INTO conversation_branches (id, conversation_id, session_id, review_id, provider_conversation_id, parent_branch_id, fork_after_turn_id, replaced_turn_id, replacement_turn_id, fork_after_sequence, strategy, replay_cutoff_sequence, replay_truncated, provider_scope_id, provider_ids_scoped, created_at)
+VALUES (?, ?, ?, ?, ?, NULL, NULL, NULL, NULL, 0, 'native', 0, 0, '', 0, ?)
+`
+
+type InsertReviewConversationBranchParams struct {
+	ID                     string
+	ConversationID         string
+	SessionID              sql.NullString
+	ReviewID               sql.NullString
+	ProviderConversationID string
+	CreatedAt              time.Time
+}
+
+func (q *Queries) InsertReviewConversationBranch(ctx context.Context, arg InsertReviewConversationBranchParams) error {
+	_, err := q.db.ExecContext(ctx, insertReviewConversationBranch,
+		arg.ID,
+		arg.ConversationID,
+		arg.SessionID,
+		arg.ReviewID,
+		arg.ProviderConversationID,
+		arg.CreatedAt,
+	)
+	return err
+}
+
+const insertReviewConversationTurn = `-- name: InsertReviewConversationTurn :exec
+INSERT INTO conversation_turns (
+    id, conversation_id, handled_by_session_id, handled_by_review_id,
+    provider_turn_id, controller_generation, retry_of_turn_id, state, requested_at
+) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+`
+
+type InsertReviewConversationTurnParams struct {
+	ID                   string
+	ConversationID       string
+	HandledBySessionID   domain.SessionID
+	HandledByReviewID    sql.NullString
+	ProviderTurnID       string
+	ControllerGeneration string
+	RetryOfTurnID        sql.NullString
+	State                domain.TurnState
+	RequestedAt          time.Time
+}
+
+func (q *Queries) InsertReviewConversationTurn(ctx context.Context, arg InsertReviewConversationTurnParams) error {
+	_, err := q.db.ExecContext(ctx, insertReviewConversationTurn,
+		arg.ID,
+		arg.ConversationID,
+		arg.HandledBySessionID,
+		arg.HandledByReviewID,
+		arg.ProviderTurnID,
+		arg.ControllerGeneration,
+		arg.RetryOfTurnID,
+		arg.State,
+		arg.RequestedAt,
+	)
+	return err
+}
+
 const interruptRolledBackQueuedTurns = `-- name: InterruptRolledBackQueuedTurns :exec
 UPDATE conversation_turns
 SET state = 'interrupted', completed_at = ?
@@ -1063,6 +1445,222 @@ type InterruptRolledBackQueuedTurnsParams struct {
 func (q *Queries) InterruptRolledBackQueuedTurns(ctx context.Context, arg InterruptRolledBackQueuedTurnsParams) error {
 	_, err := q.db.ExecContext(ctx, interruptRolledBackQueuedTurns, arg.CompletedAt, arg.ConversationID)
 	return err
+}
+
+const latestVisibleUserTurnSettled = `-- name: LatestVisibleUserTurnSettled :one
+WITH RECURSIVE active_path(branch_id, max_sequence) AS (
+    SELECT conversations.active_branch_id, CAST(NULL AS INTEGER)
+    FROM conversations
+    WHERE conversations.id = ?2
+    UNION ALL
+    SELECT branch.parent_branch_id,
+           CASE
+               WHEN path.max_sequence IS NULL THEN branch.fork_after_sequence
+               WHEN branch.fork_after_sequence < path.max_sequence THEN branch.fork_after_sequence
+               ELSE path.max_sequence
+           END
+    FROM active_path AS path
+    JOIN conversation_branches AS branch ON branch.id = path.branch_id
+    WHERE branch.parent_branch_id IS NOT NULL
+), latest_user AS (
+    SELECT turn.handled_by_session_id, turn.state, turn.completed_at
+    FROM conversation_messages AS message
+    JOIN active_path AS path ON path.branch_id = message.branch_id
+    LEFT JOIN conversation_turns AS turn ON turn.id = message.turn_id
+    WHERE message.conversation_id = ?2
+      AND message.role = 'user'
+      AND (path.max_sequence IS NULL OR message.sequence <= path.max_sequence)
+      AND (message.turn_id IS NULL OR turn.id IS NULL OR (
+          turn.rolled_back_at IS NULL AND turn.promoted_to_turn_id IS NULL AND turn.state <> 'cancelled'
+      ))
+    ORDER BY message.sequence DESC
+    LIMIT 1
+)
+SELECT EXISTS (
+    SELECT 1 FROM latest_user
+    WHERE handled_by_session_id = ?1
+      AND completed_at IS NOT NULL
+      AND state IN ('completed', 'failed', 'interrupted', 'recovered')
+)
+`
+
+type LatestVisibleUserTurnSettledParams struct {
+	SessionID      domain.SessionID
+	ConversationID string
+}
+
+// Hibernation only needs the latest visible user prompt's outcome. Match the
+// active-branch and discarded-turn filters used by SelectConversationMessages
+// without loading the entire conversation timeline.
+func (q *Queries) LatestVisibleUserTurnSettled(ctx context.Context, arg LatestVisibleUserTurnSettledParams) (bool, error) {
+	row := q.db.QueryRowContext(ctx, latestVisibleUserTurnSettled, arg.SessionID, arg.ConversationID)
+	var exists bool
+	err := row.Scan(&exists)
+	return exists, err
+}
+
+const listConversationBatchedTurns = `-- name: ListConversationBatchedTurns :many
+SELECT id, promoted_to_turn_id, batch_delivery_kind, batch_delivery_steer_id
+FROM conversation_turns
+WHERE conversation_id = ?1
+  AND batched_input = 1
+  AND promoted_to_turn_id IS NOT NULL
+  AND batch_delivery_kind != ''
+`
+
+type ListConversationBatchedTurnsRow struct {
+	ID                   string
+	PromotedToTurnID     sql.NullString
+	BatchDeliveryKind    string
+	BatchDeliverySteerID string
+}
+
+// The queued turns AO batched into another turn's provider input, and how: a
+// queue drain or a steer. The snapshot turn queries leave them out, so the
+// client reads the delivery link here. Turns batched before the kind was
+// recorded are left out.
+func (q *Queries) ListConversationBatchedTurns(ctx context.Context, conversationID string) ([]ListConversationBatchedTurnsRow, error) {
+	rows, err := q.db.QueryContext(ctx, listConversationBatchedTurns, conversationID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []ListConversationBatchedTurnsRow{}
+	for rows.Next() {
+		var i ListConversationBatchedTurnsRow
+		if err := rows.Scan(
+			&i.ID,
+			&i.PromotedToTurnID,
+			&i.BatchDeliveryKind,
+			&i.BatchDeliverySteerID,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listConversationBatchedTurnsInRange = `-- name: ListConversationBatchedTurnsInRange :many
+SELECT member.id, member.promoted_to_turn_id, member.batch_delivery_kind, member.batch_delivery_steer_id
+FROM conversation_turns AS member
+WHERE member.conversation_id = ?1
+  AND member.batched_input = 1
+  AND member.batch_delivery_kind != ''
+  AND member.promoted_to_turn_id IN (
+      SELECT loaded.promoted_to_turn_id
+      FROM conversation_messages AS message
+      JOIN conversation_turns AS loaded ON loaded.id = message.turn_id
+      WHERE message.conversation_id = ?1
+        AND message.sequence >= ?2
+        AND message.sequence < ?3
+        AND loaded.batched_input = 1
+        AND loaded.promoted_to_turn_id IS NOT NULL
+        AND loaded.batch_delivery_kind != ''
+  )
+`
+
+type ListConversationBatchedTurnsInRangeParams struct {
+	ConversationID string
+	FromSequence   int64
+	BeforeSequence int64
+}
+
+type ListConversationBatchedTurnsInRangeRow struct {
+	ID                   string
+	PromotedToTurnID     sql.NullString
+	BatchDeliveryKind    string
+	BatchDeliverySteerID string
+}
+
+// The batched turns a page needs: every member of a batch with a message in
+// [from_sequence, before_sequence), so a drain can still find its siblings'
+// human message. Bounded by the page rather than by the whole history.
+func (q *Queries) ListConversationBatchedTurnsInRange(ctx context.Context, arg ListConversationBatchedTurnsInRangeParams) ([]ListConversationBatchedTurnsInRangeRow, error) {
+	rows, err := q.db.QueryContext(ctx, listConversationBatchedTurnsInRange, arg.ConversationID, arg.FromSequence, arg.BeforeSequence)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []ListConversationBatchedTurnsInRangeRow{}
+	for rows.Next() {
+		var i ListConversationBatchedTurnsInRangeRow
+		if err := rows.Scan(
+			&i.ID,
+			&i.PromotedToTurnID,
+			&i.BatchDeliveryKind,
+			&i.BatchDeliverySteerID,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listInterruptedSessions = `-- name: ListInterruptedSessions :many
+WITH wanted_session AS (
+    SELECT CAST(j.value AS TEXT) AS session_id
+    FROM json_each(?) AS j
+),
+session_conversation AS (
+    SELECT wanted_session.session_id, (
+        SELECT conversations.id FROM conversations
+        WHERE conversations.current_session_id = wanted_session.session_id
+        ORDER BY conversations.scope = 'project' DESC, conversations.created_at DESC, conversations.id DESC
+        LIMIT 1
+    ) AS conversation_id
+    FROM wanted_session
+)
+SELECT CAST(session_conversation.session_id AS TEXT) AS session_id
+FROM session_conversation
+WHERE (
+    SELECT conversation_turns.state FROM conversation_turns
+    WHERE conversation_turns.conversation_id = session_conversation.conversation_id
+      AND conversation_turns.promoted_to_turn_id IS NULL
+      AND conversation_turns.rolled_back_at IS NULL
+      AND conversation_turns.state <> 'cancelled'
+    ORDER BY conversation_turns.requested_at DESC, conversation_turns.rowid DESC
+    LIMIT 1
+) = 'interrupted'
+`
+
+// Sessions in the batch whose latest Chat turn the person interrupted. The
+// conversation is the one SelectConversationBySession picks. A cancelled turn is
+// a queued prompt the user withdrew, so it never counts as the latest turn.
+func (q *Queries) ListInterruptedSessions(ctx context.Context, jsonEach interface{}) ([]string, error) {
+	rows, err := q.db.QueryContext(ctx, listInterruptedSessions, jsonEach)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []string{}
+	for rows.Next() {
+		var session_id string
+		if err := rows.Scan(&session_id); err != nil {
+			return nil, err
+		}
+		items = append(items, session_id)
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
 }
 
 const listVisibleRunningTurnsForConversation = `-- name: ListVisibleRunningTurnsForConversation :many
@@ -1089,10 +1687,12 @@ WHERE conversation_turns.conversation_id = ?1
   AND (path.max_sequence IS NULL OR EXISTS (
       SELECT 1 FROM conversation_messages AS lineage_message
       WHERE lineage_message.turn_id = conversation_turns.id
+        AND lineage_message.conversation_id = conversation_turns.conversation_id
         AND lineage_message.sequence <= path.max_sequence
       UNION ALL
       SELECT 1 FROM conversation_activities AS lineage_activity
       WHERE lineage_activity.turn_id = conversation_turns.id
+        AND lineage_activity.conversation_id = conversation_turns.conversation_id
         AND lineage_activity.sequence <= path.max_sequence
   ))
 ORDER BY conversation_turns.requested_at, conversation_turns.rowid
@@ -1147,10 +1747,10 @@ func (q *Queries) MarkConversationCompacted(ctx context.Context, arg MarkConvers
 	return err
 }
 
-const markConversationTurnStarted = `-- name: MarkConversationTurnStarted :exec
+const markConversationTurnStarted = `-- name: MarkConversationTurnStarted :execrows
 UPDATE conversation_turns
 SET state = 'running', started_at = COALESCE(started_at, ?)
-WHERE id = ?
+WHERE id = ? AND state IN ('queued', 'running')
 `
 
 type MarkConversationTurnStartedParams struct {
@@ -1158,9 +1758,12 @@ type MarkConversationTurnStartedParams struct {
 	ID        string
 }
 
-func (q *Queries) MarkConversationTurnStarted(ctx context.Context, arg MarkConversationTurnStartedParams) error {
-	_, err := q.db.ExecContext(ctx, markConversationTurnStarted, arg.StartedAt, arg.ID)
-	return err
+func (q *Queries) MarkConversationTurnStarted(ctx context.Context, arg MarkConversationTurnStartedParams) (int64, error) {
+	result, err := q.db.ExecContext(ctx, markConversationTurnStarted, arg.StartedAt, arg.ID)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected()
 }
 
 const markConversationTurnsRolledBack = `-- name: MarkConversationTurnsRolledBack :execrows
@@ -1168,15 +1771,24 @@ UPDATE conversation_turns
 SET rolled_back_at = ?
 WHERE conversation_turns.conversation_id = ?
   AND conversation_turns.rolled_back_at IS NULL
-  AND conversation_turns.rowid >= (
-      SELECT anchor.rowid FROM conversation_turns AS anchor WHERE anchor.id = ?
+  AND (
+      conversation_turns.rowid >= (
+          SELECT anchor.rowid FROM conversation_turns AS anchor WHERE anchor.id = ?3
+      )
+      OR conversation_turns.promoted_to_turn_id IN (
+          SELECT target.id FROM conversation_turns AS target
+          WHERE target.conversation_id = conversation_turns.conversation_id
+            AND target.rowid >= (
+                SELECT anchor.rowid FROM conversation_turns AS anchor WHERE anchor.id = ?3
+            )
+      )
   )
 `
 
 type MarkConversationTurnsRolledBackParams struct {
 	RolledBackAt   sql.NullTime
 	ConversationID string
-	ID             string
+	AnchorTurnID   string
 }
 
 // Everything from the named turn to the end of the conversation, which is the range
@@ -1188,11 +1800,227 @@ type MarkConversationTurnsRolledBackParams struct {
 // the same way SelectConversationTurns does. Two turns sharing a timestamp is
 // ordinary; two turns sharing a rowid is impossible.
 func (q *Queries) MarkConversationTurnsRolledBack(ctx context.Context, arg MarkConversationTurnsRolledBackParams) (int64, error) {
-	result, err := q.db.ExecContext(ctx, markConversationTurnsRolledBack, arg.RolledBackAt, arg.ConversationID, arg.ID)
+	result, err := q.db.ExecContext(ctx, markConversationTurnsRolledBack, arg.RolledBackAt, arg.ConversationID, arg.AnchorTurnID)
 	if err != nil {
 		return 0, err
 	}
 	return result.RowsAffected()
+}
+
+const markQueuedConversationBatchStarted = `-- name: MarkQueuedConversationBatchStarted :exec
+UPDATE conversation_turns
+SET started_at = COALESCE(started_at, ?1)
+WHERE conversation_id = ?2
+  AND id IN (SELECT CAST(value AS TEXT) FROM json_each(CAST(?3 AS TEXT)))
+`
+
+type MarkQueuedConversationBatchStartedParams struct {
+	StartedAt      sql.NullTime
+	ConversationID string
+	TurnIds        string
+}
+
+func (q *Queries) MarkQueuedConversationBatchStarted(ctx context.Context, arg MarkQueuedConversationBatchStartedParams) error {
+	_, err := q.db.ExecContext(ctx, markQueuedConversationBatchStarted, arg.StartedAt, arg.ConversationID, arg.TurnIds)
+	return err
+}
+
+const moveConversationActivities = `-- name: MoveConversationActivities :exec
+UPDATE conversation_activities
+SET conversation_id = ?1, branch_id = ?2,
+    sequence = sequence + ?3
+WHERE conversation_activities.conversation_id = ?4
+  AND (conversation_activities.turn_id IS NULL OR conversation_activities.turn_id IN (
+      SELECT id FROM conversation_turns WHERE conversation_turns.conversation_id = ?1
+  ))
+`
+
+type MoveConversationActivitiesParams struct {
+	TargetID       string
+	BranchID       string
+	SequenceOffset int64
+	SourceID       string
+}
+
+func (q *Queries) MoveConversationActivities(ctx context.Context, arg MoveConversationActivitiesParams) error {
+	_, err := q.db.ExecContext(ctx, moveConversationActivities,
+		arg.TargetID,
+		arg.BranchID,
+		arg.SequenceOffset,
+		arg.SourceID,
+	)
+	return err
+}
+
+const moveConversationMessages = `-- name: MoveConversationMessages :exec
+UPDATE conversation_messages
+SET conversation_id = ?1, branch_id = ?2,
+    sequence = sequence + ?3
+WHERE conversation_messages.conversation_id = ?4
+  AND (conversation_messages.turn_id IS NULL OR conversation_messages.turn_id IN (
+      SELECT id FROM conversation_turns WHERE conversation_turns.conversation_id = ?1
+  ))
+`
+
+type MoveConversationMessagesParams struct {
+	TargetID       string
+	BranchID       string
+	SequenceOffset int64
+	SourceID       string
+}
+
+// Messages and activities follow their turns. Offsetting every sequence by the
+// target's latest keeps their order and places them after the target's history.
+func (q *Queries) MoveConversationMessages(ctx context.Context, arg MoveConversationMessagesParams) error {
+	_, err := q.db.ExecContext(ctx, moveConversationMessages,
+		arg.TargetID,
+		arg.BranchID,
+		arg.SequenceOffset,
+		arg.SourceID,
+	)
+	return err
+}
+
+const moveConversationQueuedEditDeliveries = `-- name: MoveConversationQueuedEditDeliveries :exec
+UPDATE conversation_queued_edit_deliveries
+SET conversation_id = ?1
+WHERE conversation_queued_edit_deliveries.conversation_id = ?2
+  AND conversation_queued_edit_deliveries.client_message_id NOT IN (
+      SELECT existing.client_message_id FROM conversation_queued_edit_deliveries AS existing
+      WHERE existing.conversation_id = ?1
+  )
+`
+
+type MoveConversationQueuedEditDeliveriesParams struct {
+	TargetID string
+	SourceID string
+}
+
+// Queued-edit receipts keep a retried edit idempotent after the move.
+func (q *Queries) MoveConversationQueuedEditDeliveries(ctx context.Context, arg MoveConversationQueuedEditDeliveriesParams) error {
+	_, err := q.db.ExecContext(ctx, moveConversationQueuedEditDeliveries, arg.TargetID, arg.SourceID)
+	return err
+}
+
+const moveConversationTurns = `-- name: MoveConversationTurns :exec
+UPDATE conversation_turns
+SET conversation_id = ?1, branch_id = ?2
+WHERE conversation_turns.conversation_id = ?3
+  AND conversation_turns.id NOT IN (
+      SELECT moved.turn_id FROM conversation_messages AS moved
+      JOIN conversation_messages AS delivered
+        ON delivered.conversation_id = ?1
+       AND delivered.client_message_id = moved.client_message_id
+      WHERE moved.conversation_id = ?3
+        AND moved.client_message_id <> ''
+        AND moved.turn_id IS NOT NULL
+  )
+`
+
+type MoveConversationTurnsParams struct {
+	TargetID string
+	BranchID string
+	SourceID string
+}
+
+// Move a provisioning row's turns into the conversation that adopts them. IDs and
+// requested_at stay, so queue order and every turn id a client holds still work.
+// A turn whose prompt already reached the target under the same client message id
+// stays behind: it would break the target's unique client id.
+func (q *Queries) MoveConversationTurns(ctx context.Context, arg MoveConversationTurnsParams) error {
+	_, err := q.db.ExecContext(ctx, moveConversationTurns, arg.TargetID, arg.BranchID, arg.SourceID)
+	return err
+}
+
+const moveUndispatchedTurnActivitiesToBranch = `-- name: MoveUndispatchedTurnActivitiesToBranch :exec
+UPDATE conversation_activities
+SET branch_id = ?1
+WHERE conversation_activities.conversation_id = ?2
+  AND conversation_activities.branch_id = ?3
+  AND conversation_activities.turn_id IN (
+      SELECT intake.id FROM conversation_turns AS intake
+      WHERE intake.conversation_id = ?2
+        AND intake.branch_id = ?3
+        AND intake.handled_by_session_id = ?4
+        AND intake.state = 'queued' AND intake.provider_turn_id = '' AND intake.rolled_back_at IS NULL
+  )
+`
+
+type MoveUndispatchedTurnActivitiesToBranchParams struct {
+	BranchID       string
+	ConversationID string
+	ParentBranchID string
+	SessionID      domain.SessionID
+}
+
+func (q *Queries) MoveUndispatchedTurnActivitiesToBranch(ctx context.Context, arg MoveUndispatchedTurnActivitiesToBranchParams) error {
+	_, err := q.db.ExecContext(ctx, moveUndispatchedTurnActivitiesToBranch,
+		arg.BranchID,
+		arg.ConversationID,
+		arg.ParentBranchID,
+		arg.SessionID,
+	)
+	return err
+}
+
+const moveUndispatchedTurnMessagesToBranch = `-- name: MoveUndispatchedTurnMessagesToBranch :exec
+UPDATE conversation_messages
+SET branch_id = ?1
+WHERE conversation_messages.conversation_id = ?2
+  AND conversation_messages.branch_id = ?3
+  AND conversation_messages.turn_id IN (
+      SELECT intake.id FROM conversation_turns AS intake
+      WHERE intake.conversation_id = ?2
+        AND intake.branch_id = ?3
+        AND intake.handled_by_session_id = ?4
+        AND intake.state = 'queued' AND intake.provider_turn_id = '' AND intake.rolled_back_at IS NULL
+  )
+`
+
+type MoveUndispatchedTurnMessagesToBranchParams struct {
+	BranchID       string
+	ConversationID string
+	ParentBranchID string
+	SessionID      domain.SessionID
+}
+
+// Intake a session queued before its fresh provider existed belongs to that
+// provider's scope, so native replay can correlate it after a restart. Rows
+// move with their turn; dispatched or rolled-back turns stay where they are.
+func (q *Queries) MoveUndispatchedTurnMessagesToBranch(ctx context.Context, arg MoveUndispatchedTurnMessagesToBranchParams) error {
+	_, err := q.db.ExecContext(ctx, moveUndispatchedTurnMessagesToBranch,
+		arg.BranchID,
+		arg.ConversationID,
+		arg.ParentBranchID,
+		arg.SessionID,
+	)
+	return err
+}
+
+const moveUndispatchedTurnsToBranch = `-- name: MoveUndispatchedTurnsToBranch :exec
+UPDATE conversation_turns
+SET branch_id = ?1
+WHERE conversation_id = ?2
+  AND branch_id = ?3
+  AND handled_by_session_id = ?4
+  AND state = 'queued' AND provider_turn_id = '' AND rolled_back_at IS NULL
+`
+
+type MoveUndispatchedTurnsToBranchParams struct {
+	BranchID       string
+	ConversationID string
+	ParentBranchID string
+	SessionID      domain.SessionID
+}
+
+func (q *Queries) MoveUndispatchedTurnsToBranch(ctx context.Context, arg MoveUndispatchedTurnsToBranchParams) error {
+	_, err := q.db.ExecContext(ctx, moveUndispatchedTurnsToBranch,
+		arg.BranchID,
+		arg.ConversationID,
+		arg.ParentBranchID,
+		arg.SessionID,
+	)
+	return err
 }
 
 const nextConversationSequence = `-- name: NextConversationSequence :one
@@ -1212,6 +2040,27 @@ func (q *Queries) NextConversationSequence(ctx context.Context, arg NextConversa
 	var latest_sequence int64
 	err := row.Scan(&latest_sequence)
 	return latest_sequence, err
+}
+
+const postponeConversationTurnAutoResume = `-- name: PostponeConversationTurnAutoResume :execrows
+UPDATE conversation_turns
+SET usage_limit_resets_at = ?1
+WHERE id = ?2 AND conversation_id = ?3
+  AND usage_limit_auto_resume = 1
+`
+
+type PostponeConversationTurnAutoResumeParams struct {
+	ResetsAt       sql.NullTime
+	ID             string
+	ConversationID string
+}
+
+func (q *Queries) PostponeConversationTurnAutoResume(ctx context.Context, arg PostponeConversationTurnAutoResumeParams) (int64, error) {
+	result, err := q.db.ExecContext(ctx, postponeConversationTurnAutoResume, arg.ResetsAt, arg.ID, arg.ConversationID)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected()
 }
 
 const recomputeConversationCompactedAt = `-- name: RecomputeConversationCompactedAt :exec
@@ -1337,10 +2186,11 @@ func (q *Queries) ReleaseQueuedConversationTurnPromotion(ctx context.Context, ar
 const releaseUntouchedConversationProvider = `-- name: ReleaseUntouchedConversationProvider :execrows
 UPDATE conversation_branches
 SET provider_conversation_id = '', provider_scope_id = ?1
-WHERE conversation_branches.session_id = ?2 AND parent_branch_id IS NULL
+WHERE parent_branch_id IS NULL
   AND conversation_branches.id = (
       SELECT c.active_branch_id FROM conversations AS c
-      WHERE c.session_id = ?2 AND c.current_session_id = ?2
+      WHERE c.current_session_id = ?2
+        AND (c.session_id = ?2 OR (c.scope = 'project' AND c.session_id IS NULL))
         AND c.latest_sequence = 0
         AND NOT EXISTS (
             SELECT 1 FROM conversation_turns WHERE conversation_id = c.id
@@ -1350,11 +2200,47 @@ WHERE conversation_branches.session_id = ?2 AND parent_branch_id IS NULL
 
 type ReleaseUntouchedConversationProviderParams struct {
 	ProviderScopeID string
-	SessionID       sql.NullString
+	SessionID       *domain.SessionID
 }
 
+// The conversation's current session is the owner. A project conversation
+// (orchestrator) has no owning session_id, and its root branch's session_id
+// records the orchestrator that created it, not the one that holds it now.
 func (q *Queries) ReleaseUntouchedConversationProvider(ctx context.Context, arg ReleaseUntouchedConversationProviderParams) (int64, error) {
 	result, err := q.db.ExecContext(ctx, releaseUntouchedConversationProvider, arg.ProviderScopeID, arg.SessionID)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected()
+}
+
+const replaceUntouchedConversationProvider = `-- name: ReplaceUntouchedConversationProvider :execrows
+UPDATE conversation_branches
+SET provider_conversation_id = ?1
+WHERE parent_branch_id IS NULL
+  AND conversation_branches.provider_conversation_id = ?2
+  AND conversation_branches.id = (
+      SELECT c.active_branch_id FROM conversations AS c
+      WHERE c.current_session_id = ?3
+        AND (c.session_id = ?3 OR (c.scope = 'project' AND c.session_id IS NULL))
+        AND c.latest_sequence = 0
+        AND NOT EXISTS (
+            SELECT 1 FROM conversation_turns WHERE conversation_id = c.id
+        )
+  )
+`
+
+type ReplaceUntouchedConversationProviderParams struct {
+	ProviderConversationID         string
+	ExpectedProviderConversationID string
+	SessionID                      *domain.SessionID
+}
+
+// Same proof as ReleaseUntouchedConversationProvider, but rebinds the empty
+// root to a fresh provider id and keeps its provider scope, which is part of
+// the persistent provider host's identity.
+func (q *Queries) ReplaceUntouchedConversationProvider(ctx context.Context, arg ReplaceUntouchedConversationProviderParams) (int64, error) {
+	result, err := q.db.ExecContext(ctx, replaceUntouchedConversationProvider, arg.ProviderConversationID, arg.ExpectedProviderConversationID, arg.SessionID)
 	if err != nil {
 		return 0, err
 	}
@@ -1387,24 +2273,6 @@ func (q *Queries) ReserveQueuedConversationTurnForPromotion(ctx context.Context,
 	return result.RowsAffected()
 }
 
-const resetConversationAgentOverridesForSession = `-- name: ResetConversationAgentOverridesForSession :exec
-UPDATE conversations
-SET model = NULL, reasoning_effort = NULL, updated_at = ?
-WHERE current_session_id = ?
-`
-
-type ResetConversationAgentOverridesForSessionParams struct {
-	UpdatedAt        time.Time
-	CurrentSessionID *domain.SessionID
-}
-
-// An agent switch starts a new provider/model scope. Clear only the source
-// harness choices; approval posture is AO-owned and remains applicable.
-func (q *Queries) ResetConversationAgentOverridesForSession(ctx context.Context, arg ResetConversationAgentOverridesForSessionParams) error {
-	_, err := q.db.ExecContext(ctx, resetConversationAgentOverridesForSession, arg.UpdatedAt, arg.CurrentSessionID)
-	return err
-}
-
 const resolveConversationApproval = `-- name: ResolveConversationApproval :exec
 UPDATE conversation_activities
 SET status = 'resolved',
@@ -1413,6 +2281,7 @@ SET status = 'resolved',
     updated_at = ?2
 WHERE conversation_id = ?3
   AND request_id = ?4
+  AND request_id <> ''
   AND status = 'pending'
 `
 
@@ -1437,8 +2306,65 @@ func (q *Queries) ResolveConversationApproval(ctx context.Context, arg ResolveCo
 	return err
 }
 
+const selectAutoResumeConversationTurns = `-- name: SelectAutoResumeConversationTurns :many
+SELECT id, conversation_id, handled_by_session_id, provider_turn_id, controller_generation, state, error_message, requested_at, started_at, completed_at, diff_json, rolled_back_at, plan_json, branch_id, promotion_started_at, promoted_to_turn_id, retry_of_turn_id, handled_by_review_id, usage_limit_resets_at, usage_limit_auto_resume, usage_limit_resume_error, batched_input, provider_input_text, failure_code, batch_delivery_kind, batch_delivery_steer_id, artifacts_json FROM conversation_turns
+WHERE usage_limit_auto_resume = 1
+ORDER BY usage_limit_resets_at, id
+`
+
+func (q *Queries) SelectAutoResumeConversationTurns(ctx context.Context) ([]ConversationTurn, error) {
+	rows, err := q.db.QueryContext(ctx, selectAutoResumeConversationTurns)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []ConversationTurn{}
+	for rows.Next() {
+		var i ConversationTurn
+		if err := rows.Scan(
+			&i.ID,
+			&i.ConversationID,
+			&i.HandledBySessionID,
+			&i.ProviderTurnID,
+			&i.ControllerGeneration,
+			&i.State,
+			&i.ErrorMessage,
+			&i.RequestedAt,
+			&i.StartedAt,
+			&i.CompletedAt,
+			&i.DiffJson,
+			&i.RolledBackAt,
+			&i.PlanJson,
+			&i.BranchID,
+			&i.PromotionStartedAt,
+			&i.PromotedToTurnID,
+			&i.RetryOfTurnID,
+			&i.HandledByReviewID,
+			&i.UsageLimitResetsAt,
+			&i.UsageLimitAutoResume,
+			&i.UsageLimitResumeError,
+			&i.BatchedInput,
+			&i.ProviderInputText,
+			&i.FailureCode,
+			&i.BatchDeliveryKind,
+			&i.BatchDeliverySteerID,
+			&i.ArtifactsJson,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const selectCompletedEditReplacement = `-- name: SelectCompletedEditReplacement :one
-SELECT t.id, t.conversation_id, t.handled_by_session_id, t.provider_turn_id, t.controller_generation, t.state, t.error_message, t.requested_at, t.started_at, t.completed_at, t.diff_json, t.rolled_back_at, t.plan_json, t.branch_id, t.promotion_started_at, t.promoted_to_turn_id, t.retry_of_turn_id, b.parent_branch_id
+SELECT t.id, t.conversation_id, t.handled_by_session_id, t.provider_turn_id, t.controller_generation, t.state, t.error_message, t.requested_at, t.started_at, t.completed_at, t.diff_json, t.rolled_back_at, t.plan_json, t.branch_id, t.promotion_started_at, t.promoted_to_turn_id, t.retry_of_turn_id, t.handled_by_review_id, t.usage_limit_resets_at, t.usage_limit_auto_resume, t.usage_limit_resume_error, t.batched_input, t.provider_input_text, t.failure_code, t.batch_delivery_kind, t.batch_delivery_steer_id, t.artifacts_json, b.parent_branch_id
 FROM conversation_messages m
 JOIN conversation_turns t ON t.id = m.turn_id
 JOIN conversation_branches b ON b.id = m.branch_id
@@ -1482,6 +2408,16 @@ func (q *Queries) SelectCompletedEditReplacement(ctx context.Context, arg Select
 		&i.ConversationTurn.PromotionStartedAt,
 		&i.ConversationTurn.PromotedToTurnID,
 		&i.ConversationTurn.RetryOfTurnID,
+		&i.ConversationTurn.HandledByReviewID,
+		&i.ConversationTurn.UsageLimitResetsAt,
+		&i.ConversationTurn.UsageLimitAutoResume,
+		&i.ConversationTurn.UsageLimitResumeError,
+		&i.ConversationTurn.BatchedInput,
+		&i.ConversationTurn.ProviderInputText,
+		&i.ConversationTurn.FailureCode,
+		&i.ConversationTurn.BatchDeliveryKind,
+		&i.ConversationTurn.BatchDeliverySteerID,
+		&i.ConversationTurn.ArtifactsJson,
 		&i.ParentBranchID,
 	)
 	return i, err
@@ -1507,7 +2443,8 @@ SELECT conversation_activities.id, conversation_activities.conversation_id, conv
 JOIN active_path AS path ON path.branch_id = conversation_activities.branch_id
 WHERE conversation_activities.conversation_id = ?1
   AND (path.max_sequence IS NULL OR conversation_activities.sequence <= path.max_sequence)
-  AND (conversation_activities.turn_id IS NULL OR conversation_activities.turn_id NOT IN (
+  -- An AO action outlives its turn: rolling back does not undo a spawn or a kill.
+  AND (conversation_activities.turn_id IS NULL OR conversation_activities.kind = 'ao_action' OR conversation_activities.turn_id NOT IN (
       SELECT discarded.id FROM conversation_turns AS discarded
       WHERE discarded.conversation_id = ?1
         AND (
@@ -1566,7 +2503,7 @@ const selectConversationActivitiesPage = `-- name: SelectConversationActivitiesP
 WITH RECURSIVE active_path(branch_id, max_sequence) AS (
     SELECT conversations.active_branch_id, CAST(NULL AS INTEGER)
     FROM conversations
-    WHERE conversations.id = ?1
+    WHERE conversations.id = ?2
     UNION ALL
     SELECT branch.parent_branch_id,
            CASE
@@ -1577,32 +2514,53 @@ WITH RECURSIVE active_path(branch_id, max_sequence) AS (
     FROM active_path AS path
     JOIN conversation_branches AS branch ON branch.id = path.branch_id
     WHERE branch.parent_branch_id IS NOT NULL
-)
-SELECT conversation_activities.id, conversation_activities.conversation_id, conversation_activities.turn_id, conversation_activities.sequence, conversation_activities.revision, conversation_activities.kind, conversation_activities.status, conversation_activities.summary, conversation_activities.detail_json, conversation_activities.request_id, conversation_activities.provider_item_id, conversation_activities.created_at, conversation_activities.updated_at, conversation_activities.command_output, conversation_activities.command_output_truncated, conversation_activities.streamed_text, conversation_activities.streamed_text_truncated, conversation_activities.branch_id FROM conversation_activities
+), page_candidates AS (
+SELECT conversation_activities.id, conversation_activities.sequence,
+       length(CAST(conversation_activities.summary AS BLOB)) + length(CAST(conversation_activities.detail_json AS BLOB)) + length(CAST(conversation_activities.command_output AS BLOB)) + length(CAST(conversation_activities.streamed_text AS BLOB)) AS row_bytes
+FROM conversation_activities
 JOIN active_path AS path ON path.branch_id = conversation_activities.branch_id
-WHERE conversation_activities.conversation_id = ?1
-  AND conversation_activities.sequence < ?2
+WHERE conversation_activities.conversation_id = ?2
+  AND conversation_activities.sequence < ?3
   AND (path.max_sequence IS NULL OR conversation_activities.sequence <= path.max_sequence)
-  AND (conversation_activities.turn_id IS NULL OR conversation_activities.turn_id NOT IN (
+  -- An AO action outlives its turn: rolling back does not undo a spawn or a kill.
+  AND (conversation_activities.turn_id IS NULL OR conversation_activities.kind = 'ao_action' OR conversation_activities.turn_id NOT IN (
       SELECT discarded.id FROM conversation_turns AS discarded
-      WHERE discarded.conversation_id = ?1
+      WHERE discarded.conversation_id = ?2
         AND (
           discarded.rolled_back_at IS NOT NULL
           OR discarded.state = 'cancelled'
         )
   ))
 ORDER BY conversation_activities.sequence DESC
-LIMIT ?3
+LIMIT ?4
+), page_budget(id, sequence, total_bytes, row_position) AS (
+    SELECT id, sequence,
+           SUM(row_bytes) OVER (ORDER BY sequence DESC ROWS UNBOUNDED PRECEDING) AS total_bytes,
+           ROW_NUMBER() OVER (ORDER BY sequence DESC) AS row_position
+    FROM page_candidates
+)
+SELECT conversation_activities.id, conversation_activities.conversation_id, conversation_activities.turn_id, conversation_activities.sequence, conversation_activities.revision, conversation_activities.kind, conversation_activities.status, conversation_activities.summary, conversation_activities.detail_json, conversation_activities.request_id, conversation_activities.provider_item_id, conversation_activities.created_at, conversation_activities.updated_at, conversation_activities.command_output, conversation_activities.command_output_truncated, conversation_activities.streamed_text, conversation_activities.streamed_text_truncated, conversation_activities.branch_id FROM conversation_activities
+JOIN page_budget AS budget ON conversation_activities.id = budget.id
+WHERE budget.total_bytes <= CAST(?1 AS INTEGER) OR budget.row_position = 1
+ORDER BY budget.sequence DESC
 `
 
 type SelectConversationActivitiesPageParams struct {
+	PageBytes      int64
 	ConversationID string
 	BeforeSequence int64
 	PageLimit      int64
 }
 
+// Budget IDs and byte lengths before loading payload columns. A single
+// oversized row remains readable so every page cursor can advance.
 func (q *Queries) SelectConversationActivitiesPage(ctx context.Context, arg SelectConversationActivitiesPageParams) ([]ConversationActivity, error) {
-	rows, err := q.db.QueryContext(ctx, selectConversationActivitiesPage, arg.ConversationID, arg.BeforeSequence, arg.PageLimit)
+	rows, err := q.db.QueryContext(ctx, selectConversationActivitiesPage,
+		arg.PageBytes,
+		arg.ConversationID,
+		arg.BeforeSequence,
+		arg.PageLimit,
+	)
 	if err != nil {
 		return nil, err
 	}
@@ -1645,7 +2603,7 @@ func (q *Queries) SelectConversationActivitiesPage(ctx context.Context, arg Sele
 
 const selectConversationActivityByProviderItem = `-- name: SelectConversationActivityByProviderItem :one
 SELECT id, conversation_id, turn_id, sequence, revision, kind, status, summary, detail_json, request_id, provider_item_id, created_at, updated_at, command_output, command_output_truncated, streamed_text, streamed_text_truncated, branch_id FROM conversation_activities
-WHERE conversation_id = ? AND provider_item_id = ?
+WHERE conversation_id = ? AND provider_item_id = ? AND provider_item_id <> ''
 LIMIT 1
 `
 
@@ -1656,6 +2614,52 @@ type SelectConversationActivityByProviderItemParams struct {
 
 func (q *Queries) SelectConversationActivityByProviderItem(ctx context.Context, arg SelectConversationActivityByProviderItemParams) (ConversationActivity, error) {
 	row := q.db.QueryRowContext(ctx, selectConversationActivityByProviderItem, arg.ConversationID, arg.ProviderItemID)
+	var i ConversationActivity
+	err := row.Scan(
+		&i.ID,
+		&i.ConversationID,
+		&i.TurnID,
+		&i.Sequence,
+		&i.Revision,
+		&i.Kind,
+		&i.Status,
+		&i.Summary,
+		&i.DetailJson,
+		&i.RequestID,
+		&i.ProviderItemID,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+		&i.CommandOutput,
+		&i.CommandOutputTruncated,
+		&i.StreamedText,
+		&i.StreamedTextTruncated,
+		&i.BranchID,
+	)
+	return i, err
+}
+
+const selectConversationActivityByRequest = `-- name: SelectConversationActivityByRequest :one
+SELECT id, conversation_id, turn_id, sequence, revision, kind, status, summary, detail_json, request_id, provider_item_id, created_at, updated_at, command_output, command_output_truncated, streamed_text, streamed_text_truncated, branch_id FROM conversation_activities
+WHERE conversation_id = ? AND request_id = ?
+LIMIT 1
+`
+
+type SelectConversationActivityByRequestParams struct {
+	ConversationID string
+	RequestID      string
+}
+
+// A question reaches the store with only its request id, and the chat host
+// replays pending requests after a reconnect. Matching on the request id is
+// what keeps that replay on the row AO already stored: the
+// (conversation_id, request_id) index forbids a second row, and failing the
+// insert stops the whole projection with the turn still running (#7944).
+// Only an in-flight row is refreshed. A settled row stays settled: a replay
+// must not reopen a question the user answered (resolved) or one
+// settleOrphanedWork already failed with its turn - revived, it would sit
+// pending on a failed turn, where the dock never shows it.
+func (q *Queries) SelectConversationActivityByRequest(ctx context.Context, arg SelectConversationActivityByRequestParams) (ConversationActivity, error) {
+	row := q.db.QueryRowContext(ctx, selectConversationActivityByRequest, arg.ConversationID, arg.RequestID)
 	var i ConversationActivity
 	err := row.Scan(
 		&i.ID,
@@ -1694,7 +2698,7 @@ WITH RECURSIVE lineage(id, parent_branch_id, replaced_turn_id, provider_scope_id
     JOIN conversation_branches AS parent ON parent.id = lineage.parent_branch_id
     WHERE parent.conversation_id = ?1
 )
-SELECT b.id, b.conversation_id, b.session_id, b.provider_conversation_id, b.parent_branch_id, b.fork_after_turn_id, b.replaced_turn_id, b.replacement_turn_id, b.fork_after_sequence, b.created_at, b.strategy, b.replay_cutoff_sequence, b.replay_truncated, b.provider_scope_id, b.provider_ids_scoped, b.id = c.active_branch_id AS active,
+SELECT b.id, b.conversation_id, b.session_id, b.provider_conversation_id, b.parent_branch_id, b.fork_after_turn_id, b.replaced_turn_id, b.replacement_turn_id, b.fork_after_sequence, b.created_at, b.strategy, b.replay_cutoff_sequence, b.replay_truncated, b.provider_scope_id, b.provider_ids_scoped, b.review_id, b.handoff_note, b.id = c.active_branch_id AS active,
        CAST(COALESCE((
            SELECT lineage.provider_scope_id
            FROM lineage
@@ -1740,6 +2744,8 @@ type SelectConversationBranchRow struct {
 	ReplayTruncated          int64
 	ProviderScopeID          string
 	ProviderIdsScoped        int64
+	ReviewID                 sql.NullString
+	HandoffNote              string
 	Active                   bool
 	EffectiveProviderScopeID string
 	ProviderBindingID        string
@@ -1764,6 +2770,8 @@ func (q *Queries) SelectConversationBranch(ctx context.Context, arg SelectConver
 		&i.ReplayTruncated,
 		&i.ProviderScopeID,
 		&i.ProviderIdsScoped,
+		&i.ReviewID,
+		&i.HandoffNote,
 		&i.Active,
 		&i.EffectiveProviderScopeID,
 		&i.ProviderBindingID,
@@ -1784,7 +2792,7 @@ WITH RECURSIVE lineages(branch_id, id, parent_branch_id, replaced_turn_id, provi
     JOIN conversation_branches AS parent ON parent.id = lineage.parent_branch_id
     WHERE parent.conversation_id = ?1
 )
-SELECT b.id, b.conversation_id, b.session_id, b.provider_conversation_id, b.parent_branch_id, b.fork_after_turn_id, b.replaced_turn_id, b.replacement_turn_id, b.fork_after_sequence, b.created_at, b.strategy, b.replay_cutoff_sequence, b.replay_truncated, b.provider_scope_id, b.provider_ids_scoped, b.id = c.active_branch_id AS active,
+SELECT b.id, b.conversation_id, b.session_id, b.provider_conversation_id, b.parent_branch_id, b.fork_after_turn_id, b.replaced_turn_id, b.replacement_turn_id, b.fork_after_sequence, b.created_at, b.strategy, b.replay_cutoff_sequence, b.replay_truncated, b.provider_scope_id, b.provider_ids_scoped, b.review_id, b.handoff_note, b.id = c.active_branch_id AS active,
        CAST(COALESCE((
            SELECT lineage.provider_scope_id
            FROM lineages AS lineage
@@ -1825,6 +2833,8 @@ type SelectConversationBranchesRow struct {
 	ReplayTruncated          int64
 	ProviderScopeID          string
 	ProviderIdsScoped        int64
+	ReviewID                 sql.NullString
+	HandoffNote              string
 	Active                   bool
 	EffectiveProviderScopeID string
 	ProviderBindingID        string
@@ -1855,6 +2865,8 @@ func (q *Queries) SelectConversationBranches(ctx context.Context, conversationID
 			&i.ReplayTruncated,
 			&i.ProviderScopeID,
 			&i.ProviderIdsScoped,
+			&i.ReviewID,
+			&i.HandoffNote,
 			&i.Active,
 			&i.EffectiveProviderScopeID,
 			&i.ProviderBindingID,
@@ -1873,7 +2885,7 @@ func (q *Queries) SelectConversationBranches(ctx context.Context, conversationID
 }
 
 const selectConversationByID = `-- name: SelectConversationByID :one
-SELECT id, scope, project_id, session_id, current_session_id, latest_sequence, created_at, updated_at, model, reasoning_effort, approval_mode, compacted_at, context_used, context_window, usage_input_tokens, usage_output_tokens, usage_cached_tokens, usage_total_tokens, rate_limit_primary_percent, rate_limit_secondary_percent, rate_limit_primary_resets_in, rate_limit_secondary_resets_in, rate_limit_plan, provider_title, applied_title, model_reroute_json, account_json, thread_state_json, mcp_servers_json, usage_cost, usage_currency, active_branch_id, opencode_mode FROM conversations WHERE id = ? LIMIT 1
+SELECT id, scope, project_id, session_id, review_id, current_session_id, current_review_id, latest_sequence, created_at, updated_at, model, reasoning_effort, approval_mode, compacted_at, context_used, context_window, usage_input_tokens, usage_output_tokens, usage_cached_tokens, usage_total_tokens, rate_limit_primary_percent, rate_limit_secondary_percent, rate_limit_primary_resets_in, rate_limit_secondary_resets_in, rate_limit_plan, provider_title, applied_title, model_reroute_json, account_json, thread_state_json, mcp_servers_json, usage_cost, usage_currency, active_branch_id, opencode_mode, auto_compact_window FROM conversations WHERE id = ? LIMIT 1
 `
 
 func (q *Queries) SelectConversationByID(ctx context.Context, id string) (Conversation, error) {
@@ -1884,7 +2896,9 @@ func (q *Queries) SelectConversationByID(ctx context.Context, id string) (Conver
 		&i.Scope,
 		&i.ProjectID,
 		&i.SessionID,
+		&i.ReviewID,
 		&i.CurrentSessionID,
+		&i.CurrentReviewID,
 		&i.LatestSequence,
 		&i.CreatedAt,
 		&i.UpdatedAt,
@@ -1913,14 +2927,69 @@ func (q *Queries) SelectConversationByID(ctx context.Context, id string) (Conver
 		&i.UsageCurrency,
 		&i.ActiveBranchID,
 		&i.OpencodeMode,
+		&i.AutoCompactWindow,
+	)
+	return i, err
+}
+
+const selectConversationByReview = `-- name: SelectConversationByReview :one
+SELECT id, scope, project_id, session_id, review_id, current_session_id, current_review_id, latest_sequence, created_at, updated_at, model, reasoning_effort, approval_mode, compacted_at, context_used, context_window, usage_input_tokens, usage_output_tokens, usage_cached_tokens, usage_total_tokens, rate_limit_primary_percent, rate_limit_secondary_percent, rate_limit_primary_resets_in, rate_limit_secondary_resets_in, rate_limit_plan, provider_title, applied_title, model_reroute_json, account_json, thread_state_json, mcp_servers_json, usage_cost, usage_currency, active_branch_id, opencode_mode, auto_compact_window FROM conversations WHERE current_review_id = ? LIMIT 1
+`
+
+func (q *Queries) SelectConversationByReview(ctx context.Context, currentReviewID sql.NullString) (Conversation, error) {
+	row := q.db.QueryRowContext(ctx, selectConversationByReview, currentReviewID)
+	var i Conversation
+	err := row.Scan(
+		&i.ID,
+		&i.Scope,
+		&i.ProjectID,
+		&i.SessionID,
+		&i.ReviewID,
+		&i.CurrentSessionID,
+		&i.CurrentReviewID,
+		&i.LatestSequence,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+		&i.Model,
+		&i.ReasoningEffort,
+		&i.ApprovalMode,
+		&i.CompactedAt,
+		&i.ContextUsed,
+		&i.ContextWindow,
+		&i.UsageInputTokens,
+		&i.UsageOutputTokens,
+		&i.UsageCachedTokens,
+		&i.UsageTotalTokens,
+		&i.RateLimitPrimaryPercent,
+		&i.RateLimitSecondaryPercent,
+		&i.RateLimitPrimaryResetsIn,
+		&i.RateLimitSecondaryResetsIn,
+		&i.RateLimitPlan,
+		&i.ProviderTitle,
+		&i.AppliedTitle,
+		&i.ModelRerouteJson,
+		&i.AccountJson,
+		&i.ThreadStateJson,
+		&i.McpServersJson,
+		&i.UsageCost,
+		&i.UsageCurrency,
+		&i.ActiveBranchID,
+		&i.OpencodeMode,
+		&i.AutoCompactWindow,
 	)
 	return i, err
 }
 
 const selectConversationBySession = `-- name: SelectConversationBySession :one
-SELECT id, scope, project_id, session_id, current_session_id, latest_sequence, created_at, updated_at, model, reasoning_effort, approval_mode, compacted_at, context_used, context_window, usage_input_tokens, usage_output_tokens, usage_cached_tokens, usage_total_tokens, rate_limit_primary_percent, rate_limit_secondary_percent, rate_limit_primary_resets_in, rate_limit_secondary_resets_in, rate_limit_plan, provider_title, applied_title, model_reroute_json, account_json, thread_state_json, mcp_servers_json, usage_cost, usage_currency, active_branch_id, opencode_mode FROM conversations WHERE current_session_id = ? LIMIT 1
+SELECT id, scope, project_id, session_id, review_id, current_session_id, current_review_id, latest_sequence, created_at, updated_at, model, reasoning_effort, approval_mode, compacted_at, context_used, context_window, usage_input_tokens, usage_output_tokens, usage_cached_tokens, usage_total_tokens, rate_limit_primary_percent, rate_limit_secondary_percent, rate_limit_primary_resets_in, rate_limit_secondary_resets_in, rate_limit_plan, provider_title, applied_title, model_reroute_json, account_json, thread_state_json, mcp_servers_json, usage_cost, usage_currency, active_branch_id, opencode_mode, auto_compact_window FROM conversations WHERE current_session_id = ?
+ORDER BY scope = 'project' DESC, created_at DESC, id DESC
+LIMIT 1
 `
 
+// An orchestrator's first controller moves the prompts queued during provisioning
+// into the project row and detaches the session-scoped row in one transaction
+// (#6523). Migration 0197 detached the rows older builds left bound to both. If a
+// session is still bound to two rows, the project row is the live one.
 func (q *Queries) SelectConversationBySession(ctx context.Context, currentSessionID *domain.SessionID) (Conversation, error) {
 	row := q.db.QueryRowContext(ctx, selectConversationBySession, currentSessionID)
 	var i Conversation
@@ -1929,7 +2998,9 @@ func (q *Queries) SelectConversationBySession(ctx context.Context, currentSessio
 		&i.Scope,
 		&i.ProjectID,
 		&i.SessionID,
+		&i.ReviewID,
 		&i.CurrentSessionID,
+		&i.CurrentReviewID,
 		&i.LatestSequence,
 		&i.CreatedAt,
 		&i.UpdatedAt,
@@ -1958,6 +3029,7 @@ func (q *Queries) SelectConversationBySession(ctx context.Context, currentSessio
 		&i.UsageCurrency,
 		&i.ActiveBranchID,
 		&i.OpencodeMode,
+		&i.AutoCompactWindow,
 	)
 	return i, err
 }
@@ -1968,6 +3040,7 @@ FROM conversation_activities
 WHERE conversation_id = ?
   AND kind = 'system'
   AND provider_item_id = ?
+  AND provider_item_id <> ''
 `
 
 type SelectConversationContextResetSequenceParams struct {
@@ -1980,6 +3053,75 @@ func (q *Queries) SelectConversationContextResetSequence(ctx context.Context, ar
 	var sequence int64
 	err := row.Scan(&sequence)
 	return sequence, err
+}
+
+const selectConversationDeliveryContent = `-- name: SelectConversationDeliveryContent :many
+SELECT id, delivery_content_json FROM conversation_messages
+WHERE conversation_id = ? AND delivery_content_json <> ''
+`
+
+type SelectConversationDeliveryContentRow struct {
+	ID                  string
+	DeliveryContentJson string
+}
+
+// Delivery content that may hold excerpt references to the conversation it is
+// moving out of.
+func (q *Queries) SelectConversationDeliveryContent(ctx context.Context, conversationID string) ([]SelectConversationDeliveryContentRow, error) {
+	rows, err := q.db.QueryContext(ctx, selectConversationDeliveryContent, conversationID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []SelectConversationDeliveryContentRow{}
+	for rows.Next() {
+		var i SelectConversationDeliveryContentRow
+		if err := rows.Scan(&i.ID, &i.DeliveryContentJson); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const selectConversationEarliestTurnPrompt = `-- name: SelectConversationEarliestTurnPrompt :one
+SELECT CAST(COALESCE(MIN(sequence), 0) AS INTEGER) AS first_sequence
+FROM conversation_messages
+WHERE conversation_id = ?1
+  AND role = 'user'
+  AND turn_id IN (/*SLICE:turn_ids*/?)
+`
+
+type SelectConversationEarliestTurnPromptParams struct {
+	ConversationID string
+	TurnIds        []sql.NullString
+}
+
+// Earliest prompt of the named turns. A page that ends among interleaved turns
+// (a prompt queued while another turn runs) reaches back to it, so a turn is not
+// shown without its prompt. Zero when none of the turns has a prompt.
+func (q *Queries) SelectConversationEarliestTurnPrompt(ctx context.Context, arg SelectConversationEarliestTurnPromptParams) (int64, error) {
+	query := selectConversationEarliestTurnPrompt
+	var queryParams []interface{}
+	queryParams = append(queryParams, arg.ConversationID)
+	if len(arg.TurnIds) > 0 {
+		for _, v := range arg.TurnIds {
+			queryParams = append(queryParams, v)
+		}
+		query = strings.Replace(query, "/*SLICE:turn_ids*/?", strings.Repeat(",?", len(arg.TurnIds))[1:], 1)
+	} else {
+		query = strings.Replace(query, "/*SLICE:turn_ids*/?", "NULL", 1)
+	}
+	row := q.db.QueryRowContext(ctx, query, queryParams...)
+	var first_sequence int64
+	err := row.Scan(&first_sequence)
+	return first_sequence, err
 }
 
 const selectConversationEditAnchor = `-- name: SelectConversationEditAnchor :one
@@ -2016,7 +3158,7 @@ WITH RECURSIVE active_path(branch_id, max_sequence, depth) AS (
     ORDER BY path.depth
     LIMIT 1
 ), active_branch AS (
-    SELECT branch.id, branch.conversation_id, branch.session_id, branch.provider_conversation_id, branch.parent_branch_id, branch.fork_after_turn_id, branch.replaced_turn_id, branch.replacement_turn_id, branch.fork_after_sequence, branch.created_at, branch.strategy, branch.replay_cutoff_sequence, branch.replay_truncated, branch.provider_scope_id, branch.provider_ids_scoped
+    SELECT branch.id, branch.conversation_id, branch.session_id, branch.provider_conversation_id, branch.parent_branch_id, branch.fork_after_turn_id, branch.replaced_turn_id, branch.replacement_turn_id, branch.fork_after_sequence, branch.created_at, branch.strategy, branch.replay_cutoff_sequence, branch.replay_truncated, branch.provider_scope_id, branch.provider_ids_scoped, branch.review_id, branch.handoff_note
     FROM conversations AS conversation
     JOIN conversation_branches AS branch ON branch.id = conversation.active_branch_id
     WHERE conversation.id = ?1
@@ -2182,9 +3324,40 @@ func (q *Queries) SelectConversationEditDelivery(ctx context.Context, arg Select
 	return i, err
 }
 
+const selectConversationHumanPromptTurnIDs = `-- name: SelectConversationHumanPromptTurnIDs :many
+SELECT DISTINCT CAST(turn_id AS TEXT) AS turn_id
+FROM conversation_messages
+WHERE conversation_id = ?1
+  AND turn_id IS NOT NULL AND role = 'user' AND origin = 'human'
+`
+
+// Prompt eligibility must survive the original message falling outside a page.
+func (q *Queries) SelectConversationHumanPromptTurnIDs(ctx context.Context, conversationID string) ([]string, error) {
+	rows, err := q.db.QueryContext(ctx, selectConversationHumanPromptTurnIDs, conversationID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []string{}
+	for rows.Next() {
+		var turn_id string
+		if err := rows.Scan(&turn_id); err != nil {
+			return nil, err
+		}
+		items = append(items, turn_id)
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const selectConversationMessageByClientID = `-- name: SelectConversationMessageByClientID :one
-SELECT id, conversation_id, turn_id, sequence, revision, role, origin, text, streaming, provider_item_id, client_message_id, created_at, updated_at, delivery_content_json, branch_id FROM conversation_messages
-WHERE conversation_id = ? AND client_message_id = ?
+SELECT id, conversation_id, turn_id, sequence, revision, role, origin, text, streaming, provider_item_id, client_message_id, created_at, updated_at, delivery_content_json, branch_id, client_payload_hash, sender_session_id, sender_project_id, sender_display_name, continuation, authored_by_user FROM conversation_messages
+WHERE conversation_id = ? AND client_message_id = ? AND client_message_id <> ''
 LIMIT 1
 `
 
@@ -2212,13 +3385,19 @@ func (q *Queries) SelectConversationMessageByClientID(ctx context.Context, arg S
 		&i.UpdatedAt,
 		&i.DeliveryContentJson,
 		&i.BranchID,
+		&i.ClientPayloadHash,
+		&i.SenderSessionID,
+		&i.SenderProjectID,
+		&i.SenderDisplayName,
+		&i.Continuation,
+		&i.AuthoredByUser,
 	)
 	return i, err
 }
 
 const selectConversationMessageByProviderItem = `-- name: SelectConversationMessageByProviderItem :one
-SELECT id, conversation_id, turn_id, sequence, revision, role, origin, text, streaming, provider_item_id, client_message_id, created_at, updated_at, delivery_content_json, branch_id FROM conversation_messages
-WHERE conversation_id = ? AND provider_item_id = ?
+SELECT id, conversation_id, turn_id, sequence, revision, role, origin, text, streaming, provider_item_id, client_message_id, created_at, updated_at, delivery_content_json, branch_id, client_payload_hash, sender_session_id, sender_project_id, sender_display_name, continuation, authored_by_user FROM conversation_messages
+WHERE conversation_id = ? AND provider_item_id = ? AND provider_item_id <> ''
 LIMIT 1
 `
 
@@ -2246,6 +3425,12 @@ func (q *Queries) SelectConversationMessageByProviderItem(ctx context.Context, a
 		&i.UpdatedAt,
 		&i.DeliveryContentJson,
 		&i.BranchID,
+		&i.ClientPayloadHash,
+		&i.SenderSessionID,
+		&i.SenderProjectID,
+		&i.SenderDisplayName,
+		&i.Continuation,
+		&i.AuthoredByUser,
 	)
 	return i, err
 }
@@ -2266,7 +3451,7 @@ WITH RECURSIVE active_path(branch_id, max_sequence) AS (
     JOIN conversation_branches AS branch ON branch.id = path.branch_id
     WHERE branch.parent_branch_id IS NOT NULL
 )
-SELECT conversation_messages.id, conversation_messages.conversation_id, conversation_messages.turn_id, conversation_messages.sequence, conversation_messages.revision, conversation_messages.role, conversation_messages.origin, conversation_messages.text, conversation_messages.streaming, conversation_messages.provider_item_id, conversation_messages.client_message_id, conversation_messages.created_at, conversation_messages.updated_at, conversation_messages.delivery_content_json, conversation_messages.branch_id FROM conversation_messages
+SELECT conversation_messages.id, conversation_messages.conversation_id, conversation_messages.turn_id, conversation_messages.sequence, conversation_messages.revision, conversation_messages.role, conversation_messages.origin, conversation_messages.text, conversation_messages.streaming, conversation_messages.provider_item_id, conversation_messages.client_message_id, conversation_messages.created_at, conversation_messages.updated_at, conversation_messages.delivery_content_json, conversation_messages.branch_id, conversation_messages.client_payload_hash, conversation_messages.sender_session_id, conversation_messages.sender_project_id, conversation_messages.sender_display_name, conversation_messages.continuation, conversation_messages.authored_by_user FROM conversation_messages
 JOIN active_path AS path ON path.branch_id = conversation_messages.branch_id
 WHERE conversation_messages.conversation_id = ?1
   AND (path.max_sequence IS NULL OR conversation_messages.sequence <= path.max_sequence)
@@ -2275,7 +3460,7 @@ WHERE conversation_messages.conversation_id = ?1
       WHERE discarded.conversation_id = ?1
         AND (
           discarded.rolled_back_at IS NOT NULL
-          OR discarded.promoted_to_turn_id IS NOT NULL
+          OR (discarded.promoted_to_turn_id IS NOT NULL AND discarded.batched_input = 0)
           OR discarded.state = 'cancelled'
         )
   ))
@@ -2319,6 +3504,12 @@ func (q *Queries) SelectConversationMessages(ctx context.Context, conversationID
 			&i.UpdatedAt,
 			&i.DeliveryContentJson,
 			&i.BranchID,
+			&i.ClientPayloadHash,
+			&i.SenderSessionID,
+			&i.SenderProjectID,
+			&i.SenderDisplayName,
+			&i.Continuation,
+			&i.AuthoredByUser,
 		); err != nil {
 			return nil, err
 		}
@@ -2337,7 +3528,7 @@ const selectConversationMessagesPage = `-- name: SelectConversationMessagesPage 
 WITH RECURSIVE active_path(branch_id, max_sequence) AS (
     SELECT conversations.active_branch_id, CAST(NULL AS INTEGER)
     FROM conversations
-    WHERE conversations.id = ?1
+    WHERE conversations.id = ?2
     UNION ALL
     SELECT branch.parent_branch_id,
            CASE
@@ -2348,33 +3539,53 @@ WITH RECURSIVE active_path(branch_id, max_sequence) AS (
     FROM active_path AS path
     JOIN conversation_branches AS branch ON branch.id = path.branch_id
     WHERE branch.parent_branch_id IS NOT NULL
-)
-SELECT conversation_messages.id, conversation_messages.conversation_id, conversation_messages.turn_id, conversation_messages.sequence, conversation_messages.revision, conversation_messages.role, conversation_messages.origin, conversation_messages.text, conversation_messages.streaming, conversation_messages.provider_item_id, conversation_messages.client_message_id, conversation_messages.created_at, conversation_messages.updated_at, conversation_messages.delivery_content_json, conversation_messages.branch_id FROM conversation_messages
+), page_candidates AS (
+SELECT conversation_messages.id, conversation_messages.sequence,
+       length(CAST(conversation_messages.text AS BLOB)) + length(CAST(conversation_messages.delivery_content_json AS BLOB)) AS row_bytes
+FROM conversation_messages
 JOIN active_path AS path ON path.branch_id = conversation_messages.branch_id
-WHERE conversation_messages.conversation_id = ?1
-  AND conversation_messages.sequence < ?2
+WHERE conversation_messages.conversation_id = ?2
+  AND conversation_messages.sequence < ?3
   AND (path.max_sequence IS NULL OR conversation_messages.sequence <= path.max_sequence)
   AND (conversation_messages.turn_id IS NULL OR conversation_messages.turn_id NOT IN (
       SELECT discarded.id FROM conversation_turns AS discarded
-      WHERE discarded.conversation_id = ?1
+      WHERE discarded.conversation_id = ?2
         AND (
           discarded.rolled_back_at IS NOT NULL
-          OR discarded.promoted_to_turn_id IS NOT NULL
+          OR (discarded.promoted_to_turn_id IS NOT NULL AND discarded.batched_input = 0)
           OR discarded.state = 'cancelled'
         )
   ))
 ORDER BY conversation_messages.sequence DESC
-LIMIT ?3
+LIMIT ?4
+), page_budget(id, sequence, total_bytes, row_position) AS (
+    SELECT id, sequence,
+           SUM(row_bytes) OVER (ORDER BY sequence DESC ROWS UNBOUNDED PRECEDING) AS total_bytes,
+           ROW_NUMBER() OVER (ORDER BY sequence DESC) AS row_position
+    FROM page_candidates
+)
+SELECT conversation_messages.id, conversation_messages.conversation_id, conversation_messages.turn_id, conversation_messages.sequence, conversation_messages.revision, conversation_messages.role, conversation_messages.origin, conversation_messages.text, conversation_messages.streaming, conversation_messages.provider_item_id, conversation_messages.client_message_id, conversation_messages.created_at, conversation_messages.updated_at, conversation_messages.delivery_content_json, conversation_messages.branch_id, conversation_messages.client_payload_hash, conversation_messages.sender_session_id, conversation_messages.sender_project_id, conversation_messages.sender_display_name, conversation_messages.continuation, conversation_messages.authored_by_user FROM conversation_messages
+JOIN page_budget AS budget ON conversation_messages.id = budget.id
+WHERE budget.total_bytes <= CAST(?1 AS INTEGER) OR budget.row_position = 1
+ORDER BY budget.sequence DESC
 `
 
 type SelectConversationMessagesPageParams struct {
+	PageBytes      int64
 	ConversationID string
 	BeforeSequence int64
 	PageLimit      int64
 }
 
+// Budget IDs and byte lengths before loading payload columns. A single
+// oversized row remains readable so every page cursor can advance.
 func (q *Queries) SelectConversationMessagesPage(ctx context.Context, arg SelectConversationMessagesPageParams) ([]ConversationMessage, error) {
-	rows, err := q.db.QueryContext(ctx, selectConversationMessagesPage, arg.ConversationID, arg.BeforeSequence, arg.PageLimit)
+	rows, err := q.db.QueryContext(ctx, selectConversationMessagesPage,
+		arg.PageBytes,
+		arg.ConversationID,
+		arg.BeforeSequence,
+		arg.PageLimit,
+	)
 	if err != nil {
 		return nil, err
 	}
@@ -2398,6 +3609,12 @@ func (q *Queries) SelectConversationMessagesPage(ctx context.Context, arg Select
 			&i.UpdatedAt,
 			&i.DeliveryContentJson,
 			&i.BranchID,
+			&i.ClientPayloadHash,
+			&i.SenderSessionID,
+			&i.SenderProjectID,
+			&i.SenderDisplayName,
+			&i.Continuation,
+			&i.AuthoredByUser,
 		); err != nil {
 			return nil, err
 		}
@@ -2479,7 +3696,7 @@ WITH RECURSIVE active_path(branch_id, max_sequence) AS (
     JOIN conversation_branches AS branch ON branch.id = path.branch_id
     WHERE branch.parent_branch_id IS NOT NULL
 )
-SELECT conversation_provider_events.id, conversation_provider_events.conversation_id, conversation_provider_events.session_id, conversation_provider_events.provider_event_id, conversation_provider_events.method, conversation_provider_events.payload_json, conversation_provider_events.received_at, conversation_provider_events.branch_id FROM conversation_provider_events
+SELECT conversation_provider_events.id, conversation_provider_events.conversation_id, conversation_provider_events.session_id, conversation_provider_events.provider_event_id, conversation_provider_events.method, conversation_provider_events.payload_json, conversation_provider_events.received_at, conversation_provider_events.branch_id, conversation_provider_events.review_id FROM conversation_provider_events
 JOIN active_path AS path ON path.branch_id = conversation_provider_events.branch_id
 WHERE conversation_provider_events.conversation_id = ?1
   AND conversation_provider_events.id > ?2
@@ -2511,7 +3728,54 @@ func (q *Queries) SelectConversationProviderEvents(ctx context.Context, arg Sele
 			&i.PayloadJson,
 			&i.ReceivedAt,
 			&i.BranchID,
+			&i.ReviewID,
 		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const selectConversationProviderInputContent = `-- name: SelectConversationProviderInputContent :many
+SELECT conversation_turns.id AS source_turn_id, conversation_messages.delivery_content_json
+FROM conversation_turns
+JOIN conversation_messages ON conversation_messages.turn_id = conversation_turns.id
+    AND conversation_messages.role = 'user'
+WHERE conversation_turns.conversation_id = ?1
+  AND (conversation_turns.id = ?2
+       OR conversation_turns.promoted_to_turn_id = ?2)
+ORDER BY conversation_turns.rowid
+`
+
+type SelectConversationProviderInputContentParams struct {
+	ConversationID string
+	TurnID         string
+}
+
+type SelectConversationProviderInputContentRow struct {
+	SourceTurnID        string
+	DeliveryContentJson string
+}
+
+// Content blocks for every message absorbed by a failed provider turn.
+// Row order matches the original batch, including steer fallback batches.
+func (q *Queries) SelectConversationProviderInputContent(ctx context.Context, arg SelectConversationProviderInputContentParams) ([]SelectConversationProviderInputContentRow, error) {
+	rows, err := q.db.QueryContext(ctx, selectConversationProviderInputContent, arg.ConversationID, arg.TurnID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []SelectConversationProviderInputContentRow{}
+	for rows.Next() {
+		var i SelectConversationProviderInputContentRow
+		if err := rows.Scan(&i.SourceTurnID, &i.DeliveryContentJson); err != nil {
 			return nil, err
 		}
 		items = append(items, i)
@@ -2626,8 +3890,48 @@ func (q *Queries) SelectConversationSteerDelivery(ctx context.Context, arg Selec
 	return i, err
 }
 
+const selectConversationSteerRetryInputs = `-- name: SelectConversationSteerRetryInputs :many
+SELECT detail_json FROM conversation_activities
+WHERE conversation_id = ?1
+  AND turn_id = ?2
+  AND kind = 'system'
+  AND status = 'completed'
+  AND json_extract(detail_json, '$.event') = 'steer'
+ORDER BY sequence
+`
+
+type SelectConversationSteerRetryInputsParams struct {
+	ConversationID string
+	TurnID         sql.NullString
+}
+
+// Accepted steering inputs are separate provider inputs on the same turn.
+// Their detail rows retain the exact content sent to the provider.
+func (q *Queries) SelectConversationSteerRetryInputs(ctx context.Context, arg SelectConversationSteerRetryInputsParams) ([]string, error) {
+	rows, err := q.db.QueryContext(ctx, selectConversationSteerRetryInputs, arg.ConversationID, arg.TurnID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []string{}
+	for rows.Next() {
+		var detail_json string
+		if err := rows.Scan(&detail_json); err != nil {
+			return nil, err
+		}
+		items = append(items, detail_json)
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const selectConversationTurnByID = `-- name: SelectConversationTurnByID :one
-SELECT id, conversation_id, handled_by_session_id, provider_turn_id, controller_generation, state, error_message, requested_at, started_at, completed_at, diff_json, rolled_back_at, plan_json, branch_id, promotion_started_at, promoted_to_turn_id, retry_of_turn_id FROM conversation_turns WHERE id = ? LIMIT 1
+SELECT id, conversation_id, handled_by_session_id, provider_turn_id, controller_generation, state, error_message, requested_at, started_at, completed_at, diff_json, rolled_back_at, plan_json, branch_id, promotion_started_at, promoted_to_turn_id, retry_of_turn_id, handled_by_review_id, usage_limit_resets_at, usage_limit_auto_resume, usage_limit_resume_error, batched_input, provider_input_text, failure_code, batch_delivery_kind, batch_delivery_steer_id, artifacts_json FROM conversation_turns WHERE id = ? LIMIT 1
 `
 
 func (q *Queries) SelectConversationTurnByID(ctx context.Context, id string) (ConversationTurn, error) {
@@ -2651,13 +3955,23 @@ func (q *Queries) SelectConversationTurnByID(ctx context.Context, id string) (Co
 		&i.PromotionStartedAt,
 		&i.PromotedToTurnID,
 		&i.RetryOfTurnID,
+		&i.HandledByReviewID,
+		&i.UsageLimitResetsAt,
+		&i.UsageLimitAutoResume,
+		&i.UsageLimitResumeError,
+		&i.BatchedInput,
+		&i.ProviderInputText,
+		&i.FailureCode,
+		&i.BatchDeliveryKind,
+		&i.BatchDeliverySteerID,
+		&i.ArtifactsJson,
 	)
 	return i, err
 }
 
 const selectConversationTurnByProviderID = `-- name: SelectConversationTurnByProviderID :one
-SELECT id, conversation_id, handled_by_session_id, provider_turn_id, controller_generation, state, error_message, requested_at, started_at, completed_at, diff_json, rolled_back_at, plan_json, branch_id, promotion_started_at, promoted_to_turn_id, retry_of_turn_id FROM conversation_turns
-WHERE conversation_id = ? AND provider_turn_id = ?
+SELECT id, conversation_id, handled_by_session_id, provider_turn_id, controller_generation, state, error_message, requested_at, started_at, completed_at, diff_json, rolled_back_at, plan_json, branch_id, promotion_started_at, promoted_to_turn_id, retry_of_turn_id, handled_by_review_id, usage_limit_resets_at, usage_limit_auto_resume, usage_limit_resume_error, batched_input, provider_input_text, failure_code, batch_delivery_kind, batch_delivery_steer_id, artifacts_json FROM conversation_turns
+WHERE conversation_id = ? AND provider_turn_id = ? AND provider_turn_id <> ''
 LIMIT 1
 `
 
@@ -2689,6 +4003,16 @@ func (q *Queries) SelectConversationTurnByProviderID(ctx context.Context, arg Se
 		&i.PromotionStartedAt,
 		&i.PromotedToTurnID,
 		&i.RetryOfTurnID,
+		&i.HandledByReviewID,
+		&i.UsageLimitResetsAt,
+		&i.UsageLimitAutoResume,
+		&i.UsageLimitResumeError,
+		&i.BatchedInput,
+		&i.ProviderInputText,
+		&i.FailureCode,
+		&i.BatchDeliveryKind,
+		&i.BatchDeliverySteerID,
+		&i.ArtifactsJson,
 	)
 	return i, err
 }
@@ -2709,17 +4033,19 @@ WITH RECURSIVE active_path(branch_id, max_sequence) AS (
     JOIN conversation_branches AS branch ON branch.id = path.branch_id
     WHERE branch.parent_branch_id IS NOT NULL
 )
-SELECT conversation_turns.id, conversation_turns.conversation_id, conversation_turns.handled_by_session_id, conversation_turns.provider_turn_id, conversation_turns.controller_generation, conversation_turns.state, conversation_turns.error_message, conversation_turns.requested_at, conversation_turns.started_at, conversation_turns.completed_at, conversation_turns.diff_json, conversation_turns.rolled_back_at, conversation_turns.plan_json, conversation_turns.branch_id, conversation_turns.promotion_started_at, conversation_turns.promoted_to_turn_id, conversation_turns.retry_of_turn_id FROM conversation_turns
+SELECT conversation_turns.id, conversation_turns.conversation_id, conversation_turns.handled_by_session_id, conversation_turns.provider_turn_id, conversation_turns.controller_generation, conversation_turns.state, conversation_turns.error_message, conversation_turns.requested_at, conversation_turns.started_at, conversation_turns.completed_at, conversation_turns.diff_json, conversation_turns.rolled_back_at, conversation_turns.plan_json, conversation_turns.branch_id, conversation_turns.promotion_started_at, conversation_turns.promoted_to_turn_id, conversation_turns.retry_of_turn_id, conversation_turns.handled_by_review_id, conversation_turns.usage_limit_resets_at, conversation_turns.usage_limit_auto_resume, conversation_turns.usage_limit_resume_error, conversation_turns.batched_input, conversation_turns.provider_input_text, conversation_turns.failure_code, conversation_turns.batch_delivery_kind, conversation_turns.batch_delivery_steer_id, conversation_turns.artifacts_json FROM conversation_turns
 JOIN active_path AS path ON path.branch_id = conversation_turns.branch_id
 WHERE conversation_turns.conversation_id = ?1
   AND conversation_turns.promoted_to_turn_id IS NULL
   AND (path.max_sequence IS NULL OR EXISTS (
       SELECT 1 FROM conversation_messages AS lineage_message
       WHERE lineage_message.turn_id = conversation_turns.id
+        AND lineage_message.conversation_id = conversation_turns.conversation_id
         AND lineage_message.sequence <= path.max_sequence
       UNION ALL
       SELECT 1 FROM conversation_activities AS lineage_activity
       WHERE lineage_activity.turn_id = conversation_turns.id
+        AND lineage_activity.conversation_id = conversation_turns.conversation_id
         AND lineage_activity.sequence <= path.max_sequence
   ))
 ORDER BY conversation_turns.requested_at, conversation_turns.rowid
@@ -2757,6 +4083,16 @@ func (q *Queries) SelectConversationTurns(ctx context.Context, conversationID st
 			&i.PromotionStartedAt,
 			&i.PromotedToTurnID,
 			&i.RetryOfTurnID,
+			&i.HandledByReviewID,
+			&i.UsageLimitResetsAt,
+			&i.UsageLimitAutoResume,
+			&i.UsageLimitResumeError,
+			&i.BatchedInput,
+			&i.ProviderInputText,
+			&i.FailureCode,
+			&i.BatchDeliveryKind,
+			&i.BatchDeliverySteerID,
+			&i.ArtifactsJson,
 		); err != nil {
 			return nil, err
 		}
@@ -2787,17 +4123,19 @@ WITH RECURSIVE active_path(branch_id, max_sequence) AS (
     JOIN conversation_branches AS branch ON branch.id = path.branch_id
     WHERE branch.parent_branch_id IS NOT NULL
 )
-SELECT conversation_turns.id, conversation_turns.conversation_id, conversation_turns.handled_by_session_id, conversation_turns.provider_turn_id, conversation_turns.controller_generation, conversation_turns.state, conversation_turns.error_message, conversation_turns.requested_at, conversation_turns.started_at, conversation_turns.completed_at, conversation_turns.diff_json, conversation_turns.rolled_back_at, conversation_turns.plan_json, conversation_turns.branch_id, conversation_turns.promotion_started_at, conversation_turns.promoted_to_turn_id, conversation_turns.retry_of_turn_id FROM conversation_turns
+SELECT conversation_turns.id, conversation_turns.conversation_id, conversation_turns.handled_by_session_id, conversation_turns.provider_turn_id, conversation_turns.controller_generation, conversation_turns.state, conversation_turns.error_message, conversation_turns.requested_at, conversation_turns.started_at, conversation_turns.completed_at, conversation_turns.diff_json, conversation_turns.rolled_back_at, conversation_turns.plan_json, conversation_turns.branch_id, conversation_turns.promotion_started_at, conversation_turns.promoted_to_turn_id, conversation_turns.retry_of_turn_id, conversation_turns.handled_by_review_id, conversation_turns.usage_limit_resets_at, conversation_turns.usage_limit_auto_resume, conversation_turns.usage_limit_resume_error, conversation_turns.batched_input, conversation_turns.provider_input_text, conversation_turns.failure_code, conversation_turns.batch_delivery_kind, conversation_turns.batch_delivery_steer_id, conversation_turns.artifacts_json FROM conversation_turns
 JOIN active_path AS path ON path.branch_id = conversation_turns.branch_id
 WHERE conversation_turns.conversation_id = ?1
   AND conversation_turns.promoted_to_turn_id IS NULL
   AND (path.max_sequence IS NULL OR EXISTS (
       SELECT 1 FROM conversation_messages AS lineage_message
       WHERE lineage_message.turn_id = conversation_turns.id
+        AND lineage_message.conversation_id = conversation_turns.conversation_id
         AND lineage_message.sequence <= path.max_sequence
       UNION ALL
       SELECT 1 FROM conversation_activities AS lineage_activity
       WHERE lineage_activity.turn_id = conversation_turns.id
+        AND lineage_activity.conversation_id = conversation_turns.conversation_id
         AND lineage_activity.sequence <= path.max_sequence
   ))
   AND (
@@ -2854,6 +4192,16 @@ func (q *Queries) SelectConversationTurnsPage(ctx context.Context, arg SelectCon
 			&i.PromotionStartedAt,
 			&i.PromotedToTurnID,
 			&i.RetryOfTurnID,
+			&i.HandledByReviewID,
+			&i.UsageLimitResetsAt,
+			&i.UsageLimitAutoResume,
+			&i.UsageLimitResumeError,
+			&i.BatchedInput,
+			&i.ProviderInputText,
+			&i.FailureCode,
+			&i.BatchDeliveryKind,
+			&i.BatchDeliverySteerID,
+			&i.ArtifactsJson,
 		); err != nil {
 			return nil, err
 		}
@@ -2869,7 +4217,7 @@ func (q *Queries) SelectConversationTurnsPage(ctx context.Context, arg SelectCon
 }
 
 const selectConversationUserMessageByTurn = `-- name: SelectConversationUserMessageByTurn :one
-SELECT conversation_messages.id, conversation_messages.conversation_id, conversation_messages.turn_id, conversation_messages.sequence, conversation_messages.revision, conversation_messages.role, conversation_messages.origin, conversation_messages.text, conversation_messages.streaming, conversation_messages.provider_item_id, conversation_messages.client_message_id, conversation_messages.created_at, conversation_messages.updated_at, conversation_messages.delivery_content_json, conversation_messages.branch_id
+SELECT conversation_messages.id, conversation_messages.conversation_id, conversation_messages.turn_id, conversation_messages.sequence, conversation_messages.revision, conversation_messages.role, conversation_messages.origin, conversation_messages.text, conversation_messages.streaming, conversation_messages.provider_item_id, conversation_messages.client_message_id, conversation_messages.created_at, conversation_messages.updated_at, conversation_messages.delivery_content_json, conversation_messages.branch_id, conversation_messages.client_payload_hash, conversation_messages.sender_session_id, conversation_messages.sender_project_id, conversation_messages.sender_display_name, conversation_messages.continuation, conversation_messages.authored_by_user
 FROM conversation_messages
 JOIN conversation_turns ON conversation_turns.id = conversation_messages.turn_id
 WHERE conversation_messages.conversation_id = ?
@@ -2905,8 +4253,52 @@ func (q *Queries) SelectConversationUserMessageByTurn(ctx context.Context, arg S
 		&i.UpdatedAt,
 		&i.DeliveryContentJson,
 		&i.BranchID,
+		&i.ClientPayloadHash,
+		&i.SenderSessionID,
+		&i.SenderProjectID,
+		&i.SenderDisplayName,
+		&i.Continuation,
+		&i.AuthoredByUser,
 	)
 	return i, err
+}
+
+const selectConversationsAwaitingLogin = `-- name: SelectConversationsAwaitingLogin :many
+SELECT conversations.id AS conversation_id, sessions.id AS session_id, sessions.harness
+FROM conversations
+JOIN sessions ON sessions.id = conversations.current_session_id
+WHERE json_extract(conversations.account_json, '$.reauthRequiredAt') IS NOT NULL
+`
+
+type SelectConversationsAwaitingLoginRow struct {
+	ConversationID string
+	SessionID      domain.SessionID
+	Harness        domain.AgentHarness
+}
+
+// Session conversations still waiting for the user to sign in again, with the
+// harness each session runs, so a confirmed login can be matched to them.
+func (q *Queries) SelectConversationsAwaitingLogin(ctx context.Context) ([]SelectConversationsAwaitingLoginRow, error) {
+	rows, err := q.db.QueryContext(ctx, selectConversationsAwaitingLogin)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []SelectConversationsAwaitingLoginRow{}
+	for rows.Next() {
+		var i SelectConversationsAwaitingLoginRow
+		if err := rows.Scan(&i.ConversationID, &i.SessionID, &i.Harness); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
 }
 
 const selectFirstHumanTurnOnBranch = `-- name: SelectFirstHumanTurnOnBranch :one
@@ -2940,12 +4332,159 @@ func (q *Queries) SelectFirstHumanTurnOnBranch(ctx context.Context, arg SelectFi
 	return id, err
 }
 
+const selectLatestAutoResumeConversationTurn = `-- name: SelectLatestAutoResumeConversationTurn :one
+WITH RECURSIVE active_path(branch_id, max_sequence) AS (
+    SELECT conversations.active_branch_id, CAST(NULL AS INTEGER)
+    FROM conversations
+    WHERE conversations.id = ?1
+    UNION ALL
+    SELECT branch.parent_branch_id,
+           CASE
+               WHEN path.max_sequence IS NULL THEN branch.fork_after_sequence
+               WHEN branch.fork_after_sequence < path.max_sequence THEN branch.fork_after_sequence
+               ELSE path.max_sequence
+           END
+    FROM active_path AS path
+    JOIN conversation_branches AS branch ON branch.id = path.branch_id
+    WHERE branch.parent_branch_id IS NOT NULL
+)
+SELECT conversation_turns.id, conversation_turns.conversation_id, conversation_turns.handled_by_session_id, conversation_turns.provider_turn_id, conversation_turns.controller_generation, conversation_turns.state, conversation_turns.error_message, conversation_turns.requested_at, conversation_turns.started_at, conversation_turns.completed_at, conversation_turns.diff_json, conversation_turns.rolled_back_at, conversation_turns.plan_json, conversation_turns.branch_id, conversation_turns.promotion_started_at, conversation_turns.promoted_to_turn_id, conversation_turns.retry_of_turn_id, conversation_turns.handled_by_review_id, conversation_turns.usage_limit_resets_at, conversation_turns.usage_limit_auto_resume, conversation_turns.usage_limit_resume_error, conversation_turns.batched_input, conversation_turns.provider_input_text, conversation_turns.failure_code, conversation_turns.batch_delivery_kind, conversation_turns.batch_delivery_steer_id, conversation_turns.artifacts_json FROM conversation_turns
+JOIN active_path AS path ON path.branch_id = conversation_turns.branch_id
+WHERE conversation_turns.conversation_id = ?1
+  AND conversation_turns.state NOT IN ('queued', 'cancelled')
+  AND conversation_turns.promoted_to_turn_id IS NULL
+  AND conversation_turns.rolled_back_at IS NULL
+  AND (path.max_sequence IS NULL OR EXISTS (
+      SELECT 1 FROM conversation_messages AS lineage_message
+      WHERE lineage_message.turn_id = conversation_turns.id
+        AND lineage_message.sequence <= path.max_sequence
+      UNION ALL
+      SELECT 1 FROM conversation_activities AS lineage_activity
+      WHERE lineage_activity.turn_id = conversation_turns.id
+        AND lineage_activity.sequence <= path.max_sequence
+  ))
+ORDER BY conversation_turns.requested_at DESC, conversation_turns.rowid DESC
+LIMIT 1
+`
+
+// Queued work stays held behind a failed source until its retry succeeds.
+func (q *Queries) SelectLatestAutoResumeConversationTurn(ctx context.Context, conversationID string) (ConversationTurn, error) {
+	row := q.db.QueryRowContext(ctx, selectLatestAutoResumeConversationTurn, conversationID)
+	var i ConversationTurn
+	err := row.Scan(
+		&i.ID,
+		&i.ConversationID,
+		&i.HandledBySessionID,
+		&i.ProviderTurnID,
+		&i.ControllerGeneration,
+		&i.State,
+		&i.ErrorMessage,
+		&i.RequestedAt,
+		&i.StartedAt,
+		&i.CompletedAt,
+		&i.DiffJson,
+		&i.RolledBackAt,
+		&i.PlanJson,
+		&i.BranchID,
+		&i.PromotionStartedAt,
+		&i.PromotedToTurnID,
+		&i.RetryOfTurnID,
+		&i.HandledByReviewID,
+		&i.UsageLimitResetsAt,
+		&i.UsageLimitAutoResume,
+		&i.UsageLimitResumeError,
+		&i.BatchedInput,
+		&i.ProviderInputText,
+		&i.FailureCode,
+		&i.BatchDeliveryKind,
+		&i.BatchDeliverySteerID,
+		&i.ArtifactsJson,
+	)
+	return i, err
+}
+
+const selectLatestConversationTurn = `-- name: SelectLatestConversationTurn :one
+WITH RECURSIVE active_path(branch_id, max_sequence) AS (
+    SELECT conversations.active_branch_id, CAST(NULL AS INTEGER)
+    FROM conversations
+    WHERE conversations.id = ?1
+    UNION ALL
+    SELECT branch.parent_branch_id,
+           CASE
+               WHEN path.max_sequence IS NULL THEN branch.fork_after_sequence
+               WHEN branch.fork_after_sequence < path.max_sequence THEN branch.fork_after_sequence
+               ELSE path.max_sequence
+           END
+    FROM active_path AS path
+    JOIN conversation_branches AS branch ON branch.id = path.branch_id
+    WHERE branch.parent_branch_id IS NOT NULL
+)
+SELECT conversation_turns.id, conversation_turns.conversation_id, conversation_turns.handled_by_session_id, conversation_turns.provider_turn_id, conversation_turns.controller_generation, conversation_turns.state, conversation_turns.error_message, conversation_turns.requested_at, conversation_turns.started_at, conversation_turns.completed_at, conversation_turns.diff_json, conversation_turns.rolled_back_at, conversation_turns.plan_json, conversation_turns.branch_id, conversation_turns.promotion_started_at, conversation_turns.promoted_to_turn_id, conversation_turns.retry_of_turn_id, conversation_turns.handled_by_review_id, conversation_turns.usage_limit_resets_at, conversation_turns.usage_limit_auto_resume, conversation_turns.usage_limit_resume_error, conversation_turns.batched_input, conversation_turns.provider_input_text, conversation_turns.failure_code, conversation_turns.batch_delivery_kind, conversation_turns.batch_delivery_steer_id, conversation_turns.artifacts_json FROM conversation_turns
+JOIN active_path AS path ON path.branch_id = conversation_turns.branch_id
+WHERE conversation_turns.conversation_id = ?1
+  AND conversation_turns.promoted_to_turn_id IS NULL
+  AND conversation_turns.rolled_back_at IS NULL
+  AND (path.max_sequence IS NULL OR EXISTS (
+      SELECT 1 FROM conversation_messages AS lineage_message
+      WHERE lineage_message.turn_id = conversation_turns.id
+        AND lineage_message.conversation_id = conversation_turns.conversation_id
+        AND lineage_message.sequence <= path.max_sequence
+      UNION ALL
+      SELECT 1 FROM conversation_activities AS lineage_activity
+      WHERE lineage_activity.turn_id = conversation_turns.id
+        AND lineage_activity.conversation_id = conversation_turns.conversation_id
+        AND lineage_activity.sequence <= path.max_sequence
+  ))
+ORDER BY conversation_turns.requested_at DESC, conversation_turns.rowid DESC
+LIMIT 1
+`
+
+// The latest non-discarded turn uses the same active lineage and ordering as
+// SelectConversationTurns, independently of where late timeline items occur.
+func (q *Queries) SelectLatestConversationTurn(ctx context.Context, conversationID string) (ConversationTurn, error) {
+	row := q.db.QueryRowContext(ctx, selectLatestConversationTurn, conversationID)
+	var i ConversationTurn
+	err := row.Scan(
+		&i.ID,
+		&i.ConversationID,
+		&i.HandledBySessionID,
+		&i.ProviderTurnID,
+		&i.ControllerGeneration,
+		&i.State,
+		&i.ErrorMessage,
+		&i.RequestedAt,
+		&i.StartedAt,
+		&i.CompletedAt,
+		&i.DiffJson,
+		&i.RolledBackAt,
+		&i.PlanJson,
+		&i.BranchID,
+		&i.PromotionStartedAt,
+		&i.PromotedToTurnID,
+		&i.RetryOfTurnID,
+		&i.HandledByReviewID,
+		&i.UsageLimitResetsAt,
+		&i.UsageLimitAutoResume,
+		&i.UsageLimitResumeError,
+		&i.BatchedInput,
+		&i.ProviderInputText,
+		&i.FailureCode,
+		&i.BatchDeliveryKind,
+		&i.BatchDeliverySteerID,
+		&i.ArtifactsJson,
+	)
+	return i, err
+}
+
 const selectNextQueuedConversationTurn = `-- name: SelectNextQueuedConversationTurn :one
 SELECT conversation_turns.id,
        conversation_messages.text,
        conversation_messages.client_message_id,
        conversation_messages.origin,
-       conversation_messages.delivery_content_json
+       conversation_messages.delivery_content_json,
+       conversation_messages.sender_session_id,
+       conversation_messages.sender_project_id,
+       conversation_messages.sender_display_name
 FROM conversation_turns
 JOIN conversation_messages
     ON conversation_messages.turn_id = conversation_turns.id
@@ -2963,6 +4502,9 @@ type SelectNextQueuedConversationTurnRow struct {
 	ClientMessageID     string
 	Origin              domain.MessageOrigin
 	DeliveryContentJson string
+	SenderSessionID     string
+	SenderProjectID     string
+	SenderDisplayName   string
 }
 
 // The head of the send queue: the oldest message recorded while the agent was
@@ -2980,12 +4522,15 @@ func (q *Queries) SelectNextQueuedConversationTurn(ctx context.Context, conversa
 		&i.ClientMessageID,
 		&i.Origin,
 		&i.DeliveryContentJson,
+		&i.SenderSessionID,
+		&i.SenderProjectID,
+		&i.SenderDisplayName,
 	)
 	return i, err
 }
 
 const selectProjectConversation = `-- name: SelectProjectConversation :one
-SELECT id, scope, project_id, session_id, current_session_id, latest_sequence, created_at, updated_at, model, reasoning_effort, approval_mode, compacted_at, context_used, context_window, usage_input_tokens, usage_output_tokens, usage_cached_tokens, usage_total_tokens, rate_limit_primary_percent, rate_limit_secondary_percent, rate_limit_primary_resets_in, rate_limit_secondary_resets_in, rate_limit_plan, provider_title, applied_title, model_reroute_json, account_json, thread_state_json, mcp_servers_json, usage_cost, usage_currency, active_branch_id, opencode_mode FROM conversations WHERE project_id = ? AND scope = 'project' LIMIT 1
+SELECT id, scope, project_id, session_id, review_id, current_session_id, current_review_id, latest_sequence, created_at, updated_at, model, reasoning_effort, approval_mode, compacted_at, context_used, context_window, usage_input_tokens, usage_output_tokens, usage_cached_tokens, usage_total_tokens, rate_limit_primary_percent, rate_limit_secondary_percent, rate_limit_primary_resets_in, rate_limit_secondary_resets_in, rate_limit_plan, provider_title, applied_title, model_reroute_json, account_json, thread_state_json, mcp_servers_json, usage_cost, usage_currency, active_branch_id, opencode_mode, auto_compact_window FROM conversations WHERE project_id = ? AND scope = 'project' LIMIT 1
 `
 
 func (q *Queries) SelectProjectConversation(ctx context.Context, projectID *domain.ProjectID) (Conversation, error) {
@@ -2996,7 +4541,9 @@ func (q *Queries) SelectProjectConversation(ctx context.Context, projectID *doma
 		&i.Scope,
 		&i.ProjectID,
 		&i.SessionID,
+		&i.ReviewID,
 		&i.CurrentSessionID,
+		&i.CurrentReviewID,
 		&i.LatestSequence,
 		&i.CreatedAt,
 		&i.UpdatedAt,
@@ -3025,12 +4572,116 @@ func (q *Queries) SelectProjectConversation(ctx context.Context, projectID *doma
 		&i.UsageCurrency,
 		&i.ActiveBranchID,
 		&i.OpencodeMode,
+		&i.AutoCompactWindow,
 	)
 	return i, err
 }
 
+const selectProvisioningConversationsForSession = `-- name: SelectProvisioningConversationsForSession :many
+SELECT id, latest_sequence FROM conversations
+WHERE current_session_id = ? AND scope = 'session' AND id <> ?
+ORDER BY created_at, id
+`
+
+type SelectProvisioningConversationsForSessionParams struct {
+	CurrentSessionID *domain.SessionID
+	ID               string
+}
+
+type SelectProvisioningConversationsForSessionRow struct {
+	ID             string
+	LatestSequence int64
+}
+
+// The session-scoped rows a session is bound to besides the given conversation:
+// where an orchestrator's provisioning-time prompts wait for its project row.
+func (q *Queries) SelectProvisioningConversationsForSession(ctx context.Context, arg SelectProvisioningConversationsForSessionParams) ([]SelectProvisioningConversationsForSessionRow, error) {
+	rows, err := q.db.QueryContext(ctx, selectProvisioningConversationsForSession, arg.CurrentSessionID, arg.ID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []SelectProvisioningConversationsForSessionRow{}
+	for rows.Next() {
+		var i SelectProvisioningConversationsForSessionRow
+		if err := rows.Scan(&i.ID, &i.LatestSequence); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const selectQueuedConversationBatch = `-- name: SelectQueuedConversationBatch :many
+SELECT conversation_turns.id,
+       conversation_messages.text,
+       conversation_messages.client_message_id,
+       conversation_messages.origin,
+       conversation_messages.delivery_content_json,
+       conversation_messages.sender_session_id,
+       conversation_messages.sender_project_id,
+       conversation_messages.sender_display_name
+FROM conversation_turns
+JOIN conversation_messages
+    ON conversation_messages.turn_id = conversation_turns.id
+    AND conversation_messages.role = 'user'
+WHERE conversation_turns.conversation_id = ?
+  AND conversation_turns.state = 'queued'
+  AND conversation_turns.promotion_started_at IS NULL
+ORDER BY conversation_turns.requested_at, conversation_turns.rowid
+`
+
+type SelectQueuedConversationBatchRow struct {
+	ID                  string
+	Text                string
+	ClientMessageID     string
+	Origin              domain.MessageOrigin
+	DeliveryContentJson string
+	SenderSessionID     string
+	SenderProjectID     string
+	SenderDisplayName   string
+}
+
+func (q *Queries) SelectQueuedConversationBatch(ctx context.Context, conversationID string) ([]SelectQueuedConversationBatchRow, error) {
+	rows, err := q.db.QueryContext(ctx, selectQueuedConversationBatch, conversationID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []SelectQueuedConversationBatchRow{}
+	for rows.Next() {
+		var i SelectQueuedConversationBatchRow
+		if err := rows.Scan(
+			&i.ID,
+			&i.Text,
+			&i.ClientMessageID,
+			&i.Origin,
+			&i.DeliveryContentJson,
+			&i.SenderSessionID,
+			&i.SenderProjectID,
+			&i.SenderDisplayName,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const selectQueuedConversationMessage = `-- name: SelectQueuedConversationMessage :one
-SELECT conversation_messages.id, conversation_messages.conversation_id, conversation_messages.turn_id, conversation_messages.sequence, conversation_messages.revision, conversation_messages.role, conversation_messages.origin, conversation_messages.text, conversation_messages.streaming, conversation_messages.provider_item_id, conversation_messages.client_message_id, conversation_messages.created_at, conversation_messages.updated_at, conversation_messages.delivery_content_json, conversation_messages.branch_id
+SELECT conversation_messages.id, conversation_messages.conversation_id, conversation_messages.turn_id, conversation_messages.sequence, conversation_messages.revision, conversation_messages.role, conversation_messages.origin, conversation_messages.text, conversation_messages.streaming, conversation_messages.provider_item_id, conversation_messages.client_message_id, conversation_messages.created_at, conversation_messages.updated_at, conversation_messages.delivery_content_json, conversation_messages.branch_id, conversation_messages.client_payload_hash, conversation_messages.sender_session_id, conversation_messages.sender_project_id, conversation_messages.sender_display_name, conversation_messages.continuation, conversation_messages.authored_by_user
 FROM conversation_messages
 JOIN conversation_turns ON conversation_turns.id = conversation_messages.turn_id
 WHERE conversation_messages.conversation_id = ?
@@ -3066,6 +4717,12 @@ func (q *Queries) SelectQueuedConversationMessage(ctx context.Context, arg Selec
 		&i.UpdatedAt,
 		&i.DeliveryContentJson,
 		&i.BranchID,
+		&i.ClientPayloadHash,
+		&i.SenderSessionID,
+		&i.SenderProjectID,
+		&i.SenderDisplayName,
+		&i.Continuation,
+		&i.AuthoredByUser,
 	)
 	return i, err
 }
@@ -3113,6 +4770,7 @@ SELECT conversation_turns.id,
        conversation_messages.text,
        conversation_messages.client_message_id,
        conversation_messages.origin,
+       conversation_messages.authored_by_user,
        conversation_messages.delivery_content_json
 FROM conversation_turns
 JOIN conversation_messages
@@ -3135,6 +4793,7 @@ type SelectReservedConversationTurnForPromotionRow struct {
 	Text                string
 	ClientMessageID     string
 	Origin              domain.MessageOrigin
+	AuthoredByUser      int64
 	DeliveryContentJson string
 }
 
@@ -3148,6 +4807,7 @@ func (q *Queries) SelectReservedConversationTurnForPromotion(ctx context.Context
 		&i.Text,
 		&i.ClientMessageID,
 		&i.Origin,
+		&i.AuthoredByUser,
 		&i.DeliveryContentJson,
 	)
 	return i, err
@@ -3171,7 +4831,9 @@ WITH RECURSIVE active_path(branch_id, max_sequence) AS (
 )
 SELECT conversation_messages.text,
        conversation_messages.origin,
+       conversation_messages.continuation,
        conversation_messages.delivery_content_json,
+       conversation_turns.provider_input_text,
        EXISTS (
            SELECT 1
            FROM active_path AS path
@@ -3196,7 +4858,9 @@ type SelectRetryableConversationPromptParams struct {
 type SelectRetryableConversationPromptRow struct {
 	Text                string
 	Origin              domain.MessageOrigin
+	Continuation        int64
 	DeliveryContentJson string
+	ProviderInputText   string
 	ActiveLineage       bool
 }
 
@@ -3209,16 +4873,297 @@ func (q *Queries) SelectRetryableConversationPrompt(ctx context.Context, arg Sel
 	err := row.Scan(
 		&i.Text,
 		&i.Origin,
+		&i.Continuation,
 		&i.DeliveryContentJson,
+		&i.ProviderInputText,
 		&i.ActiveLineage,
 	)
 	return i, err
 }
 
+const selectSessionForActivityProviderItem = `-- name: SelectSessionForActivityProviderItem :one
+SELECT current_session_id
+FROM conversations
+JOIN conversation_activities ON conversation_activities.conversation_id = conversations.id
+WHERE conversation_activities.provider_item_id = ?
+  AND conversation_activities.provider_item_id <> ''
+  AND current_session_id IS NOT NULL
+LIMIT 1
+`
+
+func (q *Queries) SelectSessionForActivityProviderItem(ctx context.Context, providerItemID string) (*domain.SessionID, error) {
+	row := q.db.QueryRowContext(ctx, selectSessionForActivityProviderItem, providerItemID)
+	var current_session_id *domain.SessionID
+	err := row.Scan(&current_session_id)
+	return current_session_id, err
+}
+
+const selectSpanningPlanCopiesOnActivePath = `-- name: SelectSpanningPlanCopiesOnActivePath :many
+WITH RECURSIVE active_path(branch_id, max_sequence) AS (
+    SELECT conversations.active_branch_id, CAST(NULL AS INTEGER)
+    FROM conversations
+    WHERE conversations.id = ?1
+    UNION ALL
+    SELECT branch.parent_branch_id,
+           CASE
+               WHEN path.max_sequence IS NULL THEN branch.fork_after_sequence
+               WHEN branch.fork_after_sequence < path.max_sequence THEN branch.fork_after_sequence
+               ELSE path.max_sequence
+           END
+    FROM active_path AS path
+    JOIN conversation_branches AS branch ON branch.id = path.branch_id
+    WHERE branch.parent_branch_id IS NOT NULL
+)
+SELECT activity.id,
+       activity.turn_id,
+       activity.sequence,
+       activity.detail_json,
+       activity.created_at,
+       turn.completed_at AS turn_completed_at
+FROM conversation_activities AS activity
+JOIN active_path AS path ON path.branch_id = activity.branch_id
+LEFT JOIN conversation_turns AS turn ON turn.id = activity.turn_id
+WHERE activity.conversation_id = ?1
+  AND activity.kind = 'plan'
+  AND json_valid(activity.detail_json)
+  AND json_extract(activity.detail_json, '$.spansTurns') = 1
+  AND (path.max_sequence IS NULL OR activity.sequence <= path.max_sequence)
+  AND (turn.id IS NULL OR (turn.rolled_back_at IS NULL AND turn.state <> 'cancelled'))
+ORDER BY activity.sequence
+`
+
+type SelectSpanningPlanCopiesOnActivePathRow struct {
+	ID              string
+	TurnID          sql.NullString
+	Sequence        int64
+	DetailJson      string
+	CreatedAt       time.Time
+	TurnCompletedAt sql.NullTime
+}
+
+// A list the agent keeps across turns has one current copy on the active path:
+// the one written last. Every copy has a plan row, a turn's included, so the rows
+// on the path decide it, with the same branch and discarded-turn filters as the
+// timeline. Copies on other branches keep their marks until their branch is
+// active again.
+func (q *Queries) SelectSpanningPlanCopiesOnActivePath(ctx context.Context, conversationID string) ([]SelectSpanningPlanCopiesOnActivePathRow, error) {
+	rows, err := q.db.QueryContext(ctx, selectSpanningPlanCopiesOnActivePath, conversationID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []SelectSpanningPlanCopiesOnActivePathRow{}
+	for rows.Next() {
+		var i SelectSpanningPlanCopiesOnActivePathRow
+		if err := rows.Scan(
+			&i.ID,
+			&i.TurnID,
+			&i.Sequence,
+			&i.DetailJson,
+			&i.CreatedAt,
+			&i.TurnCompletedAt,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const selectVerifiedAuthenticationTurn = `-- name: SelectVerifiedAuthenticationTurn :one
+SELECT t.id, t.conversation_id, t.handled_by_session_id, t.provider_turn_id, t.controller_generation, t.state, t.error_message, t.requested_at, t.started_at, t.completed_at, t.diff_json, t.rolled_back_at, t.plan_json, t.branch_id, t.promotion_started_at, t.promoted_to_turn_id, t.retry_of_turn_id, t.handled_by_review_id, t.usage_limit_resets_at, t.usage_limit_auto_resume, t.usage_limit_resume_error, t.batched_input, t.provider_input_text, t.failure_code, t.batch_delivery_kind, t.batch_delivery_steer_id, t.artifacts_json FROM conversation_turns t
+JOIN conversations c ON c.id = t.conversation_id
+WHERE t.conversation_id = ?1
+  AND t.controller_generation = COALESCE(
+    (SELECT controller_generation FROM review WHERE id = c.current_review_id),
+    (SELECT controller_generation FROM sessions WHERE id = c.current_session_id))
+  AND (?2 = '' OR t.controller_generation = ?2)
+  AND t.branch_id = c.active_branch_id
+  AND t.state = 'completed' AND t.rolled_back_at IS NULL
+  AND t.provider_turn_id <> ''
+  AND EXISTS (
+    SELECT 1 FROM conversation_provider_events e
+    JOIN conversation_branches b ON b.id = c.active_branch_id
+    WHERE e.conversation_id = c.id AND e.branch_id = c.active_branch_id
+      AND e.method = 'turn.completed'
+      AND json_extract(e.payload_json, '$.providerTurnId') = t.provider_turn_id
+      AND json_extract(e.payload_json, '$.turnState') = 'completed'
+      AND json_extract(e.payload_json, '$.error') IS NULL
+      AND COALESCE(json_extract(e.payload_json, '$.providerConversationId'), '') IN ('', b.provider_conversation_id)
+  )
+  AND (?3 = '' OR t.provider_turn_id = ?3)
+  AND t.started_at > ?4
+  AND t.completed_at > ?4
+ORDER BY t.completed_at DESC LIMIT 1
+`
+
+type SelectVerifiedAuthenticationTurnParams struct {
+	ConversationID string
+	Generation     interface{}
+	ProviderTurnID interface{}
+	AfterAt        sql.NullTime
+}
+
+// A completed turn proves usable authentication only for the current controller
+// and active provider branch, after the last rejection/account change.
+func (q *Queries) SelectVerifiedAuthenticationTurn(ctx context.Context, arg SelectVerifiedAuthenticationTurnParams) (ConversationTurn, error) {
+	row := q.db.QueryRowContext(ctx, selectVerifiedAuthenticationTurn,
+		arg.ConversationID,
+		arg.Generation,
+		arg.ProviderTurnID,
+		arg.AfterAt,
+	)
+	var i ConversationTurn
+	err := row.Scan(
+		&i.ID,
+		&i.ConversationID,
+		&i.HandledBySessionID,
+		&i.ProviderTurnID,
+		&i.ControllerGeneration,
+		&i.State,
+		&i.ErrorMessage,
+		&i.RequestedAt,
+		&i.StartedAt,
+		&i.CompletedAt,
+		&i.DiffJson,
+		&i.RolledBackAt,
+		&i.PlanJson,
+		&i.BranchID,
+		&i.PromotionStartedAt,
+		&i.PromotedToTurnID,
+		&i.RetryOfTurnID,
+		&i.HandledByReviewID,
+		&i.UsageLimitResetsAt,
+		&i.UsageLimitAutoResume,
+		&i.UsageLimitResumeError,
+		&i.BatchedInput,
+		&i.ProviderInputText,
+		&i.FailureCode,
+		&i.BatchDeliveryKind,
+		&i.BatchDeliverySteerID,
+		&i.ArtifactsJson,
+	)
+	return i, err
+}
+
+const setConversationMessageDeliveryContent = `-- name: SetConversationMessageDeliveryContent :exec
+UPDATE conversation_messages SET delivery_content_json = ? WHERE id = ?
+`
+
+type SetConversationMessageDeliveryContentParams struct {
+	DeliveryContentJson string
+	ID                  string
+}
+
+func (q *Queries) SetConversationMessageDeliveryContent(ctx context.Context, arg SetConversationMessageDeliveryContentParams) error {
+	_, err := q.db.ExecContext(ctx, setConversationMessageDeliveryContent, arg.DeliveryContentJson, arg.ID)
+	return err
+}
+
+const setConversationPlanActivitySuperseded = `-- name: SetConversationPlanActivitySuperseded :exec
+UPDATE conversation_activities
+SET detail_json = CASE WHEN CAST(?1 AS BOOLEAN)
+                       THEN json_set(detail_json, '$.superseded', json('true'))
+                       ELSE json_remove(detail_json, '$.superseded') END,
+    revision = revision + 1,
+    updated_at = ?2
+WHERE id = ?3
+  AND ifnull(json_extract(detail_json, '$.superseded'), 0) <> CAST(?1 AS BOOLEAN)
+`
+
+type SetConversationPlanActivitySupersededParams struct {
+	Superseded bool
+	UpdatedAt  time.Time
+	ID         string
+}
+
+func (q *Queries) SetConversationPlanActivitySuperseded(ctx context.Context, arg SetConversationPlanActivitySupersededParams) error {
+	_, err := q.db.ExecContext(ctx, setConversationPlanActivitySuperseded, arg.Superseded, arg.UpdatedAt, arg.ID)
+	return err
+}
+
+const setConversationProviderInputText = `-- name: SetConversationProviderInputText :execrows
+UPDATE conversation_turns
+SET provider_input_text = ?
+WHERE id = ? AND state IN ('queued', 'running', 'completed') AND provider_input_text = ''
+`
+
+type SetConversationProviderInputTextParams struct {
+	ProviderInputText string
+	ID                string
+}
+
+// Remember the exact combined input so native history replay can identify it
+// without replacing the separate AO transcript messages.
+func (q *Queries) SetConversationProviderInputText(ctx context.Context, arg SetConversationProviderInputTextParams) (int64, error) {
+	result, err := q.db.ExecContext(ctx, setConversationProviderInputText, arg.ProviderInputText, arg.ID)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected()
+}
+
+const setConversationTurnAutoResume = `-- name: SetConversationTurnAutoResume :execrows
+UPDATE conversation_turns
+SET usage_limit_resets_at = COALESCE(?1, usage_limit_resets_at),
+    usage_limit_auto_resume = ?2,
+    usage_limit_resume_error = ?3
+WHERE id = ?4 AND conversation_id = ?5
+`
+
+type SetConversationTurnAutoResumeParams struct {
+	ResetsAt       sql.NullTime
+	Enabled        int64
+	ResumeError    string
+	ID             string
+	ConversationID string
+}
+
+func (q *Queries) SetConversationTurnAutoResume(ctx context.Context, arg SetConversationTurnAutoResumeParams) (int64, error) {
+	result, err := q.db.ExecContext(ctx, setConversationTurnAutoResume,
+		arg.ResetsAt,
+		arg.Enabled,
+		arg.ResumeError,
+		arg.ID,
+		arg.ConversationID,
+	)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected()
+}
+
+const setConversationTurnPlanSuperseded = `-- name: SetConversationTurnPlanSuperseded :exec
+UPDATE conversation_turns
+SET plan_json = CASE WHEN CAST(?1 AS BOOLEAN)
+                     THEN json_set(plan_json, '$.superseded', json('true'))
+                     ELSE json_remove(plan_json, '$.superseded') END
+WHERE id = ?2
+  AND plan_json <> ''
+  AND json_valid(plan_json)
+  AND ifnull(json_extract(plan_json, '$.superseded'), 0) <> CAST(?1 AS BOOLEAN)
+`
+
+type SetConversationTurnPlanSupersededParams struct {
+	Superseded bool
+	ID         string
+}
+
+func (q *Queries) SetConversationTurnPlanSuperseded(ctx context.Context, arg SetConversationTurnPlanSupersededParams) error {
+	_, err := q.db.ExecContext(ctx, setConversationTurnPlanSuperseded, arg.Superseded, arg.ID)
+	return err
+}
+
 const settleConversationActivity = `-- name: SettleConversationActivity :exec
 UPDATE conversation_activities
 SET status = ?, summary = ?, detail_json = ?, revision = revision + 1, updated_at = ?
-WHERE conversation_id = ? AND provider_item_id = ? AND status <> 'cancelled'
+WHERE conversation_id = ? AND provider_item_id = ? AND provider_item_id <> '' AND status <> 'cancelled'
 `
 
 type SettleConversationActivityParams struct {
@@ -3242,10 +5187,37 @@ func (q *Queries) SettleConversationActivity(ctx context.Context, arg SettleConv
 	return err
 }
 
+const settleConversationActivityByRequest = `-- name: SettleConversationActivityByRequest :exec
+UPDATE conversation_activities
+SET status = ?, summary = ?, detail_json = ?, revision = revision + 1, updated_at = ?
+WHERE conversation_id = ? AND request_id = ? AND status IN ('pending', 'running')
+`
+
+type SettleConversationActivityByRequestParams struct {
+	Status         domain.ActivityStatus
+	Summary        string
+	DetailJson     string
+	UpdatedAt      time.Time
+	ConversationID string
+	RequestID      string
+}
+
+func (q *Queries) SettleConversationActivityByRequest(ctx context.Context, arg SettleConversationActivityByRequestParams) error {
+	_, err := q.db.ExecContext(ctx, settleConversationActivityByRequest,
+		arg.Status,
+		arg.Summary,
+		arg.DetailJson,
+		arg.UpdatedAt,
+		arg.ConversationID,
+		arg.RequestID,
+	)
+	return err
+}
+
 const settleConversationActivityStreamedText = `-- name: SettleConversationActivityStreamedText :execrows
 UPDATE conversation_activities
 SET streamed_text = ?, streamed_text_truncated = 0, revision = revision + 1, updated_at = ?
-WHERE conversation_id = ? AND provider_item_id = ? AND status <> 'cancelled'
+WHERE conversation_id = ? AND provider_item_id = ? AND provider_item_id <> '' AND status <> 'cancelled'
 `
 
 type SettleConversationActivityStreamedTextParams struct {
@@ -3280,7 +5252,7 @@ func (q *Queries) SettleConversationActivityStreamedText(ctx context.Context, ar
 const settleConversationMessage = `-- name: SettleConversationMessage :exec
 UPDATE conversation_messages
 SET text = ?, revision = revision + 1, streaming = 0, updated_at = ?
-WHERE conversation_id = ? AND provider_item_id = ?
+WHERE conversation_id = ? AND provider_item_id = ? AND provider_item_id <> ''
 `
 
 type SettleConversationMessageParams struct {
@@ -3302,22 +5274,31 @@ func (q *Queries) SettleConversationMessage(ctx context.Context, arg SettleConve
 
 const settleConversationTurn = `-- name: SettleConversationTurn :exec
 UPDATE conversation_turns
-SET state = ?, error_message = ?, completed_at = COALESCE(completed_at, ?)
-WHERE id = ?
+SET state = ?1, error_message = ?2, failure_code = ?3,
+    started_at = COALESCE(started_at, ?4),
+    completed_at = COALESCE(completed_at, ?5),
+    usage_limit_resets_at = COALESCE(?6, usage_limit_resets_at)
+WHERE id = ?7
 `
 
 type SettleConversationTurnParams struct {
-	State        domain.TurnState
-	ErrorMessage string
-	CompletedAt  sql.NullTime
-	ID           string
+	State              domain.TurnState
+	ErrorMessage       string
+	FailureCode        string
+	StartedAt          sql.NullTime
+	CompletedAt        sql.NullTime
+	UsageLimitResetsAt sql.NullTime
+	ID                 string
 }
 
 func (q *Queries) SettleConversationTurn(ctx context.Context, arg SettleConversationTurnParams) error {
 	_, err := q.db.ExecContext(ctx, settleConversationTurn,
 		arg.State,
 		arg.ErrorMessage,
+		arg.FailureCode,
+		arg.StartedAt,
 		arg.CompletedAt,
+		arg.UsageLimitResetsAt,
 		arg.ID,
 	)
 	return err
@@ -3341,6 +5322,27 @@ type SettleOrphanedConversationTurnsParams struct {
 // completed.
 func (q *Queries) SettleOrphanedConversationTurns(ctx context.Context, arg SettleOrphanedConversationTurnsParams) error {
 	_, err := q.db.ExecContext(ctx, settleOrphanedConversationTurns, arg.CompletedAt, arg.HandledBySessionID)
+	return err
+}
+
+const settleOrphanedReviewTurns = `-- name: SettleOrphanedReviewTurns :exec
+UPDATE conversation_turns
+SET state = 'failed',
+    error_message = 'controller ended before the turn completed',
+    completed_at = ?1
+WHERE conversation_turns.conversation_id = ?2
+  AND conversation_turns.handled_by_review_id = ?3
+  AND conversation_turns.state IN ('queued', 'running')
+`
+
+type SettleOrphanedReviewTurnsParams struct {
+	CompletedAt    sql.NullTime
+	ConversationID string
+	ReviewID       sql.NullString
+}
+
+func (q *Queries) SettleOrphanedReviewTurns(ctx context.Context, arg SettleOrphanedReviewTurnsParams) error {
+	_, err := q.db.ExecContext(ctx, settleOrphanedReviewTurns, arg.CompletedAt, arg.ConversationID, arg.ReviewID)
 	return err
 }
 
@@ -3369,6 +5371,45 @@ func (q *Queries) SettleRunningConversationActivitiesForTurn(ctx context.Context
 		arg.ConversationID,
 		arg.TurnID,
 	)
+	return err
+}
+
+const settleStrandedConversationActivities = `-- name: SettleStrandedConversationActivities :exec
+UPDATE conversation_activities
+SET status = CASE (SELECT settled.state FROM conversation_turns AS settled WHERE settled.id = conversation_activities.turn_id)
+        WHEN 'completed' THEN 'completed'
+        WHEN 'recovered' THEN 'recovered'
+        WHEN 'interrupted' THEN 'cancelled'
+        ELSE 'failed'
+    END,
+    revision = revision + 1,
+    updated_at = ?1
+WHERE conversation_activities.conversation_id = ?2
+  AND status = 'running'
+  -- An AO action runs on the daemon's clock, not the turn's: one recorded after
+  -- its turn settled is still in flight, and its terminal update skips a row that
+  -- is no longer running, so settling it here would lose the real outcome.
+  AND kind <> 'ao_action'
+  AND turn_id IN (
+      -- Every settled turn in the conversation, including turns an earlier
+      -- session handled before a handoff kept them in this timeline.
+      SELECT owner.id FROM conversation_turns AS owner
+      WHERE owner.conversation_id = ?2
+        AND owner.state IN ('completed', 'recovered', 'interrupted', 'failed', 'cancelled')
+  )
+`
+
+type SettleStrandedConversationActivitiesParams struct {
+	UpdatedAt      time.Time
+	ConversationID string
+}
+
+// A running row on a turn that has already settled can never finish. Older
+// daemons stored replayed provider retry/limit notices this way, after their turn
+// had ended, so clients showed a spinner that never stopped. Give each one the
+// status SettleTurn would have written (terminalActivityStatus).
+func (q *Queries) SettleStrandedConversationActivities(ctx context.Context, arg SettleStrandedConversationActivitiesParams) error {
+	_, err := q.db.ExecContext(ctx, settleStrandedConversationActivities, arg.UpdatedAt, arg.ConversationID)
 	return err
 }
 
@@ -3578,10 +5619,35 @@ func (q *Queries) UpdateConversationThreadState(ctx context.Context, arg UpdateC
 	return err
 }
 
+const updateConversationTurnArtifacts = `-- name: UpdateConversationTurnArtifacts :execrows
+UPDATE conversation_turns
+SET artifacts_json = ?
+WHERE conversation_id = ? AND provider_turn_id = ?
+`
+
+type UpdateConversationTurnArtifactsParams struct {
+	ArtifactsJson  string
+	ConversationID string
+	ProviderTurnID string
+}
+
+// Record the session artifacts a turn created or edited. AO computes the whole
+// list once, when the turn ends, so this replaces whatever was there.
+// execrows so the caller can tell "recorded" from "no such turn".
+// NOTE: keep these comments ASCII. sqlc locates its star-expansion edits by byte
+// offset, so a multi-byte character here silently corrupts later queries.
+func (q *Queries) UpdateConversationTurnArtifacts(ctx context.Context, arg UpdateConversationTurnArtifactsParams) (int64, error) {
+	result, err := q.db.ExecContext(ctx, updateConversationTurnArtifacts, arg.ArtifactsJson, arg.ConversationID, arg.ProviderTurnID)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected()
+}
+
 const updateConversationTurnDiff = `-- name: UpdateConversationTurnDiff :execrows
 UPDATE conversation_turns
 SET diff_json = ?
-WHERE conversation_id = ? AND provider_turn_id = ?
+WHERE conversation_id = ? AND provider_turn_id = ? AND provider_turn_id <> ''
 `
 
 type UpdateConversationTurnDiffParams struct {
@@ -3606,7 +5672,7 @@ func (q *Queries) UpdateConversationTurnDiff(ctx context.Context, arg UpdateConv
 const updateConversationTurnPlan = `-- name: UpdateConversationTurnPlan :execrows
 UPDATE conversation_turns
 SET plan_json = ?
-WHERE conversation_id = ? AND provider_turn_id = ?
+WHERE conversation_id = ? AND provider_turn_id = ? AND provider_turn_id <> ''
 `
 
 type UpdateConversationTurnPlanParams struct {
@@ -3632,17 +5698,18 @@ func (q *Queries) UpdateConversationTurnPlan(ctx context.Context, arg UpdateConv
 
 const updateConversationTurnSettings = `-- name: UpdateConversationTurnSettings :exec
 UPDATE conversations
-SET model = ?, reasoning_effort = ?, approval_mode = ?, opencode_mode = ?, updated_at = ?
+SET model = ?, reasoning_effort = ?, approval_mode = ?, opencode_mode = ?, auto_compact_window = ?, updated_at = ?
 WHERE id = ?
 `
 
 type UpdateConversationTurnSettingsParams struct {
-	Model           sql.NullString
-	ReasoningEffort sql.NullString
-	ApprovalMode    sql.NullString
-	OpencodeMode    string
-	UpdatedAt       time.Time
-	ID              string
+	Model             sql.NullString
+	ReasoningEffort   sql.NullString
+	ApprovalMode      sql.NullString
+	OpencodeMode      string
+	AutoCompactWindow string
+	UpdatedAt         time.Time
+	ID                string
 }
 
 // The next turn's provider choices. Written only when the user picks something,
@@ -3655,6 +5722,7 @@ func (q *Queries) UpdateConversationTurnSettings(ctx context.Context, arg Update
 		arg.ReasoningEffort,
 		arg.ApprovalMode,
 		arg.OpencodeMode,
+		arg.AutoCompactWindow,
 		arg.UpdatedAt,
 		arg.ID,
 	)

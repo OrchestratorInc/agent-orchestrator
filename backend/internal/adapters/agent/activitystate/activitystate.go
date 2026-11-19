@@ -14,8 +14,16 @@ import "github.com/aoagents/agent-orchestrator/backend/internal/domain"
 // hooks report activity purely through which callback fired.
 //
 //   - session-start / user-prompt-submit → active
+//   - pre-tool-use / post-tool-use / post-tool-use-failure /
+//     permission-resolved                → active (tool traffic is work)
 //   - stop                               → idle
 //   - permission-request                 → waiting_input
+//
+// Tool-use signals map to active: an agent about to run (or having run) a
+// tool is working, not blocked on the user. Lifecycle precedence ensures
+// these signals never demote a sticky state on their own; only an explicit
+// turn boundary (stop, user-prompt-submit, permission-resolved) or the
+// correlated post clears it.
 //
 // permission-request maps to waiting_input, not blocked: none of the sharing
 // adapters install the pre/post-tool-use trio, so a blocked state could never
@@ -26,6 +34,8 @@ func StandardDeriveActivityState(event string, _ []byte) (domain.ActivityState, 
 	case "session-start":
 		return domain.ActivityActive, true
 	case "user-prompt-submit":
+		return domain.ActivityActive, true
+	case "pre-tool-use", "post-tool-use", "post-tool-use-failure", "permission-resolved":
 		return domain.ActivityActive, true
 	case "stop":
 		return domain.ActivityIdle, true

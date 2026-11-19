@@ -1,45 +1,98 @@
 import { describe, expect, it } from "vitest";
-import { conversationMenuSections, normalizeConversationTitle } from "./conversationMenuModel";
+import { conversationMenuGroups, type ConversationMenuState } from "./conversationMenuModel";
 
-describe("conversation overflow menu", () => {
-	it("groups every supported session action by user intent", () => {
-		const sections = conversationMenuSections({
-			canRename: true,
-			canPin: true,
-			canCompact: true,
-			canReloadMcp: true,
-			canDelete: true,
-		});
+const base: ConversationMenuState = {
+	canPin: true,
+	canCompact: true,
+	canDelete: true,
+	pinned: false,
+	openingShell: false,
+	compacting: false,
+	turnInFlight: false,
+};
 
-		expect(sections).toEqual([
-			{ title: "Workspace", actions: ["shell", "preview", "pull_requests"] },
-			{ title: "Conversation", actions: ["map", "refresh", "settings", "rename", "pin", "compact"] },
-			{ title: "Agent", actions: ["terminal_ui", "reload_mcp"] },
-			// Last, and alone: the only entry here that destroys something.
-			{ title: "Session", actions: ["delete"] },
+const layout = (state: ConversationMenuState) => conversationMenuGroups(state).map((group) => [group.title, group.items.map((item) => item.label)]);
+
+describe("conversationMenuGroups", () => {
+	it("names the agent's account first in Session, and holds it while a move runs or nothing else is signed in", () => {
+		const account = (state: Partial<NonNullable<ConversationMenuState["account"]>>) => conversationMenuGroups({ ...base, account: { name: "a@x.dev", moving: false, canMove: true, ...state } })
+			.find((group) => group.title === "Session")?.items[0];
+		expect(account({})).toMatchObject({ action: "account", label: "Account", subtitle: "a@x.dev", disabled: false });
+		expect(account({ moving: true })).toMatchObject({ label: "Switching account…", disabled: true });
+		expect(account({ canMove: false })).toMatchObject({ disabled: true });
+	});
+
+	// Only these seven, each in its group, on both platforms.
+	it("offers Terminal, Preview, Artifacts, Pin, PR Review, Compact and Archive in four groups", () => {
+		expect(layout({ ...base, artifactCount: 2, hasPullRequest: true })).toEqual([
+			["Open", ["Shell", "Preview", "Artifacts"]],
+			["Worker", ["Pin", "PR Review"]],
+			["Context", ["Compact"]],
+			["Session", ["Archive"]],
 		]);
 	});
 
-	it("omits capability-gated maintenance actions without disturbing the core menu", () => {
-		const sections = conversationMenuSections({
-			canRename: false,
-			canPin: false,
-			canCompact: false,
-			canReloadMcp: false,
-			canDelete: false,
-		});
-
-		expect(sections[1]?.actions).toEqual(["map", "refresh", "settings"]);
-		expect(sections[2]?.actions).toEqual(["terminal_ui"]);
-		// An orchestrator has no delete here, so the section goes rather than
-		// rendering an empty group.
-		expect(sections.some((section) => section.title === "Session")).toBe(false);
+	// PR Review draws the app's pull-request glyph on both platforms, as the
+	// board's header does; nothing else replaces its symbol.
+	it("marks PR Review, and only it, for the app's pull-request glyph", () => {
+		const items = conversationMenuGroups({ ...base, artifactCount: 2, hasPullRequest: true }).flatMap((group) => group.items);
+		expect(items.filter((item) => item.glyph).map((item) => [item.label, item.glyph])).toEqual([["PR Review", "pullRequest"]]);
 	});
-});
 
-describe("conversation rename", () => {
-	it("trims a useful title and rejects an empty one", () => {
-		expect(normalizeConversationTitle("  Release follow-up  ")).toBe("Release follow-up");
-		expect(normalizeConversationTitle("   ")).toBeUndefined();
+	// On an empty session both led to an empty page.
+	it("offers Artifacts and PR Review only once there is something to open", () => {
+		expect(layout(base)).toEqual([
+			["Open", ["Shell", "Preview"]],
+			["Worker", ["Pin"]],
+			["Context", ["Compact"]],
+			["Session", ["Archive"]],
+		]);
+		expect(layout({ ...base, artifactCount: 0 })[0][1]).not.toContain("Artifacts");
+	});
+
+	// Only where the agent can carry the conversation on in Terminal UI, and
+	// just before Archive.
+	it("offers Switch to Terminal UI before Archive when the agent supports it", () => {
+		expect(layout({ ...base, canSwitchToTerminal: true }).at(-1)).toEqual(["Session", ["Switch to Terminal UI", "Archive"]]);
+		expect(layout({ ...base, canSwitchToTerminal: true, canDelete: false }).at(-1)).toEqual(["Session", ["Switch to Terminal UI"]]);
+		const switching = conversationMenuGroups({ ...base, canSwitchToTerminal: true, switchingToTerminal: true }).at(-1)!.items[0];
+		expect(switching).toMatchObject({ action: "switch_tui", label: "Switching to Terminal UI…", disabled: true });
+	});
+
+	it("drops what the session cannot do, and never shows an empty group", () => {
+		expect(layout({ ...base, canPin: false, canCompact: false, canDelete: false })).toEqual([
+			["Open", ["Shell", "Preview"]],
+		]);
+		expect(layout({ ...base, canPin: false, canCompact: false, canDelete: false, hasPullRequest: true })).toEqual([
+			["Open", ["Shell", "Preview"]],
+			["Worker", ["PR Review"]],
+		]);
+	});
+
+	it("draws the context in use as a ring on Compact, and says it under the label", () => {
+		const compact = conversationMenuGroups({ ...base, contextPercent: 42 })[2].items[0];
+		expect(compact).toMatchObject({ action: "compact", meter: 42, subtitle: "42% of context used" });
+		const unknown = conversationMenuGroups(base)[2].items[0];
+		expect(unknown.meter).toBeUndefined();
+		expect(unknown.subtitle).toBeUndefined();
+	});
+
+	it("says what is running and holds it until it finishes", () => {
+		const groups = conversationMenuGroups({ ...base, openingShell: true, compacting: true, pinned: true, previewReady: true });
+		expect(groups[0].items[0]).toMatchObject({ label: "Opening shell…", disabled: true });
+		expect(groups[0].items[1].subtitle).toBe("Ready to open");
+		expect(groups[1].items[0].label).toBe("Unpin");
+		expect(groups[2].items[0]).toMatchObject({ label: "Compacting…", disabled: true });
+		expect(conversationMenuGroups({ ...base, turnInFlight: true })[2].items[0].disabled).toBe(true);
+	});
+
+	it("counts the artifacts under their label", () => {
+		expect(conversationMenuGroups({ ...base, artifactCount: 3 })[0].items[2]).toMatchObject({ action: "artifacts", subtitle: "3 files" });
+		expect(conversationMenuGroups({ ...base, artifactCount: 1 })[0].items[2].subtitle).toBe("1 file");
+	});
+
+	it("draws Archive in red with its hint", () => {
+		expect(conversationMenuGroups(base)[3].items[0]).toMatchObject({ action: "delete", destructive: true });
+		expect(conversationMenuGroups(base)[3].items[0].subtitle).toBeTruthy();
 	});
 });

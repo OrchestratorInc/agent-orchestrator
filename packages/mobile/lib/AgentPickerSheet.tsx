@@ -1,11 +1,12 @@
-import { Feather } from "@expo/vector-icons";
-import { ActivityIndicator, FlatList, Pressable, StyleSheet, Text } from "react-native";
+import { Platform, StyleSheet, Text } from "react-native";
 import { AgentLogo } from "./AgentLogo";
 import type { RankedAgent } from "./agentPicker";
 import { haptics } from "./haptics";
+import { NativePickerList } from "./NativePickerList";
 import type { Theme } from "./theme";
-import { useTheme, useThemedStyles } from "./ThemeProvider";
-import { SHEET_SCROLL_CONTENT, SheetHeader } from "./ui";
+import { useThemedStyles } from "./ThemeProvider";
+import { SheetHeader } from "./ui";
+import { iconSize, type } from "./tokens";
 
 // Picks the agent CLI that will run a session.
 //
@@ -14,7 +15,7 @@ import { SHEET_SCROLL_CONTENT, SheetHeader } from "./ui";
 //
 // Refresh lives here rather than on the form: a stale catalog is something you
 // discover while looking for an agent that is missing or unauthorised, which is
-// this list, not the screen behind it.
+// this list, not the screen behind it. Pull the list down to refresh it.
 export function AgentPickerSheet({
 	onClose,
 	agents,
@@ -31,131 +32,50 @@ export function AgentPickerSheet({
 	agents: RankedAgent[];
 	selected: string;
 	onSelect: (id: string) => void;
-	onRefresh: () => void;
+	/** Settles once the catalog has been fetched again. */
+	onRefresh: () => Promise<void>;
 	refreshing?: boolean;
 	error?: string | null;
+	/** Android's, in the body; iOS carries the title in the sheet's native bar. */
 	title?: string;
 	subtitle?: string;
 }) {
-	const t = useTheme();
 	const s = useThemedStyles(makeStyles);
-
 	return (
-		<FlatList
-			style={s.list}
-			data={agents}
-			keyExtractor={(a) => a.id}
-			contentContainerStyle={SHEET_SCROLL_CONTENT}
-			ListEmptyComponent={
-				<Text style={s.empty}>No agents reported. Check that AO is running on your computer, then refresh.</Text>
-			}
-			ListHeaderComponent={
-				<>
-					<SheetHeader
-						title={title}
-						subtitle={subtitle}
-						right={
-							<Pressable
-								accessibilityRole="button"
-								accessibilityLabel="Refresh agent list"
-								accessibilityState={{ disabled: refreshing }}
-								disabled={refreshing}
-								hitSlop={8}
-								onPress={() => {
-									haptics.tap();
-									onRefresh();
-								}}
-								style={({ pressed }) => [s.refresh, (pressed || refreshing) && { opacity: 0.5 }]}
-							>
-								{refreshing ? (
-									<ActivityIndicator size="small" color={t.blue} />
-								) : (
-									<>
-										<Feather name="refresh-cw" size={13} color={t.blue} />
-										<Text style={s.refreshText}>Refresh</Text>
-									</>
-								)}
-							</Pressable>
-						}
-					/>
-					{error ? <Text style={s.error}>{error}</Text> : null}
-				</>
-			}
-			renderItem={({ item: a }) => {
-				const isSelected = a.id === selected;
-				return (
-					<Pressable
-						accessibilityRole="button"
-						accessibilityState={{
-							selected: isSelected,
-							disabled: !a.selectable,
-						}}
-						accessibilityLabel={a.status ? `${a.label}, ${a.status}` : a.label}
-						// Genuinely disabled, not just ignored on press. The previous
-						// picker let you tap an unusable agent and silently did nothing.
-						disabled={!a.selectable}
-						onPress={() => {
-							haptics.select();
-							// Dismiss before reporting the choice, matching the other
-							// sheets. onClose is router.back(), so a callback that
-							// navigated first would have back() pop the destination
-							// instead of this sheet.
-							onClose();
-							onSelect(a.id);
-						}}
-						style={({ pressed }) => [
-							s.option,
-							!a.selectable && s.optionDisabled,
-							pressed && a.selectable && s.optionPressed,
-						]}
-					>
-						<AgentLogo harness={a.id} size={22} />
-						<Text style={[s.label, isSelected && { color: t.blue }]} numberOfLines={1}>
-							{a.label}
-						</Text>
-						{a.status ? (
-							<Text
-								style={[
-									s.status,
-									// Amber for something you can act on, muted for a missing
-									// install — desktop's tone split.
-									a.availability === "auth-unknown" || a.availability === "needs-auth" ? { color: t.amber } : null,
-								]}
-							>
-								{a.status}
-							</Text>
-						) : null}
-						{isSelected ? <Feather name="check" size={17} color={t.blue} /> : null}
-					</Pressable>
-				);
+		<NativePickerList
+			header={<>
+				<SheetHeader title={Platform.OS === "ios" ? undefined : title} subtitle={subtitle} />
+				{error ? <Text accessibilityRole="alert" style={s.error}>{error}</Text> : null}
+			</>}
+			options={agents.map((agent) => ({
+				id: agent.id,
+				title: agent.label,
+				detail: agent.status || undefined,
+				// Amber for something you can act on, muted for a missing install —
+				// desktop's tone split.
+				warn: agent.availability === "auth-unknown" || agent.availability === "needs-auth",
+				// Genuinely disabled, not just ignored on press. The previous picker
+				// let you tap an unusable agent and silently did nothing.
+				disabled: !agent.selectable,
+				mark: <AgentLogo harness={agent.id} size={iconSize.lg} />,
+			}))}
+			selected={selected}
+			onSelect={(id) => {
+				haptics.select();
+				// Dismiss before reporting the choice, matching the other sheets.
+				// onClose leaves the sheet, so a callback that navigated first would
+				// have that dismiss pop the destination instead of this sheet.
+				onClose();
+				onSelect(id);
 			}}
+			refreshing={refreshing}
+			onRefresh={onRefresh}
+			empty="No agents reported. Check that Orchestrator is running on your computer, then pull down to refresh."
 		/>
 	);
 }
 
 const makeStyles = (t: Theme) =>
 	StyleSheet.create({
-		list: { flex: 1, backgroundColor: t.bgSurface },
-		refresh: { flexDirection: "row", alignItems: "center", gap: 5 },
-		refreshText: { color: t.blue, fontSize: 13, fontWeight: "600" },
-		option: {
-			flexDirection: "row",
-			alignItems: "center",
-			gap: 11,
-			paddingVertical: 11,
-			paddingHorizontal: 2,
-		},
-		optionPressed: { opacity: 0.6 },
-		// Desktop's opacity for an unpickable agent. The row still shows its mark
-		// and reason, so it reads as "not yet" rather than missing.
-		optionDisabled: { opacity: 0.45 },
-		label: { flex: 1, color: t.textPrimary, fontSize: 15, fontWeight: "500" },
-		status: { color: t.textTertiary, fontSize: 11, fontWeight: "600" },
-		empty: {
-			color: t.textTertiary,
-			fontSize: 13,
-			lineHeight: 19,
-			paddingVertical: 14,
-		},
-		error: { color: t.red, fontSize: 13, lineHeight: 18, marginTop: 10 },
+		error: { fontFamily: type.footnote.fontFamily, color: t.red, fontSize: type.footnote.fontSize, lineHeight: type.footnote.lineHeight },
 	});

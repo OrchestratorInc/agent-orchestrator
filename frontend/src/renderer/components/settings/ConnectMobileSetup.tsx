@@ -86,7 +86,7 @@ export function ConnectMobileSetup({ mode, onModeChange, enabled, busy = false, 
 				</div>
 			) : (
 				<div className="mt-3 w-full px-(--size-settings-mobile-details-pad-x)">
-					<div className="relative flex items-start justify-between gap-3 rounded-(--radius-settings-dialog-lg) border border-[var(--color-border-settings-input)] bg-[var(--color-bg-settings-input)] px-3.5 py-2.5">
+					<div className="relative flex items-start justify-between gap-3 rounded-(--radius-settings-dialog-lg) bg-[var(--color-bg-settings-input)] px-3.5 py-2.5">
 						<div className="flex min-w-0 flex-col gap-1 pr-2">
 							<span className="text-subtitle leading-(--leading-settings-mobile-title) text-settings-label">
 								{t("mobile.securePairing")}
@@ -102,10 +102,8 @@ export function ConnectMobileSetup({ mode, onModeChange, enabled, busy = false, 
 							aria-label={t("mobile.securePairing")}
 							tabIndex={enabled ? 0 : -1}
 							className={cn(
-								"h-(--size-settings-mobile-switch-h) w-(--size-settings-mobile-switch-w) shrink-0 transition-colors duration-300 ease-out",
-								"data-[state=checked]:bg-settings-switch-on data-[state=unchecked]:bg-[var(--color-border-settings-input)]",
-								"focus-visible:ring-0 focus-visible:ring-offset-0",
-								"**:data-[slot=switch-thumb]:size-5 **:data-[slot=switch-thumb]:bg-white **:data-[slot=switch-thumb]:transition-transform **:data-[slot=switch-thumb]:duration-300 **:data-[slot=switch-thumb]:ease-out",
+								"h-(--size-settings-mobile-switch-h) w-(--size-settings-mobile-switch-w) shrink-0",
+								"**:data-[slot=switch-thumb]:size-5",
 								"data-[state=checked]:**:data-[slot=switch-thumb]:translate-x-(--size-settings-mobile-switch-travel)",
 								"data-[state=unchecked]:**:data-[slot=switch-thumb]:translate-x-0.5",
 							)}

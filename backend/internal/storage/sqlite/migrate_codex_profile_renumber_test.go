@@ -3,7 +3,6 @@ package sqlite
 import (
 	"database/sql"
 	"fmt"
-	"path/filepath"
 	"strings"
 	"testing"
 	"testing/fstest"
@@ -12,14 +11,7 @@ import (
 )
 
 func TestMigrateRepairsRenumberedCodexProfileHistory(t *testing.T) {
-	db, err := sql.Open("sqlite", "file:"+filepath.Join(t.TempDir(), "ao.db")+pragmas)
-	if err != nil {
-		t.Fatalf("open sqlite: %v", err)
-	}
-	db.SetMaxOpenConns(1)
-	t.Cleanup(func() { _ = db.Close() })
-
-	upTo(t, db, 116)
+	db := openMigratedDatabaseCopy(t, 116)
 	applyLegacyCodexProfileMigrations(t, db, []legacyCodexProfileMigration{
 		{version: 117, canonicalPath: "migrations/0122_drop_agent_inventory_cache.sql", legacyName: "drop_agent_inventory_cache.sql"},
 	})
@@ -32,8 +24,8 @@ func TestMigrateRepairsRenumberedCodexProfileHistory(t *testing.T) {
 	}
 
 	assertAppliedMigrations(t, db, 117, 118, 119, 120, 121, 122)
-	assertTableSQLContains(t, db, "usage_bindings", "'kimi'")
-	assertTableSQLContains(t, db, "usage_sources", "'kimi_wire'")
+	assertTableSQLContains(t, db, "usage_bindings", "trim(harness)")
+	assertTableSQLContains(t, db, "usage_sources", "trim(kind)")
 	assertTableSQLContains(t, db, "conversation_turns", "'cancelled'")
 	var stagingTable int
 	if err := db.QueryRow(`SELECT COUNT(*) FROM sqlite_master WHERE type = 'table' AND name = 'conversation_turns_next'`).Scan(&stagingTable); err != nil {
@@ -52,6 +44,9 @@ func TestMigrateRepairsRenumberedCodexProfileHistory(t *testing.T) {
 	if err := migrate(db); err != nil {
 		t.Fatalf("second migration pass: %v", err)
 	}
+	assertAppliedMigrations(t, db, 117)
+	assertTableSQLContains(t, db, "usage_bindings", "trim(harness)")
+	assertTableSQLContains(t, db, "usage_sources", "trim(kind)")
 }
 
 type legacyCodexProfileMigration struct {

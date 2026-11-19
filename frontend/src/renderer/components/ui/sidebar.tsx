@@ -1,8 +1,10 @@
 "use client";
 
+import { useSidebarChromeGeometry } from "../../hooks/useSidebarChromeGeometry";
+
 import * as React from "react";
 import { cva, type VariantProps } from "class-variance-authority";
-import { PanelLeftIcon } from "lucide-react";
+import { PanelLeftIcon } from "@/components/app-icons";
 import { motion, useReducedMotion } from "motion/react";
 import { Slot } from "radix-ui";
 import { useTranslation } from "react-i18next";
@@ -12,6 +14,7 @@ import { SHELL_PANEL_SPRING } from "@/lib/motion-spring";
 import { cn } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
+import { Pressable } from "@/components/ui/pressable";
 import { Separator } from "@/components/ui/separator";
 import { Sheet, SheetContent, SheetDescription, SheetHeader, SheetTitle } from "@/components/ui/sheet";
 import { Skeleton } from "@/components/ui/skeleton";
@@ -165,6 +168,9 @@ function Sidebar({
 	const { t } = useTranslation();
 	const prefersReducedMotion = useReducedMotion();
 	const { isMobile, state, openMobile, setOpenMobile, isReady } = useSidebar();
+	const gapRef = React.useRef<HTMLDivElement>(null);
+	const containerRef = React.useRef<HTMLDivElement>(null);
+	useSidebarChromeGeometry(!isMobile && side === "left" && collapsible !== "none", gapRef, containerRef);
 
 	if (collapsible === "none") {
 		return (
@@ -224,6 +230,9 @@ function Sidebar({
 	// Cast once so callers can keep passing through plain div props.
 	// eslint-disable-next-line @typescript-eslint/no-explicit-any
 	const motionSafeProps = props as any;
+	const childList = React.Children.toArray(children);
+	const rail = childList.filter((child) => React.isValidElement(child) && child.type === SidebarRail);
+	const rest = childList.filter((child) => !rail.includes(child));
 
 	return (
 		<div
@@ -239,6 +248,7 @@ function Sidebar({
 			    smoothly with the shell instead of snapping on a separate CSS timer. */}
 			<motion.div
 				data-slot="sidebar-gap"
+				ref={gapRef}
 				initial={false}
 				animate={{ width: gapTargetWidth }}
 				transition={activeTransition}
@@ -248,6 +258,7 @@ function Sidebar({
 			    uses the same curve as the section animations. */}
 			<motion.div
 				data-slot="sidebar-container"
+				ref={containerRef}
 				initial={false}
 				animate={{ x: containerX }}
 				transition={activeTransition}
@@ -270,7 +281,13 @@ function Sidebar({
 					data-slot="sidebar-inner"
 					className="flex h-full w-full flex-col bg-sidebar group-data-[variant=floating]:rounded-lg group-data-[variant=floating]:border group-data-[variant=floating]:border-sidebar-border group-data-[variant=floating]:shadow-sm"
 				>
-					{children}
+					{/* The expand rail stays live while the rest is off-screen: a collapsed
+					    sidebar's controls must not be tabbable or readable, but its edge
+					    strip is how the pointer reopens it. */}
+					{rail}
+					<div aria-hidden={isOffcanvasCollapsed ? true : undefined} className="contents" inert={isOffcanvasCollapsed}>
+						{rest}
+					</div>
 				</div>
 			</motion.div>
 		</div>
@@ -286,8 +303,8 @@ function SidebarTrigger({ className, onClick, ...props }: React.ComponentProps<t
 			data-sidebar="trigger"
 			data-slot="sidebar-trigger"
 			variant="ghost"
-			size="icon"
-			className={cn("size-7", className)}
+			size="icon-sm"
+			className={className}
 			onClick={(event) => {
 				onClick?.(event);
 				toggleSidebar();
@@ -305,7 +322,7 @@ function SidebarRail({ className, ...props }: React.ComponentProps<"button">) {
 	const { toggleSidebar } = useSidebar();
 
 	return (
-		<button
+		<Pressable
 			data-sidebar="rail"
 			data-slot="sidebar-rail"
 			aria-label={t("shortcut.toggle-sidebar")}
@@ -486,7 +503,7 @@ function SidebarMenuItem({ className, ...props }: React.ComponentProps<"li">) {
 }
 
 const sidebarMenuButtonVariants = cva(
-	"peer/menu-button flex w-full items-center gap-2 overflow-hidden rounded-md p-2 text-left text-sm outline-hidden transition-[width,height,padding] group-has-data-[sidebar=menu-action]/menu-item:pr-8 group-data-[collapsible=icon]:size-control-form! group-data-[collapsible=icon]:p-2! hover:bg-sidebar-accent hover:text-sidebar-accent-foreground active:bg-sidebar-accent active:text-sidebar-accent-foreground disabled:pointer-events-none disabled:opacity-50 aria-disabled:pointer-events-none aria-disabled:opacity-50 data-[active=true]:bg-sidebar-accent data-[active=true]:font-medium data-[active=true]:text-sidebar-accent-foreground data-[state=open]:hover:bg-sidebar-accent data-[state=open]:hover:text-sidebar-accent-foreground [&>span:last-child]:truncate [&>svg]:size-icon-base [&>svg]:shrink-0",
+	"peer/menu-button flex w-full items-center gap-2 overflow-hidden rounded-md p-2 text-left text-sm outline-hidden transition-[width,height,padding] [[data-sidebar=menu-item]:has(>[data-sidebar=menu-action])>&]:pr-8 group-data-[collapsible=icon]:size-control-form! group-data-[collapsible=icon]:p-2! hover:bg-sidebar-accent hover:text-sidebar-accent-foreground active:bg-sidebar-accent active:text-sidebar-accent-foreground disabled:pointer-events-none disabled:opacity-50 aria-disabled:pointer-events-none aria-disabled:opacity-50 data-[active=true]:bg-sidebar-accent data-[active=true]:font-medium data-[active=true]:text-sidebar-accent-foreground data-[state=open]:hover:bg-sidebar-accent data-[state=open]:hover:text-sidebar-accent-foreground [&>span:last-child]:truncate [&>svg]:size-icon-base [&>svg]:shrink-0",
 	{
 		variants: {
 			variant: {
@@ -521,7 +538,6 @@ function SidebarMenuButton({
 	tooltip?: string | React.ComponentProps<typeof TooltipContent>;
 } & VariantProps<typeof sidebarMenuButtonVariants>) {
 	const Comp = asChild ? Slot.Root : "button";
-	const { isMobile, state } = useSidebar();
 
 	const button = (
 		<Comp
@@ -547,9 +563,17 @@ function SidebarMenuButton({
 	return (
 		<Tooltip>
 			<TooltipTrigger asChild>{button}</TooltipTrigger>
-			<TooltipContent side="right" align="center" hidden={state !== "collapsed" || isMobile} {...tooltip} />
+			<SidebarMenuButtonTooltipContent {...tooltip} />
 		</Tooltip>
 	);
+}
+
+// Reads the sidebar state here rather than in SidebarMenuButton, so collapsing
+// or expanding the sidebar re-renders only each tooltip's content, not every
+// row button with its trigger.
+function SidebarMenuButtonTooltipContent(props: React.ComponentProps<typeof TooltipContent>) {
+	const { isMobile, state } = useSidebar();
+	return <TooltipContent side="right" align="center" hidden={state !== "collapsed" || isMobile} {...props} />;
 }
 
 function SidebarMenuAction({

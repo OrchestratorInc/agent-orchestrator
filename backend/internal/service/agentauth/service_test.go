@@ -10,6 +10,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/aoagents/agent-orchestrator/backend/internal/config"
 	"github.com/aoagents/agent-orchestrator/backend/internal/httpd/apierr"
 	"github.com/aoagents/agent-orchestrator/backend/internal/service/shellterm"
 )
@@ -43,6 +44,26 @@ func TestStartRejectsUnstartablePlans(t *testing.T) {
 	}
 }
 
+func TestStartOpensFXNativeLogin(t *testing.T) {
+	t.Parallel()
+
+	opener := &recordingTerminalOpener{}
+	svc := New(foundExecutable("fx"), opener)
+
+	_, err := svc.Start(context.Background(), "fx")
+	if err != nil {
+		t.Fatalf("Start(fx): %v", err)
+	}
+	want := shellterm.OpenCommandTerminalInput{
+		Owner: "agentauth:fx",
+		Argv:  []string{"/test/bin/fx", "login"},
+		Title: "Log in to fx",
+	}
+	if !reflect.DeepEqual(opener.input, want) {
+		t.Fatalf("OpenCommandTerminal input = %#v, want %#v", opener.input, want)
+	}
+}
+
 func TestStartOpensDevinNativeLogin(t *testing.T) {
 	t.Parallel()
 
@@ -54,6 +75,7 @@ func TestStartOpensDevinNativeLogin(t *testing.T) {
 		t.Fatalf("Start(devin): %v", err)
 	}
 	want := shellterm.OpenCommandTerminalInput{
+		Owner: "agentauth:devin",
 		Argv:  []string{"/test/bin/devin", "auth", "login"},
 		Title: "Log in to Devin",
 	}
@@ -65,33 +87,214 @@ func TestStartOpensDevinNativeLogin(t *testing.T) {
 func TestStartOpensResolvedPlanAndReturnsSafeTerminal(t *testing.T) {
 	t.Parallel()
 
-	terminal := shellterm.ShellTerminal{HandleID: "shellterm-123", Title: "Log in to Pi"}
+	terminal := shellterm.ShellTerminal{HandleID: "shellterm-123", Title: "Log in to Droid"}
 	opener := &recordingTerminalOpener{terminal: terminal}
-	svc := New(foundExecutable("pi"), opener)
+	svc := New(foundExecutable("droid"), opener)
 
-	got, err := svc.Start(context.Background(), "pi")
+	got, err := svc.Start(context.Background(), "droid")
 	if err != nil {
-		t.Fatalf("Start(pi): %v", err)
+		t.Fatalf("Start(droid): %v", err)
 	}
 	if opener.calls != 1 {
 		t.Fatalf("OpenCommandTerminal calls = %d, want 1", opener.calls)
 	}
 	wantInput := shellterm.OpenCommandTerminalInput{
-		Argv:  []string{"/test/bin/pi"},
-		Title: "Log in to Pi",
+		Owner: "agentauth:droid",
+		Argv:  []string{"/test/bin/droid"},
+		Title: "Log in to Droid",
 	}
 	if !reflect.DeepEqual(opener.input, wantInput) {
 		t.Fatalf("OpenCommandTerminal input = %#v, want %#v", opener.input, wantInput)
 	}
-	if got.AgentID != "pi" || got.Action != ActionLogin || got.Guidance != "Select Open login after Pi finishes starting" || got.TerminalInput != "/login\r" || got.Terminal != terminal {
-		t.Fatalf("Start(pi) = %#v, want display-safe Pi result with terminal %#v", got, terminal)
+	if got.AgentID != "droid" || got.Action != ActionLogin || got.Guidance != "Select Open login after Droid finishes starting" || got.TerminalInput != "/login\r" || got.Terminal != terminal {
+		t.Fatalf("Start(droid) = %#v, want display-safe Droid result with terminal %#v", got, terminal)
 	}
 	data, err := json.Marshal(got)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if strings.Contains(string(data), "argv") || strings.Contains(string(data), "initialInput") {
-		t.Fatalf("Start(pi) serialized trusted terminal input: %s", data)
+		t.Fatalf("Start(droid) serialized trusted terminal input: %s", data)
+	}
+}
+
+func TestStartPiInjectsLoginAutomatically(t *testing.T) {
+	t.Parallel()
+
+	opener := &recordingTerminalOpener{}
+	svc := New(foundExecutable("pi"), opener)
+
+	got, err := svc.Start(context.Background(), "pi")
+	if err != nil {
+		t.Fatalf("Start(pi): %v", err)
+	}
+	wantInput := shellterm.OpenCommandTerminalInput{
+		Owner:        "agentauth:pi",
+		Argv:         []string{"/test/bin/pi"},
+		Title:        "Log in to Pi",
+		InitialInput: "/login",
+		InitialInputReadyStates: []shellterm.InitialInputReadyState{
+			{Text: "0.0%/"},
+			{Text: "Pi can explain its own features"},
+		},
+		SendInitialInputOnReadyTimeout: true,
+	}
+	if !reflect.DeepEqual(opener.input, wantInput) {
+		t.Fatalf("OpenCommandTerminal input = %#v, want %#v", opener.input, wantInput)
+	}
+	if got.TerminalInput != "" {
+		t.Fatalf("Start(pi) terminal input = %q, want none so the login is not held behind a button", got.TerminalInput)
+	}
+}
+
+func TestStartGeminiInjectsAuthWhenEditorIsReady(t *testing.T) {
+	t.Parallel()
+
+	opener := &recordingTerminalOpener{}
+	svc := New(foundExecutable("gemini"), opener)
+
+	got, err := svc.Start(context.Background(), "gemini")
+	if err != nil {
+		t.Fatalf("Start(gemini): %v", err)
+	}
+	wantInput := shellterm.OpenCommandTerminalInput{
+		Owner: "agentauth:gemini",
+		Argv:  []string{"/test/bin/gemini"},
+		Title: "Set up Gemini CLI",
+		InitialInputReadyStates: []shellterm.InitialInputReadyState{
+			{Text: "How would you like to authenticate for this project?", SkipInput: true},
+			{
+				Text:            "Type your message or @path/to/file",
+				RawPrefix:       "/auth",
+				SubmitReadyText: "Manage authentication",
+			},
+		},
+	}
+	if !reflect.DeepEqual(opener.input, wantInput) {
+		t.Fatalf("OpenCommandTerminal input = %#v, want %#v", opener.input, wantInput)
+	}
+	if got.TerminalInput != "" {
+		t.Fatalf("Start(gemini) terminal input = %q, want none so setup is not held behind a button", got.TerminalInput)
+	}
+}
+
+func TestGeminiReadyStateMatchesRenderedEditor(t *testing.T) {
+	t.Parallel()
+
+	readyStates := planByAgentID["gemini"].initialInputReadyStates
+	if got := shellterm.MatchInitialInputReadyState("Gemini CLI v0.63.0\nAuthenticated with gemini-api-key /auth", readyStates); got != nil {
+		t.Fatalf("startup banner matched before editor was ready: %#v", got)
+	}
+	if got := shellterm.MatchInitialInputReadyState("Type your message or @path/to/file", readyStates); got == nil || got.SkipInput {
+		t.Fatal("rendered Gemini editor did not match its ready state")
+	}
+}
+
+func TestGeminiReadyStateSkipsOpenAuthDialog(t *testing.T) {
+	t.Parallel()
+
+	// The picker wins even when scrollback still contains the editor marker.
+	output := "Type your message or @path/to/file\nGet started\nHow would you like to authenticate for this project?"
+	got := shellterm.MatchInitialInputReadyState(output, planByAgentID["gemini"].initialInputReadyStates)
+	if got == nil || !got.SkipInput {
+		t.Fatalf("open Gemini auth dialog = %#v, want skip input", got)
+	}
+}
+
+func TestStartOMPOpensNativeProviderSetupWithoutInjectingInput(t *testing.T) {
+	t.Parallel()
+
+	opener := &recordingTerminalOpener{}
+	svc := New(foundExecutable("omp"), opener)
+
+	got, err := svc.Start(context.Background(), "omp")
+	if err != nil {
+		t.Fatalf("Start(omp): %v", err)
+	}
+	wantInput := shellterm.OpenCommandTerminalInput{
+		Owner: "agentauth:omp",
+		Argv:  []string{"/test/bin/omp", "setup"},
+		Title: "Log in to OMP",
+	}
+	if !reflect.DeepEqual(opener.input, wantInput) {
+		t.Fatalf("OpenCommandTerminal input = %#v, want %#v", opener.input, wantInput)
+	}
+	if got.TerminalInput != "" {
+		t.Fatalf("Start(omp) terminal input = %q, want none because OMP owns provider sign-in", got.TerminalInput)
+	}
+}
+
+// Screens captured from Pi 0.85.1 in an AO auth terminal (120 columns), so the
+// reviewed markers are checked against what Pi actually renders.
+const (
+	piDefaultStartupScreen = ` pi v0.85.1
+ escape interrupt · ctrl+c/ctrl+d clear/exit · / commands · ! bash · ctrl+o more
+ Press ctrl+o to show full startup help and loaded resources.
+
+ Pi can explain its own features and look up its docs. Ask it how to use or extend Pi.
+
+────────────────────────────────────────────────────────────────────────────────
+~\.ao\data\auth-workspace\shellterm-a15141f25c4872b3
+0.0%/262k (auto)                                         (moonshotai) kimi-k2.6 • medium`
+	piQuietStartupWithModelScreen = `────────────────────────────────────────────────────────────────────────────────
+~\.ao\data\auth-workspace\shellterm-a86fe63f7a8f957d
+0.0%/1.0M (auto)                                       (zai-coding-cn) glm-5.3 • high`
+	piQuietStartupWithoutModelScreen = `────────────────────────────────────────────────────────────────────────────────
+~\.ao\data\auth-workspace\shellterm-0c1d2e3f4a5b6c7d
+0.0%/0 (auto)                                                                   no-model`
+	piStillLoadingScreen = ` pi v0.85.1
+ escape interrupt · ctrl+c/ctrl+d clear/exit · / commands · ! bash · ctrl+o more`
+)
+
+func TestPiReadyStatesMatchRenderedPiScreens(t *testing.T) {
+	t.Parallel()
+
+	readyStates := planByAgentID["pi"].initialInputReadyStates
+	for _, tc := range []struct {
+		name   string
+		screen string
+		ready  bool
+	}{
+		{name: "default startup", screen: piDefaultStartupScreen, ready: true},
+		{name: "quietStartup with a selected model", screen: piQuietStartupWithModelScreen, ready: true},
+		{name: "quietStartup without a model", screen: piQuietStartupWithoutModelScreen, ready: true},
+		{name: "before the footer renders", screen: piStillLoadingScreen, ready: false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			got := shellterm.MatchInitialInputReadyState(tc.screen, readyStates)
+			if (got != nil) != tc.ready {
+				t.Fatalf("MatchInitialInputReadyState = %#v, want ready %v", got, tc.ready)
+			}
+		})
+	}
+}
+
+func TestStartOpensKimchiPTYAndAutomaticallyRunsLogin(t *testing.T) {
+	t.Parallel()
+
+	opener := &recordingTerminalOpener{}
+	svc := New(foundExecutable("kimchi"), opener)
+
+	got, err := svc.Start(context.Background(), "kimchi")
+	if err != nil {
+		t.Fatalf("Start(kimchi): %v", err)
+	}
+	wantStates := []shellterm.InitialInputReadyState{
+		{Text: "Select authentication method:", SkipInput: true},
+		{Text: "/ for commands"},
+	}
+	wantInput := shellterm.OpenCommandTerminalInput{
+		Owner:                   "agentauth:kimchi",
+		Argv:                    []string{"/test/bin/kimchi"},
+		Title:                   "Log in to Kimchi",
+		InitialInput:            "/login",
+		InitialInputReadyStates: wantStates,
+	}
+	if !reflect.DeepEqual(opener.input, wantInput) {
+		t.Fatalf("OpenCommandTerminal input = %#v, want %#v", opener.input, wantInput)
+	}
+	if got.TerminalInput != "" {
+		t.Fatalf("TerminalInput = %q, want empty because Kimchi login is automatic inside the PTY", got.TerminalInput)
 	}
 }
 
@@ -130,6 +333,39 @@ func TestStartOpensCodexLoginMethodMenu(t *testing.T) {
 	}
 }
 
+func TestStartPinsClaudeDataDirectoryAcrossAuthWorkspaceChange(t *testing.T) {
+	t.Chdir(t.TempDir())
+	t.Setenv("AO_DATA_DIR", "data")
+	cfg, err := config.Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	opener := &recordingTerminalOpener{}
+	svc := NewWithAgentResolver(foundExecutable("claude"), nil, opener, cfg.DataDir)
+	svc.selfExecutable = func() (string, error) { return "/managed/bin/ao", nil }
+	if _, err := svc.Start(context.Background(), "claude-code"); err != nil {
+		t.Fatal(err)
+	}
+	if got := opener.input.Env["AO_DATA_DIR"]; got != cfg.DataDir || !filepath.IsAbs(got) {
+		t.Fatalf("launcher data directory = %q, want absolute %q", got, cfg.DataDir)
+	}
+	// Reproduce the launcher's cwd and inherited environment without starting
+	// a process. The login command uses config.Load to find its token file.
+	authWorkspace := filepath.Join(cfg.DataDir, "auth-workspace", "shellterm-test")
+	if err := os.MkdirAll(authWorkspace, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	t.Chdir(authWorkspace)
+	t.Setenv("AO_DATA_DIR", opener.input.Env["AO_DATA_DIR"])
+	launcherConfig, err := config.Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if launcherConfig.DataDir != cfg.DataDir {
+		t.Fatalf("launcher resolved %q, want daemon root %q", launcherConfig.DataDir, cfg.DataDir)
+	}
+}
+
 func TestStartPrefersAdapterResolvedBinaryOverGenericPATHMatch(t *testing.T) {
 	t.Parallel()
 
@@ -151,6 +387,7 @@ func TestStartPreparesKimiAuthWorkspaceWithSeededTrust(t *testing.T) {
 	// seed lands in a throwaway home instead of the developer's real one.
 	home := t.TempDir()
 	t.Setenv("HOME", home)
+	t.Setenv("USERPROFILE", home)
 	t.Setenv("KIMI_CODE_HOME", "")
 
 	dataDir := t.TempDir()
@@ -181,8 +418,56 @@ func TestStartPreparesKimiAuthWorkspaceWithSeededTrust(t *testing.T) {
 	if err != nil {
 		t.Fatalf("read trust record: %v", err)
 	}
-	if !strings.Contains(string(data), `"root":"`+wantDir+`"`) {
+	var trust struct {
+		Root string `json:"root"`
+	}
+	if err := json.Unmarshal(data, &trust); err != nil || filepath.Clean(trust.Root) != filepath.Clean(wantDir) {
 		t.Fatalf("trust record = %s, want root %q", data, wantDir)
+	}
+}
+
+func TestStartPreparesCopilotAuthWorkspaceWithSeededTrust(t *testing.T) {
+	// Not parallel: isolates HOME/COPILOT_HOME so the copilot adapter's trust
+	// seed lands in a throwaway home instead of the developer's real one.
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("USERPROFILE", home)
+	t.Setenv("COPILOT_HOME", "")
+
+	dataDir := t.TempDir()
+	opener := &recordingTerminalOpener{}
+	svc := NewWithAgentResolver(foundExecutable("copilot"), nil, opener, dataDir)
+
+	if _, err := svc.Start(context.Background(), "copilot"); err != nil {
+		t.Fatalf("Start(copilot): %v", err)
+	}
+	wantDir := filepath.Join(dataDir, "auth-workspace", "copilot")
+	if opener.input.WorkingDir != wantDir {
+		t.Fatalf("terminal working dir = %q, want %q", opener.input.WorkingDir, wantDir)
+	}
+	if got := opener.input.Argv; !reflect.DeepEqual(got, []string{"/test/bin/copilot"}) {
+		t.Fatalf("terminal argv = %#v, want copilot TUI launch", got)
+	}
+	if opener.input.InitialInput != "/login" {
+		t.Fatalf("initial input = %q, want automatic /login injection", opener.input.InitialInput)
+	}
+	if got := opener.input.InitialInputReadyStates; !reflect.DeepEqual(got, []shellterm.InitialInputReadyState{{Text: "/ commands"}}) {
+		t.Fatalf("initial input ready states = %#v, want Copilot composer footer", got)
+	}
+	if !opener.input.SendInitialInputOnReadyTimeout {
+		t.Fatal("Copilot login does not fall back to /login after a slow startup")
+	}
+	data, err := os.ReadFile(filepath.Join(home, ".copilot", "config.json"))
+	if err != nil {
+		t.Fatalf("read copilot config: %v", err)
+	}
+	realDir := wantDir
+	if resolved, err := filepath.EvalSymlinks(wantDir); err == nil {
+		realDir = resolved
+	}
+	encodedDir, err := json.Marshal(realDir)
+	if err != nil || !strings.Contains(string(data), string(encodedDir)) {
+		t.Fatalf("copilot config = %s, want trusted folder %q", data, realDir)
 	}
 }
 
@@ -190,6 +475,9 @@ type recordingTerminalOpener struct {
 	calls    int
 	input    shellterm.OpenCommandTerminalInput
 	terminal shellterm.ShellTerminal
+	alive    bool
+	probeErr error
+	listErr  error
 }
 
 type managedExecutableResolver struct {
@@ -221,4 +509,101 @@ func (o *recordingTerminalOpener) OpenCommandTerminal(_ context.Context, in shel
 	o.calls++
 	o.input = in
 	return o.terminal, nil
+}
+
+func (o *recordingTerminalOpener) IsShellTerminalChildAlive(context.Context, string) (bool, error) {
+	return o.alive, o.probeErr
+}
+
+func (o *recordingTerminalOpener) CommandTerminalHandles(_ context.Context, owner string) ([]string, error) {
+	if o.listErr != nil {
+		return nil, o.listErr
+	}
+	if o.calls > 0 && o.input.Owner == owner && o.terminal.HandleID != "" {
+		return []string{o.terminal.HandleID}, nil
+	}
+	return nil, nil
+}
+
+func TestLogoutUsesAdapterExecutableAndNeverLoginLauncher(t *testing.T) {
+	for _, tc := range []struct {
+		agent string
+		args  []string
+	}{
+		{"claude-code", []string{"auth", "logout"}},
+		{"codex", []string{"logout"}},
+		{"cursor", []string{"logout"}},
+		{"opencode", []string{"auth", "logout"}},
+	} {
+		t.Run(tc.agent, func(t *testing.T) {
+			opener := &recordingTerminalOpener{terminal: shellterm.ShellTerminal{HandleID: "logout-terminal"}}
+			resolver := managedExecutableResolver{agentID: tc.agent, path: "/managed/agent"}
+			svc := NewWithAgentResolver(nil, resolver, opener, "")
+			result, err := svc.Logout(context.Background(), tc.agent)
+			if err != nil {
+				t.Fatal(err)
+			}
+			want := append([]string{"/managed/agent"}, tc.args...)
+			if !reflect.DeepEqual(opener.input.Argv, want) {
+				t.Fatalf("argv = %v, want %v", opener.input.Argv, want)
+			}
+			if result.Action != "logout" || result.Terminal.HandleID != "logout-terminal" || result.TerminalInput != "" || opener.input.InitialInput != "" {
+				t.Fatalf("unexpected logout: %+v, input %+v", result, opener.input)
+			}
+		})
+	}
+}
+
+// MiniMax's bare logout targets the China account, so a saved Global login
+// must reach the CLI as --region global.
+func TestMiniMaxLogoutTargetsSavedRegion(t *testing.T) {
+	for _, tc := range []struct {
+		name, preference string
+		args             []string
+	}{
+		{"global", `{"version":1,"regions":{"prod":"en"}}`, []string{"logout", "--region", "global"}},
+		{"no preference", "", []string{"logout"}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			profile := t.TempDir()
+			t.Setenv("MINIMAX_DATA_DIR", profile)
+			if tc.preference != "" {
+				path := filepath.Join(profile, "preferences", "mcode-region.json")
+				if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
+					t.Fatal(err)
+				}
+				if err := os.WriteFile(path, []byte(tc.preference), 0o600); err != nil {
+					t.Fatal(err)
+				}
+			}
+			opener := &recordingTerminalOpener{terminal: shellterm.ShellTerminal{HandleID: "logout-terminal"}}
+			svc := NewWithAgentResolver(nil, managedExecutableResolver{agentID: "minimax-code", path: "/managed/mcode"}, opener, "")
+			if _, err := svc.Logout(context.Background(), "minimax-code"); err != nil {
+				t.Fatal(err)
+			}
+			if want := append([]string{"/managed/mcode"}, tc.args...); !reflect.DeepEqual(opener.input.Argv, want) {
+				t.Fatalf("argv = %v, want %v", opener.input.Argv, want)
+			}
+		})
+	}
+}
+
+func TestLogoutRejectsUnknownUnsupportedAndMissingExecutable(t *testing.T) {
+	for _, tc := range []struct{ agent, code string }{
+		{"not-a-harness", "AGENT_AUTH_TARGET_UNKNOWN"},
+		{"aider", "AGENT_LOGOUT_UNSUPPORTED"},
+		{"codex", "AGENT_AUTH_UNAVAILABLE"},
+	} {
+		t.Run(tc.agent, func(t *testing.T) {
+			opener := &recordingTerminalOpener{}
+			_, err := New(foundExecutables(nil), opener).Logout(context.Background(), tc.agent)
+			var apiErr *apierr.Error
+			if !errors.As(err, &apiErr) || apiErr.Code != tc.code {
+				t.Fatalf("error = %v, want %s", err, tc.code)
+			}
+			if opener.calls != 0 {
+				t.Fatal("rejected logout opened a terminal")
+			}
+		})
+	}
 }

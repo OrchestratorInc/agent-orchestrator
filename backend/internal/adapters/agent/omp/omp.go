@@ -32,8 +32,13 @@ func New() *Plugin {
 	return &Plugin{}
 }
 
+// EmitsSemanticMessageAcceptance reports that AO's OMP plugin includes the
+// accepted prompt text in its user-prompt-submit callback.
+func (p *Plugin) EmitsSemanticMessageAcceptance() bool { return true }
+
 var _ adapters.Adapter = (*Plugin)(nil)
 var _ ports.Agent = (*Plugin)(nil)
+var _ ports.SemanticMessageAcceptanceSignaler = (*Plugin)(nil)
 var _ ports.AgentAuthChecker = (*Plugin)(nil)
 var _ ports.AgentBinaryResolver = (*Plugin)(nil)
 var _ ports.AgentInterfaceHandoffHistoryProbe = (*Plugin)(nil)
@@ -72,6 +77,9 @@ func (p *Plugin) GetLaunchCommand(ctx context.Context, cfg ports.LaunchConfig) (
 		return nil, err
 	}
 	agentbase.AppendModelFlag(&cmd, cfg.Config, "--model")
+	if effort := strings.TrimSpace(cfg.Config.Effort); effort != "" {
+		cmd = append(cmd, "--thinking", effort)
+	}
 	if prompt := strings.TrimSpace(cfg.Prompt); prompt != "" {
 		cmd = append(cmd, prompt)
 	}
@@ -101,6 +109,9 @@ func (p *Plugin) GetRestoreCommand(ctx context.Context, cfg ports.RestoreConfig)
 		return nil, false, err
 	}
 	agentbase.AppendModelFlag(&cmd, cfg.Config, "--model")
+	if effort := strings.TrimSpace(cfg.Config.Effort); effort != "" {
+		cmd = append(cmd, "--thinking", effort)
+	}
 	cmd = append(cmd, "--resume", agentSessionID)
 	return cmd, true, nil
 }
@@ -214,4 +225,12 @@ func (p *Plugin) ompBinary(ctx context.Context) (string, error) {
 	}
 	p.resolvedBinary = binary
 	return binary, nil
+}
+
+// InvalidateBinaryResolution forgets the cached executable path, so the next
+// launch resolves it again: after AO installs a managed copy, for example.
+func (p *Plugin) InvalidateBinaryResolution() {
+	p.binaryMu.Lock()
+	p.resolvedBinary = ""
+	p.binaryMu.Unlock()
 }

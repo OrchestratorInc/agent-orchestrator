@@ -2,6 +2,7 @@ package ports
 
 import (
 	"context"
+	"time"
 
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
 )
@@ -58,4 +59,7 @@ type PRCommentObservation struct {
 	URL              string
 	Resolved         bool
 	AutoInjectReview bool
+	// CreatedAt is when the provider says the comment was written. Zero when
+	// the provider did not report it.
+	CreatedAt time.Time
 }

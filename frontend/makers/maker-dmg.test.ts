@@ -1,5 +1,7 @@
 import { describe, expect, it, vi, beforeEach } from "vitest";
 import { fileURLToPath } from "node:url";
+import { existsSync } from "node:fs";
+import path from "node:path";
 
 // Capture buildForge's args without pulling in electron-builder's real machinery.
 const buildForge = vi.fn<(forge: { dir: string }, options: any) => Promise<string[]>>(async () => [
@@ -33,6 +35,7 @@ vi.mock("node:child_process", async (importOriginal) => {
 });
 
 import MakerDMG, { sealDmg, verifyDmg } from "./maker-dmg";
+import { BACKGROUND_IMAGE, VOLUME_ICON } from "../scripts/build-mac-dmg.mjs";
 
 const makeOptions = {
 	dir: "/tmp/app/Agent Orchestrator-darwin-arm64",
@@ -138,6 +141,37 @@ describe("MakerDMG", () => {
 		// This array is exactly what Forge hands its publisher, so filtering here is
 		// what keeps a sidecar off the release regardless of how it got generated.
 		expect(await new MakerDMG().make(makeOptions)).toEqual(["/out/make/Agent Orchestrator-0.10.3-arm64.dmg"]);
+	});
+
+	// Without these options electron-builder still writes a .DS_Store, but with
+	// its generic template background, 80pt icons and a versioned volume name.
+	it("lays out the install window: branded background, large icons, app left of Applications", async () => {
+		await new MakerDMG().make(makeOptions);
+		const [, options] = buildForge.mock.calls.at(-1)!;
+		const dmg = options.config.dmg;
+		expect(dmg.title).toBe("Orchestrator");
+		expect(dmg.iconSize).toBe(128);
+		expect(dmg.background).toBe(BACKGROUND_IMAGE);
+		expect(path.basename(BACKGROUND_IMAGE)).toBe("background.png");
+		// electron-builder only merges in the Retina art if it sits beside the 1x file.
+		expect(existsSync(BACKGROUND_IMAGE)).toBe(true);
+		expect(existsSync(BACKGROUND_IMAGE.replace(/\.png$/, "@2x.png"))).toBe(true);
+		expect(dmg.icon).toBe(VOLUME_ICON);
+		expect(existsSync(VOLUME_ICON)).toBe(true);
+		expect(dmg.contents).toEqual([
+			{ x: 170, y: 184, type: "file" },
+			{ x: 490, y: 184, type: "link", path: "/Applications" },
+		]);
+	});
+
+	it("keeps the signing-related dmg options when the layout is applied", async () => {
+		const maker = new MakerDMG({ dmg: { iconSize: 100 } });
+		await maker.prepareConfig(makeOptions.targetArch);
+		await maker.make(makeOptions);
+		const [, options] = buildForge.mock.calls.at(-1)!;
+		expect(options.config.dmg).toMatchObject({ sign: false, writeUpdateInfo: false, iconSize: 100 });
+		// The layout must not drop the volume or artifact naming either.
+		expect(options.config.dmg.artifactName).toBeUndefined();
 	});
 });
 

@@ -3,6 +3,7 @@ package cli
 import (
 	"bufio"
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -11,6 +12,7 @@ import (
 	"github.com/spf13/cobra"
 
 	"github.com/aoagents/agent-orchestrator/backend/internal/config"
+	"github.com/aoagents/agent-orchestrator/backend/internal/datadirlock"
 	"github.com/aoagents/agent-orchestrator/backend/internal/legacyimport"
 	"github.com/aoagents/agent-orchestrator/backend/internal/runfile"
 	"github.com/aoagents/agent-orchestrator/backend/internal/storage/sqlite"
@@ -27,7 +29,7 @@ func newImportCommand(ctx *commandContext) *cobra.Command {
 	var opts importOptions
 	cmd := &cobra.Command{
 		Use:   "import",
-		Short: "Import projects from a legacy AO install",
+		Short: "Import projects from a legacy Orchestrator install",
 		Long: "Import reads the legacy Agent Orchestrator flat-file store " +
 			"(~/.agent-orchestrator) read-only and ports its projects and per-project " +
 			"settings into the rewrite database. Legacy files are never modified, and " +
@@ -38,7 +40,7 @@ func newImportCommand(ctx *commandContext) *cobra.Command {
 			return ctx.runImport(cmd, opts)
 		},
 	}
-	cmd.Flags().StringVar(&opts.from, "from", "", "Legacy AO root to read (default ~/.agent-orchestrator)")
+	cmd.Flags().StringVar(&opts.from, "from", "", "Legacy Orchestrator root to read (default ~/.agent-orchestrator)")
 	cmd.Flags().BoolVar(&opts.dryRun, "dry-run", false, "Parse and report the planned import without writing")
 	cmd.Flags().BoolVarP(&opts.yes, "yes", "y", false, "Skip the confirmation prompt (for non-interactive use)")
 	cmd.Flags().BoolVar(&opts.json, "json", false, "Output the import report as JSON")
@@ -56,7 +58,7 @@ func (c *commandContext) runImport(cmd *cobra.Command, opts importOptions) error
 	if live, err := runfile.CheckStale(cfg.RunFilePath); err != nil {
 		return fmt.Errorf("inspect run-file: %w", err)
 	} else if live != nil {
-		return usageError{fmt.Errorf("the AO daemon is running (pid %d); stop it first with `ao stop` before importing", live.PID)}
+		return usageError{fmt.Errorf("the Orchestrator daemon is running (pid %d); stop it first with `ao stop` before importing", live.PID)}
 	}
 
 	root := opts.from
@@ -71,7 +73,7 @@ func (c *commandContext) runImport(cmd *cobra.Command, opts importOptions) error
 		return fmt.Errorf("legacy config at %s: %w", root, parseErr)
 	}
 	if !legacyimport.HasLegacyData(root) {
-		_, err := fmt.Fprintf(cmd.OutOrStdout(), "No legacy AO projects found at %s. Nothing to import.\n", root)
+		_, err := fmt.Fprintf(cmd.OutOrStdout(), "No legacy Orchestrator projects found at %s. Nothing to import.\n", root)
 		return err
 	}
 
@@ -103,9 +105,22 @@ func (c *commandContext) runImport(cmd *cobra.Command, opts importOptions) error
 
 // executeImport opens the rewrite store, runs the import, and closes the store.
 // It is the one CLI path that opens the database directly: the import is a
-// one-time bootstrap that must run with the daemon stopped (guarded by the
-// caller), so it cannot go through the daemon's loopback API.
+// one-time bootstrap that must run with the daemon stopped, so it cannot go
+// through the daemon's loopback API. The caller's run-file check misses a
+// daemon with another AO_RUN_FILE or one still starting, so the import also
+// takes the daemon's data-dir lock before opening the store.
 func (c *commandContext) executeImport(ctx context.Context, cfg config.Config, opts legacyimport.Options) (legacyimport.Report, error) {
+	lock, err := datadirlock.Acquire(ctx, cfg.DataDir, 0)
+	if errors.Is(err, datadirlock.ErrLocked) {
+		return legacyimport.Report{}, usageError{fmt.Errorf("%w; stop that process before importing", err)}
+	}
+	// A file system that cannot lock files leaves only the run-file check, as
+	// before the lock; lock is nil then and Release a no-op.
+	if err != nil && !errors.Is(err, datadirlock.ErrUnsupported) {
+		return legacyimport.Report{}, err
+	}
+	defer func() { _ = lock.Release() }()
+
 	store, err := sqlite.Open(cfg.DataDir)
 	if err != nil {
 		return legacyimport.Report{}, fmt.Errorf("open store: %w", err)

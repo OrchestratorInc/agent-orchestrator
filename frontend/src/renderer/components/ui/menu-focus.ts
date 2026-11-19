@@ -1,4 +1,4 @@
-import { useCallback } from "react";
+import { createContext, useCallback, type PointerEvent } from "react";
 
 /**
  * Focus hand-off between a menu that is closing and the surface its selected
@@ -29,6 +29,36 @@ import { useCallback } from "react";
 let menuReturnTarget: HTMLElement | null = null;
 let capturedForMenu: HTMLElement | null = null;
 let pending: { borrower: Element; target: HTMLElement } | null = null;
+
+/**
+ * Published once a menu's teardown has genuinely finished: Presence let go of
+ * the content and the FocusScope restore Radix defers by a tick has been
+ * dispatched and either allowed or prevented. That is the last moment a closing
+ * menu can still move the caret or emit outside-interactions, so anything that
+ * opened a surface from it can stop covering for it here.
+ */
+export type MenuTeardownDetail = {
+	/** The menu content node — detached from the document by the time this fires. */
+	menu: HTMLElement;
+	/** Where Radix would have restored focus, or null when there was nowhere to go. */
+	trigger: HTMLElement | null;
+};
+
+type MenuTeardownListener = (detail: MenuTeardownDetail) => void;
+const teardownListeners = new Set<MenuTeardownListener>();
+
+export function onMenuTeardownComplete(listener: MenuTeardownListener): () => void {
+	teardownListeners.add(listener);
+	return () => {
+		teardownListeners.delete(listener);
+	};
+}
+
+function publishMenuTeardownComplete(menu: HTMLElement) {
+	const detail: MenuTeardownDetail = { menu, trigger: menuReturnTarget };
+	// Copy before iterating so a listener can unsubscribe re-entrantly.
+	for (const listener of [...teardownListeners]) listener(detail);
+}
 
 /**
  * Remember, while the menu is open, where focus should end up once it is done
@@ -67,6 +97,15 @@ export function useMenuReturnTarget<T extends HTMLElement>() {
 			if (trigger) menuReturnTarget = trigger;
 		});
 	}, []);
+}
+
+/**
+ * Where the open menu would return focus: its trigger, or for a context menu
+ * the element the user was on. A surface opened from a menu item that has no
+ * trigger of its own (the archive modal) returns there when it closes.
+ */
+export function menuFocusReturnTarget(): HTMLElement | null {
+	return menuReturnTarget?.isConnected ? menuReturnTarget : null;
 }
 
 export function keepFocusOnOpenedSurface(event: Event) {
@@ -130,10 +169,47 @@ function handleFocusRelease(event: FocusEvent) {
 	);
 }
 
-/** Runs the caller's own handler first, then the hand-off guard. */
+/** Runs the caller's own handler first, then the hand-off guard, then reports the teardown. */
 export function composeMenuCloseAutoFocus(handler?: (event: Event) => void) {
 	return (event: Event) => {
 		handler?.(event);
 		keepFocusOnOpenedSurface(event);
+		const menu = event.currentTarget ?? event.target;
+		if (menu instanceof HTMLElement) publishMenuTeardownComplete(menu);
 	};
+}
+
+/**
+ * Pointer-leave for a menu row. Radix moves focus to the menu itself when the
+ * pointer leaves a row and then on to the next row, so going from one row to the
+ * next changes focus twice, and each change restyles the page. Going straight to
+ * a sibling row skips the first: that row's own hover takes focus.
+ */
+export function skipFocusHopToSibling(event: PointerEvent<HTMLElement>) {
+	const next = event.relatedTarget instanceof Element ? event.relatedTarget.closest('[role^="menuitem"]') : null;
+	if (next && next !== event.currentTarget && next.closest('[role="menu"]') === event.currentTarget.closest('[role="menu"]')) {
+		event.preventDefault();
+	}
+}
+
+/**
+ * Set by a menu root that is non-modal only to spare the page a restyle, not to
+ * let clicks through. Its content then makes an outside click do what a modal
+ * menu's would: close the menu and nothing else.
+ */
+export const ShieldOutsideClick = createContext(false);
+
+/** Swallows the click that follows an outside pointerdown which closed a menu. */
+export function swallowClickAfter(event: CustomEvent<{ originalEvent: globalThis.PointerEvent }>) {
+	if (event.defaultPrevented || event.detail.originalEvent.button !== 0) return;
+	const listening = new AbortController();
+	const swallow = (click: MouseEvent) => {
+		click.preventDefault();
+		click.stopPropagation();
+	};
+	// The click, if any, is dispatched right after pointerup; stop listening once it has had its turn.
+	const release = () => setTimeout(() => listening.abort());
+	document.addEventListener("click", swallow, { capture: true, signal: listening.signal });
+	document.addEventListener("pointerup", release, { capture: true, once: true, signal: listening.signal });
+	document.addEventListener("pointercancel", release, { capture: true, once: true, signal: listening.signal });
 }

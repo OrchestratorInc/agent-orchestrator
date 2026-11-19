@@ -261,8 +261,7 @@ func styledTerminalLines(output string) [][]styledRune {
 		if output[i] == '\x1b' {
 			if next, params, sgr := consumeEscape(output, i); next > i {
 				if sgr {
-					dim = applySGRDim(dim, params)
-					bold = applySGRBold(bold, params)
+					dim, bold = applySGR(dim, bold, params)
 				}
 				i = next
 				continue
@@ -311,28 +310,9 @@ func consumeEscape(output string, start int) (next int, params string, sgr bool)
 	}
 }
 
-func applySGRDim(current bool, params string) bool {
+func applySGR(dim, bold bool, params string) (bool, bool) {
 	if params == "" {
-		return false
-	}
-	for _, raw := range strings.FieldsFunc(params, func(r rune) bool { return r == ';' || r == ':' }) {
-		code, err := strconv.Atoi(raw)
-		if err != nil {
-			continue
-		}
-		switch code {
-		case 0, 22:
-			current = false
-		case 2:
-			current = true
-		}
-	}
-	return current
-}
-
-func applySGRBold(current bool, params string) bool {
-	if params == "" {
-		return false
+		return false, false
 	}
 	fields := strings.Split(params, ";")
 	for i := 0; i < len(fields); i++ {
@@ -346,8 +326,9 @@ func applySGRBold(current bool, params string) bool {
 		}
 		// Extended foreground, background, and underline colors use either
 		// 38:2:... / 38:5:... or semicolon-separated payloads. Their color values
-		// are data, not independent SGR attributes (a palette index of 1 is not
-		// bold). Skip the whole payload before examining later attributes.
+		// are data, not independent SGR attributes (the 2 in 38;2;R;G;B is not
+		// dim, a palette index of 1 is not bold). Skip the whole payload before
+		// examining later attributes.
 		if code == 38 || code == 48 || code == 58 {
 			if strings.Contains(fields[i], ":") || i+1 >= len(fields) {
 				continue
@@ -362,12 +343,14 @@ func applySGRBold(current bool, params string) bool {
 		}
 		switch code {
 		case 0, 22:
-			current = false
+			dim, bold = false, false
 		case 1:
-			current = true
+			bold = true
+		case 2:
+			dim = true
 		}
 	}
-	return current
+	return dim, bold
 }
 
 func trimLeftStyledSpace(line []styledRune) []styledRune {

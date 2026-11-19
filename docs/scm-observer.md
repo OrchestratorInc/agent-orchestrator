@@ -87,6 +87,13 @@ readiness" state is purely `ci.state ∈ {unknown, pending}` or
 `mergeability.state == unknown` in the served summary
 (`frontend/src/renderer/lib/pr-display.ts`).
 
+PRs a worker reports with `ao report --pr-created` show as "Reported by worker"
+links unless the session already tracks them (`ListPRListing`). That check
+compares normalized URLs after mapping a repository's old name to its current
+one through `repository_renames`. Discovery fills that table when a listing
+under one name returns PRs whose base repository has another name, so a link
+built from a renamed origin still matches the tracked PR.
+
 ## The Polling Pipeline
 
 `Observer.Poll` (`backend/internal/observe/scm/observer.go`) runs every 30s
@@ -113,10 +120,15 @@ Stage notes:
 - **Subjects** are the observer's in-memory unit of tracking: one live session
   + one tracked PR row + the repo identity to poll it under. Terminated
   sessions produce no subjects; their PRs stop being observed.
-- **Repo scan set** (`resolveScanRepos`): the project origin plus every other
-  GitHub/GitLab remote in the checkout (upstreams, mirrors). Attribution still
-  requires the PR's head repo to be a session's push origin, so extra remotes
-  only surface cross-fork PRs.
+- **Remote discovery** (`resolveScanRepos`): combine the registered origin with
+  all fetch and push URLs reported by Git. Supported destinations are deduplicated
+  before polling. A fork can therefore supply a head branch even when it appears
+  only in a remote's push configuration.
+- **Head eligibility**: each base repository has a set of permitted head names
+  from its checkout, restricted to that base's provider and host. Workspace
+  children sharing a base contribute to the same set regardless of child order;
+  their other bases retain separate sets. Discovery still checks the authenticated
+  author and session branch ownership. Unknown or deleted heads are excluded.
 - **Candidate selection** is incremental: once a repo has a sync cursor, only
   PRs in the updated listing, PRs with a changed commit-check ETag, or PRs
   older than `DefaultPRMaxAge` are re-fetched.

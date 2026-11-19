@@ -242,13 +242,13 @@ func TestSteerOrSendRouteReturnsAtomicOutcome(t *testing.T) {
 		},
 	}
 	status, body, _ := postSteerOrSend(t, svc, map[string]any{
-		"text": "correct it", "clientMessageId": "atomic-1",
+		"text": "correct it", "clientMessageId": "atomic-1", "senderSessionId": "worker-1",
 	})
 	if status != http.StatusAccepted || body["outcome"] != "steered" || body["providerTurnId"] != "provider-turn-1" {
 		t.Fatalf("status=%d body=%v", status, body)
 	}
 	if len(svc.atomicSeen) != 1 || svc.atomicSeen[0].ClientMessageID != "atomic-1" ||
-		len(svc.recoverOnly) != 1 || svc.recoverOnly[0] {
+		len(svc.recoverOnly) != 1 || svc.recoverOnly[0] || svc.atomicSeen[0].SenderSessionID != "worker-1" {
 		t.Fatalf("atomic request = %+v recoverOnly=%v", svc.atomicSeen, svc.recoverOnly)
 	}
 }
@@ -370,6 +370,11 @@ func TestSteerRouteRefusalsAreTypedAndCoded(t *testing.T) {
 			name:       "interface transition",
 			err:        chatsvc.ErrControllerHandoff,
 			wantStatus: http.StatusConflict, wantCode: "CHAT_INTERFACE_TRANSITION",
+		},
+		{
+			name:       "chat open in another process",
+			err:        chatsvc.ErrChatOpenElsewhere,
+			wantStatus: http.StatusConflict, wantCode: "CHAT_OPEN_ELSEWHERE",
 		},
 		{
 			name:       "terminal-mode session",

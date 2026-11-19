@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"log/slog"
 	"maps"
+	"reflect"
 	"slices"
 	"strings"
 	"sync"
@@ -14,6 +15,9 @@ import (
 	"testing"
 	"time"
 
+	acpdriver "github.com/aoagents/agent-orchestrator/backend/internal/adapters/chatdriver/acp"
+	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/chatdriver/kimiacp"
+	"github.com/aoagents/agent-orchestrator/backend/internal/attachmentstore"
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
 	"github.com/aoagents/agent-orchestrator/backend/internal/lifecycle"
 	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
@@ -32,7 +36,7 @@ const (
 	testSession = domain.SessionID("p1-1")
 )
 
-func openStore(t *testing.T) *sqlite.Store {
+func openStore(t *testing.T, imports ...*domain.SessionImportSource) *sqlite.Store {
 	t.Helper()
 	dir := t.TempDir()
 	st := sqlitetest.MustOpenAt(t, dir)
@@ -45,7 +49,12 @@ func openStore(t *testing.T) *sqlite.Store {
 	}); err != nil {
 		t.Fatalf("seed project: %v", err)
 	}
+	var source *domain.SessionImportSource
+	if len(imports) > 0 {
+		source = imports[0]
+	}
 	if _, err := st.CreateSession(ctx, domain.SessionRecord{
+		Metadata:  domain.SessionMetadata{ImportSource: source},
 		ID:        testSession,
 		ProjectID: testProject,
 		Kind:      domain.KindOrchestrator,
@@ -66,16 +75,28 @@ func fullSnapshotReader(st *sqlite.Store) chatsvc.SnapshotReader {
 			return chatsvc.ConversationRows{}, err
 		}
 		return chatsvc.ConversationRows{
-			Conversation: rows.Conversation, Turns: rows.Turns,
+			Conversation: rows.Conversation, ActiveBranch: rows.ActiveBranch, Turns: rows.Turns,
 			Messages: rows.Messages, Activities: rows.Activities,
 			BranchPoints: rows.BranchPoints, BranchedFromEarlierMessage: rows.BranchedFromEarlierMessage,
 		}, nil
 	})
 }
 
+func boundedSnapshotReader(st *sqlite.Store) chatsvc.SnapshotPageReader {
+	return chatsvc.SnapshotPageReaderFunc(func(ctx context.Context, id string, before, after, limit int64) (chatsvc.ConversationRows, error) {
+		rows, err := st.LoadConversationSnapshotRange(ctx, id, before, after, limit)
+		return chatsvc.ConversationRows{Conversation: rows.Conversation, ActiveBranch: rows.ActiveBranch,
+			Turns: rows.Turns, Messages: rows.Messages, Activities: rows.Activities}, err
+	})
+}
+
 /* ---- a fake conversation the controller can drive ---------------------- */
 
 type fakeConversation struct {
+	// noNetwork makes SandboxAllowsNetwork report a sandbox with no network.
+	noNetwork bool
+	// networkMode, when set, is the one approval mode whose sandbox has network.
+	networkMode            ports.PermissionMode
 	events                 chan ports.ChatEvent
 	providerConversationID string
 
@@ -254,6 +275,15 @@ func newFakeConversation() *fakeConversation {
 }
 
 func (f *fakeConversation) ProviderConversationID() string { return f.providerConversationID }
+
+// SandboxAllowsNetwork is the agent sandbox's network, as Codex reports it;
+// noNetwork plays a Codex thread in accept-edits or auto.
+func (f *fakeConversation) SandboxAllowsNetwork(mode ports.PermissionMode) bool {
+	if f.networkMode != "" {
+		return mode == f.networkMode
+	}
+	return !f.noNetwork
+}
 func (f *fakeConversation) Capabilities() ports.ChatCapabilities {
 	f.mu.Lock()
 	defer f.mu.Unlock()
@@ -370,6 +400,15 @@ type fakeDriver struct {
 	probe     func() error
 	start     func(ports.ChatStartConfig) (ports.ChatConversation, error)
 	resume    func(ports.ChatResumeConfig) (ports.ChatConversation, error)
+	// probeSandbox, when set, is what the reviewer preflight sees when it asks
+	// whether the read-only provider sandbox can start.
+	probeSandbox func(ports.ChatSandboxProbeConfig) error
+	// supports, when set, is the agent's answer to which permission modes it runs in.
+	supports func(ports.PermissionMode) bool
+}
+
+func (d fakeDriver) SupportsPermissionMode(mode ports.PermissionMode) bool {
+	return d.supports == nil || d.supports(mode)
 }
 
 type sequenceDriver struct {
@@ -399,6 +438,12 @@ func (d *sequenceDriver) Resume(context.Context, ports.ChatResumeConfig) (ports.
 }
 
 func (d fakeDriver) Harness() domain.AgentHarness { return domain.HarnessCodex }
+func (d fakeDriver) ProbeSandbox(_ context.Context, cfg ports.ChatSandboxProbeConfig) error {
+	if d.probeSandbox == nil {
+		return nil
+	}
+	return d.probeSandbox(cfg)
+}
 func (d fakeDriver) Probe(context.Context) (ports.ChatCapabilities, error) {
 	if d.probe != nil {
 		if err := d.probe(); err != nil {
@@ -541,6 +586,40 @@ func TestFailedChatProbeCanBeRetriedThenCached(t *testing.T) {
 	}
 	if attempts != 2 {
 		t.Fatalf("Probe attempts = %d, want one failed attempt plus one cached success", attempts)
+	}
+}
+
+func TestContextualChatPreflightRevalidatesEnvironmentAfterCapabilityCache(t *testing.T) {
+	sentinel := errors.New("required native config missing")
+	driver := acpdriver.New(acpdriver.Config{
+		Harness:      domain.HarnessCodex,
+		Capabilities: productionCaps(),
+		Probe:        func(context.Context) error { return nil },
+		Launch: func(context.Context, acpdriver.LaunchConfig) (acpdriver.Launch, error) {
+			t.Fatal("preflight launched a provider")
+			return acpdriver.Launch{}, nil
+		},
+		ValidateEnvironment: func(_ context.Context, env map[string]string) error {
+			if env["CONFIG"] != "/project/native.yaml" {
+				return sentinel
+			}
+			return nil
+		},
+	}, nil)
+	svc := chatsvc.New(chatsvc.Options{Drivers: fakeRegistry{driver: driver}})
+	if err := svc.PreflightChat(context.Background(), domain.HarnessCodex, ports.PermissionModeDefault); err != nil {
+		t.Fatalf("global capability probe: %v", err)
+	}
+	if err := svc.PreflightChatWithEnv(context.Background(), domain.HarnessCodex, ports.PermissionModeDefault, map[string]string{"CONFIG": "/project/native.yaml"}); err != nil {
+		t.Fatalf("project config rejected: %v", err)
+	}
+	if err := svc.PreflightChatWithEnv(context.Background(), domain.HarnessCodex, ports.PermissionModeDefault, nil); !errors.Is(err, sentinel) {
+		t.Fatalf("cached capabilities bypassed required config: %v", err)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	if err := svc.PreflightChatWithEnv(ctx, domain.HarnessCodex, ports.PermissionModeDefault, map[string]string{"CONFIG": "/project/native.yaml"}); !errors.Is(err, context.Canceled) {
+		t.Fatalf("cached capabilities bypassed cancellation: %v", err)
 	}
 }
 
@@ -748,7 +827,112 @@ func TestServicePersistsAndPassesInitialModelTuningBeforeProviderStart(t *testin
 	}
 }
 
-func TestPendingAgentSwitchFreshStartUsesReservedProviderScope(t *testing.T) {
+type reviewerModelConversation struct{ *fakeConversation }
+
+func (c reviewerModelConversation) ListModels(context.Context) ([]ports.ChatModel, error) {
+	return []ports.ChatModel{{ID: "review-model", DisplayName: "Review model", Efforts: []string{"high"}}}, nil
+}
+
+func TestReviewerModelSettingsStayWithReviewOwner(t *testing.T) {
+	st := openStore(t)
+	ctx := context.Background()
+	now := time.Now().UTC()
+	worker, err := st.CreateConversation(ctx, "worker-conversation", domain.ConversationScopeProject, testProject, testSession, now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	workerSettings := domain.ConversationSettings{Model: "worker-model", ApprovalMode: domain.PermissionModeAuto}
+	if err := st.SetConversationSettings(ctx, worker.ID, workerSettings, now); err != nil {
+		t.Fatal(err)
+	}
+	if err := st.UpsertReview(ctx, domain.Review{ID: "review-models", SessionID: testSession, ProjectID: testProject, Harness: domain.ReviewerCodex, CreatedAt: now, UpdatedAt: now}); err != nil {
+		t.Fatal(err)
+	}
+	provider := reviewerModelConversation{newFakeConversation()}
+	var synced bool
+	var ids atomic.Uint64
+	svc := chatsvc.New(chatsvc.Options{Store: st, Sessions: st, Drivers: fakeRegistry{driver: fakeDriver{conv: provider}}, Log: slog.New(slog.DiscardHandler), NewID: func() string { return fmt.Sprintf("review-model-%d", ids.Add(1)) }, OnModelChanged: func(domain.SessionID, string) { synced = true }})
+	owner := domain.ReviewConversationOwner("review-models")
+	t.Cleanup(func() { _ = svc.StopForOwner(context.Background(), owner) })
+	if _, err := svc.Start(ctx, chatsvc.StartConfig{Owner: owner, SessionID: testSession, ProjectID: testProject, Harness: domain.HarnessCodex, WorkspacePath: t.TempDir(), Permissions: ports.PermissionModeAuto}); err != nil {
+		t.Fatal(err)
+	}
+	models, settings, err := svc.ModelsForOwner(ctx, owner)
+	if err != nil || len(models) != 1 || models[0].ID != "review-model" {
+		t.Fatalf("models=%+v err=%v", models, err)
+	}
+	settings.Model = "review-model"
+	settings.ReasoningEffort = "high"
+	if _, err := svc.SetTurnSettingsForOwner(ctx, owner, settings); err != nil {
+		t.Fatal(err)
+	}
+	reviewConversation, err := st.ConversationForReview(ctx, owner.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if reviewConversation.Settings.Model != "review-model" || reviewConversation.Settings.ReasoningEffort != "high" {
+		t.Fatalf("review settings=%+v", reviewConversation.Settings)
+	}
+	workerAfter, err := st.LoadConversationSnapshot(ctx, worker.ID)
+	if err != nil || workerAfter.Conversation.Settings != workerSettings || synced {
+		t.Fatalf("worker settings=%+v synced=%v err=%v", workerAfter.Conversation.Settings, synced, err)
+	}
+	if _, err := svc.SendForOwner(ctx, owner, ports.ChatUserMessage{Text: "verify reviewer settings"}); err != nil {
+		t.Fatal(err)
+	}
+	sent := provider.sentMessages()
+	if len(sent) != 1 || sent[0].Settings.Model != "review-model" || sent[0].Settings.Effort != "high" {
+		t.Fatalf("provider turn settings = %+v", sent)
+	}
+	settings.ApprovalMode = domain.PermissionModeBypassPermissions
+	if _, err := svc.SetTurnSettingsForOwner(ctx, owner, settings); !errors.Is(err, chatsvc.ErrReviewerPermissionsFixed) {
+		t.Fatalf("changed fixed reviewer permissions: %v", err)
+	}
+}
+
+func TestReviewerChatUsesItsOwnProviderHost(t *testing.T) {
+	st := openStore(t)
+	now := time.Now().UTC()
+	if err := st.UpsertReview(context.Background(), domain.Review{
+		ID: "review-1", SessionID: testSession, ProjectID: testProject,
+		Harness: domain.ReviewerCodex, CreatedAt: now, UpdatedAt: now,
+	}); err != nil {
+		t.Fatalf("UpsertReview: %v", err)
+	}
+
+	provider := newFakeConversation()
+	var closed atomic.Bool
+	provider.onClose = func() { closed.Store(true) }
+	var started ports.ChatStartConfig
+	svc := chatsvc.New(chatsvc.Options{
+		Store: st, Sessions: st,
+		Drivers: fakeRegistry{driver: fakeDriver{conv: provider, startCfg: &started}},
+		Log:     slog.New(slog.DiscardHandler),
+		NewID:   func() string { return "review-conversation" },
+	})
+	owner := domain.ReviewConversationOwner("review-1")
+	t.Cleanup(func() { _ = svc.StopForOwner(context.Background(), owner) })
+
+	_, err := svc.Start(context.Background(), chatsvc.StartConfig{
+		Owner: owner, SessionID: testSession, ProjectID: testProject,
+		Harness: domain.HarnessCodex, WorkspacePath: t.TempDir(),
+	})
+	if err != nil {
+		t.Fatalf("Start reviewer chat: %v", err)
+	}
+	if started.SessionID != "review-review-1" {
+		t.Fatalf("reviewer provider host = %q, want review-review-1", started.SessionID)
+	}
+	if !started.ReadOnly {
+		t.Fatal("reviewer provider was not launched read-only")
+	}
+	svc.StopAll(context.Background())
+	if !closed.Load() {
+		t.Fatal("StopAll did not close the review-owned controller")
+	}
+}
+
+func TestPendingProviderHandoffFreshStartUsesReservedProviderScope(t *testing.T) {
 	st := openStore(t)
 	now := time.Date(2026, 8, 21, 10, 0, 0, 0, time.UTC)
 	record, found, err := st.GetSession(context.Background(), testSession)
@@ -787,7 +971,7 @@ func TestPendingAgentSwitchFreshStartUsesReservedProviderScope(t *testing.T) {
 	}
 }
 
-func TestPendingAgentSwitchResumeUsesReservedProviderScope(t *testing.T) {
+func TestPendingProviderHandoffResumeUsesReservedProviderScope(t *testing.T) {
 	st := openStore(t)
 	now := time.Date(2026, 8, 21, 11, 0, 0, 0, time.UTC)
 	record, found, err := st.GetSession(context.Background(), testSession)
@@ -869,6 +1053,9 @@ func TestOrdinaryResumeRejectsProviderHandleOutsideActiveBranch(t *testing.T) {
 	})
 	if err == nil || !strings.Contains(err.Error(), "does not match session handle") {
 		t.Fatalf("ordinary resume error = %v, want active-branch handle mismatch", err)
+	}
+	if !errors.Is(err, ports.ErrChatResumeFailed) {
+		t.Fatalf("mismatch error = %v, want ErrChatResumeFailed so the API answers 409", err)
 	}
 	if resumeCalls != 0 {
 		t.Fatalf("driver resume calls = %d, want mismatch rejected before provider launch", resumeCalls)
@@ -2629,7 +2816,7 @@ func TestInterfaceHandoffDoesNotAnchorReplayBeforeProviderCoordinationBoundary(t
 	}
 
 	// This completed turn belongs to the provider that owned the session before
-	// the agent switch. The new provider receives it through hidden handoff
+	// the provider handoff. The new provider receives it through hidden handoff
 	// instructions, so its native thread cannot replay the old provider IDs.
 	created, err := st.AppendUserMessage(context.Background(), existing.ID, testSession, "old-generation",
 		domain.ConversationMessage{
@@ -2999,6 +3186,16 @@ type harness struct {
 	ctrl      *chatsvc.Controller
 	activity  *recordingActivity
 	hostStops atomic.Int32
+	// accountChanges counts refusals and account updates; accountRechecks counts
+	// turns asking to read the session's account again.
+	accountChanges  atomic.Int32
+	accountRechecks atomic.Int32
+	renders         *attachmentstore.Store
+	rendersDir      string
+	// reconciled lists the sessions whose output type a save asked to update;
+	// reconcileErr is what that update returns.
+	reconciled   []domain.SessionID
+	reconcileErr error
 
 	clockMu sync.Mutex
 	clock   time.Time
@@ -3050,7 +3247,28 @@ func newHarnessWithConversationAndStoreForHarness(
 	agentHarness domain.AgentHarness,
 ) *harness {
 	t.Helper()
+	return newHarnessInWorkspace(t, conv, wrapStore, agentHarness, t.TempDir())
+}
+
+func newHarnessInWorkspace(
+	t *testing.T,
+	conv ports.ChatConversation,
+	wrapStore func(*sqlite.Store) chatsvc.Store,
+	agentHarness domain.AgentHarness,
+	workspace string,
+) *harness {
+	t.Helper()
 	st := openStore(t)
+	if agentHarness != domain.HarnessCodex {
+		record, found, err := st.GetSession(context.Background(), testSession)
+		if err != nil || !found {
+			t.Fatalf("read seeded session: found=%v, err=%v", found, err)
+		}
+		record.Harness = agentHarness
+		if err := st.UpdateSession(context.Background(), record); err != nil {
+			t.Fatalf("set seeded harness: %v", err)
+		}
+	}
 	base := newFakeConversation()
 	if conv == nil {
 		conv = base
@@ -3065,6 +3283,8 @@ func newHarnessWithConversationAndStoreForHarness(
 		activity: &recordingActivity{},
 		clock:    time.Date(2026, 8, 2, 10, 0, 0, 0, time.UTC),
 	}
+	h.rendersDir = t.TempDir()
+	h.renders = attachmentstore.New(h.rendersDir)
 
 	// Guarded because the id factory is called from both the projection goroutine and
 	// whichever goroutine a test drives commands from, and an unsynchronized counter
@@ -3075,8 +3295,10 @@ func newHarnessWithConversationAndStoreForHarness(
 	)
 	chatStore := wrapStore(st)
 	svc := chatsvc.New(chatsvc.Options{
-		Store:    chatStore,
-		Sessions: st,
+		Store:      chatStore,
+		Reader:     fullSnapshotReader(st),
+		PageReader: boundedSnapshotReader(st),
+		Sessions:   st,
 		StopProviderHost: func(context.Context, domain.SessionID) error {
 			h.hostStops.Add(1)
 			return nil
@@ -3084,20 +3306,32 @@ func newHarnessWithConversationAndStoreForHarness(
 		Drivers:  fakeRegistry{driver: fakeDriver{conv: conv}},
 		Activity: h.activity,
 		Log:      slog.New(slog.DiscardHandler),
+		OnAccountChanged: func(domain.SessionID, string, domain.AgentHarness) {
+			h.accountChanges.Add(1)
+		},
+		RecheckAccount: func(domain.SessionID, domain.AgentHarness) {
+			h.accountRechecks.Add(1)
+		},
 		NewID: func() string {
 			counterMu.Lock()
 			defer counterMu.Unlock()
 			counter++
 			return fmt.Sprintf("id-%03d", counter)
 		},
-		Now: h.now,
+		Now:     h.now,
+		Renders: h.renders,
+		DataDir: h.rendersDir,
+		ReconcileOutputType: func(_ context.Context, id domain.SessionID) error {
+			h.reconciled = append(h.reconciled, id)
+			return h.reconcileErr
+		},
 	})
 
 	ctrl, err := svc.Start(context.Background(), chatsvc.StartConfig{
 		SessionID:     testSession,
 		ProjectID:     testProject,
 		Harness:       agentHarness,
-		WorkspacePath: t.TempDir(),
+		WorkspacePath: workspace,
 	})
 	if err != nil {
 		t.Fatalf("Start: %v", err)
@@ -3159,6 +3393,108 @@ func TestStaleControllerEventsDoNotReachTheTimeline(t *testing.T) {
 
 /* ---- tests ------------------------------------------------------------- */
 
+func TestSendVerifiesExcerptAndFallsBackToTextForProvider(t *testing.T) {
+	for _, tt := range []struct{ name, source, selected string }{
+		{"desktop", "Keep this exact sentence.", "exact sentence"},
+		{"native", "# Title\n\n- First\n- Second\n\n```ts\ncode();\n```", "Title\n\n• First\n• Second\n\nts\ncode();"},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			h := newHarness(t)
+			ctx := context.Background()
+			seed, err := h.svc.Send(ctx, testSession, ports.ChatUserMessage{
+				Text: "seed", ClientMessageID: "excerpt-seed", Origin: domain.MessageOriginHuman,
+			})
+			if err != nil {
+				t.Fatalf("send seed: %v", err)
+			}
+			h.conv.emit(
+				ports.ChatEvent{Kind: ports.ChatEventTurnStarted, ProviderTurnID: seed.ProviderTurnID},
+				ports.ChatEvent{Kind: ports.ChatEventMessageDelta, ProviderTurnID: seed.ProviderTurnID,
+					ProviderItemID: "excerpt-source", Delta: tt.source},
+				ports.ChatEvent{Kind: ports.ChatEventMessageCompleted, ProviderTurnID: seed.ProviderTurnID,
+					ProviderItemID: "excerpt-source", Text: tt.source},
+				ports.ChatEvent{Kind: ports.ChatEventTurnCompleted, ProviderTurnID: seed.ProviderTurnID,
+					TurnState: domain.TurnStateCompleted},
+			)
+			snapshot := h.awaitSnapshot(t, func(s store.ConversationSnapshot) bool {
+				return len(s.Messages) == 2 && len(s.Turns) == 1 && s.Turns[0].State == domain.TurnStateCompleted
+			})
+			source := snapshot.Messages[1]
+
+			_, err = h.svc.Send(ctx, testSession, ports.ChatUserMessage{
+				Text: "Use it", ClientMessageID: "excerpt-followup", Origin: domain.MessageOriginHuman,
+				Excerpts: []ports.ChatExcerptReference{{
+					ConversationID: h.ctrl.ConversationID(), MessageID: source.ID,
+					Revision: source.Revision, Text: tt.selected,
+				}},
+			})
+			if err != nil {
+				t.Fatalf("send with excerpt: %v", err)
+			}
+			sent := h.conv.sentMessages()
+			if len(sent) != 2 || !strings.Contains(sent[1].Text, "Referenced chat excerpt") ||
+				!strings.Contains(sent[1].Text, tt.selected) || !strings.Contains(sent[1].Text, "User:\nseed\nAssistant:\n"+tt.source) || len(sent[1].Content) != 0 {
+				t.Fatalf("provider delivery = %#v", sent)
+			}
+			duplicate, err := h.svc.Send(ctx, testSession, ports.ChatUserMessage{
+				Text: "Use it", ClientMessageID: "excerpt-followup", Origin: domain.MessageOriginHuman,
+				Excerpts: []ports.ChatExcerptReference{{
+					ConversationID: h.ctrl.ConversationID(), MessageID: source.ID,
+					Revision: source.Revision + 1, Text: "no longer relevant to the accepted retry",
+				}},
+			})
+			if err != nil || duplicate.ID != "" {
+				t.Fatalf("idempotent excerpt retry = (%+v, %v), want duplicate success", duplicate, err)
+			}
+
+			_, err = h.svc.Send(ctx, testSession, ports.ChatUserMessage{
+				Text: "stale", Origin: domain.MessageOriginHuman,
+				Excerpts: []ports.ChatExcerptReference{{
+					ConversationID: h.ctrl.ConversationID(), MessageID: source.ID,
+					Revision: source.Revision + 1, Text: tt.selected,
+				}},
+			})
+			if !errors.Is(err, chatsvc.ErrExcerptStale) {
+				t.Fatalf("stale excerpt error = %v, want ErrExcerptStale", err)
+			}
+		})
+	}
+}
+
+// Claude Code can answer on its own after a background task finishes. That
+// message has no AO turn, but it is settled transcript the user can select.
+func TestSendAcceptsExcerptFromMessageOutsideAnyTurn(t *testing.T) {
+	h := newHarness(t)
+	ctx := context.Background()
+	source := "Nothing else has changed. Did you close the `test` window?"
+	h.conv.emit(
+		ports.ChatEvent{Kind: ports.ChatEventMessageDelta, ProviderItemID: "turnless", Delta: source},
+		ports.ChatEvent{Kind: ports.ChatEventMessageCompleted, ProviderItemID: "turnless", Text: source},
+	)
+	snapshot := h.awaitSnapshot(t, func(s store.ConversationSnapshot) bool {
+		return len(s.Messages) == 1 && !s.Messages[0].Streaming
+	})
+	message := snapshot.Messages[0]
+	if message.TurnID != "" {
+		t.Fatalf("source turn = %q, want a message outside any turn", message.TurnID)
+	}
+
+	if _, err := h.svc.Send(ctx, testSession, ports.ChatUserMessage{
+		Text: "I think it crashed", ClientMessageID: "turnless-followup", Origin: domain.MessageOriginHuman,
+		Excerpts: []ports.ChatExcerptReference{{
+			ConversationID: h.ctrl.ConversationID(), MessageID: message.ID,
+			Revision: message.Revision, Text: "Did you close the test window?",
+		}},
+	}); err != nil {
+		t.Fatalf("send with excerpt from a message outside any turn: %v", err)
+	}
+	sent := h.conv.sentMessages()
+	if len(sent) != 1 || !strings.Contains(sent[0].Text, "Selected text:\n---\nDid you close the test window?") ||
+		!strings.Contains(sent[0].Text, "Assistant:\n"+source) {
+		t.Fatalf("provider delivery = %#v", sent)
+	}
+}
+
 func TestProviderPromptFailureSettlesTurnAndRecordsRecoveryOnce(t *testing.T) {
 	h := newHarness(t)
 	turn, err := h.svc.Send(context.Background(), testSession, ports.ChatUserMessage{
@@ -3190,6 +3526,9 @@ func TestProviderPromptFailureSettlesTurnAndRecordsRecoveryOnce(t *testing.T) {
 	if snapshot.Turns[0].ErrorMessage != message {
 		t.Fatalf("turn error = %q", snapshot.Turns[0].ErrorMessage)
 	}
+	if got := snapshot.Turns[0].FailureCode; got != domain.ConversationFailureAuthRequired {
+		t.Fatalf("failure code = %q, want %q", got, domain.ConversationFailureAuthRequired)
+	}
 	if snapshot.Conversation.Account.ReauthReason != message {
 		t.Fatalf("reauth reason = %q", snapshot.Conversation.Account.ReauthReason)
 	}
@@ -3197,6 +3536,73 @@ func TestProviderPromptFailureSettlesTurnAndRecordsRecoveryOnce(t *testing.T) {
 		if activity.Kind == domain.ActivityKindError || strings.Contains(activity.ProviderItemID, "ao-reauth-") {
 			t.Fatalf("terminal failure was duplicated as an activity: %#v", activity)
 		}
+	}
+}
+
+// Claude's adapter sends "Not logged in · Please run /login" as a typed login
+// failure. The chat turns that into a sign-in button, so the turn carries the
+// code; a failure that is not about the login carries none.
+func TestRefusedLoginTurnCarriesAuthRequiredCode(t *testing.T) {
+	h := newHarness(t)
+	signedOut, err := h.svc.Send(context.Background(), testSession, ports.ChatUserMessage{
+		Text: "hello", ClientMessageID: "signed-out-prompt", Origin: domain.MessageOriginHuman,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	h.conv.emit(ports.ChatEvent{
+		Kind: ports.ChatEventTurnCompleted, ProviderTurnID: signedOut.ProviderTurnID,
+		TurnState: domain.TurnStateCompleted,
+		Err:       ports.NewChatProviderFailure("Not logged in · Please run /login", "", ports.ErrChatAuthRequired),
+	})
+	h.awaitSnapshot(t, func(s store.ConversationSnapshot) bool {
+		return len(s.Turns) == 1 && s.Turns[0].State == domain.TurnStateFailed
+	})
+	other, err := h.svc.Send(context.Background(), testSession, ports.ChatUserMessage{
+		Text: "again", ClientMessageID: "overloaded-prompt", Origin: domain.MessageOriginHuman,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	h.conv.emit(ports.ChatEvent{
+		Kind: ports.ChatEventTurnCompleted, ProviderTurnID: other.ProviderTurnID,
+		TurnState: domain.TurnStateFailed, Err: errors.New("provider overloaded"),
+	})
+	snapshot := h.awaitSnapshot(t, func(s store.ConversationSnapshot) bool {
+		return len(s.Turns) == 2 && s.Turns[1].State == domain.TurnStateFailed
+	})
+	if got := snapshot.Turns[0].FailureCode; got != domain.ConversationFailureAuthRequired {
+		t.Fatalf("signed-out turn failure code = %q, want %q", got, domain.ConversationFailureAuthRequired)
+	}
+	if snapshot.Turns[0].ErrorMessage != "Not logged in · Please run /login" {
+		t.Fatalf("signed-out turn keeps the provider text for details, got %q", snapshot.Turns[0].ErrorMessage)
+	}
+	if got := snapshot.Turns[1].FailureCode; got != "" {
+		t.Fatalf("ordinary failure code = %q, want none", got)
+	}
+}
+
+func TestProviderPromptFailurePersistsConfigurationCodeWithoutReauth(t *testing.T) {
+	h := newHarness(t)
+	turn, err := h.svc.Send(context.Background(), testSession, ports.ChatUserMessage{
+		Text: "hello", ClientMessageID: "missing-key-prompt", Origin: domain.MessageOriginHuman,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	h.conv.emit(ports.ChatEvent{
+		Kind: ports.ChatEventTurnCompleted, ProviderTurnID: turn.ProviderTurnID,
+		TurnState: domain.TurnStateFailed, Err: errors.New("ACP internal detail"),
+		FailureCode: domain.ConversationFailureProviderKeyMissing,
+	})
+	snapshot := h.awaitSnapshot(t, func(s store.ConversationSnapshot) bool {
+		return len(s.Turns) == 1 && s.Turns[0].State == domain.TurnStateFailed
+	})
+	if got := snapshot.Turns[0].FailureCode; got != domain.ConversationFailureProviderKeyMissing {
+		t.Fatalf("failure code = %q", got)
+	}
+	if snapshot.Turns[0].ErrorMessage != "ACP internal detail" || snapshot.Conversation.Account != nil && snapshot.Conversation.Account.ReauthRequiredAt != nil {
+		t.Fatalf("turn/account = %+v / %+v", snapshot.Turns[0], snapshot.Conversation.Account)
 	}
 }
 
@@ -3855,6 +4261,173 @@ func TestControllerReadyDurableSettingsRefreshBeforeFirstDispatch(t *testing.T) 
 	}
 }
 
+// configOptionConversation models a provider that owns its own session config
+// (e.g. Claude Code's model picker), so SetConfigOption has a real surface to
+// drive.
+type configOptionConversation struct {
+	*fakeConversation
+	mu      sync.Mutex
+	applied []ports.ChatConfigOptionValue
+}
+
+func (c *configOptionConversation) ListConfigOptions(context.Context) ([]ports.ChatConfigOption, error) {
+	return c.catalog(), nil
+}
+
+func (c *configOptionConversation) SetConfigOption(_ context.Context, _ string, value ports.ChatConfigOptionValue) ([]ports.ChatConfigOption, error) {
+	c.mu.Lock()
+	c.applied = append(c.applied, value)
+	c.mu.Unlock()
+	return c.catalog(), nil
+}
+
+// catalog reflects the most recently applied model select, the way a provider
+// reports the post-change state back.
+func (c *configOptionConversation) catalog() []ports.ChatConfigOption {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	current := ""
+	if len(c.applied) > 0 {
+		current = c.applied[len(c.applied)-1].Select
+	}
+	return []ports.ChatConfigOption{{
+		ID: "model", Category: "model",
+		Type:    ports.ChatConfigOptionSelect,
+		Current: ports.ChatConfigOptionValue{Select: current},
+	}}
+}
+
+// TestSetConfigOptionPersistsModelBeforeRouting covers the other model-change
+// route: provider-owned pickers like Claude Code's model menu go through the
+// config-options PATCH, which calls SetSettings directly. The pick must land on
+// the session's durable metadata the same way a turn-settings model change does
+// (#4893 follow-up), or a later TUI rebuild resumes with the stale model.
+func TestSetConfigOptionPersistsModelBeforeRouting(t *testing.T) {
+	st := openStore(t)
+	ctx := context.Background()
+	conv := &configOptionConversation{fakeConversation: newFakeConversation()}
+	var (
+		logMu sync.Mutex
+		log   []string
+	)
+	svc := chatsvc.New(chatsvc.Options{
+		Store: st, Sessions: st,
+		Drivers: fakeRegistry{driver: fakeDriver{conv: conv}},
+		Log:     slog.New(slog.DiscardHandler),
+		NewID:   func() string { return "config-option-model-id" },
+		OnModelChanged: func(id domain.SessionID, model string) {
+			logMu.Lock()
+			defer logMu.Unlock()
+			log = append(log, string(id)+":"+model)
+		},
+	})
+	t.Cleanup(func() { _ = svc.Stop(ctx, testSession) })
+	if _, err := svc.Start(ctx, chatsvc.StartConfig{
+		SessionID: testSession, ProjectID: testProject, Harness: domain.HarnessCodex,
+		WorkspacePath: t.TempDir(),
+	}); err != nil {
+		t.Fatalf("Start: %v", err)
+	}
+
+	// Picking a model through the config-options route persists it.
+	options, err := svc.SetConfigOption(ctx, testSession, "model", ports.ChatConfigOptionValue{Select: "5.6-haiku"})
+	if err != nil {
+		t.Fatalf("SetConfigOption: %v", err)
+	}
+	if len(options) == 0 || options[0].Current.Select != "5.6-haiku" {
+		t.Fatalf("post-change catalog = %+v, want the picked model", options)
+	}
+	if !reflect.DeepEqual(log, []string{string(testSession) + ":5.6-haiku"}) {
+		t.Fatalf("model persistence log = %v, want [%s:5.6-haiku]", log, testSession)
+	}
+
+	// Re-applying the same selection is a no-op.
+	if _, err := svc.SetConfigOption(ctx, testSession, "model", ports.ChatConfigOptionValue{Select: "5.6-haiku"}); err != nil {
+		t.Fatalf("SetConfigOption (same): %v", err)
+	}
+	if !reflect.DeepEqual(log, []string{string(testSession) + ":5.6-haiku"}) {
+		t.Fatalf("model persistence log after no-op = %v, want unchanged", log)
+	}
+
+	// A later pick through the same route supersedes the earlier one.
+	if _, err := svc.SetConfigOption(ctx, testSession, "model", ports.ChatConfigOptionValue{Select: "5.6-sonnet"}); err != nil {
+		t.Fatalf("SetConfigOption (sonnet): %v", err)
+	}
+	if !reflect.DeepEqual(log, []string{string(testSession) + ":5.6-haiku", string(testSession) + ":5.6-sonnet"}) {
+		t.Fatalf("model persistence log = %v, want haiku then sonnet", log)
+	}
+}
+
+// TestSetTurnSettingsPersistsModelBeforeRouting is the regression for the
+// ChatUI ↔ TUI model-persistence bug (#4893). A model the user picks in ChatUI
+// must be recorded on the session BEFORE the next prompt routes, so that when
+// ChatUI later hands off to TUI, the rebuilt terminal resumes with the same
+// model instead of reverting to the project default. The conversation row is
+// the chat-side source of truth already; this pins the extra session metadata
+// write that makes the choice visible to the TUI rebuild.
+func TestSetTurnSettingsPersistsModelBeforeRouting(t *testing.T) {
+	st := openStore(t)
+	ctx := context.Background()
+	conv := newFakeConversation()
+	var (
+		logMu sync.Mutex
+		log   []string
+	)
+	svc := chatsvc.New(chatsvc.Options{
+		Store: st, Sessions: st,
+		Drivers: fakeRegistry{driver: fakeDriver{conv: conv}},
+		Log:     slog.New(slog.DiscardHandler),
+		NewID:   func() string { return "persist-model-id" },
+		// Production wires this to the session manager, which writes the model onto
+		// the session's durable metadata before the next turn routes.
+		OnModelChanged: func(id domain.SessionID, model string) {
+			logMu.Lock()
+			defer logMu.Unlock()
+			log = append(log, string(id)+":"+model)
+		},
+	})
+	t.Cleanup(func() { _ = svc.Stop(ctx, testSession) })
+	if _, err := svc.Start(ctx, chatsvc.StartConfig{
+		SessionID: testSession, ProjectID: testProject, Harness: domain.HarnessCodex,
+		WorkspacePath: t.TempDir(),
+	}); err != nil {
+		t.Fatalf("Start: %v", err)
+	}
+
+	// A model change is persisted immediately (before the next prompt routes).
+	if _, err := svc.SetTurnSettings(ctx, testSession, domain.ConversationSettings{Model: "5.6-luna"}); err != nil {
+		t.Fatalf("SetTurnSettings (luna): %v", err)
+	}
+	if !reflect.DeepEqual(log, []string{string(testSession) + ":5.6-luna"}) {
+		t.Fatalf("model persistence log = %v, want [%s:5.6-luna]", log, testSession)
+	}
+
+	// Re-selecting the same model is a no-op: no redundant session write.
+	if _, err := svc.SetTurnSettings(ctx, testSession, domain.ConversationSettings{Model: "5.6-luna"}); err != nil {
+		t.Fatalf("SetTurnSettings (same): %v", err)
+	}
+	if !reflect.DeepEqual(log, []string{string(testSession) + ":5.6-luna"}) {
+		t.Fatalf("model persistence log after no-op = %v, want unchanged", log)
+	}
+
+	// A later change to another model lands too, so the TUI rebuild picks up the
+	// most recent choice rather than the first one.
+	if _, err := svc.SetTurnSettings(ctx, testSession, domain.ConversationSettings{Model: "5.6-full"}); err != nil {
+		t.Fatalf("SetTurnSettings (full): %v", err)
+	}
+	if !reflect.DeepEqual(log, []string{string(testSession) + ":5.6-luna", string(testSession) + ":5.6-full"}) {
+		t.Fatalf("model persistence log = %v, want luna then full", log)
+	}
+
+	// Clearing the override must clear session metadata for a later TUI rebuild.
+	if _, err := svc.SetTurnSettings(ctx, testSession, domain.ConversationSettings{}); err != nil {
+		t.Fatalf("SetTurnSettings (clear): %v", err)
+	}
+	if !reflect.DeepEqual(log, []string{string(testSession) + ":5.6-luna", string(testSession) + ":5.6-full", string(testSession) + ":"}) {
+		t.Fatalf("model persistence log = %v, want model override cleared", log)
+	}
+}
+
 type failConversationReadStore struct {
 	*sqlite.Store
 	reads int
@@ -4445,7 +5018,9 @@ func TestChatHandoffInterruptAbortAfterPreflightFailureResumesFencedQueue(t *tes
 	// queue; there may be no later completion event to trigger this drain.
 	h.svc.AbortChatHandoff(testSession)
 	h.awaitSnapshot(t, func(s store.ConversationSnapshot) bool {
-		return turnStateByText(t, s)["queued work survives preflight"] == domain.TurnStateRunning
+		// The asynchronous drain reserves the running turn before sending it.
+		return turnStateByText(t, s)["queued work survives preflight"] == domain.TurnStateRunning &&
+			len(h.conv.sentTexts()) >= 2
 	})
 	if got := h.conv.sentTexts(); len(got) != 2 || got[1] != "queued work survives preflight" {
 		t.Fatalf("provider received %v after abort, want preserved queue to resume", got)
@@ -4566,13 +5141,13 @@ func (s *failFirstQueueCancellationStore) CancelAllQueuedTurns(
 	ctx context.Context,
 	conversationID string,
 	now time.Time,
-) error {
+) (int, error) {
 	s.mu.Lock()
 	s.calls++
 	call := s.calls
 	s.mu.Unlock()
 	if call == 1 {
-		return errors.New("injected queue cancellation failure")
+		return 0, errors.New("injected queue cancellation failure")
 	}
 	return s.Store.CancelAllQueuedTurns(ctx, conversationID, now)
 }
@@ -4694,6 +5269,17 @@ func TestServiceStopTerminatesPersistentConversation(t *testing.T) {
 	}
 	if !provider.terminated.Load() {
 		t.Fatal("explicit session stop detached persistent conversation instead of terminating it")
+	}
+}
+
+func TestServiceTerminateAllTerminatesPersistentConversation(t *testing.T) {
+	provider := &terminatingConversation{fakeConversation: newFakeConversation()}
+	h := newHarnessWithConversation(t, provider)
+	if err := h.svc.TerminateAll(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if !provider.terminated.Load() {
+		t.Fatal("desktop quit detached the persistent provider instead of terminating it")
 	}
 }
 
@@ -5095,6 +5681,40 @@ func TestServiceLiveReconnectKeepsDurableRunningTurnBusy(t *testing.T) {
 	if after.Metadata.ControllerGeneration == before.Metadata.ControllerGeneration {
 		t.Fatal("generation did not rotate")
 	}
+	// ACP adapters emit their initialized ready state before live reconnect
+	// restores ownership of the durable turn. The queued notification is stale
+	// once that ownership has been restored and must not make the controller
+	// claim it is ready while the durable turn is still running.
+	secondProvider.emit(ports.ChatEvent{
+		Kind: ports.ChatEventControllerState, ProviderEventID: "reconnect-ready",
+		ControllerState: ports.ChatControllerReady,
+	})
+	deadline := time.Now().Add(time.Second)
+	readyProjected := false
+	for time.Now().Before(deadline) {
+		events, readErr := st.ProviderEventsSince(context.Background(), secondController.ConversationID(), 0, 10_000)
+		if readErr != nil {
+			t.Fatal(readErr)
+		}
+		seen := false
+		for _, event := range events {
+			if event.ProviderEventID == "reconnect-ready" {
+				seen = true
+				break
+			}
+		}
+		if seen {
+			readyProjected = true
+			break
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+	if !readyProjected {
+		t.Fatal("reconnect ready event was not projected")
+	}
+	if got := secondController.State(); got != ports.ChatControllerBusy {
+		t.Fatalf("controller state after reconnect ready event = %q, want busy for durable running turn", got)
+	}
 	queued, err := secondController.Send(context.Background(), ports.ChatUserMessage{Text: "after restart"})
 	if err != nil {
 		t.Fatalf("reconnect Send: %v", err)
@@ -5360,6 +5980,37 @@ func TestRelayedMessageIsAttributedToAutomation(t *testing.T) {
 	}
 	if got := h.conv.sentTexts(); len(got) != 1 || got[0] != "orchestrator: rebase onto main" {
 		t.Fatalf("provider received %v, want the relayed text dispatched", got)
+	}
+	rec, ok, err := h.st.GetSession(ctx, testSession)
+	if err != nil || !ok {
+		t.Fatalf("get session: ok=%v err=%v", ok, err)
+	}
+	if !rec.Metadata.LatestUserPromptAt.IsZero() {
+		t.Fatalf("automation advanced latest user prompt time to %s", rec.Metadata.LatestUserPromptAt)
+	}
+}
+
+func TestUserAuthoredRelayAdvancesUserActivityWithoutChangingOrigin(t *testing.T) {
+	h := newHarness(t)
+	ctx := context.Background()
+
+	if _, err := h.svc.RelayUserAuthoredChatTurn(ctx, testSession, "move this control closer to the heading"); err != nil {
+		t.Fatalf("RelayUserAuthoredChatTurn: %v", err)
+	}
+
+	snapshot := h.awaitSnapshot(t, func(s store.ConversationSnapshot) bool {
+		return len(s.Messages) >= 1
+	})
+	if got := snapshot.Messages[0].Origin; got != domain.MessageOriginAutomation {
+		t.Fatalf("user-authored relay origin = %q, want %q", got, domain.MessageOriginAutomation)
+	}
+	rec, ok, err := h.st.GetSession(ctx, testSession)
+	if err != nil || !ok {
+		t.Fatalf("get session: ok=%v err=%v", ok, err)
+	}
+	if rec.Metadata.LatestUserPrompt != "move this control closer to the heading" || !rec.Metadata.LatestUserPromptAt.Equal(h.now()) {
+		t.Fatalf("latest user prompt = %q at %s, want annotation at %s",
+			rec.Metadata.LatestUserPrompt, rec.Metadata.LatestUserPromptAt, h.now())
 	}
 }
 
@@ -5918,6 +6569,14 @@ func TestInterruptReconciliationCancelsQueuedTurns(t *testing.T) {
 // claims a turn is running and a queued message is waiting to be sent behind a
 // controller that no longer exists.
 func TestStartSettlesWorkLeftByAKilledController(t *testing.T) {
+	testStartSettlesWorkLeftByAKilledController(t, false)
+}
+
+func TestStartSettlesQueuedWorkLeftByAKilledController(t *testing.T) {
+	testStartSettlesWorkLeftByAKilledController(t, true)
+}
+
+func testStartSettlesWorkLeftByAKilledController(t *testing.T, queuedOnly bool) {
 	h := newHarness(t)
 	ctx := context.Background()
 
@@ -5938,6 +6597,11 @@ func TestStartSettlesWorkLeftByAKilledController(t *testing.T) {
 		ActivityStatus: domain.ActivityStatusPending, Summary: "Run something",
 	})
 	h.awaitSnapshot(t, func(s store.ConversationSnapshot) bool { return len(s.Activities) == 1 })
+	if queuedOnly {
+		if err := h.st.SettleTurn(ctx, h.ctrl.ConversationID(), "provider-turn-1", domain.TurnStateFailed, "crash", h.now()); err != nil {
+			t.Fatal(err)
+		}
+	}
 
 	// A killed daemon leaves the rows mid-flight and takes its service with it, so
 	// the next controller comes up in a NEW service over the SAME store. Building
@@ -5952,6 +6616,13 @@ func TestStartSettlesWorkLeftByAKilledController(t *testing.T) {
 		Now:      h.now,
 	})
 	t.Cleanup(func() { _ = next.Stop(context.Background(), testSession) })
+	// Retry moves an interrupted async start back to provisioning. That state
+	// must not hide the running turn left by its previous controller.
+	if !queuedOnly {
+		if _, err := h.st.SetSessionProvisionState(ctx, testSession, domain.SessionProvisionProvisioning, "", h.now()); err != nil {
+			t.Fatal(err)
+		}
+	}
 
 	if _, err := next.Start(ctx, chatsvc.StartConfig{
 		SessionID:              testSession,
@@ -6157,6 +6828,12 @@ func TestCodexRateLimitsUpdateActiveAccountCapacityWithoutConversationPersistenc
 	if err != nil {
 		t.Fatal(err)
 	}
+	// The capacity callback fires before the event reaches the archive.
+	for deadline := time.Now().Add(5 * time.Second); len(events) == 0 && time.Now().Before(deadline); time.Sleep(10 * time.Millisecond) {
+		if events, err = st.ProviderEventsSince(context.Background(), ctrl.ConversationID(), 0, 10); err != nil {
+			t.Fatal(err)
+		}
+	}
 	var archived map[string]any
 	if len(events) != 1 || json.Unmarshal([]byte(events[0].PayloadJson), &archived) != nil || archived["rateLimits"] != nil || strings.Contains(events[0].PayloadJson, "usedPercent") {
 		t.Fatalf("bound Codex capacity leaked into provider archive: %#v", events)
@@ -6327,6 +7004,38 @@ func TestCompactReportsWhatIsAboutToBeReclaimed(t *testing.T) {
 	}
 	if conv.compactCalls() != 1 {
 		t.Errorf("provider called %d times, want 1", conv.compactCalls())
+	}
+}
+
+func TestCompactionSettlementWithoutStartDrainsQueue(t *testing.T) {
+	for _, kind := range []ports.ChatEventKind{ports.ChatEventTurnCompleted, ports.ChatEventCompacted} {
+		t.Run(string(kind), func(t *testing.T) {
+			conv := newCompactingConversation()
+			sent := make(chan struct{}, 1)
+			conv.onSend = func(string) { sent <- struct{}{} }
+			h := newHarnessWithConversation(t, conv)
+			ctx := context.Background()
+			if _, err := h.svc.Compact(ctx, testSession); err != nil {
+				t.Fatal(err)
+			}
+			if turn, err := h.svc.Send(ctx, testSession, ports.ChatUserMessage{Text: "after compact"}); err != nil || turn.State != domain.TurnStateQueued {
+				t.Fatalf("Send while compacting = %+v, %v", turn, err)
+			}
+			conv.emit(ports.ChatEvent{Kind: kind, ProviderTurnID: "compact-turn", TurnState: domain.TurnStateCompleted})
+			h.awaitSnapshot(t, func(s store.ConversationSnapshot) bool {
+				return len(s.Turns) == 1 && s.Turns[0].State == domain.TurnStateRunning
+			})
+			// Claiming a queued turn publishes Running before SendTurn crosses
+			// the provider boundary. Wait for that boundary, not just the row.
+			select {
+			case <-sent:
+			case <-time.After(5 * time.Second):
+				t.Fatal("queued turn never reached the provider after compaction")
+			}
+			if got := conv.sentTexts(); len(got) != 1 || got[0] != "after compact" {
+				t.Fatalf("provider messages = %v", got)
+			}
+		})
 	}
 }
 
@@ -6712,5 +7421,62 @@ func TestReservedBoundaryAdoptsSuccessorHandleWithoutRewritingHistory(t *testing
 	if keptSource.ProviderConversationID != ancestor ||
 		keptSource.ProviderScopeID != sourceBranch.ProviderScopeID {
 		t.Fatalf("ancestor branch = %+v, want the recorded handle untouched", keptSource)
+	}
+}
+
+// No real executable is started by capability discovery or admission.
+type kimiCapabilityPlugin struct{}
+
+func (kimiCapabilityPlugin) ResolveBinary(context.Context) (string, error) { return "/fake/kimi", nil }
+func (kimiCapabilityPlugin) AuthStatus(context.Context) (ports.AgentAuthStatus, error) {
+	return ports.AgentAuthStatusAuthorized, nil
+}
+
+func TestPermissionModeCatalogMatchesPreflight(t *testing.T) {
+	for _, tc := range []struct {
+		name   string
+		driver ports.ChatDriver
+		want   []ports.PermissionMode
+	}{
+		{"kimi", kimiacp.New(kimiCapabilityPlugin{}, nil), []ports.PermissionMode{ports.PermissionModeDefault}},
+		{"full approvals", fakeDriver{}, ports.PermissionModesStrictestFirst},
+		{"no approval channel", fakeDriver{caps: ports.ChatCapabilities{ports.ChatCapabilityStreaming: true, ports.ChatCapabilityInterrupt: true, ports.ChatCapabilityResume: true}}, []ports.PermissionMode{ports.PermissionModeBypassPermissions}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			svc := chatsvc.New(chatsvc.Options{Store: openStore(t), Drivers: fakeRegistry{driver: tc.driver}, Log: slog.New(slog.DiscardHandler)})
+			modes, err := svc.PermissionModes(context.Background(), tc.driver.Harness())
+			if err != nil || !reflect.DeepEqual(modes, tc.want) {
+				t.Fatalf("modes = %v, %v; want %v", modes, err, tc.want)
+			}
+			for _, mode := range ports.PermissionModesStrictestFirst {
+				err := svc.PreflightChat(context.Background(), tc.driver.Harness(), mode)
+				if slices.Contains(tc.want, mode) != (err == nil) {
+					t.Fatalf("preflight %s = %v; modes %v", mode, err, modes)
+				}
+				if tc.name == "kimi" && mode != ports.PermissionModeDefault && !errors.Is(err, ports.ErrChatPermissionModeUnsupported) {
+					t.Fatalf("Kimi rejection = %v", err)
+				}
+			}
+		})
+	}
+}
+
+func TestStartRejectsProviderPermissionBeforeDriverLaunch(t *testing.T) {
+	launched := false
+	svc := chatsvc.New(chatsvc.Options{
+		Store: openStore(t), Drivers: fakeRegistry{driver: fakeDriver{
+			supports: func(mode ports.PermissionMode) bool { return mode == ports.PermissionModeDefault },
+			start: func(ports.ChatStartConfig) (ports.ChatConversation, error) {
+				launched = true
+				return newFakeConversation(), nil
+			},
+		}}, Log: slog.New(slog.DiscardHandler),
+	})
+	_, err := svc.Start(context.Background(), chatsvc.StartConfig{SessionID: testSession, Harness: domain.HarnessKimi, WorkspacePath: t.TempDir(), Permissions: ports.PermissionModeAuto})
+	if !errors.Is(err, ports.ErrChatPermissionModeUnsupported) {
+		t.Fatalf("Start = %v", err)
+	}
+	if launched {
+		t.Fatal("unsupported permission reached provider launch")
 	}
 }

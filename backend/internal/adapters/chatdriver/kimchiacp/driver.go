@@ -7,6 +7,7 @@ import (
 	"log/slog"
 	"strings"
 
+	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/agent/kimchi"
 	acpdriver "github.com/aoagents/agent-orchestrator/backend/internal/adapters/chatdriver/acp"
 	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/chatdriver/nativeacp"
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
@@ -19,20 +20,32 @@ import (
 func New(plugin nativeacp.Plugin, log *slog.Logger) ports.ChatDriver {
 	return nativeacp.New(plugin, nativeacp.Config{
 		Harness:        domain.HarnessKimchi,
+		HideCommand:    hiddenCommands,
 		Configure:      configure,
 		SessionOptions: sessionOptions,
+		SteerRequest:   steerRequest,
 		VersionProbe:   versionProbe,
 	}, log)
 }
 
-func configure(_ context.Context, cfg acpdriver.LaunchConfig) ([]string, map[string]string, error) {
+func configure(ctx context.Context, cfg acpdriver.LaunchConfig) ([]string, map[string]string, error) {
+	// Kimchi's entry point overwrites its config-dir env variable. Validate it
+	// against the effective child home before starting any native process.
+	if _, err := kimchi.New().NativeSessionConfigDir(ctx, cfg.Env); err != nil {
+		return nil, nil, err
+	}
 	args := []string{"--mode", "acp"}
 	if model := strings.TrimSpace(cfg.Model); model != "" {
 		args = append(args, "--model", model)
 	}
 	appendPermissionFlags(&args, cfg.Permissions)
 	if strings.TrimSpace(cfg.SystemPrompt) != "" {
-		args = append(args, "--append-system-prompt", cfg.SystemPrompt)
+		// Kimchi reads the flag's value as a file when one exists at that path.
+		file, err := acpdriver.SystemPromptFile(cfg, "kimchi")
+		if err != nil {
+			return nil, nil, err
+		}
+		args = append(args, "--append-system-prompt", file)
 	}
 	return args, nil, nil
 }

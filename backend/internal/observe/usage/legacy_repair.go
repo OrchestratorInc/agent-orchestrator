@@ -19,6 +19,10 @@ type legacyRepairStore interface {
 	ListLegacyUsageSources(context.Context) ([]domain.UsageSourceContext, error)
 	ListLegacyUsageEvents(context.Context, int64) ([]domain.LegacyUsageEvent, error)
 	ApplyLegacyUsageRepairs(context.Context, []domain.LegacyUsageRepair, time.Time) (int, error)
+	ListUsageSourcesWithUntimedEvents(context.Context) ([]domain.UsageSourceContext, error)
+	SetUsageEventTimes(context.Context, int64, map[string]time.Time) (int, error)
+	ListUsageTierRepairSources(context.Context) ([]domain.UsageSourceContext, error)
+	CompleteUsageTierRepair(context.Context, int64, int64, map[string]string) (int, error)
 }
 
 // LegacyRepairerConfig controls bounded replay and lifecycle diagnostics.
@@ -29,7 +33,8 @@ type LegacyRepairerConfig struct {
 	OnError     func(error)
 	// RaceRetry is the first delay before retrying a pass that lost its cursor
 	// guard to concurrent ingestion. It doubles up to maxRaceRetry.
-	RaceRetry time.Duration
+	RaceRetry     time.Duration
+	OnTiersFilled func(context.Context)
 	// StartupSettle delays one follow-up pass after the first. Startup
 	// ingestion begins after the repairer does, so the first pass can read the
 	// table before the rows it exists to repair are in it.
@@ -107,6 +112,12 @@ func (r *LegacyRepairer) Start(ctx context.Context) error {
 				settleTimer.Stop()
 			}
 		}()
+		if err := r.repairEventTimes(ctx); err != nil && ctx.Err() == nil {
+			r.config.OnError(err)
+		}
+		if err := r.repairServiceTiers(ctx); err != nil && ctx.Err() == nil {
+			r.config.OnError(err)
+		}
 		retry := r.config.RaceRetry
 		// The daemon starts pricing before it starts ingesting, so the first
 		// pass can read the table before startup ingestion has written to it.
@@ -313,6 +324,7 @@ func (r *LegacyRepairer) repairSource(ctx context.Context, source domain.UsageSo
 				BillingProviderID:       billingProviderID,
 				BillingProviderSource:   providerSource,
 				ProviderUsageJSON:       event.ProviderUsageJSON,
+				ServiceTier:             event.ServiceTier,
 				Costs:                   domain.UsageEventCosts{PricingVersion: snapshot.ProviderVersion(billingProviderID)},
 			}
 			estimate, estimateErr := snapshot.Estimate(event)

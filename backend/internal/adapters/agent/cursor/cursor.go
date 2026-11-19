@@ -226,3 +226,17 @@ func (p *Plugin) cursorBinary(ctx context.Context) (string, error) {
 	p.resolvedBinary = binary
 	return binary, nil
 }
+
+// InvalidateBinaryResolution forgets the cached executable path, so the next
+// launch resolves it again: after AO installs a managed copy, for example.
+func (p *Plugin) InvalidateBinaryResolution() {
+	p.binaryMu.Lock()
+	p.resolvedBinary = ""
+	p.binaryMu.Unlock()
+}
+
+// SupportsTerminalVersionRefresh opts into idle restarts using the captured
+// native session ID. Restore preserves session model and permission options.
+func (*Plugin) SupportsTerminalVersionRefresh() bool { return true }
+
+var _ ports.AgentTerminalVersionRefresher = (*Plugin)(nil)

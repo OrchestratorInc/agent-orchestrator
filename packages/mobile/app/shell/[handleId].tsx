@@ -1,10 +1,48 @@
+import { useLocalSearchParams, useRouter } from "expo-router";
+import { View } from "react-native";
+import { hostRouteMatches } from "../../lib/hostRoute";
 import TerminalSessionScreen from "../../lib/session/TerminalSessionScreen";
+import { Spinner } from "../../lib/Spinner";
+import { HostScope, useApp } from "../../lib/store";
+import { useTheme } from "../../lib/ThemeProvider";
+import { Button, EmptyState } from "../../lib/ui";
+import { useGlassBarInset } from "../../lib/useHeaderOverlap";
 
 /**
  * A Chat session's terminal escape hatch attaches the shell handle through the
  * same authenticated mux and xterm renderer as every other AO terminal. The
  * handle, not the Chat session id, identifies this PTY.
  */
-export default TerminalSessionScreen;
+export default function ShellRoute() {
+	const { hostId } = useLocalSearchParams<{ hostId?: string }>();
+	return hostId ? <HostScope key={hostId} hostId={hostId}><ShellRouteContent /></HostScope> : <ShellRouteContent />;
+}
+
+function ShellRouteContent() {
+	const { hostId: routeHostId } = useLocalSearchParams<{ hostId?: string }>();
+	const { config, currentHostId, connection, loading } = useApp();
+	const router = useRouter();
+	const t = useTheme();
+	const glassInset = useGlassBarInset();
+	if (!hostRouteMatches(routeHostId, currentHostId)) {
+		return (
+			<View style={{ flex: 1, justifyContent: "center", backgroundColor: t.bgBase }}>
+				{loading && !config ? <Spinner accessibilityLabel="Loading" /> : (
+					<EmptyState
+						icon="terminal"
+						title="Shell belongs to another machine"
+						message="Open it from that machine's session."
+						// Back down to the board under this page, not a second board on top of it.
+						action={<Button title="Open board" icon="workers" onPress={() => router.dismissTo("/")} />}
+					/>
+				)}
+			</View>
+		);
+	}
+	if (!config && connection === "closed") {
+		return <View style={{ flex: 1, justifyContent: "center", backgroundColor: t.bgBase }}><EmptyState icon="wifi-off" title="Machine offline" message="This shell opens once the app reconnects." /></View>;
+	}
+	return <View style={{ flex: 1, paddingTop: glassInset, backgroundColor: t.bgBase }}><TerminalSessionScreen /></View>;
+}
 
 export { RouteErrorBoundary as ErrorBoundary } from "../../lib/RouteErrorBoundary";

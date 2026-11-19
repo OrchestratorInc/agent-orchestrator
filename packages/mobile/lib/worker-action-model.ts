@@ -6,19 +6,20 @@
  *
  * Every action here maps to an endpoint that actually exists. That constraint
  * is the whole design: the obvious missing item is "Stop", and there is no stop
- * or pause endpoint. `killSession` is what Delete already calls, and its own
- * copy says it terminates the session — so a "Stop" entry would be a second,
- * gentler-sounding name for the same destructive call. Resume/Restore are the
- * honest inverses instead.
+ * or pause endpoint. The archive action calls `killSession`: it stops the agent
+ * and deletes the session's worktree folder unless that folder has uncommitted
+ * changes (the daemon refuses to remove a dirty worktree). The conversation and
+ * the branch's commits stay, which is what Restore rebuilds from. A "Stop" entry
+ * would therefore be a second name for the same call.
  */
-import type { SFSymbol } from "sf-symbols-typescript";
+import { symbols, type PlatformSymbol } from "./symbols";
 
 export type WorkerActionId = "open" | "pin" | "unpin" | "rename" | "resume" | "restore" | "openPr" | "delete";
 
 export type WorkerAction = {
 	id: WorkerActionId;
 	title: string;
-	/** Marks the row destructive in the native menu. */
+	/** Marks an irreversible row action as destructive in the native menu. */
 	destructive?: boolean;
 };
 
@@ -29,6 +30,8 @@ export type WorkerActionState = {
 	/** The runtime is stopped but the session is alive; the agent can be resumed. */
 	stopped: boolean;
 	hasPr: boolean;
+	/** An Orchestrator Cloud session. */
+	cloud?: boolean;
 };
 
 /**
@@ -46,84 +49,70 @@ export function workerContextActions(state: WorkerActionState): WorkerAction[] {
 	actions.push(state.pinned ? { id: "unpin", title: "Unpin" } : { id: "pin", title: "Pin" });
 	actions.push({ id: "rename", title: "Rename" });
 
-	if (state.hasPr) actions.push({ id: "openPr", title: "Open pull request" });
+	// A cloud worker's pull request has the same review page as a machine's.
+	if (state.hasPr) actions.push({ id: "openPr", title: "Review pull request" });
 
-	// Last and marked destructive: the native menus render it apart from the rest,
-	// and the screen still raises its own confirmation before calling kill.
-	actions.push({ id: "delete", title: "Delete session", destructive: true });
+	// The internal id predates Archive and stays for action routing. Still
+	// destructive: archiving deletes a clean worktree folder.
+	actions.push({ id: "delete", title: "Archive session", destructive: true });
 	return actions;
 }
 
 /**
- * SF Symbol per action, for iOS's native menu.
- *
- * Typed as SFSymbol rather than string so a name that does not exist is a
- * compile error instead of a blank icon on the device — MenuAction.image takes
- * `SFSymbol | ImageSourcePropType`, and a plain string satisfies neither. Same
- * approach as notification-type-icon.ios.tsx. The import is type-only, so this
- * module still runs under Node for its tests.
+ * The row's menu as screen-reader actions, for VoiceOver's Actions rotor and
+ * TalkBack's actions menu: neither reader can swipe a row open or long-press
+ * it, so without these pin, rename and archive were out of reach. Open is the
+ * row's own activation and is not repeated.
  */
-export function workerActionSymbol(id: WorkerActionId): SFSymbol {
-	switch (id) {
-		case "open":
-			return "arrow.forward";
-		case "restore":
-		case "resume":
-			return "arrow.clockwise";
-		case "pin":
-			return "pin";
-		case "unpin":
-			return "pin.slash";
-		case "rename":
-			return "pencil";
-		case "openPr":
-			return "arrow.up.forward.square";
-		default:
-			return "trash";
-	}
+export function workerAccessibilityActions(actions: readonly WorkerAction[]): { name: WorkerActionId; label: string }[] {
+	return actions.filter((action) => action.id !== "open").map((action) => ({ name: action.id, label: action.title }));
 }
 
-/**
- * Which actions Android and the web fallback can show an icon for.
- *
- * Those menus take a bundled drawable via `require`, and a missing file fails at
- * bundle time rather than degrading — so this list has to track assets/icons
- * exactly. Every action now has one, which matches iOS, where the menu resolves
- * an SF Symbol by name for each.
- */
-export const WORKER_ACTION_DRAWABLES: readonly WorkerActionId[] = ["pin", "unpin", "rename", "open", "resume", "restore", "openPr", "delete"];
-
-/**
- * Icon for each action, for Android's own action sheet.
- *
- * Android does not render the native MenuView — its rows are an in-app Modal —
- * so it cannot use the bundled drawables above. A vector font needs no asset
- * pipeline at all, and gives that list the same iconography iOS gets from SF
- * Symbols.
- *
- * Pin and unpin carry the same pushpin the swipe rail uses, which comes from a
- * different icon set — hence the family tag. A menu and a rail offering the same
- * action should not draw it two different ways, and Feather has only a map
- * marker, which reads as a location rather than a pin. Kept as plain data so
- * this module stays free of React Native.
- */
-export type WorkerActionGlyph =
-	| { family: "feather"; name: "message-square" | "edit-2" | "play" | "rotate-ccw" | "git-pull-request" | "trash-2" }
-	| { family: "material"; name: "pin" | "pin-outline" };
-
-export function workerActionGlyph(id: WorkerActionId): WorkerActionGlyph {
-	switch (id) {
-		case "open": return { family: "feather", name: "message-square" };
-		case "pin": return { family: "material", name: "pin" };
-		case "unpin": return { family: "material", name: "pin-outline" };
-		case "rename": return { family: "feather", name: "edit-2" };
-		case "resume": return { family: "feather", name: "play" };
-		case "restore": return { family: "feather", name: "rotate-ccw" };
-		case "openPr": return { family: "feather", name: "git-pull-request" };
-		case "delete": return { family: "feather", name: "trash-2" };
-	}
+/** The action a screen reader asked for, if the row offers it. */
+export function workerActionNamed(actions: readonly WorkerAction[], name: string): WorkerActionId | undefined {
+	return actions.find((action) => action.id === name)?.id;
 }
 
-export function hasWorkerActionDrawable(id: WorkerActionId): boolean {
-	return WORKER_ACTION_DRAWABLES.includes(id);
+/** Confirmation copy for every Archive entry point, word for word desktop's (SessionArchiveDialog). */
+export const ARCHIVE_SESSION_CONFIRM = {
+	title: "Are you sure you want to archive this session?",
+	message: "You can always restore it from the Archive section later.",
+	cancel: "No",
+	confirm: "Confirm",
+} as const;
+
+/**
+ * The Archive item's subtitle. iOS's menu shows two lines of a subtitle and
+ * cuts the rest, so it says only what the title does not: the agent stops, and
+ * a worktree with uncommitted work is kept (a clean one is deleted).
+ */
+export const ARCHIVE_SESSION_HINT = "Stops the agent. Keeps uncommitted work.";
+
+/**
+ * Each action's glyph as each platform's own symbol: the SF Symbol iOS's menu
+ * resolves by name, and the Material Symbol Android's menu draws from the shared
+ * drawable registry (materialDrawable).
+ *
+ * Typed against the symbol registry's types, so a name iOS 16.4 cannot draw or
+ * a Material name that does not exist is a compile error rather than a blank
+ * icon on the device. The registry is plain data, so this module still runs
+ * under Node for its tests.
+ */
+export const workerActionSymbols = {
+	open: { ios: "arrow.forward", android: "arrow_forward" },
+	pin: symbols.pin,
+	unpin: symbols.unpin,
+	rename: symbols.rename,
+	resume: symbols.refresh,
+	restore: symbols.refresh,
+	openPr: { ios: "arrow.up.forward.square", android: "open_in_new" },
+	delete: symbols.archive,
+} as const satisfies Record<WorkerActionId, PlatformSymbol>;
+
+/**
+ * The action's glyph wherever it is drawn: the long-press menu on both
+ * platforms and the swipe rail, so one action never reads two ways.
+ */
+export function workerActionSymbol(id: WorkerActionId): PlatformSymbol {
+	return workerActionSymbols[id];
 }

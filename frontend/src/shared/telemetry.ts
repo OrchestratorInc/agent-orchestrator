@@ -1,11 +1,38 @@
-import { mkdir, readFile, writeFile } from "node:fs/promises";
+import { access, link, lstat, mkdir, readFile, rmdir, stat, unlink, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { randomUUID } from "node:crypto";
+import { randomInt, randomUUID } from "node:crypto";
 import type { TelemetryPolicySnapshot } from "./telemetry-policy";
+import { detectCiEnvironment, installDay, normalizeInstallSource, safeOsVersion } from "./install-environment";
+
+/**
+ * Segmentation the renderer cannot see for itself: CPU architecture, the real
+ * OS version (Chromium freezes the macOS version in its user agent), how the
+ * app was installed (~/.ao/app-state.json), and whether this is a CI or
+ * container run. The daemon stamps the same values on its own events.
+ */
+export type TelemetryInstallContext = {
+	arch: string;
+	osVersion?: string;
+	installSource: string;
+	installedAt?: string;
+	isCi: boolean;
+	isContainer: boolean;
+};
 
 export type TelemetryBootstrap = {
 	distinctId: string;
+	installId: string;
+	daysSinceInstall?: number;
+	/** Install ID file mtime, used to refresh event age in a long-lived renderer. */
+	installTimestampMs?: number;
+	lifetimeSessions?: number;
+	/**
+	 * The signed-in AO Cloud user ID, present only when the stored WorkOS session
+	 * belongs to the account the daemon recorded in telemetry_bound_user. The
+	 * renderer then starts identified as that ID instead of an anonymous one.
+	 */
+	cloudUserId?: string;
 	appVersion: string;
 	platform: NodeJS.Platform;
 	/**
@@ -21,7 +48,41 @@ export type TelemetryBootstrap = {
 	disabledEvents: string[];
 	eventsEnabled: boolean;
 	consentGeneration: string;
+	install?: TelemetryInstallContext;
+	/** This install's fixed 0-99 experiment bucket; absent when unreadable. */
+	experimentCohort?: number;
 };
+
+/** Reads the install context for the bootstrap. Never throws. */
+export async function readTelemetryInstallContext(input: {
+	/** Directory holding app-state.json (dirname of running.json); null if unknown. */
+	stateDir: string | null;
+	arch: string;
+	osVersion: string;
+	env: Record<string, string | undefined>;
+	exists: (file: string) => boolean;
+}): Promise<TelemetryInstallContext> {
+	let state: { installSource?: unknown; installedAt?: unknown } = {};
+	if (input.stateDir) {
+		try {
+			const parsed: unknown = JSON.parse(await readFile(path.join(input.stateDir, "app-state.json"), "utf8"));
+			if (parsed && typeof parsed === "object") state = parsed as typeof state;
+		} catch {
+			// Absent or unreadable: report unknown rather than block the bootstrap.
+		}
+	}
+	const ci = detectCiEnvironment(input.env, input.exists);
+	const installedAt = installDay(typeof state.installedAt === "string" ? state.installedAt : undefined);
+	const osVersion = safeOsVersion(input.osVersion);
+	return {
+		arch: input.arch,
+		...(osVersion ? { osVersion } : {}),
+		installSource: normalizeInstallSource(typeof state.installSource === "string" ? state.installSource : undefined),
+		...(installedAt ? { installedAt } : {}),
+		isCi: ci.isCi,
+		isContainer: ci.isContainer,
+	};
+}
 
 /** Parses the comma-separated deny list. Never throws: an unusable entry is inert. */
 export function parseDisabledEvents(raw: string | undefined): string[] {
@@ -60,18 +121,188 @@ export function defaultDataDir(
 	return path.join(homeDir, ".ao", "data");
 }
 
+export const EXPERIMENT_COHORT_BUCKETS = 100;
+
+/**
+ * This install's experiment bucket, 0-99, assigned once on the first run (by
+ * the desktop app or the daemon, whichever gets there first) and never changed.
+ * Onboarding tests split installs by bucket range without PostHog flags. The
+ * daemon reads and creates the same file
+ * (backend/internal/adapters/telemetry/cohort.go). Never throws: an unreadable
+ * or unwritable bucket is reported as absent rather than guessed.
+ */
+export async function loadOrAssignExperimentCohort(dataDir: string): Promise<number | undefined> {
+	const file = path.join(dataDir, "telemetry_experiment_cohort");
+	for (let attempt = 0; attempt < 3; attempt++) {
+		try {
+			const value = Number((await readFile(file, "utf8")).trim());
+			return Number.isInteger(value) && value >= 0 && value < EXPERIMENT_COHORT_BUCKETS ? value : undefined;
+		} catch (error) {
+			if ((error as NodeJS.ErrnoException).code !== "ENOENT") return undefined;
+		}
+		const cohort = randomInt(EXPERIMENT_COHORT_BUCKETS);
+		// A complete temp file linked into place: the link fails if the daemon
+		// won the race, and a reader never sees a half-written file.
+		const temporary = path.join(dataDir, `.telemetry_experiment_cohort_${randomUUID()}`);
+		try {
+			await mkdir(dataDir, { recursive: true });
+			await writeFile(temporary, `${cohort}\n`, { mode: 0o600, flag: "wx" });
+			await link(temporary, file);
+			return cohort;
+		} catch (error) {
+			if ((error as NodeJS.ErrnoException).code !== "EEXIST") return undefined;
+		} finally {
+			await unlink(temporary).catch(() => {});
+		}
+	}
+	return undefined;
+}
+
+const CLOUD_USER_ID_PATTERN = /^[A-Za-z0-9_-]{1,64}$/;
+
+/**
+ * The AO Cloud user the daemon recorded as bound to this install, or null. A
+ * symlink, a non-file or a malformed value is ignored rather than trusted.
+ */
+export async function boundCloudUserId(dataDir: string): Promise<string | null> {
+	const file = path.join(dataDir, "telemetry_bound_user");
+	try {
+		if (!(await lstat(file)).isFile()) return null;
+		const value = (await readFile(file, "utf8")).trim();
+		return CLOUD_USER_ID_PATTERN.test(value) ? value : null;
+	} catch {
+		return null;
+	}
+}
+
+/**
+ * Claims ao.app.first_opened for this install: true at most once, ever, and
+ * only for a fresh install (install day 0, no session yet). The marker is
+ * created exclusively under the data dir, so a reload, a second window or a
+ * cleared localStorage cannot claim it again. Installs that ran a build which
+ * sent ao.install.created already hold this file, so an upgrade never claims
+ * it. A marker that cannot be created is not claimed.
+ */
+export type FirstOpenClaim = "claimed" | "ineligible" | "unknown";
+
+export async function claimFirstOpen(dataDir: string, facts: Pick<TelemetryBootstrap, "daysSinceInstall" | "lifetimeSessions">): Promise<FirstOpenClaim> {
+	if (facts.daysSinceInstall !== 0) return "ineligible";
+	// An unreadable session count is not "no sessions": the CLI may already
+	// have started one. The caller asks again once the daemon answers.
+	if (facts.lifetimeSessions === undefined) return "unknown";
+	if (facts.lifetimeSessions > 0) return "ineligible";
+	try {
+		await writeFile(path.join(dataDir, "telemetry_first_open_emitted"), "", { mode: 0o600, flag: "wx" });
+		return "claimed";
+	} catch {
+		return "ineligible";
+	}
+}
+
 export async function loadOrCreateTelemetryInstallId(dataDir: string): Promise<string> {
 	const file = path.join(dataDir, "telemetry_install_id");
-	try {
-		const existing = (await readFile(file, "utf8")).trim();
-		if (existing) return existing;
-	} catch {
-		// Create the id on first use.
-	}
 	await mkdir(dataDir, { recursive: true });
-	const distinctId = `ins_${randomUUID()}`;
-	await writeFile(file, `${distinctId}\n`, { mode: 0o600 });
-	return distinctId;
+	for (let attempt = 0; attempt < 5; attempt++) {
+		try {
+			const existing = (await readFile(file, "utf8")).trim();
+			if (existing) return existing;
+			return recoverEmptyTelemetryInstallId(dataDir, file);
+		} catch (error) {
+			if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+		}
+
+		const distinctId = `ins_${randomUUID()}`;
+		const temporary = path.join(dataDir, `.telemetry_install_id_${randomUUID()}`);
+		try {
+			await writeFile(temporary, `${distinctId}\n`, { mode: 0o600, flag: "wx" });
+			await link(temporary, file);
+			return distinctId;
+		} catch (error) {
+			if ((error as NodeJS.ErrnoException).code !== "EEXIST") throw error;
+		} finally {
+			await unlink(temporary).catch(() => {});
+		}
+	}
+	throw new Error("telemetry install id creation did not settle");
+}
+
+// Both the daemon and Electron use this lock before repairing a legacy empty
+// file. Re-read under the lock so a second repair cannot erase the first ID.
+async function recoverEmptyTelemetryInstallId(dataDir: string, file: string): Promise<string> {
+	const lock = `${file}.recovery`;
+	const deadline = Date.now() + 20_000;
+	for (;;) {
+		try {
+			await mkdir(lock, { mode: 0o700 });
+			break;
+		} catch (error) {
+			if ((error as NodeJS.ErrnoException).code !== "EEXIST") throw error;
+			let age: number;
+			try {
+				age = Date.now() - (await stat(lock)).mtimeMs;
+			} catch (statError) {
+				if ((statError as NodeJS.ErrnoException).code === "ENOENT") continue;
+				throw statError;
+			}
+			if (age > 10_000) {
+				await rmdir(lock).catch(() => {});
+				continue;
+			}
+			if (Date.now() > deadline) throw new Error("timed out waiting for telemetry install id recovery");
+			await new Promise((resolve) => setTimeout(resolve, 20));
+		}
+	}
+	try {
+		try {
+			const existing = (await readFile(file, "utf8")).trim();
+			if (existing) return existing;
+			await unlink(file);
+		} catch (error) {
+			if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+		}
+		return loadOrCreateTelemetryInstallId(dataDir);
+	} finally {
+		await rmdir(lock).catch(() => {});
+	}
+}
+
+/**
+ * The ID the renderer's PostHog client starts on. The daemon keeps
+ * `telemetry_bound_user` while the install ID may be linked to an AO Cloud
+ * account (identify() merged it into that person). Whether that account is still
+ * signed in is only known once the session resolves, after init has already
+ * captured its first events, so a linked (or uninspectable) ID is withheld: the
+ * client starts on a throwaway anonymous ID, and a signed-in user's identify()
+ * merges it into the person anyway.
+ *
+ * The marker is checked before the anonymous ID is read. The daemon writes a
+ * replacement anonymous ID before removing the marker. The installation ID
+ * remains fixed for event attribution and must not be reused as a linked
+ * anonymous distinct ID after sign-out.
+ */
+export async function bootstrapDistinctId(
+	dataDir: string,
+	io: { markerMissing: (file: string) => Promise<boolean>; loadId: (dir: string) => Promise<string> } = {
+		// Only a confirmed missing marker proves the ID is unlinked; any other
+		// failure (EACCES, EIO, ELOOP) means it could not be inspected, so fail closed.
+		markerMissing: (file) =>
+			access(file).then(
+				() => false,
+				(error: NodeJS.ErrnoException) => error.code === "ENOENT",
+			),
+		loadId: loadOrCreateTelemetryInstallId,
+	},
+): Promise<string> {
+	const unlinked = await io.markerMissing(path.join(dataDir, "telemetry_bound_user"));
+	if (!unlinked) return `anon_${randomUUID()}`;
+	try {
+		const anonymousId = (await readFile(path.join(dataDir, "telemetry_anonymous_id"), "utf8")).trim();
+		if (anonymousId) return anonymousId;
+		throw new Error("empty telemetry anonymous id");
+	} catch (error) {
+		if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+	}
+	return io.loadId(dataDir);
 }
 
 export async function buildTelemetryBootstrap(
@@ -81,6 +312,7 @@ export async function buildTelemetryBootstrap(
 	homeDir = os.homedir(),
 	isPackaged = true,
 	policy?: TelemetryPolicySnapshot,
+	install?: TelemetryInstallContext,
 ): Promise<TelemetryBootstrap | null> {
 	// Returning null is the whole switch: initTelemetry() bails on a null
 	// bootstrap, so the renderer never constructs a PostHog client at all. That
@@ -93,12 +325,30 @@ export async function buildTelemetryBootstrap(
 	// This policy controls failure reporting only. Existing anonymous PostHog
 	// product analytics retain their own packaged/env gate above.
 	const eventsEnabled = policy.eventsEnabled && policy.acknowledged;
+	const experimentCohort = await loadOrAssignExperimentCohort(dataDir);
+	const installId = await loadOrCreateTelemetryInstallId(dataDir);
+	let daysSinceInstall: number | undefined;
+	let installTimestampMs: number | undefined;
+	try {
+		const installedAt = (await stat(path.join(dataDir, "telemetry_install_id"))).mtimeMs;
+		if (installedAt > 0 && installedAt <= Date.now()) {
+			installTimestampMs = installedAt;
+			daysSinceInstall = Math.floor((Date.now() - installedAt) / 86_400_000);
+		}
+	} catch {
+		// An unreadable creation time is unknown.
+	}
 	return {
-		distinctId: await loadOrCreateTelemetryInstallId(dataDir),
+		distinctId: await bootstrapDistinctId(dataDir),
+		installId,
+		...(daysSinceInstall === undefined ? {} : { daysSinceInstall }),
+		...(installTimestampMs === undefined ? {} : { installTimestampMs }),
 		appVersion,
 		platform,
 		disabledEvents: parseDisabledEvents(env.AO_TELEMETRY_DISABLED_EVENTS),
 		eventsEnabled,
 		consentGeneration: policy.consentGeneration,
+		...(install ? { install } : {}),
+		...(experimentCohort === undefined ? {} : { experimentCohort }),
 	};
 }

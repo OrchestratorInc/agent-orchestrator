@@ -2,7 +2,10 @@ package kimchiacp
 
 import (
 	"context"
+	"os"
+	"path/filepath"
 	"reflect"
+	"strings"
 	"testing"
 
 	acpdriver "github.com/aoagents/agent-orchestrator/backend/internal/adapters/chatdriver/acp"
@@ -76,11 +79,17 @@ func TestConfigurePassesModelAndPermissionTogether(t *testing.T) {
 }
 
 func TestConfigureAppendsSystemPromptWhenProvided(t *testing.T) {
-	args, _, err := configure(context.Background(), acpdriver.LaunchConfig{SystemPrompt: "Follow AO worker rules."})
+	data := t.TempDir()
+	args, _, err := configure(context.Background(), acpdriver.LaunchConfig{DataDir: data, SessionID: "s1", SystemPrompt: "Follow AO worker rules."})
 	if err != nil {
 		t.Fatalf("configure: %v", err)
 	}
-	want := []string{"--mode", "acp", "--append-system-prompt", "Follow AO worker rules."}
+	// Kimchi reads a path given to the flag as a file, which keeps the command line short.
+	file := filepath.Join(data, "prompts", "s1", "kimchi", "system-prompt.md")
+	if got, err := os.ReadFile(file); err != nil || string(got) != "Follow AO worker rules." {
+		t.Fatalf("system prompt file = %q, %v", got, err)
+	}
+	want := []string{"--mode", "acp", "--append-system-prompt", file}
 	if !reflect.DeepEqual(args, want) {
 		t.Fatalf("args = %#v, want %#v", args, want)
 	}
@@ -140,5 +149,44 @@ func TestSessionOptionsIncludeModelAndPermissionMode(t *testing.T) {
 	}
 	if !reflect.DeepEqual(got, want) {
 		t.Fatalf("options = %#v, want %#v", got, want)
+	}
+}
+
+func TestConfigureRejectsImportedRootMismatchWithoutChangingHome(t *testing.T) {
+	home := t.TempDir()
+	sourceRoot := filepath.Join(home, ".config", "kimchi", "harness")
+	otherHome := t.TempDir()
+	env := map[string]string{"HOME": otherHome, "USERPROFILE": otherHome, "KIMCHI_CODING_AGENT_DIR": sourceRoot}
+	_, _, err := configure(context.Background(), acpdriver.LaunchConfig{
+		ProviderConversationID: "native-import",
+		Env:                    env,
+	})
+	if err == nil || !strings.Contains(err.Error(), "ignores KIMCHI_CODING_AGENT_DIR") {
+		t.Fatalf("incompatible child root was not rejected before launch: %v", err)
+	}
+	if env["HOME"] != otherHome || env["USERPROFILE"] != otherHome || env["KIMCHI_CODING_AGENT_DIR"] != sourceRoot {
+		t.Fatalf("root validation changed native tool/config home: %v", env)
+	}
+}
+
+func TestConfigureAcceptsNativeRootAndEquivalentAlias(t *testing.T) {
+	home := t.TempDir()
+	root := filepath.Join(home, ".config", "kimchi", "harness")
+	if err := os.MkdirAll(root, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	alias := filepath.Join(t.TempDir(), "native-root")
+	if err := os.Symlink(root, alias); err != nil {
+		t.Fatal(err)
+	}
+	for _, source := range []string{root, alias} {
+		env := map[string]string{"HOME": home, "USERPROFILE": home, "KIMCHI_CODING_AGENT_DIR": source}
+		_, overrides, err := configure(context.Background(), acpdriver.LaunchConfig{
+			ProviderConversationID: "native-import",
+			Env:                    env,
+		})
+		if err != nil || overrides != nil {
+			t.Fatalf("native root rejected or home overridden: %v, %v", overrides, err)
+		}
 	}
 }

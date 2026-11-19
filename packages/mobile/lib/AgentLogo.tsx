@@ -1,54 +1,35 @@
 import { Image, StyleSheet, Text, View } from "react-native";
-import { backdropFor, harnessInitial } from "./harnessLogo";
+import { harnessInitial } from "./harnessLogo";
 import { logoFor } from "./harnessLogoAssets";
 import type { Theme } from "./theme";
-import { useTheme, useThemedStyles } from "./ThemeProvider";
-
-// Fixed chip colours, deliberately NOT theme tokens: a white mark needs
-// something dark behind it on the light theme *and* the dark one, so following
-// the palette would defeat the purpose.
-const DARK_CHIP = "#24272e";
-const LIGHT_CHIP = "#ffffff";
+import { useTheme, useThemedStyles, useThemeState } from "./ThemeProvider";
 
 /**
- * A harness's brand mark.
+ * A harness's brand mark, drawn bare in its own colours, as the desktop draws it.
  *
- * Sits on a chip only when the mark needs one to stay visible (see
- * `backdropFor`) — most marks are colourful enough to render bare, and a chip
- * behind every one of them would turn a calm row of logos into a row of boxes.
+ * A brand whose mark only reads on one background ships a light/dark pair, and
+ * the app's colour scheme picks between them, so no mark needs a chip behind it.
  */
 export function AgentLogo({ harness, size = 24 }: { harness?: string | null; size?: number }) {
 	const t = useTheme();
+	const { scheme } = useThemeState();
 	const styles = useThemedStyles(makeStyles);
-	const source = logoFor(harness);
-	const polarity = backdropFor(harness);
-
-	const chip =
-		polarity === "needs-dark" ? DARK_CHIP : polarity === "needs-light" ? LIGHT_CHIP : "transparent";
-	// The chip is padded so the mark doesn't run to its edge; a bare mark uses
-	// the full box so the two render at the same optical size.
-	const inset = polarity === "neutral" ? 0 : Math.round(size * 0.16);
+	const source = logoFor(harness, scheme);
 
 	return (
-		<View
-			style={[
-				styles.box,
-				{ width: size, height: size, borderRadius: Math.round(size * 0.28), backgroundColor: chip },
-			]}
-		>
+		<View style={[styles.box, { width: size, height: size }]}>
 			{source ? (
 				<Image
 					source={source}
-					// `contain`, matching desktop's object-contain: the assets have mixed
-					// aspect ratios (goose is 64×65, kimi 28×28, aider 128×128) and must
-					// not be stretched to square.
+					// `contain`, matching desktop's object-contain, so a wide mark such as
+					// amp's wordmark keeps its shape.
 					resizeMode="contain"
-					style={{ width: size - inset * 2, height: size - inset * 2 }}
+					style={{ width: size, height: size }}
 					accessibilityIgnoresInvertColors
 				/>
 			) : (
-				<View style={[styles.fallback, { width: size, height: size, borderRadius: Math.round(size * 0.28) }]}>
-					<Text style={[styles.initial, { fontSize: Math.round(size * 0.5), color: t.textSecondary }]}>
+				<View style={[styles.fallback, { width: size, height: size, borderRadius: Math.round(size * 0.28), borderCurve: "continuous"}]}>
+					<Text style={[styles.initial, { fontFamily: "DMSans_400Regular", fontSize: Math.round(size * 0.5), color: t.textSecondary }]}>
 						{harnessInitial(harness)}
 					</Text>
 				</View>
@@ -59,7 +40,7 @@ export function AgentLogo({ harness, size = 24 }: { harness?: string | null; siz
 
 const makeStyles = (t: Theme) =>
 	StyleSheet.create({
-		box: { alignItems: "center", justifyContent: "center", overflow: "hidden" },
+		box: { alignItems: "center", justifyContent: "center" },
 		fallback: {
 			alignItems: "center",
 			justifyContent: "center",
@@ -67,5 +48,5 @@ const makeStyles = (t: Theme) =>
 			borderWidth: StyleSheet.hairlineWidth,
 			borderColor: t.borderDefault,
 		},
-		initial: { fontWeight: "700" },
+		initial: { fontFamily: "DMSans_600SemiBold", fontWeight: "600" },
 	});

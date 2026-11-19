@@ -2,20 +2,23 @@
 
 Operational guidance for coding agents working in this repository. Keep changes small, match the current rewrite architecture, and prefer the documented daemon/API boundaries over behavior from the old TypeScript implementation.
 
+Follow [CONTRIBUTING.md](CONTRIBUTING.md) before choosing an issue or starting work.
+
 ## Repo layout
 
-- `backend/` — Go rewrite of Agent Orchestrator: Cobra `ao` CLI, loopback HTTP daemon, services, SQLite storage, lifecycle/reaper, runtime/workspace/agent/tracker adapters, terminal mux, and tests.
-- `frontend/` — Electron + React supervisor wired to the daemon via the generated typed client. Treat it as a thin supervisor/UI surface; do not move daemon logic into it.
-- `docs/` — current architecture/status notes. Start here before changing lifecycle, CLI, agents, storage, or daemon behavior.
-- `test/` — external smoke/e2e assets, including the CLI fresh-install container check.
-- `.github/workflows/` — CI definitions. Mirror these commands locally when possible.
+- `backend/`: Go rewrite of Agent Orchestrator with the Cobra `ao` CLI, loopback HTTP daemon, services, SQLite storage, lifecycle/reaper, runtime/workspace/agent/tracker adapters, terminal mux, and tests.
+- `frontend/`: Electron + React supervisor wired to the daemon through the generated typed client. Treat it as a thin supervisor/UI surface; do not move daemon logic into it.
+- `docs/`: Current architecture and status notes. Start here before changing lifecycle, CLI, agents, storage, or daemon behavior.
+- `test/`: External smoke/e2e assets, including the CLI fresh-install container check.
+- `contracts/cloud/` and `packages/cloud-client/`: the AO Cloud API contract and its typed client. The AO Cloud control plane is not in this repository: it lives in the private `OrchestratorInc/ao-control-plane`, and code here reaches it only through this contract (`scripts/check-public-boundary.sh` enforces it).
+- `.github/workflows/`: CI definitions. Mirror these commands locally when possible.
 
 ## Commands
 
 From the repo root unless noted:
 
 ```bash
-npm run lint                         # backend go test ./... + golangci-lint v2.12.2
+npm run lint                         # backend go test ./... + golangci-lint v2.14.0
 npm run frontend:typecheck           # frontend TypeScript check
 npm run sqlc                         # regenerate backend/internal/storage/sqlite/gen from queries/schema
 npm run api                          # regenerate OpenAPI spec + frontend TS types (see API contract changes below)
@@ -45,17 +48,19 @@ When showing or demoing frontend changes, run `ao preview [url]` from inside the
 
 ### Desktop lab (running the real Electron app for UI review)
 
-For visual verification that needs the real app rather than `ao preview` or `dev:web`, run the checkout in an isolated worktree against scratch data. Never use the invoking working tree (it may hold unrelated uncommitted work) and never touch the user's real `~/.ao` data.
+To run, show, or check the desktop app, follow `.agents/skills/ao-desktop-dev/SKILL.md` by default: `npm run dev:warm`, then a launch with per-checkout isolated data and port, ready in about 30 s from a fresh worktree. For visual verification that needs the real app rather than `ao preview` or `dev:web`, run the checkout in an isolated worktree against scratch data. Never use the invoking working tree (it may hold unrelated uncommitted work) and never touch the user's real `~/.ao` data.
 
 ```bash
 git worktree add /tmp/ao-lab <branch>   # the PR branch under review
 cd /tmp/ao-lab/frontend
-npm ci                                  # never symlink node_modules from another checkout (see below)
-npm run build:daemon -- --dev
+npm run dev:warm                        # real install + predev outputs, cloned from caches when possible (see below)
 AO_DATA_DIR=/tmp/ao-lab-data ./node_modules/.bin/electron-forge start
 ```
 
 - **Run a real `npm ci`.** Symlinking another checkout's `node_modules` makes React resolve from two physical paths and shares the Vite optimizer cache across checkouts: the symptom is a black window with `Invalid hook call` / `useSyncExternalStore` errors in the renderer console. It also writes `.vite/deps` output into the other checkout's tree.
+- **`npm run dev:warm` makes a fresh checkout launchable in seconds.** It never symlinks. When an earlier checkout ran a real `npm ci` with a byte-identical `package-lock.json` (same Node, npm, platform), it clones that install into `frontend/node_modules` (APFS `clonefile` on macOS, `cp --reflink=auto` on Linux; Windows always runs `npm ci`). Otherwise it runs `npm ci` and stores a copy-on-write clone of the result in `~/.ao/warm` (`AO_WARM_DIR`) for the next checkout. The stored install is captured straight after `npm ci` and never modified, so it holds no `.vite` optimizer cache and no Electron-rebuilt `better-sqlite3`. Each checkout still builds those on its first `electron-forge start`. It then runs the predev steps (below). It writes only git-ignored paths, fails if `git status` changes, and leaves an existing `node_modules` it did not install alone while it still matches `package-lock.json` (`--replace` swaps it anyway). Flags: `--dry-run`, `--worktree <path>`, `--skip-prepare`, `--reuse-daemon <ao binary>`.
+- **`predev` (`scripts/dev-prepare.mjs`) caches its outputs by input hash.** The dev daemon, browser extension, wake and dictation helpers, agent-browser runtime and ACP runtime are each keyed by their real inputs: tracked and untracked source files, lockfiles, Go/Swift toolchain and Go env, `VITE_*` env, platform and arch. A step whose output was built from the same key is skipped. A key another checkout already built is cloned from `~/.ao/build-cache/outputs` (`AO_BUILD_CACHE_DIR`). Only new keys build, in parallel. `AO_DEV_BUILD_CACHE=0` runs the original build scripts in order with no cache. Before building, `predev` compares `node_modules` with `package-lock.json` and refreshes it through `dev:warm` when a merge added, bumped or removed a package. A daemon served from the cache reports the commit and date of the build that produced it in `ao version`. `AO_DEV_DAEMON_REUSE=<path to ao>` copies an existing binary instead of building the daemon. It is off by default; use it only when you know the backend is unchanged.
+- **Warm every new session automatically.** In the project's Settings → Scripts → Setup, add the step `cd frontend && (npm run dev:warm || echo "dev:warm failed; run npm ci in frontend/")`. Setup steps run in the new worktree, and a failing step blocks the session start, hence the fallback `echo`.
 - **Isolate data with `AO_DATA_DIR`.** The lab starts with an empty board; create throwaway sessions inside it to exercise list/detail flows. The Electron `userData` dir already defaults to a dev path, not the production one.
 - **Diagnose with `ELECTRON_ENABLE_LOGGING=1`.** Renderer console errors (the cause of most blank windows) land in the launcher's stdout.
 - **Killing the forge wrapper is not enough.** The Electron main process cmdline is just `Electron .`, so `pkill -f electron-forge` leaves the app running and the next launch exits silently. Kill the `Electron.app/.../MacOS/Electron` main process explicitly before relaunching.
@@ -63,13 +68,13 @@ AO_DATA_DIR=/tmp/ao-lab-data ./node_modules/.bin/electron-forge start
 
 ## Where to look first
 
-- `README.md` — current run/config/test quickstart.
-- `docs/README.md` — docs index.
-- `docs/documentation-map.md` — which artifacts are the machine-readable contract layer (`openapi.yaml`, `AGENTS.md`, `skills/`, sqlc `gen/`), what each is source of truth for, and how CI keeps them from drifting.
-- `docs/architecture.md` — backend mental model, package layout, lifecycle/session/service boundaries, and load-bearing rules.
-- `docs/STATUS.md` — what is shipped on `main` today and what is still in flight.
-- `docs/cli/README.md` — intended CLI shape: thin Cobra client over daemon HTTP, never direct storage/runtime access.
-- `CLAUDE.md` — compatibility pointer for Claude Code; it directs agents back to `AGENTS.md`.
+- `README.md`: Current run/config/test quickstart.
+- `docs/README.md`: Docs index.
+- `docs/documentation-map.md`: Which artifacts are the machine-readable contract layer (`openapi.yaml`, `AGENTS.md`, `skills/`, sqlc `gen/`), what each is source of truth for, and how CI keeps them from drifting.
+- `docs/architecture.md`: Backend mental model, package layout, lifecycle/session/service boundaries, and load-bearing rules.
+- `docs/STATUS.md`: What is shipped on `main` today and what is still in flight.
+- `docs/cli/README.md`: Intended CLI shape, a thin Cobra client over daemon HTTP with no direct storage/runtime access.
+- `CLAUDE.md`: Compatibility pointer for Claude Code. It directs agents back to `AGENTS.md`.
 
 For code entry points:
 
@@ -104,27 +109,29 @@ For code entry points:
 ## Hard rules and boundaries
 
 - The daemon's **primary (loopback) listener** stays bound to `127.0.0.1` and unauthenticated. Do not change its bind host or add auth to it.
-- The daemon MAY run a **second, opt-in LAN listener** (the "Connect Mobile" feature) that binds `0.0.0.0` **only while explicitly enabled**, **only** behind the bearer-password `authMiddleware`, serving the app API but never the loopback-gated control routes (`/shutdown`, telemetry, mobile control). **Exactly one route is exempt from `authMiddleware`: `GET /api/v1/identity`**, which returns an opaque host id and the mobile contract version so a phone can confirm which machine answered before presenting a credential — see `docs/adr/0003-unauthenticated-identity-probe.md`. The exemption is an exact path, `GET` only, and checked ahead of the lockout; any further unauthenticated route needs its own ADR. It is plaintext and home-network-only by deliberate decision — see `docs/adr/0001-lan-listener-for-mobile.md` and `CONTEXT.md`. Do not add any other network-facing bind.
+- The daemon MAY run a **second, opt-in LAN listener** (the "Connect Mobile" feature) that binds `0.0.0.0` **only while explicitly enabled**, **only** behind the bearer-password `authMiddleware`, serving the app API but never the loopback-gated control routes (`/shutdown`, internal telemetry control, mobile control). Authenticated `GET /api/v1/telemetry/identity` is an app API route available to a paired phone; it returns the Cloud user ID and GitHub login when present, but no email. **Exactly one route is exempt from `authMiddleware`: `GET /api/v1/identity`**, which returns an opaque host id and the mobile contract version so a phone can confirm which machine answered before presenting a credential. See `docs/adr/0003-unauthenticated-identity-probe.md`. The exemption is an exact path, `GET` only, and checked ahead of the lockout; any further unauthenticated route needs its own ADR. The direct LAN listener is plaintext for trusted home networks. See `docs/adr/0001-lan-listener-for-mobile.md` and `CONTEXT.md` for the original decision. Current managed cloudflared and Tailscale TLS endpoints wrap this authenticated mobile path; they do not authorize exposing the primary listener or adding an unauthenticated route. See `frontend/src/docs/content/configuration/remote-access.mdx` for current pairing behavior. Do not add any other network-facing bind.
+- Offline exception: `ao triage` reads bounded diagnostics and resolves/launches a coding agent directly so reporting works with the daemon down. It never starts the daemon or opens SQLite.
 - The CLI is a thin client. Do not port old in-process TypeScript CLI behavior that bypasses daemon HTTP routes.
 - Do not store derived/display session status. Status is derived from durable facts (`activity_state`, `is_terminated`, PR/check/comment facts) at service read time.
 - Do not treat failed/unknown runtime probes as proof a session is dead.
 - Do not force-delete dirty registered worktrees.
 - Do not modify already-merged SQLite migrations. Add a new migration instead.
+- Create new SQLite migrations with `npm run migration:create -- <snake_case_name>` (UTC `YYYYMMDDHHMMSSsss` IDs); append the generated ID and filename to `shippedMigrations` in `migrate_burned_versions_test.go`.
 - Do not hand-edit `backend/internal/storage/sqlite/gen/*`; change `backend/internal/storage/sqlite/queries/*` or migrations and run `npm run sqlc`.
 - SQLite change events come from DB triggers into `change_log`; do not add parallel manual CDC emission from store methods unless the architecture changes explicitly.
 - Keep generated OpenAPI/API DTO drift in mind: controller response shapes live in `backend/internal/httpd/controllers/dto.go` and tests may assert CLI/HTTP wire compatibility.
 - Do not add network calls to tests unless the package already has an integration/e2e pattern for them. Prefer `httptest`, fakes, and injected dependencies.
 - Do not commit local run state, daemon data, temporary worktrees, build outputs, or credentials.
-- All AO-owned app state lives under `~/.ao` only. The daemon's data dir, `running.json`, worktrees, and the Electron supervisor's `userData` (Chromium cache, cookies, local/session storage, crash dumps) must resolve under `~/.ao` (overridable via `AO_DATA_DIR`/`AO_RUN_FILE`). Never write to or otherwise use `~/Library/Application Support` or any other OS default app-data location for AO state. The sole read exception is an explicit, user-initiated browser-profile import: it may read only validated, known source-browser profile files, must never write to the source profile, must keep source paths out of the renderer, and must place every snapshot, staging file, and imported result under `~/.ao`. `main.ts` pins Electron's `userData` to `~/.ao/electron`; do not remove that override or rely on Electron's default path.
+- All AO-owned app state lives under `~/.ao` only. The daemon's data dir, `running.json`, worktrees, and the Electron supervisor's `userData` (Chromium cache, cookies, local/session storage, crash dumps) must resolve under `~/.ao` (overridable via `AO_DATA_DIR`/`AO_RUN_FILE`). Never write to or otherwise use `~/Library/Application Support` or any other OS default app-data location for AO state. The sole read exception is an explicit, user-initiated browser-profile import: it may read only validated, known source-browser profile files, must never write to the source profile, must keep source paths out of the renderer, and must place every snapshot, staging file, and imported result under `~/.ao`. Session import may also read Conductor's `~/Library/Application Support/com.conductor.app/conductor.db`, opened with SQLite `mode=ro` and never written or checkpointed. The sole write exception is Chrome mode's native-messaging host manifest (`dev.ao.browser_bridge.json`): Chrome only discovers native hosts in its own `NativeMessagingHosts` directory (the registry on Windows), so `ao browser chrome setup` writes that one pointer file there, only on the user's explicit setup, and `remove` deletes it. It must point at a host wrapper under `~/.ao` and hold no AO state; the wrapper, endpoint file, and unpacked extension all live under `~/.ao`. `main.ts` pins Electron's `userData` to `~/.ao/electron`; do not remove that override or rely on Electron's default path.
 
 ## API contract changes
 
-The daemon API is code-first. The OpenAPI spec and frontend TypeScript types are generated artifacts — edit the source, then regenerate.
+The daemon API is code-first. The OpenAPI spec and frontend TypeScript types are generated artifacts. Edit the source, then regenerate.
 
 **Source files to edit:**
 
-- `backend/internal/httpd/controllers/dto.go` — request/response shapes.
-- `backend/internal/httpd/apispec/specgen/build.go` — operation registry; add a `schemaNames` entry for any new named type.
+- `backend/internal/httpd/controllers/dto.go`: request/response shapes.
+- `backend/internal/httpd/apispec/specgen/build.go`: operation registry. Add a `schemaNames` entry for any new named type.
 
 **Regenerate after editing:**
 
@@ -142,14 +149,14 @@ npm run api:ts       # npx openapi-typescript@7.4.4 backend/internal/httpd/apisp
 **Verify:**
 
 ```bash
-cd backend && go test ./internal/httpd/...    # spec drift + route/spec parity tests (does not cover schema.ts — that is checked by the api-drift CI job)
+cd backend && go test ./internal/httpd/...    # spec drift + route/spec parity tests (does not cover schema.ts; the codegen-drift CI job checks it)
 ```
 
 Commit `openapi.yaml` and `frontend/src/api/schema.ts` together with the Go changes. CI will regenerate both files and fail if the committed versions are out of date. The CLI hand-mirrored DTOs remain a deliberate manual boundary and are not generated.
 
 ## PR hygiene
 
-- When creating or updating a PR, follow `.agents/skills/pr-description/SKILL.md` so the published description starts with verified category change counts.
+- When creating or updating a PR, follow `.agents/skills/pr-description/SKILL.md` so the published description starts with verified category change counts and shows before-and-after evidence, with screenshots or recordings for UI changes.
 
 - Before creating or handing over a PR, run all CI validation jobs locally using the workflow commands, pinned runtimes, and CI environment (including complete suites, not only focused tests). Fix failures and rerun the affected full suites before sharing the PR. A local pass is not a guarantee: verify the remote checks too. If a job cannot run locally (for example, an unavailable native OS runner, Docker, or required credentials), explicitly report the exact gap and verify that job in CI; never label it locally passed. Do not execute publishing or production deployment as a validation step.
 

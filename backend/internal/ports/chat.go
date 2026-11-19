@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"strings"
+	"time"
 
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
 )
@@ -33,6 +34,12 @@ var (
 	// ErrChatDriverIncompatible means the installed provider speaks a protocol
 	// version AO does not support.
 	ErrChatDriverIncompatible = errors.New("chat driver incompatible")
+	// ErrChatSandboxUnavailable means the provider is installed and speaks the
+	// protocol, but its sandbox cannot start on this host. Reviewers run
+	// read-only with approvals disabled, so the sandbox is their only route to
+	// read the checkout and submit a result; launching one anyway would spend a
+	// model turn on commands that can never run.
+	ErrChatSandboxUnavailable = errors.New("chat sandbox unavailable")
 	// ErrChatAuthRequired means the provider is installed but not authenticated.
 	ErrChatAuthRequired = errors.New("chat driver requires authentication")
 	// ErrChatResumeFailed means a stored provider conversation could not be
@@ -44,6 +51,16 @@ var (
 	// must preserve the durable session and worktree rather than treating the
 	// failed attachment as proof that the provider died.
 	ErrChatRecoveryInconclusive = errors.New("chat conversation recovery is inconclusive")
+	// ErrChatHostNotRunning is a definitive observation that no provider host exists.
+	ErrChatHostNotRunning = errors.New("chat provider host is not running")
+	// ErrChatProviderSessionLost means the provider process is still running
+	// but answers for this conversation's session as if it does not exist.
+	// claude-agent-acp drops a session from memory when the Claude Code process
+	// under it dies, while the adapter (and AO's persistent host) live on. That
+	// provider can never serve the conversation again, so the driver stops it;
+	// the session then reads as exited and resuming reloads the provider's
+	// saved transcript in a fresh process.
+	ErrChatProviderSessionLost = errors.New("chat provider no longer holds the conversation's session")
 	// ErrChatNoActiveTurn means an interrupt found nothing to cancel — either AO
 	// has no turn in flight, or the provider no longer considers the named turn
 	// active. A driver must translate its provider's refusal into this rather than
@@ -86,6 +103,12 @@ var (
 	// re-sending the same load and report the failure instead of spending the
 	// rest of the budget on it.
 	ErrChatHistoryLoadFailed = errors.New("chat conversation history load failed")
+
+	// ErrChatPromptStalled means the chat host's watchdog failed a prompt
+	// because the adapter sent nothing for the whole stall window. The provider
+	// did not answer with an error, so the failure says nothing about whether
+	// the next prompt would fail too.
+	ErrChatPromptStalled = errors.New("chat provider stopped responding")
 )
 
 // ChatHistoryMismatchDimension identifies the exact durable checkpoint fact a
@@ -175,6 +198,9 @@ const (
 	ChatCapabilityUsage     ChatCapability = "usage"
 	ChatCapabilityDiffs     ChatCapability = "diffs"
 	ChatCapabilityPlans     ChatCapability = "plans"
+	// ChatCapabilityPlanMode is a plan mode AO switches per turn, for a
+	// provider that does not offer one as a session setting of its own.
+	ChatCapabilityPlanMode ChatCapability = "plan_mode"
 	// ChatCapabilityModels means the provider can enumerate the models it offers
 	// and accept one per turn.
 	ChatCapabilityModels ChatCapability = "models"
@@ -187,8 +213,11 @@ const (
 	ChatCapabilityCompaction ChatCapability = "compaction"
 	// ChatCapabilityRollback means history can be discarded back to a turn.
 	ChatCapabilityRollback ChatCapability = "rollback"
-	// ChatCapabilityFork means a conversation can be branched.
+	// ChatCapabilityFork means a conversation can be branched at a completed turn.
 	ChatCapabilityFork ChatCapability = "fork"
+	// ChatCapabilityForkCurrent copies the current provider context only; it
+	// must not enable historical edits that require an exact turn cutoff.
+	ChatCapabilityForkCurrent ChatCapability = "fork_current"
 	// ChatCapabilityPromptReplay means AO can open a fresh provider session with
 	// a durable textual transcript supplied as context. This is an approximation
 	// of fork for providers whose protocol cannot fork from a historical turn.
@@ -273,6 +302,12 @@ func MissingCapabilitiesForPermissions(caps ChatCapabilities, permissions Permis
 	return out
 }
 
+// PermissionModesStrictestFirst is AO's permission modes from the one that asks
+// before every action to the one that never asks.
+var PermissionModesStrictestFirst = []PermissionMode{
+	PermissionModeDefault, PermissionModeAcceptEdits, PermissionModeAuto, PermissionModeBypassPermissions,
+}
+
 // ChatStartConfig is what a driver needs to open a new provider conversation.
 type ChatStartConfig struct {
 	SessionID domain.SessionID
@@ -291,6 +326,11 @@ type ChatStartConfig struct {
 	// until they know a new provider process is required; live adoption must keep
 	// the verifier for the bearer already held by the surviving process.
 	PrepareEnv func(context.Context) (map[string]string, error)
+	// AcquireForkSource locks a current-context source immediately before the
+	// provider copies it. Fork drivers release it before loading the child.
+	AcquireForkSource func(context.Context) (copyCtx context.Context, release func(), err error)
+	// RecordFork records an independent child before loading or activating it.
+	RecordFork func(context.Context, string) error
 	// Model is optional; empty defers to the provider's configured default.
 	Model string
 	// Effort is an optional provider-advertised model tuning value; empty
@@ -299,6 +339,15 @@ type ChatStartConfig struct {
 	// Permissions is AO's existing per-session approval policy. Drivers map it
 	// onto their provider's native approval and sandbox settings.
 	Permissions PermissionMode
+	// ReadOnly requires a provider-enforced sandbox that cannot modify the
+	// workspace. It is used for review-owned conversations.
+	ReadOnly bool
+	// DisableNetwork requests tool network isolation for read-only background
+	// conversations. Supporting drivers must not inherit reviewer network access.
+	DisableNetwork bool
+	// DisableTools requests text-only generation for background tasks from
+	// providers that expose a native tool-selection option.
+	DisableTools bool
 	// SystemPrompt carries AO's standing instructions for the session.
 	SystemPrompt string
 	// ProviderScopeID identifies the AO ownership boundary for opaque provider
@@ -307,6 +356,8 @@ type ChatStartConfig struct {
 	// ProviderIDsScoped matches the branch's persisted ID format. False preserves
 	// legacy projections written before scoped IDs were supported.
 	ProviderIDsScoped bool
+	// Ephemeral asks supporting providers not to persist this conversation.
+	Ephemeral bool
 	// AdditionalDirectories are extra absolute workspace roots the provider may
 	// access alongside WorkspacePath. Workspace projects use this for child repo
 	// worktrees; it is not a replacement for AO's worktree ownership.
@@ -318,13 +369,20 @@ type ChatStartConfig struct {
 
 // ChatResumeConfig reattaches to a provider conversation after a restart.
 type ChatResumeConfig struct {
+	// ReconnectOnly forbids launching a replacement provider during a health check.
+	ReconnectOnly bool
 	// See ChatStartConfig.ProviderIDsScoped.
 	ProviderIDsScoped      bool
 	SessionID              domain.SessionID
 	ProviderConversationID string
-	DataDir                string
-	WorkspacePath          string
-	Env                    map[string]string
+	// FreshIfMissing lets a driver that had to reload ProviderConversationID
+	// start a fresh provider conversation when the provider reports it does not
+	// exist. Callers set it only with durable proof that the conversation never
+	// started. The returned conversation then reports the new id.
+	FreshIfMissing bool
+	DataDir        string
+	WorkspacePath  string
+	Env            map[string]string
 	// See ChatStartConfig.PrepareEnv.
 	PrepareEnv func(context.Context) (map[string]string, error)
 	// Model is optional; empty keeps the provider conversation's current model.
@@ -332,9 +390,14 @@ type ChatResumeConfig struct {
 	// Effort is optional; empty keeps the provider conversation's current effort.
 	Effort      string
 	Permissions PermissionMode
+	ReadOnly    bool
 	// SystemPrompt is recomputed by the session manager on restore and reapplied
 	// to the provider process. It is not persisted in the conversation transcript.
 	SystemPrompt string
+	// HasPriorTurns indicates whether the conversation already contains turns
+	// (durable or provider history), so reconnection/restore does not re-send
+	// standing instructions or session preamble intended only for the first turn.
+	HasPriorTurns bool
 	// ProviderScopeID identifies AO's provider ownership boundary. A fresh
 	// approximate branch must never inherit the parent's opaque-id scope.
 	ProviderScopeID       string
@@ -359,16 +422,45 @@ type ChatMCPServerConfig struct {
 // ChatInternalReplayResourceURI is reserved for AO's reconstructed edit context.
 const ChatInternalReplayResourceURI = "ao://conversation/edit-replay"
 
+// ChatExcerptResourceURIPrefix identifies legacy AO-verified transcript excerpts.
+// Captured snapshots carry user-supplied context without resolving this URI.
+const ChatExcerptResourceURIPrefix = "ao://conversation-excerpt/"
+
+// ChatExcerptReference carries captured user input when Snapshot is present.
+// Without Snapshot it is a legacy reference requiring source validation.
+type ChatExcerptReference struct {
+	Snapshot       *domain.ChatExcerptSnapshot `json:"snapshot,omitempty"`
+	ID             string                      `json:"id,omitempty"`
+	Order          int64                       `json:"order,omitempty"`
+	ConversationID string                      `json:"conversationId"`
+	MessageID      string                      `json:"messageId"`
+	Revision       int64                       `json:"revision"`
+	Text           string                      `json:"text"`
+	Comment        string                      `json:"comment,omitempty"`
+}
+
+// ChatExcerptContext carries a frozen selection. Captured context lives in
+// Reference.Snapshot; UserMessage and AssistantMessage retain the legacy
+// server-resolved paired turn for compatibility.
+type ChatExcerptContext struct {
+	Reference        ChatExcerptReference `json:"reference"`
+	SelectedText     string               `json:"selectedText"`
+	UserMessage      string               `json:"userMessage"`
+	AssistantMessage string               `json:"assistantMessage"`
+}
+
 // ChatContent is structured prompt context. Text remains on ChatUserMessage so
 // the durable transcript has an ordinary readable message; these blocks enrich
 // what the provider receives without leaking protocol DTOs above the adapter.
 type ChatContent struct {
-	Type     string `json:"type"`
-	Data     string `json:"data,omitempty"`
-	MIMEType string `json:"mimeType,omitempty"`
-	URI      string `json:"uri,omitempty"`
-	Name     string `json:"name,omitempty"`
-	Text     string `json:"text,omitempty"`
+	Type          string              `json:"type"`
+	Data          string              `json:"data,omitempty"`
+	MIMEType      string              `json:"mimeType,omitempty"`
+	URI           string              `json:"uri,omitempty"`
+	Name          string              `json:"name,omitempty"`
+	Text          string              `json:"text,omitempty"`
+	Excerpt       *ChatExcerptContext `json:"excerpt,omitempty"`
+	FileReference *ChatFileReference  `json:"fileReference,omitempty"`
 	// Internal distinguishes AO-owned prompt context from a user attachment.
 	// Public request DTOs never expose this bit; it is durable so edit/retry and
 	// snapshot reconstruction can hide only content AO actually synthesized.
@@ -383,7 +475,20 @@ func IsInternalReplayContent(content ChatContent) bool {
 
 // ChatUserMessage is one inbound request to the agent.
 type ChatUserMessage struct {
-	Text string
+	// InteractionAt preserves initial acceptance across transition outbox replay.
+	InteractionAt time.Time
+	Text          string
+	// SpawnOpeningPrompt excludes the task brief delivered during session creation
+	// from direct Chat message usage, regardless of who requested the spawn.
+	SpawnOpeningPrompt bool
+	// SenderSessionID identifies the AO session that authored an automation steer.
+	// It is presentation metadata only and is never sent to the provider.
+	SenderSessionID string
+	// SenderProjectID and SenderDisplayName are resolved from SenderSessionID when
+	// the source session is available. They are persisted on steer activities so
+	// the renderer can show a stable label and safe AO session link.
+	SenderProjectID   string
+	SenderDisplayName string
 	// Content carries native images and resources for providers that negotiated
 	// them. Drivers must reject an unsupported block rather than silently discard
 	// context the user believed they sent.
@@ -391,12 +496,32 @@ type ChatUserMessage struct {
 	// ClientMessageID makes delivery idempotent: a retry with the same key must
 	// not produce a second provider turn.
 	ClientMessageID string
-	// Origin records who is speaking. Automation shares the queue with the user
-	// and can never resolve an approval.
+	// ClientPayloadHash identifies the original request before AO adds reports
+	// or other server-owned context. It is internal, never supplied by a client.
+	ClientPayloadHash string
+	// Excerpts are verified transcript selections attached to this user message.
+	Excerpts []ChatExcerptReference
+	// Origin records the timeline attribution and delivery source. Automation
+	// shares the queue with the user and can never resolve an approval.
 	Origin domain.MessageOrigin
+	// AuthoredByUser distinguishes user-written content carried through AO's
+	// automation delivery path from content authored by automation itself.
+	AuthoredByUser bool
 	// Settings are the per-turn provider choices for this message. Zero means the
 	// conversation's own defaults.
 	Settings ChatTurnSettings
+	// Continuation marks the user's one-click "continue" after stopping a turn,
+	// so the timeline can show a marker instead of a message bubble.
+	Continuation bool
+}
+
+// MessageDeliveryOptions describes facts about the message independent of the
+// mechanism AO uses to deliver it.
+type MessageDeliveryOptions struct {
+	InteractionAt time.Time
+	// SenderSessionID is cooperative local identity, resolved from stored metadata.
+	SenderSessionID string
+	AuthoredByUser  bool
 }
 
 // ChatTurnSettings are the per-turn choices a provider accepts alongside the
@@ -415,6 +540,10 @@ type ChatTurnSettings struct {
 	// Approval is AO's permission mode for this turn. The driver maps it onto
 	// whatever approval policy and sandbox its provider understands.
 	Approval PermissionMode
+	// Fast asks for the provider's faster tier, on models that offer one.
+	Fast bool
+	// Plan asks the provider to plan the work rather than carry it out.
+	Plan bool
 }
 
 // IsZero reports whether nothing was chosen, so a dispatch can omit the fields
@@ -429,6 +558,7 @@ func (s ChatTurnSettings) IsZero() bool {
 // is wrong within a week: models are added, renamed, hidden per account, and
 // gated by entitlement the provider knows about and AO does not.
 type ChatModel struct {
+	Inputs      []string
 	ID          string
 	DisplayName string
 	Description string
@@ -439,6 +569,9 @@ type ChatModel struct {
 	Efforts []string
 	// DefaultEffort is the level the provider uses when none is chosen.
 	DefaultEffort string
+	// FastTier is the provider's id for this model's faster tier. Empty means
+	// the model has none.
+	FastTier string
 }
 
 // ChatModelLister is implemented by drivers whose provider can enumerate models.
@@ -583,6 +716,10 @@ type ChatAccount struct {
 	// expected to supply. AO does not hold provider credentials, so this is
 	// reported to the user rather than answered.
 	ReauthRequired bool
+	// ReauthRecovered reports provider recovery intent. The daemon requires a
+	// correlated authoritative turn completion before clearing a demand; an
+	// uncorrelated account report alone is not authentication evidence.
+	ReauthRecovered bool
 	// ReauthReason is the provider's stated reason, e.g. "unauthorized".
 	ReauthReason string
 }
@@ -606,6 +743,14 @@ type ChatMCPServer struct {
 	Status        string
 	Error         string
 	FailureReason string
+}
+
+// ChatMCPReloadResult distinguishes a complete post-reload inventory from a
+// reload whose inventory could not be read. An authoritative empty inventory is
+// meaningful: it says every previously known server was disabled or removed.
+type ChatMCPReloadResult struct {
+	Servers       []ChatMCPServer
+	Authoritative bool
 }
 
 // ChatSkill is one capability the provider exposes to the agent, which a user can
@@ -652,6 +797,29 @@ type (
 	ChatForker interface {
 		Fork(ctx context.Context, lastProviderTurnID *string) (providerConversationID string, err error)
 	}
+	// ChatIsolatedForker creates the fork in the destination provider host. The
+	// source host and its active writer remain untouched. An empty turn id
+	// copies current context; the caller must keep the source quiescent.
+	ChatIsolatedForker interface {
+		ForkIntoHost(ctx context.Context, sourceProviderConversationID, lastProviderTurnID string, cfg ChatStartConfig) (ChatConversation, error)
+	}
+	// ChatWorkspaceForker copies a provider conversation into a new one that
+	// opens from another workspace, without starting a provider host. Session
+	// forks use it for agents whose native sessions are keyed by folder. A
+	// non-empty upToMessageID is the provider's id for the last message to
+	// keep; empty copies the whole conversation.
+	ChatWorkspaceForker interface {
+		ForkIntoWorkspace(ctx context.Context, sourceProviderConversationID, sourceWorkspace, upToMessageID string, cfg ChatStartConfig) (providerConversationID string, err error)
+	}
+	// ChatNativeTurnID resolves a completed provider turn to its native turn ID.
+	ChatNativeTurnID interface {
+		NativeTurnID(providerTurnID string) string
+	}
+	// ChatForkDeleter removes only a provider fork ID positively registered to
+	// an AO side conversation. The caller must never pass a main thread ID.
+	ChatForkDeleter interface {
+		DeleteFork(ctx context.Context, providerConversationID string) error
+	}
 	// ChatInheritedHistory proves native ancestry and expresses the supplied
 	// replay in an ancestor's ID namespace. Nil means ancestry is unverified.
 	// Event order and content must be preserved; callers still verify each copy.
@@ -666,6 +834,14 @@ type (
 	ChatSkillLister interface {
 		ListSkills(ctx context.Context) ([]ChatSkill, error)
 	}
+	// ChatSandboxNetwork is implemented by a conversation whose provider runs
+	// the agent in a sandbox that can withhold network access. AO's own tools
+	// that load agent pages must not give the agent more network than that.
+	ChatSandboxNetwork interface {
+		// SandboxAllowsNetwork reports whether the agent can reach the network
+		// under the turn's permission mode; empty means the mode it launched with.
+		SandboxAllowsNetwork(turnMode PermissionMode) bool
+	}
 	// ChatUsageReporter reads the account's quota position on demand, for the
 	// cases where waiting for the next notification is too late to be useful.
 	ChatUsageReporter interface {
@@ -676,7 +852,7 @@ type (
 	// whose config changed on disk, leaves the agent short of tools for the rest of
 	// the conversation, and the only alternative is throwing the session away.
 	ChatMCPReloader interface {
-		ReloadMCPServers(ctx context.Context) ([]ChatMCPServer, error)
+		ReloadMCPServers(ctx context.Context) (ChatMCPReloadResult, error)
 	}
 )
 
@@ -867,6 +1043,11 @@ const (
 	// ChatEventThreadState reports the provider's own lifecycle view of the thread:
 	// working, idle, archived, closed.
 	ChatEventThreadState ChatEventKind = "thread.state"
+	// ChatEventProviderState reports that the provider itself started or finished
+	// work (ThreadState.Status active or idle). It exists for work AO did not
+	// start: a cycle the agent runs on its own after a turn has no turn events,
+	// so this is the only sign that the agent is busy.
+	ChatEventProviderState ChatEventKind = "provider.state"
 	// ChatEventMCPServers reports the startup state of the tool servers this
 	// conversation can reach, which is what explains a tool call that failed for a
 	// reason the agent had no part in.
@@ -883,6 +1064,7 @@ const (
 	ChatControllerReady      ChatControllerState = "ready"
 	ChatControllerBusy       ChatControllerState = "busy"
 	ChatControllerRecovering ChatControllerState = "recovering"
+	ChatControllerHibernated ChatControllerState = "hibernated"
 	ChatControllerStopped    ChatControllerState = "stopped"
 )
 
@@ -893,7 +1075,7 @@ type chatProviderFailure struct {
 
 // NewChatProviderFailure preserves provider prose as opaque display text. An
 // adapter may attach an existing sentinel (e.g. ErrChatAuthRequired) when native
-// metadata proves it; callers never infer recovery from the message.
+// metadata proves it; callers never infer authentication recovery from the message.
 func NewChatProviderFailure(title, detail string, cause error) error {
 	title = strings.TrimSpace(title)
 	detail = strings.TrimSpace(detail)
@@ -920,6 +1102,8 @@ func (f *chatProviderFailure) Unwrap() error { return f.cause }
 // Deltas are the high-frequency case, so they carry only what changed. A
 // projector folds a delta into the message identified by ProviderItemID and
 // bumps its revision; it never allocates a new timeline position per token.
+// Assistant message text is portable Markdown. Adapters convert native citation
+// annotations to links before emitting events or returning history.
 type ChatEvent struct {
 	Kind ChatEventKind
 	// NativeUserMessageID is an adapter-proven native user record identity.
@@ -953,6 +1137,9 @@ type ChatEvent struct {
 
 	// TurnState is set on turn.completed.
 	TurnState domain.TurnState
+	// FailureCode is set only when an adapter recognizes a specific failed-turn cause.
+	FailureCode        domain.ConversationFailureCode
+	UsageLimitResetsAt time.Time
 
 	// Delta is the text appended by a message.delta, a reasoning.delta, a
 	// command.output.delta, a command.input or an activity.text.
@@ -997,7 +1184,7 @@ type ChatEvent struct {
 	Reroute *ChatModelReroute
 	// Account is set on account.changed.
 	Account *ChatAccount
-	// ThreadState is set on thread.state.
+	// ThreadState is set on thread.state and provider.state.
 	ThreadState *ChatThreadState
 	// MCPServers is set on mcp.servers. A single-server update carries one entry:
 	// the provider reports servers one at a time, so a consumer merges by name
@@ -1007,6 +1194,38 @@ type ChatEvent struct {
 	// Err carries display text and optional typed causes. Its presence does not
 	// imply the conversation is over; check Kind and ControllerState.
 	Err error
+}
+
+// ChatInstallChecker is implemented by chat drivers that can tell, without
+// starting anything, that the adapter they need is missing.
+type ChatInstallChecker interface {
+	CheckChatInstall(ctx context.Context) error
+}
+
+// ChatPermissionModeChecker is implemented by chat drivers whose agent refuses
+// some AO permission modes, so a caller can pick one it accepts before starting.
+type ChatPermissionModeChecker interface {
+	SupportsPermissionMode(mode PermissionMode) bool
+}
+
+// ChatSandboxProbeConfig is the posture a sandbox probe must reproduce. It
+// carries no model, prompt, or credentials: the probe only proves that a
+// command can start inside the provider's sandbox from this checkout.
+type ChatSandboxProbeConfig struct {
+	// WorkspacePath is the checkout the reviewer will run in.
+	WorkspacePath string
+}
+
+// ChatSandboxProber is implemented by a driver that can prove its sandbox
+// starts before AO commits to a review. It is deliberately separate from
+// ChatDriver: most Chat flows can fall back to a different posture, while a
+// reviewer cannot.
+type ChatSandboxProber interface {
+	// ProbeSandbox runs a no-op command in the provider's read-only sandbox.
+	// It returns ErrChatSandboxUnavailable (wrapped with the provider's own
+	// error) when the sandbox cannot start, and nil when the provider does not
+	// support the probe so callers keep their previous behaviour.
+	ProbeSandbox(ctx context.Context, cfg ChatSandboxProbeConfig) error
 }
 
 // ChatDriver opens conversations for one harness.
@@ -1023,6 +1242,20 @@ type ChatDriver interface {
 	// Resume reattaches to an existing one. It returns ErrChatResumeFailed
 	// rather than silently starting a new conversation.
 	Resume(ctx context.Context, cfg ChatResumeConfig) (ChatConversation, error)
+}
+
+// ChatEnvironmentValidator checks provider prerequisites against the environment
+// overrides that a new session will inherit over the daemon environment. It must
+// not mutate the environment, create files, or launch a provider. These checks
+// are per request and must not be cached with global Chat capabilities.
+type ChatEnvironmentValidator interface {
+	ValidateEnvironment(ctx context.Context, env map[string]string) error
+}
+
+// ChatDriverReconnector attaches only to a surviving provider. Implementations
+// must never create a provider process or fall back to native history resume.
+type ChatDriverReconnector interface {
+	Reconnect(context.Context, ChatResumeConfig) (ChatConversation, error)
 }
 
 // ChatConversation is one live controller. Exactly one exists per Chat session,
@@ -1060,6 +1293,15 @@ type ChatProviderPreserver interface {
 // destruction must do more than detach the controller.
 type ChatProviderTerminator interface {
 	Terminate() error
+}
+
+// ChatProviderHibernator stops the controller and provider process while
+// retaining the native conversation for a later Resume.
+type ChatProviderHibernator interface {
+	// CanHibernate checks provider-owned work that can outlive a settled turn.
+	// An error must leave the provider running.
+	CanHibernate(ctx context.Context) (bool, error)
+	Hibernate() error
 }
 
 // ChatLiveReconnector identifies attachment to the same initialized provider

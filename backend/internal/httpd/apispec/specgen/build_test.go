@@ -80,6 +80,27 @@ func TestBuild_MatchesEmbedded(t *testing.T) {
 	}
 }
 
+func TestBuild_TelemetryIdentityUsesNamedSchema(t *testing.T) {
+	got, err := specgen.Build()
+	if err != nil {
+		t.Fatalf("Build: %v", err)
+	}
+	var doc struct {
+		Components struct {
+			Schemas map[string]openAPISchemaNode `yaml:"schemas"`
+		} `yaml:"components"`
+	}
+	if err := yaml.Unmarshal(got, &doc); err != nil {
+		t.Fatalf("parse generated OpenAPI: %v", err)
+	}
+	if _, ok := doc.Components.Schemas["TelemetryIdentityResponse"]; !ok {
+		t.Fatal("named TelemetryIdentityResponse schema is missing")
+	}
+	if _, ok := doc.Components.Schemas["ControllersTelemetryIdentityResponse"]; ok {
+		t.Fatal("default controller-prefixed telemetry identity schema remains")
+	}
+}
+
 func TestBuild_InstallJobTargetRemainsAnEnum(t *testing.T) {
 	got, err := specgen.Build()
 	if err != nil {
@@ -134,6 +155,76 @@ func TestBuild_DelegateAgentEnumIncludesPrimeAgent(t *testing.T) {
 	}
 }
 
+func TestBuild_OpenCodeV2HarnessContracts(t *testing.T) {
+	doc := buildSchemas(t)
+	for schema, field := range map[string]string{
+		"SpawnSessionRequest": "harness",
+		"DelegateTaskRequest": "agent",
+	} {
+		values := doc.Components.Schemas[schema].Properties[field].Enum
+		if !slices.Contains(values, "opencode-v2") {
+			t.Errorf("%s.%s enum = %v, missing opencode-v2", schema, field, values)
+		}
+		if !slices.Contains(values, "opencode") {
+			t.Errorf("%s.%s enum = %v, missing existing opencode", schema, field, values)
+		}
+	}
+	for schema, field := range map[string]string{
+		"ControllersSessionView":    "reviewerHarness",
+		"SetSessionReviewerRequest": "harness",
+		"TriggerReviewRequest":      "harness",
+	} {
+		values := doc.Components.Schemas[schema].Properties[field].Enum
+		if !slices.Contains(values, "opencode-v2") {
+			t.Errorf("%s.%s enum = %v, missing opencode-v2", schema, field, values)
+		}
+		if !slices.Contains(values, "opencode") {
+			t.Errorf("%s.%s enum = %v, missing existing opencode reviewer", schema, field, values)
+		}
+	}
+}
+
+func TestBuild_OpenCodeV2InstallContracts(t *testing.T) {
+	got, err := specgen.Build()
+	if err != nil {
+		t.Fatalf("Build: %v", err)
+	}
+	var doc struct {
+		Paths map[string]struct {
+			Post struct {
+				Parameters []struct {
+					Name   string            `yaml:"name"`
+					Schema openAPISchemaNode `yaml:"schema"`
+				} `yaml:"parameters"`
+			} `yaml:"post"`
+		} `yaml:"paths"`
+		Components struct {
+			Schemas map[string]openAPISchemaNode `yaml:"schemas"`
+		} `yaml:"components"`
+	}
+	if err := yaml.Unmarshal(got, &doc); err != nil {
+		t.Fatalf("parse generated OpenAPI: %v", err)
+	}
+	var targets []string
+	for _, parameter := range doc.Paths["/api/v1/system/install/{target}"].Post.Parameters {
+		if parameter.Name == "target" {
+			targets = parameter.Schema.Enum
+		}
+	}
+	if !slices.Contains(targets, "opencode-v2") {
+		t.Fatalf("InstallTargetParam target enum = %v, missing opencode-v2", targets)
+	}
+	for schema := range map[string]bool{
+		"AgentInstallPlan":   true,
+		"AgentInstallMethod": true,
+		"InstallJob":         true,
+	} {
+		if _, ok := doc.Components.Schemas[schema].Properties["notice"]; !ok {
+			t.Errorf("%s is missing the install replacement notice", schema)
+		}
+	}
+}
+
 func TestBuild_UsageEstimatedCostIsNamedReusableAndNullable(t *testing.T) {
 	got, err := specgen.Build()
 	if err != nil {
@@ -170,24 +261,12 @@ func TestBuild_UsageEstimatedCostIsNamedReusableAndNullable(t *testing.T) {
 	}
 
 	const costRef = "#/components/schemas/EstimatedCostResponse"
-	for schemaName, propertyName := range map[string]string{
-		"CompactSessionUsageResponse": "estimatedCost",
-		"UsageTotalsResponse":         "estimatedCost",
-	} {
-		property := doc.Components.Schemas[schemaName].Properties[propertyName]
-		if property.Type != nil {
-			t.Fatalf("%s.%s has contradictory outer type %v", schemaName, propertyName, property.Type)
-		}
-		if !schemaContainsRef(property, costRef) || !schemaAllowsNull(property) {
-			t.Fatalf("%s.%s = %+v, want nullable %s", schemaName, propertyName, property, costRef)
-		}
+	property := doc.Components.Schemas["CompactSessionUsageResponse"].Properties["estimatedCost"]
+	if property.Type != nil {
+		t.Fatalf("CompactSessionUsageResponse.estimatedCost has contradictory outer type %v", property.Type)
 	}
-	// One model is one row. The billing provider is a pricing input the
-	// aggregate has already applied, so it must not reappear here and split a
-	// model apart by AO's own attribution state.
-	model := doc.Components.Schemas["UsageModelResponse"]
-	if slices.Contains(model.Required, "providerId") {
-		t.Fatalf("UsageModelResponse still exposes providerId: %v", model.Required)
+	if !schemaContainsRef(property, costRef) || !schemaAllowsNull(property) {
+		t.Fatalf("CompactSessionUsageResponse.estimatedCost = %+v, want nullable %s", property, costRef)
 	}
 }
 
@@ -248,11 +327,34 @@ func TestBuild_OMPIsPubliclySpawnable(t *testing.T) {
 	}
 }
 
+func TestBuild_FXPublicHarnessContracts(t *testing.T) {
+	doc := buildSchemas(t)
+	for schema, field := range map[string]string{
+		"SpawnSessionRequest": "harness", "DelegateTaskRequest": "agent", "InstallJob": "target",
+	} {
+		if values := doc.Components.Schemas[schema].Properties[field].Enum; !slices.Contains(values, "fx") {
+			t.Errorf("%s.%s enum = %v, want fx", schema, field, values)
+		}
+	}
+}
+
 func TestBuild_OMPIsPubliclyDelegatable(t *testing.T) {
 	doc := buildSchemas(t)
 	agents := doc.Components.Schemas["DelegateTaskRequest"].Properties["agent"].Enum
 	if !slices.Contains(agents, "omp") {
 		t.Fatalf("DelegateTaskRequest agent enum = %v, want omp", agents)
+	}
+}
+
+func TestBuild_CodewhaleIsPubliclySpawnableAndDelegatable(t *testing.T) {
+	doc := buildSchemas(t)
+	harnesses := doc.Components.Schemas["SpawnSessionRequest"].Properties["harness"].Enum
+	if !slices.Contains(harnesses, "codewhale") {
+		t.Fatalf("SpawnSessionRequest harness enum = %v, want codewhale", harnesses)
+	}
+	agents := doc.Components.Schemas["DelegateTaskRequest"].Properties["agent"].Enum
+	if !slices.Contains(agents, "codewhale") {
+		t.Fatalf("DelegateTaskRequest agent enum = %v, want codewhale", agents)
 	}
 }
 

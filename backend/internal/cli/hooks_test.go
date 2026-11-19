@@ -18,6 +18,7 @@ import (
 
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
 	"github.com/aoagents/agent-orchestrator/backend/internal/pricing"
+	"github.com/aoagents/agent-orchestrator/backend/internal/runfile"
 )
 
 type activityCapture struct {
@@ -57,6 +58,74 @@ func TestClaudeSubmissionContextMatchesDurableNonce(t *testing.T) {
 			t.Fatalf("submission identity mismatch: request=%+v output=%+v", request, output)
 		}
 		previous = request.SubmissionID
+	}
+}
+
+func TestClaudeHookReportsNativeEntrypoint(t *testing.T) {
+	t.Setenv("AO_SESSION_ID", "qa-1")
+	t.Setenv("AO_RUNTIME_LAUNCH_ID", "launch-1")
+	cfg := setConfigEnv(t)
+	srv, capture := activityServer(t, http.StatusOK, `{"ok":true}`)
+	writeRunFileFor(t, cfg, srv)
+	for _, tc := range []struct{ agent, env, want string }{
+		{"claude-code", "sdk-cli", "sdk-cli"},
+		{"claude-code", "cli", "cli"},
+		{"claude-code", "", ""},
+		// Only Claude defines this marker; other harnesses never forward it.
+		{"codex", "sdk-cli", ""},
+	} {
+		t.Setenv("CLAUDE_CODE_ENTRYPOINT", tc.env)
+		hits := capture.hits
+		if _, _, err := executeCLI(t, Deps{
+			In:           strings.NewReader(`{"session_id":"native-side"}`),
+			ProcessAlive: func(int) bool { return true },
+		}, "hooks", tc.agent, "session-end"); err != nil {
+			t.Fatal(err)
+		}
+		if capture.hits != hits+1 {
+			t.Fatalf("%s session-end posted %d activity requests, want 1", tc.agent, capture.hits-hits)
+		}
+		var request setActivityAPIRequest
+		if err := json.Unmarshal([]byte(capture.body), &request); err != nil {
+			t.Fatal(err)
+		}
+		if request.Entrypoint != tc.want {
+			t.Fatalf("%s entrypoint %q forwarded as %q, want %q", tc.agent, tc.env, request.Entrypoint, tc.want)
+		}
+	}
+}
+
+func TestClaudeHookReportsItsProcess(t *testing.T) {
+	t.Setenv("AO_SESSION_ID", "qa-1")
+	t.Setenv("AO_RUNTIME_LAUNCH_ID", "launch-1")
+	cfg := setConfigEnv(t)
+	srv, capture := activityServer(t, http.StatusOK, `{"ok":true}`)
+	writeRunFileFor(t, cfg, srv)
+	for _, tc := range []struct {
+		agent, env string
+		want       int
+	}{
+		{"claude-code", "4242", 4242},
+		{"claude-code", "", 0},
+		{"claude-code", "not-a-pid", 0},
+		{"claude-code", "1", 0},
+		// Only Claude names the process running a hook.
+		{"codex", "4242", 0},
+	} {
+		t.Setenv("CLAUDE_PID", tc.env)
+		if _, _, err := executeCLI(t, Deps{
+			In:           strings.NewReader(`{"session_id":"native-1"}`),
+			ProcessAlive: func(int) bool { return true },
+		}, "hooks", tc.agent, "stop"); err != nil {
+			t.Fatal(err)
+		}
+		var request setActivityAPIRequest
+		if err := json.Unmarshal([]byte(capture.body), &request); err != nil {
+			t.Fatal(err)
+		}
+		if request.ProcessID != tc.want {
+			t.Fatalf("%s CLAUDE_PID %q forwarded as %d, want %d", tc.agent, tc.env, request.ProcessID, tc.want)
+		}
 	}
 }
 
@@ -160,6 +229,11 @@ func assertActivityRequest(t *testing.T, got, want setActivityAPIRequest) {
 	}
 	// The exact timestamp has a separate deterministic wire-contract test.
 	got.ObservedAt = time.Time{}
+	// Every hook names the agent that sent it; the value has its own test.
+	if got.Harness == "" {
+		t.Fatal("hook omitted the agent that sent it")
+	}
+	got.Harness = ""
 	if got != want {
 		t.Fatalf("body = %+v, want %+v", got, want)
 	}
@@ -302,6 +376,39 @@ func TestHooks_ReviewerRoutesToReviewActivity(t *testing.T) {
 	}
 }
 
+func TestHooks_ClineReviewerUsesResumableIDs(t *testing.T) {
+	for _, tc := range []struct {
+		name, payload, want string
+	}{
+		{"task ID", `{"taskId":"conv_123"}`, ""},
+		{"snake task ID", `{"task_id":"conv_123"}`, ""},
+		{"root ID", `{"taskId":"conv_123","sessionContext":{"rootSessionId":"native-root"}}`, "native-root"},
+		{"legacy ID", `{"taskResume":{"taskMetadata":{"ulid":"native-legacy"}}}`, "native-legacy"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Setenv("AO_REVIEW_SESSION_ID", "review-7")
+			t.Setenv("AO_REVIEW_HARNESS", "cline")
+			cfg := setConfigEnv(t)
+			srv, capture := activityServer(t, http.StatusOK, `{"ok":true}`)
+			writeRunFileFor(t, cfg, srv)
+			_, _, err := executeCLI(t, Deps{
+				In:           strings.NewReader(tc.payload),
+				ProcessAlive: func(int) bool { return true },
+			}, "hooks", "cline", "session-start")
+			if err != nil {
+				t.Fatal(err)
+			}
+			var req setReviewActivityAPIRequest
+			if err := json.Unmarshal([]byte(capture.body), &req); err != nil {
+				t.Fatal(err)
+			}
+			if capture.path != "/api/v1/reviews/review-7/activity" || req.AgentSessionID != tc.want || req.State != "active" {
+				t.Fatalf("review hook = %s, %+v; want native ID %q and active state", capture.path, req, tc.want)
+			}
+		})
+	}
+}
+
 func TestHooks_ReviewerActivityOmitsToolCorrelationFields(t *testing.T) {
 	t.Setenv("AO_REVIEW_SESSION_ID", "review-7")
 	t.Setenv("AO_REVIEW_WORKER_SESSION_ID", "worker-7")
@@ -329,6 +436,44 @@ func TestHooks_ReviewerActivityOmitsToolCorrelationFields(t *testing.T) {
 	}
 	if _, ok := req["toolUseId"]; ok {
 		t.Fatalf("reviewer activity included toolUseId: body=%s", capture.body)
+	}
+}
+
+func TestHooks_MemcodeReportsSessionChangesAfterRestore(t *testing.T) {
+	t.Setenv("AO_SESSION_ID", "ao-7")
+	t.Setenv("AO_MEMCODE_INTERACTIVE_RESTORE", "1")
+	t.Setenv("AO_MEMCODE_RESTORE_TARGET", "sess_a0a0a0a0")
+	t.Setenv("AO_MEMCODE_SESSION", "ao-7")
+	t.Setenv("AO_MEMCODE_GENERATION", "launch-1")
+	data := t.TempDir()
+	t.Setenv("AO_MEMCODE_DATA_DIR", data)
+	instructions := filepath.Join(data, "agent-launches", "memcode", "ao-7")
+	if err := os.MkdirAll(instructions, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(instructions, "instructions.json"), []byte(`["Y29udGV4dA=="]`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	cfg := setConfigEnv(t)
+	srv, capture := activityServer(t, http.StatusOK, `{"ok":true}`)
+	writeRunFileFor(t, cfg, srv)
+	for i, nativeID := range []string{"sess_b1b1b1b1", "sess_a0a0a0a0", "sess_c2c2c2c2"} {
+		t.Setenv("MEMCODE_SESSION_ID", nativeID)
+		_, stderr, err := executeCLI(t, Deps{In: strings.NewReader(`{}`), ProcessAlive: func(int) bool { return true }}, "hooks", "memcode", "session-start")
+		if err != nil {
+			t.Fatalf("hook %d: %v: %s", i, err, stderr)
+		}
+		if want := 0; i == 2 {
+			want = 1
+			if !strings.Contains(capture.body, nativeID) {
+				t.Fatalf("session change was not reported: %s", capture.body)
+			}
+			if capture.hits != want {
+				t.Fatalf("hook %d posted %d times, want %d", i, capture.hits, want)
+			}
+		} else if capture.hits != want {
+			t.Fatalf("handshake hook %d posted %d times", i, capture.hits)
+		}
 	}
 }
 
@@ -440,6 +585,24 @@ func TestHooks_IdlePromptReportsIdle(t *testing.T) {
 	}
 }
 
+func TestHooks_DottedProjectSessionIDReportsActivity(t *testing.T) {
+	t.Setenv("AO_SESSION_ID", "acme.dev-2")
+	cfg := setConfigEnv(t)
+	srv, capture := activityServer(t, http.StatusOK, `{"ok":true}`)
+	writeRunFileFor(t, cfg, srv)
+
+	_, errOut, err := executeCLI(t, Deps{
+		In:           strings.NewReader(`{}`),
+		ProcessAlive: func(int) bool { return true },
+	}, "hooks", "claude-code", "stop")
+	if err != nil {
+		t.Fatalf("unexpected error: %v\nstderr=%s", err, errOut)
+	}
+	if capture.path != "/api/v1/sessions/acme.dev-2/activity" {
+		t.Fatalf("activity path = %q, want the dotted session's activity endpoint", capture.path)
+	}
+}
+
 func TestHooks_SessionEndReportsExited(t *testing.T) {
 	t.Setenv("AO_SESSION_ID", "ao-7")
 	cfg := setConfigEnv(t)
@@ -521,6 +684,183 @@ func TestHooks_StopReportsIdle(t *testing.T) {
 	}
 	if got := capturedState(t, capture); got != "idle" {
 		t.Errorf("state = %q, want idle", got)
+	}
+}
+
+// Claude fires StopFailure instead of Stop when an API error (usage limit,
+// unknown model, expired login) ends the turn. It must report idle, tagged so
+// lifecycle treats it as a turn boundary, and must not certify the error text
+// as the turn's assistant answer.
+func TestHooks_ClaudeStopFailureReportsIdle(t *testing.T) {
+	t.Setenv("AO_SESSION_ID", "ao-7")
+	cfg := setConfigEnv(t)
+	srv, capture := activityServer(t, http.StatusOK, `{"ok":true}`)
+	writeRunFileFor(t, cfg, srv)
+
+	payload := `{"session_id":"native-1","hook_event_name":"StopFailure","error":"rate_limit","error_details":"429 usage limit","last_assistant_message":"API Error: usage limit reached"}`
+	_, _, err := executeCLI(t, Deps{
+		In:           strings.NewReader(payload),
+		ProcessAlive: func(int) bool { return true },
+	}, "hooks", "claude-code", "stop-failure")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	var req setActivityAPIRequest
+	if err := json.Unmarshal([]byte(capture.body), &req); err != nil {
+		t.Fatal(err)
+	}
+	if req.State != "idle" || req.Event != "stop-failure" || req.AgentSessionID != "native-1" {
+		t.Fatalf("request = %#v, want idle stop-failure for native-1", req)
+	}
+	if req.LatestAssistantUpdate != "" || req.LatestUserPrompt != "" {
+		t.Fatalf("stop-failure reported conversation facts: %#v", req)
+	}
+}
+
+func TestHooks_ClaudeStopCarriesRunningSubagents(t *testing.T) {
+	t.Setenv("AO_SESSION_ID", "ao-7")
+	t.Setenv("AO_RUNTIME_LAUNCH_ID", "launch-3")
+	cfg := setConfigEnv(t)
+	srv, capture := activityServer(t, http.StatusOK, `{"ok":true}`)
+	writeRunFileFor(t, cfg, srv)
+	payload := `{"session_id":"native-main","background_tasks":[{"id":"child-1","type":"subagent","status":"running"},{"id":"shell-1","type":"bash","status":"running"}]}`
+	_, _, err := executeCLI(t, Deps{
+		In: strings.NewReader(payload), ProcessAlive: func(int) bool { return true },
+	}, "hooks", "claude-code", "stop")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var req setActivityAPIRequest
+	if err := json.Unmarshal([]byte(capture.body), &req); err != nil {
+		t.Fatal(err)
+	}
+	if req.State != "idle" || req.RunningSubagentIDs == nil || len(*req.RunningSubagentIDs) != 1 || (*req.RunningSubagentIDs)[0] != "child-1" {
+		t.Fatalf("Stop request = %+v", req)
+	}
+	_, _, err = executeCLI(t, Deps{
+		In:           strings.NewReader(`{"session_id":"native-main","background_tasks":[]}`),
+		ProcessAlive: func(int) bool { return true },
+	}, "hooks", "claude-code", "stop")
+	if err != nil {
+		t.Fatal(err)
+	}
+	req = setActivityAPIRequest{}
+	if err := json.Unmarshal([]byte(capture.body), &req); err != nil {
+		t.Fatal(err)
+	}
+	if req.RunningSubagentIDs == nil || len(*req.RunningSubagentIDs) != 0 {
+		t.Fatalf("empty background snapshot lost: %+v", req)
+	}
+	_, _, err = executeCLI(t, Deps{
+		In:           strings.NewReader(`{"session_id":"native-main"}`),
+		ProcessAlive: func(int) bool { return true },
+	}, "hooks", "claude-code", "stop")
+	if err != nil {
+		t.Fatal(err)
+	}
+	req = setActivityAPIRequest{}
+	if err := json.Unmarshal([]byte(capture.body), &req); err != nil {
+		t.Fatal(err)
+	}
+	if req.RunningSubagentIDs != nil {
+		t.Fatalf("unavailable task registry became an empty snapshot: %+v", req)
+	}
+	_, _, err = executeCLI(t, Deps{
+		In:           strings.NewReader(`{"session_id":"native-main","agent_id":"child-1","background_tasks":[{"id":"child-2","type":"subagent"}]}`),
+		ProcessAlive: func(int) bool { return true },
+	}, "hooks", "claude-code", "subagent-stop")
+	if err != nil {
+		t.Fatal(err)
+	}
+	req = setActivityAPIRequest{}
+	if err := json.Unmarshal([]byte(capture.body), &req); err != nil {
+		t.Fatal(err)
+	}
+	if req.SubagentID != "child-1" || req.RunningSubagentIDs == nil || len(*req.RunningSubagentIDs) != 1 || (*req.RunningSubagentIDs)[0] != "child-2" {
+		t.Fatalf("SubagentStop parent snapshot = %+v", req)
+	}
+}
+
+func TestHooks_ClaudeSubagentIdentityDoesNotBecomeMainConversation(t *testing.T) {
+	t.Setenv("AO_SESSION_ID", "ao-7")
+	t.Setenv("AO_RUNTIME_LAUNCH_ID", "launch-3")
+	cfg := setConfigEnv(t)
+	srv, capture := activityServer(t, http.StatusOK, `{"ok":true}`)
+	writeRunFileFor(t, cfg, srv)
+	for _, event := range []string{"subagent-start", "pre-tool-use", "subagent-stop"} {
+		_, _, err := executeCLI(t, Deps{
+			In:           strings.NewReader(`{"session_id":"native-main","agent_id":"child-1","tool_name":"Bash","last_assistant_message":"child answer"}`),
+			ProcessAlive: func(int) bool { return true },
+		}, "hooks", "claude-code", event)
+		if err != nil {
+			t.Fatal(err)
+		}
+		var req setActivityAPIRequest
+		if err := json.Unmarshal([]byte(capture.body), &req); err != nil {
+			t.Fatal(err)
+		}
+		if req.SubagentID != "child-1" || req.AgentSessionID != "native-main" || req.LatestAssistantUpdate != "" {
+			t.Fatalf("%s request = %+v", event, req)
+		}
+	}
+}
+
+func TestHooks_CodexSubagentEventsCarryChildIdentity(t *testing.T) {
+	t.Setenv("AO_SESSION_ID", "ao-7")
+	t.Setenv("AO_RUNTIME_LAUNCH_ID", "launch-3")
+	cfg := setConfigEnv(t)
+	srv, capture := activityServer(t, http.StatusOK, `{"ok":true}`)
+	writeRunFileFor(t, cfg, srv)
+	for _, event := range []string{"subagent-start", "user-prompt-submit", "subagent-stop"} {
+		_, _, err := executeCLI(t, Deps{
+			In:           strings.NewReader(`{"session_id":"native-root","agent_id":"child-1","last_assistant_message":"child answer"}`),
+			ProcessAlive: func(int) bool { return true },
+		}, "hooks", "codex", event)
+		if err != nil {
+			t.Fatal(err)
+		}
+		var req setActivityAPIRequest
+		if err := json.Unmarshal([]byte(capture.body), &req); err != nil {
+			t.Fatal(err)
+		}
+		if req.Event != event || req.SubagentID != "child-1" || req.AgentSessionID != "native-root" || req.LaunchID != "launch-3" ||
+			req.LatestUserPrompt != "" || req.LatestAssistantUpdate != "" || req.ProviderTurnID != "" {
+			t.Fatalf("%s request = %+v", event, req)
+		}
+	}
+}
+
+func TestHooks_CodexSpawnToolResultCarriesProvisionalChild(t *testing.T) {
+	t.Setenv("AO_SESSION_ID", "ao-7")
+	t.Setenv("AO_RUNTIME_LAUNCH_ID", "launch-3")
+	cfg := setConfigEnv(t)
+	srv, capture := activityServer(t, http.StatusOK, `{"ok":true}`)
+	writeRunFileFor(t, cfg, srv)
+	payload := `{"session_id":"native-root","tool_name":"spawn_agent","tool_use_id":"call-1","tool_response":"{\"task_name\":\"/root/worker\"}"}`
+	_, _, err := executeCLI(t, Deps{
+		In:           strings.NewReader(payload),
+		ProcessAlive: func(int) bool { return true },
+	}, "hooks", "codex", "post-tool-use")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var req setActivityAPIRequest
+	if err := json.Unmarshal([]byte(capture.body), &req); err != nil {
+		t.Fatal(err)
+	}
+	if req.Event != "subagent-spawn" || req.SubagentID != "call-1" || req.AgentSessionID != "native-root" || req.LaunchID != "launch-3" || req.State != "" {
+		t.Fatalf("spawn request = %+v", req)
+	}
+	for _, payload := range []string{
+		`{"tool_name":"spawn_agent","tool_use_id":"call-1","tool_response":"failed"}`,
+		`{"tool_name":"spawn_agent","tool_use_id":"call-1","tool_response":"{\"task_name\":\"/root/worker\"}","agent_id":"child-1"}`,
+		`{"tool_name":"collaborationspawn_agent","tool_use_id":"call-1","tool_response":"failed"}`,
+		`{"tool_name":"collaborationspawn_agent","tool_use_id":"call-1","tool_response":"{\"task_name\":\"/root/worker\"}","agent_id":"child-1"}`,
+		`{"tool_name":"exec_command","tool_use_id":"call-1","tool_response":"{\"task_name\":\"/root/worker\"}"}`,
+	} {
+		if got := codexSpawnToolUseID([]byte(payload)); got != "" {
+			t.Fatalf("non-root successful spawn parsed as %q from %s", got, payload)
+		}
 	}
 }
 
@@ -629,6 +969,185 @@ func TestHooks_UserPromptSubmitReportsOnlyMainUserCheckpoint(t *testing.T) {
 		req.ConversationCheckpointOrigin != domain.ConversationCheckpointOriginHuman {
 		t.Fatalf("conversation facts = %#v", req)
 	}
+}
+
+func TestHookConversationFactsCorrelatesAcceptedReportDelivery(t *testing.T) {
+	// Claude transcript lines 1538, 687, 659, and 1303 from the replay
+	// investigation. Keep the paste boundaries; shorten unrelated report text.
+	tests := []struct {
+		name, prompt, deliveryID string
+	}{
+		{
+			name: "fully wrapped",
+			prompt: `
+
+<pasted_content id="eead">
+<ao-report-delivery id="report-batch:rpt_7bf824eb-2fd9-4b15-a920-04f0469aac0f">
+Reports since your previous turn:
+
+[stuck] ao://sessions/ao-agentic-testing/ao-agentic-testing-28
+artifact: /evidence/unattended-rebuild-02/create.log
+</ao-report-delivery>
+</pasted_content id="eead">
+`,
+			deliveryID: "report-batch:rpt_7bf824eb-2fd9-4b15-a920-04f0469aac0f",
+		},
+		{
+			name: "partially wrapped",
+			prompt: `
+
+<pasted_content id="eead">
+<ao-report-delivery id="report-batch:rpt_7e0c477b-4631-4357-8763-969d2e2ac026">
+Reports since your previous turn:
+
+artifact: /evidence/vnc-headless-6gb-02
+</pasted_content id="eead">
+
+/character-fidelity-result-01.json
+</ao-report-delivery>`,
+			deliveryID: "report-batch:rpt_7e0c477b-4631-4357-8763-969d2e2ac026",
+		},
+		{
+			name: "multiple paste blocks",
+			prompt: `
+
+<pasted_content id="eead">
+<ao-report-delivery id="report-batch:rpt_7e0c477b-4631-4357-8763-969d2e2ac026">
+Reports since your previous turn:
+
+artifact: /evidence/vnc-headless-6gb-02
+</pasted_content id="eead">
+
+
+<pasted_content id="eead">
+/character-fidelity-result-01.json
+</ao-report-delivery>
+</pasted_content id="eead">
+`,
+			deliveryID: "report-batch:rpt_7e0c477b-4631-4357-8763-969d2e2ac026",
+		},
+		{
+			name:       "unwrapped",
+			prompt:     domain.WrapReportDelivery("report-batch:rpt_a0cdacc3-6362-43b0-aa86-9030fcdcecf1", "Reports since your previous turn:"),
+			deliveryID: "report-batch:rpt_a0cdacc3-6362-43b0-aa86-9030fcdcecf1",
+		},
+		{
+			name:       "plain closing tag",
+			prompt:     "<pasted_content id=\"eead\">\n" + domain.WrapReportDelivery("report-batch:abc123", "worker finished") + "\n</pasted_content>",
+			deliveryID: "report-batch:abc123",
+		},
+		{
+			name: "multiple paste blocks with plain closing tags",
+			prompt: "<pasted_content id=\"a\"><ao-report-delivery id=\"report-batch:abc123\">worker </pasted_content>\n" +
+				"<pasted_content id=\"b\">finished</ao-report-delivery></pasted_content>",
+			deliveryID: "report-batch:abc123",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			payload := []byte(`{"prompt":` + mustJSONString(t, tt.prompt) + `,"prompt_id":"native-turn"}`)
+			got := hookConversationFacts(domain.HarnessClaudeCode, "user-prompt-submit", payload)
+			if got.CheckpointOrigin != domain.ConversationCheckpointOriginCoordination ||
+				got.CoordinationID != tt.deliveryID || got.LatestUserPrompt != "" || got.ProviderTurnID != "native-turn" {
+				t.Fatalf("conversation facts = %+v", got)
+			}
+		})
+	}
+}
+
+func TestHookConversationFactsPreservesHumanTextAfterReportPaste(t *testing.T) {
+	const deliveryID = "report-batch:abc123"
+	report := domain.WrapReportDelivery(deliveryID, "worker finished")
+	pasteOpen, pasteClose := "<pasted_content id=\"eead\">\n", "\n</pasted_content id=\"eead\">"
+	instruction := "Please stop the worker and wait for my approval."
+	tests := []struct {
+		name, prompt string
+	}{
+		{
+			name:   "instruction inside paste wrapper",
+			prompt: pasteOpen + report + "\n" + instruction + pasteClose,
+		},
+		{
+			name:   "instruction after paste wrapper",
+			prompt: pasteOpen + report + pasteClose + "\n" + instruction,
+		},
+		{
+			name: "instruction after multiple paste blocks",
+			prompt: pasteOpen +
+				"<ao-report-delivery id=\"" + deliveryID + "\">\nworker " + pasteClose +
+				"\n\n" + pasteOpen + "finished\n</ao-report-delivery>" + pasteClose + "\n" + instruction,
+		},
+		{
+			name:   "unmatched paste closer",
+			prompt: report + "\n</pasted_content id=\"eead\">",
+		},
+		{
+			name:   "unmatched plain paste closer",
+			prompt: report + "\n</pasted_content>",
+		},
+		{
+			name: "paste block closed twice",
+			prompt: pasteOpen + "<ao-report-delivery id=\"" + deliveryID + "\">\nworker " + pasteClose +
+				"\n" + pasteOpen + "finished\n</ao-report-delivery>" + pasteClose + "\n</pasted_content>",
+		},
+		{
+			name: "closer for a block a plain closer already closed",
+			prompt: "<ao-report-delivery id=\"" + deliveryID + "\"><pasted_content id=\"a\">worker</pasted_content>" +
+				"<pasted_content id=\"b\">finished</ao-report-delivery></pasted_content id=\"a\">",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			payload := []byte(`{"prompt":` + mustJSONString(t, tt.prompt) + `}`)
+			got := hookConversationFacts(domain.HarnessClaudeCode, "user-prompt-submit", payload)
+			if got.CheckpointOrigin != domain.ConversationCheckpointOriginHuman ||
+				got.CoordinationID != deliveryID || got.LatestUserPrompt != tt.prompt {
+				t.Fatalf("conversation facts = %+v", got)
+			}
+		})
+	}
+}
+
+func TestHookConversationFactsRejectsInvalidReportPastes(t *testing.T) {
+	report := domain.WrapReportDelivery("report-batch:abc123", "worker finished")
+	pasteOpen, pasteClose := "<pasted_content id=\"eead\">\n", "\n</pasted_content id=\"eead\">"
+	wrapped := pasteOpen + report + pasteClose
+	tests := []struct {
+		name, prompt string
+	}{
+		{name: "missing closing tag", prompt: pasteOpen + report},
+		{name: "mismatched paste id", prompt: pasteOpen + report + "\n</pasted_content id=\"other\">"},
+		{name: "malformed opening tag", prompt: "<pasted_content id=eead>\n" + report + pasteClose},
+		{name: "lookalike opening tag", prompt: "<pasted_content_other id=\"eead\">\n" + report + pasteClose},
+		{name: "invalid delivery id", prompt: pasteOpen + domain.WrapReportDelivery("bad value", "worker finished") + pasteClose},
+		{name: "empty delivery id", prompt: pasteOpen + domain.WrapReportDelivery("", "worker finished") + pasteClose},
+		{name: "long delivery id", prompt: pasteOpen + domain.WrapReportDelivery(strings.Repeat("a", 129), "worker finished") + pasteClose},
+		{name: "human text before report", prompt: "Please speed up.\n" + report},
+		{name: "human text before paste", prompt: "Please speed up.\n" + wrapped},
+		{name: "human text inside paste", prompt: pasteOpen + "Please speed up.\n" + report + pasteClose},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			payload := []byte(`{"prompt":` + mustJSONString(t, tt.prompt) + `}`)
+			got := hookConversationFacts(domain.HarnessClaudeCode, "user-prompt-submit", payload)
+			if got.CheckpointOrigin != domain.ConversationCheckpointOriginHuman ||
+				got.CoordinationID != "" || got.LatestUserPrompt != tt.prompt {
+				t.Fatalf("conversation facts = %+v", got)
+			}
+		})
+	}
+	t.Run("other harness", func(t *testing.T) {
+		payload := []byte(`{"prompt":` + mustJSONString(t, wrapped) + `}`)
+		got := hookConversationFacts(domain.HarnessCodex, "user-prompt-submit", payload)
+		if got.CheckpointOrigin != domain.ConversationCheckpointOriginHuman || got.CoordinationID != "" || got.LatestUserPrompt != wrapped {
+			t.Fatalf("conversation facts = %+v", got)
+		}
+	})
+	t.Run("domain parser stays strict", func(t *testing.T) {
+		if id, ok := domain.ReportDeliveryID(wrapped); ok || id != "" {
+			t.Fatalf("ReportDeliveryID(wrapped) = %q, %v", id, ok)
+		}
+	})
 }
 
 func TestHooks_SubagentStopCannotReportMainConversationCheckpoint(t *testing.T) {
@@ -749,6 +1268,39 @@ func TestHooks_NonSwitchingHarnessDoesNotReportConversationFacts(t *testing.T) {
 	}
 }
 
+func TestHookSemanticAcceptanceFacts(t *testing.T) {
+	wrapped := domain.WrapReportDelivery("report-batch:abc123", "worker finished")
+	for _, harness := range []domain.AgentHarness{
+		domain.HarnessOpenCode,
+		domain.HarnessGrok,
+		domain.HarnessKilocode,
+		domain.HarnessOMP,
+		domain.HarnessPi,
+		domain.HarnessAmp,
+		domain.HarnessPrimeAgent,
+		domain.HarnessMiniMaxCode,
+	} {
+		t.Run(string(harness), func(t *testing.T) {
+			got := hookSemanticAcceptanceFacts(
+				"user-prompt-submit",
+				[]byte(`{"prompt":`+mustJSONString(t, wrapped)+`}`),
+			)
+			if got.CoordinationID != "report-batch:abc123" ||
+				got.CheckpointOrigin != domain.ConversationCheckpointOriginCoordination {
+				t.Fatalf("semantic acceptance = %#v", got)
+			}
+			if got.LatestUserPrompt != "" {
+				t.Fatalf("accepted report leaked into user prompt: %#v", got)
+			}
+		})
+	}
+
+	ordinary := hookSemanticAcceptanceFacts("user-prompt-submit", []byte(`{"prompt":"private prompt"}`))
+	if ordinary != (hookConversationSnapshot{}) {
+		t.Fatalf("ordinary prompt became a semantic checkpoint: %#v", ordinary)
+	}
+}
+
 func TestHookConversationFactsExcludesAOCoordinationUserTurns(t *testing.T) {
 	for _, prompt := range []string{
 		"<ao-handoff-request>\nprepare context",
@@ -793,6 +1345,85 @@ func mustJSONString(t *testing.T, value string) string {
 		t.Fatal(err)
 	}
 	return string(b)
+}
+
+func TestHookPayloadHelpersTolerateUTF8BOM(t *testing.T) {
+	payload := append([]byte("\xef\xbb\xbf"), []byte(`{"session_id":"native-bom-1","tool_name":"Bash","tool_use_id":"toolu_1","launch_id":"launch-1","prompt":"do it","transcript_path":"/tmp/t.jsonl"}`)...)
+	if got := hookAgentSessionID(payload); got != "native-bom-1" {
+		t.Fatalf("hookAgentSessionID = %q, want native-bom-1", got)
+	}
+	if tool, useID := activityMeta(payload); tool != "Bash" || useID != "toolu_1" {
+		t.Fatalf("activityMeta = (%q, %q), want (Bash, toolu_1)", tool, useID)
+	}
+	if got := hookLaunchID(payload); got != "launch-1" {
+		t.Fatalf("hookLaunchID = %q, want launch-1", got)
+	}
+	facts := hookConversationFacts(domain.HarnessClaudeCode, "user-prompt-submit", payload)
+	if facts.LatestUserPrompt != "do it" || facts.TranscriptPath != "/tmp/t.jsonl" {
+		t.Fatalf("hookConversationFacts = %+v", facts)
+	}
+}
+
+func TestHookAgentSessionIDPrefersClineDurableRootSession(t *testing.T) {
+	payload := []byte(`{"taskId":"conv_internal","conversationId":"conv_internal","sessionContext":{"rootSessionId":"1792275014518_yyjbm"}}`)
+	if got := hookAgentSessionID(payload); got != "1792275014518_yyjbm" {
+		t.Fatalf("native resume ID = %q, want durable Cline CLI root session, not internal task ID", got)
+	}
+}
+
+func TestHooksClineReportsDurableRootSession(t *testing.T) {
+	t.Setenv("AO_SESSION_ID", "ao-7")
+	cfg := setConfigEnv(t)
+	srv, capture := activityServer(t, http.StatusOK, `{"ok":true}`)
+	writeRunFileFor(t, cfg, srv)
+	_, _, err := executeCLI(t, Deps{
+		In:           strings.NewReader(`{"taskId":"conv_internal","sessionContext":{"rootSessionId":"1792275014518_yyjbm"}}`),
+		ProcessAlive: func(int) bool { return true },
+	}, "hooks", "cline", "session-start")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var req setActivityAPIRequest
+	if err := json.Unmarshal([]byte(capture.body), &req); err != nil {
+		t.Fatal(err)
+	}
+	if req.AgentSessionID != "1792275014518_yyjbm" {
+		t.Fatalf("reported native ID = %q", req.AgentSessionID)
+	}
+}
+
+func TestHookAgentSessionIDReadsClineTaskID(t *testing.T) {
+	if got := hookAgentSessionID([]byte(`{"taskId":"cline-task-abc123"}`)); got != "cline-task-abc123" {
+		t.Fatalf("hookAgentSessionID(taskId) = %q, want cline-task-abc123", got)
+	}
+	if got := hookAgentSessionID([]byte(`{"task_id":"cline-task-snake"}`)); got != "cline-task-snake" {
+		t.Fatalf("hookAgentSessionID(task_id) = %q, want cline-task-snake", got)
+	}
+	// Existing aliases keep precedence over the Cline task handle.
+	if got := hookAgentSessionID([]byte(`{"session_id":"sess-1","taskId":"cline-task-abc123"}`)); got != "sess-1" {
+		t.Fatalf("hookAgentSessionID precedence = %q, want sess-1", got)
+	}
+}
+
+func TestHooks_ClineSessionStartIgnoresTaskID(t *testing.T) {
+	t.Setenv("AO_SESSION_ID", "ao-7")
+	cfg := setConfigEnv(t)
+	srv, capture := activityServer(t, http.StatusOK, `{"ok":true}`)
+	writeRunFileFor(t, cfg, srv)
+
+	_, _, err := executeCLI(t, Deps{
+		In:           strings.NewReader(`{"taskId":"cline-task-abc123"}`),
+		ProcessAlive: func(int) bool { return true },
+	}, "hooks", "cline", "session-start")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	var req setActivityAPIRequest
+	if err := json.Unmarshal([]byte(capture.body), &req); err != nil {
+		t.Fatalf("decode body: %v\nbody=%s", err, capture.body)
+	}
+	want := setActivityAPIRequest{State: "active", Event: "session-start"}
+	assertActivityRequest(t, req, want)
 }
 
 func TestHooks_SessionStartReportsNativeSessionIDWithoutActivity(t *testing.T) {
@@ -899,6 +1530,58 @@ func TestHooks_PostToolUseCarriesCorrelationFields(t *testing.T) {
 	assertActivityRequest(t, req, want)
 }
 
+func TestHooks_ClineTaskIDDoesNotBecomeAgentSessionID(t *testing.T) {
+	for _, payload := range []string{`{"taskId":"conv_123"}`, `{"task_id":"conv_123"}`, `{"session_id":"conv_123"}`} {
+		t.Run(payload, func(t *testing.T) {
+			t.Setenv("AO_SESSION_ID", "ao-7")
+			cfg := setConfigEnv(t)
+			srv, capture := activityServer(t, http.StatusOK, `{"ok":true}`)
+			writeRunFileFor(t, cfg, srv)
+			_, _, err := executeCLI(t, Deps{
+				In:           strings.NewReader(payload),
+				ProcessAlive: func(int) bool { return true },
+			}, "hooks", "cline", "session-start")
+			if err != nil {
+				t.Fatal(err)
+			}
+			var req setActivityAPIRequest
+			if err := json.Unmarshal([]byte(capture.body), &req); err != nil {
+				t.Fatal(err)
+			}
+			if req.AgentSessionID != "" || req.State != "active" {
+				t.Fatalf("hook must report activity without replacing native ID: %+v", req)
+			}
+		})
+	}
+}
+
+func TestHooks_ClineTaskStartCarriesAgentSessionID(t *testing.T) {
+	t.Setenv("AO_SESSION_ID", "ao-7")
+	cfg := setConfigEnv(t)
+	srv, capture := activityServer(t, http.StatusOK, `{"ok":true}`)
+	writeRunFileFor(t, cfg, srv)
+
+	_, _, err := executeCLI(t, Deps{
+		In:           strings.NewReader(`{"taskId":"conv_123","sessionContext":{"rootSessionId":"cline-session-123"},"hookName":"agent_start","taskStart":{"task":"fix restore"}}`),
+		ProcessAlive: func(int) bool { return true },
+	}, "hooks", "cline", "session-start")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	var req setActivityAPIRequest
+	if err := json.Unmarshal([]byte(capture.body), &req); err != nil {
+		t.Fatalf("decode body: %v\nbody=%s", err, capture.body)
+	}
+	if req.ObservedAt.IsZero() {
+		t.Fatal("hook omitted its observation time")
+	}
+	req.ObservedAt = time.Time{}
+	want := setActivityAPIRequest{State: "active", Event: "session-start", AgentSessionID: "cline-session-123", Harness: "cline"}
+	if req != want {
+		t.Errorf("body = %+v, want %+v", req, want)
+	}
+}
+
 func TestHooks_EventWithoutToolIdentityOmitsIt(t *testing.T) {
 	// Adapters whose payloads carry no tool fields (codex permission-request
 	// payload here has tool_name only) still tag the event; missing identity
@@ -963,6 +1646,32 @@ func TestHooks_CodexSessionStartReportsAgentSessionID(t *testing.T) {
 	}
 	want := setActivityAPIRequest{Event: "session-start", AgentSessionID: "codex-native-1"}
 	assertActivityRequest(t, req, want)
+}
+
+func TestHooks_PiSessionStartReportsUsageTranscriptPath(t *testing.T) {
+	t.Setenv("AO_SESSION_ID", "ao-7")
+	cfg := setConfigEnv(t)
+	srv, capture := activityServer(t, http.StatusOK, `{"ok":true}`)
+	writeRunFileFor(t, cfg, srv)
+
+	_, _, err := executeCLI(t, Deps{
+		In: strings.NewReader(`{
+			"session_id":"pi-native-1",
+			"transcript_path":"/ao/data/pi/sessions/pi-native-1.jsonl"
+		}`),
+		ProcessAlive: func(int) bool { return true },
+	}, "hooks", "pi", "session-start")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	var req setActivityAPIRequest
+	if err := json.Unmarshal([]byte(capture.body), &req); err != nil {
+		t.Fatalf("decode body: %v\nbody=%s", err, capture.body)
+	}
+	if req.AgentSessionID != "pi-native-1" || req.TranscriptPath != "/ao/data/pi/sessions/pi-native-1.jsonl" || req.Usage == nil ||
+		req.Usage.Harness != "pi" || req.Usage.TranscriptPath != "/ao/data/pi/sessions/pi-native-1.jsonl" {
+		t.Fatalf("body = %+v", req)
+	}
 }
 
 func TestHooks_CodexBlankSessionIDIsIgnored(t *testing.T) {
@@ -1074,8 +1783,138 @@ func TestHooks_MuseUserPromptReportsActive(t *testing.T) {
 	assertActivityRequest(t, req, want)
 }
 
+// Every mid-turn sub-command Kimi's managed hook config installs must reach
+// the daemon as an active signal: the tool-use trio and PermissionResult,
+// which the config maps onto AO's canonical permission-resolved event.
+func TestHooks_KimiMidTurnEventsReportActive(t *testing.T) {
+	for _, event := range []string{"pre-tool-use", "post-tool-use", "post-tool-use-failure", "permission-resolved"} {
+		t.Run(event, func(t *testing.T) {
+			t.Setenv("AO_SESSION_ID", "ao-7")
+			cfg := setConfigEnv(t)
+			srv, capture := activityServer(t, http.StatusOK, `{"ok":true}`)
+			writeRunFileFor(t, cfg, srv)
+
+			_, _, err := executeCLI(t, Deps{
+				In:           strings.NewReader(`{"session_id":"kimi-native-1"}`),
+				ProcessAlive: func(int) bool { return true },
+			}, "hooks", "kimi", event)
+			if err != nil {
+				t.Fatalf("unexpected error: %v", err)
+			}
+			var req setActivityAPIRequest
+			if err := json.Unmarshal([]byte(capture.body), &req); err != nil {
+				t.Fatalf("decode body: %v\nbody=%s", err, capture.body)
+			}
+			want := setActivityAPIRequest{State: "active", Event: event, AgentSessionID: "kimi-native-1"}
+			assertActivityRequest(t, req, want)
+		})
+	}
+}
+
+// A tool call alone cannot identify an approval. Old payloads without native
+// approval identity must retain the ID-less compatibility path.
+func TestHooks_KimiToolCallAloneDoesNotIdentifyApproval(t *testing.T) {
+	t.Setenv("AO_SESSION_ID", "ao-7")
+	cfg := setConfigEnv(t)
+	srv, capture := activityServer(t, http.StatusOK, `{"ok":true}`)
+	writeRunFileFor(t, cfg, srv)
+
+	_, _, err := executeCLI(t, Deps{
+		In:           strings.NewReader(`{"session_id":"kimi-native-1","tool_call_id":"call-1"}`),
+		ProcessAlive: func(int) bool { return true },
+	}, "hooks", "kimi", "permission-resolved")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	var req setActivityAPIRequest
+	if err := json.Unmarshal([]byte(capture.body), &req); err != nil {
+		t.Fatalf("decode body: %v\nbody=%s", err, capture.body)
+	}
+	want := setActivityAPIRequest{State: "active", Event: "permission-resolved", AgentSessionID: "kimi-native-1"}
+	assertActivityRequest(t, req, want)
+}
+
+func TestHooks_KimiApprovalIdentityIsScopedAndStable(t *testing.T) {
+	var first string
+	for _, tt := range []struct {
+		name    string
+		event   string
+		payload string
+		same    bool
+	}{
+		{"request", "permission-request", `{"session_id":"native","agent_id":"main","turn_id":1,"id":"approval_a","tool_call_id":"call"}`, true},
+		{"matching result", "permission-resolved", `{"session_id":"native","agent_id":"main","turn_id":1,"id":"approval_a","tool_call_id":"call","decision":"approved"}`, true},
+		{"another approval for same tool", "permission-request", `{"session_id":"native","agent_id":"main","turn_id":1,"id":"approval_b","tool_call_id":"call"}`, false},
+		{"another turn", "permission-request", `{"session_id":"native","agent_id":"main","turn_id":2,"id":"approval_a","tool_call_id":"call"}`, false},
+		{"background agent", "permission-request", `{"session_id":"native","agent_id":"worker","turn_id":1,"id":"approval_a","tool_call_id":"call"}`, false},
+		{"another native session", "permission-request", `{"session_id":"other","agent_id":"main","turn_id":1,"id":"approval_a","tool_call_id":"call"}`, false},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Setenv("AO_SESSION_ID", "ao-7")
+			cfg := setConfigEnv(t)
+			srv, capture := activityServer(t, http.StatusOK, `{"ok":true}`)
+			writeRunFileFor(t, cfg, srv)
+			_, _, err := executeCLI(t, Deps{In: strings.NewReader(tt.payload), ProcessAlive: func(int) bool { return true }}, "hooks", "kimi", tt.event)
+			if err != nil {
+				t.Fatal(err)
+			}
+			var req setActivityAPIRequest
+			if err := json.Unmarshal([]byte(capture.body), &req); err != nil {
+				t.Fatal(err)
+			}
+			if !strings.HasPrefix(req.ToolUseID, "kimi-approval:") || len(req.ToolUseID) > maxActivityMetaLen {
+				t.Fatalf("missing bounded native approval identity: %q", req.ToolUseID)
+			}
+			if first == "" {
+				first = req.ToolUseID
+			}
+			if (req.ToolUseID == first) != tt.same {
+				t.Fatalf("identity equality = %v, want %v", req.ToolUseID == first, tt.same)
+			}
+		})
+	}
+}
+
+func TestActivityMetaDoesNotLiftOtherAgentsToolCallID(t *testing.T) {
+	_, id := activityMeta([]byte(`{"tool_call_id":"unrelated"}`))
+	if id != "" {
+		t.Fatalf("tool_call_id changed shared mapper behavior: %q", id)
+	}
+	_, id = activityMeta([]byte(`{"tool_call_id":"unrelated","tool_use_id":"toolu_1"}`))
+	if id != "toolu_1" {
+		t.Fatalf("tool_use_id was not preserved: %q", id)
+	}
+}
+
+func TestKimiApprovalIncompleteIdentityUsesCompatibilityPath(t *testing.T) {
+	for _, payload := range []string{
+		`{}`, `not json`,
+		`{"session_id":"s","agent_id":"main","turn_id":1}`,
+		`{"id":"a","agent_id":"main","turn_id":1}`,
+		`{"id":"a","session_id":"s","turn_id":1}`,
+		`{"id":"a","session_id":"s","agent_id":"main"}`,
+		`{"id":"a","session_id":"s","agent_id":"main","turn_id":-1}`,
+		`{"id":"a","session_id":"s","agent_id":"main","turn_id":1.5}`,
+		`{"id":"a\u0000b","session_id":"s","agent_id":"main","turn_id":1}`,
+		`{"id":"` + strings.Repeat("a", 257) + `","session_id":"s","agent_id":"main","turn_id":1}`,
+	} {
+		if id := kimiApprovalID([]byte(payload)); id != "" {
+			t.Fatalf("incomplete identity produced correlation %q for %s", id, payload)
+		}
+	}
+}
+
 func TestHooks_RegisteredHarnessSessionStartReportsAgentSessionID(t *testing.T) {
-	for _, agent := range []string{"opencode", "qwen", "kimi", "kilocode", "goose"} {
+	// Command Code is the one harness here whose SessionStart carries metadata
+	// only: it also fires on resume and clear, and a native restore delivers no
+	// prompt, so reporting it as active would strand a restored session at an
+	// empty prompt reading as working. It must still report the native id.
+	sessionStartState := map[string]string{
+		"opencode": "active", "qwen": "active", "gemini": "active",
+		"kimi": "active", "kilocode": "active", "goose": "active",
+		"command-code": "",
+	}
+	for agent, wantState := range sessionStartState {
 		t.Run(agent, func(t *testing.T) {
 			t.Setenv("AO_SESSION_ID", "ao-7")
 			cfg := setConfigEnv(t)
@@ -1096,10 +1935,80 @@ func TestHooks_RegisteredHarnessSessionStartReportsAgentSessionID(t *testing.T) 
 			if err := json.Unmarshal([]byte(capture.body), &req); err != nil {
 				t.Fatalf("decode body: %v\nbody=%s", err, capture.body)
 			}
-			want := setActivityAPIRequest{State: "active", Event: "session-start", AgentSessionID: agent + "-native-1"}
+			want := setActivityAPIRequest{State: wantState, Event: "session-start", AgentSessionID: agent + "-native-1"}
 			assertActivityRequest(t, req, want)
 		})
 	}
+}
+
+func TestHooks_GeminiBeforeAgentReturnsStandingInstructions(t *testing.T) {
+	t.Setenv("AO_SESSION_ID", "ao-7")
+	cfg := setConfigEnv(t)
+	dir := filepath.Join(cfg.dataDir, "prompts", "ao-7")
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "system.md"), []byte("Follow AO instructions."), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	srv, capture := activityServer(t, http.StatusOK, `{"ok":true}`)
+	writeRunFileFor(t, cfg, srv)
+	out, _, err := executeCLI(t, Deps{In: strings.NewReader(`{"session_id":"gemini-native-1"}`), ProcessAlive: func(int) bool { return true }}, "hooks", "gemini", "user-prompt-submit")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var response sessionStartHookOutput
+	if err := json.Unmarshal([]byte(out), &response); err != nil {
+		t.Fatalf("invalid Gemini hook output %q: %v", out, err)
+	}
+	if response.HookSpecificOutput.HookEventName != "BeforeAgent" || response.HookSpecificOutput.AdditionalContext != "Follow AO instructions." {
+		t.Fatalf("response = %+v", response)
+	}
+	var req setActivityAPIRequest
+	if err := json.Unmarshal([]byte(capture.body), &req); err != nil {
+		t.Fatal(err)
+	}
+	if req.AgentSessionID != "gemini-native-1" || req.State != "active" {
+		t.Fatalf("request = %+v", req)
+	}
+}
+
+// Command Code's SessionStart hook reports activity and the native session id,
+// but no longer carries AO's standing instructions. Memory is the delivery
+// channel now, so emitting context here would duplicate the role prompt in the
+// Terminal surface while Chat never received it at all.
+func TestHooks_CommandCodeSessionStartReportsActivityWithoutSystemPromptContext(t *testing.T) {
+	t.Setenv("AO_SESSION_ID", "ao-7")
+	cfg := setConfigEnv(t)
+	promptDir := filepath.Join(cfg.dataDir, "prompts", "ao-7")
+	if err := os.MkdirAll(promptDir, 0o750); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(promptDir, "system.md"), []byte("follow AO standing instructions\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	srv, capture := activityServer(t, http.StatusOK, `{"ok":true}`)
+	writeRunFileFor(t, cfg, srv)
+
+	out, _, err := executeCLI(t, Deps{
+		In:           strings.NewReader(`{"session_id":"command-code-native-1","source":"startup"}`),
+		ProcessAlive: func(int) bool { return true },
+	}, "hooks", "command-code", "session-start")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if strings.TrimSpace(out) != "" {
+		t.Fatalf("hook output = %q, want no SessionStart context payload", out)
+	}
+	if capture.hits != 1 {
+		t.Fatalf("daemon calls = %d, want 1", capture.hits)
+	}
+	var request setActivityAPIRequest
+	if err := json.Unmarshal([]byte(capture.body), &request); err != nil {
+		t.Fatalf("decode activity request: %v\n%s", err, capture.body)
+	}
+	want := setActivityAPIRequest{Event: "session-start", AgentSessionID: "command-code-native-1"}
+	assertActivityRequest(t, request, want)
 }
 
 func TestHooks_VibePostAgentReportsSessionIDAndIdle(t *testing.T) {
@@ -1158,6 +2067,83 @@ func TestHooks_AgySessionStartReportsConversationID(t *testing.T) {
 	}
 	want := setActivityAPIRequest{Event: "session-start", AgentSessionID: "agy-native-1"}
 	assertActivityRequest(t, req, want)
+}
+
+// OpenHands' hook payload (openhands.sdk.hooks.types.HookEvent) carries the
+// conversation id as session_id, and its executor reads additionalContext from
+// the top level of stdout; hookSpecificOutput is ignored.
+func TestHooks_OpenHandsUserPromptSubmitInjectsInstructions(t *testing.T) {
+	t.Setenv("AO_SESSION_ID", "ao-7")
+	cfg := setConfigEnv(t)
+	promptDir := filepath.Join(cfg.dataDir, "prompts", "ao-7")
+	if err := os.MkdirAll(promptDir, 0o750); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(promptDir, "system.md"), []byte("follow AO standing instructions\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	srv, capture := activityServer(t, http.StatusOK, `{"ok":true}`)
+	writeRunFileFor(t, cfg, srv)
+
+	payload := `{"event_type":"UserPromptSubmit","message":"fix the bug","session_id":"0b6c1f5e-5a4e-4d8b-9c55-0d5c2b1f7a10","working_dir":"/ws","metadata":{}}`
+	out, _, err := executeCLI(t, Deps{
+		In:           strings.NewReader(payload),
+		ProcessAlive: func(int) bool { return true },
+	}, "hooks", "openhands", "user-prompt-submit")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	var response map[string]any
+	if err := json.Unmarshal([]byte(out), &response); err != nil {
+		t.Fatalf("hook output is not one JSON object: %q: %v", out, err)
+	}
+	if response["additionalContext"] != "follow AO standing instructions" {
+		t.Fatalf("additionalContext = %#v, want top-level instructions; output %q", response["additionalContext"], out)
+	}
+	if _, nested := response["hookSpecificOutput"]; nested {
+		t.Fatalf("OpenHands ignores hookSpecificOutput: %q", out)
+	}
+	var req setActivityAPIRequest
+	if err := json.Unmarshal([]byte(capture.body), &req); err != nil {
+		t.Fatalf("decode body: %v\nbody=%s", err, capture.body)
+	}
+	want := setActivityAPIRequest{State: "active", Event: "user-prompt-submit", AgentSessionID: "0b6c1f5e-5a4e-4d8b-9c55-0d5c2b1f7a10"}
+	assertActivityRequest(t, req, want)
+}
+
+func TestHooks_OpenHandsSessionStartAndStopEmitNoOutput(t *testing.T) {
+	for _, tc := range []struct {
+		event string
+		state string
+	}{
+		{"session-start", "active"},
+		// Any stdout on Stop is parsed as a decision; OpenHands must be left
+		// free to stop.
+		{"stop", "idle"},
+	} {
+		t.Run(tc.event, func(t *testing.T) {
+			t.Setenv("AO_SESSION_ID", "ao-7")
+			cfg := setConfigEnv(t)
+			srv, capture := activityServer(t, http.StatusOK, `{"ok":true}`)
+			writeRunFileFor(t, cfg, srv)
+
+			out, _, err := executeCLI(t, Deps{
+				In:           strings.NewReader(`{"session_id":"oh-native-1"}`),
+				ProcessAlive: func(int) bool { return true },
+			}, "hooks", "openhands", tc.event)
+			if err != nil {
+				t.Fatalf("unexpected error: %v", err)
+			}
+			if strings.TrimSpace(out) != "" {
+				t.Fatalf("unexpected hook output %q", out)
+			}
+			var req setActivityAPIRequest
+			if err := json.Unmarshal([]byte(capture.body), &req); err != nil {
+				t.Fatalf("decode body: %v\nbody=%s", err, capture.body)
+			}
+			assertActivityRequest(t, req, setActivityAPIRequest{State: tc.state, Event: tc.event, AgentSessionID: "oh-native-1"})
+		})
+	}
 }
 
 func TestHooks_AgyModernEventsReturnValidJSON(t *testing.T) {
@@ -1729,25 +2715,90 @@ func TestHooks_CursorTerminalFailureReportsCorrelatedCompletion(t *testing.T) {
 	}
 }
 
+func TestHooks_DaemonNotRunningStaysOutOfStderr(t *testing.T) {
+	cases := []struct {
+		name  string
+		setup func(t *testing.T, cfg testConfig)
+		alive func(int) bool
+	}{
+		{
+			name: "stale run-file",
+			setup: func(t *testing.T, cfg testConfig) {
+				if err := runfile.Write(cfg.runFile, runfile.Info{
+					PID: 999999, Port: 3001, StartedAt: time.Unix(100, 0).UTC(),
+				}); err != nil {
+					t.Fatalf("write run-file: %v", err)
+				}
+			},
+			alive: func(int) bool { return false },
+		},
+		{
+			name:  "no run-file",
+			setup: func(t *testing.T, cfg testConfig) {},
+			alive: func(int) bool { return true },
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Setenv("AO_SESSION_ID", "ao-7")
+			cfg := setConfigEnv(t)
+			tc.setup(t, cfg)
+
+			_, errOut, err := executeCLI(t, Deps{
+				In:           strings.NewReader(`{"reason":"logout"}`),
+				ProcessAlive: tc.alive,
+			}, "hooks", "claude-code", "session-end")
+			if err != nil {
+				t.Fatalf("hooks must exit 0 when the daemon is down, got: %v", err)
+			}
+			if errOut != "" {
+				t.Errorf("daemon-down must not reach the agent's stderr, got %q", errOut)
+			}
+
+			logged, err := os.ReadFile(filepath.Join(cfg.dataDir, hooksLogName))
+			if err != nil {
+				t.Fatalf("daemon-down must still be recorded in hooks.log: %v", err)
+			}
+			if !strings.Contains(string(logged), "daemon is not running") {
+				t.Errorf("hooks.log missing the daemon-down notice, got %q", logged)
+			}
+		})
+	}
+}
+
 func TestHooks_ReviewerPermissionRequestAnswersInsteadOfBlocking(t *testing.T) {
 	// Claude Code ≥ 2.1.257 prompts on Bash commands its analyzer cannot verify
 	// even when an allow rule matches (#4810). A headless reviewer has nobody to
 	// answer, so the hook decides: the exact submit shapes are allowed, anything
 	// else is denied, and no blocked activity is reported either way.
 	// The shell literal, JSON-escaped for the hook payload; `it'\''s` is the
-	// prompt's shell-escaped single quote.
+	// printf fallback's shell-escaped single quote. Heredoc bodies carry quotes,
+	// $(...), and backticks verbatim because the quoted delimiter disables
+	// expansion.
 	const submitJSON = `'{ \"reviews\": [ { \"runId\": \"run-1\", \"verdict\": \"approved\", \"body\": \"it'\\''s fine\" } ] }'`
 	cases := []struct {
 		name    string
 		payload string
 		want    string
 	}{
-		{"ao review submit pipe", `{"tool_name":"Bash","tool_input":{"command":"printf '%s' ` + submitJSON + ` | ao review submit --session worker-7 --reviews -"}}`, "allow"},
+		{"ao review submit pipe", `{"tool_name":"Bash","tool_input":{"command":"printf '%s' ` + submitJSON + ` | ao review submit --session worker-7 --reviews -"}}`, "deny"},
 		{"gh api review post", `{"tool_name":"Bash","tool_input":{"command":"printf '%s' '{ \"event\": \"COMMENT\", \"body\": \"ok\" }' | gh api --method POST repos/acme/app/pulls/12/reviews --input - --jq '.id'"}}`, "allow"},
-		{"other worker session", `{"tool_name":"Bash","tool_input":{"command":"printf '%s' '{}' | ao review submit --session worker-9 --reviews -"}}`, "deny"},
-		{"unset worker session id", `{"tool_name":"Bash","tool_input":{"command":"printf '%s' '{}' | ao review submit --session worker-7 --reviews -"}}`, "deny"},
-		{"command substitution in operand", `{"tool_name":"Bash","tool_input":{"command":"printf '%s' '{}'$(id) | ao review submit --session worker-7 --reviews -"}}`, "deny"},
-		{"heredoc submit", `{"tool_name":"Bash","tool_input":{"command":"cat > /tmp/r.json <<'EOF'\n{}\nEOF\nao review submit --session worker-7 --reviews - < /tmp/r.json"}}`, "deny"},
+		{"other worker session", `{"tool_name":"Bash","tool_input":{"command":"printf '%s' '{}' | ao review submit --session worker-9 --run run-1 --verdict approved --body -"}}`, "deny"},
+		{"unset worker session id", `{"tool_name":"Bash","tool_input":{"command":"printf '%s' '{}' | ao review submit --session worker-7 --run run-1 --verdict approved --body -"}}`, "deny"},
+		{"command substitution in operand", `{"tool_name":"Bash","tool_input":{"command":"printf '%s' '{}'$(id) | ao review submit --session worker-7 --run run-1 --verdict approved --body -"}}`, "deny"},
+		{"single-run body pipe", `{"tool_name":"Bash","tool_input":{"command":"printf '%s' 'it'\\''s fine' | ao review submit --session worker-7 --run run-1 --verdict approved --review-id 42 --body -"}}`, "allow"},
+		{"gh api review heredoc", `{"tool_name":"Bash","tool_input":{"command":"gh api --method POST repos/acme/app/pulls/12/reviews --input - --jq '.id' <<'AO_REVIEW_EOF'\n{\n  \"event\": \"COMMENT\",\n  \"body\": \"it's $(fine) ` + "`ok`" + `\"\n}\nAO_REVIEW_EOF"}}`, "allow"},
+		{"single-run body heredoc", `{"tool_name":"Bash","tool_input":{"command":"ao review submit --session worker-7 --run run-1 --verdict changes_requested --review-id 42 --body - <<'AO_REVIEW_EOF'\n## Review\nThe worker's nil check doesn't run.\nAO_REVIEW_EOF\n"}}`, "allow"},
+		{"single-run heredoc without review id", `{"tool_name":"Bash","tool_input":{"command":"ao review submit --session worker-7 --run run-1 --verdict approved --body - <<'AO_REVIEW_EOF'\nLooks good.\nAO_REVIEW_EOF"}}`, "allow"},
+		{"batch heredoc", `{"tool_name":"Bash","tool_input":{"command":"ao review submit --session worker-7 --reviews - <<'AO_REVIEW_EOF'\n{ \"reviews\": [] }\nAO_REVIEW_EOF"}}`, "deny"},
+		{"heredoc for other worker session", `{"tool_name":"Bash","tool_input":{"command":"ao review submit --session worker-9 --run run-1 --verdict approved --body - <<'AO_REVIEW_EOF'\nok\nAO_REVIEW_EOF"}}`, "deny"},
+		{"heredoc body ends early then runs a command", `{"tool_name":"Bash","tool_input":{"command":"ao review submit --session worker-7 --run run-1 --verdict approved --body - <<'AO_REVIEW_EOF'\nok\nAO_REVIEW_EOF\ntouch /tmp/pwned\nAO_REVIEW_EOF"}}`, "deny"},
+		{"heredoc with command after terminator", `{"tool_name":"Bash","tool_input":{"command":"ao review submit --session worker-7 --run run-1 --verdict approved --body - <<'AO_REVIEW_EOF'\nok\nAO_REVIEW_EOF\ntouch /tmp/pwned"}}`, "deny"},
+		{"unquoted heredoc delimiter", `{"tool_name":"Bash","tool_input":{"command":"ao review submit --session worker-7 --run run-1 --verdict approved --body - <<AO_REVIEW_EOF\n$(id)\nAO_REVIEW_EOF"}}`, "deny"},
+		{"other heredoc delimiter", `{"tool_name":"Bash","tool_input":{"command":"ao review submit --session worker-7 --run run-1 --verdict approved --body - <<'EOF'\nok\nEOF"}}`, "deny"},
+		{"indented heredoc terminator", `{"tool_name":"Bash","tool_input":{"command":"ao review submit --session worker-7 --run run-1 --verdict approved --body - <<'AO_REVIEW_EOF'\nok\n    AO_REVIEW_EOF"}}`, "deny"},
+		{"heredoc into a file", `{"tool_name":"Bash","tool_input":{"command":"cat > /tmp/r.json <<'AO_REVIEW_EOF'\n{}\nAO_REVIEW_EOF\nao review submit --session worker-7 --reviews - < /tmp/r.json"}}`, "deny"},
 		{"env inspection", `{"tool_name":"Bash","tool_input":{"command":"pip3 show pkg | sed -n 1p; cat \"$(pip3 show pkg)\" || python3 -c \"print(1)\""}}`, "deny"},
 		{"non-bash tool", `{"tool_name":"Read","tool_input":{"file_path":"/etc/passwd"}}`, "deny"},
 	}
@@ -1787,5 +2838,165 @@ func TestHooks_ReviewerPermissionRequestAnswersInsteadOfBlocking(t *testing.T) {
 				t.Fatalf("deny carried no message: %s", out)
 			}
 		})
+	}
+}
+
+func TestHooksSessionDeliveryPreservesCoordinationOrigin(t *testing.T) {
+	for _, harness := range []domain.AgentHarness{domain.HarnessClaudeCode, domain.HarnessMiniMaxCode} {
+		t.Run(string(harness), func(t *testing.T) {
+			t.Setenv("AO_SESSION_ID", "ao-worker")
+			t.Setenv("AO_RUNTIME_LAUNCH_ID", "launch-1")
+			cfg := setConfigEnv(t)
+			srv, capture := activityServer(t, http.StatusOK, `{"ok":true}`)
+			writeRunFileFor(t, cfg, srv)
+			payload, _ := json.Marshal(map[string]string{"session_id": "native-1", "prompt": domain.WrapSessionDelivery("session-send:1", "orchestrator direction")})
+			_, _, err := executeCLI(t, Deps{In: strings.NewReader(string(payload)), ProcessAlive: func(int) bool { return true }}, "hooks", string(harness), "user-prompt-submit")
+			if err != nil {
+				t.Fatal(err)
+			}
+			var req setActivityAPIRequest
+			if err := json.Unmarshal([]byte(capture.body), &req); err != nil {
+				t.Fatal(err)
+			}
+			if req.ConversationCheckpointOrigin != "coordination" || req.CoordinationID != "session-send:1" || req.LatestUserPrompt != "" {
+				t.Fatalf("hook facts=%+v", req)
+			}
+		})
+	}
+}
+
+func TestClaudeHookDeniesFirstArtifactUseOnly(t *testing.T) {
+	t.Setenv("AO_SESSION_ID", "qa-1")
+	t.Setenv("AO_DATA_DIR", t.TempDir())
+	cfg := setConfigEnv(t)
+	srv, capture := activityServer(t, http.StatusOK, `{"ok":true}`)
+	writeRunFileFor(t, cfg, srv)
+	run := func(agent, event, tool string) string {
+		t.Helper()
+		stdout, _, err := executeCLI(t, Deps{
+			In:           strings.NewReader(`{"session_id":"native","tool_name":"` + tool + `","tool_use_id":"tu-1"}`),
+			ProcessAlive: func(int) bool { return true },
+		}, "hooks", agent, event)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return stdout
+	}
+
+	if out := run("claude-code", "pre-tool-use", "Bash"); out != "" {
+		t.Fatalf("non-Artifact tool produced output: %q", out)
+	}
+	if out := run("codex", "pre-tool-use", "Artifact"); out != "" {
+		t.Fatalf("non-Claude harness produced output: %q", out)
+	}
+	if out := run("claude-code", "post-tool-use", "Artifact"); out != "" {
+		t.Fatalf("post-tool-use produced output: %q", out)
+	}
+
+	hits := capture.hits
+	var got claudePreToolUseDenyOutput
+	if err := json.Unmarshal([]byte(run("claude-code", "pre-tool-use", "Artifact")), &got); err != nil {
+		t.Fatal(err)
+	}
+	if got.HookSpecificOutput.HookEventName != "PreToolUse" ||
+		got.HookSpecificOutput.PermissionDecision != "deny" ||
+		!strings.Contains(got.HookSpecificOutput.PermissionDecisionReason, "html_render") ||
+		strings.Contains(got.HookSpecificOutput.PermissionDecisionReason, "ao report") {
+		t.Fatalf("unexpected decision: %+v", got)
+	}
+	if capture.hits != hits+1 {
+		t.Fatalf("activity still reports on a denied Artifact: %d hits", capture.hits-hits)
+	}
+	if out := run("claude-code", "pre-tool-use", "Artifact"); out != "" {
+		t.Fatalf("second Artifact use was blocked: %q", out)
+	}
+}
+
+func TestClaudeHookArtifactNudgeFailsOpen(t *testing.T) {
+	t.Setenv("AO_SESSION_ID", "qa-1")
+	setConfigEnv(t)
+	t.Setenv("AO_DATA_DIR", "")
+	// No daemon run file and no data dir: the hook must still exit cleanly with no decision.
+	stdout, _, err := executeCLI(t, Deps{
+		In:           strings.NewReader(`{"tool_name":"Artifact"}`),
+		ProcessAlive: func(int) bool { return true },
+	}, "hooks", "claude-code", "pre-tool-use")
+	if err != nil || stdout != "" {
+		t.Fatalf("stdout=%q err=%v", stdout, err)
+	}
+}
+
+// Claude Code's built-in computer use tells the user to grant "the Claude
+// desktop app"; inside AO macOS checks Orchestrator. The hook answers that
+// refusal with a notice for the user and corrected guidance for the model,
+// and stays silent for every other tool result.
+func TestClaudeHookAnswersComputerUsePermissionRefusal(t *testing.T) {
+	t.Setenv("AO_SESSION_ID", "qa-1")
+	t.Setenv(envDesktopApp, "1")
+	cfg := setConfigEnv(t)
+	srv, _ := activityServer(t, http.StatusOK, `{"ok":true}`)
+	writeRunFileFor(t, cfg, srv)
+	run := func(agent, event string, payload map[string]any) string {
+		t.Helper()
+		body, _ := json.Marshal(payload)
+		stdout, _, err := executeCLI(t, Deps{In: strings.NewReader(string(body)), ProcessAlive: func(int) bool { return true }}, "hooks", agent, event)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return stdout
+	}
+	refused := map[string]any{
+		"session_id": "native",
+		"tool_name":  "mcp__computer-use__request_access",
+		"tool_response": []map[string]string{{"type": "text", "text": "The user saw the permission prompt but macOS Accessibility permission(s) are still not granted. " +
+			"Do not retry in this turn. Let the user know these permissions need to be granted in the Claude desktop app."}},
+	}
+
+	for _, event := range []string{"post-tool-use", "post-tool-use-failure"} {
+		var got claudePostToolUseOutput
+		if err := json.Unmarshal([]byte(run("claude-code", event, refused)), &got); err != nil {
+			t.Fatalf("%s: %v", event, err)
+		}
+		wantEvent := map[string]string{"post-tool-use": "PostToolUse", "post-tool-use-failure": "PostToolUseFailure"}[event]
+		if got.HookSpecificOutput.HookEventName != wantEvent ||
+			!strings.Contains(got.SystemMessage, "Settings > Computer use agents > Native computer use > Grant macOS permissions to Orchestrator") ||
+			!strings.Contains(got.HookSpecificOutput.AdditionalContext, "Ignore the advice to grant Claude") ||
+			!strings.Contains(got.HookSpecificOutput.AdditionalContext, "restart") {
+			t.Fatalf("%s: unexpected output %+v", event, got)
+		}
+	}
+
+	failure := map[string]any{"session_id": "native", "tool_name": "mcp__computer-use__screenshot", "error": "Screen Recording permission(s) are still not granted"}
+	if out := run("claude-code", "post-tool-use-failure", failure); !strings.Contains(out, "Grant macOS permissions to Orchestrator") {
+		t.Fatalf("refusal in error field not answered: %q", out)
+	}
+
+	granted := map[string]any{"session_id": "native", "tool_name": "mcp__computer-use__screenshot", "tool_response": "ok"}
+	otherTool := map[string]any{"session_id": "native", "tool_name": "Bash", "tool_response": "permission not granted"}
+	// The user declining one app is not a macOS refusal: Claude's own
+	// explanation stands.
+	appDeclined := map[string]any{"session_id": "native", "tool_name": "mcp__computer-use__request_access", "tool_response": "Access to Safari was not granted."}
+	onScreenText := map[string]any{"session_id": "native", "tool_name": "mcp__computer-use__screenshot", "tool_response": "Window text: permission not granted"}
+	for name, tc := range map[string]struct {
+		agent, event string
+		payload      map[string]any
+	}{
+		"granted result":   {"claude-code", "post-tool-use", granted},
+		"other tool":       {"claude-code", "post-tool-use", otherTool},
+		"pre-tool-use":     {"claude-code", "pre-tool-use", refused},
+		"non-Claude agent": {"codex", "post-tool-use", refused},
+		"app declined":     {"claude-code", "post-tool-use", appDeclined},
+		"on-screen text":   {"claude-code", "post-tool-use", onScreenText},
+	} {
+		if out := run(tc.agent, tc.event, tc.payload); out != "" {
+			t.Fatalf("%s produced output: %q", name, out)
+		}
+	}
+
+	// A daemon started from a terminal: macOS checks that terminal, so
+	// Claude's own advice is left alone.
+	t.Setenv(envDesktopApp, "")
+	if out := run("claude-code", "post-tool-use", refused); out != "" {
+		t.Fatalf("CLI-started daemon produced output: %q", out)
 	}
 }

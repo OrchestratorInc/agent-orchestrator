@@ -1,9 +1,12 @@
-import { useLocalSearchParams, useRouter } from "expo-router";
+import { useFocusEffect, useLocalSearchParams, useRouter } from "expo-router";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { ActivityIndicator, AppState, StyleSheet, View } from "react-native";
 import { shouldPoll } from "../../lib/appStatePoll";
 import { ChatSessionScreen } from "../../lib/chat/ChatSessionScreen";
-import { isConfigured, machineIdentity } from "../../lib/config";
+import { CloudSessionScreen } from "../../lib/cloud/CloudSessionScreen";
+import { isCloudHost } from "../../lib/cloud/mapping";
+import { hostRouteMatches } from "../../lib/hostRoute";
+import { rememberLastProject } from "../../lib/lastProject";
 import { lookUpSession } from "../../lib/session/sessionLookup";
 import TerminalSessionScreen from "../../lib/session/TerminalSessionScreen";
 import {
@@ -13,7 +16,7 @@ import {
 	sessionRouteView,
 	type KeyedSessionLookup,
 } from "../../lib/session/sessionRoute";
-import { useApp } from "../../lib/store";
+import { HostScope, useApp } from "../../lib/store";
 import { useTheme, useThemedStyles } from "../../lib/ThemeProvider";
 import type { Theme } from "../../lib/theme";
 import { Button, EmptyState } from "../../lib/ui";
@@ -26,14 +29,24 @@ import { Button, EmptyState } from "../../lib/ui";
  * `sessionRouteView`, and when the route asks is `sessionLookupDue`.
  */
 export default function MobileSessionRoute() {
-	const { id: rawId } = useLocalSearchParams<{ id: string }>();
+	const { id, hostId } = useLocalSearchParams<{ id: string; hostId?: string }>();
+	// Orchestrator Cloud sessions open the same route with the cloud host: their chat and
+	// terminal come from the control plane rather than a paired daemon.
+	if (isCloudHost(hostId)) return <CloudSessionScreen key={String(id ?? "")} sessionId={String(id ?? "")} />;
+	return hostId ? <HostScope key={hostId} hostId={hostId}><SessionRouteContent /></HostScope> : <SessionRouteContent />;
+}
+
+function SessionRouteContent() {
+	const { id: rawId, hostId: routeHostId } = useLocalSearchParams<{ id: string; hostId?: string }>();
 	const id = String(rawId ?? "");
 	const router = useRouter();
-	const { sessions, orchestrators, config, connection, loading } = useApp();
-	const listed = sessions.find((item) => item.id === id) ?? orchestrators.find((item) => item.id === id);
+	// `machine` and `paired`, not `config`: the verified connection drops on every
+	// app switch and endpoint race, and this screen must stay mounted through
+	// both (see viewMachine.ts).
+	const { sessions, orchestrators, projects, config, machine, paired, currentHostId, connection, loading } = useApp();
+	const hostMatches = hostRouteMatches(routeHostId, currentHostId);
+	const listed = hostMatches ? sessions.find((item) => item.id === id) ?? orchestrators.find((item) => item.id === id) : undefined;
 	const isListed = Boolean(listed);
-	const configured = config === null ? null : isConfigured(config);
-	const machine = config ? machineIdentity(config) : "";
 	const key = sessionLookupKey(machine, id);
 	const [stored, setStored] = useState<KeyedSessionLookup | null>(null);
 	const [attempt, setAttempt] = useState(0);
@@ -47,9 +60,9 @@ export default function MobileSessionRoute() {
 	// for the same machine, which restarts the store's poll and so re-runs the
 	// effect through `connection` anyway. Declared first, so it has run by the time
 	// that effect does.
-	const latest = useRef({ config, configured, lookup });
+	const latest = useRef({ config, paired, lookup });
 	useEffect(() => {
-		latest.current = { config, configured, lookup };
+		latest.current = { config, paired, lookup };
 	});
 	const machineRef = useRef(machine);
 
@@ -57,6 +70,11 @@ export default function MobileSessionRoute() {
 	// populated it, and the board never lists an orchestrator it dropped. Ask the
 	// daemon directly instead of reading the miss as "not found".
 	useEffect(() => {
+		if (!hostMatches) {
+			machineRef.current = machine;
+			setStored(null);
+			return;
+		}
 		const machineChanged = machineRef.current !== machine;
 		machineRef.current = machine;
 		if (isListed) {
@@ -70,7 +88,7 @@ export default function MobileSessionRoute() {
 			!now.config ||
 			!sessionLookupDue({
 				listed: isListed,
-				configured: now.configured,
+				paired: now.paired,
 				connection,
 				// Read, not a dependency: a foreground restarts the store's poll, which
 				// re-runs this effect through `connection` once it opens.
@@ -94,7 +112,11 @@ export default function MobileSessionRoute() {
 		// `attempt` is read only through this list: bumping it is how Retry asks
 		// again. `connection` turning "open" is how a lookup that failed, or was
 		// rejected, gets asked again once the board has reconnected.
-	}, [attempt, connection, id, isListed, key, machine]);
+	}, [attempt, connection, hostMatches, id, isListed, key, machine]);
+
+	// The board is already under this page, so this goes back down to its Workers
+	// tab; navigating there from a pushed page stacked a second board on top.
+	const openBoard = useCallback(() => router.dismissTo("/"), [router]);
 
 	const retry = useCallback(() => {
 		// Clearing first swaps the button for the spinner, so a second tap cannot
@@ -103,19 +125,39 @@ export default function MobileSessionRoute() {
 		setAttempt((n) => n + 1);
 	}, []);
 
-	const view = sessionRouteView({ listed, configured, connection, loading, lookup });
+	const view = sessionRouteView({ listed, paired, connection, loading, lookup, routeHostId, currentHostId: currentHostId ?? undefined });
+	// The session on screen, listed or looked up. A session can outlive its
+	// project; only a project still listed is worth starting in.
+	const shownProjectId = view.kind === "screen" ? view.session.projectId : undefined;
+	const rememberedProjectId = shownProjectId && projects.some((project) => project.id === shownProjectId) ? shownProjectId : undefined;
+	useFocusEffect(useCallback(() => { rememberLastProject(currentHostId, rememberedProjectId); }, [currentHostId, rememberedProjectId]));
 
 	switch (view.kind) {
 		case "screen":
-			return view.session.mode === "chat" ? (
-				<ChatSessionScreen session={view.session} />
-			) : (
-				<TerminalSessionScreen session={view.session} />
+			return (
+				<View style={styles.screen}>
+					{view.session.mode === "chat" ? (
+						<ChatSessionScreen session={view.session} />
+					) : (
+						<TerminalSessionScreen session={view.session} />
+					)}
+				</View>
 			);
 		case "loading":
 			return (
 				<View style={styles.center}>
-					<ActivityIndicator color={t.blue} />
+					<ActivityIndicator color={t.accent} />
+				</View>
+			);
+		case "wrongHost":
+			return (
+				<View style={styles.center}>
+					<EmptyState
+						icon="server"
+						title="Session belongs to another machine"
+						message="Open it from that machine's session list."
+						action={<Button title="Open board" icon="workers" onPress={openBoard} />}
+					/>
 				</View>
 			);
 		case "unpaired":
@@ -123,10 +165,9 @@ export default function MobileSessionRoute() {
 			return (
 				<View style={styles.center}>
 					<EmptyState
-						icon="server"
-						title="No desktop paired"
-						message="Scan the pairing code from AO → Settings → Connect Mobile to drive your agents from here."
-						action={<Button title="Scan pairing code" icon="maximize" onPress={() => router.push("/pair")} />}
+						icon="monitor-smartphone"
+						title="No machine paired"
+						action={<Button title="Scan pairing code" icon="qrScanner" onPress={() => router.push("/pair")} />}
 					/>
 				</View>
 			);
@@ -134,23 +175,31 @@ export default function MobileSessionRoute() {
 			return (
 				<View style={styles.center}>
 					<EmptyState
-						icon="wifi-off"
-						title="Not connected to your desktop"
-						message="This session loads once the app reconnects."
-						action={<Button title="Open board" icon="activity" variant="ghost" onPress={() => router.navigate("/")} />}
+						icon="unplug"
+						title="This machine is offline"
+						action={<Button title="Open board" icon="workers" variant="secondary" onPress={openBoard} />}
 					/>
 				</View>
 			);
 		case "ended":
 			return (
 				<View style={styles.center}>
-					<EmptyState icon="archive" title="This session has ended" />
+					<EmptyState
+						icon="archive"
+						title="This session has ended"
+						action={<Button title="Open board" icon="workers" variant="secondary" onPress={openBoard} />}
+					/>
 				</View>
 			);
 		case "missing":
 			return (
 				<View style={styles.center}>
-					<EmptyState icon="search" title="Session not found" />
+					<EmptyState
+						icon="search"
+						title="Session not found"
+						message="It may have been deleted on that machine."
+						action={<Button title="Open board" icon="workers" variant="secondary" onPress={openBoard} />}
+					/>
 				</View>
 			);
 		case "failed":
@@ -159,7 +208,7 @@ export default function MobileSessionRoute() {
 					<EmptyState
 						icon="alert-circle"
 						title="Couldn't load this session"
-						action={<Button title="Retry" icon="refresh-cw" variant="ghost" onPress={retry} />}
+						action={<Button title="Retry" icon="refresh-cw" variant="secondary" onPress={retry} />}
 					/>
 				</View>
 			);
@@ -168,6 +217,7 @@ export default function MobileSessionRoute() {
 
 const makeStyles = (t: Theme) =>
 	StyleSheet.create({
+		screen: { flex: 1 },
 		center: { flex: 1, alignItems: "center", justifyContent: "center", backgroundColor: t.bgBase },
 	});
 

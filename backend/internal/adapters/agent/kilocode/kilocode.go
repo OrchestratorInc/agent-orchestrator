@@ -53,8 +53,13 @@ func New() *Plugin {
 	return &Plugin{}
 }
 
+// EmitsSemanticMessageAcceptance reports that AO's Kilocode plugin includes
+// the accepted prompt text in its user-prompt-submit callback.
+func (p *Plugin) EmitsSemanticMessageAcceptance() bool { return true }
+
 var _ adapters.Adapter = (*Plugin)(nil)
 var _ ports.Agent = (*Plugin)(nil)
+var _ ports.SemanticMessageAcceptanceSignaler = (*Plugin)(nil)
 
 // Manifest returns the adapter's static self-description.
 func (p *Plugin) Manifest() adapters.Manifest {
@@ -79,7 +84,7 @@ func (p *Plugin) GetConfigSpec(ctx context.Context) (ports.ConfigSpec, error) {
 			{
 				Key:         "model",
 				Type:        ports.ConfigFieldString,
-				Description: "Model override written to the AO-generated Kilo agent (agent.<name>.model); format provider/model-id (e.g. anthropic/claude-haiku-4-20250514).",
+				Description: "Model override written to the Orchestrator-generated Kilo agent (agent.<name>.model); format provider/model-id (e.g. anthropic/claude-haiku-4-20250514).",
 			},
 		},
 	}, nil
@@ -320,4 +325,12 @@ func (p *Plugin) kilocodeBinary(ctx context.Context) (string, error) {
 	}
 	p.resolvedBinary = binary
 	return binary, nil
+}
+
+// InvalidateBinaryResolution forgets the cached executable path, so the next
+// launch resolves it again: after AO installs a managed copy, for example.
+func (p *Plugin) InvalidateBinaryResolution() {
+	p.binaryMu.Lock()
+	p.resolvedBinary = ""
+	p.binaryMu.Unlock()
 }

@@ -1,0 +1,26 @@
+---
+title: Codex
+description: Built-in Terminal UI and native app-server Chat support for the user's Codex installation.
+---
+
+Orchestrator uses the locally installed `codex` executable and Codex-owned authentication.
+
+```bash
+ao agent ls
+ao spawn --project my-app --name codex-task --agent codex --mode chat
+```
+
+## Interfaces
+
+- **Terminal UI:** runs the native Codex CLI in the session worktree.
+- **Chat:** connects to Codex's native app-server protocol and persists the provider conversation identity with the Orchestrator session.
+
+Codex supports the same capability-gated Chat/Terminal UI handoff as Claude Code. The Orchestrator session and worktree remain stable across a compatible handoff.
+
+Orchestrator performs bounded installation and authentication probes before spawn. Use `--skip-agent-check` only to bypass that advisory CLI preflight; daemon validation remains authoritative.
+
+## Accounts
+
+Open **Settings → Harness → Codex → Account** to see Codex's own login and the accounts you add in Orchestrator, each with its plan, usage limits, and reset credits. **Add account** runs Codex's device-code sign-in in a terminal, inside a separate Codex home for that account. Orchestrator never reads or stores the token. An account keeps only its own sign-in: conversations and history stay shared, so every account sees the same sessions.
+
+New tasks start on the account marked **Default for new tasks**; **Make default** changes it. Sessions on different accounts run side by side. A session's Summary shows its account: choosing another restarts the agent on that account in the same conversation, and Orchestrator asks before it stops a turn that is still running. Adding, removing, or choosing a default account in Orchestrator never changes the login Codex uses outside Orchestrator.

@@ -11,6 +11,8 @@ let recognitionAvailable = true;
 let permissionGranted = true;
 // Counts native permission round-trips, which sit in front of the microphone start.
 let permissionChecks = 0;
+// Counts system permission dialogs.
+let permissionPrompts = 0;
 let supportedLocales = ["en-US", "en-GB", "en-IN"];
 // iOS and Android segment differently, so the provider branches on platform.
 let platformOS = "android";
@@ -60,12 +62,13 @@ vi.mock("expo-speech-recognition", () => ({
 		},
 		requestPermissionsAsync: async () => {
 			permissionChecks++;
+			permissionPrompts++;
 			return { granted: permissionGranted };
 		},
 	},
 }));
 
-const { createDeviceVoiceProvider } = await import("./deviceProvider");
+const { createDeviceVoiceProvider, voiceLevel } = await import("./deviceProvider");
 
 function harness() {
 	const onReady = vi.fn();
@@ -89,6 +92,7 @@ beforeEach(() => {
 	recognitionAvailable = true;
 	permissionGranted = true;
 	permissionChecks = 0;
+	permissionPrompts = 0;
 	supportedLocales = ["en-US", "en-GB", "en-IN"];
 	platformOS = "android";
 });
@@ -114,6 +118,43 @@ describe("availability and permission", () => {
 		// native round-trip on every press delays recording enough to swallow the
 		// first words of a short phrase.
 		expect(permissionChecks).toBe(1);
+	});
+
+	// Coming back from Settings re-reads the permission. A dialog there would
+	// pop up every time the app returns to the foreground.
+	it("checks the permission without ever prompting", async () => {
+		permissionGranted = false;
+		const p = createDeviceVoiceProvider();
+		await expect(p.checkPermission()).resolves.toBe(false);
+		permissionGranted = true;
+		await expect(p.checkPermission()).resolves.toBe(true);
+		expect(permissionPrompts).toBe(0);
+		// Once granted, the next press skips the native round-trip.
+		await expect(p.requestPermission()).resolves.toBe(true);
+		expect(permissionChecks).toBe(2);
+	});
+});
+
+describe("input level", () => {
+	it("meters the input for the waveform as 0 to 1, from the recogniser's -2 to 10", async () => {
+		const p = createDeviceVoiceProvider();
+		const onLevel = vi.fn();
+		await p.start({ ...harness().cb, onLevel });
+		expect(started[0]).toMatchObject({ volumeChangeEventOptions: { enabled: true } });
+		emit("volumechange", { value: 5 });
+		emit("volumechange", { value: -2 });
+		emit("volumechange", { value: 14 });
+		expect(onLevel.mock.calls.map(([level]) => level)).toEqual([0.5, 0, 1]);
+		expect(voiceLevel(2.5)).toBe(0.25);
+	});
+
+	it("stops metering once the session is abandoned", async () => {
+		const p = createDeviceVoiceProvider();
+		const onLevel = vi.fn();
+		await p.start({ ...harness().cb, onLevel });
+		p.abort();
+		emit("volumechange", { value: 5 });
+		expect(onLevel).not.toHaveBeenCalled();
 	});
 });
 

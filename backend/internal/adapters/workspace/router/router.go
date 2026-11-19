@@ -41,6 +41,7 @@ var _ ports.WorkspaceDefaultBranchRefresher = (*Workspace)(nil)
 var _ ports.WorkspaceProject = (*Workspace)(nil)
 var _ ports.WorkspaceObserver = (*Workspace)(nil)
 var _ ports.WorkspaceReclaimer = (*Workspace)(nil)
+var _ ports.WorkspacePreparationBranchCleaner = (*Workspace)(nil)
 
 // New returns a router over git and scratch workspace implementations.
 func New(deps Deps) *Workspace {
@@ -59,6 +60,24 @@ func (w *Workspace) ResolveDefaultBranch(ctx context.Context, repoPath, configur
 // FetchDefaultBranch delegates default-branch fetching to the git workspace adapter.
 func (w *Workspace) FetchDefaultBranch(ctx context.Context, repoPath string, target ports.WorkspaceDefaultBranch) error {
 	return w.git.FetchDefaultBranch(ctx, repoPath, target)
+}
+
+// RenameTaskBranch delegates task branch naming to the Git adapter.
+func (w *Workspace) RenameTaskBranch(ctx context.Context, info ports.WorkspaceProjectInfo, branch string) (ports.WorkspaceProjectInfo, error) {
+	namer, ok := w.git.(ports.WorkspaceTaskNamer)
+	if !ok {
+		return info, errors.New("workspace router: Git adapter does not support task naming")
+	}
+	return namer.RenameTaskBranch(ctx, info, branch)
+}
+
+// RevertTaskBranch delegates an exact task branch undo to the Git adapter.
+func (w *Workspace) RevertTaskBranch(ctx context.Context, renamed, original ports.WorkspaceProjectInfo) (ports.WorkspaceProjectInfo, error) {
+	namer, ok := w.git.(ports.WorkspaceTaskNamer)
+	if !ok {
+		return renamed, errors.New("workspace router: Git adapter does not support task naming")
+	}
+	return namer.RevertTaskBranch(ctx, renamed, original)
 }
 
 // Create delegates session workspace creation to the project-appropriate
@@ -104,6 +123,18 @@ func (w *Workspace) DestroyReclaim(ctx context.Context, info ports.WorkspaceInfo
 		return reclaimer.DestroyReclaim(ctx, info)
 	}
 	return ports.WorkspaceReclaimRemoved, adapter.Destroy(ctx, info)
+}
+
+// DeletePreparedBranch delegates safe speculative-branch cleanup to Git workspaces.
+func (w *Workspace) DeletePreparedBranch(ctx context.Context, info ports.WorkspaceInfo) error {
+	adapter, err := w.adapterForProject(ctx, info.ProjectID)
+	if err != nil {
+		return err
+	}
+	if cleaner, ok := adapter.(ports.WorkspacePreparationBranchCleaner); ok {
+		return cleaner.DeletePreparedBranch(ctx, info)
+	}
+	return nil
 }
 
 // ForceDestroy delegates forced session workspace cleanup to the

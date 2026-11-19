@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { dockInset, keyboardVerticalOffset, MIN_DOCK_INSET, rootKeyboardPad, screenKeyboardAvoidance } from "./keyboardInset";
+import { CHAT_KEYBOARD_HIDDEN, chatDockRiseOverride, dockInset, dockRestingInset, KEYBOARD_DOCK_GAP, keyboardVerticalOffset, MIN_DOCK_INSET, reduceChatKeyboard, rootKeyboardPad, type ChatKeyboardSignal } from "./keyboardInset";
 import { CONTROL_KEYS } from "./keys";
 
 describe("dockInset", () => {
@@ -7,9 +7,12 @@ describe("dockInset", () => {
 	// the root view was already padded by the keyboard height, so opening the
 	// keyboard moved the bar twice in opposite directions.
 	it("does not add a second dock gap while the root already clears the keyboard", () => {
-		expect(dockInset(336, 34, true)).toBe(0);
-		expect(dockInset(1, 34, true)).toBe(0);
-		expect(dockInset(0, 34, true)).toBe(0);
+		// The gap is a constant, not the inset: the root already clears the whole
+		// keyboard, and adding the home-indicator inset again is what made the bar
+		// kick twice.
+		expect(dockInset(336, 34, true)).toBe(KEYBOARD_DOCK_GAP);
+		expect(dockInset(1, 34, true)).toBe(KEYBOARD_DOCK_GAP);
+		expect(dockInset(0, 34, true)).toBe(KEYBOARD_DOCK_GAP);
 	});
 
 	it("carries the home-indicator inset while the keyboard is down", () => {
@@ -18,6 +21,24 @@ describe("dockInset", () => {
 
 	it("falls back to a minimum on a device with no home indicator", () => {
 		expect(dockInset(0, 0, false)).toBe(MIN_DOCK_INSET);
+	});
+});
+
+// The chat dock holds this value at all times and rides the keyboard's progress
+// to close the difference. Switching it on a visibility flag is what made the
+// composer overshoot: the flag turns over when the keyboard has *finished*
+// hiding, so the dock spent the whole close one inset too low and then jumped.
+describe("dockRestingInset", () => {
+	it("is the home-indicator inset with the keyboard down", () => {
+		expect(dockRestingInset(34)).toBe(34);
+	});
+
+	it("falls back to the minimum without a home indicator", () => {
+		expect(dockRestingInset(0)).toBe(MIN_DOCK_INSET);
+	});
+
+	it("never returns the keyboard gap, which the dock owes only mid-animation", () => {
+		expect(dockRestingInset(34)).not.toBe(KEYBOARD_DOCK_GAP);
 	});
 });
 
@@ -47,21 +68,6 @@ describe("rootKeyboardPad", () => {
 	});
 });
 
-describe("screenKeyboardAvoidance", () => {
-	it("reserves the reported keyboard height plus the nav bar using Android's final keyboard events", () => {
-		expect(screenKeyboardAvoidance("android", 336, 48)).toEqual({
-			showEvent: "keyboardDidShow",
-			hideEvent: "keyboardDidHide",
-			paddingBottom: 384,
-			rootStyle: { paddingBottom: 384 },
-		});
-	});
-
-	it("collapses to nothing when the keyboard is down", () => {
-		expect(screenKeyboardAvoidance("android", 0, 48).rootStyle).toEqual({ paddingBottom: 0 });
-	});
-});
-
 describe("keyboardVerticalOffset", () => {
 	it("uses the measured native stack header instead of a device-specific constant", () => {
 		expect(keyboardVerticalOffset(101)).toBe(101);
@@ -69,17 +75,75 @@ describe("keyboardVerticalOffset", () => {
 	});
 });
 
-// The dock sits inside the root view, so the root's padding is the only place
-// the keyboard is accounted for. Together they must clear the keyboard exactly.
+// The dock sits inside the root view, so the root's padding is what clears the
+// keyboard. The dock only adds its own gap on top of that.
 describe("root padding and dock inset together", () => {
 	it("clear the full Android keyboard occupancy without double-counting", () => {
 		const kb = 336; // as reported by RN: ime inset minus nav bar
 		const nav = 48;
-		expect(rootKeyboardPad("android", kb, nav) + dockInset(kb, nav)).toBe(kb + nav);
+		expect(rootKeyboardPad("android", kb, nav) + dockInset(kb, nav)).toBe(kb + nav + KEYBOARD_DOCK_GAP);
 	});
 
 	it("fall back to the safe-area inset with the keyboard down", () => {
 		expect(rootKeyboardPad("android", 0, 48) + dockInset(0, 48)).toBe(48);
+	});
+});
+
+// Measured on a Pixel emulator under gesture navigation: keyboard-controller
+// reported 336 while React Native's keyboardDidShow reported 312 for the same
+// keyboard, the difference being the 24dp navigation bar.
+describe("reduceChatKeyboard", () => {
+	const run = (...signals: ChatKeyboardSignal[]) => signals.reduce((state, signal) => reduceChatKeyboard("android", state, signal), CHAT_KEYBOARD_HIDDEN);
+
+	it("clears keyboard-controller's height as-is, since it already spans the nav bar", () => {
+		// Adding the inset again is what held the composer 24dp above the keyboard.
+		expect(run({ kind: "controller-show", height: 336 })).toEqual({ visible: true, height: 336, progressTrusted: true });
+	});
+
+	it("leaves a normal opening to the keyboard's progress when React Native agrees", () => {
+		const state = run({ kind: "controller-show", height: 336 }, { kind: "platform-shown", height: 312, insetsBottom: 24 });
+		expect(state).toEqual({ visible: true, height: 336, progressTrusted: true });
+		expect(chatDockRiseOverride(state)).toBeUndefined();
+	});
+
+	// The settle window means React Native's early keyboardDidHide reaches the
+	// reducer after keyboard-controller's own close, as a no-op.
+	it("ends a normal close hidden, with React Native's report changing nothing", () => {
+		expect(run({ kind: "controller-show", height: 336 }, { kind: "controller-hidden" }, { kind: "platform-hidden" })).toEqual(CHAT_KEYBOARD_HIDDEN);
+	});
+
+	it("treats a sub-dp height difference as the same keyboard", () => {
+		const state = run({ kind: "controller-show", height: 336.38 }, { kind: "platform-shown", height: 312, insetsBottom: 24 });
+		expect(chatDockRiseOverride(state)).toBeUndefined();
+	});
+
+	// The empty-space bug: keyboard-controller never heard the keyboard close, so
+	// the root kept a keyboard-sized pad with nothing under it.
+	it("drops the pad when React Native sees a close keyboard-controller missed", () => {
+		const state = run({ kind: "controller-show", height: 336 }, { kind: "platform-hidden" });
+		expect(state.visible).toBe(false);
+		expect(state.height).toBe(0);
+		expect(chatDockRiseOverride(state)).toBe(0);
+	});
+
+	// The reverse: keyboard-controller reported nothing for an opening, and the
+	// composer stayed under the keyboard.
+	it("clears a keyboard only React Native reported, adding the nav bar back", () => {
+		const state = run({ kind: "platform-shown", height: 312, insetsBottom: 24 });
+		expect(state).toEqual({ visible: true, height: 336, progressTrusted: false });
+		expect(chatDockRiseOverride(state)).toBe(1);
+	});
+
+	// Its progress never left 0 for an open it missed, so riding it during the
+	// close would drop the composer by a resting inset.
+	it("keeps a pinned dock pinned until keyboard-controller reports the close", () => {
+		const pinned = run({ kind: "platform-shown", height: 312, insetsBottom: 24 });
+		expect(chatDockRiseOverride(pinned)).toBe(1);
+		expect(chatDockRiseOverride(reduceChatKeyboard("android", pinned, { kind: "controller-hidden" }))).toBeUndefined();
+	});
+
+	it("treats iOS heights from either source as the full occupancy", () => {
+		expect(reduceChatKeyboard("ios", CHAT_KEYBOARD_HIDDEN, { kind: "platform-shown", height: 336, insetsBottom: 34 }).height).toBe(336);
 	});
 });
 
@@ -91,16 +155,20 @@ describe("CONTROL_KEYS", () => {
 	});
 
 	it("sends the bytes a PTY expects", () => {
-		const seq = Object.fromEntries(CONTROL_KEYS.map((k) => [k.label, k.seq]));
+		const seq = Object.fromEntries(CONTROL_KEYS.map((k) => [k.id, k.seq]));
 		expect(seq.esc).toBe("\x1b");
 		expect(seq.tab).toBe("\t");
-		expect(seq["^C"]).toBe("\x03");
-		expect(seq["↵"]).toBe("\r");
+		expect(seq.interrupt).toBe("\x03");
+		expect(seq.enter).toBe("\r");
 		// CSI cursor keys: ESC [ A/B/C/D
-		expect(seq["↑"]).toBe("\x1b[A");
-		expect(seq["↓"]).toBe("\x1b[B");
-		expect(seq["→"]).toBe("\x1b[C");
-		expect(seq["←"]).toBe("\x1b[D");
+		expect(seq.up).toBe("\x1b[A");
+		expect(seq.down).toBe("\x1b[B");
+		expect(seq.right).toBe("\x1b[C");
+		expect(seq.left).toBe("\x1b[D");
+	});
+
+	it("repeats only the arrows while held", () => {
+		expect(CONTROL_KEYS.filter((k) => k.repeats).map((k) => k.id)).toEqual(["left", "up", "down", "right"]);
 	});
 
 	// Every one of these would be stripped by SanitizeControlChars on the REST

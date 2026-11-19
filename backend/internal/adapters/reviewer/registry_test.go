@@ -43,7 +43,7 @@ func TestRegistryMatchesDomainVocabulary(t *testing.T) {
 				if spec.Input != "\x1b" || len(spec.Inputs) != 0 {
 					t.Errorf("reviewer harness %q cancel input = %q inputs=%#v, want single escape", h, spec.Input, spec.Inputs)
 				}
-			case domain.ReviewerClaudeCode, domain.ReviewerOpenCode:
+			case domain.ReviewerClaudeCode, domain.ReviewerOpenCode, domain.ReviewerOpenCodeV2:
 				if spec.Mode != ports.ReviewCancelInput {
 					t.Errorf("reviewer harness %q cancel mode = %q, want %q", h, spec.Mode, ports.ReviewCancelInput)
 				}
@@ -96,6 +96,46 @@ func TestNewResolverResolvesShippedReviewers(t *testing.T) {
 	for _, removed := range []domain.ReviewerHarness{"continue", "goose", "vibe", "qwen"} {
 		if _, ok := resolver.Reviewer(removed); ok {
 			t.Errorf("resolver returned removed reviewer %q", removed)
+		}
+	}
+}
+
+type cachingReviewer struct {
+	ports.Reviewer
+	invalidated int
+}
+
+func (r *cachingReviewer) InvalidateBinaryResolution() { r.invalidated++ }
+
+// Reviewers launch through worker plugins of their own; an install must clear
+// their cached executable too, or new reviews keep running the old binary.
+func TestResolverInvalidatesOneReviewersBinary(t *testing.T) {
+	codex, claude := &cachingReviewer{}, &cachingReviewer{}
+	resolver := &Resolver{reviewers: map[domain.ReviewerHarness]ports.Reviewer{
+		domain.ReviewerCodex: codex, domain.ReviewerClaudeCode: claude,
+	}}
+
+	resolver.InvalidateBinaryResolution(domain.HarnessCodex)
+	resolver.InvalidateBinaryResolution(domain.HarnessAider)
+
+	if codex.invalidated != 1 || claude.invalidated != 0 {
+		t.Fatalf("invalidations codex=%d claude=%d, want 1 and 0", codex.invalidated, claude.invalidated)
+	}
+}
+
+// Every reviewer built on a caching worker plugin forwards the invalidation.
+func TestCachingReviewersForwardBinaryInvalidation(t *testing.T) {
+	for _, harness := range []domain.ReviewerHarness{
+		domain.ReviewerClaudeCode, domain.ReviewerCodex, domain.ReviewerCopilot, domain.ReviewerCursor,
+		domain.ReviewerKimchi, domain.ReviewerOpenCode, domain.ReviewerKiloCode, domain.ReviewerOpenCodeV2,
+	} {
+		resolver, err := NewResolver()
+		if err != nil {
+			t.Fatal(err)
+		}
+		reviewer, _ := resolver.Reviewer(harness)
+		if _, ok := reviewer.(ports.AgentBinaryResolutionInvalidator); !ok {
+			t.Errorf("%s reviewer does not forward binary invalidation", harness)
 		}
 	}
 }

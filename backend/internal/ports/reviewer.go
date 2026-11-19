@@ -22,6 +22,12 @@ type Reviewer interface {
 	ReviewMessage(ctx context.Context, inv ReviewInvocation) (string, error)
 }
 
+// ReviewerChatProfile opts a reviewer into the typed Chat transport. Reviewers
+// without this capability keep the terminal launch path.
+type ReviewerChatProfile interface {
+	ReviewChatHarness() domain.AgentHarness
+}
+
 // ReviewCancelMode names how AO should stop a running reviewer.
 type ReviewCancelMode string
 
@@ -61,6 +67,14 @@ type ReviewerRestorer interface {
 	ReviewRestoreCommand(ctx context.Context, inv ReviewInvocation) (cmd ReviewCommandSpec, ok bool, err error)
 }
 
+// ReviewerActivityHooks is implemented by reviewer adapters whose terminal
+// reviewer reliably reports active and idle through AO's activity hooks. The
+// review run lifecycle applies its first-activity and idle rules only to
+// these; every other reviewer is judged by liveness and its maximum duration.
+type ReviewerActivityHooks interface {
+	ReviewActivityHooks() bool
+}
+
 // ReviewerReusePolicy is implemented by interactive reviewer adapters that
 // need a fresh TUI for each task because request-scoped context is fixed at
 // process launch. Returning false forces a fresh launch for every pass.
@@ -74,6 +88,20 @@ type ReviewerReusePolicy interface {
 type ReviewerPromptReadinessProvider interface {
 	ReviewPromptReadinessHints(ctx context.Context) (PromptReadinessHints, error)
 }
+
+// ReviewSubmitHeredocDelimiter is the quoted here-document delimiter the review
+// prompt uses to pass review text to the GitHub review POST and to
+// `ao review submit`. Reviewer permission rules match commands ending in it.
+const ReviewSubmitHeredocDelimiter = "AO_REVIEW_EOF"
+
+// ReviewEndpointPattern matches the path used to create a GitHub pull request review.
+const ReviewEndpointPattern = `repos/[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+/pulls/\d+/reviews`
+
+// ReviewPostCommandPattern matches a GitHub review POST with its body on stdin.
+const ReviewPostCommandPattern = `gh api --method POST ` + ReviewEndpointPattern + ` --input - --jq '[.]id'`
+
+// ReviewRunArgsPattern matches the arguments for recording one review from stdin.
+const ReviewRunArgsPattern = `--run [A-Za-z0-9_.:-]+ --verdict (?:approved|changes_requested)(?: --review-id [0-9]+)? --body -`
 
 // ReviewInvocation describes one review pass for a reviewer to act on. All ids
 // the reviewer needs are passed explicitly here (and embedded in the prompt /

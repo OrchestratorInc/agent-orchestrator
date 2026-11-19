@@ -5,6 +5,7 @@
 	},
 	"build": {
 		"development": {
+			"env": { "SENTRY_DISABLE_AUTO_UPLOAD": "true" },
 			"developmentClient": true,
 			"distribution": "internal",
 			"android": {
@@ -12,13 +13,18 @@
 			}
 		},
 		"preview": {
+			"env": { "SENTRY_DISABLE_AUTO_UPLOAD": "true" },
 			"distribution": "internal",
 			"android": {
-				"buildType": "apk"
+				"buildType": "apk",
+				"env": {
+					"ORG_GRADLE_PROJECT_reactNativeArchitectures": "armeabi-v7a,arm64-v8a"
+				}
 			},
 			"channel": "preview"
 		},
 		"production": {
+			"env": { "SENTRY_DISABLE_AUTO_UPLOAD": "true" },
 			"autoIncrement": true,
 			"channel": "production"
 		}

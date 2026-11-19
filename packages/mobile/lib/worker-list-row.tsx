@@ -1,27 +1,44 @@
-import { Feather } from "@expo/vector-icons";
+import { Feather } from "./icons";
 import { useRouter } from "expo-router";
-import { useCallback, useEffect, useRef, useState } from "react";
-import { Keyboard, Pressable, StyleSheet, Text, TextInput, View } from "react-native";
+import { memo, useCallback, useEffect, useRef, useState } from "react";
+import { Alert, BackHandler, Keyboard, StyleSheet, Text, TextInput, View } from "react-native";
 import type { DashboardSession } from "./api";
 import { AgentLogo } from "./AgentLogo";
 import { haptics } from "./haptics";
-import { prLine, workerRowPresentation, workerStatusGlyph } from "./agentsView";
+import { sessionHostId } from "./hostedRows";
+import { prLine, workerRowPresentation, workerStatusGlyph, type WorkerStatusGlyph } from "./agentsView";
+import { AppSymbol } from "./AppSymbol";
+import type { AppSymbolName, PlatformSymbol } from "./symbols";
 import { toneColor } from "./prView";
 import { statusVisual, type Theme } from "./theme";
 import { rowDividerWidth } from "./divider";
 import { useTheme, useThemedStyles } from "./ThemeProvider";
-import { openGitHub } from "./openGitHub";
+import { textSelectionColors } from "./textSelection";
 import { workerContextActions, type WorkerActionId } from "./worker-action-model";
 import { WorkerRowActions } from "./worker-row-actions";
 import { WorkerRowInteraction } from "./worker-row-interaction";
-import { WORKER_ACTION_REVEAL_WIDTH } from "./worker-row-swipe-model";
+import { Spinner } from "./Spinner";
 import { normalizeConversationTitle } from "./chat/conversationMenuModel";
+import { useOpenPage } from "./pageNavigation";
+import { iconSize, space, type } from "./tokens";
+import { userFacingError } from "./connectionError";
+import { reviewRouteForSession } from "./reviewView";
+import { isCloudHost } from "./cloud/mapping";
+import { MachineIdentity } from "./MachineIdentity";
+import type { MachineAppearance } from "./machineAppearance";
+import type { MachineFreshness } from "./machineFreshness";
 
-export function WorkerListRow({
+export const WorkerListRow = memo(
+	function WorkerListRow({
 	session,
+	hostId,
+	rowKey,
 	projectName,
+	machine,
+	unreachable = false,
 	isRenaming,
 	activeSwipeId,
+	nowBucket,
 	onSwipeOpen,
 	onSwipeClose,
 	onRenameStart,
@@ -33,9 +50,24 @@ export function WorkerListRow({
 	onRestore,
 }: {
 	session: DashboardSession;
+	/** Fallback for primary-only rows; hosted sessions carry their own host ID. */
+	hostId?: string;
+	rowKey?: string;
 	projectName?: string;
+	machine?: { name: string; appearance: MachineAppearance; freshness?: MachineFreshness };
+	/**
+	 * The row's machine can't be reached, so what it shows is the last thing
+	 * heard. Dimmed rather than hidden: the rows are still worth reading.
+	 */
+	unreachable?: boolean;
 	isRenaming: boolean;
 	activeSwipeId?: string;
+	/**
+	 * The current minute, passed in only so a row re-renders when its relative
+	 * timestamp would read differently — the memo below compares session *values*,
+	 * so nothing else would wake a row whose data has not changed.
+	 */
+	nowBucket: number;
 	onSwipeOpen(id: string, close: () => void): void;
 	onSwipeClose(id: string): void;
 	onRenameStart(): void;
@@ -51,69 +83,99 @@ export function WorkerListRow({
 	const t = useTheme();
 	const styles = useThemedStyles(makeStyles);
 	const router = useRouter();
+	const openPage = useOpenPage();
 	const closeActionRailRef = useRef<() => void>(() => {});
 	const [renameTitle, setRenameTitle] = useState("");
 	const [renameSaving, setRenameSaving] = useState(false);
-	const [renameError, setRenameError] = useState<string>();
+	// One way out of each rename: Return and the blur that follows it, or a
+	// cancel and the blur the dismissed keyboard sends, must not both act.
+	const renameSettled = useRef(false);
+	const renaming = useRef(isRenaming);
+	renaming.current = isRenaming;
 	const row = workerRowPresentation(t, session, projectName);
 	const visual = statusVisual(t, session.status);
 	const glyph = workerStatusGlyph(session.status);
 	const prs = prLine(session);
-	const details = [row.branch, prs?.text].filter(Boolean).join("  ·  ");
+	// The second line is the pull request when there is one, and the branch when
+	// there is not. The branch used to lead unconditionally, which put a worktree
+	// path (`ao/dev/<project>-N/root`) under every title — the same string the
+	// session header already shows. Then it went missing entirely for a row with no
+	// PR, which left the line blank on exactly the sessions that had no other way to
+	// name their branch. `workerRowPresentation` has already dropped a branch that
+	// only restates the title, so whatever reaches here says something new.
+	const details = prs?.text ?? row.branch ?? "";
+	useEffect(() => {
+		if (isRenaming) renameSettled.current = false;
+	}, [isRenaming]);
 	useEffect(() => {
 		if (isRenaming) return;
 		setRenameTitle(row.title);
-		setRenameError(undefined);
 		setRenameSaving(false);
 	}, [isRenaming, row.title]);
-	const cancelRename = () => {
+	const cancelRename = useCallback(() => {
+		if (renameSettled.current) return;
+		renameSettled.current = true;
 		Keyboard.dismiss();
-		setRenameError(undefined);
 		onRenameCancel();
-	};
-	const saveRename = useCallback(async () => {
+	}, [onRenameCancel]);
+	// An inline rename commits the way each platform's own lists do: Return, or
+	// leaving the field. Android's back and VoiceOver's escape scrub cancel.
+	const commitRename = useCallback(async () => {
+		if (renameSettled.current) return;
+		renameSettled.current = true;
+		Keyboard.dismiss();
 		const nextTitle = normalizeConversationTitle(renameTitle);
-		if (!nextTitle || renameSaving) return;
+		// Left empty or unchanged, the worker keeps its name.
+		if (!nextTitle || nextTitle === row.title) {
+			onRenameCancel();
+			return;
+		}
 		setRenameSaving(true);
-		setRenameError(undefined);
 		try {
 			await onRename(nextTitle);
 			haptics.success();
-			Keyboard.dismiss();
-			onRenameCancel();
 		} catch (cause) {
+			// With no Cancel button, a field kept open on a failure would have no
+			// way out, so the rename ends and says why.
 			haptics.error();
-			setRenameError(cause instanceof Error ? cause.message : "Could not rename this worker.");
-			setRenameSaving(false);
+			Alert.alert("Couldn't rename this worker", userFacingError(cause, "Please try again."));
 		}
-	}, [onRename, onRenameCancel, renameSaving, renameTitle]);
+		// The board may have moved on to renaming another row meanwhile.
+		if (renaming.current) onRenameCancel();
+	}, [onRename, onRenameCancel, renameTitle, row.title]);
+	useEffect(() => {
+		if (!isRenaming) return;
+		const subscription = BackHandler.addEventListener("hardwareBackPress", () => {
+			cancelRename();
+			return true;
+		});
+		return () => subscription.remove();
+	}, [cancelRename, isRenaming]);
+	// No haptics on these presses: the pin's result and Archive's confirmation
+	// each give their own, and opening a row is navigation.
 	const renderRightActions = useCallback(
 		() => (
-			<View style={styles.actionRail}>
-				<WorkerRowActions
-					title={row.title}
-					pinned={Boolean(session.isPinned)}
-					onSetPinned={(pinned) => {
-						closeActionRailRef.current();
-						haptics.tap();
-						void onSetPinned(pinned);
-					}}
-					onDelete={() => { closeActionRailRef.current(); haptics.warning(); onDelete(); }}
-				/>
-			</View>
+			<WorkerRowActions
+				title={row.title}
+				pinned={Boolean(session.isPinned)}
+				onSetPinned={(pinned) => {
+					closeActionRailRef.current();
+					void onSetPinned(pinned);
+				}}
+			/>
 		),
-		[onDelete, onSetPinned, row.title, session.isPinned, styles.actionRail],
+		[onSetPinned, row.title, session.isPinned],
 	);
-	const openSession = () => {
-		haptics.tap();
+	const openSession = useCallback(() => {
 		router.push({
 			pathname: "/session/[id]",
-			params: { id: session.id, projectId: session.projectId },
+			params: { id: session.id, projectId: session.projectId, hostId: sessionHostId(session) ?? hostId },
 		});
-	};
+	}, [router, session, hostId]);
 
-	// prLine returns display text, not a link, so the url comes off the session.
-	const prUrl = (session.prs?.length ? session.prs[0] : session.pr)?.url ?? null;
+	const cloudRow = isCloudHost(sessionHostId(session) ?? hostId);
+	// The PR page reads the worker's own host: its machine's daemon, or Orchestrator Cloud.
+	const reviewRoute = reviewRouteForSession(session, sessionHostId(session) ?? hostId);
 	const terminated = session.isTerminated === true || session.status === "terminated";
 	const contextActions = workerContextActions({
 		pinned: Boolean(session.isPinned),
@@ -121,7 +183,8 @@ export function WorkerListRow({
 		// A live session whose agent has stopped: exited or crashed, but the AO
 		// session around it is still intact, so resuming is the lighter fix.
 		stopped: !terminated && (session.status === "exited" || session.status === "errored"),
-		hasPr: Boolean(prUrl),
+		hasPr: Boolean(reviewRoute),
+		cloud: cloudRow,
 	});
 
 	const runAction = useCallback((id: WorkerActionId) => {
@@ -133,35 +196,32 @@ export function WorkerListRow({
 			case "unpin":
 				return void onSetPinned(false);
 			case "rename":
-				haptics.tap();
 				setRenameTitle(row.title);
-				setRenameError(undefined);
 				return onRenameStart();
 			case "resume":
 				return onResume();
 			case "restore":
 				return onRestore();
 			case "openPr":
-				if (prUrl) void openGitHub(prUrl);
+				if (reviewRoute) openPage(reviewRoute);
 				return;
 			default:
 				return onDelete();
 		}
-	// openSession closes over router and session, both stable enough for a row.
-	}, [onDelete, onRenameStart, onResume, onRestore, onSetPinned, prUrl, row.title]);
+	}, [onDelete, onRenameStart, onResume, onRestore, onSetPinned, openPage, reviewRoute, openSession, row.title]);
 
 	return (
 		<WorkerRowInteraction
-			sessionId={session.id}
+			sessionId={rowKey ?? session.id}
 			enabled={!isRenaming}
 			activeSwipeId={activeSwipeId}
 			rightActions={renderRightActions()}
 			shellStyle={styles.shell}
 			foregroundStyle={styles.foreground}
 			rowStyle={styles.row}
-			pressedStyle={styles.rowPressed}
-			accessibilityLabel={`${row.title}. ${visual.label}. ${row.project}.`}
-			accessibilityHint="Swipe left for pin and delete actions. Long press for more."
+			// No gesture hint: a screen reader reaches pin, rename and archive as
+			// the row's actions, and announces that it has them.
+			accessibilityLabel={`${row.title}. ${visual.label}. ${row.project}.${unreachable ? " Last known; its machine can't be reached." : ""}`}
 			onPress={openSession}
 			actions={contextActions}
 			onAction={runAction}
@@ -177,13 +237,14 @@ export function WorkerListRow({
 					details={details}
 					prsTone={prs?.tone}
 					harness={session.harness}
+					machine={machine}
+					unreachable={unreachable}
 					isRenaming
 					renameTitle={renameTitle}
 					renameSaving={renameSaving}
-					renameError={renameError}
 					onRenameTitleChange={setRenameTitle}
 					onRenameCancel={cancelRename}
-					onRenameSave={() => void saveRename()}
+					onRenameCommit={() => void commitRename()}
 					styles={styles}
 					t={t}
 				/>
@@ -195,13 +256,34 @@ export function WorkerListRow({
 					details={details}
 					prsTone={prs?.tone}
 					harness={session.harness}
+					machine={machine}
+					unreachable={unreachable}
 					styles={styles}
 					t={t}
 				/>
 			)}
 		</WorkerRowInteraction>
 	);
-}
+},
+	// Polls retain unchanged session objects. Bound handlers are stable too, but
+	// must be compared so a changed connection never leaves stale actions behind.
+	(prev, next) =>
+		prev.nowBucket === next.nowBucket &&
+		prev.rowKey === next.rowKey &&
+		prev.projectName === next.projectName &&
+		prev.hostId === next.hostId &&
+		prev.machine?.name === next.machine?.name &&
+		prev.machine?.appearance.symbol === next.machine?.appearance.symbol &&
+		prev.machine?.freshness === next.machine?.freshness &&
+		prev.unreachable === next.unreachable &&
+		prev.isRenaming === next.isRenaming &&
+		prev.activeSwipeId === next.activeSwipeId &&
+		prev.session === next.session &&
+		prev.onSwipeOpen === next.onSwipeOpen && prev.onSwipeClose === next.onSwipeClose &&
+		prev.onRenameStart === next.onRenameStart && prev.onRenameCancel === next.onRenameCancel &&
+		prev.onRename === next.onRename && prev.onSetPinned === next.onSetPinned &&
+		prev.onDelete === next.onDelete && prev.onResume === next.onResume && prev.onRestore === next.onRestore,
+);
 
 function WorkerRowContents({
 	row,
@@ -210,13 +292,14 @@ function WorkerRowContents({
 	details,
 	prsTone,
 	harness,
+	machine,
+	unreachable = false,
 	isRenaming = false,
 	renameTitle = "",
 	renameSaving = false,
-	renameError,
 	onRenameTitleChange,
 	onRenameCancel,
-	onRenameSave,
+	onRenameCommit,
 	styles,
 	t,
 }: {
@@ -226,29 +309,34 @@ function WorkerRowContents({
 	details: string;
 	prsTone?: Parameters<typeof toneColor>[1];
 	harness: DashboardSession["harness"];
+	machine?: { name: string; appearance: MachineAppearance; freshness?: MachineFreshness };
+	unreachable?: boolean;
 	isRenaming?: boolean;
 	renameTitle?: string;
 	renameSaving?: boolean;
-	renameError?: string;
 	onRenameTitleChange?(title: string): void;
 	onRenameCancel?(): void;
-	onRenameSave?(): void;
+	onRenameCommit?(): void;
 	styles: ReturnType<typeof makeStyles>;
 	t: Theme;
 }) {
-	const canSave = Boolean(normalizeConversationTitle(renameTitle)) && !renameSaving;
 	return (
 		<>
-			<View style={styles.eyebrow}>
+			<View style={[styles.eyebrow, unreachable && styles.lastKnown]}>
 				<AgentLogo harness={harness} size={14} />
 				<Text style={styles.project} numberOfLines={1}>
 					{row.project}
 				</Text>
 				{/* Paired with the tinted label so status reads by shape as well as
 				    colour. Only shown alongside a real status — when the row is
-				    showing an elapsed time instead, there is no state to depict. */}
+				    showing an elapsed time instead, there is no state to depict.
+				    A working or starting row shows the system's spinner: a still
+				    circle reads as stuck, and a pulse says "waiting", which is what
+				    the row above it says for a different state. */}
 				{glyph && row.trailingKind === "status" ? (
-					<Feather name={glyph} size={12} color={visual.color} />
+					visual.breathing || glyph === "loader"
+						? <Spinner size={iconSize.xs} color={visual.color} />
+						: <StatusGlyph glyph={glyph} color={visual.color} />
 				) : null}
 				<Text
 					style={[styles.trailing, { color: row.trailingKind === "status" ? visual.color : t.textTertiary }]}
@@ -262,49 +350,59 @@ function WorkerRowContents({
 				<View style={styles.titleEditor}>
 					<TextInput
 						autoFocus
+						accessibilityLabel="Worker name"
+						accessibilityHint="Saves when you press Return or leave the field."
+						// VoiceOver's escape scrub backs out of the rename.
+						onAccessibilityEscape={onRenameCancel}
 						value={renameTitle}
 						onChangeText={onRenameTitleChange}
+						editable={!renameSaving}
 						placeholder="Worker name"
 						placeholderTextColor={t.textFaint}
-						selectionColor={t.blue}
+						{...textSelectionColors(t)}
 						maxLength={120}
 						returnKeyType="done"
-						onSubmitEditing={onRenameSave}
+						onSubmitEditing={onRenameCommit}
+						onBlur={onRenameCommit}
 						style={styles.renameInput}
 					/>
-					<Pressable
-						accessibilityRole="button"
-						accessibilityLabel="Cancel rename"
-						disabled={renameSaving}
-						onPress={onRenameCancel}
-						style={({ pressed }) => [styles.renameControl, pressed && styles.renameControlPressed, renameSaving && styles.renameControlDisabled]}
-					>
-						<Feather name="x" size={17} color={t.textSecondary} />
-					</Pressable>
-					<Pressable
-						accessibilityRole="button"
-						accessibilityLabel="Save worker name"
-						disabled={!canSave}
-						onPress={onRenameSave}
-						style={({ pressed }) => [styles.renameControl, styles.renameSave, pressed && styles.renameControlPressed, !canSave && styles.renameControlDisabled]}
-					>
-						<Feather name={renameSaving ? "loader" : "check"} size={17} color={t.onAccent} />
-					</Pressable>
+					{renameSaving ? <Spinner size={iconSize.md} accessibilityLabel="Saving worker name" /> : null}
 				</View>
 			) : (
-				<Text style={styles.title} numberOfLines={1}>
+				<Text style={[styles.title, unreachable && styles.lastKnown]} numberOfLines={1}>
 					{row.title}
 				</Text>
 			)}
 
-			{renameError ? <Text accessibilityRole="alert" style={styles.renameError}>{renameError}</Text> : null}
-			{details ? (
-				<Text style={[styles.details, prsTone && !row.branch && { color: toneColor(t, prsTone) }]} numberOfLines={1}>
-					{details}
-				</Text>
+			{details || machine ? (
+				<View style={[styles.metadata, unreachable && styles.lastKnown]}>
+					{details ? (
+						<Text style={[styles.details, prsTone && { color: toneColor(t, prsTone) }]} numberOfLines={1}>
+							{details}
+						</Text>
+					) : <View style={styles.metadataSpacer} />}
+					{machine ? <MachineIdentity testID="worker-machine-identity" name={machine.name} appearance={machine.appearance} freshness={machine.freshness} style={styles.machineIdentity} /> : null}
+				</View>
 			) : null}
 		</>
 	);
+}
+
+/**
+ * Status glyphs are chrome, so each draws as its platform's own symbol. The
+ * pull request keeps its Lucide glyph: a domain mark with no system symbol.
+ */
+const STATUS_SYMBOLS: Record<Exclude<WorkerStatusGlyph, "git-pull-request" | "loader">, AppSymbolName | PlatformSymbol> = {
+	"alert-circle": "error",
+	"message-square": "chat",
+	"x-octagon": { ios: "xmark.octagon", android: "dangerous" },
+	"check-circle": "checkCircle",
+	moon: "idle",
+};
+
+function StatusGlyph({ glyph, color }: { glyph: Exclude<WorkerStatusGlyph, "loader">; color: string }) {
+	if (glyph === "git-pull-request") return <Feather name={glyph} size={iconSize.xs} color={color} />;
+	return <AppSymbol name={STATUS_SYMBOLS[glyph]} size={iconSize.xs} color={color} />;
 }
 
 const makeStyles = (t: Theme) =>
@@ -312,33 +410,28 @@ const makeStyles = (t: Theme) =>
 		shell: {
 			minHeight: 76,
 			overflow: "hidden",
-			borderBottomWidth: rowDividerWidth,
-			borderBottomColor: t.borderSubtle,
-		},
-		actionRail: {
-			width: WORKER_ACTION_REVEAL_WIDTH,
-			backgroundColor: t.bgElevated,
-			borderLeftWidth: StyleSheet.hairlineWidth,
-			borderLeftColor: t.borderSubtle,
 		},
 		foreground: { backgroundColor: t.bgBase },
 		row: {
 			minHeight: 76,
-			paddingHorizontal: 18,
-			paddingVertical: 10,
-			gap: 3,
+			paddingHorizontal: space.lg,
+			paddingVertical: space.sm,
+			gap: space.hair,
 		},
-		rowPressed: { backgroundColor: t.bgSubtle },
-		titleEditor: { minHeight: 32, flexDirection: "row", alignItems: "center", gap: 7 },
-		renameInput: { flex: 1, minWidth: 0, minHeight: 32, paddingHorizontal: 0, paddingVertical: 0, borderWidth: 0, backgroundColor: "transparent", color: t.textPrimary, fontSize: 16, lineHeight: 21, fontWeight: "600", letterSpacing: -0.15, includeFontPadding: false, textAlignVertical: "center" },
-		renameError: { color: t.red, fontSize: 11, lineHeight: 15, marginTop: -1 },
-		renameControl: { width: 32, height: 32, borderRadius: 16, borderWidth: StyleSheet.hairlineWidth, borderColor: t.borderDefault, alignItems: "center", justifyContent: "center", backgroundColor: t.bgElevatedHover },
-		renameSave: { borderColor: t.blue, backgroundColor: t.blue },
-		renameControlPressed: { opacity: 0.68 },
-		renameControlDisabled: { opacity: 0.45 },
-		eyebrow: { flexDirection: "row", alignItems: "center", gap: 6, minHeight: 17 },
-		project: { flex: 1, color: t.textSecondary, fontSize: 12, lineHeight: 16, fontWeight: "500" },
-		trailing: { flexShrink: 0, fontSize: 12, lineHeight: 16, fontWeight: "500", fontVariant: ["tabular-nums"] },
-		title: { color: t.textPrimary, fontSize: 16, lineHeight: 21, fontWeight: "600", letterSpacing: -0.15 },
-		details: { color: t.textTertiary, fontSize: 12, lineHeight: 16, fontFamily: t.fontMono },
+		// Inset to the text, and drawn inside the row
+		// so it travels with a swipe instead of staying behind on the rail.
+		divider: { position: "absolute", left: space.lg, right: 0, bottom: 0, height: rowDividerWidth, backgroundColor: t.borderSubtle },
+		titleEditor: { minHeight: 32, flexDirection: "row", alignItems: "center", gap: space.xs },
+		renameInput: { fontFamily: "DMSans_600SemiBold", flex: 1, minWidth: 0, minHeight: 32, paddingHorizontal: space.none, paddingVertical: space.none, borderWidth: 0, backgroundColor: "transparent", color: t.textPrimary, fontSize: 16, lineHeight: 21, fontWeight: "600", letterSpacing: -0.15, includeFontPadding: false, textAlignVertical: "center" },
+		eyebrow: { flexDirection: "row", alignItems: "center", gap: space.xs, minHeight: 17 },
+		project: { fontFamily: "DMSans_500Medium", flex: 1, color: t.textSecondary, fontSize: type.footnote.fontSize, lineHeight: type.footnote.lineHeight, fontWeight: "500" },
+		trailing: { fontFamily: "DMSans_500Medium", flexShrink: 0, fontSize: type.footnote.fontSize, lineHeight: type.footnote.lineHeight, fontWeight: "500", fontVariant: ["tabular-nums"] },
+		title: { fontFamily: "DMSans_600SemiBold", color: t.textPrimary, fontSize: 16, lineHeight: 21, fontWeight: "600", letterSpacing: -0.15 },
+		// A row whose machine can't be reached shows the last thing heard, so it
+		// must not read as live: the spinner and status stay, at a lower voice.
+		lastKnown: { opacity: 0.5 },
+		metadata: { minWidth: 0, flexDirection: "row", alignItems: "center", gap: space.sm },
+		metadataSpacer: { flex: 1 },
+		details: { flex: 1, minWidth: 0, color: t.textTertiary, fontSize: type.footnote.fontSize, lineHeight: type.footnote.lineHeight, fontFamily: t.fontMono },
+		machineIdentity: { maxWidth: "52%", marginLeft: "auto" },
 	});

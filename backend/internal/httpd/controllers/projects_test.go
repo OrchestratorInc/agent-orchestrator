@@ -223,7 +223,7 @@ func TestProjectsAPI_UpdateSettings(t *testing.T) {
 	body, status, _ = doRequest(t, srv, "PUT", "/api/v1/projects/legacy-project", `{"displayName":"  ","config":{}}`)
 	assertErrorCode(t, body, status, http.StatusBadRequest, "DISPLAY_NAME_REQUIRED")
 
-	body, status, _ = doRequest(t, srv, "PUT", "/api/v1/projects/legacy-project", `{"displayName":"`+strings.Repeat("x", 21)+`","config":{}}`)
+	body, status, _ = doRequest(t, srv, "PUT", "/api/v1/projects/legacy-project", `{"displayName":"`+strings.Repeat("x", 101)+`","config":{}}`)
 	assertErrorCode(t, body, status, http.StatusBadRequest, "DISPLAY_NAME_TOO_LONG")
 
 	body, status, _ = doRequest(t, srv, "PUT", "/api/v1/projects/missing", `{"displayName":"Missing","config":{}}`)
@@ -690,5 +690,11 @@ func TestProjectsAPI_SetPermissions(t *testing.T) {
 		assertErrorCode(t, body, status, http.StatusBadRequest, tc.code)
 	}
 	body, status, _ = doRequest(t, srv, "PATCH", "/api/v1/projects/missing/permissions", `{"permissions":"auto"}`)
+	assertErrorCode(t, body, status, http.StatusNotFound, "PROJECT_NOT_FOUND")
+	body, status, _ = doRequest(t, srv, "DELETE", "/api/v1/projects/remember/permissions", "")
+	if status != http.StatusOK || strings.Contains(string(body), `"permissions":"auto"`) {
+		t.Fatalf("forget %d %s", status, body)
+	}
+	body, status, _ = doRequest(t, srv, "DELETE", "/api/v1/projects/missing/permissions", "")
 	assertErrorCode(t, body, status, http.StatusNotFound, "PROJECT_NOT_FOUND")
 }

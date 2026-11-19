@@ -64,6 +64,41 @@ func TestDecodeSpawnAttachments(t *testing.T) {
 		}
 	})
 
+	t.Run("accepts video above previous file limit", func(t *testing.T) {
+		const size = 11 << 20
+		out, err := decodeSpawnAttachments([]AttachmentInput{{MimeType: "video/quicktime", Data: b64(make([]byte, size))}})
+		if err != nil {
+			t.Fatalf("11 MiB video rejected: %+v", err)
+		}
+		if len(out) != 1 {
+			t.Fatalf("decoded video count = %d, want 1", len(out))
+		}
+		if out[0].Ext != ".mov" || len(out[0].Data) != size {
+			t.Fatalf("decoded video extension = %q, bytes = %d", out[0].Ext, len(out[0].Data))
+		}
+	})
+
+	t.Run("accepts batch above previous total limit", func(t *testing.T) {
+		const size = 9 << 20
+		data := b64(make([]byte, size))
+		out, err := decodeSpawnAttachments([]AttachmentInput{
+			{MimeType: "application/octet-stream", Data: data},
+			{MimeType: "application/octet-stream", Data: data},
+			{MimeType: "application/octet-stream", Data: data},
+		})
+		if err != nil {
+			t.Fatalf("27 MiB batch rejected: %+v", err)
+		}
+		if len(out) != 3 {
+			t.Fatalf("decoded batch count = %d, want 3", len(out))
+		}
+		for i, attachment := range out {
+			if len(attachment.Data) != size {
+				t.Fatalf("decoded batch attachment %d = %d bytes, want %d", i, len(attachment.Data), size)
+			}
+		}
+	})
+
 	// SVG is XML that can carry active content; it is explicitly blocked.
 	t.Run("rejects svg", func(t *testing.T) {
 		_, err := decodeSpawnAttachments([]AttachmentInput{{MimeType: "image/svg+xml", Data: b64([]byte("<svg/>"))}})
@@ -86,24 +121,42 @@ func TestDecodeSpawnAttachments(t *testing.T) {
 		}
 	})
 
-	t.Run("rejects oversized single attachment", func(t *testing.T) {
-		big := b64(make([]byte, maxAttachmentBytes+1))
-		_, err := decodeSpawnAttachments([]AttachmentInput{{MimeType: "image/png", Data: big}})
-		if err == nil || err.code != "ATTACHMENT_TOO_LARGE" {
-			t.Fatalf("want ATTACHMENT_TOO_LARGE got %v", err)
+	t.Run("names an upload instead of inline data", func(t *testing.T) {
+		const upload = "upload-0123456789abcdef0123456789abcdef"
+		out, err := decodeSpawnAttachments([]AttachmentInput{{MimeType: "video/mp4", UploadID: upload}})
+		if err != nil {
+			t.Fatalf("upload rejected: %+v", err)
+		}
+		if len(out) != 1 || out[0].Upload != upload || out[0].Data != nil || out[0].Ext != ".mp4" {
+			t.Fatalf("decoded upload = %+v", out)
 		}
 	})
 
-	t.Run("rejects oversized total", func(t *testing.T) {
-		half := b64(make([]byte, maxAttachmentBytes))
-		in := []AttachmentInput{
-			{MimeType: "image/png", Data: half},
-			{MimeType: "image/png", Data: half},
-			{MimeType: "image/png", Data: half},
+	t.Run("rejects a malformed upload id", func(t *testing.T) {
+		_, err := decodeSpawnAttachments([]AttachmentInput{{MimeType: "image/png", UploadID: "../attachments/x"}})
+		if err == nil || err.code != "INVALID_ATTACHMENT_UPLOAD" {
+			t.Fatalf("want INVALID_ATTACHMENT_UPLOAD got %v", err)
 		}
-		_, err := decodeSpawnAttachments(in)
-		if err == nil || err.code != "ATTACHMENTS_TOO_LARGE" {
-			t.Fatalf("want ATTACHMENTS_TOO_LARGE got %v", err)
+	})
+
+	t.Run("rejects data and an upload together", func(t *testing.T) {
+		_, err := decodeSpawnAttachments([]AttachmentInput{{MimeType: "image/png", Data: b64([]byte("x")), UploadID: "upload-0123456789abcdef0123456789abcdef"}})
+		if err == nil || err.code != "INVALID_ATTACHMENT_DATA" {
+			t.Fatalf("want INVALID_ATTACHMENT_DATA got %v", err)
+		}
+	})
+
+	t.Run("a capped caller takes no uploads", func(t *testing.T) {
+		_, err := decodeAttachments([]AttachmentInput{{MimeType: "image/png", UploadID: "upload-0123456789abcdef0123456789abcdef"}}, 10<<20, 25<<20)
+		if err == nil || err.code != "INVALID_ATTACHMENT_DATA" {
+			t.Fatalf("want INVALID_ATTACHMENT_DATA got %v", err)
+		}
+	})
+
+	t.Run("a capped caller still refuses oversized inline data", func(t *testing.T) {
+		_, err := decodeAttachments([]AttachmentInput{{MimeType: "image/png", Data: b64(make([]byte, 1<<10+1))}}, 1<<10, 4<<10)
+		if err == nil || err.code != "ATTACHMENT_TOO_LARGE" {
+			t.Fatalf("want ATTACHMENT_TOO_LARGE got %v", err)
 		}
 	})
 

@@ -11,11 +11,18 @@ import {
 } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import {
+	archiveExtraction,
 	createWorkDirectory,
 	npmInvocation,
+	patchClaudeContextUsage,
+	patchClaudeContextWindowProbe,
+	patchClaudeFoldedPromptSettlement,
+	patchClaudeHibernationCheck,
 	patchClaudeRetryDetails,
+	patchClaudeStaleIdleDebt,
+	patchClaudeSteerSettlement,
 	pruneNodeDistribution,
 	runtimeSourceFiles,
 } from "./build-acp-runtime-helpers.mjs";
@@ -109,6 +116,740 @@ describe("patchClaudeRetryDetails", () => {
 	});
 });
 
+describe("patchClaudeHibernationCheck", () => {
+	const anchors = [
+		"// session.liveBackgroundTasks.set(message.task_id",
+		"// session.lastSessionState = message.state;",
+		"agent.endTask = (session, message) => { session.liveBackgroundTasks.delete(message.task_id); };",
+		"// session.liveBackgroundTasks.delete(message.task_id);",
+		"connection.onRequest(GOAL_CONTROL_METHOD, { parse: parseGoalRequest }, (ctx) => agent.goal(ctx.params));",
+	];
+
+	it("keeps live native tasks awake and allows sleep after they settle", () => {
+		const adapterPath = join(temporaryDirectory(), "acp-agent.js");
+		writeFileSync(adapterPath, anchors.join("\n"));
+		expect(patchClaudeHibernationCheck(adapterPath)).toBe(true);
+		expect(patchClaudeHibernationCheck(adapterPath)).toBe(false);
+		const handlers = new Map();
+		const connection = { onRequest: (method, parser, handler) => {
+			expect(typeof parser.parse).toBe("function");
+			expect(typeof handler).toBe("function");
+			handlers.set(method, (ctx) => handler({ params: parser.parse(ctx.params) }));
+			return connection;
+		} };
+		const tasks = new Map();
+		const agent = { sessions: { native: { liveBackgroundTasks: tasks } } };
+		new Function("connection", "agent", "GOAL_CONTROL_METHOD", "parseGoalRequest", "RequestError", readFileSync(adapterPath, "utf8"))(
+			connection, agent, "goal", params => params, { invalidParams: () => new Error("invalid session") },
+		);
+		const check = handlers.get("_ao/session/can_hibernate");
+		const ctx = { params: { sessionId: "native" } };
+		expect(check(ctx)).toEqual({ canHibernate: true });
+		tasks.set("server", { isSubagent: false });
+		expect(check(ctx)).toEqual({ canHibernate: false });
+		tasks.delete("server");
+		expect(check(ctx)).toEqual({ canHibernate: true });
+		tasks.set("ended", { isSubagent: true, endedPerLevel: "ended" });
+		expect(check(ctx)).toEqual({ canHibernate: true });
+		// A finished task's notification starts a cycle AO has no turn for.
+		agent.sessions.native.lastSessionState = "running";
+		expect(check(ctx)).toEqual({ canHibernate: false });
+		agent.sessions.native.lastSessionState = "requires_action";
+		expect(check(ctx)).toEqual({ canHibernate: false });
+		agent.sessions.native.lastSessionState = "idle";
+		expect(check(ctx)).toEqual({ canHibernate: true });
+		// The notification cycle is reported as running a moment after the task leaves.
+		tasks.set("shell", { isSubagent: false });
+		agent.endTask(agent.sessions.native, { task_id: "shell" });
+		expect(check(ctx)).toEqual({ canHibernate: false });
+		agent.sessions.native.aoTaskEndedAt -= 10000;
+		expect(check(ctx)).toEqual({ canHibernate: true });
+		for (const sessionId of [undefined, "missing", "__proto__"]) {
+			expect(() => check({ params: { sessionId } })).toThrow("invalid session");
+		}
+		agent.sessions.native.queryClosed = true;
+		expect(() => check(ctx)).toThrow("invalid session");
+	});
+
+	it("fails packaging if the pinned native task registry changes", () => {
+		const adapterPath = join(temporaryDirectory(), "acp-agent.js");
+		for (const missing of anchors.keys()) {
+			writeFileSync(adapterPath, anchors.filter((_, i) => i !== missing).join("\n"));
+			expect(() => patchClaudeHibernationCheck(adapterPath)).toThrow("native-task hibernation check");
+		}
+	});
+});
+
+describe("patchClaudeContextUsage", () => {
+	function patchedUsageBlock() {
+		const adapterPath = join(temporaryDirectory(), "acp-agent.js");
+		writeFileSync(adapterPath, `
+                            // Send usage_update notification
+                            if (lastAssistantTotalUsage !== null) {
+                                await sendUpdate({
+                                    sessionId: params.sessionId,
+                                    update: {
+                                        sessionUpdate: "usage_update",
+                                        used: lastAssistantTotalUsage,
+                                        size: session.contextWindowSize,
+                                        cost: {
+                                            amount: message.total_cost_usd,
+                                            currency: "USD",
+                                        },
+                                        ...(message.origin && {
+                                            _meta: { "_claude/origin": message.origin },
+                                        }),
+                                    },
+                                });
+                            }
+                            if (session.cancelled) {
+`);
+
+		expect(patchClaudeContextUsage(adapterPath)).toBe(true);
+		expect(patchClaudeContextUsage(adapterPath)).toBe(false);
+		const patched = readFileSync(adapterPath, "utf8");
+		const start = patched.indexOf("// AO: publish the SDK's context snapshot");
+		const end = patched.indexOf("if (session.cancelled) {", start);
+		const AsyncFunction = Object.getPrototypeOf(async function () {}).constructor;
+		return new AsyncFunction("session", "sendUpdate", "state", `
+			const params = { sessionId: "s" };
+			const message = { total_cost_usd: 1.5 };
+			let lastAssistantTotalUsage = 9;
+			${patched.slice(start, end)}
+			state.read = () => lastAssistantTotalUsage;
+		`);
+	}
+
+	function claudeSession(getContextUsage) {
+		return {
+			contextWindowSize: 100,
+			contextWindowAuthoritative: false,
+			models: { currentModelId: "sonnet" },
+			query: { getContextUsage },
+		};
+	}
+
+	async function publish(run, session, sendUpdate) {
+		const updates = [];
+		const errors = [];
+		const state = {};
+		await run.call({ logger: { error: (...args) => errors.push(args) } }, session, async (notification) => {
+			updates.push(notification.update);
+			await sendUpdate?.();
+		}, state);
+		await vi.waitFor(() => expect(updates.length + errors.length).toBeGreaterThan(0));
+		return { updates, errors, state };
+	}
+
+	it("settles the result before the SDK context snapshot arrives", async () => {
+		const run = patchedUsageBlock();
+		let resolveSnapshot;
+		const session = claudeSession(() => new Promise((resolve) => { resolveSnapshot = resolve; }));
+		const updates = [];
+		const state = {};
+
+		await run.call({ logger: { error: () => {} } }, session, (notification) => {
+			updates.push(notification.update);
+		}, state);
+		expect(updates).toEqual([]);
+
+		resolveSnapshot({ totalTokens: 17, rawMaxTokens: 200 });
+		await vi.waitFor(() => expect(updates).toHaveLength(1));
+		expect(updates[0]).toMatchObject({ sessionUpdate: "usage_update", used: 17, size: 200, cost: { amount: 1.5 } });
+		expect(session.contextWindowAuthoritative).toBe(true);
+		expect(state.read()).toBe(17);
+	});
+
+	it("falls back to the message usage when the snapshot is unusable", async () => {
+		const run = patchedUsageBlock();
+		for (const getContextUsage of [
+			async () => { throw new Error("unavailable"); },
+			async () => ({ totalTokens: 0, rawMaxTokens: 200 }),
+		]) {
+			const session = claudeSession(getContextUsage);
+			const { updates } = await publish(run, session);
+			expect(updates.map(({ used, size }) => [used, size])).toEqual([[9, 100]]);
+			expect(session.contextWindowAuthoritative).toBe(false);
+		}
+	});
+
+	it("keeps the window a model switch seeded while the snapshot was pending", async () => {
+		const run = patchedUsageBlock();
+		const session = claudeSession(async () => {
+			session.models.currentModelId = "opus";
+			session.contextWindowSize = 1000;
+			return { totalTokens: 17, rawMaxTokens: 200 };
+		});
+		const { updates } = await publish(run, session);
+		expect(updates.map(({ used, size }) => [used, size])).toEqual([[17, 1000]]);
+		expect(session.contextWindowAuthoritative).toBe(false);
+	});
+
+	it("logs a failed usage publish instead of rejecting", async () => {
+		const run = patchedUsageBlock();
+		const session = claudeSession(async () => ({ totalTokens: 17, rawMaxTokens: 200 }));
+		const { errors } = await publish(run, session, async () => { throw new Error("closed"); });
+		await vi.waitFor(() => expect(errors).toHaveLength(1));
+		expect(errors[0][0]).toBe("Failed to publish Claude context usage:");
+	});
+});
+
+describe("patchClaudeContextWindowProbe", () => {
+	// The pinned adapter's top-level stream branch, as 0.70.0 ships it.
+	const streamBranch = `
+                switch (message.type) {
+                    case "stream_event": {
+                        if (message.parent_tool_use_id === null &&
+                            (message.event.type === "message_start" || message.event.type === "message_delta")) {
+                            if (message.event.type === "message_start") {
+                                lastAssistantUsage = snapshotFromUsage(message.event.message.usage);
+                                const model = message.event.message.model;
+                                if (model && model !== "<synthetic>") {
+                                    lastAssistantModel = model;
+                                    // Only upgrade from the heuristic default.
+                                    if (!session.contextWindowAuthoritative &&
+                                        session.contextWindowSize === DEFAULT_CONTEXT_WINDOW) {
+                                        const inferred = inferContextWindowFromModel(model);
+                                        if (inferred !== null) {
+                                            session.contextWindowSize = inferred;
+                                        }
+                                    }
+                                }
+                            }
+                            else {
+                                const usage = message.event.usage;
+                                const prev = lastAssistantUsage ?? ZERO_USAGE;
+                                lastAssistantUsage = {
+                                    input_tokens: usage.input_tokens ?? prev.input_tokens,
+                                    output_tokens: usage.output_tokens,
+                                    cache_read_input_tokens: usage.cache_read_input_tokens ?? prev.cache_read_input_tokens,
+                                    cache_creation_input_tokens: usage.cache_creation_input_tokens ?? prev.cache_creation_input_tokens,
+                                };
+                            }
+                            const nextUsage = totalTokens(lastAssistantUsage);
+                            if (nextUsage !== lastAssistantTotalUsage) {
+                                lastAssistantTotalUsage = nextUsage;
+                                await sendUpdate({
+                                    sessionId: params.sessionId,
+                                    update: {
+                                        sessionUpdate: "usage_update",
+                                        used: nextUsage,
+                                        size: session.contextWindowSize,
+                                    },
+                                });
+                            }
+                        }
+                        for (const notification of streamEventToAcpNotifications(message, params.sessionId)) {}
+                        break;
+                    }
+                }
+`;
+
+	// One consumer per session, holding its usage counters across messages the
+	// way the adapter's runConsumer closure does.
+	function patchedConsumer() {
+		const adapterPath = join(temporaryDirectory(), "acp-agent.js");
+		writeFileSync(adapterPath, streamBranch);
+		expect(patchClaudeContextWindowProbe(adapterPath)).toBe(true);
+		expect(patchClaudeContextWindowProbe(adapterPath)).toBe(false);
+		const consumer = new Function("session", "sendUpdate", "logger", `
+			const params = { sessionId: "s" };
+			const DEFAULT_CONTEXT_WINDOW = 200000;
+			const ZERO_USAGE = { input_tokens: 0, output_tokens: 0, cache_read_input_tokens: 0, cache_creation_input_tokens: 0 };
+			const inferContextWindowFromModel = (text) => /\\b1m\\b/i.test(text) ? 1000000 : null;
+			const snapshotFromUsage = (usage) => ({ ...ZERO_USAGE, ...usage });
+			const totalTokens = (usage) => Object.values(usage).reduce((sum, tokens) => sum + tokens, 0);
+			const streamEventToAcpNotifications = () => [];
+			let lastAssistantUsage = null, lastAssistantModel, lastAssistantTotalUsage = null;
+			return {
+				logger,
+				newTurn() { session.activeTurn = {}; lastAssistantUsage = null; lastAssistantTotalUsage = null; },
+				async stream(message) { ${readFileSync(adapterPath, "utf8")} },
+			};
+		`);
+		const updates = [];
+		const errors = [];
+		const logger = { error: (...args) => errors.push(args) };
+		const consume = (session) => consumer(session, async ({ update }) => { updates.push([update.used, update.size]); }, logger);
+		return { consume, updates, errors };
+	}
+
+	const start = (model, input_tokens) => ({ type: "stream_event", parent_tool_use_id: null, event: { type: "message_start", message: { model, usage: { input_tokens } } } });
+	const delta = (output_tokens) => ({ type: "stream_event", parent_tool_use_id: null, event: { type: "message_delta", usage: { output_tokens } } });
+
+	function freshSession(modelId, getContextUsage) {
+		return {
+			contextWindowSize: 200000,
+			contextWindowAuthoritative: false,
+			models: { currentModelId: modelId },
+			query: { getContextUsage: vi.fn(getContextUsage) },
+		};
+	}
+
+	const settle = () => new Promise((resolve) => setTimeout(resolve, 0));
+
+	it("publishes a fable session's 1M window with the latest usage, however late the SDK answers", async () => {
+		const { consume, updates } = patchedConsumer();
+		let answer;
+		const session = freshSession("claude-fable-5-1", () => new Promise((resolve) => { answer = resolve; }));
+		const turn = consume(session);
+		vi.useFakeTimers();
+		try {
+			await turn.stream(start("claude-fable-5-1", 206000));
+			await turn.stream(start("claude-fable-5-1", 207000));
+			await turn.stream(delta(500));
+			await vi.advanceTimersByTimeAsync(10000);
+			answer({ totalTokens: 206000, rawMaxTokens: 1000000 });
+		} finally {
+			vi.useRealTimers();
+		}
+		await settle();
+		expect(session.query.getContextUsage).toHaveBeenCalledTimes(1);
+		expect(updates).toEqual([[206000, 200000], [207000, 200000], [207500, 200000], [207500, 1000000]]);
+		expect(session.contextWindowAuthoritative).toBe(true);
+	});
+
+	it("leaves a window the adapter already knows", async () => {
+		const { consume } = patchedConsumer();
+		const known = freshSession("claude-fable-5-1", async () => ({ rawMaxTokens: 1 }));
+		known.contextWindowAuthoritative = true;
+		const named = freshSession("opus[1m]", async () => ({ rawMaxTokens: 1 }));
+		await consume(known).stream(start("claude-fable-5-1", 10));
+		await consume(named).stream(start("claude-opus-4-8[1m]", 10));
+		expect(named.contextWindowSize).toBe(1000000);
+		for (const session of [known, named]) expect(session.query.getContextUsage).not.toHaveBeenCalled();
+	});
+
+	it("publishes nothing more when the probe fails, confirms 200k, loses a race, or a new turn starts", async () => {
+		const { consume, updates, errors } = patchedConsumer();
+		// A result, then a model switch, set the window while the probe ran.
+		const racing = (change) => async (session) => { await null; Object.assign(session, change); return { rawMaxTokens: 1000000 }; };
+		const cases = [
+			[async () => { throw new Error("closed"); }, [200000, false]],
+			[async () => ({ rawMaxTokens: 0 }), [200000, false]],
+			[async () => ({}), [200000, false]],
+			[async () => ({ rawMaxTokens: 200000 }), [200000, true]],
+			[racing({ contextWindowSize: 900000, contextWindowAuthoritative: true }), [900000, true]],
+			[racing({ contextWindowSize: 150000, models: { currentModelId: "claude-haiku-5-5" } }), [150000, false]],
+			[async (_, turn) => { await null; turn.newTurn(); return { rawMaxTokens: 1000000 }; }, [1000000, true]],
+		];
+		for (const [answer, window] of cases) {
+			const session = freshSession("claude-fable-5-1", () => answer(session, turn));
+			const turn = consume(session);
+			await turn.stream(start("claude-fable-5-1", 10));
+			await settle();
+			expect([session.contextWindowSize, session.contextWindowAuthoritative]).toEqual(window);
+		}
+		expect(errors).toHaveLength(1);
+		expect(updates).toEqual(cases.map(() => [10, 200000]));
+	});
+
+	it("probes again after switching back to a model, whatever became of its earlier probe", async () => {
+		for (const earlier of ["discarded", "failed", "pending"]) {
+			const { consume, updates } = patchedConsumer();
+			const answers = [];
+			const session = freshSession("claude-fable-5-1", () => new Promise((resolve, reject) => answers.push({ resolve, reject })));
+			const turn = consume(session);
+			// The adapter's switch path replaces session.models and reseeds the window from the "1m" heuristic.
+			const switchTo = (model) => Object.assign(session, {
+				models: { currentModelId: model }, contextWindowSize: model.includes("[1m]") ? 1000000 : 200000,
+			});
+			await turn.stream(start("claude-fable-5-1", 300));
+			switchTo("claude-opus-4-8[1m]");
+			await turn.stream(start("claude-opus-4-8[1m]", 300));
+			if (earlier === "discarded") answers[0].resolve({ rawMaxTokens: 1000000 });
+			if (earlier === "failed") answers[0].reject(new Error("closed"));
+			await settle();
+			switchTo("claude-fable-5-1");
+			await turn.stream(start("claude-fable-5-1", 310));
+			expect(answers).toHaveLength(2);
+			// Still pending, the first answer may describe the other model.
+			answers[0].resolve({ rawMaxTokens: 1 });
+			await settle();
+			expect(session.contextWindowSize).toBe(200000);
+			answers[1].resolve({ rawMaxTokens: 1000000 });
+			await settle();
+			expect(updates.at(-1)).toEqual([310, 1000000]);
+		}
+	});
+
+	it("retries a failed probe on a later turn, never while one is pending", async () => {
+		const { consume, updates } = patchedConsumer();
+		const answers = [];
+		const session = freshSession("claude-fable-5-1", () => new Promise((resolve, reject) => answers.push({ resolve, reject })));
+		const turn = consume(session);
+		await turn.stream(start("claude-fable-5-1", 100));
+		turn.newTurn();
+		await turn.stream(start("claude-fable-5-1", 200));
+		expect(answers).toHaveLength(1);
+		answers[0].reject(new Error("closed"));
+		await settle();
+		// This turn has not asked yet.
+		await turn.stream(start("claude-fable-5-1", 210));
+		answers[1].resolve({ rawMaxTokens: 0 });
+		await settle();
+		await turn.stream(start("claude-fable-5-1", 220));
+		expect(answers).toHaveLength(2);
+		// The turn was cancelled before its result corrected the window.
+		turn.newTurn();
+		await turn.stream(start("claude-fable-5-1", 230));
+		answers[2].resolve({ rawMaxTokens: 1000000 });
+		await settle();
+		expect(session.query.getContextUsage).toHaveBeenCalledTimes(3);
+		expect(updates.at(-1)).toEqual([230, 1000000]);
+	});
+
+	it("ignores indentation but fails packaging without modifying a changed adapter", () => {
+		const adapterPath = join(temporaryDirectory(), "acp-agent.js");
+		writeFileSync(adapterPath, streamBranch.replace(/^ {8}/gm, ""));
+		expect(patchClaudeContextWindowProbe(adapterPath)).toBe(true);
+		const publish = /lastAssistantTotalUsage = nextUsage;[\s\S]*?\}\);/;
+		for (const changed of [
+			streamBranch.replace("!session.contextWindowAuthoritative &&", ""),
+			streamBranch.replace("message.parent_tool_use_id === null &&", ""),
+			streamBranch.replace("if (nextUsage !== lastAssistantTotalUsage)", "if (nextUsage !== lastAssistantTotalUsage && false)"),
+			streamBranch.replace(publish, (code) => `/* ${code} */`),
+			streamBranch + streamBranch,
+			// A brace in a comment must not become the insertion point.
+			streamBranch.replace("session.contextWindowSize = inferred;", "$&\n// } end heuristic"),
+			// The branch is commented out from outside the compared text.
+			streamBranch.replace(/if \(message\.parent_tool_use_id[\s\S]*?(?=break;)/, (code) => `/*\n${code}*/ `),
+			streamBranch.replace("if (message.parent_tool_use_id === null &&", "if (message.event &&\n// $&"),
+			streamBranch.replace('case "stream_event": {', 'case "assistant": {'),
+		]) {
+			writeFileSync(adapterPath, changed);
+			expect(() => patchClaudeContextWindowProbe(adapterPath)).toThrow("context window patch");
+			expect(readFileSync(adapterPath, "utf8")).toBe(changed);
+		}
+	});
+});
+
+describe("patchClaudeFoldedPromptSettlement", () => {
+	it("routes a task-notification result that names a pending prompt to the user lane", () => {
+		const adapterPath = join(temporaryDirectory(), "acp-agent.js");
+		writeFileSync(adapterPath, `
+        const findUnsettledTurn = (uuid) => (session.turnQueue ?? []).find((t) => t.promptUuid === uuid && !t.settled);
+                    case "result": {
+                        const isAutonomousResult = message.origin != null && AUTONOMOUS_RESULT_ORIGINS.has(message.origin.kind);
+                        try {
+`);
+
+		expect(patchClaudeFoldedPromptSettlement(adapterPath)).toBe(true);
+		expect(patchClaudeFoldedPromptSettlement(adapterPath)).toBe(false);
+		const patched = readFileSync(adapterPath, "utf8");
+
+		const start = patched.indexOf("// AO: a result naming a pending prompt answers it.");
+		const end = patched.indexOf("try {", start);
+		const classify = new Function("message", "session", `
+			const AUTONOMOUS_RESULT_ORIGINS = new Set(["task-notification", "peer"]);
+			const isHeldOpen = (turn) => turn.deferredSettle !== undefined && !turn.settled;
+			const findUnsettledTurn = (uuid) => (session.turnQueue ?? []).find((t) => t.promptUuid === uuid && !t.settled);
+			${patched.slice(start, end)}
+			return isAutonomousResult;
+		`);
+		const notification = { kind: "task-notification" };
+		const session = {
+			turnQueue: [
+				{ promptUuid: "pending", settled: false },
+				{ promptUuid: "settled", settled: true },
+				{ promptUuid: "held", settled: false, deferredSettle: { stopReason: "end_turn" } },
+			],
+		};
+
+		expect(classify({ origin: notification, user_message_uuids: ["pending"] }, session)).toBe(false);
+		expect(classify({ origin: notification, user_message_uuid: "pending" }, session)).toBe(false);
+		expect(classify({ origin: notification, user_message_uuids: ["settled", "held", "unknown"] }, session)).toBe(true);
+		expect(classify({ origin: notification }, session)).toBe(true);
+		expect(classify({ origin: { kind: "human" } }, session)).toBe(false);
+		expect(classify({}, session)).toBe(false);
+	});
+
+	it("fails packaging when the adapter's classification changes", () => {
+		const adapterPath = join(temporaryDirectory(), "acp-agent.js");
+		writeFileSync(adapterPath, "const isAutonomousResult = isAutonomous(message);\n");
+
+		expect(() => patchClaudeFoldedPromptSettlement(adapterPath)).toThrow(/folded-prompt patch/);
+	});
+});
+
+describe("patchClaudeStaleIdleDebt", () => {
+	it("drops unpaid idle debt when Claude starts running again", () => {
+		const adapterPath = join(temporaryDirectory(), "acp-agent.js");
+		writeFileSync(adapterPath, `
+                            case "session_state_changed": {
+                                session.lastSessionState = message.state;
+                                if (message.state === "idle") {
+                                    if (session.owedTrailingIdles > 0) {
+                                        session.owedTrailingIdles--;
+                                    }
+                                }
+                                break;
+                            }
+`);
+
+		expect(patchClaudeStaleIdleDebt(adapterPath)).toBe(true);
+		expect(patchClaudeStaleIdleDebt(adapterPath)).toBe(false);
+		const patched = readFileSync(adapterPath, "utf8");
+
+		const start = patched.indexOf("// AO: drop idle debt that can no longer be paid.");
+		const end = patched.indexOf("break;", start);
+		const onState = new Function("message", "session", `${patched.slice(start, end)}`);
+		const session = { lastSessionState: "idle", owedTrailingIdles: 2 };
+
+		onState({ state: "idle" }, session);
+		expect(session.owedTrailingIdles).toBe(1);
+		onState({ state: "running" }, session);
+		expect(session.owedTrailingIdles).toBe(0);
+		session.owedTrailingIdles = 1;
+		onState({ state: "running" }, session);
+		expect(session.owedTrailingIdles).toBe(1);
+		onState({ state: "idle" }, session);
+		expect(session.owedTrailingIdles).toBe(0);
+		expect(session.lastSessionState).toBe("idle");
+	});
+
+	it("fails packaging when the adapter's state handling changes", () => {
+		const adapterPath = join(temporaryDirectory(), "acp-agent.js");
+		writeFileSync(adapterPath, 'case "session_state_changed": {\n');
+
+		expect(() => patchClaudeStaleIdleDebt(adapterPath)).toThrow(/idle-debt patch/);
+	});
+});
+
+describe("patchClaudeSteerSettlement", () => {
+	// claude-agent-acp 0.70's steer and settle lanes, cut down to the lines the
+	// settlement patches anchor on. Each test replays an SDK frame order a real
+	// session produces.
+	const consumerSource = `
+function isSteering(turn) {
+    return turn != null && turn.steeredEchoes !== undefined && !turn.settled;
+}
+const AUTONOMOUS_RESULT_ORIGINS = new Set(["task-notification", "peer"]);
+const isHeldOpen = (turn) => turn != null && turn.deferredSettle !== undefined && !turn.settled;
+const findUnsettledTurn = (uuid) => session.turnQueue.find((t) => t.promptUuid === uuid && !t.settled);
+const ensureActiveTurn = () => { session.activeTurn ??= session.turnQueue.find((turn) => !turn.settled); };
+const recordResultForOrphanCommands = () => {};
+const settleActive = (outcome) => {
+    session.activeTurn.settled = outcome;
+    session.activeTurn = undefined;
+};
+const settleDeferredIfDrained = () => {
+    if (isHeldOpen(session.activeTurn)) settleActive(session.activeTurn.deferredSettle);
+};
+function steer(steeredUuid) {
+        const turnInFlight = session.turnQueue.find((turn) => !turn.settled);
+        (turnInFlight.steeredEchoes ??= new Set()).add(steeredUuid);
+        if (turnInFlight.deferredSettle !== undefined) {
+            turnInFlight.steeredSettle = turnInFlight.deferredSettle;
+            turnInFlight.deferredSettle = undefined;
+        }
+}
+function onMessage(message) {
+        const settleOrDefer = (outcome) => {
+            if (isSteering(session.activeTurn)) {
+                session.activeTurn.steeredSettle = outcome;
+                return;
+            }
+            settleActive(outcome);
+        };
+        switch (message.type) {
+                    case "result": {
+                        const isAutonomousResult = message.origin != null && AUTONOMOUS_RESULT_ORIGINS.has(message.origin.kind);
+                        try {
+                            if (!isAutonomousResult) {
+                                recordResultForOrphanCommands();
+                                ensureActiveTurn();
+                            }
+                            const owesTrailingIdle = isAutonomousResult || !isSteering(session.activeTurn);
+                            if (owesTrailingIdle &&
+                                (isAutonomousResult || !session.cancelled || !session.activeTurn)) {
+                                session.owedTrailingIdles++;
+                            }
+                            if (!isAutonomousResult && !session.cancelled && session.activeTurn) {
+                                settleOrDefer(message.result);
+                            }
+                        } finally {}
+                        break;
+                    }
+                    case "user": {
+                            if ("isReplay" in message && message.isReplay) {
+                                if (isSteering(session.activeTurn)) {
+                                    session.activeTurn.steeredEchoes.delete(message.uuid);
+                                }
+                                break;
+                            }
+                        break;
+                    }
+                    case "system": {
+                        switch (message.subtype) {
+                            case "session_state_changed": {
+                                session.lastSessionState = message.state;
+                                if (message.state === "idle") {
+                                    if (isHeldOpen(session.activeTurn)) {
+                                        if (session.owedTrailingIdles > 0) {
+                                            session.owedTrailingIdles--;
+                                        }
+                                        settleDeferredIfDrained();
+                                    }
+                                    else if (session.owedTrailingIdles > 0) {
+                                        // Absorb a settled turn's trailing idle. Also covers a
+                                        session.owedTrailingIdles--;
+                                    }
+                                    else if (isSteering(session.activeTurn)) {
+                                        // Plain Turn so the fields can be cleared below; isSteering
+                                        // narrows steeredEchoes to non-optional.
+                                        const steered = session.activeTurn;
+                                        if (steered.steeredEchoes?.size === 0 && steered.steeredSettle !== undefined) {
+                                            // Via the subagent gate, not settleActive: a steered turn
+                                            // can also have spawned background subagents, which own it
+                                            // from here (settles now if none is live, holds otherwise).
+                                            steered.deferredSettle = steered.steeredSettle;
+                                            steered.steeredEchoes = undefined;
+                                            steered.steeredSettle = undefined;
+                                            settleDeferredIfDrained();
+                                        }
+                                    }
+                                    else if (!session.cancelled && session.activeTurn) {
+                                        settleActive("rejected: idle without a result (#825)");
+                                    }
+                                }
+                                break;
+                            }
+                        }
+                        break;
+                    }
+        }
+}
+`;
+
+	function steerConsumer({ fold = true } = {}) {
+		const adapterPath = join(temporaryDirectory(), "acp-agent.js");
+		writeFileSync(adapterPath, consumerSource);
+		// Same order as scripts/build-acp-runtime.mjs.
+		if (fold) patchClaudeFoldedPromptSettlement(adapterPath);
+		patchClaudeStaleIdleDebt(adapterPath);
+		expect(patchClaudeSteerSettlement(adapterPath)).toBe(true);
+		expect(patchClaudeSteerSettlement(adapterPath)).toBe(false);
+
+		const session = { turnQueue: [], owedTrailingIdles: 0, lastSessionState: "idle" };
+		const consumer = new Function("session", `${readFileSync(adapterPath, "utf8")}\nreturn { steer, onMessage };`)(session);
+		const turn = { promptUuid: "prompt" };
+		session.turnQueue.push(turn);
+		session.activeTurn = turn;
+		return {
+			session,
+			turn,
+			steer: consumer.steer,
+			result: (fields) => consumer.onMessage({ type: "result", origin: { kind: "human" }, ...fields }),
+			echo: (uuid) => consumer.onMessage({ type: "user", isReplay: true, uuid }),
+			state: (state) => consumer.onMessage({ type: "system", subtype: "session_state_changed", state }),
+		};
+	}
+
+	it("settles at the result that names the steer, which still owes its trailing idle", () => {
+		const { session, turn, steer, result, echo, state } = steerConsumer();
+		steer("steer");
+		result({ result: "interrupted", user_message_uuid: "prompt" });
+		echo("steer");
+		result({ result: "steered", user_message_uuids: ["steer"] });
+		expect(turn.settled).toBe("steered");
+		expect(session.owedTrailingIdles).toBe(1);
+
+		// The next prompt's echo can land before that trailing idle.
+		const next = { promptUuid: "next" };
+		session.turnQueue.push(next);
+		session.activeTurn = next;
+		state("idle");
+		expect(next.settled).toBeUndefined();
+		result({ result: "answer", user_message_uuid: "next" });
+		expect(next.settled).toBe("answer");
+	});
+
+	it("waits for the steered result when an idle lands after the steered echo", () => {
+		const { session, turn, steer, result, echo, state } = steerConsumer();
+		result({ origin: { kind: "task-notification" }, result: "autonomous" });
+		steer("steer");
+		result({ result: "interrupted", user_message_uuid: "prompt" });
+		echo("steer");
+		state("idle"); // the autonomous cycle's lagging trailer
+		expect(turn.settled).toBeUndefined();
+
+		result({ result: "steered" });
+		state("idle");
+		expect(turn.settled).toBe("steered");
+		expect(session.owedTrailingIdles).toBe(0);
+	});
+
+	it("settles a ready steered turn ahead of idle debt and leaves the debt to the running sweep", () => {
+		const { session, turn, steer, result, echo, state } = steerConsumer();
+		result({ origin: { kind: "task-notification" }, result: "autonomous" });
+		steer("steer");
+		result({ result: "interrupted", user_message_uuid: "prompt" });
+		echo("steer");
+		result({ result: "steered" });
+		state("idle"); // Claude Code coalesced the autonomous trailer into this idle
+		expect(turn.settled).toBe("steered");
+		expect(session.owedTrailingIdles).toBe(1);
+		state("running");
+		expect(session.owedTrailingIdles).toBe(0);
+	});
+
+	it.each([true, false])("lets an autonomous result that names the steer answer it (fold patch: %s)", (fold) => {
+		const { session, turn, steer, result, echo } = steerConsumer({ fold });
+		steer("steer");
+		echo("steer");
+		result({ origin: { kind: "task-notification" }, result: "hand-back", user_message_uuids: ["steer"] });
+		expect(turn.settled).toBe("hand-back");
+		expect(session.owedTrailingIdles).toBe(1);
+	});
+
+	it.each([true, false])("settles a queued prompt whose steer an autonomous cycle folded in (fold patch: %s)", (fold) => {
+		const { session, turn, steer, result } = steerConsumer({ fold });
+		session.activeTurn = undefined; // Claude Code's own cycle is running; the prompt is still queued
+		steer("steer");
+		result({
+			origin: { kind: "task-notification" },
+			result: "folded",
+			user_message_uuid: "steer",
+			user_message_uuids: ["prompt", "steer"],
+		});
+		expect(turn.settled).toBe("folded");
+		expect(session.owedTrailingIdles).toBe(1);
+	});
+
+	it("keeps the steer lane while another steer is still outstanding", () => {
+		const { turn, steer, result, echo, state } = steerConsumer();
+		steer("first");
+		steer("second");
+		result({ result: "first answer", user_message_uuids: ["first"] });
+		expect(turn.settled).toBeUndefined();
+		expect([...turn.steeredEchoes]).toEqual(["second"]);
+		state("idle");
+		expect(turn.settled).toBeUndefined();
+
+		echo("second");
+		result({ result: "second answer", user_message_uuids: ["second"] });
+		expect(turn.settled).toBe("second answer");
+	});
+
+	it("leaves a cancelled turn's steers to cancel()", () => {
+		const { session, turn, steer, result } = steerConsumer();
+		steer("steer");
+		session.cancelled = true;
+		result({ origin: { kind: "task-notification" }, result: "cancelled", user_message_uuid: "steer" });
+		expect(turn.steeredEchoes).toEqual(new Set(["steer"]));
+	});
+
+	it("fails packaging without modifying a changed adapter", () => {
+		const adapterPath = join(temporaryDirectory(), "acp-agent.js");
+		const changed = consumerSource.replace("ensureActiveTurn();", "await ensureActiveTurn(message.user_message_uuid);");
+		writeFileSync(adapterPath, changed);
+
+		expect(() => patchClaudeSteerSettlement(adapterPath)).toThrow(/steer settlement patch/);
+		expect(readFileSync(adapterPath, "utf8")).toBe(changed);
+	});
+});
+
 describe("pruneNodeDistribution", () => {
 	it("removes Unix package-manager links before deleting their targets", () => {
 		const nodeRoot = temporaryDirectory();
@@ -149,3 +890,34 @@ function temporaryDirectory() {
 	temporaryDirectories.push(directory);
 	return directory;
 }
+
+describe("archiveExtraction", () => {
+	// Extraction must not go through PowerShell's Expand-Archive: it is bound by
+	// MAX_PATH, and with LongPathsEnabled=0 a deep checkout pushes Node's bundled
+	// npm tree past 260 characters, where it fails while still exiting zero.
+	it("uses bsdtar for the Windows zip", () => {
+		expect(archiveExtraction("C:\\w\\node.zip", "C:\\w", {
+			platform: "win32",
+			systemRoot: "C:\\Windows",
+		})).toEqual({
+			command: "C:\\Windows\\System32\\tar.exe",
+			args: ["-xf", "C:\\w\\node.zip", "-C", "C:\\w"],
+		});
+	});
+
+	it("keeps gzip handling on the other platforms", () => {
+		for (const platform of ["darwin", "linux"]) {
+			expect(archiveExtraction("/w/node.tar.gz", "/w", { platform })).toEqual({
+				command: "tar",
+				args: ["-xzf", "/w/node.tar.gz", "-C", "/w"],
+			});
+		}
+	});
+
+	it("never shells out to a command interpreter", () => {
+		for (const platform of ["win32", "darwin", "linux"]) {
+			const { command } = archiveExtraction("/w/a", "/w", { platform, systemRoot: "C:\\Windows" });
+			expect(command).not.toMatch(/powershell|cmd\.exe|\bsh\b/i);
+		}
+	});
+});

@@ -3,10 +3,16 @@ import {
 	canBypassOrchestratorApprovals,
 	isChatPreflightError,
 	OrchestratorSpawnError,
+	resumeOrchestrator,
 	spawnOrchestrator,
 } from "./spawn-orchestrator";
 import { apiClient } from "./api-client";
 import { captureRendererEvent } from "./telemetry";
+import { resumeAgentOnOpen } from "../hooks/useCanResumeAgent";
+
+const { notificationShowMock } = vi.hoisted(() => ({
+	notificationShowMock: vi.fn(),
+}));
 
 vi.mock("./api-client", () => ({
 	apiClient: { POST: vi.fn() },
@@ -34,6 +40,10 @@ vi.mock("./api-client", () => ({
 
 vi.mock("./telemetry", () => ({
 	captureRendererEvent: vi.fn().mockResolvedValue(undefined),
+}));
+
+vi.mock("./bridge", () => ({
+	aoBridge: { notifications: { show: notificationShowMock } },
 }));
 
 const captureMock = vi.mocked(captureRendererEvent);
@@ -80,18 +90,15 @@ describe("spawnOrchestrator", () => {
 		});
 	});
 
-	it("emits the requested + succeeded triad keyed by source", async () => {
+	it("emits the succeeded outcome keyed by source", async () => {
 		(apiClient.POST as ReturnType<typeof vi.fn>).mockResolvedValue({
 			data: { orchestrator: { id: "proj-7" } },
 			error: undefined,
 			response: { status: 201 },
 		});
 		await spawnOrchestrator("proj", "sidebar");
-		expect(captureMock).toHaveBeenCalledWith("ao.renderer.orchestrator_spawn_requested", {
-			project_id: "proj",
-			source: "sidebar",
-		});
-		expect(captureMock).toHaveBeenCalledWith("ao.renderer.orchestrator_spawn_succeeded", {
+		expect(captureMock).not.toHaveBeenCalledWith("ao.renderer.orchestrator_spawn_requested", expect.anything());
+		expect(captureMock).toHaveBeenCalledWith("ao.orchestrators.spawned", {
 			project_id: "proj",
 			source: "sidebar",
 		});
@@ -104,10 +111,7 @@ describe("spawnOrchestrator", () => {
 			response: { status: 201 },
 		});
 		await spawnOrchestrator("proj", "project_clone");
-		expect(captureMock).toHaveBeenCalledWith("ao.renderer.orchestrator_spawn_requested", {
-			project_id: "proj",
-			source: "project_clone",
-		});
+		expect(captureMock).not.toHaveBeenCalledWith("ao.renderer.orchestrator_spawn_requested", expect.anything());
 	});
 
 	it("emits the failed event and rethrows when the daemon rejects the spawn", async () => {
@@ -117,11 +121,13 @@ describe("spawnOrchestrator", () => {
 			response: { status: 500 },
 		});
 		await expect(spawnOrchestrator("proj", "topbar")).rejects.toThrow("boom");
-		expect(captureMock).toHaveBeenCalledWith("ao.renderer.orchestrator_spawn_failed", {
+		expect(captureMock).toHaveBeenCalledWith("ao.orchestrators.spawn_failed", {
 			project_id: "proj",
 			source: "topbar",
+			error_code: undefined,
+			http_status: 500,
 		});
-		expect(captureMock).not.toHaveBeenCalledWith("ao.renderer.orchestrator_spawn_succeeded", expect.anything());
+		expect(captureMock).not.toHaveBeenCalledWith("ao.orchestrators.spawned", expect.anything());
 	});
 
 	it("surfaces daemon spawn error messages and codes", async () => {
@@ -190,5 +196,69 @@ describe("spawnOrchestrator", () => {
 				allowedApprovalModes: ["accept-edits"],
 			}),
 		).toBe(false);
+	});
+});
+
+describe("resumeOrchestrator", () => {
+	const postMock = vi.mocked(apiClient.POST);
+
+	beforeEach(() => {
+		notificationShowMock.mockReset().mockResolvedValue(undefined);
+	});
+
+	it("posts resume-agent for the session", async () => {
+		postMock.mockResolvedValue({ data: {}, error: undefined, response: { status: 200 } } as never);
+		await resumeOrchestrator("proj-1-orch");
+		expect(postMock).toHaveBeenCalledWith("/api/v1/sessions/{sessionId}/resume-agent", {
+			params: { path: { sessionId: "proj-1-orch" } },
+		});
+	});
+
+	it("warns when resume falls back to the saved prompt", async () => {
+		postMock.mockResolvedValue({
+			data: { resumeMode: "saved_prompt" },
+			error: undefined,
+			response: { status: 200 },
+		} as never);
+
+		await resumeOrchestrator("proj-1-orch");
+
+		expect(notificationShowMock).toHaveBeenCalledWith({
+			id: expect.stringMatching(/^resume-agent-fallback:proj-1-orch:/),
+			title: "Started from saved prompt",
+			body: "The native agent session could not be resumed, so a new conversation was started from the saved prompt.",
+		});
+	});
+
+	// The caller asked for a working orchestrator; one that is already running
+	// satisfies that, so the 409 must not surface as a failure.
+	it("treats AGENT_NOT_EXITED as success", async () => {
+		postMock.mockResolvedValue({
+			data: undefined,
+			error: { code: "AGENT_NOT_EXITED", message: "still running" },
+			response: { status: 409 },
+		} as never);
+		await expect(resumeOrchestrator("proj-1-orch")).resolves.toBeUndefined();
+	});
+
+	it("throws on any other error", async () => {
+		postMock.mockResolvedValue({
+			data: undefined,
+			error: { code: "SESSION_NOT_FOUND", message: "Unknown session" },
+			response: { status: 404 },
+		} as never);
+		await expect(resumeOrchestrator("proj-1-orch")).rejects.toThrow(/Unknown session/);
+	});
+
+	it("joins the resume its open chat started and resolves when the agent is already running", async () => {
+		postMock.mockClear();
+		let answer!: (value: unknown) => void;
+		postMock.mockReturnValue(new Promise((resolve) => { answer = resolve; }) as never);
+		const chatResume = resumeAgentOnOpen("proj-1-orch");
+		const launcherResume = resumeOrchestrator("proj-1-orch");
+		answer({ data: undefined, error: { code: "AGENT_NOT_EXITED", message: "still running" }, response: { status: 409 } });
+		await expect(launcherResume).resolves.toBeUndefined();
+		await expect(chatResume).rejects.toMatchObject({ code: "AGENT_NOT_EXITED" });
+		expect(postMock).toHaveBeenCalledOnce();
 	});
 });

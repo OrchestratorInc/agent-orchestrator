@@ -30,6 +30,9 @@ func (f *fakeLAN) Start(port int) (int, error) {
 	f.port = port
 	return port, nil
 }
+func (f *fakeLAN) StartLoopback(port int) (int, error) {
+	return f.Start(port)
+}
 func (f *fakeLAN) Stop(ctx context.Context) error { return nil }
 func (f *fakeLAN) Running() bool                  { return f.started }
 func (f *fakeLAN) BoundPort() int                 { return f.port }
@@ -73,6 +76,52 @@ func TestRestoreDisabledDoesNotStart(t *testing.T) {
 	}
 	if lan.started {
 		t.Fatal("expected LAN listener NOT started when persisted state is disabled")
+	}
+}
+
+type restoreWake struct {
+	active, lid bool
+	setups      int
+}
+
+func (f *restoreWake) Start() error     { f.active = true; return nil }
+func (f *restoreWake) Stop()            { f.active, f.lid = false, false }
+func (f *restoreWake) Active() bool     { return f.active }
+func (f *restoreWake) HasBattery() bool { return true }
+func (f *restoreWake) ConfigureLid(on, setup bool) error {
+	f.lid = on
+	if setup {
+		f.setups++
+	}
+	return nil
+}
+func (f *restoreWake) LidStatus() (bool, bool, string) { return true, f.lid, "" }
+
+func TestRestoreWakeWithoutEnablingMobile(t *testing.T) {
+	for _, lid := range []bool{false, true} {
+		path := mobilebridge.Path(t.TempDir())
+		state := mobilebridge.State{KeepAwake: true, KeepAwakeLid: lid, SecurePairing: true}
+		if err := mobilebridge.Save(path, state); err != nil {
+			t.Fatal(err)
+		}
+		lan, wake := &fakeLAN{}, &restoreWake{}
+		bs := &controllers.BridgeService{LAN: lan, KeepAwake: wake,
+			ApplyServe: func(int) error { t.Fatal("wake restoration enabled network access"); return nil },
+		}
+		if err := restoreMobileOnBoot(path, bs); err != nil {
+			t.Fatal(err)
+		}
+		if !wake.active || wake.lid != lid || wake.setups != 0 || lan.started || lan.hash != "" {
+			t.Fatalf("wake-only restore: wake=%+v lan=%+v", wake, lan)
+		}
+		bs.ShutdownKeepAwake()
+		if wake.active || wake.lid {
+			t.Fatal("daemon shutdown did not release awake ownership")
+		}
+		persisted, err := mobilebridge.Load(path)
+		if err != nil || persisted != state {
+			t.Fatalf("shutdown changed saved preferences: %+v, %v", persisted, err)
+		}
 	}
 }
 

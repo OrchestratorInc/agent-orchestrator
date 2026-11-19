@@ -1,6 +1,7 @@
 package httpd
 
 import (
+	"context"
 	"net"
 	"net/http"
 	"strings"
@@ -9,69 +10,188 @@ import (
 	"time"
 
 	"github.com/aoagents/agent-orchestrator/backend/internal/httpd/envelope"
+	"github.com/aoagents/agent-orchestrator/backend/internal/httpd/requestscope"
 	"github.com/aoagents/agent-orchestrator/backend/internal/mobilebridge"
 )
 
-// authState holds the current password hash for the LAN listener. Swapped
-// atomically on regenerate so an in-flight request never sees a torn value.
-type authState struct{ hash atomic.Pointer[string] }
+// authState keeps previously valid hashes so a client retrying an old password
+// after rotation cannot lock out a newly paired client behind the same address.
+type authState struct {
+	hashes atomic.Pointer[authHashes]
+	// Set once before the listener starts. Nil accepts only the shared credentials.
+	devices *mobilebridge.AccessDevices
+	codes   *mobilebridge.PairingCodes
+	// passwordOff makes the listener refuse the pairing password.
+	passwordOff atomic.Bool
+}
+type authHashes struct {
+	current string
+	account string
+	retired []string
+}
 
-func (a *authState) setHash(h string) { a.hash.Store(&h) }
+// maxRetiredHashes bounds how many rotated passwords stay exempt from lockout.
+const maxRetiredHashes = 8
+
+func (a *authState) setHash(h string) {
+	for {
+		previous := a.hashes.Load()
+		if previous != nil && previous.current == h {
+			return
+		}
+		next := &authHashes{current: h}
+		if previous != nil {
+			next.account = previous.account
+			next.retired = append(next.retired, previous.retired...)
+			if previous.current != "" {
+				next.retired = append(next.retired, previous.current)
+			}
+			if len(next.retired) > maxRetiredHashes {
+				next.retired = next.retired[len(next.retired)-maxRetiredHashes:]
+			}
+		}
+		if a.hashes.CompareAndSwap(previous, next) {
+			return
+		}
+	}
+}
+func (a *authState) setAccountHash(h string) {
+	for {
+		previous := a.hashes.Load()
+		next := &authHashes{account: h}
+		if previous != nil {
+			next.current = previous.current
+			next.retired = previous.retired
+		}
+		if a.hashes.CompareAndSwap(previous, next) {
+			return
+		}
+	}
+}
+func (a *authState) accountHash() string {
+	if hashes := a.hashes.Load(); hashes != nil {
+		return hashes.account
+	}
+	return ""
+}
 func (a *authState) currentHash() string {
-	if p := a.hash.Load(); p != nil {
-		return *p
+	if hashes := a.hashes.Load(); hashes != nil {
+		return hashes.current
 	}
 	return ""
 }
 
-// lockout throttles password guessing per source address.
-type lockout struct {
-	mu       sync.Mutex
-	limit    int
-	cooldown time.Duration
-	now      func() time.Time
-	fails    map[string]int
-	until    map[string]time.Time
+// authenticate returns the credential tok matches. A pairing code counts only on
+// the pairing route. passwordRefused means tok is the password while it is off.
+func (a *authState) authenticate(tok string, pairing bool) (credential requestscope.Credential, ok, passwordRefused bool) {
+	if mobilebridge.PasswordMatches(a.currentHash(), tok) {
+		if a.passwordOff.Load() {
+			return requestscope.Credential{}, false, true
+		}
+		return requestscope.Credential{Kind: requestscope.CredentialPassword}, true, false
+	}
+	if mobilebridge.PasswordMatches(a.accountHash(), tok) {
+		return requestscope.Credential{Kind: requestscope.CredentialAccount}, true, false
+	}
+	if a.devices != nil {
+		if device, found := a.devices.Match(tok); found {
+			return requestscope.Credential{Kind: requestscope.CredentialDevice, DeviceID: device.ID}, true, false
+		}
+	}
+	if pairing && a.codes != nil && a.codes.Valid(tok) {
+		return requestscope.Credential{Kind: requestscope.CredentialPairingCode}, true, false
+	}
+	return requestscope.Credential{}, false, false
 }
 
-func newLockout(limit int, cooldown time.Duration, now func() time.Time) *lockout {
-	return &lockout{limit: limit, cooldown: cooldown, now: now, fails: map[string]int{}, until: map[string]time.Time{}}
+func (a *authState) noteUse(credential requestscope.Credential, now time.Time) {
+	if a.devices == nil {
+		return
+	}
+	switch credential.Kind {
+	case requestscope.CredentialDevice:
+		a.devices.Touch(credential.DeviceID, now)
+	case requestscope.CredentialPassword:
+		a.devices.TouchShared(mobilebridge.SharedPassword, now)
+	case requestscope.CredentialAccount:
+		a.devices.TouchShared(mobilebridge.SharedAccount, now)
+	case requestscope.CredentialPairingCode:
+	}
+}
+
+func (a *authState) retiredPasswordMatches(token string) bool {
+	if hashes := a.hashes.Load(); hashes != nil {
+		for _, hash := range hashes.retired {
+			if mobilebridge.PasswordMatches(hash, token) {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+// lockout throttles password guessing per source address.
+type lockout struct {
+	mu        sync.Mutex
+	now       func() time.Time
+	attempts  map[string]authAttempts
+	lastSweep time.Time
+}
+
+type authAttempts struct {
+	fails   int
+	expires time.Time
+}
+
+func newLockout(now func() time.Time) *lockout {
+	return &lockout{now: now, attempts: map[string]authAttempts{}}
 }
 
 func (l *lockout) blocked(src string) bool {
 	l.mu.Lock()
 	defer l.mu.Unlock()
-	t, ok := l.until[src]
+	a, ok := l.attempts[src]
 	if !ok {
 		return false
 	}
-	if l.now().Before(t) {
-		return true
+	if l.now().Before(a.expires) {
+		return a.fails >= 5
 	}
-	// Cooldown elapsed: clear the lockout AND the fail counter so the source
-	// starts a fresh window. Without this the counter stays at the limit and the
-	// very next failure would immediately re-lock for another full cooldown —
-	// and a client that keeps polling would stay locked out forever. This also
-	// bounds map growth, since expired entries are pruned on the next request.
-	delete(l.until, src)
-	delete(l.fails, src)
+	delete(l.attempts, src)
 	return false
 }
 
 func (l *lockout) fail(src string) {
 	l.mu.Lock()
 	defer l.mu.Unlock()
-	l.fails[src]++
-	if l.fails[src] >= l.limit {
-		l.until[src] = l.now().Add(l.cooldown)
+	now := l.now()
+	if now.Sub(l.lastSweep) >= time.Minute {
+		for key, a := range l.attempts {
+			if !now.Before(a.expires) {
+				delete(l.attempts, key)
+			}
+		}
+		l.lastSweep = now
 	}
+	a := l.attempts[src]
+	if !now.Before(a.expires) {
+		a.fails = 0
+	}
+	a.fails++
+	a.expires = now.Add(time.Minute)
+	l.attempts[src] = a
 }
 
 func (l *lockout) reset(src string) {
 	l.mu.Lock()
 	defer l.mu.Unlock()
-	delete(l.fails, src)
-	delete(l.until, src)
+	delete(l.attempts, src)
+}
+
+func (l *lockout) resetAll() {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	l.attempts = map[string]authAttempts{}
 }
 
 func sourceKey(r *http.Request) string {
@@ -79,6 +199,32 @@ func sourceKey(r *http.Request) string {
 		return host
 	}
 	return r.RemoteAddr
+}
+
+// clientSource is the address of a request's client, which lockouts count
+// failures against. Cloudflared connects from loopback, so its visitor IP
+// stands in for it. A LAN client must not be able to spoof its source with this
+// header.
+func clientSource(r *http.Request) string {
+	src := sourceKey(r)
+	if ip := net.ParseIP(src); ip != nil && ip.IsLoopback() {
+		if forwarded := r.Header.Values("CF-Connecting-IP"); len(forwarded) == 1 {
+			if visitor := net.ParseIP(forwarded[0]); visitor != nil {
+				return visitor.String()
+			}
+		}
+	}
+	return src
+}
+
+// lockoutKey groups IPv6 sources by /64, since one client usually holds a
+// whole /64 and could otherwise rotate addresses past the lockout.
+func lockoutKey(src string) string {
+	ip := net.ParseIP(src)
+	if ip == nil || ip.To4() != nil {
+		return src
+	}
+	return ip.Mask(net.CIDRMask(64, 128)).String() + "/64"
 }
 
 func bearerToken(r *http.Request) string {
@@ -184,6 +330,23 @@ func isIdentityProbe(r *http.Request) bool {
 	return r.Method == http.MethodGet && r.URL.Path == identityProbePath
 }
 
+const devicePairPath = "/api/v1/remote-host/devices"
+
+func isDevicePairing(r *http.Request) bool {
+	return r.Method == http.MethodPost && r.URL.Path == devicePairPath
+}
+
+// lanBearerContextKey is set only by the authenticated listener after a
+// successful bearer check. Preview-scoped cookies never confer API authority.
+type lanBearerContextKey struct{}
+
+type lanPreviewCookieContextKey struct{}
+
+func authenticatedLANBearer(r *http.Request) bool {
+	authenticated, _ := r.Context().Value(lanBearerContextKey{}).(bool)
+	return authenticated
+}
+
 func authMiddleware(state *authState, lock *lockout, connected *mobileConnectReporter) func(http.Handler) http.Handler {
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -191,20 +354,59 @@ func authMiddleware(state *authState, lock *lockout, connected *mobileConnectRep
 				next.ServeHTTP(w, r)
 				return
 			}
-			src := sourceKey(r)
+			remoteSrc := sourceKey(r)
+			src := lockoutKey(clientSource(r))
 			if lock.blocked(src) {
 				envelope.WriteAPIError(w, r, http.StatusTooManyRequests, "too_many_requests", "LOCKED_OUT",
 					"too many failed attempts; try again shortly", nil)
 				return
 			}
-			if tok := connectionToken(r); mobilebridge.PasswordMatches(state.currentHash(), tok) {
+			tok := connectionToken(r)
+			conn, _ := r.Context().Value(lanConnContextKey{}).(*lanConn)
+			if conn != nil {
+				conn.owner.mu.Lock()
+			}
+			// Record auth atomically with rotation's connection close.
+			credential, authenticated, passwordRefused := state.authenticate(tok, isDevicePairing(r))
+			if conn != nil {
+				if authenticated {
+					conn.tokenHash = mobilebridge.HashPassword(tok)
+				}
+				conn.owner.mu.Unlock()
+			}
+			if authenticated {
 				lock.reset(src)
-				connected.report(src)
+				connected.report(remoteSrc)
+				state.noteUse(credential, lock.now())
 				maybeSetPreviewAuthCookie(w, r, tok)
-				next.ServeHTTP(w, r)
+				ctx := requestscope.WithCredential(r.Context(), credential)
+				if bearerToken(r) != "" {
+					ctx = context.WithValue(ctx, lanBearerContextKey{}, true)
+				} else {
+					ctx = context.WithValue(ctx, lanPreviewCookieContextKey{}, true)
+				}
+				next.ServeHTTP(w, r.WithContext(ctx))
 				return
 			}
-			lock.fail(src)
+			if passwordRefused {
+				// Not a guess, so it does not count toward the lockout.
+				envelope.WriteAPIError(w, r, http.StatusUnauthorized, "unauthorized", "DEVICE_CREDENTIAL_REQUIRED",
+					"this host no longer accepts the pairing password; pair this device again", nil)
+				return
+			}
+			if strings.HasPrefix(tok, mobilebridge.DeviceTokenPrefix) {
+				// A removed device. The distinct code stops it falling back to the password,
+				// and a 256-bit token is not a guess, so it does not count toward the lockout.
+				envelope.WriteAPIError(w, r, http.StatusUnauthorized, "unauthorized", "DEVICE_REVOKED",
+					"this device was removed from the host; pair it again", nil)
+				return
+			}
+			// Only a presented password is a guess. A request with none (a
+			// browser opening the tunnel URL, its favicon) reveals nothing, and
+			// counting it locks out every device behind the visitor's IP.
+			if tok != "" && !state.retiredPasswordMatches(tok) {
+				lock.fail(src)
+			}
 			envelope.WriteAPIError(w, r, http.StatusUnauthorized, "unauthorized", "BAD_PASSWORD",
 				"missing or invalid connection password", nil)
 		})

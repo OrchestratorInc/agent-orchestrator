@@ -1,0 +1,126 @@
+---
+title: 快速开始
+description: 添加项目，启动一个 worker，并从任务一路跟进到拉取请求。
+translatedFrom: ec341474c9bc
+---
+
+本指南将带你在桌面应用中完成第一个任务：添加仓库、启动 worker、跟进它的工作，并审查结果。
+
+<Callout type="info" title="开始之前">
+	安装 Orchestrator；如果你使用 GitHub 项目，请用 `gh` 登录。如果你选择外部编程代理，请安装它并完成登录。Orchestrator 把这些工具称为 harness。Unreal Agent 内置于 Orchestrator，可在 macOS 和 Linux 上用于 Chat。请参阅[安装](/installation)。
+</Callout>
+
+<span id="pick-a-safe-first-task" />
+## 选择一个稳妥的首个任务
+
+选择一个你可以创建分支和拉取请求的仓库。好的首个任务有明确的完成标准：
+
+- 修复一个能稳定复现的小缺陷。
+- 添加一个聚焦的测试。
+- 更新一篇简短的文档页面。
+- 进行一次范围小、验收标准明确的重构。
+
+<span id="run-the-first-session" />
+## 运行第一个会话
+
+<Steps>
+<Step>
+
+<span id="add-the-repository" />
+### 添加仓库
+
+打开 Orchestrator，选择 **Add project**，然后选择本地仓库。桌面应用会登记该仓库，并保持原来的检出目录不变。
+
+</Step>
+<Step>
+
+<span id="create-a-worker" />
+### 创建 worker
+
+在项目中新建一个任务，输入简短的名称和具体的提示词。选择一个可用的编程代理。外部代理在安装后才会出现；Unreal Agent 内置于 Orchestrator，可在受支持的 macOS 和 Linux 上用于 Chat。Orchestrator 在 Settings 的 **Harness** 下列出代理。
+
+选择适合该任务的界面：
+
+- **Chat**：适合结构化对话、活动、审批、计划和持久保存的历史。
+- **Terminal UI**：适合使用 harness 原生的交互式终端。
+
+在启动所选的控制器之前，Orchestrator 会为该会话创建一个隔离的 git 工作树和分支。
+
+</Step>
+<Step>
+
+<span id="follow-the-session" />
+### 跟进会话
+
+在侧边栏或看板中选择该会话。主窗格显示它的 Chat 对话或实时终端。检查器显示会话详情、拉取请求状态、审查、已更改的文件和浏览器预览。
+
+Orchestrator 会把活跃、空闲、等待输入、受阻或已退出等活动状态，与拉取请求的信息结合起来，显示会话的状态。
+
+</Step>
+<Step>
+
+<span id="give-feedback" />
+### 提供反馈
+
+使用 Chat 输入框或会话的消息控件发送后续指令。修改意见要具体：
+
+```text
+Keep this change limited to the API route. Do not refactor the shared client.
+```
+
+对于 TUI 会话，当需要直接交互时，终端仍然可用。
+
+</Step>
+<Step>
+
+<span id="review-the-pull-request" />
+### 审查拉取请求
+
+在 worker 创建或认领拉取请求后，Orchestrator 会显示 CI、审查者、未解决的审查评论和可合并状态的简要概览。你可以运行审查代理、把要求的修改发回给 worker、解决评论，或在合适时进行合并。
+
+Orchestrator 绝不会强制删除有未提交更改的工作树。当无法安全移除会话工作区时，清理过程会保留用户的工作。
+
+</Step>
+</Steps>
+
+<span id="try-a-browser-preview" />
+## 试用浏览器预览
+
+对于 Web 任务，在会话中启动应用，然后用可选的 CLI 选择它的 URL：
+
+```bash
+ao preview http://127.0.0.1:5173
+```
+
+如果仓库包含 `.ao/launch.json`，`ao preview start` 可以启动已配置的开发服务器。Browser 标签页随后会显示所选的目标。Orchestrator 不会仅仅因为存在 worker 就去猜测预览目标。
+
+<span id="try-switching-interfaces" />
+## 试用界面切换
+
+受支持的会话会显示 **Switch to chat UI** 或 **Switch to terminal UI**。是否显示取决于代理以及它是否正在工作。Orchestrator 会保持同一个会话和工作树，一次替换一个控制器。
+
+如果出现 **Finish work, then switch**，它会等待已接受的工作完成。**Stop now and switch** 会中断工作。有些终端会话需要 **Terminate and then switch**。请仔细阅读对话框，因为草稿、附件或排队中的轮次可能需要重新发送。关于对话历史的详细说明，请参阅[仪表板：切换界面](/dashboard#switch-interfaces)。
+
+<span id="optional-cli" />
+## 可选的 CLI
+
+CLI 是连接应用所管理的守护进程的轻量客户端。它适合脚本和以终端为主的工作流，但日常使用桌面应用时并不需要。
+
+```bash
+ao status
+ao session ls
+ao send --session <session-id> --message "Run the focused tests before you finish."
+```
+
+在 **Settings → General** 中选择默认界面，或为新任务单独选择。项目的代理设置用于选择编程代理、模型、推理强度和提供方执行模式。它们不会设置全局默认使用 Chat 还是 Terminal UI。
+
+<span id="next" />
+
+<span id="next-steps" />
+## 下一步
+
+<Cards>
+	<Card title="仪表板" description="了解看板、会话视图、检查器、Chat 和终端。" href="/dashboard" />
+	<Card title="架构" description="了解桌面应用和守护进程如何协调会话。" href="/architecture" />
+	<Card title="示例" description="试用当前的桌面和 CLI 工作流。" href="/examples" />
+</Cards>

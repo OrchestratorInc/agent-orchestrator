@@ -1,0 +1,362 @@
+package store_test
+
+import (
+	"context"
+	"fmt"
+	"testing"
+	"time"
+
+	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
+	"github.com/aoagents/agent-orchestrator/backend/internal/storage/sqlite"
+	"github.com/aoagents/agent-orchestrator/backend/internal/storage/sqlite/sqlitetest"
+)
+
+func TestPersistedAuthenticationDemandReconcilesOnlyVerifiedCurrentSuccess(t *testing.T) {
+	for _, scenario := range []string{"current", "old-generation", "started-before-failure", "child-thread", "missing-authoritative-completion", "newer-failure", "account-change"} {
+		t.Run(scenario, func(t *testing.T) {
+			ctx := context.Background()
+			dir := t.TempDir()
+			s, err := sqlitetest.Open(dir)
+			if err != nil {
+				t.Fatal(err)
+			}
+			seedProject(t, s, "auth")
+			record := sampleRecord("auth")
+			record.Mode = domain.SessionModeChat
+			session, err := s.CreateSession(ctx, record)
+			if err != nil {
+				t.Fatal(err)
+			}
+			conversation, err := s.CreateConversation(ctx, "auth-conv", domain.ConversationScopeSession, "auth", session.ID, histClock)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err := s.ClaimChatControllerGeneration(ctx, session.ID, "gen-1"); err != nil {
+				t.Fatal(err)
+			}
+			failureAt := histClock.Add(time.Second)
+			account := domain.ConversationAccount{ReauthRequiredAt: &failureAt, ReauthReason: "expired", PlanLabel: "Pro"}
+			if err := s.RecordAccount(ctx, conversation.ID, account, failureAt); err != nil {
+				t.Fatal(err)
+			}
+			startAt := failureAt.Add(time.Second)
+			if scenario == "started-before-failure" {
+				startAt = histClock
+			}
+			if err := s.AdoptProviderTurn(ctx, conversation.ID, session.ID, "gen-1", "turn", "provider-turn", startAt); err != nil {
+				t.Fatal(err)
+			}
+			completedAt := startAt.Add(3 * time.Second)
+			nativeID := ""
+			if scenario == "child-thread" {
+				nativeID = "child"
+			}
+			if scenario == "missing-authoritative-completion" {
+				if err := s.SettleTurn(ctx, conversation.ID, "provider-turn", domain.TurnStateCompleted, "", completedAt); err != nil {
+					t.Fatal(err)
+				}
+			} else {
+				payload := fmt.Sprintf(`{"providerTurnId":"provider-turn","providerConversationId":%q,"turnState":"completed"}`, nativeID)
+				if _, err := s.ProjectProviderEvent(ctx, conversation.ID, session.ID, "gen-1", "completion", "turn.completed", payload, completedAt, func(txCtx context.Context) error {
+					return s.SettleTurn(txCtx, conversation.ID, "provider-turn", domain.TurnStateCompleted, "", completedAt)
+				}); err != nil {
+					t.Fatal(err)
+				}
+			}
+			if scenario == "old-generation" {
+				if err := s.ClaimChatControllerGeneration(ctx, session.ID, "gen-2"); err != nil {
+					t.Fatal(err)
+				}
+			}
+			if scenario == "newer-failure" {
+				failureAt = completedAt.Add(time.Second)
+				account.ReauthRequiredAt = &failureAt
+				if err := s.RecordAccount(ctx, conversation.ID, account, failureAt); err != nil {
+					t.Fatal(err)
+				}
+			}
+			if scenario == "account-change" {
+				account.AuthChangedAt = &completedAt
+				if err := s.RecordAccount(ctx, conversation.ID, account, completedAt); err != nil {
+					t.Fatal(err)
+				}
+			}
+			if err := s.Close(); err != nil {
+				t.Fatal(err)
+			}
+			s, err = sqlite.OpenPreMigrated(dir)
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer func() { _ = s.Close() }()
+			// Page loading must reconcile even if the successful turn is outside the page.
+			snapshot, err := s.LoadConversationSnapshotPage(ctx, conversation.ID, 0, 1)
+			if err != nil {
+				t.Fatal(err)
+			}
+			recovered := snapshot.Conversation.Account.ReauthRequiredAt == nil
+			if recovered != (scenario == "current") {
+				t.Fatalf("recovered=%v, account=%+v", recovered, snapshot.Conversation.Account)
+			}
+			if recovered {
+				persisted, err := s.ConversationAccount(ctx, conversation.ID)
+				if err != nil {
+					t.Fatal(err)
+				}
+				if persisted.AuthenticationState != "authenticated" || persisted.LastAuthFailureReason != "expired" || persisted.PlanLabel != "Pro" {
+					t.Fatalf("persisted account = %+v", persisted)
+				}
+				events, err := s.ProviderEventsSince(ctx, conversation.ID, 0, 10)
+				if err != nil || len(events) != 1 {
+					t.Fatalf("history lost: %+v, %v", events, err)
+				}
+			}
+		})
+	}
+}
+
+func TestAccountOnlyChangesInvalidateConversationThroughCDC(t *testing.T) {
+	s, session, conversation := conversationFixture(t)
+	ctx := context.Background()
+	before, err := s.LatestSeq(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	account := domain.ConversationAccount{AuthenticationState: "required", ReauthRequiredAt: &histClock, AuthFailureID: "failure"}
+	if err := s.RecordAccount(ctx, conversation, account, histClock); err != nil {
+		t.Fatal(err)
+	}
+	events, err := s.EventsAfter(ctx, before, 10)
+	if err != nil || len(events) != 1 {
+		t.Fatalf("account-only CDC = %+v, %v", events, err)
+	}
+	if events[0].SessionID != string(session) || string(events[0].Type) != "session_updated" {
+		t.Fatalf("account event = %+v", events[0])
+	}
+	before = events[0].Seq
+	if err := s.RecordAccount(ctx, conversation, account, histClock); err != nil {
+		t.Fatal(err)
+	}
+	events, err = s.EventsAfter(ctx, before, 10)
+	if err != nil || len(events) != 0 {
+		t.Fatalf("unchanged account emitted CDC: %+v, %v", events, err)
+	}
+	account.AuthenticationState = "authenticated"
+	account.ReauthRequiredAt = nil
+	account.AuthVerifiedAt = &histClock
+	if err := s.RecordAccount(ctx, conversation, account, histClock); err != nil {
+		t.Fatal(err)
+	}
+	events, err = s.EventsAfter(ctx, before, 10)
+	if err != nil || len(events) != 1 {
+		t.Fatalf("recovery-only CDC = %+v, %v", events, err)
+	}
+}
+
+func TestAuthenticationRecoveryRollsBackWithProviderProjection(t *testing.T) {
+	s, session, conversation := conversationFixture(t)
+	ctx := context.Background()
+	at := histClock.Add(time.Second)
+	account := domain.ConversationAccount{AuthenticationState: "required", ReauthRequiredAt: &at, AuthFailureID: "failure"}
+	if err := s.RecordAccount(ctx, conversation, account, at); err != nil {
+		t.Fatal(err)
+	}
+	start := at.Add(time.Second)
+	if err := s.AdoptProviderTurn(ctx, conversation, session, "gen-1", "turn", "provider-turn", start); err != nil {
+		t.Fatal(err)
+	}
+	completed := start.Add(time.Second)
+	_, err := s.ProjectProviderEvent(ctx, conversation, session, "gen-1", "rolled-back-completion", "turn.completed", `{"providerTurnId":"provider-turn","turnState":"completed"}`, completed, func(txCtx context.Context) error {
+		if err := s.SettleTurn(txCtx, conversation, "provider-turn", domain.TurnStateCompleted, "", completed); err != nil {
+			return err
+		}
+		a, err := s.ReconcileConversationAuthentication(txCtx, conversation, "gen-1", "provider-turn", completed)
+		if err != nil {
+			return err
+		}
+		if a.ReauthRequiredAt != nil {
+			t.Fatal("expected recovery within projection")
+		}
+		return fmt.Errorf("injected projection failure")
+	})
+	if err == nil {
+		t.Fatal("wanted projection error")
+	}
+	persisted, err := s.ConversationAccount(ctx, conversation)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if persisted.ReauthRequiredAt == nil || persisted.AuthFailureID != "failure" {
+		t.Fatalf("rolled back recovery leaked: %+v", persisted)
+	}
+	events, err := s.ProviderEventsSince(ctx, conversation, 0, 10)
+	if err != nil || len(events) != 0 {
+		t.Fatalf("rolled back success archived: %+v, %v", events, err)
+	}
+}
+
+func TestConcurrentRecoveryCannotClearNewerAuthenticationFailure(t *testing.T) {
+	s, session, conversation := conversationFixture(t)
+	ctx := context.Background()
+	failureAt := histClock.Add(time.Second)
+	if err := s.RecordAccount(ctx, conversation, domain.ConversationAccount{ReauthRequiredAt: &failureAt}, failureAt); err != nil {
+		t.Fatal(err)
+	}
+	startAt := failureAt.Add(time.Second)
+	if err := s.AdoptProviderTurn(ctx, conversation, session, "gen-1", "turn", "provider-turn", startAt); err != nil {
+		t.Fatal(err)
+	}
+	completedAt := startAt.Add(time.Second)
+	if _, err := s.ProjectProviderEvent(ctx, conversation, session, "gen-1", "completion", "turn.completed", `{"providerTurnId":"provider-turn","turnState":"completed"}`, completedAt, func(txCtx context.Context) error {
+		return s.SettleTurn(txCtx, conversation, "provider-turn", domain.TurnStateCompleted, "", completedAt)
+	}); err != nil {
+		t.Fatal(err)
+	}
+	newerFailureAt := completedAt.Add(time.Second)
+	ready := make(chan struct{})
+	results := make(chan error, 2)
+	go func() {
+		<-ready
+		results <- s.RecordAccount(ctx, conversation, domain.ConversationAccount{AuthenticationState: "required", ReauthRequiredAt: &newerFailureAt, AuthFailureID: "newer"}, newerFailureAt)
+	}()
+	go func() {
+		<-ready
+		_, err := s.ReconcileConversationAuthentication(ctx, conversation, "gen-1", "provider-turn", completedAt)
+		results <- err
+	}()
+	close(ready)
+	for range 2 {
+		if err := <-results; err != nil {
+			t.Fatal(err)
+		}
+	}
+	account, err := s.ConversationAccount(ctx, conversation)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if account.ReauthRequiredAt == nil || account.AuthFailureID != "newer" {
+		t.Fatalf("old success cleared newer concurrent failure: %+v", account)
+	}
+}
+
+func TestConfirmedLoginClearsOnlyAnOlderDemand(t *testing.T) {
+	ctx := context.Background()
+	s, err := sqlitetest.Open(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = s.Close() }()
+	seedProject(t, s, "login")
+	record := sampleRecord("login")
+	record.Mode = domain.SessionModeChat
+	session, err := s.CreateSession(ctx, record)
+	if err != nil {
+		t.Fatal(err)
+	}
+	conversation, err := s.CreateConversation(ctx, "login-conv", domain.ConversationScopeSession, "login", session.ID, histClock)
+	if err != nil {
+		t.Fatal(err)
+	}
+	failureAt := histClock.Add(time.Minute)
+	account := domain.ConversationAccount{AuthenticationState: "required", ReauthRequiredAt: &failureAt, ReauthReason: "Not logged in", PlanLabel: "Max"}
+	if err := s.RecordAccount(ctx, conversation.ID, account, failureAt); err != nil {
+		t.Fatal(err)
+	}
+	waiting, err := s.ConversationsAwaitingLogin(ctx)
+	if err != nil || len(waiting) != 1 || waiting[0].ConversationID != conversation.ID ||
+		waiting[0].SessionID != session.ID || waiting[0].Harness != domain.HarnessClaudeCode {
+		t.Fatalf("waiting = %+v, %v", waiting, err)
+	}
+	// A check that began before or at the demand cannot answer it.
+	for _, at := range []time.Time{failureAt.Add(-time.Second), failureAt} {
+		if cleared, err := s.ConfirmConversationLogin(ctx, conversation.ID, at, at); err != nil || cleared {
+			t.Fatalf("check at %v cleared=%v, %v", at, cleared, err)
+		}
+	}
+	checkedAt := failureAt.Add(time.Second)
+	if cleared, err := s.ConfirmConversationLogin(ctx, conversation.ID, checkedAt, checkedAt); err != nil || !cleared {
+		t.Fatalf("later check cleared=%v, %v", cleared, err)
+	}
+	persisted, err := s.ConversationAccount(ctx, conversation.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if persisted.AuthenticationState != "authenticated" || persisted.ReauthRequiredAt != nil ||
+		persisted.LastAuthFailureReason != "Not logged in" || persisted.PlanLabel != "Max" {
+		t.Fatalf("persisted account = %+v", persisted)
+	}
+	if waiting, err := s.ConversationsAwaitingLogin(ctx); err != nil || len(waiting) != 0 {
+		t.Fatalf("still waiting = %+v, %v", waiting, err)
+	}
+}
+
+func TestLaunchRefusalRaisesTheChatLoginDemand(t *testing.T) {
+	ctx := context.Background()
+	s, err := sqlitetest.Open(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = s.Close() }()
+	seedProject(t, s, "launch")
+	record := sampleRecord("launch")
+	record.Mode = domain.SessionModeChat
+	session, err := s.CreateSession(ctx, record)
+	if err != nil {
+		t.Fatal(err)
+	}
+	conversation, err := s.CreateConversation(ctx, "launch-conv", domain.ConversationScopeSession, "launch", session.ID, histClock)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := s.RecordAccount(ctx, conversation.ID, domain.ConversationAccount{AuthenticationState: "authenticated", PlanLabel: "Team"}, histClock); err != nil {
+		t.Fatal(err)
+	}
+	refusedAt := histClock.Add(time.Minute)
+	if err := s.RequireSessionLogin(ctx, session.ID, "agent requires authentication", refusedAt); err != nil {
+		t.Fatal(err)
+	}
+	first, err := s.ConversationAccount(ctx, conversation.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if first.AuthenticationState != "required" || first.ReauthRequiredAt == nil || !first.ReauthRequiredAt.Equal(refusedAt) ||
+		first.AuthFailureID == "" || first.PlanLabel != "Team" {
+		t.Fatalf("account after refusal = %+v", first)
+	}
+	if err := s.RequireSessionLogin(ctx, session.ID, "agent requires authentication", refusedAt.Add(time.Minute)); err != nil {
+		t.Fatal(err)
+	}
+	if again, err := s.ConversationAccount(ctx, conversation.ID); err != nil || again.AuthFailureID != first.AuthFailureID || !again.ReauthRequiredAt.Equal(refusedAt) {
+		t.Fatalf("account after second refusal = %+v, %v", again, err)
+	}
+	release := s.HoldWriterForTest()
+	loaded := make(chan error, 1)
+	go func() {
+		_, err := s.LoadConversationSnapshot(ctx, conversation.ID)
+		loaded <- err
+	}()
+	select {
+	case err := <-loaded:
+		release()
+		if err != nil {
+			t.Fatal(err)
+		}
+	case <-time.After(5 * time.Second):
+		release()
+		t.Fatal("reading a chat that waits for a sign-in waited for the writer")
+	}
+	if cleared, err := s.ConfirmConversationLogin(ctx, conversation.ID, refusedAt.Add(time.Second), refusedAt.Add(time.Second)); err != nil || !cleared {
+		t.Fatalf("confirmed login cleared=%v, %v", cleared, err)
+	}
+	refusedAgainAt := refusedAt.Add(2 * time.Minute)
+	if err := s.RequireSessionLogin(ctx, session.ID, "agent requires authentication", refusedAgainAt); err != nil {
+		t.Fatal(err)
+	}
+	if raised, err := s.ConversationAccount(ctx, conversation.ID); err != nil || raised.AuthFailureID == first.AuthFailureID ||
+		raised.ReauthRequiredAt == nil || !raised.ReauthRequiredAt.Equal(refusedAgainAt) {
+		t.Fatalf("account after a refusal that follows a sign-in = %+v, %v", raised, err)
+	}
+	if err := s.RequireSessionLogin(ctx, "no-such-session", "agent requires authentication", refusedAt); err != nil {
+		t.Fatal(err)
+	}
+}

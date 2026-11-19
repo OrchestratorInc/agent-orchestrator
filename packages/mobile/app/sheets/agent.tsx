@@ -1,4 +1,4 @@
-import { useLocalSearchParams, useRouter } from "expo-router";
+import { Stack, useLocalSearchParams, useRouter } from "expo-router";
 import { useEffect, useMemo, useState } from "react";
 import { AgentPickerSheet } from "../../lib/AgentPickerSheet";
 import { agentErrorCopy } from "../../lib/agentError";
@@ -7,6 +7,7 @@ import { getAgents, refreshAgents } from "../../lib/api";
 import { haptics } from "../../lib/haptics";
 import { releaseSheetResult, takeSheetResult } from "../../lib/sheetResult";
 import { useApp } from "../../lib/store";
+import { backOr } from "../../lib/backNavigation";
 
 // The agent picker, as a native form sheet.
 //
@@ -46,9 +47,9 @@ export default function AgentSheetRoute() {
 		if (!config || refreshing) return;
 		setRefreshing(true);
 		try {
+			// No success haptic: the refresh control already answered the pull.
 			setCatalog(await refreshAgents(config));
 			setError(null);
-			haptics.success();
 		} catch (e) {
 			haptics.error();
 			setError(agentErrorCopy(e));
@@ -57,21 +58,26 @@ export default function AgentSheetRoute() {
 		}
 	}
 
+	const title = mode === "chat" ? "Chat agent" : "Agent";
 	const allowedSet = useMemo(() => allowed ? new Set(allowed.split("|").filter(Boolean)) : undefined, [allowed]);
 	const agents = useMemo(() => rankAgents(catalog).filter((agent) => !allowedSet || allowedSet.has(agent.id)), [catalog, allowedSet]);
 
 	return (
-		<AgentPickerSheet
-			agents={agents}
-			selected={selected ?? ""}
-			error={error}
-			refreshing={refreshing}
-			onRefresh={onRefresh}
-			onClose={() => router.back()}
-			onSelect={(id) => takeSheetResult<string>(resultKey)?.(id)}
-			title={mode === "chat" ? "Chat agent" : "Agent"}
-			subtitle={mode === "chat" ? "Installed agents with a structured Chat controller." : "The CLI that runs this terminal session."}
-		/>
+		<>
+			{/* The iOS bar's title; the route registers "Agent". */}
+			<Stack.Screen options={{ title }} />
+			<AgentPickerSheet
+				agents={agents}
+				selected={selected ?? ""}
+				error={error}
+				refreshing={refreshing}
+				onRefresh={onRefresh}
+				onClose={() => backOr(router)}
+				onSelect={(id) => takeSheetResult<string>(resultKey)?.(id)}
+				title={title}
+				subtitle={mode === "chat" ? "Installed agents with a structured Chat controller." : "The CLI that runs this terminal session."}
+			/>
+		</>
 	);
 }
 

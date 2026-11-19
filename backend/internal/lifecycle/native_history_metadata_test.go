@@ -1,6 +1,7 @@
 package lifecycle
 
 import (
+	"context"
 	"testing"
 	"time"
 
@@ -114,7 +115,7 @@ func TestSubagentHookCannotReplaceNativeConversationFacts(t *testing.T) {
 	rec.Metadata.NativeTranscriptPath = "/root.jsonl"
 	store.sessions[rec.ID] = rec
 	if err := m.ApplyActivitySignal(ctx, rec.ID, ports.ActivitySignal{
-		Event: "subagent-stop", LaunchID: "launch", AgentSessionID: "subagent",
+		Event: "subagent-stop", SubagentID: "child-1", LaunchID: "launch", AgentSessionID: "subagent",
 		Timestamp: time.Unix(200, 0), LatestUserPrompt: "suggest a prompt",
 		LatestAssistantUpdate: "continue", TranscriptPath: "/subagent.jsonl",
 	}); err != nil {
@@ -123,5 +124,51 @@ func TestSubagentHookCannotReplaceNativeConversationFacts(t *testing.T) {
 	got := store.sessions[rec.ID]
 	if got.Metadata != rec.Metadata || got.Activity != rec.Activity {
 		t.Fatalf("subagent hook changed root conversation facts: got %+v, want %+v", got, rec)
+	}
+}
+
+func TestClaudeSubagentHookCannotReplaceRootConversationFacts(t *testing.T) {
+	store := newFakeStore()
+	rec := domain.SessionRecord{
+		ID: "ao-1", Harness: domain.HarnessClaudeCode, Mode: domain.SessionModeTUI,
+		Activity: domain.Activity{State: domain.ActivityActive, LastActivityAt: time.Unix(100, 0)},
+		Metadata: domain.SessionMetadata{
+			RuntimeLaunchID: "launch", AgentSessionID: "root",
+			NativeTranscriptPath: "/root.jsonl", LatestUserPrompt: "root prompt",
+		},
+	}
+	store.sessions[rec.ID] = rec
+	m := New(store, nil)
+	if err := m.ApplyActivitySignal(context.Background(), rec.ID, ports.ActivitySignal{
+		Event: "subagent-stop", SubagentID: "child-1", LaunchID: "launch",
+		AgentSessionID: "child", TranscriptPath: "/child.jsonl",
+		LatestUserPrompt: "child prompt", LatestAssistantUpdate: "child answer",
+		Timestamp: time.Unix(200, 0),
+	}); err != nil {
+		t.Fatal(err)
+	}
+	got := store.sessions[rec.ID].Metadata
+	if got.AgentSessionID != "root" || got.NativeTranscriptPath != "/root.jsonl" || got.LatestUserPrompt != "root prompt" || got.LatestAssistantUpdate != "" {
+		t.Fatalf("child hook changed root conversation facts: %+v", got)
+	}
+}
+
+func TestWhitespaceSubagentStopIsIgnored(t *testing.T) {
+	store := newFakeStore()
+	rec := domain.SessionRecord{
+		ID: "ao-1", Harness: domain.HarnessClaudeCode, Mode: domain.SessionModeTUI,
+		Activity: domain.Activity{State: domain.ActivityActive},
+		Metadata: domain.SessionMetadata{RuntimeLaunchID: "launch", AgentSessionID: "root"},
+	}
+	store.sessions[rec.ID] = rec
+	m := New(store, nil)
+	if err := m.ApplyActivitySignal(context.Background(), rec.ID, ports.ActivitySignal{
+		Event: "subagent-stop", SubagentID: "  ", LaunchID: "launch",
+		AgentSessionID: "child", TranscriptPath: "/child.jsonl",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if got := store.sessions[rec.ID]; got.Metadata != rec.Metadata || got.Revision != rec.Revision {
+		t.Fatalf("anonymous child stop changed root session: %+v", got)
 	}
 }
