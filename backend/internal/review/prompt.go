@@ -28,7 +28,7 @@ func reviewTexts(spec LaunchSpec) (prompt, systemPrompt string) {
 Complete every review task in the queue autonomously. Do not ask the user whether to continue to the next PR, and do not stop after the first PR unless the provider or checkout is genuinely unusable for every queued task.
 
 Do these steps in order for each PR:
-1. Post a separate review on the pull request and capture its id in one call. Post with `+"`gh api`"+` rather than `+"`gh pr review`"+`: it is the only way to attach inline comments, and its response carries the created review's id, so Orchestrator can tell the worker exactly which review to address.
+1. Post a separate review on the pull request and capture its id in one call. Use the command below to attach inline comments and return the created GitHub review ID.
 
 ~~~sh
 %[3]s
@@ -73,9 +73,13 @@ If a heredoc command fails because the shell cannot create a temp file for the h
 	case domain.ReviewerKiro:
 		const pipe = "' | base64 --decode | "
 		return "printf '%s' '<base64 of review JSON>" + pipe + gh, "printf '%s' '<base64 of review Markdown>" + pipe + ao, "Encode the UTF-8 body as one unwrapped base64 string. Use base64 -D if your platform requires it. The GitHub JSON shape is " + payload
+	case domain.ReviewerOpenCodeV2:
+		post = "printf '%s' '" + `{"endpoint":"repos/{owner}/{repo}/pulls/{number}/reviews","review":` + payload + "}' | ao review post-github"
 	default:
-		return "printf '%s' '" + payload + "' | " + gh, "printf '%s' '<one-paragraph review Markdown>' | " + ao, `Keep each command on one physical line. In each printf operand replace every single quote with '\''. Encode newlines in JSON strings as \n.`
+		post = "printf '%s' '" + payload + "' | " + gh
 	}
+	return post, "printf '%s' '<one-paragraph review Markdown>' | " + ao, `Keep each command on one physical line. In each printf operand replace every single quote with '\''. Encode newlines in JSON strings as \n.`
+
 }
 
 func reviewSystemPrompt() string {

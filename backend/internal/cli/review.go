@@ -1,6 +1,7 @@
 package cli
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -8,10 +9,13 @@ import (
 	"io"
 	"net/url"
 	"os"
+	"regexp"
 	"strings"
 	"text/tabwriter"
 	"time"
 
+	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
+	aoprocess "github.com/aoagents/agent-orchestrator/backend/internal/process"
 	"github.com/spf13/cobra"
 	"github.com/spf13/pflag"
 )
@@ -157,9 +161,43 @@ func newReviewCommand(ctx *commandContext) *cobra.Command {
 	}
 	cmd.AddCommand(newReviewListCommand(ctx))
 	cmd.AddCommand(newReviewSubmitCommand(ctx))
+	cmd.AddCommand(newReviewPostGitHubCommand())
 	cmd.AddCommand(newReviewCancelCommand(ctx))
 	cmd.AddCommand(newReviewTriggerCommand(ctx))
 	return cmd
+}
+
+// OpenCode's shell policy can match a fixed command but cannot validate an
+// endpoint inside a wildcard. Read both values as data and invoke gh by argv.
+var reviewEndpoint = regexp.MustCompile(`^` + ports.ReviewEndpointPattern + `$`)
+
+func newReviewPostGitHubCommand() *cobra.Command {
+	return &cobra.Command{
+		Use:    "post-github",
+		Short:  "Post a GitHub pull request review from JSON on stdin",
+		Hidden: true,
+		Args:   cobra.NoArgs,
+		RunE: func(cmd *cobra.Command, _ []string) error {
+			var request struct {
+				Endpoint string          `json:"endpoint"`
+				Review   json.RawMessage `json:"review"`
+			}
+			if err := json.NewDecoder(cmd.InOrStdin()).Decode(&request); err != nil {
+				return fmt.Errorf("read GitHub review: %w", err)
+			}
+			if !reviewEndpoint.MatchString(request.Endpoint) || strings.Contains(request.Endpoint, "/../") || strings.Contains(request.Endpoint, "/./") {
+				return errors.New("expected a GitHub pull request reviews endpoint")
+			}
+			var fields map[string]json.RawMessage
+			if err := json.Unmarshal(request.Review, &fields); err != nil || string(fields["event"]) != `"COMMENT"` {
+				return errors.New("expected a GitHub COMMENT review")
+			}
+			post := aoprocess.CommandContext(cmd.Context(), "gh", "api", "--method", "POST", request.Endpoint, "--input", "-", "--jq", ".id")
+			post.Stdin = bytes.NewReader(request.Review)
+			post.Stdout, post.Stderr = cmd.OutOrStdout(), cmd.ErrOrStderr()
+			return post.Run()
+		},
+	}
 }
 
 func newReviewListCommand(ctx *commandContext) *cobra.Command {

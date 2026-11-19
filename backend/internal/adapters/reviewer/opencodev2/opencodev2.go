@@ -184,26 +184,17 @@ func reviewerPermissions(taskPromptRoot string) []permissionRule {
 		"git show *",
 		"git status *",
 		"ao review submit --session * --run * --verdict * --body -",
-	} {
-		rules = append(rules, permissionRule{Action: "shell", Resource: resource, Effect: "allow"})
-	}
-	// Later rules win, so the mutating shapes below override the broad allows
-	// above. Any gh api flag is denied (a positive shape, not a flag blocklist);
-	// only the review-submission endpoint is re-allowed afterwards.
-	for _, resource := range []string{
-		"gh api -*",
-		"gh api * -*",
-	} {
-		rules = append(rules, permissionRule{Action: "shell", Resource: resource, Effect: "deny"})
-	}
-	for _, resource := range []string{
-		"gh api --method POST repos/*/pulls/*/reviews --input -",
-		"gh api --method POST repos/*/pulls/*/reviews --input - --jq '.id'",
+		"ao review post-github",
 		"printf '%s' '*'",
 	} {
 		rules = append(rules, permissionRule{Action: "shell", Resource: resource, Effect: "allow"})
 	}
+	// Later rules win, so the mutating shapes below override the broad allows
+	// above. The fixed post-github command validates the endpoint and passes
+	// it directly to gh, so the shell only needs read access through gh api.
 	for _, resource := range []string{
+		"gh api -*",
+		"gh api * -*",
 		"gh api *>*",
 		"git *>*",
 		"ao review submit *>*",
@@ -233,15 +224,6 @@ func reviewerPermissions(taskPromptRoot string) []permissionRule {
 	}
 	for _, resource := range []string{
 		"ao review submit *--reviews*",
-		// A wildcard in the endpoint must never consume another argument.
-		"gh api --method POST repos/* */reviews*",
-		"gh api --method POST repos/*\t*/reviews*",
-		"gh api --method POST repos/*\n*/reviews*",
-		"gh api --method POST repos/*/*/*/*/*/reviews*",
-		"gh api --method POST repos/*?*/reviews*",
-		"gh api --method POST repos/*#*/reviews*",
-		"gh api --method POST repos/*%*/reviews*",
-		"gh api --method POST repos/*..*/reviews*",
 		"printf '%s' '*' *>*",
 		"printf '%s' '*' *<*",
 		"printf '%s' '*' *|*",

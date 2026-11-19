@@ -94,8 +94,11 @@ type ReviewerPromptReadinessProvider interface {
 // `ao review submit`. Reviewer permission rules match commands ending in it.
 const ReviewSubmitHeredocDelimiter = "AO_REVIEW_EOF"
 
+// ReviewEndpointPattern matches the path used to create a GitHub pull request review.
+const ReviewEndpointPattern = `repos/[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+/pulls/[0-9]+/reviews`
+
 // ReviewPostCommandPattern matches a GitHub review POST with its body on stdin.
-const ReviewPostCommandPattern = `gh api --method POST repos/[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+/pulls/[0-9]+/reviews --input - --jq '[.]id'`
+const ReviewPostCommandPattern = `gh api --method POST ` + ReviewEndpointPattern + ` --input - --jq '[.]id'`
 
 // ReviewRunArgsPattern matches the arguments for recording one review from stdin.
 const ReviewRunArgsPattern = `--run [A-Za-z0-9_.:-]+ --verdict (?:approved|changes_requested)(?: --review-id [0-9]+)? --body -`

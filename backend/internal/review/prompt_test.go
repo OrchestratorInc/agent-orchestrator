@@ -96,6 +96,9 @@ func TestReviewPromptSubmitsThroughHeredocWithBoundedFallback(t *testing.T) {
 func TestSingleLineSubmitExamples(t *testing.T) {
 	for _, harness := range []domain.ReviewerHarness{domain.ReviewerAider, domain.ReviewerKimchi, domain.ReviewerOpenCodeV2, domain.ReviewerCodex, domain.ReviewerKiro} {
 		post, record, _ := reviewSubmitExamples(LaunchSpec{Harness: harness, WorkerID: "worker-1"})
+		if strings.HasSuffix(post, " | ao review post-github") != (harness == domain.ReviewerOpenCodeV2) {
+			t.Errorf("%s unexpected GitHub posting command: %q", harness, post)
+		}
 		for _, cmd := range []string{post, record} {
 			if strings.Contains(cmd, "<<") || strings.Contains(cmd, "\n") || !strings.HasPrefix(cmd, "printf '%s'") {
 				t.Errorf("%s expected single-line pipeline, got %q", harness, cmd)
